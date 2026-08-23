@@ -36,6 +36,8 @@ export interface CutToolHooks {
 export interface BuildToolsOptions {
   dir: string;
   hooks?: CutToolHooks;
+  /** Optional yt-dlp cookie file path passed through to fetchVideo. */
+  cookies?: string;
 }
 
 function resolveIn(dir: string, src: string): string {
@@ -44,11 +46,12 @@ function resolveIn(dir: string, src: string): string {
 
 /** Build a ToolMap of concrete tool implementations rooted at `dir`. */
 export function buildCutTools(opts: BuildToolsOptions) {
-  const { dir, hooks = {} } = opts;
+  const { dir, hooks = {}, cookies } = opts;
 
   const fetch = {
     async execute(input: { url: string }) {
       const result = await fetchVideo(input.url, path.resolve(dir), {
+        ...(cookies ? { cookies } : {}),
         onProgress: (pct) =>
           process.stderr.write(`\rfetch ${progressBar(pct / 100)}\r`),
       });

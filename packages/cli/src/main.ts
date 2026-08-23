@@ -7,6 +7,7 @@
  */
 import { createInterface } from "node:readline/promises";
 import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -22,7 +23,31 @@ interface Args {
   key?: string | undefined;
   model?: string | undefined;
   dir: string;
+  cookies?: string | undefined;
   print?: string | undefined;
+}
+
+/** Default cookie file used when it exists on disk. */
+export const DEFAULT_COOKIES_PATH = path.join(
+  homedir(),
+  "yolomodellayout",
+  "youtube.com_cookies.txt",
+);
+
+/**
+ * Resolve the cookie file for yt-dlp fetches, in priority order:
+ * --cookies flag > CUT_COOKIES env > default user cookie file (if present).
+ * Returns undefined when nothing is available; callers proceed without cookies.
+ */
+export function resolveCookiesPath(
+  explicit: string | undefined,
+  exists: (p: string) => boolean = existsSync,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  if (explicit) return explicit;
+  const fromEnv = env["CUT_COOKIES"];
+  if (fromEnv) return fromEnv;
+  return exists(DEFAULT_COOKIES_PATH) ? DEFAULT_COOKIES_PATH : undefined;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -38,6 +63,9 @@ function parseArgs(argv: string[]): Args {
         break;
       case "--dir":
         args.dir = path.resolve(argv[++i] ?? ".");
+        break;
+      case "--cookies":
+        args.cookies = argv[++i];
         break;
       case "-p": {
         const rest = argv.slice(++i).join(" ");
@@ -71,8 +99,8 @@ async function resolveApiKey(explicit?: string): Promise<string> {
   }
 }
 
-async function initializeMedia(media: string | undefined, dir: string): Promise<void> {
-  const tools = buildCutTools({ dir });
+async function initializeMedia(media: string | undefined, dir: string, cookies?: string): Promise<void> {
+  const tools = buildCutTools({ dir, ...(cookies ? { cookies } : {}) });
   if (media === undefined) return;
   if (/^https?:\/\//i.test(media)) {
     console.log(`fetching ${media} ...`);
@@ -122,11 +150,12 @@ function printEvent(event: Record<string, unknown>): void {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  args.cookies = resolveCookiesPath(args.cookies);
   console.log(`cut — session dir: ${args.dir}`);
 
-  await initializeMedia(args.media, args.dir);
+  await initializeMedia(args.media, args.dir, args.cookies);
 
-  const tools = buildCutTools({ dir: args.dir });
+  const tools = buildCutTools({ dir: args.dir, ...(args.cookies ? { cookies: args.cookies } : {}) });
   const apiKey = await resolveApiKey(args.key);
 
   const session = new AgentSession({

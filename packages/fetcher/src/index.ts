@@ -42,6 +42,8 @@ export interface FetchOptions {
   onProgress?: (percent: number) => void;
   /** Kill yt-dlp after this many milliseconds. Default: none. */
   timeoutMs?: number;
+  /** Path to a Netscape-format cookie file passed as `--cookies` to yt-dlp. */
+  cookies?: string;
   /** Extra args appended to the yt-dlp invocation. */
   extraArgs?: string[];
 }
@@ -156,12 +158,11 @@ function run(
 }
 
 /**
- * Download `url` into `outDir` at ≤1080p + best audio, with ko/en VTT subs.
+ * Pure helper building the yt-dlp argv. Exported for unit tests.
+ * When `cookies` is set, `--cookies <path>` is inserted before extraArgs.
  */
-export async function fetchVideo(url: string, outDir: string, opts: FetchOptions = {}): Promise<FetchResult> {
-  await checkYtDlp();
-
-  const args = [
+export function buildYtDlpArgs(url: string, opts: FetchOptions = {}): string[] {
+  return [
     "--format", FORMAT_STRING,
     "--write-auto-subs",
     "--write-subs",
@@ -170,9 +171,19 @@ export async function fetchVideo(url: string, outDir: string, opts: FetchOptions
     "--no-playlist",
     "--newline",
     "--output", OUTPUT_TEMPLATE,
+    ...(opts.cookies ? ["--cookies", opts.cookies] : []),
     ...(opts.extraArgs ?? []),
     url,
   ];
+}
+
+/**
+ * Download `url` into `outDir` at ≤1080p + best audio, with ko/en VTT subs.
+ */
+export async function fetchVideo(url: string, outDir: string, opts: FetchOptions = {}): Promise<FetchResult> {
+  await checkYtDlp();
+
+  const args = buildYtDlpArgs(url, opts);
 
   const res = await run("yt-dlp", args, {
     timeoutMs: opts.timeoutMs,
