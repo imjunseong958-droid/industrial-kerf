@@ -7,7 +7,7 @@ describe("timeline", () => {
       version: 1,
       fps: 30,
       sources: [{ id: "a", path: "/tmp/a.mp4" }],
-      tracks: [{ id: "v0", clips: [{ src: "a", in: 0, out: 5 }] }],
+      tracks: [{ id: "v0", clips: [{ id: "c1", src: "a", in: 0, out: 5 }] }],
       overlays: [],
     };
     expect(TimelineSchema.parse(t)).toMatchObject({ fps: 30 });

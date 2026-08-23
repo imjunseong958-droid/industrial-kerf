@@ -13,12 +13,18 @@ export const SourceSchema = z.object({
 export type Source = z.infer<typeof SourceSchema>;
 
 export const ClipSchema = z.object({
+  /** unique within a timeline; used as EditOp target selector */
+  id: z.string(),
   /** source id referencing sources[].id */
   src: z.string(),
   /** start time in seconds within the source */
   in: z.number(),
   /** end time in seconds within the source (> in) */
   out: z.number(),
+  /** playback rate multiplier, default 1 */
+  speed: z.number().positive().optional(),
+  /** linear volume, 1.0 = original, 0 = muted */
+  volume: z.number().min(0).optional(),
 });
 export type Clip = z.infer<typeof ClipSchema>;
 
