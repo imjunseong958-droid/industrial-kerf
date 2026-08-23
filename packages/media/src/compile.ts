@@ -8,7 +8,49 @@
  *  - concat filter across the clips of each track
  *  - tracks are concatenated too when there is more than one
  */
-import type { Clip, Source, Timeline } from "@cut/timeline";
+import type { Clip, Source, SubtitlesOverlay, Timeline } from "@cut/timeline";
+
+/**
+ * Escape a file path for use inside an ffmpeg filter argument (macOS-safe):
+ * backslashes and colons are special inside filter values, and the path is
+ * wrapped in single quotes which also need escaping.
+ */
+export function escapeFilterPath(p: string): string {
+  return p
+    .replace(/\\/g, "\\\\")
+    .replace(/:/g, "\\:")
+    .replace(/'/g, "\\'");
+}
+
+/** Convert '#rrggbb' to ASS '&HAABBGGRR'; pass other formats through. */
+function toAssColor(c: string): string {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(c);
+  if (!m) return c;
+  const r = c.slice(1, 3)!;
+  const g = c.slice(3, 5)!;
+  const b = c.slice(5, 7)!;
+  return `&H00${b}${g}${r}`.toUpperCase();
+}
+
+const ALIGNMENT: Record<NonNullable<SubtitlesOverlay["style"]>["position"] & string, number> = {
+  bottom: 2,
+  center: 5,
+  top: 8,
+};
+
+/** Build the `subtitles=` filter string for one overlay entry. */
+export function subtitlesFilter(o: SubtitlesOverlay): string {
+  const styleParts: string[] = [];
+  if (o.style?.fontSize !== undefined) styleParts.push(`FontSize=${o.style.fontSize}`);
+  if (o.style?.fontColor !== undefined) styleParts.push(`PrimaryColour=${toAssColor(o.style.fontColor)}`);
+  if (o.style?.outlineColor !== undefined) styleParts.push(`OutlineColour=${toAssColor(o.style.outlineColor)}`);
+  if (o.style?.position !== undefined) {
+    styleParts.push(`Alignment=${ALIGNMENT[o.style.position]}`);
+    if (o.style.marginV !== undefined) styleParts.push(`MarginV=${o.style.marginV}`);
+  }
+  const forceStyle = styleParts.length ? `:force_style='${styleParts.join(",")}'` : "";
+  return `subtitles=filename='${escapeFilterPath(o.path)}'${forceStyle}`;
+}
 
 export interface CompiledFilterGraph {
   /** Full ffmpeg argv array (spawn-safe, no shell). */
@@ -173,6 +215,16 @@ export function compileFilterGraph(
   if (opts.videoPostFilters?.length) {
     parts.push(`[${finalV}]${opts.videoPostFilters.join(",")}[${finalV}out]`);
     finalV = `${finalV}out`;
+  }
+
+  // Burn in subtitle overlays, chained after the final video output.
+  const subOverlays = timeline.overlays.filter(
+    (o): o is SubtitlesOverlay => (o as { type?: string }).type === "subtitles",
+  );
+  for (const o of subOverlays) {
+    const outLabel = `${finalV}subs`;
+    parts.push(`[${finalV}]${subtitlesFilter(o)}[${outLabel}]`);
+    finalV = outLabel;
   }
 
   const filterComplex = parts.join(";\n");

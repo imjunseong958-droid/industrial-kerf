@@ -40,18 +40,47 @@ export const OverlaySchema = z.object({
 }).passthrough();
 export type Overlay = z.infer<typeof OverlaySchema>;
 
+export const SubtitleStyleSchema = z.object({
+  fontSize: z.number().positive().optional(),
+  fontColor: z.string().optional(),
+  outlineColor: z.string().optional(),
+  position: z.enum(["bottom", "center", "top"]).optional(),
+  marginV: z.number().optional(),
+});
+export type SubtitleStyle = z.infer<typeof SubtitleStyleSchema>;
+
+/** Burned-in subtitle overlay backed by an .srt/.ass file. */
+export const SubtitlesOverlaySchema = z.object({
+  id: z.string(),
+  type: z.literal("subtitles"),
+  path: z.string(),
+  style: SubtitleStyleSchema.optional(),
+});
+export type SubtitlesOverlay = z.infer<typeof SubtitlesOverlaySchema>;
+
 export const TimelineSchema = z.object({
   version: z.literal(1),
   fps: z.number().positive(),
   sources: z.array(SourceSchema),
   tracks: z.array(TrackSchema),
-  overlays: z.array(OverlaySchema),
+  overlays: z.array(z.union([SubtitlesOverlaySchema, OverlaySchema])),
 });
 export type Timeline = z.infer<typeof TimelineSchema>;
 
 // ---------------------------------------------------------------------------
-// Edit operations — the payload of the `edit` tool
+// Edit operations
 // ---------------------------------------------------------------------------
+
+export const AddSubtitlesOpSchema = z.object({
+  op: z.literal("add_subtitles"),
+  path: z.string(),
+  style: SubtitleStyleSchema.optional(),
+});
+
+export const RemoveOverlayOpSchema = z.object({
+  op: z.literal("remove_overlay"),
+  id: z.string(),
+});
 
 export const TrimOpSchema = z.object({
   op: z.literal("trim"),
@@ -93,5 +122,7 @@ export const EditOpSchema = z.discriminatedUnion("op", [
   RemoveRangesOpSchema,
   SetSpeedOpSchema,
   SetVolumeOpSchema,
+  AddSubtitlesOpSchema,
+  RemoveOverlayOpSchema,
 ]);
 export type EditOp = z.infer<typeof EditOpSchema>;

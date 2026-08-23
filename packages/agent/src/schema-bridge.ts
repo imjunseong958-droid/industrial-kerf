@@ -59,7 +59,10 @@ const DEFAULT_TOOL_DEFS: Record<
   },
   edit: {
     description:
-      "Apply an edit operation to the timeline and return the updated Timeline JSON.",
+      "Apply an edit operation to the timeline and return the updated Timeline JSON. " +
+      "Ops: trim, split, remove_ranges, set_speed, set_volume, " +
+      "add_subtitles (burn in a subtitle file: { op: 'add_subtitles', path, style?: { fontSize, fontColor, outlineColor, position: 'bottom'|'center'|'top', marginV } }), " +
+      "remove_overlay ({ op: 'remove_overlay', id }).",
     input_schema: {
       type: "object",
       properties: { op: { type: "object", description: "EditOp union" } },

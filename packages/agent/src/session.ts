@@ -8,6 +8,7 @@ export const DEFAULT_MODEL = "claude-sonnet-4-20250514";
 
 export const DEFAULT_SYSTEM_PROMPT = `You are a video editing assistant.
 Available tools: fetch (get media), probe (inspect media), edit (modify timeline), render (output video), bash (shell).
+The edit tool supports add_subtitles ({ path, style?: { fontSize, fontColor, outlineColor, position: 'bottom'|'center'|'top', marginV } }) to burn in a subtitle file and remove_overlay ({ id }); subtitles are rendered into the output at render time.
 Timeline JSON is the single source of truth. Prefer draft renders for preview.`;
 
 export interface AgentEvent {

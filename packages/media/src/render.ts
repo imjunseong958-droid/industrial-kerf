@@ -2,7 +2,7 @@
  * render() — spawns ffmpeg with a compiled filtergraph, parses progress
  * from stderr `time=HH:MM:SS.xx` lines and reports via onProgress.
  */
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import type { Timeline } from "@cut/timeline";
 import { compileFilterGraph, timelineDuration } from "./compile.js";
 
@@ -12,6 +12,27 @@ export interface RenderOptions {
   draft?: boolean;
   /** Progress callback, ratio in [0,1]. */
   onProgress?: (ratio: number) => void;
+}
+
+/**
+ * Pick an ffmpeg binary: $CUT_FFMPEG if set, else the homebrew ffmpeg-full
+ * build (includes libass for the subtitles filter), else PATH "ffmpeg".
+ */
+export function resolveFfmpegBin(): string {
+  const candidates = [
+    process.env["CUT_FFMPEG"],
+    "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg",
+    "ffmpeg",
+  ].filter((c): c is string => Boolean(c));
+  for (const c of candidates) {
+    try {
+      execFileSync(c, ["-version"], { stdio: "ignore" });
+      return c;
+    } catch {
+      /* try next */
+    }
+  }
+  return "ffmpeg";
 }
 
 /** Parse ffmpeg's `time=HH:MM:SS.xx` (or `time=N.NN`) into seconds. */
@@ -57,7 +78,7 @@ export async function render(
   const args = renderArgs(timeline, opts);
 
   return new Promise((resolve, reject) => {
-    const child = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn(resolveFfmpegBin(), args, { stdio: ["ignore", "ignore", "pipe"] });
     let stderr = "";
     child.stderr.on("data", (d: Buffer) => {
       const text = d.toString();

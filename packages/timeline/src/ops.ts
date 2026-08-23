@@ -122,6 +122,29 @@ function applySetVolume(t: Timeline, clipId: string, volume: number): void {
 }
 
 // ---------------------------------------------------------------------------
+// add_subtitles / remove_overlay
+// ---------------------------------------------------------------------------
+
+function applyAddSubtitles(
+  t: Timeline,
+  path: string,
+  style?: import("./schema.js").SubtitleStyle,
+): void {
+  t.overlays.push({
+    id: `subs${t.overlays.length + 1}`,
+    type: "subtitles",
+    path,
+    ...(style !== undefined ? { style } : {}),
+  });
+}
+
+function applyRemoveOverlay(t: Timeline, id: string): void {
+  const before = t.overlays.length;
+  t.overlays = t.overlays.filter((o) => o.id !== id);
+  if (t.overlays.length === before) throw new Error(`overlay not found: ${id}`);
+}
+
+// ---------------------------------------------------------------------------
 // dispatcher
 // ---------------------------------------------------------------------------
 
@@ -142,6 +165,12 @@ export function applyEdit(timeline: Timeline, op: import("./schema.js").EditOp):
       break;
     case "set_volume":
       applySetVolume(t, op.clipId, op.volume);
+      break;
+    case "add_subtitles":
+      applyAddSubtitles(t, op.path, op.style);
+      break;
+    case "remove_overlay":
+      applyRemoveOverlay(t, op.id);
       break;
     default: {
       const never: never = op;
