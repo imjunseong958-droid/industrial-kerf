@@ -75,9 +75,9 @@ export function formatGanttBlock(timeline: Timeline): string {
 }
 
 /** Bilingual welcome banner listing slash commands and example prompts. */
-export function formatBanner(dir: string): string {
+export function formatBanner(dir: string, skillCount = 0): string {
   return [
-    bold(cyan("cut")) + dim(` — AI video editor · session dir: ${dir}`),
+    bold(cyan("cut")) + dim(` — AI video editor · session dir: ${dir}`) + (skillCount > 0 ? dim(` · ${skillCount} skill${skillCount === 1 ? "" : "s"}`) : ""),
     "",
     bold("Commands") + dim("  /timeline  /save  /quit"),
     bold("예시 프롬프트 · Example prompts") + ":",

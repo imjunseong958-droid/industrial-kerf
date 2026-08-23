@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages";
 import { buildToolsParam, type ToolMap } from "./schema-bridge.js";
+import { composeSystemPrompt, type Skill } from "@cut/skills";
 
 export const DEFAULT_MODEL = "claude-sonnet-4-20250514";
 
@@ -31,6 +32,8 @@ export interface AgentSessionOptions {
   client?: Pick<typeof Anthropic.prototype.messages, "create">;
   model?: string;
   systemPrompt?: string;
+  /** Skills appended to the system prompt as a compact index. */
+  skills?: Skill[];
   tools?: ToolMap;
   maxTurns?: number;
 }
@@ -83,7 +86,7 @@ export class AgentSession {
     this.client =
       opts.client ?? new Anthropic({ apiKey: opts.apiKey ?? process.env["ANTHROPIC_API_KEY"] }).messages;
     this.model = opts.model ?? DEFAULT_MODEL;
-    this.systemPrompt = opts.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
+    this.systemPrompt = composeSystemPrompt(opts.systemPrompt ?? DEFAULT_SYSTEM_PROMPT, opts.skills ?? []);
     this.tools = opts.tools ?? {};
     this.anthropicTools = buildToolsParam(this.tools);
     this.maxTurns = opts.maxTurns ?? 32;

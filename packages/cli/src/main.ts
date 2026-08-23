@@ -14,6 +14,7 @@ import process from "node:process";
 import { AgentSession } from "@cut/agent";
 import { YtDlpMissingError } from "@cut/fetcher";
 import { info } from "@cut/media";
+import { loadSkills, BUNDLED_SKILLS_DIR, type Skill } from "@cut/skills";
 import { dim, yellow } from "./ansi.js";
 import { Spinner } from "./spinner.js";
 import { formatToolLine, formatGanttBlock, formatBanner, GANTT_TOOLS } from "./ui.js";
@@ -28,6 +29,12 @@ interface Args {
   dir: string;
   cookies?: string | undefined;
   print?: string | undefined;
+  listSkills?: boolean;
+}
+
+/** Skill search order for a session dir: bundled examples < user < project (last wins). */
+export function skillDirsFor(dir: string): string[] {
+  return [BUNDLED_SKILLS_DIR, path.join(homedir(), ".cut", "skills"), path.join(dir, ".cut", "skills")];
 }
 
 /** Default cookie file used when it exists on disk. */
@@ -69,6 +76,9 @@ function parseArgs(argv: string[]): Args {
         break;
       case "--cookies":
         args.cookies = argv[++i];
+        break;
+      case "--skills":
+        args.listSkills = true;
         break;
       case "-p": {
         const rest = argv.slice(++i).join(" ");
@@ -156,6 +166,16 @@ async function main(): Promise<void> {
   args.cookies = resolveCookiesPath(args.cookies);
   console.log(`cut — session dir: ${args.dir}`);
 
+  const skills = await loadSkills(skillDirsFor(args.dir));
+  if (args.listSkills) {
+    if (skills.length === 0) {
+      console.log("no skills loaded");
+    } else {
+      for (const s of skills) console.log(`${s.name} — ${s.description}\n  ${path.join(s.dir, "SKILL.md")}`);
+    }
+    return;
+  }
+
   await initializeMedia(args.media, args.dir, args.cookies);
 
   const tools = buildCutTools({ dir: args.dir, ...(args.cookies ? { cookies: args.cookies } : {}) });
@@ -164,6 +184,7 @@ async function main(): Promise<void> {
   const session = new AgentSession({
     apiKey,
     ...(args.model ? { model: args.model } : {}),
+    skills,
     tools,
   });
   session.onEvent(printEvent as never);
@@ -182,7 +203,7 @@ async function main(): Promise<void> {
     prompt: "❯ ",
     historySize: 200,
   });
-  console.log("\n" + formatBanner(args.dir) + "\n");
+  console.log("\n" + formatBanner(args.dir, skills.length) + "\n");
   rl.prompt();
 
   // Ctrl-C: cancel the in-flight generation; Ctrl-D (EOF) closes the loop.

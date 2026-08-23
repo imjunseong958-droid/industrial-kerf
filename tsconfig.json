@@ -4,6 +4,7 @@
     { "path": "packages/timeline" },
     { "path": "packages/media" },
     { "path": "packages/agent" },
+    { "path": "packages/skills" },
     { "path": "packages/fetcher" },
     { "path": "packages/cli" }
   ]

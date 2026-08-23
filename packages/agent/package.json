@@ -9,6 +9,7 @@
     "@anthropic-ai/sdk": "^0.120.0",
     "@cut/fetcher": "*",
     "@cut/media": "*",
+    "@cut/skills": "*",
     "@cut/timeline": "*"
   }
 }
