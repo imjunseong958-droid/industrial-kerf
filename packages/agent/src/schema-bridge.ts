@@ -5,6 +5,18 @@ import type { CutTools, ToolName } from "./tools.js";
 /**
  * A concrete tool implementation handed to AgentSession. Only the tools
  * present in the map are offered to the model.
+ *
+ * The map holds the five built-in CutTools contracts plus any number of
+ * extension tools (e.g. MCP tools under `mcp_<server>_<tool>` names), which
+ * must carry their own description and inputJsonSchema.
+ */
+export type ToolMap = Partial<Record<ToolName, ToolImpl<any, any>>> & {
+  [extension: string]: ToolImpl<any, any> | undefined;
+};
+
+/**
+ * A concrete tool implementation handed to AgentSession. Only the tools
+ * present in the map are offered to the model.
  */
 export interface ToolImpl<I = unknown, O = unknown> {
   /** Optional override of the tool description shown to the model. */
@@ -15,8 +27,6 @@ export interface ToolImpl<I = unknown, O = unknown> {
   inputJsonSchema?: Record<string, unknown>;
   execute(input: I): Promise<O>;
 }
-
-export type ToolMap = Partial<Record<ToolName, ToolImpl<any, any>>>;
 
 /** Default descriptions + JSON schemas derived from the CutTools contracts. */
 const DEFAULT_TOOL_DEFS: Record<
@@ -90,32 +100,35 @@ const DEFAULT_TOOL_DEFS: Record<
   },
 };
 
-/** Convert one CutTools entry into an Anthropic tool definition. */
+/** Convert one ToolMap entry into an Anthropic tool definition. */
 export function toAnthropicTool(
-  name: ToolName,
+  name: string,
   impl?: ToolImpl,
 ): Anthropic.Tool {
-  const def = DEFAULT_TOOL_DEFS[name];
+  const def = (DEFAULT_TOOL_DEFS as Record<string, { description: string; input_schema: Record<string, unknown> }>)[name];
   let input_schema: Record<string, unknown>;
   if (impl?.inputJsonSchema) {
     input_schema = impl.inputJsonSchema;
-  } else if (impl?.inputSchema) {
+  } else if (impl?.inputSchema instanceof z.ZodType) {
     input_schema = z.toJSONSchema(impl.inputSchema) as Record<string, unknown>;
   } else {
-    input_schema = def.input_schema;
+    input_schema = def?.input_schema ?? { type: "object", properties: {} };
   }
   return {
     name,
-    description: impl?.description ?? def.description,
+    description: impl?.description ?? def!.description,
     input_schema: input_schema as unknown as Anthropic.Tool.InputSchema,
   };
 }
 
 /** Build the full Anthropic tools array for the given tool map. */
 export function buildToolsParam(toolMap: ToolMap): Anthropic.Tool[] {
-  return (Object.keys(DEFAULT_TOOL_DEFS) as ToolName[])
-    .filter((n) => toolMap[n] != null)
-    .map((n) => toAnthropicTool(n, toolMap[n]));
+  const tools: Anthropic.Tool[] = [];
+  for (const [name, impl] of Object.entries(toolMap)) {
+    if (impl == null) continue;
+    tools.push(toAnthropicTool(name, impl as ToolImpl));
+  }
+  return tools;
 }
 
 /** Registry-only helper: schemas for all five CutTools contracts. */

@@ -12,6 +12,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { AgentSession } from "@cut/agent";
+import { initMcpTools } from "@cut/mcp";
 import { YtDlpMissingError } from "@cut/fetcher";
 import { info } from "@cut/media";
 import { loadSkills, BUNDLED_SKILLS_DIR, type Skill } from "@cut/skills";
@@ -30,6 +31,7 @@ interface Args {
   cookies?: string | undefined;
   print?: string | undefined;
   listSkills?: boolean;
+  listMcp?: boolean;
 }
 
 /** Skill search order for a session dir: bundled examples < user < project (last wins). */
@@ -79,6 +81,9 @@ function parseArgs(argv: string[]): Args {
         break;
       case "--skills":
         args.listSkills = true;
+        break;
+      case "--mcp":
+        args.listMcp = true;
         break;
       case "-p": {
         const rest = argv.slice(++i).join(" ");
@@ -176,6 +181,29 @@ async function main(): Promise<void> {
     return;
   }
 
+  // MCP extension: connect configured stdio servers, discover their tools.
+  // Failures degrade to warnings; an empty/missing mcp.json is silent.
+  const mcpRegistry = await initMcpTools({
+    cwd: args.dir,
+    ...(args.listMcp ? { log: (l: string) => console.log(l) } : {}),
+  });
+  if (args.listMcp) {
+    const described = mcpRegistry.describe();
+    if (described.length === 0) {
+      console.log("no MCP tools discovered (no ~/.cut/mcp.json or ./.cut/mcp.json)");
+    } else {
+      for (const s of described) {
+        console.log(`${s.server}:`);
+        if (s.tools.length === 0) console.log("  (no tools)");
+        for (const t of s.tools) {
+          console.log(`  mcp_${s.server}_${t.name}${t.description ? ` — ${t.description}` : ""}`);
+        }
+      }
+    }
+    await mcpRegistry.close();
+    return;
+  }
+
   await initializeMedia(args.media, args.dir, args.cookies);
 
   const tools = buildCutTools({ dir: args.dir, ...(args.cookies ? { cookies: args.cookies } : {}) });
@@ -185,7 +213,7 @@ async function main(): Promise<void> {
     apiKey,
     ...(args.model ? { model: args.model } : {}),
     skills,
-    tools,
+    tools: { ...tools, ...mcpRegistry.tools },
   });
   session.onEvent(printEvent as never);
 

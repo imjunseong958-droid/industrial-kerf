@@ -7,6 +7,7 @@
   "dependencies": {
     "@cut/agent": "*",
     "@cut/fetcher": "*",
+    "@cut/mcp": "*",
     "@cut/media": "*",
     "@cut/timeline": "*",
     "zod": "^3.24.1"
