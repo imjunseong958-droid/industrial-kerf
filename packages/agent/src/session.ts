@@ -1,11 +1,21 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import Anthropic from "@anthropic-ai/sdk";
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages";
 import { buildToolsParam, type ToolMap } from "./schema-bridge.js";
+import {
+  AnthropicProvider,
+  OpenAIProvider,
+  DEFAULT_MODELS,
+  type LlmProvider,
+  type ProviderName,
+  type AnthropicClientLike,
+  type OpenAICompletionsLike,
+} from "./provider.js";
 import { composeSystemPrompt, type Skill } from "@cut/skills";
 
-export const DEFAULT_MODEL = "claude-sonnet-4-20250514";
+export const DEFAULT_MODEL = DEFAULT_MODELS.anthropic;
+export { DEFAULT_MODELS };
+export type { ProviderName };
 
 export const DEFAULT_SYSTEM_PROMPT = `You are a video editing assistant.
 Available tools: fetch (get media), probe (inspect media), edit (modify timeline), render (output video), bash (shell).
@@ -28,8 +38,14 @@ export type AgentEventHandler = (event: AgentEvent) => void;
 
 export interface AgentSessionOptions {
   apiKey?: string;
-  /** Injected client — overrides apiKey. Used by tests with a mock. */
-  client?: Pick<typeof Anthropic.prototype.messages, "create">;
+  /** LLM provider when no client is injected. Default: anthropic. */
+  provider?: ProviderName;
+  /** Base URL override for the OpenAI-compatible provider (OpenRouter, Ollama…). */
+  baseUrl?: string;
+  /** Injected Anthropic-like client — overrides apiKey. Used by tests with a mock. */
+  client?: AnthropicClientLike;
+  /** Injected OpenAI chat.completions-like seam — overrides apiKey. */
+  openaiClient?: OpenAICompletionsLike;
   model?: string;
   systemPrompt?: string;
   /** Skills appended to the system prompt as a compact index. */
@@ -53,23 +69,19 @@ function isToolUse(block: unknown): boolean {
   );
 }
 
-function isTextBlock(block: unknown): block is { type: "text"; text: string } {
-  return (
-    typeof block === "object" &&
-    block !== null &&
-    (block as { type?: unknown }).type === "text"
-  );
-}
-
-/** One agentic turn loop over the Anthropic messages API with tool use. */
+/**
+ * One agentic turn loop over a pluggable LLM provider
+ * ('anthropic' or any OpenAI-compatible endpoint) with tool use.
+ */
 export class AgentSession {
   readonly model: string;
+  readonly provider: ProviderName;
   readonly systemPrompt: string;
   messages: MessageParam[] = [];
   private readonly tools: ToolMap;
-  private readonly anthropicTools;
+  private readonly normalizedTools;
   private readonly maxTurns: number;
-  private readonly client: { create: (typeof Anthropic.prototype.messages)["create"] };
+  private readonly llm: LlmProvider;
   private handlers = new Set<AgentEventHandler>();
   private aborted = false;
 
@@ -83,12 +95,25 @@ export class AgentSession {
   }
 
   constructor(opts: AgentSessionOptions) {
-    this.client =
-      opts.client ?? new Anthropic({ apiKey: opts.apiKey ?? process.env["ANTHROPIC_API_KEY"] }).messages;
-    this.model = opts.model ?? DEFAULT_MODEL;
+    this.provider = opts.provider ?? "anthropic";
+    if (opts.client) {
+      this.llm = new AnthropicProvider(opts.client);
+      this.provider = "anthropic";
+    } else if (opts.openaiClient) {
+      this.llm = new OpenAIProvider(opts.openaiClient);
+      this.provider = "openai";
+    } else if (this.provider === "openai") {
+      this.llm = new OpenAIProvider(undefined, {
+        ...(opts.apiKey ? { apiKey: opts.apiKey } : {}),
+        ...(opts.baseUrl ? { baseURL: opts.baseUrl } : {}),
+      });
+    } else {
+      this.llm = new AnthropicProvider(undefined, opts.apiKey);
+    }
+    this.model = opts.model ?? this.llm.defaultModel;
     this.systemPrompt = composeSystemPrompt(opts.systemPrompt ?? DEFAULT_SYSTEM_PROMPT, opts.skills ?? []);
     this.tools = opts.tools ?? {};
-    this.anthropicTools = buildToolsParam(this.tools);
+    this.normalizedTools = buildToolsParam(this.tools);
     this.maxTurns = opts.maxTurns ?? 32;
   }
 
@@ -112,48 +137,59 @@ export class AgentSession {
         this.emit({ type: "aborted" });
         break;
       }
-      const response = await this.client.create({
+      // Stream the model response through the normalized provider event flow.
+      let stopReason = "end_turn";
+      let contentBlocks: unknown[] = [];
+      for await (const chunk of this.llm.stream({
         model: this.model,
-        max_tokens: 8192,
         system: this.systemPrompt,
-        tools: this.anthropicTools,
+        tools: this.normalizedTools as never,
         messages: [...this.messages],
-      });
+      })) {
+        if (chunk.type === "text_delta") {
+          this.emit({ type: "text_delta", text: chunk.text });
+          continue;
+        }
+        stopReason = chunk.stopReason;
+        contentBlocks = chunk.content;
+      }
 
+      this.emit({ type: "turn_started", stopReason });
       this.messages.push({
         role: "assistant",
-        // Serialize SDK blocks defensively (mocks / plain objects lack toJSON).
-        content: response.content.map((b: unknown) =>
-          typeof (b as { toJSON?: unknown }).toJSON === "function"
-            ? (b as { toJSON: () => unknown }).toJSON()
-            : b,
-        ) as MessageParam["content"],
+        content: contentBlocks as MessageParam["content"],
       });
-      this.emit({ type: "turn_started", stopReason: response.stop_reason });
 
-      // Emit text deltas.
-      let textParts: string[] = [];
-      for (const block of response.content) {
-        if (isTextBlock(block)) {
-          textParts.push(block.text);
-          this.emit({ type: "text_delta", text: block.text });
+      const textParts: string[] = [];
+      for (const block of contentBlocks) {
+        if (
+          typeof block === "object" &&
+          block !== null &&
+          (block as { type?: unknown }).type === "text" &&
+          typeof (block as { text?: unknown }).text === "string"
+        ) {
+          textParts.push((block as { text: string }).text);
         }
       }
 
-      if (response.stop_reason !== "tool_use") {
+      if (stopReason !== "tool_use") {
         finalText += textParts.join("");
         break;
       }
 
       // Execute each requested tool call and append results.
-      const toolUses = response.content.filter(isToolUse) as unknown as ToolUseBlockLike[];
+      const toolUses = contentBlocks.filter(isToolUse) as unknown as ToolUseBlockLike[];
       const results: MessageParam[] = [
         {
           role: "user",
-          content: [] as Anthropic.ToolResultBlockParam[],
+          content: [] as never[],
         },
       ];
-      const resultBlocks = results[0]!.content as Anthropic.ToolResultBlockParam[];
+      const resultBlocks = results[0]!.content as Array<{
+        type: "tool_result";
+        tool_use_id: string;
+        content: string;
+      }>;
       for (const use of toolUses) {
         if (this.aborted) {
           this.emit({ type: "aborted" });
@@ -181,7 +217,6 @@ export class AgentSession {
         });
       }
       this.messages.push(...results);
-      textParts = [];
     }
 
     this.emit({ type: "done", text: finalText });

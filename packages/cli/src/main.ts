@@ -3,7 +3,11 @@
  * cut — interactive CLI video editor.
  *
  * Usage:
- *   npx cut [video-or-url] [-k key] [--model m] [--dir d] [-p "instruction"]
+ *   npx cut [video-or-url] [-k key] [--provider anthropic|openai] [--model m] [--dir d] [-p "instruction"]
+ *
+ * Providers: anthropic (ANTHROPIC_API_KEY) or any OpenAI-compatible API
+ * (OPENAI_API_KEY, optional OPENAI_BASE_URL for OpenRouter/Ollama/LM Studio).
+ * Defaults can live in ~/.cut/config.json as { provider, apiKey, model }.
  */
 import { createInterface } from "node:readline/promises";
 import { readFile } from "node:fs/promises";
@@ -11,7 +15,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { AgentSession } from "@cut/agent";
+import { AgentSession, DEFAULT_MODELS, type ProviderName } from "@cut/agent";
 import { initMcpTools } from "@cut/mcp";
 import { YtDlpMissingError } from "@cut/fetcher";
 import { info } from "@cut/media";
@@ -26,12 +30,19 @@ import { renderTimelineGantt } from "./gantt.js";
 interface Args {
   media?: string | undefined;
   key?: string | undefined;
+  provider?: string | undefined;
   model?: string | undefined;
   dir: string;
   cookies?: string | undefined;
   print?: string | undefined;
   listSkills?: boolean;
   listMcp?: boolean;
+}
+
+interface ResolvedLlmConfig {
+  provider: ProviderName;
+  apiKey: string | undefined;
+  model: string | undefined;
 }
 
 /** Skill search order for a session dir: bundled examples < user < project (last wins). */
@@ -70,6 +81,9 @@ function parseArgs(argv: string[]): Args {
       case "-k":
         args.key = argv[++i];
         break;
+      case "--provider":
+        args.provider = argv[++i];
+        break;
       case "--model":
         args.model = argv[++i];
         break;
@@ -98,23 +112,53 @@ function parseArgs(argv: string[]): Args {
   return args;
 }
 
-async function resolveApiKey(explicit?: string): Promise<string> {
-  if (explicit) return explicit;
-  if (process.env["ANTHROPIC_API_KEY"]) return process.env["ANTHROPIC_API_KEY"];
+/** Read ~/.cut/config.json, tolerating a missing or malformed file. */
+async function readCutConfig(): Promise<Record<string, unknown>> {
   try {
-    const cfg = JSON.parse(await readFile(path.join(homedir(), ".cut", "config.json"), "utf-8"));
-    if (typeof cfg["apiKey"] === "string" && cfg["apiKey"]) return cfg["apiKey"] as string;
+    const raw = await readFile(path.join(homedir(), ".cut", "config.json"), "utf-8");
+    return JSON.parse(raw) as Record<string, unknown>;
   } catch {
-    /* no config */
+    return {};
   }
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    const key = (await rl.question("ANTHROPIC_API_KEY: ")).trim();
-    if (!key) throw new Error("no API key provided");
-    return key;
-  } finally {
-    rl.close();
+}
+
+/**
+ * Resolve provider + API key + model, in priority order:
+ *   provider: --provider > config.provider > env keys (anthropic wins if both set)
+ *   key:      -k flag > provider-specific env > config.apiKey > interactive prompt
+ *   model:    --model > config.model > provider default (handled by AgentSession)
+ */
+export async function resolveLlmConfig(
+  explicitKey: string | undefined,
+  explicitProvider: string | undefined,
+  explicitModel: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+  readConfig: () => Promise<Record<string, unknown>> = readCutConfig,
+): Promise<ResolvedLlmConfig> {
+  const cfg = await readConfig();
+  const cfgProvider = typeof cfg["provider"] === "string" ? (cfg["provider"] as string) : undefined;
+  const providerRaw =
+    explicitProvider ?? cfgProvider ?? (env["ANTHROPIC_API_KEY"] ? "anthropic" : env["OPENAI_API_KEY"] ? "openai" : undefined);
+  if (providerRaw !== undefined && providerRaw !== "anthropic" && providerRaw !== "openai") {
+    throw new Error(`unknown provider "${providerRaw}" — expected anthropic or openai`);
   }
+  const provider: ProviderName = providerRaw ?? "anthropic";
+  const envKey = provider === "openai" ? env["OPENAI_API_KEY"] : env["ANTHROPIC_API_KEY"];
+  const cfgKey = typeof cfg["apiKey"] === "string" && cfg["apiKey"] ? (cfg["apiKey"] as string) : undefined;
+  let apiKey = explicitKey ?? envKey ?? cfgKey;
+  if (!apiKey) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      const key = (await rl.question(`${provider.toUpperCase()}_API_KEY: `)).trim();
+      if (!key) throw new Error("no API key provided");
+      apiKey = key;
+    } finally {
+      rl.close();
+    }
+  }
+  const cfgModel = typeof cfg["model"] === "string" && cfg["model"] ? (cfg["model"] as string) : undefined;
+  const model = explicitModel ?? cfgModel ?? DEFAULT_MODELS[provider];
+  return { provider, apiKey, model };
 }
 
 async function initializeMedia(media: string | undefined, dir: string, cookies?: string): Promise<void> {
@@ -207,11 +251,15 @@ async function main(): Promise<void> {
   await initializeMedia(args.media, args.dir, args.cookies);
 
   const tools = buildCutTools({ dir: args.dir, ...(args.cookies ? { cookies: args.cookies } : {}) });
-  const apiKey = await resolveApiKey(args.key);
+  const llm = await resolveLlmConfig(args.key, args.provider, args.model);
+  const baseUrl =
+    llm.provider === "openai" ? process.env["OPENAI_BASE_URL"] || undefined : undefined;
 
   const session = new AgentSession({
-    apiKey,
-    ...(args.model ? { model: args.model } : {}),
+    provider: llm.provider,
+    ...(llm.apiKey ? { apiKey: llm.apiKey } : {}),
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(llm.model ? { model: llm.model } : {}),
     skills,
     tools: { ...tools, ...mcpRegistry.tools },
   });
@@ -231,7 +279,7 @@ async function main(): Promise<void> {
     prompt: "❯ ",
     historySize: 200,
   });
-  console.log("\n" + formatBanner(args.dir, skills.length) + "\n");
+  console.log("\n" + formatBanner(args.dir, skills.length, `${llm.provider} · ${llm.model}`) + "\n");
   rl.prompt();
 
   // Ctrl-C: cancel the in-flight generation; Ctrl-D (EOF) closes the loop.
