@@ -1,0 +1,11 @@
+{
+  "name": "@cut/agent",
+  "type": "module",
+  "version": "0.1.0",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@cut/timeline": "*",
+    "@cut/media": "*",
+    "@cut/fetcher": "*"
+  }
+}

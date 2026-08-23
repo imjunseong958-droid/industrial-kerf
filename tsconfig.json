@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/timeline" },
+    { "path": "packages/media" },
+    { "path": "packages/agent" },
+    { "path": "packages/fetcher" },
+    { "path": "packages/cli" }
+  ]
+}

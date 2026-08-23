@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.avi
+*.wav
+*.mp3
+*.m4a
+*.srt
+*.vtt

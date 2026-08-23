@@ -1,0 +1,12 @@
+{
+  "name": "@cut/cli",
+  "type": "module",
+  "version": "0.1.0",
+  "bin": { "cut": "./src/main.ts" },
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@cut/agent": "*",
+    "@cut/media": "*",
+    "@cut/timeline": "*"
+  }
+}

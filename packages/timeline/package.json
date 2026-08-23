@@ -1,0 +1,9 @@
+{
+  "name": "@cut/timeline",
+  "type": "module",
+  "version": "0.1.0",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "zod": "^3.24.1"
+  }
+}
