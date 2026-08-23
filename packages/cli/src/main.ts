@@ -14,8 +14,11 @@ import process from "node:process";
 import { AgentSession } from "@cut/agent";
 import { YtDlpMissingError } from "@cut/fetcher";
 import { info } from "@cut/media";
+import { dim, yellow } from "./ansi.js";
+import { Spinner } from "./spinner.js";
+import { formatToolLine, formatGanttBlock, formatBanner, GANTT_TOOLS } from "./ui.js";
 import { buildCutTools } from "./tools.js";
-import { initialTimeline, loadTimeline, saveTimeline, projectPath } from "./state.js";
+import { initialTimeline, loadTimeline, saveTimeline } from "./state.js";
 import { renderTimelineGantt } from "./gantt.js";
 
 interface Args {
@@ -173,36 +176,114 @@ async function main(): Promise<void> {
   }
 
   // Interactive REPL.
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  console.log("\nCommands: /timeline /save /quit — otherwise just describe your edit.\n");
-  // Exit cleanly when stdin closes (EOF / Ctrl-D).
-  let eof = false;
-  rl.on("close", () => {
-    eof = true;
-    console.log();
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    prompt: "❯ ",
+    historySize: 200,
   });
-  while (!eof) {
-    const line = (await rl.question("cut> ")).trim();
+  console.log("\n" + formatBanner(args.dir) + "\n");
+  rl.prompt();
+
+  // Ctrl-C: cancel the in-flight generation; Ctrl-D (EOF) closes the loop.
+  let generating = false;
+  rl.on("SIGINT", () => {
+    if (generating) {
+      session.abort();
+      process.stdout.write(dim("\n  cancelling…\n"));
+    } else {
+      process.stdout.write("\n");
+      rl.prompt();
+    }
+  });
+
+  for await (const raw of rl) {
+    const line = raw.trim();
     if (line === "/quit" || line === "/q" || line === "exit") break;
     if (line === "/timeline") {
       try {
-        const raw = JSON.parse(await readFile(projectPath(args.dir), "utf-8"));
-        console.log(JSON.stringify(raw, null, 2));
+        const tl = await loadTimeline(args.dir);
+        if (!tl) throw new Error("none");
+        console.log(formatGanttBlock(tl));
       } catch {
         console.log("no project timeline yet");
       }
+      rl.prompt();
       continue;
     }
     if (line === "/save") {
       await session.save(path.join(args.dir, "conversation.json"));
       console.log("saved conversation.json");
+      rl.prompt();
       continue;
     }
-    if (line === "") continue;
+    if (line === "") {
+      rl.prompt();
+      continue;
+    }
+
+    generating = true;
+    const spinner = new Spinner();
+    spinner.start("thinking…");
+    const startedCalls = new Map<string, { name: string; input: unknown; t: number }>();
+    let sawText = false;
+    let ganttDue = false;
+    const off = session.onEvent((event) => {
+      switch (event["type"]) {
+        case "text_delta":
+          if (!sawText) {
+            spinner.stop();
+            sawText = true;
+          }
+          process.stdout.write(String(event["text"]));
+          break;
+        case "tool_call_started":
+          startedCalls.set(String(event["id"]), {
+            name: String(event["name"]),
+            input: event["input"],
+            t: Date.now(),
+          });
+          spinner.update(`running ${String(event["name"])}…`);
+          break;
+        case "tool_call_finished": {
+          const s = startedCalls.get(String(event["id"]));
+          const ok = event["ok"] !== false;
+          console.log(
+            "\n" +
+              formatToolLine({
+                name: String(event["name"]),
+                ...(s ? { input: s.input } : {}),
+                ok,
+                ...(s ? { durationMs: Date.now() - s.t } : {}),
+                ...(ok ? {} : { error: String(event["error"] ?? "failed") }),
+              }),
+          );
+          if (ok && GANTT_TOOLS.has(String(event["name"]))) ganttDue = true;
+          break;
+        }
+        case "error":
+          spinner.stop();
+          console.log("\n" + yellow(`error: ${String(event["error"] ?? event)}`));
+          break;
+        default:
+          break;
+      }
+    });
+    try {
+      await session.run(line);
+    } finally {
+      off();
+      spinner.stop();
+      generating = false;
+    }
+    if (ganttDue && !session.isAborted) {
+      const tl = await loadTimeline(args.dir);
+      if (tl) console.log("\n" + dim(formatGanttBlock(tl)));
+    }
     console.log();
-    await session.run(line);
-    console.log("\n");
+    rl.prompt();
   }
+  console.log(dim("bye 👋"));
   rl.close();
 }
 

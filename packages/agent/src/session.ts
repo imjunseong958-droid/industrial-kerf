@@ -18,6 +18,7 @@ export interface AgentEvent {
     | "tool_call_finished"
     | "turn_started"
     | "done"
+    | "aborted"
     | "error";
   [key: string]: unknown;
 }
@@ -67,6 +68,16 @@ export class AgentSession {
   private readonly maxTurns: number;
   private readonly client: { create: (typeof Anthropic.prototype.messages)["create"] };
   private handlers = new Set<AgentEventHandler>();
+  private aborted = false;
+
+  /** Request cancellation of the current run(); takes effect between steps. */
+  abort(): void {
+    this.aborted = true;
+  }
+
+  get isAborted(): boolean {
+    return this.aborted;
+  }
 
   constructor(opts: AgentSessionOptions) {
     this.client =
@@ -90,9 +101,14 @@ export class AgentSession {
   /** Run the agent loop for a user message until a text-only response. */
   async run(userMessage: string): Promise<string> {
     this.messages.push({ role: "user", content: userMessage });
+    this.aborted = false;
     let finalText = "";
 
     for (let turn = 0; turn < this.maxTurns; turn++) {
+      if (this.aborted) {
+        this.emit({ type: "aborted" });
+        break;
+      }
       const response = await this.client.create({
         model: this.model,
         max_tokens: 8192,
@@ -136,6 +152,11 @@ export class AgentSession {
       ];
       const resultBlocks = results[0]!.content as Anthropic.ToolResultBlockParam[];
       for (const use of toolUses) {
+        if (this.aborted) {
+          this.emit({ type: "aborted" });
+          this.emit({ type: "done", text: finalText });
+          return finalText;
+        }
         this.emit({ type: "tool_call_started", id: use.id, name: use.name, input: use.input });
         let outputText: string;
         try {
