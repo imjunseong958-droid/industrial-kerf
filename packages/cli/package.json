@@ -6,7 +6,9 @@
   "exports": { ".": "./src/index.ts" },
   "dependencies": {
     "@cut/agent": "*",
+    "@cut/fetcher": "*",
     "@cut/media": "*",
-    "@cut/timeline": "*"
+    "@cut/timeline": "*",
+    "zod": "^3.24.1"
   }
 }
