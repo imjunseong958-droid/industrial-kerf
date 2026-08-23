@@ -2,10 +2,13 @@
   "name": "@cut/agent",
   "type": "module",
   "version": "0.1.0",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "dependencies": {
-    "@cut/timeline": "*",
+    "@anthropic-ai/sdk": "^0.120.0",
+    "@cut/fetcher": "*",
     "@cut/media": "*",
-    "@cut/fetcher": "*"
+    "@cut/timeline": "*"
   }
 }
