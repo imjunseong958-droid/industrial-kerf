@@ -1,0 +1,11 @@
+# Copy this file, replace `path`, and point --data at the copy.
+# Ultralytics YOLO detection labels are one TXT file per image:
+#   class_id center_x center_y width height
+# with all coordinates normalized to 0..1.
+path: /absolute/path/to/cam-chat-content-dataset
+train: images/train
+val: images/val
+names:
+  0: cam
+  1: chat
+  2: content

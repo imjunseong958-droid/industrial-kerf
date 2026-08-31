@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { renderTimelineGantt, progressBar } from "../src/gantt.js";
 import { buildCutTools } from "../src/tools.js";
-import { initialTimeline, loadTimeline, saveTimeline } from "../src/state.js";
+import { initialTimeline, loadProjectV2, saveTimeline } from "../src/state.js";
 import type { Timeline } from "@cut/timeline";
 
 function sampleTimeline(duration = 10): Timeline {
@@ -38,7 +38,7 @@ describe("renderTimelineGantt", () => {
   });
 });
 
-// A mock AgentSession-like harness exercising the tool registry directly.
+// A mock AgentSession-like helper exercising the tool registry directly.
 describe("tool wiring state logic", () => {
   let dir: string;
 
@@ -53,25 +53,24 @@ describe("tool wiring state logic", () => {
     await saveTimeline(dir, sampleTimeline(10));
   }
 
-  it("edit round-trips trim to disk and prints gantt", async () => {
+  it("project_edit round-trips trim to disk as v2", async () => {
     await seed();
     const tools = buildCutTools({ dir });
-    const out = (await tools.edit.execute({
+    expect(tools.edit).toBeUndefined();
+    await tools.project_edit!.execute({
       op: { op: "trim", clipId: "c1", newOut: 5 },
-    })) as Timeline & { summary: string };
-    expect(out.tracks[0]!.clips[0]!.out).toBe(5);
-    expect(out.summary).toContain("duration 5.0s");
+    });
 
-    // Reload from disk — the change persisted.
-    const onDisk = await loadTimeline(dir);
+    const onDisk = await loadProjectV2(dir);
+    expect(onDisk!.version).toBe(2);
     expect(onDisk!.tracks[0]!.clips[0]!.out).toBe(5);
   });
 
   it("split creates two clips persisted across calls", async () => {
     await seed();
     const tools = buildCutTools({ dir });
-    await tools.edit.execute({ op: { op: "split", clipId: "c1", at: 4 } });
-    const onDisk = await loadTimeline(dir);
+    await tools.project_edit!.execute({ op: { op: "split", clipId: "c1", at: 4 } });
+    const onDisk = await loadProjectV2(dir);
     expect(onDisk!.tracks[0]!.clips.map((c) => c.id)).toEqual(["c1", "c1-b"]);
     expect(onDisk!.tracks[0]!.clips[0]!.out).toBe(4);
     expect(onDisk!.tracks[0]!.clips[1]!.in).toBe(4);
@@ -80,23 +79,55 @@ describe("tool wiring state logic", () => {
   it("set_speed persists", async () => {
     await seed();
     const tools = buildCutTools({ dir });
-    await tools.edit.execute({ op: { op: "set_speed", clipId: "c1", speed: 2 } });
-    expect((await loadTimeline(dir))!.tracks[0]!.clips[0]!.speed).toBe(2);
+    await tools.project_edit!.execute({ op: { op: "set_speed", clipId: "c1", speed: 2 } });
+    expect((await loadProjectV2(dir))!.tracks[0]!.clips[0]!.speed).toBe(2);
   });
 
-  it("edit throws when no timeline exists", async () => {
+  it("project_edit rejects an edit against the empty canonical project", async () => {
     const tools = buildCutTools({ dir });
     await expect(
-      tools.edit.execute({ op: { op: "trim", clipId: "c1", newOut: 5 } }),
-    ).rejects.toThrow(/no project timeline/);
+      tools.project_edit!.execute({ op: { op: "trim", clipId: "c1", newOut: 5 } }),
+    ).rejects.toThrow(/clip not found/);
   });
 
   it("bash runs in the session dir", async () => {
     await seed();
-    const tools = buildCutTools({ dir });
-    const res = await tools.bash.execute({ command: "pwd" });
+    const tools = buildCutTools({ dir, enableBash: true });
+    const res = await tools.bash!.execute({ command: "pwd" });
     expect(res.exitCode).toBe(0);
     expect(path.basename(res.stdout.trim())).toBe(path.basename(dir));
+  });
+
+  it("does not expose bash unless explicitly enabled", async () => {
+    await seed();
+    // User-level vision configuration must not change the core tool catalog
+    // asserted by this test.
+    const tools = buildCutTools({ dir, vision: {} });
+    expect(tools.bash).toBeUndefined();
+    expect(Object.keys(tools).sort()).toEqual([
+      "fetch",
+      "probe",
+      "project_edit",
+      "render",
+      "skill_read",
+      "timeline",
+      "timeline_redo",
+      "timeline_undo",
+    ]);
+    expect(tools.timeline_query).toBeUndefined();
+    expect(tools.timeline_apply).toBeUndefined();
+  });
+
+  it("exposes bash when the explicit environment opt-in is set", async () => {
+    await seed();
+    const previous = process.env["CUT_ENABLE_BASH"];
+    process.env["CUT_ENABLE_BASH"] = "1";
+    try {
+      expect(buildCutTools({ dir }).bash).toBeDefined();
+    } finally {
+      if (previous === undefined) delete process.env["CUT_ENABLE_BASH"];
+      else process.env["CUT_ENABLE_BASH"] = previous;
+    }
   });
 
   it("saveTimeline writes valid JSON at projectPath", async () => {

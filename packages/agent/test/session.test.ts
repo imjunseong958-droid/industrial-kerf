@@ -29,14 +29,24 @@ describe("tool schemas", () => {
     expect(tools[0]!.input_schema.type).toBe("object");
   });
 
-  it("cutToolsSchemas covers the 5 registry contracts", () => {
+  it("falls back to a stable description for extension tools without one", () => {
+    const tools = buildToolsParam({
+      mcp_external_no_description: { execute: async () => ({}) as never },
+    });
+    expect(tools[0]).toMatchObject({
+      name: "mcp_external_no_description",
+      description: "Call the mcp_external_no_description tool.",
+    });
+  });
+
+  it("cutToolsSchemas covers the built-in registry contracts", () => {
     const schemas = cutToolsSchemas();
     expect(schemas.map((s) => s.name)).toEqual([
       "fetch",
       "probe",
-      "edit",
+      "timeline",
+      "project_edit",
       "render",
-      "bash",
     ]);
   });
 });
@@ -111,6 +121,85 @@ describe("AgentSession loop", () => {
     expect(session.messages).toHaveLength(4);
   });
 
+  it("normalizes a multimodal tool result into native Anthropic text and image blocks", async () => {
+    let callCount = 0;
+    const calls: MessageCreateParamsNonStreaming[] = [];
+    const mockClient = {
+      create: async (params: MessageCreateParamsNonStreaming) => {
+        calls.push(params);
+        callCount++;
+        if (callCount === 1) {
+          return makeResponse({
+            content: [
+              { type: "tool_use", id: "probe_1", name: "probe", input: { action: "frames" } },
+            ],
+            stop_reason: "tool_use",
+          });
+        }
+        return makeResponse({ content: [{ type: "text", text: "I can see the frame." }] });
+      },
+    };
+
+    const session = new AgentSession({
+      client: mockClient as unknown as Pick<typeof Anthropic.prototype.messages, "create">,
+      tools: {
+        probe: {
+          execute: async () => ({
+            type: "multimodal_tool_result" as const,
+            text: "Frame at 1.0s",
+            metadata: { timestamp: 1 },
+            images: [{ data: "aGVsbG8=", mediaType: "image/png" as const }],
+          }),
+        },
+      },
+    });
+
+    await session.run("inspect the frame");
+    const resultMessage = calls[1]!.messages.at(-1)!;
+    const result = (resultMessage.content as unknown as Array<Record<string, unknown>>)[0]!;
+    expect(result).toMatchObject({ type: "tool_result", tool_use_id: "probe_1" });
+    expect(result.content).toEqual([
+      { type: "text", text: 'Frame at 1.0s\n{"timestamp":1}' },
+      {
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" },
+      },
+    ]);
+    expect(JSON.parse(JSON.stringify(session.messages))).toEqual(session.messages);
+  });
+
+  it("turns invalid or oversized multimodal output into a safe error result", async () => {
+    let callCount = 0;
+    const mockClient = {
+      create: async () => {
+        callCount++;
+        if (callCount === 1) {
+          return makeResponse({
+            content: [{ type: "tool_use", id: "probe_bad", name: "probe", input: {} }],
+            stop_reason: "tool_use",
+          });
+        }
+        return makeResponse({ content: [{ type: "text", text: "recovered" }] });
+      },
+    };
+    const session = new AgentSession({
+      client: mockClient as unknown as Pick<typeof Anthropic.prototype.messages, "create">,
+      tools: {
+        probe: {
+          execute: async () => ({
+            type: "multimodal_tool_result" as const,
+            images: [{ data: "not base64", mediaType: "image/png" as const }],
+          }),
+        },
+      },
+    });
+
+    await session.run("inspect");
+    const last = session.messages.at(-2)!;
+    const content = last.content as unknown as Array<Record<string, unknown>>;
+    expect(content[0]!.content).toBe('{"error":"Tool result image 1 is not valid base64"}');
+  });
+
   it("reports tool errors as error results and continues", async () => {
     let callCount = 0;
     const mockClient = {
@@ -179,7 +268,11 @@ describe("AgentSession loop", () => {
     const session = new AgentSession({
       client: { create: async () => makeResponse({}) } as never,
     });
-    expect(session.systemPrompt).toContain("video editing assistant");
+    expect(session.systemPrompt).toContain("video editing assistant for Cut");
+    expect(session.systemPrompt).toContain("project.cut.json");
+    expect(session.systemPrompt).toContain("project_edit (the only mutation tool");
+    expect(session.systemPrompt).toContain("normalized 0..1 crops");
+    expect(session.systemPrompt).toContain("Do not call a tool named edit");
     expect(session.model).toBe("claude-sonnet-4-20250514");
   });
 });

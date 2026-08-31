@@ -3,12 +3,32 @@
   "private": true,
   "type": "module",
   "version": "0.1.0",
+  "bin": {
+    "lcut": "packages/cli/src/main.ts"
+  },
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "npm run test:rust && npm run test:ts",
+    "pretest:ts": "npm run runtime:build",
+    "test:ts": "vitest run",
+    "test:rust": "cargo test -p cut-engine --no-default-features",
+    "engine:build": "cargo build -p cut-engine",
+    "engine:build:release": "cargo build --release -p cut-engine",
+    "engine:build:vision": "cargo build --release -p cut-engine --features onnx",
+    "engine:test": "cargo test -p cut-engine --no-default-features",
+    "engine:test:vision": "cargo test -p cut-engine --features onnx",
+    "runtime:build": "cargo build --manifest-path packages/desktop/src-tauri/Cargo.toml --bin cut-runtime",
+    "build": "npm run build --workspaces --if-present",
+    "gui:build": "npm --workspace @cut/gui run build",
+    "desktop:dev": "npm --workspace @cut/desktop run dev",
+    "desktop:build": "npm --workspace @cut/desktop run build",
+    "desktop:check": "npm --workspace @cut/desktop run check",
+    "app:build": "npm --workspace @cut/app run typecheck",
+    "cli:build": "npm --workspace @cut/cli run build",
+    "link:global": "npm link --workspace @cut/cli && npm link tsx"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

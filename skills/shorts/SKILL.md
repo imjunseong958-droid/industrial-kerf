@@ -1,34 +1,50 @@
 ---
 name: shorts
-description: Recipe for cutting 9:16 vertical shorts — crop/scale filters, hook in the first 3 seconds, remove silence first.
+description: 9:16 vertical shorts with probe, timeline, project_edit, fetch, and render.
 ---
 
-# Vertical Shorts Recipe
+# Vertical shorts
 
-Goal: turn long-form footage into a punchy 9:16 short (15–60s).
+Turn a longer source into a focused 15-60 second vertical cut. Keep every
+decision in the validated v2 project so it can be previewed and revised.
 
-## Order of operations
+If only the compact index was injected, call skill_read with `{ "name": "shorts" }`
+to load this playbook.
 
-1. **Remove silence first.** Run silence detection (`probe {action:"silence"}`),
-   then use `edit` to drop silent spans before doing anything else. Tight audio
-   makes every later timing decision honest.
-2. **Pick the hook.** The first 3 seconds decide retention. Choose the span with
-   the strongest claim, question, or visual moment and move it (or cut to it)
-   so it opens the short. Never start with dead air or a slow intro.
-3. **Crop to 9:16.** Render with an ffmpeg filter chain like:
+Use existing `timeline` / `probe` / `project_edit` / `render` (and `fetch` for URLs).
 
-   ```
-   crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920
-   ```
+## Workflow
 
-   Center-crop by default; shift the crop x-offset toward the speaker's side
-   when the subject is off-center.
-4. **Trim to length.** Target ≤ 60s. Cut mid-sentence pauses aggressively —
-   jump cuts are the house style, not a flaw.
+1. **Inspect first.** `timeline` for source and clip IDs; `probe` for
+   `info`, `silence`, and `frames` when framing is uncertain.
+2. **Tighten the cut.** Turn reviewed silence ranges into one non-empty atomic
+   `project_edit` batch. Legacy `remove_ranges` is fine. Keep words needed
+   for the hook.
+3. **Choose the hook.** Put the strongest claim, question, or visual beat in
+   the first three seconds. Do not open on dead air or an unreviewed crop.
+4. **Frame for 9:16.** Prefer v2 `update_clip` with a normalized `crop`
+   patch; legacy `set_crop` in the same atomic batch is OK. Use output
+   dimensions or transform keyframes when the host exposes them; otherwise
+   state the limitation instead of inventing an unsupported effect. When
+   `track_objects` is available, call it and use the returned `content` ROI
+   as the primary subject; include `cam`/`chat` only when the user wants those
+   overlays kept. If tracking is unavailable, use `probe` frames for crop
+   decisions as above.
+5. **Use the supplied subtitles.** For a YouTube source, `fetch` returns
+   `subsPath` (normally `.vtt`). Pass that path through `project_edit` with
+   `add_subtitles`. Use inline `add_captions` only for cues the user supplied
+   or the project already contains.
+6. **Preview before delivery.** `render` with `{draft:true}` and inspect the
+   result. Run the full render only after crop, hook, timing, and subtitles
+   are acceptable.
 
-## Checklist
+## Guardrails
 
-- [ ] Silence removed
-- [ ] Hook lands within the first 3s
-- [ ] 9:16 crop + scale to 1080x1920
-- [ ] Subtitles burned in (bottom third, large font) — most shorts are watched muted
+- Keep the final cut at or below 60 seconds unless the user asks otherwise.
+- Keep crop rectangles normalized, finite, and inside the frame.
+- Use only structured timeline operations. If an effect is not represented by
+  an available command or legacy op, explain the limitation and ask before
+  changing the workflow.
+
+Checklist: hook ≤ 3s, reviewed 9:16 framing, concise timing, subtitle source
+identified, draft preview inspected, full render approved.

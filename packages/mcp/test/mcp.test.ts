@@ -47,6 +47,22 @@ describe("loadMcpConfig", () => {
     expect(cfg.mcpServers["fs"]!.args).toEqual(["-y", "mcp-fs"]);
   });
 
+  it("parses optional per-server tool allowlists", async () => {
+    const cfg = await loadMcpConfig({
+      home: "/home/u",
+      cwd: "/proj",
+      read: async (p) => {
+        if (p !== "/proj/.cut/mcp.json") throw new Error("missing");
+        return JSON.stringify({
+          mcpServers: {
+            hello: { command: "fake", tools: ["greet", 1, "search"] },
+          },
+        });
+      },
+    });
+    expect(cfg.mcpServers["hello"]!.tools).toEqual(["greet", "search"]);
+  });
+
   it("returns empty config when no files exist", async () => {
     const cfg = await loadMcpConfig({ home: "/none", cwd: "/none2", read: async () => { throw new Error("nope"); } });
     expect(cfg.mcpServers).toEqual({});
@@ -64,6 +80,9 @@ describe("namespacing", () => {
     const n = mcpToolName("fs", "read_file");
     expect(n).toBe("mcp_fs_read_file");
     expect(parseMcpToolName(n)).toEqual({ server: "fs", tool: "read_file" });
+    const underscored = mcpToolName("team_alpha", "read_file");
+    expect(parseMcpToolName(underscored, ["team", "team_alpha"]))
+      .toEqual({ server: "team_alpha", tool: "read_file" });
   });
   it("rejects non-mcp names", () => {
     expect(parseMcpToolName("fetch")).toBeUndefined();
@@ -91,6 +110,18 @@ describe("connectMcpServers", () => {
     await registry.close();
   });
 
+  it("routes servers whose names contain underscores", async () => {
+    const calls: string[] = [];
+    const registry = await connectMcpServers(
+      { mcpServers: { team_alpha: { command: "fake" } } },
+      { connect: async () => fakeClient(toolDefs, calls) },
+    );
+    const out = await registry.tools["mcp_team_alpha_greet"]!.execute({ who: "world" });
+    expect(out).toContain("echo:greet");
+    expect(calls).toEqual(["greet"]);
+    await registry.close();
+  });
+
   it("skips failing servers with a warning", async () => {
     const lines: string[] = [];
     const registry = await connectMcpServers(
@@ -105,6 +136,29 @@ describe("connectMcpServers", () => {
     );
     expect(Object.keys(registry.tools)).toEqual(["mcp_good_greet"]);
     expect(lines.some((l) => l.includes("'bad' unavailable"))).toBe(true);
+    await registry.close();
+  });
+
+  it("closes a client when discovery fails after connection", async () => {
+    let closed = 0;
+    const registry = await connectMcpServers(
+      { mcpServers: { broken: { command: "fake" } } },
+      {
+        connect: async () => ({
+          async listTools() {
+            throw new Error("list failed");
+          },
+          async callTool() {
+            return { content: [] };
+          },
+          async close() {
+            closed++;
+          },
+        }),
+      },
+    );
+    expect(registry.tools).toEqual({});
+    expect(closed).toBe(1);
     await registry.close();
   });
 
@@ -141,6 +195,62 @@ describe("initMcpTools", () => {
         fakeClient([{ name: `t_${name}`, description: `${name} tool`, inputSchema: { type: "object" } }]),
     });
     expect(Object.keys(registry.tools).sort()).toEqual(["mcp_s1_t_s1", "mcp_s2_t_s2"]);
+    await registry.close();
+  });
+});
+
+describe("inbound MCP meta tools", () => {
+  const toolDefs = [
+    { name: "greet", description: "Say hello", inputSchema: { type: "object", properties: { who: { type: "string" } } } },
+    { name: "secret", description: "Hidden admin tool", inputSchema: { type: "object" } },
+  ];
+
+  it("exposes mcp_search and mcp_call while leaving registry.tools for listing", async () => {
+    const calls: string[] = [];
+    const registry = await connectMcpServers(
+      { mcpServers: { hello: { command: "fake" } } },
+      { connect: async () => fakeClient(toolDefs, calls) },
+    );
+    expect(Object.keys(registry.tools).sort()).toEqual(["mcp_hello_greet", "mcp_hello_secret"]);
+    const meta = registry.metaTools();
+    expect(Object.keys(meta).sort()).toEqual(["mcp_call", "mcp_search"]);
+    const listed = await meta["mcp_search"]!.execute({});
+    expect(listed).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "mcp_hello_greet", server: "hello", tool: "greet" }),
+      expect.objectContaining({ name: "mcp_hello_secret", tool: "secret" }),
+    ]));
+    const filtered = await meta["mcp_search"]!.execute({ query: "hello" });
+    expect(filtered).toEqual(expect.arrayContaining([
+      expect.objectContaining({ tool: "greet" }),
+    ]));
+    const out = await meta["mcp_call"]!.execute({ name: "hello/greet", arguments: { who: "world" } });
+    expect(out).toBe('echo:greet:{"who":"world"}');
+    const namespaced = await meta["mcp_call"]!.execute({ name: "mcp_hello_greet", arguments: { who: "again" } });
+    expect(namespaced).toContain("echo:greet");
+    await registry.close();
+  });
+
+  it("allowlists searchable and callable meta tools without hiding listing names", async () => {
+    const registry = await connectMcpServers(
+      { mcpServers: { hello: { command: "fake", tools: ["greet"] } } },
+      { connect: async () => fakeClient(toolDefs) },
+    );
+    expect(Object.keys(registry.tools).sort()).toEqual(["mcp_hello_greet", "mcp_hello_secret"]);
+    expect(registry.describe()).toEqual([
+      {
+        server: "hello",
+        tools: [
+          { name: "greet", description: "Say hello" },
+          { name: "secret", description: "Hidden admin tool" },
+        ],
+      },
+    ]);
+    const meta = registry.metaTools();
+    await expect(meta["mcp_search"]!.execute({})).resolves.toEqual([
+      expect.objectContaining({ tool: "greet", name: "mcp_hello_greet" }),
+    ]);
+    await expect(meta["mcp_call"]!.execute({ name: "mcp_hello_secret" })).rejects.toThrow(/not allowed/);
+    await expect(meta["mcp_call"]!.execute({ name: "hello/greet" })).resolves.toContain("echo:greet");
     await registry.close();
   });
 });

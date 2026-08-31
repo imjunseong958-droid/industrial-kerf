@@ -8,7 +8,7 @@ import { renderTimelineGantt } from "./gantt.js";
 import type { Timeline } from "@cut/timeline";
 
 /** Tool names whose success should trigger a gantt block after the turn. */
-export const GANTT_TOOLS = new Set(["edit", "render"]);
+export const GANTT_TOOLS = new Set(["project_edit", "render"]);
 
 export function formatDuration(ms: number): string {
   if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`;
@@ -77,13 +77,13 @@ export function formatGanttBlock(timeline: Timeline): string {
 /** Bilingual welcome banner listing slash commands and example prompts. */
 export function formatBanner(dir: string, skillCount = 0, llmInfo?: string): string {
   return [
-    bold(cyan("cut")) + dim(` — AI video editor · session dir: ${dir}`) +
+    bold(cyan("cut")) + dim(`. Agentic video editor · session dir: ${dir}`) +
       (llmInfo ? dim(` · ${llmInfo}`) : "") +
       (skillCount > 0 ? dim(` · ${skillCount} skill${skillCount === 1 ? "" : "s"}`) : ""),
     "",
     bold("Commands") + dim("  /timeline  /save  /quit"),
     bold("예시 프롬프트 · Example prompts") + ":",
-    dim('  ❯ "앞부분 5초 잘라내고 자막 넣어줘" — trim the first 5s and add subtitles'),
+    dim('  ❯ "앞부분 5초 잘라내고 자막 넣어줘". Trim the first 5s and add subtitles'),
     dim('  ❯ "make a 15s highlight reel from this video"'),
     dim('  ❯ "silence the audio between 00:10 and 00:20"'),
   ].join("\n");

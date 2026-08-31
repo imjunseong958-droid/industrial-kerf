@@ -3,9 +3,13 @@ import {
   TimelineSchema,
   type Timeline,
 } from "@cut/timeline";
-import { compileFilterGraph, timelineDuration } from "../src/compile.js";
 import {
-  parseTimeSeconds,
+  atempoFilters,
+  captionsFilter,
+  compileFilterGraph,
+  timelineDuration,
+} from "../src/compile.js";
+import {
   renderArgs,
 } from "../src/render.js";
 
@@ -48,7 +52,7 @@ describe("compileFilterGraph", () => {
     expect(argv[0]).toBe("ffmpeg");
     const fcIdx = argv.indexOf("-filter_complex");
     expect(typeof argv[fcIdx! + 1]).toBe("string");
-    // no shell metacharacter wrapping — plain args
+    // no shell metacharacter wrapping, plain args
     expect(command).not.toContain("&&");
   });
 
@@ -63,11 +67,119 @@ describe("compileFilterGraph", () => {
   });
 });
 
-describe("parseTimeSeconds", () => {
-  it("parses HH:MM:SS.xx and raw seconds", () => {
-    expect(parseTimeSeconds("00:01:02.50")).toBeCloseTo(62.5);
-    expect(parseTimeSeconds("12.34")).toBeCloseTo(12.34);
-    expect(parseTimeSeconds("garbage")).toBeUndefined();
+describe("compileFilterGraph reliability", () => {
+  it("allocates independent labels when the same source is used repeatedly", () => {
+    const timeline = {
+      version: 1,
+      fps: 30,
+      sources: [{ id: "same", path: "/tmp/repeated.mp4", hasAudio: false }],
+      tracks: [
+        {
+          id: "t1",
+          clips: [
+            { id: "one", src: "same", in: 0, out: 1 },
+            { id: "two", src: "same", in: 1, out: 2 },
+          ],
+        },
+      ],
+      overlays: [],
+    } as unknown as Timeline;
+    const { filterComplex } = compileFilterGraph(timeline);
+    expect(filterComplex).toMatch(/\[0:v\][^;]*\[clipv_0\]/);
+    expect(filterComplex).toMatch(/\[0:v\][^;]*\[clipv_2\]/);
+    expect(filterComplex).toContain("anullsrc=r=48000:cl=stereo");
+    expect(filterComplex).toContain("concat=n=2:v=1:a=1");
+  });
+
+  it("skips empty tracks and rejects a timeline with no clips", () => {
+    const timeline = {
+      version: 1,
+      fps: 30,
+      sources: [{ id: "a", path: "/tmp/a.mp4" }],
+      tracks: [
+        { id: "empty", clips: [] },
+        { id: "used", clips: [{ id: "c", src: "a", in: 0, out: 1 }] },
+      ],
+      overlays: [],
+    } as unknown as Timeline;
+    expect(() => compileFilterGraph(timeline)).not.toThrow();
+    expect(() =>
+      compileFilterGraph({ ...timeline, tracks: [{ id: "empty", clips: [] }] }),
+    ).toThrow(/empty timeline/i);
+  });
+
+  it("uses known dimensions for the canvas and emits a safe crop", () => {
+    const timeline = {
+      version: 1,
+      fps: 24,
+      sources: [{ id: "a", path: "/tmp/a.mp4", width: 320, height: 240 }],
+      tracks: [
+        {
+          id: "t",
+          clips: [
+            {
+              id: "c",
+              src: "a",
+              in: 0,
+              out: 1,
+              crop: { x: 0.25, y: 0.1, width: 0.5, height: 0.75 },
+            },
+          ],
+        },
+      ],
+      overlays: [],
+    } as unknown as Timeline;
+    const { filterComplex } = compileFilterGraph(timeline);
+    expect(filterComplex).toContain("crop=w=");
+    expect(filterComplex).toContain("scale=320:240:");
+    expect(filterComplex).not.toContain("scale=1920:1080");
+  });
+
+  it("uses one largest complete source aspect for portrait/landscape mixes", () => {
+    const timeline = {
+      version: 1,
+      fps: 30,
+      sources: [
+        { id: "landscape", path: "/tmp/landscape.mp4", width: 1280, height: 720 },
+        { id: "portrait", path: "/tmp/portrait.mp4", width: 1080, height: 1920 },
+      ],
+      tracks: [
+        {
+          id: "t",
+          clips: [
+            { id: "l", src: "landscape", in: 0, out: 1 },
+            { id: "p", src: "portrait", in: 0, out: 1 },
+          ],
+        },
+      ],
+      overlays: [],
+    } as unknown as Timeline;
+    const { filterComplex } = compileFilterGraph(timeline);
+    expect(filterComplex).toContain("scale=1080:1920:");
+    expect(filterComplex).not.toContain("scale=1280:1920:");
+    expect(filterComplex).not.toContain("scale=1920:1920:");
+  });
+
+  it("keeps atempo factors within ffmpeg bounds for arbitrary speeds", () => {
+    for (const speed of [0.1, 0.25, 0.5, 2, 100, 10_000]) {
+      const factors = atempoFilters(speed).map((f) => Number(f.slice("atempo=".length)));
+      expect(factors.every((factor) => factor >= 0.5 && factor <= 100)).toBe(true);
+      expect(factors.reduce((product, factor) => product * factor, 1)).toBeCloseTo(speed, 8);
+    }
+  });
+
+  it("escapes timed caption text and maps its style/position", () => {
+    const filter = captionsFilter(
+      { start: 1, end: 2.5, text: "A:b,c; it's 100%" },
+      { fontSize: 22, fontColor: "#ffffff", position: "top", marginV: 18 },
+    );
+    expect(filter).toContain("drawtext=text=");
+    expect(filter).toContain("between(t,1,2.5)");
+    expect(filter).toContain("fontsize=22");
+    expect(filter).toContain("fontcolor=0xffffff");
+    expect(filter).toContain("y='18'");
+    expect(filter).toContain("A\\\\:b");
+    expect(filter).toContain("100\\\\%");
   });
 });
 

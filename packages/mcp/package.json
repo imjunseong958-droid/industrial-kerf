@@ -5,7 +5,15 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "bin": {
+    "cut-mcp": "./src/stdio.ts"
+  },
   "dependencies": {
+    "@cut/fetcher": "*",
+    "@cut/media": "*",
+    "@cut/skills": "*",
+    "@cut/timeline": "*",
+    "@cut/vision": "*",
     "@modelcontextprotocol/sdk": "^1.0.0"
   }
 }

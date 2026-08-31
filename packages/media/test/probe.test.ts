@@ -156,9 +156,82 @@ describe.skipIf(!hasFfmpeg)("integration (ffmpeg on PATH)", () => {
     const outDir = path.join(path.dirname(videoPath), "frames");
     const frames = await extractFrames(videoPath, [0.5, 3], outDir);
     expect(frames).toHaveLength(2);
+    expect(frames.map((frame) => frame.time)).toEqual([0.5, 3]);
     for (const f of frames) {
       const files = await readdir(outDir);
       expect(files.some((n) => n === path.basename(f.path))).toBe(true);
     }
   }, 30_000);
+
+  it("downscales wide PNG frames by default without upscaling", async () => {
+    const wideVideo = path.join(path.dirname(videoPath), "wide.mp4");
+    const fixture = spawnSync(
+      "ffmpeg",
+      [
+        "-y",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=duration=2:size=2560x1440:rate=2",
+        "-an",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        wideVideo,
+      ],
+      { encoding: "utf8" },
+    );
+    if (fixture.status !== 0) throw new Error(`wide fixture failed: ${fixture.stderr}`);
+
+    const outDir = path.join(path.dirname(videoPath), "wide-frames");
+    const frames = await extractFrames(wideVideo, [0.5], outDir);
+    const dimensions = spawnSync(
+      "ffprobe",
+      [
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height",
+        "-of",
+        "csv=p=0",
+        frames[0]!.path,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(dimensions.status).toBe(0);
+    expect(dimensions.stdout.trim()).toBe("1280,720");
+
+    const customDir = path.join(path.dirname(videoPath), "wide-frames-custom");
+    const custom = await extractFrames(wideVideo, [0.5], customDir, { maxWidth: 640 });
+    const customDimensions = spawnSync(
+      "ffprobe",
+      [
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height",
+        "-of",
+        "csv=p=0",
+        custom[0]!.path,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(customDimensions.status).toBe(0);
+    expect(customDimensions.stdout.trim()).toBe("640,360");
+  }, 60_000);
+
+  it("rejects silenceDetect when ffmpeg exits nonzero", async () => {
+    await expect(silenceDetect("/tmp/cut-media-no-such-input.mp4")).rejects.toThrow(/ffmpeg exited with code/);
+  });
+
+  it("rejects detectScenes when ffmpeg exits nonzero", async () => {
+    await expect(detectScenes("/tmp/cut-media-no-such-input.mp4")).rejects.toThrow(/ffmpeg exited with code/);
+  });
 });

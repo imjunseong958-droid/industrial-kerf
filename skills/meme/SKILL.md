@@ -1,40 +1,38 @@
 ---
 name: meme
-description: Meme-style edits — speed ramps and zoom punch-ins driven by crop+scale expressions timed to beats.
+description: Beat-aware meme edits via split, speed, crop, and optional v2 transform keyframes.
 ---
 
-# Meme Edit Recipe
+# Meme edits
 
-Goal: high-energy meme cuts using speed ramps and zoom punch-ins.
+Use short, reversible timeline operations to make the beat legible without
+stacking effects that fight each other.
 
-## Speed ramps
+If only the compact index was injected, call skill_read with `{ "name": "meme" }`
+to load this playbook.
 
-Split the timeline at ramp points, then set per-segment speed:
+Use existing `timeline` / `probe` / `project_edit` / `render`.
 
-- Build-up: 1.5–2× (fast)
-- Punchline/key moment: 0.5× or freeze-frame (slow-mo sells the beat)
-- After the punchline: snap back to 1×
+## Workflow
 
-Keep ramps aligned to audio peaks — probe the audio waveform and place ramp
-boundaries on transients, not on round timestamps.
+1. **Inspect timing.** `timeline` for clip IDs; `probe` for beat boundaries and
+   optional `frames`.
+2. **Build ramps.** `project_edit` with legacy `split` at reviewed beat
+   boundaries, then set speed on each resulting clip (`update_clip` patch or
+   legacy `set_speed`: build-up ~1.5-2x, punchline ~0.5x, return to 1x). Keep
+   split and speed changes in one atomic batch when clip IDs are known.
+3. **Punch in.** For a static punch-in, split around the moment and apply a
+   normalized crop to the middle clip in the same atomic batch. For a short
+   eased move, use v2 `transform` / `keyframes` on `update_clip` when exposed.
+4. **Preview.** `render` with `{draft:true}`; inspect punchline, framing, and
+   return to neutral speed before the full render.
 
-## Zoom punch-ins
+## Guardrails
 
-Emphasize moments with quick zooms via ffmpeg crop+scale expressions:
-
-```
-# ease-in punch to ~115% over 0.3s starting at t=2.5
-scale=iw*1.15:ih*1.15,zoompan=z='min(1+0.15*(on/8),1.15)':d=8:s=1920x1080
-```
-
-Or with crop expressions for a re-framed punch-in:
-
-```
-crop=w='iw-(iw*0.12*min(max(t-2.5,0)*3.33,1))':h='ih-(ih*0.12*min(max(t-2.5,0)*3.33,1))'
-```
-
-Rules of thumb:
-
-- Punch-in duration 0.2–0.4s; longer feels sluggish.
-- Stack at most two effects on the same moment (zoom + speed change max).
-- Always end the edit back at neutral framing/speed so the loop reads clean.
+- Keep punch-ins to roughly 0.2-0.4 seconds and at most two effects on one
+  beat (for example, crop plus speed).
+- End every ramp or reframing at a neutral state unless the user asks for a
+  deliberately held effect.
+- Use only structured timeline operations. If the configured tools cannot
+  represent a requested effect, report the limitation rather than fabricating
+  an operation.

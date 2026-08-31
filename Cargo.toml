@@ -1,0 +1,31 @@
+[workspace]
+members = ["crates/cut-core", "crates/cut-engine", "crates/cut-runtime"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+# Extreme runtime profile for the media engine CLI. Thin LTO is almost as
+# fast to run and much faster to link; fat LTO is reserved for maxperf.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+# Whole-program LTO for a local max-speed binary:
+#   cargo build --profile maxperf -p cut-engine
+[profile.maxperf]
+inherits = "release"
+lto = "fat"
+
+# Keep the default dev profile fast. Release-style optimization of every
+# dependency made small Rust edits rebuild the entire media stack. Use the
+# explicit `maxperf` profile when benchmarking a final binary.
+[profile.dev]
+opt-level = 0
+debug = 1
+incremental = true

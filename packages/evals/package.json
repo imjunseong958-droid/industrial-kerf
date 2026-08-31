@@ -1,0 +1,16 @@
+{
+  "name": "@cut/evals",
+  "type": "module",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@cut/timeline": "*",
+    "zod": "^3.24.1"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  }
+}

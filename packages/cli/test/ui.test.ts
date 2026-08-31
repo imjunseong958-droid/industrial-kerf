@@ -107,8 +107,8 @@ describe("gantt block + banner", () => {
     expect(banner).toContain("Example prompts");
   });
 
-  it("gantt tools are edit and render", () => {
-    expect([...GANTT_TOOLS].sort()).toEqual(["edit", "render"]);
+  it("gantt tools include canonical project edits and render", () => {
+    expect([...GANTT_TOOLS].sort()).toEqual(["project_edit", "render"]);
   });
 
   it("boxBlock pads rows to equal width", () => {

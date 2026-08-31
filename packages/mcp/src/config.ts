@@ -7,6 +7,8 @@ export interface McpServerConfig {
   command: string;
   args?: string[];
   env?: Record<string, string>;
+  /** When set, only these underlying tool names are searchable/callable via meta tools. */
+  tools?: string[];
 }
 
 /** Shape of ~/.cut/mcp.json (and ./.cut/mcp.json). */
@@ -42,7 +44,15 @@ export async function loadMcpConfig(opts?: {
     if (!parsed || typeof parsed !== "object" || !parsed.mcpServers) continue;
     for (const [name, cfg] of Object.entries(parsed.mcpServers)) {
       if (!cfg || typeof cfg.command !== "string") continue;
-      merged.mcpServers[name] = cfg as McpServerConfig;
+      const tools = Array.isArray(cfg.tools)
+        ? cfg.tools.filter((tool): tool is string => typeof tool === "string")
+        : undefined;
+      merged.mcpServers[name] = {
+        command: cfg.command,
+        ...(cfg.args !== undefined ? { args: cfg.args } : {}),
+        ...(cfg.env !== undefined ? { env: cfg.env } : {}),
+        ...(tools !== undefined ? { tools } : {}),
+      };
     }
   }
   return merged;

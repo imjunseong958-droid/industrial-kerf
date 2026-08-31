@@ -33,7 +33,7 @@ export class Spinner {
     return this.timer !== undefined;
   }
 
-  /** Current rendered frame text (frame + label). Pure — safe for tests. */
+  /** Current rendered frame text (frame + label). Pure; safe for tests. */
   render(): string {
     return dim(`${spinnerFrame(this.index)} ${this.label}`);
   }

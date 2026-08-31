@@ -1,5 +1,5 @@
 /**
- * @cut/fetcher — yt-dlp wrapper.
+ * @cut/fetcher. yt-dlp wrapper.
  *
  * Downloads videos (max height 1080, best audio) plus ko/en VTT subtitles.
  */

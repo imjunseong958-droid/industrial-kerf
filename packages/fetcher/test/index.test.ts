@@ -40,7 +40,7 @@ describe("isYouTubeUrl", () => {
     expect(isYouTubeUrl(url)).toBe(true);
   });
 
-  it("accepts any other http(s) URL — yt-dlp supports many sites", () => {
+  it("accepts any other http(s) URL, yt-dlp supports many sites", () => {
     expect(isYouTubeUrl("https://vimeo.com/76979871")).toBe(true);
   });
 

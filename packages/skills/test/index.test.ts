@@ -7,6 +7,8 @@ import {
   parseSkillMd,
   skillsIndexPrompt,
   composeSystemPrompt,
+  findSkill,
+  createSkillReadTool,
   BUNDLED_SKILLS_DIR,
 } from "../src/index.js";
 
@@ -70,11 +72,78 @@ describe("loadSkills", () => {
 
   it("finds bundled example skills in the repo", async () => {
     const skills = await loadSkills([BUNDLED_SKILLS_DIR]);
-    expect(skills.map((s) => s.name).sort()).toEqual(["meme", "shorts"]);
+    expect(skills.map((s) => s.name).sort()).toEqual(["meme", "shorts", "stream-gameplay"]);
     for (const s of skills) {
       expect(s.description.length).toBeGreaterThan(0);
       expect(s.body).toContain("\n");
     }
+  });
+
+  it("stream-gameplay documents canonical vision classes", async () => {
+    const skills = await loadSkills([BUNDLED_SKILLS_DIR]);
+    const streamGameplay = skills.find((s) => s.name === "stream-gameplay")!;
+    expect(streamGameplay.body).toContain("`cam`");
+    expect(streamGameplay.body).toContain("`chat`");
+    expect(streamGameplay.body).toContain("`content`");
+    expect(streamGameplay.body).toMatch(/main gameplay\/stream canvas/i);
+    expect(streamGameplay.body).toMatch(/main-picture ROI/i);
+    expect(streamGameplay.body).not.toMatch(/\bwebcam\b/i);
+  });
+});
+
+describe("findSkill and createSkillReadTool", () => {
+  const skills = [
+    { name: "shorts", description: "9:16 vertical recipes.", body: "full shorts body", dir: "/x/shorts" },
+    { name: "meme", description: "memes", body: "full meme body", dir: "/x/meme" },
+  ];
+
+  it("matches exact names only", () => {
+    expect(findSkill(skills, "shorts")).toEqual(skills[0]);
+    expect(findSkill(skills, "Shorts")).toBeUndefined();
+    expect(findSkill(skills, "shorts/SKILL.md")).toBeUndefined();
+  });
+
+  it("does not treat names as paths", () => {
+    expect(findSkill(skills, "../meme")).toBeUndefined();
+    expect(findSkill(skills, skills[0]!.dir)).toBeUndefined();
+    expect(findSkill(skills, "/x/shorts/SKILL.md")).toBeUndefined();
+  });
+
+  it("returns the loaded playbook body by name", async () => {
+    const tool = createSkillReadTool(skills);
+    expect(tool.inputJsonSchema).toEqual({
+      type: "object",
+      properties: { name: { type: "string", minLength: 1 } },
+      required: ["name"],
+      additionalProperties: false,
+    });
+    await expect(tool.execute({ name: "shorts" })).resolves.toEqual({
+      name: "shorts",
+      description: "9:16 vertical recipes.",
+      body: "full shorts body",
+    });
+  });
+
+  it("throws a clear error for unknown names without other skill paths", async () => {
+    const tool = createSkillReadTool(skills);
+    await expect(tool.execute({ name: "missing" })).rejects.toThrow(/Unknown skill "missing"/);
+    await expect(tool.execute({ name: "missing" })).rejects.toThrow(/Known skills: meme, shorts/);
+    const traversal = await tool.execute({ name: "../meme" }).then(
+      () => undefined,
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    expect(traversal).toMatch(/Unknown skill "\.\.\/meme"/);
+    expect(traversal).not.toMatch(/\/x\//);
+    const missing = await tool.execute({ name: "missing" }).then(
+      () => undefined,
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    expect(missing).not.toMatch(/\/x\//);
+  });
+
+  it("lists no known skills when the catalog is empty", async () => {
+    const tool = createSkillReadTool([]);
+    await expect(tool.execute({ name: "shorts" })).rejects.toThrow(/No skills are loaded/);
   });
 });
 
@@ -84,11 +153,13 @@ describe("system prompt composition", () => {
     { name: "meme", description: "", body: "", dir: "/x/meme" },
   ];
 
-  it("builds a compact index pointing at SKILL.md files", () => {
+  it("builds a compact index pointing at skill_read", () => {
     const prompt = skillsIndexPrompt(skills);
-    expect(prompt).toContain("- shorts — 9:16 vertical recipes.");
-    expect(prompt).toContain("- meme — (no description)");
-    expect(prompt).toContain("read the full skill file at <dir>/SKILL.md");
+    expect(prompt).toContain("- shorts: 9:16 vertical recipes.");
+    expect(prompt).toContain("- meme: (no description)");
+    expect(prompt).toContain('Call skill_read with { "name": "<skill-name>" }');
+    expect(prompt).not.toContain("<dir>/SKILL.md");
+    expect(prompt).not.toMatch(/\bbash\b/);
   });
 
   it("appends index to base prompt; empty skills returns base unchanged", () => {

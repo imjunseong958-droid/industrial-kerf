@@ -79,4 +79,50 @@ describe.skipIf(!ffmpegOnPath)("render integration", () => {
       await rm(dir, { recursive: true, force: true });
     },
   );
+
+  it(
+    "probes legacy sources with omitted audio metadata and renders silent video",
+    { timeout: 120_000 },
+    async () => {
+      const dir = await mkdtemp(path.join(os.tmpdir(), "cut-media-legacy-"));
+      const src = path.join(dir, "silent.mp4");
+      execFileSync(
+        "ffmpeg",
+        [
+          "-y",
+          "-f",
+          "lavfi",
+          "-i",
+          "testsrc=duration=2:size=160x120:rate=24",
+          "-an",
+          "-c:v",
+          "libx264",
+          "-pix_fmt",
+          "yuv420p",
+          src,
+        ],
+        { stdio: "ignore" },
+      );
+      const timeline: Timeline = {
+        version: 1,
+        fps: 24,
+        // Deliberately omit hasAudio/width/height to exercise render-time
+        // probing of the legacy source shape.
+        sources: [{ id: "silent", path: src }],
+        tracks: [
+          {
+            id: "t1",
+            clips: [{ src: "silent", in: 0, out: 1, id: "c1" }],
+          },
+        ],
+        overlays: [],
+      };
+      const output = path.join(dir, "out.mp4");
+      await render(timeline, { output, draft: true });
+      expect((await stat(output)).size).toBeGreaterThan(1000);
+      expect(timeline.sources[0]?.hasAudio).toBeUndefined();
+      expect(timeline.sources[0]?.width).toBeUndefined();
+      await rm(dir, { recursive: true, force: true });
+    },
+  );
 });

@@ -2,9 +2,15 @@
   "files": [],
   "references": [
     { "path": "packages/timeline" },
+    { "path": "packages/interchange" },
+    { "path": "packages/engine" },
     { "path": "packages/media" },
     { "path": "packages/agent" },
+    { "path": "packages/vision" },
+    { "path": "packages/mcp" },
+    { "path": "packages/evals" },
     { "path": "packages/skills" },
+    { "path": "packages/app" },
     { "path": "packages/fetcher" },
     { "path": "packages/cli" }
   ]
