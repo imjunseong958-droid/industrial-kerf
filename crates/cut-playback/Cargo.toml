@@ -1,0 +1,24 @@
+[package]
+name = "cut-playback"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native Cut playback controller, timeline mapper, and FFmpeg decoder"
+rust-version = "1.95"
+
+[lib]
+name = "cut_playback"
+path = "src/lib.rs"
+
+[features]
+default = ["native-audio"]
+native-audio = ["dep:cpal"]
+
+[dependencies]
+cpal = { version = "0.15.3", optional = true }
+cut-domain = { path = "../cut-domain" }
+serde_json = "1"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

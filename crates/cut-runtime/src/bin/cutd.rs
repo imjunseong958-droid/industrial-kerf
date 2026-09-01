@@ -1,6 +1,6 @@
 //! Standalone Cut runtime daemon.
 
-use cut_runtime::run_stdio;
+use cut_runtime::{run_ipc, run_stdio};
 use std::env;
 use std::io;
 use std::path::PathBuf;
@@ -13,11 +13,16 @@ fn main() {
         .map(|pair| PathBuf::from(&pair[1]))
         .or_else(|| env::var_os("CUT_PROJECT_DIR").map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from(".cut/runtime"));
-    if let Err(error) = run_stdio(
-        &directory,
-        io::stdin().lock(),
-        io::BufWriter::new(io::stdout().lock()),
-    ) {
+    let result = if args.iter().any(|arg| arg == "--stdio") {
+        run_stdio(
+            &directory,
+            io::stdin().lock(),
+            io::BufWriter::new(io::stdout().lock()),
+        )
+    } else {
+        run_ipc(&directory)
+    };
+    if let Err(error) = result {
         eprintln!(
             "{}",
             serde_json::to_string(&error).unwrap_or_else(|_| error.message.clone())

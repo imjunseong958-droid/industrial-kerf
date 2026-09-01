@@ -1,0 +1,112 @@
+use cut_playback::{PlaybackConfig, PlaybackEvent, PlaybackSession};
+use serde_json::json;
+use std::process::Command;
+use std::time::{Duration, Instant};
+use tempfile::tempdir;
+
+fn ffmpeg_binary() -> String {
+    std::env::var("CUT_FFMPEG").unwrap_or_else(|_| {
+        if cfg!(windows) {
+            "ffmpeg.exe".into()
+        } else {
+            "ffmpeg".into()
+        }
+    })
+}
+
+fn ffmpeg_available(binary: &str) -> bool {
+    Command::new(binary)
+        .arg("-version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+#[test]
+fn real_ffmpeg_surface_delivers_rgba_frames_off_the_calling_thread() {
+    let binary = ffmpeg_binary();
+    if !ffmpeg_available(&binary) {
+        eprintln!("skipping playback integration test: ffmpeg is unavailable");
+        return;
+    }
+    let directory = tempdir().expect("temporary directory");
+    let source = directory.path().join("source.mp4");
+    let status = Command::new(&binary)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=64x36:r=10",
+            "-t",
+            "0.4",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            source.to_str().expect("utf8 source path"),
+        ])
+        .status()
+        .expect("run ffmpeg fixture");
+    assert!(status.success(), "fixture ffmpeg process failed");
+
+    let project = json!({
+        "version": 2,
+        "name": "Playback integration",
+        "fps": 10,
+        "width": 64,
+        "height": 36,
+        "sources": [{
+            "id": "source-a",
+            "path": source,
+            "duration": 0.4,
+            "hasAudio": false
+        }],
+        "tracks": [{
+            "id": "video-1",
+            "type": "video",
+            "clips": [{
+                "id": "clip-a",
+                "sourceId": "source-a",
+                "in": 0,
+                "out": 0.4,
+                "timelineStart": 0
+            }]
+        }],
+        "overlays": [],
+        "gaps": [],
+        "transitions": [],
+        "effects": [],
+        "markers": []
+    });
+    let session = PlaybackSession::open_json(
+        &project,
+        PlaybackConfig::default()
+            .with_ffmpeg_binary(&binary)
+            .with_audio_enabled(false)
+            .with_frame_size(64, 36),
+    )
+    .expect("open playback session");
+    session.play().expect("play");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut frame = None;
+    while Instant::now() < deadline {
+        if let Some(PlaybackEvent::Frame(value)) =
+            session.next_event_timeout(Duration::from_millis(100))
+        {
+            frame = Some(value);
+            break;
+        }
+    }
+    let frame = frame.expect("a decoded frame");
+    assert_eq!((frame.width, frame.height), (64, 36));
+    assert_eq!(frame.pixels.len(), 64 * 36 * 4);
+    assert!(frame.has_valid_pixels());
+    assert!(frame.pixels[0] > 240);
+    assert!(frame.pixels[1] < 10);
+    assert!(frame.pixels[2] < 10);
+    assert_eq!(frame.pixels[3], 255);
+}

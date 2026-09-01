@@ -1,27 +1,179 @@
 //! Desktop-owned editing runtime.
 //!
-//! This is deliberately a semantic boundary.  The web client sends project
-//! commands and receives snapshots; it never mutates a local copy of the
-//! timeline.  Browser/MCP clients use their own host adapter and do not pass
-//! through this runtime.
+//! This is deliberately a semantic boundary.  UI and MCP clients send project
+//! commands and receive snapshots; they never mutate a local copy of the
+//! timeline. `cutd` owns one `RuntimeHandle` and serves those clients through
+//! the project-scoped IPC transport below.
 
+use cut_domain::{self, Project};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap};
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
+
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::fs::FileTypeExt;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::os::unix::net::{UnixListener, UnixStream};
 
 const PROJECT_FILE: &str = "project.cut.json";
 const HISTORY_FILE: &str = "project.cut.history.json";
+const JOURNAL_FILE: &str = ".cut-runtime.journal";
 const LOCK_FILE: &str = ".cut-runtime.lock";
 const CHECKPOINT_FILE: &str = ".cut-runtime.checkpoint.json";
 const CHECKPOINT_TEMP_FILE: &str = ".cut-runtime.checkpoint.json.tmp";
-const CHECKPOINT_VERSION: u64 = 1;
+const CHECKPOINT_VERSION: u64 = 2;
+const JOURNAL_VERSION: u64 = 1;
+const CHECKPOINT_INTERVAL: u64 = 32;
+const MAX_HISTORY_ENTRIES: usize = 256;
+const MAX_RECEIPTS: usize = 1024;
+
+/// The largest JSONL request accepted by the local IPC boundary.
+pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+/// Conservative limit for a Unix-domain socket path.  Linux permits 108
+/// bytes and macOS permits fewer bytes on some SDKs, so leave room for the
+/// terminating NUL and use the same threshold on both platforms.
+pub const UNIX_SOCKET_PATH_LIMIT: usize = 100;
+const SOCKET_FILE: &str = ".cutd.sock";
+const CLIENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const SERVER_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const CLIENT_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+static TEST_RESPONSE_DROPPED: AtomicBool = AtomicBool::new(false);
+
+/// Address for the project-scoped local runtime endpoint.
+///
+/// Unix is the implemented transport in this unit.  The named-pipe variant
+/// is part of the public address model so callers cannot accidentally claim
+/// Windows support without implementing its transport and credential checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EndpointAddress {
+    Unix { path: PathBuf },
+    WindowsNamedPipe { name: String },
+}
+
+impl EndpointAddress {
+    /// Derive the endpoint from the canonical project directory.
+    pub fn for_project_directory(directory: &Path) -> Result<Self, RuntimeError> {
+        let canonical = canonical_project_directory(directory)?;
+        Ok(Self::for_canonical_directory(&canonical))
+    }
+
+    fn for_canonical_directory(directory: &Path) -> Self {
+        #[cfg(unix)]
+        {
+            let direct = directory.join(SOCKET_FILE);
+            if unix_path_len(&direct) < UNIX_SOCKET_PATH_LIMIT {
+                return Self::Unix { path: direct };
+            }
+            return Self::Unix {
+                path: user_runtime_directory()
+                    .join(format!("cutd-{}.sock", project_directory_hash(directory))),
+            };
+        }
+
+        #[cfg(windows)]
+        {
+            // Keep the namespace stable and independent of path length.  The
+            // named pipe transport is intentionally not enabled until its
+            // server/client implementation and ACL checks land.
+            return Self::WindowsNamedPipe {
+                name: format!(r"\\.\pipe\cutd-{}", project_directory_hash(directory)),
+            };
+        }
+
+        #[allow(unreachable_code)]
+        Self::WindowsNamedPipe {
+            name: format!("cutd-{}", project_directory_hash(directory)),
+        }
+    }
+
+    pub fn as_path(&self) -> Option<&Path> {
+        match self {
+            Self::Unix { path } => Some(path),
+            Self::WindowsNamedPipe { .. } => None,
+        }
+    }
+}
+
+fn canonical_project_directory(directory: &Path) -> Result<PathBuf, RuntimeError> {
+    fs::create_dir_all(directory).map_err(io_error)?;
+    directory.canonicalize().map_err(io_error)
+}
+
+#[cfg(unix)]
+fn unix_path_len(path: &Path) -> usize {
+    path.as_os_str().as_encoded_bytes().len()
+}
+
+fn project_directory_hash(directory: &Path) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(directory.as_os_str().to_string_lossy().as_bytes());
+    let digest = hasher.finalize();
+    digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn user_runtime_directory() -> PathBuf {
+    let directory = std::env::var_os("CUT_RUNTIME_DIR")
+        .or_else(|| std::env::var_os("XDG_RUNTIME_DIR"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            #[cfg(target_os = "macos")]
+            {
+                // macOS TMPDIR is already a private per-user runtime root;
+                // adding another component can exceed sockaddr_un's limit.
+                std::env::temp_dir()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let uid = current_user_id()
+                    .map(|uid| uid.to_string())
+                    .unwrap_or_else(|| "user".into());
+                std::env::temp_dir().join(format!("cut-runtime-{uid}"))
+            }
+        });
+    let directory = if directory.is_absolute() {
+        directory
+    } else {
+        std::env::current_dir()
+            .map(|current| current.join(&directory))
+            .unwrap_or(directory)
+    };
+    let _ = fs::create_dir_all(&directory);
+    #[cfg(unix)]
+    {
+        let _ = fs::set_permissions(&directory, fs::Permissions::from_mode(0o700));
+    }
+    directory
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn current_user_id() -> Option<u32> {
+    // `geteuid` has no Rust wrapper on the supported Unix targets and does not
+    // dereference pointers or depend on process-owned state.
+    Some(unsafe { libc::geteuid() })
+}
+
+#[cfg(not(unix))]
+fn current_user_id() -> Option<u32> {
+    None
+}
 
 /// A project directory has exactly one canonical runtime owner.  Keeping the
 /// lock open for the lifetime of the runtime prevents two desktop windows (or
@@ -64,24 +216,120 @@ impl Drop for RuntimeLock {
     }
 }
 
-#[derive(Debug, Serialize, serde::Deserialize)]
-struct PersistedHistory {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct JournalHistoryEntry {
+    command: cut_domain::Command,
+    inverse: cut_domain::Command,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum JournalAction {
+    Apply,
+    Undo,
+    Redo,
+    Noop,
+    StageProposal,
+    RejectProposal,
+    Job,
+    ProjectionImport,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct JournalOperation {
+    key: String,
+    record: OperationRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct JournalImport {
+    key: String,
+    record: ImportRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct JournalRecord {
+    format_version: u64,
+    sequence: u64,
     revision: u64,
-    past: Vec<Value>,
-    future: Vec<Value>,
+    action: JournalAction,
+    #[serde(default)]
+    command: Option<cut_domain::Command>,
+    #[serde(default)]
+    inverse: Option<cut_domain::Command>,
+    #[serde(default)]
+    operation: Option<JournalOperation>,
+    #[serde(default)]
+    import: Option<JournalImport>,
+    #[serde(default)]
+    proposal: Option<ProposalRecord>,
+    #[serde(default)]
+    job: Option<RenderJob>,
+    #[serde(default)]
+    project: Option<Project>,
+    #[serde(default)]
+    source_version: Option<u8>,
+    checksum: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct PersistedCheckpoint {
     format_version: u64,
-    project: Value,
+    project: Project,
     revision: u64,
-    past: Vec<Value>,
-    future: Vec<Value>,
+    #[serde(default)]
+    past: Vec<JournalHistoryEntry>,
+    #[serde(default)]
+    future: Vec<JournalHistoryEntry>,
+    #[serde(default)]
+    journal_sequence: u64,
     operations: HashMap<String, OperationRecord>,
     imports: HashMap<String, ImportRecord>,
     #[serde(default)]
     proposal: Option<ProposalRecord>,
+    #[serde(default)]
+    jobs: HashMap<String, RenderJob>,
+    #[serde(default = "default_source_version")]
+    source_version: u8,
+    #[serde(default)]
+    projection_digest: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LegacyPersistedCheckpoint {
+    project: Project,
+    revision: u64,
+    #[serde(default)]
+    operations: HashMap<String, OperationRecord>,
+    #[serde(default)]
+    imports: HashMap<String, ImportRecord>,
+    #[serde(default)]
+    proposal: Option<ProposalRecord>,
+}
+
+fn default_source_version() -> u8 {
+    2
+}
+
+fn default_projection_status() -> String {
+    "current".into()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectionStatus {
+    Current,
+    Missing,
+    Diverged,
+}
+
+impl ProjectionStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Current => "current",
+            Self::Missing => "missing",
+            Self::Diverged => "diverged",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,6 +342,10 @@ pub struct StateSnapshot {
     pub duration: f64,
     pub sources: Vec<Value>,
     pub pending_proposal: Option<PendingProposal>,
+    #[serde(default = "default_source_version")]
+    pub source_version: u8,
+    #[serde(default = "default_projection_status")]
+    pub projection_status: String,
 }
 
 /// One machine-readable leaf change in an agent proposal.  The diff is
@@ -140,7 +392,7 @@ pub enum PendingProposal {
     },
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderJob {
     pub job_id: String,
@@ -178,11 +430,6 @@ impl RuntimeError {
     }
 }
 
-#[derive(Debug, Clone)]
-struct JobRecord {
-    job: RenderJob,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct OperationRecord {
     fingerprint: String,
@@ -214,12 +461,93 @@ struct ProposalRecord {
     receipt: Option<ProposalReceipt>,
 }
 
+#[allow(clippy::large_enum_variant)]
+enum JournalEvent {
+    Mutation {
+        action: JournalAction,
+        command: Option<cut_domain::Command>,
+        inverse: Option<cut_domain::Command>,
+        operation: Option<JournalOperation>,
+        import: Option<JournalImport>,
+        proposal: Option<ProposalRecord>,
+    },
+    Proposal {
+        proposal: Option<ProposalRecord>,
+    },
+    Job {
+        job: RenderJob,
+    },
+    ProjectionImport {
+        project: Project,
+        source_version: u8,
+        operation: Option<JournalOperation>,
+    },
+}
+
+impl JournalRecord {
+    fn from_event(sequence: u64, revision: u64, event: JournalEvent) -> Self {
+        let mut record = Self {
+            format_version: JOURNAL_VERSION,
+            sequence,
+            revision,
+            action: JournalAction::Noop,
+            command: None,
+            inverse: None,
+            operation: None,
+            import: None,
+            proposal: None,
+            job: None,
+            project: None,
+            source_version: None,
+            checksum: String::new(),
+        };
+        match event {
+            JournalEvent::Mutation {
+                action,
+                command,
+                inverse,
+                operation,
+                import,
+                proposal,
+            } => {
+                record.action = action;
+                record.command = command;
+                record.inverse = inverse;
+                record.operation = operation;
+                record.import = import;
+                record.proposal = proposal;
+            }
+            JournalEvent::Proposal { proposal } => {
+                record.action = JournalAction::StageProposal;
+                record.proposal = proposal;
+            }
+            JournalEvent::Job { job } => {
+                record.action = JournalAction::Job;
+                record.job = Some(job);
+            }
+            JournalEvent::ProjectionImport {
+                project,
+                source_version,
+                operation,
+            } => {
+                record.action = JournalAction::ProjectionImport;
+                record.project = Some(project);
+                record.source_version = Some(source_version);
+                record.operation = operation;
+            }
+        }
+        record
+    }
+}
+
 #[derive(Debug, Clone)]
 struct DurableState {
-    project: Value,
+    project: Project,
     revision: u64,
-    past: Vec<Value>,
-    future: Vec<Value>,
+    source_version: u8,
+    past: Vec<JournalHistoryEntry>,
+    future: Vec<JournalHistoryEntry>,
+    jobs: HashMap<String, RenderJob>,
     operations: HashMap<String, OperationRecord>,
     imports: HashMap<String, ImportRecord>,
     proposal: Option<ProposalRecord>,
@@ -229,14 +557,20 @@ struct DurableState {
 struct Runtime {
     _lock: RuntimeLock,
     project_path: PathBuf,
-    project: Value,
+    journal_path: PathBuf,
+    project: Project,
     revision: u64,
-    past: Vec<Value>,
-    future: Vec<Value>,
-    jobs: HashMap<String, JobRecord>,
+    past: Vec<JournalHistoryEntry>,
+    future: Vec<JournalHistoryEntry>,
+    jobs: HashMap<String, RenderJob>,
     operations: HashMap<String, OperationRecord>,
     imports: HashMap<String, ImportRecord>,
     proposal: Option<ProposalRecord>,
+    source_version: u8,
+    journal_sequence: u64,
+    journal_records_since_checkpoint: u64,
+    projection_status: ProjectionStatus,
+    projection_digest: Option<String>,
 }
 
 /// Versioned operations accepted by the runtime mailbox.  JSON/IPC payloads
@@ -292,6 +626,18 @@ pub enum RuntimeRequest {
         error: Option<String>,
         #[serde(rename = "outputUrl")]
         output_url: Option<String>,
+    },
+    CancelRender {
+        #[serde(rename = "jobId")]
+        job_id: String,
+    },
+    RepairProjection,
+    ImportProjection {
+        actor: String,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "baseRevision")]
+        base_revision: u64,
     },
     StageProposal {
         #[serde(rename = "requestKey")]
@@ -609,6 +955,35 @@ impl RuntimeHandle {
         }
     }
 
+    pub fn cancel_render(&self, job_id: &str) -> Result<RenderJob, RuntimeError> {
+        match self.request(RuntimeRequest::CancelRender {
+            job_id: job_id.to_owned(),
+        })? {
+            RuntimeResponse::RenderJob(job) => Ok(job),
+            _ => Err(RuntimeError::new(
+                "RUNTIME_PROTOCOL_ERROR",
+                "expected render-job response",
+            )),
+        }
+    }
+
+    pub fn repair_projection(&self) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::RepairProjection)?)
+    }
+
+    pub fn import_projection(
+        &self,
+        actor: &str,
+        key: &str,
+        base_revision: u64,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::ImportProjection {
+            actor: actor.to_owned(),
+            idempotency_key: key.to_owned(),
+            base_revision,
+        })?)
+    }
+
     pub fn stage_agent_proposal(
         &self,
         request_key: &str,
@@ -659,6 +1034,596 @@ impl RuntimeHandle {
             idempotency_key: Some(key.to_owned()),
             base_revision: Some(base_revision),
         })?)
+    }
+}
+
+/// Request-scoped client for the project daemon.
+///
+/// The client owns no project state and never owns the daemon process.  Every
+/// request opens a fresh local connection, which keeps a disconnected client
+/// from affecting other clients or jobs.  When a binary is configured, the
+/// first request that cannot connect starts it and waits for the endpoint to
+/// become ready.
+#[derive(Clone)]
+pub struct RuntimeClient {
+    inner: Arc<RuntimeClientInner>,
+}
+
+/// Descriptive name for the request-scoped compatibility client.
+pub type IpcRuntimeClient = RuntimeClient;
+
+struct RuntimeClientInner {
+    directory: PathBuf,
+    endpoint: EndpointAddress,
+    binary: Option<PathBuf>,
+    request_timeout: Duration,
+    startup_timeout: Duration,
+}
+
+impl std::fmt::Debug for RuntimeClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RuntimeClient")
+            .field("directory", &self.inner.directory)
+            .field("endpoint", &self.inner.endpoint)
+            .finish_non_exhaustive()
+    }
+}
+
+impl RuntimeClient {
+    /// Create a client that connects only to an already-running daemon.
+    pub fn new(directory: &Path) -> Result<Self, RuntimeError> {
+        Self::with_binary(directory, None)
+    }
+
+    /// Create a client that connects first and starts `binary` only when no
+    /// daemon is listening.  The spawned process is intentionally detached
+    /// from the client lifetime; dropping this value never kills `cutd`.
+    pub fn connect_or_spawn(directory: &Path, binary: Option<&Path>) -> Result<Self, RuntimeError> {
+        Self::with_binary(directory, binary)
+    }
+
+    fn with_binary(directory: &Path, binary: Option<&Path>) -> Result<Self, RuntimeError> {
+        let directory = canonical_project_directory(directory)?;
+        let endpoint = EndpointAddress::for_canonical_directory(&directory);
+        Ok(Self {
+            inner: Arc::new(RuntimeClientInner {
+                directory,
+                endpoint,
+                binary: binary.map(Path::to_path_buf),
+                request_timeout: CLIENT_REQUEST_TIMEOUT,
+                startup_timeout: CLIENT_STARTUP_TIMEOUT,
+            }),
+        })
+    }
+
+    /// Return the canonical project directory used by this client.
+    pub fn directory(&self) -> &Path {
+        &self.inner.directory
+    }
+
+    /// Return the derived project-scoped endpoint.
+    pub fn endpoint(&self) -> &EndpointAddress {
+        &self.inner.endpoint
+    }
+
+    /// Send one versioned request over a fresh connection.
+    pub fn request(&self, request: RuntimeRequest) -> Result<RuntimeResponse, RuntimeError> {
+        let retryable = request_has_stable_idempotency_key(&request);
+        match self.request_once(&request) {
+            Ok(response) => Ok(response),
+            Err(error) if retryable && is_transport_error(&error) => {
+                // The first request may have committed before its response
+                // was lost.  Re-read authoritative state before retrying so
+                // the caller observes a current revision and the retry can
+                // safely resolve through the durable receipt.
+                self.request_once(&RuntimeRequest::GetState)
+                    .map_err(|_| error.clone())?;
+                self.request_once(&request)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn get_state(&self) -> Result<StateSnapshot, RuntimeError> {
+        match self.request(RuntimeRequest::GetState)? {
+            RuntimeResponse::State(state) => Ok(state),
+            _ => Err(RuntimeError::new(
+                "RUNTIME_PROTOCOL_ERROR",
+                "expected state response",
+            )),
+        }
+    }
+
+    pub fn apply_request(
+        &self,
+        actor: &str,
+        key: &str,
+        command: Value,
+        base_revision: u64,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::Apply {
+            actor: actor.to_owned(),
+            idempotency_key: key.to_owned(),
+            base_revision,
+            command,
+        })?)
+    }
+
+    pub fn undo_request(
+        &self,
+        actor: &str,
+        key: &str,
+        base_revision: u64,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::Undo {
+            actor: actor.to_owned(),
+            idempotency_key: key.to_owned(),
+            base_revision,
+        })?)
+    }
+
+    pub fn redo_request(
+        &self,
+        actor: &str,
+        key: &str,
+        base_revision: u64,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::Redo {
+            actor: actor.to_owned(),
+            idempotency_key: key.to_owned(),
+            base_revision,
+        })?)
+    }
+
+    pub fn import_media_request(
+        &self,
+        actor: &str,
+        key: &str,
+        path: &str,
+        base_revision: u64,
+        metadata: Option<Value>,
+        overlay: Option<Value>,
+    ) -> Result<(StateSnapshot, String, String), RuntimeError> {
+        match self.request(RuntimeRequest::Import {
+            actor: actor.to_owned(),
+            idempotency_key: key.to_owned(),
+            base_revision,
+            path: path.to_owned(),
+            metadata,
+            overlay,
+        })? {
+            RuntimeResponse::Import {
+                state,
+                source_id,
+                clip_id,
+            } => Ok((state, source_id, clip_id)),
+            _ => Err(RuntimeError::new(
+                "RUNTIME_PROTOCOL_ERROR",
+                "expected import response",
+            )),
+        }
+    }
+
+    pub fn start_render(&self, quality: &str) -> Result<(RenderJob, Value, PathBuf), RuntimeError> {
+        match self.request(RuntimeRequest::StartRender {
+            quality: quality.to_owned(),
+        })? {
+            RuntimeResponse::RenderStarted {
+                job,
+                project,
+                output,
+            } => Ok((job, project, output)),
+            _ => Err(RuntimeError::new(
+                "RUNTIME_PROTOCOL_ERROR",
+                "expected render-start response",
+            )),
+        }
+    }
+
+    pub fn render_job(&self, job_id: &str) -> Result<RenderJob, RuntimeError> {
+        match self.request(RuntimeRequest::GetRender {
+            job_id: job_id.to_owned(),
+        })? {
+            RuntimeResponse::RenderJob(job) => Ok(job),
+            _ => Err(RuntimeError::new(
+                "RUNTIME_PROTOCOL_ERROR",
+                "expected render-job response",
+            )),
+        }
+    }
+
+    pub fn update_job(
+        &self,
+        job_id: &str,
+        status: &str,
+        error: Option<String>,
+        output_url: Option<String>,
+    ) -> Result<(), RuntimeError> {
+        match self.request(RuntimeRequest::UpdateJob {
+            job_id: job_id.to_owned(),
+            status: status.to_owned(),
+            error,
+            output_url,
+        })? {
+            RuntimeResponse::Empty => Ok(()),
+            _ => Err(RuntimeError::new(
+                "RUNTIME_PROTOCOL_ERROR",
+                "expected empty response",
+            )),
+        }
+    }
+
+    pub fn cancel_render(&self, job_id: &str) -> Result<RenderJob, RuntimeError> {
+        match self.request(RuntimeRequest::CancelRender {
+            job_id: job_id.to_owned(),
+        })? {
+            RuntimeResponse::RenderJob(job) => Ok(job),
+            _ => Err(RuntimeError::new(
+                "RUNTIME_PROTOCOL_ERROR",
+                "expected render-job response",
+            )),
+        }
+    }
+
+    pub fn repair_projection(&self) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::RepairProjection)?)
+    }
+
+    pub fn import_projection(
+        &self,
+        actor: &str,
+        key: &str,
+        base_revision: u64,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::ImportProjection {
+            actor: actor.to_owned(),
+            idempotency_key: key.to_owned(),
+            base_revision,
+        })?)
+    }
+
+    pub fn stage_agent_proposal(
+        &self,
+        request_key: &str,
+        base_revision: u64,
+        transactions: Vec<Value>,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::StageProposal {
+            request_key: request_key.to_owned(),
+            base_revision,
+            transactions,
+        })?)
+    }
+
+    pub fn accept_proposal(
+        &self,
+        proposal_id: &str,
+        actor: &str,
+        key: &str,
+        base_revision: u64,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::AcceptProposal {
+            proposal_id: proposal_id.to_owned(),
+            actor: actor.to_owned(),
+            idempotency_key: key.to_owned(),
+            base_revision,
+        })?)
+    }
+
+    pub fn reject_proposal(&self, proposal_id: &str) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::RejectProposal {
+            proposal_id: proposal_id.to_owned(),
+            actor: None,
+            idempotency_key: None,
+            base_revision: None,
+        })?)
+    }
+
+    pub fn reject_proposal_request(
+        &self,
+        proposal_id: &str,
+        actor: &str,
+        key: &str,
+        base_revision: u64,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::RejectProposal {
+            proposal_id: proposal_id.to_owned(),
+            actor: Some(actor.to_owned()),
+            idempotency_key: Some(key.to_owned()),
+            base_revision: Some(base_revision),
+        })?)
+    }
+
+    #[cfg(unix)]
+    fn request_once(&self, request: &RuntimeRequest) -> Result<RuntimeResponse, RuntimeError> {
+        let envelope = RequestEnvelope::new(format!("request-{}", unique_id()), request.clone());
+        let mut payload = serde_json::to_vec(&envelope)
+            .map_err(|error| RuntimeError::new("SERIALIZE_ERROR", error.to_string()))?;
+        payload.push(b'\n');
+        if payload.len() > MAX_REQUEST_BYTES {
+            return Err(RuntimeError::new(
+                "REQUEST_TOO_LARGE",
+                format!("request exceeds {MAX_REQUEST_BYTES} bytes"),
+            ));
+        }
+        let mut stream = self.connect_or_start()?;
+        stream
+            .set_read_timeout(Some(self.inner.request_timeout))
+            .map_err(ipc_error)?;
+        stream
+            .set_write_timeout(Some(self.inner.request_timeout))
+            .map_err(ipc_error)?;
+        stream.write_all(&payload).map_err(ipc_error)?;
+        stream.flush().map_err(ipc_error)?;
+        let line = read_bounded_line(&mut stream)?;
+        let value: Value = serde_json::from_slice(&line)
+            .map_err(|error| RuntimeError::new("INVALID_JSON", error.to_string()))?;
+        decode_response(&value, &envelope.id)
+    }
+
+    #[cfg(unix)]
+    fn connect_or_start(&self) -> Result<UnixStream, RuntimeError> {
+        match self.connect_once() {
+            Ok(stream) => return Ok(stream),
+            Err(error) if error.code == "IPC_PERMISSION_DENIED" => return Err(error),
+            Err(_) => {}
+        }
+        let binary = self.inner.binary.as_ref().ok_or_else(|| {
+            RuntimeError::new(
+                "RUNTIME_UNAVAILABLE",
+                format!("no cutd daemon is listening at {}", self.endpoint_label()),
+            )
+        })?;
+        Command::new(binary)
+            .arg("--dir")
+            .arg(&self.inner.directory)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| {
+                RuntimeError::new(
+                    "RUNTIME_UNAVAILABLE",
+                    format!("failed to start cutd at {}: {error}", binary.display()),
+                )
+            })?;
+        let deadline = std::time::Instant::now() + self.inner.startup_timeout;
+        loop {
+            match self.connect_once() {
+                Ok(stream) => return Ok(stream),
+                Err(error) if std::time::Instant::now() < deadline => {
+                    // A competing client may have started the daemon, or the
+                    // child may still be loading its checkpoint.
+                    if error.code == "IPC_PERMISSION_DENIED" {
+                        return Err(error);
+                    }
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => {
+                    return Err(RuntimeError::new(
+                        "RUNTIME_UNAVAILABLE",
+                        format!("cutd did not become ready: {}", error.message),
+                    ));
+                }
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn request_once(&self, _request: &RuntimeRequest) -> Result<RuntimeResponse, RuntimeError> {
+        Err(RuntimeError::new(
+            "IPC_UNSUPPORTED",
+            "Windows named-pipe transport is defined but not implemented yet",
+        ))
+    }
+
+    #[cfg(unix)]
+    fn connect_once(&self) -> Result<UnixStream, RuntimeError> {
+        let path = self
+            .inner
+            .endpoint
+            .as_path()
+            .ok_or_else(|| RuntimeError::new("IPC_UNSUPPORTED", "endpoint is not Unix IPC"))?;
+        UnixStream::connect(path).map_err(|error| {
+            let code = match error.kind() {
+                std::io::ErrorKind::PermissionDenied => "IPC_PERMISSION_DENIED",
+                _ => "IPC_CONNECT_ERROR",
+            };
+            RuntimeError::new(
+                code,
+                format!("cannot connect to {}: {error}", path.display()),
+            )
+        })
+    }
+
+    fn endpoint_label(&self) -> String {
+        match &self.inner.endpoint {
+            EndpointAddress::Unix { path } => path.display().to_string(),
+            EndpointAddress::WindowsNamedPipe { name } => name.clone(),
+        }
+    }
+}
+
+fn request_has_stable_idempotency_key(request: &RuntimeRequest) -> bool {
+    match request {
+        RuntimeRequest::Apply {
+            idempotency_key, ..
+        }
+        | RuntimeRequest::Undo {
+            idempotency_key, ..
+        }
+        | RuntimeRequest::Redo {
+            idempotency_key, ..
+        }
+        | RuntimeRequest::Import {
+            idempotency_key, ..
+        }
+        | RuntimeRequest::ImportProjection {
+            idempotency_key, ..
+        }
+        | RuntimeRequest::AcceptProposal {
+            idempotency_key, ..
+        } => !idempotency_key.trim().is_empty(),
+        // Staging has a request key, but it is not backed by the durable
+        // operation-receipt table. A lost response is therefore ambiguous
+        // and must not be replayed automatically.
+        RuntimeRequest::StageProposal { .. } => false,
+        RuntimeRequest::RejectProposal {
+            idempotency_key: Some(idempotency_key),
+            ..
+        } => !idempotency_key.trim().is_empty(),
+        RuntimeRequest::GetState
+        | RuntimeRequest::StartRender { .. }
+        | RuntimeRequest::GetRender { .. }
+        | RuntimeRequest::UpdateJob { .. }
+        | RuntimeRequest::CancelRender { .. }
+        | RuntimeRequest::RepairProjection
+        | RuntimeRequest::RejectProposal {
+            idempotency_key: None,
+            ..
+        } => false,
+    }
+}
+
+fn is_transport_error(error: &RuntimeError) -> bool {
+    matches!(
+        error.code.as_str(),
+        "IPC_CONNECT_ERROR"
+            | "IPC_PERMISSION_DENIED"
+            | "IPC_TIMEOUT"
+            | "IPC_ERROR"
+            | "RUNTIME_UNAVAILABLE"
+    )
+}
+
+fn decode_response(value: &Value, expected_id: &str) -> Result<RuntimeResponse, RuntimeError> {
+    let object = value.as_object().ok_or_else(|| {
+        RuntimeError::new(
+            "RUNTIME_PROTOCOL_ERROR",
+            "runtime response must be an object",
+        )
+    })?;
+    if object.get("protocolVersion").and_then(Value::as_u64)
+        != Some(RequestEnvelope::PROTOCOL_VERSION)
+    {
+        return Err(RuntimeError::new(
+            "PROTOCOL_VERSION_UNSUPPORTED",
+            "runtime response protocolVersion must be 1",
+        ));
+    }
+    if object.get("id").and_then(Value::as_str) != Some(expected_id) {
+        return Err(RuntimeError::new(
+            "RUNTIME_PROTOCOL_ERROR",
+            "runtime response id does not match request",
+        ));
+    }
+    if !object.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        return Err(object
+            .get("error")
+            .cloned()
+            .and_then(|error| serde_json::from_value::<RuntimeError>(error).ok())
+            .unwrap_or_else(|| RuntimeError::new("RUNTIME_ERROR", "runtime request failed")));
+    }
+    if let Some(state) = object.get("state") {
+        let state = serde_json::from_value::<StateSnapshot>(state.clone())
+            .map_err(|error| RuntimeError::new("RUNTIME_PROTOCOL_ERROR", error.to_string()))?;
+        if let (Some(source_id), Some(clip_id)) = (
+            object.get("sourceId").and_then(Value::as_str),
+            object.get("clipId").and_then(Value::as_str),
+        ) {
+            return Ok(RuntimeResponse::Import {
+                state,
+                source_id: source_id.to_owned(),
+                clip_id: clip_id.to_owned(),
+            });
+        }
+        return Ok(RuntimeResponse::State(state));
+    }
+    if let Some(job) = object.get("job") {
+        let job = serde_json::from_value::<RenderJob>(job.clone())
+            .map_err(|error| RuntimeError::new("RUNTIME_PROTOCOL_ERROR", error.to_string()))?;
+        if let (Some(project), Some(output)) = (object.get("project"), object.get("output")) {
+            let output = serde_json::from_value::<PathBuf>(output.clone())
+                .map_err(|error| RuntimeError::new("RUNTIME_PROTOCOL_ERROR", error.to_string()))?;
+            return Ok(RuntimeResponse::RenderStarted {
+                job,
+                project: project.clone(),
+                output,
+            });
+        }
+        return Ok(RuntimeResponse::RenderJob(job));
+    }
+    Ok(RuntimeResponse::Empty)
+}
+
+fn ipc_error(error: std::io::Error) -> RuntimeError {
+    let code = match error.kind() {
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => "IPC_TIMEOUT",
+        _ => "IPC_ERROR",
+    };
+    RuntimeError::new(code, error.to_string())
+}
+
+fn read_bounded_line<R: Read>(reader: &mut R) -> Result<Vec<u8>, RuntimeError> {
+    let mut bytes = Vec::new();
+    let mut chunk = [0_u8; 8192];
+    loop {
+        let count = reader.read(&mut chunk).map_err(ipc_error)?;
+        if count == 0 {
+            break;
+        }
+        if let Some(index) = chunk[..count].iter().position(|byte| *byte == b'\n') {
+            bytes.extend_from_slice(&chunk[..index]);
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..count]);
+        if bytes.len() > MAX_REQUEST_BYTES {
+            return Err(RuntimeError::new(
+                "REQUEST_TOO_LARGE",
+                format!("request exceeds {MAX_REQUEST_BYTES} bytes"),
+            ));
+        }
+    }
+    if bytes.len() > MAX_REQUEST_BYTES {
+        return Err(RuntimeError::new(
+            "REQUEST_TOO_LARGE",
+            format!("request exceeds {MAX_REQUEST_BYTES} bytes"),
+        ));
+    }
+    if bytes.is_empty() {
+        return Err(RuntimeError::new(
+            "RUNTIME_UNAVAILABLE",
+            "runtime connection closed before a response",
+        ));
+    }
+    Ok(bytes)
+}
+
+fn read_bounded_bufread_line<R: BufRead>(reader: &mut R) -> Result<Option<Vec<u8>>, RuntimeError> {
+    let mut bytes = Vec::new();
+    loop {
+        let buffer = reader.fill_buf().map_err(io_error)?;
+        if buffer.is_empty() {
+            return if bytes.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(bytes))
+            };
+        }
+        let newline = buffer.iter().position(|byte| *byte == b'\n');
+        let length = newline.unwrap_or(buffer.len());
+        if bytes.len() + length > MAX_REQUEST_BYTES {
+            return Err(RuntimeError::new(
+                "REQUEST_TOO_LARGE",
+                format!("request exceeds {MAX_REQUEST_BYTES} bytes"),
+            ));
+        }
+        bytes.extend_from_slice(&buffer[..length]);
+        reader.consume(newline.map_or(length, |index| index + 1));
+        if newline.is_some() {
+            return Ok(Some(bytes));
+        }
     }
 }
 
@@ -724,48 +1689,254 @@ pub fn response_value(id: &str, result: Result<RuntimeResponse, RuntimeError>) -
     }
 }
 
+/// Run the canonical project-scoped local IPC daemon.
+///
+/// One `RuntimeHandle` is created for the canonical project directory and is
+/// shared by short-lived connection workers.  Each worker handles one JSONL
+/// request and then closes its connection; the daemon and its mailbox remain
+/// alive until the process itself is terminated.
+pub fn run_ipc(directory: &Path) -> Result<(), RuntimeError> {
+    #[cfg(unix)]
+    {
+        let directory = canonical_project_directory(directory)?;
+        let endpoint = EndpointAddress::for_canonical_directory(&directory);
+        let handle = RuntimeHandle::open(&directory)?;
+        let path = endpoint.as_path().ok_or_else(|| {
+            RuntimeError::new("IPC_UNSUPPORTED", "Unix daemon requires a Unix endpoint")
+        })?;
+        let listener = bind_unix_listener(path)?;
+        for incoming in listener.incoming() {
+            match incoming {
+                Ok(stream) => {
+                    let handle = handle.clone();
+                    thread::Builder::new()
+                        .name("cutd-client".into())
+                        .spawn(move || serve_unix_connection(stream, handle))
+                        .map_err(io_error)?;
+                }
+                Err(error) => return Err(io_error(error)),
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = directory;
+        Err(RuntimeError::new(
+            "IPC_UNSUPPORTED",
+            "Windows named-pipe transport is defined but not implemented yet",
+        ))
+    }
+}
+
+/// Explicit alias for callers that want to name the daemon boundary rather
+/// than the transport.  `cutd` is the canonical binary and calls this entry
+/// point; `cut-runtime` retains the alias only during migration.
+pub fn run_server(directory: &Path) -> Result<(), RuntimeError> {
+    run_ipc(directory)
+}
+
+#[cfg(unix)]
+fn bind_unix_listener(path: &Path) -> Result<UnixListener, RuntimeError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(io_error)?;
+    }
+    match UnixListener::bind(path) {
+        Ok(listener) => {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(io_error)?;
+            Ok(listener)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+            let stale_socket = fs::symlink_metadata(path)
+                .map(|metadata| metadata.file_type().is_socket())
+                .unwrap_or(false);
+            if !stale_socket {
+                return Err(io_error(error));
+            }
+            match UnixStream::connect(path) {
+                Ok(_) => Err(RuntimeError::new(
+                    "RUNTIME_ALREADY_RUNNING",
+                    format!("another cutd is listening at {}", path.display()),
+                )),
+                Err(connect_error)
+                    if matches!(
+                        connect_error.kind(),
+                        std::io::ErrorKind::ConnectionRefused
+                            | std::io::ErrorKind::NotFound
+                            | std::io::ErrorKind::ConnectionAborted
+                    ) =>
+                {
+                    fs::remove_file(path).map_err(io_error)?;
+                    let listener = UnixListener::bind(path).map_err(io_error)?;
+                    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+                        .map_err(io_error)?;
+                    Ok(listener)
+                }
+                Err(connect_error) => Err(io_error(connect_error)),
+            }
+        }
+        Err(error) => Err(io_error(error)),
+    }
+}
+
+#[cfg(unix)]
+fn serve_unix_connection(mut stream: UnixStream, handle: RuntimeHandle) {
+    if let Err(error) = verify_unix_peer(&stream) {
+        let _ = write_ipc_response(&mut stream, "", Err(error));
+        return;
+    }
+    let _ = stream.set_read_timeout(Some(SERVER_REQUEST_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(SERVER_REQUEST_TIMEOUT));
+    let line = match read_bounded_line(&mut stream) {
+        Ok(line) => line,
+        Err(error) => {
+            let _ = write_ipc_response(&mut stream, "", Err(error));
+            return;
+        }
+    };
+    let (id, result) = process_request_line(&line, &handle);
+    if should_drop_test_response(&line) {
+        return;
+    }
+    let _ = write_ipc_response(&mut stream, &id, result);
+}
+
+#[cfg(unix)]
+fn should_drop_test_response(line: &[u8]) -> bool {
+    let Some(key) = std::env::var_os("CUTD_TEST_DROP_RESPONSE_KEY") else {
+        return false;
+    };
+    let matches = serde_json::from_slice::<Value>(line)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("idempotencyKey")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .is_some_and(|candidate| candidate == key.to_string_lossy());
+    matches && !TEST_RESPONSE_DROPPED.swap(true, Ordering::SeqCst)
+}
+
+#[cfg(unix)]
+fn write_ipc_response(
+    stream: &mut UnixStream,
+    id: &str,
+    result: Result<RuntimeResponse, RuntimeError>,
+) -> Result<(), RuntimeError> {
+    let value = response_value(id, result);
+    let bytes = serde_json::to_vec(&value)
+        .map_err(|error| RuntimeError::new("SERIALIZE_ERROR", error.to_string()))?;
+    stream.write_all(&bytes).map_err(ipc_error)?;
+    stream.write_all(b"\n").map_err(ipc_error)?;
+    stream.flush().map_err(ipc_error)
+}
+
+#[cfg(unix)]
+fn verify_unix_peer(stream: &UnixStream) -> Result<(), RuntimeError> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut credentials = libc::ucred {
+            pid: 0,
+            uid: 0,
+            gid: 0,
+        };
+        let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        // The buffer and length are valid for this synchronous libc call, and
+        // the socket descriptor is borrowed from `stream`.
+        let result = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                (&mut credentials as *mut libc::ucred).cast(),
+                &mut length,
+            )
+        };
+        if result != 0 {
+            return Err(ipc_error(std::io::Error::last_os_error()));
+        }
+        // `geteuid` is a side-effect-free libc query with no pointer argument.
+        if credentials.uid != unsafe { libc::geteuid() } {
+            return Err(RuntimeError::new(
+                "IPC_UNAUTHORIZED_PEER",
+                "cutd rejected a connection from a different user",
+            ));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let mut effective_uid = 0;
+        let mut effective_gid = 0;
+        // `getpeereid` writes only to the two local uid/gid values and uses the
+        // borrowed socket descriptor for the duration of this call.
+        let result =
+            unsafe { libc::getpeereid(stream.as_raw_fd(), &mut effective_uid, &mut effective_gid) };
+        if result != 0 {
+            return Err(ipc_error(std::io::Error::last_os_error()));
+        }
+        // `geteuid` is a side-effect-free libc query with no pointer argument.
+        if effective_uid != unsafe { libc::geteuid() } {
+            return Err(RuntimeError::new(
+                "IPC_UNAUTHORIZED_PEER",
+                "cutd rejected a connection from a different user",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn process_request_line(
+    line: &[u8],
+    handle: &RuntimeHandle,
+) -> (String, Result<RuntimeResponse, RuntimeError>) {
+    match serde_json::from_slice::<Value>(line) {
+        Err(error) => (
+            String::new(),
+            Err(RuntimeError::new("INVALID_JSON", error.to_string())),
+        ),
+        Ok(value) => {
+            let id = value
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            match serde_json::from_value::<RequestEnvelope>(value) {
+                Ok(envelope) => {
+                    let result = envelope
+                        .validate()
+                        .and_then(|()| handle.request(envelope.request));
+                    (id, result)
+                }
+                Err(error) => {
+                    let code = if error.to_string().contains("unknown variant") {
+                        "UNKNOWN_OPERATION"
+                    } else {
+                        "INVALID_REQUEST"
+                    };
+                    (id, Err(RuntimeError::new(code, error.to_string())))
+                }
+            }
+        }
+    }
+}
+
 /// Run the persistent JSONL daemon over stdin/stdout.  A single actor owns
 /// the runtime; malformed requests are rejected at this transport boundary.
 pub fn run_stdio<R: BufRead, W: Write>(
     directory: &Path,
-    input: R,
+    mut input: R,
     mut output: W,
 ) -> Result<(), RuntimeError> {
     let handle = RuntimeHandle::open(directory)?;
-    for line in input.lines() {
-        let line = line.map_err(io_error)?;
-        if line.trim().is_empty() {
+    while let Some(line) = read_bounded_bufread_line(&mut input)? {
+        if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
-        let (id, result) = match serde_json::from_str::<Value>(&line) {
-            Err(error) => (
-                String::new(),
-                Err(RuntimeError::new("INVALID_JSON", error.to_string())),
-            ),
-            Ok(value) => {
-                let id = value
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
-                match serde_json::from_value::<RequestEnvelope>(value) {
-                    Ok(envelope) => {
-                        let result = envelope
-                            .validate()
-                            .and_then(|()| handle.request(envelope.request));
-                        (id, result)
-                    }
-                    Err(error) => {
-                        let code = if error.to_string().contains("unknown variant") {
-                            "UNKNOWN_OPERATION"
-                        } else {
-                            "INVALID_REQUEST"
-                        };
-                        (id, Err(RuntimeError::new(code, error.to_string())))
-                    }
-                }
-            }
-        };
+        let (id, result) = process_request_line(&line, &handle);
         writeln!(output, "{}", response_value(&id, result)).map_err(io_error)?;
         output.flush().map_err(io_error)?;
     }
@@ -802,124 +1973,176 @@ impl Runtime {
         fs::create_dir_all(directory).map_err(io_error)?;
         let lock = RuntimeLock::acquire(directory)?;
         let project_path = directory.join(PROJECT_FILE);
-        let history_path = directory.join(HISTORY_FILE);
+        let journal_path = directory.join(JOURNAL_FILE);
         let checkpoint = load_checkpoint(directory)?;
-        let (project, revision, past, future, operations, imports, proposal) =
-            if let Some(checkpoint) = checkpoint {
-                validate_project(&checkpoint.project)?;
-                for snapshot in checkpoint.past.iter().chain(checkpoint.future.iter()) {
-                    validate_project(snapshot)?;
-                }
-                for record in checkpoint.operations.values() {
-                    validate_project(&record.snapshot.project)?;
-                }
-                for record in checkpoint.imports.values() {
-                    validate_project(&record.snapshot.project)?;
-                }
-                (
-                    checkpoint.project,
-                    checkpoint.revision,
-                    checkpoint.past,
-                    checkpoint.future,
-                    checkpoint.operations,
-                    checkpoint.imports,
-                    checkpoint.proposal,
-                )
-            } else {
-                let project = if project_path.is_file() {
-                    let text = fs::read_to_string(&project_path).map_err(io_error)?;
-                    let value: Value = serde_json::from_str(&text)
-                        .map_err(|error| RuntimeError::new("INVALID_PROJECT", error.to_string()))?;
-                    validate_project(&value)?;
-                    value
-                } else {
-                    empty_project()
-                };
-                let persisted = if history_path.is_file() {
-                    let text = fs::read_to_string(&history_path).map_err(io_error)?;
-                    let history: PersistedHistory = serde_json::from_str(&text)
-                        .map_err(|error| RuntimeError::new("INVALID_HISTORY", error.to_string()))?;
-                    for snapshot in history.past.iter().chain(history.future.iter()) {
-                        validate_project(snapshot)?;
-                    }
-                    Some(history)
-                } else {
-                    None
-                };
-                let (revision, past, future) = persisted
-                    .map(|history| (history.revision, history.past, history.future))
-                    .unwrap_or((0, Vec::new(), Vec::new()));
-                (
-                    project,
-                    revision,
-                    past,
-                    future,
-                    HashMap::new(),
-                    HashMap::new(),
-                    None,
-                )
-            };
-        let runtime = Self {
-            _lock: lock,
-            project_path,
+        let checkpoint_project = checkpoint.as_ref().map(|value| value.project.clone());
+        let (
             project,
             revision,
             past,
             future,
-            jobs: HashMap::new(),
             operations,
             imports,
             proposal,
-        };
-        // The checkpoint is the commit record.  Legacy projects are imported
-        // once into it before any mutation, so a later projection write cannot
-        // leave restart recovery ambiguous.
-        if !directory.join(CHECKPOINT_FILE).is_file() {
-            runtime.persist_checkpoint()?;
+            jobs,
+            source_version,
+            journal_sequence,
+            checkpoint_projection_digest,
+        ) = if let Some(checkpoint) = checkpoint {
+            cut_domain::validate(&checkpoint.project).map_err(domain_error)?;
+            for entry in checkpoint.past.iter().chain(checkpoint.future.iter()) {
+                validate_journal_history_entry(entry)?;
+            }
+            for record in checkpoint.operations.values() {
+                cut_domain::parse_project(&record.snapshot.project).map_err(domain_error)?;
+            }
+            for record in checkpoint.imports.values() {
+                cut_domain::parse_project(&record.snapshot.project).map_err(domain_error)?;
+            }
+            (
+                checkpoint.project,
+                checkpoint.revision,
+                checkpoint.past,
+                checkpoint.future,
+                checkpoint.operations,
+                checkpoint.imports,
+                checkpoint.proposal,
+                checkpoint.jobs,
+                checkpoint.source_version,
+                checkpoint.journal_sequence,
+                checkpoint.projection_digest,
+            )
         } else {
-            // Repair the human-readable projections opportunistically.  They
-            // are exports; the checkpoint remains authoritative on failure.
-            let _ = runtime.materialize_project();
-            let _ = runtime.materialize_history();
+            let (project, source_version) = load_bootstrap_project(&project_path)?;
+            (
+                project,
+                0,
+                Vec::new(),
+                Vec::new(),
+                HashMap::new(),
+                HashMap::new(),
+                None,
+                HashMap::new(),
+                source_version,
+                0,
+                None,
+            )
+        };
+        let mut runtime = Self {
+            _lock: lock,
+            project_path,
+            journal_path,
+            project,
+            revision,
+            past,
+            future,
+            jobs,
+            operations,
+            imports,
+            proposal,
+            source_version,
+            journal_sequence,
+            journal_records_since_checkpoint: 0,
+            projection_status: ProjectionStatus::Missing,
+            projection_digest: checkpoint_projection_digest,
+        };
+        bound_receipts(&mut runtime.operations, None);
+        bound_receipts(&mut runtime.imports, None);
+
+        let records = load_journal(&runtime.journal_path, runtime.journal_sequence)?;
+        for record in records {
+            runtime.replay_journal_record(record)?;
+        }
+
+        if checkpoint_project
+            .as_ref()
+            .is_some_and(|project| projection_matches(&runtime.project_path, project))
+        {
+            // The projection was known to be the last checkpointed value. A
+            // crash may have left the journal ahead of that checkpoint, so it
+            // is safe to repair this specific stale projection on startup.
+            if runtime.materialize_project().is_ok() && runtime.materialize_history().is_ok() {
+                runtime.projection_status = ProjectionStatus::Current;
+                runtime.projection_digest = projection_digest(&runtime.project_path).ok();
+            }
+        } else {
+            runtime.projection_status = inspect_projection(&runtime.project_path, &runtime.project);
+        }
+
+        if checkpoint_project.is_none() {
+            // First launch is the one controlled bootstrap point. Import v1
+            // once, write the canonical checkpoint, and publish v2 as the
+            // read-only compatibility projection.
+            runtime.materialize_project()?;
+            runtime.materialize_history()?;
+            runtime.projection_status = ProjectionStatus::Current;
+            runtime.projection_digest = Some(projection_digest(&runtime.project_path)?);
+            runtime.persist_checkpoint()?;
+            truncate_journal(&runtime.journal_path)?;
+            runtime.journal_records_since_checkpoint = 0;
+        }
+
+        if runtime.journal_records_since_checkpoint >= CHECKPOINT_INTERVAL {
+            // A previous process may have persisted a checkpoint but failed
+            // to truncate the journal. Compact again on startup so a healthy
+            // project does not accumulate stale records indefinitely.
+            if runtime.persist_checkpoint().is_ok() {
+                let _ = truncate_journal(&runtime.journal_path);
+                runtime.journal_records_since_checkpoint = 0;
+            }
+        }
+
+        if runtime.reconcile_abandoned_jobs() {
+            runtime.persist_checkpoint()?;
+            truncate_journal(&runtime.journal_path)?;
+            runtime.journal_records_since_checkpoint = 0;
         }
         Ok(runtime)
     }
 
     pub fn snapshot(&self) -> StateSnapshot {
-        self.snapshot_for_parts(&self.project, self.revision, &self.past, &self.future)
+        let mut snapshot =
+            self.snapshot_for_parts(&self.project, self.revision, &self.past, &self.future);
+        snapshot.projection_status = inspect_projection(&self.project_path, &self.project)
+            .as_str()
+            .into();
+        snapshot
     }
 
     fn snapshot_for_parts(
         &self,
-        project: &Value,
+        project: &Project,
         revision: u64,
-        past: &[Value],
-        future: &[Value],
+        past: &[JournalHistoryEntry],
+        future: &[JournalHistoryEntry],
     ) -> StateSnapshot {
         self.snapshot_for_parts_with_proposal(project, revision, past, future, &self.proposal)
     }
 
     fn snapshot_for_parts_with_proposal(
         &self,
-        project: &Value,
+        project: &Project,
         revision: u64,
-        past: &[Value],
-        future: &[Value],
+        past: &[JournalHistoryEntry],
+        future: &[JournalHistoryEntry],
         proposal: &Option<ProposalRecord>,
     ) -> StateSnapshot {
-        let sources = project
+        let project_value = project_value(project);
+        let sources = project_value
             .get("sources")
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
         StateSnapshot {
-            duration: project_duration(project),
-            project: project.clone(),
+            duration: cut_domain::project_duration(project),
+            project: project_value,
             revision,
             can_undo: !past.is_empty(),
             can_redo: !future.is_empty(),
             sources,
             pending_proposal: proposal.as_ref().map(|record| record.lifecycle.clone()),
+            source_version: self.source_version,
+            projection_status: self.projection_status.as_str().into(),
         }
     }
 
@@ -927,8 +2150,10 @@ impl Runtime {
         DurableState {
             project: self.project.clone(),
             revision: self.revision,
+            source_version: self.source_version,
             past: self.past.clone(),
             future: self.future.clone(),
+            jobs: self.jobs.clone(),
             operations: self.operations.clone(),
             imports: self.imports.clone(),
             proposal: self.proposal.clone(),
@@ -937,10 +2162,10 @@ impl Runtime {
 
     fn candidate_state(
         &self,
-        project: Value,
+        project: Project,
         revision: u64,
-        past: Vec<Value>,
-        future: Vec<Value>,
+        past: Vec<JournalHistoryEntry>,
+        future: Vec<JournalHistoryEntry>,
     ) -> DurableState {
         let mut candidate = self.durable_state();
         candidate.project = project;
@@ -950,17 +2175,96 @@ impl Runtime {
         candidate
     }
 
-    fn commit_candidate(&mut self, candidate: DurableState) -> Result<StateSnapshot, RuntimeError> {
-        // Persist first.  No in-memory field is changed until all durable
-        // projections and the checkpoint commit succeed.
-        self.persist_candidate(&candidate)?;
+    fn commit_candidate(
+        &mut self,
+        candidate: DurableState,
+        event: JournalEvent,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        self.commit_candidate_with_policy(candidate, event, false)
+    }
+
+    fn commit_projection_import(
+        &mut self,
+        candidate: DurableState,
+        event: JournalEvent,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        self.commit_candidate_with_policy(candidate, event, true)
+    }
+
+    fn commit_candidate_with_policy(
+        &mut self,
+        mut candidate: DurableState,
+        event: JournalEvent,
+        allow_diverged_projection: bool,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        let preserve_operation = match &event {
+            JournalEvent::Mutation { operation, .. }
+            | JournalEvent::ProjectionImport { operation, .. } => {
+                operation.as_ref().map(|value| value.key.as_str())
+            }
+            _ => None,
+        };
+        let preserve_import = match &event {
+            JournalEvent::Mutation { import, .. } => {
+                import.as_ref().map(|value| value.key.as_str())
+            }
+            _ => None,
+        };
+        bound_receipts(&mut candidate.operations, preserve_operation);
+        bound_receipts(&mut candidate.imports, preserve_import);
+        let project_changed = candidate.project != self.project;
+        if project_changed {
+            self.projection_status = inspect_projection(&self.project_path, &self.project);
+            if self.projection_status == ProjectionStatus::Diverged && !allow_diverged_projection {
+                return Err(RuntimeError::new(
+                    "PROJECTION_DIVERGED",
+                    "project.cut.json differs from authoritative cutd state; repair or explicitly import the projection before editing",
+                ));
+            }
+            // Publish the compatibility projection before the journal record.
+            // If the process dies between these writes, startup compares the
+            // projection with authoritative checkpoint/journal state and
+            // reports divergence instead of adopting an unjournaled edit.
+            self.materialize_project_value(&candidate.project)?;
+            self.materialize_history_values(
+                candidate.revision,
+                &candidate.past,
+                &candidate.future,
+            )?;
+        }
+
+        let sequence = self.journal_sequence + 1;
+        let record = seal_journal_record(JournalRecord::from_event(
+            sequence,
+            candidate.revision,
+            event,
+        ))?;
+        append_journal_record(&self.journal_path, &record)?;
+
         self.project = candidate.project;
         self.revision = candidate.revision;
+        self.source_version = candidate.source_version;
         self.past = candidate.past;
         self.future = candidate.future;
+        self.jobs = candidate.jobs;
         self.operations = candidate.operations;
         self.imports = candidate.imports;
         self.proposal = candidate.proposal;
+        self.journal_sequence = sequence;
+        self.journal_records_since_checkpoint += 1;
+        if project_changed {
+            self.projection_status = ProjectionStatus::Current;
+            self.projection_digest = projection_digest(&self.project_path).ok();
+        }
+        if self.journal_records_since_checkpoint >= CHECKPOINT_INTERVAL {
+            // The journal is the durable commit. Checkpointing is a bounded
+            // optimization; a temporary checkpoint failure leaves the typed
+            // records available for recovery on the next startup.
+            if self.persist_checkpoint().is_ok() {
+                let _ = truncate_journal(&self.journal_path);
+                self.journal_records_since_checkpoint = 0;
+            }
+        }
         Ok(self.snapshot())
     }
 
@@ -970,13 +2274,27 @@ impl Runtime {
         expected_revision: Option<u64>,
     ) -> Result<StateSnapshot, RuntimeError> {
         self.check_revision(expected_revision)?;
-        let mut next = self.project.clone();
-        apply_command(&mut next, &command)?;
-        validate_project(&next)?;
+        let typed = cut_domain::parse_command(&command).map_err(domain_error)?;
+        let inverse = cut_domain::inverse_command(&self.project, &typed).map_err(domain_error)?;
+        let next = cut_domain::apply_command(&self.project, &typed).map_err(domain_error)?;
         let mut past = self.past.clone();
-        past.push(self.project.clone());
+        past.push(JournalHistoryEntry {
+            command: typed.clone(),
+            inverse: inverse.clone(),
+        });
+        bound_history(&mut past);
         let revision = self.revision + 1;
-        self.commit_candidate(self.candidate_state(next, revision, past, Vec::new()))
+        self.commit_candidate(
+            self.candidate_state(next, revision, past, Vec::new()),
+            JournalEvent::Mutation {
+                action: JournalAction::Apply,
+                command: Some(typed),
+                inverse: Some(inverse),
+                operation: None,
+                import: None,
+                proposal: self.proposal.clone(),
+            },
+        )
     }
 
     pub fn apply_request(
@@ -987,6 +2305,11 @@ impl Runtime {
         base_revision: u64,
     ) -> Result<StateSnapshot, RuntimeError> {
         validate_request_identity(actor, key)?;
+        // Pending-proposal policy: ordinary canonical edits may continue, but
+        // a proposal stays pinned to the revision at which it was staged.
+        // Acceptance then fails with REVISION_CONFLICT rather than silently
+        // rebasing an agent command over unrelated human edits. The caller
+        // must reject or restage the proposal explicitly.
         self.apply_request_with_proposal(actor, key, command, base_revision, self.proposal.clone())
     }
 
@@ -1015,11 +2338,15 @@ impl Runtime {
             return Ok(record.snapshot.clone());
         }
         self.check_revision(Some(base_revision))?;
-        let mut next = self.project.clone();
-        apply_command(&mut next, &command)?;
-        validate_project(&next)?;
+        let typed = cut_domain::parse_command(&command).map_err(domain_error)?;
+        let inverse = cut_domain::inverse_command(&self.project, &typed).map_err(domain_error)?;
+        let next = cut_domain::apply_command(&self.project, &typed).map_err(domain_error)?;
         let mut past = self.past.clone();
-        past.push(self.project.clone());
+        past.push(JournalHistoryEntry {
+            command: typed.clone(),
+            inverse: inverse.clone(),
+        });
+        bound_history(&mut past);
         let revision = self.revision + 1;
         let mut candidate = self.candidate_state(next, revision, past, Vec::new());
         candidate.proposal = proposal;
@@ -1047,7 +2374,29 @@ impl Runtime {
                 snapshot: snapshot.clone(),
             },
         );
-        self.commit_candidate(candidate)
+        let operation_key = format!("{actor}:{key}");
+        let operation_record = candidate
+            .operations
+            .get(&operation_key)
+            .cloned()
+            .ok_or_else(|| {
+                RuntimeError::new("RUNTIME_PROTOCOL_ERROR", "operation receipt was not staged")
+            })?;
+        let journal_proposal = candidate.proposal.clone();
+        self.commit_candidate(
+            candidate,
+            JournalEvent::Mutation {
+                action: JournalAction::Apply,
+                command: Some(typed),
+                inverse: Some(inverse),
+                operation: Some(JournalOperation {
+                    key: operation_key,
+                    record: operation_record,
+                }),
+                import: None,
+                proposal: journal_proposal,
+            },
+        )
     }
 
     /// Stage the ordered commands returned by an agent without touching the
@@ -1132,10 +2481,11 @@ impl Runtime {
             }
         }
 
-        let mut candidate = self.project.clone();
-        apply_command(&mut candidate, &command)?;
-        validate_project(&candidate)?;
-        let (diff, diff_truncated) = structured_diff(&self.project, &candidate);
+        let typed = cut_domain::parse_command(&command).map_err(domain_error)?;
+        let candidate = cut_domain::apply_command(&self.project, &typed).map_err(domain_error)?;
+        let before_value = project_value(&self.project);
+        let candidate_value = project_value(&candidate);
+        let (diff, diff_truncated) = structured_diff(&before_value, &candidate_value);
         let proposal_id = format!("proposal-{}", unique_id());
         let proposal = Some(ProposalRecord {
             lifecycle: PendingProposal::Pending {
@@ -1151,10 +2501,8 @@ impl Runtime {
         });
         let mut candidate = self.durable_state();
         candidate.proposal = proposal;
-        self.persist_candidate(&candidate)?;
-        let proposal = candidate.proposal;
-        self.proposal = proposal;
-        Ok(self.snapshot())
+        let proposal = candidate.proposal.clone();
+        self.commit_candidate(candidate, JournalEvent::Proposal { proposal })
     }
 
     /// Apply a previously staged proposal as exactly one canonical request.
@@ -1306,9 +2654,8 @@ impl Runtime {
                 });
                 let mut candidate = self.durable_state();
                 candidate.proposal = rejected_proposal;
-                self.persist_candidate(&candidate)?;
-                self.proposal = candidate.proposal;
-                Ok(self.snapshot())
+                let proposal = candidate.proposal.clone();
+                self.commit_candidate(candidate, JournalEvent::Proposal { proposal })
             }
             PendingProposal::Accepted {
                 proposal_id: current_id,
@@ -1407,7 +2754,7 @@ impl Runtime {
                     &candidate.proposal,
                 );
                 candidate.operations.insert(
-                    operation,
+                    operation.clone(),
                     OperationRecord {
                         fingerprint,
                         snapshot: snapshot.clone(),
@@ -1421,7 +2768,32 @@ impl Runtime {
                         snapshot: snapshot.clone(),
                     });
                 }
-                self.commit_candidate(candidate)
+                let operation_record =
+                    candidate
+                        .operations
+                        .get(&operation)
+                        .cloned()
+                        .ok_or_else(|| {
+                            RuntimeError::new(
+                                "RUNTIME_PROTOCOL_ERROR",
+                                "operation receipt was not staged",
+                            )
+                        })?;
+                let journal_proposal = candidate.proposal.clone();
+                self.commit_candidate(
+                    candidate,
+                    JournalEvent::Mutation {
+                        action: JournalAction::RejectProposal,
+                        command: None,
+                        inverse: None,
+                        operation: Some(JournalOperation {
+                            key: operation,
+                            record: operation_record,
+                        }),
+                        import: None,
+                        proposal: journal_proposal,
+                    },
+                )
             }
             PendingProposal::Accepted {
                 proposal_id: current_id,
@@ -1470,14 +2842,27 @@ impl Runtime {
 
     pub fn undo(&mut self, expected_revision: Option<u64>) -> Result<StateSnapshot, RuntimeError> {
         self.check_revision(expected_revision)?;
-        let Some(previous) = self.past.last().cloned() else {
+        let Some(entry) = self.past.last().cloned() else {
             return Ok(self.snapshot());
         };
+        let next =
+            cut_domain::apply_command(&self.project, &entry.inverse).map_err(domain_error)?;
         let mut past = self.past.clone();
         past.pop();
         let mut future = self.future.clone();
-        future.push(self.project.clone());
-        self.commit_candidate(self.candidate_state(previous, self.revision + 1, past, future))
+        future.push(entry.clone());
+        bound_history(&mut future);
+        self.commit_candidate(
+            self.candidate_state(next, self.revision + 1, past, future),
+            JournalEvent::Mutation {
+                action: JournalAction::Undo,
+                command: Some(entry.inverse),
+                inverse: Some(entry.command),
+                operation: None,
+                import: None,
+                proposal: self.proposal.clone(),
+            },
+        )
     }
 
     pub fn undo_request(
@@ -1499,7 +2884,7 @@ impl Runtime {
             return Ok(record.snapshot.clone());
         }
         self.check_revision(Some(base_revision))?;
-        let Some(previous) = self.past.last().cloned() else {
+        let Some(entry) = self.past.last().cloned() else {
             let mut candidate = self.durable_state();
             let snapshot = self.snapshot_for_parts_with_proposal(
                 &candidate.project,
@@ -1509,41 +2894,103 @@ impl Runtime {
                 &candidate.proposal,
             );
             candidate.operations.insert(
-                operation,
+                operation.clone(),
                 OperationRecord {
                     fingerprint,
                     snapshot: snapshot.clone(),
                 },
             );
-            return self.commit_candidate(candidate);
+            let operation_record =
+                candidate
+                    .operations
+                    .get(&operation)
+                    .cloned()
+                    .ok_or_else(|| {
+                        RuntimeError::new(
+                            "RUNTIME_PROTOCOL_ERROR",
+                            "operation receipt was not staged",
+                        )
+                    })?;
+            let journal_proposal = candidate.proposal.clone();
+            return self.commit_candidate(
+                candidate,
+                JournalEvent::Mutation {
+                    action: JournalAction::Noop,
+                    command: None,
+                    inverse: None,
+                    operation: Some(JournalOperation {
+                        key: operation,
+                        record: operation_record,
+                    }),
+                    import: None,
+                    proposal: journal_proposal,
+                },
+            );
         };
+        let previous =
+            cut_domain::apply_command(&self.project, &entry.inverse).map_err(domain_error)?;
         let mut past = self.past.clone();
         past.pop();
         let mut future = self.future.clone();
-        future.push(self.project.clone());
+        future.push(entry.clone());
+        bound_history(&mut future);
         let revision = self.revision + 1;
         let snapshot = self.snapshot_for_parts(&previous, revision, &past, &future);
         let mut candidate = self.candidate_state(previous, revision, past, future);
         candidate.operations.insert(
-            operation,
+            operation.clone(),
             OperationRecord {
                 fingerprint,
                 snapshot: snapshot.clone(),
             },
         );
-        self.commit_candidate(candidate)
+        let operation_record = candidate
+            .operations
+            .get(&operation)
+            .cloned()
+            .ok_or_else(|| {
+                RuntimeError::new("RUNTIME_PROTOCOL_ERROR", "operation receipt was not staged")
+            })?;
+        let journal_proposal = candidate.proposal.clone();
+        self.commit_candidate(
+            candidate,
+            JournalEvent::Mutation {
+                action: JournalAction::Undo,
+                command: Some(entry.inverse),
+                inverse: Some(entry.command),
+                operation: Some(JournalOperation {
+                    key: operation,
+                    record: operation_record,
+                }),
+                import: None,
+                proposal: journal_proposal,
+            },
+        )
     }
 
     pub fn redo(&mut self, expected_revision: Option<u64>) -> Result<StateSnapshot, RuntimeError> {
         self.check_revision(expected_revision)?;
-        let Some(next) = self.future.last().cloned() else {
+        let Some(entry) = self.future.last().cloned() else {
             return Ok(self.snapshot());
         };
+        let next =
+            cut_domain::apply_command(&self.project, &entry.command).map_err(domain_error)?;
         let mut future = self.future.clone();
         future.pop();
         let mut past = self.past.clone();
-        past.push(self.project.clone());
-        self.commit_candidate(self.candidate_state(next, self.revision + 1, past, future))
+        past.push(entry.clone());
+        bound_history(&mut past);
+        self.commit_candidate(
+            self.candidate_state(next, self.revision + 1, past, future),
+            JournalEvent::Mutation {
+                action: JournalAction::Redo,
+                command: Some(entry.command),
+                inverse: Some(entry.inverse),
+                operation: None,
+                import: None,
+                proposal: self.proposal.clone(),
+            },
+        )
     }
 
     pub fn redo_request(
@@ -1565,7 +3012,7 @@ impl Runtime {
             return Ok(record.snapshot.clone());
         }
         self.check_revision(Some(base_revision))?;
-        let Some(next) = self.future.last().cloned() else {
+        let Some(entry) = self.future.last().cloned() else {
             let mut candidate = self.durable_state();
             let snapshot = self.snapshot_for_parts_with_proposal(
                 &candidate.project,
@@ -1575,29 +3022,78 @@ impl Runtime {
                 &candidate.proposal,
             );
             candidate.operations.insert(
-                operation,
+                operation.clone(),
                 OperationRecord {
                     fingerprint,
                     snapshot: snapshot.clone(),
                 },
             );
-            return self.commit_candidate(candidate);
+            let operation_record =
+                candidate
+                    .operations
+                    .get(&operation)
+                    .cloned()
+                    .ok_or_else(|| {
+                        RuntimeError::new(
+                            "RUNTIME_PROTOCOL_ERROR",
+                            "operation receipt was not staged",
+                        )
+                    })?;
+            let journal_proposal = candidate.proposal.clone();
+            return self.commit_candidate(
+                candidate,
+                JournalEvent::Mutation {
+                    action: JournalAction::Noop,
+                    command: None,
+                    inverse: None,
+                    operation: Some(JournalOperation {
+                        key: operation,
+                        record: operation_record,
+                    }),
+                    import: None,
+                    proposal: journal_proposal,
+                },
+            );
         };
+        let next =
+            cut_domain::apply_command(&self.project, &entry.command).map_err(domain_error)?;
         let mut future = self.future.clone();
         future.pop();
         let mut past = self.past.clone();
-        past.push(self.project.clone());
+        past.push(entry.clone());
+        bound_history(&mut past);
         let revision = self.revision + 1;
         let snapshot = self.snapshot_for_parts(&next, revision, &past, &future);
         let mut candidate = self.candidate_state(next, revision, past, future);
         candidate.operations.insert(
-            operation,
+            operation.clone(),
             OperationRecord {
                 fingerprint,
                 snapshot: snapshot.clone(),
             },
         );
-        self.commit_candidate(candidate)
+        let operation_record = candidate
+            .operations
+            .get(&operation)
+            .cloned()
+            .ok_or_else(|| {
+                RuntimeError::new("RUNTIME_PROTOCOL_ERROR", "operation receipt was not staged")
+            })?;
+        let journal_proposal = candidate.proposal.clone();
+        self.commit_candidate(
+            candidate,
+            JournalEvent::Mutation {
+                action: JournalAction::Redo,
+                command: Some(entry.command),
+                inverse: Some(entry.inverse),
+                operation: Some(JournalOperation {
+                    key: operation,
+                    record: operation_record,
+                }),
+                import: None,
+                proposal: journal_proposal,
+            },
+        )
     }
 
     pub fn start_render(
@@ -1623,8 +3119,10 @@ impl Runtime {
             output_path: Some(output.to_string_lossy().into_owned()),
             error: None,
         };
-        self.jobs.insert(id, JobRecord { job: job.clone() });
-        Ok((job, self.project.clone(), output))
+        let mut candidate = self.durable_state();
+        candidate.jobs.insert(id, job.clone());
+        self.commit_candidate(candidate, JournalEvent::Job { job: job.clone() })?;
+        Ok((job, project_value(&self.project), output))
     }
 
     pub fn import_media(
@@ -1633,6 +3131,37 @@ impl Runtime {
         metadata: Option<&Value>,
         overlay: Option<&Value>,
     ) -> Result<(StateSnapshot, String, String), RuntimeError> {
+        let (next, source_id, clip_id, command) =
+            self.build_import_candidate(path, metadata, overlay)?;
+        let inverse = cut_domain::inverse_command(&self.project, &command).map_err(domain_error)?;
+        let mut past = self.past.clone();
+        past.push(JournalHistoryEntry {
+            command: command.clone(),
+            inverse: inverse.clone(),
+        });
+        bound_history(&mut past);
+        let revision = self.revision + 1;
+        let snapshot = self.snapshot_for_parts(&next, revision, &past, &[]);
+        self.commit_candidate(
+            self.candidate_state(next, revision, past, Vec::new()),
+            JournalEvent::Mutation {
+                action: JournalAction::Apply,
+                command: Some(command),
+                inverse: Some(inverse),
+                operation: None,
+                import: None,
+                proposal: self.proposal.clone(),
+            },
+        )?;
+        Ok((snapshot, source_id, clip_id))
+    }
+
+    fn build_import_candidate(
+        &self,
+        path: &str,
+        metadata: Option<&Value>,
+        overlay: Option<&Value>,
+    ) -> Result<(Project, String, String, cut_domain::Command), RuntimeError> {
         if path.trim().is_empty() {
             return Err(RuntimeError::new(
                 "INVALID_IMPORT",
@@ -1648,14 +3177,12 @@ impl Runtime {
         let probe = Self::probe(path).ok();
         let mut source = json!({"id":source_id.clone(),"path":source_path.to_string_lossy()});
         let supplied = metadata.or(probe.as_ref());
-        if let Some(info) = supplied {
-            if let Some(object) = info.as_object() {
-                for key in [
-                    "duration", "width", "height", "hasAudio", "subs", "metadata",
-                ] {
-                    if let Some(value) = object.get(key) {
-                        source[key] = value.clone();
-                    }
+        if let Some(info) = supplied.and_then(Value::as_object) {
+            for key in [
+                "duration", "width", "height", "hasAudio", "subs", "metadata",
+            ] {
+                if let Some(value) = info.get(key) {
+                    source[key] = value.clone();
                 }
             }
         }
@@ -1663,54 +3190,98 @@ impl Runtime {
             .get("duration")
             .and_then(Value::as_f64)
             .filter(|duration| *duration > 0.0);
-        let clip = json!({
-            "id": clip_id.clone(),
-            "sourceId": source_id,
-            "timelineStart": project_duration(&self.project),
-            "in": 0.0,
-            "out": duration.unwrap_or(1.0)
-        });
-        let mut next = self.project.clone();
-        next.get_mut("sources")
-            .and_then(Value::as_array_mut)
-            .unwrap()
-            .push(source);
-        let tracks = next
-            .get_mut("tracks")
-            .and_then(Value::as_array_mut)
-            .unwrap();
+        let mut next = project_value(&self.project);
+        next["sources"].as_array_mut().unwrap().push(source);
+        let tracks = next["tracks"].as_array_mut().unwrap();
+        let mut created_track = None;
         if !tracks
             .iter()
             .any(|track| track.get("type").and_then(Value::as_str) == Some("video"))
         {
-            tracks.push(json!({
-                "id": format!("video-{}", unique_id()),
-                "type": "video",
-                "clips": []
-            }));
+            let track =
+                json!({"id": format!("video-{}", unique_id()), "type": "video", "clips": []});
+            tracks.push(track.clone());
+            created_track = Some(track);
         }
         let track = tracks
             .iter_mut()
             .find(|track| track.get("type").and_then(Value::as_str) == Some("video"))
             .expect("video track was created above");
-        track
-            .get_mut("clips")
-            .and_then(Value::as_array_mut)
-            .unwrap()
-            .push(clip);
+        let track_id = track
+            .get("id")
+            .and_then(Value::as_str)
+            .expect("validated video track has an id")
+            .to_owned();
+        track["clips"].as_array_mut().unwrap().push(json!({
+            "id": clip_id.clone(),
+            "sourceId": source_id.clone(),
+            "timelineStart": cut_domain::project_duration(&self.project),
+            "in": 0.0,
+            "out": duration.unwrap_or(1.0)
+        }));
         if let Some(overlay) = overlay {
-            next.get_mut("overlays")
-                .and_then(Value::as_array_mut)
+            next["overlays"]
+                .as_array_mut()
                 .unwrap()
                 .push(overlay.clone());
         }
-        validate_project(&next)?;
-        let mut past = self.past.clone();
-        past.push(self.project.clone());
-        let revision = self.revision + 1;
-        let snapshot = self.snapshot_for_parts(&next, revision, &past, &[]);
-        self.commit_candidate(self.candidate_state(next, revision, past, Vec::new()))?;
-        Ok((snapshot, source_id, clip_id))
+        let next = cut_domain::parse_project(&next).map_err(domain_error)?;
+        let next_value = project_value(&next);
+        let source = next_value["sources"]
+            .as_array()
+            .and_then(|sources| {
+                sources.iter().find(|source| {
+                    source.get("id").and_then(Value::as_str) == Some(source_id.as_str())
+                })
+            })
+            .cloned()
+            .ok_or_else(|| {
+                RuntimeError::new("RUNTIME_PROTOCOL_ERROR", "import source disappeared")
+            })?;
+        let clip = next_value["tracks"]
+            .as_array()
+            .and_then(|tracks| {
+                tracks.iter().find_map(|track| {
+                    track["clips"].as_array().and_then(|clips| {
+                        clips.iter().find(|clip| {
+                            clip.get("id").and_then(Value::as_str) == Some(clip_id.as_str())
+                        })
+                    })
+                })
+            })
+            .cloned()
+            .ok_or_else(|| {
+                RuntimeError::new("RUNTIME_PROTOCOL_ERROR", "import clip disappeared")
+            })?;
+        let mut commands = Vec::with_capacity(4);
+        if let Some(track) = created_track {
+            commands.push(json!({"type": "add_track", "track": track}));
+        }
+        commands.push(json!({"type": "add_source", "source": source}));
+        commands.push(json!({
+            "type": "add_clip",
+            "trackId": track_id,
+            "clip": clip
+        }));
+        if overlay.is_some() {
+            let overlay = next.overlays.last().cloned().ok_or_else(|| {
+                RuntimeError::new("RUNTIME_PROTOCOL_ERROR", "import overlay disappeared")
+            })?;
+            commands.push(json!({"type": "add_overlay", "overlay": overlay}));
+        }
+        let command = cut_domain::parse_command(&json!({
+            "type": "batch",
+            "commands": commands,
+        }))
+        .map_err(domain_error)?;
+        let applied = cut_domain::apply_command(&self.project, &command).map_err(domain_error)?;
+        if applied != next {
+            return Err(RuntimeError::new(
+                "RUNTIME_PROTOCOL_ERROR",
+                "typed import command did not reproduce candidate project",
+            ));
+        }
+        Ok((next, source_id, clip_id, command))
     }
 
     pub fn import_media_request(
@@ -1743,82 +3314,24 @@ impl Runtime {
             ));
         }
         self.check_revision(Some(base_revision))?;
-        let source_path = validate_media_path(path)?;
-        if let Some(overlay) = overlay.as_ref() {
-            validate_overlay_shape(overlay)?;
-        }
         // Build the import candidate without mutating the actor.  The same
         // probe/import shape is used by direct and idempotent requests so a
         // failed projection leaves every in-memory field untouched.
-        let source_id = format!("source-{}", unique_id());
-        let clip_id = format!("clip-{}", unique_id());
-        let probe = Self::probe(path).ok();
-        let mut source = json!({"id":source_id.clone(),"path":source_path.to_string_lossy()});
-        let supplied = metadata.as_ref().or(probe.as_ref());
-        if let Some(info) = supplied {
-            if let Some(object) = info.as_object() {
-                for key in [
-                    "duration", "width", "height", "hasAudio", "subs", "metadata",
-                ] {
-                    if let Some(value) = object.get(key) {
-                        source[key] = value.clone();
-                    }
-                }
-            }
-        }
-        let duration = source
-            .get("duration")
-            .and_then(Value::as_f64)
-            .filter(|duration| *duration > 0.0);
-        let clip = json!({
-            "id": clip_id.clone(),
-            "sourceId": source_id,
-            "timelineStart": project_duration(&self.project),
-            "in": 0.0,
-            "out": duration.unwrap_or(1.0)
-        });
-        let mut next = self.project.clone();
-        next.get_mut("sources")
-            .and_then(Value::as_array_mut)
-            .unwrap()
-            .push(source);
-        let tracks = next
-            .get_mut("tracks")
-            .and_then(Value::as_array_mut)
-            .unwrap();
-        if !tracks
-            .iter()
-            .any(|track| track.get("type").and_then(Value::as_str) == Some("video"))
-        {
-            tracks.push(json!({
-                "id": format!("video-{}", unique_id()),
-                "type": "video",
-                "clips": []
-            }));
-        }
-        let track = tracks
-            .iter_mut()
-            .find(|track| track.get("type").and_then(Value::as_str) == Some("video"))
-            .expect("video track was created above");
-        track
-            .get_mut("clips")
-            .and_then(Value::as_array_mut)
-            .unwrap()
-            .push(clip);
-        if let Some(overlay) = overlay.as_ref() {
-            next.get_mut("overlays")
-                .and_then(Value::as_array_mut)
-                .unwrap()
-                .push(overlay.clone());
-        }
-        validate_project(&next)?;
+        let (next, source_id, clip_id, command) =
+            self.build_import_candidate(path, metadata.as_ref(), overlay.as_ref())?;
+        let inverse = cut_domain::inverse_command(&self.project, &command).map_err(domain_error)?;
         let mut past = self.past.clone();
-        past.push(self.project.clone());
+        past.push(JournalHistoryEntry {
+            command: command.clone(),
+            inverse: inverse.clone(),
+        });
+        bound_history(&mut past);
         let revision = self.revision + 1;
         let snapshot = self.snapshot_for_parts(&next, revision, &past, &[]);
         let mut candidate = self.candidate_state(next, revision, past, Vec::new());
+        let import_key = operation.clone();
         candidate.imports.insert(
-            operation,
+            import_key.clone(),
             ImportRecord {
                 fingerprint,
                 snapshot: snapshot.clone(),
@@ -1826,7 +3339,24 @@ impl Runtime {
                 clip_id: clip_id.clone(),
             },
         );
-        self.commit_candidate(candidate)?;
+        bound_receipts(&mut candidate.imports, Some(&import_key));
+        let import_record = candidate.imports.get(&import_key).cloned().ok_or_else(|| {
+            RuntimeError::new("RUNTIME_PROTOCOL_ERROR", "import receipt was not staged")
+        })?;
+        self.commit_candidate(
+            candidate,
+            JournalEvent::Mutation {
+                action: JournalAction::Apply,
+                command: Some(command),
+                inverse: Some(inverse),
+                operation: None,
+                import: Some(JournalImport {
+                    key: import_key,
+                    record: import_record,
+                }),
+                proposal: self.proposal.clone(),
+            },
+        )?;
         Ok((snapshot, source_id, clip_id))
     }
 
@@ -1836,21 +3366,56 @@ impl Runtime {
         status: &str,
         error: Option<String>,
         output_url: Option<String>,
-    ) {
-        if let Some(record) = self.jobs.get_mut(id) {
-            record.job.status = status.into();
-            record.job.error = error;
-            record.job.output_url = output_url;
+    ) -> Result<(), RuntimeError> {
+        if !matches!(
+            status,
+            "queued" | "running" | "completed" | "failed" | "cancelled"
+        ) {
+            return Err(RuntimeError::new(
+                "INVALID_RENDER_STATUS",
+                format!("unsupported render status: {status}"),
+            ));
         }
+        let current = self.jobs.get(id).cloned().ok_or_else(|| {
+            RuntimeError::new("RENDER_NOT_FOUND", format!("render job not found: {id}"))
+        })?;
+        if matches!(
+            current.status.as_str(),
+            "completed" | "failed" | "cancelled"
+        ) && current.status != status
+        {
+            return Err(RuntimeError::new(
+                "RENDER_STATE_CONFLICT",
+                format!("render job {id} is already {}", current.status),
+            ));
+        }
+        let mut job = current;
+        job.status = status.into();
+        job.error = error;
+        job.output_url = output_url;
+        let mut candidate = self.durable_state();
+        candidate.jobs.insert(id.to_owned(), job.clone());
+        self.commit_candidate(candidate, JournalEvent::Job { job })?;
+        Ok(())
     }
 
     pub fn render_job(&self, id: &str) -> Result<RenderJob, RuntimeError> {
-        self.jobs
-            .get(id)
-            .map(|record| record.job.clone())
-            .ok_or_else(|| {
-                RuntimeError::new("RENDER_NOT_FOUND", format!("render job not found: {id}"))
-            })
+        self.jobs.get(id).cloned().ok_or_else(|| {
+            RuntimeError::new("RENDER_NOT_FOUND", format!("render job not found: {id}"))
+        })
+    }
+
+    pub fn cancel_render(&mut self, id: &str) -> Result<RenderJob, RuntimeError> {
+        let current = self.render_job(id)?;
+        if matches!(current.status.as_str(), "queued" | "running") {
+            self.update_job(
+                id,
+                "cancelled",
+                Some("render job was cancelled".into()),
+                None,
+            )?;
+        }
+        self.render_job(id)
     }
 
     fn probe(path: &str) -> Result<Value, RuntimeError> {
@@ -1870,6 +3435,7 @@ impl Runtime {
     }
 
     fn execute(&mut self, request: RuntimeRequest) -> Result<RuntimeResponse, RuntimeError> {
+        self.refresh_projection_status();
         match request {
             RuntimeRequest::GetState => Ok(RuntimeResponse::State(self.snapshot())),
             RuntimeRequest::Apply {
@@ -1950,8 +3516,26 @@ impl Runtime {
                 error,
                 output_url,
             } => {
-                self.update_job(&job_id, &status, error, output_url);
+                self.update_job(&job_id, &status, error, output_url)?;
                 Ok(RuntimeResponse::Empty)
+            }
+            RuntimeRequest::CancelRender { job_id } => {
+                Ok(RuntimeResponse::RenderJob(self.cancel_render(&job_id)?))
+            }
+            RuntimeRequest::RepairProjection => {
+                Ok(RuntimeResponse::State(self.repair_projection()?))
+            }
+            RuntimeRequest::ImportProjection {
+                actor,
+                idempotency_key,
+                base_revision,
+            } => {
+                validate_request_identity(&actor, &idempotency_key)?;
+                Ok(RuntimeResponse::State(self.import_projection(
+                    &actor,
+                    &idempotency_key,
+                    base_revision,
+                )?))
             }
             RuntimeRequest::StageProposal {
                 request_key,
@@ -2002,6 +3586,118 @@ impl Runtime {
         }
     }
 
+    fn replay_journal_record(&mut self, record: JournalRecord) -> Result<(), RuntimeError> {
+        if record.sequence != self.journal_sequence + 1 {
+            return Err(RuntimeError::new(
+                "JOURNAL_SEQUENCE_ERROR",
+                format!(
+                    "expected journal sequence {}, got {}",
+                    self.journal_sequence + 1,
+                    record.sequence
+                ),
+            ));
+        }
+        let action = record.action.clone();
+        match action {
+            JournalAction::Apply | JournalAction::Undo | JournalAction::Redo => {
+                let command = record.command.clone();
+                let inverse = record.inverse.clone();
+                match record.action {
+                    JournalAction::Apply => {
+                        let command = command.ok_or_else(|| {
+                            RuntimeError::new("INVALID_JOURNAL", "apply record has no command")
+                        })?;
+                        let inverse = inverse.ok_or_else(|| {
+                            RuntimeError::new("INVALID_JOURNAL", "apply record has no inverse")
+                        })?;
+                        self.project = cut_domain::apply_command(&self.project, &command)
+                            .map_err(domain_error)?;
+                        self.past.push(JournalHistoryEntry { command, inverse });
+                        bound_history(&mut self.past);
+                        self.future.clear();
+                        self.revision = record.revision;
+                    }
+                    JournalAction::Undo => {
+                        let command = command.ok_or_else(|| {
+                            RuntimeError::new("INVALID_JOURNAL", "undo record has no command")
+                        })?;
+                        let inverse = inverse.ok_or_else(|| {
+                            RuntimeError::new("INVALID_JOURNAL", "undo record has no inverse")
+                        })?;
+                        self.project = cut_domain::apply_command(&self.project, &command)
+                            .map_err(domain_error)?;
+                        let _ = self.past.pop().ok_or_else(|| {
+                            RuntimeError::new("INVALID_JOURNAL", "undo record has no past entry")
+                        })?;
+                        self.future.push(JournalHistoryEntry {
+                            command: inverse,
+                            inverse: command,
+                        });
+                        bound_history(&mut self.future);
+                        self.revision = record.revision;
+                    }
+                    JournalAction::Redo => {
+                        let command = command.ok_or_else(|| {
+                            RuntimeError::new("INVALID_JOURNAL", "redo record has no command")
+                        })?;
+                        let inverse = inverse.ok_or_else(|| {
+                            RuntimeError::new("INVALID_JOURNAL", "redo record has no inverse")
+                        })?;
+                        self.project = cut_domain::apply_command(&self.project, &command)
+                            .map_err(domain_error)?;
+                        let _ = self.future.pop().ok_or_else(|| {
+                            RuntimeError::new("INVALID_JOURNAL", "redo record has no future entry")
+                        })?;
+                        self.past.push(JournalHistoryEntry { command, inverse });
+                        bound_history(&mut self.past);
+                        self.revision = record.revision;
+                    }
+                    _ => unreachable!(),
+                }
+                self.proposal = record.proposal;
+            }
+            JournalAction::Noop | JournalAction::RejectProposal => {
+                self.revision = record.revision;
+                self.proposal = record.proposal;
+            }
+            JournalAction::StageProposal => {
+                self.proposal = record.proposal;
+            }
+            JournalAction::Job => {
+                let job = record
+                    .job
+                    .ok_or_else(|| RuntimeError::new("INVALID_JOURNAL", "job record has no job"))?;
+                self.jobs.insert(job.job_id.clone(), job);
+            }
+            JournalAction::ProjectionImport => {
+                let project = record.project.ok_or_else(|| {
+                    RuntimeError::new("INVALID_JOURNAL", "projection import has no project")
+                })?;
+                let project_changed = project != self.project;
+                self.project = project;
+                cut_domain::validate(&self.project).map_err(domain_error)?;
+                self.revision = record.revision;
+                if project_changed {
+                    self.past.clear();
+                    self.future.clear();
+                    self.proposal = None;
+                }
+                self.source_version = record.source_version.unwrap_or(2);
+            }
+        }
+        if let Some(operation) = record.operation {
+            self.operations.insert(operation.key, operation.record);
+            bound_receipts(&mut self.operations, None);
+        }
+        if let Some(import) = record.import {
+            self.imports.insert(import.key, import.record);
+            bound_receipts(&mut self.imports, None);
+        }
+        self.journal_sequence = record.sequence;
+        self.journal_records_since_checkpoint += 1;
+        Ok(())
+    }
+
     fn check_revision(&self, expected: Option<u64>) -> Result<(), RuntimeError> {
         if let Some(value) = expected {
             if value != self.revision {
@@ -2011,27 +3707,11 @@ impl Runtime {
         Ok(())
     }
 
-    fn persist_candidate(&self, candidate: &DurableState) -> Result<(), RuntimeError> {
-        // Materialized files remain useful to existing tooling, but the
-        // checkpoint is the authoritative commit record.  Write projections
-        // first; if either fails, the previous checkpoint still wins on
-        // restart and the actor has not advanced.
-        self.materialize_project_value(&candidate.project)?;
-        self.materialize_history_values(candidate.revision, &candidate.past, &candidate.future)?;
-        let checkpoint = PersistedCheckpoint {
-            format_version: CHECKPOINT_VERSION,
-            project: candidate.project.clone(),
-            revision: candidate.revision,
-            past: candidate.past.clone(),
-            future: candidate.future.clone(),
-            operations: candidate.operations.clone(),
-            imports: candidate.imports.clone(),
-            proposal: candidate.proposal.clone(),
-        };
-        write_json_atomic(
-            &self.project_path.with_file_name(CHECKPOINT_FILE),
-            &checkpoint,
-        )
+    fn refresh_projection_status(&mut self) {
+        self.projection_status = inspect_projection(&self.project_path, &self.project);
+        if self.projection_status == ProjectionStatus::Current {
+            self.projection_digest = projection_digest(&self.project_path).ok();
+        }
     }
 
     fn persist_checkpoint(&self) -> Result<(), RuntimeError> {
@@ -2041,9 +3721,13 @@ impl Runtime {
             revision: self.revision,
             past: self.past.clone(),
             future: self.future.clone(),
+            journal_sequence: self.journal_sequence,
             operations: self.operations.clone(),
             imports: self.imports.clone(),
             proposal: self.proposal.clone(),
+            jobs: self.jobs.clone(),
+            source_version: self.source_version,
+            projection_digest: self.projection_digest.clone(),
         };
         write_json_atomic(
             &self.project_path.with_file_name(CHECKPOINT_FILE),
@@ -2055,7 +3739,7 @@ impl Runtime {
         self.materialize_project_value(&self.project)
     }
 
-    fn materialize_project_value(&self, project: &Value) -> Result<(), RuntimeError> {
+    fn materialize_project_value(&self, project: &Project) -> Result<(), RuntimeError> {
         write_json_atomic(&self.project_path, project)
     }
 
@@ -2066,15 +3750,137 @@ impl Runtime {
     fn materialize_history_values(
         &self,
         revision: u64,
-        past: &[Value],
-        future: &[Value],
+        past: &[JournalHistoryEntry],
+        future: &[JournalHistoryEntry],
     ) -> Result<(), RuntimeError> {
-        let history = PersistedHistory {
-            revision,
-            past: past.to_vec(),
-            future: future.to_vec(),
-        };
+        // Keep the old filename as a small compatibility projection. It is a
+        // command journal view, never a source of truth and never a list of
+        // full project snapshots.
+        let history = json!({
+            "formatVersion": JOURNAL_VERSION,
+            "revision": revision,
+            "past": past,
+            "future": future,
+        });
         write_json_atomic(&self.project_path.with_file_name(HISTORY_FILE), &history)
+    }
+
+    fn import_projection(
+        &mut self,
+        actor: &str,
+        key: &str,
+        base_revision: u64,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        validate_request_identity(actor, key)?;
+        let operation = format!("{actor}:{key}");
+        let fingerprint = format!("{actor}:{base_revision}:projection_import");
+        if let Some(record) = self.operations.get(&operation) {
+            if record.fingerprint != fingerprint {
+                return Err(RuntimeError::new(
+                    "IDEMPOTENCY_CONFLICT",
+                    "idempotency key was already used for a different projection import",
+                ));
+            }
+            return Ok(record.snapshot.clone());
+        }
+        self.check_revision(Some(base_revision))?;
+        if !self.project_path.is_file() {
+            return Err(RuntimeError::new(
+                "INVALID_PROJECT",
+                "project.cut.json is required for an explicit projection import",
+            ));
+        }
+        let (project, source_version) = load_bootstrap_project(&self.project_path)?;
+        let project_changed = project != self.project;
+        let revision = if project_changed {
+            self.revision + 1
+        } else {
+            self.revision
+        };
+        let mut candidate = self.durable_state();
+        candidate.project = project;
+        candidate.revision = revision;
+        candidate.source_version = source_version;
+        if project_changed {
+            candidate.past.clear();
+            candidate.future.clear();
+            candidate.proposal = None;
+        }
+        let mut snapshot = self.snapshot_for_parts_with_proposal(
+            &candidate.project,
+            candidate.revision,
+            &candidate.past,
+            &candidate.future,
+            &candidate.proposal,
+        );
+        snapshot.source_version = source_version;
+        snapshot.projection_status = ProjectionStatus::Current.as_str().into();
+        candidate.operations.insert(
+            operation.clone(),
+            OperationRecord {
+                fingerprint,
+                snapshot: snapshot.clone(),
+            },
+        );
+        bound_receipts(&mut candidate.operations, Some(&operation));
+        let operation_record = candidate
+            .operations
+            .get(&operation)
+            .cloned()
+            .ok_or_else(|| {
+                RuntimeError::new(
+                    "RUNTIME_PROTOCOL_ERROR",
+                    "projection import receipt was not staged",
+                )
+            })?;
+        if !project_changed && self.projection_status != ProjectionStatus::Current {
+            // The file already describes the authoritative project, but may
+            // use the v1 spelling or be missing the compatibility history.
+            // An explicit import is also a repair request in this case.
+            self.materialize_project_value(&candidate.project)?;
+            self.materialize_history_values(
+                candidate.revision,
+                &candidate.past,
+                &candidate.future,
+            )?;
+            self.projection_status = ProjectionStatus::Current;
+            self.projection_digest = projection_digest(&self.project_path).ok();
+        }
+        let imported_project = candidate.project.clone();
+        self.commit_projection_import(
+            candidate,
+            JournalEvent::ProjectionImport {
+                project: imported_project,
+                source_version,
+                operation: Some(JournalOperation {
+                    key: operation,
+                    record: operation_record,
+                }),
+            },
+        )
+    }
+
+    fn repair_projection(&mut self) -> Result<StateSnapshot, RuntimeError> {
+        self.materialize_project()?;
+        self.materialize_history()?;
+        self.projection_status = ProjectionStatus::Current;
+        self.projection_digest = Some(projection_digest(&self.project_path)?);
+        self.persist_checkpoint()?;
+        truncate_journal(&self.journal_path)?;
+        self.journal_records_since_checkpoint = 0;
+        Ok(self.snapshot())
+    }
+
+    fn reconcile_abandoned_jobs(&mut self) -> bool {
+        let mut changed = false;
+        for job in self.jobs.values_mut() {
+            if matches!(job.status.as_str(), "queued" | "running") {
+                job.status = "failed".into();
+                job.error = Some("render job was abandoned when cutd restarted".into());
+                changed = true;
+            }
+        }
+        changed
     }
 }
 
@@ -2093,6 +3899,17 @@ pub fn validate_actor(actor: &str) -> Result<(), RuntimeError> {
     }
 }
 
+fn domain_error(error: cut_domain::DomainError) -> RuntimeError {
+    RuntimeError::new(error.code, error.message)
+}
+
+/// Convert a validated canonical project to the JSON representation used by
+/// the protocol and compatibility projections.  This is intentionally a
+/// boundary helper; the runtime actor stores only `Project`.
+fn project_value(project: &Project) -> Value {
+    serde_json::to_value(project).expect("validated Cut projects serialize")
+}
+
 fn validate_request_identity(actor: &str, key: &str) -> Result<(), RuntimeError> {
     validate_actor(actor)?;
     if key.trim().is_empty() {
@@ -2104,12 +3921,218 @@ fn validate_request_identity(actor: &str, key: &str) -> Result<(), RuntimeError>
     Ok(())
 }
 
+fn load_bootstrap_project(path: &Path) -> Result<(Project, u8), RuntimeError> {
+    if !path.is_file() {
+        return Ok((cut_domain::empty_project(), 2));
+    }
+    let text = fs::read_to_string(path).map_err(io_error)?;
+    let value: Value = serde_json::from_str(&text)
+        .map_err(|error| RuntimeError::new("INVALID_PROJECT", error.to_string()))?;
+    match cut_domain::parse_versioned(&value).map_err(domain_error)? {
+        cut_domain::VersionedProject::V1(legacy) => Ok((
+            cut_domain::migrate_v1_to_v2(&legacy).map_err(domain_error)?,
+            1,
+        )),
+        cut_domain::VersionedProject::V2(project) => Ok((project, 2)),
+    }
+}
+
+fn validate_journal_history_entry(entry: &JournalHistoryEntry) -> Result<(), RuntimeError> {
+    let _ = cut_domain::serialize_command(&entry.command).map_err(domain_error)?;
+    let _ = cut_domain::serialize_command(&entry.inverse).map_err(domain_error)?;
+    // Serialization above validates the command shape without pretending that
+    // an inverse can be applied to an unrelated project.
+    Ok(())
+}
+
+fn bound_history(entries: &mut Vec<JournalHistoryEntry>) {
+    if entries.len() > MAX_HISTORY_ENTRIES {
+        let excess = entries.len() - MAX_HISTORY_ENTRIES;
+        entries.drain(..excess);
+    }
+}
+
+fn bound_receipts<T>(receipts: &mut HashMap<String, T>, preserve: Option<&str>) {
+    while receipts.len() > MAX_RECEIPTS {
+        let Some(key) = receipts
+            .keys()
+            .find(|key| preserve != Some(key.as_str()))
+            .cloned()
+        else {
+            break;
+        };
+        receipts.remove(&key);
+    }
+}
+
+fn seal_journal_record(mut record: JournalRecord) -> Result<JournalRecord, RuntimeError> {
+    record.checksum.clear();
+    let bytes = serde_json::to_vec(&record)
+        .map_err(|error| RuntimeError::new("SERIALIZE_ERROR", error.to_string()))?;
+    record.checksum = sha256_hex(&bytes);
+    Ok(record)
+}
+
+fn verify_journal_record(record: &JournalRecord) -> Result<(), RuntimeError> {
+    if record.format_version != JOURNAL_VERSION {
+        return Err(RuntimeError::new(
+            "JOURNAL_VERSION_UNSUPPORTED",
+            format!(
+                "journal record format {} is not supported",
+                record.format_version
+            ),
+        ));
+    }
+    let mut unsigned = record.clone();
+    let checksum = unsigned.checksum.clone();
+    unsigned.checksum.clear();
+    let bytes = serde_json::to_vec(&unsigned)
+        .map_err(|error| RuntimeError::new("INVALID_JOURNAL", error.to_string()))?;
+    if checksum != sha256_hex(&bytes) {
+        return Err(RuntimeError::new(
+            "JOURNAL_CHECKSUM_MISMATCH",
+            format!(
+                "journal record {} failed checksum verification",
+                record.sequence
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn append_journal_record(path: &Path, record: &JournalRecord) -> Result<(), RuntimeError> {
+    let bytes = serde_json::to_vec(record)
+        .map_err(|error| RuntimeError::new("SERIALIZE_ERROR", error.to_string()))?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(io_error)?;
+    file.write_all(&bytes).map_err(io_error)?;
+    file.write_all(b"\n").map_err(io_error)?;
+    file.sync_all().map_err(io_error)
+}
+
+fn load_journal(path: &Path, after_sequence: u64) -> Result<Vec<JournalRecord>, RuntimeError> {
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(io_error)?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(io_error)?;
+    let mut records = Vec::new();
+    let mut offset = 0;
+    while offset < bytes.len() {
+        let start = offset;
+        let newline = bytes[offset..].iter().position(|byte| *byte == b'\n');
+        let (end, terminated) = match newline {
+            Some(index) => (offset + index, true),
+            None => (bytes.len(), false),
+        };
+        let line = &bytes[start..end];
+        offset = if terminated { end + 1 } else { end };
+        if line.iter().all(u8::is_ascii_whitespace) {
+            if !terminated {
+                file.set_len(start as u64).map_err(io_error)?;
+                file.sync_all().map_err(io_error)?;
+            }
+            break;
+        }
+        let parsed = serde_json::from_slice::<JournalRecord>(line);
+        let record = match parsed {
+            Ok(record) => record,
+            Err(error) if offset == bytes.len() && !terminated => {
+                // A process can die after writing only part of the final JSON
+                // line. The valid prefix remains authoritative; discard only
+                // this torn tail and keep all earlier records.
+                file.set_len(start as u64).map_err(io_error)?;
+                file.sync_all().map_err(io_error)?;
+                let _ = error;
+                break;
+            }
+            Err(error) => {
+                return Err(RuntimeError::new(
+                    "INVALID_JOURNAL",
+                    format!("journal record at byte {start} is invalid: {error}"),
+                ));
+            }
+        };
+        if let Err(error) = verify_journal_record(&record) {
+            if offset == bytes.len() && !terminated {
+                file.set_len(start as u64).map_err(io_error)?;
+                file.sync_all().map_err(io_error)?;
+                break;
+            }
+            return Err(error);
+        }
+        if record.sequence <= after_sequence {
+            continue;
+        }
+        records.push(record);
+    }
+    Ok(records)
+}
+
+fn truncate_journal(path: &Path) -> Result<(), RuntimeError> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let file = OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .map_err(io_error)?;
+    file.sync_all().map_err(io_error)
+}
+
+fn inspect_projection(path: &Path, expected: &Project) -> ProjectionStatus {
+    if !path.is_file() {
+        return ProjectionStatus::Missing;
+    }
+    let Ok(text) = fs::read_to_string(path) else {
+        return ProjectionStatus::Diverged;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&text) else {
+        return ProjectionStatus::Diverged;
+    };
+    match cut_domain::parse_versioned(&value) {
+        Ok(cut_domain::VersionedProject::V1(legacy)) => {
+            match cut_domain::migrate_v1_to_v2(&legacy) {
+                Ok(project) if project == *expected => ProjectionStatus::Current,
+                _ => ProjectionStatus::Diverged,
+            }
+        }
+        Ok(cut_domain::VersionedProject::V2(project)) if project == *expected => {
+            ProjectionStatus::Current
+        }
+        _ => ProjectionStatus::Diverged,
+    }
+}
+
+fn projection_matches(path: &Path, expected: &Project) -> bool {
+    inspect_projection(path, expected) == ProjectionStatus::Current
+}
+
+fn projection_digest(path: &Path) -> Result<String, RuntimeError> {
+    let bytes = fs::read(path).map_err(io_error)?;
+    Ok(sha256_hex(&bytes))
+}
+
 fn load_checkpoint(directory: &Path) -> Result<Option<PersistedCheckpoint>, RuntimeError> {
     let checkpoint_path = directory.join(CHECKPOINT_FILE);
     let temporary_path = directory.join(CHECKPOINT_TEMP_FILE);
     if !checkpoint_path.is_file() && temporary_path.is_file() {
         let value = read_checkpoint(&temporary_path)?;
-        fs::rename(&temporary_path, &checkpoint_path).map_err(io_error)?;
+        replace_file(&temporary_path, &checkpoint_path)?;
         sync_parent_dir(directory);
         return Ok(Some(value));
     }
@@ -2135,7 +4158,7 @@ fn load_checkpoint(directory: &Path) -> Result<Option<PersistedCheckpoint>, Runt
                         ),
                     )
                 })?;
-                fs::rename(&temporary_path, &checkpoint_path).map_err(io_error)?;
+                replace_file(&temporary_path, &checkpoint_path)?;
                 sync_parent_dir(directory);
                 return Ok(Some(value));
             }
@@ -2147,18 +4170,48 @@ fn load_checkpoint(directory: &Path) -> Result<Option<PersistedCheckpoint>, Runt
 
 fn read_checkpoint(path: &Path) -> Result<PersistedCheckpoint, RuntimeError> {
     let text = fs::read_to_string(path).map_err(io_error)?;
-    let checkpoint: PersistedCheckpoint = serde_json::from_str(&text)
+    let value: Value = serde_json::from_str(&text)
         .map_err(|error| RuntimeError::new("INVALID_CHECKPOINT", error.to_string()))?;
-    if checkpoint.format_version != CHECKPOINT_VERSION {
+    let format_version = value
+        .get("format_version")
+        .or_else(|| value.get("formatVersion"))
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            RuntimeError::new(
+                "INVALID_CHECKPOINT",
+                "checkpoint format_version is required",
+            )
+        })?;
+    if format_version == 1 {
+        let legacy: LegacyPersistedCheckpoint = serde_json::from_value(value)
+            .map_err(|error| RuntimeError::new("INVALID_CHECKPOINT", error.to_string()))?;
+        return Ok(PersistedCheckpoint {
+            format_version: CHECKPOINT_VERSION,
+            project: legacy.project,
+            revision: legacy.revision,
+            // v1 checkpoints retained full snapshots. Do not carry that
+            // unbounded representation into the journal runtime; the current
+            // project remains authoritative and older undo entries are
+            // intentionally discarded at this one-time format boundary.
+            past: Vec::new(),
+            future: Vec::new(),
+            journal_sequence: 0,
+            operations: legacy.operations,
+            imports: legacy.imports,
+            proposal: legacy.proposal,
+            jobs: HashMap::new(),
+            source_version: 2,
+            projection_digest: None,
+        });
+    }
+    if format_version != CHECKPOINT_VERSION {
         return Err(RuntimeError::new(
             "CHECKPOINT_VERSION_UNSUPPORTED",
-            format!(
-                "checkpoint format {} is not supported",
-                checkpoint.format_version
-            ),
+            format!("checkpoint format {format_version} is not supported"),
         ));
     }
-    Ok(checkpoint)
+    serde_json::from_value(value)
+        .map_err(|error| RuntimeError::new("INVALID_CHECKPOINT", error.to_string()))
 }
 
 fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), RuntimeError> {
@@ -2174,7 +4227,7 @@ fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), Runtime
             .map_err(io_error)?;
         file.write_all(&bytes).map_err(io_error)?;
         file.sync_all().map_err(io_error)?;
-        fs::rename(&temporary_path, path).map_err(io_error)?;
+        replace_file(&temporary_path, path)?;
         if let Some(parent) = path.parent() {
             sync_parent_dir(parent);
         }
@@ -2192,6 +4245,52 @@ fn atomic_temp_path(path: &Path) -> PathBuf {
         .and_then(|name| name.to_str())
         .unwrap_or("state");
     path.with_file_name(format!("{file_name}.tmp"))
+}
+
+#[cfg(not(windows))]
+fn replace_file(temporary_path: &Path, destination: &Path) -> Result<(), RuntimeError> {
+    fs::rename(temporary_path, destination).map_err(io_error)
+}
+
+#[cfg(windows)]
+fn replace_file(temporary_path: &Path, destination: &Path) -> Result<(), RuntimeError> {
+    use std::os::windows::ffi::OsStrExt;
+
+    let source: Vec<u16> = temporary_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let target: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // MoveFileExW with REPLACE_EXISTING and WRITE_THROUGH is the Windows
+    // equivalent of the same-volume atomic replacement used by rename(2).
+    // The pointers remain valid for the duration of the synchronous call.
+    let replaced = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            target.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if replaced == 0 {
+        return Err(io_error(std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+#[cfg(windows)]
+const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+extern "system" {
+    fn MoveFileExW(existing_file_name: *const u16, new_file_name: *const u16, flags: u32) -> i32;
 }
 
 fn sync_parent_dir(directory: &Path) {
@@ -2290,74 +4389,6 @@ fn validate_overlay_shape(overlay: &Value) -> Result<(), RuntimeError> {
     Ok(())
 }
 
-fn empty_project() -> Value {
-    json!({"version":2,"name":"Untitled project","fps":30,"sources":[],"tracks":[{"id":"video-1","type":"video","clips":[]},{"id":"audio-1","type":"audio","clips":[]}],"overlays":[],"gaps":[],"transitions":[],"effects":[],"markers":[]})
-}
-
-fn project_duration(project: &Value) -> f64 {
-    let mut duration = project
-        .get("duration")
-        .and_then(Value::as_f64)
-        .filter(|value| value.is_finite() && *value >= 0.0)
-        .unwrap_or(0.0);
-    if let Some(tracks) = project.get("tracks").and_then(Value::as_array) {
-        for track in tracks {
-            if let Some(clips) = track.get("clips").and_then(Value::as_array) {
-                for clip in clips {
-                    let start = clip
-                        .get("timelineStart")
-                        .and_then(Value::as_f64)
-                        .filter(|value| value.is_finite() && *value >= 0.0)
-                        .unwrap_or(0.0);
-                    let clip_duration = clip
-                        .get("duration")
-                        .and_then(Value::as_f64)
-                        .filter(|value| value.is_finite() && *value > 0.0)
-                        .or_else(|| {
-                            let input = clip.get("in").and_then(Value::as_f64)?;
-                            let output = clip.get("out").and_then(Value::as_f64)?;
-                            let speed = clip
-                                .get("speed")
-                                .and_then(Value::as_f64)
-                                .filter(|value| value.is_finite() && *value > 0.0)
-                                .unwrap_or(1.0);
-                            if input.is_finite()
-                                && output.is_finite()
-                                && input >= 0.0
-                                && output > input
-                            {
-                                Some((output - input) / speed)
-                            } else {
-                                None
-                            }
-                        });
-                    if let Some(clip_duration) = clip_duration {
-                        duration = duration.max(start + clip_duration);
-                    }
-                }
-            }
-        }
-    }
-    if let Some(gaps) = project.get("gaps").and_then(Value::as_array) {
-        for gap in gaps {
-            let start = gap
-                .get("start")
-                .or_else(|| gap.get("timelineStart"))
-                .and_then(Value::as_f64)
-                .filter(|value| value.is_finite() && *value >= 0.0)
-                .unwrap_or(0.0);
-            let gap_duration = gap
-                .get("duration")
-                .and_then(Value::as_f64)
-                .filter(|value| value.is_finite() && *value > 0.0);
-            if let Some(gap_duration) = gap_duration {
-                duration = duration.max(start + gap_duration);
-            }
-        }
-    }
-    duration
-}
-
 const MAX_PROPOSAL_DIFF: usize = 128;
 
 /// Walk two JSON values in stable key/index order and collect a bounded leaf
@@ -2447,573 +4478,6 @@ fn unique_id() -> String {
         .unwrap_or_default()
         .as_nanos();
     format!("{nanos:x}-{:x}", SEQUENCE.fetch_add(1, Ordering::Relaxed))
-}
-
-fn object<'a>(value: &'a Value, label: &str) -> Result<&'a Map<String, Value>, RuntimeError> {
-    value
-        .as_object()
-        .ok_or_else(|| RuntimeError::new("INVALID_PROJECT", format!("{label} must be an object")))
-}
-
-fn array<'a>(value: &'a Value, key: &str) -> Result<&'a Vec<Value>, RuntimeError> {
-    value.get(key).and_then(Value::as_array).ok_or_else(|| {
-        RuntimeError::new("INVALID_PROJECT", format!("project.{key} must be an array"))
-    })
-}
-
-fn id<'a>(value: &'a Value, label: &str) -> Result<&'a str, RuntimeError> {
-    value
-        .get("id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            RuntimeError::new(
-                "INVALID_PROJECT",
-                format!("{label}.id must be a non-empty string"),
-            )
-        })
-}
-
-/// Validate the canonical v2 envelope at the runtime boundary. Extension
-/// fields remain available, but aliases and malformed references do not.
-pub fn validate_project(project: &Value) -> Result<(), RuntimeError> {
-    let root = object(project, "project")?;
-    if root.get("version").and_then(Value::as_u64) != Some(2) {
-        return Err(RuntimeError::new(
-            "INVALID_PROJECT",
-            "project.version must be 2",
-        ));
-    }
-    if root
-        .get("fps")
-        .and_then(Value::as_f64)
-        .filter(|fps| fps.is_finite() && *fps > 0.0)
-        .is_none()
-    {
-        return Err(RuntimeError::new(
-            "INVALID_PROJECT",
-            "project.fps must be positive",
-        ));
-    }
-    let sources = array(project, "sources")?;
-    let tracks = array(project, "tracks")?;
-    let mut source_ids = std::collections::HashSet::new();
-    for source in sources {
-        id(source, "source")?;
-        if !source_ids.insert(id(source, "source")?.to_owned()) {
-            return Err(RuntimeError::new("INVALID_PROJECT", "duplicate source id"));
-        }
-        if source.get("path").and_then(Value::as_str).is_none() {
-            return Err(RuntimeError::new(
-                "INVALID_PROJECT",
-                "source.path is required",
-            ));
-        }
-        if let Some(duration) = source.get("duration").and_then(Value::as_f64) {
-            if !duration.is_finite() || duration < 0.0 {
-                return Err(RuntimeError::new(
-                    "INVALID_PROJECT",
-                    "source.duration must be nonnegative",
-                ));
-            }
-        }
-    }
-    let mut track_ids = std::collections::HashSet::new();
-    let mut marker_ids = std::collections::HashSet::new();
-    let mut clip_ids = std::collections::HashSet::new();
-    for track in tracks {
-        let track_id = id(track, "track")?;
-        if !track_ids.insert(track_id.to_owned()) {
-            return Err(RuntimeError::new("INVALID_PROJECT", "duplicate track id"));
-        }
-        let track_type = track
-            .get("type")
-            .and_then(Value::as_str)
-            .ok_or_else(|| RuntimeError::new("INVALID_PROJECT", "track.type is required"))?;
-        if !matches!(track_type, "video" | "audio" | "title" | "adjustment") {
-            return Err(RuntimeError::new(
-                "INVALID_PROJECT",
-                format!("unsupported track.type: {track_type}"),
-            ));
-        }
-        let clips = track
-            .get("clips")
-            .and_then(Value::as_array)
-            .ok_or_else(|| RuntimeError::new("INVALID_PROJECT", "track.clips must be an array"))?;
-        for clip in clips {
-            let clip_id = id(clip, "clip")?;
-            if !clip_ids.insert(clip_id.to_owned()) {
-                return Err(RuntimeError::new("INVALID_PROJECT", "duplicate clip id"));
-            }
-            let source_id = clip.get("sourceId").and_then(Value::as_str);
-            if matches!(track_type, "video" | "audio") && source_id.is_none() {
-                return Err(RuntimeError::new(
-                    "INVALID_PROJECT",
-                    format!("{track_type} clip requires sourceId"),
-                ));
-            }
-            if let Some(source_id) = source_id {
-                if !source_ids.contains(source_id) {
-                    return Err(RuntimeError::new(
-                        "INVALID_PROJECT",
-                        format!("clip references unknown source: {source_id}"),
-                    ));
-                }
-            }
-            let timeline_start = clip
-                .get("timelineStart")
-                .and_then(Value::as_f64)
-                .filter(|value| value.is_finite() && *value >= 0.0);
-            if timeline_start.is_none() {
-                return Err(RuntimeError::new(
-                    "INVALID_PROJECT",
-                    "clip.timelineStart must be nonnegative",
-                ));
-            }
-            let clip_in = clip.get("in").and_then(Value::as_f64);
-            let clip_out = clip.get("out").and_then(Value::as_f64);
-            if clip_in.is_some() != clip_out.is_some() {
-                return Err(RuntimeError::new(
-                    "INVALID_PROJECT",
-                    "clip source interval requires both in and out",
-                ));
-            }
-            if let (Some(start), Some(end)) = (clip_in, clip_out) {
-                if !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start {
-                    return Err(RuntimeError::new(
-                        "INVALID_PROJECT",
-                        "clip out must be greater than in",
-                    ));
-                }
-                if let Some(source_id) = source_id {
-                    let source_duration = sources
-                        .iter()
-                        .find(|source| source.get("id").and_then(Value::as_str) == Some(source_id))
-                        .and_then(|source| source.get("duration"))
-                        .and_then(Value::as_f64);
-                    if let Some(duration) = source_duration {
-                        if end > duration {
-                            return Err(RuntimeError::new(
-                                "INVALID_PROJECT",
-                                "clip out exceeds source duration",
-                            ));
-                        }
-                    }
-                }
-            }
-            if let Some(duration) = clip.get("duration").and_then(Value::as_f64) {
-                if !duration.is_finite() || duration <= 0.0 {
-                    return Err(RuntimeError::new(
-                        "INVALID_PROJECT",
-                        "clip.duration must be positive",
-                    ));
-                }
-            }
-        }
-    }
-    for key in ["overlays", "gaps", "transitions", "effects", "markers"] {
-        array(project, key)?;
-    }
-    for marker in array(project, "markers")? {
-        let marker_id = id(marker, "marker")?;
-        if !marker_ids.insert(marker_id.to_owned()) {
-            return Err(RuntimeError::new("INVALID_PROJECT", "duplicate marker id"));
-        }
-        if marker
-            .get("time")
-            .and_then(Value::as_f64)
-            .filter(|value| value.is_finite() && *value >= 0.0)
-            .is_none()
-        {
-            return Err(RuntimeError::new(
-                "INVALID_PROJECT",
-                "marker.time must be nonnegative",
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn apply_command(project: &mut Value, command: &Value) -> Result<(), RuntimeError> {
-    let command_object = object(command, "command")
-        .map_err(|_| RuntimeError::new("INVALID_COMMAND", "command must be an object"))?;
-    let kind = command_object
-        .get("type")
-        .and_then(Value::as_str)
-        .ok_or_else(|| RuntimeError::new("INVALID_COMMAND", "command.type is required"))?;
-    match kind {
-        "batch" => {
-            let commands = command_object
-                .get("commands")
-                .and_then(Value::as_array)
-                .ok_or_else(|| {
-                    RuntimeError::new("INVALID_COMMAND", "batch.commands must be an array")
-                })?;
-            if commands.is_empty() {
-                return Err(RuntimeError::new(
-                    "INVALID_COMMAND",
-                    "batch.commands must not be empty",
-                ));
-            }
-            for child in commands {
-                apply_command(project, child)?;
-            }
-        }
-        "add_track" => {
-            let track = command_object.get("track").ok_or_else(|| {
-                RuntimeError::new("INVALID_COMMAND", "add_track.track is required")
-            })?;
-            let tracks = project
-                .get_mut("tracks")
-                .and_then(Value::as_array_mut)
-                .unwrap();
-            let track_id = id(track, "track")?.to_owned();
-            if tracks
-                .iter()
-                .any(|value| id(value, "track").ok() == Some(track_id.as_str()))
-            {
-                return Err(RuntimeError::new("INVALID_COMMAND", "track already exists"));
-            }
-            tracks.push(track.clone());
-        }
-        "remove_track" => {
-            let track_id = command_object
-                .get("trackId")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    RuntimeError::new("INVALID_COMMAND", "remove_track.trackId is required")
-                })?;
-            let tracks = project
-                .get_mut("tracks")
-                .and_then(Value::as_array_mut)
-                .unwrap();
-            let index = tracks
-                .iter()
-                .position(|value| id(value, "track").ok() == Some(track_id))
-                .ok_or_else(|| {
-                    RuntimeError::new("NOT_FOUND", format!("track not found: {track_id}"))
-                })?;
-            tracks.remove(index);
-        }
-        "add_clip" => {
-            let track_id = command_object
-                .get("trackId")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    RuntimeError::new("INVALID_COMMAND", "add_clip.trackId is required")
-                })?;
-            let clip = command_object
-                .get("clip")
-                .ok_or_else(|| RuntimeError::new("INVALID_COMMAND", "add_clip.clip is required"))?;
-            let tracks = project
-                .get_mut("tracks")
-                .and_then(Value::as_array_mut)
-                .unwrap();
-            let track = tracks
-                .iter_mut()
-                .find(|value| id(value, "track").ok() == Some(track_id))
-                .ok_or_else(|| {
-                    RuntimeError::new("NOT_FOUND", format!("track not found: {track_id}"))
-                })?;
-            let clips = track
-                .get_mut("clips")
-                .and_then(Value::as_array_mut)
-                .unwrap();
-            if clips
-                .iter()
-                .any(|value| id(value, "clip").ok() == id(clip, "clip").ok())
-            {
-                return Err(RuntimeError::new("INVALID_COMMAND", "clip already exists"));
-            }
-            let index = command_object
-                .get("index")
-                .and_then(Value::as_u64)
-                .map(|v| v as usize)
-                .unwrap_or(clips.len());
-            if index > clips.len() {
-                return Err(RuntimeError::new(
-                    "INVALID_COMMAND",
-                    "add_clip.index is out of range",
-                ));
-            }
-            clips.insert(index, clip.clone());
-        }
-        "remove_clip" => {
-            let clip_id = command_object
-                .get("clipId")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    RuntimeError::new("INVALID_COMMAND", "remove_clip.clipId is required")
-                })?;
-            let track_filter = command_object.get("trackId").and_then(Value::as_str);
-            let (track, index) = find_clip_mut(project, clip_id, track_filter)?;
-            track
-                .get_mut("clips")
-                .and_then(Value::as_array_mut)
-                .unwrap()
-                .remove(index);
-        }
-        "update_clip" => {
-            let clip_id = command_object
-                .get("clipId")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    RuntimeError::new("INVALID_COMMAND", "update_clip.clipId is required")
-                })?;
-            let patch = command_object
-                .get("patch")
-                .and_then(Value::as_object)
-                .ok_or_else(|| {
-                    RuntimeError::new("INVALID_COMMAND", "update_clip.patch must be an object")
-                })?;
-            let (track, index) = find_clip_mut(project, clip_id, None)?;
-            let clip = track
-                .get_mut("clips")
-                .and_then(Value::as_array_mut)
-                .unwrap()
-                .get_mut(index)
-                .unwrap();
-            let target = clip.as_object_mut().unwrap();
-            for (key, value) in patch {
-                if key == "id" && value.as_str() != Some(clip_id) {
-                    return Err(RuntimeError::new(
-                        "INVALID_COMMAND",
-                        "update_clip cannot change clip id",
-                    ));
-                }
-                target.insert(key.clone(), value.clone());
-            }
-        }
-        "set_clip" => {
-            let clip_id = command_object
-                .get("clipId")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    RuntimeError::new("INVALID_COMMAND", "set_clip.clipId is required")
-                })?;
-            let clip = command_object
-                .get("clip")
-                .ok_or_else(|| RuntimeError::new("INVALID_COMMAND", "set_clip.clip is required"))?;
-            if id(clip, "clip")? != clip_id {
-                return Err(RuntimeError::new("INVALID_COMMAND", "set_clip id mismatch"));
-            }
-            let (track, index) = find_clip_mut(project, clip_id, None)?;
-            track
-                .get_mut("clips")
-                .and_then(Value::as_array_mut)
-                .unwrap()[index] = clip.clone();
-        }
-        "move_clip" => {
-            let clip_id = command_object
-                .get("clipId")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    RuntimeError::new("INVALID_COMMAND", "move_clip.clipId is required")
-                })?;
-            let destination = command_object
-                .get("toIndex")
-                .or_else(|| command_object.get("index"))
-                .and_then(Value::as_u64)
-                .ok_or_else(|| RuntimeError::new("INVALID_COMMAND", "move_clip requires toIndex"))?
-                as usize;
-            let target_track_id = command_object
-                .get("toTrackId")
-                .or_else(|| command_object.get("trackId"))
-                .and_then(Value::as_str);
-            let (source_track_id, clip) = {
-                let (source_track, source_index) = find_clip_mut(project, clip_id, None)?;
-                let source_track_id = id(source_track, "track")?.to_owned();
-                let clip = source_track
-                    .get_mut("clips")
-                    .and_then(Value::as_array_mut)
-                    .unwrap()
-                    .remove(source_index);
-                (source_track_id, clip)
-            };
-            let target_id = target_track_id.unwrap_or(source_track_id.as_str());
-            let tracks = project
-                .get_mut("tracks")
-                .and_then(Value::as_array_mut)
-                .unwrap();
-            let target = tracks
-                .iter_mut()
-                .find(|value| id(value, "track").ok() == Some(target_id))
-                .ok_or_else(|| {
-                    RuntimeError::new("NOT_FOUND", format!("track not found: {target_id}"))
-                })?;
-            let clips = target
-                .get_mut("clips")
-                .and_then(Value::as_array_mut)
-                .unwrap();
-            if destination > clips.len() {
-                return Err(RuntimeError::new(
-                    "INVALID_COMMAND",
-                    "move_clip index is out of range",
-                ));
-            }
-            clips.insert(destination, clip);
-        }
-        "add_marker" | "remove_marker" | "set_metadata" => {
-            apply_simple_collection_command(project, kind, command_object)?;
-        }
-        "add_source" => {
-            let source = command_object.get("source").ok_or_else(|| {
-                RuntimeError::new("INVALID_COMMAND", "add_source.source is required")
-            })?;
-            let source_id = id(source, "source")?.to_owned();
-            let sources = project
-                .get_mut("sources")
-                .and_then(Value::as_array_mut)
-                .unwrap();
-            if sources
-                .iter()
-                .any(|value| id(value, "source").ok() == Some(source_id.as_str()))
-            {
-                return Err(RuntimeError::new(
-                    "INVALID_COMMAND",
-                    "source already exists",
-                ));
-            }
-            sources.push(source.clone());
-        }
-        "add_overlay" => {
-            let overlay = command_object.get("overlay").ok_or_else(|| {
-                RuntimeError::new("INVALID_COMMAND", "add_overlay.overlay is required")
-            })?;
-            let overlay_id = id(overlay, "overlay")?.to_owned();
-            let overlays = project
-                .get_mut("overlays")
-                .and_then(Value::as_array_mut)
-                .unwrap();
-            if overlays
-                .iter()
-                .any(|value| id(value, "overlay").ok() == Some(overlay_id.as_str()))
-            {
-                return Err(RuntimeError::new(
-                    "INVALID_COMMAND",
-                    "overlay already exists",
-                ));
-            }
-            overlays.push(overlay.clone());
-        }
-        "remove_overlay" => {
-            let overlay_id = command_object
-                .get("overlayId")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    RuntimeError::new("INVALID_COMMAND", "remove_overlay.overlayId is required")
-                })?;
-            let overlays = project
-                .get_mut("overlays")
-                .and_then(Value::as_array_mut)
-                .unwrap();
-            let index = overlays
-                .iter()
-                .position(|overlay| id(overlay, "overlay").ok() == Some(overlay_id))
-                .ok_or_else(|| {
-                    RuntimeError::new("NOT_FOUND", format!("overlay not found: {overlay_id}"))
-                })?;
-            overlays.remove(index);
-        }
-        _ => {
-            return Err(RuntimeError::new(
-                "INVALID_COMMAND",
-                format!("unsupported semantic command: {kind}"),
-            ))
-        }
-    }
-    Ok(())
-}
-
-fn find_clip_mut<'a>(
-    project: &'a mut Value,
-    clip_id: &str,
-    track_filter: Option<&str>,
-) -> Result<(&'a mut Value, usize), RuntimeError> {
-    let tracks = project
-        .get_mut("tracks")
-        .and_then(Value::as_array_mut)
-        .unwrap();
-    for track in tracks {
-        if track_filter.is_some() && id(track, "track").ok() != track_filter {
-            continue;
-        }
-        if let Some(index) = track
-            .get("clips")
-            .and_then(Value::as_array)
-            .and_then(|clips| {
-                clips
-                    .iter()
-                    .position(|clip| id(clip, "clip").ok() == Some(clip_id))
-            })
-        {
-            return Ok((track, index));
-        }
-    }
-    Err(RuntimeError::new(
-        "NOT_FOUND",
-        format!("clip not found: {clip_id}"),
-    ))
-}
-
-fn apply_simple_collection_command(
-    project: &mut Value,
-    kind: &str,
-    command: &Map<String, Value>,
-) -> Result<(), RuntimeError> {
-    match kind {
-        "set_metadata" => {
-            let patch = command
-                .get("patch")
-                .and_then(Value::as_object)
-                .ok_or_else(|| {
-                    RuntimeError::new("INVALID_COMMAND", "set_metadata.patch must be an object")
-                })?;
-            if !project
-                .get("metadata")
-                .map(Value::is_object)
-                .unwrap_or(false)
-            {
-                project["metadata"] = json!({});
-            }
-            let metadata = project
-                .get_mut("metadata")
-                .and_then(Value::as_object_mut)
-                .unwrap();
-            metadata.extend(patch.clone());
-        }
-        "add_marker" => {
-            let marker = command.get("marker").ok_or_else(|| {
-                RuntimeError::new("INVALID_COMMAND", "add_marker.marker is required")
-            })?;
-            project
-                .get_mut("markers")
-                .and_then(Value::as_array_mut)
-                .unwrap()
-                .push(marker.clone());
-        }
-        "remove_marker" => {
-            let marker_id = command
-                .get("markerId")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    RuntimeError::new("INVALID_COMMAND", "remove_marker.markerId is required")
-                })?;
-            let markers = project
-                .get_mut("markers")
-                .and_then(Value::as_array_mut)
-                .unwrap();
-            let index = markers
-                .iter()
-                .position(|marker| id(marker, "marker").ok() == Some(marker_id))
-                .ok_or_else(|| {
-                    RuntimeError::new("NOT_FOUND", format!("marker not found: {marker_id}"))
-                })?;
-            markers.remove(index);
-        }
-        _ => unreachable!(),
-    }
-    Ok(())
 }
 
 fn repository_root_from_manifest(manifest_dir: &Path) -> PathBuf {
@@ -3465,6 +4929,7 @@ mod tests {
         // The checkpoint remains writable, while the legacy project
         // projection is deliberately made unrenamable.  This exercises the
         // failure between candidate construction and the commit record.
+        fs::remove_file(directory.join(PROJECT_FILE)).unwrap();
         fs::create_dir(directory.join(PROJECT_FILE)).unwrap();
         let error = runtime
             .apply(
@@ -3790,17 +5255,23 @@ mod tests {
 
     #[test]
     fn snapshot_duration_matches_canonical_clip_and_gap_semantics() {
-        let project = json!({
+        let project = cut_domain::parse_project(&json!({
+            "version": 2,
+            "fps": 30,
             "duration": 1.5,
+            "sources": [],
             "tracks": [{
+                "id": "titles",
+                "type": "title",
                 "clips": [
-                    {"timelineStart":2.0,"duration":4.0},
-                    {"timelineStart":8.0,"in":1.0,"out":5.0,"speed":2.0}
+                    {"id":"a","timelineStart":2.0,"duration":4.0},
+                    {"id":"b","timelineStart":8.0,"in":1.0,"out":5.0,"speed":2.0}
                 ]
             }],
             "gaps": [{"timelineStart":12.0,"duration":3.0}]
-        });
-        assert_eq!(project_duration(&project), 15.0);
+        }))
+        .unwrap();
+        assert_eq!(cut_domain::project_duration(&project), 15.0);
     }
 
     #[test]
@@ -3891,5 +5362,213 @@ mod tests {
             .reject_proposal_request(&proposal_id, "ui", "reject-other", 0)
             .unwrap_err();
         assert_eq!(error.code, "IDEMPOTENCY_CONFLICT");
+    }
+
+    #[test]
+    fn journal_stores_typed_commands_without_full_snapshot_history() {
+        let directory =
+            std::env::temp_dir().join(format!("cut-runtime-journal-shape-{}", unique_id()));
+        let mut runtime = Runtime::open(&directory).unwrap();
+        runtime
+            .apply(
+                json!({"type":"add_track","track":{"id":"titles","type":"title","clips":[]}}),
+                Some(0),
+            )
+            .unwrap();
+        let journal = fs::read_to_string(directory.join(JOURNAL_FILE)).unwrap();
+        assert!(journal.contains("\"command\""));
+        assert!(journal.contains("\"inverse\""));
+        assert!(!journal.contains("\"before\""));
+        assert!(!journal.contains("\"after\""));
+
+        for index in 0..(MAX_HISTORY_ENTRIES + 8) {
+            runtime
+                .apply(json!({"type":"set_metadata","patch":{"index":index}}), None)
+                .unwrap();
+        }
+        let history: Value =
+            serde_json::from_str(&fs::read_to_string(directory.join(HISTORY_FILE)).unwrap())
+                .unwrap();
+        assert_eq!(
+            history["past"].as_array().unwrap().len(),
+            MAX_HISTORY_ENTRIES
+        );
+        assert!(history["future"].as_array().unwrap().is_empty());
+        drop(runtime);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn checkpoint_and_torn_journal_tail_recover_authoritative_state() {
+        let directory =
+            std::env::temp_dir().join(format!("cut-runtime-journal-recovery-{}", unique_id()));
+        let mut runtime = Runtime::open(&directory).unwrap();
+        for index in 0..(CHECKPOINT_INTERVAL + 1) {
+            runtime
+                .apply(json!({"type":"set_metadata","patch":{"index":index}}), None)
+                .unwrap();
+        }
+        let checkpoint: Value =
+            serde_json::from_str(&fs::read_to_string(directory.join(CHECKPOINT_FILE)).unwrap())
+                .unwrap();
+        assert_eq!(checkpoint["journal_sequence"], CHECKPOINT_INTERVAL);
+        assert_eq!(
+            checkpoint["past"].as_array().unwrap().len(),
+            CHECKPOINT_INTERVAL as usize
+        );
+        drop(runtime);
+
+        let mut journal = OpenOptions::new()
+            .append(true)
+            .open(directory.join(JOURNAL_FILE))
+            .unwrap();
+        journal.write_all(br#"{"#).unwrap();
+        journal.sync_all().unwrap();
+
+        let reopened = Runtime::open(&directory).unwrap();
+        assert_eq!(reopened.snapshot().revision, CHECKPOINT_INTERVAL + 1);
+        assert_eq!(
+            reopened.snapshot().project["metadata"]["index"],
+            CHECKPOINT_INTERVAL
+        );
+        drop(reopened);
+        let journal = fs::read_to_string(directory.join(JOURNAL_FILE)).unwrap();
+        assert!(journal
+            .lines()
+            .all(|line| serde_json::from_str::<Value>(line).is_ok()));
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn interrupted_checkpoint_write_recovers_from_complete_temp_file() {
+        let directory =
+            std::env::temp_dir().join(format!("cut-runtime-checkpoint-recovery-{}", unique_id()));
+        let mut runtime = Runtime::open(&directory).unwrap();
+        runtime
+            .apply(
+                json!({"type":"set_metadata","patch":{"saved":true}}),
+                Some(0),
+            )
+            .unwrap();
+        drop(runtime);
+        let checkpoint = fs::read(directory.join(CHECKPOINT_FILE)).unwrap();
+        fs::write(directory.join(CHECKPOINT_TEMP_FILE), checkpoint).unwrap();
+        fs::write(directory.join(CHECKPOINT_FILE), b"{broken").unwrap();
+
+        let runtime = Runtime::open(&directory).unwrap();
+        assert_eq!(runtime.snapshot().revision, 1);
+        assert_eq!(runtime.snapshot().project["metadata"]["saved"], true);
+        assert!(!directory.join(CHECKPOINT_TEMP_FILE).exists());
+        drop(runtime);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn first_launch_migrates_v1_once_and_publishes_v2_projection() {
+        let directory =
+            std::env::temp_dir().join(format!("cut-runtime-v1-bootstrap-{}", unique_id()));
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join(PROJECT_FILE),
+            serde_json::to_vec(&json!({
+                "version": 1,
+                "fps": 24,
+                "sources": [{"id":"src1","path":"clip.mp4","duration":4}],
+                "tracks": [{"id":"v1","clips":[{"id":"clip1","src":"src1","in":0,"out":4}]}],
+                "overlays": []
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let runtime = Runtime::open(&directory).unwrap();
+        let state = runtime.snapshot();
+        assert_eq!(state.source_version, 1);
+        assert_eq!(state.projection_status, "current");
+        assert_eq!(state.project["version"], 2);
+        assert!(directory.join(CHECKPOINT_FILE).is_file());
+        drop(runtime);
+        let projection: Value =
+            serde_json::from_str(&fs::read_to_string(directory.join(PROJECT_FILE)).unwrap())
+                .unwrap();
+        assert_eq!(projection["version"], 2);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn divergent_projection_requires_repair_or_explicit_import() {
+        let directory =
+            std::env::temp_dir().join(format!("cut-runtime-projection-policy-{}", unique_id()));
+        let mut runtime = Runtime::open(&directory).unwrap();
+        runtime
+            .apply(
+                json!({"type":"set_metadata","patch":{"authoritative":true}}),
+                Some(0),
+            )
+            .unwrap();
+        drop(runtime);
+
+        let mut edited: Value =
+            serde_json::from_str(&fs::read_to_string(directory.join(PROJECT_FILE)).unwrap())
+                .unwrap();
+        edited["name"] = json!("human edit");
+        fs::write(
+            directory.join(PROJECT_FILE),
+            serde_json::to_vec_pretty(&edited).unwrap(),
+        )
+        .unwrap();
+
+        let mut runtime = Runtime::open(&directory).unwrap();
+        assert_eq!(runtime.snapshot().projection_status, "diverged");
+        let blocked = runtime.apply(
+            json!({"type":"set_metadata","patch":{"blocked":true}}),
+            Some(1),
+        );
+        assert_eq!(blocked.unwrap_err().code, "PROJECTION_DIVERGED");
+        let repaired = runtime.repair_projection().unwrap();
+        assert_eq!(repaired.projection_status, "current");
+        assert_eq!(repaired.project["name"], "Untitled project");
+
+        let mut imported = repaired.project.clone();
+        imported["name"] = json!("explicit import");
+        fs::write(
+            directory.join(PROJECT_FILE),
+            serde_json::to_vec_pretty(&imported).unwrap(),
+        )
+        .unwrap();
+        let imported_state = runtime
+            .import_projection("ui", "projection-import-1", repaired.revision)
+            .unwrap();
+        assert_eq!(imported_state.revision, repaired.revision + 1);
+        assert_eq!(imported_state.project["name"], "explicit import");
+        assert!(!imported_state.can_undo);
+        assert_eq!(imported_state.projection_status, "current");
+        drop(runtime);
+
+        let reopened = Runtime::open(&directory).unwrap();
+        assert_eq!(reopened.snapshot().project["name"], "explicit import");
+        assert_eq!(reopened.snapshot().projection_status, "current");
+        drop(reopened);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn abandoned_render_jobs_are_reconciled_after_restart() {
+        let directory =
+            std::env::temp_dir().join(format!("cut-runtime-job-recovery-{}", unique_id()));
+        let job_id = {
+            let mut runtime = Runtime::open(&directory).unwrap();
+            let (job, _, _) = runtime.start_render("preview").unwrap();
+            assert_eq!(job.status, "queued");
+            job.job_id
+        };
+        let runtime = Runtime::open(&directory).unwrap();
+        let job = runtime.render_job(&job_id).unwrap();
+        assert_eq!(job.status, "failed");
+        assert_eq!(
+            job.error.as_deref(),
+            Some("render job was abandoned when cutd restarted")
+        );
+        drop(runtime);
+        let _ = fs::remove_dir_all(directory);
     }
 }

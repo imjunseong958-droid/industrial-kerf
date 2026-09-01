@@ -10,6 +10,9 @@ name = "cut_runtime"
 path = "src/lib.rs"
 
 [dependencies]
+cut-domain = { path = "../cut-domain" }
 fs2 = "0.4"
+libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"

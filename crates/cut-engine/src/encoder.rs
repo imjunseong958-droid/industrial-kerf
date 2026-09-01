@@ -1,7 +1,7 @@
 //! Hardware encoder capability discovery and explicit selection.
 //!
-//! Mirrors `@cut/media` encoder.ts. Hardware is never selected unless the
-//! caller opts in with `prefer_hardware`.
+//! Defines the native encoder selection policy. Hardware is never selected
+//! unless the caller opts in with `prefer_hardware`.
 
 use serde::{Deserialize, Serialize};
 

@@ -1,0 +1,126 @@
+{
+  "provider": {
+    "tool": {
+      "name": "timeline.query",
+      "description": "Inspect the timeline.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "include": { "enum": ["summary", "full"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "messages": [
+      { "role": "user", "content": "inspect the timeline" },
+      {
+        "role": "assistant",
+        "content": [
+          { "type": "text", "text": "I will inspect it." },
+          {
+            "type": "tool_use",
+            "id": "call_1",
+            "name": "timeline.query",
+            "input": { "include": "full" }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "call_1",
+            "content": "{\"revision\":1}"
+          }
+        ]
+      }
+    ],
+    "expected_chat_tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "timeline.query",
+          "description": "Inspect the timeline.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "include": { "enum": ["summary", "full"] }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    ],
+    "expected_chat_messages": [
+      { "role": "user", "content": "inspect the timeline" },
+      {
+        "role": "assistant",
+        "content": "I will inspect it.",
+        "tool_calls": [
+          {
+            "id": "call_1",
+            "type": "function",
+            "function": {
+              "name": "timeline.query",
+              "arguments": "{\"include\":\"full\"}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": "{\"revision\":1}"
+      }
+    ],
+    "expected_responses_tools": [
+      {
+        "type": "function",
+        "name": "timeline.query",
+        "description": "Inspect the timeline.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "include": { "enum": ["summary", "full"] }
+          },
+          "additionalProperties": false
+        }
+      }
+    ],
+    "expected_responses_input": [
+      { "role": "user", "content": "inspect the timeline" },
+      {
+        "role": "assistant",
+        "content": "I will inspect it."
+      },
+      {
+        "type": "function_call",
+        "call_id": "call_1",
+        "name": "timeline.query",
+        "arguments": "{\"include\":\"full\"}"
+      },
+      {
+        "type": "function_call_output",
+        "call_id": "call_1",
+        "output": "{\"revision\":1}"
+      }
+    ]
+  },
+  "mcp": {
+    "protocol_version": "2024-11-05",
+    "core_tools": [
+      "timeline.query",
+      "timeline.apply",
+      "timeline.undo",
+      "timeline.redo",
+      "media.probe",
+      "media.fetch",
+      "media.import",
+      "render.preview",
+      "render.start",
+      "render.result",
+      "skills.read"
+    ]
+  }
+}

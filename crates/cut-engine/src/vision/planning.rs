@@ -845,7 +845,7 @@ fn crop_target_from_json(value: Option<&Value>) -> Result<Option<CropTarget>, Ra
     Ok(Some(CropTarget::Box(bbox)))
 }
 
-/// Build a crop plan from the TypeScript `CropPlanRequest` JSON shape.
+/// Build a crop plan from the canonical `CropPlanRequest` JSON shape.
 pub fn crop_plan_from_json(value: &Value) -> Result<CropPlan, RangeError> {
     let object = value
         .as_object()

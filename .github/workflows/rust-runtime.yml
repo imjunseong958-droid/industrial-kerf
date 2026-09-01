@@ -1,0 +1,28 @@
+name: Rust runtime
+
+on:
+  push:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/cut-domain/**"
+      - "crates/cut-runtime/**"
+      - ".github/workflows/rust-runtime.yml"
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/cut-domain/**"
+      - "crates/cut-runtime/**"
+      - ".github/workflows/rust-runtime.yml"
+
+jobs:
+  windows-runtime:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test typed domain
+        run: cargo test -p cut-domain
+      - name: Test durable runtime
+        run: cargo test -p cut-runtime --all-targets

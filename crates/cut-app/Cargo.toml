@@ -1,0 +1,30 @@
+[package]
+name = "cut-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native Cut editor shell and desktop composition root"
+rust-version = "1.95"
+
+[lib]
+name = "cut_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cut"
+path = "src/main.rs"
+
+[dependencies]
+accesskit_winit = "0.32.0"
+cut-agent = { path = "../cut-agent" }
+cut-mcp = { path = "../cut-mcp" }
+cut-runtime = { path = "../cut-runtime" }
+cut-playback = { path = "../cut-playback" }
+cut-skills = { path = "../cut-skills" }
+egui = "0.36.1"
+egui-wgpu = { version = "0.36.1", default-features = false, features = ["winit"] }
+egui-winit = { version = "0.36.1", default-features = false, features = ["accesskit", "clipboard", "wayland", "x11"] }
+pollster = "0.4"
+serde_json = "1"
+wgpu = { version = "30.0.1", default-features = false, features = ["dx12", "gles", "metal", "vulkan", "wgsl"] }
+winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "wayland", "x11"] }

@@ -1,1 +1,0 @@
-//! Tauri desktop application library.

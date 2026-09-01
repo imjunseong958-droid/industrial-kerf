@@ -1,0 +1,52 @@
+{
+  "v1": {
+    "version": 1,
+    "fps": 30,
+    "sources": [{ "id": "s", "path": "/tmp/a.mp4" }],
+    "tracks": [{
+      "id": "v0",
+      "clips": [
+        { "id": "a", "src": "s", "in": 0, "out": 4, "speed": 2 },
+        { "id": "b", "src": "s", "in": 4, "out": 6 }
+      ]
+    }],
+    "overlays": []
+  },
+  "v2Aliases": {
+    "version": 2,
+    "name": "Golden",
+    "fps": 30,
+    "sources": [{ "id": "s", "path": "/tmp/a.mp4", "duration": 10, "futureSource": { "x": 1 } }],
+    "tracks": [{
+      "id": "v",
+      "kind": "video",
+      "clips": [{
+        "id": "c",
+        "src": "s",
+        "sourceIn": 0,
+        "sourceOut": 4,
+        "start": 2,
+        "speed": 2,
+        "futureClip": { "enabled": true }
+      }]
+    }],
+    "gaps": [{ "timelineStart": 8, "duration": 2 }],
+    "markers": [{ "id": "m", "start": 1 }],
+    "futureProject": { "new": true }
+  },
+  "commands": [
+    { "type": "setMetadata", "patch": { "title": "Cut" } },
+    { "type": "add_marker", "marker": { "id": "m2", "time": 3 } }
+  ],
+  "expected": {
+    "migrationStarts": [0, 2],
+    "canonicalTrackType": "video",
+    "canonicalSourceId": "s",
+    "canonicalTimelineStart": 2,
+    "duration": 10,
+    "revisionAfterApply": 1,
+    "revisionAfterUndo": 2,
+    "revisionAfterRedo": 3,
+    "serializedCommand": { "type": "set_metadata", "patch": { "title": "Cut" } }
+  }
+}

@@ -1,0 +1,28 @@
+[package]
+name = "cut-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Project-scoped MCP stdio router for the native Cut runtime"
+
+[lib]
+name = "cut_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cut-mcp"
+path = "src/bin/cut-mcp.rs"
+
+[dependencies]
+base64 = "0.23"
+cut-agent = { path = "../cut-agent" }
+cut-domain = { path = "../cut-domain" }
+cut-engine = { path = "../cut-engine" }
+cut-fetcher = { path = "../cut-fetcher" }
+cut-runtime = { path = "../cut-runtime" }
+cut-skills = { path = "../cut-skills" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,5 +1,18 @@
 [workspace]
-members = ["crates/cut-core", "crates/cut-engine", "crates/cut-runtime"]
+members = [
+    "crates/cut-core",
+    "crates/cut-engine",
+    "crates/cut-domain",
+    "crates/cut-playback",
+    "crates/cut-runtime",
+    "crates/cut-app",
+    "crates/cut-skills",
+    "crates/cut-fetcher",
+    "crates/cut-interchange",
+    "crates/cut-agent",
+    "crates/cut-mcp",
+    "crates/cut-cli",
+]
 resolver = "2"
 
 [workspace.package]

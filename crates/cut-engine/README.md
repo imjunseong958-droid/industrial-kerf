@@ -1,8 +1,8 @@
 # cut-engine
 
-Native media engine for Cut. TypeScript packages (`@cut/media`, `@cut/vision`)
-always invoke this binary (`target/release/cut-engine`, `target/debug/cut-engine`,
-or `CUT_ENGINE_BIN`). There is no TypeScript engine fallback.
+Native media engine for Cut. The Rust application and adapters invoke this
+binary (`target/release/cut-engine`, `target/debug/cut-engine`, or
+`CUT_ENGINE_BIN`).
 
 ```
 cargo test -p cut-engine
@@ -54,4 +54,5 @@ Commands:
 
 YOLO inference is letterbox → decode → NMS → ByteTrack in-process via ONNX Runtime.
 `.pt` files are not executed; export with `yolo export model=custom.pt format=onnx`.
-Python Ultralytics remains a training/export tool only.
+Python Ultralytics remains a training/export tool only; runtime inference has
+no scripting-language fallback.
