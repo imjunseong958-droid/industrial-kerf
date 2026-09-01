@@ -194,10 +194,14 @@ impl RuntimeLock {
             .open(&path)
             .map_err(io_error)?;
         file.try_lock_exclusive().map_err(|error| {
-            if matches!(
+            // fs2 reports lock contention with a platform-specific OS error;
+            // Windows uses ERROR_LOCK_VIOLATION rather than WouldBlock.
+            let is_contention = matches!(
                 error.kind(),
                 std::io::ErrorKind::WouldBlock | std::io::ErrorKind::AlreadyExists
-            ) {
+            ) || error.raw_os_error()
+                == fs2::lock_contended_error().raw_os_error();
+            if is_contention {
                 RuntimeError::new(
                     "RUNTIME_ALREADY_RUNNING",
                     format!("another cut runtime already owns {}", directory.display()),
