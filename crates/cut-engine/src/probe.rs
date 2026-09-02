@@ -2,12 +2,16 @@
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::SystemTime;
 
+use crate::derivatives::DerivativeCache;
 use crate::error::Result;
-use crate::ffmpeg::{resolve_ffmpeg_bin, resolve_ffprobe_bin, run, video_decode_prefix};
+use crate::ffmpeg::{resolve_ffmpeg_bin, resolve_ffprobe_bin, run, run_bytes, video_decode_prefix};
 use crate::resources::extract_job_count;
 
 static SILENCE_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -55,6 +59,72 @@ pub struct ExtractedFrame {
     pub time: f64,
     pub path: String,
 }
+
+/// One exact timestamp frame stored in the derivative cache.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameGrab {
+    pub time: f64,
+    pub path: String,
+    pub media_type: String,
+}
+
+/// Cached result of an exact frame request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameGrabSet {
+    pub key: String,
+    pub frames: Vec<FrameGrab>,
+    pub cached: bool,
+}
+
+/// Cached contact sheet built from exact timestamp frames.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilmstripResult {
+    pub key: String,
+    pub path: String,
+    pub frame_paths: Vec<String>,
+    pub times: Vec<f64>,
+    pub columns: usize,
+    pub cached: bool,
+}
+
+/// One deterministic min/max/RMS bucket in a waveform envelope.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaveformBucket {
+    pub min: f64,
+    pub max: f64,
+    pub rms: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WaveformPayload {
+    pub duration: f64,
+    pub sample_rate: u32,
+    pub buckets: Vec<WaveformBucket>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_path: Option<String>,
+}
+
+/// Cached waveform envelope and optional waveform image.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaveformResult {
+    pub key: String,
+    pub duration: f64,
+    pub sample_rate: u32,
+    pub buckets: Vec<WaveformBucket>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_path: Option<String>,
+    pub cached: bool,
+}
+
+pub const MAX_FRAME_TIMES: usize = 128;
+pub const MAX_WAVEFORM_BUCKETS: usize = 4096;
+const WAVEFORM_SAMPLE_RATE: u32 = 8_000;
 
 #[derive(Debug, Deserialize)]
 struct FfprobeStream {
@@ -318,8 +388,8 @@ pub fn extract_frames(
         let end = (index + jobs).min(times.len());
         std::thread::scope(|scope| {
             let mut handles = Vec::with_capacity(end - index);
-            for slot in index..end {
-                let time = times[slot];
+            for (offset, &time) in times[index..end].iter().enumerate() {
+                let slot = index + offset;
                 let out_path = std::path::Path::new(out_dir).join(format!("frame_{slot}.png"));
                 let out_path_str = out_path.to_string_lossy().into_owned();
                 let scale = scale.as_str();
@@ -342,6 +412,405 @@ pub fn extract_frames(
         .into_iter()
         .map(|frame| frame.ok_or_else(|| crate::error::EngineError::msg("missing extracted frame")))
         .collect()
+}
+
+fn validate_exact_times(times: &[f64]) -> Result<()> {
+    if times.is_empty() {
+        return Err(crate::error::EngineError::msg(
+            "at least one frame timestamp is required",
+        ));
+    }
+    if times.len() > MAX_FRAME_TIMES {
+        return Err(crate::error::EngineError::msg(format!(
+            "frame timestamp count exceeds {MAX_FRAME_TIMES}"
+        )));
+    }
+    if times.iter().any(|time| !time.is_finite() || *time < 0.0) {
+        return Err(crate::error::EngineError::msg(
+            "frame timestamps must be finite and nonnegative",
+        ));
+    }
+    Ok(())
+}
+
+fn frame_file_name(index: usize) -> String {
+    format!("frame-{index:03}.png")
+}
+
+fn frame_file_names(count: usize) -> Vec<String> {
+    (0..count).map(frame_file_name).collect()
+}
+
+fn extract_one_exact_frame(
+    ffmpeg: &str,
+    src: &str,
+    time: f64,
+    scale: &str,
+    output: String,
+) -> Result<FrameGrab> {
+    let mut args = video_decode_prefix().to_vec();
+    args.extend([
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-i".into(),
+        src.into(),
+        "-ss".into(),
+        time.to_string(),
+        "-an".into(),
+        "-frames:v".into(),
+        "1".into(),
+        "-vf".into(),
+        scale.into(),
+        "-y".into(),
+        output.clone(),
+    ]);
+    run(ffmpeg, &args)?;
+    Ok(FrameGrab {
+        time,
+        path: output,
+        media_type: "image/png".into(),
+    })
+}
+
+fn extract_exact_frames_to_dir(
+    src: &str,
+    times: &[f64],
+    out_dir: &Path,
+    max_width: u32,
+) -> Result<Vec<FrameGrab>> {
+    validate_exact_times(times)?;
+    if max_width == 0 {
+        return Err(crate::error::EngineError::msg(
+            "maxWidth must be finite and positive",
+        ));
+    }
+    fs::create_dir_all(out_dir)?;
+    let scale = format!("scale=w='min(iw,{max_width})':h=-2");
+    let ffmpeg = resolve_ffmpeg_bin();
+    let jobs = extract_job_count().max(1);
+    let names = frame_file_names(times.len());
+    let mut results: Vec<Option<FrameGrab>> = vec![None; times.len()];
+    let mut index = 0usize;
+    while index < times.len() {
+        let end = (index + jobs).min(times.len());
+        std::thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(end - index);
+            for slot in index..end {
+                let output = out_dir.join(&names[slot]).to_string_lossy().into_owned();
+                let scale = scale.as_str();
+                handles.push((
+                    slot,
+                    scope.spawn(move || {
+                        extract_one_exact_frame(ffmpeg, src, times[slot], scale, output)
+                    }),
+                ));
+            }
+            for (slot, handle) in handles {
+                results[slot] = Some(handle.join().map_err(|_| {
+                    crate::error::EngineError::msg("exact frame extraction thread panicked")
+                })??);
+            }
+            Ok::<(), crate::error::EngineError>(())
+        })?;
+        index = end;
+    }
+    results
+        .into_iter()
+        .map(|frame| {
+            frame.ok_or_else(|| crate::error::EngineError::msg("missing exact extracted frame"))
+        })
+        .collect()
+}
+
+/// Extract exact timestamp frames into a caller-selected derivative directory.
+pub fn extract_exact_frames(
+    src: &str,
+    times: &[f64],
+    out_dir: &Path,
+    max_width: u32,
+) -> Result<Vec<FrameGrab>> {
+    extract_exact_frames_to_dir(src, times, out_dir, max_width)
+}
+
+/// Extract frames at exact requested timestamps and cache the result below the
+/// project's `.cut/cache/derived` directory.
+pub fn cached_exact_frames(
+    src: &str,
+    cache: &DerivativeCache,
+    times: &[f64],
+    max_width: u32,
+) -> Result<FrameGrabSet> {
+    validate_exact_times(times)?;
+    if max_width == 0 {
+        return Err(crate::error::EngineError::msg(
+            "maxWidth must be finite and positive",
+        ));
+    }
+    let options = json!({
+        "exact": true,
+        "times": times,
+        "maxWidth": max_width,
+    });
+    let entry = cache.source_entry(Path::new(src), "frames", &options)?;
+    let names = frame_file_names(times.len());
+    let required = names.iter().map(String::as_str).collect::<Vec<_>>();
+    let cached = entry.is_complete(&required);
+    if !cached {
+        extract_exact_frames_to_dir(src, times, &entry.directory, max_width)?;
+        entry.mark_complete(&required)?;
+    }
+    let frames = times
+        .iter()
+        .zip(names)
+        .map(|(time, name)| FrameGrab {
+            time: *time,
+            path: entry.path(&name).to_string_lossy().into_owned(),
+            media_type: "image/png".into(),
+        })
+        .collect();
+    Ok(FrameGrabSet {
+        key: entry.key,
+        frames,
+        cached,
+    })
+}
+
+/// Build a contact sheet from an ordered set of PNG frame paths.
+pub fn create_contact_sheet(frame_paths: &[String], output: &Path, columns: usize) -> Result<()> {
+    if frame_paths.is_empty() {
+        return Err(crate::error::EngineError::msg(
+            "contact sheet requires at least one frame",
+        ));
+    }
+    if !(1..=16).contains(&columns) {
+        return Err(crate::error::EngineError::msg(
+            "contact sheet columns must be between 1 and 16",
+        ));
+    }
+    let first = Path::new(&frame_paths[0]);
+    let parent = first
+        .parent()
+        .ok_or_else(|| crate::error::EngineError::msg("frame path has no parent directory"))?;
+    if frame_paths
+        .iter()
+        .any(|path| Path::new(path).parent() != Some(parent))
+    {
+        return Err(crate::error::EngineError::msg(
+            "contact sheet frames must share a directory",
+        ));
+    }
+    let rows = frame_paths.len().div_ceil(columns);
+    let pattern = parent.join("frame-%03d.png");
+    let args = vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-framerate".into(),
+        "1".into(),
+        "-start_number".into(),
+        "0".into(),
+        "-i".into(),
+        pattern.to_string_lossy().into_owned(),
+        "-vf".into(),
+        format!("tile={columns}x{rows}:padding=0:margin=0"),
+        "-frames:v".into(),
+        "1".into(),
+        "-y".into(),
+        output.to_string_lossy().into_owned(),
+    ];
+    run(resolve_ffmpeg_bin(), &args)?;
+    Ok(())
+}
+
+/// Extract exact frames and assemble a cached filmstrip/contact sheet.
+pub fn cached_filmstrip(
+    src: &str,
+    cache: &DerivativeCache,
+    times: &[f64],
+    max_width: u32,
+    columns: usize,
+) -> Result<FilmstripResult> {
+    validate_exact_times(times)?;
+    if max_width == 0 {
+        return Err(crate::error::EngineError::msg(
+            "maxWidth must be finite and positive",
+        ));
+    }
+    let columns = columns.clamp(1, 16);
+    let options = json!({
+        "exact": true,
+        "times": times,
+        "maxWidth": max_width,
+        "columns": columns,
+    });
+    let entry = cache.source_entry(Path::new(src), "filmstrip", &options)?;
+    let names = frame_file_names(times.len());
+    let mut required = names.iter().map(String::as_str).collect::<Vec<_>>();
+    required.push("filmstrip.png");
+    let cached = entry.is_complete(&required);
+    if !cached {
+        extract_exact_frames_to_dir(src, times, &entry.directory, max_width)?;
+        let frame_paths = names
+            .iter()
+            .map(|name| entry.path(name).to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        create_contact_sheet(&frame_paths, &entry.path("filmstrip.png"), columns)?;
+        entry.mark_complete(&required)?;
+    }
+    Ok(FilmstripResult {
+        key: entry.key.clone(),
+        path: entry.path("filmstrip.png").to_string_lossy().into_owned(),
+        frame_paths: names
+            .iter()
+            .map(|name| entry.path(name).to_string_lossy().into_owned())
+            .collect(),
+        times: times.to_vec(),
+        columns,
+        cached,
+    })
+}
+
+fn waveform_buckets(samples: &[f64], bucket_count: usize) -> Vec<WaveformBucket> {
+    if samples.is_empty() {
+        return Vec::new();
+    }
+    let bucket_count = bucket_count
+        .clamp(1, MAX_WAVEFORM_BUCKETS)
+        .min(samples.len())
+        .max(1);
+    (0..bucket_count)
+        .map(|index| {
+            let start = index * samples.len() / bucket_count;
+            let end = ((index + 1) * samples.len() / bucket_count).max(start + 1);
+            let end = end.min(samples.len());
+            let values = &samples[start..end];
+            let min = values.iter().copied().fold(f64::INFINITY, f64::min);
+            let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            let rms = (values.iter().map(|value| value * value).sum::<f64>() / values.len() as f64)
+                .sqrt();
+            WaveformBucket { min, max, rms }
+        })
+        .collect()
+}
+
+fn decode_waveform_samples(src: &str) -> Result<Vec<f64>> {
+    let args = vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-i".into(),
+        src.into(),
+        "-vn".into(),
+        "-ac".into(),
+        "1".into(),
+        "-ar".into(),
+        WAVEFORM_SAMPLE_RATE.to_string(),
+        "-f".into(),
+        "f32le".into(),
+        "pipe:1".into(),
+    ];
+    let output = run_bytes(resolve_ffmpeg_bin(), &args)?;
+    let samples = output
+        .stdout
+        .chunks_exact(4)
+        .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64)
+        .filter(|value| value.is_finite())
+        .collect::<Vec<_>>();
+    if samples.is_empty() {
+        return Err(crate::error::EngineError::msg(
+            "audio stream did not produce waveform samples",
+        ));
+    }
+    Ok(samples)
+}
+
+fn create_waveform_image(src: &str, output: &Path, width: u32, height: u32) -> Result<()> {
+    let args = vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-i".into(),
+        src.into(),
+        "-filter_complex".into(),
+        format!("showwavespic=s={width}x{height}:colors=white"),
+        "-frames:v".into(),
+        "1".into(),
+        "-y".into(),
+        output.to_string_lossy().into_owned(),
+    ];
+    run(resolve_ffmpeg_bin(), &args)?;
+    Ok(())
+}
+
+/// Generate a deterministic waveform envelope and optional image in the
+/// project-local derivative cache.
+pub fn cached_waveform(
+    src: &str,
+    cache: &DerivativeCache,
+    bucket_count: usize,
+    include_image: bool,
+    image_width: u32,
+    image_height: u32,
+) -> Result<WaveformResult> {
+    let bucket_count = bucket_count.clamp(1, MAX_WAVEFORM_BUCKETS);
+    if image_width == 0 || image_height == 0 {
+        return Err(crate::error::EngineError::msg(
+            "waveform image dimensions must be finite and positive",
+        ));
+    }
+    let options = json!({
+        "bucketCount": bucket_count,
+        "includeImage": include_image,
+        "imageWidth": image_width,
+        "imageHeight": image_height,
+        "sampleRate": WAVEFORM_SAMPLE_RATE,
+    });
+    let entry = cache.source_entry(Path::new(src), "waveform", &options)?;
+    let mut required = vec!["waveform.json"];
+    if include_image {
+        required.push("waveform.png");
+    }
+    let cached = entry.is_complete(&required);
+    let payload = if cached {
+        entry.read_json::<WaveformPayload>("waveform.json")?
+    } else {
+        let meta = info(src)?;
+        if meta.has_audio == Some(false) {
+            return Err(crate::error::EngineError::msg(
+                "media does not contain an audio stream",
+            ));
+        }
+        let samples = decode_waveform_samples(src)?;
+        let duration = meta
+            .duration
+            .filter(|duration| duration.is_finite() && *duration >= 0.0)
+            .unwrap_or(samples.len() as f64 / WAVEFORM_SAMPLE_RATE as f64);
+        let image_path = if include_image {
+            let path = entry.path("waveform.png");
+            create_waveform_image(src, &path, image_width, image_height)?;
+            Some(path.to_string_lossy().into_owned())
+        } else {
+            None
+        };
+        let payload = WaveformPayload {
+            duration,
+            sample_rate: WAVEFORM_SAMPLE_RATE,
+            buckets: waveform_buckets(&samples, bucket_count),
+            image_path,
+        };
+        entry.write_json("waveform.json", &payload)?;
+        entry.mark_complete(&required)?;
+        payload
+    };
+    Ok(WaveformResult {
+        key: entry.key,
+        duration: payload.duration,
+        sample_rate: payload.sample_rate,
+        buckets: payload.buckets,
+        image_path: payload.image_path,
+        cached,
+    })
 }
 
 #[cfg(test)]
@@ -413,5 +882,38 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn waveform_buckets_do_not_exceed_available_samples() {
+        let buckets = waveform_buckets(&[-1.0, 0.0, 1.0], MAX_WAVEFORM_BUCKETS);
+        assert_eq!(buckets.len(), 3);
+        assert_eq!(buckets[0].min, -1.0);
+        assert_eq!(buckets[2].max, 1.0);
+    }
+
+    #[test]
+    fn exact_frame_output_names_preserve_requested_order() {
+        assert_eq!(
+            frame_file_names(4),
+            [
+                "frame-000.png",
+                "frame-001.png",
+                "frame-002.png",
+                "frame-003.png"
+            ]
+        );
+    }
+
+    #[test]
+    fn waveform_buckets_are_deterministic() {
+        let samples = [-1.0, -0.5, 0.25, 1.0, 0.0, 0.75, -0.25];
+        let first = waveform_buckets(&samples, 3);
+        let second = waveform_buckets(&samples, 3);
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 3);
+        assert_eq!((first[0].min, first[0].max), (-1.0, -0.5));
+        assert_eq!((first[1].min, first[1].max), (0.25, 1.0));
+        assert_eq!((first[2].min, first[2].max), (-0.25, 0.75));
     }
 }

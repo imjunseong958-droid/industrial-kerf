@@ -4,14 +4,16 @@
 //! it reads an authoritative snapshot for each request and sends canonical
 //! commands back with an idempotency key and revision.
 
+pub mod docs;
 pub mod inbound;
 
 use base64::Engine;
 use cut_agent::{AgentTool, ToolMap};
 use cut_domain::{Clip, Command, Project};
+use cut_engine::derivatives::{DerivativeCache, SourceIdentity};
 use cut_runtime::{RuntimeClient, RuntimeError, StateSnapshot};
 use cut_skills::{find_skill, load_skills, skill_read_tool_schema, Skill};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::fmt;
 use std::fs;
@@ -22,9 +24,13 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static NEXT_KEY: AtomicU64 = AtomicU64::new(1);
+const MAX_INLINE_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_CAPTURE_TIMES: usize = 64;
 
 pub const CORE_TOOL_NAMES: &[&str] = &[
     "timeline.query",
+    "timeline.check",
+    "timeline.capture",
     "timeline.apply",
     "timeline.undo",
     "timeline.redo",
@@ -34,17 +40,22 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     "render.preview",
     "render.start",
     "render.result",
+    "project.outline",
     "skills.read",
 ];
 
 pub const FULL_TOOL_NAMES: &[&str] = &[
     "project.inspect",
+    "project.outline",
     "timeline.query",
+    "timeline.check",
+    "timeline.capture",
     "timeline.apply",
     "timeline.undo",
     "timeline.redo",
     "project.validate",
     "timeline.diff",
+    "proposal.capture",
     "render.preview",
     "render.start",
     "render.status",
@@ -57,6 +68,59 @@ pub const FULL_TOOL_NAMES: &[&str] = &[
     "skills.read",
 ];
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProbeOptions {
+    noise_db: Option<f64>,
+    min_duration: Option<f64>,
+    threshold: Option<f64>,
+    frames: Option<usize>,
+    times: Option<Vec<f64>>,
+    time: Option<f64>,
+    max_width: Option<u32>,
+    columns: Option<usize>,
+    buckets: Option<usize>,
+    include_base64: Option<bool>,
+    include_image: Option<bool>,
+    image_width: Option<u32>,
+    image_height: Option<u32>,
+    start: Option<f64>,
+    end: Option<f64>,
+    duration: Option<f64>,
+    language: Option<String>,
+    backend: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+    model_version: Option<String>,
+    backend_version: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CaptureOptions {
+    start: Option<f64>,
+    end: Option<f64>,
+    duration: Option<f64>,
+    times: Option<Vec<f64>>,
+    count: Option<usize>,
+    max_width: Option<u32>,
+    columns: Option<usize>,
+    include_base64: Option<bool>,
+    draft: Option<bool>,
+    format: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CapturePayload {
+    start: f64,
+    end: f64,
+    duration: f64,
+    path: String,
+    media_type: String,
+    frames: Vec<Value>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum McpProfile {
     Core,
@@ -68,6 +132,14 @@ impl McpProfile {
         match self {
             Self::Core => CORE_TOOL_NAMES,
             Self::Full => FULL_TOOL_NAMES,
+        }
+    }
+
+    /// Stable profile label used by generated agent documentation.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Core => "core",
+            Self::Full => "full",
         }
     }
 }
@@ -204,6 +276,21 @@ impl CutMcpRouter {
         &self.runtime
     }
 
+    /// Return the skills available to this project-scoped adapter.
+    pub fn skills(&self) -> &[Skill] {
+        &self.skills
+    }
+
+    /// Return the profile used to advertise this adapter's tools.
+    pub const fn profile(&self) -> McpProfile {
+        self.profile
+    }
+
+    /// Generate the deterministic project-local agent documentation bundle.
+    pub fn generate_agent_docs(&self) -> Result<docs::GeneratedDocs, docs::DocsError> {
+        docs::generate_agent_docs(self)
+    }
+
     pub fn list_tools(&self) -> Vec<ToolDefinition> {
         self.profile
             .names()
@@ -290,21 +377,26 @@ impl CutMcpRouter {
     fn call_inner(&self, name: &str, arguments: Value) -> Result<Value, McpError> {
         match name {
             "project.inspect" => self.project_inspect(arguments),
+            "project.outline" => self.project_outline(arguments),
             "project.validate" => self.project_validate(arguments),
             "timeline.query" => self.timeline_query(arguments),
+            "timeline.check" => self.timeline_check(arguments),
+            "timeline.capture" => self.timeline_capture(arguments),
             "timeline.apply" => self.timeline_apply(arguments),
             "timeline.undo" => self.history_move(arguments, false),
             "timeline.redo" => self.history_move(arguments, true),
             "timeline.diff" => self.timeline_diff(arguments),
+            "proposal.capture" => self.proposal_capture(arguments),
             "media.probe" => self.media_probe(arguments),
             "media.fetch" => self.media_fetch(arguments),
             "media.import" => self.media_import(arguments),
-            "render.preview" => self.render_start(true),
+            "render.preview" => self.render_start(true, &arguments),
             "render.start" => self.render_start(
                 arguments
                     .get("draft")
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
+                &arguments,
             ),
             "render.status" => self.render_status(&arguments),
             "render.cancel" => self.render_cancel(&arguments),
@@ -325,11 +417,28 @@ impl CutMcpRouter {
         let snapshot = self.state()?;
         let project = parse_project(&snapshot)?;
         let mut result = summary(&project, snapshot.revision);
-        if arguments.get("include").and_then(Value::as_str) == Some("full") {
-            result["project"] = snapshot.project;
+        match arguments.get("include").and_then(Value::as_str) {
+            Some("full") => result["project"] = snapshot.project,
+            Some("outline") => {
+                result["outline"] = serde_json::to_value(cut_domain::project_outline(&project))
+                    .map_err(|error| McpError::new("SERIALIZATION_FAILED", error.to_string()))?;
+            }
+            _ => {}
         }
         result["sourceVersion"] = json!(snapshot.source_version);
         result["normalizedVersion"] = json!(2);
+        Ok(result)
+    }
+
+    fn project_outline(&self, _arguments: Value) -> Result<Value, McpError> {
+        let snapshot = self.state()?;
+        let project = parse_project(&snapshot)?;
+        let mut result = serde_json::to_value(cut_domain::project_outline(&project))
+            .map_err(|error| McpError::new("SERIALIZATION_FAILED", error.to_string()))?;
+        result["action"] = json!("project.outline");
+        result["revision"] = json!(snapshot.revision);
+        result["sourceVersion"] = json!(snapshot.source_version);
+        result["projectionStatus"] = json!(snapshot.projection_status);
         Ok(result)
     }
 
@@ -377,6 +486,265 @@ impl CutMcpRouter {
         let mut result = json!({"revision": snapshot.revision, "tracks": tracks});
         if arguments.get("include").and_then(Value::as_str) == Some("full") {
             result["project"] = snapshot.project;
+        }
+        Ok(result)
+    }
+
+    fn timeline_check(&self, _arguments: Value) -> Result<Value, McpError> {
+        let snapshot = self.state()?;
+        let report = cut_engine::check::check_project(&snapshot.project, Some(&self.dir));
+        let mut result = serde_json::to_value(report)
+            .map_err(|error| McpError::new("SERIALIZATION_FAILED", error.to_string()))?;
+        result["revision"] = json!(snapshot.revision);
+        result["duration"] = json!(project_duration_from_value(&snapshot.project));
+        result["valid"] = json!(result["findings"]
+            .as_array()
+            .map(|findings| {
+                !findings
+                    .iter()
+                    .any(|finding| finding["severity"] == "error")
+            })
+            .unwrap_or(false));
+        Ok(result)
+    }
+
+    fn timeline_capture(&self, arguments: Value) -> Result<Value, McpError> {
+        let snapshot = self.state()?;
+        let options = capture_options(&arguments)?;
+        self.capture_project(
+            &snapshot.project,
+            snapshot.revision,
+            &options,
+            "timeline-capture",
+            "timeline.capture",
+        )
+    }
+
+    fn proposal_capture(&self, arguments: Value) -> Result<Value, McpError> {
+        let proposal_id = arguments
+            .get("proposalId")
+            .and_then(Value::as_str)
+            .filter(|id| !id.trim().is_empty())
+            .ok_or_else(|| McpError::new("INVALID_ARGUMENTS", "proposalId is required"))?;
+        let snapshot = self.state()?;
+        let (before, after) = self
+            .runtime
+            .proposal_preview(proposal_id)
+            .map_err(McpError::from)?;
+        let mut options = capture_options(&arguments)?;
+        options.draft = Some(true);
+        if options.start.is_none() && options.end.is_none() && options.duration.is_none() {
+            let end = project_duration_from_value(&before)
+                .min(project_duration_from_value(&after))
+                .min(cut_runtime::MAX_RENDER_RANGE_SECONDS);
+            if end <= 0.0 {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    "proposal has no positive duration to capture",
+                ));
+            }
+            options.start = Some(0.0);
+            options.duration = Some(end);
+        }
+        let before_capture = self.capture_project(
+            &before,
+            snapshot.revision,
+            &options,
+            "proposal-before",
+            "proposal.capture",
+        )?;
+        let after_capture = self.capture_project(
+            &after,
+            snapshot.revision,
+            &options,
+            "proposal-after",
+            "proposal.capture",
+        )?;
+        Ok(json!({
+            "action": "proposal.capture",
+            "proposalId": proposal_id,
+            "revision": snapshot.revision,
+            "before": before_capture,
+            "after": after_capture,
+        }))
+    }
+
+    fn capture_project(
+        &self,
+        project_value: &Value,
+        revision: u64,
+        options: &CaptureOptions,
+        cache_kind: &str,
+        action: &str,
+    ) -> Result<Value, McpError> {
+        let project = cut_domain::parse_project(project_value)
+            .map_err(|error| McpError::new("RUNTIME_ERROR", error.to_string()))?;
+        let report = cut_engine::check::check_project(project_value, Some(&self.dir));
+        if !report.is_valid() {
+            let details = serde_json::to_value(report)
+                .map_err(|error| McpError::new("SERIALIZATION_FAILED", error.to_string()))?;
+            return Err(McpError::new(
+                "TIMELINE_INVALID",
+                "timeline capture requires a project without error findings",
+            )
+            .with_details(details));
+        }
+        let format = options.format.as_deref().unwrap_or("filmstrip");
+        if !matches!(format, "filmstrip" | "contact_sheet" | "frame" | "frames") {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "timeline.capture format must be filmstrip, contact_sheet, frame, or frames",
+            ));
+        }
+        let total_duration = cut_engine::compile::timeline_duration_v2(project_value)
+            .map_err(|error| engine_error(error.into()))?;
+        let start = options.start.unwrap_or(0.0);
+        if !start.is_finite() || start < 0.0 {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "timeline.capture start must be finite and nonnegative",
+            ));
+        }
+        let end = if let Some(end) = options.end {
+            end
+        } else if let Some(duration) = options.duration {
+            if !duration.is_finite() || duration <= 0.0 {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    "timeline.capture duration must be finite and positive",
+                ));
+            }
+            start + duration
+        } else {
+            total_duration
+        };
+        if !end.is_finite() || end <= start || end > total_duration + 1e-9 {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                format!("timeline.capture range must satisfy 0 <= start < end <= {total_duration}"),
+            ));
+        }
+        let times = capture_times(options, start, end, format)?;
+        let max_width = options.max_width.unwrap_or(1280);
+        if max_width == 0 {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "timeline.capture maxWidth must be positive",
+            ));
+        }
+        let columns = options
+            .columns
+            .unwrap_or_else(|| times.len().min(4))
+            .clamp(1, 16);
+        let source_identities = project
+            .sources
+            .iter()
+            .map(|source| {
+                SourceIdentity::from_path(&resolve_project_source_path(&self.dir, &source.path))
+                    .map_err(engine_error)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let cache = DerivativeCache::new(&self.dir);
+        let cache_options = json!({
+            "format": format,
+            "start": start,
+            "end": end,
+            "times": times,
+            "maxWidth": max_width,
+            "columns": columns,
+            "draft": options.draft.unwrap_or(false),
+        });
+        let entry = cache
+            .project_entry(
+                project_value,
+                &source_identities,
+                cache_kind,
+                &cache_options,
+            )
+            .map_err(engine_error)?;
+        let frame_names = (0..times.len())
+            .map(|index| format!("frame-{index:03}.png"))
+            .collect::<Vec<_>>();
+        let mut required = vec!["capture.mp4", "capture.png", "capture.json"];
+        required.extend(frame_names.iter().map(String::as_str));
+        let cached = entry.is_complete(&required);
+        let payload = if cached {
+            entry
+                .read_json::<CapturePayload>("capture.json")
+                .map_err(engine_error)?
+        } else {
+            let output = entry.path("capture.mp4");
+            let render_options = cut_engine::render::RenderV2Options {
+                output: output.to_string_lossy().into_owned(),
+                draft: options.draft.unwrap_or(false),
+                force_software: true,
+                ..cut_engine::render::RenderV2Options::default()
+            };
+            cut_engine::render::render_v2_range(
+                project_value,
+                &render_options,
+                start,
+                end - start,
+                None::<fn(f64)>,
+            )
+            .map_err(engine_error)?;
+            let relative_times = times.iter().map(|time| time - start).collect::<Vec<_>>();
+            let frames = cut_engine::probe::extract_exact_frames(
+                &output.to_string_lossy(),
+                &relative_times,
+                &entry.directory,
+                max_width,
+            )
+            .map_err(engine_error)?;
+            let frame_paths = frames
+                .iter()
+                .map(|frame| frame.path.clone())
+                .collect::<Vec<_>>();
+            cut_engine::probe::create_contact_sheet(
+                &frame_paths,
+                &entry.path("capture.png"),
+                columns,
+            )
+            .map_err(engine_error)?;
+            let frame_values = frames
+                .into_iter()
+                .zip(times.iter().copied())
+                .map(|(frame, time)| {
+                    json!({
+                        "time": time,
+                        "path": frame.path,
+                        "mediaType": frame.media_type,
+                    })
+                })
+                .collect::<Vec<_>>();
+            let payload = CapturePayload {
+                start,
+                end,
+                duration: end - start,
+                path: entry.path("capture.png").to_string_lossy().into_owned(),
+                media_type: "image/png".into(),
+                frames: frame_values,
+            };
+            entry
+                .write_json("capture.json", &payload)
+                .map_err(engine_error)?;
+            entry.mark_complete(&required).map_err(engine_error)?;
+            payload
+        };
+        let mut result = serde_json::to_value(&payload)
+            .map_err(|error| McpError::new("SERIALIZATION_FAILED", error.to_string()))?;
+        result["action"] = json!(action);
+        result["format"] = json!(format);
+        result["key"] = json!(entry.key);
+        result["cached"] = json!(cached);
+        result["revision"] = json!(revision);
+        if options.include_base64.unwrap_or(false) {
+            add_inline_base64(&mut result, "path", "imageBase64")?;
+            if let Some(frames) = result.get_mut("frames").and_then(Value::as_array_mut) {
+                for frame in frames {
+                    add_inline_base64(frame, "path", "imageBase64")?;
+                }
+            }
         }
         Ok(result)
     }
@@ -485,60 +853,151 @@ impl CutMcpRouter {
             .ok()
             .and_then(|snapshot| cut_domain::parse_project(&snapshot.project).ok());
         let src = resolve_media_src(&self.dir, src, project.as_ref())?;
-        let opts = arguments.get("opts").cloned().unwrap_or_else(|| json!({}));
+        let opts = probe_options(&arguments)?;
         match action {
             "info" => {
                 let info = cut_engine::info(&src).map_err(engine_error)?;
                 Ok(json!({"action": action, "info": info}))
             }
             "silence" => {
-                let noise = opts.get("noiseDb").and_then(Value::as_f64).unwrap_or(-35.0);
-                let duration = opts
-                    .get("minDuration")
-                    .and_then(Value::as_f64)
-                    .unwrap_or(0.35);
+                let noise = opts.noise_db.unwrap_or(-35.0);
+                let duration = opts.min_duration.unwrap_or(0.35);
+                if !noise.is_finite() || !duration.is_finite() || duration <= 0.0 {
+                    return Err(McpError::new(
+                        "INVALID_ARGUMENTS",
+                        "silence noiseDb must be finite and minDuration must be positive",
+                    ));
+                }
                 let ranges = cut_engine::probe::silence_detect(&src, noise, duration)
                     .map_err(engine_error)?;
                 Ok(json!({"action": action, "ranges": ranges}))
             }
             "scenes" => {
-                let threshold = opts
-                    .get("threshold")
-                    .and_then(Value::as_f64)
-                    .unwrap_or(0.35);
+                let threshold = opts.threshold.unwrap_or(0.35);
+                if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
+                    return Err(McpError::new(
+                        "INVALID_ARGUMENTS",
+                        "scene threshold must be finite and between 0 and 1",
+                    ));
+                }
                 let ranges = cut_engine::detect_scenes(&src, threshold).map_err(engine_error)?;
                 Ok(json!({"action": action, "ranges": ranges}))
             }
-            "frames" => {
-                let count = opts
-                    .get("frames")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(8)
-                    .clamp(1, 32) as usize;
+            "frames" | "frame" => {
                 let meta = cut_engine::info(&src).map_err(engine_error)?;
                 let duration = meta.duration.unwrap_or(60.0).max(0.01);
-                let times = (0..count)
-                    .map(|index| duration * (index as f64 + 0.5) / count as f64)
-                    .collect::<Vec<_>>();
-                let frames_dir = self.dir.join(".cut").join("frames");
-                let frames =
-                    cut_engine::extract_frames(&src, &times, &frames_dir.to_string_lossy(), 1280)
-                        .map_err(engine_error)?;
-                let mut serialized = Vec::new();
-                for frame in frames {
-                    let data = fs::read(&frame.path).map_err(io_error)?;
-                    serialized.push(json!({
-                        "time": frame.time,
-                        "path": frame.path,
-                        "imageBase64": base64::engine::general_purpose::STANDARD.encode(data),
-                        "mediaType": "image/png",
-                    }));
+                let times = if action == "frame" {
+                    opts.times.clone().or_else(|| opts.time.map(|time| vec![time])).ok_or_else(|| {
+                        McpError::new("INVALID_ARGUMENTS", "media.probe frame requires opts.time or opts.times")
+                    })?
+                } else if let Some(times) = opts.times.clone() {
+                    times
+                } else {
+                    let count = opts.frames.unwrap_or(8).clamp(1, 32);
+                    (0..count)
+                        .map(|index| duration * (index as f64 + 0.5) / count as f64)
+                        .collect::<Vec<_>>()
+                };
+                let max_width = opts.max_width.unwrap_or(1280);
+                let result = cut_engine::cached_exact_frames(
+                    &src,
+                    &DerivativeCache::new(&self.dir),
+                    &times,
+                    max_width,
+                )
+                .map_err(engine_error)?;
+                let include_base64 = opts.include_base64.unwrap_or(false);
+                let mut serialized = serde_json::to_value(&result)
+                    .map_err(|error| McpError::new("SERIALIZATION_FAILED", error.to_string()))?;
+                serialized["action"] = json!(action);
+                if include_base64 {
+                    if let Some(frames) = serialized.get_mut("frames").and_then(Value::as_array_mut) {
+                        for frame in frames {
+                            add_inline_base64(frame, "path", "imageBase64")?;
+                        }
+                    }
                 }
-                Ok(json!({"action": action, "frames": serialized}))
+                Ok(serialized)
+            }
+            "filmstrip" | "contact_sheet" => {
+                let meta = cut_engine::info(&src).map_err(engine_error)?;
+                let duration = meta.duration.unwrap_or(60.0).max(0.01);
+                let times = if let Some(times) = opts.times.clone() {
+                    times
+                } else {
+                    let count = opts.frames.unwrap_or(8).clamp(1, 32);
+                    (0..count)
+                        .map(|index| duration * (index as f64 + 0.5) / count as f64)
+                        .collect::<Vec<_>>()
+                };
+                let result = cut_engine::cached_filmstrip(
+                    &src,
+                    &DerivativeCache::new(&self.dir),
+                    &times,
+                    opts.max_width.unwrap_or(1280),
+                    opts.columns.unwrap_or_else(|| times.len().min(4)),
+                )
+                .map_err(engine_error)?;
+                let mut serialized = serde_json::to_value(&result)
+                    .map_err(|error| McpError::new("SERIALIZATION_FAILED", error.to_string()))?;
+                serialized["action"] = json!(action);
+                if opts.include_base64.unwrap_or(false) {
+                    add_inline_base64(&mut serialized, "path", "imageBase64")?;
+                }
+                Ok(serialized)
+            }
+            "waveform" => {
+                let result = cut_engine::cached_waveform(
+                    &src,
+                    &DerivativeCache::new(&self.dir),
+                    opts.buckets.unwrap_or(256),
+                    opts.include_image.unwrap_or(false),
+                    opts.image_width.unwrap_or(1200),
+                    opts.image_height.unwrap_or(240),
+                )
+                .map_err(engine_error)?;
+                let mut serialized = serde_json::to_value(&result)
+                    .map_err(|error| McpError::new("SERIALIZATION_FAILED", error.to_string()))?;
+                serialized["action"] = json!(action);
+                if opts.include_base64.unwrap_or(false)
+                    && serialized.get("imagePath").is_some_and(|value| !value.is_null())
+                {
+                    add_inline_base64(&mut serialized, "imagePath", "imageBase64")?;
+                }
+                Ok(serialized)
+            }
+            "transcribe" | "listen" => {
+                let metadata = cut_engine::info(&src).map_err(engine_error)?;
+                let listen = action == "listen";
+                let range = transcription_range(&opts, &metadata, listen)?;
+                let transcription_options = transcription_options(&self.dir, &opts, range)?;
+                let cancellation = cut_engine::CancellationToken::new();
+                let result = if listen {
+                    cut_engine::listen_cached(
+                        &src,
+                        &DerivativeCache::new(&self.dir),
+                        &transcription_options,
+                        &cancellation,
+                        |_| {},
+                    )
+                } else {
+                    cut_engine::transcribe_cached(
+                        &src,
+                        &DerivativeCache::new(&self.dir),
+                        &transcription_options,
+                        &cancellation,
+                        |_| {},
+                    )
+                }
+                .map_err(engine_error)?;
+                let mut serialized = serde_json::to_value(&result)
+                    .map_err(|error| McpError::new("SERIALIZATION_FAILED", error.to_string()))?;
+                serialized["action"] = json!(action);
+                Ok(serialized)
             }
             _ => Err(McpError::new(
                 "INVALID_ARGUMENTS",
-                "media.probe action must be info, silence, scenes, or frames",
+                "media.probe action must be info, silence, scenes, frames, frame, filmstrip, contact_sheet, waveform, transcribe, or listen",
             )),
         }
     }
@@ -649,17 +1108,44 @@ impl CutMcpRouter {
         }))
     }
 
-    fn render_start(&self, draft: bool) -> Result<Value, McpError> {
+    fn render_start(&self, draft: bool, arguments: &Value) -> Result<Value, McpError> {
+        let range = render_range(arguments)?;
         let (job, project, output) = self
             .runtime
-            .start_render(if draft { "preview" } else { "full" })
+            .start_render_range(if draft { "preview" } else { "full" }, range)
             .map_err(McpError::from)?;
         let runtime = self.runtime.clone();
         let job_id = job.job_id.clone();
         let output_for_thread = output.clone();
+        let range_for_thread = job.range.clone();
+        let cancel_file = cut_runtime::render_cancel_path(runtime.directory(), &job_id);
+        let cancel_file_for_cleanup = cancel_file.clone();
         thread::spawn(move || {
-            let result =
-                cut_runtime::run_render(job_id.clone(), project, output_for_thread.clone(), draft);
+            let _ = runtime.update_job(&job_id, "running", None, None);
+            let progress_runtime = runtime.clone();
+            let progress_job_id = job_id.clone();
+            let mut last_progress = -1.0_f64;
+            let result = cut_runtime::run_render_with_cancel_file_progress(
+                job_id.clone(),
+                project,
+                output_for_thread.clone(),
+                draft,
+                range_for_thread,
+                Some(cancel_file),
+                move |progress| {
+                    if progress < 1.0 && progress - last_progress < 0.01 {
+                        return;
+                    }
+                    last_progress = progress;
+                    let _ = progress_runtime.update_job_with_progress(
+                        &progress_job_id,
+                        "running",
+                        None,
+                        None,
+                        Some(progress),
+                    );
+                },
+            );
             match result {
                 Ok(()) => {
                     let _ = runtime.update_job(
@@ -670,9 +1156,16 @@ impl CutMcpRouter {
                     );
                 }
                 Err(error) => {
-                    let _ = runtime.update_job(&job_id, "failed", Some(error.message), None);
+                    if runtime
+                        .render_job(&job_id)
+                        .map(|job| job.status != "cancelled")
+                        .unwrap_or(false)
+                    {
+                        let _ = runtime.update_job(&job_id, "failed", Some(error.message), None);
+                    }
                 }
             }
+            let _ = fs::remove_file(cancel_file_for_cleanup);
         });
         Ok(json!({
             "jobId": job.job_id,
@@ -690,6 +1183,8 @@ impl CutMcpRouter {
             "status": job.status,
             "output": job.output_path,
             "error": job.error,
+            "progress": job.progress,
+            "range": job.range,
         }))
     }
 
@@ -707,6 +1202,8 @@ impl CutMcpRouter {
             "status": job.status,
             "output": job.output_path,
             "error": job.error,
+            "progress": job.progress,
+            "range": job.range,
         }))
     }
 
@@ -813,8 +1310,8 @@ impl McpServer {
         Self {
             router,
             name: "cut-mcp".into(),
-            version: "0.1.0".into(),
-            instructions: "Read the timeline with timeline.query, apply canonical v2 commands with timeline.apply, use media.probe for media context, render with render.preview/render.start, and load playbooks with skills.read. Shell access is unavailable.".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            instructions: "Read the structural project with project.outline or timeline.query, inspect deterministic findings with timeline.check, capture exact bounded previews with timeline.capture, use proposal.capture for before/after contact sheets, apply canonical v2 commands with timeline.apply, use media.probe for cached media context including local bounded transcription/listen when configured, render with render.preview/render.start, and load playbooks with skills.read. Shell access is unavailable.".into(),
         }
     }
 
@@ -846,7 +1343,7 @@ impl McpServer {
                         .get("params")
                         .and_then(|params| params.get("protocolVersion"))
                         .and_then(Value::as_str)
-                        .unwrap_or("2024-11-05"),
+                        .unwrap_or(docs::MCP_PROTOCOL_VERSION),
                     "capabilities": {"tools": {"listChanged": false}},
                     "serverInfo": {"name": self.name, "version": self.version},
                     "instructions": self.instructions,
@@ -922,10 +1419,19 @@ fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
     };
     match name {
         "project.inspect" => (
-            "Inspect the current project summary or full v2 project.",
+            "Inspect the current project summary, full v2 project, or structural outline.",
             json!({
                 "type": "object",
-                "properties": {"include": {"enum": ["summary", "full"]}},
+                "properties": {"include": {"enum": ["summary", "full", "outline"]}},
+                "additionalProperties": false
+            }),
+            read_only,
+        ),
+        "project.outline" => (
+            "Read the structural sequence, track, clip, caption, effect, and marker outline.",
+            json!({
+                "type": "object",
+                "properties": {},
                 "additionalProperties": false
             }),
             read_only,
@@ -943,6 +1449,36 @@ fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
                     "include": {"enum": ["summary", "full"]},
                     "trackId": {"type": "string"},
                     "clipId": {"type": "string"}
+                },
+                "additionalProperties": false
+            }),
+            read_only,
+        ),
+        "timeline.check" => (
+            "Check source availability, timeline ranges, visible video coverage, compiler support, and live/offline preview parity.",
+            json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            read_only,
+        ),
+        "timeline.capture" => (
+            "Capture an exact, bounded offline-compiler preview of the current timeline.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "start": {"type": "number", "minimum": 0},
+                    "end": {"type": "number", "exclusiveMinimum": 0},
+                    "duration": {"type": "number", "exclusiveMinimum": 0},
+                    "times": {"type": "array", "minItems": 1, "maxItems": MAX_CAPTURE_TIMES, "items": {"type": "number", "minimum": 0}},
+                    "count": {"type": "integer", "minimum": 1, "maximum": 32},
+                    "maxWidth": {"type": "integer", "minimum": 1},
+                    "columns": {"type": "integer", "minimum": 1, "maximum": 16},
+                    "format": {"enum": ["filmstrip", "contact_sheet", "frame", "frames"]},
+                    "includeBase64": {"type": "boolean"},
+                    "draft": {"type": "boolean"},
+                    "opts": {"type": "object"}
                 },
                 "additionalProperties": false
             }),
@@ -982,14 +1518,62 @@ fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
             json!({"type": "object", "properties": {"from": {"type": "object"}, "to": {"type": "object"}}, "additionalProperties": false}),
             read_only,
         ),
-        "media.probe" => (
-            "Probe media metadata, silence, scenes, or sampled frames.",
+        "proposal.capture" => (
+            "Capture before and after contact sheets for the pending proposal using the offline compiler.",
             json!({
                 "type": "object",
                 "properties": {
-                    "action": {"enum": ["info", "silence", "scenes", "frames"]},
+                    "proposalId": {"type": "string", "minLength": 1},
+                    "start": {"type": "number", "minimum": 0},
+                    "end": {"type": "number", "exclusiveMinimum": 0},
+                    "duration": {"type": "number", "exclusiveMinimum": 0},
+                    "times": {"type": "array", "minItems": 1, "maxItems": MAX_CAPTURE_TIMES, "items": {"type": "number", "minimum": 0}},
+                    "count": {"type": "integer", "minimum": 1, "maximum": 32},
+                    "maxWidth": {"type": "integer", "minimum": 1},
+                    "columns": {"type": "integer", "minimum": 1, "maximum": 16},
+                    "includeBase64": {"type": "boolean"},
+                    "format": {"enum": ["filmstrip", "contact_sheet", "frame", "frames"]}
+                },
+                "required": ["proposalId"],
+                "additionalProperties": false
+            }),
+            read_only,
+        ),
+        "media.probe" => (
+            "Probe media metadata, silence, scenes, exact frames, filmstrips, waveform, transcription, or selected-range listening derivatives.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "action": {"enum": ["info", "silence", "scenes", "frames", "frame", "filmstrip", "contact_sheet", "waveform", "transcribe", "listen"]},
                     "src": {"type": "string", "minLength": 1},
-                    "opts": {"type": "object"}
+                    "opts": {
+                        "type": "object",
+                        "properties": {
+                            "noiseDb": {"type": "number"},
+                            "minDuration": {"type": "number", "exclusiveMinimum": 0},
+                            "threshold": {"type": "number", "minimum": 0, "maximum": 1},
+                            "frames": {"type": "integer", "minimum": 1, "maximum": 32},
+                            "times": {"type": "array", "minItems": 1, "maxItems": 128, "items": {"type": "number", "minimum": 0}},
+                            "time": {"type": "number", "minimum": 0},
+                            "maxWidth": {"type": "integer", "minimum": 1},
+                            "columns": {"type": "integer", "minimum": 1, "maximum": 16},
+                            "buckets": {"type": "integer", "minimum": 1, "maximum": 4096},
+                            "includeBase64": {"type": "boolean"},
+                            "includeImage": {"type": "boolean"},
+                            "imageWidth": {"type": "integer", "minimum": 1},
+                            "imageHeight": {"type": "integer", "minimum": 1},
+                            "start": {"type": "number", "minimum": 0},
+                            "end": {"type": "number", "exclusiveMinimum": 0},
+                            "duration": {"type": "number", "exclusiveMinimum": 0},
+                            "language": {"type": "string", "minLength": 1},
+                            "backend": {"enum": ["local", "whisper.cpp", "whisper_cpp", "provider"]},
+                            "provider": {"type": "string", "minLength": 1},
+                            "model": {"type": "string", "minLength": 1},
+                            "modelVersion": {"type": "string", "minLength": 1},
+                            "backendVersion": {"type": "string", "minLength": 1}
+                        },
+                        "additionalProperties": false
+                    }
                 },
                 "required": ["action", "src"],
                 "additionalProperties": false
@@ -1017,8 +1601,8 @@ fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
             mutation,
         ),
         "render.preview" | "render.start" => (
-            "Queue a durable draft or full render job.",
-            json!({"type": "object", "properties": {"draft": {"type": "boolean"}}, "additionalProperties": false}),
+            "Queue a durable draft or full render job, optionally bounded to a project-time range.",
+            json!({"type": "object", "properties": {"draft": {"type": "boolean"}, "start": {"type": "number", "minimum": 0}, "duration": {"type": "number", "exclusiveMinimum": 0}}, "additionalProperties": false}),
             mutation,
         ),
         "render.status" | "render.cancel" | "render.result" => (
@@ -1378,6 +1962,216 @@ fn job_id(arguments: &Value) -> Result<&str, McpError> {
         .ok_or_else(|| McpError::new("INVALID_ARGUMENTS", "jobId is required"))
 }
 
+fn probe_options(arguments: &Value) -> Result<ProbeOptions, McpError> {
+    let value = arguments.get("opts").cloned().unwrap_or_else(|| json!({}));
+    serde_json::from_value(value).map_err(|error| {
+        McpError::new(
+            "INVALID_ARGUMENTS",
+            format!("invalid media.probe opts: {error}"),
+        )
+    })
+}
+
+fn transcription_range(
+    options: &ProbeOptions,
+    metadata: &cut_engine::ProbeInfo,
+    listen: bool,
+) -> Result<cut_engine::TimeRange, McpError> {
+    if listen && options.start.is_none() {
+        return Err(McpError::new(
+            "INVALID_ARGUMENTS",
+            "media.probe listen requires opts.start",
+        ));
+    }
+    if listen && options.end.is_none() && options.duration.is_none() {
+        return Err(McpError::new(
+            "INVALID_ARGUMENTS",
+            "media.probe listen requires opts.end or opts.duration",
+        ));
+    }
+    if options.end.is_some() && options.duration.is_some() {
+        return Err(McpError::new(
+            "INVALID_ARGUMENTS",
+            "media.probe transcription accepts opts.end or opts.duration, not both",
+        ));
+    }
+    let start = options.start.unwrap_or(0.0);
+    let end = if let Some(end) = options.end {
+        end
+    } else if let Some(duration) = options.duration {
+        if !duration.is_finite() || duration <= 0.0 {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "media.probe transcription duration must be finite and positive",
+            ));
+        }
+        start + duration
+    } else if let Some(duration) = metadata.duration {
+        duration
+    } else {
+        return Err(McpError::new(
+            "INVALID_ARGUMENTS",
+            "media.probe transcribe requires opts.end or a source duration",
+        ));
+    };
+    let range = cut_engine::TimeRange::new(start, end)
+        .map_err(|error| McpError::new("INVALID_ARGUMENTS", error.to_string()))?;
+    let max = if listen {
+        cut_engine::MAX_LISTEN_RANGE_SECONDS
+    } else {
+        cut_engine::MAX_TRANSCRIPTION_RANGE_SECONDS
+    };
+    if range.duration() > max + 1e-9 {
+        return Err(McpError::new(
+            "INVALID_ARGUMENTS",
+            format!(
+                "media.probe {0} range exceeds the {max:.0}s limit",
+                if listen { "listen" } else { "transcribe" }
+            ),
+        ));
+    }
+    if let Some(duration) = metadata.duration {
+        if !duration.is_finite() || duration <= 0.0 || range.end > duration + 1e-6 {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                format!(
+                    "media.probe transcription range must be inside source duration {duration:.3}s"
+                ),
+            ));
+        }
+    }
+    Ok(range)
+}
+
+fn transcription_options(
+    directory: &Path,
+    options: &ProbeOptions,
+    range: cut_engine::TimeRange,
+) -> Result<cut_engine::TranscriptionOptions, McpError> {
+    let backend = match options.backend.as_deref().unwrap_or("local") {
+        "local" | "whisper.cpp" | "whisper_cpp" => {
+            cut_engine::TranscriptionBackend::LocalWhisperCpp
+        }
+        "provider" => cut_engine::TranscriptionBackend::ExplicitProvider {
+            name: options
+                .provider
+                .clone()
+                .unwrap_or_else(|| "provider".into()),
+        },
+        other => {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                format!("unknown transcription backend {other:?}; expected local or provider"),
+            ));
+        }
+    };
+    let mut result = cut_engine::TranscriptionOptions::new(range);
+    result.backend = backend;
+    result.language = options.language.clone();
+    result.model = options.model.as_deref().map(|model| {
+        let path = Path::new(model);
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            directory.join(path)
+        }
+    });
+    result.model_version = options.model_version.clone();
+    result.backend_version = options.backend_version.clone();
+    Ok(result)
+}
+
+fn capture_options(arguments: &Value) -> Result<CaptureOptions, McpError> {
+    let mut object = arguments.as_object().cloned().unwrap_or_default();
+    if let Some(opts) = arguments.get("opts").and_then(Value::as_object) {
+        object.extend(opts.iter().map(|(key, value)| (key.clone(), value.clone())));
+    }
+    serde_json::from_value(Value::Object(object)).map_err(|error| {
+        McpError::new(
+            "INVALID_ARGUMENTS",
+            format!("invalid timeline.capture options: {error}"),
+        )
+    })
+}
+
+fn capture_times(
+    options: &CaptureOptions,
+    start: f64,
+    end: f64,
+    format: &str,
+) -> Result<Vec<f64>, McpError> {
+    if let Some(times) = options.times.as_ref() {
+        if times.is_empty() || times.len() > MAX_CAPTURE_TIMES {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                format!("timeline.capture times must contain 1..={MAX_CAPTURE_TIMES} items"),
+            ));
+        }
+        if times
+            .iter()
+            .any(|time| !time.is_finite() || *time < start || *time > end)
+        {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "timeline.capture times must be finite and inside the selected range",
+            ));
+        }
+        return Ok(times.clone());
+    }
+    let default_count = if matches!(format, "frame") { 1 } else { 8 };
+    let count = options.count.unwrap_or(default_count).clamp(1, 32);
+    let length = end - start;
+    Ok((0..count)
+        .map(|index| start + length * (index as f64 + 0.5) / count as f64)
+        .collect())
+}
+
+fn project_duration_from_value(project: &Value) -> f64 {
+    cut_engine::compile::timeline_duration_v2(project).unwrap_or(0.0)
+}
+
+fn render_range(arguments: &Value) -> Result<Option<cut_runtime::RenderRange>, McpError> {
+    let start = arguments.get("start").and_then(Value::as_f64);
+    let duration = arguments.get("duration").and_then(Value::as_f64);
+    match (start, duration) {
+        (None, None) => Ok(None),
+        (Some(start), Some(duration)) => cut_runtime::RenderRange::new(start, duration)
+            .map(Some)
+            .map_err(McpError::from),
+        _ => Err(McpError::new(
+            "INVALID_ARGUMENTS",
+            "render start and duration must be provided together",
+        )),
+    }
+}
+
+fn resolve_project_source_path(dir: &Path, input: &str) -> PathBuf {
+    let path = Path::new(input);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        dir.join(path)
+    }
+}
+
+fn add_inline_base64(object: &mut Value, path_key: &str, base64_key: &str) -> Result<(), McpError> {
+    let path = object
+        .get(path_key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| McpError::new("HANDLER_FAILED", "artifact path is missing"))?
+        .to_owned();
+    let metadata = fs::metadata(&path).map_err(io_error)?;
+    if metadata.len() > MAX_INLINE_ARTIFACT_BYTES as u64 {
+        return Err(McpError::new(
+            "RESULT_TOO_LARGE",
+            format!("inline artifact exceeds {MAX_INLINE_ARTIFACT_BYTES} bytes"),
+        ));
+    }
+    let data = fs::read(path).map_err(io_error)?;
+    object[base64_key] = json!(base64::engine::general_purpose::STANDARD.encode(data));
+    Ok(())
+}
+
 fn resolve_media_src(
     dir: &Path,
     input: &str,
@@ -1457,8 +2251,16 @@ fn runtime_error_text(error: RuntimeError) -> String {
     format!("{}: {}", error.code, error.message)
 }
 
-fn engine_error(error: impl fmt::Display) -> McpError {
-    McpError::new("HANDLER_FAILED", error.to_string())
+fn engine_error(error: cut_engine::EngineError) -> McpError {
+    match error {
+        cut_engine::EngineError::CapabilityUnavailable {
+            capability,
+            message,
+        } => McpError::new("CAPABILITY_UNAVAILABLE", message)
+            .with_details(json!({"capability": capability})),
+        cut_engine::EngineError::Cancelled => McpError::new("CANCELLED", "operation cancelled"),
+        error => McpError::new("HANDLER_FAILED", error.to_string()),
+    }
 }
 
 fn io_error(error: io::Error) -> McpError {
@@ -1483,6 +2285,15 @@ mod tests {
     fn core_profile_keeps_stable_mcp_order() {
         assert_eq!(McpProfile::Core.names()[0], "timeline.query");
         assert_eq!(McpProfile::Core.names().last(), Some(&"skills.read"));
+    }
+
+    #[test]
+    fn outline_tool_is_advertised_as_a_read_only_projection() {
+        assert!(McpProfile::Core.names().contains(&"project.outline"));
+        let (_, schema, annotations) = tool_metadata("project.outline");
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(annotations.read_only_hint, Some(true));
+        assert_eq!(annotations.idempotent_hint, Some(true));
     }
 
     #[test]
@@ -1543,5 +2354,74 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(command, Command::UpdateClip { .. }));
+    }
+
+    #[test]
+    fn media_probe_advertises_transcription_and_listen_actions() {
+        let (_, schema, _) = tool_metadata("media.probe");
+        let actions = schema["properties"]["action"]["enum"]
+            .as_array()
+            .expect("actions");
+        assert!(actions.iter().any(|action| action == "transcribe"));
+        assert!(actions.iter().any(|action| action == "listen"));
+        assert_eq!(
+            schema["properties"]["opts"]["properties"]["modelVersion"]["type"],
+            "string"
+        );
+    }
+
+    #[test]
+    fn listen_requires_an_explicit_bounded_range() {
+        let metadata = cut_engine::ProbeInfo {
+            duration: Some(30.0),
+            has_audio: Some(true),
+            ..cut_engine::ProbeInfo::default()
+        };
+        let options = ProbeOptions::default();
+        assert!(transcription_range(&options, &metadata, true).is_err());
+        let options = ProbeOptions {
+            start: Some(4.0),
+            duration: Some(8.0),
+            ..ProbeOptions::default()
+        };
+        let range = transcription_range(&options, &metadata, true).expect("range");
+        assert_eq!(range.start, 4.0);
+        assert_eq!(range.end, 12.0);
+    }
+
+    #[test]
+    fn provider_backend_is_only_selected_when_explicit() {
+        let range = cut_engine::TimeRange::new(0.0, 1.0).expect("range");
+        let local =
+            transcription_options(Path::new("/tmp/project"), &ProbeOptions::default(), range)
+                .expect("options");
+        assert!(matches!(
+            local.backend,
+            cut_engine::TranscriptionBackend::LocalWhisperCpp
+        ));
+        let provider = ProbeOptions {
+            backend: Some("provider".into()),
+            provider: Some("openai".into()),
+            ..ProbeOptions::default()
+        };
+        let provider =
+            transcription_options(Path::new("/tmp/project"), &provider, range).expect("options");
+        assert!(matches!(
+            provider.backend,
+            cut_engine::TranscriptionBackend::ExplicitProvider { name } if name == "openai"
+        ));
+    }
+
+    #[test]
+    fn capability_unavailable_is_a_structured_mcp_error() {
+        let error = engine_error(cut_engine::EngineError::capability_unavailable(
+            "transcription",
+            "whisper.cpp is not installed",
+        ));
+        assert_eq!(error.code, "CAPABILITY_UNAVAILABLE");
+        assert_eq!(
+            error.details.as_ref().unwrap()["capability"],
+            "transcription"
+        );
     }
 }

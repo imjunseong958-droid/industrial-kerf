@@ -1,8 +1,8 @@
 # cut
 
-Cut is a native, agentic video editor. The packaged desktop binary is `cut`;
-the terminal workflow is `lcut` and the project-scoped MCP server is
-`cut-mcp`.
+Cut is a native, agentic video editor. `lcut` opens the native editor by
+default; pass `--terminal` for the project-scoped terminal agent. `cut` is the
+underlying native editor binary and `cut-mcp` is the project-scoped MCP server.
 
 ## Architecture
 
@@ -31,23 +31,24 @@ cargo build --release -p cut-mcp --bin cut-mcp
 Open the native editor for a project:
 
 ```bash
-target/release/cut --dir ./my-project --cutd "$PWD/target/release/cutd"
+target/release/lcut --dir ./my-project --cutd "$PWD/target/release/cutd"
 ```
 
 Run the terminal workflow:
 
 ```bash
-target/release/lcut --dir ./my-project video.mp4
-target/release/lcut --dir ./my-project -p "trim the first clip to two seconds"
-target/release/lcut --dir ./my-project --skills
-target/release/lcut --dir ./my-project --mcp
-target/release/lcut --dir ./my-project --mcp-tools -p "use the connected research tool"
+target/release/lcut --terminal --dir ./my-project video.mp4
+target/release/lcut --terminal --dir ./my-project -p "trim the first clip to two seconds"
+target/release/lcut --terminal --dir ./my-project --skills
+target/release/lcut --terminal --dir ./my-project --generate-docs
+target/release/lcut --terminal --dir ./my-project --mcp
+target/release/lcut --terminal --dir ./my-project --mcp-tools -p "use the connected research tool"
 ```
 
-`lcut` imports a local media path or an HTTP(S) URL, then uses the Rust agent
-when a prompt or API key is configured. Without a key it prints the current
-project snapshot and exits. `--cutd PATH` selects an explicit daemon; the
-`CUTD_BIN` environment variable does the same.
+In editor mode, `lcut` imports a local media path or an HTTP(S) URL before
+opening the native window. The editor's agent rail uses the same provider
+configuration as the terminal agent. `--cutd PATH` selects an explicit
+daemon; the `CUTD_BIN` environment variable does the same.
 
 `--mcp` lists the native catalog and any servers configured in
 `~/.cut/mcp.json` or `<project>/.cut/mcp.json`. `--mcp-tools` (or
@@ -108,16 +109,46 @@ The core profile contains the stable editing loop:
 
 | Tool | Purpose |
 |---|---|
+| `project.outline` | Read the structural sequence, track, clip, caption, effect, and marker hierarchy |
 | `timeline.query` | Inspect tracks, clips, source ranges, and placement |
+| `timeline.check` | Check source availability, timeline coverage, compiler findings, and capability mismatches |
+| `timeline.capture` | Capture a deterministic offline timeline range as a frame or filmstrip |
 | `timeline.apply` | Apply one canonical v2 command or atomic batch |
 | `timeline.undo` / `timeline.redo` | Move durable history |
-| `media.probe` | Run info, silence, scenes, or frame analysis |
+| `media.probe` | Run info, silence, scenes, exact frames, filmstrips, waveform, transcription, or selected-range listening |
 | `media.fetch` / `media.import` | Fetch or import media through `cutd` |
 | `render.preview` / `render.start` / `render.result` | Run and retrieve renders |
 | `skills.read` | Load a playbook body by exact name |
 
+Local transcription is optional and never uploads media implicitly. Install a
+`whisper.cpp` `whisper-cli` binary and configure a local GGML model before using
+`media.probe` with `action: "transcribe"` or `action: "listen"`:
+
+```bash
+export CUT_WHISPER_BIN=/absolute/path/to/whisper-cli
+export CUT_WHISPER_MODEL=/absolute/path/to/ggml-base.bin
+target/debug/cut-engine probe listen input.mp4 --start 12 --duration 30 --project-dir ./my-project
+```
+
+`listen` requires an explicit bounded range and is limited to two minutes;
+`transcribe` accepts up to fifteen minutes per request. Both actions return
+typed cues and word timestamps from `.cut/cache/derived`, while the listening
+action also returns the prepared local WAV path. Set
+`CUT_WHISPER_CPP_VERSION` and `CUT_WHISPER_MODEL_VERSION` when packaging or
+pinning sidecar/model versions. A configured provider backend is rejected until
+an explicit upload-capable adapter and UI consent flow exist.
+
 The `--full` profile adds project inspection and validation, timeline diff,
 render polling/cancellation, and the optional vision capability.
+
+`lcut --generate-docs` writes deterministic, machine-owned protocol, tool,
+skill, and current-project summary files under
+`.cut/docs/generated/`. Keep editorial guidance in
+`.cut/docs/conventions.md`; the generator never overwrites it or a root
+`AGENTS.md`. If a root pointer is useful, pass the explicit
+`--add-agents-pointer` opt-in; it appends an idempotent pointer without
+replacing existing instructions. The outline is a projection of the `cutd`
+snapshot and cannot mutate project state.
 
 ## Interchange
 

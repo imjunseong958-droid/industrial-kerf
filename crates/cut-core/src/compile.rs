@@ -468,7 +468,7 @@ fn normalize_crop(raw: Option<&Value>, context: &str) -> Result<Option<Crop>, Co
         Some(0.0),
         Some(1.0),
     )?;
-    if !(width > 0.0) || !(height > 0.0) {
+    if width <= 0.0 || height <= 0.0 {
         return Err(msg(format!("{context} crop width/height must be positive")));
     }
     if x + width > 1.0 || y + height > 1.0 {
@@ -884,7 +884,7 @@ fn normalize_clip(
     let source_out = if let Some(out) = source_out_value.and_then(positive) {
         out
     } else {
-        source.and_then(|s| source_duration(s)).unwrap_or(0.0)
+        source.and_then(source_duration).unwrap_or(0.0)
     };
 
     let duration = if let Some(explicit) = clip.get("duration") {
@@ -1124,7 +1124,7 @@ fn transition_for(
         })?;
 
     let overlap = previous.start + previous.duration - next.start;
-    if !(overlap > 0.0) {
+    if overlap <= 0.0 {
         return Err(unsupported(
             "transition",
             format!(
@@ -1150,7 +1150,7 @@ fn close_to_identity(value: f64, identity: f64) -> bool {
 }
 
 fn clamp_color_balance(value: f64) -> f64 {
-    value.max(-1.0).min(1.0)
+    value.clamp(-1.0, 1.0)
 }
 
 fn color_effect_filters(
@@ -1158,7 +1158,7 @@ fn color_effect_filters(
     context: &str,
 ) -> Result<Vec<String>, CompileError> {
     let mix = params.mix;
-    if !finite_num(mix) || mix < 0.0 || mix > 1.0 {
+    if !finite_num(mix) || !(0.0..=1.0).contains(&mix) {
         return Err(msg(format!("{context} color mix must be finite in [0, 1]")));
     }
     if mix == 0.0 {
@@ -1613,7 +1613,7 @@ fn output_duration(
 ) -> Result<f64, CompileError> {
     let mut end = project
         .get("duration")
-        .and_then(|v| finite(v))
+        .and_then(finite)
         .filter(|v| *v >= 0.0)
         .unwrap_or(0.0);
     for track in tracks {
@@ -1636,7 +1636,7 @@ fn output_duration(
             end = end.max(gap.start + gap.duration);
         }
     }
-    if !(end > 0.0) {
+    if end <= 0.0 {
         return Err(msg(
             "Cannot compile an empty v2 timeline: no positive duration",
         ));
@@ -1771,7 +1771,7 @@ fn overlay_filters(
                 let cue = caption_cue(raw_cue, overlay_id)?;
                 let start = cue.start.max(window_start.unwrap_or(cue.start));
                 let end = cue.end.min(window_end.unwrap_or(cue.end));
-                if !(end > start) {
+                if end <= start {
                     continue;
                 }
                 let next = labels.next("v2caption");

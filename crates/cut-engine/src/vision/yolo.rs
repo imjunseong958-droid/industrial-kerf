@@ -245,6 +245,14 @@ pub struct DetectionFrame {
     pub detections: Vec<JsonlDetection>,
 }
 
+#[derive(Default)]
+struct InferenceScratch {
+    letterbox_buffer: Vec<f32>,
+    src_xs: Vec<usize>,
+    output: YoloRawOutput,
+    letterbox_layout: (u32, u32, u32),
+}
+
 pub struct YoloEngine {
     weights_path: String,
     imgsz: u32,
@@ -253,10 +261,7 @@ pub struct YoloEngine {
     conf: f32,
     iou: f32,
     backend: Option<Box<dyn InferenceBackend>>,
-    letterbox_buffer: Vec<f32>,
-    src_xs: Vec<usize>,
-    output_scratch: YoloRawOutput,
-    letterbox_layout: (u32, u32, u32),
+    scratch: InferenceScratch,
 }
 
 impl YoloEngine {
@@ -271,10 +276,7 @@ impl YoloEngine {
             conf: 0.25,
             iou: 0.7,
             backend: None,
-            letterbox_buffer: Vec::new(),
-            src_xs: Vec::new(),
-            output_scratch: YoloRawOutput::default(),
-            letterbox_layout: (0, 0, 0),
+            scratch: InferenceScratch::default(),
         };
         #[cfg(feature = "onnx")]
         {
@@ -375,10 +377,7 @@ impl YoloEngine {
             }
             let tracked = if let Some(backend) = backend.as_deref_mut() {
                 run_frame_inference(
-                    &mut self.letterbox_buffer,
-                    &mut self.src_xs,
-                    &mut self.output_scratch,
-                    &mut self.letterbox_layout,
+                    &mut self.scratch,
                     backend,
                     &frame,
                     conf,
@@ -386,18 +385,10 @@ impl YoloEngine {
                     imgsz,
                     &mut tracker,
                 )?
-            } else if self.backend.is_some() {
-                let letterbox_buffer = &mut self.letterbox_buffer;
-                let src_xs = &mut self.src_xs;
-                let output_scratch = &mut self.output_scratch;
-                let letterbox_layout = &mut self.letterbox_layout;
-                let backend = self.backend.as_mut().unwrap().as_mut();
+            } else if let Some(backend) = self.backend.as_mut() {
                 run_frame_inference(
-                    letterbox_buffer,
-                    src_xs,
-                    output_scratch,
-                    letterbox_layout,
-                    backend,
+                    &mut self.scratch,
+                    backend.as_mut(),
                     &frame,
                     conf,
                     iou,
@@ -423,10 +414,7 @@ impl YoloEngine {
 }
 
 fn run_frame_inference(
-    letterbox_buffer: &mut Vec<f32>,
-    src_xs: &mut Vec<usize>,
-    output_scratch: &mut YoloRawOutput,
-    letterbox_layout: &mut (u32, u32, u32),
+    scratch: &mut InferenceScratch,
     backend: &mut dyn InferenceBackend,
     frame: &VideoFrame,
     conf: f32,
@@ -435,20 +423,27 @@ fn run_frame_inference(
     tracker: &mut ByteTracker,
 ) -> Result<Vec<TrackedDetection>, VisionEngineError> {
     let layout = (frame.width, frame.height, imgsz);
-    let reset_pad = *letterbox_layout != layout;
-    *letterbox_layout = layout;
+    let reset_pad = scratch.letterbox_layout != layout;
+    scratch.letterbox_layout = layout;
     let (nchw, info) = letterbox_nchw_into(
         &frame.rgb,
         frame.width,
         frame.height,
         imgsz,
-        letterbox_buffer,
-        src_xs,
+        &mut scratch.letterbox_buffer,
+        &mut scratch.src_xs,
         reset_pad,
     );
-    backend.infer(nchw, 1, 3, imgsz as usize, imgsz as usize, output_scratch)?;
+    backend.infer(
+        nchw,
+        1,
+        3,
+        imgsz as usize,
+        imgsz as usize,
+        &mut scratch.output,
+    )?;
     let mut boxes = decode_yolo_output(
-        output_scratch,
+        &scratch.output,
         conf,
         imgsz,
         frame.width,

@@ -24,7 +24,9 @@ fn two_clip_timeline() -> serde_json::Value {
     })
 }
 
-fn err_message(result: Result<cut_engine::compile_v1::CompiledV1FilterGraph, CompileV1Error>) -> String {
+fn err_message(
+    result: Result<cut_engine::compile_v1::CompiledV1FilterGraph, CompileV1Error>,
+) -> String {
     match result {
         Ok(_) => panic!("expected error"),
         Err(err) => err.to_string(),
@@ -104,7 +106,9 @@ fn allocates_independent_labels_when_same_source_is_reused() {
     let clipv2 = Regex::new(r"\[0:v\][^;]*\[clipv_2\]").expect("regex");
     assert!(clipv0.is_match(&compiled.filter_complex));
     assert!(clipv2.is_match(&compiled.filter_complex));
-    assert!(compiled.filter_complex.contains("anullsrc=r=48000:cl=stereo"));
+    assert!(compiled
+        .filter_complex
+        .contains("anullsrc=r=48000:cl=stereo"));
     assert!(compiled.filter_complex.contains("concat=n=2:v=1:a=1"));
 }
 

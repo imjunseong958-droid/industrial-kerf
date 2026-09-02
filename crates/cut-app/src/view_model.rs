@@ -1,4 +1,4 @@
-use crate::agent_rail::AgentRailViewModel;
+use crate::agent_rail::{AgentRailViewModel, AgentRunViewModel};
 use crate::config::AppConfig;
 use crate::inspector::InspectorViewModel;
 use crate::media_bin::MediaBinViewModel;
@@ -28,6 +28,15 @@ pub struct AppViewModel {
 
 impl AppViewModel {
     pub fn from_snapshot(snapshot: &StateSnapshot, config: &AppConfig, endpoint: String) -> Self {
+        Self::from_snapshot_with_run(snapshot, config, endpoint, AgentRunViewModel::default())
+    }
+
+    pub fn from_snapshot_with_run(
+        snapshot: &StateSnapshot,
+        config: &AppConfig,
+        endpoint: String,
+        agent_run: AgentRunViewModel,
+    ) -> Self {
         let project_name = snapshot
             .project
             .get("name")
@@ -35,6 +44,7 @@ impl AppViewModel {
             .filter(|name| !name.trim().is_empty())
             .unwrap_or("Untitled project")
             .to_owned();
+        let timeline = TimelineViewModel::from_snapshot(snapshot);
         Self {
             project_name,
             revision: snapshot.revision,
@@ -43,10 +53,13 @@ impl AppViewModel {
             can_redo: snapshot.can_redo,
             projection_status: snapshot.projection_status.clone(),
             viewer: ViewerViewModel::new(snapshot.duration),
-            timeline: TimelineViewModel::from_project(&snapshot.project),
+            media_bin: MediaBinViewModel::from_timeline(
+                &timeline,
+                Some(config.project_directory()),
+            ),
+            timeline,
             inspector: InspectorViewModel,
-            agent_rail: AgentRailViewModel::from_snapshot(snapshot),
-            media_bin: MediaBinViewModel::from_snapshot(snapshot),
+            agent_rail: AgentRailViewModel::from_snapshot_with_run(snapshot, agent_run),
             settings: SettingsViewModel::new(config.project_directory(), endpoint, config.actor()),
         }
     }

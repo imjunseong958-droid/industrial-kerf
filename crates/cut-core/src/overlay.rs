@@ -39,8 +39,7 @@ pub fn escape_filter_path(path: &str) -> String {
 pub fn escape_drawtext_text(text: &str) -> String {
     text.replace('\\', "\\\\")
         .replace("\r\n", "\\n")
-        .replace('\r', "\\n")
-        .replace('\n', "\\n")
+        .replace(['\r', '\n'], "\\n")
         .replace('\'', "\\'")
         .replace(':', "\\\\:")
         .replace(',', "\\,")
@@ -67,7 +66,7 @@ pub fn atempo_filters(speed: f64) -> Vec<String> {
         remaining /= 0.5;
     }
     if (remaining - 1.0).abs() > 1e-9 {
-        let clamped = remaining.max(0.5).min(100.0);
+        let clamped = remaining.clamp(0.5, 100.0);
         filters.push(format!("atempo={}", fmt(clamped)));
     }
     filters

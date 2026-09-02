@@ -35,16 +35,19 @@ Default resource limits:
 `CUT_PRESET`, `CUT_CRF`.
 
 ffmpeg/ffprobe paths, encoder listings, and hwaccel flags are resolved once per
-process. Multi-frame `probe frames` seeks in bounded parallel. Compile regexes are
-cached. YOLO letterbox writes NCHW in-place (no per-frame tensor clone). Frame
-decode from ffmpeg uses a 1 MiB buffered pipe. JSONL tracking output is written
-directly rather than via nested maps.
+process. Multi-frame `probe frames` seeks in bounded parallel. Exact frame,
+filmstrip, waveform, and timeline-capture artifacts use the project-local
+`.cut/cache/derived` cache and publish a manifest only after generation
+completes. Compile regexes are cached. YOLO letterbox writes NCHW in-place (no
+per-frame tensor clone). Frame decode from ffmpeg uses a 1 MiB buffered pipe.
+JSONL tracking output is written directly rather than via nested maps.
 
 Commands:
 
 | Command | Role |
 |---|---|
-| `probe info/silence/scenes/frames` | ffprobe/ffmpeg analysis |
+| `probe info/silence/scenes/frames/frame/filmstrip/waveform` | ffprobe/ffmpeg analysis, exact frames, contact sheets, and waveform derivatives |
+| `probe transcribe/listen` | Optional local whisper.cpp transcription and explicitly bounded listening observations |
 | `encoders` / `select-encoder` | hardware encoder discovery (`select-encoder` stays opt-in) |
 | `resources` | laptop CPU/encode/tracking budget |
 | `compile-v1` / `compile-v2` / `duration-v1` / `duration-v2` / `render-v2` | filtergraph, duration, ffmpeg argv (`--prefer-hardware` / `--software`) |
@@ -56,3 +59,11 @@ YOLO inference is letterbox → decode → NMS → ByteTrack in-process via ONNX
 `.pt` files are not executed; export with `yolo export model=custom.pt format=onnx`.
 Python Ultralytics remains a training/export tool only; runtime inference has
 no scripting-language fallback.
+
+Transcription uses `CUT_WHISPER_BIN` (or `whisper-cli` on `PATH`) and
+`CUT_WHISPER_MODEL`. It prepares mono 16 kHz WAV ranges and stores typed JSON
+under `.cut/cache/derived`; `listen` requires a start plus an end/duration and
+is limited to two minutes. `CUT_WHISPER_CPP_VERSION` and
+`CUT_WHISPER_MODEL_VERSION` can pin cache identity. Provider transcription is
+not selected from API keys and is unavailable until an explicit upload/consent
+adapter is implemented.

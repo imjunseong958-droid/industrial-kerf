@@ -61,12 +61,12 @@ impl VisionTarget {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    fn parse_label(s: &str) -> Result<Self, &'static str> {
         match s {
-            "cam" => Some(Self::Cam),
-            "chat" => Some(Self::Chat),
-            "content" => Some(Self::Content),
-            _ => None,
+            "cam" => Ok(Self::Cam),
+            "chat" => Ok(Self::Chat),
+            "content" => Ok(Self::Content),
+            _ => Err("expected cam, chat, or content"),
         }
     }
 
@@ -76,6 +76,14 @@ impl VisionTarget {
             Self::Chat => 1,
             Self::Content => 2,
         }
+    }
+}
+
+impl std::str::FromStr for VisionTarget {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse_label(s)
     }
 }
 

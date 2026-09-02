@@ -101,7 +101,7 @@ impl KalmanBox {
         self.mean[3] = self.mean[3] * (1.0 - alpha) + h * alpha;
     }
 
-    fn to_xyxy(&self) -> (f32, f32, f32, f32) {
+    fn to_xyxy(self) -> (f32, f32, f32, f32) {
         let cx = self.mean[0];
         let cy = self.mean[1];
         let a = self.mean[2].max(1e-6);

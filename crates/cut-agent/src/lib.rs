@@ -22,13 +22,18 @@ pub const DEFAULT_RESPONSES_MODEL: &str = "gpt-5.6-luna";
 
 const DEFAULT_SYSTEM_PROMPT: &str = "You are a video editing assistant for Cut.
 The project file is project.cut.json (v2).
-Inspect the timeline before editing. Use structured project_edit commands for mutations, batch related changes, and render a draft before a full render. Agent edits are staged as proposals for user review; do not claim a staged edit is applied until it is accepted.
+Inspect project.outline and the timeline before editing. Use structured project_edit commands for mutations, batch related changes, and render a draft before a full render. Agent edits are staged as proposals for user review; do not claim a staged edit is applied until it is accepted.
 Use skills.read to load a playbook body when a skill is relevant.
 Do not call a tool named edit.";
 
 pub const MAX_TOOL_RESULT_IMAGES: usize = 8;
 pub const MAX_TOOL_RESULT_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 pub const MAX_TOOL_RESULT_TOTAL_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+
+const MAX_AGENT_EVENT_TEXT_BYTES: usize = 8 * 1024;
+const MAX_AGENT_SUMMARY_TEXT_BYTES: usize = 512;
+const MAX_AGENT_SUMMARY_ITEMS: usize = 8;
+const MAX_AGENT_SUMMARY_NODES: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -1203,7 +1208,9 @@ impl AgentTool {
 
 pub type ToolMap = BTreeMap<String, AgentTool>;
 
-#[derive(Clone, Debug, PartialEq)]
+/// Progress emitted by an agent session. Payloads intended for a UI are
+/// bounded and contain summaries rather than provider or tool JSON.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AgentEvent {
     TextDelta(String),
     TurnStarted {
@@ -1212,18 +1219,43 @@ pub enum AgentEvent {
     ToolCallStarted {
         id: String,
         name: String,
-        input: Value,
+        targets: AgentTargetSummary,
     },
     ToolCallFinished {
         id: String,
         name: String,
         ok: bool,
-        detail: String,
+        summary: ToolResultSummary,
     },
     Done {
         text: String,
     },
     Aborted,
+}
+
+/// Bounded entity references extracted from a tool call for human-facing
+/// progress displays. Raw tool input is intentionally not part of an event.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AgentTargetSummary {
+    pub sources: Vec<String>,
+    pub clips: Vec<String>,
+    pub tracks: Vec<String>,
+    pub overlays: Vec<String>,
+    pub jobs: Vec<String>,
+}
+
+/// Bounded, human-facing metadata extracted from a tool result. The canonical
+/// result remains in the agent conversation; this summary is the only result
+/// shape exposed through desktop event transport.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ToolResultSummary {
+    pub targets: AgentTargetSummary,
+    pub artifact_paths: Vec<String>,
+    pub revision: Option<u64>,
+    pub status: Option<String>,
+    pub count: Option<usize>,
+    pub error: Option<String>,
+    pub truncated: bool,
 }
 
 #[derive(Debug)]
@@ -1405,7 +1437,7 @@ impl AgentSession {
             if self.is_aborted() {
                 emit(AgentEvent::Aborted);
                 emit(AgentEvent::Done {
-                    text: final_text.clone(),
+                    text: bounded_text(&final_text, MAX_AGENT_EVENT_TEXT_BYTES),
                 });
                 return Ok(final_text);
             }
@@ -1422,7 +1454,10 @@ impl AgentSession {
             let mut content = Vec::new();
             for chunk in chunks {
                 match chunk {
-                    ProviderChunk::TextDelta { text } => emit(AgentEvent::TextDelta(text)),
+                    ProviderChunk::TextDelta { text } => emit(AgentEvent::TextDelta(bounded_text(
+                        &text,
+                        MAX_AGENT_EVENT_TEXT_BYTES,
+                    ))),
                     ProviderChunk::MessageEnd {
                         stop_reason: reason,
                         content: blocks,
@@ -1433,7 +1468,7 @@ impl AgentSession {
                 }
             }
             emit(AgentEvent::TurnStarted {
-                stop_reason: stop_reason.clone(),
+                stop_reason: bounded_text(&stop_reason, MAX_AGENT_SUMMARY_TEXT_BYTES),
             });
             self.messages
                 .push(json!({"role": "assistant", "content": content}));
@@ -1441,7 +1476,7 @@ impl AgentSession {
             if stop_reason != "tool_use" {
                 final_text.push_str(&text);
                 emit(AgentEvent::Done {
-                    text: final_text.clone(),
+                    text: bounded_text(&final_text, MAX_AGENT_EVENT_TEXT_BYTES),
                 });
                 return Ok(final_text);
             }
@@ -1451,7 +1486,7 @@ impl AgentSession {
                 if self.is_aborted() {
                     emit(AgentEvent::Aborted);
                     emit(AgentEvent::Done {
-                        text: final_text.clone(),
+                        text: bounded_text(&final_text, MAX_AGENT_EVENT_TEXT_BYTES),
                     });
                     return Ok(final_text);
                 }
@@ -1466,36 +1501,36 @@ impl AgentSession {
                     .unwrap_or_default()
                     .to_owned();
                 let input = block.get("input").cloned().unwrap_or_else(|| json!({}));
+                let targets = summarize_targets(&input);
                 emit(AgentEvent::ToolCallStarted {
-                    id: id.clone(),
-                    name: name.clone(),
-                    input: input.clone(),
+                    id: bounded_text(&id, MAX_AGENT_SUMMARY_TEXT_BYTES),
+                    name: bounded_text(&name, MAX_AGENT_SUMMARY_TEXT_BYTES),
+                    targets,
                 });
                 let output = match self.tools.get(&name) {
                     Some(tool) => tool.execute(input),
                     None => Err(format!("unknown tool: {name}")),
                 };
-                let (ok, detail, canonical) = match output {
+                let (ok, summary, canonical) = match output {
                     Ok(value) => {
+                        let summary = summarize_tool_result(&value);
                         let canonical =
                             normalize_tool_result(value).map_err(AgentError::Serialization)?;
-                        let detail =
-                            serde_json::to_string(&canonical).unwrap_or_else(|_| "null".into());
-                        (true, detail, canonical)
+                        (true, summary, canonical)
                     }
                     Err(error) => {
                         let canonical = Value::String(
                             serde_json::to_string(&json!({"error": error}))
                                 .unwrap_or_else(|_| "{\"error\":\"tool failed\"}".into()),
                         );
-                        (false, error, canonical)
+                        (false, ToolResultSummary::from_error(&error), canonical)
                     }
                 };
                 emit(AgentEvent::ToolCallFinished {
-                    id: id.clone(),
-                    name,
+                    id: bounded_text(&id, MAX_AGENT_SUMMARY_TEXT_BYTES),
+                    name: bounded_text(&name, MAX_AGENT_SUMMARY_TEXT_BYTES),
                     ok,
-                    detail,
+                    summary,
                 });
                 result_blocks.push(json!({
                     "type": "tool_result",
@@ -1525,6 +1560,240 @@ impl AgentSession {
         session.messages = serde_json::from_slice(&bytes)
             .map_err(|error| AgentError::Serialization(error.to_string()))?;
         Ok(session)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TargetKind {
+    Source,
+    Clip,
+    Track,
+    Overlay,
+    Job,
+}
+
+fn bounded_text(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_owned();
+    }
+    let suffix = "…";
+    let limit = max_bytes.saturating_sub(suffix.len());
+    let mut end = 0;
+    for (index, character) in value.char_indices() {
+        let next = index + character.len_utf8();
+        if next > limit {
+            break;
+        }
+        end = next;
+    }
+    format!("{}{}", &value[..end], suffix)
+}
+
+fn summarize_targets(value: &Value) -> AgentTargetSummary {
+    let mut summary = AgentTargetSummary::default();
+    let mut nodes = 0;
+    collect_targets(value, None, &mut summary, &mut nodes);
+    summary
+}
+
+fn collect_targets(
+    value: &Value,
+    context: Option<TargetKind>,
+    summary: &mut AgentTargetSummary,
+    nodes: &mut usize,
+) {
+    if *nodes >= MAX_AGENT_SUMMARY_NODES {
+        return;
+    }
+    *nodes += 1;
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                collect_targets(value, context, summary, nodes);
+            }
+        }
+        Value::Object(object) => {
+            for (key, value) in object {
+                let nested_context = target_kind(key).or(context);
+                match key.as_str() {
+                    "sourceId" => add_target(
+                        &mut summary.sources,
+                        value.as_str(),
+                        MAX_AGENT_SUMMARY_ITEMS,
+                    ),
+                    "clipId" => {
+                        add_target(&mut summary.clips, value.as_str(), MAX_AGENT_SUMMARY_ITEMS)
+                    }
+                    "trackId" => {
+                        add_target(&mut summary.tracks, value.as_str(), MAX_AGENT_SUMMARY_ITEMS)
+                    }
+                    "overlayId" => add_target(
+                        &mut summary.overlays,
+                        value.as_str(),
+                        MAX_AGENT_SUMMARY_ITEMS,
+                    ),
+                    "jobId" => {
+                        add_target(&mut summary.jobs, value.as_str(), MAX_AGENT_SUMMARY_ITEMS)
+                    }
+                    "src" | "source" => add_target(
+                        &mut summary.sources,
+                        value.as_str(),
+                        MAX_AGENT_SUMMARY_ITEMS,
+                    ),
+                    "id" => match context {
+                        Some(TargetKind::Source) => add_target(
+                            &mut summary.sources,
+                            value.as_str(),
+                            MAX_AGENT_SUMMARY_ITEMS,
+                        ),
+                        Some(TargetKind::Clip) => {
+                            add_target(&mut summary.clips, value.as_str(), MAX_AGENT_SUMMARY_ITEMS)
+                        }
+                        Some(TargetKind::Track) => {
+                            add_target(&mut summary.tracks, value.as_str(), MAX_AGENT_SUMMARY_ITEMS)
+                        }
+                        Some(TargetKind::Overlay) => add_target(
+                            &mut summary.overlays,
+                            value.as_str(),
+                            MAX_AGENT_SUMMARY_ITEMS,
+                        ),
+                        Some(TargetKind::Job) | None => {}
+                    },
+                    _ => {}
+                }
+                if !value.is_string() {
+                    collect_targets(value, nested_context, summary, nodes);
+                }
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
+}
+
+fn target_kind(key: &str) -> Option<TargetKind> {
+    match key {
+        "source" | "sources" => Some(TargetKind::Source),
+        "clip" | "clips" => Some(TargetKind::Clip),
+        "track" | "tracks" => Some(TargetKind::Track),
+        "overlay" | "overlays" => Some(TargetKind::Overlay),
+        "job" | "jobs" => Some(TargetKind::Job),
+        _ => None,
+    }
+}
+
+fn add_target(targets: &mut Vec<String>, value: Option<&str>, limit: usize) {
+    let Some(value) = value.filter(|value| !value.trim().is_empty()) else {
+        return;
+    };
+    let value = bounded_text(value, MAX_AGENT_SUMMARY_TEXT_BYTES);
+    if targets.iter().any(|target| target == &value) || targets.len() >= limit {
+        return;
+    }
+    targets.push(value);
+}
+
+fn summarize_tool_result(value: &Value) -> ToolResultSummary {
+    let mut summary = ToolResultSummary {
+        targets: summarize_targets(value),
+        ..ToolResultSummary::default()
+    };
+    let mut nodes = 0;
+    collect_result_fields(value, &mut summary, &mut nodes);
+    summary
+}
+
+fn collect_result_fields(value: &Value, summary: &mut ToolResultSummary, nodes: &mut usize) {
+    if *nodes >= MAX_AGENT_SUMMARY_NODES {
+        summary.truncated = true;
+        return;
+    }
+    *nodes += 1;
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                collect_result_fields(value, summary, nodes);
+            }
+        }
+        Value::Object(object) => {
+            for (key, value) in object {
+                match key.as_str() {
+                    "revision" if summary.revision.is_none() => summary.revision = value.as_u64(),
+                    "status" if summary.status.is_none() => {
+                        summary.status = value
+                            .as_str()
+                            .map(|value| bounded_text(value, MAX_AGENT_SUMMARY_TEXT_BYTES))
+                    }
+                    "error" if summary.error.is_none() => {
+                        summary.error = value.as_str().map(compact_error)
+                    }
+                    "path" | "output" => {
+                        let Some(path) = value.as_str() else {
+                            continue;
+                        };
+                        if path.starts_with("data:") || path.trim().is_empty() {
+                            continue;
+                        }
+                        if !add_artifact_path(&mut summary.artifact_paths, path) {
+                            summary.truncated = true;
+                        }
+                    }
+                    "count" if summary.count.is_none() => {
+                        summary.count = value.as_u64().and_then(|value| usize::try_from(value).ok())
+                    }
+                    "frames" | "ranges" | "tracks" | "clips" if summary.count.is_none() => {
+                        summary.count = value.as_array().map(|values| values.len());
+                    }
+                    _ => {}
+                }
+                if !value.is_string() {
+                    collect_result_fields(value, summary, nodes);
+                }
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
+}
+
+fn add_artifact_path(paths: &mut Vec<String>, path: &str) -> bool {
+    let path = bounded_text(path, MAX_AGENT_SUMMARY_TEXT_BYTES);
+    if paths.iter().any(|existing| existing == &path) {
+        return true;
+    }
+    if paths.len() >= MAX_AGENT_SUMMARY_ITEMS {
+        return false;
+    }
+    paths.push(path);
+    true
+}
+
+fn compact_error(error: &str) -> String {
+    let lower = error.to_ascii_lowercase();
+    if [
+        "api_key",
+        "apikey",
+        "access_token",
+        "authorization",
+        "bearer ",
+        "cookie",
+        "password",
+        "secret",
+        "token=",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+    {
+        "sensitive tool error redacted".into()
+    } else {
+        bounded_text(error, MAX_AGENT_SUMMARY_TEXT_BYTES)
+    }
+}
+
+impl ToolResultSummary {
+    fn from_error(error: &str) -> Self {
+        Self {
+            error: Some(compact_error(error)),
+            ..Self::default()
+        }
     }
 }
 
@@ -1840,6 +2109,44 @@ mod tests {
         assert_eq!(
             value.as_array().unwrap()[1]["source"]["media_type"],
             "image/png"
+        );
+    }
+
+    #[test]
+    fn agent_events_expose_bounded_tool_summaries_without_raw_payloads() {
+        let targets = summarize_targets(&json!({
+            "command": {
+                "type": "update_clip",
+                "clipId": "clip-1",
+                "trackId": "track-1",
+            },
+            "sourceId": "source-1",
+        }));
+        assert_eq!(targets.sources, vec!["source-1"]);
+        assert_eq!(targets.clips, vec!["clip-1"]);
+        assert_eq!(targets.tracks, vec!["track-1"]);
+
+        let summary = summarize_tool_result(&json!({
+            "revision": 9,
+            "status": "completed",
+            "clipId": "clip-1",
+            "frames": [{
+                "path": "/project/.cut/cache/derived/frame.png",
+                "imageBase64": "should-not-be-retained",
+            }],
+        }));
+        assert_eq!(summary.revision, Some(9));
+        assert_eq!(summary.status.as_deref(), Some("completed"));
+        assert_eq!(
+            summary.artifact_paths,
+            vec!["/project/.cut/cache/derived/frame.png"]
+        );
+        assert!(!format!("{summary:?}").contains("should-not-be-retained"));
+
+        let sensitive = ToolResultSummary::from_error("authorization: bearer secret");
+        assert_eq!(
+            sensitive.error.as_deref(),
+            Some("sensitive tool error redacted")
         );
     }
 }

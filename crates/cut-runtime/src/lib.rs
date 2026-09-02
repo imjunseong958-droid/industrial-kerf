@@ -10,9 +10,9 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,6 +41,11 @@ const JOURNAL_VERSION: u64 = 1;
 const CHECKPOINT_INTERVAL: u64 = 32;
 const MAX_HISTORY_ENTRIES: usize = 256;
 const MAX_RECEIPTS: usize = 1024;
+/// Maximum duration of one bounded rendered-preview request.
+pub const MAX_RENDER_RANGE_SECONDS: f64 = 120.0;
+const RENDER_CANCEL_FILE_PREFIX: &str = ".cut-render-";
+const RENDER_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const RENDER_PROGRESS_QUEUE_CAPACITY: usize = 128;
 
 /// The largest JSONL request accepted by the local IPC boundary.
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
@@ -112,6 +117,15 @@ impl EndpointAddress {
 fn canonical_project_directory(directory: &Path) -> Result<PathBuf, RuntimeError> {
     fs::create_dir_all(directory).map_err(io_error)?;
     directory.canonicalize().map_err(io_error)
+}
+
+/// Return the project-local cancellation marker for one durable render job.
+///
+/// The marker is an execution signal, not project data. It lets a worker in a
+/// separate client process deliver cancellation to the exact engine process
+/// that owns the job's FFmpeg child.
+pub fn render_cancel_path(directory: &Path, job_id: &str) -> PathBuf {
+    directory.join(format!("{RENDER_CANCEL_FILE_PREFIX}{job_id}.cancel"))
 }
 
 #[cfg(unix)]
@@ -364,6 +378,124 @@ pub struct ProposalChange {
     pub after: Value,
 }
 
+/// A finite time interval carried by a semantic proposal impact.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposalTimeRange {
+    pub start: f64,
+    pub end: f64,
+}
+
+/// A video-domain meaning derived from a staged typed command.
+///
+/// The raw [`ProposalChange`] list remains available for diagnostics and wire
+/// compatibility. These impacts are the stable surface that native clients
+/// use for review and timeline visualization.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ProposalImpact {
+    TrackAdded {
+        track_id: String,
+        index: usize,
+    },
+    TrackRemoved {
+        track_id: String,
+        index: usize,
+    },
+    TrackReordered {
+        track_id: String,
+        from_index: usize,
+        to_index: usize,
+    },
+    ClipAdded {
+        clip_id: String,
+        track_id: String,
+        timeline: ProposalTimeRange,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source: Option<ProposalTimeRange>,
+    },
+    ClipRemoved {
+        clip_id: String,
+        track_id: String,
+        timeline: ProposalTimeRange,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source: Option<ProposalTimeRange>,
+    },
+    ClipMoved {
+        clip_id: String,
+        from_track_id: String,
+        from: ProposalTimeRange,
+        to_track_id: String,
+        to: ProposalTimeRange,
+    },
+    ClipTrimmed {
+        clip_id: String,
+        track_id: String,
+        before: ProposalTimeRange,
+        after: ProposalTimeRange,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source_before: Option<ProposalTimeRange>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source_after: Option<ProposalTimeRange>,
+    },
+    ClipPropertyChanged {
+        clip_id: String,
+        track_id: String,
+        property: String,
+        before: Value,
+        after: Value,
+    },
+    OverlayAdded {
+        overlay_id: String,
+        index: usize,
+        overlay_kind: String,
+    },
+    OverlayRemoved {
+        overlay_id: String,
+        index: usize,
+        overlay_kind: String,
+    },
+    OverlayChanged {
+        overlay_id: String,
+        overlay_kind: String,
+        before: Value,
+        after: Value,
+    },
+    ProjectSettingChanged {
+        property: String,
+        before: Value,
+        after: Value,
+    },
+    Unclassified {
+        path: String,
+        before: Value,
+        after: Value,
+    },
+}
+
+/// Whether a pending proposal still targets the canonical project revision.
+///
+/// Older checkpoints omit this field and therefore deserialize as `Current`.
+/// Runtime snapshots always recompute it from the proposal base revision so
+/// every adapter receives the same explicit stale state.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProposalFreshness {
+    #[default]
+    Current,
+    Stale,
+}
+
+impl ProposalFreshness {
+    fn is_current(value: &Self) -> bool {
+        *value == Self::Current
+    }
+}
+
 /// Proposal lifecycle owned by the canonical runtime.  Terminal states stay
 /// in memory so repeating an accept/reject request converges without another
 /// project mutation; only `Pending` exposes the proposed command and diff.
@@ -379,6 +511,13 @@ pub enum PendingProposal {
         diff: Vec<ProposalChange>,
         #[serde(rename = "diffTruncated", alias = "diff_truncated")]
         diff_truncated: bool,
+        #[serde(default, skip_serializing_if = "ProposalFreshness::is_current")]
+        freshness: ProposalFreshness,
+        /// Semantic impacts are optional for checkpoints written before this
+        /// field existed. `None` is represented as an unavailable semantic
+        /// projection by clients; new proposals always write `Some`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        impacts: Option<Vec<ProposalImpact>>,
     },
     Accepted {
         #[serde(rename = "proposalId", alias = "proposal_id")]
@@ -396,6 +535,43 @@ pub enum PendingProposal {
     },
 }
 
+/// A bounded project-time range rendered for a preview job.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderRange {
+    pub start: f64,
+    pub duration: f64,
+}
+
+impl RenderRange {
+    /// Validate a positive, bounded project-time range.
+    pub fn new(start: f64, duration: f64) -> Result<Self, RuntimeError> {
+        if !start.is_finite()
+            || start < 0.0
+            || !duration.is_finite()
+            || duration <= 0.0
+            || duration > MAX_RENDER_RANGE_SECONDS
+            || !(start + duration).is_finite()
+        {
+            return Err(RuntimeError::new(
+                "INVALID_RENDER_RANGE",
+                format!(
+                    "render range requires start >= 0, 0 < duration <= {MAX_RENDER_RANGE_SECONDS}s"
+                ),
+            ));
+        }
+        Ok(Self { start, duration })
+    }
+
+    pub fn end(&self) -> f64 {
+        self.start + self.duration
+    }
+}
+
+fn default_render_progress() -> f64 {
+    0.0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderJob {
@@ -404,6 +580,10 @@ pub struct RenderJob {
     pub output_url: Option<String>,
     pub output_path: Option<String>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub range: Option<RenderRange>,
+    #[serde(default = "default_render_progress")]
+    pub progress: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -584,6 +764,10 @@ struct Runtime {
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum RuntimeRequest {
     GetState,
+    GetProposalPreview {
+        #[serde(rename = "proposalId")]
+        proposal_id: String,
+    },
     Apply {
         actor: String,
         #[serde(rename = "idempotencyKey")]
@@ -618,6 +802,10 @@ pub enum RuntimeRequest {
     },
     StartRender {
         quality: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration: Option<f64>,
     },
     GetRender {
         #[serde(rename = "jobId")]
@@ -630,6 +818,8 @@ pub enum RuntimeRequest {
         error: Option<String>,
         #[serde(rename = "outputUrl")]
         output_url: Option<String>,
+        #[serde(default)]
+        progress: Option<f64>,
     },
     CancelRender {
         #[serde(rename = "jobId")]
@@ -766,6 +956,10 @@ impl Serialize for RequestEnvelope {
 #[derive(Debug, Clone)]
 pub enum RuntimeResponse {
     State(StateSnapshot),
+    ProposalPreview {
+        before: Value,
+        after: Value,
+    },
     Import {
         state: StateSnapshot,
         source_id: String,
@@ -836,6 +1030,18 @@ impl RuntimeHandle {
             _ => Err(RuntimeError::new(
                 "RUNTIME_PROTOCOL_ERROR",
                 "expected state response",
+            )),
+        }
+    }
+
+    pub fn proposal_preview(&self, proposal_id: &str) -> Result<(Value, Value), RuntimeError> {
+        match self.request(RuntimeRequest::GetProposalPreview {
+            proposal_id: proposal_id.to_owned(),
+        })? {
+            RuntimeResponse::ProposalPreview { before, after } => Ok((before, after)),
+            _ => Err(RuntimeError::new(
+                "RUNTIME_PROTOCOL_ERROR",
+                "expected proposal-preview response",
             )),
         }
     }
@@ -911,8 +1117,21 @@ impl RuntimeHandle {
     }
 
     pub fn start_render(&self, quality: &str) -> Result<(RenderJob, Value, PathBuf), RuntimeError> {
+        self.start_render_range(quality, None)
+    }
+
+    pub fn start_render_range(
+        &self,
+        quality: &str,
+        range: Option<RenderRange>,
+    ) -> Result<(RenderJob, Value, PathBuf), RuntimeError> {
+        let (start, duration) = range
+            .map(|range| (Some(range.start), Some(range.duration)))
+            .unwrap_or((None, None));
         match self.request(RuntimeRequest::StartRender {
             quality: quality.to_owned(),
+            start,
+            duration,
         })? {
             RuntimeResponse::RenderStarted {
                 job,
@@ -945,11 +1164,23 @@ impl RuntimeHandle {
         error: Option<String>,
         output_url: Option<String>,
     ) -> Result<(), RuntimeError> {
+        self.update_job_with_progress(job_id, status, error, output_url, None)
+    }
+
+    pub fn update_job_with_progress(
+        &self,
+        job_id: &str,
+        status: &str,
+        error: Option<String>,
+        output_url: Option<String>,
+        progress: Option<f64>,
+    ) -> Result<(), RuntimeError> {
         match self.request(RuntimeRequest::UpdateJob {
             job_id: job_id.to_owned(),
             status: status.to_owned(),
             error,
             output_url,
+            progress,
         })? {
             RuntimeResponse::Empty => Ok(()),
             _ => Err(RuntimeError::new(
@@ -1129,6 +1360,18 @@ impl RuntimeClient {
         }
     }
 
+    pub fn proposal_preview(&self, proposal_id: &str) -> Result<(Value, Value), RuntimeError> {
+        match self.request(RuntimeRequest::GetProposalPreview {
+            proposal_id: proposal_id.to_owned(),
+        })? {
+            RuntimeResponse::ProposalPreview { before, after } => Ok((before, after)),
+            _ => Err(RuntimeError::new(
+                "RUNTIME_PROTOCOL_ERROR",
+                "expected proposal-preview response",
+            )),
+        }
+    }
+
     pub fn get_state(&self) -> Result<StateSnapshot, RuntimeError> {
         match self.request(RuntimeRequest::GetState)? {
             RuntimeResponse::State(state) => Ok(state),
@@ -1210,8 +1453,21 @@ impl RuntimeClient {
     }
 
     pub fn start_render(&self, quality: &str) -> Result<(RenderJob, Value, PathBuf), RuntimeError> {
+        self.start_render_range(quality, None)
+    }
+
+    pub fn start_render_range(
+        &self,
+        quality: &str,
+        range: Option<RenderRange>,
+    ) -> Result<(RenderJob, Value, PathBuf), RuntimeError> {
+        let (start, duration) = range
+            .map(|range| (Some(range.start), Some(range.duration)))
+            .unwrap_or((None, None));
         match self.request(RuntimeRequest::StartRender {
             quality: quality.to_owned(),
+            start,
+            duration,
         })? {
             RuntimeResponse::RenderStarted {
                 job,
@@ -1244,11 +1500,23 @@ impl RuntimeClient {
         error: Option<String>,
         output_url: Option<String>,
     ) -> Result<(), RuntimeError> {
+        self.update_job_with_progress(job_id, status, error, output_url, None)
+    }
+
+    pub fn update_job_with_progress(
+        &self,
+        job_id: &str,
+        status: &str,
+        error: Option<String>,
+        output_url: Option<String>,
+        progress: Option<f64>,
+    ) -> Result<(), RuntimeError> {
         match self.request(RuntimeRequest::UpdateJob {
             job_id: job_id.to_owned(),
             status: status.to_owned(),
             error,
             output_url,
+            progress,
         })? {
             RuntimeResponse::Empty => Ok(()),
             _ => Err(RuntimeError::new(
@@ -1478,6 +1746,7 @@ fn request_has_stable_idempotency_key(request: &RuntimeRequest) -> bool {
             ..
         } => !idempotency_key.trim().is_empty(),
         RuntimeRequest::GetState
+        | RuntimeRequest::GetProposalPreview { .. }
         | RuntimeRequest::StartRender { .. }
         | RuntimeRequest::GetRender { .. }
         | RuntimeRequest::UpdateJob { .. }
@@ -1528,6 +1797,12 @@ fn decode_response(value: &Value, expected_id: &str) -> Result<RuntimeResponse, 
             .cloned()
             .and_then(|error| serde_json::from_value::<RuntimeError>(error).ok())
             .unwrap_or_else(|| RuntimeError::new("RUNTIME_ERROR", "runtime request failed")));
+    }
+    if let (Some(before), Some(after)) = (object.get("beforeProject"), object.get("afterProject")) {
+        return Ok(RuntimeResponse::ProposalPreview {
+            before: before.clone(),
+            after: after.clone(),
+        });
     }
     if let Some(state) = object.get("state") {
         let state = serde_json::from_value::<StateSnapshot>(state.clone())
@@ -1649,6 +1924,13 @@ pub fn response_value(id: &str, result: Result<RuntimeResponse, RuntimeError>) -
         Ok(RuntimeResponse::State(state)) => {
             json!({ "protocolVersion": RequestEnvelope::PROTOCOL_VERSION, "id": id, "ok": true, "state": state })
         }
+        Ok(RuntimeResponse::ProposalPreview { before, after }) => json!({
+            "protocolVersion": RequestEnvelope::PROTOCOL_VERSION,
+            "id": id,
+            "ok": true,
+            "beforeProject": before,
+            "afterProject": after
+        }),
         Ok(RuntimeResponse::Import {
             state,
             source_id,
@@ -2144,7 +2426,22 @@ impl Runtime {
             can_undo: !past.is_empty(),
             can_redo: !future.is_empty(),
             sources,
-            pending_proposal: proposal.as_ref().map(|record| record.lifecycle.clone()),
+            pending_proposal: proposal.as_ref().map(|record| {
+                let mut lifecycle = record.lifecycle.clone();
+                if let PendingProposal::Pending {
+                    base_revision,
+                    freshness,
+                    ..
+                } = &mut lifecycle
+                {
+                    *freshness = if *base_revision == revision {
+                        ProposalFreshness::Current
+                    } else {
+                        ProposalFreshness::Stale
+                    };
+                }
+                lifecycle
+            }),
             source_version: self.source_version,
             projection_status: self.projection_status.as_str().into(),
         }
@@ -2490,6 +2787,7 @@ impl Runtime {
         let before_value = project_value(&self.project);
         let candidate_value = project_value(&candidate);
         let (diff, diff_truncated) = structured_diff(&before_value, &candidate_value);
+        let impacts = derive_proposal_impacts(&self.project, &candidate, &diff, diff_truncated);
         let proposal_id = format!("proposal-{}", unique_id());
         let proposal = Some(ProposalRecord {
             lifecycle: PendingProposal::Pending {
@@ -2498,6 +2796,8 @@ impl Runtime {
                 command,
                 diff,
                 diff_truncated,
+                freshness: ProposalFreshness::Current,
+                impacts: Some(impacts),
             },
             request_key: request_key.to_owned(),
             fingerprint,
@@ -3104,11 +3404,32 @@ impl Runtime {
         &mut self,
         quality: &str,
     ) -> Result<(RenderJob, Value, PathBuf), RuntimeError> {
+        self.start_render_range(quality, None)
+    }
+
+    pub fn start_render_range(
+        &mut self,
+        quality: &str,
+        range: Option<RenderRange>,
+    ) -> Result<(RenderJob, Value, PathBuf), RuntimeError> {
         if !matches!(quality, "preview" | "full") {
             return Err(RuntimeError::new(
                 "INVALID_RENDER_QUALITY",
                 "quality must be preview or full",
             ));
+        }
+        if let Some(range) = range.as_ref() {
+            RenderRange::new(range.start, range.duration)?;
+            if range.end() > self.project.duration() + 1e-9 {
+                return Err(RuntimeError::new(
+                    "INVALID_RENDER_RANGE",
+                    format!(
+                        "render range ends at {:.3}s but project duration is {:.3}s",
+                        range.end(),
+                        self.project.duration()
+                    ),
+                ));
+            }
         }
         let id = format!("render-{}", unique_id());
         let output = self
@@ -3116,17 +3437,65 @@ impl Runtime {
             .parent()
             .unwrap_or(Path::new("."))
             .join(format!("{id}.mp4"));
+        let cancel_path =
+            render_cancel_path(self.project_path.parent().unwrap_or(Path::new(".")), &id);
+        match fs::remove_file(&cancel_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(io_error(error)),
+        }
         let job = RenderJob {
             job_id: id.clone(),
             status: "queued".into(),
             output_url: None,
             output_path: Some(output.to_string_lossy().into_owned()),
             error: None,
+            range,
+            progress: 0.0,
         };
         let mut candidate = self.durable_state();
         candidate.jobs.insert(id, job.clone());
         self.commit_candidate(candidate, JournalEvent::Job { job: job.clone() })?;
         Ok((job, project_value(&self.project), output))
+    }
+
+    pub fn proposal_preview(&self, proposal_id: &str) -> Result<(Value, Value), RuntimeError> {
+        let record = self.proposal.as_ref().ok_or_else(|| {
+            RuntimeError::new(
+                "PROPOSAL_NOT_FOUND",
+                format!("proposal not found: {proposal_id}"),
+            )
+        })?;
+        let PendingProposal::Pending {
+            proposal_id: current_id,
+            base_revision,
+            command,
+            ..
+        } = &record.lifecycle
+        else {
+            return Err(RuntimeError::new(
+                "PROPOSAL_NOT_PENDING",
+                format!("proposal is not pending: {proposal_id}"),
+            ));
+        };
+        if current_id != proposal_id {
+            return Err(RuntimeError::new(
+                "PROPOSAL_NOT_FOUND",
+                format!("proposal not found: {proposal_id}"),
+            ));
+        }
+        if *base_revision != self.revision {
+            return Err(RuntimeError::new(
+                "PROPOSAL_STALE",
+                format!(
+                    "proposal was created at revision {base_revision}, current revision is {}",
+                    self.revision
+                ),
+            ));
+        }
+        let command = cut_domain::parse_command(command).map_err(domain_error)?;
+        let after = cut_domain::apply_command(&self.project, &command).map_err(domain_error)?;
+        Ok((project_value(&self.project), project_value(&after)))
     }
 
     pub fn import_media(
@@ -3371,6 +3740,17 @@ impl Runtime {
         error: Option<String>,
         output_url: Option<String>,
     ) -> Result<(), RuntimeError> {
+        self.update_job_with_progress(id, status, error, output_url, None)
+    }
+
+    pub fn update_job_with_progress(
+        &mut self,
+        id: &str,
+        status: &str,
+        error: Option<String>,
+        output_url: Option<String>,
+        progress: Option<f64>,
+    ) -> Result<(), RuntimeError> {
         if !matches!(
             status,
             "queued" | "running" | "completed" | "failed" | "cancelled"
@@ -3397,6 +3777,18 @@ impl Runtime {
         job.status = status.into();
         job.error = error;
         job.output_url = output_url;
+        if let Some(progress) = progress {
+            if !progress.is_finite() || !(0.0..=1.0).contains(&progress) {
+                return Err(RuntimeError::new(
+                    "INVALID_RENDER_PROGRESS",
+                    "render progress must be finite and between 0 and 1",
+                ));
+            }
+            job.progress = progress;
+        }
+        if status == "completed" {
+            job.progress = 1.0;
+        }
         let mut candidate = self.durable_state();
         candidate.jobs.insert(id.to_owned(), job.clone());
         self.commit_candidate(candidate, JournalEvent::Job { job })?;
@@ -3412,6 +3804,9 @@ impl Runtime {
     pub fn cancel_render(&mut self, id: &str) -> Result<RenderJob, RuntimeError> {
         let current = self.render_job(id)?;
         if matches!(current.status.as_str(), "queued" | "running") {
+            let cancel_path =
+                render_cancel_path(self.project_path.parent().unwrap_or(Path::new(".")), id);
+            fs::write(&cancel_path, b"cancelled\n").map_err(io_error)?;
             self.update_job(
                 id,
                 "cancelled",
@@ -3442,6 +3837,10 @@ impl Runtime {
         self.refresh_projection_status();
         match request {
             RuntimeRequest::GetState => Ok(RuntimeResponse::State(self.snapshot())),
+            RuntimeRequest::GetProposalPreview { proposal_id } => {
+                let (before, after) = self.proposal_preview(&proposal_id)?;
+                Ok(RuntimeResponse::ProposalPreview { before, after })
+            }
             RuntimeRequest::Apply {
                 actor,
                 idempotency_key,
@@ -3503,8 +3902,22 @@ impl Runtime {
                     clip_id,
                 })
             }
-            RuntimeRequest::StartRender { quality } => {
-                let (job, project, output) = self.start_render(&quality)?;
+            RuntimeRequest::StartRender {
+                quality,
+                start,
+                duration,
+            } => {
+                let range = match (start, duration) {
+                    (None, None) => None,
+                    (Some(start), Some(duration)) => Some(RenderRange::new(start, duration)?),
+                    _ => {
+                        return Err(RuntimeError::new(
+                            "INVALID_RENDER_RANGE",
+                            "render start and duration must be provided together",
+                        ))
+                    }
+                };
+                let (job, project, output) = self.start_render_range(&quality, range)?;
                 Ok(RuntimeResponse::RenderStarted {
                     job,
                     project,
@@ -3519,8 +3932,9 @@ impl Runtime {
                 status,
                 error,
                 output_url,
+                progress,
             } => {
-                self.update_job(&job_id, &status, error, output_url)?;
+                self.update_job_with_progress(&job_id, &status, error, output_url, progress)?;
                 Ok(RuntimeResponse::Empty)
             }
             RuntimeRequest::CancelRender { job_id } => {
@@ -4473,6 +4887,393 @@ fn collect_structured_diff(
     });
 }
 
+const MAX_PROPOSAL_IMPACTS: usize = 128;
+
+fn derive_proposal_impacts(
+    before: &Project,
+    after: &Project,
+    diff: &[ProposalChange],
+    diff_truncated: bool,
+) -> Vec<ProposalImpact> {
+    let mut impacts = Vec::new();
+    let before_track_indices: BTreeMap<&str, usize> = before
+        .tracks
+        .iter()
+        .enumerate()
+        .map(|(index, track)| (track.id.as_str(), index))
+        .collect();
+    let after_track_indices: BTreeMap<&str, usize> = after
+        .tracks
+        .iter()
+        .enumerate()
+        .map(|(index, track)| (track.id.as_str(), index))
+        .collect();
+
+    for (index, track) in after.tracks.iter().enumerate() {
+        if !before_track_indices.contains_key(track.id.as_str())
+            && !push_impact(
+                &mut impacts,
+                ProposalImpact::TrackAdded {
+                    track_id: track.id.to_string(),
+                    index,
+                },
+            )
+        {
+            return impacts;
+        }
+    }
+    for (index, track) in before.tracks.iter().enumerate() {
+        if !after_track_indices.contains_key(track.id.as_str())
+            && !push_impact(
+                &mut impacts,
+                ProposalImpact::TrackRemoved {
+                    track_id: track.id.to_string(),
+                    index,
+                },
+            )
+        {
+            return impacts;
+        }
+    }
+    for (to_index, track) in after.tracks.iter().enumerate() {
+        let Some(&from_index) = before_track_indices.get(track.id.as_str()) else {
+            continue;
+        };
+        if from_index != to_index
+            && !push_impact(
+                &mut impacts,
+                ProposalImpact::TrackReordered {
+                    track_id: track.id.to_string(),
+                    from_index,
+                    to_index,
+                },
+            )
+        {
+            return impacts;
+        }
+    }
+
+    let before_clips = clip_locations(before);
+    let after_clips = clip_locations(after);
+    for (clip_id, location) in &after_clips {
+        if !before_clips.contains_key(clip_id)
+            && !push_impact(
+                &mut impacts,
+                ProposalImpact::ClipAdded {
+                    clip_id: clip_id.clone(),
+                    track_id: location.track_id.clone(),
+                    timeline: clip_timeline_range(location.clip),
+                    source: clip_source_range(location.clip),
+                },
+            )
+        {
+            return impacts;
+        }
+    }
+    for (clip_id, location) in &before_clips {
+        if !after_clips.contains_key(clip_id)
+            && !push_impact(
+                &mut impacts,
+                ProposalImpact::ClipRemoved {
+                    clip_id: clip_id.clone(),
+                    track_id: location.track_id.clone(),
+                    timeline: clip_timeline_range(location.clip),
+                    source: clip_source_range(location.clip),
+                },
+            )
+        {
+            return impacts;
+        }
+    }
+    for (clip_id, before_location) in &before_clips {
+        let Some(after_location) = after_clips.get(clip_id) else {
+            continue;
+        };
+        let before_timeline = clip_timeline_range(before_location.clip);
+        let after_timeline = clip_timeline_range(after_location.clip);
+        let before_source = clip_source_range(before_location.clip);
+        let after_source = clip_source_range(after_location.clip);
+        let timeline_duration_changed = (before_timeline.end - before_timeline.start)
+            != (after_timeline.end - after_timeline.start);
+        let trim_changed = before_source != after_source || timeline_duration_changed;
+        let start_changed = before_timeline.start != after_timeline.start;
+        let track_changed = before_location.track_id != after_location.track_id;
+        if (track_changed || start_changed)
+            && !push_impact(
+                &mut impacts,
+                ProposalImpact::ClipMoved {
+                    clip_id: clip_id.clone(),
+                    from_track_id: before_location.track_id.clone(),
+                    from: before_timeline.clone(),
+                    to_track_id: after_location.track_id.clone(),
+                    to: after_timeline.clone(),
+                },
+            )
+        {
+            return impacts;
+        }
+        if trim_changed
+            && !push_impact(
+                &mut impacts,
+                ProposalImpact::ClipTrimmed {
+                    clip_id: clip_id.clone(),
+                    track_id: after_location.track_id.clone(),
+                    before: before_timeline.clone(),
+                    after: after_timeline.clone(),
+                    source_before: before_source,
+                    source_after: after_source,
+                },
+            )
+        {
+            return impacts;
+        }
+        if !append_clip_property_impacts(
+            &mut impacts,
+            clip_id,
+            after_location.track_id.as_str(),
+            before_location.clip,
+            after_location.clip,
+        ) {
+            return impacts;
+        }
+    }
+
+    let before_overlays = overlay_locations(before);
+    let after_overlays = overlay_locations(after);
+    for (overlay_id, (overlay, index)) in &after_overlays {
+        if !before_overlays.contains_key(overlay_id)
+            && !push_impact(
+                &mut impacts,
+                ProposalImpact::OverlayAdded {
+                    overlay_id: overlay_id.clone(),
+                    index: *index,
+                    overlay_kind: overlay.kind().unwrap_or("overlay").to_owned(),
+                },
+            )
+        {
+            return impacts;
+        }
+    }
+    for (overlay_id, (overlay, index)) in &before_overlays {
+        if !after_overlays.contains_key(overlay_id)
+            && !push_impact(
+                &mut impacts,
+                ProposalImpact::OverlayRemoved {
+                    overlay_id: overlay_id.clone(),
+                    index: *index,
+                    overlay_kind: overlay.kind().unwrap_or("overlay").to_owned(),
+                },
+            )
+        {
+            return impacts;
+        }
+    }
+    for (overlay_id, (before_overlay, _)) in &before_overlays {
+        let Some((after_overlay, _)) = after_overlays.get(overlay_id) else {
+            continue;
+        };
+        if before_overlay == after_overlay {
+            continue;
+        }
+        if !push_impact(
+            &mut impacts,
+            ProposalImpact::OverlayChanged {
+                overlay_id: overlay_id.clone(),
+                overlay_kind: after_overlay.kind().unwrap_or("overlay").to_owned(),
+                before: serde_json::to_value(before_overlay).expect("overlay serializes"),
+                after: serde_json::to_value(after_overlay).expect("overlay serializes"),
+            },
+        ) {
+            return impacts;
+        }
+    }
+
+    append_project_setting_impacts(&mut impacts, before, after);
+    if impacts.is_empty() && (!diff.is_empty() || diff_truncated) {
+        for change in diff {
+            if !push_impact(
+                &mut impacts,
+                ProposalImpact::Unclassified {
+                    path: change.path.clone(),
+                    before: change.before.clone(),
+                    after: change.after.clone(),
+                },
+            ) {
+                break;
+            }
+        }
+    }
+    impacts
+}
+
+fn push_impact(impacts: &mut Vec<ProposalImpact>, impact: ProposalImpact) -> bool {
+    if impacts.len() >= MAX_PROPOSAL_IMPACTS {
+        return false;
+    }
+    impacts.push(impact);
+    true
+}
+
+struct ClipLocation<'a> {
+    track_id: String,
+    clip: &'a cut_domain::Clip,
+}
+
+fn clip_locations<'a>(project: &'a Project) -> BTreeMap<String, ClipLocation<'a>> {
+    project
+        .tracks
+        .iter()
+        .flat_map(|track| {
+            track.clips.iter().map(|clip| {
+                (
+                    clip.id.to_string(),
+                    ClipLocation {
+                        track_id: track.id.to_string(),
+                        clip,
+                    },
+                )
+            })
+        })
+        .collect()
+}
+
+fn clip_timeline_range(clip: &cut_domain::Clip) -> ProposalTimeRange {
+    let start = if clip.timeline_start.is_finite() {
+        clip.timeline_start.max(0.0)
+    } else {
+        0.0
+    };
+    let duration = clip
+        .timeline_duration()
+        .filter(|duration| duration.is_finite() && *duration > 0.0)
+        .unwrap_or(0.0);
+    ProposalTimeRange {
+        start,
+        end: start + duration,
+    }
+}
+
+fn clip_source_range(clip: &cut_domain::Clip) -> Option<ProposalTimeRange> {
+    match (clip.source_in, clip.source_out) {
+        (Some(start), Some(end)) if start.is_finite() && end.is_finite() && end > start => {
+            Some(ProposalTimeRange { start, end })
+        }
+        _ => None,
+    }
+}
+
+fn append_clip_property_impacts(
+    impacts: &mut Vec<ProposalImpact>,
+    clip_id: &str,
+    track_id: &str,
+    before: &cut_domain::Clip,
+    after: &cut_domain::Clip,
+) -> bool {
+    let before = serde_json::to_value(before).expect("clip serializes");
+    let after = serde_json::to_value(after).expect("clip serializes");
+    let mut keys: BTreeSet<String> = before
+        .as_object()
+        .into_iter()
+        .flat_map(|object| object.keys().cloned())
+        .collect();
+    keys.extend(
+        after
+            .as_object()
+            .into_iter()
+            .flat_map(|object| object.keys().cloned()),
+    );
+    for property in keys {
+        if matches!(
+            property.as_str(),
+            "id" | "timelineStart" | "duration" | "in" | "out"
+        ) {
+            continue;
+        }
+        let before_value = before.get(&property).cloned().unwrap_or(Value::Null);
+        let after_value = after.get(&property).cloned().unwrap_or(Value::Null);
+        if before_value == after_value {
+            continue;
+        }
+        if !push_impact(
+            impacts,
+            ProposalImpact::ClipPropertyChanged {
+                clip_id: clip_id.to_owned(),
+                track_id: track_id.to_owned(),
+                property,
+                before: before_value,
+                after: after_value,
+            },
+        ) {
+            return false;
+        }
+    }
+    true
+}
+
+fn overlay_locations(project: &Project) -> BTreeMap<String, (&cut_domain::Overlay, usize)> {
+    project
+        .overlays
+        .iter()
+        .enumerate()
+        .map(|(index, overlay)| {
+            let id = overlay
+                .id()
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("index:{index}"));
+            (id, (overlay, index))
+        })
+        .collect()
+}
+
+fn append_project_setting_impacts(
+    impacts: &mut Vec<ProposalImpact>,
+    before: &Project,
+    after: &Project,
+) {
+    const COLLECTIONS: &[&str] = &[
+        "sources",
+        "tracks",
+        "overlays",
+        "gaps",
+        "transitions",
+        "effects",
+        "markers",
+    ];
+    let before = project_value(before);
+    let after = project_value(after);
+    let mut keys: BTreeSet<String> = before
+        .as_object()
+        .into_iter()
+        .flat_map(|object| object.keys().cloned())
+        .collect();
+    keys.extend(
+        after
+            .as_object()
+            .into_iter()
+            .flat_map(|object| object.keys().cloned()),
+    );
+    for property in keys {
+        if COLLECTIONS.contains(&property.as_str()) {
+            continue;
+        }
+        let before_value = before.get(&property).cloned().unwrap_or(Value::Null);
+        let after_value = after.get(&property).cloned().unwrap_or(Value::Null);
+        if before_value == after_value {
+            continue;
+        }
+        if !push_impact(
+            impacts,
+            ProposalImpact::ProjectSettingChanged {
+                property,
+                before: before_value,
+                after: after_value,
+            },
+        ) {
+            return;
+        }
+    }
+}
+
 fn unique_id() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -4521,29 +5322,166 @@ pub fn run_render(
     output: PathBuf,
     draft: bool,
 ) -> Result<(), RuntimeError> {
+    run_render_with_cancel_file(id, project, output, draft, None, None)
+}
+
+/// Run one render worker with an optional bounded range and job-specific
+/// cancellation marker. The runtime remains the durable owner of job state;
+/// this helper only owns the short-lived engine process.
+pub fn run_render_with_cancel_file(
+    id: String,
+    project: Value,
+    output: PathBuf,
+    draft: bool,
+    range: Option<RenderRange>,
+    cancel_file: Option<PathBuf>,
+) -> Result<(), RuntimeError> {
+    run_render_with_cancel_file_progress(id, project, output, draft, range, cancel_file, |_| {})
+}
+
+/// Run one render worker and forward bounded engine progress to the caller.
+/// The callback runs on this worker thread and must not block on UI state.
+pub fn run_render_with_cancel_file_progress<F>(
+    id: String,
+    project: Value,
+    output: PathBuf,
+    draft: bool,
+    range: Option<RenderRange>,
+    cancel_file: Option<PathBuf>,
+    mut on_progress: F,
+) -> Result<(), RuntimeError>
+where
+    F: FnMut(f64),
+{
     let binary = engine_binary()?;
+    let cancel_file_for_result = cancel_file.clone();
+    let mut args = vec![
+        "render-v2".to_owned(),
+        "--run".to_owned(),
+        "--output".to_owned(),
+        output.to_string_lossy().into_owned(),
+    ];
+    if draft {
+        args.push("--draft".into());
+    }
+    if let Some(range) = range {
+        RenderRange::new(range.start, range.duration)?;
+        args.extend([
+            "--start".into(),
+            range.start.to_string(),
+            "--duration".into(),
+            range.duration.to_string(),
+        ]);
+    }
+    if let Some(cancel_file) = cancel_file.as_ref() {
+        args.extend([
+            "--cancel-file".into(),
+            cancel_file.to_string_lossy().into_owned(),
+        ]);
+    }
     let mut child = Command::new(binary)
-        .args(["render-v2", "--run", "--output"])
-        .arg(&output)
-        .args(if draft { vec!["--draft"] } else { Vec::new() })
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(io_error)?;
     if let Some(mut stdin) = child.stdin.take() {
         serde_json::to_writer(&mut stdin, &project)
             .map_err(|error| RuntimeError::new("ENGINE_PROTOCOL_ERROR", error.to_string()))?;
     }
-    let status = child.wait().map_err(io_error)?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(RuntimeError::new(
+    let stderr = child.stderr.take();
+    let (sender, receiver) = mpsc::sync_channel(RENDER_PROGRESS_QUEUE_CAPACITY);
+    let reader = thread::spawn(move || {
+        let Some(stderr) = stderr else {
+            return;
+        };
+        for line in BufReader::new(stderr)
+            .lines()
+            .map_while(std::result::Result::ok)
+        {
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    loop {
+        for line in receiver.try_iter() {
+            if let Some(progress) = render_progress_line(&line) {
+                on_progress(progress);
+            }
+        }
+        let status = match child.try_wait() {
+            Ok(status) => status,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                finish_render_progress_reader(reader, &receiver, &mut on_progress);
+                return Err(io_error(error));
+            }
+        };
+        let Some(status) = status else {
+            thread::sleep(RENDER_POLL_INTERVAL);
+            continue;
+        };
+        finish_render_progress_reader(reader, &receiver, &mut on_progress);
+        if status.success() {
+            if output.is_file() {
+                return Ok(());
+            }
+            return Err(RuntimeError::new(
+                "ENGINE_ERROR",
+                format!(
+                    "render job {id} completed without producing {}",
+                    output.display()
+                ),
+            ));
+        }
+        if cancel_file_for_result.is_some_and(|path| path.is_file()) {
+            return Err(RuntimeError::new(
+                "CANCELLED",
+                format!("render job {id} was cancelled"),
+            ));
+        }
+        return Err(RuntimeError::new(
             "ENGINE_ERROR",
             format!("render job {id} failed: cut-engine exited with {status}"),
-        ))
+        ));
     }
+}
+
+fn finish_render_progress_reader<F>(
+    reader: thread::JoinHandle<()>,
+    receiver: &Receiver<String>,
+    on_progress: &mut F,
+) where
+    F: FnMut(f64),
+{
+    while !reader.is_finished() {
+        drain_render_progress(receiver, on_progress);
+        thread::sleep(RENDER_POLL_INTERVAL);
+    }
+    let _ = reader.join();
+    drain_render_progress(receiver, on_progress);
+}
+
+fn drain_render_progress<F>(receiver: &Receiver<String>, on_progress: &mut F)
+where
+    F: FnMut(f64),
+{
+    for line in receiver.try_iter() {
+        if let Some(progress) = render_progress_line(&line) {
+            on_progress(progress);
+        }
+    }
+}
+
+fn render_progress_line(line: &str) -> Option<f64> {
+    serde_json::from_str::<Value>(line)
+        .ok()
+        .and_then(|value| value.get("progress").and_then(Value::as_f64))
+        .filter(|progress| progress.is_finite())
+        .map(|progress| progress.clamp(0.0, 1.0))
 }
 
 #[cfg(test)]
@@ -4654,7 +5592,14 @@ mod tests {
             )
             .unwrap();
         let proposal_id = match staged.pending_proposal.as_ref().unwrap() {
-            PendingProposal::Pending { proposal_id, .. } => proposal_id.clone(),
+            PendingProposal::Pending {
+                proposal_id,
+                freshness,
+                ..
+            } => {
+                assert_eq!(*freshness, ProposalFreshness::Current);
+                proposal_id.clone()
+            }
             _ => panic!("expected pending proposal"),
         };
         let rejected = runtime.reject_proposal(&proposal_id).unwrap();
@@ -4790,7 +5735,10 @@ mod tests {
         assert_eq!(error.code, "REVISION_CONFLICT");
         assert!(matches!(
             runtime.snapshot().pending_proposal,
-            Some(PendingProposal::Pending { .. })
+            Some(PendingProposal::Pending {
+                freshness: ProposalFreshness::Stale,
+                ..
+            })
         ));
     }
 
@@ -5004,6 +5952,13 @@ mod tests {
             }
         };
         let mut reopened = Runtime::open(&directory).unwrap();
+        assert!(matches!(
+            reopened.snapshot().pending_proposal,
+            Some(PendingProposal::Pending {
+                impacts: Some(impacts),
+                ..
+            }) if !impacts.is_empty()
+        ));
         let accepted = reopened
             .accept_proposal(&proposal_id, "ui", "accept-restart", 0)
             .unwrap();
@@ -5126,6 +6081,8 @@ mod tests {
                 after: json!("Cut"),
             }],
             diff_truncated: true,
+            freshness: ProposalFreshness::Current,
+            impacts: None,
         })
         .unwrap();
         assert_eq!(
@@ -5158,6 +6115,120 @@ mod tests {
                 "appliedRevision":3
             })
         );
+    }
+
+    #[test]
+    fn semantic_proposal_impacts_cover_clip_geometry_and_properties() {
+        let before = cut_domain::parse_project(&json!({
+            "version": 2,
+            "fps": 30.0,
+            "sources": [{"id":"source-1","path":"shot.mp4","duration":12.0}],
+            "tracks": [{
+                "id":"video-1",
+                "type":"video",
+                "clips": [{
+                    "id":"clip-1",
+                    "sourceId":"source-1",
+                    "in":0.0,
+                    "out":4.0,
+                    "timelineStart":1.0,
+                    "duration":4.0,
+                    "volume":1.0
+                }]
+            }],
+            "overlays": [],
+            "gaps": [],
+            "transitions": [],
+            "effects": [],
+            "markers": []
+        }))
+        .expect("valid project");
+        let after = cut_domain::parse_project(&json!({
+            "version": 2,
+            "fps": 30.0,
+            "sources": [{"id":"source-1","path":"shot.mp4","duration":12.0}],
+            "tracks": [{
+                "id":"video-1",
+                "type":"video",
+                "clips": [{
+                    "id":"clip-1",
+                    "sourceId":"source-1",
+                    "in":1.0,
+                    "out":4.0,
+                    "timelineStart":2.0,
+                    "duration":3.0,
+                    "volume":0.5
+                }]
+            }],
+            "overlays": [],
+            "gaps": [],
+            "transitions": [],
+            "effects": [],
+            "markers": []
+        }))
+        .expect("valid project");
+        let (diff, truncated) = structured_diff(&project_value(&before), &project_value(&after));
+        let impacts = derive_proposal_impacts(&before, &after, &diff, truncated);
+
+        assert!(impacts.iter().any(|impact| matches!(
+            impact,
+            ProposalImpact::ClipMoved {
+                clip_id,
+                from_track_id,
+                to_track_id,
+                from,
+                to,
+            } if clip_id == "clip-1"
+                && from_track_id == "video-1"
+                && to_track_id == "video-1"
+                && from.start == 1.0
+                && to.start == 2.0
+        )));
+        assert!(impacts.iter().any(|impact| matches!(
+            impact,
+            ProposalImpact::ClipTrimmed {
+                clip_id,
+                source_before: Some(source_before),
+                source_after: Some(source_after),
+                ..
+            } if clip_id == "clip-1"
+                && source_before.start == 0.0
+                && source_after.start == 1.0
+        )));
+        assert!(impacts.iter().any(|impact| matches!(
+            impact,
+            ProposalImpact::ClipPropertyChanged {
+                clip_id,
+                property,
+                before,
+                after,
+                ..
+            } if clip_id == "clip-1"
+                && property == "volume"
+                && before == &json!(1.0)
+                && after == &json!(0.5)
+        )));
+    }
+
+    #[test]
+    fn pending_proposal_without_impacts_remains_readable() {
+        let legacy = json!({
+            "status": "pending",
+            "proposalId": "legacy",
+            "baseRevision": 4,
+            "command": {"type":"batch","commands":[]},
+            "diff": [],
+            "diffTruncated": false
+        });
+        let decoded: PendingProposal = serde_json::from_value(legacy).expect("legacy proposal");
+        assert!(matches!(
+            decoded,
+            PendingProposal::Pending {
+                impacts: None,
+                proposal_id,
+                ..
+            } if proposal_id == "legacy"
+        ));
     }
 
     #[test]
@@ -5574,5 +6645,80 @@ mod tests {
         );
         drop(runtime);
         let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn render_cancellation_is_job_scoped_and_survives_restart() {
+        let directory =
+            std::env::temp_dir().join(format!("cut-runtime-job-cancel-{}", unique_id()));
+        let (cancelled_id, queued_id) = {
+            let mut runtime = Runtime::open(&directory).unwrap();
+            let (cancelled, _, _) = runtime.start_render("preview").unwrap();
+            let (queued, _, _) = runtime.start_render("preview").unwrap();
+            let cancel_path = render_cancel_path(&directory, &cancelled.job_id);
+            let queued_path = render_cancel_path(&directory, &queued.job_id);
+            let cancelled_job = runtime.cancel_render(&cancelled.job_id).unwrap();
+            assert_eq!(cancelled_job.status, "cancelled");
+            assert!(cancel_path.is_file());
+            assert!(!queued_path.is_file());
+            assert_eq!(runtime.render_job(&queued.job_id).unwrap().status, "queued");
+            (cancelled.job_id, queued.job_id)
+        };
+
+        let runtime = Runtime::open(&directory).unwrap();
+        assert_eq!(
+            runtime.render_job(&cancelled_id).unwrap().status,
+            "cancelled"
+        );
+        assert_eq!(runtime.render_job(&queued_id).unwrap().status, "failed");
+        drop(runtime);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn render_range_is_finite_and_bounded() {
+        assert!(RenderRange::new(0.0, MAX_RENDER_RANGE_SECONDS).is_ok());
+        assert_eq!(
+            RenderRange::new(0.0, MAX_RENDER_RANGE_SECONDS + 0.1)
+                .unwrap_err()
+                .code,
+            "INVALID_RENDER_RANGE"
+        );
+        assert!(RenderRange::new(f64::NAN, 1.0).is_err());
+    }
+
+    #[test]
+    fn proposal_preview_reconstructs_before_and_after_without_mutating_state() {
+        let mut runtime = runtime();
+        let staged = runtime
+            .stage_agent_proposal(
+                "preview-proposal",
+                0,
+                &[json!({
+                    "idempotencyKey": "preview-proposal",
+                    "commands": [{"type":"set_metadata","patch":{"title":"Preview"}}]
+                })],
+            )
+            .unwrap();
+        let proposal_id = match staged.pending_proposal.as_ref().unwrap() {
+            PendingProposal::Pending { proposal_id, .. } => proposal_id.clone(),
+            _ => panic!("expected pending proposal"),
+        };
+        let before_revision = runtime.snapshot().revision;
+        let (before, after) = runtime.proposal_preview(&proposal_id).unwrap();
+        assert_eq!(before["metadata"].get("title"), None);
+        assert_eq!(after["metadata"]["title"], "Preview");
+        assert_eq!(runtime.snapshot().revision, before_revision);
+
+        runtime
+            .apply(
+                json!({"type":"set_metadata","patch":{"other":true}}),
+                Some(0),
+            )
+            .unwrap();
+        assert_eq!(
+            runtime.proposal_preview(&proposal_id).unwrap_err().code,
+            "PROPOSAL_STALE"
+        );
     }
 }

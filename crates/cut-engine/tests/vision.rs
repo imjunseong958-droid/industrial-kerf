@@ -4,8 +4,8 @@ use cut_engine::vision::planning::{
     TrackingPlanInput, TrackingPlanOptions,
 };
 use cut_engine::vision::{
-    parse_and_normalize_tracking_output, NormalizedBoundingBox, NormalizedDetection,
-    NormalizeOptions, TrackId, UnknownLabelPolicy, VisionConfigError, VisionOutputError,
+    parse_and_normalize_tracking_output, NormalizeOptions, NormalizedBoundingBox,
+    NormalizedDetection, TrackId, UnknownLabelPolicy, VisionConfigError, VisionOutputError,
     VisionTarget,
 };
 use std::collections::HashMap;
@@ -80,7 +80,9 @@ fn rejects_stock_checkpoint_and_incomplete_mappings() {
         ..base_config()
     })
     .unwrap_err();
-    assert!(err.message.contains("all three targets (cam, chat, and content)"));
+    assert!(err
+        .message
+        .contains("all three targets (cam, chat, and content)"));
 
     let err = validate_yolo26_config(&Yolo26TrackingConfig {
         weights: "/tmp/custom.pt".to_string(),
@@ -92,7 +94,9 @@ fn rejects_stock_checkpoint_and_incomplete_mappings() {
         ..base_config()
     })
     .unwrap_err();
-    assert!(err.message.contains("labelMap key \"webcam\" is not supported"));
+    assert!(err
+        .message
+        .contains("labelMap key \"webcam\" is not supported"));
 }
 
 #[test]
@@ -115,7 +119,10 @@ fn accepts_custom_weights_and_the_identity_label_map() {
     .unwrap();
     assert_eq!(identity.label_map.get("cam"), Some(&VisionTarget::Cam));
     assert_eq!(identity.label_map.get("chat"), Some(&VisionTarget::Chat));
-    assert_eq!(identity.label_map.get("content"), Some(&VisionTarget::Content));
+    assert_eq!(
+        identity.label_map.get("content"),
+        Some(&VisionTarget::Content)
+    );
 
     let config = validate_yolo26_config(&Yolo26TrackingConfig {
         weights: " ./custom.pt ".to_string(),
@@ -130,7 +137,10 @@ fn accepts_custom_weights_and_the_identity_label_map() {
     assert_eq!(config.weights, "./custom.pt");
     assert_eq!(config.label_map.get("cam"), Some(&VisionTarget::Cam));
     assert_eq!(config.label_map.get("chat"), Some(&VisionTarget::Chat));
-    assert_eq!(config.label_map.get("content"), Some(&VisionTarget::Content));
+    assert_eq!(
+        config.label_map.get("content"),
+        Some(&VisionTarget::Content)
+    );
     assert_eq!(config.tracker, "bytetrack.yaml");
     assert_eq!(config.confidence, 0.25);
     assert_eq!(config.iou, 0.7);
@@ -251,13 +261,32 @@ fn normalizes_xyxy_xywh_and_object_boxes() {
     )
     .unwrap();
 
-    let boxes: Vec<_> = result.detections.iter().map(|item| item.bbox.clone()).collect();
+    let boxes: Vec<_> = result
+        .detections
+        .iter()
+        .map(|item| item.bbox.clone())
+        .collect();
     assert_eq!(
         boxes,
         vec![
-            NormalizedBoundingBox { x: 0.1, y: 0.1, width: 0.2, height: 0.2 },
-            NormalizedBoundingBox { x: 0.2, y: 0.3, width: 0.4, height: 0.2 },
-            NormalizedBoundingBox { x: 0.1, y: 0.1, width: 0.2, height: 0.4 },
+            NormalizedBoundingBox {
+                x: 0.1,
+                y: 0.1,
+                width: 0.2,
+                height: 0.2
+            },
+            NormalizedBoundingBox {
+                x: 0.2,
+                y: 0.3,
+                width: 0.4,
+                height: 0.2
+            },
+            NormalizedBoundingBox {
+                x: 0.1,
+                y: 0.1,
+                width: 0.2,
+                height: 0.4
+            },
         ]
     );
 }
@@ -271,7 +300,12 @@ fn keeps_cam_chat_content_segments_separate() {
                 VisionTarget::Chat,
                 0,
                 0.0,
-                NormalizedBoundingBox { x: 0.55, y: 0.1, width: 0.3, height: 0.3 },
+                NormalizedBoundingBox {
+                    x: 0.55,
+                    y: 0.1,
+                    width: 0.3,
+                    height: 0.3,
+                },
                 0.9,
             ),
             detection(
@@ -279,7 +313,12 @@ fn keeps_cam_chat_content_segments_separate() {
                 VisionTarget::Content,
                 0,
                 0.0,
-                NormalizedBoundingBox { x: 0.2, y: 0.25, width: 0.45, height: 0.5 },
+                NormalizedBoundingBox {
+                    x: 0.2,
+                    y: 0.25,
+                    width: 0.45,
+                    height: 0.5,
+                },
                 0.9,
             ),
             detection(
@@ -287,7 +326,12 @@ fn keeps_cam_chat_content_segments_separate() {
                 VisionTarget::Cam,
                 0,
                 0.0,
-                NormalizedBoundingBox { x: 0.1, y: 0.2, width: 0.15, height: 0.2 },
+                NormalizedBoundingBox {
+                    x: 0.1,
+                    y: 0.2,
+                    width: 0.15,
+                    height: 0.2,
+                },
                 0.9,
             ),
             detection(
@@ -295,7 +339,12 @@ fn keeps_cam_chat_content_segments_separate() {
                 VisionTarget::Cam,
                 1,
                 0.1,
-                NormalizedBoundingBox { x: 0.11, y: 0.2, width: 0.15, height: 0.2 },
+                NormalizedBoundingBox {
+                    x: 0.11,
+                    y: 0.2,
+                    width: 0.15,
+                    height: 0.2,
+                },
                 0.9,
             ),
             detection(
@@ -303,7 +352,12 @@ fn keeps_cam_chat_content_segments_separate() {
                 VisionTarget::Chat,
                 1,
                 0.1,
-                NormalizedBoundingBox { x: 0.55, y: 0.1, width: 0.3, height: 0.3 },
+                NormalizedBoundingBox {
+                    x: 0.55,
+                    y: 0.1,
+                    width: 0.3,
+                    height: 0.3,
+                },
                 0.9,
             ),
             detection(
@@ -311,7 +365,12 @@ fn keeps_cam_chat_content_segments_separate() {
                 VisionTarget::Content,
                 1,
                 0.1,
-                NormalizedBoundingBox { x: 0.2, y: 0.25, width: 0.45, height: 0.5 },
+                NormalizedBoundingBox {
+                    x: 0.2,
+                    y: 0.25,
+                    width: 0.45,
+                    height: 0.5,
+                },
                 0.9,
             ),
         ]),
@@ -334,7 +393,12 @@ fn keeps_cam_chat_content_segments_separate() {
         .all(|keyframe| keyframe.class_ == VisionTarget::Content));
     assert_eq!(
         plan.by_class.cam[0].keyframes[0].bbox,
-        NormalizedBoundingBox { x: 0.1, y: 0.2, width: 0.15, height: 0.2 }
+        NormalizedBoundingBox {
+            x: 0.1,
+            y: 0.2,
+            width: 0.15,
+            height: 0.2
+        }
     );
 }
 
@@ -347,7 +411,12 @@ fn filters_low_confidence_and_splits_after_gap() {
                 VisionTarget::Cam,
                 0,
                 0.0,
-                NormalizedBoundingBox { x: 0.0, y: 0.0, width: 0.1, height: 0.1 },
+                NormalizedBoundingBox {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.1,
+                    height: 0.1,
+                },
                 0.9,
             ),
             detection(
@@ -355,7 +424,12 @@ fn filters_low_confidence_and_splits_after_gap() {
                 VisionTarget::Cam,
                 1,
                 0.1,
-                NormalizedBoundingBox { x: 0.1, y: 0.0, width: 0.1, height: 0.1 },
+                NormalizedBoundingBox {
+                    x: 0.1,
+                    y: 0.0,
+                    width: 0.1,
+                    height: 0.1,
+                },
                 0.1,
             ),
             detection(
@@ -363,7 +437,12 @@ fn filters_low_confidence_and_splits_after_gap() {
                 VisionTarget::Cam,
                 8,
                 0.8,
-                NormalizedBoundingBox { x: 0.2, y: 0.0, width: 0.1, height: 0.1 },
+                NormalizedBoundingBox {
+                    x: 0.2,
+                    y: 0.0,
+                    width: 0.1,
+                    height: 0.1,
+                },
                 0.9,
             ),
         ]),
@@ -394,7 +473,12 @@ fn smooths_bbox_jitter_deterministically() {
             VisionTarget::Cam,
             0,
             0.0,
-            NormalizedBoundingBox { x: 0.1, y: 0.2, width: 0.2, height: 0.2 },
+            NormalizedBoundingBox {
+                x: 0.1,
+                y: 0.2,
+                width: 0.2,
+                height: 0.2,
+            },
             0.9,
         ),
         detection(
@@ -402,7 +486,12 @@ fn smooths_bbox_jitter_deterministically() {
             VisionTarget::Cam,
             1,
             0.1,
-            NormalizedBoundingBox { x: 0.3, y: 0.2, width: 0.2, height: 0.2 },
+            NormalizedBoundingBox {
+                x: 0.3,
+                y: 0.2,
+                width: 0.2,
+                height: 0.2,
+            },
             0.9,
         ),
     ];
@@ -558,7 +647,12 @@ fn crop_plan_center_fallback() {
     assert!(!result.included.cam);
     assert_eq!(
         result.crop,
-        NormalizedBoundingBox { x: 0.0, y: 0.0, width: 1.0, height: 1.0 }
+        NormalizedBoundingBox {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0
+        }
     );
 }
 

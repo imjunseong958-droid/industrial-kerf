@@ -1,15 +1,17 @@
-//! Native terminal entry point for Cut.
+//! Native Cut launcher and terminal entry point.
 //!
-//! The CLI is deliberately a thin adapter: project state is read and mutated
-//! through `cutd`, while media probing/fetching and the agent are Rust
-//! libraries shared with the native app and MCP server.
+//! `lcut` opens the native editor by default. `--terminal` keeps the
+//! project-scoped terminal agent available for scripts and interactive shells.
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use cut_agent::{
-    AgentEvent, AgentSession, AgentSessionOptions, OpenAiApiMode, ProviderName, ReasoningEffort,
+    AgentEvent, AgentSession, AgentSessionOptions, AgentTargetSummary, OpenAiApiMode, ProviderName,
+    ReasoningEffort,
 };
-use cut_mcp::{inbound::InboundMcpRegistry, CutMcpRouter, McpProfile};
+use cut_app::config::AppConfig;
+use cut_app::launch as launch_native_editor;
+use cut_mcp::{docs::add_agents_pointer, inbound::InboundMcpRegistry, CutMcpRouter, McpProfile};
 use cut_runtime::RuntimeClient;
 use cut_skills::{load_skills, Skill};
 use serde_json::{json, Value};
@@ -20,9 +22,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Parser)]
-#[command(name = "lcut", version, about = "Cut native terminal agent")]
+#[command(name = "lcut", version, about = "Cut native editor and terminal agent")]
 struct Args {
-    /// Local media path or a URL to fetch before opening the session.
+    /// Local media path or a URL to import before opening the editor/session.
     media: Option<String>,
 
     /// LLM API key. Prefer the provider-specific environment variable.
@@ -65,7 +67,7 @@ struct Args {
     #[arg(short = 'p', long = "prompt")]
     prompt: Option<String>,
 
-    /// Accepted for parity with the pre-migration launcher.
+    /// Use the terminal agent instead of opening the native editor.
     #[arg(long)]
     terminal: bool,
 
@@ -77,11 +79,19 @@ struct Args {
     #[arg(long)]
     mcp: bool,
 
+    /// Generate the project-local agent documentation bundle and exit.
+    #[arg(long = "generate-docs", alias = "docs")]
+    generate_docs: bool,
+
+    /// Explicitly append a pointer to the generated docs in AGENTS.md.
+    #[arg(long = "add-agents-pointer")]
+    add_agents_pointer: bool,
+
     /// Attach configured inbound MCP servers through mcp_search/mcp_call.
     #[arg(long = "mcp-tools")]
     mcp_tools: bool,
 
-    /// Keep the flag accepted for scripts that used the GUI launcher.
+    /// Keep the flag accepted for launcher-script compatibility.
     #[arg(long)]
     no_open: bool,
 }
@@ -103,10 +113,33 @@ fn run() -> Result<()> {
             args.dir.canonicalize()
         })
         .context("resolve project directory")?;
+
+    if !uses_terminal(&args) {
+        return run_gui(&args, &directory);
+    }
+
     let skills = project_skills(&directory)?;
 
     if args.skills {
         print_skills(&skills);
+        return Ok(());
+    }
+
+    if args.generate_docs || args.add_agents_pointer {
+        let router = open_router(&directory, args.cutd.as_deref(), McpProfile::Full)?;
+        let generated = router
+            .generate_agent_docs()
+            .map_err(|error| anyhow!(error))?;
+        println!(
+            "generated {} agent doc(s) at {} (revision {})",
+            generated.files.len(),
+            generated.directory.display(),
+            generated.revision
+        );
+        if args.add_agents_pointer {
+            let path = add_agents_pointer(&directory).map_err(|error| anyhow!(error))?;
+            println!("ensured generated-docs pointer at {}", path.display());
+        }
         return Ok(());
     }
 
@@ -194,6 +227,94 @@ fn run() -> Result<()> {
     }
 
     run_repl(&mut session, &directory)
+}
+
+fn uses_terminal(args: &Args) -> bool {
+    uses_terminal_with_mcp(
+        args,
+        env::var("CUT_ENABLE_MCP").ok().as_deref() == Some("1"),
+    )
+}
+
+fn uses_terminal_with_mcp(args: &Args, inbound_mcp_enabled: bool) -> bool {
+    args.terminal
+        || args.prompt.is_some()
+        || args.skills
+        || args.mcp
+        || args.generate_docs
+        || args.add_agents_pointer
+        || args.mcp_tools
+        || inbound_mcp_enabled
+}
+
+fn run_gui(args: &Args, directory: &Path) -> Result<()> {
+    let llm = resolve_llm(args)?;
+    configure_gui_agent(&llm);
+
+    if let Some(media) = args.media.as_deref() {
+        let path = import_media(
+            directory,
+            args.cutd.as_deref(),
+            media,
+            args.cookies.as_deref(),
+        )?;
+        println!("imported {}", path.display());
+    }
+
+    let mut config = AppConfig::from_env().map_err(runtime_error)?;
+    config = config.with_project_directory(directory.to_owned());
+    if let Some(cutd) = args.cutd.as_deref() {
+        config = config.with_cutd_binary(cutd.to_owned());
+    }
+    launch_native_editor(config).map_err(runtime_error)
+}
+
+fn configure_gui_agent(llm: &LlmConfig) {
+    let provider = match llm.provider {
+        ProviderName::Anthropic => "anthropic",
+        ProviderName::Openai => "openai",
+    };
+    env::set_var("CUT_PROVIDER", provider);
+
+    if let Some(api_key) = llm.api_key.as_deref() {
+        let key_name = match llm.provider {
+            ProviderName::Anthropic => "ANTHROPIC_API_KEY",
+            ProviderName::Openai => "OPENAI_API_KEY",
+        };
+        env::set_var(key_name, api_key);
+    }
+    if let Some(model) = llm.model.as_deref() {
+        env::set_var("CUT_MODEL", model);
+    }
+    if let Some(base_url) = llm.base_url.as_deref() {
+        env::set_var("OPENAI_BASE_URL", base_url);
+    }
+    env::set_var("OPENAI_API_MODE", api_mode_name(llm.api_mode));
+    if let Some(reasoning_effort) = llm.reasoning_effort {
+        env::set_var(
+            "OPENAI_REASONING_EFFORT",
+            reasoning_effort_name(reasoning_effort),
+        );
+    }
+}
+
+fn api_mode_name(mode: OpenAiApiMode) -> &'static str {
+    match mode {
+        OpenAiApiMode::Chat => "chat",
+        OpenAiApiMode::Responses => "responses",
+    }
+}
+
+fn reasoning_effort_name(effort: ReasoningEffort) -> &'static str {
+    match effort {
+        ReasoningEffort::None => "none",
+        ReasoningEffort::Minimal => "minimal",
+        ReasoningEffort::Low => "low",
+        ReasoningEffort::Medium => "medium",
+        ReasoningEffort::High => "high",
+        ReasoningEffort::Xhigh => "xhigh",
+        ReasoningEffort::Max => "max",
+    }
 }
 
 #[derive(Debug)]
@@ -435,14 +556,17 @@ fn run_prompt(session: &mut AgentSession, prompt: &str) -> Result<String> {
             let _ = io::stdout().flush();
             text.push_str(&delta);
         }
-        AgentEvent::ToolCallStarted { name, input, .. } => {
-            eprintln!("\n▸ tool {name} {}", compact_json(&input));
+        AgentEvent::ToolCallStarted { name, targets, .. } => {
+            eprintln!("\n▸ tool {name} {}", target_summary(&targets));
         }
         AgentEvent::ToolCallFinished {
-            name, ok, detail, ..
+            name, ok, summary, ..
         } => {
             if !ok {
-                eprintln!("✗ tool {name} failed: {detail}");
+                eprintln!(
+                    "✗ tool {name} failed: {}",
+                    summary.error.as_deref().unwrap_or("unknown tool error")
+                );
             }
         }
         AgentEvent::Aborted => eprintln!("\nagent aborted"),
@@ -487,12 +611,24 @@ fn run_repl(session: &mut AgentSession, directory: &Path) -> Result<()> {
     Ok(())
 }
 
-fn compact_json(value: &Value) -> String {
-    serde_json::to_string(value)
-        .unwrap_or_else(|_| "{}".into())
-        .chars()
-        .take(160)
-        .collect()
+fn target_summary(targets: &AgentTargetSummary) -> String {
+    let mut parts = Vec::new();
+    add_target_summary(&mut parts, "source", &targets.sources);
+    add_target_summary(&mut parts, "clip", &targets.clips);
+    add_target_summary(&mut parts, "track", &targets.tracks);
+    add_target_summary(&mut parts, "overlay", &targets.overlays);
+    add_target_summary(&mut parts, "job", &targets.jobs);
+    if parts.is_empty() {
+        "(no targets)".into()
+    } else {
+        parts.join("; ")
+    }
+}
+
+fn add_target_summary(parts: &mut Vec<String>, label: &str, values: &[String]) {
+    if !values.is_empty() {
+        parts.push(format!("{label}: {}", values.join(", ")));
+    }
 }
 
 fn operation_key(kind: &str) -> String {
@@ -501,4 +637,31 @@ fn operation_key(kind: &str) -> String {
         .unwrap_or_default()
         .as_nanos();
     format!("cli-{kind}-{}-{timestamp}", std::process::id())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{uses_terminal_with_mcp, Args};
+    use clap::Parser;
+
+    #[test]
+    fn lcut_opens_the_native_editor_by_default() {
+        let args = Args::try_parse_from(["lcut"]).expect("parse default launcher args");
+
+        assert!(!uses_terminal_with_mcp(&args, false));
+    }
+
+    #[test]
+    fn terminal_commands_keep_the_terminal_agent_path() {
+        for argv in [
+            vec!["lcut", "--terminal"],
+            vec!["lcut", "-p", "trim the first clip"],
+            vec!["lcut", "--skills"],
+            vec!["lcut", "--mcp"],
+            vec!["lcut", "--generate-docs"],
+        ] {
+            let args = Args::try_parse_from(argv).expect("parse terminal launcher args");
+            assert!(uses_terminal_with_mcp(&args, false));
+        }
+    }
 }

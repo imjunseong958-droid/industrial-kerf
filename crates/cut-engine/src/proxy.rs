@@ -268,9 +268,11 @@ fn proxy_video_codec_args(settings: &ProxySettings) -> Result<Vec<String>> {
         return Ok(args);
     }
     if should_try_hardware_encode(false, false) {
-        let mut select = SelectEncoderOptions::default();
-        select.prefer_hardware = true;
-        select.codec = VideoCodec::H264;
+        let select = SelectEncoderOptions {
+            prefer_hardware: true,
+            codec: VideoCodec::H264,
+            ..Default::default()
+        };
         if let Ok(selection) = detect_and_select_encoder(&select) {
             return Ok(encode_output_args(
                 &selection,

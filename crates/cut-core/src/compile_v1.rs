@@ -58,7 +58,7 @@ struct ClipChain {
 }
 
 fn finite_positive(value: f64, name: &str) -> Result<f64, CompileV1Error> {
-    if !value.is_finite() || !(value > 0.0) {
+    if !value.is_finite() || value <= 0.0 {
         return Err(msg(format!(
             "{name} must be a finite positive number, got {value}"
         )));
@@ -191,7 +191,7 @@ fn normalize_crop(raw: &Value, clip: &Value) -> Result<Option<NormalizedCrop>, C
     let y = y.unwrap();
     let width = width.unwrap();
     let height = height.unwrap();
-    if !(width > 0.0) || !(height > 0.0) {
+    if width <= 0.0 || height <= 0.0 {
         return Err(msg(format!(
             "Clip {clip_id} crop width/height must be positive"
         )));
@@ -371,7 +371,7 @@ fn normalize_cue(cue: &Value, overlay_id: &str) -> Result<Option<CaptionCue>, Co
         .ok_or_else(|| msg(format!("Caption overlay {overlay_id} has an invalid cue")))?;
     let start = start.max(0.0);
     let end = end.max(0.0);
-    if !(end > start) {
+    if end <= start {
         return Ok(None);
     }
     Ok(Some(CaptionCue {

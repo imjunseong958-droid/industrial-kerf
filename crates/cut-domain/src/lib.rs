@@ -6,10 +6,17 @@
 //! serialized again.  This keeps the reducer and history independent from
 //! the transport representation while preserving forward-compatible fields.
 
+use cut_core::{FrameGrid, FrameIndex};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Number, Value};
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
+
+pub mod outline;
+
+pub use outline::{
+    project_outline, OutlineNode, OutlineNodeKind, OutlineTimeRange, ProjectOutline,
+};
 
 /// A JSON leaf used only for extension data and deliberately distinct from
 /// `serde_json::Value`, which is kept inside the private wire adapter.
@@ -602,6 +609,16 @@ impl Project {
     }
 }
 
+/// The edge moved by a semantic clip trim command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrimEdge {
+    /// Move the first frame of the clip.
+    Leading,
+    /// Move the first frame after the clip.
+    Trailing,
+}
+
 /// Canonical project commands.  The enum is the only input to the reducer;
 /// command aliases are resolved by `parse_command` at the wire boundary.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -629,6 +646,25 @@ pub enum Command {
         clip_id: ClipId,
         #[serde(skip_serializing_if = "Option::is_none")]
         track_id: Option<TrackId>,
+    },
+    /// Place an existing clip at a frame, optionally moving it to another track.
+    PlaceClip {
+        clip_id: ClipId,
+        timeline_frame: FrameIndex,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        track_id: Option<TrackId>,
+    },
+    /// Move one typed edge of an existing clip to a timeline frame.
+    TrimClip {
+        clip_id: ClipId,
+        edge: TrimEdge,
+        timeline_frame: FrameIndex,
+    },
+    /// Split an existing clip at an interior frame and assign the right half a new ID.
+    SplitClip {
+        clip_id: ClipId,
+        at_frame: FrameIndex,
+        new_clip_id: ClipId,
     },
     MoveClip {
         clip_id: ClipId,
@@ -1762,6 +1798,9 @@ mod wire {
             ("removeClip", "remove_clip"),
             ("deleteClip", "remove_clip"),
             ("insertClip", "add_clip"),
+            ("placeClip", "place_clip"),
+            ("trimClip", "trim_clip"),
+            ("splitClip", "split_clip"),
             ("moveClip", "move_clip"),
             ("updateClip", "update_clip"),
             ("setClip", "set_clip"),
@@ -1845,6 +1884,45 @@ mod wire {
                     raw.insert("patch".into(), Value::Object(patch));
                 }
             }
+        }
+        match raw.get("type").and_then(Value::as_str) {
+            Some("place_clip") => {
+                set_alias(
+                    raw,
+                    "timelineFrame",
+                    &["timelineFrame", "frame"],
+                    "place clip frame",
+                )?;
+                set_alias(
+                    raw,
+                    "trackId",
+                    &["trackId", "toTrackId"],
+                    "place clip track",
+                )?;
+            }
+            Some("trim_clip") => {
+                set_alias(
+                    raw,
+                    "timelineFrame",
+                    &["timelineFrame", "frame", "atFrame"],
+                    "trim clip frame",
+                )?;
+            }
+            Some("split_clip") => {
+                set_alias(
+                    raw,
+                    "atFrame",
+                    &["atFrame", "timelineFrame", "frame"],
+                    "split clip frame",
+                )?;
+                set_alias(
+                    raw,
+                    "newClipId",
+                    &["newClipId", "rightClipId"],
+                    "split clip ID",
+                )?;
+            }
+            _ => {}
         }
         Ok(value)
     }
@@ -1939,6 +2017,23 @@ mod wire {
 
     fn validate_command(command: &Command) -> Result<(), DomainError> {
         match command {
+            Command::PlaceClip { timeline_frame, .. }
+            | Command::TrimClip { timeline_frame, .. }
+            | Command::SplitClip {
+                at_frame: timeline_frame,
+                ..
+            } if *timeline_frame < 0 => Err(DomainError::new(
+                "INVALID_COMMAND",
+                "semantic clip command frame must be nonnegative",
+            )),
+            Command::SplitClip {
+                clip_id,
+                new_clip_id,
+                ..
+            } if clip_id == new_clip_id => Err(DomainError::new(
+                "INVALID_COMMAND",
+                "split_clip newClipId must differ from clipId",
+            )),
             Command::MoveClip {
                 index, to_index, ..
             } if index.is_none() && to_index.is_none() => Err(DomainError::new(
@@ -1961,7 +2056,11 @@ mod wire {
         let clip_id = {
             let raw = object_mut(&mut value, "clip")?;
             for (key, value) in patch {
-                raw.insert(key.clone(), value.to_wire());
+                if matches!(value, JsonValue::Null) {
+                    raw.remove(key);
+                } else {
+                    raw.insert(key.clone(), value.to_wire());
+                }
             }
             raw.get("id").cloned().unwrap_or(Value::Null)
         };
@@ -2423,6 +2522,53 @@ pub fn inverse_command(project: &Project, command: &Command) -> Result<Command, 
                 index: Some(index),
             })
         }
+        Command::PlaceClip { clip_id, .. } => {
+            let (source_track, source_index) = clip_location(project, clip_id, None)?;
+            let before = project.tracks[source_track].clips[source_index].clone();
+            let after = apply_command(project, command)?;
+            let (destination_track, _) = clip_location(&after, clip_id, None)?;
+            Ok(Command::Batch {
+                commands: vec![
+                    Command::RemoveClip {
+                        clip_id: clip_id.clone(),
+                        track_id: Some(after.tracks[destination_track].id.clone()),
+                    },
+                    Command::AddClip {
+                        track_id: project.tracks[source_track].id.clone(),
+                        clip: before,
+                        index: Some(source_index),
+                    },
+                ],
+            })
+        }
+        Command::TrimClip { clip_id, .. } => {
+            let (track, index) = clip_location(project, clip_id, None)?;
+            Ok(Command::SetClip {
+                clip_id: clip_id.clone(),
+                clip: project.tracks[track].clips[index].clone(),
+            })
+        }
+        Command::SplitClip {
+            clip_id,
+            new_clip_id,
+            ..
+        } => {
+            let (track, index) = clip_location(project, clip_id, None)?;
+            let after = apply_command(project, command)?;
+            let (new_track, _) = clip_location(&after, new_clip_id, None)?;
+            Ok(Command::Batch {
+                commands: vec![
+                    Command::RemoveClip {
+                        clip_id: new_clip_id.clone(),
+                        track_id: Some(after.tracks[new_track].id.clone()),
+                    },
+                    Command::SetClip {
+                        clip_id: clip_id.clone(),
+                        clip: project.tracks[track].clips[index].clone(),
+                    },
+                ],
+            })
+        }
         Command::MoveClip { clip_id, .. } => {
             let (source_track, source_index) = clip_location(project, clip_id, None)?;
             let after = apply_command(project, command)?;
@@ -2586,6 +2732,21 @@ fn apply_command_mut(project: &mut Project, command: &Command) -> Result<(), Dom
             let (track, clip) = clip_location(project, clip_id, track_id.as_ref())?;
             project.tracks[track].clips.remove(clip);
         }
+        Command::PlaceClip {
+            clip_id,
+            timeline_frame,
+            track_id,
+        } => place_clip_mut(project, clip_id, *timeline_frame, track_id.as_ref())?,
+        Command::TrimClip {
+            clip_id,
+            edge,
+            timeline_frame,
+        } => trim_clip_mut(project, clip_id, *edge, *timeline_frame)?,
+        Command::SplitClip {
+            clip_id,
+            at_frame,
+            new_clip_id,
+        } => split_clip_mut(project, clip_id, *at_frame, new_clip_id)?,
         Command::MoveClip {
             clip_id,
             track_id,
@@ -2759,6 +2920,270 @@ fn apply_command_mut(project: &mut Project, command: &Command) -> Result<(), Dom
         }
     }
     Ok(())
+}
+
+fn project_frame_grid(project: &Project) -> Result<FrameGrid, DomainError> {
+    FrameGrid::new(project.fps).ok_or_else(|| {
+        DomainError::new("INVALID_PROJECT", "project.fps must be finite and positive")
+    })
+}
+
+fn clip_duration(project: &Project, clip: &Clip) -> Result<f64, DomainError> {
+    if let Some(duration) = clip.timeline_duration() {
+        if duration.is_finite() && duration > 0.0 {
+            return Ok(duration);
+        }
+    }
+    let speed = clip.speed.unwrap_or(1.0);
+    if !speed.is_finite() || speed <= 0.0 {
+        return Err(DomainError::new(
+            "INVALID_COMMAND",
+            format!("clip {} speed must be positive", clip.id),
+        ));
+    }
+    let source_duration = clip
+        .source_id
+        .as_ref()
+        .and_then(|source_id| {
+            project
+                .sources
+                .iter()
+                .find(|source| source.id == *source_id)
+        })
+        .and_then(|source| source.duration);
+    let duration =
+        source_duration.map(|duration| (duration - clip.source_in.unwrap_or(0.0)) / speed);
+    duration
+        .filter(|duration| duration.is_finite() && *duration > 0.0)
+        .ok_or_else(|| {
+            DomainError::new(
+                "INVALID_COMMAND",
+                format!("clip {} has no positive timeline duration", clip.id),
+            )
+        })
+}
+
+fn clip_location_by_id(project: &Project, clip_id: &ClipId) -> Result<(usize, usize), DomainError> {
+    clip_location(project, clip_id, None)
+}
+
+fn place_clip_mut(
+    project: &mut Project,
+    clip_id: &ClipId,
+    timeline_frame: FrameIndex,
+    target_track_id: Option<&TrackId>,
+) -> Result<(), DomainError> {
+    if timeline_frame < 0 {
+        return Err(DomainError::new(
+            "INVALID_COMMAND",
+            "place_clip frame must be nonnegative",
+        ));
+    }
+    let grid = project_frame_grid(project)?;
+    let (source_track, source_index) = clip_location_by_id(project, clip_id)?;
+    let source_track_id = project.tracks[source_track].id.clone();
+    let target_track_id = target_track_id.unwrap_or(&source_track_id).clone();
+    track_index(project, &target_track_id)?;
+
+    let mut clip = project.tracks[source_track].clips.remove(source_index);
+    clip.timeline_start = grid.seconds_at(timeline_frame);
+    let target_track = track_index(project, &target_track_id)?;
+    let destination = if target_track_id == source_track_id {
+        source_index.min(project.tracks[target_track].clips.len())
+    } else {
+        project.tracks[target_track].clips.len()
+    };
+    project.tracks[target_track].clips.insert(destination, clip);
+    Ok(())
+}
+
+fn trim_clip_mut(
+    project: &mut Project,
+    clip_id: &ClipId,
+    edge: TrimEdge,
+    timeline_frame: FrameIndex,
+) -> Result<(), DomainError> {
+    if timeline_frame < 0 {
+        return Err(DomainError::new(
+            "INVALID_COMMAND",
+            "trim_clip frame must be nonnegative",
+        ));
+    }
+    let grid = project_frame_grid(project)?;
+    let (track, index) = clip_location_by_id(project, clip_id)?;
+    let current = project.tracks[track].clips[index].clone();
+    let duration = clip_duration(project, &current)?;
+    let start = current.timeline_start;
+    let end = start + duration;
+    let target = grid.seconds_at(timeline_frame);
+    let new_duration = match edge {
+        TrimEdge::Leading if target > start && target < end => end - target,
+        TrimEdge::Trailing if target > start && target <= end => target - start,
+        TrimEdge::Leading | TrimEdge::Trailing => {
+            return Err(DomainError::new(
+                "INVALID_COMMAND",
+                "trim edge must stay within the clip and leave a positive duration",
+            ))
+        }
+    };
+    let speed = current.speed.unwrap_or(1.0);
+    if !speed.is_finite() || speed <= 0.0 {
+        return Err(DomainError::new(
+            "INVALID_COMMAND",
+            "clip speed must be positive",
+        ));
+    }
+
+    let has_source = current.source_id.is_some();
+    let source_in = current.source_in.unwrap_or(0.0);
+    let source_out = current.source_out.unwrap_or(source_in + duration * speed);
+    let mut trimmed = current;
+    trimmed.timeline_start = match edge {
+        TrimEdge::Leading => target,
+        TrimEdge::Trailing => start,
+    };
+    if has_source {
+        match edge {
+            TrimEdge::Leading => {
+                trimmed.source_in = Some(source_in + (target - start) * speed);
+                trimmed.source_out = Some(source_out);
+            }
+            TrimEdge::Trailing => {
+                trimmed.source_in = Some(source_in);
+                trimmed.source_out = Some(source_in + new_duration * speed);
+            }
+        }
+    }
+    if trimmed.duration.is_some() || !has_source {
+        trimmed.duration = Some(new_duration);
+    }
+    trim_keyframes(
+        &mut trimmed,
+        edge,
+        if edge == TrimEdge::Leading {
+            target - start
+        } else {
+            0.0
+        },
+        new_duration,
+    );
+    project.tracks[track].clips[index] = trimmed;
+    Ok(())
+}
+
+fn split_clip_mut(
+    project: &mut Project,
+    clip_id: &ClipId,
+    at_frame: FrameIndex,
+    new_clip_id: &ClipId,
+) -> Result<(), DomainError> {
+    if at_frame < 0 {
+        return Err(DomainError::new(
+            "INVALID_COMMAND",
+            "split_clip frame must be nonnegative",
+        ));
+    }
+    if clip_id == new_clip_id {
+        return Err(DomainError::new(
+            "INVALID_COMMAND",
+            "split_clip newClipId must differ from clipId",
+        ));
+    }
+    let grid = project_frame_grid(project)?;
+    let (track, index) = clip_location_by_id(project, clip_id)?;
+    if project
+        .tracks
+        .iter()
+        .any(|track| track.clips.iter().any(|clip| clip.id == *new_clip_id))
+    {
+        return Err(DomainError::new(
+            "INVALID_COMMAND",
+            format!("clip already exists: {new_clip_id}"),
+        ));
+    }
+    let current = project.tracks[track].clips[index].clone();
+    let duration = clip_duration(project, &current)?;
+    let start = current.timeline_start;
+    let end = start + duration;
+    let split_time = grid.seconds_at(at_frame);
+    if split_time <= start || split_time >= end {
+        return Err(DomainError::new(
+            "INVALID_COMMAND",
+            "split frame must be strictly inside the clip",
+        ));
+    }
+    let left_duration = split_time - start;
+    let right_duration = end - split_time;
+    let speed = current.speed.unwrap_or(1.0);
+    if !speed.is_finite() || speed <= 0.0 {
+        return Err(DomainError::new(
+            "INVALID_COMMAND",
+            "clip speed must be positive",
+        ));
+    }
+    let has_source = current.source_id.is_some();
+    let source_in = current.source_in.unwrap_or(0.0);
+    let source_out = current.source_out.unwrap_or(source_in + duration * speed);
+
+    let mut left = current.clone();
+    let mut right = current;
+    right.id = new_clip_id.clone();
+    right.timeline_start = split_time;
+    if has_source {
+        let split_source = source_in + left_duration * speed;
+        left.source_in = Some(source_in);
+        left.source_out = Some(split_source);
+        right.source_in = Some(split_source);
+        right.source_out = Some(source_out);
+    }
+    if left.duration.is_some() || !has_source {
+        left.duration = Some(left_duration);
+        right.duration = Some(right_duration);
+    }
+    split_keyframes(&mut left, &mut right, left_duration);
+
+    project.tracks[track].clips[index] = left;
+    project.tracks[track].clips.insert(index + 1, right);
+    Ok(())
+}
+
+fn split_keyframes(left: &mut Clip, right: &mut Clip, split_time: f64) {
+    let Some(keyframes) = left.keyframes.take() else {
+        return;
+    };
+    let mut left_keyframes = Vec::new();
+    let mut right_keyframes = Vec::new();
+    for keyframe in keyframes {
+        if keyframe.time <= split_time {
+            left_keyframes.push(keyframe.clone());
+        }
+        if keyframe.time >= split_time {
+            let mut shifted = keyframe;
+            shifted.time -= split_time;
+            right_keyframes.push(shifted);
+        }
+    }
+    left.keyframes = Some(left_keyframes);
+    right.keyframes = Some(right_keyframes);
+}
+
+fn trim_keyframes(clip: &mut Clip, edge: TrimEdge, removed_time: f64, duration: f64) {
+    let Some(keyframes) = clip.keyframes.take() else {
+        return;
+    };
+    let mut retained = Vec::new();
+    for mut keyframe in keyframes {
+        if edge == TrimEdge::Leading {
+            if keyframe.time + 1e-9 < removed_time {
+                continue;
+            }
+            keyframe.time = (keyframe.time - removed_time).max(0.0);
+        }
+        if keyframe.time <= duration + 1e-9 {
+            retained.push(keyframe);
+        }
+    }
+    clip.keyframes = Some(retained);
 }
 
 pub fn empty_project() -> Project {

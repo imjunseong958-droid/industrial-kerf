@@ -19,6 +19,14 @@ pub struct CommandOutput {
     pub stderr: String,
 }
 
+/// Process output that may contain arbitrary bytes, such as raw PCM audio.
+#[derive(Debug, Clone)]
+pub struct BinaryCommandOutput {
+    pub code: i32,
+    pub stdout: Vec<u8>,
+    pub stderr: String,
+}
+
 fn bin_exists(candidate: &str) -> bool {
     let path = Path::new(candidate);
     if path.is_absolute() || candidate.contains('/') || candidate.contains('\\') {
@@ -96,8 +104,7 @@ pub fn hwaccel_decode_args() -> &'static [String] {
             }
         }
         let ffmpeg = resolve_ffmpeg_bin();
-        let output = match run_allow_failure(&ffmpeg, &["-hide_banner".into(), "-hwaccels".into()])
-        {
+        let output = match run_allow_failure(ffmpeg, &["-hide_banner".into(), "-hwaccels".into()]) {
             Ok(output) => format!("{}\n{}", output.stdout, output.stderr),
             Err(_) => return Vec::new(),
         };
@@ -119,7 +126,7 @@ pub fn cached_encoder_listing() -> Result<&'static str> {
         return Ok(listing.as_str());
     }
     let ffmpeg = resolve_ffmpeg_bin();
-    let output = run_allow_failure(&ffmpeg, &["-hide_banner".into(), "-encoders".into()])?;
+    let output = run_allow_failure(ffmpeg, &["-hide_banner".into(), "-encoders".into()])?;
     let listing = format!("{}\n{}", output.stdout, output.stderr);
     Ok(LISTING.get_or_init(|| listing).as_str())
 }
@@ -156,6 +163,34 @@ pub fn run(bin: &str, args: &[String]) -> Result<CommandOutput> {
                 tail(&stderr, 2000)
             ),
         })
+    }
+}
+
+/// Run a sidecar without lossy UTF-8 conversion of stdout.
+pub fn run_bytes(bin: &str, args: &[String]) -> Result<BinaryCommandOutput> {
+    let output = Command::new(bin)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                EngineError::msg(format!("{bin} not found on PATH"))
+            } else {
+                EngineError::from(error)
+            }
+        })?;
+    let code = output.status.code().unwrap_or(-1);
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    if code == 0 {
+        Ok(BinaryCommandOutput {
+            code,
+            stdout: output.stdout,
+            stderr,
+        })
+    } else {
+        Err(EngineError::Ffmpeg { code, stderr })
     }
 }
 

@@ -206,7 +206,7 @@ fn normalize_detection(
 ) -> Result<PlannedDetection, PlanningInputError> {
     if !VISION_TARGETS
         .iter()
-        .any(|target| VisionTarget::from_str(target) == Some(detection.class_))
+        .any(|target| target.parse::<VisionTarget>().ok() == Some(detection.class_))
     {
         return Err(PlanningInputError::new(format!(
             "Planning detections must use {} classes.",

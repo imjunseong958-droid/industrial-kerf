@@ -4,6 +4,10 @@ use thiserror::Error;
 pub enum EngineError {
     #[error("{0}")]
     Message(String),
+    #[error("capability unavailable: {capability}: {message}")]
+    CapabilityUnavailable { capability: String, message: String },
+    #[error("operation cancelled")]
+    Cancelled,
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -23,6 +27,16 @@ pub enum EngineError {
 impl EngineError {
     pub fn msg(message: impl Into<String>) -> Self {
         Self::Message(message.into())
+    }
+
+    pub fn capability_unavailable(
+        capability: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::CapabilityUnavailable {
+            capability: capability.into(),
+            message: message.into(),
+        }
     }
 }
 

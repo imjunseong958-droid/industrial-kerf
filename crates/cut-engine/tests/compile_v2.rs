@@ -55,8 +55,8 @@ fn err_message(result: Result<cut_engine::compile::CompiledV2FilterGraph, Compil
 
 #[test]
 fn composites_positioned_video_tracks_and_mixes_audio_tracks() {
-    let compiled = compile_filter_graph_v2(&project(json!({})), CompileV2Options::default())
-        .expect("compile");
+    let compiled =
+        compile_filter_graph_v2(&project(json!({})), CompileV2Options::default()).expect("compile");
     assert_eq!(compiled.duration, 3.0);
     assert!(compiled.filter_complex.contains("overlay="));
     assert!(compiled.filter_complex.contains("adelay=0:all=1"));
@@ -149,7 +149,10 @@ fn includes_project_level_gaps_in_duration_and_rejects_project_effects_transitio
     assert!(compiled.filter_complex.contains("d=4"));
 
     let effects = project(json!({ "effects": [{ "type": "blur" }] }));
-    let msg = err_message(compile_filter_graph_v2(&effects, CompileV2Options::default()));
+    let msg = err_message(compile_filter_graph_v2(
+        &effects,
+        CompileV2Options::default(),
+    ));
     assert!(Regex::new(r"(?i)effect.*project").unwrap().is_match(&msg));
 
     let transitions = project(json!({ "transitions": [{ "type": "fade", "duration": 0.5 }] }));
@@ -157,7 +160,9 @@ fn includes_project_level_gaps_in_duration_and_rejects_project_effects_transitio
         &transitions,
         CompileV2Options::default(),
     ));
-    assert!(Regex::new(r"(?i)project transition").unwrap().is_match(&msg));
+    assert!(Regex::new(r"(?i)project transition")
+        .unwrap()
+        .is_match(&msg));
 }
 
 #[test]
@@ -199,11 +204,10 @@ fn rejects_unsupported_effects_instead_of_dropping_them() {
         }]
     }));
     let err = compile_filter_graph_v2(&parsed, CompileV2Options::default()).unwrap_err();
-    assert!(matches!(
-        err,
-        CompileError::UnsupportedFeature { .. }
-    ));
-    assert!(Regex::new(r"(?i)effect.*blur").unwrap().is_match(&err.to_string()));
+    assert!(matches!(err, CompileError::UnsupportedFeature { .. }));
+    assert!(Regex::new(r"(?i)effect.*blur")
+        .unwrap()
+        .is_match(&err.to_string()));
 }
 
 #[test]
@@ -270,10 +274,7 @@ fn compiles_color_controls_before_opacity_composition() {
     assert!(filter.contains("eq=contrast=1.2:brightness=0.1:saturation=1.3:gamma=1.2"));
     assert!(filter.contains("colorbalance="));
     assert!(filter.contains("vibrance=intensity=0.4"));
-    assert!(
-        filter.find("vibrance=")
-            < filter.find("colorchannelmixer=aa=0.75")
-    );
+    assert!(filter.find("vibrance=") < filter.find("colorchannelmixer=aa=0.75"));
 }
 
 #[test]
@@ -292,7 +293,10 @@ fn validates_color_ranges_and_rejects_unsupported_lut_paths() {
             }]
         }]
     }));
-    let msg = err_message(compile_filter_graph_v2(&invalid, CompileV2Options::default()));
+    let msg = err_message(compile_filter_graph_v2(
+        &invalid,
+        CompileV2Options::default(),
+    ));
     assert!(Regex::new(r"(?i)contrast").unwrap().is_match(&msg));
 
     let with_lut = project(json!({
@@ -309,8 +313,13 @@ fn validates_color_ranges_and_rejects_unsupported_lut_paths() {
             }]
         }]
     }));
-    let msg = err_message(compile_filter_graph_v2(&with_lut, CompileV2Options::default()));
-    assert!(Regex::new(r"(?i)color LUT.*not supported").unwrap().is_match(&msg));
+    let msg = err_message(compile_filter_graph_v2(
+        &with_lut,
+        CompileV2Options::default(),
+    ));
+    assert!(Regex::new(r"(?i)color LUT.*not supported")
+        .unwrap()
+        .is_match(&msg));
 }
 
 #[test]

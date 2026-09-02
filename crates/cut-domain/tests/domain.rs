@@ -1,7 +1,8 @@
 use cut_domain::{
-    apply_history_command, apply_history_commands, create_history, empty_project, migrate_v1_to_v2,
-    parse_command, parse_project, parse_v1, project_duration, redo, serialize_command,
-    serialize_project, undo, Command, JsonValue, Revision, TrackType,
+    apply_command, apply_history_command, apply_history_commands, create_history, empty_project,
+    inverse_command, migrate_v1_to_v2, parse_command, parse_project, parse_v1, project_duration,
+    redo, serialize_command, serialize_project, undo, ClipId, Command, JsonValue, Revision,
+    TrackType, TrimEdge,
 };
 use serde_json::json;
 
@@ -212,4 +213,140 @@ fn command_serialization_is_canonical() {
         serialize_command(&command).unwrap(),
         json!({"type":"set_metadata","patch":{"a":1}})
     );
+}
+
+#[test]
+fn optional_inspector_properties_can_be_cleared_without_leaving_null_fields() {
+    let project = parse_project(&json!({
+        "version": 2,
+        "fps": 30,
+        "sources": [],
+        "tracks": [{
+            "id": "title-1",
+            "type": "title",
+            "clips": [{
+                "id": "clip-1",
+                "timelineStart": 0,
+                "duration": 1,
+                "crop": {"x": 0, "y": 0, "width": 1, "height": 1},
+                "transform": {"x": 0, "y": 0, "scale": 1, "rotation": 0}
+            }]
+        }]
+    }))
+    .unwrap();
+    let command = parse_command(&json!({
+        "type": "update_clip",
+        "clipId": "clip-1",
+        "patch": {"crop": null, "transform": null}
+    }))
+    .unwrap();
+    let cleared = apply_command(&project, &command).unwrap();
+    let value = serialize_project(&cleared).unwrap();
+    assert!(value["tracks"][0]["clips"][0].get("crop").is_none());
+    assert!(value["tracks"][0]["clips"][0].get("transform").is_none());
+    assert!(apply_command(&cleared, &inverse_command(&project, &command).unwrap()).is_ok());
+}
+
+fn semantic_project() -> cut_domain::Project {
+    parse_project(&json!({
+        "version": 2,
+        "fps": 30,
+        "sources": [{"id": "source", "path": "/tmp/source.mp4", "duration": 20}],
+        "tracks": [
+            {"id": "video-1", "type": "video", "clips": [{
+                "id": "clip-1",
+                "sourceId": "source",
+                "in": 2,
+                "out": 8,
+                "timelineStart": 1,
+                "duration": 6,
+                "speed": 1
+            }]},
+            {"id": "video-2", "type": "video", "clips": []}
+        ]
+    }))
+    .unwrap()
+}
+
+#[test]
+fn semantic_place_moves_and_quantizes_with_one_inverse_step() {
+    let project = semantic_project();
+    let command = parse_command(&json!({
+        "type": "placeClip",
+        "clipId": "clip-1",
+        "timelineFrame": 90,
+        "trackId": "video-2"
+    }))
+    .unwrap();
+    assert!(matches!(command, Command::PlaceClip { .. }));
+    assert_eq!(
+        serde_json::to_value(&command).unwrap(),
+        json!({"type":"place_clip","clipId":"clip-1","timelineFrame":90,"trackId":"video-2"})
+    );
+
+    let placed = apply_command(&project, &command).unwrap();
+    assert!(placed.tracks[0].clips.is_empty());
+    assert_eq!(placed.tracks[1].clips[0].timeline_start, 3.0);
+    let inverse = inverse_command(&project, &command).unwrap();
+    assert_eq!(apply_command(&placed, &inverse).unwrap(), project);
+
+    let history = create_history(project.clone(), Revision::ZERO).unwrap();
+    let applied = apply_history_command(&history, &command, Some(Revision::ZERO)).unwrap();
+    assert_eq!(applied.past.len(), 1);
+    assert_eq!(
+        undo(&applied, Some(Revision::new(1))).unwrap().project,
+        project
+    );
+}
+
+#[test]
+fn semantic_trim_preserves_source_mapping_and_rejects_invalid_edges() {
+    let project = semantic_project();
+    let leading = Command::TrimClip {
+        clip_id: ClipId::new("clip-1").unwrap(),
+        edge: TrimEdge::Leading,
+        timeline_frame: 60,
+    };
+    let trimmed = apply_command(&project, &leading).unwrap();
+    let clip = &trimmed.tracks[0].clips[0];
+    assert_eq!(clip.timeline_start, 2.0);
+    assert_eq!(clip.source_in, Some(3.0));
+    assert_eq!(clip.source_out, Some(8.0));
+    assert_eq!(clip.duration, Some(5.0));
+    assert_eq!(
+        apply_command(&trimmed, &inverse_command(&project, &leading).unwrap()).unwrap(),
+        project
+    );
+
+    let invalid = Command::TrimClip {
+        clip_id: ClipId::new("clip-1").unwrap(),
+        edge: TrimEdge::Trailing,
+        timeline_frame: 30,
+    };
+    let error = apply_command(&project, &invalid).unwrap_err();
+    assert_eq!(error.code, "INVALID_COMMAND");
+}
+
+#[test]
+fn semantic_split_keeps_source_ranges_and_stable_explicit_id() {
+    let project = semantic_project();
+    let command = parse_command(&json!({
+        "type": "split_clip",
+        "clipId": "clip-1",
+        "atFrame": 90,
+        "newClipId": "clip-1-right"
+    }))
+    .unwrap();
+    let split = apply_command(&project, &command).unwrap();
+    assert_eq!(split.tracks[0].clips.len(), 2);
+    let left = &split.tracks[0].clips[0];
+    let right = &split.tracks[0].clips[1];
+    assert_eq!(left.id.as_str(), "clip-1");
+    assert_eq!(right.id.as_str(), "clip-1-right");
+    assert_eq!((left.source_in, left.source_out), (Some(2.0), Some(4.0)));
+    assert_eq!((right.source_in, right.source_out), (Some(4.0), Some(8.0)));
+    assert_eq!((left.timeline_start, left.duration), (1.0, Some(2.0)));
+    assert_eq!((right.timeline_start, right.duration), (3.0, Some(4.0)));
+    let inverse = inverse_command(&project, &command).unwrap();
+    assert_eq!(apply_command(&split, &inverse).unwrap(), project);
 }

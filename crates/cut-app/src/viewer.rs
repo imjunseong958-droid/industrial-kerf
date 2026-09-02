@@ -1,7 +1,114 @@
+use cut_core::preview::{PreviewMode, PreviewPlan, PreviewRange};
 use cut_playback::{PlaybackConfig, PlaybackError, PlaybackEvent, PlaybackSession, PlaybackState};
 use cut_runtime::{RuntimeError, StateSnapshot};
 use egui::{Color32, RichText, Slider, TextureHandle, TextureOptions};
+use serde_json::json;
+use std::path::Path;
 use std::time::Duration;
+
+/// State of the path currently allowed to feed the native viewer.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PreviewState {
+    NativeExact,
+    WaitingForRender,
+    Rendering { job_id: String, progress: f64 },
+    RenderedFallback,
+    Failed { message: String },
+    Unavailable,
+}
+
+/// Bounded preview decision shown alongside the viewer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreviewStatus {
+    pub plan: PreviewPlan,
+    pub state: PreviewState,
+}
+
+impl PreviewStatus {
+    pub fn native_exact() -> Self {
+        Self::from_plan(PreviewPlan {
+            mode: PreviewMode::NativeExact,
+            range: None,
+            reasons: Vec::new(),
+            reasons_truncated: false,
+        })
+    }
+
+    pub fn from_plan(plan: PreviewPlan) -> Self {
+        let state = match plan.mode {
+            PreviewMode::NativeExact => PreviewState::NativeExact,
+            PreviewMode::RenderedFallback => PreviewState::WaitingForRender,
+            PreviewMode::Unavailable => PreviewState::Unavailable,
+        };
+        Self { plan, state }
+    }
+
+    pub fn begin_render(&mut self, job_id: String) {
+        self.state = PreviewState::Rendering {
+            job_id,
+            progress: 0.0,
+        };
+    }
+
+    pub fn set_progress(&mut self, progress: f64) {
+        if let PreviewState::Rendering {
+            progress: current, ..
+        } = &mut self.state
+        {
+            *current = progress.clamp(0.0, 1.0);
+        }
+    }
+
+    pub fn mark_rendered(&mut self) {
+        self.state = PreviewState::RenderedFallback;
+    }
+
+    pub fn mark_failed(&mut self, message: String) {
+        self.state = PreviewState::Failed { message };
+    }
+
+    pub fn job_id(&self) -> Option<&str> {
+        match &self.state {
+            PreviewState::Rendering { job_id, .. } => Some(job_id),
+            PreviewState::NativeExact
+            | PreviewState::WaitingForRender
+            | PreviewState::RenderedFallback
+            | PreviewState::Failed { .. }
+            | PreviewState::Unavailable => None,
+        }
+    }
+
+    pub fn accepts_playback(&self) -> bool {
+        matches!(
+            &self.state,
+            PreviewState::NativeExact | PreviewState::RenderedFallback
+        )
+    }
+
+    fn label(&self) -> &'static str {
+        match &self.state {
+            PreviewState::NativeExact => "Native exact",
+            PreviewState::WaitingForRender => "Rendered fallback pending",
+            PreviewState::Rendering { .. } => "Rendered fallback rendering",
+            PreviewState::RenderedFallback => "Rendered fallback",
+            PreviewState::Failed { .. } | PreviewState::Unavailable => "Unavailable",
+        }
+    }
+
+    fn reason_summary(&self) -> String {
+        let mut reasons = self
+            .plan
+            .reasons
+            .iter()
+            .map(|reason| reason.message.as_str())
+            .take(3)
+            .collect::<Vec<_>>();
+        if self.plan.reasons_truncated {
+            reasons.push("more reasons omitted");
+        }
+        reasons.join(" · ")
+    }
+}
 
 /// View state for the native viewer. Decoded media stays in the app playback
 /// adapter; this model remains cheap to rebuild after a daemon snapshot
@@ -16,6 +123,7 @@ pub struct ViewerViewModel {
     pub muted: bool,
     pub canvas_width: u32,
     pub canvas_height: u32,
+    pub preview: PreviewStatus,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -25,6 +133,8 @@ pub enum ViewerAction {
     SetVolume(f32),
     ToggleMute,
     ToggleFullscreen,
+    CancelPreview,
+    RetryPreview,
 }
 
 impl ViewerViewModel {
@@ -38,6 +148,7 @@ impl ViewerViewModel {
             muted: false,
             canvas_width: 1920,
             canvas_height: 1080,
+            preview: PreviewStatus::native_exact(),
         }
     }
 
@@ -58,51 +169,87 @@ impl ViewerViewModel {
         texture: Option<&TextureHandle>,
         caption: Option<&str>,
     ) -> Option<ViewerAction> {
-        ui.heading(RichText::new("Viewer").color(Color32::WHITE));
+        let mut action = None;
+        ui.horizontal(|ui| {
+            ui.heading(RichText::new("Viewer").color(Color32::WHITE));
+            ui.label(
+                RichText::new(format!("Preview · {}", self.preview.label()))
+                    .small()
+                    .color(if self.preview.accepts_playback() {
+                        Color32::from_gray(170)
+                    } else {
+                        Color32::from_rgb(228, 174, 84)
+                    }),
+            );
+            if let Some(job_id) = self.preview.job_id() {
+                let progress = match &self.preview.state {
+                    PreviewState::Rendering { progress, .. } => *progress,
+                    _ => 0.0,
+                };
+                ui.label(format!("{} {:.0}%", job_id, progress * 100.0));
+                if ui.button("Cancel render").clicked() {
+                    action = Some(ViewerAction::CancelPreview);
+                }
+            } else if self.preview.plan.needs_rendered_fallback()
+                && matches!(
+                    &self.preview.state,
+                    PreviewState::WaitingForRender | PreviewState::Failed { .. }
+                )
+                && ui.button("Render preview").clicked()
+            {
+                action = Some(ViewerAction::RetryPreview);
+            }
+        });
+        let reason_summary = self.preview.reason_summary();
+        if !reason_summary.is_empty() {
+            ui.label(
+                RichText::new(reason_summary)
+                    .small()
+                    .color(Color32::from_gray(165)),
+            );
+        }
         ui.add_space(8.0);
         let available = ui.available_size();
         let aspect = self.canvas_width as f32 / self.canvas_height.max(1) as f32;
-        let controls_height = 74.0;
+        let controls_height = 108.0;
         let max_height = (available.y - controls_height).max(180.0);
         let height = (available.x / aspect).min(max_height).max(180.0);
         let width = (height * aspect).min(available.x).max(1.0);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
         ui.painter().rect_filled(rect, 4.0, Color32::BLACK);
-        if let Some(texture) = texture {
-            ui.painter().image(
-                texture.id(),
-                rect,
-                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                Color32::WHITE,
-            );
+        if self.preview.accepts_playback() {
+            if let Some(texture) = texture {
+                ui.painter().image(
+                    texture.id(),
+                    rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+            } else {
+                self.draw_placeholder(ui, rect);
+            }
         } else {
-            ui.painter().text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                if self.playing {
-                    "BUFFERING"
-                } else {
-                    "NO MEDIA"
-                },
-                egui::FontId::proportional(16.0),
-                Color32::from_gray(130),
-            );
+            self.draw_placeholder(ui, rect);
         }
-        if let Some(caption) = caption.filter(|caption| !caption.is_empty()) {
-            ui.painter().text(
-                egui::pos2(rect.center().x, rect.max.y - 26.0),
-                egui::Align2::CENTER_CENTER,
-                caption,
-                egui::FontId::proportional(18.0),
-                Color32::WHITE,
-            );
+        if self.preview.accepts_playback() {
+            if let Some(caption) = caption.filter(|caption| !caption.is_empty()) {
+                ui.painter().text(
+                    egui::pos2(rect.center().x, rect.max.y - 26.0),
+                    egui::Align2::CENTER_CENTER,
+                    caption,
+                    egui::FontId::proportional(18.0),
+                    Color32::WHITE,
+                );
+            }
         }
 
         ui.add_space(8.0);
-        let mut action = None;
         ui.horizontal(|ui| {
             if ui
-                .button(if self.playing { "Pause" } else { "Play" })
+                .add_enabled(
+                    self.preview.accepts_playback(),
+                    egui::Button::new(if self.playing { "Pause" } else { "Play" }),
+                )
                 .clicked()
             {
                 action = Some(ViewerAction::TogglePlay);
@@ -110,7 +257,8 @@ impl ViewerViewModel {
             ui.label(format_time(self.playhead));
             let mut playhead = self.playhead;
             if ui
-                .add(
+                .add_enabled(
+                    self.preview.accepts_playback(),
                     Slider::new(&mut playhead, 0.0..=self.duration.max(0.001))
                         .show_value(false)
                         .text("playhead"),
@@ -123,14 +271,20 @@ impl ViewerViewModel {
         });
         ui.horizontal(|ui| {
             if ui
-                .button(if self.muted { "Unmute" } else { "Mute" })
+                .add_enabled(
+                    self.preview.accepts_playback(),
+                    egui::Button::new(if self.muted { "Unmute" } else { "Mute" }),
+                )
                 .clicked()
             {
                 action = Some(ViewerAction::ToggleMute);
             }
             let mut volume = self.volume;
             if ui
-                .add(Slider::new(&mut volume, 0.0..=1.0).text("volume"))
+                .add_enabled(
+                    self.preview.accepts_playback(),
+                    Slider::new(&mut volume, 0.0..=1.0).text("volume"),
+                )
                 .changed()
             {
                 action = Some(ViewerAction::SetVolume(volume));
@@ -141,6 +295,30 @@ impl ViewerViewModel {
         });
         action
     }
+
+    fn draw_placeholder(&self, ui: &egui::Ui, rect: egui::Rect) {
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            if matches!(
+                &self.preview.state,
+                PreviewState::WaitingForRender | PreviewState::Rendering { .. }
+            ) {
+                "RENDERING PREVIEW"
+            } else if matches!(
+                &self.preview.state,
+                PreviewState::Unavailable | PreviewState::Failed { .. }
+            ) {
+                "PREVIEW UNAVAILABLE"
+            } else if self.playing {
+                "BUFFERING"
+            } else {
+                "NO MEDIA"
+            },
+            egui::FontId::proportional(16.0),
+            Color32::from_gray(130),
+        );
+    }
 }
 
 /// App-owned adapter between playback events and egui's wgpu-backed texture
@@ -149,6 +327,7 @@ pub struct ViewerPlaybackAdapter {
     session: PlaybackSession,
     texture: Option<TextureHandle>,
     caption: Option<String>,
+    rendered_range: Option<PreviewRange>,
 }
 
 impl ViewerPlaybackAdapter {
@@ -159,6 +338,7 @@ impl ViewerPlaybackAdapter {
             session,
             texture: None,
             caption: None,
+            rendered_range: None,
         })
     }
 
@@ -185,7 +365,52 @@ impl ViewerPlaybackAdapter {
         if playing {
             handle.play().map_err(playback_runtime_error)?;
         }
+        self.texture = None;
         self.caption = None;
+        self.rendered_range = None;
+        Ok(())
+    }
+
+    /// Replace playback with a bounded draft render. The generated project is
+    /// an adapter-only projection and never enters canonical runtime state.
+    pub fn replace_rendered_preview(
+        &mut self,
+        output: &Path,
+        range: PreviewRange,
+        fps: f64,
+        size: (u32, u32),
+        position: f64,
+        playing: bool,
+    ) -> Result<(), RuntimeError> {
+        let (width, height) = size;
+        let project = json!({
+            "version": 2,
+            "fps": fps,
+            "width": width,
+            "height": height,
+            "sources": [{
+                "id": "rendered-preview-source",
+                "path": output.to_string_lossy(),
+                "duration": range.duration(),
+                "width": width,
+                "height": height,
+                "hasAudio": true
+            }],
+            "tracks": [{
+                "id": "rendered-preview-track",
+                "type": "video",
+                "clips": [{
+                    "id": "rendered-preview-clip",
+                    "sourceId": "rendered-preview-source",
+                    "in": 0,
+                    "out": range.duration(),
+                    "timelineStart": 0
+                }]
+            }]
+        });
+        let local_position = (position - range.start).clamp(0.0, range.duration());
+        self.replace_project(&project, local_position, playing)?;
+        self.rendered_range = Some(range);
         Ok(())
     }
 
@@ -194,6 +419,18 @@ impl ViewerPlaybackAdapter {
         action: ViewerAction,
         model: &mut ViewerViewModel,
     ) -> Result<bool, RuntimeError> {
+        if !matches!(
+            &action,
+            ViewerAction::ToggleFullscreen
+                | ViewerAction::CancelPreview
+                | ViewerAction::RetryPreview
+        ) && !model.preview.accepts_playback()
+        {
+            return Err(RuntimeError::new(
+                "PREVIEW_NOT_READY",
+                "rendered preview is not ready",
+            ));
+        }
         match action {
             ViewerAction::TogglePlay => {
                 if model.playing {
@@ -206,8 +443,19 @@ impl ViewerPlaybackAdapter {
                 Ok(false)
             }
             ViewerAction::Seek(position) => {
+                let session_position = if let Some(range) = self.rendered_range {
+                    if position < range.start || position > range.end {
+                        return Err(RuntimeError::new(
+                            "PREVIEW_RANGE_MISS",
+                            "requested position is outside the rendered preview range",
+                        ));
+                    }
+                    position - range.start
+                } else {
+                    position
+                };
                 self.session
-                    .seek(position.max(0.0))
+                    .seek(session_position.max(0.0))
                     .map_err(playback_runtime_error)?;
                 model.playhead = position.clamp(0.0, model.duration);
                 Ok(true)
@@ -252,34 +500,48 @@ impl ViewerPlaybackAdapter {
                 model.muted = muted;
                 Ok(false)
             }
-            ViewerAction::ToggleFullscreen => Ok(false),
+            ViewerAction::ToggleFullscreen
+            | ViewerAction::CancelPreview
+            | ViewerAction::RetryPreview => Ok(false),
         }
     }
 
     /// Drain worker events and upload only the latest valid frame for this
     /// repaint. This is intentionally called from the UI thread.
     pub fn poll(&mut self, context: &egui::Context, model: &mut ViewerViewModel) -> Option<String> {
+        let rendered_range = self.rendered_range;
+        let can_present_frames = model.preview.accepts_playback();
         let mut error = None;
         let mut latest_frame = None;
         for event in self.session.drain_events() {
+            if !can_present_frames {
+                continue;
+            }
             match event {
                 PlaybackEvent::Opened {
                     duration,
                     width,
                     height,
                 } => {
-                    model.sync_duration(duration);
+                    if rendered_range.is_none() {
+                        model.sync_duration(duration);
+                    }
                     model.sync_canvas(width, height);
                 }
                 PlaybackEvent::StateChanged(state) => {
                     model.playing = state == PlaybackState::Playing;
                     if state == PlaybackState::Ended {
-                        model.playhead = model.duration;
+                        model.playhead = rendered_range
+                            .map_or(model.duration, |range| range.end.min(model.duration));
                     }
                 }
                 PlaybackEvent::Clock(clock) => {
-                    model.sync_duration(clock.duration);
-                    model.playhead = clock.position.clamp(0.0, model.duration);
+                    if let Some(range) = rendered_range {
+                        model.playhead = (range.start + clock.position).clamp(0.0, model.duration);
+                    } else {
+                        model.sync_duration(clock.duration);
+                        model.playhead = clock.position.clamp(0.0, model.duration);
+                    }
                 }
                 PlaybackEvent::Frame(frame) => {
                     if !frame.has_valid_pixels() {
@@ -290,7 +552,8 @@ impl ViewerPlaybackAdapter {
                 }
                 PlaybackEvent::Ended => {
                     model.playing = false;
-                    model.playhead = model.duration;
+                    model.playhead = rendered_range
+                        .map_or(model.duration, |range| range.end.min(model.duration));
                 }
                 PlaybackEvent::Error(error_value) => {
                     error = Some(error_value.to_string());
@@ -315,7 +578,10 @@ impl ViewerPlaybackAdapter {
                 .collect::<Vec<_>>()
                 .join("\n")
                 .into();
-            model.playhead = frame.timeline_time.clamp(0.0, model.duration);
+            model.playhead = rendered_range.map_or(frame.timeline_time, |range| {
+                range.start + frame.timeline_time
+            });
+            model.playhead = model.playhead.clamp(0.0, model.duration);
         }
         error
     }
@@ -334,4 +600,21 @@ pub fn format_time(seconds: f64) -> String {
     let minutes = (seconds / 60.0).floor() as u64;
     let remainder = seconds - minutes as f64 * 60.0;
     format!("{minutes:02}:{remainder:04.1}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PreviewState, PreviewStatus};
+
+    #[test]
+    fn render_progress_is_clamped_and_keeps_the_active_job() {
+        let mut preview = PreviewStatus::native_exact();
+        preview.begin_render("preview-1".into());
+        preview.set_progress(1.5);
+        assert_eq!(preview.job_id(), Some("preview-1"));
+        assert!(matches!(
+            preview.state,
+            PreviewState::Rendering { progress: 1.0, .. }
+        ));
+    }
 }

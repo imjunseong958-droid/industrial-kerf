@@ -242,8 +242,10 @@ mod tests {
         assert_eq!(software.encoder, "libx264");
         assert!(!software.hardware);
 
-        let mut hw = SelectEncoderOptions::default();
-        hw.prefer_hardware = true;
+        let mut hw = SelectEncoderOptions {
+            prefer_hardware: true,
+            ..Default::default()
+        };
         let selected = select_video_encoder(&capabilities.encoders, &hw);
         assert_eq!(selected.encoder, "h264_videotoolbox");
         assert_eq!(selected.family, Some(HardwareEncoderFamily::Videotoolbox));
