@@ -2,11 +2,14 @@
 //!
 //! The playback crate owns no project state. It receives a validated typed
 //! project, maps timeline time to source time, and emits bounded frame/clock
-//! events from a worker thread. The editor owns the UI adapter and uploads
-//! delivered RGBA frames to its wgpu-backed texture system.
+//! events from a worker thread. Video and audio decode run in-process through
+//! libav; export stays on the ffmpeg CLI in `cut-engine`. The editor owns the
+//! UI adapter and uploads delivered RGBA frames to its wgpu-backed texture
+//! system.
 
 mod audio;
 mod decoder;
+mod libav;
 mod timeline;
 
 pub use timeline::{CaptionCue, PlaybackClip, PlaybackSource, PlaybackTimeline, ResolvedClip};
@@ -27,6 +30,8 @@ pub const DEFAULT_EVENT_QUEUE_CAPACITY: usize = 64;
 const COMMAND_QUEUE_CAPACITY: usize = 32;
 const CLOCK_EVENT_INTERVAL: Duration = Duration::from_millis(50);
 const WORKER_TICK: Duration = Duration::from_millis(2);
+/// Forward seeks inside this window keep the live decoder and drop frames.
+const SMALL_FORWARD_SEEK_SECONDS: f64 = 1.0;
 
 /// Playback failures are kept independent from the runtime protocol. The app
 /// maps them to its UI/runtime error type at the adapter boundary.
@@ -328,7 +333,9 @@ impl Drop for PlaybackSession {
     }
 }
 
-/// Configuration for the FFmpeg decoder and bounded worker queues.
+/// Configuration for the in-process libav decoder and bounded worker queues.
+/// `ffmpeg_binary` is unused for decode; tests still pass it when they spawn
+/// ffmpeg only to generate fixtures.
 #[derive(Clone, Debug)]
 pub struct PlaybackConfig {
     pub ffmpeg_binary: PathBuf,
@@ -512,14 +519,66 @@ impl Worker {
         let was_playing = self.state == PlaybackState::Playing;
         self.audio.seek(next);
         self.position = next;
-        self.decode_cursor = next;
-        self.decode_queue.clear();
-        self.stop_decoder();
+        if !self.keep_decoder_for_seek(next) {
+            self.decode_cursor = next;
+            self.decode_queue.clear();
+            self.stop_decoder();
+        }
         self.preview_requested = !was_playing;
         if was_playing {
             self.audio.play(next);
         }
         self.emit_clock(true);
+    }
+
+    fn keep_decoder_for_seek(&mut self, target: f64) -> bool {
+        let Some(clip) = self.timeline.video_at(target) else {
+            return false;
+        };
+        if !self
+            .decoder
+            .as_ref()
+            .is_some_and(|decoder| decoder.clip_id() == clip.clip.id)
+        {
+            return false;
+        }
+        let interval = frame_interval(self.timeline.fps);
+        while self
+            .decode_queue
+            .front()
+            .is_some_and(|frame| frame.timeline_time < target - interval * 0.5)
+        {
+            self.decode_queue.pop_front();
+        }
+        if self
+            .decode_queue
+            .front()
+            .is_some_and(|frame| (frame.timeline_time - target).abs() <= interval * 0.75)
+        {
+            return true;
+        }
+        if !can_reuse_ffmpeg_decoder(
+            clip.clip.id.as_str(),
+            self.decode_cursor,
+            target,
+            clip.clip.id.as_str(),
+            clip.timeline_end(),
+            self.timeline.fps,
+        ) {
+            return false;
+        }
+        while self.decode_cursor < target - interval * 0.5 {
+            match self
+                .decoder
+                .as_mut()
+                .and_then(|decoder| decoder.next_frame().ok())
+                .flatten()
+            {
+                Some(_) => self.decode_cursor += interval,
+                None => return false,
+            }
+        }
+        true
     }
 
     fn tick_playing(&mut self) {
@@ -550,8 +609,10 @@ impl Worker {
         if let Some(frame) = self.decode_queue.pop_front() {
             self.emit(PlaybackEvent::Frame(frame));
             self.preview_requested = false;
+        } else if self.timeline.video_at(self.position).is_none() {
             self.stop_decoder();
-        } else if self.decoder.is_none() || self.timeline.video_at(self.position).is_none() {
+            self.preview_requested = false;
+        } else if self.decoder.is_none() {
             self.preview_requested = false;
         }
     }
@@ -725,6 +786,74 @@ fn frame_interval(fps: f64) -> f64 {
         1.0 / fps
     } else {
         1.0 / 30.0
+    }
+}
+
+fn can_reuse_ffmpeg_decoder(
+    decoder_clip_id: &str,
+    decode_cursor: f64,
+    target: f64,
+    clip_id: &str,
+    clip_end: f64,
+    fps: f64,
+) -> bool {
+    if decoder_clip_id != clip_id {
+        return false;
+    }
+    if !target.is_finite() || target < 0.0 || target >= clip_end {
+        return false;
+    }
+    let interval = frame_interval(fps);
+    if target + interval * 1.5 < decode_cursor {
+        return false;
+    }
+    target - decode_cursor <= SMALL_FORWARD_SEEK_SECONDS
+}
+
+#[cfg(test)]
+mod reuse_tests {
+    use super::{can_reuse_ffmpeg_decoder, frame_interval, SMALL_FORWARD_SEEK_SECONDS};
+
+    #[test]
+    fn reuses_small_forward_seeks_on_the_same_clip() {
+        assert!(can_reuse_ffmpeg_decoder(
+            "clip-a", 0.0, 0.2, "clip-a", 4.0, 30.0
+        ));
+        assert!(can_reuse_ffmpeg_decoder(
+            "clip-a",
+            0.5,
+            0.5 + SMALL_FORWARD_SEEK_SECONDS,
+            "clip-a",
+            4.0,
+            30.0
+        ));
+    }
+
+    #[test]
+    fn restarts_backward_far_forward_or_clip_changes() {
+        let interval = frame_interval(30.0);
+        assert!(!can_reuse_ffmpeg_decoder(
+            "clip-a",
+            1.0,
+            1.0 - interval * 3.0,
+            "clip-a",
+            4.0,
+            30.0
+        ));
+        assert!(!can_reuse_ffmpeg_decoder(
+            "clip-a",
+            0.0,
+            SMALL_FORWARD_SEEK_SECONDS + 0.05,
+            "clip-a",
+            4.0,
+            30.0
+        ));
+        assert!(!can_reuse_ffmpeg_decoder(
+            "clip-a", 0.0, 0.1, "clip-b", 4.0, 30.0
+        ));
+        assert!(!can_reuse_ffmpeg_decoder(
+            "clip-a", 0.0, 4.0, "clip-a", 4.0, 30.0
+        ));
     }
 }
 

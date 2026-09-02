@@ -25,10 +25,33 @@ pub struct CompiledV2FilterGraph {
     pub height: u32,
 }
 
+/// Timeline window compiled as a zero-based output of `duration` seconds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CompileRange {
+    pub start: f64,
+    pub duration: f64,
+}
+
+impl CompileRange {
+    pub fn new(start: f64, duration: f64) -> Result<Self, CompileError> {
+        if !start.is_finite() || start < 0.0 || !duration.is_finite() || duration <= 0.0 {
+            return Err(msg(
+                "compile range requires finite start >= 0 and positive duration",
+            ));
+        }
+        Ok(Self { start, duration })
+    }
+
+    pub fn end(self) -> f64 {
+        self.start + self.duration
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct CompileV2Options {
     pub video_post_filters: Vec<String>,
     pub include_embedded_audio: Option<bool>,
+    pub range: Option<CompileRange>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -104,6 +127,10 @@ struct NormalizedClip {
     color_effects: Vec<ColorEffectParams>,
     visual: VisualSpec,
     raw: Value,
+    /// Timeline origin used when rewriting clip-local `t` in overlay expressions.
+    expr_origin: f64,
+    /// Seconds trimmed from the start of the original clip (range compiles).
+    local_offset: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -938,6 +965,8 @@ fn normalize_clip(
         color_effects,
         visual,
         raw: clip_value.clone(),
+        expr_origin: start,
+        local_offset: 0.0,
     })
 }
 
@@ -1224,20 +1253,98 @@ fn color_effect_filters(
     Ok(filters)
 }
 
+fn clip_needs_alpha(clip: &NormalizedClip) -> bool {
+    clip.opacity != 1.0
+        || clip.visual.opacity_expression.is_some()
+        || clip.visual.rotation_expression.is_some()
+}
+
+fn identity_placement(clip: &NormalizedClip) -> bool {
+    clip.visual.scale_expression_x == "1"
+        && clip.visual.scale_expression_y == "1"
+        && clip.visual.x_expression == "0"
+        && clip.visual.y_expression == "0"
+        && clip.visual.rotation_expression.is_none()
+}
+
+fn clip_range_key(source_id: &str, source_in: f64, source_out: f64) -> String {
+    format!("{}@{}:{}", source_id, fmt(source_in), fmt(source_out))
+}
+
+fn value_has_transition_metadata(raw: &Value) -> bool {
+    let Some(record) = record(raw) else {
+        return false;
+    };
+    if record
+        .get("transition")
+        .is_some_and(|value| !value.is_null())
+    {
+        return true;
+    }
+    record
+        .get("transitions")
+        .and_then(Value::as_array)
+        .is_some_and(|arr| arr.iter().any(|value| !value.is_null()))
+}
+
+fn can_concat_non_overlapping_video(tracks: &[NormalizedTrack]) -> bool {
+    let mut items: Vec<&NormalizedClip> = Vec::new();
+    for track in tracks {
+        if !track.enabled {
+            continue;
+        }
+        if track.track_type == "title" && !track.clips.is_empty() {
+            return false;
+        }
+        if track.track_type != "video" {
+            continue;
+        }
+        if value_has_transition_metadata(&track.raw)
+            || track
+                .clips
+                .iter()
+                .any(|clip| value_has_transition_metadata(&clip.raw))
+        {
+            return false;
+        }
+        for clip in &track.clips {
+            if !identity_placement(clip) {
+                return false;
+            }
+            items.push(clip);
+        }
+    }
+    if items.len() < 2 {
+        return false;
+    }
+    items.sort_by(|left, right| {
+        left.start
+            .partial_cmp(&right.start)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    for pair in items.windows(2) {
+        if pair[0].start + pair[0].duration > pair[1].start + 1e-6 {
+            return false;
+        }
+    }
+    true
+}
+
 fn video_clip_filters(
     clip: &NormalizedClip,
     input_index: usize,
-    _canvas: &Canvas,
+    canvas: &Canvas,
+    input_seek: f64,
     labels: &mut Labels,
     parts: &mut Vec<String>,
+    place_on_timeline: bool,
 ) -> Result<String, CompileError> {
     let label = labels.next("v2clip");
+    let trim_start = (clip.source_in - input_seek).max(0.0);
+    let trim_end = (clip.source_out - input_seek).max(trim_start);
     let mut filters = vec![
-        format!(
-            "trim=start={}:end={}",
-            fmt(clip.source_in),
-            fmt(clip.source_out)
-        ),
+        format!("trim=start={}:end={}", fmt(trim_start), fmt(trim_end)),
         "setpts=PTS-STARTPTS".to_string(),
     ];
     if let Some(ref crop) = clip.visual.crop {
@@ -1246,6 +1353,10 @@ fn video_clip_filters(
 
     let scale_x = &clip.visual.scale_expression_x;
     let scale_y = &clip.visual.scale_expression_y;
+    filters.push(format!(
+        "scale={}:{}:force_original_aspect_ratio=decrease",
+        canvas.width, canvas.height
+    ));
     if scale_x != "1" || scale_y != "1" {
         filters.push(format!(
             "scale=w='max(2\\,trunc(iw*({scale_x})/2)*2)':h='max(2\\,trunc(ih*({scale_y})/2)*2)':eval=frame"
@@ -1254,7 +1365,18 @@ fn video_clip_filters(
     if let Some(ref rotation) = clip.visual.rotation_expression {
         filters.push(format!("rotate='({rotation})*PI/180':fillcolor=none"));
     }
-    filters.push("format=rgba".to_string());
+    if identity_placement(clip) {
+        filters.push(format!(
+            "pad={}:{}:(ow-iw)/2:(oh-ih)/2:color=black",
+            canvas.width, canvas.height
+        ));
+        filters.push("setsar=1".to_string());
+    }
+    if clip_needs_alpha(clip) {
+        filters.push("format=rgba".to_string());
+    } else {
+        filters.push("format=yuv420p".to_string());
+    }
     for (index, color) in clip.color_effects.iter().enumerate() {
         filters.extend(color_effect_filters(
             color,
@@ -1262,7 +1384,12 @@ fn video_clip_filters(
         )?);
     }
     if let Some(ref expression) = clip.visual.opacity_expression {
-        let rewritten = rewrite_t_token(expression, "T");
+        let token = if clip.local_offset != 0.0 {
+            format!("(T+{})", fmt(clip.local_offset))
+        } else {
+            "T".to_string()
+        };
+        let rewritten = rewrite_t_token(expression, &token);
         filters.push(format!(
             "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*({})'",
             rewritten
@@ -1275,7 +1402,9 @@ fn video_clip_filters(
     }
     filters.push(format!("trim=duration={}", fmt(clip.duration)));
     filters.push("setpts=PTS-STARTPTS".to_string());
-    filters.push(format!("setpts=PTS+{}/TB", fmt(clip.start)));
+    if place_on_timeline {
+        filters.push(format!("setpts=PTS+{}/TB", fmt(clip.start)));
+    }
     parts.push(format!(
         "[{input_index}:v]{filters}[{label}]",
         filters = filters.join(","),
@@ -1288,6 +1417,7 @@ fn title_clip(
     canvas: &Canvas,
     labels: &mut Labels,
     parts: &mut Vec<String>,
+    place_on_timeline: bool,
 ) -> Result<String, CompileError> {
     let raw = record(&clip.raw).ok_or_else(|| msg("title clip raw must be object"))?;
     let text_value = raw
@@ -1344,7 +1474,9 @@ fn title_clip(
     } else if clip.opacity != 1.0 {
         filters.push(format!("colorchannelmixer=aa={}", fmt(clip.opacity)));
     }
-    filters.push(format!("setpts=PTS+{}/TB", fmt(clip.start)));
+    if place_on_timeline {
+        filters.push(format!("setpts=PTS+{}/TB", fmt(clip.start)));
+    }
     parts.push(format!("{}[{label}]", filters.join(",")));
     Ok(label)
 }
@@ -1353,9 +1485,11 @@ fn build_video_track_items(
     track: &NormalizedTrack,
     source_by_id: &HashMap<String, Map<String, Value>>,
     input_index: &HashMap<String, usize>,
+    input_seek: &HashMap<String, f64>,
     canvas: &Canvas,
     labels: &mut Labels,
     parts: &mut Vec<String>,
+    place_on_timeline: bool,
 ) -> Result<Vec<(String, NormalizedClip)>, CompileError> {
     if track.track_type == "adjustment" {
         return Err(unsupported("adjustment track", track.id.clone()));
@@ -1374,18 +1508,29 @@ fn build_video_track_items(
     while i < clips.len() {
         let clip = clips[i].clone();
         let label = if track.track_type == "title" {
-            title_clip(&clip, canvas, labels, parts)?
+            title_clip(&clip, canvas, labels, parts, place_on_timeline)?
         } else {
             let source_id = clip.source_id.as_deref();
             let source = source_id.and_then(|id| source_by_id.get(id));
-            let index = source_id.and_then(|id| input_index.get(id).copied());
+            let key = source_id.map(|id| clip_range_key(id, clip.source_in, clip.source_out));
+            let index = key.as_ref().and_then(|key| input_index.get(key).copied());
             if source.is_none() || index.is_none() {
                 return Err(msg(format!(
                     "v2 video clip {} has no usable source",
                     clip.id
                 )));
             }
-            video_clip_filters(&clip, index.unwrap_or(0), canvas, labels, parts)?
+            video_clip_filters(
+                &clip,
+                index.unwrap_or(0),
+                canvas,
+                key.as_ref()
+                    .and_then(|key| input_seek.get(key).copied())
+                    .unwrap_or(0.0),
+                labels,
+                parts,
+                place_on_timeline,
+            )?
         };
 
         let next = clips.get(i + 1);
@@ -1424,18 +1569,29 @@ fn build_video_track_items(
             }
 
             let next_label = if track.track_type == "title" {
-                title_clip(&next, canvas, labels, parts)?
+                title_clip(&next, canvas, labels, parts, place_on_timeline)?
             } else {
                 let source_id = next.source_id.as_deref();
                 let source = source_id.and_then(|id| source_by_id.get(id));
-                let index = source_id.and_then(|id| input_index.get(id).copied());
+                let key = source_id.map(|id| clip_range_key(id, next.source_in, next.source_out));
+                let index = key.as_ref().and_then(|key| input_index.get(key).copied());
                 if source.is_none() || index.is_none() {
                     return Err(msg(format!(
                         "v2 video clip {} has no usable source",
                         next.id
                     )));
                 }
-                video_clip_filters(&next, index.unwrap_or(0), canvas, labels, parts)?
+                video_clip_filters(
+                    &next,
+                    index.unwrap_or(0),
+                    canvas,
+                    key.as_ref()
+                        .and_then(|key| input_seek.get(key).copied())
+                        .unwrap_or(0.0),
+                    labels,
+                    parts,
+                    place_on_timeline,
+                )?
             };
 
             let first_local = labels.next("v2xfadein");
@@ -1484,17 +1640,16 @@ fn build_video_track_items(
 fn audio_clip(
     clip: &NormalizedClip,
     input_index: usize,
+    input_seek: f64,
     total_duration: f64,
     labels: &mut Labels,
     parts: &mut Vec<String>,
 ) -> String {
     let label = labels.next("v2audio");
+    let trim_start = (clip.source_in - input_seek).max(0.0);
+    let trim_end = (clip.source_out - input_seek).max(trim_start);
     let mut filters = vec![
-        format!(
-            "atrim=start={}:end={}",
-            fmt(clip.source_in),
-            fmt(clip.source_out)
-        ),
+        format!("atrim=start={}:end={}", fmt(trim_start), fmt(trim_end)),
         "asetpts=PTS-STARTPTS".to_string(),
         "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo".to_string(),
     ];
@@ -1539,6 +1694,7 @@ fn build_audio(
     tracks: &[NormalizedTrack],
     source_by_id: &HashMap<String, Map<String, Value>>,
     input_index: &HashMap<String, usize>,
+    input_seek: &HashMap<String, f64>,
     total_duration: f64,
     labels: &mut Labels,
     parts: &mut Vec<String>,
@@ -1567,7 +1723,8 @@ fn build_audio(
                 continue;
             };
             let source = source_by_id.get(source_id);
-            let index = input_index.get(source_id).copied();
+            let key = clip_range_key(source_id, clip.source_in, clip.source_out);
+            let index = input_index.get(&key).copied();
             if source.is_none() || index.is_none() {
                 return Err(msg(format!(
                     "v2 audio clip {} has no usable source",
@@ -1579,7 +1736,14 @@ fn build_audio(
             let label = if !has_audio {
                 silent_audio_clip(clip, total_duration, labels, parts)
             } else {
-                audio_clip(clip, index.unwrap_or(0), total_duration, labels, parts)
+                audio_clip(
+                    clip,
+                    index.unwrap_or(0),
+                    input_seek.get(&key).copied().unwrap_or(0.0),
+                    total_duration,
+                    labels,
+                    parts,
+                )
             };
             inputs.push(format!("[{label}]"));
         }
@@ -1832,6 +1996,159 @@ fn normalize_tracks(
         .collect()
 }
 
+fn clip_to_range(
+    mut clip: NormalizedClip,
+    range_start: f64,
+    range_end: f64,
+) -> Option<NormalizedClip> {
+    let clip_end = clip.start + clip.duration;
+    let overlap_start = clip.start.max(range_start);
+    let overlap_end = clip_end.min(range_end);
+    if overlap_end <= overlap_start {
+        return None;
+    }
+    let head = overlap_start - clip.start;
+    clip.expr_origin = clip.start - range_start;
+    clip.local_offset = head;
+    clip.start = overlap_start - range_start;
+    clip.duration = overlap_end - overlap_start;
+    clip.source_in += head * clip.speed;
+    clip.source_out = clip.source_in + clip.duration * clip.speed;
+    Some(clip)
+}
+
+fn apply_range_to_tracks(tracks: &mut [NormalizedTrack], range: CompileRange) {
+    let range_end = range.end();
+    for track in tracks {
+        let clips = std::mem::take(&mut track.clips);
+        track.clips = clips
+            .into_iter()
+            .filter_map(|clip| clip_to_range(clip, range.start, range_end))
+            .collect();
+        let gaps = std::mem::take(&mut track.gaps);
+        track.gaps = gaps
+            .into_iter()
+            .filter_map(|gap| {
+                let gap_end = gap.start + gap.duration;
+                let start = gap.start.max(range.start);
+                let end = gap_end.min(range_end);
+                (end > start).then_some(Gap {
+                    start: start - range.start,
+                    duration: end - start,
+                })
+            })
+            .collect();
+    }
+}
+
+fn collect_clip_inputs(
+    tracks: &[NormalizedTrack],
+    source_by_id: &HashMap<String, Map<String, Value>>,
+) -> Result<(Vec<String>, HashMap<String, usize>, HashMap<String, f64>), CompileError> {
+    let mut argv_inputs = Vec::new();
+    let mut input_index = HashMap::new();
+    let mut input_seek = HashMap::new();
+    let mut next_input = 0usize;
+    for track in tracks {
+        if !track.enabled {
+            continue;
+        }
+        for clip in &track.clips {
+            let Some(source_id) = clip.source_id.as_deref() else {
+                continue;
+            };
+            let key = clip_range_key(source_id, clip.source_in, clip.source_out);
+            if input_index.contains_key(&key) {
+                continue;
+            }
+            let source = source_by_id
+                .get(source_id)
+                .ok_or_else(|| msg(format!("Unknown v2 source id: {source_id}")))?;
+            let path = source
+                .get("path")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    msg(format!(
+                        "v2 source {source_id} path must be a non-empty string"
+                    ))
+                })?;
+            let seek = clip.source_in.max(0.0);
+            if seek > 0.0 {
+                argv_inputs.push("-ss".to_string());
+                argv_inputs.push(fmt(seek));
+            }
+            let span = (clip.source_out - clip.source_in).max(0.0);
+            if span > 0.0 && span.is_finite() {
+                argv_inputs.push("-t".to_string());
+                argv_inputs.push(fmt(span));
+            }
+            input_index.insert(key.clone(), next_input);
+            input_seek.insert(key, seek);
+            next_input += 1;
+            argv_inputs.push("-i".to_string());
+            argv_inputs.push(path.to_string());
+        }
+    }
+    Ok((argv_inputs, input_index, input_seek))
+}
+
+fn concat_identity_video(
+    mut items: Vec<(String, NormalizedClip)>,
+    canvas: &Canvas,
+    labels: &mut Labels,
+    parts: &mut Vec<String>,
+) -> String {
+    items.sort_by(|left, right| {
+        left.1
+            .start
+            .partial_cmp(&right.1.start)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.1.id.cmp(&right.1.id))
+    });
+    let mut segments: Vec<String> = Vec::new();
+    let mut cursor = 0.0_f64;
+    for (label, clip) in items {
+        if clip.start > cursor + 1e-6 {
+            let gap = labels.next("v2gap");
+            parts.push(format!(
+                "color=c=black:s={}x{}:r={}:d={},format=yuv420p[{gap}]",
+                canvas.width,
+                canvas.height,
+                fmt(canvas.fps),
+                fmt(clip.start - cursor)
+            ));
+            segments.push(gap);
+        }
+        segments.push(label);
+        cursor = clip.start + clip.duration;
+    }
+    if canvas.duration > cursor + 1e-6 {
+        let gap = labels.next("v2gap");
+        parts.push(format!(
+            "color=c=black:s={}x{}:r={}:d={},format=yuv420p[{gap}]",
+            canvas.width,
+            canvas.height,
+            fmt(canvas.fps),
+            fmt(canvas.duration - cursor)
+        ));
+        segments.push(gap);
+    }
+    if segments.len() == 1 {
+        return segments.pop().unwrap_or_else(|| labels.next("v2concat"));
+    }
+    let output = labels.next("v2concat");
+    parts.push(format!(
+        "{inputs}concat=n={count}:v=1:a=0[{output}]",
+        inputs = segments
+            .iter()
+            .map(|segment| format!("[{segment}]"))
+            .collect::<String>(),
+        count = segments.len()
+    ));
+    output
+}
+
 /// Compile a version 2 project into a timeline-positioned compositing graph.
 pub fn compile_filter_graph_v2(
     project: &Value,
@@ -1848,8 +2165,13 @@ pub fn compile_filter_graph_v2(
     reject_unsupported_project_features(project)?;
 
     let source_by_id = sources_map(project)?;
-    let tracks = normalize_tracks(project, &source_by_id)?;
-    let duration = output_duration(project, &tracks)?;
+    let mut tracks = normalize_tracks(project, &source_by_id)?;
+    let duration = if let Some(range) = opts.range {
+        apply_range_to_tracks(&mut tracks, range);
+        range.duration
+    } else {
+        output_duration(project, &tracks)?
+    };
 
     let mut used_source_ids: Vec<String> = Vec::new();
     let mut seen = HashSet::new();
@@ -1886,59 +2208,88 @@ pub fn compile_filter_graph_v2(
 
     let mut labels = Labels::new();
     let mut parts: Vec<String> = Vec::new();
-    let mut inputs: Vec<String> = Vec::new();
-    let mut input_index = HashMap::new();
-    for source in &used_sources {
-        let id = source
-            .get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        let path = source
-            .get("path")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| msg(format!("v2 source {id} path must be a non-empty string")))?;
-        input_index.insert(id.to_string(), inputs.len() / 2);
-        inputs.push("-i".to_string());
-        inputs.push(path.to_string());
-    }
+    let (inputs, input_index, input_seek) = collect_clip_inputs(&tracks, &source_by_id)?;
 
-    let base = labels.next("v2base");
-    parts.push(format!(
-        "color=c=black:s={}x{}:r={}:d={},format=rgba[{base}]",
-        canvas.width,
-        canvas.height,
-        fmt(canvas.fps),
-        fmt(canvas.duration)
-    ));
-    let mut final_video = base;
-    for track in &tracks {
-        if !track.enabled {
-            continue;
+    let concat_video = can_concat_non_overlapping_video(&tracks);
+    let final_video = if concat_video {
+        let mut items = Vec::new();
+        for track in &tracks {
+            if !track.enabled || track.track_type != "video" {
+                continue;
+            }
+            let mut clips = track.clips.clone();
+            clips.sort_by(|left, right| {
+                left.start
+                    .partial_cmp(&right.start)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| left.id.cmp(&right.id))
+            });
+            for clip in clips {
+                let source_id = clip.source_id.as_deref().ok_or_else(|| {
+                    msg(format!("v2 video clip {} has no usable source", clip.id))
+                })?;
+                let key = clip_range_key(source_id, clip.source_in, clip.source_out);
+                let index = input_index.get(&key).copied().ok_or_else(|| {
+                    msg(format!("v2 video clip {} has no usable source", clip.id))
+                })?;
+                let seek = input_seek.get(&key).copied().unwrap_or(0.0);
+                let label = video_clip_filters(
+                    &clip,
+                    index,
+                    &canvas,
+                    seek,
+                    &mut labels,
+                    &mut parts,
+                    false,
+                )?;
+                items.push((label, clip));
+            }
         }
-        if track.track_type != "video" && track.track_type != "title" {
-            continue;
+        concat_identity_video(items, &canvas, &mut labels, &mut parts)
+    } else {
+        let base = labels.next("v2base");
+        parts.push(format!(
+            "color=c=black:s={}x{}:r={}:d={},format=yuv420p[{base}]",
+            canvas.width,
+            canvas.height,
+            fmt(canvas.fps),
+            fmt(canvas.duration)
+        ));
+        let mut final_video = base;
+        for track in &tracks {
+            if !track.enabled {
+                continue;
+            }
+            if track.track_type != "video" && track.track_type != "title" {
+                continue;
+            }
+            let items = build_video_track_items(
+                track,
+                &source_by_id,
+                &input_index,
+                &input_seek,
+                &canvas,
+                &mut labels,
+                &mut parts,
+                true,
+            )?;
+            for (label, clip) in items {
+                let out = labels.next("v2overlay");
+                let x = expression_with_timeline_time(&clip.visual.x_expression, clip.expr_origin);
+                let y = expression_with_timeline_time(&clip.visual.y_expression, clip.expr_origin);
+                let x_expression = format!("((main_w-overlay_w)/2+main_w*({x}))");
+                let y_expression = format!("((main_h-overlay_h)/2+main_h*({y}))");
+                let enable_end = clip.start + clip.duration;
+                parts.push(format!(
+                    "[{final_video}][{label}]overlay=x='{x_expression}':y='{y_expression}':eof_action=pass:shortest=0:format=auto:enable='between(t,{},{})'[{out}]",
+                    fmt(clip.start),
+                    fmt(enable_end)
+                ));
+                final_video = out;
+            }
         }
-        let items = build_video_track_items(
-            track,
-            &source_by_id,
-            &input_index,
-            &canvas,
-            &mut labels,
-            &mut parts,
-        )?;
-        for (label, clip) in items {
-            let out = labels.next("v2overlay");
-            let x = expression_with_timeline_time(&clip.visual.x_expression, clip.start);
-            let y = expression_with_timeline_time(&clip.visual.y_expression, clip.start);
-            let x_expression = format!("((main_w-overlay_w)/2+main_w*({x}))");
-            let y_expression = format!("((main_h-overlay_h)/2+main_h*({y}))");
-            parts.push(format!(
-                "[{final_video}][{label}]overlay=x='{x_expression}':y='{y_expression}':eof_action=pass:shortest=0:format=auto[{out}]"
-            ));
-            final_video = out;
-        }
-    }
+        final_video
+    };
 
     let final_video_format = labels.next("v2video");
     if !opts.video_post_filters.is_empty() {
@@ -1963,6 +2314,7 @@ pub fn compile_filter_graph_v2(
         &tracks,
         &source_by_id,
         &input_index,
+        &input_seek,
         duration,
         &mut labels,
         &mut parts,

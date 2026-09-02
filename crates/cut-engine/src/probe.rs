@@ -5,13 +5,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::Path;
+use std::process::{Command, Stdio};
 use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::SystemTime;
 
 use crate::derivatives::DerivativeCache;
 use crate::error::Result;
-use crate::ffmpeg::{resolve_ffmpeg_bin, resolve_ffprobe_bin, run, run_bytes, video_decode_prefix};
+use crate::ffmpeg::{resolve_ffmpeg_bin, resolve_ffprobe_bin, run, video_decode_prefix};
 use crate::resources::extract_job_count;
 
 static SILENCE_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -448,15 +450,18 @@ fn extract_one_exact_frame(
     scale: &str,
     output: String,
 ) -> Result<FrameGrab> {
+    let preroll = 0.5_f64.min(time);
     let mut args = video_decode_prefix().to_vec();
     args.extend([
         "-hide_banner".into(),
         "-loglevel".into(),
         "error".into(),
+        "-ss".into(),
+        (time - preroll).to_string(),
         "-i".into(),
         src.into(),
         "-ss".into(),
-        time.to_string(),
+        preroll.to_string(),
         "-an".into(),
         "-frames:v".into(),
         "1".into(),
@@ -671,6 +676,7 @@ pub fn cached_filmstrip(
     })
 }
 
+#[cfg(test)]
 fn waveform_buckets(samples: &[f64], bucket_count: usize) -> Vec<WaveformBucket> {
     if samples.is_empty() {
         return Vec::new();
@@ -694,35 +700,141 @@ fn waveform_buckets(samples: &[f64], bucket_count: usize) -> Vec<WaveformBucket>
         .collect()
 }
 
-fn decode_waveform_samples(src: &str) -> Result<Vec<f64>> {
-    let args = vec![
-        "-hide_banner".into(),
-        "-loglevel".into(),
-        "error".into(),
-        "-i".into(),
-        src.into(),
-        "-vn".into(),
-        "-ac".into(),
-        "1".into(),
-        "-ar".into(),
-        WAVEFORM_SAMPLE_RATE.to_string(),
-        "-f".into(),
-        "f32le".into(),
-        "pipe:1".into(),
-    ];
-    let output = run_bytes(resolve_ffmpeg_bin(), &args)?;
-    let samples = output
-        .stdout
-        .chunks_exact(4)
-        .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64)
-        .filter(|value| value.is_finite())
-        .collect::<Vec<_>>();
-    if samples.is_empty() {
+fn decode_waveform_buckets(
+    src: &str,
+    duration: f64,
+    bucket_count: usize,
+) -> Result<Vec<WaveformBucket>> {
+    let bucket_count = bucket_count.max(1);
+    let expected = if duration.is_finite() && duration > 0.0 {
+        (duration * f64::from(WAVEFORM_SAMPLE_RATE))
+            .round()
+            .max(1.0) as usize
+    } else {
+        0
+    };
+    let mut mins = vec![f64::INFINITY; bucket_count];
+    let mut maxs = vec![f64::NEG_INFINITY; bucket_count];
+    let mut sums = vec![0.0_f64; bucket_count];
+    let mut counts = vec![0_usize; bucket_count];
+    let sample_rate = WAVEFORM_SAMPLE_RATE.to_string();
+    let mut child = Command::new(resolve_ffmpeg_bin())
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            src,
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            sample_rate.as_str(),
+            "-f",
+            "f32le",
+            "pipe:1",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let mut stdout = child.stdout.take().ok_or_else(|| {
+        crate::error::EngineError::msg("ffmpeg waveform decoder did not expose stdout")
+    })?;
+    let mut buf = vec![0_u8; 64 * 1024];
+    let mut leftover = Vec::new();
+    let mut index = 0usize;
+    loop {
+        let read = stdout.read(&mut buf)?;
+        if read == 0 {
+            break;
+        }
+        leftover.extend_from_slice(&buf[..read]);
+        let usable = leftover.len() / 4 * 4;
+        for chunk in leftover[..usable].chunks_exact(4) {
+            let sample = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as f64;
+            if sample.is_finite() {
+                let bucket = if expected > 0 {
+                    index.saturating_mul(bucket_count) / expected
+                } else {
+                    0
+                }
+                .min(bucket_count - 1);
+                mins[bucket] = mins[bucket].min(sample);
+                maxs[bucket] = maxs[bucket].max(sample);
+                sums[bucket] += sample * sample;
+                counts[bucket] += 1;
+            }
+            index += 1;
+        }
+        leftover.drain(..usable);
+    }
+    drop(stdout);
+    let status = child.wait()?;
+    if !status.success() {
+        return Err(crate::error::EngineError::msg(
+            "ffmpeg failed while decoding waveform samples",
+        ));
+    }
+    if index == 0 {
         return Err(crate::error::EngineError::msg(
             "audio stream did not produce waveform samples",
         ));
     }
-    Ok(samples)
+    if expected == 0 {
+        return Ok(waveform_buckets_from_counts(
+            &mins,
+            &maxs,
+            &sums,
+            &counts,
+            bucket_count,
+        ));
+    }
+    Ok((0..bucket_count)
+        .map(|slot| {
+            let count = counts[slot].max(1) as f64;
+            WaveformBucket {
+                min: if mins[slot].is_finite() {
+                    mins[slot]
+                } else {
+                    0.0
+                },
+                max: if maxs[slot].is_finite() {
+                    maxs[slot]
+                } else {
+                    0.0
+                },
+                rms: (sums[slot] / count).sqrt(),
+            }
+        })
+        .collect())
+}
+
+fn waveform_buckets_from_counts(
+    mins: &[f64],
+    maxs: &[f64],
+    sums: &[f64],
+    counts: &[usize],
+    bucket_count: usize,
+) -> Vec<WaveformBucket> {
+    (0..bucket_count)
+        .map(|slot| {
+            let count = counts[slot].max(1) as f64;
+            WaveformBucket {
+                min: if mins[slot].is_finite() {
+                    mins[slot]
+                } else {
+                    0.0
+                },
+                max: if maxs[slot].is_finite() {
+                    maxs[slot]
+                } else {
+                    0.0
+                },
+                rms: (sums[slot] / count).sqrt(),
+            }
+        })
+        .collect()
 }
 
 fn create_waveform_image(src: &str, output: &Path, width: u32, height: u32) -> Result<()> {
@@ -781,11 +893,16 @@ pub fn cached_waveform(
                 "media does not contain an audio stream",
             ));
         }
-        let samples = decode_waveform_samples(src)?;
         let duration = meta
             .duration
             .filter(|duration| duration.is_finite() && *duration >= 0.0)
-            .unwrap_or(samples.len() as f64 / WAVEFORM_SAMPLE_RATE as f64);
+            .unwrap_or(0.0);
+        let buckets = decode_waveform_buckets(src, duration, bucket_count)?;
+        let duration = if duration > 0.0 {
+            duration
+        } else {
+            buckets.len() as f64 / WAVEFORM_SAMPLE_RATE as f64
+        };
         let image_path = if include_image {
             let path = entry.path("waveform.png");
             create_waveform_image(src, &path, image_width, image_height)?;
@@ -796,7 +913,7 @@ pub fn cached_waveform(
         let payload = WaveformPayload {
             duration,
             sample_rate: WAVEFORM_SAMPLE_RATE,
-            buckets: waveform_buckets(&samples, bucket_count),
+            buckets,
             image_path,
         };
         entry.write_json("waveform.json", &payload)?;

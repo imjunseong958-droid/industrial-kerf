@@ -2,6 +2,9 @@ use std::collections::HashMap;
 use std::io::{self, Read};
 use std::path::PathBuf;
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use cut_engine::compile::{compile_filter_graph_v2, timeline_duration_v2, CompileV2Options};
@@ -498,6 +501,7 @@ fn main() -> Result<()> {
             let opts = CompileV2Options {
                 video_post_filters: merge_post_filters(draft, post_filter),
                 include_embedded_audio,
+                range: None,
             };
             let compiled = compile_filter_graph_v2(&project, opts)?;
             let duration = timeline_duration_v2(&project)?;

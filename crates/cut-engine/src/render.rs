@@ -8,7 +8,9 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::Duration;
 
-use crate::compile::{compile_filter_graph_v2, timeline_duration_v2, CompileV2Options};
+use crate::compile::{
+    compile_filter_graph_v2, timeline_duration_v2, CompileRange, CompileV2Options,
+};
 use crate::compile_v1::{compile_filter_graph_v1, timeline_duration_v1};
 use crate::encoder::{
     encode_output_args, parse_encoder_capabilities, select_video_encoder, EncoderSelection,
@@ -133,16 +135,31 @@ pub fn render_args_v1(timeline: &Value, opts: &RenderV1Options) -> Result<Vec<St
     Ok(base)
 }
 
-pub fn render_args_v2(project: &Value, opts: &RenderV2Options) -> Result<Vec<String>> {
-    let compile_opts = CompileV2Options {
+fn compile_options_for_render(
+    opts: &RenderV2Options,
+    range: Option<CompileRange>,
+) -> CompileV2Options {
+    CompileV2Options {
         video_post_filters: if opts.draft {
             draft_post_filters()
         } else {
             Vec::new()
         },
         include_embedded_audio: opts.include_embedded_audio,
-    };
-    let compiled = compile_filter_graph_v2(project, compile_opts)?;
+        range,
+    }
+}
+
+pub fn render_args_v2(project: &Value, opts: &RenderV2Options) -> Result<Vec<String>> {
+    render_args_v2_with_range(project, opts, None)
+}
+
+pub fn render_args_v2_with_range(
+    project: &Value,
+    opts: &RenderV2Options,
+    range: Option<CompileRange>,
+) -> Result<Vec<String>> {
+    let compiled = compile_filter_graph_v2(project, compile_options_for_render(opts, range))?;
     let mut base: Vec<String> = video_decode_prefix().to_vec();
     base.extend(compiled.argv.iter().skip(1).cloned());
     if base.len() >= 2 {
@@ -414,17 +431,8 @@ where
             "render range requires finite start >= 0 and positive duration",
         ));
     }
-    let mut args = render_args_v2(project, opts)?;
-    let output = args
-        .pop()
-        .ok_or_else(|| EngineError::msg("render output path is missing"))?;
-    args.extend([
-        "-ss".into(),
-        start.to_string(),
-        "-t".into(),
-        duration.to_string(),
-    ]);
-    args.push(output);
+    let range = CompileRange { start, duration };
+    let args = render_args_v2_with_range(project, opts, Some(range))?;
     run_ffmpeg_with_progress(&args, duration, cancellation, on_progress)
 }
 
@@ -592,5 +600,44 @@ mod tests {
         second.cancel();
         first_watcher.join().expect("first watcher");
         second_watcher.join().expect("second watcher");
+    }
+
+    #[test]
+    fn range_render_args_seek_before_input_not_after_the_graph() {
+        let project = json!({
+            "version": 2,
+            "fps": 24,
+            "width": 160,
+            "height": 120,
+            "sources": [
+                { "id": "s", "path": "/tmp/s.mp4", "width": 160, "height": 120, "hasAudio": false, "duration": 30 }
+            ],
+            "tracks": [{
+                "id": "video",
+                "type": "video",
+                "clips": [{ "id": "v", "sourceId": "s", "in": 10, "out": 20, "timelineStart": 0 }]
+            }]
+        });
+        let args = render_args_v2_with_range(
+            &project,
+            &RenderV2Options {
+                output: "out.mp4".into(),
+                draft: true,
+                force_software: true,
+                ..RenderV2Options::default()
+            },
+            Some(CompileRange {
+                start: 2.0,
+                duration: 3.0,
+            }),
+        )
+        .expect("args");
+        let filter_pos = args
+            .iter()
+            .position(|arg| arg == "-filter_complex")
+            .expect("filter");
+        assert!(args[..filter_pos].windows(2).any(|pair| pair[0] == "-ss"));
+        assert!(!args[filter_pos..].windows(2).any(|pair| pair[0] == "-ss"));
+        assert_eq!(args.last().map(String::as_str), Some("out.mp4"));
     }
 }

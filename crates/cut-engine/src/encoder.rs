@@ -211,8 +211,41 @@ pub fn encode_output_args(
 ) -> Vec<String> {
     let mut args = encoder_args(selection);
     if selection.hardware {
-        if selection.family == Some(HardwareEncoderFamily::Videotoolbox) {
-            args.extend(["-q:v".into(), "65".into()]);
+        match selection.family {
+            Some(HardwareEncoderFamily::Videotoolbox) => {
+                args.extend(["-q:v".into(), "65".into()]);
+            }
+            Some(HardwareEncoderFamily::Nvenc) => {
+                args.extend([
+                    "-rc".into(),
+                    "constqp".into(),
+                    "-qp".into(),
+                    software_crf.to_string(),
+                    "-preset".into(),
+                    "p4".into(),
+                ]);
+            }
+            Some(HardwareEncoderFamily::Qsv) => {
+                args.extend([
+                    "-global_quality".into(),
+                    software_crf.to_string(),
+                    "-preset".into(),
+                    "veryfast".into(),
+                ]);
+            }
+            Some(HardwareEncoderFamily::Amf) => {
+                args.extend([
+                    "-rc".into(),
+                    "cqp".into(),
+                    "-qp_i".into(),
+                    software_crf.to_string(),
+                    "-qp_p".into(),
+                    software_crf.to_string(),
+                    "-quality".into(),
+                    "speed".into(),
+                ]);
+            }
+            None => {}
         }
         return args;
     }
@@ -254,5 +287,33 @@ mod tests {
         let hevc = select_video_encoder(&capabilities.encoders, &hw);
         assert_eq!(hevc.encoder, "hevc_qsv");
         assert_eq!(hevc.family, Some(HardwareEncoderFamily::Qsv));
+    }
+
+    #[test]
+    fn hardware_encode_args_include_family_quality_flags() {
+        let nvenc = EncoderSelection {
+            encoder: "h264_nvenc".into(),
+            hardware: true,
+            family: Some(HardwareEncoderFamily::Nvenc),
+            reason: "test".into(),
+        };
+        let args = encode_output_args(&nvenc, 23, "veryfast");
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "-preset" && pair[1] == "p4"));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "-qp" && pair[1] == "23"));
+
+        let qsv = EncoderSelection {
+            encoder: "h264_qsv".into(),
+            hardware: true,
+            family: Some(HardwareEncoderFamily::Qsv),
+            reason: "test".into(),
+        };
+        let args = encode_output_args(&qsv, 22, "veryfast");
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "-global_quality" && pair[1] == "22"));
     }
 }

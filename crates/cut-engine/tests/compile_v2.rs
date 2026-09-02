@@ -402,7 +402,7 @@ fn normalizes_differing_transition_source_dimensions_before_xfade() {
         filter
             .matches("scale=640:360:force_original_aspect_ratio=decrease")
             .count(),
-        2
+        4
     );
     assert!(filter.contains("fps=30,format=yuv420p"));
     assert!(filter.contains("xfade=transition=fade"));
@@ -471,4 +471,74 @@ fn uses_embedded_video_audio_only_when_no_explicit_audio_track_exists() {
     .expect("compile")
     .filter_complex;
     assert_eq!(opted_in.matches("[0:a]").count(), 2);
+}
+
+#[test]
+fn identity_clips_composite_in_yuv_at_canvas_size() {
+    let filter = compile_filter_graph_v2(&project(json!({})), CompileV2Options::default())
+        .expect("compile")
+        .filter_complex;
+    assert!(filter.contains("format=yuv420p"));
+    assert!(filter.contains("scale=320:180:force_original_aspect_ratio=decrease"));
+    assert!(filter.contains("enable='between(t,"));
+}
+
+#[test]
+fn range_compile_seeks_inputs_and_shortens_the_canvas() {
+    let compiled = compile_filter_graph_v2(
+        &project(json!({})),
+        CompileV2Options {
+            range: Some(cut_engine::compile::CompileRange {
+                start: 1.0,
+                duration: 1.0,
+            }),
+            ..CompileV2Options::default()
+        },
+    )
+    .expect("compile");
+    assert_eq!(compiled.duration, 1.0);
+    assert!(compiled.filter_complex.contains("d=1"));
+    assert!(compiled.argv.windows(2).any(|pair| pair[0] == "-ss"));
+    assert!(compiled.argv.windows(2).any(|pair| pair[0] == "-t"));
+    let filter_pos = compiled
+        .argv
+        .iter()
+        .position(|arg| arg == "-filter_complex")
+        .expect("filter");
+    let ss_after_filter = compiled.argv[filter_pos..]
+        .windows(2)
+        .any(|pair| pair[0] == "-ss");
+    assert!(!ss_after_filter);
+}
+
+#[test]
+fn sparse_same_source_clips_get_separate_inputs() {
+    let compiled = compile_filter_graph_v2(
+        &project(json!({
+            "tracks": [{
+                "id": "video",
+                "type": "video",
+                "clips": [
+                    { "id": "early", "sourceId": "a", "in": 0, "out": 1, "timelineStart": 0 },
+                    { "id": "late", "sourceId": "a", "in": 90, "out": 91, "timelineStart": 2 }
+                ]
+            }]
+        })),
+        CompileV2Options::default(),
+    )
+    .expect("compile");
+    let input_count = compiled.argv.iter().filter(|arg| *arg == "-i").count();
+    assert_eq!(input_count, 2, "each source range should be its own -i");
+    assert!(compiled.argv.windows(2).any(|pair| pair == ["-ss", "90"]));
+    assert!(compiled.filter_complex.contains("concat="));
+    assert!(!compiled.filter_complex.contains("overlay="));
+}
+
+#[test]
+fn overlapping_clips_keep_overlay_and_share_identical_source_ranges() {
+    let compiled =
+        compile_filter_graph_v2(&project(json!({})), CompileV2Options::default()).expect("compile");
+    assert!(compiled.filter_complex.contains("overlay="));
+    assert!(compiled.filter_complex.contains("enable='between(t,"));
+    assert!(!compiled.filter_complex.contains("concat="));
 }

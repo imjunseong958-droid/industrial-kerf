@@ -3,7 +3,7 @@ name = "cut-playback"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Native Cut playback controller, timeline mapper, and FFmpeg decoder"
+description = "Native Cut playback controller, timeline mapper, and in-process libav decoder"
 rust-version = "1.95"
 
 [lib]
@@ -17,6 +17,7 @@ native-audio = ["dep:cpal"]
 [dependencies]
 cpal = { version = "0.15.3", optional = true }
 cut-domain = { path = "../cut-domain" }
+ffmpeg-next = { version = "8.1", default-features = false, features = ["codec", "filter", "format", "software-resampling", "software-scaling"] }
 serde_json = "1"
 thiserror = "2"
 

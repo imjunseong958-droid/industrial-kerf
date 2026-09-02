@@ -349,8 +349,12 @@ pub struct ViewerPlaybackAdapter {
 
 impl ViewerPlaybackAdapter {
     pub fn open(snapshot: &StateSnapshot) -> Result<Self, RuntimeError> {
-        let session = PlaybackSession::open_json(&snapshot.project, PlaybackConfig::default())
-            .map_err(playback_runtime_error)?;
+        let (width, height) = preview_frame_size(&snapshot.project);
+        let session = PlaybackSession::open_json(
+            &snapshot.project,
+            PlaybackConfig::default().with_frame_size(width, height),
+        )
+        .map_err(playback_runtime_error)?;
         Ok(Self {
             session,
             texture: None,
@@ -608,6 +612,31 @@ impl ViewerPlaybackAdapter {
     }
 }
 
+const PREVIEW_MAX_EDGE: u32 = 1280;
+
+fn preview_frame_size(project: &serde_json::Value) -> (u32, u32) {
+    let width = project
+        .get("width")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(1920) as u32;
+    let height = project
+        .get("height")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(1080) as u32;
+    cap_preview_size(width.max(2), height.max(2), PREVIEW_MAX_EDGE)
+}
+
+fn cap_preview_size(width: u32, height: u32, max_edge: u32) -> (u32, u32) {
+    let long = width.max(height).max(1);
+    if long <= max_edge {
+        return (width, height);
+    }
+    let scale = f64::from(max_edge) / f64::from(long);
+    let width = ((f64::from(width) * scale).round() as u32).max(2) & !1;
+    let height = ((f64::from(height) * scale).round() as u32).max(2) & !1;
+    (width.max(2), height.max(2))
+}
+
 fn playback_runtime_error(error: PlaybackError) -> RuntimeError {
     RuntimeError::new("PLAYBACK_ERROR", error.to_string())
 }
@@ -622,6 +651,13 @@ pub fn format_time(seconds: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{PreviewState, PreviewStatus};
+
+    #[test]
+    fn preview_frame_size_caps_the_long_edge() {
+        assert_eq!(super::cap_preview_size(1920, 1080, 1280), (1280, 720));
+        assert_eq!(super::cap_preview_size(1280, 720, 1280), (1280, 720));
+        assert_eq!(super::cap_preview_size(640, 360, 1280), (640, 360));
+    }
 
     #[test]
     fn render_progress_is_clamped_and_keeps_the_active_job() {

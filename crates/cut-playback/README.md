@@ -1,8 +1,9 @@
 # `cut-playback`
 
 `cut-playback` is the native Unit 5 playback boundary. It accepts a typed
-`cut-domain::Project`, builds an immutable timeline plan, and runs FFmpeg video
-decoding and audio work away from the editor event loop.
+`cut-domain::Project`, builds an immutable timeline plan, and runs in-process
+libav video decoding and audio work away from the editor event loop. Export
+still uses the ffmpeg CLI in `cut-engine`.
 
 The public surface is intentionally small:
 
@@ -14,11 +15,15 @@ The public surface is intentionally small:
 - `PlaybackTimeline` exposes tested timeline-to-source mapping and caption
   lookup for adapters and focused tests.
 
-Video frames are read from an FFmpeg rawvideo pipe and uploaded by
-`crates/cut-app` into its egui wgpu texture registry. Audio uses cpal when a
-default output device is available and otherwise uses a monotonic clock
-fallback. Both command and decode/event paths are bounded so media work does
-not block the UI thread.
+Video frames are decoded in-process with libavformat/libavcodec/libavfilter
+to packed RGBA and uploaded by `crates/cut-app` into its egui wgpu texture
+registry. Audio uses cpal when a default output device is available and
+otherwise uses a monotonic clock fallback. Both command and decode/event
+paths are bounded so media work does not block the UI thread.
+
+Build requires system FFmpeg development libraries (`pkg-config` must see
+`libavcodec`, `libavformat`, `libavfilter`, `libswscale`, `libswresample`).
+Set `FFMPEG_DIR` if those `.pc` files are not on the default search path.
 
 Focused verification:
 

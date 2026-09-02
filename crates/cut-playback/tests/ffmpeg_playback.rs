@@ -110,3 +110,104 @@ fn real_ffmpeg_surface_delivers_rgba_frames_off_the_calling_thread() {
     assert!(frame.pixels[2] < 10);
     assert_eq!(frame.pixels[3], 255);
 }
+
+#[test]
+fn small_forward_seek_still_delivers_a_later_frame() {
+    let binary = ffmpeg_binary();
+    if !ffmpeg_available(&binary) {
+        eprintln!("skipping playback integration test: ffmpeg is unavailable");
+        return;
+    }
+    let directory = tempdir().expect("temporary directory");
+    let source = directory.path().join("source.mp4");
+    let status = Command::new(&binary)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x36:rate=10",
+            "-t",
+            "1",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            source.to_str().expect("utf8 source path"),
+        ])
+        .status()
+        .expect("run ffmpeg fixture");
+    assert!(status.success(), "fixture ffmpeg process failed");
+
+    let project = json!({
+        "version": 2,
+        "name": "Small seek",
+        "fps": 10,
+        "width": 64,
+        "height": 36,
+        "sources": [{
+            "id": "source-a",
+            "path": source,
+            "duration": 1.0,
+            "hasAudio": false
+        }],
+        "tracks": [{
+            "id": "video-1",
+            "type": "video",
+            "clips": [{
+                "id": "clip-a",
+                "sourceId": "source-a",
+                "in": 0,
+                "out": 1.0,
+                "timelineStart": 0
+            }]
+        }],
+        "overlays": [],
+        "gaps": [],
+        "transitions": [],
+        "effects": [],
+        "markers": []
+    });
+    let session = PlaybackSession::open_json(
+        &project,
+        PlaybackConfig::default()
+            .with_ffmpeg_binary(&binary)
+            .with_audio_enabled(false)
+            .with_frame_size(64, 36)
+            .with_decode_queue_capacity(1),
+    )
+    .expect("open playback session");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut first = None;
+    while Instant::now() < deadline {
+        if let Some(PlaybackEvent::Frame(value)) =
+            session.next_event_timeout(Duration::from_millis(100))
+        {
+            first = Some(value);
+            break;
+        }
+    }
+    let first = first.expect("opening frame");
+    session.seek(first.timeline_time + 0.2).expect("small seek");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut second = None;
+    while Instant::now() < deadline {
+        if let Some(PlaybackEvent::Frame(value)) =
+            session.next_event_timeout(Duration::from_millis(100))
+        {
+            second = Some(value);
+            break;
+        }
+    }
+    let second = second.expect("seek frame");
+    assert!(
+        second.timeline_time + 1e-3 >= first.timeline_time + 0.15,
+        "small seek stayed at {} after {}",
+        second.timeline_time,
+        first.timeline_time
+    );
+    assert!(second.has_valid_pixels());
+}

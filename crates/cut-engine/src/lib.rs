@@ -1,8 +1,5 @@
 //! Cut media engine. Probe, encode, compile, proxy, and YOLO tracking.
 
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
 // Timeline compilation is kept in the lightweight `cut-core` crate. Re-export
 // its modules from the engine crate so Rust consumers have one coherent API
 // while media/vision changes do not rebuild the compiler.

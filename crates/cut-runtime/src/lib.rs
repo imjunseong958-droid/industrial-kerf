@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,8 +44,6 @@ const MAX_RECEIPTS: usize = 1024;
 /// Maximum duration of one bounded rendered-preview request.
 pub const MAX_RENDER_RANGE_SECONDS: f64 = 120.0;
 const RENDER_CANCEL_FILE_PREFIX: &str = ".cut-render-";
-const RENDER_POLL_INTERVAL: Duration = Duration::from_millis(20);
-const RENDER_PROGRESS_QUEUE_CAPACITY: usize = 128;
 
 /// The largest JSONL request accepted by the local IPC boundary.
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
@@ -3818,18 +3816,8 @@ impl Runtime {
     }
 
     fn probe(path: &str) -> Result<Value, RuntimeError> {
-        let binary = engine_binary()?;
-        let output = Command::new(binary)
-            .args(["probe", "info", path])
-            .output()
-            .map_err(io_error)?;
-        if !output.status.success() {
-            return Err(RuntimeError::new(
-                "ENGINE_ERROR",
-                String::from_utf8_lossy(&output.stderr).trim().to_string(),
-            ));
-        }
-        serde_json::from_slice(&output.stdout)
+        let info = cut_engine::probe::info(path).map_err(engine_error)?;
+        serde_json::to_value(info)
             .map_err(|error| RuntimeError::new("ENGINE_PROTOCOL_ERROR", error.to_string()))
     }
 
@@ -5285,6 +5273,7 @@ fn unique_id() -> String {
     format!("{nanos:x}-{:x}", SEQUENCE.fetch_add(1, Ordering::Relaxed))
 }
 
+#[cfg(test)]
 fn repository_root_from_manifest(manifest_dir: &Path) -> PathBuf {
     manifest_dir
         .ancestors()
@@ -5293,6 +5282,7 @@ fn repository_root_from_manifest(manifest_dir: &Path) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+#[cfg(test)]
 fn engine_binary_candidates(root: &Path) -> [PathBuf; 2] {
     [
         root.join("target/release/cut-engine"),
@@ -5300,20 +5290,13 @@ fn engine_binary_candidates(root: &Path) -> [PathBuf; 2] {
     ]
 }
 
-fn engine_binary() -> Result<PathBuf, RuntimeError> {
-    if let Some(path) = std::env::var_os("CUT_ENGINE_BIN") {
-        return Ok(PathBuf::from(path));
-    }
-    let root = repository_root_from_manifest(Path::new(env!("CARGO_MANIFEST_DIR")));
-    for candidate in engine_binary_candidates(&root) {
-        if candidate.is_file() {
-            return Ok(candidate);
+fn engine_error(error: cut_engine::EngineError) -> RuntimeError {
+    match error {
+        cut_engine::EngineError::Cancelled => {
+            RuntimeError::new("CANCELLED", "render job was cancelled")
         }
+        other => RuntimeError::new("ENGINE_ERROR", other.to_string()),
     }
-    Err(RuntimeError::new(
-        "ENGINE_UNAVAILABLE",
-        "cut-engine is not available; set CUT_ENGINE_BIN",
-    ))
 }
 
 pub fn run_render(
@@ -5327,7 +5310,7 @@ pub fn run_render(
 
 /// Run one render worker with an optional bounded range and job-specific
 /// cancellation marker. The runtime remains the durable owner of job state;
-/// this helper only owns the short-lived engine process.
+/// the engine is invoked in-process.
 pub fn run_render_with_cancel_file(
     id: String,
     project: Value,
@@ -5353,135 +5336,62 @@ pub fn run_render_with_cancel_file_progress<F>(
 where
     F: FnMut(f64),
 {
-    let binary = engine_binary()?;
-    let cancel_file_for_result = cancel_file.clone();
-    let mut args = vec![
-        "render-v2".to_owned(),
-        "--run".to_owned(),
-        "--output".to_owned(),
-        output.to_string_lossy().into_owned(),
-    ];
-    if draft {
-        args.push("--draft".into());
-    }
-    if let Some(range) = range {
+    if let Some(range) = range.as_ref() {
         RenderRange::new(range.start, range.duration)?;
-        args.extend([
-            "--start".into(),
-            range.start.to_string(),
-            "--duration".into(),
-            range.duration.to_string(),
-        ]);
     }
-    if let Some(cancel_file) = cancel_file.as_ref() {
-        args.extend([
-            "--cancel-file".into(),
-            cancel_file.to_string_lossy().into_owned(),
-        ]);
-    }
-    let mut child = Command::new(binary)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(io_error)?;
-    if let Some(mut stdin) = child.stdin.take() {
-        serde_json::to_writer(&mut stdin, &project)
-            .map_err(|error| RuntimeError::new("ENGINE_PROTOCOL_ERROR", error.to_string()))?;
-    }
-    let stderr = child.stderr.take();
-    let (sender, receiver) = mpsc::sync_channel(RENDER_PROGRESS_QUEUE_CAPACITY);
-    let reader = thread::spawn(move || {
-        let Some(stderr) = stderr else {
-            return;
-        };
-        for line in BufReader::new(stderr)
-            .lines()
-            .map_while(std::result::Result::ok)
-        {
-            if sender.send(line).is_err() {
-                break;
-            }
-        }
+    let project = cut_engine::enrich::enrich_project_v2(&project).map_err(engine_error)?;
+    let opts = cut_engine::render::RenderV2Options {
+        output: output.to_string_lossy().into_owned(),
+        draft,
+        include_embedded_audio: None,
+        prefer_hardware: false,
+        force_software: false,
+        codec: cut_engine::VideoCodec::H264,
+    };
+    let cancellation = cut_engine::CancellationToken::new();
+    let watcher = cancel_file.as_ref().map(|path| {
+        cut_engine::render::spawn_cancel_file_watcher(path.clone(), cancellation.clone())
     });
-    loop {
-        for line in receiver.try_iter() {
-            if let Some(progress) = render_progress_line(&line) {
-                on_progress(progress);
-            }
-        }
-        let status = match child.try_wait() {
-            Ok(status) => status,
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                finish_render_progress_reader(reader, &receiver, &mut on_progress);
-                return Err(io_error(error));
-            }
-        };
-        let Some(status) = status else {
-            thread::sleep(RENDER_POLL_INTERVAL);
-            continue;
-        };
-        finish_render_progress_reader(reader, &receiver, &mut on_progress);
-        if status.success() {
+    let result = match range {
+        Some(range) => cut_engine::render::render_v2_range_with_cancellation(
+            &project,
+            &opts,
+            range.start,
+            range.duration,
+            &cancellation,
+            Some(&mut on_progress),
+        ),
+        None => cut_engine::render::render_v2_with_cancellation(
+            &project,
+            &opts,
+            &cancellation,
+            Some(&mut on_progress),
+        ),
+    };
+    cancellation.cancel();
+    if let Some(watcher) = watcher {
+        let _ = watcher.join();
+    }
+    match result {
+        Ok(()) => {
             if output.is_file() {
-                return Ok(());
+                Ok(())
+            } else {
+                Err(RuntimeError::new(
+                    "ENGINE_ERROR",
+                    format!(
+                        "render job {id} completed without producing {}",
+                        output.display()
+                    ),
+                ))
             }
-            return Err(RuntimeError::new(
-                "ENGINE_ERROR",
-                format!(
-                    "render job {id} completed without producing {}",
-                    output.display()
-                ),
-            ));
         }
-        if cancel_file_for_result.is_some_and(|path| path.is_file()) {
-            return Err(RuntimeError::new(
-                "CANCELLED",
-                format!("render job {id} was cancelled"),
-            ));
-        }
-        return Err(RuntimeError::new(
-            "ENGINE_ERROR",
-            format!("render job {id} failed: cut-engine exited with {status}"),
-        ));
+        Err(cut_engine::EngineError::Cancelled) => Err(RuntimeError::new(
+            "CANCELLED",
+            format!("render job {id} was cancelled"),
+        )),
+        Err(error) => Err(engine_error(error)),
     }
-}
-
-fn finish_render_progress_reader<F>(
-    reader: thread::JoinHandle<()>,
-    receiver: &Receiver<String>,
-    on_progress: &mut F,
-) where
-    F: FnMut(f64),
-{
-    while !reader.is_finished() {
-        drain_render_progress(receiver, on_progress);
-        thread::sleep(RENDER_POLL_INTERVAL);
-    }
-    let _ = reader.join();
-    drain_render_progress(receiver, on_progress);
-}
-
-fn drain_render_progress<F>(receiver: &Receiver<String>, on_progress: &mut F)
-where
-    F: FnMut(f64),
-{
-    for line in receiver.try_iter() {
-        if let Some(progress) = render_progress_line(&line) {
-            on_progress(progress);
-        }
-    }
-}
-
-fn render_progress_line(line: &str) -> Option<f64> {
-    serde_json::from_str::<Value>(line)
-        .ok()
-        .and_then(|value| value.get("progress").and_then(Value::as_f64))
-        .filter(|progress| progress.is_finite())
-        .map(|progress| progress.clamp(0.0, 1.0))
 }
 
 #[cfg(test)]

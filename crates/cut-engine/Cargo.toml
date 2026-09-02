@@ -33,4 +33,10 @@ thiserror = "2"
 
 [dev-dependencies]
 approx = "0.5"
+criterion = "0.5"
+cut-playback = { path = "../cut-playback", default-features = false }
 tempfile = "3"
+
+[[bench]]
+name = "engine_hotpath"
+harness = false

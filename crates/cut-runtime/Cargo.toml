@@ -11,6 +11,7 @@ path = "src/lib.rs"
 
 [dependencies]
 cut-domain = { path = "../cut-domain" }
+cut-engine = { path = "../cut-engine" }
 fs2 = "0.4"
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
