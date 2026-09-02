@@ -133,7 +133,11 @@ pub fn check_project(project: &Value, media_root: Option<&Path>) -> TimelineChec
     report_never_visible_findings(&facts, &mut collector);
     report_black_gaps(&facts, &mut collector);
     report_capability_mismatches(&facts, &mut collector);
-    report_compiler_findings(project, &mut collector);
+    // An empty timeline is a valid editing state even though it cannot be
+    // rendered yet. Structural findings above still report malformed projects.
+    if facts.duration > 0.0 {
+        report_compiler_findings(project, &mut collector);
+    }
     collector.finish()
 }
 
@@ -1119,6 +1123,26 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tempfile::tempdir;
+
+    #[test]
+    fn empty_timeline_is_not_a_compiler_error() {
+        let project = json!({
+            "version": 2,
+            "fps": 30,
+            "sources": [],
+            "tracks": [
+                {"id": "video", "type": "video", "clips": []},
+                {"id": "audio", "type": "audio", "clips": []}
+            ]
+        });
+
+        let report = check_project(&project, None);
+        assert!(report.is_valid());
+        assert!(!report
+            .findings
+            .iter()
+            .any(|finding| finding.code == "compiler_rejected_feature"));
+    }
 
     #[test]
     fn reports_missing_source_and_black_gap_deterministically() {

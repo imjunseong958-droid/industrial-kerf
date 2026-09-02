@@ -9,6 +9,7 @@ use std::time::Duration;
 /// State of the path currently allowed to feed the native viewer.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PreviewState {
+    Empty,
     NativeExact,
     WaitingForRender,
     Rendering { job_id: String, progress: f64 },
@@ -25,6 +26,12 @@ pub struct PreviewStatus {
 }
 
 impl PreviewStatus {
+    pub fn empty() -> Self {
+        let mut status = Self::native_exact();
+        status.state = PreviewState::Empty;
+        status
+    }
+
     pub fn native_exact() -> Self {
         Self::from_plan(PreviewPlan {
             mode: PreviewMode::NativeExact,
@@ -70,7 +77,8 @@ impl PreviewStatus {
     pub fn job_id(&self) -> Option<&str> {
         match &self.state {
             PreviewState::Rendering { job_id, .. } => Some(job_id),
-            PreviewState::NativeExact
+            PreviewState::Empty
+            | PreviewState::NativeExact
             | PreviewState::WaitingForRender
             | PreviewState::RenderedFallback
             | PreviewState::Failed { .. }
@@ -85,8 +93,13 @@ impl PreviewStatus {
         )
     }
 
+    fn is_empty(&self) -> bool {
+        matches!(self.state, PreviewState::Empty)
+    }
+
     fn label(&self) -> &'static str {
         match &self.state {
+            PreviewState::Empty => "No media",
             PreviewState::NativeExact => "Native exact",
             PreviewState::WaitingForRender => "Rendered fallback pending",
             PreviewState::Rendering { .. } => "Rendered fallback rendering",
@@ -175,11 +188,13 @@ impl ViewerViewModel {
             ui.label(
                 RichText::new(format!("Preview · {}", self.preview.label()))
                     .small()
-                    .color(if self.preview.accepts_playback() {
-                        Color32::from_gray(170)
-                    } else {
-                        Color32::from_rgb(228, 174, 84)
-                    }),
+                    .color(
+                        if self.preview.accepts_playback() || self.preview.is_empty() {
+                            Color32::from_gray(170)
+                        } else {
+                            Color32::from_rgb(228, 174, 84)
+                        },
+                    ),
             );
             if let Some(job_id) = self.preview.job_id() {
                 let progress = match &self.preview.state {
@@ -300,7 +315,9 @@ impl ViewerViewModel {
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            if matches!(
+            if matches!(&self.preview.state, PreviewState::Empty) {
+                "DROP MEDIA TO START"
+            } else if matches!(
                 &self.preview.state,
                 PreviewState::WaitingForRender | PreviewState::Rendering { .. }
             ) {
@@ -616,5 +633,14 @@ mod tests {
             preview.state,
             PreviewState::Rendering { progress: 1.0, .. }
         ));
+    }
+
+    #[test]
+    fn empty_preview_is_neutral_and_disables_playback() {
+        let preview = PreviewStatus::empty();
+        assert_eq!(preview.state, PreviewState::Empty);
+        assert_eq!(preview.label(), "No media");
+        assert!(!preview.accepts_playback());
+        assert!(preview.reason_summary().is_empty());
     }
 }

@@ -525,6 +525,14 @@ impl NativeApp {
             Some(self.runtime.project_directory()),
             None,
         );
+        if snapshot.duration <= 0.0 && !plan.unavailable() {
+            self.pending_preview = None;
+            self.model.viewer.preview = PreviewStatus::empty();
+            self.model.viewer.playing = false;
+            self.ui_state.status = status;
+            return;
+        }
+
         match plan.mode {
             PreviewMode::NativeExact => {
                 self.pending_preview = None;
