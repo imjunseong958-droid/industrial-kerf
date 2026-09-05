@@ -212,9 +212,11 @@ impl PlaybackTimeline {
     }
 
     pub fn video_at(&self, timeline_time: f64) -> Option<ResolvedClip> {
-        self.resolved_clips(TrackType::Video)
-            .rev()
-            .find(|resolved| resolved.clip.contains(timeline_time))
+        self.video_at_ref(timeline_time)
+            .map(|(clip, source)| ResolvedClip {
+                clip: clip.clone(),
+                source: source.clone(),
+            })
     }
 
     pub fn audio_at(&self, timeline_time: f64) -> Vec<ResolvedClip> {
@@ -239,6 +241,57 @@ impl PlaybackTimeline {
             .collect()
     }
 
+    /// Resolve the active video clip without cloning media metadata. Decoder
+    /// workers use this on every frame; the owned `video_at` API remains for
+    /// callers that need to retain the result.
+    pub(crate) fn video_at_ref(
+        &self,
+        timeline_time: f64,
+    ) -> Option<(&PlaybackClip, &PlaybackSource)> {
+        self.clips
+            .iter()
+            .rev()
+            .filter(|clip| clip.track_kind == TrackType::Video)
+            .filter(|clip| clip.contains(timeline_time))
+            .find_map(|clip| {
+                self.sources
+                    .iter()
+                    .find(|source| source.id == clip.source_id)
+                    .map(|source| (clip, source))
+            })
+    }
+
+    pub(crate) fn video_at_indices(&self, timeline_time: f64) -> Option<(usize, usize)> {
+        self.clips
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, clip)| clip.track_kind == TrackType::Video && clip.contains(timeline_time))
+            .find_map(|(clip_index, clip)| {
+                self.sources
+                    .iter()
+                    .position(|source| source.id == clip.source_id)
+                    .map(|source_index| (clip_index, source_index))
+            })
+    }
+
+    pub(crate) fn audio_at_indices(&self, timeline_time: f64) -> Option<(usize, usize)> {
+        self.clips
+            .iter()
+            .enumerate()
+            .filter(|(_, clip)| {
+                matches!(clip.track_kind, TrackType::Audio | TrackType::Video)
+                    && !clip.track_muted
+                    && clip.contains(timeline_time)
+            })
+            .find_map(|(clip_index, clip)| {
+                self.sources
+                    .iter()
+                    .position(|source| source.id == clip.source_id && source.has_audio)
+                    .map(|source_index| (clip_index, source_index))
+            })
+    }
+
     pub fn next_video_start_after(&self, timeline_time: f64) -> Option<f64> {
         self.clips
             .iter()
@@ -255,25 +308,6 @@ impl PlaybackTimeline {
             .filter(|cue| timeline_time >= cue.start && timeline_time < cue.end)
             .cloned()
             .collect()
-    }
-
-    fn resolved_clips(
-        &self,
-        kind: TrackType,
-    ) -> impl DoubleEndedIterator<Item = ResolvedClip> + '_ {
-        self.clips
-            .iter()
-            .filter(move |clip| clip.track_kind == kind)
-            .filter_map(|clip| {
-                self.sources
-                    .iter()
-                    .find(|source| source.id == clip.source_id)
-                    .cloned()
-                    .map(|source| ResolvedClip {
-                        clip: clip.clone(),
-                        source,
-                    })
-            })
     }
 }
 

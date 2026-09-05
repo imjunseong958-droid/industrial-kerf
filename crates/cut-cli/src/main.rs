@@ -9,8 +9,6 @@ use cut_agent::{
     AgentEvent, AgentSession, AgentSessionOptions, AgentTargetSummary, OpenAiApiMode, ProviderName,
     ReasoningEffort,
 };
-use cut_app::config::AppConfig;
-use cut_app::launch as launch_native_editor;
 use cut_mcp::{docs::add_agents_pointer, inbound::InboundMcpRegistry, CutMcpRouter, McpProfile};
 use cut_runtime::RuntimeClient;
 use cut_skills::{load_skills, Skill};
@@ -261,12 +259,21 @@ fn run_gui(args: &Args, directory: &Path) -> Result<()> {
         println!("imported {}", path.display());
     }
 
-    let mut config = AppConfig::from_env().map_err(runtime_error)?;
-    config = config.with_project_directory(directory.to_owned());
-    if let Some(cutd) = args.cutd.as_deref() {
-        config = config.with_cutd_binary(cutd.to_owned());
+    let qt = discover_cut_qt()?;
+    let cutd = args
+        .cutd
+        .clone()
+        .or_else(discover_cutd)
+        .unwrap_or_else(|| PathBuf::from(binary_name("cutd")));
+    let status = std::process::Command::new(&qt)
+        .arg(directory)
+        .arg(&cutd)
+        .status()
+        .with_context(|| format!("could not launch {}", qt.display()))?;
+    if !status.success() {
+        bail!("Qt editor exited with {status}");
     }
-    launch_native_editor(config).map_err(runtime_error)
+    Ok(())
 }
 
 fn configure_gui_agent(llm: &LlmConfig) {
@@ -477,6 +484,35 @@ fn discover_cutd() -> Option<PathBuf> {
     candidates.push(root.join("target/debug").join(binary_name("cutd")));
     candidates.push(root.join("target/release").join(binary_name("cutd")));
     candidates.into_iter().find(|path| path.is_file())
+}
+
+fn discover_cut_qt() -> Result<PathBuf> {
+    if let Some(path) = env::var_os("CUT_QT_BIN").map(PathBuf::from) {
+        if path.is_file() {
+            return Ok(path);
+        }
+        bail!("configured Qt editor does not exist: {}", path.display());
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .context("could not resolve repository root")?;
+    let mut candidates = Vec::new();
+    if let Some(parent) = env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+    {
+        candidates.push(parent.join(binary_name("cut-qt")));
+    }
+    candidates.push(root.join("target/qt").join(binary_name("cut-qt")));
+    candidates.push(root.join("target/debug").join(binary_name("cut-qt")));
+    candidates.push(root.join("target/release").join(binary_name("cut-qt")));
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .ok_or_else(|| {
+            anyhow!("Qt editor not found; build it with scripts/run-cut-qt.sh or set CUT_QT_BIN")
+        })
 }
 
 fn binary_name(name: &str) -> String {

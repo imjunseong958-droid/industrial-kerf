@@ -12,7 +12,6 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-cut-app = { path = "../cut-app" }
 cut-agent = { path = "../cut-agent" }
 cut-domain = { path = "../cut-domain" }
 cut-engine = { path = "../cut-engine" }

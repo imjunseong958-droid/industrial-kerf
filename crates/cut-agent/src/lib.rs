@@ -131,6 +131,13 @@ pub trait LlmProvider: Send + Sync {
 
 /// Injectable JSON HTTP boundary. Tests can replace it without a network.
 pub trait JsonHttpClient: Send + Sync {
+    fn get_json(&self, _url: &str, _headers: &[(String, String)]) -> Result<Value, ProviderError> {
+        Err(ProviderError::new(
+            "PROVIDER_HTTP_ERROR",
+            "model discovery is not supported by this HTTP client",
+        ))
+    }
+
     fn post_json(
         &self,
         url: &str,
@@ -170,6 +177,29 @@ impl Default for UreqHttpClient {
 }
 
 impl JsonHttpClient for UreqHttpClient {
+    fn get_json(&self, url: &str, headers: &[(String, String)]) -> Result<Value, ProviderError> {
+        let config = ureq::Agent::config_builder()
+            .timeout_global(Some(self.timeout))
+            .build();
+        let agent: ureq::Agent = config.into();
+        let mut request = agent.get(url);
+        for (name, value) in headers {
+            request = request.header(name, value);
+        }
+        let mut response = request.call().map_err(|error| {
+            ProviderError::new(
+                "PROVIDER_HTTP_ERROR",
+                format!("provider model check failed: {error}"),
+            )
+        })?;
+        response.body_mut().read_json().map_err(|error| {
+            ProviderError::new(
+                "PROVIDER_PROTOCOL_ERROR",
+                format!("provider returned an invalid model list: {error}"),
+            )
+        })
+    }
+
     fn post_json(
         &self,
         url: &str,
@@ -194,6 +224,50 @@ impl JsonHttpClient for UreqHttpClient {
         let body = self.send(url, headers, body)?;
         parse_stream_events(&body)
     }
+}
+
+/// Verify that provider credentials can see the selected model without
+/// consuming generation tokens.
+pub fn check_model_access(
+    provider: ProviderName,
+    api_key: &str,
+    base_url: Option<&str>,
+    model: &str,
+) -> Result<(), ProviderError> {
+    let base_url = base_url
+        .unwrap_or(match provider {
+            ProviderName::Anthropic => "https://api.anthropic.com/v1",
+            ProviderName::Openai => "https://api.openai.com/v1",
+        })
+        .trim_end_matches('/');
+    let headers = match provider {
+        ProviderName::Anthropic => vec![
+            ("anthropic-version".into(), "2023-06-01".into()),
+            ("x-api-key".into(), api_key.into()),
+        ],
+        ProviderName::Openai => vec![("authorization".into(), format!("Bearer {api_key}"))],
+    };
+    let response = UreqHttpClient::new(Duration::from_secs(15))
+        .get_json(&format!("{base_url}/models"), &headers)?;
+    if model_list_contains(&response, model) {
+        Ok(())
+    } else {
+        Err(ProviderError::new(
+            "MODEL_UNAVAILABLE",
+            format!("model {model} is not available for these credentials"),
+        ))
+    }
+}
+
+fn model_list_contains(response: &Value, model: &str) -> bool {
+    response
+        .get("data")
+        .and_then(Value::as_array)
+        .is_some_and(|models| {
+            models
+                .iter()
+                .any(|candidate| candidate.get("id").and_then(Value::as_str) == Some(model))
+        })
 }
 
 impl UreqHttpClient {
@@ -2148,5 +2222,18 @@ mod tests {
             sensitive.error.as_deref(),
             Some("sensitive tool error redacted")
         );
+    }
+
+    #[test]
+    fn model_list_requires_an_exact_visible_model_id() {
+        let response = json!({
+            "data": [
+                {"id": "gpt-test"},
+                {"id": "provider/model-v2"}
+            ]
+        });
+        assert!(model_list_contains(&response, "provider/model-v2"));
+        assert!(!model_list_contains(&response, "model-v2"));
+        assert!(!model_list_contains(&json!({}), "gpt-test"));
     }
 }

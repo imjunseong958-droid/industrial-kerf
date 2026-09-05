@@ -9,7 +9,7 @@ playback, agent, or MCP boundaries.
 The final application removes TypeScript, React, and Tauri from production. The target uses these boundaries:
 
 ```text
-native editor (winit + egui + wgpu) ─┐
+Qt6 editor ───────────────────────────┐
 Rust MCP server ──────────────────────┼─> cutd ─> typed domain ─> durable store
 Rust agent and CLI ───────────────────┘               └────────> cut-engine
 ```
@@ -53,19 +53,19 @@ surfaces; the former Node and Tauri product packages have been removed.
 - Runtime inputs reject empty idempotency keys.
 - Runtime duration includes project duration, clip placement, clip duration, speed, and gaps.
 - Import rejects missing files and malformed overlays.
-- `crates/cut-app` owns the native `winit` + `egui` + `egui-wgpu` + `wgpu`
-  composition root, native window configuration, icon, sidecar discovery, and
-  packaging guidance.
-- The native shell reads and mutates project state only through `RuntimeClient`
-  and projects the canonical snapshot through viewer, timeline, inspector,
-  agent rail, media bin, and settings view-model boundaries.
+- `apps/cut-qt` owns the Qt6 composition root and visual shell. The
+  `crates/cut-qt-bridge` C ABI owns nonblocking runtime, playback, and agent
+  workers while keeping canonical state in `cutd`.
+- The Qt shell reads and mutates project state only through the bridge and
+  projects the canonical snapshot through viewer, timeline, inspector, agent
+  rail, and media-bin widgets.
 - `crates/cut-playback` owns the worker-backed native playback boundary. It
   maps typed timeline clips to FFmpeg decoding, emits bounded clock and RGBA
   frame events, and uses cpal with a monotonic fallback clock when no audio
   device is available.
-- `crates/cut-app` owns the playback adapter, egui texture upload, captions,
-  viewer controls, and native fullscreen window action. `cut-engine` remains
-  the offline render and probe owner.
+- `crates/cut-qt-bridge` owns playback frame delivery and captions while Qt
+  owns texture upload, viewer controls, and window actions. `cut-engine`
+  remains the offline render and probe owner.
 - `crates/cut-playback/tests/release_gate.rs` generates real 4K, VFR, long-GOP,
   audio/video, and caption media and verifies decode, seek, clock mapping,
   captions, mute state, and bounded frame delivery.
@@ -84,8 +84,9 @@ surfaces; the former Node and Tauri product packages have been removed.
 - The real Rust workflow was exercised with local media, two MCP clients,
   revision conflict and idempotent retry, preview render, undo/redo, daemon
   restart recovery, CLI agent proposal staging, and proposal accept/reject.
-- `cut --smoke` and `scripts/smoke-cut-app.sh` exercise real add-track,
-  undo, redo, release-build, and daemon-restart behavior.
+- `scripts/test-cut-qt-bridge.py` exercises real import, trim, undo, redo,
+  latest-seek delivery, proposal approval, preview rendering, and restart
+  behavior through the Qt bridge.
 
 The runtime wire boundary still uses `serde_json::Value` for compatibility, but
 canonical project and command reduction is typed in `cut-domain`. Unix socket
@@ -101,15 +102,16 @@ These commands pass on the native tree:
 cargo fmt -p cut-runtime --check
 cargo test -p cut-runtime
 cargo test --workspace
-cargo fmt -p cut-app --check
-cargo test -p cut-app
+cargo check -p cut-qt-bridge -p cut-cli
 cargo test -p cut-playback --all-targets -- --nocapture
-cargo clippy -p cut-agent -p cut-mcp -p cut-cli -p cut-app \
+cargo clippy -p cut-agent -p cut-mcp -p cut-cli -p cut-qt-bridge \
   -p cut-fetcher -p cut-interchange -p cut-skills -p cut-playback \
   -p cut-runtime --all-targets --no-deps -- -D warnings
 cargo build --release -p cut-runtime --bin cutd
-cargo build --release -p cut-app --bin cut
-scripts/smoke-cut-app.sh
+cargo build -p cut-qt-bridge
+cmake -S apps/cut-qt -B target/qt
+cmake --build target/qt
+python3 scripts/test-cut-qt-bridge.py
 ```
 
 `cut-runtime` has 32 unit tests and 2 real-process IPC tests. Run
@@ -156,25 +158,23 @@ import are durable, revisioned operations.
 
 ### 4. Add the native Rust editor shell (completed)
 
-Status: complete. The native shell, runtime-backed view-models,
-command-surface smoke, release build, daemon-restart smoke, Korean IME,
-keyboard navigation, focus, AccessKit, and open-edit-restart workflow passed.
+Status: complete. The Qt shell, runtime-backed bridge, daemon-restart smoke,
+Korean input, and open-edit-restart workflow passed.
 
-`crates/cut-app` is the native application crate. Its `cut` binary is the
-packaged desktop product and composition root built on `winit`, `egui`,
-`egui-wgpu`, and `wgpu`.
+`apps/cut-qt` is the packaged desktop product and composition root. Its
+`crates/cut-qt-bridge` dependency keeps runtime and media work off the Qt GUI
+thread.
 
 - Start with project name, revision, track list, proposal status, and undo or redo.
 - Keep canonical project state in `cutd`. The UI owns only view state.
-- Use clear view-model boundaries for viewer, timeline, inspector, agent rail, media bin, and settings.
-- The real command-surface smoke test covers add-track, undo, redo, and daemon
-  restart.
-- Korean IME, keyboard navigation, focus, and AccessKit accessibility passed
-  as release gates.
-- Window lifecycle, icons, configuration, sidecar discovery, and packaging are
-  owned by `crates/cut-app`.
-- `cargo build --release -p cut-app` and the native open/edit/restart smoke test
-  passed before legacy deletion.
+- Keep viewer, timeline, inspector, agent rail, and media-bin state projected
+  from the bridge snapshot.
+- The real Qt bridge smoke test covers import, trim, undo, redo, latest-seek
+  delivery, proposals, preview rendering, and daemon restart.
+- Korean input, keyboard navigation, focus, and Qt window lifecycle are
+  release gates.
+- Window configuration, sidecar discovery, and packaging are owned by the Qt
+  shell and launcher.
 
 Do not add Slint as a second UI toolkit.
 
@@ -182,19 +182,19 @@ Do not add Slint as a second UI toolkit.
 
 Status: complete. `cut-playback` exposes a bounded worker-backed session with
 typed timeline mapping, FFmpeg RGBA frame delivery, clock events, cpal audio
-output with a monotonic fallback, and control commands. `cut-app` owns the
-adapter, texture upload, captions, viewer controls, and fullscreen window
-action. The release-gate integration tests and native manual checks passed.
+output with a monotonic fallback, and control commands. The Qt bridge owns the
+adapter and captions while the shell owns texture upload, viewer controls, and
+window actions. The release-gate integration tests and Qt manual checks passed.
 
 `crates/cut-playback` is a Cargo workspace member behind a stable playback
-interface. `crates/cut-app` owns its UI adapter and `crates/cut-engine` owns
-offline render and probe behavior.
+interface. `crates/cut-qt-bridge` owns the UI adapter and `crates/cut-engine`
+owns offline render and probe behavior.
 
 - Open, play, pause, seek, volume, mute, clock events, and frame delivery are
   implemented.
 - Decode uses a bounded queue and an audio/monotonic master clock.
 - Timeline mapping handles placement, in/out points, and speed.
-- Frames are rendered to a wgpu texture without blocking the UI event loop.
+- Frames are delivered to a Qt image without blocking the UI event loop.
 - 4K, variable-frame-rate, long-GOP, captions, mute, fullscreen, and audio
   synchronization were verified.
 
@@ -219,7 +219,7 @@ surface; API credentials remain user-owned and are not part of the test tree.
 Status: complete. The native workflow passed before the legacy packages and
 workspace files were removed.
 
-Delete legacy code only after the native application and Rust MCP surface pass the same real workflow:
+Delete legacy code only after the Qt application and Rust MCP surface pass the same real workflow:
 
 ```text
 open project

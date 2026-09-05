@@ -3,9 +3,8 @@
 //! The playback crate owns no project state. It receives a validated typed
 //! project, maps timeline time to source time, and emits bounded frame/clock
 //! events from a worker thread. Video and audio decode run in-process through
-//! libav; export stays on the ffmpeg CLI in `cut-engine`. The editor owns the
-//! UI adapter and uploads delivered RGBA frames to its wgpu-backed texture
-//! system.
+//! libav; export stays on the ffmpeg CLI in `cut-engine`. Native clients own
+//! the adapter that presents delivered RGBA frames.
 
 mod audio;
 mod decoder;
@@ -18,8 +17,8 @@ use audio::AudioRuntime;
 use decoder::{DecodedVideoFrame, VideoDecoder};
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
-use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -139,16 +138,80 @@ pub enum PlaybackCommand {
     Shutdown,
 }
 
+#[derive(Debug)]
+enum WorkerCommand {
+    Open {
+        project: Box<cut_domain::Project>,
+        request_id: u64,
+    },
+    Play,
+    Pause,
+    Seek(SeekRequest),
+    SeekWake,
+    SetVolume(f32),
+    SetMuted(bool),
+    Shutdown,
+}
+
+#[derive(Debug)]
+struct SeekRequest {
+    position: f64,
+    request_id: u64,
+}
+
+#[derive(Debug)]
+struct ControlState {
+    next_request_id: u64,
+    visible_epoch: u64,
+    latest_seek: Option<SeekRequest>,
+}
+
+impl ControlState {
+    fn new() -> Self {
+        Self {
+            // Epoch zero belongs to the initial project events. Start
+            // requests at one so the first seek/open can invalidate them.
+            next_request_id: 1,
+            visible_epoch: 0,
+            latest_seek: None,
+        }
+    }
+
+    fn allocate_request_id(&mut self) -> u64 {
+        let request_id = self.next_request_id;
+        self.next_request_id = self.next_request_id.wrapping_add(1);
+        request_id
+    }
+}
+
 /// Cloneable control handle for a playback worker.
 #[derive(Clone, Debug)]
 pub struct PlaybackHandle {
-    commands: SyncSender<PlaybackCommand>,
+    commands: SyncSender<WorkerCommand>,
+    control: Arc<Mutex<ControlState>>,
 }
 
 impl PlaybackHandle {
     /// Replace the project without touching the editor's canonical runtime.
     pub fn open(&self, project: cut_domain::Project) -> Result<(), PlaybackError> {
-        self.send(PlaybackCommand::Open(Box::new(project)))
+        let mut control = self.lock_control();
+        let request_id = control.allocate_request_id();
+        let result = self
+            .commands
+            .try_send(WorkerCommand::Open {
+                project: Box::new(project),
+                request_id,
+            })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => PlaybackError::CommandQueueFull,
+                TrySendError::Disconnected(_) => PlaybackError::WorkerUnavailable,
+            });
+        if result.is_ok() {
+            // Publish the boundary when the command is accepted so events
+            // from an earlier open cannot escape while this one is queued.
+            control.visible_epoch = control.visible_epoch.max(request_id);
+        }
+        result
     }
 
     pub fn open_json(&self, project: &serde_json::Value) -> Result<(), PlaybackError> {
@@ -171,7 +234,20 @@ impl PlaybackHandle {
                 "seek position must be finite and nonnegative".into(),
             ));
         }
-        self.send(PlaybackCommand::Seek(position))
+        let mut control = self.lock_control();
+        let request_id = control.allocate_request_id();
+        let result = self.commands.try_send(WorkerCommand::SeekWake);
+        match result {
+            Ok(()) | Err(TrySendError::Full(_)) => {
+                control.latest_seek = Some(SeekRequest {
+                    position,
+                    request_id,
+                });
+                control.visible_epoch = request_id;
+                Ok(())
+            }
+            Err(TrySendError::Disconnected(_)) => Err(PlaybackError::WorkerUnavailable),
+        }
     }
 
     pub fn set_volume(&self, volume: f32) -> Result<(), PlaybackError> {
@@ -192,6 +268,19 @@ impl PlaybackHandle {
     }
 
     fn send(&self, command: PlaybackCommand) -> Result<(), PlaybackError> {
+        let command = match command {
+            PlaybackCommand::Open(project) => {
+                return self.open(*project);
+            }
+            PlaybackCommand::Play => WorkerCommand::Play,
+            PlaybackCommand::Pause => WorkerCommand::Pause,
+            PlaybackCommand::Seek(position) => {
+                return self.seek(position);
+            }
+            PlaybackCommand::SetVolume(volume) => WorkerCommand::SetVolume(volume),
+            PlaybackCommand::SetMuted(muted) => WorkerCommand::SetMuted(muted),
+            PlaybackCommand::Shutdown => WorkerCommand::Shutdown,
+        };
         self.commands
             .try_send(command)
             .map_err(|error| match error {
@@ -199,10 +288,16 @@ impl PlaybackHandle {
                 TrySendError::Disconnected(_) => PlaybackError::WorkerUnavailable,
             })
     }
+
+    fn lock_control(&self) -> std::sync::MutexGuard<'_, ControlState> {
+        self.control
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 }
 
-/// Stable controller/event boundary used by `cut-app` and future native
-/// clients. Implementations must keep media work off the caller's UI thread.
+/// Stable controller/event boundary used by native clients. Implementations
+/// must keep media work off the caller's UI thread.
 pub trait PlaybackInterface {
     fn handle(&self) -> PlaybackHandle;
     fn try_next_event(&self) -> Option<PlaybackEvent>;
@@ -212,7 +307,13 @@ pub trait PlaybackInterface {
 /// A worker-backed playback session.
 pub struct PlaybackSession {
     handle: PlaybackHandle,
-    events: Receiver<PlaybackEvent>,
+    events: Receiver<QueuedEvent>,
+    control: Arc<Mutex<ControlState>>,
+}
+
+struct QueuedEvent {
+    epoch: u64,
+    event: PlaybackEvent,
 }
 
 impl PlaybackSession {
@@ -224,7 +325,8 @@ impl PlaybackSession {
         let timeline = PlaybackTimeline::from_project(&project)?;
         let (command_tx, command_rx) = mpsc::sync_channel(COMMAND_QUEUE_CAPACITY);
         let event_queue_capacity = config.event_queue_capacity.max(8);
-        let (event_tx, event_rx) = mpsc::sync_channel(event_queue_capacity);
+        let (event_tx, event_rx) = mpsc::sync_channel::<QueuedEvent>(event_queue_capacity);
+        let control = Arc::new(Mutex::new(ControlState::new()));
         let audio = AudioRuntime::spawn(
             timeline.clone(),
             &config.ffmpeg_binary,
@@ -248,6 +350,9 @@ impl PlaybackSession {
             muted: false,
             pending_events: VecDeque::new(),
             pending_event_capacity: event_queue_capacity,
+            control: Arc::clone(&control),
+            event_epoch: 0,
+            deferred_command: None,
         };
         thread::Builder::new()
             .name("cut-playback".into())
@@ -256,8 +361,10 @@ impl PlaybackSession {
         Ok(Self {
             handle: PlaybackHandle {
                 commands: command_tx,
+                control: Arc::clone(&control),
             },
             events: event_rx,
+            control,
         })
     }
 
@@ -301,15 +408,34 @@ impl PlaybackSession {
     }
 
     pub fn try_next_event(&self) -> Option<PlaybackEvent> {
-        self.events.try_recv().ok()
+        loop {
+            let event = self.events.try_recv().ok()?;
+            if event.epoch >= self.current_epoch() {
+                return Some(event.event);
+            }
+        }
     }
 
     pub fn next_event_timeout(&self, timeout: Duration) -> Option<PlaybackEvent> {
-        self.events.recv_timeout(timeout).ok()
+        let started = Instant::now();
+        loop {
+            let remaining = timeout.saturating_sub(started.elapsed());
+            let event = self.events.recv_timeout(remaining).ok()?;
+            if event.epoch >= self.current_epoch() {
+                return Some(event.event);
+            }
+        }
     }
 
     pub fn drain_events(&self) -> impl Iterator<Item = PlaybackEvent> + '_ {
-        self.events.try_iter()
+        std::iter::from_fn(move || self.try_next_event())
+    }
+
+    fn current_epoch(&self) -> u64 {
+        self.control
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .visible_epoch
     }
 }
 
@@ -392,8 +518,8 @@ impl PlaybackConfig {
 struct Worker {
     timeline: PlaybackTimeline,
     config: PlaybackConfig,
-    commands: Receiver<PlaybackCommand>,
-    events: SyncSender<PlaybackEvent>,
+    commands: Receiver<WorkerCommand>,
+    events: SyncSender<QueuedEvent>,
     audio: AudioRuntime,
     state: PlaybackState,
     position: f64,
@@ -405,8 +531,11 @@ struct Worker {
     last_clock_event: Instant,
     volume: f32,
     muted: bool,
-    pending_events: VecDeque<PlaybackEvent>,
+    pending_events: VecDeque<QueuedEvent>,
     pending_event_capacity: usize,
+    control: Arc<Mutex<ControlState>>,
+    event_epoch: u64,
+    deferred_command: Option<WorkerCommand>,
 }
 
 impl Worker {
@@ -426,14 +555,11 @@ impl Worker {
             } else {
                 Duration::from_millis(100)
             };
-            match self.commands.recv_timeout(timeout) {
-                Ok(command) => {
-                    if !self.handle_command(command) {
-                        break;
-                    }
+            let command = self.next_command(timeout);
+            if let Some(command) = command {
+                if !self.handle_command(command) {
+                    break;
                 }
-                Err(RecvTimeoutError::Disconnected) => break,
-                Err(RecvTimeoutError::Timeout) => {}
             }
             if self.pending_events.is_empty() {
                 if self.state == PlaybackState::Playing {
@@ -451,10 +577,74 @@ impl Worker {
         self.audio.shutdown();
     }
 
-    fn handle_command(&mut self, command: PlaybackCommand) -> bool {
+    fn next_command(&mut self, timeout: Duration) -> Option<WorkerCommand> {
+        if let Some(command) = self.deferred_command.take() {
+            return Some(command);
+        }
+        let command = match self.commands.try_recv() {
+            Ok(command) => Some(command),
+            Err(TryRecvError::Disconnected) => return None,
+            Err(TryRecvError::Empty) => {
+                self.take_seek_request()
+                    .map(WorkerCommand::Seek)
+                    .or_else(|| match self.commands.recv_timeout(timeout) {
+                        Ok(command) => Some(command),
+                        Err(RecvTimeoutError::Disconnected) => None,
+                        Err(RecvTimeoutError::Timeout) => None,
+                    })
+            }
+        }?;
+        if let WorkerCommand::Open { request_id, .. } = &command {
+            if let Some(request) = self.take_seek_request_before(*request_id) {
+                self.deferred_command = Some(command);
+                return Some(WorkerCommand::Seek(request));
+            }
+        }
+        Some(command)
+    }
+
+    fn take_seek_request(&mut self) -> Option<SeekRequest> {
+        self.control
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .latest_seek
+            .take()
+    }
+
+    fn take_seek_request_before(&mut self, request_id: u64) -> Option<SeekRequest> {
+        let mut control = self
+            .control
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if control
+            .latest_seek
+            .as_ref()
+            .is_some_and(|request| request.request_id < request_id)
+        {
+            control.latest_seek.take()
+        } else {
+            None
+        }
+    }
+
+    fn accept_open(&mut self, request_id: u64) {
+        self.event_epoch = request_id;
+        self.pending_events.clear();
+        let mut control = self
+            .control
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        control.visible_epoch = control.visible_epoch.max(request_id);
+    }
+
+    fn handle_command(&mut self, command: WorkerCommand) -> bool {
         match command {
-            PlaybackCommand::Open(project) => match PlaybackTimeline::from_project(&project) {
+            WorkerCommand::Open {
+                project,
+                request_id,
+            } => match PlaybackTimeline::from_project(&project) {
                 Ok(timeline) => {
+                    self.accept_open(request_id);
                     self.stop_decoder();
                     self.timeline = timeline.clone();
                     self.audio.open(timeline);
@@ -470,20 +660,28 @@ impl Worker {
                     });
                     self.emit_clock(true);
                 }
-                Err(error) => self.emit(PlaybackEvent::Error(error)),
+                Err(error) => {
+                    self.accept_open(request_id);
+                    self.emit(PlaybackEvent::Error(error));
+                }
             },
-            PlaybackCommand::Play => self.start_playing(),
-            PlaybackCommand::Pause => self.pause_playing(),
-            PlaybackCommand::Seek(position) => self.seek_to(position),
-            PlaybackCommand::SetVolume(volume) => {
+            WorkerCommand::Play => self.start_playing(),
+            WorkerCommand::Pause => self.pause_playing(),
+            WorkerCommand::SeekWake => {
+                if let Some(request) = self.take_seek_request() {
+                    self.seek_to(request.position, request.request_id);
+                }
+            }
+            WorkerCommand::Seek(request) => self.seek_to(request.position, request.request_id),
+            WorkerCommand::SetVolume(volume) => {
                 self.volume = volume;
                 self.audio.set_volume(volume);
             }
-            PlaybackCommand::SetMuted(muted) => {
+            WorkerCommand::SetMuted(muted) => {
                 self.muted = muted;
                 self.audio.set_muted(muted);
             }
-            PlaybackCommand::Shutdown => return false,
+            WorkerCommand::Shutdown => return false,
         }
         true
     }
@@ -514,7 +712,9 @@ impl Worker {
         }
     }
 
-    fn seek_to(&mut self, position: f64) {
+    fn seek_to(&mut self, position: f64, request_id: u64) {
+        self.event_epoch = request_id;
+        self.pending_events.clear();
         let next = position.min(self.timeline.duration.max(0.0));
         let was_playing = self.state == PlaybackState::Playing;
         self.audio.seek(next);
@@ -529,16 +729,24 @@ impl Worker {
             self.audio.play(next);
         }
         self.emit_clock(true);
+        // A seek advances the visible event epoch. Repeat the current state
+        // so a state transition queued before the seek cannot be filtered
+        // away without leaving clients with an out-of-date state.
+        self.emit(PlaybackEvent::StateChanged(self.state));
     }
 
     fn keep_decoder_for_seek(&mut self, target: f64) -> bool {
-        let Some(clip) = self.timeline.video_at(target) else {
+        let Some((clip_id, clip_end)) = self
+            .timeline
+            .video_at_ref(target)
+            .map(|(clip, _)| (clip.id.clone(), clip.timeline_end()))
+        else {
             return false;
         };
         if !self
             .decoder
             .as_ref()
-            .is_some_and(|decoder| decoder.clip_id() == clip.clip.id)
+            .is_some_and(|decoder| decoder.clip_id() == clip_id.as_str())
         {
             return false;
         }
@@ -553,16 +761,23 @@ impl Worker {
         if self
             .decode_queue
             .front()
+            .is_some_and(|frame| frame.timeline_time > target + interval * 0.75)
+        {
+            return false;
+        }
+        if self
+            .decode_queue
+            .front()
             .is_some_and(|frame| (frame.timeline_time - target).abs() <= interval * 0.75)
         {
             return true;
         }
         if !can_reuse_ffmpeg_decoder(
-            clip.clip.id.as_str(),
+            clip_id.as_str(),
             self.decode_cursor,
             target,
-            clip.clip.id.as_str(),
-            clip.timeline_end(),
+            clip_id.as_str(),
+            clip_end,
             self.timeline.fps,
         ) {
             return false;
@@ -571,11 +786,11 @@ impl Worker {
             match self
                 .decoder
                 .as_mut()
-                .and_then(|decoder| decoder.next_frame().ok())
-                .flatten()
+                .and_then(|decoder| decoder.skip_frame().ok())
             {
-                Some(_) => self.decode_cursor += interval,
+                Some(true) => self.decode_cursor += interval,
                 None => return false,
+                Some(false) => return false,
             }
         }
         true
@@ -609,7 +824,7 @@ impl Worker {
         if let Some(frame) = self.decode_queue.pop_front() {
             self.emit(PlaybackEvent::Frame(frame));
             self.preview_requested = false;
-        } else if self.timeline.video_at(self.position).is_none() {
+        } else if self.timeline.video_at_ref(self.position).is_none() {
             self.stop_decoder();
             self.preview_requested = false;
         } else if self.decoder.is_none() {
@@ -620,7 +835,9 @@ impl Worker {
     fn fill_decode_queue(&mut self) {
         let capacity = self.config.decode_queue_capacity.max(1);
         while self.decode_queue.len() < capacity {
-            let Some(clip) = self.timeline.video_at(self.decode_cursor) else {
+            let Some((clip_index, source_index)) =
+                self.timeline.video_at_indices(self.decode_cursor)
+            else {
                 let Some(next_start) = self.timeline.next_video_start_after(self.decode_cursor)
                 else {
                     self.stop_decoder();
@@ -629,29 +846,36 @@ impl Worker {
                 self.decode_cursor = next_start;
                 continue;
             };
-            if self.decode_cursor >= clip.timeline_end() {
-                self.decode_cursor = clip.timeline_end();
+            let clip_end = self.timeline.clips[clip_index].timeline_end();
+            if self.decode_cursor >= clip_end {
+                self.decode_cursor = clip_end;
                 self.stop_decoder();
                 continue;
             }
             let decoder_matches = self
                 .decoder
                 .as_ref()
-                .is_some_and(|decoder| decoder.clip_id() == clip.clip.id);
+                .is_some_and(|decoder| decoder.clip_id() == self.timeline.clips[clip_index].id);
             if !decoder_matches {
                 self.stop_decoder();
-                match VideoDecoder::open(
-                    &self.config.ffmpeg_binary,
-                    &self.timeline,
-                    &clip,
-                    self.decode_cursor,
-                    self.config.frame_width,
-                    self.config.frame_height,
-                ) {
+                let decoder = {
+                    let clip = &self.timeline.clips[clip_index];
+                    let source = &self.timeline.sources[source_index];
+                    VideoDecoder::open(
+                        &self.config.ffmpeg_binary,
+                        &self.timeline,
+                        clip,
+                        source,
+                        self.decode_cursor,
+                        self.config.frame_width,
+                        self.config.frame_height,
+                    )
+                };
+                match decoder {
                     Ok(decoder) => self.decoder = Some(decoder),
                     Err(error) => {
                         self.emit(PlaybackEvent::Error(error));
-                        self.decode_cursor = clip.timeline_end();
+                        self.decode_cursor = clip_end;
                         break;
                     }
                 }
@@ -662,21 +886,21 @@ impl Worker {
             match decoder.next_frame() {
                 Ok(Some(decoded)) => {
                     let timeline_time = self.decode_cursor;
-                    if timeline_time >= clip.timeline_end() {
+                    if timeline_time >= clip_end {
                         self.stop_decoder();
                         continue;
                     }
-                    let frame = self.make_frame(&clip, decoded, timeline_time);
+                    let frame = self.make_frame(clip_index, decoded, timeline_time);
                     self.decode_queue.push_back(frame);
                     self.decode_cursor += frame_interval(self.timeline.fps);
                 }
                 Ok(None) => {
                     self.stop_decoder();
-                    self.decode_cursor = clip.timeline_end();
+                    self.decode_cursor = clip_end;
                 }
                 Err(error) => {
                     self.emit(PlaybackEvent::Error(error));
-                    self.decode_cursor = clip.timeline_end();
+                    self.decode_cursor = clip_end;
                     self.stop_decoder();
                     break;
                 }
@@ -686,15 +910,16 @@ impl Worker {
 
     fn make_frame(
         &mut self,
-        clip: &ResolvedClip,
+        clip_index: usize,
         decoded: DecodedVideoFrame,
         timeline_time: f64,
     ) -> PlaybackFrame {
+        let clip = &self.timeline.clips[clip_index];
         let frame = PlaybackFrame {
             sequence: self.sequence,
             timeline_time,
             source_time: clip.source_time_at(timeline_time),
-            clip_id: clip.clip.id.clone(),
+            clip_id: clip.id.clone(),
             width: decoded.width,
             height: decoded.height,
             pixels: decoded.pixels,
@@ -730,17 +955,21 @@ impl Worker {
 
     fn emit(&mut self, event: PlaybackEvent) {
         self.flush_pending_events();
+        let event = QueuedEvent {
+            epoch: self.event_epoch,
+            event,
+        };
         match self.events.try_send(event) {
             Ok(()) | Err(TrySendError::Disconnected(_)) => {}
             Err(TrySendError::Full(event)) => {
-                if matches!(&event, PlaybackEvent::Frame(_)) {
+                if matches!(&event.event, PlaybackEvent::Frame(_)) {
                     return;
                 }
-                if matches!(&event, PlaybackEvent::Clock(_)) {
+                if matches!(&event.event, PlaybackEvent::Clock(_)) {
                     if let Some(existing) = self
                         .pending_events
                         .iter_mut()
-                        .find(|pending| matches!(pending, PlaybackEvent::Clock(_)))
+                        .find(|pending| matches!(&pending.event, PlaybackEvent::Clock(_)))
                     {
                         *existing = event;
                     } else {
@@ -765,12 +994,12 @@ impl Worker {
         }
     }
 
-    fn queue_pending(&mut self, event: PlaybackEvent) {
+    fn queue_pending(&mut self, event: QueuedEvent) {
         if self.pending_events.len() >= self.pending_event_capacity {
             if let Some(index) = self
                 .pending_events
                 .iter()
-                .position(|pending| matches!(pending, PlaybackEvent::Clock(_)))
+                .position(|pending| matches!(&pending.event, PlaybackEvent::Clock(_)))
             {
                 self.pending_events.remove(index);
             } else {
@@ -942,5 +1171,192 @@ mod tests {
         assert_eq!(timeline.duration, 3.0);
         assert_eq!(timeline.width, 320);
         assert_eq!(timeline.height, 180);
+    }
+
+    fn worker_for_state_test() -> (Worker, Receiver<QueuedEvent>, Arc<Mutex<ControlState>>) {
+        let timeline = PlaybackTimeline::from_project(&project_with_media()).expect("timeline");
+        let (commands, command_receiver) = mpsc::sync_channel(COMMAND_QUEUE_CAPACITY);
+        let (events, event_receiver) = mpsc::sync_channel(16);
+        let control = Arc::new(Mutex::new(ControlState::new()));
+        let audio = AudioRuntime::spawn(timeline.clone(), PathBuf::from("ffmpeg").as_path(), false)
+            .expect("audio worker");
+        let worker = Worker {
+            timeline,
+            config: PlaybackConfig::default().with_audio_enabled(false),
+            commands: command_receiver,
+            events,
+            audio,
+            state: PlaybackState::Ready,
+            position: 0.0,
+            decoder: None,
+            decode_queue: VecDeque::new(),
+            decode_cursor: 0.0,
+            sequence: 0,
+            preview_requested: false,
+            last_clock_event: Instant::now(),
+            volume: 1.0,
+            muted: false,
+            pending_events: VecDeque::new(),
+            pending_event_capacity: 16,
+            control: Arc::clone(&control),
+            event_epoch: 0,
+            deferred_command: None,
+        };
+        drop(commands);
+        (worker, event_receiver, control)
+    }
+
+    #[test]
+    fn rapid_seek_requests_are_coalesced_without_filling_the_command_queue() {
+        let session = PlaybackSession::open(
+            cut_domain::empty_project(),
+            PlaybackConfig::default().with_audio_enabled(false),
+        )
+        .expect("session");
+        for position in 0..(COMMAND_QUEUE_CAPACITY * 4) {
+            session.seek(position as f64).expect("coalesced seek");
+        }
+    }
+
+    #[test]
+    fn latest_seek_slot_keeps_only_the_newest_target() {
+        let (commands, _receiver) = mpsc::sync_channel(1);
+        let control = Arc::new(Mutex::new(ControlState::new()));
+        let handle = PlaybackHandle {
+            commands,
+            control: Arc::clone(&control),
+        };
+        handle.seek(1.0).expect("first seek");
+        handle.seek(2.0).expect("second seek");
+        assert_eq!(
+            control
+                .lock()
+                .expect("control")
+                .latest_seek
+                .as_ref()
+                .map(|request| request.position),
+            Some(2.0)
+        );
+        assert_eq!(
+            control
+                .lock()
+                .expect("control")
+                .latest_seek
+                .as_ref()
+                .map(|request| request.request_id),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn seek_repeats_current_state_after_advancing_event_epoch() {
+        let (mut worker, events, control) = worker_for_state_test();
+        assert!(worker.handle_command(WorkerCommand::Play));
+        let _: Vec<_> = events.try_iter().collect();
+        control.lock().expect("control").visible_epoch = 1;
+        assert!(worker.handle_command(WorkerCommand::Seek(SeekRequest {
+            position: 1.5,
+            request_id: 1,
+        })));
+        let events: Vec<_> = events.try_iter().collect();
+        assert!(events.iter().any(|event| {
+            event.epoch == 1
+                && matches!(
+                    event.event,
+                    PlaybackEvent::StateChanged(PlaybackState::Playing)
+                )
+        }));
+    }
+
+    #[test]
+    fn accepted_open_publishes_its_event_epoch_before_worker_handles_it() {
+        let (commands, _receiver) = mpsc::sync_channel(1);
+        let control = Arc::new(Mutex::new(ControlState::new()));
+        let handle = PlaybackHandle {
+            commands,
+            control: Arc::clone(&control),
+        };
+        handle
+            .open(cut_domain::empty_project())
+            .expect("accepted open");
+        assert_eq!(control.lock().expect("control").visible_epoch, 1);
+    }
+
+    #[test]
+    fn rapid_opens_hide_events_from_superseded_projects() {
+        let (command_tx, _command_rx) = mpsc::sync_channel(4);
+        let (event_tx, event_rx) = mpsc::sync_channel(4);
+        let control = Arc::new(Mutex::new(ControlState::new()));
+        let handle = PlaybackHandle {
+            commands: command_tx,
+            control: Arc::clone(&control),
+        };
+        handle
+            .open(cut_domain::empty_project())
+            .expect("first open");
+        handle
+            .open(cut_domain::empty_project())
+            .expect("second open");
+        event_tx
+            .send(QueuedEvent {
+                epoch: 1,
+                event: PlaybackEvent::Opened {
+                    duration: 1.0,
+                    width: 2,
+                    height: 2,
+                },
+            })
+            .expect("first event");
+        event_tx
+            .send(QueuedEvent {
+                epoch: 2,
+                event: PlaybackEvent::Opened {
+                    duration: 2.0,
+                    width: 2,
+                    height: 2,
+                },
+            })
+            .expect("second event");
+        let session = PlaybackSession {
+            handle,
+            events: event_rx,
+            control,
+        };
+        assert!(matches!(
+            session.try_next_event(),
+            Some(PlaybackEvent::Opened { duration, .. }) if duration == 2.0
+        ));
+    }
+
+    #[test]
+    fn events_from_before_a_seek_are_filtered_at_the_session_boundary() {
+        let (command_tx, _command_rx) = mpsc::sync_channel(1);
+        let (event_tx, event_rx) = mpsc::sync_channel(2);
+        let control = Arc::new(Mutex::new(ControlState::new()));
+        event_tx
+            .send(QueuedEvent {
+                epoch: 0,
+                event: PlaybackEvent::Frame(PlaybackFrame {
+                    sequence: 0,
+                    timeline_time: 0.0,
+                    source_time: 0.0,
+                    clip_id: "clip".into(),
+                    width: 2,
+                    height: 2,
+                    pixels: Arc::from(vec![0_u8; 16].into_boxed_slice()),
+                    captions: Vec::new(),
+                }),
+            })
+            .expect("queued event");
+        control.lock().expect("control").visible_epoch = 1;
+        let session = PlaybackSession {
+            handle: PlaybackHandle {
+                commands: command_tx,
+                control: Arc::clone(&control),
+            },
+            events: event_rx,
+            control,
+        };
+        assert!(session.try_next_event().is_none());
     }
 }

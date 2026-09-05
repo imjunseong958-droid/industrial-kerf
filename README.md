@@ -1,8 +1,8 @@
 # cut
 
-Cut is a native, agentic video editor. `lcut` opens the native editor by
-default; pass `--terminal` for the project-scoped terminal agent. `cut` is the
-underlying native editor binary and `cut-mcp` is the project-scoped MCP server.
+Cut is a native, agentic video editor. `lcut` opens the Qt6 editor by default;
+pass `--terminal` for the project-scoped terminal agent. `cut-mcp` is the
+project-scoped MCP server.
 
 ## Architecture
 
@@ -11,7 +11,7 @@ receipts, proposals, and render jobs. The native editor, terminal agent, and
 MCP server are adapters over the same project-scoped IPC boundary.
 
 ```text
-native editor (winit + egui + wgpu) ─┐
+Qt6 editor ──────────────────────────┐
 Rust agent and CLI ──────────────────┼─> cutd ─> typed domain ─> durable store
 Rust MCP server ─────────────────────┘               └────────> cut-engine
 ```
@@ -23,15 +23,18 @@ playbooks are data in `skills/*/SKILL.md` and are loaded by `cut-skills`.
 
 ```bash
 cargo build --release -p cut-runtime --bin cutd
-cargo build --release -p cut-app --bin cut
+cargo build -p cut-qt-bridge
+cmake -S apps/cut-qt -B target/qt
+cmake --build target/qt
 cargo build --release -p cut-cli --bin lcut
 cargo build --release -p cut-mcp --bin cut-mcp
 ```
 
-Open the native editor for a project:
+Open the Qt editor for a project:
 
 ```bash
-target/release/lcut --dir ./my-project --cutd "$PWD/target/release/cutd"
+CUT_QT_BIN="$PWD/target/qt/cut-qt" target/release/lcut \
+  --dir ./my-project --cutd "$PWD/target/release/cutd"
 ```
 
 Run the terminal workflow:
@@ -55,10 +58,12 @@ daemon; the `CUTD_BIN` environment variable does the same.
 `CUT_ENABLE_MCP=1`) attaches those inbound stdio servers to the terminal agent
 through `mcp_search` and `mcp_call`; configured tool allowlists are enforced.
 
-The native command surface and daemon restart smoke test are available at:
+The Qt bridge, daemon, decoder, agent proposal, and restart smoke test are
+available at:
 
 ```bash
-scripts/smoke-cut-app.sh
+cargo build -p cut-qt-bridge -p cut-runtime --lib --bin cutd
+python3 scripts/test-cut-qt-bridge.py
 ```
 
 ## Providers
@@ -165,12 +170,11 @@ skills, fetch, interchange, CLI wiring, and protocol conformance fixtures.
 
 ```bash
 cargo test --workspace
-cargo clippy -p cut-agent -p cut-mcp -p cut-cli -p cut-app \
+cargo clippy -p cut-agent -p cut-mcp -p cut-cli -p cut-qt-bridge \
   -p cut-fetcher -p cut-interchange -p cut-skills -p cut-playback \
   -p cut-runtime --all-targets --no-deps -- -D warnings
 ```
 
-The native release gate also includes a manual window check: open a project,
-edit it, restart it, enter Korean text, traverse controls with Tab, inspect the
-AccessKit tree, play/seek media, verify captions/mute/fullscreen, and accept or
-reject an agent proposal.
+The Qt release gate also includes a manual window check: open a project, edit
+it, restart it, enter Korean text, play/seek media, verify captions/mute, and
+accept or reject an agent proposal.

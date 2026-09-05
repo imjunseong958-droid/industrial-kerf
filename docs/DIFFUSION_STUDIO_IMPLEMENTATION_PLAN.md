@@ -1,6 +1,6 @@
 # Diffusion Studio reference implementation plan
 
-Status: implementation handoff
+Status: implementation handoff; Qt6 UI migration supersedes the former Rust UI shell
 Prepared: 2026-09-01
 Cut baseline: `24a3485db74cb8c17de254b7b108882424998eba`
 Diffusion Studio baseline: `585fb010dcca36919f096f4b1275d535acab0cb9`
@@ -50,7 +50,7 @@ heads and working tree before implementation. Preserve unrelated user changes.
 Cut is a native Rust workspace with these production boundaries:
 
 ```text
-native editor (winit + egui + wgpu) -+
+Qt6 editor --------------------------+
 Rust agent and CLI ------------------+-> cutd -> typed domain -> durable store
 Rust MCP server ---------------------+                 +-----> cut-engine
 ```
@@ -64,7 +64,7 @@ Relevant files:
 - `README.md:7`
 - `docs/RUST_MIGRATION_HANDOFF.md:7`
 - `crates/cut-runtime/src/lib.rs:788`
-- `crates/cut-app/src/runtime.rs:9`
+- `crates/cut-qt-bridge/src/lib.rs:1`
 
 Do not introduce a second state reducer, project owner, UI toolkit, Node
 runtime, or Tauri/Electron compatibility layer.
@@ -109,11 +109,8 @@ Relevant files:
 
 Relevant files:
 
-- `crates/cut-app/src/timeline.rs:33`
-- `crates/cut-app/src/inspector.rs:37`
-- `crates/cut-app/src/media_bin.rs:40`
-- `crates/cut-app/src/agent_rail.rs:90`
-- `crates/cut-app/src/lib.rs:494`
+- `apps/cut-qt/main.cpp:98`
+- `crates/cut-qt-bridge/src/lib.rs:1`
 - `crates/cut-playback/src/timeline.rs:214`
 - `crates/cut-playback/src/decoder.rs:140`
 - `crates/cut-core/src/compile.rs:1836`
@@ -325,9 +322,8 @@ than passing the current arbitrary `detail: String` through unchanged.
 Likely files:
 
 - `crates/cut-agent/src/lib.rs`
-- `crates/cut-app/src/lib.rs`
-- `crates/cut-app/src/agent_rail.rs`
-- `crates/cut-app/src/view_model.rs`
+- `crates/cut-qt-bridge/src/lib.rs`
+- `apps/cut-qt/main.cpp`
 
 Acceptance:
 
@@ -351,7 +347,7 @@ Replace the summary timeline projection with typed presentation structures for:
 - thumbnail and waveform cache keys;
 - semantic proposal impacts.
 
-Use `egui::Painter` with separate logical passes for background/grid, ruler,
+Use Qt's `QPainter` with separate logical passes for background/grid, ruler,
 track rows, clip bodies, media decoration, selection, proposal overlay, and
 playhead. Cull clips outside the visible time and row range.
 
@@ -368,12 +364,12 @@ playhead. Keyboard selection and focus must remain usable.
 
 Likely files:
 
-- `crates/cut-app/src/timeline.rs`
+- `apps/cut-qt/main.cpp`
 - new small timeline geometry/render modules only if the existing file becomes
   unwieldy;
-- `crates/cut-app/src/ui.rs`
-- `crates/cut-app/src/view_model.rs`
-- a centralized `theme.rs` selected from the approved mock
+- `apps/cut-qt/main.cpp`
+- `crates/cut-qt-bridge/src/lib.rs`
+- the centralized Qt stylesheet and timeline palette in `apps/cut-qt/main.cpp`
 
 Acceptance:
 
@@ -418,9 +414,8 @@ phase.
 Likely files:
 
 - `crates/cut-domain/src/lib.rs`
-- `crates/cut-app/src/runtime.rs`
-- `crates/cut-app/src/timeline.rs`
-- `crates/cut-app/src/inspector.rs`
+- `crates/cut-qt-bridge/src/lib.rs`
+- `apps/cut-qt/main.cpp`
 - domain golden fixture and app/runtime tests
 
 Acceptance:
@@ -671,9 +666,9 @@ Expected focused gates by area:
 - durable proposal/job behavior: `cargo test -p cut-runtime`
 - MCP schemas and routing: `cargo test -p cut-mcp`
 - media probe/cache/render: `cargo test -p cut-engine`
-- native view models and command builders: `cargo test -p cut-app`
+- Qt bridge and command surface: `cargo check -p cut-qt-bridge -p cut-cli`
 - live parity and real media: `cargo test -p cut-playback --all-targets -- --nocapture`
-- binary surface and restart: `scripts/smoke-cut-app.sh`
+- binary surface and restart: `python3 scripts/test-cut-qt-bridge.py`
 
 Do not run `cargo clean`. Do not use a workspace-wide check to hunt a local
 compiler error. `cargo fmt --all --check` is not currently a clean repository

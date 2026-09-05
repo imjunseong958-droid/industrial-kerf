@@ -1,20 +1,10 @@
 //! Fill missing source metadata before compile/render (matches TS timelineForRender).
 
 use serde_json::{Map, Value};
+use std::collections::{HashMap, HashSet};
 
 use crate::error::Result;
 use crate::probe::info;
-
-fn source_is_used_v1(timeline: &Value, source_id: &str) -> bool {
-    timeline
-        .get("tracks")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|track| track.get("clips").and_then(Value::as_array))
-        .flatten()
-        .any(|clip| clip.get("src").and_then(Value::as_str) == Some(source_id))
-}
 
 fn source_needs_probe_v1(source: &Value) -> bool {
     source.get("hasAudio").is_none()
@@ -28,43 +18,32 @@ fn source_id_of_clip_v2(clip: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-fn source_is_used_v2(project: &Value, source_id: &str) -> bool {
-    project
+// Index references once: scanning every clip for each source made preparation
+// quadratic even when all source metadata was already present.
+fn used_sources(project: &Value, v2: bool) -> HashMap<&str, bool> {
+    let mut used = HashMap::new();
+    for clip in project
         .get("tracks")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(|track| track.get("clips").and_then(Value::as_array))
         .flatten()
-        .any(|clip| source_id_of_clip_v2(clip) == Some(source_id))
-}
-
-fn source_duration_is_needed_v2(project: &Value, source_id: &str) -> bool {
-    project
-        .get("tracks")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|track| track.get("clips").and_then(Value::as_array))
-        .flatten()
-        .any(|clip| {
-            if source_id_of_clip_v2(clip) != Some(source_id) {
-                return false;
-            }
-            let has_interval = clip.get("in").is_some()
-                || clip.get("out").is_some()
-                || clip.get("sourceIn").is_some()
-                || clip.get("sourceOut").is_some();
-            !has_interval && clip.get("duration").is_none()
-        })
-}
-
-fn source_needs_probe_v2(project: &Value, source: &Value) -> bool {
-    let id = source.get("id").and_then(Value::as_str).unwrap_or("");
-    source.get("hasAudio").is_none()
-        || source.get("width").is_none()
-        || source.get("height").is_none()
-        || (source.get("duration").is_none() && source_duration_is_needed_v2(project, id))
+    {
+        let id = if v2 {
+            source_id_of_clip_v2(clip)
+        } else {
+            clip.get("src").and_then(Value::as_str)
+        };
+        if let Some(id) = id {
+            let needs_duration = v2
+                && ["in", "out", "sourceIn", "sourceOut", "duration"]
+                    .iter()
+                    .all(|field| clip.get(*field).is_none());
+            *used.entry(id).or_insert(false) |= needs_duration;
+        }
+    }
+    used
 }
 
 fn fill_source_from_probe(source: &mut Map<String, Value>, probed: &crate::probe::ProbeInfo) {
@@ -96,13 +75,12 @@ pub fn enrich_timeline_v1(timeline: &Value) -> Result<Value> {
         Some(sources) => sources,
         None => return Ok(timeline.clone()),
     };
-    let pending: Vec<&Value> = sources
+    let used = used_sources(timeline, false);
+    let pending: HashSet<&str> = sources
         .iter()
-        .filter(|source| {
-            let Some(id) = source.get("id").and_then(Value::as_str) else {
-                return false;
-            };
-            source_is_used_v1(timeline, id) && source_needs_probe_v1(source)
+        .filter_map(|source| {
+            let id = source.get("id")?.as_str()?;
+            (used.contains_key(id) && source_needs_probe_v1(source)).then_some(id)
         })
         .collect();
     if pending.is_empty() {
@@ -112,19 +90,23 @@ pub fn enrich_timeline_v1(timeline: &Value) -> Result<Value> {
     let Some(sources_mut) = enriched.get_mut("sources").and_then(Value::as_array_mut) else {
         return Ok(enriched);
     };
+    let mut probes = HashMap::new();
     for source in sources_mut.iter_mut() {
         let Some(id) = source.get("id").and_then(Value::as_str) else {
             continue;
         };
-        if !source_is_used_v1(timeline, id) || !source_needs_probe_v1(source) {
+        if !pending.contains(id) {
             continue;
         }
         let Some(path) = source.get("path").and_then(Value::as_str) else {
             continue;
         };
-        let probed = info(path)?;
+        if !probes.contains_key(path) {
+            probes.insert(path.to_owned(), info(path)?);
+        }
+        let probed = &probes[path];
         if let Some(map) = source.as_object_mut() {
-            fill_source_from_probe(map, &probed);
+            fill_source_from_probe(map, probed);
         }
     }
     Ok(enriched)
@@ -136,13 +118,14 @@ pub fn enrich_project_v2(project: &Value) -> Result<Value> {
         Some(sources) => sources,
         None => return Ok(project.clone()),
     };
-    let pending: Vec<&Value> = sources
+    let used = used_sources(project, true);
+    let pending: HashSet<&str> = sources
         .iter()
-        .filter(|source| {
-            let Some(id) = source.get("id").and_then(Value::as_str) else {
-                return false;
-            };
-            source_is_used_v2(project, id) && source_needs_probe_v2(project, source)
+        .filter_map(|source| {
+            let id = source.get("id")?.as_str()?;
+            let needs_duration = *used.get(id)?;
+            (source_needs_probe_v1(source) || (needs_duration && source.get("duration").is_none()))
+                .then_some(id)
         })
         .collect();
     if pending.is_empty() {
@@ -152,20 +135,51 @@ pub fn enrich_project_v2(project: &Value) -> Result<Value> {
     let Some(sources_mut) = enriched.get_mut("sources").and_then(Value::as_array_mut) else {
         return Ok(enriched);
     };
+    let mut probes = HashMap::new();
     for source in sources_mut.iter_mut() {
         let Some(id) = source.get("id").and_then(Value::as_str) else {
             continue;
         };
-        if !source_is_used_v2(project, id) || !source_needs_probe_v2(project, source) {
+        if !pending.contains(id) {
             continue;
         }
         let Some(path) = source.get("path").and_then(Value::as_str) else {
             continue;
         };
-        let probed = info(path)?;
+        if !probes.contains_key(path) {
+            probes.insert(path.to_owned(), info(path)?);
+        }
+        let probed = &probes[path];
         if let Some(map) = source.as_object_mut() {
-            fill_source_from_probe(map, &probed);
+            fill_source_from_probe(map, probed);
         }
     }
     Ok(enriched)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn duration_requirement_accumulates_across_references_and_aliases() {
+        let project = json!({"tracks":[{"clips":[
+            {"sourceId":"a","in":0,"out":1}, {"src":"b","duration":2},
+            {"sourceId":"a"}, {"sourceId":"b","sourceIn":1,"sourceOut":2}
+        ]}]});
+        let used = used_sources(&project, true);
+        assert_eq!(used.get("a"), Some(&true));
+        assert_eq!(used.get("b"), Some(&false));
+        assert_eq!(used.len(), 2);
+    }
+
+    #[test]
+    fn complete_and_unused_sources_do_not_probe_missing_paths() {
+        let project = json!({"version":2,"sources":[
+            {"id":"used","path":"/nonexistent/used.mov","width":1920,"height":1080,"hasAudio":false},
+            {"id":"unused","path":"/nonexistent/unused.mov"}
+        ],"tracks":[{"clips":[{"sourceId":"used","in":0,"out":2}]}]});
+        assert_eq!(enrich_project_v2(&project).unwrap(), project);
+    }
 }

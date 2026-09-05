@@ -1,0 +1,18 @@
+[package]
+name = "cut-qt-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Nonblocking C ABI for the Qt editor and Rust workers"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+cut-core = { path = "../cut-core" }
+cut-runtime = { path = "../cut-runtime" }
+cut-playback = { path = "../cut-playback" }
+cut-agent = { path = "../cut-agent" }
+cut-mcp = { path = "../cut-mcp" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

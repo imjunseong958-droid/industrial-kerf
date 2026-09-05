@@ -1,5 +1,5 @@
 use crate::libav;
-use crate::timeline::{PlaybackTimeline, ResolvedClip};
+use crate::timeline::{PlaybackClip, PlaybackSource, PlaybackTimeline};
 use crate::{ClockSource, PlaybackError};
 use ffmpeg_next as ffmpeg;
 use ffmpeg_next::format::context::Input;
@@ -370,7 +370,8 @@ impl AudioWorker {
         let channels = self.output.channels();
         let sample_rate = self.output.sample_rate();
         loop {
-            let Some(clip) = self.timeline.audio_at(self.position).into_iter().next() else {
+            let Some((clip_index, source_index)) = self.timeline.audio_at_indices(self.position)
+            else {
                 let Some(next_start) = self.next_audio_start_after(self.position) else {
                     self.stop_decoder();
                     return;
@@ -378,21 +379,21 @@ impl AudioWorker {
                 self.position = next_start;
                 continue;
             };
+            let clip_id = self.timeline.clips[clip_index].id.as_str();
+            let clip_end = self.timeline.clips[clip_index].timeline_end();
             let decoder_matches = self
                 .decoder
                 .as_ref()
-                .is_some_and(|decoder| decoder.clip_id() == clip.clip.id);
+                .is_some_and(|decoder| decoder.clip_id() == clip_id);
             if !decoder_matches {
                 self.stop_decoder();
-                self.decoder = AudioDecoder::open(
-                    &clip,
-                    self.position,
-                    sample_rate,
-                    channels,
-                )
-                .ok();
+                self.decoder = {
+                    let clip = &self.timeline.clips[clip_index];
+                    let source = &self.timeline.sources[source_index];
+                    AudioDecoder::open(clip, source, self.position, sample_rate, channels).ok()
+                };
                 if self.decoder.is_none() {
-                    self.position = clip.timeline_end();
+                    self.position = clip_end;
                     continue;
                 }
             }
@@ -404,15 +405,15 @@ impl AudioWorker {
                     let frames = samples.len() / channels.max(1);
                     self.output.push(&samples);
                     self.position += frames as f64 / sample_rate as f64;
-                    if self.position >= clip.timeline_end() {
-                        self.position = clip.timeline_end();
+                    if self.position >= clip_end {
+                        self.position = clip_end;
                         self.stop_decoder();
                     }
                 }
                 Ok(Some(_)) => return,
                 Ok(None) | Err(_) => {
                     self.stop_decoder();
-                    self.position = clip.timeline_end();
+                    self.position = clip_end;
                 }
             }
             if self.output.queued_frames()
@@ -458,22 +459,23 @@ struct AudioDecoder {
 
 impl AudioDecoder {
     fn open(
-        clip: &ResolvedClip,
+        clip: &PlaybackClip,
+        source: &PlaybackSource,
         timeline_time: f64,
         sample_rate: u32,
         channels: usize,
     ) -> Result<Self, PlaybackError> {
         libav::ensure_init().map_err(audio_error)?;
         let source_time = clip.source_time_at(timeline_time);
-        let remaining = (clip.clip.source_out - source_time).max(0.0);
+        let remaining = (clip.source_out - source_time).max(0.0);
         if remaining <= 0.0 {
             return Err(PlaybackError::Audio(format!(
                 "audio clip {} has no source time remaining",
-                clip.clip.id
+                clip.id
             )));
         }
-        let mut input =
-            ffmpeg::format::input(&clip.source.path).map_err(|error| audio_error(libav::map_error(error)))?;
+        let mut input = ffmpeg::format::input(&source.path)
+            .map_err(|error| audio_error(libav::map_error(error)))?;
         let (stream_index, time_base) = {
             let stream = input
                 .streams()
@@ -502,7 +504,7 @@ impl AudioDecoder {
             stream_index,
             time_base,
             source_time,
-            clip_id: clip.clip.id.clone(),
+            clip_id: clip.id.clone(),
             eof: false,
             flushed: false,
         })
@@ -542,9 +544,7 @@ impl AudioDecoder {
             sink.sink().frame(&mut filtered)
         };
         match result {
-            Ok(()) => libav::packed_f32(&filtered)
-                .map(Some)
-                .map_err(audio_error),
+            Ok(()) => libav::packed_f32(&filtered).map(Some).map_err(audio_error),
             Err(error) if libav::is_again(&error) || libav::is_eof(&error) => Ok(None),
             Err(error) => Err(audio_error(libav::map_error(error))),
         }
@@ -637,7 +637,7 @@ fn audio_error(error: PlaybackError) -> PlaybackError {
 
 fn audio_filter_graph(
     decoder: &decoder::Audio,
-    clip: &ResolvedClip,
+    clip: &PlaybackClip,
     remaining: f64,
     sample_rate: u32,
     channels: usize,
@@ -658,9 +658,9 @@ fn audio_filter_graph(
         "asetpts=PTS-STARTPTS".to_string(),
         format!("atrim=duration={}", libav::format_number(remaining)),
     ];
-    spec_parts.extend(atempo_filters(clip.clip.speed));
-    if (clip.clip.volume - 1.0).abs() > f32::EPSILON {
-        spec_parts.push(format!("volume={}", clip.clip.volume));
+    spec_parts.extend(atempo_filters(clip.speed));
+    if (clip.volume - 1.0).abs() > f32::EPSILON {
+        spec_parts.push(format!("volume={}", clip.volume));
     }
     spec_parts.push(format!(
         "aformat=sample_fmts=flt:channel_layouts={}:sample_rates={}",

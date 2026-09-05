@@ -85,6 +85,22 @@ pub(crate) fn packed_rgba(
         )));
     }
     let data = frame.data(0);
+    let required_len = stride.checked_mul(height as usize).ok_or_else(|| {
+        PlaybackError::Ffmpeg(format!(
+            "decoded RGBA stride is too large: {stride}x{height}"
+        ))
+    })?;
+    if data.len() < required_len {
+        return Err(PlaybackError::Ffmpeg(format!(
+            "decoded RGBA frame is truncated: {} bytes for {required_len}",
+            data.len()
+        )));
+    }
+    if stride == row_bytes {
+        return Ok(std::sync::Arc::from(
+            data[..byte_len].to_vec().into_boxed_slice(),
+        ));
+    }
     let mut pixels = vec![0_u8; byte_len];
     for y in 0..height as usize {
         let src = y * stride;

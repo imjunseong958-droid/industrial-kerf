@@ -5,7 +5,7 @@ members = [
     "crates/cut-domain",
     "crates/cut-playback",
     "crates/cut-runtime",
-    "crates/cut-app",
+    "crates/cut-qt-bridge",
     "crates/cut-skills",
     "crates/cut-fetcher",
     "crates/cut-interchange",

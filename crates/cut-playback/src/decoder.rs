@@ -1,5 +1,5 @@
 use crate::libav;
-use crate::timeline::{PlaybackTimeline, ResolvedClip};
+use crate::timeline::{PlaybackClip, PlaybackSource, PlaybackTimeline};
 use crate::PlaybackError;
 use ffmpeg_next as ffmpeg;
 use ffmpeg_next::format::context::Input;
@@ -37,18 +37,19 @@ impl VideoDecoder {
     pub fn open(
         _ffmpeg_binary: &Path,
         timeline: &PlaybackTimeline,
-        clip: &ResolvedClip,
+        clip: &PlaybackClip,
+        source: &PlaybackSource,
         timeline_time: f64,
         requested_width: Option<u32>,
         requested_height: Option<u32>,
     ) -> Result<Self, PlaybackError> {
         libav::ensure_init()?;
         let source_time = clip.source_time_at(timeline_time);
-        let remaining_source = (clip.clip.source_out - source_time).max(0.0);
+        let remaining_source = (clip.source_out - source_time).max(0.0);
         if remaining_source <= 0.0 {
             return Err(PlaybackError::Ffmpeg(format!(
                 "clip {} has no source time remaining",
-                clip.clip.id
+                clip.id
             )));
         }
         let width = match requested_width {
@@ -60,7 +61,7 @@ impl VideoDecoder {
             None => timeline.height.max(2),
         };
 
-        let mut input = ffmpeg::format::input(&clip.source.path).map_err(libav::map_error)?;
+        let mut input = ffmpeg::format::input(&source.path).map_err(libav::map_error)?;
         let (stream_index, time_base) = {
             let stream = input
                 .streams()
@@ -86,19 +87,19 @@ impl VideoDecoder {
             stream_index,
             time_base,
             source_time,
-            clip_id: clip.clip.id.clone(),
+            clip_id: clip.id.clone(),
             width,
             height,
             eof: false,
             flushed: false,
         };
-        let graph = match decoder.build_filter(timeline, clip, remaining_source) {
+        let graph = match decoder.build_filter(timeline, clip, source, remaining_source) {
             Ok(graph) => graph,
             Err(error) => {
-                if timeline.subtitles.is_empty() && clip.source.subtitles.is_empty() {
+                if timeline.subtitles.is_empty() && source.subtitles.is_empty() {
                     return Err(error);
                 }
-                decoder.build_filter_without_subtitles(timeline, clip, remaining_source)?
+                decoder.build_filter_without_subtitles(timeline, clip, source, remaining_source)?
             }
         };
         decoder.filter = Some(graph);
@@ -121,6 +122,32 @@ impl VideoDecoder {
         }
     }
 
+    /// Advance one filtered frame without converting it to RGBA. Seek
+    /// coalescing uses this path to discard frames before the target without
+    /// allocating a pixel buffer that will never reach the UI.
+    pub fn skip_frame(&mut self) -> Result<bool, PlaybackError> {
+        loop {
+            if let Some(filter) = self.filter.as_mut() {
+                let mut filtered = ffmpeg::frame::Video::empty();
+                let result = {
+                    let mut sink = filter
+                        .get("out")
+                        .ok_or_else(|| PlaybackError::Ffmpeg("missing buffersink".into()))?;
+                    sink.sink().frame(&mut filtered)
+                };
+                match result {
+                    Ok(()) => return Ok(true),
+                    Err(error) if libav::is_again(&error) || libav::is_eof(&error) => {}
+                    Err(error) => return Err(libav::map_error(error)),
+                }
+            }
+            if self.eof && self.flushed {
+                return Ok(false);
+            }
+            self.pump()?;
+        }
+    }
+
     pub fn stop(&mut self) {
         self.eof = true;
         self.flushed = true;
@@ -130,25 +157,28 @@ impl VideoDecoder {
     fn build_filter(
         &self,
         timeline: &PlaybackTimeline,
-        clip: &ResolvedClip,
+        clip: &PlaybackClip,
+        source: &PlaybackSource,
         remaining_source: f64,
     ) -> Result<filter::Graph, PlaybackError> {
-        self.build_filter_graph(timeline, clip, remaining_source, true)
+        self.build_filter_graph(timeline, clip, source, remaining_source, true)
     }
 
     fn build_filter_without_subtitles(
         &self,
         timeline: &PlaybackTimeline,
-        clip: &ResolvedClip,
+        clip: &PlaybackClip,
+        source: &PlaybackSource,
         remaining_source: f64,
     ) -> Result<filter::Graph, PlaybackError> {
-        self.build_filter_graph(timeline, clip, remaining_source, false)
+        self.build_filter_graph(timeline, clip, source, remaining_source, false)
     }
 
     fn build_filter_graph(
         &self,
         timeline: &PlaybackTimeline,
-        clip: &ResolvedClip,
+        clip: &PlaybackClip,
+        source: &PlaybackSource,
         remaining_source: f64,
         include_subtitles: bool,
     ) -> Result<filter::Graph, PlaybackError> {
@@ -176,17 +206,15 @@ impl VideoDecoder {
             self.height,
             remaining_source,
             include_subtitles,
+            source,
         );
         let mut graph = filter::Graph::new();
         let buffer = filter::find("buffer").ok_or_else(|| {
             PlaybackError::Ffmpeg("libavfilter buffer source is unavailable".into())
         })?;
-        let sink = filter::find("buffersink").ok_or_else(|| {
-            PlaybackError::Ffmpeg("libavfilter buffersink is unavailable".into())
-        })?;
-        graph
-            .add(&buffer, "in", &args)
-            .map_err(libav::map_error)?;
+        let sink = filter::find("buffersink")
+            .ok_or_else(|| PlaybackError::Ffmpeg("libavfilter buffersink is unavailable".into()))?;
+        graph.add(&buffer, "in", &args).map_err(libav::map_error)?;
         graph.add(&sink, "out", "").map_err(libav::map_error)?;
         graph
             .output("in", 0)
@@ -304,13 +332,14 @@ impl Drop for VideoDecoder {
 
 fn video_filter(
     timeline: &PlaybackTimeline,
-    clip: &ResolvedClip,
+    clip: &PlaybackClip,
     width: u32,
     height: u32,
     remaining_source: f64,
     include_subtitles: bool,
+    source: &PlaybackSource,
 ) -> String {
-    let speed = libav::format_number(clip.clip.speed);
+    let speed = libav::format_number(clip.speed);
     let fps = libav::format_number(timeline.fps);
     let mut filters = vec![
         "setpts=PTS-STARTPTS".to_string(),
@@ -322,7 +351,7 @@ fn video_filter(
         "setsar=1".to_string(),
     ];
     if include_subtitles {
-        for subtitle in &clip.source.subtitles {
+        for subtitle in &source.subtitles {
             if subtitle.is_file() {
                 filters.push(format!(
                     "subtitles=filename='{}'",
