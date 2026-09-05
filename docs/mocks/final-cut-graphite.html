@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cut — Graphite UI mockup</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --canvas: #111110;
+      --surface: #1b1b1a;
+      --surface-2: #222221;
+      --surface-3: #292927;
+      --line: #363633;
+      --line-soft: #2a2a28;
+      --text: #e8e7e2;
+      --text-muted: #9a9992;
+      --text-dim: #696861;
+      --accent: #d7a34a;
+      --accent-soft: #463a25;
+      --video: #8e7040;
+      --audio: #5f8267;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: #0d0d0c;
+      color: var(--text);
+      font: 12px -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+      letter-spacing: .01em;
+    }
+    .app { height: 100vh; min-height: 680px; display: grid; grid-template-rows: 38px 1fr 24px; }
+    .topbar { display: flex; align-items: center; gap: 14px; padding: 0 14px; background: #181817; border-bottom: 1px solid var(--line-soft); }
+    .brand { font-weight: 700; letter-spacing: .08em; font-size: 11px; }
+    .project { color: var(--text-muted); padding-left: 12px; border-left: 1px solid var(--line); }
+    .top-actions { margin-left: auto; display: flex; gap: 6px; }
+    button { font: inherit; color: var(--text); border: 1px solid var(--line); border-radius: 4px; background: var(--surface-3); padding: 5px 10px; }
+    button.primary { background: var(--accent); color: #17130b; border-color: #e2b66a; font-weight: 650; }
+    .workspace { display: grid; grid-template-columns: 224px minmax(520px, 1fr) 320px; gap: 1px; min-height: 0; background: #0c0c0b; }
+    .library, .agent { background: var(--surface); min-height: 0; display: flex; flex-direction: column; }
+    .section-head { display: flex; align-items: center; justify-content: space-between; height: 44px; padding: 0 14px; border-bottom: 1px solid var(--line-soft); }
+    .eyebrow { color: var(--text-muted); font-size: 10px; letter-spacing: .12em; font-weight: 700; }
+    .count { color: var(--text-dim); font-size: 10px; }
+    .search { margin: 10px 12px 8px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 4px; color: var(--text-dim); background: #151514; }
+    .media-list { padding: 0 8px; overflow: hidden; }
+    .media { display: grid; grid-template-columns: 54px 1fr; gap: 9px; align-items: center; padding: 7px 6px; border-radius: 4px; }
+    .media.selected { background: #302c22; }
+    .thumb { height: 34px; border: 1px solid #5b5547; border-radius: 3px; background: linear-gradient(135deg, #4a473b, #201f1a 55%, #806f4b); }
+    .media-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .media-meta { color: var(--text-dim); font-size: 10px; margin-top: 3px; }
+    .library-foot { margin-top: auto; padding: 12px; border-top: 1px solid var(--line-soft); color: var(--text-muted); line-height: 1.45; }
+    .center { background: #121211; display: grid; grid-template-rows: minmax(290px, 1fr) 48px minmax(210px, 34%); gap: 1px; min-height: 0; }
+    .viewer { background: #0b0b0a; min-height: 0; position: relative; display: grid; place-items: center; }
+    .viewer-bar { position: absolute; left: 14px; right: 14px; top: 0; height: 38px; display: flex; align-items: center; border-bottom: 1px solid var(--line-soft); }
+    .viewer-bar .time { margin-left: auto; color: var(--text-muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .frame { width: min(78%, 720px); aspect-ratio: 16 / 9; border: 1px solid #45433d; background: radial-gradient(circle at 64% 34%, #6e6250 0, #33312a 35%, #161614 76%); box-shadow: 0 12px 32px #0008; display: grid; place-items: center; color: #c7c3b8; }
+    .frame::after { content: "PREVIEW"; font-size: 10px; letter-spacing: .16em; color: #b3ad9e; border: 1px solid #9d947f; padding: 6px 8px; background: #15151288; }
+    .transport { background: var(--surface); display: flex; align-items: center; gap: 6px; padding: 0 14px; border-top: 1px solid var(--line-soft); }
+    .transport .play { width: 28px; height: 28px; border-radius: 50%; padding: 0; }
+    .timecode { margin-left: 8px; color: var(--text); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .transport .spacer { flex: 1; }
+    .zoom { color: var(--text-muted); display: flex; align-items: center; gap: 8px; }
+    input[type=range] { width: 100px; accent-color: var(--accent); }
+    .timeline { min-height: 0; background: #151514; position: relative; overflow: hidden; }
+    .ruler { height: 28px; margin-left: 112px; border-bottom: 1px solid var(--line); background: #1d1d1b; display: flex; align-items: end; color: var(--text-dim); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .ticks { width: 100%; display: flex; justify-content: space-around; padding-bottom: 6px; }
+    .tracks { position: absolute; top: 28px; left: 0; right: 0; bottom: 0; }
+    .track { display: grid; grid-template-columns: 112px 1fr; height: 58px; border-bottom: 1px solid var(--line-soft); }
+    .track-label { display: flex; align-items: center; gap: 8px; padding-left: 12px; color: var(--text-muted); border-right: 1px solid var(--line); }
+    .track-label b { width: 22px; height: 22px; display: grid; place-items: center; border: 1px solid #655737; border-radius: 3px; color: var(--accent); font-size: 10px; }
+    .lane { position: relative; background: #191918; }
+    .clip { position: absolute; top: 8px; bottom: 8px; min-width: 74px; padding: 8px 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; border: 1px solid #806434; border-radius: 4px; background: linear-gradient(#7d6239, #493a25); color: #f2ead8; }
+    .clip.two { left: 48%; width: 21%; background: linear-gradient(#6e886f, #3e5644); border-color: #6c8971; }
+    .clip.three { left: 73%; width: 14%; }
+    .playhead { position: absolute; top: 0; bottom: 0; left: 62%; width: 1px; background: var(--accent); z-index: 2; }
+    .playhead::before { content: ""; position: absolute; top: 0; left: -5px; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 7px solid var(--accent); }
+    .agent { background: #1a1a19; }
+    .agent-head { height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 14px; border-bottom: 1px solid var(--line-soft); }
+    .status { margin-left: auto; color: #9ebc98; font-size: 10px; }
+    .chat { min-height: 0; flex: 1; padding: 14px; overflow: hidden; }
+    .message { margin-bottom: 14px; line-height: 1.45; }
+    .message .who { color: var(--text-muted); font-size: 10px; margin-bottom: 5px; }
+    .message.user .bubble { background: #292824; border: 1px solid #413c31; }
+    .message.agent .bubble { background: #21211f; border-left: 2px solid var(--accent); }
+    .bubble { padding: 9px 10px; border-radius: 5px; color: #d8d5cc; }
+    .proposal { margin: 0 14px 10px; padding: 11px; border: 1px solid #655737; border-radius: 5px; background: #242117; }
+    .proposal-head { display: flex; justify-content: space-between; color: var(--accent); font-size: 11px; font-weight: 700; }
+    .proposal p { color: var(--text-muted); margin: 8px 0 10px; line-height: 1.4; }
+    .proposal-actions { display: flex; gap: 6px; }
+    .proposal-actions button { flex: 1; }
+    .composer { display: flex; gap: 7px; margin: auto 12px 12px; padding-top: 10px; border-top: 1px solid var(--line-soft); }
+    .composer input { min-width: 0; flex: 1; color: var(--text); background: #111110; border: 1px solid var(--line); border-radius: 4px; padding: 8px 9px; font: inherit; }
+    .statusbar { display: flex; align-items: center; gap: 14px; padding: 0 14px; background: #171716; color: var(--text-dim); border-top: 1px solid var(--line-soft); font-size: 10px; }
+    .statusbar .spacer { flex: 1; }
+    @media (max-width: 1080px) { .workspace { grid-template-columns: 190px minmax(450px, 1fr) 280px; } }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="topbar"><span class="brand">CUT</span><span class="project">Untitled project</span><nav class="top-actions"><button>Import</button><button>Undo</button><button>Redo</button><button class="primary">Export</button></nav></header>
+    <section class="workspace">
+      <aside class="library"><div class="section-head"><span class="eyebrow">MEDIA</span><span class="count">3 items</span></div><div class="search">Search media</div><div class="media-list"><div class="media selected"><div class="thumb"></div><div><div class="media-name">interview_master.mov</div><div class="media-meta">01:24 · 4K video</div></div></div><div class="media"><div class="thumb"></div><div><div class="media-name">room_tone.wav</div><div class="media-meta">00:18 · audio</div></div></div><div class="media"><div class="thumb"></div><div><div class="media-name">brand-mark.png</div><div class="media-meta">graphic</div></div></div></div><div class="library-foot">Drop media here or use Import to start building the sequence.</div></aside>
+      <section class="center"><div class="viewer"><div class="viewer-bar"><span class="eyebrow">VIEWER</span><span class="time">00:18.42</span></div><div class="frame"></div></div><div class="transport"><button class="play">▶</button><button>−5</button><button>+5</button><span class="timecode">00:18.42 / 01:24.00</span><span class="spacer"></span><span class="zoom">Timeline zoom <input type="range" value="48"></span></div><div class="timeline"><div class="ruler"><div class="ticks"><span>00:00</span><span>00:15</span><span>00:30</span><span>00:45</span><span>01:00</span><span>01:15</span></div></div><div class="tracks"><div class="track"><div class="track-label"><b>V1</b><span>Video</span></div><div class="lane"><div class="clip" style="left:4%; width:40%">interview_master</div><div class="clip two">room_tone</div><div class="clip three">brand-mark</div><div class="playhead"></div></div></div><div class="track"><div class="track-label"><b>A1</b><span>Audio</span></div><div class="lane"><div class="clip two" style="left:4%; width:55%">interview_master audio</div></div></div><div class="track"><div class="track-label"><b>T1</b><span>Titles</span></div><div class="lane"><div class="clip" style="left:26%; width:22%">Lower third</div></div></div></div></div></section>
+      <aside class="agent"><div class="agent-head"><span class="eyebrow">AGENT</span><span class="status">● READY</span></div><div class="chat"><div class="message user"><div class="who">YOU · 2m ago</div><div class="bubble">Tighten the opening and add a clean lower third.</div></div><div class="message agent"><div class="who">CUT · just now</div><div class="bubble">I found a natural cut at 00:18.42 and prepared a lower third using the selected title style.</div></div></div><div class="proposal"><div class="proposal-head"><span>PROPOSED EDIT</span><span>2 changes</span></div><p>Trim 00:00–00:02.10 and place “Alex Kim” at 00:26.00.</p><div class="proposal-actions"><button class="primary">Accept</button><button>Review</button></div></div><div class="composer"><input placeholder="Describe an edit…"><button class="primary">Send</button></div></aside>
+    </section>
+    <footer class="statusbar"><span>Revision 12</span><span>24 fps</span><span>01:24 sequence</span><span class="spacer"></span><span>All changes saved</span></footer>
+  </main>
+</body>
+</html>

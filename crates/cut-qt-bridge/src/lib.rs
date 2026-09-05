@@ -348,6 +348,12 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
             }
             let seek = shared.seek.lock().ok().and_then(|mut slot| slot.take());
             if let Some(position) = seek {
+                // A frame decoded before this seek belongs to the old target.
+                // Clear the replaceable slot before asking the session to
+                // decode so a hover skim cannot briefly show stale media.
+                if let Ok(mut frame) = shared.frame.lock() {
+                    *frame = None;
+                }
                 if let Err(err) = handle.seek(position) {
                     error(&tx, err);
                 }

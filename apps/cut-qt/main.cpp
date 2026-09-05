@@ -94,13 +94,15 @@ QString sourceName(const QJsonObject &source) {
 QColor trackAccent(const QJsonObject &track, int row) {
     const QString type = track.value(QStringLiteral("type")).toString().toLower();
     if (type.contains(QStringLiteral("audio")) || type.contains(QStringLiteral("sound"))) {
-        return QColor("#65b98f");
+        return QColor("#999999");
     }
     if (type.contains(QStringLiteral("title")) || type.contains(QStringLiteral("graphic")) ||
         type.contains(QStringLiteral("overlay"))) {
-        return QColor("#a486d4");
+        return QColor("#888888");
     }
-    return row == 0 ? QColor("#5c9fe8") : QColor("#6689b9");
+    // Video lanes stay warm and subdued so the playhead remains the only
+    // high-salience timeline control.
+    return row == 0 ? QColor("#999999") : QColor("#777777");
 }
 
 QJsonObject commandApply(const QJsonObject &command, quint64 revision) {
@@ -142,10 +144,19 @@ public:
         update();
     }
 
+    void clearSkimmer() {
+        if (!m_hasSkimmer) return;
+        m_hasSkimmer = false;
+        emit hoverSeekEnded();
+        update();
+    }
+
     QSize minimumSizeHint() const override { return QSize(kMinimumTimelineWidth, 190); }
 
 signals:
     void seekRequested(double time);
+    void hoverSeekRequested(double time);
+    void hoverSeekEnded();
     void clipSelected(const QString &clipId);
     void moveRequested(const QString &clipId, double timelineStart);
     void trimRequested(const QString &clipId, bool leading, double timelineFrame);
@@ -161,8 +172,8 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
         QLinearGradient timelineGradient(0, 0, 0, height());
-        timelineGradient.setColorAt(0.0, QColor("#111318"));
-        timelineGradient.setColorAt(1.0, QColor("#0d0f12"));
+        timelineGradient.setColorAt(0.0, QColor("#111111"));
+        timelineGradient.setColorAt(1.0, QColor("#0d0d0d"));
         p.fillRect(rect(), timelineGradient);
 
         const int trackCount = static_cast<int>(std::max<qsizetype>(1, m_project.value(QStringLiteral("tracks")).toArray().size()));
@@ -172,15 +183,15 @@ protected:
             setMinimumWidth(contentWidth);
         }
 
-        p.fillRect(0, 0, kTimelineLabelWidth, height(), QColor("#17191e"));
-        p.fillRect(kTimelineLabelWidth, 0, width() - kTimelineLabelWidth, kRulerHeight, QColor("#1a1c22"));
-        p.setPen(QColor("#2f343d"));
+        p.fillRect(0, 0, kTimelineLabelWidth, height(), QColor("#1b1b1b"));
+        p.fillRect(kTimelineLabelWidth, 0, width() - kTimelineLabelWidth, kRulerHeight, QColor("#1d1d1d"));
+        p.setPen(QColor("#3a3a3a"));
         p.drawLine(kTimelineLabelWidth, 0, kTimelineLabelWidth, height());
 
         QFont rulerFont = p.font();
         rulerFont.setPointSize(9);
         p.setFont(rulerFont);
-        p.setPen(QColor("#737b88"));
+        p.setPen(QColor("#868686"));
         p.drawText(QRect(12, 0, kTimelineLabelWidth - 20, kRulerHeight), Qt::AlignVCenter,
                    QStringLiteral("TRACKS"));
 
@@ -191,9 +202,9 @@ protected:
         for (int second = firstSecond; second <= lastSecond; ++second) {
             const int x = kTimelineLabelWidth + static_cast<int>(second * pxPerSecond);
             const bool major = second % majorStep == 0;
-            p.setPen(major ? QColor("#38404d") : QColor("#272c35"));
+            p.setPen(major ? QColor("#434343") : QColor("#2f2f2f"));
             p.drawLine(x, major ? kRulerHeight : kRulerHeight - 5, x, height());
-            p.setPen(major ? QColor("#a4abb6") : QColor("#6e7682"));
+            p.setPen(major ? QColor("#b0b0b0") : QColor("#747474"));
             if (major) p.drawText(x + 6, 18, prettyTime(second));
         }
 
@@ -202,8 +213,8 @@ protected:
             const int y = kRulerHeight + row * kTrackHeight;
             if (y + kTrackHeight < visible.top() || y > visible.bottom()) continue;
             p.fillRect(0, y, width(), kTrackHeight,
-                       row % 2 == 0 ? QColor("#15171c") : QColor("#121419"));
-            p.setPen(QColor("#2a2f38"));
+                       row % 2 == 0 ? QColor("#171717") : QColor("#141414"));
+            p.setPen(QColor("#2b2b2b"));
             p.drawLine(0, y + kTrackHeight - 1, width(), y + kTrackHeight - 1);
             const QJsonObject track = row < tracks.size() ? tracks.at(row).toObject() : QJsonObject();
             const QColor accent = trackAccent(track, row);
@@ -219,17 +230,17 @@ protected:
                                          : type.contains(QStringLiteral("title")) || type.contains(QStringLiteral("graphic"))
                                                ? QStringLiteral("T")
                                                : QStringLiteral("V");
-            p.setPen(QColor("#303640"));
-            p.setBrush(QColor("#1b1e24"));
+            p.setPen(QColor("#393939"));
+            p.setBrush(QColor("#222222"));
             p.drawRoundedRect(QRectF(10, y + 9, 28, 31), 4, 4);
             p.setPen(accent);
             p.setBrush(Qt::NoBrush);
             p.drawRoundedRect(QRectF(10, y + 9, 28, 31), 4, 4);
-            p.setPen(QColor("#d1d6df"));
+            p.setPen(QColor("#cecece"));
             p.drawText(QRectF(10, y + 9, 28, 31), Qt::AlignCenter, laneKind);
-            p.setPen(QColor("#c8cdd5"));
+            p.setPen(QColor("#cbcbcb"));
             p.drawText(48, y + 23, trackTitle);
-            p.setPen(QColor("#7c8490"));
+            p.setPen(QColor("#808080"));
             QFont trackFont = p.font();
             trackFont.setPointSize(8);
             p.setFont(trackFont);
@@ -259,12 +270,12 @@ protected:
                 const bool selected = id == m_selectedClip;
                 const bool hovered = id == m_hoverClipId;
                 QColor body = accent.darker(selected ? 215 : hovered ? 265 : 330);
-                if (body.value() < 24) body = QColor("#252930");
+                if (body.value() < 24) body = QColor("#292929");
                 QLinearGradient clipGradient(0, clipRect.top(), 0, clipRect.bottom());
                 clipGradient.setColorAt(0.0, body.lighter(114));
                 clipGradient.setColorAt(1.0, body);
                 p.setBrush(clipGradient);
-                p.setPen(selected ? QColor("#c6e5ff") : hovered ? accent.lighter(120) : QColor("#3b4652"));
+                p.setPen(selected ? QColor("#d8d8d8") : hovered ? accent.lighter(120) : QColor("#474747"));
                 p.drawRoundedRect(clipRect, 5, 5);
                 p.save();
                 p.setClipRect(clipRect.adjusted(2, 2, -2, -2));
@@ -287,13 +298,13 @@ protected:
                     const QFontMetrics metrics(p.font());
                     const QString label = metrics.elidedText(clipName(clip), Qt::ElideRight,
                                                               std::max(1, static_cast<int>(clipRect.width()) - 16));
-                    p.setPen(QColor("#f0f4f8"));
+                    p.setPen(QColor("#eeeeee"));
                     p.drawText(clipRect.adjusted(9, 0, -7, 0), Qt::AlignVCenter | Qt::TextSingleLine, label);
                 }
                 p.setPen(QPen(accent.lighter(selected ? 135 : 120), selected ? 2 : 1));
                 p.drawLine(clipRect.left() + 5, clipRect.top() + 1, clipRect.right() - 5, clipRect.top() + 1);
                 if (selected) {
-                    p.setPen(QPen(QColor("#d3eaff"), 2));
+                    p.setPen(QPen(QColor("#e0e0e0"), 2));
                     p.drawLine(clipRect.left(), clipRect.top() + 3, clipRect.left(), clipRect.bottom() - 3);
                     p.drawLine(clipRect.right(), clipRect.top() + 3, clipRect.right(), clipRect.bottom() - 3);
                 }
@@ -301,13 +312,23 @@ protected:
         }
 
         const int playheadX = kTimelineLabelWidth + static_cast<int>(m_playhead * pxPerSecond);
-        p.setPen(QPen(QColor("#ff5d73"), 2));
+        p.setPen(QPen(QColor("#dddddd"), 2));
         p.drawLine(playheadX, 0, playheadX, height());
-        p.setBrush(QColor("#ff5d73"));
+        p.setBrush(QColor("#dddddd"));
         p.setPen(Qt::NoPen);
         p.drawPolygon(QPolygonF{QPointF(playheadX - 6, 0), QPointF(playheadX + 6, 0), QPointF(playheadX, 8)});
+        if (m_hasSkimmer && !m_dragging && !m_scrubbing) {
+            const int skimmerX = kTimelineLabelWidth + static_cast<int>(m_skimmerTime * pxPerSecond);
+            p.setPen(QPen(QColor("#ececec"), 1));
+            p.drawLine(skimmerX, kRulerHeight, skimmerX, height());
+            p.setBrush(QColor("#ececec"));
+            p.setPen(Qt::NoPen);
+            p.drawPolygon(QPolygonF{QPointF(skimmerX - 4, kRulerHeight - 1),
+                                   QPointF(skimmerX + 4, kRulerHeight - 1),
+                                   QPointF(skimmerX, kRulerHeight + 5)});
+        }
         if (hasFocus()) {
-            p.setPen(QPen(QColor("#536b86"), 1));
+            p.setPen(QPen(QColor("#777777"), 1));
             p.setBrush(Qt::NoBrush);
             p.drawRect(rect().adjusted(1, 1, -2, -2));
         }
@@ -316,6 +337,7 @@ protected:
     void mousePressEvent(QMouseEvent *event) override {
         if (event->button() != Qt::LeftButton) return;
         setFocus();
+        clearSkimmer();
         const QPoint pos = event->position().toPoint();
         const double time = timeAt(pos.x());
         if (pos.y() < kRulerHeight || pos.x() < kTimelineLabelWidth) {
@@ -355,8 +377,10 @@ protected:
             } else {
                 setCursor(Qt::OpenHandCursor);
             }
+            updateSkimmer(event->position().toPoint());
             return;
         }
+        clearSkimmer();
         const double delta = timeAt(event->position().x()) - m_pressTime;
         m_previewTime = std::round(std::max(0.0, (m_dragTrailing ? m_dragStart + m_dragDuration : m_dragStart) + delta) * m_fps) / m_fps;
         setCursor((m_dragLeading || m_dragTrailing) ? Qt::SizeHorCursor : Qt::ClosedHandCursor);
@@ -385,6 +409,10 @@ protected:
     void leaveEvent(QEvent *) override {
         if (!m_dragging) {
             m_hoverClipId.clear();
+            if (m_hasSkimmer) {
+                m_hasSkimmer = false;
+                emit hoverSeekEnded();
+            }
             setCursor(Qt::ArrowCursor);
             update();
         }
@@ -402,6 +430,57 @@ private:
 
     double timeAt(int x) const {
         return std::clamp((x - kTimelineLabelWidth) / pixelsPerSecond(), 0.0, m_duration);
+    }
+
+    bool hasVideoAt(double time) const {
+        const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
+        for (const QJsonValue &trackValue : tracks) {
+            const QJsonObject track = trackValue.toObject();
+            const QString type = track.value(QStringLiteral("type")).toString().toLower();
+            if (type.contains(QStringLiteral("audio")) || type.contains(QStringLiteral("sound")) ||
+                type.contains(QStringLiteral("title")) || type.contains(QStringLiteral("graphic")) ||
+                type.contains(QStringLiteral("overlay"))) {
+                continue;
+            }
+            for (const QJsonValue &clipValue : track.value(QStringLiteral("clips")).toArray()) {
+                const QJsonObject clip = clipValue.toObject();
+                const double start = clip.value(QStringLiteral("timelineStart")).toDouble();
+                double duration = clip.value(QStringLiteral("duration")).toDouble();
+                if (duration <= 0.0) {
+                    const double speed = std::max(0.01, clip.value(QStringLiteral("speed")).toDouble(1.0));
+                    duration = (clip.value(QStringLiteral("out")).toDouble() - clip.value(QStringLiteral("in")).toDouble()) / speed;
+                }
+                if (time >= start && time < start + duration) return true;
+            }
+        }
+        return false;
+    }
+
+    void updateSkimmer(const QPoint &point) {
+        if (point.x() < kTimelineLabelWidth || point.y() < kRulerHeight) {
+            if (m_hasSkimmer) {
+                m_hasSkimmer = false;
+                emit hoverSeekEnded();
+                update();
+            }
+            return;
+        }
+        const double time = timeAt(point.x());
+        if (!hasVideoAt(time)) {
+            if (m_hasSkimmer) {
+                m_hasSkimmer = false;
+                emit hoverSeekEnded();
+                update();
+            }
+            return;
+        }
+        const double frameTime = std::round(time * m_fps) / m_fps;
+        if (!m_hasSkimmer || std::abs(m_skimmerTime - frameTime) >= (0.5 / m_fps)) {
+            m_skimmerTime = std::clamp(frameTime, 0.0, m_duration);
+            m_hasSkimmer = true;
+            emit hoverSeekRequested(m_skimmerTime);
+            update();
+        }
     }
 
     ClipHit clipAt(const QPoint &point) const {
@@ -432,6 +511,7 @@ private:
     double m_duration = 1.0;
     double m_fps = 24.0;
     double m_playhead = 0.0;
+    double m_skimmerTime = 0.0;
     double m_zoom = 1.0;
     double m_dragStart = 0.0;
     double m_dragDuration = 0.0;
@@ -439,6 +519,7 @@ private:
     double m_previewTime = 0.0;
     bool m_scrubbing = false;
     bool m_dragging = false;
+    bool m_hasSkimmer = false;
     bool m_dragLeading = false;
     bool m_dragTrailing = false;
 };
@@ -478,56 +559,56 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
         QLinearGradient viewerGradient(0, 0, 0, height());
-        viewerGradient.setColorAt(0.0, QColor("#0d0f12"));
-        viewerGradient.setColorAt(1.0, QColor("#090a0c"));
+        viewerGradient.setColorAt(0.0, QColor("#0d0d0d"));
+        viewerGradient.setColorAt(1.0, QColor("#090909"));
         p.fillRect(rect(), viewerGradient);
-        p.setPen(QColor("#242830"));
+        p.setPen(QColor("#343434"));
         p.drawLine(18, 34, width() - 18, 34);
         const QRectF target = QRectF(rect()).adjusted(32, 48, -32, -34);
         if (!m_frame.isNull()) {
             QImage scaled = m_frame.scaled(target.size().toSize(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
             const QPointF topLeft(target.center().x() - scaled.width() / 2.0, target.center().y() - scaled.height() / 2.0);
-            p.setPen(QColor("#363b45"));
-            p.setBrush(QColor("#07080a"));
+            p.setPen(QColor("#434343"));
+            p.setBrush(QColor("#070707"));
             p.drawRect(QRectF(topLeft, QSizeF(scaled.size())).adjusted(-1, -1, 1, 1));
             p.drawImage(topLeft, scaled);
         } else {
             const QPointF center = target.center() + QPointF(0, 4);
-            p.setPen(QColor("#303641"));
-            p.setBrush(QColor("#171a20"));
+            p.setPen(QColor("#363636"));
+            p.setBrush(QColor("#191919"));
             p.drawEllipse(center, 27, 27);
-            p.setPen(QColor("#56606e"));
+            p.setPen(QColor("#737373"));
             p.setBrush(Qt::NoBrush);
             p.drawEllipse(center, 27, 27);
             p.setPen(Qt::NoPen);
-            p.setBrush(QColor("#8c96a4"));
+            p.setBrush(QColor("#b1b1b1"));
             p.drawPolygon(QPolygonF{center + QPointF(-5, -8), center + QPointF(9, 0), center + QPointF(-5, 8)});
-            p.setPen(QColor("#a0a8b5"));
+            p.setPen(QColor("#a0a0a0"));
             p.drawText(QRectF(target.left(), center.y() + 42, target.width(), 20), Qt::AlignCenter,
                        QStringLiteral("No preview frame"));
-            p.setPen(QColor("#656e7c"));
+            p.setPen(QColor("#747474"));
             p.drawText(QRectF(target.left(), center.y() + 64, target.width(), 20), Qt::AlignCenter,
                        QStringLiteral("Import media to begin"));
         }
-        p.setPen(QColor("#a1a8b3"));
+        p.setPen(QColor("#a0a0a0"));
         QFont viewerFont = p.font();
         viewerFont.setPointSize(9);
         p.setFont(viewerFont);
         p.drawText(24, 22, QStringLiteral("VIEWER"));
-        p.setPen(QColor("#656d7a"));
+        p.setPen(QColor("#747474"));
         p.drawText(92, 22, QStringLiteral("%1 × %2").arg(m_width > 0 ? QString::number(static_cast<int>(m_width)) : QStringLiteral("—"),
                                                          m_height > 0 ? QString::number(static_cast<int>(m_height)) : QStringLiteral("—")));
-        p.setPen(QColor("#aab2bd"));
+        p.setPen(QColor("#a6a6a6"));
         p.drawText(width() - 96, 22, prettyTime(m_time));
         if (!m_caption.isEmpty()) {
             const QRectF captionRect(48, height() - 64, width() - 96, 34);
             p.setPen(Qt::NoPen);
-            p.setBrush(QColor(10, 12, 16, 225));
+            p.setBrush(QColor(15, 15, 15, 225));
             p.drawRoundedRect(captionRect, 4, 4);
-            p.setPen(QColor("#596474"));
+            p.setPen(QColor("#676767"));
             p.setBrush(Qt::NoBrush);
             p.drawRoundedRect(captionRect, 4, 4);
-            p.setPen(QColor("#f4f6fa"));
+            p.setPen(QColor("#eeeeee"));
             p.drawText(captionRect.adjusted(10, 0, -10, 0), Qt::AlignCenter | Qt::TextSingleLine, m_caption);
         }
     }
@@ -582,6 +663,13 @@ private slots:
         if (cut_bridge_frame(m_bridge, &frame) && frame.pixels && frame.length > 0 && frame.width > 0 && frame.height > 0) {
             const qsizetype expected = static_cast<qsizetype>(frame.width) * static_cast<qsizetype>(frame.height) * 4;
             if (expected > 0 && frame.length >= static_cast<size_t>(expected)) {
+                // A seek can leave one already decoded frame in the bridge's
+                // replaceable slot. Do not let it flash while the latest
+                // hover target is still being decoded.
+                if (m_hoverSkimming &&
+                    std::abs(frame.time - m_pendingHoverSeek) > (1.5 / std::max(1.0, m_fps))) {
+                    return;
+                }
                 QImage image(frame.pixels, static_cast<int>(frame.width), static_cast<int>(frame.height),
                              static_cast<int>(frame.width * 4), QImage::Format_RGBA8888);
                 m_viewer->setFrame(image.copy(), frame.time);
@@ -625,15 +713,39 @@ private slots:
 
     void togglePlayback() {
         if (m_previewRequired || m_duration <= 0) return;
+        if (!m_playing && m_hoverSkimming) {
+            // Skimming is a viewer-only preview. Restore the edit playhead
+            // before starting playback so hover never changes its start point.
+            m_hasPendingHoverSeek = false;
+            m_hoverSkimming = false;
+            m_timeline->clearSkimmer();
+            sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("seek")},
+                                   {QStringLiteral("position"), m_playhead}});
+        }
         sendSimple(QJsonObject{{QStringLiteral("type"), m_playing ? QStringLiteral("pause") : QStringLiteral("play")} });
     }
 
     void queueSeek(double time) {
+        m_hasPendingHoverSeek = false;
+        m_hoverSkimming = false;
+        m_timeline->clearSkimmer();
         m_pendingSeek = std::clamp(time, 0.0, m_duration);
         m_hasPendingSeek = true;
         m_playhead = m_pendingSeek;
         m_timeline->setPlayhead(m_playhead);
         updateTransportTime();
+    }
+
+    void queueHoverSeek(double time) {
+        if (m_previewRequired || m_playing || m_duration <= 0.0) return;
+        m_pendingHoverSeek = std::clamp(time, 0.0, m_duration);
+        m_hasPendingHoverSeek = true;
+        m_hoverSkimming = true;
+    }
+
+    void endHoverSeek() {
+        m_hasPendingHoverSeek = false;
+        m_hoverSkimming = false;
     }
 
     void selectClip(const QString &id) {
@@ -677,9 +789,21 @@ private slots:
         if (text.isEmpty()) return;
         if (!sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("agent")}, {QStringLiteral("text"), text}})) return;
         m_chatInput->clear();
-        m_sendButton->setEnabled(false);
+        m_agentBusy = true;
+        m_agentText.clear();
+        m_agentStatus->setText(QStringLiteral("WORKING"));
+        m_chatInput->setEnabled(false);
+        m_abortButton->setEnabled(true);
+        updateChatControls();
         appendConversation(QStringLiteral("You"), text);
-        addActivity(QStringLiteral("agent"), QStringLiteral("Agent request sent"));
+        appendConversationNote(QStringLiteral("Progress"), QStringLiteral("Request sent"));
+        addActivity(QStringLiteral("agent"), QStringLiteral("Request sent"));
+    }
+
+    void updateChatControls() {
+        const bool hasText = !m_chatInput->text().trimmed().isEmpty();
+        m_sendButton->setEnabled(hasText && !m_agentBusy);
+        m_abortButton->setEnabled(m_agentBusy);
     }
 
     void acceptProposal() {
@@ -718,13 +842,15 @@ private:
     void buildUi() {
         auto *central = new QWidget(this);
         auto *root = new QHBoxLayout(central);
-        root->setContentsMargins(10, 10, 10, 10);
-        root->setSpacing(10);
+        // Keep the editor chrome close to the canvas, as in a dedicated NLE.
+        // Panels carry their own inset so the sequence remains the visual focus.
+        root->setContentsMargins(8, 8, 8, 8);
+        root->setSpacing(8);
 
         auto *left = new QWidget;
         left->setObjectName(QStringLiteral("panel"));
-        left->setMinimumWidth(228);
-        left->setMaximumWidth(300);
+        left->setMinimumWidth(220);
+        left->setMaximumWidth(286);
         auto *leftLayout = new QVBoxLayout(left);
         leftLayout->setContentsMargins(14, 12, 14, 12);
         auto *mediaHeader = new QHBoxLayout;
@@ -810,8 +936,8 @@ private:
 
         auto *right = new QWidget;
         right->setObjectName(QStringLiteral("panel"));
-        right->setMinimumWidth(326);
-        right->setMaximumWidth(410);
+        right->setMinimumWidth(320);
+        right->setMaximumWidth(392);
         auto *rightLayout = new QVBoxLayout(right);
         rightLayout->setContentsMargins(14, 12, 14, 12);
         auto *agentHeader = new QHBoxLayout;
@@ -830,36 +956,59 @@ private:
         auto *chatTab = new QWidget;
         auto *chatLayout = new QVBoxLayout(chatTab);
         chatLayout->setContentsMargins(0, 8, 0, 0);
+        chatLayout->setSpacing(8);
+        auto *chatHint = new QLabel(QStringLiteral("Describe an edit and Cut will inspect the project, plan the change, and stage it for your review."));
+        chatHint->setObjectName(QStringLiteral("chatHint"));
+        chatHint->setWordWrap(true);
+        chatLayout->addWidget(chatHint);
         m_conversation = new QTextEdit;
         m_conversation->setReadOnly(true);
         m_conversation->setObjectName(QStringLiteral("conversation"));
-        m_conversation->setHtml(QStringLiteral("<p style='color:#788595'>Describe an edit. Review the proposed changes here.</p>"));
+        m_conversation->setAcceptRichText(false);
+        m_conversation->setUndoRedoEnabled(false);
+        m_conversation->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+        m_conversation->document()->setDocumentMargin(10);
+        m_conversation->setHtml(QStringLiteral("<p style='color:#7a7a7a'>Your conversation with Cut will appear here.</p>"));
         chatLayout->addWidget(m_conversation, 1);
-        auto *chatRow = new QHBoxLayout;
+        auto *composer = new QFrame;
+        composer->setObjectName(QStringLiteral("chatComposer"));
+        auto *chatRow = new QHBoxLayout(composer);
+        chatRow->setContentsMargins(8, 7, 8, 7);
+        chatRow->setSpacing(6);
         m_chatInput = new QLineEdit;
-        m_chatInput->setPlaceholderText(QStringLiteral("Ask the editor to make a change…"));
+        m_chatInput->setObjectName(QStringLiteral("chatInput"));
+        m_chatInput->setPlaceholderText(QStringLiteral("Message Cut…"));
+        m_chatInput->setClearButtonEnabled(true);
         connect(m_chatInput, &QLineEdit::returnPressed, this, &MainWindow::sendChat);
+        connect(m_chatInput, &QLineEdit::textChanged, this, &MainWindow::updateChatControls);
         auto *sendButton = new QPushButton(QStringLiteral("Send"));
-        sendButton->setObjectName(QStringLiteral("primaryButton"));
+        sendButton->setObjectName(QStringLiteral("chatSendButton"));
         m_sendButton = sendButton;
+        sendButton->setToolTip(QStringLiteral("Send message (Return)"));
         connect(sendButton, &QPushButton::clicked, this, &MainWindow::sendChat);
         chatRow->addWidget(m_chatInput);
         chatRow->addWidget(sendButton);
         auto *abortButton = new QToolButton;
+        abortButton->setObjectName(QStringLiteral("abortButton"));
         abortButton->setText(QStringLiteral("Stop"));
         abortButton->setToolTip(QStringLiteral("Stop the current agent request"));
+        m_abortButton = abortButton;
+        abortButton->setEnabled(false);
         connect(abortButton, &QToolButton::clicked, this, [this] {
-            sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("abort")}});
+            if (!sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("abort")}})) return;
+            m_abortButton->setEnabled(false);
+            m_agentStatus->setText(QStringLiteral("STOPPING"));
+            appendConversationNote(QStringLiteral("Progress"), QStringLiteral("Stopping request…"));
         });
         chatRow->addWidget(abortButton);
-        chatLayout->addLayout(chatRow);
+        chatLayout->addWidget(composer);
 
         auto *activityTitle = new QLabel(QStringLiteral("ACTIVITY"));
         activityTitle->setObjectName(QStringLiteral("eyebrow"));
         chatLayout->addWidget(activityTitle);
         m_activityList = new QListWidget;
         m_activityList->setObjectName(QStringLiteral("activityList"));
-        m_activityList->setMaximumHeight(96);
+        m_activityList->setMaximumHeight(76);
         chatLayout->addWidget(m_activityList);
 
         m_exportProgress = new QProgressBar;
@@ -931,6 +1080,8 @@ private:
         setCentralWidget(central);
 
         connect(m_timeline, &TimelineWidget::seekRequested, this, &MainWindow::queueSeek);
+        connect(m_timeline, &TimelineWidget::hoverSeekRequested, this, &MainWindow::queueHoverSeek);
+        connect(m_timeline, &TimelineWidget::hoverSeekEnded, this, &MainWindow::endHoverSeek);
         connect(m_timeline, &TimelineWidget::clipSelected, this, &MainWindow::selectClip);
         connect(m_timeline, &TimelineWidget::moveRequested, this, &MainWindow::moveClip);
         connect(m_timeline, &TimelineWidget::trimRequested, this, &MainWindow::trimClip);
@@ -1030,9 +1181,15 @@ private:
     }
 
     void flushSeek() {
-        if (!m_hasPendingSeek) return;
-        m_hasPendingSeek = false;
-        sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("seek")}, {QStringLiteral("position"), m_pendingSeek}});
+        if (m_hasPendingSeek) {
+            m_hasPendingSeek = false;
+            sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("seek")}, {QStringLiteral("position"), m_pendingSeek}});
+            return;
+        }
+        if (m_hasPendingHoverSeek) {
+            m_hasPendingHoverSeek = false;
+            sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("seek")}, {QStringLiteral("position"), m_pendingHoverSeek}});
+        }
     }
 
     void handleEvent(QJsonObject event) {
@@ -1050,25 +1207,48 @@ private:
         } else if (type == QStringLiteral("agent")) {
             const QString kind = event.value(QStringLiteral("kind")).toString(QStringLiteral("agent"));
             const QString text = event.value(QStringLiteral("text")).toString();
-            if (kind == "delta") {
-                if (m_agentText.isEmpty()) appendConversation("Cut", text);
-                else { QTextCursor cursor(m_conversation->document()); cursor.movePosition(QTextCursor::End); cursor.insertText(text); m_conversation->ensureCursorVisible(); }
+            if (kind == QStringLiteral("delta")) {
+                if (m_agentText.isEmpty()) appendConversation(QStringLiteral("Cut"), text);
+                else {
+                    QTextCursor cursor(m_conversation->document());
+                    cursor.movePosition(QTextCursor::End);
+                    cursor.insertText(text);
+                    m_conversation->ensureCursorVisible();
+                }
                 m_agentText += text;
+            } else if (kind == QStringLiteral("done")) {
+                if (m_agentText.isEmpty()) appendConversation(QStringLiteral("Cut"), text);
+                m_agentText.clear();
+            } else if (kind == QStringLiteral("tool")) {
+                appendConversationNote(QStringLiteral("Tool"), text);
+                addActivity(QStringLiteral("tool"), text.left(120));
+            } else if (kind == QStringLiteral("status")) {
+                appendConversationNote(QStringLiteral("Progress"), text);
+                addActivity(QStringLiteral("status"), text.left(120));
+            } else {
+                appendConversationNote(QStringLiteral("Agent"), text);
+                addActivity(kind, text.left(120));
             }
-            else if (kind == "done") { if (m_agentText.isEmpty()) appendConversation("Cut", text); m_agentText.clear(); }
-            else addActivity(kind, text.left(120));
         } else if (type == QStringLiteral("agent_busy")) {
             const bool busy = event.value(QStringLiteral("busy")).toBool();
+            m_agentBusy = busy;
             m_agentStatus->setText(busy ? QStringLiteral("THINKING") : QStringLiteral("READY"));
             m_chatInput->setEnabled(!busy);
-            m_sendButton->setEnabled(!busy);
+            updateChatControls();
         } else if (type == QStringLiteral("clock")) {
-            m_playhead = std::clamp(event.value(QStringLiteral("position")).toDouble(), 0.0, m_duration);
             if (event.value(QStringLiteral("duration")).isDouble()) m_duration = std::max(0.0, event.value(QStringLiteral("duration")).toDouble());
-            m_timeline->setPlayhead(m_playhead);
+            if (!m_hoverSkimming || m_playing) {
+                m_playhead = std::clamp(event.value(QStringLiteral("position")).toDouble(), 0.0, m_duration);
+                m_timeline->setPlayhead(m_playhead);
+            }
             updateTransportTime();
         } else if (type == QStringLiteral("playback")) {
             m_playing = event.value(QStringLiteral("playing")).toBool();
+            if (m_playing) {
+                m_hasPendingHoverSeek = false;
+                m_hoverSkimming = false;
+                m_timeline->clearSkimmer();
+            }
             m_playButton->setText(m_playing ? QStringLiteral("Ⅱ") : QStringLiteral("▶"));
         } else if (type == QStringLiteral("export")) {
             const double progress = event.value(QStringLiteral("progress")).toDouble();
@@ -1211,7 +1391,37 @@ private:
             m_conversation->clear();
             m_conversationEmpty = false;
         }
-        m_conversation->append(QStringLiteral("<b>%1</b><br/>%2").arg(speaker.toHtmlEscaped(), text.toHtmlEscaped().replace(QStringLiteral("\n"), QStringLiteral("<br/>"))));
+        const bool user = speaker == QStringLiteral("You");
+        const bool error = speaker == QStringLiteral("Error");
+        const QString role = speaker.toHtmlEscaped().toUpper();
+        const QString roleColor = user ? QStringLiteral("#d2d2d2")
+                                       : error ? QStringLiteral("#939393") : QStringLiteral("#afafaf");
+        const QString bubbleColor = user ? QStringLiteral("#2b2b2b")
+                                         : error ? QStringLiteral("#272727") : QStringLiteral("#262626");
+        const QString bodyColor = error ? QStringLiteral("#d0d0d0") : QStringLiteral("#e2e2e2");
+        const QString body = text.toHtmlEscaped().replace(QStringLiteral("\n"), QStringLiteral("<br/>"));
+        m_conversation->append(QStringLiteral(
+            "<p style='margin:0 0 10px 0; padding:9px 10px; background-color:%1;'>"
+            "<span style='color:%2; font-size:9pt; font-weight:700;'>%3</span><br/>"
+            "<span style='color:%4; font-size:10pt;'>%5</span></p>")
+                                    .arg(bubbleColor, roleColor, role, bodyColor, body));
+        m_conversation->ensureCursorVisible();
+    }
+
+    void appendConversationNote(const QString &kind, const QString &text) {
+        if (text.isEmpty()) return;
+        if (m_conversationEmpty) {
+            m_conversation->clear();
+            m_conversationEmpty = false;
+        }
+        const QString label = kind.toHtmlEscaped().toUpper();
+        const QString body = text.toHtmlEscaped().replace(QStringLiteral("\n"), QStringLiteral("<br/>"));
+        const QString color = kind == QStringLiteral("Tool") ? QStringLiteral("#acacac") : QStringLiteral("#7c7c7c");
+        m_conversation->append(QStringLiteral(
+            "<p style='margin:0 0 7px 0; padding:2px 4px;'>"
+            "<span style='color:%1; font-size:9pt; font-weight:700;'>%2</span>"
+            "<span style='color:#a1a1a1; font-size:9pt;'>  %3</span></p>")
+                                    .arg(color, label, body));
         while (m_conversation->document()->blockCount() > 120) {
             QTextCursor cursor(m_conversation->document());
             cursor.movePosition(QTextCursor::Start);
@@ -1235,7 +1445,7 @@ private:
 
     void showError(const QString &message) {
         statusBar()->showMessage(message, 6000);
-        appendConversation(QStringLiteral("error"), message);
+        appendConversation(QStringLiteral("Error"), message);
         addActivity(QStringLiteral("error"), message);
     }
 
@@ -1255,11 +1465,15 @@ private:
     double m_fps = 24.0;
     double m_playhead = 0.0;
     double m_pendingSeek = 0.0;
+    double m_pendingHoverSeek = 0.0;
     bool m_hasPendingSeek = false;
+    bool m_hasPendingHoverSeek = false;
     bool m_playing = false;
     bool m_previewRequired = false;
+    bool m_hoverSkimming = false;
     bool m_updatingInspector = false;
     bool m_conversationEmpty = true;
+    bool m_agentBusy = false;
     QString m_agentText;
     QString m_selectedClip;
     QString m_proposalId;
@@ -1271,6 +1485,7 @@ private:
     QTextEdit *m_conversation = nullptr;
     QLineEdit *m_chatInput = nullptr;
     QPushButton *m_sendButton = nullptr;
+    QToolButton *m_abortButton = nullptr;
     QListWidget *m_activityList = nullptr;
     QLabel *m_agentStatus = nullptr;
     QLabel *m_proposalSummary = nullptr;
@@ -1306,47 +1521,52 @@ int main(int argc, char **argv) {
     QApplication::setOrganizationName(QStringLiteral("Cut"));
     app.setStyle(QStringLiteral("Fusion"));
     app.setStyleSheet(QStringLiteral(
-        "* { color: #d8dbe1; font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif; font-size: 12px; }"
-        "QMainWindow, QWidget { background: #0d0e10; } QLabel { background: transparent; }"
-        "QMenuBar { background: #17181b; border-bottom: 1px solid #292b30; padding: 4px 9px; }"
-        "QMenuBar::item { padding: 5px 10px; border-radius: 4px; } QMenuBar::item:selected { background: #2a2d33; }"
-        "QMenu { background: #1b1d21; border: 1px solid #363940; padding: 4px; }"
-        "QMenu::item { padding: 7px 28px 7px 12px; border-radius: 3px; } QMenu::item:selected { background: #315b87; }"
-        "QToolBar { background: #17181b; border: 0; border-bottom: 1px solid #292b30; spacing: 6px; padding: 6px 10px; }"
-        "QToolBar::separator { background: #34363d; width: 1px; margin: 4px 3px; }"
-        "QToolButton, QPushButton { background: #26282d; border: 1px solid #3b3e46; border-radius: 5px; padding: 6px 11px; min-height: 16px; }"
-        "QToolButton:hover, QPushButton:hover { background: #30343b; border-color: #505661; }"
-        "QToolButton:pressed, QPushButton:pressed { background: #344f6b; border-color: #6795bd; }"
-        "QToolButton:disabled, QPushButton:disabled { color: #626873; background: #1b1d21; border-color: #292c32; }"
-        "QPushButton#primaryButton { background: #356fae; border-color: #5c99cf; color: #f4f8fc; font-weight: 600; }"
-        "QPushButton#primaryButton:hover { background: #4383c0; } QPushButton#dangerButton { background: #4a292e; border-color: #86505a; }"
-        "QPushButton#dangerButton:hover { background: #60363d; } QPushButton#secondaryButton { background: #1b1e23; }"
-        "QToolButton#squareButton { padding: 2px 9px; font-size: 18px; color: #c3ccd7; }"
-        "QToolButton#playButton { background: #326fae; border-color: #66a2d8; border-radius: 6px; color: #f5f9fc; font-size: 15px; padding: 5px 16px; }"
-        "QToolButton#playButton:hover { background: #4186c5; }"
-        "QWidget#panel { background: #181a1e; border: 1px solid #2c2f36; border-radius: 6px; }"
-        "QFrame#viewerFrame, QFrame#timelineFrame { background: #0b0c0f; border: 1px solid #2c2f36; border-radius: 6px; }"
-        "QWidget#transport { background: #181a1e; border: 1px solid #2c2f36; border-radius: 6px; }"
-        "QLabel#eyebrow { color: #8b929d; font-size: 10px; font-weight: 700; letter-spacing: 1px; }"
-        "QLabel#muted { color: #7a818c; font-size: 11px; } QLabel#statusPill { color: #71cd99; font-size: 10px; font-weight: 700; }"
-        "QLabel#timecode { color: #d5d9e0; font-family: Menlo, Monaco, monospace; font-size: 11px; }"
-        "QLabel#inspectorClip { color: #f1f3f6; font-weight: 600; padding: 5px 0; }"
-        "QListWidget, QTextEdit { background: #111316; border: 1px solid #30343c; border-radius: 5px; padding: 5px; selection-background-color: #294e75; }"
-        "QListWidget::item { padding: 9px 8px; border-bottom: 1px solid #25282e; } QListWidget::item:hover { background: #1c2026; }"
-        "QListWidget::item:selected { background: #294e75; color: #f3f7fb; }"
-        "QTextEdit { selection-background-color: #315f8d; } QLineEdit, QDoubleSpinBox, QComboBox { background: #202328; border: 1px solid #3a3e47; border-radius: 4px; padding: 6px; selection-background-color: #315f8d; }"
-        "QLineEdit:hover, QDoubleSpinBox:hover, QComboBox:hover { border-color: #505660; } QLineEdit:focus, QDoubleSpinBox:focus, QComboBox:focus { border-color: #6194c3; background: #232830; }"
-        "QGroupBox#proposalBox { border: 1px solid #465263; border-radius: 5px; margin-top: 12px; padding: 12px 10px 10px; background: #1b2027; }"
-        "QGroupBox#proposalBox::title { subcontrol-origin: margin; left: 9px; padding: 0 5px; color: #a8b5c7; font-size: 10px; font-weight: 700; }"
-        "QProgressBar { background: #202329; border: 0; border-radius: 2px; height: 4px; } QProgressBar::chunk { background: #5e9fcf; border-radius: 2px; }"
-        "QTabWidget::pane { border: 0; background: transparent; } QTabBar::tab { color: #838b97; padding: 8px 15px; border-bottom: 2px solid transparent; }"
-        "QTabBar::tab:hover { color: #d7dce4; } QTabBar::tab:selected { color: #f1f4f8; border-bottom-color: #5f9bd0; }"
-        "QSlider::groove:horizontal { background: #101215; border: 1px solid #292c32; height: 5px; border-radius: 3px; }"
-        "QSlider::handle:horizontal { background: #6a9ec7; border: 1px solid #8bb7d8; width: 11px; margin: -4px 0; border-radius: 6px; }"
-        "QScrollBar:vertical, QScrollBar:horizontal { background: #101215; border: 0; } QScrollBar:vertical { width: 10px; } QScrollBar:horizontal { height: 10px; }"
-        "QScrollBar::handle:vertical, QScrollBar::handle:horizontal { background: #3b424d; border-radius: 4px; min-height: 20px; min-width: 20px; }"
-        "QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover { background: #596675; } QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }"
-        "QStatusBar { background: #111215; color: #89919d; border-top: 1px solid #25282e; }"
+        "* { color: #dedede; font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif; font-size: 12px; }"
+        "QMainWindow, QWidget { background: #111111; } QLabel { background: transparent; }"
+        "QMenuBar { background: #181818; border-bottom: 1px solid #2b2b2b; padding: 4px 9px; }"
+        "QMenuBar::item { padding: 5px 10px; border-radius: 4px; } QMenuBar::item:selected { background: #2d2d2d; }"
+        "QMenu { background: #202020; border: 1px solid #3a3a3a; padding: 4px; }"
+        "QMenu::item { padding: 7px 28px 7px 12px; border-radius: 3px; } QMenu::item:selected { background: #3e3e3e; }"
+        "QToolBar { background: #181818; border: 0; border-bottom: 1px solid #2b2b2b; spacing: 6px; padding: 6px 10px; }"
+        "QToolBar::separator { background: #393939; width: 1px; margin: 4px 3px; }"
+        "QToolButton, QPushButton { background: #292929; border: 1px solid #444444; border-radius: 5px; padding: 6px 11px; min-height: 16px; }"
+        "QToolButton:hover, QPushButton:hover { background: #353535; border-color: #5f5f5f; }"
+        "QToolButton:pressed, QPushButton:pressed { background: #414141; border-color: #8e8e8e; }"
+        "QToolButton:disabled, QPushButton:disabled { color: #676767; background: #202020; border-color: #2f2f2f; }"
+        "QPushButton#primaryButton { background: #b0b0b0; border-color: #d0d0d0; color: #131313; font-weight: 600; }"
+        "QPushButton#primaryButton:hover { background: #c8c8c8; } QPushButton#dangerButton { background: #333333; border-color: #5b5b5b; }"
+        "QPushButton#dangerButton:hover { background: #434343; } QPushButton#secondaryButton { background: #232323; }"
+        "QToolButton#squareButton { padding: 2px 9px; font-size: 18px; color: #c5c5c5; }"
+        "QToolButton#playButton { background: #b0b0b0; border-color: #d0d0d0; border-radius: 6px; color: #131313; font-size: 15px; padding: 5px 16px; }"
+        "QToolButton#playButton:hover { background: #c8c8c8; }"
+        "QWidget#panel { background: #1b1b1b; border: 1px solid #373737; border-radius: 6px; }"
+        "QFrame#viewerFrame, QFrame#timelineFrame { background: #0c0c0c; border: 1px solid #373737; border-radius: 6px; }"
+        "QWidget#transport { background: #1b1b1b; border: 1px solid #373737; border-radius: 6px; }"
+        "QLabel#eyebrow { color: #969696; font-size: 10px; font-weight: 700; letter-spacing: 1px; }"
+        "QLabel#muted { color: #838383; font-size: 11px; } QLabel#statusPill { color: #b1b1b1; font-size: 10px; font-weight: 700; }"
+        "QLabel#timecode { color: #dedede; font-family: Menlo, Monaco, monospace; font-size: 11px; }"
+        "QLabel#inspectorClip { color: #efefef; font-weight: 600; padding: 5px 0; }"
+        "QListWidget, QTextEdit { background: #141414; border: 1px solid #393939; border-radius: 5px; padding: 5px; selection-background-color: #3e3e3e; }"
+        "QListWidget::item { padding: 9px 8px; border-bottom: 1px solid #292929; } QListWidget::item:hover { background: #252525; }"
+        "QListWidget::item:selected { background: #3e3e3e; color: #f0f0f0; }"
+        "QTextEdit { selection-background-color: #4a4a4a; } QTextEdit#conversation { background: #171717; border: 1px solid #393939; border-radius: 6px; padding: 2px; }"
+        "QLineEdit, QDoubleSpinBox, QComboBox { background: #242424; border: 1px solid #444444; border-radius: 4px; padding: 6px; selection-background-color: #4a4a4a; }"
+        "QLineEdit:hover, QDoubleSpinBox:hover, QComboBox:hover { border-color: #5f5f5f; } QLineEdit:focus, QDoubleSpinBox:focus, QComboBox:focus { border-color: #8e8e8e; background: #292929; }"
+        "QFrame#chatComposer { background: #222222; border: 1px solid #444444; border-radius: 7px; } QLineEdit#chatInput { background: transparent; border: 0; padding: 5px 2px; } QLineEdit#chatInput:focus { background: transparent; border: 0; }"
+        "QPushButton#chatSendButton { background: #d6d6d6; border-color: #e9e9e9; color: #1a1a1a; font-weight: 700; } QPushButton#chatSendButton:hover { background: #eeeeee; } QPushButton#chatSendButton:disabled { color: #717171; background: #353535; border-color: #444444; }"
+        "QToolButton#abortButton { color: #c5c5c5; background: transparent; border-color: transparent; padding: 5px 7px; } QToolButton#abortButton:hover { color: #b5b5b5; background: #282828; border-color: #3f3f3f; } QToolButton#abortButton:disabled { color: #646464; background: transparent; border-color: transparent; }"
+        "QLabel#chatHint { color: #868686; font-size: 11px; padding: 1px 2px 3px; }"
+        "QGroupBox#proposalBox { border: 1px solid #585858; border-radius: 5px; margin-top: 12px; padding: 12px 10px 10px; background: #212121; }"
+        "QGroupBox#proposalBox::title { subcontrol-origin: margin; left: 9px; padding: 0 5px; color: #a7a7a7; font-size: 10px; font-weight: 700; }"
+        "QProgressBar { background: #242424; border: 0; border-radius: 2px; height: 4px; } QProgressBar::chunk { background: #aaaaaa; border-radius: 2px; }"
+        "QTabWidget::pane { border: 0; background: transparent; } QTabBar::tab { color: #838383; padding: 8px 15px; border-bottom: 2px solid transparent; }"
+        "QTabBar::tab:hover { color: #dedede; } QTabBar::tab:selected { color: #efefef; border-bottom-color: #aaaaaa; }"
+        "QSlider::groove:horizontal { background: #121212; border: 1px solid #343434; height: 5px; border-radius: 3px; }"
+        "QSlider::handle:horizontal { background: #aaaaaa; border: 1px solid #cccccc; width: 11px; margin: -4px 0; border-radius: 6px; }"
+        "QScrollBar:vertical, QScrollBar:horizontal { background: #121212; border: 0; } QScrollBar:vertical { width: 10px; } QScrollBar:horizontal { height: 10px; }"
+        "QScrollBar::handle:vertical, QScrollBar::handle:horizontal { background: #494949; border-radius: 4px; min-height: 20px; min-width: 20px; }"
+        "QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover { background: #666666; } QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }"
+        "QStatusBar { background: #151515; color: #878787; border-top: 1px solid #2b2b2b; }"
     ));
 
     QString project;
