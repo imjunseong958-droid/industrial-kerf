@@ -28,3 +28,9 @@ seeking, and export are sent as bounded asynchronous bridge commands.
 
 The timeline supports click-to-seek, clip selection, drag-to-move, edge
 trimming, split-at-playhead, and Delete. Inspector values commit on focus loss.
+
+The Agent panel includes a Chat view and an Agent settings view. Configure
+Anthropic and OpenAI independently with an API key, Base URL, model, and (for
+OpenAI) Chat Completions or Responses mode. The provider and model picker in
+Chat are sent with each request, so changing them takes effect immediately;
+the existing environment variables remain available as fallbacks.

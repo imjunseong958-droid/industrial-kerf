@@ -104,6 +104,10 @@ pub struct WaveformBucket {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WaveformPayload {
+    #[serde(default)]
+    pub start: f64,
+    #[serde(default)]
+    pub end: f64,
     pub duration: f64,
     pub sample_rate: u32,
     pub buckets: Vec<WaveformBucket>,
@@ -116,6 +120,10 @@ struct WaveformPayload {
 #[serde(rename_all = "camelCase")]
 pub struct WaveformResult {
     pub key: String,
+    /// Source time covered by this waveform. Full-source requests use
+    /// `0..duration`; ranged requests retain their selected interval.
+    pub start: f64,
+    pub end: f64,
     pub duration: f64,
     pub sample_rate: u32,
     pub buckets: Vec<WaveformBucket>,
@@ -704,6 +712,7 @@ fn decode_waveform_buckets(
     src: &str,
     duration: f64,
     bucket_count: usize,
+    start: f64,
 ) -> Result<Vec<WaveformBucket>> {
     let bucket_count = bucket_count.max(1);
     let expected = if duration.is_finite() && duration > 0.0 {
@@ -718,11 +727,17 @@ fn decode_waveform_buckets(
     let mut sums = vec![0.0_f64; bucket_count];
     let mut counts = vec![0_usize; bucket_count];
     let sample_rate = WAVEFORM_SAMPLE_RATE.to_string();
+    let start = start.to_string();
+    let duration = duration.to_string();
     let mut child = Command::new(resolve_ffmpeg_bin())
         .args([
             "-hide_banner",
             "-loglevel",
             "error",
+            "-ss",
+            start.as_str(),
+            "-t",
+            duration.as_str(),
             "-i",
             src,
             "-vn",
@@ -837,11 +852,22 @@ fn waveform_buckets_from_counts(
         .collect()
 }
 
-fn create_waveform_image(src: &str, output: &Path, width: u32, height: u32) -> Result<()> {
+fn create_waveform_image(
+    src: &str,
+    output: &Path,
+    width: u32,
+    height: u32,
+    start: f64,
+    duration: f64,
+) -> Result<()> {
     let args = vec![
         "-hide_banner".into(),
         "-loglevel".into(),
         "error".into(),
+        "-ss".into(),
+        start.to_string(),
+        "-t".into(),
+        duration.to_string(),
         "-i".into(),
         src.into(),
         "-filter_complex".into(),
@@ -865,7 +891,44 @@ pub fn cached_waveform(
     image_width: u32,
     image_height: u32,
 ) -> Result<WaveformResult> {
+    let metadata = info(src)?;
+    let end = metadata
+        .duration
+        .filter(|duration| duration.is_finite() && *duration > 0.0)
+        .unwrap_or(1.0);
+    cached_waveform_range(
+        src,
+        cache,
+        bucket_count,
+        include_image,
+        image_width,
+        image_height,
+        0.0,
+        end,
+    )
+}
+
+/// Generate a cached waveform for one bounded source interval.
+///
+/// The range is included in the cache identity and passed to both the audio
+/// decoder and optional waveform image, so a targeted observation never
+/// accidentally reuses a full-source derivative.
+pub fn cached_waveform_range(
+    src: &str,
+    cache: &DerivativeCache,
+    bucket_count: usize,
+    include_image: bool,
+    image_width: u32,
+    image_height: u32,
+    start: f64,
+    end: f64,
+) -> Result<WaveformResult> {
     let bucket_count = bucket_count.clamp(1, MAX_WAVEFORM_BUCKETS);
+    if !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start {
+        return Err(crate::error::EngineError::msg(
+            "waveform range must be finite with 0 <= start < end",
+        ));
+    }
     if image_width == 0 || image_height == 0 {
         return Err(crate::error::EngineError::msg(
             "waveform image dimensions must be finite and positive",
@@ -877,6 +940,8 @@ pub fn cached_waveform(
         "imageWidth": image_width,
         "imageHeight": image_height,
         "sampleRate": WAVEFORM_SAMPLE_RATE,
+        "start": start,
+        "end": end,
     });
     let entry = cache.source_entry(Path::new(src), "waveform", &options)?;
     let mut required = vec!["waveform.json"];
@@ -893,11 +958,17 @@ pub fn cached_waveform(
                 "media does not contain an audio stream",
             ));
         }
-        let duration = meta
+        let source_duration = meta
             .duration
             .filter(|duration| duration.is_finite() && *duration >= 0.0)
             .unwrap_or(0.0);
-        let buckets = decode_waveform_buckets(src, duration, bucket_count)?;
+        if source_duration > 0.0 && end > source_duration + 1e-6 {
+            return Err(crate::error::EngineError::msg(
+                "waveform range exceeds source duration",
+            ));
+        }
+        let duration = end - start;
+        let buckets = decode_waveform_buckets(src, duration, bucket_count, start)?;
         let duration = if duration > 0.0 {
             duration
         } else {
@@ -905,12 +976,14 @@ pub fn cached_waveform(
         };
         let image_path = if include_image {
             let path = entry.path("waveform.png");
-            create_waveform_image(src, &path, image_width, image_height)?;
+            create_waveform_image(src, &path, image_width, image_height, start, duration)?;
             Some(path.to_string_lossy().into_owned())
         } else {
             None
         };
         let payload = WaveformPayload {
+            start,
+            end: start + duration,
             duration,
             sample_rate: WAVEFORM_SAMPLE_RATE,
             buckets,
@@ -922,6 +995,8 @@ pub fn cached_waveform(
     };
     Ok(WaveformResult {
         key: entry.key,
+        start: payload.start,
+        end: payload.end,
         duration: payload.duration,
         sample_rate: payload.sample_rate,
         buckets: payload.buckets,
@@ -1032,5 +1107,14 @@ mod tests {
         assert_eq!((first[0].min, first[0].max), (-1.0, -0.5));
         assert_eq!((first[1].min, first[1].max), (0.25, 1.0));
         assert_eq!((first[2].min, first[2].max), (-0.25, 0.75));
+    }
+
+    #[test]
+    fn ranged_waveform_rejects_reversed_ranges_before_media_io() {
+        let temp = tempfile::tempdir().expect("cache");
+        let cache = DerivativeCache::new(temp.path());
+        let error = cached_waveform_range("/missing.wav", &cache, 8, false, 800, 120, 4.0, 4.0)
+            .expect_err("equal bounds");
+        assert!(error.to_string().contains("0 <= start < end"));
     }
 }

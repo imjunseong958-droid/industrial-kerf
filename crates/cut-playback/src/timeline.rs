@@ -1,4 +1,5 @@
 use crate::PlaybackError;
+use cut_core::evaluation::EvaluationPlan;
 use cut_domain::{Clip, Overlay, Project, Source, TrackType};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -79,6 +80,8 @@ impl ResolvedClip {
 /// worker thread without giving that worker ownership of project state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlaybackTimeline {
+    /// Shared immutable timing interpretation also used by offline export.
+    pub evaluation: EvaluationPlan,
     pub fps: f64,
     pub width: u32,
     pub height: u32,
@@ -94,6 +97,10 @@ impl PlaybackTimeline {
     pub fn from_project(project: &Project) -> Result<Self, PlaybackError> {
         cut_domain::validate(project)
             .map_err(|error| PlaybackError::InvalidProject(error.to_string()))?;
+        let project_value = serde_json::to_value(project)
+            .map_err(|error| PlaybackError::InvalidProject(error.to_string()))?;
+        let evaluation = EvaluationPlan::from_project_json(&project_value)
+            .map_err(PlaybackError::InvalidProject)?;
 
         let (width, height) = canvas_size(project);
         let mut sources = Vec::with_capacity(project.sources.len());
@@ -200,6 +207,7 @@ impl PlaybackTimeline {
             })
             .collect();
         Ok(Self {
+            evaluation,
             fps: project.fps,
             width,
             height,

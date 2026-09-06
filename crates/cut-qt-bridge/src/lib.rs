@@ -14,6 +14,20 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+struct AgentSettings {
+    #[serde(default)]
+    provider: Option<ProviderName>,
+    #[serde(rename = "apiMode", default)]
+    api_mode: Option<OpenAiApiMode>,
+    #[serde(rename = "apiKey", default)]
+    api_key: Option<String>,
+    #[serde(rename = "baseUrl", default)]
+    base_url: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Command {
@@ -44,6 +58,8 @@ enum Command {
     },
     Agent {
         text: String,
+        #[serde(flatten)]
+        settings: AgentSettings,
     },
     Abort,
     Play,
@@ -78,10 +94,15 @@ struct Shared {
 struct Bridge {
     commands: SyncSender<Command>,
     media: SyncSender<Command>,
-    prompts: SyncSender<String>,
+    prompts: SyncSender<AgentRequest>,
     events: Receiver<Value>,
     shared: Arc<Shared>,
     displayed_frame: Option<PlaybackFrame>,
+}
+
+struct AgentRequest {
+    text: String,
+    settings: AgentSettings,
 }
 
 fn emit(tx: &SyncSender<Value>, value: Value) {
@@ -339,7 +360,10 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
                         playing = false;
                         handle.pause()
                     }
-                    Command::Volume { value } => { volume = value; handle.set_volume(value) },
+                    Command::Volume { value } => {
+                        volume = value;
+                        handle.set_volume(value)
+                    }
                     _ => continue,
                 };
                 if let Err(err) = result {
@@ -380,7 +404,7 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
                     PlaybackEvent::StateChanged(state) => {
                         playing = state == PlaybackState::Playing;
                         emit(&tx, json!({"type":"playback","playing":playing}));
-                    },
+                    }
                     PlaybackEvent::Error(err) => error(&tx, err),
                     PlaybackEvent::Ended => emit(&tx, json!({"type":"playback","playing":false})),
                     PlaybackEvent::Opened { duration, .. } => {
@@ -400,28 +424,51 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
 fn new_agent(
     directory: &std::path::Path,
     binary: &std::path::Path,
+    settings: &AgentSettings,
 ) -> Result<AgentSession, String> {
-    let provider = match std::env::var("CUT_PROVIDER").ok().as_deref() {
-        Some("openai") => ProviderName::Openai,
-        Some("anthropic") => ProviderName::Anthropic,
-        Some(_) => return Err("CUT_PROVIDER must be openai or anthropic".into()),
-        None if std::env::var_os("OPENAI_API_KEY").is_some() => ProviderName::Openai,
-        _ => ProviderName::Anthropic,
+    let provider = if let Some(provider) = settings.provider {
+        provider
+    } else {
+        match std::env::var("CUT_PROVIDER").ok().as_deref() {
+            Some("openai") => ProviderName::Openai,
+            Some("anthropic") => ProviderName::Anthropic,
+            Some(_) => return Err("CUT_PROVIDER must be openai or anthropic".into()),
+            None if settings
+                .api_key
+                .as_deref()
+                .is_some_and(|key| !key.trim().is_empty()) =>
+            {
+                // A key entered in the UI without an explicit provider defaults to
+                // OpenAI, matching the existing environment fallback.
+                ProviderName::Openai
+            }
+            None if std::env::var_os("OPENAI_API_KEY").is_some() => ProviderName::Openai,
+            _ => ProviderName::Anthropic,
+        }
     };
     let key_name = if provider == ProviderName::Openai {
         "OPENAI_API_KEY"
     } else {
         "ANTHROPIC_API_KEY"
     };
-    let api_key = std::env::var(key_name)
-        .ok()
+    let api_key = settings
+        .api_key
+        .clone()
         .filter(|key| !key.trim().is_empty())
-        .ok_or_else(|| format!("Set {key_name} before sending an agent prompt"))?;
-    let api_mode = match std::env::var("OPENAI_API_MODE").ok().as_deref() {
-        Some("responses") => OpenAiApiMode::Responses,
-        Some("chat") | None => OpenAiApiMode::Chat,
-        _ => return Err("OPENAI_API_MODE must be chat or responses".into()),
-    };
+        .or_else(|| std::env::var(key_name).ok())
+        .filter(|key| !key.trim().is_empty())
+        .ok_or_else(|| format!("Add an API key in Agent Settings or set {key_name}"))?;
+    let api_mode =
+        match settings
+            .api_mode
+            .or_else(|| match std::env::var("OPENAI_API_MODE").ok().as_deref() {
+                Some("responses") => Some(OpenAiApiMode::Responses),
+                Some("chat") | None => Some(OpenAiApiMode::Chat),
+                _ => None,
+            }) {
+            Some(mode) => mode,
+            None => return Err("OPENAI_API_MODE must be chat or responses".into()),
+        };
     let reasoning_effort = std::env::var("OPENAI_REASONING_EFFORT")
         .ok()
         .map(|value| {
@@ -435,13 +482,23 @@ fn new_agent(
         api_mode,
         reasoning_effort,
         api_key: Some(api_key),
-        model: std::env::var("CUT_MODEL").ok(),
-        base_url: std::env::var(if provider == ProviderName::Openai {
-            "OPENAI_BASE_URL"
-        } else {
-            "ANTHROPIC_BASE_URL"
-        })
-        .ok(),
+        model: settings
+            .model
+            .clone()
+            .filter(|model| !model.trim().is_empty())
+            .or_else(|| std::env::var("CUT_MODEL").ok()),
+        base_url: settings
+            .base_url
+            .clone()
+            .filter(|url| !url.trim().is_empty())
+            .or_else(|| {
+                std::env::var(if provider == ProviderName::Openai {
+                    "OPENAI_BASE_URL"
+                } else {
+                    "ANTHROPIC_BASE_URL"
+                })
+                .ok()
+            }),
         skills: router.skills().to_vec(),
         tools: router.agent_tools(),
         ..Default::default()
@@ -451,28 +508,39 @@ fn new_agent(
 fn agent_worker(
     directory: PathBuf,
     binary: PathBuf,
-    rx: Receiver<String>,
+    rx: Receiver<AgentRequest>,
     commands: SyncSender<Command>,
     tx: SyncSender<Value>,
     shared: Arc<Shared>,
 ) {
     // Keep one session for follow-up feedback, rather than forgetting every turn.
-    let mut session = None;
-    while let Ok(prompt) = rx.recv() {
+    let mut session: Option<(AgentSettings, AgentSession)> = None;
+    while let Ok(request) = rx.recv() {
         if shared.closed.load(Ordering::Relaxed) {
             break;
         }
         emit(&tx, json!({"type":"agent_busy","busy":true}));
+        emit(&tx, json!({"type":"agent_state","state":"running"}));
         let result = (|| {
-            if session.is_none() {
-                session = Some(new_agent(&directory, &binary)?);
+            if session.as_ref().map_or(true, |(active_settings, _)| {
+                active_settings != &request.settings
+            }) {
+                session = Some((
+                    request.settings.clone(),
+                    new_agent(&directory, &binary, &request.settings)?,
+                ));
             }
-            let current = session.as_mut().ok_or("Agent session unavailable")?;
+            let current = &mut session.as_mut().ok_or("Agent session unavailable")?.1;
             if let Ok(mut abort) = shared.abort.lock() {
                 *abort = Some(current.abort_handle());
             }
             current
-                .run_with_events(&prompt, |event| {
+                .run_with_events(&request.text, |event| {
+                    if let AgentEvent::ToolCallFinished { summary, .. } = &event {
+                        if summary.status.as_deref() == Some("awaiting_review") {
+                            emit(&tx, json!({"type":"agent_state","state":"awaiting_review"}));
+                        }
+                    }
                     let (kind, text) = match event {
                         AgentEvent::TextDelta(text) => ("delta", text),
                         AgentEvent::ToolCallStarted { name, targets, .. } => {
@@ -483,26 +551,43 @@ fn agent_worker(
                         } => (
                             "tool",
                             format!(
-                                "{name} · {}{}",
+                                "{name} · {}{}{}",
                                 if ok { "done" } else { "failed" },
                                 summary
                                     .status
                                     .map(|status| format!(" · {status}"))
+                                    .unwrap_or_default(),
+                                summary
+                                    .observation
+                                    .map(|observation| {
+                                        format!(
+                                            " · {} {} {}",
+                                            observation.phase.unwrap_or_else(|| "observe".into()),
+                                            observation.range.unwrap_or_default(),
+                                            observation.evidence.join("+")
+                                        )
+                                    })
                                     .unwrap_or_default()
                             ),
                         ),
                         AgentEvent::TurnStarted { .. } => ("status", "Planning next step…".into()),
                         AgentEvent::Done { text } => ("done", text),
-                        AgentEvent::Aborted => ("status", "Stopped".into()),
+                        AgentEvent::Aborted => {
+                            emit(&tx, json!({"type":"agent_state","state":"aborted"}));
+                            ("status", "Stopped".into())
+                        }
                     };
                     emit(&tx, json!({"type":"agent","kind":kind,"text":text}));
                 })
-                .map_err(|_| {
-                    "Agent request failed. Check provider configuration and connection.".to_string()
-                })?;
+                .map_err(|error| error.to_string())?;
+            emit(&tx, json!({"type":"agent_state","state":"completed"}));
             Ok::<_, String>(())
         })();
         if let Err(err) = result {
+            emit(
+                &tx,
+                json!({"type":"agent_state","state":"failed","message":err}),
+            );
             error(&tx, err);
         }
         if let Ok(mut abort) = shared.abort.lock() {
@@ -639,11 +724,15 @@ pub unsafe extern "C" fn cut_bridge_send(bridge: *mut c_void, message: *const c_
                 false
             }
         }
-        Command::Agent { text } => {
+        Command::Agent { text, settings } => {
             if text.trim().is_empty() || bridge.shared.agent_busy.swap(true, Ordering::SeqCst) {
                 return false;
             }
-            if bridge.prompts.try_send(text).is_err() {
+            if bridge
+                .prompts
+                .try_send(AgentRequest { text, settings })
+                .is_err()
+            {
                 bridge.shared.agent_busy.store(false, Ordering::SeqCst);
                 false
             } else {
@@ -729,4 +818,51 @@ pub unsafe extern "C" fn cut_bridge_frame(bridge: *mut c_void, output: *mut CutF
         };
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AgentSettings, Command};
+    use serde_json::json;
+
+    #[test]
+    fn agent_command_accepts_per_request_provider_settings() {
+        let command: Command = serde_json::from_value(json!({
+            "type": "agent",
+            "text": "Trim the opening",
+            "provider": "openai",
+            "apiMode": "responses",
+            "apiKey": "test-key",
+            "baseUrl": "http://localhost:9000/v1",
+            "model": "local-model"
+        }))
+        .expect("agent command should deserialize");
+        let Command::Agent { text, settings } = command else {
+            panic!("expected agent command");
+        };
+        assert_eq!(text, "Trim the opening");
+        assert_eq!(
+            settings,
+            AgentSettings {
+                provider: Some(cut_agent::ProviderName::Openai),
+                api_mode: Some(cut_agent::OpenAiApiMode::Responses),
+                api_key: Some("test-key".into()),
+                base_url: Some("http://localhost:9000/v1".into()),
+                model: Some("local-model".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn legacy_agent_command_keeps_environment_fallbacks() {
+        let command: Command = serde_json::from_value(json!({
+            "type": "agent",
+            "text": "Review this timeline"
+        }))
+        .expect("legacy agent command should deserialize");
+        let Command::Agent { settings, .. } = command else {
+            panic!("expected agent command");
+        };
+        assert_eq!(settings, AgentSettings::default());
+    }
 }

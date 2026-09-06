@@ -24,6 +24,16 @@ const DEFAULT_SYSTEM_PROMPT: &str = "You are a video editing assistant for Cut.
 The project file is project.cut.json (v2).
 Inspect project.outline and the timeline before editing. Use structured project_edit commands for mutations, batch related changes, and render a draft before a full render. Agent edits are staged as proposals for user review; do not claim a staged edit is applied until it is accepted.
 Use skills.read to load a playbook body when a skill is relevant.
+For a request for a rough cut, inspect the project and run coarse
+media.probe calls with action observe first, then call workflow.roughcut with
+the multiple source ranges you selected and a concise rationale for every
+range. The workflow turns those
+typed selections into one proposal, validates the candidate timeline, and
+captures a bounded before/after preview. If you have not selected ranges yet,
+workflow.roughcut returns planning_needed; never let it choose the first clip
+or source for you. Keep the proposal pending until the user reviews it. Use
+media.asset only for an existing local artifact and never claim a provider
+generated media without a returned file.
 Do not call a tool named edit.";
 
 pub const MAX_TOOL_RESULT_IMAGES: usize = 8;
@@ -1325,11 +1335,21 @@ pub struct AgentTargetSummary {
 pub struct ToolResultSummary {
     pub targets: AgentTargetSummary,
     pub artifact_paths: Vec<String>,
+    pub observation: Option<ObservationSummary>,
     pub revision: Option<u64>,
     pub status: Option<String>,
     pub count: Option<usize>,
     pub error: Option<String>,
     pub truncated: bool,
+}
+
+/// Compact observation metadata used in the live agent activity stream.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ObservationSummary {
+    pub id: String,
+    pub phase: Option<String>,
+    pub range: Option<String>,
+    pub evidence: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -1769,11 +1789,53 @@ fn add_target(targets: &mut Vec<String>, value: Option<&str>, limit: usize) {
 fn summarize_tool_result(value: &Value) -> ToolResultSummary {
     let mut summary = ToolResultSummary {
         targets: summarize_targets(value),
+        observation: find_observation(value),
         ..ToolResultSummary::default()
     };
     let mut nodes = 0;
     collect_result_fields(value, &mut summary, &mut nodes);
     summary
+}
+
+fn find_observation(value: &Value) -> Option<ObservationSummary> {
+    match value {
+        Value::Array(values) => values.iter().find_map(find_observation),
+        Value::Object(object) => {
+            if let Some(reference) = object.get("observationRef") {
+                let id = reference.get("id").and_then(Value::as_str)?.to_owned();
+                let range = reference.get("range").and_then(|range| {
+                    Some(format!(
+                        "{:.2}–{:.2}s",
+                        range.get("start")?.as_f64()?,
+                        range.get("end")?.as_f64()?
+                    ))
+                });
+                let evidence = reference
+                    .get("evidence")
+                    .and_then(Value::as_array)
+                    .map(|values| {
+                        values
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .take(MAX_AGENT_SUMMARY_ITEMS)
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                return Some(ObservationSummary {
+                    id: bounded_text(&id, MAX_AGENT_SUMMARY_TEXT_BYTES),
+                    phase: reference
+                        .get("phase")
+                        .and_then(Value::as_str)
+                        .map(|phase| bounded_text(phase, MAX_AGENT_SUMMARY_TEXT_BYTES)),
+                    range,
+                    evidence,
+                });
+            }
+            object.values().find_map(find_observation)
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => None,
+    }
 }
 
 fn collect_result_fields(value: &Value, summary: &mut ToolResultSummary, nodes: &mut usize) {
@@ -1993,6 +2055,10 @@ mod tests {
         chunks: Vec<ProviderChunk>,
     }
 
+    struct SequencedProvider {
+        responses: Mutex<Vec<Vec<ProviderChunk>>>,
+    }
+
     struct FakeStreamingClient {
         events: Vec<Value>,
         bodies: Mutex<Vec<Value>>,
@@ -2047,6 +2113,25 @@ mod tests {
 
         fn stream(&self, _request: &ProviderRequest) -> Result<Vec<ProviderChunk>, ProviderError> {
             Ok(self.chunks.clone())
+        }
+    }
+
+    impl LlmProvider for SequencedProvider {
+        fn name(&self) -> ProviderName {
+            ProviderName::Anthropic
+        }
+
+        fn default_model(&self) -> &'static str {
+            DEFAULT_ANTHROPIC_MODEL
+        }
+
+        fn stream(&self, _request: &ProviderRequest) -> Result<Vec<ProviderChunk>, ProviderError> {
+            self.responses
+                .lock()
+                .unwrap()
+                .drain(..1)
+                .next()
+                .ok_or_else(|| ProviderError::new("TEST", "no response"))
         }
     }
 
@@ -2172,6 +2257,60 @@ mod tests {
     }
 
     #[test]
+    fn agent_executes_tool_sequence_through_the_model_loop() {
+        let provider = SequencedProvider {
+            responses: Mutex::new(vec![
+                vec![ProviderChunk::MessageEnd {
+                    stop_reason: "tool_use".into(),
+                    content: vec![json!({
+                        "type": "tool_use",
+                        "id": "call-1",
+                        "name": "workflow.roughcut",
+                        "input": {"goal": "assemble selected ranges"}
+                    })],
+                }],
+                vec![ProviderChunk::MessageEnd {
+                    stop_reason: "end_turn".into(),
+                    content: vec![json!({"type": "text", "text": "awaiting review"})],
+                }],
+            ]),
+        };
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let calls_for_tool = Arc::clone(&calls);
+        let mut tools = ToolMap::new();
+        tools.insert(
+            "workflow.roughcut".into(),
+            AgentTool::new(
+                "workflow.roughcut",
+                "Stage a rough cut",
+                json!({"type": "object"}),
+                move |input| {
+                    calls_for_tool.lock().unwrap().push(input);
+                    Ok(json!({"status": "planning_needed"}))
+                },
+            ),
+        );
+        let mut session = AgentSession::from_provider(
+            Box::new(provider),
+            None,
+            None,
+            Vec::new(),
+            tools,
+            2,
+            OpenAiApiMode::Chat,
+            None,
+        );
+        assert_eq!(session.run("make a rough cut").unwrap(), "awaiting review");
+        assert_eq!(
+            calls.lock().unwrap().as_slice(),
+            &[json!({
+                "goal": "assemble selected ranges"
+            })]
+        );
+        assert_eq!(session.messages.len(), 4);
+    }
+
+    #[test]
     fn multimodal_results_are_size_checked_and_canonicalized() {
         let encoded = base64::engine::general_purpose::STANDARD.encode([1_u8, 2, 3]);
         let value = normalize_tool_result(json!({
@@ -2215,6 +2354,20 @@ mod tests {
             summary.artifact_paths,
             vec!["/project/.cut/cache/derived/frame.png"]
         );
+
+        let observation = summarize_tool_result(&json!({
+            "action": "media.observe",
+            "observationRef": {
+                "id": "observation-123",
+                "phase": "targeted",
+                "range": {"start": 4.0, "end": 8.0},
+                "evidence": ["frames"]
+            }
+        }))
+        .observation
+        .expect("observation summary");
+        assert_eq!(observation.phase.as_deref(), Some("targeted"));
+        assert_eq!(observation.range.as_deref(), Some("4.00–8.00s"));
         assert!(!format!("{summary:?}").contains("should-not-be-retained"));
 
         let sensitive = ToolResultSummary::from_error("authorization: bearer secret");

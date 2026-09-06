@@ -595,8 +595,10 @@ dependencies = [
  "cut-fetcher",
  "cut-runtime",
  "cut-skills",
+ "fs2",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 

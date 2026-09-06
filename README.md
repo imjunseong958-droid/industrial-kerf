@@ -120,8 +120,9 @@ The core profile contains the stable editing loop:
 | `timeline.capture` | Capture a deterministic offline timeline range as a frame or filmstrip |
 | `timeline.apply` | Apply one canonical v2 command or atomic batch |
 | `timeline.undo` / `timeline.redo` | Move durable history |
-| `media.probe` | Run info, silence, scenes, exact frames, filmstrips, waveform, transcription, or selected-range listening |
+| `media.probe` | Run info, silence, scenes, exact frames, filmstrips, waveform, transcription, selected-range listening, or a bounded multi-modal `observe` envelope |
 | `media.fetch` / `media.import` | Fetch or import media through `cutd` |
+| `media.asset` | Register an existing local artifact and optionally stage import/replacement as one proposal |
 | `render.preview` / `render.start` / `render.result` | Run and retrieve renders |
 | `skills.read` | Load a playbook body by exact name |
 
@@ -142,6 +143,54 @@ action also returns the prepared local WAV path. Set
 `CUT_WHISPER_CPP_VERSION` and `CUT_WHISPER_MODEL_VERSION` when packaging or
 pinning sidecar/model versions. A configured provider backend is rejected until
 an explicit upload-capable adapter and UI consent flow exist.
+
+For agent refinement, `media.probe` with `action: "observe"` accepts a required
+bounded `opts.start` plus `opts.end` or `opts.duration`, and an optional
+`opts.evidence` list (`frames`, `filmstrip`, `waveform`, `transcript`, or
+`listen`). It returns the selected range, source metadata, requested frame
+times, and the existing cached derivative results in one evidence envelope.
+The default evidence is a filmstrip. Passing an imported source ID in `src`
+resolves it through the current project before probing.
+
+For a complete local rough-cut pass, the agent first uses `media.probe` for
+coarse evidence and then calls `workflow.roughcut` with the selected ranges:
+
+```json
+{
+  "goal": "Keep the strongest opening moments",
+  "selections": [
+    {"sourceId": "source-1", "start": 12, "end": 18, "rationale": "clear opening statement"},
+    {"sourceId": "source-2", "start": 4, "end": 9, "rationale": "supports the opening visually"}
+  ]
+}
+```
+
+Each selected range is targeted, checked against the candidate timeline, and
+staged as one typed proposal with a bounded before/after preview. Without
+selections the workflow returns `planning_needed`; it never chooses a first
+clip or source. The proposal remains pending until the user accepts it. An
+optional `duration` is an output timeline upper bound after speed conversion;
+the sum of selected timeline durations must fit it, or the workflow returns an
+argument error without shortening the agent's selections. The preview starts
+at the proposed timeline ranges; when ranges are farther apart than the
+120-second capture bound, the response identifies the representative range
+and reports which selections were covered.
+
+Agent tools do not expose direct `media.fetch`, `media.import`, or timeline
+undo/redo calls because those paths bypass review. Use `media.asset` with an
+existing local file to stage an import/replacement, and leave history changes
+to the human UI. Observation references retain the selection index, rationale,
+and optional coarse observation; project-bound references carry the current
+revision and are rechecked against source path and file identity at acceptance.
+
+already-produced local file can be registered with `media.asset`; it is cached
+with request/content fingerprints under `.cut/cache/assets.json`, whose
+read-modify-write is locked and atomically replaced. Asset records are
+immutable: reusing a request fingerprint for a different content hash returns
+`ASSET_REQUEST_CONFLICT`, and staging verifies the file hash again. With
+`import: true`, the asset import and optional `replaceClipId` are staged
+together and leave the canonical project unchanged until proposal acceptance.
+Cut does not invoke cloud media generation from this path.
 
 The `--full` profile adds project inspection and validation, timeline diff,
 render polling/cancellation, and the optional vision capability.

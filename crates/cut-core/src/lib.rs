@@ -8,6 +8,7 @@ pub mod capability;
 pub mod check;
 pub mod compile;
 pub mod compile_v1;
+pub mod evaluation;
 pub mod overlay;
 pub mod preview;
 pub mod time;

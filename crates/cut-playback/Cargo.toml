@@ -16,6 +16,7 @@ native-audio = ["dep:cpal"]
 
 [dependencies]
 cpal = { version = "0.15.3", optional = true }
+cut-core = { path = "../cut-core" }
 cut-domain = { path = "../cut-domain" }
 ffmpeg-next = { version = "8.1", default-features = false, features = ["codec", "filter", "format", "software-resampling", "software-scaling"] }
 serde_json = "1"

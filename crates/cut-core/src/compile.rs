@@ -2154,6 +2154,9 @@ pub fn compile_filter_graph_v2(
     project: &Value,
     opts: CompileV2Options,
 ) -> Result<CompiledV2FilterGraph, CompileError> {
+    // Validate the shared timing interpretation before lowering into an
+    // FFmpeg graph. Native playback consumes the same immutable plan.
+    let _evaluation = crate::evaluation::EvaluationPlan::from_project_json(project).map_err(msg)?;
     let project = record(project).ok_or_else(|| msg("project must be an object"))?;
     if project.get("version").and_then(|v| v.as_i64()) != Some(2) {
         return Err(msg("compileFilterGraphV2 requires a version 2 project"));

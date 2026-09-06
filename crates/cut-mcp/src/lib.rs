@@ -13,11 +13,14 @@ use cut_domain::{Clip, Command, Project};
 use cut_engine::derivatives::{DerivativeCache, SourceIdentity};
 use cut_runtime::{RuntimeClient, RuntimeError, StateSnapshot};
 use cut_skills::{find_skill, load_skills, skill_read_tool_schema, Skill};
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs;
-use std::io::{self, BufRead, Write};
+use std::fs::OpenOptions;
+use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
@@ -26,6 +29,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 static NEXT_KEY: AtomicU64 = AtomicU64::new(1);
 const MAX_INLINE_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_CAPTURE_TIMES: usize = 64;
+const MAX_OBSERVATION_TIMES: usize = 32;
+const MAX_OBSERVATION_EVIDENCE: usize = 5;
+/// Keep one observation request bounded so an agent can refine its query.
+pub const MAX_OBSERVATION_RANGE_SECONDS: f64 = 120.0;
+
+const AGENT_CANONICAL_ONLY_TOOLS: &[&str] = &[
+    "media.fetch",
+    "media.import",
+    "timeline.undo",
+    "timeline.redo",
+];
 
 pub const CORE_TOOL_NAMES: &[&str] = &[
     "timeline.query",
@@ -35,8 +49,10 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     "timeline.undo",
     "timeline.redo",
     "media.probe",
+    "media.asset",
     "media.fetch",
     "media.import",
+    "workflow.roughcut",
     "render.preview",
     "render.start",
     "render.result",
@@ -64,7 +80,9 @@ pub const FULL_TOOL_NAMES: &[&str] = &[
     "media.fetch",
     "media.import",
     "media.probe",
+    "media.asset",
     "vision.track_objects",
+    "workflow.roughcut",
     "skills.read",
 ];
 
@@ -93,6 +111,93 @@ struct ProbeOptions {
     model: Option<String>,
     model_version: Option<String>,
     backend_version: Option<String>,
+    evidence: Option<Vec<ObservationEvidence>>,
+    phase: Option<ObservationPhase>,
+}
+
+/// A cached media modality that can be requested by one bounded observation.
+///
+/// Each variant delegates to the existing `media.probe` derivative path; the
+/// enum only gives agents a stable, composable request contract.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ObservationEvidence {
+    Frames,
+    Filmstrip,
+    Waveform,
+    Transcript,
+    Listen,
+}
+
+/// Whether an observation is narrowing candidates or examining a selected
+/// target. The phase is trace metadata and never changes media semantics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ObservationPhase {
+    Coarse,
+    Targeted,
+}
+
+impl ObservationEvidence {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Frames => "frames",
+            Self::Filmstrip => "filmstrip",
+            Self::Waveform => "waveform",
+            Self::Transcript => "transcript",
+            Self::Listen => "listen",
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ObservationArtifact {
+    kind: ObservationEvidence,
+    data: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeneratedAssetRecord {
+    asset_id: String,
+    path: String,
+    kind: String,
+    request_fingerprint: String,
+    content_fingerprint: String,
+    backend: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<Value>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeneratedAssetManifest {
+    schema_version: u8,
+    assets: Vec<GeneratedAssetRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RoughcutSelection {
+    source_id: String,
+    start: f64,
+    end: f64,
+    #[serde(default)]
+    timeline_start: Option<f64>,
+    #[serde(default)]
+    track_id: Option<String>,
+    #[serde(default)]
+    clip_id: Option<String>,
+    #[serde(default)]
+    speed: Option<f64>,
+    rationale: String,
+    #[serde(default)]
+    observation_ref: Option<Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -302,9 +407,14 @@ impl CutMcpRouter {
     pub fn agent_tools(&self) -> ToolMap {
         let mut tools = ToolMap::new();
         for definition in self.list_tools() {
+            let agent_name = self
+                .parse_name(&definition.name)
+                .unwrap_or_else(|| definition.name.clone());
+            if AGENT_CANONICAL_ONLY_TOOLS.contains(&agent_name.as_str()) {
+                continue;
+            }
             let router = self.clone_for_agent();
             let name = definition.name.clone();
-            let agent_name = name.clone();
             let description = definition.description.clone();
             let input_schema = definition.input_schema.clone();
             tools.insert(
@@ -388,8 +498,10 @@ impl CutMcpRouter {
             "timeline.diff" => self.timeline_diff(arguments),
             "proposal.capture" => self.proposal_capture(arguments),
             "media.probe" => self.media_probe(arguments),
+            "media.asset" => self.media_asset(arguments),
             "media.fetch" => self.media_fetch(arguments),
             "media.import" => self.media_import(arguments),
+            "workflow.roughcut" => self.workflow_roughcut(arguments),
             "render.preview" => self.render_start(true, &arguments),
             "render.start" => self.render_start(
                 arguments
@@ -490,13 +602,30 @@ impl CutMcpRouter {
         Ok(result)
     }
 
-    fn timeline_check(&self, _arguments: Value) -> Result<Value, McpError> {
+    fn timeline_check(&self, arguments: Value) -> Result<Value, McpError> {
         let snapshot = self.state()?;
-        let report = cut_engine::check::check_project(&snapshot.project, Some(&self.dir));
+        let (project, candidate_proposal) = if let Some(proposal_id) = arguments
+            .get("proposalId")
+            .and_then(Value::as_str)
+            .filter(|id| !id.trim().is_empty())
+        {
+            let (_, after) = self
+                .runtime
+                .proposal_preview(proposal_id)
+                .map_err(McpError::from)?;
+            (after, Some(proposal_id.to_owned()))
+        } else {
+            (snapshot.project.clone(), None)
+        };
+        let report = cut_engine::check::check_project(&project, Some(&self.dir));
         let mut result = serde_json::to_value(report)
             .map_err(|error| McpError::new("SERIALIZATION_FAILED", error.to_string()))?;
         result["revision"] = json!(snapshot.revision);
-        result["duration"] = json!(project_duration_from_value(&snapshot.project));
+        result["duration"] = json!(project_duration_from_value(&project));
+        result["candidate"] = json!(candidate_proposal.is_some());
+        if let Some(proposal_id) = candidate_proposal {
+            result["proposalId"] = json!(proposal_id);
+        }
         result["valid"] = json!(result["findings"]
             .as_array()
             .map(|findings| {
@@ -844,17 +973,19 @@ impl CutMcpRouter {
             .get("action")
             .and_then(Value::as_str)
             .ok_or_else(|| McpError::new("INVALID_ARGUMENTS", "media.probe action is required"))?;
-        let src = arguments
+        let source_ref = arguments
             .get("src")
             .and_then(Value::as_str)
             .ok_or_else(|| McpError::new("INVALID_ARGUMENTS", "media.probe src is required"))?;
+        let source_ref = source_ref.to_owned();
         let project = self
             .state()
             .ok()
             .and_then(|snapshot| cut_domain::parse_project(&snapshot.project).ok());
-        let src = resolve_media_src(&self.dir, src, project.as_ref())?;
+        let src = resolve_media_src(&self.dir, &source_ref, project.as_ref())?;
         let opts = probe_options(&arguments)?;
         match action {
+            "observe" => self.media_observe(&source_ref, &src, &opts),
             "info" => {
                 let info = cut_engine::info(&src).map_err(engine_error)?;
                 Ok(json!({"action": action, "info": info}))
@@ -997,9 +1128,771 @@ impl CutMcpRouter {
             }
             _ => Err(McpError::new(
                 "INVALID_ARGUMENTS",
-                "media.probe action must be info, silence, scenes, frames, frame, filmstrip, contact_sheet, waveform, transcribe, or listen",
+                "media.probe action must be info, silence, scenes, frames, frame, filmstrip, contact_sheet, waveform, transcribe, listen, or observe",
             )),
         }
+    }
+
+    /// Collect existing media derivatives for one bounded source range.
+    ///
+    /// This is an evidence envelope for agent refinement: it does not create
+    /// project state and each requested artifact is still generated by the
+    /// same cached probe/transcription implementation as its standalone
+    /// `media.probe` action.
+    fn media_observe(
+        &self,
+        source_ref: &str,
+        src: &str,
+        options: &ProbeOptions,
+    ) -> Result<Value, McpError> {
+        let metadata = cut_engine::info(src).map_err(engine_error)?;
+        let observation_revision = self.state()?.revision;
+        let range = observation_range(options, &metadata)?;
+        let evidence = observation_evidence(options)?;
+        let has_visual = evidence.iter().any(|kind| {
+            matches!(
+                kind,
+                ObservationEvidence::Frames | ObservationEvidence::Filmstrip
+            )
+        });
+        let times = if has_visual {
+            observation_times(options, range)?
+        } else {
+            Vec::new()
+        };
+        let cache = DerivativeCache::new(&self.dir);
+        let mut artifacts = Vec::with_capacity(evidence.len());
+        for kind in evidence.iter().copied() {
+            let mut data = match kind {
+                ObservationEvidence::Frames => serde_json::to_value(
+                    cut_engine::cached_exact_frames(
+                        src,
+                        &cache,
+                        &times,
+                        options.max_width.unwrap_or(1280),
+                    )
+                    .map_err(engine_error)?,
+                )
+                .map_err(|error| McpError::new("SERIALIZATION_FAILED", error.to_string()))?,
+                ObservationEvidence::Filmstrip => serde_json::to_value(
+                    cut_engine::cached_filmstrip(
+                        src,
+                        &cache,
+                        &times,
+                        options.max_width.unwrap_or(1280),
+                        options.columns.unwrap_or_else(|| times.len().min(4)),
+                    )
+                    .map_err(engine_error)?,
+                )
+                .map_err(|error| McpError::new("SERIALIZATION_FAILED", error.to_string()))?,
+                ObservationEvidence::Waveform => {
+                    let mut result = serde_json::to_value(
+                        cut_engine::cached_waveform_range(
+                            src,
+                            &cache,
+                            options.buckets.unwrap_or(256),
+                            options.include_image.unwrap_or(false),
+                            options.image_width.unwrap_or(1200),
+                            options.image_height.unwrap_or(240),
+                            range.start,
+                            range.end,
+                        )
+                        .map_err(engine_error)?,
+                    )
+                    .map_err(|error| McpError::new("SERIALIZATION_FAILED", error.to_string()))?;
+                    result["scope"] = json!("range");
+                    result
+                }
+                ObservationEvidence::Transcript | ObservationEvidence::Listen => {
+                    let listen = matches!(kind, ObservationEvidence::Listen);
+                    let transcription_options = transcription_options(&self.dir, options, range)?;
+                    let cancellation = cut_engine::CancellationToken::new();
+                    let result = if listen {
+                        cut_engine::listen_cached(
+                            src,
+                            &cache,
+                            &transcription_options,
+                            &cancellation,
+                            |_| {},
+                        )
+                    } else {
+                        cut_engine::transcribe_cached(
+                            src,
+                            &cache,
+                            &transcription_options,
+                            &cancellation,
+                            |_| {},
+                        )
+                    }
+                    .map_err(engine_error)?;
+                    serde_json::to_value(result)
+                        .map_err(|error| McpError::new("SERIALIZATION_FAILED", error.to_string()))?
+                }
+            };
+            data["action"] = json!(kind.as_str());
+            if options.include_base64.unwrap_or(false) {
+                match kind {
+                    ObservationEvidence::Frames => {
+                        if let Some(frames) = data.get_mut("frames").and_then(Value::as_array_mut) {
+                            for frame in frames {
+                                add_inline_base64(frame, "path", "imageBase64")?;
+                            }
+                        }
+                    }
+                    ObservationEvidence::Filmstrip => {
+                        add_inline_base64(&mut data, "path", "imageBase64")?;
+                    }
+                    ObservationEvidence::Waveform => {
+                        if data.get("imagePath").is_some_and(|value| !value.is_null()) {
+                            add_inline_base64(&mut data, "imagePath", "imageBase64")?;
+                        }
+                    }
+                    ObservationEvidence::Transcript | ObservationEvidence::Listen => {}
+                }
+            }
+            artifacts.push(ObservationArtifact { kind, data });
+        }
+        let source_identity = SourceIdentity::from_path(Path::new(src)).map_err(engine_error)?;
+        let artifact_keys = artifacts
+            .iter()
+            .filter_map(|artifact| artifact.data.get("key").and_then(Value::as_str))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let observation_id = cut_engine::derivatives::cache_key_for_values(
+            "observation",
+            &serde_json::to_value(&source_identity)
+                .map_err(|error| McpError::new("SERIALIZATION_FAILED", error.to_string()))?,
+            &json!({
+                "source": source_ref,
+                "start": range.start,
+                "end": range.end,
+                "evidence": evidence,
+                "phase": options.phase,
+                "artifactKeys": artifact_keys,
+            }),
+        );
+        let observation_ref = json!({
+            "id": format!("observation-{}", &observation_id[..16]),
+            "sourceRef": source_ref,
+            "sourcePath": src,
+            "sourceIdentity": source_identity,
+            "range": range,
+            "evidence": evidence,
+            "artifactKeys": artifact_keys,
+            "phase": options.phase,
+            "revision": observation_revision,
+        });
+        let envelope = json!({
+            "action": "media.observe",
+            "phase": options.phase,
+            "observationRef": observation_ref,
+            "source": {
+                "ref": source_ref,
+                "path": src,
+            },
+            "media": metadata,
+            "range": range,
+            "times": times,
+            "evidence": artifacts,
+        });
+        Ok(envelope)
+    }
+
+    /// Register an already-produced local artifact with a content-addressed
+    /// provenance manifest. This deliberately does not invoke a provider or
+    /// manufacture media; optional project insertion is staged through the
+    /// runtime proposal boundary and waits for acceptance.
+    fn media_asset(&self, arguments: Value) -> Result<Value, McpError> {
+        let action = arguments
+            .get("action")
+            .and_then(Value::as_str)
+            .ok_or_else(|| McpError::new("INVALID_ARGUMENTS", "media.asset action is required"))?;
+        if action != "register" {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "media.asset action must be register",
+            ));
+        }
+        let input = arguments
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| McpError::new("INVALID_ARGUMENTS", "media.asset path is required"))?;
+        let path = resolve_import_path(&self.dir, input)?;
+        let kind = arguments
+            .get("kind")
+            .and_then(Value::as_str)
+            .filter(|kind| !kind.trim().is_empty())
+            .unwrap_or("video")
+            .to_owned();
+        if !kind.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        }) {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "media.asset kind must contain only letters, numbers, '-', '_', or '.'",
+            ));
+        }
+        let content_fingerprint = file_fingerprint(&path)?;
+        let request_fingerprint = arguments
+            .get("requestFingerprint")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                cut_engine::derivatives::cache_key_for_values(
+                    "asset-request",
+                    &json!({"kind": kind}),
+                    &json!({
+                        "prompt": arguments.get("prompt"),
+                        "provider": arguments.get("provider"),
+                        "model": arguments.get("model"),
+                        "provenance": arguments.get("provenance"),
+                    }),
+                )
+            });
+        let asset_id = format!("asset-{}", &content_fingerprint[..16]);
+        let record = GeneratedAssetRecord {
+            asset_id,
+            path: path.to_string_lossy().into_owned(),
+            kind,
+            request_fingerprint: request_fingerprint.clone(),
+            content_fingerprint,
+            backend: "local-artifact".into(),
+            provider: arguments
+                .get("provider")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            model: arguments
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            provenance: arguments.get("provenance").cloned(),
+        };
+        let manifest_path = self.dir.join(".cut/cache/assets.json");
+        let (cached, manifest_record) = upsert_asset_manifest(&manifest_path, &record)?;
+
+        let mut result = json!({
+            "action": "media.asset",
+            "asset": manifest_record.clone(),
+            "cached": cached,
+            "backend": "local-artifact",
+            "inserted": false,
+        });
+        if arguments.get("import").and_then(Value::as_bool) == Some(true) {
+            let replacement_clip_id = arguments
+                .get("replaceClipId")
+                .and_then(Value::as_str)
+                .filter(|id| !id.trim().is_empty());
+            let import_key = arguments
+                .get("idempotencyKey")
+                .and_then(Value::as_str)
+                .filter(|key| !key.trim().is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| {
+                    stable_operation_key(
+                        "asset-import",
+                        &json!({
+                            "requestFingerprint": record.request_fingerprint,
+                            "contentFingerprint": record.content_fingerprint,
+                            "path": path.to_string_lossy(),
+                            "replaceClipId": replacement_clip_id,
+                        }),
+                    )
+                });
+            let snapshot = self.state()?;
+            let metadata = arguments.get("metadata").cloned().or_else(|| {
+                Some(json!({
+                    "metadata": {
+                        "generatedAssetId": manifest_record.asset_id,
+                        "assetProvenance": {
+                            "requestFingerprint": manifest_record.request_fingerprint,
+                            "contentFingerprint": manifest_record.content_fingerprint,
+                            "backend": manifest_record.backend,
+                        }
+                    }
+                }))
+            });
+            let staging_fingerprint = file_fingerprint(&path)?;
+            if staging_fingerprint != record.content_fingerprint {
+                return Err(McpError::new(
+                    "ASSET_CHANGED",
+                    "asset changed after registration and before proposal staging",
+                )
+                .with_details(json!({
+                    "expectedContentFingerprint": record.content_fingerprint,
+                    "actualContentFingerprint": staging_fingerprint,
+                    "path": path,
+                })));
+            }
+            let staged = self
+                .runtime
+                .stage_import_proposal(
+                    &import_key,
+                    snapshot.revision,
+                    &path.to_string_lossy(),
+                    metadata,
+                    arguments.get("overlay").cloned(),
+                    replacement_clip_id,
+                    None,
+                )
+                .map_err(McpError::from)?;
+            let pending = staged
+                .pending_proposal
+                .as_ref()
+                .map(|proposal| serde_json::to_value(proposal).unwrap_or(Value::Null))
+                .unwrap_or(Value::Null);
+            let (source_id, clip_id) = staged_import_ids(&pending);
+            result["staged"] = json!(true);
+            result["inserted"] = json!(false);
+            result["import"] = json!({
+                "path": path,
+                "sourceId": source_id,
+                "clipId": clip_id,
+                "revision": staged.revision,
+                "staged": true,
+            });
+            result["pendingProposal"] = pending.clone();
+            if replacement_clip_id.is_some() {
+                result["replacementProposal"] = pending;
+            }
+        } else if arguments.get("replaceClipId").is_some() {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "media.asset replaceClipId requires import:true; review the replacement proposal before accepting it",
+            ));
+        }
+        Ok(result)
+    }
+
+    /// Execute source ranges selected by the agent after its observation loop.
+    ///
+    /// Semantic selection stays at the agent boundary: an omitted selection
+    /// returns `planning_needed`, while each supplied range carries a rationale
+    /// and becomes one typed clip command in a single reviewable proposal.
+    fn workflow_roughcut(&self, arguments: Value) -> Result<Value, McpError> {
+        let goal = arguments
+            .get("goal")
+            .and_then(Value::as_str)
+            .filter(|goal| !goal.trim().is_empty())
+            .unwrap_or("Create a concise rough cut")
+            .trim()
+            .to_owned();
+        let requested_duration = arguments
+            .get("duration")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        if requested_duration != 0.0
+            && (!requested_duration.is_finite()
+                || requested_duration <= 0.0
+                || requested_duration > MAX_OBSERVATION_RANGE_SECONDS)
+        {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                format!(
+                    "workflow.roughcut duration must be finite, positive, and at most {MAX_OBSERVATION_RANGE_SECONDS:.0}s"
+                ),
+            ));
+        }
+        let max_retries = arguments
+            .get("maxRetries")
+            .and_then(Value::as_u64)
+            .unwrap_or(1)
+            .min(2) as usize;
+        let Some(raw_selections) = arguments.get("selections").and_then(Value::as_array) else {
+            return Ok(json!({
+                "action": "workflow.roughcut",
+                "status": "planning_needed",
+                "goal": goal,
+                "message": "The agent must observe media and provide one or more selected source ranges with rationale before roughcut execution.",
+                "retryPolicy": {"maxRetries": max_retries, "attempts": 0},
+            }));
+        };
+        if raw_selections.is_empty() {
+            return Ok(json!({
+                "action": "workflow.roughcut",
+                "status": "planning_needed",
+                "goal": goal,
+                "message": "The agent must provide at least one selected source range with rationale.",
+                "retryPolicy": {"maxRetries": max_retries, "attempts": 0},
+            }));
+        }
+        if raw_selections.len() > 16 {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "workflow.roughcut supports at most 16 selected ranges",
+            ));
+        }
+        let selections = raw_selections
+            .iter()
+            .cloned()
+            .map(serde_json::from_value::<RoughcutSelection>)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                McpError::new(
+                    "INVALID_ARGUMENTS",
+                    format!("workflow.roughcut selection is invalid: {error}"),
+                )
+            })?;
+        let selected_duration = roughcut_selected_duration(&selections)?;
+        if requested_duration > 0.0 && selected_duration > requested_duration + 1e-9 {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                format!(
+                    "workflow.roughcut selected timeline duration {selected_duration:.3}s exceeds requested output duration {requested_duration:.3}s"
+                ),
+            )
+            .with_details(json!({
+                "requestedDuration": requested_duration,
+                "selectedDuration": selected_duration,
+            })));
+        }
+        let snapshot = self.state()?;
+        let project = parse_project(&snapshot)?;
+        let default_track = project
+            .tracks
+            .iter()
+            .find(|track| track.kind == cut_domain::TrackType::Video)
+            .ok_or_else(|| {
+                McpError::new(
+                    "INVALID_ARGUMENTS",
+                    "workflow.roughcut requires a video track for selected ranges",
+                )
+            })?;
+        let request_key = arguments
+            .get("idempotencyKey")
+            .and_then(Value::as_str)
+            .filter(|key| !key.trim().is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                stable_operation_key(
+                    "roughcut",
+                    &json!({"goal": goal, "selections": raw_selections}),
+                )
+            });
+        let mut commands = Vec::with_capacity(selections.len());
+        let mut targeted = Vec::with_capacity(selections.len());
+        let mut observation_refs = Vec::with_capacity(selections.len());
+        let mut selection_results = Vec::with_capacity(selections.len());
+        let mut timeline_ranges = Vec::with_capacity(selections.len());
+        let mut next_timeline = project_duration(&project);
+        for (index, selection) in selections.iter().enumerate() {
+            if selection.source_id.trim().is_empty() || selection.rationale.trim().is_empty() {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    format!("workflow.roughcut selection {index} requires sourceId and rationale"),
+                ));
+            }
+            if !selection.start.is_finite()
+                || !selection.end.is_finite()
+                || selection.start < 0.0
+                || selection.end <= selection.start
+                || selection.end - selection.start > MAX_OBSERVATION_RANGE_SECONDS
+            {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    format!(
+                        "workflow.roughcut selection {index} has an invalid bounded source range"
+                    ),
+                ));
+            }
+            let source = project
+                .sources
+                .iter()
+                .find(|source| source.id.as_str() == selection.source_id)
+                .ok_or_else(|| {
+                    McpError::new(
+                        "INVALID_ARGUMENTS",
+                        format!("workflow.roughcut selection {index} references an unknown source"),
+                    )
+                })?;
+            let coarse_observation = selection
+                .observation_ref
+                .as_ref()
+                .map(|value| {
+                    let observation = serde_json::from_value::<
+                        cut_runtime::ObservationReference,
+                    >(value.clone())
+                    .map_err(|error| {
+                        McpError::new(
+                            "INVALID_ARGUMENTS",
+                            format!(
+                                "workflow.roughcut selection {index} coarse observation is invalid: {error}"
+                            ),
+                        )
+                    })?;
+                    validate_observation_reference(&self.dir, &project, snapshot.revision, &observation)?;
+                    if observation.source_ref != selection.source_id {
+                        return Err(McpError::new(
+                            "STALE_OBSERVATION",
+                            format!(
+                                "workflow.roughcut selection {index} coarse observation source does not match sourceId"
+                            ),
+                        ));
+                    }
+                    Ok(observation)
+                })
+                .transpose()?;
+            if source
+                .duration
+                .is_some_and(|duration| selection.end > duration + 1e-9)
+            {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    format!("workflow.roughcut selection {index} exceeds source duration"),
+                ));
+            }
+            let speed = selection.speed.unwrap_or(1.0);
+            if !speed.is_finite() || speed <= 0.0 {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    format!("workflow.roughcut selection {index} speed must be positive"),
+                ));
+            }
+            let track = if let Some(track_id) = selection.track_id.as_deref() {
+                project
+                    .tracks
+                    .iter()
+                    .find(|track| track.id.as_str() == track_id)
+                    .filter(|track| track.kind == cut_domain::TrackType::Video)
+                    .ok_or_else(|| {
+                        McpError::new(
+                            "INVALID_ARGUMENTS",
+                            format!("workflow.roughcut selection {index} requires a video track"),
+                        )
+                    })?
+            } else {
+                default_track
+            };
+            let timeline_start = selection.timeline_start.unwrap_or(next_timeline);
+            if !timeline_start.is_finite() || timeline_start < 0.0 {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    format!("workflow.roughcut selection {index} timelineStart is invalid"),
+                ));
+            }
+            let timeline_duration = (selection.end - selection.start) / speed;
+            let timeline_end = timeline_start + timeline_duration;
+            if !timeline_duration.is_finite()
+                || timeline_duration <= 0.0
+                || !timeline_end.is_finite()
+            {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    format!("workflow.roughcut selection {index} timeline range is invalid"),
+                ));
+            }
+            timeline_ranges.push((timeline_start, timeline_end));
+            if let Some(clip_id) = selection.clip_id.as_deref() {
+                let clip = project
+                    .tracks
+                    .iter()
+                    .flat_map(|track| track.clips.iter())
+                    .find(|clip| clip.id.as_str() == clip_id)
+                    .ok_or_else(|| {
+                        McpError::new(
+                            "INVALID_ARGUMENTS",
+                            format!(
+                                "workflow.roughcut selection {index} references an unknown clip"
+                            ),
+                        )
+                    })?;
+                if clip
+                    .source_id
+                    .as_ref()
+                    .is_some_and(|id| id.as_str() != selection.source_id)
+                {
+                    return Err(McpError::new(
+                        "INVALID_ARGUMENTS",
+                        format!("workflow.roughcut selection {index} clip/source mismatch"),
+                    ));
+                }
+                commands.push(json!({
+                    "type": "update_clip",
+                    "clipId": clip_id,
+                    "patch": {
+                        "sourceId": selection.source_id,
+                        "in": selection.start,
+                        "out": selection.end,
+                        "timelineStart": timeline_start,
+                        "speed": speed,
+                    }
+                }));
+            } else {
+                let clip_id = stable_operation_key(
+                    "roughcut-clip",
+                    &json!({"requestKey": request_key, "index": index}),
+                );
+                commands.push(json!({
+                    "type": "add_clip",
+                    "trackId": track.id,
+                    "clip": {
+                        "id": clip_id,
+                        "sourceId": selection.source_id,
+                        "in": selection.start,
+                        "out": selection.end,
+                        "timelineStart": timeline_start,
+                        "speed": speed,
+                    }
+                }));
+            }
+            let mut observation = self.media_probe(json!({
+                "action": "observe",
+                "src": source.id,
+                "opts": {
+                    "start": selection.start,
+                    "end": selection.end,
+                    "frames": 6,
+                    "evidence": ["frames"],
+                    "phase": "targeted"
+                }
+            }))?;
+            if let Some(reference) = observation.get_mut("observationRef") {
+                reference["selectionIndex"] = json!(index);
+                reference["rationale"] = json!(selection.rationale.trim());
+                reference["trackId"] = json!(track.id.as_str());
+                reference["timelineRange"] = json!({
+                    "start": timeline_start,
+                    "end": timeline_end,
+                });
+                if let Some(coarse_observation) = coarse_observation.as_ref() {
+                    reference["coarseObservation"] = serde_json::to_value(coarse_observation)
+                        .map_err(|error| {
+                            McpError::new("SERIALIZATION_FAILED", error.to_string())
+                        })?;
+                }
+            }
+            let reference = observation.get("observationRef").cloned().ok_or_else(|| {
+                McpError::new(
+                    "HANDLER_FAILED",
+                    "targeted observation omitted its reference",
+                )
+            })?;
+            observation_refs.push(reference);
+            targeted.push(observation);
+            selection_results.push(json!({
+                "index": index,
+                "sourceId": selection.source_id,
+                "start": selection.start,
+                "end": selection.end,
+                "timelineStart": timeline_start,
+                "timelineEnd": timeline_end,
+                "rationale": selection.rationale.trim(),
+                "trackId": track.id.as_str(),
+                "coarseObservationRef": coarse_observation
+                    .as_ref()
+                    .map(serde_json::to_value)
+                    .transpose()
+                    .map_err(|error| McpError::new("SERIALIZATION_FAILED", error.to_string()))?,
+            }));
+            next_timeline = timeline_end;
+        }
+        let observation = observation_refs.first().cloned();
+        let command = json!({"type": "batch", "commands": commands});
+        let validation = self.timeline_check(json!({}))?;
+        let mut result = json!({
+            "action": "workflow.roughcut",
+            "status": "observed",
+            "goal": goal,
+            "selections": selection_results,
+            "observationRefs": observation_refs.clone(),
+            "targeted": targeted,
+            "selectedDuration": selected_duration,
+            "validation": validation,
+            "retryPolicy": {"maxRetries": max_retries, "attempts": 0},
+            "revision": snapshot.revision,
+        });
+        let timeline_valid = validation
+            .get("valid")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if !timeline_valid {
+            result["status"] = json!("failed");
+            result["failure"] = json!({
+                "code": "TIMELINE_INVALID",
+                "message": "rough-cut workflow stopped because the current timeline has error findings",
+                "retryable": false,
+                "attempts": 0,
+                "maxRetries": max_retries,
+            });
+            return Ok(result);
+        }
+        let mut proposal_arguments = json!({
+            "expectedRevision": snapshot.revision,
+            "idempotencyKey": request_key,
+            "command": command,
+            "observationRefs": observation_refs,
+        });
+        if let Some(observation) = observation {
+            proposal_arguments["observationRef"] = observation;
+        }
+        let proposal = self.stage_agent_edit(proposal_arguments)?;
+        let pending = proposal
+            .get("pendingProposal")
+            .cloned()
+            .unwrap_or(Value::Null);
+        let proposal_id = pending
+            .get("proposalId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                McpError::new("HANDLER_FAILED", "rough-cut proposal id was not returned")
+            })?;
+        let candidate_validation = self.timeline_check(json!({"proposalId": proposal_id}))?;
+        result["validation"] = candidate_validation.clone();
+        if !candidate_validation
+            .get("valid")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            let _ = self.runtime.reject_proposal(proposal_id);
+            result["status"] = json!("failed");
+            result["failure"] = json!({
+                "code": "TIMELINE_INVALID",
+                "message": "rough-cut candidate failed timeline validation and was not made reviewable",
+                "retryable": false,
+                "attempts": 1,
+                "maxRetries": max_retries,
+            });
+            result["proposal"] = pending;
+            return Ok(result);
+        }
+        let (capture_start, capture_end, capture_coverage) =
+            proposal_capture_window(&timeline_ranges);
+        let capture = match self.proposal_capture(json!({
+            "proposalId": proposal_id,
+            "start": capture_start,
+            "duration": capture_end - capture_start,
+            "count": 4,
+            "draft": true,
+        })) {
+            Ok(capture) => capture,
+            Err(error) => {
+                let cleanup = self.runtime.reject_proposal(proposal_id);
+                result["status"] = json!("failed");
+                result["failure"] = json!({
+                    "code": error.code,
+                    "message": error.message,
+                    "retryable": false,
+                    "attempts": 1,
+                    "maxRetries": max_retries,
+                    "proposalCleanup": match cleanup {
+                        Ok(_) => json!({"status": "rejected"}),
+                        Err(cleanup_error) => json!({
+                            "status": "cleanup_failed",
+                            "code": cleanup_error.code,
+                            "message": cleanup_error.message,
+                        }),
+                    },
+                });
+                result["proposal"] = pending;
+                return Ok(result);
+            }
+        };
+        result["status"] = json!("awaiting_review");
+        result["captureCoverage"] = capture_coverage;
+        result["proposal"] = pending;
+        result["capture"] = capture;
+        result["retryPolicy"] = json!({"maxRetries": max_retries, "attempts": 1});
+        Ok(result)
     }
 
     fn media_fetch(&self, arguments: Value) -> Result<Value, McpError> {
@@ -1237,6 +2130,9 @@ struct AgentRouter {
 
 impl AgentRouter {
     fn call_base(&self, name: &str, arguments: Value) -> Result<Value, String> {
+        if AGENT_CANONICAL_ONLY_TOOLS.contains(&name) {
+            return Err(agent_canonical_bypass_error(name));
+        }
         let router = CutMcpRouter {
             dir: self.dir.clone(),
             runtime: self.runtime.clone(),
@@ -1252,6 +2148,23 @@ impl AgentRouter {
         router
             .call_base(name, arguments)
             .map_err(|error| error.to_string())
+    }
+}
+
+fn agent_canonical_bypass_error(name: &str) -> String {
+    match name {
+        "media.import" => {
+            "AGENT_CANONICAL_BYPASS: media.import is human-only; use media.asset with import:true for a staged local-artifact proposal".into()
+        }
+        "media.fetch" => {
+            "AGENT_CANONICAL_BYPASS: media.fetch is human-only; use media.probe for project media, then media.asset for an existing local artifact".into()
+        }
+        "timeline.undo" | "timeline.redo" => {
+            format!(
+                "AGENT_CANONICAL_BYPASS: {name} is human-only; use timeline.apply for an explicit staged edit"
+            )
+        }
+        _ => format!("AGENT_CANONICAL_BYPASS: {name} is unavailable to the agent"),
     }
 }
 
@@ -1275,16 +2188,49 @@ impl CutMcpRouter {
             .unwrap_or_else(|| operation_key("agent-proposal"));
         let command = cut_domain::serialize_command(&command)
             .map_err(|error| McpError::new("INVALID_ARGUMENTS", error.to_string()))?;
+        let observation_values = arguments
+            .get("observationRefs")
+            .and_then(Value::as_array)
+            .cloned()
+            .or_else(|| {
+                arguments
+                    .get("observationRef")
+                    .cloned()
+                    .map(|value| vec![value])
+            })
+            .unwrap_or_default();
+        let mut observations = Vec::with_capacity(observation_values.len());
+        for value in observation_values {
+            let observation = serde_json::from_value::<cut_runtime::ObservationReference>(value)
+                .map_err(|error| {
+                    McpError::new(
+                        "INVALID_ARGUMENTS",
+                        format!("invalid observationRef: {error}"),
+                    )
+                })?;
+            validate_observation_reference(&self.dir, &project, base_revision, &observation)?;
+            observations.push(observation);
+        }
+        let observation = observations.first().cloned().map(|_| {
+            arguments
+                .get("observationRef")
+                .cloned()
+                .unwrap_or_else(|| serde_json::to_value(&observations[0]).unwrap_or(Value::Null))
+        });
+        let mut transaction = json!({
+            "idempotencyKey": request_key,
+            "commands": [command],
+        });
+        if let Some(observation) = observation {
+            transaction["observation"] = observation;
+        }
+        if observations.len() > 1 {
+            transaction["observations"] = serde_json::to_value(&observations)
+                .map_err(|error| McpError::new("SERIALIZATION_FAILED", error.to_string()))?;
+        }
         let next = self
             .runtime
-            .stage_agent_proposal(
-                &request_key,
-                base_revision,
-                vec![json!({
-                    "idempotencyKey": request_key,
-                    "commands": [command],
-                })],
-            )
+            .stage_agent_proposal(&request_key, base_revision, vec![transaction])
             .map_err(McpError::from)?;
         Ok(json!({
             "project": next.project,
@@ -1311,7 +2257,7 @@ impl McpServer {
             router,
             name: "cut-mcp".into(),
             version: env!("CARGO_PKG_VERSION").into(),
-            instructions: "Read the structural project with project.outline or timeline.query, inspect deterministic findings with timeline.check, capture exact bounded previews with timeline.capture, use proposal.capture for before/after contact sheets, apply canonical v2 commands with timeline.apply, use media.probe for cached media context including local bounded transcription/listen when configured, render with render.preview/render.start, and load playbooks with skills.read. Shell access is unavailable.".into(),
+            instructions: "Read the structural project with project.outline or timeline.query, inspect deterministic findings with timeline.check, use media.probe action observe for one bounded cached evidence envelope (frames, filmstrip, waveform, transcript, or listen), capture exact bounded previews with timeline.capture, use proposal.capture for before/after contact sheets, apply canonical v2 commands with timeline.apply, render with render.preview/render.start, and load playbooks with skills.read. Shell access is unavailable.".into(),
         }
     }
 
@@ -1458,7 +2404,9 @@ fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
             "Check source availability, timeline ranges, visible video coverage, compiler support, and live/offline preview parity.",
             json!({
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "proposalId": {"type": "string", "minLength": 1}
+                },
                 "additionalProperties": false
             }),
             read_only,
@@ -1494,7 +2442,8 @@ fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
                     "command": {"type": "object"},
                     "commands": {"type": "array", "minItems": 1, "items": {"type": "object"}},
                     "op": {"type": "object"},
-                    "ops": {"type": "array", "minItems": 1, "items": {"type": "object"}}
+                    "ops": {"type": "array", "minItems": 1, "items": {"type": "object"}},
+                    "observationRef": {"type": "object"}
                 },
                 "additionalProperties": false
             }),
@@ -1540,11 +2489,11 @@ fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
             read_only,
         ),
         "media.probe" => (
-            "Probe media metadata, silence, scenes, exact frames, filmstrips, waveform, transcription, or selected-range listening derivatives.",
+            "Probe media metadata, silence, scenes, exact frames, filmstrips, waveform, transcription, selected-range listening, or one bounded multi-modal observation envelope.",
             json!({
                 "type": "object",
                 "properties": {
-                    "action": {"enum": ["info", "silence", "scenes", "frames", "frame", "filmstrip", "contact_sheet", "waveform", "transcribe", "listen"]},
+                    "action": {"enum": ["info", "silence", "scenes", "frames", "frame", "filmstrip", "contact_sheet", "waveform", "transcribe", "listen", "observe"]},
                     "src": {"type": "string", "minLength": 1},
                     "opts": {
                         "type": "object",
@@ -1570,7 +2519,9 @@ fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
                             "provider": {"type": "string", "minLength": 1},
                             "model": {"type": "string", "minLength": 1},
                             "modelVersion": {"type": "string", "minLength": 1},
-                            "backendVersion": {"type": "string", "minLength": 1}
+                            "backendVersion": {"type": "string", "minLength": 1},
+                            "evidence": {"type": "array", "minItems": 1, "maxItems": 5, "items": {"enum": ["frames", "filmstrip", "waveform", "transcript", "listen"]}},
+                            "phase": {"enum": ["coarse", "targeted"]}
                         },
                         "additionalProperties": false
                     }
@@ -1596,6 +2547,67 @@ fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
                 "type": "object",
                 "properties": {"path": {"type": "string", "minLength": 1}, "idempotencyKey": {"type": "string"}, "metadata": {"type": "object"}, "overlay": {"type": "object"}},
                 "required": ["path"],
+                "additionalProperties": false
+            }),
+            mutation,
+        ),
+        "media.asset" => (
+            "Register an existing local generated artifact with request and content provenance; optionally import it through cutd.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "action": {"enum": ["register"]},
+                    "path": {"type": "string", "minLength": 1},
+                    "kind": {"type": "string", "minLength": 1},
+                    "requestFingerprint": {"type": "string", "minLength": 1},
+                    "prompt": {"type": "string"},
+                    "provider": {"type": "string"},
+                    "model": {"type": "string"},
+                    "provenance": {"type": "object"},
+                    "import": {"type": "boolean"},
+                    "replaceClipId": {"type": "string", "minLength": 1},
+                    "idempotencyKey": {"type": "string", "minLength": 1},
+                    "metadata": {"type": "object"},
+                    "overlay": {"type": "object"}
+                },
+                "required": ["action", "path"],
+                "additionalProperties": false
+            }),
+            mutation,
+        ),
+        "workflow.roughcut" => (
+            "Execute the agent's observed source-range selections as one typed rough-cut proposal; call media.probe first and provide rationale for every range.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "goal": {"type": "string", "minLength": 1},
+                    "idempotencyKey": {"type": "string", "minLength": 1},
+                    "sourceId": {"type": "string", "minLength": 1},
+                    "source": {"type": "string", "minLength": 1},
+                    "duration": {"type": "number", "exclusiveMinimum": 0, "maximum": MAX_OBSERVATION_RANGE_SECONDS},
+                    "maxRetries": {"type": "integer", "minimum": 0, "maximum": 2},
+                    "selections": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 16,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "sourceId": {"type": "string", "minLength": 1},
+                                "start": {"type": "number", "minimum": 0},
+                                "end": {"type": "number", "exclusiveMinimum": 0},
+                                "timelineStart": {"type": "number", "minimum": 0},
+                                "trackId": {"type": "string", "minLength": 1},
+                                "clipId": {"type": "string", "minLength": 1},
+                                "speed": {"type": "number", "exclusiveMinimum": 0},
+                                "rationale": {"type": "string", "minLength": 1},
+                                "observationRef": {"type": "object"}
+                            },
+                            "required": ["sourceId", "start", "end", "rationale"],
+                            "additionalProperties": false
+                        }
+                    }
+                },
                 "additionalProperties": false
             }),
             mutation,
@@ -1972,6 +2984,113 @@ fn probe_options(arguments: &Value) -> Result<ProbeOptions, McpError> {
     })
 }
 
+fn observation_evidence(options: &ProbeOptions) -> Result<Vec<ObservationEvidence>, McpError> {
+    let evidence = options
+        .evidence
+        .clone()
+        .unwrap_or_else(|| vec![ObservationEvidence::Filmstrip]);
+    if evidence.is_empty() || evidence.len() > MAX_OBSERVATION_EVIDENCE {
+        return Err(McpError::new(
+            "INVALID_ARGUMENTS",
+            format!(
+                "media.probe observe evidence must contain 1..={MAX_OBSERVATION_EVIDENCE} items"
+            ),
+        ));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for kind in &evidence {
+        if !seen.insert(*kind) {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                format!("media.probe observe evidence contains duplicate {:?}", kind),
+            ));
+        }
+    }
+    Ok(evidence)
+}
+
+fn observation_range(
+    options: &ProbeOptions,
+    metadata: &cut_engine::ProbeInfo,
+) -> Result<cut_engine::TimeRange, McpError> {
+    let start = options.start.ok_or_else(|| {
+        McpError::new(
+            "INVALID_ARGUMENTS",
+            "media.probe observe requires opts.start",
+        )
+    })?;
+    if options.end.is_some() && options.duration.is_some() {
+        return Err(McpError::new(
+            "INVALID_ARGUMENTS",
+            "media.probe observe accepts opts.end or opts.duration, not both",
+        ));
+    }
+    let end = if let Some(end) = options.end {
+        end
+    } else if let Some(duration) = options.duration {
+        if !duration.is_finite() || duration <= 0.0 {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "media.probe observe duration must be finite and positive",
+            ));
+        }
+        start + duration
+    } else {
+        return Err(McpError::new(
+            "INVALID_ARGUMENTS",
+            "media.probe observe requires opts.end or opts.duration",
+        ));
+    };
+    let range = cut_engine::TimeRange::new(start, end)
+        .map_err(|error| McpError::new("INVALID_ARGUMENTS", error.to_string()))?;
+    if range.duration() > MAX_OBSERVATION_RANGE_SECONDS + 1e-9 {
+        return Err(McpError::new(
+            "INVALID_ARGUMENTS",
+            format!(
+                "media.probe observe range exceeds the {MAX_OBSERVATION_RANGE_SECONDS:.0}s limit"
+            ),
+        ));
+    }
+    if let Some(duration) = metadata.duration {
+        if !duration.is_finite() || duration <= 0.0 || range.end > duration + 1e-6 {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                format!("media.probe observe range must be inside source duration {duration:.3}s"),
+            ));
+        }
+    }
+    Ok(range)
+}
+
+fn observation_times(
+    options: &ProbeOptions,
+    range: cut_engine::TimeRange,
+) -> Result<Vec<f64>, McpError> {
+    if let Some(times) = options.times.as_ref() {
+        if times.is_empty() || times.len() > MAX_OBSERVATION_TIMES {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                format!("media.probe observe times must contain 1..={MAX_OBSERVATION_TIMES} items"),
+            ));
+        }
+        if times
+            .iter()
+            .any(|time| !time.is_finite() || *time < range.start || *time > range.end)
+        {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "media.probe observe times must be finite and inside the selected range",
+            ));
+        }
+        return Ok(times.clone());
+    }
+    let count = options.frames.unwrap_or(8).clamp(1, MAX_OBSERVATION_TIMES);
+    let duration = range.duration();
+    Ok((0..count)
+        .map(|index| range.start + duration * (index as f64 + 0.5) / count as f64)
+        .collect())
+}
+
 fn transcription_range(
     options: &ProbeOptions,
     metadata: &cut_engine::ProbeInfo,
@@ -2130,6 +3249,85 @@ fn project_duration_from_value(project: &Value) -> f64 {
     cut_engine::compile::timeline_duration_v2(project).unwrap_or(0.0)
 }
 
+fn roughcut_selected_duration(selections: &[RoughcutSelection]) -> Result<f64, McpError> {
+    let mut total = 0.0;
+    for (index, selection) in selections.iter().enumerate() {
+        let speed = selection.speed.unwrap_or(1.0);
+        let duration = (selection.end - selection.start) / speed;
+        if !selection.start.is_finite()
+            || !selection.end.is_finite()
+            || selection.end <= selection.start
+            || !speed.is_finite()
+            || speed <= 0.0
+            || !duration.is_finite()
+            || duration <= 0.0
+        {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                format!("workflow.roughcut selection {index} has an invalid duration"),
+            ));
+        }
+        total += duration;
+        if !total.is_finite() {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "workflow.roughcut selected duration is not finite",
+            ));
+        }
+    }
+    Ok(total)
+}
+
+fn proposal_capture_window(ranges: &[(f64, f64)]) -> (f64, f64, Value) {
+    let min_start = ranges
+        .iter()
+        .map(|(start, _)| *start)
+        .fold(f64::INFINITY, f64::min);
+    let max_end = ranges
+        .iter()
+        .map(|(_, end)| *end)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let full_span = max_end - min_start;
+    let (start, end, mode) = if full_span <= MAX_OBSERVATION_RANGE_SECONDS {
+        (min_start, max_end, "full")
+    } else {
+        let &(start, end) = ranges
+            .iter()
+            .max_by(|left, right| {
+                (left.1 - left.0)
+                    .partial_cmp(&(right.1 - right.0))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .expect("workflow has at least one selection");
+        (
+            start,
+            (start + MAX_OBSERVATION_RANGE_SECONDS).min(end),
+            "representative",
+        )
+    };
+    let coverage = ranges
+        .iter()
+        .enumerate()
+        .map(|(index, (range_start, range_end))| {
+            json!({
+                "selectionIndex": index,
+                "timelineRange": {"start": range_start, "end": range_end},
+                "fullyCovered": *range_start >= start && *range_end <= end,
+            })
+        })
+        .collect::<Vec<_>>();
+    (
+        start,
+        end,
+        json!({
+            "mode": mode,
+            "capturedRange": {"start": start, "end": end},
+            "requestedRanges": coverage,
+            "fullyCovered": mode == "full",
+        }),
+    )
+}
+
 fn render_range(arguments: &Value) -> Result<Option<cut_runtime::RenderRange>, McpError> {
     let start = arguments.get("start").and_then(Value::as_f64);
     let duration = arguments.get("duration").and_then(Value::as_f64);
@@ -2172,11 +3370,157 @@ fn add_inline_base64(object: &mut Value, path_key: &str, base64_key: &str) -> Re
     Ok(())
 }
 
+fn file_fingerprint(path: &Path) -> Result<String, McpError> {
+    let mut file = fs::File::open(path).map_err(io_error)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(io_error)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    let mut fingerprint = String::with_capacity(64);
+    for byte in digest.finalize() {
+        use std::fmt::Write as _;
+        let _ = write!(fingerprint, "{byte:02x}");
+    }
+    Ok(fingerprint)
+}
+
+fn write_asset_manifest(path: &Path, manifest: &GeneratedAssetManifest) -> Result<(), McpError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| McpError::new("HANDLER_FAILED", "asset manifest has no parent directory"))?;
+    fs::create_dir_all(parent).map_err(io_error)?;
+    let bytes = serde_json::to_vec_pretty(manifest)
+        .map_err(|error| McpError::new("SERIALIZATION_FAILED", error.to_string()))?;
+    let temp = parent.join(format!("assets.json.tmp-{}", std::process::id()));
+    let mut file = fs::File::create(&temp).map_err(io_error)?;
+    file.write_all(&bytes).map_err(io_error)?;
+    file.sync_all().map_err(io_error)?;
+    fs::rename(temp, path).map_err(io_error)?;
+    Ok(())
+}
+
+fn upsert_asset_manifest(
+    path: &Path,
+    record: &GeneratedAssetRecord,
+) -> Result<(bool, GeneratedAssetRecord), McpError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| McpError::new("HANDLER_FAILED", "asset manifest has no parent directory"))?;
+    fs::create_dir_all(parent).map_err(io_error)?;
+    let lock_path = parent.join("assets.json.lock");
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)
+        .map_err(io_error)?;
+    lock.lock_exclusive().map_err(io_error)?;
+
+    let mut manifest = if path.is_file() {
+        let bytes = fs::read(path).map_err(io_error)?;
+        serde_json::from_slice::<GeneratedAssetManifest>(&bytes).map_err(|error| {
+            McpError::new(
+                "HANDLER_FAILED",
+                format!("generated asset manifest is invalid: {error}"),
+            )
+        })?
+    } else {
+        GeneratedAssetManifest {
+            schema_version: 1,
+            assets: Vec::new(),
+        }
+    };
+    if manifest.schema_version != 1 {
+        return Err(McpError::new(
+            "HANDLER_FAILED",
+            "generated asset manifest version is unsupported",
+        ));
+    }
+    if let Some(existing) = manifest.assets.iter().find(|existing| {
+        existing.request_fingerprint == record.request_fingerprint
+            && existing.content_fingerprint == record.content_fingerprint
+    }) {
+        return Ok((true, existing.clone()));
+    }
+    if let Some(existing) = manifest
+        .assets
+        .iter()
+        .find(|existing| existing.request_fingerprint == record.request_fingerprint)
+    {
+        return Err(McpError::new(
+            "ASSET_REQUEST_CONFLICT",
+            "request fingerprint is already bound to a different content fingerprint",
+        )
+        .with_details(json!({
+            "requestFingerprint": record.request_fingerprint,
+            "existingAssetId": existing.asset_id,
+            "existingContentFingerprint": existing.content_fingerprint,
+            "requestedContentFingerprint": record.content_fingerprint,
+            "existingPath": existing.path,
+            "requestedPath": record.path,
+        })));
+    }
+    manifest.assets.push(record.clone());
+    manifest
+        .assets
+        .sort_by(|left, right| left.asset_id.cmp(&right.asset_id));
+    write_asset_manifest(path, &manifest)?;
+    Ok((false, record.clone()))
+}
+
+fn stable_operation_key(kind: &str, identity: &Value) -> String {
+    let key = cut_engine::derivatives::cache_key_for_values(
+        "mcp-operation",
+        &json!({"kind": kind}),
+        identity,
+    );
+    format!("{kind}-{}", &key[..24])
+}
+
+fn staged_import_ids(pending: &Value) -> (Value, Value) {
+    let commands = pending
+        .get("command")
+        .and_then(|command| command.get("commands"))
+        .and_then(Value::as_array);
+    let source_id = commands
+        .into_iter()
+        .flatten()
+        .find(|command| command.get("type").and_then(Value::as_str) == Some("add_source"))
+        .and_then(|command| command.get("source"))
+        .and_then(|source| source.get("id"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let clip_id = commands
+        .into_iter()
+        .flatten()
+        .find(|command| command.get("type").and_then(Value::as_str) == Some("add_clip"))
+        .and_then(|command| command.get("clip"))
+        .and_then(|clip| clip.get("id"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    (source_id, clip_id)
+}
+
 fn resolve_media_src(
     dir: &Path,
     input: &str,
     project: Option<&Project>,
 ) -> Result<String, McpError> {
+    if let Some(source) = project.and_then(|project| {
+        project
+            .sources
+            .iter()
+            .find(|source| source.id.as_str() == input)
+    }) {
+        let path = resolve_import_path(dir, &source.path)?;
+        return Ok(path.to_string_lossy().into_owned());
+    }
     let candidate = resolve_import_path(dir, input)?;
     if is_contained(dir, &candidate) {
         return Ok(candidate.to_string_lossy().into_owned());
@@ -2222,6 +3566,95 @@ fn resolve_import_path(dir: &Path, input: &str) -> Result<PathBuf, McpError> {
         ));
     }
     Ok(path)
+}
+
+fn validate_observation_reference(
+    dir: &Path,
+    project: &Project,
+    base_revision: u64,
+    observation: &cut_runtime::ObservationReference,
+) -> Result<(), McpError> {
+    observation
+        .validate()
+        .map_err(|error| McpError::new("INVALID_ARGUMENTS", error))?;
+    if let Some(observation_revision) = observation.revision {
+        if observation_revision != base_revision {
+            return Err(McpError::new(
+                "STALE_OBSERVATION",
+                format!(
+                    "observation belongs to revision {observation_revision}, not {base_revision}"
+                ),
+            ));
+        }
+    }
+    let observed_path = Path::new(&observation.source_path)
+        .canonicalize()
+        .map_err(|error| {
+            McpError::new(
+                "STALE_OBSERVATION",
+                format!("observation source is unavailable: {error}"),
+            )
+        })?;
+    let source = project
+        .sources
+        .iter()
+        .find(|source| {
+            let source_path = resolve_project_source_path(dir, &source.path)
+                .canonicalize()
+                .ok();
+            source.id.as_str() == observation.source_ref
+                || source_path.as_ref() == Some(&observed_path)
+        })
+        .ok_or_else(|| {
+            McpError::new(
+                "STALE_OBSERVATION",
+                "observation source is not present in the current project",
+            )
+        })?;
+    let observation_revision = observation.revision.ok_or_else(|| {
+        McpError::new(
+            "STALE_OBSERVATION",
+            "project-bound observation must include its project revision",
+        )
+    })?;
+    if observation_revision != base_revision {
+        return Err(McpError::new(
+            "STALE_OBSERVATION",
+            format!("observation belongs to revision {observation_revision}, not {base_revision}"),
+        ));
+    }
+    let source_path = resolve_import_path(dir, &source.path).map_err(|error| {
+        McpError::new(
+            "STALE_OBSERVATION",
+            format!("current project source is unavailable: {}", error.message),
+        )
+    })?;
+    if source_path != observed_path {
+        return Err(McpError::new(
+            "STALE_OBSERVATION",
+            "observation source path does not match the project source",
+        ));
+    }
+    let identity = SourceIdentity::from_path(&observed_path).map_err(engine_error)?;
+    if identity.path != observation.source_identity.path
+        || identity.size != observation.source_identity.size
+        || identity.modified_ns != observation.source_identity.modified_ns
+    {
+        return Err(McpError::new(
+            "STALE_OBSERVATION",
+            "observation source identity no longer matches the media file",
+        ));
+    }
+    if source
+        .duration
+        .is_some_and(|duration| observation.range.end > duration + 1e-9)
+    {
+        return Err(McpError::new(
+            "STALE_OBSERVATION",
+            "observation range is outside the project source duration",
+        ));
+    }
+    Ok(())
 }
 
 fn is_contained(root: &Path, candidate: &Path) -> bool {
@@ -2278,13 +3711,66 @@ fn json_rpc_error(id: Value, code: i32, message: impl Into<String>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cut_agent::{
+        AgentSession, LlmProvider, OpenAiApiMode, ProviderChunk, ProviderError, ProviderName,
+        ProviderRequest,
+    };
     use std::io::Cursor;
+    use std::process::{Command as ProcessCommand, Stdio};
+    use std::sync::{Arc, Mutex};
+    use std::thread;
     use tempfile::TempDir;
+
+    struct SequencedAgentProvider {
+        responses: Mutex<Vec<Vec<ProviderChunk>>>,
+    }
+
+    impl LlmProvider for SequencedAgentProvider {
+        fn name(&self) -> ProviderName {
+            ProviderName::Anthropic
+        }
+
+        fn default_model(&self) -> &'static str {
+            cut_agent::DEFAULT_ANTHROPIC_MODEL
+        }
+
+        fn stream(&self, _request: &ProviderRequest) -> Result<Vec<ProviderChunk>, ProviderError> {
+            self.responses
+                .lock()
+                .expect("provider responses")
+                .drain(..1)
+                .next()
+                .ok_or_else(|| ProviderError {
+                    code: "TEST".into(),
+                    message: "no response".into(),
+                })
+        }
+    }
 
     #[test]
     fn core_profile_keeps_stable_mcp_order() {
         assert_eq!(McpProfile::Core.names()[0], "timeline.query");
         assert_eq!(McpProfile::Core.names().last(), Some(&"skills.read"));
+    }
+
+    #[test]
+    fn agent_tools_hide_canonical_bypasses_and_dispatch_rejects_them() {
+        let root = TempDir::new().expect("temp dir");
+        let router = CutMcpRouter::new(root.path(), McpProfile::Core, None).expect("router");
+        let tools = router.agent_tools();
+        for name in AGENT_CANONICAL_ONLY_TOOLS {
+            assert!(
+                !tools.contains_key(*name),
+                "agent tool listing exposed {name}"
+            );
+            let error = router
+                .clone_for_agent()
+                .call_base(name, json!({}))
+                .expect_err("canonical bypass must be rejected");
+            assert!(error.starts_with("AGENT_CANONICAL_BYPASS:"));
+        }
+        assert!(tools.contains_key("timeline.apply"));
+        assert!(tools.contains_key("workflow.roughcut"));
     }
 
     #[test]
@@ -2338,6 +3824,136 @@ mod tests {
     }
 
     #[test]
+    fn agent_router_runs_observe_planning_and_multi_range_proposal_flow() {
+        let root = TempDir::new().expect("temp dir");
+        let source_path = root.path().join("source.mp4");
+        let status = ProcessCommand::new(cut_engine::ffmpeg::resolve_ffmpeg_bin())
+            .args([
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=blue:s=64x64:r=30:d=2",
+                "-an",
+                "-c:v",
+                "mpeg4",
+                source_path.to_str().expect("source path"),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("ffmpeg");
+        assert!(status.success(), "ffmpeg fixture generation failed");
+        let mut project =
+            cut_domain::serialize_project(&cut_domain::empty_project()).expect("empty project");
+        project["sources"] = json!([{
+            "id": "source-1",
+            "path": source_path.to_string_lossy(),
+            "duration": 2.0
+        }]);
+        project["tracks"][0]["clips"] = json!([
+            {"id":"clip-existing-1","sourceId":"source-1","in":0.0,"out":0.5,"timelineStart":0.0},
+            {"id":"clip-existing-2","sourceId":"source-1","in":0.8,"out":1.4,"timelineStart":0.8}
+        ]);
+        std::fs::write(
+            root.path().join("project.cut.json"),
+            serde_json::to_vec_pretty(&project).expect("project json"),
+        )
+        .expect("project");
+        let cutd_binary = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/cutd");
+        assert!(cutd_binary.is_file(), "cutd test binary is required");
+        let router =
+            CutMcpRouter::new(root.path(), McpProfile::Core, Some(&cutd_binary)).expect("router");
+        let provider = SequencedAgentProvider {
+            responses: Mutex::new(vec![
+                vec![ProviderChunk::MessageEnd {
+                    stop_reason: "tool_use".into(),
+                    content: vec![json!({
+                        "type": "tool_use",
+                        "id": "outline-1",
+                        "name": "project.outline",
+                        "input": {"include": "summary"}
+                    })],
+                }],
+                vec![ProviderChunk::MessageEnd {
+                    stop_reason: "tool_use".into(),
+                    content: vec![json!({
+                        "type": "tool_use",
+                        "id": "observe-1",
+                        "name": "media.probe",
+                        "input": {
+                            "action": "observe",
+                            "src": "source-1",
+                            "opts": {"start": 0.0, "duration": 1.0, "frames": 2, "phase": "coarse", "evidence": ["frames"]}
+                        }
+                    })],
+                }],
+                vec![ProviderChunk::MessageEnd {
+                    stop_reason: "tool_use".into(),
+                    content: vec![json!({
+                        "type": "tool_use",
+                        "id": "plan-1",
+                        "name": "workflow.roughcut",
+                        "input": {"goal": "assemble selected moments"}
+                    })],
+                }],
+                vec![ProviderChunk::MessageEnd {
+                    stop_reason: "tool_use".into(),
+                    content: vec![json!({
+                        "type": "tool_use",
+                        "id": "roughcut-1",
+                        "name": "workflow.roughcut",
+                        "input": {
+                            "goal": "assemble selected moments",
+                            "selections": [
+                                {"sourceId":"source-1","start":0.0,"end":0.4,"timelineStart":0.0,"clipId":"clip-existing-1","rationale":"opening beat"},
+                                {"sourceId":"source-1","start":0.8,"end":1.2,"timelineStart":0.8,"clipId":"clip-existing-2","rationale":"closing beat"}
+                            ]
+                        }
+                    })],
+                }],
+                vec![ProviderChunk::MessageEnd {
+                    stop_reason: "end_turn".into(),
+                    content: vec![json!({"type": "text", "text": "awaiting review"})],
+                }],
+            ]),
+        };
+        let mut session = AgentSession::from_provider(
+            Box::new(provider),
+            None,
+            None,
+            Vec::new(),
+            router.agent_tools(),
+            6,
+            OpenAiApiMode::Chat,
+            None,
+        );
+        assert_eq!(
+            session.run("make a rough cut").expect("agent run"),
+            "awaiting review"
+        );
+        let state = router.runtime().get_state().expect("runtime state");
+        let pending = state.pending_proposal.expect("pending proposal");
+        let pending = serde_json::to_value(pending).expect("proposal json");
+        assert_eq!(pending["status"], "pending");
+        assert_eq!(
+            pending["command"]["commands"][0]["commands"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(session
+            .messages
+            .iter()
+            .any(|message| message.to_string().contains("planning_needed")));
+        assert!(session
+            .messages
+            .iter()
+            .any(|message| message.to_string().contains("candidate")));
+    }
+
+    #[test]
     fn legacy_trim_lowers_to_typed_update() {
         let project = cut_domain::empty_project();
         let mut project_value = cut_domain::serialize_project(&project).unwrap();
@@ -2364,9 +3980,247 @@ mod tests {
             .expect("actions");
         assert!(actions.iter().any(|action| action == "transcribe"));
         assert!(actions.iter().any(|action| action == "listen"));
+        assert!(actions.iter().any(|action| action == "observe"));
+        let evidence = schema["properties"]["opts"]["properties"]["evidence"]["items"]["enum"]
+            .as_array()
+            .expect("observation evidence");
+        assert!(evidence.iter().any(|item| item == "filmstrip"));
+        assert!(evidence.iter().any(|item| item == "listen"));
         assert_eq!(
             schema["properties"]["opts"]["properties"]["modelVersion"]["type"],
             "string"
+        );
+    }
+
+    #[test]
+    fn observation_range_is_explicit_and_bounded() {
+        let metadata = cut_engine::ProbeInfo {
+            duration: Some(30.0),
+            ..cut_engine::ProbeInfo::default()
+        };
+        let options = ProbeOptions {
+            start: Some(4.0),
+            duration: Some(8.0),
+            ..ProbeOptions::default()
+        };
+        let range = observation_range(&options, &metadata).expect("range");
+        assert_eq!(range.start, 4.0);
+        assert_eq!(range.end, 12.0);
+
+        let too_long = ProbeOptions {
+            start: Some(0.0),
+            duration: Some(MAX_OBSERVATION_RANGE_SECONDS + 1.0),
+            ..ProbeOptions::default()
+        };
+        assert!(observation_range(&too_long, &metadata).is_err());
+    }
+
+    #[test]
+    fn observation_times_are_selected_inside_the_shared_range() {
+        let range = cut_engine::TimeRange::new(4.0, 12.0).expect("range");
+        let options = ProbeOptions {
+            frames: Some(4),
+            ..ProbeOptions::default()
+        };
+        let times = observation_times(&options, range).expect("times");
+        assert_eq!(times, vec![5.0, 7.0, 9.0, 11.0]);
+
+        let outside = ProbeOptions {
+            times: Some(vec![3.0]),
+            ..ProbeOptions::default()
+        };
+        assert!(observation_times(&outside, range).is_err());
+    }
+
+    #[test]
+    fn media_probe_accepts_a_project_source_id() {
+        let root = TempDir::new().expect("temp dir");
+        let source_path = root.path().join("source.mp4");
+        std::fs::write(&source_path, b"placeholder").expect("source");
+        let mut value =
+            cut_domain::serialize_project(&cut_domain::empty_project()).expect("project");
+        value["sources"] = json!([{
+            "id": "source-1",
+            "path": source_path.to_string_lossy()
+        }]);
+        let project = cut_domain::parse_project(&value).expect("project");
+        let resolved =
+            resolve_media_src(root.path(), "source-1", Some(&project)).expect("source id");
+        assert_eq!(
+            resolved,
+            source_path
+                .canonicalize()
+                .expect("canonical source")
+                .to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn generated_asset_registration_is_cached_and_keeps_provenance_outside_project() {
+        let root = TempDir::new().expect("temp dir");
+        let artifact = root.path().join("generated.mp4");
+        std::fs::write(&artifact, b"local generated artifact").expect("artifact");
+        let router = CutMcpRouter::new(root.path(), McpProfile::Core, None).expect("router");
+        let request = json!({
+            "action": "register",
+            "path": "generated.mp4",
+            "kind": "video",
+            "requestFingerprint": "request-product-1",
+            "provider": "local",
+            "model": "fixture",
+            "provenance": {"source": "test"}
+        });
+        let first = router.call("media.asset", request.clone());
+        assert_eq!(first["ok"], true);
+        assert_eq!(first["result"]["cached"], false);
+        assert_eq!(first["result"]["asset"]["backend"], "local-artifact");
+        assert!(first["result"]["asset"]["contentFingerprint"].is_string());
+        assert!(first["result"]["asset"]["path"].is_string());
+        assert!(first["result"]["project"].is_null());
+        let second = router.call("media.asset", request);
+        assert_eq!(second["ok"], true);
+        assert_eq!(second["result"]["cached"], true);
+        assert!(root.path().join(".cut/cache/assets.json").is_file());
+        assert!(!root
+            .path()
+            .join("project.cut.json")
+            .to_string_lossy()
+            .contains("generated.mp4"));
+    }
+
+    #[test]
+    fn generated_asset_manifest_keeps_concurrent_provenance_records() {
+        let root = TempDir::new().expect("temp dir");
+        let artifact = root.path().join("generated.mp4");
+        std::fs::write(&artifact, b"local generated artifact").expect("artifact");
+        let manifest_path = Arc::new(root.path().join(".cut/cache/assets.json"));
+        let artifact_path = artifact.to_string_lossy().into_owned();
+        let workers = (0..8)
+            .map(|index| {
+                let manifest_path = Arc::clone(&manifest_path);
+                let artifact_path = artifact_path.clone();
+                thread::spawn(move || {
+                    let record = GeneratedAssetRecord {
+                        asset_id: format!("asset-{index}"),
+                        path: artifact_path,
+                        kind: "video".into(),
+                        request_fingerprint: format!("request-{index}"),
+                        content_fingerprint: format!("content-{index}"),
+                        backend: "fixture".into(),
+                        provider: None,
+                        model: None,
+                        provenance: Some(json!({"worker": index})),
+                    };
+                    upsert_asset_manifest(&manifest_path, &record).expect("manifest update");
+                })
+            })
+            .collect::<Vec<_>>();
+        for worker in workers {
+            worker.join().expect("manifest worker");
+        }
+        let bytes = std::fs::read(&*manifest_path).expect("manifest");
+        let manifest: GeneratedAssetManifest = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(manifest.assets.len(), 8);
+        assert!(manifest
+            .assets
+            .iter()
+            .all(|asset| asset.provenance.is_some()));
+    }
+
+    #[test]
+    fn generated_asset_request_conflict_keeps_the_immutable_first_record() {
+        let root = TempDir::new().expect("temp dir");
+        let first_path = root.path().join("first.mp4");
+        let second_path = root.path().join("second.mp4");
+        std::fs::write(&first_path, b"first artifact").expect("first artifact");
+        std::fs::write(&second_path, b"second artifact").expect("second artifact");
+        let manifest_path = root.path().join(".cut/cache/assets.json");
+        let first = GeneratedAssetRecord {
+            asset_id: "asset-first".into(),
+            path: first_path.to_string_lossy().into_owned(),
+            kind: "video".into(),
+            request_fingerprint: "same-request".into(),
+            content_fingerprint: "content-first".into(),
+            backend: "fixture".into(),
+            provider: None,
+            model: None,
+            provenance: Some(json!({"version": 1})),
+        };
+        let second = GeneratedAssetRecord {
+            asset_id: "asset-second".into(),
+            path: second_path.to_string_lossy().into_owned(),
+            content_fingerprint: "content-second".into(),
+            ..first.clone()
+        };
+        upsert_asset_manifest(&manifest_path, &first).expect("first manifest update");
+        let error = upsert_asset_manifest(&manifest_path, &second).expect_err("conflict");
+        assert_eq!(error.code, "ASSET_REQUEST_CONFLICT");
+        let bytes = std::fs::read(&manifest_path).expect("manifest");
+        let manifest: GeneratedAssetManifest = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(manifest.assets.len(), 1);
+        assert_eq!(manifest.assets[0].asset_id, "asset-first");
+        assert_eq!(manifest.assets[0].path, first.path);
+    }
+
+    #[test]
+    fn workflow_requires_agent_selected_ranges_before_planning() {
+        let root = TempDir::new().expect("temp dir");
+        let router = CutMcpRouter::new(root.path(), McpProfile::Core, None).expect("router");
+        let result = router.call(
+            "workflow.roughcut",
+            json!({"goal": "assemble the strongest moments"}),
+        );
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["result"]["status"], "planning_needed");
+        assert!(result["result"]["message"].is_string());
+    }
+
+    #[test]
+    fn workflow_duration_caps_speed_adjusted_selected_output() {
+        let root = TempDir::new().expect("temp dir");
+        let router = CutMcpRouter::new(root.path(), McpProfile::Core, None).expect("router");
+        let result = router.call(
+            "workflow.roughcut",
+            json!({
+                "goal": "assemble a ten second cut",
+                "duration": 10.0,
+                "selections": [
+                    {"sourceId":"source-1","start":0.0,"end":20.0,"speed":2.0,"rationale":"first beat"},
+                    {"sourceId":"source-2","start":0.0,"end":20.0,"speed":1.0,"rationale":"second beat"}
+                ]
+            }),
+        );
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"]["code"], "INVALID_ARGUMENTS");
+        assert_eq!(result["error"]["details"]["selectedDuration"], 30.0);
+    }
+
+    #[test]
+    fn proposal_capture_window_follows_selected_timeline_ranges() {
+        let (start, end, coverage) = proposal_capture_window(&[(200.0, 206.0), (210.0, 218.0)]);
+        assert_eq!((start, end), (200.0, 218.0));
+        assert_eq!(coverage["mode"], "full");
+        assert_eq!(coverage["fullyCovered"], true);
+
+        let (start, end, coverage) = proposal_capture_window(&[(0.0, 2.0), (300.0, 304.0)]);
+        assert_eq!((start, end), (300.0, 304.0));
+        assert_eq!(coverage["mode"], "representative");
+        assert_eq!(coverage["fullyCovered"], false);
+        assert_eq!(coverage["requestedRanges"][0]["fullyCovered"], false);
+    }
+
+    #[test]
+    fn workflow_schema_exposes_bounded_retry_and_observation_phase() {
+        let (_, workflow, _) = tool_metadata("workflow.roughcut");
+        assert_eq!(
+            workflow["properties"]["duration"]["maximum"],
+            MAX_OBSERVATION_RANGE_SECONDS
+        );
+        assert_eq!(workflow["properties"]["maxRetries"]["maximum"], 2);
+        let (_, probe, _) = tool_metadata("media.probe");
+        assert_eq!(
+            probe["properties"]["opts"]["properties"]["phase"]["enum"][0],
+            "coarse"
         );
     }
 

@@ -22,10 +22,10 @@ pub use encoder::{
 };
 pub use error::{EngineError, Result};
 pub use probe::{
-    cached_exact_frames, cached_filmstrip, cached_waveform, create_contact_sheet, detect_scenes,
-    extract_exact_frames, extract_frames, info, parse_scene_times, parse_silencedetect,
-    FilmstripResult, FrameGrab, FrameGrabSet, ProbeInfo, SceneRange, SilenceRange, WaveformBucket,
-    WaveformResult,
+    cached_exact_frames, cached_filmstrip, cached_waveform, cached_waveform_range,
+    create_contact_sheet, detect_scenes, extract_exact_frames, extract_frames, info,
+    parse_scene_times, parse_silencedetect, FilmstripResult, FrameGrab, FrameGrabSet, ProbeInfo,
+    SceneRange, SilenceRange, WaveformBucket, WaveformResult,
 };
 pub use proxy::{create_proxy_cache_key, proxy_ffmpeg_args};
 pub use resources::{
