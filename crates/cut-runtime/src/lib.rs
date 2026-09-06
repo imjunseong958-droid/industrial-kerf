@@ -2483,20 +2483,45 @@ impl Runtime {
         bound_receipts(&mut runtime.imports, None);
 
         let records = load_journal(&runtime.journal_path, runtime.journal_sequence)?;
+        // A journal may contain several committed mutations after the last
+        // checkpoint. If publication failed for the newest mutation, the
+        // projection can still equal the last successfully published state
+        // from that journal tail. Remember every state reached while replaying
+        // so that only a recognized authoritative state is auto-repaired;
+        // arbitrary external edits remain divergent and are preserved.
+        let mut recognized_projection = checkpoint_project
+            .as_ref()
+            .is_some_and(|project| projection_matches(&runtime.project_path, project));
         for record in records {
             runtime.replay_journal_record(record)?;
+            if !recognized_projection
+                && checkpoint_project.is_some()
+                && projection_matches(&runtime.project_path, &runtime.project)
+            {
+                recognized_projection = true;
+            }
         }
 
-        if checkpoint_project
-            .as_ref()
-            .is_some_and(|project| projection_matches(&runtime.project_path, project))
-        {
-            // The projection was known to be the last checkpointed value. A
-            // crash may have left the journal ahead of that checkpoint, so it
-            // is safe to repair this specific stale projection on startup.
-            if runtime.materialize_project().is_ok() && runtime.materialize_history().is_ok() {
+        if recognized_projection {
+            // The projection was known to equal an authoritative state before
+            // or within the replayed journal tail. A crash may have left the
+            // journal ahead of that state, so it is safe to repair this stale
+            // projection on startup.
+            let repaired = runtime
+                .materialize_project()
+                .and_then(|_| runtime.materialize_history());
+            if repaired.is_ok() {
                 runtime.projection_status = ProjectionStatus::Current;
                 runtime.projection_digest = projection_digest(&runtime.project_path).ok();
+            } else {
+                runtime.projection_status =
+                    inspect_projection(&runtime.project_path, &runtime.project);
+                runtime.projection_digest =
+                    if runtime.projection_status == ProjectionStatus::Current {
+                        projection_digest(&runtime.project_path).ok()
+                    } else {
+                        None
+                    };
             }
         } else {
             runtime.projection_status = inspect_projection(&runtime.project_path, &runtime.project);
@@ -2515,7 +2540,9 @@ impl Runtime {
             runtime.journal_records_since_checkpoint = 0;
         }
 
-        if runtime.journal_records_since_checkpoint >= CHECKPOINT_INTERVAL {
+        if runtime.projection_status == ProjectionStatus::Current
+            && runtime.journal_records_since_checkpoint >= CHECKPOINT_INTERVAL
+        {
             // A previous process may have persisted a checkpoint but failed
             // to truncate the journal. Compact again on startup so a healthy
             // project does not accumulate stale records indefinitely.
@@ -2534,12 +2561,7 @@ impl Runtime {
     }
 
     pub fn snapshot(&self) -> StateSnapshot {
-        let mut snapshot =
-            self.snapshot_for_parts(&self.project, self.revision, &self.past, &self.future);
-        snapshot.projection_status = inspect_projection(&self.project_path, &self.project)
-            .as_str()
-            .into();
-        snapshot
+        self.snapshot_for_parts(&self.project, self.revision, &self.past, &self.future)
     }
 
     fn snapshot_for_parts(
@@ -2669,16 +2691,6 @@ impl Runtime {
                     "project.cut.json differs from authoritative cutd state; repair or explicitly import the projection before editing",
                 ));
             }
-            // Publish the compatibility projection before the journal record.
-            // If the process dies between these writes, startup compares the
-            // projection with authoritative checkpoint/journal state and
-            // reports divergence instead of adopting an unjournaled edit.
-            self.materialize_project_value(&candidate.project)?;
-            self.materialize_history_values(
-                candidate.revision,
-                &candidate.past,
-                &candidate.future,
-            )?;
         }
 
         let sequence = self.journal_sequence + 1;
@@ -2687,6 +2699,10 @@ impl Runtime {
             candidate.revision,
             event,
         ))?;
+        // The journal is the authoritative durable commit. Publish the
+        // compatibility projection only after the record is safely appended;
+        // startup can then replay a committed record and repair a stale
+        // projection without mistaking it for an external edit.
         append_journal_record(&self.journal_path, &record)?;
 
         self.project = candidate.project;
@@ -2701,10 +2717,23 @@ impl Runtime {
         self.journal_sequence = sequence;
         self.journal_records_since_checkpoint += 1;
         if project_changed {
-            self.projection_status = ProjectionStatus::Current;
-            self.projection_digest = projection_digest(&self.project_path).ok();
+            let published = self
+                .materialize_history()
+                .and_then(|_| self.materialize_project());
+            if published.is_ok() {
+                self.projection_status = ProjectionStatus::Current;
+                self.projection_digest = projection_digest(&self.project_path).ok();
+            } else {
+                // The canonical state is already committed in the journal;
+                // keep it in memory and require projection repair instead of
+                // reporting an ambiguous mutation failure to the caller.
+                self.projection_status = ProjectionStatus::Diverged;
+                self.projection_digest = None;
+            }
         }
-        if self.journal_records_since_checkpoint >= CHECKPOINT_INTERVAL {
+        if self.projection_status == ProjectionStatus::Current
+            && self.journal_records_since_checkpoint >= CHECKPOINT_INTERVAL
+        {
             // The journal is the durable commit. Checkpointing is a bounded
             // optimization; a temporary checkpoint failure leaves the typed
             // records available for recovery on the next startup.
@@ -6402,30 +6431,178 @@ mod tests {
     }
 
     #[test]
-    fn failed_projection_does_not_advance_memory_or_checkpoint() {
+    fn durable_journal_recovers_after_projection_failure() {
         let directory =
             std::env::temp_dir().join(format!("cut-runtime-persist-fail-{}", unique_id()));
         let mut runtime = Runtime::open(&directory).unwrap();
         let before = runtime.snapshot();
-        // The checkpoint remains writable, while the legacy project
-        // projection is deliberately made unrenamable.  This exercises the
-        // failure between candidate construction and the commit record.
+        // The projection is deliberately made unrenamable. The journal commit
+        // must still advance the authoritative runtime state and survive a
+        // restart after the old projection is restored.
         fs::remove_file(directory.join(PROJECT_FILE)).unwrap();
         fs::create_dir(directory.join(PROJECT_FILE)).unwrap();
-        let error = runtime
+        let committed = runtime
             .apply(
                 json!({"type":"add_track","track":{"id":"titles","type":"title","clips":[]}}),
                 Some(before.revision),
             )
-            .unwrap_err();
-        assert_eq!(error.code, "IO_ERROR");
-        assert_eq!(runtime.snapshot().revision, before.revision);
-        assert_eq!(runtime.snapshot().project, before.project);
+            .unwrap();
+        assert_eq!(committed.revision, before.revision + 1);
+        assert_eq!(committed.projection_status, "diverged");
+        assert!(directory.join(JOURNAL_FILE).is_file());
         drop(runtime);
         fs::remove_dir_all(directory.join(PROJECT_FILE)).unwrap();
+        fs::write(
+            directory.join(PROJECT_FILE),
+            serde_json::to_vec_pretty(&before.project).unwrap(),
+        )
+        .unwrap();
         let reopened = Runtime::open(&directory).unwrap();
-        assert_eq!(reopened.snapshot().revision, before.revision);
-        assert_eq!(reopened.snapshot().project, before.project);
+        assert_eq!(reopened.snapshot().revision, committed.revision);
+        assert!(reopened.snapshot().project["tracks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|track| track["id"] == "titles"));
+        assert_eq!(reopened.snapshot().projection_status, "current");
+        drop(reopened);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn journal_tail_recovery_keeps_external_projection_edits_divergent() {
+        let directory =
+            std::env::temp_dir().join(format!("cut-runtime-journal-tail-{}", unique_id()));
+        let mut runtime = Runtime::open(&directory).unwrap();
+        let first = runtime
+            .apply(
+                json!({"type":"set_metadata","patch":{"first":true}}),
+                Some(0),
+            )
+            .unwrap();
+
+        fs::remove_file(directory.join(PROJECT_FILE)).unwrap();
+        fs::create_dir(directory.join(PROJECT_FILE)).unwrap();
+        let second = runtime
+            .apply(
+                json!({"type":"set_metadata","patch":{"second":true}}),
+                Some(first.revision),
+            )
+            .unwrap();
+        assert_eq!(second.projection_status, "diverged");
+        drop(runtime);
+
+        // The projection is the last successfully published journal state,
+        // while the second mutation remains durable in the journal.
+        fs::remove_dir_all(directory.join(PROJECT_FILE)).unwrap();
+        fs::write(
+            directory.join(PROJECT_FILE),
+            serde_json::to_vec_pretty(&first.project).unwrap(),
+        )
+        .unwrap();
+        let reopened = Runtime::open(&directory).unwrap();
+        assert_eq!(reopened.snapshot().revision, second.revision);
+        assert_eq!(reopened.snapshot().project["metadata"]["second"], true);
+        assert_eq!(reopened.snapshot().projection_status, "current");
+        drop(reopened);
+
+        // An edit that does not match any recognized journal state must remain
+        // visible on disk and keep subsequent mutations blocked.
+        let mut edited: Value =
+            serde_json::from_str(&fs::read_to_string(directory.join(PROJECT_FILE)).unwrap())
+                .unwrap();
+        edited["name"] = json!("external edit");
+        fs::write(
+            directory.join(PROJECT_FILE),
+            serde_json::to_vec_pretty(&edited).unwrap(),
+        )
+        .unwrap();
+        let mut diverged = Runtime::open(&directory).unwrap();
+        assert_eq!(diverged.snapshot().projection_status, "diverged");
+        assert_eq!(
+            diverged
+                .apply(
+                    json!({"type":"set_metadata","patch":{"blocked":true}}),
+                    Some(second.revision),
+                )
+                .unwrap_err()
+                .code,
+            "PROJECTION_DIVERGED"
+        );
+        let on_disk: Value =
+            serde_json::from_str(&fs::read_to_string(directory.join(PROJECT_FILE)).unwrap())
+                .unwrap();
+        assert_eq!(on_disk["name"], "external edit");
+        drop(diverged);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn diverged_projection_keeps_checkpoint_threshold_journal_for_recovery() {
+        let directory =
+            std::env::temp_dir().join(format!("cut-runtime-journal-threshold-{}", unique_id()));
+        let mut runtime = Runtime::open(&directory).unwrap();
+        let before = runtime.snapshot();
+        runtime.journal_records_since_checkpoint = CHECKPOINT_INTERVAL - 1;
+        fs::remove_file(directory.join(PROJECT_FILE)).unwrap();
+        fs::create_dir(directory.join(PROJECT_FILE)).unwrap();
+
+        let committed = runtime
+            .apply(
+                json!({"type":"set_metadata","patch":{"threshold":true}}),
+                Some(before.revision),
+            )
+            .unwrap();
+        assert_eq!(committed.projection_status, "diverged");
+        let checkpoint: Value =
+            serde_json::from_str(&fs::read_to_string(directory.join(CHECKPOINT_FILE)).unwrap())
+                .unwrap();
+        assert_eq!(checkpoint["revision"], before.revision);
+        assert!(fs::metadata(directory.join(JOURNAL_FILE)).unwrap().len() > 0);
+        drop(runtime);
+
+        fs::remove_dir_all(directory.join(PROJECT_FILE)).unwrap();
+        fs::write(
+            directory.join(PROJECT_FILE),
+            serde_json::to_vec_pretty(&before.project).unwrap(),
+        )
+        .unwrap();
+        let reopened = Runtime::open(&directory).unwrap();
+        assert_eq!(reopened.snapshot().revision, committed.revision);
+        assert_eq!(reopened.snapshot().project["metadata"]["threshold"], true);
+        assert_eq!(reopened.snapshot().projection_status, "current");
+        drop(reopened);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn failed_startup_projection_repair_reports_project_status() {
+        let directory =
+            std::env::temp_dir().join(format!("cut-runtime-repair-status-{}", unique_id()));
+        let mut runtime = Runtime::open(&directory).unwrap();
+        let before = runtime.snapshot();
+        let committed = runtime
+            .apply(
+                json!({"type":"set_metadata","patch":{"repair":true}}),
+                Some(before.revision),
+            )
+            .unwrap();
+        drop(runtime);
+
+        // Leave the last checkpointed projection in place so journal replay
+        // recognizes this as an internal stale projection. Make only the
+        // compatibility history publication fail during startup repair.
+        fs::write(
+            directory.join(PROJECT_FILE),
+            serde_json::to_vec_pretty(&before.project).unwrap(),
+        )
+        .unwrap();
+        fs::remove_file(directory.join(HISTORY_FILE)).unwrap();
+        fs::create_dir(directory.join(HISTORY_FILE)).unwrap();
+        let reopened = Runtime::open(&directory).unwrap();
+        assert_eq!(reopened.snapshot().revision, committed.revision);
+        assert_eq!(reopened.snapshot().project["metadata"]["repair"], true);
+        assert_eq!(reopened.snapshot().projection_status, "current");
         drop(reopened);
         let _ = fs::remove_dir_all(directory);
     }

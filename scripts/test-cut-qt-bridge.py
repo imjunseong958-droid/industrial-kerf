@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import socket
 import sys
 import tempfile
 import threading
@@ -60,14 +61,46 @@ class Frame(C.Structure):
 lib.cut_bridge_frame.argtypes = [C.c_void_p, C.POINTER(Frame)]
 lib.cut_bridge_frame.restype = C.c_bool
 
+def runtime_request(directory, request):
+    payload = {'protocolVersion': 1, 'id': f'qt-test-{time.time_ns()}'}
+    payload.update(request)
+    endpoint = directory / '.cutd.sock'
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(5)
+        connection.connect(os.fsencode(endpoint))
+        connection.sendall(json.dumps(payload).encode() + b'\n')
+        response = b''
+        while not response.endswith(b'\n'):
+            chunk = connection.recv(65536)
+            if not chunk:
+                raise RuntimeError('cutd closed the socket before replying')
+            response += chunk
+    return json.loads(response)
+
 with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as temporary:
     directory = Path(temporary)
     media = directory / 'fixture.mp4'
     subprocess.run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30', '-t', '4', '-c:v', 'libx264', '-preset', 'ultrafast', str(media)], check=True)
     daemon = subprocess.Popen([str(ROOT / 'target/debug/cutd'), '--dir', str(directory)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    endpoint = directory / '.cutd.sock'
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if daemon.poll() is not None:
+            raise RuntimeError('cutd exited before opening its socket')
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                connection.settimeout(.2)
+                connection.connect(os.fsencode(endpoint))
+            break
+        except OSError:
+            time.sleep(.02)
+    else:
+        daemon.terminate()
+        raise RuntimeError('cutd did not open its socket')
     bridge = lib.cut_bridge_new(os.fsencode(directory), os.fsencode(ROOT / 'target/debug/cutd'))
     assert bridge
     observed = []
+    connection_statuses = []
     timings = []
 
     def send(command):
@@ -82,6 +115,8 @@ with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as tempo
         value = json.loads(C.string_at(pointer))
         lib.cut_bridge_string_free(pointer)
         observed.append(value)
+        if value['type'] == 'connection':
+            connection_statuses.append(value['status'])
         if value['type'] == 'error':
             raise AssertionError(value)
         return value
@@ -100,6 +135,8 @@ with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as tempo
 
     try:
         initial = state()
+        wait(lambda event: event['type'] == 'connection' and event['status'] == 'ready')
+        assert 'connecting' in connection_statuses
         send({'type': 'import', 'path': str(media)})
         imported = state()
         assert imported['revision'] > initial['revision']
@@ -112,6 +149,24 @@ with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as tempo
         assert abs(undone['duration'] - 4) < .05
         send({'type': 'redo', 'revision': undone['revision']})
         redone = state()
+        external = runtime_request(directory, {
+            'operation': 'apply',
+            'actor': 'mcp',
+            'idempotencyKey': 'qt-external-edit',
+            'baseRevision': redone['revision'],
+            'command': {'type': 'set_metadata', 'patch': {'external': True}},
+        })
+        assert external['ok'], external
+        external_state = wait(lambda event: event['type'] == 'state' and event['snapshot']['revision'] == external['state']['revision'])['snapshot']
+        assert external_state['project']['metadata']['external'] is True
+
+        daemon.terminate()
+        daemon.wait(timeout=5)
+        wait(lambda event: event['type'] == 'connection' and event['status'] == 'disconnected')
+        daemon = subprocess.Popen([str(ROOT / 'target/debug/cutd'), '--dir', str(directory)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        send({'type': 'reconnect'})
+        wait(lambda event: event['type'] == 'connection' and event['status'] == 'ready')
+        assert connection_statuses[-3:] == ['disconnected', 'connecting', 'ready'], connection_statuses
         for i in range(200):
             send({'type': 'seek', 'position': 2.0 * i / 199})
         frame = Frame()
@@ -130,7 +185,7 @@ with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as tempo
         proposal_state = state()
         proposal = proposal_state['pendingProposal']
         assert proposal, observed[-10:]
-        assert proposal_state['revision'] == redone['revision']
+        assert proposal_state['revision'] == external_state['revision']
         proposal_id = proposal.get('id', proposal.get('proposalId'))
         assert proposal_id, proposal
         send({'type': 'accept', 'proposalId': proposal_id, 'revision': proposal_state['revision']})
@@ -150,12 +205,13 @@ with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as tempo
         send({'type': 'preview'})
         wait(lambda event: event['type'] == 'preview' and event['status'] == 'ready', 60)
         assert any(event.get('kind') == 'tool' for event in observed)
-        print(json.dumps({'result': 'passed', 'checks': ['import', 'trim', 'undo', 'redo', '200 seeks/latest frame', 'local provider/tool activity', 'proposal/accept', 'conversation history', 'real export', 'effect rendered fallback'], 'max_enqueue_ms': round(max(timings), 3), 'frame': [frame.width, frame.height]}, indent=2))
+        print(json.dumps({'result': 'passed', 'checks': ['connection lifecycle/reconnect', 'import', 'trim', 'undo', 'redo', 'external CLI edit sync', '200 seeks/latest frame', 'local provider/tool activity', 'proposal/accept', 'conversation history', 'real export', 'effect rendered fallback'], 'max_enqueue_ms': round(max(timings), 3), 'frame': [frame.width, frame.height]}, indent=2))
     finally:
         lib.cut_bridge_free(bridge)
-        daemon.terminate()
-        try:
-            daemon.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            daemon.kill()
+        if daemon.poll() is None:
+            daemon.terminate()
+            try:
+                daemon.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                daemon.kill()
         server.shutdown()

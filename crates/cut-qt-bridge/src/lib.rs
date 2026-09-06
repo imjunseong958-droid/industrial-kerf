@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -32,6 +32,7 @@ struct AgentSettings {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Command {
     Refresh,
+    Reconnect,
     Preview,
     Import {
         path: String,
@@ -129,61 +130,169 @@ fn publish(
     tx: &SyncSender<Value>,
     previous: &mut Option<Value>,
 ) {
+    publish_snapshot(state, shared, tx, previous, false);
+}
+
+fn publish_force(
+    state: StateSnapshot,
+    shared: &Shared,
+    tx: &SyncSender<Value>,
+    previous: &mut Option<Value>,
+) {
+    publish_snapshot(state, shared, tx, previous, true);
+}
+
+fn publish_snapshot(
+    state: StateSnapshot,
+    shared: &Shared,
+    tx: &SyncSender<Value>,
+    previous: &mut Option<Value>,
+    force: bool,
+) {
+    let snapshot = serde_json::to_value(&state).unwrap_or_default();
+    if !force && previous.as_ref() == Some(&snapshot) {
+        return;
+    }
+
     // Proposal-only refreshes must not reopen decoders or interrupt playback.
-    if previous.as_ref() != Some(&state.project) {
+    let project_changed = previous
+        .as_ref()
+        .and_then(|snapshot| snapshot.get("project"))
+        .map_or(true, |project| project != &state.project);
+    if project_changed {
         if let Ok(mut slot) = shared.project.lock() {
             shared.revision.fetch_add(1, Ordering::SeqCst);
             *slot = Some(MediaProject::Native(state.project.clone()));
         }
-        *previous = Some(state.project.clone());
     }
+    *previous = Some(snapshot);
     emit(tx, json!({"type":"state", "snapshot":state}));
+}
+
+fn connection_event(tx: &SyncSender<Value>, status: &str, message: Option<&str>) {
+    let mut event = json!({"type":"connection", "status":status});
+    if let Some(message) = message {
+        event["message"] = Value::String(message.to_owned());
+    }
+    emit(tx, event);
+}
+
+fn is_transport_error(error: &cut_runtime::RuntimeError) -> bool {
+    matches!(
+        error.code.as_str(),
+        "IPC_UNSUPPORTED"
+            | "IPC_CONNECT_ERROR"
+            | "IPC_PERMISSION_DENIED"
+            | "IPC_TIMEOUT"
+            | "IPC_ERROR"
+            | "RUNTIME_UNAVAILABLE"
+    )
+}
+
+fn connect_runtime(
+    directory: &std::path::Path,
+    binary: &std::path::Path,
+    tx: &SyncSender<Value>,
+    shared: &Shared,
+    previous: &mut Option<Value>,
+) -> Option<RuntimeClient> {
+    connection_event(tx, "connecting", None);
+    let bootstrap = match RuntimeClient::connect_or_spawn(directory, Some(binary)) {
+        Ok(client) => client,
+        Err(error) => {
+            connection_event(tx, "disconnected", Some(&error.message));
+            return None;
+        }
+    };
+    let state = match bootstrap.get_state() {
+        Ok(state) => state,
+        Err(error) => {
+            connection_event(tx, "disconnected", Some(&error.message));
+            return None;
+        }
+    };
+    // Do not retain the binary on the steady-state client: a daemon that
+    // disappears must be reported as disconnected until the user reconnects.
+    let client = match RuntimeClient::new(directory) {
+        Ok(client) => client,
+        Err(error) => {
+            connection_event(tx, "disconnected", Some(&error.message));
+            return None;
+        }
+    };
+    // Rebuild the viewer after a reconnect even when the canonical snapshot
+    // did not change while the transport was down.
+    *previous = None;
+    publish(state, shared, tx, previous);
+    connection_event(tx, "ready", None);
+    Some(client)
 }
 
 fn runtime_worker(
     directory: PathBuf,
     binary: PathBuf,
     rx: Receiver<Command>,
+    media: SyncSender<Command>,
     tx: SyncSender<Value>,
     shared: Arc<Shared>,
 ) {
-    let client = match RuntimeClient::connect_or_spawn(&directory, Some(&binary)) {
-        Ok(client) => client,
-        Err(err) => {
-            error(&tx, err.message);
-            return;
-        }
-    };
     let mut previous = None;
-    match client.get_state() {
-        Ok(state) => publish(state, &shared, &tx, &mut previous),
-        Err(err) => error(&tx, err.message),
-    }
-    while let Ok(command) = rx.recv() {
+    let mut client = connect_runtime(&directory, &binary, &tx, &shared, &mut previous);
+    while !shared.closed.load(Ordering::Relaxed) {
+        let command = match rx.recv_timeout(Duration::from_millis(500)) {
+            Ok(command) => command,
+            Err(RecvTimeoutError::Timeout) => {
+                if let Some(active_client) = client.as_ref() {
+                    match active_client.get_state() {
+                        Ok(state) => publish(state, &shared, &tx, &mut previous),
+                        Err(error) if is_transport_error(&error) => {
+                            let _ = media.try_send(Command::Pause);
+                            connection_event(&tx, "disconnected", Some(&error.message));
+                            client = None;
+                        }
+                        Err(_) => {}
+                    }
+                }
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
         if shared.closed.load(Ordering::Relaxed) {
             break;
         }
+        if matches!(command, Command::Reconnect) {
+            if client.is_some() {
+                let _ = media.try_send(Command::Pause);
+            }
+            client = connect_runtime(&directory, &binary, &tx, &shared, &mut previous);
+            continue;
+        }
+        let Some(active_client) = client.clone() else {
+            error(&tx, "Runtime is disconnected; reconnect to continue");
+            continue;
+        };
         let operation = key();
+        let force_refresh = matches!(&command, Command::Refresh);
         let result = match command {
-            Command::Refresh => client.get_state(),
-            Command::Import { path } => client.get_state().and_then(|state| {
-                client
+            Command::Refresh => active_client.get_state(),
+            Command::Import { path } => active_client.get_state().and_then(|state| {
+                active_client
                     .import_media_request("ui", &operation, &path, state.revision, None, None)
                     .map(|(state, _, _)| state)
             }),
             Command::Apply { command, revision } => {
-                client.apply_request("ui", &operation, command, revision)
+                active_client.apply_request("ui", &operation, command, revision)
             }
-            Command::Undo { revision } => client.undo_request("ui", &operation, revision),
-            Command::Redo { revision } => client.redo_request("ui", &operation, revision),
+            Command::Undo { revision } => active_client.undo_request("ui", &operation, revision),
+            Command::Redo { revision } => active_client.redo_request("ui", &operation, revision),
             Command::Accept {
                 proposal_id,
                 revision,
-            } => client.accept_proposal(&proposal_id, "ui", &operation, revision),
+            } => active_client.accept_proposal(&proposal_id, "ui", &operation, revision),
             Command::Reject {
                 proposal_id,
                 revision,
-            } => client.reject_proposal_request(&proposal_id, "ui", &operation, revision),
+            } => active_client.reject_proposal_request(&proposal_id, "ui", &operation, revision),
             Command::Preview | Command::Export { .. } => {
                 let preview = matches!(command, Command::Preview);
                 let quality = match command {
@@ -194,7 +303,7 @@ fn runtime_worker(
                     error(&tx, "An export is already running");
                     continue;
                 }
-                let client = client.clone();
+                let client = active_client.clone();
                 let tx = tx.clone();
                 let shared = shared.clone();
                 thread::spawn(move || {
@@ -229,11 +338,21 @@ fn runtime_worker(
             _ => continue,
         };
         match result {
+            Ok(state) if force_refresh => publish_force(state, &shared, &tx, &mut previous),
             Ok(state) => publish(state, &shared, &tx, &mut previous),
-            Err(err) => {
-                error(&tx, err.message);
-                if let Ok(state) = client.get_state() {
-                    publish(state, &shared, &tx, &mut previous);
+            Err(error) if is_transport_error(&error) => {
+                let _ = media.try_send(Command::Pause);
+                connection_event(&tx, "disconnected", Some(&error.message));
+                client = None;
+            }
+            Err(runtime_error) => {
+                error(&tx, runtime_error.message);
+                if let Ok(state) = active_client.get_state() {
+                    publish_force(state, &shared, &tx, &mut previous);
+                } else {
+                    let _ = media.try_send(Command::Pause);
+                    connection_event(&tx, "disconnected", Some("runtime became unavailable"));
+                    client = None;
                 }
             }
         }
@@ -636,9 +755,10 @@ pub unsafe extern "C" fn cut_bridge_new(
     {
         let directory = directory.clone();
         let binary = binary.clone();
+        let media = media.clone();
         let tx = emit.clone();
         let shared = shared.clone();
-        thread::spawn(move || runtime_worker(directory, binary, rx, tx, shared));
+        thread::spawn(move || runtime_worker(directory, binary, rx, media, tx, shared));
     }
     {
         let tx = emit.clone();
@@ -822,8 +942,111 @@ pub unsafe extern "C" fn cut_bridge_frame(bridge: *mut c_void, output: *mut CutF
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentSettings, Command};
+    use super::{publish, publish_force, AgentSettings, Command, Shared};
+    use cut_runtime::{PendingProposal, ProposalFreshness, StateSnapshot};
     use serde_json::json;
+    use std::sync::atomic::{AtomicBool, AtomicU64};
+    use std::sync::mpsc;
+    use std::sync::{Arc, Mutex};
+
+    fn shared() -> Shared {
+        Shared {
+            revision: AtomicU64::new(0),
+            closed: AtomicBool::new(false),
+            agent_busy: AtomicBool::new(false),
+            export_busy: AtomicBool::new(false),
+            abort: Mutex::new(None),
+            frame: Mutex::new(None),
+            seek: Mutex::new(None),
+            project: Mutex::new(None),
+        }
+    }
+
+    fn snapshot(
+        project: serde_json::Value,
+        pending_proposal: Option<PendingProposal>,
+    ) -> StateSnapshot {
+        StateSnapshot {
+            project,
+            revision: 1,
+            can_undo: true,
+            can_redo: false,
+            duration: 0.0,
+            sources: Vec::new(),
+            pending_proposal,
+            source_version: 2,
+            projection_status: "current".into(),
+        }
+    }
+
+    #[test]
+    fn reconnect_command_deserializes() {
+        let command: Command = serde_json::from_value(json!({"type":"reconnect"}))
+            .expect("reconnect command should deserialize");
+        assert!(matches!(command, Command::Reconnect));
+    }
+
+    #[test]
+    fn proposal_only_snapshot_is_published_without_restarting_media() {
+        let (tx, rx) = mpsc::sync_channel(4);
+        let shared = Arc::new(shared());
+        let project = json!({"version":2,"tracks":[]});
+        let mut previous = None;
+
+        publish(snapshot(project.clone(), None), &shared, &tx, &mut previous);
+        let first = rx.try_recv().expect("initial snapshot should publish");
+        assert_eq!(first["type"], "state");
+        let media_revision = shared.revision.load(std::sync::atomic::Ordering::SeqCst);
+        publish_force(snapshot(project.clone(), None), &shared, &tx, &mut previous);
+        assert_eq!(
+            rx.try_recv().expect("forced refresh should publish")["type"],
+            "state"
+        );
+        assert_eq!(
+            shared.revision.load(std::sync::atomic::Ordering::SeqCst),
+            media_revision,
+            "forced refresh must not restart unchanged media"
+        );
+
+        let proposal = PendingProposal::Pending {
+            proposal_id: "proposal-1".into(),
+            base_revision: 1,
+            command: json!({"type":"set_metadata","patch":{"name":"Draft"}}),
+            diff: Vec::new(),
+            diff_truncated: false,
+            freshness: ProposalFreshness::Current,
+            impacts: None,
+            observation: None,
+            observations: None,
+        };
+        let proposal_for_repeat = proposal.clone();
+        publish(
+            snapshot(project, Some(proposal)),
+            &shared,
+            &tx,
+            &mut previous,
+        );
+        let proposal_event = rx.try_recv().expect("proposal snapshot should publish");
+        assert_eq!(
+            proposal_event["snapshot"]["pendingProposal"]["proposalId"],
+            "proposal-1"
+        );
+        assert_eq!(
+            shared.revision.load(std::sync::atomic::Ordering::SeqCst),
+            media_revision,
+            "proposal-only refresh must keep the media generation stable"
+        );
+        publish(
+            snapshot(json!({"version":2,"tracks":[]}), Some(proposal_for_repeat)),
+            &shared,
+            &tx,
+            &mut previous,
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "unchanged snapshots must be coalesced"
+        );
+    }
 
     #[test]
     fn agent_command_accepts_per_request_provider_settings() {

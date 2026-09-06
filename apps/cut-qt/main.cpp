@@ -37,6 +37,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSlider>
@@ -53,6 +54,9 @@
 #include <QVector>
 #include <QWidget>
 #include <QFontMetrics>
+#ifdef CUT_QT_TESTING
+#include <QTest>
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -63,7 +67,6 @@ namespace {
 constexpr int kTimelineLabelWidth = 126;
 constexpr int kRulerHeight = 28;
 constexpr int kTrackHeight = 52;
-constexpr int kMinimumTimelineWidth = 760;
 
 QString prettyTime(double seconds) {
     seconds = std::max(0.0, seconds);
@@ -117,7 +120,7 @@ class TimelineWidget final : public QWidget {
 public:
     explicit TimelineWidget(QWidget *parent = nullptr) : QWidget(parent) {
         setFocusPolicy(Qt::StrongFocus);
-        setMinimumHeight(kRulerHeight + kTrackHeight * 3 + 8);
+        updateContentSize();
         setMouseTracking(true);
     }
 
@@ -125,7 +128,7 @@ public:
         m_project = project;
         m_duration = std::max(duration, 1.0);
         m_fps = fps > 0.0 ? fps : 24.0;
-        updateGeometry();
+        updateContentSize();
         update();
     }
 
@@ -141,9 +144,18 @@ public:
 
     void setZoom(double zoom) {
         m_zoom = std::clamp(zoom, 0.35, 3.5);
-        updateGeometry();
+        m_fitWidth = 0;
+        updateContentSize();
         update();
     }
+
+    void fitToWidth(int width) {
+        m_fitWidth = std::max(kTimelineLabelWidth + 32, width);
+        updateContentSize();
+        update();
+    }
+
+    bool isFitToWidth() const { return m_fitWidth > 0; }
 
     void clearSkimmer() {
         if (!m_hasSkimmer) return;
@@ -152,7 +164,7 @@ public:
         update();
     }
 
-    QSize minimumSizeHint() const override { return QSize(kMinimumTimelineWidth, 190); }
+    QSize minimumSizeHint() const override { return minimumSize(); }
 
 signals:
     void seekRequested(double time);
@@ -163,11 +175,6 @@ signals:
     void trimRequested(const QString &clipId, bool leading, double timelineFrame);
 
 protected:
-    int heightForWidth(int) const override {
-        return kRulerHeight + std::max<qsizetype>(1, m_project.value(QStringLiteral("tracks")).toArray().size()) *
-                   kTrackHeight + 8;
-    }
-
     void paintEvent(QPaintEvent *event) override {
         const QRect visible = event->rect();
         QPainter p(this);
@@ -179,10 +186,6 @@ protected:
 
         const int trackCount = static_cast<int>(std::max<qsizetype>(1, m_project.value(QStringLiteral("tracks")).toArray().size()));
         const double pxPerSecond = pixelsPerSecond();
-        const int contentWidth = std::max(kMinimumTimelineWidth, kTimelineLabelWidth + static_cast<int>(m_duration * pxPerSecond) + 30);
-        if (contentWidth != minimumWidth()) {
-            setMinimumWidth(contentWidth);
-        }
 
         p.fillRect(0, 0, kTimelineLabelWidth, height(), QColor("#1b1b1b"));
         p.fillRect(kTimelineLabelWidth, 0, width() - kTimelineLabelWidth, kRulerHeight, QColor("#1d1d1d"));
@@ -196,11 +199,12 @@ protected:
         p.drawText(QRect(12, 0, kTimelineLabelWidth - 20, kRulerHeight), Qt::AlignVCenter,
                    QStringLiteral("TRACKS"));
 
-        const int majorStep = m_duration > 90.0 ? 10 : (m_duration > 36.0 ? 5 : 1);
+        const int majorStep = std::max(1, static_cast<int>(std::ceil(70.0 / pxPerSecond)));
         const int firstSecond = std::max(0, static_cast<int>(std::floor((visible.left() - kTimelineLabelWidth) / pxPerSecond)) - 1);
         const int lastSecond = std::min(static_cast<int>(std::ceil(m_duration)),
                                         static_cast<int>(std::ceil((visible.right() - kTimelineLabelWidth) / pxPerSecond)) + 1);
-        for (int second = firstSecond; second <= lastSecond; ++second) {
+        const int tickStep = pxPerSecond >= 10.0 ? 1 : majorStep;
+        for (int second = firstSecond / tickStep * tickStep; second <= lastSecond; second += tickStep) {
             const int x = kTimelineLabelWidth + static_cast<int>(second * pxPerSecond);
             const bool major = second % majorStep == 0;
             p.setPen(major ? QColor("#434343") : QColor("#2f2f2f"));
@@ -427,7 +431,17 @@ private:
         QRectF rect;
     };
 
-    double pixelsPerSecond() const { return 72.0 * m_zoom; }
+    void updateContentSize() {
+        const int tracks = static_cast<int>(m_project.value(QStringLiteral("tracks")).toArray().size());
+        const double contentWidth = kTimelineLabelWidth + m_duration * pixelsPerSecond() + 30;
+        setMinimumSize(static_cast<int>(std::min(contentWidth, 16777215.0)),
+                       kRulerHeight + std::max(3, tracks) * kTrackHeight + 8);
+        updateGeometry();
+    }
+
+    double pixelsPerSecond() const {
+        return m_fitWidth > 0 ? (m_fitWidth - kTimelineLabelWidth - 30.0) / m_duration : 72.0 * m_zoom;
+    }
 
     double timeAt(int x) const {
         return std::clamp((x - kTimelineLabelWidth) / pixelsPerSecond(), 0.0, m_duration);
@@ -514,6 +528,7 @@ private:
     double m_playhead = 0.0;
     double m_skimmerTime = 0.0;
     double m_zoom = 1.0;
+    int m_fitWidth = 0;
     double m_dragStart = 0.0;
     double m_dragDuration = 0.0;
     double m_pressTime = 0.0;
@@ -624,6 +639,7 @@ private:
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
+    friend class EditorTest;
 public:
     MainWindow(const QString &projectDirectory, const QString &cutdBinary, QWidget *parent = nullptr)
         : QMainWindow(parent), m_projectDirectory(projectDirectory), m_cutdBinary(cutdBinary) {
@@ -632,16 +648,16 @@ public:
         setMinimumSize(1080, 700);
         buildUi();
         setupActions();
+        setConnection(QStringLiteral("connecting"));
+#ifndef CUT_QT_TESTING
         m_bridge = cut_bridge_new(m_projectDirectory.toUtf8().constData(), m_cutdBinary.toUtf8().constData());
         if (!m_bridge) {
-            showError(QStringLiteral("Could not connect to cutd. Check the project directory and cutd binary."));
-        } else {
-            addActivity(QStringLiteral("system"), QStringLiteral("Connected to cutd"));
-            sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("refresh")}});
+            setConnection(QStringLiteral("disconnected"), QStringLiteral("Could not start the runtime connection."));
         }
         m_pollTimer.setInterval(16);
         connect(&m_pollTimer, &QTimer::timeout, this, &MainWindow::pollBridge);
         m_pollTimer.start();
+#endif
     }
 
     ~MainWindow() override {
@@ -661,7 +677,7 @@ private slots:
             if (doc.isObject()) handleEvent(doc.object());
         }
         CutFrame frame{};
-        if (cut_bridge_frame(m_bridge, &frame) && frame.pixels && frame.length > 0 && frame.width > 0 && frame.height > 0) {
+        if (cut_bridge_frame(m_bridge, &frame) && m_connected && frame.pixels && frame.length > 0 && frame.width > 0 && frame.height > 0) {
             const qsizetype expected = static_cast<qsizetype>(frame.width) * static_cast<qsizetype>(frame.height) * 4;
             if (expected > 0 && frame.length >= static_cast<size_t>(expected)) {
                 // A seek can leave one already decoded frame in the bridge's
@@ -682,20 +698,20 @@ private slots:
         const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Import media"), QString(),
                                                            QStringLiteral("Media files (*.mov *.mp4 *.m4v *.mkv *.webm *.wav *.mp3);;All files (*)"));
         if (path.isEmpty()) return;
-        sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("import")},
+        if (!sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("import")},
                                {QStringLiteral("path"), path},
-                               {QStringLiteral("revision"), QJsonValue::fromVariant(QVariant::fromValue(m_revision))}});
+                               {QStringLiteral("revision"), QJsonValue::fromVariant(QVariant::fromValue(m_revision))}})) return;
         addActivity(QStringLiteral("import"), QStringLiteral("Importing %1").arg(QFileInfo(path).fileName()));
     }
 
     void exportProject() {
         const QString quality = m_quality->currentData().toString();
-        sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("export")}, {QStringLiteral("quality"), quality}});
+        if (!sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("export")}, {QStringLiteral("quality"), quality}})) return;
         addActivity(QStringLiteral("export"), QStringLiteral("Export started (%1)").arg(m_quality->currentText()));
     }
 
     void renderPreview() {
-        sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("preview")}});
+        if (!sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("preview")}})) return;
         addActivity(QStringLiteral("preview"), QStringLiteral("Rendering preview"));
         m_previewButton->setEnabled(false);
     }
@@ -713,7 +729,7 @@ private slots:
     void refresh() { sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("refresh")}}); }
 
     void togglePlayback() {
-        if (m_previewRequired || m_duration <= 0) return;
+        if (!m_connected || m_previewRequired || m_duration <= 0) return;
         if (!m_playing && m_hoverSkimming) {
             // Skimming is a viewer-only preview. Restore the edit playhead
             // before starting playback so hover never changes its start point.
@@ -727,6 +743,7 @@ private slots:
     }
 
     void queueSeek(double time) {
+        if (!m_connected) return;
         m_hasPendingHoverSeek = false;
         m_hoverSkimming = false;
         m_timeline->clearSkimmer();
@@ -738,7 +755,7 @@ private slots:
     }
 
     void queueHoverSeek(double time) {
-        if (m_previewRequired || m_playing || m_duration <= 0.0) return;
+        if (!m_connected || m_previewRequired || m_playing || m_duration <= 0.0) return;
         m_pendingHoverSeek = std::clamp(time, 0.0, m_duration);
         m_hasPendingHoverSeek = true;
         m_hoverSkimming = true;
@@ -810,7 +827,7 @@ private slots:
 
     void updateChatControls() {
         const bool hasText = !m_chatInput->text().trimmed().isEmpty();
-        m_sendButton->setEnabled(hasText && !m_agentBusy);
+        m_sendButton->setEnabled(m_connected && hasText && !m_agentBusy);
         m_abortButton->setEnabled(m_agentBusy);
     }
 
@@ -906,6 +923,13 @@ private slots:
     }
 
 protected:
+    bool eventFilter(QObject *object, QEvent *event) override {
+        if (m_timelineScroll && object == m_timelineScroll->viewport() && event->type() == QEvent::Resize && m_timeline->isFitToWidth()) {
+            m_timeline->fitToWidth(m_timelineScroll->viewport()->width());
+        }
+        return QMainWindow::eventFilter(object, event);
+    }
+
     void keyPressEvent(QKeyEvent *event) override {
         if (event->key() == Qt::Key_S && m_timeline && m_timeline->hasFocus()) {
             splitClip();
@@ -918,16 +942,51 @@ protected:
 private:
     void buildUi() {
         auto *central = new QWidget(this);
-        auto *root = new QHBoxLayout(central);
+        auto *root = new QVBoxLayout(central);
         // Keep the editor chrome close to the canvas, as in a dedicated NLE.
         // Panels carry their own inset so the sequence remains the visual focus.
         root->setContentsMargins(8, 8, 8, 8);
         root->setSpacing(8);
 
+        m_connectionBanner = new QFrame;
+        m_connectionBanner->setObjectName(QStringLiteral("connectionBanner"));
+        auto *connectionLayout = new QHBoxLayout(m_connectionBanner);
+        m_connectionMessage = new QLabel;
+        m_connectionMessage->setWordWrap(true);
+        connectionLayout->addWidget(m_connectionMessage, 1);
+        m_reconnectButton = new QPushButton(QStringLiteral("Reconnect"));
+        connect(m_reconnectButton, &QPushButton::clicked, this, [this] {
+            setConnection(QStringLiteral("connecting"));
+            if (!m_bridge) {
+                m_bridge = cut_bridge_new(m_projectDirectory.toUtf8().constData(), m_cutdBinary.toUtf8().constData());
+                if (!m_bridge) setConnection(QStringLiteral("disconnected"), QStringLiteral("Could not start the runtime connection."));
+            } else if (!sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("reconnect")}})) {
+                setConnection(QStringLiteral("disconnected"), QStringLiteral("Reconnect could not be queued. Try again."));
+            }
+        });
+        connectionLayout->addWidget(m_reconnectButton);
+        root->addWidget(m_connectionBanner);
+
+        m_errorBanner = new QFrame;
+        m_errorBanner->setObjectName(QStringLiteral("errorBanner"));
+        auto *errorLayout = new QHBoxLayout(m_errorBanner);
+        m_errorMessage = new QLabel;
+        m_errorMessage->setWordWrap(true);
+        errorLayout->addWidget(m_errorMessage, 1);
+        auto *dismissError = new QPushButton(QStringLiteral("Dismiss"));
+        connect(dismissError, &QPushButton::clicked, m_errorBanner, &QWidget::hide);
+        errorLayout->addWidget(dismissError);
+        m_errorBanner->hide();
+        root->addWidget(m_errorBanner);
+
+        auto *workspace = new QSplitter(Qt::Horizontal);
+        workspace->setObjectName(QStringLiteral("workspaceSplitter"));
+        root->addWidget(workspace, 1);
+
         auto *left = new QWidget;
+        m_mediaPanel = left;
         left->setObjectName(QStringLiteral("panel"));
         left->setMinimumWidth(220);
-        left->setMaximumWidth(286);
         auto *leftLayout = new QVBoxLayout(left);
         leftLayout->setContentsMargins(14, 12, 14, 12);
         auto *mediaHeader = new QHBoxLayout;
@@ -959,13 +1018,20 @@ private:
         auto *centerLayout = new QVBoxLayout(center);
         centerLayout->setContentsMargins(0, 0, 0, 0);
         centerLayout->setSpacing(10);
+        auto *editorSplit = new QSplitter(Qt::Vertical);
+        editorSplit->setChildrenCollapsible(false);
+        centerLayout->addWidget(editorSplit);
         auto *viewerFrame = new QFrame;
         viewerFrame->setObjectName(QStringLiteral("viewerFrame"));
         auto *viewerLayout = new QVBoxLayout(viewerFrame);
         viewerLayout->setContentsMargins(0, 0, 0, 0);
         m_viewer = new ViewerWidget;
         viewerLayout->addWidget(m_viewer);
-        centerLayout->addWidget(viewerFrame, 4);
+        editorSplit->addWidget(viewerFrame);
+
+        auto *timelinePanel = new QWidget;
+        auto *timelinePanelLayout = new QVBoxLayout(timelinePanel);
+        timelinePanelLayout->setContentsMargins(0, 0, 0, 0);
 
         auto *transport = new QWidget;
         transport->setObjectName(QStringLiteral("transport"));
@@ -989,14 +1055,23 @@ private:
         m_timeLabel->setObjectName(QStringLiteral("timecode"));
         transportLayout->addWidget(m_timeLabel);
         transportLayout->addStretch();
-        transportLayout->addWidget(new QLabel(QStringLiteral("Timeline zoom")));
+        auto *fitButton = new QToolButton;
+        fitButton->setText(QStringLiteral("Fit"));
+        fitButton->setToolTip(QStringLiteral("Fit the entire timeline"));
+        connect(fitButton, &QToolButton::clicked, this, [this] {
+            m_timeline->fitToWidth(m_timelineScroll->viewport()->width());
+            m_timelineScroll->horizontalScrollBar()->setValue(0);
+        });
+        transportLayout->addWidget(fitButton);
         m_zoom = new QSlider(Qt::Horizontal);
         m_zoom->setRange(35, 350);
         m_zoom->setValue(100);
-        m_zoom->setFixedWidth(130);
+        m_zoom->setMaximumWidth(130);
+        m_zoom->setMinimumWidth(60);
+        m_zoom->setToolTip(QStringLiteral("Timeline zoom"));
         connect(m_zoom, &QSlider::valueChanged, this, [this](int value) { m_timeline->setZoom(value / 100.0); });
         transportLayout->addWidget(m_zoom);
-        centerLayout->addWidget(transport);
+        timelinePanelLayout->addWidget(transport);
 
         auto *timelineFrame = new QFrame;
         timelineFrame->setObjectName(QStringLiteral("timelineFrame"));
@@ -1004,17 +1079,21 @@ private:
         timelineLayout->setContentsMargins(0, 0, 0, 0);
         m_timeline = new TimelineWidget;
         auto *timelineScroll = new QScrollArea;
+        m_timelineScroll = timelineScroll;
         timelineScroll->setWidgetResizable(true);
         timelineScroll->setFrameShape(QFrame::NoFrame);
         timelineScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
         timelineScroll->setWidget(m_timeline);
+        timelineScroll->viewport()->installEventFilter(this);
         timelineLayout->addWidget(timelineScroll);
-        centerLayout->addWidget(timelineFrame, 2);
+        timelinePanelLayout->addWidget(timelineFrame, 1);
+        editorSplit->addWidget(timelinePanel);
+        editorSplit->setSizes({520, 280});
 
         auto *right = new QWidget;
+        m_agentPanel = right;
         right->setObjectName(QStringLiteral("panel"));
         right->setMinimumWidth(320);
-        right->setMaximumWidth(392);
         auto *rightLayout = new QVBoxLayout(right);
         rightLayout->setContentsMargins(14, 12, 14, 12);
         auto *agentHeader = new QHBoxLayout;
@@ -1044,11 +1123,13 @@ private:
         contextTitle->setObjectName(QStringLiteral("eyebrow"));
         m_agentConfigLabel = new QLabel;
         m_agentConfigLabel->setObjectName(QStringLiteral("agentConfig"));
+        m_agentConfigLabel->setWordWrap(true);
         contextHeader->addWidget(contextTitle);
         contextHeader->addStretch();
         contextHeader->addWidget(m_agentConfigLabel);
         contextLayout->addLayout(contextHeader);
         auto *contextHint = new QLabel(QStringLiteral("Project timeline and media are attached automatically."));
+        contextHint->setWordWrap(true);
         contextHint->setObjectName(QStringLiteral("muted"));
         contextLayout->addWidget(contextHint);
         chatLayout->addWidget(agentContext);
@@ -1070,26 +1151,26 @@ private:
         auto *composerLayout = new QVBoxLayout(composer);
         composerLayout->setContentsMargins(8, 7, 8, 7);
         composerLayout->setSpacing(6);
-        auto *agentPicker = new QHBoxLayout;
+        auto *agentPicker = new QFormLayout;
         agentPicker->setSpacing(6);
         auto *providerLabel = new QLabel(QStringLiteral("Provider"));
         providerLabel->setObjectName(QStringLiteral("muted"));
-        agentPicker->addWidget(providerLabel);
         m_providerSelect = new QComboBox;
         m_providerSelect->addItem(QStringLiteral("Anthropic"), QStringLiteral("anthropic"));
         m_providerSelect->addItem(QStringLiteral("OpenAI"), QStringLiteral("openai"));
         m_providerSelect->setObjectName(QStringLiteral("agentProvider"));
         m_providerSelect->setToolTip(QStringLiteral("Choose which configured provider handles this request"));
-        agentPicker->addWidget(m_providerSelect);
+        agentPicker->addRow(providerLabel, m_providerSelect);
         auto *modelLabel = new QLabel(QStringLiteral("Model"));
         modelLabel->setObjectName(QStringLiteral("muted"));
-        agentPicker->addWidget(modelLabel);
         m_modelSelect = new QComboBox;
         m_modelSelect->setEditable(true);
         m_modelSelect->setInsertPolicy(QComboBox::NoInsert);
+        m_modelSelect->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        m_modelSelect->setMinimumContentsLength(12);
         m_modelSelect->setObjectName(QStringLiteral("agentModel"));
         m_modelSelect->setToolTip(QStringLiteral("Select or type a model configured for this provider"));
-        agentPicker->addWidget(m_modelSelect, 1);
+        agentPicker->addRow(modelLabel, m_modelSelect);
         composerLayout->addLayout(agentPicker);
         auto *chatRow = new QHBoxLayout;
         chatRow->setContentsMargins(0, 0, 0, 0);
@@ -1150,8 +1231,10 @@ private:
         m_proposalSummary = new QLabel(QStringLiteral("No pending changes"));
         m_proposalSummary->setWordWrap(true);
         m_proposalSummary->setObjectName(QStringLiteral("proposalSummary"));
-        m_proposalDiff = new QLabel;
-        m_proposalDiff->setWordWrap(true);
+        m_proposalDiff = new QTextEdit;
+        m_proposalDiff->setReadOnly(true);
+        m_proposalDiff->setMinimumHeight(120);
+        m_proposalDiff->setMaximumHeight(240);
         m_proposalDiff->setObjectName(QStringLiteral("muted"));
         auto *proposalButtons = new QHBoxLayout;
         m_acceptButton = new QPushButton(QStringLiteral("Accept"));
@@ -1271,9 +1354,12 @@ private:
         connect(m_openaiModel, &QLineEdit::editingFinished, this, &MainWindow::saveAgentSettings);
         connect(m_openaiMode, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::saveAgentSettings);
 
-        root->addWidget(left, 0);
-        root->addWidget(center, 1);
-        root->addWidget(right, 0);
+        workspace->addWidget(left);
+        workspace->addWidget(center);
+        workspace->addWidget(right);
+        workspace->setCollapsible(1, false);
+        workspace->setStretchFactor(1, 1);
+        workspace->setSizes({240, 850, 360});
         setCentralWidget(central);
 
         connect(m_timeline, &TimelineWidget::seekRequested, this, &MainWindow::queueSeek);
@@ -1298,6 +1384,15 @@ private:
     }
 
     void setupActions() {
+        auto *view = menuBar()->addMenu(QStringLiteral("View"));
+        auto addPanelToggle = [view](const QString &title, QWidget *panel) {
+            auto *action = view->addAction(title);
+            action->setCheckable(true);
+            action->setChecked(true);
+            connect(action, &QAction::toggled, panel, &QWidget::setVisible);
+        };
+        addPanelToggle(QStringLiteral("Media bin"), m_mediaPanel);
+        addPanelToggle(QStringLiteral("Agent and inspector"), m_agentPanel);
         auto *file = menuBar()->addMenu(QStringLiteral("File"));
         auto *import = file->addAction(QStringLiteral("Import media…"));
         import->setShortcut(QKeySequence::Open);
@@ -1360,11 +1455,16 @@ private:
         m_previewButton = toolbar->addAction(QStringLiteral("Render preview"));
         m_previewButton->setEnabled(false);
         connect(m_previewButton, &QAction::triggered, this, &MainWindow::renderPreview);
+        m_runtimeActions = {import, exportAction, refreshAction, splitAction, deleteAction, play, split, deleteToolbar, exportToolbar};
     }
 
     QJsonValue revisionValue() const { return QJsonValue::fromVariant(QVariant::fromValue(m_revision)); }
 
     bool sendSimple(const QJsonObject &value) {
+        if (!m_connected && value.value(QStringLiteral("type")).toString() != QStringLiteral("reconnect") &&
+            value.value(QStringLiteral("type")).toString() != QStringLiteral("abort")) {
+            return false;
+        }
         if (!m_bridge) {
             showError(QStringLiteral("Runtime is not connected"));
             return false;
@@ -1391,7 +1491,9 @@ private:
 
     void handleEvent(QJsonObject event) {
         const QString type = event.value(QStringLiteral("type")).toString();
-        if (type == QStringLiteral("state")) {
+        if (type == QStringLiteral("connection")) {
+            setConnection(event.value(QStringLiteral("status")).toString(), event.value(QStringLiteral("message")).toString());
+        } else if (type == QStringLiteral("state")) {
             const QJsonObject snapshot = event.value(QStringLiteral("snapshot")).toObject().isEmpty()
                                               ? event.value(QStringLiteral("state")).toObject()
                                               : event.value(QStringLiteral("snapshot")).toObject();
@@ -1429,12 +1531,13 @@ private:
         } else if (type == QStringLiteral("agent_busy")) {
             const bool busy = event.value(QStringLiteral("busy")).toBool();
             m_agentBusy = busy;
-            if (busy) m_agentStatus->setText(QStringLiteral("THINKING"));
+            if (!m_connected) m_agentStatus->setText(QStringLiteral("OFFLINE"));
+            else if (busy) m_agentStatus->setText(QStringLiteral("THINKING"));
             else if (m_agentRunState == QStringLiteral("failed")) m_agentStatus->setText(QStringLiteral("FAILED"));
             else if (m_agentRunState == QStringLiteral("aborted")) m_agentStatus->setText(QStringLiteral("STOPPED"));
             else if (m_agentRunState == QStringLiteral("awaiting_review")) m_agentStatus->setText(QStringLiteral("REVIEW"));
             else m_agentStatus->setText(QStringLiteral("READY"));
-            m_chatInput->setEnabled(!busy);
+            m_chatInput->setEnabled(m_connected && !busy);
             updateChatControls();
         } else if (type == QStringLiteral("agent_state")) {
             const QString state = event.value(QStringLiteral("state")).toString();
@@ -1444,7 +1547,7 @@ private:
                                   : state == QStringLiteral("failed") ? QStringLiteral("FAILED")
                                   : state == QStringLiteral("aborted") ? QStringLiteral("STOPPED")
                                   : QStringLiteral("READY");
-            m_agentStatus->setText(label);
+            m_agentStatus->setText(m_connected ? label : QStringLiteral("OFFLINE"));
             if (state == QStringLiteral("failed")) {
                 appendConversationNote(QStringLiteral("Agent error"), event.value(QStringLiteral("message")).toString());
             }
@@ -1456,7 +1559,7 @@ private:
             }
             updateTransportTime();
         } else if (type == QStringLiteral("playback")) {
-            m_playing = event.value(QStringLiteral("playing")).toBool();
+            m_playing = m_connected && event.value(QStringLiteral("playing")).toBool();
             if (m_playing) {
                 m_hasPendingHoverSeek = false;
                 m_hoverSkimming = false;
@@ -1474,7 +1577,7 @@ private:
             const QString message = event.value(QStringLiteral("message")).toString();
             if (status == QStringLiteral("required") || status == QStringLiteral("unavailable")) {
                 m_previewRequired = true;
-                m_previewButton->setEnabled(status == QStringLiteral("required"));
+                m_previewButton->setEnabled(m_connected && status == QStringLiteral("required"));
                 m_playButton->setEnabled(false);
                 m_viewer->clearFrame();
                 statusBar()->showMessage(message.isEmpty() ? QStringLiteral("Rendered preview required") : message, 6000);
@@ -1487,7 +1590,7 @@ private:
             } else if (status == QStringLiteral("ready")) {
                 m_previewRequired = false;
                 m_previewButton->setEnabled(false);
-                m_playButton->setEnabled(true);
+                m_playButton->setEnabled(m_connected && m_duration > 0);
                 m_exportProgress->setValue(0);
                 statusBar()->showMessage(QStringLiteral("Preview ready"), 4000);
             }
@@ -1516,8 +1619,8 @@ private:
             track.insert("clips", displayClips); displayTracks.append(track);
         }
         m_project.insert("tracks", displayTracks);
-        m_undoAction->setEnabled(snapshot.value("canUndo").toBool());
-        m_redoAction->setEnabled(snapshot.value("canRedo").toBool());
+        m_undoAction->setEnabled(m_connected && snapshot.value("canUndo").toBool());
+        m_redoAction->setEnabled(m_connected && snapshot.value("canRedo").toBool());
         m_fps = m_project.value(QStringLiteral("fps")).toDouble(24.0);
         const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
         m_trackCount = tracks.size();
@@ -1525,14 +1628,19 @@ private:
         m_timeline->setProject(m_project, m_duration, m_fps);
         m_timeline->setSelectedClip(m_selectedClip);
         m_viewer->setProjectInfo(m_project.value(QStringLiteral("width")).toDouble(), m_project.value(QStringLiteral("height")).toDouble());
-        m_mediaList->clear();
-        for (const QJsonValue &value : snapshot.value(QStringLiteral("sources")).toArray()) {
-            const QJsonObject source = value.toObject();
-            auto *item = new QListWidgetItem(sourceName(source), m_mediaList);
-            item->setToolTip(source.value(QStringLiteral("path")).toString());
-            item->setData(Qt::UserRole, source.value(QStringLiteral("id")).toString());
+        const QJsonArray sources = snapshot.value(QStringLiteral("sources")).toArray();
+        if (sources != m_displayedSources) {
+            const QString selectedSource = m_mediaList->currentItem() ? m_mediaList->currentItem()->data(Qt::UserRole).toString() : QString();
+            m_mediaList->clear();
+            for (const QJsonValue &value : sources) {
+                const QJsonObject source = value.toObject();
+                auto *item = new QListWidgetItem(sourceName(source), m_mediaList);
+                item->setToolTip(source.value(QStringLiteral("path")).toString());
+                item->setData(Qt::UserRole, source.value(QStringLiteral("id")).toString());
+                if (item->data(Qt::UserRole).toString() == selectedSource) m_mediaList->setCurrentItem(item);
+            }
+            m_displayedSources = sources;
         }
-        m_exportProgress->setValue(0);
         updateProposal(snapshot.value(QStringLiteral("pendingProposal")));
         updateInspector();
         updateTransportTime();
@@ -1553,7 +1661,7 @@ private:
     void updateInspector() {
         m_updatingInspector = true;
         const QJsonObject clip = selectedClipObject();
-        const bool hasClip = !clip.isEmpty();
+        const bool hasClip = m_connected && !clip.isEmpty();
         m_inspectorClip->setText(hasClip ? clipName(clip) : QStringLiteral("Select a clip"));
         auto setSpin = [hasClip](QDoubleSpinBox *spin, double value) {
             spin->setEnabled(hasClip);
@@ -1573,8 +1681,8 @@ private:
     void updateProposal(const QJsonValue &value) {
         m_proposalId.clear();
         bool pending = value.isObject() && value.toObject().value(QStringLiteral("status")).toString() == QStringLiteral("pending");
-        m_acceptButton->setEnabled(pending);
-        m_rejectButton->setEnabled(pending);
+        m_acceptButton->setEnabled(m_connected && pending);
+        m_rejectButton->setEnabled(m_connected && pending);
         m_proposalBox->setVisible(pending);
         if (!pending) {
             m_proposalSummary->setText(QStringLiteral("No pending changes"));
@@ -1589,13 +1697,85 @@ private:
                                        .arg(diff.size())
                                        .arg(diff.size() == 1 ? QString() : QStringLiteral("s"))
                                        .arg(stale ? QStringLiteral("  •  stale") : QString()));
-        QStringList lines;
-        for (int i = 0; i < static_cast<int>(std::min<qsizetype>(4, diff.size())); ++i) {
-            const QJsonObject change = diff.at(i).toObject();
-            lines << QStringLiteral("%1  %2").arg(change.value(QStringLiteral("kind")).toString(), change.value(QStringLiteral("path")).toString());
+        auto displayValue = [](const QJsonValue &entry) {
+            if (entry.isUndefined()) return QStringLiteral("—");
+            if (entry.isString()) return entry.toString();
+            if (entry.isObject()) {
+                const auto object = entry.toObject();
+                if (object.contains(QStringLiteral("start")) && object.contains(QStringLiteral("end")))
+                    return QStringLiteral("%1 – %2").arg(prettyTime(object.value(QStringLiteral("start")).toDouble()), prettyTime(object.value(QStringLiteral("end")).toDouble()));
+                return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Indented));
+            }
+            if (entry.isArray()) return QString::fromUtf8(QJsonDocument(entry.toArray()).toJson(QJsonDocument::Indented));
+            const QByteArray encoded = QJsonDocument(QJsonArray{entry}).toJson(QJsonDocument::Compact);
+            return QString::fromUtf8(encoded.mid(1, encoded.size() - 2));
+        };
+        auto entityName = [this](const QString &id) {
+            for (const auto &trackValue : m_project.value(QStringLiteral("tracks")).toArray()) {
+                const auto track = trackValue.toObject();
+                if (track.value(QStringLiteral("id")).toString() == id) return track.value(QStringLiteral("name")).toString(id);
+                for (const auto &clipValue : track.value(QStringLiteral("clips")).toArray()) {
+                    const auto clip = clipValue.toObject();
+                    if (clip.value(QStringLiteral("id")).toString() == id) return clipName(clip);
+                }
+            }
+            return id;
+        };
+        QString html;
+        if (stale) html += QStringLiteral("<p><b>This proposal is out of date. Ask Cut to prepare it again before accepting.</b></p>");
+        const auto impacts = proposal.value(QStringLiteral("impacts")).toArray();
+        for (const auto &entry : impacts) {
+            const auto impact = entry.toObject();
+            QString kind = impact.value(QStringLiteral("kind")).toString();
+            kind.replace(QLatin1Char('_'), QLatin1Char(' '));
+            const QString id = impact.value(QStringLiteral("clipId")).toString(impact.value(QStringLiteral("trackId")).toString());
+            html += QStringLiteral("<p><b>%1%2</b>").arg(kind.toHtmlEscaped(), id.isEmpty() ? QString() : QStringLiteral(" · ") + entityName(id).toHtmlEscaped());
+            if (impact.contains(QStringLiteral("property"))) html += QStringLiteral("<br/>%1").arg(impact.value(QStringLiteral("property")).toString().toHtmlEscaped());
+            for (const QString &key : {QStringLiteral("timeline"), QStringLiteral("source"), QStringLiteral("from"), QStringLiteral("to"), QStringLiteral("before"), QStringLiteral("after"), QStringLiteral("sourceBefore"), QStringLiteral("sourceAfter")}) {
+                if (impact.contains(key)) html += QStringLiteral("<br/>%1: %2").arg(key.toHtmlEscaped(), displayValue(impact.value(key)).toHtmlEscaped());
+            }
+            html += QStringLiteral("</p>");
         }
-        m_proposalDiff->setText(lines.join(QStringLiteral("\n")));
-        m_acceptButton->setEnabled(!stale);
+        html += QStringLiteral("<p><b>All field changes</b></p>");
+        for (const auto &entry : diff) {
+            const auto change = entry.toObject();
+            const QString path = change.value(QStringLiteral("path")).toString();
+            QStringList parts;
+            QString part;
+            bool escaped = false;
+            for (const QChar ch : path.mid(path.startsWith(QLatin1Char('$')) ? 1 : 0)) {
+                if (escaped) { part += ch; escaped = false; }
+                else if (ch == QLatin1Char('\\')) escaped = true;
+                else if (ch == QLatin1Char('.') || ch == QLatin1Char('[') || ch == QLatin1Char(']')) {
+                    if (!part.isEmpty()) { parts << part; part.clear(); }
+                } else part += ch;
+            }
+            if (!part.isEmpty()) parts << part;
+            QStringList labels;
+            QJsonValue current(m_project);
+            for (const QString &part : parts) {
+                if (current.isArray()) {
+                    bool valid = false;
+                    const int index = part.toInt(&valid);
+                    const auto array = current.toArray();
+                    current = valid && index >= 0 && index < array.size() ? array.at(index) : QJsonValue();
+                    const auto object = current.toObject();
+                    labels << (object.contains(QStringLiteral("id")) ? entityName(object.value(QStringLiteral("id")).toString()) : part);
+                } else {
+                    current = current.toObject().value(part);
+                    labels << part;
+                }
+            }
+            html += QStringLiteral("<p><b>%1</b><br/>Before: %2<br/>After: %3</p>")
+                .arg(labels.isEmpty() ? QStringLiteral("Project") : labels.join(QStringLiteral(" › ")).toHtmlEscaped(),
+                     displayValue(change.value(QStringLiteral("before"))).toHtmlEscaped(),
+                     displayValue(change.value(QStringLiteral("after"))).toHtmlEscaped());
+        }
+        const bool truncated = proposal.value(QStringLiteral("diffTruncated")).toBool();
+        if (truncated) html += QStringLiteral("<p><b>This proposal is too large to review completely. Ask Cut to split it into smaller changes.</b></p>");
+        m_proposalDiff->setHtml(html);
+        m_acceptButton->setEnabled(m_connected && !stale && !truncated);
+        m_acceptButton->setToolTip(truncated ? QStringLiteral("Split this proposal into smaller changes to review all fields") : QString());
     }
 
     void appendConversation(const QString &speaker, const QString &text) {
@@ -1657,9 +1837,42 @@ private:
     }
 
     void showError(const QString &message) {
-        statusBar()->showMessage(message, 6000);
-        appendConversation(QStringLiteral("Error"), message);
-        addActivity(QStringLiteral("error"), message);
+        m_errorMessage->setText(message);
+        m_errorBanner->show();
+    }
+
+    void setConnection(const QString &status, const QString &message = QString()) {
+        const bool wasConnected = m_connected;
+        m_connected = status == QStringLiteral("ready");
+        m_connectionBanner->setVisible(!m_connected);
+        m_reconnectButton->setEnabled(status == QStringLiteral("disconnected"));
+        m_connectionMessage->setText(status == QStringLiteral("connecting") ? QStringLiteral("Connecting to project…")
+            : QStringLiteral("Project disconnected. %1").arg(message));
+        m_agentStatus->setText(m_connected ? (m_agentBusy ? QStringLiteral("THINKING") : QStringLiteral("READY"))
+            : status == QStringLiteral("connecting") ? QStringLiteral("CONNECTING") : QStringLiteral("OFFLINE"));
+        m_mediaPanel->setEnabled(m_connected);
+        m_timeline->setEnabled(m_connected);
+        m_chatInput->setEnabled(m_connected && !m_agentBusy);
+        for (auto *action : m_runtimeActions) action->setEnabled(m_connected);
+        m_undoAction->setEnabled(m_connected && m_snapshot.value(QStringLiteral("canUndo")).toBool());
+        m_redoAction->setEnabled(m_connected && m_snapshot.value(QStringLiteral("canRedo")).toBool());
+        m_playButton->setEnabled(m_connected && !m_previewRequired && m_duration > 0);
+        m_previewButton->setEnabled(m_connected && m_previewRequired);
+        if (!m_connected) {
+            m_playing = false;
+            m_playButton->setText(QStringLiteral("▶"));
+            m_hasPendingSeek = false;
+            m_hasPendingHoverSeek = false;
+            m_hoverSkimming = false;
+            m_timeline->clearSkimmer();
+            m_viewer->clearFrame();
+            m_viewer->setCaption(QString());
+        } else if (!wasConnected) {
+            addActivity(QStringLiteral("system"), QStringLiteral("Project connected"));
+        }
+        updateInspector();
+        updateProposal(m_snapshot.value(QStringLiteral("pendingProposal")));
+        updateChatControls();
     }
 
     void updateTransportTime() {
@@ -1672,9 +1885,20 @@ private:
     QTimer m_pollTimer;
     QJsonObject m_snapshot;
     QJsonObject m_project;
+    QJsonArray m_displayedSources;
+    bool m_connected = false;
+    QFrame *m_connectionBanner = nullptr;
+    QLabel *m_connectionMessage = nullptr;
+    QPushButton *m_reconnectButton = nullptr;
+    QFrame *m_errorBanner = nullptr;
+    QLabel *m_errorMessage = nullptr;
+    QWidget *m_mediaPanel = nullptr;
+    QWidget *m_agentPanel = nullptr;
+    QScrollArea *m_timelineScroll = nullptr;
+    QList<QAction *> m_runtimeActions;
     quint64 m_revision = 0;
     int m_trackCount = 0;
-    double m_duration = 1.0;
+    double m_duration = 0.0;
     double m_fps = 24.0;
     double m_playhead = 0.0;
     double m_pendingSeek = 0.0;
@@ -1713,7 +1937,7 @@ private:
     QListWidget *m_activityList = nullptr;
     QLabel *m_agentStatus = nullptr;
     QLabel *m_proposalSummary = nullptr;
-    QLabel *m_proposalDiff = nullptr;
+    QTextEdit *m_proposalDiff = nullptr;
     QPushButton *m_acceptButton = nullptr;
     QPushButton *m_rejectButton = nullptr;
     QGroupBox *m_proposalBox = nullptr;
@@ -1735,17 +1959,108 @@ private:
     QAction *m_previewButton = nullptr;
 };
 
+#ifdef CUT_QT_TESTING
+class EditorTest final : public QObject {
+    Q_OBJECT
+private slots:
+    void disconnectedControlsAndRecovery() {
+        MainWindow window{QString(), QString()};
+        QCOMPARE(window.m_agentStatus->text(), QStringLiteral("CONNECTING"));
+        QVERIFY(!window.m_sendButton->isEnabled());
+        window.handleEvent(QJsonObject{{"type", "connection"}, {"status", "disconnected"}, {"message", "Daemon unavailable"}});
+        QCOMPARE(window.m_agentStatus->text(), QStringLiteral("OFFLINE"));
+        QVERIFY(window.m_reconnectButton->isEnabled());
+        QVERIFY(!window.m_mediaPanel->isEnabled());
+        QVERIFY(!window.m_connectionBanner->isHidden());
+        QVERIFY(window.m_connectionMessage->text().contains(QStringLiteral("Daemon unavailable")));
+        window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", false}});
+        QCOMPARE(window.m_agentStatus->text(), QStringLiteral("OFFLINE"));
+        window.handleEvent(QJsonObject{{"type", "connection"}, {"status", "ready"}});
+        QVERIFY(window.m_connectionBanner->isHidden());
+        QVERIFY(window.m_mediaPanel->isEnabled());
+        window.m_chatInput->setText(QStringLiteral("테스트 편집"));
+        QVERIFY(window.m_sendButton->isEnabled());
+        const auto conversation = window.m_conversation->toPlainText();
+        const int activityCount = window.m_activityList->count();
+        window.showError(QStringLiteral("Render failed"));
+        window.showError(QStringLiteral("Render failed"));
+        QCOMPARE(window.m_conversation->toPlainText(), conversation);
+        QCOMPARE(window.m_activityList->count(), activityCount);
+        QCOMPARE(window.m_errorMessage->text(), QStringLiteral("Render failed"));
+    }
+
+    void timelineFitsAndAllTracksRemainReachable() {
+        QScrollArea scroll;
+        scroll.resize(640, 230);
+        scroll.setWidgetResizable(true);
+        auto *timeline = new TimelineWidget;
+        scroll.setWidget(timeline);
+        scroll.show();
+        QTest::qWait(20);
+        QCOMPARE(scroll.horizontalScrollBar()->maximum(), 0);
+        QJsonArray tracks;
+        for (int i = 0; i < 12; ++i) tracks.append(QJsonObject{{"id", QString::number(i)}, {"clips", QJsonArray{}}});
+        timeline->setProject(QJsonObject{{"tracks", tracks}}, 3600, 24);
+        timeline->fitToWidth(scroll.viewport()->width());
+        QTest::qWait(20);
+        // The vertical scrollbar changes the available width.
+        timeline->fitToWidth(scroll.viewport()->width());
+        QTest::qWait(20);
+        QCOMPARE(scroll.horizontalScrollBar()->maximum(), 0);
+        QVERIFY(scroll.verticalScrollBar()->maximum() > 0);
+        QVERIFY(timeline->minimumHeight() >= kRulerHeight + 12 * kTrackHeight);
+        timeline->setZoom(1.0);
+        QTest::qWait(20);
+        QVERIFY(scroll.horizontalScrollBar()->maximum() > 0);
+    }
+
+    void proposalShowsAllChangesAndGuardsIncompleteReview() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.m_project = QJsonObject{{"tracks", QJsonArray{QJsonObject{{"id", "video"}, {"clips", QJsonArray{QJsonObject{{"id", "clip-1"}, {"name", "Opening shot"}}}}}}}};
+        QJsonArray diff;
+        for (int i = 0; i < 6; ++i) diff.append(QJsonObject{{"path", QStringLiteral("$.metadata.field%1").arg(i)}, {"before", i}, {"after", i + 10}});
+        diff.append(QJsonObject{{"path", "$.metadata.name"}, {"before", "old"}, {"after", "<b>literal</b>"}});
+        diff.append(QJsonObject{{"path", "$.tracks[0].clips[0].out"}, {"before", 8}, {"after", 4}});
+        diff.append(QJsonObject{{"path", "$.tracks[1]"}, {"after", QJsonObject{{"id", "new-track"}, {"clips", QJsonArray{}}}}});
+        QJsonObject proposal{{"status", "pending"}, {"proposalId", "proposal-1"}, {"diff", diff}, {"impacts", QJsonArray{QJsonObject{{"kind", "clip_trimmed"}, {"clipId", "clip-1"}, {"before", QJsonObject{{"start", 0}, {"end", 8}}}, {"after", QJsonObject{{"start", 0}, {"end", 4}}}}}}};
+        window.updateProposal(proposal);
+        const auto text = window.m_proposalDiff->toPlainText();
+        QVERIFY(text.contains(QStringLiteral("field5")));
+        QVERIFY(text.contains(QStringLiteral("After: 15")));
+        QVERIFY(text.contains(QStringLiteral("Opening shot")));
+        QVERIFY(text.contains(QStringLiteral("Opening shot › out")));
+        QVERIFY(text.contains(QStringLiteral("new-track")));
+        QVERIFY(text.contains(QStringLiteral("00:04.00")));
+        QVERIFY(text.contains(QStringLiteral("<b>literal</b>")));
+        QVERIFY(window.m_acceptButton->isEnabled());
+        proposal.insert(QStringLiteral("freshness"), QStringLiteral("stale"));
+        window.updateProposal(proposal);
+        QVERIFY(!window.m_acceptButton->isEnabled());
+        proposal.remove(QStringLiteral("freshness"));
+        proposal.insert(QStringLiteral("diffTruncated"), true);
+        window.updateProposal(proposal);
+        QVERIFY(!window.m_acceptButton->isEnabled());
+        QVERIFY(window.m_proposalDiff->toPlainText().contains(QStringLiteral("smaller changes")));
+    }
+};
+#endif
+
 } // namespace
 
 #include "main.moc"
 
+#ifdef CUT_QT_TESTING
+QTEST_MAIN(EditorTest)
+#else
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("Cut"));
     QApplication::setOrganizationName(QStringLiteral("Cut"));
     app.setStyle(QStringLiteral("Fusion"));
     app.setStyleSheet(QStringLiteral(
-        "* { color: #dedede; font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif; font-size: 12px; }"
+        "QFrame#connectionBanner, QFrame#errorBanner { background: #392b22; border: 1px solid #a7794e; border-radius: 5px; }"
+        "* { color: #dedede; font-size: 12px; }"
         "QMainWindow, QWidget { background: #111111; } QLabel { background: transparent; }"
         "QMenuBar { background: #181818; border-bottom: 1px solid #2b2b2b; padding: 4px 9px; }"
         "QMenuBar::item { padding: 5px 10px; border-radius: 4px; } QMenuBar::item:selected { background: #2d2d2d; }"
@@ -1763,6 +2078,7 @@ int main(int argc, char **argv) {
         "QToolButton#squareButton { padding: 2px 9px; font-size: 18px; color: #c5c5c5; }"
         "QToolButton#playButton { background: #b0b0b0; border-color: #d0d0d0; border-radius: 6px; color: #131313; font-size: 15px; padding: 5px 16px; }"
         "QToolButton#playButton:hover { background: #c8c8c8; }"
+        "QToolButton#playButton:disabled, QPushButton#primaryButton:disabled { background: #202020; color: #676767; border-color: #2f2f2f; }"
         "QWidget#panel { background: #1b1b1b; border: 1px solid #373737; border-radius: 6px; }"
         "QFrame#agentContext { background: #202020; border: 1px solid #3c3c3c; border-radius: 6px; } QLabel#agentConfig { color: #d0d0d0; font-size: 10px; font-weight: 600; }"
         "QFrame#viewerFrame, QFrame#timelineFrame { background: #0c0c0c; border: 1px solid #373737; border-radius: 6px; }"
@@ -1833,3 +2149,4 @@ int main(int argc, char **argv) {
     }
     return app.exec();
 }
+#endif

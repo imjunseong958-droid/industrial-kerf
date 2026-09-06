@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, ChildStderr, Command, Stdio};
 use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::SystemTime;
 
@@ -753,14 +753,37 @@ fn decode_waveform_buckets(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let mut stdout = child.stdout.take().ok_or_else(|| {
-        crate::error::EngineError::msg("ffmpeg waveform decoder did not expose stdout")
-    })?;
+    let mut stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            reap_waveform_child(&mut child);
+            return Err(crate::error::EngineError::msg(
+                "ffmpeg waveform decoder did not expose stdout",
+            ));
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            reap_waveform_child(&mut child);
+            return Err(crate::error::EngineError::msg(
+                "ffmpeg waveform decoder did not expose stderr",
+            ));
+        }
+    };
+    let stderr_reader = drain_waveform_stderr(stderr);
     let mut buf = vec![0_u8; 64 * 1024];
     let mut leftover = Vec::new();
     let mut index = 0usize;
+    let mut read_error = None;
     loop {
-        let read = stdout.read(&mut buf)?;
+        let read = match stdout.read(&mut buf) {
+            Ok(read) => read,
+            Err(error) => {
+                read_error = Some(error);
+                break;
+            }
+        };
         if read == 0 {
             break;
         }
@@ -785,11 +808,24 @@ fn decode_waveform_buckets(
         leftover.drain(..usable);
     }
     drop(stdout);
-    let status = child.wait()?;
+    if let Some(error) = read_error {
+        reap_waveform_child_with_stderr(&mut child, stderr_reader);
+        return Err(error.into());
+    }
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(error) => {
+            reap_waveform_child_with_stderr(&mut child, stderr_reader);
+            return Err(error.into());
+        }
+    };
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| crate::error::EngineError::msg("ffmpeg stderr reader panicked"))??;
     if !status.success() {
-        return Err(crate::error::EngineError::msg(
-            "ffmpeg failed while decoding waveform samples",
-        ));
+        return Err(crate::error::EngineError::msg(waveform_decode_error(
+            &stderr,
+        )));
     }
     if index == 0 {
         return Err(crate::error::EngineError::msg(
@@ -823,6 +859,59 @@ fn decode_waveform_buckets(
             }
         })
         .collect())
+}
+
+const MAX_WAVEFORM_STDERR_BYTES: usize = 16 * 1024;
+
+fn drain_waveform_stderr(stderr: ChildStderr) -> std::thread::JoinHandle<std::io::Result<Vec<u8>>> {
+    std::thread::spawn(move || drain_waveform_stderr_tail(stderr))
+}
+
+fn drain_waveform_stderr_tail(mut stderr: impl Read) -> std::io::Result<Vec<u8>> {
+    let mut retained = Vec::with_capacity(MAX_WAVEFORM_STDERR_BYTES);
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let read = stderr.read(&mut buffer)?;
+        if read == 0 {
+            return Ok(retained);
+        }
+        if read >= MAX_WAVEFORM_STDERR_BYTES {
+            retained.clear();
+            retained.extend_from_slice(&buffer[read - MAX_WAVEFORM_STDERR_BYTES..read]);
+            continue;
+        }
+        let overflow = retained
+            .len()
+            .saturating_add(read)
+            .saturating_sub(MAX_WAVEFORM_STDERR_BYTES);
+        if overflow > 0 {
+            retained.drain(..overflow);
+        }
+        retained.extend_from_slice(&buffer[..read]);
+    }
+}
+
+fn reap_waveform_child(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn reap_waveform_child_with_stderr(
+    child: &mut Child,
+    stderr_reader: std::thread::JoinHandle<std::io::Result<Vec<u8>>>,
+) {
+    reap_waveform_child(child);
+    let _ = stderr_reader.join();
+}
+
+fn waveform_decode_error(stderr: &[u8]) -> String {
+    let diagnostics = String::from_utf8_lossy(stderr);
+    let diagnostics = diagnostics.trim();
+    if diagnostics.is_empty() {
+        "ffmpeg failed while decoding waveform samples".to_string()
+    } else {
+        format!("ffmpeg failed while decoding waveform samples: {diagnostics}")
+    }
 }
 
 fn waveform_buckets_from_counts(
@@ -1008,6 +1097,7 @@ pub fn cached_waveform_range(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     #[test]
     fn pairs_silence_start_end() {
@@ -1116,5 +1206,43 @@ mod tests {
         let error = cached_waveform_range("/missing.wav", &cache, 8, false, 800, 120, 4.0, 4.0)
             .expect_err("equal bounds");
         assert!(error.to_string().contains("0 <= start < end"));
+    }
+
+    #[test]
+    fn waveform_stderr_tail_is_bounded_and_keeps_latest_diagnostics() {
+        let mut input = vec![b'x'; MAX_WAVEFORM_STDERR_BYTES * 4];
+        input.extend_from_slice(b"final ffmpeg error");
+        let retained = drain_waveform_stderr_tail(Cursor::new(input)).expect("read stderr");
+
+        assert!(retained.len() <= MAX_WAVEFORM_STDERR_BYTES);
+        assert!(String::from_utf8_lossy(&retained).ends_with("final ffmpeg error"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn waveform_stderr_is_drained_while_stdout_is_read() {
+        let mut child = Command::new("sh")
+            .args([
+                "-c",
+                "head -c 131072 /dev/zero >&2; printf '\\000\\000\\000\\000'; exit 1",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn test child");
+        let stderr = child.stderr.take().expect("stderr pipe");
+        let stderr_reader = drain_waveform_stderr(stderr);
+        let mut stdout = child.stdout.take().expect("stdout pipe");
+        let mut output = Vec::new();
+        stdout.read_to_end(&mut output).expect("read stdout");
+        let status = child.wait().expect("wait test child");
+        let stderr = stderr_reader
+            .join()
+            .expect("stderr reader thread")
+            .expect("read stderr");
+
+        assert!(!status.success());
+        assert_eq!(output.len(), 4);
+        assert_eq!(stderr.len(), MAX_WAVEFORM_STDERR_BYTES);
     }
 }

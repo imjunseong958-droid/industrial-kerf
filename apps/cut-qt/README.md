@@ -28,9 +28,34 @@ seeking, and export are sent as bounded asynchronous bridge commands.
 
 The timeline supports click-to-seek, clip selection, drag-to-move, edge
 trimming, split-at-playhead, and Delete. Inspector values commit on focus loss.
+Drag the panel dividers to resize the workspace, use View to hide either side
+panel, and use Fit to show the entire timeline. All tracks remain vertically
+scrollable when their combined height exceeds the timeline panel.
+
+The connection banner reports connection progress and offers Reconnect after
+a failure. Editing controls become available only after a successful project
+snapshot. Changes made through CLI or MCP are checked every 500 ms while idle;
+unchanged snapshots do not redraw the UI or reopen playback.
+
+Proposal review shows semantic clip changes, time ranges, and all supplied
+before/after field values in a scrollable view. Stale proposals and proposals
+whose field diff was truncated cannot be accepted; ask the agent to restage
+or split them into smaller changes.
 
 The Agent panel includes a Chat view and an Agent settings view. Configure
 Anthropic and OpenAI independently with an API key, Base URL, model, and (for
 OpenAI) Chat Completions or Responses mode. The provider and model picker in
 Chat are sent with each request, so changing them takes effect immediately;
 the existing environment variables remain available as fallbacks.
+
+Run the Qt behavior tests after configuring with `-DCUT_QT_BUILD_TESTS=ON`:
+
+```sh
+cmake --build target/qt --parallel 2
+ctest --test-dir target/qt --output-on-failure
+```
+
+The tests cover disconnected controls, reconnection state, error deduplication,
+long timeline fit, scrolling through many tracks, and complete proposal review.
+The macOS CI job also runs the real bridge/media workflow in
+`scripts/test-cut-qt-bridge.py`.
