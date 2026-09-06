@@ -35,7 +35,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Install native media and Qt dependencies
-        run: brew install ffmpeg qt pkg-config cmake
+        run: |
+          brew install ffmpeg@8 qt pkg-config cmake
+          ffmpeg_prefix="$(brew --prefix ffmpeg@8)"
+          echo "$ffmpeg_prefix/bin" >> "$GITHUB_PATH"
+          echo "FFMPEG_DIR=$ffmpeg_prefix" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$ffmpeg_prefix/lib/pkgconfig" >> "$GITHUB_ENV"
       - name: Check bridge and playback
         run: cargo check -p cut-qt-bridge -p cut-playback --all-targets
       - name: Test runtime and bridge
