@@ -703,12 +703,12 @@ protected:
             if (canvasSize.height() > target.height())
                 canvasSize = QSizeF(target.height() * aspect, target.height());
             const QRectF canvas(target.center() - QPointF(canvasSize.width() / 2, canvasSize.height() / 2), canvasSize);
-            p.setPen(QColor("#454545"));
-            p.setBrush(QColor("#333333"));
+            p.setPen(QColor("#303030"));
+            p.setBrush(QColor("#171717"));
             p.drawRect(canvas.adjusted(0.5, 0.5, -0.5, -0.5));
             const QPointF center = canvas.center() - QPointF(0, 22);
             p.setPen(QColor("#363636"));
-            p.setBrush(QColor("#393939"));
+            p.setBrush(QColor("#252525"));
             p.drawEllipse(center, 20, 20);
             p.setPen(QColor("#626262"));
             p.setBrush(Qt::NoBrush);
@@ -721,7 +721,7 @@ protected:
                        QStringLiteral("Your viewer"));
             p.setPen(QColor("#747474"));
             p.drawText(QRectF(target.left(), center.y() + 52, target.width(), 20), Qt::AlignCenter,
-                       QStringLiteral("Select media to preview"));
+                       QStringLiteral("Import media or render a preview"));
         }
         p.setPen(QColor("#a0a0a0"));
         QFont viewerFont = p.font();
@@ -920,7 +920,7 @@ private slots:
     }
 
     void sendChat() {
-        const QString text = m_chatInput->text().trimmed();
+        const QString text = m_chatInput->toPlainText().trimmed();
         if (text.isEmpty()) return;
         const QJsonObject settings = agentSettingsPayload();
         if (!sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("agent")},
@@ -943,9 +943,11 @@ private slots:
     }
 
     void updateChatControls() {
-        const bool hasText = !m_chatInput->text().trimmed().isEmpty();
+        const bool hasText = !m_chatInput->toPlainText().trimmed().isEmpty();
         m_sendButton->setEnabled(m_connected && hasText && !m_agentBusy);
         m_abortButton->setEnabled(m_agentBusy);
+        m_abortButton->setVisible(m_agentBusy);
+        m_sendButton->setVisible(!m_agentBusy);
     }
 
     QJsonObject agentSettingsPayload() const {
@@ -1041,6 +1043,14 @@ private slots:
 
 protected:
     bool eventFilter(QObject *object, QEvent *event) override {
+        if (object == m_chatInput && event->type() == QEvent::KeyPress) {
+            auto *key = static_cast<QKeyEvent *>(event);
+            if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) &&
+                !(key->modifiers() & Qt::ShiftModifier)) {
+                if (m_sendButton->isEnabled()) sendChat();
+                return true;
+            }
+        }
         if (m_timelineScroll && object == m_timelineScroll->viewport() && event->type() == QEvent::Resize && m_timeline->isFitToWidth()) {
             m_timeline->fitToWidth(m_timelineScroll->viewport()->width());
         }
@@ -1104,10 +1114,10 @@ private:
         auto *mediaShelf = new QFrame;
         m_mediaPanel = mediaShelf;
         mediaShelf->setObjectName(QStringLiteral("mediaShelf"));
-        mediaShelf->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-        mediaShelf->setMaximumHeight(120);
+        mediaShelf->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+        mediaShelf->setMinimumWidth(180);
         auto *mediaShelfLayout = new QVBoxLayout(mediaShelf);
-        mediaShelfLayout->setContentsMargins(8, 2, 8, 2);
+        mediaShelfLayout->setContentsMargins(10, 4, 10, 4);
         mediaShelfLayout->setSpacing(2);
         auto *mediaHeader = new QHBoxLayout;
         auto *mediaTitle = new QLabel(QStringLiteral("Media"));
@@ -1123,21 +1133,22 @@ private:
         auto *mediaToggle = new QToolButton;
         m_mediaToggle = mediaToggle;
         mediaToggle->setText(QStringLiteral("▾"));
-        mediaToggle->setToolTip(QStringLiteral("Collapse media bin"));
+        mediaToggle->setToolTip(QStringLiteral("Expand media bin"));
         mediaToggle->setObjectName(QStringLiteral("mediaToggle"));
-        mediaHeader->addWidget(mediaToggle);
+        mediaToggle->hide();
         mediaShelfLayout->addLayout(mediaHeader);
         m_mediaList = new QListWidget;
         m_mediaList->setObjectName(QStringLiteral("mediaList"));
         m_mediaList->setSelectionMode(QAbstractItemView::SingleSelection);
         m_mediaList->setFlow(QListView::LeftToRight);
-        m_mediaList->setWrapping(false);
+        m_mediaList->setWrapping(true);
         m_mediaList->setViewMode(QListView::IconMode);
         m_mediaList->setResizeMode(QListView::Adjust);
-        m_mediaList->setIconSize(QSize(96, 54));
-        m_mediaList->setGridSize(QSize(112, 78));
+        m_mediaList->setIconSize(QSize(112, 63));
+        m_mediaList->setGridSize(QSize(128, 88));
         m_mediaList->setMovement(QListView::Static);
-        m_mediaList->setFixedHeight(84);
+        m_mediaList->setMinimumHeight(90);
+        m_mediaList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         connect(m_artwork, &MediaArtwork::changed, this, [this] {
             for (int i = 0; i < m_mediaList->count(); ++i) {
                 auto *item = m_mediaList->item(i);
@@ -1146,7 +1157,7 @@ private:
             }
         });
         auto *mediaList = m_mediaList;
-        mediaShelfLayout->addWidget(m_mediaList);
+        mediaShelfLayout->addWidget(m_mediaList, 1);
         auto *mediaHint = new QLabel(QStringLiteral("Import media to add clips to the timeline."));
         m_mediaHint = mediaHint;
         mediaHint->setObjectName(QStringLiteral("muted"));
@@ -1155,9 +1166,6 @@ private:
         auto *trackButton = new QPushButton(QStringLiteral("+ Track"));
         trackButton->setObjectName(QStringLiteral("secondaryButton"));
         connect(trackButton, &QPushButton::clicked, this, &MainWindow::addTrack);
-        mediaHeader->addWidget(trackButton);
-        m_mediaList->hide();
-        mediaHint->hide();
         mediaToggle->setText(QStringLiteral("▸"));
         connect(mediaToggle, &QToolButton::clicked, mediaShelf, [mediaShelf, mediaList, mediaHint, mediaToggle] {
             const bool collapsed = mediaList->isVisible();
@@ -1183,18 +1191,25 @@ private:
         viewerLayout->setContentsMargins(0, 0, 0, 0);
         m_viewer = new ViewerWidget;
         viewerLayout->addWidget(m_viewer);
-        editorSplit->addWidget(viewerFrame);
+        auto *browserViewerSplit = new QSplitter(Qt::Horizontal);
+        browserViewerSplit->setObjectName(QStringLiteral("browserViewerSplitter"));
+        browserViewerSplit->setChildrenCollapsible(false);
+        browserViewerSplit->addWidget(mediaShelf);
+        browserViewerSplit->addWidget(viewerFrame);
+        browserViewerSplit->setStretchFactor(0, 0);
+        browserViewerSplit->setStretchFactor(1, 1);
+        browserViewerSplit->setSizes({250, 870});
+        editorSplit->addWidget(browserViewerSplit);
 
         auto *timelinePanel = new QWidget;
         auto *timelinePanelLayout = new QVBoxLayout(timelinePanel);
         timelinePanelLayout->setContentsMargins(0, 0, 0, 0);
         timelinePanelLayout->setSpacing(0);
 
-        timelinePanelLayout->addWidget(mediaShelf);
         auto *transport = new QWidget;
         transport->setObjectName(QStringLiteral("transport"));
         auto *transportLayout = new QHBoxLayout(transport);
-        transportLayout->setContentsMargins(8, 2, 8, 2);
+        transportLayout->setContentsMargins(10, 5, 10, 5);
         m_playButton = new QToolButton;
         m_playButton->setObjectName(QStringLiteral("playButton"));
         m_playButton->setText(QStringLiteral("▶"));
@@ -1213,6 +1228,7 @@ private:
         m_timeLabel->setObjectName(QStringLiteral("timecode"));
         transportLayout->addWidget(m_timeLabel);
         transportLayout->addStretch();
+        transportLayout->addWidget(trackButton);
         auto *fitButton = new QToolButton;
         fitButton->setText(QStringLiteral("Fit"));
         fitButton->setToolTip(QStringLiteral("Fit the entire timeline"));
@@ -1248,13 +1264,13 @@ private:
         timelinePanelLayout->addWidget(timelineFrame, 1);
         editorSplit->addWidget(timelinePanel);
         editorSplit->setSizes({550, 310});
-        editorSplit->setStretchFactor(0, 3);
+        editorSplit->setStretchFactor(0, 1);
         editorSplit->setStretchFactor(1, 1);
 
         auto *right = new QWidget;
         m_agentPanel = right;
         right->setObjectName(QStringLiteral("panel"));
-        right->setMinimumWidth(280);
+        right->setMinimumWidth(320);
         auto *rightLayout = new QVBoxLayout(right);
         rightLayout->setContentsMargins(14, 12, 14, 12);
         rightLayout->setSpacing(12);
@@ -1306,7 +1322,7 @@ private:
         m_conversation->setUndoRedoEnabled(false);
         m_conversation->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
         m_conversation->document()->setDocumentMargin(10);
-        m_conversation->setPlaceholderText(QStringLiteral("Describe an edit, explore a different pace,\nor ask for a new direction."));
+        m_conversation->setPlaceholderText(QStringLiteral("Describe the edit you have in mind.\n\nYour timeline and media are included.\nYou review changes before they apply."));
         chatLayout->addWidget(m_conversation, 1);
         auto *composer = new QFrame;
         composer->setObjectName(QStringLiteral("chatComposer"));
@@ -1337,27 +1353,36 @@ private:
         agentPicker->addWidget(modelLabel);
         modelLabel->hide();
         agentPicker->addWidget(m_modelSelect, 2);
-        composerLayout->addLayout(agentPicker);
         auto *chatRow = new QHBoxLayout;
         chatRow->setContentsMargins(0, 0, 0, 0);
         chatRow->setSpacing(6);
-        m_chatInput = new QLineEdit;
+        m_chatInput = new QTextEdit;
         m_chatInput->setObjectName(QStringLiteral("chatInput"));
-        m_chatInput->setPlaceholderText(QStringLiteral("Message Cut…"));
-        m_chatInput->setClearButtonEnabled(true);
-        connect(m_chatInput, &QLineEdit::returnPressed, this, &MainWindow::sendChat);
-        connect(m_chatInput, &QLineEdit::textChanged, this, &MainWindow::updateChatControls);
+        m_chatInput->setPlaceholderText(QStringLiteral("Ask Cut to edit…"));
+        m_chatInput->setAccessibleName(QStringLiteral("Message Cut"));
+        m_chatInput->setAcceptRichText(false);
+        m_chatInput->setFixedHeight(76);
+        m_chatInput->setTabChangesFocus(true);
+        m_chatInput->installEventFilter(this);
+        connect(m_chatInput, &QTextEdit::textChanged, this, &MainWindow::updateChatControls);
+        composerLayout->addWidget(m_chatInput);
+        composerLayout->addLayout(agentPicker);
         connect(m_providerSelect, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::updateAgentModelChoices);
         connect(m_modelSelect, &QComboBox::currentTextChanged, this, [this] {
             if (m_agentConfigLabel) m_agentConfigLabel->setText(QStringLiteral("%1  ·  %2")
                                                                     .arg(m_providerSelect->currentText(), m_modelSelect->currentText()));
         });
-        auto *sendButton = new QPushButton(QStringLiteral("Send"));
+        auto *sendButton = new QPushButton(QStringLiteral("↑"));
         sendButton->setObjectName(QStringLiteral("chatSendButton"));
         m_sendButton = sendButton;
+        sendButton->setAccessibleName(QStringLiteral("Send message"));
+        sendButton->setFixedSize(28, 28);
         sendButton->setToolTip(QStringLiteral("Send message (Return)"));
         connect(sendButton, &QPushButton::clicked, this, &MainWindow::sendChat);
-        chatRow->addWidget(m_chatInput);
+        auto *composerHint = new QLabel(QStringLiteral("⇧ Return for a new line"));
+        composerHint->setObjectName(QStringLiteral("muted"));
+        chatRow->addWidget(composerHint);
+        chatRow->addStretch();
         chatRow->addWidget(sendButton);
         auto *abortButton = new QToolButton;
         abortButton->setObjectName(QStringLiteral("abortButton"));
@@ -1532,7 +1557,7 @@ private:
         workspace->setCollapsible(0, false);
         workspace->setCollapsible(1, false);
         workspace->setStretchFactor(0, 1);
-        workspace->setSizes({1160, 340});
+        workspace->setSizes({1120, 380});
         setCentralWidget(central);
 
         connect(m_timeline, &TimelineWidget::seekRequested, this, &MainWindow::queueSeek);
@@ -2140,7 +2165,7 @@ private:
     TimelineWidget *m_timeline = nullptr;
     QListWidget *m_mediaList = nullptr;
     QTextEdit *m_conversation = nullptr;
-    QLineEdit *m_chatInput = nullptr;
+    QTextEdit *m_chatInput = nullptr;
     QComboBox *m_providerSelect = nullptr;
     QComboBox *m_modelSelect = nullptr;
     QLabel *m_agentConfigLabel = nullptr;
@@ -2182,6 +2207,23 @@ private:
 class EditorTest final : public QObject {
     Q_OBJECT
 private slots:
+    void chatComposerSupportsMultilineWithoutAccidentalSend() {
+        MainWindow window{QString(), QString()};
+        window.show();
+        window.m_chatInput->setEnabled(true);
+        window.m_chatInput->setFocus();
+        window.m_chatInput->setPlainText(QStringLiteral("First edit"));
+        window.m_chatInput->moveCursor(QTextCursor::End);
+        QTest::keyClick(window.m_chatInput, Qt::Key_Return, Qt::ShiftModifier);
+        QTest::keyClicks(window.m_chatInput, "Second edit");
+        QCOMPARE(window.m_chatInput->toPlainText(), QStringLiteral("First edit\nSecond edit"));
+        // Return must preserve a draft while sending is unavailable.
+        QTest::keyClick(window.m_chatInput, Qt::Key_Return);
+        QCOMPARE(window.m_chatInput->toPlainText(), QStringLiteral("First edit\nSecond edit"));
+        QVERIFY(!window.m_sendButton->isEnabled());
+        QVERIFY(window.m_abortButton->isHidden());
+    }
+
     void artworkDecodesMediaWithoutBlocking() {
         if (QStandardPaths::findExecutable(QStringLiteral("ffmpeg")).isEmpty()) QSKIP("FFmpeg unavailable");
         QTemporaryDir directory;
@@ -2345,32 +2387,35 @@ int main(int argc, char **argv) {
         "QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover { background: #666666; } QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }"
         "QStatusBar { background: #151515; color: #878787; border-top: 1px solid #2b2b2b; }"
         // Neutral, adjoining editing surfaces; only media and selection carry color.
-        "* { font-size: 11px; } QWidget { background: #242424; }"
-        "QToolBar { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #363636,stop:1 #2b2b2b); padding: 4px 8px; spacing: 4px; border-bottom: 1px solid #111; }"
-        "QToolButton, QPushButton { background: #363636; border: 1px solid #414141; border-radius: 3px; padding: 2px 8px; min-height: 16px; }"
+        "* { font-size: 12px; } QWidget { background: #232323; }"
+        "QToolBar { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #343434,stop:1 #292929); padding: 7px 10px; spacing: 5px; border-bottom: 1px solid #111; }"
+        "QToolButton, QPushButton { background: #353535; border: 1px solid #454545; border-radius: 4px; padding: 3px 9px; min-height: 18px; }"
         "QToolBar QToolButton { min-width: 24px; padding: 2px 6px; }"
         "QToolButton:disabled, QPushButton:disabled { background: #303030; border-color: #383838; color: #646464; }"
-        "QWidget#panel { background: #242424; border: 0; }"
+        "QWidget#panel { background: #232323; border: 0; }"
         "QFrame#mediaShelf { background: #242424; border: 0; border-bottom: 1px solid #111; }"
         "QFrame#viewerFrame, QFrame#timelineFrame { border: 0; background: #202020; }"
         "QWidget#transport { background: #303030; border: 0; border-top: 1px solid #3b3b3b; border-bottom: 1px solid #111; }"
         "QToolButton#playButton { background: transparent; color: #ccc; border: 0; padding: 0 8px; font-size: 12px; }"
         "QToolButton#squareButton { font-size: 14px; padding: 0 5px; background: transparent; border: 0; }"
         "QLabel#eyebrow { color: #b5b5b5; font-size: 11px; font-weight: 500; letter-spacing: 0; }"
-        "QLabel#projectTitle { color: #c0c0c0; background: transparent; font-size: 11px; padding: 0 20px; }"
-        "QLabel#assistantTitle { color: #dedede; font-size: 12px; font-weight: 600; }"
+        "QLabel#projectTitle { color: #dedede; background: transparent; font-size: 12px; font-weight: 600; padding: 0 20px; }"
+        "QLabel#assistantTitle { color: #ededed; font-size: 13px; font-weight: 600; }"
         "QLabel#statusPill { color: #aaa; background: #303030; border: 1px solid #3b3b3b; border-radius: 7px; padding: 2px 6px; font-weight: 400; font-size: 9px; }"
-        "QSplitter::handle { background: #111; } QSplitter::handle:horizontal { width: 1px; } QSplitter::handle:vertical { height: 1px; }"
+        "QSplitter::handle { background: #151515; } QSplitter::handle:hover { background: #555; } QSplitter::handle:horizontal { width: 3px; } QSplitter::handle:vertical { height: 3px; }"
         "QListWidget { background: #242424; border: 0; padding: 0; } QListWidget::item { border: 0; padding: 2px 4px; }"
         "QListWidget::item:selected { background: #43536b; }"
-        "QTextEdit#conversation { background: #242424; border: 0; border-radius: 0; color: #b5b5b5; }"
-        "QLabel#chatHint { color: #d8d8d8; font-size: 15px; font-weight: 500; padding: 22px 10px 0; }"
-        "QFrame#chatComposer { background: #2c2c2c; border: 1px solid #424242; border-radius: 9px; }"
+        "QTextEdit#conversation { background: #232323; border: 0; border-radius: 0; color: #c5c5c5; font-size: 12px; }"
+        "QLabel#chatHint { color: #ececec; font-size: 18px; font-weight: 600; padding: 22px 10px 2px; }"
+        "QFrame#chatComposer { background: #2c2c2c; border: 1px solid #484848; border-radius: 10px; }"
         "QFrame#chatComposer QWidget { background: transparent; }"
-        "QComboBox#agentProvider, QComboBox#agentModel { background: transparent; border: 0; padding: 2px; font-size: 10px; color: #aaa; }"
+        "QTextEdit#chatInput { background: transparent; border: 0; padding: 0; color: #eee; font-size: 13px; selection-background-color: #506283; }"
+        "QPushButton#chatSendButton { border-radius: 14px; padding: 0; font-size: 19px; }"
+        "QComboBox#agentProvider, QComboBox#agentModel { background: transparent; border: 0; padding: 3px 2px; font-size: 11px; color: #bdbdbd; }"
+        "QComboBox#agentProvider:hover, QComboBox#agentModel:hover { background: #383838; }"
         "QComboBox, QLineEdit, QDoubleSpinBox { padding: 3px 5px; border-radius: 3px; }"
         "QToolButton#eyebrow { text-align: left; background: transparent; border: 0; color: #999; }"
-        "QTabBar::tab { background: transparent; padding: 7px 12px; font-size: 11px; border-bottom: 1px solid #363636; }"
+        "QTabBar::tab { background: transparent; padding: 9px 14px; font-size: 12px; border-bottom: 1px solid #363636; }"
         "QTabBar::tab:selected { background: transparent; color: #e0e0e0; border-bottom: 1px solid #aaa; }"
         "QProgressBar { height: 2px; max-height: 2px; background: #292929; }"
         "QStatusBar { background: #242424; font-size: 10px; border-top: 1px solid #111; }"

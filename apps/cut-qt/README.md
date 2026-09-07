@@ -31,6 +31,9 @@ trimming, split-at-playhead, and Delete. Inspector values commit on focus loss.
 Drag the panel dividers to resize the workspace, use View to hide either side
 panel, and use Fit to show the entire timeline. All tracks remain vertically
 scrollable when their combined height exceeds the timeline panel.
+The media browser sits to the left of the viewer, with the timeline spanning
+both below. The assistant stays in its own right panel. In Chat, Return sends
+the message and Shift+Return inserts a new line.
 
 The connection banner reports connection progress and offers Reconnect after
 a failure. Editing controls become available only after a successful project
