@@ -775,6 +775,9 @@ public:
         setMinimumSize(1080, 700);
         buildUi();
         setupActions();
+        // Runtime messages remain available to callers, but the empty status
+        // bar should not reserve a strip along the bottom of the editor.
+        statusBar()->hide();
         setConnection(QStringLiteral("connecting"));
 #ifndef CUT_QT_TESTING
         m_bridge = cut_bridge_new(m_projectDirectory.toUtf8().constData(), m_cutdBinary.toUtf8().constData());
@@ -1219,8 +1222,8 @@ private:
         timelinePanel->setObjectName(QStringLiteral("timelinePanel"));
         timelinePanel->setAttribute(Qt::WA_StyledBackground);
         auto *timelinePanelLayout = new QVBoxLayout(timelinePanel);
-        timelinePanelLayout->setContentsMargins(6, 6, 6, 6);
-        timelinePanelLayout->setSpacing(6);
+        timelinePanelLayout->setContentsMargins(2, 2, 2, 2);
+        timelinePanelLayout->setSpacing(2);
 
         auto *transport = new QWidget;
         transport->setObjectName(QStringLiteral("transport"));
@@ -1294,7 +1297,7 @@ private:
         rightLayout->setContentsMargins(16, 14, 16, 14);
         rightLayout->setSpacing(12);
         auto *agentHeader = new QHBoxLayout;
-        auto *agentTitle = new QLabel(QStringLiteral("✦  Cut Assistant"));
+        auto *agentTitle = new QLabel(QStringLiteral("Cut Assistant"));
         agentTitle->setObjectName(QStringLiteral("assistantTitle"));
         m_agentStatus = new QLabel(QStringLiteral("READY"));
         m_agentStatus->setObjectName(QStringLiteral("statusPill"));
@@ -1417,8 +1420,6 @@ private:
         });
         chatRow->addWidget(abortButton);
         composerLayout->addLayout(chatRow);
-        chatLayout->addWidget(composer);
-
         auto *activityTitle = new QToolButton;
         activityTitle->setText(QStringLiteral("▸ Activity"));
         activityTitle->setObjectName(QStringLiteral("eyebrow"));
@@ -1466,6 +1467,9 @@ private:
         proposalLayout->addWidget(m_proposalDiff);
         proposalLayout->addLayout(proposalButtons);
         chatLayout->addWidget(proposalBox);
+        // Keep the composer last so expanding Activity or a proposal consumes
+        // conversation space instead of lifting the message input upward.
+        chatLayout->addWidget(composer);
         tabs->addTab(chatTab, QStringLiteral("Chat"));
 
         auto *inspectorTab = new QWidget;
@@ -2249,6 +2253,29 @@ private:
 class EditorTest final : public QObject {
     Q_OBJECT
 private slots:
+    void editorChromeKeepsComposerAtTheBottom() {
+        MainWindow window{QString(), QString()};
+        window.show();
+        QTest::qWait(20);
+
+        QVERIFY(window.statusBar()->isHidden());
+        auto *title = window.findChild<QLabel *>(QStringLiteral("assistantTitle"));
+        QVERIFY(title);
+        QCOMPARE(title->text(), QStringLiteral("Cut Assistant"));
+
+        auto *composer = window.findChild<QFrame *>(QStringLiteral("chatComposer"));
+        QVERIFY(composer);
+        QToolButton *activity = nullptr;
+        for (auto *button : window.findChildren<QToolButton *>()) {
+            if (button->text().endsWith(QStringLiteral("Activity"))) {
+                activity = button;
+                break;
+            }
+        }
+        QVERIFY(activity);
+        QVERIFY(activity->mapTo(&window, QPoint{}).y() < composer->mapTo(&window, QPoint{}).y());
+    }
+
     void chatComposerSupportsMultilineWithoutAccidentalSend() {
         MainWindow window{QString(), QString()};
         window.show();
