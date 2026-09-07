@@ -36,8 +36,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install native media and Qt dependencies
         run: |
-          brew install ffmpeg@8 qt pkg-config cmake
-          ffmpeg_prefix="$(brew --prefix ffmpeg@8)"
+          brew install ffmpeg@7 qt pkg-config cmake
+          ffmpeg_prefix="$(brew --prefix ffmpeg@7)"
           echo "$ffmpeg_prefix/bin" >> "$GITHUB_PATH"
           echo "FFMPEG_DIR=$ffmpeg_prefix" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=$ffmpeg_prefix/lib/pkgconfig" >> "$GITHUB_ENV"
