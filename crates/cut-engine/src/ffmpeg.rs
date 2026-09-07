@@ -28,10 +28,6 @@ pub struct BinaryCommandOutput {
 }
 
 fn bin_exists(candidate: &str) -> bool {
-    let path = Path::new(candidate);
-    if path.is_absolute() || candidate.contains('/') || candidate.contains('\\') {
-        return path.is_file();
-    }
     Command::new(candidate)
         .arg("-version")
         .stdout(Stdio::null())
