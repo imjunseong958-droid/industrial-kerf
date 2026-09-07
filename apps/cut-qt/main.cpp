@@ -1,4 +1,5 @@
 #include "bridge.h"
+#include "editor_style.h"
 
 #include <QAction>
 #include <QPaintEvent>
@@ -57,6 +58,7 @@
 #include <QVector>
 #include <QWidget>
 #include <QFontMetrics>
+#include <QFontDatabase>
 #ifdef CUT_QT_TESTING
 #include <QTest>
 #include <QTemporaryDir>
@@ -274,24 +276,24 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
         QLinearGradient timelineGradient(0, 0, 0, height());
-        timelineGradient.setColorAt(0.0, QColor("#202020"));
-        timelineGradient.setColorAt(1.0, QColor("#202020"));
+        timelineGradient.setColorAt(0.0, QColor("#141414"));
+        timelineGradient.setColorAt(1.0, QColor("#141414"));
         p.fillRect(rect(), timelineGradient);
 
         const int trackCount = static_cast<int>(std::max<qsizetype>(1, m_project.value(QStringLiteral("tracks")).toArray().size()));
         const double pxPerSecond = pixelsPerSecond();
 
-        p.fillRect(0, 0, kTimelineLabelWidth, height(), QColor("#1b1b1b"));
-        p.fillRect(kTimelineLabelWidth, 0, width() - kTimelineLabelWidth, kRulerHeight, QColor("#1d1d1d"));
-        p.setPen(QColor("#3a3a3a"));
+        p.fillRect(0, 0, kTimelineLabelWidth, height(), QColor("#111111"));
+        p.fillRect(kTimelineLabelWidth, 0, width() - kTimelineLabelWidth, kRulerHeight, QColor("#101010"));
+        p.setPen(QColor("#2a2a2a"));
         p.drawLine(kTimelineLabelWidth, 0, kTimelineLabelWidth, height());
 
         QFont rulerFont = p.font();
-        rulerFont.setPointSize(9);
+        rulerFont.setPixelSize(11);
         p.setFont(rulerFont);
         p.setPen(QColor("#868686"));
         p.drawText(QRect(12, 0, kTimelineLabelWidth - 20, kRulerHeight), Qt::AlignVCenter,
-                   QStringLiteral("TRACKS"));
+                   QStringLiteral("Tracks"));
 
         const int majorStep = std::max(1, static_cast<int>(std::ceil(70.0 / pxPerSecond)));
         const int firstSecond = std::max(0, static_cast<int>(std::floor((visible.left() - kTimelineLabelWidth) / pxPerSecond)) - 1);
@@ -312,8 +314,8 @@ protected:
             const int y = kRulerHeight + row * kTrackHeight;
             if (y + kTrackHeight < visible.top() || y > visible.bottom()) continue;
             p.fillRect(0, y, width(), kTrackHeight,
-                       row % 2 == 0 ? QColor("#202020") : QColor("#1e1e1e"));
-            p.setPen(QColor("#2b2b2b"));
+                       row % 2 == 0 ? QColor("#141414") : QColor("#121212"));
+            p.setPen(QColor("#222222"));
             p.drawLine(0, y + kTrackHeight - 1, width(), y + kTrackHeight - 1);
             const QJsonObject track = row < tracks.size() ? tracks.at(row).toObject() : QJsonObject();
             const QColor accent = trackAccent(track, row);
@@ -341,7 +343,7 @@ protected:
             p.drawText(30, y + 25, p.fontMetrics().elidedText(trackTitle, Qt::ElideRight, 60));
             p.setPen(QColor("#808080"));
             QFont trackFont = p.font();
-            trackFont.setPointSize(8);
+            trackFont.setPixelSize(10);
             p.setFont(trackFont);
             p.drawText(30, y + 40, type.toUpper());
             p.setFont(rulerFont);
@@ -682,18 +684,21 @@ protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
+        QPainterPath surface;
+        surface.addRoundedRect(QRectF(rect()), 9, 9);
+        p.setClipPath(surface);
         QLinearGradient viewerGradient(0, 0, 0, height());
-        viewerGradient.setColorAt(0.0, QColor(m_frame.isNull() ? "#202020" : "#0d0d0d"));
-        viewerGradient.setColorAt(1.0, QColor(m_frame.isNull() ? "#1c1c1c" : "#090909"));
+        viewerGradient.setColorAt(0.0, QColor(m_frame.isNull() ? "#181818" : "#101010"));
+        viewerGradient.setColorAt(1.0, QColor(m_frame.isNull() ? "#141414" : "#101010"));
         p.fillRect(rect(), viewerGradient);
-        p.setPen(QColor("#343434"));
-        p.fillRect(0, 0, width(), 27, QColor("#252525"));
-        p.drawLine(0, 27, width(), 27);
-        const QRectF target = QRectF(rect()).adjusted(8, 32, -8, -8);
+        p.setPen(QColor("#262626"));
+        p.fillRect(0, 0, width(), 36, QColor("#1b1b1b"));
+        p.drawLine(12, 36, width() - 12, 36);
+        const QRectF target = QRectF(rect()).adjusted(12, 48, -12, -12);
         if (!m_frame.isNull()) {
             QImage scaled = m_frame.scaled(target.size().toSize(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
             const QPointF topLeft(target.center().x() - scaled.width() / 2.0, target.center().y() - scaled.height() / 2.0);
-            p.setPen(QColor("#434343"));
+            p.setPen(QColor("#242424"));
             p.setBrush(QColor("#070707"));
             p.drawRect(QRectF(topLeft, QSizeF(scaled.size())).adjusted(-1, -1, 1, 1));
             p.drawImage(topLeft, scaled);
@@ -703,12 +708,12 @@ protected:
             if (canvasSize.height() > target.height())
                 canvasSize = QSizeF(target.height() * aspect, target.height());
             const QRectF canvas(target.center() - QPointF(canvasSize.width() / 2, canvasSize.height() / 2), canvasSize);
-            p.setPen(QColor("#303030"));
-            p.setBrush(QColor("#171717"));
-            p.drawRect(canvas.adjusted(0.5, 0.5, -0.5, -0.5));
+            p.setPen(QColor("#202020"));
+            p.setBrush(QColor("#070707"));
+            p.drawRoundedRect(canvas.adjusted(0.5, 0.5, -0.5, -0.5), 6, 6);
             const QPointF center = canvas.center() - QPointF(0, 22);
             p.setPen(QColor("#363636"));
-            p.setBrush(QColor("#252525"));
+            p.setBrush(QColor("#181818"));
             p.drawEllipse(center, 20, 20);
             p.setPen(QColor("#626262"));
             p.setBrush(Qt::NoBrush);
@@ -725,14 +730,19 @@ protected:
         }
         p.setPen(QColor("#a0a0a0"));
         QFont viewerFont = p.font();
-        viewerFont.setPointSize(9);
+        viewerFont.setPixelSize(12);
+        viewerFont.setWeight(QFont::Medium);
         p.setFont(viewerFont);
-        p.drawText(12, 18, QStringLiteral("Viewer"));
+        p.drawText(14, 23, QStringLiteral("Viewer"));
         p.setPen(QColor("#747474"));
-        p.drawText(70, 18, QStringLiteral("%1 × %2").arg(m_width > 0 ? QString::number(static_cast<int>(m_width)) : QStringLiteral("—"),
+        p.drawText(76, 23, QStringLiteral("%1 × %2").arg(m_width > 0 ? QString::number(static_cast<int>(m_width)) : QStringLiteral("—"),
                                                          m_height > 0 ? QString::number(static_cast<int>(m_height)) : QStringLiteral("—")));
         p.setPen(QColor("#a6a6a6"));
-        p.drawText(width() - 80, 18, prettyTime(m_time));
+        QFont timeFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+        timeFont.setPixelSize(11);
+        p.setFont(timeFont);
+        p.drawText(width() - 84, 23, prettyTime(m_time));
+        p.setFont(viewerFont);
         if (!m_caption.isEmpty()) {
             const QRectF captionRect(48, height() - 64, width() - 96, 34);
             p.setPen(Qt::NoPen);
@@ -1069,11 +1079,11 @@ protected:
 private:
     void buildUi() {
         auto *central = new QWidget(this);
+        central->setObjectName(QStringLiteral("workspaceRoot"));
         auto *root = new QVBoxLayout(central);
-        // Keep the editor chrome close to the canvas, as in a dedicated NLE.
-        // Panels carry their own inset so the sequence remains the visual focus.
-        root->setContentsMargins(0, 0, 0, 0);
-        root->setSpacing(0);
+        // Small gutters separate the editing surfaces without sacrificing density.
+        root->setContentsMargins(8, 8, 8, 8);
+        root->setSpacing(8);
         m_artwork = new MediaArtwork(this);
 
         m_connectionBanner = new QFrame;
@@ -1109,6 +1119,8 @@ private:
 
         auto *workspace = new QSplitter(Qt::Horizontal);
         workspace->setObjectName(QStringLiteral("workspaceSplitter"));
+        workspace->setHandleWidth(8);
+        workspace->setChildrenCollapsible(false);
         root->addWidget(workspace, 1);
 
         auto *mediaShelf = new QFrame;
@@ -1117,8 +1129,8 @@ private:
         mediaShelf->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
         mediaShelf->setMinimumWidth(180);
         auto *mediaShelfLayout = new QVBoxLayout(mediaShelf);
-        mediaShelfLayout->setContentsMargins(10, 4, 10, 4);
-        mediaShelfLayout->setSpacing(2);
+        mediaShelfLayout->setContentsMargins(12, 10, 12, 12);
+        mediaShelfLayout->setSpacing(8);
         auto *mediaHeader = new QHBoxLayout;
         auto *mediaTitle = new QLabel(QStringLiteral("Media"));
         mediaTitle->setObjectName(QStringLiteral("eyebrow"));
@@ -1184,16 +1196,18 @@ private:
         centerLayout->setSpacing(0);
         auto *editorSplit = new QSplitter(Qt::Vertical);
         editorSplit->setChildrenCollapsible(false);
+        editorSplit->setHandleWidth(8);
         centerLayout->addWidget(editorSplit);
         auto *viewerFrame = new QFrame;
         viewerFrame->setObjectName(QStringLiteral("viewerFrame"));
         auto *viewerLayout = new QVBoxLayout(viewerFrame);
-        viewerLayout->setContentsMargins(0, 0, 0, 0);
+        viewerLayout->setContentsMargins(1, 1, 1, 1);
         m_viewer = new ViewerWidget;
         viewerLayout->addWidget(m_viewer);
         auto *browserViewerSplit = new QSplitter(Qt::Horizontal);
         browserViewerSplit->setObjectName(QStringLiteral("browserViewerSplitter"));
         browserViewerSplit->setChildrenCollapsible(false);
+        browserViewerSplit->setHandleWidth(8);
         browserViewerSplit->addWidget(mediaShelf);
         browserViewerSplit->addWidget(viewerFrame);
         browserViewerSplit->setStretchFactor(0, 0);
@@ -1202,14 +1216,18 @@ private:
         editorSplit->addWidget(browserViewerSplit);
 
         auto *timelinePanel = new QWidget;
+        timelinePanel->setObjectName(QStringLiteral("timelinePanel"));
+        timelinePanel->setAttribute(Qt::WA_StyledBackground);
         auto *timelinePanelLayout = new QVBoxLayout(timelinePanel);
-        timelinePanelLayout->setContentsMargins(0, 0, 0, 0);
-        timelinePanelLayout->setSpacing(0);
+        timelinePanelLayout->setContentsMargins(6, 6, 6, 6);
+        timelinePanelLayout->setSpacing(6);
 
         auto *transport = new QWidget;
         transport->setObjectName(QStringLiteral("transport"));
+        transport->setAttribute(Qt::WA_StyledBackground);
         auto *transportLayout = new QHBoxLayout(transport);
-        transportLayout->setContentsMargins(10, 5, 10, 5);
+        transportLayout->setContentsMargins(8, 4, 8, 4);
+        transportLayout->setSpacing(6);
         m_playButton = new QToolButton;
         m_playButton->setObjectName(QStringLiteral("playButton"));
         m_playButton->setText(QStringLiteral("▶"));
@@ -1270,9 +1288,10 @@ private:
         auto *right = new QWidget;
         m_agentPanel = right;
         right->setObjectName(QStringLiteral("panel"));
+        right->setAttribute(Qt::WA_StyledBackground);
         right->setMinimumWidth(320);
         auto *rightLayout = new QVBoxLayout(right);
-        rightLayout->setContentsMargins(14, 12, 14, 12);
+        rightLayout->setContentsMargins(16, 14, 16, 14);
         rightLayout->setSpacing(12);
         auto *agentHeader = new QHBoxLayout;
         auto *agentTitle = new QLabel(QStringLiteral("✦  Cut Assistant"));
@@ -1633,12 +1652,35 @@ private:
 
         auto *toolbar = addToolBar(QStringLiteral("Main"));
         toolbar->setMovable(false);
-        toolbar->setIconSize(QSize(16, 16));
+        toolbar->setIconSize(QSize(18, 18));
+        // Draw toolbar symbols on a shared grid so their weight and optical size match.
         auto icon = [](const QString &glyph) {
-            QPixmap pixmap(40, 40); pixmap.fill(Qt::transparent);
-            QPainter painter(&pixmap); painter.setRenderHint(QPainter::Antialiasing);
-            QFont font = painter.font(); font.setPixelSize(28); painter.setFont(font);
-            painter.setPen(QColor("#c5c5c5")); painter.drawText(pixmap.rect(), Qt::AlignCenter, glyph);
+            QPixmap pixmap(40, 40);
+            pixmap.setDevicePixelRatio(2);
+            pixmap.fill(Qt::transparent);
+            QPainter painter(&pixmap);
+            painter.setRenderHint(QPainter::Antialiasing);
+            painter.setPen(QPen(QColor("#d7d7d7"), 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            QPainterPath path;
+            if (glyph == QStringLiteral("↓")) {
+                path.moveTo(10, 3); path.lineTo(10, 12);
+                path.moveTo(6.5, 8.5); path.lineTo(10, 12); path.lineTo(13.5, 8.5);
+                path.moveTo(4, 12); path.lineTo(4, 16); path.lineTo(16, 16); path.lineTo(16, 12);
+            } else if (glyph == QStringLiteral("↶") || glyph == QStringLiteral("↷")) {
+                if (glyph == QStringLiteral("↷")) { painter.translate(20, 0); painter.scale(-1, 1); }
+                path.moveTo(7, 4); path.lineTo(3.5, 7.5); path.lineTo(7, 11);
+                path.moveTo(4, 7.5); path.lineTo(11, 7.5);
+                path.cubicTo(17, 7.5, 17, 15.5, 11, 15.5);
+            } else if (glyph == QStringLiteral("✂")) {
+                painter.drawEllipse(QPointF(5, 5), 2.5, 2.5);
+                painter.drawEllipse(QPointF(5, 15), 2.5, 2.5);
+                path.moveTo(7, 6.5); path.lineTo(16, 16);
+                path.moveTo(7, 13.5); path.lineTo(16, 4);
+            } else {
+                path.moveTo(5, 5); path.lineTo(15, 15);
+                path.moveTo(15, 5); path.lineTo(5, 15);
+            }
+            painter.drawPath(path);
             return QIcon(pixmap);
         };
         import->setIcon(icon(QStringLiteral("↓")));
@@ -2020,7 +2062,7 @@ private:
         }
         const bool user = speaker == QStringLiteral("You");
         const bool error = speaker == QStringLiteral("Error");
-        const QString role = speaker.toHtmlEscaped().toUpper();
+        const QString role = speaker.toHtmlEscaped();
         const QString roleColor = user ? QStringLiteral("#d2d2d2")
                                        : error ? QStringLiteral("#939393") : QStringLiteral("#afafaf");
         const QString bubbleColor = user ? QStringLiteral("#2b2b2b")
@@ -2029,8 +2071,8 @@ private:
         const QString body = text.toHtmlEscaped().replace(QStringLiteral("\n"), QStringLiteral("<br/>"));
         m_conversation->append(QStringLiteral(
             "<p style='margin:0 0 10px 0; padding:9px 10px; background-color:%1;'>"
-            "<span style='color:%2; font-size:9pt; font-weight:700;'>%3</span><br/>"
-            "<span style='color:%4; font-size:10pt;'>%5</span></p>")
+            "<span style='color:%2; font-size:12px; font-weight:600;'>%3</span><br/>"
+            "<span style='color:%4; font-size:13px;'>%5</span></p>")
                                     .arg(bubbleColor, roleColor, role, bodyColor, body));
         m_conversation->ensureCursorVisible();
     }
@@ -2046,8 +2088,8 @@ private:
         const QString color = kind == QStringLiteral("Tool") ? QStringLiteral("#acacac") : QStringLiteral("#7c7c7c");
         m_conversation->append(QStringLiteral(
             "<p style='margin:0 0 7px 0; padding:2px 4px;'>"
-            "<span style='color:%1; font-size:9pt; font-weight:700;'>%2</span>"
-            "<span style='color:#a1a1a1; font-size:9pt;'>  %3</span></p>")
+            "<span style='color:%1; font-size:12px; font-weight:600;'>%2</span>"
+            "<span style='color:#a1a1a1; font-size:12px;'>  %3</span></p>")
                                     .arg(color, label, body));
         while (m_conversation->document()->blockCount() > 120) {
             QTextCursor cursor(m_conversation->document());
@@ -2331,96 +2373,14 @@ int main(int argc, char **argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("Cut"));
     QApplication::setOrganizationName(QStringLiteral("Cut"));
+    QFont interfaceFont = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
+    if (QFontDatabase::families().contains(QStringLiteral("Avenir Next")))
+        interfaceFont.setFamily(QStringLiteral("Avenir Next"));
+    interfaceFont.setPixelSize(13);
+    interfaceFont.setWeight(QFont::Normal);
+    app.setFont(interfaceFont);
     app.setStyle(QStringLiteral("Fusion"));
-    app.setStyleSheet(QStringLiteral(
-        "QFrame#connectionBanner, QFrame#errorBanner { background: #392b22; border: 1px solid #a7794e; border-radius: 5px; }"
-        "* { color: #dedede; font-size: 12px; }"
-        "QMainWindow, QWidget { background: #111111; } QLabel { background: transparent; }"
-        "QMenuBar { background: #181818; border-bottom: 1px solid #2b2b2b; padding: 4px 9px; }"
-        "QMenuBar::item { padding: 5px 10px; border-radius: 4px; } QMenuBar::item:selected { background: #2d2d2d; }"
-        "QMenu { background: #202020; border: 1px solid #3a3a3a; padding: 4px; }"
-        "QMenu::item { padding: 7px 28px 7px 12px; border-radius: 3px; } QMenu::item:selected { background: #3e3e3e; }"
-        "QToolBar { background: #181818; border: 0; border-bottom: 1px solid #2b2b2b; spacing: 6px; padding: 6px 10px; }"
-        "QToolBar::separator { background: #393939; width: 1px; margin: 4px 3px; }"
-        "QToolButton, QPushButton { background: #252b33; border: 1px solid #3d4855; border-radius: 3px; padding: 5px 10px; min-height: 15px; }"
-        "QToolButton:hover, QPushButton:hover { background: #353535; border-color: #5f5f5f; }"
-        "QToolButton:pressed, QPushButton:pressed { background: #414141; border-color: #8e8e8e; }"
-        "QToolButton:disabled, QPushButton:disabled { color: #676767; background: #202020; border-color: #2f2f2f; }"
-        "QPushButton#primaryButton { background: #b0b0b0; border-color: #d0d0d0; color: #131313; font-weight: 600; }"
-        "QPushButton#primaryButton:hover { background: #c8c8c8; } QPushButton#dangerButton { background: #333333; border-color: #5b5b5b; }"
-        "QPushButton#dangerButton:hover { background: #434343; } QPushButton#secondaryButton { background: #232323; }"
-        "QToolButton#squareButton { padding: 2px 9px; font-size: 18px; color: #c5c5c5; }"
-        "QToolButton#playButton { background: #b0b0b0; border-color: #d0d0d0; border-radius: 6px; color: #131313; font-size: 15px; padding: 5px 16px; }"
-        "QToolButton#playButton:hover { background: #c8c8c8; }"
-        "QToolButton#playButton:disabled, QPushButton#primaryButton:disabled { background: #202020; color: #676767; border-color: #2f2f2f; }"
-        "QWidget#panel, QFrame#mediaShelf { background: #171b20; border: 1px solid #303b47; border-radius: 2px; }"
-        "QFrame#agentContext { background: #1b2128; border: 1px solid #303b47; border-radius: 2px; } QLabel#agentConfig { color: #d0d0d0; font-size: 10px; font-weight: 600; }"
-        "QFrame#viewerFrame, QFrame#timelineFrame { background: #0b0e12; border: 1px solid #303b47; border-radius: 2px; }"
-        "QWidget#transport { background: #171b20; border: 1px solid #303b47; border-radius: 2px; }"
-        "QToolButton#mediaToggle { background: transparent; border: 0; color: #8997a6; padding: 1px 5px; } QToolButton#mediaToggle:hover { color: #dce8f4; background: #27313b; }"
-        "QLabel#eyebrow { color: #969696; font-size: 10px; font-weight: 700; letter-spacing: 1px; }"
-        "QLabel#muted { color: #838383; font-size: 11px; } QLabel#statusPill { color: #b1b1b1; font-size: 10px; font-weight: 700; }"
-        "QLabel#timecode { color: #dedede; font-family: Menlo, Monaco, monospace; font-size: 11px; }"
-        "QLabel#inspectorClip { color: #efefef; font-weight: 600; padding: 5px 0; }"
-        "QListWidget, QTextEdit { background: #101419; border: 1px solid #303b47; border-radius: 2px; padding: 3px; selection-background-color: #284b70; }"
-        "QListWidget::item { padding: 7px 12px; border-right: 1px solid #26313c; } QListWidget::item:hover { background: #1d2a36; }"
-        "QListWidget::item:selected { background: #23496f; color: #f0f0f0; }"
-        "QTextEdit { selection-background-color: #4a4a4a; } QTextEdit#conversation { background: #171717; border: 1px solid #393939; border-radius: 6px; padding: 2px; }"
-        "QLineEdit, QDoubleSpinBox, QComboBox { background: #242424; border: 1px solid #444444; border-radius: 4px; padding: 6px; selection-background-color: #4a4a4a; }"
-        "QLineEdit:hover, QDoubleSpinBox:hover, QComboBox:hover { border-color: #5f5f5f; } QLineEdit:focus, QDoubleSpinBox:focus, QComboBox:focus { border-color: #8e8e8e; background: #292929; }"
-        "QComboBox#agentProvider, QComboBox#agentModel { padding: 4px 6px; min-height: 16px; }"
-        "QFrame#chatComposer { background: #222222; border: 1px solid #444444; border-radius: 7px; } QLineEdit#chatInput { background: transparent; border: 0; padding: 5px 2px; } QLineEdit#chatInput:focus { background: transparent; border: 0; }"
-        "QPushButton#chatSendButton { background: #d6d6d6; border-color: #e9e9e9; color: #1a1a1a; font-weight: 700; } QPushButton#chatSendButton:hover { background: #eeeeee; } QPushButton#chatSendButton:disabled { color: #717171; background: #353535; border-color: #444444; }"
-        "QToolButton#abortButton { color: #c5c5c5; background: transparent; border-color: transparent; padding: 5px 7px; } QToolButton#abortButton:hover { color: #b5b5b5; background: #282828; border-color: #3f3f3f; } QToolButton#abortButton:disabled { color: #646464; background: transparent; border-color: transparent; }"
-        "QLabel#chatHint { color: #868686; font-size: 11px; padding: 1px 2px 3px; }"
-        "QGroupBox#proposalBox { border: 1px solid #585858; border-radius: 5px; margin-top: 12px; padding: 12px 10px 10px; background: #212121; }"
-        "QGroupBox#proposalBox::title { subcontrol-origin: margin; left: 9px; padding: 0 5px; color: #a7a7a7; font-size: 10px; font-weight: 700; }"
-        "QGroupBox#providerBox { border: 1px solid #414141; border-radius: 5px; margin-top: 8px; padding: 10px 8px 8px; background: #202020; }"
-        "QGroupBox#providerBox::title { subcontrol-origin: margin; left: 8px; padding: 0 5px; color: #bdbdbd; font-size: 10px; font-weight: 700; }"
-        "QProgressBar { background: #242424; border: 0; border-radius: 2px; height: 4px; } QProgressBar::chunk { background: #aaaaaa; border-radius: 2px; }"
-        "QTabWidget::pane { border: 0; background: transparent; } QTabBar::tab { color: #838383; padding: 8px 15px; border-bottom: 2px solid transparent; }"
-        "QTabBar::tab:hover { color: #dedede; } QTabBar::tab:selected { color: #efefef; border-bottom-color: #aaaaaa; }"
-        "QSlider::groove:horizontal { background: #121212; border: 1px solid #343434; height: 5px; border-radius: 3px; }"
-        "QSlider::handle:horizontal { background: #aaaaaa; border: 1px solid #cccccc; width: 11px; margin: -4px 0; border-radius: 6px; }"
-        "QScrollBar:vertical, QScrollBar:horizontal { background: #121212; border: 0; } QScrollBar:vertical { width: 10px; } QScrollBar:horizontal { height: 10px; }"
-        "QScrollBar::handle:vertical, QScrollBar::handle:horizontal { background: #494949; border-radius: 4px; min-height: 20px; min-width: 20px; }"
-        "QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover { background: #666666; } QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }"
-        "QStatusBar { background: #151515; color: #878787; border-top: 1px solid #2b2b2b; }"
-        // Neutral, adjoining editing surfaces; only media and selection carry color.
-        "* { font-size: 12px; } QWidget { background: #232323; }"
-        "QToolBar { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #343434,stop:1 #292929); padding: 7px 10px; spacing: 5px; border-bottom: 1px solid #111; }"
-        "QToolButton, QPushButton { background: #353535; border: 1px solid #454545; border-radius: 4px; padding: 3px 9px; min-height: 18px; }"
-        "QToolBar QToolButton { min-width: 24px; padding: 2px 6px; }"
-        "QToolButton:disabled, QPushButton:disabled { background: #303030; border-color: #383838; color: #646464; }"
-        "QWidget#panel { background: #232323; border: 0; }"
-        "QFrame#mediaShelf { background: #242424; border: 0; border-bottom: 1px solid #111; }"
-        "QFrame#viewerFrame, QFrame#timelineFrame { border: 0; background: #202020; }"
-        "QWidget#transport { background: #303030; border: 0; border-top: 1px solid #3b3b3b; border-bottom: 1px solid #111; }"
-        "QToolButton#playButton { background: transparent; color: #ccc; border: 0; padding: 0 8px; font-size: 12px; }"
-        "QToolButton#squareButton { font-size: 14px; padding: 0 5px; background: transparent; border: 0; }"
-        "QLabel#eyebrow { color: #b5b5b5; font-size: 11px; font-weight: 500; letter-spacing: 0; }"
-        "QLabel#projectTitle { color: #dedede; background: transparent; font-size: 12px; font-weight: 600; padding: 0 20px; }"
-        "QLabel#assistantTitle { color: #ededed; font-size: 13px; font-weight: 600; }"
-        "QLabel#statusPill { color: #aaa; background: #303030; border: 1px solid #3b3b3b; border-radius: 7px; padding: 2px 6px; font-weight: 400; font-size: 9px; }"
-        "QSplitter::handle { background: #151515; } QSplitter::handle:hover { background: #555; } QSplitter::handle:horizontal { width: 3px; } QSplitter::handle:vertical { height: 3px; }"
-        "QListWidget { background: #242424; border: 0; padding: 0; } QListWidget::item { border: 0; padding: 2px 4px; }"
-        "QListWidget::item:selected { background: #43536b; }"
-        "QTextEdit#conversation { background: #232323; border: 0; border-radius: 0; color: #c5c5c5; font-size: 12px; }"
-        "QLabel#chatHint { color: #ececec; font-size: 18px; font-weight: 600; padding: 22px 10px 2px; }"
-        "QFrame#chatComposer { background: #2c2c2c; border: 1px solid #484848; border-radius: 10px; }"
-        "QFrame#chatComposer QWidget { background: transparent; }"
-        "QTextEdit#chatInput { background: transparent; border: 0; padding: 0; color: #eee; font-size: 13px; selection-background-color: #506283; }"
-        "QPushButton#chatSendButton { border-radius: 14px; padding: 0; font-size: 19px; }"
-        "QComboBox#agentProvider, QComboBox#agentModel { background: transparent; border: 0; padding: 3px 2px; font-size: 11px; color: #bdbdbd; }"
-        "QComboBox#agentProvider:hover, QComboBox#agentModel:hover { background: #383838; }"
-        "QComboBox, QLineEdit, QDoubleSpinBox { padding: 3px 5px; border-radius: 3px; }"
-        "QToolButton#eyebrow { text-align: left; background: transparent; border: 0; color: #999; }"
-        "QTabBar::tab { background: transparent; padding: 9px 14px; font-size: 12px; border-bottom: 1px solid #363636; }"
-        "QTabBar::tab:selected { background: transparent; color: #e0e0e0; border-bottom: 1px solid #aaa; }"
-        "QProgressBar { height: 2px; max-height: 2px; background: #292929; }"
-        "QStatusBar { background: #242424; font-size: 10px; border-top: 1px solid #111; }"
-        "QScrollBar:vertical { width: 7px; } QScrollBar:horizontal { height: 7px; }"
-    ));
+    app.setStyleSheet(editorStyleSheet());
 
     QString project;
     QString cutd;
