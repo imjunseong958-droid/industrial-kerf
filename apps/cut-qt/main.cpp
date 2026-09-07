@@ -685,7 +685,7 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
         QPainterPath surface;
-        surface.addRoundedRect(QRectF(rect()), 9, 9);
+        surface.addRoundedRect(QRectF(rect()), 4, 4);
         p.setClipPath(surface);
         QLinearGradient viewerGradient(0, 0, 0, height());
         viewerGradient.setColorAt(0.0, QColor(m_frame.isNull() ? "#181818" : "#101010"));
@@ -1081,9 +1081,9 @@ private:
         auto *central = new QWidget(this);
         central->setObjectName(QStringLiteral("workspaceRoot"));
         auto *root = new QVBoxLayout(central);
-        // Small gutters separate the editing surfaces without sacrificing density.
-        root->setContentsMargins(8, 8, 8, 8);
-        root->setSpacing(8);
+        // Narrow gutters give the editing surfaces a little breathing room.
+        root->setContentsMargins(2, 2, 2, 2);
+        root->setSpacing(2);
         m_artwork = new MediaArtwork(this);
 
         m_connectionBanner = new QFrame;
@@ -1119,7 +1119,7 @@ private:
 
         auto *workspace = new QSplitter(Qt::Horizontal);
         workspace->setObjectName(QStringLiteral("workspaceSplitter"));
-        workspace->setHandleWidth(8);
+        workspace->setHandleWidth(2);
         workspace->setChildrenCollapsible(false);
         root->addWidget(workspace, 1);
 
@@ -1196,18 +1196,18 @@ private:
         centerLayout->setSpacing(0);
         auto *editorSplit = new QSplitter(Qt::Vertical);
         editorSplit->setChildrenCollapsible(false);
-        editorSplit->setHandleWidth(8);
+        editorSplit->setHandleWidth(2);
         centerLayout->addWidget(editorSplit);
         auto *viewerFrame = new QFrame;
         viewerFrame->setObjectName(QStringLiteral("viewerFrame"));
         auto *viewerLayout = new QVBoxLayout(viewerFrame);
-        viewerLayout->setContentsMargins(1, 1, 1, 1);
+        viewerLayout->setContentsMargins(0, 0, 0, 0);
         m_viewer = new ViewerWidget;
         viewerLayout->addWidget(m_viewer);
         auto *browserViewerSplit = new QSplitter(Qt::Horizontal);
         browserViewerSplit->setObjectName(QStringLiteral("browserViewerSplitter"));
         browserViewerSplit->setChildrenCollapsible(false);
-        browserViewerSplit->setHandleWidth(8);
+        browserViewerSplit->setHandleWidth(2);
         browserViewerSplit->addWidget(mediaShelf);
         browserViewerSplit->addWidget(viewerFrame);
         browserViewerSplit->setStretchFactor(0, 0);

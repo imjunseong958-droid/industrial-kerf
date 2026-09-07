@@ -75,8 +75,8 @@ QFrame#mediaShelf,
 QFrame#viewerFrame,
 QWidget#timelinePanel {
     background: #181818;
-    border: 1px solid #282828;
-    border-radius: 10px;
+    border: 0;
+    border-radius: 4px;
 }
 QFrame#timelineFrame {
     background: transparent;
@@ -92,10 +92,10 @@ QFrame#agentContext {
     border: 1px solid #303030;
     border-radius: 8px;
 }
-QSplitter::handle { background: #0b0b0b; border-radius: 3px; }
+QSplitter::handle { background: #0b0b0b; }
 QSplitter::handle:hover { background: #4e4e4e; }
-QSplitter::handle:horizontal { width: 8px; }
-QSplitter::handle:vertical { height: 8px; }
+QSplitter::handle:horizontal { width: 2px; }
+QSplitter::handle:vertical { height: 2px; }
 
 QToolButton,
 QPushButton {
