@@ -276,15 +276,15 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
         QLinearGradient timelineGradient(0, 0, 0, height());
-        timelineGradient.setColorAt(0.0, QColor("#141414"));
-        timelineGradient.setColorAt(1.0, QColor("#141414"));
+        timelineGradient.setColorAt(0.0, QColor("#242424"));
+        timelineGradient.setColorAt(1.0, QColor("#242424"));
         p.fillRect(rect(), timelineGradient);
 
         const int trackCount = static_cast<int>(std::max<qsizetype>(1, m_project.value(QStringLiteral("tracks")).toArray().size()));
         const double pxPerSecond = pixelsPerSecond();
 
-        p.fillRect(0, 0, kTimelineLabelWidth, height(), QColor("#111111"));
-        p.fillRect(kTimelineLabelWidth, 0, width() - kTimelineLabelWidth, kRulerHeight, QColor("#101010"));
+        p.fillRect(0, 0, kTimelineLabelWidth, height(), QColor("#202020"));
+        p.fillRect(kTimelineLabelWidth, 0, width() - kTimelineLabelWidth, kRulerHeight, QColor("#202020"));
         p.setPen(QColor("#2a2a2a"));
         p.drawLine(kTimelineLabelWidth, 0, kTimelineLabelWidth, height());
 
@@ -314,8 +314,8 @@ protected:
             const int y = kRulerHeight + row * kTrackHeight;
             if (y + kTrackHeight < visible.top() || y > visible.bottom()) continue;
             p.fillRect(0, y, width(), kTrackHeight,
-                       row % 2 == 0 ? QColor("#141414") : QColor("#121212"));
-            p.setPen(QColor("#222222"));
+                       row % 2 == 0 ? QColor("#242424") : QColor("#202020"));
+            p.setPen(QColor("#363636"));
             p.drawLine(0, y + kTrackHeight - 1, width(), y + kTrackHeight - 1);
             const QJsonObject track = row < tracks.size() ? tracks.at(row).toObject() : QJsonObject();
             const QColor accent = trackAccent(track, row);
@@ -426,9 +426,9 @@ protected:
         }
 
         const int playheadX = kTimelineLabelWidth + static_cast<int>(m_playhead * pxPerSecond);
-        p.setPen(QPen(QColor("#e8ce54"), 1));
+        p.setPen(QPen(QColor("#c7b5ed"), 1));
         p.drawLine(playheadX, 0, playheadX, height());
-        p.setBrush(QColor("#e8ce54"));
+        p.setBrush(QColor("#c7b5ed"));
         p.setPen(Qt::NoPen);
         p.drawPolygon(QPolygonF{QPointF(playheadX - 6, 0), QPointF(playheadX + 6, 0), QPointF(playheadX, 8)});
         if (m_hasSkimmer && !m_dragging && !m_scrubbing) {
@@ -685,14 +685,14 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
         QPainterPath surface;
-        surface.addRoundedRect(QRectF(rect()), 4, 4);
+        surface.addRect(QRectF(rect()));
         p.setClipPath(surface);
         QLinearGradient viewerGradient(0, 0, 0, height());
-        viewerGradient.setColorAt(0.0, QColor(m_frame.isNull() ? "#181818" : "#101010"));
-        viewerGradient.setColorAt(1.0, QColor(m_frame.isNull() ? "#141414" : "#101010"));
+        viewerGradient.setColorAt(0.0, QColor("#242424"));
+        viewerGradient.setColorAt(1.0, QColor("#242424"));
         p.fillRect(rect(), viewerGradient);
         p.setPen(QColor("#262626"));
-        p.fillRect(0, 0, width(), 36, QColor("#1b1b1b"));
+        p.fillRect(0, 0, width(), 36, QColor("#2a2a2a"));
         p.drawLine(12, 36, width() - 12, 36);
         const QRectF target = QRectF(rect()).adjusted(12, 48, -12, -12);
         if (!m_frame.isNull()) {
@@ -710,7 +710,7 @@ protected:
             const QRectF canvas(target.center() - QPointF(canvasSize.width() / 2, canvasSize.height() / 2), canvasSize);
             p.setPen(QColor("#202020"));
             p.setBrush(QColor("#070707"));
-            p.drawRoundedRect(canvas.adjusted(0.5, 0.5, -0.5, -0.5), 6, 6);
+            p.drawRect(canvas.adjusted(0.5, 0.5, -0.5, -0.5));
             const QPointF center = canvas.center() - QPointF(0, 22);
             p.setPen(QColor("#363636"));
             p.setBrush(QColor("#181818"));
@@ -1605,6 +1605,7 @@ private:
     }
 
     void setupActions() {
+        menuBar()->setNativeMenuBar(true);
         auto *view = menuBar()->addMenu(QStringLiteral("View"));
         auto addPanelToggle = [view](const QString &title, QWidget *panel) {
             auto *action = view->addAction(title);
@@ -1657,6 +1658,25 @@ private:
         auto *toolbar = addToolBar(QStringLiteral("Main"));
         toolbar->setMovable(false);
         toolbar->setIconSize(QSize(18, 18));
+        if (!menuBar()->isNativeMenuBar()) {
+            // Keep menus accessible without dedicating a full row to them.
+            auto *menuButton = new QToolButton(toolbar);
+            menuButton->setText(QStringLiteral("☰"));
+            menuButton->setToolTip(QStringLiteral("Application menu"));
+            menuButton->setAccessibleName(QStringLiteral("Application menu"));
+            menuButton->setPopupMode(QToolButton::InstantPopup);
+            auto *applicationMenu = new QMenu(menuButton);
+            for (auto *menu : {view, file, edit, playback}) {
+                applicationMenu->addMenu(menu);
+                for (auto *action : menu->actions()) {
+                    if (action->shortcutContext() != Qt::WidgetShortcut)
+                        addAction(action);
+                }
+            }
+            menuButton->setMenu(applicationMenu);
+            toolbar->addWidget(menuButton);
+            menuBar()->hide();
+        }
         // Draw toolbar symbols on a shared grid so their weight and optical size match.
         auto icon = [](const QString &glyph) {
             QPixmap pixmap(40, 40);
