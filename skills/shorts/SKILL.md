@@ -1,50 +1,35 @@
 ---
 name: shorts
-description: 9:16 vertical shorts with probe, timeline, project_edit, fetch, and render.
+description: Build a reviewed vertical short from observed source ranges, with framing, captions, and an offline preview.
 ---
 
 # Vertical shorts
 
-Turn a longer source into a focused 15-60 second vertical cut. Keep every
-decision in the validated v2 project so it can be previewed and revised.
+Create a focused 15–60 second cut unless the user specifies another duration.
 
-If only the compact index was injected, call skill_read with `{ "name": "shorts" }`
-to load this playbook.
+1. Read `project.outline` and a bounded `timeline.query`. Follow pagination or
+   expand a node with `nodePath` when more detail is needed.
+2. Inspect source evidence with `media.probe`, using `action: "observe"` and
+   an explicit `opts.start` plus `opts.duration`. Use a filmstrip first;
+   request exact frames or local transcription only for the selected range.
+3. Choose the strongest hook and source ranges. Use `workflow.roughcut` with
+   those selections and a rationale for each. The result is a pending proposal,
+   not an applied edit.
+4. For crop or timing refinements, read `tools.describe` with
+   `{"name":"timeline.apply","commandType":"update_clip"}`. Stage related
+   changes as one atomic batch. Crop coordinates are normalized and must stay
+   within the source frame. Preserve words needed to understand the hook.
+5. Use existing subtitles or observed transcript cues. Read the `add_overlay`
+   command contract before staging captions. Do not invent speech. Existing
+   local media may be staged with `media.asset`; direct fetching and history
+   changes are not tools of the built-in agent.
+6. Run `timeline.check` on the pending proposal and use `proposal.capture`
+   to inspect its offline before/after preview. This is required when live
+   playback cannot represent layering, audio mixing, or the requested effect.
+   After acceptance, render the current project with `render.preview` or
+   `render.start` as requested.
 
-Use existing `timeline` / `probe` / `project_edit` / `render` (and `fetch` for URLs).
-
-## Workflow
-
-1. **Inspect first.** `timeline` for source and clip IDs; `probe` for
-   `info`, `silence`, and `frames` when framing is uncertain.
-2. **Tighten the cut.** Turn reviewed silence ranges into one non-empty atomic
-   `project_edit` batch. Legacy `remove_ranges` is fine. Keep words needed
-   for the hook.
-3. **Choose the hook.** Put the strongest claim, question, or visual beat in
-   the first three seconds. Do not open on dead air or an unreviewed crop.
-4. **Frame for 9:16.** Prefer v2 `update_clip` with a normalized `crop`
-   patch; legacy `set_crop` in the same atomic batch is OK. Use output
-   dimensions or transform keyframes when the host exposes them; otherwise
-   state the limitation instead of inventing an unsupported effect. When
-   `track_objects` is available, call it and use the returned `content` ROI
-   as the primary subject; include `cam`/`chat` only when the user wants those
-   overlays kept. If tracking is unavailable, use `probe` frames for crop
-   decisions as above.
-5. **Use the supplied subtitles.** For a YouTube source, `fetch` returns
-   `subsPath` (normally `.vtt`). Pass that path through `project_edit` with
-   `add_subtitles`. Use inline `add_captions` only for cues the user supplied
-   or the project already contains.
-6. **Preview before delivery.** `render` with `{draft:true}` and inspect the
-   result. Run the full render only after crop, hook, timing, and subtitles
-   are acceptable.
-
-## Guardrails
-
-- Keep the final cut at or below 60 seconds unless the user asks otherwise.
-- Keep crop rectangles normalized, finite, and inside the frame.
-- Use only structured timeline operations. If an effect is not represented by
-  an available command or legacy op, explain the limitation and ask before
-  changing the workflow.
-
-Checklist: hook ≤ 3s, reviewed 9:16 framing, concise timing, subtitle source
-identified, draft preview inspected, full render approved.
+Keep the proposal pending for user review. Recheck revision and proposal
+status before further editing; an archived tool result is historical evidence.
+Retrieve abbreviated results with `session.read` in the built-in agent or
+`results.read` when the MCP server returns an evidence handle.

@@ -9,9 +9,9 @@ use cut_agent::{
     AgentEvent, AgentSession, AgentSessionOptions, AgentTargetSummary, OpenAiApiMode, ProviderName,
     ReasoningEffort,
 };
-use cut_mcp::{docs::add_agents_pointer, inbound::InboundMcpRegistry, CutMcpRouter, McpProfile};
+use cut_mcp::{docs::add_agents_pointer, inbound, CutMcpRouter, McpProfile};
 use cut_runtime::RuntimeClient;
-use cut_skills::{load_skills, Skill};
+use cut_skills::{load_skills_with_bundled, Skill};
 use serde_json::{json, Value};
 use std::env;
 use std::fs;
@@ -141,11 +141,10 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
-    let inbound_mcp_enabled =
-        args.mcp_tools || env::var("CUT_ENABLE_MCP").ok().as_deref() == Some("1");
+    let inbound_mcp_enabled = inbound::enabled(args.mcp_tools);
     if args.mcp {
         let router = open_router(&directory, args.cutd.as_deref(), McpProfile::Full)?;
-        let inbound = InboundMcpRegistry::connect(&directory, |line| eprintln!("{line}"))
+        let inbound = inbound::InboundMcpRegistry::connect(&directory, |line| eprintln!("{line}"))
             .map_err(|error| anyhow!(error))?;
         let inbound_servers = inbound.describe();
         if !inbound_servers.is_empty() {
@@ -199,11 +198,10 @@ fn run() -> Result<()> {
     }
 
     let mut tools = router.agent_tools();
-    if inbound_mcp_enabled {
-        let inbound = InboundMcpRegistry::connect(&directory, |line| eprintln!("{line}"))
-            .map_err(|error| anyhow!(error))?;
-        tools.extend(inbound.meta_tools());
-    }
+    inbound::add_agent_tools(&mut tools, &directory, args.mcp_tools, |line| {
+        eprintln!("{line}")
+    })
+    .map_err(|error| anyhow!(error))?;
     let mut session = AgentSession::new(AgentSessionOptions {
         provider: llm.provider,
         api_mode: llm.api_mode,
@@ -227,14 +225,8 @@ fn run() -> Result<()> {
     run_repl(&mut session, &directory)
 }
 
+// Optional MCP configuration belongs to the agent, not the UI selection.
 fn uses_terminal(args: &Args) -> bool {
-    uses_terminal_with_mcp(
-        args,
-        env::var("CUT_ENABLE_MCP").ok().as_deref() == Some("1"),
-    )
-}
-
-fn uses_terminal_with_mcp(args: &Args, inbound_mcp_enabled: bool) -> bool {
     args.terminal
         || args.prompt.is_some()
         || args.skills
@@ -242,7 +234,6 @@ fn uses_terminal_with_mcp(args: &Args, inbound_mcp_enabled: bool) -> bool {
         || args.generate_docs
         || args.add_agents_pointer
         || args.mcp_tools
-        || inbound_mcp_enabled
 }
 
 fn run_gui(args: &Args, directory: &Path) -> Result<()> {
@@ -444,16 +435,11 @@ fn read_user_config() -> Value {
 }
 
 fn project_skills(directory: &Path) -> Result<Vec<Skill>> {
-    let repo_skills = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .map(|root| root.join("skills"))
-        .context("resolve bundled skills directory")?;
     let user_skills = env::var_os("HOME")
         .map(|home| PathBuf::from(home).join(".cut/skills"))
         .unwrap_or_default();
     let project_skills = directory.join(".cut/skills");
-    Ok(load_skills(&[repo_skills, user_skills, project_skills])?)
+    Ok(load_skills_with_bundled(&[user_skills, project_skills])?)
 }
 
 fn print_skills(skills: &[Skill]) {
@@ -677,14 +663,14 @@ fn operation_key(kind: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{uses_terminal_with_mcp, Args};
+    use super::{uses_terminal, Args};
     use clap::Parser;
 
     #[test]
     fn lcut_opens_the_native_editor_by_default() {
         let args = Args::try_parse_from(["lcut"]).expect("parse default launcher args");
 
-        assert!(!uses_terminal_with_mcp(&args, false));
+        assert!(!uses_terminal(&args));
     }
 
     #[test]
@@ -697,7 +683,7 @@ mod tests {
             vec!["lcut", "--generate-docs"],
         ] {
             let args = Args::try_parse_from(argv).expect("parse terminal launcher args");
-            assert!(uses_terminal_with_mcp(&args, false));
+            assert!(uses_terminal(&args));
         }
     }
 }

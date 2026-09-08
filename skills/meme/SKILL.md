@@ -1,38 +1,25 @@
 ---
 name: meme
-description: Beat-aware meme edits via split, speed, crop, and optional v2 transform keyframes.
+description: Make beat-aware meme edits with observed timing, canonical splits, speed changes, and reviewed crops.
 ---
 
 # Meme edits
 
-Use short, reversible timeline operations to make the beat legible without
-stacking effects that fight each other.
+1. Read `timeline.query` for clip IDs and current placement. Inspect bounded
+   source ranges with `media.probe` frames or `listen` when local transcription
+   is configured. Beat detection is not an advertised probe action; do not
+   claim measured beats without evidence.
+2. Read `tools.describe` for `timeline.apply` with `commandType: "split_clip"`
+   and then `commandType: "update_clip"`. Split at reviewed timeline frames,
+   assign explicit new clip IDs, and stage speed changes in one atomic batch.
+   A faster setup and slower punchline are options, not mandatory presets.
+3. For a punch-in, split around the moment and use a normalized crop on the
+   middle clip. Read the current command contract before adding transforms
+   or keyframes. Return to the original framing unless the user wants it held.
+4. Check the pending proposal with `timeline.check` and inspect
+   `proposal.capture`. Use offline evidence for effects unsupported by native
+   playback. Keep the edit pending until reviewed; after acceptance, use
+   `render.preview` or `render.start` for the current project.
 
-If only the compact index was injected, call skill_read with `{ "name": "meme" }`
-to load this playbook.
-
-Use existing `timeline` / `probe` / `project_edit` / `render`.
-
-## Workflow
-
-1. **Inspect timing.** `timeline` for clip IDs; `probe` for beat boundaries and
-   optional `frames`.
-2. **Build ramps.** `project_edit` with legacy `split` at reviewed beat
-   boundaries, then set speed on each resulting clip (`update_clip` patch or
-   legacy `set_speed`: build-up ~1.5-2x, punchline ~0.5x, return to 1x). Keep
-   split and speed changes in one atomic batch when clip IDs are known.
-3. **Punch in.** For a static punch-in, split around the moment and apply a
-   normalized crop to the middle clip in the same atomic batch. For a short
-   eased move, use v2 `transform` / `keyframes` on `update_clip` when exposed.
-4. **Preview.** `render` with `{draft:true}`; inspect punchline, framing, and
-   return to neutral speed before the full render.
-
-## Guardrails
-
-- Keep punch-ins to roughly 0.2-0.4 seconds and at most two effects on one
-  beat (for example, crop plus speed).
-- End every ramp or reframing at a neutral state unless the user asks for a
-  deliberately held effect.
-- Use only structured timeline operations. If the configured tools cannot
-  represent a requested effect, report the limitation rather than fabricating
-  an operation.
+Prefer one or two clear changes per beat. Follow paginated queries and read
+archived evidence when necessary; never repeat a mutation to recover output.

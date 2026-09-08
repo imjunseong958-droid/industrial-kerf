@@ -61,7 +61,7 @@ impl AudioRuntime {
     pub fn open(&self, timeline: PlaybackTimeline) {
         self.clock.set_position(0.0);
         self.clock.set_playing(false);
-        self.send(AudioCommand::Open(timeline));
+        self.send(AudioCommand::Open(Box::new(timeline)));
     }
 
     pub fn play(&self, position: f64) {
@@ -254,7 +254,7 @@ impl AudioClock {
 }
 
 enum AudioCommand {
-    Open(PlaybackTimeline),
+    Open(Box<PlaybackTimeline>),
     Play(f64),
     Pause,
     Seek(f64),
@@ -318,7 +318,7 @@ impl AudioWorker {
         match command {
             AudioCommand::Open(timeline) => {
                 self.stop_decoder();
-                self.timeline = timeline;
+                self.timeline = *timeline;
                 self.position = 0.0;
                 self.playing = false;
                 self.output.clear();
@@ -379,8 +379,8 @@ impl AudioWorker {
                 self.position = next_start;
                 continue;
             };
-            let clip_id = self.timeline.clips[clip_index].id.as_str();
-            let clip_end = self.timeline.clips[clip_index].timeline_end();
+            let clip_id = self.timeline.clips()[clip_index].id.as_str();
+            let clip_end = self.timeline.clips()[clip_index].timeline_end();
             let decoder_matches = self
                 .decoder
                 .as_ref()
@@ -388,8 +388,8 @@ impl AudioWorker {
             if !decoder_matches {
                 self.stop_decoder();
                 self.decoder = {
-                    let clip = &self.timeline.clips[clip_index];
-                    let source = &self.timeline.sources[source_index];
+                    let clip = &self.timeline.clips()[clip_index];
+                    let source = &self.timeline.sources()[source_index];
                     AudioDecoder::open(clip, source, self.position, sample_rate, channels).ok()
                 };
                 if self.decoder.is_none() {
@@ -426,7 +426,7 @@ impl AudioWorker {
 
     fn next_audio_start_after(&self, position: f64) -> Option<f64> {
         self.timeline
-            .clips
+            .clips()
             .iter()
             .filter(|clip| {
                 matches!(

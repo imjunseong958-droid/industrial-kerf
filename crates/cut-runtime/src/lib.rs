@@ -725,13 +725,13 @@ impl RuntimeError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct OperationRecord {
     fingerprint: String,
-    snapshot: StateSnapshot,
+    snapshot: Arc<StateSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ImportRecord {
     fingerprint: String,
-    snapshot: StateSnapshot,
+    snapshot: Arc<StateSnapshot>,
     source_id: String,
     clip_id: String,
 }
@@ -741,7 +741,7 @@ struct ProposalReceipt {
     actor: String,
     key: String,
     base_revision: u64,
-    snapshot: StateSnapshot,
+    snapshot: Arc<StateSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2812,7 +2812,7 @@ impl Runtime {
                     "idempotency key was already used for a different request",
                 ));
             }
-            return Ok(record.snapshot.clone());
+            return Ok((*record.snapshot).clone());
         }
         self.check_revision(Some(base_revision))?;
         let typed = cut_domain::parse_command(&command).map_err(domain_error)?;
@@ -2840,7 +2840,7 @@ impl Runtime {
                     actor: actor.to_owned(),
                     key: key.to_owned(),
                     base_revision,
-                    snapshot: snapshot.clone(),
+                    snapshot: Arc::new(snapshot.clone()),
                 });
             }
         }
@@ -2848,7 +2848,7 @@ impl Runtime {
             operation,
             OperationRecord {
                 fingerprint,
-                snapshot: snapshot.clone(),
+                snapshot: Arc::new(snapshot.clone()),
             },
         );
         let operation_key = format!("{actor}:{key}");
@@ -3272,7 +3272,7 @@ impl Runtime {
                 // Terminal lifecycle states are durable receipts.  Returning
                 // the recorded snapshot makes retries converge even after a
                 // later mutation advances the live project.
-                Ok(receipt.snapshot.clone())
+                Ok((*receipt.snapshot).clone())
             }
             PendingProposal::Rejected {
                 proposal_id: current_id,
@@ -3381,7 +3381,7 @@ impl Runtime {
                     "idempotency key was already used for a different request",
                 ));
             }
-            return Ok(existing.snapshot.clone());
+            return Ok((*existing.snapshot).clone());
         }
 
         let record = self.proposal.clone().ok_or_else(|| {
@@ -3434,7 +3434,7 @@ impl Runtime {
                     operation.clone(),
                     OperationRecord {
                         fingerprint,
-                        snapshot: snapshot.clone(),
+                        snapshot: Arc::new(snapshot.clone()),
                     },
                 );
                 if let Some(proposal) = candidate.proposal.as_mut() {
@@ -3442,7 +3442,7 @@ impl Runtime {
                         actor: actor.to_owned(),
                         key: key.to_owned(),
                         base_revision,
-                        snapshot: snapshot.clone(),
+                        snapshot: Arc::new(snapshot.clone()),
                     });
                 }
                 let operation_record =
@@ -3512,7 +3512,7 @@ impl Runtime {
                         "proposal rejection was already recorded for a different request",
                     ));
                 }
-                Ok(receipt.snapshot.clone())
+                Ok((*receipt.snapshot).clone())
             }
         }
     }
@@ -3558,7 +3558,7 @@ impl Runtime {
                     "idempotency key was already used for a different request",
                 ));
             }
-            return Ok(record.snapshot.clone());
+            return Ok((*record.snapshot).clone());
         }
         self.check_revision(Some(base_revision))?;
         let Some(entry) = self.past.last().cloned() else {
@@ -3574,7 +3574,7 @@ impl Runtime {
                 operation.clone(),
                 OperationRecord {
                     fingerprint,
-                    snapshot: snapshot.clone(),
+                    snapshot: Arc::new(snapshot.clone()),
                 },
             );
             let operation_record =
@@ -3618,7 +3618,7 @@ impl Runtime {
             operation.clone(),
             OperationRecord {
                 fingerprint,
-                snapshot: snapshot.clone(),
+                snapshot: Arc::new(snapshot.clone()),
             },
         );
         let operation_record = candidate
@@ -3686,7 +3686,7 @@ impl Runtime {
                     "idempotency key was already used for a different request",
                 ));
             }
-            return Ok(record.snapshot.clone());
+            return Ok((*record.snapshot).clone());
         }
         self.check_revision(Some(base_revision))?;
         let Some(entry) = self.future.last().cloned() else {
@@ -3702,7 +3702,7 @@ impl Runtime {
                 operation.clone(),
                 OperationRecord {
                     fingerprint,
-                    snapshot: snapshot.clone(),
+                    snapshot: Arc::new(snapshot.clone()),
                 },
             );
             let operation_record =
@@ -3746,7 +3746,7 @@ impl Runtime {
             operation.clone(),
             OperationRecord {
                 fingerprint,
-                snapshot: snapshot.clone(),
+                snapshot: Arc::new(snapshot.clone()),
             },
         );
         let operation_record = candidate
@@ -4075,7 +4075,7 @@ impl Runtime {
                 ));
             }
             return Ok((
-                record.snapshot.clone(),
+                (*record.snapshot).clone(),
                 record.source_id.clone(),
                 record.clip_id.clone(),
             ));
@@ -4101,7 +4101,7 @@ impl Runtime {
             import_key.clone(),
             ImportRecord {
                 fingerprint,
-                snapshot: snapshot.clone(),
+                snapshot: Arc::new(snapshot.clone()),
                 source_id: source_id.clone(),
                 clip_id: clip_id.clone(),
             },
@@ -4600,7 +4600,7 @@ impl Runtime {
                     "idempotency key was already used for a different projection import",
                 ));
             }
-            return Ok(record.snapshot.clone());
+            return Ok((*record.snapshot).clone());
         }
         self.check_revision(Some(base_revision))?;
         if !self.project_path.is_file() {
@@ -4638,7 +4638,7 @@ impl Runtime {
             operation.clone(),
             OperationRecord {
                 fingerprint,
-                snapshot: snapshot.clone(),
+                snapshot: Arc::new(snapshot.clone()),
             },
         );
         bound_receipts(&mut candidate.operations, Some(&operation));
@@ -5884,6 +5884,37 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(error.code, "IDEMPOTENCY_CONFLICT");
+    }
+
+    #[test]
+    fn receipt_snapshots_share_memory_and_keep_legacy_json_shape() {
+        let snapshot = StateSnapshot {
+            project: json!({"version": 2}),
+            revision: 7,
+            can_undo: true,
+            can_redo: false,
+            duration: 0.0,
+            sources: Vec::new(),
+            pending_proposal: None,
+            source_version: 2,
+            projection_status: "current".into(),
+        };
+        let shared = Arc::new(snapshot);
+        let record = OperationRecord {
+            fingerprint: "fingerprint".into(),
+            snapshot: shared.clone(),
+        };
+        let cloned = record.clone();
+        assert!(Arc::ptr_eq(&record.snapshot, &cloned.snapshot));
+
+        let encoded = serde_json::to_value(&record).expect("receipt JSON");
+        assert_eq!(encoded["snapshot"]["revision"], 7);
+        let legacy = serde_json::json!({
+            "fingerprint": "fingerprint",
+            "snapshot": encoded["snapshot"]
+        });
+        let decoded: OperationRecord = serde_json::from_value(legacy).expect("legacy receipt");
+        assert_eq!(decoded.snapshot.revision, 7);
     }
 
     #[test]

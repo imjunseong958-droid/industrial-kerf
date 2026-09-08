@@ -846,7 +846,7 @@ impl Worker {
                 self.decode_cursor = next_start;
                 continue;
             };
-            let clip_end = self.timeline.clips[clip_index].timeline_end();
+            let clip_end = self.timeline.clips()[clip_index].timeline_end();
             if self.decode_cursor >= clip_end {
                 self.decode_cursor = clip_end;
                 self.stop_decoder();
@@ -855,12 +855,12 @@ impl Worker {
             let decoder_matches = self
                 .decoder
                 .as_ref()
-                .is_some_and(|decoder| decoder.clip_id() == self.timeline.clips[clip_index].id);
+                .is_some_and(|decoder| decoder.clip_id() == self.timeline.clips()[clip_index].id);
             if !decoder_matches {
                 self.stop_decoder();
                 let decoder = {
-                    let clip = &self.timeline.clips[clip_index];
-                    let source = &self.timeline.sources[source_index];
+                    let clip = &self.timeline.clips()[clip_index];
+                    let source = &self.timeline.sources()[source_index];
                     VideoDecoder::open(
                         &self.config.ffmpeg_binary,
                         &self.timeline,
@@ -914,7 +914,7 @@ impl Worker {
         decoded: DecodedVideoFrame,
         timeline_time: f64,
     ) -> PlaybackFrame {
-        let clip = &self.timeline.clips[clip_index];
+        let clip = &self.timeline.clips()[clip_index];
         let frame = PlaybackFrame {
             sequence: self.sequence,
             timeline_time,

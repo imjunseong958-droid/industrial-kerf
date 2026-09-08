@@ -22,6 +22,7 @@ cut-fetcher = { path = "../cut-fetcher" }
 cut-runtime = { path = "../cut-runtime" }
 cut-skills = { path = "../cut-skills" }
 fs2 = "0.4"
+libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

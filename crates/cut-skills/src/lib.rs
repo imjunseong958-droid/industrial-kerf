@@ -18,9 +18,42 @@ pub struct Skill {
     pub dir: PathBuf,
 }
 
+/// The playbooks shipped with the binary. Keeping their contents in the
+/// executable makes the agent independent of its current working directory.
+pub fn bundled_skills() -> Vec<Skill> {
+    [
+        include_str!("../../../skills/shorts/SKILL.md"),
+        include_str!("../../../skills/meme/SKILL.md"),
+        include_str!("../../../skills/stream-gameplay/SKILL.md"),
+    ]
+    .into_iter()
+    .map(|content| {
+        parse_skill_content(content, Path::new("<bundled>/SKILL.md"))
+            .expect("bundled skill parsing")
+            .expect("bundled skill must have valid frontmatter")
+    })
+    .collect()
+}
+
+/// Load bundled skills first, then apply user and project overrides.
+pub fn load_skills_with_bundled(directories: &[impl AsRef<Path>]) -> io::Result<Vec<Skill>> {
+    let mut loaded = BTreeMap::new();
+    for skill in bundled_skills() {
+        loaded.insert(skill.name.clone(), skill);
+    }
+    for skill in load_skills(directories)? {
+        loaded.insert(skill.name.clone(), skill);
+    }
+    Ok(loaded.into_values().collect())
+}
+
 /// Parse a markdown skill with a YAML-like frontmatter header.
 pub fn parse_skill_md(path: &Path) -> io::Result<Option<Skill>> {
     let content = fs::read_to_string(path)?;
+    parse_skill_content(&content, path)
+}
+
+fn parse_skill_content(content: &str, path: &Path) -> io::Result<Option<Skill>> {
     let mut lines = content.lines();
     if lines.next().map(str::trim) != Some("---") {
         return Ok(None);
@@ -107,9 +140,21 @@ pub fn skills_index_prompt(skills: &[Skill]) -> String {
     }
     skills
         .iter()
-        .map(|skill| format!("- {}: {}", skill.name, skill.description))
+        .take(16)
+        .map(|skill| {
+            format!(
+                "- {}: {}",
+                skill.name,
+                skill.description.chars().take(200).collect::<String>()
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n")
+        + if skills.len() > 16 {
+            "\n- More skills available via skills.list."
+        } else {
+            ""
+        }
 }
 
 /// Compose a prompt with a compact skill index and the explicit read rule.
@@ -134,6 +179,15 @@ pub fn skill_read_tool_schema() -> Value {
             "required": ["name"],
             "additionalProperties": false
         }
+    })
+}
+
+/// JSON schema shared by the MCP and native agent adapters for listing skills.
+pub fn skill_list_tool_schema() -> Value {
+    json!({
+        "name": "skills.list",
+        "description": "List installed skills as compact names and descriptions.",
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false}
     })
 }
 
@@ -186,5 +240,19 @@ mod tests {
         fs::create_dir_all(&dir).expect("skill directory");
         fs::write(dir.join("SKILL.md"), "# no frontmatter").expect("skill file");
         assert!(load_skills(&[root.path()]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn bundled_skills_are_available_without_a_working_directory() {
+        let skills = bundled_skills();
+        assert!(find_skill(&skills, "shorts").is_some());
+        assert!(find_skill(&skills, "meme")
+            .unwrap()
+            .body
+            .contains("Meme edits"));
+        assert_eq!(
+            find_skill(&skills, "shorts").unwrap().dir,
+            PathBuf::from("<bundled>")
+        );
     }
 }

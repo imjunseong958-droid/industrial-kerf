@@ -55,8 +55,61 @@ daemon; the `CUTD_BIN` environment variable does the same.
 
 `--mcp` lists the native catalog and any servers configured in
 `~/.cut/mcp.json` or `<project>/.cut/mcp.json`. `--mcp-tools` (or
-`CUT_ENABLE_MCP=1`) attaches those inbound stdio servers to the terminal agent
-through `mcp_search` and `mcp_call`; configured tool allowlists are enforced.
+`CUT_ENABLE_MCP=1`) attaches those inbound stdio servers through `mcp_search`,
+`mcp_describe`, and `mcp_call`; configured tool allowlists are enforced.
+The Rust agent launched from the Qt editor uses the same attachment helper
+when `CUT_ENABLE_MCP=1`. Qt remains a presentation layer.
+
+## Agent discovery and context
+
+Use `tools.search` for compact native tool descriptions, then `tools.describe`
+for the selected schema. For edits, pass `name: "timeline.apply"` and a
+`commandType` such as `trim_clip` or `update_clip` to retrieve one command's
+fields and example. Without `commandType`, the response lists the available
+command types. The built-in agent advertises a fixed set of bootstrap tools
+and executes other discovered native operations through `tools.call`, keeping
+new feature schemas out of every initial prompt. External MCP catalogs also
+keep detailed command schemas behind `tools.describe`.
+Atomic edits accept up to 256 command entries and 16 nested
+batch levels.
+
+Bundled playbooks are compiled into `cut-skills`; they do not depend on the
+working directory or the build machine's source tree. User and project skills
+override bundled names. The initial prompt includes at most 16 names with
+short descriptions. Discover additional skills with paginated `skills.list`
+and load one body with `skills.read`.
+
+`timeline.query` accepts `start`, `end`, `trackId`, `clipId`, `offset`, and
+`limit`. Time ranges are half-open. `project.outline` has a node budget;
+expand a returned node's `path` with `nodePath`, `childOffset`, and `childLimit`.
+Follow the returned cursors and recheck the revision when continuing a query.
+External MCP results larger than 16 KiB become immutable `results.read`
+handles. That tool reads a JSON pointer or UTF-8 page without repeating the
+operation. Evidence is cached in `.cut/cache/tool-results` with a 64 MiB entry
+limit and a 128 MiB cache budget. Old handles can expire; do not retry a
+mutation merely to retrieve its output.
+
+The built-in agent retains its original transcript but constructs a bounded
+view for each provider request. It prioritizes the current user request,
+the latest tool exchange, and earlier user requirements. Older evidence and
+images are replaced by explicit `session.read` references. That tool can
+retrieve a message, a tool result's JSON pointer, or one archived image.
+When earlier requirements cannot fit, the view identifies their archive
+indices and tells the agent to read them before making assumptions. This is
+deterministic context reduction, not an LLM-generated semantic summary.
+
+`CUT_AGENT_INPUT_BUDGET` controls the input allowance (default 65536 units).
+The allowance conservatively charges text by UTF-8 bytes plus overhead and
+reserves 16384 units per image; it is not an exact vendor token count. Choose
+an allowance below the selected model's context window, leaving room for
+output and reasoning. A context-limit response causes one retry with a
+smaller view, without re-executing tools. A user request or fixed catalog that
+cannot fit produces an explicit error instead of silent truncation.
+
+Inbound MCP transport limits each message to 4 MiB. On Unix, it times out
+after 30 seconds (`CUT_MCP_TIMEOUT_MS` overrides it) and running calls observe
+the agent's cancellation flag. A cancelled external operation
+may have already taken effect; verify its state before retrying it.
 
 The Qt bridge, daemon, decoder, agent proposal, and restart smoke test are
 available at:

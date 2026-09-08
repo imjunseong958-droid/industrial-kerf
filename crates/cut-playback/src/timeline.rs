@@ -63,6 +63,13 @@ pub struct ResolvedClip {
     pub source: PlaybackSource,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ClipIndexEntry {
+    clip_index: usize,
+    start: f64,
+    end: f64,
+}
+
 impl ResolvedClip {
     pub fn timeline_end(&self) -> f64 {
         self.clip.timeline_end()
@@ -86,13 +93,31 @@ pub struct PlaybackTimeline {
     pub width: u32,
     pub height: u32,
     pub duration: f64,
-    pub sources: Vec<PlaybackSource>,
-    pub clips: Vec<PlaybackClip>,
-    pub captions: Vec<CaptionCue>,
+    sources: Vec<PlaybackSource>,
+    clips: Vec<PlaybackClip>,
+    captions: Vec<CaptionCue>,
     pub subtitles: Vec<PathBuf>,
+    source_indices: HashMap<String, usize>,
+    caption_prefix_max_end: Vec<f64>,
+    clip_index: Vec<ClipIndexEntry>,
+    clip_prefix_max_end: Vec<f64>,
 }
 
 impl PlaybackTimeline {
+    /// Sources resolved by this immutable playback plan.
+    pub fn sources(&self) -> &[PlaybackSource] {
+        &self.sources
+    }
+
+    /// Clips in their original project order, which defines overlap priority.
+    pub fn clips(&self) -> &[PlaybackClip] {
+        &self.clips
+    }
+
+    /// Inline captions sorted by timeline start.
+    pub fn captions(&self) -> &[CaptionCue] {
+        &self.captions
+    }
     /// Build a playback plan from a validated typed project.
     pub fn from_project(project: &Project) -> Result<Self, PlaybackError> {
         cut_domain::validate(project)
@@ -192,6 +217,41 @@ impl PlaybackTimeline {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
+        let caption_prefix_max_end = captions
+            .iter()
+            .scan(f64::NEG_INFINITY, |max_end, cue| {
+                *max_end = (*max_end).max(cue.end);
+                Some(*max_end)
+            })
+            .collect();
+        let source_indices = sources
+            .iter()
+            .enumerate()
+            .map(|(index, source)| (source.id.clone(), index))
+            .collect();
+        let mut clip_index: Vec<_> = clips
+            .iter()
+            .enumerate()
+            .map(|(clip_index, clip)| ClipIndexEntry {
+                clip_index,
+                start: clip.timeline_start,
+                end: clip.timeline_end(),
+            })
+            .collect();
+        clip_index.sort_by(|left, right| {
+            left.start
+                .partial_cmp(&right.start)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(left.clip_index.cmp(&right.clip_index))
+        });
+        let clip_prefix_max_end = clip_index
+            .iter()
+            .scan(f64::NEG_INFINITY, |max_end, entry| {
+                *max_end = (*max_end).max(entry.end);
+                Some(*max_end)
+            })
+            .collect();
+
         let duration = project.duration().max(
             clips
                 .iter()
@@ -216,6 +276,10 @@ impl PlaybackTimeline {
             clips,
             captions,
             subtitles,
+            source_indices,
+            caption_prefix_max_end,
+            clip_index,
+            clip_prefix_max_end,
         })
     }
 
@@ -236,9 +300,9 @@ impl PlaybackTimeline {
                     && clip.contains(timeline_time)
             })
             .filter_map(|clip| {
-                self.sources
-                    .iter()
-                    .find(|source| source.id == clip.source_id)
+                self.source_indices
+                    .get(&clip.source_id)
+                    .and_then(|index| self.sources.get(*index))
                     .cloned()
                     .map(|source| ResolvedClip {
                         clip: clip.clone(),
@@ -256,62 +320,92 @@ impl PlaybackTimeline {
         &self,
         timeline_time: f64,
     ) -> Option<(&PlaybackClip, &PlaybackSource)> {
-        self.clips
-            .iter()
-            .rev()
-            .filter(|clip| clip.track_kind == TrackType::Video)
-            .filter(|clip| clip.contains(timeline_time))
-            .find_map(|clip| {
-                self.sources
-                    .iter()
-                    .find(|source| source.id == clip.source_id)
-                    .map(|source| (clip, source))
-            })
+        let entry = self
+            .indexed_entries_at(timeline_time)?
+            .filter(|entry| self.clips[entry.clip_index].track_kind == TrackType::Video)
+            .max_by_key(|entry| entry.clip_index)?;
+        let clip = &self.clips[entry.clip_index];
+        let source = self
+            .source_indices
+            .get(&clip.source_id)
+            .and_then(|index| self.sources.get(*index))?;
+        Some((clip, source))
     }
 
     pub(crate) fn video_at_indices(&self, timeline_time: f64) -> Option<(usize, usize)> {
-        self.clips
-            .iter()
-            .enumerate()
-            .rev()
-            .filter(|(_, clip)| clip.track_kind == TrackType::Video && clip.contains(timeline_time))
-            .find_map(|(clip_index, clip)| {
-                self.sources
-                    .iter()
-                    .position(|source| source.id == clip.source_id)
-                    .map(|source_index| (clip_index, source_index))
-            })
+        let entry = self
+            .indexed_entries_at(timeline_time)?
+            .filter(|entry| self.clips[entry.clip_index].track_kind == TrackType::Video)
+            .max_by_key(|entry| entry.clip_index)?;
+        let source_index = self
+            .source_indices
+            .get(&self.clips[entry.clip_index].source_id)
+            .copied()?;
+        Some((entry.clip_index, source_index))
     }
 
     pub(crate) fn audio_at_indices(&self, timeline_time: f64) -> Option<(usize, usize)> {
-        self.clips
-            .iter()
-            .enumerate()
-            .filter(|(_, clip)| {
-                matches!(clip.track_kind, TrackType::Audio | TrackType::Video)
-                    && !clip.track_muted
-                    && clip.contains(timeline_time)
+        self.indexed_entries_at(timeline_time)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| {
+                let clip = &self.clips[entry.clip_index];
+                if !matches!(clip.track_kind, TrackType::Audio | TrackType::Video)
+                    || clip.track_muted
+                {
+                    return None;
+                }
+                let source_index = self.source_indices.get(&clip.source_id).copied()?;
+                self.sources[source_index]
+                    .has_audio
+                    .then_some((entry.clip_index, source_index))
             })
-            .find_map(|(clip_index, clip)| {
-                self.sources
-                    .iter()
-                    .position(|source| source.id == clip.source_id && source.has_audio)
-                    .map(|source_index| (clip_index, source_index))
-            })
+            .min_by_key(|(clip_index, _)| *clip_index)
     }
 
     pub fn next_video_start_after(&self, timeline_time: f64) -> Option<f64> {
-        self.clips
+        if !timeline_time.is_finite() {
+            return None;
+        }
+        let first = self
+            .clip_index
+            .partition_point(|entry| entry.start <= timeline_time);
+        self.clip_index[first..]
             .iter()
-            .filter(|clip| {
-                clip.track_kind == TrackType::Video && clip.timeline_start > timeline_time
-            })
-            .map(|clip| clip.timeline_start)
-            .min_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal))
+            .find(|entry| self.clips[entry.clip_index].track_kind == TrackType::Video)
+            .map(|entry| entry.start)
+    }
+
+    fn indexed_entries_at(
+        &self,
+        timeline_time: f64,
+    ) -> Option<impl Iterator<Item = &ClipIndexEntry>> {
+        if !timeline_time.is_finite() {
+            return None;
+        }
+        let end = self
+            .clip_index
+            .partition_point(|entry| entry.start <= timeline_time);
+        let first =
+            self.clip_prefix_max_end[..end].partition_point(|max_end| *max_end <= timeline_time);
+        Some(
+            self.clip_index[first..end]
+                .iter()
+                .filter(move |entry| entry.end > timeline_time),
+        )
     }
 
     pub fn captions_at(&self, timeline_time: f64) -> Vec<CaptionCue> {
-        self.captions
+        if !timeline_time.is_finite() {
+            return Vec::new();
+        }
+        let first = self
+            .caption_prefix_max_end
+            .partition_point(|end| *end <= timeline_time);
+        let end = self
+            .captions
+            .partition_point(|cue| cue.start <= timeline_time);
+        self.captions[first.min(end)..end]
             .iter()
             .filter(|cue| timeline_time >= cue.start && timeline_time < cue.end)
             .cloned()
@@ -478,6 +572,33 @@ mod tests {
     }
 
     #[test]
+    fn caption_index_preserves_overlaps_and_exclusive_boundaries() {
+        let project = project(json!({
+            "overlays": [{
+                "id": "captions",
+                "type": "captions",
+                "cues": [
+                    {"start": 0.0, "end": 10.0, "text": "long"},
+                    {"start": 2.0, "end": 4.0, "text": "short"},
+                    {"start": 4.0, "end": 6.0, "text": "next"}
+                ]
+            }]
+        }));
+        let timeline = PlaybackTimeline::from_project(&project).expect("timeline");
+        assert_eq!(timeline.captions_at(2.0).len(), 2);
+        assert_eq!(
+            timeline
+                .captions_at(4.0)
+                .iter()
+                .map(|cue| cue.text.as_str())
+                .collect::<Vec<_>>(),
+            ["long", "next"]
+        );
+        assert!(timeline.captions_at(10.0).is_empty());
+        assert!(timeline.captions_at(f64::NAN).is_empty());
+    }
+
+    #[test]
     fn explicit_duration_limits_the_declared_source_out() {
         let project = project(json!({
             "tracks": [{
@@ -520,6 +641,59 @@ mod tests {
         assert_eq!(clip.duration, 10.0);
         assert_eq!(timeline.duration, 11.0);
         assert!(timeline.audio_at(5.0).is_empty());
+    }
+
+    #[test]
+    fn clip_index_handles_overlaps_gaps_and_backward_queries() {
+        let project = project(json!({
+            "sources": [{
+                "id": "source-a",
+                "path": "/tmp/source-a.mp4",
+                "duration": 10,
+                "hasAudio": true
+            }],
+            "tracks": [
+                {
+                    "id": "video-1",
+                    "type": "video",
+                    "muted": true,
+                    "clips": [
+                        {"id": "video-a", "sourceId": "source-a", "duration": 4, "timelineStart": 0},
+                        {"id": "video-b", "sourceId": "source-a", "duration": 2, "timelineStart": 2},
+                        {"id": "video-c", "sourceId": "source-a", "duration": 1, "timelineStart": 6}
+                    ]
+                },
+                {
+                    "id": "audio-1",
+                    "type": "audio",
+                    "clips": [
+                        {"id": "audio-a", "sourceId": "source-a", "duration": 4, "timelineStart": 1},
+                        {"id": "audio-b", "sourceId": "source-a", "duration": 1, "timelineStart": 2}
+                    ]
+                }
+            ]
+        }));
+        let timeline = PlaybackTimeline::from_project(&project).expect("timeline");
+
+        assert_eq!(timeline.video_at(2.5).expect("overlap").clip.id, "video-b");
+        assert_eq!(
+            timeline.video_at(6.5).expect("later clip").clip.id,
+            "video-c"
+        );
+        assert!(timeline.video_at(4.0).is_none());
+        assert_eq!(timeline.next_video_start_after(4.0), Some(6.0));
+        assert_eq!(
+            timeline.video_at_indices(2.5).map(|(_, source)| source),
+            Some(0)
+        );
+        assert_eq!(
+            timeline
+                .audio_at_indices(2.5)
+                .map(|(clip, _)| timeline.clips()[clip].id.as_str()),
+            Some("audio-a")
+        );
+        assert!(timeline.video_at(f64::NAN).is_none());
+        assert_eq!(timeline.next_video_start_after(f64::NAN), None);
     }
 
     #[test]

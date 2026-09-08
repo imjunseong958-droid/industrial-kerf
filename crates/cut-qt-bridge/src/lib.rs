@@ -1,6 +1,7 @@
 //! Qt's nonblocking, UTF-8 C ABI. Canonical edits stay in cutd; media frames
 //! travel through a latest-frame slot rather than JSON or an accumulating queue.
 use cut_agent::{AgentEvent, AgentSession, AgentSessionOptions, OpenAiApiMode, ProviderName};
+use cut_mcp::inbound;
 use cut_mcp::{CutMcpRouter, McpProfile};
 use cut_playback::{PlaybackConfig, PlaybackEvent, PlaybackFrame, PlaybackSession, PlaybackState};
 use cut_runtime::{RuntimeClient, StateSnapshot};
@@ -158,7 +159,7 @@ fn publish_snapshot(
     let project_changed = previous
         .as_ref()
         .and_then(|snapshot| snapshot.get("project"))
-        .map_or(true, |project| project != &state.project);
+        != Some(&state.project);
     if project_changed {
         if let Ok(mut slot) = shared.project.lock() {
             shared.revision.fetch_add(1, Ordering::SeqCst);
@@ -596,6 +597,8 @@ fn new_agent(
         })
         .transpose()?;
     let router = CutMcpRouter::new(directory, McpProfile::Full, Some(binary))?;
+    let mut tools = router.agent_tools();
+    inbound::add_agent_tools(&mut tools, directory, false, |line| eprintln!("{line}"))?;
     Ok(AgentSession::new(AgentSessionOptions {
         provider,
         api_mode,
@@ -619,7 +622,7 @@ fn new_agent(
                 .ok()
             }),
         skills: router.skills().to_vec(),
-        tools: router.agent_tools(),
+        tools,
         ..Default::default()
     }))
 }
@@ -641,9 +644,10 @@ fn agent_worker(
         emit(&tx, json!({"type":"agent_busy","busy":true}));
         emit(&tx, json!({"type":"agent_state","state":"running"}));
         let result = (|| {
-            if session.as_ref().map_or(true, |(active_settings, _)| {
-                active_settings != &request.settings
-            }) {
+            if session
+                .as_ref()
+                .is_none_or(|(active_settings, _)| active_settings != &request.settings)
+            {
                 session = Some((
                     request.settings.clone(),
                     new_agent(&directory, &binary, &request.settings)?,

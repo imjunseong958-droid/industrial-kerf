@@ -4,6 +4,7 @@ dist/
 .env
 .cut/config.json
 .cut/vision.json
+.cut/cache/
 *.pt
 *.mp4
 *.mov

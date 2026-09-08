@@ -1,48 +1,26 @@
 ---
 name: stream-gameplay
-description: Reframe streams around cam, chat, and content tracking with reviewed v2 crop and transform.
+description: Reframe gameplay while preserving the requested game, camera, and chat regions with reviewed crops.
 ---
 
 # Stream/gameplay reframing
 
-Reframe a landscape stream or gameplay recording into a vertical or focused
-layout. Use only the three configured tracking classes: `cam` (streamer camera
-overlay), `chat` (chat overlay), and `content` (main gameplay/stream canvas).
-Treat `content` as the default framing anchor when the user wants the game or
-stream itself visible; add `cam` and `chat` when those overlays should stay on
-screen.
+1. Read `project.outline` and bounded `timeline.query` pages for the source,
+   placement, and revision. Inspect filmstrips and selected exact frames with
+   `media.probe`. Treat game content as the framing anchor unless the user
+   requests another subject.
+2. Identify game content, camera, and chat regions from available evidence.
+   `vision.track_objects` may report `CAPABILITY_UNAVAILABLE`; use observed
+   frames when tracking is unavailable and do not invent tracked motion.
+3. Keep requested regions visible. If one crop cannot preserve all requested
+   regions, explain the composition choice. For a layered proposal, use the
+   offline preview because native playback does not composite all layers.
+4. Read `tools.describe` for the required `timeline.apply` command types.
+   Stage related crop, placement, and supported transform changes in one
+   atomic batch. Coordinates must be finite, normalized, and within the frame.
+5. Run `timeline.check` on the pending proposal and inspect `proposal.capture`
+   for visibility, crop edges, and motion. Recheck proposal status before
+   subsequent edits. Render the current project after acceptance as requested.
 
-If only the compact index was injected, call skill_read with `{ "name": "stream-gameplay" }`
-to load this playbook.
-
-Use existing `timeline` / `probe` / `project_edit` / `render`, and optional `track_objects` when configured.
-
-## Workflow
-
-1. **Inspect the project.** `timeline` first: source clip, output aspect,
-   duration, and current revision.
-2. **Track exactly three targets.** When configured, call `track_objects` with
-   the source path. Use only `cam`, `chat`, and `content`.
-3. **Review the crop plan.** Keep class-separated ROIs for `cam`, `chat`, and
-   `content`; use `plan.keyframesByClass.content` / `byClass.content` for the
-   main-picture ROI at the requested aspect ratio. Show proposed bounds and
-   whether each target is included; reject obvious outliers. If chat must be
-   preserved and one crop cannot fit cam, chat, and content together, widen the
-   crop or add a separate v2 video track/clip when exposed. Never silently crop
-   chat away.
-4. **Apply one safe transaction.** After the plan is accepted, `project_edit`
-   with one non-empty atomic `commands` batch of `update_clip` patches
-   (`crop`, `transform`, `keyframes`; time relative to the containing clip).
-   Include chat-preserving geometry in the same batch. A rejected batch must
-   leave the project unchanged.
-5. **Preview, then render.** Draft preview first; inspect cam, chat, content
-   visibility, crop edges, and motion. Full render only after acceptance.
-
-## Guardrails
-
-- Tracking targets for this skill are only `cam`, `chat`, and `content`.
-- Keep crop coordinates normalized, finite, and within `[0,1]`; clamp before
-  writing to the timeline.
-- Do not use shell commands or hand-edit the project around the transaction.
-  If `track_objects` or v2 commands are unavailable, report the gap
-  and stop before mutating.
+Never silently crop away requested chat or camera content. Use structured
+commands and preserve the original project until the proposal is accepted.

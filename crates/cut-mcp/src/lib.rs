@@ -4,15 +4,19 @@
 //! it reads an authoritative snapshot for each request and sends canonical
 //! commands back with an idempotency key and revision.
 
+mod contracts;
 pub mod docs;
 pub mod inbound;
+mod results;
 
 use base64::Engine;
 use cut_agent::{AgentTool, ToolMap};
-use cut_domain::{Clip, Command, Project};
+use cut_domain::{Clip, Command, OutlineNode, Project};
 use cut_engine::derivatives::{DerivativeCache, SourceIdentity};
 use cut_runtime::{RuntimeClient, RuntimeError, StateSnapshot};
-use cut_skills::{find_skill, load_skills, skill_read_tool_schema, Skill};
+use cut_skills::{
+    find_skill, load_skills_with_bundled, skill_list_tool_schema, skill_read_tool_schema, Skill,
+};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -42,6 +46,9 @@ const AGENT_CANONICAL_ONLY_TOOLS: &[&str] = &[
 ];
 
 pub const CORE_TOOL_NAMES: &[&str] = &[
+    "results.read",
+    "tools.search",
+    "tools.describe",
     "timeline.query",
     "timeline.check",
     "timeline.capture",
@@ -57,10 +64,14 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     "render.start",
     "render.result",
     "project.outline",
+    "skills.list",
     "skills.read",
 ];
 
 pub const FULL_TOOL_NAMES: &[&str] = &[
+    "results.read",
+    "tools.search",
+    "tools.describe",
     "project.inspect",
     "project.outline",
     "timeline.query",
@@ -83,6 +94,7 @@ pub const FULL_TOOL_NAMES: &[&str] = &[
     "media.asset",
     "vision.track_objects",
     "workflow.roughcut",
+    "skills.list",
     "skills.read",
 ];
 
@@ -414,7 +426,9 @@ impl CutMcpRouter {
                 continue;
             }
             let router = self.clone_for_agent();
-            let name = definition.name.clone();
+            // Namespaces belong to the external MCP adapter, not the shared
+            // built-in agent's bootstrap/discovery contract.
+            let name = agent_name.clone();
             let description = definition.description.clone();
             let input_schema = definition.input_schema.clone();
             tools.insert(
@@ -432,7 +446,13 @@ impl CutMcpRouter {
             .parse_name(presented_name)
             .unwrap_or_else(|| presented_name.to_owned());
         match self.call_base(&base_name, arguments) {
-            Ok(result) => json!({"ok": true, "result": result}),
+            Ok(result) => {
+                let mut result = results::bound(&self.dir, result);
+                if result.get("readWith").is_some() {
+                    result["readWith"]["tool"] = json!(self.definition("results.read").name);
+                }
+                json!({"ok": true, "result": result})
+            }
             Err(error) => json!({"ok": false, "error": error.shape()}),
         }
     }
@@ -486,6 +506,10 @@ impl CutMcpRouter {
 
     fn call_inner(&self, name: &str, arguments: Value) -> Result<Value, McpError> {
         match name {
+            "results.read" => results::read(&self.dir, &arguments)
+                .map_err(|error| McpError::new("RESULT_UNAVAILABLE", error)),
+            "tools.search" => self.tools_search(&arguments),
+            "tools.describe" => self.tools_describe(&arguments),
             "project.inspect" => self.project_inspect(arguments),
             "project.outline" => self.project_outline(arguments),
             "project.validate" => self.project_validate(arguments),
@@ -518,6 +542,7 @@ impl CutMcpRouter {
                 "vision.track_objects requires a configured YOLO runtime",
             )),
             "skills.read" => self.skills_read(&arguments),
+            "skills.list" => self.skills_list(&arguments),
             _ => Err(McpError::new(
                 "UNKNOWN_TOOL",
                 format!("unknown tool: {name}"),
@@ -542,15 +567,133 @@ impl CutMcpRouter {
         Ok(result)
     }
 
-    fn project_outline(&self, _arguments: Value) -> Result<Value, McpError> {
+    fn project_outline(&self, arguments: Value) -> Result<Value, McpError> {
         let snapshot = self.state()?;
         let project = parse_project(&snapshot)?;
-        let mut result = serde_json::to_value(cut_domain::project_outline(&project))
+        let mut outline = cut_domain::project_outline(&project);
+        let kind = arguments.get("kind").and_then(Value::as_str);
+        let track_id = arguments.get("trackId").and_then(Value::as_str);
+        let node_path = arguments.get("nodePath").and_then(Value::as_str);
+        let mut selected_child_total = None;
+        let offset = arguments.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let limit = arguments
+            .get("limit")
+            .and_then(Value::as_u64)
+            .unwrap_or(100)
+            .clamp(1, 500) as usize;
+        outline.root.children.retain(|node| {
+            kind.is_none_or(|value| node.kind.as_str() == value)
+                && track_id.is_none_or(|value| node.entity_id.as_deref() == Some(value))
+        });
+        if let Some(path) = node_path {
+            if let Some(node) = outline
+                .root
+                .children
+                .iter()
+                .find_map(|node| find_outline_node(node, path).cloned())
+            {
+                outline.root.children = vec![node];
+            } else {
+                outline.root.children.clear();
+            }
+            let child_offset = arguments
+                .get("childOffset")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as usize;
+            let child_limit = arguments
+                .get("childLimit")
+                .and_then(Value::as_u64)
+                .unwrap_or(100)
+                .clamp(1, 500) as usize;
+            if let Some(node) = outline
+                .root
+                .children
+                .first_mut()
+                .and_then(|root| find_outline_node_mut(root, path))
+            {
+                selected_child_total = Some(node.children.len());
+                node.children = node
+                    .children
+                    .drain(..)
+                    .skip(child_offset)
+                    .take(child_limit)
+                    .collect();
+            }
+        }
+        let filtered_total = outline.root.children.len();
+        outline.root.children = outline
+            .root
+            .children
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .collect();
+        let max_nodes = arguments
+            .get("maxNodes")
+            .and_then(Value::as_u64)
+            .unwrap_or(500)
+            .clamp(2, 5000) as usize;
+        let before_nodes = outline
+            .root
+            .children
+            .iter()
+            .map(count_outline_nodes)
+            .sum::<usize>();
+        let mut budget = max_nodes;
+        let mut children = Vec::new();
+        for mut child in outline.root.children.drain(..) {
+            if budget == 0 {
+                break;
+            }
+            truncate_outline_nodes(&mut child, &mut budget);
+            children.push(child);
+        }
+        outline.root.children = children;
+        let returned_nodes = outline
+            .root
+            .children
+            .iter()
+            .map(count_outline_nodes)
+            .sum::<usize>();
+        let mut result = serde_json::to_value(outline)
             .map_err(|error| McpError::new("SERIALIZATION_FAILED", error.to_string()))?;
         result["action"] = json!("project.outline");
         result["revision"] = json!(snapshot.revision);
         result["sourceVersion"] = json!(snapshot.source_version);
         result["projectionStatus"] = json!(snapshot.projection_status);
+        result["offset"] = json!(offset);
+        result["limit"] = json!(limit);
+        result["total"] = json!(filtered_total);
+        result["nodeCount"] = json!(returned_nodes);
+        result["totalNodeCount"] = json!(before_nodes);
+        result["truncated"] = json!(before_nodes > max_nodes);
+        if let Some(path) = node_path {
+            let requested = result["root"]["children"]
+                .as_array()
+                .and_then(|v| v.first())
+                .cloned();
+            if let Some(node) = requested {
+                let total = selected_child_total
+                    .unwrap_or_else(|| node["children"].as_array().map_or(0, Vec::len));
+                let page = node["children"].as_array().cloned().unwrap_or_default();
+                result["nodePath"] = json!(path);
+                result["childTotal"] = json!(total);
+                result["childCount"] = json!(page.len());
+                let child_offset = arguments
+                    .get("childOffset")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0) as usize;
+                result["childNextOffset"] = json!((child_offset.saturating_add(page.len())
+                    < total)
+                    .then_some(child_offset.saturating_add(page.len())));
+            }
+        }
+        result["nextOffset"] = json!((offset
+            .saturating_add(result["root"]["children"].as_array().map_or(0, Vec::len))
+            < filtered_total)
+            .then_some(
+                offset.saturating_add(result["root"]["children"].as_array().map_or(0, Vec::len))
+            ));
         Ok(result)
     }
 
@@ -572,6 +715,34 @@ impl CutMcpRouter {
         let project = parse_project(&snapshot)?;
         let track_filter = arguments.get("trackId").and_then(Value::as_str);
         let clip_filter = arguments.get("clipId").and_then(Value::as_str);
+        let range_start = arguments.get("start").and_then(Value::as_f64);
+        let range_end = arguments.get("end").and_then(Value::as_f64);
+        for key in ["start", "end"] {
+            if arguments.get(key).is_some_and(|value| {
+                value
+                    .as_f64()
+                    .is_none_or(|time| !time.is_finite() || time < 0.0)
+            }) {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    format!("{key} must be a finite non-negative time"),
+                ));
+            }
+        }
+        if matches!((range_start,range_end),(Some(start),Some(end)) if end <= start) {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "end must be greater than start",
+            ));
+        }
+        let offset = arguments.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let limit = arguments
+            .get("limit")
+            .and_then(Value::as_u64)
+            .unwrap_or(100)
+            .clamp(1, 500) as usize;
+        let mut seen = 0usize;
+        let mut emitted = 0usize;
         let tracks = project
             .tracks
             .iter()
@@ -581,21 +752,39 @@ impl CutMcpRouter {
                     .clips
                     .iter()
                     .filter(|clip| clip_filter.is_none_or(|id| id == clip.id.as_str()))
-                    .map(|clip| {
-                        json!({
+                    .filter(|clip| {
+                        let start = clip.timeline_start;
+                        let end = start + clip.timeline_duration().unwrap_or_default();
+                        range_start.is_none_or(|value| end > value)
+                            && range_end.is_none_or(|value| start < value)
+                    })
+                    .filter_map(|clip| {
+                        let index = seen;
+                        seen += 1;
+                        if index < offset || emitted >= limit {
+                            return None;
+                        }
+                        emitted += 1;
+                        Some(json!({
                             "id": clip.id,
                             "sourceId": clip.source_id,
                             "timelineStart": clip.timeline_start,
                             "duration": clip.timeline_duration(),
                             "in": clip.source_in,
                             "out": clip.source_out,
-                        })
+                        }))
                     })
                     .collect::<Vec<_>>();
                 json!({"id": track.id, "type": track.kind.as_str(), "clips": clips})
             })
+            .filter(|track| {
+                track["clips"]
+                    .as_array()
+                    .is_some_and(|clips| !clips.is_empty())
+            })
             .collect::<Vec<_>>();
-        let mut result = json!({"revision": snapshot.revision, "tracks": tracks});
+        let total = seen;
+        let mut result = json!({"revision": snapshot.revision, "tracks": tracks, "offset": offset, "limit": limit, "total": total, "nextOffset": (offset.saturating_add(emitted) < total).then_some(offset.saturating_add(emitted))});
         if arguments.get("include").and_then(Value::as_str) == Some("full") {
             result["project"] = snapshot.project;
         }
@@ -2100,6 +2289,118 @@ impl CutMcpRouter {
         }))
     }
 
+    fn tools_search(&self, arguments: &Value) -> Result<Value, McpError> {
+        let query = arguments
+            .get("query")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        let offset = arguments.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let limit = arguments
+            .get("limit")
+            .and_then(Value::as_u64)
+            .unwrap_or(20)
+            .clamp(1, 100) as usize;
+        let mut all = self
+            .profile
+            .names()
+            .iter()
+            .filter(|name| {
+                arguments.get("agentOnly").and_then(Value::as_bool) != Some(true)
+                    || !AGENT_CANONICAL_ONLY_TOOLS.contains(name)
+            })
+            .filter_map(|name| {
+                let (description, _, _) = tool_metadata(name);
+                (query.is_empty()
+                    || name.to_ascii_lowercase().contains(&query)
+                    || description.to_ascii_lowercase().contains(&query))
+                .then(|| json!({"name": self.definition(name).name, "description": description}))
+            })
+            .collect::<Vec<_>>();
+        if !query.is_empty() {
+            for kind in contracts::names() {
+                let fields = contracts::schema(kind)
+                    .unwrap_or_default()
+                    .to_string()
+                    .to_ascii_lowercase();
+                if kind.contains(&query)
+                    || kind.replace('_', " ").contains(&query)
+                    || fields.contains(&query)
+                {
+                    all.push(json!({"name":self.definition("timeline.apply").name,"commandType":kind,
+                        "description":format!("Canonical {kind} edit. Read tools.describe with this commandType for fields and an example.")}));
+                }
+            }
+        }
+        let items = all
+            .iter()
+            .skip(offset)
+            .take(limit)
+            .cloned()
+            .collect::<Vec<_>>();
+        let next_offset = (offset.saturating_add(items.len()) < all.len())
+            .then_some(offset.saturating_add(items.len()));
+        Ok(
+            json!({"items": items, "offset": offset, "limit": limit, "total": all.len(), "nextOffset": next_offset}),
+        )
+    }
+
+    fn tools_describe(&self, arguments: &Value) -> Result<Value, McpError> {
+        let name = arguments
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| !name.trim().is_empty())
+            .ok_or_else(|| McpError::new("INVALID_ARGUMENTS", "tools.describe name is required"))?;
+        let base = self
+            .parse_name(name)
+            .or_else(|| {
+                self.profile
+                    .names()
+                    .contains(&name)
+                    .then(|| name.to_owned())
+            })
+            .ok_or_else(|| McpError::new("UNKNOWN_TOOL", format!("unknown tool: {name}")))?;
+        let mut definition = self.definition(&base);
+        let mut example = example_for_tool(&base);
+        if base == "timeline.apply" {
+            if let Some(kind) = arguments.get("commandType") {
+                let kind = kind.as_str().ok_or_else(|| {
+                    McpError::new("INVALID_ARGUMENTS", "commandType must be a string")
+                })?;
+                let schema = contracts::schema(kind).ok_or_else(|| {
+                    McpError::new("INVALID_ARGUMENTS", format!("unknown commandType: {kind}"))
+                })?;
+                definition.input_schema["properties"]["command"] = schema.clone();
+                definition.input_schema["properties"]["commands"]["items"] = json!({"type":"object","description":"Each item follows the command contract shown above."});
+                example = json!({"command": contracts::example(kind)});
+            }
+        } else if arguments.get("commandType").is_some() {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "commandType applies only to timeline.apply",
+            ));
+        }
+        let mut result = json!({"tool": definition, "example": example});
+        if base == "timeline.apply" {
+            result["commandTypes"] = json!(contracts::names());
+        }
+        Ok(result)
+    }
+
+    fn skills_list(&self, arguments: &Value) -> Result<Value, McpError> {
+        let offset = arguments.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let limit = arguments
+            .get("limit")
+            .and_then(Value::as_u64)
+            .unwrap_or(20)
+            .clamp(1, 100) as usize;
+        let skills = self.skills.iter().skip(offset).take(limit).map(|skill| json!({"name": skill.name, "description": skill.description.chars().take(200).collect::<String>()})).collect::<Vec<_>>();
+        Ok(
+            json!({"skills": skills, "offset": offset, "limit": limit, "total": self.skills.len(), "nextOffset": (offset.saturating_add(skills.len()) < self.skills.len()).then_some(offset.saturating_add(skills.len()))}),
+        )
+    }
+
     fn skills_read(&self, arguments: &Value) -> Result<Value, McpError> {
         let name = arguments
             .get("name")
@@ -2140,6 +2441,23 @@ impl AgentRouter {
             profile: self.profile,
             namespace: String::new(),
         };
+        if name == "tools.search" {
+            let mut arguments = arguments;
+            arguments["agentOnly"] = json!(true);
+            return router
+                .tools_search(&arguments)
+                .map_err(|error| error.to_string());
+        }
+        if name == "tools.describe"
+            && arguments
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| AGENT_CANONICAL_ONLY_TOOLS.contains(&name))
+        {
+            return Err(agent_canonical_bypass_error(
+                arguments["name"].as_str().unwrap_or_default(),
+            ));
+        }
         if name == "timeline.apply" {
             return router
                 .stage_agent_edit(arguments)
@@ -2352,6 +2670,45 @@ impl McpServer {
     }
 }
 
+fn count_outline_nodes(node: &OutlineNode) -> usize {
+    1 + node.children.iter().map(count_outline_nodes).sum::<usize>()
+}
+
+fn find_outline_node<'a>(node: &'a OutlineNode, path: &str) -> Option<&'a OutlineNode> {
+    if node.path == path {
+        return Some(node);
+    }
+    node.children
+        .iter()
+        .find_map(|child| find_outline_node(child, path))
+}
+
+fn find_outline_node_mut<'a>(node: &'a mut OutlineNode, path: &str) -> Option<&'a mut OutlineNode> {
+    if node.path == path {
+        return Some(node);
+    }
+    node.children
+        .iter_mut()
+        .find_map(|child| find_outline_node_mut(child, path))
+}
+
+fn truncate_outline_nodes(node: &mut OutlineNode, budget: &mut usize) {
+    if *budget == 0 {
+        node.children.clear();
+        return;
+    }
+    *budget -= 1;
+    let mut kept = Vec::new();
+    for mut child in node.children.drain(..) {
+        if *budget == 0 {
+            break;
+        }
+        truncate_outline_nodes(&mut child, budget);
+        kept.push(child);
+    }
+    node.children = kept;
+}
+
 fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
     let read_only = ToolAnnotations {
         read_only_hint: Some(true),
@@ -2364,6 +2721,21 @@ fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
         ..ToolAnnotations::default()
     };
     match name {
+        "results.read" => (
+            "Read a page or JSON pointer from an archived tool result without repeating the operation. Historical results may be evicted from the bounded cache.",
+            json!({"type":"object","properties":{"resultId":{"type":"string","minLength":64,"maxLength":64},"pointer":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":4096}},"required":["resultId"],"additionalProperties":false}),
+            read_only,
+        ),
+        "tools.search" => (
+            "Search available tools by name or description; returns compact metadata only.",
+            json!({"type":"object","properties":{"query":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":100}},"additionalProperties":false}),
+            read_only,
+        ),
+        "tools.describe" => (
+            "Read the exact input schema and a representative example for one tool.",
+            json!({"type":"object","properties":{"name":{"type":"string","minLength":1},"commandType":{"type":"string"}},"required":["name"],"additionalProperties":false}),
+            read_only,
+        ),
         "project.inspect" => (
             "Inspect the current project summary, full v2 project, or structural outline.",
             json!({
@@ -2377,7 +2749,7 @@ fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
             "Read the structural sequence, track, clip, caption, effect, and marker outline.",
             json!({
                 "type": "object",
-                "properties": {},
+                "properties": {"kind":{"type":"string","enum":["sequence","track","clip","caption","effect","marker"]},"trackId":{"type":"string"},"nodePath":{"type":"string"},"childOffset":{"type":"integer","minimum":0},"childLimit":{"type":"integer","minimum":1,"maximum":500},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":500},"maxNodes":{"type":"integer","minimum":2,"maximum":5000}},
                 "additionalProperties": false
             }),
             read_only,
@@ -2394,7 +2766,11 @@ fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
                 "properties": {
                     "include": {"enum": ["summary", "full"]},
                     "trackId": {"type": "string"},
-                    "clipId": {"type": "string"}
+                    "clipId": {"type": "string"},
+                    "start": {"type": "number", "minimum": 0},
+                    "end": {"type": "number", "minimum": 0},
+                    "offset": {"type": "integer", "minimum": 0},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 500}
                 },
                 "additionalProperties": false
             }),
@@ -2432,23 +2808,22 @@ fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
             }),
             read_only,
         ),
-        "timeline.apply" => (
-            "Apply one atomic canonical v2 command or legacy operation through cutd.",
-            json!({
+        "timeline.apply" => {
+            let schema = json!({
                 "type": "object",
                 "properties": {
                     "expectedRevision": {"type": "integer", "minimum": 0},
                     "idempotencyKey": {"type": "string"},
-                    "command": {"type": "object"},
-                    "commands": {"type": "array", "minItems": 1, "items": {"type": "object"}},
+                    "command": {"type":"object","description":"Read tools.describe with commandType for the exact canonical command contract."},
+                    "commands": {"type":"array","minItems":1,"maxItems":256,"items":{"type":"object"}},
                     "op": {"type": "object"},
-                    "ops": {"type": "array", "minItems": 1, "items": {"type": "object"}},
+                    "ops": {"type": "array", "minItems": 1,"maxItems":256, "items": {"type": "object"}},
                     "observationRef": {"type": "object"}
                 },
                 "additionalProperties": false
-            }),
-            mutation,
-        ),
+            });
+            ("Apply one atomic canonical v2 command or legacy operation through cutd.", schema, mutation)
+        },
         "timeline.undo" | "timeline.redo" => (
             "Move the durable project history by one or more steps.",
             json!({
@@ -2642,6 +3017,12 @@ fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
                 read_only,
             )
         }
+        "skills.list" => {
+            let schema = skill_list_tool_schema();
+            let mut input = schema.get("inputSchema").cloned().unwrap_or_else(|| json!({"type":"object"}));
+            input["properties"] = json!({"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":100}});
+            ("List installed playbooks as compact names and descriptions.", input, read_only)
+        }
         _ => (
             "Unknown capability.",
             json!({"type": "object", "additionalProperties": false}),
@@ -2650,7 +3031,57 @@ fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
     }
 }
 
+fn example_for_tool(name: &str) -> Value {
+    match name {
+        "timeline.query" => json!({"trackId":"video-1","limit":50}),
+        "timeline.apply" => {
+            json!({"commands":[{"type":"update_clip","clipId":"clip-1","patch":{}}]})
+        }
+        "skills.read" => json!({"name":"shorts"}),
+        "skills.list" => json!({}),
+        _ => json!({}),
+    }
+}
+
 fn canonical_command(project: &Project, arguments: &Value) -> Result<Command, McpError> {
+    let mut pending = Vec::new();
+    for key in ["command", "op"] {
+        if let Some(value) = arguments.get(key) {
+            pending.push((value, 0usize));
+        }
+    }
+    for key in ["commands", "ops"] {
+        if let Some(values) = arguments.get(key).and_then(Value::as_array) {
+            if values.len() > 256 {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    "A batch may contain at most 256 command entries",
+                ));
+            }
+            pending.extend(values.iter().map(|value| (value, 0)));
+        }
+    }
+    let mut count = 0usize;
+    while let Some((value, depth)) = pending.pop() {
+        count += 1;
+        if count > 256 || depth > 16 {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "A batch may contain at most 256 command entries and 16 nested levels",
+            ));
+        }
+        if value.get("type").and_then(Value::as_str) == Some("batch") {
+            if let Some(values) = value.get("commands").and_then(Value::as_array) {
+                if values.len() > 256 {
+                    return Err(McpError::new(
+                        "INVALID_ARGUMENTS",
+                        "A batch may contain at most 256 command entries",
+                    ));
+                }
+                pending.extend(values.iter().map(|value| (value, depth + 1)));
+            }
+        }
+    }
     if let Some(command) = arguments.get("command") {
         return cut_domain::parse_command(command)
             .map_err(|error| McpError::new("INVALID_ARGUMENTS", error.to_string()));
@@ -3663,12 +4094,12 @@ fn is_contained(root: &Path, candidate: &Path) -> bool {
 }
 
 fn load_project_skills(dir: &Path) -> io::Result<Vec<Skill>> {
-    let mut directories = vec![std::env::current_dir()?.join("skills")];
+    let mut directories = Vec::new();
     if let Some(home) = std::env::var_os("HOME") {
         directories.push(PathBuf::from(home).join(".cut").join("skills"));
     }
     directories.push(dir.join(".cut").join("skills"));
-    load_skills(&directories)
+    load_skills_with_bundled(&directories)
 }
 
 fn operation_key(kind: &str) -> String {
@@ -3749,7 +4180,7 @@ mod tests {
 
     #[test]
     fn core_profile_keeps_stable_mcp_order() {
-        assert_eq!(McpProfile::Core.names()[0], "timeline.query");
+        assert_eq!(McpProfile::Core.names()[0], "results.read");
         assert_eq!(McpProfile::Core.names().last(), Some(&"skills.read"));
     }
 

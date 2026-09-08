@@ -16,14 +16,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+mod context;
+pub use context::ContextBudget;
+
 pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-20250514";
 pub const DEFAULT_OPENAI_MODEL: &str = "gpt-4o";
 pub const DEFAULT_RESPONSES_MODEL: &str = "gpt-5.6-luna";
 
 const DEFAULT_SYSTEM_PROMPT: &str = "You are a video editing assistant for Cut.
 The project file is project.cut.json (v2).
-Inspect project.outline and the timeline before editing. Use structured project_edit commands for mutations, batch related changes, and render a draft before a full render. Agent edits are staged as proposals for user review; do not claim a staged edit is applied until it is accepted.
+Inspect project.outline and timeline.query before editing. Use timeline.apply for mutations, batch related changes, and render a draft before a full render. Use tools.search and tools.describe to discover exact editing command schemas. Agent edits are staged as proposals for user review; do not claim a staged edit is applied until it is accepted.
 Use skills.read to load a playbook body when a skill is relevant.
+Use tools.search and tools.describe to discover native capabilities. If the selected operation is not directly advertised, execute it through tools.call with its name and arguments. Discovery does not change a staged edit into an accepted edit. For configured external servers, use mcp_search, mcp_describe, and mcp_call instead.
+Use session.read to retrieve archived requirements or evidence when a result is abbreviated. An archived proposal is not proof of its current approval state: recheck the current revision and pending proposal before editing. Check timeline.check for live/offline capability differences and use an offline preview when native playback cannot represent the edit.
 For a request for a rough cut, inspect the project and run coarse
 media.probe calls with action observe first, then call workflow.roughcut with
 the multiple source ranges you selected and a concise rationale for every
@@ -1267,8 +1272,10 @@ pub struct AgentTool {
     pub name: String,
     pub description: String,
     pub input_schema: Value,
-    executor: Arc<dyn Fn(Value) -> Result<Value, String> + Send + Sync>,
+    executor: Arc<ToolExecutor>,
 }
+
+type ToolExecutor = dyn Fn(Value, &AtomicBool) -> Result<Value, String> + Send + Sync;
 
 impl AgentTool {
     pub fn new(
@@ -1281,12 +1288,26 @@ impl AgentTool {
             name: name.into(),
             description: description.into(),
             input_schema,
+            executor: Arc::new(move |input, _| executor(input)),
+        }
+    }
+
+    pub fn cancellable(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        input_schema: Value,
+        executor: impl Fn(Value, &AtomicBool) -> Result<Value, String> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            input_schema,
             executor: Arc::new(executor),
         }
     }
 
-    fn execute(&self, input: Value) -> Result<Value, String> {
-        (self.executor)(input)
+    fn execute(&self, input: Value, cancelled: &AtomicBool) -> Result<Value, String> {
+        (self.executor)(input, cancelled)
     }
 }
 
@@ -1309,7 +1330,7 @@ pub enum AgentEvent {
         id: String,
         name: String,
         ok: bool,
-        summary: ToolResultSummary,
+        summary: Box<ToolResultSummary>,
     },
     Done {
         text: String,
@@ -1358,6 +1379,7 @@ pub enum AgentError {
     Tool(String),
     Serialization(String),
     TurnLimit(usize),
+    ContextBudget(String),
 }
 
 impl fmt::Display for AgentError {
@@ -1367,11 +1389,25 @@ impl fmt::Display for AgentError {
             Self::Tool(error) => write!(formatter, "tool error: {error}"),
             Self::Serialization(error) => write!(formatter, "serialization error: {error}"),
             Self::TurnLimit(limit) => write!(formatter, "agent reached the {limit}-turn limit"),
+            Self::ContextBudget(error) => write!(formatter, "agent input budget: {error}"),
         }
     }
 }
 
 impl std::error::Error for AgentError {}
+
+fn is_context_limit(error: &ProviderError) -> bool {
+    let text = format!("{} {}", error.code, error.message).to_lowercase();
+    [
+        "context_length_exceeded",
+        "maximum context length",
+        "prompt is too long",
+        "input is too long",
+        "context window",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
+}
 
 pub struct AgentSession {
     pub model: String,
@@ -1383,6 +1419,7 @@ pub struct AgentSession {
     tools: ToolMap,
     llm: Box<dyn LlmProvider>,
     max_turns: usize,
+    context_budget: ContextBudget,
     aborted: Arc<AtomicBool>,
 }
 
@@ -1409,6 +1446,7 @@ pub struct AgentSessionOptions {
     pub skills: Vec<Skill>,
     pub tools: ToolMap,
     pub max_turns: usize,
+    pub context_budget: ContextBudget,
 }
 
 impl Default for AgentSessionOptions {
@@ -1424,6 +1462,7 @@ impl Default for AgentSessionOptions {
             skills: Vec::new(),
             tools: BTreeMap::new(),
             max_turns: 32,
+            context_budget: ContextBudget::from_env(),
         }
     }
 }
@@ -1447,7 +1486,7 @@ impl AgentSession {
                 ))
             }
         };
-        Self::from_provider(
+        let mut session = Self::from_provider(
             llm,
             options.model,
             options.system_prompt,
@@ -1456,7 +1495,9 @@ impl AgentSession {
             options.max_turns,
             options.api_mode,
             options.reasoning_effort,
-        )
+        );
+        session.context_budget = options.context_budget;
+        session
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1486,6 +1527,7 @@ impl AgentSession {
             tools,
             llm,
             max_turns: max_turns.max(1),
+            context_budget: ContextBudget::default(),
             aborted: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -1503,14 +1545,105 @@ impl AgentSession {
     }
 
     pub fn normalized_tools(&self) -> Vec<NormalizedTool> {
-        self.tools
+        let discovery =
+            self.tools.contains_key("tools.search") && self.tools.contains_key("tools.describe");
+        const BOOTSTRAP: &[&str] = &[
+            "tools.search",
+            "tools.describe",
+            "skills.list",
+            "skills.read",
+            "results.read",
+            "project.outline",
+            "timeline.query",
+            "timeline.apply",
+            "mcp_search",
+            "mcp_describe",
+            "mcp_call",
+        ];
+        let mut tools = self
+            .tools
             .values()
+            .filter(|tool| tool.name != "session.read")
+            .filter(|tool| !discovery || BOOTSTRAP.contains(&tool.name.as_str()))
             .map(|tool| NormalizedTool {
                 name: tool.name.clone(),
                 description: tool.description.clone(),
                 input_schema: tool.input_schema.clone(),
             })
-            .collect()
+            .collect::<Vec<_>>();
+        if discovery {
+            tools.push(NormalizedTool {
+                name:"tools.call".into(),description:"Execute a discovered native operation using the exact name and arguments from tools.describe. This uses the same proposal and validation boundary as direct tools.".into(),
+                input_schema:json!({"type":"object","properties":{"name":{"type":"string","minLength":1},"arguments":{"type":"object"}},"required":["name","arguments"],"additionalProperties":false}),
+            });
+        }
+        tools.push(context::read_tool());
+        tools
+    }
+
+    fn execute_tool(&self, name: &str, input: Value) -> Result<Value, String> {
+        if name == "session.read" {
+            return context::read(&self.messages, input);
+        }
+        let (name, input) = if name == "tools.call" && self.tools.contains_key("tools.describe") {
+            let name = input
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .ok_or("tools.call requires an operation name")?
+                .to_owned();
+            let arguments = input
+                .get("arguments")
+                .filter(|value| value.is_object())
+                .ok_or("tools.call requires an arguments object")?
+                .clone();
+            (name, arguments)
+        } else {
+            (name.to_owned(), input)
+        };
+        self.tools
+            .get(&name)
+            .ok_or_else(|| format!("unknown tool: {name}"))?
+            .execute(input, &self.aborted)
+    }
+
+    fn provider_request(&self, budget: &ContextBudget) -> Result<ProviderRequest, AgentError> {
+        let tools = self.normalized_tools();
+        let fixed = self.system_prompt.len().saturating_mul(2)
+            + context::units(
+                &serde_json::to_value(&tools)
+                    .map_err(|error| AgentError::Serialization(error.to_string()))?,
+            )
+            + tools.len() * 256
+            + 1024;
+        let available = budget.max_input_units.checked_sub(fixed)
+            .ok_or_else(|| AgentError::ContextBudget("System prompt and tool definitions exceed the input allowance. Lower the advertised catalog or increase the budget for this model.".into()))?;
+        let messages = context::project(&self.messages, available, budget)
+            .map_err(AgentError::ContextBudget)?;
+        Ok(ProviderRequest {
+            model: self.model.clone(),
+            system: self.system_prompt.clone(),
+            tools,
+            messages,
+        })
+    }
+
+    fn stream_bounded(&mut self) -> Result<Vec<ProviderChunk>, AgentError> {
+        let request = self.provider_request(&self.context_budget)?;
+        match self.llm.stream(&request) {
+            Ok(chunks) => Ok(chunks),
+            Err(error) if is_context_limit(&error) => {
+                // No tools have run for this request. Retry once with a smaller
+                // view; never restart an edit or replay a mutating tool call.
+                let mut smaller = self.context_budget.clone();
+                smaller.max_input_units /= 2;
+                smaller.recent_tool_messages = 0;
+                let request = self.provider_request(&smaller)?;
+                self.context_budget = smaller;
+                self.llm.stream(&request).map_err(AgentError::Provider)
+            }
+            Err(error) => Err(AgentError::Provider(error)),
+        }
     }
 
     pub fn run(&mut self, user_message: &str) -> Result<String, AgentError> {
@@ -1535,15 +1668,7 @@ impl AgentSession {
                 });
                 return Ok(final_text);
             }
-            let chunks = self
-                .llm
-                .stream(&ProviderRequest {
-                    model: self.model.clone(),
-                    system: self.system_prompt.clone(),
-                    tools: self.normalized_tools(),
-                    messages: self.messages.clone(),
-                })
-                .map_err(AgentError::Provider)?;
+            let chunks = self.stream_bounded()?;
             let mut stop_reason = "end_turn".to_owned();
             let mut content = Vec::new();
             for chunk in chunks {
@@ -1561,6 +1686,25 @@ impl AgentSession {
                     }
                 }
             }
+            let calls = content
+                .iter()
+                .filter(|block| is_tool_use(block))
+                .collect::<Vec<_>>();
+            let mut ids = std::collections::HashSet::new();
+            if (stop_reason == "tool_use") != !calls.is_empty()
+                || calls.iter().any(|block| {
+                    let id = block.get("id").and_then(Value::as_str).unwrap_or_default();
+                    id.is_empty()
+                        || !ids.insert(id)
+                        || block
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .is_none_or(str::is_empty)
+                        || !block.get("input").is_some_and(Value::is_object)
+                })
+            {
+                return Err(AgentError::Provider(ProviderError::new("INVALID_PROVIDER_RESPONSE","Tool calls must have unique non-empty IDs, names, object inputs, and a tool-use stop reason. No tools were executed.")));
+            }
             emit(AgentEvent::TurnStarted {
                 stop_reason: bounded_text(&stop_reason, MAX_AGENT_SUMMARY_TEXT_BYTES),
             });
@@ -1577,13 +1721,6 @@ impl AgentSession {
 
             let mut result_blocks = Vec::new();
             for block in content.iter().filter(|block| is_tool_use(block)) {
-                if self.is_aborted() {
-                    emit(AgentEvent::Aborted);
-                    emit(AgentEvent::Done {
-                        text: bounded_text(&final_text, MAX_AGENT_EVENT_TEXT_BYTES),
-                    });
-                    return Ok(final_text);
-                }
                 let id = block
                     .get("id")
                     .and_then(Value::as_str)
@@ -1595,22 +1732,31 @@ impl AgentSession {
                     .unwrap_or_default()
                     .to_owned();
                 let input = block.get("input").cloned().unwrap_or_else(|| json!({}));
+                let event_name = if name == "tools.call" {
+                    input.get("name").and_then(Value::as_str).unwrap_or(&name)
+                } else {
+                    &name
+                }
+                .to_owned();
                 let targets = summarize_targets(&input);
                 emit(AgentEvent::ToolCallStarted {
                     id: bounded_text(&id, MAX_AGENT_SUMMARY_TEXT_BYTES),
-                    name: bounded_text(&name, MAX_AGENT_SUMMARY_TEXT_BYTES),
+                    name: bounded_text(&event_name, MAX_AGENT_SUMMARY_TEXT_BYTES),
                     targets,
                 });
-                let output = match self.tools.get(&name) {
-                    Some(tool) => tool.execute(input),
-                    None => Err(format!("unknown tool: {name}")),
+                let output = if self.is_aborted() {
+                    Err("Agent aborted before this tool executed".into())
+                } else {
+                    self.execute_tool(&name, input)
                 };
                 let (ok, summary, canonical) = match output {
                     Ok(value) => {
+                        let ok = value.get("isError").and_then(Value::as_bool) != Some(true);
                         let summary = summarize_tool_result(&value);
-                        let canonical =
-                            normalize_tool_result(value).map_err(AgentError::Serialization)?;
-                        (true, summary, canonical)
+                        match normalize_tool_result(value) {
+                            Ok(canonical) => (ok, summary, canonical),
+                            Err(error) => (false, ToolResultSummary::from_error(&error), Value::String(json!({"error":error,"note":"Tool execution finished but its evidence could not be represented. Recheck project state before retrying a mutation."}).to_string())),
+                        }
                     }
                     Err(error) => {
                         let canonical = Value::String(
@@ -1622,18 +1768,26 @@ impl AgentSession {
                 };
                 emit(AgentEvent::ToolCallFinished {
                     id: bounded_text(&id, MAX_AGENT_SUMMARY_TEXT_BYTES),
-                    name: bounded_text(&name, MAX_AGENT_SUMMARY_TEXT_BYTES),
+                    name: bounded_text(&event_name, MAX_AGENT_SUMMARY_TEXT_BYTES),
                     ok,
-                    summary,
+                    summary: Box::new(summary),
                 });
                 result_blocks.push(json!({
                     "type": "tool_result",
                     "tool_use_id": id,
                     "content": canonical,
+                    "is_error": !ok,
                 }));
             }
             self.messages
                 .push(json!({"role": "user", "content": result_blocks}));
+            if self.is_aborted() {
+                emit(AgentEvent::Aborted);
+                emit(AgentEvent::Done {
+                    text: bounded_text(&final_text, MAX_AGENT_EVENT_TEXT_BYTES),
+                });
+                return Ok(final_text);
+            }
         }
         Err(AgentError::TurnLimit(self.max_turns))
     }
@@ -1933,7 +2087,16 @@ impl ToolResultSummary {
     }
 }
 
-fn normalize_tool_result(value: Value) -> Result<Value, String> {
+fn normalize_tool_result(mut value: Value) -> Result<Value, String> {
+    // Native observations use imageBase64 beside path/time metadata. Promote
+    // those bytes to image blocks, never send encoded image data as text.
+    if value.get("type").and_then(Value::as_str) != Some("multimodal_tool_result") {
+        let mut images = Vec::new();
+        collect_inline_images(&mut value, &mut images);
+        if !images.is_empty() {
+            value = json!({"type":"multimodal_tool_result","metadata":value,"images":images});
+        }
+    }
     if value.get("type").and_then(Value::as_str) != Some("multimodal_tool_result") {
         return Ok(Value::String(
             serde_json::to_string(&value).map_err(|error| error.to_string())?,
@@ -2032,6 +2195,26 @@ fn normalize_tool_result(value: Value) -> Result<Value, String> {
         );
     }
     Ok(Value::Array(blocks))
+}
+
+fn collect_inline_images(value: &mut Value, images: &mut Vec<Value>) {
+    match value {
+        Value::Object(object) => {
+            if let Some(Value::String(data)) = object.remove("imageBase64") {
+                object.insert("imageIndex".into(), json!(images.len()));
+                images.push(json!({"mediaType":"image/png","data":data}));
+            }
+            for nested in object.values_mut() {
+                collect_inline_images(nested, images);
+            }
+        }
+        Value::Array(values) => {
+            for nested in values {
+                collect_inline_images(nested, images);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Helper for tools that need to stage an agent proposal through cutd.
@@ -2257,6 +2440,54 @@ mod tests {
     }
 
     #[test]
+    fn native_discovery_keeps_large_catalogs_out_of_the_prompt() {
+        let provider = FakeProvider { chunks: vec![] };
+        let mut tools = ToolMap::new();
+        for name in ["tools.search", "tools.describe"] {
+            tools.insert(
+                name.into(),
+                AgentTool::new(name, "discovery", json!({"type":"object"}), |_| {
+                    Ok(json!({}))
+                }),
+            );
+        }
+        for index in 0..500 {
+            let name = format!("feature.{index}");
+            tools.insert(
+                name.clone(),
+                AgentTool::new(
+                    name,
+                    "large optional capability",
+                    json!({"type":"object","description":"x".repeat(1000)}),
+                    move |input| Ok(json!({"feature":index,"input":input})),
+                ),
+            );
+        }
+        let session = AgentSession::from_provider(
+            Box::new(provider),
+            None,
+            None,
+            vec![],
+            tools,
+            2,
+            OpenAiApiMode::Chat,
+            None,
+        );
+        assert_eq!(session.normalized_tools().len(), 4);
+        let result = session
+            .execute_tool(
+                "tools.call",
+                json!({"name":"feature.499","arguments":{"selected":true}}),
+            )
+            .unwrap();
+        assert_eq!(result["feature"], 499);
+        assert_eq!(result["input"]["selected"], true);
+        assert!(session
+            .execute_tool("tools.call", json!({"name":"media.import","arguments":{}}))
+            .is_err());
+    }
+
+    #[test]
     fn agent_executes_tool_sequence_through_the_model_loop() {
         let provider = SequencedProvider {
             responses: Mutex::new(vec![
@@ -2311,6 +2542,140 @@ mod tests {
     }
 
     #[test]
+    fn context_retry_shrinks_only_provider_view_and_never_repeats_an_edit() {
+        struct LimitedProvider {
+            requests: Arc<Mutex<Vec<ProviderRequest>>>,
+        }
+        impl LlmProvider for LimitedProvider {
+            fn name(&self) -> ProviderName {
+                ProviderName::Anthropic
+            }
+            fn default_model(&self) -> &'static str {
+                "test"
+            }
+            fn stream(
+                &self,
+                request: &ProviderRequest,
+            ) -> Result<Vec<ProviderChunk>, ProviderError> {
+                let mut requests = self.requests.lock().unwrap();
+                requests.push(request.clone());
+                match requests.len() {
+                    1 => Err(ProviderError::new(
+                        "context_length_exceeded",
+                        "prompt is too long",
+                    )),
+                    2 => Ok(vec![ProviderChunk::MessageEnd {
+                        stop_reason: "tool_use".into(),
+                        content: vec![
+                            json!({"type":"tool_use","id":"edit-1","name":"timeline.apply","input":{}}),
+                        ],
+                    }]),
+                    _ => Ok(vec![ProviderChunk::MessageEnd {
+                        stop_reason: "end_turn".into(),
+                        content: vec![json!({"type":"text","text":"awaiting review"})],
+                    }]),
+                }
+            }
+        }
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let executions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = executions.clone();
+        let mut tools = ToolMap::new();
+        tools.insert("timeline.apply".into(),AgentTool::new("timeline.apply","stage",json!({"type":"object"}),move |_| {
+            counter.fetch_add(1,Ordering::SeqCst);
+            Ok(json!({"status":"awaiting_review","revision":7,"evidence":"x".repeat(100_000)}))
+        }));
+        let mut session = AgentSession::from_provider(
+            Box::new(LimitedProvider {
+                requests: requests.clone(),
+            }),
+            None,
+            None,
+            vec![],
+            tools,
+            3,
+            OpenAiApiMode::Chat,
+            None,
+        );
+        assert_eq!(
+            session
+                .run("Preserve the music and trim the opening")
+                .unwrap(),
+            "awaiting review"
+        );
+        assert_eq!(executions.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            session.context_budget.max_input_units,
+            ContextBudget::default().max_input_units / 2
+        );
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert!(
+            requests[2].messages.last().unwrap()["content"][0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("session.read")
+        );
+        assert!(
+            session.messages[2]["content"][0]["content"]
+                .as_str()
+                .unwrap()
+                .len()
+                > 100_000
+        );
+    }
+
+    #[test]
+    fn cancellation_keeps_results_of_completed_tools_and_closes_pending_calls() {
+        let provider = FakeProvider {
+            chunks: vec![ProviderChunk::MessageEnd {
+                stop_reason: "tool_use".into(),
+                content: vec![
+                    json!({"type":"tool_use","id":"first","name":"first","input":{}}),
+                    json!({"type":"tool_use","id":"second","name":"second","input":{}}),
+                ],
+            }],
+        };
+        let token = Arc::new(Mutex::new(None::<Arc<AtomicBool>>));
+        let stop = token.clone();
+        let mut tools = ToolMap::new();
+        tools.insert(
+            "first".into(),
+            AgentTool::new("first", "stage", json!({"type":"object"}), move |_| {
+                stop.lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .store(true, Ordering::SeqCst);
+                Ok(json!({"status":"awaiting_review","proposalId":"p1"}))
+            }),
+        );
+        tools.insert(
+            "second".into(),
+            AgentTool::new("second", "must not run", json!({"type":"object"}), |_| {
+                panic!("cancelled tool executed")
+            }),
+        );
+        let mut session = AgentSession::from_provider(
+            Box::new(provider),
+            None,
+            None,
+            vec![],
+            tools,
+            2,
+            OpenAiApiMode::Chat,
+            None,
+        );
+        *token.lock().unwrap() = Some(session.abort_handle());
+        session.run("make a proposal").unwrap();
+        let blocks = session.messages[2]["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["is_error"], false);
+        assert_eq!(blocks[1]["is_error"], true);
+        assert!(blocks[0]["content"].as_str().unwrap().contains("p1"));
+    }
+
+    #[test]
     fn multimodal_results_are_size_checked_and_canonicalized() {
         let encoded = base64::engine::general_purpose::STANDARD.encode([1_u8, 2, 3]);
         let value = normalize_tool_result(json!({
@@ -2323,6 +2688,54 @@ mod tests {
             value.as_array().unwrap()[1]["source"]["media_type"],
             "image/png"
         );
+    }
+
+    #[test]
+    fn native_inline_frames_become_images_with_timing_metadata() {
+        let result = normalize_tool_result(
+            json!({"revision":4,"frames":[{"time":1.5,"path":"frame.png","imageBase64":"AQID"}]}),
+        )
+        .unwrap();
+        let blocks = result.as_array().unwrap();
+        let metadata: Value = serde_json::from_str(blocks[0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(metadata["frames"][0]["time"], 1.5);
+        assert_eq!(metadata["frames"][0]["imageIndex"], 0);
+        assert!(metadata["frames"][0].get("imageBase64").is_none());
+        assert_eq!(blocks[1]["type"], "image");
+    }
+
+    #[test]
+    fn malformed_tool_turn_is_rejected_before_execution_or_history_append() {
+        for content in [
+            vec![],
+            vec![
+                json!({"type":"tool_use","id":"duplicate","name":"edit","input":{}}),
+                json!({"type":"tool_use","id":"duplicate","name":"edit","input":{}}),
+            ],
+        ] {
+            let provider = FakeProvider {
+                chunks: vec![ProviderChunk::MessageEnd {
+                    stop_reason: "tool_use".into(),
+                    content,
+                }],
+            };
+            let mut session = AgentSession::from_provider(
+                Box::new(provider),
+                None,
+                None,
+                vec![],
+                ToolMap::new(),
+                2,
+                OpenAiApiMode::Chat,
+                None,
+            );
+            assert!(session
+                .run("edit")
+                .unwrap_err()
+                .to_string()
+                .contains("INVALID_PROVIDER_RESPONSE"));
+            assert_eq!(session.messages.len(), 1);
+        }
     }
 
     #[test]

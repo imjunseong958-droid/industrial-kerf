@@ -110,6 +110,9 @@
   "mcp": {
     "protocol_version": "2024-11-05",
     "core_tools": [
+      "results.read",
+      "tools.search",
+      "tools.describe",
       "timeline.query",
       "timeline.check",
       "timeline.capture",
@@ -125,6 +128,7 @@
       "render.start",
       "render.result",
       "project.outline",
+      "skills.list",
       "skills.read"
     ]
   }
