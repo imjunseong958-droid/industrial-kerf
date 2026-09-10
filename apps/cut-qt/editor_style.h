@@ -222,6 +222,21 @@ QTextEdit:hover,
 QLineEdit:hover,
 QDoubleSpinBox:hover,
 QComboBox:hover { border-color: #484848; }
+QComboBox#qualityPicker,
+QComboBox#canvasPicker {
+    padding-right: 30px;
+}
+QComboBox#qualityPicker::drop-down,
+QComboBox#canvasPicker::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 30px;
+    background: transparent;
+    border: 0;
+    border-left: 1px solid #404040;
+    border-top-right-radius: 4px;
+    border-bottom-right-radius: 4px;
+}
 QListWidget:focus,
 QTextEdit:focus,
 QLineEdit:focus,
@@ -290,7 +305,7 @@ QGroupBox#providerBox::title {
     font-size: 11px;
     font-weight: 600;
 }
-QProgressBar { background: #2e2e2e; border: 0; border-radius: 3px; height: 4px; }
+QProgressBar { background: #2e2e2e; border: 0; border-radius: 2px; height: 4px; max-height: 4px; }
 QProgressBar::chunk { background: #999999; border-radius: 3px; }
 
 QTabWidget::pane { border: 0; background: transparent; }

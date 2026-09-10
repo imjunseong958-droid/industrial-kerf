@@ -18,6 +18,8 @@ const NAMES: &[&str] = &[
     "remove_marker",
     "set_metadata",
     "restore_metadata",
+    "set_canvas",
+    "restore_canvas",
     "add_source",
     "remove_source",
     "add_overlay",
@@ -78,6 +80,14 @@ fn command_schema(kind: &str) -> Option<Value> {
         "remove_marker" => obj(&["markerId"], json!({"markerId":id()})),
         "set_metadata" => obj(&["patch"], json!({"patch":{"type":"object"}})),
         "restore_metadata" => obj(&[], json!({"metadata":{"type":["object","null"]}})),
+        "set_canvas" => obj(
+            &["width", "height"],
+            json!({"width":{"type":"number","exclusiveMinimum":0},"height":{"type":"number","exclusiveMinimum":0}}),
+        ),
+        "restore_canvas" => obj(
+            &["width", "height"],
+            json!({"width":{"type":["number","null"]},"height":{"type":["number","null"]}}),
+        ),
         "add_source" => obj(
             &["source"],
             json!({"source":{"type":"object","required":["id","path"],"properties":{"id":id(),"path":{"type":"string","minLength":1},"subs":{"type":"string"},"duration":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"hasAudio":{"type":"boolean"}}},"index":{"type":"integer","minimum":0}}),
@@ -162,6 +172,8 @@ pub fn example(kind: &str) -> Option<Value> {
         "remove_marker" => json!({"type":kind,"markerId":"marker-1"}),
         "set_metadata" => json!({"type":kind,"patch":{}}),
         "restore_metadata" => json!({"type":kind,"metadata":null}),
+        "set_canvas" => json!({"type":kind,"width":1920.0,"height":1080.0}),
+        "restore_canvas" => json!({"type":kind,"width":null,"height":null}),
         "add_source" => json!({"type":kind,"source":{"id":"source-1","path":"media.mp4"}}),
         "remove_source" => json!({"type":kind,"sourceId":"source-1"}),
         "add_overlay" => {
@@ -199,6 +211,8 @@ mod tests {
             Command::RemoveMarker { .. } => "remove_marker",
             Command::SetMetadata { .. } => "set_metadata",
             Command::RestoreMetadata { .. } => "restore_metadata",
+            Command::SetCanvas { .. } => "set_canvas",
+            Command::RestoreCanvas { .. } => "restore_canvas",
             Command::AddSource { .. } => "add_source",
             Command::RemoveSource { .. } => "remove_source",
             Command::AddOverlay { .. } => "add_overlay",

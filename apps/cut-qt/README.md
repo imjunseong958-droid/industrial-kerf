@@ -35,6 +35,11 @@ The media browser sits to the left of the viewer, with the timeline spanning
 both below. The assistant stays in its own right panel. In Chat, Return sends
 the message and Shift+Return inserts a new line.
 
+Use the project-format picker in the toolbar to switch between standard
+1920×1080 (16:9) and vertical 1080×1920 (9:16). The viewer fits either canvas
+inside the available panel without cropping and keeps preview captions inside
+the video safe area.
+
 The connection banner reports connection progress and offers Reconnect after
 a failure. Editing controls become available only after a successful project
 snapshot. Changes made through CLI or MCP are checked every 500 ms while idle;

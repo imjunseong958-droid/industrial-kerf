@@ -350,3 +350,68 @@ fn semantic_split_keeps_source_ranges_and_stable_explicit_id() {
     let inverse = inverse_command(&project, &command).unwrap();
     assert_eq!(apply_command(&split, &inverse).unwrap(), project);
 }
+
+#[test]
+fn canvas_command_is_canonical_and_restores_unset_dimensions() {
+    let mut project = empty_project();
+    project.width = None;
+    project.height = None;
+    let command = parse_command(&json!({
+        "type": "setCanvas",
+        "width": 1080,
+        "height": 1920
+    }))
+    .unwrap();
+    assert!(matches!(
+        command,
+        Command::SetCanvas {
+            width: 1080.0,
+            height: 1920.0
+        }
+    ));
+    assert_eq!(
+        serialize_command(&command).unwrap(),
+        json!({"type":"set_canvas","width":1080.0,"height":1920.0})
+    );
+
+    let applied = apply_command(&project, &command).unwrap();
+    assert_eq!(applied.width, Some(1080.0));
+    assert_eq!(applied.height, Some(1920.0));
+
+    let inverse = inverse_command(&project, &command).unwrap();
+    assert_eq!(
+        serialize_command(&inverse).unwrap(),
+        json!({"type":"restore_canvas","width":null,"height":null})
+    );
+    assert_eq!(apply_command(&applied, &inverse).unwrap(), project);
+
+    let history = create_history(project.clone(), Revision::ZERO).unwrap();
+    let history = apply_history_command(&history, &command, None).unwrap();
+    assert_eq!(
+        undo(&history, Some(Revision::new(1))).unwrap().project,
+        project
+    );
+}
+
+#[test]
+fn canvas_command_rejects_non_positive_or_non_finite_dimensions() {
+    for (width, height) in [(0.0, 1080.0), (-1.0, 1080.0), (1080.0, 0.0)] {
+        let error = parse_command(&json!({
+            "type": "set_canvas",
+            "width": width,
+            "height": height
+        }))
+        .unwrap_err();
+        assert_eq!(error.code, "INVALID_COMMAND");
+    }
+
+    let error = apply_command(
+        &empty_project(),
+        &Command::SetCanvas {
+            width: f64::INFINITY,
+            height: 1080.0,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "INVALID_COMMAND");
+}

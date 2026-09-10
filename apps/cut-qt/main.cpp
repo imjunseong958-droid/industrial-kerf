@@ -67,6 +67,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <memory>
 
 namespace {
@@ -101,6 +102,55 @@ QString sourceName(const QJsonObject &source) {
     const QString path = source.value(QStringLiteral("path")).toString();
     return path.isEmpty() ? QStringLiteral("Untitled media") : QFileInfo(path).fileName();
 }
+
+QSize resolvedCanvasSize(const QJsonObject &project, const QJsonArray &sources) {
+    const auto validDimension = [](const QJsonValue &value) {
+        const double number = value.toDouble();
+        return std::isfinite(number) && number > 0.0;
+    };
+    const auto dimension = [](double value) {
+        return static_cast<int>(std::round(std::clamp(
+            value, 2.0, static_cast<double>(std::numeric_limits<int>::max()))));
+    };
+    if (validDimension(project.value(QStringLiteral("width"))) &&
+        validDimension(project.value(QStringLiteral("height")))) {
+        return QSize(dimension(project.value(QStringLiteral("width")).toDouble()),
+                     dimension(project.value(QStringLiteral("height")).toDouble()));
+    }
+    QSize largest;
+    double largestArea = 0.0;
+    for (const auto &value : sources) {
+        const QJsonObject source = value.toObject();
+        if (!validDimension(source.value(QStringLiteral("width"))) ||
+            !validDimension(source.value(QStringLiteral("height")))) continue;
+        const double width = source.value(QStringLiteral("width")).toDouble();
+        const double height = source.value(QStringLiteral("height")).toDouble();
+        if (width * height > largestArea) {
+            largestArea = width * height;
+            largest = QSize(dimension(width), dimension(height));
+        }
+    }
+    return largest.isValid() ? largest : QSize(1920, 1080);
+}
+
+class QualityComboBox final : public QComboBox {
+public:
+    using QComboBox::QComboBox;
+
+protected:
+    void paintEvent(QPaintEvent *event) override {
+        QComboBox::paintEvent(event);
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(isEnabled() ? QColor("#a7a7a7") : QColor("#727272"));
+        const qreal centerX = width() - 15.0;
+        const qreal centerY = height() / 2.0;
+        painter.drawPolygon(QPolygonF{{centerX - 4.5, centerY - 2.5},
+                                      {centerX + 4.5, centerY - 2.5},
+                                      {centerX, centerY + 2.5}});
+    }
+};
 
 QColor trackAccent(const QJsonObject &track, int row) {
     const QString type = track.value(QStringLiteral("type")).toString().toLower();
@@ -281,6 +331,7 @@ protected:
         p.fillRect(rect(), timelineGradient);
 
         const int trackCount = static_cast<int>(std::max<qsizetype>(1, m_project.value(QStringLiteral("tracks")).toArray().size()));
+        const int trackBottom = kRulerHeight + trackCount * kTrackHeight;
         const double pxPerSecond = pixelsPerSecond();
 
         p.fillRect(0, 0, kTimelineLabelWidth, height(), QColor("#202020"));
@@ -304,7 +355,7 @@ protected:
             const int x = kTimelineLabelWidth + static_cast<int>(second * pxPerSecond);
             const bool major = second % majorStep == 0;
             p.setPen(major ? QColor("#434343") : QColor("#2f2f2f"));
-            p.drawLine(x, major ? kRulerHeight : kRulerHeight - 5, x, height());
+            p.drawLine(x, major ? kRulerHeight : kRulerHeight - 5, x, trackBottom);
             p.setPen(major ? QColor("#b0b0b0") : QColor("#747474"));
             if (major) p.drawText(x + 6, 18, prettyTime(second));
         }
@@ -680,6 +731,27 @@ public:
         update();
     }
 
+    QRectF videoRect() const {
+        const QRectF target = QRectF(rect()).adjusted(12, 48, -12, -12);
+        double aspect = 16.0 / 9.0;
+        if (m_width > 0 && m_height > 0) aspect = m_width / m_height;
+        else if (!m_frame.isNull()) aspect = static_cast<double>(m_frame.width()) / m_frame.height();
+        QSizeF canvasSize(target.width(), target.width() / aspect);
+        if (canvasSize.height() > target.height())
+            canvasSize = QSizeF(target.height() * aspect, target.height());
+        return QRectF(target.center() - QPointF(canvasSize.width() / 2, canvasSize.height() / 2), canvasSize);
+    }
+
+    QRectF captionRect() const {
+        const QRectF canvas = videoRect();
+        const double horizontalMargin = std::max(12.0, canvas.width() * 0.08);
+        const double bottomMargin = std::max(12.0, canvas.height() * 0.08);
+        const double captionHeight = std::clamp(canvas.height() * 0.12, 34.0, 64.0);
+        return QRectF(canvas.left() + horizontalMargin,
+                      canvas.bottom() - bottomMargin - captionHeight,
+                      std::max(1.0, canvas.width() - horizontalMargin * 2.0), captionHeight);
+    }
+
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
@@ -694,23 +766,15 @@ protected:
         p.setPen(QColor("#262626"));
         p.fillRect(0, 0, width(), 36, QColor("#2a2a2a"));
         p.drawLine(12, 36, width() - 12, 36);
-        const QRectF target = QRectF(rect()).adjusted(12, 48, -12, -12);
+        const QRectF canvas = videoRect();
+        p.setPen(QColor("#202020"));
+        p.setBrush(QColor("#070707"));
+        p.drawRect(canvas.adjusted(0.5, 0.5, -0.5, -0.5));
         if (!m_frame.isNull()) {
-            QImage scaled = m_frame.scaled(target.size().toSize(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
-            const QPointF topLeft(target.center().x() - scaled.width() / 2.0, target.center().y() - scaled.height() / 2.0);
-            p.setPen(QColor("#242424"));
-            p.setBrush(QColor("#070707"));
-            p.drawRect(QRectF(topLeft, QSizeF(scaled.size())).adjusted(-1, -1, 1, 1));
+            QImage scaled = m_frame.scaled(canvas.size().toSize(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            const QPointF topLeft(canvas.center().x() - scaled.width() / 2.0, canvas.center().y() - scaled.height() / 2.0);
             p.drawImage(topLeft, scaled);
         } else {
-            const double aspect = m_width > 0 && m_height > 0 ? m_width / m_height : 16.0 / 9.0;
-            QSizeF canvasSize(target.width(), target.width() / aspect);
-            if (canvasSize.height() > target.height())
-                canvasSize = QSizeF(target.height() * aspect, target.height());
-            const QRectF canvas(target.center() - QPointF(canvasSize.width() / 2, canvasSize.height() / 2), canvasSize);
-            p.setPen(QColor("#202020"));
-            p.setBrush(QColor("#070707"));
-            p.drawRect(canvas.adjusted(0.5, 0.5, -0.5, -0.5));
             const QPointF center = canvas.center() - QPointF(0, 22);
             p.setPen(QColor("#363636"));
             p.setBrush(QColor("#181818"));
@@ -722,10 +786,10 @@ protected:
             p.setBrush(QColor("#b1b1b1"));
             p.drawPolygon(QPolygonF{center + QPointF(-5, -8), center + QPointF(9, 0), center + QPointF(-5, 8)});
             p.setPen(QColor("#a0a0a0"));
-            p.drawText(QRectF(target.left(), center.y() + 32, target.width(), 20), Qt::AlignCenter,
+            p.drawText(QRectF(canvas.left(), center.y() + 32, canvas.width(), 20), Qt::AlignCenter,
                        QStringLiteral("Your viewer"));
             p.setPen(QColor("#747474"));
-            p.drawText(QRectF(target.left(), center.y() + 52, target.width(), 20), Qt::AlignCenter,
+            p.drawText(QRectF(canvas.left(), center.y() + 52, canvas.width(), 20), Qt::AlignCenter,
                        QStringLiteral("Import media or render a preview"));
         }
         p.setPen(QColor("#a0a0a0"));
@@ -744,15 +808,15 @@ protected:
         p.drawText(width() - 84, 23, prettyTime(m_time));
         p.setFont(viewerFont);
         if (!m_caption.isEmpty()) {
-            const QRectF captionRect(48, height() - 64, width() - 96, 34);
+            const QRectF caption = captionRect();
             p.setPen(Qt::NoPen);
             p.setBrush(QColor(15, 15, 15, 225));
-            p.drawRoundedRect(captionRect, 4, 4);
+            p.drawRoundedRect(caption, 4, 4);
             p.setPen(QColor("#676767"));
             p.setBrush(Qt::NoBrush);
-            p.drawRoundedRect(captionRect, 4, 4);
+            p.drawRoundedRect(caption, 4, 4);
             p.setPen(QColor("#eeeeee"));
-            p.drawText(captionRect.adjusted(10, 0, -10, 0), Qt::AlignCenter | Qt::TextSingleLine, m_caption);
+            p.drawText(caption.adjusted(10, 4, -10, -4), Qt::AlignCenter | Qt::TextWordWrap, m_caption);
         }
     }
 
@@ -844,6 +908,27 @@ private slots:
         if (!sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("preview")}})) return;
         addActivity(QStringLiteral("preview"), QStringLiteral("Rendering preview"));
         m_previewButton->setEnabled(false);
+    }
+
+    void canvasPresetChanged(int index) {
+        if (m_updatingCanvasPreset || !m_connected || index < 0) return;
+        const QStringList dimensions = m_canvasPreset->itemData(index).toString().split(QLatin1Char('x'));
+        if (dimensions.size() != 2) {
+            syncCanvasPreset(m_canvasSize);
+            return;
+        }
+        bool widthOk = false;
+        bool heightOk = false;
+        const int width = dimensions.at(0).toInt(&widthOk);
+        const int height = dimensions.at(1).toInt(&heightOk);
+        if (!widthOk || !heightOk || width < 2 || height < 2) {
+            syncCanvasPreset(m_canvasSize);
+            return;
+        }
+        const QJsonObject command{{QStringLiteral("type"), QStringLiteral("set_canvas")},
+                                  {QStringLiteral("width"), width},
+                                  {QStringLiteral("height"), height}};
+        if (!sendSimple(commandApply(command, m_revision))) syncCanvasPreset(m_canvasSize);
     }
 
     void addTrack() {
@@ -1441,6 +1526,7 @@ private:
         m_exportProgress->setTextVisible(false);
         m_exportProgress->setToolTip(QStringLiteral("Export and preview progress"));
         chatLayout->addWidget(m_exportProgress);
+        m_exportProgress->hide();
 
         auto *proposalBox = new QGroupBox(QStringLiteral("PROPOSAL"));
         m_proposalBox = proposalBox;
@@ -1604,6 +1690,28 @@ private:
         return spin;
     }
 
+    void syncCanvasPreset(const QSize &size) {
+        if (!m_canvasPreset || !size.isValid()) return;
+        m_canvasSize = size;
+        const QSignalBlocker blocker(m_canvasPreset);
+        m_updatingCanvasPreset = true;
+        const QString key = QStringLiteral("%1x%2").arg(size.width()).arg(size.height());
+        int index = m_canvasPreset->findData(key);
+        if (index < 0) {
+            index = m_canvasPreset->findData(QStringLiteral("custom"));
+            const QString label = QStringLiteral("Custom  %1 × %2").arg(size.width()).arg(size.height());
+            if (index < 0) {
+                m_canvasPreset->addItem(label, QStringLiteral("custom"));
+                index = m_canvasPreset->count() - 1;
+            } else {
+                m_canvasPreset->setItemText(index, label);
+            }
+        }
+        m_canvasPreset->setCurrentIndex(index);
+        m_canvasPreset->setToolTip(QStringLiteral("Project format: %1 × %2").arg(size.width()).arg(size.height()));
+        m_updatingCanvasPreset = false;
+    }
+
     void setupActions() {
         menuBar()->setNativeMenuBar(true);
         auto *view = menuBar()->addMenu(QStringLiteral("View"));
@@ -1734,10 +1842,19 @@ private:
         spacerRight->setStyleSheet(QStringLiteral("background: transparent"));
         spacerRight->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         toolbar->addWidget(spacerRight);
-        m_quality = new QComboBox;
+        m_quality = new QualityComboBox;
+        m_quality->setObjectName(QStringLiteral("qualityPicker"));
         m_quality->addItem(QStringLiteral("Preview"), QStringLiteral("preview"));
         m_quality->addItem(QStringLiteral("Full"), QStringLiteral("full"));
         toolbar->addWidget(m_quality);
+        m_canvasPreset = new QualityComboBox;
+        m_canvasPreset->setObjectName(QStringLiteral("canvasPicker"));
+        m_canvasPreset->addItem(QStringLiteral("16:9  1920 × 1080"), QStringLiteral("1920x1080"));
+        m_canvasPreset->addItem(QStringLiteral("9:16  1080 × 1920"), QStringLiteral("1080x1920"));
+        m_canvasPreset->setToolTip(QStringLiteral("Project format"));
+        connect(m_canvasPreset, qOverload<int>(&QComboBox::currentIndexChanged),
+                this, &MainWindow::canvasPresetChanged);
+        toolbar->addWidget(m_canvasPreset);
         auto *exportToolbar = toolbar->addAction(QStringLiteral("Export"));
         connect(exportToolbar, &QAction::triggered, this, &MainWindow::exportProject);
         m_previewButton = toolbar->addAction(QStringLiteral("Render preview"));
@@ -1858,6 +1975,10 @@ private:
             const double progress = event.value(QStringLiteral("progress")).toDouble();
             m_exportProgress->setValue(static_cast<int>(std::clamp(progress, 0.0, 1.0) * 100.0));
             const QString status = event.value(QStringLiteral("status")).toString();
+            const bool finished = status == QStringLiteral("ready") || status == QStringLiteral("complete") ||
+                                  status == QStringLiteral("completed") || status == QStringLiteral("failed") ||
+                                  status == QStringLiteral("cancelled") || status == QStringLiteral("canceled");
+            m_exportProgress->setVisible(!finished);
             if (!status.isEmpty()) statusBar()->showMessage(QStringLiteral("Export %1").arg(status));
             if (!event.value(QStringLiteral("path")).toString().isEmpty()) addActivity(QStringLiteral("export"), event.value(QStringLiteral("path")).toString());
         } else if (type == QStringLiteral("preview")) {
@@ -1877,11 +1998,13 @@ private:
                 m_previewButton->setEnabled(false);
                 m_playButton->setEnabled(false);
                 m_exportProgress->setValue(static_cast<int>(std::clamp(event.value(QStringLiteral("progress")).toDouble(), 0.0, 1.0) * 100.0));
+                m_exportProgress->show();
             } else if (status == QStringLiteral("ready")) {
                 m_previewRequired = false;
                 m_previewButton->setEnabled(false);
                 m_playButton->setEnabled(m_connected && m_duration > 0);
                 m_exportProgress->setValue(0);
+                m_exportProgress->hide();
                 statusBar()->showMessage(QStringLiteral("Preview ready"), 4000);
             }
         } else if (type == QStringLiteral("caption")) {
@@ -1918,8 +2041,10 @@ private:
         if (!m_selectedClip.isEmpty() && selectedClipObject().isEmpty()) m_selectedClip.clear();
         m_timeline->setProject(m_project, m_duration, m_fps);
         m_timeline->setSelectedClip(m_selectedClip);
-        m_viewer->setProjectInfo(m_project.value(QStringLiteral("width")).toDouble(), m_project.value(QStringLiteral("height")).toDouble());
         const QJsonArray sources = snapshot.value(QStringLiteral("sources")).toArray();
+        const QSize canvasSize = resolvedCanvasSize(m_project, sources);
+        m_viewer->setProjectInfo(canvasSize.width(), canvasSize.height());
+        syncCanvasPreset(canvasSize);
         m_artwork->request(sources, m_projectDirectory);
         if (sources != m_displayedSources) {
             const QString selectedSource = m_mediaList->currentItem() ? m_mediaList->currentItem()->data(Qt::UserRole).toString() : QString();
@@ -2152,6 +2277,7 @@ private:
             : status == QStringLiteral("connecting") ? QStringLiteral("CONNECTING") : QStringLiteral("OFFLINE"));
         m_mediaPanel->setEnabled(m_connected);
         m_timeline->setEnabled(m_connected);
+        if (m_canvasPreset) m_canvasPreset->setEnabled(m_connected);
         m_chatInput->setEnabled(m_connected && !m_agentBusy);
         for (auto *action : m_runtimeActions) action->setEnabled(m_connected);
         m_undoAction->setEnabled(m_connected && m_snapshot.value(QStringLiteral("canUndo")).toBool());
@@ -2219,6 +2345,7 @@ private:
     bool m_previewRequired = false;
     bool m_hoverSkimming = false;
     bool m_updatingInspector = false;
+    bool m_updatingCanvasPreset = false;
     bool m_conversationEmpty = true;
     bool m_agentBusy = false;
     QString m_agentRunState = QStringLiteral("idle");
@@ -2226,6 +2353,7 @@ private:
     QString m_selectedClip;
     QString m_proposalId;
     QStringList m_activityLog;
+    QSize m_canvasSize{1920, 1080};
 
     ViewerWidget *m_viewer = nullptr;
     TimelineWidget *m_timeline = nullptr;
@@ -2263,6 +2391,7 @@ private:
     QLabel *m_timeLabel = nullptr;
     QSlider *m_zoom = nullptr;
     QComboBox *m_quality = nullptr;
+    QComboBox *m_canvasPreset = nullptr;
     QProgressBar *m_exportProgress = nullptr;
     QAction *m_undoAction = nullptr;
     QAction *m_redoAction = nullptr;
@@ -2273,6 +2402,34 @@ private:
 class EditorTest final : public QObject {
     Q_OBJECT
 private slots:
+    void viewerKeepsLandscapeAndShortsInsideOneCanvasContract() {
+        ViewerWidget viewer;
+        viewer.resize(800, 600);
+
+        viewer.setProjectInfo(1920, 1080);
+        const QRectF landscape = viewer.videoRect();
+        QVERIFY(std::abs(landscape.width() / landscape.height() - 16.0 / 9.0) < 0.001);
+        QVERIFY(viewer.rect().contains(landscape.toAlignedRect()));
+        QVERIFY(landscape.contains(viewer.captionRect()));
+
+        viewer.setProjectInfo(1080, 1920);
+        const QRectF shorts = viewer.videoRect();
+        QVERIFY(std::abs(shorts.width() / shorts.height() - 9.0 / 16.0) < 0.001);
+        QVERIFY(viewer.rect().contains(shorts.toAlignedRect()));
+        QVERIFY(shorts.contains(viewer.captionRect()));
+    }
+
+    void viewerCanvasResolutionMatchesProjectThenSourceThenDefault() {
+        QCOMPARE(resolvedCanvasSize(QJsonObject{{"width", 1920}, {"height", 1080}},
+                                    QJsonArray{QJsonObject{{"width", 1080}, {"height", 1920}}}),
+                 QSize(1920, 1080));
+        QCOMPARE(resolvedCanvasSize(QJsonObject{},
+                                    QJsonArray{QJsonObject{{"width", 1280}, {"height", 720}},
+                                               QJsonObject{{"width", 1080}, {"height", 1920}}}),
+                 QSize(1080, 1920));
+        QCOMPARE(resolvedCanvasSize(QJsonObject{}, QJsonArray{}), QSize(1920, 1080));
+    }
+
     void editorChromeKeepsComposerAtTheBottom() {
         MainWindow window{QString(), QString()};
         window.show();
@@ -2294,6 +2451,13 @@ private slots:
         }
         QVERIFY(activity);
         QVERIFY(activity->mapTo(&window, QPoint{}).y() < composer->mapTo(&window, QPoint{}).y());
+        QVERIFY(window.m_exportProgress->isHidden());
+
+        window.handleEvent(QJsonObject{{"type", "export"}, {"status", "running"}, {"progress", 0.5}});
+        QVERIFY(!window.m_exportProgress->isHidden());
+        QCOMPARE(window.m_exportProgress->value(), 50);
+        window.handleEvent(QJsonObject{{"type", "export"}, {"status", "completed"}, {"progress", 1.0}});
+        QVERIFY(window.m_exportProgress->isHidden());
     }
 
     void chatComposerSupportsMultilineWithoutAccidentalSend() {

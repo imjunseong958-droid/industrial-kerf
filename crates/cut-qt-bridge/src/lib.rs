@@ -412,6 +412,57 @@ fn export(
     }
 }
 
+/// Resolve the preview canvas using the same precedence as native playback:
+/// an explicit project canvas, then the largest complete source canvas, then
+/// the conventional landscape default.
+fn preview_canvas_size(project: &Value) -> (u32, u32) {
+    fn positive(value: Option<&Value>) -> Option<f64> {
+        value
+            .and_then(Value::as_f64)
+            .filter(|value| value.is_finite() && *value > 0.0)
+    }
+
+    if let (Some(width), Some(height)) = (
+        positive(project.get("width")),
+        positive(project.get("height")),
+    ) {
+        return (dimension(width), dimension(height));
+    }
+
+    let mut largest = None;
+    if let Some(sources) = project.get("sources").and_then(Value::as_array) {
+        for source in sources {
+            let (Some(width), Some(height)) = (
+                positive(source.get("width")),
+                positive(source.get("height")),
+            ) else {
+                continue;
+            };
+            let area = width * height;
+            if largest.is_none_or(|(largest_area, _, _)| area > largest_area) {
+                largest = Some((area, width, height));
+            }
+        }
+    }
+
+    largest
+        .map(|(_, width, height)| (dimension(width), dimension(height)))
+        .unwrap_or((1920, 1080))
+}
+
+fn dimension(value: f64) -> u32 {
+    value.round().clamp(2.0, u32::MAX as f64) as u32
+}
+
+fn preview_frame_size(project: &Value) -> (u32, u32) {
+    let (width, height) = preview_canvas_size(project);
+    let scale = (1280.0 / f64::from(width.max(height))).min(1.0);
+    (
+        dimension(f64::from(width) * scale),
+        dimension(f64::from(height) * scale),
+    )
+}
+
 fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared>) {
     let mut session: Option<PlaybackSession> = None;
     let mut position = 0.0_f64;
@@ -442,13 +493,7 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
                 continue;
             }
             emit(&tx, json!({"type":"preview","status":"ready"}));
-            let width = project["width"].as_u64().unwrap_or(1920).clamp(2, 16384) as u32;
-            let height = project["height"].as_u64().unwrap_or(1080).clamp(2, 16384) as u32;
-            let scale = 1280.0 / f64::from(width.max(height)).max(1280.0);
-            let size = (
-                (f64::from(width) * scale).round() as u32,
-                (f64::from(height) * scale).round() as u32,
-            );
+            let size = preview_frame_size(&project);
             // A new worker prevents old-project frames from resurfacing after an edit.
             session = match PlaybackSession::open_json(
                 &project,
@@ -946,7 +991,10 @@ pub unsafe extern "C" fn cut_bridge_frame(bridge: *mut c_void, output: *mut CutF
 
 #[cfg(test)]
 mod tests {
-    use super::{publish, publish_force, AgentSettings, Command, Shared};
+    use super::{
+        preview_canvas_size, preview_frame_size, publish, publish_force, AgentSettings, Command,
+        Shared,
+    };
     use cut_runtime::{PendingProposal, ProposalFreshness, StateSnapshot};
     use serde_json::json;
     use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -1091,5 +1139,54 @@ mod tests {
             panic!("expected agent command");
         };
         assert_eq!(settings, AgentSettings::default());
+    }
+
+    #[test]
+    fn preview_canvas_prefers_explicit_project_dimensions() {
+        let project = json!({
+            "version": 2,
+            "width": 1080,
+            "height": 1920,
+            "sources": [{"width": 1920, "height": 1080}]
+        });
+
+        assert_eq!(preview_canvas_size(&project), (1080, 1920));
+        assert_eq!(preview_frame_size(&project), (720, 1280));
+    }
+
+    #[test]
+    fn preview_canvas_uses_largest_valid_source_when_project_is_unsized() {
+        let project = json!({
+            "version": 2,
+            "sources": [
+                {"width": 1280, "height": 720},
+                {"width": 1080, "height": 1920},
+                {"width": 0, "height": 500},
+                {"width": 640}
+            ]
+        });
+
+        assert_eq!(preview_canvas_size(&project), (1080, 1920));
+        assert_eq!(preview_frame_size(&project), (720, 1280));
+    }
+
+    #[test]
+    fn preview_canvas_falls_back_to_landscape_default_without_dimensions() {
+        let project = json!({"version": 2, "sources": []});
+
+        assert_eq!(preview_canvas_size(&project), (1920, 1080));
+        assert_eq!(preview_frame_size(&project), (1280, 720));
+    }
+
+    #[test]
+    fn preview_frame_size_limits_only_the_longest_edge_for_large_canvases() {
+        let project = json!({
+            "version": 2,
+            "width": 20_000,
+            "height": 10_000
+        });
+
+        assert_eq!(preview_canvas_size(&project), (20_000, 10_000));
+        assert_eq!(preview_frame_size(&project), (1280, 640));
     }
 }

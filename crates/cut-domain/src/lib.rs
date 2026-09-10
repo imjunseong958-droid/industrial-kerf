@@ -699,6 +699,18 @@ pub enum Command {
     RestoreMetadata {
         metadata: Option<JsonObject>,
     },
+    /// Set the project output canvas dimensions.
+    SetCanvas {
+        width: f64,
+        height: f64,
+    },
+    /// Restore the project output canvas dimensions captured by an inverse.
+    /// Each dimension is optional because older projects may not have either
+    /// top-level value yet.
+    RestoreCanvas {
+        width: Option<f64>,
+        height: Option<f64>,
+    },
     AddSource {
         source: Source,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -1293,6 +1305,16 @@ fn normalise_project(mut value: Value) -> Result<Value, DomainError> {
             "project.fps must be positive",
         ));
     }
+    for key in ["width", "height"] {
+        if let Some(value) = raw.get(key).filter(|value| !value.is_null()) {
+            if positive(value).is_none() {
+                return Err(DomainError::new(
+                    "INVALID_PROJECT",
+                    format!("project.{key} must be positive"),
+                ));
+            }
+        }
+    }
     for key in [
         "sources",
         "tracks",
@@ -1813,6 +1835,7 @@ mod wire {
             ("deleteMarker", "remove_marker"),
             ("insertMarker", "add_marker"),
             ("setMetadata", "set_metadata"),
+            ("setCanvas", "set_canvas"),
             ("addSource", "add_source"),
             ("insertSource", "add_source"),
             ("addOverlay", "add_overlay"),
@@ -2040,6 +2063,23 @@ mod wire {
                 "INVALID_COMMAND",
                 "move_clip requires index or toIndex",
             )),
+            Command::SetCanvas { width, height }
+                if !width.is_finite() || *width <= 0.0 || !height.is_finite() || *height <= 0.0 =>
+            {
+                Err(DomainError::new(
+                    "INVALID_COMMAND",
+                    "set_canvas width and height must be finite and positive",
+                ))
+            }
+            Command::RestoreCanvas { width, height }
+                if width.is_some_and(|value| !value.is_finite() || value <= 0.0)
+                    || height.is_some_and(|value| !value.is_finite() || value <= 0.0) =>
+            {
+                Err(DomainError::new(
+                    "INVALID_COMMAND",
+                    "restore_canvas width and height must be finite and positive when present",
+                ))
+            }
             Command::Batch { commands } => {
                 for command in commands {
                     validate_command(command)?;
@@ -2263,6 +2303,24 @@ fn validate_project(project: &Project) -> Result<(), DomainError> {
         return Err(DomainError::new(
             "INVALID_PROJECT",
             "project.fps must be positive",
+        ));
+    }
+    if project
+        .width
+        .is_some_and(|width| !width.is_finite() || width <= 0.0)
+    {
+        return Err(DomainError::new(
+            "INVALID_PROJECT",
+            "project.width must be positive",
+        ));
+    }
+    if project
+        .height
+        .is_some_and(|height| !height.is_finite() || height <= 0.0)
+    {
+        return Err(DomainError::new(
+            "INVALID_PROJECT",
+            "project.height must be positive",
         ));
     }
     let source_ids: HashSet<&str> = project
@@ -2610,6 +2668,14 @@ pub fn inverse_command(project: &Project, command: &Command) -> Result<Command, 
         Command::RestoreMetadata { .. } => Ok(Command::RestoreMetadata {
             metadata: project.metadata.clone(),
         }),
+        Command::SetCanvas { .. } => Ok(Command::RestoreCanvas {
+            width: project.width,
+            height: project.height,
+        }),
+        Command::RestoreCanvas { .. } => Ok(Command::RestoreCanvas {
+            width: project.width,
+            height: project.height,
+        }),
         Command::AddSource { source, .. } => Ok(Command::RemoveSource {
             source_id: source.id.clone(),
         }),
@@ -2832,6 +2898,28 @@ fn apply_command_mut(project: &mut Project, command: &Command) -> Result<(), Dom
         }
         Command::RestoreMetadata { metadata } => {
             project.metadata = metadata.clone();
+        }
+        Command::SetCanvas { width, height } => {
+            if !width.is_finite() || *width <= 0.0 || !height.is_finite() || *height <= 0.0 {
+                return Err(DomainError::new(
+                    "INVALID_COMMAND",
+                    "set_canvas width and height must be finite and positive",
+                ));
+            }
+            project.width = Some(*width);
+            project.height = Some(*height);
+        }
+        Command::RestoreCanvas { width, height } => {
+            if width.is_some_and(|value| !value.is_finite() || value <= 0.0)
+                || height.is_some_and(|value| !value.is_finite() || value <= 0.0)
+            {
+                return Err(DomainError::new(
+                    "INVALID_COMMAND",
+                    "restore_canvas width and height must be finite and positive when present",
+                ));
+            }
+            project.width = *width;
+            project.height = *height;
         }
         Command::AddSource { source, index } => {
             if project
@@ -3192,8 +3280,8 @@ pub fn empty_project() -> Project {
         id: None,
         name: Some("Untitled project".into()),
         fps: 30.0,
-        width: None,
-        height: None,
+        width: Some(1920.0),
+        height: Some(1080.0),
         duration: None,
         sources: Vec::new(),
         tracks: vec![
