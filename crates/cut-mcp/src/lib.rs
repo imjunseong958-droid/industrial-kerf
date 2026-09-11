@@ -53,12 +53,8 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     "timeline.check",
     "timeline.capture",
     "timeline.apply",
-    "timeline.undo",
-    "timeline.redo",
     "media.probe",
     "media.asset",
-    "media.fetch",
-    "media.import",
     "workflow.roughcut",
     "render.preview",
     "render.start",
@@ -78,8 +74,6 @@ pub const FULL_TOOL_NAMES: &[&str] = &[
     "timeline.check",
     "timeline.capture",
     "timeline.apply",
-    "timeline.undo",
-    "timeline.redo",
     "project.validate",
     "timeline.diff",
     "proposal.capture",
@@ -88,8 +82,6 @@ pub const FULL_TOOL_NAMES: &[&str] = &[
     "render.status",
     "render.cancel",
     "render.result",
-    "media.fetch",
-    "media.import",
     "media.probe",
     "media.asset",
     "vision.track_objects",
@@ -442,10 +434,23 @@ impl CutMcpRouter {
     }
 
     pub fn call(&self, presented_name: &str, arguments: Value) -> Value {
-        let base_name = self
-            .parse_name(presented_name)
-            .unwrap_or_else(|| presented_name.to_owned());
-        match self.call_base(&base_name, arguments) {
+        let base_name = self.parse_name(presented_name).unwrap_or_else(|| {
+            presented_name
+                .strip_prefix(&format!("{}.", self.namespace))
+                .unwrap_or(presented_name)
+                .to_owned()
+        });
+        let result = if AGENT_CANONICAL_ONLY_TOOLS.contains(&base_name.as_str()) {
+            Err(McpError::new(
+                "AGENT_CANONICAL_BYPASS",
+                agent_canonical_bypass_error(&base_name),
+            ))
+        } else if base_name == "timeline.apply" {
+            self.stage_agent_edit(arguments)
+        } else {
+            self.call_base(&base_name, arguments)
+        };
+        match result {
             Ok(result) => {
                 let mut result = results::bound(&self.dir, result);
                 if result.get("readWith").is_some() {
@@ -2487,9 +2492,7 @@ fn agent_canonical_bypass_error(name: &str) -> String {
 }
 
 impl CutMcpRouter {
-    /// Stage an agent edit for explicit user review. Direct MCP calls keep the
-    /// normal `timeline.apply` mutation semantics; only the agent-facing
-    /// catalog uses this proposal boundary.
+    /// Stage an embedded or external agent edit for explicit human review.
     fn stage_agent_edit(&self, arguments: Value) -> Result<Value, McpError> {
         let snapshot = self.state()?;
         let project = parse_project(&snapshot)?;
@@ -2822,7 +2825,7 @@ fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
                 },
                 "additionalProperties": false
             });
-            ("Apply one atomic canonical v2 command or legacy operation through cutd.", schema, mutation)
+            ("Stage one atomic canonical v2 command or legacy operation for human review through cutd. Canonical state changes only on acceptance.", schema, mutation)
         },
         "timeline.undo" | "timeline.redo" => (
             "Move the durable project history by one or more steps.",
@@ -4182,6 +4185,76 @@ mod tests {
     fn core_profile_keeps_stable_mcp_order() {
         assert_eq!(McpProfile::Core.names()[0], "results.read");
         assert_eq!(McpProfile::Core.names().last(), Some(&"skills.read"));
+    }
+
+    #[test]
+    fn external_catalog_hides_bypasses_and_dispatch_rejects_them() {
+        for profile in [McpProfile::Core, McpProfile::Full] {
+            let root = TempDir::new().expect("temp dir");
+            let mut router = CutMcpRouter::new(root.path(), profile, None).expect("router");
+            for namespace in ["", "cut"] {
+                router.namespace = namespace.into();
+                let listed = router.list_tools();
+                let search = router.call(
+                    &router.definition("tools.search").name,
+                    json!({"limit":100}),
+                );
+                assert_eq!(search["ok"], true);
+                for name in AGENT_CANONICAL_ONLY_TOOLS {
+                    let presented = router.definition(name).name;
+                    assert!(!listed.iter().any(|tool| tool.name == presented));
+                    assert!(!search["result"]["items"]
+                        .as_array()
+                        .expect("search items")
+                        .iter()
+                        .any(|tool| tool["name"] == presented));
+                    for attempted_name in [*name, presented.as_str()] {
+                        let result = router.call(attempted_name, json!({}));
+                        assert_eq!(result["ok"], false);
+                        assert_eq!(result["error"]["code"], "AGENT_CANONICAL_BYPASS");
+                        let description = router.call(
+                            &router.definition("tools.describe").name,
+                            json!({"name":attempted_name}),
+                        );
+                        assert_eq!(description["ok"], false);
+                        assert_eq!(description["error"]["code"], "UNKNOWN_TOOL");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn external_timeline_apply_stages_without_changing_canonical_state() {
+        let cutd_binary = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/cutd");
+        assert!(cutd_binary.is_file(), "cutd test binary is required");
+        for profile in [McpProfile::Core, McpProfile::Full] {
+            let root = TempDir::new().expect("temp dir");
+            let mut router =
+                CutMcpRouter::new(root.path(), profile, Some(&cutd_binary)).expect("router");
+            router.namespace = "cut".into();
+            let before = router.runtime().get_state().expect("initial state");
+            let result = router.call(
+                &router.definition("timeline.apply").name,
+                json!({
+                    "expectedRevision": before.revision,
+                    "idempotencyKey": "external-edit",
+                    "command": {"type":"add_track","track":{"id":"titles","type":"title","clips":[]}}
+                }),
+            );
+            assert_eq!(result["ok"], true, "{result}");
+            assert_eq!(result["result"]["staged"], true);
+            assert_eq!(result["result"]["pendingProposal"]["status"], "pending");
+            assert_eq!(result["result"]["revision"], before.revision);
+            assert_eq!(result["result"]["project"], before.project);
+            let after = router.runtime().get_state().expect("state after staging");
+            assert_eq!(after.revision, before.revision);
+            assert_eq!(after.project, before.project);
+            let pending = serde_json::to_value(after.pending_proposal).expect("proposal json");
+            assert_eq!(pending["status"], "pending");
+            assert_eq!(pending, result["result"]["pendingProposal"]);
+            assert!(pending["command"].to_string().contains("titles"));
+        }
     }
 
     #[test]

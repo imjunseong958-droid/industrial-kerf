@@ -2,7 +2,10 @@
 
 Cut is a native, agentic video editor. `lcut` opens the Qt6 editor by default;
 pass `--terminal` for the project-scoped terminal agent. `cut-mcp` is the
-project-scoped MCP server.
+project-scoped MCP server and primary external-agent integration surface.
+External Claude, Cursor, and Codex-like clients connect through `cut-mcp`
+using their own agent configuration; they do not need a provider API key
+configured in Cut.
 
 ## Architecture
 
@@ -119,7 +122,11 @@ cargo build -p cut-qt-bridge -p cut-runtime --lib --bin cutd
 python3 scripts/test-cut-qt-bridge.py
 ```
 
-## Providers
+## Optional embedded-agent providers
+
+Provider APIs are optional and only power Cut's embedded agent rail (and its
+terminal agent workflow). They are not required for external agents using
+`cut-mcp` or for native editing.
 
 | Provider | Key | Transports |
 |---|---|---|
@@ -145,12 +152,31 @@ and `--reasoning-effort low|medium|high|...`.
 `cut-mcp` speaks JSON-RPC MCP over stdin/stdout. Diagnostics go to stderr and
 all project mutations go through `cutd`.
 
+Generate a generic MCP client configuration, then copy the JSON into your
+external client's MCP settings:
+
+```bash
+target/release/cut-mcp --dir ./my-project --print-config
+target/release/cut-mcp --dir ./my-project --full --print-config
+```
+
+`--print-config` prints pretty JSON with the absolute path of the running
+`cut-mcp` executable and an absolute project path. Relative project paths are
+resolved against the current working directory; the project need not exist.
+This mode exits without starting `cutd` or changing the project. The full
+profile adds `--full` to the generated arguments, including when selected by
+`CUT_MCP_PROFILE=full`. `CUT_PROJECT_DIR` supplies the default project path
+when `--dir` is omitted.
+
+To run the stdio server directly:
+
 ```bash
 target/release/cut-mcp --dir ./my-project
 target/release/cut-mcp --dir ./my-project --full
 ```
 
-Use `CUTD_BIN` when `cutd` is not on `PATH`:
+Keep `cutd` beside `cut-mcp`, put it on `PATH`, or set `CUTD_BIN` in the client
+process environment. The generated configuration has this shape:
 
 ```json
 {
@@ -171,10 +197,8 @@ The core profile contains the stable editing loop:
 | `timeline.query` | Inspect tracks, clips, source ranges, and placement |
 | `timeline.check` | Check source availability, timeline coverage, compiler findings, and capability mismatches |
 | `timeline.capture` | Capture a deterministic offline timeline range as a frame or filmstrip |
-| `timeline.apply` | Apply one canonical v2 command or atomic batch |
-| `timeline.undo` / `timeline.redo` | Move durable history |
+| `timeline.apply` | Stage one canonical v2 command or atomic batch for human review |
 | `media.probe` | Run info, silence, scenes, exact frames, filmstrips, waveform, transcription, selected-range listening, or a bounded multi-modal `observe` envelope |
-| `media.fetch` / `media.import` | Fetch or import media through `cutd` |
 | `media.asset` | Register an existing local artifact and optionally stage import/replacement as one proposal |
 | `render.preview` / `render.start` / `render.result` | Run and retrieve renders |
 | `skills.read` | Load a playbook body by exact name |
@@ -229,8 +253,12 @@ at the proposed timeline ranges; when ranges are farther apart than the
 120-second capture bound, the response identifies the representative range
 and reports which selections were covered.
 
-Agent tools do not expose direct `media.fetch`, `media.import`, or timeline
-undo/redo calls because those paths bypass review. Use `media.asset` with an
+Embedded agent tools and both external MCP profiles omit direct `media.fetch`,
+`media.import`, and timeline undo/redo calls because those paths bypass review.
+External calls to these tools return `AGENT_CANONICAL_BYPASS`. External
+`timeline.apply` calls create a pending proposal through the same review boundary
+as embedded agent edits; the canonical project and revision remain unchanged
+until a human accepts the proposal in the UI. Use `media.asset` with an
 existing local file to stage an import/replacement, and leave history changes
 to the human UI. Observation references retain the selection index, rationale,
 and optional coarse observation; project-bound references carry the current
