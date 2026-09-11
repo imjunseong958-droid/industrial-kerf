@@ -9,6 +9,7 @@
 #include <QUrl>
 #include <QHash>
 #include <QApplication>
+#include <QClipboard>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDir>
@@ -75,6 +76,38 @@ namespace {
 constexpr int kTimelineLabelWidth = 94;
 constexpr int kRulerHeight = 28;
 constexpr int kTrackHeight = 56;
+
+QString mcpExecutable(const QString &projectDirectory) {
+    const QString override = qEnvironmentVariable("CUT_MCP_BIN");
+    if (!override.isEmpty()) {
+        return QFileInfo(override).isRelative() && !override.contains(QLatin1Char('/'))
+            && !override.contains(QLatin1Char('\\'))
+            ? override : QFileInfo(override).absoluteFilePath();
+    }
+#ifdef Q_OS_WIN
+    const QString binary = QStringLiteral("cut-mcp.exe");
+#else
+    const QString binary = QStringLiteral("cut-mcp");
+#endif
+    QStringList candidates{QDir(QCoreApplication::applicationDirPath()).filePath(binary)};
+    const QStringList roots{QCoreApplication::applicationDirPath(), QDir::currentPath(),
+                            QFileInfo(QString::fromUtf8(__FILE__)).absolutePath(), projectDirectory};
+    for (const QString &root : roots) {
+        QDir directory(root);
+        do {
+            if (directory.exists(QStringLiteral("crates/cut-mcp/Cargo.toml"))) {
+                candidates << directory.filePath(QStringLiteral("target/release/") + binary)
+                           << directory.filePath(QStringLiteral("target/debug/") + binary);
+                break;
+            }
+        } while (directory.cdUp());
+    }
+    for (const QString &candidate : candidates) {
+        const QFileInfo info(candidate);
+        if (info.isFile() && info.isExecutable()) return info.absoluteFilePath();
+    }
+    return QStringLiteral("cut-mcp");
+}
 
 QString prettyTime(double seconds) {
     seconds = std::max(0.0, seconds);
@@ -1647,6 +1680,43 @@ private:
         saveSettings->setObjectName(QStringLiteral("primaryButton"));
         connect(saveSettings, &QPushButton::clicked, this, &MainWindow::saveAgentSettings);
         settingsLayout->addWidget(saveSettings);
+
+        auto *mcpSection = new QGroupBox(QStringLiteral("MCP / External agents"));
+        mcpSection->setObjectName(QStringLiteral("mcpSection"));
+        auto *mcpLayout = new QVBoxLayout(mcpSection);
+        auto *mcpIntro = new QLabel(QStringLiteral("External Claude, Cursor, and Codex clients connect through cut-mcp. Cut provider API keys are not required for this connection. Use this config in your client's MCP settings."));
+        mcpIntro->setWordWrap(true);
+        mcpIntro->setObjectName(QStringLiteral("chatHint"));
+        mcpLayout->addWidget(mcpIntro);
+        const QString projectPath = QDir(m_projectDirectory).absolutePath();
+        auto *mcpProject = new QLineEdit(projectPath);
+        mcpProject->setReadOnly(true);
+        mcpProject->setObjectName(QStringLiteral("mcpProjectPath"));
+        auto *mcpProjectForm = new QFormLayout;
+        mcpProjectForm->addRow(QStringLiteral("Project"), mcpProject);
+        mcpLayout->addLayout(mcpProjectForm);
+        const QJsonObject config{{QStringLiteral("mcpServers"), QJsonObject{
+            {QStringLiteral("cut"), QJsonObject{
+                {QStringLiteral("command"), mcpExecutable(projectPath)},
+                {QStringLiteral("args"), QJsonArray{QStringLiteral("--dir"), projectPath}}
+            }}}}};
+        auto *mcpJson = new QTextEdit;
+        mcpJson->setObjectName(QStringLiteral("mcpConfigJson"));
+        mcpJson->setReadOnly(true);
+        mcpJson->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+        mcpJson->setPlainText(QString::fromUtf8(QJsonDocument(config).toJson(QJsonDocument::Indented)));
+        mcpLayout->addWidget(mcpJson);
+        auto *copyMcp = new QPushButton(QStringLiteral("Copy MCP config"));
+        copyMcp->setObjectName(QStringLiteral("copyMcpConfig"));
+        auto *mcpCopyStatus = new QLabel;
+        mcpCopyStatus->setObjectName(QStringLiteral("muted"));
+        connect(copyMcp, &QPushButton::clicked, this, [mcpJson, mcpCopyStatus]() {
+            QApplication::clipboard()->setText(mcpJson->toPlainText());
+            mcpCopyStatus->setText(QStringLiteral("MCP config copied"));
+        });
+        mcpLayout->addWidget(copyMcp);
+        mcpLayout->addWidget(mcpCopyStatus);
+        settingsLayout->addWidget(mcpSection);
         settingsLayout->addStretch(1);
         settingsScroll->setWidget(settingsContent);
         settingsTabLayout->addWidget(settingsScroll);
@@ -2402,6 +2472,28 @@ private:
 class EditorTest final : public QObject {
     Q_OBJECT
 private slots:
+    void mcpConfigCopiesProjectWithoutCredentials() {
+        const QString projectPath = QDir::temp().filePath(QStringLiteral("Cut project \"quoted\""));
+        MainWindow window{projectPath, QString()};
+        auto *section = window.findChild<QGroupBox *>(QStringLiteral("mcpSection"));
+        QVERIFY(section);
+        auto *editor = section->findChild<QTextEdit *>(QStringLiteral("mcpConfigJson"));
+        auto *button = section->findChild<QPushButton *>(QStringLiteral("copyMcpConfig"));
+        QVERIFY(editor);
+        QVERIFY(button);
+        QVERIFY(editor->isReadOnly());
+        const QJsonObject expected{{QStringLiteral("mcpServers"), QJsonObject{
+            {QStringLiteral("cut"), QJsonObject{
+                {QStringLiteral("command"), mcpExecutable(projectPath)},
+                {QStringLiteral("args"), QJsonArray{QStringLiteral("--dir"), projectPath}}
+            }}}}};
+        QCOMPARE(QJsonDocument::fromJson(editor->toPlainText().toUtf8()).object(), expected);
+        button->click();
+        QCOMPARE(QApplication::clipboard()->text(), editor->toPlainText());
+        QCOMPARE(section->findChild<QLabel *>(QStringLiteral("muted"))->text(),
+                 QStringLiteral("MCP config copied"));
+    }
+
     void viewerKeepsLandscapeAndShortsInsideOneCanvasContract() {
         ViewerWidget viewer;
         viewer.resize(800, 600);
