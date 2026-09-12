@@ -87,11 +87,6 @@ QWidget#transport {
     border: 0;
     border-radius: 0px;
 }
-QFrame#agentContext {
-    background: #2a2a2a;
-    border: 1px solid #404040;
-    border-radius: 4px;
-}
 QSplitter::handle { background: #141414; }
 QSplitter::handle:hover { background: #4e4e4e; }
 QSplitter::handle:horizontal { width: 2px; }
@@ -201,7 +196,6 @@ QLabel#timecode { color: #e2e2e2; font-family: Menlo, Monaco, monospace; font-si
 QLabel#inspectorClip { color: #eeeeee; font-weight: 600; padding: 5px 0; }
 QLabel#projectTitle { color: #e1e1e1; font-weight: 600; padding: 0 20px; }
 QLabel#assistantTitle { color: #e9e9e9; font-size: 14px; font-weight: 600; }
-QLabel#agentConfig { color: #cacaca; font-size: 11px; font-weight: 600; }
 QLabel#proposalSummary { color: #bdbdbd; }
 QToolButton#eyebrow { text-align: left; background: transparent; border: 0; color: #a1a1a1; }
 
@@ -268,7 +262,6 @@ QComboBox:disabled {
     background: #2a2a2a;
     border-color: #272727;
 }
-QComboBox#agentProvider,
 QComboBox#agentModel {
     background: transparent;
     border: 0;
@@ -276,7 +269,6 @@ QComboBox#agentModel {
     font-size: 11px;
     color: #c3c3c3;
 }
-QComboBox#agentProvider:hover,
 QComboBox#agentModel:hover { background: #393939; }
 QComboBox#agentModel QLineEdit { background: transparent; border: 0; padding: 0; }
 QFrame#chatComposer {

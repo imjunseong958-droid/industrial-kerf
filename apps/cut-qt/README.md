@@ -50,11 +50,12 @@ before/after field values in a scrollable view. Stale proposals and proposals
 whose field diff was truncated cannot be accepted; ask the agent to restage
 or split them into smaller changes.
 
-The Agent panel includes a Chat view and an Agent settings view. Configure
-Anthropic and OpenAI independently with an API key, Base URL, model, and (for
-OpenAI) Chat Completions or Responses mode. The provider and model picker in
-Chat are sent with each request, so changing them takes effect immediately;
-the existing environment variables remain available as fallbacks.
+The Agent panel includes a Chat view and an Agent settings view. Settings
+holds two protocol slots: Anthropic Messages and OpenAI-compatible. Each slot
+has an API key, Base URL, and model. The OpenAI-compatible slot also has Chat
+Completions vs Responses. Gemini and other compatible hosts use that slot and
+its Base URL. Chat sends the active Settings connection plus the model combo.
+Environment variables remain available as fallbacks.
 
 Settings separates the two MCP directions. “Use MCP tools in Cut chat” makes
 the embedded agent call local stdio MCP servers from `~/.cut/mcp.json` or
