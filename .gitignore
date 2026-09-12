@@ -1,6 +1,8 @@
 node_modules/
 dist/
-.cursor/
+.cursor/*
+!.cursor/skills/
+!.cursor/skills/**
 .env
 .cut/config.json
 .cut/vision.json
