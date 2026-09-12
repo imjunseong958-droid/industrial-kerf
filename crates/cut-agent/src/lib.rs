@@ -635,7 +635,7 @@ impl LlmProvider for OpenAiProvider {
             .and_then(|choice| choice.get("finish_reason"))
             .and_then(Value::as_str);
         chunks.push(ProviderChunk::MessageEnd {
-            stop_reason: normalize_stop_reason(finish),
+            stop_reason: normalize_openai_stop_reason(finish, &content),
             content,
         });
         Ok(chunks)
@@ -696,7 +696,7 @@ fn openai_chat_stream_chunks(events: &[Value]) -> Vec<ProviderChunk> {
         }));
     }
     chunks.push(ProviderChunk::MessageEnd {
-        stop_reason: normalize_stop_reason(finish_reason.as_deref()),
+        stop_reason: normalize_openai_stop_reason(finish_reason.as_deref(), &content),
         content,
     });
     chunks
@@ -1249,6 +1249,14 @@ fn normalize_stop_reason(value: Option<&str>) -> String {
         .then_some("tool_use")
         .unwrap_or("end_turn")
         .into()
+}
+
+fn normalize_openai_stop_reason(value: Option<&str>, content: &[Value]) -> String {
+    if matches!(value, Some("stop" | "STOP")) && content.iter().any(is_tool_use) {
+        "tool_use".into()
+    } else {
+        normalize_stop_reason(value)
+    }
 }
 
 fn reasoning_effort_name(value: ReasoningEffort) -> &'static str {
@@ -2367,7 +2375,7 @@ mod tests {
         let chat_client = Arc::new(FakeStreamingClient {
             events: vec![
                 json!({"choices":[{"delta":{"content":"hello","tool_calls":[{"index":0,"id":"call-1","function":{"name":"timeline.query","arguments":"{\"include\":"}}]},"finish_reason":null}]}),
-                json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"full\"}"}}]},"finish_reason":"tool_calls"}]}),
+                json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"full\"}"}}]},"finish_reason":"stop"}]}),
             ],
             bodies: Mutex::new(Vec::new()),
         });
