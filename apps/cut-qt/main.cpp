@@ -1630,8 +1630,6 @@ private:
         proposalLayout->addWidget(m_proposalDiff);
         proposalLayout->addLayout(proposalButtons);
         chatLayout->addWidget(proposalBox);
-        // Keep the composer last so expanding Activity or a proposal consumes
-        // conversation space instead of lifting the message input upward.
         chatLayout->addWidget(composer);
         tabs->addTab(chatTab, QStringLiteral("Chat"));
 

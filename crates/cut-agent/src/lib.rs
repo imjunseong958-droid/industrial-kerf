@@ -50,8 +50,6 @@ const MAX_AGENT_SUMMARY_TEXT_BYTES: usize = 512;
 const MAX_AGENT_SUMMARY_ITEMS: usize = 8;
 const MAX_AGENT_SUMMARY_NODES: usize = 256;
 
-/// HTTP protocol family for agent requests, not a vendor name.
-/// `Openai` means any OpenAI-compatible Chat Completions or Responses endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderName {
