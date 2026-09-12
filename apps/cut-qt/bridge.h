@@ -9,7 +9,7 @@ void *cut_bridge_new(const char *project_directory, const char *cutd_binary);
 void cut_bridge_free(void *bridge);
 // JSON commands: refresh, import {path}, apply {command,revision}, undo/redo
 // {revision}, accept/reject {proposalId,revision}, agent {text,provider,
-// apiMode,apiKey,baseUrl,model}, abort, play, pause, seek {position}, volume
+// apiMode,apiKey,baseUrl,model,mcpEnabled,mcpConfigVersion}, abort, play, pause, seek {position}, volume
 // {value}, export {quality}. Agent settings are request-scoped so switching
 // providers never mutates the project or leaks credentials into its state.
 // false means the bounded queue is full; show an error, never silently drop edits.

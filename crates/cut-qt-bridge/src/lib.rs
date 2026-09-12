@@ -27,6 +27,10 @@ struct AgentSettings {
     base_url: Option<String>,
     #[serde(default)]
     model: Option<String>,
+    #[serde(rename = "mcpEnabled", default)]
+    mcp_enabled: bool,
+    #[serde(rename = "mcpConfigVersion", default)]
+    mcp_config_version: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -590,6 +594,7 @@ fn new_agent(
     directory: &std::path::Path,
     binary: &std::path::Path,
     settings: &AgentSettings,
+    tx: &SyncSender<Value>,
 ) -> Result<AgentSession, String> {
     let provider = if let Some(provider) = settings.provider {
         provider
@@ -643,7 +648,18 @@ fn new_agent(
         .transpose()?;
     let router = CutMcpRouter::new(directory, McpProfile::Full, Some(binary))?;
     let mut tools = router.agent_tools();
-    inbound::add_agent_tools(&mut tools, directory, false, |line| eprintln!("{line}"))?;
+    inbound::add_agent_tools(&mut tools, directory, settings.mcp_enabled, |line| {
+        // Connection errors may contain command arguments or server responses.
+        // Never forward raw names, paths, or error details to chat activity.
+        emit(
+            tx,
+            json!({"type":"agent","kind":"status","text":mcp_connection_status(&line)}),
+        );
+    })
+    .map_err(|_| {
+        "Could not load MCP configuration. Check ~/.cut/mcp.json and project .cut/mcp.json."
+            .to_owned()
+    })?;
     Ok(AgentSession::new(AgentSessionOptions {
         provider,
         api_mode,
@@ -672,6 +688,14 @@ fn new_agent(
     }))
 }
 
+fn mcp_connection_status(line: &str) -> &'static str {
+    if line.starts_with("mcp: connected ") {
+        "MCP server connected"
+    } else {
+        "MCP server unavailable; skipped. Check its local command and configuration."
+    }
+}
+
 fn agent_worker(
     directory: PathBuf,
     binary: PathBuf,
@@ -695,7 +719,7 @@ fn agent_worker(
             {
                 session = Some((
                     request.settings.clone(),
-                    new_agent(&directory, &binary, &request.settings)?,
+                    new_agent(&directory, &binary, &request.settings, &tx)?,
                 ));
             }
             let current = &mut session.as_mut().ok_or("Agent session unavailable")?.1;
@@ -1109,7 +1133,9 @@ mod tests {
             "apiMode": "responses",
             "apiKey": "test-key",
             "baseUrl": "http://localhost:9000/v1",
-            "model": "local-model"
+            "model": "local-model",
+            "mcpEnabled": true,
+            "mcpConfigVersion": 7
         }))
         .expect("agent command should deserialize");
         let Command::Agent { text, settings } = command else {
@@ -1124,6 +1150,8 @@ mod tests {
                 api_key: Some("test-key".into()),
                 base_url: Some("http://localhost:9000/v1".into()),
                 model: Some("local-model".into()),
+                mcp_enabled: true,
+                mcp_config_version: 7,
             }
         );
     }
@@ -1139,6 +1167,33 @@ mod tests {
             panic!("expected agent command");
         };
         assert_eq!(settings, AgentSettings::default());
+    }
+
+    #[test]
+    fn mcp_config_version_invalidates_session_settings() {
+        let settings = AgentSettings::default();
+        assert!(!settings.mcp_enabled);
+        assert_eq!(settings.mcp_config_version, 0);
+        assert_ne!(
+            settings,
+            AgentSettings {
+                mcp_config_version: 1,
+                ..settings.clone()
+            }
+        );
+    }
+
+    #[test]
+    fn mcp_connection_activity_omits_untrusted_details() {
+        assert_eq!(
+            super::mcp_connection_status("mcp: connected secret (2 tools)"),
+            "MCP server connected"
+        );
+        let status = super::mcp_connection_status(
+            "warning: mcp server 'secret' unavailable (token=secret), skipping",
+        );
+        assert!(status.contains("unavailable"));
+        assert!(!status.contains("secret"));
     }
 
     #[test]

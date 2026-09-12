@@ -56,6 +56,13 @@ OpenAI) Chat Completions or Responses mode. The provider and model picker in
 Chat are sent with each request, so changing them takes effect immediately;
 the existing environment variables remain available as fallbacks.
 
+Settings separates the two MCP directions. “Use MCP tools in Cut chat” makes
+the embedded agent call local stdio MCP servers from `~/.cut/mcp.json` or
+`.cut/mcp.json`; it can import an existing project or home Cursor config and
+save a validated project config. “Use Cut from Cursor / Claude” generates the
+opposite-direction `cut-mcp` configuration for an external client. Enabling
+one direction does not enable the other.
+
 Run the Qt behavior tests after configuring with `-DCUT_QT_BUILD_TESTS=ON`:
 
 ```sh

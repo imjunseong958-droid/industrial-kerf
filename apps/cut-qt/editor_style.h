@@ -288,16 +288,22 @@ QFrame#chatComposer QWidget { background: transparent; }
 QPushButton#chatSendButton { border-radius: 4px; padding: 0; font-size: 19px; }
 
 QGroupBox#proposalBox,
-QGroupBox#providerBox {
+QGroupBox#providerBox,
+QGroupBox#inboundMcpSection,
+QGroupBox#mcpSection {
     border: 1px solid #484848;
     border-radius: 4px;
     margin-top: 12px;
     padding: 12px 10px 10px;
     background: #2a2a2a;
 }
-QGroupBox#providerBox { margin-top: 8px; padding: 10px 8px 8px; }
+QGroupBox#providerBox,
+QGroupBox#inboundMcpSection,
+QGroupBox#mcpSection { margin-top: 8px; padding: 10px 8px 8px; }
 QGroupBox#proposalBox::title,
-QGroupBox#providerBox::title {
+QGroupBox#providerBox::title,
+QGroupBox#inboundMcpSection::title,
+QGroupBox#mcpSection::title {
     subcontrol-origin: margin;
     left: 9px;
     padding: 0 5px;

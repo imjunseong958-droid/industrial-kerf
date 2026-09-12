@@ -10,11 +10,13 @@
 #include <QHash>
 #include <QApplication>
 #include <QClipboard>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDir>
 #include <QDoubleSpinBox>
 #include <QFileDialog>
+#include <QFile>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QFrame>
@@ -44,6 +46,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
+#include <QSaveFile>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QSplitter>
@@ -76,6 +79,37 @@ namespace {
 constexpr int kTimelineLabelWidth = 94;
 constexpr int kRulerHeight = 28;
 constexpr int kTrackHeight = 56;
+
+QString validateInboundMcpConfig(const QByteArray &raw) {
+    QJsonParseError error;
+    const QJsonDocument document = QJsonDocument::fromJson(raw, &error);
+    if (error.error != QJsonParseError::NoError)
+        return QStringLiteral("Invalid JSON at offset %1: %2").arg(error.offset).arg(error.errorString());
+    if (!document.isObject()) return QStringLiteral("The JSON root must be an object.");
+    const QJsonValue servers = document.object().value(QStringLiteral("mcpServers"));
+    if (!servers.isObject()) return QStringLiteral("mcpServers must be an object.");
+    const QJsonObject object = servers.toObject();
+    for (auto it = object.begin(); it != object.end(); ++it) {
+        if (!it.value().isObject()) return QStringLiteral("Each server must be an object.");
+        const QJsonObject server = it.value().toObject();
+        const QJsonValue command = server.value(QStringLiteral("command"));
+        if (!command.isString() || command.toString().trimmed().isEmpty())
+            return QStringLiteral("Each server needs a nonempty local command string. URL-only remote servers are not supported in Cut chat.");
+        for (const QString &field : {QStringLiteral("args"), QStringLiteral("tools")}) {
+            if (!server.contains(field) || (field == QStringLiteral("tools") && server.value(field).isNull())) continue;
+            if (!server.value(field).isArray()) return QStringLiteral("%1 must be an array of strings.").arg(field);
+            for (const QJsonValue &value : server.value(field).toArray())
+                if (!value.isString()) return QStringLiteral("%1 must contain only strings.").arg(field);
+        }
+        if (server.contains(QStringLiteral("env"))) {
+            if (!server.value(QStringLiteral("env")).isObject()) return QStringLiteral("env must be an object of string values.");
+            const QJsonObject env = server.value(QStringLiteral("env")).toObject();
+            for (auto entry = env.begin(); entry != env.end(); ++entry)
+                if (!entry.value().isString()) return QStringLiteral("env must contain only string values.");
+        }
+    }
+    return {};
+}
 
 QString mcpExecutable(const QString &projectDirectory) {
     const QString override = qEnvironmentVariable("CUT_MCP_BIN");
@@ -1089,7 +1123,49 @@ private slots:
                            {QStringLiteral("apiMode"), m_openaiMode->currentData().toString()},
                            {QStringLiteral("apiKey"), key ? key->text().trimmed() : QString()},
                            {QStringLiteral("baseUrl"), baseUrl ? baseUrl->text().trimmed() : QString()},
-                           {QStringLiteral("model"), m_modelSelect->currentText().trimmed()}};
+                           {QStringLiteral("model"), m_modelSelect->currentText().trimmed()},
+                           {QStringLiteral("mcpEnabled"), m_mcpEnabled && m_mcpEnabled->isChecked()},
+                           {QStringLiteral("mcpConfigVersion"), static_cast<qint64>(m_mcpConfigVersion)}};
+    }
+
+    void loadInboundMcpConfig(const QString &path, bool imported) {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            m_inboundMcpStatus->setText(QStringLiteral("Could not read %1: %2").arg(path, file.errorString()));
+            return;
+        }
+        const QByteArray raw = file.readAll();
+        if (file.error() != QFileDevice::NoError) {
+            m_inboundMcpStatus->setText(QStringLiteral("Could not read %1: %2").arg(path, file.errorString()));
+            return;
+        }
+        m_inboundMcpJson->setPlainText(QString::fromUtf8(raw));
+        const QString error = validateInboundMcpConfig(raw);
+        m_inboundMcpStatus->setText(error.isEmpty()
+            ? (imported ? QStringLiteral("Loaded %1 into the editor only. Review, then Save and apply.").arg(path)
+                        : QStringLiteral("Loaded project config. Changes apply on the next chat request."))
+            : QStringLiteral("Loaded %1. %2").arg(path, error));
+    }
+
+    void saveInboundMcpConfig() {
+        const QByteArray raw = m_inboundMcpJson->toPlainText().toUtf8();
+        const QString error = validateInboundMcpConfig(raw);
+        if (!error.isEmpty()) {
+            m_inboundMcpStatus->setText(error);
+            return;
+        }
+        const QDir project(m_projectDirectory);
+        if (!project.mkpath(QStringLiteral(".cut"))) {
+            m_inboundMcpStatus->setText(QStringLiteral("Could not create the project's .cut directory."));
+            return;
+        }
+        QSaveFile file(project.filePath(QStringLiteral(".cut/mcp.json")));
+        if (!file.open(QIODevice::WriteOnly) || file.write(raw) != raw.size() || !file.commit()) {
+            m_inboundMcpStatus->setText(QStringLiteral("Could not save MCP config: %1").arg(file.errorString()));
+            return;
+        }
+        ++m_mcpConfigVersion;
+        m_inboundMcpStatus->setText(QStringLiteral("Saved project .cut/mcp.json. Applies on the next chat request when MCP is enabled."));
     }
 
     void updateAgentModelChoices() {
@@ -1632,7 +1708,7 @@ private:
         auto *settingsLayout = new QVBoxLayout(settingsContent);
         settingsLayout->setContentsMargins(0, 0, 2, 0);
         settingsLayout->setSpacing(10);
-        auto *settingsIntro = new QLabel(QStringLiteral("Keep multiple provider connections ready. The provider and model selected above are used for the next request."));
+        auto *settingsIntro = new QLabel(QStringLiteral("AI provider: the service that runs the model answering your chat and choosing tools. Set its API key below. The provider and model selected above are used for the next request."));
         settingsIntro->setObjectName(QStringLiteral("chatHint"));
         settingsIntro->setWordWrap(true);
         settingsLayout->addWidget(settingsIntro);
@@ -1681,10 +1757,60 @@ private:
         connect(saveSettings, &QPushButton::clicked, this, &MainWindow::saveAgentSettings);
         settingsLayout->addWidget(saveSettings);
 
-        auto *mcpSection = new QGroupBox(QStringLiteral("MCP / External agents"));
+        auto *inboundSection = new QGroupBox(QStringLiteral("Use MCP tools in Cut chat"));
+        inboundSection->setObjectName(QStringLiteral("inboundMcpSection"));
+        auto *inboundLayout = new QVBoxLayout(inboundSection);
+        m_mcpEnabled = new QCheckBox(QStringLiteral("Enable external MCP tools"));
+        m_mcpEnabled->setObjectName(QStringLiteral("inboundMcpEnabled"));
+        const bool environmentMcpEnabled = qEnvironmentVariable("CUT_ENABLE_MCP") == QStringLiteral("1");
+        m_mcpEnabled->setChecked(QSettings().value(QStringLiteral("agent/mcpEnabled"), environmentMcpEnabled).toBool());
+        inboundLayout->addWidget(m_mcpEnabled);
+        auto *inboundIntro = new QLabel(QStringLiteral("Cut chat calls external MCP servers directly; Cursor is not needed. Your AI provider above still powers the chat. Cut starts local commands using stdio; URL-only remote servers are not supported. CUT_ENABLE_MCP=1 also enables tools even if this box is unchecked."));
+        inboundIntro->setWordWrap(true);
+        inboundIntro->setObjectName(QStringLiteral("chatHint"));
+        inboundLayout->addWidget(inboundIntro);
+        const QString inboundPath = QDir(m_projectDirectory).absoluteFilePath(QStringLiteral(".cut/mcp.json"));
+        auto *inboundPathLabel = new QLabel(QStringLiteral("Project config: %1\nAlso reads ~/.cut/mcp.json; project entries override matching server names. Use command, optional args, env, and tools (an allowlist). Commands must be installed locally; env values are literal strings. This file may contain server credentials.").arg(inboundPath));
+        inboundPathLabel->setWordWrap(true);
+        inboundPathLabel->setObjectName(QStringLiteral("muted"));
+        inboundLayout->addWidget(inboundPathLabel);
+        m_inboundMcpJson = new QTextEdit;
+        m_inboundMcpJson->setObjectName(QStringLiteral("inboundMcpConfigJson"));
+        m_inboundMcpJson->setAcceptRichText(false);
+        m_inboundMcpJson->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+        m_inboundMcpJson->setMinimumHeight(160);
+        m_inboundMcpJson->setPlainText(QStringLiteral("{\n  \"mcpServers\": {}\n}\n"));
+        m_inboundMcpJson->setPlaceholderText(QStringLiteral("{\"mcpServers\": {\"example\": {\"command\": \"/path/to/server\", \"args\": [], \"env\": {}}}}"));
+        inboundLayout->addWidget(m_inboundMcpJson);
+        for (const auto &source : {qMakePair(QStringLiteral("Load project Cursor config"), QDir(m_projectDirectory).absoluteFilePath(QStringLiteral(".cursor/mcp.json"))),
+                                   qMakePair(QStringLiteral("Load home Cursor config"), QDir::home().filePath(QStringLiteral(".cursor/mcp.json")))}) {
+            auto *load = new QPushButton(source.first);
+            load->setObjectName(source.first.contains(QStringLiteral("project")) ? QStringLiteral("loadProjectCursorMcp") : QStringLiteral("loadHomeCursorMcp"));
+            load->setToolTip(source.second);
+            connect(load, &QPushButton::clicked, this, [this, path = source.second]() { loadInboundMcpConfig(path, true); });
+            inboundLayout->addWidget(load);
+        }
+        auto *saveInbound = new QPushButton(QStringLiteral("Save and apply MCP config"));
+        saveInbound->setObjectName(QStringLiteral("saveInboundMcpConfig"));
+        connect(saveInbound, &QPushButton::clicked, this, &MainWindow::saveInboundMcpConfig);
+        inboundLayout->addWidget(saveInbound);
+        m_inboundMcpStatus = new QLabel(QStringLiteral("No project config yet. Add servers here or load a Cursor config, then Save and apply. Existing home Cut config is used automatically."));
+        m_inboundMcpStatus->setObjectName(QStringLiteral("inboundMcpStatus"));
+        m_inboundMcpStatus->setWordWrap(true);
+        inboundLayout->addWidget(m_inboundMcpStatus);
+        if (QFileInfo::exists(inboundPath)) loadInboundMcpConfig(inboundPath, false);
+        connect(m_mcpEnabled, &QCheckBox::toggled, this, [this](bool enabled) {
+            QSettings settings;
+            settings.setValue(QStringLiteral("agent/mcpEnabled"), enabled);
+            settings.sync();
+            m_inboundMcpStatus->setText(QStringLiteral("MCP preference saved. Applies on the next chat request. CUT_ENABLE_MCP=1 also enables tools."));
+        });
+        settingsLayout->addWidget(inboundSection);
+
+        auto *mcpSection = new QGroupBox(QStringLiteral("Use Cut from Cursor / Claude"));
         mcpSection->setObjectName(QStringLiteral("mcpSection"));
         auto *mcpLayout = new QVBoxLayout(mcpSection);
-        auto *mcpIntro = new QLabel(QStringLiteral("External Claude, Cursor, and Codex clients connect through cut-mcp. Cut provider API keys are not required for this connection. Use this config in your client's MCP settings."));
+        auto *mcpIntro = new QLabel(QStringLiteral("This is the opposite direction: Cursor, Claude, or Codex calls Cut through cut-mcp to work on this project. It does not enable external tools in Cut chat. Cut provider API keys are not required. Copy this config into your external client's MCP settings."));
         mcpIntro->setWordWrap(true);
         mcpIntro->setObjectName(QStringLiteral("chatHint"));
         mcpLayout->addWidget(mcpIntro);
@@ -2440,6 +2566,10 @@ private:
     QLineEdit *m_openaiBaseUrl = nullptr;
     QLineEdit *m_openaiModel = nullptr;
     QComboBox *m_openaiMode = nullptr;
+    QCheckBox *m_mcpEnabled = nullptr;
+    QTextEdit *m_inboundMcpJson = nullptr;
+    QLabel *m_inboundMcpStatus = nullptr;
+    quint64 m_mcpConfigVersion = 0;
     QPushButton *m_sendButton = nullptr;
     QToolButton *m_abortButton = nullptr;
     QListWidget *m_activityList = nullptr;
@@ -2472,6 +2602,62 @@ private:
 class EditorTest final : public QObject {
     Q_OBJECT
 private slots:
+    void inboundMcpConfigValidatesStdioShape() {
+        QVERIFY(!validateInboundMcpConfig("[]").isEmpty());
+        QVERIFY(!validateInboundMcpConfig("{}").isEmpty());
+        QVERIFY(!validateInboundMcpConfig("{broken").isEmpty());
+        const QByteArray remote = R"({"mcpServers":{"remote":{"url":"https://example.com/mcp"}}})";
+        const QByteArray emptyCommand = R"({"mcpServers":{"local":{"command":" "}}})";
+        const QByteArray invalidArgs = R"({"mcpServers":{"local":{"command":"server","args":[1]}}})";
+        const QByteArray invalidEnv = R"({"mcpServers":{"local":{"command":"server","env":{"TOKEN":1}}}})";
+        const QByteArray valid = R"({"mcpServers":{"local":{"command":"server","args":["--stdio"],"env":{"TOKEN":"value"},"tools":["search"]}}})";
+        QVERIFY(validateInboundMcpConfig(remote).contains(QStringLiteral("URL-only")));
+        QVERIFY(!validateInboundMcpConfig(emptyCommand).isEmpty());
+        QVERIFY(!validateInboundMcpConfig(invalidArgs).isEmpty());
+        QVERIFY(!validateInboundMcpConfig(invalidEnv).isEmpty());
+        QVERIFY(validateInboundMcpConfig(valid).isEmpty());
+    }
+
+    void inboundMcpImportRequiresSaveAndInvalidSavePreservesConfig() {
+        QTemporaryDir project;
+        QVERIFY(project.isValid());
+        QVERIFY(QDir(project.path()).mkpath(QStringLiteral(".cursor")));
+        const QByteArray config = R"({"mcpServers":{"local":{"command":"server","args":["--stdio"]}}})";
+        QFile source(QDir(project.path()).filePath(QStringLiteral(".cursor/mcp.json")));
+        QVERIFY(source.open(QIODevice::WriteOnly));
+        QCOMPARE(source.write(config), qint64(config.size()));
+        source.close();
+        const QString savedPath = QDir(project.path()).filePath(QStringLiteral(".cut/mcp.json"));
+        MainWindow window{project.path(), QString()};
+        const bool originalEnabled = window.m_mcpEnabled->isChecked();
+        window.m_mcpEnabled->setChecked(!originalEnabled);
+        QCOMPARE(QSettings().value(QStringLiteral("agent/mcpEnabled")).toBool(), !originalEnabled);
+        QCOMPARE(window.agentSettingsPayload().value(QStringLiteral("mcpEnabled")).toBool(), !originalEnabled);
+        window.m_mcpEnabled->setChecked(originalEnabled);
+        QCOMPARE(window.agentSettingsPayload().value(QStringLiteral("mcpConfigVersion")).toInteger(), qint64(0));
+        auto *load = window.findChild<QPushButton *>(QStringLiteral("loadProjectCursorMcp"));
+        QVERIFY(load);
+        QVERIFY(window.findChild<QPushButton *>(QStringLiteral("loadHomeCursorMcp")));
+        load->click();
+        QCOMPARE(window.m_inboundMcpJson->toPlainText().toUtf8(), config);
+        QVERIFY(!QFileInfo::exists(savedPath));
+        auto *save = window.findChild<QPushButton *>(QStringLiteral("saveInboundMcpConfig"));
+        QVERIFY(save);
+        save->click();
+        QCOMPARE(window.agentSettingsPayload().value(QStringLiteral("mcpConfigVersion")).toInteger(), qint64(1));
+        QFile saved(savedPath);
+        QVERIFY(saved.open(QIODevice::ReadOnly));
+        QCOMPARE(saved.readAll(), config);
+        saved.close();
+        window.m_inboundMcpJson->setPlainText(QStringLiteral("[]"));
+        save->click();
+        QCOMPARE(window.agentSettingsPayload().value(QStringLiteral("mcpConfigVersion")).toInteger(), qint64(1));
+        QVERIFY(saved.open(QIODevice::ReadOnly));
+        QCOMPARE(saved.readAll(), config);
+        MainWindow reopened{project.path(), QString()};
+        QCOMPARE(reopened.m_inboundMcpJson->toPlainText().toUtf8(), config);
+    }
+
     void mcpConfigCopiesProjectWithoutCredentials() {
         const QString projectPath = QDir::temp().filePath(QStringLiteral("Cut project \"quoted\""));
         MainWindow window{projectPath, QString()};

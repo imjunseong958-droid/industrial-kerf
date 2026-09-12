@@ -60,8 +60,9 @@ daemon; the `CUTD_BIN` environment variable does the same.
 `~/.cut/mcp.json` or `<project>/.cut/mcp.json`. `--mcp-tools` (or
 `CUT_ENABLE_MCP=1`) attaches those inbound stdio servers through `mcp_search`,
 `mcp_describe`, and `mcp_call`; configured tool allowlists are enforced.
-The Rust agent launched from the Qt editor uses the same attachment helper
-when `CUT_ENABLE_MCP=1`. Qt remains a presentation layer.
+The Qt editor's Settings tab can enable the same attachment for its Chat,
+edit the project config, or import a Cursor config. `CUT_ENABLE_MCP=1` remains
+available as an environment fallback. Qt remains a presentation layer.
 
 ## Agent discovery and context
 

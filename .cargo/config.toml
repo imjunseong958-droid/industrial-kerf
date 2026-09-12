@@ -1,2 +1,8 @@
 [env]
 MACOSX_DEPLOYMENT_TARGET = "11.0"
+
+[target.aarch64-apple-darwin]
+# The macOS 27 SDK emits arm64e.x1 TAPI entries that older Homebrew LLD
+# versions cannot parse. Keep the SDK linker as the final -fuse-ld flag even
+# when a user's global Cargo config adds LLD first.
+rustflags = ["-C", "link-arg=-fuse-ld=/usr/bin/ld"]
