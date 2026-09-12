@@ -43,6 +43,7 @@
 #include <QQueue>
 #include <QSet>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
@@ -1115,11 +1116,16 @@ private slots:
         m_sendButton->setVisible(!m_agentBusy);
     }
 
+    QString activeProviderId() const {
+        return m_openaiActiveRadio && m_openaiActiveRadio->isChecked() ? QStringLiteral("openai")
+                                                                       : QStringLiteral("anthropic");
+    }
+
     QJsonObject agentSettingsPayload() const {
-        const bool openai = m_providerSelect && m_providerSelect->currentData().toString() == QStringLiteral("openai");
+        const bool openai = activeProviderId() == QStringLiteral("openai");
         const QLineEdit *key = openai ? m_openaiKey : m_anthropicKey;
         const QLineEdit *baseUrl = openai ? m_openaiBaseUrl : m_anthropicBaseUrl;
-        return QJsonObject{{QStringLiteral("provider"), m_providerSelect->currentData().toString()},
+        return QJsonObject{{QStringLiteral("provider"), activeProviderId()},
                            {QStringLiteral("apiMode"), m_openaiMode->currentData().toString()},
                            {QStringLiteral("apiKey"), key ? key->text().trimmed() : QString()},
                            {QStringLiteral("baseUrl"), baseUrl ? baseUrl->text().trimmed() : QString()},
@@ -1169,8 +1175,8 @@ private slots:
     }
 
     void updateAgentModelChoices() {
-        if (!m_providerSelect || !m_modelSelect) return;
-        const bool openai = m_providerSelect->currentData().toString() == QStringLiteral("openai");
+        if (!m_modelSelect) return;
+        const bool openai = activeProviderId() == QStringLiteral("openai");
         const QString current = m_modelSelect->currentText();
         const QString configured = openai ? m_openaiModel->text().trimmed() : m_anthropicModel->text().trimmed();
         const QStringList models = openai
@@ -1181,11 +1187,6 @@ private slots:
         m_modelSelect->addItems(models);
         const QString model = configured.isEmpty() ? current : configured;
         m_modelSelect->setEditText(model.isEmpty() ? models.constFirst() : model);
-        if (m_agentConfigLabel) {
-            m_agentConfigLabel->setText(QStringLiteral("%1  ·  %2")
-                                            .arg(openai ? QStringLiteral("OpenAI") : QStringLiteral("Anthropic"),
-                                                 m_modelSelect->currentText()));
-        }
     }
 
     void loadAgentSettings() {
@@ -1202,8 +1203,10 @@ private slots:
                                                  qEnvironmentVariable("CUT_PROVIDER", envOpenaiKey.isEmpty() ? QStringLiteral("anthropic") : QStringLiteral("openai")))
                                      .toString()
                                      .toLower();
-        const int providerIndex = m_providerSelect->findData(provider == QStringLiteral("openai") ? QStringLiteral("openai") : QStringLiteral("anthropic"));
-        m_providerSelect->setCurrentIndex(std::max(0, providerIndex));
+        if (provider == QStringLiteral("openai"))
+            m_openaiActiveRadio->setChecked(true);
+        else
+            m_anthropicActiveRadio->setChecked(true);
         const QString mode = settings.value(QStringLiteral("agent/openai/apiMode"), qEnvironmentVariable("OPENAI_API_MODE", QStringLiteral("chat"))).toString().toLower();
         const int modeIndex = m_openaiMode->findData(mode == QStringLiteral("responses") ? QStringLiteral("responses") : QStringLiteral("chat"));
         m_openaiMode->setCurrentIndex(std::max(0, modeIndex));
@@ -1220,7 +1223,7 @@ private slots:
         settings.setValue(QStringLiteral("agent/openai/baseUrl"), m_openaiBaseUrl->text().trimmed());
         settings.setValue(QStringLiteral("agent/openai/model"), m_openaiModel->text().trimmed());
         settings.setValue(QStringLiteral("agent/openai/apiMode"), m_openaiMode->currentData().toString());
-        settings.setValue(QStringLiteral("agent/activeProvider"), m_providerSelect->currentData().toString());
+        settings.setValue(QStringLiteral("agent/activeProvider"), activeProviderId());
         settings.sync();
         updateAgentModelChoices();
         statusBar()->showMessage(QStringLiteral("Agent settings saved"), 3000);
@@ -1507,26 +1510,6 @@ private:
         auto *chatLayout = new QVBoxLayout(chatTab);
         chatLayout->setContentsMargins(0, 8, 0, 0);
         chatLayout->setSpacing(10);
-        auto *agentContext = new QFrame(chatTab);
-        agentContext->setObjectName(QStringLiteral("agentContext"));
-        auto *contextLayout = new QVBoxLayout(agentContext);
-        contextLayout->setContentsMargins(10, 8, 10, 8);
-        contextLayout->setSpacing(5);
-        auto *contextHeader = new QHBoxLayout;
-        auto *contextTitle = new QLabel(QStringLiteral("CURRENT TASK"));
-        contextTitle->setObjectName(QStringLiteral("eyebrow"));
-        m_agentConfigLabel = new QLabel;
-        m_agentConfigLabel->setObjectName(QStringLiteral("agentConfig"));
-        m_agentConfigLabel->setWordWrap(true);
-        contextHeader->addWidget(contextTitle);
-        contextHeader->addStretch();
-        contextHeader->addWidget(m_agentConfigLabel);
-        contextLayout->addLayout(contextHeader);
-        auto *contextHint = new QLabel(QStringLiteral("Project timeline and media are attached automatically."));
-        contextHint->setWordWrap(true);
-        contextHint->setObjectName(QStringLiteral("muted"));
-        contextLayout->addWidget(contextHint);
-        agentContext->hide();
         auto *chatHint = new QLabel(QStringLiteral("Make your next cut."));
         chatHint->setObjectName(QStringLiteral("chatHint"));
         chatHint->setWordWrap(true);
@@ -1547,16 +1530,6 @@ private:
         composerLayout->setSpacing(10);
         auto *agentPicker = new QHBoxLayout;
         agentPicker->setSpacing(5);
-        auto *providerLabel = new QLabel(QStringLiteral("Provider"));
-        providerLabel->setObjectName(QStringLiteral("muted"));
-        m_providerSelect = new QComboBox;
-        m_providerSelect->addItem(QStringLiteral("Anthropic"), QStringLiteral("anthropic"));
-        m_providerSelect->addItem(QStringLiteral("OpenAI"), QStringLiteral("openai"));
-        m_providerSelect->setObjectName(QStringLiteral("agentProvider"));
-        m_providerSelect->setToolTip(QStringLiteral("Choose which configured provider handles this request"));
-        agentPicker->addWidget(providerLabel);
-        providerLabel->hide();
-        agentPicker->addWidget(m_providerSelect, 1);
         auto *modelLabel = new QLabel(QStringLiteral("Model"));
         modelLabel->setObjectName(QStringLiteral("muted"));
         m_modelSelect = new QComboBox;
@@ -1565,7 +1538,7 @@ private:
         m_modelSelect->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
         m_modelSelect->setMinimumContentsLength(12);
         m_modelSelect->setObjectName(QStringLiteral("agentModel"));
-        m_modelSelect->setToolTip(QStringLiteral("Select or type a model configured for this provider"));
+        m_modelSelect->setToolTip(QStringLiteral("Model ID sent with each chat request. Suggestions follow the active connection in Settings."));
         agentPicker->addWidget(modelLabel);
         modelLabel->hide();
         agentPicker->addWidget(m_modelSelect, 2);
@@ -1583,11 +1556,6 @@ private:
         connect(m_chatInput, &QTextEdit::textChanged, this, &MainWindow::updateChatControls);
         composerLayout->addWidget(m_chatInput);
         composerLayout->addLayout(agentPicker);
-        connect(m_providerSelect, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::updateAgentModelChoices);
-        connect(m_modelSelect, &QComboBox::currentTextChanged, this, [this] {
-            if (m_agentConfigLabel) m_agentConfigLabel->setText(QStringLiteral("%1  ·  %2")
-                                                                    .arg(m_providerSelect->currentText(), m_modelSelect->currentText()));
-        });
         auto *sendButton = new QPushButton(QStringLiteral("↑"));
         sendButton->setObjectName(QStringLiteral("chatSendButton"));
         m_sendButton = sendButton;
@@ -1708,51 +1676,68 @@ private:
         auto *settingsLayout = new QVBoxLayout(settingsContent);
         settingsLayout->setContentsMargins(0, 0, 2, 0);
         settingsLayout->setSpacing(10);
-        auto *settingsIntro = new QLabel(QStringLiteral("AI provider: the service that runs the model answering your chat and choosing tools. Set its API key below. The provider and model selected above are used for the next request."));
+        auto *settingsIntro = new QLabel(QStringLiteral("Two protocol slots. One active connection for chat. Gemini, Groq, and OpenRouter use the OpenAI-compatible slot with that vendor's compatible base URL."));
         settingsIntro->setObjectName(QStringLiteral("chatHint"));
         settingsIntro->setWordWrap(true);
         settingsLayout->addWidget(settingsIntro);
+        auto *activeConnection = new QGroupBox(QStringLiteral("Active connection"));
+        auto *activeLayout = new QVBoxLayout(activeConnection);
+        activeLayout->setContentsMargins(10, 12, 10, 10);
+        activeLayout->setSpacing(6);
+        m_anthropicActiveRadio = new QRadioButton(QStringLiteral("Anthropic Messages"));
+        m_anthropicActiveRadio->setObjectName(QStringLiteral("agentActiveAnthropic"));
+        m_openaiActiveRadio = new QRadioButton(QStringLiteral("OpenAI-compatible"));
+        m_openaiActiveRadio->setObjectName(QStringLiteral("agentActiveOpenai"));
+        activeLayout->addWidget(m_anthropicActiveRadio);
+        activeLayout->addWidget(m_openaiActiveRadio);
+        settingsLayout->addWidget(activeConnection);
 
-        auto providerSettings = [this, settingsLayout](const QString &title, QLineEdit *&key, QLineEdit *&baseUrl,
-                                                        QLineEdit *&model, const QString &keyPlaceholder,
-                                                        const QString &baseDefault, const QString &modelDefault) {
-            auto *group = new QGroupBox(title);
-            group->setObjectName(QStringLiteral("providerBox"));
-            auto *form = new QFormLayout(group);
-            form->setContentsMargins(10, 12, 10, 10);
-            form->setSpacing(7);
-            key = new QLineEdit;
-            key->setEchoMode(QLineEdit::Password);
-            key->setPlaceholderText(keyPlaceholder);
-            key->setClearButtonEnabled(true);
-            baseUrl = new QLineEdit(baseDefault);
-            baseUrl->setPlaceholderText(QStringLiteral("https://…/v1"));
-            model = new QLineEdit(modelDefault);
-            form->addRow(QStringLiteral("API key"), key);
-            form->addRow(QStringLiteral("Base URL"), baseUrl);
-            form->addRow(QStringLiteral("Model"), model);
-            settingsLayout->addWidget(group);
-        };
-        providerSettings(QStringLiteral("Anthropic"), m_anthropicKey, m_anthropicBaseUrl, m_anthropicModel,
-                         QStringLiteral("sk-ant-…"), QStringLiteral("https://api.anthropic.com/v1"),
-                         QStringLiteral("claude-sonnet-4-20250514"));
-        providerSettings(QStringLiteral("OpenAI"), m_openaiKey, m_openaiBaseUrl, m_openaiModel,
-                         QStringLiteral("sk-…"), QStringLiteral("https://api.openai.com/v1"),
-                         QStringLiteral("gpt-5.6-luna"));
-        auto *openaiModeRow = new QHBoxLayout;
-        auto *openaiModeLabel = new QLabel(QStringLiteral("OpenAI API"));
-        openaiModeLabel->setObjectName(QStringLiteral("muted"));
-        openaiModeRow->addWidget(openaiModeLabel);
+        auto *anthropicGroup = new QGroupBox(QStringLiteral("Anthropic Messages"));
+        anthropicGroup->setObjectName(QStringLiteral("providerBox"));
+        auto *anthropicForm = new QFormLayout(anthropicGroup);
+        anthropicForm->setContentsMargins(10, 12, 10, 10);
+        anthropicForm->setSpacing(7);
+        m_anthropicKey = new QLineEdit;
+        m_anthropicKey->setEchoMode(QLineEdit::Password);
+        m_anthropicKey->setPlaceholderText(QStringLiteral("sk-ant-…"));
+        m_anthropicKey->setClearButtonEnabled(true);
+        m_anthropicBaseUrl = new QLineEdit(QStringLiteral("https://api.anthropic.com/v1"));
+        m_anthropicBaseUrl->setPlaceholderText(QStringLiteral("https://…/v1"));
+        m_anthropicModel = new QLineEdit(QStringLiteral("claude-sonnet-4-20250514"));
+        anthropicForm->addRow(QStringLiteral("API key"), m_anthropicKey);
+        anthropicForm->addRow(QStringLiteral("Base URL"), m_anthropicBaseUrl);
+        anthropicForm->addRow(QStringLiteral("Model"), m_anthropicModel);
+        settingsLayout->addWidget(anthropicGroup);
+
+        auto *openaiGroup = new QGroupBox(QStringLiteral("OpenAI-compatible"));
+        openaiGroup->setObjectName(QStringLiteral("providerBox"));
+        auto *openaiForm = new QFormLayout(openaiGroup);
+        openaiForm->setContentsMargins(10, 12, 10, 10);
+        openaiForm->setSpacing(7);
+        m_openaiKey = new QLineEdit;
+        m_openaiKey->setEchoMode(QLineEdit::Password);
+        m_openaiKey->setPlaceholderText(QStringLiteral("sk-…"));
+        m_openaiKey->setClearButtonEnabled(true);
+        m_openaiBaseUrl = new QLineEdit(QStringLiteral("https://api.openai.com/v1"));
+        m_openaiBaseUrl->setPlaceholderText(QStringLiteral("https://…/v1"));
+        auto *openaiBaseUrlHint = new QLabel(QStringLiteral("Must serve /chat/completions or /responses. Native Gemini generateContent URLs return 404. Use a root that ends in /openai."));
+        openaiBaseUrlHint->setObjectName(QStringLiteral("muted"));
+        openaiBaseUrlHint->setWordWrap(true);
+        m_openaiModel = new QLineEdit(QStringLiteral("gpt-5.6-luna"));
         m_openaiMode = new QComboBox;
         m_openaiMode->addItem(QStringLiteral("Chat Completions"), QStringLiteral("chat"));
         m_openaiMode->addItem(QStringLiteral("Responses"), QStringLiteral("responses"));
-        openaiModeRow->addWidget(m_openaiMode, 1);
-        settingsLayout->addLayout(openaiModeRow);
+        openaiForm->addRow(QStringLiteral("API key"), m_openaiKey);
+        openaiForm->addRow(QStringLiteral("Base URL"), m_openaiBaseUrl);
+        openaiForm->addRow(QString(), openaiBaseUrlHint);
+        openaiForm->addRow(QStringLiteral("Model"), m_openaiModel);
+        openaiForm->addRow(QStringLiteral("API shape"), m_openaiMode);
+        settingsLayout->addWidget(openaiGroup);
         auto *settingsNote = new QLabel(QStringLiteral("Credentials stay outside project files and are never included in chat activity."));
         settingsNote->setObjectName(QStringLiteral("muted"));
         settingsNote->setWordWrap(true);
         settingsLayout->addWidget(settingsNote);
-        auto *saveSettings = new QPushButton(QStringLiteral("Save provider settings"));
+        auto *saveSettings = new QPushButton(QStringLiteral("Save agent connection"));
         saveSettings->setObjectName(QStringLiteral("primaryButton"));
         connect(saveSettings, &QPushButton::clicked, this, &MainWindow::saveAgentSettings);
         settingsLayout->addWidget(saveSettings);
@@ -1849,6 +1834,13 @@ private:
         tabs->addTab(settingsTab, QStringLiteral("Settings"));
 
         loadAgentSettings();
+        const auto onActiveConnectionChanged = [this](bool checked) {
+            if (!checked) return;
+            updateAgentModelChoices();
+            saveAgentSettings();
+        };
+        connect(m_anthropicActiveRadio, &QRadioButton::toggled, this, onActiveConnectionChanged);
+        connect(m_openaiActiveRadio, &QRadioButton::toggled, this, onActiveConnectionChanged);
         connect(m_anthropicKey, &QLineEdit::editingFinished, this, &MainWindow::saveAgentSettings);
         connect(m_anthropicBaseUrl, &QLineEdit::editingFinished, this, &MainWindow::saveAgentSettings);
         connect(m_anthropicModel, &QLineEdit::editingFinished, this, &MainWindow::saveAgentSettings);
@@ -2556,9 +2548,9 @@ private:
     QListWidget *m_mediaList = nullptr;
     QTextEdit *m_conversation = nullptr;
     QTextEdit *m_chatInput = nullptr;
-    QComboBox *m_providerSelect = nullptr;
+    QRadioButton *m_anthropicActiveRadio = nullptr;
+    QRadioButton *m_openaiActiveRadio = nullptr;
     QComboBox *m_modelSelect = nullptr;
-    QLabel *m_agentConfigLabel = nullptr;
     QLineEdit *m_anthropicKey = nullptr;
     QLineEdit *m_anthropicBaseUrl = nullptr;
     QLineEdit *m_anthropicModel = nullptr;
@@ -2706,6 +2698,56 @@ private slots:
                                                QJsonObject{{"width", 1080}, {"height", 1920}}}),
                  QSize(1080, 1920));
         QCOMPARE(resolvedCanvasSize(QJsonObject{}, QJsonArray{}), QSize(1920, 1080));
+    }
+
+    void agentPayloadFollowsSettingsProtocol() {
+        MainWindow window{QString(), QString()};
+        QVERIFY(!window.findChild<QComboBox *>(QStringLiteral("agentProvider")));
+        QVERIFY(!window.findChild<QFrame *>(QStringLiteral("agentContext")));
+        QVERIFY(!window.findChild<QLabel *>(QStringLiteral("agentConfig")));
+        QVERIFY(window.findChild<QComboBox *>(QStringLiteral("agentModel")));
+        auto *tabs = window.findChild<QTabWidget *>(QStringLiteral("rightTabs"));
+        QVERIFY(tabs);
+        QWidget *chatTab = tabs->widget(0);
+        QVERIFY(chatTab);
+        for (auto *label : chatTab->findChildren<QLabel *>()) {
+            QVERIFY(!label->text().contains(QStringLiteral("OpenAI")));
+            QVERIFY(!label->text().contains(QStringLiteral("Anthropic")));
+        }
+        auto *anthropicRadio = window.findChild<QRadioButton *>(QStringLiteral("agentActiveAnthropic"));
+        auto *openaiRadio = window.findChild<QRadioButton *>(QStringLiteral("agentActiveOpenai"));
+        QVERIFY(anthropicRadio);
+        QVERIFY(openaiRadio);
+        const QSignalBlocker anthropicBlock(anthropicRadio);
+        const QSignalBlocker openaiBlock(openaiRadio);
+
+        const QString anthropicKey = QStringLiteral("sk-ant-test");
+        const QString anthropicUrl = QStringLiteral("https://anthropic.example/v1");
+        const QString anthropicModel = QStringLiteral("claude-test-model");
+        anthropicRadio->setChecked(true);
+        window.m_anthropicKey->setText(anthropicKey);
+        window.m_anthropicBaseUrl->setText(anthropicUrl);
+        window.m_anthropicModel->setText(anthropicModel);
+        window.updateAgentModelChoices();
+        const QJsonObject anthropicPayload = window.agentSettingsPayload();
+        QCOMPARE(anthropicPayload.value(QStringLiteral("provider")).toString(), QStringLiteral("anthropic"));
+        QCOMPARE(anthropicPayload.value(QStringLiteral("apiKey")).toString(), anthropicKey);
+        QCOMPARE(anthropicPayload.value(QStringLiteral("baseUrl")).toString(), anthropicUrl);
+        QCOMPARE(anthropicPayload.value(QStringLiteral("model")).toString(), anthropicModel);
+
+        const QString openaiKey = QStringLiteral("sk-openai-test");
+        const QString openaiUrl = QStringLiteral("https://openai.example/v1");
+        const QString openaiModel = QStringLiteral("gpt-test-model");
+        openaiRadio->setChecked(true);
+        window.m_openaiKey->setText(openaiKey);
+        window.m_openaiBaseUrl->setText(openaiUrl);
+        window.m_openaiModel->setText(openaiModel);
+        window.updateAgentModelChoices();
+        const QJsonObject openaiPayload = window.agentSettingsPayload();
+        QCOMPARE(openaiPayload.value(QStringLiteral("provider")).toString(), QStringLiteral("openai"));
+        QCOMPARE(openaiPayload.value(QStringLiteral("apiKey")).toString(), openaiKey);
+        QCOMPARE(openaiPayload.value(QStringLiteral("baseUrl")).toString(), openaiUrl);
+        QCOMPARE(openaiPayload.value(QStringLiteral("model")).toString(), openaiModel);
     }
 
     void editorChromeKeepsComposerAtTheBottom() {
