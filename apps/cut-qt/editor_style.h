@@ -71,6 +71,7 @@ QToolBar::separator {
 }
 
 QWidget#panel,
+QWidget#assistantPanel,
 QFrame#mediaShelf,
 QFrame#viewerFrame,
 QWidget#timelinePanel {
@@ -196,6 +197,22 @@ QLabel#timecode { color: #e2e2e2; font-family: Menlo, Monaco, monospace; font-si
 QLabel#inspectorClip { color: #eeeeee; font-weight: 600; padding: 5px 0; }
 QLabel#projectTitle { color: #e1e1e1; font-weight: 600; padding: 0 20px; }
 QLabel#assistantTitle { color: #e9e9e9; font-size: 14px; font-weight: 600; }
+QWidget#assistantPanel { background: #202020; border-left: 1px solid #303030; }
+QWidget#assistantPanel QLabel#statusPill {
+    color: #cec3df;
+    background: #302b37;
+    border-color: #494051;
+    border-radius: 7px;
+    padding: 3px 7px;
+}
+QLabel#composerStatus { color: #a6a6a6; font-size: 10px; }
+QLabel#chatActivity {
+    color: #b9b2c3;
+    background: #29262d;
+    border-left: 2px solid #80718e;
+    padding: 0 8px;
+    font-size: 11px;
+}
 QLabel#proposalSummary { color: #bdbdbd; }
 QToolButton#eyebrow { text-align: left; background: transparent; border: 0; color: #a1a1a1; }
 
@@ -244,7 +261,7 @@ QListWidget::item:hover { background: #343434; }
 QListWidget::item:selected { background: #484848; color: #f5f5f5; }
 QListWidget#mediaList,
 QListWidget#activityList { background: transparent; border: 0; padding: 0; }
-QTextEdit#conversation { background: transparent; border: 0; padding: 4px; color: #d0d0d0; }
+QTextEdit#conversation { background: transparent; border: 0; padding: 4px 0; color: #d0d0d0; }
 QTextEdit#chatInput {
     background: transparent;
     border: 0;
@@ -276,8 +293,12 @@ QFrame#chatComposer {
     border: 1px solid #444444;
     border-radius: 12px;
 }
-QFrame#chatComposer QWidget { background: transparent; }
-QPushButton#chatSendButton { border-radius: 4px; padding: 0; font-size: 19px; }
+QFrame#chatComposer[state="focused"] { border-color: #ad98c9; background: #323033; }
+QFrame#chatComposer[state="sending"] { border-color: #756486; background: #2e2a32; }
+QFrame#chatComposer[state="offline"] { border-color: #3c3c3c; background: #272727; }
+QTextEdit#chatInput:disabled { background: transparent; color: #999999; border: 0; }
+QPushButton#chatSendButton { border-radius: 8px; padding: 0; font-size: 19px; }
+QToolButton#abortButton { border: 1px solid #78688a; border-radius: 7px; padding: 4px 9px; }
 
 QGroupBox#proposalBox,
 QGroupBox#providerBox,
@@ -321,6 +342,8 @@ QTabBar::tab:selected {
     background: #2d2d2d;
     border-color: #424242;
 }
+QTabWidget#rightTabs QTabBar::tab { padding: 8px 12px; border-radius: 0; border: 0; border-bottom: 2px solid transparent; }
+QTabWidget#rightTabs QTabBar::tab:selected { background: #292929; border-bottom-color: #b7a2d1; }
 
 QSlider::groove:horizontal { background: #101010; border: 1px solid #2c2c2c; height: 5px; border-radius: 3px; }
 QSlider::handle:horizontal { background: #b3b3b3; border: 1px solid #d6d6d6; width: 11px; margin: -4px 0; border-radius: 4px; }

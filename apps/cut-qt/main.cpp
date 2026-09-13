@@ -56,6 +56,7 @@
 #include <QTabWidget>
 #include <QTextEdit>
 #include <QTextCursor>
+#include <QTextFrame>
 #include <QToolBar>
 #include <QTimer>
 #include <QToolButton>
@@ -66,6 +67,7 @@
 #include <QFontDatabase>
 #ifdef CUT_QT_TESTING
 #include <QTest>
+#include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QStandardPaths>
 #endif
@@ -393,19 +395,20 @@ protected:
         const QRect visible = event->rect();
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
-        QLinearGradient timelineGradient(0, 0, 0, height());
-        timelineGradient.setColorAt(0.0, QColor("#242424"));
-        timelineGradient.setColorAt(1.0, QColor("#242424"));
-        p.fillRect(rect(), timelineGradient);
+        p.fillRect(rect(), QColor("#1b1b1b"));
 
         const int trackCount = static_cast<int>(std::max<qsizetype>(1, m_project.value(QStringLiteral("tracks")).toArray().size()));
         const int trackBottom = kRulerHeight + trackCount * kTrackHeight;
         const double pxPerSecond = pixelsPerSecond();
 
-        p.fillRect(0, 0, kTimelineLabelWidth, height(), QColor("#202020"));
-        p.fillRect(kTimelineLabelWidth, 0, width() - kTimelineLabelWidth, kRulerHeight, QColor("#202020"));
-        p.setPen(QColor("#2a2a2a"));
-        p.drawLine(kTimelineLabelWidth, 0, kTimelineLabelWidth, height());
+        p.fillRect(0, 0, kTimelineLabelWidth, height(), QColor("#252525"));
+        p.fillRect(kTimelineLabelWidth, 0, width() - kTimelineLabelWidth, kRulerHeight, QColor("#292929"));
+        // Paint lanes before the ruler grid so their backgrounds do not erase it.
+        for (int row = 0; row < trackCount; ++row) {
+            const int y = kRulerHeight + row * kTrackHeight;
+            p.fillRect(kTimelineLabelWidth, y, width() - kTimelineLabelWidth, kTrackHeight,
+                       QColor(row % 2 == 0 ? "#202020" : "#1d1d1d"));
+        }
 
         QFont rulerFont = p.font();
         rulerFont.setPixelSize(11);
@@ -422,8 +425,12 @@ protected:
         for (int second = firstSecond / tickStep * tickStep; second <= lastSecond; second += tickStep) {
             const int x = kTimelineLabelWidth + static_cast<int>(second * pxPerSecond);
             const bool major = second % majorStep == 0;
-            p.setPen(major ? QColor("#434343") : QColor("#2f2f2f"));
-            p.drawLine(x, major ? kRulerHeight : kRulerHeight - 5, x, trackBottom);
+            if (major) {
+                p.setPen(QColor("#2d2d2d"));
+                p.drawLine(x, kRulerHeight, x, trackBottom);
+            }
+            p.setPen(QColor(major ? "#666666" : "#454545"));
+            p.drawLine(x, kRulerHeight - (major ? 8 : 4), x, kRulerHeight - 1);
             p.setPen(major ? QColor("#b0b0b0") : QColor("#747474"));
             if (major) p.drawText(x + 6, 18, prettyTime(second));
         }
@@ -432,9 +439,7 @@ protected:
         for (int row = 0; row < trackCount; ++row) {
             const int y = kRulerHeight + row * kTrackHeight;
             if (y + kTrackHeight < visible.top() || y > visible.bottom()) continue;
-            p.fillRect(0, y, width(), kTrackHeight,
-                       row % 2 == 0 ? QColor("#242424") : QColor("#202020"));
-            p.setPen(QColor("#363636"));
+            p.setPen(QColor("#303030"));
             p.drawLine(0, y + kTrackHeight - 1, width(), y + kTrackHeight - 1);
             const QJsonObject track = row < tracks.size() ? tracks.at(row).toObject() : QJsonObject();
             const QColor accent = trackAccent(track, row);
@@ -464,10 +469,16 @@ protected:
             QFont trackFont = p.font();
             trackFont.setPixelSize(10);
             p.setFont(trackFont);
-            p.drawText(30, y + 40, type.toUpper());
+            p.drawText(30, y + 40, p.fontMetrics().elidedText(type.isEmpty() ? QStringLiteral("VIDEO") : type.toUpper(), Qt::ElideRight, 60));
             p.setFont(rulerFont);
 
             const QJsonArray clips = track.value(QStringLiteral("clips")).toArray();
+            if (clips.isEmpty()) {
+                p.setPen(QColor("#808080"));
+                p.drawText(QRect(kTimelineLabelWidth + 18, y, width() - kTimelineLabelWidth - 36, kTrackHeight),
+                           Qt::AlignVCenter | Qt::TextSingleLine,
+                           tracks.isEmpty() ? QStringLiteral("Import media to begin your timeline") : QStringLiteral("Empty track"));
+            }
             for (const QJsonValue &value : clips) {
                 const QJsonObject clip = value.toObject();
                 double start = clip.value(QStringLiteral("timelineStart")).toDouble();
@@ -495,7 +506,7 @@ protected:
                 clipGradient.setColorAt(0.0, body.lighter(114));
                 clipGradient.setColorAt(1.0, body);
                 p.setBrush(clipGradient);
-                p.setPen(selected ? QColor("#d8d8d8") : hovered ? accent.lighter(120) : QColor("#474747"));
+                p.setPen(QPen(selected ? QColor("#d5c3f3") : hovered ? accent.lighter(120) : QColor("#535353"), selected ? 2 : 1));
                 p.drawRoundedRect(clipRect, 3, 3);
                 p.save();
                 p.setClipRect(clipRect.adjusted(2, 2, -2, -2));
@@ -537,19 +548,31 @@ protected:
                 p.setPen(QPen(accent.lighter(selected ? 135 : 120), selected ? 2 : 1));
                 p.drawLine(clipRect.left() + 5, clipRect.top() + 1, clipRect.right() - 5, clipRect.top() + 1);
                 if (selected) {
-                    p.setPen(QPen(QColor("#e0e0e0"), 2));
-                    p.drawLine(clipRect.left(), clipRect.top() + 3, clipRect.left(), clipRect.bottom() - 3);
-                    p.drawLine(clipRect.right(), clipRect.top() + 3, clipRect.right(), clipRect.bottom() - 3);
+                    p.setPen(QPen(QColor("#eee5ff"), 2, Qt::SolidLine, Qt::RoundCap));
+                    p.drawLine(QPointF(clipRect.left() + 3, clipRect.center().y() - 5), QPointF(clipRect.left() + 3, clipRect.center().y() + 5));
+                    p.drawLine(QPointF(clipRect.right() - 3, clipRect.center().y() - 5), QPointF(clipRect.right() - 3, clipRect.center().y() + 5));
                 }
             }
         }
 
+        p.setPen(QColor("#3a3a3a"));
+        p.drawLine(kTimelineLabelWidth, 0, kTimelineLabelWidth, height());
+        p.drawLine(0, kRulerHeight - 1, width(), kRulerHeight - 1);
+        if (tracks.isEmpty()) {
+            p.setPen(QColor("#888888"));
+            p.drawText(QRect(kTimelineLabelWidth + 18, trackBottom + 16, width() - kTimelineLabelWidth - 36, 40),
+                       Qt::AlignTop | Qt::TextWordWrap, QStringLiteral("Arrange clips here. Ask Cut for an edit in the assistant panel."));
+        }
         const int playheadX = kTimelineLabelWidth + static_cast<int>(m_playhead * pxPerSecond);
+        p.setPen(QPen(QColor(0, 0, 0, 90), 3));
+        p.drawLine(playheadX + 1, kRulerHeight, playheadX + 1, height());
         p.setPen(QPen(QColor("#c7b5ed"), 1));
-        p.drawLine(playheadX, 0, playheadX, height());
+        p.drawLine(playheadX, kRulerHeight - 10, playheadX, height());
         p.setBrush(QColor("#c7b5ed"));
         p.setPen(Qt::NoPen);
-        p.drawPolygon(QPolygonF{QPointF(playheadX - 6, 0), QPointF(playheadX + 6, 0), QPointF(playheadX, 8)});
+        p.drawPolygon(QPolygonF{QPointF(playheadX - 5, kRulerHeight - 11), QPointF(playheadX + 5, kRulerHeight - 11),
+                               QPointF(playheadX + 5, kRulerHeight - 5), QPointF(playheadX, kRulerHeight),
+                               QPointF(playheadX - 5, kRulerHeight - 5)});
         if (m_hasSkimmer && !m_dragging && !m_scrubbing) {
             const int skimmerX = kTimelineLabelWidth + static_cast<int>(m_skimmerTime * pxPerSecond);
             p.setPen(QPen(QColor("#ececec"), 1));
@@ -1114,6 +1137,21 @@ private slots:
         m_abortButton->setEnabled(m_agentBusy);
         m_abortButton->setVisible(m_agentBusy);
         m_sendButton->setVisible(!m_agentBusy);
+        const QString state = !m_connected ? QStringLiteral("offline")
+                              : m_agentBusy ? QStringLiteral("sending")
+                              : m_chatInput->hasFocus() ? QStringLiteral("focused") : QStringLiteral("ready");
+        if (m_chatComposer->property("state").toString() != state) {
+            m_chatComposer->setProperty("state", state);
+            m_chatComposer->style()->unpolish(m_chatComposer);
+            m_chatComposer->style()->polish(m_chatComposer);
+            m_chatComposer->update();
+        }
+        m_composerStatus->setText(!m_connected ? QStringLiteral("Connect to start editing")
+                                 : m_agentBusy ? QStringLiteral("Cut is working…")
+                                                : QStringLiteral("Return to send · ⇧ Return for a new line"));
+        m_chatInput->setPlaceholderText(!m_connected ? QStringLiteral("Your next edit starts here…")
+                                       : m_agentBusy ? QStringLiteral("Working on your edit…")
+                                                     : QStringLiteral("Describe your next edit…"));
     }
 
     QString activeProviderId() const {
@@ -1253,6 +1291,8 @@ private slots:
 
 protected:
     bool eventFilter(QObject *object, QEvent *event) override {
+        if (object == m_chatInput && (event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut))
+            updateChatControls();
         if (object == m_chatInput && event->type() == QEvent::KeyPress) {
             auto *key = static_cast<QKeyEvent *>(event);
             if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) &&
@@ -1487,7 +1527,7 @@ private:
 
         auto *right = new QWidget;
         m_agentPanel = right;
-        right->setObjectName(QStringLiteral("panel"));
+        right->setObjectName(QStringLiteral("assistantPanel"));
         right->setAttribute(Qt::WA_StyledBackground);
         right->setMinimumWidth(320);
         auto *rightLayout = new QVBoxLayout(right);
@@ -1502,32 +1542,55 @@ private:
         agentHeader->addStretch();
         agentHeader->addWidget(m_agentStatus);
         rightLayout->addLayout(agentHeader);
+        auto *agentSubtitle = new QLabel(QStringLiteral("Shape your story, one edit at a time."));
+        agentSubtitle->setObjectName(QStringLiteral("muted"));
+        rightLayout->addWidget(agentSubtitle);
 
         auto *tabs = new QTabWidget;
         tabs->setObjectName(QStringLiteral("rightTabs"));
         rightLayout->addWidget(tabs, 1);
         auto *chatTab = new QWidget;
-        auto *chatLayout = new QVBoxLayout(chatTab);
-        chatLayout->setContentsMargins(0, 8, 0, 0);
+        auto *chatTabLayout = new QVBoxLayout(chatTab);
+        chatTabLayout->setContentsMargins(0, 8, 0, 0);
+        chatTabLayout->setSpacing(10);
+        // Review and activity can overflow on short windows; the composer stays fixed.
+        auto *chatScroll = new QScrollArea;
+        chatScroll->setFrameShape(QFrame::NoFrame);
+        chatScroll->setWidgetResizable(true);
+        chatScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        auto *chatContent = new QWidget;
+        auto *chatLayout = new QVBoxLayout(chatContent);
+        chatLayout->setContentsMargins(0, 0, 0, 0);
+        chatLayout->setSizeConstraint(QLayout::SetMinimumSize);
         chatLayout->setSpacing(10);
-        auto *chatHint = new QLabel(QStringLiteral("Make your next cut."));
-        chatHint->setObjectName(QStringLiteral("chatHint"));
-        chatHint->setWordWrap(true);
-        chatLayout->addWidget(chatHint);
+        chatScroll->setWidget(chatContent);
+        chatTabLayout->addWidget(chatScroll, 1);
         m_conversation = new QTextEdit;
         m_conversation->setReadOnly(true);
         m_conversation->setObjectName(QStringLiteral("conversation"));
         m_conversation->setAcceptRichText(false);
         m_conversation->setUndoRedoEnabled(false);
         m_conversation->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
-        m_conversation->document()->setDocumentMargin(10);
-        m_conversation->setPlaceholderText(QStringLiteral("Describe the edit you have in mind.\n\nYour timeline and media are included.\nYou review changes before they apply."));
+        m_conversation->setAccessibleName(QStringLiteral("Conversation with Cut"));
+        m_conversation->setMinimumHeight(80);
+        m_conversation->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_conversation->document()->setDocumentMargin(2);
+        m_conversation->setHtml(QStringLiteral(
+            "<p style='margin-top:28px; color:#b5a6cf; font-size:11px;'>YOUR EDITING PARTNER</p>"
+            "<p style='margin-top:12px; color:#f0f0f0; font-size:24px; font-weight:600;'>Make your next cut.</p>"
+            "<p style='margin-top:12px; color:#b6b6b6;'>Describe what you want to change. Cut works with your timeline and media.</p>"
+            "<p style='margin-top:24px; color:#888888; font-size:11px;'>TRY ASKING</p>"
+            "<p style='color:#dddddd;'>“Trim the opening to three seconds.”</p>"
+            "<p style='color:#dddddd;'>“Lower the music under the dialogue.”</p>"
+            "<p style='margin-top:24px; color:#999999; font-size:12px;'>Review proposed changes before applying them.<br/>"
+            "Manage your AI connection in Settings.</p>"));
         chatLayout->addWidget(m_conversation, 1);
         auto *composer = new QFrame;
+        m_chatComposer = composer;
         composer->setObjectName(QStringLiteral("chatComposer"));
         auto *composerLayout = new QVBoxLayout(composer);
-        composerLayout->setContentsMargins(10, 10, 10, 10);
-        composerLayout->setSpacing(10);
+        composerLayout->setContentsMargins(12, 12, 12, 10);
+        composerLayout->setSpacing(8);
         auto *agentPicker = new QHBoxLayout;
         agentPicker->setSpacing(5);
         auto *modelLabel = new QLabel(QStringLiteral("Model"));
@@ -1540,7 +1603,6 @@ private:
         m_modelSelect->setObjectName(QStringLiteral("agentModel"));
         m_modelSelect->setToolTip(QStringLiteral("Model ID sent with each chat request. Suggestions follow the active connection in Settings."));
         agentPicker->addWidget(modelLabel);
-        modelLabel->hide();
         agentPicker->addWidget(m_modelSelect, 2);
         auto *chatRow = new QHBoxLayout;
         chatRow->setContentsMargins(0, 0, 0, 0);
@@ -1550,7 +1612,7 @@ private:
         m_chatInput->setPlaceholderText(QStringLiteral("Ask Cut to edit…"));
         m_chatInput->setAccessibleName(QStringLiteral("Message Cut"));
         m_chatInput->setAcceptRichText(false);
-        m_chatInput->setFixedHeight(76);
+        m_chatInput->setFixedHeight(88);
         m_chatInput->setTabChangesFocus(true);
         m_chatInput->installEventFilter(this);
         connect(m_chatInput, &QTextEdit::textChanged, this, &MainWindow::updateChatControls);
@@ -1560,12 +1622,13 @@ private:
         sendButton->setObjectName(QStringLiteral("chatSendButton"));
         m_sendButton = sendButton;
         sendButton->setAccessibleName(QStringLiteral("Send message"));
-        sendButton->setFixedSize(28, 28);
+        sendButton->setFixedSize(32, 32);
         sendButton->setToolTip(QStringLiteral("Send message (Return)"));
         connect(sendButton, &QPushButton::clicked, this, &MainWindow::sendChat);
-        auto *composerHint = new QLabel(QStringLiteral("⇧ Return for a new line"));
-        composerHint->setObjectName(QStringLiteral("muted"));
-        chatRow->addWidget(composerHint);
+        m_composerStatus = new QLabel;
+        m_composerStatus->setObjectName(QStringLiteral("composerStatus"));
+        m_composerStatus->setWordWrap(true);
+        chatRow->addWidget(m_composerStatus, 1);
         chatRow->addStretch();
         chatRow->addWidget(sendButton);
         auto *abortButton = new QToolButton;
@@ -1582,13 +1645,20 @@ private:
         });
         chatRow->addWidget(abortButton);
         composerLayout->addLayout(chatRow);
+        m_chatActivity = new QLabel;
+        m_chatActivity->setObjectName(QStringLiteral("chatActivity"));
+        m_chatActivity->setTextFormat(Qt::PlainText);
+        m_chatActivity->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_chatActivity->setFixedHeight(28);
+        m_chatActivity->hide();
+        chatLayout->addWidget(m_chatActivity);
         auto *activityTitle = new QToolButton;
         activityTitle->setText(QStringLiteral("▸ Activity"));
         activityTitle->setObjectName(QStringLiteral("eyebrow"));
         chatLayout->addWidget(activityTitle);
         m_activityList = new QListWidget;
         m_activityList->setObjectName(QStringLiteral("activityList"));
-        m_activityList->setMaximumHeight(76);
+        m_activityList->setMaximumHeight(60);
         chatLayout->addWidget(m_activityList);
         m_activityList->hide();
         connect(activityTitle, &QToolButton::clicked, this, [this, activityTitle] {
@@ -1609,12 +1679,13 @@ private:
         m_proposalBox = proposalBox;
         proposalBox->setObjectName(QStringLiteral("proposalBox"));
         auto *proposalLayout = new QVBoxLayout(proposalBox);
+        proposalLayout->setSizeConstraint(QLayout::SetMinimumSize);
         m_proposalSummary = new QLabel(QStringLiteral("No pending changes"));
         m_proposalSummary->setWordWrap(true);
         m_proposalSummary->setObjectName(QStringLiteral("proposalSummary"));
         m_proposalDiff = new QTextEdit;
         m_proposalDiff->setReadOnly(true);
-        m_proposalDiff->setMinimumHeight(120);
+        m_proposalDiff->setMinimumHeight(80);
         m_proposalDiff->setMaximumHeight(240);
         m_proposalDiff->setObjectName(QStringLiteral("muted"));
         auto *proposalButtons = new QHBoxLayout;
@@ -1630,7 +1701,7 @@ private:
         proposalLayout->addWidget(m_proposalDiff);
         proposalLayout->addLayout(proposalButtons);
         chatLayout->addWidget(proposalBox);
-        chatLayout->addWidget(composer);
+        chatTabLayout->addWidget(composer);
         tabs->addTab(chatTab, QStringLiteral("Chat"));
 
         auto *inspectorTab = new QWidget;
@@ -2100,15 +2171,15 @@ private:
             if (kind == QStringLiteral("delta")) {
                 if (m_agentText.isEmpty()) appendConversation(QStringLiteral("Cut"), text);
                 else {
-                    QTextCursor cursor(m_conversation->document());
-                    cursor.movePosition(QTextCursor::End);
-                    cursor.insertText(text);
-                    m_conversation->ensureCursorVisible();
+                    const bool follow = m_conversation->verticalScrollBar()->value() >= m_conversation->verticalScrollBar()->maximum() - 4;
+                    m_agentCursor.insertText(text);
+                    if (follow) m_conversation->verticalScrollBar()->setValue(m_conversation->verticalScrollBar()->maximum());
                 }
                 m_agentText += text;
             } else if (kind == QStringLiteral("done")) {
                 if (m_agentText.isEmpty()) appendConversation(QStringLiteral("Cut"), text);
                 m_agentText.clear();
+                appendConversationNote(QStringLiteral("Progress"), QStringLiteral("Response complete"));
             } else if (kind == QStringLiteral("tool")) {
                 appendConversationNote(QStringLiteral("Tool"), text);
                 addActivity(QStringLiteral("tool"), text.left(120));
@@ -2391,49 +2462,55 @@ private:
 
     void appendConversation(const QString &speaker, const QString &text) {
         if (text.isEmpty()) return;
+        const bool follow = m_conversationEmpty || m_conversation->verticalScrollBar()->value() >= m_conversation->verticalScrollBar()->maximum() - 4;
         if (m_conversationEmpty) {
             m_conversation->clear();
             m_conversationEmpty = false;
         }
         const bool user = speaker == QStringLiteral("You");
         const bool error = speaker == QStringLiteral("Error");
-        const QString role = speaker.toHtmlEscaped();
-        const QString roleColor = user ? QStringLiteral("#d2d2d2")
-                                       : error ? QStringLiteral("#939393") : QStringLiteral("#afafaf");
-        const QString bubbleColor = user ? QStringLiteral("#2b2b2b")
-                                         : error ? QStringLiteral("#272727") : QStringLiteral("#262626");
-        const QString bodyColor = error ? QStringLiteral("#d0d0d0") : QStringLiteral("#e2e2e2");
-        const QString body = text.toHtmlEscaped().replace(QStringLiteral("\n"), QStringLiteral("<br/>"));
-        m_conversation->append(QStringLiteral(
-            "<p style='margin:0 0 10px 0; padding:9px 10px; background-color:%1;'>"
-            "<span style='color:%2; font-size:12px; font-weight:600;'>%3</span><br/>"
-            "<span style='color:%4; font-size:13px;'>%5</span></p>")
-                                    .arg(bubbleColor, roleColor, role, bodyColor, body));
-        m_conversation->ensureCursorVisible();
+        // Native text frames provide actual padding and separate message regions.
+        // Keep the streaming cursor in its frame even when another event arrives.
+        QTextCursor cursor = m_conversation->document()->rootFrame()->lastCursorPosition();
+        QTextFrameFormat frame;
+        frame.setPadding(12);
+        frame.setTopMargin(6);
+        frame.setBottomMargin(10);
+        frame.setLeftMargin(user ? 32 : 0);
+        frame.setRightMargin(user ? 0 : 16);
+        frame.setBackground(QColor(user ? "#333333" : error ? "#342729" : "#262626"));
+        frame.setBorder(1);
+        frame.setBorderStyle(QTextFrameFormat::BorderStyle_Solid);
+        frame.setBorderBrush(QColor(error ? "#94666b" : user ? "#494949" : "#353535"));
+        cursor = cursor.insertFrame(frame)->firstCursorPosition();
+        QTextBlockFormat block;
+        block.setBottomMargin(7);
+        cursor.setBlockFormat(block);
+        QTextCharFormat role;
+        role.setFontWeight(QFont::DemiBold);
+        role.setFontPointSize(9);
+        role.setForeground(QColor(error ? "#efb3b8" : user ? "#bfbfbf" : "#c7b5ed"));
+        cursor.insertText(user ? QStringLiteral("YOU") : error ? QStringLiteral("COULDN’T COMPLETE EDIT") : QStringLiteral("CUT"), role);
+        QTextBlockFormat body;
+        body.setLineHeight(145, QTextBlockFormat::ProportionalHeight);
+        QTextCharFormat bodyText;
+        bodyText.setForeground(QColor("#e4e4e4"));
+        cursor.insertBlock(body, bodyText);
+        cursor.insertText(text);
+        if (speaker == QStringLiteral("Cut")) m_agentCursor = cursor;
+        if (follow) m_conversation->verticalScrollBar()->setValue(m_conversation->verticalScrollBar()->maximum());
     }
 
     void appendConversationNote(const QString &kind, const QString &text) {
         if (text.isEmpty()) return;
-        if (m_conversationEmpty) {
-            m_conversation->clear();
-            m_conversationEmpty = false;
+        if (kind == QStringLiteral("Agent error")) {
+            appendConversation(QStringLiteral("Error"), text);
+            return;
         }
-        const QString label = kind.toHtmlEscaped().toUpper();
-        const QString body = text.toHtmlEscaped().replace(QStringLiteral("\n"), QStringLiteral("<br/>"));
-        const QString color = kind == QStringLiteral("Tool") ? QStringLiteral("#acacac") : QStringLiteral("#7c7c7c");
-        m_conversation->append(QStringLiteral(
-            "<p style='margin:0 0 7px 0; padding:2px 4px;'>"
-            "<span style='color:%1; font-size:12px; font-weight:600;'>%2</span>"
-            "<span style='color:#a1a1a1; font-size:12px;'>  %3</span></p>")
-                                    .arg(color, label, body));
-        while (m_conversation->document()->blockCount() > 120) {
-            QTextCursor cursor(m_conversation->document());
-            cursor.movePosition(QTextCursor::Start);
-            cursor.select(QTextCursor::BlockUnderCursor);
-            cursor.removeSelectedText();
-            cursor.deleteChar();
-        }
-        m_conversation->ensureCursorVisible();
+        const QString activity = QStringLiteral("%1 · %2").arg(kind, text.simplified());
+        m_chatActivity->setText(activity);
+        m_chatActivity->setToolTip(activity);
+        m_chatActivity->show();
     }
 
     void addActivity(const QString &kind, const QString &text) {
@@ -2545,6 +2622,10 @@ private:
     TimelineWidget *m_timeline = nullptr;
     QListWidget *m_mediaList = nullptr;
     QTextEdit *m_conversation = nullptr;
+    QTextCursor m_agentCursor;
+    QLabel *m_chatActivity = nullptr;
+    QFrame *m_chatComposer = nullptr;
+    QLabel *m_composerStatus = nullptr;
     QTextEdit *m_chatInput = nullptr;
     QRadioButton *m_anthropicActiveRadio = nullptr;
     QRadioButton *m_openaiActiveRadio = nullptr;
@@ -2592,6 +2673,11 @@ private:
 class EditorTest final : public QObject {
     Q_OBJECT
 private slots:
+    void initTestCase() {
+        QApplication::setStyle(QStringLiteral("Fusion"));
+        qApp->setStyleSheet(editorStyleSheet());
+    }
+
     void inboundMcpConfigValidatesStdioShape() {
         QVERIFY(!validateInboundMcpConfig("[]").isEmpty());
         QVERIFY(!validateInboundMcpConfig("{}").isEmpty());
@@ -2793,6 +2879,130 @@ private slots:
         QCOMPARE(window.m_chatInput->toPlainText(), QStringLiteral("First edit\nSecond edit"));
         QVERIFY(!window.m_sendButton->isEnabled());
         QVERIFY(window.m_abortButton->isHidden());
+    }
+
+    void conversationSeparatesActivityAndKeepsStreamInItsMessage() {
+        MainWindow window{QString(), QString()};
+        window.show();
+        QVERIFY(window.m_conversation->toPlainText().contains(QStringLiteral("Make your next cut.")));
+        const QString emptyState = window.m_conversation->toPlainText();
+        window.appendConversationNote(QStringLiteral("Tool"), QStringLiteral("Inspecting timeline"));
+        QCOMPARE(window.m_conversation->toPlainText(), emptyState);
+        QVERIFY(!window.m_chatActivity->isHidden());
+
+        window.appendConversation(QStringLiteral("You"), QStringLiteral("Trim <intro>\nKeep the dialogue."));
+        window.handleEvent(QJsonObject{{"type", "agent"}, {"kind", "delta"}, {"text", "I’ll trim "}});
+        window.handleEvent(QJsonObject{{"type", "agent"}, {"kind", "tool"}, {"text", "Reading <timeline>"}});
+        window.handleEvent(QJsonObject{{"type", "agent_state"}, {"state", "failed"}, {"message", "Could not read <media>"}});
+        window.handleEvent(QJsonObject{{"type", "agent"}, {"kind", "delta"}, {"text", "the opening."}});
+        window.handleEvent(QJsonObject{{"type", "agent"}, {"kind", "done"}, {"text", "I’ll trim the opening."}});
+
+        const QString transcript = window.m_conversation->toPlainText();
+        QVERIFY(!transcript.contains(QStringLiteral("Make your next cut.")));
+        QVERIFY(transcript.contains(QStringLiteral("Trim <intro>\nKeep the dialogue.")));
+        QCOMPARE(transcript.count(QStringLiteral("I’ll trim the opening.")), 1);
+        QVERIFY(transcript.contains(QStringLiteral("Could not read <media>")));
+        QVERIFY(!transcript.contains(QStringLiteral("Reading <timeline>")));
+        QCOMPARE(window.m_activityList->count(), 1);
+        const auto frames = window.m_conversation->document()->rootFrame()->childFrames();
+        QCOMPARE(frames.size(), 3);
+        QVERIFY(frames[0]->frameFormat().leftMargin() > frames[1]->frameFormat().leftMargin());
+        QVERIFY(frames[1]->frameFormat().borderBrush() != frames[2]->frameFormat().borderBrush());
+        window.appendConversation(QStringLiteral("Cut"), QStringLiteral("A separate response."));
+        QCOMPARE(window.m_conversation->document()->rootFrame()->childFrames().size(), 4);
+
+        // New output must not pull the reader away from earlier messages.
+        for (int i = 0; i < 12; ++i)
+            window.appendConversation(QStringLiteral("You"), QStringLiteral("A longer edit request.\nKeep this line readable."));
+        QCoreApplication::processEvents();
+        auto *scroll = window.m_conversation->verticalScrollBar();
+        QVERIFY(scroll->maximum() > 0);
+        scroll->setValue(0);
+        window.appendConversation(QStringLiteral("Cut"), QStringLiteral("New response."));
+        QCOMPARE(scroll->value(), 0);
+    }
+
+    void composerStatesAndNarrowLayoutRemainUsable() {
+        MainWindow window{QString(), QString()};
+        window.resize(1080, 700);
+        window.show();
+        QCOMPARE(window.m_chatComposer->property("state").toString(), QStringLiteral("offline"));
+        window.setConnection(QStringLiteral("ready"));
+        window.activateWindow();
+        window.m_chatInput->setFocus();
+        QTRY_COMPARE(window.m_chatComposer->property("state").toString(), QStringLiteral("focused"));
+        window.m_chatInput->setPlainText(QStringLiteral("Keep my draft"));
+        window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
+        QCOMPARE(window.m_chatComposer->property("state").toString(), QStringLiteral("sending"));
+        QVERIFY(!window.m_chatInput->isEnabled());
+        QVERIFY(window.m_abortButton->isVisible());
+        window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", false}});
+        QVERIFY(window.m_chatInput->isEnabled());
+        QVERIFY(window.m_sendButton->isEnabled());
+        QCOMPARE(window.m_chatInput->toPlainText(), QStringLiteral("Keep my draft"));
+        window.appendConversation(QStringLiteral("You"), QStringLiteral("Trim the opening to three seconds."));
+        window.appendConversation(QStringLiteral("Cut"), QStringLiteral("I’ll shorten the opening and keep the rest of your sequence in place.\nReview the changes before applying them."));
+        window.appendConversationNote(QStringLiteral("Tool"), QString(500, QLatin1Char('x')));
+        window.updateProposal(QJsonObject{{"status", "pending"}, {"proposalId", "review"},
+            {"diff", QJsonArray{QJsonObject{{"path", "$.name"}, {"before", "old"}, {"after", "new"}}}}});
+        window.m_activityList->show();
+        QCoreApplication::processEvents();
+        auto *chat = window.m_chatComposer->parentWidget();
+        QVERIFY(chat->rect().contains(window.m_chatComposer->geometry()));
+        QCOMPARE(window.m_chatComposer->geometry().bottom(), chat->rect().bottom());
+        QVERIFY(window.m_conversation->height() >= 80);
+        QCOMPARE(window.m_conversation->horizontalScrollBar()->maximum(), 0);
+        QVERIFY(window.m_proposalBox->rect().contains(window.m_proposalDiff->geometry()));
+        QVERIFY(window.m_proposalDiff->geometry().bottom() < window.m_acceptButton->geometry().top());
+        QVERIFY(window.m_proposalBox->rect().contains(window.m_acceptButton->geometry()));
+        auto *reviewScroll = window.m_proposalBox->parentWidget()->parentWidget()->parentWidget();
+        QVERIFY(reviewScroll->mapTo(chat, QPoint(0, reviewScroll->height())).y() <= window.m_chatComposer->y());
+        // Optional artifact for manual review of the real styled widget tree.
+        const QString screenshot = qEnvironmentVariable("CUT_QT_UI_SCREENSHOT");
+        if (!screenshot.isEmpty()) {
+            QVERIFY(window.grab().save(screenshot));
+            window.resize(1500, 940);
+            window.m_proposalBox->hide();
+            window.m_activityList->hide();
+            window.appendConversationNote(QStringLiteral("Progress"), QStringLiteral("Response complete"));
+            QCoreApplication::processEvents();
+            QVERIFY(window.grab().save(screenshot + QStringLiteral(".chat.png")));
+        }
+    }
+
+    void timelineKeepsSeekSelectMoveAndTrimCoordinates() {
+        TimelineWidget timeline;
+        timeline.resize(700, 240);
+        timeline.setProject(QJsonObject{{"tracks", QJsonArray{QJsonObject{{"type", "video"}, {"clips", QJsonArray{
+            QJsonObject{{"id", "clip"}, {"timelineStart", 1.0}, {"duration", 4.0}, {"name", "Opening"}}
+        }}}}}}, 8, 24);
+        timeline.show();
+        QSignalSpy seeks(&timeline, &TimelineWidget::seekRequested);
+        QSignalSpy selections(&timeline, &TimelineWidget::clipSelected);
+        QSignalSpy moves(&timeline, &TimelineWidget::moveRequested);
+        QSignalSpy trims(&timeline, &TimelineWidget::trimRequested);
+        QTest::mouseClick(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(kTimelineLabelWidth + 144, 12));
+        QCOMPARE(seeks.constLast()[0].toDouble(), 2.0);
+        const int y = kRulerHeight + kTrackHeight / 2;
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(kTimelineLabelWidth + 144, y));
+        QTest::mouseMove(&timeline, QPoint(kTimelineLabelWidth + 216, y));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(kTimelineLabelWidth + 216, y));
+        QCOMPARE(selections.constLast()[0].toString(), QStringLiteral("clip"));
+        QCOMPARE(moves.count(), 1);
+        QCOMPARE(moves[0][1].toDouble(), 2.0);
+        for (const bool leading : {true, false}) {
+            const int edge = kTimelineLabelWidth + (leading ? 75 : 357);
+            QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(edge, y));
+            QTest::mouseMove(&timeline, QPoint(edge + 72, y));
+            QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(edge + 72, y));
+            QCOMPARE(trims.constLast()[1].toBool(), leading);
+            QCOMPARE(trims.constLast()[2].toDouble(), double(std::llround((edge + 72 - kTimelineLabelWidth) / 72.0 * 24)));
+        }
+        QCOMPARE(trims.count(), 2);
+        timeline.setSelectedClip(QStringLiteral("clip"));
+        timeline.setPlayhead(2.5);
+        const QString screenshot = qEnvironmentVariable("CUT_QT_UI_SCREENSHOT");
+        if (!screenshot.isEmpty()) QVERIFY(timeline.grab().save(screenshot + QStringLiteral(".timeline.png")));
     }
 
     void artworkDecodesMediaWithoutBlocking() {
