@@ -4,6 +4,7 @@
 //! it reads an authoritative snapshot for each request and sends canonical
 //! commands back with an idempotency key and revision.
 
+mod composition;
 mod contracts;
 pub mod docs;
 pub mod inbound;
@@ -51,6 +52,7 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     "tools.describe",
     "timeline.query",
     "timeline.check",
+    "composition.check",
     "timeline.capture",
     "timeline.apply",
     "media.probe",
@@ -72,6 +74,7 @@ pub const FULL_TOOL_NAMES: &[&str] = &[
     "project.outline",
     "timeline.query",
     "timeline.check",
+    "composition.check",
     "timeline.capture",
     "timeline.apply",
     "project.validate",
@@ -520,6 +523,7 @@ impl CutMcpRouter {
             "project.validate" => self.project_validate(arguments),
             "timeline.query" => self.timeline_query(arguments),
             "timeline.check" => self.timeline_check(arguments),
+            "composition.check" => composition::check(&self.dir, &arguments),
             "timeline.capture" => self.timeline_capture(arguments),
             "timeline.apply" => self.timeline_apply(arguments),
             "timeline.undo" => self.history_move(arguments, false),
@@ -2790,6 +2794,11 @@ fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
             }),
             read_only,
         ),
+        "composition.check" => (
+            "Statically inspect a local HTML motion composition sidecar without executing HTML, scripts, a browser, CLI, or network requests. Returns bounded metadata, timed elements, assets, nested references and findings; never changes the canonical project or writes a result cache. The entry defaults to index.html and must be a project-relative regular file without symlinks or parent components. Root: data-composition-id, data-composition with id, or id=composition; width/height/fps/duration use data-* attributes (plain attributes also accepted). valid means no errors; deterministic means the entry scan completed with no known determinism violations or uninspected executable dependencies, not a runtime guarantee. Dependencies are only checked for local availability, never read recursively. Error findings cover invalid declarations and unsafe behavior; warnings cover uninspected dependencies. Requires Unix secure file traversal.",
+            composition::input_schema(),
+            read_only,
+        ),
         "timeline.capture" => (
             "Capture an exact, bounded offline-compiler preview of the current timeline.",
             json!({
@@ -3036,6 +3045,7 @@ fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
 
 fn example_for_tool(name: &str) -> Value {
     match name {
+        "composition.check" => json!({"entry":"index.html"}),
         "timeline.query" => json!({"trackId":"video-1","limit":50}),
         "timeline.apply" => {
             json!({"commands":[{"type":"update_clip","clipId":"clip-1","patch":{}}]})
@@ -4284,6 +4294,122 @@ mod tests {
         assert_eq!(schema["additionalProperties"], false);
         assert_eq!(annotations.read_only_hint, Some(true));
         assert_eq!(annotations.idempotent_hint, Some(true));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn composition_check_profiles_discovery_and_dispatch_are_read_only() {
+        let root = TempDir::new().expect("temp dir");
+        let project_path = root.path().join("project.cut.json");
+        let project_bytes = serde_json::to_vec(
+            &cut_domain::serialize_project(&cut_domain::empty_project()).expect("project"),
+        )
+        .expect("project bytes");
+        fs::write(&project_path, &project_bytes).expect("project fixture");
+        let html = "<main data-composition-id='intro' data-width='1920' data-height='1080' data-fps='30' data-duration='5'></main>";
+        fs::write(root.path().join("index.html"), html).expect("composition fixture");
+        for profile in [McpProfile::Core, McpProfile::Full] {
+            // No daemon or binary is available: successful dispatch also proves
+            // this sidecar read never needs an authoritative state request.
+            let mut router = CutMcpRouter {
+                dir: root.path().to_path_buf(),
+                runtime: RuntimeClient::new(root.path()).expect("client"),
+                skills: Vec::new(),
+                profile,
+                namespace: String::new(),
+            };
+            for namespace in ["", "cut"] {
+                router.namespace = namespace.into();
+                let name = router.definition("composition.check").name;
+                let listed = router.list_tools();
+                let definition = listed
+                    .iter()
+                    .find(|tool| tool.name == name)
+                    .expect("listed");
+                assert_eq!(definition.annotations.read_only_hint, Some(true));
+                assert_eq!(definition.annotations.idempotent_hint, Some(true));
+                assert_eq!(definition.input_schema["additionalProperties"], false);
+                assert_eq!(
+                    definition.input_schema["properties"]["entry"]["default"],
+                    "index.html"
+                );
+                let search = router.call(
+                    &router.definition("tools.search").name,
+                    json!({"query":"composition"}),
+                );
+                assert_eq!(search["ok"], true, "{search}");
+                assert!(search["result"]["items"]
+                    .as_array()
+                    .expect("items")
+                    .iter()
+                    .any(|item| item["name"] == name));
+                let described = router.call(
+                    &router.definition("tools.describe").name,
+                    json!({"name":name}),
+                );
+                assert_eq!(described["ok"], true, "{described}");
+                assert_eq!(described["result"]["tool"]["name"], name);
+                assert_eq!(
+                    described["result"]["example"],
+                    json!({"entry":"index.html"})
+                );
+                let response = router.call(&name, described["result"]["example"].clone());
+                assert_eq!(response["ok"], true, "{response}");
+                assert_eq!(response["result"]["valid"], true);
+                assert_eq!(response["result"]["deterministic"], true);
+                assert_eq!(response, router.call(&name, json!({})));
+                assert!(router.agent_tools().contains_key("composition.check"));
+                let embedded = router
+                    .clone_for_agent()
+                    .call_base("composition.check", json!({}))
+                    .expect("embedded dispatch");
+                assert_eq!(embedded, response["result"]);
+                let traversal = router.call(&name, json!({"entry":"../index.html"}));
+                assert_eq!(traversal["ok"], false);
+                assert_eq!(traversal["error"]["code"], "INVALID_ARGUMENTS");
+            }
+        }
+        assert_eq!(
+            fs::read(project_path).expect("project after check"),
+            project_bytes
+        );
+        assert_eq!(
+            fs::read_to_string(root.path().join("index.html")).expect("entry after check"),
+            html
+        );
+        assert!(!root.path().join(".cut").exists());
+        assert_eq!(fs::read_dir(root.path()).expect("directory").count(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn composition_check_large_dispatch_never_archives_or_creates_runtime_state() {
+        let root = TempDir::new().expect("temp dir");
+        let html = format!(
+            "<main data-composition-id='intro' data-width='1920' data-height='1080' data-fps='30' data-duration='5'>{}</main>",
+            "<div data-start='0' data-duration='1' data-track-index='0'></div>".repeat(500)
+        );
+        fs::write(root.path().join("index.html"), &html).expect("large fixture");
+        let router = CutMcpRouter {
+            dir: root.path().to_path_buf(),
+            runtime: RuntimeClient::new(root.path()).expect("client"),
+            skills: Vec::new(),
+            profile: McpProfile::Core,
+            namespace: String::new(),
+        };
+        let response = router.call("composition.check", json!({}));
+        assert_eq!(response["ok"], true, "{response}");
+        assert_eq!(response["result"]["valid"], true);
+        assert_eq!(response["result"]["counts"]["elements"], 500);
+        assert_eq!(response["result"]["truncated"], true);
+        assert!(response["result"].get("readWith").is_none());
+        assert!(response["result"].to_string().len() <= results::MAX_INLINE_BYTES);
+        assert_eq!(
+            fs::read_to_string(root.path().join("index.html")).expect("unchanged entry"),
+            html
+        );
+        assert!(!root.path().join(".cut").exists());
+        assert_eq!(fs::read_dir(root.path()).expect("directory").count(), 1);
     }
 
     #[test]

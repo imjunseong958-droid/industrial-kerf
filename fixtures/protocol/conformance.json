@@ -115,6 +115,7 @@
       "tools.describe",
       "timeline.query",
       "timeline.check",
+      "composition.check",
       "timeline.capture",
       "timeline.apply",
       "media.probe",
