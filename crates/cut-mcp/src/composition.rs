@@ -1,7 +1,9 @@
 //! Read-only, bounded inspection of a declarative HTML sidecar. This is a
 //! conservative source scanner, not an HTML/JS engine or a second project model.
-//! Only the entry's bytes are read; dependencies are checked for availability.
+//! Only the entry and explicitly requested manifest/instance sidecar bytes are
+//! read; HTML dependencies are checked for availability.
 
+use super::composition_manifest;
 use super::McpError;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -10,7 +12,7 @@ use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 const MAX_HTML_BYTES: usize = 256 * 1024;
-const MAX_ENTRY_BYTES: usize = 1024;
+pub(crate) const MAX_ENTRY_BYTES: usize = 1024;
 const MAX_TAGS: usize = 4096;
 const MAX_ATTRIBUTES: usize = 64;
 const MAX_VALUE_BYTES: usize = 4096;
@@ -22,17 +24,49 @@ pub(super) fn input_schema() -> Value {
     json!({"type":"object","properties":{"entry":{
         "type":"string","minLength":1,"maxLength":MAX_ENTRY_BYTES,"default":"index.html",
         "description":"Project-relative UTF-8 HTML file, at most 256 KiB. No absolute paths, .. components, backslashes, URL syntax, symlinks or special files. The limit is measured in UTF-8 bytes."
+    },"manifest":{
+        "type":"string","minLength":1,"maxLength":MAX_ENTRY_BYTES,
+        "description":"Optional project-relative JSON manifest sidecar. Schema version 1 declares output metadata and typed slots."
+    },"instance":{
+        "type":"string","minLength":1,"maxLength":MAX_ENTRY_BYTES,
+        "description":"Optional project-relative JSON instance sidecar containing sparse overrides. Requires manifest."
     }},"additionalProperties":false})
 }
 
 pub(super) fn check(directory: &Path, arguments: &Value) -> Result<Value, McpError> {
+    Ok(inspect(directory, arguments)?.report)
+}
+
+pub(super) struct CheckedComposition {
+    pub report: Value,
+    pub sources: BTreeMap<String, Vec<u8>>,
+    pub manifest: Value,
+    pub instance: Option<Value>,
+    pub dependencies: Vec<String>,
+    pub inputs_complete: bool,
+    pub variable_count: usize,
+}
+
+pub(super) fn inspect(directory: &Path, arguments: &Value) -> Result<CheckedComposition, McpError> {
+    let root = File::open(directory).map_err(unavailable)?;
+    inspect_open(&root, arguments)
+}
+
+/// Inspect through an already-open project directory descriptor. Callers that
+/// have traversed a project with descriptor-relative I/O must keep using that
+/// descriptor here; reopening the path would reintroduce a root replacement
+/// race between validation and snapshotting.
+pub(super) fn inspect_open(root: &File, arguments: &Value) -> Result<CheckedComposition, McpError> {
     let object = arguments
         .as_object()
         .ok_or_else(|| McpError::new("INVALID_ARGUMENTS", "composition.check expects an object"))?;
-    if object.keys().any(|key| key != "entry") {
+    if object
+        .keys()
+        .any(|key| !matches!(key.as_str(), "entry" | "manifest" | "instance"))
+    {
         return Err(McpError::new(
             "INVALID_ARGUMENTS",
-            "only entry is supported",
+            "only entry, manifest, and instance are supported",
         ));
     }
     let entry = match object.get("entry") {
@@ -40,10 +74,35 @@ pub(super) fn check(directory: &Path, arguments: &Value) -> Result<Value, McpErr
         Some(Value::String(entry)) => entry,
         _ => return Err(McpError::new("INVALID_ARGUMENTS", "entry must be a string")),
     };
+    let manifest = match object.get("manifest") {
+        None => None,
+        Some(Value::String(manifest)) => Some(manifest.as_str()),
+        _ => {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "manifest must be a string",
+            ))
+        }
+    };
+    let instance = match object.get("instance") {
+        None => None,
+        Some(Value::String(instance)) => Some(instance.as_str()),
+        _ => {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "instance must be a string",
+            ))
+        }
+    };
+    if instance.is_some() && manifest.is_none() {
+        return Err(McpError::new(
+            "INVALID_ARGUMENTS",
+            "instance requires manifest",
+        ));
+    }
     let path = relative_path(Path::new(""), entry, false)
         .map_err(|message| McpError::new("INVALID_ARGUMENTS", message))?;
-    let root = File::open(directory).map_err(unavailable)?;
-    let file = open_local(&root, &path).map_err(unavailable)?;
+    let file = open_local(root, &path).map_err(unavailable)?;
     if file.metadata().map_err(unavailable)?.len() > MAX_HTML_BYTES as u64 {
         return Err(McpError::new("COMPOSITION_LIMIT", "entry exceeds 256 KiB"));
     }
@@ -56,9 +115,44 @@ pub(super) fn check(directory: &Path, arguments: &Value) -> Result<Value, McpErr
     }
     let html = std::str::from_utf8(&bytes)
         .map_err(|_| McpError::new("COMPOSITION_ENCODING", "entry must be UTF-8 HTML"))?;
-    let mut inspection = Inspection::new(&root, path.parent().unwrap_or(Path::new("")));
+    let mut inspection = Inspection::new(root, path.parent().unwrap_or(Path::new("")));
     inspection.scan(html);
-    inspection.finish(entry, bytes.len())
+    let mut sources = BTreeMap::from([(path.to_string_lossy().into_owned(), bytes.clone())]);
+    let mut manifest_source = Value::Null;
+    let mut instance_source = None;
+    if let Some(manifest) = manifest {
+        let entry = path.to_string_lossy();
+        let report = composition_manifest::inspect(
+            root,
+            &entry,
+            manifest,
+            instance,
+            &inspection.metadata,
+            &inspection.lists[VARIABLES],
+        )?;
+        sources.extend(report.sources.clone());
+        manifest_source = report.source.clone();
+        instance_source = report.instance_source.clone();
+        inspection.attach_manifest(report);
+    }
+    let dependencies = inspection.lists[ASSETS]
+        .iter()
+        .chain(&inspection.lists[NESTED])
+        .filter_map(|item| item["path"].as_str().map(str::to_owned))
+        .collect();
+    let inputs_complete = [ASSETS, NESTED, VARIABLES]
+        .iter()
+        .all(|&index| inspection.counts[index] == inspection.lists[index].len());
+    let variable_count = inspection.counts[VARIABLES];
+    Ok(CheckedComposition {
+        report: inspection.finish(entry, bytes.len())?,
+        sources,
+        manifest: manifest_source,
+        instance: instance_source,
+        dependencies,
+        inputs_complete,
+        variable_count,
+    })
 }
 
 fn unavailable(error: std::io::Error) -> McpError {
@@ -70,7 +164,11 @@ fn unavailable(error: std::io::Error) -> McpError {
 
 /// Normalize references lexically before any I/O. Entry paths reject all parent
 /// components; dependency paths may use parents only inside the project root.
-fn relative_path(base: &Path, value: &str, allow_parent: bool) -> Result<PathBuf, &'static str> {
+pub(crate) fn relative_path(
+    base: &Path,
+    value: &str,
+    allow_parent: bool,
+) -> Result<PathBuf, &'static str> {
     if value.is_empty()
         || value.len() > MAX_ENTRY_BYTES
         || value.chars().any(char::is_control)
@@ -99,7 +197,17 @@ fn relative_path(base: &Path, value: &str, allow_parent: bool) -> Result<PathBuf
 }
 
 #[cfg(unix)]
-fn open_local(root: &File, path: &Path) -> std::io::Result<File> {
+pub(crate) fn open_local(root: &File, path: &Path) -> std::io::Result<File> {
+    open_path(root, path, false)
+}
+
+#[cfg(unix)]
+pub(super) fn open_directory(root: &File, path: &Path) -> std::io::Result<File> {
+    open_path(root, path, true)
+}
+
+#[cfg(unix)]
+fn open_path(root: &File, path: &Path, directory: bool) -> std::io::Result<File> {
     use std::ffi::CString;
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::ffi::OsStrExt;
@@ -115,7 +223,7 @@ fn open_local(root: &File, path: &Path) -> std::io::Result<File> {
         let name =
             CString::new(name.as_bytes()).map_err(|_| std::io::Error::other("NUL in path"))?;
         let mut flags = libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK;
-        if parts.peek().is_some() {
+        if parts.peek().is_some() || directory {
             flags |= libc::O_DIRECTORY;
         }
         // SAFETY: the parent descriptor and C string stay alive for openat; no
@@ -127,14 +235,22 @@ fn open_local(root: &File, path: &Path) -> std::io::Result<File> {
         // SAFETY: openat returned a new owned descriptor, transferred once.
         file = unsafe { File::from_raw_fd(fd) };
     }
-    if !file.metadata()?.is_file() {
-        return Err(std::io::Error::other("not a regular file"));
+    let metadata = file.metadata()?;
+    if (directory && !metadata.is_dir()) || (!directory && !metadata.is_file()) {
+        return Err(std::io::Error::other("unexpected file type"));
     }
     Ok(file)
 }
 
 #[cfg(not(unix))]
-fn open_local(_root: &File, _path: &Path) -> std::io::Result<File> {
+pub(super) fn open_directory(_root: &File, _path: &Path) -> std::io::Result<File> {
+    Err(std::io::Error::other(
+        "composition requires Unix directory traversal",
+    ))
+}
+
+#[cfg(not(unix))]
+pub(crate) fn open_local(_root: &File, _path: &Path) -> std::io::Result<File> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "composition.check requires Unix descriptor-relative file traversal",
@@ -161,10 +277,11 @@ struct Inspection<'a> {
     root: &'a File,
     base: &'a Path,
     metadata: Value,
+    manifest: Option<Value>,
     roots: usize,
     tags: usize,
-    lists: [Vec<Value>; 4],
-    counts: [usize; 4],
+    lists: [Vec<Value>; 5],
+    counts: [usize; 5],
     errors: usize,
     warnings: usize,
     deterministic: bool,
@@ -175,7 +292,8 @@ const FINDINGS: usize = 0;
 const ELEMENTS: usize = 1;
 const ASSETS: usize = 2;
 const NESTED: usize = 3;
-const LIST_NAMES: [&str; 4] = ["findings", "elements", "assets", "nested"];
+const VARIABLES: usize = 4;
+const LIST_NAMES: [&str; 5] = ["findings", "elements", "assets", "nested", "variables"];
 
 impl<'a> Inspection<'a> {
     fn new(root: &'a File, base: &'a Path) -> Self {
@@ -183,10 +301,11 @@ impl<'a> Inspection<'a> {
             root,
             base,
             metadata: Value::Null,
+            manifest: None,
             roots: 0,
             tags: 0,
             lists: Default::default(),
-            counts: [0; 4],
+            counts: [0; 5],
             errors: 0,
             warnings: 0,
             deterministic: true,
@@ -393,6 +512,44 @@ impl<'a> Inspection<'a> {
         }
         if let Some(value) = nested {
             self.reference(tag, "data-composition-src", value, true, true);
+        }
+        for (name, value) in &tag.attrs {
+            if let Some(id) = name.strip_prefix("data-var-") {
+                if id.is_empty() {
+                    self.finding(
+                        "INVALID_VARIABLE_BINDING",
+                        "data-var-* must include a non-empty slot id",
+                        tag.offset,
+                        true,
+                        false,
+                    );
+                } else {
+                    self.push(
+                        VARIABLES,
+                        json!({"element":tag.location(),"attribute":name,
+                            "id":short(id),"idTruncated":id.len()>256,
+                            "value":short(value),"valueTruncated":value.len()>256}),
+                    );
+                }
+            } else if name == "data-var" {
+                let id = value.trim();
+                if id.is_empty() {
+                    self.finding(
+                        "INVALID_VARIABLE_BINDING",
+                        "data-var must contain a non-empty slot id",
+                        tag.offset,
+                        true,
+                        false,
+                    );
+                } else {
+                    self.push(
+                        VARIABLES,
+                        json!({"element":tag.location(),"attribute":name,
+                            "id":short(id),"idTruncated":id.len()>256,
+                            "value":"","valueTruncated":false}),
+                    );
+                }
+            }
         }
         if matches!(
             tag.name.as_str(),
@@ -692,6 +849,7 @@ impl<'a> Inspection<'a> {
         let mut report = json!({"entry":entry,"scope":"entry-only-static",
             "valid":self.errors==0,"deterministic":self.deterministic && self.scan_complete,
             "scanComplete":self.scan_complete,"metadata":self.metadata,"bytesRead":bytes,"outputBytes":0,
+            "manifest":self.manifest.unwrap_or(Value::Null),
             "truncated":false,"counts":{"tags":self.tags,"roots":self.roots,"errors":self.errors,"warnings":self.warnings},
             "returned":{},"limits":{"htmlBytes":MAX_HTML_BYTES,"entryBytes":MAX_ENTRY_BYTES,
                 "tags":MAX_TAGS,"attributesPerTag":MAX_ATTRIBUTES,"attributeBytes":MAX_VALUE_BYTES,
@@ -717,6 +875,15 @@ impl<'a> Inspection<'a> {
                 report["outputBytes"] = json!(size);
                 continue;
             }
+            let lists_have_items = LIST_NAMES.iter().any(|name| {
+                report[*name]
+                    .as_array()
+                    .is_some_and(|items| !items.is_empty())
+            });
+            if !lists_have_items && trim_manifest_report(&mut report) {
+                report["truncated"] = json!(true);
+                continue;
+            }
             let largest = LIST_NAMES
                 .iter()
                 .max_by_key(|name| report[**name].to_string().len())
@@ -729,6 +896,39 @@ impl<'a> Inspection<'a> {
             }
         }
     }
+
+    fn attach_manifest(&mut self, manifest: composition_manifest::Report) {
+        self.errors += manifest.errors;
+        self.warnings += manifest.warnings;
+        self.deterministic &= manifest.deterministic;
+        for finding in manifest.findings {
+            self.push(FINDINGS, finding);
+        }
+        self.manifest = Some(manifest.manifest);
+    }
+}
+
+fn trim_manifest_report(report: &mut Value) -> bool {
+    if let Some(slots) = report["manifest"]["slots"].as_array_mut() {
+        if slots.pop().is_some() {
+            report["manifest"]["slotsTruncated"] = json!(true);
+            return true;
+        }
+    }
+    if let Some(used) = report["manifest"]["usedSlots"].as_array_mut() {
+        if used.pop().is_some() {
+            report["manifest"]["usedSlotsTruncated"] = json!(true);
+            return true;
+        }
+    }
+    if let Some(overrides) = report["manifest"]["instance"]["overrides"].as_object_mut() {
+        if let Some(key) = overrides.keys().next_back().cloned() {
+            overrides.remove(&key);
+            report["manifest"]["instance"]["overridesTruncated"] = json!(true);
+            return true;
+        }
+    }
+    false
 }
 
 fn short(value: &str) -> &str {
@@ -1054,6 +1254,220 @@ mod tests {
             report
         );
         assert!(!dir.path().join(".cut").exists());
+    }
+
+    #[test]
+    fn composition_manifest_validates_typed_slots_and_sparse_instance_overrides() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("index.html"),
+            r#"<main data-composition-id="intro" data-width="1920" data-height="1080" data-fps="30" data-duration="5">
+                <h1 data-var-hookText></h1>
+                <div data-var-accentColor></div>
+                <video data-var-creatorClip></video>
+            </main>"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("composition.manifest.json"),
+            serde_json::to_vec(&json!({
+                "schemaVersion": 1,
+                "templateId": "product-launch-v1",
+                "templateVersion": "1.0.0",
+                "entry": "index.html",
+                "output": {"width": 1920, "height": 1080, "fps": 30, "duration": 5},
+                "slots": [
+                    {"id": "hookText", "type": "text", "required": true},
+                    {"id": "accentColor", "type": "color", "default": "#7C5CFC"},
+                    {"id": "creatorClip", "type": "video", "required": true}
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("launch.instance.json"),
+            serde_json::to_vec(&json!({
+                "schemaVersion": 1,
+                "templateId": "product-launch-v1",
+                "templateVersion": "1.0.0",
+                "overrides": {
+                    "hookText": "새로운 제품 소개",
+                    "accentColor": "#00AAFF",
+                    "creatorClip": "asset_123"
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let report = check(
+            dir.path(),
+            &json!({
+                "manifest": "composition.manifest.json",
+                "instance": "launch.instance.json"
+            }),
+        )
+        .unwrap();
+        assert_eq!(report["valid"], true, "{report}");
+        assert_eq!(report["deterministic"], true);
+        assert_eq!(report["counts"]["variables"], 3);
+        assert_eq!(report["manifest"]["valid"], true);
+        assert_eq!(report["manifest"]["slotCount"], 3);
+        assert_eq!(report["manifest"]["instance"]["valid"], true);
+        assert_eq!(report["manifest"]["instance"]["overrideCount"], 3);
+        assert_eq!(report["findings"], json!([]));
+        assert!(!dir.path().join(".cut").exists());
+    }
+
+    #[test]
+    fn composition_manifest_rejects_unknown_bindings_bad_overrides_and_output_drift() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("index.html"),
+            r#"<main data-composition-id="intro" data-width="1280" data-height="1080" data-fps="30" data-duration="5">
+                <h1 data-var-hookText></h1>
+                <div data-var-unknownSlot></div>
+            </main>"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("composition.manifest.json"),
+            serde_json::to_vec(&json!({
+                "schemaVersion": 1,
+                "templateId": "product-launch-v1",
+                "templateVersion": "1.0.0",
+                "entry": "index.html",
+                "output": {"width": 1920, "height": 1080, "fps": 30, "duration": 5},
+                "slots": [
+                    {"id": "hookText", "type": "text", "required": true},
+                    {"id": "creatorClip", "type": "video", "required": true}
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("launch.instance.json"),
+            serde_json::to_vec(&json!({
+                "schemaVersion": 1,
+                "templateId": "product-launch-v1",
+                "templateVersion": "1.0.0",
+                "overrides": {
+                    "hookText": 42,
+                    "unknown": "asset"
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let report = check(
+            dir.path(),
+            &json!({
+                "manifest": "composition.manifest.json",
+                "instance": "launch.instance.json"
+            }),
+        )
+        .unwrap();
+        assert_eq!(report["valid"], false, "{report}");
+        for code in [
+            "MANIFEST_OUTPUT_MISMATCH",
+            "UNKNOWN_VARIABLE_SLOT",
+            "OVERRIDE_TYPE_MISMATCH",
+            "UNKNOWN_OVERRIDE_SLOT",
+            "MISSING_REQUIRED_OVERRIDE",
+        ] {
+            assert!(has_finding(&report, code, "error"), "{code}: {report}");
+        }
+        assert!(!dir.path().join(".cut").exists());
+    }
+
+    #[test]
+    fn composition_manifest_rejects_case_colliding_slot_ids() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("index.html"), ROOT).unwrap();
+        fs::write(
+            dir.path().join("composition.manifest.json"),
+            r#"{
+                "schemaVersion": 1,
+                "templateId": "intro",
+                "templateVersion": "1.0.0",
+                "entry": "index.html",
+                "output": {"width": 1920, "height": 1080, "fps": 30, "duration": 5},
+                "slots": [
+                    {"id": "Accent", "type": "color"},
+                    {"id": "accent", "type": "color"}
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let report = check(dir.path(), &json!({"manifest":"composition.manifest.json"})).unwrap();
+        assert_eq!(report["valid"], false, "{report}");
+        assert!(has_finding(&report, "MANIFEST_SLOT_DUPLICATE", "error"));
+    }
+
+    #[test]
+    fn descriptor_inspection_stays_on_open_project_after_path_replacement() {
+        let parent = TempDir::new().unwrap();
+        let project = parent.path().join("project");
+        let moved = parent.path().join("moved");
+        fs::create_dir(&project).unwrap();
+        fs::write(project.join("index.html"), ROOT).unwrap();
+        let descriptor = File::open(&project).unwrap();
+
+        fs::rename(&project, &moved).unwrap();
+        fs::create_dir(&project).unwrap();
+        fs::write(
+            project.join("index.html"),
+            r#"<main data-composition-id="replacement" data-width="1" data-height="1" data-fps="1" data-duration="1"></main>"#,
+        )
+        .unwrap();
+
+        let checked = inspect_open(&descriptor, &json!({})).unwrap();
+        assert_eq!(checked.report["metadata"]["id"], "intro");
+        assert_eq!(checked.report["metadata"]["width"], 1920.0);
+    }
+
+    #[test]
+    fn composition_manifest_result_stays_within_inline_budget() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("index.html"),
+            r#"<main data-composition-id="intro" data-width="1920" data-height="1080" data-fps="30" data-duration="5"></main>"#,
+        )
+        .unwrap();
+        let slots = (0..64)
+            .map(|index| {
+                json!({
+                    "id": format!("mode_{index}"),
+                    "type": "enum",
+                    "options": (0..32)
+                        .map(|option| format!("option_{index}_{option}"))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        fs::write(
+            dir.path().join("composition.manifest.json"),
+            serde_json::to_vec(&json!({
+                "schemaVersion": 1,
+                "templateId": "large-template",
+                "templateVersion": "1.0.0",
+                "entry": "index.html",
+                "output": {"width": 1920, "height": 1080, "fps": 30, "duration": 5},
+                "slots": slots
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let report = check(dir.path(), &json!({"manifest":"composition.manifest.json"})).unwrap();
+        assert_eq!(report["valid"], true, "{report}");
+        assert_eq!(report["manifest"]["slotCount"], 64);
+        assert_eq!(report["manifest"]["slotsTruncated"], true);
+        assert!(report.to_string().len() <= MAX_OUTPUT_BYTES);
     }
 
     #[test]

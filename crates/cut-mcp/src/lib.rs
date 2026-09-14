@@ -5,6 +5,11 @@
 //! commands back with an idempotency key and revision.
 
 mod composition;
+mod composition_bridge;
+mod composition_catalog;
+mod composition_files;
+mod composition_manifest;
+mod composition_render;
 mod contracts;
 pub mod docs;
 pub mod inbound;
@@ -53,6 +58,9 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     "timeline.query",
     "timeline.check",
     "composition.check",
+    "composition.catalog",
+    "composition.preview",
+    "composition.render",
     "timeline.capture",
     "timeline.apply",
     "media.probe",
@@ -75,6 +83,9 @@ pub const FULL_TOOL_NAMES: &[&str] = &[
     "timeline.query",
     "timeline.check",
     "composition.check",
+    "composition.catalog",
+    "composition.preview",
+    "composition.render",
     "timeline.capture",
     "timeline.apply",
     "project.validate",
@@ -524,6 +535,19 @@ impl CutMcpRouter {
             "timeline.query" => self.timeline_query(arguments),
             "timeline.check" => self.timeline_check(arguments),
             "composition.check" => composition::check(&self.dir, &arguments),
+            "composition.catalog" => composition_catalog::catalog(&self.dir, &arguments),
+            "composition.preview" => composition_render::execute(
+                &self.dir,
+                &arguments,
+                composition_render::Mode::Preview,
+                None,
+            ),
+            "composition.render" => composition_render::execute(
+                &self.dir,
+                &arguments,
+                composition_render::Mode::Render,
+                None,
+            ),
             "timeline.capture" => self.timeline_capture(arguments),
             "timeline.apply" => self.timeline_apply(arguments),
             "timeline.undo" => self.history_move(arguments, false),
@@ -2582,7 +2606,7 @@ impl McpServer {
             router,
             name: "cut-mcp".into(),
             version: env!("CARGO_PKG_VERSION").into(),
-            instructions: "Read the structural project with project.outline or timeline.query, inspect deterministic findings with timeline.check, use media.probe action observe for one bounded cached evidence envelope (frames, filmstrip, waveform, transcript, or listen), capture exact bounded previews with timeline.capture, use proposal.capture for before/after contact sheets, apply canonical v2 commands with timeline.apply, render with render.preview/render.start, and load playbooks with skills.read. Shell access is unavailable.".into(),
+            instructions: "Read the structural project with project.outline or timeline.query, inspect deterministic findings with timeline.check or composition.check, discover local HTML templates with composition.catalog, use composition.preview/composition.render only through the configured deterministic external bridge, use media.probe action observe for one bounded cached evidence envelope (frames, filmstrip, waveform, transcript, or listen), capture exact bounded previews with timeline.capture, use proposal.capture for before/after contact sheets, apply canonical v2 commands with timeline.apply, render canonical timelines with render.preview/render.start, and load playbooks with skills.read. Shell access is unavailable.".into(),
         }
     }
 
@@ -2795,8 +2819,23 @@ fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
             read_only,
         ),
         "composition.check" => (
-            "Statically inspect a local HTML motion composition sidecar without executing HTML, scripts, a browser, CLI, or network requests. Returns bounded metadata, timed elements, assets, nested references and findings; never changes the canonical project or writes a result cache. The entry defaults to index.html and must be a project-relative regular file without symlinks or parent components. Root: data-composition-id, data-composition with id, or id=composition; width/height/fps/duration use data-* attributes (plain attributes also accepted). valid means no errors; deterministic means the entry scan completed with no known determinism violations or uninspected executable dependencies, not a runtime guarantee. Dependencies are only checked for local availability, never read recursively. Error findings cover invalid declarations and unsafe behavior; warnings cover uninspected dependencies. Requires Unix secure file traversal.",
+            "Statically inspect a local HTML motion composition sidecar without executing HTML, scripts, a browser, CLI, or network requests. Returns bounded metadata, typed variable bindings, optional manifest/instance validation, timed elements, assets, nested references and findings; never changes the canonical project or writes a result cache. The entry defaults to index.html and must be a project-relative regular file without symlinks or parent components. An optional schemaVersion 1 manifest declares template identity, explicit width/height/fps/duration output, and typed text/color/number/boolean/enum/image/video/audio slots. An optional instance sidecar contains sparse overrides and must match the manifest template id/version. HTML data-var-* bindings must refer to declared slots. Root: data-composition-id, data-composition with id, or id=composition; width/height/fps/duration use data-* attributes (plain attributes also accepted). valid means no errors; deterministic means the entry scan completed with no known determinism violations or uninspected executable dependencies, not a runtime guarantee. Dependencies are only checked for local availability, never read recursively. Error findings cover invalid declarations, manifest/override mismatches, and unsafe behavior; warnings cover uninspected dependencies. Requires Unix secure file traversal.",
             composition::input_schema(),
+            read_only,
+        ),
+        "composition.catalog" => (
+            "Discover bounded local HTML compositions and their manifest/meta/storyboard metadata without executing scripts or changing canonical state.",
+            composition_catalog::input_schema(),
+            read_only,
+        ),
+        "composition.preview" => (
+            "Render one deterministic composition frame through the configured external JSON bridge and cache the verified PNG artifact.",
+            composition_render::input_schema(composition_render::Mode::Preview),
+            read_only,
+        ),
+        "composition.render" => (
+            "Render a deterministic composition through the configured external JSON bridge and cache the verified MP4 artifact.",
+            composition_render::input_schema(composition_render::Mode::Render),
             read_only,
         ),
         "timeline.capture" => (
@@ -3046,6 +3085,13 @@ fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
 fn example_for_tool(name: &str) -> Value {
     match name {
         "composition.check" => json!({"entry":"index.html"}),
+        "composition.catalog" => json!({}),
+        "composition.preview" => {
+            json!({"entry":"index.html","manifest":"composition.manifest.json","frame":0})
+        }
+        "composition.render" => {
+            json!({"entry":"index.html","manifest":"composition.manifest.json"})
+        }
         "timeline.query" => json!({"trackId":"video-1","limit":50}),
         "timeline.apply" => {
             json!({"commands":[{"type":"update_clip","clipId":"clip-1","patch":{}}]})
@@ -4379,6 +4425,76 @@ mod tests {
         );
         assert!(!root.path().join(".cut").exists());
         assert_eq!(fs::read_dir(root.path()).expect("directory").count(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn composition_catalog_and_render_tools_are_registered_and_routed() {
+        let root = TempDir::new().expect("temp dir");
+        fs::write(
+            root.path().join("index.html"),
+            "<main data-composition-id='catalog' data-width='320' data-height='180' data-fps='30' data-duration='1'></main>",
+        )
+        .expect("composition fixture");
+        let expected = [
+            "composition.check",
+            "composition.catalog",
+            "composition.preview",
+            "composition.render",
+        ];
+
+        for profile in [McpProfile::Core, McpProfile::Full] {
+            let mut router = CutMcpRouter {
+                dir: root.path().to_path_buf(),
+                runtime: RuntimeClient::new(root.path()).expect("client"),
+                skills: Vec::new(),
+                profile,
+                namespace: String::new(),
+            };
+            for namespace in ["", "cut"] {
+                router.namespace = namespace.into();
+                let listed = router.list_tools();
+                let agent_tools = router.agent_tools();
+                for base_name in expected {
+                    assert!(profile.names().contains(&base_name));
+                    let name = router.definition(base_name).name;
+                    let definition = listed
+                        .iter()
+                        .find(|tool| tool.name == name)
+                        .expect("registered composition tool");
+                    assert_eq!(definition.annotations.read_only_hint, Some(true));
+                    assert_eq!(definition.annotations.idempotent_hint, Some(true));
+                    assert_eq!(definition.input_schema["additionalProperties"], false);
+                    assert!(agent_tools.contains_key(base_name));
+
+                    let search = router.call(
+                        &router.definition("tools.search").name,
+                        json!({"query":base_name}),
+                    );
+                    assert_eq!(search["ok"], true, "{search}");
+                    assert!(search["result"]["items"]
+                        .as_array()
+                        .expect("search items")
+                        .iter()
+                        .any(|item| item["name"] == name));
+
+                    let described = router.call(
+                        &router.definition("tools.describe").name,
+                        json!({"name":name}),
+                    );
+                    assert_eq!(described["ok"], true, "{described}");
+                    assert_eq!(described["result"]["tool"]["name"], name);
+                    assert_eq!(described["result"]["example"], example_for_tool(base_name));
+                }
+
+                let catalog_name = router.definition("composition.catalog").name;
+                let response = router.call(&catalog_name, json!({}));
+                assert_eq!(response["ok"], true, "{response}");
+                assert_eq!(response["result"]["items"][0]["entry"], "index.html");
+                assert_eq!(response["result"]["canonicalStateChanged"], false);
+            }
+        }
+        assert!(!root.path().join(".cut").exists());
     }
 
     #[cfg(unix)]

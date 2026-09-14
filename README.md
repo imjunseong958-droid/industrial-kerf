@@ -197,6 +197,9 @@ The core profile contains the stable editing loop:
 | `project.outline` | Read the structural sequence, track, clip, caption, effect, and marker hierarchy |
 | `timeline.query` | Inspect tracks, clips, source ranges, and placement |
 | `timeline.check` | Check source availability, timeline coverage, compiler findings, and capability mismatches |
+| `composition.check` | Inspect a local HTML composition and optionally validate a schema v1 manifest plus sparse instance overrides |
+| `composition.catalog` | Discover local compositions and their manifest/meta/storyboard metadata |
+| `composition.preview` / `composition.render` | Render a composition through the configured external bridge with deterministic caching |
 | `timeline.capture` | Capture a deterministic offline timeline range as a frame or filmstrip |
 | `timeline.apply` | Stage one canonical v2 command or atomic batch for human review |
 | `media.probe` | Run info, silence, scenes, exact frames, filmstrips, waveform, transcription, selected-range listening, or a bounded multi-modal `observe` envelope |
@@ -221,6 +224,58 @@ action also returns the prepared local WAV path. Set
 `CUT_WHISPER_CPP_VERSION` and `CUT_WHISPER_MODEL_VERSION` when packaging or
 pinning sidecar/model versions. A configured provider backend is rejected until
 an explicit upload-capable adapter and UI consent flow exist.
+
+`composition.check` remains read-only. Pass `manifest` with a project-relative
+JSON sidecar to validate `schemaVersion: 1`, template identity, explicit
+output metadata, and typed `text`, `color`, `number`, `boolean`, `enum`,
+`image`, `video`, or `audio` slots. Pass `instance` with a second JSON sidecar
+to validate sparse overrides against that manifest:
+
+~~~json
+{
+  "manifest": "composition.manifest.json",
+  "instance": "launch.instance.json"
+}
+~~~
+
+The HTML entry can expose slot bindings through `data-var-slot-id` or
+`data-var="slotId"`. Media overrides are asset-id strings; the check does not
+import media, update the canonical project, or resolve render provenance.
+
+`composition.catalog` performs bounded, sorted, non-executing discovery of
+HTML entries. A composition directory may contain `index.html`,
+`composition.manifest.json` (or `manifest.json`), `meta.json`,
+`STORYBOARD.md`, and a local thumbnail. Catalog results include template
+identity, output, slots, tags, validation status, and those local references;
+the catalog never changes the canonical project.
+
+`composition.preview` and `composition.render` use an administrator-configured
+external renderer rather than embedding a browser in Cut. Configure both a
+renderer executable and a pinned version:
+
+```bash
+export CUT_COMPOSITION_RENDERER=/absolute/path/to/cut-composition-renderer
+export CUT_COMPOSITION_RENDERER_VERSION=1.0.0
+```
+
+The bridge starts that executable without a shell, clears its environment, and
+sends one bounded JSON request on stdin from a temporary `inputs/` snapshot.
+The worker must write the requested `artifact.path` in its working directory
+and return one JSON object acknowledging `bridgeVersion`, `rendererVersion`,
+`cacheKey`, `inputFingerprint`, `artifact`, and `ok: true`. Preview requests
+default to one PNG frame; render requests default to an MP4 over the complete
+composition frame range. Missing or changed media asset IDs, invalid or
+non-deterministic compositions, missing acknowledgements, invalid output
+signatures, timeouts, and partial artifacts fail closed; there is no authored
+media fallback.
+
+Completed artifacts live under `.cut/cache/derived` and are keyed by the
+normalized template/source/binding/asset fingerprints, renderer identity and
+version, output metadata, mode, frame range, and format. Completion is
+published atomically and the artifact is registered in `.cut/cache/assets.json`
+with template, renderer, and cache provenance. These tools only write
+regenerable cache/provenance artifacts; `project.cut.json`, revisions,
+proposals, and the timeline remain unchanged.
 
 For agent refinement, `media.probe` with `action: "observe"` accepts a required
 bounded `opts.start` plus `opts.end` or `opts.duration`, and an optional
