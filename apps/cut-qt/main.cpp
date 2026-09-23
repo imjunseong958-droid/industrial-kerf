@@ -44,6 +44,7 @@
 #include <QSet>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QResizeEvent>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
@@ -81,7 +82,7 @@ namespace {
 
 constexpr int kTimelineLabelWidth = 94;
 constexpr int kRulerHeight = 28;
-constexpr int kTrackHeight = 56;
+constexpr int kTrackHeight = 64;
 
 QString validateInboundMcpConfig(const QByteArray &raw) {
     QJsonParseError error;
@@ -327,6 +328,211 @@ private:
     QSet<QString> m_requested;
 };
 
+struct MediaEntry {
+    QString id;
+    QString name;
+    QString tip;
+    QPixmap pixmap;
+};
+
+QPixmap mediaPixmap(const QString &id, const QHash<QString, QImage> &frames, const QHash<QString, QImage> &waves) {
+    if (const auto frame = frames.constFind(id); frame != frames.cend() && !frame->isNull())
+        return QPixmap::fromImage(*frame);
+    if (const auto wave = waves.constFind(id); wave != waves.cend() && !wave->isNull()) {
+        QPixmap tile(160, 90);
+        tile.fill(Qt::transparent);
+        QPainter painter(&tile);
+        painter.setOpacity(0.75);
+        painter.drawImage(QRect(0, 30, 160, 32), *wave);
+        return tile;
+    }
+    return {};
+}
+
+// The bin is always two equal 16:9 wells. A single thumbnail stays in the
+// left well instead of floating in whatever width the shelf happens to have.
+class MediaGrid final : public QWidget {
+public:
+    static constexpr int kColumns = 2;
+    static constexpr int kGap = 8;
+
+    void setEntries(QVector<MediaEntry> entries, const QString &selectedId) {
+        m_entries = std::move(entries);
+        m_selectedId = selectedId;
+        syncHeight();
+        update();
+    }
+
+    void setArtwork(const QHash<QString, QImage> &frames, const QHash<QString, QImage> &waves) {
+        for (auto &entry : m_entries) entry.pixmap = mediaPixmap(entry.id, frames, waves);
+        update();
+    }
+
+    QString selectedId() const { return m_selectedId; }
+    int count() const { return static_cast<int>(m_entries.size()); }
+    QRect thumbRect(int index) const { return thumbFor(cellFor(index)); }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        const int wells = wellCount();
+        for (int index = 0; index < wells; ++index) {
+            const QRect thumb = thumbFor(cellFor(index));
+            const bool filled = index < m_entries.size();
+            const bool selected = filled && m_entries.at(index).id == m_selectedId;
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor("#070707"));
+            painter.drawRoundedRect(thumb, 3, 3);
+            if (filled && !m_entries.at(index).pixmap.isNull()) {
+                painter.save();
+                QPainterPath clip;
+                clip.addRoundedRect(QRectF(thumb).adjusted(1, 1, -1, -1), 2, 2);
+                painter.setClipPath(clip);
+                const QPixmap scaled = m_entries.at(index).pixmap.scaled(thumb.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                painter.drawPixmap(QPoint(thumb.center().x() - scaled.width() / 2, thumb.center().y() - scaled.height() / 2), scaled);
+                painter.restore();
+            }
+            painter.setPen(QPen(QColor(selected ? "#d5c3f3" : "#2c2c2c"), 1));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawRoundedRect(QRectF(thumb).adjusted(0.5, 0.5, -0.5, -0.5), 3, 3);
+            if (!filled) continue;
+            painter.setPen(QColor(selected ? "#f3f3f3" : "#c8c8c8"));
+            QFont font = painter.font();
+            font.setPixelSize(11);
+            painter.setFont(font);
+            const QRect label(thumb.left(), thumb.bottom() + 4, thumb.width(), 16);
+            painter.drawText(label, Qt::AlignHCenter | Qt::AlignVCenter,
+                             painter.fontMetrics().elidedText(m_entries.at(index).name, Qt::ElideRight, label.width()));
+        }
+        if (!m_entries.isEmpty()) return;
+        painter.setPen(QColor("#a5a5a5"));
+        QFont hintFont = painter.font();
+        hintFont.setPixelSize(11);
+        painter.setFont(hintFont);
+        const int hintTop = contentOrigin() + thumbHeight() + 10;
+        painter.drawText(QRect(0, hintTop, width(), 34), Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
+                         QStringLiteral("Use + to add a clip."));
+    }
+
+    void mousePressEvent(QMouseEvent *event) override {
+        if (event->button() != Qt::LeftButton) return;
+        const QPoint point = event->position().toPoint();
+        for (int index = 0; index < m_entries.size(); ++index) {
+            if (!cellFor(index).contains(point)) continue;
+            m_selectedId = m_entries.at(index).id;
+            update();
+            return;
+        }
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override {
+        const QPoint point = event->position().toPoint();
+        QString tip;
+        for (int index = 0; index < m_entries.size(); ++index) {
+            if (!cellFor(index).contains(point)) continue;
+            tip = m_entries.at(index).tip;
+            break;
+        }
+        setToolTip(tip);
+    }
+
+    void resizeEvent(QResizeEvent *event) override {
+        QWidget::resizeEvent(event);
+        syncHeight();
+    }
+
+private:
+    int wellCount() const {
+        if (m_entries.isEmpty()) return kColumns;
+        return ((static_cast<int>(m_entries.size()) + kColumns - 1) / kColumns) * kColumns;
+    }
+
+    int columnWidth() const {
+        return std::max(1, (width() - kGap) / kColumns);
+    }
+
+    int thumbHeight() const {
+        return std::max(36, qRound(columnWidth() * 9.0 / 16.0));
+    }
+
+    int cellHeight() const {
+        return thumbHeight() + (m_entries.isEmpty() ? 0 : 22);
+    }
+
+    int contentHeight() const {
+        const int rows = std::max(1, (wellCount() + kColumns - 1) / kColumns);
+        const int wells = rows * cellHeight() + (rows - 1) * kGap;
+        return m_entries.isEmpty() ? wells + 44 : wells;
+    }
+
+    void syncHeight() {
+        const int height = std::max(1, contentHeight());
+        if (minimumHeight() != height) setMinimumHeight(height);
+    }
+
+    int contentOrigin() const {
+        if (!m_entries.isEmpty()) return 0;
+        return std::max(0, (height() - contentHeight()) / 2);
+    }
+
+    QRect cellFor(int index) const {
+        const int width = columnWidth();
+        const int column = index % kColumns;
+        const int row = index / kColumns;
+        return QRect(column * (width + kGap), contentOrigin() + row * (cellHeight() + kGap), width, cellHeight());
+    }
+
+    QRect thumbFor(const QRect &cell) const {
+        return QRect(cell.left(), cell.top(), cell.width(), thumbHeight());
+    }
+
+    QVector<MediaEntry> m_entries;
+    QString m_selectedId;
+};
+
+class MediaBinView final : public QScrollArea {
+public:
+    explicit MediaBinView(QWidget *parent = nullptr) : QScrollArea(parent) {
+        setObjectName(QStringLiteral("mediaList"));
+        setFrameShape(QFrame::NoFrame);
+        setWidgetResizable(true);
+        setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+        m_grid = new MediaGrid;
+        m_grid->setObjectName(QStringLiteral("mediaGrid"));
+        m_grid->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        m_grid->setMouseTracking(true);
+        setWidget(m_grid);
+        viewport()->setAutoFillBackground(false);
+        setMinimumHeight(88);
+    }
+
+    void setSources(const QJsonArray &sources, const QString &selectedId,
+                    const QHash<QString, QImage> &frames, const QHash<QString, QImage> &waves) {
+        QVector<MediaEntry> entries;
+        entries.reserve(static_cast<int>(sources.size()));
+        for (const QJsonValue &value : sources) {
+            const QJsonObject source = value.toObject();
+            const QString id = source.value(QStringLiteral("id")).toString();
+            entries.push_back(MediaEntry{id, sourceName(source), source.value(QStringLiteral("path")).toString(),
+                                          mediaPixmap(id, frames, waves)});
+        }
+        m_grid->setEntries(std::move(entries), selectedId);
+    }
+
+    void setArtwork(const QHash<QString, QImage> &frames, const QHash<QString, QImage> &waves) {
+        m_grid->setArtwork(frames, waves);
+    }
+
+    QString selectedId() const { return m_grid->selectedId(); }
+    int count() const { return m_grid->count(); }
+    QRect thumbRect(int index) const { return m_grid->thumbRect(index); }
+
+private:
+    MediaGrid *m_grid = nullptr;
+};
+
 class TimelineWidget final : public QWidget {
     Q_OBJECT
 public:
@@ -403,11 +609,15 @@ protected:
 
         p.fillRect(0, 0, kTimelineLabelWidth, height(), QColor("#252525"));
         p.fillRect(kTimelineLabelWidth, 0, width() - kTimelineLabelWidth, kRulerHeight, QColor("#292929"));
-        // Paint lanes before the ruler grid so their backgrounds do not erase it.
-        for (int row = 0; row < trackCount; ++row) {
-            const int y = kRulerHeight + row * kTrackHeight;
-            p.fillRect(kTimelineLabelWidth, y, width() - kTimelineLabelWidth, kTrackHeight,
+        // Paint a full lane bed so a short sequence does not sit in an empty well.
+        for (int y = kRulerHeight, row = 0; y < height(); y += kTrackHeight, ++row) {
+            const int laneHeight = std::min(kTrackHeight, height() - y);
+            p.fillRect(kTimelineLabelWidth, y, width() - kTimelineLabelWidth, laneHeight,
                        QColor(row % 2 == 0 ? "#202020" : "#1d1d1d"));
+            if (y + kTrackHeight <= height()) {
+                p.setPen(QColor("#343434"));
+                p.drawLine(0, y + kTrackHeight - 1, width(), y + kTrackHeight - 1);
+            }
         }
 
         QFont rulerFont = p.font();
@@ -439,8 +649,6 @@ protected:
         for (int row = 0; row < trackCount; ++row) {
             const int y = kRulerHeight + row * kTrackHeight;
             if (y + kTrackHeight < visible.top() || y > visible.bottom()) continue;
-            p.setPen(QColor("#303030"));
-            p.drawLine(0, y + kTrackHeight - 1, width(), y + kTrackHeight - 1);
             const QJsonObject track = row < tracks.size() ? tracks.at(row).toObject() : QJsonObject();
             const QColor accent = trackAccent(track, row);
             QString trackTitle = row == 0 ? QStringLiteral("Video 1") : QStringLiteral("Track %1").arg(row + 1);
@@ -477,7 +685,7 @@ protected:
                 p.setPen(QColor("#808080"));
                 p.drawText(QRect(kTimelineLabelWidth + 18, y, width() - kTimelineLabelWidth - 36, kTrackHeight),
                            Qt::AlignVCenter | Qt::TextSingleLine,
-                           tracks.isEmpty() ? QStringLiteral("Import media to begin your timeline") : QStringLiteral("Empty track"));
+                           tracks.isEmpty() ? QStringLiteral("Clips line up here.") : QStringLiteral("Empty lane"));
             }
             for (const QJsonValue &value : clips) {
                 const QJsonObject clip = value.toObject();
@@ -558,11 +766,6 @@ protected:
         p.setPen(QColor("#3a3a3a"));
         p.drawLine(kTimelineLabelWidth, 0, kTimelineLabelWidth, height());
         p.drawLine(0, kRulerHeight - 1, width(), kRulerHeight - 1);
-        if (tracks.isEmpty()) {
-            p.setPen(QColor("#888888"));
-            p.drawText(QRect(kTimelineLabelWidth + 18, trackBottom + 16, width() - kTimelineLabelWidth - 36, 40),
-                       Qt::AlignTop | Qt::TextWordWrap, QStringLiteral("Arrange clips here. Ask Cut for an edit in the assistant panel."));
-        }
         const int playheadX = kTimelineLabelWidth + static_cast<int>(m_playhead * pxPerSecond);
         p.setPen(QPen(QColor(0, 0, 0, 90), 3));
         p.drawLine(playheadX + 1, kRulerHeight, playheadX + 1, height());
@@ -858,13 +1061,18 @@ protected:
         p.fillRect(0, 0, width(), 36, QColor("#2a2a2a"));
         p.drawLine(12, 36, width() - 12, 36);
         const QRectF canvas = videoRect();
-        p.setPen(QColor("#202020"));
+        QPainterPath canvasPath;
+        canvasPath.addRoundedRect(canvas.adjusted(0.5, 0.5, -0.5, -0.5), 3, 3);
+        p.setPen(QPen(QColor("#1a1a1a"), 1));
         p.setBrush(QColor("#070707"));
-        p.drawRect(canvas.adjusted(0.5, 0.5, -0.5, -0.5));
+        p.drawPath(canvasPath);
         if (!m_frame.isNull()) {
+            p.save();
+            p.setClipPath(canvasPath);
             QImage scaled = m_frame.scaled(canvas.size().toSize(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
             const QPointF topLeft(canvas.center().x() - scaled.width() / 2.0, canvas.center().y() - scaled.height() / 2.0);
             p.drawImage(topLeft, scaled);
+            p.restore();
         } else {
             const QPointF center = canvas.center() - QPointF(0, 22);
             p.setPen(QColor("#363636"));
@@ -881,7 +1089,7 @@ protected:
                        QStringLiteral("Your viewer"));
             p.setPen(QColor("#747474"));
             p.drawText(QRectF(canvas.left(), center.y() + 52, canvas.width(), 20), Qt::AlignCenter,
-                       QStringLiteral("Import media or render a preview"));
+                       QStringLiteral("The playhead frame shows here."));
         }
         p.setPen(QColor("#a0a0a0"));
         QFont viewerFont = p.font();
@@ -1367,9 +1575,10 @@ private:
         m_mediaPanel = mediaShelf;
         mediaShelf->setObjectName(QStringLiteral("mediaShelf"));
         mediaShelf->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
-        mediaShelf->setMinimumWidth(180);
+        // Two 16:9 wells plus the gap and the shelf padding.
+        mediaShelf->setMinimumWidth(252);
         auto *mediaShelfLayout = new QVBoxLayout(mediaShelf);
-        mediaShelfLayout->setContentsMargins(12, 10, 12, 12);
+        mediaShelfLayout->setContentsMargins(10, 10, 10, 10);
         mediaShelfLayout->setSpacing(8);
         auto *mediaHeader = new QHBoxLayout;
         auto *mediaTitle = new QLabel(QStringLiteral("Media"));
@@ -1389,40 +1598,19 @@ private:
         mediaToggle->setObjectName(QStringLiteral("mediaToggle"));
         mediaToggle->hide();
         mediaShelfLayout->addLayout(mediaHeader);
-        m_mediaList = new QListWidget;
-        m_mediaList->setObjectName(QStringLiteral("mediaList"));
-        m_mediaList->setSelectionMode(QAbstractItemView::SingleSelection);
-        m_mediaList->setFlow(QListView::LeftToRight);
-        m_mediaList->setWrapping(true);
-        m_mediaList->setViewMode(QListView::IconMode);
-        m_mediaList->setResizeMode(QListView::Adjust);
-        m_mediaList->setIconSize(QSize(112, 63));
-        m_mediaList->setGridSize(QSize(128, 88));
-        m_mediaList->setMovement(QListView::Static);
-        m_mediaList->setMinimumHeight(90);
-        m_mediaList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_mediaList = new MediaBinView;
         connect(m_artwork, &MediaArtwork::changed, this, [this] {
-            for (int i = 0; i < m_mediaList->count(); ++i) {
-                auto *item = m_mediaList->item(i);
-                const QString id = item->data(Qt::UserRole).toString();
-                item->setIcon(m_artwork->icon(id));
-            }
+            m_mediaList->setArtwork(m_artwork->frames, m_artwork->waves);
         });
-        auto *mediaList = m_mediaList;
         mediaShelfLayout->addWidget(m_mediaList, 1);
-        auto *mediaHint = new QLabel(QStringLiteral("Import media to add clips to the timeline."));
-        m_mediaHint = mediaHint;
-        mediaHint->setObjectName(QStringLiteral("muted"));
-        mediaHint->setWordWrap(true);
-        mediaShelfLayout->addWidget(mediaHint);
         auto *trackButton = new QPushButton(QStringLiteral("+ Track"));
-        trackButton->setObjectName(QStringLiteral("secondaryButton"));
+        trackButton->setObjectName(QStringLiteral("transportButton"));
+        trackButton->setToolTip(QStringLiteral("Add a timeline lane"));
         connect(trackButton, &QPushButton::clicked, this, &MainWindow::addTrack);
         mediaToggle->setText(QStringLiteral("▸"));
-        connect(mediaToggle, &QToolButton::clicked, mediaShelf, [mediaShelf, mediaList, mediaHint, mediaToggle] {
+        connect(mediaToggle, &QToolButton::clicked, mediaShelf, [mediaShelf, mediaList = m_mediaList, mediaToggle] {
             const bool collapsed = mediaList->isVisible();
             mediaList->setVisible(!collapsed);
-            mediaHint->setVisible(!collapsed && mediaList->count() == 0);
             mediaToggle->setText(collapsed ? QStringLiteral("▸") : QStringLiteral("▾"));
             mediaToggle->setToolTip(collapsed ? QStringLiteral("Expand media bin") : QStringLiteral("Collapse media bin"));
             mediaShelf->setProperty("collapsed", collapsed);
@@ -1452,7 +1640,7 @@ private:
         browserViewerSplit->addWidget(viewerFrame);
         browserViewerSplit->setStretchFactor(0, 0);
         browserViewerSplit->setStretchFactor(1, 1);
-        browserViewerSplit->setSizes({250, 870});
+        browserViewerSplit->setSizes({300, 860});
         editorSplit->addWidget(browserViewerSplit);
 
         auto *timelinePanel = new QWidget;
@@ -1475,11 +1663,15 @@ private:
         connect(m_playButton, &QToolButton::clicked, this, &MainWindow::togglePlayback);
         transportLayout->addWidget(m_playButton);
         auto *back = new QToolButton;
-        back->setText(QStringLiteral("−5"));
+        back->setObjectName(QStringLiteral("transportButton"));
+        back->setText(QStringLiteral("−5s"));
+        back->setToolTip(QStringLiteral("Back five seconds"));
         connect(back, &QToolButton::clicked, this, [this] { queueSeek(m_playhead - 5); });
         transportLayout->addWidget(back);
         auto *forward = new QToolButton;
-        forward->setText(QStringLiteral("+5"));
+        forward->setObjectName(QStringLiteral("transportButton"));
+        forward->setText(QStringLiteral("+5s"));
+        forward->setToolTip(QStringLiteral("Forward five seconds"));
         connect(forward, &QToolButton::clicked, this, [this] { queueSeek(m_playhead + 5); });
         transportLayout->addWidget(forward);
         m_timeLabel = new QLabel(QStringLiteral("00:00.00 / 00:00.00"));
@@ -1488,8 +1680,9 @@ private:
         transportLayout->addStretch();
         transportLayout->addWidget(trackButton);
         auto *fitButton = new QToolButton;
+        fitButton->setObjectName(QStringLiteral("transportButton"));
         fitButton->setText(QStringLiteral("Fit"));
-        fitButton->setToolTip(QStringLiteral("Fit the entire timeline"));
+        fitButton->setToolTip(QStringLiteral("Fit the timeline to the window"));
         connect(fitButton, &QToolButton::clicked, this, [this] {
             m_timeline->fitToWidth(m_timelineScroll->viewport()->width());
             m_timelineScroll->horizontalScrollBar()->setValue(0);
@@ -1520,19 +1713,21 @@ private:
         timelineScroll->viewport()->installEventFilter(this);
         timelineLayout->addWidget(timelineScroll);
         timelinePanelLayout->addWidget(timelineFrame, 1);
+        timelinePanel->setMinimumHeight(220);
         editorSplit->addWidget(timelinePanel);
-        editorSplit->setSizes({550, 310});
+        // Extra window height goes to the viewer. The timeline stays a lane bed.
         editorSplit->setStretchFactor(0, 1);
-        editorSplit->setStretchFactor(1, 1);
+        editorSplit->setStretchFactor(1, 0);
+        editorSplit->setSizes({640, 268});
 
         auto *right = new QWidget;
         m_agentPanel = right;
         right->setObjectName(QStringLiteral("assistantPanel"));
         right->setAttribute(Qt::WA_StyledBackground);
-        right->setMinimumWidth(320);
+        right->setMinimumWidth(300);
         auto *rightLayout = new QVBoxLayout(right);
-        rightLayout->setContentsMargins(16, 14, 16, 14);
-        rightLayout->setSpacing(12);
+        rightLayout->setContentsMargins(12, 12, 12, 12);
+        rightLayout->setSpacing(10);
         auto *agentHeader = new QHBoxLayout;
         auto *agentTitle = new QLabel(QStringLiteral("Cut Assistant"));
         agentTitle->setObjectName(QStringLiteral("assistantTitle"));
@@ -1576,14 +1771,13 @@ private:
         m_conversation->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         m_conversation->document()->setDocumentMargin(2);
         m_conversation->setHtml(QStringLiteral(
-            "<p style='margin-top:28px; color:#b5a6cf; font-size:11px;'>YOUR EDITING PARTNER</p>"
-            "<p style='margin-top:12px; color:#f0f0f0; font-size:24px; font-weight:600;'>Make your next cut.</p>"
-            "<p style='margin-top:12px; color:#b6b6b6;'>Describe what you want to change. Cut works with your timeline and media.</p>"
-            "<p style='margin-top:24px; color:#888888; font-size:11px;'>TRY ASKING</p>"
-            "<p style='color:#dddddd;'>“Trim the opening to three seconds.”</p>"
-            "<p style='color:#dddddd;'>“Lower the music under the dialogue.”</p>"
-            "<p style='margin-top:24px; color:#999999; font-size:12px;'>Review proposed changes before applying them.<br/>"
-            "Manage your AI connection in Settings.</p>"));
+            "<p style='margin-top:4px; color:#b5a6cf; font-size:11px;'>YOUR EDITING PARTNER</p>"
+            "<p style='margin-top:4px; color:#f0f0f0; font-size:18px; font-weight:600;'>Make your next cut.</p>"
+            "<p style='margin-top:6px; color:#b6b6b6;'>Describe the change. Cut uses this timeline.</p>"
+            "<p style='margin-top:14px; color:#888888; font-size:11px;'>TRY ASKING</p>"
+            "<p style='margin-top:2px; color:#dddddd;'>“Trim the opening to three seconds.”</p>"
+            "<p style='margin-top:2px; color:#dddddd;'>“Lower the music under the dialogue.”</p>"
+            "<p style='margin-top:14px; color:#999999; font-size:12px;'>Review a proposal before it changes the cut.</p>"));
         chatLayout->addWidget(m_conversation, 1);
         auto *composer = new QFrame;
         m_chatComposer = composer;
@@ -1923,7 +2117,8 @@ private:
         workspace->setCollapsible(0, false);
         workspace->setCollapsible(1, false);
         workspace->setStretchFactor(0, 1);
-        workspace->setSizes({1120, 380});
+        workspace->setStretchFactor(1, 0);
+        workspace->setSizes({1168, 332});
         setCentralWidget(central);
 
         connect(m_timeline, &TimelineWidget::seekRequested, this, &MainWindow::queueSeek);
@@ -2101,22 +2296,31 @@ private:
         toolbar->addWidget(spacerRight);
         m_quality = new QualityComboBox;
         m_quality->setObjectName(QStringLiteral("qualityPicker"));
+        m_quality->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+        m_quality->setToolTip(QStringLiteral("Export quality"));
         m_quality->addItem(QStringLiteral("Preview"), QStringLiteral("preview"));
         m_quality->addItem(QStringLiteral("Full"), QStringLiteral("full"));
         toolbar->addWidget(m_quality);
         m_canvasPreset = new QualityComboBox;
         m_canvasPreset->setObjectName(QStringLiteral("canvasPicker"));
-        m_canvasPreset->addItem(QStringLiteral("16:9  1920 × 1080"), QStringLiteral("1920x1080"));
-        m_canvasPreset->addItem(QStringLiteral("9:16  1080 × 1920"), QStringLiteral("1080x1920"));
+        m_canvasPreset->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+        m_canvasPreset->addItem(QStringLiteral("16:9"), QStringLiteral("1920x1080"));
+        m_canvasPreset->addItem(QStringLiteral("9:16"), QStringLiteral("1080x1920"));
         m_canvasPreset->setToolTip(QStringLiteral("Project format"));
         connect(m_canvasPreset, qOverload<int>(&QComboBox::currentIndexChanged),
                 this, &MainWindow::canvasPresetChanged);
         toolbar->addWidget(m_canvasPreset);
         auto *exportToolbar = toolbar->addAction(QStringLiteral("Export"));
+        exportToolbar->setToolTip(QStringLiteral("Export the timeline"));
         connect(exportToolbar, &QAction::triggered, this, &MainWindow::exportProject);
-        m_previewButton = toolbar->addAction(QStringLiteral("Render preview"));
+        if (auto *exportButton = qobject_cast<QToolButton *>(toolbar->widgetForAction(exportToolbar)))
+            exportButton->setObjectName(QStringLiteral("toolbarPrimary"));
+        m_previewButton = toolbar->addAction(QStringLiteral("Render"));
+        m_previewButton->setToolTip(QStringLiteral("Render a preview of the timeline"));
         m_previewButton->setEnabled(false);
         connect(m_previewButton, &QAction::triggered, this, &MainWindow::renderPreview);
+        if (auto *renderButton = qobject_cast<QToolButton *>(toolbar->widgetForAction(m_previewButton)))
+            renderButton->setObjectName(QStringLiteral("toolbarQuiet"));
         m_runtimeActions = {import, exportAction, refreshAction, splitAction, deleteAction, play, split, deleteToolbar, exportToolbar};
     }
 
@@ -2304,20 +2508,9 @@ private:
         syncCanvasPreset(canvasSize);
         m_artwork->request(sources, m_projectDirectory);
         if (sources != m_displayedSources) {
-            const QString selectedSource = m_mediaList->currentItem() ? m_mediaList->currentItem()->data(Qt::UserRole).toString() : QString();
-            m_mediaList->clear();
-            for (const QJsonValue &value : sources) {
-                const QJsonObject source = value.toObject();
-                auto *item = new QListWidgetItem(sourceName(source), m_mediaList);
-                item->setToolTip(source.value(QStringLiteral("path")).toString());
-                item->setData(Qt::UserRole, source.value(QStringLiteral("id")).toString());
-                const QString sourceId = source.value("id").toString();
-                item->setIcon(m_artwork->icon(sourceId));
-                if (item->data(Qt::UserRole).toString() == selectedSource) m_mediaList->setCurrentItem(item);
-            }
+            m_mediaList->setSources(sources, m_mediaList->selectedId(), m_artwork->frames, m_artwork->waves);
             if (!sources.isEmpty()) {
                 m_mediaList->show();
-                m_mediaHint->hide();
                 m_mediaToggle->setText(QStringLiteral("▾"));
                 m_mediaToggle->setToolTip(QStringLiteral("Collapse media bin"));
             }
@@ -2590,7 +2783,6 @@ private:
     QFrame *m_errorBanner = nullptr;
     QLabel *m_errorMessage = nullptr;
     QWidget *m_mediaPanel = nullptr;
-    QLabel *m_mediaHint = nullptr;
     QToolButton *m_mediaToggle = nullptr;
     QWidget *m_agentPanel = nullptr;
     QScrollArea *m_timelineScroll = nullptr;
@@ -2620,7 +2812,7 @@ private:
 
     ViewerWidget *m_viewer = nullptr;
     TimelineWidget *m_timeline = nullptr;
-    QListWidget *m_mediaList = nullptr;
+    MediaBinView *m_mediaList = nullptr;
     QTextEdit *m_conversation = nullptr;
     QTextCursor m_agentCursor;
     QLabel *m_chatActivity = nullptr;
@@ -2968,6 +3160,52 @@ private slots:
             QCoreApplication::processEvents();
             QVERIFY(window.grab().save(screenshot + QStringLiteral(".chat.png")));
         }
+    }
+
+    void mediaBinAlignsTwoVideoCells() {
+        MediaBinView bin;
+        bin.resize(300, 240);
+        bin.show();
+        QTest::qWait(30);
+
+        const QRect emptyLeft = bin.thumbRect(0);
+        const QRect emptyRight = bin.thumbRect(1);
+        QVERIFY(emptyLeft.width() > 90);
+        QCOMPARE(emptyLeft.size(), emptyRight.size());
+        QCOMPARE(emptyLeft.top(), emptyRight.top());
+        QVERIFY(emptyLeft.top() > 8);
+        QCOMPARE(emptyLeft.left(), 0);
+        QVERIFY(std::abs(emptyRight.left() - (emptyLeft.right() + MediaGrid::kGap)) <= 1);
+        QVERIFY(std::abs(emptyLeft.height() * 16 - emptyLeft.width() * 9) <= 16);
+        QVERIFY(bin.viewport()->width() - emptyRight.right() <= 1);
+
+        const QJsonArray sources{
+            QJsonObject{{"id", "left"}, {"path", "/tmp/left.mp4"}},
+            QJsonObject{{"id", "right"}, {"path", "/tmp/right.mp4"}},
+            QJsonObject{{"id", "below"}, {"path", "/tmp/below.mp4"}},
+        };
+        bin.setSources(sources, QString(), {}, {});
+        QTest::qWait(20);
+        const QRect left = bin.thumbRect(0);
+        const QRect right = bin.thumbRect(1);
+        const QRect below = bin.thumbRect(2);
+        QCOMPARE(left.top(), 0);
+        QCOMPARE(left.size(), right.size());
+        QCOMPARE(left.top(), right.top());
+        QVERIFY(right.left() > left.right());
+        QCOMPARE(below.left(), left.left());
+        QCOMPARE(below.width(), left.width());
+        QVERIFY(below.top() > left.bottom());
+
+        bin.setSources(QJsonArray{sources.at(0)}, QString(), {}, {});
+        QTest::qWait(20);
+        const QRect single = bin.thumbRect(0);
+        const QRect partner = bin.thumbRect(1);
+        QCOMPARE(single.size(), left.size());
+        QCOMPARE(single.topLeft(), left.topLeft());
+        QCOMPARE(partner.size(), right.size());
+        QCOMPARE(partner.topLeft(), right.topLeft());
+        QVERIFY(single.right() < bin.viewport()->width() / 2);
     }
 
     void timelineKeepsSeekSelectMoveAndTrimCoordinates() {

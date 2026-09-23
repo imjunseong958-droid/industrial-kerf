@@ -460,7 +460,7 @@ fn dimension(value: f64) -> u32 {
 
 fn preview_frame_size(project: &Value) -> (u32, u32) {
     let (width, height) = preview_canvas_size(project);
-    let scale = (1280.0 / f64::from(width.max(height))).min(1.0);
+    let scale = (1920.0 / f64::from(width.max(height))).min(1.0);
     (
         dimension(f64::from(width) * scale),
         dimension(f64::from(height) * scale),
@@ -1206,7 +1206,7 @@ mod tests {
         });
 
         assert_eq!(preview_canvas_size(&project), (1080, 1920));
-        assert_eq!(preview_frame_size(&project), (720, 1280));
+        assert_eq!(preview_frame_size(&project), (1080, 1920));
     }
 
     #[test]
@@ -1222,7 +1222,7 @@ mod tests {
         });
 
         assert_eq!(preview_canvas_size(&project), (1080, 1920));
-        assert_eq!(preview_frame_size(&project), (720, 1280));
+        assert_eq!(preview_frame_size(&project), (1080, 1920));
     }
 
     #[test]
@@ -1230,7 +1230,7 @@ mod tests {
         let project = json!({"version": 2, "sources": []});
 
         assert_eq!(preview_canvas_size(&project), (1920, 1080));
-        assert_eq!(preview_frame_size(&project), (1280, 720));
+        assert_eq!(preview_frame_size(&project), (1920, 1080));
     }
 
     #[test]
@@ -1242,6 +1242,6 @@ mod tests {
         });
 
         assert_eq!(preview_canvas_size(&project), (20_000, 10_000));
-        assert_eq!(preview_frame_size(&project), (1280, 640));
+        assert_eq!(preview_frame_size(&project), (1920, 960));
     }
 }

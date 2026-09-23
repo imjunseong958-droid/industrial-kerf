@@ -166,6 +166,70 @@ QToolButton#playButton {
 }
 QToolButton#playButton:hover { background: #d9d9d9; }
 QToolButton#playButton:disabled { background: #363636; color: #777777; border-color: #303030; }
+QToolButton#transportButton,
+QPushButton#transportButton {
+    background: transparent;
+    border: 1px solid #3c3c3c;
+    border-radius: 4px;
+    color: #d2d2d2;
+    padding: 3px 8px;
+    min-height: 22px;
+    font-size: 12px;
+}
+QToolButton#transportButton:hover,
+QPushButton#transportButton:hover {
+    background: #333333;
+    border-color: #5a5a5a;
+    color: #f2f2f2;
+}
+QToolBar QComboBox#qualityPicker,
+QToolBar QComboBox#canvasPicker {
+    background: #2a2a2a;
+    border: 1px solid #343434;
+    border-radius: 4px;
+    padding: 1px 22px 1px 8px;
+    min-height: 20px;
+}
+QToolBar QComboBox#qualityPicker:hover,
+QToolBar QComboBox#canvasPicker:hover {
+    background: #333333;
+    border-color: #4a4a4a;
+}
+QToolBar QComboBox#qualityPicker::drop-down,
+QToolBar QComboBox#canvasPicker::drop-down {
+    border: 0;
+    width: 18px;
+}
+QToolBar QToolButton#toolbarPrimary {
+    background: #c8c8c8;
+    border: 1px solid #dbdbdb;
+    border-radius: 4px;
+    color: #1c1c1c;
+    font-weight: 600;
+    padding: 3px 10px;
+}
+QToolBar QToolButton#toolbarPrimary:hover { background: #d9d9d9; }
+QToolBar QToolButton#toolbarPrimary:disabled {
+    color: #777777;
+    background: #363636;
+    border-color: #303030;
+}
+QToolBar QToolButton#toolbarQuiet {
+    background: transparent;
+    border: 1px solid transparent;
+    color: #c8c8c8;
+    padding: 3px 8px;
+}
+QToolBar QToolButton#toolbarQuiet:hover {
+    background: #2c2c2c;
+    border-color: #3a3a3a;
+    color: #f2f2f2;
+}
+QToolBar QToolButton#toolbarQuiet:disabled {
+    color: #6a6a6a;
+    background: transparent;
+    border-color: transparent;
+}
 QToolButton#mediaToggle {
     background: transparent;
     border: 0;
@@ -260,7 +324,9 @@ QListWidget::item { padding: 4px; border: 0; border-radius: 4px; }
 QListWidget::item:hover { background: #343434; }
 QListWidget::item:selected { background: #484848; color: #f5f5f5; }
 QListWidget#mediaList,
-QListWidget#activityList { background: transparent; border: 0; padding: 0; }
+QListWidget#activityList,
+QScrollArea#mediaList { background: transparent; border: 0; padding: 0; }
+QWidget#mediaGrid { background: transparent; }
 QTextEdit#conversation { background: transparent; border: 0; padding: 4px 0; color: #d0d0d0; }
 QTextEdit#chatInput {
     background: transparent;
