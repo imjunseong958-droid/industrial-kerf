@@ -30,7 +30,7 @@ pub(crate) fn is_eof(error: &ffmpeg::Error) -> bool {
 }
 
 pub(crate) fn seek_to(input: &mut ffmpeg::format::context::Input, seconds: f64) {
-    if !seconds.is_finite() || seconds <= 0.0 {
+    if !seconds.is_finite() || seconds < 0.0 {
         return;
     }
     let ts = (seconds * 1_000_000.0).round() as i64;

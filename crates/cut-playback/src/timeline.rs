@@ -54,6 +54,17 @@ impl PlaybackClip {
         let elapsed = (timeline_time - self.timeline_start).max(0.0);
         (self.source_in + elapsed * self.speed).min(self.source_out)
     }
+
+    /// Map a source timestamp back into this clip's timeline interval.
+    pub fn timeline_time_for_source(&self, source_time: f64) -> f64 {
+        let speed = if self.speed.is_finite() && self.speed > 0.0 {
+            self.speed
+        } else {
+            1.0
+        };
+        let time = self.timeline_start + (source_time - self.source_in) / speed;
+        time.clamp(self.timeline_start, self.timeline_end())
+    }
 }
 
 /// A clip together with its resolved source.
@@ -509,9 +520,9 @@ fn dimension(value: f64) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::PlaybackTimeline;
+    use super::{PlaybackClip, PlaybackTimeline};
     use cut_core::capability::{capability, CapabilitySupport, EditCapability};
-    use cut_domain::parse_project;
+    use cut_domain::{parse_project, TrackType};
     use serde_json::json;
 
     fn project(extra: serde_json::Value) -> cut_domain::Project {
@@ -694,6 +705,26 @@ mod tests {
         );
         assert!(timeline.video_at(f64::NAN).is_none());
         assert_eq!(timeline.next_video_start_after(f64::NAN), None);
+    }
+
+    #[test]
+    fn source_time_maps_back_onto_the_clip_timeline() {
+        let clip = PlaybackClip {
+            id: "clip".into(),
+            track_id: "video-1".into(),
+            track_kind: TrackType::Video,
+            source_id: "source-a".into(),
+            timeline_start: 2.0,
+            duration: 4.0,
+            source_in: 1.0,
+            source_out: 5.0,
+            speed: 2.0,
+            volume: 1.0,
+            track_muted: false,
+        };
+        assert!((clip.timeline_time_for_source(1.0) - 2.0).abs() < 1e-9);
+        assert!((clip.timeline_time_for_source(5.0) - 4.0).abs() < 1e-9);
+        assert!((clip.source_time_at(clip.timeline_time_for_source(3.0)) - 3.0).abs() < 1e-9);
     }
 
     #[test]

@@ -72,6 +72,10 @@ enum Command {
     Pause,
     Seek {
         position: f64,
+        /// Pointer is still moving. The playback worker shows the nearest
+        /// picture immediately; a later seek without this flag is exact.
+        #[serde(default)]
+        scrub: bool,
     },
     Volume {
         value: f32,
@@ -86,6 +90,11 @@ enum MediaProject {
     Rendered(Value),
 }
 
+struct PendingSeek {
+    position: f64,
+    exact: bool,
+}
+
 struct Shared {
     closed: AtomicBool,
     revision: AtomicU64,
@@ -93,7 +102,7 @@ struct Shared {
     export_busy: AtomicBool,
     abort: Mutex<Option<Arc<AtomicBool>>>,
     frame: Mutex<Option<PlaybackFrame>>,
-    seek: Mutex<Option<f64>>,
+    seek: Mutex<Option<PendingSeek>>,
     project: Mutex<Option<MediaProject>>,
 }
 
@@ -540,14 +549,16 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
                 }
             }
             let seek = shared.seek.lock().ok().and_then(|mut slot| slot.take());
-            if let Some(position) = seek {
-                // A frame decoded before this seek belongs to the old target.
-                // Clear the replaceable slot before asking the session to
-                // decode so a hover skim cannot briefly show stale media.
-                if let Ok(mut frame) = shared.frame.lock() {
-                    *frame = None;
-                }
-                if let Err(err) = handle.seek(position) {
+            if let Some(seek) = seek {
+                // Keep the picture that is already on screen. The UI drops a
+                // frame only when a newer one is closer to the pointer, so
+                // clearing this slot just freezes the viewer during a scrub.
+                let result = if seek.exact {
+                    handle.seek(seek.position)
+                } else {
+                    handle.scrub(seek.position)
+                };
+                if let Err(err) = result {
                     error(&tx, err);
                 }
             }
@@ -586,7 +597,11 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
                 }
             }
         }
-        thread::sleep(Duration::from_millis(4));
+        thread::sleep(if session.is_some() {
+            Duration::from_millis(1)
+        } else {
+            Duration::from_millis(4)
+        });
     }
 }
 
@@ -893,12 +908,15 @@ pub unsafe extern "C" fn cut_bridge_send(bridge: *mut c_void, message: *const c_
         return false;
     };
     match command {
-        Command::Seek { position } => {
+        Command::Seek { position, scrub } => {
             if !position.is_finite() || position < 0.0 {
                 return false;
             }
             if let Ok(mut slot) = bridge.shared.seek.try_lock() {
-                *slot = Some(position);
+                *slot = Some(PendingSeek {
+                    position,
+                    exact: !scrub,
+                });
                 true
             } else {
                 false
