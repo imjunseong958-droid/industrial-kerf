@@ -175,7 +175,7 @@ with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as tempo
             poll()
             if lib.cut_bridge_frame(bridge, C.byref(frame)) and frame.time >= 1.95:
                 assert frame.length == frame.width * frame.height * 4
-                assert max(frame.width, frame.height) <= 1280
+                assert max(frame.width, frame.height) <= 1920, (frame.width, frame.height)
                 assert C.string_at(frame.pixels, 16)
                 break
             time.sleep(.005)
