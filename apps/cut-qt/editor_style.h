@@ -72,7 +72,6 @@ QToolBar::separator {
 
 QWidget#panel,
 QWidget#assistantPanel,
-QFrame#mediaShelf,
 QFrame#viewerFrame,
 QWidget#timelinePanel {
     background: #242424;
@@ -80,6 +79,11 @@ QWidget#timelinePanel {
     border-radius: 0px;
 }
 QFrame#timelineFrame {
+    background: transparent;
+    border: 0;
+}
+QWidget#bottomBand { background: #141414; }
+QFrame#sourceTray {
     background: transparent;
     border: 0;
 }
