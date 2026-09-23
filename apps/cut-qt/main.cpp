@@ -82,7 +82,17 @@ namespace {
 
 constexpr int kTimelineLabelWidth = 94;
 constexpr int kRulerHeight = 0;
-constexpr int kTrackHeight = 64;
+constexpr int kTrackHeight = 40;
+constexpr int kClipInset = 3;
+
+// While the pointer is driving the viewer, keep a frame when it is closer to
+// the target than the one already on screen. Equal distance still replaces so
+// an exact decode can take over a keyframe labeled at the same time.
+inline bool nearerScrubFrame(double shownTime, bool hasShown, double frameTime, double target, double fps) {
+    if (!hasShown) return true;
+    const double slack = 0.5 / std::max(1.0, fps);
+    return std::abs(frameTime - target) <= std::abs(shownTime - target) + slack;
+}
 
 QString validateInboundMcpConfig(const QByteArray &raw) {
     QJsonParseError error;
@@ -422,7 +432,7 @@ protected:
                 painter.drawLine(badge.left() + 3, badge.center().y(), badge.center().x() - 1, badge.bottom() - 3);
                 painter.drawLine(badge.center().x() - 1, badge.bottom() - 3, badge.right() - 2, badge.top() + 3);
             }
-            const QColor edge = selected ? QColor("#f3f3f3")
+            const QColor edge = selected ? QColor("#f0b429")
                                          : !filled ? QColor(hover ? "#d7d7d7" : "#6a6a6a")
                                                    : QColor(hover ? "#6e6e6e" : "#2c2c2c");
             painter.setPen(QPen(edge, selected || !filled ? 1.5 : 1));
@@ -585,9 +595,27 @@ public:
     }
 
     void setPlayhead(double time) {
+        const double previous = m_playhead;
         m_playhead = std::clamp(time, 0.0, m_duration);
-        update();
+        update(timeBand(previous));
+        update(timeBand(m_playhead));
     }
+
+    void showSkimmer(double time) {
+        const double previous = m_skimmerTime;
+        const bool had = m_hasSkimmer;
+        const QPoint previousAnchor = m_feedbackPoint;
+        m_skimmerTime = std::clamp(time, 0.0, m_duration);
+        m_hasSkimmer = true;
+        m_feedbackPoint = QPoint(kTimelineLabelWidth + static_cast<int>(m_skimmerTime * pixelsPerSecond()),
+                                 kRulerHeight + kTrackHeight / 2);
+        if (had) update(timeBand(previous));
+        update(timeBand(m_skimmerTime));
+        update(chipSweep(previousAnchor));
+        update(chipSweep(m_feedbackPoint));
+    }
+
+    double skimmerTime() const { return m_skimmerTime; }
 
     void setZoom(double zoom) {
         m_zoom = std::clamp(zoom, 0.35, 3.5);
@@ -610,9 +638,11 @@ public:
 
     void clearSkimmer() {
         if (!m_hasSkimmer) return;
+        const double previous = m_skimmerTime;
         m_hasSkimmer = false;
-        emit hoverSeekEnded();
-        update();
+        update(timeBand(previous));
+        update(timeBand(m_playhead));
+        update(chipSweep(m_feedbackPoint));
     }
 
     QSize minimumSizeHint() const override { return minimumSize(); }
@@ -635,20 +665,20 @@ protected:
         const QRect visible = event->rect();
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
-        p.fillRect(rect(), QColor("#1b1b1b"));
+        p.fillRect(rect(), QColor("#121212"));
 
         const int trackCount = static_cast<int>(std::max<qsizetype>(1, m_project.value(QStringLiteral("tracks")).toArray().size()));
         const int trackBottom = kRulerHeight + trackCount * kTrackHeight;
         const double pxPerSecond = pixelsPerSecond();
 
-        p.fillRect(0, 0, kTimelineLabelWidth, height(), QColor("#252525"));
+        p.fillRect(0, 0, kTimelineLabelWidth, height(), QColor("#1a1a1a"));
         // Paint a full lane bed so a short sequence does not sit in an empty well.
         for (int y = kRulerHeight, row = 0; y < height(); y += kTrackHeight, ++row) {
             const int laneHeight = std::min(kTrackHeight, height() - y);
             p.fillRect(kTimelineLabelWidth, y, width() - kTimelineLabelWidth, laneHeight,
-                       QColor(row % 2 == 0 ? "#202020" : "#1d1d1d"));
+                       QColor(row % 2 == 0 ? "#161616" : "#121212"));
             if (y + kTrackHeight <= height()) {
-                p.setPen(QColor("#343434"));
+                p.setPen(QColor("#0c0c0c"));
                 p.drawLine(0, y + kTrackHeight - 1, width(), y + kTrackHeight - 1);
             }
         }
@@ -661,7 +691,7 @@ protected:
         const int firstSecond = std::max(0, static_cast<int>(std::floor((visible.left() - kTimelineLabelWidth) / pxPerSecond)) - 1);
         const int lastSecond = std::min(static_cast<int>(std::ceil(m_duration)),
                                         static_cast<int>(std::ceil((visible.right() - kTimelineLabelWidth) / pxPerSecond)) + 1);
-        p.setPen(QColor("#2a2a2a"));
+        p.setPen(QColor("#242424"));
         for (int second = firstSecond / majorStep * majorStep; second <= lastSecond; second += majorStep) {
             const int x = kTimelineLabelWidth + static_cast<int>(second * pxPerSecond);
             p.drawLine(x, 0, x, trackBottom);
@@ -685,22 +715,19 @@ protected:
                                          : type.contains(QStringLiteral("title")) || type.contains(QStringLiteral("graphic"))
                                                ? QStringLiteral("T")
                                                : QStringLiteral("V");
-            p.setPen(QColor("#393939"));
+            const int badge = 16;
+            const int badgeY = y + (kTrackHeight - badge) / 2;
+            p.setPen(QColor("#3a3a3a"));
             p.setBrush(QColor("#222222"));
-            p.drawRoundedRect(QRectF(8, y + 12, 16, 18), 2, 2);
+            p.drawRoundedRect(QRectF(8, badgeY, badge, badge), 2, 2);
             p.setPen(accent);
             p.setBrush(Qt::NoBrush);
-            p.drawRoundedRect(QRectF(8, y + 12, 16, 18), 2, 2);
-            p.setPen(QColor("#cecece"));
-            p.drawText(QRectF(8, y + 12, 16, 18), Qt::AlignCenter, laneKind);
-            p.setPen(QColor("#cbcbcb"));
-            p.drawText(30, y + 25, p.fontMetrics().elidedText(trackTitle, Qt::ElideRight, 60));
-            p.setPen(QColor("#808080"));
-            QFont trackFont = p.font();
-            trackFont.setPixelSize(10);
-            p.setFont(trackFont);
-            p.drawText(30, y + 40, p.fontMetrics().elidedText(type.isEmpty() ? QStringLiteral("VIDEO") : type.toUpper(), Qt::ElideRight, 60));
-            p.setFont(laneFont);
+            p.drawRoundedRect(QRectF(8, badgeY, badge, badge), 2, 2);
+            p.setPen(QColor("#d0d0d0"));
+            p.drawText(QRectF(8, badgeY, badge, badge), Qt::AlignCenter, laneKind);
+            p.setPen(QColor("#c8c8c8"));
+            p.drawText(QRect(30, y, kTimelineLabelWidth - 36, kTrackHeight), Qt::AlignVCenter | Qt::TextSingleLine,
+                       p.fontMetrics().elidedText(trackTitle, Qt::ElideRight, 58));
 
             const QJsonArray clips = track.value(QStringLiteral("clips")).toArray();
             if (clips.isEmpty()) {
@@ -725,8 +752,8 @@ protected:
                     else if (m_dragTrailing) duration = std::max(1.0 / m_fps, m_previewTime - m_dragStart);
                     else start = m_previewTime;
                 }
-                QRectF clipRect(kTimelineLabelWidth + start * pxPerSecond + 2, y + 6,
-                                std::max(12.0, duration * pxPerSecond - 4), kTrackHeight - 12);
+                QRectF clipRect(kTimelineLabelWidth + start * pxPerSecond + 2, y + kClipInset,
+                                std::max(12.0, duration * pxPerSecond - 4), kTrackHeight - kClipInset * 2);
                 if (!clipRect.intersects(visible)) continue;
                 const bool selected = id == m_selectedClip;
                 const bool hovered = id == m_hoverClipId;
@@ -736,7 +763,7 @@ protected:
                 clipGradient.setColorAt(0.0, body.lighter(114));
                 clipGradient.setColorAt(1.0, body);
                 p.setBrush(clipGradient);
-                p.setPen(QPen(selected ? QColor("#d5c3f3") : hovered ? accent.lighter(120) : QColor("#535353"), selected ? 2 : 1));
+                p.setPen(QPen(selected ? QColor("#f0b429") : hovered ? accent.lighter(130) : QColor("#3a3a3a"), selected ? 2 : 1));
                 p.drawRoundedRect(clipRect, 3, 3);
                 p.save();
                 p.setClipRect(clipRect.adjusted(2, 2, -2, -2));
@@ -753,7 +780,7 @@ protected:
                         const double in = clip.value("in").toDouble();
                         const double out = clip.value("out").toDouble(sourceDuration);
                         p.setOpacity(0.55);
-                        p.drawImage(clipRect.adjusted(0, 18, 0, 0), wave,
+                        p.drawImage(clipRect.adjusted(0, 13, 0, 0), wave,
                                     QRectF(in / sourceDuration * wave.width(), 0,
                                            (out - in) / sourceDuration * wave.width(), wave.height()));
                         p.setOpacity(1);
@@ -761,10 +788,12 @@ protected:
                 } else {
                     const QImage frame = m_artwork ? m_artwork->frames.value(clip.value("sourceId").toString()) : QImage();
                     if (!frame.isNull()) {
-                        const double tileWidth = (clipRect.height() - 16) * 16.0 / 9.0;
+                        const double titleBand = std::min(13.0, std::max(0.0, clipRect.height() - 8.0));
+                        const double tileHeight = std::max(1.0, clipRect.height() - titleBand);
+                        const double tileWidth = tileHeight * 16.0 / 9.0;
                         const double firstTile = clipRect.left() + std::max(0.0, std::floor((visible.left() - clipRect.left()) / tileWidth)) * tileWidth;
                         for (double x = firstTile; x < std::min(clipRect.right(), double(visible.right())); x += tileWidth)
-                            p.drawImage(QRectF(x, clipRect.top() + 16, tileWidth, clipRect.height() - 16), frame);
+                            p.drawImage(QRectF(x, clipRect.top() + titleBand, tileWidth, tileHeight), frame);
                     }
                 }
                 p.restore();
@@ -775,32 +804,36 @@ protected:
                     p.setPen(QColor("#eeeeee"));
                     p.drawText(QRectF(clipRect.left() + 5, clipRect.top(), clipRect.width() - 10, 16), Qt::AlignVCenter | Qt::TextSingleLine, label);
                 }
-                p.setPen(QPen(accent.lighter(selected ? 135 : 120), selected ? 2 : 1));
+                p.setPen(QPen(accent.lighter(selected ? 150 : 120), selected ? 2 : 1));
                 p.drawLine(clipRect.left() + 5, clipRect.top() + 1, clipRect.right() - 5, clipRect.top() + 1);
                 if (selected) {
-                    p.setPen(QPen(QColor("#eee5ff"), 2, Qt::SolidLine, Qt::RoundCap));
+                    p.setPen(QPen(QColor("#f0b429"), 2, Qt::SolidLine, Qt::RoundCap));
                     p.drawLine(QPointF(clipRect.left() + 3, clipRect.center().y() - 5), QPointF(clipRect.left() + 3, clipRect.center().y() + 5));
                     p.drawLine(QPointF(clipRect.right() - 3, clipRect.center().y() - 5), QPointF(clipRect.right() - 3, clipRect.center().y() + 5));
                 }
             }
         }
 
-        p.setPen(QColor("#3a3a3a"));
+        p.setPen(QColor("#2a2a2a"));
         p.drawLine(kTimelineLabelWidth, 0, kTimelineLabelWidth, height());
-        const int playheadX = kTimelineLabelWidth + static_cast<int>(m_playhead * pxPerSecond);
-        p.setPen(QPen(QColor(0, 0, 0, 90), 3));
-        p.drawLine(playheadX + 1, 0, playheadX + 1, height());
-        p.setPen(QPen(QColor("#c7b5ed"), 1));
-        p.drawLine(playheadX, 0, playheadX, height());
-        p.setBrush(QColor("#c7b5ed"));
-        p.setPen(Qt::NoPen);
-        p.drawPolygon(QPolygonF{QPointF(playheadX - 5, 0), QPointF(playheadX + 5, 0), QPointF(playheadX, 7)});
+        const auto drawHead = [&](double time, const QColor &color, int weight) {
+            const int x = kTimelineLabelWidth + static_cast<int>(time * pxPerSecond);
+            p.setPen(QPen(QColor(0, 0, 0, 110), weight + 2));
+            p.drawLine(x + 1, 0, x + 1, height());
+            p.setPen(QPen(color, weight));
+            p.drawLine(x, 0, x, height());
+            p.setBrush(color);
+            p.setPen(Qt::NoPen);
+            p.drawPolygon(QPolygonF{QPointF(x - 5, 0), QPointF(x + 5, 0), QPointF(x, 7)});
+        };
         if (m_hasSkimmer && !m_dragging && !m_scrubbing) {
-            const int skimmerX = kTimelineLabelWidth + static_cast<int>(m_skimmerTime * pxPerSecond);
-            p.setPen(QPen(QColor(255, 255, 255, 80), 1));
-            p.drawLine(skimmerX, 0, skimmerX, height());
+            drawHead(m_playhead, QColor("#6e6e6e"), 1);
+            drawHead(m_skimmerTime, QColor("#f0b429"), 1);
             paintTimeChip(p, m_feedbackPoint, prettyTime(m_skimmerTime));
-        } else if (m_scrubbing) {
+        } else {
+            drawHead(m_playhead, QColor("#f0b429"), 1);
+        }
+        if (m_scrubbing) {
             paintTimeChip(p, m_feedbackPoint, prettyTime(timeAt(m_feedbackPoint.x())));
         }
         if (m_addLaneVisible) {
@@ -839,14 +872,12 @@ protected:
         }
         const double time = timeAt(pos.x());
         if (pos.y() < kRulerHeight || pos.x() < kTimelineLabelWidth) {
-            m_scrubbing = true;
-            emit seekRequested(time);
+            beginScrub(time);
             return;
         }
         const auto hit = clipAt(pos);
         if (hit.id.isEmpty()) {
-            m_scrubbing = true;
-            emit seekRequested(time);
+            beginScrub(time);
             return;
         }
         m_dragging = true;
@@ -862,9 +893,15 @@ protected:
 
     void mouseMoveEvent(QMouseEvent *event) override {
         if (m_scrubbing) {
+            const QPoint previousAnchor = m_feedbackPoint;
+            const double previous = m_playhead;
             m_feedbackPoint = event->position().toPoint();
-            emit seekRequested(timeAt(m_feedbackPoint.x()));
-            update();
+            m_playhead = std::clamp(timeAt(m_feedbackPoint.x()), 0.0, m_duration);
+            update(timeBand(previous));
+            update(timeBand(m_playhead));
+            update(chipSweep(previousAnchor));
+            update(chipSweep(m_feedbackPoint));
+            emit seekRequested(m_playhead);
             return;
         }
         if (!m_dragging) {
@@ -903,7 +940,18 @@ protected:
     }
 
     void mouseReleaseEvent(QMouseEvent *event) override {
-        if (m_scrubbing) { m_scrubbing = false; emit seekRequested(timeAt(event->position().x())); return; }
+        if (m_scrubbing) {
+            m_scrubbing = false;
+            releaseMouse();
+            const QPoint previousAnchor = m_feedbackPoint;
+            m_feedbackPoint = event->position().toPoint();
+            m_playhead = std::clamp(timeAt(m_feedbackPoint.x()), 0.0, m_duration);
+            update(timeBand(m_playhead));
+            update(chipSweep(previousAnchor));
+            update(chipSweep(m_feedbackPoint));
+            emit seekRequested(m_playhead);
+            return;
+        }
         if (!m_dragging) return;
         m_dragging = false;
         const double delta = timeAt(event->position().x()) - m_pressTime;
@@ -922,7 +970,8 @@ protected:
     }
 
     void leaveEvent(QEvent *) override {
-        if (!m_dragging) {
+        if (m_scrubbing || m_dragging) return;
+        {
             m_hoverClipId.clear();
             m_addLaneVisible = false;
             if (m_hasSkimmer) {
@@ -979,23 +1028,53 @@ private:
         p.drawText(chip, Qt::AlignCenter, label);
     }
 
+    void beginScrub(double time) {
+        const double previous = m_playhead;
+        m_scrubbing = true;
+        grabMouse();
+        m_playhead = std::clamp(time, 0.0, m_duration);
+        update(timeBand(previous));
+        update(timeBand(m_playhead));
+        emit seekRequested(m_playhead);
+    }
+
+    QRect timeBand(double time) const {
+        const int x = kTimelineLabelWidth + static_cast<int>(time * pixelsPerSecond());
+        return QRect(x - 16, 0, 32, std::max(1, height()));
+    }
+
+    QRect chipSweep(const QPoint &anchor) const {
+        return QRect(anchor.x() - 110, anchor.y() - 42, 220, 96);
+    }
+
     void updateSkimmer(const QPoint &point) {
         if (point.x() < kTimelineLabelWidth) {
             if (m_hasSkimmer) {
+                const double previous = m_skimmerTime;
+                const QPoint previousAnchor = m_feedbackPoint;
                 m_hasSkimmer = false;
                 emit hoverSeekEnded();
-                update();
+                update(timeBand(previous));
+                update(timeBand(m_playhead));
+                update(chipSweep(previousAnchor));
             }
             return;
         }
+        const QPoint previousAnchor = m_feedbackPoint;
+        const double previous = m_skimmerTime;
+        const bool had = m_hasSkimmer;
         m_feedbackPoint = point;
         const double frameTime = std::round(timeAt(point.x()) * m_fps) / m_fps;
         const double clamped = std::clamp(frameTime, 0.0, m_duration);
         const bool changed = !m_hasSkimmer || std::abs(m_skimmerTime - clamped) >= (0.5 / m_fps);
         m_skimmerTime = clamped;
         m_hasSkimmer = true;
+        if (had) update(timeBand(previous));
+        update(timeBand(m_skimmerTime));
+        update(timeBand(m_playhead));
+        update(chipSweep(previousAnchor));
+        update(chipSweep(m_feedbackPoint));
         if (changed) emit hoverSeekRequested(m_skimmerTime);
-        update();
     }
 
     QRect addLaneButtonRect() const {
@@ -1039,8 +1118,8 @@ private:
                     const double speed = std::max(0.01, clip.value(QStringLiteral("speed")).toDouble(1.0));
                     duration = (clip.value(QStringLiteral("out")).toDouble() - clip.value(QStringLiteral("in")).toDouble()) / speed;
                 }
-                QRectF rect(kTimelineLabelWidth + start * pixelsPerSecond() + 2, y + 6,
-                            std::max(12.0, duration * pixelsPerSecond() - 4), kTrackHeight - 12);
+                QRectF rect(kTimelineLabelWidth + start * pixelsPerSecond() + 2, y + kClipInset,
+                            std::max(12.0, duration * pixelsPerSecond() - 4), kTrackHeight - kClipInset * 2);
                 if (rect.contains(point)) return {clip.value(QStringLiteral("id")).toString(), start, duration, rect};
             }
         }
@@ -1078,16 +1157,26 @@ public:
     explicit ViewerWidget(QWidget *parent = nullptr) : QWidget(parent) {
         setMinimumSize(320, 180);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        setMouseTracking(true);
     }
 
     void setFrame(const QImage &frame, double time) {
         m_frame = frame;
         m_time = time;
+        m_scaled = QImage();
         update();
     }
 
     void clearFrame() {
         m_frame = QImage();
+        m_scaled = QImage();
+        update();
+    }
+
+    void setLiveScrub(bool live) {
+        if (m_liveScrub == live) return;
+        m_liveScrub = live;
+        m_scaled = QImage();
         update();
     }
 
@@ -1103,7 +1192,7 @@ public:
     }
 
     QRectF videoRect() const {
-        const QRectF target = QRectF(rect()).adjusted(12, 48, -12, -12);
+        const QRectF target = QRectF(rect()).adjusted(8, 8, -8, -8);
         double aspect = 16.0 / 9.0;
         if (m_width > 0 && m_height > 0) aspect = m_width / m_height;
         else if (!m_frame.isNull()) aspect = static_cast<double>(m_frame.width()) / m_frame.height();
@@ -1123,32 +1212,56 @@ public:
                       std::max(1.0, canvas.width() - horizontalMargin * 2.0), captionHeight);
     }
 
+signals:
+    void scrubbed(double fraction);
+    void scrubEnded();
+    void seekRequested(double fraction);
+
 protected:
+    void mousePressEvent(QMouseEvent *event) override {
+        if (event->button() != Qt::LeftButton) return;
+        emit seekRequested(fractionAt(event->position().x()));
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override {
+        const double fraction = fractionAt(event->position().x());
+        if (m_skimming && std::abs(fraction - m_skimFraction) < 0.0005) return;
+        m_skimming = true;
+        m_skimFraction = fraction;
+        emit scrubbed(fraction);
+    }
+
+    void leaveEvent(QEvent *) override {
+        if (!m_skimming) return;
+        m_skimming = false;
+        emit scrubEnded();
+    }
+
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
-        QPainterPath surface;
-        surface.addRect(QRectF(rect()));
-        p.setClipPath(surface);
-        QLinearGradient viewerGradient(0, 0, 0, height());
-        viewerGradient.setColorAt(0.0, QColor("#242424"));
-        viewerGradient.setColorAt(1.0, QColor("#242424"));
-        p.fillRect(rect(), viewerGradient);
-        p.setPen(QColor("#262626"));
-        p.fillRect(0, 0, width(), 36, QColor("#2a2a2a"));
-        p.drawLine(12, 36, width() - 12, 36);
+        p.fillRect(rect(), QColor("#141414"));
         const QRectF canvas = videoRect();
         QPainterPath canvasPath;
-        canvasPath.addRoundedRect(canvas.adjusted(0.5, 0.5, -0.5, -0.5), 3, 3);
-        p.setPen(QPen(QColor("#1a1a1a"), 1));
-        p.setBrush(QColor("#070707"));
+        canvasPath.addRoundedRect(canvas.adjusted(0.5, 0.5, -0.5, -0.5), 2, 2);
+        p.setPen(QPen(QColor("#050505"), 1));
+        p.setBrush(QColor("#050505"));
         p.drawPath(canvasPath);
         if (!m_frame.isNull()) {
             p.save();
             p.setClipPath(canvasPath);
-            QImage scaled = m_frame.scaled(canvas.size().toSize(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
-            const QPointF topLeft(canvas.center().x() - scaled.width() / 2.0, canvas.center().y() - scaled.height() / 2.0);
-            p.drawImage(topLeft, scaled);
+            const qreal dpr = m_liveScrub ? 1.0 : std::max(1.0, devicePixelRatioF());
+            const QSize target(std::max(1, static_cast<int>(std::round(canvas.width() * dpr))),
+                               std::max(1, static_cast<int>(std::round(canvas.height() * dpr))));
+            if (m_scaled.isNull() || m_scaled.size() != target || m_scaledFast != m_liveScrub) {
+                m_scaled = m_frame.scaled(target, Qt::KeepAspectRatio,
+                                          m_liveScrub ? Qt::FastTransformation : Qt::SmoothTransformation);
+                m_scaled.setDevicePixelRatio(dpr);
+                m_scaledFast = m_liveScrub;
+            }
+            const QPointF topLeft(canvas.center().x() - m_scaled.width() / dpr / 2.0,
+                                  canvas.center().y() - m_scaled.height() / dpr / 2.0);
+            p.drawImage(topLeft, m_scaled);
             p.restore();
         } else {
             const QPointF center = canvas.center() - QPointF(0, 22);
@@ -1168,21 +1281,6 @@ protected:
             p.drawText(QRectF(canvas.left(), center.y() + 52, canvas.width(), 20), Qt::AlignCenter,
                        QStringLiteral("The playhead frame shows here."));
         }
-        p.setPen(QColor("#a0a0a0"));
-        QFont viewerFont = p.font();
-        viewerFont.setPixelSize(12);
-        viewerFont.setWeight(QFont::Medium);
-        p.setFont(viewerFont);
-        p.drawText(14, 23, QStringLiteral("Viewer"));
-        p.setPen(QColor("#747474"));
-        p.drawText(76, 23, QStringLiteral("%1 × %2").arg(m_width > 0 ? QString::number(static_cast<int>(m_width)) : QStringLiteral("—"),
-                                                         m_height > 0 ? QString::number(static_cast<int>(m_height)) : QStringLiteral("—")));
-        p.setPen(QColor("#a6a6a6"));
-        QFont timeFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-        timeFont.setPixelSize(11);
-        p.setFont(timeFont);
-        p.drawText(width() - 84, 23, prettyTime(m_time));
-        p.setFont(viewerFont);
         if (!m_caption.isEmpty()) {
             const QRectF caption = captionRect();
             p.setPen(Qt::NoPen);
@@ -1197,10 +1295,19 @@ protected:
     }
 
 private:
+    double fractionAt(int x) const {
+        return std::clamp(static_cast<double>(x) / std::max(1, width()), 0.0, 1.0);
+    }
+
     QImage m_frame;
+    QImage m_scaled;
     double m_time = 0.0;
     double m_width = 0.0;
     double m_height = 0.0;
+    double m_skimFraction = -1.0;
+    bool m_skimming = false;
+    bool m_liveScrub = false;
+    bool m_scaledFast = false;
     QString m_caption;
 };
 
@@ -1218,13 +1325,15 @@ public:
         // Runtime messages remain available to callers, but the empty status
         // bar should not reserve a strip along the bottom of the editor.
         statusBar()->hide();
+        m_exactSeekTimer.setSingleShot(true);
+        connect(&m_exactSeekTimer, &QTimer::timeout, this, &MainWindow::settlePointerSeek);
         setConnection(QStringLiteral("connecting"));
 #ifndef CUT_QT_TESTING
         m_bridge = cut_bridge_new(m_projectDirectory.toUtf8().constData(), m_cutdBinary.toUtf8().constData());
         if (!m_bridge) {
             setConnection(QStringLiteral("disconnected"), QStringLiteral("Could not start the runtime connection."));
         }
-        m_pollTimer.setInterval(16);
+        m_pollTimer.setInterval(8);
         connect(&m_pollTimer, &QTimer::timeout, this, &MainWindow::pollBridge);
         m_pollTimer.start();
 #endif
@@ -1250,15 +1359,15 @@ private slots:
         if (cut_bridge_frame(m_bridge, &frame) && m_connected && frame.pixels && frame.length > 0 && frame.width > 0 && frame.height > 0) {
             const qsizetype expected = static_cast<qsizetype>(frame.width) * static_cast<qsizetype>(frame.height) * 4;
             if (expected > 0 && frame.length >= static_cast<size_t>(expected)) {
-                // A seek can leave one already decoded frame in the bridge's
-                // replaceable slot. Do not let it flash while the latest
-                // hover target is still being decoded.
-                if (m_hoverSkimming &&
-                    std::abs(frame.time - m_pendingHoverSeek) > (1.5 / std::max(1.0, m_fps))) {
+                const double target = m_hoverSkimming ? m_pendingHoverSeek : m_playhead;
+                if ((m_hoverSkimming || m_pointerOwnsPlayhead) &&
+                    !nearerScrubFrame(m_shownFrameTime, m_hasShownFrame, frame.time, target, m_fps)) {
                     return;
                 }
                 QImage image(frame.pixels, static_cast<int>(frame.width), static_cast<int>(frame.height),
                              static_cast<int>(frame.width * 4), QImage::Format_RGBA8888);
+                m_shownFrameTime = frame.time;
+                m_hasShownFrame = true;
                 m_viewer->setFrame(image.copy(), frame.time);
             }
         }
@@ -1339,21 +1448,72 @@ private slots:
         m_hoverSkimming = false;
         m_timeline->clearSkimmer();
         m_pendingSeek = std::clamp(time, 0.0, m_duration);
+        m_pendingSeekScrub = scrubFromShownFrame(m_pendingSeek);
         m_hasPendingSeek = true;
+        m_pointerOwnsPlayhead = true;
         m_playhead = m_pendingSeek;
         m_timeline->setPlayhead(m_playhead);
+        m_viewer->setLiveScrub(true);
+        if (m_pendingSeekScrub) m_exactSeekTimer.start(50);
+        else m_exactSeekTimer.stop();
+        flushSeek();
     }
 
     void queueHoverSeek(double time) {
         if (!m_connected || m_previewRequired || m_playing || m_duration <= 0.0) return;
         m_pendingHoverSeek = std::clamp(time, 0.0, m_duration);
+        m_pendingHoverScrub = scrubFromShownFrame(m_pendingHoverSeek);
         m_hasPendingHoverSeek = true;
         m_hoverSkimming = true;
+        m_pointerOwnsPlayhead = true;
+        m_viewer->setLiveScrub(true);
+        if (m_pendingHoverScrub) m_exactSeekTimer.start(50);
+        else m_exactSeekTimer.stop();
+        flushSeek();
     }
 
     void endHoverSeek() {
+        const bool wasSkimming = m_hoverSkimming || m_hasPendingHoverSeek;
         m_hasPendingHoverSeek = false;
         m_hoverSkimming = false;
+        m_exactSeekTimer.stop();
+        if (!wasSkimming || !m_connected || m_playing) {
+            m_pointerOwnsPlayhead = false;
+            m_viewer->setLiveScrub(false);
+            return;
+        }
+        // Keep the pointer in charge until the edit playhead's frame arrives,
+        // so a late skim picture cannot jump back onto the viewer.
+        m_pointerOwnsPlayhead = true;
+        m_viewer->setLiveScrub(true);
+        m_pendingSeek = m_playhead;
+        m_pendingSeekScrub = false;
+        m_hasPendingSeek = true;
+        m_exactSeekTimer.start(50);
+        flushSeek();
+    }
+
+    void settlePointerSeek() {
+        if (m_hoverSkimming) {
+            m_pendingHoverSeek = m_timeline->skimmerTime();
+            m_pendingHoverScrub = false;
+            m_hasPendingHoverSeek = true;
+            flushSeek();
+            return;
+        }
+        if (!m_pointerOwnsPlayhead) return;
+        m_pendingSeek = m_playhead;
+        m_pendingSeekScrub = false;
+        m_hasPendingSeek = true;
+        m_pointerOwnsPlayhead = false;
+        m_viewer->setLiveScrub(false);
+        flushSeek();
+    }
+
+    bool scrubFromShownFrame(double time) const {
+        if (!m_hasShownFrame) return true;
+        const double delta = time - m_shownFrameTime;
+        return delta < -(1.0 / std::max(1.0, m_fps)) || delta > 0.40;
     }
 
     void selectClip(const QString &id) {
@@ -1782,7 +1942,7 @@ private:
         m_conversation->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         m_conversation->document()->setDocumentMargin(2);
         m_conversation->setHtml(QStringLiteral(
-            "<p style='margin-top:4px; color:#b5a6cf; font-size:11px;'>YOUR EDITING PARTNER</p>"
+            "<p style='margin-top:4px; color:#c6a15a; font-size:11px;'>YOUR EDITING PARTNER</p>"
             "<p style='margin-top:4px; color:#f0f0f0; font-size:18px; font-weight:600;'>Make your next cut.</p>"
             "<p style='margin-top:6px; color:#b6b6b6;'>Describe the change. Cut uses this timeline.</p>"
             "<p style='margin-top:14px; color:#888888; font-size:11px;'>TRY ASKING</p>"
@@ -2135,6 +2295,20 @@ private:
         connect(m_timeline, &TimelineWidget::addLaneRequested, this, &MainWindow::addTrack);
         connect(m_timeline, &TimelineWidget::hoverSeekRequested, this, &MainWindow::queueHoverSeek);
         connect(m_timeline, &TimelineWidget::hoverSeekEnded, this, &MainWindow::endHoverSeek);
+        connect(m_viewer, &ViewerWidget::scrubbed, this, [this](double fraction) {
+            if (m_duration <= 0.0) return;
+            const double time = fraction * m_duration;
+            m_timeline->showSkimmer(time);
+            queueHoverSeek(time);
+        });
+        connect(m_viewer, &ViewerWidget::scrubEnded, this, [this] {
+            m_timeline->clearSkimmer();
+            endHoverSeek();
+        });
+        connect(m_viewer, &ViewerWidget::seekRequested, this, [this](double fraction) {
+            if (m_duration <= 0.0) return;
+            queueSeek(fraction * m_duration);
+        });
         connect(m_timeline, &TimelineWidget::clipSelected, this, &MainWindow::selectClip);
         connect(m_timeline, &TimelineWidget::moveRequested, this, &MainWindow::moveClip);
         connect(m_timeline, &TimelineWidget::trimRequested, this, &MainWindow::trimClip);
@@ -2355,15 +2529,24 @@ private:
         return true;
     }
 
+    bool sendSeek(double position, bool scrub) {
+        if (!m_connected || !m_bridge) return false;
+        const QJsonObject payload{{QStringLiteral("type"), QStringLiteral("seek")},
+                                  {QStringLiteral("position"), position},
+                                  {QStringLiteral("scrub"), scrub}};
+        const QByteArray bytes = QJsonDocument(payload).toJson(QJsonDocument::Compact);
+        return cut_bridge_send(m_bridge, bytes.constData());
+    }
+
     void flushSeek() {
         if (m_hasPendingSeek) {
+            if (!sendSeek(m_pendingSeek, m_pendingSeekScrub)) return;
             m_hasPendingSeek = false;
-            sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("seek")}, {QStringLiteral("position"), m_pendingSeek}});
             return;
         }
         if (m_hasPendingHoverSeek) {
+            if (!sendSeek(m_pendingHoverSeek, m_pendingHoverScrub)) return;
             m_hasPendingHoverSeek = false;
-            sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("seek")}, {QStringLiteral("position"), m_pendingHoverSeek}});
         }
     }
 
@@ -2379,6 +2562,7 @@ private:
         } else if (type == QStringLiteral("viewer_reset")) {
             m_viewer->clearFrame();
             m_viewer->setCaption(QString());
+            m_hasShownFrame = false;
         } else if (type == QStringLiteral("error")) {
             showError(event.value(QStringLiteral("message")).toString(QStringLiteral("Runtime error")));
         } else if (type == QStringLiteral("agent")) {
@@ -2431,7 +2615,7 @@ private:
             }
         } else if (type == QStringLiteral("clock")) {
             if (event.value(QStringLiteral("duration")).isDouble()) m_duration = std::max(0.0, event.value(QStringLiteral("duration")).toDouble());
-            if (!m_hoverSkimming || m_playing) {
+            if (!m_hoverSkimming && !m_pointerOwnsPlayhead) {
                 m_playhead = std::clamp(event.value(QStringLiteral("position")).toDouble(), 0.0, m_duration);
                 m_timeline->setPlayhead(m_playhead);
             }
@@ -2691,7 +2875,7 @@ private:
         QTextCharFormat role;
         role.setFontWeight(QFont::DemiBold);
         role.setFontPointSize(9);
-        role.setForeground(QColor(error ? "#efb3b8" : user ? "#bfbfbf" : "#c7b5ed"));
+        role.setForeground(QColor(error ? "#efb3b8" : user ? "#bfbfbf" : "#e6b450"));
         cursor.insertText(user ? QStringLiteral("YOU") : error ? QStringLiteral("COULDN’T COMPLETE EDIT") : QStringLiteral("CUT"), role);
         QTextBlockFormat body;
         body.setLineHeight(145, QTextBlockFormat::ProportionalHeight);
@@ -2753,6 +2937,9 @@ private:
             m_hasPendingSeek = false;
             m_hasPendingHoverSeek = false;
             m_hoverSkimming = false;
+            m_pointerOwnsPlayhead = false;
+            m_hasShownFrame = false;
+            m_exactSeekTimer.stop();
             m_timeline->clearSkimmer();
             m_viewer->clearFrame();
             m_viewer->setCaption(QString());
@@ -2776,6 +2963,7 @@ private:
     QString m_cutdBinary;
     void *m_bridge = nullptr;
     QTimer m_pollTimer;
+    QTimer m_exactSeekTimer;
     QJsonObject m_snapshot;
     QJsonObject m_project;
     QJsonArray m_displayedSources;
@@ -2798,11 +2986,16 @@ private:
     double m_playhead = 0.0;
     double m_pendingSeek = 0.0;
     double m_pendingHoverSeek = 0.0;
+    double m_shownFrameTime = 0.0;
     bool m_hasPendingSeek = false;
     bool m_hasPendingHoverSeek = false;
+    bool m_pendingSeekScrub = false;
+    bool m_pendingHoverScrub = false;
     bool m_playing = false;
     bool m_previewRequired = false;
     bool m_hoverSkimming = false;
+    bool m_pointerOwnsPlayhead = false;
+    bool m_hasShownFrame = false;
     bool m_updatingInspector = false;
     bool m_updatingCanvasPreset = false;
     bool m_conversationEmpty = true;
@@ -2964,6 +3157,18 @@ private slots:
         QVERIFY(std::abs(shorts.width() / shorts.height() - 9.0 / 16.0) < 0.001);
         QVERIFY(viewer.rect().contains(shorts.toAlignedRect()));
         QVERIFY(shorts.contains(viewer.captionRect()));
+
+        viewer.resize(800, 220);
+        viewer.setProjectInfo(1920, 1080);
+        QVERIFY(viewer.videoRect().top() < 20.0);
+        viewer.show();
+        QSignalSpy scrubs(&viewer, &ViewerWidget::scrubbed);
+        QTest::mouseMove(&viewer, QPoint(400, 80));
+        QVERIFY(!scrubs.isEmpty());
+        QCOMPARE(scrubs.constLast()[0].toDouble(), 0.5);
+        QVERIFY(nearerScrubFrame(1.0, true, 2.0, 3.0, 24.0));
+        QVERIFY(!nearerScrubFrame(2.5, true, 0.2, 3.0, 24.0));
+        QVERIFY(nearerScrubFrame(0.0, false, 9.0, 1.0, 24.0));
     }
 
     void viewerCanvasResolutionMatchesProjectThenSourceThenDefault() {
