@@ -628,6 +628,22 @@ private:
     MediaGrid *m_grid = nullptr;
 };
 
+// The source rectangle of drawPixmap(point, pixmap, source) is in device pixels,
+// and a negative target size is then divided by the pixmap ratio again. Passing
+// a logical dirty rect therefore pastes a half-size slice on a retina display.
+// Each playhead band looked like a new, crushed ruler. Target stays logical;
+// source is converted once.
+void blitLaneCache(QPainter &painter, const QPixmap &cache, const QRegion &clip) {
+    const qreal dpr = std::max<qreal>(1, cache.devicePixelRatio());
+    painter.save();
+    painter.setClipRegion(clip, Qt::IntersectClip);
+    for (const QRect &logical : clip) {
+        const QRectF source(logical.x() * dpr, logical.y() * dpr, logical.width() * dpr, logical.height() * dpr);
+        painter.drawPixmap(QRectF(logical), cache, source);
+    }
+    painter.restore();
+}
+
 class TimelineWidget final : public QWidget {
     Q_OBJECT
 public:
@@ -735,12 +751,15 @@ protected:
         // Corner timecode and the playhead are separate strips. Paint each one
         // so a long timeline does not rebuild everything between them.
         if (lanesAreCacheable()) {
+            const bool rebuilt = m_laneCache.isNull();
             ensureLaneCache();
             if (!m_laneCache.isNull()) {
-                for (const QRect &visible : event->region())
-                    p.drawPixmap(visible.topLeft(), m_laneCache, visible);
+                blitLaneCache(p, m_laneCache, event->region());
                 p.setClipRegion(event->region());
                 paintOverlay(p);
+                // A resize can expose only the new edge. The rest would keep the
+                // previous scale until the pointer moved across it.
+                if (rebuilt && event->region() != QRegion(rect())) update();
                 return;
             }
         }
@@ -753,6 +772,7 @@ protected:
     void resizeEvent(QResizeEvent *event) override {
         invalidateLanes();
         QWidget::resizeEvent(event);
+        update();
     }
 
     void mousePressEvent(QMouseEvent *event) override {
@@ -3713,6 +3733,41 @@ private slots:
         QCOMPARE(hovers.constLast()[0].toDouble(), 0.5);
         QTest::mouseMove(&timeline, QPoint(20, kTrackHeight / 2));
         QVERIFY(timeline.skimLabel().isEmpty());
+    }
+
+    void laneCacheBlitKeepsLogicalPixelsAtRetinaScale() {
+        constexpr qreal dpr = 2;
+        constexpr int width = 480;
+        constexpr int height = 90;
+        QPixmap cache(width * dpr, height * dpr);
+        cache.setDevicePixelRatio(dpr);
+        cache.fill(QColor("#141414"));
+        {
+            QPainter painter(&cache);
+            painter.fillRect(QRect(0, 0, width, kRulerHeight), QColor("#2a2a2a"));
+            painter.fillRect(QRect(120, 40, 40, 16), QColor("#3d7eff"));
+        }
+
+        const auto at = [](const QImage &image, int x, int y) {
+            return image.pixelColor(QPoint(x * int(dpr), y * int(dpr)));
+        };
+        QImage destination(width * dpr, height * dpr, QImage::Format_ARGB32_Premultiplied);
+        destination.setDevicePixelRatio(dpr);
+        destination.fill(Qt::red);
+        {
+            QPainter painter(&destination);
+            blitLaneCache(painter, cache, QRegion(QRect(0, 0, width, height)));
+        }
+        QCOMPARE(at(destination, width - 8, 6).red(), 0x2a);
+        QCOMPARE(at(destination, 140, 48).blue(), 0xff);
+
+        destination.fill(Qt::red);
+        {
+            QPainter painter(&destination);
+            blitLaneCache(painter, cache, QRegion(QRect(300, 0, 100, height)));
+        }
+        QCOMPARE(at(destination, 340, 6).red(), 0x2a);
+        QCOMPARE(at(destination, 20, 6).red(), 255);
     }
 
     void timelinePointerTimeAdvancesEveryFewPixels() {
