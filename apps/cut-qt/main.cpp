@@ -349,9 +349,10 @@ QPixmap mediaPixmap(const QString &id, const QHash<QString, QImage> &frames, con
     return {};
 }
 
-// The bin is always two equal 16:9 wells. A single thumbnail stays in the
-// left well instead of floating in whatever width the shelf happens to have.
+// Filled bins stay two equal 16:9 columns, with a single clip in the left well.
+// An empty bin shows one well at the top. Hovering an empty well reveals a plus.
 class MediaGrid final : public QWidget {
+    Q_OBJECT
 public:
     static constexpr int kColumns = 2;
     static constexpr int kGap = 8;
@@ -359,6 +360,8 @@ public:
     void setEntries(QVector<MediaEntry> entries, const QString &selectedId) {
         m_entries = std::move(entries);
         m_selectedId = selectedId;
+        m_importHover = -1;
+        unsetCursor();
         syncHeight();
         update();
     }
@@ -370,7 +373,14 @@ public:
 
     QString selectedId() const { return m_selectedId; }
     int count() const { return static_cast<int>(m_entries.size()); }
-    QRect thumbRect(int index) const { return thumbFor(cellFor(index)); }
+    int importHover() const { return m_importHover; }
+    QRect thumbRect(int index) const {
+        if (index < 0 || index >= wellCount()) return {};
+        return thumbFor(cellFor(index));
+    }
+
+signals:
+    void importRequested();
 
 protected:
     void paintEvent(QPaintEvent *) override {
@@ -381,8 +391,9 @@ protected:
             const QRect thumb = thumbFor(cellFor(index));
             const bool filled = index < m_entries.size();
             const bool selected = filled && m_entries.at(index).id == m_selectedId;
+            const bool importHover = index == m_importHover;
             painter.setPen(Qt::NoPen);
-            painter.setBrush(QColor("#070707"));
+            painter.setBrush(QColor(importHover ? "#121212" : "#070707"));
             painter.drawRoundedRect(thumb, 3, 3);
             if (filled && !m_entries.at(index).pixmap.isNull()) {
                 painter.save();
@@ -393,10 +404,13 @@ protected:
                 painter.drawPixmap(QPoint(thumb.center().x() - scaled.width() / 2, thumb.center().y() - scaled.height() / 2), scaled);
                 painter.restore();
             }
-            painter.setPen(QPen(QColor(selected ? "#d5c3f3" : "#2c2c2c"), 1));
+            painter.setPen(QPen(QColor(selected ? "#d5c3f3" : importHover ? "#6e6e6e" : "#2c2c2c"), 1));
             painter.setBrush(Qt::NoBrush);
             painter.drawRoundedRect(QRectF(thumb).adjusted(0.5, 0.5, -0.5, -0.5), 3, 3);
-            if (!filled) continue;
+            if (!filled) {
+                if (importHover) paintImportButton(painter, thumb);
+                continue;
+            }
             painter.setPen(QColor(selected ? "#f3f3f3" : "#c8c8c8"));
             QFont font = painter.font();
             font.setPixelSize(11);
@@ -410,7 +424,7 @@ protected:
         QFont hintFont = painter.font();
         hintFont.setPixelSize(11);
         painter.setFont(hintFont);
-        const int hintTop = contentOrigin() + thumbHeight() + 10;
+        const int hintTop = thumbHeight() + 10;
         painter.drawText(QRect(0, hintTop, width(), 34), Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
                          QStringLiteral("Use + to add a clip."));
     }
@@ -418,6 +432,11 @@ protected:
     void mousePressEvent(QMouseEvent *event) override {
         if (event->button() != Qt::LeftButton) return;
         const QPoint point = event->position().toPoint();
+        if (emptyWellAt(point) >= 0) {
+            emit importRequested();
+            event->accept();
+            return;
+        }
         for (int index = 0; index < m_entries.size(); ++index) {
             if (!cellFor(index).contains(point)) continue;
             m_selectedId = m_entries.at(index).id;
@@ -434,7 +453,25 @@ protected:
             tip = m_entries.at(index).tip;
             break;
         }
-        setToolTip(tip);
+        const int hover = emptyWellAt(point);
+        if (hover >= 0) tip = QStringLiteral("Import media");
+        if (tip != toolTip()) setToolTip(tip);
+        if (hover == m_importHover) return;
+        m_importHover = hover;
+        setCursor(hover >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor);
+        update();
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override {
+        event->accept();
+    }
+
+    void leaveEvent(QEvent *event) override {
+        QWidget::leaveEvent(event);
+        if (m_importHover < 0) return;
+        m_importHover = -1;
+        unsetCursor();
+        update();
     }
 
     void resizeEvent(QResizeEvent *event) override {
@@ -444,7 +481,7 @@ protected:
 
 private:
     int wellCount() const {
-        if (m_entries.isEmpty()) return kColumns;
+        if (m_entries.isEmpty()) return 1;
         return ((static_cast<int>(m_entries.size()) + kColumns - 1) / kColumns) * kColumns;
     }
 
@@ -471,27 +508,45 @@ private:
         if (minimumHeight() != height) setMinimumHeight(height);
     }
 
-    int contentOrigin() const {
-        if (!m_entries.isEmpty()) return 0;
-        return std::max(0, (height() - contentHeight()) / 2);
-    }
-
     QRect cellFor(int index) const {
         const int width = columnWidth();
         const int column = index % kColumns;
         const int row = index / kColumns;
-        return QRect(column * (width + kGap), contentOrigin() + row * (cellHeight() + kGap), width, cellHeight());
+        return QRect(column * (width + kGap), row * (cellHeight() + kGap), width, cellHeight());
     }
 
     QRect thumbFor(const QRect &cell) const {
         return QRect(cell.left(), cell.top(), cell.width(), thumbHeight());
     }
 
+    int emptyWellAt(const QPoint &point) const {
+        for (int index = static_cast<int>(m_entries.size()); index < wellCount(); ++index)
+            if (thumbFor(cellFor(index)).contains(point)) return index;
+        return -1;
+    }
+
+    void paintImportButton(QPainter &painter, const QRect &thumb) const {
+        const int side = std::min(34, std::min(thumb.width(), thumb.height()) - 16);
+        if (side < 16) return;
+        const QRect button(thumb.center().x() - side / 2, thumb.center().y() - side / 2, side, side);
+        painter.setPen(QPen(QColor("#5c5c5c"), 1));
+        painter.setBrush(QColor("#2c2c2c"));
+        painter.drawRoundedRect(button, 8, 8);
+        painter.setPen(QColor("#f2f2f2"));
+        QFont font = painter.font();
+        font.setPixelSize(std::max(16, side - 12));
+        font.setWeight(QFont::Medium);
+        painter.setFont(font);
+        painter.drawText(button, Qt::AlignCenter, QStringLiteral("+"));
+    }
+
     QVector<MediaEntry> m_entries;
     QString m_selectedId;
+    int m_importHover = -1;
 };
 
 class MediaBinView final : public QScrollArea {
+    Q_OBJECT
 public:
     explicit MediaBinView(QWidget *parent = nullptr) : QScrollArea(parent) {
         setObjectName(QStringLiteral("mediaList"));
@@ -503,6 +558,7 @@ public:
         m_grid->setObjectName(QStringLiteral("mediaGrid"));
         m_grid->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         m_grid->setMouseTracking(true);
+        connect(m_grid, &MediaGrid::importRequested, this, &MediaBinView::importRequested);
         setWidget(m_grid);
         viewport()->setAutoFillBackground(false);
         setMinimumHeight(88);
@@ -528,6 +584,10 @@ public:
     QString selectedId() const { return m_grid->selectedId(); }
     int count() const { return m_grid->count(); }
     QRect thumbRect(int index) const { return m_grid->thumbRect(index); }
+    bool showsImportButton() const { return m_grid->importHover() >= 0; }
+
+signals:
+    void importRequested();
 
 private:
     MediaGrid *m_grid = nullptr;
@@ -1599,6 +1659,7 @@ private:
         mediaToggle->hide();
         mediaShelfLayout->addLayout(mediaHeader);
         m_mediaList = new MediaBinView;
+        connect(m_mediaList, &MediaBinView::importRequested, this, &MainWindow::importMedia);
         connect(m_artwork, &MediaArtwork::changed, this, [this] {
             m_mediaList->setArtwork(m_artwork->frames, m_artwork->waves);
         });
@@ -1713,12 +1774,12 @@ private:
         timelineScroll->viewport()->installEventFilter(this);
         timelineLayout->addWidget(timelineScroll);
         timelinePanelLayout->addWidget(timelineFrame, 1);
-        timelinePanel->setMinimumHeight(220);
+        timelinePanel->setMinimumHeight(300);
         editorSplit->addWidget(timelinePanel);
-        // Extra window height goes to the viewer. The timeline stays a lane bed.
-        editorSplit->setStretchFactor(0, 1);
-        editorSplit->setStretchFactor(1, 0);
-        editorSplit->setSizes({640, 268});
+        // Give the lane bed a real share of the window so it can grow upward.
+        editorSplit->setStretchFactor(0, 3);
+        editorSplit->setStretchFactor(1, 2);
+        editorSplit->setSizes({500, 400});
 
         auto *right = new QWidget;
         m_agentPanel = right;
@@ -2217,7 +2278,8 @@ private:
 
         auto *toolbar = addToolBar(QStringLiteral("Main"));
         toolbar->setMovable(false);
-        toolbar->setIconSize(QSize(18, 18));
+        toolbar->setIconSize(QSize(15, 15));
+        toolbar->setFixedHeight(34);
         if (!menuBar()->isNativeMenuBar()) {
             // Keep menus accessible without dedicating a full row to them.
             auto *menuButton = new QToolButton(toolbar);
@@ -3168,16 +3230,13 @@ private slots:
         bin.show();
         QTest::qWait(30);
 
-        const QRect emptyLeft = bin.thumbRect(0);
-        const QRect emptyRight = bin.thumbRect(1);
-        QVERIFY(emptyLeft.width() > 90);
-        QCOMPARE(emptyLeft.size(), emptyRight.size());
-        QCOMPARE(emptyLeft.top(), emptyRight.top());
-        QVERIFY(emptyLeft.top() > 8);
-        QCOMPARE(emptyLeft.left(), 0);
-        QVERIFY(std::abs(emptyRight.left() - (emptyLeft.right() + MediaGrid::kGap)) <= 1);
-        QVERIFY(std::abs(emptyLeft.height() * 16 - emptyLeft.width() * 9) <= 16);
-        QVERIFY(bin.viewport()->width() - emptyRight.right() <= 1);
+        const QRect empty = bin.thumbRect(0);
+        QVERIFY(empty.width() > 90);
+        QCOMPARE(empty.top(), 0);
+        QCOMPARE(empty.left(), 0);
+        QVERIFY(bin.thumbRect(1).isEmpty());
+        QVERIFY(std::abs(empty.height() * 16 - empty.width() * 9) <= 16);
+        QVERIFY(empty.right() < bin.viewport()->width() / 2);
 
         const QJsonArray sources{
             QJsonObject{{"id", "left"}, {"path", "/tmp/left.mp4"}},
@@ -3206,6 +3265,37 @@ private slots:
         QCOMPARE(partner.size(), right.size());
         QCOMPARE(partner.topLeft(), right.topLeft());
         QVERIFY(single.right() < bin.viewport()->width() / 2);
+    }
+
+    void emptyMediaWellImportsOnHover() {
+        MediaBinView bin;
+        bin.resize(300, 240);
+        bin.show();
+        QTest::qWait(30);
+        QSignalSpy imports(&bin, &MediaBinView::importRequested);
+        const QRect empty = bin.thumbRect(0);
+        QVERIFY(!empty.isEmpty());
+        QVERIFY(!bin.showsImportButton());
+        QTest::mouseMove(bin.widget(), empty.center());
+        QVERIFY(bin.showsImportButton());
+        const QString screenshot = qEnvironmentVariable("CUT_QT_UI_SCREENSHOT");
+        if (!screenshot.isEmpty()) QVERIFY(bin.grab().save(screenshot + QStringLiteral(".media-hover.png")));
+        QTest::mouseClick(bin.widget(), Qt::LeftButton, Qt::NoModifier, empty.center());
+        QCOMPARE(imports.count(), 1);
+        QTest::mouseMove(bin.widget(), QPoint(empty.right() + 12, empty.center().y()));
+        QVERIFY(!bin.showsImportButton());
+        QTest::mouseClick(bin.widget(), Qt::LeftButton, Qt::NoModifier, QPoint(empty.right() + 12, empty.center().y()));
+        QCOMPARE(imports.count(), 1);
+
+        bin.setSources(QJsonArray{QJsonObject{{"id", "left"}, {"path", "/tmp/left.mp4"}}}, QString(), {}, {});
+        QTest::qWait(20);
+        QVERIFY(!bin.showsImportButton());
+        QTest::mouseClick(bin.widget(), Qt::LeftButton, Qt::NoModifier, bin.thumbRect(0).center());
+        QCOMPARE(imports.count(), 1);
+        QTest::mouseMove(bin.widget(), bin.thumbRect(1).center());
+        QVERIFY(bin.showsImportButton());
+        QTest::mouseClick(bin.widget(), Qt::LeftButton, Qt::NoModifier, bin.thumbRect(1).center());
+        QCOMPARE(imports.count(), 2);
     }
 
     void timelineKeepsSeekSelectMoveAndTrimCoordinates() {
