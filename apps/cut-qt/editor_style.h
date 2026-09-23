@@ -61,13 +61,13 @@ QToolBar {
     background: #1c1c1c;
     border: 0;
     border-bottom: 1px solid #272727;
-    spacing: 6px;
-    padding: 6px 10px;
+    spacing: 4px;
+    padding: 1px 8px;
 }
 QToolBar::separator {
     background: #404040;
     width: 1px;
-    margin: 4px 3px;
+    margin: 2px 3px;
 }
 
 QWidget#panel,
@@ -104,8 +104,9 @@ QPushButton {
 QToolBar QToolButton {
     background: transparent;
     border-color: transparent;
-    min-width: 24px;
-    padding: 3px 7px;
+    min-width: 22px;
+    min-height: 18px;
+    padding: 0px 6px;
 }
 QToolBar QToolButton:hover,
 QToolButton:hover,
@@ -187,8 +188,8 @@ QToolBar QComboBox#canvasPicker {
     background: #2a2a2a;
     border: 1px solid #343434;
     border-radius: 4px;
-    padding: 1px 22px 1px 8px;
-    min-height: 20px;
+    padding: 0px 18px 0px 6px;
+    min-height: 18px;
 }
 QToolBar QComboBox#qualityPicker:hover,
 QToolBar QComboBox#canvasPicker:hover {
@@ -206,7 +207,7 @@ QToolBar QToolButton#toolbarPrimary {
     border-radius: 4px;
     color: #1c1c1c;
     font-weight: 600;
-    padding: 3px 10px;
+    padding: 0px 8px;
 }
 QToolBar QToolButton#toolbarPrimary:hover { background: #d9d9d9; }
 QToolBar QToolButton#toolbarPrimary:disabled {
@@ -218,7 +219,7 @@ QToolBar QToolButton#toolbarQuiet {
     background: transparent;
     border: 1px solid transparent;
     color: #c8c8c8;
-    padding: 3px 8px;
+    padding: 0px 6px;
 }
 QToolBar QToolButton#toolbarQuiet:hover {
     background: #2c2c2c;
