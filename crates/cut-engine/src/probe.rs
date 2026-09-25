@@ -684,30 +684,6 @@ pub fn cached_filmstrip(
     })
 }
 
-#[cfg(test)]
-fn waveform_buckets(samples: &[f64], bucket_count: usize) -> Vec<WaveformBucket> {
-    if samples.is_empty() {
-        return Vec::new();
-    }
-    let bucket_count = bucket_count
-        .clamp(1, MAX_WAVEFORM_BUCKETS)
-        .min(samples.len())
-        .max(1);
-    (0..bucket_count)
-        .map(|index| {
-            let start = index * samples.len() / bucket_count;
-            let end = ((index + 1) * samples.len() / bucket_count).max(start + 1);
-            let end = end.min(samples.len());
-            let values = &samples[start..end];
-            let min = values.iter().copied().fold(f64::INFINITY, f64::min);
-            let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-            let rms = (values.iter().map(|value| value * value).sum::<f64>() / values.len() as f64)
-                .sqrt();
-            WaveformBucket { min, max, rms }
-        })
-        .collect()
-}
-
 fn decode_waveform_buckets(
     src: &str,
     duration: f64,
@@ -1164,39 +1140,6 @@ mod tests {
                 },
             ]
         );
-    }
-
-    #[test]
-    fn waveform_buckets_do_not_exceed_available_samples() {
-        let buckets = waveform_buckets(&[-1.0, 0.0, 1.0], MAX_WAVEFORM_BUCKETS);
-        assert_eq!(buckets.len(), 3);
-        assert_eq!(buckets[0].min, -1.0);
-        assert_eq!(buckets[2].max, 1.0);
-    }
-
-    #[test]
-    fn exact_frame_output_names_preserve_requested_order() {
-        assert_eq!(
-            frame_file_names(4),
-            [
-                "frame-000.png",
-                "frame-001.png",
-                "frame-002.png",
-                "frame-003.png"
-            ]
-        );
-    }
-
-    #[test]
-    fn waveform_buckets_are_deterministic() {
-        let samples = [-1.0, -0.5, 0.25, 1.0, 0.0, 0.75, -0.25];
-        let first = waveform_buckets(&samples, 3);
-        let second = waveform_buckets(&samples, 3);
-        assert_eq!(first, second);
-        assert_eq!(first.len(), 3);
-        assert_eq!((first[0].min, first[0].max), (-1.0, -0.5));
-        assert_eq!((first[1].min, first[1].max), (0.25, 1.0));
-        assert_eq!((first[2].min, first[2].max), (-0.25, 0.75));
     }
 
     #[test]

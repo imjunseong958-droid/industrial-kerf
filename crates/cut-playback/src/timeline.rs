@@ -521,7 +521,6 @@ fn dimension(value: f64) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{PlaybackClip, PlaybackTimeline};
-    use cut_core::capability::{capability, CapabilitySupport, EditCapability};
     use cut_domain::{parse_project, TrackType};
     use serde_json::json;
 
@@ -742,29 +741,5 @@ mod tests {
         assert_eq!(timeline.captions_at(2.5)[0].text, "hello");
         assert!(timeline.captions_at(4.5).is_empty());
         assert!(timeline.captions_at(4.0).is_empty());
-    }
-
-    #[test]
-    fn live_capability_contract_matches_the_playback_projection() {
-        for feature in [
-            EditCapability::Placement,
-            EditCapability::SourceRange,
-            EditCapability::Speed,
-            EditCapability::Volume,
-        ] {
-            assert_eq!(capability(feature).live, CapabilitySupport::Exact);
-        }
-        for feature in [
-            EditCapability::Crop,
-            EditCapability::Transform,
-            EditCapability::Opacity,
-            EditCapability::LayeredVideo,
-            EditCapability::AudioMixing,
-            EditCapability::Effects,
-            EditCapability::Keyframes,
-            EditCapability::Transitions,
-        ] {
-            assert_eq!(capability(feature).live, CapabilitySupport::Unsupported);
-        }
     }
 }

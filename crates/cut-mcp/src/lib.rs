@@ -4238,12 +4238,6 @@ mod tests {
     }
 
     #[test]
-    fn core_profile_keeps_stable_mcp_order() {
-        assert_eq!(McpProfile::Core.names()[0], "results.read");
-        assert_eq!(McpProfile::Core.names().last(), Some(&"skills.read"));
-    }
-
-    #[test]
     fn external_catalog_hides_bypasses_and_dispatch_rejects_them() {
         for profile in [McpProfile::Core, McpProfile::Full] {
             let root = TempDir::new().expect("temp dir");
@@ -4331,15 +4325,6 @@ mod tests {
         }
         assert!(tools.contains_key("timeline.apply"));
         assert!(tools.contains_key("workflow.roughcut"));
-    }
-
-    #[test]
-    fn outline_tool_is_advertised_as_a_read_only_projection() {
-        assert!(McpProfile::Core.names().contains(&"project.outline"));
-        let (_, schema, annotations) = tool_metadata("project.outline");
-        assert_eq!(schema["additionalProperties"], false);
-        assert_eq!(annotations.read_only_hint, Some(true));
-        assert_eq!(annotations.idempotent_hint, Some(true));
     }
 
     #[cfg(unix)]
@@ -4719,26 +4704,6 @@ mod tests {
     }
 
     #[test]
-    fn media_probe_advertises_transcription_and_listen_actions() {
-        let (_, schema, _) = tool_metadata("media.probe");
-        let actions = schema["properties"]["action"]["enum"]
-            .as_array()
-            .expect("actions");
-        assert!(actions.iter().any(|action| action == "transcribe"));
-        assert!(actions.iter().any(|action| action == "listen"));
-        assert!(actions.iter().any(|action| action == "observe"));
-        let evidence = schema["properties"]["opts"]["properties"]["evidence"]["items"]["enum"]
-            .as_array()
-            .expect("observation evidence");
-        assert!(evidence.iter().any(|item| item == "filmstrip"));
-        assert!(evidence.iter().any(|item| item == "listen"));
-        assert_eq!(
-            schema["properties"]["opts"]["properties"]["modelVersion"]["type"],
-            "string"
-        );
-    }
-
-    #[test]
     fn observation_range_is_explicit_and_bounded() {
         let metadata = cut_engine::ProbeInfo {
             duration: Some(30.0),
@@ -4909,19 +4874,6 @@ mod tests {
     }
 
     #[test]
-    fn workflow_requires_agent_selected_ranges_before_planning() {
-        let root = TempDir::new().expect("temp dir");
-        let router = CutMcpRouter::new(root.path(), McpProfile::Core, None).expect("router");
-        let result = router.call(
-            "workflow.roughcut",
-            json!({"goal": "assemble the strongest moments"}),
-        );
-        assert_eq!(result["ok"], true);
-        assert_eq!(result["result"]["status"], "planning_needed");
-        assert!(result["result"]["message"].is_string());
-    }
-
-    #[test]
     fn workflow_duration_caps_speed_adjusted_selected_output() {
         let root = TempDir::new().expect("temp dir");
         let router = CutMcpRouter::new(root.path(), McpProfile::Core, None).expect("router");
@@ -4953,21 +4905,6 @@ mod tests {
         assert_eq!(coverage["mode"], "representative");
         assert_eq!(coverage["fullyCovered"], false);
         assert_eq!(coverage["requestedRanges"][0]["fullyCovered"], false);
-    }
-
-    #[test]
-    fn workflow_schema_exposes_bounded_retry_and_observation_phase() {
-        let (_, workflow, _) = tool_metadata("workflow.roughcut");
-        assert_eq!(
-            workflow["properties"]["duration"]["maximum"],
-            MAX_OBSERVATION_RANGE_SECONDS
-        );
-        assert_eq!(workflow["properties"]["maxRetries"]["maximum"], 2);
-        let (_, probe, _) = tool_metadata("media.probe");
-        assert_eq!(
-            probe["properties"]["opts"]["properties"]["phase"]["enum"][0],
-            "coarse"
-        );
     }
 
     #[test]

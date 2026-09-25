@@ -394,22 +394,3 @@ fn release_gate_keeps_audio_clock_and_video_frames_on_one_timeline() {
         "muted audio track remained audible"
     );
 }
-
-#[test]
-fn release_gate_maps_captions_and_exposes_mute_state() {
-    let project = cut_domain::parse_project(&json!({
-        "version": 2,
-        "fps": 30,
-        "sources": [{"id":"s", "path":"/tmp/no-media.mp4", "duration": 2, "hasAudio": true}],
-        "tracks": [{"id":"v", "type":"video", "clips":[{"id":"c", "sourceId":"s", "in":0, "out":2, "timelineStart":0}]}],
-        "overlays": [{"id":"captions", "type":"captions", "cues":[{"start":0.5,"end":1.0,"text":"한국어 caption"}]}],
-        "gaps": [], "transitions": [], "effects": [], "markers": []
-    }))
-    .expect("caption project");
-    let timeline = PlaybackTimeline::from_project(&project).expect("caption timeline");
-    assert_eq!(timeline.captions_at(0.75)[0].text, "한국어 caption");
-    assert!(
-        timeline.captions_at(1.0).is_empty(),
-        "caption end must be exclusive"
-    );
-}

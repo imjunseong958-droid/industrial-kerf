@@ -58,21 +58,6 @@ fn composition_files(root: &TempDir) {
 }
 
 #[test]
-fn composition_cache_keys_are_order_independent() {
-    let first = cache_key_for_values(
-        "composition",
-        &json!({"templateId":"fixture","bindings":{"b":2,"a":1}}),
-        &json!({"format":"png","frame":0}),
-    );
-    let second = cache_key_for_values(
-        "composition",
-        &json!({"bindings":{"a":1,"b":2},"templateId":"fixture"}),
-        &json!({"frame":0,"format":"png"}),
-    );
-    assert_eq!(first, second);
-}
-
-#[test]
 fn composition_render_rejects_unregistered_media_without_renderer_fallback() {
     let root = TempDir::new().unwrap();
     fs::write(

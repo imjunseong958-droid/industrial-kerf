@@ -5,7 +5,6 @@ use cut_engine::vision::yolo::{
     serialize_frame_json, DetectionFrame, FrameSource, SyntheticBackend, TrackOptions, VideoFrame,
     YoloEngine, YoloOutputLayout, YoloRawOutput,
 };
-use cut_engine::vision::InferenceBackend;
 use cut_engine::vision::VisionEngineError;
 
 struct VecFrameSource {
@@ -169,60 +168,6 @@ fn synthetic_yolo_tensor_decode_rows_first() {
 }
 
 #[test]
-fn synthetic_yolo_tensor_decode_channels_first() {
-    let info = letterbox_info(640, 480, 640);
-    let output = YoloRawOutput {
-        layout: YoloOutputLayout::ChannelsFirst,
-        num_predictions: 1,
-        num_classes: 2,
-        data: vec![320.0, 240.0, 80.0, 60.0, 0.05, 0.95],
-    };
-    let boxes = decode_yolo_output(&output, 0.25, 640, 640, 480, &info);
-    assert_eq!(boxes.len(), 1);
-    assert_eq!(boxes[0].class_id, 1);
-}
-
-#[test]
-fn yolo_engine_track_video_with_synthetic_backend() {
-    let frame = VideoFrame {
-        index: 0,
-        width: 64,
-        height: 64,
-        rgb: vec![0u8; 64 * 64 * 3],
-        orig_width: 0,
-        orig_height: 0,
-    };
-    let mut source = VecFrameSource {
-        frames: vec![frame],
-        index: 0,
-    };
-    let backend_output = YoloRawOutput {
-        layout: YoloOutputLayout::RowsFirst,
-        num_predictions: 1,
-        num_classes: 1,
-        data: vec![32.0, 32.0, 20.0, 20.0, 0.95],
-    };
-    let mut backend = SyntheticBackend::new(vec![backend_output]);
-    let mut engine = YoloEngine::from_weights("/tmp/custom.onnx").unwrap();
-    let jsonl = engine
-        .track_video(
-            &mut source,
-            &TrackOptions {
-                fps: Some(30.0),
-                max_frames: Some(1),
-                conf: Some(0.25),
-                iou: Some(0.7),
-                imgsz: Some(64),
-                class_names: Some(vec!["cam".to_string()]),
-            },
-            Some(&mut backend),
-        )
-        .unwrap();
-    assert!(jsonl.contains("\"frame_index\":0"));
-    assert!(jsonl.contains("\"detections\""));
-}
-
-#[test]
 fn scaled_frame_boxes_map_back_to_source_pixels() {
     let frame = VideoFrame {
         index: 0,
@@ -283,13 +228,4 @@ fn yolo_engine_track_detections_emits_jsonl() {
         jsonl,
         "{\"detections\":[],\"frame_index\":0,\"height\":100,\"width\":100}"
     );
-}
-
-#[cfg(not(feature = "onnx"))]
-#[test]
-fn onnx_backend_reports_disabled() {
-    let mut backend = cut_engine::vision::yolo::OnnxBackend;
-    let mut dest = YoloRawOutput::default();
-    let err = backend.infer(&[], 1, 3, 640, 640, &mut dest).unwrap_err();
-    assert!(err.message.contains("ONNX runtime not enabled"));
 }

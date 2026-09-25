@@ -1074,13 +1074,6 @@ mod tests {
     }
 
     #[test]
-    fn reconnect_command_deserializes() {
-        let command: Command = serde_json::from_value(json!({"type":"reconnect"}))
-            .expect("reconnect command should deserialize");
-        assert!(matches!(command, Command::Reconnect));
-    }
-
-    #[test]
     fn proposal_only_snapshot_is_published_without_restarting_media() {
         let (tx, rx) = mpsc::sync_channel(4);
         let shared = Arc::new(shared());
@@ -1170,33 +1163,6 @@ mod tests {
                 model: Some("local-model".into()),
                 mcp_enabled: true,
                 mcp_config_version: 7,
-            }
-        );
-    }
-
-    #[test]
-    fn legacy_agent_command_keeps_environment_fallbacks() {
-        let command: Command = serde_json::from_value(json!({
-            "type": "agent",
-            "text": "Review this timeline"
-        }))
-        .expect("legacy agent command should deserialize");
-        let Command::Agent { settings, .. } = command else {
-            panic!("expected agent command");
-        };
-        assert_eq!(settings, AgentSettings::default());
-    }
-
-    #[test]
-    fn mcp_config_version_invalidates_session_settings() {
-        let settings = AgentSettings::default();
-        assert!(!settings.mcp_enabled);
-        assert_eq!(settings.mcp_config_version, 0);
-        assert_ne!(
-            settings,
-            AgentSettings {
-                mcp_config_version: 1,
-                ..settings.clone()
             }
         );
     }

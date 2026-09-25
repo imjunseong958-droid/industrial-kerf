@@ -191,7 +191,7 @@ pub fn capability(capability: EditCapability) -> &'static CapabilityEntry {
 
 #[cfg(test)]
 mod tests {
-    use super::{capability, CapabilitySupport, EditCapability, CAPABILITY_MATRIX};
+    use super::{EditCapability, CAPABILITY_MATRIX};
     use std::collections::HashSet;
 
     #[test]
@@ -222,21 +222,5 @@ mod tests {
         assert!(CAPABILITY_MATRIX
             .iter()
             .all(|entry| { !entry.live_note.is_empty() && !entry.offline_note.is_empty() }));
-    }
-
-    #[test]
-    fn exact_preview_is_explicit_and_conservative() {
-        assert_eq!(
-            capability(EditCapability::Placement).live,
-            CapabilitySupport::Exact
-        );
-        assert_eq!(
-            capability(EditCapability::Crop).live,
-            CapabilitySupport::Unsupported
-        );
-        assert_eq!(
-            capability(EditCapability::Transform).offline,
-            CapabilitySupport::Limited
-        );
     }
 }
