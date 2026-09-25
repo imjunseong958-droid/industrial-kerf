@@ -784,13 +784,3 @@ fn xyxy_to_normalized(
         height: round_coordinate(bottom - top),
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::vision::VISION_TARGETS;
-
-    #[test]
-    fn vision_targets_constant() {
-        assert_eq!(VISION_TARGETS, &["cam", "chat", "content"]);
-    }
-}

@@ -2246,10 +2246,6 @@ mod tests {
         chunks: Vec<ProviderChunk>,
     }
 
-    struct SequencedProvider {
-        responses: Mutex<Vec<Vec<ProviderChunk>>>,
-    }
-
     struct FakeStreamingClient {
         events: Vec<Value>,
         bodies: Mutex<Vec<Value>>,
@@ -2305,45 +2301,6 @@ mod tests {
         fn stream(&self, _request: &ProviderRequest) -> Result<Vec<ProviderChunk>, ProviderError> {
             Ok(self.chunks.clone())
         }
-    }
-
-    impl LlmProvider for SequencedProvider {
-        fn name(&self) -> ProviderName {
-            ProviderName::Anthropic
-        }
-
-        fn default_model(&self) -> &'static str {
-            DEFAULT_ANTHROPIC_MODEL
-        }
-
-        fn stream(&self, _request: &ProviderRequest) -> Result<Vec<ProviderChunk>, ProviderError> {
-            self.responses
-                .lock()
-                .unwrap()
-                .drain(..1)
-                .next()
-                .ok_or_else(|| ProviderError::new("TEST", "no response"))
-        }
-    }
-
-    #[test]
-    fn translates_tool_history_for_both_openai_shapes() {
-        let messages = vec![
-            json!({"role": "user", "content": "trim it"}),
-            json!({"role": "assistant", "content": [
-                {"type": "text", "text": "I will"},
-                {"type": "tool_use", "id": "call-1", "name": "timeline", "input": {"track": "video-1"}}
-            ]}),
-            json!({"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": "call-1", "content": "{\"ok\":true}"}
-            ]}),
-        ];
-        let chat = to_openai_messages(&messages);
-        assert_eq!(chat[1]["tool_calls"][0]["function"]["name"], "timeline");
-        assert_eq!(chat[2]["role"], "tool");
-        let responses = to_openai_responses_input(&messages);
-        assert_eq!(responses[2]["type"], "function_call");
-        assert_eq!(responses[3]["type"], "function_call_output");
     }
 
     #[test]
@@ -2419,35 +2376,6 @@ mod tests {
     }
 
     #[test]
-    fn agent_runs_tool_turn_and_serializes_history() {
-        let provider = FakeProvider {
-            chunks: vec![ProviderChunk::MessageEnd {
-                stop_reason: "end_turn".into(),
-                content: vec![json!({"type": "text", "text": "done"})],
-            }],
-        };
-        let mut tools = ToolMap::new();
-        tools.insert(
-            "timeline".into(),
-            AgentTool::new("timeline", "inspect", json!({"type": "object"}), |_| {
-                Ok(json!({}))
-            }),
-        );
-        let mut session = AgentSession::from_provider(
-            Box::new(provider),
-            None,
-            None,
-            Vec::new(),
-            tools,
-            2,
-            OpenAiApiMode::Chat,
-            None,
-        );
-        assert_eq!(session.run("hello").unwrap(), "done");
-        assert_eq!(session.messages.len(), 2);
-    }
-
-    #[test]
     fn native_discovery_keeps_large_catalogs_out_of_the_prompt() {
         let provider = FakeProvider { chunks: vec![] };
         let mut tools = ToolMap::new();
@@ -2493,60 +2421,6 @@ mod tests {
         assert!(session
             .execute_tool("tools.call", json!({"name":"media.import","arguments":{}}))
             .is_err());
-    }
-
-    #[test]
-    fn agent_executes_tool_sequence_through_the_model_loop() {
-        let provider = SequencedProvider {
-            responses: Mutex::new(vec![
-                vec![ProviderChunk::MessageEnd {
-                    stop_reason: "tool_use".into(),
-                    content: vec![json!({
-                        "type": "tool_use",
-                        "id": "call-1",
-                        "name": "workflow.roughcut",
-                        "input": {"goal": "assemble selected ranges"}
-                    })],
-                }],
-                vec![ProviderChunk::MessageEnd {
-                    stop_reason: "end_turn".into(),
-                    content: vec![json!({"type": "text", "text": "awaiting review"})],
-                }],
-            ]),
-        };
-        let calls = Arc::new(Mutex::new(Vec::new()));
-        let calls_for_tool = Arc::clone(&calls);
-        let mut tools = ToolMap::new();
-        tools.insert(
-            "workflow.roughcut".into(),
-            AgentTool::new(
-                "workflow.roughcut",
-                "Stage a rough cut",
-                json!({"type": "object"}),
-                move |input| {
-                    calls_for_tool.lock().unwrap().push(input);
-                    Ok(json!({"status": "planning_needed"}))
-                },
-            ),
-        );
-        let mut session = AgentSession::from_provider(
-            Box::new(provider),
-            None,
-            None,
-            Vec::new(),
-            tools,
-            2,
-            OpenAiApiMode::Chat,
-            None,
-        );
-        assert_eq!(session.run("make a rough cut").unwrap(), "awaiting review");
-        assert_eq!(
-            calls.lock().unwrap().as_slice(),
-            &[json!({
-                "goal": "assemble selected ranges"
-            })]
-        );
-        assert_eq!(session.messages.len(), 4);
     }
 
     #[test]

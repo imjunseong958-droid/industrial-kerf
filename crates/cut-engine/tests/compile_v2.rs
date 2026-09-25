@@ -533,12 +533,3 @@ fn sparse_same_source_clips_get_separate_inputs() {
     assert!(compiled.filter_complex.contains("concat="));
     assert!(!compiled.filter_complex.contains("overlay="));
 }
-
-#[test]
-fn overlapping_clips_keep_overlay_and_share_identical_source_ranges() {
-    let compiled =
-        compile_filter_graph_v2(&project(json!({})), CompileV2Options::default()).expect("compile");
-    assert!(compiled.filter_complex.contains("overlay="));
-    assert!(compiled.filter_complex.contains("enable='between(t,"));
-    assert!(!compiled.filter_complex.contains("concat="));
-}

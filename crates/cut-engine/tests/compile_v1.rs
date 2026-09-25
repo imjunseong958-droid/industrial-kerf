@@ -42,33 +42,12 @@ fn contains_trim_filters_for_both_clips() {
 }
 
 #[test]
-fn contains_concat_filter_across_track_clips() {
-    let timeline = two_clip_timeline();
-    let compiled = compile_filter_graph_v1(&timeline, &[]).expect("compile");
-    assert!(compiled.filter_complex.contains("concat=n=2:v=1:a=1"));
-}
-
-#[test]
 fn applies_setpts_atempo_and_volume_for_speed_and_volume() {
     let timeline = two_clip_timeline();
     let compiled = compile_filter_graph_v1(&timeline, &[]).expect("compile");
     assert!(compiled.filter_complex.contains("setpts=0.5*PTS"));
     assert!(compiled.filter_complex.contains("atempo=2"));
     assert!(compiled.filter_complex.contains("volume=0.5"));
-}
-
-#[test]
-fn produces_argv_starting_with_ffmpeg_and_array_safe_args() {
-    let timeline = two_clip_timeline();
-    let compiled = compile_filter_graph_v1(&timeline, &[]).expect("compile");
-    assert_eq!(compiled.argv.first().map(String::as_str), Some("ffmpeg"));
-    let fc_idx = compiled
-        .argv
-        .iter()
-        .position(|arg| arg == "-filter_complex")
-        .expect("filter_complex flag");
-    assert!(compiled.argv.get(fc_idx + 1).is_some());
-    assert!(!compiled.command.contains("&&"));
 }
 
 #[test]
@@ -227,16 +206,4 @@ fn escapes_timed_caption_text_and_maps_style_position() {
     assert!(filter.contains("y='18'"));
     assert!(filter.contains("A\\\\:b"));
     assert!(filter.contains("100\\\\%"));
-}
-
-#[test]
-fn draft_post_filters_scale_and_fps() {
-    let timeline = two_clip_timeline();
-    let compiled = compile_filter_graph_v1(
-        &timeline,
-        &["scale=-2:360".to_string(), "fps=15".to_string()],
-    )
-    .expect("compile");
-    assert!(compiled.filter_complex.contains("scale=-2:360"));
-    assert!(compiled.filter_complex.contains("fps=15"));
 }

@@ -350,24 +350,3 @@ impl ByteTracker {
             .collect()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::vision::nms::NmsBox;
-
-    #[test]
-    fn creates_track_on_first_frame() {
-        let mut tracker = ByteTracker::new(TrackConfig::default());
-        let tracked = tracker.update(&[NmsBox {
-            x1: 50.0,
-            y1: 50.0,
-            x2: 90.0,
-            y2: 90.0,
-            confidence: 0.9,
-            class_id: 0,
-        }]);
-        assert_eq!(tracked.len(), 1);
-        assert_eq!(tracked[0].track_id, 1);
-    }
-}

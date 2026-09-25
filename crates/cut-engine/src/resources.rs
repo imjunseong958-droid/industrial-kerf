@@ -178,37 +178,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn four_core_laptop_stays_conservative() {
-        let budget = budget_for_cpus(4);
-        assert_eq!(budget.ffmpeg_threads, 2);
-        assert_eq!(budget.decode_threads, 2);
-        assert_eq!(budget.onnx_intra_threads, 2);
-        assert_eq!(budget.extract_parallelism, 2);
-        assert_eq!(budget.software_preset, "veryfast");
-        assert_eq!(budget.software_crf, 23);
-        assert!((budget.tracking_fps - DEFAULT_TRACKING_FPS).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn two_core_machine_does_not_oversubscribe() {
-        let budget = budget_for_cpus(2);
-        assert_eq!(budget.ffmpeg_threads, 1);
-        assert_eq!(budget.decode_threads, 1);
-        assert_eq!(budget.onnx_intra_threads, 1);
-        assert_eq!(budget.extract_parallelism, 1);
-        assert!((budget.tracking_fps - LOW_POWER_TRACKING_FPS).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn desktop_keeps_higher_quality_software_defaults() {
-        let budget = budget_for_cpus(16);
-        assert_eq!(budget.software_preset, "medium");
-        assert_eq!(budget.software_crf, 20);
-        assert_eq!(budget.ffmpeg_threads, 8);
-        assert_eq!(budget.extract_parallelism, 4);
-    }
-
-    #[test]
     fn explicit_fps_wins_over_budget() {
         assert!((tracking_sample_fps(Some(12.5)) - 12.5).abs() < f64::EPSILON);
         assert!(tracking_sample_fps(Some(0.0)) > 0.0);

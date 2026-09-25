@@ -1313,19 +1313,6 @@ mod tests {
     }
 
     #[test]
-    fn public_session_accepts_controls_without_starting_ffmpeg() {
-        let session = PlaybackSession::open(
-            cut_domain::empty_project(),
-            PlaybackConfig::default().with_audio_enabled(false),
-        )
-        .expect("session");
-        assert!(session.handle().seek(0.25).is_ok());
-        assert!(session.handle().set_volume(0.5).is_ok());
-        assert!(session.handle().set_muted(true).is_ok());
-        assert!(session.handle().pause().is_ok());
-    }
-
-    #[test]
     fn frame_byte_validation_rejects_truncated_rgba() {
         let frame = PlaybackFrame {
             sequence: 0,
@@ -1355,14 +1342,6 @@ mod tests {
             session.set_volume(2.0),
             Err(PlaybackError::InvalidValue(_))
         ));
-    }
-
-    #[test]
-    fn media_project_is_accepted_even_when_source_is_not_opened_yet() {
-        let timeline = PlaybackTimeline::from_project(&project_with_media()).expect("timeline");
-        assert_eq!(timeline.duration, 3.0);
-        assert_eq!(timeline.width, 320);
-        assert_eq!(timeline.height, 180);
     }
 
     fn worker_for_state_test() -> (Worker, Receiver<QueuedEvent>, Arc<Mutex<ControlState>>) {

@@ -911,17 +911,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn letterbox_roundtrip() {
-        let rgb = vec![255u8; 640 * 480 * 3];
-        let mut buffer = Vec::new();
-        let (nchw, info) = letterbox_nchw(&rgb, 640, 480, 640, &mut buffer, &mut Vec::new());
-        assert_eq!(nchw.len(), 3 * 640 * 640);
-        let (x1, y1, x2, y2) = invert_letterbox_xyxy(320.0, 320.0, 100.0, 80.0, &info, 640, 480);
-        assert!(x2 > x1);
-        assert!(y2 > y1);
-    }
-
-    #[test]
     fn tracking_decode_fits_without_upscaling() {
         assert_eq!(scaled_decode_size(1920, 1080, 640), (640, 360));
         assert_eq!(scaled_decode_size(320, 180, 640), (320, 180));

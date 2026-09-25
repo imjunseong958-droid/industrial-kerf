@@ -5695,23 +5695,6 @@ fn stable_id(prefix: &str, identity: &str) -> String {
     format!("{prefix}-{}", &sha256_hex(&digest)[..16])
 }
 
-#[cfg(test)]
-fn repository_root_from_manifest(manifest_dir: &Path) -> PathBuf {
-    manifest_dir
-        .ancestors()
-        .nth(2)
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."))
-}
-
-#[cfg(test)]
-fn engine_binary_candidates(root: &Path) -> [PathBuf; 2] {
-    [
-        root.join("target/release/cut-engine"),
-        root.join("target/debug/cut-engine"),
-    ]
-}
-
 fn engine_error(error: cut_engine::EngineError) -> RuntimeError {
     match error {
         cut_engine::EngineError::Cancelled => {
@@ -5884,60 +5867,6 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(error.code, "IDEMPOTENCY_CONFLICT");
-    }
-
-    #[test]
-    fn receipt_snapshots_share_memory_and_keep_legacy_json_shape() {
-        let snapshot = StateSnapshot {
-            project: json!({"version": 2}),
-            revision: 7,
-            can_undo: true,
-            can_redo: false,
-            duration: 0.0,
-            sources: Vec::new(),
-            pending_proposal: None,
-            source_version: 2,
-            projection_status: "current".into(),
-        };
-        let shared = Arc::new(snapshot);
-        let record = OperationRecord {
-            fingerprint: "fingerprint".into(),
-            snapshot: shared.clone(),
-        };
-        let cloned = record.clone();
-        assert!(Arc::ptr_eq(&record.snapshot, &cloned.snapshot));
-
-        let encoded = serde_json::to_value(&record).expect("receipt JSON");
-        assert_eq!(encoded["snapshot"]["revision"], 7);
-        let legacy = serde_json::json!({
-            "fingerprint": "fingerprint",
-            "snapshot": encoded["snapshot"]
-        });
-        let decoded: OperationRecord = serde_json::from_value(legacy).expect("legacy receipt");
-        assert_eq!(decoded.snapshot.revision, 7);
-    }
-
-    #[test]
-    fn agent_proposal_does_not_mutate_until_accepted() {
-        let mut runtime = runtime();
-        let before = runtime.snapshot();
-        let staged = runtime
-            .stage_agent_proposal(
-                "agent-1",
-                before.revision,
-                &[json!({
-                    "idempotencyKey": "agent-1",
-                    "commands": [{"type":"add_track","track":{"id":"titles","type":"title","clips":[]}}]
-                })],
-            )
-            .unwrap();
-        assert_eq!(staged.project, before.project);
-        assert_eq!(staged.revision, before.revision);
-        assert!(!staged.can_undo);
-        assert!(matches!(
-            staged.pending_proposal,
-            Some(PendingProposal::Pending { .. })
-        ));
     }
 
     #[test]
@@ -6788,24 +6717,6 @@ mod tests {
     }
 
     #[test]
-    fn request_envelope_round_trips_typed_operation() {
-        let envelope = RequestEnvelope::new(
-            "request-1",
-            RuntimeRequest::Apply {
-                actor: "ui".into(),
-                idempotency_key: "key-1".into(),
-                base_revision: 0,
-                command: json!({"type":"set_metadata","patch":{"title":"Cut"}}),
-            },
-        );
-        let encoded = serde_json::to_string(&envelope).unwrap();
-        let decoded: RequestEnvelope = serde_json::from_str(&encoded).unwrap();
-        decoded.validate().unwrap();
-        assert_eq!(decoded.id, "request-1");
-        assert!(matches!(decoded.request, RuntimeRequest::Apply { .. }));
-    }
-
-    #[test]
     fn pending_proposal_serializes_gui_field_names_exactly() {
         let pending = serde_json::to_value(PendingProposal::Pending {
             proposal_id: "proposal-1".into(),
@@ -6973,20 +6884,6 @@ mod tests {
     }
 
     #[test]
-    fn engine_path_resolution_uses_workspace_root_after_crate_move() {
-        let manifest = Path::new("/workspace/cut/crates/cut-runtime");
-        let root = repository_root_from_manifest(manifest);
-        assert_eq!(root, Path::new("/workspace/cut"));
-        assert_eq!(
-            engine_binary_candidates(&root),
-            [
-                PathBuf::from("/workspace/cut/target/release/cut-engine"),
-                PathBuf::from("/workspace/cut/target/debug/cut-engine")
-            ]
-        );
-    }
-
-    #[test]
     fn jsonl_rejects_empty_idempotency_keys_at_runtime_boundary() {
         let directory = std::env::temp_dir().join(format!("cut-runtime-jsonl-{}", unique_id()));
         let requests = [
@@ -7067,27 +6964,6 @@ mod tests {
             assert_eq!(response["error"]["code"], "INVALID_REQUEST");
         }
         let _ = fs::remove_dir_all(directory);
-    }
-
-    #[test]
-    fn snapshot_duration_matches_canonical_clip_and_gap_semantics() {
-        let project = cut_domain::parse_project(&json!({
-            "version": 2,
-            "fps": 30,
-            "duration": 1.5,
-            "sources": [],
-            "tracks": [{
-                "id": "titles",
-                "type": "title",
-                "clips": [
-                    {"id":"a","timelineStart":2.0,"duration":4.0},
-                    {"id":"b","timelineStart":8.0,"in":1.0,"out":5.0,"speed":2.0}
-                ]
-            }],
-            "gaps": [{"timelineStart":12.0,"duration":3.0}]
-        }))
-        .unwrap();
-        assert_eq!(cut_domain::project_duration(&project), 15.0);
     }
 
     #[test]

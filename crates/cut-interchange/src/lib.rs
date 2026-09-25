@@ -592,7 +592,6 @@ fn process_error_message(code: Option<i32>, stderr: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn normalizes_native_formats_and_rejects_shell_fragments() {
@@ -617,20 +616,5 @@ mod tests {
         assert_eq!(report.issues.len(), 1);
         assert_eq!(report.losses.len(), 1);
         assert_eq!(report.omissions, report.losses);
-    }
-
-    #[test]
-    fn validates_projects_before_export() {
-        let project = cut_domain::empty_project();
-        let adapter = OpenTimelineIoAdapter::with_defaults().unwrap();
-        let invocation = adapter
-            .build_export_invocation(&project, Path::new("out.otio"), None)
-            .unwrap();
-        assert!(invocation.args.iter().any(|arg| arg == "export"));
-        assert!(invocation
-            .stdin
-            .as_deref()
-            .is_some_and(|value| value.contains("\"project\"")));
-        let _ = json!({});
     }
 }

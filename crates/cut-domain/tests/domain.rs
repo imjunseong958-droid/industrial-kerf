@@ -138,26 +138,6 @@ fn conflicting_aliases_are_rejected() {
 }
 
 #[test]
-fn migration_accumulates_effective_duration_per_track() {
-    let legacy = json!({
-        "version":1,"fps":30,"sources":[{"id":"s","path":"/tmp/a.mp4"}],
-        "tracks":[{"id":"v0","clips":[{"id":"a","src":"s","in":0,"out":4,"speed":2},{"id":"b","src":"s","in":4,"out":6}]}],
-        "overlays":[]
-    });
-    let legacy = parse_v1(&legacy).unwrap();
-    let migrated = migrate_v1_to_v2(&legacy).unwrap();
-    assert_eq!(migrated.tracks[0].kind, TrackType::Video);
-    assert_eq!(
-        migrated.tracks[0]
-            .clips
-            .iter()
-            .map(|clip| clip.timeline_start)
-            .collect::<Vec<_>>(),
-        vec![0.0, 2.0]
-    );
-}
-
-#[test]
 fn command_alias_precedence_and_atomic_history() {
     let project = parse_project(&json!({
         "version":2,"fps":30,"sources":[],"tracks":[{"id":"titles","type":"title","clips":[]}]

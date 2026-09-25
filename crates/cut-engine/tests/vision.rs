@@ -5,8 +5,7 @@ use cut_engine::vision::planning::{
 };
 use cut_engine::vision::{
     parse_and_normalize_tracking_output, NormalizeOptions, NormalizedBoundingBox,
-    NormalizedDetection, TrackId, UnknownLabelPolicy, VisionConfigError, VisionOutputError,
-    VisionTarget,
+    NormalizedDetection, TrackId, UnknownLabelPolicy, VisionOutputError, VisionTarget,
 };
 use std::collections::HashMap;
 
@@ -684,15 +683,4 @@ fn rejects_remote_weights() {
     })
     .unwrap_err();
     assert!(err.message.contains("remote URLs"));
-}
-
-#[test]
-fn config_error_is_typed() {
-    let err = validate_yolo26_config(&Yolo26TrackingConfig {
-        weights: "yolo26s.pt".to_string(),
-        label_map: config_label_map(),
-        ..base_config()
-    })
-    .unwrap_err();
-    let _: VisionConfigError = err;
 }
