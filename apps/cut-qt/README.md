@@ -2,7 +2,7 @@
 
 This is the native Qt6 desktop shell for Cut. It keeps the project state in
 `cutd` through the small C ABI in `bridge.h`; the window does not maintain a
-second editable copy of the timeline. The viewer, source tray, timeline, inspector, and agent rail are all
+second editable copy of the timeline. The viewer, timeline, inspector, and agent rail are all
 backed by the bridge event stream.
 
 Build the Rust bridge first, then configure and build the app from the
@@ -31,12 +31,12 @@ trimming, split-at-playhead, and Delete. Inspector values commit on focus loss.
 Drag the panel dividers to resize the workspace, and use View to hide either
 panel. The timeline fits the window on its own. All tracks remain vertically
 scrollable when their combined height exceeds the timeline panel.
-The source tray has a Sources label and one empty well. Hovering that well
-shows a plus and imports from there. Moving the pointer across the timeline
+Import media from File. Moving the pointer across the timeline
 scrubs the viewer and shows the time beside the pointer. Play and pause are
 Space. The assistant fills the right side
-from top to bottom. Hover the left side of a lane
-to add another one. In Chat, Return sends
+from top to bottom. An empty timeline starts without tracks. Hover over the
+empty row in the left track header to reveal a plus; click it to add a video
+or audio track. In Chat, Return sends
 the message and Shift+Return inserts a new line.
 
 Use the project-format picker in the toolbar to switch between standard

@@ -9,6 +9,7 @@ fn router_with_clips(count: usize) -> (TempDir, CutMcpRouter) {
     std::fs::write(&source, b"test").unwrap();
     let mut project = serialize_project(&empty_project()).unwrap();
     project["sources"] = json!([{"id":"source-1","path":source,"duration":300.0}]);
+    project["tracks"] = json!([{"id":"video-1","type":"video","clips":[]}]);
     project["tracks"][0]["clips"] = Value::Array(
         (0..count)
             .map(|i| {
