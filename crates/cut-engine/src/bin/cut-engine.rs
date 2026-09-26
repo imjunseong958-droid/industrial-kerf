@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::io::{self, Read};
 use std::path::PathBuf;
 
@@ -30,12 +29,9 @@ use cut_engine::proxy::{
 use cut_engine::render::{
     render_args_v1, render_args_v2, stderr_progress_callback, RenderV1Options, RenderV2Options,
 };
-use cut_engine::resources::{budget, tracking_sample_fps};
+use cut_engine::resources::budget;
 use cut_engine::vision::{
-    build_tracking_plan, crop_plan_from_json, normalize_detection_frames,
-    parse_and_normalize_tracking_output, validate_yolo26_config, FfmpegRgbFrameSource,
-    NormalizeOptions, TrackDecodeOptions, TrackingPlanInput, TrackingPlanOptions,
-    UnknownLabelPolicy, VisionTarget, Yolo26TrackingConfig, YoloEngine, DEFAULT_IMGSZ,
+    build_tracking_plan, crop_plan_from_json, TrackingPlanInput, TrackingPlanOptions,
 };
 use cut_engine::{
     CancellationToken, TimeRange, TranscriptionBackend, TranscriptionOptions,
@@ -145,18 +141,6 @@ enum Commands {
         #[arg(long)]
         output: String,
     },
-    Normalize {
-        #[arg(long)]
-        label_map: String,
-        #[arg(long, default_value = "ignore")]
-        unknown: String,
-        #[arg(long)]
-        fps: Option<f64>,
-        #[arg(long)]
-        frame_width: Option<f64>,
-        #[arg(long)]
-        frame_height: Option<f64>,
-    },
     Plan {
         #[arg(long)]
         min_confidence: Option<f64>,
@@ -172,24 +156,6 @@ enum Commands {
         action: OverlayAction,
     },
     Crop,
-    Track {
-        #[arg(long)]
-        source: Option<String>,
-        #[arg(long)]
-        weights: Option<String>,
-        #[arg(long)]
-        label_map: Option<String>,
-        #[arg(long)]
-        conf: Option<f64>,
-        #[arg(long)]
-        iou: Option<f64>,
-        #[arg(long)]
-        fps: Option<f64>,
-        #[arg(long)]
-        imgsz: Option<u32>,
-        #[arg(long)]
-        max_frames: Option<usize>,
-    },
 }
 
 #[derive(Subcommand)]
@@ -439,10 +405,7 @@ fn main() -> Result<()> {
             print_json(&json!({
                 "logicalCpus": budget.logical_cpus,
                 "ffmpegThreads": budget.ffmpeg_threads,
-                "decodeThreads": budget.decode_threads,
-                "onnxIntraThreads": budget.onnx_intra_threads,
                 "extractParallelism": budget.extract_parallelism,
-                "trackingFps": budget.tracking_fps,
                 "softwarePreset": budget.software_preset,
                 "softwareCrf": budget.software_crf,
                 "hardwareEncode": match budget.hardware_encode {
@@ -672,23 +635,6 @@ fn main() -> Result<()> {
             proxy_run(&input, &output, &settings, duration)?;
             print_json(&json!({ "ok": true, "output": output }))?;
         }
-        Commands::Normalize {
-            label_map,
-            unknown,
-            fps,
-            frame_width,
-            frame_height,
-        } => {
-            let stdout = read_stdin()?;
-            print_json(&normalize_stdout(
-                &stdout,
-                &label_map,
-                &unknown,
-                fps,
-                frame_width,
-                frame_height,
-            )?)?;
-        }
         Commands::Plan {
             min_confidence,
             max_gap,
@@ -755,65 +701,6 @@ fn main() -> Result<()> {
             let input: Value = serde_json::from_str(&read_stdin()?)?;
             print_json(&crop_plan_from_json(&input)?)?;
         }
-        Commands::Track {
-            source,
-            weights,
-            label_map,
-            conf,
-            iou,
-            fps,
-            imgsz,
-            max_frames,
-        } => {
-            let stdout = read_stdin().unwrap_or_default();
-            if source.is_none() && !stdout.trim().is_empty() {
-                let labels = label_map.unwrap_or_else(|| "{}".into());
-                print_json(&normalize_stdout(
-                    &stdout, &labels, "ignore", None, None, None,
-                )?)?;
-                return Ok(());
-            }
-            let source = source.context("track requires --source or JSONL on stdin")?;
-            let weights = weights.context("track requires --weights")?;
-            let labels = parse_label_map(&label_map.unwrap_or_else(|| "{}".into()))?;
-            let config = validate_yolo26_config(&Yolo26TrackingConfig {
-                weights: weights.clone(),
-                label_map: labels,
-                targets: None,
-                cwd: None,
-                tracker: None,
-                confidence: conf,
-                conf: None,
-                iou,
-                fps,
-                device: None,
-                timeout_ms: None,
-                unknown_label_policy: Some(UnknownLabelPolicy::Ignore),
-            })?;
-            let native_weights = cut_engine::vision::resolve_inference_weights(&config.weights)
-                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-            let frames = native_track(
-                &source,
-                native_weights
-                    .to_str()
-                    .context("weights path must be UTF-8")?,
-                max_frames,
-                conf,
-                iou,
-                fps.or(config.fps),
-                imgsz,
-            )?;
-            print_json(&normalize_detection_frames(
-                &frames,
-                &NormalizeOptions {
-                    label_map: config.label_map,
-                    unknown_label_policy: config.unknown_label_policy,
-                    fps: config.fps,
-                    frame_width: None,
-                    frame_height: None,
-                },
-            )?)?;
-        }
     }
     Ok(())
 }
@@ -826,91 +713,6 @@ fn merge_post_filters(draft: bool, post_filter: Vec<String>) -> Vec<String> {
     } else {
         Vec::new()
     }
-}
-
-fn parse_label_map(raw: &str) -> Result<HashMap<String, VisionTarget>> {
-    let value: Value = serde_json::from_str(raw)?;
-    let mut map = HashMap::new();
-    let Some(object) = value.as_object() else {
-        bail!("label_map must be a JSON object");
-    };
-    for (key, value) in object {
-        let Some(label) = value
-            .as_str()
-            .and_then(|value| value.parse::<VisionTarget>().ok())
-        else {
-            bail!("label_map.{key} must be cam, chat, or content");
-        };
-        map.insert(key.clone(), label);
-    }
-    Ok(map)
-}
-
-fn normalize_stdout(
-    stdout: &str,
-    label_map: &str,
-    unknown: &str,
-    fps: Option<f64>,
-    frame_width: Option<f64>,
-    frame_height: Option<f64>,
-) -> Result<cut_engine::vision::ParsedTrackingOutput> {
-    let parsed = parse_label_map(label_map)?;
-    let map = cut_engine::vision::resolve_label_map(&parsed)?;
-    let policy = if unknown == "error" {
-        UnknownLabelPolicy::Error
-    } else {
-        UnknownLabelPolicy::Ignore
-    };
-    Ok(parse_and_normalize_tracking_output(
-        stdout,
-        &NormalizeOptions {
-            label_map: map,
-            unknown_label_policy: policy,
-            fps,
-            frame_width,
-            frame_height,
-        },
-    )?)
-}
-
-fn native_track(
-    source: &str,
-    weights: &str,
-    max_frames: Option<usize>,
-    conf: Option<f64>,
-    iou: Option<f64>,
-    fps: Option<f64>,
-    imgsz: Option<u32>,
-) -> Result<Vec<cut_engine::vision::DetectionFrame>> {
-    let mut engine = YoloEngine::from_weights(weights)?;
-    if let Some(conf) = conf {
-        engine.set_confidence(conf as f32);
-    }
-    if let Some(iou) = iou {
-        engine.set_iou(iou as f32);
-    }
-    let sample_fps = tracking_sample_fps(fps);
-    let imgsz = imgsz.unwrap_or(DEFAULT_IMGSZ);
-    let mut frames = FfmpegRgbFrameSource::open_with(
-        source,
-        TrackDecodeOptions {
-            max_frames,
-            fps: Some(sample_fps),
-            imgsz,
-        },
-    )?;
-    Ok(engine.track_video_frames(
-        &mut frames,
-        &cut_engine::vision::TrackOptions {
-            max_frames,
-            fps: Some(sample_fps),
-            conf: conf.map(|value| value as f32),
-            iou: iou.map(|value| value as f32),
-            imgsz: Some(imgsz),
-            ..cut_engine::vision::TrackOptions::default()
-        },
-        None,
-    )?)
 }
 
 fn run_transcription(

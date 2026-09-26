@@ -56,6 +56,8 @@ enum Command {
         #[serde(rename = "proposalId")]
         proposal_id: String,
         revision: u64,
+        #[serde(rename = "cropOverride", default)]
+        crop_override: Option<Value>,
     },
     Reject {
         #[serde(rename = "proposalId")]
@@ -302,7 +304,14 @@ fn runtime_worker(
             Command::Accept {
                 proposal_id,
                 revision,
-            } => active_client.accept_proposal(&proposal_id, "ui", &operation, revision),
+                crop_override,
+            } => active_client.accept_proposal_with_crop(
+                &proposal_id,
+                "ui",
+                &operation,
+                revision,
+                crop_override,
+            ),
             Command::Reject {
                 proposal_id,
                 revision,

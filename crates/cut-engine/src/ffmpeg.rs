@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
 use crate::error::{EngineError, Result};
-use crate::resources::{decode_thread_count, ffmpeg_thread_count};
+use crate::resources::ffmpeg_thread_count;
 
 #[derive(Debug, Clone)]
 pub struct CommandOutput {
@@ -235,11 +235,6 @@ fn tail(value: &str, max: usize) -> String {
 pub fn video_decode_prefix() -> &'static [String] {
     static PREFIX: OnceLock<Vec<String>> = OnceLock::new();
     PREFIX.get_or_init(|| decode_prefix_with_threads(ffmpeg_thread_count()))
-}
-
-/// Tighter thread cap for decode that overlaps ONNX inference.
-pub fn tracking_decode_prefix() -> Vec<String> {
-    decode_prefix_with_threads(decode_thread_count())
 }
 
 fn decode_prefix_with_threads(threads: usize) -> Vec<String> {

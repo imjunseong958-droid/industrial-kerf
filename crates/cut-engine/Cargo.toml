@@ -3,7 +3,7 @@ name = "cut-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Cut media engine: probe, encode, compile, proxy, and optional YOLO tracking"
+description = "Cut media engine: probe, encode, compile, proxy, and region planning"
 
 [lib]
 name = "cut_engine"
@@ -13,17 +13,12 @@ path = "src/lib.rs"
 name = "cut-engine"
 path = "src/bin/cut-engine.rs"
 
-[features]
-default = []
-onnx = ["dep:ort"]
-
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 cut-core = { path = "../cut-core" }
 hex = "0.4"
 mimalloc = { version = "0.1", default-features = false }
-ort = { version = "=2.0.0-rc.10", optional = true, default-features = false, features = ["std", "ndarray", "download-binaries", "copy-dylibs"] }
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 signal-hook = "0.3"
@@ -34,6 +29,7 @@ thiserror = "2"
 [dev-dependencies]
 approx = "0.5"
 criterion = "0.5"
+cut-domain = { path = "../cut-domain" }
 cut-playback = { path = "../cut-playback", default-features = false }
 tempfile = "3"
 

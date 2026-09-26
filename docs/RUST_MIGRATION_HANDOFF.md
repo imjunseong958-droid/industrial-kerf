@@ -19,7 +19,7 @@ revisions, history, idempotency receipts, proposals, and jobs. All production
 callers use the versioned `cutd` protocol. They must not read or mutate
 `project.cut.json` as an independent state owner.
 
-Keep FFmpeg, ffprobe, yt-dlp, and ONNX as controlled native sidecars. The migration does not require rewriting codecs or model runtimes in Rust.
+Keep FFmpeg, ffprobe, and yt-dlp as controlled native sidecars. The migration does not require rewriting codecs in Rust.
 
 ## Completed work
 
@@ -265,7 +265,7 @@ cargo test --workspace
 - Decide whether idempotency keys are globally unique across operation kinds or namespaced by operation.
 - Decide whether unsupported live effects use a rendered-preview fallback during native playback.
 - Set concrete frame-time, command-to-paint, memory, recovery, installer-size, and cold-start budgets.
-- Package and sign FFmpeg, ffprobe, yt-dlp, ONNX models, and other sidecars for each target platform.
+- Package and sign FFmpeg, ffprobe, yt-dlp, and other sidecars for each target platform.
 
 ## Instructions for the next task
 

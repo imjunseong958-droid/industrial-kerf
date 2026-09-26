@@ -28,6 +28,17 @@ seeking, and export are sent as bounded asynchronous bridge commands.
 
 The timeline supports click-to-seek, clip selection, drag-to-move, edge
 trimming, split-at-playhead, and Delete. Inspector values commit on focus loss.
+Choose Edit → Focus region to draw a crop box on the selected video clip and
+apply it to a time range. Reopen it on the focused segment to adjust the box.
+The picker loads the exact source frame at the playhead. A fixed box ends at a
+detected scene cut. Turn on Follow a moving subject only when the subject moves;
+it starts from the drawn box, samples twice per second, and stops when the match
+is unreliable. Select a new box after a scene cut or tracking loss. Tracking is
+limited to two minute ranges; split longer ranges into shorter selections.
+For an agent crop proposal, use Adjust box in the proposal review to replace
+the suggested rectangle before accepting it as one edit.
+The offline preview shows the crop; native playback requires a rendered preview
+for this edit.
 Drag the panel dividers to resize the workspace, and use View to hide either
 panel. The timeline fits the window on its own. All tracks remain vertically
 scrollable when their combined height exceeds the timeline panel.

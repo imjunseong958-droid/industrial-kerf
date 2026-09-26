@@ -9,9 +9,9 @@ description: Reframe gameplay while preserving the requested game, camera, and c
    placement, and revision. Inspect filmstrips and selected exact frames with
    `media.probe`. Treat game content as the framing anchor unless the user
    requests another subject.
-2. Identify game content, camera, and chat regions from available evidence.
-   `vision.track_objects` may report `CAPABILITY_UNAVAILABLE`; use observed
-   frames when tracking is unavailable and do not invent tracked motion.
+2. Identify game content, camera, and chat regions from observed frames.
+   Propose normalized boxes and let the user correct them. Do not invent motion
+   between observed frames.
 3. Keep requested regions visible. If one crop cannot preserve all requested
    regions, explain the composition choice. For a layered proposal, use the
    offline preview because native playback does not composite all layers.
