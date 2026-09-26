@@ -14,6 +14,8 @@
 #include <QComboBox>
 #include <QDateTime>
 #include <QDir>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QFileDialog>
 #include <QFile>
@@ -35,6 +37,7 @@
 #include <QMainWindow>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMouseEvent>
 #include <QMessageBox>
 #include <QPainter>
 #include <QPainterPath>
@@ -46,6 +49,7 @@
 #include <QSet>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QRegularExpression>
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -310,6 +314,24 @@ QJsonObject commandApply(const QJsonObject &command, quint64 revision) {
     return QJsonObject{{QStringLiteral("type"), QStringLiteral("apply")},
                        {QStringLiteral("revision"), QJsonValue::fromVariant(QVariant::fromValue(revision))},
                        {QStringLiteral("command"), command}};
+}
+
+QJsonObject proposalCropEdit(const QJsonObject &proposal) {
+    QQueue<QJsonObject> pending;
+    pending.enqueue(proposal.value(QStringLiteral("command")).toObject());
+    QJsonObject cropEdit;
+    while (!pending.isEmpty()) {
+        const QJsonObject command = pending.dequeue();
+        if (command.value(QStringLiteral("type")).toString() == QStringLiteral("batch")) {
+            for (const QJsonValue &child : command.value(QStringLiteral("commands")).toArray())
+                pending.enqueue(child.toObject());
+        } else if (command.value(QStringLiteral("type")).toString() == QStringLiteral("update_clip") &&
+                   command.value(QStringLiteral("patch")).toObject().value(QStringLiteral("crop")).isObject()) {
+            if (!cropEdit.isEmpty()) return {};
+            cropEdit = command;
+        }
+    }
+    return cropEdit;
 }
 
 // Decode visual media references outside the paint path. Missing FFmpeg or an
@@ -1100,6 +1122,8 @@ public:
         update();
     }
 
+    QImage frame() const { return m_frame; }
+
     void clearFrame() {
         m_frame = QImage();
         m_scaled = QImage();
@@ -1242,6 +1266,74 @@ private:
     bool m_liveScrub = false;
     bool m_scaledFast = false;
     QString m_caption;
+};
+
+class RegionPicker final : public QWidget {
+public:
+    explicit RegionPicker(const QImage &frame, const QRectF &region, QWidget *parent = nullptr)
+        : QWidget(parent), m_frame(frame), m_region(region) {
+        setMinimumSize(480, 270);
+        setMouseTracking(true);
+    }
+
+    QRectF region() const { return m_region; }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.fillRect(rect(), QColor("#141414"));
+        const QRectF image = imageRect();
+        painter.drawImage(image, m_frame);
+        if (m_region.isEmpty()) return;
+        const QRectF selected(image.x() + m_region.x() * image.width(),
+                              image.y() + m_region.y() * image.height(),
+                              m_region.width() * image.width(), m_region.height() * image.height());
+        painter.setPen(QPen(QColor("#f2bd69"), 2));
+        painter.setBrush(QColor(242, 189, 105, 35));
+        painter.drawRect(selected);
+    }
+
+    void mousePressEvent(QMouseEvent *event) override {
+        if (event->button() != Qt::LeftButton || !imageRect().contains(event->position())) return;
+        m_start = normalizedPoint(event->position());
+        m_dragging = true;
+        m_region = QRectF();
+        update();
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override {
+        if (!m_dragging) return;
+        const QPointF end = normalizedPoint(event->position());
+        m_region = QRectF(m_start, end).normalized();
+        update();
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override {
+        if (event->button() != Qt::LeftButton || !m_dragging) return;
+        m_dragging = false;
+        const QPointF end = normalizedPoint(event->position());
+        m_region = QRectF(m_start, end).normalized();
+        if (m_region.width() < 0.01 || m_region.height() < 0.01) m_region = QRectF();
+        update();
+    }
+
+private:
+    QRectF imageRect() const {
+        const QSizeF fitted = m_frame.size().scaled(size(), Qt::KeepAspectRatio);
+        return QRectF((width() - fitted.width()) / 2.0, (height() - fitted.height()) / 2.0,
+                      fitted.width(), fitted.height());
+    }
+
+    QPointF normalizedPoint(const QPointF &point) const {
+        const QRectF image = imageRect();
+        return QPointF(std::clamp((point.x() - image.x()) / image.width(), 0.0, 1.0),
+                       std::clamp((point.y() - image.y()) / image.height(), 0.0, 1.0));
+    }
+
+    QImage m_frame;
+    QRectF m_region;
+    QPointF m_start;
+    bool m_dragging = false;
 };
 
 class MainWindow final : public QMainWindow {
@@ -1489,6 +1581,326 @@ private slots:
         sendSimple(commandApply(command, m_revision));
     }
 
+    QImage sourceFrame(const QJsonObject &clip, double timelineTime) const {
+        const QString sourceId = clip.value(QStringLiteral("sourceId")).toString();
+        QString path;
+        for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray()) {
+            const QJsonObject source = value.toObject();
+            if (source.value(QStringLiteral("id")).toString() == sourceId) {
+                path = QDir(m_projectDirectory).absoluteFilePath(source.value(QStringLiteral("path")).toString());
+                break;
+            }
+        }
+        if (path.isEmpty()) return {};
+        const double clipStart = clip.value(QStringLiteral("timelineStart")).toDouble();
+        const double sourceTime = clip.value(QStringLiteral("in")).toDouble() +
+                                  (timelineTime - clipStart) * clip.value(QStringLiteral("speed")).toDouble(1.0);
+        QProcess process;
+        process.start(QStringLiteral("ffmpeg"), {QStringLiteral("-nostdin"), QStringLiteral("-v"), QStringLiteral("error"),
+                                                 QStringLiteral("-ss"), QString::number(std::max(0.0, sourceTime), 'f', 6),
+                                                 QStringLiteral("-i"), path, QStringLiteral("-frames:v"), QStringLiteral("1"),
+                                                 QStringLiteral("-vf"), QStringLiteral("scale=960:-2"),
+                                                 QStringLiteral("-f"), QStringLiteral("image2pipe"), QStringLiteral("-vcodec"),
+                                                 QStringLiteral("png"), QStringLiteral("pipe:1")});
+        if (!process.waitForStarted(3000) || !process.waitForFinished(15000)) {
+            process.kill();
+            process.waitForFinished();
+            return {};
+        }
+        return process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0
+                   ? QImage::fromData(process.readAllStandardOutput(), "PNG") : QImage();
+    }
+
+    double firstSceneCut(const QJsonObject &clip, double start, double end) const {
+        QString path;
+        for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray()) {
+            const QJsonObject source = value.toObject();
+            if (source.value(QStringLiteral("id")).toString() == clip.value(QStringLiteral("sourceId")).toString()) {
+                path = QDir(m_projectDirectory).absoluteFilePath(source.value(QStringLiteral("path")).toString());
+                break;
+            }
+        }
+        if (path.isEmpty()) return std::numeric_limits<double>::quiet_NaN();
+        const double speed = clip.value(QStringLiteral("speed")).toDouble(1.0);
+        const double sourceStart = clip.value(QStringLiteral("in")).toDouble() +
+                                   (start - clip.value(QStringLiteral("timelineStart")).toDouble()) * speed;
+        QProcess process;
+        process.start(QStringLiteral("ffmpeg"), {QStringLiteral("-nostdin"), QStringLiteral("-hide_banner"),
+                                                 QStringLiteral("-nostats"), QStringLiteral("-ss"),
+                                                 QString::number(sourceStart, 'f', 6), QStringLiteral("-t"),
+                                                 QString::number((end - start) * speed, 'f', 6),
+                                                 QStringLiteral("-i"), path, QStringLiteral("-vf"),
+                                                 QStringLiteral("select='gt(scene,0.08)',metadata=print"),
+                                                 QStringLiteral("-an"), QStringLiteral("-f"), QStringLiteral("null"),
+                                                 QStringLiteral("-")});
+        if (!process.waitForStarted(3000) || !process.waitForFinished(30000)) {
+            process.kill();
+            process.waitForFinished();
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)
+            return std::numeric_limits<double>::quiet_NaN();
+        const QString output = QString::fromUtf8(process.readAllStandardError());
+        const QRegularExpression times(QStringLiteral(R"(pts_time:([0-9]+(?:\.[0-9]+)?))"));
+        auto match = times.globalMatch(output);
+        while (match.hasNext()) {
+            const double cut = start + match.next().captured(1).toDouble() / speed;
+            if (cut > start + 1.0 / m_fps && cut < end - 1.0 / m_fps) return cut;
+        }
+        return -1.0;
+    }
+
+    QVector<QPair<qint64, QRectF>> trackRegion(const QJsonObject &clip, double start, double end,
+                                                const QRectF &seed, double *reliableEnd) const {
+        constexpr int width = 160;
+        constexpr int height = 90;
+        constexpr int samplesPerSecond = 2;
+        QVector<QPair<qint64, QRectF>> boxes;
+        QString path;
+        for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray()) {
+            const QJsonObject source = value.toObject();
+            if (source.value(QStringLiteral("id")).toString() == clip.value(QStringLiteral("sourceId")).toString()) {
+                path = QDir(m_projectDirectory).absoluteFilePath(source.value(QStringLiteral("path")).toString());
+                break;
+            }
+        }
+        if (path.isEmpty() || end - start > 120.0) return boxes;
+        const double speed = clip.value(QStringLiteral("speed")).toDouble(1.0);
+        const double sourceStart = clip.value(QStringLiteral("in")).toDouble() +
+                                   (start - clip.value(QStringLiteral("timelineStart")).toDouble()) * speed;
+        QProcess process;
+        process.start(QStringLiteral("ffmpeg"), {QStringLiteral("-nostdin"), QStringLiteral("-v"), QStringLiteral("error"),
+                                                 QStringLiteral("-ss"), QString::number(sourceStart, 'f', 6),
+                                                 QStringLiteral("-t"), QString::number((end - start) * speed, 'f', 6),
+                                                 QStringLiteral("-i"), path, QStringLiteral("-vf"),
+                                                 QStringLiteral("fps=%1,scale=160:90,format=gray").arg(samplesPerSecond * speed),
+                                                 QStringLiteral("-f"), QStringLiteral("rawvideo"), QStringLiteral("-pix_fmt"),
+                                                 QStringLiteral("gray"), QStringLiteral("pipe:1")});
+        if (!process.waitForStarted(3000) || !process.waitForFinished(30000)) {
+            process.kill();
+            process.waitForFinished();
+            return boxes;
+        }
+        const QByteArray frames = process.readAllStandardOutput();
+        constexpr qsizetype frameBytes = width * height;
+        const qsizetype count = frames.size() / frameBytes;
+        if (process.exitCode() != 0 || count < 2) return boxes;
+        const int boxWidth = std::clamp(static_cast<int>(std::round(seed.width() * width)), 1, width);
+        const int boxHeight = std::clamp(static_cast<int>(std::round(seed.height() * height)), 1, height);
+        if (boxWidth < 6 || boxHeight < 6) return boxes;
+        int x = std::clamp(static_cast<int>(std::round(seed.x() * width)), 0, width - boxWidth);
+        int y = std::clamp(static_cast<int>(std::round(seed.y() * height)), 0, height - boxHeight);
+        const auto *reference = reinterpret_cast<const uchar *>(frames.constData());
+        int darkest = 255;
+        int brightest = 0;
+        for (int row = 0; row < boxHeight; row += 2) {
+            for (int column = 0; column < boxWidth; column += 2) {
+                const int pixel = reference[(y + row) * width + x + column];
+                darkest = std::min(darkest, pixel);
+                brightest = std::max(brightest, pixel);
+            }
+        }
+        if (brightest - darkest < 20) return boxes;
+        auto difference = [&](const uchar *image, int candidateX, int candidateY) {
+            int sum = 0;
+            int pixels = 0;
+            for (int row = 0; row < boxHeight; row += 2) {
+                for (int column = 0; column < boxWidth; column += 2) {
+                    sum += std::abs(int(reference[(y + row) * width + x + column]) -
+                                    int(image[(candidateY + row) * width + candidateX + column]));
+                    ++pixels;
+                }
+            }
+            return double(sum) / pixels;
+        };
+        const qint64 firstFrame = std::llround(start * m_fps);
+        boxes.append({firstFrame, seed});
+        *reliableEnd = end;
+        int previousX = x;
+        int previousY = y;
+        for (qsizetype index = 1; index < count; ++index) {
+            const auto *image = reinterpret_cast<const uchar *>(frames.constData() + index * frameBytes);
+            double best = std::numeric_limits<double>::infinity();
+            int bestX = previousX;
+            int bestY = previousY;
+            const int radius = std::max(8, std::min(boxWidth, boxHeight) / 2);
+            for (int candidateY = std::max(0, previousY - radius);
+                 candidateY <= std::min(height - boxHeight, previousY + radius); ++candidateY) {
+                for (int candidateX = std::max(0, previousX - radius);
+                     candidateX <= std::min(width - boxWidth, previousX + radius); ++candidateX) {
+                    const double score = difference(image, candidateX, candidateY);
+                    if (score < best) { best = score; bestX = candidateX; bestY = candidateY; }
+                }
+            }
+            const double time = start + double(index) / samplesPerSecond;
+            if (best > 28.0) {
+                *reliableEnd = std::min(end, time);
+                break;
+            }
+            const qint64 frame = std::llround(time * m_fps);
+            if (frame >= std::llround(end * m_fps)) break;
+            if (frame > boxes.last().first && (std::abs(bestX - previousX) > 1 || std::abs(bestY - previousY) > 1))
+                boxes.append({frame, QRectF(std::min(double(bestX) / width, 1.0 - seed.width()),
+                                            std::min(double(bestY) / height, 1.0 - seed.height()),
+                                            seed.width(), seed.height())});
+            previousX = bestX;
+            previousY = bestY;
+        }
+        return boxes;
+    }
+
+    void focusRegion() {
+        if (!m_proposalId.isEmpty()) {
+            QMessageBox::information(this, QStringLiteral("Focus region"),
+                                     QStringLiteral("Review the pending suggestion before changing the crop."));
+            return;
+        }
+        const QJsonObject clip = selectedClipObject();
+        if (clip.isEmpty()) return;
+        bool video = false;
+        for (const QJsonValue &value : m_project.value(QStringLiteral("tracks")).toArray()) {
+            const QJsonObject track = value.toObject();
+            if (track.value(QStringLiteral("type")).toString() != QStringLiteral("video")) continue;
+            for (const QJsonValue &entry : track.value(QStringLiteral("clips")).toArray())
+                video |= entry.toObject().value(QStringLiteral("id")).toString() == m_selectedClip;
+        }
+        if (!video) return;
+        const double clipStart = clip.value(QStringLiteral("timelineStart")).toDouble();
+        const double sourceIn = clip.value(QStringLiteral("in")).toDouble();
+        const double sourceOut = clip.value(QStringLiteral("out")).toDouble();
+        const double speed = clip.value(QStringLiteral("speed")).toDouble(1.0);
+        const double clipDuration = clip.value(QStringLiteral("duration")).toDouble(
+            speed > 0.0 ? (sourceOut - sourceIn) / speed : 0.0);
+        const double clipEnd = clipStart + clipDuration;
+        if (!(clipDuration > 1.0 / m_fps)) return;
+
+        const QJsonObject crop = clip.value(QStringLiteral("crop")).toObject();
+        const double representativeTime = std::clamp(m_playhead, clipStart, clipEnd - 1.0 / m_fps);
+        const QImage frame = sourceFrame(clip, representativeTime);
+        if (frame.isNull()) {
+            QMessageBox::information(this, QStringLiteral("Focus region"),
+                                     QStringLiteral("Could not read a source frame from this clip."));
+            return;
+        }
+
+        const QRectF current(crop.value(QStringLiteral("x")).toDouble(), crop.value(QStringLiteral("y")).toDouble(),
+                             crop.value(QStringLiteral("width")).toDouble(), crop.value(QStringLiteral("height")).toDouble());
+        QDialog dialog(this);
+        dialog.setWindowTitle(QStringLiteral("Focus region"));
+        auto *layout = new QVBoxLayout(&dialog);
+        layout->addWidget(new QLabel(QStringLiteral("Drag a box over the area to enlarge.")));
+        auto *picker = new RegionPicker(frame, current, &dialog);
+        layout->addWidget(picker);
+        auto *form = new QFormLayout;
+        auto *start = new QDoubleSpinBox(&dialog);
+        auto *end = new QDoubleSpinBox(&dialog);
+        for (QDoubleSpinBox *spin : {start, end}) {
+            spin->setDecimals(3);
+            spin->setSingleStep(1.0 / m_fps);
+            spin->setSuffix(QStringLiteral(" s"));
+        }
+        start->setRange(clipStart, clipEnd - 1.0 / m_fps);
+        end->setRange(clipStart + 1.0 / m_fps, clipEnd);
+        const double suggestedStart = crop.isEmpty() ? representativeTime : clipStart;
+        start->setValue(suggestedStart);
+        end->setValue(crop.isEmpty() ? std::min(clipEnd, suggestedStart + 5.0) : clipEnd);
+        form->addRow(QStringLiteral("Start"), start);
+        form->addRow(QStringLiteral("End"), end);
+        layout->addLayout(form);
+        auto *follow = new QCheckBox(QStringLiteral("Follow a moving subject (up to 2 minutes)"), &dialog);
+        layout->addWidget(follow);
+        connect(follow, &QCheckBox::toggled, &dialog, [start, representativeTime](bool enabled) {
+            if (enabled) start->setValue(representativeTime);
+            start->setEnabled(!enabled);
+        });
+        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        layout->addWidget(buttons);
+        if (dialog.exec() != QDialog::Accepted) return;
+        const QRectF region = picker->region();
+        const qint64 clipStartFrame = std::llround(clipStart * m_fps);
+        const qint64 clipEndFrame = std::llround(clipEnd * m_fps);
+        const qint64 startFrame = std::llround(start->value() * m_fps);
+        qint64 endFrame = std::llround(end->value() * m_fps);
+        if (region.isEmpty() || startFrame < clipStartFrame || endFrame > clipEndFrame || startFrame >= endFrame) {
+            QMessageBox::information(this, QStringLiteral("Focus region"),
+                                     QStringLiteral("Select a box and a valid time range within the clip."));
+            return;
+        }
+        const double cut = firstSceneCut(clip, start->value(), end->value());
+        if (!std::isfinite(cut)) {
+            QMessageBox::information(this, QStringLiteral("Focus region"),
+                                     QStringLiteral("Could not check this range for scene cuts. Choose a shorter range and try again."));
+            return;
+        }
+        if (cut > 0.0) {
+            endFrame = std::llround(cut * m_fps);
+            QMessageBox::information(this, QStringLiteral("Focus region"),
+                                     QStringLiteral("A scene cut was found. This box ends at the cut; select a new box for the next scene."));
+        }
+
+        double reliableEnd = double(endFrame) / m_fps;
+        const QVector<QPair<qint64, QRectF>> tracked = follow->isChecked()
+            ? trackRegion(clip, double(startFrame) / m_fps, reliableEnd, region, &reliableEnd)
+            : QVector<QPair<qint64, QRectF>>{};
+        if (follow->isChecked() && tracked.isEmpty()) {
+            QMessageBox::information(this, QStringLiteral("Focus region"),
+                                     QStringLiteral("Tracking could not start. Choose a larger box or a range under two minutes."));
+            return;
+        }
+        if (reliableEnd < double(endFrame) / m_fps) {
+            endFrame = std::llround(reliableEnd * m_fps);
+            QMessageBox::information(this, QStringLiteral("Focus region"),
+                                     QStringLiteral("The subject could no longer be tracked. The crop ends at the last reliable frame."));
+        }
+
+        const QString suffix = QString::number(QDateTime::currentMSecsSinceEpoch());
+        QString focusId = m_selectedClip;
+        QJsonArray commands;
+        if (startFrame > clipStartFrame) {
+            focusId = m_selectedClip + QStringLiteral("-focus-") + suffix;
+            commands.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("split_clip")},
+                                        {QStringLiteral("clipId"), m_selectedClip},
+                                        {QStringLiteral("atFrame"), startFrame},
+                                        {QStringLiteral("newClipId"), focusId}});
+        }
+        const QJsonObject box{{QStringLiteral("x"), region.x()}, {QStringLiteral("y"), region.y()},
+                              {QStringLiteral("width"), region.width()}, {QStringLiteral("height"), region.height()}};
+        commands.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("update_clip")},
+                                    {QStringLiteral("clipId"), focusId},
+                                    {QStringLiteral("patch"), QJsonObject{{QStringLiteral("crop"), box}}}});
+        for (int index = 1; index < tracked.size(); ++index) {
+            const auto &step = tracked.at(index);
+            if (step.first >= endFrame) break;
+            const QString nextId = m_selectedClip + QStringLiteral("-track-%1-").arg(index) + suffix;
+            commands.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("split_clip")},
+                                        {QStringLiteral("clipId"), focusId}, {QStringLiteral("atFrame"), step.first},
+                                        {QStringLiteral("newClipId"), nextId}});
+            focusId = nextId;
+            const QRectF moved = step.second;
+            commands.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("update_clip")},
+                                        {QStringLiteral("clipId"), focusId},
+                                        {QStringLiteral("patch"), QJsonObject{{QStringLiteral("crop"),
+                                            QJsonObject{{QStringLiteral("x"), moved.x()}, {QStringLiteral("y"), moved.y()},
+                                                        {QStringLiteral("width"), moved.width()}, {QStringLiteral("height"), moved.height()}}}}}});
+        }
+        if (endFrame < clipEndFrame) {
+            const QString afterId = m_selectedClip + QStringLiteral("-after-") + suffix;
+            commands.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("split_clip")},
+                                        {QStringLiteral("clipId"), focusId},
+                                        {QStringLiteral("atFrame"), endFrame},
+                                        {QStringLiteral("newClipId"), afterId}});
+            commands.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("update_clip")},
+                                        {QStringLiteral("clipId"), afterId},
+                                        {QStringLiteral("patch"), QJsonObject{{QStringLiteral("crop"),
+                                            clip.contains(QStringLiteral("crop")) ? clip.value(QStringLiteral("crop")) : QJsonValue()}}}});
+        }
+        if (sendSimple(commandApply(QJsonObject{{QStringLiteral("type"), QStringLiteral("batch")},
+                                               {QStringLiteral("commands"), commands}}, m_revision)))
+            m_selectedClip = focusId;
+    }
+
     void deleteSelected() {
         if (m_selectedClip.isEmpty()) return;
         const QJsonObject command{{QStringLiteral("type"), QStringLiteral("remove_clip")}, {QStringLiteral("clipId"), m_selectedClip}};
@@ -1657,6 +2069,79 @@ private slots:
     void acceptProposal() {
         if (m_proposalId.isEmpty()) return;
         sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("accept")}, {QStringLiteral("proposalId"), m_proposalId}, {QStringLiteral("revision"), revisionValue()}});
+    }
+
+    void adjustProposalCrop() {
+        const QJsonObject proposal = m_snapshot.value(QStringLiteral("pendingProposal")).toObject();
+        const QString proposalId = proposal.value(QStringLiteral("proposalId")).toString();
+        const quint64 baseRevision = m_revision;
+        const QJsonObject edit = proposalCropEdit(proposal);
+        if (edit.isEmpty() || proposal.value(QStringLiteral("freshness")).toString() == QStringLiteral("stale")) return;
+        const QString focusId = edit.value(QStringLiteral("clipId")).toString();
+        QString originalId = focusId;
+        QQueue<QJsonObject> pending;
+        pending.enqueue(proposal.value(QStringLiteral("command")).toObject());
+        QList<QJsonObject> splits;
+        while (!pending.isEmpty()) {
+            const QJsonObject command = pending.dequeue();
+            if (command.value(QStringLiteral("type")).toString() == QStringLiteral("batch")) {
+                for (const QJsonValue &child : command.value(QStringLiteral("commands")).toArray())
+                    pending.enqueue(child.toObject());
+            } else if (command.value(QStringLiteral("type")).toString() == QStringLiteral("split_clip")) {
+                splits.append(command);
+            }
+        }
+        for (int pass = 0; pass < splits.size(); ++pass) {
+            bool changed = false;
+            for (const QJsonObject &split : splits) {
+                if (split.value(QStringLiteral("newClipId")).toString() == originalId) {
+                    originalId = split.value(QStringLiteral("clipId")).toString();
+                    changed = true;
+                    break;
+                }
+            }
+            if (!changed) break;
+        }
+        QJsonObject original;
+        for (const QJsonValue &track : m_project.value(QStringLiteral("tracks")).toArray()) {
+            for (const QJsonValue &clip : track.toObject().value(QStringLiteral("clips")).toArray()) {
+                if (clip.toObject().value(QStringLiteral("id")).toString() == originalId) original = clip.toObject();
+            }
+        }
+        if (original.isEmpty()) return;
+        const double clipStart = original.value(QStringLiteral("timelineStart")).toDouble();
+        const double clipEnd = clipStart + original.value(QStringLiteral("duration")).toDouble(
+            (original.value(QStringLiteral("out")).toDouble() - original.value(QStringLiteral("in")).toDouble()) /
+            original.value(QStringLiteral("speed")).toDouble(1.0));
+        const QImage frame = sourceFrame(original, std::clamp(m_playhead, clipStart, clipEnd - 1.0 / m_fps));
+        if (frame.isNull()) {
+            QMessageBox::information(this, QStringLiteral("Adjust crop"),
+                                     QStringLiteral("Could not read a source frame from this clip."));
+            return;
+        }
+        const QJsonObject crop = edit.value(QStringLiteral("patch")).toObject().value(QStringLiteral("crop")).toObject();
+        const QRectF proposed(crop.value(QStringLiteral("x")).toDouble(), crop.value(QStringLiteral("y")).toDouble(),
+                              crop.value(QStringLiteral("width")).toDouble(), crop.value(QStringLiteral("height")).toDouble());
+        QDialog dialog(this);
+        dialog.setWindowTitle(QStringLiteral("Adjust proposed crop"));
+        auto *layout = new QVBoxLayout(&dialog);
+        layout->addWidget(new QLabel(QStringLiteral("Drag a replacement box, then apply the edited proposal.")));
+        auto *picker = new RegionPicker(frame, proposed, &dialog);
+        layout->addWidget(picker);
+        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        layout->addWidget(buttons);
+        if (dialog.exec() != QDialog::Accepted) return;
+        const QRectF region = picker->region();
+        if (region.isEmpty()) return;
+        const QJsonObject box{{QStringLiteral("x"), region.x()}, {QStringLiteral("y"), region.y()},
+                              {QStringLiteral("width"), region.width()}, {QStringLiteral("height"), region.height()}};
+        sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("accept")},
+                               {QStringLiteral("proposalId"), proposalId},
+                               {QStringLiteral("revision"), QJsonValue::fromVariant(QVariant::fromValue(baseRevision))},
+                               {QStringLiteral("cropOverride"), QJsonObject{{QStringLiteral("clipId"), focusId},
+                                                                             {QStringLiteral("crop"), box}}}});
     }
 
     void rejectProposal() {
@@ -1967,11 +2452,14 @@ private:
         auto *proposalButtons = new QHBoxLayout;
         m_acceptButton = new QPushButton(QStringLiteral("Accept"));
         m_acceptButton->setObjectName(QStringLiteral("primaryButton"));
+        m_adjustCropButton = new QPushButton(QStringLiteral("Adjust box…"));
         m_rejectButton = new QPushButton(QStringLiteral("Reject"));
         m_rejectButton->setObjectName(QStringLiteral("dangerButton"));
         connect(m_acceptButton, &QPushButton::clicked, this, &MainWindow::acceptProposal);
+        connect(m_adjustCropButton, &QPushButton::clicked, this, &MainWindow::adjustProposalCrop);
         connect(m_rejectButton, &QPushButton::clicked, this, &MainWindow::rejectProposal);
         proposalButtons->addWidget(m_acceptButton);
+        proposalButtons->addWidget(m_adjustCropButton);
         proposalButtons->addWidget(m_rejectButton);
         proposalLayout->addWidget(m_proposalSummary);
         proposalLayout->addWidget(m_proposalDiff);
@@ -2300,6 +2788,8 @@ private:
         connect(deleteAction, &QAction::triggered, this, &MainWindow::deleteSelected);
         auto *splitAction = edit->addAction(QStringLiteral("Split at playhead"));
         connect(splitAction, &QAction::triggered, this, &MainWindow::splitClip);
+        auto *focusAction = edit->addAction(QStringLiteral("Focus region…"));
+        connect(focusAction, &QAction::triggered, this, &MainWindow::focusRegion);
 
         auto *playback = menuBar()->addMenu(QStringLiteral("Playback"));
         auto *play = playback->addAction(QStringLiteral("Play / Pause"));
@@ -2646,6 +3136,7 @@ private:
         m_proposalId.clear();
         bool pending = value.isObject() && value.toObject().value(QStringLiteral("status")).toString() == QStringLiteral("pending");
         m_acceptButton->setEnabled(m_connected && pending);
+        m_adjustCropButton->setEnabled(false);
         m_rejectButton->setEnabled(m_connected && pending);
         m_proposalBox->setVisible(pending);
         if (!pending) {
@@ -2739,6 +3230,7 @@ private:
         if (truncated) html += QStringLiteral("<p><b>This proposal is too large to review completely. Ask Cut to split it into smaller changes.</b></p>");
         m_proposalDiff->setHtml(html);
         m_acceptButton->setEnabled(m_connected && !stale && !truncated);
+        m_adjustCropButton->setEnabled(m_connected && !stale && !truncated && !proposalCropEdit(proposal).isEmpty());
         m_acceptButton->setToolTip(truncated ? QStringLiteral("Split this proposal into smaller changes to review all fields") : QString());
     }
 
@@ -2927,6 +3419,7 @@ private:
     QLabel *m_proposalSummary = nullptr;
     QTextEdit *m_proposalDiff = nullptr;
     QPushButton *m_acceptButton = nullptr;
+    QPushButton *m_adjustCropButton = nullptr;
     QPushButton *m_rejectButton = nullptr;
     QGroupBox *m_proposalBox = nullptr;
     QLabel *m_inspectorClip = nullptr;
@@ -3471,6 +3964,45 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(artwork.waves.contains(QStringLiteral("tone")), 5000);
         QVERIFY(!artwork.waves.value(QStringLiteral("tone")).isNull());
         QVERIFY(!artwork.frames.contains(QStringLiteral("tone")));
+    }
+
+    void selectedBoxTracksMotionAndStopsAtSceneCut() {
+        if (QStandardPaths::findExecutable(QStringLiteral("ffmpeg")).isEmpty()) QSKIP("FFmpeg unavailable");
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        for (int index = 0; index < 8; ++index) {
+            QImage frame(160, 90, QImage::Format_RGB888);
+            frame.fill(index < 4 ? QColor(30, 30, 30) : QColor(30, 30, 220));
+            if (index < 4) {
+                for (int row = 0; row < 24; ++row)
+                    for (int column = 0; column < 24; ++column)
+                        frame.setPixelColor(16 + index * 3 + column, 20 + row,
+                                            QColor(60 + column * 7, 40 + row * 7, 100 + (column + row) % 8 * 12));
+            }
+            QVERIFY(frame.save(directory.filePath(QStringLiteral("frame-%1.png").arg(index, 2, 10, QLatin1Char('0')))));
+        }
+        const QString video = directory.filePath(QStringLiteral("moving.mp4"));
+        QCOMPARE(QProcess::execute(QStringLiteral("ffmpeg"), {
+            QStringLiteral("-v"), QStringLiteral("error"), QStringLiteral("-framerate"), QStringLiteral("2"),
+            QStringLiteral("-i"), directory.filePath(QStringLiteral("frame-%02d.png")),
+            QStringLiteral("-c:v"), QStringLiteral("libx264"), QStringLiteral("-pix_fmt"),
+            QStringLiteral("yuv420p"), QStringLiteral("-y"), video}), 0);
+        MainWindow window{directory.path(), QString()};
+        window.m_fps = 10;
+        window.m_project = QJsonObject{{QStringLiteral("sources"), QJsonArray{
+            QJsonObject{{QStringLiteral("id"), QStringLiteral("moving")}, {QStringLiteral("path"), video}}}}};
+        const QJsonObject clip{{QStringLiteral("sourceId"), QStringLiteral("moving")},
+                               {QStringLiteral("timelineStart"), 0}, {QStringLiteral("in"), 0},
+                               {QStringLiteral("out"), 4}, {QStringLiteral("speed"), 1}};
+        const QRectF seed(16.0 / 160, 20.0 / 90, 24.0 / 160, 24.0 / 90);
+        QVERIFY(!window.sourceFrame(clip, 0).isNull());
+        const double cut = window.firstSceneCut(clip, 0, 4);
+        QVERIFY2(std::abs(cut - 2.0) < 0.1, qPrintable(QString::number(cut)));
+        double reliableEnd = 4;
+        const auto boxes = window.trackRegion(clip, 0, 4, seed, &reliableEnd);
+        QVERIFY(boxes.size() >= 2);
+        QVERIFY(boxes.last().second.x() > seed.x());
+        QVERIFY(reliableEnd <= 2.5);
     }
 
     void disconnectedControlsAndRecovery() {

@@ -1,4 +1,4 @@
-//! Cut media engine. Probe, encode, compile, proxy, and YOLO tracking.
+//! Cut media engine. Probe, encode, compile, proxy, and region planning.
 
 // Timeline compilation is kept in the lightweight `cut-core` crate. Re-export
 // its modules from the engine crate so Rust consumers have one coherent API
@@ -28,9 +28,7 @@ pub use probe::{
     SceneRange, SilenceRange, WaveformBucket, WaveformResult,
 };
 pub use proxy::{create_proxy_cache_key, proxy_ffmpeg_args};
-pub use resources::{
-    budget, budget_for_cpus, HardwareEncodePolicy, ResourceBudget, DEFAULT_TRACKING_FPS,
-};
+pub use resources::{budget, budget_for_cpus, HardwareEncodePolicy, ResourceBudget};
 pub use transcription::{
     listen_cached, parse_whisper_json, transcribe_cached, CancellationToken, TimeRange, Transcript,
     TranscriptCue, TranscriptWord, TranscriptionBackend, TranscriptionOptions,

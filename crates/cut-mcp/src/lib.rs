@@ -98,7 +98,6 @@ pub const FULL_TOOL_NAMES: &[&str] = &[
     "render.result",
     "media.probe",
     "media.asset",
-    "vision.track_objects",
     "workflow.roughcut",
     "skills.list",
     "skills.read",
@@ -570,10 +569,6 @@ impl CutMcpRouter {
             "render.status" => self.render_status(&arguments),
             "render.cancel" => self.render_cancel(&arguments),
             "render.result" => self.render_result(&arguments),
-            "vision.track_objects" => Err(McpError::new(
-                "CAPABILITY_UNAVAILABLE",
-                "vision.track_objects requires a configured YOLO runtime",
-            )),
             "skills.read" => self.skills_read(&arguments),
             "skills.list" => self.skills_list(&arguments),
             _ => Err(McpError::new(
@@ -3051,11 +3046,6 @@ fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
             } else {
                 mutation
             },
-        ),
-        "vision.track_objects" => (
-            "Track configured cam, chat, or content regions when a YOLO runtime is installed.",
-            json!({"type": "object", "properties": {"source": {"type": "string"}}, "required": ["source"], "additionalProperties": false}),
-            read_only,
         ),
         "skills.read" => {
             let schema = skill_read_tool_schema();

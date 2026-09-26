@@ -19,7 +19,7 @@ Rust agent and CLI ──────────────────┼─>
 Rust MCP server ─────────────────────┘               └────────> cut-engine
 ```
 
-FFmpeg, ffprobe, yt-dlp, and ONNX remain controlled native sidecars. Editing
+FFmpeg, ffprobe, and yt-dlp remain controlled native sidecars. Editing
 playbooks are data in `skills/*/SKILL.md` and are loaded by `cut-skills`.
 
 ## Build and run

@@ -643,6 +643,54 @@ pub enum PendingProposal {
     },
 }
 
+fn replace_proposal_crop(command: &mut Value, crop_override: &Value) -> Result<(), RuntimeError> {
+    let clip_id = crop_override
+        .get("clipId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| RuntimeError::new("INVALID_REQUEST", "cropOverride.clipId is required"))?;
+    let crop = crop_override
+        .get("crop")
+        .filter(|value| value.is_object())
+        .ok_or_else(|| {
+            RuntimeError::new("INVALID_REQUEST", "cropOverride.crop must be an object")
+        })?;
+
+    fn replace(command: &mut Value, clip_id: &str, crop: &Value) -> usize {
+        if command.get("type").and_then(Value::as_str) == Some("batch") {
+            return command
+                .get_mut("commands")
+                .and_then(Value::as_array_mut)
+                .map(|commands| {
+                    commands
+                        .iter_mut()
+                        .map(|child| replace(child, clip_id, crop))
+                        .sum()
+                })
+                .unwrap_or(0);
+        }
+        if command.get("type").and_then(Value::as_str) == Some("update_clip")
+            && command.get("clipId").and_then(Value::as_str) == Some(clip_id)
+            && command
+                .get("patch")
+                .and_then(|patch| patch.get("crop"))
+                .is_some()
+        {
+            command["patch"]["crop"] = crop.clone();
+            return 1;
+        }
+        0
+    }
+
+    if replace(command, clip_id, crop) != 1 {
+        return Err(RuntimeError::new(
+            "INVALID_REQUEST",
+            "proposal must contain exactly one crop edit for cropOverride.clipId",
+        ));
+    }
+    Ok(())
+}
+
 /// A bounded project-time range rendered for a preview job.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -973,6 +1021,12 @@ pub enum RuntimeRequest {
         idempotency_key: String,
         #[serde(rename = "baseRevision")]
         base_revision: u64,
+        #[serde(
+            rename = "cropOverride",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        crop_override: Option<Value>,
     },
     RejectProposal {
         #[serde(rename = "proposalId")]
@@ -1364,11 +1418,23 @@ impl RuntimeHandle {
         key: &str,
         base_revision: u64,
     ) -> Result<StateSnapshot, RuntimeError> {
+        self.accept_proposal_with_crop(proposal_id, actor, key, base_revision, None)
+    }
+
+    pub fn accept_proposal_with_crop(
+        &self,
+        proposal_id: &str,
+        actor: &str,
+        key: &str,
+        base_revision: u64,
+        crop_override: Option<Value>,
+    ) -> Result<StateSnapshot, RuntimeError> {
         expect_state(self.request(RuntimeRequest::AcceptProposal {
             proposal_id: proposal_id.to_owned(),
             actor: actor.to_owned(),
             idempotency_key: key.to_owned(),
             base_revision,
+            crop_override,
         })?)
     }
 
@@ -1722,11 +1788,23 @@ impl RuntimeClient {
         key: &str,
         base_revision: u64,
     ) -> Result<StateSnapshot, RuntimeError> {
+        self.accept_proposal_with_crop(proposal_id, actor, key, base_revision, None)
+    }
+
+    pub fn accept_proposal_with_crop(
+        &self,
+        proposal_id: &str,
+        actor: &str,
+        key: &str,
+        base_revision: u64,
+        crop_override: Option<Value>,
+    ) -> Result<StateSnapshot, RuntimeError> {
         expect_state(self.request(RuntimeRequest::AcceptProposal {
             proposal_id: proposal_id.to_owned(),
             actor: actor.to_owned(),
             idempotency_key: key.to_owned(),
             base_revision,
+            crop_override,
         })?)
     }
 
@@ -3180,6 +3258,17 @@ impl Runtime {
         key: &str,
         base_revision: u64,
     ) -> Result<StateSnapshot, RuntimeError> {
+        self.accept_proposal_with_crop(proposal_id, actor, key, base_revision, None)
+    }
+
+    pub fn accept_proposal_with_crop(
+        &mut self,
+        proposal_id: &str,
+        actor: &str,
+        key: &str,
+        base_revision: u64,
+        crop_override: Option<Value>,
+    ) -> Result<StateSnapshot, RuntimeError> {
         validate_request_identity(actor, key)?;
         if proposal_id.trim().is_empty() {
             return Err(RuntimeError::new(
@@ -3197,7 +3286,7 @@ impl Runtime {
             PendingProposal::Pending {
                 proposal_id: current_id,
                 base_revision: proposal_revision,
-                command,
+                mut command,
                 observation,
                 observations,
                 ..
@@ -3223,6 +3312,9 @@ impl Runtime {
                             "proposal was created at revision {proposal_revision}, not {base_revision}"
                         ),
                     ));
+                }
+                if let Some(crop_override) = crop_override.as_ref() {
+                    replace_proposal_crop(&mut command, crop_override)?;
                 }
                 let accepted_proposal = Some(ProposalRecord {
                     lifecycle: PendingProposal::Accepted {
@@ -4370,13 +4462,15 @@ impl Runtime {
                 actor,
                 idempotency_key,
                 base_revision,
+                crop_override,
             } => {
                 validate_request_identity(&actor, &idempotency_key)?;
-                Ok(RuntimeResponse::State(self.accept_proposal(
+                Ok(RuntimeResponse::State(self.accept_proposal_with_crop(
                     &proposal_id,
                     &actor,
                     &idempotency_key,
                     base_revision,
+                    crop_override,
                 )?))
             }
             RuntimeRequest::RejectProposal {
@@ -6180,6 +6274,97 @@ mod tests {
             .unwrap()
             .iter()
             .any(|track| track["id"] == "titles"));
+    }
+
+    #[test]
+    fn crop_override_changes_one_proposed_box_atomically() {
+        let mut runtime = runtime();
+        let staged = runtime.stage_agent_proposal("crop-proposal", 0, &[json!({
+            "idempotencyKey": "crop-proposal",
+            "commands": [
+                {"type":"add_source","source":{"id":"source","path":"source.mp4","duration":3}},
+                {"type":"add_track","track":{"id":"video","type":"video","clips":[
+                    {"id":"clip","sourceId":"source","in":0,"out":3,"timelineStart":0}
+                ]}},
+                {"type":"update_clip","clipId":"clip","patch":{"crop":{
+                    "x":0.1,"y":0.1,"width":0.4,"height":0.4
+                }}}
+            ]
+        })]).unwrap();
+        let proposal_id = match staged.pending_proposal.unwrap() {
+            PendingProposal::Pending { proposal_id, .. } => proposal_id,
+            _ => panic!("expected pending proposal"),
+        };
+        let invalid = runtime
+            .accept_proposal_with_crop(
+                &proposal_id,
+                "ui",
+                "invalid-crop",
+                0,
+                Some(json!({"clipId":"clip","crop":{"x":0.9,"y":0,"width":0.5,"height":1}})),
+            )
+            .unwrap_err();
+        assert_eq!(invalid.code, "INVALID_COMMAND");
+        assert_eq!(runtime.snapshot().revision, 0);
+        assert!(matches!(
+            runtime.snapshot().pending_proposal,
+            Some(PendingProposal::Pending { .. })
+        ));
+
+        let accepted = runtime
+            .accept_proposal_with_crop(
+                &proposal_id,
+                "ui",
+                "valid-crop",
+                0,
+                Some(json!({"clipId":"clip","crop":{"x":0.5,"y":0,"width":0.5,"height":1}})),
+            )
+            .unwrap();
+        assert_eq!(accepted.revision, 1);
+        assert_eq!(accepted.project["tracks"][0]["clips"][0]["crop"]["x"], 0.5);
+        runtime.undo(Some(1)).unwrap();
+        assert_eq!(
+            runtime.snapshot().project["tracks"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn crop_override_requires_a_unique_matching_crop_edit() {
+        let original = json!({"type":"batch","commands":[
+            {"type":"update_clip","clipId":"clip","patch":{"crop":{"x":0,"y":0,"width":1,"height":1}}}
+        ]});
+        for (name, override_box, duplicate, expected) in [
+            (
+                "wrong clip",
+                json!({"clipId":"other","crop":{"x":0,"y":0,"width":1,"height":1}}),
+                false,
+                "exactly one",
+            ),
+            (
+                "missing box",
+                json!({"clipId":"clip"}),
+                false,
+                "must be an object",
+            ),
+            (
+                "duplicate",
+                json!({"clipId":"clip","crop":{"x":0,"y":0,"width":1,"height":1}}),
+                true,
+                "exactly one",
+            ),
+        ] {
+            let mut command = original.clone();
+            if duplicate {
+                let repeated = command["commands"][0].clone();
+                command["commands"].as_array_mut().unwrap().push(repeated);
+            }
+            let error = replace_proposal_crop(&mut command, &override_box).expect_err(name);
+            assert!(error.message.contains(expected), "{name}: {error:?}");
+        }
     }
 
     #[test]
