@@ -20,15 +20,22 @@ Do not defer compile errors until the end of a large edit.
 Ask when progress stalls or a decision requires user input.
 
 Testing rules are only in Tests. `cargo check` does not compile tests.
-When a test changes, run that test once. If it fails, fix the cause and run that test again. Do not rerun it once it passes unless it changes again.
 
 ## Tests
 
-Never write unit tests after you write code.
+Test by risk. Use the cheapest test that catches the failure.
 
-Highly prefer E2E tests as the sole testing mechanism. Use them to verify complex features work. At the end of E2E tests, produce a verifiable and repeatable artifact.
+* Pure logic where bugs are costly: table-driven golden tests. List failure modes first; each becomes a case.
+* Cross-module features: one E2E test that writes a small, repeatable artifact. Read the artifact, not the log.
+* External services: read-only smoke tests, skipped by default. Run only when asked.
+* Glue and refactors: no new tests.
 
-If you must test a system in isolation, first write down all the ways it could fail, then write the code.
+A bug fix adds one regression case at the lowest level.
+No tests that restate the implementation.
+
+Run only the affected tests and read only failures.
+Run a changed test once; rerun it only after a fix.
+Before a PR, run the full suite once.
 
 ## Git/PR
 
