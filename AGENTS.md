@@ -19,23 +19,9 @@ Once it passes, do not repeat it without new relevant changes.
 Do not defer compile errors until the end of a large edit.
 Ask when progress stalls or a decision requires user input.
 
-Testing rules are only in Tests. `cargo check` does not compile tests.
-
-## Tests
-
-Test by risk. Use the cheapest test that catches the failure.
-
-* Pure logic where bugs are costly: table-driven golden tests. List failure modes first; each becomes a case.
-* Cross-module features: one E2E test that writes a small, repeatable artifact. Read the artifact, not the log.
-* External services: read-only smoke tests, skipped by default. Run only when asked.
-* Glue and refactors: no new tests.
-
-A bug fix adds one regression case at the lowest level.
-No tests that restate the implementation.
-
-Run only the affected tests and read only failures.
-Run a changed test once; rerun it only after a fix.
-Before a PR, run the full suite once.
+`cargo check` does not compile tests.
+Run only relevant tests. Run the full suite once when shared code or
+multiple modules are affected. When checks pass, stop re-running them.
 
 ## Git/PR
 
