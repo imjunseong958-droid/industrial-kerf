@@ -330,6 +330,20 @@ mod tests {
         let mut project = empty_project();
         project.id = Some(crate::ProjectId::new("project-1").expect("project id"));
         project.name = Some("Launch".into());
+        project.tracks.push(crate::Track {
+            id: crate::TrackId::new("video-1").expect("track id"),
+            kind: crate::TrackType::Video,
+            name: None,
+            enabled: None,
+            muted: None,
+            locked: None,
+            clips: Vec::new(),
+            gaps: None,
+            transitions: None,
+            effects: None,
+            markers: None,
+            extensions: Default::default(),
+        });
         project.tracks[0].name = Some("Picture".into());
         project.tracks[0].clips.push(crate::Clip {
             id: crate::ClipId::new("clip-1").expect("clip id"),
@@ -419,7 +433,7 @@ mod tests {
             outline.root.children[0].children[1].entity_id.as_deref(),
             Some("marker-1")
         );
-        let captions = &outline.root.children[2];
+        let captions = &outline.root.children[1];
         assert_eq!(captions.entity_id.as_deref(), Some("captions-1"));
         assert_eq!(captions.children[0].path, "/overlays/0/cues/0");
         assert_eq!(captions.children[0].text.as_deref(), Some("Hello"));

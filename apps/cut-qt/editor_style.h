@@ -83,10 +83,6 @@ QFrame#timelineFrame {
     border: 0;
 }
 QWidget#bottomBand { background: #0e0e0e; }
-QFrame#sourceTray {
-    background: transparent;
-    border: 0;
-}
 QWidget#transport {
     background: #1c1c1c;
     border: 0;

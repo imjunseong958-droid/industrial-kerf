@@ -157,6 +157,20 @@ fn command_alias_precedence_and_atomic_history() {
 }
 
 #[test]
+fn new_project_starts_with_an_empty_timeline() {
+    let project = empty_project();
+    assert!(project.tracks.is_empty());
+    let command = parse_command(&json!({
+        "type": "add_track",
+        "track": {"id": "audio-1", "type": "audio", "clips": []}
+    }))
+    .unwrap();
+    let updated = apply_command(&project, &command).unwrap();
+    assert_eq!(updated.tracks.len(), 1);
+    assert_eq!(updated.tracks[0].id.as_str(), "audio-1");
+}
+
+#[test]
 fn batch_undo_redo_and_empty_identity() {
     let history = create_history(empty_project(), Revision::ZERO).unwrap();
     let command = parse_command(&json!({"type":"set_metadata","patch":{"x":true}})).unwrap();

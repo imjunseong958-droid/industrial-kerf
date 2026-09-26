@@ -4582,6 +4582,7 @@ mod tests {
             "path": source_path.to_string_lossy(),
             "duration": 2.0
         }]);
+        project["tracks"] = json!([{"id": "video-1", "type": "video", "clips": []}]);
         project["tracks"][0]["clips"] = json!([
             {"id":"clip-existing-1","sourceId":"source-1","in":0.0,"out":0.5,"timelineStart":0.0},
             {"id":"clip-existing-2","sourceId":"source-1","in":0.8,"out":1.4,"timelineStart":0.8}
@@ -4691,6 +4692,7 @@ mod tests {
         project_value["sources"] = json!([{
             "id": "source-1", "path": "/tmp/source.mp4", "duration": 4
         }]);
+        project_value["tracks"] = json!([{"id": "video-1", "type": "video", "clips": []}]);
         project_value["tracks"][0]["clips"] = json!([{
             "id": "clip-1", "sourceId": "source-1", "in": 0, "out": 4, "timelineStart": 0
         }]);
