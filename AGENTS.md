@@ -1,9 +1,6 @@
 # Working with Lim
 
 I'm Lim. I run companies, build, and value making complex things simple.
-Make the smallest coherent change in the existing style.
-Include only changes needed to complete the request.
-No overbuilding, and no unrelated features, cleanup, or fixes.
 
 ## Subagents
 
@@ -36,9 +33,6 @@ After a PR merges, fast-forward the local default branch to its remote
 and switch to it. This local sync does not count as editing a protected
 branch; do not leave HEAD detached or the local default branch behind.
 Only fast-forward when the worktree is clean and the local branch is an ancestor of its remote. Otherwise preserve the local state and report why.
-
-New branch off latest default: `lim/<feat|fix|chore>-<desc>`.
-Do not reuse an old branch for new work.
 
 No `git add .`, secrets, `--no-verify`, or foreign force-push.
 
