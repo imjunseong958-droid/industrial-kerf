@@ -86,11 +86,30 @@
 
 namespace {
 
-constexpr int kTimelineLabelWidth = 94;
+constexpr int kTimelineLabelWidth = 160;
 constexpr int kTimelineTail = 30;
-constexpr int kRulerHeight = 28;
-constexpr int kTrackHeight = 52;
-constexpr int kClipInset = 4;
+constexpr int kRulerHeight = 26;
+// Medium: the sound-track default and the add-track row.
+constexpr int kTrackHeight = 44;
+// Large: picture tracks start taller so the filmstrip reads.
+constexpr int kVideoTrackHeight = 60;
+constexpr int kMinTrackHeight = 24;
+constexpr int kMaxTrackHeight = 160;
+constexpr int kResizeGrip = 4;
+constexpr int kClipInset = 2;
+constexpr int kTrimHandle = 8;
+// Track header preview slot, right-aligned beside the track name.
+constexpr int kHeaderPreviewWidth = 48;
+constexpr int kHeaderPreviewHeight = 27;
+
+struct TrackHeightPreset {
+    const char *name;
+    int height;
+};
+
+// Track height steps, named the way Pro Tools names them.
+constexpr TrackHeightPreset kTrackHeightPresets[] = {
+    {"Mini", kMinTrackHeight}, {"Small", 34}, {"Medium", kTrackHeight}, {"Large", kVideoTrackHeight}, {"Jumbo", 96}};
 // One pixel stays under a frame, so the pointer time cannot step in multi-second jumps.
 constexpr double kMinPixelsPerSecond = 80.0;
 
@@ -310,6 +329,45 @@ QColor trackAccent(const QJsonObject &track, int row) {
     return row == 0 ? QColor("#4d9df4") : QColor("#3978c5");
 }
 
+bool isAudioTrack(const QJsonObject &track) {
+    const QString type = track.value(QStringLiteral("type")).toString().toLower();
+    return type.contains(QStringLiteral("audio")) || type.contains(QStringLiteral("sound"));
+}
+
+double clipDuration(const QJsonObject &clip) {
+    const double duration = clip.value(QStringLiteral("duration")).toDouble();
+    if (duration > 0.0) return duration;
+    const double speed = std::max(0.01, clip.value(QStringLiteral("speed")).toDouble(1.0));
+    return std::max(0.2, (clip.value(QStringLiteral("out")).toDouble() - clip.value(QStringLiteral("in")).toDouble()) / speed);
+}
+
+// Clip surfaces derive from the track hue: a mid-tone name bar over a dark
+// body, so picture, filmstrip, and waveform carry the brightness instead.
+struct ClipColors {
+    QColor band;
+    QColor body;
+    QColor wave;
+    QColor highlight;
+};
+
+ClipColors clipColors(const QColor &accent, bool selected, bool hovered) {
+    const int hue = accent.hsvHue();
+    const int saturation = accent.hsvSaturation();
+    const int lift = selected ? 22 : hovered ? 12 : 0;
+    return {QColor::fromHsv(hue, saturation * 62 / 100, 142 + lift),
+            QColor::fromHsv(hue, saturation * 70 / 100, 70 + lift),
+            QColor::fromHsv(hue, saturation * 42 / 100, 232),
+            QColor::fromHsv(hue, saturation * 45 / 100, 196, 150)};
+}
+
+// Pixel-exact border drawn inside the rectangle, independent of pen geometry.
+void frameInside(QPainter &p, const QRectF &rect, qreal thickness, const QColor &color) {
+    p.fillRect(QRectF(rect.left(), rect.top(), rect.width(), thickness), color);
+    p.fillRect(QRectF(rect.left(), rect.bottom() - thickness, rect.width(), thickness), color);
+    p.fillRect(QRectF(rect.left(), rect.top() + thickness, thickness, rect.height() - 2 * thickness), color);
+    p.fillRect(QRectF(rect.right() - thickness, rect.top() + thickness, thickness, rect.height() - 2 * thickness), color);
+}
+
 QJsonObject commandApply(const QJsonObject &command, quint64 revision) {
     return QJsonObject{{QStringLiteral("type"), QStringLiteral("apply")},
                        {QStringLiteral("revision"), QJsonValue::fromVariant(QVariant::fromValue(revision))},
@@ -444,6 +502,7 @@ public:
         m_project = project;
         m_duration = std::max(duration, 1.0);
         m_fps = fps > 0.0 ? fps : 24.0;
+        layoutRows();
         invalidateLanes();
         updateContentSize();
         update();
@@ -500,6 +559,7 @@ public:
     void setArtwork(MediaArtwork *artwork) {
         m_artwork = artwork;
         connect(artwork, &MediaArtwork::changed, this, [this] {
+            m_waveTints.clear();
             invalidateLanes();
             update();
         });
@@ -515,11 +575,37 @@ public:
         repaintAt(m_feedbackPoint.x());
     }
 
+    // Every track shares the visible panel height, the way Pro Tools fits
+    // tracks to the window. The empty add-track row stays reachable below.
+    void fitTracksToView() {
+        if (m_rows.isEmpty()) return;
+        const int available = viewportRect().height() - kRulerHeight - kTrackHeight - 8;
+        const int each = std::clamp(available / static_cast<int>(m_rows.size()), kMinTrackHeight, kMaxTrackHeight);
+        const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
+        for (const TrackRow &row : m_rows)
+            m_trackHeights.insert(trackKey(tracks.at(row.track).toObject(), row.track), each);
+        relayout();
+    }
+
+    void resetTrackHeights() {
+        m_trackHeights.clear();
+        relayout();
+    }
+
     QSize minimumSizeHint() const override { return minimumSize(); }
 
     bool addLaneVisible() const { return m_addLaneVisible; }
     QPoint addLaneButtonCenter() const { return addLaneButtonRect().center(); }
     QString skimLabel() const { return m_hasSkimmer ? prettyTime(m_skimmerTime) : QString(); }
+    int trackRowCount() const { return static_cast<int>(m_rows.size()); }
+    QString trackRowLabel(int row) const {
+        const TrackRow track = m_rows.value(row);
+        return (track.audio ? QStringLiteral("A") : QStringLiteral("V")) + QString::number(track.number);
+    }
+    QRect trackHeaderRect(int row) const {
+        const TrackRow track = m_rows.value(row);
+        return QRect(stickyOrigin().x(), track.top, kTimelineLabelWidth, track.height);
+    }
 
 signals:
     void seekRequested(double time);
@@ -533,15 +619,16 @@ signals:
 protected:
     void paintEvent(QPaintEvent *event) override {
         QPainter p(this);
-        // Corner timecode and the playhead are separate strips. Paint each one
-        // so a long timeline does not rebuild everything between them.
+        const QRect dirty = event->region().boundingRect();
+        // Lanes come from a cache; the ruler, track headers, and playhead are
+        // painted on top at the scroll position so they stay pinned.
         if (lanesAreCacheable()) {
             const bool rebuilt = m_laneCache.isNull();
             ensureLaneCache();
             if (!m_laneCache.isNull()) {
                 blitLaneCache(p, m_laneCache, event->region());
                 p.setClipRegion(event->region());
-                paintOverlay(p);
+                paintOverlay(p, dirty);
                 // A resize can expose only the new edge. The rest would keep the
                 // previous scale until the pointer moved across it.
                 if (rebuilt && event->region() != QRegion(rect())) update();
@@ -551,7 +638,7 @@ protected:
         for (const QRect &visible : event->region())
             paintLanes(p, visible);
         p.setClipRegion(event->region());
-        paintOverlay(p);
+        paintOverlay(p, dirty);
     }
 
     void resizeEvent(QResizeEvent *event) override {
@@ -560,11 +647,25 @@ protected:
         update();
     }
 
+    void moveEvent(QMoveEvent *event) override {
+        QWidget::moveEvent(event);
+        // A scroll area scrolls by moving this widget. Repaint so the pinned
+        // ruler and headers are drawn at the new offset.
+        if (!isWindow()) update();
+    }
+
     void mousePressEvent(QMouseEvent *event) override {
         if (event->button() != Qt::LeftButton) return;
         setFocus();
         clearSkimmer();
         const QPoint pos = event->position().toPoint();
+        const int grip = resizeRowAt(pos);
+        if (grip >= 0) {
+            m_resizeRow = grip;
+            m_resizeAnchor = pos.y();
+            m_resizeStartHeight = m_rows.at(grip).height;
+            return;
+        }
         if (addLaneHitRect().contains(pos)) {
             m_addLaneVisible = false;
             update();
@@ -572,8 +673,8 @@ protected:
             return;
         }
         m_addLaneVisible = false;
-        const double time = timeAt(event->position().x());
-        if (pos.y() < kRulerHeight || pos.x() < kTimelineLabelWidth) {
+        if (inHeader(pos)) return;
+        if (inRuler(pos)) {
             beginScrub(event->position());
             return;
         }
@@ -583,21 +684,29 @@ protected:
             return;
         }
         m_dragging = true;
+        m_dragMoved = false;
         m_dragClipId = hit.id;
+        m_dragRow = hit.row;
         m_dragStart = hit.start;
-        m_previewTime = hit.start;
         m_dragDuration = hit.duration;
-        m_pressTime = time;
-        m_dragLeading = pos.x() - hit.rect.left() < 8;
-        m_dragTrailing = hit.rect.right() - pos.x() < 8;
+        m_pressTime = timeAt(event->position().x());
+        m_dragLeading = pos.x() - hit.rect.left() < kTrimHandle;
+        m_dragTrailing = hit.rect.right() - pos.x() < kTrimHandle;
+        // A trailing trim previews the out point; starting from the in point
+        // would collapse the clip to one frame until the pointer moves.
+        m_previewTime = m_dragTrailing && !m_dragLeading ? hit.start + hit.duration : hit.start;
         emit clipSelected(hit.id);
     }
 
     void mouseMoveEvent(QMouseEvent *event) override {
+        if (m_resizeRow >= 0) {
+            setTrackHeight(m_resizeRow, m_resizeStartHeight + event->position().toPoint().y() - m_resizeAnchor);
+            return;
+        }
         if (m_scrubbing) {
             const double previous = m_playhead;
             m_feedbackPoint = event->position();
-            m_playhead = std::clamp(timeAt(m_feedbackPoint.x()), 0.0, m_duration);
+            m_playhead = scrubTime(m_feedbackPoint.x());
             repaintAt(timeToX(previous));
             repaintAt(timeToX(m_playhead));
             emit seekRequested(m_playhead);
@@ -605,12 +714,24 @@ protected:
         }
         if (!m_dragging) {
             const QPoint pos = event->position().toPoint();
+            const int grip = resizeRowAt(pos);
+            if (grip != m_hoverGrip) {
+                m_hoverGrip = grip;
+                update(headerColumnRect());
+            }
+            if (grip >= 0) {
+                if (m_addLaneVisible) {
+                    m_addLaneVisible = false;
+                    update(addLaneHitRect());
+                }
+                clearHoverClip();
+                updateSkimmer(event->position());
+                setCursor(Qt::SplitVCursor);
+                return;
+            }
             updateAddLane(pos);
             if (m_addLaneVisible && addLaneHitRect().contains(pos)) {
-                if (!m_hoverClipId.isEmpty()) {
-                    m_hoverClipId.clear();
-                    invalidateLanes();
-                }
+                clearHoverClip();
                 if (m_hasSkimmer) {
                     m_hasSkimmer = false;
                     m_hoverFrame = -1.0;
@@ -621,14 +742,19 @@ protected:
                 return;
             }
             const ClipHit hit = clipAt(pos);
-            if (hit.id != m_hoverClipId) {
+            const qreal x = event->position().x();
+            const int edge = hit.id.isEmpty() ? 0
+                : x - hit.rect.left() < kTrimHandle ? -1
+                : hit.rect.right() - x < kTrimHandle ? 1 : 0;
+            if (hit.id != m_hoverClipId || edge != m_hoverEdge) {
                 m_hoverClipId = hit.id;
+                m_hoverEdge = edge;
                 invalidateLanes();
                 update();
             }
             if (hit.id.isEmpty()) {
                 setCursor(Qt::ArrowCursor);
-            } else if (event->position().x() - hit.rect.left() < 8 || hit.rect.right() - event->position().x() < 8) {
+            } else if (edge != 0) {
                 setCursor(Qt::SizeHorCursor);
             } else {
                 setCursor(Qt::OpenHandCursor);
@@ -638,19 +764,24 @@ protected:
         }
         clearSkimmer();
         const double delta = timeAt(event->position().x()) - m_pressTime;
-        m_previewTime = std::round(std::max(0.0, (m_dragTrailing ? m_dragStart + m_dragDuration : m_dragStart) + delta) * m_fps) / m_fps;
+        m_dragMoved = m_dragMoved || std::abs(delta * pixelsPerSecond()) >= QApplication::startDragDistance();
+        m_previewTime = std::round(std::max(0.0, dragOrigin() + delta) * m_fps) / m_fps;
         setCursor((m_dragLeading || m_dragTrailing) ? Qt::SizeHorCursor : Qt::ClosedHandCursor);
         invalidateLanes();
         update();
     }
 
     void mouseReleaseEvent(QMouseEvent *event) override {
+        if (m_resizeRow >= 0) {
+            m_resizeRow = -1;
+            return;
+        }
         if (m_scrubbing) {
             m_scrubbing = false;
             releaseMouse();
             const double previous = m_playhead;
             m_feedbackPoint = event->position();
-            m_playhead = std::clamp(timeAt(m_feedbackPoint.x()), 0.0, m_duration);
+            m_playhead = scrubTime(m_feedbackPoint.x());
             repaintAt(timeToX(previous));
             repaintAt(timeToX(m_playhead));
             emit seekRequested(m_playhead);
@@ -679,258 +810,551 @@ protected:
         update();
     }
 
-    void leaveEvent(QEvent *) override {
-        if (m_scrubbing || m_dragging) return;
-        {
-            if (!m_hoverClipId.isEmpty()) invalidateLanes();
-            m_hoverClipId.clear();
-            m_addLaneVisible = false;
-            m_hoverFrame = -1.0;
-            if (m_hasSkimmer) {
-                m_hasSkimmer = false;
-                emit hoverSeekEnded();
+    void contextMenuEvent(QContextMenuEvent *event) override {
+        const QPoint pos = event->pos();
+        if (!inHeader(pos) || inRuler(pos)) return;
+        const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
+        const int row = rowAt(pos.y());
+        QMenu menu(this);
+        // Keys, not row indexes: a snapshot can relayout rows while the menu is open.
+        const auto addPresets = [&](QMenu *target, const QStringList &keys, int current) {
+            for (const auto &preset : kTrackHeightPresets) {
+                QAction *action = target->addAction(QString::fromLatin1(preset.name));
+                action->setCheckable(true);
+                action->setChecked(current == preset.height);
+                connect(action, &QAction::triggered, this, [this, keys, height = preset.height] {
+                    for (const QString &key : keys) m_trackHeights.insert(key, height);
+                    relayout();
+                });
             }
-            setCursor(Qt::ArrowCursor);
-            update();
+        };
+        QStringList allKeys;
+        for (const TrackRow &track : m_rows) allKeys << trackKey(tracks.at(track.track).toObject(), track.track);
+        if (row >= 0) {
+            const TrackRow track = m_rows.at(row);
+            addPresets(menu.addMenu(QStringLiteral("Track height")),
+                       {trackKey(tracks.at(track.track).toObject(), track.track)}, track.height);
         }
+        if (!m_rows.isEmpty()) {
+            addPresets(menu.addMenu(QStringLiteral("All tracks")), allKeys, -1);
+            menu.addSeparator();
+            menu.addAction(QStringLiteral("Fit tracks to panel"), this, &TimelineWidget::fitTracksToView);
+            menu.addAction(QStringLiteral("Reset track heights"), this, &TimelineWidget::resetTrackHeights);
+        }
+        if (!menu.isEmpty()) menu.exec(event->globalPos());
+    }
+
+    void leaveEvent(QEvent *) override {
+        if (m_scrubbing || m_dragging || m_resizeRow >= 0) return;
+        clearHoverClip();
+        m_hoverGrip = -1;
+        m_addLaneVisible = false;
+        m_hoverFrame = -1.0;
+        if (m_hasSkimmer) {
+            m_hasSkimmer = false;
+            emit hoverSeekEnded();
+        }
+        setCursor(Qt::ArrowCursor);
+        update();
     }
 
 private:
     struct ClipHit {
         QString id;
+        int row = -1;
         double start = 0.0;
         double duration = 0.0;
         QRectF rect;
     };
 
-    void paintLanes(QPainter &p, const QRect &visible) {
-        const int trackCount = static_cast<int>(m_project.value(QStringLiteral("tracks")).toArray().size());
-        const double pxPerSecond = pixelsPerSecond();
-        p.setRenderHint(QPainter::Antialiasing, false);
-        p.fillRect(visible, QColor("#141414"));
-        p.fillRect(0, kRulerHeight, kTimelineLabelWidth, std::max(0, height() - kRulerHeight), QColor("#1c1c1c"));
-        for (int y = kRulerHeight, row = 0; y < height(); y += kTrackHeight, ++row) {
-            const int laneHeight = std::min(kTrackHeight, height() - y);
-            if (laneHeight <= 0) break;
-            p.fillRect(kTimelineLabelWidth, y, std::max(0, width() - kTimelineLabelWidth), laneHeight,
-                       QColor(row % 2 == 0 ? "#1a1a1a" : "#161616"));
-            if (y + kTrackHeight <= height()) {
-                p.setPen(QColor("#101010"));
-                p.drawLine(0, y + kTrackHeight - 1, width(), y + kTrackHeight - 1);
-            }
-        }
+    // One display row per track. The project keeps tracks in layer order;
+    // rows place them the way an edit suite shows them.
+    struct TrackRow {
+        int track = -1;
+        bool audio = false;
+        int number = 0;
+        int top = kRulerHeight;
+        int height = kTrackHeight;
+        int bottom() const { return top + height; }
+    };
 
-        QFont laneFont = p.font();
-        laneFont.setPixelSize(11);
-        p.setFont(laneFont);
-
-        const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
-        for (int row = 0; row < trackCount; ++row) {
-            const int y = kRulerHeight + row * kTrackHeight;
-            if (y + kTrackHeight < visible.top() || y > visible.bottom()) continue;
-            const QJsonObject track = tracks.at(row).toObject();
-            const QColor accent = trackAccent(track, row);
-            const QString type = track.value(QStringLiteral("type")).toString().toLower();
-            const bool audio = type.contains(QStringLiteral("audio")) || type.contains(QStringLiteral("sound"));
-            const QJsonArray clips = track.value(QStringLiteral("clips")).toArray();
-            if (m_artwork && !clips.isEmpty()) {
-                const QString sourceId = clips.first().toObject().value(QStringLiteral("sourceId")).toString();
-                const QImage image = audio ? m_artwork->waves.value(sourceId) : m_artwork->frames.value(sourceId);
-                if (!image.isNull()) {
-                    const QRect thumbnail(8, y + 4, 78, kTrackHeight - 8);
-                    p.drawImage(thumbnail, image);
-                }
-            }
-
-            for (const QJsonValue &value : clips) {
-                const QJsonObject clip = value.toObject();
-                double start = clip.value(QStringLiteral("timelineStart")).toDouble();
-                double duration = clip.value(QStringLiteral("duration")).toDouble();
-                if (duration <= 0.0) {
-                    const double in = clip.value(QStringLiteral("in")).toDouble();
-                    const double out = clip.value(QStringLiteral("out")).toDouble();
-                    const double speed = std::max(0.01, clip.value(QStringLiteral("speed")).toDouble(1.0));
-                    duration = std::max(0.2, (out - in) / speed);
-                }
-                const QString id = clip.value(QStringLiteral("id")).toString();
-                if (m_dragging && id == m_dragClipId) {
-                    if (m_dragLeading) { duration = std::max(1.0 / m_fps, m_dragStart + m_dragDuration - m_previewTime); start = m_previewTime; }
-                    else if (m_dragTrailing) duration = std::max(1.0 / m_fps, m_previewTime - m_dragStart);
-                    else start = m_previewTime;
-                }
-                QRectF clipRect(kTimelineLabelWidth + start * pxPerSecond + 2, y + kClipInset,
-                                std::max(12.0, duration * pxPerSecond - 4), kTrackHeight - kClipInset * 2);
-                if (!clipRect.intersects(visible)) continue;
-                const bool selected = id == m_selectedClip;
-                const bool hovered = id == m_hoverClipId;
-                QColor body = accent.darker(selected ? 145 : hovered ? 160 : 185);
-                if (body.value() < 28) body = QColor("#243044");
-                const qreal titleBand = std::min(16.0, std::max(10.0, clipRect.height() * 0.34));
-                p.save();
-                p.setClipRect(visible);
-                QPainterPath clipPath;
-                clipPath.addRoundedRect(clipRect, 2, 2);
-                p.setClipPath(clipPath, Qt::IntersectClip);
-                p.fillRect(clipRect, body);
-                p.fillRect(QRectF(clipRect.left(), clipRect.top(), clipRect.width(), titleBand), accent);
-                if (audio) {
-                    const QString sourceId = clip.value("sourceId").toString();
-                    if (m_artwork && m_artwork->waves.contains(sourceId)) {
-                        const auto wave = m_artwork->waves.value(sourceId);
-                        double sourceDuration = 1;
-                        for (const auto &source : m_project.value("sources").toArray())
-                            if (source.toObject().value("id").toString() == sourceId)
-                                sourceDuration = std::max(0.01, source.toObject().value("duration").toDouble(1));
-                        const double in = clip.value("in").toDouble();
-                        const double out = clip.value("out").toDouble(sourceDuration);
-                        const QRectF film(clipRect.left(), clipRect.top() + titleBand, clipRect.width(),
-                                          std::max(1.0, clipRect.height() - titleBand));
-                        p.setOpacity(0.9);
-                        p.drawImage(film, wave,
-                                    QRectF(in / sourceDuration * wave.width(), 0,
-                                           (out - in) / sourceDuration * wave.width(), wave.height()));
-                        p.setOpacity(1);
-                    }
-                } else {
-                    const QImage frame = m_artwork ? m_artwork->frames.value(clip.value("sourceId").toString()) : QImage();
-                    if (!frame.isNull()) {
-                        const double tileHeight = std::max(1.0, clipRect.height() - titleBand);
-                        const double tileWidth = tileHeight * 16.0 / 9.0;
-                        const double firstTile = clipRect.left() + std::max(0.0, std::floor((visible.left() - clipRect.left()) / tileWidth)) * tileWidth;
-                        for (double x = firstTile; x < std::min(clipRect.right(), double(visible.right())); x += tileWidth)
-                            p.drawImage(QRectF(x, clipRect.top() + titleBand, tileWidth, tileHeight), frame);
-                    }
-                }
-                if (clipRect.width() > 28.0) {
-                    QFont nameFont = p.font();
-                    nameFont.setPixelSize(11);
-                    p.setFont(nameFont);
-                    const QFontMetrics metrics(nameFont);
-                    const QString label = metrics.elidedText(clipName(clip), Qt::ElideRight,
-                                                              std::max(1, static_cast<int>(clipRect.width()) - 12));
-                    p.setPen(QColor("#f7f7f7"));
-                    p.drawText(QRectF(clipRect.left() + 6, clipRect.top(), clipRect.width() - 10, titleBand),
-                               Qt::AlignVCenter | Qt::TextSingleLine, label);
-                }
-                p.restore();
-                p.setRenderHint(QPainter::Antialiasing, true);
-                p.setBrush(Qt::NoBrush);
-                p.setPen(QPen(selected ? QColor("#f0b429") : QColor(0, 0, 0, 170), selected ? 2 : 1));
-                p.drawRoundedRect(clipRect, 2, 2);
-                if (selected) {
-                    p.setPen(QPen(QColor("#f0b429"), 2, Qt::SolidLine, Qt::RoundCap));
-                    p.drawLine(QPointF(clipRect.left() + 3, clipRect.center().y() - 6), QPointF(clipRect.left() + 3, clipRect.center().y() + 6));
-                    p.drawLine(QPointF(clipRect.right() - 3, clipRect.center().y() - 6), QPointF(clipRect.right() - 3, clipRect.center().y() + 6));
-                }
-                p.setRenderHint(QPainter::Antialiasing, false);
-            }
-        }
-
-        p.setPen(QColor("#0c0c0c"));
-        p.drawLine(kTimelineLabelWidth, kRulerHeight, kTimelineLabelWidth, height());
-        paintRuler(p, visible, pxPerSecond);
+    static QString trackKey(const QJsonObject &track, int index) {
+        const QString id = track.value(QStringLiteral("id")).toString();
+        return id.isEmpty() ? QStringLiteral("#%1").arg(index) : id;
     }
 
-    void paintRuler(QPainter &p, const QRect &visible, double pps) {
+    // Classic order: playback draws a later picture track over earlier ones,
+    // so picture tracks stack upward from V1, which sits on the sound bank.
+    // Sound tracks run downward from A1.
+    void layoutRows() {
+        const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
+        QVector<int> picture;
+        QVector<int> sound;
+        for (int index = 0; index < tracks.size(); ++index)
+            (isAudioTrack(tracks.at(index).toObject()) ? sound : picture).append(index);
+        m_rows.clear();
+        int top = kRulerHeight;
+        const auto add = [&](int index, bool audio, int number) {
+            const int height = m_trackHeights.value(trackKey(tracks.at(index).toObject(), index),
+                                                    audio ? kTrackHeight : kVideoTrackHeight);
+            m_rows.append(TrackRow{index, audio, number, top, height});
+            top += height;
+        };
+        for (int number = static_cast<int>(picture.size()); number >= 1; --number)
+            add(picture.at(number - 1), false, number);
+        for (int number = 1; number <= static_cast<int>(sound.size()); ++number)
+            add(sound.at(number - 1), true, number);
+    }
+
+    void relayout() {
+        layoutRows();
+        invalidateLanes();
+        updateContentSize();
+        update();
+    }
+
+    void setTrackHeight(int row, int height) {
+        if (row < 0 || row >= m_rows.size()) return;
+        const TrackRow track = m_rows.at(row);
+        const int clamped = std::clamp(height, kMinTrackHeight, kMaxTrackHeight);
+        if (clamped == track.height) return;
+        const QJsonObject object = m_project.value(QStringLiteral("tracks")).toArray().at(track.track).toObject();
+        m_trackHeights.insert(trackKey(object, track.track), clamped);
+        relayout();
+    }
+
+    int tracksBottom() const { return m_rows.isEmpty() ? kRulerHeight : m_rows.constLast().bottom(); }
+
+    int rowAt(int y) const {
+        for (int row = 0; row < m_rows.size(); ++row)
+            if (y >= m_rows.at(row).top && y < m_rows.at(row).bottom()) return row;
+        return -1;
+    }
+
+    // The part of the content on screen. Inside a scroll area the widget is
+    // moved by the scroll offset; the ruler and headers are pinned to it.
+    QRect viewportRect() const {
+        if (isWindow() || !parentWidget()) return rect();
+        return QRect(-pos(), parentWidget()->size()).intersected(rect());
+    }
+
+    QPoint stickyOrigin() const { return viewportRect().topLeft(); }
+    bool inHeader(const QPoint &point) const { return point.x() < stickyOrigin().x() + kTimelineLabelWidth; }
+    bool inRuler(const QPoint &point) const { return point.y() < stickyOrigin().y() + kRulerHeight; }
+
+    QRect headerColumnRect() const {
+        const QPoint origin = stickyOrigin();
+        return QRect(origin.x(), origin.y() + kRulerHeight, kTimelineLabelWidth,
+                     std::max(0, height() - origin.y() - kRulerHeight));
+    }
+
+    int resizeRowAt(const QPoint &point) const {
+        if (!inHeader(point) || inRuler(point)) return -1;
+        for (int row = 0; row < m_rows.size(); ++row)
+            if (std::abs(point.y() - m_rows.at(row).bottom()) <= kResizeGrip) return row;
+        return -1;
+    }
+
+    void clearHoverClip() {
+        if (m_hoverClipId.isEmpty()) return;
+        m_hoverClipId.clear();
+        m_hoverEdge = 0;
+        invalidateLanes();
+        update();
+    }
+
+    void paintLanes(QPainter &p, const QRect &visible) {
+        const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
         p.setRenderHint(QPainter::Antialiasing, false);
-        p.fillRect(QRect(visible.left(), 0, visible.width(), kRulerHeight), QColor("#2a2a2a"));
-        p.fillRect(0, 0, kTimelineLabelWidth, kRulerHeight, QColor("#232323"));
-        p.setPen(QColor("#101010"));
-        p.drawLine(visible.left(), kRulerHeight - 1, visible.right(), kRulerHeight - 1);
-        p.drawLine(kTimelineLabelWidth, 0, kTimelineLabelWidth, kRulerHeight - 1);
+        // Below the last track is an empty well, so spare height never reads as a track.
+        p.fillRect(visible, QColor("#121212"));
+        for (int row = 0; row < m_rows.size(); ++row) {
+            const TrackRow &track = m_rows.at(row);
+            if (track.bottom() <= visible.top() || track.top > visible.bottom()) continue;
+            paintLane(p, visible, row, tracks.at(track.track).toObject());
+        }
+    }
+
+    void paintLane(QPainter &p, const QRect &visible, int row, const QJsonObject &track) {
+        const TrackRow &layout = m_rows.at(row);
+        const QColor accent = trackAccent(track, layout.track);
+        const QRect lane(kTimelineLabelWidth, layout.top, std::max(0, width() - kTimelineLabelWidth), layout.height - 1);
+        p.fillRect(lane, QColor("#1c1c1c"));
+        if (track.value(QStringLiteral("locked")).toBool())
+            p.fillRect(lane, QBrush(QColor(255, 255, 255, 14), Qt::BDiagPattern));
+
+        p.save();
+        p.setClipRect(lane.adjusted(0, 0, 0, 1).intersected(visible));
+        if (!track.value(QStringLiteral("enabled")).toBool(true)) p.setOpacity(0.4);
+        for (const QJsonValue &value : track.value(QStringLiteral("clips")).toArray())
+            paintClip(p, visible, row, value.toObject(), accent, layout.audio);
+        p.restore();
+
+        p.fillRect(lane.left(), layout.bottom() - 1, lane.width(), 1, QColor("#0c0c0c"));
+        // Picture and sound read as two banks, the way a conform is laid out.
+        if (row > 0 && m_rows.at(row - 1).audio != layout.audio)
+            p.fillRect(lane.left(), layout.top, lane.width(), 2, QColor("#050505"));
+    }
+
+    void paintHeaders(QPainter &p, const QRect &dirty) {
+        const QRect column = headerColumnRect();
+        if (!column.intersects(dirty)) return;
+        const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
+        p.save();
+        p.setClipRect(column, Qt::IntersectClip);
+        p.fillRect(column, QColor("#171717"));
+        for (int row = 0; row < m_rows.size(); ++row) {
+            const TrackRow &track = m_rows.at(row);
+            if (track.bottom() <= column.top() || track.top > dirty.bottom()) continue;
+            paintTrackHeader(p, row, tracks.at(track.track).toObject(), column.left());
+        }
+        const int grip = m_resizeRow >= 0 ? m_resizeRow : m_hoverGrip;
+        if (grip >= 0 && grip < m_rows.size())
+            p.fillRect(column.left(), m_rows.at(grip).bottom() - 2, column.width() - 1, 2, QColor("#8a8a8a"));
+        p.fillRect(column.left() + kTimelineLabelWidth - 1, column.top(), 1, column.height(), QColor("#0a0a0a"));
+        p.restore();
+    }
+
+    void paintTrackHeader(QPainter &p, int row, const QJsonObject &track, int left) {
+        const TrackRow &layout = m_rows.at(row);
+        const QColor accent = trackAccent(track, layout.track);
+        const bool enabled = track.value(QStringLiteral("enabled")).toBool(true);
+        const QRect header(left, layout.top, kTimelineLabelWidth - 1, layout.height - 1);
+        p.fillRect(header, QColor("#1f1f1f"));
+        p.fillRect(QRect(left, layout.top, header.width(), 1), QColor("#282828"));
+        p.fillRect(QRect(left, layout.top, 3, header.height()), enabled ? accent : accent.darker(240));
+        p.fillRect(QRect(left, layout.bottom() - 1, kTimelineLabelWidth, 1), QColor("#0c0c0c"));
+        if (row > 0 && m_rows.at(row - 1).audio != layout.audio)
+            p.fillRect(QRect(left, layout.top, kTimelineLabelWidth, 2), QColor("#050505"));
+
+        // Tall rows show a name line over a detail line; short rows keep only
+        // the track number and name, centered.
+        const bool detailed = layout.height >= 40;
+        const int blockTop = detailed ? layout.top + (header.height() - 31) / 2
+                                      : layout.top + (header.height() - 16) / 2;
+        QFont codeFont(QStringLiteral("Menlo"));
+        codeFont.setStyleHint(QFont::Monospace);
+        codeFont.setPixelSize(10);
+        codeFont.setWeight(QFont::Bold);
+        const QRect badge(left + 10, blockTop, 26, 16);
+        p.fillRect(badge, QColor("#2a2a2a"));
+        frameInside(p, badge, 1, QColor("#454545"));
+        p.setFont(codeFont);
+        p.setPen(enabled ? QColor("#ececec") : QColor("#7a7a7a"));
+        p.drawText(badge, Qt::AlignCenter, trackRowLabel(row));
+
+        const QJsonArray clips = track.value(QStringLiteral("clips")).toArray();
+        QImage preview;
+        if (detailed && m_artwork && !clips.isEmpty()) {
+            const QString sourceId = clips.first().toObject().value(QStringLiteral("sourceId")).toString();
+            if (layout.audio && m_artwork->waves.contains(sourceId)) {
+                preview = tintedWave(sourceId, clipColors(accent, false, false).wave);
+            } else if (!layout.audio) {
+                preview = m_artwork->frames.value(sourceId);
+            }
+        }
+        const QRect slot = headerPreviewRect(row, left);
+        if (!preview.isNull()) {
+            p.fillRect(slot, QColor("#0e0e0e"));
+            p.drawImage(slot.adjusted(1, 1, -1, -1), preview);
+            frameInside(p, slot, 1, QColor("#0a0a0a"));
+        }
+
+        QFont nameFont = font();
+        nameFont.setPixelSize(11);
+        nameFont.setWeight(QFont::Medium);
+        p.setFont(nameFont);
+        const int nameLeft = badge.right() + 6;
+        const int nameRight = preview.isNull() ? header.right() - 8 : slot.left() - 8;
+        QString name = track.value(QStringLiteral("name")).toString().trimmed();
+        if (name.isEmpty()) name = (layout.audio ? QStringLiteral("Audio %1") : QStringLiteral("Video %1")).arg(layout.number);
+        p.setPen(enabled ? QColor("#d8d8d8") : QColor("#808080"));
+        p.drawText(QRect(nameLeft, badge.top(), std::max(1, nameRight - nameLeft), badge.height()),
+                   Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
+                   QFontMetrics(nameFont).elidedText(name, Qt::ElideRight, std::max(1, nameRight - nameLeft)));
+        if (!detailed) return;
+
+        QFont metaFont = nameFont;
+        metaFont.setPixelSize(10);
+        metaFont.setWeight(QFont::Normal);
+        p.setFont(metaFont);
+        const QString count = clips.size() == 1 ? QStringLiteral("1 clip") : QStringLiteral("%1 clips").arg(clips.size());
+        const QRect meta(badge.left(), blockTop + 19, std::max(1, nameRight - badge.left()), 12);
+        p.setPen(QColor("#7c7c7c"));
+        p.drawText(meta, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, count);
+
+        // State the runtime reports. These are indicators, not toggles.
+        int chipX = meta.left() + QFontMetrics(metaFont).horizontalAdvance(count) + 7;
+        const auto chip = [&](const QString &text) {
+            QFont chipFont = codeFont;
+            chipFont.setPixelSize(8);
+            const int chipWidth = QFontMetrics(chipFont).horizontalAdvance(text) + 8;
+            if (chipX + chipWidth > nameRight) return;
+            const QRect box(chipX, meta.top(), chipWidth, meta.height());
+            p.fillRect(box, QColor("#c9c9c9"));
+            p.setFont(chipFont);
+            p.setPen(QColor("#141414"));
+            p.drawText(box, Qt::AlignCenter, text);
+            chipX += chipWidth + 4;
+        };
+        if (track.value(QStringLiteral("locked")).toBool()) chip(QStringLiteral("LOCK"));
+        if (track.value(QStringLiteral("muted")).toBool()) chip(QStringLiteral("M"));
+        if (!enabled) chip(QStringLiteral("OFF"));
+    }
+
+    void paintClip(QPainter &p, const QRect &visible, int row, const QJsonObject &clip, const QColor &accent, bool audio) {
+        double start = clip.value(QStringLiteral("timelineStart")).toDouble();
+        double duration = clipDuration(clip);
+        const QString id = clip.value(QStringLiteral("id")).toString();
+        const bool dragged = m_dragging && id == m_dragClipId;
+        if (dragged) {
+            if (m_dragLeading) { duration = std::max(1.0 / m_fps, m_dragStart + m_dragDuration - m_previewTime); start = m_previewTime; }
+            else if (m_dragTrailing) duration = std::max(1.0 / m_fps, m_previewTime - m_dragStart);
+            else start = m_previewTime;
+        }
+        const QRectF rect = clipRect(row, start, duration);
+        if (!rect.intersects(visible)) return;
+        const bool selected = id == m_selectedClip;
+        const bool hovered = id == m_hoverClipId;
+        const ClipColors colors = clipColors(accent, selected, hovered);
+        // Short rows show only the name bar, as a mini track does.
+        const qreal bandHeight = rect.height() >= 26.0 ? 13.0 : rect.height();
+        const QRectF band(rect.left(), rect.top(), rect.width(), bandHeight);
+        const QRectF body(rect.left(), band.bottom(), rect.width(), rect.height() - bandHeight);
+
+        p.save();
+        p.setClipRect(rect, Qt::IntersectClip);
+        QLinearGradient bandFill(0, band.top(), 0, band.bottom());
+        bandFill.setColorAt(0, colors.band.lighter(112));
+        bandFill.setColorAt(1, colors.band);
+        p.fillRect(band, bandFill);
+
+        const QString sourceId = clip.value(QStringLiteral("sourceId")).toString();
+        if (body.height() > 0.0) {
+            QLinearGradient bodyFill(0, body.top(), 0, body.bottom());
+            bodyFill.setColorAt(0, colors.body.lighter(125));
+            bodyFill.setColorAt(1, colors.body);
+            p.fillRect(body, bodyFill);
+        }
+        if (body.height() > 0.0 && audio) {
+            p.fillRect(QRectF(body.left(), std::floor(body.center().y()), body.width(), 1), QColor(0, 0, 0, 70));
+            if (m_artwork && m_artwork->waves.contains(sourceId)) {
+                const QImage wave = tintedWave(sourceId, colors.wave);
+                double sourceDuration = 1;
+                for (const auto &source : m_project.value(QStringLiteral("sources")).toArray())
+                    if (source.toObject().value(QStringLiteral("id")).toString() == sourceId)
+                        sourceDuration = std::max(0.01, source.toObject().value(QStringLiteral("duration")).toDouble(1));
+                const double in = clip.value(QStringLiteral("in")).toDouble();
+                const double out = clip.value(QStringLiteral("out")).toDouble(sourceDuration);
+                p.drawImage(body.adjusted(0, 1, 0, -1), wave,
+                            QRectF(in / sourceDuration * wave.width(), 0,
+                                   (out - in) / sourceDuration * wave.width(), wave.height()));
+            }
+        } else if (body.height() > 0.0) {
+            const QImage frame = m_artwork ? m_artwork->frames.value(sourceId) : QImage();
+            if (!frame.isNull()) {
+                const double tileHeight = std::max(1.0, body.height());
+                const double tileWidth = std::max(1.0, std::round(tileHeight * 16.0 / 9.0));
+                const double firstTile = body.left() + std::max(0.0, std::floor((visible.left() - body.left()) / tileWidth)) * tileWidth;
+                const double stop = std::min(body.right(), double(visible.right()) + 1.0);
+                for (double x = firstTile; x < stop; x += tileWidth) {
+                    p.drawImage(QRectF(x, body.top(), tileWidth, tileHeight), frame);
+                    p.fillRect(QRectF(x + tileWidth - 1, body.top(), 1, tileHeight), QColor(0, 0, 0, 120));
+                }
+            }
+        }
+
+        if (rect.width() > 22.0) {
+            qreal textRight = rect.right() - 5;
+            const bool effected = !clip.value(QStringLiteral("effects")).toArray().isEmpty() ||
+                                  !clip.value(QStringLiteral("keyframes")).toArray().isEmpty() ||
+                                  clip.value(QStringLiteral("crop")).isObject();
+            if (effected && rect.width() > 64.0) {
+                QFont badgeFont(QStringLiteral("Menlo"));
+                badgeFont.setStyleHint(QFont::Monospace);
+                badgeFont.setPixelSize(8);
+                badgeFont.setWeight(QFont::Bold);
+                const QRectF fx(textRight - 16, band.center().y() - 5.0, 16, 10);
+                p.fillRect(fx, QColor(0, 0, 0, 110));
+                p.setFont(badgeFont);
+                p.setPen(QColor("#ededed"));
+                p.drawText(fx, Qt::AlignCenter, QStringLiteral("FX"));
+                textRight = fx.left() - 4;
+            }
+            QFont nameFont = font();
+            nameFont.setPixelSize(10);
+            nameFont.setWeight(QFont::DemiBold);
+            p.setFont(nameFont);
+            QString label = clipName(clip);
+            const double speed = clip.value(QStringLiteral("speed")).toDouble(1.0);
+            if (std::abs(speed - 1.0) > 0.0005) label += QStringLiteral("  [%1%]").arg(std::lround(speed * 100.0));
+            const qreal textLeft = rect.left() + 6;
+            p.setPen(QColor("#f6f6f6"));
+            p.drawText(QRectF(textLeft, band.top(), std::max(1.0, textRight - textLeft), bandHeight),
+                       Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
+                       QFontMetrics(nameFont).elidedText(label, Qt::ElideRight, std::max(1, int(textRight - textLeft))));
+        }
+        p.restore();
+
+        p.fillRect(QRectF(rect.left() + 1, rect.top() + 1, rect.width() - 2, 1), colors.highlight);
+        if (selected) {
+            frameInside(p, rect, 2, QColor("#f0b429"));
+        } else {
+            frameInside(p, rect, 1, QColor(0, 0, 0, 200));
+        }
+
+        // Trim bracket on the edge under the pointer, or the edge being trimmed.
+        int edge = 0;
+        if (dragged) edge = m_dragLeading ? -1 : m_dragTrailing ? 1 : 0;
+        else if (hovered && !m_dragging) edge = m_hoverEdge;
+        if (edge != 0) {
+            const QColor bracket("#f0b429");
+            const qreal x = edge < 0 ? rect.left() : rect.right() - 3;
+            p.fillRect(QRectF(x, rect.top(), 3, rect.height()), bracket);
+            const qreal serif = edge < 0 ? rect.left() : rect.right() - 8;
+            p.fillRect(QRectF(serif, rect.top(), 8, 2), bracket);
+            p.fillRect(QRectF(serif, rect.bottom() - 2, 8, 2), bracket);
+        }
+    }
+
+    void paintRuler(QPainter &p, const QRect &dirty, int top) {
+        const QRect band(dirty.left(), top, dirty.width(), kRulerHeight);
+        if (!band.intersects(dirty)) return;
+        p.setRenderHint(QPainter::Antialiasing, false);
+        QLinearGradient fill(0, top, 0, top + kRulerHeight);
+        fill.setColorAt(0, QColor("#2a2a2a"));
+        fill.setColorAt(1, QColor("#202020"));
+        p.fillRect(band.adjusted(0, 0, 0, -1), fill);
+        p.fillRect(QRect(band.left(), top + kRulerHeight - 1, band.width(), 1), QColor("#0a0a0a"));
 
         QFont font(QStringLiteral("Menlo"));
         font.setPixelSize(9);
         font.setStyleHint(QFont::Monospace);
         p.setFont(font);
+        const double pps = pixelsPerSecond();
         const RulerScale scale = rulerScale(pps, m_fps);
         const double major = std::max(scale.majorSeconds, 1e-6);
         const double minor = major / scale.divisions;
-        const double startTime = (visible.left() - kTimelineLabelWidth) / pps;
-        const double endTime = (visible.right() - kTimelineLabelWidth) / pps;
+        const double startTime = (dirty.left() - kTimelineLabelWidth) / pps;
+        const double endTime = (dirty.right() - kTimelineLabelWidth) / pps;
         int first = std::max(0, static_cast<int>(std::floor(startTime / major)) - 1);
         const int limit = static_cast<int>(std::ceil(std::max(m_duration, 0.0) / major)) + 1;
         const int last = std::min(limit, static_cast<int>(std::ceil(endTime / major)) + 1);
         for (int index = first; index <= last; ++index) {
             const double time = index * major;
-            const qreal x = timeToX(time);
-            p.setPen(QColor("#8e8e8e"));
-            p.drawLine(QPointF(x, kRulerHeight - 10), QPointF(x, kRulerHeight - 1));
-            if (x >= kTimelineLabelWidth - 1.0 && time <= m_duration + 0.0001) {
-                p.setPen(QColor("#b5b5b5"));
-                p.drawText(QRectF(x + 4, 1, std::max(12.0, major * pps - 8.0), 14),
+            const int x = static_cast<int>(std::floor(timeToX(time)));
+            p.fillRect(QRect(x, top + 3, 1, kRulerHeight - 4), QColor("#666666"));
+            if (time <= m_duration + 0.0001) {
+                p.setPen(QColor("#b0b0b0"));
+                p.drawText(QRectF(x + 4, top + 1, std::max(12.0, major * pps - 8.0), 12),
                            Qt::AlignLeft | Qt::AlignVCenter,
                            timelineRulerLabel(std::min(time, m_duration), m_fps, m_duration));
             }
             for (int step = 1; step < scale.divisions; ++step) {
                 const double tick = time + minor * step;
                 if (tick > m_duration) break;
-                const qreal mx = timeToX(tick);
-                p.setPen(QColor("#5c5c5c"));
-                p.drawLine(QPointF(mx, kRulerHeight - 5), QPointF(mx, kRulerHeight - 1));
+                const bool half = scale.divisions % 2 == 0 && step * 2 == scale.divisions;
+                const int length = half ? 8 : 4;
+                p.fillRect(QRect(static_cast<int>(std::floor(timeToX(tick))), top + kRulerHeight - 1 - length, 1, length),
+                           QColor(half ? "#5a5a5a" : "#474747"));
             }
         }
     }
 
-    void paintOverlay(QPainter &p) {
-        const auto drawHead = [&](double time, const QColor &color) {
-            const qreal x = std::floor(timeToX(time)) + 0.5;
-            p.setRenderHint(QPainter::Antialiasing, false);
-            p.setPen(QPen(color, 1));
-            p.drawLine(QPointF(x, kRulerHeight), QPointF(x, height()));
-            p.setRenderHint(QPainter::Antialiasing, true);
-            p.setPen(Qt::NoPen);
-            p.setBrush(color);
-            QPainterPath head;
-            head.moveTo(x - 6.0, kRulerHeight - 11.0);
-            head.lineTo(x + 6.0, kRulerHeight - 11.0);
-            head.lineTo(x, kRulerHeight);
-            head.closeSubpath();
-            p.drawPath(head);
-            p.setRenderHint(QPainter::Antialiasing, false);
-        };
-        if (m_hasSkimmer && !m_dragging && !m_scrubbing) {
-            drawHead(m_playhead, QColor("#6a6a6a"));
-            const qreal skimX = std::floor(timeToX(m_skimmerTime)) + 0.5;
-            p.setRenderHint(QPainter::Antialiasing, false);
-            p.setPen(QPen(QColor("#f3f3f3"), 1));
-            p.drawLine(QPointF(skimX, kRulerHeight), QPointF(skimX, height()));
-            paintCornerTime(p, m_skimmerTime, QColor("#f4f4f4"));
-        } else {
-            drawHead(m_playhead, QColor("#f0b429"));
-            paintCornerTime(p, m_playhead, QColor("#f0b429"));
+    // Painted every frame on top of the lane cache, in stacking order: lane
+    // lines, pinned ruler with its playhead tab, pinned headers, corner, and
+    // transient feedback.
+    void paintOverlay(QPainter &p, const QRect &dirty) {
+        const QPoint origin = stickyOrigin();
+        const bool skimming = m_hasSkimmer && !m_dragging && !m_scrubbing;
+        const QColor playColor = skimming ? QColor("#6a6a6a") : QColor("#f0b429");
+        const int laneTop = origin.y() + kRulerHeight;
+        const int playX = static_cast<int>(std::floor(timeToX(m_playhead)));
+        p.setRenderHint(QPainter::Antialiasing, false);
+        // A dark halo keeps the line readable over bright filmstrips.
+        if (!skimming) p.fillRect(QRect(playX - 1, laneTop, 3, height() - laneTop), QColor(0, 0, 0, 110));
+        p.fillRect(QRect(playX, laneTop, 1, height() - laneTop), playColor);
+
+        paintRuler(p, dirty, origin.y());
+        if (skimming) {
+            const int skimX = static_cast<int>(std::floor(timeToX(m_skimmerTime)));
+            p.fillRect(QRect(skimX, origin.y(), 1, height() - origin.y()), QColor(240, 240, 240, 215));
         }
+        p.fillRect(QRect(playX, laneTop - 3, 1, 3), playColor);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.setPen(Qt::NoPen);
+        p.setBrush(playColor);
+        const qreal cx = playX + 0.5;
+        const qreal top = origin.y();
+        QPainterPath head;
+        head.moveTo(cx - 5.5, top + 3.0);
+        head.lineTo(cx + 5.5, top + 3.0);
+        head.lineTo(cx + 5.5, top + kRulerHeight - 9.0);
+        head.lineTo(cx, top + kRulerHeight - 3.0);
+        head.lineTo(cx - 5.5, top + kRulerHeight - 9.0);
+        head.closeSubpath();
+        p.drawPath(head);
+        p.setRenderHint(QPainter::Antialiasing, false);
+
+        paintHeaders(p, dirty);
         if (m_addLaneVisible) {
+            p.fillRect(addLaneHitRect().adjusted(0, 0, -1, -1), QColor("#1d1d1d"));
             const QRect button = addLaneButtonRect();
-            p.setRenderHint(QPainter::Antialiasing, true);
-            p.setPen(QPen(QColor("#5c5c5c"), 1));
-            p.setBrush(QColor("#2c2c2c"));
-            p.drawRoundedRect(button, 3, 3);
-            p.setPen(QColor("#f2f2f2"));
-            QFont addFont = p.font();
-            addFont.setPixelSize(16);
+            p.fillRect(button, QColor("#2a2a2a"));
+            frameInside(p, button, 1, QColor("#555555"));
+            p.setPen(QColor("#ededed"));
+            QFont addFont = font();
+            addFont.setPixelSize(11);
             addFont.setWeight(QFont::Medium);
             p.setFont(addFont);
-            p.drawText(button, Qt::AlignCenter, QStringLiteral("+"));
-            p.setRenderHint(QPainter::Antialiasing, false);
+            p.drawText(button, Qt::AlignCenter, QStringLiteral("+  Track"));
         }
+        paintCornerTime(p, origin, skimming ? m_skimmerTime : m_playhead, skimming ? QColor("#f4f4f4") : playColor);
+        if (m_dragging && m_dragMoved) paintDragReadout(p);
     }
 
-    void paintCornerTime(QPainter &p, double time, const QColor &color) const {
-        const QRect corner(0, 0, kTimelineLabelWidth, kRulerHeight - 1);
-        p.setRenderHint(QPainter::Antialiasing, false);
-        p.fillRect(corner, QColor("#232323"));
+    // While a clip moves or trims, show where the edge lands and how far it went.
+    void paintDragReadout(QPainter &p) {
+        const double delta = m_previewTime - dragOrigin();
+        const QString text = QStringLiteral("%1  %2%3")
+            .arg(timelineTimecode(m_previewTime, m_fps), delta < 0 ? QStringLiteral("-") : QStringLiteral("+"),
+                 timelineTimecode(std::abs(delta), m_fps));
         QFont font(QStringLiteral("Menlo"));
-        font.setPixelSize(11);
         font.setStyleHint(QFont::Monospace);
+        font.setPixelSize(10);
+        const QFontMetrics metrics(font);
+        const qreal x = timeToX(m_previewTime);
+        QRectF box(0, 0, metrics.horizontalAdvance(text) + 14, 18);
+        box.moveTop(std::max(stickyOrigin().y() + kRulerHeight + 2, m_rows.value(m_dragRow).top - 21));
+        box.moveLeft(x + 6);
+        if (box.right() > width() - 4) box.moveRight(x - 6);
+        p.setRenderHint(QPainter::Antialiasing, false);
+        p.fillRect(box, QColor(10, 10, 10, 235));
+        frameInside(p, box, 1, QColor("#4a4a4a"));
+        p.setFont(font);
+        p.setPen(QColor("#f2f2f2"));
+        p.drawText(box, Qt::AlignCenter, text);
+    }
+
+    void paintCornerTime(QPainter &p, const QPoint &origin, double time, const QColor &color) const {
+        const QRect corner(origin.x(), origin.y(), kTimelineLabelWidth - 1, kRulerHeight - 1);
+        p.setRenderHint(QPainter::Antialiasing, false);
+        p.fillRect(corner, QColor("#1a1a1a"));
+        p.fillRect(QRect(corner.right() + 1, origin.y(), 1, kRulerHeight), QColor("#0a0a0a"));
+        p.fillRect(QRect(origin.x(), corner.bottom() + 1, kTimelineLabelWidth, 1), QColor("#0a0a0a"));
+        QFont font(QStringLiteral("Menlo"));
+        font.setPixelSize(13);
+        font.setStyleHint(QFont::Monospace);
+        font.setWeight(QFont::DemiBold);
         p.setFont(font);
         p.setPen(color);
-        p.drawText(corner.adjusted(4, 0, -4, 0), Qt::AlignCenter, timelineRulerLabel(time, m_fps, m_duration));
+        p.drawText(corner.adjusted(10, 0, -6, 0), Qt::AlignLeft | Qt::AlignVCenter, timelineTimecode(time, m_fps));
     }
 
     void repaintAt(qreal x) {
         update(pointerBand(x));
-        update(QRect(0, 0, kTimelineLabelWidth, kRulerHeight));
+        const QPoint origin = stickyOrigin();
+        update(QRect(origin.x(), origin.y(), kTimelineLabelWidth, kRulerHeight));
     }
 
     void ensureLaneCache() {
@@ -950,7 +1374,7 @@ private:
             return;
         }
         cache.setDevicePixelRatio(dpr);
-        cache.fill(QColor("#141414"));
+        cache.fill(QColor("#121212"));
         QPainter painter(&cache);
         if (!painter.isActive()) {
             m_laneCache = QPixmap();
@@ -972,16 +1396,48 @@ private:
         return kTimelineLabelWidth + time * pixelsPerSecond();
     }
 
+    // Clips sit on whole pixels at their exact edit points, so adjacent clips
+    // butt together the way the cut plays.
+    QRectF clipRect(int row, double start, double duration) const {
+        const TrackRow track = m_rows.value(row);
+        const double left = std::round(timeToX(start));
+        const double right = std::max(left + 4.0, std::round(timeToX(start + duration)));
+        return QRectF(left, track.top + kClipInset, right - left, track.height - 1 - kClipInset * 2);
+    }
+
+    double dragOrigin() const {
+        return m_dragTrailing && !m_dragLeading ? m_dragStart + m_dragDuration : m_dragStart;
+    }
+
+    QRect headerPreviewRect(int row, int left) const {
+        const TrackRow track = m_rows.value(row);
+        return QRect(left + kTimelineLabelWidth - 9 - kHeaderPreviewWidth,
+                     track.top + (track.height - 1 - kHeaderPreviewHeight) / 2,
+                     kHeaderPreviewWidth, kHeaderPreviewHeight);
+    }
+
+    QImage tintedWave(const QString &sourceId, const QColor &color) {
+        const QString key = sourceId + QLatin1Char('/') + color.name(QColor::HexArgb);
+        const auto cached = m_waveTints.constFind(key);
+        if (cached != m_waveTints.constEnd()) return cached.value();
+        QImage tinted = m_artwork->waves.value(sourceId).convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        QPainter painter(&tinted);
+        painter.setCompositionMode(QPainter::CompositionMode_SourceIn);
+        painter.fillRect(tinted.rect(), color);
+        painter.end();
+        m_waveTints.insert(key, tinted);
+        return tinted;
+    }
+
     QRect pointerBand(qreal x) const {
         const int ix = static_cast<int>(std::lround(x));
         return QRect(ix - 120, 0, 240, std::max(1, height()));
     }
 
     void updateContentSize() {
-        const int tracks = static_cast<int>(m_project.value(QStringLiteral("tracks")).toArray().size());
         const double contentWidth = kTimelineLabelWidth + m_duration * pixelsPerSecond() + kTimelineTail;
-        setMinimumSize(static_cast<int>(std::min(contentWidth, 16777215.0)),
-                       kRulerHeight + std::max(3, tracks) * kTrackHeight + 8);
+        const int contentHeight = std::max(tracksBottom() + kTrackHeight, kRulerHeight + 3 * kTrackHeight) + 8;
+        setMinimumSize(static_cast<int>(std::min(contentWidth, 16777215.0)), contentHeight);
         updateGeometry();
     }
 
@@ -995,19 +1451,24 @@ private:
         return std::clamp((x - kTimelineLabelWidth) / pixelsPerSecond(), 0.0, m_duration);
     }
 
+    // Lanes hidden under the pinned headers are not addressable.
+    double scrubTime(qreal x) const {
+        return timeAt(std::max(x, qreal(stickyOrigin().x() + kTimelineLabelWidth)));
+    }
+
     void beginScrub(const QPointF &point) {
         const double previous = m_playhead;
         m_scrubbing = true;
         grabMouse();
         m_feedbackPoint = point;
-        m_playhead = std::clamp(timeAt(point.x()), 0.0, m_duration);
+        m_playhead = scrubTime(point.x());
         repaintAt(timeToX(previous));
         repaintAt(timeToX(m_playhead));
         emit seekRequested(m_playhead);
     }
 
     void updateSkimmer(const QPointF &point) {
-        if (point.x() < kTimelineLabelWidth) {
+        if (inHeader(point.toPoint())) {
             if (m_hasSkimmer) {
                 const double previous = m_skimmerTime;
                 const qreal previousX = m_feedbackPoint.x();
@@ -1040,14 +1501,12 @@ private:
     }
 
     QRect addLaneButtonRect() const {
-        const int row = m_project.value(QStringLiteral("tracks")).toArray().size();
-        return QRect((kTimelineLabelWidth - 22) / 2,
-                     kRulerHeight + row * kTrackHeight + (kTrackHeight - 22) / 2, 22, 22);
+        return QRect(stickyOrigin().x() + (kTimelineLabelWidth - 76) / 2,
+                     tracksBottom() + (kTrackHeight - 20) / 2, 76, 20);
     }
 
     QRect addLaneHitRect() const {
-        const int row = m_project.value(QStringLiteral("tracks")).toArray().size();
-        return QRect(0, kRulerHeight + row * kTrackHeight, kTimelineLabelWidth, kTrackHeight);
+        return QRect(stickyOrigin().x(), tracksBottom(), kTimelineLabelWidth, kTrackHeight);
     }
 
     void updateAddLane(const QPoint &point) {
@@ -1060,31 +1519,36 @@ private:
     }
 
     ClipHit clipAt(const QPoint &point) const {
+        if (inHeader(point) || inRuler(point)) return {};
+        const int row = rowAt(point.y());
+        if (row < 0) return {};
         const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
-        for (int row = 0; row < tracks.size(); ++row) {
-            const int y = kRulerHeight + row * kTrackHeight;
-            if (point.y() < y || point.y() > y + kTrackHeight) continue;
-            for (const QJsonValue &value : tracks.at(row).toObject().value(QStringLiteral("clips")).toArray()) {
-                const QJsonObject clip = value.toObject();
-                const double start = clip.value(QStringLiteral("timelineStart")).toDouble();
-                double duration = clip.value(QStringLiteral("duration")).toDouble();
-                if (duration <= 0.0) {
-                    const double speed = std::max(0.01, clip.value(QStringLiteral("speed")).toDouble(1.0));
-                    duration = (clip.value(QStringLiteral("out")).toDouble() - clip.value(QStringLiteral("in")).toDouble()) / speed;
-                }
-                QRectF rect(kTimelineLabelWidth + start * pixelsPerSecond() + 2, y + kClipInset,
-                            std::max(12.0, duration * pixelsPerSecond() - 4), kTrackHeight - kClipInset * 2);
-                if (rect.contains(point)) return {clip.value(QStringLiteral("id")).toString(), start, duration, rect};
-            }
+        const QJsonArray clips = tracks.at(m_rows.at(row).track).toObject().value(QStringLiteral("clips")).toArray();
+        for (const QJsonValue &value : clips) {
+            const QJsonObject clip = value.toObject();
+            const double start = clip.value(QStringLiteral("timelineStart")).toDouble();
+            const double duration = clipDuration(clip);
+            const QRectF rect = clipRect(row, start, duration);
+            if (rect.contains(point)) return {clip.value(QStringLiteral("id")).toString(), row, start, duration, rect};
         }
         return {};
     }
 
     MediaArtwork *m_artwork = nullptr;
     QJsonObject m_project;
+    QVector<TrackRow> m_rows;
+    // Track heights are a view preference keyed by track id, so they survive
+    // snapshots and reordering without touching the project.
+    QHash<QString, int> m_trackHeights;
     QString m_selectedClip;
     QString m_hoverClipId;
     QString m_dragClipId;
+    int m_dragRow = 0;
+    int m_hoverEdge = 0;
+    int m_hoverGrip = -1;
+    int m_resizeRow = -1;
+    int m_resizeAnchor = 0;
+    int m_resizeStartHeight = 0;
     double m_duration = 1.0;
     double m_fps = 24.0;
     double m_playhead = 0.0;
@@ -1101,9 +1565,11 @@ private:
     bool m_hasSkimmer = false;
     bool m_dragLeading = false;
     bool m_dragTrailing = false;
+    bool m_dragMoved = false;
     bool m_addLaneVisible = false;
     QPointF m_feedbackPoint;
     QPixmap m_laneCache;
+    QHash<QString, QImage> m_waveTints;
 };
 
 class ViewerWidget final : public QWidget {
@@ -1336,6 +1802,58 @@ private:
     bool m_dragging = false;
 };
 
+// Docked-panel title strip, the way desktop edit suites label each pane: the
+// panel name on the left and live details on the right.
+struct PanelHeader {
+    QWidget *widget = nullptr;
+    QHBoxLayout *layout = nullptr;
+    QLabel *detail = nullptr;
+};
+
+PanelHeader panelHeader(const QString &title, const QString &titleName = QStringLiteral("panelTitle")) {
+    PanelHeader header;
+    header.widget = new QWidget;
+    header.widget->setObjectName(QStringLiteral("panelHeader"));
+    header.widget->setAttribute(Qt::WA_StyledBackground);
+    header.widget->setFixedHeight(24);
+    header.layout = new QHBoxLayout(header.widget);
+    header.layout->setContentsMargins(10, 0, 8, 0);
+    header.layout->setSpacing(8);
+    auto *name = new QLabel(title);
+    name->setObjectName(titleName);
+    header.layout->addWidget(name);
+    header.layout->addStretch(1);
+    header.detail = new QLabel;
+    header.detail->setObjectName(QStringLiteral("panelDetail"));
+    header.layout->addWidget(header.detail);
+    return header;
+}
+
+enum class TransportGlyph { Start, PreviousFrame, Play, Pause, NextFrame, End };
+
+// Transport symbols drawn on a 16-point grid so they share weight and size.
+QIcon transportIcon(TransportGlyph glyph) {
+    QPixmap pixmap(32, 32);
+    pixmap.setDevicePixelRatio(2);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor("#d7d7d7"));
+    const auto triangle = [&painter](qreal base, qreal tip) {
+        painter.drawPolygon(QPolygonF{{base, 3.5}, {tip, 8.0}, {base, 12.5}});
+    };
+    switch (glyph) {
+    case TransportGlyph::Start: painter.drawRect(QRectF(3.0, 3.5, 1.6, 9.0)); triangle(13.0, 5.5); break;
+    case TransportGlyph::PreviousFrame: triangle(10.5, 3.5); painter.drawRect(QRectF(11.5, 3.5, 1.6, 9.0)); break;
+    case TransportGlyph::Play: triangle(4.5, 12.5); break;
+    case TransportGlyph::Pause: painter.drawRect(QRectF(4.5, 3.5, 2.4, 9.0)); painter.drawRect(QRectF(9.1, 3.5, 2.4, 9.0)); break;
+    case TransportGlyph::NextFrame: painter.drawRect(QRectF(2.9, 3.5, 1.6, 9.0)); triangle(5.5, 12.5); break;
+    case TransportGlyph::End: triangle(3.0, 10.5); painter.drawRect(QRectF(11.4, 3.5, 1.6, 9.0)); break;
+    }
+    return QIcon(pixmap);
+}
+
 class MainWindow final : public QMainWindow {
     Q_OBJECT
     friend class EditorTest;
@@ -1347,9 +1865,7 @@ public:
         setMinimumSize(1080, 700);
         buildUi();
         setupActions();
-        // Runtime messages remain available to callers, but the empty status
-        // bar should not reserve a strip along the bottom of the editor.
-        statusBar()->hide();
+        setupStatusBar();
         m_exactSeekTimer.setSingleShot(true);
         connect(&m_exactSeekTimer, &QTimer::timeout, this, &MainWindow::settlePointerSeek);
         setConnection(QStringLiteral("connecting"));
@@ -1488,6 +2004,7 @@ private slots:
         m_pointerOwnsPlayhead = true;
         m_playhead = m_pendingSeek;
         m_timeline->setPlayhead(m_playhead);
+        updateTransport();
         m_viewer->setLiveScrub(true);
         if (m_pendingSeekScrub) m_exactSeekTimer.start(50);
         else m_exactSeekTimer.stop();
@@ -1947,7 +2464,7 @@ private slots:
         }
         m_composerStatus->setText(!m_connected ? QStringLiteral("Connect to start editing")
                                  : m_agentBusy ? QStringLiteral("Cut is working…")
-                                                : QStringLiteral("Return to send · ⇧ Return for a new line"));
+                                                : QStringLiteral("↵ Send  ·  ⇧↵ New line"));
         m_chatInput->setPlaceholderText(!m_connected ? QStringLiteral("Your next edit starts here…")
                                        : m_agentBusy ? QStringLiteral("Working on your edit…")
                                                      : QStringLiteral("Describe your next edit…"));
@@ -2245,8 +2762,13 @@ private:
         viewerFrame->setObjectName(QStringLiteral("viewerFrame"));
         auto *viewerLayout = new QVBoxLayout(viewerFrame);
         viewerLayout->setContentsMargins(0, 0, 0, 0);
+        viewerLayout->setSpacing(0);
+        const PanelHeader viewerHeader = panelHeader(QStringLiteral("Viewer"));
+        m_viewerDetail = viewerHeader.detail;
+        viewerLayout->addWidget(viewerHeader.widget);
         m_viewer = new ViewerWidget;
-        viewerLayout->addWidget(m_viewer);
+        viewerLayout->addWidget(m_viewer, 1);
+        viewerLayout->addWidget(buildTransport());
         editorSplit->addWidget(viewerFrame);
 
         auto *bottomBand = new QWidget;
@@ -2263,6 +2785,10 @@ private:
         timelinePanelLayout->setContentsMargins(0, 0, 0, 0);
         timelinePanelLayout->setSpacing(0);
 
+        const PanelHeader timelineHeader = panelHeader(QStringLiteral("Timeline"));
+        m_timelineDetail = timelineHeader.detail;
+        timelinePanelLayout->addWidget(timelineHeader.widget);
+
         auto *timelineFrame = new QFrame;
         timelineFrame->setObjectName(QStringLiteral("timelineFrame"));
         auto *timelineLayout = new QVBoxLayout(timelineFrame);
@@ -2278,7 +2804,7 @@ private:
         timelineScroll->viewport()->installEventFilter(this);
         timelineLayout->addWidget(timelineScroll);
         timelinePanelLayout->addWidget(timelineFrame, 1);
-        timelinePanel->setMinimumHeight(280);
+        timelinePanel->setMinimumHeight(220);
         bottomLayout->addWidget(timelinePanel, 1);
         editorSplit->addWidget(bottomBand);
         editorSplit->setStretchFactor(0, 1);
@@ -2289,30 +2815,29 @@ private:
         m_agentPanel = right;
         right->setObjectName(QStringLiteral("assistantPanel"));
         right->setAttribute(Qt::WA_StyledBackground);
-        right->setMinimumWidth(300);
-        auto *rightLayout = new QVBoxLayout(right);
-        rightLayout->setContentsMargins(12, 12, 12, 12);
-        rightLayout->setSpacing(10);
-        auto *agentHeader = new QHBoxLayout;
-        auto *agentTitle = new QLabel(QStringLiteral("Cut Assistant"));
-        agentTitle->setObjectName(QStringLiteral("assistantTitle"));
+        right->setMinimumWidth(248);
+        auto *rightFrame = new QVBoxLayout(right);
+        rightFrame->setContentsMargins(0, 0, 0, 0);
+        rightFrame->setSpacing(0);
+        const PanelHeader agentHeader = panelHeader(QStringLiteral("Cut Assistant"), QStringLiteral("assistantTitle"));
+        agentHeader.detail->hide();
         m_agentStatus = new QLabel(QStringLiteral("READY"));
         m_agentStatus->setObjectName(QStringLiteral("statusPill"));
-        agentHeader->addWidget(agentTitle);
-        agentHeader->addStretch();
-        agentHeader->addWidget(m_agentStatus);
-        rightLayout->addLayout(agentHeader);
-        auto *agentSubtitle = new QLabel(QStringLiteral("Shape your story, one edit at a time."));
-        agentSubtitle->setObjectName(QStringLiteral("muted"));
-        rightLayout->addWidget(agentSubtitle);
+        agentHeader.layout->addWidget(m_agentStatus);
+        rightFrame->addWidget(agentHeader.widget);
+        auto *rightBody = new QWidget;
+        rightFrame->addWidget(rightBody, 1);
+        auto *rightLayout = new QVBoxLayout(rightBody);
+        rightLayout->setContentsMargins(8, 2, 8, 8);
+        rightLayout->setSpacing(6);
 
         auto *tabs = new QTabWidget;
         tabs->setObjectName(QStringLiteral("rightTabs"));
         rightLayout->addWidget(tabs, 1);
         auto *chatTab = new QWidget;
         auto *chatTabLayout = new QVBoxLayout(chatTab);
-        chatTabLayout->setContentsMargins(0, 8, 0, 0);
-        chatTabLayout->setSpacing(10);
+        chatTabLayout->setContentsMargins(0, 6, 0, 0);
+        chatTabLayout->setSpacing(6);
         // Review and activity can overflow on short windows; the composer stays fixed.
         auto *chatScroll = new QScrollArea;
         chatScroll->setFrameShape(QFrame::NoFrame);
@@ -2322,7 +2847,7 @@ private:
         auto *chatLayout = new QVBoxLayout(chatContent);
         chatLayout->setContentsMargins(0, 0, 0, 0);
         chatLayout->setSizeConstraint(QLayout::SetMinimumSize);
-        chatLayout->setSpacing(10);
+        chatLayout->setSpacing(6);
         chatScroll->setWidget(chatContent);
         chatTabLayout->addWidget(chatScroll, 1);
         m_conversation = new QTextEdit;
@@ -2336,13 +2861,13 @@ private:
         m_conversation->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         m_conversation->document()->setDocumentMargin(2);
         m_conversation->setHtml(QStringLiteral(
-            "<p style='margin-top:4px; color:#c6a15a; font-size:11px;'>YOUR EDITING PARTNER</p>"
-            "<p style='margin-top:4px; color:#f0f0f0; font-size:18px; font-weight:600;'>Make your next cut.</p>"
-            "<p style='margin-top:6px; color:#b6b6b6;'>Describe the change. Cut uses this timeline.</p>"
-            "<p style='margin-top:14px; color:#888888; font-size:11px;'>TRY ASKING</p>"
+            "<p style='margin-top:2px; color:#c6a15a; font-size:10px;'>YOUR EDITING PARTNER</p>"
+            "<p style='margin-top:2px; color:#f0f0f0; font-size:14px; font-weight:600;'>Make your next cut.</p>"
+            "<p style='margin-top:4px; color:#b6b6b6;'>Describe the change. Cut uses this timeline.</p>"
+            "<p style='margin-top:10px; color:#888888; font-size:10px;'>TRY ASKING</p>"
             "<p style='margin-top:2px; color:#dddddd;'>“Trim the opening to three seconds.”</p>"
             "<p style='margin-top:2px; color:#dddddd;'>“Lower the music under the dialogue.”</p>"
-            "<p style='margin-top:14px; color:#999999; font-size:12px;'>Review a proposal before it changes the cut.</p>"));
+            "<p style='margin-top:10px; color:#999999; font-size:11px;'>Review a proposal before it changes the cut.</p>"));
         chatLayout->addWidget(m_conversation, 1);
         auto *composer = new QFrame;
         m_chatComposer = composer;
@@ -2685,7 +3210,7 @@ private:
         workspace->addWidget(right);
         workspace->setStretchFactor(0, 1);
         workspace->setStretchFactor(1, 0);
-        workspace->setSizes({1168, 332});
+        workspace->setSizes({1228, 272});
         setCentralWidget(central);
 
         connect(m_timeline, &TimelineWidget::seekRequested, this, &MainWindow::queueSeek);
@@ -2756,6 +3281,11 @@ private:
             connect(action, &QAction::toggled, panel, &QWidget::setVisible);
         };
         addPanelToggle(QStringLiteral("Agent and inspector"), m_agentPanel);
+        view->addSeparator();
+        auto *fitTracks = view->addAction(QStringLiteral("Fit tracks to panel"));
+        connect(fitTracks, &QAction::triggered, m_timeline, &TimelineWidget::fitTracksToView);
+        auto *resetTracks = view->addAction(QStringLiteral("Reset track heights"));
+        connect(resetTracks, &QAction::triggered, m_timeline, &TimelineWidget::resetTrackHeights);
         auto *file = menuBar()->addMenu(QStringLiteral("File"));
         auto *import = file->addAction(QStringLiteral("Import media…"));
         import->setShortcut(QKeySequence::Open);
@@ -2797,11 +3327,24 @@ private:
         play->setShortcutContext(Qt::WidgetShortcut);
         m_timeline->addAction(play);
         connect(play, &QAction::triggered, this, &MainWindow::togglePlayback);
+        playback->addSeparator();
+        const auto transportAction = [&](const QString &title, Qt::Key key, void (MainWindow::*slot)()) {
+            auto *action = playback->addAction(title);
+            action->setShortcut(key);
+            action->setShortcutContext(Qt::WidgetShortcut);
+            m_timeline->addAction(action);
+            connect(action, &QAction::triggered, this, slot);
+            return action;
+        };
+        auto *toStart = transportAction(QStringLiteral("Go to start"), Qt::Key_Home, &MainWindow::seekToStart);
+        auto *previousFrame = transportAction(QStringLiteral("Previous frame"), Qt::Key_Left, &MainWindow::stepBackward);
+        auto *nextFrame = transportAction(QStringLiteral("Next frame"), Qt::Key_Right, &MainWindow::stepForward);
+        auto *toEnd = transportAction(QStringLiteral("Go to end"), Qt::Key_End, &MainWindow::seekToEnd);
 
         auto *toolbar = addToolBar(QStringLiteral("Main"));
         toolbar->setMovable(false);
         toolbar->setIconSize(QSize(15, 15));
-        toolbar->setFixedHeight(34);
+        toolbar->setFixedHeight(30);
         if (!menuBar()->isNativeMenuBar()) {
             // Keep menus accessible without dedicating a full row to them.
             auto *menuButton = new QToolButton(toolbar);
@@ -2905,7 +3448,82 @@ private:
         connect(m_previewButton, &QAction::triggered, this, &MainWindow::renderPreview);
         if (auto *renderButton = qobject_cast<QToolButton *>(toolbar->widgetForAction(m_previewButton)))
             renderButton->setObjectName(QStringLiteral("toolbarQuiet"));
-        m_runtimeActions = {import, exportAction, refreshAction, splitAction, deleteAction, play, split, deleteToolbar, exportToolbar};
+        m_runtimeActions = {import, exportAction, refreshAction, splitAction, deleteAction, play, split, deleteToolbar, exportToolbar,
+                            toStart, previousFrame, nextFrame, toEnd};
+    }
+
+    // Transport under the viewer: playhead timecode, the usual buttons, and
+    // the program length.
+    QWidget *buildTransport() {
+        auto *transport = new QWidget;
+        transport->setObjectName(QStringLiteral("transport"));
+        transport->setAttribute(Qt::WA_StyledBackground);
+        transport->setFixedHeight(28);
+        auto *layout = new QHBoxLayout(transport);
+        layout->setContentsMargins(10, 0, 10, 0);
+        layout->setSpacing(1);
+        m_transportTime = new QLabel(timelineTimecode(0.0, m_fps));
+        m_transportTime->setObjectName(QStringLiteral("transportTime"));
+        m_transportTime->setMinimumWidth(120);
+        layout->addWidget(m_transportTime);
+        layout->addStretch(1);
+        const auto button = [&](TransportGlyph glyph, const QString &tip, void (MainWindow::*slot)()) {
+            auto *control = new QToolButton;
+            control->setObjectName(QStringLiteral("transportButton"));
+            control->setIcon(transportIcon(glyph));
+            control->setIconSize(QSize(14, 14));
+            control->setToolTip(tip);
+            control->setAccessibleName(tip);
+            connect(control, &QToolButton::clicked, this, slot);
+            layout->addWidget(control);
+            m_transportButtons.append(control);
+            return control;
+        };
+        button(TransportGlyph::Start, QStringLiteral("Go to start (Home)"), &MainWindow::seekToStart);
+        button(TransportGlyph::PreviousFrame, QStringLiteral("Previous frame (Left)"), &MainWindow::stepBackward);
+        m_transportPlay = button(TransportGlyph::Play, QStringLiteral("Play (Space)"), &MainWindow::togglePlayback);
+        button(TransportGlyph::NextFrame, QStringLiteral("Next frame (Right)"), &MainWindow::stepForward);
+        button(TransportGlyph::End, QStringLiteral("Go to end (End)"), &MainWindow::seekToEnd);
+        layout->addStretch(1);
+        m_transportDuration = new QLabel(timelineTimecode(0.0, m_fps));
+        m_transportDuration->setObjectName(QStringLiteral("transportDuration"));
+        m_transportDuration->setMinimumWidth(120);
+        m_transportDuration->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        m_transportDuration->setToolTip(QStringLiteral("Program length"));
+        layout->addWidget(m_transportDuration);
+        return transport;
+    }
+
+    void updateTransport() {
+        if (!m_transportTime) return;
+        m_transportTime->setText(timelineTimecode(m_playhead, m_fps));
+        m_transportDuration->setText(timelineTimecode(m_duration, m_fps));
+        if (m_transportShowsPause != m_playing) {
+            m_transportShowsPause = m_playing;
+            m_transportPlay->setIcon(transportIcon(m_playing ? TransportGlyph::Pause : TransportGlyph::Play));
+            m_transportPlay->setToolTip(m_playing ? QStringLiteral("Pause (Space)") : QStringLiteral("Play (Space)"));
+        }
+    }
+
+    void seekToStart() { queueSeek(0.0); }
+    void seekToEnd() { queueSeek(m_duration); }
+    // Step from the frame on screen so each press moves exactly one frame.
+    void stepFrames(int frames) {
+        const double rate = std::max(1.0, m_fps);
+        queueSeek((std::round(m_playhead * rate) + frames) / rate);
+    }
+    void stepBackward() { stepFrames(-1); }
+    void stepForward() { stepFrames(1); }
+
+    void setupStatusBar() {
+        statusBar()->setSizeGripEnabled(false);
+        m_statusRevision = new QLabel;
+        m_statusRevision->setObjectName(QStringLiteral("statusRevision"));
+        m_statusRevision->hide();
+        m_statusConnection = new QLabel;
+        m_statusConnection->setObjectName(QStringLiteral("statusConnection"));
+        statusBar()->addPermanentWidget(m_statusRevision);
+        statusBar()->addPermanentWidget(m_statusConnection);
     }
 
     QJsonValue revisionValue() const { return QJsonValue::fromVariant(QVariant::fromValue(m_revision)); }
@@ -3017,8 +3635,10 @@ private:
                 m_playhead = std::clamp(event.value(QStringLiteral("position")).toDouble(), 0.0, m_duration);
                 m_timeline->setPlayhead(m_playhead);
             }
+            updateTransport();
         } else if (type == QStringLiteral("playback")) {
             m_playing = m_connected && event.value(QStringLiteral("playing")).toBool();
+            updateTransport();
             if (m_playing) {
                 m_hasPendingHoverSeek = false;
                 m_hoverSkimming = false;
@@ -3095,10 +3715,19 @@ private:
         const QSize canvasSize = resolvedCanvasSize(m_project, sources);
         m_viewer->setProjectInfo(canvasSize.width(), canvasSize.height());
         syncCanvasPreset(canvasSize);
+        m_viewerDetail->setText(QStringLiteral("%1 × %2  ·  %3 fps")
+                                    .arg(canvasSize.width()).arg(canvasSize.height()).arg(QString::number(m_fps, 'g', 5)));
+        m_timelineDetail->setText(QStringLiteral("%1  ·  %2")
+                                      .arg(m_trackCount == 1 ? QStringLiteral("1 track") : QStringLiteral("%1 tracks").arg(m_trackCount),
+                                           timelineTimecode(m_duration, m_fps)));
+        if (m_statusRevision) {
+            m_statusRevision->setText(QStringLiteral("Revision %1").arg(m_revision));
+            m_statusRevision->show();
+        }
+        updateTransport();
         m_artwork->request(sources, m_projectDirectory);
         updateProposal(snapshot.value(QStringLiteral("pendingProposal")));
         updateInspector();
-        statusBar()->showMessage(QStringLiteral("Revision %1  •  %2 tracks  •  %3").arg(m_revision).arg(m_trackCount).arg(m_project.value(QStringLiteral("name")).toString(QStringLiteral("Untitled project"))), 1500);
     }
 
     QJsonObject selectedClipObject() const {
@@ -3316,11 +3945,22 @@ private:
         if (m_canvasPreset) m_canvasPreset->setEnabled(m_connected);
         m_chatInput->setEnabled(m_connected && !m_agentBusy);
         for (auto *action : m_runtimeActions) action->setEnabled(m_connected);
+        for (auto *button : m_transportButtons) button->setEnabled(m_connected);
+        if (m_statusConnection) {
+            const QString state = m_connected ? QStringLiteral("ready")
+                : status == QStringLiteral("connecting") ? QStringLiteral("connecting") : QStringLiteral("disconnected");
+            m_statusConnection->setText(state == QStringLiteral("ready") ? QStringLiteral("● Connected")
+                : state == QStringLiteral("connecting") ? QStringLiteral("● Connecting…") : QStringLiteral("● Offline"));
+            m_statusConnection->setProperty("state", state);
+            m_statusConnection->style()->unpolish(m_statusConnection);
+            m_statusConnection->style()->polish(m_statusConnection);
+        }
         m_undoAction->setEnabled(m_connected && m_snapshot.value(QStringLiteral("canUndo")).toBool());
         m_redoAction->setEnabled(m_connected && m_snapshot.value(QStringLiteral("canRedo")).toBool());
         m_previewButton->setEnabled(m_connected && m_previewRequired);
         if (!m_connected) {
             m_playing = false;
+            updateTransport();
             m_hasPendingSeek = false;
             m_hasPendingHoverSeek = false;
             m_hoverSkimming = false;
@@ -3362,6 +4002,15 @@ private:
     QWidget *m_agentPanel = nullptr;
     QScrollArea *m_timelineScroll = nullptr;
     QList<QAction *> m_runtimeActions;
+    QList<QToolButton *> m_transportButtons;
+    QToolButton *m_transportPlay = nullptr;
+    QLabel *m_transportTime = nullptr;
+    QLabel *m_transportDuration = nullptr;
+    QLabel *m_viewerDetail = nullptr;
+    QLabel *m_timelineDetail = nullptr;
+    QLabel *m_statusConnection = nullptr;
+    QLabel *m_statusRevision = nullptr;
+    bool m_transportShowsPause = false;
     quint64 m_revision = 0;
     int m_trackCount = 0;
     double m_duration = 0.0;
@@ -3620,7 +4269,16 @@ private slots:
         window.show();
         QTest::qWait(20);
 
-        QVERIFY(window.statusBar()->isHidden());
+        // The status bar carries live state instead of sitting empty.
+        QVERIFY(window.statusBar()->isVisible());
+        QCOMPARE(window.m_statusConnection->text(), QStringLiteral("● Connecting…"));
+        window.setConnection(QStringLiteral("ready"));
+        QCOMPARE(window.m_statusConnection->text(), QStringLiteral("● Connected"));
+        QVERIFY(std::all_of(window.m_transportButtons.cbegin(), window.m_transportButtons.cend(),
+                            [](const QToolButton *button) { return button->isEnabled(); }));
+        window.setConnection(QStringLiteral("disconnected"));
+        QVERIFY(std::none_of(window.m_transportButtons.cbegin(), window.m_transportButtons.cend(),
+                             [](const QToolButton *button) { return button->isEnabled(); }));
         auto *title = window.findChild<QLabel *>(QStringLiteral("assistantTitle"));
         QVERIFY(title);
         QCOMPARE(title->text(), QStringLiteral("Cut Assistant"));
@@ -3758,8 +4416,12 @@ private slots:
         window.show();
         QTest::qWait(30);
         QVERIFY(window.findChild<QWidget *>(QStringLiteral("sourceTray")) == nullptr);
-        const int viewerBottom = window.m_viewer->mapTo(&window, QPoint(0, window.m_viewer->height())).y();
-        const int timelineTop = window.m_timelineScroll->mapTo(&window, QPoint(0, 0)).y();
+        // The viewer panel (with its transport) meets the timeline panel directly.
+        auto *viewerPanel = window.findChild<QWidget *>(QStringLiteral("viewerFrame"));
+        auto *timelinePanel = window.findChild<QWidget *>(QStringLiteral("timelinePanel"));
+        QVERIFY(viewerPanel && timelinePanel);
+        const int viewerBottom = viewerPanel->mapTo(&window, QPoint(0, viewerPanel->height())).y();
+        const int timelineTop = timelinePanel->mapTo(&window, QPoint(0, 0)).y();
         QVERIFY(timelineTop >= viewerBottom - 4);
         QVERIFY(timelineTop <= viewerBottom + 8);
         QVERIFY(window.m_timelineScroll->height() >= 280);
@@ -3851,13 +4513,104 @@ private slots:
         const QJsonObject track{{"type", "video"}, {"clips", QJsonArray{clip}}};
         timeline.setProject(QJsonObject{{"tracks", QJsonArray{track}}}, 4, 24);
         timeline.show();
-        const QPoint thumbnail(45, kRulerHeight + kTrackHeight / 2);
-        QCOMPARE(timeline.grab().toImage().pixelColor(thumbnail), QColor("#1c1c1c"));
+        const QPoint thumbnail(kTimelineLabelWidth - 9 - kHeaderPreviewWidth / 2, kRulerHeight + kTrackHeight / 2);
+        QCOMPARE(timeline.grab().toImage().pixelColor(thumbnail), QColor("#1f1f1f"));
         QImage frame(160, 90, QImage::Format_RGB32);
         frame.fill(QColor("#e87342"));
         artwork.frames.insert(QStringLiteral("sample"), frame);
         emit artwork.changed();
         QCOMPARE(timeline.grab().toImage().pixelColor(thumbnail), QColor("#e87342"));
+    }
+
+    void timelineStacksPictureTracksUpwardFromV1() {
+        TimelineWidget timeline;
+        timeline.resize(700, 400);
+        timeline.setProject(QJsonObject{{"tracks", QJsonArray{
+            QJsonObject{{"id", "base"}, {"type", "video"}, {"clips", QJsonArray{}}},
+            QJsonObject{{"id", "dial"}, {"type", "audio"}, {"clips", QJsonArray{}}},
+            QJsonObject{{"id", "top"}, {"type", "video"}, {"clips", QJsonArray{
+                QJsonObject{{"id", "title"}, {"timelineStart", 0.0}, {"duration", 4.0}}}}},
+            QJsonObject{{"id", "music"}, {"type", "audio"}, {"clips", QJsonArray{}}},
+        }}}, 8, 24);
+        timeline.show();
+        QCOMPARE(timeline.trackRowCount(), 4);
+        QCOMPARE(timeline.trackRowLabel(0), QStringLiteral("V2"));
+        QCOMPARE(timeline.trackRowLabel(1), QStringLiteral("V1"));
+        QCOMPARE(timeline.trackRowLabel(2), QStringLiteral("A1"));
+        QCOMPARE(timeline.trackRowLabel(3), QStringLiteral("A2"));
+        // Playback draws the later picture track on top, so it is the upper row.
+        QSignalSpy selections(&timeline, &TimelineWidget::clipSelected);
+        QTest::mouseClick(&timeline, Qt::LeftButton, Qt::NoModifier,
+                          QPoint(kTimelineLabelWidth + 100, timeline.trackHeaderRect(0).center().y()));
+        QCOMPARE(selections.count(), 1);
+        QCOMPARE(selections.constLast()[0].toString(), QStringLiteral("title"));
+    }
+
+    void timelinePinsHeadersAndRulerWhileScrolling() {
+        QScrollArea scroll;
+        scroll.resize(640, 260);
+        scroll.setWidgetResizable(true);
+        auto *timeline = new TimelineWidget;
+        scroll.setWidget(timeline);
+        QJsonArray tracks;
+        for (int i = 0; i < 8; ++i)
+            tracks.append(QJsonObject{{"id", QString::number(i)}, {"type", "video"}, {"clips", QJsonArray{}}});
+        timeline->setProject(QJsonObject{{"tracks", tracks}}, 120, 24);
+        scroll.show();
+        QTest::qWait(20);
+        scroll.horizontalScrollBar()->setValue(2000);
+        scroll.verticalScrollBar()->setValue(150);
+        QTest::qWait(20);
+        QCOMPARE(scroll.horizontalScrollBar()->value(), 2000);
+        QCOMPARE(scroll.verticalScrollBar()->value(), 150);
+        const QImage view = scroll.viewport()->grab().toImage();
+        QCOMPARE(view.pixelColor(4, 4), QColor("#1a1a1a"));
+        QCOMPARE(view.pixelColor(6, 60), QColor("#1f1f1f"));
+        QCOMPARE(view.pixelColor(kTimelineLabelWidth + 50, kRulerHeight - 1), QColor("#0a0a0a"));
+
+        QSignalSpy seeks(timeline, &TimelineWidget::seekRequested);
+        QTest::mouseClick(timeline, Qt::LeftButton, Qt::NoModifier, timeline->mapFrom(scroll.viewport(), QPoint(60, 60)));
+        QCOMPARE(seeks.count(), 0);
+        QTest::mouseMove(timeline, timeline->mapFrom(scroll.viewport(), QPoint(60, 60)));
+        QVERIFY(timeline->skimLabel().isEmpty());
+        QTest::mouseClick(timeline, Qt::LeftButton, Qt::NoModifier,
+                          timeline->mapFrom(scroll.viewport(), QPoint(kTimelineLabelWidth + 72, 10)));
+        QVERIFY(!seeks.isEmpty());
+        QVERIFY(std::abs(seeks.constLast()[0].toDouble() - 2072.0 / 72.0) < 0.05);
+    }
+
+    void timelineTrackHeightsFollowTheHeaderEdge() {
+        TimelineWidget timeline;
+        timeline.resize(700, 400);
+        const QJsonObject project{{"tracks", QJsonArray{
+            QJsonObject{{"id", "v"}, {"type", "video"}, {"clips", QJsonArray{}}},
+            QJsonObject{{"id", "a"}, {"type", "audio"}, {"clips", QJsonArray{}}}}}};
+        timeline.setProject(project, 8, 24);
+        timeline.show();
+        QCOMPARE(timeline.trackHeaderRect(0).height(), kVideoTrackHeight);
+        QCOMPARE(timeline.trackHeaderRect(1).height(), kTrackHeight);
+        int edge = timeline.trackHeaderRect(0).bottom() + 1;
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(40, edge));
+        QTest::mouseMove(&timeline, QPoint(40, edge + 30));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(40, edge + 30));
+        QCOMPARE(timeline.trackHeaderRect(0).height(), kVideoTrackHeight + 30);
+        QCOMPARE(timeline.trackHeaderRect(1).top(), kRulerHeight + kVideoTrackHeight + 30);
+        edge = timeline.trackHeaderRect(1).bottom() + 1;
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(40, edge));
+        QTest::mouseMove(&timeline, QPoint(40, 0));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(40, 0));
+        QCOMPARE(timeline.trackHeaderRect(1).height(), kMinTrackHeight);
+        // Heights belong to the track, so a new snapshot keeps them.
+        timeline.setProject(project, 8, 24);
+        QCOMPARE(timeline.trackHeaderRect(0).height(), kVideoTrackHeight + 30);
+        QCOMPARE(timeline.trackHeaderRect(1).height(), kMinTrackHeight);
+        timeline.fitTracksToView();
+        QCOMPARE(timeline.trackHeaderRect(0).height(), timeline.trackHeaderRect(1).height());
+        QVERIFY(timeline.trackHeaderRect(0).height() > kVideoTrackHeight);
+        QVERIFY(timeline.trackHeaderRect(1).bottom() + kTrackHeight + 8 <= timeline.height());
+        timeline.resetTrackHeights();
+        QCOMPARE(timeline.trackHeaderRect(0).height(), kVideoTrackHeight);
+        QCOMPARE(timeline.trackHeaderRect(1).height(), kTrackHeight);
     }
 
     void timelineScrubsFromThePointer() {

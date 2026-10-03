@@ -28,6 +28,18 @@ seeking, and export are sent as bounded asynchronous bridge commands.
 
 The timeline supports click-to-seek, clip selection, drag-to-move, edge
 trimming, split-at-playhead, and Delete. Inspector values commit on focus loss.
+Tracks follow the classic edit-suite order: picture tracks stack upward from
+V1, because a later picture track plays over the ones below it, and sound
+tracks run downward from A1. The ruler and track headers stay pinned while the
+timeline scrolls. Headers show LOCK, M, or OFF when the project marks a track
+locked, muted, or disabled; these are indicators, not toggles. While a clip
+moves or trims, a readout shows the new edge timecode and its offset.
+
+Drag the bottom edge of a track header to resize that track. Right-click a
+header for the Mini, Small, Medium, Large, and Jumbo heights, for one track or
+all of them. View → Fit tracks to panel shares the panel height across every
+track; View → Reset track heights restores the defaults. Heights are a view
+setting and are not saved in the project.
 Choose Edit → Focus region to draw a crop box on the selected video clip and
 apply it to a time range. Reopen it on the focused segment to adjust the box.
 The picker loads the exact source frame at the playhead. A fixed box ends at a
@@ -44,8 +56,10 @@ panel. The timeline fits the window on its own. All tracks remain vertically
 scrollable when their combined height exceeds the timeline panel.
 Import media from File. Moving the pointer across the timeline
 scrubs the viewer and shows the time beside the pointer. Play and pause are
-Space. The assistant fills the right side
-from top to bottom. An empty timeline starts without tracks. Hover over the
+Space; with the timeline focused, Home and End jump to the start and end, and
+Left and Right step one frame. The transport under the viewer has the same
+controls between the playhead timecode and the program length. The assistant
+fills a narrow column on the right from top to bottom. An empty timeline starts without tracks. Hover over the
 empty row in the left track header to reveal a plus; click it to add a video
 or audio track. In Chat, Return sends
 the message and Shift+Return inserts a new line.
@@ -56,7 +70,8 @@ inside the available panel without cropping and keeps preview captions inside
 the video safe area.
 
 The connection banner reports connection progress and offers Reconnect after
-a failure. Editing controls become available only after a successful project
+a failure. The status bar keeps the connection state and project revision in
+view and shows runtime messages on the left. Editing controls become available only after a successful project
 snapshot. Changes made through CLI or MCP are checked every 500 ms while idle;
 unchanged snapshots do not redraw the UI or reopen playback.
 
