@@ -626,6 +626,9 @@ version = "0.1.0"
 dependencies = [
  "cut-domain",
  "cut-engine",
+ "cut-interchange",
+ "cut-lang",
+ "cut-model",
  "fs2",
  "libc",
  "serde",

@@ -43,6 +43,12 @@ fn wait_until_ready(client: &RuntimeClient) {
     panic!("cutd did not become ready at {:?}", client.endpoint());
 }
 
+fn has_marker(project: &serde_json::Value, id: &str) -> bool {
+    project["markers"]
+        .as_array()
+        .is_some_and(|markers| markers.iter().any(|marker| marker["id"] == id))
+}
+
 fn stop_daemon(mut daemon: Child) {
     let _ = daemon.kill();
     let _ = daemon.wait();
@@ -69,7 +75,7 @@ fn two_clients_share_one_daemon_and_recover_after_lost_response_and_restart() {
         left_client.apply_request(
             "ui",
             "simultaneous-left",
-            json!({"type":"set_metadata","patch":{"left":true}}),
+            json!({"type":"add_marker","marker":{"id":"left","time":0}}),
             0,
         )
     });
@@ -80,7 +86,7 @@ fn two_clients_share_one_daemon_and_recover_after_lost_response_and_restart() {
         right_client.apply_request(
             "mcp",
             "simultaneous-right",
-            json!({"type":"set_metadata","patch":{"right":true}}),
+            json!({"type":"add_marker","marker":{"id":"right","time":0}}),
             0,
         )
     });
@@ -97,20 +103,20 @@ fn two_clients_share_one_daemon_and_recover_after_lost_response_and_restart() {
     let revision_one = left.get_state().unwrap();
     assert_eq!(revision_one.revision, 1);
 
-    // The real daemon commits this request and deliberately drops its first
-    // response. RuntimeClient must reconnect, read authoritative state, and
-    // replay the same stable key inside this single method call.
+    // The real daemon commits this edit script and deliberately drops its
+    // first response. RuntimeClient must reconnect, read authoritative
+    // state, and replay the same stable key inside this single method call.
     let lost_key = "lost-response";
     let replay = right
-        .apply_request(
+        .apply_script_request(
             "mcp",
             lost_key,
-            json!({"type":"set_metadata","patch":{"lost":true}}),
+            "marker add at=12f name=\"lost\" as=lost",
             1,
         )
         .unwrap();
     assert_eq!(replay.revision, 2);
-    assert_eq!(replay.project["metadata"]["lost"], true);
+    assert!(has_marker(&replay.project, "lost"));
 
     // A client has no daemon ownership. Dropping one leaves the other fully
     // usable on the same process.
@@ -124,7 +130,13 @@ fn two_clients_share_one_daemon_and_recover_after_lost_response_and_restart() {
     wait_until_ready(&right);
     let recovered = right.get_state().unwrap();
     assert_eq!(recovered.revision, 2);
-    assert_eq!(recovered.project["metadata"]["lost"], true);
+    assert!(has_marker(&recovered.project, "lost"));
+    let (revision, document) = right.get_document(false).unwrap();
+    assert_eq!(revision, 2);
+    assert!(
+        document.contains("marker lost at=00:00:00:12 name=\"lost\""),
+        "{document}"
+    );
     stop_daemon(restarted);
     let _ = fs::remove_dir_all(&directory);
 }
@@ -151,5 +163,112 @@ fn real_daemon_rejects_an_oversized_request_before_reducer_execution() {
     assert_eq!(response["error"]["code"], "REQUEST_TOO_LARGE");
     assert_eq!(client.get_state().unwrap().revision, 0);
     stop_daemon(daemon);
+    let _ = fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn a_v2_project_round_trips_through_cutd_on_the_kernel() {
+    let directory = project_directory("kernel");
+    fs::create_dir_all(&directory).unwrap();
+    let legacy = serde_json::to_vec_pretty(&json!({
+        "version": 2,
+        "name": "Round Trip",
+        "fps": 24,
+        "width": 1920,
+        "height": 1080,
+        "sources": [{"id": "src-1", "path": "/media/a.mov", "duration": 60, "width": 1920, "height": 1080, "hasAudio": true}],
+        "tracks": [{"id": "v1", "type": "video", "clips": [
+            {"id": "clip-a", "sourceId": "src-1", "in": 0, "out": 4, "timelineStart": 0},
+            {"id": "clip-b", "sourceId": "src-1", "in": 10, "out": 12, "timelineStart": 4}
+        ]}],
+        "overlays": [], "gaps": [], "transitions": [], "effects": [], "markers": []
+    }))
+    .unwrap();
+    fs::write(directory.join("project.cut.json"), &legacy).unwrap();
+
+    let daemon = start_daemon(&directory);
+    let client = RuntimeClient::new(&directory).unwrap();
+    wait_until_ready(&client);
+    let opened = client.get_state().unwrap();
+    assert_eq!(opened.revision, 0);
+    assert_eq!(opened.source_version, 3);
+    assert!(opened
+        .import_warnings
+        .iter()
+        .any(|warning| warning.contains("imported project.cut.json")));
+    let imported = fs::read_to_string(directory.join("project.cut")).unwrap();
+    assert!(imported.contains("clip clip-a media=src-1"), "{imported}");
+    // The embedded sound became a linked clip on its own track.
+    assert!(imported.contains("clip clip-a_a media=src-1"), "{imported}");
+
+    // A ripple trim keeps picture and sound in sync; the clip after moves.
+    let trimmed = client
+        .apply_script_request("ui", "trim-a", "trim clip-a out -12f ripple", 0)
+        .unwrap();
+    assert_eq!(trimmed.revision, 1);
+    assert!(trimmed.can_undo);
+    let (_, after_trim) = client.get_document(false).unwrap();
+    assert!(after_trim.contains("clip clip-b media=src-1 src=00:00:10:00 at=00:00:03:12"));
+    assert_eq!(
+        fs::read_to_string(directory.join("project.cut")).unwrap(),
+        after_trim
+    );
+
+    // A v2 command from an older client still edits the model, and deleting
+    // a clip retires its id and its sound's.
+    let deleted = client
+        .apply_request(
+            "ui",
+            "delete-b",
+            json!({"type": "remove_clip", "clipId": "clip-b"}),
+            1,
+        )
+        .unwrap();
+    assert_eq!(deleted.revision, 2);
+    let undone = client.undo_request("ui", "undo-delete", 2).unwrap();
+    assert_eq!(undone.revision, 3);
+    assert!(undone.can_redo);
+    let (_, after_undo) = client.get_document(false).unwrap();
+    assert_eq!(after_undo, after_trim);
+
+    stop_daemon(daemon);
+    let restarted = start_daemon(&directory);
+    wait_until_ready(&client);
+    let recovered = client.get_state().unwrap();
+    assert_eq!(recovered.revision, 3);
+    assert!(recovered.can_undo && recovered.can_redo);
+    let (_, recovered_document) = client.get_document(false).unwrap();
+    assert_eq!(recovered_document, after_trim);
+    assert_eq!(
+        fs::read_to_string(directory.join("project.cut")).unwrap(),
+        after_trim
+    );
+    // History survived the restart: redo the delete, then undo the trim.
+    let redone = client.redo_request("ui", "redo-delete", 3).unwrap();
+    assert_eq!(redone.revision, 4);
+    let (_, after_redo) = client.get_document(false).unwrap();
+    assert!(!after_redo.contains("clip clip-b "), "{after_redo}");
+    assert!(after_redo.contains("retired="), "{after_redo}");
+    assert!(after_redo.contains("clip-b"), "{after_redo}");
+    // A retired id cannot name a new clip.
+    let reused = client
+        .apply_script_request(
+            "ui",
+            "reuse-b",
+            "insert media=src-1 src=0f dur=24f at=10s on=v1 as=clip-b",
+            4,
+        )
+        .unwrap_err();
+    assert_eq!(reused.code, "EDIT_REJECTED");
+    assert!(
+        reused.message.contains("never reused"),
+        "{}",
+        reused.message
+    );
+    stop_daemon(restarted);
+    assert_eq!(
+        fs::read(directory.join("project.cut.json")).unwrap(),
+        legacy
+    );
     let _ = fs::remove_dir_all(&directory);
 }

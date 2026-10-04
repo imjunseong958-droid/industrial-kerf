@@ -13,6 +13,10 @@ configured in Cut.
 receipts, proposals, and render jobs. The native editor, terminal agent, and
 MCP server are adapters over the same project-scoped IPC boundary.
 
+The canonical project is the `project.cut` text document
+([the Cut language](docs/cut-language.md)). On first open, `cutd` imports an
+existing `project.cut.json` once and leaves it untouched.
+
 ```text
 Qt6 editor ──────────────────────────┐
 Rust agent and CLI ──────────────────┼─> cutd ─> typed domain ─> durable store
@@ -274,7 +278,7 @@ normalized template/source/binding/asset fingerprints, renderer identity and
 version, output metadata, mode, frame range, and format. Completion is
 published atomically and the artifact is registered in `.cut/cache/assets.json`
 with template, renderer, and cache provenance. These tools only write
-regenerable cache/provenance artifacts; `project.cut.json`, revisions,
+regenerable cache/provenance artifacts; `project.cut`, revisions,
 proposals, and the timeline remain unchanged.
 
 For agent refinement, `media.probe` with `action: "observe"` accepts a required

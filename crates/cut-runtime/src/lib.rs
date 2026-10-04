@@ -4,10 +4,23 @@
 //! commands and receive snapshots; they never mutate a local copy of the
 //! timeline. `cutd` owns one `RuntimeHandle` and serves those clients through
 //! the project-scoped IPC transport below.
+//!
+//! The canonical project is a `cut_model::Project` stored as the `.cut`
+//! document `project.cut` (ADR 0006). Edits arrive as scripts, typed
+//! operations, or v2 commands (see `kernel`) and are journaled as scripts.
+//! Snapshots still carry a v2 project derived from the model so the
+//! renderer, playback, the Qt app, and MCP keep working until they read the
+//! model directly.
 
-use cut_domain::{self, Project};
+mod kernel;
+
+pub use kernel::{EditOp, TrimSide};
+
+use cut_domain as v2;
 use cut_engine::derivatives::SourceIdentity;
+use cut_model::Project;
 use fs2::FileExt;
+use kernel::{Edit, Edited};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -31,16 +44,24 @@ use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 
-const PROJECT_FILE: &str = "project.cut.json";
-const HISTORY_FILE: &str = "project.cut.history.json";
+const PROJECT_FILE: &str = "project.cut";
+/// The v1/v2 project file, read once to import a project and never written.
+const LEGACY_PROJECT_FILE: &str = "project.cut.json";
 const JOURNAL_FILE: &str = ".cut-runtime.journal";
 const LOCK_FILE: &str = ".cut-runtime.lock";
 const CHECKPOINT_FILE: &str = ".cut-runtime.checkpoint.json";
 const CHECKPOINT_TEMP_FILE: &str = ".cut-runtime.checkpoint.json.tmp";
-const CHECKPOINT_VERSION: u64 = 2;
-const JOURNAL_VERSION: u64 = 1;
+/// Where state from a pre-kernel `cutd` is moved, untouched, on first open.
+const LEGACY_STATE_PREFIX: &str = ".cut-runtime.v2";
+const CHECKPOINT_VERSION: u64 = 3;
+const JOURNAL_VERSION: u64 = 2;
 const CHECKPOINT_INTERVAL: u64 = 32;
-const MAX_HISTORY_ENTRIES: usize = 256;
+/// History holds project snapshots, so it is bounded more tightly than the
+/// command history it replaced.
+const MAX_HISTORY_ENTRIES: usize = 100;
+/// `StateSnapshot::source_version` of the canonical `.cut` document; 1 and 2
+/// were the `project.cut.json` formats.
+const SOURCE_VERSION: u8 = 3;
 const MAX_RECEIPTS: usize = 1024;
 /// Maximum duration of one bounded rendered-preview request.
 pub const MAX_RENDER_RANGE_SECONDS: f64 = 120.0;
@@ -233,10 +254,52 @@ impl Drop for RuntimeLock {
     }
 }
 
+/// One undoable edit: how it reads, and the project on the other side of
+/// it (before the edit in `past`, after it in `future`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct JournalHistoryEntry {
-    command: cut_domain::Command,
-    inverse: cut_domain::Command,
+struct HistoryEntry {
+    script: String,
+    #[serde(with = "document_text")]
+    project: Arc<Project>,
+}
+
+/// Projects in history and checkpoints are stored as `.cut` text.
+mod document_text {
+    use super::kernel;
+    use cut_model::Project;
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::sync::Arc;
+
+    pub fn serialize<S: Serializer>(
+        project: &Arc<Project>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&kernel::print(project))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Arc<Project>, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        kernel::parse(&text)
+            .map(Arc::new)
+            .map_err(|error| serde::de::Error::custom(error.message))
+    }
+}
+
+/// How a journaled mutation changed the project. Script edits replay from
+/// their script; edits without one (v2 commands that went through the v2
+/// export, projection imports) carry the resulting document. The digest of
+/// the resulting document guards every replay.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Change {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    script: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    document: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    digest: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -271,9 +334,7 @@ struct JournalRecord {
     revision: u64,
     action: JournalAction,
     #[serde(default)]
-    command: Option<cut_domain::Command>,
-    #[serde(default)]
-    inverse: Option<cut_domain::Command>,
+    change: Option<Change>,
     #[serde(default)]
     operation: Option<JournalOperation>,
     #[serde(default)]
@@ -282,22 +343,19 @@ struct JournalRecord {
     proposal: Option<ProposalRecord>,
     #[serde(default)]
     job: Option<RenderJob>,
-    #[serde(default)]
-    project: Option<Project>,
-    #[serde(default)]
-    source_version: Option<u8>,
     checksum: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct PersistedCheckpoint {
     format_version: u64,
-    project: Project,
+    #[serde(with = "document_text")]
+    project: Arc<Project>,
     revision: u64,
     #[serde(default)]
-    past: Vec<JournalHistoryEntry>,
+    past: Vec<HistoryEntry>,
     #[serde(default)]
-    future: Vec<JournalHistoryEntry>,
+    future: Vec<HistoryEntry>,
     #[serde(default)]
     journal_sequence: u64,
     operations: HashMap<String, OperationRecord>,
@@ -306,26 +364,14 @@ struct PersistedCheckpoint {
     proposal: Option<ProposalRecord>,
     #[serde(default)]
     jobs: HashMap<String, RenderJob>,
-    #[serde(default = "default_source_version")]
-    source_version: u8,
+    #[serde(default)]
+    import_warnings: Vec<String>,
     #[serde(default)]
     projection_digest: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct LegacyPersistedCheckpoint {
-    project: Project,
-    revision: u64,
-    #[serde(default)]
-    operations: HashMap<String, OperationRecord>,
-    #[serde(default)]
-    imports: HashMap<String, ImportRecord>,
-    #[serde(default)]
-    proposal: Option<ProposalRecord>,
-}
-
 fn default_source_version() -> u8 {
-    2
+    SOURCE_VERSION
 }
 
 fn default_projection_status() -> String {
@@ -349,6 +395,9 @@ impl ProjectionStatus {
     }
 }
 
+/// What clients see of the runtime. `project` and `sources` are the v2
+/// project derived from the canonical model; `GetDocument` returns the
+/// canonical `.cut` text.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StateSnapshot {
@@ -359,10 +408,15 @@ pub struct StateSnapshot {
     pub duration: f64,
     pub sources: Vec<Value>,
     pub pending_proposal: Option<PendingProposal>,
+    /// 3 for the canonical `.cut` document.
     #[serde(default = "default_source_version")]
     pub source_version: u8,
     #[serde(default = "default_projection_status")]
     pub projection_status: String,
+    /// What the one-time import of `project.cut.json` changed or left
+    /// behind.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub import_warnings: Vec<String>,
 }
 
 /// One machine-readable leaf change in an agent proposal.  The diff is
@@ -620,6 +674,18 @@ pub enum PendingProposal {
         /// The singular field remains for compatibility with older clients.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         observations: Option<Vec<ObservationReference>>,
+        /// The proposed edit as script, when every step has a kernel
+        /// equivalent. `command` is null for proposals staged as scripts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        script: Option<String>,
+        /// Unified diff of the canonical document before and after.
+        #[serde(
+            rename = "documentDiff",
+            alias = "document_diff",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        document_diff: Option<String>,
     },
     Accepted {
         #[serde(rename = "proposalId", alias = "proposal_id")]
@@ -799,14 +865,17 @@ struct ProposalRecord {
     fingerprint: String,
     #[serde(default)]
     receipt: Option<ProposalReceipt>,
+    /// The edit applied on acceptance when it is not the v2 `command` shown
+    /// in the lifecycle (script proposals).
+    #[serde(default)]
+    edit: Option<Edit>,
 }
 
 #[allow(clippy::large_enum_variant)]
 enum JournalEvent {
     Mutation {
         action: JournalAction,
-        command: Option<cut_domain::Command>,
-        inverse: Option<cut_domain::Command>,
+        change: Option<Change>,
         operation: Option<JournalOperation>,
         import: Option<JournalImport>,
         proposal: Option<ProposalRecord>,
@@ -818,8 +887,7 @@ enum JournalEvent {
         job: RenderJob,
     },
     ProjectionImport {
-        project: Project,
-        source_version: u8,
+        change: Change,
         operation: Option<JournalOperation>,
     },
 }
@@ -831,28 +899,23 @@ impl JournalRecord {
             sequence,
             revision,
             action: JournalAction::Noop,
-            command: None,
-            inverse: None,
+            change: None,
             operation: None,
             import: None,
             proposal: None,
             job: None,
-            project: None,
-            source_version: None,
             checksum: String::new(),
         };
         match event {
             JournalEvent::Mutation {
                 action,
-                command,
-                inverse,
+                change,
                 operation,
                 import,
                 proposal,
             } => {
                 record.action = action;
-                record.command = command;
-                record.inverse = inverse;
+                record.change = change;
                 record.operation = operation;
                 record.import = import;
                 record.proposal = proposal;
@@ -865,14 +928,9 @@ impl JournalRecord {
                 record.action = JournalAction::Job;
                 record.job = Some(job);
             }
-            JournalEvent::ProjectionImport {
-                project,
-                source_version,
-                operation,
-            } => {
+            JournalEvent::ProjectionImport { change, operation } => {
                 record.action = JournalAction::ProjectionImport;
-                record.project = Some(project);
-                record.source_version = Some(source_version);
+                record.change = Some(change);
                 record.operation = operation;
             }
         }
@@ -884,9 +942,8 @@ impl JournalRecord {
 struct DurableState {
     project: Project,
     revision: u64,
-    source_version: u8,
-    past: Vec<JournalHistoryEntry>,
-    future: Vec<JournalHistoryEntry>,
+    past: Vec<HistoryEntry>,
+    future: Vec<HistoryEntry>,
     jobs: HashMap<String, RenderJob>,
     operations: HashMap<String, OperationRecord>,
     imports: HashMap<String, ImportRecord>,
@@ -899,14 +956,16 @@ struct Runtime {
     project_path: PathBuf,
     journal_path: PathBuf,
     project: Project,
+    /// The v2 project derived from `project` for v2 clients.
+    view: v2::Project,
     revision: u64,
-    past: Vec<JournalHistoryEntry>,
-    future: Vec<JournalHistoryEntry>,
+    past: Vec<HistoryEntry>,
+    future: Vec<HistoryEntry>,
     jobs: HashMap<String, RenderJob>,
     operations: HashMap<String, OperationRecord>,
     imports: HashMap<String, ImportRecord>,
     proposal: Option<ProposalRecord>,
-    source_version: u8,
+    import_warnings: Vec<String>,
     journal_sequence: u64,
     journal_records_since_checkpoint: u64,
     projection_status: ProjectionStatus,
@@ -920,10 +979,45 @@ struct Runtime {
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum RuntimeRequest {
     GetState,
+    /// The canonical `.cut` document, optionally annotated with end times
+    /// and source outs.
+    GetDocument {
+        #[serde(default)]
+        annotated: bool,
+    },
     GetProposalPreview {
         #[serde(rename = "proposalId")]
         proposal_id: String,
     },
+    /// Apply an edit script atomically at `baseRevision`.
+    ApplyScript {
+        actor: String,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "baseRevision")]
+        base_revision: u64,
+        script: String,
+    },
+    /// Apply typed operations atomically at `baseRevision`.
+    ApplyOps {
+        actor: String,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "baseRevision")]
+        base_revision: u64,
+        ops: Vec<EditOp>,
+    },
+    /// Stage an agent's edit script as a pending proposal.
+    StageScriptProposal {
+        #[serde(rename = "requestKey")]
+        request_key: String,
+        #[serde(rename = "baseRevision")]
+        base_revision: u64,
+        script: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        observations: Vec<Value>,
+    },
+    /// Apply a v2 command (`v2::Command` JSON).
     Apply {
         actor: String,
         #[serde(rename = "idempotencyKey")]
@@ -1135,6 +1229,10 @@ impl Serialize for RequestEnvelope {
 #[derive(Debug, Clone)]
 pub enum RuntimeResponse {
     State(StateSnapshot),
+    Document {
+        revision: u64,
+        document: String,
+    },
     ProposalPreview {
         before: Value,
         after: Value,
@@ -1223,6 +1321,62 @@ impl RuntimeHandle {
                 "expected proposal-preview response",
             )),
         }
+    }
+
+    /// The canonical `.cut` document and the revision it describes.
+    pub fn get_document(&self, annotated: bool) -> Result<(u64, String), RuntimeError> {
+        match self.request(RuntimeRequest::GetDocument { annotated })? {
+            RuntimeResponse::Document { revision, document } => Ok((revision, document)),
+            _ => Err(RuntimeError::new(
+                "RUNTIME_PROTOCOL_ERROR",
+                "expected document response",
+            )),
+        }
+    }
+
+    pub fn apply_script_request(
+        &self,
+        actor: &str,
+        key: &str,
+        script: &str,
+        base_revision: u64,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::ApplyScript {
+            actor: actor.to_owned(),
+            idempotency_key: key.to_owned(),
+            base_revision,
+            script: script.to_owned(),
+        })?)
+    }
+
+    pub fn apply_ops_request(
+        &self,
+        actor: &str,
+        key: &str,
+        ops: Vec<EditOp>,
+        base_revision: u64,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::ApplyOps {
+            actor: actor.to_owned(),
+            idempotency_key: key.to_owned(),
+            base_revision,
+            ops,
+        })?)
+    }
+
+    pub fn stage_script_proposal(
+        &self,
+        request_key: &str,
+        base_revision: u64,
+        script: &str,
+        observations: Vec<Value>,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::StageScriptProposal {
+            request_key: request_key.to_owned(),
+            base_revision,
+            script: script.to_owned(),
+            observations,
+        })?)
     }
 
     pub fn apply_request(
@@ -1595,6 +1749,62 @@ impl RuntimeClient {
         })?)
     }
 
+    /// The canonical `.cut` document and the revision it describes.
+    pub fn get_document(&self, annotated: bool) -> Result<(u64, String), RuntimeError> {
+        match self.request(RuntimeRequest::GetDocument { annotated })? {
+            RuntimeResponse::Document { revision, document } => Ok((revision, document)),
+            _ => Err(RuntimeError::new(
+                "RUNTIME_PROTOCOL_ERROR",
+                "expected document response",
+            )),
+        }
+    }
+
+    pub fn apply_script_request(
+        &self,
+        actor: &str,
+        key: &str,
+        script: &str,
+        base_revision: u64,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::ApplyScript {
+            actor: actor.to_owned(),
+            idempotency_key: key.to_owned(),
+            base_revision,
+            script: script.to_owned(),
+        })?)
+    }
+
+    pub fn apply_ops_request(
+        &self,
+        actor: &str,
+        key: &str,
+        ops: Vec<EditOp>,
+        base_revision: u64,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::ApplyOps {
+            actor: actor.to_owned(),
+            idempotency_key: key.to_owned(),
+            base_revision,
+            ops,
+        })?)
+    }
+
+    pub fn stage_script_proposal(
+        &self,
+        request_key: &str,
+        base_revision: u64,
+        script: &str,
+        observations: Vec<Value>,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::StageScriptProposal {
+            request_key: request_key.to_owned(),
+            base_revision,
+            script: script.to_owned(),
+            observations,
+        })?)
+    }
+
     pub fn apply_request(
         &self,
         actor: &str,
@@ -1947,6 +2157,12 @@ fn request_has_stable_idempotency_key(request: &RuntimeRequest) -> bool {
         RuntimeRequest::Apply {
             idempotency_key, ..
         }
+        | RuntimeRequest::ApplyScript {
+            idempotency_key, ..
+        }
+        | RuntimeRequest::ApplyOps {
+            idempotency_key, ..
+        }
         | RuntimeRequest::Undo {
             idempotency_key, ..
         }
@@ -1965,12 +2181,15 @@ fn request_has_stable_idempotency_key(request: &RuntimeRequest) -> bool {
         // Staging has a request key, but it is not backed by the durable
         // operation-receipt table. A lost response is therefore ambiguous
         // and must not be replayed automatically.
-        RuntimeRequest::StageProposal { .. } | RuntimeRequest::StageImportProposal { .. } => false,
+        RuntimeRequest::StageProposal { .. }
+        | RuntimeRequest::StageScriptProposal { .. }
+        | RuntimeRequest::StageImportProposal { .. } => false,
         RuntimeRequest::RejectProposal {
             idempotency_key: Some(idempotency_key),
             ..
         } => !idempotency_key.trim().is_empty(),
         RuntimeRequest::GetState
+        | RuntimeRequest::GetDocument { .. }
         | RuntimeRequest::GetProposalPreview { .. }
         | RuntimeRequest::StartRender { .. }
         | RuntimeRequest::GetRender { .. }
@@ -2022,6 +2241,15 @@ fn decode_response(value: &Value, expected_id: &str) -> Result<RuntimeResponse, 
             .cloned()
             .and_then(|error| serde_json::from_value::<RuntimeError>(error).ok())
             .unwrap_or_else(|| RuntimeError::new("RUNTIME_ERROR", "runtime request failed")));
+    }
+    if let (Some(revision), Some(document)) = (
+        object.get("revision").and_then(Value::as_u64),
+        object.get("document").and_then(Value::as_str),
+    ) {
+        return Ok(RuntimeResponse::Document {
+            revision,
+            document: document.to_owned(),
+        });
     }
     if let (Some(before), Some(after)) = (object.get("beforeProject"), object.get("afterProject")) {
         return Ok(RuntimeResponse::ProposalPreview {
@@ -2149,6 +2377,13 @@ pub fn response_value(id: &str, result: Result<RuntimeResponse, RuntimeError>) -
         Ok(RuntimeResponse::State(state)) => {
             json!({ "protocolVersion": RequestEnvelope::PROTOCOL_VERSION, "id": id, "ok": true, "state": state })
         }
+        Ok(RuntimeResponse::Document { revision, document }) => json!({
+            "protocolVersion": RequestEnvelope::PROTOCOL_VERSION,
+            "id": id,
+            "ok": true,
+            "revision": revision,
+            "document": document
+        }),
         Ok(RuntimeResponse::ProposalPreview { before, after }) => json!({
             "protocolVersion": RequestEnvelope::PROTOCOL_VERSION,
             "id": id,
@@ -2485,77 +2720,73 @@ impl Runtime {
         let lock = RuntimeLock::acquire(directory)?;
         let project_path = directory.join(PROJECT_FILE);
         let journal_path = directory.join(JOURNAL_FILE);
-        let checkpoint = load_checkpoint(directory)?;
-        let checkpoint_project = checkpoint.as_ref().map(|value| value.project.clone());
-        let (
-            project,
-            revision,
-            past,
-            future,
-            operations,
-            imports,
-            proposal,
-            jobs,
-            source_version,
-            journal_sequence,
-            checkpoint_projection_digest,
-        ) = if let Some(checkpoint) = checkpoint {
-            cut_domain::validate(&checkpoint.project).map_err(domain_error)?;
-            for entry in checkpoint.past.iter().chain(checkpoint.future.iter()) {
-                validate_journal_history_entry(entry)?;
+        let mut notes = Vec::new();
+        let checkpoint = match load_checkpoint(directory)? {
+            Loaded::Current(checkpoint) => Some(checkpoint),
+            Loaded::Legacy => {
+                // State from a pre-kernel cutd. Its project.cut.json is the
+                // last published project; keep its runtime files untouched
+                // and import the project once.
+                preserve_legacy_state(directory)?;
+                notes.push(format!(
+                    "previous cutd state was preserved as {LEGACY_STATE_PREFIX}.*"
+                ));
+                None
             }
+            Loaded::None => None,
+        };
+        let checkpoint_project = checkpoint.as_ref().map(|value| value.project.clone());
+        let mut runtime = if let Some(checkpoint) = checkpoint {
             for record in checkpoint.operations.values() {
-                cut_domain::parse_project(&record.snapshot.project).map_err(domain_error)?;
+                v2::parse_project(&record.snapshot.project).map_err(domain_error)?;
             }
             for record in checkpoint.imports.values() {
-                cut_domain::parse_project(&record.snapshot.project).map_err(domain_error)?;
+                v2::parse_project(&record.snapshot.project).map_err(domain_error)?;
             }
-            (
-                checkpoint.project,
-                checkpoint.revision,
-                checkpoint.past,
-                checkpoint.future,
-                checkpoint.operations,
-                checkpoint.imports,
-                checkpoint.proposal,
-                checkpoint.jobs,
-                checkpoint.source_version,
-                checkpoint.journal_sequence,
-                checkpoint.projection_digest,
-            )
-        } else {
-            let (project, source_version) = load_bootstrap_project(&project_path)?;
-            (
+            let project = Arc::unwrap_or_clone(checkpoint.project);
+            kernel::view(&project)?;
+            Self {
+                _lock: lock,
+                project_path,
+                journal_path,
+                view: kernel::committed_view(&project),
                 project,
-                0,
-                Vec::new(),
-                Vec::new(),
-                HashMap::new(),
-                HashMap::new(),
-                None,
-                HashMap::new(),
-                source_version,
-                0,
-                None,
-            )
-        };
-        let mut runtime = Self {
-            _lock: lock,
-            project_path,
-            journal_path,
-            project,
-            revision,
-            past,
-            future,
-            jobs,
-            operations,
-            imports,
-            proposal,
-            source_version,
-            journal_sequence,
-            journal_records_since_checkpoint: 0,
-            projection_status: ProjectionStatus::Missing,
-            projection_digest: checkpoint_projection_digest,
+                revision: checkpoint.revision,
+                past: checkpoint.past,
+                future: checkpoint.future,
+                jobs: checkpoint.jobs,
+                operations: checkpoint.operations,
+                imports: checkpoint.imports,
+                proposal: checkpoint.proposal,
+                import_warnings: checkpoint.import_warnings,
+                journal_sequence: checkpoint.journal_sequence,
+                journal_records_since_checkpoint: 0,
+                projection_status: ProjectionStatus::Missing,
+                projection_digest: checkpoint.projection_digest,
+            }
+        } else {
+            let (project, mut warnings) = load_bootstrap_project(directory)?;
+            kernel::view(&project)?;
+            notes.append(&mut warnings);
+            Self {
+                _lock: lock,
+                project_path,
+                journal_path,
+                view: kernel::committed_view(&project),
+                project,
+                revision: 0,
+                past: Vec::new(),
+                future: Vec::new(),
+                jobs: HashMap::new(),
+                operations: HashMap::new(),
+                imports: HashMap::new(),
+                proposal: None,
+                import_warnings: notes,
+                journal_sequence: 0,
+                journal_records_since_checkpoint: 0,
+                projection_status: ProjectionStatus::Missing,
+                projection_digest: None,
+            }
         };
         bound_receipts(&mut runtime.operations, None);
         bound_receipts(&mut runtime.imports, None);
@@ -2579,16 +2810,14 @@ impl Runtime {
                 recognized_projection = true;
             }
         }
+        runtime.view = kernel::committed_view(&runtime.project);
 
         if recognized_projection {
             // The projection was known to equal an authoritative state before
             // or within the replayed journal tail. A crash may have left the
             // journal ahead of that state, so it is safe to repair this stale
             // projection on startup.
-            let repaired = runtime
-                .materialize_project()
-                .and_then(|_| runtime.materialize_history());
-            if repaired.is_ok() {
+            if runtime.materialize_project().is_ok() {
                 runtime.projection_status = ProjectionStatus::Current;
                 runtime.projection_digest = projection_digest(&runtime.project_path).ok();
             } else {
@@ -2606,11 +2835,10 @@ impl Runtime {
         }
 
         if checkpoint_project.is_none() {
-            // First launch is the one controlled bootstrap point. Import v1
-            // once, write the canonical checkpoint, and publish v2 as the
-            // read-only compatibility projection.
+            // First launch is the one controlled bootstrap point: import
+            // project.cut.json once if there is no project.cut, then write the
+            // canonical document and checkpoint.
             runtime.materialize_project()?;
-            runtime.materialize_history()?;
             runtime.projection_status = ProjectionStatus::Current;
             runtime.projection_digest = Some(projection_digest(&runtime.project_path)?);
             runtime.persist_checkpoint()?;
@@ -2639,15 +2867,21 @@ impl Runtime {
     }
 
     pub fn snapshot(&self) -> StateSnapshot {
-        self.snapshot_for_parts(&self.project, self.revision, &self.past, &self.future)
+        self.snapshot_view(
+            &self.view,
+            self.revision,
+            &self.past,
+            &self.future,
+            &self.proposal,
+        )
     }
 
     fn snapshot_for_parts(
         &self,
         project: &Project,
         revision: u64,
-        past: &[JournalHistoryEntry],
-        future: &[JournalHistoryEntry],
+        past: &[HistoryEntry],
+        future: &[HistoryEntry],
     ) -> StateSnapshot {
         self.snapshot_for_parts_with_proposal(project, revision, past, future, &self.proposal)
     }
@@ -2656,18 +2890,33 @@ impl Runtime {
         &self,
         project: &Project,
         revision: u64,
-        past: &[JournalHistoryEntry],
-        future: &[JournalHistoryEntry],
+        past: &[HistoryEntry],
+        future: &[HistoryEntry],
         proposal: &Option<ProposalRecord>,
     ) -> StateSnapshot {
-        let project_value = project_value(project);
+        if *project == self.project {
+            self.snapshot_view(&self.view, revision, past, future, proposal)
+        } else {
+            self.snapshot_view(&kernel::committed_view(project), revision, past, future, proposal)
+        }
+    }
+
+    fn snapshot_view(
+        &self,
+        view: &v2::Project,
+        revision: u64,
+        past: &[HistoryEntry],
+        future: &[HistoryEntry],
+        proposal: &Option<ProposalRecord>,
+    ) -> StateSnapshot {
+        let project_value = project_value(view);
         let sources = project_value
             .get("sources")
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
         StateSnapshot {
-            duration: cut_domain::project_duration(project),
+            duration: v2::project_duration(view),
             project: project_value,
             revision,
             can_undo: !past.is_empty(),
@@ -2689,8 +2938,9 @@ impl Runtime {
                 }
                 lifecycle
             }),
-            source_version: self.source_version,
+            source_version: SOURCE_VERSION,
             projection_status: self.projection_status.as_str().into(),
+            import_warnings: self.import_warnings.clone(),
         }
     }
 
@@ -2698,7 +2948,6 @@ impl Runtime {
         DurableState {
             project: self.project.clone(),
             revision: self.revision,
-            source_version: self.source_version,
             past: self.past.clone(),
             future: self.future.clone(),
             jobs: self.jobs.clone(),
@@ -2712,8 +2961,8 @@ impl Runtime {
         &self,
         project: Project,
         revision: u64,
-        past: Vec<JournalHistoryEntry>,
-        future: Vec<JournalHistoryEntry>,
+        past: Vec<HistoryEntry>,
+        future: Vec<HistoryEntry>,
     ) -> DurableState {
         let mut candidate = self.durable_state();
         candidate.project = project;
@@ -2766,7 +3015,7 @@ impl Runtime {
             if self.projection_status == ProjectionStatus::Diverged && !allow_diverged_projection {
                 return Err(RuntimeError::new(
                     "PROJECTION_DIVERGED",
-                    "project.cut.json differs from authoritative cutd state; repair or explicitly import the projection before editing",
+                    "project.cut differs from authoritative cutd state; repair or explicitly import the projection before editing",
                 ));
             }
         }
@@ -2778,14 +3027,16 @@ impl Runtime {
             event,
         ))?;
         // The journal is the authoritative durable commit. Publish the
-        // compatibility projection only after the record is safely appended;
-        // startup can then replay a committed record and repair a stale
-        // projection without mistaking it for an external edit.
+        // document only after the record is safely appended; startup can then
+        // replay a committed record and repair a stale document without
+        // mistaking it for an external edit.
         append_journal_record(&self.journal_path, &record)?;
 
+        if project_changed {
+            self.view = kernel::committed_view(&candidate.project);
+        }
         self.project = candidate.project;
         self.revision = candidate.revision;
-        self.source_version = candidate.source_version;
         self.past = candidate.past;
         self.future = candidate.future;
         self.jobs = candidate.jobs;
@@ -2795,10 +3046,7 @@ impl Runtime {
         self.journal_sequence = sequence;
         self.journal_records_since_checkpoint += 1;
         if project_changed {
-            let published = self
-                .materialize_history()
-                .and_then(|_| self.materialize_project());
-            if published.is_ok() {
+            if self.materialize_project().is_ok() {
                 self.projection_status = ProjectionStatus::Current;
                 self.projection_digest = projection_digest(&self.project_path).ok();
             } else {
@@ -2813,7 +3061,7 @@ impl Runtime {
             && self.journal_records_since_checkpoint >= CHECKPOINT_INTERVAL
         {
             // The journal is the durable commit. Checkpointing is a bounded
-            // optimization; a temporary checkpoint failure leaves the typed
+            // optimization; a temporary checkpoint failure leaves the
             // records available for recovery on the next startup.
             if self.persist_checkpoint().is_ok() {
                 let _ = truncate_journal(&self.journal_path);
@@ -2823,31 +3071,40 @@ impl Runtime {
         Ok(self.snapshot())
     }
 
+    /// The state after `edit`, with a history entry, and how to journal it.
+    fn edit_candidate(&self, edit: &Edit) -> Result<(DurableState, Change), RuntimeError> {
+        let Edited { project, script } = edit.run(&self.project)?;
+        let label = script.clone().unwrap_or_else(|| edit.label());
+        let change = change_to(&project, script, Some(label.clone()));
+        let mut past = self.past.clone();
+        past.push(HistoryEntry {
+            script: label,
+            project: Arc::new(self.project.clone()),
+        });
+        bound_history(&mut past);
+        Ok((
+            self.candidate_state(project, self.revision + 1, past, Vec::new()),
+            change,
+        ))
+    }
+
+    /// Apply a v2 command without an idempotency receipt.
     pub fn apply(
         &mut self,
         command: Value,
         expected_revision: Option<u64>,
     ) -> Result<StateSnapshot, RuntimeError> {
         self.check_revision(expected_revision)?;
-        let typed = cut_domain::parse_command(&command).map_err(domain_error)?;
-        let inverse = cut_domain::inverse_command(&self.project, &typed).map_err(domain_error)?;
-        let next = cut_domain::apply_command(&self.project, &typed).map_err(domain_error)?;
-        let mut past = self.past.clone();
-        past.push(JournalHistoryEntry {
-            command: typed.clone(),
-            inverse: inverse.clone(),
-        });
-        bound_history(&mut past);
-        let revision = self.revision + 1;
+        let (candidate, change) = self.edit_candidate(&Edit::Legacy { command })?;
+        let proposal = self.proposal.clone();
         self.commit_candidate(
-            self.candidate_state(next, revision, past, Vec::new()),
+            candidate,
             JournalEvent::Mutation {
                 action: JournalAction::Apply,
-                command: Some(typed),
-                inverse: Some(inverse),
+                change: Some(change),
                 operation: None,
                 import: None,
-                proposal: self.proposal.clone(),
+                proposal,
             },
         )
     }
@@ -2865,24 +3122,61 @@ impl Runtime {
         // Acceptance then fails with REVISION_CONFLICT rather than silently
         // rebasing an agent command over unrelated human edits. The caller
         // must reject or restage the proposal explicitly.
-        self.apply_request_with_proposal(actor, key, command, base_revision, self.proposal.clone())
+        self.apply_edit_request(
+            actor,
+            key,
+            Edit::Legacy { command },
+            base_revision,
+            self.proposal.clone(),
+        )
     }
 
-    fn apply_request_with_proposal(
+    pub fn apply_script_request(
         &mut self,
         actor: &str,
         key: &str,
-        command: Value,
+        script: &str,
+        base_revision: u64,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        validate_request_identity(actor, key)?;
+        self.apply_edit_request(
+            actor,
+            key,
+            Edit::Script {
+                script: script.to_owned(),
+            },
+            base_revision,
+            self.proposal.clone(),
+        )
+    }
+
+    pub fn apply_ops_request(
+        &mut self,
+        actor: &str,
+        key: &str,
+        ops: Vec<EditOp>,
+        base_revision: u64,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        validate_request_identity(actor, key)?;
+        self.apply_edit_request(
+            actor,
+            key,
+            Edit::Ops { ops },
+            base_revision,
+            self.proposal.clone(),
+        )
+    }
+
+    fn apply_edit_request(
+        &mut self,
+        actor: &str,
+        key: &str,
+        edit: Edit,
         base_revision: u64,
         proposal: Option<ProposalRecord>,
     ) -> Result<StateSnapshot, RuntimeError> {
         let operation = format!("{actor}:{key}");
-        let fingerprint = format!(
-            "{}:{}:{}",
-            actor,
-            base_revision,
-            serde_json::to_string(&command).unwrap_or_default()
-        );
+        let fingerprint = format!("{actor}:{base_revision}:{}", edit.fingerprint());
         if let Some(record) = self.operations.get(&operation) {
             if record.fingerprint != fingerprint {
                 return Err(RuntimeError::new(
@@ -2893,17 +3187,7 @@ impl Runtime {
             return Ok((*record.snapshot).clone());
         }
         self.check_revision(Some(base_revision))?;
-        let typed = cut_domain::parse_command(&command).map_err(domain_error)?;
-        let inverse = cut_domain::inverse_command(&self.project, &typed).map_err(domain_error)?;
-        let next = cut_domain::apply_command(&self.project, &typed).map_err(domain_error)?;
-        let mut past = self.past.clone();
-        past.push(JournalHistoryEntry {
-            command: typed.clone(),
-            inverse: inverse.clone(),
-        });
-        bound_history(&mut past);
-        let revision = self.revision + 1;
-        let mut candidate = self.candidate_state(next, revision, past, Vec::new());
+        let (mut candidate, change) = self.edit_candidate(&edit)?;
         candidate.proposal = proposal;
         let snapshot = self.snapshot_for_parts_with_proposal(
             &candidate.project,
@@ -2923,16 +3207,15 @@ impl Runtime {
             }
         }
         candidate.operations.insert(
-            operation,
+            operation.clone(),
             OperationRecord {
                 fingerprint,
-                snapshot: Arc::new(snapshot.clone()),
+                snapshot: Arc::new(snapshot),
             },
         );
-        let operation_key = format!("{actor}:{key}");
         let operation_record = candidate
             .operations
-            .get(&operation_key)
+            .get(&operation)
             .cloned()
             .ok_or_else(|| {
                 RuntimeError::new("RUNTIME_PROTOCOL_ERROR", "operation receipt was not staged")
@@ -2942,10 +3225,9 @@ impl Runtime {
             candidate,
             JournalEvent::Mutation {
                 action: JournalAction::Apply,
-                command: Some(typed),
-                inverse: Some(inverse),
+                change: Some(change),
                 operation: Some(JournalOperation {
-                    key: operation_key,
+                    key: operation,
                     record: operation_record,
                 }),
                 import: None,
@@ -2954,9 +3236,10 @@ impl Runtime {
         )
     }
 
-    /// Stage the ordered commands returned by an agent without touching the
-    /// canonical project or its history.  All commands are flattened into one
-    /// batch and applied to a private clone so validation is all-or-nothing.
+    /// Stage the ordered v2 commands returned by an agent without touching
+    /// the canonical project or its history.  All commands are flattened into
+    /// one batch and applied to a private copy so validation is
+    /// all-or-nothing.
     pub fn stage_agent_proposal(
         &mut self,
         request_key: &str,
@@ -3025,32 +3308,77 @@ impl Runtime {
                             .map(|value| vec![value])
                     })
             })
-            .map(|values| {
-                values
-                    .into_iter()
-                    .map(|value| {
-                        let observation = serde_json::from_value::<ObservationReference>(value)
-                            .map_err(|error| {
-                                RuntimeError::new(
-                                    "AGENT_PROTOCOL_ERROR",
-                                    format!("invalid observation reference: {error}"),
-                                )
-                            })?;
-                        self.validate_observation_reference(&observation, base_revision)?;
-                        Ok(observation)
-                    })
-                    .collect::<Result<Vec<_>, RuntimeError>>()
-            })
-            .transpose()?
             .unwrap_or_default();
-        let observation = observations.first().cloned();
         let command = json!({ "type": "batch", "commands": commands });
-        let fingerprint = format!(
-            "{}:{}:{}",
+        self.stage_edit_proposal(
+            request_key,
             base_revision,
-            serde_json::to_string(&command).unwrap_or_default(),
-            serde_json::to_string(&observations).unwrap_or_default()
-        );
+            Edit::Legacy { command },
+            observations,
+        )
+    }
+
+    /// Stage an agent's edit script as a pending proposal.
+    pub fn stage_script_proposal(
+        &mut self,
+        request_key: &str,
+        base_revision: u64,
+        script: &str,
+        observations: Vec<Value>,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        if request_key.trim().is_empty() {
+            return Err(RuntimeError::new(
+                "AGENT_PROTOCOL_ERROR",
+                "agent request requires a non-empty idempotency key",
+            ));
+        }
+        self.check_revision(Some(base_revision))?;
+        self.stage_edit_proposal(
+            request_key,
+            base_revision,
+            Edit::Script {
+                script: script.to_owned(),
+            },
+            observations,
+        )
+    }
+
+    fn stage_edit_proposal(
+        &mut self,
+        request_key: &str,
+        base_revision: u64,
+        edit: Edit,
+        observations: Vec<Value>,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        let observations = observations
+            .into_iter()
+            .map(|value| {
+                let observation =
+                    serde_json::from_value::<ObservationReference>(value).map_err(|error| {
+                        RuntimeError::new(
+                            "AGENT_PROTOCOL_ERROR",
+                            format!("invalid observation reference: {error}"),
+                        )
+                    })?;
+                self.validate_observation_reference(&observation, base_revision)?;
+                Ok(observation)
+            })
+            .collect::<Result<Vec<_>, RuntimeError>>()?;
+        let observation = observations.first().cloned();
+        let fingerprint = match &edit {
+            Edit::Legacy { command } => format!(
+                "{}:{}:{}",
+                base_revision,
+                serde_json::to_string(command).unwrap_or_default(),
+                serde_json::to_string(&observations).unwrap_or_default()
+            ),
+            other => format!(
+                "{}:{}:{}",
+                base_revision,
+                other.fingerprint(),
+                serde_json::to_string(&observations).unwrap_or_default()
+            ),
+        };
 
         if let Some(existing) = self.proposal.as_ref() {
             if existing.request_key == request_key {
@@ -3070,13 +3398,21 @@ impl Runtime {
             }
         }
 
-        let typed = cut_domain::parse_command(&command).map_err(domain_error)?;
-        let candidate = cut_domain::apply_command(&self.project, &typed).map_err(domain_error)?;
-        let before_value = project_value(&self.project);
-        let candidate_value = project_value(&candidate);
-        let (diff, diff_truncated) = structured_diff(&before_value, &candidate_value);
-        let impacts = derive_proposal_impacts(&self.project, &candidate, &diff, diff_truncated);
+        let edited = edit.run(&self.project)?;
+        let before_view = &self.view;
+        let after_view = kernel::committed_view(&edited.project);
+        let (diff, diff_truncated) =
+            structured_diff(&project_value(before_view), &project_value(&after_view));
+        let impacts = derive_proposal_impacts(before_view, &after_view, &diff, diff_truncated);
+        let document_diff = cut_lang::diff_text(
+            &kernel::print(&self.project),
+            &kernel::print(&edited.project),
+        );
         let proposal_id = format!("proposal-{}", unique_id());
+        let (command, stored) = match edit {
+            Edit::Legacy { command } => (command, None),
+            other => (Value::Null, Some(other)),
+        };
         let proposal = Some(ProposalRecord {
             lifecycle: PendingProposal::Pending {
                 proposal_id,
@@ -3088,10 +3424,13 @@ impl Runtime {
                 impacts: Some(impacts),
                 observation,
                 observations: (observations.len() > 1).then_some(observations),
+                script: edited.script,
+                document_diff: Some(document_diff),
             },
             request_key: request_key.to_owned(),
             fingerprint,
             receipt: None,
+            edit: stored,
         });
         let mut candidate = self.durable_state();
         candidate.proposal = proposal;
@@ -3131,7 +3470,7 @@ impl Runtime {
                 "observation source identity no longer matches the media file",
             ));
         }
-        let project_source = self.project.sources.iter().find(|source| {
+        let project_source = self.view.sources.iter().find(|source| {
             source.id.as_str() == observation.source_ref
                 || self
                     .project_source_path(&source.path)
@@ -3215,14 +3554,13 @@ impl Runtime {
         replacement_clip_id: Option<&str>,
         observation: Option<Value>,
     ) -> Result<StateSnapshot, RuntimeError> {
-        let (_, source_id, _, import_command) = self.build_import_candidate_with_identity(
+        let (source_id, _, import_command) = self.build_import_command(
             path,
             metadata.as_ref(),
             overlay.as_ref(),
             Some(request_key),
         )?;
-        let serialized = cut_domain::serialize_command(&import_command).map_err(domain_error)?;
-        let mut commands = serialized
+        let mut commands = import_command
             .get("commands")
             .and_then(Value::as_array)
             .cloned()
@@ -3313,9 +3651,21 @@ impl Runtime {
                         ),
                     ));
                 }
-                if let Some(crop_override) = crop_override.as_ref() {
-                    replace_proposal_crop(&mut command, crop_override)?;
-                }
+                let edit = match record.edit.clone() {
+                    Some(_) if crop_override.is_some() => {
+                        return Err(RuntimeError::new(
+                            "INVALID_REQUEST",
+                            "cropOverride applies only to proposals of v2 commands",
+                        ))
+                    }
+                    Some(edit) => edit,
+                    None => {
+                        if let Some(crop_override) = crop_override.as_ref() {
+                            replace_proposal_crop(&mut command, crop_override)?;
+                        }
+                        Edit::Legacy { command }
+                    }
+                };
                 let accepted_proposal = Some(ProposalRecord {
                     lifecycle: PendingProposal::Accepted {
                         proposal_id: current_id.clone(),
@@ -3327,14 +3677,9 @@ impl Runtime {
                     request_key: record.request_key.clone(),
                     fingerprint: record.fingerprint.clone(),
                     receipt: None,
+                    edit: None,
                 });
-                self.apply_request_with_proposal(
-                    actor,
-                    key,
-                    command,
-                    base_revision,
-                    accepted_proposal,
-                )
+                self.apply_edit_request(actor, key, edit, base_revision, accepted_proposal)
             }
             PendingProposal::Accepted {
                 proposal_id: current_id,
@@ -3420,6 +3765,7 @@ impl Runtime {
                     request_key: record.request_key.clone(),
                     fingerprint: record.fingerprint.clone(),
                     receipt: None,
+                    edit: None,
                 });
                 let mut candidate = self.durable_state();
                 candidate.proposal = rejected_proposal;
@@ -3512,6 +3858,7 @@ impl Runtime {
                     request_key: record.request_key,
                     fingerprint: record.fingerprint,
                     receipt: None,
+                    edit: None,
                 });
                 let mut candidate = self.durable_state();
                 candidate.proposal = rejected_proposal;
@@ -3553,8 +3900,7 @@ impl Runtime {
                     candidate,
                     JournalEvent::Mutation {
                         action: JournalAction::RejectProposal,
-                        command: None,
-                        inverse: None,
+                        change: None,
                         operation: Some(JournalOperation {
                             key: operation,
                             record: operation_record,
@@ -3611,27 +3957,7 @@ impl Runtime {
 
     pub fn undo(&mut self, expected_revision: Option<u64>) -> Result<StateSnapshot, RuntimeError> {
         self.check_revision(expected_revision)?;
-        let Some(entry) = self.past.last().cloned() else {
-            return Ok(self.snapshot());
-        };
-        let next =
-            cut_domain::apply_command(&self.project, &entry.inverse).map_err(domain_error)?;
-        let mut past = self.past.clone();
-        past.pop();
-        let mut future = self.future.clone();
-        future.push(entry.clone());
-        bound_history(&mut future);
-        self.commit_candidate(
-            self.candidate_state(next, self.revision + 1, past, future),
-            JournalEvent::Mutation {
-                action: JournalAction::Undo,
-                command: Some(entry.inverse),
-                inverse: Some(entry.command),
-                operation: None,
-                import: None,
-                proposal: self.proposal.clone(),
-            },
-        )
+        self.history_step(Direction::Undo, None)
     }
 
     pub fn undo_request(
@@ -3641,125 +3967,12 @@ impl Runtime {
         base_revision: u64,
     ) -> Result<StateSnapshot, RuntimeError> {
         validate_request_identity(actor, key)?;
-        let operation = format!("{actor}:{key}");
-        let fingerprint = format!("{}:{}:undo", actor, base_revision);
-        if let Some(record) = self.operations.get(&operation) {
-            if record.fingerprint != fingerprint {
-                return Err(RuntimeError::new(
-                    "IDEMPOTENCY_CONFLICT",
-                    "idempotency key was already used for a different request",
-                ));
-            }
-            return Ok((*record.snapshot).clone());
-        }
-        self.check_revision(Some(base_revision))?;
-        let Some(entry) = self.past.last().cloned() else {
-            let mut candidate = self.durable_state();
-            let snapshot = self.snapshot_for_parts_with_proposal(
-                &candidate.project,
-                candidate.revision,
-                &candidate.past,
-                &candidate.future,
-                &candidate.proposal,
-            );
-            candidate.operations.insert(
-                operation.clone(),
-                OperationRecord {
-                    fingerprint,
-                    snapshot: Arc::new(snapshot.clone()),
-                },
-            );
-            let operation_record =
-                candidate
-                    .operations
-                    .get(&operation)
-                    .cloned()
-                    .ok_or_else(|| {
-                        RuntimeError::new(
-                            "RUNTIME_PROTOCOL_ERROR",
-                            "operation receipt was not staged",
-                        )
-                    })?;
-            let journal_proposal = candidate.proposal.clone();
-            return self.commit_candidate(
-                candidate,
-                JournalEvent::Mutation {
-                    action: JournalAction::Noop,
-                    command: None,
-                    inverse: None,
-                    operation: Some(JournalOperation {
-                        key: operation,
-                        record: operation_record,
-                    }),
-                    import: None,
-                    proposal: journal_proposal,
-                },
-            );
-        };
-        let previous =
-            cut_domain::apply_command(&self.project, &entry.inverse).map_err(domain_error)?;
-        let mut past = self.past.clone();
-        past.pop();
-        let mut future = self.future.clone();
-        future.push(entry.clone());
-        bound_history(&mut future);
-        let revision = self.revision + 1;
-        let snapshot = self.snapshot_for_parts(&previous, revision, &past, &future);
-        let mut candidate = self.candidate_state(previous, revision, past, future);
-        candidate.operations.insert(
-            operation.clone(),
-            OperationRecord {
-                fingerprint,
-                snapshot: Arc::new(snapshot.clone()),
-            },
-        );
-        let operation_record = candidate
-            .operations
-            .get(&operation)
-            .cloned()
-            .ok_or_else(|| {
-                RuntimeError::new("RUNTIME_PROTOCOL_ERROR", "operation receipt was not staged")
-            })?;
-        let journal_proposal = candidate.proposal.clone();
-        self.commit_candidate(
-            candidate,
-            JournalEvent::Mutation {
-                action: JournalAction::Undo,
-                command: Some(entry.inverse),
-                inverse: Some(entry.command),
-                operation: Some(JournalOperation {
-                    key: operation,
-                    record: operation_record,
-                }),
-                import: None,
-                proposal: journal_proposal,
-            },
-        )
+        self.history_request(Direction::Undo, actor, key, base_revision)
     }
 
     pub fn redo(&mut self, expected_revision: Option<u64>) -> Result<StateSnapshot, RuntimeError> {
         self.check_revision(expected_revision)?;
-        let Some(entry) = self.future.last().cloned() else {
-            return Ok(self.snapshot());
-        };
-        let next =
-            cut_domain::apply_command(&self.project, &entry.command).map_err(domain_error)?;
-        let mut future = self.future.clone();
-        future.pop();
-        let mut past = self.past.clone();
-        past.push(entry.clone());
-        bound_history(&mut past);
-        self.commit_candidate(
-            self.candidate_state(next, self.revision + 1, past, future),
-            JournalEvent::Mutation {
-                action: JournalAction::Redo,
-                command: Some(entry.command),
-                inverse: Some(entry.inverse),
-                operation: None,
-                import: None,
-                proposal: self.proposal.clone(),
-            },
-        )
+        self.history_step(Direction::Redo, None)
     }
 
     pub fn redo_request(
@@ -3769,8 +3982,18 @@ impl Runtime {
         base_revision: u64,
     ) -> Result<StateSnapshot, RuntimeError> {
         validate_request_identity(actor, key)?;
+        self.history_request(Direction::Redo, actor, key, base_revision)
+    }
+
+    fn history_request(
+        &mut self,
+        direction: Direction,
+        actor: &str,
+        key: &str,
+        base_revision: u64,
+    ) -> Result<StateSnapshot, RuntimeError> {
         let operation = format!("{actor}:{key}");
-        let fingerprint = format!("{}:{}:redo", actor, base_revision);
+        let fingerprint = format!("{actor}:{base_revision}:{}", direction.name());
         if let Some(record) = self.operations.get(&operation) {
             if record.fingerprint != fingerprint {
                 return Err(RuntimeError::new(
@@ -3781,24 +4004,43 @@ impl Runtime {
             return Ok((*record.snapshot).clone());
         }
         self.check_revision(Some(base_revision))?;
-        let Some(entry) = self.future.last().cloned() else {
-            let mut candidate = self.durable_state();
-            let snapshot = self.snapshot_for_parts_with_proposal(
-                &candidate.project,
-                candidate.revision,
-                &candidate.past,
-                &candidate.future,
-                &candidate.proposal,
-            );
-            candidate.operations.insert(
-                operation.clone(),
-                OperationRecord {
-                    fingerprint,
-                    snapshot: Arc::new(snapshot.clone()),
-                },
-            );
-            let operation_record =
-                candidate
+        self.history_step(direction, Some((operation, fingerprint)))
+    }
+
+    /// Restore the newest snapshot in the direction's stack. With nothing to
+    /// restore, a request with a receipt still records a no-op.
+    fn history_step(
+        &mut self,
+        direction: Direction,
+        receipt: Option<(String, String)>,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        let (from, _) = self.stacks(direction);
+        let (mut candidate, action, change) = match from.last() {
+            Some(_) => {
+                let (project, past, future, change) = self.stepped(direction);
+                let candidate = self.candidate_state(project, self.revision + 1, past, future);
+                (candidate, direction.action(), Some(change))
+            }
+            None if receipt.is_none() => return Ok(self.snapshot()),
+            None => (self.durable_state(), JournalAction::Noop, None),
+        };
+        let operation = match receipt {
+            Some((operation, fingerprint)) => {
+                let snapshot = self.snapshot_for_parts_with_proposal(
+                    &candidate.project,
+                    candidate.revision,
+                    &candidate.past,
+                    &candidate.future,
+                    &candidate.proposal,
+                );
+                candidate.operations.insert(
+                    operation.clone(),
+                    OperationRecord {
+                        fingerprint,
+                        snapshot: Arc::new(snapshot),
+                    },
+                );
+                let record = candidate
                     .operations
                     .get(&operation)
                     .cloned()
@@ -3808,61 +4050,55 @@ impl Runtime {
                             "operation receipt was not staged",
                         )
                     })?;
-            let journal_proposal = candidate.proposal.clone();
-            return self.commit_candidate(
-                candidate,
-                JournalEvent::Mutation {
-                    action: JournalAction::Noop,
-                    command: None,
-                    inverse: None,
-                    operation: Some(JournalOperation {
-                        key: operation,
-                        record: operation_record,
-                    }),
-                    import: None,
-                    proposal: journal_proposal,
-                },
-            );
+                Some(JournalOperation {
+                    key: operation,
+                    record,
+                })
+            }
+            None => None,
         };
-        let next =
-            cut_domain::apply_command(&self.project, &entry.command).map_err(domain_error)?;
-        let mut future = self.future.clone();
-        future.pop();
-        let mut past = self.past.clone();
-        past.push(entry.clone());
-        bound_history(&mut past);
-        let revision = self.revision + 1;
-        let snapshot = self.snapshot_for_parts(&next, revision, &past, &future);
-        let mut candidate = self.candidate_state(next, revision, past, future);
-        candidate.operations.insert(
-            operation.clone(),
-            OperationRecord {
-                fingerprint,
-                snapshot: Arc::new(snapshot.clone()),
-            },
-        );
-        let operation_record = candidate
-            .operations
-            .get(&operation)
-            .cloned()
-            .ok_or_else(|| {
-                RuntimeError::new("RUNTIME_PROTOCOL_ERROR", "operation receipt was not staged")
-            })?;
-        let journal_proposal = candidate.proposal.clone();
+        let proposal = candidate.proposal.clone();
         self.commit_candidate(
             candidate,
             JournalEvent::Mutation {
-                action: JournalAction::Redo,
-                command: Some(entry.command),
-                inverse: Some(entry.inverse),
-                operation: Some(JournalOperation {
-                    key: operation,
-                    record: operation_record,
-                }),
+                action,
+                change,
+                operation,
                 import: None,
-                proposal: journal_proposal,
+                proposal,
             },
         )
+    }
+
+    fn stacks(&self, direction: Direction) -> (&[HistoryEntry], &[HistoryEntry]) {
+        match direction {
+            Direction::Undo => (&self.past, &self.future),
+            Direction::Redo => (&self.future, &self.past),
+        }
+    }
+
+    /// The project, past, and future after one undo or redo. The caller has
+    /// checked that the stack to take from is not empty.
+    fn stepped(
+        &self,
+        direction: Direction,
+    ) -> (Project, Vec<HistoryEntry>, Vec<HistoryEntry>, Change) {
+        let (mut from, mut to) = match direction {
+            Direction::Undo => (self.past.clone(), self.future.clone()),
+            Direction::Redo => (self.future.clone(), self.past.clone()),
+        };
+        let entry = from.pop().expect("history step has an entry");
+        let project = kernel::restore(&entry.project, &self.project);
+        to.push(HistoryEntry {
+            script: entry.script,
+            project: Arc::new(self.project.clone()),
+        });
+        bound_history(&mut to);
+        let change = change_to(&project, None, None);
+        match direction {
+            Direction::Undo => (project, from, to, change),
+            Direction::Redo => (project, to, from, change),
+        }
     }
 
     pub fn start_render(
@@ -3885,13 +4121,13 @@ impl Runtime {
         }
         if let Some(range) = range.as_ref() {
             RenderRange::new(range.start, range.duration)?;
-            if range.end() > self.project.duration() + 1e-9 {
+            if range.end() > self.view.duration() + 1e-9 {
                 return Err(RuntimeError::new(
                     "INVALID_RENDER_RANGE",
                     format!(
                         "render range ends at {:.3}s but project duration is {:.3}s",
                         range.end(),
-                        self.project.duration()
+                        self.view.duration()
                     ),
                 ));
             }
@@ -3921,7 +4157,7 @@ impl Runtime {
         let mut candidate = self.durable_state();
         candidate.jobs.insert(id, job.clone());
         self.commit_candidate(candidate, JournalEvent::Job { job: job.clone() })?;
-        Ok((job, project_value(&self.project), output))
+        Ok((job, project_value(&self.view), output))
     }
 
     pub fn proposal_preview(&self, proposal_id: &str) -> Result<(Value, Value), RuntimeError> {
@@ -3958,9 +4194,14 @@ impl Runtime {
                 ),
             ));
         }
-        let command = cut_domain::parse_command(command).map_err(domain_error)?;
-        let after = cut_domain::apply_command(&self.project, &command).map_err(domain_error)?;
-        Ok((project_value(&self.project), project_value(&after)))
+        let edit = record.edit.clone().unwrap_or_else(|| Edit::Legacy {
+            command: command.clone(),
+        });
+        let after = edit.run(&self.project)?.project;
+        Ok((
+            project_value(&self.view),
+            project_value(&kernel::committed_view(&after)),
+        ))
     }
 
     pub fn import_media(
@@ -3969,47 +4210,23 @@ impl Runtime {
         metadata: Option<&Value>,
         overlay: Option<&Value>,
     ) -> Result<(StateSnapshot, String, String), RuntimeError> {
-        let (next, source_id, clip_id, command) =
-            self.build_import_candidate(path, metadata, overlay)?;
-        let inverse = cut_domain::inverse_command(&self.project, &command).map_err(domain_error)?;
-        let mut past = self.past.clone();
-        past.push(JournalHistoryEntry {
-            command: command.clone(),
-            inverse: inverse.clone(),
-        });
-        bound_history(&mut past);
-        let revision = self.revision + 1;
-        let snapshot = self.snapshot_for_parts(&next, revision, &past, &[]);
-        self.commit_candidate(
-            self.candidate_state(next, revision, past, Vec::new()),
-            JournalEvent::Mutation {
-                action: JournalAction::Apply,
-                command: Some(command),
-                inverse: Some(inverse),
-                operation: None,
-                import: None,
-                proposal: self.proposal.clone(),
-            },
-        )?;
+        let (source_id, clip_id, command) =
+            self.build_import_command(path, metadata, overlay, None)?;
+        let snapshot = self.apply(command, None)?;
         Ok((snapshot, source_id, clip_id))
     }
 
-    fn build_import_candidate(
-        &self,
-        path: &str,
-        metadata: Option<&Value>,
-        overlay: Option<&Value>,
-    ) -> Result<(Project, String, String, cut_domain::Command), RuntimeError> {
-        self.build_import_candidate_with_identity(path, metadata, overlay, None)
-    }
-
-    fn build_import_candidate_with_identity(
+    /// The v2 command that imports a media file: a source and a clip at the
+    /// end of the first picture track (created when there is none), plus an
+    /// optional overlay. With an `identity`, the generated ids are stable for
+    /// that identity and path.
+    fn build_import_command(
         &self,
         path: &str,
         metadata: Option<&Value>,
         overlay: Option<&Value>,
         identity: Option<&str>,
-    ) -> Result<(Project, String, String, cut_domain::Command), RuntimeError> {
+    ) -> Result<(String, String, Value), RuntimeError> {
         if path.trim().is_empty() {
             return Err(RuntimeError::new(
                 "INVALID_IMPORT",
@@ -4046,101 +4263,52 @@ impl Runtime {
             .get("duration")
             .and_then(Value::as_f64)
             .filter(|duration| *duration > 0.0);
-        let mut next = project_value(&self.project);
-        next["sources"].as_array_mut().unwrap().push(source);
-        let tracks = next["tracks"].as_array_mut().unwrap();
-        let mut created_track = None;
-        if !tracks
-            .iter()
-            .any(|track| track.get("type").and_then(Value::as_str) == Some("video"))
-        {
-            let track_id = stable_identity
-                .as_deref()
-                .map(|identity| stable_id("video", identity))
-                .unwrap_or_else(|| format!("video-{}", unique_id()));
-            let track = json!({"id": track_id, "type": "video", "clips": []});
-            tracks.push(track.clone());
-            created_track = Some(track);
+        if duration.is_none() {
+            // Unprobed media is assumed to be as long as the clip placed
+            // below, so the model's source bounds hold.
+            source["duration"] = json!(1.0);
         }
-        let track = tracks
-            .iter_mut()
-            .find(|track| track.get("type").and_then(Value::as_str) == Some("video"))
-            .expect("video track was created above");
-        let track_id = track
-            .get("id")
-            .and_then(Value::as_str)
-            .expect("validated video track has an id")
-            .to_owned();
-        track["clips"].as_array_mut().unwrap().push(json!({
-            "id": clip_id.clone(),
-            "sourceId": source_id.clone(),
-            "timelineStart": cut_domain::project_duration(&self.project),
-            "in": 0.0,
-            "out": duration.unwrap_or(1.0)
-        }));
-        if let Some(overlay) = overlay {
-            next["overlays"]
-                .as_array_mut()
-                .unwrap()
-                .push(overlay.clone());
-        }
-        let next = cut_domain::parse_project(&next).map_err(domain_error)?;
-        let next_value = project_value(&next);
-        let source = next_value["sources"]
-            .as_array()
-            .and_then(|sources| {
-                sources.iter().find(|source| {
-                    source.get("id").and_then(Value::as_str) == Some(source_id.as_str())
-                })
-            })
-            .cloned()
-            .ok_or_else(|| {
-                RuntimeError::new("RUNTIME_PROTOCOL_ERROR", "import source disappeared")
-            })?;
-        let clip = next_value["tracks"]
-            .as_array()
-            .and_then(|tracks| {
-                tracks.iter().find_map(|track| {
-                    track["clips"].as_array().and_then(|clips| {
-                        clips.iter().find(|clip| {
-                            clip.get("id").and_then(Value::as_str) == Some(clip_id.as_str())
-                        })
-                    })
-                })
-            })
-            .cloned()
-            .ok_or_else(|| {
-                RuntimeError::new("RUNTIME_PROTOCOL_ERROR", "import clip disappeared")
-            })?;
         let mut commands = Vec::with_capacity(4);
-        if let Some(track) = created_track {
-            commands.push(json!({"type": "add_track", "track": track}));
-        }
+        let track_id = match self
+            .view
+            .tracks
+            .iter()
+            .find(|track| track.kind == v2::TrackType::Video)
+        {
+            Some(track) => track.id.as_str().to_owned(),
+            None => {
+                let track_id = stable_identity
+                    .as_deref()
+                    .map(|identity| stable_id("video", identity))
+                    .unwrap_or_else(|| format!("video-{}", unique_id()));
+                commands.push(json!({
+                    "type": "add_track",
+                    "track": {"id": track_id, "type": "video", "clips": []}
+                }));
+                track_id
+            }
+        };
         commands.push(json!({"type": "add_source", "source": source}));
         commands.push(json!({
             "type": "add_clip",
             "trackId": track_id,
-            "clip": clip
+            "clip": {
+                "id": clip_id.clone(),
+                "sourceId": source_id.clone(),
+                "timelineStart": v2::project_duration(&self.view),
+                "in": 0.0,
+                "out": duration.unwrap_or(1.0)
+            }
         }));
-        if overlay.is_some() {
-            let overlay = next.overlays.last().cloned().ok_or_else(|| {
-                RuntimeError::new("RUNTIME_PROTOCOL_ERROR", "import overlay disappeared")
-            })?;
+        if let Some(overlay) = overlay {
             commands.push(json!({"type": "add_overlay", "overlay": overlay}));
         }
-        let command = cut_domain::parse_command(&json!({
-            "type": "batch",
-            "commands": commands,
-        }))
-        .map_err(domain_error)?;
-        let applied = cut_domain::apply_command(&self.project, &command).map_err(domain_error)?;
-        if applied != next {
-            return Err(RuntimeError::new(
-                "RUNTIME_PROTOCOL_ERROR",
-                "typed import command did not reproduce candidate project",
-            ));
-        }
-        Ok((next, source_id, clip_id, command))
+        let command = json!({"type": "batch", "commands": commands});
+        // Reject malformed sources and overlays at the v2 boundary, as v2
+        // clients expect.
+        let typed = v2::parse_command(&command).map_err(domain_error)?;
+        v2::apply_command(&self.view, &typed).map_err(domain_error)?;
+        Ok((source_id, clip_id, command))
     }
 
     pub fn import_media_request(
@@ -4173,21 +4341,17 @@ impl Runtime {
             ));
         }
         self.check_revision(Some(base_revision))?;
-        // Build the import candidate without mutating the actor.  The same
-        // probe/import shape is used by direct and idempotent requests so a
-        // failed projection leaves every in-memory field untouched.
-        let (next, source_id, clip_id, command) =
-            self.build_import_candidate(path, metadata.as_ref(), overlay.as_ref())?;
-        let inverse = cut_domain::inverse_command(&self.project, &command).map_err(domain_error)?;
-        let mut past = self.past.clone();
-        past.push(JournalHistoryEntry {
-            command: command.clone(),
-            inverse: inverse.clone(),
-        });
-        bound_history(&mut past);
-        let revision = self.revision + 1;
-        let snapshot = self.snapshot_for_parts(&next, revision, &past, &[]);
-        let mut candidate = self.candidate_state(next, revision, past, Vec::new());
+        // Build the import candidate without mutating the actor, so a failed
+        // probe or edit leaves every in-memory field untouched.
+        let (source_id, clip_id, command) =
+            self.build_import_command(path, metadata.as_ref(), overlay.as_ref(), None)?;
+        let (mut candidate, change) = self.edit_candidate(&Edit::Legacy { command })?;
+        let snapshot = self.snapshot_for_parts(
+            &candidate.project,
+            candidate.revision,
+            &candidate.past,
+            &candidate.future,
+        );
         let import_key = operation.clone();
         candidate.imports.insert(
             import_key.clone(),
@@ -4202,18 +4366,18 @@ impl Runtime {
         let import_record = candidate.imports.get(&import_key).cloned().ok_or_else(|| {
             RuntimeError::new("RUNTIME_PROTOCOL_ERROR", "import receipt was not staged")
         })?;
+        let proposal = self.proposal.clone();
         self.commit_candidate(
             candidate,
             JournalEvent::Mutation {
                 action: JournalAction::Apply,
-                command: Some(command),
-                inverse: Some(inverse),
+                change: Some(change),
                 operation: None,
                 import: Some(JournalImport {
                     key: import_key,
                     record: import_record,
                 }),
-                proposal: self.proposal.clone(),
+                proposal,
             },
         )?;
         Ok((snapshot, source_id, clip_id))
@@ -4313,6 +4477,43 @@ impl Runtime {
         self.refresh_projection_status();
         match request {
             RuntimeRequest::GetState => Ok(RuntimeResponse::State(self.snapshot())),
+            RuntimeRequest::GetDocument { annotated } => Ok(RuntimeResponse::Document {
+                revision: self.revision,
+                document: self.document(annotated),
+            }),
+            RuntimeRequest::ApplyScript {
+                actor,
+                idempotency_key,
+                base_revision,
+                script,
+            } => Ok(RuntimeResponse::State(self.apply_script_request(
+                &actor,
+                &idempotency_key,
+                &script,
+                base_revision,
+            )?)),
+            RuntimeRequest::ApplyOps {
+                actor,
+                idempotency_key,
+                base_revision,
+                ops,
+            } => Ok(RuntimeResponse::State(self.apply_ops_request(
+                &actor,
+                &idempotency_key,
+                ops,
+                base_revision,
+            )?)),
+            RuntimeRequest::StageScriptProposal {
+                request_key,
+                base_revision,
+                script,
+                observations,
+            } => Ok(RuntimeResponse::State(self.stage_script_proposal(
+                &request_key,
+                base_revision,
+                &script,
+                observations,
+            )?)),
             RuntimeRequest::GetProposalPreview { proposal_id } => {
                 let (before, after) = self.proposal_preview(&proposal_id)?;
                 Ok(RuntimeResponse::ProposalPreview { before, after })
@@ -4510,63 +4711,61 @@ impl Runtime {
                 ),
             ));
         }
-        let action = record.action.clone();
-        match action {
-            JournalAction::Apply | JournalAction::Undo | JournalAction::Redo => {
-                let command = record.command.clone();
-                let inverse = record.inverse.clone();
-                match record.action {
-                    JournalAction::Apply => {
-                        let command = command.ok_or_else(|| {
-                            RuntimeError::new("INVALID_JOURNAL", "apply record has no command")
-                        })?;
-                        let inverse = inverse.ok_or_else(|| {
-                            RuntimeError::new("INVALID_JOURNAL", "apply record has no inverse")
-                        })?;
-                        self.project = cut_domain::apply_command(&self.project, &command)
-                            .map_err(domain_error)?;
-                        self.past.push(JournalHistoryEntry { command, inverse });
-                        bound_history(&mut self.past);
-                        self.future.clear();
-                        self.revision = record.revision;
+        let missing = |what: &str| {
+            RuntimeError::new("INVALID_JOURNAL", format!("{what} record has no change"))
+        };
+        match record.action {
+            JournalAction::Apply => {
+                let change = record.change.as_ref().ok_or_else(|| missing("apply"))?;
+                let project = match (&change.script, &change.document) {
+                    (Some(script), _) => {
+                        Edit::Script {
+                            script: script.clone(),
+                        }
+                        .run(&self.project)?
+                        .project
                     }
-                    JournalAction::Undo => {
-                        let command = command.ok_or_else(|| {
-                            RuntimeError::new("INVALID_JOURNAL", "undo record has no command")
-                        })?;
-                        let inverse = inverse.ok_or_else(|| {
-                            RuntimeError::new("INVALID_JOURNAL", "undo record has no inverse")
-                        })?;
-                        self.project = cut_domain::apply_command(&self.project, &command)
-                            .map_err(domain_error)?;
-                        let _ = self.past.pop().ok_or_else(|| {
-                            RuntimeError::new("INVALID_JOURNAL", "undo record has no past entry")
-                        })?;
-                        self.future.push(JournalHistoryEntry {
-                            command: inverse,
-                            inverse: command,
-                        });
-                        bound_history(&mut self.future);
-                        self.revision = record.revision;
-                    }
-                    JournalAction::Redo => {
-                        let command = command.ok_or_else(|| {
-                            RuntimeError::new("INVALID_JOURNAL", "redo record has no command")
-                        })?;
-                        let inverse = inverse.ok_or_else(|| {
-                            RuntimeError::new("INVALID_JOURNAL", "redo record has no inverse")
-                        })?;
-                        self.project = cut_domain::apply_command(&self.project, &command)
-                            .map_err(domain_error)?;
-                        let _ = self.future.pop().ok_or_else(|| {
-                            RuntimeError::new("INVALID_JOURNAL", "redo record has no future entry")
-                        })?;
-                        self.past.push(JournalHistoryEntry { command, inverse });
-                        bound_history(&mut self.past);
-                        self.revision = record.revision;
-                    }
-                    _ => unreachable!(),
+                    (None, Some(document)) => kernel::parse(document)?,
+                    (None, None) => return Err(missing("apply")),
+                };
+                verify_change(change, &project, record.sequence)?;
+                let label = change
+                    .script
+                    .clone()
+                    .or_else(|| change.label.clone())
+                    .unwrap_or_default();
+                let before = std::mem::replace(&mut self.project, project);
+                self.past.push(HistoryEntry {
+                    script: label,
+                    project: Arc::new(before),
+                });
+                bound_history(&mut self.past);
+                self.future.clear();
+                self.revision = record.revision;
+                self.proposal = record.proposal;
+            }
+            JournalAction::Undo | JournalAction::Redo => {
+                let direction = if matches!(record.action, JournalAction::Undo) {
+                    Direction::Undo
+                } else {
+                    Direction::Redo
+                };
+                if self.stacks(direction).0.is_empty() {
+                    return Err(RuntimeError::new(
+                        "INVALID_JOURNAL",
+                        format!("{} record has no history entry", direction.name()),
+                    ));
                 }
+                let change = record
+                    .change
+                    .as_ref()
+                    .ok_or_else(|| missing(direction.name()))?;
+                let (project, past, future, _) = self.stepped(direction);
+                verify_change(change, &project, record.sequence)?;
+                self.project = project;
+                self.past = past;
+                self.future = future;
+                self.revision = record.revision;
                 self.proposal = record.proposal;
             }
             JournalAction::Noop | JournalAction::RejectProposal => {
@@ -4583,19 +4782,23 @@ impl Runtime {
                 self.jobs.insert(job.job_id.clone(), job);
             }
             JournalAction::ProjectionImport => {
-                let project = record.project.ok_or_else(|| {
-                    RuntimeError::new("INVALID_JOURNAL", "projection import has no project")
+                let change = record
+                    .change
+                    .as_ref()
+                    .ok_or_else(|| missing("projection import"))?;
+                let document = change.document.as_deref().ok_or_else(|| {
+                    RuntimeError::new("INVALID_JOURNAL", "projection import has no document")
                 })?;
+                let project = kernel::parse(document)?;
+                verify_change(change, &project, record.sequence)?;
                 let project_changed = project != self.project;
                 self.project = project;
-                cut_domain::validate(&self.project).map_err(domain_error)?;
                 self.revision = record.revision;
                 if project_changed {
                     self.past.clear();
                     self.future.clear();
                     self.proposal = None;
                 }
-                self.source_version = record.source_version.unwrap_or(2);
             }
         }
         if let Some(operation) = record.operation {
@@ -4621,16 +4824,22 @@ impl Runtime {
     }
 
     fn refresh_projection_status(&mut self) {
+        // An unchanged file is the document this runtime last wrote.
+        let digest = projection_digest(&self.project_path).ok();
+        if digest.is_some() && digest == self.projection_digest {
+            self.projection_status = ProjectionStatus::Current;
+            return;
+        }
         self.projection_status = inspect_projection(&self.project_path, &self.project);
         if self.projection_status == ProjectionStatus::Current {
-            self.projection_digest = projection_digest(&self.project_path).ok();
+            self.projection_digest = digest;
         }
     }
 
     fn persist_checkpoint(&self) -> Result<(), RuntimeError> {
         let checkpoint = PersistedCheckpoint {
             format_version: CHECKPOINT_VERSION,
-            project: self.project.clone(),
+            project: Arc::new(self.project.clone()),
             revision: self.revision,
             past: self.past.clone(),
             future: self.future.clone(),
@@ -4639,7 +4848,7 @@ impl Runtime {
             imports: self.imports.clone(),
             proposal: self.proposal.clone(),
             jobs: self.jobs.clone(),
-            source_version: self.source_version,
+            import_warnings: self.import_warnings.clone(),
             projection_digest: self.projection_digest.clone(),
         };
         write_json_atomic(
@@ -4648,36 +4857,13 @@ impl Runtime {
         )
     }
 
+    /// Write the canonical document.
     fn materialize_project(&self) -> Result<(), RuntimeError> {
-        self.materialize_project_value(&self.project)
+        write_bytes_atomic(&self.project_path, kernel::print(&self.project).as_bytes())
     }
 
-    fn materialize_project_value(&self, project: &Project) -> Result<(), RuntimeError> {
-        write_json_atomic(&self.project_path, project)
-    }
-
-    fn materialize_history(&self) -> Result<(), RuntimeError> {
-        self.materialize_history_values(self.revision, &self.past, &self.future)
-    }
-
-    fn materialize_history_values(
-        &self,
-        revision: u64,
-        past: &[JournalHistoryEntry],
-        future: &[JournalHistoryEntry],
-    ) -> Result<(), RuntimeError> {
-        // Keep the old filename as a small compatibility projection. It is a
-        // command journal view, never a source of truth and never a list of
-        // full project snapshots.
-        let history = json!({
-            "formatVersion": JOURNAL_VERSION,
-            "revision": revision,
-            "past": past,
-            "future": future,
-        });
-        write_json_atomic(&self.project_path.with_file_name(HISTORY_FILE), &history)
-    }
-
+    /// Make the edited `project.cut` canonical. Text edits made outside cutd
+    /// become one revision that clears history.
     fn import_projection(
         &mut self,
         actor: &str,
@@ -4700,10 +4886,12 @@ impl Runtime {
         if !self.project_path.is_file() {
             return Err(RuntimeError::new(
                 "INVALID_PROJECT",
-                "project.cut.json is required for an explicit projection import",
+                "project.cut is required for an explicit projection import",
             ));
         }
-        let (project, source_version) = load_bootstrap_project(&self.project_path)?;
+        let text = fs::read_to_string(&self.project_path).map_err(io_error)?;
+        let project = kernel::parse(&text)?;
+        kernel::view(&project)?;
         let project_changed = project != self.project;
         let revision = if project_changed {
             self.revision + 1
@@ -4713,7 +4901,6 @@ impl Runtime {
         let mut candidate = self.durable_state();
         candidate.project = project;
         candidate.revision = revision;
-        candidate.source_version = source_version;
         if project_changed {
             candidate.past.clear();
             candidate.future.clear();
@@ -4726,7 +4913,6 @@ impl Runtime {
             &candidate.future,
             &candidate.proposal,
         );
-        snapshot.source_version = source_version;
         snapshot.projection_status = ProjectionStatus::Current.as_str().into();
         candidate.operations.insert(
             operation.clone(),
@@ -4747,24 +4933,25 @@ impl Runtime {
                 )
             })?;
         if !project_changed && self.projection_status != ProjectionStatus::Current {
-            // The file already describes the authoritative project, but may
-            // use the v1 spelling or be missing the compatibility history.
-            // An explicit import is also a repair request in this case.
-            self.materialize_project_value(&candidate.project)?;
-            self.materialize_history_values(
-                candidate.revision,
-                &candidate.past,
-                &candidate.future,
+            // The file already describes the authoritative project but is not
+            // its canonical text (comments, spacing). An explicit import is
+            // also a repair request in this case.
+            write_bytes_atomic(
+                &self.project_path,
+                kernel::print(&candidate.project).as_bytes(),
             )?;
             self.projection_status = ProjectionStatus::Current;
             self.projection_digest = projection_digest(&self.project_path).ok();
         }
-        let imported_project = candidate.project.clone();
+        let change = change_to(&candidate.project, None, None);
+        let change = Change {
+            document: Some(kernel::print(&candidate.project)),
+            ..change
+        };
         self.commit_projection_import(
             candidate,
             JournalEvent::ProjectionImport {
-                project: imported_project,
-                source_version,
+                change,
                 operation: Some(JournalOperation {
                     key: operation,
                     record: operation_record,
@@ -4775,13 +4962,20 @@ impl Runtime {
 
     fn repair_projection(&mut self) -> Result<StateSnapshot, RuntimeError> {
         self.materialize_project()?;
-        self.materialize_history()?;
         self.projection_status = ProjectionStatus::Current;
         self.projection_digest = Some(projection_digest(&self.project_path)?);
         self.persist_checkpoint()?;
         truncate_journal(&self.journal_path)?;
         self.journal_records_since_checkpoint = 0;
         Ok(self.snapshot())
+    }
+
+    fn document(&self, annotated: bool) -> String {
+        if annotated {
+            kernel::print_annotated(&self.project)
+        } else {
+            kernel::print(&self.project)
+        }
     }
 
     fn reconcile_abandoned_jobs(&mut self) -> bool {
@@ -4812,15 +5006,67 @@ pub fn validate_actor(actor: &str) -> Result<(), RuntimeError> {
     }
 }
 
-fn domain_error(error: cut_domain::DomainError) -> RuntimeError {
+fn domain_error(error: v2::DomainError) -> RuntimeError {
     RuntimeError::new(error.code, error.message)
 }
 
-/// Convert a validated canonical project to the JSON representation used by
-/// the protocol and compatibility projections.  This is intentionally a
-/// boundary helper; the runtime actor stores only `Project`.
-fn project_value(project: &Project) -> Value {
+/// The v2 JSON that snapshots carry for v2 clients.
+fn project_value(project: &v2::Project) -> Value {
     serde_json::to_value(project).expect("validated Cut projects serialize")
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Direction {
+    Undo,
+    Redo,
+}
+
+impl Direction {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Undo => "undo",
+            Self::Redo => "redo",
+        }
+    }
+
+    fn action(self) -> JournalAction {
+        match self {
+            Self::Undo => JournalAction::Undo,
+            Self::Redo => JournalAction::Redo,
+        }
+    }
+}
+
+/// How to journal a change that leaves `project`.
+fn change_to(project: &Project, script: Option<String>, label: Option<String>) -> Change {
+    let text = kernel::print(project);
+    let digest = sha256_hex(text.as_bytes());
+    match script {
+        Some(script) => Change {
+            script: Some(script),
+            document: None,
+            label: None,
+            digest,
+        },
+        None => Change {
+            script: None,
+            document: label.is_some().then_some(text),
+            label,
+            digest,
+        },
+    }
+}
+
+/// Fail a replay that does not reproduce the journaled document.
+fn verify_change(change: &Change, project: &Project, sequence: u64) -> Result<(), RuntimeError> {
+    if sha256_hex(kernel::print(project).as_bytes()) == change.digest {
+        Ok(())
+    } else {
+        Err(RuntimeError::new(
+            "JOURNAL_REPLAY_MISMATCH",
+            format!("journal record {sequence} did not reproduce its project"),
+        ))
+    }
 }
 
 fn validate_request_identity(actor: &str, key: &str) -> Result<(), RuntimeError> {
@@ -4834,31 +5080,54 @@ fn validate_request_identity(actor: &str, key: &str) -> Result<(), RuntimeError>
     Ok(())
 }
 
-fn load_bootstrap_project(path: &Path) -> Result<(Project, u8), RuntimeError> {
-    if !path.is_file() {
-        return Ok((cut_domain::empty_project(), 2));
+/// The project of a directory without runtime state: `project.cut`, else a
+/// one-time import of `project.cut.json` (left untouched) with its
+/// warnings, else an empty project.
+fn load_bootstrap_project(directory: &Path) -> Result<(Project, Vec<String>), RuntimeError> {
+    let document = directory.join(PROJECT_FILE);
+    if document.is_file() {
+        let text = fs::read_to_string(&document).map_err(io_error)?;
+        return Ok((kernel::parse(&text)?, Vec::new()));
     }
-    let text = fs::read_to_string(path).map_err(io_error)?;
-    let value: Value = serde_json::from_str(&text)
-        .map_err(|error| RuntimeError::new("INVALID_PROJECT", error.to_string()))?;
-    match cut_domain::parse_versioned(&value).map_err(domain_error)? {
-        cut_domain::VersionedProject::V1(legacy) => Ok((
-            cut_domain::migrate_v1_to_v2(&legacy).map_err(domain_error)?,
-            1,
-        )),
-        cut_domain::VersionedProject::V2(project) => Ok((project, 2)),
+    let legacy = directory.join(LEGACY_PROJECT_FILE);
+    if !legacy.is_file() {
+        return Ok((kernel::empty_project(), Vec::new()));
     }
+    let text = fs::read_to_string(&legacy).map_err(io_error)?;
+    let imported = cut_interchange::v2::import_json(&text).map_err(|errors| {
+        RuntimeError::new(
+            "INVALID_PROJECT",
+            format!(
+                "{LEGACY_PROJECT_FILE} could not be imported: {}",
+                errors.join("; ")
+            ),
+        )
+    })?;
+    let mut warnings = vec![format!(
+        "imported {LEGACY_PROJECT_FILE} into {PROJECT_FILE}; {LEGACY_PROJECT_FILE} is no longer read or written"
+    )];
+    warnings.extend(imported.warnings);
+    Ok((imported.project, warnings))
 }
 
-fn validate_journal_history_entry(entry: &JournalHistoryEntry) -> Result<(), RuntimeError> {
-    let _ = cut_domain::serialize_command(&entry.command).map_err(domain_error)?;
-    let _ = cut_domain::serialize_command(&entry.inverse).map_err(domain_error)?;
-    // Serialization above validates the command shape without pretending that
-    // an inverse can be applied to an unrelated project.
+/// Move a pre-kernel cutd's checkpoint and journal aside, unchanged.
+fn preserve_legacy_state(directory: &Path) -> Result<(), RuntimeError> {
+    for (from, suffix) in [
+        (CHECKPOINT_FILE, "checkpoint.json"),
+        (CHECKPOINT_TEMP_FILE, "checkpoint.json.tmp"),
+        (JOURNAL_FILE, "journal"),
+    ] {
+        let from = directory.join(from);
+        if from.exists() {
+            let to = directory.join(format!("{LEGACY_STATE_PREFIX}.{suffix}"));
+            fs::rename(&from, &to).map_err(io_error)?;
+        }
+    }
+    sync_parent_dir(directory);
     Ok(())
 }
 
-fn bound_history(entries: &mut Vec<JournalHistoryEntry>) {
+fn bound_history(entries: &mut Vec<HistoryEntry>) {
     if entries.len() > MAX_HISTORY_ENTRIES {
         let excess = entries.len() - MAX_HISTORY_ENTRIES;
         entries.drain(..excess);
@@ -5007,6 +5276,8 @@ fn truncate_journal(path: &Path) -> Result<(), RuntimeError> {
     file.sync_all().map_err(io_error)
 }
 
+/// Whether `project.cut` holds `expected`. Formatting and comments do not
+/// matter; the parsed project does.
 fn inspect_projection(path: &Path, expected: &Project) -> ProjectionStatus {
     if !path.is_file() {
         return ProjectionStatus::Missing;
@@ -5014,19 +5285,8 @@ fn inspect_projection(path: &Path, expected: &Project) -> ProjectionStatus {
     let Ok(text) = fs::read_to_string(path) else {
         return ProjectionStatus::Diverged;
     };
-    let Ok(value) = serde_json::from_str::<Value>(&text) else {
-        return ProjectionStatus::Diverged;
-    };
-    match cut_domain::parse_versioned(&value) {
-        Ok(cut_domain::VersionedProject::V1(legacy)) => {
-            match cut_domain::migrate_v1_to_v2(&legacy) {
-                Ok(project) if project == *expected => ProjectionStatus::Current,
-                _ => ProjectionStatus::Diverged,
-            }
-        }
-        Ok(cut_domain::VersionedProject::V2(project)) if project == *expected => {
-            ProjectionStatus::Current
-        }
+    match kernel::parse(&text) {
+        Ok(project) if project == *expected => ProjectionStatus::Current,
         _ => ProjectionStatus::Diverged,
     }
 }
@@ -5040,14 +5300,29 @@ fn projection_digest(path: &Path) -> Result<String, RuntimeError> {
     Ok(sha256_hex(&bytes))
 }
 
-fn load_checkpoint(directory: &Path) -> Result<Option<PersistedCheckpoint>, RuntimeError> {
+/// What a directory's checkpoint holds.
+enum Loaded {
+    None,
+    Current(Box<PersistedCheckpoint>),
+    /// A checkpoint written by a pre-kernel cutd.
+    Legacy,
+}
+
+fn load_checkpoint(directory: &Path) -> Result<Loaded, RuntimeError> {
     let checkpoint_path = directory.join(CHECKPOINT_FILE);
     let temporary_path = directory.join(CHECKPOINT_TEMP_FILE);
+    for path in [&checkpoint_path, &temporary_path] {
+        if path.is_file()
+            && checkpoint_format(path).is_some_and(|format| format < CHECKPOINT_VERSION)
+        {
+            return Ok(Loaded::Legacy);
+        }
+    }
     if !checkpoint_path.is_file() && temporary_path.is_file() {
         let value = read_checkpoint(&temporary_path)?;
         replace_file(&temporary_path, &checkpoint_path)?;
         sync_parent_dir(directory);
-        return Ok(Some(value));
+        return Ok(Loaded::Current(Box::new(value)));
     }
     if checkpoint_path.is_file() {
         match read_checkpoint(&checkpoint_path) {
@@ -5057,7 +5332,7 @@ fn load_checkpoint(directory: &Path) -> Result<Option<PersistedCheckpoint>, Runt
                 if temporary_path.is_file() {
                     let _ = fs::remove_file(temporary_path);
                 }
-                return Ok(Some(value));
+                return Ok(Loaded::Current(Box::new(value)));
             }
             Err(canonical_error) if temporary_path.is_file() => {
                 // A manually interrupted/corrupted canonical file can still
@@ -5073,12 +5348,22 @@ fn load_checkpoint(directory: &Path) -> Result<Option<PersistedCheckpoint>, Runt
                 })?;
                 replace_file(&temporary_path, &checkpoint_path)?;
                 sync_parent_dir(directory);
-                return Ok(Some(value));
+                return Ok(Loaded::Current(Box::new(value)));
             }
             Err(error) => return Err(error),
         }
     }
-    Ok(None)
+    Ok(Loaded::None)
+}
+
+/// The format version a checkpoint file declares, if it is readable.
+fn checkpoint_format(path: &Path) -> Option<u64> {
+    let text = fs::read_to_string(path).ok()?;
+    let value: Value = serde_json::from_str(&text).ok()?;
+    value
+        .get("format_version")
+        .or_else(|| value.get("formatVersion"))
+        .and_then(Value::as_u64)
 }
 
 fn read_checkpoint(path: &Path) -> Result<PersistedCheckpoint, RuntimeError> {
@@ -5095,28 +5380,6 @@ fn read_checkpoint(path: &Path) -> Result<PersistedCheckpoint, RuntimeError> {
                 "checkpoint format_version is required",
             )
         })?;
-    if format_version == 1 {
-        let legacy: LegacyPersistedCheckpoint = serde_json::from_value(value)
-            .map_err(|error| RuntimeError::new("INVALID_CHECKPOINT", error.to_string()))?;
-        return Ok(PersistedCheckpoint {
-            format_version: CHECKPOINT_VERSION,
-            project: legacy.project,
-            revision: legacy.revision,
-            // v1 checkpoints retained full snapshots. Do not carry that
-            // unbounded representation into the journal runtime; the current
-            // project remains authoritative and older undo entries are
-            // intentionally discarded at this one-time format boundary.
-            past: Vec::new(),
-            future: Vec::new(),
-            journal_sequence: 0,
-            operations: legacy.operations,
-            imports: legacy.imports,
-            proposal: legacy.proposal,
-            jobs: HashMap::new(),
-            source_version: 2,
-            projection_digest: None,
-        });
-    }
     if format_version != CHECKPOINT_VERSION {
         return Err(RuntimeError::new(
             "CHECKPOINT_VERSION_UNSUPPORTED",
@@ -5130,6 +5393,11 @@ fn read_checkpoint(path: &Path) -> Result<PersistedCheckpoint, RuntimeError> {
 fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), RuntimeError> {
     let bytes = serde_json::to_vec_pretty(value)
         .map_err(|error| RuntimeError::new("SERIALIZE_ERROR", error.to_string()))?;
+    write_bytes_atomic(path, &bytes)
+}
+
+/// Write through a synced temporary file and an atomic rename.
+fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), RuntimeError> {
     let temporary_path = atomic_temp_path(path);
     let result = (|| {
         let mut file = OpenOptions::new()
@@ -5138,7 +5406,7 @@ fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), Runtime
             .write(true)
             .open(&temporary_path)
             .map_err(io_error)?;
-        file.write_all(&bytes).map_err(io_error)?;
+        file.write_all(bytes).map_err(io_error)?;
         file.sync_all().map_err(io_error)?;
         replace_file(&temporary_path, path)?;
         if let Some(parent) = path.parent() {
@@ -5385,8 +5653,8 @@ fn collect_structured_diff(
 const MAX_PROPOSAL_IMPACTS: usize = 128;
 
 fn derive_proposal_impacts(
-    before: &Project,
-    after: &Project,
+    before: &v2::Project,
+    after: &v2::Project,
     diff: &[ProposalChange],
     diff_truncated: bool,
 ) -> Vec<ProposalImpact> {
@@ -5611,10 +5879,10 @@ fn push_impact(impacts: &mut Vec<ProposalImpact>, impact: ProposalImpact) -> boo
 
 struct ClipLocation<'a> {
     track_id: String,
-    clip: &'a cut_domain::Clip,
+    clip: &'a v2::Clip,
 }
 
-fn clip_locations<'a>(project: &'a Project) -> BTreeMap<String, ClipLocation<'a>> {
+fn clip_locations<'a>(project: &'a v2::Project) -> BTreeMap<String, ClipLocation<'a>> {
     project
         .tracks
         .iter()
@@ -5632,7 +5900,7 @@ fn clip_locations<'a>(project: &'a Project) -> BTreeMap<String, ClipLocation<'a>
         .collect()
 }
 
-fn clip_timeline_range(clip: &cut_domain::Clip) -> ProposalTimeRange {
+fn clip_timeline_range(clip: &v2::Clip) -> ProposalTimeRange {
     let start = if clip.timeline_start.is_finite() {
         clip.timeline_start.max(0.0)
     } else {
@@ -5648,7 +5916,7 @@ fn clip_timeline_range(clip: &cut_domain::Clip) -> ProposalTimeRange {
     }
 }
 
-fn clip_source_range(clip: &cut_domain::Clip) -> Option<ProposalTimeRange> {
+fn clip_source_range(clip: &v2::Clip) -> Option<ProposalTimeRange> {
     match (clip.source_in, clip.source_out) {
         (Some(start), Some(end)) if start.is_finite() && end.is_finite() && end > start => {
             Some(ProposalTimeRange { start, end })
@@ -5661,8 +5929,8 @@ fn append_clip_property_impacts(
     impacts: &mut Vec<ProposalImpact>,
     clip_id: &str,
     track_id: &str,
-    before: &cut_domain::Clip,
-    after: &cut_domain::Clip,
+    before: &v2::Clip,
+    after: &v2::Clip,
 ) -> bool {
     let before = serde_json::to_value(before).expect("clip serializes");
     let after = serde_json::to_value(after).expect("clip serializes");
@@ -5705,7 +5973,7 @@ fn append_clip_property_impacts(
     true
 }
 
-fn overlay_locations(project: &Project) -> BTreeMap<String, (&cut_domain::Overlay, usize)> {
+fn overlay_locations(project: &v2::Project) -> BTreeMap<String, (&v2::Overlay, usize)> {
     project
         .overlays
         .iter()
@@ -5722,8 +5990,8 @@ fn overlay_locations(project: &Project) -> BTreeMap<String, (&cut_domain::Overla
 
 fn append_project_setting_impacts(
     impacts: &mut Vec<ProposalImpact>,
-    before: &Project,
-    after: &Project,
+    before: &v2::Project,
+    after: &v2::Project,
 ) {
     const COLLECTIONS: &[&str] = &[
         "sources",
@@ -5896,6 +6164,17 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A v2 command with a kernel equivalent that changes the project.
+    fn canvas_command(width: u32) -> Value {
+        json!({"type":"set_canvas","width":width,"height":1080})
+    }
+
+    fn has_marker(project: &Value, id: &str) -> bool {
+        project["markers"]
+            .as_array()
+            .is_some_and(|markers| markers.iter().any(|marker| marker["id"] == id))
+    }
 
     fn runtime() -> Runtime {
         let directory = std::env::temp_dir().join(format!("cut-runtime-test-{}", unique_id()));
@@ -6123,14 +6402,14 @@ mod tests {
         fs::create_dir_all(&directory).expect("observation directory");
         let source = directory.join("source.mp4");
         fs::write(&source, b"source").expect("source");
-        let mut project = cut_domain::serialize_project(&cut_domain::empty_project()).unwrap();
+        let mut project = v2::serialize_project(&v2::empty_project()).unwrap();
         project["sources"] = json!([{
             "id": "source-1",
             "path": source.to_string_lossy(),
             "duration": 8.0
         }]);
         fs::write(
-            directory.join(PROJECT_FILE),
+            directory.join(LEGACY_PROJECT_FILE),
             serde_json::to_vec_pretty(&project).unwrap(),
         )
         .expect("project");
@@ -6241,7 +6520,7 @@ mod tests {
                     }),
                     json!({
                         "idempotencyKey": "agent-accept-2",
-                        "commands": [{"type":"set_metadata","patch":{"intent":"approved"}}]
+                        "commands": [{"type":"add_marker","marker":{"id":"intent","time":0}}]
                     }),
                 ],
             )
@@ -6255,7 +6534,7 @@ mod tests {
             .unwrap();
         assert_eq!(accepted.revision, 1);
         assert!(accepted.can_undo);
-        assert_eq!(accepted.project["metadata"]["intent"], "approved");
+        assert!(has_marker(&accepted.project, "intent"));
         assert!(matches!(
             accepted.pending_proposal,
             Some(PendingProposal::Accepted {
@@ -6376,7 +6655,7 @@ mod tests {
                 0,
                 &[json!({
                     "idempotencyKey": "agent-receipt",
-                    "commands": [{"type":"set_metadata","patch":{"approved":true}}]
+                    "commands": [{"type":"add_marker","marker":{"id":"approved","time":0}}]
                 })],
             )
             .unwrap();
@@ -6389,7 +6668,7 @@ mod tests {
             .unwrap();
         let later = runtime
             .apply(
-                json!({"type":"set_metadata","patch":{"later":true}}),
+                json!({"type":"add_marker","marker":{"id":"later","time":0}}),
                 Some(first.revision),
             )
             .unwrap();
@@ -6400,8 +6679,8 @@ mod tests {
             .unwrap();
         assert_eq!(replay.revision, first.revision);
         assert_eq!(replay.project, first.project);
-        assert_eq!(replay.project["metadata"]["approved"], true);
-        assert!(replay.project["metadata"].get("later").is_none());
+        assert!(has_marker(&replay.project, "approved"));
+        assert!(!has_marker(&replay.project, "later"));
 
         let error = runtime
             .accept_proposal(&proposal_id, "ui", "accept-other", 0)
@@ -6428,7 +6707,7 @@ mod tests {
         };
         runtime
             .apply(
-                json!({"type":"set_metadata","patch":{"changed":true}}),
+                json!({"type":"add_marker","marker":{"id":"changed","time":0}}),
                 Some(0),
             )
             .unwrap();
@@ -6506,12 +6785,19 @@ mod tests {
             "cam-a"
         );
 
+        // A subtitle file has no kernel equivalent; captions do.
+        let subtitle_file = runtime.apply(
+            json!({"type":"add_overlay","overlay":{"id":"subs-0","type":"subtitles","path":"/media/subs.srt"}}),
+            Some(1),
+        );
+        assert_eq!(subtitle_file.unwrap_err().code, "NO_EQUIVALENT");
         runtime
             .apply(
-                json!({"type":"add_overlay","overlay":{"id":"subs-1","type":"subtitles","path":"/media/subs.srt"}}),
+                json!({"type":"add_overlay","overlay":{"id":"subs-1","type":"captions","cues":[{"start":1,"end":2,"text":"Hi"}]}}),
                 Some(1),
             )
             .unwrap();
+        assert!(runtime.document(false).contains("track subs-1 subtitle"));
         assert_eq!(
             runtime.snapshot().project["overlays"]
                 .as_array()
@@ -6527,7 +6813,7 @@ mod tests {
         assert_eq!(duplicate_source.unwrap_err().code, "INVALID_COMMAND");
 
         let duplicate_overlay = runtime.apply(
-            json!({"type":"add_overlay","overlay":{"id":"subs-1","type":"subtitles","path":"/other.srt"}}),
+            json!({"type":"add_overlay","overlay":{"id":"subs-1","type":"captions","cues":[{"start":3,"end":4,"text":"Again"}]}}),
             Some(2),
         );
         assert_eq!(duplicate_overlay.unwrap_err().code, "INVALID_COMMAND");
@@ -6581,6 +6867,7 @@ mod tests {
             std::env::temp_dir().join(format!("cut-runtime-persist-fail-{}", unique_id()));
         let mut runtime = Runtime::open(&directory).unwrap();
         let before = runtime.snapshot();
+        let before_document = runtime.document(false);
         // The projection is deliberately made unrenamable. The journal commit
         // must still advance the authoritative runtime state and survive a
         // restart after the old projection is restored.
@@ -6597,11 +6884,7 @@ mod tests {
         assert!(directory.join(JOURNAL_FILE).is_file());
         drop(runtime);
         fs::remove_dir_all(directory.join(PROJECT_FILE)).unwrap();
-        fs::write(
-            directory.join(PROJECT_FILE),
-            serde_json::to_vec_pretty(&before.project).unwrap(),
-        )
-        .unwrap();
+        fs::write(directory.join(PROJECT_FILE), &before_document).unwrap();
         let reopened = Runtime::open(&directory).unwrap();
         assert_eq!(reopened.snapshot().revision, committed.revision);
         assert!(reopened.snapshot().project["tracks"]
@@ -6621,16 +6904,17 @@ mod tests {
         let mut runtime = Runtime::open(&directory).unwrap();
         let first = runtime
             .apply(
-                json!({"type":"set_metadata","patch":{"first":true}}),
+                json!({"type":"add_marker","marker":{"id":"first","time":0}}),
                 Some(0),
             )
             .unwrap();
+        let first_document = runtime.document(false);
 
         fs::remove_file(directory.join(PROJECT_FILE)).unwrap();
         fs::create_dir(directory.join(PROJECT_FILE)).unwrap();
         let second = runtime
             .apply(
-                json!({"type":"set_metadata","patch":{"second":true}}),
+                json!({"type":"add_marker","marker":{"id":"second","time":0}}),
                 Some(first.revision),
             )
             .unwrap();
@@ -6640,44 +6924,36 @@ mod tests {
         // The projection is the last successfully published journal state,
         // while the second mutation remains durable in the journal.
         fs::remove_dir_all(directory.join(PROJECT_FILE)).unwrap();
-        fs::write(
-            directory.join(PROJECT_FILE),
-            serde_json::to_vec_pretty(&first.project).unwrap(),
-        )
-        .unwrap();
+        fs::write(directory.join(PROJECT_FILE), &first_document).unwrap();
         let reopened = Runtime::open(&directory).unwrap();
         assert_eq!(reopened.snapshot().revision, second.revision);
-        assert_eq!(reopened.snapshot().project["metadata"]["second"], true);
+        assert!(has_marker(&reopened.snapshot().project, "second"));
         assert_eq!(reopened.snapshot().projection_status, "current");
         drop(reopened);
 
         // An edit that does not match any recognized journal state must remain
         // visible on disk and keep subsequent mutations blocked.
-        let mut edited: Value =
-            serde_json::from_str(&fs::read_to_string(directory.join(PROJECT_FILE)).unwrap())
-                .unwrap();
-        edited["name"] = json!("external edit");
-        fs::write(
-            directory.join(PROJECT_FILE),
-            serde_json::to_vec_pretty(&edited).unwrap(),
-        )
-        .unwrap();
+        let edited = fs::read_to_string(directory.join(PROJECT_FILE))
+            .unwrap()
+            .replace(
+                "project name=\"Untitled project\"",
+                "project name=\"external edit\"",
+            );
+        fs::write(directory.join(PROJECT_FILE), edited).unwrap();
         let mut diverged = Runtime::open(&directory).unwrap();
         assert_eq!(diverged.snapshot().projection_status, "diverged");
         assert_eq!(
             diverged
                 .apply(
-                    json!({"type":"set_metadata","patch":{"blocked":true}}),
+                    json!({"type":"add_marker","marker":{"id":"blocked","time":0}}),
                     Some(second.revision),
                 )
                 .unwrap_err()
                 .code,
             "PROJECTION_DIVERGED"
         );
-        let on_disk: Value =
-            serde_json::from_str(&fs::read_to_string(directory.join(PROJECT_FILE)).unwrap())
-                .unwrap();
-        assert_eq!(on_disk["name"], "external edit");
+        let on_disk = fs::read_to_string(directory.join(PROJECT_FILE)).unwrap();
+        assert!(on_disk.contains("project name=\"external edit\""));
         drop(diverged);
         let _ = fs::remove_dir_all(directory);
     }
@@ -6688,13 +6964,14 @@ mod tests {
             std::env::temp_dir().join(format!("cut-runtime-journal-threshold-{}", unique_id()));
         let mut runtime = Runtime::open(&directory).unwrap();
         let before = runtime.snapshot();
+        let before_document = runtime.document(false);
         runtime.journal_records_since_checkpoint = CHECKPOINT_INTERVAL - 1;
         fs::remove_file(directory.join(PROJECT_FILE)).unwrap();
         fs::create_dir(directory.join(PROJECT_FILE)).unwrap();
 
         let committed = runtime
             .apply(
-                json!({"type":"set_metadata","patch":{"threshold":true}}),
+                json!({"type":"add_marker","marker":{"id":"threshold","time":0}}),
                 Some(before.revision),
             )
             .unwrap();
@@ -6707,14 +6984,10 @@ mod tests {
         drop(runtime);
 
         fs::remove_dir_all(directory.join(PROJECT_FILE)).unwrap();
-        fs::write(
-            directory.join(PROJECT_FILE),
-            serde_json::to_vec_pretty(&before.project).unwrap(),
-        )
-        .unwrap();
+        fs::write(directory.join(PROJECT_FILE), &before_document).unwrap();
         let reopened = Runtime::open(&directory).unwrap();
         assert_eq!(reopened.snapshot().revision, committed.revision);
-        assert_eq!(reopened.snapshot().project["metadata"]["threshold"], true);
+        assert!(has_marker(&reopened.snapshot().project, "threshold"));
         assert_eq!(reopened.snapshot().projection_status, "current");
         drop(reopened);
         let _ = fs::remove_dir_all(directory);
@@ -6726,28 +6999,22 @@ mod tests {
             std::env::temp_dir().join(format!("cut-runtime-repair-status-{}", unique_id()));
         let mut runtime = Runtime::open(&directory).unwrap();
         let before = runtime.snapshot();
+        let before_document = runtime.document(false);
         let committed = runtime
-            .apply(
-                json!({"type":"set_metadata","patch":{"repair":true}}),
-                Some(before.revision),
-            )
+            .apply(canvas_command(1280), Some(before.revision))
             .unwrap();
         drop(runtime);
 
-        // Leave the last checkpointed projection in place so journal replay
-        // recognizes this as an internal stale projection. Make only the
-        // compatibility history publication fail during startup repair.
-        fs::write(
-            directory.join(PROJECT_FILE),
-            serde_json::to_vec_pretty(&before.project).unwrap(),
-        )
-        .unwrap();
-        fs::remove_file(directory.join(HISTORY_FILE)).unwrap();
-        fs::create_dir(directory.join(HISTORY_FILE)).unwrap();
+        // Put back the last checkpointed document so journal replay
+        // recognizes it as an internal stale projection and repairs it.
+        fs::write(directory.join(PROJECT_FILE), before_document).unwrap();
         let reopened = Runtime::open(&directory).unwrap();
         assert_eq!(reopened.snapshot().revision, committed.revision);
-        assert_eq!(reopened.snapshot().project["metadata"]["repair"], true);
+        assert_eq!(reopened.snapshot().project["width"], 1280.0);
         assert_eq!(reopened.snapshot().projection_status, "current");
+        assert!(fs::read_to_string(directory.join(PROJECT_FILE))
+            .unwrap()
+            .contains("size=1280x1080"));
         drop(reopened);
         let _ = fs::remove_dir_all(directory);
     }
@@ -6772,7 +7039,7 @@ mod tests {
             .apply_request(
                 "ui",
                 "request-1",
-                json!({"type":"set_metadata","patch":{"changed":true}}),
+                json!({"type":"add_marker","marker":{"id":"changed","time":0}}),
                 1,
             )
             .unwrap_err();
@@ -6793,7 +7060,7 @@ mod tests {
                     0,
                     &[json!({
                         "idempotencyKey":"agent-restart",
-                        "commands":[{"type":"set_metadata","patch":{"survives":true}}]
+                        "commands":[{"type":"add_marker","marker":{"id":"survives","time":0}}]
                     })],
                 )
                 .unwrap();
@@ -6834,7 +7101,7 @@ mod tests {
                     0,
                     &[json!({
                         "idempotencyKey":"agent-accepted-restart",
-                        "commands":[{"type":"set_metadata","patch":{"persisted":true}}]
+                        "commands":[{"type":"add_marker","marker":{"id":"persisted","time":0}}]
                     })],
                 )
                 .unwrap();
@@ -6850,7 +7117,7 @@ mod tests {
         let mut reopened = Runtime::open(&directory).unwrap();
         reopened
             .apply(
-                json!({"type":"set_metadata","patch":{"later":true}}),
+                json!({"type":"add_marker","marker":{"id":"later","time":0}}),
                 Some(1),
             )
             .unwrap();
@@ -6858,8 +7125,8 @@ mod tests {
             .accept_proposal(&proposal_id, "ui", "accept-persisted", 0)
             .unwrap();
         assert_eq!(replay.revision, 1);
-        assert_eq!(replay.project["metadata"]["persisted"], true);
-        assert!(replay.project["metadata"].get("later").is_none());
+        assert!(has_marker(&replay.project, "persisted"));
+        assert!(!has_marker(&replay.project, "later"));
         drop(reopened);
         let _ = fs::remove_dir_all(directory);
     }
@@ -6918,6 +7185,8 @@ mod tests {
             impacts: None,
             observation: None,
             observations: None,
+            script: None,
+            document_diff: None,
         })
         .unwrap();
         assert_eq!(
@@ -6956,7 +7225,7 @@ mod tests {
 
     #[test]
     fn semantic_proposal_impacts_cover_clip_geometry_and_properties() {
-        let before = cut_domain::parse_project(&json!({
+        let before = v2::parse_project(&json!({
             "version": 2,
             "fps": 30.0,
             "sources": [{"id":"source-1","path":"shot.mp4","duration":12.0}],
@@ -6980,7 +7249,7 @@ mod tests {
             "markers": []
         }))
         .expect("valid project");
-        let after = cut_domain::parse_project(&json!({
+        let after = v2::parse_project(&json!({
             "version": 2,
             "fps": 30.0,
             "sources": [{"id":"source-1","path":"shot.mp4","duration":12.0}],
@@ -7079,7 +7348,7 @@ mod tests {
                 "actor":"ui",
                 "idempotencyKey":"",
                 "baseRevision":0,
-                "command":{"type":"set_metadata","patch":{"x":true}}
+                "command":{"type":"add_marker","marker":{"id":"x","time":0}}
             }),
             json!({
                 "protocolVersion":1,
@@ -7194,12 +7463,24 @@ mod tests {
                 media.to_str().unwrap(),
                 0,
                 Some(json!({"duration":2.5,"width":1920,"height":1080})),
-                Some(json!({"id":"overlay-1","type":"subtitles"})),
+                Some(json!({"id":"overlay-1","type":"captions","cues":[{"start":0,"end":1,"text":"Hi"}]})),
             )
             .unwrap();
         assert_eq!(state.revision, 1);
         assert_eq!(state.sources[0]["duration"], 2.5);
         assert_eq!(state.project["overlays"][0]["id"], "overlay-1");
+        let unsupported = runtime
+            .import_media_request(
+                "ui",
+                "unsupported-overlay",
+                media.to_str().unwrap(),
+                1,
+                None,
+                Some(json!({"id":"overlay-2","type":"subtitles"})),
+            )
+            .unwrap_err();
+        assert_eq!(unsupported.code, "NO_EQUIVALENT");
+        assert_eq!(runtime.snapshot().revision, 1);
         drop(runtime);
         let _ = fs::remove_dir_all(directory);
     }
@@ -7213,7 +7494,7 @@ mod tests {
                 0,
                 &[json!({
                     "idempotencyKey":"agent-reject-receipt",
-                    "commands":[{"type":"set_metadata","patch":{"proposed":true}}]
+                    "commands":[{"type":"add_marker","marker":{"id":"proposed","time":0}}]
                 })],
             )
             .unwrap();
@@ -7226,7 +7507,7 @@ mod tests {
             .unwrap();
         runtime
             .apply(
-                json!({"type":"set_metadata","patch":{"later":true}}),
+                json!({"type":"add_marker","marker":{"id":"later","time":0}}),
                 Some(first.revision),
             )
             .unwrap();
@@ -7253,25 +7534,24 @@ mod tests {
             )
             .unwrap();
         let journal = fs::read_to_string(directory.join(JOURNAL_FILE)).unwrap();
-        assert!(journal.contains("\"command\""));
-        assert!(journal.contains("\"inverse\""));
-        assert!(!journal.contains("\"before\""));
-        assert!(!journal.contains("\"after\""));
+        assert!(
+            journal.contains("\"script\":\"track add titles video\\n\""),
+            "{journal}"
+        );
+        assert!(journal.contains("\"digest\""));
+        assert!(!journal.contains("\"document\""));
 
         for index in 0..(MAX_HISTORY_ENTRIES + 8) {
             runtime
-                .apply(json!({"type":"set_metadata","patch":{"index":index}}), None)
+                .apply(canvas_command(1000 + 2 * index as u32), None)
                 .unwrap();
         }
-        let history: Value =
-            serde_json::from_str(&fs::read_to_string(directory.join(HISTORY_FILE)).unwrap())
-                .unwrap();
-        assert_eq!(
-            history["past"].as_array().unwrap().len(),
-            MAX_HISTORY_ENTRIES
-        );
-        assert!(history["future"].as_array().unwrap().is_empty());
+        assert_eq!(runtime.past.len(), MAX_HISTORY_ENTRIES);
+        assert!(runtime.future.is_empty());
         drop(runtime);
+        let reopened = Runtime::open(&directory).unwrap();
+        assert_eq!(reopened.past.len(), MAX_HISTORY_ENTRIES);
+        drop(reopened);
         let _ = fs::remove_dir_all(directory);
     }
 
@@ -7282,7 +7562,7 @@ mod tests {
         let mut runtime = Runtime::open(&directory).unwrap();
         for index in 0..(CHECKPOINT_INTERVAL + 1) {
             runtime
-                .apply(json!({"type":"set_metadata","patch":{"index":index}}), None)
+                .apply(canvas_command(1000 + 2 * index as u32), None)
                 .unwrap();
         }
         let checkpoint: Value =
@@ -7305,8 +7585,8 @@ mod tests {
         let reopened = Runtime::open(&directory).unwrap();
         assert_eq!(reopened.snapshot().revision, CHECKPOINT_INTERVAL + 1);
         assert_eq!(
-            reopened.snapshot().project["metadata"]["index"],
-            CHECKPOINT_INTERVAL
+            reopened.snapshot().project["width"],
+            f64::from(1000 + 2 * CHECKPOINT_INTERVAL as u32)
         );
         drop(reopened);
         let journal = fs::read_to_string(directory.join(JOURNAL_FILE)).unwrap();
@@ -7323,7 +7603,7 @@ mod tests {
         let mut runtime = Runtime::open(&directory).unwrap();
         runtime
             .apply(
-                json!({"type":"set_metadata","patch":{"saved":true}}),
+                json!({"type":"add_marker","marker":{"id":"saved","time":0}}),
                 Some(0),
             )
             .unwrap();
@@ -7334,40 +7614,82 @@ mod tests {
 
         let runtime = Runtime::open(&directory).unwrap();
         assert_eq!(runtime.snapshot().revision, 1);
-        assert_eq!(runtime.snapshot().project["metadata"]["saved"], true);
+        assert!(has_marker(&runtime.snapshot().project, "saved"));
         assert!(!directory.join(CHECKPOINT_TEMP_FILE).exists());
         drop(runtime);
         let _ = fs::remove_dir_all(directory);
     }
 
     #[test]
-    fn first_launch_migrates_v1_once_and_publishes_v2_projection() {
+    fn first_launch_imports_project_json_once_and_leaves_it_untouched() {
         let directory =
             std::env::temp_dir().join(format!("cut-runtime-v1-bootstrap-{}", unique_id()));
         fs::create_dir_all(&directory).unwrap();
-        fs::write(
-            directory.join(PROJECT_FILE),
-            serde_json::to_vec(&json!({
-                "version": 1,
-                "fps": 24,
-                "sources": [{"id":"src1","path":"clip.mp4","duration":4}],
-                "tracks": [{"id":"v1","clips":[{"id":"clip1","src":"src1","in":0,"out":4}]}],
-                "overlays": []
-            }))
-            .unwrap(),
-        )
+        let legacy = serde_json::to_vec(&json!({
+            "version": 1,
+            "fps": 24,
+            "sources": [{"id":"src1","path":"clip.mp4","duration":4}],
+            "tracks": [{"id":"v1","clips":[{"id":"clip1","src":"src1","in":0,"out":4}]}],
+            "overlays": []
+        }))
         .unwrap();
+        fs::write(directory.join(LEGACY_PROJECT_FILE), &legacy).unwrap();
         let runtime = Runtime::open(&directory).unwrap();
         let state = runtime.snapshot();
-        assert_eq!(state.source_version, 1);
+        assert_eq!(state.source_version, SOURCE_VERSION);
         assert_eq!(state.projection_status, "current");
         assert_eq!(state.project["version"], 2);
+        assert!(state.import_warnings[0].contains("imported project.cut.json"));
         assert!(directory.join(CHECKPOINT_FILE).is_file());
         drop(runtime);
-        let projection: Value =
-            serde_json::from_str(&fs::read_to_string(directory.join(PROJECT_FILE)).unwrap())
-                .unwrap();
-        assert_eq!(projection["version"], 2);
+        let document = fs::read_to_string(directory.join(PROJECT_FILE)).unwrap();
+        assert!(document.starts_with("cut 1\n"), "{document}");
+        assert!(document.contains("clip clip1 media=src1"), "{document}");
+        assert_eq!(
+            fs::read(directory.join(LEGACY_PROJECT_FILE)).unwrap(),
+            legacy
+        );
+
+        // project.cut is canonical from now on: a later project.cut.json is
+        // ignored.
+        fs::write(directory.join(LEGACY_PROJECT_FILE), b"{}").unwrap();
+        let reopened = Runtime::open(&directory).unwrap();
+        assert_eq!(reopened.snapshot().projection_status, "current");
+        assert!(reopened.document(false).contains("clip clip1"));
+        drop(reopened);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn state_from_a_v2_runtime_is_preserved_and_the_project_imported() {
+        let directory = std::env::temp_dir().join(format!("cut-runtime-v2-state-{}", unique_id()));
+        fs::create_dir_all(&directory).unwrap();
+        let mut project = v2::serialize_project(&v2::empty_project()).unwrap();
+        project["name"] = json!("From v2");
+        fs::write(
+            directory.join(LEGACY_PROJECT_FILE),
+            serde_json::to_vec(&project).unwrap(),
+        )
+        .unwrap();
+        let old_checkpoint = br#"{"format_version":2,"project":{},"revision":7}"#;
+        fs::write(directory.join(CHECKPOINT_FILE), old_checkpoint).unwrap();
+        fs::write(directory.join(JOURNAL_FILE), b"{\"format_version\":1}\n").unwrap();
+        let runtime = Runtime::open(&directory).unwrap();
+        let state = runtime.snapshot();
+        assert_eq!(state.revision, 0);
+        assert_eq!(state.project["name"], "From v2");
+        assert!(state
+            .import_warnings
+            .iter()
+            .any(|warning| warning.contains(LEGACY_STATE_PREFIX)));
+        assert_eq!(
+            fs::read(directory.join(format!("{LEGACY_STATE_PREFIX}.checkpoint.json"))).unwrap(),
+            old_checkpoint
+        );
+        assert!(directory
+            .join(format!("{LEGACY_STATE_PREFIX}.journal"))
+            .is_file());
+        drop(runtime);
         let _ = fs::remove_dir_all(directory);
     }
 
@@ -7378,26 +7700,23 @@ mod tests {
         let mut runtime = Runtime::open(&directory).unwrap();
         runtime
             .apply(
-                json!({"type":"set_metadata","patch":{"authoritative":true}}),
+                json!({"type":"add_marker","marker":{"id":"authoritative","time":0}}),
                 Some(0),
             )
             .unwrap();
         drop(runtime);
 
-        let mut edited: Value =
-            serde_json::from_str(&fs::read_to_string(directory.join(PROJECT_FILE)).unwrap())
-                .unwrap();
-        edited["name"] = json!("human edit");
+        let original = fs::read_to_string(directory.join(PROJECT_FILE)).unwrap();
         fs::write(
             directory.join(PROJECT_FILE),
-            serde_json::to_vec_pretty(&edited).unwrap(),
+            original.replace("Untitled project", "human edit"),
         )
         .unwrap();
 
         let mut runtime = Runtime::open(&directory).unwrap();
         assert_eq!(runtime.snapshot().projection_status, "diverged");
         let blocked = runtime.apply(
-            json!({"type":"set_metadata","patch":{"blocked":true}}),
+            json!({"type":"add_marker","marker":{"id":"blocked","time":0}}),
             Some(1),
         );
         assert_eq!(blocked.unwrap_err().code, "PROJECTION_DIVERGED");
@@ -7405,11 +7724,11 @@ mod tests {
         assert_eq!(repaired.projection_status, "current");
         assert_eq!(repaired.project["name"], "Untitled project");
 
-        let mut imported = repaired.project.clone();
-        imported["name"] = json!("explicit import");
+        // A text edit of the canonical document, made outside cutd.
         fs::write(
             directory.join(PROJECT_FILE),
-            serde_json::to_vec_pretty(&imported).unwrap(),
+            original.replace("Untitled project", "explicit import")
+                + "# a comment the import does not keep\n",
         )
         .unwrap();
         let imported_state = runtime
@@ -7498,7 +7817,7 @@ mod tests {
                 0,
                 &[json!({
                     "idempotencyKey": "preview-proposal",
-                    "commands": [{"type":"set_metadata","patch":{"title":"Preview"}}]
+                    "commands": [{"type":"add_marker","marker":{"id":"title","time":0}}]
                 })],
             )
             .unwrap();
@@ -7508,13 +7827,13 @@ mod tests {
         };
         let before_revision = runtime.snapshot().revision;
         let (before, after) = runtime.proposal_preview(&proposal_id).unwrap();
-        assert_eq!(before["metadata"].get("title"), None);
-        assert_eq!(after["metadata"]["title"], "Preview");
+        assert!(!has_marker(&before, "title"));
+        assert!(has_marker(&after, "title"));
         assert_eq!(runtime.snapshot().revision, before_revision);
 
         runtime
             .apply(
-                json!({"type":"set_metadata","patch":{"other":true}}),
+                json!({"type":"add_marker","marker":{"id":"other","time":0}}),
                 Some(0),
             )
             .unwrap();
@@ -7522,5 +7841,221 @@ mod tests {
             runtime.proposal_preview(&proposal_id).unwrap_err().code,
             "PROPOSAL_STALE"
         );
+    }
+
+    /// A project with media, a picture clip, and its linked sound.
+    fn kernel_runtime(label: &str) -> (Runtime, PathBuf) {
+        let directory = std::env::temp_dir().join(format!("cut-runtime-{label}-{}", unique_id()));
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join(PROJECT_FILE),
+            "cut 1\nproject name=\"Kernel\"\n\n\
+             media m1 path=\"a.mov\" rate=24 dur=00:01:00:00 video=1920x1080 audio=2ch@48000\n\n\
+             sequence s1 name=\"Main\" rate=24 size=1920x1080 audio=48000 start=00:00:00:00\n\
+             \x20 track V1 video\n\
+             \x20   clip c1 media=m1 src=00:00:00:00 at=00:00:00:00 dur=00:00:04:00 link=L1\n\
+             \x20 track A1 audio\n\
+             \x20   clip a1 media=m1 src=00:00:00:00 at=00:00:00:00 dur=00:00:04:00 link=L1\n",
+        )
+        .unwrap();
+        (Runtime::open(&directory).unwrap(), directory)
+    }
+
+    #[test]
+    fn v2_commands_with_kernel_equivalents_are_journaled_as_scripts() {
+        let (mut runtime, directory) = kernel_runtime("v2-split");
+        let state = runtime
+            .apply_request(
+                "ui",
+                "split",
+                json!({"type":"split_clip","clipId":"c1","atFrame":24,"newClipId":"c2"}),
+                0,
+            )
+            .unwrap();
+        assert_eq!(state.revision, 1);
+        // The linked sound split with the picture.
+        let document = runtime.document(false);
+        assert!(document.contains("clip c2 media=m1"), "{document}");
+        assert_eq!(document.matches("link=").count(), 4, "{document}");
+        assert_eq!(runtime.past[0].script, "split c1 at=00:00:01:00 as=c2\n");
+        let journal = fs::read_to_string(directory.join(JOURNAL_FILE)).unwrap();
+        assert!(journal.contains("split c1 at=00:00:01:00 as=c2"));
+        drop(runtime);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn v2_commands_without_equivalents_journal_their_result_and_replay() {
+        let (mut runtime, directory) = kernel_runtime("v2-bridge");
+        runtime
+            .apply_request(
+                "ui",
+                "opacity",
+                json!({"type":"update_clip","clipId":"c1","patch":{"opacity":0.5}}),
+                0,
+            )
+            .unwrap();
+        let document = runtime.document(false);
+        assert!(document.contains("set opacity=0.5"), "{document}");
+        assert_eq!(runtime.past[0].script, "# v2 update_clip");
+        drop(runtime);
+        let reopened = Runtime::open(&directory).unwrap();
+        assert_eq!(reopened.document(false), document);
+        assert!(reopened.snapshot().can_undo);
+        drop(reopened);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn typed_ops_apply_atomically_and_replay_by_key() {
+        let (mut runtime, directory) = kernel_runtime("ops");
+        let ops: Vec<EditOp> = serde_json::from_value(json!([
+            {"op": "split", "clip": "c1", "at": 48, "tail": "c2"},
+            {"op": "set", "clip": "c2", "props": {"opacity": 0.25}},
+            {"op": "add-marker", "at": 12, "name": "look", "color": "green"}
+        ]))
+        .unwrap();
+        let first = runtime
+            .apply_ops_request("ui", "ops-1", ops.clone(), 0)
+            .unwrap();
+        assert_eq!(first.revision, 1);
+        let replay = runtime.apply_ops_request("ui", "ops-1", ops, 0).unwrap();
+        assert_eq!(replay.revision, 1);
+        assert!(runtime.document(false).contains("set opacity=0.25"));
+        assert_eq!(
+            runtime.past[0].script,
+            "split c1 at=00:00:02:00 as=c2\nset c2 opacity=0.25\nmarker add at=00:00:00:12 name=\"look\" color=green\n"
+        );
+        // Any failing operation leaves the project unchanged.
+        let failing: Vec<EditOp> = serde_json::from_value(json!([
+            {"op": "trim", "clip": "c1", "edge": "out", "frames": -6},
+            {"op": "slip", "clip": "missing", "frames": 1}
+        ]))
+        .unwrap();
+        let before = runtime.document(false);
+        let error = runtime
+            .apply_ops_request("ui", "ops-2", failing, 1)
+            .unwrap_err();
+        assert_eq!(error.code, "INVALID_EDIT");
+        assert_eq!(runtime.document(false), before);
+        assert_eq!(runtime.snapshot().revision, 1);
+        drop(runtime);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn script_proposals_show_a_document_diff_and_apply_on_acceptance() {
+        let (mut runtime, directory) = kernel_runtime("script-proposal");
+        let staged = runtime
+            .stage_script_proposal("agent-1", 0, "trim c1 out -1s ripple", Vec::new())
+            .unwrap();
+        assert_eq!(staged.revision, 0);
+        let pending = serde_json::to_value(staged.pending_proposal.unwrap()).unwrap();
+        assert_eq!(pending["status"], "pending");
+        assert_eq!(pending["command"], Value::Null);
+        assert_eq!(pending["script"], "trim c1 out -24f ripple\n");
+        let diff = pending["documentDiff"].as_str().unwrap();
+        assert!(
+            diff.contains(
+                "-    clip c1 media=m1 src=00:00:00:00 at=00:00:00:00 dur=00:00:04:00 link=L1"
+            ),
+            "{diff}"
+        );
+        assert!(
+            diff.contains(
+                "+    clip c1 media=m1 src=00:00:00:00 at=00:00:00:00 dur=00:00:03:00 link=L1"
+            ),
+            "{diff}"
+        );
+        assert!(pending["impacts"].as_array().is_some_and(|i| !i.is_empty()));
+        let proposal_id = pending["proposalId"].as_str().unwrap().to_owned();
+        let crop = runtime
+            .accept_proposal_with_crop(
+                &proposal_id,
+                "ui",
+                "accept-crop",
+                0,
+                Some(json!({"clipId":"c1","crop":{"x":0,"y":0,"width":1,"height":1}})),
+            )
+            .unwrap_err();
+        assert_eq!(crop.code, "INVALID_REQUEST");
+
+        drop(runtime);
+        let mut runtime = Runtime::open(&directory).unwrap();
+        let accepted = runtime
+            .accept_proposal(&proposal_id, "ui", "accept-1", 0)
+            .unwrap();
+        assert_eq!(accepted.revision, 1);
+        assert!(runtime.document(false).contains("dur=00:00:03:00 link=L1"));
+        assert_eq!(runtime.past.len(), 1);
+        drop(runtime);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn history_snapshots_survive_checkpoints() {
+        let (mut runtime, directory) = kernel_runtime("history-checkpoint");
+        for index in 0..(CHECKPOINT_INTERVAL + 2) {
+            runtime
+                .apply_script_request(
+                    "ui",
+                    &format!("marker-{index}"),
+                    &format!("marker add at={index}f"),
+                    index,
+                )
+                .unwrap();
+        }
+        let expected = runtime.document(false);
+        drop(runtime);
+        let mut reopened = Runtime::open(&directory).unwrap();
+        assert_eq!(reopened.document(false), expected);
+        let revision = reopened.snapshot().revision;
+        for step in 0..(CHECKPOINT_INTERVAL + 2) {
+            reopened.undo(Some(revision + step)).unwrap();
+        }
+        let undone = reopened.document(false);
+        assert!(!undone.contains("marker mk"), "{undone}");
+        // Undone markers keep their ids retired.
+        assert!(undone.contains("retired=mk1,"), "{undone}");
+        drop(reopened);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn replay_refuses_a_record_that_does_not_reproduce_its_project() {
+        let (mut runtime, directory) = kernel_runtime("replay-digest");
+        runtime
+            .apply_script_request("ui", "trim", "trim c1 out -12f", 0)
+            .unwrap();
+        drop(runtime);
+        let journal = fs::read_to_string(directory.join(JOURNAL_FILE)).unwrap();
+        let mut record: JournalRecord = serde_json::from_str(journal.trim()).unwrap();
+        record.change.as_mut().unwrap().script = Some("trim c1 out -6f\n".into());
+        let record = seal_journal_record(record).unwrap();
+        fs::write(
+            directory.join(JOURNAL_FILE),
+            format!("{}\n", serde_json::to_string(&record).unwrap()),
+        )
+        .unwrap();
+        let error = Runtime::open(&directory).unwrap_err();
+        assert_eq!(error.code, "JOURNAL_REPLAY_MISMATCH");
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn get_document_returns_the_canonical_and_annotated_text() {
+        let (mut runtime, directory) = kernel_runtime("document");
+        match runtime
+            .execute(RuntimeRequest::GetDocument { annotated: true })
+            .unwrap()
+        {
+            RuntimeResponse::Document { revision, document } => {
+                assert_eq!(revision, 0);
+                assert!(document.contains("# ends 00:00:04:00"), "{document}");
+            }
+            other => panic!("expected a document, got {other:?}"),
+        }
+        drop(runtime);
+        let _ = fs::remove_dir_all(directory);
     }
 }

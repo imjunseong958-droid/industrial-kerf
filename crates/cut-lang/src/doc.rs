@@ -150,6 +150,9 @@ impl Parser<'_> {
         if let Some(name) = fields.take_text("name")? {
             self.project.name = name.to_owned();
         }
+        if let Some(retired) = fields.take_ids("retired")? {
+            self.project.retired.extend(retired);
+        }
         fields.finish(1)
     }
 
@@ -644,7 +647,12 @@ pub(crate) fn parse_marker_color(text: &str) -> Result<MarkerColor, String> {
 pub fn print_document(project: &Project, catalog: &Catalog, options: PrintOptions) -> String {
     let mut out = String::new();
     writeln!(out, "cut {VERSION}").unwrap();
-    writeln!(out, "project name={}", quote(&project.name)).unwrap();
+    write!(out, "project name={}", quote(&project.name)).unwrap();
+    if !project.retired.is_empty() {
+        let retired: Vec<&str> = project.retired.iter().map(Id::as_str).collect();
+        write!(out, " retired={}", retired.join(",")).unwrap();
+    }
+    out.push('\n');
     if !project.media.is_empty() {
         out.push('\n');
         for media in &project.media {
@@ -954,6 +962,27 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
         assert_eq!(printed, SAMPLE);
         let again = parse_document(&printed, Catalog::builtin()).unwrap();
         assert_eq!(again.project, document.project);
+    }
+
+    #[test]
+    fn retired_ids_round_trip_on_the_project_line() {
+        let text = SAMPLE.replace(
+            "project name=\"Short Film\"",
+            "project name=\"Short Film\" retired=L2,c4,c9",
+        );
+        let project = parse_document(&text, Catalog::builtin()).unwrap().project;
+        let retired: Vec<&str> = project.retired.iter().map(Id::as_str).collect();
+        assert_eq!(retired, ["L2", "c4", "c9"]);
+        assert_eq!(
+            print_document(&project, Catalog::builtin(), PrintOptions::default()),
+            text
+        );
+        let reused = SAMPLE.replace(
+            "project name=\"Short Film\"",
+            "project name=\"Short Film\" retired=c2",
+        );
+        let errors = parse_document(&reused, Catalog::builtin()).unwrap_err();
+        assert!(errors.iter().any(|d| d.code == "id.retired"), "{errors:?}");
     }
 
     #[test]

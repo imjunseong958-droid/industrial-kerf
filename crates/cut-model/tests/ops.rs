@@ -639,3 +639,34 @@ fn validation_reports_broken_invariants() {
         );
     }
 }
+
+#[test]
+fn deleted_ids_are_retired_and_never_reused() {
+    let project = scene();
+    let catalog = Catalog::builtin();
+    let victim = project.sequences[0].tracks[0]
+        .clips
+        .last()
+        .unwrap()
+        .id
+        .clone();
+    let (after, _) = apply(
+        &project,
+        catalog,
+        &[Op::Delete {
+            clips: vec![victim.clone()],
+        }],
+    )
+    .unwrap();
+    assert!(after.retired.contains(&victim));
+    let mut ids = after.id_gen();
+    let prefix = victim
+        .as_str()
+        .trim_end_matches(|c: char| c.is_ascii_digit());
+    assert_ne!(ids.next(prefix), victim);
+    let mut reused = after.clone();
+    reused.sequences[0].tracks[0].clips[0].id = victim.clone();
+    assert!(cut_model::validate(&reused, catalog)
+        .iter()
+        .any(|d| d.code == "id.retired"));
+}
