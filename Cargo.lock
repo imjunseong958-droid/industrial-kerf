@@ -558,8 +558,17 @@ name = "cut-interchange"
 version = "0.1.0"
 dependencies = [
  "cut-domain",
+ "cut-lang",
+ "cut-model",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "cut-lang"
+version = "0.1.0"
+dependencies = [
+ "cut-model",
 ]
 
 [[package]]
@@ -580,6 +589,10 @@ dependencies = [
  "sha2",
  "tempfile",
 ]
+
+[[package]]
+name = "cut-model"
+version = "0.1.0"
 
 [[package]]
 name = "cut-playback"
