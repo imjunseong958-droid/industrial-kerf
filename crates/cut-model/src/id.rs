@@ -84,12 +84,13 @@ impl fmt::Display for InvalidId {
 
 impl std::error::Error for InvalidId {}
 
-/// Allocates `<prefix><n>` ids above every numeric suffix already in use, so
-/// generated ids are deterministic and never reuse a deleted id's number
-/// within one allocation pass.
+/// Allocates `<prefix><n>` ids above every numeric suffix already in use or
+/// retired, so generated ids are deterministic and a deleted id's number is
+/// never handed out again.
 #[derive(Clone, Debug, Default)]
 pub struct IdGen {
     used: HashSet<String>,
+    retired: HashSet<String>,
     next: HashMap<String, u64>,
 }
 
@@ -102,7 +103,18 @@ impl IdGen {
         generator
     }
 
-    /// Record `id` as taken. Returns false when it was already taken.
+    /// Record `id` as retired: never allocated and never reservable.
+    pub fn retire(&mut self, id: &Id) {
+        self.reserve(id);
+        self.retired.insert(id.as_str().to_owned());
+    }
+
+    pub fn is_retired(&self, id: &str) -> bool {
+        self.retired.contains(id)
+    }
+
+    /// Record `id` as taken. Returns false when it was already taken or is
+    /// retired.
     pub fn reserve(&mut self, id: &Id) -> bool {
         let text = id.as_str();
         let split = text.trim_end_matches(|c: char| c.is_ascii_digit()).len();
@@ -155,5 +167,16 @@ mod tests {
         assert_eq!(ids.next("c").as_str(), "c9");
         assert_eq!(ids.next("m").as_str(), "m3");
         assert_eq!(ids.next("t").as_str(), "t1");
+    }
+
+    #[test]
+    fn retired_ids_are_neither_allocated_nor_reservable() {
+        let mut ids = IdGen::new(&[Id::new("c1").unwrap()]);
+        ids.retire(&Id::new("c4").unwrap());
+        ids.retire(&Id::new("intro").unwrap());
+        assert_eq!(ids.next("c").as_str(), "c5");
+        assert!(!ids.reserve(&Id::new("intro").unwrap()));
+        assert!(ids.is_retired("c4"));
+        assert!(!ids.is_retired("c1"));
     }
 }

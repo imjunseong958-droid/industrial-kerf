@@ -1,6 +1,6 @@
 # ADR 0006: Exact-time kernel with a text-canonical project
 
-Status: accepted (phase 1 implemented)
+Status: accepted (phases 1 and 2 implemented)
 Date: 2026-10-04
 
 ## Context
@@ -82,5 +82,12 @@ Each phase is its own pull request; the old stack keeps working until phase 5.
 - v2 projects need the one-time import, and some v2 features (subtitle file
   overlays, project-level effects, 3D transform values) are reported rather
   than carried over.
-- Generated ids are the next number after the highest in use, so deleting the
-  newest clip lets its number be reused until phase 2 persists the counter.
+- Ids are never reused. A project lists the ids of deleted items as
+  `retired=` on its `project` line; the allocator skips them and edits that
+  claim one are refused. Undo keeps an undone item's ids retired.
+- Until phase 4, `cutd` derives a v2 project for the renderer, playback, the
+  Qt app, and MCP. v2 commands from those clients become kernel operations
+  where one exists (trims, splits, moves, deletes, media and clip insertion,
+  markers, tracks). The rest run on the v2 export and are imported back with
+  the model as a hint; a command whose effect the model cannot hold is
+  refused with `NO_EQUIVALENT`.

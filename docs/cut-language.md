@@ -32,6 +32,8 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   marker mk1 at=01:00:05:00 name="pickup needed" color=red
 ```
 
+- `retired=` on the `project` line lists ids of deleted items. Ids are never
+  reused, so an edit cannot claim one and generated ids skip them.
 - One line is one thing; two-space indentation nests tracks in sequences,
   clips in tracks, and `set`/`fx` lines in clips. `#` starts a comment.
 - A clip's content is exactly one of `media=`, `seq=` (a nested sequence),
@@ -83,6 +85,16 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
 
 Every operation prints back as script (`print_op`, `print_ops`), so history,
 UI actions, and agent edits share one readable log.
+
+## In `cutd`
+
+`cutd` keeps the project as `project.cut`, written after every change. Edits
+arrive as scripts (`apply_script`), typed operations from the editor
+(`apply_ops`, frame counts on the sequence), or v2 commands from older
+clients. Each change is journaled as the script it ran, and undo restores
+the project as it was. Agent edits stay pending proposals that show the
+script and a diff of the document; `get_document` returns the document,
+optionally annotated.
 
 ## Importing v2 projects
 

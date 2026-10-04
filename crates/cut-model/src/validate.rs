@@ -65,6 +65,13 @@ impl Validator<'_> {
             }
         }
         for (id, kind) in entities {
+            if project.retired.contains(id) {
+                self.error(
+                    "id.retired",
+                    id,
+                    format!("`{id}` is retired and cannot name a {kind}"),
+                );
+            }
             if let Some(previous) = seen.insert(id.as_str(), kind) {
                 self.error(
                     "id.duplicate",
@@ -81,6 +88,13 @@ impl Validator<'_> {
             .filter_map(|c| c.link.as_ref())
             .collect();
         for link in links {
+            if project.retired.contains(link) {
+                self.error(
+                    "id.retired",
+                    link,
+                    format!("`{link}` is retired and cannot name a link group"),
+                );
+            }
             if let Some(kind) = seen.get(link.as_str()) {
                 self.error(
                     "id.duplicate",

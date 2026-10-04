@@ -9,7 +9,7 @@ use crate::catalog::Domain;
 use crate::id::{Id, IdGen};
 use crate::time::{Rate, Ratio, Time};
 use crate::value::Param;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub type Params = BTreeMap<String, Param>;
 
@@ -18,6 +18,10 @@ pub struct Project {
     pub name: String,
     pub media: Vec<Media>,
     pub sequences: Vec<Sequence>,
+    /// Ids that named something which no longer exists. They are never
+    /// allocated or claimed again, so a stale reference cannot silently
+    /// address a different item.
+    pub retired: BTreeSet<Id>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -542,8 +546,25 @@ impl Project {
         media.chain(sequences)
     }
 
+    /// An allocator that skips every live and retired id.
     pub fn id_gen(&self) -> IdGen {
-        IdGen::new(self.ids())
+        let mut ids = IdGen::new(self.ids());
+        for id in &self.retired {
+            ids.retire(id);
+        }
+        ids
+    }
+
+    /// Retire every id in `before` that this project no longer uses, and
+    /// forget retirements of ids that are live again (as after an undo).
+    pub fn retire_missing<'a>(&mut self, before: impl IntoIterator<Item = &'a Id>) {
+        let live: std::collections::HashSet<Id> = self.ids().cloned().collect();
+        for id in before {
+            if !live.contains(id) {
+                self.retired.insert(id.clone());
+            }
+        }
+        self.retired.retain(|id| !live.contains(id));
     }
 
     /// Whether `id` names a media item, sequence, clip, transition, marker,

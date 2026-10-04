@@ -1077,8 +1077,9 @@ mod tests {
             duration: 0.0,
             sources: Vec::new(),
             pending_proposal,
-            source_version: 2,
+            source_version: 3,
             projection_status: "current".into(),
+            import_warnings: Vec::new(),
         }
     }
 
@@ -1114,6 +1115,8 @@ mod tests {
             impacts: None,
             observation: None,
             observations: None,
+            script: None,
+            document_diff: None,
         };
         let proposal_for_repeat = proposal.clone();
         publish(

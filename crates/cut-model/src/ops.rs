@@ -282,7 +282,8 @@ pub struct Rejected {
 
 /// Apply `ops` in order. On success returns the new project; on failure the
 /// input is untouched. Validation errors already present in `project` do
-/// not block an edit, but new ones do.
+/// not block an edit, but new ones do. Ids that stop naming anything are
+/// added to `Project::retired`.
 pub fn apply(
     project: &Project,
     catalog: &Catalog,
@@ -300,11 +301,13 @@ pub fn apply(
     };
     for (index, op) in ops.iter().enumerate() {
         editor.ids = editor.project.id_gen();
+        let before: Vec<Id> = editor.project.ids().cloned().collect();
         editor.apply(op).map_err(|diagnostic| Rejected {
             op: Some(index),
             diagnostics: vec![diagnostic],
         })?;
         editor.housekeep();
+        editor.project.retire_missing(&before);
     }
     let introduced: Vec<_> = errors(&editor.project, catalog)
         .into_iter()
@@ -876,7 +879,12 @@ impl Editor<'_> {
     // ---- checks -----------------------------------------------------------
 
     fn claim(&mut self, id: &Id) -> Outcome {
-        if self.ids.reserve(id) {
+        if self.ids.is_retired(id.as_str()) {
+            Err(fail(
+                "id.retired",
+                format!("`{id}` named something that was deleted; ids are never reused"),
+            ))
+        } else if self.ids.reserve(id) {
             Ok(())
         } else {
             Err(fail("id.taken", format!("`{id}` is already used")))

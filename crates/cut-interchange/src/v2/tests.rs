@@ -130,3 +130,155 @@ fn unusable_frame_rates_fail() {
     let errors = import_json(&json).unwrap_err();
     assert!(errors[0].contains("frame rate"), "{errors:?}");
 }
+
+const KERNEL: &str = r#"cut 1
+project name="Short Film" retired=c9,mk7
+
+media m1 path="footage/A001_C003.mov" rate=23.976 tc=14:22:31:05 dur=00:04:12:00 video=3840x2160 audio=2ch@48000 reel="A001"
+media m2 path="music.wav" rate=23.976 dur=00:03:00:00 audio=2ch@48000
+
+sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:00:00
+  track V1 video
+    clip c1 media=m1 src=14:22:35:00 at=01:00:00:00 dur=00:00:06:12 link=L1
+      set x=0.1 scale={0f:1 48f:1.1:ease} opacity=0.9
+      fx color.basic exposure=0.3 saturation=1.2
+    clip c2 media=m1 src=14:23:02:00 at=01:00:06:12 dur=00:00:03:00 speed=-1.5
+    transition t1 from=c1 to=c2 fx=dip dur=00:00:00:12 align=start color=#ffffff
+  track V2 video name="Titles"
+    clip c3 gen=title at=01:00:01:00 dur=00:00:02:00
+      set y=0.3 text="Day One" size=0.1
+  track S1 subtitle
+    clip cap1 caption="Where are we?" at=01:00:01:00 dur=00:00:02:00
+  track A1 audio
+    clip a1 media=m1 src=14:22:35:00 at=01:00:00:00 dur=00:00:06:12 link=L1
+      set gain=-3.3333
+  track A2 audio locked=true
+    clip a2 media=m2 src=00:00:10:00 at=01:00:00:00 dur=00:00:20:00
+      fx audio.eq3 low=-6
+  marker mk1 at=01:00:05:00 name="pickup needed" color=red note="ADR"
+
+sequence s2 name="Alt" rate=25 size=1280x720 audio=48000 start=00:00:00:00
+  track A1 audio
+    clip alt1 media=m2 src=00:00:00:00 at=00:00:00:00 dur=00:00:02:00
+"#;
+
+fn kernel() -> Project {
+    parse_document(KERNEL, Catalog::builtin())
+        .unwrap_or_else(|e| panic!("{e:#?}"))
+        .project
+}
+
+/// Every clip's track, start, duration, and source in, by id.
+fn timing(project: &Project) -> Vec<(String, String, Time, Time, Option<Time>)> {
+    let mut out: Vec<_> = project.sequences[0]
+        .tracks
+        .iter()
+        .flat_map(|track| {
+            track.clips.iter().map(|clip| {
+                (
+                    track.id.to_string(),
+                    clip.id.to_string(),
+                    clip.start,
+                    clip.duration,
+                    clip.source_range().map(|range| range.0),
+                )
+            })
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn import_of_an_export_preserves_timing() {
+    let project = kernel();
+    let exported = export(&project).unwrap();
+    let imported = import_v2(&exported).unwrap_or_else(|e| panic!("{e:#?}"));
+    assert_eq!(timing(&imported.project), timing(&project));
+    let transitions = &imported.project.sequences[0].tracks[0].transitions;
+    assert_eq!(transitions.len(), 1);
+    assert_eq!(transitions[0].align, Align::Start);
+    assert_eq!(transitions[0].fx, "dip");
+    assert_eq!(
+        imported.project.sequences[0].rate,
+        project.sequences[0].rate
+    );
+}
+
+#[test]
+fn hinted_import_of_an_export_is_exact() {
+    let project = kernel();
+    let exported = export(&project).unwrap();
+    let imported = import_v2_with(&exported, Some(&project)).unwrap_or_else(|e| panic!("{e:#?}"));
+    assert_eq!(imported.warnings, Vec::<String>::new());
+    assert_eq!(imported.project, project);
+}
+
+#[test]
+fn hinted_import_takes_v2_edits_and_keeps_everything_else() {
+    let project = kernel();
+    let exported = export(&project).unwrap();
+    let command = v2::parse_command(&serde_json::json!({
+        "type": "batch",
+        "commands": [
+            {"type": "update_clip", "clipId": "c1", "patch": {"opacity": 0.5}},
+            {"type": "remove_clip", "clipId": "c3"},
+        ]
+    }))
+    .unwrap();
+    let edited = v2::apply_command(&exported, &command).unwrap();
+    let imported = import_v2_with(&edited, Some(&project)).unwrap_or_else(|e| panic!("{e:#?}"));
+    assert!(imported.dropped.is_empty(), "{:?}", imported.dropped);
+
+    let mut expected = project.clone();
+    let c1 = expected.locate("c1").unwrap();
+    expected
+        .clip_at_mut(c1)
+        .props
+        .insert("opacity".into(), Param::Static(Value::Number(0.5)));
+    expected.sequences[0].tracks[1].clips.clear();
+    expected.retired.insert(Id::new("c3").unwrap());
+    assert_eq!(imported.project, expected);
+}
+
+#[test]
+fn hinted_import_reports_what_the_model_cannot_hold() {
+    let project = kernel();
+    let exported = export(&project).unwrap();
+    let command = v2::parse_command(&serde_json::json!({
+        "type": "set_metadata", "patch": {"reviewed": true}
+    }))
+    .unwrap();
+    let edited = v2::apply_command(&exported, &command).unwrap();
+    let imported = import_v2_with(&edited, Some(&project)).unwrap();
+    assert_eq!(imported.project, project);
+    assert_eq!(imported.dropped, ["project metadata was not imported"]);
+}
+
+#[test]
+fn clips_v2_cannot_show_survive_a_v2_edit() {
+    let text = KERNEL.replace(
+        "      set y=0.3 text=\"Day One\" size=0.1\n",
+        "      set y=0.3 text=\"Day One\" size=0.1\n    clip bg gen=solid at=01:00:03:00 dur=00:00:01:00\n    transition t5 from=c3 to=bg fx=dissolve dur=00:00:00:06\n",
+    );
+    let project = parse_document(&text, Catalog::builtin())
+        .unwrap_or_else(|e| panic!("{e:#?}"))
+        .project;
+    let exported = export(&project).unwrap();
+    let ids: Vec<&str> = exported.tracks.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(ids, ["V1", "V2", "V2/titles", "A1", "A2"]);
+    assert_eq!(
+        import_v2_with(&exported, Some(&project)).unwrap().project,
+        project
+    );
+    let command = v2::parse_command(&serde_json::json!({
+        "type": "update_clip", "clipId": "c3", "patch": {"opacity": 0.5}
+    }))
+    .unwrap();
+    let edited = v2::apply_command(&exported, &command).unwrap();
+    let imported = import_v2_with(&edited, Some(&project)).unwrap();
+    let track = &imported.project.sequences[0].tracks[1];
+    let clips: Vec<&str> = track.clips.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(clips, ["c3", "bg"]);
+    assert_eq!(track.transitions.len(), 1);
+}
