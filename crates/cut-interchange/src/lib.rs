@@ -4,6 +4,8 @@
 //! invocation, timeout handling, and structured conversion reports; the
 //! bridge owns the Python OTIO object model.
 
+pub mod v2;
+
 use cut_domain::Project;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};

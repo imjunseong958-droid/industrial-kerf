@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "crates/cut-core",
+    "crates/cut-model",
+    "crates/cut-lang",
     "crates/cut-engine",
     "crates/cut-domain",
     "crates/cut-playback",
