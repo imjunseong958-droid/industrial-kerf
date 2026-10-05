@@ -1,12 +1,14 @@
 //! OpenTimelineIO interchange through the bundled Python bridge.
 //!
 //! OTIO remains an optional process dependency. Rust owns validation,
-//! invocation, timeout handling, and structured conversion reports; the
-//! bridge owns the Python OTIO object model.
+//! invocation, timeout handling, conversion to and from the model (see
+//! `otio`), and structured reports; the bridge owns the Python OTIO object
+//! model.
 
+pub mod otio;
 pub mod v2;
 
-use cut_domain::Project;
+use cut_model::Project;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::fmt;
@@ -96,7 +98,7 @@ pub struct InterchangeError {
 }
 
 impl InterchangeError {
-    fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             code: code.into(),
             message: message.into(),
@@ -185,16 +187,16 @@ impl OpenTimelineIoAdapter {
         })
     }
 
+    /// The bridge invocation that writes `project`, and what the
+    /// conversion leaves out.
     pub fn build_export_invocation(
         &self,
         project: &Project,
         output_path: &Path,
         adapter: Option<&str>,
-    ) -> Result<ProcessInvocation, InterchangeError> {
+    ) -> Result<(ProcessInvocation, Vec<InterchangeIssue>), InterchangeError> {
         validate_path(output_path, "outputPath")?;
-        let project = cut_domain::serialize_project(project).map_err(|error| {
-            InterchangeError::new("INTERCHANGE_CONFIG_INVALID", error.to_string())
-        })?;
+        let (timeline, issues) = otio::to_timeline(project)?;
         let adapter = normalize_adapter(adapter, Some(output_path))?;
         let args = vec![
             self.bridge_script.to_string_lossy().into_owned(),
@@ -204,15 +206,16 @@ impl OpenTimelineIoAdapter {
             "--adapter".into(),
             adapter,
         ];
-        let stdin = serde_json::to_string(&json!({ "project": project })).map_err(|error| {
+        let stdin = serde_json::to_string(&json!({ "timeline": timeline })).map_err(|error| {
             InterchangeError::new("INTERCHANGE_CONFIG_INVALID", error.to_string())
         })?;
-        Ok(ProcessInvocation {
+        let invocation = ProcessInvocation {
             command: self.config.python_executable.clone(),
             args,
             cwd: self.config.cwd.clone(),
             stdin: Some(stdin),
-        })
+        };
+        Ok((invocation, issues))
     }
 
     pub fn import(
@@ -245,34 +248,31 @@ impl OpenTimelineIoAdapter {
             ));
         }
         let parsed = parse_bridge_output(&output.stdout)?;
-        let project_value = parsed
-            .get("project")
-            .cloned()
-            .or_else(|| {
-                parsed
-                    .get("result")
-                    .and_then(|value| value.get("project"))
-                    .cloned()
-            })
-            .ok_or_else(|| {
-                InterchangeError::new(
-                    "INTERCHANGE_OUTPUT_INVALID",
-                    "OTIO bridge response does not contain a project",
-                )
-            })?;
-        let project = cut_domain::parse_project(&project_value).map_err(|error| {
+        let timeline = parsed.get("timeline").cloned().ok_or_else(|| {
             InterchangeError::new(
                 "INTERCHANGE_OUTPUT_INVALID",
-                format!("bridge returned an invalid cut v2 project: {error}"),
+                "OTIO bridge response does not contain a timeline",
             )
         })?;
+        let timeline: otio::Timeline = serde_json::from_value(timeline).map_err(|error| {
+            InterchangeError::new(
+                "INTERCHANGE_OUTPUT_INVALID",
+                format!("bridge returned an invalid timeline: {error}"),
+            )
+        })?;
+        let (project, issues) = otio::from_timeline(&timeline)?;
         let adapter = adapter.map(str::to_owned);
-        let bridge_report = report_from_value("import", adapter.as_deref(), parsed.get("report"));
+        let mut report = report_from_value("import", adapter.as_deref(), parsed.get("report"));
+        report = create_report(
+            "import",
+            adapter.as_deref(),
+            report.issues.into_iter().chain(issues),
+        );
         Ok(ImportResult {
             project,
             input_path: input_path.to_path_buf(),
             adapter,
-            report: bridge_report,
+            report,
         })
     }
 
@@ -283,26 +283,13 @@ impl OpenTimelineIoAdapter {
         adapter: Option<&str>,
     ) -> Result<ExportResult, InterchangeError> {
         let adapter = normalize_adapter(adapter, Some(output_path))?;
-        let project_value = cut_domain::serialize_project(project).map_err(|error| {
-            InterchangeError::new("INTERCHANGE_CONFIG_INVALID", error.to_string())
-        })?;
-        let stdin =
-            serde_json::to_string(&json!({ "project": project_value })).map_err(|error| {
-                InterchangeError::new("INTERCHANGE_CONFIG_INVALID", error.to_string())
-            })?;
-        let args = vec![
-            self.bridge_script.to_string_lossy().into_owned(),
-            "export".into(),
-            "--output".into(),
-            output_path.to_string_lossy().into_owned(),
-            "--adapter".into(),
-            adapter.clone(),
-        ];
+        let (invocation, issues) =
+            self.build_export_invocation(project, output_path, Some(&adapter))?;
         let output = run_process(
-            &self.config.python_executable,
-            &args,
-            self.config.cwd.as_deref(),
-            Some(stdin),
+            &invocation.command,
+            &invocation.args,
+            invocation.cwd.as_deref(),
+            invocation.stdin,
             self.config.timeout,
         )?;
         if output.timed_out {
@@ -321,10 +308,15 @@ impl OpenTimelineIoAdapter {
             ));
         }
         let parsed = parse_bridge_output(&output.stdout)?;
+        let report = report_from_value("export", Some(&adapter), parsed.get("report"));
         Ok(ExportResult {
             output_path: output_path.to_path_buf(),
-            adapter: adapter.clone(),
-            report: report_from_value("export", Some(&adapter), parsed.get("report")),
+            report: create_report(
+                "export",
+                Some(&adapter),
+                issues.into_iter().chain(report.issues),
+            ),
+            adapter,
         })
     }
 }
