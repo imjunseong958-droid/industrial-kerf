@@ -2,7 +2,7 @@
 
 #![cfg(unix)]
 
-use cut_runtime::{EndpointAddress, RuntimeClient, MAX_REQUEST_BYTES};
+use cut_runtime::{EndpointAddress, RuntimeClient, StateSnapshot, MAX_REQUEST_BYTES};
 use serde_json::json;
 use std::fs;
 use std::io::{Read, Write};
@@ -43,10 +43,8 @@ fn wait_until_ready(client: &RuntimeClient) {
     panic!("cutd did not become ready at {:?}", client.endpoint());
 }
 
-fn has_marker(project: &serde_json::Value, id: &str) -> bool {
-    project["markers"]
-        .as_array()
-        .is_some_and(|markers| markers.iter().any(|marker| marker["id"] == id))
+fn has_marker(state: &StateSnapshot, id: &str) -> bool {
+    state.document.contains(&format!("marker {id} "))
 }
 
 fn stop_daemon(mut daemon: Child) {
@@ -72,21 +70,16 @@ fn two_clients_share_one_daemon_and_recover_after_lost_response_and_restart() {
     let left_client = left.clone();
     let left_thread = thread::spawn(move || {
         left_barrier.wait();
-        left_client.apply_request(
-            "ui",
-            "simultaneous-left",
-            json!({"type":"add_marker","marker":{"id":"left","time":0}}),
-            0,
-        )
+        left_client.apply_script_request("ui", "simultaneous-left", "marker add at=0f as=left", 0)
     });
     let right_barrier = barrier.clone();
     let right_client = right.clone();
     let right_thread = thread::spawn(move || {
         right_barrier.wait();
-        right_client.apply_request(
+        right_client.apply_script_request(
             "mcp",
             "simultaneous-right",
-            json!({"type":"add_marker","marker":{"id":"right","time":0}}),
+            "marker add at=0f as=right",
             0,
         )
     });
@@ -116,7 +109,7 @@ fn two_clients_share_one_daemon_and_recover_after_lost_response_and_restart() {
         )
         .unwrap();
     assert_eq!(replay.revision, 2);
-    assert!(has_marker(&replay.project, "lost"));
+    assert!(has_marker(&replay, "lost"));
 
     // A client has no daemon ownership. Dropping one leaves the other fully
     // usable on the same process.
@@ -130,7 +123,7 @@ fn two_clients_share_one_daemon_and_recover_after_lost_response_and_restart() {
     wait_until_ready(&right);
     let recovered = right.get_state().unwrap();
     assert_eq!(recovered.revision, 2);
-    assert!(has_marker(&recovered.project, "lost"));
+    assert!(has_marker(&recovered, "lost"));
     let (revision, document) = right.get_document(false).unwrap();
     assert_eq!(revision, 2);
     assert!(
@@ -214,15 +207,9 @@ fn a_v2_project_round_trips_through_cutd_on_the_kernel() {
         after_trim
     );
 
-    // A v2 command from an older client still edits the model, and deleting
-    // a clip retires its id and its sound's.
+    // Deleting a clip retires its id and its sound's.
     let deleted = client
-        .apply_request(
-            "ui",
-            "delete-b",
-            json!({"type": "remove_clip", "clipId": "clip-b"}),
-            1,
-        )
+        .apply_script_request("ui", "delete-b", "delete clip-b", 1)
         .unwrap();
     assert_eq!(deleted.revision, 2);
     let undone = client.undo_request("ui", "undo-delete", 2).unwrap();
