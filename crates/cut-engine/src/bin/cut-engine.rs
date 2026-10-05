@@ -6,18 +6,12 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use cut_engine::compile::{compile_filter_graph_v2, timeline_duration_v2, CompileV2Options};
-use cut_engine::compile_v1::{atempo_filters, compile_filter_graph_v1, timeline_duration_v1};
 use cut_engine::derivatives::DerivativeCache;
 use cut_engine::encoder::{
     encoder_args, parse_encoder_capabilities, select_video_encoder, SelectEncoderOptions,
     VideoCodec,
 };
-use cut_engine::enrich::{enrich_project_v2, enrich_timeline_v1};
 use cut_engine::ffmpeg::{resolve_ffmpeg_bin, run_allow_failure};
-use cut_engine::overlay::{
-    captions_filter, escape_drawtext_text, escape_filter_path, subtitles_filter, CaptionCue,
-};
 use cut_engine::probe::{
     cached_filmstrip, cached_waveform, detect_scenes, extract_exact_frames, extract_frames, info,
     parse_scene_times, parse_silencedetect, silence_detect,
@@ -25,9 +19,6 @@ use cut_engine::probe::{
 use cut_engine::proxy::{
     create_proxy_cache_key, proxy_ffmpeg_args, proxy_run, proxy_settings_from_value, ProxySettings,
     ProxySourceStat,
-};
-use cut_engine::render::{
-    render_args_v1, render_args_v2, stderr_progress_callback, RenderV1Options, RenderV2Options,
 };
 use cut_engine::resources::budget;
 use cut_engine::vision::{
@@ -67,52 +58,6 @@ enum Commands {
         #[arg(long)]
         software: Option<String>,
     },
-    CompileV1 {
-        #[arg(long)]
-        draft: bool,
-        #[arg(long)]
-        post_filter: Vec<String>,
-    },
-    CompileV2 {
-        #[arg(long)]
-        include_embedded_audio: Option<bool>,
-        #[arg(long)]
-        draft: bool,
-        #[arg(long)]
-        post_filter: Vec<String>,
-    },
-    DurationV1,
-    DurationV2,
-    RenderV1 {
-        #[arg(long)]
-        output: PathBuf,
-        #[arg(long)]
-        draft: bool,
-        #[arg(long)]
-        run: bool,
-        #[arg(long)]
-        cancel_file: Option<PathBuf>,
-    },
-    RenderV2 {
-        #[arg(long)]
-        output: PathBuf,
-        #[arg(long)]
-        draft: bool,
-        #[arg(long)]
-        prefer_hardware: bool,
-        #[arg(long)]
-        software: bool,
-        #[arg(long)]
-        run: bool,
-        #[arg(long)]
-        include_embedded_audio: Option<bool>,
-        #[arg(long)]
-        start: Option<f64>,
-        #[arg(long)]
-        duration: Option<f64>,
-        #[arg(long)]
-        cancel_file: Option<PathBuf>,
-    },
     ProxyKey {
         #[arg(long)]
         source: String,
@@ -150,10 +95,6 @@ enum Commands {
         smoothing: Option<f64>,
         #[arg(long)]
         crop_aspect: Option<f64>,
-    },
-    Overlay {
-        #[command(subcommand)]
-        action: OverlayAction,
     },
     Crop,
 }
@@ -254,24 +195,6 @@ struct TranscriptionArgs {
     language: Option<String>,
     #[arg(long, default_value = "local")]
     backend: String,
-}
-
-#[derive(Subcommand)]
-enum OverlayAction {
-    EscapePath {
-        #[arg(long)]
-        path: String,
-    },
-    EscapeDrawtext {
-        #[arg(long)]
-        text: String,
-    },
-    Atempo {
-        #[arg(long)]
-        speed: f64,
-    },
-    Captions,
-    Subtitles,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -443,141 +366,6 @@ fn main() -> Result<()> {
             payload["args"] = json!(encoder_args(&selection));
             print_json(&payload)?;
         }
-        Commands::CompileV1 { draft, post_filter } => {
-            let timeline: Value = serde_json::from_str(&read_stdin()?)?;
-            let video_post_filters = merge_post_filters(draft, post_filter);
-            let compiled = compile_filter_graph_v1(&timeline, &video_post_filters)?;
-            let duration = timeline_duration_v1(&timeline)?;
-            print_json(&json!({
-                "argv": compiled.argv,
-                "command": compiled.command,
-                "filterComplex": compiled.filter_complex,
-                "duration": duration,
-            }))?;
-        }
-        Commands::CompileV2 {
-            include_embedded_audio,
-            draft,
-            post_filter,
-        } => {
-            let project: Value = serde_json::from_str(&read_stdin()?)?;
-            let opts = CompileV2Options {
-                video_post_filters: merge_post_filters(draft, post_filter),
-                include_embedded_audio,
-                range: None,
-            };
-            let compiled = compile_filter_graph_v2(&project, opts)?;
-            let duration = timeline_duration_v2(&project)?;
-            print_json(&json!({
-                "argv": compiled.argv,
-                "command": compiled.command,
-                "filterComplex": compiled.filter_complex,
-                "duration": duration,
-                "width": compiled.width,
-                "height": compiled.height,
-            }))?;
-        }
-        Commands::DurationV1 => {
-            let timeline: Value = serde_json::from_str(&read_stdin()?)?;
-            print_json(&json!({ "duration": timeline_duration_v1(&timeline)? }))?;
-        }
-        Commands::DurationV2 => {
-            let project: Value = serde_json::from_str(&read_stdin()?)?;
-            print_json(&json!({ "duration": timeline_duration_v2(&project)? }))?;
-        }
-        Commands::RenderV1 {
-            output,
-            draft,
-            run,
-            cancel_file,
-        } => {
-            let timeline: Value = serde_json::from_str(&read_stdin()?)?;
-            let opts = RenderV1Options {
-                output: output.to_string_lossy().into_owned(),
-                draft,
-            };
-            if run {
-                let timeline = enrich_timeline_v1(&timeline)?;
-                let cancellation = CancellationToken::new();
-                cancellation.register_signal_handlers()?;
-                let watcher = cancel_file.map(|path| {
-                    cut_engine::render::spawn_cancel_file_watcher(path, cancellation.clone())
-                });
-                let result = cut_engine::render::render_v1_with_cancellation(
-                    &timeline,
-                    &opts,
-                    &cancellation,
-                    Some(stderr_progress_callback()),
-                );
-                cancellation.cancel();
-                if let Some(watcher) = watcher {
-                    let _ = watcher.join();
-                }
-                result?;
-                print_json(&json!({ "ok": true, "output": opts.output }))?;
-            } else {
-                print_json(&json!({ "args": render_args_v1(&timeline, &opts)? }))?;
-            }
-        }
-        Commands::RenderV2 {
-            output,
-            draft,
-            prefer_hardware,
-            software,
-            run,
-            include_embedded_audio,
-            start,
-            duration,
-            cancel_file,
-        } => {
-            let project: Value = serde_json::from_str(&read_stdin()?)?;
-            let opts = RenderV2Options {
-                output: output.to_string_lossy().into_owned(),
-                draft,
-                include_embedded_audio,
-                prefer_hardware,
-                force_software: software,
-                codec: VideoCodec::H264,
-            };
-            if run {
-                let project = enrich_project_v2(&project)?;
-                if start.is_some() != duration.is_some() {
-                    bail!("render-v2 --start and --duration must be provided together");
-                }
-                let cancellation = CancellationToken::new();
-                cancellation.register_signal_handlers()?;
-                let watcher = cancel_file.map(|path| {
-                    cut_engine::render::spawn_cancel_file_watcher(path, cancellation.clone())
-                });
-                let result = match (start, duration) {
-                    (Some(start), Some(duration)) => {
-                        cut_engine::render::render_v2_range_with_cancellation(
-                            &project,
-                            &opts,
-                            start,
-                            duration,
-                            &cancellation,
-                            Some(stderr_progress_callback()),
-                        )
-                    }
-                    (None, None) => cut_engine::render::render_v2_with_cancellation(
-                        &project,
-                        &opts,
-                        &cancellation,
-                        Some(stderr_progress_callback()),
-                    ),
-                    _ => unreachable!("render range presence was checked above"),
-                };
-                cancellation.cancel();
-                if let Some(watcher) = watcher {
-                    let _ = watcher.join();
-                }
-                result?;
-                print_json(&json!({ "ok": true, "output": opts.output }))?;
-            } else {
-                print_json(&json!({ "args": render_args_v2(&project, &opts)? }))?;
-            }
-        }
         Commands::ProxyKey {
             source,
             size,
@@ -665,54 +453,12 @@ fn main() -> Result<()> {
             }
             print_json(&payload)?;
         }
-        Commands::Overlay { action } => match action {
-            OverlayAction::EscapePath { path } => print_json(&escape_filter_path(&path))?,
-            OverlayAction::EscapeDrawtext { text } => print_json(&escape_drawtext_text(&text))?,
-            OverlayAction::Atempo { speed } => print_json(&atempo_filters(speed)?)?,
-            OverlayAction::Captions => {
-                let input: Value = serde_json::from_str(&read_stdin()?)?;
-                let cue = CaptionCue {
-                    start: input
-                        .get("start")
-                        .and_then(Value::as_f64)
-                        .context("captions require start")?,
-                    end: input
-                        .get("end")
-                        .and_then(Value::as_f64)
-                        .context("captions require end")?,
-                    text: input
-                        .get("text")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                };
-                print_json(&captions_filter(&cue, input.get("style")))?;
-            }
-            OverlayAction::Subtitles => {
-                let input: Value = serde_json::from_str(&read_stdin()?)?;
-                let path = input
-                    .get("path")
-                    .and_then(Value::as_str)
-                    .context("subtitles require path")?;
-                print_json(&subtitles_filter(path, input.get("style")))?;
-            }
-        },
         Commands::Crop => {
             let input: Value = serde_json::from_str(&read_stdin()?)?;
             print_json(&crop_plan_from_json(&input)?)?;
         }
     }
     Ok(())
-}
-
-fn merge_post_filters(draft: bool, post_filter: Vec<String>) -> Vec<String> {
-    if !post_filter.is_empty() {
-        post_filter
-    } else if draft {
-        vec!["scale=-2:360".into(), "fps=15".into()]
-    } else {
-        Vec::new()
-    }
 }
 
 fn run_transcription(

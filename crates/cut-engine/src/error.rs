@@ -13,11 +13,7 @@ pub enum EngineError {
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error("{0}")]
-    Compile(#[from] cut_core::compile::CompileError),
-    #[error("{0}")]
     Program(#[from] cut_core::program::ProgramError),
-    #[error("{0}")]
-    CompileV1(#[from] cut_core::compile_v1::CompileV1Error),
     #[error("ffmpeg failed ({code}): {stderr}")]
     Ffmpeg { code: i32, stderr: String },
     #[error("cut-engine binary not found")]

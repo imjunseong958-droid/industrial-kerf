@@ -31,7 +31,6 @@ thiserror = "2"
 cut-lang = { path = "../cut-lang" }
 approx = "0.5"
 criterion = "0.5"
-cut-domain = { path = "../cut-domain" }
 cut-playback = { path = "../cut-playback", default-features = false }
 tempfile = "3"
 

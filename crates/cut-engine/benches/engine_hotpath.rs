@@ -4,10 +4,9 @@
 //! Range-render and seek benches need a working ffmpeg (`CUT_FFMPEG` optional).
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use cut_engine::compile::{compile_filter_graph_v2, CompileV2Options};
 use cut_engine::ffmpeg::resolve_ffmpeg_bin;
+use cut_engine::program::{compile_program, ProgramOptions};
 use cut_engine::render::{render_program, RenderOptions};
-use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -100,48 +99,34 @@ fn short_source() -> PathBuf {
     path
 }
 
-fn project_with_clips(source: &Path, clips: Vec<Value>) -> Value {
-    json!({
-        "version": 2,
-        "fps": 30,
-        "width": 320,
-        "height": 180,
-        "sources": [{
-            "id": "a",
-            "path": source,
-            "width": 320,
-            "height": 180,
-            "hasAudio": false,
-            "duration": 610
-        }],
-        "tracks": [{
-            "id": "video",
-            "type": "video",
-            "clips": clips
-        }]
-    })
-}
-
-fn compile_100_clips() -> Value {
-    let clips: Vec<Value> = (0..100)
-        .map(|index| {
-            json!({
-                "id": format!("c{index}"),
-                "sourceId": "a",
-                "in": index,
-                "out": index + 1,
-                "timelineStart": index
-            })
-        })
-        .collect();
-    project_with_clips(Path::new("/tmp/a.mp4"), clips)
+/// One hundred one-second cuts of one source.
+fn hundred_clips() -> cut_model::Project {
+    let mut text = String::from(
+        "cut 1\nproject name=\"bench\"\n\
+         media a path=\"/tmp/a.mp4\" rate=30 dur=610s video=320x180\n\
+         sequence s1 rate=30 size=320x180 audio=48000\n\
+         \x20 track V1 video\n",
+    );
+    for index in 0..100 {
+        text.push_str(&format!(
+            "    clip c{index} media=a src={index}s at={index}s dur=1s\n"
+        ));
+    }
+    cut_lang::parse_document(&text, cut_model::Catalog::builtin())
+        .expect("bench project")
+        .project
 }
 
 fn bench_compile_100(c: &mut Criterion) {
-    let project = compile_100_clips();
-    c.bench_function("compile_v2_100_clips", |bencher| {
+    let project = hundred_clips();
+    c.bench_function("compile_program_100_clips", |bencher| {
         bencher.iter(|| {
-            compile_filter_graph_v2(&project, CompileV2Options::default()).expect("compile")
+            compile_program(
+                &project,
+                cut_model::Catalog::builtin(),
+                &ProgramOptions::default(),
+            )
+            .expect("compile")
         });
     });
 }

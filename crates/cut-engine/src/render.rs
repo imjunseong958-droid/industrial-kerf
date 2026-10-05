@@ -1,7 +1,5 @@
-//! Render argument construction and ffmpeg spawn for `cut-model` projects
-//! and the v1/v2 timelines that remain until ADR 0006 phase 5.
+//! Render argument construction and ffmpeg spawn for `cut-model` projects.
 
-use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -9,10 +7,6 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::Duration;
 
-use crate::compile::{
-    compile_filter_graph_v2, timeline_duration_v2, CompileRange, CompileV2Options,
-};
-use crate::compile_v1::{compile_filter_graph_v1, timeline_duration_v1};
 use crate::encoder::{
     encode_output_args, parse_encoder_capabilities, select_video_encoder, EncoderSelection,
     SelectEncoderOptions, VideoCodec,
@@ -27,35 +21,6 @@ use crate::transcription::CancellationToken;
 
 const RENDER_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const STDERR_QUEUE_CAPACITY: usize = 128;
-
-#[derive(Debug, Clone)]
-pub struct RenderV1Options {
-    pub output: String,
-    pub draft: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct RenderV2Options {
-    pub output: String,
-    pub draft: bool,
-    pub include_embedded_audio: Option<bool>,
-    pub prefer_hardware: bool,
-    pub force_software: bool,
-    pub codec: VideoCodec,
-}
-
-impl Default for RenderV2Options {
-    fn default() -> Self {
-        Self {
-            output: String::new(),
-            draft: false,
-            include_embedded_audio: None,
-            prefer_hardware: false,
-            force_software: false,
-            codec: VideoCodec::H264,
-        }
-    }
-}
 
 pub fn detect_and_select_encoder(options: &SelectEncoderOptions) -> Result<EncoderSelection> {
     let ffmpeg = resolve_ffmpeg_bin();
@@ -109,75 +74,6 @@ fn hardware_or_software_codec(
         budget.software_crf,
         budget.software_preset,
     ))
-}
-
-pub fn render_args_v1(timeline: &Value, opts: &RenderV1Options) -> Result<Vec<String>> {
-    let video_post_filters = if opts.draft {
-        draft_post_filters()
-    } else {
-        Vec::new()
-    };
-    let compiled =
-        compile_filter_graph_v1(timeline, &video_post_filters).map_err(EngineError::CompileV1)?;
-    let mut base: Vec<String> = video_decode_prefix().to_vec();
-    base.extend(compiled.argv.iter().skip(1).cloned());
-    if base.len() >= 2 {
-        base.truncate(base.len() - 2);
-    }
-    let codec = if opts.draft {
-        draft_codec_args()
-    } else {
-        hardware_or_software_codec(false, false, VideoCodec::H264)?
-    };
-    let fps = timeline.get("fps").and_then(Value::as_f64).unwrap_or(30.0);
-    base.extend(codec);
-    base.push("-r".into());
-    base.push(format!("{fps}"));
-    base.push(opts.output.clone());
-    Ok(base)
-}
-
-fn compile_options_for_render(
-    opts: &RenderV2Options,
-    range: Option<CompileRange>,
-) -> CompileV2Options {
-    CompileV2Options {
-        video_post_filters: if opts.draft {
-            draft_post_filters()
-        } else {
-            Vec::new()
-        },
-        include_embedded_audio: opts.include_embedded_audio,
-        range,
-    }
-}
-
-pub fn render_args_v2(project: &Value, opts: &RenderV2Options) -> Result<Vec<String>> {
-    render_args_v2_with_range(project, opts, None)
-}
-
-pub fn render_args_v2_with_range(
-    project: &Value,
-    opts: &RenderV2Options,
-    range: Option<CompileRange>,
-) -> Result<Vec<String>> {
-    let compiled = compile_filter_graph_v2(project, compile_options_for_render(opts, range))?;
-    let mut base: Vec<String> = video_decode_prefix().to_vec();
-    base.extend(compiled.argv.iter().skip(1).cloned());
-    if base.len() >= 2 {
-        base.truncate(base.len() - 2);
-    }
-    let codec = if opts.draft {
-        draft_codec_args()
-    } else {
-        hardware_or_software_codec(opts.prefer_hardware, opts.force_software, opts.codec)?
-    };
-    let fps = project.get("fps").and_then(Value::as_f64).unwrap_or(30.0);
-    base.extend(codec);
-    base.push("-r".into());
-    base.push(format!("{fps}"));
-    base.push(opts.output.clone());
-    Ok(base)
 }
 
 /// How to encode a rendered program.
@@ -460,89 +356,6 @@ where
     }
 }
 
-/// Render a v1 timeline with a caller-owned cancellation token.
-pub fn render_v1_with_cancellation<F>(
-    timeline: &Value,
-    opts: &RenderV1Options,
-    cancellation: &CancellationToken,
-    on_progress: Option<F>,
-) -> Result<()>
-where
-    F: FnMut(f64),
-{
-    let duration = timeline_duration_v1(timeline).map_err(EngineError::CompileV1)?;
-    let args = render_args_v1(timeline, opts)?;
-    run_ffmpeg_with_progress(&args, duration, cancellation, on_progress)
-}
-
-pub fn render_v1<F>(timeline: &Value, opts: &RenderV1Options, on_progress: Option<F>) -> Result<()>
-where
-    F: FnMut(f64),
-{
-    let cancellation = CancellationToken::new();
-    render_v1_with_cancellation(timeline, opts, &cancellation, on_progress)
-}
-
-/// Render a v2 project with a caller-owned cancellation token.
-pub fn render_v2_with_cancellation<F>(
-    project: &Value,
-    opts: &RenderV2Options,
-    cancellation: &CancellationToken,
-    on_progress: Option<F>,
-) -> Result<()>
-where
-    F: FnMut(f64),
-{
-    let duration = timeline_duration_v2(project)?;
-    let args = render_args_v2(project, opts)?;
-    run_ffmpeg_with_progress(&args, duration, cancellation, on_progress)
-}
-
-pub fn render_v2<F>(project: &Value, opts: &RenderV2Options, on_progress: Option<F>) -> Result<()>
-where
-    F: FnMut(f64),
-{
-    let cancellation = CancellationToken::new();
-    render_v2_with_cancellation(project, opts, &cancellation, on_progress)
-}
-
-/// Render a bounded project-time range with the same v2 compiler and filters
-/// used by export. The output timestamps start at zero for the selected range.
-pub fn render_v2_range_with_cancellation<F>(
-    project: &Value,
-    opts: &RenderV2Options,
-    start: f64,
-    duration: f64,
-    cancellation: &CancellationToken,
-    on_progress: Option<F>,
-) -> Result<()>
-where
-    F: FnMut(f64),
-{
-    if !start.is_finite() || start < 0.0 || !duration.is_finite() || duration <= 0.0 {
-        return Err(EngineError::msg(
-            "render range requires finite start >= 0 and positive duration",
-        ));
-    }
-    let range = CompileRange { start, duration };
-    let args = render_args_v2_with_range(project, opts, Some(range))?;
-    run_ffmpeg_with_progress(&args, duration, cancellation, on_progress)
-}
-
-pub fn render_v2_range<F>(
-    project: &Value,
-    opts: &RenderV2Options,
-    start: f64,
-    duration: f64,
-    on_progress: Option<F>,
-) -> Result<()>
-where
-    F: FnMut(f64),
-{
-    let cancellation = CancellationToken::new();
-    render_v2_range_with_cancellation(project, opts, start, duration, &cancellation, on_progress)
-}
-
 /// Run ffmpeg for proxy transcode with optional stderr progress lines.
 pub fn run_proxy_ffmpeg_with_cancellation<F>(
     args: &[String],
@@ -601,65 +414,32 @@ pub fn stderr_progress_callback() -> impl FnMut(f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use std::fs;
 
-    #[test]
-    fn render_args_v1_draft_contains_ultrafast_and_scale() {
-        let timeline = json!({
-            "version": 1,
-            "fps": 30,
-            "sources": [
-                { "id": "a", "path": "/tmp/a.mp4", "hasAudio": false }
-            ],
-            "tracks": [{
-                "id": "t1",
-                "clips": [{ "id": "c1", "src": "a", "in": 0, "out": 2 }]
-            }],
-            "overlays": []
-        });
-        let args = render_args_v1(
-            &timeline,
-            &RenderV1Options {
-                output: "out.mp4".into(),
-                draft: true,
-            },
+    /// Ten seconds of one source, cut at 24 fps.
+    fn project() -> cut_model::Project {
+        cut_lang::parse_document(
+            "cut 1\nproject name=\"render\"\n\
+             media s path=\"/tmp/s.mp4\" rate=24 dur=30s video=160x120\n\
+             sequence s1 rate=24 size=160x120 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20   clip v media=s src=10s at=0f dur=10s\n",
+            cut_model::Catalog::builtin(),
         )
-        .expect("args");
-        let fc = args
-            .iter()
-            .position(|arg| arg == "-filter_complex")
-            .map(|index| args[index + 1].as_str())
-            .expect("filter_complex");
-        assert!(fc.contains("scale=-2:360"));
-        assert!(fc.contains("fps=15"));
-        assert!(args.iter().any(|arg| arg == "ultrafast"));
-        assert_eq!(args.last().map(String::as_str), Some("out.mp4"));
+        .expect("project")
+        .project
     }
 
     #[test]
     fn production_software_uses_budgeted_x264() {
-        let project = json!({
-            "version": 2,
-            "fps": 24,
-            "width": 160,
-            "height": 120,
-            "sources": [
-                { "id": "s", "path": "/tmp/s.mp4", "width": 160, "height": 120, "hasAudio": false }
-            ],
-            "tracks": [{
-                "id": "video",
-                "type": "video",
-                "clips": [{ "id": "v", "sourceId": "s", "in": 0, "out": 1, "timelineStart": 0 }]
-            }]
-        });
-        let args = render_args_v2(
-            &project,
-            &RenderV2Options {
+        let (args, _) = render_program_args(
+            &project(),
+            None,
+            None,
+            &RenderOptions {
                 output: "out.mp4".into(),
-                draft: false,
                 force_software: true,
-                ..RenderV2Options::default()
+                ..RenderOptions::default()
             },
         )
         .expect("args");
@@ -670,6 +450,52 @@ mod tests {
             .iter()
             .any(|arg| arg == "veryfast" || arg == "faster" || arg == "medium"));
         assert!(args.windows(2).any(|pair| pair[0] == "-threads"));
+    }
+
+    #[test]
+    fn draft_renders_scale_down_with_fast_encoding() {
+        let (args, _) = render_program_args(
+            &project(),
+            None,
+            None,
+            &RenderOptions {
+                output: "out.mp4".into(),
+                draft: true,
+                ..RenderOptions::default()
+            },
+        )
+        .expect("args");
+        let graph = args
+            .iter()
+            .position(|arg| arg == "-filter_complex")
+            .map(|index| args[index + 1].as_str())
+            .expect("filter_complex");
+        assert!(graph.contains("scale=-2:360") && graph.contains("fps=15"));
+        assert!(args.iter().any(|arg| arg == "ultrafast"));
+        assert_eq!(args.last().map(String::as_str), Some("out.mp4"));
+    }
+
+    #[test]
+    fn range_render_args_seek_before_input_not_after_the_graph() {
+        let rate = cut_model::Rate::FPS_24;
+        let (args, duration) = render_program_args(
+            &project(),
+            None,
+            Some((rate.time_of(48), rate.time_of(120))),
+            &RenderOptions {
+                output: "out.mp4".into(),
+                draft: true,
+                ..RenderOptions::default()
+            },
+        )
+        .expect("args");
+        assert_eq!(duration, 3.0);
+        let graph = args
+            .iter()
+            .position(|arg| arg == "-filter_complex")
+            .expect("filter");
+        assert!(args[..graph].windows(2).any(|pair| pair[0] == "-ss"));
+        assert!(!args[graph..].windows(2).any(|pair| pair[0] == "-ss"));
     }
 
     #[test]
@@ -693,44 +519,5 @@ mod tests {
         second.cancel();
         first_watcher.join().expect("first watcher");
         second_watcher.join().expect("second watcher");
-    }
-
-    #[test]
-    fn range_render_args_seek_before_input_not_after_the_graph() {
-        let project = json!({
-            "version": 2,
-            "fps": 24,
-            "width": 160,
-            "height": 120,
-            "sources": [
-                { "id": "s", "path": "/tmp/s.mp4", "width": 160, "height": 120, "hasAudio": false, "duration": 30 }
-            ],
-            "tracks": [{
-                "id": "video",
-                "type": "video",
-                "clips": [{ "id": "v", "sourceId": "s", "in": 10, "out": 20, "timelineStart": 0 }]
-            }]
-        });
-        let args = render_args_v2_with_range(
-            &project,
-            &RenderV2Options {
-                output: "out.mp4".into(),
-                draft: true,
-                force_software: true,
-                ..RenderV2Options::default()
-            },
-            Some(CompileRange {
-                start: 2.0,
-                duration: 3.0,
-            }),
-        )
-        .expect("args");
-        let filter_pos = args
-            .iter()
-            .position(|arg| arg == "-filter_complex")
-            .expect("filter");
-        assert!(args[..filter_pos].windows(2).any(|pair| pair[0] == "-ss"));
-        assert!(!args[filter_pos..].windows(2).any(|pair| pair[0] == "-ss"));
-        assert_eq!(args.last().map(String::as_str), Some("out.mp4"));
     }
 }
