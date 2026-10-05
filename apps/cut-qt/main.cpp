@@ -368,30 +368,6 @@ void frameInside(QPainter &p, const QRectF &rect, qreal thickness, const QColor 
     p.fillRect(QRectF(rect.right() - thickness, rect.top() + thickness, thickness, rect.height() - 2 * thickness), color);
 }
 
-QJsonObject commandApply(const QJsonObject &command, quint64 revision) {
-    return QJsonObject{{QStringLiteral("type"), QStringLiteral("apply")},
-                       {QStringLiteral("revision"), QJsonValue::fromVariant(QVariant::fromValue(revision))},
-                       {QStringLiteral("command"), command}};
-}
-
-QJsonObject proposalCropEdit(const QJsonObject &proposal) {
-    QQueue<QJsonObject> pending;
-    pending.enqueue(proposal.value(QStringLiteral("command")).toObject());
-    QJsonObject cropEdit;
-    while (!pending.isEmpty()) {
-        const QJsonObject command = pending.dequeue();
-        if (command.value(QStringLiteral("type")).toString() == QStringLiteral("batch")) {
-            for (const QJsonValue &child : command.value(QStringLiteral("commands")).toArray())
-                pending.enqueue(child.toObject());
-        } else if (command.value(QStringLiteral("type")).toString() == QStringLiteral("update_clip") &&
-                   command.value(QStringLiteral("patch")).toObject().value(QStringLiteral("crop")).isObject()) {
-            if (!cropEdit.isEmpty()) return {};
-            cropEdit = command;
-        }
-    }
-    return cropEdit;
-}
-
 // Decode visual media references outside the paint path. Missing FFmpeg or an
 // unsupported source leaves a plain clip; editing never waits for decoration.
 class MediaArtwork final : public QObject {
@@ -1951,10 +1927,10 @@ private slots:
             syncCanvasPreset(m_canvasSize);
             return;
         }
-        const QJsonObject command{{QStringLiteral("type"), QStringLiteral("set_canvas")},
-                                  {QStringLiteral("width"), width},
-                                  {QStringLiteral("height"), height}};
-        if (!sendSimple(commandApply(command, m_revision))) syncCanvasPreset(m_canvasSize);
+        const QJsonObject op{{QStringLiteral("op"), QStringLiteral("set-sequence")},
+                             {QStringLiteral("width"), width},
+                             {QStringLiteral("height"), height}};
+        if (!sendEdit(QJsonArray{op})) syncCanvasPreset(m_canvasSize);
     }
 
     void addTrack() {
@@ -1963,16 +1939,15 @@ private slots:
         auto *audio = menu.addAction(QStringLiteral("Add audio track"));
         const QAction *choice = menu.exec(m_timeline->mapToGlobal(m_timeline->addLaneButtonCenter()));
         if (choice != video && choice != audio) return;
-        const QString type = choice == audio ? QStringLiteral("audio") : QStringLiteral("video");
+        const QString kind = choice == audio ? QStringLiteral("audio") : QStringLiteral("video");
         int count = 0;
         for (const QJsonValue &value : m_project.value(QStringLiteral("tracks")).toArray())
-            if (value.toObject().value(QStringLiteral("type")).toString() == type) ++count;
-        const QString id = QStringLiteral("%1-%2").arg(type).arg(QDateTime::currentMSecsSinceEpoch());
+            if (value.toObject().value(QStringLiteral("type")).toString() == kind) ++count;
         const QString name = choice == audio ? QStringLiteral("Audio %1").arg(count + 1)
                                               : QStringLiteral("Video %1").arg(count + 1);
-        const QJsonObject track{{QStringLiteral("id"), id}, {QStringLiteral("type"), type},
-                                {QStringLiteral("name"), name}, {QStringLiteral("clips"), QJsonArray{}}};
-        sendSimple(commandApply(QJsonObject{{QStringLiteral("type"), QStringLiteral("add_track")}, {QStringLiteral("track"), track}}, m_revision));
+        sendEdit(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("add-track")},
+                                        {QStringLiteral("kind"), kind},
+                                        {QStringLiteral("name"), name}}});
     }
 
     void undo() { sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("undo")}, {QStringLiteral("revision"), revisionValue()}}); }
@@ -2625,79 +2600,6 @@ private slots:
         sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("accept")}, {QStringLiteral("proposalId"), m_proposalId}, {QStringLiteral("revision"), revisionValue()}});
     }
 
-    void adjustProposalCrop() {
-        const QJsonObject proposal = m_snapshot.value(QStringLiteral("pendingProposal")).toObject();
-        const QString proposalId = proposal.value(QStringLiteral("proposalId")).toString();
-        const quint64 baseRevision = m_revision;
-        const QJsonObject edit = proposalCropEdit(proposal);
-        if (edit.isEmpty() || proposal.value(QStringLiteral("freshness")).toString() == QStringLiteral("stale")) return;
-        const QString focusId = edit.value(QStringLiteral("clipId")).toString();
-        QString originalId = focusId;
-        QQueue<QJsonObject> pending;
-        pending.enqueue(proposal.value(QStringLiteral("command")).toObject());
-        QList<QJsonObject> splits;
-        while (!pending.isEmpty()) {
-            const QJsonObject command = pending.dequeue();
-            if (command.value(QStringLiteral("type")).toString() == QStringLiteral("batch")) {
-                for (const QJsonValue &child : command.value(QStringLiteral("commands")).toArray())
-                    pending.enqueue(child.toObject());
-            } else if (command.value(QStringLiteral("type")).toString() == QStringLiteral("split_clip")) {
-                splits.append(command);
-            }
-        }
-        for (int pass = 0; pass < splits.size(); ++pass) {
-            bool changed = false;
-            for (const QJsonObject &split : splits) {
-                if (split.value(QStringLiteral("newClipId")).toString() == originalId) {
-                    originalId = split.value(QStringLiteral("clipId")).toString();
-                    changed = true;
-                    break;
-                }
-            }
-            if (!changed) break;
-        }
-        QJsonObject original;
-        for (const QJsonValue &track : m_project.value(QStringLiteral("tracks")).toArray()) {
-            for (const QJsonValue &clip : track.toObject().value(QStringLiteral("clips")).toArray()) {
-                if (clip.toObject().value(QStringLiteral("id")).toString() == originalId) original = clip.toObject();
-            }
-        }
-        if (original.isEmpty()) return;
-        const double clipStart = original.value(QStringLiteral("timelineStart")).toDouble();
-        const double clipEnd = clipStart + original.value(QStringLiteral("duration")).toDouble(
-            (original.value(QStringLiteral("out")).toDouble() - original.value(QStringLiteral("in")).toDouble()) /
-            original.value(QStringLiteral("speed")).toDouble(1.0));
-        const QImage frame = sourceFrame(original, std::clamp(m_playhead, clipStart, clipEnd - 1.0 / m_fps));
-        if (frame.isNull()) {
-            QMessageBox::information(this, QStringLiteral("Adjust crop"),
-                                     QStringLiteral("Could not read a source frame from this clip."));
-            return;
-        }
-        const QJsonObject crop = edit.value(QStringLiteral("patch")).toObject().value(QStringLiteral("crop")).toObject();
-        const QRectF proposed(crop.value(QStringLiteral("x")).toDouble(), crop.value(QStringLiteral("y")).toDouble(),
-                              crop.value(QStringLiteral("width")).toDouble(), crop.value(QStringLiteral("height")).toDouble());
-        QDialog dialog(this);
-        dialog.setWindowTitle(QStringLiteral("Adjust proposed crop"));
-        auto *layout = new QVBoxLayout(&dialog);
-        layout->addWidget(new QLabel(QStringLiteral("Drag a replacement box, then apply the edited proposal.")));
-        auto *picker = new RegionPicker(frame, proposed, &dialog);
-        layout->addWidget(picker);
-        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-        connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-        layout->addWidget(buttons);
-        if (dialog.exec() != QDialog::Accepted) return;
-        const QRectF region = picker->region();
-        if (region.isEmpty()) return;
-        const QJsonObject box{{QStringLiteral("x"), region.x()}, {QStringLiteral("y"), region.y()},
-                              {QStringLiteral("width"), region.width()}, {QStringLiteral("height"), region.height()}};
-        sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("accept")},
-                               {QStringLiteral("proposalId"), proposalId},
-                               {QStringLiteral("revision"), QJsonValue::fromVariant(QVariant::fromValue(baseRevision))},
-                               {QStringLiteral("cropOverride"), QJsonObject{{QStringLiteral("clipId"), focusId},
-                                                                             {QStringLiteral("crop"), box}}}});
-    }
-
     void rejectProposal() {
         if (m_proposalId.isEmpty()) return;
         sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("reject")}, {QStringLiteral("proposalId"), m_proposalId}, {QStringLiteral("revision"), revisionValue()}});
@@ -3047,14 +2949,11 @@ private:
         auto *proposalButtons = new QHBoxLayout;
         m_acceptButton = new QPushButton(QStringLiteral("Accept"));
         m_acceptButton->setObjectName(QStringLiteral("primaryButton"));
-        m_adjustCropButton = new QPushButton(QStringLiteral("Adjust box…"));
         m_rejectButton = new QPushButton(QStringLiteral("Reject"));
         m_rejectButton->setObjectName(QStringLiteral("dangerButton"));
         connect(m_acceptButton, &QPushButton::clicked, this, &MainWindow::acceptProposal);
-        connect(m_adjustCropButton, &QPushButton::clicked, this, &MainWindow::adjustProposalCrop);
         connect(m_rejectButton, &QPushButton::clicked, this, &MainWindow::rejectProposal);
         proposalButtons->addWidget(m_acceptButton);
-        proposalButtons->addWidget(m_adjustCropButton);
         proposalButtons->addWidget(m_rejectButton);
         proposalLayout->addWidget(m_proposalSummary);
         proposalLayout->addWidget(m_proposalDiff);
@@ -3834,11 +3733,12 @@ private:
         m_updatingInspector = false;
     }
 
+    // A proposal is the script the agent wants to run and the diff of the
+    // document it would produce.
     void updateProposal(const QJsonValue &value) {
         m_proposalId.clear();
         bool pending = value.isObject() && value.toObject().value(QStringLiteral("status")).toString() == QStringLiteral("pending");
         m_acceptButton->setEnabled(m_connected && pending);
-        m_adjustCropButton->setEnabled(false);
         m_rejectButton->setEnabled(m_connected && pending);
         m_proposalBox->setVisible(pending);
         if (!pending) {
@@ -3849,91 +3749,23 @@ private:
         const QJsonObject proposal = value.toObject();
         m_proposalId = proposal.value(QStringLiteral("proposalId")).toString();
         const bool stale = proposal.value(QStringLiteral("freshness")).toString() == QStringLiteral("stale");
-        const QJsonArray diff = proposal.value(QStringLiteral("diff")).toArray();
-        m_proposalSummary->setText(QStringLiteral("%1 change%2%3")
-                                       .arg(diff.size())
-                                       .arg(diff.size() == 1 ? QString() : QStringLiteral("s"))
+        const QString diff = proposal.value(QStringLiteral("documentDiff")).toString();
+        int changed = 0;
+        for (const QString &line : diff.split(QLatin1Char('\n'))) {
+            if ((line.startsWith(QLatin1Char('+')) && !line.startsWith(QStringLiteral("+++"))) ||
+                (line.startsWith(QLatin1Char('-')) && !line.startsWith(QStringLiteral("---"))))
+                ++changed;
+        }
+        m_proposalSummary->setText(QStringLiteral("%1 changed line%2%3")
+                                       .arg(changed)
+                                       .arg(changed == 1 ? QString() : QStringLiteral("s"))
                                        .arg(stale ? QStringLiteral("  •  stale") : QString()));
-        auto displayValue = [](const QJsonValue &entry) {
-            if (entry.isUndefined()) return QStringLiteral("—");
-            if (entry.isString()) return entry.toString();
-            if (entry.isObject()) {
-                const auto object = entry.toObject();
-                if (object.contains(QStringLiteral("start")) && object.contains(QStringLiteral("end")))
-                    return QStringLiteral("%1 – %2").arg(prettyTime(object.value(QStringLiteral("start")).toDouble()), prettyTime(object.value(QStringLiteral("end")).toDouble()));
-                return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Indented));
-            }
-            if (entry.isArray()) return QString::fromUtf8(QJsonDocument(entry.toArray()).toJson(QJsonDocument::Indented));
-            const QByteArray encoded = QJsonDocument(QJsonArray{entry}).toJson(QJsonDocument::Compact);
-            return QString::fromUtf8(encoded.mid(1, encoded.size() - 2));
-        };
-        auto entityName = [this](const QString &id) {
-            for (const auto &trackValue : m_project.value(QStringLiteral("tracks")).toArray()) {
-                const auto track = trackValue.toObject();
-                if (track.value(QStringLiteral("id")).toString() == id) return track.value(QStringLiteral("name")).toString(id);
-                for (const auto &clipValue : track.value(QStringLiteral("clips")).toArray()) {
-                    const auto clip = clipValue.toObject();
-                    if (clip.value(QStringLiteral("id")).toString() == id) return clipName(clip);
-                }
-            }
-            return id;
-        };
-        QString html;
-        if (stale) html += QStringLiteral("<p><b>This proposal is out of date. Ask Cut to prepare it again before accepting.</b></p>");
-        const auto impacts = proposal.value(QStringLiteral("impacts")).toArray();
-        for (const auto &entry : impacts) {
-            const auto impact = entry.toObject();
-            QString kind = impact.value(QStringLiteral("kind")).toString();
-            kind.replace(QLatin1Char('_'), QLatin1Char(' '));
-            const QString id = impact.value(QStringLiteral("clipId")).toString(impact.value(QStringLiteral("trackId")).toString());
-            html += QStringLiteral("<p><b>%1%2</b>").arg(kind.toHtmlEscaped(), id.isEmpty() ? QString() : QStringLiteral(" · ") + entityName(id).toHtmlEscaped());
-            if (impact.contains(QStringLiteral("property"))) html += QStringLiteral("<br/>%1").arg(impact.value(QStringLiteral("property")).toString().toHtmlEscaped());
-            for (const QString &key : {QStringLiteral("timeline"), QStringLiteral("source"), QStringLiteral("from"), QStringLiteral("to"), QStringLiteral("before"), QStringLiteral("after"), QStringLiteral("sourceBefore"), QStringLiteral("sourceAfter")}) {
-                if (impact.contains(key)) html += QStringLiteral("<br/>%1: %2").arg(key.toHtmlEscaped(), displayValue(impact.value(key)).toHtmlEscaped());
-            }
-            html += QStringLiteral("</p>");
-        }
-        html += QStringLiteral("<p><b>All field changes</b></p>");
-        for (const auto &entry : diff) {
-            const auto change = entry.toObject();
-            const QString path = change.value(QStringLiteral("path")).toString();
-            QStringList parts;
-            QString part;
-            bool escaped = false;
-            for (const QChar ch : path.mid(path.startsWith(QLatin1Char('$')) ? 1 : 0)) {
-                if (escaped) { part += ch; escaped = false; }
-                else if (ch == QLatin1Char('\\')) escaped = true;
-                else if (ch == QLatin1Char('.') || ch == QLatin1Char('[') || ch == QLatin1Char(']')) {
-                    if (!part.isEmpty()) { parts << part; part.clear(); }
-                } else part += ch;
-            }
-            if (!part.isEmpty()) parts << part;
-            QStringList labels;
-            QJsonValue current(m_project);
-            for (const QString &part : parts) {
-                if (current.isArray()) {
-                    bool valid = false;
-                    const int index = part.toInt(&valid);
-                    const auto array = current.toArray();
-                    current = valid && index >= 0 && index < array.size() ? array.at(index) : QJsonValue();
-                    const auto object = current.toObject();
-                    labels << (object.contains(QStringLiteral("id")) ? entityName(object.value(QStringLiteral("id")).toString()) : part);
-                } else {
-                    current = current.toObject().value(part);
-                    labels << part;
-                }
-            }
-            html += QStringLiteral("<p><b>%1</b><br/>Before: %2<br/>After: %3</p>")
-                .arg(labels.isEmpty() ? QStringLiteral("Project") : labels.join(QStringLiteral(" › ")).toHtmlEscaped(),
-                     displayValue(change.value(QStringLiteral("before"))).toHtmlEscaped(),
-                     displayValue(change.value(QStringLiteral("after"))).toHtmlEscaped());
-        }
-        const bool truncated = proposal.value(QStringLiteral("diffTruncated")).toBool();
-        if (truncated) html += QStringLiteral("<p><b>This proposal is too large to review completely. Ask Cut to split it into smaller changes.</b></p>");
-        m_proposalDiff->setHtml(html);
-        m_acceptButton->setEnabled(m_connected && !stale && !truncated);
-        m_adjustCropButton->setEnabled(m_connected && !stale && !truncated && !proposalCropEdit(proposal).isEmpty());
-        m_acceptButton->setToolTip(truncated ? QStringLiteral("Split this proposal into smaller changes to review all fields") : QString());
+        QString text;
+        if (stale) text += QStringLiteral("This proposal is out of date. Ask Cut to prepare it again before accepting.\n\n");
+        text += proposal.value(QStringLiteral("script")).toString();
+        text += QStringLiteral("\n") + diff;
+        m_proposalDiff->setPlainText(text);
+        m_acceptButton->setEnabled(m_connected && !stale);
     }
 
     void appendConversation(const QString &speaker, const QString &text) {
@@ -4143,7 +3975,6 @@ private:
     QLabel *m_proposalSummary = nullptr;
     QTextEdit *m_proposalDiff = nullptr;
     QPushButton *m_acceptButton = nullptr;
-    QPushButton *m_adjustCropButton = nullptr;
     QPushButton *m_rejectButton = nullptr;
     QGroupBox *m_proposalBox = nullptr;
     QLabel *m_inspectorClip = nullptr;
@@ -4458,7 +4289,7 @@ private slots:
         window.appendConversation(QStringLiteral("Cut"), QStringLiteral("I’ll shorten the opening and keep the rest of your sequence in place.\nReview the changes before applying them."));
         window.appendConversationNote(QStringLiteral("Tool"), QString(500, QLatin1Char('x')));
         window.updateProposal(QJsonObject{{"status", "pending"}, {"proposalId", "review"},
-            {"diff", QJsonArray{QJsonObject{{"path", "$.name"}, {"before", "old"}, {"after", "new"}}}}});
+            {"script", "trim c1 out -1s\n"}, {"documentDiff", "-    clip c1 dur=00:00:04:00\n+    clip c1 dur=00:00:03:00\n"}});
         window.m_activityList->show();
         QCoreApplication::processEvents();
         QVERIFY(window.m_chatInput->height() <= 36);
@@ -4924,34 +4755,22 @@ private slots:
         QVERIFY(scroll.horizontalScrollBar()->maximum() > 0);
     }
 
-    void proposalShowsAllChangesAndGuardsIncompleteReview() {
+    void proposalShowsTheScriptAndDocumentDiff() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
-        window.m_project = QJsonObject{{"tracks", QJsonArray{QJsonObject{{"id", "video"}, {"clips", QJsonArray{QJsonObject{{"id", "clip-1"}, {"name", "Opening shot"}}}}}}}};
-        QJsonArray diff;
-        for (int i = 0; i < 6; ++i) diff.append(QJsonObject{{"path", QStringLiteral("$.metadata.field%1").arg(i)}, {"before", i}, {"after", i + 10}});
-        diff.append(QJsonObject{{"path", "$.metadata.name"}, {"before", "old"}, {"after", "<b>literal</b>"}});
-        diff.append(QJsonObject{{"path", "$.tracks[0].clips[0].out"}, {"before", 8}, {"after", 4}});
-        diff.append(QJsonObject{{"path", "$.tracks[1]"}, {"after", QJsonObject{{"id", "new-track"}, {"clips", QJsonArray{}}}}});
-        QJsonObject proposal{{"status", "pending"}, {"proposalId", "proposal-1"}, {"diff", diff}, {"impacts", QJsonArray{QJsonObject{{"kind", "clip_trimmed"}, {"clipId", "clip-1"}, {"before", QJsonObject{{"start", 0}, {"end", 8}}}, {"after", QJsonObject{{"start", 0}, {"end", 4}}}}}}};
+        QJsonObject proposal{{"status", "pending"}, {"proposalId", "proposal-1"},
+                             {"script", "trim c1 out -24f\n"},
+                             {"documentDiff", "--- before\n+++ after\n@@ -1,1 +1,1 @@\n-    clip c1 dur=00:00:04:00\n+    clip c1 dur=00:00:03:00\n"}};
         window.updateProposal(proposal);
         const auto text = window.m_proposalDiff->toPlainText();
-        QVERIFY(text.contains(QStringLiteral("field5")));
-        QVERIFY(text.contains(QStringLiteral("After: 15")));
-        QVERIFY(text.contains(QStringLiteral("Opening shot")));
-        QVERIFY(text.contains(QStringLiteral("Opening shot › out")));
-        QVERIFY(text.contains(QStringLiteral("new-track")));
-        QVERIFY(text.contains(QStringLiteral("00:04.00")));
-        QVERIFY(text.contains(QStringLiteral("<b>literal</b>")));
+        QVERIFY(text.contains(QStringLiteral("trim c1 out -24f")));
+        QVERIFY(text.contains(QStringLiteral("+    clip c1 dur=00:00:03:00")));
+        QCOMPARE(window.m_proposalSummary->text(), QStringLiteral("2 changed lines"));
         QVERIFY(window.m_acceptButton->isEnabled());
         proposal.insert(QStringLiteral("freshness"), QStringLiteral("stale"));
         window.updateProposal(proposal);
         QVERIFY(!window.m_acceptButton->isEnabled());
-        proposal.remove(QStringLiteral("freshness"));
-        proposal.insert(QStringLiteral("diffTruncated"), true);
-        window.updateProposal(proposal);
-        QVERIFY(!window.m_acceptButton->isEnabled());
-        QVERIFY(window.m_proposalDiff->toPlainText().contains(QStringLiteral("smaller changes")));
+        QVERIFY(window.m_proposalDiff->toPlainText().contains(QStringLiteral("out of date")));
     }
 };
 #endif
