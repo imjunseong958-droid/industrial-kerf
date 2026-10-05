@@ -3775,11 +3775,15 @@ private:
         setSpin(m_inSpin, clip.value(QStringLiteral("in")).toDouble());
         setSpin(m_outSpin, std::max(0.01, clip.value(QStringLiteral("out")).toDouble(1.0)));
         setSpin(m_speedSpin, clip.value(QStringLiteral("speed")).toDouble(1.0));
-        // Property editors follow the catalog definitions for the clip's track
-        // type; animated properties show their first key and are read-only.
-        const QJsonArray defs = hasClip
-            ? m_project.value(QStringLiteral("properties")).toObject().value(selectedTrackType()).toArray()
-            : QJsonArray();
+        // Property editors follow the catalog definitions for a generator's
+        // parameters and the clip's track type; animated properties show their
+        // first key and are read-only.
+        QJsonArray defs;
+        if (hasClip) {
+            defs = m_project.value(QStringLiteral("generators")).toObject().value(clip.value(QStringLiteral("fx")).toString()).toArray();
+            for (const QJsonValue &def : m_project.value(QStringLiteral("properties")).toObject().value(selectedTrackType()).toArray())
+                defs.append(def);
+        }
         if (defs != m_propertyDefs) {
             while (m_propertyForm->rowCount() > 0) m_propertyForm->removeRow(0);
             m_propertyEditors.clear();
@@ -4486,8 +4490,14 @@ private slots:
                                 {"props", QJsonObject{{"opacity", 0.5}, {"x", QJsonArray{
                                     QJsonObject{{"at", 0.0}, {"value", 0.25}, {"interp", "linear"}},
                                     QJsonObject{{"at", 1.0}, {"value", 1.0}, {"interp", "linear"}}}}}}}}}},
+                QJsonObject{{"id", "V2"}, {"type", "video"}, {"clips", QJsonArray{
+                    QJsonObject{{"id", "g"}, {"kind", "generator"}, {"fx", "title"}, {"timelineStart", 0.0}, {"duration", 2.0},
+                                {"props", QJsonObject{{"text", "Day One"}}}}}}},
                 QJsonObject{{"id", "A1"}, {"type", "audio"}, {"clips", QJsonArray{
-                    QJsonObject{{"id", "a"}, {"timelineStart", 0.0}, {"duration", 2.0}}}}}}}}}});
+                    QJsonObject{{"id", "a"}, {"timelineStart", 0.0}, {"duration", 2.0}}}}}}},
+            {"generators", QJsonObject{{"title", QJsonArray{
+                QJsonObject{{"name", "text"}, {"type", "text"}, {"default", ""}},
+                QJsonObject{{"name", "color"}, {"type", "color"}, {"default", "#ffffff"}}}}}}}}});
         auto set = [&window] {
             const QJsonObject command = window.m_lastCommand;
             window.m_lastCommand = {};
@@ -4514,6 +4524,19 @@ private slots:
         QVERIFY(set().value("props").toObject().value("opacity").isNull());
         window.propertyEdited("blend", "add");
         QCOMPARE(set().value("props").toObject().value("blend").toString(), QStringLiteral("add"));
+        window.selectClip(QStringLiteral("g"));
+        QCOMPARE(window.m_propertyEditors.size(), 5);
+        auto *text = qobject_cast<QLineEdit *>(window.m_propertyEditors.value("text"));
+        auto *color = qobject_cast<QLineEdit *>(window.m_propertyEditors.value("color"));
+        QVERIFY(text && color && window.m_propertyEditors.contains("opacity"));
+        QCOMPARE(text->text(), QStringLiteral("Day One"));
+        QCOMPARE(color->text(), QStringLiteral("#ffffff"));
+        window.propertyEdited("text", "Day Two");
+        QCOMPARE(set().value("props").toObject().value("text").toString(), QStringLiteral("Day Two"));
+        window.propertyEdited("color", "#ffffff");
+        QVERIFY(set().isEmpty());
+        window.propertyEdited("color", "#ff0000");
+        QCOMPARE(set().value("props").toObject().value("color").toString(), QStringLiteral("#ff0000"));
         window.selectClip(QStringLiteral("a"));
         QCOMPARE(window.m_propertyEditors.keys(), QList<QString>{"gain"});
         QVERIFY(window.m_propertyEditors.value("gain")->toolTip().contains("dB"));

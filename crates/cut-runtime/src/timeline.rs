@@ -7,13 +7,14 @@
 //! Edits go back as typed operations (`EditOp`), never by patching this.
 //!
 //! `properties` carries the catalog's intrinsic clip property definitions once
-//! per snapshot, keyed by track type. Each clip's `props` holds only the
-//! properties it sets: a static value, or a keyframe list when animated.
-//! Anything absent is at its default.
+//! per snapshot, keyed by track type, and `generators` the parameter
+//! definitions of each generator. Each clip's `props` holds only the
+//! properties and generator parameters it sets: a static value, or a keyframe
+//! list when animated. Anything absent is at its default.
 
 use cut_model::{
-    Catalog, Clip, Content, Domain, Param, ParamDef, ParamType, Project, Rate, Sequence, Time,
-    Track, Value,
+    Catalog, Clip, Content, Domain, FxKind, Param, ParamDef, ParamType, Project, Rate, Sequence,
+    Time, Track, Value,
 };
 use serde_json::{json, Map, Value as Json};
 
@@ -38,6 +39,11 @@ pub(crate) fn timeline_json(project: &Project) -> Json {
             json!({"id": sequence.id.as_str(), "name": sequence.name})
         }).collect::<Vec<_>>(),
         "properties": properties_json(),
+        "generators": Catalog::builtin()
+            .all()
+            .filter(|def| def.kind == FxKind::Generator)
+            .map(|def| (def.id.to_string(), def.params.iter().map(param_def_json).collect()))
+            .collect::<Map<String, Json>>(),
         "tracks": [],
         "markers": [],
     });
@@ -173,16 +179,11 @@ fn clip_json(project: &Project, rate: Rate, clip: &Clip) -> Json {
         Content::Generator { fx, params } => {
             object.insert("kind".into(), json!("generator"));
             object.insert("fx".into(), json!(fx.as_str()));
-            let text = match params.get("text") {
-                Some(Param::Static(Value::Text(text))) => Some(text.clone()),
-                _ => None,
+            let name = match params.get("text") {
+                Some(Param::Static(Value::Text(text))) => text.clone(),
+                _ => fx.to_string(),
             };
-            if let Some(text) = &text {
-                object.insert("text".into(), json!(text));
-            }
-            object
-                .entry("name")
-                .or_insert_with(|| json!(text.unwrap_or_else(|| fx.to_string())));
+            object.entry("name").or_insert_with(|| json!(name));
         }
         Content::Caption { text } => {
             object.insert("kind".into(), json!("caption"));
@@ -190,9 +191,14 @@ fn clip_json(project: &Project, rate: Rate, clip: &Clip) -> Json {
             object.entry("name").or_insert_with(|| json!(text));
         }
     }
+    let params = match &clip.content {
+        Content::Generator { params, .. } => Some(params),
+        _ => None,
+    };
     let props: Map<String, Json> = clip
         .props
         .iter()
+        .chain(params.into_iter().flatten())
         .map(|(name, param)| (name.clone(), param_json(param)))
         .collect();
     if !props.is_empty() {
@@ -281,7 +287,10 @@ mod tests {
              \x20   transition t1 from=c1 to=c2 fx=dissolve dur=12f\n\
              \x20 track A1 audio\n\
              \x20   clip a1 media=m1 src=2s at=0f dur=48f\n\
-             \x20     set gain=-6\n",
+             \x20     set gain=-6\n\
+             \x20 track V2 video\n\
+             \x20   clip g1 gen=title at=0f dur=24f\n\
+             \x20     set y=0.3 text=\"Day One\"\n",
             Catalog::builtin(),
         )
         .unwrap()
@@ -309,6 +318,15 @@ mod tests {
         let blend = video.iter().find(|def| def["name"] == "blend").unwrap();
         assert_eq!(blend["options"][0], "normal");
         let gain = &value["properties"]["audio"][0];
+        let title = &value["tracks"][2]["clips"][0];
+        assert_eq!(title["name"], "Day One");
+        assert_eq!(title["props"]["text"], "Day One");
+        assert_eq!(title["props"]["y"], 0.3);
+        let title = value["generators"]["title"].as_array().unwrap();
+        assert!(title
+            .iter()
+            .any(|def| def["name"] == "color" && def["type"] == "color"));
+        assert_eq!(value["generators"]["adjustment"], json!([]));
         assert_eq!(
             (gain["name"].as_str(), gain["unit"].as_str()),
             (Some("gain"), Some("dB"))
