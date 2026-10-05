@@ -5,9 +5,15 @@
 //! frame counts on the sequence rate beside them; clips appear at their own
 //! spans, and transitions are listed separately with the region they cover.
 //! Edits go back as typed operations (`EditOp`), never by patching this.
+//!
+//! `properties` carries the catalog's intrinsic clip property definitions once
+//! per snapshot, keyed by track type. Each clip's `props` holds only the
+//! properties it sets: a static value, or a keyframe list when animated.
+//! Anything absent is at its default.
 
 use cut_model::{
-    Catalog, Clip, Content, Domain, Param, Project, Rate, Sequence, Time, Track, Value,
+    Catalog, Clip, Content, Domain, Param, ParamDef, ParamType, Project, Rate, Sequence, Time,
+    Track, Value,
 };
 use serde_json::{json, Map, Value as Json};
 
@@ -31,6 +37,7 @@ pub(crate) fn timeline_json(project: &Project) -> Json {
         "sequences": project.sequences.iter().map(|sequence| {
             json!({"id": sequence.id.as_str(), "name": sequence.name})
         }).collect::<Vec<_>>(),
+        "properties": properties_json(),
         "tracks": [],
         "markers": [],
     });
@@ -77,6 +84,17 @@ pub(crate) fn timeline_json(project: &Project) -> Json {
     value
 }
 
+fn properties_json() -> Json {
+    [Domain::Video, Domain::Audio]
+        .into_iter()
+        .map(|domain| {
+            let defs = Catalog::builtin().props(domain).iter();
+            (domain.name().to_owned(), defs.map(param_def_json).collect())
+        })
+        .collect::<Map<String, Json>>()
+        .into()
+}
+
 fn frames(rate: Rate, time: Time) -> i64 {
     rate.frames_round(time)
 }
@@ -89,7 +107,7 @@ fn track_json(project: &Project, sequence: &Sequence, track: &Track) -> Json {
         "enabled": track.enabled,
         "locked": track.locked,
         "muted": track.muted,
-        "clips": track.clips.iter().map(|clip| clip_json(project, rate, track, clip)).collect::<Vec<_>>(),
+        "clips": track.clips.iter().map(|clip| clip_json(project, rate, clip)).collect::<Vec<_>>(),
         "transitions": track.transitions.iter().map(|transition| {
             let cut = track.clip(transition.from.as_str()).map_or(Time::ZERO, Clip::end);
             let (before, after) = transition.split_at_cut(rate);
@@ -111,7 +129,7 @@ fn track_json(project: &Project, sequence: &Sequence, track: &Track) -> Json {
     value
 }
 
-fn clip_json(project: &Project, rate: Rate, track: &Track, clip: &Clip) -> Json {
+fn clip_json(project: &Project, rate: Rate, clip: &Clip) -> Json {
     let mut value = json!({
         "id": clip.id.as_str(),
         "timelineStart": clip.start.seconds(),
@@ -172,33 +190,6 @@ fn clip_json(project: &Project, rate: Rate, track: &Track, clip: &Clip) -> Json 
             object.entry("name").or_insert_with(|| json!(text));
         }
     }
-    let catalog = Catalog::builtin();
-    let number = |name: &str| match clip.props.get(name) {
-        Some(Param::Static(Value::Number(n))) => Some(*n),
-        _ => None,
-    };
-    match track.kind.domain() {
-        Some(Domain::Video) => {
-            if let Some(opacity) = number("opacity") {
-                object.insert("opacity".into(), json!(opacity));
-            }
-            let crop = ["crop_l", "crop_t", "crop_r", "crop_b"].map(number);
-            if crop.iter().any(Option::is_some) {
-                let [l, t, r, b] = crop.map(|edge| edge.unwrap_or(0.0));
-                object.insert(
-                    "crop".into(),
-                    json!({"x": l, "y": t, "width": 1.0 - l - r, "height": 1.0 - t - b}),
-                );
-            }
-        }
-        Some(Domain::Audio) => {
-            if let Some(gain) = number("gain") {
-                object.insert("gain".into(), json!(gain));
-                object.insert("volume".into(), json!(10f64.powf(gain / 20.0)));
-            }
-        }
-        None => {}
-    }
     let props: Map<String, Json> = clip
         .props
         .iter()
@@ -206,15 +197,6 @@ fn clip_json(project: &Project, rate: Rate, track: &Track, clip: &Clip) -> Json 
         .collect();
     if !props.is_empty() {
         object.insert("props".into(), Json::Object(props));
-    }
-    let animated: Vec<&str> = clip
-        .props
-        .iter()
-        .filter(|(_, param)| matches!(param, Param::Animated(_)))
-        .map(|(name, _)| name.as_str())
-        .collect();
-    if !animated.is_empty() {
-        object.insert("animated".into(), json!(animated));
     }
     if !clip.effects.is_empty() {
         object.insert(
@@ -225,11 +207,34 @@ fn clip_json(project: &Project, rate: Rate, track: &Track, clip: &Clip) -> Json 
                     json!({
                         "fx": effect.fx.as_str(),
                         "enabled": effect.enabled,
-                        "doc": catalog.fx(effect.fx.as_str()).map(|def| def.doc.as_str()),
+                        "doc": Catalog::builtin().fx(effect.fx.as_str()).map(|def| def.doc.as_str()),
                     })
                 })
                 .collect(),
         );
+    }
+    value
+}
+
+fn param_def_json(def: &ParamDef) -> Json {
+    let mut value = json!({
+        "name": def.name,
+        "type": def.ty.name(),
+        "default": value_json(&def.default),
+        "animatable": def.animatable,
+        "doc": def.doc,
+    });
+    if let Some(min) = def.min {
+        value["min"] = json!(min);
+    }
+    if let Some(max) = def.max {
+        value["max"] = json!(max);
+    }
+    if let Some(unit) = &def.unit {
+        value["unit"] = json!(unit);
+    }
+    if let ParamType::Enum(options) = &def.ty {
+        value["options"] = json!(options);
     }
     value
 }
@@ -287,13 +292,26 @@ mod tests {
         let v1 = &value["tracks"][0];
         assert_eq!(v1["clips"][0]["duration"], 2.0);
         assert_eq!(v1["clips"][0]["durationFrames"], 48);
-        assert_eq!(v1["clips"][0]["opacity"], 0.5);
-        assert_eq!(v1["clips"][0]["crop"]["width"], 0.75);
+        assert_eq!(v1["clips"][0]["props"]["opacity"], 0.5);
+        assert_eq!(v1["clips"][0]["props"]["crop_l"], 0.25);
+        assert!(v1["clips"][1].get("props").is_none());
         assert_eq!(v1["clips"][1]["timelineStart"], 2.0);
         assert_eq!(v1["clips"][1]["reverse"], true);
         assert_eq!(v1["transitions"][0]["start"], 1.75);
         assert_eq!(v1["transitions"][0]["end"], 2.25);
-        let a1 = &value["tracks"][1]["clips"][0];
-        assert!((a1["volume"].as_f64().unwrap() - 0.501).abs() < 0.001);
+        assert_eq!(value["tracks"][1]["clips"][0]["props"]["gain"], -6.0);
+        let video = value["properties"]["video"].as_array().unwrap();
+        let opacity = video.iter().find(|def| def["name"] == "opacity").unwrap();
+        assert_eq!(opacity["type"], "number");
+        assert_eq!(opacity["default"], 1.0);
+        assert_eq!(opacity["max"], 1.0);
+        assert_eq!(opacity["animatable"], true);
+        let blend = video.iter().find(|def| def["name"] == "blend").unwrap();
+        assert_eq!(blend["options"][0], "normal");
+        let gain = &value["properties"]["audio"][0];
+        assert_eq!(
+            (gain["name"].as_str(), gain["unit"].as_str()),
+            (Some("gain"), Some("dB"))
+        );
     }
 }
