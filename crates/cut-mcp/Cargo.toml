@@ -19,6 +19,8 @@ cut-agent = { path = "../cut-agent" }
 cut-domain = { path = "../cut-domain" }
 cut-engine = { path = "../cut-engine" }
 cut-fetcher = { path = "../cut-fetcher" }
+cut-lang = { path = "../cut-lang" }
+cut-model = { path = "../cut-model" }
 cut-runtime = { path = "../cut-runtime" }
 cut-skills = { path = "../cut-skills" }
 fs2 = "0.4"

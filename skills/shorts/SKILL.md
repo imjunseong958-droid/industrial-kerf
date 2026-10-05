@@ -1,35 +1,20 @@
 ---
 name: shorts
-description: Build a reviewed vertical short from observed source ranges, with framing, captions, and an offline preview.
+description: Cut a vertical short around one strong hook, framed for a phone and captioned from what is actually said.
 ---
 
 # Vertical shorts
 
-Create a focused 15–60 second cut unless the user specifies another duration.
-
-1. Read `project.outline` and a bounded `timeline.query`. Follow pagination or
-   expand a node with `nodePath` when more detail is needed.
-2. Inspect source evidence with `media.probe`, using `action: "observe"` and
-   an explicit `opts.start` plus `opts.duration`. Use a filmstrip first;
-   request exact frames or local transcription only for the selected range.
-3. Choose the strongest hook and source ranges. Use `workflow.roughcut` with
-   those selections and a rationale for each. The result is a pending proposal,
-   not an applied edit.
-4. For crop or timing refinements, read `tools.describe` with
-   `{"name":"timeline.apply","commandType":"update_clip"}`. Stage related
-   changes as one atomic batch. Crop coordinates are normalized and must stay
-   within the source frame. Preserve words needed to understand the hook.
-5. Use existing subtitles or observed transcript cues. Read the `add_overlay`
-   command contract before staging captions. Do not invent speech. Existing
-   local media may be staged with `media.asset`; direct fetching and history
-   changes are not tools of the built-in agent.
-6. Run `timeline.check` on the pending proposal and use `proposal.capture`
-   to inspect its offline before/after preview. This is required when live
-   playback cannot represent layering, audio mixing, or the requested effect.
-   After acceptance, render the current project with `render.preview` or
-   `render.start` as requested.
-
-Keep the proposal pending for user review. Recheck revision and proposal
-status before further editing; an archived tool result is historical evidence.
-Retrieve abbreviated results with `session.read` in the built-in agent or
-`results.read` when the MCP server returns an evidence handle.
+- Aim for 15–60 seconds unless the user asks otherwise. One idea per short.
+- Open on the hook: the line, reaction, or image that makes someone stay.
+  Cut setup that the hook does not need; keep every word the hook depends on.
+- Choose ranges from what you saw and heard, not from file order. Prefer
+  complete sentences and clean in and out points on pauses.
+- Frame for 9:16. Keep the speaker's face or the action inside the frame for
+  the whole clip; a fixed crop cannot follow a moving subject, so split where
+  the composition changes and frame each part on its own.
+- Caption only what is said, timed to the speech. Never invent dialogue.
+- End on the payoff. Do not let a short trail off into setup for something
+  else.
+- Before handing it over, look at the result: the first second, every cut,
+  and the last frame.

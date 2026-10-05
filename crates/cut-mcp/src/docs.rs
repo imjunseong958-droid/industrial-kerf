@@ -168,9 +168,11 @@ fn protocol_markdown(metadata: &Value, tools: &[ToolDefinition]) -> Result<Strin
     let mut output = markdown_header();
     output.push_str("# Cut agent protocol\n\n");
     write_metadata_markdown(&mut output, metadata);
-    output.push_str(
-        "All project state is owned by `cutd`. Read the current snapshot before proposing an edit; mutations go through `timeline.apply` and agent edits remain proposals until accepted. Generated files are documentation only.\n\n",
-    );
+    output.push_str(if metadata["mcpProfile"] == "kernel" {
+        "All project state is owned by `cutd`. Agents read the annotated `.cut` document with `look`, change it with `edit` scripts, and render with `render`. Every edit is a proposal until a person accepts it. Generated files are documentation only.\n\n"
+    } else {
+        "All project state is owned by `cutd`. Read the current snapshot before proposing an edit; mutations go through `timeline.apply` and agent edits remain proposals until accepted. Generated files are documentation only.\n\n"
+    });
     output.push_str("## Tools\n\n");
     for tool in tools {
         let _ = writeln!(output, "### `{}`\n", markdown_inline(&tool.name));

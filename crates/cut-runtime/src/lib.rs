@@ -4157,7 +4157,7 @@ impl Runtime {
         let mut candidate = self.durable_state();
         candidate.jobs.insert(id, job.clone());
         self.commit_candidate(candidate, JournalEvent::Job { job: job.clone() })?;
-        Ok((job, project_value(&self.view), output))
+        Ok((job, self.renderable(&self.view), output))
     }
 
     pub fn proposal_preview(&self, proposal_id: &str) -> Result<(Value, Value), RuntimeError> {
@@ -4199,9 +4199,19 @@ impl Runtime {
         });
         let after = edit.run(&self.project)?.project;
         Ok((
-            project_value(&self.view),
-            project_value(&kernel::committed_view(&after)),
+            self.renderable(&self.view),
+            self.renderable(&kernel::committed_view(&after)),
         ))
+    }
+
+    /// A v2 project for the renderer, with media paths made absolute.
+    fn renderable(&self, view: &v2::Project) -> Value {
+        let mut project = project_value(view);
+        resolve_source_paths(
+            &mut project,
+            self.project_path.parent().unwrap_or(Path::new(".")),
+        );
+        project
     }
 
     pub fn import_media(
@@ -5008,6 +5018,22 @@ pub fn validate_actor(actor: &str) -> Result<(), RuntimeError> {
 
 fn domain_error(error: v2::DomainError) -> RuntimeError {
     RuntimeError::new(error.code, error.message)
+}
+
+/// Resolve relative `sources[].path` of a v2 project against the project
+/// directory. Documents keep media paths relative so a project can move;
+/// renderers run elsewhere and need them absolute.
+pub fn resolve_source_paths(project: &mut Value, directory: &Path) {
+    let Some(sources) = project.get_mut("sources").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for source in sources {
+        if let Some(path) = source.get("path").and_then(Value::as_str) {
+            if Path::new(path).is_relative() {
+                source["path"] = Value::String(directory.join(path).to_string_lossy().into_owned());
+            }
+        }
+    }
 }
 
 /// The v2 JSON that snapshots carry for v2 clients.
