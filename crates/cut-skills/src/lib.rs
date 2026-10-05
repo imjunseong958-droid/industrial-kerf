@@ -3,7 +3,6 @@
 //! Skills are data. The loader only reads direct child directories and never
 //! turns a skill into executable code or an arbitrary filesystem capability.
 
-use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
@@ -133,30 +132,6 @@ pub fn read_skill(skills: &[Skill], name: &str) -> Result<String, String> {
         .ok_or_else(|| format!("skill not found: {name}"))
 }
 
-/// Compact index suitable for an agent system prompt.
-pub fn skills_index_prompt(skills: &[Skill]) -> String {
-    if skills.is_empty() {
-        return "No skills are installed.".into();
-    }
-    skills
-        .iter()
-        .take(16)
-        .map(|skill| {
-            format!(
-                "- {}: {}",
-                skill.name,
-                skill.description.chars().take(200).collect::<String>()
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-        + if skills.len() > 16 {
-            "\n- More skills available via skills.list."
-        } else {
-            ""
-        }
-}
-
 /// The longest skill body carried in a system prompt.
 const MAX_PROMPT_SKILL_BYTES: usize = 6 * 1024;
 
@@ -191,29 +166,6 @@ fn bounded_body(body: &str) -> &str {
     body[..end]
         .rfind('\n')
         .map_or(&body[..end], |line| &body[..line])
-}
-
-/// JSON schema used by both MCP and the agent tool adapter.
-pub fn skill_read_tool_schema() -> Value {
-    json!({
-        "name": "skills.read",
-        "description": "Read the full body of one installed skill by exact name.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"name": {"type": "string", "minLength": 1}},
-            "required": ["name"],
-            "additionalProperties": false
-        }
-    })
-}
-
-/// JSON schema shared by the MCP and native agent adapters for listing skills.
-pub fn skill_list_tool_schema() -> Value {
-    json!({
-        "name": "skills.list",
-        "description": "List installed skills as compact names and descriptions.",
-        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false}
-    })
 }
 
 fn unquote(value: &str) -> String {

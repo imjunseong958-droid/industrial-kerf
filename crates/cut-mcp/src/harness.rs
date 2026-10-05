@@ -20,7 +20,7 @@ use cut_skills::Skill;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-/// The tools of the kernel profile.
+/// The tools every agent and MCP client uses.
 pub const TOOL_NAMES: &[&str] = &["look", "edit", "render"];
 
 const MAX_LOOK_FRAMES: usize = 12;
@@ -302,7 +302,7 @@ impl CutMcpRouter {
                 ));
             }
             let (revision, document) = self.runtime.get_document(true)?;
-            let state = self.state()?;
+            let state = self.runtime.get_state()?;
             return Ok(json!({
                 "revision": revision,
                 "document": document,
@@ -681,7 +681,7 @@ impl CutMcpRouter {
     pub(super) fn edit(&self, arguments: Value) -> Result<Value, McpError> {
         let input: EditInput = input(arguments)?;
         if let Some(revise) = input.revise.as_deref() {
-            match self.state()?.pending_proposal {
+            match self.runtime.get_state()?.pending_proposal {
                 Some(PendingProposal::Pending { proposal_id, .. }) if proposal_id == revise => {
                     self.runtime.reject_proposal(revise)?;
                 }
@@ -826,7 +826,7 @@ impl CutMcpRouter {
                 ))
             }
         };
-        let mut range = json!({});
+        let mut range = None;
         if input.from.is_some() || input.to.is_some() {
             let (_, document) = self.runtime.get_document(false)?;
             let project = parse(&document)?;
@@ -840,9 +840,12 @@ impl CutMcpRouter {
                 Some(text) => position(&clock, text)?,
                 None => sequence.duration(),
             };
-            range = json!({"start": from.seconds(), "duration": (to - from).seconds()});
+            range = Some(cut_runtime::RenderRange::new(
+                from.seconds(),
+                (to - from).seconds(),
+            )?);
         }
-        let started = self.render_start(draft, &range)?;
+        let started = self.render_start(draft, range)?;
         Ok(json!({
             "job": started["jobId"],
             "status": started["status"],

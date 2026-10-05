@@ -1,11 +1,10 @@
-use cut_mcp::{CutMcpRouter, McpProfile, McpServer};
+use cut_mcp::{CutMcpRouter, McpServer};
 use std::env;
 use std::io;
 use std::path::{Path, PathBuf};
 
 struct Options {
     directory: PathBuf,
-    profile: McpProfile,
     print_config: bool,
 }
 
@@ -21,15 +20,8 @@ fn run() -> Result<(), String> {
     let directory = env::var_os("CUT_PROJECT_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
-    let profile = match env::var("CUT_MCP_PROFILE") {
-        Ok(name) => McpProfile::parse(&name)
-            .ok_or_else(|| format!("CUT_MCP_PROFILE must be kernel, core, or full, not {name}"))?,
-        Err(_) => McpProfile::Kernel,
-    };
-    let Some(options) = parse_args(&args, directory, profile)? else {
-        println!(
-            "usage: cut-mcp [--dir <project-directory>] [--profile kernel|core|full] [--full] [--print-config]"
-        );
+    let Some(options) = parse_args(&args, directory)? else {
+        println!("usage: cut-mcp [--dir <project-directory>] [--print-config]");
         return Ok(());
     };
     if options.print_config {
@@ -39,7 +31,7 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     let cutd = discover_cutd();
-    let router = CutMcpRouter::new(&options.directory, options.profile, cutd.as_deref())?;
+    let router = CutMcpRouter::new(&options.directory, cutd.as_deref())?;
     McpServer::new(router)
         .serve(
             io::BufReader::new(io::stdin().lock()),
@@ -48,11 +40,7 @@ fn run() -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-fn parse_args(
-    args: &[String],
-    mut directory: PathBuf,
-    mut profile: McpProfile,
-) -> Result<Option<Options>, String> {
+fn parse_args(args: &[String], mut directory: PathBuf) -> Result<Option<Options>, String> {
     let mut print_config = false;
     let mut index = 0;
     while index < args.len() {
@@ -63,15 +51,6 @@ fn parse_args(
                     .get(index)
                     .ok_or_else(|| "cut-mcp --dir requires a path".to_owned())?
                     .into();
-            }
-            "--full" => profile = McpProfile::Full,
-            "--profile" => {
-                index += 1;
-                let name = args
-                    .get(index)
-                    .ok_or_else(|| "cut-mcp --profile requires kernel, core, or full".to_owned())?;
-                profile = McpProfile::parse(name)
-                    .ok_or_else(|| format!("unknown cut-mcp profile: {name}"))?;
             }
             "--print-config" => print_config = true,
             "--help" | "-h" => return Ok(None),
@@ -84,7 +63,6 @@ fn parse_args(
     }
     Ok(Some(Options {
         directory,
-        profile,
         print_config,
     }))
 }
@@ -97,10 +75,7 @@ fn client_config(executable: &Path, cwd: &Path, options: &Options) -> Result<Str
     let directory = directory
         .to_str()
         .ok_or_else(|| "cut-mcp project path is not valid UTF-8".to_owned())?;
-    let mut args = vec!["--dir", directory];
-    if options.profile != McpProfile::Kernel {
-        args.extend(["--profile", options.profile.as_str()]);
-    }
+    let args = ["--dir", directory];
     serde_json::to_string_pretty(&serde_json::json!({
         "mcpServers": {"cut": {"command": executable, "args": args}}
     }))
@@ -134,9 +109,9 @@ fn binary_name(name: &str) -> String {
 mod tests {
     use super::*;
 
-    fn parse(args: &[&str], directory: PathBuf, profile: McpProfile) -> Options {
+    fn parse(args: &[&str], directory: PathBuf) -> Options {
         let args = args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
-        parse_args(&args, directory, profile).unwrap().unwrap()
+        parse_args(&args, directory).unwrap().unwrap()
     }
 
     #[test]
@@ -145,7 +120,6 @@ mod tests {
         let options = parse(
             &["--print-config", "--dir", "missing project"],
             PathBuf::from("."),
-            McpProfile::Kernel,
         );
         assert!(options.print_config);
         let executable = root.path().join("cut-\"mcp");
@@ -162,44 +136,29 @@ mod tests {
     }
 
     #[test]
-    fn config_preserves_absolute_directory_and_full_profile() {
+    fn config_preserves_absolute_directory() {
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("project");
-        for args in [
-            vec!["--full", "--print-config"],
-            vec!["--print-config", "--full"],
-            vec!["--print-config"],
-        ] {
-            let options = parse(&args, directory.clone(), McpProfile::Full);
-            let config = client_config(
-                &root.path().join("cut-mcp"),
-                &root.path().join("cwd"),
-                &options,
-            )
-            .unwrap();
-            let config: serde_json::Value = serde_json::from_str(&config).unwrap();
-            assert_eq!(
-                config["mcpServers"]["cut"]["args"],
-                serde_json::json!(["--dir", directory, "--profile", "full"])
-            );
-        }
-        let options = parse(
-            &["--print-config", "--full"],
-            directory.clone(),
-            McpProfile::Core,
+        let options = parse(&["--print-config"], directory.clone());
+        let config = client_config(
+            &root.path().join("cut-mcp"),
+            &root.path().join("cwd"),
+            &options,
+        )
+        .unwrap();
+        let config: serde_json::Value = serde_json::from_str(&config).unwrap();
+        assert_eq!(
+            config["mcpServers"]["cut"]["args"],
+            serde_json::json!(["--dir", directory])
         );
-        assert!(matches!(options.profile, McpProfile::Full));
-        let options = parse(&["--profile", "core"], directory, McpProfile::Kernel);
-        assert!(matches!(options.profile, McpProfile::Core));
     }
 
     #[test]
     fn server_defaults_and_directory_alias_are_preserved() {
-        let options = parse(&[], PathBuf::from("default-project"), McpProfile::Kernel);
+        let options = parse(&[], PathBuf::from("default-project"));
         assert!(!options.print_config);
         assert_eq!(options.directory, PathBuf::from("default-project"));
-        assert!(matches!(options.profile, McpProfile::Kernel));
-        let options = parse(&["-d", "override"], options.directory, options.profile);
+        let options = parse(&["-d", "override"], options.directory);
         assert_eq!(options.directory, PathBuf::from("override"));
     }
 
@@ -209,16 +168,14 @@ mod tests {
             vec!["--print-config", "--dir"],
             vec!["--print-config", "--unknown"],
             vec!["--print-config", "unexpected"],
-            vec!["--profile", "v2"],
-            vec!["--profile"],
+            vec!["--profile", "full"],
+            vec!["--full"],
         ] {
             let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
-            assert!(parse_args(&args, PathBuf::from("."), McpProfile::Core).is_err());
+            assert!(parse_args(&args, PathBuf::from(".")).is_err());
         }
-        assert!(
-            parse_args(&["--help".into()], PathBuf::from("."), McpProfile::Core)
-                .unwrap()
-                .is_none()
-        );
+        assert!(parse_args(&["--help".into()], PathBuf::from("."))
+            .unwrap()
+            .is_none());
     }
 }

@@ -2449,7 +2449,7 @@ mod tests {
                     2 => Ok(vec![ProviderChunk::MessageEnd {
                         stop_reason: "tool_use".into(),
                         content: vec![
-                            json!({"type":"tool_use","id":"edit-1","name":"timeline.apply","input":{}}),
+                            json!({"type":"tool_use","id":"edit-1","name":"edit","input":{}}),
                         ],
                     }]),
                     _ => Ok(vec![ProviderChunk::MessageEnd {
@@ -2463,10 +2463,13 @@ mod tests {
         let executions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counter = executions.clone();
         let mut tools = ToolMap::new();
-        tools.insert("timeline.apply".into(),AgentTool::new("timeline.apply","stage",json!({"type":"object"}),move |_| {
-            counter.fetch_add(1,Ordering::SeqCst);
-            Ok(json!({"status":"awaiting_review","revision":7,"evidence":"x".repeat(100_000)}))
-        }));
+        tools.insert(
+            "edit".into(),
+            AgentTool::new("edit", "stage", json!({"type":"object"}), move |_| {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({"status":"awaiting_review","revision":7,"evidence":"x".repeat(100_000)}))
+            }),
+        );
         let mut session = AgentSession::from_provider(
             Box::new(LimitedProvider {
                 requests: requests.clone(),

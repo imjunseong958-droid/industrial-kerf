@@ -1,6 +1,6 @@
 //! `look`, `edit`, and `render` against a real cutd and real footage.
 
-use cut_mcp::{CutMcpRouter, McpProfile, McpServer};
+use cut_mcp::{CutMcpRouter, McpServer};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -76,7 +76,7 @@ sequence s1 rate=30 size=320x180
     )
     .unwrap();
     let cutd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/cutd");
-    let router = CutMcpRouter::new(directory.path(), McpProfile::Kernel, Some(&cutd)).unwrap();
+    let router = CutMcpRouter::new(directory.path(), Some(&cutd)).unwrap();
     Some((directory, router))
 }
 
@@ -99,9 +99,9 @@ fn has_image(value: &Value) -> bool {
 }
 
 #[test]
-fn kernel_profile_lists_three_tools_and_the_reference() {
+fn lists_three_tools_and_the_reference() {
     let directory = TempDir::new().unwrap();
-    let router = CutMcpRouter::new(directory.path(), McpProfile::Kernel, None).unwrap();
+    let router = CutMcpRouter::new(directory.path(), None).unwrap();
     let names = router
         .list_tools()
         .into_iter()

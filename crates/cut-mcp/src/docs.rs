@@ -5,8 +5,9 @@
 //! user-owned `.cut/docs/conventions.md` file.
 
 use super::{CutMcpRouter, ToolDefinition};
-use cut_domain::{OutlineNode, Project, ProjectOutline};
-use cut_runtime::{RequestEnvelope, RuntimeError, StateSnapshot};
+use cut_lang::Clock;
+use cut_model::{Catalog, Project};
+use cut_runtime::{RequestEnvelope, RuntimeError};
 use cut_skills::Skill;
 use serde_json::{json, Value};
 use std::fmt::{self, Write as FmtWrite};
@@ -83,11 +84,19 @@ impl From<io::Error> for DocsError {
 
 /// Generate the four project-local agent documentation files.
 pub fn generate_agent_docs(router: &CutMcpRouter) -> Result<GeneratedDocs, DocsError> {
-    let snapshot = router.runtime().get_state()?;
-    let project = cut_domain::parse_project(&snapshot.project)
-        .map_err(|error| DocsError::InvalidProject(error.to_string()))?;
-    let outline = cut_domain::project_outline(&project);
-    let metadata = metadata(router, &snapshot);
+    let (revision, document) = router.runtime().get_document(false)?;
+    let project = cut_lang::parse_document(&document, Catalog::builtin())
+        .map(|document| document.project)
+        .map_err(|errors| {
+            DocsError::InvalidProject(
+                errors
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )
+        })?;
+    let metadata = metadata(revision);
     let tools = router.list_tools();
     let directory = router
         .runtime()
@@ -101,7 +110,7 @@ pub fn generate_agent_docs(router: &CutMcpRouter) -> Result<GeneratedDocs, DocsE
         ("skills.md", skills_markdown(&metadata, router.skills())),
         (
             "project-summary.md",
-            project_summary_markdown(&metadata, &snapshot, &project, &outline),
+            project_summary_markdown(&metadata, &project),
         ),
     ];
     let mut files = Vec::with_capacity(contents.len());
@@ -113,7 +122,7 @@ pub fn generate_agent_docs(router: &CutMcpRouter) -> Result<GeneratedDocs, DocsE
     Ok(GeneratedDocs {
         directory,
         files,
-        revision: snapshot.revision,
+        revision,
     })
 }
 
@@ -143,7 +152,7 @@ pub fn add_agents_pointer(directory: &Path) -> Result<PathBuf, DocsError> {
     Ok(path)
 }
 
-fn metadata(router: &CutMcpRouter, snapshot: &StateSnapshot) -> Value {
+fn metadata(revision: u64) -> Value {
     json!({
         "_generated": {
             "owner": "cut",
@@ -158,9 +167,7 @@ fn metadata(router: &CutMcpRouter, snapshot: &StateSnapshot) -> Value {
         "deterministic": true,
         "mcpProtocolVersion": MCP_PROTOCOL_VERSION,
         "cutdProtocolVersion": RequestEnvelope::PROTOCOL_VERSION,
-        "mcpProfile": router.profile().as_str(),
-        "projectRevision": snapshot.revision,
-        "projectSchemaVersion": snapshot.project.get("version").and_then(Value::as_u64).unwrap_or(2),
+        "projectRevision": revision,
     })
 }
 
@@ -168,11 +175,9 @@ fn protocol_markdown(metadata: &Value, tools: &[ToolDefinition]) -> Result<Strin
     let mut output = markdown_header();
     output.push_str("# Cut agent protocol\n\n");
     write_metadata_markdown(&mut output, metadata);
-    output.push_str(if metadata["mcpProfile"] == "kernel" {
-        "All project state is owned by `cutd`. Agents read the annotated `.cut` document with `look`, change it with `edit` scripts, and render with `render`. Every edit is a proposal until a person accepts it. Generated files are documentation only.\n\n"
-    } else {
-        "All project state is owned by `cutd`. Read the current snapshot before proposing an edit; mutations go through `timeline.apply` and agent edits remain proposals until accepted. Generated files are documentation only.\n\n"
-    });
+    output.push_str(
+        "All project state is owned by `cutd`. Agents read the annotated `.cut` document with `look`, change it with `edit` scripts, and render with `render`. Every edit is a proposal until a person accepts it. The resource `cut://reference` holds the edit language and every property, effect, transition, and generator. Generated files are documentation only.\n\n",
+    );
     output.push_str("## Tools\n\n");
     for tool in tools {
         let _ = writeln!(output, "### `{}`\n", markdown_inline(&tool.name));
@@ -202,7 +207,7 @@ fn skills_markdown(metadata: &Value, skills: &[Skill]) -> String {
     output.push_str("# Cut skills\n\n");
     write_metadata_markdown(&mut output, metadata);
     output.push_str(
-        "Skills are data-only playbooks. Use `skills.read` with an exact name before relying on a full playbook. Project skills override user skills, which override bundled skills.\n\n",
+        "Skills carry editorial guidance and are part of the agent's instructions. Project skills override user skills, which override bundled skills.\n\n",
     );
     output.push_str("## Installed skills\n\n");
     if skills.is_empty() {
@@ -220,103 +225,61 @@ fn skills_markdown(metadata: &Value, skills: &[Skill]) -> String {
     output
 }
 
-fn project_summary_markdown(
-    metadata: &Value,
-    snapshot: &StateSnapshot,
-    project: &Project,
-    outline: &ProjectOutline,
-) -> String {
+fn project_summary_markdown(metadata: &Value, project: &Project) -> String {
     let mut output = markdown_header();
     output.push_str("# Cut project summary\n\n");
     write_metadata_markdown(&mut output, metadata);
-    let _ = writeln!(
-        output,
-        "- Project: **{}**",
-        markdown_text(&outline.project_name)
-    );
-    if let Some(id) = outline.project_id.as_deref() {
-        let _ = writeln!(output, "- Project ID: `{}`", markdown_inline(id));
-    }
-    let _ = writeln!(output, "- Duration: `{:.3}s`", project.duration());
-    let _ = writeln!(output, "- Frame rate: `{:.3} fps`", project.fps);
-    if let (Some(width), Some(height)) = (project.width, project.height) {
-        let _ = writeln!(output, "- Canvas: `{width:.0}×{height:.0}`");
-    }
-    let _ = writeln!(output, "- Sources: `{}`", project.sources.len());
-    let _ = writeln!(
-        output,
-        "- Tracks: `{}` · clips: `{}`",
-        project.tracks.len(),
-        project
-            .tracks
-            .iter()
-            .map(|track| track.clips.len())
-            .sum::<usize>()
-    );
+    let _ = writeln!(output, "- Project: **{}**", markdown_text(&project.name));
+    let _ = writeln!(output, "- Media: `{}`", project.media.len());
+    let _ = writeln!(output, "- Sequences: `{}`", project.sequences.len());
+    output.push_str("- Document: `project.cut`; agents read it annotated with `look`\n");
     output.push_str("- User-owned guidance: `.cut/docs/conventions.md` (preserved)\n\n");
 
-    output.push_str("## Sources\n\n");
-    if project.sources.is_empty() {
-        output.push_str("No sources.\n\n");
+    output.push_str("## Sequences\n\n");
+    if project.sequences.is_empty() {
+        output.push_str("No sequences.\n\n");
     } else {
-        output.push_str("| ID | Path | Duration |\n| --- | --- | ---: |\n");
-        for source in &project.sources {
-            let duration = source
-                .duration
-                .map(|duration| format!("{duration:.3}s"))
-                .unwrap_or_else(|| "unknown".into());
+        output.push_str(
+            "| ID | Name | Rate | Size | Duration | Tracks | Clips |\n| --- | --- | ---: | ---: | ---: | ---: | ---: |\n",
+        );
+        for sequence in &project.sequences {
+            let clock = Clock::of_sequence(sequence);
             let _ = writeln!(
                 output,
-                "| `{}` | {} | `{duration}` |",
-                markdown_inline(source.id.as_str()),
-                markdown_table_text(&source.path)
+                "| `{}` | {} | `{}` | `{}×{}` | `{}` | `{}` | `{}` |",
+                markdown_inline(sequence.id.as_str()),
+                markdown_table_text(&sequence.name),
+                sequence.rate,
+                sequence.width,
+                sequence.height,
+                clock.print_duration(sequence.duration()),
+                sequence.tracks.len(),
+                sequence
+                    .tracks
+                    .iter()
+                    .map(|track| track.clips.len())
+                    .sum::<usize>()
             );
         }
         output.push('\n');
     }
 
-    output.push_str("## Outline\n\n");
-    output.push_str("Machine-readable form: `project.outline`.\n\n");
-    render_outline_node(&mut output, &outline.root, 0);
-    if snapshot.projection_status != "current" {
-        let _ = writeln!(
-            output,
-            "\nProjection status: `{}`",
-            markdown_inline(&snapshot.projection_status)
-        );
+    output.push_str("## Media\n\n");
+    if project.media.is_empty() {
+        output.push_str("No media.\n");
+    } else {
+        output.push_str("| ID | Path | Duration |\n| --- | --- | ---: |\n");
+        for media in &project.media {
+            let _ = writeln!(
+                output,
+                "| `{}` | {} | `{:.3}s` |",
+                markdown_inline(media.id.as_str()),
+                markdown_table_text(&media.path),
+                media.duration.seconds()
+            );
+        }
     }
     output
-}
-
-fn render_outline_node(output: &mut String, node: &OutlineNode, depth: usize) {
-    let indent = "  ".repeat(depth);
-    let id = node
-        .entity_id
-        .as_deref()
-        .map(|id| format!(" id=`{}`", markdown_inline(id)))
-        .unwrap_or_default();
-    let range = node
-        .range
-        .map(|range| format!(" [{:.3}s, {:.3}s]", range.start, range.end))
-        .unwrap_or_default();
-    let source = node
-        .source_id
-        .as_deref()
-        .map(|source| format!(" source=`{}`", markdown_inline(source)))
-        .unwrap_or_default();
-    let _ = writeln!(
-        output,
-        "{indent}- **{}** {}{}{}{} · path `{}`",
-        node.kind.as_str(),
-        markdown_text(&node.label),
-        id,
-        range,
-        source,
-        markdown_inline(&node.path)
-    );
-    for child in &node.children {
-        render_outline_node(output, child, depth + 1);
-    }
 }
 
 fn markdown_header() -> String {
