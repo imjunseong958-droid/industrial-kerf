@@ -8,6 +8,10 @@
 use super::{bounded_text, NormalizedTool};
 use serde_json::{json, Value};
 
+/// The charge for one image: more than providers count for the frames and
+/// contact sheets Cut sends, which they scale to about a megapixel.
+const IMAGE_UNITS: usize = 4 * 1024;
+
 #[derive(Clone, Debug)]
 pub struct ContextBudget {
     /// Input allowance only; leave output/reasoning space in the model window.
@@ -19,7 +23,9 @@ pub struct ContextBudget {
 impl Default for ContextBudget {
     fn default() -> Self {
         Self {
-            max_input_units: 64 * 1024,
+            // Room for the instructions, the largest context document, and
+            // a full `look` of frames, with history beside them.
+            max_input_units: 192 * 1024,
             max_tool_text_bytes: 12 * 1024,
             recent_tool_messages: 2,
         }
@@ -153,10 +159,10 @@ pub(super) fn read(messages: &[Value], input: Value) -> Result<Value, String> {
 // Charge images without serializing their potentially multi-megabyte base64.
 pub(super) fn units(value: &Value) -> usize {
     if value.get("type").and_then(Value::as_str) == Some("image") {
-        return 16 * 1024;
+        return IMAGE_UNITS;
     }
     match value {
-        Value::String(text) => text.len().saturating_mul(2).saturating_add(8),
+        Value::String(text) => text.len().saturating_add(8),
         Value::Array(values) => values
             .iter()
             .fold(16usize, |n, v| n.saturating_add(units(v))),
@@ -234,12 +240,25 @@ fn project_message(
             } else {
                 512
             };
-            projected.insert(
-                "content".into(),
-                Value::String(
-                    archived(content, message_index, block_index, preview_limit).to_string(),
-                ),
-            );
+            let summary = archived(content, message_index, block_index, preview_limit).to_string();
+            // Frames and previews are a recent result's evidence: when only
+            // its text is too long, archive the text and keep the images.
+            let images = content
+                .as_array()
+                .filter(|_| keep_recent)
+                .into_iter()
+                .flatten()
+                .filter(|block| block["type"] == "image")
+                .cloned()
+                .collect::<Vec<_>>();
+            let content = if images.is_empty() {
+                Value::String(summary)
+            } else {
+                let mut blocks = vec![json!({"type": "text", "text": summary})];
+                blocks.extend(images);
+                Value::Array(blocks)
+            };
+            projected.insert("content".into(), content);
             Value::Object(projected)
         })
         .collect::<Vec<_>>();

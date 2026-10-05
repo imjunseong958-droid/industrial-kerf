@@ -133,6 +133,11 @@ pub struct WaveformResult {
 }
 
 pub const MAX_FRAME_TIMES: usize = 128;
+/// Exact frames and contact sheets are JPEG: a fraction of the size of PNG
+/// for footage, which keeps several of them within what a model accepts.
+pub const FRAME_MEDIA_TYPE: &str = "image/jpeg";
+/// FFmpeg's JPEG quality scale runs from 2 (best) to 31.
+const FRAME_QUALITY: &str = "3";
 pub const MAX_WAVEFORM_BUCKETS: usize = 4096;
 const WAVEFORM_SAMPLE_RATE: u32 = 8_000;
 
@@ -443,8 +448,9 @@ fn validate_exact_times(times: &[f64]) -> Result<()> {
     Ok(())
 }
 
-fn frame_file_name(index: usize) -> String {
-    format!("frame-{index:03}.png")
+/// The name of the `index`th exact frame in a derivative directory.
+pub fn frame_file_name(index: usize) -> String {
+    format!("frame-{index:03}.jpg")
 }
 
 fn frame_file_names(count: usize) -> Vec<String> {
@@ -475,6 +481,8 @@ fn extract_one_exact_frame(
         "1".into(),
         "-vf".into(),
         scale.into(),
+        "-q:v".into(),
+        FRAME_QUALITY.into(),
         "-y".into(),
         output.clone(),
     ]);
@@ -482,7 +490,7 @@ fn extract_one_exact_frame(
     Ok(FrameGrab {
         time,
         path: output,
-        media_type: "image/png".into(),
+        media_type: FRAME_MEDIA_TYPE.into(),
     })
 }
 
@@ -579,7 +587,7 @@ pub fn cached_exact_frames(
         .map(|(time, name)| FrameGrab {
             time: *time,
             path: entry.path(&name).to_string_lossy().into_owned(),
-            media_type: "image/png".into(),
+            media_type: FRAME_MEDIA_TYPE.into(),
         })
         .collect();
     Ok(FrameGrabSet {
@@ -589,7 +597,7 @@ pub fn cached_exact_frames(
     })
 }
 
-/// Build a contact sheet from an ordered set of PNG frame paths.
+/// Build a JPEG contact sheet from exact frames named by `frame_file_name`.
 pub fn create_contact_sheet(frame_paths: &[String], output: &Path, columns: usize) -> Result<()> {
     if frame_paths.is_empty() {
         return Err(crate::error::EngineError::msg(
@@ -614,7 +622,7 @@ pub fn create_contact_sheet(frame_paths: &[String], output: &Path, columns: usiz
         ));
     }
     let rows = frame_paths.len().div_ceil(columns);
-    let pattern = parent.join("frame-%03d.png");
+    let pattern = parent.join("frame-%03d.jpg");
     let args = vec![
         "-hide_banner".into(),
         "-loglevel".into(),
@@ -629,6 +637,8 @@ pub fn create_contact_sheet(frame_paths: &[String], output: &Path, columns: usiz
         format!("tile={columns}x{rows}:padding=0:margin=0"),
         "-frames:v".into(),
         "1".into(),
+        "-q:v".into(),
+        FRAME_QUALITY.into(),
         "-y".into(),
         output.to_string_lossy().into_owned(),
     ];
@@ -660,7 +670,7 @@ pub fn cached_filmstrip(
     let entry = cache.source_entry(Path::new(src), "filmstrip", &options)?;
     let names = frame_file_names(times.len());
     let mut required = names.iter().map(String::as_str).collect::<Vec<_>>();
-    required.push("filmstrip.png");
+    required.push("filmstrip.jpg");
     let cached = entry.is_complete(&required);
     if !cached {
         extract_exact_frames_to_dir(src, times, &entry.directory, max_width)?;
@@ -668,12 +678,12 @@ pub fn cached_filmstrip(
             .iter()
             .map(|name| entry.path(name).to_string_lossy().into_owned())
             .collect::<Vec<_>>();
-        create_contact_sheet(&frame_paths, &entry.path("filmstrip.png"), columns)?;
+        create_contact_sheet(&frame_paths, &entry.path("filmstrip.jpg"), columns)?;
         entry.mark_complete(&required)?;
     }
     Ok(FilmstripResult {
         key: entry.key.clone(),
-        path: entry.path("filmstrip.png").to_string_lossy().into_owned(),
+        path: entry.path("filmstrip.jpg").to_string_lossy().into_owned(),
         frame_paths: names
             .iter()
             .map(|name| entry.path(name).to_string_lossy().into_owned())
@@ -768,12 +778,11 @@ fn decode_waveform_buckets(
         for chunk in leftover[..usable].chunks_exact(4) {
             let sample = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as f64;
             if sample.is_finite() {
-                let bucket = if expected > 0 {
-                    index.saturating_mul(bucket_count) / expected
-                } else {
-                    0
-                }
-                .min(bucket_count - 1);
+                let bucket = index
+                    .saturating_mul(bucket_count)
+                    .checked_div(expected)
+                    .unwrap_or(0)
+                    .min(bucket_count - 1);
                 mins[bucket] = mins[bucket].min(sample);
                 maxs[bucket] = maxs[bucket].max(sample);
                 sums[bucket] += sample * sample;
@@ -978,6 +987,7 @@ pub fn cached_waveform(
 /// The range is included in the cache identity and passed to both the audio
 /// decoder and optional waveform image, so a targeted observation never
 /// accidentally reuses a full-source derivative.
+#[allow(clippy::too_many_arguments)]
 pub fn cached_waveform_range(
     src: &str,
     cache: &DerivativeCache,

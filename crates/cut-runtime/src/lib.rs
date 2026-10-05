@@ -870,6 +870,13 @@ pub enum RuntimeRequest {
         start: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         duration: Option<f64>,
+        /// Render what this pending proposal would make of the project.
+        #[serde(
+            rename = "proposalId",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        proposal_id: Option<String>,
     },
     GetRender {
         #[serde(rename = "jobId")]
@@ -1223,14 +1230,16 @@ impl RuntimeHandle {
         &self,
         quality: &str,
     ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
-        self.start_render_range(quality, None)
+        self.start_render_range(quality, None, None)
     }
 
-    /// Queue a render job. The returned document is what to render.
+    /// Queue a render job of the project, or of what a pending `proposal`
+    /// would make of it. The returned document is what to render.
     pub fn start_render_range(
         &self,
         quality: &str,
         range: Option<RenderRange>,
+        proposal: Option<&str>,
     ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
         let (start, duration) = range
             .map(|range| (Some(range.start), Some(range.duration)))
@@ -1239,6 +1248,7 @@ impl RuntimeHandle {
             quality: quality.to_owned(),
             start,
             duration,
+            proposal_id: proposal.map(str::to_owned),
         })? {
             RuntimeResponse::RenderStarted {
                 job,
@@ -1589,14 +1599,16 @@ impl RuntimeClient {
         &self,
         quality: &str,
     ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
-        self.start_render_range(quality, None)
+        self.start_render_range(quality, None, None)
     }
 
-    /// Queue a render job. The returned document is what to render.
+    /// Queue a render job of the project, or of what a pending `proposal`
+    /// would make of it. The returned document is what to render.
     pub fn start_render_range(
         &self,
         quality: &str,
         range: Option<RenderRange>,
+        proposal: Option<&str>,
     ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
         let (start, duration) = range
             .map(|range| (Some(range.start), Some(range.duration)))
@@ -1605,6 +1617,7 @@ impl RuntimeClient {
             quality: quality.to_owned(),
             start,
             duration,
+            proposal_id: proposal.map(str::to_owned),
         })? {
             RuntimeResponse::RenderStarted {
                 job,
@@ -3516,12 +3529,14 @@ impl Runtime {
         }
     }
 
-    /// Queue a render of the first sequence and return the document to
+    /// Queue a render of the first sequence of the project, or of what a
+    /// pending `proposal` would make of it, and return the document to
     /// render, with media paths resolved.
     pub fn start_render_range(
         &mut self,
         quality: &str,
         range: Option<RenderRange>,
+        proposal: Option<&str>,
     ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
         if !matches!(quality, "preview" | "full") {
             return Err(RuntimeError::new(
@@ -3529,9 +3544,12 @@ impl Runtime {
                 "quality must be preview or full",
             ));
         }
+        let proposed = proposal.map(|id| self.proposal_result(id)).transpose()?;
+        let project = proposed.as_ref().unwrap_or(&self.project);
+        let document = self.renderable(project);
+        let duration = kernel::program_duration(project).seconds();
         if let Some(range) = range.as_ref() {
             RenderRange::new(range.start, range.duration)?;
-            let duration = kernel::program_duration(&self.project).seconds();
             if range.end() > duration + 1e-9 {
                 return Err(RuntimeError::new(
                     "INVALID_RENDER_RANGE",
@@ -3567,7 +3585,7 @@ impl Runtime {
         let mut candidate = self.durable_state();
         candidate.jobs.insert(id, job.clone());
         self.commit_candidate(candidate, JournalEvent::Job { job: job.clone() })?;
-        Ok((job, self.renderable(&self.project), output))
+        Ok((job, document, output))
     }
 
     /// The documents before and after a pending proposal, for a renderer.
@@ -3866,6 +3884,7 @@ impl Runtime {
                 quality,
                 start,
                 duration,
+                proposal_id,
             } => {
                 let range = match (start, duration) {
                     (None, None) => None,
@@ -3877,7 +3896,8 @@ impl Runtime {
                         ))
                     }
                 };
-                let (job, document, output) = self.start_render_range(&quality, range)?;
+                let (job, document, output) =
+                    self.start_render_range(&quality, range, proposal_id.as_deref())?;
                 Ok(RuntimeResponse::RenderStarted {
                     job,
                     document,
@@ -5976,7 +5996,7 @@ mod tests {
             std::env::temp_dir().join(format!("cut-runtime-job-recovery-{}", unique_id()));
         let job_id = {
             let mut runtime = Runtime::open(&directory).unwrap();
-            let (job, _, _) = runtime.start_render_range("preview", None).unwrap();
+            let (job, _, _) = runtime.start_render_range("preview", None, None).unwrap();
             assert_eq!(job.status, "queued");
             job.job_id
         };
@@ -5997,8 +6017,8 @@ mod tests {
             std::env::temp_dir().join(format!("cut-runtime-job-cancel-{}", unique_id()));
         let (cancelled_id, queued_id) = {
             let mut runtime = Runtime::open(&directory).unwrap();
-            let (cancelled, _, _) = runtime.start_render_range("preview", None).unwrap();
-            let (queued, _, _) = runtime.start_render_range("preview", None).unwrap();
+            let (cancelled, _, _) = runtime.start_render_range("preview", None, None).unwrap();
+            let (queued, _, _) = runtime.start_render_range("preview", None, None).unwrap();
             let cancel_path = render_cancel_path(&directory, &cancelled.job_id);
             let queued_path = render_cancel_path(&directory, &queued.job_id);
             let cancelled_job = runtime.cancel_render(&cancelled.job_id).unwrap();
@@ -6087,13 +6107,13 @@ mod tests {
         assert_eq!(snapshot.duration, 4.0);
 
         let (_, document, _) = runtime
-            .start_render_range("preview", Some(RenderRange::new(1.0, 2.0).unwrap()))
+            .start_render_range("preview", Some(RenderRange::new(1.0, 2.0).unwrap()), None)
             .unwrap();
         let rendered = parse_document(&document).unwrap();
         assert_eq!(rendered.media[0].path, media);
         assert_eq!(
             runtime
-                .start_render_range("preview", Some(RenderRange::new(3.0, 2.0).unwrap()))
+                .start_render_range("preview", Some(RenderRange::new(3.0, 2.0).unwrap()), None)
                 .unwrap_err()
                 .code,
             "INVALID_RENDER_RANGE"
@@ -6118,6 +6138,36 @@ mod tests {
         assert_eq!(after.media[0].path, media);
         assert_eq!(kernel::program_duration(&before).seconds(), 4.0);
         assert_eq!(kernel::program_duration(&after).seconds(), 3.0);
+
+        // A render of the proposal renders what it would make, not the project.
+        let (_, document, _) = runtime
+            .start_render_range(
+                "preview",
+                Some(RenderRange::new(1.0, 2.0).unwrap()),
+                Some(&proposal_id),
+            )
+            .unwrap();
+        let proposed = parse_document(&document).unwrap();
+        assert_eq!(proposed.media[0].path, media);
+        assert_eq!(kernel::program_duration(&proposed).seconds(), 3.0);
+        assert_eq!(
+            runtime
+                .start_render_range(
+                    "preview",
+                    Some(RenderRange::new(2.0, 2.0).unwrap()),
+                    Some(&proposal_id),
+                )
+                .unwrap_err()
+                .code,
+            "INVALID_RENDER_RANGE"
+        );
+        assert_eq!(
+            runtime
+                .start_render_range("preview", None, Some("proposal-0"))
+                .unwrap_err()
+                .code,
+            "PROPOSAL_NOT_FOUND"
+        );
     }
 
     #[test]
