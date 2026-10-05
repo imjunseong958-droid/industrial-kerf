@@ -1,6 +1,6 @@
 # ADR 0006: Exact-time kernel with a text-canonical project
 
-Status: accepted (phases 1–4 implemented)
+Status: accepted (phases 1–4 implemented; phase 5 in progress)
 Date: 2026-10-04
 
 ## Context
@@ -70,7 +70,9 @@ Each phase is its own pull request; the old stack keeps working until phase 5.
    guidance only.
 4. Render compiler, playback, and the Qt bridge read `cut-model`.
 5. Delete `cut-domain`, `cut-core` compile, the v2 export, and the old
-   harness.
+   harness. The old harness is gone: the v2 MCP catalog and its
+   `core`/`full` profiles, result handles, the legacy command lowering, and
+   the composition tools (ADR 0005). The rest follows.
 
 ## Consequences
 
@@ -89,9 +91,9 @@ Each phase is its own pull request; the old stack keeps working until phase 5.
   the reference, and use three tools: `look` (the document, a media index of
   uses, scene cuts, pauses, and speech, and frames), `edit` (a script staged
   as a proposal with its diff, check findings, and a before/after preview of
-  the changed range), and `render`. The v2 MCP catalog stays behind
-  `--profile core|full` until phase 5. Skills carry editorial guidance and
-  are part of the agent's instructions.
+  the changed range), and `render`. `cut-mcp` serves only these three; it
+  has no profiles. Skills carry editorial guidance and are part of the
+  agent's instructions.
 - Documents keep media paths relative to the project; the runtime resolves
   them before handing a project to a renderer.
 - The render compiler (`cut_core::program`), playback, the Qt bridge, and the
@@ -102,8 +104,8 @@ Each phase is its own pull request; the old stack keeps working until phase 5.
   included, and `preview_plan` asks for a rendered preview when it would
   differ. The Qt app reads a timeline view of the model and edits with typed
   operations.
-- Until phase 5, `cutd` still derives a v2 export for v2 commands, proposal
-  field diffs, and the v2 MCP catalog. v2 commands become kernel operations
+- Until phase 5 completes, `cutd` still derives a v2 export for v2 commands
+  and proposal field diffs. v2 commands become kernel operations
   where one exists (trims, splits, moves, deletes, media and clip insertion,
   markers, tracks). The rest run on the v2 export and are imported back with
   the model as a hint; a command whose effect the model cannot hold is

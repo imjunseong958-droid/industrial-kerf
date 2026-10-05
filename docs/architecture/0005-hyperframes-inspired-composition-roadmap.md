@@ -1,5 +1,7 @@
 # HyperFrames에서 영감을 받은 Cut Composition/Template 로드맵
 
+> 상태: ADR 0006 phase 5에서 `composition.*` MCP 도구와 구현을 삭제했습니다. 에이전트 하네스는 `look`, `edit`, `render`만 제공합니다. 아래 내용은 기록으로 남깁니다.
+>
 > 조사 결과와 첫 구현 계약을 정리한 문서입니다. 초기 범위는 manifest/check였고, 현재는 최소한의 local catalog와 외부 renderer bridge 수직 슬라이스까지 연결했습니다.
 
 ## 실행 상태

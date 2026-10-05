@@ -2,7 +2,7 @@
 //! travel through a latest-frame slot rather than JSON or an accumulating queue.
 use cut_agent::{AgentEvent, AgentSession, AgentSessionOptions, OpenAiApiMode, ProviderName};
 use cut_mcp::inbound;
-use cut_mcp::{CutMcpRouter, McpProfile};
+use cut_mcp::CutMcpRouter;
 use cut_model::{
     AudioInfo, Clip, Content, Id, Media, Project, Ratio, Sequence, Time, Track, TrackKind,
     VideoInfo,
@@ -717,7 +717,7 @@ fn new_agent(
                 .map_err(|_| "Invalid OPENAI_REASONING_EFFORT".to_string())
         })
         .transpose()?;
-    let router = CutMcpRouter::new(directory, McpProfile::Kernel, Some(binary))?;
+    let router = CutMcpRouter::new(directory, Some(binary))?;
     let mut tools = router.agent_tools();
     inbound::add_agent_tools(&mut tools, directory, settings.mcp_enabled, |line| {
         // Connection errors may contain command arguments or server responses.

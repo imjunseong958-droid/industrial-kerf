@@ -581,18 +581,14 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "cut-agent",
- "cut-domain",
  "cut-engine",
- "cut-fetcher",
  "cut-lang",
  "cut-model",
  "cut-runtime",
  "cut-skills",
- "fs2",
  "libc",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
 ]
 
@@ -648,7 +644,6 @@ dependencies = [
 name = "cut-skills"
 version = "0.1.0"
 dependencies = [
- "serde_json",
  "tempfile",
 ]
 

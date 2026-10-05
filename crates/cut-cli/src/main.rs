@@ -9,7 +9,7 @@ use cut_agent::{
     AgentEvent, AgentSession, AgentSessionOptions, AgentTargetSummary, OpenAiApiMode, ProviderName,
     ReasoningEffort,
 };
-use cut_mcp::{docs::add_agents_pointer, inbound, CutMcpRouter, McpProfile};
+use cut_mcp::{docs::add_agents_pointer, inbound, CutMcpRouter};
 use cut_runtime::RuntimeClient;
 use cut_skills::{load_skills_with_bundled, Skill};
 use serde_json::{json, Value};
@@ -124,7 +124,7 @@ fn run() -> Result<()> {
     }
 
     if args.generate_docs || args.add_agents_pointer {
-        let router = open_router(&directory, args.cutd.as_deref(), McpProfile::Kernel)?;
+        let router = open_router(&directory, args.cutd.as_deref())?;
         let generated = router
             .generate_agent_docs()
             .map_err(|error| anyhow!(error))?;
@@ -143,7 +143,7 @@ fn run() -> Result<()> {
 
     let inbound_mcp_enabled = inbound::enabled(args.mcp_tools);
     if args.mcp {
-        let router = open_router(&directory, args.cutd.as_deref(), McpProfile::Kernel)?;
+        let router = open_router(&directory, args.cutd.as_deref())?;
         let inbound = inbound::InboundMcpRegistry::connect(&directory, |line| eprintln!("{line}"))
             .map_err(|error| anyhow!(error))?;
         let inbound_servers = inbound.describe();
@@ -187,7 +187,7 @@ fn run() -> Result<()> {
         println!("imported {}", path.display());
     }
 
-    let router = open_router(&directory, args.cutd.as_deref(), McpProfile::Kernel)?;
+    let router = open_router(&directory, args.cutd.as_deref())?;
     let llm = resolve_llm(&args)?;
     if llm.api_key.is_none() {
         if args.prompt.is_some() || args.terminal || inbound_mcp_enabled {
@@ -453,9 +453,9 @@ fn print_skills(skills: &[Skill]) {
     }
 }
 
-fn open_router(directory: &Path, cutd: Option<&Path>, profile: McpProfile) -> Result<CutMcpRouter> {
+fn open_router(directory: &Path, cutd: Option<&Path>) -> Result<CutMcpRouter> {
     let cutd = cutd.map(Path::to_path_buf).or_else(discover_cutd);
-    CutMcpRouter::new(directory, profile, cutd.as_deref()).map_err(|error| anyhow!(error))
+    CutMcpRouter::new(directory, cutd.as_deref()).map_err(|error| anyhow!(error))
 }
 
 fn discover_cutd() -> Option<PathBuf> {
@@ -537,7 +537,7 @@ fn import_media(
     if !path.is_file() {
         bail!("media file does not exist: {}", path.display());
     }
-    let router = open_router(directory, cutd, McpProfile::Kernel)?;
+    let router = open_router(directory, cutd)?;
     let snapshot = router.runtime().get_state().map_err(runtime_error)?;
     let metadata = serde_json::to_value(cut_engine::info(&path.to_string_lossy())?)?;
     let key = operation_key("cli-import");
@@ -617,7 +617,7 @@ fn run_repl(session: &mut AgentSession, directory: &Path) -> Result<()> {
             "" => continue,
             "/quit" | "/q" | "exit" => break,
             "/timeline" => {
-                let router = open_router(directory, None, McpProfile::Kernel)?;
+                let router = open_router(directory, None)?;
                 print_snapshot(router.runtime(), "timeline");
             }
             "/save" => {
