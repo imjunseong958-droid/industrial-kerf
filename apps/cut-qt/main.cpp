@@ -11,6 +11,7 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QCheckBox>
+#include <QColorDialog>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDir>
@@ -324,6 +325,19 @@ QColor trackAccent(const QJsonObject &track, int row) {
         return QColor("#a879e8");
     }
     return row == 0 ? QColor("#4d9df4") : QColor("#3978c5");
+}
+
+// Model colors are #rrggbb, with a trailing alpha byte when not opaque.
+QColor modelColor(const QString &hex) {
+    QColor color(hex.left(7));
+    if (hex.size() == 9) color.setAlpha(hex.mid(7).toInt(nullptr, 16));
+    return color;
+}
+
+QString modelColorName(const QColor &color) {
+    QString hex = color.name();
+    if (color.alpha() != 255) hex += QStringLiteral("%1").arg(color.alpha(), 2, 16, QLatin1Char('0'));
+    return hex;
 }
 
 bool isAudioTrack(const QJsonObject &track) {
@@ -3237,6 +3251,14 @@ private:
             auto *check = new QCheckBox;
             connect(check, &QCheckBox::clicked, this, [this, name](bool checked) { propertyEdited(name, checked); });
             editor = check;
+        } else if (type == QStringLiteral("color")) {
+            auto *button = new QPushButton;
+            connect(button, &QPushButton::clicked, this, [this, button, name] {
+                const QColor color = QColorDialog::getColor(modelColor(button->text()), this, name,
+                                                            QColorDialog::ShowAlphaChannel);
+                if (color.isValid()) propertyEdited(name, modelColorName(color));
+            });
+            editor = button;
         } else {
             auto *line = new QLineEdit;
             connect(line, &QLineEdit::editingFinished, this, [this, line, name] { propertyEdited(name, line->text()); });
@@ -3253,6 +3275,12 @@ private:
         if (auto *spin = qobject_cast<QDoubleSpinBox *>(editor)) spin->setValue(value.toDouble());
         else if (auto *combo = qobject_cast<QComboBox *>(editor)) combo->setCurrentText(value.toString());
         else if (auto *check = qobject_cast<QCheckBox *>(editor)) check->setChecked(value.toBool());
+        else if (auto *button = qobject_cast<QPushButton *>(editor)) {
+            QPixmap swatch(12, 12);
+            swatch.fill(modelColor(value.toString()));
+            button->setIcon(swatch);
+            button->setText(value.toString());
+        }
         else if (auto *line = qobject_cast<QLineEdit *>(editor)) line->setText(value.toString());
     }
 
@@ -4527,10 +4555,14 @@ private slots:
         window.selectClip(QStringLiteral("g"));
         QCOMPARE(window.m_propertyEditors.size(), 5);
         auto *text = qobject_cast<QLineEdit *>(window.m_propertyEditors.value("text"));
-        auto *color = qobject_cast<QLineEdit *>(window.m_propertyEditors.value("color"));
+        auto *color = qobject_cast<QPushButton *>(window.m_propertyEditors.value("color"));
         QVERIFY(text && color && window.m_propertyEditors.contains("opacity"));
         QCOMPARE(text->text(), QStringLiteral("Day One"));
         QCOMPARE(color->text(), QStringLiteral("#ffffff"));
+        QVERIFY(!color->icon().isNull());
+        QCOMPARE(modelColor(QStringLiteral("#ff000080")).alpha(), 0x80);
+        QCOMPARE(modelColorName(QColor(255, 0, 0, 0x80)), QStringLiteral("#ff000080"));
+        QCOMPARE(modelColorName(Qt::white), QStringLiteral("#ffffff"));
         window.propertyEdited("text", "Day Two");
         QCOMPARE(set().value("props").toObject().value("text").toString(), QStringLiteral("Day Two"));
         window.propertyEdited("color", "#ffffff");
