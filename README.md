@@ -96,9 +96,9 @@ tools cover the work:
 
 | Tool | Purpose |
 |---|---|
-| `look` | No arguments: the annotated document and proposal state. `media`: that media's index — where it is used, scene cuts, pauses, and with `transcript: true` what is said. `at`: frames — source frames of `media`, or program frames of the sequence |
-| `edit` | Run an edit script. It becomes a proposal, returned with the document diff, check findings, and a before/after preview of the changed range. `revise` replaces a pending proposal |
-| `render` | Render the sequence, or `from`–`to`, as a draft or full-quality file; `job` reads progress, `cancel` stops it |
+| `look` | No arguments: the annotated document and proposal state. `media`: that media's index — where it is used, scene cuts, pauses, and with `transcript: true` what is said. `at`: up to eight frames — source frames of `media`, or program frames of the sequence. `proposal`: the same, as a pending proposal would make the project |
+| `edit` | Run an edit script. It becomes a proposal, returned with the document diff, check findings, and a before/after preview of the changed range. `extend` runs the script on top of a pending proposal and makes the two one proposal; `revise` replaces it |
+| `render` | Render the sequence, or `from`–`to`, as a draft or full-quality file — of the project, or of a pending `proposal`; `job` reads progress, `cancel` stops it |
 
 Times are timecode (`01:00:04:12`), frames (`96f`), or seconds (`4.5s`):
 media positions with `media`, sequence positions otherwise. The project
@@ -117,15 +117,16 @@ name. Every skill's guidance is part of the agent's instructions.
 The built-in agent retains its original transcript but constructs a bounded
 view for each provider request. It prioritizes the current user request,
 the latest tool exchange, and earlier user requirements. Older evidence and
-images are replaced by explicit `session.read` references. That tool can
+images are replaced by explicit `session.read` references; a recent result
+whose text is too long keeps its frames and previews. That tool can
 retrieve a message, a tool result's JSON pointer, or one archived image.
 When earlier requirements cannot fit, the view identifies their archive
 indices and tells the agent to read them before making assumptions. This is
 deterministic context reduction, not an LLM-generated semantic summary.
 
-`CUT_AGENT_INPUT_BUDGET` controls the input allowance (default 65536 units).
+`CUT_AGENT_INPUT_BUDGET` controls the input allowance (default 196608 units).
 The allowance conservatively charges text by UTF-8 bytes plus overhead and
-reserves 16384 units per image; it is not an exact vendor token count. Choose
+reserves 4096 units per image; it is not an exact vendor token count. Choose
 an allowance below the selected model's context window, leaving room for
 output and reasoning. A context-limit response causes one retry with a
 smaller view, without re-executing tools. A user request or fixed catalog that

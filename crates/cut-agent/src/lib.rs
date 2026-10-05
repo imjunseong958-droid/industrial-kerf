@@ -1594,7 +1594,7 @@ impl AgentSession {
     fn provider_request(&self, budget: &ContextBudget) -> Result<ProviderRequest, AgentError> {
         let tools = self.normalized_tools();
         let system = self.system();
-        let fixed = system.len().saturating_mul(2)
+        let fixed = system.len()
             + context::units(
                 &serde_json::to_value(&tools)
                     .map_err(|error| AgentError::Serialization(error.to_string()))?,
@@ -2546,6 +2546,86 @@ mod tests {
         assert_eq!(blocks[0]["is_error"], false);
         assert_eq!(blocks[1]["is_error"], true);
         assert!(blocks[0]["content"].as_str().unwrap().contains("p1"));
+    }
+
+    #[test]
+    fn frames_and_previews_reach_the_model_under_the_default_budget() {
+        struct RecordingProvider {
+            requests: Arc<Mutex<Vec<ProviderRequest>>>,
+        }
+        impl LlmProvider for RecordingProvider {
+            fn name(&self) -> ProviderName {
+                ProviderName::Anthropic
+            }
+            fn default_model(&self) -> &'static str {
+                "test"
+            }
+            fn stream(
+                &self,
+                request: &ProviderRequest,
+            ) -> Result<Vec<ProviderChunk>, ProviderError> {
+                let mut requests = self.requests.lock().unwrap();
+                requests.push(request.clone());
+                let first = requests.len() == 1;
+                Ok(vec![ProviderChunk::MessageEnd {
+                    stop_reason: if first { "tool_use" } else { "end_turn" }.into(),
+                    content: if first {
+                        vec![json!({"type":"tool_use","id":"call_1","name":"look","input":{}})]
+                    } else {
+                        vec![json!({"type":"text","text":"done"})]
+                    },
+                }])
+            }
+        }
+        let frame = base64::engine::general_purpose::STANDARD.encode([1_u8, 2, 3]);
+        let frames = (0..MAX_TOOL_RESULT_IMAGES)
+            .map(|index| json!({"at": format!("{index}s"), "imageBase64": frame}))
+            .collect::<Vec<_>>();
+        // A full look of frames, and an edit whose diff is too long to keep
+        // whole: its text is archived, its before/after preview is not.
+        for (result, images) in [
+            (json!({"frames": frames}), MAX_TOOL_RESULT_IMAGES),
+            (
+                json!({
+                    "diff": "+    clip c1 media=m1 at=00:00:00:00\n".repeat(1024),
+                    "preview": {"before": {"imageBase64": frame}, "after": {"imageBase64": frame}},
+                }),
+                2,
+            ),
+        ] {
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let mut tools = ToolMap::new();
+            tools.insert(
+                "look".into(),
+                AgentTool::new("look", "look", json!({"type":"object"}), move |_| {
+                    Ok(result.clone())
+                }),
+            );
+            let mut session = AgentSession::from_provider(
+                Box::new(RecordingProvider {
+                    requests: Arc::clone(&requests),
+                }),
+                None,
+                // About the size of the instructions, and a long document.
+                Some("x".repeat(12 * 1024)),
+                vec![],
+                tools,
+                4,
+                OpenAiApiMode::Chat,
+                None,
+            )
+            .with_context(Arc::new(|| Ok("y".repeat(48 * 1024))));
+            assert_eq!(session.run("look at it").unwrap(), "done");
+            let requests = requests.lock().unwrap();
+            let result = &requests[1].messages.last().unwrap()["content"][0]["content"];
+            let seen = result
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|block| block["type"] == "image")
+                .count();
+            assert_eq!(seen, images, "{result}");
+        }
     }
 
     #[test]

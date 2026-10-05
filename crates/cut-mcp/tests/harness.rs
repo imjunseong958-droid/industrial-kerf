@@ -257,18 +257,156 @@ fn render_runs_a_range_to_a_file() {
         return;
     };
     let started = ok(&router, "render", json!({"from": "0f", "to": "1s"}));
-    let job = started["job"].as_str().unwrap().to_owned();
-    let deadline = Instant::now() + Duration::from_secs(60);
-    let finished = loop {
-        let status = ok(&router, "render", json!({"job": job}));
-        if status["status"] == "completed" || status["status"] == "failed" {
-            break status;
-        }
-        assert!(Instant::now() < deadline, "render did not finish: {status}");
-        std::thread::sleep(Duration::from_millis(100));
-    };
+    let finished = finish(&router, started["job"].as_str().unwrap());
     assert_eq!(finished["status"], "completed", "{finished}");
     assert!(Path::new(finished["output"].as_str().unwrap()).is_file());
     let invalid = error(&router, "render", json!({"quality": "best"}));
     assert_eq!(invalid["code"], "INVALID_ARGUMENTS");
+}
+
+fn finish(router: &CutMcpRouter, job: &str) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let status = ok(router, "render", json!({"job": job}));
+        if status["status"] == "completed" || status["status"] == "failed" {
+            return status;
+        }
+        assert!(Instant::now() < deadline, "render did not finish: {status}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[test]
+fn a_proposal_can_be_seen_extended_and_rendered() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    let first = ok(
+        &router,
+        "edit",
+        json!({"script": "trim c1 out -30f ripple"}),
+    );
+    let first_id = first["proposal"].as_str().unwrap().to_owned();
+
+    // `look` with the proposal sees what it would make of the project.
+    let document = ok(&router, "look", json!({"proposal": first_id}));
+    assert_eq!(document["proposal"], first_id.as_str());
+    let text = document["document"].as_str().unwrap();
+    assert!(text.contains("at=00:00:00:00 dur=00:00:03:00"), "{text}");
+    assert!(text.contains('#'), "annotated: {text}");
+    let index = ok(
+        &router,
+        "look",
+        json!({"media": "m1", "proposal": first_id}),
+    );
+    assert_eq!(index["uses"][0]["out"], "00:00:03:00", "{index}");
+    let frames = ok(
+        &router,
+        "look",
+        json!({"at": ["00:00:02:15"], "proposal": first_id, "width": 160}),
+    );
+    assert!(has_image(&frames["frames"][0]), "{frames}");
+    // The proposal is three seconds long; the project is still four.
+    let beyond = error(
+        &router,
+        "look",
+        json!({"at": ["00:00:03:15"], "proposal": first_id}),
+    );
+    assert_eq!(beyond["code"], "INVALID_ARGUMENTS");
+    ok(
+        &router,
+        "look",
+        json!({"at": ["00:00:03:15"], "width": 160}),
+    );
+
+    // `extend` runs more lines on what the proposal makes; the two become
+    // one proposal, and the preview shows only this step.
+    let extended = ok(
+        &router,
+        "edit",
+        json!({"script": "trim c1 in +15f ripple", "extend": first_id}),
+    );
+    let id = extended["proposal"].as_str().unwrap().to_owned();
+    assert_ne!(id, first_id);
+    let script = extended["script"].as_str().unwrap();
+    let lines = script.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2, "{script}");
+    assert!(lines[0].starts_with("trim c1 out"), "{script}");
+    assert!(lines[1].starts_with("trim c1 in"), "{script}");
+    let diff = extended["diff"].as_str().unwrap();
+    assert!(
+        diff.contains("+    clip c1 media=m1 src=00:00:00:15 at=00:00:00:00 dur=00:00:02:15"),
+        "{diff}"
+    );
+    assert_eq!(extended["preview"]["to"], "00:00:03:00", "{extended}");
+    assert!(has_image(&extended["preview"]["before"]), "{extended}");
+    assert!(has_image(&extended["preview"]["after"]), "{extended}");
+    let replaced = error(&router, "look", json!({"proposal": first_id}));
+    assert_eq!(replaced["code"], "NOT_PENDING");
+    let both = error(
+        &router,
+        "edit",
+        json!({"script": "trim c1 in +1f", "extend": id, "revise": id}),
+    );
+    assert_eq!(both["code"], "INVALID_ARGUMENTS");
+
+    // `render` with the proposal renders what it would make.
+    let started = ok(
+        &router,
+        "render",
+        json!({"proposal": id, "from": "0f", "to": "1s"}),
+    );
+    assert_eq!(started["proposal"], id.as_str());
+    let finished = finish(&router, started["job"].as_str().unwrap());
+    assert_eq!(finished["status"], "completed", "{finished}");
+    assert!(Path::new(finished["output"].as_str().unwrap()).is_file());
+    let beyond = error(
+        &router,
+        "render",
+        json!({"proposal": id, "from": "0f", "to": "3s"}),
+    );
+    assert!(
+        beyond["message"].as_str().unwrap().contains("2.500s"),
+        "{beyond}"
+    );
+
+    // Once the project changes, the proposal is stale until it is revised.
+    let revision = router.runtime().get_state().unwrap().revision;
+    router
+        .runtime()
+        .apply_script_request("ui", "ui-1", "set c1 opacity=0.5", revision)
+        .unwrap();
+    for (name, arguments) in [
+        ("look", json!({"proposal": id})),
+        ("render", json!({"proposal": id})),
+        ("edit", json!({"script": "trim c1 in +1f", "extend": id})),
+    ] {
+        assert_eq!(error(&router, name, arguments)["code"], "PROPOSAL_STALE");
+    }
+    ok(
+        &router,
+        "edit",
+        json!({"script": "trim c1 out -30f ripple", "revise": id}),
+    );
+}
+
+#[test]
+fn look_shows_no_more_frames_than_a_model_receives() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    let at = (0..=cut_agent::MAX_TOOL_RESULT_IMAGES)
+        .map(|frame| format!("{frame}f"))
+        .collect::<Vec<_>>();
+    let refused = error(&router, "look", json!({"media": "m1", "at": at}));
+    assert_eq!(refused["code"], "INVALID_ARGUMENTS");
+    let accepted = ok(
+        &router,
+        "look",
+        json!({"media": "m1", "at": &at[1..], "width": 64}),
+    );
+    assert_eq!(
+        accepted["frames"].as_array().unwrap().len(),
+        cut_agent::MAX_TOOL_RESULT_IMAGES
+    );
 }

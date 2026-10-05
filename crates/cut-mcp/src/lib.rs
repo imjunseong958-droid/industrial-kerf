@@ -260,11 +260,17 @@ impl CutMcpRouter {
         }
     }
 
-    /// Start a render job in the background and return it queued.
-    fn render_start(&self, draft: bool, range: Option<RenderRange>) -> Result<Value, McpError> {
+    /// Start a render job of the project, or of a pending proposal, in the
+    /// background and return it queued.
+    fn render_start(
+        &self,
+        draft: bool,
+        range: Option<RenderRange>,
+        proposal: Option<&str>,
+    ) -> Result<Value, McpError> {
         let (job, project, output) = self
             .runtime
-            .start_render_range(if draft { "preview" } else { "full" }, range)
+            .start_render_range(if draft { "preview" } else { "full" }, range, proposal)
             .map_err(McpError::from)?;
         let runtime = self.runtime.clone();
         let job_id = job.job_id.clone();

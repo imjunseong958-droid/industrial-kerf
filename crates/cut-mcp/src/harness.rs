@@ -23,7 +23,8 @@ use serde_json::{json, Value};
 /// The tools every agent and MCP client uses.
 pub const TOOL_NAMES: &[&str] = &["look", "edit", "render"];
 
-const MAX_LOOK_FRAMES: usize = 12;
+/// As many frames as one tool result carries to a model.
+const MAX_LOOK_FRAMES: usize = cut_agent::MAX_TOOL_RESULT_IMAGES;
 const DEFAULT_FRAME_WIDTH: u32 = 960;
 const PREVIEW_FRAMES: usize = 4;
 const PREVIEW_WIDTH: u32 = 480;
@@ -43,17 +44,21 @@ scripts in the language below.
 - `look` shows what is there: with no arguments the document; with `media` \
 that media's index (where it is used, its scene cuts and pauses, and what is \
 said on request); with `at` frames — source frames of a media, or program \
-frames of the sequence.
+frames of the sequence. With `proposal` it shows what a pending proposal \
+would make: its document and its program frames.
 - `edit` runs one script. It becomes a proposal for the user, returned with \
 the document diff, check findings, and a before/after preview of the range \
-it changed. The project does not change until the user accepts it. Replace \
-a pending proposal by passing its id as `revise`.
-- `render` renders the sequence, or a range of it, to a file.
+it changed. The project does not change until the user accepts it. Pass a \
+pending proposal's id as `extend` to run more lines on top of it, or as \
+`revise` to replace it.
+- `render` renders the sequence, or a range of it, to a file; with \
+`proposal`, what that proposal would make.
 
-Work like an editor. Look at the footage before choosing ranges, make each \
-change one script, and look at the preview before saying it is done. Base \
-every time, word, and frame on something you saw or heard; never invent \
-them. A refused script names the line and the clip that stopped it.";
+Work like an editor. Look at the footage before choosing ranges, and look at \
+the proposal before saying it is done: its preview, and with `proposal` the \
+frames around its cuts. Base every time, word, and frame on something you \
+saw or heard; never invent them. A refused script names the line and the \
+clip that stopped it.";
 
 /// Fixed instructions for an agent: the guide, the language reference, and
 /// the editorial guidance of each skill.
@@ -131,12 +136,14 @@ fn bounded_lines(text: &str, max: usize, note: &str) -> String {
 
 pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotations)> {
     let time = "Timecode (`01:00:04:12`), frames (`96f`), or seconds (`4.5s`).";
+    let proposal = "The id of the pending proposal to see: what it would make of the project.";
     Some(match name {
         "look" => (
             "See the project and its footage. No arguments: the annotated document and \
              proposal state. `media`: that media's index — where it is used, scene cuts, \
              pauses, and with `transcript` what is said. `at`: frames, as source frames \
-             of `media` or program frames of the sequence.",
+             of `media` or program frames of the sequence. `proposal`: the same, as a \
+             pending proposal would make the project.",
             json!({
                 "type": "object",
                 "properties": {
@@ -151,7 +158,8 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "transcript": {"type": "boolean", "description": "With `media`: include what is said (local transcription, up to 15 minutes per call)."},
                     "from": {"type": "string", "description": format!("With `transcript`: the first media position to transcribe. {time}")},
                     "to": {"type": "string", "description": "With `transcript`: the media position to stop at."},
-                    "width": {"type": "integer", "minimum": 64, "maximum": 1920, "description": "Frame width in pixels (default 960)."}
+                    "width": {"type": "integer", "minimum": 64, "maximum": 1920, "description": "Frame width in pixels (default 960)."},
+                    "proposal": {"type": "string", "description": proposal}
                 },
                 "additionalProperties": false
             }),
@@ -164,12 +172,14 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
         "edit" => (
             "Run an edit script. It becomes a proposal for the user, returned with the \
              document diff, check findings, and a before/after preview of the changed \
-             range. The project is unchanged until the user accepts it.",
+             range. The project is unchanged until the user accepts it. `extend` builds \
+             on a pending proposal; `revise` replaces it.",
             json!({
                 "type": "object",
                 "properties": {
                     "script": {"type": "string", "minLength": 1, "description": "One operation per line, applied in order and atomically."},
-                    "revise": {"type": "string", "description": "The id of a pending proposal this one replaces."}
+                    "extend": {"type": "string", "description": "The id of a pending proposal to build on: the script runs on what it makes, the two become one proposal, and the preview shows what this script changed."},
+                    "revise": {"type": "string", "description": "The id of a pending proposal this one replaces; the script runs on the project."}
                 },
                 "required": ["script"],
                 "additionalProperties": false
@@ -181,14 +191,16 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
             },
         ),
         "render" => (
-            "Render the sequence, or the range `from`–`to`, to a file. Returns a job; \
-             pass `job` to read its progress and output, with `cancel` to stop it.",
+            "Render the sequence, or the range `from`–`to`, to a file — of the project, or \
+             of what a pending `proposal` would make. Returns a job; pass `job` to read its \
+             progress and output, with `cancel` to stop it.",
             json!({
                 "type": "object",
                 "properties": {
                     "quality": {"type": "string", "enum": ["draft", "full"], "description": "Default draft."},
                     "from": {"type": "string", "description": format!("Sequence position. {time}")},
                     "to": {"type": "string", "description": "Sequence position."},
+                    "proposal": {"type": "string", "description": proposal},
                     "job": {"type": "string", "description": "A render job id."},
                     "cancel": {"type": "boolean"}
                 },
@@ -215,12 +227,14 @@ struct LookInput {
     from: Option<String>,
     to: Option<String>,
     width: Option<u32>,
+    proposal: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EditInput {
     script: String,
+    extend: Option<String>,
     revise: Option<String>,
 }
 
@@ -230,6 +244,7 @@ struct RenderInput {
     quality: Option<String>,
     from: Option<String>,
     to: Option<String>,
+    proposal: Option<String>,
     job: Option<String>,
     #[serde(default)]
     cancel: bool,
@@ -291,15 +306,61 @@ fn print_seconds(clock: &Clock, seconds: f64) -> String {
 }
 
 impl CutMcpRouter {
+    /// The script and base revision of `id`, the proposal waiting for review.
+    fn pending(&self, id: &str) -> Result<(String, u64), McpError> {
+        match self.runtime.get_state()?.pending_proposal {
+            Some(PendingProposal::Pending {
+                proposal_id,
+                script,
+                base_revision,
+                ..
+            }) if proposal_id == id => Ok((script, base_revision)),
+            _ => Err(McpError::new(
+                "NOT_PENDING",
+                format!("proposal {id} is not waiting for review"),
+            )),
+        }
+    }
+
+    /// The current revision and the project, or what the pending
+    /// `proposal` would make of it.
+    fn project_at(&self, proposal: Option<&str>) -> Result<(u64, Project), McpError> {
+        let (revision, document) = self.runtime.get_document(false)?;
+        let project = parse(&document)?;
+        let Some(id) = proposal else {
+            return Ok((revision, project));
+        };
+        let (script, base_revision) = self.pending(id)?;
+        if base_revision != revision {
+            return Err(McpError::new(
+                "PROPOSAL_STALE",
+                format!(
+                    "proposal {id} was made at revision {base_revision} and the project is \
+                     at revision {revision}; revise it"
+                ),
+            ));
+        }
+        let proposed = apply_script(&project, catalog(), &script)
+            .map_err(|errors| McpError::new("PROPOSAL_STALE", diagnostics(&errors)))?;
+        Ok((revision, proposed.project))
+    }
+
     pub(super) fn look(&self, arguments: Value) -> Result<Value, McpError> {
         let input: LookInput = input(arguments)?;
-        if input.media.is_none() && input.at.is_empty() {
-            if input.transcript || input.from.is_some() || input.to.is_some() {
-                return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
-                    "transcript, from, and to need `media`",
-                ));
-            }
+        if input.media.is_none() && (input.transcript || input.from.is_some() || input.to.is_some())
+        {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "transcript, from, and to need `media`",
+            ));
+        }
+        if input.at.len() > MAX_LOOK_FRAMES {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                format!("look shows at most {MAX_LOOK_FRAMES} frames at a time"),
+            ));
+        }
+        if input.media.is_none() && input.at.is_empty() && input.proposal.is_none() {
             let (revision, document) = self.runtime.get_document(true)?;
             let state = self.runtime.get_state()?;
             return Ok(json!({
@@ -308,29 +369,32 @@ impl CutMcpRouter {
                 "proposal": proposal_status(state.pending_proposal.as_ref()),
             }));
         }
-        if input.at.len() > MAX_LOOK_FRAMES {
-            return Err(McpError::new(
-                "INVALID_ARGUMENTS",
-                format!("look shows at most {MAX_LOOK_FRAMES} frames at a time"),
-            ));
-        }
-        let (revision, document) = self.runtime.get_document(false)?;
-        let project = parse(&document)?;
+        let (revision, project) = self.project_at(input.proposal.as_deref())?;
         let width = input.width.unwrap_or(DEFAULT_FRAME_WIDTH).clamp(64, 1920);
-        let Some(media_id) = input.media.as_deref() else {
-            return self.program_frames(&project, revision, &input.at, width);
+        let mut result = match input.media.as_deref() {
+            None if input.at.is_empty() => json!({
+                "revision": revision,
+                "document": print_document(&project, catalog(), PrintOptions { annotate: true }),
+            }),
+            None => self.program_frames(&project, revision, &input.at, width)?,
+            Some(media_id) => {
+                let media = project.media(media_id).ok_or_else(|| {
+                    McpError::new(
+                        "UNKNOWN_MEDIA",
+                        format!("no media `{media_id}` in the project"),
+                    )
+                })?;
+                if input.at.is_empty() {
+                    self.media_index(&project, media, &input)?
+                } else {
+                    self.source_frames(media, &input.at, width)?
+                }
+            }
         };
-        let media = project.media(media_id).ok_or_else(|| {
-            McpError::new(
-                "UNKNOWN_MEDIA",
-                format!("no media `{media_id}` in the project"),
-            )
-        })?;
-        if input.at.is_empty() {
-            self.media_index(&project, media, &input)
-        } else {
-            self.source_frames(media, &input.at, width)
+        if let Some(id) = input.proposal {
+            result["proposal"] = json!(id);
         }
+        Ok(result)
     }
 
     fn media_index(
@@ -679,39 +743,42 @@ impl CutMcpRouter {
 
     pub(super) fn edit(&self, arguments: Value) -> Result<Value, McpError> {
         let input: EditInput = input(arguments)?;
-        if let Some(revise) = input.revise.as_deref() {
-            match self.runtime.get_state()?.pending_proposal {
-                Some(PendingProposal::Pending { proposal_id, .. }) if proposal_id == revise => {
-                    self.runtime.reject_proposal(revise)?;
-                }
-                _ => {
-                    return Err(McpError::new(
-                        "NOT_PENDING",
-                        format!("proposal {revise} is not waiting for review"),
-                    ))
-                }
-            }
+        if input.extend.is_some() && input.revise.is_some() {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "pass `extend` or `revise`, not both",
+            ));
         }
-        let (revision, document) = self.runtime.get_document(false)?;
-        let before = parse(&document)?;
+        let replaced = input.extend.as_deref().or(input.revise.as_deref());
+        let prior = match replaced {
+            Some(id) => Some(self.pending(id)?.0),
+            None => None,
+        };
+        // `extend` runs the script on what the proposal makes; `revise` on
+        // the project.
+        let (revision, before) = self.project_at(input.extend.as_deref())?;
         let applied = apply_script(&before, catalog(), &input.script)
             .map_err(|errors| McpError::new("SCRIPT_REFUSED", diagnostics(&errors)))?;
-        if print_document(&applied.project, catalog(), PrintOptions::default()) == document {
+        if print_document(&applied.project, catalog(), PrintOptions::default())
+            == print_document(&before, catalog(), PrintOptions::default())
+        {
             return Err(McpError::new("NO_CHANGE", "the script changes nothing"));
+        }
+        let script = match prior.filter(|_| input.extend.is_some()) {
+            Some(prior) => format!("{}\n{}", prior.trim_end(), input.script),
+            None => input.script.clone(),
+        };
+        if let Some(id) = replaced {
+            self.runtime.reject_proposal(id)?;
         }
         let snapshot = self
             .runtime
-            .stage_script_proposal(
-                &operation_key("agent-edit"),
-                revision,
-                &input.script,
-                Vec::new(),
-            )
+            .stage_script_proposal(&operation_key("agent-edit"), revision, &script, Vec::new())
             .map_err(|error| match error.code.as_str() {
                 "PROPOSAL_PENDING" => McpError::new(
                     "PROPOSAL_PENDING",
                     "another proposal is waiting for the user's review; pass its id as \
-                     `revise` to replace it",
+                     `extend` to build on it or as `revise` to replace it",
                 ),
                 _ => McpError::from(error),
             })?;
@@ -727,8 +794,10 @@ impl CutMcpRouter {
                 "the runtime did not keep the proposal",
             ));
         };
-        let (before_document, after_document) = self.runtime.proposal_documents(&proposal_id)?;
-        let (before_program, after_program) = (parse(&before_document)?, parse(&after_document)?);
+        let (_, after_document) = self.runtime.proposal_documents(&proposal_id)?;
+        let after_program = parse(&after_document)?;
+        let mut before_program = before.clone();
+        cut_runtime::resolve_media_paths(&mut before_program, &self.dir);
         let check = check(&after_program);
         let preview = match changed_range(&before, &applied.project) {
             None => json!({"unavailable": "the edit changes nothing on the sequence"}),
@@ -793,10 +862,14 @@ impl CutMcpRouter {
     pub(super) fn render(&self, arguments: Value) -> Result<Value, McpError> {
         let input: RenderInput = input(arguments)?;
         if let Some(job) = input.job.as_deref() {
-            if input.quality.is_some() || input.from.is_some() || input.to.is_some() {
+            if input.quality.is_some()
+                || input.from.is_some()
+                || input.to.is_some()
+                || input.proposal.is_some()
+            {
                 return Err(McpError::new(
                     "INVALID_ARGUMENTS",
-                    "`job` reads a render; it takes no quality or range",
+                    "`job` reads a render; it takes no quality, range, or proposal",
                 ));
             }
             let job = if input.cancel {
@@ -825,10 +898,9 @@ impl CutMcpRouter {
                 ))
             }
         };
+        let (_, project) = self.project_at(input.proposal.as_deref())?;
         let mut range = None;
         if input.from.is_some() || input.to.is_some() {
-            let (_, document) = self.runtime.get_document(false)?;
-            let project = parse(&document)?;
             let sequence = program(&project)?;
             let clock = Clock::of_sequence(sequence);
             let from = match &input.from {
@@ -844,13 +916,17 @@ impl CutMcpRouter {
                 (to - from).seconds(),
             )?);
         }
-        let started = self.render_start(draft, range)?;
-        Ok(json!({
+        let started = self.render_start(draft, range, input.proposal.as_deref())?;
+        let mut result = json!({
             "job": started["jobId"],
             "status": started["status"],
             "output": started["output"],
             "revision": started["revision"],
-        }))
+        });
+        if let Some(id) = input.proposal {
+            result["proposal"] = json!(id);
+        }
+        Ok(result)
     }
 }
 
