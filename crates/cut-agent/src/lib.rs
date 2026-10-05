@@ -2181,8 +2181,12 @@ fn collect_inline_images(value: &mut Value, images: &mut Vec<Value>) {
     match value {
         Value::Object(object) => {
             if let Some(Value::String(data)) = object.remove("imageBase64") {
+                let media_type = object.get("mediaType").cloned();
                 object.insert("imageIndex".into(), json!(images.len()));
-                images.push(json!({"mediaType":"image/png","data":data}));
+                images.push(json!({
+                    "mediaType": media_type.unwrap_or_else(|| json!("image/png")),
+                    "data": data,
+                }));
             }
             for nested in object.values_mut() {
                 collect_inline_images(nested, images);
@@ -2645,9 +2649,10 @@ mod tests {
 
     #[test]
     fn native_inline_frames_become_images_with_timing_metadata() {
-        let result = normalize_tool_result(
-            json!({"revision":4,"frames":[{"time":1.5,"path":"frame.png","imageBase64":"AQID"}]}),
-        )
+        let result = normalize_tool_result(json!({"revision":4,"frames":[
+            {"time":1.5,"path":"frame.jpg","imageBase64":"AQID","mediaType":"image/jpeg"},
+            {"time":2.0,"path":"frame.png","imageBase64":"AQID"},
+        ]}))
         .unwrap();
         let blocks = result.as_array().unwrap();
         let metadata: Value = serde_json::from_str(blocks[0]["text"].as_str().unwrap()).unwrap();
@@ -2655,6 +2660,9 @@ mod tests {
         assert_eq!(metadata["frames"][0]["imageIndex"], 0);
         assert!(metadata["frames"][0].get("imageBase64").is_none());
         assert_eq!(blocks[1]["type"], "image");
+        // The image keeps the type it was inlined with; PNG is the default.
+        assert_eq!(blocks[1]["source"]["media_type"], "image/jpeg");
+        assert_eq!(blocks[2]["source"]["media_type"], "image/png");
     }
 
     #[test]

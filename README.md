@@ -212,7 +212,7 @@ process environment. The generated configuration has this shape:
 server instructions carry the language reference and editorial guidance;
 `look` with no arguments, or the resource `cut://document`, returns the
 annotated document, and `cut://reference` the reference. Frames and previews
-arrive as MCP image content. An `edit` from an external client is a proposal
+arrive as MCP image content, as JPEG. An `edit` from an external client is a proposal
 like any other: the project and revision stay unchanged until a person
 accepts it in the editor. `CUT_MCP_NAMESPACE` prefixes the tool names (for
 example `cut.look`).
@@ -257,9 +257,7 @@ skills, fetch, interchange, CLI wiring, and protocol conformance fixtures.
 
 ```bash
 cargo test --workspace
-cargo clippy -p cut-agent -p cut-mcp -p cut-cli -p cut-qt-bridge \
-  -p cut-fetcher -p cut-interchange -p cut-skills -p cut-playback \
-  -p cut-runtime --all-targets --no-deps -- -D warnings
+cargo clippy --workspace --all-targets --no-deps -- -D warnings
 ```
 
 The Qt release gate also includes a manual window check: open a project, edit

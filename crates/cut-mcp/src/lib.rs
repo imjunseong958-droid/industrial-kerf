@@ -505,8 +505,13 @@ fn take_images(value: &mut Value, images: &mut Vec<Value>) {
     match value {
         Value::Object(object) => {
             if let Some(Value::String(data)) = object.remove("imageBase64") {
+                let mime_type = object.get("mediaType").cloned();
                 object.insert("image".into(), json!(images.len()));
-                images.push(json!({"type": "image", "data": data, "mimeType": "image/png"}));
+                images.push(json!({
+                    "type": "image",
+                    "data": data,
+                    "mimeType": mime_type.unwrap_or_else(|| json!("image/png")),
+                }));
             }
             for nested in object.values_mut() {
                 take_images(nested, images);
@@ -529,12 +534,23 @@ fn resolve_project_source_path(dir: &Path, input: &str) -> PathBuf {
     }
 }
 
-fn add_inline_base64(object: &mut Value, path_key: &str, base64_key: &str) -> Result<(), McpError> {
+/// Inline the image at `object.path` as `imageBase64`, with its `mediaType`.
+fn inline_image(object: &mut Value) -> Result<(), McpError> {
     let path = object
-        .get(path_key)
+        .get("path")
         .and_then(Value::as_str)
         .ok_or_else(|| McpError::new("HANDLER_FAILED", "artifact path is missing"))?
         .to_owned();
+    let media_type = match Path::new(&path).extension().and_then(|ext| ext.to_str()) {
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("png") => "image/png",
+        _ => {
+            return Err(McpError::new(
+                "HANDLER_FAILED",
+                format!("artifact is not an image: {path}"),
+            ))
+        }
+    };
     let metadata = fs::metadata(&path).map_err(io_error)?;
     if metadata.len() > MAX_INLINE_ARTIFACT_BYTES as u64 {
         return Err(McpError::new(
@@ -543,7 +559,8 @@ fn add_inline_base64(object: &mut Value, path_key: &str, base64_key: &str) -> Re
         ));
     }
     let data = fs::read(path).map_err(io_error)?;
-    object[base64_key] = json!(base64::engine::general_purpose::STANDARD.encode(data));
+    object["imageBase64"] = json!(base64::engine::general_purpose::STANDARD.encode(data));
+    object["mediaType"] = json!(media_type);
     Ok(())
 }
 

@@ -98,6 +98,14 @@ fn has_image(value: &Value) -> bool {
         .is_some_and(|data| data.len() > 100)
 }
 
+/// A JPEG inlined as JPEG: `/9j/` is the base64 of its start marker.
+fn is_jpeg(value: &Value) -> bool {
+    value["mediaType"] == "image/jpeg"
+        && value["imageBase64"]
+            .as_str()
+            .is_some_and(|data| data.starts_with("/9j/"))
+}
+
 #[test]
 fn lists_three_tools_and_the_reference() {
     let directory = TempDir::new().unwrap();
@@ -163,6 +171,7 @@ fn look_shows_the_document_media_index_and_frames() {
     let frames = source["frames"].as_array().unwrap();
     assert_eq!(frames.len(), 2);
     assert!(frames.iter().all(has_image));
+    assert!(frames.iter().all(is_jpeg));
     assert_eq!(frames[1]["at"], "3s");
 
     let program = ok(&router, "look", json!({"at": ["00:00:01:00"]}));
@@ -181,7 +190,7 @@ fn look_shows_the_document_media_index_and_frames() {
     let content = response["result"]["content"].as_array().unwrap();
     assert_eq!(content.len(), 2, "{response}");
     assert_eq!(content[1]["type"], "image");
-    assert_eq!(content[1]["mimeType"], "image/png");
+    assert_eq!(content[1]["mimeType"], "image/jpeg");
     let frame = &response["result"]["structuredContent"]["result"]["frames"][0];
     assert!(frame.get("imageBase64").is_none());
     assert_eq!(frame["image"], 0);
@@ -220,6 +229,7 @@ fn edit_stages_a_checked_proposal_with_a_preview() {
     assert_eq!(preview["from"], "00:00:00:00");
     assert_eq!(preview["to"], "00:00:04:00");
     assert!(has_image(&preview["before"]), "{preview}");
+    assert!(is_jpeg(&preview["after"]), "contact sheet");
     assert!(has_image(&preview["after"]), "{preview}");
 
     // Nothing changes until the user accepts.

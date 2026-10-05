@@ -7,7 +7,7 @@
 //! before/after preview of the range it changed.
 
 use super::{
-    add_inline_base64, engine_error, operation_key, resolve_project_source_path, CapturePayload,
+    engine_error, inline_image, operation_key, resolve_project_source_path, CapturePayload,
     CutMcpRouter, McpError, ToolAnnotations,
 };
 use cut_engine::derivatives::{DerivativeCache, SourceIdentity};
@@ -591,7 +591,7 @@ impl CutMcpRouter {
         let mut frames = Vec::new();
         for (text, frame) in at.iter().zip(grabbed.frames) {
             let mut value = json!({"at": text, "path": frame.path});
-            add_inline_base64(&mut value, "path", "imageBase64")?;
+            inline_image(&mut value)?;
             frames.push(value);
         }
         Ok(json!({"media": media.id.to_string(), "frames": frames}))
@@ -622,7 +622,7 @@ impl CutMcpRouter {
             let capture =
                 self.capture_program(&resolved, time, end, &[time.seconds()], width, 1, "look")?;
             let mut value = json!({"at": text, "path": capture["frames"][0]["path"]});
-            add_inline_base64(&mut value, "path", "imageBase64")?;
+            inline_image(&mut value)?;
             frames.push(value);
         }
         Ok(json!({"sequence": sequence.id.to_string(), "revision": revision, "frames": frames}))
@@ -680,9 +680,9 @@ impl CutMcpRouter {
             )
             .map_err(engine_error)?;
         let frame_names: Vec<String> = (0..times.len())
-            .map(|index| format!("frame-{index:03}.png"))
+            .map(cut_engine::probe::frame_file_name)
             .collect();
-        let mut required = vec!["capture.mp4", "capture.png", "capture.json"];
+        let mut required = vec!["capture.mp4", "capture.jpg", "capture.json"];
         required.extend(frame_names.iter().map(String::as_str));
         let cached = entry.is_complete(&required);
         let payload = if cached {
@@ -713,14 +713,14 @@ impl CutMcpRouter {
             )
             .map_err(engine_error)?;
             let paths: Vec<String> = frames.iter().map(|frame| frame.path.clone()).collect();
-            cut_engine::probe::create_contact_sheet(&paths, &entry.path("capture.png"), columns)
+            cut_engine::probe::create_contact_sheet(&paths, &entry.path("capture.jpg"), columns)
                 .map_err(engine_error)?;
             let payload = CapturePayload {
                 start: start.seconds(),
                 end: end.seconds(),
                 duration: (end - start).seconds(),
-                path: entry.path("capture.png").to_string_lossy().into_owned(),
-                media_type: "image/png".into(),
+                path: entry.path("capture.jpg").to_string_lossy().into_owned(),
+                media_type: cut_engine::probe::FRAME_MEDIA_TYPE.into(),
                 frames: frames
                     .into_iter()
                     .zip(times)
@@ -853,7 +853,7 @@ impl CutMcpRouter {
                 side,
             )?;
             let mut sheet = json!({"path": capture["path"]});
-            add_inline_base64(&mut sheet, "path", "imageBase64")?;
+            inline_image(&mut sheet)?;
             result[side] = sheet;
         }
         Ok(result)
