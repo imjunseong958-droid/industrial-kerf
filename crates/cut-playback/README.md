@@ -1,7 +1,7 @@
 # `cut-playback`
 
 `cut-playback` is the native Unit 5 playback boundary. It accepts a typed
-`cut-domain::Project`, builds an immutable timeline plan, and runs in-process
+`cut_model::Project`, builds an immutable timeline plan, and runs in-process
 libav video decoding and audio work away from the editor event loop. Export
 still uses the ffmpeg CLI in `cut-engine`.
 

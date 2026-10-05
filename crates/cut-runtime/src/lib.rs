@@ -52,7 +52,7 @@ const LOCK_FILE: &str = ".cut-runtime.lock";
 const CHECKPOINT_FILE: &str = ".cut-runtime.checkpoint.json";
 const CHECKPOINT_TEMP_FILE: &str = ".cut-runtime.checkpoint.json.tmp";
 /// Where state written by an older cutd is moved, untouched, on first open.
-const LEGACY_STATE_PREFIX: &str = ".cut-runtime.previous";
+const PREVIOUS_STATE_PREFIX: &str = ".cut-runtime.previous";
 const CHECKPOINT_VERSION: u64 = 4;
 const JOURNAL_VERSION: u64 = 3;
 const CHECKPOINT_INTERVAL: u64 = 32;
@@ -2411,13 +2411,13 @@ impl Runtime {
         let mut notes = Vec::new();
         let checkpoint = match load_checkpoint(directory)? {
             Loaded::Current(checkpoint) => Some(checkpoint),
-            Loaded::Legacy => {
+            Loaded::Previous => {
                 // State from an older cutd. Its project.cut (or, before the
                 // kernel, project.cut.json) is the last published project;
                 // keep its runtime files untouched and reopen the project.
-                preserve_legacy_state(directory)?;
+                preserve_previous_state(directory)?;
                 notes.push(format!(
-                    "previous cutd state was preserved as {LEGACY_STATE_PREFIX}.*"
+                    "previous cutd state was preserved as {PREVIOUS_STATE_PREFIX}.*"
                 ));
                 None
             }
@@ -4323,8 +4323,8 @@ fn load_bootstrap_project(directory: &Path) -> Result<(Project, Vec<String>), Ru
     Ok((imported.project, warnings))
 }
 
-/// Move a pre-kernel cutd's checkpoint and journal aside, unchanged.
-fn preserve_legacy_state(directory: &Path) -> Result<(), RuntimeError> {
+/// Move an older cutd's checkpoint and journal aside, unchanged.
+fn preserve_previous_state(directory: &Path) -> Result<(), RuntimeError> {
     for (from, suffix) in [
         (CHECKPOINT_FILE, "checkpoint.json"),
         (CHECKPOINT_TEMP_FILE, "checkpoint.json.tmp"),
@@ -4332,7 +4332,7 @@ fn preserve_legacy_state(directory: &Path) -> Result<(), RuntimeError> {
     ] {
         let from = directory.join(from);
         if from.exists() {
-            let to = directory.join(format!("{LEGACY_STATE_PREFIX}.{suffix}"));
+            let to = directory.join(format!("{PREVIOUS_STATE_PREFIX}.{suffix}"));
             fs::rename(&from, &to).map_err(io_error)?;
         }
     }
@@ -4517,8 +4517,8 @@ fn projection_digest(path: &Path) -> Result<String, RuntimeError> {
 enum Loaded {
     None,
     Current(Box<PersistedCheckpoint>),
-    /// A checkpoint written by a pre-kernel cutd.
-    Legacy,
+    /// A checkpoint written by an older cutd.
+    Previous,
 }
 
 fn load_checkpoint(directory: &Path) -> Result<Loaded, RuntimeError> {
@@ -4528,7 +4528,7 @@ fn load_checkpoint(directory: &Path) -> Result<Loaded, RuntimeError> {
         if path.is_file()
             && checkpoint_format(path).is_some_and(|format| format < CHECKPOINT_VERSION)
         {
-            return Ok(Loaded::Legacy);
+            return Ok(Loaded::Previous);
         }
     }
     if !checkpoint_path.is_file() && temporary_path.is_file() {
@@ -5912,13 +5912,13 @@ mod tests {
         assert!(state
             .import_warnings
             .iter()
-            .any(|warning| warning.contains(LEGACY_STATE_PREFIX)));
+            .any(|warning| warning.contains(PREVIOUS_STATE_PREFIX)));
         assert_eq!(
-            fs::read(directory.join(format!("{LEGACY_STATE_PREFIX}.checkpoint.json"))).unwrap(),
+            fs::read(directory.join(format!("{PREVIOUS_STATE_PREFIX}.checkpoint.json"))).unwrap(),
             old_checkpoint
         );
         assert!(directory
-            .join(format!("{LEGACY_STATE_PREFIX}.journal"))
+            .join(format!("{PREVIOUS_STATE_PREFIX}.journal"))
             .is_file());
         drop(runtime);
         let _ = fs::remove_dir_all(directory);

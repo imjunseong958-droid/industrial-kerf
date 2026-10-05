@@ -7,8 +7,8 @@ trap 'rm -rf "$project_dir"' EXIT HUP INT TERM
 first_output=$(
   printf '%s\n' \
     '{"protocolVersion":1,"id":"state-0","operation":"get_state"}' \
-    '{"protocolVersion":1,"id":"bad-key","operation":"apply","actor":"ui","idempotencyKey":"","baseRevision":0,"command":{"type":"set_metadata","patch":{"bad":true}}}' \
-    '{"protocolVersion":1,"id":"apply-1","operation":"apply","actor":"ui","idempotencyKey":"smoke-1","baseRevision":0,"command":{"type":"set_metadata","patch":{"smoke":true}}}' \
+    '{"protocolVersion":1,"id":"bad-key","operation":"apply_script","actor":"ui","idempotencyKey":"","baseRevision":0,"script":"marker add at=0f as=bad"}' \
+    '{"protocolVersion":1,"id":"apply-1","operation":"apply_script","actor":"ui","idempotencyKey":"smoke-1","baseRevision":0,"script":"marker add at=0f as=smoke"}' \
     | cargo run -q -p cut-runtime --bin cutd -- --stdio --dir "$project_dir"
 )
 
@@ -18,7 +18,7 @@ printf '%s\n' "$first_output" | grep '"id":"apply-1"' | grep '"revision":1' >/de
 
 proposal_output=$(
   printf '%s\n' \
-    '{"protocolVersion":1,"id":"proposal","operation":"stage_proposal","requestKey":"agent-1","baseRevision":1,"transactions":[{"idempotencyKey":"agent-1","commands":[{"type":"set_metadata","patch":{"approved":true}}]}]}' \
+    '{"protocolVersion":1,"id":"proposal","operation":"stage_script_proposal","requestKey":"agent-1","baseRevision":1,"script":"marker add at=1f as=approved"}' \
     | cargo run -q -p cut-runtime --bin cutd -- --stdio --dir "$project_dir"
 )
 
@@ -30,6 +30,6 @@ restart_output=$(
     | cargo run -q -p cut-runtime --bin cutd -- --stdio --dir "$project_dir"
 )
 
-printf '%s\n' "$restart_output" | grep '"id":"state-reopen"' | grep '"revision":1' | grep '"smoke":true' >/dev/null
+printf '%s\n' "$restart_output" | grep '"id":"state-reopen"' | grep '"revision":1' | grep 'marker smoke' >/dev/null
 
 echo 'cutd smoke passed'

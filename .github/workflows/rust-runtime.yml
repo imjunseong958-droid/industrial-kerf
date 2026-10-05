@@ -24,8 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Test typed domain
-        run: cargo test -p cut-domain
+      - name: Test kernel and v2 import
+        run: cargo test -p cut-model -p cut-lang -p cut-interchange
       - name: Test durable runtime
         run: cargo test -p cut-runtime --all-targets
 
