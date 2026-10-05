@@ -580,6 +580,8 @@ dependencies = [
  "cut-domain",
  "cut-engine",
  "cut-fetcher",
+ "cut-lang",
+ "cut-model",
  "cut-runtime",
  "cut-skills",
  "fs2",

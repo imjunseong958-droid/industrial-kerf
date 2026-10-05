@@ -25,10 +25,14 @@ class Provider(http.server.BaseHTTPRequestHandler):
         request = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         requests.append(request)
         if len(requests) == 1:
+            system = request['messages'][0]['content']
+            assert request['messages'][0]['role'] == 'system', request['messages'][0]
+            assert '# Cut edit script' in system and '```cut' in system, system[:400]
+            assert [tool['function']['name'] for tool in request['tools']] == ['edit', 'look', 'render', 'session.read'], request['tools']
             message = {'role': 'assistant', 'content': None, 'tool_calls': [{
                 'id': 'edit-1', 'type': 'function', 'function': {
-                    'name': 'timeline.apply',
-                    'arguments': json.dumps({'command': {'type': 'set_metadata', 'patch': {'name': 'Agent reviewed'}}})
+                    'name': 'edit',
+                    'arguments': json.dumps({'script': 'marker add at=0f name="Agent reviewed"'})
                 }}]}
             finish = 'tool_calls'
         else:
@@ -150,15 +154,15 @@ with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as tempo
         send({'type': 'redo', 'revision': undone['revision']})
         redone = state()
         external = runtime_request(directory, {
-            'operation': 'apply',
+            'operation': 'apply_script',
             'actor': 'mcp',
             'idempotencyKey': 'qt-external-edit',
             'baseRevision': redone['revision'],
-            'command': {'type': 'set_metadata', 'patch': {'external': True}},
+            'script': 'marker add at=1s name="external"',
         })
         assert external['ok'], external
         external_state = wait(lambda event: event['type'] == 'state' and event['snapshot']['revision'] == external['state']['revision'])['snapshot']
-        assert external_state['project']['metadata']['external'] is True
+        assert [marker.get('label') for marker in external_state['project']['markers']] == ['external'], external_state['project']['markers']
 
         daemon.terminate()
         daemon.wait(timeout=5)
@@ -190,7 +194,7 @@ with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as tempo
         assert proposal_id, proposal
         send({'type': 'accept', 'proposalId': proposal_id, 'revision': proposal_state['revision']})
         accepted = state()
-        assert accepted['project']['metadata']['name'] == 'Agent reviewed'
+        assert sorted(marker.get('label') for marker in accepted['project']['markers']) == ['Agent reviewed', 'external'], accepted['project']['markers']
         send({'type': 'agent', 'text': 'Keep the previous change.'})
         wait(lambda event: event['type'] == 'agent_busy' and event['busy'] is False)
         assert len(requests) == 3

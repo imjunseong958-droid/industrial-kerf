@@ -1,6 +1,6 @@
 # ADR 0006: Exact-time kernel with a text-canonical project
 
-Status: accepted (phases 1 and 2 implemented)
+Status: accepted (phases 1–3 implemented)
 Date: 2026-10-04
 
 ## Context
@@ -85,6 +85,15 @@ Each phase is its own pull request; the old stack keeps working until phase 5.
 - Ids are never reused. A project lists the ids of deleted items as
   `retired=` on its `project` line; the allocator skips them and edits that
   claim one are refused. Undo keeps an undone item's ids retired.
+- Agents (the built-in agent and MCP clients) see the annotated document and
+  the reference, and use three tools: `look` (the document, a media index of
+  uses, scene cuts, pauses, and speech, and frames), `edit` (a script staged
+  as a proposal with its diff, check findings, and a before/after preview of
+  the changed range), and `render`. The v2 MCP catalog stays behind
+  `--profile core|full` until phase 5. Skills carry editorial guidance and
+  are part of the agent's instructions.
+- Documents keep media paths relative to the project; the runtime resolves
+  them before handing a project to a renderer.
 - Until phase 4, `cutd` derives a v2 project for the renderer, playback, the
   Qt app, and MCP. v2 commands from those clients become kernel operations
   where one exists (trims, splits, moves, deletes, media and clip insertion,

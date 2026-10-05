@@ -670,7 +670,7 @@ fn new_agent(
                 .map_err(|_| "Invalid OPENAI_REASONING_EFFORT".to_string())
         })
         .transpose()?;
-    let router = CutMcpRouter::new(directory, McpProfile::Full, Some(binary))?;
+    let router = CutMcpRouter::new(directory, McpProfile::Kernel, Some(binary))?;
     let mut tools = router.agent_tools();
     inbound::add_agent_tools(&mut tools, directory, settings.mcp_enabled, |line| {
         // Connection errors may contain command arguments or server responses.
@@ -706,8 +706,9 @@ fn new_agent(
                 })
                 .ok()
             }),
-        skills: router.skills().to_vec(),
+        system_prompt: Some(router.agent_system_prompt()),
         tools,
+        context: Some(router.agent_context()),
         ..Default::default()
     }))
 }

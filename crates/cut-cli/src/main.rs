@@ -124,7 +124,7 @@ fn run() -> Result<()> {
     }
 
     if args.generate_docs || args.add_agents_pointer {
-        let router = open_router(&directory, args.cutd.as_deref(), McpProfile::Full)?;
+        let router = open_router(&directory, args.cutd.as_deref(), McpProfile::Kernel)?;
         let generated = router
             .generate_agent_docs()
             .map_err(|error| anyhow!(error))?;
@@ -143,7 +143,7 @@ fn run() -> Result<()> {
 
     let inbound_mcp_enabled = inbound::enabled(args.mcp_tools);
     if args.mcp {
-        let router = open_router(&directory, args.cutd.as_deref(), McpProfile::Full)?;
+        let router = open_router(&directory, args.cutd.as_deref(), McpProfile::Kernel)?;
         let inbound = inbound::InboundMcpRegistry::connect(&directory, |line| eprintln!("{line}"))
             .map_err(|error| anyhow!(error))?;
         let inbound_servers = inbound.describe();
@@ -187,7 +187,7 @@ fn run() -> Result<()> {
         println!("imported {}", path.display());
     }
 
-    let router = open_router(&directory, args.cutd.as_deref(), McpProfile::Full)?;
+    let router = open_router(&directory, args.cutd.as_deref(), McpProfile::Kernel)?;
     let llm = resolve_llm(&args)?;
     if llm.api_key.is_none() {
         if args.prompt.is_some() || args.terminal || inbound_mcp_enabled {
@@ -209,8 +209,9 @@ fn run() -> Result<()> {
         api_key: llm.api_key,
         base_url: llm.base_url,
         model: llm.model,
-        skills,
+        system_prompt: Some(router.agent_system_prompt()),
         tools,
+        context: Some(router.agent_context()),
         ..AgentSessionOptions::default()
     });
 
@@ -536,7 +537,7 @@ fn import_media(
     if !path.is_file() {
         bail!("media file does not exist: {}", path.display());
     }
-    let router = open_router(directory, cutd, McpProfile::Core)?;
+    let router = open_router(directory, cutd, McpProfile::Kernel)?;
     let snapshot = router.runtime().get_state().map_err(runtime_error)?;
     let metadata = serde_json::to_value(cut_engine::info(&path.to_string_lossy())?)?;
     let key = operation_key("cli-import");
@@ -616,7 +617,7 @@ fn run_repl(session: &mut AgentSession, directory: &Path) -> Result<()> {
             "" => continue,
             "/quit" | "/q" | "exit" => break,
             "/timeline" => {
-                let router = open_router(directory, None, McpProfile::Core)?;
+                let router = open_router(directory, None, McpProfile::Kernel)?;
                 print_snapshot(router.runtime(), "timeline");
             }
             "/save" => {

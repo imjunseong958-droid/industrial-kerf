@@ -157,15 +157,40 @@ pub fn skills_index_prompt(skills: &[Skill]) -> String {
         }
 }
 
-/// Compose a prompt with a compact skill index and the explicit read rule.
+/// The longest skill body carried in a system prompt.
+const MAX_PROMPT_SKILL_BYTES: usize = 6 * 1024;
+
+/// Compose a prompt that carries each skill's editorial guidance in full.
+/// Skills hold judgment, not procedures, so they are short enough to keep in
+/// context; an overlong body is cut at a line boundary.
 pub fn compose_system_prompt(base: &str, skills: &[Skill]) -> String {
     if skills.is_empty() {
         return base.to_owned();
     }
-    format!(
-        "{base}\n\nAvailable skills:\n{}\n\nRead a skill with the skills.read tool before relying on its full playbook.",
-        skills_index_prompt(skills)
-    )
+    let mut prompt =
+        format!("{base}\n\n# Editorial guidance\n\nApply the guidance that fits the request.");
+    for skill in skills.iter().take(16) {
+        prompt.push_str(&format!(
+            "\n\n## {}\n\n{}\n\n{}",
+            skill.name,
+            skill.description,
+            bounded_body(&skill.body)
+        ));
+    }
+    prompt
+}
+
+fn bounded_body(body: &str) -> &str {
+    if body.len() <= MAX_PROMPT_SKILL_BYTES {
+        return body;
+    }
+    let mut end = MAX_PROMPT_SKILL_BYTES;
+    while !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    body[..end]
+        .rfind('\n')
+        .map_or(&body[..end], |line| &body[..line])
 }
 
 /// JSON schema used by both MCP and the agent tool adapter.
@@ -243,13 +268,26 @@ mod tests {
     }
 
     #[test]
+    fn prompt_carries_editorial_guidance_in_full() {
+        let prompt = compose_system_prompt("base", &bundled_skills());
+        assert!(prompt.starts_with("base\n\n# Editorial guidance"));
+        assert!(prompt.contains("## shorts"));
+        assert!(prompt.contains("Never invent dialogue."));
+        assert!(!prompt.contains("skills.read"));
+        assert_eq!(compose_system_prompt("base", &[]), "base");
+        let long = "line\n".repeat(4000);
+        assert!(bounded_body(&long).len() <= MAX_PROMPT_SKILL_BYTES);
+        assert!(bounded_body(&long).ends_with("line"));
+    }
+
+    #[test]
     fn bundled_skills_are_available_without_a_working_directory() {
         let skills = bundled_skills();
         assert!(find_skill(&skills, "shorts").is_some());
         assert!(find_skill(&skills, "meme")
             .unwrap()
             .body
-            .contains("Meme edits"));
+            .contains("Timing is the joke"));
         assert_eq!(
             find_skill(&skills, "shorts").unwrap().dir,
             PathBuf::from("<bundled>")

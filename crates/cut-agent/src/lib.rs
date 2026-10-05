@@ -23,24 +23,8 @@ pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-20250514";
 pub const DEFAULT_OPENAI_MODEL: &str = "gpt-4o";
 pub const DEFAULT_RESPONSES_MODEL: &str = "gpt-5.6-luna";
 
-const DEFAULT_SYSTEM_PROMPT: &str = "You are a video editing assistant for Cut.
-The project file is project.cut; tools show it in the v2 JSON shape.
-Inspect project.outline and timeline.query before editing. Use timeline.apply for mutations, batch related changes, and render a draft before a full render. Use tools.search and tools.describe to discover exact editing command schemas. Agent edits are staged as proposals for user review; do not claim a staged edit is applied until it is accepted.
-Use skills.read to load a playbook body when a skill is relevant.
-Use tools.search and tools.describe to discover native capabilities. If the selected operation is not directly advertised, execute it through tools.call with its name and arguments. Discovery does not change a staged edit into an accepted edit. For configured external servers, use mcp_search, mcp_describe, and mcp_call instead.
-Use session.read to retrieve archived requirements or evidence when a result is abbreviated. An archived proposal is not proof of its current approval state: recheck the current revision and pending proposal before editing. Check timeline.check for live/offline capability differences and use an offline preview when native playback cannot represent the edit.
-For a request to enlarge part of a video for a time range, inspect the clip and observe an exact representative source frame within that range with media.probe. Propose a normalized source rectangle from the visible evidence; never invent coordinates. Check the selected range for scene cuts before staging. A fixed region may span only one continuous scene: split at a scene cut and propose a new box for the next scene from a frame after the cut, or ask the user to choose it. Use timeline.apply to stage one batch that splits the clip at the selected boundaries and sets crop on the focused segment. A crop box stays fixed throughout its segment; do not claim it follows a moving subject. If the subject moves, direct the user to the editor's Follow a moving subject option, which starts from a user-drawn box. Capture an offline before/after preview for review. The user can correct the rectangle in the editor. Keep the proposal pending for review.
-For a request for a rough cut, inspect the project and run coarse
-media.probe calls with action observe first, then call workflow.roughcut with
-the multiple source ranges you selected and a concise rationale for every
-range. The workflow turns those
-typed selections into one proposal, validates the candidate timeline, and
-captures a bounded before/after preview. If you have not selected ranges yet,
-workflow.roughcut returns planning_needed; never let it choose the first clip
-or source for you. Keep the proposal pending until the user reviews it. Use
-media.asset only for an existing local artifact and never claim a provider
-generated media without a returned file.
-Do not call a tool named edit.";
+const DEFAULT_SYSTEM_PROMPT: &str = "You are a video editing assistant for Cut. \
+Edits you make are proposals: do not claim one is applied until the user accepts it.";
 
 pub const MAX_TOOL_RESULT_IMAGES: usize = 8;
 pub const MAX_TOOL_RESULT_IMAGE_BYTES: usize = 5 * 1024 * 1024;
@@ -1322,6 +1306,11 @@ impl AgentTool {
 
 pub type ToolMap = BTreeMap<String, AgentTool>;
 
+/// Context read fresh for every model request, such as the current project
+/// document. It follows the fixed system prompt, so the fixed part stays
+/// cacheable while the context tracks every edit.
+pub type ContextSource = Arc<dyn Fn() -> Result<String, String> + Send + Sync>;
+
 /// Progress emitted by an agent session. Payloads intended for a UI are
 /// bounded and contain summaries rather than provider or tool JSON.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1426,6 +1415,7 @@ pub struct AgentSession {
     pub system_prompt: String,
     pub messages: Vec<Value>,
     tools: ToolMap,
+    context: Option<ContextSource>,
     llm: Box<dyn LlmProvider>,
     max_turns: usize,
     context_budget: ContextBudget,
@@ -1454,6 +1444,7 @@ pub struct AgentSessionOptions {
     pub system_prompt: Option<String>,
     pub skills: Vec<Skill>,
     pub tools: ToolMap,
+    pub context: Option<ContextSource>,
     pub max_turns: usize,
     pub context_budget: ContextBudget,
 }
@@ -1470,6 +1461,7 @@ impl Default for AgentSessionOptions {
             system_prompt: None,
             skills: Vec::new(),
             tools: BTreeMap::new(),
+            context: None,
             max_turns: 32,
             context_budget: ContextBudget::from_env(),
         }
@@ -1506,7 +1498,14 @@ impl AgentSession {
             options.reasoning_effort,
         );
         session.context_budget = options.context_budget;
+        session.context = options.context;
         session
+    }
+
+    /// Read `context` before every model request.
+    pub fn with_context(mut self, context: ContextSource) -> Self {
+        self.context = Some(context);
+        self
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1534,6 +1533,7 @@ impl AgentSession {
             system_prompt,
             messages: Vec::new(),
             tools,
+            context: None,
             llm,
             max_turns: max_turns.max(1),
             context_budget: ContextBudget::default(),
@@ -1554,38 +1554,16 @@ impl AgentSession {
     }
 
     pub fn normalized_tools(&self) -> Vec<NormalizedTool> {
-        let discovery =
-            self.tools.contains_key("tools.search") && self.tools.contains_key("tools.describe");
-        const BOOTSTRAP: &[&str] = &[
-            "tools.search",
-            "tools.describe",
-            "skills.list",
-            "skills.read",
-            "results.read",
-            "project.outline",
-            "timeline.query",
-            "timeline.apply",
-            "mcp_search",
-            "mcp_describe",
-            "mcp_call",
-        ];
         let mut tools = self
             .tools
             .values()
             .filter(|tool| tool.name != "session.read")
-            .filter(|tool| !discovery || BOOTSTRAP.contains(&tool.name.as_str()))
             .map(|tool| NormalizedTool {
                 name: tool.name.clone(),
                 description: tool.description.clone(),
                 input_schema: tool.input_schema.clone(),
             })
             .collect::<Vec<_>>();
-        if discovery {
-            tools.push(NormalizedTool {
-                name:"tools.call".into(),description:"Execute a discovered native operation using the exact name and arguments from tools.describe. This uses the same proposal and validation boundary as direct tools.".into(),
-                input_schema:json!({"type":"object","properties":{"name":{"type":"string","minLength":1},"arguments":{"type":"object"}},"required":["name","arguments"],"additionalProperties":false}),
-            });
-        }
         tools.push(context::read_tool());
         tools
     }
@@ -1594,31 +1572,29 @@ impl AgentSession {
         if name == "session.read" {
             return context::read(&self.messages, input);
         }
-        let (name, input) = if name == "tools.call" && self.tools.contains_key("tools.describe") {
-            let name = input
-                .get("name")
-                .and_then(Value::as_str)
-                .filter(|name| !name.is_empty())
-                .ok_or("tools.call requires an operation name")?
-                .to_owned();
-            let arguments = input
-                .get("arguments")
-                .filter(|value| value.is_object())
-                .ok_or("tools.call requires an arguments object")?
-                .clone();
-            (name, arguments)
-        } else {
-            (name.to_owned(), input)
-        };
         self.tools
-            .get(&name)
+            .get(name)
             .ok_or_else(|| format!("unknown tool: {name}"))?
             .execute(input, &self.aborted)
     }
 
+    /// The fixed system prompt followed by the current context.
+    pub fn system(&self) -> String {
+        match self.context.as_ref().map(|context| context()) {
+            None => self.system_prompt.clone(),
+            Some(Ok(context)) if context.is_empty() => self.system_prompt.clone(),
+            Some(Ok(context)) => format!("{}\n\n{context}", self.system_prompt),
+            Some(Err(error)) => format!(
+                "{}\n\nThe current project could not be read: {error}",
+                self.system_prompt
+            ),
+        }
+    }
+
     fn provider_request(&self, budget: &ContextBudget) -> Result<ProviderRequest, AgentError> {
         let tools = self.normalized_tools();
-        let fixed = self.system_prompt.len().saturating_mul(2)
+        let system = self.system();
+        let fixed = system.len().saturating_mul(2)
             + context::units(
                 &serde_json::to_value(&tools)
                     .map_err(|error| AgentError::Serialization(error.to_string()))?,
@@ -1626,12 +1602,12 @@ impl AgentSession {
             + tools.len() * 256
             + 1024;
         let available = budget.max_input_units.checked_sub(fixed)
-            .ok_or_else(|| AgentError::ContextBudget("System prompt and tool definitions exceed the input allowance. Lower the advertised catalog or increase the budget for this model.".into()))?;
+            .ok_or_else(|| AgentError::ContextBudget("System prompt, project context, and tool definitions exceed the input allowance. Increase the budget for this model.".into()))?;
         let messages = context::project(&self.messages, available, budget)
             .map_err(AgentError::ContextBudget)?;
         Ok(ProviderRequest {
             model: self.model.clone(),
-            system: self.system_prompt.clone(),
+            system,
             tools,
             messages,
         })
@@ -1741,12 +1717,7 @@ impl AgentSession {
                     .unwrap_or_default()
                     .to_owned();
                 let input = block.get("input").cloned().unwrap_or_else(|| json!({}));
-                let event_name = if name == "tools.call" {
-                    input.get("name").and_then(Value::as_str).unwrap_or(&name)
-                } else {
-                    &name
-                }
-                .to_owned();
+                let event_name = name.clone();
                 let targets = summarize_targets(&input);
                 emit(AgentEvent::ToolCallStarted {
                     id: bounded_text(&id, MAX_AGENT_SUMMARY_TEXT_BYTES),
@@ -2377,51 +2348,79 @@ mod tests {
     }
 
     #[test]
-    fn native_discovery_keeps_large_catalogs_out_of_the_prompt() {
-        let provider = FakeProvider { chunks: vec![] };
+    fn context_is_read_fresh_after_the_fixed_prompt_for_every_request() {
+        struct RecordingProvider {
+            systems: Arc<Mutex<Vec<String>>>,
+        }
+        impl LlmProvider for RecordingProvider {
+            fn name(&self) -> ProviderName {
+                ProviderName::Anthropic
+            }
+            fn default_model(&self) -> &'static str {
+                "test"
+            }
+            fn stream(
+                &self,
+                request: &ProviderRequest,
+            ) -> Result<Vec<ProviderChunk>, ProviderError> {
+                let mut systems = self.systems.lock().unwrap();
+                systems.push(request.system.clone());
+                let content = if systems.len() == 1 {
+                    vec![json!({"type":"tool_use","id":"call_1","name":"edit","input":{}})]
+                } else {
+                    vec![json!({"type":"text","text":"done"})]
+                };
+                Ok(vec![ProviderChunk::MessageEnd {
+                    stop_reason: if systems.len() == 1 {
+                        "tool_use"
+                    } else {
+                        "end_turn"
+                    }
+                    .into(),
+                    content,
+                }])
+            }
+        }
+        let systems = Arc::new(Mutex::new(Vec::new()));
+        let revision = Arc::new(std::sync::atomic::AtomicU64::new(1));
         let mut tools = ToolMap::new();
-        for name in ["tools.search", "tools.describe"] {
-            tools.insert(
-                name.into(),
-                AgentTool::new(name, "discovery", json!({"type":"object"}), |_| {
-                    Ok(json!({}))
-                }),
-            );
-        }
-        for index in 0..500 {
-            let name = format!("feature.{index}");
-            tools.insert(
-                name.clone(),
-                AgentTool::new(
-                    name,
-                    "large optional capability",
-                    json!({"type":"object","description":"x".repeat(1000)}),
-                    move |input| Ok(json!({"feature":index,"input":input})),
-                ),
-            );
-        }
-        let session = AgentSession::from_provider(
-            Box::new(provider),
+        let edited = Arc::clone(&revision);
+        tools.insert(
+            "edit".into(),
+            AgentTool::new("edit", "edit", json!({"type":"object"}), move |_| {
+                edited.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({"staged":true}))
+            }),
+        );
+        let read = Arc::clone(&revision);
+        let mut session = AgentSession::from_provider(
+            Box::new(RecordingProvider {
+                systems: Arc::clone(&systems),
+            }),
             None,
-            None,
+            Some("fixed".into()),
             vec![],
             tools,
-            2,
+            4,
             OpenAiApiMode::Chat,
             None,
+        )
+        .with_context(Arc::new(move || {
+            Ok(format!("revision {}", read.load(Ordering::SeqCst)))
+        }));
+        assert_eq!(session.run("cut it").unwrap(), "done");
+        assert_eq!(
+            *systems.lock().unwrap(),
+            vec!["fixed\n\nrevision 1", "fixed\n\nrevision 2"]
         );
-        assert_eq!(session.normalized_tools().len(), 4);
-        let result = session
-            .execute_tool(
-                "tools.call",
-                json!({"name":"feature.499","arguments":{"selected":true}}),
-            )
-            .unwrap();
-        assert_eq!(result["feature"], 499);
-        assert_eq!(result["input"]["selected"], true);
-        assert!(session
-            .execute_tool("tools.call", json!({"name":"media.import","arguments":{}}))
-            .is_err());
+        assert_eq!(session.system_prompt, "fixed");
+        let names = session
+            .normalized_tools()
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["edit", "session.read"]);
+        assert!(session.execute_tool("tools.call", json!({})).is_err());
     }
 
     #[test]

@@ -68,34 +68,35 @@ The Qt editor's Settings tab can enable the same attachment for its Chat,
 edit the project config, or import a Cursor config. `CUT_ENABLE_MCP=1` remains
 available as an environment fallback. Qt remains a presentation layer.
 
-## Agent discovery and context
+## Agents
 
-Use `tools.search` for compact native tool descriptions, then `tools.describe`
-for the selected schema. For edits, pass `name: "timeline.apply"` and a
-`commandType` such as `trim_clip` or `update_clip` to retrieve one command's
-fields and example. Without `commandType`, the response lists the available
-command types. The built-in agent advertises a fixed set of bootstrap tools
-and executes other discovered native operations through `tools.call`, keeping
-new feature schemas out of every initial prompt. External MCP catalogs also
-keep detailed command schemas behind `tools.describe`.
-Atomic edits accept up to 256 command entries and 16 nested
-batch levels.
+Agents edit the same `.cut` document people do (see
+[the Cut language](docs/cut-language.md)). Their context is the language
+reference, generated from the feature catalog, and the current document,
+annotated with each clip's end and source out. The built-in agent reads the
+document again before every model request, so it always sees the current
+revision and the state of its proposal. There is no tool discovery; three
+tools cover the work:
 
-Bundled playbooks are compiled into `cut-skills`; they do not depend on the
-working directory or the build machine's source tree. User and project skills
-override bundled names. The initial prompt includes at most 16 names with
-short descriptions. Discover additional skills with paginated `skills.list`
-and load one body with `skills.read`.
+| Tool | Purpose |
+|---|---|
+| `look` | No arguments: the annotated document and proposal state. `media`: that media's index — where it is used, scene cuts, pauses, and with `transcript: true` what is said. `at`: frames — source frames of `media`, or program frames of the sequence |
+| `edit` | Run an edit script. It becomes a proposal, returned with the document diff, check findings, and a before/after preview of the changed range. `revise` replaces a pending proposal |
+| `render` | Render the sequence, or `from`–`to`, as a draft or full-quality file; `job` reads progress, `cancel` stops it |
 
-`timeline.query` accepts `start`, `end`, `trackId`, `clipId`, `offset`, and
-`limit`. Time ranges are half-open. `project.outline` has a node budget;
-expand a returned node's `path` with `nodePath`, `childOffset`, and `childLimit`.
-Follow the returned cursors and recheck the revision when continuing a query.
-External MCP results larger than 16 KiB become immutable `results.read`
-handles. That tool reads a JSON pointer or UTF-8 page without repeating the
-operation. Evidence is cached in `.cut/cache/tool-results` with a 64 MiB entry
-limit and a 128 MiB cache budget. Old handles can expire; do not retry a
-mutation merely to retrieve its output.
+Times are timecode (`01:00:04:12`), frames (`96f`), or seconds (`4.5s`):
+media positions with `media`, sequence positions otherwise. The project
+changes only when a person accepts a proposal.
+
+Transcripts come from local `whisper.cpp` (`CUT_WHISPER_BIN` and
+`CUT_WHISPER_MODEL`, described below); media is never uploaded. Scene cuts
+and pauses are cached with the media's other derivatives in
+`.cut/cache/derived`.
+
+Skills hold editorial guidance only — what makes a good short, how a meme
+lands — not tool procedures. Bundled skills are compiled into `cut-skills`;
+user (`~/.cut/skills`) and project (`.cut/skills`) skills override them by
+name. Every skill's guidance is part of the agent's instructions.
 
 The built-in agent retains its original transcript but constructs a bounded
 view for each provider request. It prioritizes the current user request,
@@ -162,22 +163,18 @@ external client's MCP settings:
 
 ```bash
 target/release/cut-mcp --dir ./my-project --print-config
-target/release/cut-mcp --dir ./my-project --full --print-config
 ```
 
 `--print-config` prints pretty JSON with the absolute path of the running
 `cut-mcp` executable and an absolute project path. Relative project paths are
 resolved against the current working directory; the project need not exist.
-This mode exits without starting `cutd` or changing the project. The full
-profile adds `--full` to the generated arguments, including when selected by
-`CUT_MCP_PROFILE=full`. `CUT_PROJECT_DIR` supplies the default project path
-when `--dir` is omitted.
+This mode exits without starting `cutd` or changing the project.
+`CUT_PROJECT_DIR` supplies the default project path when `--dir` is omitted.
 
 To run the stdio server directly:
 
 ```bash
 target/release/cut-mcp --dir ./my-project
-target/release/cut-mcp --dir ./my-project --full
 ```
 
 Keep `cutd` beside `cut-mcp`, put it on `PATH`, or set `CUTD_BIN` in the client
@@ -193,6 +190,20 @@ process environment. The generated configuration has this shape:
   }
 }
 ```
+
+The default profile serves the agent tools above — `look`, `edit`, and
+`render`. The server instructions carry the language reference and editorial
+guidance; `look` with no arguments, or the resource `cut://document`, returns
+the annotated document, and `cut://reference` the reference. Frames and
+previews arrive as MCP image content. An `edit` from an external client is a
+proposal like any other: the project and revision stay unchanged until a
+person accepts it in the editor.
+
+### v2 profiles
+
+Until the v2 stack is removed (ADR 0006 phase 5), `--profile core` and
+`--profile full` (or `--full`, or `CUT_MCP_PROFILE=core|full`) serve the v2
+tool catalog. The profile is written into generated configurations.
 
 The core profile contains the stable editing loop:
 

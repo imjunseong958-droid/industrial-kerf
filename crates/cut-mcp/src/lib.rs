@@ -3,6 +3,10 @@
 //! Every mutation goes through cutd. The MCP process is a stateless adapter:
 //! it reads an authoritative snapshot for each request and sends canonical
 //! commands back with an idempotency key and revision.
+//!
+//! The default profile is the kernel harness (`look`, `edit`, `render`; see
+//! `harness`). The `core` and `full` profiles keep the v2 tool catalog until
+//! the old stack is removed.
 
 mod composition;
 mod composition_bridge;
@@ -12,6 +16,7 @@ mod composition_manifest;
 mod composition_render;
 mod contracts;
 pub mod docs;
+pub mod harness;
 pub mod inbound;
 mod results;
 
@@ -245,6 +250,9 @@ struct CapturePayload {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum McpProfile {
+    /// `look`, `edit`, and `render` on the kernel document.
+    Kernel,
+    /// The v2 tool catalog, kept until the old stack is removed.
     Core,
     Full,
 }
@@ -252,6 +260,7 @@ pub enum McpProfile {
 impl McpProfile {
     pub fn names(self) -> &'static [&'static str] {
         match self {
+            Self::Kernel => harness::TOOL_NAMES,
             Self::Core => CORE_TOOL_NAMES,
             Self::Full => FULL_TOOL_NAMES,
         }
@@ -260,8 +269,18 @@ impl McpProfile {
     /// Stable profile label used by generated agent documentation.
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Kernel => "kernel",
             Self::Core => "core",
             Self::Full => "full",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "kernel" => Some(Self::Kernel),
+            "core" => Some(Self::Core),
+            "full" => Some(Self::Full),
+            _ => None,
         }
     }
 }
@@ -421,6 +440,18 @@ impl CutMcpRouter {
             .collect()
     }
 
+    /// The fixed system prompt for an agent on this project.
+    pub fn agent_system_prompt(&self) -> String {
+        harness::system_prompt(&self.skills)
+    }
+
+    /// The current annotated document and proposal state, read before
+    /// every model request.
+    pub fn agent_context(&self) -> cut_agent::ContextSource {
+        let runtime = self.runtime.clone();
+        std::sync::Arc::new(move || harness::context(&runtime))
+    }
+
     pub fn agent_tools(&self) -> ToolMap {
         let mut tools = ToolMap::new();
         for definition in self.list_tools() {
@@ -464,6 +495,11 @@ impl CutMcpRouter {
             self.call_base(&base_name, arguments)
         };
         match result {
+            // The kernel tools return the document and frames whole: the
+            // document is the agent's context and frames travel as images.
+            Ok(result) if self.profile == McpProfile::Kernel => {
+                json!({"ok": true, "result": result})
+            }
             Ok(result) => {
                 let mut result = results::bound(&self.dir, result);
                 if result.get("readWith").is_some() {
@@ -524,6 +560,9 @@ impl CutMcpRouter {
 
     fn call_inner(&self, name: &str, arguments: Value) -> Result<Value, McpError> {
         match name {
+            "look" => self.look(arguments),
+            "edit" => self.edit(arguments),
+            "render" => self.render(arguments),
             "results.read" => results::read(&self.dir, &arguments)
                 .map_err(|error| McpError::new("RESULT_UNAVAILABLE", error)),
             "tools.search" => self.tools_search(&arguments),
@@ -923,6 +962,9 @@ impl CutMcpRouter {
         cache_kind: &str,
         action: &str,
     ) -> Result<Value, McpError> {
+        let mut resolved = project_value.clone();
+        cut_runtime::resolve_source_paths(&mut resolved, &self.dir);
+        let project_value = &resolved;
         let project = cut_domain::parse_project(project_value)
             .map_err(|error| McpError::new("RUNTIME_ERROR", error.to_string()))?;
         let report = cut_engine::check::check_project(project_value, Some(&self.dir));
@@ -2587,6 +2629,11 @@ impl CutMcpRouter {
     }
 }
 
+const LEGACY_INSTRUCTIONS: &str = "Read the structural project with project.outline or timeline.query, inspect deterministic findings with timeline.check or composition.check, discover local HTML templates with composition.catalog, use composition.preview/composition.render only through the configured deterministic external bridge, use media.probe action observe for one bounded cached evidence envelope (frames, filmstrip, waveform, transcript, or listen), capture exact bounded previews with timeline.capture, use proposal.capture for before/after contact sheets, apply canonical v2 commands with timeline.apply, render canonical timelines with render.preview/render.start, and load playbooks with skills.read. Shell access is unavailable.";
+
+const DOCUMENT_URI: &str = "cut://document";
+const REFERENCE_URI: &str = "cut://reference";
+
 /// MCP JSON-RPC server over newline-delimited stdin/stdout.
 pub struct McpServer {
     router: CutMcpRouter,
@@ -2598,10 +2645,17 @@ pub struct McpServer {
 impl McpServer {
     pub fn new(router: CutMcpRouter) -> Self {
         Self {
-            router,
             name: "cut-mcp".into(),
             version: env!("CARGO_PKG_VERSION").into(),
-            instructions: "Read the structural project with project.outline or timeline.query, inspect deterministic findings with timeline.check or composition.check, discover local HTML templates with composition.catalog, use composition.preview/composition.render only through the configured deterministic external bridge, use media.probe action observe for one bounded cached evidence envelope (frames, filmstrip, waveform, transcript, or listen), capture exact bounded previews with timeline.capture, use proposal.capture for before/after contact sheets, apply canonical v2 commands with timeline.apply, render canonical timelines with render.preview/render.start, and load playbooks with skills.read. Shell access is unavailable.".into(),
+            instructions: match router.profile() {
+                McpProfile::Kernel => format!(
+                    "{}\n\nRead the current document with `look` and no arguments, or the \
+                     resource {DOCUMENT_URI}.",
+                    router.agent_system_prompt()
+                ),
+                McpProfile::Core | McpProfile::Full => LEGACY_INSTRUCTIONS.into(),
+            },
+            router,
         }
     }
 
@@ -2634,7 +2688,11 @@ impl McpServer {
                         .and_then(|params| params.get("protocolVersion"))
                         .and_then(Value::as_str)
                         .unwrap_or(docs::MCP_PROTOCOL_VERSION),
-                    "capabilities": {"tools": {"listChanged": false}},
+                    "capabilities": if self.router.profile() == McpProfile::Kernel {
+                        json!({"tools": {"listChanged": false}, "resources": {}})
+                    } else {
+                        json!({"tools": {"listChanged": false}})
+                    },
                     "serverInfo": {"name": self.name, "version": self.version},
                     "instructions": self.instructions,
                 }),
@@ -2654,18 +2712,71 @@ impl McpServer {
                     .get("arguments")
                     .cloned()
                     .unwrap_or_else(|| json!({}));
-                let structured = self.router.call(name, arguments);
+                let mut structured = self.router.call(name, arguments);
                 let is_error = structured.get("ok").and_then(Value::as_bool) == Some(false);
+                let mut images = Vec::new();
+                if self.router.profile() == McpProfile::Kernel {
+                    take_images(&mut structured, &mut images);
+                }
                 let text = serde_json::to_string(&structured).unwrap_or_else(|_| {
                     "{\"ok\":false,\"error\":{\"code\":\"SERIALIZATION_FAILED\",\"message\":\"result could not be serialized\"}}".into()
                 });
+                let mut content = vec![json!({"type": "text", "text": text})];
+                content.extend(images);
                 Some(json_rpc_result(
                     id,
                     json!({
-                        "content": [{"type": "text", "text": text}],
+                        "content": content,
                         "structuredContent": structured,
                         "isError": is_error,
                     }),
+                ))
+            }
+            "resources/list" if self.router.profile() == McpProfile::Kernel => {
+                Some(json_rpc_result(
+                    id,
+                    json!({"resources": [
+                        {"uri": DOCUMENT_URI, "name": "project.cut", "mimeType": "text/plain",
+                         "description": "The current project document, annotated with each clip's end and source out."},
+                        {"uri": REFERENCE_URI, "name": "Cut language reference", "mimeType": "text/markdown",
+                         "description": "Edit script grammar and every property, effect, transition, and generator."},
+                    ]}),
+                ))
+            }
+            "resources/read" if self.router.profile() == McpProfile::Kernel => {
+                let uri = request
+                    .get("params")
+                    .and_then(|params| params.get("uri"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let text = match uri {
+                    DOCUMENT_URI => match self.router.runtime().get_document(true) {
+                        Ok((_, document)) => document,
+                        Err(error) => {
+                            return Some(json_rpc_error(
+                                id,
+                                -32603,
+                                format!("{}: {}", error.code, error.message),
+                            ))
+                        }
+                    },
+                    REFERENCE_URI => cut_lang::reference(cut_model::Catalog::builtin()),
+                    _ => {
+                        return Some(json_rpc_error(
+                            id,
+                            -32002,
+                            format!("unknown resource {uri}"),
+                        ))
+                    }
+                };
+                let mime = if uri == DOCUMENT_URI {
+                    "text/plain"
+                } else {
+                    "text/markdown"
+                };
+                Some(json_rpc_result(
+                    id,
+                    json!({"contents": [{"uri": uri, "mimeType": mime, "text": text}]}),
                 ))
             }
             _ => Some(json_rpc_error(id, -32601, "method not found")),
@@ -2693,6 +2804,28 @@ impl McpServer {
             }
         }
         Ok(())
+    }
+}
+
+/// Move inline `imageBase64` data into MCP image content, leaving the index
+/// of each image where its data was.
+fn take_images(value: &mut Value, images: &mut Vec<Value>) {
+    match value {
+        Value::Object(object) => {
+            if let Some(Value::String(data)) = object.remove("imageBase64") {
+                object.insert("image".into(), json!(images.len()));
+                images.push(json!({"type": "image", "data": data, "mimeType": "image/png"}));
+            }
+            for nested in object.values_mut() {
+                take_images(nested, images);
+            }
+        }
+        Value::Array(values) => {
+            for nested in values {
+                take_images(nested, images);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -2736,6 +2869,9 @@ fn truncate_outline_nodes(node: &mut OutlineNode, budget: &mut usize) {
 }
 
 fn tool_metadata(name: &str) -> (&'static str, Value, ToolAnnotations) {
+    if let Some(metadata) = harness::metadata(name) {
+        return metadata;
+    }
     let read_only = ToolAnnotations {
         read_only_hint: Some(true),
         idempotent_hint: Some(true),
