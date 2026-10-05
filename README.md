@@ -15,7 +15,9 @@ MCP server are adapters over the same project-scoped IPC boundary.
 
 The canonical project is the `project.cut` text document
 ([the Cut language](docs/cut-language.md)). On first open, `cutd` imports an
-existing `project.cut.json` once and leaves it untouched.
+existing v1 or v2 `project.cut.json` once and leaves it untouched. Edits are
+edit scripts or typed operations; agent proposals carry their script and the
+diff of the document they would produce.
 
 ```text
 Qt6 editor ──────────────────────────┐
@@ -238,10 +240,13 @@ and media of the current document and cannot change project state.
 
 ## Interchange
 
-`cut-interchange` validates the project and invokes the configured native or
-external adapter through a small JSON bridge. OpenTimelineIO conversion uses
-the bundled `crates/cut-interchange/python/otio_bridge.py` and requires an
-environment with `opentimelineio` plus the requested adapter installed.
+`cut-interchange` converts the program sequence of a project to a
+frame-exact timeline (positions in frames of the sequence, media times in
+frames of the media) and invokes the configured native or external adapter
+through a small JSON bridge, reporting what the conversion leaves out.
+OpenTimelineIO conversion uses the bundled
+`crates/cut-interchange/python/otio_bridge.py` and requires an environment
+with `opentimelineio` plus the requested adapter installed.
 
 ## Verification
 

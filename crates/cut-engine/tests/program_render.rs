@@ -216,3 +216,45 @@ fn generators_nested_sequences_and_reverse_render() {
         pixel(&output, 60)
     );
 }
+
+#[test]
+fn a_cropped_cut_shows_its_region_between_full_frames() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("halves.mp4");
+    run(Command::new(resolve_ffmpeg_bin())
+        .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i"])
+        .arg("color=c=red:s=160x90:r=24:d=3,drawbox=x=80:y=0:w=80:h=90:color=blue:t=fill")
+        .args(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-y"])
+        .arg(&path));
+    let text = format!(
+        "cut 1\nproject name=\"crop\"\n\
+         media m path=\"{}\" rate=24 dur=72f video=160x90\n\
+         sequence s1 rate=24 size=160x90 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip c1 media=m src=0f at=0f dur=24f\n\
+         \x20   clip c2 media=m src=24f at=24f dur=24f\n\
+         \x20     set crop_l=0.5\n\
+         \x20   clip c3 media=m src=48f at=48f dur=24f\n",
+        path.display()
+    );
+    let project = parse_document(&text, Catalog::builtin())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+    let output = dir.path().join("cropped.mp4");
+    render(&project, None, None, &output);
+    // Left of center: red in the full frame, blue in the centered right half.
+    let left_of_center = |index: u32| {
+        let raw = run(Command::new(resolve_ffmpeg_bin())
+            .args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&output)
+            .arg("-vf")
+            .arg(format!("select=eq(n\\,{index})"))
+            .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]));
+        let at = (45 * 160 + 60) * 3;
+        [raw[at], raw[at + 1], raw[at + 2]]
+    };
+    for (frame, expected) in [(12, [255, 0, 0]), (36, [0, 0, 255]), (60, [255, 0, 0])] {
+        let color = left_of_center(frame);
+        assert!(is(color, expected), "frame {frame}: {color:?}");
+    }
+}

@@ -6,19 +6,17 @@
 //! the project-scoped IPC transport below.
 //!
 //! The canonical project is a `cut_model::Project` stored as the `.cut`
-//! document `project.cut` (ADR 0006). Edits arrive as scripts, typed
-//! operations, or v2 commands (see `kernel`) and are journaled as scripts.
-//! Snapshots carry the document and a timeline view of the model; renders
-//! and proposal previews hand renderers the document with media paths
-//! resolved. Snapshots also still carry a v2 export of the model for the v2
-//! MCP catalog, which goes away in ADR 0006 phase 5.
+//! document `project.cut` (ADR 0006). Edits arrive as scripts or typed
+//! operations (see `kernel`) and are journaled as scripts. Snapshots carry
+//! the document and a timeline view of the model; proposals carry the script
+//! and the document diff. Renders and proposal previews hand renderers the
+//! document with media paths resolved.
 
 mod kernel;
 mod timeline;
 
 pub use kernel::{resolve_media_paths, EditOp, TrimSide};
 
-use cut_domain as v2;
 use cut_engine::derivatives::SourceIdentity;
 use cut_model::Project;
 use fs2::FileExt;
@@ -26,7 +24,7 @@ use kernel::{Edit, Edited};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
@@ -53,10 +51,10 @@ const JOURNAL_FILE: &str = ".cut-runtime.journal";
 const LOCK_FILE: &str = ".cut-runtime.lock";
 const CHECKPOINT_FILE: &str = ".cut-runtime.checkpoint.json";
 const CHECKPOINT_TEMP_FILE: &str = ".cut-runtime.checkpoint.json.tmp";
-/// Where state from a pre-kernel `cutd` is moved, untouched, on first open.
-const LEGACY_STATE_PREFIX: &str = ".cut-runtime.v2";
-const CHECKPOINT_VERSION: u64 = 3;
-const JOURNAL_VERSION: u64 = 2;
+/// Where state written by an older cutd is moved, untouched, on first open.
+const PREVIOUS_STATE_PREFIX: &str = ".cut-runtime.previous";
+const CHECKPOINT_VERSION: u64 = 4;
+const JOURNAL_VERSION: u64 = 3;
 const CHECKPOINT_INTERVAL: u64 = 32;
 /// History holds project snapshots, so it is bounded more tightly than the
 /// command history it replaced.
@@ -289,9 +287,8 @@ mod document_text {
     }
 }
 
-/// How a journaled mutation changed the project. Script edits replay from
-/// their script; edits without one (v2 commands that went through the v2
-/// export, projection imports) carry the resulting document. The digest of
+/// How a journaled mutation changed the project. Edits replay from their
+/// script; projection imports carry the imported document. The digest of
 /// the resulting document guards every replay.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Change {
@@ -299,8 +296,6 @@ struct Change {
     script: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     document: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    label: Option<String>,
     digest: String,
 }
 
@@ -399,21 +394,15 @@ impl ProjectionStatus {
 
 /// What clients see of the runtime. `document` is the canonical `.cut`
 /// text and `timeline` a JSON view of its first sequence for editors.
-/// `project` and `sources` are the v2 export of the model, kept for the v2
-/// MCP catalog until ADR 0006 phase 5.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StateSnapshot {
-    #[serde(default)]
     pub document: String,
-    #[serde(default)]
     pub timeline: Value,
-    pub project: Value,
     pub revision: u64,
     pub can_undo: bool,
     pub can_redo: bool,
     pub duration: f64,
-    pub sources: Vec<Value>,
     pub pending_proposal: Option<PendingProposal>,
     /// 3 for the canonical `.cut` document.
     #[serde(default = "default_source_version")]
@@ -426,19 +415,7 @@ pub struct StateSnapshot {
     pub import_warnings: Vec<String>,
 }
 
-/// One machine-readable leaf change in an agent proposal.  The diff is
-/// intentionally structural rather than a rendered image: it remains cheap
-/// to inspect, deterministic, and useful even when no media renderer exists.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProposalChange {
-    pub path: String,
-    pub kind: String,
-    pub before: Value,
-    pub after: Value,
-}
-
-/// A finite time interval carried by a semantic proposal impact.
+/// A finite time interval of an observation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProposalTimeRange {
@@ -542,97 +519,6 @@ impl ObservationReference {
     }
 }
 
-/// A video-domain meaning derived from a staged typed command.
-///
-/// The raw [`ProposalChange`] list remains available for diagnostics and wire
-/// compatibility. These impacts are the stable surface that native clients
-/// use for review and timeline visualization.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(
-    tag = "kind",
-    rename_all = "snake_case",
-    rename_all_fields = "camelCase"
-)]
-pub enum ProposalImpact {
-    TrackAdded {
-        track_id: String,
-        index: usize,
-    },
-    TrackRemoved {
-        track_id: String,
-        index: usize,
-    },
-    TrackReordered {
-        track_id: String,
-        from_index: usize,
-        to_index: usize,
-    },
-    ClipAdded {
-        clip_id: String,
-        track_id: String,
-        timeline: ProposalTimeRange,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        source: Option<ProposalTimeRange>,
-    },
-    ClipRemoved {
-        clip_id: String,
-        track_id: String,
-        timeline: ProposalTimeRange,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        source: Option<ProposalTimeRange>,
-    },
-    ClipMoved {
-        clip_id: String,
-        from_track_id: String,
-        from: ProposalTimeRange,
-        to_track_id: String,
-        to: ProposalTimeRange,
-    },
-    ClipTrimmed {
-        clip_id: String,
-        track_id: String,
-        before: ProposalTimeRange,
-        after: ProposalTimeRange,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        source_before: Option<ProposalTimeRange>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        source_after: Option<ProposalTimeRange>,
-    },
-    ClipPropertyChanged {
-        clip_id: String,
-        track_id: String,
-        property: String,
-        before: Value,
-        after: Value,
-    },
-    OverlayAdded {
-        overlay_id: String,
-        index: usize,
-        overlay_kind: String,
-    },
-    OverlayRemoved {
-        overlay_id: String,
-        index: usize,
-        overlay_kind: String,
-    },
-    OverlayChanged {
-        overlay_id: String,
-        overlay_kind: String,
-        before: Value,
-        after: Value,
-    },
-    ProjectSettingChanged {
-        property: String,
-        before: Value,
-        after: Value,
-    },
-    Unclassified {
-        path: String,
-        before: Value,
-        after: Value,
-    },
-}
-
 /// Whether a pending proposal still targets the canonical project revision.
 ///
 /// Older checkpoints omit this field and therefore deserialize as `Current`.
@@ -654,7 +540,7 @@ impl ProposalFreshness {
 
 /// Proposal lifecycle owned by the canonical runtime.  Terminal states stay
 /// in memory so repeating an accept/reject request converges without another
-/// project mutation; only `Pending` exposes the proposed command and diff.
+/// project mutation; only `Pending` exposes the proposed script and diff.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum PendingProposal {
@@ -663,17 +549,13 @@ pub enum PendingProposal {
         proposal_id: String,
         #[serde(rename = "baseRevision", alias = "base_revision")]
         base_revision: u64,
-        command: Value,
-        diff: Vec<ProposalChange>,
-        #[serde(rename = "diffTruncated", alias = "diff_truncated")]
-        diff_truncated: bool,
+        /// The proposed edit as an operation script.
+        script: String,
+        /// Unified diff of the canonical document before and after.
+        #[serde(rename = "documentDiff", alias = "document_diff")]
+        document_diff: String,
         #[serde(default, skip_serializing_if = "ProposalFreshness::is_current")]
         freshness: ProposalFreshness,
-        /// Semantic impacts are optional for checkpoints written before this
-        /// field existed. `None` is represented as an unavailable semantic
-        /// projection by clients; new proposals always write `Some`.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        impacts: Option<Vec<ProposalImpact>>,
         /// Optional evidence reference produced by the agent workflow.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         observation: Option<ObservationReference>,
@@ -681,18 +563,6 @@ pub enum PendingProposal {
         /// The singular field remains for compatibility with older clients.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         observations: Option<Vec<ObservationReference>>,
-        /// The proposed edit as script, when every step has a kernel
-        /// equivalent. `command` is null for proposals staged as scripts.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        script: Option<String>,
-        /// Unified diff of the canonical document before and after.
-        #[serde(
-            rename = "documentDiff",
-            alias = "document_diff",
-            default,
-            skip_serializing_if = "Option::is_none"
-        )]
-        document_diff: Option<String>,
     },
     Accepted {
         #[serde(rename = "proposalId", alias = "proposal_id")]
@@ -714,54 +584,6 @@ pub enum PendingProposal {
         #[serde(rename = "baseRevision", alias = "base_revision")]
         base_revision: u64,
     },
-}
-
-fn replace_proposal_crop(command: &mut Value, crop_override: &Value) -> Result<(), RuntimeError> {
-    let clip_id = crop_override
-        .get("clipId")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| RuntimeError::new("INVALID_REQUEST", "cropOverride.clipId is required"))?;
-    let crop = crop_override
-        .get("crop")
-        .filter(|value| value.is_object())
-        .ok_or_else(|| {
-            RuntimeError::new("INVALID_REQUEST", "cropOverride.crop must be an object")
-        })?;
-
-    fn replace(command: &mut Value, clip_id: &str, crop: &Value) -> usize {
-        if command.get("type").and_then(Value::as_str) == Some("batch") {
-            return command
-                .get_mut("commands")
-                .and_then(Value::as_array_mut)
-                .map(|commands| {
-                    commands
-                        .iter_mut()
-                        .map(|child| replace(child, clip_id, crop))
-                        .sum()
-                })
-                .unwrap_or(0);
-        }
-        if command.get("type").and_then(Value::as_str) == Some("update_clip")
-            && command.get("clipId").and_then(Value::as_str) == Some(clip_id)
-            && command
-                .get("patch")
-                .and_then(|patch| patch.get("crop"))
-                .is_some()
-        {
-            command["patch"]["crop"] = crop.clone();
-            return 1;
-        }
-        0
-    }
-
-    if replace(command, clip_id, crop) != 1 {
-        return Err(RuntimeError::new(
-            "INVALID_REQUEST",
-            "proposal must contain exactly one crop edit for cropOverride.clipId",
-        ));
-    }
-    Ok(())
 }
 
 /// A bounded project-time range rendered for a preview job.
@@ -853,7 +675,7 @@ struct OperationRecord {
 struct ImportRecord {
     fingerprint: String,
     snapshot: Arc<StateSnapshot>,
-    source_id: String,
+    media_id: String,
     clip_id: String,
 }
 
@@ -872,10 +694,6 @@ struct ProposalRecord {
     fingerprint: String,
     #[serde(default)]
     receipt: Option<ProposalReceipt>,
-    /// The edit applied on acceptance when it is not the v2 `command` shown
-    /// in the lifecycle (script proposals).
-    #[serde(default)]
-    edit: Option<Edit>,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -963,8 +781,6 @@ struct Runtime {
     project_path: PathBuf,
     journal_path: PathBuf,
     project: Project,
-    /// The v2 project derived from `project` for v2 clients.
-    view: v2::Project,
     revision: u64,
     past: Vec<HistoryEntry>,
     future: Vec<HistoryEntry>,
@@ -991,10 +807,6 @@ pub enum RuntimeRequest {
     GetDocument {
         #[serde(default)]
         annotated: bool,
-    },
-    GetProposalPreview {
-        #[serde(rename = "proposalId")]
-        proposal_id: String,
     },
     /// The documents before and after a pending proposal, with media paths
     /// resolved for a renderer.
@@ -1030,15 +842,6 @@ pub enum RuntimeRequest {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         observations: Vec<Value>,
     },
-    /// Apply a v2 command (`v2::Command` JSON).
-    Apply {
-        actor: String,
-        #[serde(rename = "idempotencyKey")]
-        idempotency_key: String,
-        #[serde(rename = "baseRevision")]
-        base_revision: u64,
-        command: Value,
-    },
     Undo {
         actor: String,
         #[serde(rename = "idempotencyKey")]
@@ -1060,8 +863,6 @@ pub enum RuntimeRequest {
         #[serde(rename = "baseRevision")]
         base_revision: u64,
         path: String,
-        metadata: Option<Value>,
-        overlay: Option<Value>,
     },
     StartRender {
         quality: String,
@@ -1096,30 +897,6 @@ pub enum RuntimeRequest {
         #[serde(rename = "baseRevision")]
         base_revision: u64,
     },
-    StageProposal {
-        #[serde(rename = "requestKey")]
-        request_key: String,
-        #[serde(rename = "baseRevision")]
-        base_revision: u64,
-        transactions: Vec<Value>,
-    },
-    StageImportProposal {
-        #[serde(rename = "requestKey")]
-        request_key: String,
-        #[serde(rename = "baseRevision")]
-        base_revision: u64,
-        path: String,
-        metadata: Option<Value>,
-        overlay: Option<Value>,
-        #[serde(
-            rename = "replacementClipId",
-            default,
-            skip_serializing_if = "Option::is_none"
-        )]
-        replacement_clip_id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        observation: Option<Value>,
-    },
     AcceptProposal {
         #[serde(rename = "proposalId")]
         proposal_id: String,
@@ -1128,12 +905,6 @@ pub enum RuntimeRequest {
         idempotency_key: String,
         #[serde(rename = "baseRevision")]
         base_revision: u64,
-        #[serde(
-            rename = "cropOverride",
-            default,
-            skip_serializing_if = "Option::is_none"
-        )]
-        crop_override: Option<Value>,
     },
     RejectProposal {
         #[serde(rename = "proposalId")]
@@ -1246,17 +1017,14 @@ pub enum RuntimeResponse {
         revision: u64,
         document: String,
     },
-    ProposalPreview {
-        before: Value,
-        after: Value,
-    },
     ProposalDocuments {
         before: String,
         after: String,
     },
+    /// A media import and the media and clip it added.
     Import {
         state: StateSnapshot,
-        source_id: String,
+        media_id: String,
         clip_id: String,
     },
     /// A queued render and the document to render, with media paths
@@ -1326,18 +1094,6 @@ impl RuntimeHandle {
             _ => Err(RuntimeError::new(
                 "RUNTIME_PROTOCOL_ERROR",
                 "expected state response",
-            )),
-        }
-    }
-
-    pub fn proposal_preview(&self, proposal_id: &str) -> Result<(Value, Value), RuntimeError> {
-        match self.request(RuntimeRequest::GetProposalPreview {
-            proposal_id: proposal_id.to_owned(),
-        })? {
-            RuntimeResponse::ProposalPreview { before, after } => Ok((before, after)),
-            _ => Err(RuntimeError::new(
-                "RUNTIME_PROTOCOL_ERROR",
-                "expected proposal-preview response",
             )),
         }
     }
@@ -1412,21 +1168,6 @@ impl RuntimeHandle {
         })?)
     }
 
-    pub fn apply_request(
-        &self,
-        actor: &str,
-        key: &str,
-        command: Value,
-        base_revision: u64,
-    ) -> Result<StateSnapshot, RuntimeError> {
-        expect_state(self.request(RuntimeRequest::Apply {
-            actor: actor.to_owned(),
-            idempotency_key: key.to_owned(),
-            base_revision,
-            command,
-        })?)
-    }
-
     pub fn undo_request(
         &self,
         actor: &str,
@@ -1459,22 +1200,18 @@ impl RuntimeHandle {
         key: &str,
         path: &str,
         base_revision: u64,
-        metadata: Option<Value>,
-        overlay: Option<Value>,
     ) -> Result<(StateSnapshot, String, String), RuntimeError> {
         match self.request(RuntimeRequest::Import {
             actor: actor.to_owned(),
             idempotency_key: key.to_owned(),
             base_revision,
             path: path.to_owned(),
-            metadata,
-            overlay,
         })? {
             RuntimeResponse::Import {
                 state,
-                source_id,
+                media_id,
                 clip_id,
-            } => Ok((state, source_id, clip_id)),
+            } => Ok((state, media_id, clip_id)),
             _ => Err(RuntimeError::new(
                 "RUNTIME_PROTOCOL_ERROR",
                 "expected import response",
@@ -1589,19 +1326,6 @@ impl RuntimeHandle {
         })?)
     }
 
-    pub fn stage_agent_proposal(
-        &self,
-        request_key: &str,
-        base_revision: u64,
-        transactions: Vec<Value>,
-    ) -> Result<StateSnapshot, RuntimeError> {
-        expect_state(self.request(RuntimeRequest::StageProposal {
-            request_key: request_key.to_owned(),
-            base_revision,
-            transactions,
-        })?)
-    }
-
     pub fn accept_proposal(
         &self,
         proposal_id: &str,
@@ -1609,23 +1333,11 @@ impl RuntimeHandle {
         key: &str,
         base_revision: u64,
     ) -> Result<StateSnapshot, RuntimeError> {
-        self.accept_proposal_with_crop(proposal_id, actor, key, base_revision, None)
-    }
-
-    pub fn accept_proposal_with_crop(
-        &self,
-        proposal_id: &str,
-        actor: &str,
-        key: &str,
-        base_revision: u64,
-        crop_override: Option<Value>,
-    ) -> Result<StateSnapshot, RuntimeError> {
         expect_state(self.request(RuntimeRequest::AcceptProposal {
             proposal_id: proposal_id.to_owned(),
             actor: actor.to_owned(),
             idempotency_key: key.to_owned(),
             base_revision,
-            crop_override,
         })?)
     }
 
@@ -1742,18 +1454,6 @@ impl RuntimeClient {
         }
     }
 
-    pub fn proposal_preview(&self, proposal_id: &str) -> Result<(Value, Value), RuntimeError> {
-        match self.request(RuntimeRequest::GetProposalPreview {
-            proposal_id: proposal_id.to_owned(),
-        })? {
-            RuntimeResponse::ProposalPreview { before, after } => Ok((before, after)),
-            _ => Err(RuntimeError::new(
-                "RUNTIME_PROTOCOL_ERROR",
-                "expected proposal-preview response",
-            )),
-        }
-    }
-
     /// The documents before and after a pending proposal, with media paths
     /// resolved for a renderer.
     pub fn proposal_documents(&self, proposal_id: &str) -> Result<(String, String), RuntimeError> {
@@ -1776,28 +1476,6 @@ impl RuntimeClient {
                 "expected state response",
             )),
         }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn stage_import_proposal(
-        &self,
-        request_key: &str,
-        base_revision: u64,
-        path: &str,
-        metadata: Option<Value>,
-        overlay: Option<Value>,
-        replacement_clip_id: Option<&str>,
-        observation: Option<Value>,
-    ) -> Result<StateSnapshot, RuntimeError> {
-        expect_state(self.request(RuntimeRequest::StageImportProposal {
-            request_key: request_key.to_owned(),
-            base_revision,
-            path: path.to_owned(),
-            metadata,
-            overlay,
-            replacement_clip_id: replacement_clip_id.map(str::to_owned),
-            observation,
-        })?)
     }
 
     /// The canonical `.cut` document and the revision it describes.
@@ -1856,21 +1534,6 @@ impl RuntimeClient {
         })?)
     }
 
-    pub fn apply_request(
-        &self,
-        actor: &str,
-        key: &str,
-        command: Value,
-        base_revision: u64,
-    ) -> Result<StateSnapshot, RuntimeError> {
-        expect_state(self.request(RuntimeRequest::Apply {
-            actor: actor.to_owned(),
-            idempotency_key: key.to_owned(),
-            base_revision,
-            command,
-        })?)
-    }
-
     pub fn undo_request(
         &self,
         actor: &str,
@@ -1903,22 +1566,18 @@ impl RuntimeClient {
         key: &str,
         path: &str,
         base_revision: u64,
-        metadata: Option<Value>,
-        overlay: Option<Value>,
     ) -> Result<(StateSnapshot, String, String), RuntimeError> {
         match self.request(RuntimeRequest::Import {
             actor: actor.to_owned(),
             idempotency_key: key.to_owned(),
             base_revision,
             path: path.to_owned(),
-            metadata,
-            overlay,
         })? {
             RuntimeResponse::Import {
                 state,
-                source_id,
+                media_id,
                 clip_id,
-            } => Ok((state, source_id, clip_id)),
+            } => Ok((state, media_id, clip_id)),
             _ => Err(RuntimeError::new(
                 "RUNTIME_PROTOCOL_ERROR",
                 "expected import response",
@@ -2033,19 +1692,6 @@ impl RuntimeClient {
         })?)
     }
 
-    pub fn stage_agent_proposal(
-        &self,
-        request_key: &str,
-        base_revision: u64,
-        transactions: Vec<Value>,
-    ) -> Result<StateSnapshot, RuntimeError> {
-        expect_state(self.request(RuntimeRequest::StageProposal {
-            request_key: request_key.to_owned(),
-            base_revision,
-            transactions,
-        })?)
-    }
-
     pub fn accept_proposal(
         &self,
         proposal_id: &str,
@@ -2053,23 +1699,11 @@ impl RuntimeClient {
         key: &str,
         base_revision: u64,
     ) -> Result<StateSnapshot, RuntimeError> {
-        self.accept_proposal_with_crop(proposal_id, actor, key, base_revision, None)
-    }
-
-    pub fn accept_proposal_with_crop(
-        &self,
-        proposal_id: &str,
-        actor: &str,
-        key: &str,
-        base_revision: u64,
-        crop_override: Option<Value>,
-    ) -> Result<StateSnapshot, RuntimeError> {
         expect_state(self.request(RuntimeRequest::AcceptProposal {
             proposal_id: proposal_id.to_owned(),
             actor: actor.to_owned(),
             idempotency_key: key.to_owned(),
             base_revision,
-            crop_override,
         })?)
     }
 
@@ -2209,10 +1843,7 @@ impl RuntimeClient {
 
 fn request_has_stable_idempotency_key(request: &RuntimeRequest) -> bool {
     match request {
-        RuntimeRequest::Apply {
-            idempotency_key, ..
-        }
-        | RuntimeRequest::ApplyScript {
+        RuntimeRequest::ApplyScript {
             idempotency_key, ..
         }
         | RuntimeRequest::ApplyOps {
@@ -2236,16 +1867,13 @@ fn request_has_stable_idempotency_key(request: &RuntimeRequest) -> bool {
         // Staging has a request key, but it is not backed by the durable
         // operation-receipt table. A lost response is therefore ambiguous
         // and must not be replayed automatically.
-        RuntimeRequest::StageProposal { .. }
-        | RuntimeRequest::StageScriptProposal { .. }
-        | RuntimeRequest::StageImportProposal { .. } => false,
+        RuntimeRequest::StageScriptProposal { .. } => false,
         RuntimeRequest::RejectProposal {
             idempotency_key: Some(idempotency_key),
             ..
         } => !idempotency_key.trim().is_empty(),
         RuntimeRequest::GetState
         | RuntimeRequest::GetDocument { .. }
-        | RuntimeRequest::GetProposalPreview { .. }
         | RuntimeRequest::GetProposalDocuments { .. }
         | RuntimeRequest::StartRender { .. }
         | RuntimeRequest::GetRender { .. }
@@ -2316,22 +1944,16 @@ fn decode_response(value: &Value, expected_id: &str) -> Result<RuntimeResponse, 
             after: after.to_owned(),
         });
     }
-    if let (Some(before), Some(after)) = (object.get("beforeProject"), object.get("afterProject")) {
-        return Ok(RuntimeResponse::ProposalPreview {
-            before: before.clone(),
-            after: after.clone(),
-        });
-    }
     if let Some(state) = object.get("state") {
         let state = serde_json::from_value::<StateSnapshot>(state.clone())
             .map_err(|error| RuntimeError::new("RUNTIME_PROTOCOL_ERROR", error.to_string()))?;
-        if let (Some(source_id), Some(clip_id)) = (
-            object.get("sourceId").and_then(Value::as_str),
+        if let (Some(media_id), Some(clip_id)) = (
+            object.get("mediaId").and_then(Value::as_str),
             object.get("clipId").and_then(Value::as_str),
         ) {
             return Ok(RuntimeResponse::Import {
                 state,
-                source_id: source_id.to_owned(),
+                media_id: media_id.to_owned(),
                 clip_id: clip_id.to_owned(),
             });
         }
@@ -2452,13 +2074,6 @@ pub fn response_value(id: &str, result: Result<RuntimeResponse, RuntimeError>) -
             "revision": revision,
             "document": document
         }),
-        Ok(RuntimeResponse::ProposalPreview { before, after }) => json!({
-            "protocolVersion": RequestEnvelope::PROTOCOL_VERSION,
-            "id": id,
-            "ok": true,
-            "beforeProject": before,
-            "afterProject": after
-        }),
         Ok(RuntimeResponse::ProposalDocuments { before, after }) => json!({
             "protocolVersion": RequestEnvelope::PROTOCOL_VERSION,
             "id": id,
@@ -2468,14 +2083,14 @@ pub fn response_value(id: &str, result: Result<RuntimeResponse, RuntimeError>) -
         }),
         Ok(RuntimeResponse::Import {
             state,
-            source_id,
+            media_id,
             clip_id,
         }) => json!({
             "protocolVersion": RequestEnvelope::PROTOCOL_VERSION,
             "id": id,
             "ok": true,
             "state": state,
-            "sourceId": source_id,
+            "mediaId": media_id,
             "clipId": clip_id
         }),
         Ok(RuntimeResponse::RenderStarted {
@@ -2785,10 +2400,8 @@ fn runtime_actor(
     }
 }
 
-// The reducer is intentionally private to the actor.  Direct operation
-// helpers remain available to this crate's characterization tests while the
-// public product surface is `RuntimeHandle`.
-#[allow(dead_code)]
+// The reducer is private to the actor; the public surface is
+// `RuntimeHandle`.
 impl Runtime {
     fn open(directory: &Path) -> Result<Self, RuntimeError> {
         fs::create_dir_all(directory).map_err(io_error)?;
@@ -2798,13 +2411,13 @@ impl Runtime {
         let mut notes = Vec::new();
         let checkpoint = match load_checkpoint(directory)? {
             Loaded::Current(checkpoint) => Some(checkpoint),
-            Loaded::Legacy => {
-                // State from a pre-kernel cutd. Its project.cut.json is the
-                // last published project; keep its runtime files untouched
-                // and import the project once.
-                preserve_legacy_state(directory)?;
+            Loaded::Previous => {
+                // State from an older cutd. Its project.cut (or, before the
+                // kernel, project.cut.json) is the last published project;
+                // keep its runtime files untouched and reopen the project.
+                preserve_previous_state(directory)?;
                 notes.push(format!(
-                    "previous cutd state was preserved as {LEGACY_STATE_PREFIX}.*"
+                    "previous cutd state was preserved as {PREVIOUS_STATE_PREFIX}.*"
                 ));
                 None
             }
@@ -2812,20 +2425,11 @@ impl Runtime {
         };
         let checkpoint_project = checkpoint.as_ref().map(|value| value.project.clone());
         let mut runtime = if let Some(checkpoint) = checkpoint {
-            for record in checkpoint.operations.values() {
-                v2::parse_project(&record.snapshot.project).map_err(domain_error)?;
-            }
-            for record in checkpoint.imports.values() {
-                v2::parse_project(&record.snapshot.project).map_err(domain_error)?;
-            }
-            let project = Arc::unwrap_or_clone(checkpoint.project);
-            kernel::view(&project)?;
             Self {
                 _lock: lock,
                 project_path,
                 journal_path,
-                view: kernel::committed_view(&project),
-                project,
+                project: Arc::unwrap_or_clone(checkpoint.project),
                 revision: checkpoint.revision,
                 past: checkpoint.past,
                 future: checkpoint.future,
@@ -2841,13 +2445,11 @@ impl Runtime {
             }
         } else {
             let (project, mut warnings) = load_bootstrap_project(directory)?;
-            kernel::view(&project)?;
             notes.append(&mut warnings);
             Self {
                 _lock: lock,
                 project_path,
                 journal_path,
-                view: kernel::committed_view(&project),
                 project,
                 revision: 0,
                 past: Vec::new(),
@@ -2885,7 +2487,6 @@ impl Runtime {
                 recognized_projection = true;
             }
         }
-        runtime.view = kernel::committed_view(&runtime.project);
 
         if recognized_projection {
             // The projection was known to equal an authoritative state before
@@ -2942,14 +2543,7 @@ impl Runtime {
     }
 
     pub fn snapshot(&self) -> StateSnapshot {
-        self.snapshot_view(
-            &self.project,
-            &self.view,
-            self.revision,
-            &self.past,
-            &self.future,
-            &self.proposal,
-        )
+        self.snapshot_for_parts(&self.project, self.revision, &self.past, &self.future)
     }
 
     fn snapshot_for_parts(
@@ -2970,38 +2564,13 @@ impl Runtime {
         future: &[HistoryEntry],
         proposal: &Option<ProposalRecord>,
     ) -> StateSnapshot {
-        if *project == self.project {
-            self.snapshot_view(project, &self.view, revision, past, future, proposal)
-        } else {
-            let view = kernel::committed_view(project);
-            self.snapshot_view(project, &view, revision, past, future, proposal)
-        }
-    }
-
-    fn snapshot_view(
-        &self,
-        project: &Project,
-        view: &v2::Project,
-        revision: u64,
-        past: &[HistoryEntry],
-        future: &[HistoryEntry],
-        proposal: &Option<ProposalRecord>,
-    ) -> StateSnapshot {
-        let project_value = project_value(view);
-        let sources = project_value
-            .get("sources")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
         StateSnapshot {
             duration: kernel::program_duration(project).seconds(),
             document: kernel::print(project),
             timeline: timeline::timeline_json(project),
-            project: project_value,
             revision,
             can_undo: !past.is_empty(),
             can_redo: !future.is_empty(),
-            sources,
             pending_proposal: proposal.as_ref().map(|record| {
                 let mut lifecycle = record.lifecycle.clone();
                 if let PendingProposal::Pending {
@@ -3112,9 +2681,6 @@ impl Runtime {
         // mistaking it for an external edit.
         append_journal_record(&self.journal_path, &record)?;
 
-        if project_changed {
-            self.view = kernel::committed_view(&candidate.project);
-        }
         self.project = candidate.project;
         self.revision = candidate.revision;
         self.past = candidate.past;
@@ -3151,63 +2717,24 @@ impl Runtime {
         Ok(self.snapshot())
     }
 
-    /// The state after `edit`, with a history entry, and how to journal it.
-    fn edit_candidate(&self, edit: &Edit) -> Result<(DurableState, Change), RuntimeError> {
-        let Edited { project, script } = edit.run(&self.project)?;
-        let label = script.clone().unwrap_or_else(|| edit.label());
-        let change = change_to(&project, script, Some(label.clone()));
+    /// The state after an edit, with a history entry, and how to journal
+    /// it.
+    fn edit_candidate(&self, edited: Edited) -> (DurableState, Change) {
+        let Edited { project, script } = edited;
+        let change = Change {
+            script: Some(script.clone()),
+            document: None,
+            digest: digest(&project),
+        };
         let mut past = self.past.clone();
         past.push(HistoryEntry {
-            script: label,
+            script,
             project: Arc::new(self.project.clone()),
         });
         bound_history(&mut past);
-        Ok((
+        (
             self.candidate_state(project, self.revision + 1, past, Vec::new()),
             change,
-        ))
-    }
-
-    /// Apply a v2 command without an idempotency receipt.
-    pub fn apply(
-        &mut self,
-        command: Value,
-        expected_revision: Option<u64>,
-    ) -> Result<StateSnapshot, RuntimeError> {
-        self.check_revision(expected_revision)?;
-        let (candidate, change) = self.edit_candidate(&Edit::Legacy { command })?;
-        let proposal = self.proposal.clone();
-        self.commit_candidate(
-            candidate,
-            JournalEvent::Mutation {
-                action: JournalAction::Apply,
-                change: Some(change),
-                operation: None,
-                import: None,
-                proposal,
-            },
-        )
-    }
-
-    pub fn apply_request(
-        &mut self,
-        actor: &str,
-        key: &str,
-        command: Value,
-        base_revision: u64,
-    ) -> Result<StateSnapshot, RuntimeError> {
-        validate_request_identity(actor, key)?;
-        // Pending-proposal policy: ordinary canonical edits may continue, but
-        // a proposal stays pinned to the revision at which it was staged.
-        // Acceptance then fails with REVISION_CONFLICT rather than silently
-        // rebasing an agent command over unrelated human edits. The caller
-        // must reject or restage the proposal explicitly.
-        self.apply_edit_request(
-            actor,
-            key,
-            Edit::Legacy { command },
-            base_revision,
-            self.proposal.clone(),
         )
     }
 
@@ -3267,7 +2794,7 @@ impl Runtime {
             return Ok((*record.snapshot).clone());
         }
         self.check_revision(Some(base_revision))?;
-        let (mut candidate, change) = self.edit_candidate(&edit)?;
+        let (mut candidate, change) = self.edit_candidate(edit.run(&self.project)?);
         candidate.proposal = proposal;
         let snapshot = self.snapshot_for_parts_with_proposal(
             &candidate.project,
@@ -3277,7 +2804,9 @@ impl Runtime {
             &candidate.proposal,
         );
         if let Some(proposal) = candidate.proposal.as_mut() {
-            if matches!(proposal.lifecycle, PendingProposal::Accepted { .. }) {
+            if matches!(proposal.lifecycle, PendingProposal::Accepted { .. })
+                && proposal.receipt.is_none()
+            {
                 proposal.receipt = Some(ProposalReceipt {
                     actor: actor.to_owned(),
                     key: key.to_owned(),
@@ -3313,88 +2842,6 @@ impl Runtime {
                 import: None,
                 proposal: journal_proposal,
             },
-        )
-    }
-
-    /// Stage the ordered v2 commands returned by an agent without touching
-    /// the canonical project or its history.  All commands are flattened into
-    /// one batch and applied to a private copy so validation is
-    /// all-or-nothing.
-    pub fn stage_agent_proposal(
-        &mut self,
-        request_key: &str,
-        base_revision: u64,
-        transactions: &[Value],
-    ) -> Result<StateSnapshot, RuntimeError> {
-        if request_key.trim().is_empty() {
-            return Err(RuntimeError::new(
-                "AGENT_PROTOCOL_ERROR",
-                "agent request requires a non-empty idempotency key",
-            ));
-        }
-        self.check_revision(Some(base_revision))?;
-
-        // An agent with no transactions completed without a project edit.  It
-        // must not clear an existing proposal or fabricate a no-op proposal.
-        if transactions.is_empty() {
-            return Ok(self.snapshot());
-        }
-
-        let mut commands = Vec::new();
-        for (index, transaction) in transactions.iter().enumerate() {
-            let object = transaction.as_object().ok_or_else(|| {
-                RuntimeError::new("AGENT_PROTOCOL_ERROR", "each transaction must be an object")
-            })?;
-            let key = object
-                .get("idempotencyKey")
-                .and_then(Value::as_str)
-                .filter(|key| !key.trim().is_empty())
-                .ok_or_else(|| {
-                    RuntimeError::new(
-                        "AGENT_PROTOCOL_ERROR",
-                        "each transaction requires idempotencyKey",
-                    )
-                })?;
-            if index == 0 && key != request_key {
-                return Err(RuntimeError::new(
-                    "AGENT_PROTOCOL_ERROR",
-                    "the first transaction idempotencyKey must match the request key",
-                ));
-            }
-            let transaction_commands = object
-                .get("commands")
-                .and_then(Value::as_array)
-                .filter(|commands| !commands.is_empty())
-                .ok_or_else(|| {
-                    RuntimeError::new(
-                        "AGENT_PROTOCOL_ERROR",
-                        "each transaction requires non-empty commands",
-                    )
-                })?;
-            commands.extend(transaction_commands.iter().cloned());
-        }
-
-        let observations = transactions
-            .first()
-            .and_then(|transaction| {
-                transaction
-                    .get("observations")
-                    .and_then(Value::as_array)
-                    .map(|values| values.to_vec())
-                    .or_else(|| {
-                        transaction
-                            .get("observation")
-                            .cloned()
-                            .map(|value| vec![value])
-                    })
-            })
-            .unwrap_or_default();
-        let command = json!({ "type": "batch", "commands": commands });
-        self.stage_edit_proposal(
-            request_key,
-            base_revision,
-            Edit::Legacy { command },
-            observations,
         )
     }
 
@@ -3445,20 +2892,12 @@ impl Runtime {
             })
             .collect::<Result<Vec<_>, RuntimeError>>()?;
         let observation = observations.first().cloned();
-        let fingerprint = match &edit {
-            Edit::Legacy { command } => format!(
-                "{}:{}:{}",
-                base_revision,
-                serde_json::to_string(command).unwrap_or_default(),
-                serde_json::to_string(&observations).unwrap_or_default()
-            ),
-            other => format!(
-                "{}:{}:{}",
-                base_revision,
-                other.fingerprint(),
-                serde_json::to_string(&observations).unwrap_or_default()
-            ),
-        };
+        let fingerprint = format!(
+            "{}:{}:{}",
+            base_revision,
+            edit.fingerprint(),
+            serde_json::to_string(&observations).unwrap_or_default()
+        );
 
         if let Some(existing) = self.proposal.as_ref() {
             if existing.request_key == request_key {
@@ -3479,38 +2918,23 @@ impl Runtime {
         }
 
         let edited = edit.run(&self.project)?;
-        let before_view = &self.view;
-        let after_view = kernel::committed_view(&edited.project);
-        let (diff, diff_truncated) =
-            structured_diff(&project_value(before_view), &project_value(&after_view));
-        let impacts = derive_proposal_impacts(before_view, &after_view, &diff, diff_truncated);
         let document_diff = cut_lang::diff_text(
             &kernel::print(&self.project),
             &kernel::print(&edited.project),
         );
-        let proposal_id = format!("proposal-{}", unique_id());
-        let (command, stored) = match edit {
-            Edit::Legacy { command } => (command, None),
-            other => (Value::Null, Some(other)),
-        };
         let proposal = Some(ProposalRecord {
             lifecycle: PendingProposal::Pending {
-                proposal_id,
+                proposal_id: format!("proposal-{}", unique_id()),
                 base_revision,
-                command,
-                diff,
-                diff_truncated,
+                script: edited.script,
+                document_diff,
                 freshness: ProposalFreshness::Current,
-                impacts: Some(impacts),
                 observation,
                 observations: (observations.len() > 1).then_some(observations),
-                script: edited.script,
-                document_diff: Some(document_diff),
             },
             request_key: request_key.to_owned(),
             fingerprint,
             receipt: None,
-            edit: stored,
         });
         let mut candidate = self.durable_state();
         candidate.proposal = proposal;
@@ -3550,16 +2974,16 @@ impl Runtime {
                 "observation source identity no longer matches the media file",
             ));
         }
-        let project_source = self.view.sources.iter().find(|source| {
-            source.id.as_str() == observation.source_ref
+        let project_media = self.project.media.iter().find(|media| {
+            media.id == observation.source_ref.as_str()
                 || self
-                    .project_source_path(&source.path)
+                    .project_source_path(&media.path)
                     .canonicalize()
                     .ok()
                     .as_ref()
                     == Some(&observed_path)
         });
-        if let Some(source) = project_source {
+        if let Some(media) = project_media {
             let observation_revision = observation.revision.ok_or_else(|| {
                 RuntimeError::new(
                     "STALE_OBSERVATION",
@@ -3575,7 +2999,7 @@ impl Runtime {
                 ));
             }
             let source_path = self
-                .project_source_path(&source.path)
+                .project_source_path(&media.path)
                 .canonicalize()
                 .map_err(|error| {
                     RuntimeError::new(
@@ -3589,10 +3013,7 @@ impl Runtime {
                     "observation source path does not match the project source",
                 ));
             }
-            if source
-                .duration
-                .is_some_and(|duration| observation.range.end > duration + 1e-9)
-            {
+            if observation.range.end > media.duration.seconds() + 1e-9 {
                 return Err(RuntimeError::new(
                     "STALE_OBSERVATION",
                     "observation range is outside the project source duration",
@@ -3619,73 +3040,13 @@ impl Runtime {
         }
     }
 
-    /// Build a canonical media import command and stage it with an optional
-    /// replacement in the same reviewable proposal.  The project actor does
-    /// not commit either insertion or replacement until the proposal is
-    /// accepted.
-    #[allow(clippy::too_many_arguments)]
-    pub fn stage_import_proposal(
-        &mut self,
-        request_key: &str,
-        base_revision: u64,
-        path: &str,
-        metadata: Option<Value>,
-        overlay: Option<Value>,
-        replacement_clip_id: Option<&str>,
-        observation: Option<Value>,
-    ) -> Result<StateSnapshot, RuntimeError> {
-        let (source_id, _, import_command) = self.build_import_command(
-            path,
-            metadata.as_ref(),
-            overlay.as_ref(),
-            Some(request_key),
-        )?;
-        let mut commands = import_command
-            .get("commands")
-            .and_then(Value::as_array)
-            .cloned()
-            .ok_or_else(|| {
-                RuntimeError::new(
-                    "RUNTIME_PROTOCOL_ERROR",
-                    "media import command was not a batch",
-                )
-            })?;
-        if let Some(clip_id) = replacement_clip_id {
-            commands.push(json!({
-                "type": "update_clip",
-                "clipId": clip_id,
-                "patch": {"sourceId": source_id}
-            }));
-        }
-        let mut transaction = json!({
-            "idempotencyKey": request_key,
-            "commands": commands,
-        });
-        if let Some(observation) = observation {
-            transaction["observation"] = observation;
-        }
-        self.stage_agent_proposal(request_key, base_revision, &[transaction])
-    }
-
     /// Apply a previously staged proposal as exactly one canonical request.
-    /// Revision and history are advanced only by `apply_request`.
     pub fn accept_proposal(
         &mut self,
         proposal_id: &str,
         actor: &str,
         key: &str,
         base_revision: u64,
-    ) -> Result<StateSnapshot, RuntimeError> {
-        self.accept_proposal_with_crop(proposal_id, actor, key, base_revision, None)
-    }
-
-    pub fn accept_proposal_with_crop(
-        &mut self,
-        proposal_id: &str,
-        actor: &str,
-        key: &str,
-        base_revision: u64,
-        crop_override: Option<Value>,
     ) -> Result<StateSnapshot, RuntimeError> {
         validate_request_identity(actor, key)?;
         if proposal_id.trim().is_empty() {
@@ -3704,7 +3065,7 @@ impl Runtime {
             PendingProposal::Pending {
                 proposal_id: current_id,
                 base_revision: proposal_revision,
-                mut command,
+                script,
                 observation,
                 observations,
                 ..
@@ -3731,21 +3092,6 @@ impl Runtime {
                         ),
                     ));
                 }
-                let edit = match record.edit.clone() {
-                    Some(_) if crop_override.is_some() => {
-                        return Err(RuntimeError::new(
-                            "INVALID_REQUEST",
-                            "cropOverride applies only to proposals of v2 commands",
-                        ))
-                    }
-                    Some(edit) => edit,
-                    None => {
-                        if let Some(crop_override) = crop_override.as_ref() {
-                            replace_proposal_crop(&mut command, crop_override)?;
-                        }
-                        Edit::Legacy { command }
-                    }
-                };
                 let accepted_proposal = Some(ProposalRecord {
                     lifecycle: PendingProposal::Accepted {
                         proposal_id: current_id.clone(),
@@ -3757,9 +3103,14 @@ impl Runtime {
                     request_key: record.request_key.clone(),
                     fingerprint: record.fingerprint.clone(),
                     receipt: None,
-                    edit: None,
                 });
-                self.apply_edit_request(actor, key, edit, base_revision, accepted_proposal)
+                self.apply_edit_request(
+                    actor,
+                    key,
+                    Edit::Script { script },
+                    base_revision,
+                    accepted_proposal,
+                )
             }
             PendingProposal::Accepted {
                 proposal_id: current_id,
@@ -3845,7 +3196,6 @@ impl Runtime {
                     request_key: record.request_key.clone(),
                     fingerprint: record.fingerprint.clone(),
                     receipt: None,
-                    edit: None,
                 });
                 let mut candidate = self.durable_state();
                 candidate.proposal = rejected_proposal;
@@ -3938,7 +3288,6 @@ impl Runtime {
                     request_key: record.request_key,
                     fingerprint: record.fingerprint,
                     receipt: None,
-                    edit: None,
                 });
                 let mut candidate = self.durable_state();
                 candidate.proposal = rejected_proposal;
@@ -4035,11 +3384,6 @@ impl Runtime {
         }
     }
 
-    pub fn undo(&mut self, expected_revision: Option<u64>) -> Result<StateSnapshot, RuntimeError> {
-        self.check_revision(expected_revision)?;
-        self.history_step(Direction::Undo, None)
-    }
-
     pub fn undo_request(
         &mut self,
         actor: &str,
@@ -4048,11 +3392,6 @@ impl Runtime {
     ) -> Result<StateSnapshot, RuntimeError> {
         validate_request_identity(actor, key)?;
         self.history_request(Direction::Undo, actor, key, base_revision)
-    }
-
-    pub fn redo(&mut self, expected_revision: Option<u64>) -> Result<StateSnapshot, RuntimeError> {
-        self.check_revision(expected_revision)?;
-        self.history_step(Direction::Redo, None)
     }
 
     pub fn redo_request(
@@ -4084,15 +3423,16 @@ impl Runtime {
             return Ok((*record.snapshot).clone());
         }
         self.check_revision(Some(base_revision))?;
-        self.history_step(direction, Some((operation, fingerprint)))
+        self.history_step(direction, operation, fingerprint)
     }
 
     /// Restore the newest snapshot in the direction's stack. With nothing to
-    /// restore, a request with a receipt still records a no-op.
+    /// restore, the request still records a no-op receipt.
     fn history_step(
         &mut self,
         direction: Direction,
-        receipt: Option<(String, String)>,
+        operation: String,
+        fingerprint: String,
     ) -> Result<StateSnapshot, RuntimeError> {
         let (from, _) = self.stacks(direction);
         let (mut candidate, action, change) = match from.last() {
@@ -4101,42 +3441,33 @@ impl Runtime {
                 let candidate = self.candidate_state(project, self.revision + 1, past, future);
                 (candidate, direction.action(), Some(change))
             }
-            None if receipt.is_none() => return Ok(self.snapshot()),
             None => (self.durable_state(), JournalAction::Noop, None),
         };
-        let operation = match receipt {
-            Some((operation, fingerprint)) => {
-                let snapshot = self.snapshot_for_parts_with_proposal(
-                    &candidate.project,
-                    candidate.revision,
-                    &candidate.past,
-                    &candidate.future,
-                    &candidate.proposal,
-                );
-                candidate.operations.insert(
-                    operation.clone(),
-                    OperationRecord {
-                        fingerprint,
-                        snapshot: Arc::new(snapshot),
-                    },
-                );
-                let record = candidate
-                    .operations
-                    .get(&operation)
-                    .cloned()
-                    .ok_or_else(|| {
-                        RuntimeError::new(
-                            "RUNTIME_PROTOCOL_ERROR",
-                            "operation receipt was not staged",
-                        )
-                    })?;
-                Some(JournalOperation {
-                    key: operation,
-                    record,
-                })
-            }
-            None => None,
-        };
+        let snapshot = self.snapshot_for_parts_with_proposal(
+            &candidate.project,
+            candidate.revision,
+            &candidate.past,
+            &candidate.future,
+            &candidate.proposal,
+        );
+        candidate.operations.insert(
+            operation.clone(),
+            OperationRecord {
+                fingerprint,
+                snapshot: Arc::new(snapshot),
+            },
+        );
+        let record = candidate
+            .operations
+            .get(&operation)
+            .cloned()
+            .ok_or_else(|| {
+                RuntimeError::new("RUNTIME_PROTOCOL_ERROR", "operation receipt was not staged")
+            })?;
+        let operation = Some(JournalOperation {
+            key: operation,
+            record,
+        });
         let proposal = candidate.proposal.clone();
         self.commit_candidate(
             candidate,
@@ -4174,18 +3505,15 @@ impl Runtime {
             project: Arc::new(self.project.clone()),
         });
         bound_history(&mut to);
-        let change = change_to(&project, None, None);
+        let change = Change {
+            script: None,
+            document: None,
+            digest: digest(&project),
+        };
         match direction {
             Direction::Undo => (project, from, to, change),
             Direction::Redo => (project, to, from, change),
         }
-    }
-
-    pub fn start_render(
-        &mut self,
-        quality: &str,
-    ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
-        self.start_render_range(quality, None)
     }
 
     /// Queue a render of the first sequence and return the document to
@@ -4242,16 +3570,6 @@ impl Runtime {
         Ok((job, self.renderable(&self.project), output))
     }
 
-    /// The v2 projects before and after a pending proposal, for the v2 MCP
-    /// catalog.
-    pub fn proposal_preview(&self, proposal_id: &str) -> Result<(Value, Value), RuntimeError> {
-        let after = self.proposal_result(proposal_id)?;
-        Ok((
-            self.renderable_v2(&self.view),
-            self.renderable_v2(&kernel::committed_view(&after)),
-        ))
-    }
-
     /// The documents before and after a pending proposal, for a renderer.
     pub fn proposal_documents(&self, proposal_id: &str) -> Result<(String, String), RuntimeError> {
         let after = self.proposal_result(proposal_id)?;
@@ -4269,7 +3587,7 @@ impl Runtime {
         let PendingProposal::Pending {
             proposal_id: current_id,
             base_revision,
-            command,
+            script,
             ..
         } = &record.lifecycle
         else {
@@ -4293,9 +3611,9 @@ impl Runtime {
                 ),
             ));
         }
-        let edit = record.edit.clone().unwrap_or_else(|| Edit::Legacy {
-            command: command.clone(),
-        });
+        let edit = Edit::Script {
+            script: script.clone(),
+        };
         Ok(edit.run(&self.project)?.project)
     }
 
@@ -4308,139 +3626,16 @@ impl Runtime {
         )
     }
 
-    /// A v2 project for the v2 MCP catalog, with media paths made absolute.
-    fn renderable_v2(&self, view: &v2::Project) -> Value {
-        let mut project = project_value(view);
-        resolve_source_paths(
-            &mut project,
-            self.project_path.parent().unwrap_or(Path::new(".")),
-        );
-        project
-    }
-
-    pub fn import_media(
-        &mut self,
-        path: &str,
-        metadata: Option<&Value>,
-        overlay: Option<&Value>,
-    ) -> Result<(StateSnapshot, String, String), RuntimeError> {
-        let (source_id, clip_id, command) =
-            self.build_import_command(path, metadata, overlay, None)?;
-        let snapshot = self.apply(command, None)?;
-        Ok((snapshot, source_id, clip_id))
-    }
-
-    /// The v2 command that imports a media file: a source and a clip at the
-    /// end of the first picture track (created when there is none), plus an
-    /// optional overlay. With an `identity`, the generated ids are stable for
-    /// that identity and path.
-    fn build_import_command(
-        &self,
-        path: &str,
-        metadata: Option<&Value>,
-        overlay: Option<&Value>,
-        identity: Option<&str>,
-    ) -> Result<(String, String, Value), RuntimeError> {
-        if path.trim().is_empty() {
-            return Err(RuntimeError::new(
-                "INVALID_IMPORT",
-                "media path is required",
-            ));
-        }
-        let source_path = validate_media_path(path)?;
-        if let Some(overlay) = overlay {
-            validate_overlay_shape(overlay)?;
-        }
-        let stable_identity =
-            identity.map(|identity| format!("{identity}:{}", source_path.to_string_lossy()));
-        let source_id = stable_identity
-            .as_deref()
-            .map(|identity| stable_id("source", identity))
-            .unwrap_or_else(|| format!("source-{}", unique_id()));
-        let clip_id = stable_identity
-            .as_deref()
-            .map(|identity| stable_id("clip", identity))
-            .unwrap_or_else(|| format!("clip-{}", unique_id()));
-        let probe = Self::probe(path).ok();
-        let mut source = json!({"id":source_id.clone(),"path":source_path.to_string_lossy()});
-        let supplied = metadata.or(probe.as_ref());
-        if let Some(info) = supplied.and_then(Value::as_object) {
-            for key in [
-                "duration", "width", "height", "hasAudio", "subs", "metadata",
-            ] {
-                if let Some(value) = info.get(key) {
-                    source[key] = value.clone();
-                }
-            }
-        }
-        let duration = source
-            .get("duration")
-            .and_then(Value::as_f64)
-            .filter(|duration| *duration > 0.0);
-        if duration.is_none() {
-            // Unprobed media is assumed to be as long as the clip placed
-            // below, so the model's source bounds hold.
-            source["duration"] = json!(1.0);
-        }
-        let mut commands = Vec::with_capacity(4);
-        let track_id = match self
-            .view
-            .tracks
-            .iter()
-            .find(|track| track.kind == v2::TrackType::Video)
-        {
-            Some(track) => track.id.as_str().to_owned(),
-            None => {
-                let track_id = stable_identity
-                    .as_deref()
-                    .map(|identity| stable_id("video", identity))
-                    .unwrap_or_else(|| format!("video-{}", unique_id()));
-                commands.push(json!({
-                    "type": "add_track",
-                    "track": {"id": track_id, "type": "video", "clips": []}
-                }));
-                track_id
-            }
-        };
-        commands.push(json!({"type": "add_source", "source": source}));
-        commands.push(json!({
-            "type": "add_clip",
-            "trackId": track_id,
-            "clip": {
-                "id": clip_id.clone(),
-                "sourceId": source_id.clone(),
-                "timelineStart": v2::project_duration(&self.view),
-                "in": 0.0,
-                "out": duration.unwrap_or(1.0)
-            }
-        }));
-        if let Some(overlay) = overlay {
-            commands.push(json!({"type": "add_overlay", "overlay": overlay}));
-        }
-        let command = json!({"type": "batch", "commands": commands});
-        // Reject malformed sources and overlays at the v2 boundary, as v2
-        // clients expect.
-        let typed = v2::parse_command(&command).map_err(domain_error)?;
-        v2::apply_command(&self.view, &typed).map_err(domain_error)?;
-        Ok((source_id, clip_id, command))
-    }
-
     pub fn import_media_request(
         &mut self,
         actor: &str,
         key: &str,
         path: &str,
         base_revision: u64,
-        metadata: Option<Value>,
-        overlay: Option<Value>,
     ) -> Result<(StateSnapshot, String, String), RuntimeError> {
         validate_request_identity(actor, key)?;
         let operation = format!("{actor}:{key}");
-        let fingerprint = format!(
-            "{actor}:{base_revision}:{path}:{}:{}",
-            serde_json::to_string(&metadata).unwrap_or_default(),
-            serde_json::to_string(&overlay).unwrap_or_default()
-        );
+        let fingerprint = format!("{actor}:{base_revision}:{path}");
         if let Some(record) = self.imports.get(&operation) {
             if record.fingerprint != fingerprint {
                 return Err(RuntimeError::new(
@@ -4450,16 +3645,18 @@ impl Runtime {
             }
             return Ok((
                 (*record.snapshot).clone(),
-                record.source_id.clone(),
+                record.media_id.clone(),
                 record.clip_id.clone(),
             ));
         }
         self.check_revision(Some(base_revision))?;
         // Build the import candidate without mutating the actor, so a failed
         // probe or edit leaves every in-memory field untouched.
-        let (source_id, clip_id, command) =
-            self.build_import_command(path, metadata.as_ref(), overlay.as_ref(), None)?;
-        let (mut candidate, change) = self.edit_candidate(&Edit::Legacy { command })?;
+        let path = validate_media_path(path)?.to_string_lossy().into_owned();
+        let probe = cut_engine::probe::info(&path).ok();
+        let (ops, media_id, clip_id) = kernel::import_media(&self.project, &path, probe.as_ref())?;
+        let (mut candidate, change) = self.edit_candidate(kernel::apply_ops(&self.project, &ops)?);
+        let (media_id, clip_id) = (media_id.to_string(), clip_id.to_string());
         let snapshot = self.snapshot_for_parts(
             &candidate.project,
             candidate.revision,
@@ -4472,7 +3669,7 @@ impl Runtime {
             ImportRecord {
                 fingerprint,
                 snapshot: Arc::new(snapshot.clone()),
-                source_id: source_id.clone(),
+                media_id: media_id.clone(),
                 clip_id: clip_id.clone(),
             },
         );
@@ -4494,7 +3691,7 @@ impl Runtime {
                 proposal,
             },
         )?;
-        Ok((snapshot, source_id, clip_id))
+        Ok((snapshot, media_id, clip_id))
     }
 
     pub fn update_job(
@@ -4581,12 +3778,6 @@ impl Runtime {
         self.render_job(id)
     }
 
-    fn probe(path: &str) -> Result<Value, RuntimeError> {
-        let info = cut_engine::probe::info(path).map_err(engine_error)?;
-        serde_json::to_value(info)
-            .map_err(|error| RuntimeError::new("ENGINE_PROTOCOL_ERROR", error.to_string()))
-    }
-
     fn execute(&mut self, request: RuntimeRequest) -> Result<RuntimeResponse, RuntimeError> {
         self.refresh_projection_status();
         match request {
@@ -4628,27 +3819,9 @@ impl Runtime {
                 &script,
                 observations,
             )?)),
-            RuntimeRequest::GetProposalPreview { proposal_id } => {
-                let (before, after) = self.proposal_preview(&proposal_id)?;
-                Ok(RuntimeResponse::ProposalPreview { before, after })
-            }
             RuntimeRequest::GetProposalDocuments { proposal_id } => {
                 let (before, after) = self.proposal_documents(&proposal_id)?;
                 Ok(RuntimeResponse::ProposalDocuments { before, after })
-            }
-            RuntimeRequest::Apply {
-                actor,
-                idempotency_key,
-                base_revision,
-                command,
-            } => {
-                validate_request_identity(&actor, &idempotency_key)?;
-                Ok(RuntimeResponse::State(self.apply_request(
-                    &actor,
-                    &idempotency_key,
-                    command,
-                    base_revision,
-                )?))
             }
             RuntimeRequest::Undo {
                 actor,
@@ -4679,21 +3852,13 @@ impl Runtime {
                 idempotency_key,
                 base_revision,
                 path,
-                metadata,
-                overlay,
             } => {
                 validate_request_identity(&actor, &idempotency_key)?;
-                let (state, source_id, clip_id) = self.import_media_request(
-                    &actor,
-                    &idempotency_key,
-                    &path,
-                    base_revision,
-                    metadata,
-                    overlay,
-                )?;
+                let (state, media_id, clip_id) =
+                    self.import_media_request(&actor, &idempotency_key, &path, base_revision)?;
                 Ok(RuntimeResponse::Import {
                     state,
-                    source_id,
+                    media_id,
                     clip_id,
                 })
             }
@@ -4750,46 +3915,18 @@ impl Runtime {
                     base_revision,
                 )?))
             }
-            RuntimeRequest::StageProposal {
-                request_key,
-                base_revision,
-                transactions,
-            } => Ok(RuntimeResponse::State(self.stage_agent_proposal(
-                &request_key,
-                base_revision,
-                &transactions,
-            )?)),
-            RuntimeRequest::StageImportProposal {
-                request_key,
-                base_revision,
-                path,
-                metadata,
-                overlay,
-                replacement_clip_id,
-                observation,
-            } => Ok(RuntimeResponse::State(self.stage_import_proposal(
-                &request_key,
-                base_revision,
-                &path,
-                metadata,
-                overlay,
-                replacement_clip_id.as_deref(),
-                observation,
-            )?)),
             RuntimeRequest::AcceptProposal {
                 proposal_id,
                 actor,
                 idempotency_key,
                 base_revision,
-                crop_override,
             } => {
                 validate_request_identity(&actor, &idempotency_key)?;
-                Ok(RuntimeResponse::State(self.accept_proposal_with_crop(
+                Ok(RuntimeResponse::State(self.accept_proposal(
                     &proposal_id,
                     &actor,
                     &idempotency_key,
                     base_revision,
-                    crop_override,
                 )?))
             }
             RuntimeRequest::RejectProposal {
@@ -4835,26 +3972,12 @@ impl Runtime {
         match record.action {
             JournalAction::Apply => {
                 let change = record.change.as_ref().ok_or_else(|| missing("apply"))?;
-                let project = match (&change.script, &change.document) {
-                    (Some(script), _) => {
-                        Edit::Script {
-                            script: script.clone(),
-                        }
-                        .run(&self.project)?
-                        .project
-                    }
-                    (None, Some(document)) => kernel::parse(document)?,
-                    (None, None) => return Err(missing("apply")),
-                };
-                verify_change(change, &project, record.sequence)?;
-                let label = change
-                    .script
-                    .clone()
-                    .or_else(|| change.label.clone())
-                    .unwrap_or_default();
-                let before = std::mem::replace(&mut self.project, project);
+                let script = change.script.clone().ok_or_else(|| missing("apply"))?;
+                let edited = Edit::Script { script }.run(&self.project)?;
+                verify_change(change, &edited.project, record.sequence)?;
+                let before = std::mem::replace(&mut self.project, edited.project);
                 self.past.push(HistoryEntry {
-                    script: label,
+                    script: edited.script,
                     project: Arc::new(before),
                 });
                 bound_history(&mut self.past);
@@ -5009,7 +4132,6 @@ impl Runtime {
         }
         let text = fs::read_to_string(&self.project_path).map_err(io_error)?;
         let project = kernel::parse(&text)?;
-        kernel::view(&project)?;
         let project_changed = project != self.project;
         let revision = if project_changed {
             self.revision + 1
@@ -5061,10 +4183,10 @@ impl Runtime {
             self.projection_status = ProjectionStatus::Current;
             self.projection_digest = projection_digest(&self.project_path).ok();
         }
-        let change = change_to(&candidate.project, None, None);
         let change = Change {
+            script: None,
             document: Some(kernel::print(&candidate.project)),
-            ..change
+            digest: digest(&candidate.project),
         };
         self.commit_projection_import(
             candidate,
@@ -5109,10 +4231,6 @@ impl Runtime {
     }
 }
 
-pub fn probe(path: &str) -> Result<Value, RuntimeError> {
-    Runtime::probe(path)
-}
-
 pub fn validate_actor(actor: &str) -> Result<(), RuntimeError> {
     if matches!(actor, "ui" | "agent" | "mcp" | "system") {
         Ok(())
@@ -5122,31 +4240,6 @@ pub fn validate_actor(actor: &str) -> Result<(), RuntimeError> {
             "actor must be ui, agent, mcp, or system",
         ))
     }
-}
-
-fn domain_error(error: v2::DomainError) -> RuntimeError {
-    RuntimeError::new(error.code, error.message)
-}
-
-/// Resolve relative `sources[].path` of a v2 project against the project
-/// directory. Documents keep media paths relative so a project can move;
-/// renderers run elsewhere and need them absolute.
-pub fn resolve_source_paths(project: &mut Value, directory: &Path) {
-    let Some(sources) = project.get_mut("sources").and_then(Value::as_array_mut) else {
-        return;
-    };
-    for source in sources {
-        if let Some(path) = source.get("path").and_then(Value::as_str) {
-            if Path::new(path).is_relative() {
-                source["path"] = Value::String(directory.join(path).to_string_lossy().into_owned());
-            }
-        }
-    }
-}
-
-/// The v2 JSON that snapshots carry for v2 clients.
-fn project_value(project: &v2::Project) -> Value {
-    serde_json::to_value(project).expect("validated Cut projects serialize")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5172,28 +4265,14 @@ impl Direction {
 }
 
 /// How to journal a change that leaves `project`.
-fn change_to(project: &Project, script: Option<String>, label: Option<String>) -> Change {
-    let text = kernel::print(project);
-    let digest = sha256_hex(text.as_bytes());
-    match script {
-        Some(script) => Change {
-            script: Some(script),
-            document: None,
-            label: None,
-            digest,
-        },
-        None => Change {
-            script: None,
-            document: label.is_some().then_some(text),
-            label,
-            digest,
-        },
-    }
+/// The digest a journaled change records of the project it produced.
+fn digest(project: &Project) -> String {
+    sha256_hex(kernel::print(project).as_bytes())
 }
 
 /// Fail a replay that does not reproduce the journaled document.
 fn verify_change(change: &Change, project: &Project, sequence: u64) -> Result<(), RuntimeError> {
-    if sha256_hex(kernel::print(project).as_bytes()) == change.digest {
+    if digest(project) == change.digest {
         Ok(())
     } else {
         Err(RuntimeError::new(
@@ -5244,8 +4323,8 @@ fn load_bootstrap_project(directory: &Path) -> Result<(Project, Vec<String>), Ru
     Ok((imported.project, warnings))
 }
 
-/// Move a pre-kernel cutd's checkpoint and journal aside, unchanged.
-fn preserve_legacy_state(directory: &Path) -> Result<(), RuntimeError> {
+/// Move an older cutd's checkpoint and journal aside, unchanged.
+fn preserve_previous_state(directory: &Path) -> Result<(), RuntimeError> {
     for (from, suffix) in [
         (CHECKPOINT_FILE, "checkpoint.json"),
         (CHECKPOINT_TEMP_FILE, "checkpoint.json.tmp"),
@@ -5253,7 +4332,7 @@ fn preserve_legacy_state(directory: &Path) -> Result<(), RuntimeError> {
     ] {
         let from = directory.join(from);
         if from.exists() {
-            let to = directory.join(format!("{LEGACY_STATE_PREFIX}.{suffix}"));
+            let to = directory.join(format!("{PREVIOUS_STATE_PREFIX}.{suffix}"));
             fs::rename(&from, &to).map_err(io_error)?;
         }
     }
@@ -5438,8 +4517,8 @@ fn projection_digest(path: &Path) -> Result<String, RuntimeError> {
 enum Loaded {
     None,
     Current(Box<PersistedCheckpoint>),
-    /// A checkpoint written by a pre-kernel cutd.
-    Legacy,
+    /// A checkpoint written by an older cutd.
+    Previous,
 }
 
 fn load_checkpoint(directory: &Path) -> Result<Loaded, RuntimeError> {
@@ -5449,7 +4528,7 @@ fn load_checkpoint(directory: &Path) -> Result<Loaded, RuntimeError> {
         if path.is_file()
             && checkpoint_format(path).is_some_and(|format| format < CHECKPOINT_VERSION)
         {
-            return Ok(Loaded::Legacy);
+            return Ok(Loaded::Previous);
         }
     }
     if !checkpoint_path.is_file() && temporary_path.is_file() {
@@ -5646,531 +4725,6 @@ fn validate_media_path(path: &str) -> Result<PathBuf, RuntimeError> {
     Ok(source_path)
 }
 
-fn validate_overlay_shape(overlay: &Value) -> Result<(), RuntimeError> {
-    let object = overlay
-        .as_object()
-        .ok_or_else(|| RuntimeError::new("INVALID_IMPORT", "import overlay must be an object"))?;
-    for key in ["id", "type", "kind"] {
-        if let Some(value) = object.get(key) {
-            if value
-                .as_str()
-                .filter(|value| !value.trim().is_empty())
-                .is_none()
-            {
-                return Err(RuntimeError::new(
-                    "INVALID_IMPORT",
-                    format!("import overlay.{key} must be a non-empty string"),
-                ));
-            }
-        }
-    }
-    if let (Some(kind), Some(overlay_type)) = (
-        object.get("kind").and_then(Value::as_str),
-        object.get("type").and_then(Value::as_str),
-    ) {
-        if kind != overlay_type {
-            return Err(RuntimeError::new(
-                "INVALID_IMPORT",
-                "import overlay.type and overlay.kind disagree",
-            ));
-        }
-    }
-    for key in ["start", "timelineStart"] {
-        if let Some(value) = object.get(key) {
-            if value
-                .as_f64()
-                .filter(|value| value.is_finite() && *value >= 0.0)
-                .is_none()
-            {
-                return Err(RuntimeError::new(
-                    "INVALID_IMPORT",
-                    format!("import overlay.{key} must be nonnegative"),
-                ));
-            }
-        }
-    }
-    if let Some(value) = object.get("duration") {
-        if value
-            .as_f64()
-            .filter(|value| value.is_finite() && *value > 0.0)
-            .is_none()
-        {
-            return Err(RuntimeError::new(
-                "INVALID_IMPORT",
-                "import overlay.duration must be positive",
-            ));
-        }
-    }
-    Ok(())
-}
-
-const MAX_PROPOSAL_DIFF: usize = 128;
-
-/// Walk two JSON values in stable key/index order and collect a bounded leaf
-/// diff.  Bounding happens before copying another value, so a pathological
-/// agent response cannot produce an unbounded proposal payload.
-fn structured_diff(from: &Value, to: &Value) -> (Vec<ProposalChange>, bool) {
-    let mut changes = Vec::new();
-    let mut truncated = false;
-    collect_structured_diff(Some(from), Some(to), "$", &mut changes, &mut truncated);
-    (changes, truncated)
-}
-
-fn collect_structured_diff(
-    from: Option<&Value>,
-    to: Option<&Value>,
-    path: &str,
-    changes: &mut Vec<ProposalChange>,
-    truncated: &mut bool,
-) {
-    if *truncated {
-        return;
-    }
-    if let (Some(left), Some(right)) = (from, to) {
-        if left == right {
-            return;
-        }
-        if let (Some(left), Some(right)) = (left.as_object(), right.as_object()) {
-            let keys: BTreeSet<&str> = left
-                .keys()
-                .map(String::as_str)
-                .chain(right.keys().map(String::as_str))
-                .collect();
-            for key in keys {
-                collect_structured_diff(
-                    left.get(key),
-                    right.get(key),
-                    &format!("{path}.{}", key.replace('.', "\\.")),
-                    changes,
-                    truncated,
-                );
-                if *truncated {
-                    return;
-                }
-            }
-            return;
-        }
-        if let (Some(left), Some(right)) = (left.as_array(), right.as_array()) {
-            for index in 0..left.len().max(right.len()) {
-                collect_structured_diff(
-                    left.get(index),
-                    right.get(index),
-                    &format!("{path}[{index}]"),
-                    changes,
-                    truncated,
-                );
-                if *truncated {
-                    return;
-                }
-            }
-            return;
-        }
-    }
-
-    if changes.len() >= MAX_PROPOSAL_DIFF {
-        *truncated = true;
-        return;
-    }
-    let kind = match (from, to) {
-        (None, Some(_)) => "added",
-        (Some(_), None) => "removed",
-        _ => "changed",
-    };
-    changes.push(ProposalChange {
-        path: path.to_owned(),
-        kind: kind.to_owned(),
-        before: from.cloned().unwrap_or(Value::Null),
-        after: to.cloned().unwrap_or(Value::Null),
-    });
-}
-
-const MAX_PROPOSAL_IMPACTS: usize = 128;
-
-fn derive_proposal_impacts(
-    before: &v2::Project,
-    after: &v2::Project,
-    diff: &[ProposalChange],
-    diff_truncated: bool,
-) -> Vec<ProposalImpact> {
-    let mut impacts = Vec::new();
-    let before_track_indices: BTreeMap<&str, usize> = before
-        .tracks
-        .iter()
-        .enumerate()
-        .map(|(index, track)| (track.id.as_str(), index))
-        .collect();
-    let after_track_indices: BTreeMap<&str, usize> = after
-        .tracks
-        .iter()
-        .enumerate()
-        .map(|(index, track)| (track.id.as_str(), index))
-        .collect();
-
-    for (index, track) in after.tracks.iter().enumerate() {
-        if !before_track_indices.contains_key(track.id.as_str())
-            && !push_impact(
-                &mut impacts,
-                ProposalImpact::TrackAdded {
-                    track_id: track.id.to_string(),
-                    index,
-                },
-            )
-        {
-            return impacts;
-        }
-    }
-    for (index, track) in before.tracks.iter().enumerate() {
-        if !after_track_indices.contains_key(track.id.as_str())
-            && !push_impact(
-                &mut impacts,
-                ProposalImpact::TrackRemoved {
-                    track_id: track.id.to_string(),
-                    index,
-                },
-            )
-        {
-            return impacts;
-        }
-    }
-    for (to_index, track) in after.tracks.iter().enumerate() {
-        let Some(&from_index) = before_track_indices.get(track.id.as_str()) else {
-            continue;
-        };
-        if from_index != to_index
-            && !push_impact(
-                &mut impacts,
-                ProposalImpact::TrackReordered {
-                    track_id: track.id.to_string(),
-                    from_index,
-                    to_index,
-                },
-            )
-        {
-            return impacts;
-        }
-    }
-
-    let before_clips = clip_locations(before);
-    let after_clips = clip_locations(after);
-    for (clip_id, location) in &after_clips {
-        if !before_clips.contains_key(clip_id)
-            && !push_impact(
-                &mut impacts,
-                ProposalImpact::ClipAdded {
-                    clip_id: clip_id.clone(),
-                    track_id: location.track_id.clone(),
-                    timeline: clip_timeline_range(location.clip),
-                    source: clip_source_range(location.clip),
-                },
-            )
-        {
-            return impacts;
-        }
-    }
-    for (clip_id, location) in &before_clips {
-        if !after_clips.contains_key(clip_id)
-            && !push_impact(
-                &mut impacts,
-                ProposalImpact::ClipRemoved {
-                    clip_id: clip_id.clone(),
-                    track_id: location.track_id.clone(),
-                    timeline: clip_timeline_range(location.clip),
-                    source: clip_source_range(location.clip),
-                },
-            )
-        {
-            return impacts;
-        }
-    }
-    for (clip_id, before_location) in &before_clips {
-        let Some(after_location) = after_clips.get(clip_id) else {
-            continue;
-        };
-        let before_timeline = clip_timeline_range(before_location.clip);
-        let after_timeline = clip_timeline_range(after_location.clip);
-        let before_source = clip_source_range(before_location.clip);
-        let after_source = clip_source_range(after_location.clip);
-        let timeline_duration_changed = (before_timeline.end - before_timeline.start)
-            != (after_timeline.end - after_timeline.start);
-        let trim_changed = before_source != after_source || timeline_duration_changed;
-        let start_changed = before_timeline.start != after_timeline.start;
-        let track_changed = before_location.track_id != after_location.track_id;
-        if (track_changed || start_changed)
-            && !push_impact(
-                &mut impacts,
-                ProposalImpact::ClipMoved {
-                    clip_id: clip_id.clone(),
-                    from_track_id: before_location.track_id.clone(),
-                    from: before_timeline.clone(),
-                    to_track_id: after_location.track_id.clone(),
-                    to: after_timeline.clone(),
-                },
-            )
-        {
-            return impacts;
-        }
-        if trim_changed
-            && !push_impact(
-                &mut impacts,
-                ProposalImpact::ClipTrimmed {
-                    clip_id: clip_id.clone(),
-                    track_id: after_location.track_id.clone(),
-                    before: before_timeline.clone(),
-                    after: after_timeline.clone(),
-                    source_before: before_source,
-                    source_after: after_source,
-                },
-            )
-        {
-            return impacts;
-        }
-        if !append_clip_property_impacts(
-            &mut impacts,
-            clip_id,
-            after_location.track_id.as_str(),
-            before_location.clip,
-            after_location.clip,
-        ) {
-            return impacts;
-        }
-    }
-
-    let before_overlays = overlay_locations(before);
-    let after_overlays = overlay_locations(after);
-    for (overlay_id, (overlay, index)) in &after_overlays {
-        if !before_overlays.contains_key(overlay_id)
-            && !push_impact(
-                &mut impacts,
-                ProposalImpact::OverlayAdded {
-                    overlay_id: overlay_id.clone(),
-                    index: *index,
-                    overlay_kind: overlay.kind().unwrap_or("overlay").to_owned(),
-                },
-            )
-        {
-            return impacts;
-        }
-    }
-    for (overlay_id, (overlay, index)) in &before_overlays {
-        if !after_overlays.contains_key(overlay_id)
-            && !push_impact(
-                &mut impacts,
-                ProposalImpact::OverlayRemoved {
-                    overlay_id: overlay_id.clone(),
-                    index: *index,
-                    overlay_kind: overlay.kind().unwrap_or("overlay").to_owned(),
-                },
-            )
-        {
-            return impacts;
-        }
-    }
-    for (overlay_id, (before_overlay, _)) in &before_overlays {
-        let Some((after_overlay, _)) = after_overlays.get(overlay_id) else {
-            continue;
-        };
-        if before_overlay == after_overlay {
-            continue;
-        }
-        if !push_impact(
-            &mut impacts,
-            ProposalImpact::OverlayChanged {
-                overlay_id: overlay_id.clone(),
-                overlay_kind: after_overlay.kind().unwrap_or("overlay").to_owned(),
-                before: serde_json::to_value(before_overlay).expect("overlay serializes"),
-                after: serde_json::to_value(after_overlay).expect("overlay serializes"),
-            },
-        ) {
-            return impacts;
-        }
-    }
-
-    append_project_setting_impacts(&mut impacts, before, after);
-    if impacts.is_empty() && (!diff.is_empty() || diff_truncated) {
-        for change in diff {
-            if !push_impact(
-                &mut impacts,
-                ProposalImpact::Unclassified {
-                    path: change.path.clone(),
-                    before: change.before.clone(),
-                    after: change.after.clone(),
-                },
-            ) {
-                break;
-            }
-        }
-    }
-    impacts
-}
-
-fn push_impact(impacts: &mut Vec<ProposalImpact>, impact: ProposalImpact) -> bool {
-    if impacts.len() >= MAX_PROPOSAL_IMPACTS {
-        return false;
-    }
-    impacts.push(impact);
-    true
-}
-
-struct ClipLocation<'a> {
-    track_id: String,
-    clip: &'a v2::Clip,
-}
-
-fn clip_locations<'a>(project: &'a v2::Project) -> BTreeMap<String, ClipLocation<'a>> {
-    project
-        .tracks
-        .iter()
-        .flat_map(|track| {
-            track.clips.iter().map(|clip| {
-                (
-                    clip.id.to_string(),
-                    ClipLocation {
-                        track_id: track.id.to_string(),
-                        clip,
-                    },
-                )
-            })
-        })
-        .collect()
-}
-
-fn clip_timeline_range(clip: &v2::Clip) -> ProposalTimeRange {
-    let start = if clip.timeline_start.is_finite() {
-        clip.timeline_start.max(0.0)
-    } else {
-        0.0
-    };
-    let duration = clip
-        .timeline_duration()
-        .filter(|duration| duration.is_finite() && *duration > 0.0)
-        .unwrap_or(0.0);
-    ProposalTimeRange {
-        start,
-        end: start + duration,
-    }
-}
-
-fn clip_source_range(clip: &v2::Clip) -> Option<ProposalTimeRange> {
-    match (clip.source_in, clip.source_out) {
-        (Some(start), Some(end)) if start.is_finite() && end.is_finite() && end > start => {
-            Some(ProposalTimeRange { start, end })
-        }
-        _ => None,
-    }
-}
-
-fn append_clip_property_impacts(
-    impacts: &mut Vec<ProposalImpact>,
-    clip_id: &str,
-    track_id: &str,
-    before: &v2::Clip,
-    after: &v2::Clip,
-) -> bool {
-    let before = serde_json::to_value(before).expect("clip serializes");
-    let after = serde_json::to_value(after).expect("clip serializes");
-    let mut keys: BTreeSet<String> = before
-        .as_object()
-        .into_iter()
-        .flat_map(|object| object.keys().cloned())
-        .collect();
-    keys.extend(
-        after
-            .as_object()
-            .into_iter()
-            .flat_map(|object| object.keys().cloned()),
-    );
-    for property in keys {
-        if matches!(
-            property.as_str(),
-            "id" | "timelineStart" | "duration" | "in" | "out"
-        ) {
-            continue;
-        }
-        let before_value = before.get(&property).cloned().unwrap_or(Value::Null);
-        let after_value = after.get(&property).cloned().unwrap_or(Value::Null);
-        if before_value == after_value {
-            continue;
-        }
-        if !push_impact(
-            impacts,
-            ProposalImpact::ClipPropertyChanged {
-                clip_id: clip_id.to_owned(),
-                track_id: track_id.to_owned(),
-                property,
-                before: before_value,
-                after: after_value,
-            },
-        ) {
-            return false;
-        }
-    }
-    true
-}
-
-fn overlay_locations(project: &v2::Project) -> BTreeMap<String, (&v2::Overlay, usize)> {
-    project
-        .overlays
-        .iter()
-        .enumerate()
-        .map(|(index, overlay)| {
-            let id = overlay
-                .id()
-                .map(str::to_owned)
-                .unwrap_or_else(|| format!("index:{index}"));
-            (id, (overlay, index))
-        })
-        .collect()
-}
-
-fn append_project_setting_impacts(
-    impacts: &mut Vec<ProposalImpact>,
-    before: &v2::Project,
-    after: &v2::Project,
-) {
-    const COLLECTIONS: &[&str] = &[
-        "sources",
-        "tracks",
-        "overlays",
-        "gaps",
-        "transitions",
-        "effects",
-        "markers",
-    ];
-    let before = project_value(before);
-    let after = project_value(after);
-    let mut keys: BTreeSet<String> = before
-        .as_object()
-        .into_iter()
-        .flat_map(|object| object.keys().cloned())
-        .collect();
-    keys.extend(
-        after
-            .as_object()
-            .into_iter()
-            .flat_map(|object| object.keys().cloned()),
-    );
-    for property in keys {
-        if COLLECTIONS.contains(&property.as_str()) {
-            continue;
-        }
-        let before_value = before.get(&property).cloned().unwrap_or(Value::Null);
-        let after_value = after.get(&property).cloned().unwrap_or(Value::Null);
-        if before_value == after_value {
-            continue;
-        }
-        if !push_impact(
-            impacts,
-            ProposalImpact::ProjectSettingChanged {
-                property,
-                before: before_value,
-                after: after_value,
-            },
-        ) {
-            return;
-        }
-    }
-}
-
 fn unique_id() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -6180,15 +4734,6 @@ fn unique_id() -> String {
         .unwrap_or_default()
         .as_nanos();
     format!("{nanos:x}-{:x}", SEQUENCE.fetch_add(1, Ordering::Relaxed))
-}
-
-fn stable_id(prefix: &str, identity: &str) -> String {
-    let mut digest = Sha256::new();
-    digest.update(prefix.as_bytes());
-    digest.update([0]);
-    digest.update(identity.as_bytes());
-    let digest = digest.finalize();
-    format!("{prefix}-{}", &sha256_hex(&digest)[..16])
 }
 
 fn engine_error(error: cut_engine::EngineError) -> RuntimeError {
@@ -6299,47 +4844,68 @@ where
 mod tests {
     use super::*;
 
-    /// A v2 command with a kernel equivalent that changes the project.
-    fn canvas_command(width: u32) -> Value {
-        json!({"type":"set_canvas","width":width,"height":1080})
-    }
-
-    fn has_marker(project: &Value, id: &str) -> bool {
-        project["markers"]
-            .as_array()
-            .is_some_and(|markers| markers.iter().any(|marker| marker["id"] == id))
-    }
-
     fn runtime() -> Runtime {
         let directory = std::env::temp_dir().join(format!("cut-runtime-test-{}", unique_id()));
         Runtime::open(&directory).unwrap()
     }
 
+    /// Apply `script` at `revision` under a fresh request key.
+    fn edit(
+        runtime: &mut Runtime,
+        script: &str,
+        revision: u64,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        runtime.apply_script_request("ui", &unique_id(), script, revision)
+    }
+
+    fn undo(runtime: &mut Runtime, revision: u64) -> Result<StateSnapshot, RuntimeError> {
+        runtime.undo_request("ui", &unique_id(), revision)
+    }
+
+    /// Resize the first sequence with a typed operation.
+    fn resize(runtime: &mut Runtime, width: u32) -> StateSnapshot {
+        let ops = vec![EditOp::SetSequence {
+            width,
+            height: 1080,
+            sequence: None,
+        }];
+        let revision = runtime.revision;
+        runtime
+            .apply_ops_request("ui", &unique_id(), ops, revision)
+            .unwrap()
+    }
+
+    fn has_marker(state: &StateSnapshot, id: &str) -> bool {
+        state.document.contains(&format!("marker {id} "))
+    }
+
+    fn pending_id(state: &StateSnapshot) -> String {
+        match state.pending_proposal.as_ref() {
+            Some(PendingProposal::Pending { proposal_id, .. }) => proposal_id.clone(),
+            other => panic!("expected a pending proposal, got {other:?}"),
+        }
+    }
+
     #[test]
-    fn semantic_commands_are_atomic_and_revisioned() {
+    fn edits_are_atomic_and_revisioned() {
         let mut runtime = runtime();
-        let state = runtime
-            .apply(
-                json!({"type":"add_track","track":{"id":"titles","type":"title","clips":[]}}),
-                Some(0),
-            )
-            .unwrap();
+        let state = edit(&mut runtime, "track add T1 subtitle", 0).unwrap();
         assert_eq!(state.revision, 1);
         assert!(state.can_undo);
-        assert!(runtime
-            .apply(json!({"type":"remove_track","trackId":"missing"}), Some(1))
-            .is_err());
+        let error = edit(&mut runtime, "marker add at=0f\ntrack remove missing", 1).unwrap_err();
+        assert_eq!(error.code, "EDIT_REJECTED");
         assert_eq!(runtime.snapshot().revision, 1);
-        runtime.undo(Some(1)).unwrap();
+        assert!(!has_marker(&runtime.snapshot(), "mk1"));
+        undo(&mut runtime, 1).unwrap();
         assert!(runtime.snapshot().can_redo);
-        runtime.redo(Some(2)).unwrap();
+        runtime.redo_request("ui", "redo", 2).unwrap();
         assert_eq!(runtime.snapshot().revision, 3);
     }
 
     #[test]
     fn conflicts_are_machine_readable() {
         let mut runtime = runtime();
-        let error = runtime.undo(Some(2)).unwrap_err();
+        let error = undo(&mut runtime, 2).unwrap_err();
         assert_eq!(error.code, "REVISION_CONFLICT");
         assert_eq!(error.actual_revision, Some(0));
     }
@@ -6359,59 +4925,17 @@ mod tests {
     #[test]
     fn idempotency_replays_only_the_same_request() {
         let mut runtime = runtime();
-        let command = json!({"type":"add_track","track":{"id":"titles","type":"title","clips":[]}});
         let first = runtime
-            .apply_request("ui", "key-1", command.clone(), 0)
+            .apply_script_request("ui", "key-1", "track add T1 subtitle", 0)
             .unwrap();
-        let replay = runtime.apply_request("ui", "key-1", command, 0).unwrap();
+        let replay = runtime
+            .apply_script_request("ui", "key-1", "track add T1 subtitle", 0)
+            .unwrap();
         assert_eq!(first.revision, replay.revision);
         let error = runtime
-            .apply_request(
-                "ui",
-                "key-1",
-                json!({"type":"remove_track","trackId":"titles"}),
-                1,
-            )
+            .apply_script_request("ui", "key-1", "track remove T1", 1)
             .unwrap_err();
         assert_eq!(error.code, "IDEMPOTENCY_CONFLICT");
-    }
-
-    #[test]
-    fn staged_import_uses_request_identity_for_repeatable_ids() {
-        let directory =
-            std::env::temp_dir().join(format!("cut-runtime-staged-import-{}", unique_id()));
-        let media = directory.join("generated.mp4");
-        fs::create_dir_all(&directory).unwrap();
-        fs::write(&media, b"local artifact").unwrap();
-        let mut runtime = Runtime::open(&directory).unwrap();
-        let first = runtime
-            .stage_import_proposal(
-                "asset-import-stable",
-                0,
-                media.to_str().unwrap(),
-                None,
-                None,
-                None,
-                None,
-            )
-            .unwrap();
-        let second = runtime
-            .stage_import_proposal(
-                "asset-import-stable",
-                0,
-                media.to_str().unwrap(),
-                None,
-                None,
-                None,
-                None,
-            )
-            .unwrap();
-        assert_eq!(first.project, second.project);
-        assert_eq!(
-            serde_json::to_value(first.pending_proposal).unwrap(),
-            serde_json::to_value(second.pending_proposal).unwrap()
-        );
-        assert!(first.project["sources"].as_array().unwrap().is_empty());
     }
 
     #[test]
@@ -6473,14 +4997,11 @@ mod tests {
         {
             let mut runtime = Runtime::open(&directory).expect("runtime");
             let staged = runtime
-                .stage_agent_proposal(
+                .stage_script_proposal(
                     "agent-observation",
                     0,
-                    &[json!({
-                        "idempotencyKey": "agent-observation",
-                        "observation": observation,
-                        "commands": [{"type":"add_track","track":{"id":"titles","type":"title","clips":[]}}]
-                    })],
+                    "track add T1 subtitle",
+                    vec![serde_json::to_value(&observation).unwrap()],
                 )
                 .expect("proposal");
             assert!(matches!(
@@ -6536,15 +5057,14 @@ mod tests {
         fs::create_dir_all(&directory).expect("observation directory");
         let source = directory.join("source.mp4");
         fs::write(&source, b"source").expect("source");
-        let mut project = v2::serialize_project(&v2::empty_project()).unwrap();
-        project["sources"] = json!([{
-            "id": "source-1",
-            "path": source.to_string_lossy(),
-            "duration": 8.0
-        }]);
         fs::write(
-            directory.join(LEGACY_PROJECT_FILE),
-            serde_json::to_vec_pretty(&project).unwrap(),
+            directory.join(PROJECT_FILE),
+            format!(
+                "cut 1\nproject name=\"Observed\"\n\n\
+                 media source-1 path=\"{}\" rate=24 dur=00:00:08:00 video=1920x1080\n\n\
+                 sequence s1 name=\"Main\" rate=24 size=1920x1080 audio=48000 start=00:00:00:00\n",
+                source.display()
+            ),
         )
         .expect("project");
         let identity = SourceIdentity::from_path(&source).expect("source identity");
@@ -6574,27 +5094,21 @@ mod tests {
         };
         let mut runtime = Runtime::open(&directory).expect("runtime");
         let staged = runtime
-            .stage_agent_proposal(
+            .stage_script_proposal(
                 "observation-stale",
                 0,
-                &[json!({
-                    "idempotencyKey": "observation-stale",
-                    "observation": observation,
-                    "commands": [{"type":"add_track","track":{"id":"titles","type":"title","clips":[]}}]
-                })],
+                "track add T1 subtitle",
+                vec![serde_json::to_value(&observation).unwrap()],
             )
             .expect("proposal");
-        let proposal_id = match staged.pending_proposal.as_ref().unwrap() {
-            PendingProposal::Pending { proposal_id, .. } => proposal_id.clone(),
-            other => panic!("expected pending proposal, got {other:?}"),
-        };
+        let proposal_id = pending_id(&staged);
         let before = runtime.snapshot();
         fs::write(&source, b"changed source with a new size").expect("replace source");
         let error = runtime
             .accept_proposal(&proposal_id, "ui", "accept-observation-stale", 0)
             .expect_err("changed source must reject acceptance");
         assert_eq!(error.code, "STALE_OBSERVATION");
-        assert_eq!(runtime.snapshot().project, before.project);
+        assert_eq!(runtime.snapshot().document, before.document);
         assert!(matches!(
             runtime.snapshot().pending_proposal,
             Some(PendingProposal::Pending { .. })
@@ -6607,28 +5121,18 @@ mod tests {
         let mut runtime = runtime();
         let before = runtime.snapshot();
         let staged = runtime
-            .stage_agent_proposal(
-                "agent-reject",
-                0,
-                &[json!({
-                    "idempotencyKey": "agent-reject",
-                    "commands": [{"type":"add_track","track":{"id":"titles","type":"title","clips":[]}}]
-                })],
-            )
+            .stage_script_proposal("agent-reject", 0, "track add T1 subtitle", Vec::new())
             .unwrap();
-        let proposal_id = match staged.pending_proposal.as_ref().unwrap() {
-            PendingProposal::Pending {
-                proposal_id,
-                freshness,
+        assert!(matches!(
+            staged.pending_proposal,
+            Some(PendingProposal::Pending {
+                freshness: ProposalFreshness::Current,
                 ..
-            } => {
-                assert_eq!(*freshness, ProposalFreshness::Current);
-                proposal_id.clone()
-            }
-            _ => panic!("expected pending proposal"),
-        };
+            })
+        ));
+        let proposal_id = pending_id(&staged);
         let rejected = runtime.reject_proposal(&proposal_id).unwrap();
-        assert_eq!(rejected.project, before.project);
+        assert_eq!(rejected.document, before.document);
         assert_eq!(rejected.revision, before.revision);
         assert!(!rejected.can_undo);
         assert!(matches!(
@@ -6636,7 +5140,7 @@ mod tests {
             Some(PendingProposal::Rejected { .. })
         ));
         let replay = runtime.reject_proposal(&proposal_id).unwrap();
-        assert_eq!(replay.project, before.project);
+        assert_eq!(replay.document, before.document);
         assert_eq!(replay.revision, before.revision);
     }
 
@@ -6644,31 +5148,20 @@ mod tests {
     fn accepting_a_proposal_is_one_revision_and_one_undo_entry() {
         let mut runtime = runtime();
         let staged = runtime
-            .stage_agent_proposal(
+            .stage_script_proposal(
                 "agent-accept",
                 0,
-                &[
-                    json!({
-                        "idempotencyKey": "agent-accept",
-                        "commands": [{"type":"add_track","track":{"id":"titles","type":"title","clips":[]}}]
-                    }),
-                    json!({
-                        "idempotencyKey": "agent-accept-2",
-                        "commands": [{"type":"add_marker","marker":{"id":"intent","time":0}}]
-                    }),
-                ],
+                "track add T1 subtitle\nmarker add at=0f as=intent",
+                Vec::new(),
             )
             .unwrap();
-        let proposal_id = match staged.pending_proposal.as_ref().unwrap() {
-            PendingProposal::Pending { proposal_id, .. } => proposal_id.clone(),
-            _ => panic!("expected pending proposal"),
-        };
+        let proposal_id = pending_id(&staged);
         let accepted = runtime
             .accept_proposal(&proposal_id, "ui", "accept-1", 0)
             .unwrap();
         assert_eq!(accepted.revision, 1);
         assert!(accepted.can_undo);
-        assert!(has_marker(&accepted.project, "intent"));
+        assert!(has_marker(&accepted, "intent"));
         assert!(matches!(
             accepted.pending_proposal,
             Some(PendingProposal::Accepted {
@@ -6680,141 +5173,36 @@ mod tests {
             .accept_proposal(&proposal_id, "ui", "accept-1", 0)
             .unwrap();
         assert_eq!(replay.revision, 1);
-        runtime.undo(Some(1)).unwrap();
+        undo(&mut runtime, 1).unwrap();
         assert_eq!(runtime.snapshot().revision, 2);
-        assert!(!runtime.snapshot().project["tracks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|track| track["id"] == "titles"));
-    }
-
-    #[test]
-    fn crop_override_changes_one_proposed_box_atomically() {
-        let mut runtime = runtime();
-        let staged = runtime.stage_agent_proposal("crop-proposal", 0, &[json!({
-            "idempotencyKey": "crop-proposal",
-            "commands": [
-                {"type":"add_source","source":{"id":"source","path":"source.mp4","duration":3}},
-                {"type":"add_track","track":{"id":"video","type":"video","clips":[
-                    {"id":"clip","sourceId":"source","in":0,"out":3,"timelineStart":0}
-                ]}},
-                {"type":"update_clip","clipId":"clip","patch":{"crop":{
-                    "x":0.1,"y":0.1,"width":0.4,"height":0.4
-                }}}
-            ]
-        })]).unwrap();
-        let proposal_id = match staged.pending_proposal.unwrap() {
-            PendingProposal::Pending { proposal_id, .. } => proposal_id,
-            _ => panic!("expected pending proposal"),
-        };
-        let invalid = runtime
-            .accept_proposal_with_crop(
-                &proposal_id,
-                "ui",
-                "invalid-crop",
-                0,
-                Some(json!({"clipId":"clip","crop":{"x":0.9,"y":0,"width":0.5,"height":1}})),
-            )
-            .unwrap_err();
-        assert_eq!(invalid.code, "INVALID_COMMAND");
-        assert_eq!(runtime.snapshot().revision, 0);
-        assert!(matches!(
-            runtime.snapshot().pending_proposal,
-            Some(PendingProposal::Pending { .. })
-        ));
-
-        let accepted = runtime
-            .accept_proposal_with_crop(
-                &proposal_id,
-                "ui",
-                "valid-crop",
-                0,
-                Some(json!({"clipId":"clip","crop":{"x":0.5,"y":0,"width":0.5,"height":1}})),
-            )
-            .unwrap();
-        assert_eq!(accepted.revision, 1);
-        assert_eq!(accepted.project["tracks"][0]["clips"][0]["crop"]["x"], 0.5);
-        runtime.undo(Some(1)).unwrap();
-        assert_eq!(
-            runtime.snapshot().project["tracks"]
-                .as_array()
-                .unwrap()
-                .len(),
-            0
-        );
-    }
-
-    #[test]
-    fn crop_override_requires_a_unique_matching_crop_edit() {
-        let original = json!({"type":"batch","commands":[
-            {"type":"update_clip","clipId":"clip","patch":{"crop":{"x":0,"y":0,"width":1,"height":1}}}
-        ]});
-        for (name, override_box, duplicate, expected) in [
-            (
-                "wrong clip",
-                json!({"clipId":"other","crop":{"x":0,"y":0,"width":1,"height":1}}),
-                false,
-                "exactly one",
-            ),
-            (
-                "missing box",
-                json!({"clipId":"clip"}),
-                false,
-                "must be an object",
-            ),
-            (
-                "duplicate",
-                json!({"clipId":"clip","crop":{"x":0,"y":0,"width":1,"height":1}}),
-                true,
-                "exactly one",
-            ),
-        ] {
-            let mut command = original.clone();
-            if duplicate {
-                let repeated = command["commands"][0].clone();
-                command["commands"].as_array_mut().unwrap().push(repeated);
-            }
-            let error = replace_proposal_crop(&mut command, &override_box).expect_err(name);
-            assert!(error.message.contains(expected), "{name}: {error:?}");
-        }
+        assert!(!runtime.document(false).contains("track T1"));
     }
 
     #[test]
     fn accepted_proposal_receipt_survives_later_mutation_and_rejects_reuse() {
         let mut runtime = runtime();
         let staged = runtime
-            .stage_agent_proposal(
+            .stage_script_proposal(
                 "agent-receipt",
                 0,
-                &[json!({
-                    "idempotencyKey": "agent-receipt",
-                    "commands": [{"type":"add_marker","marker":{"id":"approved","time":0}}]
-                })],
+                "marker add at=0f as=approved",
+                Vec::new(),
             )
             .unwrap();
-        let proposal_id = match staged.pending_proposal.as_ref().unwrap() {
-            PendingProposal::Pending { proposal_id, .. } => proposal_id.clone(),
-            _ => panic!("expected pending proposal"),
-        };
+        let proposal_id = pending_id(&staged);
         let first = runtime
             .accept_proposal(&proposal_id, "ui", "accept-receipt", 0)
             .unwrap();
-        let later = runtime
-            .apply(
-                json!({"type":"add_marker","marker":{"id":"later","time":0}}),
-                Some(first.revision),
-            )
-            .unwrap();
+        let later = edit(&mut runtime, "marker add at=0f as=later", first.revision).unwrap();
         assert_eq!(later.revision, 2);
 
         let replay = runtime
             .accept_proposal(&proposal_id, "ui", "accept-receipt", 0)
             .unwrap();
         assert_eq!(replay.revision, first.revision);
-        assert_eq!(replay.project, first.project);
-        assert!(has_marker(&replay.project, "approved"));
-        assert!(!has_marker(&replay.project, "later"));
+        assert_eq!(replay.document, first.document);
+        assert!(has_marker(&replay, "approved"));
+        assert!(!has_marker(&replay, "later"));
 
         let error = runtime
             .accept_proposal(&proposal_id, "ui", "accept-other", 0)
@@ -6826,25 +5214,10 @@ mod tests {
     fn accepting_a_stale_proposal_conflicts_without_clearing_it() {
         let mut runtime = runtime();
         let staged = runtime
-            .stage_agent_proposal(
-                "agent-stale",
-                0,
-                &[json!({
-                    "idempotencyKey": "agent-stale",
-                    "commands": [{"type":"add_track","track":{"id":"titles","type":"title","clips":[]}}]
-                })],
-            )
+            .stage_script_proposal("agent-stale", 0, "track add T1 subtitle", Vec::new())
             .unwrap();
-        let proposal_id = match staged.pending_proposal.as_ref().unwrap() {
-            PendingProposal::Pending { proposal_id, .. } => proposal_id.clone(),
-            _ => panic!("expected pending proposal"),
-        };
-        runtime
-            .apply(
-                json!({"type":"add_marker","marker":{"id":"changed","time":0}}),
-                Some(0),
-            )
-            .unwrap();
+        let proposal_id = pending_id(&staged);
+        edit(&mut runtime, "marker add at=0f as=changed", 0).unwrap();
         let error = runtime
             .accept_proposal(&proposal_id, "ui", "accept-stale", 0)
             .unwrap_err();
@@ -6859,25 +5232,20 @@ mod tests {
     }
 
     #[test]
-    fn invalid_agent_batch_is_all_or_nothing() {
+    fn invalid_proposal_scripts_stage_nothing() {
         let mut runtime = runtime();
         let before = runtime.snapshot();
         let error = runtime
-            .stage_agent_proposal(
+            .stage_script_proposal(
                 "agent-invalid",
                 0,
-                &[json!({
-                    "idempotencyKey": "agent-invalid",
-                    "commands": [
-                        {"type":"add_track","track":{"id":"titles","type":"title","clips":[]}},
-                        {"type":"remove_track","trackId":"missing"}
-                    ]
-                })],
+                "track add T1 subtitle\ntrack remove missing",
+                Vec::new(),
             )
             .unwrap_err();
-        assert_eq!(error.code, "NOT_FOUND");
+        assert_eq!(error.code, "EDIT_REJECTED");
         let after = runtime.snapshot();
-        assert_eq!(after.project, before.project);
+        assert_eq!(after.document, before.document);
         assert_eq!(after.revision, before.revision);
         assert!(after.pending_proposal.is_none());
     }
@@ -6887,87 +5255,15 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("cut-runtime-restart-{}", unique_id()));
         {
             let mut runtime = Runtime::open(&directory).unwrap();
-            runtime
-                .apply(
-                    json!({"type":"add_track","track":{"id":"titles","type":"title","clips":[]}}),
-                    Some(0),
-                )
-                .unwrap();
+            edit(&mut runtime, "track add T1 subtitle", 0).unwrap();
             assert_eq!(runtime.snapshot().revision, 1);
         }
         let mut reopened = Runtime::open(&directory).unwrap();
         assert_eq!(reopened.snapshot().revision, 1);
         assert!(reopened.snapshot().can_undo);
-        reopened.undo(Some(1)).unwrap();
+        undo(&mut reopened, 1).unwrap();
         assert_eq!(reopened.snapshot().revision, 2);
         let _ = fs::remove_dir_all(directory);
-    }
-
-    #[test]
-    fn source_and_overlay_commands_mutate_collections() {
-        let mut runtime = runtime();
-        runtime
-            .apply(
-                json!({"type":"add_source","source":{"id":"cam-a","path":"/media/cam-a.mp4","duration":120}}),
-                Some(0),
-            )
-            .unwrap();
-        let snapshot = runtime.snapshot();
-        assert_eq!(snapshot.project["sources"].as_array().unwrap().len(), 1);
-        assert_eq!(
-            snapshot.project["sources"].as_array().unwrap()[0]["id"],
-            "cam-a"
-        );
-
-        // A subtitle file has no kernel equivalent; captions do.
-        let subtitle_file = runtime.apply(
-            json!({"type":"add_overlay","overlay":{"id":"subs-0","type":"subtitles","path":"/media/subs.srt"}}),
-            Some(1),
-        );
-        assert_eq!(subtitle_file.unwrap_err().code, "NO_EQUIVALENT");
-        runtime
-            .apply(
-                json!({"type":"add_overlay","overlay":{"id":"subs-1","type":"captions","cues":[{"start":1,"end":2,"text":"Hi"}]}}),
-                Some(1),
-            )
-            .unwrap();
-        assert!(runtime.document(false).contains("track subs-1 subtitle"));
-        assert_eq!(
-            runtime.snapshot().project["overlays"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
-
-        let duplicate_source = runtime.apply(
-            json!({"type":"add_source","source":{"id":"cam-a","path":"/media/other.mp4"}}),
-            Some(2),
-        );
-        assert_eq!(duplicate_source.unwrap_err().code, "INVALID_COMMAND");
-
-        let duplicate_overlay = runtime.apply(
-            json!({"type":"add_overlay","overlay":{"id":"subs-1","type":"captions","cues":[{"start":3,"end":4,"text":"Again"}]}}),
-            Some(2),
-        );
-        assert_eq!(duplicate_overlay.unwrap_err().code, "INVALID_COMMAND");
-
-        runtime
-            .apply(
-                json!({"type":"remove_overlay","overlayId":"subs-1"}),
-                Some(2),
-            )
-            .unwrap();
-        assert!(runtime.snapshot().project["overlays"]
-            .as_array()
-            .unwrap()
-            .is_empty());
-
-        let missing = runtime.apply(
-            json!({"type":"remove_overlay","overlayId":"missing"}),
-            Some(3),
-        );
-        assert_eq!(missing.unwrap_err().code, "NOT_FOUND");
     }
 
     #[test]
@@ -6978,20 +5274,88 @@ mod tests {
         fs::write(&media, b"not decoded in this unit test").unwrap();
         {
             let mut runtime = Runtime::open(&directory).unwrap();
-            let (first, source_id, clip_id) = runtime
-                .import_media_request("ui", "import-1", media.to_str().unwrap(), 0, None, None)
+            let (first, media_id, clip_id) = runtime
+                .import_media_request("ui", "import-1", media.to_str().unwrap(), 0)
                 .unwrap();
-            let (replay, replay_source, replay_clip) = runtime
-                .import_media_request("ui", "import-1", media.to_str().unwrap(), 0, None, None)
+            let (replay, replay_media, replay_clip) = runtime
+                .import_media_request("ui", "import-1", media.to_str().unwrap(), 0)
                 .unwrap();
             assert_eq!(first.revision, 1);
             assert_eq!(first.revision, replay.revision);
-            assert_eq!((source_id, clip_id), (replay_source, replay_clip));
+            assert_eq!((&media_id, &clip_id), (&replay_media, &replay_clip));
+            // Unprobed media is a second of picture at the sequence size,
+            // cut in on a new picture track.
+            assert!(
+                first.document.contains(&format!(
+                    "media {media_id} path=\"{}\" rate=30 dur=00:00:01:00 video=1920x1080",
+                    media.display()
+                )),
+                "{}",
+                first.document
+            );
+            assert!(
+                first.document.contains("track V1 video"),
+                "{}",
+                first.document
+            );
+            assert!(
+                first
+                    .document
+                    .contains(&format!("clip {clip_id} media={media_id}")),
+                "{}",
+                first.document
+            );
             let error = runtime
-                .import_media_request("ui", "import-1", "other.mp4", 1, None, None)
+                .import_media_request("ui", "import-1", "other.mp4", 1)
                 .unwrap_err();
             assert_eq!(error.code, "IDEMPOTENCY_CONFLICT");
         }
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn imported_media_with_sound_gets_a_linked_clip() {
+        let project = kernel::empty_project();
+        let probe = cut_engine::ProbeInfo {
+            duration: Some(2.0),
+            width: Some(1280),
+            height: Some(720),
+            fps: Some(24.0),
+            has_audio: Some(true),
+            video_codec: None,
+            audio_codec: None,
+        };
+        let (ops, media, clip) =
+            kernel::import_media(&project, "/media/a.mov", Some(&probe)).unwrap();
+        let edited = kernel::apply_ops(&project, &ops).unwrap();
+        let document = kernel::print(&edited.project);
+        assert!(
+            document.contains(&format!(
+                "media {media} path=\"/media/a.mov\" rate=24 dur=00:00:02:00 video=1280x720 audio=2ch@48000"
+            )),
+            "{document}"
+        );
+        assert!(document.contains("track A1 audio"), "{document}");
+        assert_eq!(document.matches("link=").count(), 2, "{document}");
+        assert!(edited.project.clip(clip.as_str()).is_some());
+    }
+
+    #[test]
+    fn import_rejects_paths_that_are_not_files() {
+        let directory =
+            std::env::temp_dir().join(format!("cut-runtime-import-boundary-{}", unique_id()));
+        fs::create_dir_all(&directory).unwrap();
+        let mut runtime = Runtime::open(&directory).unwrap();
+        let missing = runtime
+            .import_media_request("ui", "missing", "/definitely/not-a-file", 0)
+            .unwrap_err();
+        assert_eq!(missing.code, "INVALID_IMPORT");
+        let directory_error = runtime
+            .import_media_request("ui", "directory", directory.to_str().unwrap(), 0)
+            .unwrap_err();
+        assert_eq!(directory_error.code, "INVALID_IMPORT");
+        assert_eq!(runtime.snapshot().revision, 0);
+        drop(runtime);
         let _ = fs::remove_dir_all(directory);
     }
 
@@ -7007,12 +5371,7 @@ mod tests {
         // restart after the old projection is restored.
         fs::remove_file(directory.join(PROJECT_FILE)).unwrap();
         fs::create_dir(directory.join(PROJECT_FILE)).unwrap();
-        let committed = runtime
-            .apply(
-                json!({"type":"add_track","track":{"id":"titles","type":"title","clips":[]}}),
-                Some(before.revision),
-            )
-            .unwrap();
+        let committed = edit(&mut runtime, "track add T1 subtitle", before.revision).unwrap();
         assert_eq!(committed.revision, before.revision + 1);
         assert_eq!(committed.projection_status, "diverged");
         assert!(directory.join(JOURNAL_FILE).is_file());
@@ -7021,11 +5380,7 @@ mod tests {
         fs::write(directory.join(PROJECT_FILE), &before_document).unwrap();
         let reopened = Runtime::open(&directory).unwrap();
         assert_eq!(reopened.snapshot().revision, committed.revision);
-        assert!(reopened.snapshot().project["tracks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|track| track["id"] == "titles"));
+        assert!(reopened.document(false).contains("track T1 subtitle"));
         assert_eq!(reopened.snapshot().projection_status, "current");
         drop(reopened);
         let _ = fs::remove_dir_all(directory);
@@ -7036,22 +5391,12 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("cut-runtime-journal-tail-{}", unique_id()));
         let mut runtime = Runtime::open(&directory).unwrap();
-        let first = runtime
-            .apply(
-                json!({"type":"add_marker","marker":{"id":"first","time":0}}),
-                Some(0),
-            )
-            .unwrap();
+        let first = edit(&mut runtime, "marker add at=0f as=first", 0).unwrap();
         let first_document = runtime.document(false);
 
         fs::remove_file(directory.join(PROJECT_FILE)).unwrap();
         fs::create_dir(directory.join(PROJECT_FILE)).unwrap();
-        let second = runtime
-            .apply(
-                json!({"type":"add_marker","marker":{"id":"second","time":0}}),
-                Some(first.revision),
-            )
-            .unwrap();
+        let second = edit(&mut runtime, "marker add at=0f as=second", first.revision).unwrap();
         assert_eq!(second.projection_status, "diverged");
         drop(runtime);
 
@@ -7061,7 +5406,7 @@ mod tests {
         fs::write(directory.join(PROJECT_FILE), &first_document).unwrap();
         let reopened = Runtime::open(&directory).unwrap();
         assert_eq!(reopened.snapshot().revision, second.revision);
-        assert!(has_marker(&reopened.snapshot().project, "second"));
+        assert!(has_marker(&reopened.snapshot(), "second"));
         assert_eq!(reopened.snapshot().projection_status, "current");
         drop(reopened);
 
@@ -7077,13 +5422,13 @@ mod tests {
         let mut diverged = Runtime::open(&directory).unwrap();
         assert_eq!(diverged.snapshot().projection_status, "diverged");
         assert_eq!(
-            diverged
-                .apply(
-                    json!({"type":"add_marker","marker":{"id":"blocked","time":0}}),
-                    Some(second.revision),
-                )
-                .unwrap_err()
-                .code,
+            edit(
+                &mut diverged,
+                "marker add at=0f as=blocked",
+                second.revision
+            )
+            .unwrap_err()
+            .code,
             "PROJECTION_DIVERGED"
         );
         let on_disk = fs::read_to_string(directory.join(PROJECT_FILE)).unwrap();
@@ -7103,12 +5448,12 @@ mod tests {
         fs::remove_file(directory.join(PROJECT_FILE)).unwrap();
         fs::create_dir(directory.join(PROJECT_FILE)).unwrap();
 
-        let committed = runtime
-            .apply(
-                json!({"type":"add_marker","marker":{"id":"threshold","time":0}}),
-                Some(before.revision),
-            )
-            .unwrap();
+        let committed = edit(
+            &mut runtime,
+            "marker add at=0f as=threshold",
+            before.revision,
+        )
+        .unwrap();
         assert_eq!(committed.projection_status, "diverged");
         let checkpoint: Value =
             serde_json::from_str(&fs::read_to_string(directory.join(CHECKPOINT_FILE)).unwrap())
@@ -7121,7 +5466,7 @@ mod tests {
         fs::write(directory.join(PROJECT_FILE), &before_document).unwrap();
         let reopened = Runtime::open(&directory).unwrap();
         assert_eq!(reopened.snapshot().revision, committed.revision);
-        assert!(has_marker(&reopened.snapshot().project, "threshold"));
+        assert!(has_marker(&reopened.snapshot(), "threshold"));
         assert_eq!(reopened.snapshot().projection_status, "current");
         drop(reopened);
         let _ = fs::remove_dir_all(directory);
@@ -7132,11 +5477,8 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("cut-runtime-repair-status-{}", unique_id()));
         let mut runtime = Runtime::open(&directory).unwrap();
-        let before = runtime.snapshot();
         let before_document = runtime.document(false);
-        let committed = runtime
-            .apply(canvas_command(1280), Some(before.revision))
-            .unwrap();
+        let committed = resize(&mut runtime, 1280);
         drop(runtime);
 
         // Put back the last checkpointed document so journal replay
@@ -7144,7 +5486,7 @@ mod tests {
         fs::write(directory.join(PROJECT_FILE), before_document).unwrap();
         let reopened = Runtime::open(&directory).unwrap();
         assert_eq!(reopened.snapshot().revision, committed.revision);
-        assert_eq!(reopened.snapshot().project["width"], 1280.0);
+        assert_eq!(reopened.snapshot().timeline["width"], 1280);
         assert_eq!(reopened.snapshot().projection_status, "current");
         assert!(fs::read_to_string(directory.join(PROJECT_FILE))
             .unwrap()
@@ -7156,26 +5498,20 @@ mod tests {
     #[test]
     fn operation_receipts_and_revision_survive_restart() {
         let directory = std::env::temp_dir().join(format!("cut-runtime-receipt-{}", unique_id()));
-        let command = json!({"type":"add_track","track":{"id":"titles","type":"title","clips":[]}});
         let first = {
             let mut runtime = Runtime::open(&directory).unwrap();
             runtime
-                .apply_request("ui", "request-1", command.clone(), 0)
+                .apply_script_request("ui", "request-1", "track add T1 subtitle", 0)
                 .unwrap()
         };
         let mut reopened = Runtime::open(&directory).unwrap();
         let replay = reopened
-            .apply_request("ui", "request-1", command, 0)
+            .apply_script_request("ui", "request-1", "track add T1 subtitle", 0)
             .unwrap();
         assert_eq!(replay.revision, first.revision);
-        assert_eq!(replay.project, first.project);
+        assert_eq!(replay.document, first.document);
         let conflict = reopened
-            .apply_request(
-                "ui",
-                "request-1",
-                json!({"type":"add_marker","marker":{"id":"changed","time":0}}),
-                1,
-            )
+            .apply_script_request("ui", "request-1", "marker add at=0f", 1)
             .unwrap_err();
         assert_eq!(conflict.code, "IDEMPOTENCY_CONFLICT");
         drop(reopened);
@@ -7189,27 +5525,21 @@ mod tests {
         let proposal_id = {
             let mut runtime = Runtime::open(&directory).unwrap();
             let staged = runtime
-                .stage_agent_proposal(
+                .stage_script_proposal(
                     "agent-restart",
                     0,
-                    &[json!({
-                        "idempotencyKey":"agent-restart",
-                        "commands":[{"type":"add_marker","marker":{"id":"survives","time":0}}]
-                    })],
+                    "marker add at=0f as=survives",
+                    Vec::new(),
                 )
                 .unwrap();
-            match staged.pending_proposal.unwrap() {
-                PendingProposal::Pending { proposal_id, .. } => proposal_id,
-                _ => panic!("expected pending proposal"),
-            }
+            pending_id(&staged)
         };
         let mut reopened = Runtime::open(&directory).unwrap();
         assert!(matches!(
             reopened.snapshot().pending_proposal,
-            Some(PendingProposal::Pending {
-                impacts: Some(impacts),
-                ..
-            }) if !impacts.is_empty()
+            Some(PendingProposal::Pending { script, document_diff, .. })
+                if script == "marker add as=survives at=00:00:00:00\n"
+                    && document_diff.contains("+  marker survives at=00:00:00:00")
         ));
         let accepted = reopened
             .accept_proposal(&proposal_id, "ui", "accept-restart", 0)
@@ -7230,37 +5560,27 @@ mod tests {
         let proposal_id = {
             let mut runtime = Runtime::open(&directory).unwrap();
             let staged = runtime
-                .stage_agent_proposal(
+                .stage_script_proposal(
                     "agent-accepted-restart",
                     0,
-                    &[json!({
-                        "idempotencyKey":"agent-accepted-restart",
-                        "commands":[{"type":"add_marker","marker":{"id":"persisted","time":0}}]
-                    })],
+                    "marker add at=0f as=persisted",
+                    Vec::new(),
                 )
                 .unwrap();
-            let proposal_id = match staged.pending_proposal.as_ref().unwrap() {
-                PendingProposal::Pending { proposal_id, .. } => proposal_id.clone(),
-                _ => panic!("expected pending proposal"),
-            };
+            let proposal_id = pending_id(&staged);
             runtime
                 .accept_proposal(&proposal_id, "ui", "accept-persisted", 0)
                 .unwrap();
             proposal_id
         };
         let mut reopened = Runtime::open(&directory).unwrap();
-        reopened
-            .apply(
-                json!({"type":"add_marker","marker":{"id":"later","time":0}}),
-                Some(1),
-            )
-            .unwrap();
+        edit(&mut reopened, "marker add at=0f as=later", 1).unwrap();
         let replay = reopened
             .accept_proposal(&proposal_id, "ui", "accept-persisted", 0)
             .unwrap();
         assert_eq!(replay.revision, 1);
-        assert!(has_marker(&replay.project, "persisted"));
-        assert!(!has_marker(&replay.project, "later"));
+        assert!(has_marker(&replay, "persisted"));
+        assert!(!has_marker(&replay, "later"));
         drop(reopened);
         let _ = fs::remove_dir_all(directory);
     }
@@ -7283,11 +5603,11 @@ mod tests {
         let handle = RuntimeHandle::open(&directory).unwrap();
         let left = handle.clone();
         let right = handle.clone();
-        let command = json!({"type":"add_track","track":{"id":"titles","type":"title","clips":[]}});
-        let first = thread::spawn(move || left.apply_request("ui", "left", command, 0));
-        let command =
-            json!({"type":"add_track","track":{"id":"audio-titles","type":"title","clips":[]}});
-        let second = thread::spawn(move || right.apply_request("agent", "right", command, 0));
+        let first =
+            thread::spawn(move || left.apply_script_request("ui", "left", "track add T1 video", 0));
+        let second = thread::spawn(move || {
+            right.apply_script_request("agent", "right", "track add T2 video", 0)
+        });
         let first = first.join().unwrap();
         let second = second.join().unwrap();
         assert_eq!(first.is_ok() as u8 + second.is_ok() as u8, 1);
@@ -7307,20 +5627,11 @@ mod tests {
         let pending = serde_json::to_value(PendingProposal::Pending {
             proposal_id: "proposal-1".into(),
             base_revision: 2,
-            command: json!({"type":"set_metadata","patch":{"title":"Cut"}}),
-            diff: vec![ProposalChange {
-                path: "$.metadata.title".into(),
-                kind: "added".into(),
-                before: Value::Null,
-                after: json!("Cut"),
-            }],
-            diff_truncated: true,
+            script: "trim c1 out -12f\n".into(),
+            document_diff: "-a\n+b\n".into(),
             freshness: ProposalFreshness::Current,
-            impacts: None,
             observation: None,
             observations: None,
-            script: None,
-            document_diff: None,
         })
         .unwrap();
         assert_eq!(
@@ -7329,14 +5640,8 @@ mod tests {
                 "status": "pending",
                 "proposalId": "proposal-1",
                 "baseRevision": 2,
-                "command": {"type":"set_metadata","patch":{"title":"Cut"}},
-                "diff": [{
-                    "path":"$.metadata.title",
-                    "kind":"added",
-                    "before": null,
-                    "after":"Cut"
-                }],
-                "diffTruncated": true
+                "script": "trim c1 out -12f\n",
+                "documentDiff": "-a\n+b\n"
             })
         );
         assert_eq!(
@@ -7358,131 +5663,17 @@ mod tests {
     }
 
     #[test]
-    fn semantic_proposal_impacts_cover_clip_geometry_and_properties() {
-        let before = v2::parse_project(&json!({
-            "version": 2,
-            "fps": 30.0,
-            "sources": [{"id":"source-1","path":"shot.mp4","duration":12.0}],
-            "tracks": [{
-                "id":"video-1",
-                "type":"video",
-                "clips": [{
-                    "id":"clip-1",
-                    "sourceId":"source-1",
-                    "in":0.0,
-                    "out":4.0,
-                    "timelineStart":1.0,
-                    "duration":4.0,
-                    "volume":1.0
-                }]
-            }],
-            "overlays": [],
-            "gaps": [],
-            "transitions": [],
-            "effects": [],
-            "markers": []
-        }))
-        .expect("valid project");
-        let after = v2::parse_project(&json!({
-            "version": 2,
-            "fps": 30.0,
-            "sources": [{"id":"source-1","path":"shot.mp4","duration":12.0}],
-            "tracks": [{
-                "id":"video-1",
-                "type":"video",
-                "clips": [{
-                    "id":"clip-1",
-                    "sourceId":"source-1",
-                    "in":1.0,
-                    "out":4.0,
-                    "timelineStart":2.0,
-                    "duration":3.0,
-                    "volume":0.5
-                }]
-            }],
-            "overlays": [],
-            "gaps": [],
-            "transitions": [],
-            "effects": [],
-            "markers": []
-        }))
-        .expect("valid project");
-        let (diff, truncated) = structured_diff(&project_value(&before), &project_value(&after));
-        let impacts = derive_proposal_impacts(&before, &after, &diff, truncated);
-
-        assert!(impacts.iter().any(|impact| matches!(
-            impact,
-            ProposalImpact::ClipMoved {
-                clip_id,
-                from_track_id,
-                to_track_id,
-                from,
-                to,
-            } if clip_id == "clip-1"
-                && from_track_id == "video-1"
-                && to_track_id == "video-1"
-                && from.start == 1.0
-                && to.start == 2.0
-        )));
-        assert!(impacts.iter().any(|impact| matches!(
-            impact,
-            ProposalImpact::ClipTrimmed {
-                clip_id,
-                source_before: Some(source_before),
-                source_after: Some(source_after),
-                ..
-            } if clip_id == "clip-1"
-                && source_before.start == 0.0
-                && source_after.start == 1.0
-        )));
-        assert!(impacts.iter().any(|impact| matches!(
-            impact,
-            ProposalImpact::ClipPropertyChanged {
-                clip_id,
-                property,
-                before,
-                after,
-                ..
-            } if clip_id == "clip-1"
-                && property == "volume"
-                && before == &json!(1.0)
-                && after == &json!(0.5)
-        )));
-    }
-
-    #[test]
-    fn pending_proposal_without_impacts_remains_readable() {
-        let legacy = json!({
-            "status": "pending",
-            "proposalId": "legacy",
-            "baseRevision": 4,
-            "command": {"type":"batch","commands":[]},
-            "diff": [],
-            "diffTruncated": false
-        });
-        let decoded: PendingProposal = serde_json::from_value(legacy).expect("legacy proposal");
-        assert!(matches!(
-            decoded,
-            PendingProposal::Pending {
-                impacts: None,
-                proposal_id,
-                ..
-            } if proposal_id == "legacy"
-        ));
-    }
-
-    #[test]
     fn jsonl_rejects_empty_idempotency_keys_at_runtime_boundary() {
         let directory = std::env::temp_dir().join(format!("cut-runtime-jsonl-{}", unique_id()));
         let requests = [
             json!({
                 "protocolVersion":1,
-                "id":"apply-empty",
-                "operation":"apply",
+                "id":"script-empty",
+                "operation":"apply_script",
                 "actor":"ui",
                 "idempotencyKey":"",
                 "baseRevision":0,
-                "command":{"type":"add_marker","marker":{"id":"x","time":0}}
+                "script":"marker add at=0f"
             }),
             json!({
                 "protocolVersion":1,
@@ -7555,101 +5746,26 @@ mod tests {
     }
 
     #[test]
-    fn import_rejects_non_files_and_malformed_overlays_but_keeps_metadata_injection() {
-        let directory =
-            std::env::temp_dir().join(format!("cut-runtime-import-boundary-{}", unique_id()));
-        let media = directory.join("sample.mp4");
-        fs::create_dir_all(&directory).unwrap();
-        fs::write(&media, b"not decoded in this unit test").unwrap();
-        let mut runtime = Runtime::open(&directory).unwrap();
-
-        let missing = runtime
-            .import_media_request("ui", "missing", "/definitely/not-a-file", 0, None, None)
-            .unwrap_err();
-        assert_eq!(missing.code, "INVALID_IMPORT");
-        let directory_error = runtime
-            .import_media_request(
-                "ui",
-                "directory",
-                directory.to_str().unwrap(),
-                0,
-                None,
-                None,
-            )
-            .unwrap_err();
-        assert_eq!(directory_error.code, "INVALID_IMPORT");
-        let overlay_error = runtime
-            .import_media_request(
-                "ui",
-                "bad-overlay",
-                media.to_str().unwrap(),
-                0,
-                None,
-                Some(json!("not an overlay")),
-            )
-            .unwrap_err();
-        assert_eq!(overlay_error.code, "INVALID_IMPORT");
-
-        let (state, _, _) = runtime
-            .import_media_request(
-                "ui",
-                "metadata",
-                media.to_str().unwrap(),
-                0,
-                Some(json!({"duration":2.5,"width":1920,"height":1080})),
-                Some(json!({"id":"overlay-1","type":"captions","cues":[{"start":0,"end":1,"text":"Hi"}]})),
-            )
-            .unwrap();
-        assert_eq!(state.revision, 1);
-        assert_eq!(state.sources[0]["duration"], 2.5);
-        assert_eq!(state.project["overlays"][0]["id"], "overlay-1");
-        let unsupported = runtime
-            .import_media_request(
-                "ui",
-                "unsupported-overlay",
-                media.to_str().unwrap(),
-                1,
-                None,
-                Some(json!({"id":"overlay-2","type":"subtitles"})),
-            )
-            .unwrap_err();
-        assert_eq!(unsupported.code, "NO_EQUIVALENT");
-        assert_eq!(runtime.snapshot().revision, 1);
-        drop(runtime);
-        let _ = fs::remove_dir_all(directory);
-    }
-
-    #[test]
     fn durable_rejection_receipt_survives_later_mutation_and_rejects_reuse() {
         let mut runtime = runtime();
         let staged = runtime
-            .stage_agent_proposal(
+            .stage_script_proposal(
                 "agent-reject-receipt",
                 0,
-                &[json!({
-                    "idempotencyKey":"agent-reject-receipt",
-                    "commands":[{"type":"add_marker","marker":{"id":"proposed","time":0}}]
-                })],
+                "marker add at=0f as=proposed",
+                Vec::new(),
             )
             .unwrap();
-        let proposal_id = match staged.pending_proposal.as_ref().unwrap() {
-            PendingProposal::Pending { proposal_id, .. } => proposal_id.clone(),
-            _ => panic!("expected pending proposal"),
-        };
+        let proposal_id = pending_id(&staged);
         let first = runtime
             .reject_proposal_request(&proposal_id, "ui", "reject-receipt", 0)
             .unwrap();
-        runtime
-            .apply(
-                json!({"type":"add_marker","marker":{"id":"later","time":0}}),
-                Some(first.revision),
-            )
-            .unwrap();
+        edit(&mut runtime, "marker add at=0f as=later", first.revision).unwrap();
         let replay = runtime
             .reject_proposal_request(&proposal_id, "ui", "reject-receipt", 0)
             .unwrap();
         assert_eq!(replay.revision, first.revision);
-        assert_eq!(replay.project, first.project);
+        assert_eq!(replay.document, first.document);
         let error = runtime
             .reject_proposal_request(&proposal_id, "ui", "reject-other", 0)
             .unwrap_err();
@@ -7657,28 +5773,19 @@ mod tests {
     }
 
     #[test]
-    fn journal_stores_typed_commands_without_full_snapshot_history() {
+    fn journal_stores_scripts_without_full_snapshot_history() {
         let directory =
             std::env::temp_dir().join(format!("cut-runtime-journal-shape-{}", unique_id()));
         let mut runtime = Runtime::open(&directory).unwrap();
-        runtime
-            .apply(
-                json!({"type":"add_track","track":{"id":"titles","type":"title","clips":[]}}),
-                Some(0),
-            )
-            .unwrap();
+        edit(&mut runtime, "track add titles video", 0).unwrap();
         let journal = fs::read_to_string(directory.join(JOURNAL_FILE)).unwrap();
-        assert!(
-            journal.contains("\"script\":\"track add titles video\\n\""),
-            "{journal}"
-        );
-        assert!(journal.contains("\"digest\""));
-        assert!(!journal.contains("\"document\""));
+        let record: JournalRecord = serde_json::from_str(journal.trim()).unwrap();
+        let change = record.change.unwrap();
+        assert_eq!(change.script.as_deref(), Some("track add titles video\n"));
+        assert!(change.document.is_none());
 
         for index in 0..(MAX_HISTORY_ENTRIES + 8) {
-            runtime
-                .apply(canvas_command(1000 + 2 * index as u32), None)
-                .unwrap();
+            resize(&mut runtime, 1000 + 2 * index as u32);
         }
         assert_eq!(runtime.past.len(), MAX_HISTORY_ENTRIES);
         assert!(runtime.future.is_empty());
@@ -7695,9 +5802,7 @@ mod tests {
             std::env::temp_dir().join(format!("cut-runtime-journal-recovery-{}", unique_id()));
         let mut runtime = Runtime::open(&directory).unwrap();
         for index in 0..(CHECKPOINT_INTERVAL + 1) {
-            runtime
-                .apply(canvas_command(1000 + 2 * index as u32), None)
-                .unwrap();
+            resize(&mut runtime, 1000 + 2 * index as u32);
         }
         let checkpoint: Value =
             serde_json::from_str(&fs::read_to_string(directory.join(CHECKPOINT_FILE)).unwrap())
@@ -7719,8 +5824,8 @@ mod tests {
         let reopened = Runtime::open(&directory).unwrap();
         assert_eq!(reopened.snapshot().revision, CHECKPOINT_INTERVAL + 1);
         assert_eq!(
-            reopened.snapshot().project["width"],
-            f64::from(1000 + 2 * CHECKPOINT_INTERVAL as u32)
+            reopened.snapshot().timeline["width"],
+            1000 + 2 * CHECKPOINT_INTERVAL
         );
         drop(reopened);
         let journal = fs::read_to_string(directory.join(JOURNAL_FILE)).unwrap();
@@ -7735,12 +5840,7 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("cut-runtime-checkpoint-recovery-{}", unique_id()));
         let mut runtime = Runtime::open(&directory).unwrap();
-        runtime
-            .apply(
-                json!({"type":"add_marker","marker":{"id":"saved","time":0}}),
-                Some(0),
-            )
-            .unwrap();
+        edit(&mut runtime, "marker add at=0f as=saved", 0).unwrap();
         drop(runtime);
         let checkpoint = fs::read(directory.join(CHECKPOINT_FILE)).unwrap();
         fs::write(directory.join(CHECKPOINT_TEMP_FILE), checkpoint).unwrap();
@@ -7748,7 +5848,7 @@ mod tests {
 
         let runtime = Runtime::open(&directory).unwrap();
         assert_eq!(runtime.snapshot().revision, 1);
-        assert!(has_marker(&runtime.snapshot().project, "saved"));
+        assert!(has_marker(&runtime.snapshot(), "saved"));
         assert!(!directory.join(CHECKPOINT_TEMP_FILE).exists());
         drop(runtime);
         let _ = fs::remove_dir_all(directory);
@@ -7772,7 +5872,6 @@ mod tests {
         let state = runtime.snapshot();
         assert_eq!(state.source_version, SOURCE_VERSION);
         assert_eq!(state.projection_status, "current");
-        assert_eq!(state.project["version"], 2);
         assert!(state.import_warnings[0].contains("imported project.cut.json"));
         assert!(directory.join(CHECKPOINT_FILE).is_file());
         drop(runtime);
@@ -7795,33 +5894,31 @@ mod tests {
     }
 
     #[test]
-    fn state_from_a_v2_runtime_is_preserved_and_the_project_imported() {
-        let directory = std::env::temp_dir().join(format!("cut-runtime-v2-state-{}", unique_id()));
+    fn state_from_an_older_runtime_is_preserved_and_the_project_reopened() {
+        let directory = std::env::temp_dir().join(format!("cut-runtime-old-state-{}", unique_id()));
         fs::create_dir_all(&directory).unwrap();
-        let mut project = v2::serialize_project(&v2::empty_project()).unwrap();
-        project["name"] = json!("From v2");
-        fs::write(
-            directory.join(LEGACY_PROJECT_FILE),
-            serde_json::to_vec(&project).unwrap(),
-        )
-        .unwrap();
-        let old_checkpoint = br#"{"format_version":2,"project":{},"revision":7}"#;
+        let document = kernel::print(&Project {
+            name: "Earlier".into(),
+            ..kernel::empty_project()
+        });
+        fs::write(directory.join(PROJECT_FILE), &document).unwrap();
+        let old_checkpoint = br#"{"format_version":3,"project":"","revision":7}"#;
         fs::write(directory.join(CHECKPOINT_FILE), old_checkpoint).unwrap();
-        fs::write(directory.join(JOURNAL_FILE), b"{\"format_version\":1}\n").unwrap();
+        fs::write(directory.join(JOURNAL_FILE), b"{\"format_version\":2}\n").unwrap();
         let runtime = Runtime::open(&directory).unwrap();
         let state = runtime.snapshot();
         assert_eq!(state.revision, 0);
-        assert_eq!(state.project["name"], "From v2");
+        assert_eq!(state.document, document);
         assert!(state
             .import_warnings
             .iter()
-            .any(|warning| warning.contains(LEGACY_STATE_PREFIX)));
+            .any(|warning| warning.contains(PREVIOUS_STATE_PREFIX)));
         assert_eq!(
-            fs::read(directory.join(format!("{LEGACY_STATE_PREFIX}.checkpoint.json"))).unwrap(),
+            fs::read(directory.join(format!("{PREVIOUS_STATE_PREFIX}.checkpoint.json"))).unwrap(),
             old_checkpoint
         );
         assert!(directory
-            .join(format!("{LEGACY_STATE_PREFIX}.journal"))
+            .join(format!("{PREVIOUS_STATE_PREFIX}.journal"))
             .is_file());
         drop(runtime);
         let _ = fs::remove_dir_all(directory);
@@ -7832,12 +5929,7 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("cut-runtime-projection-policy-{}", unique_id()));
         let mut runtime = Runtime::open(&directory).unwrap();
-        runtime
-            .apply(
-                json!({"type":"add_marker","marker":{"id":"authoritative","time":0}}),
-                Some(0),
-            )
-            .unwrap();
+        edit(&mut runtime, "marker add at=0f as=authoritative", 0).unwrap();
         drop(runtime);
 
         let original = fs::read_to_string(directory.join(PROJECT_FILE)).unwrap();
@@ -7849,14 +5941,11 @@ mod tests {
 
         let mut runtime = Runtime::open(&directory).unwrap();
         assert_eq!(runtime.snapshot().projection_status, "diverged");
-        let blocked = runtime.apply(
-            json!({"type":"add_marker","marker":{"id":"blocked","time":0}}),
-            Some(1),
-        );
+        let blocked = edit(&mut runtime, "marker add at=0f as=blocked", 1);
         assert_eq!(blocked.unwrap_err().code, "PROJECTION_DIVERGED");
         let repaired = runtime.repair_projection().unwrap();
         assert_eq!(repaired.projection_status, "current");
-        assert_eq!(repaired.project["name"], "Untitled project");
+        assert_eq!(repaired.timeline["name"], "Untitled project");
 
         // A text edit of the canonical document, made outside cutd.
         fs::write(
@@ -7869,13 +5958,13 @@ mod tests {
             .import_projection("ui", "projection-import-1", repaired.revision)
             .unwrap();
         assert_eq!(imported_state.revision, repaired.revision + 1);
-        assert_eq!(imported_state.project["name"], "explicit import");
+        assert_eq!(imported_state.timeline["name"], "explicit import");
         assert!(!imported_state.can_undo);
         assert_eq!(imported_state.projection_status, "current");
         drop(runtime);
 
         let reopened = Runtime::open(&directory).unwrap();
-        assert_eq!(reopened.snapshot().project["name"], "explicit import");
+        assert_eq!(reopened.snapshot().timeline["name"], "explicit import");
         assert_eq!(reopened.snapshot().projection_status, "current");
         drop(reopened);
         let _ = fs::remove_dir_all(directory);
@@ -7887,7 +5976,7 @@ mod tests {
             std::env::temp_dir().join(format!("cut-runtime-job-recovery-{}", unique_id()));
         let job_id = {
             let mut runtime = Runtime::open(&directory).unwrap();
-            let (job, _, _) = runtime.start_render("preview").unwrap();
+            let (job, _, _) = runtime.start_render_range("preview", None).unwrap();
             assert_eq!(job.status, "queued");
             job.job_id
         };
@@ -7908,8 +5997,8 @@ mod tests {
             std::env::temp_dir().join(format!("cut-runtime-job-cancel-{}", unique_id()));
         let (cancelled_id, queued_id) = {
             let mut runtime = Runtime::open(&directory).unwrap();
-            let (cancelled, _, _) = runtime.start_render("preview").unwrap();
-            let (queued, _, _) = runtime.start_render("preview").unwrap();
+            let (cancelled, _, _) = runtime.start_render_range("preview", None).unwrap();
+            let (queued, _, _) = runtime.start_render_range("preview", None).unwrap();
             let cancel_path = render_cancel_path(&directory, &cancelled.job_id);
             let queued_path = render_cancel_path(&directory, &queued.job_id);
             let cancelled_job = runtime.cancel_render(&cancelled.job_id).unwrap();
@@ -7943,36 +6032,26 @@ mod tests {
     }
 
     #[test]
-    fn proposal_preview_reconstructs_before_and_after_without_mutating_state() {
+    fn proposal_documents_reconstruct_before_and_after_without_mutating_state() {
         let mut runtime = runtime();
         let staged = runtime
-            .stage_agent_proposal(
+            .stage_script_proposal(
                 "preview-proposal",
                 0,
-                &[json!({
-                    "idempotencyKey": "preview-proposal",
-                    "commands": [{"type":"add_marker","marker":{"id":"title","time":0}}]
-                })],
+                "marker add at=0f as=title",
+                Vec::new(),
             )
             .unwrap();
-        let proposal_id = match staged.pending_proposal.as_ref().unwrap() {
-            PendingProposal::Pending { proposal_id, .. } => proposal_id.clone(),
-            _ => panic!("expected pending proposal"),
-        };
+        let proposal_id = pending_id(&staged);
         let before_revision = runtime.snapshot().revision;
-        let (before, after) = runtime.proposal_preview(&proposal_id).unwrap();
-        assert!(!has_marker(&before, "title"));
-        assert!(has_marker(&after, "title"));
+        let (before, after) = runtime.proposal_documents(&proposal_id).unwrap();
+        assert!(!before.contains("marker title"));
+        assert!(after.contains("marker title"));
         assert_eq!(runtime.snapshot().revision, before_revision);
 
-        runtime
-            .apply(
-                json!({"type":"add_marker","marker":{"id":"other","time":0}}),
-                Some(0),
-            )
-            .unwrap();
+        edit(&mut runtime, "marker add at=0f as=other", 0).unwrap();
         assert_eq!(
-            runtime.proposal_preview(&proposal_id).unwrap_err().code,
+            runtime.proposal_documents(&proposal_id).unwrap_err().code,
             "PROPOSAL_STALE"
         );
     }
@@ -8042,51 +6121,6 @@ mod tests {
     }
 
     #[test]
-    fn v2_commands_with_kernel_equivalents_are_journaled_as_scripts() {
-        let (mut runtime, directory) = kernel_runtime("v2-split");
-        let state = runtime
-            .apply_request(
-                "ui",
-                "split",
-                json!({"type":"split_clip","clipId":"c1","atFrame":24,"newClipId":"c2"}),
-                0,
-            )
-            .unwrap();
-        assert_eq!(state.revision, 1);
-        // The linked sound split with the picture.
-        let document = runtime.document(false);
-        assert!(document.contains("clip c2 media=m1"), "{document}");
-        assert_eq!(document.matches("link=").count(), 4, "{document}");
-        assert_eq!(runtime.past[0].script, "split c1 at=00:00:01:00 as=c2\n");
-        let journal = fs::read_to_string(directory.join(JOURNAL_FILE)).unwrap();
-        assert!(journal.contains("split c1 at=00:00:01:00 as=c2"));
-        drop(runtime);
-        let _ = fs::remove_dir_all(directory);
-    }
-
-    #[test]
-    fn v2_commands_without_equivalents_journal_their_result_and_replay() {
-        let (mut runtime, directory) = kernel_runtime("v2-bridge");
-        runtime
-            .apply_request(
-                "ui",
-                "opacity",
-                json!({"type":"update_clip","clipId":"c1","patch":{"opacity":0.5}}),
-                0,
-            )
-            .unwrap();
-        let document = runtime.document(false);
-        assert!(document.contains("set opacity=0.5"), "{document}");
-        assert_eq!(runtime.past[0].script, "# v2 update_clip");
-        drop(runtime);
-        let reopened = Runtime::open(&directory).unwrap();
-        assert_eq!(reopened.document(false), document);
-        assert!(reopened.snapshot().can_undo);
-        drop(reopened);
-        let _ = fs::remove_dir_all(directory);
-    }
-
-    #[test]
     fn typed_ops_apply_atomically_and_replay_by_key() {
         let (mut runtime, directory) = kernel_runtime("ops");
         let ops: Vec<EditOp> = serde_json::from_value(json!([
@@ -8124,6 +6158,33 @@ mod tests {
     }
 
     #[test]
+    fn editor_ops_add_named_tracks_and_resize_the_sequence() {
+        let (mut runtime, directory) = kernel_runtime("editor-ops");
+        let ops: Vec<EditOp> = serde_json::from_value(json!([
+            {"op": "add-track", "kind": "audio", "name": "Music"},
+            {"op": "add-track", "kind": "video", "id": "titles"},
+            {"op": "set-sequence", "width": 1080, "height": 1920}
+        ]))
+        .unwrap();
+        runtime.apply_ops_request("ui", "ops", ops, 0).unwrap();
+        let document = runtime.document(false);
+        assert!(
+            document.contains("track A2 audio name=\"Music\""),
+            "{document}"
+        );
+        assert!(document.contains("track titles video"), "{document}");
+        assert!(document.contains("size=1080x1920"), "{document}");
+        let unknown: Vec<EditOp> =
+            serde_json::from_value(json!([{"op": "add-track", "kind": "title"}])).unwrap();
+        let error = runtime
+            .apply_ops_request("ui", "bad", unknown, 1)
+            .unwrap_err();
+        assert_eq!(error.code, "INVALID_EDIT");
+        drop(runtime);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
     fn script_proposals_show_a_document_diff_and_apply_on_acceptance() {
         let (mut runtime, directory) = kernel_runtime("script-proposal");
         let staged = runtime
@@ -8132,7 +6193,6 @@ mod tests {
         assert_eq!(staged.revision, 0);
         let pending = serde_json::to_value(staged.pending_proposal.unwrap()).unwrap();
         assert_eq!(pending["status"], "pending");
-        assert_eq!(pending["command"], Value::Null);
         assert_eq!(pending["script"], "trim c1 out -24f ripple\n");
         let diff = pending["documentDiff"].as_str().unwrap();
         assert!(
@@ -8147,18 +6207,7 @@ mod tests {
             ),
             "{diff}"
         );
-        assert!(pending["impacts"].as_array().is_some_and(|i| !i.is_empty()));
         let proposal_id = pending["proposalId"].as_str().unwrap().to_owned();
-        let crop = runtime
-            .accept_proposal_with_crop(
-                &proposal_id,
-                "ui",
-                "accept-crop",
-                0,
-                Some(json!({"clipId":"c1","crop":{"x":0,"y":0,"width":1,"height":1}})),
-            )
-            .unwrap_err();
-        assert_eq!(crop.code, "INVALID_REQUEST");
 
         drop(runtime);
         let mut runtime = Runtime::open(&directory).unwrap();
@@ -8191,7 +6240,7 @@ mod tests {
         assert_eq!(reopened.document(false), expected);
         let revision = reopened.snapshot().revision;
         for step in 0..(CHECKPOINT_INTERVAL + 2) {
-            reopened.undo(Some(revision + step)).unwrap();
+            undo(&mut reopened, revision + step).unwrap();
         }
         let undone = reopened.document(false);
         assert!(!undone.contains("marker mk"), "{undone}");

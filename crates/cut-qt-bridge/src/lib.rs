@@ -46,10 +46,6 @@ enum Command {
     Import {
         path: String,
     },
-    Apply {
-        command: Value,
-        revision: u64,
-    },
     /// Typed edits on the model, applied atomically.
     Edit {
         ops: Vec<cut_runtime::EditOp>,
@@ -65,8 +61,6 @@ enum Command {
         #[serde(rename = "proposalId")]
         proposal_id: String,
         revision: u64,
-        #[serde(rename = "cropOverride", default)]
-        crop_override: Option<Value>,
     },
     Reject {
         #[serde(rename = "proposalId")]
@@ -314,12 +308,9 @@ fn runtime_worker(
             Command::Refresh => active_client.get_state(),
             Command::Import { path } => active_client.get_state().and_then(|state| {
                 active_client
-                    .import_media_request("ui", &operation, &path, state.revision, None, None)
+                    .import_media_request("ui", &operation, &path, state.revision)
                     .map(|(state, _, _)| state)
             }),
-            Command::Apply { command, revision } => {
-                active_client.apply_request("ui", &operation, command, revision)
-            }
             Command::Edit { ops, revision } => {
                 active_client.apply_ops_request("ui", &operation, ops, revision)
             }
@@ -328,14 +319,7 @@ fn runtime_worker(
             Command::Accept {
                 proposal_id,
                 revision,
-                crop_override,
-            } => active_client.accept_proposal_with_crop(
-                &proposal_id,
-                "ui",
-                &operation,
-                revision,
-                crop_override,
-            ),
+            } => active_client.accept_proposal(&proposal_id, "ui", &operation, revision),
             Command::Reject {
                 proposal_id,
                 revision,
@@ -1130,12 +1114,10 @@ mod tests {
         StateSnapshot {
             document: document.to_owned(),
             timeline: json!({}),
-            project: json!({}),
             revision: 1,
             can_undo: true,
             can_redo: false,
             duration: 0.0,
-            sources: Vec::new(),
             pending_proposal,
             source_version: 3,
             projection_status: "current".into(),
@@ -1168,15 +1150,11 @@ mod tests {
         let proposal = PendingProposal::Pending {
             proposal_id: "proposal-1".into(),
             base_revision: 1,
-            command: json!({"type":"set_metadata","patch":{"name":"Draft"}}),
-            diff: Vec::new(),
-            diff_truncated: false,
+            script: "track add T1 video\n".into(),
+            document_diff: "+  track T1 video\n".into(),
             freshness: ProposalFreshness::Current,
-            impacts: None,
             observation: None,
             observations: None,
-            script: None,
-            document_diff: None,
         };
         let proposal_for_repeat = proposal.clone();
         publish(

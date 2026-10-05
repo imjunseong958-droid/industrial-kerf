@@ -2197,18 +2197,6 @@ fn collect_inline_images(value: &mut Value, images: &mut Vec<Value>) {
     }
 }
 
-/// Helper for tools that need to stage an agent proposal through cutd.
-pub fn stage_proposal(
-    runtime: &cut_runtime::RuntimeClient,
-    request_key: &str,
-    base_revision: u64,
-    transactions: Vec<Value>,
-) -> Result<cut_runtime::StateSnapshot, AgentError> {
-    runtime
-        .stage_agent_proposal(request_key, base_revision, transactions)
-        .map_err(|error| AgentError::Tool(format!("{}: {}", error.code, error.message)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

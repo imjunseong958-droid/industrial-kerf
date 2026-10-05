@@ -99,11 +99,10 @@ fn proposal_status(proposal: Option<&PendingProposal>) -> Option<String> {
             } else {
                 ""
             };
-            let diff = document_diff.as_deref().unwrap_or_default();
             format!(
                 "Proposal {proposal_id} (from revision {base_revision}) is waiting for the \
                  user's review.{stale}\n\n```diff\n{}```\n",
-                bounded_lines(diff, MAX_CONTEXT_DIFF_BYTES, "… diff continues")
+                bounded_lines(document_diff, MAX_CONTEXT_DIFF_BYTES, "… diff continues")
             )
         }
         PendingProposal::Accepted {
@@ -741,7 +740,7 @@ impl CutMcpRouter {
             "proposal": proposal_id,
             "baseRevision": revision,
             "status": "waiting for the user's review",
-            "script": script.unwrap_or(input.script),
+            "script": script,
             "diff": document_diff,
             "check": check,
             "preview": preview,
@@ -1050,15 +1049,11 @@ sequence s1 rate=24 size=1920x1080
         let pending = PendingProposal::Pending {
             proposal_id: "p1".into(),
             base_revision: 3,
-            command: Value::Null,
-            diff: Vec::new(),
-            diff_truncated: false,
+            script: "trim c1 out -6f".into(),
+            document_diff: "-a\n+b\n".into(),
             freshness: ProposalFreshness::Stale,
-            impacts: None,
             observation: None,
             observations: None,
-            script: Some("trim c1 out -6f".into()),
-            document_diff: Some("-a\n+b\n".into()),
         };
         let text = proposal_status(Some(&pending)).unwrap();
         assert!(text.contains("Proposal p1 (from revision 3)"));

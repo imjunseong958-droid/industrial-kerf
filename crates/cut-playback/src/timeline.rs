@@ -1,6 +1,5 @@
 use crate::PlaybackError;
-use cut_core::check::FindingSeverity;
-use cut_core::preview::{PreviewMode, PreviewPlan, PreviewRange, PreviewReason};
+use cut_core::preview::{FindingSeverity, PreviewMode, PreviewPlan, PreviewRange, PreviewReason};
 use cut_core::program::{compile_program, program_sequence, ProgramError, ProgramOptions};
 use cut_model::{Catalog, Clip, Content, Domain, Param, Project, Sequence, Time, TrackKind, Value};
 use std::collections::HashMap;

@@ -539,18 +539,10 @@ fn import_media(
     }
     let router = open_router(directory, cutd)?;
     let snapshot = router.runtime().get_state().map_err(runtime_error)?;
-    let metadata = serde_json::to_value(cut_engine::info(&path.to_string_lossy())?)?;
     let key = operation_key("cli-import");
     router
         .runtime()
-        .import_media_request(
-            "agent",
-            &key,
-            &path.to_string_lossy(),
-            snapshot.revision,
-            Some(metadata),
-            None,
-        )
+        .import_media_request("agent", &key, &path.to_string_lossy(), snapshot.revision)
         .map_err(runtime_error)?;
     Ok(path)
 }
@@ -558,10 +550,10 @@ fn import_media(
 fn print_snapshot(runtime: &RuntimeClient, label: &str) {
     match runtime.get_state() {
         Ok(snapshot) => println!(
-            "{label}: revision {}, duration {:.1}s, {} source(s)",
+            "{label}: revision {}, duration {:.1}s, {} media",
             snapshot.revision,
             snapshot.duration,
-            snapshot.sources.len()
+            snapshot.timeline["sources"].as_array().map_or(0, Vec::len)
         ),
         Err(error) => eprintln!("{label}: {}: {}", error.code, error.message),
     }

@@ -521,7 +521,7 @@ impl<'a> Graph<'a> {
                 };
                 let out = self.label("caption");
                 self.parts
-                    .push(format!("[{current}]{}[{out}]", captions_filter(&cue, None)));
+                    .push(format!("[{current}]{}[{out}]", captions_filter(&cue)));
                 current = out;
             }
         }

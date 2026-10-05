@@ -1,6 +1,6 @@
 # ADR 0006: Exact-time kernel with a text-canonical project
 
-Status: accepted (phases 1–4 implemented; phase 5 in progress)
+Status: accepted (implemented)
 Date: 2026-10-04
 
 ## Context
@@ -57,7 +57,8 @@ semantics, and a representation people and agents can both read.
 
 ## Roadmap
 
-Each phase is its own pull request; the old stack keeps working until phase 5.
+Each phase is its own pull request; the old stack kept working until phase 5.
+All five phases are complete.
 
 1. Kernel: `cut-model`, `cut-lang`, and the v2 import (this ADR).
 2. `cutd` on the kernel: store `.cut` documents, journal operation scripts as
@@ -70,9 +71,11 @@ Each phase is its own pull request; the old stack keeps working until phase 5.
    guidance only.
 4. Render compiler, playback, and the Qt bridge read `cut-model`.
 5. Delete `cut-domain`, `cut-core` compile, the v2 export, and the old
-   harness. The old harness is gone: the v2 MCP catalog and its
-   `core`/`full` profiles, result handles, the legacy command lowering, and
-   the composition tools (ADR 0005). The rest follows.
+   harness: the v2 MCP catalog and its `core`/`full` profiles, result
+   handles, the legacy command lowering, the composition tools (ADR 0005),
+   the v1/v2 compilers and `render_v2`, v2 commands in `cutd`, and proposal
+   field diffs. The one-time import reads v1 and v2 files itself, and the
+   OpenTimelineIO bridge exchanges a timeline derived from the model.
 
 ## Consequences
 
@@ -104,9 +107,11 @@ Each phase is its own pull request; the old stack keeps working until phase 5.
   included, and `preview_plan` asks for a rendered preview when it would
   differ. The Qt app reads a timeline view of the model and edits with typed
   operations.
-- Until phase 5 completes, `cutd` still derives a v2 export for v2 commands
-  and proposal field diffs. v2 commands become kernel operations
-  where one exists (trims, splits, moves, deletes, media and clip insertion,
-  markers, tracks). The rest run on the v2 export and are imported back with
-  the model as a hint; a command whose effect the model cannot hold is
-  refused with `NO_EQUIVALENT`.
+- `cutd` is kernel-only. Edits are scripts or typed operations and are
+  journaled as scripts; the editor's typed operations include track
+  creation and sequence size. Media import adds the media and cuts it in at
+  the end of the program with its sound linked. A proposal is a script, the
+  diff of the document it produces, and a preview. State written by an
+  earlier `cutd` is moved aside and the project reopened from `project.cut`.
+- `cut-domain` is gone. The one-time import keeps a private, read-only reader
+  of the v1 and v2 formats, and nothing else speaks them.

@@ -13,8 +13,6 @@ path = "src/main.rs"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 cut-agent = { path = "../cut-agent" }
-cut-domain = { path = "../cut-domain" }
-cut-engine = { path = "../cut-engine" }
 cut-fetcher = { path = "../cut-fetcher" }
 cut-mcp = { path = "../cut-mcp" }
 cut-runtime = { path = "../cut-runtime" }

@@ -498,8 +498,6 @@ dependencies = [
  "anyhow",
  "clap",
  "cut-agent",
- "cut-domain",
- "cut-engine",
  "cut-fetcher",
  "cut-mcp",
  "cut-runtime",
@@ -513,20 +511,8 @@ version = "0.1.0"
 dependencies = [
  "cut-lang",
  "cut-model",
- "regex",
  "serde",
- "serde_json",
- "tempfile",
  "thiserror 2.0.20",
-]
-
-[[package]]
-name = "cut-domain"
-version = "0.1.0"
-dependencies = [
- "cut-core",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -538,7 +524,6 @@ dependencies = [
  "clap",
  "criterion",
  "cut-core",
- "cut-domain",
  "cut-lang",
  "cut-model",
  "cut-playback",
@@ -561,7 +546,6 @@ version = "0.1.0"
 name = "cut-interchange"
 version = "0.1.0"
 dependencies = [
- "cut-domain",
  "cut-lang",
  "cut-model",
  "serde",
@@ -628,7 +612,6 @@ dependencies = [
 name = "cut-runtime"
 version = "0.1.0"
 dependencies = [
- "cut-domain",
  "cut-engine",
  "cut-interchange",
  "cut-lang",
