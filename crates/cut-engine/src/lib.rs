@@ -3,7 +3,7 @@
 // Timeline compilation is kept in the lightweight `cut-core` crate. Re-export
 // its modules from the engine crate so Rust consumers have one coherent API
 // while media/vision changes do not rebuild the compiler.
-pub use cut_core::{check, compile, compile_v1, overlay};
+pub use cut_core::{check, compile, compile_v1, overlay, program};
 pub mod derivatives;
 pub mod encoder;
 pub mod enrich;

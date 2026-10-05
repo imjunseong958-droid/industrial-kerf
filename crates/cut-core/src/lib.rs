@@ -11,6 +11,7 @@ pub mod compile_v1;
 pub mod evaluation;
 pub mod overlay;
 pub mod preview;
+pub mod program;
 pub mod time;
 
 pub use time::{FrameGrid, FrameIndex};

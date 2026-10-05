@@ -17,6 +17,7 @@ path = "src/bin/cut-engine.rs"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 cut-core = { path = "../cut-core" }
+cut-model = { path = "../cut-model" }
 hex = "0.4"
 mimalloc = { version = "0.1", default-features = false }
 regex = "1"
@@ -27,6 +28,7 @@ sha2 = "0.10"
 thiserror = "2"
 
 [dev-dependencies]
+cut-lang = { path = "../cut-lang" }
 approx = "0.5"
 criterion = "0.5"
 cut-domain = { path = "../cut-domain" }

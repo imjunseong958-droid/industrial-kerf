@@ -5,7 +5,6 @@
 //! while still exercising real 4K, VFR, audio, and long-GOP bitstreams.
 
 use cut_playback::{ClockSource, PlaybackConfig, PlaybackEvent, PlaybackSession, PlaybackTimeline};
-use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
@@ -63,52 +62,20 @@ fn media_project(
     width: u32,
     height: u32,
     fps: f64,
-) -> serde_json::Value {
-    json!({
-        "version": 2,
-        "name": "Native playback release gate",
-        "fps": fps,
-        "width": width,
-        "height": height,
-        "sources": [{
-            "id": "source-a",
-            "path": path,
-            "duration": duration,
-            "width": width,
-            "height": height,
-            "hasAudio": true
-        }],
-        "tracks": [
-            {
-                "id": "video-1",
-                "type": "video",
-                "clips": [{
-                    "id": "clip-a",
-                    "sourceId": "source-a",
-                    "in": 0,
-                    "out": duration,
-                    "timelineStart": 0
-                }]
-            },
-            {
-                "id": "audio-1",
-                "type": "audio",
-                "muted": false,
-                "clips": [{
-                    "id": "clip-audio",
-                    "sourceId": "source-a",
-                    "in": 0,
-                    "out": duration,
-                    "timelineStart": 0
-                }]
-            }
-        ],
-        "overlays": [],
-        "gaps": [],
-        "transitions": [],
-        "effects": [],
-        "markers": []
-    })
+) -> cut_model::Project {
+    let text = format!(
+        "cut 1\nproject name=\"Native playback release gate\"\n\
+         media source-a path=\"{}\" rate={fps} dur={duration}s video={width}x{height} audio=2ch@48000\n\
+         sequence s1 rate={fps} size={width}x{height} audio=48000\n\
+         \x20 track video-1 video\n\
+         \x20   clip clip-a media=source-a src=0f at=0f dur={duration}s\n\
+         \x20 track audio-1 audio\n\
+         \x20   clip clip-audio media=source-a src=0f at=0f dur={duration}s\n",
+        path.display()
+    );
+    cut_lang::parse_document(&text, cut_model::Catalog::builtin())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project
 }
 
 fn wait_for_frame(session: &PlaybackSession, timeout: Duration) -> cut_playback::PlaybackFrame {
@@ -168,8 +135,8 @@ fn release_gate_decodes_real_4k_media() {
         ],
     );
     let project = media_project(&source, 0.25, 3840, 2160, 24.0);
-    let session = PlaybackSession::open_json(
-        &project,
+    let session = PlaybackSession::open(
+        project.clone(),
         PlaybackConfig::default()
             .with_ffmpeg_binary(&ffmpeg)
             .with_audio_enabled(false)
@@ -277,8 +244,8 @@ fn release_gate_accepts_vfr_and_long_gop_seek() {
         ],
     );
     let project = media_project(&long_gop, 2.0, 320, 180, 30.0);
-    let session = PlaybackSession::open_json(
-        &project,
+    let session = PlaybackSession::open(
+        project.clone(),
         PlaybackConfig::default()
             .with_ffmpeg_binary(&ffmpeg)
             .with_audio_enabled(false)
@@ -335,17 +302,14 @@ fn release_gate_keeps_audio_clock_and_video_frames_on_one_timeline() {
         ],
     );
     let project = media_project(&source, 1.2, 320, 180, 30.0);
-    let timeline = PlaybackTimeline::from_project(
-        &cut_domain::parse_project(&project).expect("valid sync project"),
-    )
-    .expect("build sync timeline");
+    let timeline = PlaybackTimeline::from_project(&project).expect("build sync timeline");
     assert!(
         !timeline.audio_at(0.25).is_empty(),
         "audio clip was not mapped"
     );
 
-    let session = PlaybackSession::open_json(
-        &project,
+    let session = PlaybackSession::open(
+        project.clone(),
         PlaybackConfig::default()
             .with_ffmpeg_binary(&ffmpeg)
             .with_frame_size(320, 180)
@@ -380,15 +344,13 @@ fn release_gate_keeps_audio_clock_and_video_frames_on_one_timeline() {
     ));
 
     let muted_project = {
-        let mut value = project.clone();
-        value["tracks"][0]["muted"] = json!(true);
-        value["tracks"][1]["muted"] = json!(true);
-        value
+        let mut project = project.clone();
+        for track in &mut project.sequences[0].tracks {
+            track.muted = true;
+        }
+        project
     };
-    let muted = PlaybackTimeline::from_project(
-        &cut_domain::parse_project(&muted_project).expect("valid muted project"),
-    )
-    .expect("build muted timeline");
+    let muted = PlaybackTimeline::from_project(&muted_project).expect("build muted timeline");
     assert!(
         muted.audio_at(0.25).is_empty(),
         "muted audio track remained audible"

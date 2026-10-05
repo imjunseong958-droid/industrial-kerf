@@ -6,7 +6,7 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use cut_engine::compile::{compile_filter_graph_v2, CompileV2Options};
 use cut_engine::ffmpeg::resolve_ffmpeg_bin;
-use cut_engine::render::{render_v2_range, RenderV2Options};
+use cut_engine::render::{render_program, RenderOptions};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -176,17 +176,19 @@ fn bench_ffmpeg_spawn(c: &mut Criterion) {
     });
 }
 
-fn range_project(source: &Path) -> Value {
-    project_with_clips(
-        source,
-        vec![json!({
-            "id": "full",
-            "sourceId": "a",
-            "in": 0,
-            "out": 610,
-            "timelineStart": 0
-        })],
-    )
+/// One 320x180 clip of `seconds` at 30 fps, without sound.
+fn kernel_project(source: &Path, seconds: u32) -> cut_model::Project {
+    let text = format!(
+        "cut 1\nproject name=\"bench\"\n\
+         media a path=\"{}\" rate=30 dur={seconds}s video=320x180\n\
+         sequence s1 rate=30 size=320x180 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip full media=a src=0f at=0f dur={seconds}s\n",
+        source.display()
+    );
+    cut_lang::parse_document(&text, cut_model::Catalog::builtin())
+        .expect("bench project")
+        .project
 }
 
 fn bench_range_render(c: &mut Criterion) {
@@ -195,8 +197,8 @@ fn bench_range_render(c: &mut Criterion) {
         return;
     }
     let source = long_source();
-    let project = range_project(&source);
-    let mut group = c.benchmark_group("render_v2_range_5s");
+    let project = kernel_project(&source, 610);
+    let mut group = c.benchmark_group("render_program_range_5s");
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
     group.measurement_time(Duration::from_secs(20));
@@ -207,14 +209,17 @@ fn bench_range_render(c: &mut Criterion) {
                 for _ in 0..iters {
                     let output = tempfile::NamedTempFile::new().expect("output");
                     let path = output.path().with_extension("mp4");
-                    let opts = RenderV2Options {
+                    let opts = RenderOptions {
                         output: path.to_string_lossy().into_owned(),
                         draft: true,
                         force_software: true,
-                        ..RenderV2Options::default()
+                        ..RenderOptions::default()
                     };
+                    let rate = cut_model::Rate::FPS_30;
+                    let from = rate.time_of((start * 30.0) as i64);
+                    let range = Some((from, from + rate.time_of(150)));
                     let started = Instant::now();
-                    render_v2_range(&project, &opts, start, 5.0, None::<fn(f64)>).expect("render");
+                    render_program(&project, None, range, &opts, None::<fn(f64)>).expect("render");
                     total += started.elapsed();
                     let _ = std::fs::remove_file(&path);
                 }
@@ -249,39 +254,15 @@ fn bench_seek_ttf(c: &mut Criterion) {
         return;
     }
     let source = short_source();
-    let project = json!({
-        "version": 2,
-        "fps": 30,
-        "width": 320,
-        "height": 180,
-        "sources": [{
-            "id": "a",
-            "path": source,
-            "duration": 2.0,
-            "width": 320,
-            "height": 180,
-            "hasAudio": false
-        }],
-        "tracks": [{
-            "id": "video",
-            "type": "video",
-            "clips": [{
-                "id": "clip-a",
-                "sourceId": "a",
-                "in": 0,
-                "out": 2,
-                "timelineStart": 0
-            }]
-        }]
-    });
+    let project = kernel_project(&source, 2);
     let mut group = c.benchmark_group("seek_ttf");
     group.sample_size(20);
     group.bench_function("large_1_25", |bencher| {
         bencher.iter_custom(|iters| {
             let mut total = Duration::ZERO;
             for _ in 0..iters {
-                let session = cut_playback::PlaybackSession::open_json(
-                    &project,
+                let session = cut_playback::PlaybackSession::open(
+                    project.clone(),
                     cut_playback::PlaybackConfig::default()
                         .with_audio_enabled(false)
                         .with_frame_size(320, 180)
@@ -301,8 +282,8 @@ fn bench_seek_ttf(c: &mut Criterion) {
         bencher.iter_custom(|iters| {
             let mut total = Duration::ZERO;
             for _ in 0..iters {
-                let session = cut_playback::PlaybackSession::open_json(
-                    &project,
+                let session = cut_playback::PlaybackSession::open(
+                    project.clone(),
                     cut_playback::PlaybackConfig::default()
                         .with_audio_enabled(false)
                         .with_frame_size(320, 180)

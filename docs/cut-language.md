@@ -94,7 +94,8 @@ arrive as scripts (`apply_script`), typed operations from the editor
 clients. Each change is journaled as the script it ran, and undo restores
 the project as it was. Agent edits stay pending proposals that show the
 script and a diff of the document; `get_document` returns the document,
-optionally annotated.
+optionally annotated. Render jobs and proposal previews hand renderers the
+document with media paths resolved against the project.
 
 ## Importing v2 projects
 
