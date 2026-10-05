@@ -429,10 +429,7 @@ impl AudioWorker {
             .clips()
             .iter()
             .filter(|clip| {
-                matches!(
-                    clip.track_kind,
-                    cut_domain::TrackType::Audio | cut_domain::TrackType::Video
-                ) && clip.timeline_start > position
+                clip.track_kind == crate::ClipKind::Audio && clip.timeline_start > position
             })
             .map(|clip| clip.timeline_start)
             .min_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal))

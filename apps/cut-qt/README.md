@@ -24,7 +24,10 @@ On macOS the default bridge path is
 `-DCUT_BRIDGE_LIBRARY=$PWD/target/debug/libcut_qt_bridge.so` when configuring.
 The project directory is created by the runtime when it does not already
 exist. Importing media, timeline edits, undo/redo, proposal approval, preview
-seeking, and export are sent as bounded asynchronous bridge commands.
+seeking, and export are sent as bounded asynchronous bridge commands. The
+timeline draws the `timeline` view of the model that each snapshot carries,
+and timeline and inspector edits go to `cutd` as typed operations counted in
+frames of the sequence.
 
 The timeline supports click-to-seek, clip selection, drag-to-move, edge
 trimming, split-at-playhead, and Delete. Inspector values commit on focus loss.

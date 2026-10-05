@@ -511,6 +511,8 @@ dependencies = [
 name = "cut-core"
 version = "0.1.0"
 dependencies = [
+ "cut-lang",
+ "cut-model",
  "regex",
  "serde",
  "serde_json",
@@ -537,6 +539,8 @@ dependencies = [
  "criterion",
  "cut-core",
  "cut-domain",
+ "cut-lang",
+ "cut-model",
  "cut-playback",
  "hex",
  "mimalloc",
@@ -602,7 +606,8 @@ version = "0.1.0"
 dependencies = [
  "cpal",
  "cut-core",
- "cut-domain",
+ "cut-lang",
+ "cut-model",
  "ffmpeg-next",
  "serde_json",
  "tempfile",
@@ -616,6 +621,7 @@ dependencies = [
  "cut-agent",
  "cut-core",
  "cut-mcp",
+ "cut-model",
  "cut-playback",
  "cut-runtime",
  "serde",

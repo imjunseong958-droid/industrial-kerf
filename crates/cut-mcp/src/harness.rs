@@ -7,10 +7,12 @@
 //! before/after preview of the range it changed.
 
 use super::{
-    add_inline_base64, engine_error, operation_key, resolve_project_source_path, CaptureOptions,
+    add_inline_base64, engine_error, operation_key, resolve_project_source_path, CapturePayload,
     CutMcpRouter, McpError, ToolAnnotations,
 };
-use cut_engine::derivatives::DerivativeCache;
+use cut_engine::derivatives::{DerivativeCache, SourceIdentity};
+use cut_engine::program::{compile_program, ProgramOptions};
+use cut_engine::render::{render_program, RenderOptions};
 use cut_lang::{apply_script, parse_document, print_document, reference, Clock, PrintOptions};
 use cut_model::{Catalog, Content, Media, Project, Sequence, Time};
 use cut_runtime::{PendingProposal, ProposalFreshness, RuntimeClient, RuntimeError};
@@ -541,9 +543,9 @@ impl CutMcpRouter {
     ) -> Result<Value, McpError> {
         let sequence = program(project)?;
         let clock = Clock::of_sequence(sequence);
-        let frame = sequence.rate.frame_duration().seconds();
         let duration = sequence.duration();
-        let snapshot = self.state()?;
+        let mut resolved = project.clone();
+        cut_runtime::resolve_media_paths(&mut resolved, &self.dir);
         let mut frames = Vec::new();
         for text in at {
             let time = position(&clock, text)?;
@@ -553,23 +555,127 @@ impl CutMcpRouter {
                     format!("`{text}` is outside sequence `{}`", sequence.id),
                 ));
             }
-            let start = time.seconds();
-            let options = CaptureOptions {
-                start: Some(start),
-                end: Some((start + frame).min(duration.seconds())),
-                times: Some(vec![start]),
-                max_width: Some(width),
-                format: Some("frames".into()),
-                draft: Some(true),
-                ..CaptureOptions::default()
-            };
+            let end = (time + sequence.rate.frame_duration()).min(duration);
             let capture =
-                self.capture_project(&snapshot.project, revision, &options, "look", "look")?;
+                self.capture_program(&resolved, time, end, &[time.seconds()], width, 1, "look")?;
             let mut value = json!({"at": text, "path": capture["frames"][0]["path"]});
             add_inline_base64(&mut value, "path", "imageBase64")?;
             frames.push(value);
         }
         Ok(json!({"sequence": sequence.id.to_string(), "revision": revision, "frames": frames}))
+    }
+
+    /// Render `[start, end)` of the program as a draft and extract frames at
+    /// `times` (program seconds) with a contact sheet of them. `project`
+    /// has its media paths resolved. Results are cached by document, media
+    /// identity, and options.
+    #[allow(clippy::too_many_arguments)]
+    fn capture_program(
+        &self,
+        project: &Project,
+        start: Time,
+        end: Time,
+        times: &[f64],
+        width: u32,
+        columns: usize,
+        kind: &str,
+    ) -> Result<Value, McpError> {
+        let range = Some((start, end));
+        compile_program(
+            project,
+            catalog(),
+            &ProgramOptions {
+                range,
+                ..ProgramOptions::default()
+            },
+        )
+        .map_err(|error| McpError::new("UNRENDERABLE", error.to_string()))?;
+        let document = print_document(project, catalog(), PrintOptions::default());
+        let identities = used_media(project)
+            .map(|media| {
+                SourceIdentity::from_path(std::path::Path::new(&media.path)).map_err(|error| {
+                    McpError::new(
+                        "MEDIA_UNAVAILABLE",
+                        format!("media `{}` cannot be read: {error}", media.id),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let options = json!({
+            "start": start.seconds(),
+            "end": end.seconds(),
+            "times": times,
+            "maxWidth": width,
+            "columns": columns,
+        });
+        let entry = DerivativeCache::new(&self.dir)
+            .project_entry(
+                &json!(document),
+                &identities,
+                &format!("program-{kind}"),
+                &options,
+            )
+            .map_err(engine_error)?;
+        let frame_names: Vec<String> = (0..times.len())
+            .map(|index| format!("frame-{index:03}.png"))
+            .collect();
+        let mut required = vec!["capture.mp4", "capture.png", "capture.json"];
+        required.extend(frame_names.iter().map(String::as_str));
+        let cached = entry.is_complete(&required);
+        let payload = if cached {
+            entry
+                .read_json::<CapturePayload>("capture.json")
+                .map_err(engine_error)?
+        } else {
+            let output = entry.path("capture.mp4");
+            render_program::<fn(f64)>(
+                project,
+                None,
+                range,
+                &RenderOptions {
+                    output: output.to_string_lossy().into_owned(),
+                    draft: true,
+                    force_software: true,
+                    ..RenderOptions::default()
+                },
+                None,
+            )
+            .map_err(engine_error)?;
+            let relative: Vec<f64> = times.iter().map(|time| time - start.seconds()).collect();
+            let frames = cut_engine::probe::extract_exact_frames(
+                &output.to_string_lossy(),
+                &relative,
+                &entry.directory,
+                width,
+            )
+            .map_err(engine_error)?;
+            let paths: Vec<String> = frames.iter().map(|frame| frame.path.clone()).collect();
+            cut_engine::probe::create_contact_sheet(&paths, &entry.path("capture.png"), columns)
+                .map_err(engine_error)?;
+            let payload = CapturePayload {
+                start: start.seconds(),
+                end: end.seconds(),
+                duration: (end - start).seconds(),
+                path: entry.path("capture.png").to_string_lossy().into_owned(),
+                media_type: "image/png".into(),
+                frames: frames
+                    .into_iter()
+                    .zip(times)
+                    .map(|(frame, time)| {
+                        json!({"time": time, "path": frame.path, "mediaType": frame.media_type})
+                    })
+                    .collect(),
+            };
+            entry
+                .write_json("capture.json", &payload)
+                .map_err(engine_error)?;
+            entry.mark_complete(&required).map_err(engine_error)?;
+            payload
+        };
+        let mut result = serde_json::to_value(&payload)
+            .map_err(|error| McpError::new("SERIALIZATION_FAILED", error.to_string()))?;
+        result["cached"] = json!(cached);
+        Ok(result)
     }
 
     pub(super) fn edit(&self, arguments: Value) -> Result<Value, McpError> {
@@ -622,12 +728,13 @@ impl CutMcpRouter {
                 "the runtime did not keep the proposal",
             ));
         };
-        let (before_view, after_view) = self.runtime.proposal_preview(&proposal_id)?;
-        let report = cut_engine::check::check_project(&after_view, Some(&self.dir));
+        let (before_document, after_document) = self.runtime.proposal_documents(&proposal_id)?;
+        let (before_program, after_program) = (parse(&before_document)?, parse(&after_document)?);
+        let check = check(&after_program);
         let preview = match changed_range(&before, &applied.project) {
             None => json!({"unavailable": "the edit changes nothing on the sequence"}),
             Some((sequence, from, to)) => self
-                .preview(&sequence, from, to, &before_view, &after_view, revision)
+                .preview(&sequence, from, to, &before_program, &after_program)
                 .unwrap_or_else(|error| json!({"unavailable": error.message})),
         };
         Ok(json!({
@@ -636,45 +743,47 @@ impl CutMcpRouter {
             "status": "waiting for the user's review",
             "script": script.unwrap_or(input.script),
             "diff": document_diff,
-            "check": {"valid": report.is_valid(), "findings": report.findings},
+            "check": check,
             "preview": preview,
         }))
     }
 
     /// Contact sheets of the changed range before and after the edit.
+    /// `before` and `after` have their media paths resolved.
     fn preview(
         &self,
         sequence: &Sequence,
         from: Time,
         to: Time,
-        before: &Value,
-        after: &Value,
-        revision: u64,
+        before: &Project,
+        after: &Project,
     ) -> Result<Value, McpError> {
         let clock = Clock::of_sequence(sequence);
-        let start = from.seconds();
-        let end = to.seconds().min(start + MAX_PREVIEW_SECONDS);
+        let longest = Time::from_seconds(MAX_PREVIEW_SECONDS).unwrap_or(to);
+        let end = to.min(from + longest);
         let mut result = json!({
             "from": clock.print_position(from),
-            "to": print_seconds(&clock, end),
+            "to": clock.print_position(end),
         });
         for (side, project) in [("before", before), ("after", after)] {
-            let end = end.min(super::project_duration_from_value(project));
-            if end <= start {
+            let end = end.min(program(project)?.duration());
+            if end <= from {
                 result[side] = json!({"empty": true});
                 continue;
             }
-            let options = CaptureOptions {
-                start: Some(start),
-                end: Some(end),
-                count: Some(PREVIEW_FRAMES),
-                columns: Some(PREVIEW_FRAMES),
-                max_width: Some(PREVIEW_WIDTH),
-                format: Some("filmstrip".into()),
-                draft: Some(true),
-                ..CaptureOptions::default()
-            };
-            let capture = self.capture_project(project, revision, &options, side, "edit")?;
+            let span = (end - from).seconds();
+            let times: Vec<f64> = (0..PREVIEW_FRAMES)
+                .map(|index| from.seconds() + span * (index as f64 + 0.5) / PREVIEW_FRAMES as f64)
+                .collect();
+            let capture = self.capture_program(
+                project,
+                from,
+                end,
+                &times,
+                PREVIEW_WIDTH,
+                PREVIEW_FRAMES,
+                side,
+            )?;
             let mut sheet = json!({"path": capture["path"]});
             add_inline_base64(&mut sheet, "path", "imageBase64")?;
             result[side] = sheet;
@@ -741,6 +850,56 @@ impl CutMcpRouter {
             "revision": started["revision"],
         }))
     }
+}
+
+/// Media that some clip uses.
+fn used_media(project: &Project) -> impl Iterator<Item = &Media> {
+    project.media.iter().filter(|media| {
+        project.sequences.iter().any(|sequence| {
+            sequence.tracks.iter().any(|track| {
+                track.clips.iter().any(|clip| {
+                    matches!(&clip.content, Content::Media { media: id, .. } if *id == media.id)
+                })
+            })
+        })
+    })
+}
+
+/// What stands between a project and its render: media that cannot be
+/// read, features the renderer cannot lower, and the model's warnings.
+/// `project` has its media paths resolved.
+fn check(project: &Project) -> Value {
+    let mut findings = Vec::new();
+    for media in used_media(project) {
+        if !std::path::Path::new(&media.path).is_file() {
+            findings.push(json!({
+                "severity": "error",
+                "code": "missing_media",
+                "entity": media.id.as_str(),
+                "message": format!("media `{}` is missing: {}", media.id, media.path),
+            }));
+        }
+    }
+    if let Err(error) = compile_program(project, catalog(), &ProgramOptions::default()) {
+        findings.push(json!({
+            "severity": "error",
+            "code": "unrenderable",
+            "entity": error.entity(),
+            "message": error.to_string(),
+        }));
+    }
+    for warning in cut_model::validate(project, catalog()) {
+        findings.push(json!({
+            "severity": if warning.is_error() { "error" } else { "warning" },
+            "code": warning.code,
+            "entity": warning.entity.as_ref().map(|id| id.as_str()),
+            "message": warning.message,
+        }));
+    }
+    let valid = !findings
+        .iter()
+        .any(|finding| finding["severity"] == "error");
+    json!({"valid": valid, "findings": findings})
 }
 
 /// The span of the program that differs between two projects: every clip

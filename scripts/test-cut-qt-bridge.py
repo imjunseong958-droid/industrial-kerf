@@ -144,8 +144,10 @@ with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as tempo
         send({'type': 'import', 'path': str(media)})
         imported = state()
         assert imported['revision'] > initial['revision']
-        clip = imported['project']['tracks'][0]['clips'][0]
-        send({'type': 'apply', 'revision': imported['revision'], 'command': {'type': 'trim_clip', 'clipId': clip['id'], 'edge': 'trailing', 'timelineFrame': 90}})
+        clip = imported['timeline']['tracks'][0]['clips'][0]
+        end_frame = clip['startFrame'] + clip['durationFrames']
+        target_frame = round(3 * imported['timeline']['fps'])
+        send({'type': 'edit', 'revision': imported['revision'], 'ops': [{'op': 'trim', 'clip': clip['id'], 'edge': 'out', 'frames': target_frame - end_frame}]})
         trimmed = state()
         assert abs(trimmed['duration'] - 3) < .05
         send({'type': 'undo', 'revision': trimmed['revision']})
@@ -162,7 +164,7 @@ with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as tempo
         })
         assert external['ok'], external
         external_state = wait(lambda event: event['type'] == 'state' and event['snapshot']['revision'] == external['state']['revision'])['snapshot']
-        assert [marker.get('label') for marker in external_state['project']['markers']] == ['external'], external_state['project']['markers']
+        assert [marker.get('label') for marker in external_state['timeline']['markers']] == ['external'], external_state['timeline']['markers']
 
         daemon.terminate()
         daemon.wait(timeout=5)
@@ -194,7 +196,7 @@ with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as tempo
         assert proposal_id, proposal
         send({'type': 'accept', 'proposalId': proposal_id, 'revision': proposal_state['revision']})
         accepted = state()
-        assert sorted(marker.get('label') for marker in accepted['project']['markers']) == ['Agent reviewed', 'external'], accepted['project']['markers']
+        assert sorted(marker.get('label') for marker in accepted['timeline']['markers']) == ['Agent reviewed', 'external'], accepted['timeline']['markers']
         send({'type': 'agent', 'text': 'Keep the previous change.'})
         wait(lambda event: event['type'] == 'agent_busy' and event['busy'] is False)
         assert len(requests) == 3
@@ -203,7 +205,7 @@ with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as tempo
         send({'type': 'export', 'quality': 'preview'})
         exported = wait(lambda event: event['type'] == 'export' and event['status'] == 'completed', 60)
         assert Path(exported['path']).is_file()
-        send({'type': 'apply', 'revision': refreshed['revision'], 'command': {'type': 'update_clip', 'clipId': clip['id'], 'patch': {'opacity': 0.5}}})
+        send({'type': 'edit', 'revision': refreshed['revision'], 'ops': [{'op': 'set', 'clip': clip['id'], 'props': {'opacity': 0.5}}]})
         state()
         wait(lambda event: event['type'] == 'preview' and event['status'] == 'required')
         send({'type': 'preview'})

@@ -1,5 +1,4 @@
 use cut_playback::{PlaybackConfig, PlaybackEvent, PlaybackSession};
-use serde_json::json;
 use std::process::Command;
 use std::time::{Duration, Instant};
 use tempfile::tempdir;
@@ -20,6 +19,21 @@ fn ffmpeg_available(binary: &str) -> bool {
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+
+/// One clip of `frames` frames at 10 fps.
+fn project(source: &std::path::Path, name: &str, frames: u32) -> cut_model::Project {
+    let text = format!(
+        "cut 1\nproject name=\"{name}\"\n\
+         media source-a path=\"{}\" rate=10 dur={frames}f video=64x36\n\
+         sequence s1 rate=10 size=64x36 audio=48000\n\
+         \x20 track video-1 video\n\
+         \x20   clip clip-a media=source-a src=0f at=0f dur={frames}f\n",
+        source.display()
+    );
+    cut_lang::parse_document(&text, cut_model::Catalog::builtin())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project
 }
 
 #[test]
@@ -52,37 +66,9 @@ fn real_ffmpeg_surface_delivers_rgba_frames_off_the_calling_thread() {
         .expect("run ffmpeg fixture");
     assert!(status.success(), "fixture ffmpeg process failed");
 
-    let project = json!({
-        "version": 2,
-        "name": "Playback integration",
-        "fps": 10,
-        "width": 64,
-        "height": 36,
-        "sources": [{
-            "id": "source-a",
-            "path": source,
-            "duration": 0.4,
-            "hasAudio": false
-        }],
-        "tracks": [{
-            "id": "video-1",
-            "type": "video",
-            "clips": [{
-                "id": "clip-a",
-                "sourceId": "source-a",
-                "in": 0,
-                "out": 0.4,
-                "timelineStart": 0
-            }]
-        }],
-        "overlays": [],
-        "gaps": [],
-        "transitions": [],
-        "effects": [],
-        "markers": []
-    });
-    let session = PlaybackSession::open_json(
-        &project,
+    let project = project(&source, "Playback integration", 4);
+    let session = PlaybackSession::open(
+        project,
         PlaybackConfig::default()
             .with_ffmpeg_binary(&binary)
             .with_audio_enabled(false)
@@ -141,37 +127,9 @@ fn small_forward_seek_still_delivers_a_later_frame() {
         .expect("run ffmpeg fixture");
     assert!(status.success(), "fixture ffmpeg process failed");
 
-    let project = json!({
-        "version": 2,
-        "name": "Small seek",
-        "fps": 10,
-        "width": 64,
-        "height": 36,
-        "sources": [{
-            "id": "source-a",
-            "path": source,
-            "duration": 1.0,
-            "hasAudio": false
-        }],
-        "tracks": [{
-            "id": "video-1",
-            "type": "video",
-            "clips": [{
-                "id": "clip-a",
-                "sourceId": "source-a",
-                "in": 0,
-                "out": 1.0,
-                "timelineStart": 0
-            }]
-        }],
-        "overlays": [],
-        "gaps": [],
-        "transitions": [],
-        "effects": [],
-        "markers": []
-    });
-    let session = PlaybackSession::open_json(
-        &project,
+    let project = project(&source, "Small seek", 10);
+    let session = PlaybackSession::open(
+        project,
         PlaybackConfig::default()
             .with_ffmpeg_binary(&binary)
             .with_audio_enabled(false)

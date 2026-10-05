@@ -1,6 +1,6 @@
 # ADR 0006: Exact-time kernel with a text-canonical project
 
-Status: accepted (phases 1–3 implemented)
+Status: accepted (phases 1–4 implemented)
 Date: 2026-10-04
 
 ## Context
@@ -94,8 +94,16 @@ Each phase is its own pull request; the old stack keeps working until phase 5.
   are part of the agent's instructions.
 - Documents keep media paths relative to the project; the runtime resolves
   them before handing a project to a renderer.
-- Until phase 4, `cutd` derives a v2 project for the renderer, playback, the
-  Qt app, and MCP. v2 commands from those clients become kernel operations
+- The render compiler (`cut_core::program`), playback, the Qt bridge, and the
+  agent's frames and previews read `cut-model`. Render jobs and proposal
+  previews carry the `.cut` document with media paths resolved; times stay
+  exact flicks until FFmpeg arguments are printed, and audio is placed by
+  sample. Native playback plays the first sequence as cuts, nested sequences
+  included, and `preview_plan` asks for a rendered preview when it would
+  differ. The Qt app reads a timeline view of the model and edits with typed
+  operations.
+- Until phase 5, `cutd` still derives a v2 export for v2 commands, proposal
+  field diffs, and the v2 MCP catalog. v2 commands become kernel operations
   where one exists (trims, splits, moves, deletes, media and clip insertion,
   markers, tracks). The rest run on the v2 export and are imported back with
   the model as a hint; a command whose effect the model cannot hold is

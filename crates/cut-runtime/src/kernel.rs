@@ -31,6 +31,58 @@ pub(crate) fn print(project: &Project) -> String {
     print_document(project, catalog(), PrintOptions::default())
 }
 
+/// The length of the program: the first sequence.
+pub(crate) fn program_duration(project: &Project) -> Time {
+    project
+        .sequences
+        .first()
+        .map_or(Time::ZERO, cut_model::Sequence::duration)
+}
+
+/// `[start, end)` seconds of the first sequence as frame-aligned times.
+pub(crate) fn time_range(
+    project: &Project,
+    start: f64,
+    end: f64,
+) -> Result<(Time, Time), RuntimeError> {
+    let rate = project
+        .sequences
+        .first()
+        .map(|sequence| sequence.rate)
+        .ok_or_else(|| RuntimeError::new("INVALID_RENDER_RANGE", "the project has no sequence"))?;
+    let time = |seconds: f64| {
+        Time::from_seconds(seconds)
+            .map(|time| rate.round(time))
+            .ok_or_else(|| RuntimeError::new("INVALID_RENDER_RANGE", "the range is out of bounds"))
+    };
+    let (from, to) = (time(start)?, time(end)?);
+    if to <= from {
+        return Err(RuntimeError::new(
+            "INVALID_RENDER_RANGE",
+            "the range is shorter than a frame",
+        ));
+    }
+    Ok((from, to))
+}
+
+/// Make relative media paths absolute against `directory`. Documents keep
+/// paths relative to the project so it can move; renderers and players run
+/// elsewhere and need them resolved.
+pub fn resolve_media_paths(project: &mut Project, directory: &std::path::Path) {
+    for media in &mut project.media {
+        if std::path::Path::new(&media.path).is_relative() {
+            media.path = directory.join(&media.path).to_string_lossy().into_owned();
+        }
+    }
+}
+
+/// The document of `project` with media paths resolved, for a renderer.
+pub(crate) fn renderable(project: &Project, directory: &std::path::Path) -> String {
+    let mut project = project.clone();
+    resolve_media_paths(&mut project, directory);
+    print(&project)
+}
+
 pub(crate) fn print_annotated(project: &Project) -> String {
     print_document(project, catalog(), PrintOptions { annotate: true })
 }
@@ -54,9 +106,9 @@ fn domain_error(error: v2::DomainError) -> RuntimeError {
     RuntimeError::new(error.code, error.message)
 }
 
-/// The v2 project derived from the model for clients that still read v2.
-/// Every committed project has one: edits whose result cannot be exported
-/// are refused until those clients read the model (ADR 0006 phase 4).
+/// The v2 project derived from the model for v2 commands, proposal field
+/// diffs, and the v2 MCP catalog, until ADR 0006 phase 5. Every committed
+/// project has one, so edits whose result cannot be exported are refused.
 pub(crate) fn view(project: &Project) -> Result<v2::Project, RuntimeError> {
     export(project).map_err(|error| RuntimeError::new("V2_EXPORT_FAILED", error))
 }

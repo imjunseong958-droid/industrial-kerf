@@ -1,4 +1,5 @@
-//! Render argument construction and ffmpeg spawn for v1/v2 timelines.
+//! Render argument construction and ffmpeg spawn for `cut-model` projects
+//! and the v1/v2 timelines that remain until ADR 0006 phase 5.
 
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
@@ -20,6 +21,7 @@ use crate::error::{EngineError, Result};
 use crate::ffmpeg::{
     cached_encoder_listing, parse_time_seconds, resolve_ffmpeg_bin, video_decode_prefix,
 };
+use crate::program::{compile_program, ProgramOptions};
 use crate::resources::{budget, should_try_hardware_encode};
 use crate::transcription::CancellationToken;
 
@@ -176,6 +178,97 @@ pub fn render_args_v2_with_range(
     base.push(format!("{fps}"));
     base.push(opts.output.clone());
     Ok(base)
+}
+
+/// How to encode a rendered program.
+#[derive(Debug, Clone)]
+pub struct RenderOptions {
+    pub output: String,
+    /// 360p at 15 fps with fast, low-quality encoding.
+    pub draft: bool,
+    pub prefer_hardware: bool,
+    pub force_software: bool,
+    pub codec: VideoCodec,
+}
+
+impl Default for RenderOptions {
+    fn default() -> Self {
+        Self {
+            output: String::new(),
+            draft: false,
+            prefer_hardware: false,
+            force_software: false,
+            codec: VideoCodec::H264,
+        }
+    }
+}
+
+/// The ffmpeg arguments that render `sequence` (the first one when `None`)
+/// of `project`, or `[from, to)` of it, and the output duration in seconds.
+pub fn render_program_args(
+    project: &cut_model::Project,
+    sequence: Option<&str>,
+    range: Option<(cut_model::Time, cut_model::Time)>,
+    opts: &RenderOptions,
+) -> Result<(Vec<String>, f64)> {
+    let compiled = compile_program(
+        project,
+        cut_model::Catalog::builtin(),
+        &ProgramOptions {
+            sequence: sequence.map(str::to_owned),
+            range,
+            video_post_filters: if opts.draft {
+                draft_post_filters()
+            } else {
+                Vec::new()
+            },
+        },
+    )?;
+    let mut args: Vec<String> = video_decode_prefix().to_vec();
+    args.extend(compiled.argv.iter().skip(1).cloned());
+    args.extend(if opts.draft {
+        draft_codec_args()
+    } else {
+        hardware_or_software_codec(opts.prefer_hardware, opts.force_software, opts.codec)?
+    });
+    args.extend([
+        "-r".into(),
+        compiled.rate_arg(),
+        "-t".into(),
+        crate::program::secs(compiled.duration),
+        opts.output.clone(),
+    ]);
+    Ok((args, compiled.duration.seconds()))
+}
+
+/// Render a project with a caller-owned cancellation token.
+pub fn render_program_with_cancellation<F>(
+    project: &cut_model::Project,
+    sequence: Option<&str>,
+    range: Option<(cut_model::Time, cut_model::Time)>,
+    opts: &RenderOptions,
+    cancellation: &CancellationToken,
+    on_progress: Option<F>,
+) -> Result<()>
+where
+    F: FnMut(f64),
+{
+    let (args, duration) = render_program_args(project, sequence, range, opts)?;
+    run_ffmpeg_with_progress(&args, duration, cancellation, on_progress)
+}
+
+pub fn render_program<F>(
+    project: &cut_model::Project,
+    sequence: Option<&str>,
+    range: Option<(cut_model::Time, cut_model::Time)>,
+    opts: &RenderOptions,
+    on_progress: Option<F>,
+) -> Result<()>
+where
+    F: FnMut(f64),
+{
+    let cancellation = CancellationToken::new();
+    render_program_with_cancellation(project, sequence, range, opts, &cancellation, on_progress)
 }
 
 struct FfmpegChild {

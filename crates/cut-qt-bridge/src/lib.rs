@@ -3,6 +3,10 @@
 use cut_agent::{AgentEvent, AgentSession, AgentSessionOptions, OpenAiApiMode, ProviderName};
 use cut_mcp::inbound;
 use cut_mcp::{CutMcpRouter, McpProfile};
+use cut_model::{
+    AudioInfo, Clip, Content, Id, Media, Project, Ratio, Sequence, Time, Track, TrackKind,
+    VideoInfo,
+};
 use cut_playback::{PlaybackConfig, PlaybackEvent, PlaybackFrame, PlaybackSession, PlaybackState};
 use cut_runtime::{RuntimeClient, StateSnapshot};
 use serde::Deserialize;
@@ -46,6 +50,11 @@ enum Command {
         command: Value,
         revision: u64,
     },
+    /// Typed edits on the model, applied atomically.
+    Edit {
+        ops: Vec<cut_runtime::EditOp>,
+        revision: u64,
+    },
     Undo {
         revision: u64,
     },
@@ -87,9 +96,11 @@ enum Command {
     },
 }
 
+/// What the viewer plays: the project itself, or a rendered preview of it.
+/// Both have their media paths resolved.
 enum MediaProject {
-    Native(Value),
-    Rendered(Value),
+    Native(Project),
+    Rendered(Project),
 }
 
 struct PendingSeek {
@@ -106,6 +117,9 @@ struct Shared {
     frame: Mutex<Option<PlaybackFrame>>,
     seek: Mutex<Option<PendingSeek>>,
     project: Mutex<Option<MediaProject>>,
+    /// The project directory, which relative media paths are resolved
+    /// against.
+    directory: PathBuf,
 }
 
 struct Bridge {
@@ -173,12 +187,19 @@ fn publish_snapshot(
     // Proposal-only refreshes must not reopen decoders or interrupt playback.
     let project_changed = previous
         .as_ref()
-        .and_then(|snapshot| snapshot.get("project"))
-        != Some(&state.project);
+        .and_then(|snapshot| snapshot.get("document"))
+        .and_then(Value::as_str)
+        != Some(state.document.as_str());
     if project_changed {
-        if let Ok(mut slot) = shared.project.lock() {
-            shared.revision.fetch_add(1, Ordering::SeqCst);
-            *slot = Some(MediaProject::Native(state.project.clone()));
+        match cut_runtime::parse_document(&state.document) {
+            Ok(mut project) => {
+                cut_runtime::resolve_media_paths(&mut project, &shared.directory);
+                if let Ok(mut slot) = shared.project.lock() {
+                    shared.revision.fetch_add(1, Ordering::SeqCst);
+                    *slot = Some(MediaProject::Native(project));
+                }
+            }
+            Err(err) => error(tx, err.message),
         }
     }
     *previous = Some(snapshot);
@@ -299,6 +320,9 @@ fn runtime_worker(
             Command::Apply { command, revision } => {
                 active_client.apply_request("ui", &operation, command, revision)
             }
+            Command::Edit { ops, revision } => {
+                active_client.apply_ops_request("ui", &operation, ops, revision)
+            }
             Command::Undo { revision } => active_client.undo_request("ui", &operation, revision),
             Command::Redo { revision } => active_client.redo_request("ui", &operation, revision),
             Command::Accept {
@@ -333,11 +357,15 @@ fn runtime_worker(
                     let revision = shared.revision.load(Ordering::SeqCst);
                     let result = export(&client, &quality, preview, &tx);
                     match result {
-                        Ok((output, project, duration))
+                        Ok((output, document))
                             if preview && shared.revision.load(Ordering::SeqCst) == revision =>
                         {
-                            let rendered = json!({"version":2,"fps":project["fps"],"width":project["width"],"height":project["height"],"sources":[{"id":"preview","path":output,"duration":duration,"hasAudio":true}],"tracks":[{"id":"preview-track","type":"video","clips":[{"id":"preview-clip","sourceId":"preview","in":0,"out":duration,"timelineStart":0}]}]});
-                            if let Ok(mut slot) = shared.project.lock() {
+                            let rendered = cut_runtime::parse_document(&document)
+                                .ok()
+                                .and_then(|program| rendered_preview(&program, &output));
+                            if let (Some(rendered), Ok(mut slot)) =
+                                (rendered, shared.project.lock())
+                            {
                                 if shared.revision.load(Ordering::SeqCst) == revision {
                                     *slot = Some(MediaProject::Rendered(rendered));
                                 }
@@ -382,15 +410,15 @@ fn runtime_worker(
     }
 }
 
+/// Render the program. Returns the output path and the document rendered.
 fn export(
     client: &RuntimeClient,
     quality: &str,
     preview: bool,
     tx: &SyncSender<Value>,
-) -> Result<(String, Value, f64), cut_runtime::RuntimeError> {
-    let duration = client.get_state()?.duration;
+) -> Result<(String, String), cut_runtime::RuntimeError> {
     let event_type = if preview { "preview" } else { "export" };
-    let (job, project, output) = client.start_render(quality)?;
+    let (job, document, output) = client.start_render(quality)?;
     emit(
         tx,
         json!({"type":event_type,"status":"running","progress":0.0}),
@@ -398,7 +426,7 @@ fn export(
     let cancel = cut_runtime::render_cancel_path(client.directory(), &job.job_id);
     let result = cut_runtime::run_render_with_cancel_file_progress(
         job.job_id.clone(),
-        project.clone(),
+        document.clone(),
         output.clone(),
         quality == "preview",
         None,
@@ -424,7 +452,7 @@ fn export(
                     json!({"type":event_type,"status":"completed","path":path,"progress":1.0}),
                 );
             }
-            Ok((path, project, duration))
+            Ok((path, document))
         }
         Err(err) => {
             let _ = client.update_job(&job.job_id, "failed", Some(err.message.clone()), None);
@@ -434,50 +462,69 @@ fn export(
     }
 }
 
-/// Resolve the preview canvas using the same precedence as native playback:
-/// an explicit project canvas, then the largest complete source canvas, then
-/// the conventional landscape default.
-fn preview_canvas_size(project: &Value) -> (u32, u32) {
-    fn positive(value: Option<&Value>) -> Option<f64> {
-        value
-            .and_then(Value::as_f64)
-            .filter(|value| value.is_finite() && *value > 0.0)
-    }
-
-    if let (Some(width), Some(height)) = (
-        positive(project.get("width")),
-        positive(project.get("height")),
-    ) {
-        return (dimension(width), dimension(height));
-    }
-
-    let mut largest = None;
-    if let Some(sources) = project.get("sources").and_then(Value::as_array) {
-        for source in sources {
-            let (Some(width), Some(height)) = (
-                positive(source.get("width")),
-                positive(source.get("height")),
-            ) else {
-                continue;
-            };
-            let area = width * height;
-            if largest.is_none_or(|(largest_area, _, _)| area > largest_area) {
-                largest = Some((area, width, height));
-            }
-        }
-    }
-
-    largest
-        .map(|(_, width, height)| (dimension(width), dimension(height)))
-        .unwrap_or((1920, 1080))
+/// A project that plays a rendered preview of `program` in its place.
+fn rendered_preview(program: &Project, output: &str) -> Option<Project> {
+    let sequence = program.sequences.first()?;
+    let duration = sequence.duration();
+    let id = |text: &str| Id::new(text).ok();
+    let media = id("preview")?;
+    let clip = |name: &str| {
+        Some(Clip::new(
+            id(name)?,
+            Content::Media {
+                media: media.clone(),
+                source_in: Time::ZERO,
+                speed: Ratio::ONE,
+            },
+            Time::ZERO,
+            duration,
+        ))
+    };
+    let mut picture = Track::new(id("V1")?, TrackKind::Video);
+    picture.clips.push(clip("preview-picture")?);
+    let mut sound = Track::new(id("A1")?, TrackKind::Audio);
+    sound.clips.push(clip("preview-sound")?);
+    Some(Project {
+        name: program.name.clone(),
+        media: vec![Media {
+            id: media,
+            path: output.to_owned(),
+            rate: sequence.rate,
+            drop_frame: false,
+            start: Time::ZERO,
+            duration,
+            video: Some(VideoInfo {
+                width: sequence.width,
+                height: sequence.height,
+            }),
+            audio: Some(AudioInfo {
+                channels: 2,
+                sample_rate: 48_000,
+            }),
+            reel: None,
+        }],
+        sequences: vec![Sequence {
+            id: id("program")?,
+            name: String::new(),
+            tracks: vec![picture, sound],
+            markers: Vec::new(),
+            start: Time::ZERO,
+            ..sequence.clone()
+        }],
+        retired: Default::default(),
+    })
 }
 
 fn dimension(value: f64) -> u32 {
     value.round().clamp(2.0, u32::MAX as f64) as u32
 }
 
-fn preview_frame_size(project: &Value) -> (u32, u32) {
-    let (width, height) = preview_canvas_size(project);
+/// The viewer frame: the sequence canvas, with its longest edge at most
+/// 1920 pixels.
+fn preview_frame_size(project: &Project) -> (u32, u32) {
+    let (width, height) = project.sequences.first().map_or((1920, 1080), |sequence| {
+        (sequence.width.max(2), sequence.height.max(2))
+    });
     let scale = (1920.0 / f64::from(width.max(height))).min(1.0);
     (
         dimension(f64::from(width) * scale),
@@ -502,7 +549,7 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
             }
             emit(&tx, json!({"type":"viewer_reset"}));
             emit(&tx, json!({"type":"caption","text":""}));
-            let plan = cut_core::preview::analyze_project(&project, None, None);
+            let plan = cut_playback::preview_plan(&project);
             if !rendered && !plan.native_exact() {
                 session = None;
                 playing = false;
@@ -517,8 +564,8 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
             emit(&tx, json!({"type":"preview","status":"ready"}));
             let size = preview_frame_size(&project);
             // A new worker prevents old-project frames from resurfacing after an edit.
-            session = match PlaybackSession::open_json(
-                &project,
+            session = match PlaybackSession::open(
+                project,
                 PlaybackConfig::default().with_frame_size(size.0, size.1),
             ) {
                 Ok(session) => {
@@ -841,6 +888,7 @@ pub unsafe extern "C" fn cut_bridge_new(
     let (prompts, prompt_rx) = mpsc::sync_channel(1);
     let (emit, events) = mpsc::sync_channel(256);
     let shared = Arc::new(Shared {
+        directory: directory.clone(),
         revision: AtomicU64::new(0),
         closed: AtomicBool::new(false),
         agent_busy: AtomicBool::new(false),
@@ -1044,7 +1092,7 @@ pub unsafe extern "C" fn cut_bridge_frame(bridge: *mut c_void, output: *mut CutF
 #[cfg(test)]
 mod tests {
     use super::{
-        preview_canvas_size, preview_frame_size, publish, publish_force, AgentSettings, Command,
+        preview_frame_size, publish, publish_force, rendered_preview, AgentSettings, Command,
         Shared,
     };
     use cut_runtime::{PendingProposal, ProposalFreshness, StateSnapshot};
@@ -1055,6 +1103,7 @@ mod tests {
 
     fn shared() -> Shared {
         Shared {
+            directory: std::env::temp_dir(),
             revision: AtomicU64::new(0),
             closed: AtomicBool::new(false),
             agent_busy: AtomicBool::new(false),
@@ -1066,12 +1115,22 @@ mod tests {
         }
     }
 
-    fn snapshot(
-        project: serde_json::Value,
-        pending_proposal: Option<PendingProposal>,
-    ) -> StateSnapshot {
+    const DOCUMENT: &str = "cut 1\nproject name=\"Bridge\"\n\
+        sequence s1 rate=24 size=1920x1080 audio=48000\n";
+
+    fn project(width: u32, height: u32) -> cut_model::Project {
+        cut_runtime::parse_document(&format!(
+            "cut 1\nproject name=\"Bridge\"\n\
+             sequence s1 rate=24 size={width}x{height} audio=48000\n"
+        ))
+        .unwrap()
+    }
+
+    fn snapshot(document: &str, pending_proposal: Option<PendingProposal>) -> StateSnapshot {
         StateSnapshot {
-            project,
+            document: document.to_owned(),
+            timeline: json!({}),
+            project: json!({}),
             revision: 1,
             can_undo: true,
             can_redo: false,
@@ -1088,14 +1147,14 @@ mod tests {
     fn proposal_only_snapshot_is_published_without_restarting_media() {
         let (tx, rx) = mpsc::sync_channel(4);
         let shared = Arc::new(shared());
-        let project = json!({"version":2,"tracks":[]});
+        let project = DOCUMENT;
         let mut previous = None;
 
-        publish(snapshot(project.clone(), None), &shared, &tx, &mut previous);
+        publish(snapshot(project, None), &shared, &tx, &mut previous);
         let first = rx.try_recv().expect("initial snapshot should publish");
         assert_eq!(first["type"], "state");
         let media_revision = shared.revision.load(std::sync::atomic::Ordering::SeqCst);
-        publish_force(snapshot(project.clone(), None), &shared, &tx, &mut previous);
+        publish_force(snapshot(project, None), &shared, &tx, &mut previous);
         assert_eq!(
             rx.try_recv().expect("forced refresh should publish")["type"],
             "state"
@@ -1137,7 +1196,7 @@ mod tests {
             "proposal-only refresh must keep the media generation stable"
         );
         publish(
-            snapshot(json!({"version":2,"tracks":[]}), Some(proposal_for_repeat)),
+            snapshot(DOCUMENT, Some(proposal_for_repeat)),
             &shared,
             &tx,
             &mut previous,
@@ -1146,6 +1205,24 @@ mod tests {
             rx.try_recv().is_err(),
             "unchanged snapshots must be coalesced"
         );
+    }
+
+    #[test]
+    fn edit_command_carries_typed_operations() {
+        let command: Command = serde_json::from_value(json!({
+            "type": "edit",
+            "revision": 4,
+            "ops": [
+                {"op": "move", "clip": "c1", "frames": 12},
+                {"op": "trim", "clip": "c1", "edge": "out", "frames": -6},
+                {"op": "set", "clip": "c1", "props": {"crop_l": 0.25, "opacity": null}}
+            ]
+        }))
+        .expect("edit command should deserialize");
+        let Command::Edit { ops, revision } = command else {
+            panic!("expected an edit command");
+        };
+        assert_eq!((ops.len(), revision), (3, 4));
     }
 
     #[test]
@@ -1194,51 +1271,46 @@ mod tests {
     }
 
     #[test]
-    fn preview_canvas_prefers_explicit_project_dimensions() {
-        let project = json!({
-            "version": 2,
-            "width": 1080,
-            "height": 1920,
-            "sources": [{"width": 1920, "height": 1080}]
-        });
-
-        assert_eq!(preview_canvas_size(&project), (1080, 1920));
-        assert_eq!(preview_frame_size(&project), (1080, 1920));
-    }
-
-    #[test]
-    fn preview_canvas_uses_largest_valid_source_when_project_is_unsized() {
-        let project = json!({
-            "version": 2,
-            "sources": [
-                {"width": 1280, "height": 720},
-                {"width": 1080, "height": 1920},
-                {"width": 0, "height": 500},
-                {"width": 640}
-            ]
-        });
-
-        assert_eq!(preview_canvas_size(&project), (1080, 1920));
-        assert_eq!(preview_frame_size(&project), (1080, 1920));
-    }
-
-    #[test]
-    fn preview_canvas_falls_back_to_landscape_default_without_dimensions() {
-        let project = json!({"version": 2, "sources": []});
-
-        assert_eq!(preview_canvas_size(&project), (1920, 1080));
-        assert_eq!(preview_frame_size(&project), (1920, 1080));
+    fn preview_frame_follows_the_sequence_canvas() {
+        assert_eq!(preview_frame_size(&project(1080, 1920)), (1080, 1920));
+        assert_eq!(preview_frame_size(&project(1920, 1080)), (1920, 1080));
+        assert_eq!(
+            preview_frame_size(&cut_model::Project::default()),
+            (1920, 1080)
+        );
     }
 
     #[test]
     fn preview_frame_size_limits_only_the_longest_edge_for_large_canvases() {
-        let project = json!({
-            "version": 2,
-            "width": 20_000,
-            "height": 10_000
-        });
+        assert_eq!(preview_frame_size(&project(8000, 4000)), (1920, 960));
+    }
 
-        assert_eq!(preview_canvas_size(&project), (20_000, 10_000));
-        assert_eq!(preview_frame_size(&project), (1920, 960));
+    #[test]
+    fn a_rendered_preview_plays_in_place_of_the_program() {
+        let program = cut_runtime::parse_document(
+            "cut 1\nproject name=\"Bridge\"\n\
+             media m1 path=\"/media/a.mov\" rate=24 dur=10s video=1920x1080\n\
+             sequence s1 rate=24 size=1920x1080 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20   clip c1 media=m1 src=0f at=0f dur=60f\n\
+             \x20     set crop_l=0.25\n",
+        )
+        .unwrap();
+        assert_eq!(
+            cut_playback::preview_plan(&program).mode,
+            cut_core::preview::PreviewMode::RenderedFallback
+        );
+        let rendered = rendered_preview(&program, "/renders/preview.mp4").unwrap();
+        assert!(cut_model::validate::errors(&rendered, cut_model::Catalog::builtin()).is_empty());
+        assert_eq!(
+            rendered.sequences[0].duration(),
+            program.sequences[0].duration()
+        );
+        let timeline = cut_playback::PlaybackTimeline::from_project(&rendered).unwrap();
+        assert_eq!(
+            timeline.video_at(1.0).unwrap().source.path.to_str(),
+            Some("/renders/preview.mp4")
+        );
+        assert_eq!(timeline.audio_at(1.0).len(), 1);
     }
 }

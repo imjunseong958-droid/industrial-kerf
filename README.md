@@ -19,9 +19,23 @@ existing `project.cut.json` once and leaves it untouched.
 
 ```text
 Qt6 editor ──────────────────────────┐
-Rust agent and CLI ──────────────────┼─> cutd ─> typed domain ─> durable store
-Rust MCP server ─────────────────────┘               └────────> cut-engine
+Rust agent and CLI ──────────────────┼─> cutd ─> cut-model ─> project.cut
+Rust MCP server ─────────────────────┘     │
+                                           └─> .cut document ─> render compiler,
+                                                                playback, previews
 ```
+
+Renders, playback, and previews read the model. A render job and a proposal
+preview carry the `.cut` document with media paths resolved against the
+project, and the render compiler lowers its first sequence to one FFmpeg
+graph with exact times: picture tracks stack in order, sound comes from
+audio tracks, transitions play across their cuts using the clips' handles,
+nested sequences composite on their own canvas, and effects, transitions,
+and generators lower from their catalog definitions. A feature without a
+lowering is reported with the clip it is on. Native playback plays the same
+sequence as cuts and asks for a rendered preview whenever it would show
+something different. Editor snapshots carry the document and a timeline
+view of it; the editor sends its edits back as typed operations.
 
 FFmpeg, ffprobe, and yt-dlp remain controlled native sidecars. Editing
 playbooks are data in `skills/*/SKILL.md` and are loaded by `cut-skills`.

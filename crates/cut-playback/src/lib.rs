@@ -11,7 +11,10 @@ mod decoder;
 mod libav;
 mod timeline;
 
-pub use timeline::{CaptionCue, PlaybackClip, PlaybackSource, PlaybackTimeline, ResolvedClip};
+pub use timeline::{
+    preview_plan, CaptionCue, ClipKind, PlaybackClip, PlaybackSource, PlaybackTimeline,
+    ResolvedClip,
+};
 
 use audio::AudioRuntime;
 use decoder::{DecodedVideoFrame, VideoDecoder};
@@ -130,7 +133,7 @@ pub enum PlaybackEvent {
 /// Commands accepted by the stable playback interface.
 #[derive(Clone, Debug)]
 pub enum PlaybackCommand {
-    Open(Box<cut_domain::Project>),
+    Open(Box<cut_model::Project>),
     Play,
     Pause,
     Seek(f64),
@@ -142,7 +145,7 @@ pub enum PlaybackCommand {
 #[derive(Debug)]
 enum WorkerCommand {
     Open {
-        project: Box<cut_domain::Project>,
+        project: Box<cut_model::Project>,
         request_id: u64,
     },
     Play,
@@ -203,7 +206,7 @@ pub struct PlaybackHandle {
 
 impl PlaybackHandle {
     /// Replace the project without touching the editor's canonical runtime.
-    pub fn open(&self, project: cut_domain::Project) -> Result<(), PlaybackError> {
+    pub fn open(&self, project: cut_model::Project) -> Result<(), PlaybackError> {
         let mut control = self.lock_control();
         let request_id = control.allocate_request_id();
         let result = self
@@ -222,12 +225,6 @@ impl PlaybackHandle {
             control.visible_epoch = control.visible_epoch.max(request_id);
         }
         result
-    }
-
-    pub fn open_json(&self, project: &serde_json::Value) -> Result<(), PlaybackError> {
-        let project = cut_domain::parse_project(project)
-            .map_err(|error| PlaybackError::InvalidProject(error.to_string()))?;
-        self.open(project)
     }
 
     pub fn play(&self) -> Result<(), PlaybackError> {
@@ -340,7 +337,7 @@ struct QueuedEvent {
 impl PlaybackSession {
     /// Open a typed project and start its non-UI playback worker.
     pub fn open(
-        project: cut_domain::Project,
+        project: cut_model::Project,
         config: PlaybackConfig,
     ) -> Result<Self, PlaybackError> {
         let timeline = PlaybackTimeline::from_project(&project)?;
@@ -400,18 +397,8 @@ impl PlaybackSession {
         })
     }
 
-    /// Parse a canonical v2 wire project at the app adapter boundary.
-    pub fn open_json(
-        project: &serde_json::Value,
-        config: PlaybackConfig,
-    ) -> Result<Self, PlaybackError> {
-        let project = cut_domain::parse_project(project)
-            .map_err(|error| PlaybackError::InvalidProject(error.to_string()))?;
-        Self::open(project, config)
-    }
-
     /// Open with the default decoder/audio configuration.
-    pub fn open_default(project: cut_domain::Project) -> Result<Self, PlaybackError> {
+    pub fn open_default(project: cut_model::Project) -> Result<Self, PlaybackError> {
         Self::open(project, PlaybackConfig::default())
     }
 
@@ -861,7 +848,11 @@ impl Worker {
             return false;
         }
         while self.decode_cursor < target - interval * 0.5 {
-            if self.decoder.as_ref().is_some_and(|decoder| decoder.is_cancelled()) {
+            if self
+                .decoder
+                .as_ref()
+                .is_some_and(|decoder| decoder.is_cancelled())
+            {
                 return false;
             }
             match self
@@ -1084,7 +1075,11 @@ impl Worker {
                     self.decode_cursor += frame_interval(self.timeline.fps);
                 }
                 Ok(None) => {
-                    if self.decoder.as_ref().is_some_and(|decoder| decoder.is_cancelled()) {
+                    if self
+                        .decoder
+                        .as_ref()
+                        .is_some_and(|decoder| decoder.is_cancelled())
+                    {
                         break;
                     }
                     self.stop_decoder();
@@ -1294,22 +1289,18 @@ fn resolve_ffmpeg_binary() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
-    fn project_with_media() -> cut_domain::Project {
-        cut_domain::parse_project(&json!({
-            "version": 2,
-            "name": "Playback",
-            "fps": 30,
-            "width": 320,
-            "height": 180,
-            "sources": [{"id":"source-a","path":"/tmp/a.mp4","duration":8,"hasAudio":false}],
-            "tracks": [{"id":"video-1","type":"video","clips":[
-                {"id":"clip-a","sourceId":"source-a","in":2,"out":6,"timelineStart":1,"speed":2}
-            ]}],
-            "overlays": [], "gaps": [], "transitions": [], "effects": [], "markers": []
-        }))
+    fn project_with_media() -> cut_model::Project {
+        cut_lang::parse_document(
+            "cut 1\nproject name=\"Playback\"\n\
+             media source-a path=\"/tmp/a.mp4\" rate=30 dur=8s video=320x180\n\
+             sequence s1 rate=30 size=320x180 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20   clip clip-a media=source-a src=2s at=1s dur=2s speed=2\n",
+            cut_model::Catalog::builtin(),
+        )
         .expect("valid project")
+        .project
     }
 
     #[test]
@@ -1330,7 +1321,7 @@ mod tests {
     #[test]
     fn invalid_controls_are_rejected_at_the_interface() {
         let session = PlaybackSession::open(
-            cut_domain::empty_project(),
+            cut_model::Project::default(),
             PlaybackConfig::default().with_audio_enabled(false),
         )
         .expect("session");
@@ -1386,7 +1377,7 @@ mod tests {
     #[test]
     fn rapid_seek_requests_are_coalesced_without_filling_the_command_queue() {
         let session = PlaybackSession::open(
-            cut_domain::empty_project(),
+            cut_model::Project::default(),
             PlaybackConfig::default().with_audio_enabled(false),
         )
         .expect("session");
@@ -1423,9 +1414,21 @@ mod tests {
                 .map(|request| request.request_id),
             Some(2)
         );
-        assert!(control.lock().expect("control").latest_seek.as_ref().unwrap().exact);
+        assert!(
+            control
+                .lock()
+                .expect("control")
+                .latest_seek
+                .as_ref()
+                .unwrap()
+                .exact
+        );
         assert_eq!(
-            control.lock().expect("control").epoch.load(Ordering::Acquire),
+            control
+                .lock()
+                .expect("control")
+                .epoch
+                .load(Ordering::Acquire),
             2
         );
     }
@@ -1477,7 +1480,7 @@ mod tests {
             control: Arc::clone(&control),
         };
         handle
-            .open(cut_domain::empty_project())
+            .open(cut_model::Project::default())
             .expect("accepted open");
         assert_eq!(control.lock().expect("control").visible_epoch, 1);
     }
@@ -1492,10 +1495,10 @@ mod tests {
             control: Arc::clone(&control),
         };
         handle
-            .open(cut_domain::empty_project())
+            .open(cut_model::Project::default())
             .expect("first open");
         handle
-            .open(cut_domain::empty_project())
+            .open(cut_model::Project::default())
             .expect("second open");
         event_tx
             .send(QueuedEvent {

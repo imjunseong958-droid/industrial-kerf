@@ -1,8 +1,20 @@
 use crate::PlaybackError;
-use cut_core::evaluation::EvaluationPlan;
-use cut_domain::{Clip, Overlay, Project, Source, TrackType};
+use cut_core::check::FindingSeverity;
+use cut_core::preview::{PreviewMode, PreviewPlan, PreviewRange, PreviewReason};
+use cut_core::program::{compile_program, program_sequence, ProgramError, ProgramOptions};
+use cut_model::{Catalog, Clip, Content, Domain, Param, Project, Sequence, Time, TrackKind, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+/// Nested sequences deeper than this are not played natively.
+const MAX_NESTING: usize = 16;
+
+/// Whether a clip shows picture or plays sound.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ClipKind {
+    Video,
+    Audio,
+}
 
 /// An inline caption cue in timeline coordinates.
 #[derive(Clone, Debug, PartialEq)]
@@ -27,7 +39,7 @@ pub struct PlaybackSource {
 pub struct PlaybackClip {
     pub id: String,
     pub track_id: String,
-    pub track_kind: TrackType,
+    pub track_kind: ClipKind,
     pub source_id: String,
     pub timeline_start: f64,
     pub duration: f64,
@@ -91,15 +103,15 @@ impl ResolvedClip {
     }
 }
 
-/// Immutable playback plan derived from the canonical typed project.
+/// Immutable playback plan derived from a `cut-model` project.
 ///
-/// The plan is deliberately separate from `cut-domain::Project`: it contains
-/// only the resolved media data required by a decoder and can be moved to a
-/// worker thread without giving that worker ownership of project state.
+/// The plan is deliberately separate from the project: it contains only the
+/// resolved media data required by a decoder and can be moved to a worker
+/// thread without giving that worker ownership of project state. It plays
+/// the first sequence as cuts: the topmost picture and every sound clip.
+/// [`preview_plan`] says when that is not the whole program.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlaybackTimeline {
-    /// Shared immutable timing interpretation also used by offline export.
-    pub evaluation: EvaluationPlan,
     pub fps: f64,
     pub width: u32,
     pub height: u32,
@@ -129,104 +141,37 @@ impl PlaybackTimeline {
     pub fn captions(&self) -> &[CaptionCue] {
         &self.captions
     }
-    /// Build a playback plan from a validated typed project.
+    /// Build a playback plan from the first sequence of a validated project.
+    /// A project without a sequence plays nothing.
     pub fn from_project(project: &Project) -> Result<Self, PlaybackError> {
-        cut_domain::validate(project)
-            .map_err(|error| PlaybackError::InvalidProject(error.to_string()))?;
-        let project_value = serde_json::to_value(project)
-            .map_err(|error| PlaybackError::InvalidProject(error.to_string()))?;
-        let evaluation = EvaluationPlan::from_project_json(&project_value)
-            .map_err(PlaybackError::InvalidProject)?;
-
-        let (width, height) = canvas_size(project);
-        let mut sources = Vec::with_capacity(project.sources.len());
-        for source in &project.sources {
-            sources.push(playback_source(source));
-        }
-        let source_by_id: HashMap<&str, &PlaybackSource> = sources
+        let sequence = project.sequences.first();
+        let sources: Vec<PlaybackSource> = project
+            .media
             .iter()
-            .map(|source| (source.id.as_str(), source))
+            .map(|media| PlaybackSource {
+                id: media.id.to_string(),
+                path: PathBuf::from(&media.path),
+                duration: Some(media.duration.seconds()),
+                has_audio: media.audio.is_some(),
+                subtitles: Vec::new(),
+            })
             .collect();
-
-        let mut captions = Vec::new();
-        let mut clips = Vec::new();
-        for track in &project.tracks {
-            if track.kind == TrackType::Title {
-                for clip in &track.clips {
-                    let Some(text) = clip.text.as_deref().filter(|text| !text.trim().is_empty())
-                    else {
-                        continue;
-                    };
-                    let Some(duration) = clip.timeline_duration() else {
-                        continue;
-                    };
-                    captions.push(CaptionCue {
-                        start: clip.timeline_start,
-                        end: clip.timeline_start + duration,
-                        text: text.trim().to_owned(),
-                    });
-                }
-            }
-            if !matches!(track.kind, TrackType::Video | TrackType::Audio) {
-                continue;
-            }
-            let enabled = track.enabled.unwrap_or(true);
-            if !enabled {
-                continue;
-            }
-            for clip in &track.clips {
-                let Some(source_id) = clip.source_id.as_ref() else {
-                    continue;
-                };
-                let Some(source) = source_by_id.get(source_id.as_str()).copied() else {
-                    return Err(PlaybackError::InvalidProject(format!(
-                        "clip {} references unknown source {}",
-                        clip.id, source_id
-                    )));
-                };
-                let Some(normalized) = normalize_clip(
-                    clip,
-                    track.id.as_str(),
-                    track.kind,
-                    track.muted.unwrap_or(false),
-                    source,
-                ) else {
-                    continue;
-                };
-                clips.push(normalized);
-            }
+        let mut flattener = Flattener {
+            project,
+            clips: Vec::new(),
+            captions: Vec::new(),
+            depth: 0,
+        };
+        let duration = sequence.map_or(Time::ZERO, Sequence::duration);
+        if let Some(sequence) = sequence {
+            flattener.sequence(sequence, Time::ZERO, duration, Time::ZERO, false);
         }
-
-        for overlay in &project.overlays {
-            if let Overlay::Captions(overlay) = overlay {
-                let offset = overlay.start.unwrap_or(0.0);
-                let overlay_end = overlay
-                    .duration
-                    .filter(|duration| duration.is_finite() && *duration > 0.0)
-                    .map(|duration| offset + duration);
-                for cue in &overlay.cues {
-                    let start = cue.start + offset;
-                    let end = cue.end + offset;
-                    let end = overlay_end.map_or(end, |limit| end.min(limit));
-                    if start.is_finite()
-                        && end.is_finite()
-                        && end > start
-                        && !cue.text.trim().is_empty()
-                    {
-                        captions.push(CaptionCue {
-                            start,
-                            end,
-                            text: cue.text.trim().to_owned(),
-                        });
-                    }
-                }
-            }
-        }
-        captions.sort_by(|left, right| {
-            left.start
-                .partial_cmp(&right.start)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        let Flattener {
+            clips,
+            mut captions,
+            ..
+        } = flattener;
+        captions.sort_by(|left, right| left.start.total_cmp(&right.start));
 
         let caption_prefix_max_end = captions
             .iter()
@@ -251,8 +196,7 @@ impl PlaybackTimeline {
             .collect();
         clip_index.sort_by(|left, right| {
             left.start
-                .partial_cmp(&right.start)
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .total_cmp(&right.start)
                 .then(left.clip_index.cmp(&right.clip_index))
         });
         let clip_prefix_max_end = clip_index
@@ -262,31 +206,16 @@ impl PlaybackTimeline {
                 Some(*max_end)
             })
             .collect();
-
-        let duration = project.duration().max(
-            clips
-                .iter()
-                .map(PlaybackClip::timeline_end)
-                .fold(0.0, f64::max),
-        );
-        let subtitles = project
-            .overlays
-            .iter()
-            .filter_map(|overlay| match overlay {
-                Overlay::Subtitles(overlay) => Some(PathBuf::from(&overlay.path)),
-                _ => None,
-            })
-            .collect();
+        let (width, height) = sequence.map_or((1920, 1080), cut_core::program::canvas);
         Ok(Self {
-            evaluation,
-            fps: project.fps,
+            fps: sequence.map_or(30.0, |sequence| sequence.rate.fps()),
             width,
             height,
-            duration,
+            duration: duration.seconds(),
             sources,
             clips,
             captions,
-            subtitles,
+            subtitles: Vec::new(),
             source_indices,
             caption_prefix_max_end,
             clip_index,
@@ -306,7 +235,7 @@ impl PlaybackTimeline {
         self.clips
             .iter()
             .filter(|clip| {
-                matches!(clip.track_kind, TrackType::Audio | TrackType::Video)
+                clip.track_kind == ClipKind::Audio
                     && !clip.track_muted
                     && clip.contains(timeline_time)
             })
@@ -333,7 +262,7 @@ impl PlaybackTimeline {
     ) -> Option<(&PlaybackClip, &PlaybackSource)> {
         let entry = self
             .indexed_entries_at(timeline_time)?
-            .filter(|entry| self.clips[entry.clip_index].track_kind == TrackType::Video)
+            .filter(|entry| self.clips[entry.clip_index].track_kind == ClipKind::Video)
             .max_by_key(|entry| entry.clip_index)?;
         let clip = &self.clips[entry.clip_index];
         let source = self
@@ -346,7 +275,7 @@ impl PlaybackTimeline {
     pub(crate) fn video_at_indices(&self, timeline_time: f64) -> Option<(usize, usize)> {
         let entry = self
             .indexed_entries_at(timeline_time)?
-            .filter(|entry| self.clips[entry.clip_index].track_kind == TrackType::Video)
+            .filter(|entry| self.clips[entry.clip_index].track_kind == ClipKind::Video)
             .max_by_key(|entry| entry.clip_index)?;
         let source_index = self
             .source_indices
@@ -361,9 +290,7 @@ impl PlaybackTimeline {
             .flatten()
             .filter_map(|entry| {
                 let clip = &self.clips[entry.clip_index];
-                if !matches!(clip.track_kind, TrackType::Audio | TrackType::Video)
-                    || clip.track_muted
-                {
+                if clip.track_kind != ClipKind::Audio || clip.track_muted {
                     return None;
                 }
                 let source_index = self.source_indices.get(&clip.source_id).copied()?;
@@ -383,7 +310,7 @@ impl PlaybackTimeline {
             .partition_point(|entry| entry.start <= timeline_time);
         self.clip_index[first..]
             .iter()
-            .find(|entry| self.clips[entry.clip_index].track_kind == TrackType::Video)
+            .find(|entry| self.clips[entry.clip_index].track_kind == ClipKind::Video)
             .map(|entry| entry.start)
     }
 
@@ -424,176 +351,290 @@ impl PlaybackTimeline {
     }
 }
 
-fn playback_source(source: &Source) -> PlaybackSource {
-    let subtitles = source
-        .subs
-        .as_deref()
-        .filter(|path| !path.trim().is_empty())
-        .map(PathBuf::from)
-        .into_iter()
-        .collect();
-    PlaybackSource {
-        id: source.id.to_string(),
-        path: PathBuf::from(&source.path),
-        duration: source.duration,
-        has_audio: source.has_audio.unwrap_or(true),
-        subtitles,
-    }
+/// Lays the clips of a sequence, and of the sequences nested in it, on the
+/// program timeline.
+struct Flattener<'a> {
+    project: &'a Project,
+    clips: Vec<PlaybackClip>,
+    captions: Vec<CaptionCue>,
+    depth: usize,
 }
 
-fn normalize_clip(
-    clip: &Clip,
-    track_id: &str,
-    track_kind: TrackType,
-    track_muted: bool,
-    source: &PlaybackSource,
-) -> Option<PlaybackClip> {
-    let speed = clip.speed.unwrap_or(1.0);
-    if !speed.is_finite() || speed <= 0.0 {
-        return None;
-    }
-    let source_in = clip.source_in.unwrap_or(0.0);
-    let duration = clip
-        .timeline_duration()
-        .or_else(|| {
-            source
-                .duration
-                .map(|duration| (duration - source_in) / speed)
-        })
-        .filter(|duration| duration.is_finite() && *duration > 0.0)?;
-    let source_end_from_duration = source_in + duration * speed;
-    let source_out = clip
-        .source_out
-        .unwrap_or(source_end_from_duration)
-        .min(source_end_from_duration);
-    if !clip.timeline_start.is_finite()
-        || clip.timeline_start < 0.0
-        || !source_in.is_finite()
-        || source_in < 0.0
-        || !source_out.is_finite()
-        || source_out <= source_in
-    {
-        return None;
-    }
-    Some(PlaybackClip {
-        id: clip.id.to_string(),
-        track_id: track_id.to_owned(),
-        track_kind,
-        source_id: source.id.clone(),
-        timeline_start: clip.timeline_start,
-        duration: duration.min((source_out - source_in) / speed),
-        source_in,
-        source_out,
-        speed,
-        volume: clip.volume.unwrap_or(1.0).clamp(0.0, 1.0) as f32,
-        track_muted,
-    })
-}
-
-fn canvas_size(project: &Project) -> (u32, u32) {
-    if let (Some(width), Some(height)) = (project.width, project.height) {
-        if width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0 {
-            return (dimension(width), dimension(height));
+impl Flattener<'_> {
+    /// Add `[from, to)` of `sequence`, starting at program time `at`.
+    fn sequence(&mut self, sequence: &Sequence, from: Time, to: Time, at: Time, muted: bool) {
+        if self.depth > MAX_NESTING {
+            return;
         }
-    }
-
-    let mut largest = None;
-    for source in &project.sources {
-        let (Some(width), Some(height)) = (source.width, source.height) else {
-            continue;
-        };
-        if width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0 {
-            let area = width * height;
-            if largest.is_none_or(|(largest_area, _, _)| area > largest_area) {
-                largest = Some((area, width, height));
+        let place = |time: Time| (time - from + at).seconds();
+        for track in &sequence.tracks {
+            if !track.enabled {
+                continue;
+            }
+            for clip in track.clips.iter().filter(|clip| clip.enabled) {
+                let (lo, hi) = (clip.start.max(from), clip.end().min(to));
+                if lo >= hi {
+                    continue;
+                }
+                let speed = clip.speed();
+                let Some((source_in, _)) = clip.source_range() else {
+                    if let (TrackKind::Subtitle, Content::Caption { text }) =
+                        (track.kind, &clip.content)
+                    {
+                        if !text.trim().is_empty() {
+                            self.captions.push(CaptionCue {
+                                start: place(lo),
+                                end: place(hi),
+                                text: text.trim().to_owned(),
+                            });
+                        }
+                    }
+                    continue;
+                };
+                if speed.is_reverse() {
+                    continue;
+                }
+                let source_at = |time: Time| source_in + speed.source_span(time - clip.start);
+                match &clip.content {
+                    Content::Media { media, .. } => {
+                        let kind = match track.kind {
+                            TrackKind::Video => ClipKind::Video,
+                            TrackKind::Audio => ClipKind::Audio,
+                            TrackKind::Subtitle => continue,
+                        };
+                        let gain = match clip.props.get("gain") {
+                            Some(Param::Static(Value::Number(gain))) => *gain,
+                            _ => 0.0,
+                        };
+                        self.clips.push(PlaybackClip {
+                            id: clip.id.to_string(),
+                            track_id: track.id.to_string(),
+                            track_kind: kind,
+                            source_id: media.to_string(),
+                            timeline_start: place(lo),
+                            duration: (hi - lo).seconds(),
+                            source_in: source_at(lo).seconds(),
+                            source_out: source_at(hi).seconds(),
+                            speed: speed.value(),
+                            volume: 10f64.powf(gain / 20.0) as f32,
+                            track_muted: muted || track.muted,
+                        });
+                    }
+                    Content::Sequence { sequence: id, .. } if speed.value() == 1.0 => {
+                        if let Some(nested) = self.project.sequence(id.as_str()) {
+                            self.depth += 1;
+                            self.sequence(
+                                nested,
+                                source_at(lo),
+                                source_at(hi),
+                                lo - from + at,
+                                muted || track.muted,
+                            );
+                            self.depth -= 1;
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
     }
-    largest
-        .map(|(_, width, height)| (dimension(width), dimension(height)))
-        .unwrap_or((1920, 1080))
 }
 
-fn dimension(value: f64) -> u32 {
-    value.round().clamp(2.0, u32::MAX as f64) as u32
+/// Whether native playback shows the first sequence exactly as a render
+/// would. Anything it cannot show is a reason to play a rendered preview
+/// instead; anything the renderer cannot render makes both unavailable.
+pub fn preview_plan(project: &Project) -> PreviewPlan {
+    let mut reasons = Vec::new();
+    let mut unavailable = false;
+    match program_sequence(project, None) {
+        Ok(sequence) if sequence.duration().is_positive() => {
+            if let Err(error) =
+                compile_program(project, Catalog::builtin(), &ProgramOptions::default())
+            {
+                unavailable = true;
+                reasons.push(reason(
+                    "compiler_rejected_feature",
+                    error.entity(),
+                    None,
+                    error.to_string(),
+                    FindingSeverity::Error,
+                ));
+            }
+            NativeCheck {
+                project,
+                reasons: &mut reasons,
+                depth: 0,
+            }
+            .sequence(sequence, Time::ZERO);
+        }
+        Ok(_) => {}
+        Err(ProgramError::Invalid(message) | ProgramError::Unsupported { what: message, .. }) => {
+            unavailable = true;
+            reasons.push(reason(
+                "compiler_rejected_feature",
+                None,
+                None,
+                message,
+                FindingSeverity::Error,
+            ));
+        }
+    }
+    let reasons_truncated = reasons.len() > cut_core::preview::MAX_PREVIEW_REASONS;
+    reasons.truncate(cut_core::preview::MAX_PREVIEW_REASONS);
+    let mode = if unavailable {
+        PreviewMode::Unavailable
+    } else if reasons.is_empty() {
+        PreviewMode::NativeExact
+    } else {
+        PreviewMode::RenderedFallback
+    };
+    PreviewPlan {
+        mode,
+        range: None,
+        reasons,
+        reasons_truncated,
+    }
+}
+
+fn reason(
+    code: &str,
+    entity: Option<&str>,
+    range: Option<PreviewRange>,
+    message: String,
+    severity: FindingSeverity,
+) -> PreviewReason {
+    PreviewReason {
+        code: code.into(),
+        entity_path: entity.map_or_else(|| "/".into(), |id| format!("/{id}")),
+        entity_id: entity.map(str::to_owned),
+        time_range: range,
+        message,
+        severity,
+    }
+}
+
+struct NativeCheck<'a> {
+    project: &'a Project,
+    reasons: &'a mut Vec<PreviewReason>,
+    depth: usize,
+}
+
+impl NativeCheck<'_> {
+    fn sequence(&mut self, sequence: &Sequence, at: Time) {
+        if self.depth > MAX_NESTING {
+            return;
+        }
+        for track in sequence.tracks.iter().filter(|track| track.enabled) {
+            for transition in &track.transitions {
+                self.push(&transition.id, None, "a transition");
+            }
+            for clip in track.clips.iter().filter(|clip| clip.enabled) {
+                let range =
+                    PreviewRange::new((clip.start + at).seconds(), (clip.end() + at).seconds());
+                if let Some(what) = self.unsupported(track.kind, clip) {
+                    self.push(&clip.id, range, what);
+                }
+                if let Content::Sequence { sequence: id, .. } = &clip.content {
+                    if let Some(nested) = self.project.sequence(id.as_str()) {
+                        self.depth += 1;
+                        let source_in = clip.source_range().map_or(Time::ZERO, |(start, _)| start);
+                        self.sequence(nested, clip.start + at - source_in);
+                        self.depth -= 1;
+                    }
+                }
+            }
+        }
+    }
+
+    fn unsupported(&self, kind: TrackKind, clip: &Clip) -> Option<&'static str> {
+        if clip.effects.iter().any(|effect| effect.enabled) {
+            return Some("effects");
+        }
+        match &clip.content {
+            Content::Generator { .. } => return Some("a generator"),
+            Content::Caption { .. } => return Some("captions"),
+            Content::Sequence { .. } if clip.speed().value() != 1.0 => {
+                return Some("a speed change on a nested sequence")
+            }
+            Content::Media { .. } | Content::Sequence { .. } => {}
+        }
+        if clip.speed().is_reverse() {
+            return Some("reverse playback");
+        }
+        let domain = match kind {
+            TrackKind::Video => Domain::Video,
+            TrackKind::Audio => Domain::Audio,
+            TrackKind::Subtitle => return None,
+        };
+        let catalog = Catalog::builtin();
+        clip.props.iter().find_map(|(name, param)| {
+            let default = &catalog.prop(domain, name)?.default;
+            let native = match param {
+                Param::Static(value) => value == default || name == "gain",
+                Param::Animated(_) => false,
+            };
+            (!native).then_some(match domain {
+                Domain::Video => "a picture property (position, scale, crop, opacity, or blend)",
+                Domain::Audio => "an animated gain or a pan",
+            })
+        })
+    }
+
+    fn push(&mut self, entity: &cut_model::Id, range: Option<PreviewRange>, what: &str) {
+        self.reasons.push(reason(
+            "live_offline_capability_mismatch",
+            Some(entity.as_str()),
+            range,
+            format!("`{entity}` uses {what}, which native playback does not show"),
+            FindingSeverity::Warning,
+        ));
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{PlaybackClip, PlaybackTimeline};
-    use cut_domain::{parse_project, TrackType};
-    use serde_json::json;
+    use super::{preview_plan, ClipKind, PlaybackClip, PlaybackTimeline};
+    use cut_core::preview::PreviewMode;
+    use cut_lang::parse_document;
+    use cut_model::{Catalog, Project};
 
-    fn project(extra: serde_json::Value) -> cut_domain::Project {
-        let mut value = json!({
-            "version": 2,
-            "name": "Playback test",
-            "fps": 30,
-            "width": 320,
-            "height": 180,
-            "sources": [{
-                "id": "source-a",
-                "path": "/tmp/source-a.mp4",
-                "duration": 10,
-                "hasAudio": false
-            }],
-            "tracks": [{
-                "id": "video-1",
-                "type": "video",
-                "clips": []
-            }],
-            "overlays": [],
-            "gaps": [],
-            "transitions": [],
-            "effects": [],
-            "markers": []
-        });
-        if let (Some(root), Some(extra_root)) = (value.as_object_mut(), extra.as_object()) {
-            for (key, item) in extra_root {
-                root.insert(key.clone(), item.clone());
-            }
-        }
-        parse_project(&value).expect("valid playback project")
+    fn project(body: &str) -> Project {
+        let text = format!(
+            "cut 1\nproject name=\"Playback test\"\n\
+             media source-a path=\"/tmp/source-a.mp4\" rate=30 dur=00:00:10:00 video=320x180\n\
+             media source-b path=\"/tmp/source-b.mp4\" rate=30 dur=00:00:10:00 video=320x180 audio=2ch@48000\n\
+             sequence s1 rate=30 size=320x180 audio=48000\n{body}"
+        );
+        parse_document(&text, Catalog::builtin())
+            .unwrap_or_else(|errors| panic!("{errors:?}"))
+            .project
     }
 
     #[test]
     fn maps_speed_and_placement_into_source_time() {
-        let project = project(json!({
-            "tracks": [{
-                "id": "video-1",
-                "type": "video",
-                "clips": [{
-                    "id": "clip-a",
-                    "sourceId": "source-a",
-                    "in": 3,
-                    "out": 7,
-                    "timelineStart": 2,
-                    "speed": 2
-                }]
-            }]
-        }));
+        let project = project(
+            "  track V1 video\n    clip clip-a media=source-a src=3s at=2s dur=2s speed=2\n",
+        );
         let timeline = PlaybackTimeline::from_project(&project).expect("timeline");
         let resolved = timeline.video_at(2.5).expect("active clip");
         assert_eq!(resolved.clip.source_time_at(2.0), 3.0);
         assert_eq!(resolved.clip.source_time_at(2.5), 4.0);
-        assert_eq!(resolved.clip.source_time_at(3.99), 6.98);
+        assert!((resolved.clip.source_time_at(3.99) - 6.98).abs() < 1e-9);
         assert!(timeline.video_at(4.0).is_none());
         assert_eq!(timeline.duration, 4.0);
+        assert_eq!(
+            (timeline.width, timeline.height, timeline.fps),
+            (320, 180, 30.0)
+        );
     }
 
     #[test]
     fn caption_index_preserves_overlaps_and_exclusive_boundaries() {
-        let project = project(json!({
-            "overlays": [{
-                "id": "captions",
-                "type": "captions",
-                "cues": [
-                    {"start": 0.0, "end": 10.0, "text": "long"},
-                    {"start": 2.0, "end": 4.0, "text": "short"},
-                    {"start": 4.0, "end": 6.0, "text": "next"}
-                ]
-            }]
-        }));
+        let project = project(
+            "  track S1 subtitle\n    clip c1 caption=\" long \" at=0s dur=10s\n\
+             \x20 track S2 subtitle\n    clip c2 caption=\"short\" at=2s dur=2s\n\
+             \x20   clip c3 caption=\"next\" at=4s dur=2s\n",
+        );
         let timeline = PlaybackTimeline::from_project(&project).expect("timeline");
         assert_eq!(timeline.captions_at(2.0).len(), 2);
         assert_eq!(
@@ -609,82 +650,19 @@ mod tests {
     }
 
     #[test]
-    fn explicit_duration_limits_the_declared_source_out() {
-        let project = project(json!({
-            "tracks": [{
-                "id": "video-1",
-                "type": "video",
-                "clips": [{
-                    "id": "clip-a",
-                    "sourceId": "source-a",
-                    "in": 3,
-                    "out": 7,
-                    "duration": 0.5,
-                    "timelineStart": 0,
-                    "speed": 2
-                }]
-            }]
-        }));
+    fn sound_plays_from_audio_tracks_only() {
+        let project = project(
+            "  track V1 video muted=true\n\
+             \x20   clip video-a media=source-b src=0s at=0s dur=4s\n\
+             \x20   clip video-c media=source-b src=0s at=6s dur=1s\n\
+             \x20 track V2 video\n\
+             \x20   clip video-b media=source-b src=0s at=2s dur=2s\n\
+             \x20 track A1 audio\n\
+             \x20   clip audio-a media=source-b src=0s at=1s dur=4s\n\
+             \x20     set gain=-6\n\
+             \x20   clip audio-b media=source-b src=0s at=5s dur=1s\n",
+        );
         let timeline = PlaybackTimeline::from_project(&project).expect("timeline");
-        let clip = timeline.video_at(0.49).expect("active clip").clip;
-        assert_eq!(clip.source_out, 4.0);
-        assert_eq!(clip.duration, 0.5);
-    }
-
-    #[test]
-    fn source_duration_fills_a_clip_without_explicit_in_out() {
-        let project = project(json!({
-            "tracks": [{
-                "id": "video-1",
-                "type": "video",
-                "clips": [{
-                    "id": "clip-a",
-                    "sourceId": "source-a",
-                    "timelineStart": 1
-                }]
-            }]
-        }));
-        let timeline = PlaybackTimeline::from_project(&project).expect("timeline");
-        let clip = timeline.video_at(5.0).expect("active clip").clip;
-        assert_eq!(clip.source_in, 0.0);
-        assert_eq!(clip.source_out, 10.0);
-        assert_eq!(clip.duration, 10.0);
-        assert_eq!(timeline.duration, 11.0);
-        assert!(timeline.audio_at(5.0).is_empty());
-    }
-
-    #[test]
-    fn clip_index_handles_overlaps_gaps_and_backward_queries() {
-        let project = project(json!({
-            "sources": [{
-                "id": "source-a",
-                "path": "/tmp/source-a.mp4",
-                "duration": 10,
-                "hasAudio": true
-            }],
-            "tracks": [
-                {
-                    "id": "video-1",
-                    "type": "video",
-                    "muted": true,
-                    "clips": [
-                        {"id": "video-a", "sourceId": "source-a", "duration": 4, "timelineStart": 0},
-                        {"id": "video-b", "sourceId": "source-a", "duration": 2, "timelineStart": 2},
-                        {"id": "video-c", "sourceId": "source-a", "duration": 1, "timelineStart": 6}
-                    ]
-                },
-                {
-                    "id": "audio-1",
-                    "type": "audio",
-                    "clips": [
-                        {"id": "audio-a", "sourceId": "source-a", "duration": 4, "timelineStart": 1},
-                        {"id": "audio-b", "sourceId": "source-a", "duration": 1, "timelineStart": 2}
-                    ]
-                }
-            ]
-        }));
-        let timeline = PlaybackTimeline::from_project(&project).expect("timeline");
-
         assert_eq!(timeline.video_at(2.5).expect("overlap").clip.id, "video-b");
         assert_eq!(
             timeline.video_at(6.5).expect("later clip").clip.id,
@@ -694,16 +672,66 @@ mod tests {
         assert_eq!(timeline.next_video_start_after(4.0), Some(6.0));
         assert_eq!(
             timeline.video_at_indices(2.5).map(|(_, source)| source),
-            Some(0)
+            Some(1)
         );
-        assert_eq!(
-            timeline
-                .audio_at_indices(2.5)
-                .map(|(clip, _)| timeline.clips()[clip].id.as_str()),
-            Some("audio-a")
-        );
+        let (clip, _) = timeline.audio_at_indices(2.5).expect("sound");
+        assert_eq!(timeline.clips()[clip].id, "audio-a");
+        assert!((timeline.clips()[clip].volume - 0.501).abs() < 0.001);
+        assert_eq!(timeline.audio_at(2.5).len(), 1);
         assert!(timeline.video_at(f64::NAN).is_none());
         assert_eq!(timeline.next_video_start_after(f64::NAN), None);
+    }
+
+    #[test]
+    fn nested_sequences_play_their_clips_in_place() {
+        let text = "cut 1\nproject name=\"n\"\n\
+             media m path=\"/tmp/m.mp4\" rate=30 dur=00:00:10:00 video=320x180 audio=2ch@48000\n\
+             sequence main rate=30 size=320x180 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20   clip n1 seq=inner src=1s at=2s dur=2s\n\
+             sequence inner rate=30 size=320x180 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20   clip i1 media=m src=5s at=0s dur=2s\n\
+             \x20   clip i2 media=m src=8s at=2s dur=2s\n";
+        let project = parse_document(text, Catalog::builtin()).unwrap().project;
+        let timeline = PlaybackTimeline::from_project(&project).expect("timeline");
+        let ids: Vec<_> = timeline
+            .clips()
+            .iter()
+            .map(|clip| clip.id.as_str())
+            .collect();
+        assert_eq!(ids, ["i1", "i2"]);
+        let first = &timeline.clips()[0];
+        assert_eq!(
+            (first.timeline_start, first.duration, first.source_in),
+            (2.0, 1.0, 6.0)
+        );
+        let second = &timeline.clips()[1];
+        assert_eq!(
+            (second.timeline_start, second.duration, second.source_in),
+            (3.0, 1.0, 8.0)
+        );
+        assert_eq!(preview_plan(&project).mode, PreviewMode::NativeExact);
+    }
+
+    #[test]
+    fn preview_plan_asks_for_a_render_when_playback_would_differ() {
+        let plain = project("  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n");
+        assert_eq!(preview_plan(&plain).mode, PreviewMode::NativeExact);
+        let cropped = project(
+            "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      set crop_l=0.5\n",
+        );
+        let plan = preview_plan(&cropped);
+        assert_eq!(plan.mode, PreviewMode::RenderedFallback);
+        assert_eq!(plan.reasons[0].entity_id.as_deref(), Some("c1"));
+        let blended = project(
+            "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      set blend=screen\n",
+        );
+        assert_eq!(preview_plan(&blended).mode, PreviewMode::Unavailable);
+        let gained = project(
+            "  track A1 audio\n    clip a1 media=source-b src=0s at=0s dur=2s\n      set gain=-3\n",
+        );
+        assert_eq!(preview_plan(&gained).mode, PreviewMode::NativeExact);
     }
 
     #[test]
@@ -711,7 +739,7 @@ mod tests {
         let clip = PlaybackClip {
             id: "clip".into(),
             track_id: "video-1".into(),
-            track_kind: TrackType::Video,
+            track_kind: ClipKind::Video,
             source_id: "source-a".into(),
             timeline_start: 2.0,
             duration: 4.0,
@@ -724,22 +752,5 @@ mod tests {
         assert!((clip.timeline_time_for_source(1.0) - 2.0).abs() < 1e-9);
         assert!((clip.timeline_time_for_source(5.0) - 4.0).abs() < 1e-9);
         assert!((clip.source_time_at(clip.timeline_time_for_source(3.0)) - 3.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn caption_offsets_are_timeline_relative_and_end_is_exclusive() {
-        let project = project(json!({
-            "overlays": [{
-                "id": "captions-1",
-                "type": "captions",
-                "start": 2,
-                "duration": 3,
-                "cues": [{"start": 0.5, "end": 2, "text": " hello "}]
-            }]
-        }));
-        let timeline = PlaybackTimeline::from_project(&project).expect("timeline");
-        assert_eq!(timeline.captions_at(2.5)[0].text, "hello");
-        assert!(timeline.captions_at(4.5).is_empty());
-        assert!(timeline.captions_at(4.0).is_empty());
     }
 }

@@ -2074,28 +2074,75 @@ private slots:
         updateInspector();
     }
 
+    // Edits go to cutd as typed operations on the model. Amounts and
+    // positions count frames of the sequence.
+    bool sendEdit(const QJsonArray &ops) {
+        if (ops.isEmpty()) return false;
+        return sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("edit")},
+                                      {QStringLiteral("revision"), revisionValue()},
+                                      {QStringLiteral("ops"), ops}});
+    }
+
+    qint64 frameAt(double seconds) const { return std::llround(seconds * m_fps); }
+
+    QJsonObject clipObject(const QString &id) const {
+        for (const QJsonValue &trackValue : m_project.value(QStringLiteral("tracks")).toArray()) {
+            for (const QJsonValue &clipValue : trackValue.toObject().value(QStringLiteral("clips")).toArray()) {
+                const QJsonObject clip = clipValue.toObject();
+                if (clip.value(QStringLiteral("id")).toString() == id) return clip;
+            }
+        }
+        return {};
+    }
+
+    static qint64 clipFrames(const QJsonObject &clip, const QString &key) {
+        return static_cast<qint64>(clip.value(key).toDouble());
+    }
+
     void moveClip(const QString &id, double start) {
-        const QJsonObject command{{QStringLiteral("type"), QStringLiteral("place_clip")},
-                                  {QStringLiteral("clipId"), id},
-                                  {QStringLiteral("timelineFrame"), static_cast<qint64>(std::llround(start * m_fps))}};
-        sendSimple(commandApply(command, m_revision));
+        const QJsonObject clip = clipObject(id);
+        if (clip.isEmpty()) return;
+        const qint64 frames = frameAt(start) - clipFrames(clip, QStringLiteral("startFrame"));
+        if (frames == 0) return;
+        sendEdit(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("move")},
+                                        {QStringLiteral("clip"), id},
+                                        {QStringLiteral("frames"), frames}}});
     }
 
     void trimClip(const QString &id, bool leading, double frame) {
-        const QJsonObject command{{QStringLiteral("type"), QStringLiteral("trim_clip")},
-                                  {QStringLiteral("clipId"), id},
-                                  {QStringLiteral("edge"), leading ? QStringLiteral("leading") : QStringLiteral("trailing")},
-                                  {QStringLiteral("timelineFrame"), static_cast<qint64>(std::llround(frame))}};
-        sendSimple(commandApply(command, m_revision));
+        const QJsonObject clip = clipObject(id);
+        if (clip.isEmpty()) return;
+        const qint64 start = clipFrames(clip, QStringLiteral("startFrame"));
+        const qint64 edge = leading ? start : start + clipFrames(clip, QStringLiteral("durationFrames"));
+        const qint64 frames = std::llround(frame) - edge;
+        if (frames == 0) return;
+        sendEdit(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("trim")},
+                                        {QStringLiteral("clip"), id},
+                                        {QStringLiteral("edge"), leading ? QStringLiteral("in") : QStringLiteral("out")},
+                                        {QStringLiteral("frames"), frames}}});
     }
 
     void splitClip() {
         if (m_selectedClip.isEmpty()) return;
-        const QJsonObject command{{QStringLiteral("type"), QStringLiteral("split_clip")},
-                                  {QStringLiteral("clipId"), m_selectedClip},
-                                  {QStringLiteral("atFrame"), static_cast<qint64>(std::llround(m_playhead * m_fps))},
-                                  {QStringLiteral("newClipId"), QStringLiteral("clip-%1").arg(QDateTime::currentMSecsSinceEpoch())}};
-        sendSimple(commandApply(command, m_revision));
+        sendEdit(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("split")},
+                                        {QStringLiteral("clip"), m_selectedClip},
+                                        {QStringLiteral("at"), frameAt(m_playhead)},
+                                        {QStringLiteral("tail"), QStringLiteral("clip-%1").arg(QDateTime::currentMSecsSinceEpoch())}}});
+    }
+
+    // A crop box {x, y, width, height} as the model's crop properties; an
+    // empty box restores the full frame.
+    static QJsonObject cropProps(const QJsonObject &box) {
+        if (box.isEmpty())
+            return QJsonObject{{QStringLiteral("crop_l"), QJsonValue()}, {QStringLiteral("crop_t"), QJsonValue()},
+                               {QStringLiteral("crop_r"), QJsonValue()}, {QStringLiteral("crop_b"), QJsonValue()}};
+        const double x = box.value(QStringLiteral("x")).toDouble();
+        const double y = box.value(QStringLiteral("y")).toDouble();
+        const double width = box.value(QStringLiteral("width")).toDouble(1.0);
+        const double height = box.value(QStringLiteral("height")).toDouble(1.0);
+        return QJsonObject{{QStringLiteral("crop_l"), x}, {QStringLiteral("crop_t"), y},
+                           {QStringLiteral("crop_r"), std::max(0.0, 1.0 - x - width)},
+                           {QStringLiteral("crop_b"), std::max(0.0, 1.0 - y - height)}};
     }
 
     QImage sourceFrame(const QJsonObject &clip, double timelineTime) const {
@@ -2374,54 +2421,44 @@ private slots:
 
         const QString suffix = QString::number(QDateTime::currentMSecsSinceEpoch());
         QString focusId = m_selectedClip;
-        QJsonArray commands;
+        QJsonArray ops;
+        auto split = [&ops](const QString &id, qint64 at, const QString &tail) {
+            ops.append(QJsonObject{{QStringLiteral("op"), QStringLiteral("split")}, {QStringLiteral("clip"), id},
+                                   {QStringLiteral("at"), at}, {QStringLiteral("tail"), tail}});
+        };
+        auto setCrop = [&ops](const QString &id, const QJsonObject &box) {
+            ops.append(QJsonObject{{QStringLiteral("op"), QStringLiteral("set")}, {QStringLiteral("clip"), id},
+                                   {QStringLiteral("props"), cropProps(box)}});
+        };
+        auto boxOf = [](const QRectF &rect) {
+            return QJsonObject{{QStringLiteral("x"), rect.x()}, {QStringLiteral("y"), rect.y()},
+                               {QStringLiteral("width"), rect.width()}, {QStringLiteral("height"), rect.height()}};
+        };
         if (startFrame > clipStartFrame) {
             focusId = m_selectedClip + QStringLiteral("-focus-") + suffix;
-            commands.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("split_clip")},
-                                        {QStringLiteral("clipId"), m_selectedClip},
-                                        {QStringLiteral("atFrame"), startFrame},
-                                        {QStringLiteral("newClipId"), focusId}});
+            split(m_selectedClip, startFrame, focusId);
         }
-        const QJsonObject box{{QStringLiteral("x"), region.x()}, {QStringLiteral("y"), region.y()},
-                              {QStringLiteral("width"), region.width()}, {QStringLiteral("height"), region.height()}};
-        commands.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("update_clip")},
-                                    {QStringLiteral("clipId"), focusId},
-                                    {QStringLiteral("patch"), QJsonObject{{QStringLiteral("crop"), box}}}});
+        setCrop(focusId, boxOf(region));
         for (int index = 1; index < tracked.size(); ++index) {
             const auto &step = tracked.at(index);
             if (step.first >= endFrame) break;
             const QString nextId = m_selectedClip + QStringLiteral("-track-%1-").arg(index) + suffix;
-            commands.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("split_clip")},
-                                        {QStringLiteral("clipId"), focusId}, {QStringLiteral("atFrame"), step.first},
-                                        {QStringLiteral("newClipId"), nextId}});
+            split(focusId, step.first, nextId);
             focusId = nextId;
-            const QRectF moved = step.second;
-            commands.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("update_clip")},
-                                        {QStringLiteral("clipId"), focusId},
-                                        {QStringLiteral("patch"), QJsonObject{{QStringLiteral("crop"),
-                                            QJsonObject{{QStringLiteral("x"), moved.x()}, {QStringLiteral("y"), moved.y()},
-                                                        {QStringLiteral("width"), moved.width()}, {QStringLiteral("height"), moved.height()}}}}}});
+            setCrop(focusId, boxOf(step.second));
         }
         if (endFrame < clipEndFrame) {
             const QString afterId = m_selectedClip + QStringLiteral("-after-") + suffix;
-            commands.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("split_clip")},
-                                        {QStringLiteral("clipId"), focusId},
-                                        {QStringLiteral("atFrame"), endFrame},
-                                        {QStringLiteral("newClipId"), afterId}});
-            commands.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("update_clip")},
-                                        {QStringLiteral("clipId"), afterId},
-                                        {QStringLiteral("patch"), QJsonObject{{QStringLiteral("crop"),
-                                            clip.contains(QStringLiteral("crop")) ? clip.value(QStringLiteral("crop")) : QJsonValue()}}}});
+            split(focusId, endFrame, afterId);
+            setCrop(afterId, clip.value(QStringLiteral("crop")).toObject());
         }
-        if (sendSimple(commandApply(QJsonObject{{QStringLiteral("type"), QStringLiteral("batch")},
-                                               {QStringLiteral("commands"), commands}}, m_revision)))
-            m_selectedClip = focusId;
+        if (sendEdit(ops)) m_selectedClip = focusId;
     }
 
     void deleteSelected() {
         if (m_selectedClip.isEmpty()) return;
-        const QJsonObject command{{QStringLiteral("type"), QStringLiteral("remove_clip")}, {QStringLiteral("clipId"), m_selectedClip}};
-        sendSimple(commandApply(command, m_revision));
+        sendEdit(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("delete")},
+                                        {QStringLiteral("clips"), QJsonArray{m_selectedClip}}}});
     }
 
     void sendChat() {
@@ -2668,14 +2705,47 @@ private slots:
 
     void clipValueEdited() {
         if (m_selectedClip.isEmpty() || m_updatingInspector) return;
-        QJsonObject patch;
         const QString field = sender()->property("clipField").toString();
         const QDoubleSpinBox *spin = qobject_cast<QDoubleSpinBox *>(sender());
-        if (!spin || field.isEmpty()) return;
-        patch.insert(field, spin->value());
-        const QJsonObject command{{QStringLiteral("type"), QStringLiteral("update_clip")},
-                                  {QStringLiteral("clipId"), m_selectedClip}, {QStringLiteral("patch"), patch}};
-        sendSimple(commandApply(command, m_revision));
+        const QJsonObject clip = selectedClipObject();
+        if (!spin || field.isEmpty() || clip.isEmpty()) return;
+        const double value = spin->value();
+        const double speed = std::max(0.01, clip.value(QStringLiteral("speed")).toDouble(1.0));
+        auto amount = [this](const QString &op, double frames, const QString &edge = QString()) {
+            const qint64 whole = std::llround(frames);
+            if (whole == 0) return QJsonObject{};
+            QJsonObject edit{{QStringLiteral("op"), op}, {QStringLiteral("clip"), m_selectedClip},
+                             {QStringLiteral("frames"), whole}};
+            if (!edge.isEmpty()) edit.insert(QStringLiteral("edge"), edge);
+            return edit;
+        };
+        auto set = [this](const QString &name, const QJsonValue &prop) {
+            return QJsonObject{{QStringLiteral("op"), QStringLiteral("set")}, {QStringLiteral("clip"), m_selectedClip},
+                               {QStringLiteral("props"), QJsonObject{{name, prop}}}};
+        };
+        QJsonObject edit;
+        if (field == QStringLiteral("timelineStart")) {
+            edit = amount(QStringLiteral("move"), double(frameAt(value) - clipFrames(clip, QStringLiteral("startFrame"))));
+        } else if (field == QStringLiteral("duration")) {
+            edit = amount(QStringLiteral("trim"), double(frameAt(value) - clipFrames(clip, QStringLiteral("durationFrames"))), QStringLiteral("out"));
+        } else if (field == QStringLiteral("in")) {
+            edit = amount(QStringLiteral("slip"), (value - clip.value(QStringLiteral("in")).toDouble()) / speed * m_fps);
+        } else if (field == QStringLiteral("out")) {
+            edit = amount(QStringLiteral("trim"), (value - clip.value(QStringLiteral("out")).toDouble()) / speed * m_fps, QStringLiteral("out"));
+        } else if (field == QStringLiteral("speed")) {
+            QString ratio = QString::number(value, 'f', 4);
+            while (ratio.endsWith(QLatin1Char('0'))) ratio.chop(1);
+            if (ratio.endsWith(QLatin1Char('.'))) ratio.chop(1);
+            if (clip.value(QStringLiteral("reverse")).toBool()) ratio.prepend(QLatin1Char('-'));
+            edit = QJsonObject{{QStringLiteral("op"), QStringLiteral("speed")}, {QStringLiteral("clip"), m_selectedClip},
+                               {QStringLiteral("speed"), ratio}};
+        } else if (field == QStringLiteral("volume")) {
+            const double gain = value > 0.0 ? std::clamp(20.0 * std::log10(value), -96.0, 24.0) : -96.0;
+            edit = set(QStringLiteral("gain"), std::abs(gain) < 1e-9 ? QJsonValue() : QJsonValue(gain));
+        } else if (field == QStringLiteral("opacity")) {
+            edit = set(QStringLiteral("opacity"), value >= 1.0 ? QJsonValue() : QJsonValue(value));
+        }
+        if (!edit.isEmpty()) sendEdit(QJsonArray{edit});
     }
 
 protected:
@@ -3533,6 +3603,7 @@ private:
             value.value(QStringLiteral("type")).toString() != QStringLiteral("abort")) {
             return false;
         }
+        m_lastCommand = value;
         if (!m_bridge) {
             showError(QStringLiteral("Runtime is not connected"));
             return false;
@@ -3686,7 +3757,9 @@ private:
         m_snapshot = snapshot;
         m_revision = static_cast<quint64>(snapshot.value(QStringLiteral("revision")).toDouble());
         m_duration = std::max(0.0, snapshot.value(QStringLiteral("duration")).toDouble());
-        m_project = snapshot.value(QStringLiteral("project")).toObject();
+        // The timeline is a view of the model's first sequence; edits go back
+        // as typed operations.
+        m_project = snapshot.value(QStringLiteral("timeline")).toObject();
         // Derive presentation fields once per snapshot, not on every repaint.
         QHash<QString, QJsonObject> sourceById;
         for (const auto &value : m_project.value("sources").toArray()) { const auto source = value.toObject(); sourceById.insert(source.value("id").toString(), source); }
@@ -3711,7 +3784,7 @@ private:
         if (!m_selectedClip.isEmpty() && selectedClipObject().isEmpty()) m_selectedClip.clear();
         m_timeline->setProject(m_project, m_duration, m_fps);
         m_timeline->setSelectedClip(m_selectedClip);
-        const QJsonArray sources = snapshot.value(QStringLiteral("sources")).toArray();
+        const QJsonArray sources = m_project.value(QStringLiteral("sources")).toArray();
         const QSize canvasSize = resolvedCanvasSize(m_project, sources);
         m_viewer->setProjectInfo(canvasSize.width(), canvasSize.height());
         syncCanvasPreset(canvasSize);
@@ -3993,6 +4066,8 @@ private:
     QTimer m_exactSeekTimer;
     QJsonObject m_snapshot;
     QJsonObject m_project;
+    // The last command handed to the bridge, for tests.
+    QJsonObject m_lastCommand;
     bool m_connected = false;
     QFrame *m_connectionBanner = nullptr;
     QLabel *m_connectionMessage = nullptr;
@@ -4428,14 +4503,14 @@ private slots:
         const QString screenshot = qEnvironmentVariable("CUT_QT_UI_SCREENSHOT");
         if (!screenshot.isEmpty()) {
             window.setConnection(QStringLiteral("ready"));
-            window.applySnapshot(QJsonObject{{"duration", 8}, {"project", QJsonObject{
+            window.applySnapshot(QJsonObject{{"duration", 8}, {"timeline", QJsonObject{
                 {"name", "Cut"}, {"fps", 24}, {"tracks", QJsonArray{}}
             }}});
             QVERIFY(window.grab().save(screenshot + QStringLiteral(".empty.png")));
             const QString sample = qEnvironmentVariable("CUT_QT_UI_SAMPLE_VIDEO");
             if (!sample.isEmpty()) {
                 const QJsonArray sources{QJsonObject{{"id", "sample"}, {"path", sample}}};
-                window.applySnapshot(QJsonObject{{"duration", 4}, {"sources", sources}, {"project", QJsonObject{
+                window.applySnapshot(QJsonObject{{"duration", 4}, {"timeline", QJsonObject{
                     {"name", "Cut"}, {"fps", 24},
                     {"sources", sources},
                     {"tracks", QJsonArray{QJsonObject{{"type", "video"}, {"clips", QJsonArray{
@@ -4447,6 +4522,44 @@ private slots:
                 QVERIFY(window.grab().save(screenshot));
             }
         }
+    }
+
+    void timelineEditsAreTypedOperationsOnTheModel() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(QJsonObject{{"revision", 3}, {"duration", 4}, {"timeline", QJsonObject{
+            {"fps", 24}, {"width", 1920}, {"height", 1080},
+            {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+                QJsonObject{{"id", "c1"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 1.0},
+                            {"duration", 2.0}, {"startFrame", 24}, {"durationFrames", 48},
+                            {"in", 5.0}, {"out", 7.0}, {"speed", 1.0}}}}}}}}}});
+        auto op = [&window] {
+            const QJsonObject command = window.m_lastCommand;
+            if (command.value("type").toString() != QStringLiteral("edit")) return QJsonObject{};
+            if (command.value("revision").toInt() != 3) return QJsonObject{};
+            return command.value("ops").toArray().first().toObject();
+        };
+        window.moveClip(QStringLiteral("c1"), 1.5);
+        QCOMPARE(op().value("op").toString(), QStringLiteral("move"));
+        QCOMPARE(op().value("frames").toInt(), 12);
+        window.trimClip(QStringLiteral("c1"), false, 66);
+        QCOMPARE(op().value("op").toString(), QStringLiteral("trim"));
+        QCOMPARE(op().value("edge").toString(), QStringLiteral("out"));
+        QCOMPARE(op().value("frames").toInt(), -6);
+        window.trimClip(QStringLiteral("c1"), true, 30);
+        QCOMPARE(op().value("edge").toString(), QStringLiteral("in"));
+        QCOMPARE(op().value("frames").toInt(), 6);
+        window.selectClip(QStringLiteral("c1"));
+        window.m_playhead = 2.0;
+        window.splitClip();
+        QCOMPARE(op().value("op").toString(), QStringLiteral("split"));
+        QCOMPARE(op().value("at").toInt(), 48);
+        window.deleteSelected();
+        QCOMPARE(op().value("clips").toArray().first().toString(), QStringLiteral("c1"));
+        const QJsonObject crop = MainWindow::cropProps(QJsonObject{{"x", 0.25}, {"y", 0.0}, {"width", 0.5}, {"height", 1.0}});
+        QCOMPARE(crop.value("crop_l").toDouble(), 0.25);
+        QCOMPARE(crop.value("crop_r").toDouble(), 0.25);
+        QVERIFY(MainWindow::cropProps(QJsonObject{}).value("crop_l").isNull());
     }
 
     void timelineKeepsSeekSelectMoveAndTrimCoordinates() {

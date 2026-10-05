@@ -8,13 +8,15 @@
 //! The canonical project is a `cut_model::Project` stored as the `.cut`
 //! document `project.cut` (ADR 0006). Edits arrive as scripts, typed
 //! operations, or v2 commands (see `kernel`) and are journaled as scripts.
-//! Snapshots still carry a v2 project derived from the model so the
-//! renderer, playback, the Qt app, and MCP keep working until they read the
-//! model directly.
+//! Snapshots carry the document and a timeline view of the model; renders
+//! and proposal previews hand renderers the document with media paths
+//! resolved. Snapshots also still carry a v2 export of the model for the v2
+//! MCP catalog, which goes away in ADR 0006 phase 5.
 
 mod kernel;
+mod timeline;
 
-pub use kernel::{EditOp, TrimSide};
+pub use kernel::{resolve_media_paths, EditOp, TrimSide};
 
 use cut_domain as v2;
 use cut_engine::derivatives::SourceIdentity;
@@ -395,12 +397,17 @@ impl ProjectionStatus {
     }
 }
 
-/// What clients see of the runtime. `project` and `sources` are the v2
-/// project derived from the canonical model; `GetDocument` returns the
-/// canonical `.cut` text.
+/// What clients see of the runtime. `document` is the canonical `.cut`
+/// text and `timeline` a JSON view of its first sequence for editors.
+/// `project` and `sources` are the v2 export of the model, kept for the v2
+/// MCP catalog until ADR 0006 phase 5.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StateSnapshot {
+    #[serde(default)]
+    pub document: String,
+    #[serde(default)]
+    pub timeline: Value,
     pub project: Value,
     pub revision: u64,
     pub can_undo: bool,
@@ -989,6 +996,12 @@ pub enum RuntimeRequest {
         #[serde(rename = "proposalId")]
         proposal_id: String,
     },
+    /// The documents before and after a pending proposal, with media paths
+    /// resolved for a renderer.
+    GetProposalDocuments {
+        #[serde(rename = "proposalId")]
+        proposal_id: String,
+    },
     /// Apply an edit script atomically at `baseRevision`.
     ApplyScript {
         actor: String,
@@ -1237,14 +1250,20 @@ pub enum RuntimeResponse {
         before: Value,
         after: Value,
     },
+    ProposalDocuments {
+        before: String,
+        after: String,
+    },
     Import {
         state: StateSnapshot,
         source_id: String,
         clip_id: String,
     },
+    /// A queued render and the document to render, with media paths
+    /// resolved.
     RenderStarted {
         job: RenderJob,
-        project: Value,
+        document: String,
         output: PathBuf,
     },
     RenderJob(RenderJob),
@@ -1319,6 +1338,20 @@ impl RuntimeHandle {
             _ => Err(RuntimeError::new(
                 "RUNTIME_PROTOCOL_ERROR",
                 "expected proposal-preview response",
+            )),
+        }
+    }
+
+    /// The documents before and after a pending proposal, with media paths
+    /// resolved for a renderer.
+    pub fn proposal_documents(&self, proposal_id: &str) -> Result<(String, String), RuntimeError> {
+        match self.request(RuntimeRequest::GetProposalDocuments {
+            proposal_id: proposal_id.to_owned(),
+        })? {
+            RuntimeResponse::ProposalDocuments { before, after } => Ok((before, after)),
+            _ => Err(RuntimeError::new(
+                "RUNTIME_PROTOCOL_ERROR",
+                "expected proposal-documents response",
             )),
         }
     }
@@ -1449,15 +1482,19 @@ impl RuntimeHandle {
         }
     }
 
-    pub fn start_render(&self, quality: &str) -> Result<(RenderJob, Value, PathBuf), RuntimeError> {
+    pub fn start_render(
+        &self,
+        quality: &str,
+    ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
         self.start_render_range(quality, None)
     }
 
+    /// Queue a render job. The returned document is what to render.
     pub fn start_render_range(
         &self,
         quality: &str,
         range: Option<RenderRange>,
-    ) -> Result<(RenderJob, Value, PathBuf), RuntimeError> {
+    ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
         let (start, duration) = range
             .map(|range| (Some(range.start), Some(range.duration)))
             .unwrap_or((None, None));
@@ -1468,9 +1505,9 @@ impl RuntimeHandle {
         })? {
             RuntimeResponse::RenderStarted {
                 job,
-                project,
+                document,
                 output,
-            } => Ok((job, project, output)),
+            } => Ok((job, document, output)),
             _ => Err(RuntimeError::new(
                 "RUNTIME_PROTOCOL_ERROR",
                 "expected render-start response",
@@ -1717,6 +1754,20 @@ impl RuntimeClient {
         }
     }
 
+    /// The documents before and after a pending proposal, with media paths
+    /// resolved for a renderer.
+    pub fn proposal_documents(&self, proposal_id: &str) -> Result<(String, String), RuntimeError> {
+        match self.request(RuntimeRequest::GetProposalDocuments {
+            proposal_id: proposal_id.to_owned(),
+        })? {
+            RuntimeResponse::ProposalDocuments { before, after } => Ok((before, after)),
+            _ => Err(RuntimeError::new(
+                "RUNTIME_PROTOCOL_ERROR",
+                "expected proposal-documents response",
+            )),
+        }
+    }
+
     pub fn get_state(&self) -> Result<StateSnapshot, RuntimeError> {
         match self.request(RuntimeRequest::GetState)? {
             RuntimeResponse::State(state) => Ok(state),
@@ -1875,15 +1926,19 @@ impl RuntimeClient {
         }
     }
 
-    pub fn start_render(&self, quality: &str) -> Result<(RenderJob, Value, PathBuf), RuntimeError> {
+    pub fn start_render(
+        &self,
+        quality: &str,
+    ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
         self.start_render_range(quality, None)
     }
 
+    /// Queue a render job. The returned document is what to render.
     pub fn start_render_range(
         &self,
         quality: &str,
         range: Option<RenderRange>,
-    ) -> Result<(RenderJob, Value, PathBuf), RuntimeError> {
+    ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
         let (start, duration) = range
             .map(|range| (Some(range.start), Some(range.duration)))
             .unwrap_or((None, None));
@@ -1894,9 +1949,9 @@ impl RuntimeClient {
         })? {
             RuntimeResponse::RenderStarted {
                 job,
-                project,
+                document,
                 output,
-            } => Ok((job, project, output)),
+            } => Ok((job, document, output)),
             _ => Err(RuntimeError::new(
                 "RUNTIME_PROTOCOL_ERROR",
                 "expected render-start response",
@@ -2191,6 +2246,7 @@ fn request_has_stable_idempotency_key(request: &RuntimeRequest) -> bool {
         RuntimeRequest::GetState
         | RuntimeRequest::GetDocument { .. }
         | RuntimeRequest::GetProposalPreview { .. }
+        | RuntimeRequest::GetProposalDocuments { .. }
         | RuntimeRequest::StartRender { .. }
         | RuntimeRequest::GetRender { .. }
         | RuntimeRequest::UpdateJob { .. }
@@ -2251,6 +2307,15 @@ fn decode_response(value: &Value, expected_id: &str) -> Result<RuntimeResponse, 
             document: document.to_owned(),
         });
     }
+    if let (Some(before), Some(after)) = (
+        object.get("beforeDocument").and_then(Value::as_str),
+        object.get("afterDocument").and_then(Value::as_str),
+    ) {
+        return Ok(RuntimeResponse::ProposalDocuments {
+            before: before.to_owned(),
+            after: after.to_owned(),
+        });
+    }
     if let (Some(before), Some(after)) = (object.get("beforeProject"), object.get("afterProject")) {
         return Ok(RuntimeResponse::ProposalPreview {
             before: before.clone(),
@@ -2275,12 +2340,15 @@ fn decode_response(value: &Value, expected_id: &str) -> Result<RuntimeResponse, 
     if let Some(job) = object.get("job") {
         let job = serde_json::from_value::<RenderJob>(job.clone())
             .map_err(|error| RuntimeError::new("RUNTIME_PROTOCOL_ERROR", error.to_string()))?;
-        if let (Some(project), Some(output)) = (object.get("project"), object.get("output")) {
+        if let (Some(document), Some(output)) = (
+            object.get("document").and_then(Value::as_str),
+            object.get("output"),
+        ) {
             let output = serde_json::from_value::<PathBuf>(output.clone())
                 .map_err(|error| RuntimeError::new("RUNTIME_PROTOCOL_ERROR", error.to_string()))?;
             return Ok(RuntimeResponse::RenderStarted {
                 job,
-                project: project.clone(),
+                document: document.to_owned(),
                 output,
             });
         }
@@ -2391,6 +2459,13 @@ pub fn response_value(id: &str, result: Result<RuntimeResponse, RuntimeError>) -
             "beforeProject": before,
             "afterProject": after
         }),
+        Ok(RuntimeResponse::ProposalDocuments { before, after }) => json!({
+            "protocolVersion": RequestEnvelope::PROTOCOL_VERSION,
+            "id": id,
+            "ok": true,
+            "beforeDocument": before,
+            "afterDocument": after
+        }),
         Ok(RuntimeResponse::Import {
             state,
             source_id,
@@ -2405,14 +2480,14 @@ pub fn response_value(id: &str, result: Result<RuntimeResponse, RuntimeError>) -
         }),
         Ok(RuntimeResponse::RenderStarted {
             job,
-            project,
+            document,
             output,
         }) => json!({
             "protocolVersion": RequestEnvelope::PROTOCOL_VERSION,
             "id": id,
             "ok": true,
             "job": job,
-            "project": project,
+            "document": document,
             "output": output
         }),
         Ok(RuntimeResponse::RenderJob(job)) => json!({
@@ -2868,6 +2943,7 @@ impl Runtime {
 
     pub fn snapshot(&self) -> StateSnapshot {
         self.snapshot_view(
+            &self.project,
             &self.view,
             self.revision,
             &self.past,
@@ -2895,14 +2971,16 @@ impl Runtime {
         proposal: &Option<ProposalRecord>,
     ) -> StateSnapshot {
         if *project == self.project {
-            self.snapshot_view(&self.view, revision, past, future, proposal)
+            self.snapshot_view(project, &self.view, revision, past, future, proposal)
         } else {
-            self.snapshot_view(&kernel::committed_view(project), revision, past, future, proposal)
+            let view = kernel::committed_view(project);
+            self.snapshot_view(project, &view, revision, past, future, proposal)
         }
     }
 
     fn snapshot_view(
         &self,
+        project: &Project,
         view: &v2::Project,
         revision: u64,
         past: &[HistoryEntry],
@@ -2916,7 +2994,9 @@ impl Runtime {
             .cloned()
             .unwrap_or_default();
         StateSnapshot {
-            duration: v2::project_duration(view),
+            duration: kernel::program_duration(project).seconds(),
+            document: kernel::print(project),
+            timeline: timeline::timeline_json(project),
             project: project_value,
             revision,
             can_undo: !past.is_empty(),
@@ -4104,15 +4184,17 @@ impl Runtime {
     pub fn start_render(
         &mut self,
         quality: &str,
-    ) -> Result<(RenderJob, Value, PathBuf), RuntimeError> {
+    ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
         self.start_render_range(quality, None)
     }
 
+    /// Queue a render of the first sequence and return the document to
+    /// render, with media paths resolved.
     pub fn start_render_range(
         &mut self,
         quality: &str,
         range: Option<RenderRange>,
-    ) -> Result<(RenderJob, Value, PathBuf), RuntimeError> {
+    ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
         if !matches!(quality, "preview" | "full") {
             return Err(RuntimeError::new(
                 "INVALID_RENDER_QUALITY",
@@ -4121,13 +4203,13 @@ impl Runtime {
         }
         if let Some(range) = range.as_ref() {
             RenderRange::new(range.start, range.duration)?;
-            if range.end() > self.view.duration() + 1e-9 {
+            let duration = kernel::program_duration(&self.project).seconds();
+            if range.end() > duration + 1e-9 {
                 return Err(RuntimeError::new(
                     "INVALID_RENDER_RANGE",
                     format!(
-                        "render range ends at {:.3}s but project duration is {:.3}s",
+                        "render range ends at {:.3}s but project duration is {duration:.3}s",
                         range.end(),
-                        self.view.duration()
                     ),
                 ));
             }
@@ -4157,10 +4239,27 @@ impl Runtime {
         let mut candidate = self.durable_state();
         candidate.jobs.insert(id, job.clone());
         self.commit_candidate(candidate, JournalEvent::Job { job: job.clone() })?;
-        Ok((job, self.renderable(&self.view), output))
+        Ok((job, self.renderable(&self.project), output))
     }
 
+    /// The v2 projects before and after a pending proposal, for the v2 MCP
+    /// catalog.
     pub fn proposal_preview(&self, proposal_id: &str) -> Result<(Value, Value), RuntimeError> {
+        let after = self.proposal_result(proposal_id)?;
+        Ok((
+            self.renderable_v2(&self.view),
+            self.renderable_v2(&kernel::committed_view(&after)),
+        ))
+    }
+
+    /// The documents before and after a pending proposal, for a renderer.
+    pub fn proposal_documents(&self, proposal_id: &str) -> Result<(String, String), RuntimeError> {
+        let after = self.proposal_result(proposal_id)?;
+        Ok((self.renderable(&self.project), self.renderable(&after)))
+    }
+
+    /// The project a pending, current proposal would produce.
+    fn proposal_result(&self, proposal_id: &str) -> Result<Project, RuntimeError> {
         let record = self.proposal.as_ref().ok_or_else(|| {
             RuntimeError::new(
                 "PROPOSAL_NOT_FOUND",
@@ -4197,15 +4296,20 @@ impl Runtime {
         let edit = record.edit.clone().unwrap_or_else(|| Edit::Legacy {
             command: command.clone(),
         });
-        let after = edit.run(&self.project)?.project;
-        Ok((
-            self.renderable(&self.view),
-            self.renderable(&kernel::committed_view(&after)),
-        ))
+        Ok(edit.run(&self.project)?.project)
     }
 
-    /// A v2 project for the renderer, with media paths made absolute.
-    fn renderable(&self, view: &v2::Project) -> Value {
+    /// The document for a renderer: media paths resolved against the
+    /// project directory.
+    fn renderable(&self, project: &Project) -> String {
+        kernel::renderable(
+            project,
+            self.project_path.parent().unwrap_or(Path::new(".")),
+        )
+    }
+
+    /// A v2 project for the v2 MCP catalog, with media paths made absolute.
+    fn renderable_v2(&self, view: &v2::Project) -> Value {
         let mut project = project_value(view);
         resolve_source_paths(
             &mut project,
@@ -4528,6 +4632,10 @@ impl Runtime {
                 let (before, after) = self.proposal_preview(&proposal_id)?;
                 Ok(RuntimeResponse::ProposalPreview { before, after })
             }
+            RuntimeRequest::GetProposalDocuments { proposal_id } => {
+                let (before, after) = self.proposal_documents(&proposal_id)?;
+                Ok(RuntimeResponse::ProposalDocuments { before, after })
+            }
             RuntimeRequest::Apply {
                 actor,
                 idempotency_key,
@@ -4604,10 +4712,10 @@ impl Runtime {
                         ))
                     }
                 };
-                let (job, project, output) = self.start_render_range(&quality, range)?;
+                let (job, document, output) = self.start_render_range(&quality, range)?;
                 Ok(RuntimeResponse::RenderStarted {
                     job,
-                    project,
+                    document,
                     output,
                 })
             }
@@ -6092,13 +6200,18 @@ fn engine_error(error: cut_engine::EngineError) -> RuntimeError {
     }
 }
 
+/// Read a `.cut` document, such as one a render job or a snapshot carries.
+pub fn parse_document(text: &str) -> Result<Project, RuntimeError> {
+    kernel::parse(text)
+}
+
 pub fn run_render(
     id: String,
-    project: Value,
+    document: String,
     output: PathBuf,
     draft: bool,
 ) -> Result<(), RuntimeError> {
-    run_render_with_cancel_file(id, project, output, draft, None, None)
+    run_render_with_cancel_file(id, document, output, draft, None, None)
 }
 
 /// Run one render worker with an optional bounded range and job-specific
@@ -6106,20 +6219,22 @@ pub fn run_render(
 /// the engine is invoked in-process.
 pub fn run_render_with_cancel_file(
     id: String,
-    project: Value,
+    document: String,
     output: PathBuf,
     draft: bool,
     range: Option<RenderRange>,
     cancel_file: Option<PathBuf>,
 ) -> Result<(), RuntimeError> {
-    run_render_with_cancel_file_progress(id, project, output, draft, range, cancel_file, |_| {})
+    run_render_with_cancel_file_progress(id, document, output, draft, range, cancel_file, |_| {})
 }
 
 /// Run one render worker and forward bounded engine progress to the caller.
-/// The callback runs on this worker thread and must not block on UI state.
+/// `document` is the `.cut` text a render job carries; its first sequence
+/// is rendered. The callback runs on this worker thread and must not block
+/// on UI state.
 pub fn run_render_with_cancel_file_progress<F>(
     id: String,
-    project: Value,
+    document: String,
     output: PathBuf,
     draft: bool,
     range: Option<RenderRange>,
@@ -6129,38 +6244,31 @@ pub fn run_render_with_cancel_file_progress<F>(
 where
     F: FnMut(f64),
 {
-    if let Some(range) = range.as_ref() {
-        RenderRange::new(range.start, range.duration)?;
-    }
-    let project = cut_engine::enrich::enrich_project_v2(&project).map_err(engine_error)?;
-    let opts = cut_engine::render::RenderV2Options {
+    let project = kernel::parse(&document)?;
+    let window = match range.as_ref() {
+        Some(range) => {
+            RenderRange::new(range.start, range.duration)?;
+            Some(kernel::time_range(&project, range.start, range.end())?)
+        }
+        None => None,
+    };
+    let opts = cut_engine::render::RenderOptions {
         output: output.to_string_lossy().into_owned(),
         draft,
-        include_embedded_audio: None,
-        prefer_hardware: false,
-        force_software: false,
-        codec: cut_engine::VideoCodec::H264,
+        ..cut_engine::render::RenderOptions::default()
     };
     let cancellation = cut_engine::CancellationToken::new();
     let watcher = cancel_file.as_ref().map(|path| {
         cut_engine::render::spawn_cancel_file_watcher(path.clone(), cancellation.clone())
     });
-    let result = match range {
-        Some(range) => cut_engine::render::render_v2_range_with_cancellation(
-            &project,
-            &opts,
-            range.start,
-            range.duration,
-            &cancellation,
-            Some(&mut on_progress),
-        ),
-        None => cut_engine::render::render_v2_with_cancellation(
-            &project,
-            &opts,
-            &cancellation,
-            Some(&mut on_progress),
-        ),
-    };
+    let result = cut_engine::render::render_program_with_cancellation(
+        &project,
+        None,
+        window,
+        &opts,
+        &cancellation,
+        Some(&mut on_progress),
+    );
     cancellation.cancel();
     if let Some(watcher) = watcher {
         let _ = watcher.join();
@@ -7885,6 +7993,52 @@ mod tests {
         )
         .unwrap();
         (Runtime::open(&directory).unwrap(), directory)
+    }
+
+    #[test]
+    fn renders_and_proposals_hand_out_documents_with_resolved_media() {
+        let (mut runtime, directory) = kernel_runtime("render-documents");
+        let media = directory.join("a.mov").to_string_lossy().into_owned();
+        let snapshot = runtime.snapshot();
+        assert!(snapshot.document.contains("path=\"a.mov\""));
+        assert_eq!(
+            snapshot.timeline["tracks"][0]["clips"][0]["durationFrames"],
+            96
+        );
+        assert_eq!(snapshot.duration, 4.0);
+
+        let (_, document, _) = runtime
+            .start_render_range("preview", Some(RenderRange::new(1.0, 2.0).unwrap()))
+            .unwrap();
+        let rendered = parse_document(&document).unwrap();
+        assert_eq!(rendered.media[0].path, media);
+        assert_eq!(
+            runtime
+                .start_render_range("preview", Some(RenderRange::new(3.0, 2.0).unwrap()))
+                .unwrap_err()
+                .code,
+            "INVALID_RENDER_RANGE"
+        );
+
+        let staged = runtime
+            .stage_script_proposal(
+                "trim",
+                runtime.snapshot().revision,
+                "trim c1 out -24f",
+                Vec::new(),
+            )
+            .unwrap();
+        let Some(PendingProposal::Pending { proposal_id, .. }) = staged.pending_proposal else {
+            panic!("expected a pending proposal");
+        };
+        let (before, after) = runtime.proposal_documents(&proposal_id).unwrap();
+        let (before, after) = (
+            parse_document(&before).unwrap(),
+            parse_document(&after).unwrap(),
+        );
+        assert_eq!(after.media[0].path, media);
+        assert_eq!(kernel::program_duration(&before).seconds(), 4.0);
+        assert_eq!(kernel::program_duration(&after).seconds(), 3.0);
     }
 
     #[test]
