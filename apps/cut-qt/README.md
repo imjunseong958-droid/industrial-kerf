@@ -30,7 +30,10 @@ and timeline and inspector edits go to `cutd` as typed operations counted in
 frames of the sequence.
 
 The timeline supports click-to-seek, clip selection, drag-to-move, edge
-trimming, split-at-playhead, and Delete. Inspector values commit on focus loss.
+trimming, split-at-playhead, and Delete. The inspector edits a clip's timing,
+the catalog properties of its track type, and a generator's parameters, from
+the definitions each snapshot carries; animated properties are read-only
+there. Inspector values commit on focus loss.
 Tracks follow the classic edit-suite order: picture tracks stack upward from
 V1, because a later picture track plays over the ones below it, and sound
 tracks run downward from A1. The ruler and track headers stay pinned while the

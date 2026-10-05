@@ -11,6 +11,7 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QCheckBox>
+#include <QColorDialog>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDir>
@@ -252,9 +253,6 @@ QString clipName(const QJsonObject &clip) {
     if (clip.value(QStringLiteral("name")).isString()) {
         return clip.value(QStringLiteral("name")).toString();
     }
-    if (clip.value(QStringLiteral("title")).isString()) {
-        return clip.value(QStringLiteral("title")).toString();
-    }
     const QString id = clip.value(QStringLiteral("id")).toString();
     return id.isEmpty() ? QStringLiteral("Untitled clip") : id.left(18);
 }
@@ -329,16 +327,22 @@ QColor trackAccent(const QJsonObject &track, int row) {
     return row == 0 ? QColor("#4d9df4") : QColor("#3978c5");
 }
 
+// Model colors are #rrggbb, with a trailing alpha byte when not opaque.
+QColor modelColor(const QString &hex) {
+    QColor color(hex.left(7));
+    if (hex.size() == 9) color.setAlpha(hex.mid(7).toInt(nullptr, 16));
+    return color;
+}
+
+QString modelColorName(const QColor &color) {
+    QString hex = color.name();
+    if (color.alpha() != 255) hex += QStringLiteral("%1").arg(color.alpha(), 2, 16, QLatin1Char('0'));
+    return hex;
+}
+
 bool isAudioTrack(const QJsonObject &track) {
     const QString type = track.value(QStringLiteral("type")).toString().toLower();
     return type.contains(QStringLiteral("audio")) || type.contains(QStringLiteral("sound"));
-}
-
-double clipDuration(const QJsonObject &clip) {
-    const double duration = clip.value(QStringLiteral("duration")).toDouble();
-    if (duration > 0.0) return duration;
-    const double speed = std::max(0.01, clip.value(QStringLiteral("speed")).toDouble(1.0));
-    return std::max(0.2, (clip.value(QStringLiteral("out")).toDouble() - clip.value(QStringLiteral("in")).toDouble()) / speed);
 }
 
 // Clip surfaces derive from the track hue: a mid-tone name bar over a dark
@@ -1080,7 +1084,7 @@ private:
 
     void paintClip(QPainter &p, const QRect &visible, int row, const QJsonObject &clip, const QColor &accent, bool audio) {
         double start = clip.value(QStringLiteral("timelineStart")).toDouble();
-        double duration = clipDuration(clip);
+        double duration = clip.value(QStringLiteral("duration")).toDouble();
         const QString id = clip.value(QStringLiteral("id")).toString();
         const bool dragged = m_dragging && id == m_dragClipId;
         if (dragged) {
@@ -1143,8 +1147,7 @@ private:
         if (rect.width() > 22.0) {
             qreal textRight = rect.right() - 5;
             const bool effected = !clip.value(QStringLiteral("effects")).toArray().isEmpty() ||
-                                  !clip.value(QStringLiteral("keyframes")).toArray().isEmpty() ||
-                                  clip.value(QStringLiteral("crop")).isObject();
+                                  !clip.value(QStringLiteral("props")).toObject().isEmpty();
             if (effected && rect.width() > 64.0) {
                 QFont badgeFont(QStringLiteral("Menlo"));
                 badgeFont.setStyleHint(QFont::Monospace);
@@ -1503,7 +1506,7 @@ private:
         for (const QJsonValue &value : clips) {
             const QJsonObject clip = value.toObject();
             const double start = clip.value(QStringLiteral("timelineStart")).toDouble();
-            const double duration = clipDuration(clip);
+            const double duration = clip.value(QStringLiteral("duration")).toDouble();
             const QRectF rect = clipRect(row, start, duration);
             if (rect.contains(point)) return {clip.value(QStringLiteral("id")).toString(), row, start, duration, rect};
         }
@@ -2120,6 +2123,17 @@ private slots:
                            {QStringLiteral("crop_b"), std::max(0.0, 1.0 - y - height)}};
     }
 
+    // The inverse of cropProps: the clip's static crop as a box, empty when
+    // uncropped.
+    static QJsonObject cropBox(const QJsonObject &clip) {
+        const QJsonObject props = clip.value(QStringLiteral("props")).toObject();
+        const auto edge = [&props](const char *name) { return props.value(QLatin1String(name)).toDouble(); };
+        const double l = edge("crop_l"), t = edge("crop_t"), r = edge("crop_r"), b = edge("crop_b");
+        if (l == 0.0 && t == 0.0 && r == 0.0 && b == 0.0) return {};
+        return QJsonObject{{QStringLiteral("x"), l}, {QStringLiteral("y"), t},
+                           {QStringLiteral("width"), 1.0 - l - r}, {QStringLiteral("height"), 1.0 - t - b}};
+    }
+
     QImage sourceFrame(const QJsonObject &clip, double timelineTime) const {
         const QString sourceId = clip.value(QStringLiteral("sourceId")).toString();
         QString path;
@@ -2296,24 +2310,13 @@ private slots:
         }
         const QJsonObject clip = selectedClipObject();
         if (clip.isEmpty()) return;
-        bool video = false;
-        for (const QJsonValue &value : m_project.value(QStringLiteral("tracks")).toArray()) {
-            const QJsonObject track = value.toObject();
-            if (track.value(QStringLiteral("type")).toString() != QStringLiteral("video")) continue;
-            for (const QJsonValue &entry : track.value(QStringLiteral("clips")).toArray())
-                video |= entry.toObject().value(QStringLiteral("id")).toString() == m_selectedClip;
-        }
-        if (!video) return;
+        if (selectedTrackType() != QStringLiteral("video")) return;
         const double clipStart = clip.value(QStringLiteral("timelineStart")).toDouble();
-        const double sourceIn = clip.value(QStringLiteral("in")).toDouble();
-        const double sourceOut = clip.value(QStringLiteral("out")).toDouble();
-        const double speed = clip.value(QStringLiteral("speed")).toDouble(1.0);
-        const double clipDuration = clip.value(QStringLiteral("duration")).toDouble(
-            speed > 0.0 ? (sourceOut - sourceIn) / speed : 0.0);
+        const double clipDuration = clip.value(QStringLiteral("duration")).toDouble();
         const double clipEnd = clipStart + clipDuration;
         if (!(clipDuration > 1.0 / m_fps)) return;
 
-        const QJsonObject crop = clip.value(QStringLiteral("crop")).toObject();
+        const QJsonObject crop = cropBox(clip);
         const double representativeTime = std::clamp(m_playhead, clipStart, clipEnd - 1.0 / m_fps);
         const QImage frame = sourceFrame(clip, representativeTime);
         if (frame.isNull()) {
@@ -2425,7 +2428,7 @@ private slots:
         if (endFrame < clipEndFrame) {
             const QString afterId = m_selectedClip + QStringLiteral("-after-") + suffix;
             split(focusId, endFrame, afterId);
-            setCrop(afterId, clip.value(QStringLiteral("crop")).toObject());
+            setCrop(afterId, crop);
         }
         if (sendEdit(ops)) m_selectedClip = focusId;
     }
@@ -2621,10 +2624,6 @@ private slots:
             if (!edge.isEmpty()) edit.insert(QStringLiteral("edge"), edge);
             return edit;
         };
-        auto set = [this](const QString &name, const QJsonValue &prop) {
-            return QJsonObject{{QStringLiteral("op"), QStringLiteral("set")}, {QStringLiteral("clip"), m_selectedClip},
-                               {QStringLiteral("props"), QJsonObject{{name, prop}}}};
-        };
         QJsonObject edit;
         if (field == QStringLiteral("timelineStart")) {
             edit = amount(QStringLiteral("move"), double(frameAt(value) - clipFrames(clip, QStringLiteral("startFrame"))));
@@ -2641,13 +2640,23 @@ private slots:
             if (clip.value(QStringLiteral("reverse")).toBool()) ratio.prepend(QLatin1Char('-'));
             edit = QJsonObject{{QStringLiteral("op"), QStringLiteral("speed")}, {QStringLiteral("clip"), m_selectedClip},
                                {QStringLiteral("speed"), ratio}};
-        } else if (field == QStringLiteral("volume")) {
-            const double gain = value > 0.0 ? std::clamp(20.0 * std::log10(value), -96.0, 24.0) : -96.0;
-            edit = set(QStringLiteral("gain"), std::abs(gain) < 1e-9 ? QJsonValue() : QJsonValue(gain));
-        } else if (field == QStringLiteral("opacity")) {
-            edit = set(QStringLiteral("opacity"), value >= 1.0 ? QJsonValue() : QJsonValue(value));
         }
         if (!edit.isEmpty()) sendEdit(QJsonArray{edit});
+    }
+
+    // A catalog property edit; the default value clears the property.
+    void propertyEdited(const QString &name, const QJsonValue &value) {
+        if (m_selectedClip.isEmpty() || m_updatingInspector) return;
+        QJsonValue fallback;
+        for (const QJsonValue &def : m_propertyDefs)
+            if (def.toObject().value(QStringLiteral("name")).toString() == name) fallback = def.toObject().value(QStringLiteral("default"));
+        const QJsonValue current = selectedClipObject().value(QStringLiteral("props")).toObject().value(name);
+        auto same = [](const QJsonValue &a, const QJsonValue &b) {
+            return a.isDouble() && b.isDouble() ? std::abs(a.toDouble() - b.toDouble()) < 5e-4 : a == b;
+        };
+        if (same(value, current.isUndefined() ? fallback : current)) return;
+        sendEdit(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("set")}, {QStringLiteral("clip"), m_selectedClip},
+                                        {QStringLiteral("props"), QJsonObject{{name, same(value, fallback) ? QJsonValue() : value}}}}});
     }
 
 protected:
@@ -2980,16 +2989,17 @@ private:
         m_inSpin = inspectorSpin(0.0, 0.0, 86400.0, 0.01, QStringLiteral("in"));
         m_outSpin = inspectorSpin(1.0, 0.01, 86400.0, 0.01, QStringLiteral("out"));
         m_speedSpin = inspectorSpin(1.0, 0.01, 20.0, 0.01, QStringLiteral("speed"));
-        m_volumeSpin = inspectorSpin(1.0, 0.0, 2.0, 0.01, QStringLiteral("volume"));
-        m_opacitySpin = inspectorSpin(1.0, 0.0, 1.0, 0.01, QStringLiteral("opacity"));
         form->addRow(QStringLiteral("Position"), m_position);
         form->addRow(QStringLiteral("Duration"), m_durationSpin);
         form->addRow(QStringLiteral("Source in"), m_inSpin);
         form->addRow(QStringLiteral("Source out"), m_outSpin);
         form->addRow(QStringLiteral("Speed"), m_speedSpin);
-        form->addRow(QStringLiteral("Volume"), m_volumeSpin);
-        form->addRow(QStringLiteral("Opacity"), m_opacitySpin);
         inspectorLayout->addWidget(inspector);
+        auto *properties = new QWidget;
+        m_propertyForm = new QFormLayout(properties);
+        m_propertyForm->setContentsMargins(0, 0, 0, 0);
+        m_propertyForm->setSpacing(6);
+        inspectorLayout->addWidget(properties);
         inspectorLayout->addStretch(1);
         tabs->addTab(inspectorTab, QStringLiteral("Inspector"));
 
@@ -3216,6 +3226,62 @@ private:
         spin->setProperty("clipField", field);
         connect(spin, &QDoubleSpinBox::editingFinished, this, &MainWindow::clipValueEdited);
         return spin;
+    }
+
+    // An editor for one catalog property definition.
+    QWidget *propertyEditor(const QJsonObject &def) {
+        const QString name = def.value(QStringLiteral("name")).toString();
+        const QString type = def.value(QStringLiteral("type")).toString();
+        QWidget *editor = nullptr;
+        if (type == QStringLiteral("number")) {
+            auto *spin = new QDoubleSpinBox;
+            const double minimum = def.value(QStringLiteral("min")).toDouble(-1e6);
+            const double maximum = def.value(QStringLiteral("max")).toDouble(1e6);
+            spin->setRange(minimum, maximum);
+            spin->setDecimals(3);
+            spin->setSingleStep(maximum - minimum > 10.0 ? 1.0 : 0.01);
+            connect(spin, &QDoubleSpinBox::editingFinished, this, [this, spin, name] { propertyEdited(name, spin->value()); });
+            editor = spin;
+        } else if (type == QStringLiteral("enum")) {
+            auto *combo = new QComboBox;
+            for (const QJsonValue &option : def.value(QStringLiteral("options")).toArray()) combo->addItem(option.toString());
+            connect(combo, &QComboBox::activated, this, [this, combo, name] { propertyEdited(name, combo->currentText()); });
+            editor = combo;
+        } else if (type == QStringLiteral("bool")) {
+            auto *check = new QCheckBox;
+            connect(check, &QCheckBox::clicked, this, [this, name](bool checked) { propertyEdited(name, checked); });
+            editor = check;
+        } else if (type == QStringLiteral("color")) {
+            auto *button = new QPushButton;
+            connect(button, &QPushButton::clicked, this, [this, button, name] {
+                const QColor color = QColorDialog::getColor(modelColor(button->text()), this, name,
+                                                            QColorDialog::ShowAlphaChannel);
+                if (color.isValid()) propertyEdited(name, modelColorName(color));
+            });
+            editor = button;
+        } else {
+            auto *line = new QLineEdit;
+            connect(line, &QLineEdit::editingFinished, this, [this, line, name] { propertyEdited(name, line->text()); });
+            editor = line;
+        }
+        QString tip = def.value(QStringLiteral("doc")).toString();
+        if (def.value(QStringLiteral("unit")).isString()) tip += QStringLiteral(" (%1)").arg(def.value(QStringLiteral("unit")).toString());
+        editor->setToolTip(tip.trimmed());
+        return editor;
+    }
+
+    static void setPropertyValue(QWidget *editor, const QJsonValue &value) {
+        const QSignalBlocker blocker(editor);
+        if (auto *spin = qobject_cast<QDoubleSpinBox *>(editor)) spin->setValue(value.toDouble());
+        else if (auto *combo = qobject_cast<QComboBox *>(editor)) combo->setCurrentText(value.toString());
+        else if (auto *check = qobject_cast<QCheckBox *>(editor)) check->setChecked(value.toBool());
+        else if (auto *button = qobject_cast<QPushButton *>(editor)) {
+            QPixmap swatch(12, 12);
+            swatch.fill(modelColor(value.toString()));
+            button->setIcon(swatch);
+            button->setText(value.toString());
+        }
+        else if (auto *line = qobject_cast<QLineEdit *>(editor)) line->setText(value.toString());
     }
 
     void syncCanvasPreset(const QSize &size) {
@@ -3667,7 +3733,6 @@ private:
             auto track = value.toObject(); QJsonArray displayClips;
             for (const auto &clipValue : track.value("clips").toArray()) {
                 auto clip = clipValue.toObject(); const auto source = sourceById.value(clip.value("sourceId").toString());
-                if (!clip.contains("duration")) clip.insert("duration", std::max(0.0, (clip.value("out").toDouble(source.value("duration").toDouble()) - clip.value("in").toDouble()) / std::max(0.01, clip.value("speed").toDouble(1.0))));
                 if (!clip.contains("name")) clip.insert("name", sourceName(source));
                 displayClips.append(clip);
             }
@@ -3702,6 +3767,16 @@ private:
         updateInspector();
     }
 
+    QString selectedTrackType() const {
+        for (const QJsonValue &trackValue : m_project.value(QStringLiteral("tracks")).toArray()) {
+            const QJsonObject track = trackValue.toObject();
+            for (const QJsonValue &clipValue : track.value(QStringLiteral("clips")).toArray())
+                if (clipValue.toObject().value(QStringLiteral("id")).toString() == m_selectedClip)
+                    return track.value(QStringLiteral("type")).toString();
+        }
+        return {};
+    }
+
     QJsonObject selectedClipObject() const {
         const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
         for (const QJsonValue &trackValue : tracks) {
@@ -3728,8 +3803,35 @@ private:
         setSpin(m_inSpin, clip.value(QStringLiteral("in")).toDouble());
         setSpin(m_outSpin, std::max(0.01, clip.value(QStringLiteral("out")).toDouble(1.0)));
         setSpin(m_speedSpin, clip.value(QStringLiteral("speed")).toDouble(1.0));
-        setSpin(m_volumeSpin, clip.value(QStringLiteral("volume")).toDouble(1.0));
-        setSpin(m_opacitySpin, clip.value(QStringLiteral("opacity")).toDouble(1.0));
+        // Property editors follow the catalog definitions for a generator's
+        // parameters and the clip's track type; animated properties show their
+        // first key and are read-only.
+        QJsonArray defs;
+        if (hasClip) {
+            defs = m_project.value(QStringLiteral("generators")).toObject().value(clip.value(QStringLiteral("fx")).toString()).toArray();
+            for (const QJsonValue &def : m_project.value(QStringLiteral("properties")).toObject().value(selectedTrackType()).toArray())
+                defs.append(def);
+        }
+        if (defs != m_propertyDefs) {
+            while (m_propertyForm->rowCount() > 0) m_propertyForm->removeRow(0);
+            m_propertyEditors.clear();
+            m_propertyDefs = defs;
+            for (const QJsonValue &def : defs) {
+                QWidget *editor = propertyEditor(def.toObject());
+                const QString name = def.toObject().value(QStringLiteral("name")).toString();
+                m_propertyEditors.insert(name, editor);
+                m_propertyForm->addRow(name, editor);
+            }
+        }
+        const QJsonObject props = clip.value(QStringLiteral("props")).toObject();
+        for (const QJsonValue &def : defs) {
+            const QString name = def.toObject().value(QStringLiteral("name")).toString();
+            const QJsonValue prop = props.value(name);
+            QWidget *editor = m_propertyEditors.value(name);
+            setPropertyValue(editor, prop.isArray() ? prop.toArray().first().toObject().value(QStringLiteral("value"))
+                                     : prop.isUndefined() ? def.toObject().value(QStringLiteral("default")) : prop);
+            editor->setEnabled(!prop.isArray());
+        }
         m_updatingInspector = false;
     }
 
@@ -3983,8 +4085,9 @@ private:
     QDoubleSpinBox *m_inSpin = nullptr;
     QDoubleSpinBox *m_outSpin = nullptr;
     QDoubleSpinBox *m_speedSpin = nullptr;
-    QDoubleSpinBox *m_volumeSpin = nullptr;
-    QDoubleSpinBox *m_opacitySpin = nullptr;
+    QFormLayout *m_propertyForm = nullptr;
+    QJsonArray m_propertyDefs;
+    QHash<QString, QWidget *> m_propertyEditors;
     QComboBox *m_quality = nullptr;
     QComboBox *m_canvasPreset = nullptr;
     QProgressBar *m_exportProgress = nullptr;
@@ -4346,7 +4449,7 @@ private slots:
                     {"sources", sources},
                     {"tracks", QJsonArray{QJsonObject{{"type", "video"}, {"clips", QJsonArray{
                         QJsonObject{{"id", "sample-clip"}, {"sourceId", "sample"}, {"timelineStart", 0},
-                                    {"in", 0}, {"out", 4}}}}}}}
+                                    {"duration", 4}, {"in", 0}, {"out", 4}}}}}}}
                 }}});
                 QTRY_VERIFY_WITH_TIMEOUT(window.m_artwork->frames.contains(QStringLiteral("sample")), 5000);
                 window.m_viewer->setFrame(window.m_artwork->frames.value(QStringLiteral("sample")), 0);
@@ -4391,6 +4494,86 @@ private slots:
         QCOMPARE(crop.value("crop_l").toDouble(), 0.25);
         QCOMPARE(crop.value("crop_r").toDouble(), 0.25);
         QVERIFY(MainWindow::cropProps(QJsonObject{}).value("crop_l").isNull());
+        const QJsonObject box = MainWindow::cropBox(QJsonObject{{"props", crop}});
+        QCOMPARE(box.value("x").toDouble(), 0.25);
+        QCOMPARE(box.value("width").toDouble(), 0.5);
+        QVERIFY(MainWindow::cropBox(QJsonObject{}).isEmpty());
+    }
+
+    void inspectorEditsTheCatalogPropertiesOfTheTrackType() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        const QJsonObject properties{
+            {"video", QJsonArray{
+                QJsonObject{{"name", "opacity"}, {"type", "number"}, {"default", 1.0}, {"min", 0.0}, {"max", 1.0}},
+                QJsonObject{{"name", "x"}, {"type", "number"}, {"default", 0.0}, {"min", -10.0}, {"max", 10.0}},
+                QJsonObject{{"name", "blend"}, {"type", "enum"}, {"default", "normal"}, {"options", QJsonArray{"normal", "add"}}}}},
+            {"audio", QJsonArray{
+                QJsonObject{{"name", "gain"}, {"type", "number"}, {"default", 0.0}, {"min", -96.0}, {"max", 24.0}, {"unit", "dB"}}}}};
+        window.applySnapshot(QJsonObject{{"revision", 5}, {"duration", 4}, {"timeline", QJsonObject{
+            {"fps", 24}, {"properties", properties},
+            {"tracks", QJsonArray{
+                QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+                    QJsonObject{{"id", "v"}, {"timelineStart", 0.0}, {"duration", 2.0},
+                                {"props", QJsonObject{{"opacity", 0.5}, {"x", QJsonArray{
+                                    QJsonObject{{"at", 0.0}, {"value", 0.25}, {"interp", "linear"}},
+                                    QJsonObject{{"at", 1.0}, {"value", 1.0}, {"interp", "linear"}}}}}}}}}},
+                QJsonObject{{"id", "V2"}, {"type", "video"}, {"clips", QJsonArray{
+                    QJsonObject{{"id", "g"}, {"kind", "generator"}, {"fx", "title"}, {"timelineStart", 0.0}, {"duration", 2.0},
+                                {"props", QJsonObject{{"text", "Day One"}}}}}}},
+                QJsonObject{{"id", "A1"}, {"type", "audio"}, {"clips", QJsonArray{
+                    QJsonObject{{"id", "a"}, {"timelineStart", 0.0}, {"duration", 2.0}}}}}}},
+            {"generators", QJsonObject{{"title", QJsonArray{
+                QJsonObject{{"name", "text"}, {"type", "text"}, {"default", ""}},
+                QJsonObject{{"name", "color"}, {"type", "color"}, {"default", "#ffffff"}}}}}}}}});
+        auto set = [&window] {
+            const QJsonObject command = window.m_lastCommand;
+            window.m_lastCommand = {};
+            const QJsonObject op = command.value("ops").toArray().first().toObject();
+            return op.value("op").toString() == QStringLiteral("set") ? op : QJsonObject{};
+        };
+        QVERIFY(window.m_propertyEditors.isEmpty());
+        window.selectClip(QStringLiteral("v"));
+        QCOMPARE(window.m_propertyEditors.size(), 3);
+        auto *opacity = qobject_cast<QDoubleSpinBox *>(window.m_propertyEditors.value("opacity"));
+        auto *x = qobject_cast<QDoubleSpinBox *>(window.m_propertyEditors.value("x"));
+        auto *blend = qobject_cast<QComboBox *>(window.m_propertyEditors.value("blend"));
+        QVERIFY(opacity && x && blend);
+        QCOMPARE(opacity->value(), 0.5);
+        QCOMPARE(opacity->maximum(), 1.0);
+        QVERIFY(!x->isEnabled());
+        QCOMPARE(x->value(), 0.25);
+        QCOMPARE(blend->currentText(), QStringLiteral("normal"));
+        window.propertyEdited("opacity", 0.5);
+        QVERIFY(set().isEmpty());
+        window.propertyEdited("opacity", 0.75);
+        QCOMPARE(set().value("props").toObject().value("opacity").toDouble(), 0.75);
+        window.propertyEdited("opacity", 1.0);
+        QVERIFY(set().value("props").toObject().value("opacity").isNull());
+        window.propertyEdited("blend", "add");
+        QCOMPARE(set().value("props").toObject().value("blend").toString(), QStringLiteral("add"));
+        window.selectClip(QStringLiteral("g"));
+        QCOMPARE(window.m_propertyEditors.size(), 5);
+        auto *text = qobject_cast<QLineEdit *>(window.m_propertyEditors.value("text"));
+        auto *color = qobject_cast<QPushButton *>(window.m_propertyEditors.value("color"));
+        QVERIFY(text && color && window.m_propertyEditors.contains("opacity"));
+        QCOMPARE(text->text(), QStringLiteral("Day One"));
+        QCOMPARE(color->text(), QStringLiteral("#ffffff"));
+        QVERIFY(!color->icon().isNull());
+        QCOMPARE(modelColor(QStringLiteral("#ff000080")).alpha(), 0x80);
+        QCOMPARE(modelColorName(QColor(255, 0, 0, 0x80)), QStringLiteral("#ff000080"));
+        QCOMPARE(modelColorName(Qt::white), QStringLiteral("#ffffff"));
+        window.propertyEdited("text", "Day Two");
+        QCOMPARE(set().value("props").toObject().value("text").toString(), QStringLiteral("Day Two"));
+        window.propertyEdited("color", "#ffffff");
+        QVERIFY(set().isEmpty());
+        window.propertyEdited("color", "#ff0000");
+        QCOMPARE(set().value("props").toObject().value("color").toString(), QStringLiteral("#ff0000"));
+        window.selectClip(QStringLiteral("a"));
+        QCOMPARE(window.m_propertyEditors.keys(), QList<QString>{"gain"});
+        QVERIFY(window.m_propertyEditors.value("gain")->toolTip().contains("dB"));
+        window.propertyEdited("gain", -6.0);
+        QCOMPARE(set().value("props").toObject().value("gain").toDouble(), -6.0);
     }
 
     void timelineKeepsSeekSelectMoveAndTrimCoordinates() {
