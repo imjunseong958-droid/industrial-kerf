@@ -36,6 +36,4 @@ cargo clippy -p cut-playback --no-default-features --all-targets -- -D warnings
 
 The FFmpeg integration test creates a short real media file and verifies RGBA
 frame delivery. `tests/release_gate.rs` covers real 4K, variable-frame-rate,
-long-GOP, captions, mute, fullscreen, and audio synchronization behavior. The
-manual open, edit, restart, IME, keyboard navigation, focus, and Qt workflow is
-recorded in `docs/RUST_MIGRATION_HANDOFF.md`.
+long-GOP, captions, mute, fullscreen, and audio synchronization behavior.

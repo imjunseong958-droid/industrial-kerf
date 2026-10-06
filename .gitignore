@@ -20,3 +20,13 @@ dist/
 *.srt
 *.vtt
 target/
+
+# cutd state from local runs
+.cut-runtime.*
+.cutd.sock
+.cut-render-*
+project.cut
+project.cut.json
+project.cut.history.json
+.cut/runtime/
+.cut/native-project/

@@ -23,7 +23,6 @@ agent의 편집은 기존 `timeline.apply` proposal 경계를 통과한다.
 
 참고 자료: [Google agentic video research](/tmp/cut-google-research.md),
 [Cut 아키텍처 감사](/tmp/cut-architecture-plan-audit.md),
-[Diffusion Studio 실행계획](../DIFFUSION_STUDIO_IMPLEMENTATION_PLAN.md),
 [Gemini agentic video understanding](https://ai.google.dev/gemini-api/docs/video-understanding#agentic-video-understanding),
 [Diffusion Studio CLI reference](https://github.com/diffusionstudio/editor/blob/main/reference/README.md).
 

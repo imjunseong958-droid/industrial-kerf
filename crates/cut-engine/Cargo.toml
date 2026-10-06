@@ -3,7 +3,7 @@ name = "cut-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Cut media engine: probe, encode, compile, proxy, and region planning"
+description = "Cut media engine: probe, encode, compile, render, proxy, and transcription"
 
 [lib]
 name = "cut_engine"

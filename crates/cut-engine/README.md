@@ -42,7 +42,6 @@ Commands:
 | `encoders` / `select-encoder` | hardware encoder discovery (`select-encoder` stays opt-in) |
 | `resources` | laptop CPU/encode budget |
 | `proxy-key` / `proxy-args` / `proxy-run` | deterministic proxy cache keys, proxy ffmpeg argv, and proxy transcodes |
-| `plan` / `crop` | Region keyframe planning and aspect-aware crop planning from observed boxes |
 
 Transcription uses `CUT_WHISPER_BIN` (or `whisper-cli` on `PATH`) and
 `CUT_WHISPER_MODEL`. It prepares mono 16 kHz WAV ranges and stores typed JSON
