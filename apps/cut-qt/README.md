@@ -19,6 +19,14 @@ The positional arguments may also be supplied as `CUT_PROJECT_DIR` and
 `CUTD_BIN`. For a quick visual smoke run, add
 `--screenshot /tmp/cut.png --quit-after-ms 900`.
 
+Sources live in the `cut` namespace, one class per header/source pair:
+`main_window` (the window and its panels), `timeline_widget`,
+`viewer_widget` (the viewer and the focus-region picker), and
+`media_artwork` (background thumbnails and waveforms). `editor_common`
+holds shared constants and helpers, `editor_style.h` the stylesheet, and
+`main.cpp` only `main()`. `editor_test.cpp` builds into `cut-qt-tests`
+instead of `main.cpp`.
+
 On macOS the default bridge path is
 `target/debug/libcut_qt_bridge.dylib`; on Linux pass
 `-DCUT_BRIDGE_LIBRARY=$PWD/target/debug/libcut_qt_bridge.so` when configuring.
