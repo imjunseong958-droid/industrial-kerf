@@ -1,6 +1,8 @@
 //! Qt's nonblocking, UTF-8 C ABI. Canonical edits stay in cutd; media frames
 //! travel through a latest-frame slot rather than JSON or an accumulating queue.
-use cut_agent::{AgentEvent, AgentSession, AgentSessionOptions, OpenAiApiMode, ProviderName};
+use cut_agent::{
+    AgentEvent, AgentSession, AgentSessionOptions, OpenAiApiMode, ProviderName, ReasoningEffort,
+};
 use cut_mcp::inbound;
 use cut_mcp::CutMcpRouter;
 use cut_model::{
@@ -645,9 +647,9 @@ fn new_agent(
         provider
     } else {
         match std::env::var("CUT_PROVIDER").ok().as_deref() {
-            Some("openai") => ProviderName::Openai,
-            Some("anthropic") => ProviderName::Anthropic,
-            Some(_) => return Err("CUT_PROVIDER must be openai or anthropic".into()),
+            Some(name) => {
+                ProviderName::parse(name).ok_or("CUT_PROVIDER must be openai or anthropic")?
+            }
             None if settings
                 .api_key
                 .as_deref()
@@ -673,23 +675,18 @@ fn new_agent(
         .or_else(|| std::env::var(key_name).ok())
         .filter(|key| !key.trim().is_empty())
         .ok_or_else(|| format!("Add an API key in Agent Settings or set {key_name}"))?;
-    let api_mode =
-        match settings
-            .api_mode
-            .or_else(|| match std::env::var("OPENAI_API_MODE").ok().as_deref() {
-                Some("responses") => Some(OpenAiApiMode::Responses),
-                Some("chat") | None => Some(OpenAiApiMode::Chat),
-                _ => None,
-            }) {
-            Some(mode) => mode,
-            None => return Err("OPENAI_API_MODE must be chat or responses".into()),
-        };
+    let api_mode = match settings.api_mode {
+        Some(mode) => mode,
+        None => match std::env::var("OPENAI_API_MODE") {
+            Ok(name) => {
+                OpenAiApiMode::parse(&name).ok_or("OPENAI_API_MODE must be chat or responses")?
+            }
+            Err(_) => OpenAiApiMode::Chat,
+        },
+    };
     let reasoning_effort = std::env::var("OPENAI_REASONING_EFFORT")
         .ok()
-        .map(|value| {
-            serde_json::from_value(Value::String(value))
-                .map_err(|_| "Invalid OPENAI_REASONING_EFFORT".to_string())
-        })
+        .map(|value| ReasoningEffort::parse(&value).ok_or("Invalid OPENAI_REASONING_EFFORT"))
         .transpose()?;
     let router = CutMcpRouter::new(directory, Some(binary))?;
     let mut tools = router.agent_tools();

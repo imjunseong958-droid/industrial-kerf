@@ -9,9 +9,9 @@ use cut_agent::{
     AgentEvent, AgentSession, AgentSessionOptions, AgentTargetSummary, OpenAiApiMode, ProviderName,
     ReasoningEffort,
 };
-use cut_mcp::{docs::add_agents_pointer, inbound, CutMcpRouter};
+use cut_mcp::{docs::add_agents_pointer, inbound, load_project_skills, CutMcpRouter};
 use cut_runtime::RuntimeClient;
-use cut_skills::{load_skills_with_bundled, Skill};
+use cut_skills::Skill;
 use serde_json::{json, Value};
 use std::env;
 use std::fs;
@@ -116,7 +116,7 @@ fn run() -> Result<()> {
         return run_gui(&args, &directory);
     }
 
-    let skills = project_skills(&directory)?;
+    let skills = load_project_skills(&directory)?;
 
     if args.skills {
         print_skills(&skills);
@@ -269,11 +269,7 @@ fn run_gui(args: &Args, directory: &Path) -> Result<()> {
 }
 
 fn configure_gui_agent(llm: &LlmConfig) {
-    let provider = match llm.provider {
-        ProviderName::Anthropic => "anthropic",
-        ProviderName::Openai => "openai",
-    };
-    env::set_var("CUT_PROVIDER", provider);
+    env::set_var("CUT_PROVIDER", llm.provider.name());
 
     if let Some(api_key) = llm.api_key.as_deref() {
         let key_name = match llm.provider {
@@ -288,31 +284,9 @@ fn configure_gui_agent(llm: &LlmConfig) {
     if let Some(base_url) = llm.base_url.as_deref() {
         env::set_var("OPENAI_BASE_URL", base_url);
     }
-    env::set_var("OPENAI_API_MODE", api_mode_name(llm.api_mode));
+    env::set_var("OPENAI_API_MODE", llm.api_mode.name());
     if let Some(reasoning_effort) = llm.reasoning_effort {
-        env::set_var(
-            "OPENAI_REASONING_EFFORT",
-            reasoning_effort_name(reasoning_effort),
-        );
-    }
-}
-
-fn api_mode_name(mode: OpenAiApiMode) -> &'static str {
-    match mode {
-        OpenAiApiMode::Chat => "chat",
-        OpenAiApiMode::Responses => "responses",
-    }
-}
-
-fn reasoning_effort_name(effort: ReasoningEffort) -> &'static str {
-    match effort {
-        ReasoningEffort::None => "none",
-        ReasoningEffort::Minimal => "minimal",
-        ReasoningEffort::Low => "low",
-        ReasoningEffort::Medium => "medium",
-        ReasoningEffort::High => "high",
-        ReasoningEffort::Xhigh => "xhigh",
-        ReasoningEffort::Max => "max",
+        env::set_var("OPENAI_REASONING_EFFORT", reasoning_effort.name());
     }
 }
 
@@ -342,10 +316,8 @@ fn resolve_llm(args: &Args) -> Result<LlmConfig> {
             }
         })
         .unwrap_or("anthropic");
-    let provider = match provider_name {
-        "anthropic" => ProviderName::Anthropic,
-        "openai" => ProviderName::Openai,
-        other => bail!("unknown provider {other:?}; expected anthropic or openai"),
+    let Some(provider) = ProviderName::parse(provider_name) else {
+        bail!("unknown provider {provider_name:?}; expected anthropic or openai");
     };
     let api_mode_raw = args
         .api_mode
@@ -359,16 +331,17 @@ fn resolve_llm(args: &Args) -> Result<LlmConfig> {
                 .map(str::to_owned)
         })
         .unwrap_or_else(|| "chat".into());
-    let api_mode = match api_mode_raw.as_str() {
-        "chat" => OpenAiApiMode::Chat,
-        "responses" => OpenAiApiMode::Responses,
-        other => bail!("unknown OpenAI API mode {other:?}; expected chat or responses"),
+    let Some(api_mode) = OpenAiApiMode::parse(&api_mode_raw) else {
+        bail!("unknown OpenAI API mode {api_mode_raw:?}; expected chat or responses");
     };
     let reasoning_effort = args
         .reasoning_effort
         .as_deref()
         .or_else(|| file_config.get("reasoningEffort").and_then(Value::as_str))
-        .map(parse_reasoning_effort)
+        .map(|value| {
+            ReasoningEffort::parse(value)
+                .ok_or_else(|| anyhow!("unknown reasoning effort {value:?}"))
+        })
         .transpose()?;
     let config_key = file_config.get("apiKey").and_then(Value::as_str);
     let api_key = args
@@ -412,19 +385,6 @@ fn resolve_llm(args: &Args) -> Result<LlmConfig> {
     })
 }
 
-fn parse_reasoning_effort(value: &str) -> Result<ReasoningEffort> {
-    Ok(match value {
-        "none" => ReasoningEffort::None,
-        "minimal" => ReasoningEffort::Minimal,
-        "low" => ReasoningEffort::Low,
-        "medium" => ReasoningEffort::Medium,
-        "high" => ReasoningEffort::High,
-        "xhigh" => ReasoningEffort::Xhigh,
-        "max" => ReasoningEffort::Max,
-        other => bail!("unknown reasoning effort {other:?}"),
-    })
-}
-
 fn read_user_config() -> Value {
     let Some(home) = env::var_os("HOME") else {
         return json!({});
@@ -433,14 +393,6 @@ fn read_user_config() -> Value {
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_else(|| json!({}))
-}
-
-fn project_skills(directory: &Path) -> Result<Vec<Skill>> {
-    let user_skills = env::var_os("HOME")
-        .map(|home| PathBuf::from(home).join(".cut/skills"))
-        .unwrap_or_default();
-    let project_skills = directory.join(".cut/skills");
-    Ok(load_skills_with_bundled(&[user_skills, project_skills])?)
 }
 
 fn print_skills(skills: &[Skill]) {

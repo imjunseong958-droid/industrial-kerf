@@ -61,6 +61,66 @@ pub enum ReasoningEffort {
     Max,
 }
 
+impl ProviderName {
+    pub const ALL: [Self; 2] = [Self::Anthropic, Self::Openai];
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic",
+            Self::Openai => "openai",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|provider| provider.name() == text)
+    }
+}
+
+impl OpenAiApiMode {
+    pub const ALL: [Self; 2] = [Self::Chat, Self::Responses];
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Chat => "chat",
+            Self::Responses => "responses",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.name() == text)
+    }
+}
+
+impl ReasoningEffort {
+    pub const ALL: [Self; 7] = [
+        Self::None,
+        Self::Minimal,
+        Self::Low,
+        Self::Medium,
+        Self::High,
+        Self::Xhigh,
+        Self::Max,
+    ];
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Xhigh => "xhigh",
+            Self::Max => "max",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|effort| effort.name() == text)
+    }
+}
+
 pub fn default_model(provider: ProviderName, api_mode: OpenAiApiMode) -> &'static str {
     match (provider, api_mode) {
         (ProviderName::Anthropic, _) => DEFAULT_ANTHROPIC_MODEL,
@@ -687,7 +747,7 @@ impl LlmProvider for OpenAiResponsesProvider {
             "stream": true,
         });
         if let Some(effort) = self.reasoning_effort {
-            body["reasoning"] = json!({"effort": reasoning_effort_name(effort)});
+            body["reasoning"] = json!({"effort": effort.name()});
         }
         let events =
             self.client
@@ -1167,18 +1227,6 @@ fn normalize_openai_stop_reason(value: Option<&str>, content: &[Value]) -> Strin
         "tool_use".into()
     } else {
         normalize_stop_reason(value)
-    }
-}
-
-fn reasoning_effort_name(value: ReasoningEffort) -> &'static str {
-    match value {
-        ReasoningEffort::None => "none",
-        ReasoningEffort::Minimal => "minimal",
-        ReasoningEffort::Low => "low",
-        ReasoningEffort::Medium => "medium",
-        ReasoningEffort::High => "high",
-        ReasoningEffort::Xhigh => "xhigh",
-        ReasoningEffort::Max => "max",
     }
 }
 

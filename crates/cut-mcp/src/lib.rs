@@ -434,7 +434,8 @@ fn take_images(value: &mut Value, images: &mut Vec<Value>) {
         _ => {}
     }
 }
-fn load_project_skills(dir: &Path) -> io::Result<Vec<Skill>> {
+/// Bundled skills, then the user's (`~/.cut/skills`), then the project's.
+pub fn load_project_skills(dir: &Path) -> io::Result<Vec<Skill>> {
     let mut directories = Vec::new();
     if let Some(home) = std::env::var_os("HOME") {
         directories.push(PathBuf::from(home).join(".cut").join("skills"));
