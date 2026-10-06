@@ -7,7 +7,6 @@ use ffmpeg_next::util::format::Sample;
 use ffmpeg_next::{decoder, filter, media, ChannelLayout};
 #[cfg(feature = "native-audio")]
 use std::collections::VecDeque;
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError};
 use std::sync::{Arc, Mutex};
@@ -25,15 +24,10 @@ pub(crate) struct AudioRuntime {
 }
 
 impl AudioRuntime {
-    pub fn spawn(
-        timeline: PlaybackTimeline,
-        ffmpeg_binary: &Path,
-        enabled: bool,
-    ) -> Result<Self, PlaybackError> {
+    pub fn spawn(timeline: PlaybackTimeline, enabled: bool) -> Result<Self, PlaybackError> {
         let (commands, receiver) = mpsc::sync_channel(AUDIO_COMMAND_QUEUE_CAPACITY);
         let clock = AudioClock::new();
         let worker_clock = clock.clone();
-        let _ = ffmpeg_binary;
         thread::Builder::new()
             .name("cut-audio".into())
             .spawn(move || {

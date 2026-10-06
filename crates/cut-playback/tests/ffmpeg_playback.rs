@@ -70,7 +70,6 @@ fn real_ffmpeg_surface_delivers_rgba_frames_off_the_calling_thread() {
     let session = PlaybackSession::open(
         project,
         PlaybackConfig::default()
-            .with_ffmpeg_binary(&binary)
             .with_audio_enabled(false)
             .with_frame_size(64, 36),
     )
@@ -131,7 +130,6 @@ fn small_forward_seek_still_delivers_a_later_frame() {
     let session = PlaybackSession::open(
         project,
         PlaybackConfig::default()
-            .with_ffmpeg_binary(&binary)
             .with_audio_enabled(false)
             .with_frame_size(64, 36)
             .with_decode_queue_capacity(1),
