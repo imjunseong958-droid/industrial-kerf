@@ -91,12 +91,6 @@ pub enum EndpointAddress {
 }
 
 impl EndpointAddress {
-    /// Derive the endpoint from the canonical project directory.
-    pub fn for_project_directory(directory: &Path) -> Result<Self, RuntimeError> {
-        let canonical = canonical_project_directory(directory)?;
-        Ok(Self::for_canonical_directory(&canonical))
-    }
-
     fn for_canonical_directory(directory: &Path) -> Self {
         #[cfg(unix)]
         {
@@ -775,19 +769,34 @@ struct DurableState {
     proposal: Option<ProposalRecord>,
 }
 
+impl DurableState {
+    /// Keep `snapshot` as the receipt of `operation` and return the journal
+    /// entry that carries it.
+    fn record_operation(
+        &mut self,
+        operation: String,
+        fingerprint: String,
+        snapshot: StateSnapshot,
+    ) -> JournalOperation {
+        let record = OperationRecord {
+            fingerprint,
+            snapshot: Arc::new(snapshot),
+        };
+        self.operations.insert(operation.clone(), record.clone());
+        JournalOperation {
+            key: operation,
+            record,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Runtime {
     _lock: RuntimeLock,
     project_path: PathBuf,
     journal_path: PathBuf,
-    project: Project,
-    revision: u64,
-    past: Vec<HistoryEntry>,
-    future: Vec<HistoryEntry>,
-    jobs: HashMap<String, RenderJob>,
-    operations: HashMap<String, OperationRecord>,
-    imports: HashMap<String, ImportRecord>,
-    proposal: Option<ProposalRecord>,
+    /// What a commit replaces as one unit.
+    state: DurableState,
     import_warnings: Vec<String>,
     journal_sequence: u64,
     journal_records_since_checkpoint: u64,
@@ -1094,286 +1103,6 @@ impl RuntimeHandle {
             RuntimeError::new("RUNTIME_UNAVAILABLE", "runtime actor dropped the response")
         })?
     }
-
-    pub fn get_state(&self) -> Result<StateSnapshot, RuntimeError> {
-        match self.request(RuntimeRequest::GetState)? {
-            RuntimeResponse::State(state) => Ok(state),
-            _ => Err(RuntimeError::new(
-                "RUNTIME_PROTOCOL_ERROR",
-                "expected state response",
-            )),
-        }
-    }
-
-    /// The documents before and after a pending proposal, with media paths
-    /// resolved for a renderer.
-    pub fn proposal_documents(&self, proposal_id: &str) -> Result<(String, String), RuntimeError> {
-        match self.request(RuntimeRequest::GetProposalDocuments {
-            proposal_id: proposal_id.to_owned(),
-        })? {
-            RuntimeResponse::ProposalDocuments { before, after } => Ok((before, after)),
-            _ => Err(RuntimeError::new(
-                "RUNTIME_PROTOCOL_ERROR",
-                "expected proposal-documents response",
-            )),
-        }
-    }
-
-    /// The canonical `.cut` document and the revision it describes.
-    pub fn get_document(&self, annotated: bool) -> Result<(u64, String), RuntimeError> {
-        match self.request(RuntimeRequest::GetDocument { annotated })? {
-            RuntimeResponse::Document { revision, document } => Ok((revision, document)),
-            _ => Err(RuntimeError::new(
-                "RUNTIME_PROTOCOL_ERROR",
-                "expected document response",
-            )),
-        }
-    }
-
-    pub fn apply_script_request(
-        &self,
-        actor: &str,
-        key: &str,
-        script: &str,
-        base_revision: u64,
-    ) -> Result<StateSnapshot, RuntimeError> {
-        expect_state(self.request(RuntimeRequest::ApplyScript {
-            actor: actor.to_owned(),
-            idempotency_key: key.to_owned(),
-            base_revision,
-            script: script.to_owned(),
-        })?)
-    }
-
-    pub fn apply_ops_request(
-        &self,
-        actor: &str,
-        key: &str,
-        ops: Vec<EditOp>,
-        base_revision: u64,
-    ) -> Result<StateSnapshot, RuntimeError> {
-        expect_state(self.request(RuntimeRequest::ApplyOps {
-            actor: actor.to_owned(),
-            idempotency_key: key.to_owned(),
-            base_revision,
-            ops,
-        })?)
-    }
-
-    pub fn stage_script_proposal(
-        &self,
-        request_key: &str,
-        base_revision: u64,
-        script: &str,
-        observations: Vec<Value>,
-    ) -> Result<StateSnapshot, RuntimeError> {
-        expect_state(self.request(RuntimeRequest::StageScriptProposal {
-            request_key: request_key.to_owned(),
-            base_revision,
-            script: script.to_owned(),
-            observations,
-        })?)
-    }
-
-    pub fn undo_request(
-        &self,
-        actor: &str,
-        key: &str,
-        base_revision: u64,
-    ) -> Result<StateSnapshot, RuntimeError> {
-        expect_state(self.request(RuntimeRequest::Undo {
-            actor: actor.to_owned(),
-            idempotency_key: key.to_owned(),
-            base_revision,
-        })?)
-    }
-
-    pub fn redo_request(
-        &self,
-        actor: &str,
-        key: &str,
-        base_revision: u64,
-    ) -> Result<StateSnapshot, RuntimeError> {
-        expect_state(self.request(RuntimeRequest::Redo {
-            actor: actor.to_owned(),
-            idempotency_key: key.to_owned(),
-            base_revision,
-        })?)
-    }
-
-    pub fn import_media_request(
-        &self,
-        actor: &str,
-        key: &str,
-        path: &str,
-        base_revision: u64,
-    ) -> Result<(StateSnapshot, String, String), RuntimeError> {
-        match self.request(RuntimeRequest::Import {
-            actor: actor.to_owned(),
-            idempotency_key: key.to_owned(),
-            base_revision,
-            path: path.to_owned(),
-        })? {
-            RuntimeResponse::Import {
-                state,
-                media_id,
-                clip_id,
-            } => Ok((state, media_id, clip_id)),
-            _ => Err(RuntimeError::new(
-                "RUNTIME_PROTOCOL_ERROR",
-                "expected import response",
-            )),
-        }
-    }
-
-    pub fn start_render(
-        &self,
-        quality: &str,
-    ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
-        self.start_render_range(quality, None, None)
-    }
-
-    /// Queue a render job of the project, or of what a pending `proposal`
-    /// would make of it. The returned document is what to render.
-    pub fn start_render_range(
-        &self,
-        quality: &str,
-        range: Option<RenderRange>,
-        proposal: Option<&str>,
-    ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
-        let (start, duration) = range
-            .map(|range| (Some(range.start), Some(range.duration)))
-            .unwrap_or((None, None));
-        match self.request(RuntimeRequest::StartRender {
-            quality: quality.to_owned(),
-            start,
-            duration,
-            proposal_id: proposal.map(str::to_owned),
-        })? {
-            RuntimeResponse::RenderStarted {
-                job,
-                document,
-                output,
-            } => Ok((job, document, output)),
-            _ => Err(RuntimeError::new(
-                "RUNTIME_PROTOCOL_ERROR",
-                "expected render-start response",
-            )),
-        }
-    }
-
-    pub fn render_job(&self, job_id: &str) -> Result<RenderJob, RuntimeError> {
-        match self.request(RuntimeRequest::GetRender {
-            job_id: job_id.to_owned(),
-        })? {
-            RuntimeResponse::RenderJob(job) => Ok(job),
-            _ => Err(RuntimeError::new(
-                "RUNTIME_PROTOCOL_ERROR",
-                "expected render-job response",
-            )),
-        }
-    }
-
-    pub fn update_job(
-        &self,
-        job_id: &str,
-        status: &str,
-        error: Option<String>,
-        output_url: Option<String>,
-    ) -> Result<(), RuntimeError> {
-        self.update_job_with_progress(job_id, status, error, output_url, None)
-    }
-
-    pub fn update_job_with_progress(
-        &self,
-        job_id: &str,
-        status: &str,
-        error: Option<String>,
-        output_url: Option<String>,
-        progress: Option<f64>,
-    ) -> Result<(), RuntimeError> {
-        match self.request(RuntimeRequest::UpdateJob {
-            job_id: job_id.to_owned(),
-            status: status.to_owned(),
-            error,
-            output_url,
-            progress,
-        })? {
-            RuntimeResponse::Empty => Ok(()),
-            _ => Err(RuntimeError::new(
-                "RUNTIME_PROTOCOL_ERROR",
-                "expected empty response",
-            )),
-        }
-    }
-
-    pub fn cancel_render(&self, job_id: &str) -> Result<RenderJob, RuntimeError> {
-        match self.request(RuntimeRequest::CancelRender {
-            job_id: job_id.to_owned(),
-        })? {
-            RuntimeResponse::RenderJob(job) => Ok(job),
-            _ => Err(RuntimeError::new(
-                "RUNTIME_PROTOCOL_ERROR",
-                "expected render-job response",
-            )),
-        }
-    }
-
-    pub fn repair_projection(&self) -> Result<StateSnapshot, RuntimeError> {
-        expect_state(self.request(RuntimeRequest::RepairProjection)?)
-    }
-
-    pub fn import_projection(
-        &self,
-        actor: &str,
-        key: &str,
-        base_revision: u64,
-    ) -> Result<StateSnapshot, RuntimeError> {
-        expect_state(self.request(RuntimeRequest::ImportProjection {
-            actor: actor.to_owned(),
-            idempotency_key: key.to_owned(),
-            base_revision,
-        })?)
-    }
-
-    pub fn accept_proposal(
-        &self,
-        proposal_id: &str,
-        actor: &str,
-        key: &str,
-        base_revision: u64,
-    ) -> Result<StateSnapshot, RuntimeError> {
-        expect_state(self.request(RuntimeRequest::AcceptProposal {
-            proposal_id: proposal_id.to_owned(),
-            actor: actor.to_owned(),
-            idempotency_key: key.to_owned(),
-            base_revision,
-        })?)
-    }
-
-    pub fn reject_proposal(&self, proposal_id: &str) -> Result<StateSnapshot, RuntimeError> {
-        expect_state(self.request(RuntimeRequest::RejectProposal {
-            proposal_id: proposal_id.to_owned(),
-            actor: None,
-            idempotency_key: None,
-            base_revision: None,
-        })?)
-    }
-
-    pub fn reject_proposal_request(
-        &self,
-        proposal_id: &str,
-        actor: &str,
-        key: &str,
-        base_revision: u64,
-    ) -> Result<StateSnapshot, RuntimeError> {
-        expect_state(self.request(RuntimeRequest::RejectProposal {
-            proposal_id: proposal_id.to_owned(),
-            actor: Some(actor.to_owned()),
-            idempotency_key: Some(key.to_owned()),
-            base_revision: Some(base_revision),
-        })?)
-    }
 }
 
 /// Request-scoped client for the project daemon.
@@ -1387,9 +1116,6 @@ impl RuntimeHandle {
 pub struct RuntimeClient {
     inner: Arc<RuntimeClientInner>,
 }
-
-/// Descriptive name for the request-scoped compatibility client.
-pub type IpcRuntimeClient = RuntimeClient;
 
 struct RuntimeClientInner {
     directory: PathBuf,
@@ -1471,31 +1197,19 @@ impl RuntimeClient {
             proposal_id: proposal_id.to_owned(),
         })? {
             RuntimeResponse::ProposalDocuments { before, after } => Ok((before, after)),
-            _ => Err(RuntimeError::new(
-                "RUNTIME_PROTOCOL_ERROR",
-                "expected proposal-documents response",
-            )),
+            _ => Err(unexpected_response("proposal-documents")),
         }
     }
 
     pub fn get_state(&self) -> Result<StateSnapshot, RuntimeError> {
-        match self.request(RuntimeRequest::GetState)? {
-            RuntimeResponse::State(state) => Ok(state),
-            _ => Err(RuntimeError::new(
-                "RUNTIME_PROTOCOL_ERROR",
-                "expected state response",
-            )),
-        }
+        expect_state(self.request(RuntimeRequest::GetState)?)
     }
 
     /// The canonical `.cut` document and the revision it describes.
     pub fn get_document(&self, annotated: bool) -> Result<(u64, String), RuntimeError> {
         match self.request(RuntimeRequest::GetDocument { annotated })? {
             RuntimeResponse::Document { revision, document } => Ok((revision, document)),
-            _ => Err(RuntimeError::new(
-                "RUNTIME_PROTOCOL_ERROR",
-                "expected document response",
-            )),
+            _ => Err(unexpected_response("document")),
         }
     }
 
@@ -1588,10 +1302,7 @@ impl RuntimeClient {
                 media_id,
                 clip_id,
             } => Ok((state, media_id, clip_id)),
-            _ => Err(RuntimeError::new(
-                "RUNTIME_PROTOCOL_ERROR",
-                "expected import response",
-            )),
+            _ => Err(unexpected_response("import")),
         }
     }
 
@@ -1624,23 +1335,14 @@ impl RuntimeClient {
                 document,
                 output,
             } => Ok((job, document, output)),
-            _ => Err(RuntimeError::new(
-                "RUNTIME_PROTOCOL_ERROR",
-                "expected render-start response",
-            )),
+            _ => Err(unexpected_response("render-start")),
         }
     }
 
     pub fn render_job(&self, job_id: &str) -> Result<RenderJob, RuntimeError> {
-        match self.request(RuntimeRequest::GetRender {
+        expect_job(self.request(RuntimeRequest::GetRender {
             job_id: job_id.to_owned(),
-        })? {
-            RuntimeResponse::RenderJob(job) => Ok(job),
-            _ => Err(RuntimeError::new(
-                "RUNTIME_PROTOCOL_ERROR",
-                "expected render-job response",
-            )),
-        }
+        })?)
     }
 
     pub fn update_job(
@@ -1669,39 +1371,13 @@ impl RuntimeClient {
             progress,
         })? {
             RuntimeResponse::Empty => Ok(()),
-            _ => Err(RuntimeError::new(
-                "RUNTIME_PROTOCOL_ERROR",
-                "expected empty response",
-            )),
+            _ => Err(unexpected_response("empty")),
         }
     }
 
     pub fn cancel_render(&self, job_id: &str) -> Result<RenderJob, RuntimeError> {
-        match self.request(RuntimeRequest::CancelRender {
+        expect_job(self.request(RuntimeRequest::CancelRender {
             job_id: job_id.to_owned(),
-        })? {
-            RuntimeResponse::RenderJob(job) => Ok(job),
-            _ => Err(RuntimeError::new(
-                "RUNTIME_PROTOCOL_ERROR",
-                "expected render-job response",
-            )),
-        }
-    }
-
-    pub fn repair_projection(&self) -> Result<StateSnapshot, RuntimeError> {
-        expect_state(self.request(RuntimeRequest::RepairProjection)?)
-    }
-
-    pub fn import_projection(
-        &self,
-        actor: &str,
-        key: &str,
-        base_revision: u64,
-    ) -> Result<StateSnapshot, RuntimeError> {
-        expect_state(self.request(RuntimeRequest::ImportProjection {
-            actor: actor.to_owned(),
-            idempotency_key: key.to_owned(),
-            base_revision,
         })?)
     }
 
@@ -2065,11 +1741,22 @@ fn read_bounded_bufread_line<R: BufRead>(reader: &mut R) -> Result<Option<Vec<u8
 fn expect_state(response: RuntimeResponse) -> Result<StateSnapshot, RuntimeError> {
     match response {
         RuntimeResponse::State(state) => Ok(state),
-        _ => Err(RuntimeError::new(
-            "RUNTIME_PROTOCOL_ERROR",
-            "expected state response",
-        )),
+        _ => Err(unexpected_response("state")),
     }
+}
+
+fn expect_job(response: RuntimeResponse) -> Result<RenderJob, RuntimeError> {
+    match response {
+        RuntimeResponse::RenderJob(job) => Ok(job),
+        _ => Err(unexpected_response("render-job")),
+    }
+}
+
+fn unexpected_response(expected: &str) -> RuntimeError {
+    RuntimeError::new(
+        "RUNTIME_PROTOCOL_ERROR",
+        format!("expected {expected} response"),
+    )
 }
 
 /// Convert an internal typed result to the stable JSONL response shape.  The
@@ -2177,13 +1864,6 @@ pub fn run_ipc(directory: &Path) -> Result<(), RuntimeError> {
             "Windows named-pipe transport is defined but not implemented yet",
         ))
     }
-}
-
-/// Explicit alias for callers that want to name the daemon boundary rather
-/// than the transport.  `cutd` is the canonical binary and calls this entry
-/// point; `cut-runtime` retains the alias only during migration.
-pub fn run_server(directory: &Path) -> Result<(), RuntimeError> {
-    run_ipc(directory)
 }
 
 #[cfg(unix)]
@@ -2442,14 +2122,16 @@ impl Runtime {
                 _lock: lock,
                 project_path,
                 journal_path,
-                project: Arc::unwrap_or_clone(checkpoint.project),
-                revision: checkpoint.revision,
-                past: checkpoint.past,
-                future: checkpoint.future,
-                jobs: checkpoint.jobs,
-                operations: checkpoint.operations,
-                imports: checkpoint.imports,
-                proposal: checkpoint.proposal,
+                state: DurableState {
+                    project: Arc::unwrap_or_clone(checkpoint.project),
+                    revision: checkpoint.revision,
+                    past: checkpoint.past,
+                    future: checkpoint.future,
+                    jobs: checkpoint.jobs,
+                    operations: checkpoint.operations,
+                    imports: checkpoint.imports,
+                    proposal: checkpoint.proposal,
+                },
                 import_warnings: checkpoint.import_warnings,
                 journal_sequence: checkpoint.journal_sequence,
                 journal_records_since_checkpoint: 0,
@@ -2463,14 +2145,16 @@ impl Runtime {
                 _lock: lock,
                 project_path,
                 journal_path,
-                project,
-                revision: 0,
-                past: Vec::new(),
-                future: Vec::new(),
-                jobs: HashMap::new(),
-                operations: HashMap::new(),
-                imports: HashMap::new(),
-                proposal: None,
+                state: DurableState {
+                    project,
+                    revision: 0,
+                    past: Vec::new(),
+                    future: Vec::new(),
+                    jobs: HashMap::new(),
+                    operations: HashMap::new(),
+                    imports: HashMap::new(),
+                    proposal: None,
+                },
                 import_warnings: notes,
                 journal_sequence: 0,
                 journal_records_since_checkpoint: 0,
@@ -2478,8 +2162,8 @@ impl Runtime {
                 projection_digest: None,
             }
         };
-        bound_receipts(&mut runtime.operations, None);
-        bound_receipts(&mut runtime.imports, None);
+        bound_receipts(&mut runtime.state.operations, None);
+        bound_receipts(&mut runtime.state.imports, None);
 
         let records = load_journal(&runtime.journal_path, runtime.journal_sequence)?;
         // A journal may contain several committed mutations after the last
@@ -2495,7 +2179,7 @@ impl Runtime {
             runtime.replay_journal_record(record)?;
             if !recognized_projection
                 && checkpoint_project.is_some()
-                && projection_matches(&runtime.project_path, &runtime.project)
+                && projection_matches(&runtime.project_path, &runtime.state.project)
             {
                 recognized_projection = true;
             }
@@ -2511,7 +2195,7 @@ impl Runtime {
                 runtime.projection_digest = projection_digest(&runtime.project_path).ok();
             } else {
                 runtime.projection_status =
-                    inspect_projection(&runtime.project_path, &runtime.project);
+                    inspect_projection(&runtime.project_path, &runtime.state.project);
                 runtime.projection_digest =
                     if runtime.projection_status == ProjectionStatus::Current {
                         projection_digest(&runtime.project_path).ok()
@@ -2520,7 +2204,8 @@ impl Runtime {
                     };
             }
         } else {
-            runtime.projection_status = inspect_projection(&runtime.project_path, &runtime.project);
+            runtime.projection_status =
+                inspect_projection(&runtime.project_path, &runtime.state.project);
         }
 
         if checkpoint_project.is_none() {
@@ -2556,35 +2241,19 @@ impl Runtime {
     }
 
     pub fn snapshot(&self) -> StateSnapshot {
-        self.snapshot_for_parts(&self.project, self.revision, &self.past, &self.future)
+        self.snapshot_of(&self.state)
     }
 
-    fn snapshot_for_parts(
-        &self,
-        project: &Project,
-        revision: u64,
-        past: &[HistoryEntry],
-        future: &[HistoryEntry],
-    ) -> StateSnapshot {
-        self.snapshot_for_parts_with_proposal(project, revision, past, future, &self.proposal)
-    }
-
-    fn snapshot_for_parts_with_proposal(
-        &self,
-        project: &Project,
-        revision: u64,
-        past: &[HistoryEntry],
-        future: &[HistoryEntry],
-        proposal: &Option<ProposalRecord>,
-    ) -> StateSnapshot {
+    /// What clients see of `state`.
+    fn snapshot_of(&self, state: &DurableState) -> StateSnapshot {
         StateSnapshot {
-            duration: kernel::program_duration(project).seconds(),
-            document: kernel::print(project),
-            timeline: timeline::timeline_json(project),
-            revision,
-            can_undo: !past.is_empty(),
-            can_redo: !future.is_empty(),
-            pending_proposal: proposal.as_ref().map(|record| {
+            duration: kernel::program_duration(&state.project).seconds(),
+            document: kernel::print(&state.project),
+            timeline: timeline::timeline_json(&state.project),
+            revision: state.revision,
+            can_undo: !state.past.is_empty(),
+            can_redo: !state.future.is_empty(),
+            pending_proposal: state.proposal.as_ref().map(|record| {
                 let mut lifecycle = record.lifecycle.clone();
                 if let PendingProposal::Pending {
                     base_revision,
@@ -2592,7 +2261,7 @@ impl Runtime {
                     ..
                 } = &mut lifecycle
                 {
-                    *freshness = if *base_revision == revision {
+                    *freshness = if *base_revision == state.revision {
                         ProposalFreshness::Current
                     } else {
                         ProposalFreshness::Stale
@@ -2606,19 +2275,6 @@ impl Runtime {
         }
     }
 
-    fn durable_state(&self) -> DurableState {
-        DurableState {
-            project: self.project.clone(),
-            revision: self.revision,
-            past: self.past.clone(),
-            future: self.future.clone(),
-            jobs: self.jobs.clone(),
-            operations: self.operations.clone(),
-            imports: self.imports.clone(),
-            proposal: self.proposal.clone(),
-        }
-    }
-
     fn candidate_state(
         &self,
         project: Project,
@@ -2626,7 +2282,7 @@ impl Runtime {
         past: Vec<HistoryEntry>,
         future: Vec<HistoryEntry>,
     ) -> DurableState {
-        let mut candidate = self.durable_state();
+        let mut candidate = self.state.clone();
         candidate.project = project;
         candidate.revision = revision;
         candidate.past = past;
@@ -2671,9 +2327,9 @@ impl Runtime {
         };
         bound_receipts(&mut candidate.operations, preserve_operation);
         bound_receipts(&mut candidate.imports, preserve_import);
-        let project_changed = candidate.project != self.project;
+        let project_changed = candidate.project != self.state.project;
         if project_changed {
-            self.projection_status = inspect_projection(&self.project_path, &self.project);
+            self.projection_status = inspect_projection(&self.project_path, &self.state.project);
             if self.projection_status == ProjectionStatus::Diverged && !allow_diverged_projection {
                 return Err(RuntimeError::new(
                     "PROJECTION_DIVERGED",
@@ -2694,14 +2350,7 @@ impl Runtime {
         // mistaking it for an external edit.
         append_journal_record(&self.journal_path, &record)?;
 
-        self.project = candidate.project;
-        self.revision = candidate.revision;
-        self.past = candidate.past;
-        self.future = candidate.future;
-        self.jobs = candidate.jobs;
-        self.operations = candidate.operations;
-        self.imports = candidate.imports;
-        self.proposal = candidate.proposal;
+        self.state = candidate;
         self.journal_sequence = sequence;
         self.journal_records_since_checkpoint += 1;
         if project_changed {
@@ -2730,6 +2379,25 @@ impl Runtime {
         Ok(self.snapshot())
     }
 
+    /// The recorded result when `operation` already ran as the request
+    /// `fingerprint` describes, or a conflict when its key was used for a
+    /// different request.
+    fn replayed(
+        &self,
+        operation: &str,
+        fingerprint: &str,
+    ) -> Option<Result<StateSnapshot, RuntimeError>> {
+        let record = self.state.operations.get(operation)?;
+        Some(if record.fingerprint == fingerprint {
+            Ok((*record.snapshot).clone())
+        } else {
+            Err(RuntimeError::new(
+                "IDEMPOTENCY_CONFLICT",
+                "idempotency key was already used for a different request",
+            ))
+        })
+    }
+
     /// The state after an edit, with a history entry, and how to journal
     /// it.
     fn edit_candidate(&self, edited: Edited) -> (DurableState, Change) {
@@ -2739,14 +2407,14 @@ impl Runtime {
             document: None,
             digest: digest(&project),
         };
-        let mut past = self.past.clone();
+        let mut past = self.state.past.clone();
         past.push(HistoryEntry {
             script,
-            project: Arc::new(self.project.clone()),
+            project: Arc::new(self.state.project.clone()),
         });
         bound_history(&mut past);
         (
-            self.candidate_state(project, self.revision + 1, past, Vec::new()),
+            self.candidate_state(project, self.state.revision + 1, past, Vec::new()),
             change,
         )
     }
@@ -2766,7 +2434,7 @@ impl Runtime {
                 script: script.to_owned(),
             },
             base_revision,
-            self.proposal.clone(),
+            self.state.proposal.clone(),
         )
     }
 
@@ -2783,7 +2451,7 @@ impl Runtime {
             key,
             Edit::Ops { ops },
             base_revision,
-            self.proposal.clone(),
+            self.state.proposal.clone(),
         )
     }
 
@@ -2797,25 +2465,13 @@ impl Runtime {
     ) -> Result<StateSnapshot, RuntimeError> {
         let operation = format!("{actor}:{key}");
         let fingerprint = format!("{actor}:{base_revision}:{}", edit.fingerprint());
-        if let Some(record) = self.operations.get(&operation) {
-            if record.fingerprint != fingerprint {
-                return Err(RuntimeError::new(
-                    "IDEMPOTENCY_CONFLICT",
-                    "idempotency key was already used for a different request",
-                ));
-            }
-            return Ok((*record.snapshot).clone());
+        if let Some(replayed) = self.replayed(&operation, &fingerprint) {
+            return replayed;
         }
         self.check_revision(Some(base_revision))?;
-        let (mut candidate, change) = self.edit_candidate(edit.run(&self.project)?);
+        let (mut candidate, change) = self.edit_candidate(edit.run(&self.state.project)?);
         candidate.proposal = proposal;
-        let snapshot = self.snapshot_for_parts_with_proposal(
-            &candidate.project,
-            candidate.revision,
-            &candidate.past,
-            &candidate.future,
-            &candidate.proposal,
-        );
+        let snapshot = self.snapshot_of(&candidate);
         if let Some(proposal) = candidate.proposal.as_mut() {
             if matches!(proposal.lifecycle, PendingProposal::Accepted { .. })
                 && proposal.receipt.is_none()
@@ -2828,32 +2484,16 @@ impl Runtime {
                 });
             }
         }
-        candidate.operations.insert(
-            operation.clone(),
-            OperationRecord {
-                fingerprint,
-                snapshot: Arc::new(snapshot),
-            },
-        );
-        let operation_record = candidate
-            .operations
-            .get(&operation)
-            .cloned()
-            .ok_or_else(|| {
-                RuntimeError::new("RUNTIME_PROTOCOL_ERROR", "operation receipt was not staged")
-            })?;
-        let journal_proposal = candidate.proposal.clone();
+        let operation = candidate.record_operation(operation, fingerprint, snapshot);
+        let proposal = candidate.proposal.clone();
         self.commit_candidate(
             candidate,
             JournalEvent::Mutation {
                 action: JournalAction::Apply,
                 change: Some(change),
-                operation: Some(JournalOperation {
-                    key: operation,
-                    record: operation_record,
-                }),
+                operation: Some(operation),
                 import: None,
-                proposal: journal_proposal,
+                proposal,
             },
         )
     }
@@ -2912,7 +2552,7 @@ impl Runtime {
             serde_json::to_string(&observations).unwrap_or_default()
         );
 
-        if let Some(existing) = self.proposal.as_ref() {
+        if let Some(existing) = self.state.proposal.as_ref() {
             if existing.request_key == request_key {
                 if existing.fingerprint != fingerprint {
                     return Err(RuntimeError::new(
@@ -2930,9 +2570,9 @@ impl Runtime {
             }
         }
 
-        let edited = edit.run(&self.project)?;
+        let edited = edit.run(&self.state.project)?;
         let document_diff = cut_lang::diff_text(
-            &kernel::print(&self.project),
+            &kernel::print(&self.state.project),
             &kernel::print(&edited.project),
         );
         let proposal = Some(ProposalRecord {
@@ -2949,7 +2589,7 @@ impl Runtime {
             fingerprint,
             receipt: None,
         });
-        let mut candidate = self.durable_state();
+        let mut candidate = self.state.clone();
         candidate.proposal = proposal;
         let proposal = candidate.proposal.clone();
         self.commit_candidate(candidate, JournalEvent::Proposal { proposal })
@@ -2987,7 +2627,7 @@ impl Runtime {
                 "observation source identity no longer matches the media file",
             ));
         }
-        let project_media = self.project.media.iter().find(|media| {
+        let project_media = self.state.project.media.iter().find(|media| {
             media.id == observation.source_ref.as_str()
                 || self
                     .project_source_path(&media.path)
@@ -3068,12 +2708,11 @@ impl Runtime {
                 "proposalId is required",
             ));
         }
-        let record = self.proposal.clone().ok_or_else(|| {
-            RuntimeError::new(
-                "PROPOSAL_NOT_FOUND",
-                format!("proposal not found: {proposal_id}"),
-            )
-        })?;
+        let record = self
+            .state
+            .proposal
+            .clone()
+            .ok_or_else(|| proposal_not_found(proposal_id))?;
         match record.lifecycle {
             PendingProposal::Pending {
                 proposal_id: current_id,
@@ -3084,10 +2723,7 @@ impl Runtime {
                 ..
             } => {
                 if current_id != proposal_id {
-                    return Err(RuntimeError::new(
-                        "PROPOSAL_NOT_FOUND",
-                        format!("proposal not found: {proposal_id}"),
-                    ));
+                    return Err(proposal_not_found(proposal_id));
                 }
                 if let Some(observations) = observations.as_ref() {
                     for observation in observations {
@@ -3109,7 +2745,7 @@ impl Runtime {
                     lifecycle: PendingProposal::Accepted {
                         proposal_id: current_id.clone(),
                         base_revision: proposal_revision,
-                        applied_revision: self.revision + 1,
+                        applied_revision: self.state.revision + 1,
                         observation,
                         observations,
                     },
@@ -3130,10 +2766,7 @@ impl Runtime {
                 ..
             } => {
                 if current_id != proposal_id {
-                    return Err(RuntimeError::new(
-                        "PROPOSAL_NOT_FOUND",
-                        format!("proposal not found: {proposal_id}"),
-                    ));
+                    return Err(proposal_not_found(proposal_id));
                 }
                 let receipt = record.receipt.as_ref().ok_or_else(|| {
                     RuntimeError::new(
@@ -3160,10 +2793,7 @@ impl Runtime {
                 ..
             } => {
                 if current_id != proposal_id {
-                    return Err(RuntimeError::new(
-                        "PROPOSAL_NOT_FOUND",
-                        format!("proposal not found: {proposal_id}"),
-                    ));
+                    return Err(proposal_not_found(proposal_id));
                 }
                 Err(RuntimeError::new(
                     "PROPOSAL_REJECTED",
@@ -3183,12 +2813,11 @@ impl Runtime {
                 "proposalId is required",
             ));
         }
-        let record = self.proposal.clone().ok_or_else(|| {
-            RuntimeError::new(
-                "PROPOSAL_NOT_FOUND",
-                format!("proposal not found: {proposal_id}"),
-            )
-        })?;
+        let record = self
+            .state
+            .proposal
+            .clone()
+            .ok_or_else(|| proposal_not_found(proposal_id))?;
         match record.lifecycle {
             PendingProposal::Pending {
                 proposal_id: current_id,
@@ -3196,10 +2825,7 @@ impl Runtime {
                 ..
             } => {
                 if current_id != proposal_id {
-                    return Err(RuntimeError::new(
-                        "PROPOSAL_NOT_FOUND",
-                        format!("proposal not found: {proposal_id}"),
-                    ));
+                    return Err(proposal_not_found(proposal_id));
                 }
                 let rejected_proposal = Some(ProposalRecord {
                     lifecycle: PendingProposal::Rejected {
@@ -3210,7 +2836,7 @@ impl Runtime {
                     fingerprint: record.fingerprint.clone(),
                     receipt: None,
                 });
-                let mut candidate = self.durable_state();
+                let mut candidate = self.state.clone();
                 candidate.proposal = rejected_proposal;
                 let proposal = candidate.proposal.clone();
                 self.commit_candidate(candidate, JournalEvent::Proposal { proposal })
@@ -3224,10 +2850,7 @@ impl Runtime {
                 ..
             } => {
                 if current_id != proposal_id {
-                    return Err(RuntimeError::new(
-                        "PROPOSAL_NOT_FOUND",
-                        format!("proposal not found: {proposal_id}"),
-                    ));
+                    return Err(proposal_not_found(proposal_id));
                 }
                 Ok(self.snapshot())
             }
@@ -3255,22 +2878,15 @@ impl Runtime {
 
         let operation = format!("{actor}:{key}");
         let fingerprint = format!("{actor}:{base_revision}:reject:{proposal_id}");
-        if let Some(existing) = self.operations.get(&operation) {
-            if existing.fingerprint != fingerprint {
-                return Err(RuntimeError::new(
-                    "IDEMPOTENCY_CONFLICT",
-                    "idempotency key was already used for a different request",
-                ));
-            }
-            return Ok((*existing.snapshot).clone());
+        if let Some(replayed) = self.replayed(&operation, &fingerprint) {
+            return replayed;
         }
 
-        let record = self.proposal.clone().ok_or_else(|| {
-            RuntimeError::new(
-                "PROPOSAL_NOT_FOUND",
-                format!("proposal not found: {proposal_id}"),
-            )
-        })?;
+        let record = self
+            .state
+            .proposal
+            .clone()
+            .ok_or_else(|| proposal_not_found(proposal_id))?;
         match record.lifecycle {
             PendingProposal::Pending {
                 proposal_id: current_id,
@@ -3278,10 +2894,7 @@ impl Runtime {
                 ..
             } => {
                 if current_id != proposal_id {
-                    return Err(RuntimeError::new(
-                        "PROPOSAL_NOT_FOUND",
-                        format!("proposal not found: {proposal_id}"),
-                    ));
+                    return Err(proposal_not_found(proposal_id));
                 }
                 self.check_revision(Some(base_revision))?;
                 if base_revision != proposal_revision {
@@ -3302,22 +2915,9 @@ impl Runtime {
                     fingerprint: record.fingerprint,
                     receipt: None,
                 });
-                let mut candidate = self.durable_state();
+                let mut candidate = self.state.clone();
                 candidate.proposal = rejected_proposal;
-                let snapshot = self.snapshot_for_parts_with_proposal(
-                    &candidate.project,
-                    candidate.revision,
-                    &candidate.past,
-                    &candidate.future,
-                    &candidate.proposal,
-                );
-                candidate.operations.insert(
-                    operation.clone(),
-                    OperationRecord {
-                        fingerprint,
-                        snapshot: Arc::new(snapshot.clone()),
-                    },
-                );
+                let snapshot = self.snapshot_of(&candidate);
                 if let Some(proposal) = candidate.proposal.as_mut() {
                     proposal.receipt = Some(ProposalReceipt {
                         actor: actor.to_owned(),
@@ -3326,29 +2926,16 @@ impl Runtime {
                         snapshot: Arc::new(snapshot.clone()),
                     });
                 }
-                let operation_record =
-                    candidate
-                        .operations
-                        .get(&operation)
-                        .cloned()
-                        .ok_or_else(|| {
-                            RuntimeError::new(
-                                "RUNTIME_PROTOCOL_ERROR",
-                                "operation receipt was not staged",
-                            )
-                        })?;
-                let journal_proposal = candidate.proposal.clone();
+                let operation = candidate.record_operation(operation, fingerprint, snapshot);
+                let proposal = candidate.proposal.clone();
                 self.commit_candidate(
                     candidate,
                     JournalEvent::Mutation {
                         action: JournalAction::RejectProposal,
                         change: None,
-                        operation: Some(JournalOperation {
-                            key: operation,
-                            record: operation_record,
-                        }),
+                        operation: Some(operation),
                         import: None,
-                        proposal: journal_proposal,
+                        proposal,
                     },
                 )
             }
@@ -3357,10 +2944,7 @@ impl Runtime {
                 ..
             } => {
                 if current_id != proposal_id {
-                    return Err(RuntimeError::new(
-                        "PROPOSAL_NOT_FOUND",
-                        format!("proposal not found: {proposal_id}"),
-                    ));
+                    return Err(proposal_not_found(proposal_id));
                 }
                 Err(RuntimeError::new(
                     "PROPOSAL_ALREADY_ACCEPTED",
@@ -3372,10 +2956,7 @@ impl Runtime {
                 ..
             } => {
                 if current_id != proposal_id {
-                    return Err(RuntimeError::new(
-                        "PROPOSAL_NOT_FOUND",
-                        format!("proposal not found: {proposal_id}"),
-                    ));
+                    return Err(proposal_not_found(proposal_id));
                 }
                 let receipt = record.receipt.as_ref().ok_or_else(|| {
                     RuntimeError::new(
@@ -3426,14 +3007,8 @@ impl Runtime {
     ) -> Result<StateSnapshot, RuntimeError> {
         let operation = format!("{actor}:{key}");
         let fingerprint = format!("{actor}:{base_revision}:{}", direction.name());
-        if let Some(record) = self.operations.get(&operation) {
-            if record.fingerprint != fingerprint {
-                return Err(RuntimeError::new(
-                    "IDEMPOTENCY_CONFLICT",
-                    "idempotency key was already used for a different request",
-                ));
-            }
-            return Ok((*record.snapshot).clone());
+        if let Some(replayed) = self.replayed(&operation, &fingerprint) {
+            return replayed;
         }
         self.check_revision(Some(base_revision))?;
         self.history_step(direction, operation, fingerprint)
@@ -3447,57 +3022,33 @@ impl Runtime {
         operation: String,
         fingerprint: String,
     ) -> Result<StateSnapshot, RuntimeError> {
-        let (from, _) = self.stacks(direction);
-        let (mut candidate, action, change) = match from.last() {
-            Some(_) => {
-                let (project, past, future, change) = self.stepped(direction);
-                let candidate = self.candidate_state(project, self.revision + 1, past, future);
-                (candidate, direction.action(), Some(change))
-            }
-            None => (self.durable_state(), JournalAction::Noop, None),
+        let (mut candidate, action, change) = if self.history(direction).is_empty() {
+            (self.state.clone(), JournalAction::Noop, None)
+        } else {
+            let (project, past, future, change) = self.stepped(direction);
+            let candidate = self.candidate_state(project, self.state.revision + 1, past, future);
+            (candidate, direction.action(), Some(change))
         };
-        let snapshot = self.snapshot_for_parts_with_proposal(
-            &candidate.project,
-            candidate.revision,
-            &candidate.past,
-            &candidate.future,
-            &candidate.proposal,
-        );
-        candidate.operations.insert(
-            operation.clone(),
-            OperationRecord {
-                fingerprint,
-                snapshot: Arc::new(snapshot),
-            },
-        );
-        let record = candidate
-            .operations
-            .get(&operation)
-            .cloned()
-            .ok_or_else(|| {
-                RuntimeError::new("RUNTIME_PROTOCOL_ERROR", "operation receipt was not staged")
-            })?;
-        let operation = Some(JournalOperation {
-            key: operation,
-            record,
-        });
+        let snapshot = self.snapshot_of(&candidate);
+        let operation = candidate.record_operation(operation, fingerprint, snapshot);
         let proposal = candidate.proposal.clone();
         self.commit_candidate(
             candidate,
             JournalEvent::Mutation {
                 action,
                 change,
-                operation,
+                operation: Some(operation),
                 import: None,
                 proposal,
             },
         )
     }
 
-    fn stacks(&self, direction: Direction) -> (&[HistoryEntry], &[HistoryEntry]) {
+    /// The history an undo or redo takes its entry from.
+    fn history(&self, direction: Direction) -> &[HistoryEntry] {
         match direction {
-            Direction::Undo => (&self.past, &self.future),
-            Direction::Redo => (&self.future, &self.past),
+            Direction::Undo => &self.state.past,
+            Direction::Redo => &self.state.future,
         }
     }
 
@@ -3508,14 +3059,14 @@ impl Runtime {
         direction: Direction,
     ) -> (Project, Vec<HistoryEntry>, Vec<HistoryEntry>, Change) {
         let (mut from, mut to) = match direction {
-            Direction::Undo => (self.past.clone(), self.future.clone()),
-            Direction::Redo => (self.future.clone(), self.past.clone()),
+            Direction::Undo => (self.state.past.clone(), self.state.future.clone()),
+            Direction::Redo => (self.state.future.clone(), self.state.past.clone()),
         };
         let entry = from.pop().expect("history step has an entry");
-        let project = kernel::restore(&entry.project, &self.project);
+        let project = kernel::restore(&entry.project, &self.state.project);
         to.push(HistoryEntry {
             script: entry.script,
-            project: Arc::new(self.project.clone()),
+            project: Arc::new(self.state.project.clone()),
         });
         bound_history(&mut to);
         let change = Change {
@@ -3545,7 +3096,7 @@ impl Runtime {
             ));
         }
         let proposed = proposal.map(|id| self.proposal_result(id)).transpose()?;
-        let project = proposed.as_ref().unwrap_or(&self.project);
+        let project = proposed.as_ref().unwrap_or(&self.state.project);
         let document = self.renderable(project);
         let duration = kernel::program_duration(project).seconds();
         if let Some(range) = range.as_ref() {
@@ -3582,7 +3133,7 @@ impl Runtime {
             range,
             progress: 0.0,
         };
-        let mut candidate = self.durable_state();
+        let mut candidate = self.state.clone();
         candidate.jobs.insert(id, job.clone());
         self.commit_candidate(candidate, JournalEvent::Job { job: job.clone() })?;
         Ok((job, document, output))
@@ -3591,17 +3142,19 @@ impl Runtime {
     /// The documents before and after a pending proposal, for a renderer.
     pub fn proposal_documents(&self, proposal_id: &str) -> Result<(String, String), RuntimeError> {
         let after = self.proposal_result(proposal_id)?;
-        Ok((self.renderable(&self.project), self.renderable(&after)))
+        Ok((
+            self.renderable(&self.state.project),
+            self.renderable(&after),
+        ))
     }
 
     /// The project a pending, current proposal would produce.
     fn proposal_result(&self, proposal_id: &str) -> Result<Project, RuntimeError> {
-        let record = self.proposal.as_ref().ok_or_else(|| {
-            RuntimeError::new(
-                "PROPOSAL_NOT_FOUND",
-                format!("proposal not found: {proposal_id}"),
-            )
-        })?;
+        let record = self
+            .state
+            .proposal
+            .as_ref()
+            .ok_or_else(|| proposal_not_found(proposal_id))?;
         let PendingProposal::Pending {
             proposal_id: current_id,
             base_revision,
@@ -3615,24 +3168,21 @@ impl Runtime {
             ));
         };
         if current_id != proposal_id {
-            return Err(RuntimeError::new(
-                "PROPOSAL_NOT_FOUND",
-                format!("proposal not found: {proposal_id}"),
-            ));
+            return Err(proposal_not_found(proposal_id));
         }
-        if *base_revision != self.revision {
+        if *base_revision != self.state.revision {
             return Err(RuntimeError::new(
                 "PROPOSAL_STALE",
                 format!(
                     "proposal was created at revision {base_revision}, current revision is {}",
-                    self.revision
+                    self.state.revision
                 ),
             ));
         }
         let edit = Edit::Script {
             script: script.clone(),
         };
-        Ok(edit.run(&self.project)?.project)
+        Ok(edit.run(&self.state.project)?.project)
     }
 
     /// The document for a renderer: media paths resolved against the
@@ -3654,7 +3204,7 @@ impl Runtime {
         validate_request_identity(actor, key)?;
         let operation = format!("{actor}:{key}");
         let fingerprint = format!("{actor}:{base_revision}:{path}");
-        if let Some(record) = self.imports.get(&operation) {
+        if let Some(record) = self.state.imports.get(&operation) {
             if record.fingerprint != fingerprint {
                 return Err(RuntimeError::new(
                     "IDEMPOTENCY_CONFLICT",
@@ -3672,30 +3222,20 @@ impl Runtime {
         // probe or edit leaves every in-memory field untouched.
         let path = validate_media_path(path)?.to_string_lossy().into_owned();
         let probe = cut_engine::probe::info(&path).ok();
-        let (ops, media_id, clip_id) = kernel::import_media(&self.project, &path, probe.as_ref())?;
-        let (mut candidate, change) = self.edit_candidate(kernel::apply_ops(&self.project, &ops)?);
+        let (ops, media_id, clip_id) =
+            kernel::import_media(&self.state.project, &path, probe.as_ref())?;
+        let (mut candidate, change) =
+            self.edit_candidate(kernel::apply_ops(&self.state.project, &ops)?);
         let (media_id, clip_id) = (media_id.to_string(), clip_id.to_string());
-        let snapshot = self.snapshot_for_parts(
-            &candidate.project,
-            candidate.revision,
-            &candidate.past,
-            &candidate.future,
-        );
-        let import_key = operation.clone();
-        candidate.imports.insert(
-            import_key.clone(),
-            ImportRecord {
-                fingerprint,
-                snapshot: Arc::new(snapshot.clone()),
-                media_id: media_id.clone(),
-                clip_id: clip_id.clone(),
-            },
-        );
-        bound_receipts(&mut candidate.imports, Some(&import_key));
-        let import_record = candidate.imports.get(&import_key).cloned().ok_or_else(|| {
-            RuntimeError::new("RUNTIME_PROTOCOL_ERROR", "import receipt was not staged")
-        })?;
-        let proposal = self.proposal.clone();
+        let snapshot = self.snapshot_of(&candidate);
+        let record = ImportRecord {
+            fingerprint,
+            snapshot: Arc::new(snapshot.clone()),
+            media_id: media_id.clone(),
+            clip_id: clip_id.clone(),
+        };
+        candidate.imports.insert(operation.clone(), record.clone());
+        let proposal = candidate.proposal.clone();
         self.commit_candidate(
             candidate,
             JournalEvent::Mutation {
@@ -3703,8 +3243,8 @@ impl Runtime {
                 change: Some(change),
                 operation: None,
                 import: Some(JournalImport {
-                    key: import_key,
-                    record: import_record,
+                    key: operation,
+                    record,
                 }),
                 proposal,
             },
@@ -3713,16 +3253,6 @@ impl Runtime {
     }
 
     pub fn update_job(
-        &mut self,
-        id: &str,
-        status: &str,
-        error: Option<String>,
-        output_url: Option<String>,
-    ) -> Result<(), RuntimeError> {
-        self.update_job_with_progress(id, status, error, output_url, None)
-    }
-
-    pub fn update_job_with_progress(
         &mut self,
         id: &str,
         status: &str,
@@ -3739,7 +3269,7 @@ impl Runtime {
                 format!("unsupported render status: {status}"),
             ));
         }
-        let current = self.jobs.get(id).cloned().ok_or_else(|| {
+        let current = self.state.jobs.get(id).cloned().ok_or_else(|| {
             RuntimeError::new("RENDER_NOT_FOUND", format!("render job not found: {id}"))
         })?;
         if matches!(
@@ -3768,14 +3298,14 @@ impl Runtime {
         if status == "completed" {
             job.progress = 1.0;
         }
-        let mut candidate = self.durable_state();
+        let mut candidate = self.state.clone();
         candidate.jobs.insert(id.to_owned(), job.clone());
         self.commit_candidate(candidate, JournalEvent::Job { job })?;
         Ok(())
     }
 
     pub fn render_job(&self, id: &str) -> Result<RenderJob, RuntimeError> {
-        self.jobs.get(id).cloned().ok_or_else(|| {
+        self.state.jobs.get(id).cloned().ok_or_else(|| {
             RuntimeError::new("RENDER_NOT_FOUND", format!("render job not found: {id}"))
         })
     }
@@ -3791,6 +3321,7 @@ impl Runtime {
                 "cancelled",
                 Some("render job was cancelled".into()),
                 None,
+                None,
             )?;
         }
         self.render_job(id)
@@ -3801,7 +3332,7 @@ impl Runtime {
         match request {
             RuntimeRequest::GetState => Ok(RuntimeResponse::State(self.snapshot())),
             RuntimeRequest::GetDocument { annotated } => Ok(RuntimeResponse::Document {
-                revision: self.revision,
+                revision: self.state.revision,
                 document: self.document(annotated),
             }),
             RuntimeRequest::ApplyScript {
@@ -3845,33 +3376,26 @@ impl Runtime {
                 actor,
                 idempotency_key,
                 base_revision,
-            } => {
-                validate_request_identity(&actor, &idempotency_key)?;
-                Ok(RuntimeResponse::State(self.undo_request(
-                    &actor,
-                    &idempotency_key,
-                    base_revision,
-                )?))
-            }
+            } => Ok(RuntimeResponse::State(self.undo_request(
+                &actor,
+                &idempotency_key,
+                base_revision,
+            )?)),
             RuntimeRequest::Redo {
                 actor,
                 idempotency_key,
                 base_revision,
-            } => {
-                validate_request_identity(&actor, &idempotency_key)?;
-                Ok(RuntimeResponse::State(self.redo_request(
-                    &actor,
-                    &idempotency_key,
-                    base_revision,
-                )?))
-            }
+            } => Ok(RuntimeResponse::State(self.redo_request(
+                &actor,
+                &idempotency_key,
+                base_revision,
+            )?)),
             RuntimeRequest::Import {
                 actor,
                 idempotency_key,
                 base_revision,
                 path,
             } => {
-                validate_request_identity(&actor, &idempotency_key)?;
                 let (state, media_id, clip_id) =
                     self.import_media_request(&actor, &idempotency_key, &path, base_revision)?;
                 Ok(RuntimeResponse::Import {
@@ -3914,7 +3438,7 @@ impl Runtime {
                 output_url,
                 progress,
             } => {
-                self.update_job_with_progress(&job_id, &status, error, output_url, progress)?;
+                self.update_job(&job_id, &status, error, output_url, progress)?;
                 Ok(RuntimeResponse::Empty)
             }
             RuntimeRequest::CancelRender { job_id } => {
@@ -3927,28 +3451,22 @@ impl Runtime {
                 actor,
                 idempotency_key,
                 base_revision,
-            } => {
-                validate_request_identity(&actor, &idempotency_key)?;
-                Ok(RuntimeResponse::State(self.import_projection(
-                    &actor,
-                    &idempotency_key,
-                    base_revision,
-                )?))
-            }
+            } => Ok(RuntimeResponse::State(self.import_projection(
+                &actor,
+                &idempotency_key,
+                base_revision,
+            )?)),
             RuntimeRequest::AcceptProposal {
                 proposal_id,
                 actor,
                 idempotency_key,
                 base_revision,
-            } => {
-                validate_request_identity(&actor, &idempotency_key)?;
-                Ok(RuntimeResponse::State(self.accept_proposal(
-                    &proposal_id,
-                    &actor,
-                    &idempotency_key,
-                    base_revision,
-                )?))
-            }
+            } => Ok(RuntimeResponse::State(self.accept_proposal(
+                &proposal_id,
+                &actor,
+                &idempotency_key,
+                base_revision,
+            )?)),
             RuntimeRequest::RejectProposal {
                 proposal_id,
                 actor,
@@ -3959,7 +3477,6 @@ impl Runtime {
                     Ok(RuntimeResponse::State(self.reject_proposal(&proposal_id)?))
                 }
                 (Some(actor), Some(idempotency_key), Some(base_revision)) => {
-                    validate_request_identity(&actor, &idempotency_key)?;
                     Ok(RuntimeResponse::State(self.reject_proposal_request(
                         &proposal_id,
                         &actor,
@@ -3993,17 +3510,17 @@ impl Runtime {
             JournalAction::Apply => {
                 let change = record.change.as_ref().ok_or_else(|| missing("apply"))?;
                 let script = change.script.clone().ok_or_else(|| missing("apply"))?;
-                let edited = Edit::Script { script }.run(&self.project)?;
+                let edited = Edit::Script { script }.run(&self.state.project)?;
                 verify_change(change, &edited.project, record.sequence)?;
-                let before = std::mem::replace(&mut self.project, edited.project);
-                self.past.push(HistoryEntry {
+                let before = std::mem::replace(&mut self.state.project, edited.project);
+                self.state.past.push(HistoryEntry {
                     script: edited.script,
                     project: Arc::new(before),
                 });
-                bound_history(&mut self.past);
-                self.future.clear();
-                self.revision = record.revision;
-                self.proposal = record.proposal;
+                bound_history(&mut self.state.past);
+                self.state.future.clear();
+                self.state.revision = record.revision;
+                self.state.proposal = record.proposal;
             }
             JournalAction::Undo | JournalAction::Redo => {
                 let direction = if matches!(record.action, JournalAction::Undo) {
@@ -4011,7 +3528,7 @@ impl Runtime {
                 } else {
                     Direction::Redo
                 };
-                if self.stacks(direction).0.is_empty() {
+                if self.history(direction).is_empty() {
                     return Err(RuntimeError::new(
                         "INVALID_JOURNAL",
                         format!("{} record has no history entry", direction.name()),
@@ -4023,24 +3540,24 @@ impl Runtime {
                     .ok_or_else(|| missing(direction.name()))?;
                 let (project, past, future, _) = self.stepped(direction);
                 verify_change(change, &project, record.sequence)?;
-                self.project = project;
-                self.past = past;
-                self.future = future;
-                self.revision = record.revision;
-                self.proposal = record.proposal;
+                self.state.project = project;
+                self.state.past = past;
+                self.state.future = future;
+                self.state.revision = record.revision;
+                self.state.proposal = record.proposal;
             }
             JournalAction::Noop | JournalAction::RejectProposal => {
-                self.revision = record.revision;
-                self.proposal = record.proposal;
+                self.state.revision = record.revision;
+                self.state.proposal = record.proposal;
             }
             JournalAction::StageProposal => {
-                self.proposal = record.proposal;
+                self.state.proposal = record.proposal;
             }
             JournalAction::Job => {
                 let job = record
                     .job
                     .ok_or_else(|| RuntimeError::new("INVALID_JOURNAL", "job record has no job"))?;
-                self.jobs.insert(job.job_id.clone(), job);
+                self.state.jobs.insert(job.job_id.clone(), job);
             }
             JournalAction::ProjectionImport => {
                 let change = record
@@ -4052,23 +3569,25 @@ impl Runtime {
                 })?;
                 let project = kernel::parse(document)?;
                 verify_change(change, &project, record.sequence)?;
-                let project_changed = project != self.project;
-                self.project = project;
-                self.revision = record.revision;
+                let project_changed = project != self.state.project;
+                self.state.project = project;
+                self.state.revision = record.revision;
                 if project_changed {
-                    self.past.clear();
-                    self.future.clear();
-                    self.proposal = None;
+                    self.state.past.clear();
+                    self.state.future.clear();
+                    self.state.proposal = None;
                 }
             }
         }
         if let Some(operation) = record.operation {
-            self.operations.insert(operation.key, operation.record);
-            bound_receipts(&mut self.operations, None);
+            self.state
+                .operations
+                .insert(operation.key, operation.record);
+            bound_receipts(&mut self.state.operations, None);
         }
         if let Some(import) = record.import {
-            self.imports.insert(import.key, import.record);
-            bound_receipts(&mut self.imports, None);
+            self.state.imports.insert(import.key, import.record);
+            bound_receipts(&mut self.state.imports, None);
         }
         self.journal_sequence = record.sequence;
         self.journal_records_since_checkpoint += 1;
@@ -4077,8 +3596,8 @@ impl Runtime {
 
     fn check_revision(&self, expected: Option<u64>) -> Result<(), RuntimeError> {
         if let Some(value) = expected {
-            if value != self.revision {
-                return Err(RuntimeError::conflict(value, self.revision));
+            if value != self.state.revision {
+                return Err(RuntimeError::conflict(value, self.state.revision));
             }
         }
         Ok(())
@@ -4091,7 +3610,7 @@ impl Runtime {
             self.projection_status = ProjectionStatus::Current;
             return;
         }
-        self.projection_status = inspect_projection(&self.project_path, &self.project);
+        self.projection_status = inspect_projection(&self.project_path, &self.state.project);
         if self.projection_status == ProjectionStatus::Current {
             self.projection_digest = digest;
         }
@@ -4100,15 +3619,15 @@ impl Runtime {
     fn persist_checkpoint(&self) -> Result<(), RuntimeError> {
         let checkpoint = PersistedCheckpoint {
             format_version: CHECKPOINT_VERSION,
-            project: Arc::new(self.project.clone()),
-            revision: self.revision,
-            past: self.past.clone(),
-            future: self.future.clone(),
+            project: Arc::new(self.state.project.clone()),
+            revision: self.state.revision,
+            past: self.state.past.clone(),
+            future: self.state.future.clone(),
             journal_sequence: self.journal_sequence,
-            operations: self.operations.clone(),
-            imports: self.imports.clone(),
-            proposal: self.proposal.clone(),
-            jobs: self.jobs.clone(),
+            operations: self.state.operations.clone(),
+            imports: self.state.imports.clone(),
+            proposal: self.state.proposal.clone(),
+            jobs: self.state.jobs.clone(),
             import_warnings: self.import_warnings.clone(),
             projection_digest: self.projection_digest.clone(),
         };
@@ -4120,7 +3639,10 @@ impl Runtime {
 
     /// Write the canonical document.
     fn materialize_project(&self) -> Result<(), RuntimeError> {
-        write_bytes_atomic(&self.project_path, kernel::print(&self.project).as_bytes())
+        write_bytes_atomic(
+            &self.project_path,
+            kernel::print(&self.state.project).as_bytes(),
+        )
     }
 
     /// Make the edited `project.cut` canonical. Text edits made outside cutd
@@ -4134,14 +3656,8 @@ impl Runtime {
         validate_request_identity(actor, key)?;
         let operation = format!("{actor}:{key}");
         let fingerprint = format!("{actor}:{base_revision}:projection_import");
-        if let Some(record) = self.operations.get(&operation) {
-            if record.fingerprint != fingerprint {
-                return Err(RuntimeError::new(
-                    "IDEMPOTENCY_CONFLICT",
-                    "idempotency key was already used for a different projection import",
-                ));
-            }
-            return Ok((*record.snapshot).clone());
+        if let Some(replayed) = self.replayed(&operation, &fingerprint) {
+            return replayed;
         }
         self.check_revision(Some(base_revision))?;
         if !self.project_path.is_file() {
@@ -4152,13 +3668,13 @@ impl Runtime {
         }
         let text = fs::read_to_string(&self.project_path).map_err(io_error)?;
         let project = kernel::parse(&text)?;
-        let project_changed = project != self.project;
+        let project_changed = project != self.state.project;
         let revision = if project_changed {
-            self.revision + 1
+            self.state.revision + 1
         } else {
-            self.revision
+            self.state.revision
         };
-        let mut candidate = self.durable_state();
+        let mut candidate = self.state.clone();
         candidate.project = project;
         candidate.revision = revision;
         if project_changed {
@@ -4166,32 +3682,9 @@ impl Runtime {
             candidate.future.clear();
             candidate.proposal = None;
         }
-        let mut snapshot = self.snapshot_for_parts_with_proposal(
-            &candidate.project,
-            candidate.revision,
-            &candidate.past,
-            &candidate.future,
-            &candidate.proposal,
-        );
+        let mut snapshot = self.snapshot_of(&candidate);
         snapshot.projection_status = ProjectionStatus::Current.as_str().into();
-        candidate.operations.insert(
-            operation.clone(),
-            OperationRecord {
-                fingerprint,
-                snapshot: Arc::new(snapshot.clone()),
-            },
-        );
-        bound_receipts(&mut candidate.operations, Some(&operation));
-        let operation_record = candidate
-            .operations
-            .get(&operation)
-            .cloned()
-            .ok_or_else(|| {
-                RuntimeError::new(
-                    "RUNTIME_PROTOCOL_ERROR",
-                    "projection import receipt was not staged",
-                )
-            })?;
+        let operation = candidate.record_operation(operation, fingerprint, snapshot);
         if !project_changed && self.projection_status != ProjectionStatus::Current {
             // The file already describes the authoritative project but is not
             // its canonical text (comments, spacing). An explicit import is
@@ -4212,10 +3705,7 @@ impl Runtime {
             candidate,
             JournalEvent::ProjectionImport {
                 change,
-                operation: Some(JournalOperation {
-                    key: operation,
-                    record: operation_record,
-                }),
+                operation: Some(operation),
             },
         )
     }
@@ -4232,15 +3722,15 @@ impl Runtime {
 
     fn document(&self, annotated: bool) -> String {
         if annotated {
-            kernel::print_annotated(&self.project)
+            kernel::print_annotated(&self.state.project)
         } else {
-            kernel::print(&self.project)
+            kernel::print(&self.state.project)
         }
     }
 
     fn reconcile_abandoned_jobs(&mut self) -> bool {
         let mut changed = false;
-        for job in self.jobs.values_mut() {
+        for job in self.state.jobs.values_mut() {
             if matches!(job.status.as_str(), "queued" | "running") {
                 job.status = "failed".into();
                 job.error = Some("render job was abandoned when cutd restarted".into());
@@ -4715,6 +4205,13 @@ fn sync_parent_dir(directory: &Path) {
     }
 }
 
+fn proposal_not_found(proposal_id: &str) -> RuntimeError {
+    RuntimeError::new(
+        "PROPOSAL_NOT_FOUND",
+        format!("proposal not found: {proposal_id}"),
+    )
+}
+
 fn io_error(error: std::io::Error) -> RuntimeError {
     RuntimeError::new("IO_ERROR", error.to_string())
 }
@@ -4770,34 +4267,12 @@ pub fn parse_document(text: &str) -> Result<Project, RuntimeError> {
     kernel::parse(text)
 }
 
-pub fn run_render(
-    id: String,
-    document: String,
-    output: PathBuf,
-    draft: bool,
-) -> Result<(), RuntimeError> {
-    run_render_with_cancel_file(id, document, output, draft, None, None)
-}
-
-/// Run one render worker with an optional bounded range and job-specific
-/// cancellation marker. The runtime remains the durable owner of job state;
-/// the engine is invoked in-process.
-pub fn run_render_with_cancel_file(
-    id: String,
-    document: String,
-    output: PathBuf,
-    draft: bool,
-    range: Option<RenderRange>,
-    cancel_file: Option<PathBuf>,
-) -> Result<(), RuntimeError> {
-    run_render_with_cancel_file_progress(id, document, output, draft, range, cancel_file, |_| {})
-}
-
-/// Run one render worker and forward bounded engine progress to the caller.
-/// `document` is the `.cut` text a render job carries; its first sequence
-/// is rendered. The callback runs on this worker thread and must not block
-/// on UI state.
-pub fn run_render_with_cancel_file_progress<F>(
+/// Run one render worker in-process. `document` is the `.cut` text a render
+/// job carries; its first sequence is rendered, optionally only `range`.
+/// Creating `cancel_file` cancels the render. The runtime remains the durable
+/// owner of job state. `on_progress` runs on this worker thread and must not
+/// block on UI state.
+pub fn run_render<F>(
     id: String,
     document: String,
     output: PathBuf,
@@ -4889,7 +4364,7 @@ mod tests {
             height: 1080,
             sequence: None,
         }];
-        let revision = runtime.revision;
+        let revision = runtime.state.revision;
         runtime
             .apply_ops_request("ui", &unique_id(), ops, revision)
             .unwrap()
@@ -5621,13 +5096,18 @@ mod tests {
     fn mailbox_serializes_two_clients_against_one_revision() {
         let directory = std::env::temp_dir().join(format!("cut-runtime-mailbox-{}", unique_id()));
         let handle = RuntimeHandle::open(&directory).unwrap();
-        let left = handle.clone();
-        let right = handle.clone();
-        let first =
-            thread::spawn(move || left.apply_script_request("ui", "left", "track add T1 video", 0));
-        let second = thread::spawn(move || {
-            right.apply_script_request("agent", "right", "track add T2 video", 0)
-        });
+        let apply = |actor: &str, key: &str, script: &str| {
+            let handle = handle.clone();
+            let request = RuntimeRequest::ApplyScript {
+                actor: actor.into(),
+                idempotency_key: key.into(),
+                base_revision: 0,
+                script: script.into(),
+            };
+            thread::spawn(move || handle.request(request).and_then(expect_state))
+        };
+        let first = apply("ui", "left", "track add T1 video");
+        let second = apply("agent", "right", "track add T2 video");
         let first = first.join().unwrap();
         let second = second.join().unwrap();
         assert_eq!(first.is_ok() as u8 + second.is_ok() as u8, 1);
@@ -5637,7 +5117,8 @@ mod tests {
             second.unwrap_err()
         };
         assert_eq!(error.code, "REVISION_CONFLICT");
-        assert_eq!(handle.get_state().unwrap().revision, 1);
+        let state = expect_state(handle.request(RuntimeRequest::GetState).unwrap()).unwrap();
+        assert_eq!(state.revision, 1);
         drop(handle);
         let _ = fs::remove_dir_all(directory);
     }
@@ -5807,11 +5288,11 @@ mod tests {
         for index in 0..(MAX_HISTORY_ENTRIES + 8) {
             resize(&mut runtime, 1000 + 2 * index as u32);
         }
-        assert_eq!(runtime.past.len(), MAX_HISTORY_ENTRIES);
-        assert!(runtime.future.is_empty());
+        assert_eq!(runtime.state.past.len(), MAX_HISTORY_ENTRIES);
+        assert!(runtime.state.future.is_empty());
         drop(runtime);
         let reopened = Runtime::open(&directory).unwrap();
-        assert_eq!(reopened.past.len(), MAX_HISTORY_ENTRIES);
+        assert_eq!(reopened.state.past.len(), MAX_HISTORY_ENTRIES);
         drop(reopened);
         let _ = fs::remove_dir_all(directory);
     }
@@ -6187,7 +5668,7 @@ mod tests {
         assert_eq!(replay.revision, 1);
         assert!(runtime.document(false).contains("set opacity=0.25"));
         assert_eq!(
-            runtime.past[0].script,
+            runtime.state.past[0].script,
             "split c1 at=00:00:02:00 as=c2\nset c2 opacity=0.25\nmarker add at=00:00:00:12 name=\"look\" color=green\n"
         );
         // Any failing operation leaves the project unchanged.
@@ -6266,7 +5747,7 @@ mod tests {
             .unwrap();
         assert_eq!(accepted.revision, 1);
         assert!(runtime.document(false).contains("dur=00:00:03:00 link=L1"));
-        assert_eq!(runtime.past.len(), 1);
+        assert_eq!(runtime.state.past.len(), 1);
         drop(runtime);
         let _ = fs::remove_dir_all(directory);
     }

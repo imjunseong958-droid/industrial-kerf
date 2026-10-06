@@ -408,7 +408,7 @@ fn export(
         json!({"type":event_type,"status":"running","progress":0.0}),
     );
     let cancel = cut_runtime::render_cancel_path(client.directory(), &job.job_id);
-    let result = cut_runtime::run_render_with_cancel_file_progress(
+    let result = cut_runtime::run_render(
         job.job_id.clone(),
         document.clone(),
         output.clone(),

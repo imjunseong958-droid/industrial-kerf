@@ -283,7 +283,7 @@ impl CutMcpRouter {
             let progress_runtime = runtime.clone();
             let progress_job_id = job_id.clone();
             let mut last_progress = -1.0_f64;
-            let result = cut_runtime::run_render_with_cancel_file_progress(
+            let result = cut_runtime::run_render(
                 job_id.clone(),
                 project,
                 output_for_thread.clone(),
