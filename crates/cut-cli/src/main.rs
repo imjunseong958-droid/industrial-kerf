@@ -631,7 +631,6 @@ fn target_summary(targets: &AgentTargetSummary) -> String {
     add_target_summary(&mut parts, "source", &targets.sources);
     add_target_summary(&mut parts, "clip", &targets.clips);
     add_target_summary(&mut parts, "track", &targets.tracks);
-    add_target_summary(&mut parts, "overlay", &targets.overlays);
     add_target_summary(&mut parts, "job", &targets.jobs);
     if parts.is_empty() {
         "(no targets)".into()

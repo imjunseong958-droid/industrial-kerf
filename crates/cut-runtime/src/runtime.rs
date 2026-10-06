@@ -15,13 +15,11 @@ use crate::store::{
 };
 use crate::timeline;
 use crate::{
-    io_error, unique_id, validate_actor, EditOp, MailboxMessage, ObservationReference,
-    PendingProposal, ProposalFreshness, RenderJob, RenderRange, RuntimeError, RuntimeRequest,
-    RuntimeResponse, StateSnapshot, SOURCE_VERSION,
+    io_error, unique_id, validate_actor, EditOp, MailboxMessage, PendingProposal,
+    ProposalFreshness, RenderJob, RenderRange, RuntimeError, RuntimeRequest, RuntimeResponse,
+    StateSnapshot, SOURCE_VERSION,
 };
-use cut_engine::derivatives::SourceIdentity;
 use cut_model::Project;
-use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -585,7 +583,6 @@ impl Runtime {
         request_key: &str,
         base_revision: u64,
         script: &str,
-        observations: Vec<Value>,
     ) -> Result<StateSnapshot, RuntimeError> {
         if request_key.trim().is_empty() {
             return Err(RuntimeError::new(
@@ -594,44 +591,10 @@ impl Runtime {
             ));
         }
         self.check_revision(Some(base_revision))?;
-        self.stage_edit_proposal(
-            request_key,
-            base_revision,
-            Edit::Script {
-                script: script.to_owned(),
-            },
-            observations,
-        )
-    }
-
-    fn stage_edit_proposal(
-        &mut self,
-        request_key: &str,
-        base_revision: u64,
-        edit: Edit,
-        observations: Vec<Value>,
-    ) -> Result<StateSnapshot, RuntimeError> {
-        let observations = observations
-            .into_iter()
-            .map(|value| {
-                let observation =
-                    serde_json::from_value::<ObservationReference>(value).map_err(|error| {
-                        RuntimeError::new(
-                            "AGENT_PROTOCOL_ERROR",
-                            format!("invalid observation reference: {error}"),
-                        )
-                    })?;
-                self.validate_observation_reference(&observation, base_revision)?;
-                Ok(observation)
-            })
-            .collect::<Result<Vec<_>, RuntimeError>>()?;
-        let observation = observations.first().cloned();
-        let fingerprint = format!(
-            "{}:{}:{}",
-            base_revision,
-            edit.fingerprint(),
-            serde_json::to_string(&observations).unwrap_or_default()
-        );
+        let edit = Edit::Script {
+            script: script.to_owned(),
+        };
+        let fingerprint = format!("{base_revision}:{}", edit.fingerprint());
 
         if let Some(existing) = self.state.proposal.as_ref() {
             if existing.request_key == request_key {
@@ -656,122 +619,21 @@ impl Runtime {
             &kernel::print(&self.state.project),
             &kernel::print(&edited.project),
         );
-        let proposal = Some(ProposalRecord {
+        let mut candidate = self.state.clone();
+        candidate.proposal = Some(ProposalRecord {
             lifecycle: PendingProposal::Pending {
                 proposal_id: format!("proposal-{}", unique_id()),
                 base_revision,
                 script: edited.script,
                 document_diff,
                 freshness: ProposalFreshness::Current,
-                observation,
-                observations: (observations.len() > 1).then_some(observations),
             },
             request_key: request_key.to_owned(),
             fingerprint,
             receipt: None,
         });
-        let mut candidate = self.state.clone();
-        candidate.proposal = proposal;
         let proposal = candidate.proposal.clone();
         self.commit_candidate(candidate, JournalEvent::Proposal { proposal })
-    }
-
-    fn validate_observation_reference(
-        &self,
-        observation: &ObservationReference,
-        base_revision: u64,
-    ) -> Result<(), RuntimeError> {
-        observation
-            .validate()
-            .map_err(|error| RuntimeError::new("AGENT_PROTOCOL_ERROR", error))?;
-        let observed_path =
-            Path::new(&observation.source_path)
-                .canonicalize()
-                .map_err(|error| {
-                    RuntimeError::new(
-                        "STALE_OBSERVATION",
-                        format!("observation source is unavailable: {error}"),
-                    )
-                })?;
-        let identity = SourceIdentity::from_path(&observed_path).map_err(|error| {
-            RuntimeError::new(
-                "STALE_OBSERVATION",
-                format!("observation source identity is unavailable: {error}"),
-            )
-        })?;
-        if identity.path != observation.source_identity.path
-            || identity.size != observation.source_identity.size
-            || identity.modified_ns != observation.source_identity.modified_ns
-        {
-            return Err(RuntimeError::new(
-                "STALE_OBSERVATION",
-                "observation source identity no longer matches the media file",
-            ));
-        }
-        let project_media = self.state.project.media.iter().find(|media| {
-            media.id == observation.source_ref.as_str()
-                || self
-                    .project_source_path(&media.path)
-                    .canonicalize()
-                    .ok()
-                    .as_ref()
-                    == Some(&observed_path)
-        });
-        if let Some(media) = project_media {
-            let observation_revision = observation.revision.ok_or_else(|| {
-                RuntimeError::new(
-                    "STALE_OBSERVATION",
-                    "project-bound observation must include its project revision",
-                )
-            })?;
-            if observation_revision != base_revision {
-                return Err(RuntimeError::new(
-                    "STALE_OBSERVATION",
-                    format!(
-                        "observation belongs to revision {observation_revision}, not {base_revision}"
-                    ),
-                ));
-            }
-            let source_path = self
-                .project_source_path(&media.path)
-                .canonicalize()
-                .map_err(|error| {
-                    RuntimeError::new(
-                        "STALE_OBSERVATION",
-                        format!("current project source is unavailable: {error}"),
-                    )
-                })?;
-            if source_path != observed_path {
-                return Err(RuntimeError::new(
-                    "STALE_OBSERVATION",
-                    "observation source path does not match the project source",
-                ));
-            }
-            if observation.range.end > media.duration.seconds() + 1e-9 {
-                return Err(RuntimeError::new(
-                    "STALE_OBSERVATION",
-                    "observation range is outside the project source duration",
-                ));
-            }
-        } else if observation.revision.is_some() {
-            return Err(RuntimeError::new(
-                "STALE_OBSERVATION",
-                "raw observation must not claim a project revision",
-            ));
-        }
-        Ok(())
-    }
-
-    fn project_source_path(&self, path: &str) -> PathBuf {
-        let path = Path::new(path);
-        if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            self.project_path
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join(path)
-        }
     }
 
     /// Apply a previously staged proposal as exactly one canonical request.
@@ -799,19 +661,10 @@ impl Runtime {
                 proposal_id: current_id,
                 base_revision: proposal_revision,
                 script,
-                observation,
-                observations,
                 ..
             } => {
                 if current_id != proposal_id {
                     return Err(proposal_not_found(proposal_id));
-                }
-                if let Some(observations) = observations.as_ref() {
-                    for observation in observations {
-                        self.validate_observation_reference(observation, base_revision)?;
-                    }
-                } else if let Some(observation) = observation.as_ref() {
-                    self.validate_observation_reference(observation, base_revision)?;
                 }
                 self.check_revision(Some(base_revision))?;
                 if base_revision != proposal_revision {
@@ -827,8 +680,6 @@ impl Runtime {
                         proposal_id: current_id.clone(),
                         base_revision: proposal_revision,
                         applied_revision: self.state.revision + 1,
-                        observation,
-                        observations,
                     },
                     request_key: record.request_key.clone(),
                     fingerprint: record.fingerprint.clone(),
@@ -1442,12 +1293,10 @@ impl Runtime {
                 request_key,
                 base_revision,
                 script,
-                observations,
             } => Ok(RuntimeResponse::State(self.stage_script_proposal(
                 &request_key,
                 base_revision,
                 &script,
-                observations,
             )?)),
             RuntimeRequest::GetProposalDocuments { proposal_id } => {
                 let (before, after) = self.proposal_documents(&proposal_id)?;
@@ -1960,11 +1809,8 @@ mod tests {
     use super::*;
     use crate::ipc::expect_state;
     use crate::store::{CHECKPOINT_TEMP_FILE, LOCK_FILE};
-    use crate::{
-        parse_document, run_stdio, ObservationSourceIdentity, ProposalTimeRange, RuntimeHandle,
-        MAX_RENDER_RANGE_SECONDS,
-    };
-    use serde_json::json;
+    use crate::{parse_document, run_stdio, RuntimeHandle, MAX_RENDER_RANGE_SECONDS};
+    use serde_json::{json, Value};
     use std::fs::OpenOptions;
     use std::io::Write;
     use std::thread;
@@ -2064,189 +1910,11 @@ mod tests {
     }
 
     #[test]
-    fn observation_reference_survives_proposal_restart() {
-        let directory =
-            std::env::temp_dir().join(format!("cut-runtime-observation-{}", unique_id()));
-        fs::create_dir_all(&directory).expect("observation directory");
-        let source = directory.join("raw-source.mp4");
-        fs::write(&source, b"raw source").expect("raw source");
-        let identity = SourceIdentity::from_path(&source).expect("source identity");
-        let observation_identity = ObservationSourceIdentity {
-            path: identity.path,
-            size: identity.size,
-            modified_ns: identity.modified_ns,
-        };
-        let coarse_observation = ObservationReference {
-            id: "observation-coarse".into(),
-            source_ref: "raw-source".into(),
-            source_path: source.to_string_lossy().into_owned(),
-            source_identity: observation_identity.clone(),
-            range: ProposalTimeRange {
-                start: 0.0,
-                end: 2.0,
-            },
-            evidence: vec!["filmstrip".into()],
-            artifact_keys: vec!["filmstrip-key".into()],
-            revision: None,
-            phase: Some("coarse".into()),
-            clip_id: None,
-            track_id: None,
-            timeline_range: None,
-            selection_index: None,
-            rationale: None,
-            coarse_observation: None,
-        };
-        let observation = ObservationReference {
-            id: "observation-test".into(),
-            source_ref: "raw-source".into(),
-            source_path: source.to_string_lossy().into_owned(),
-            source_identity: observation_identity,
-            range: ProposalTimeRange {
-                start: 4.0,
-                end: 8.0,
-            },
-            evidence: vec!["frames".into()],
-            artifact_keys: vec!["frames-key".into()],
-            revision: None,
-            phase: Some("targeted".into()),
-            clip_id: Some("clip-1".into()),
-            track_id: Some("video-1".into()),
-            timeline_range: Some(ProposalTimeRange {
-                start: 0.0,
-                end: 4.0,
-            }),
-            selection_index: Some(2),
-            rationale: Some("raw source evidence is retained".into()),
-            coarse_observation: Some(Box::new(coarse_observation)),
-        };
-        {
-            let mut runtime = Runtime::open(&directory).expect("runtime");
-            let staged = runtime
-                .stage_script_proposal(
-                    "agent-observation",
-                    0,
-                    "track add T1 subtitle",
-                    vec![serde_json::to_value(&observation).unwrap()],
-                )
-                .expect("proposal");
-            assert!(matches!(
-                staged.pending_proposal,
-                Some(PendingProposal::Pending {
-                    observation: Some(_),
-                    ..
-                })
-            ));
-        }
-        let mut reopened = Runtime::open(&directory).expect("reopen runtime");
-        let (proposal_id, observation) = match reopened.snapshot().pending_proposal {
-            Some(PendingProposal::Pending {
-                proposal_id,
-                observation,
-                ..
-            }) => (proposal_id, observation.expect("observation")),
-            other => panic!("expected pending proposal, got {other:?}"),
-        };
-        assert_eq!(observation.id, "observation-test");
-        assert_eq!(observation.range.end, 8.0);
-        let accepted = reopened
-            .accept_proposal(&proposal_id, "ui", "accept-observation-test", 0)
-            .expect("accept proposal");
-        match accepted.pending_proposal {
-            Some(PendingProposal::Accepted {
-                observation: Some(observation),
-                ..
-            }) => {
-                assert_eq!(
-                    observation.rationale.as_deref(),
-                    Some("raw source evidence is retained")
-                );
-                assert_eq!(observation.selection_index, Some(2));
-                assert_eq!(
-                    observation
-                        .coarse_observation
-                        .as_deref()
-                        .map(|value| value.id.as_str()),
-                    Some("observation-coarse")
-                );
-            }
-            other => panic!("expected accepted observation, got {other:?}"),
-        }
-        drop(reopened);
-        let _ = fs::remove_dir_all(directory);
-    }
-
-    #[test]
-    fn accepting_a_project_observation_rechecks_file_identity() {
-        let directory =
-            std::env::temp_dir().join(format!("cut-runtime-observation-stale-{}", unique_id()));
-        fs::create_dir_all(&directory).expect("observation directory");
-        let source = directory.join("source.mp4");
-        fs::write(&source, b"source").expect("source");
-        fs::write(
-            directory.join(PROJECT_FILE),
-            format!(
-                "cut 1\nproject name=\"Observed\"\n\n\
-                 media source-1 path=\"{}\" rate=24 dur=00:00:08:00 video=1920x1080\n\n\
-                 sequence s1 name=\"Main\" rate=24 size=1920x1080 audio=48000 start=00:00:00:00\n",
-                source.display()
-            ),
-        )
-        .expect("project");
-        let identity = SourceIdentity::from_path(&source).expect("source identity");
-        let observation = ObservationReference {
-            id: "observation-stale".into(),
-            source_ref: "source-1".into(),
-            source_path: source.to_string_lossy().into_owned(),
-            source_identity: ObservationSourceIdentity {
-                path: identity.path,
-                size: identity.size,
-                modified_ns: identity.modified_ns,
-            },
-            range: ProposalTimeRange {
-                start: 1.0,
-                end: 3.0,
-            },
-            evidence: vec!["frames".into()],
-            artifact_keys: Vec::new(),
-            revision: Some(0),
-            phase: Some("targeted".into()),
-            clip_id: None,
-            track_id: None,
-            timeline_range: None,
-            selection_index: Some(0),
-            rationale: Some("the subject is clearly visible".into()),
-            coarse_observation: None,
-        };
-        let mut runtime = Runtime::open(&directory).expect("runtime");
-        let staged = runtime
-            .stage_script_proposal(
-                "observation-stale",
-                0,
-                "track add T1 subtitle",
-                vec![serde_json::to_value(&observation).unwrap()],
-            )
-            .expect("proposal");
-        let proposal_id = pending_id(&staged);
-        let before = runtime.snapshot();
-        fs::write(&source, b"changed source with a new size").expect("replace source");
-        let error = runtime
-            .accept_proposal(&proposal_id, "ui", "accept-observation-stale", 0)
-            .expect_err("changed source must reject acceptance");
-        assert_eq!(error.code, "STALE_OBSERVATION");
-        assert_eq!(runtime.snapshot().document, before.document);
-        assert!(matches!(
-            runtime.snapshot().pending_proposal,
-            Some(PendingProposal::Pending { .. })
-        ));
-        let _ = fs::remove_dir_all(directory);
-    }
-
-    #[test]
     fn rejecting_a_proposal_keeps_canonical_state_and_converges() {
         let mut runtime = runtime();
         let before = runtime.snapshot();
         let staged = runtime
-            .stage_script_proposal("agent-reject", 0, "track add T1 subtitle", Vec::new())
+            .stage_script_proposal("agent-reject", 0, "track add T1 subtitle")
             .unwrap();
         assert!(matches!(
             staged.pending_proposal,
@@ -2277,7 +1945,6 @@ mod tests {
                 "agent-accept",
                 0,
                 "track add T1 subtitle\nmarker add at=0f as=intent",
-                Vec::new(),
             )
             .unwrap();
         let proposal_id = pending_id(&staged);
@@ -2307,12 +1974,7 @@ mod tests {
     fn accepted_proposal_receipt_survives_later_mutation_and_rejects_reuse() {
         let mut runtime = runtime();
         let staged = runtime
-            .stage_script_proposal(
-                "agent-receipt",
-                0,
-                "marker add at=0f as=approved",
-                Vec::new(),
-            )
+            .stage_script_proposal("agent-receipt", 0, "marker add at=0f as=approved")
             .unwrap();
         let proposal_id = pending_id(&staged);
         let first = runtime
@@ -2339,7 +2001,7 @@ mod tests {
     fn accepting_a_stale_proposal_conflicts_without_clearing_it() {
         let mut runtime = runtime();
         let staged = runtime
-            .stage_script_proposal("agent-stale", 0, "track add T1 subtitle", Vec::new())
+            .stage_script_proposal("agent-stale", 0, "track add T1 subtitle")
             .unwrap();
         let proposal_id = pending_id(&staged);
         edit(&mut runtime, "marker add at=0f as=changed", 0).unwrap();
@@ -2365,7 +2027,6 @@ mod tests {
                 "agent-invalid",
                 0,
                 "track add T1 subtitle\ntrack remove missing",
-                Vec::new(),
             )
             .unwrap_err();
         assert_eq!(error.code, "EDIT_REJECTED");
@@ -2650,12 +2311,7 @@ mod tests {
         let proposal_id = {
             let mut runtime = Runtime::open(&directory).unwrap();
             let staged = runtime
-                .stage_script_proposal(
-                    "agent-restart",
-                    0,
-                    "marker add at=0f as=survives",
-                    Vec::new(),
-                )
+                .stage_script_proposal("agent-restart", 0, "marker add at=0f as=survives")
                 .unwrap();
             pending_id(&staged)
         };
@@ -2685,12 +2341,7 @@ mod tests {
         let proposal_id = {
             let mut runtime = Runtime::open(&directory).unwrap();
             let staged = runtime
-                .stage_script_proposal(
-                    "agent-accepted-restart",
-                    0,
-                    "marker add at=0f as=persisted",
-                    Vec::new(),
-                )
+                .stage_script_proposal("agent-accepted-restart", 0, "marker add at=0f as=persisted")
                 .unwrap();
             let proposal_id = pending_id(&staged);
             runtime
@@ -2761,8 +2412,6 @@ mod tests {
             script: "trim c1 out -12f\n".into(),
             document_diff: "-a\n+b\n".into(),
             freshness: ProposalFreshness::Current,
-            observation: None,
-            observations: None,
         })
         .unwrap();
         assert_eq!(
@@ -2780,8 +2429,6 @@ mod tests {
                 proposal_id: "proposal-1".into(),
                 base_revision: 2,
                 applied_revision: 3,
-                observation: None,
-                observations: None,
             })
             .unwrap(),
             json!({
@@ -2880,12 +2527,7 @@ mod tests {
     fn durable_rejection_receipt_survives_later_mutation_and_rejects_reuse() {
         let mut runtime = runtime();
         let staged = runtime
-            .stage_script_proposal(
-                "agent-reject-receipt",
-                0,
-                "marker add at=0f as=proposed",
-                Vec::new(),
-            )
+            .stage_script_proposal("agent-reject-receipt", 0, "marker add at=0f as=proposed")
             .unwrap();
         let proposal_id = pending_id(&staged);
         let first = runtime
@@ -3166,12 +2808,7 @@ mod tests {
     fn proposal_documents_reconstruct_before_and_after_without_mutating_state() {
         let mut runtime = runtime();
         let staged = runtime
-            .stage_script_proposal(
-                "preview-proposal",
-                0,
-                "marker add at=0f as=title",
-                Vec::new(),
-            )
+            .stage_script_proposal("preview-proposal", 0, "marker add at=0f as=title")
             .unwrap();
         let proposal_id = pending_id(&staged);
         let before_revision = runtime.snapshot().revision;
@@ -3231,12 +2868,7 @@ mod tests {
         );
 
         let staged = runtime
-            .stage_script_proposal(
-                "trim",
-                runtime.snapshot().revision,
-                "trim c1 out -24f",
-                Vec::new(),
-            )
+            .stage_script_proposal("trim", runtime.snapshot().revision, "trim c1 out -24f")
             .unwrap();
         let Some(PendingProposal::Pending { proposal_id, .. }) = staged.pending_proposal else {
             panic!("expected a pending proposal");
@@ -3349,7 +2981,7 @@ mod tests {
     fn script_proposals_show_a_document_diff_and_apply_on_acceptance() {
         let (mut runtime, directory) = kernel_runtime("script-proposal");
         let staged = runtime
-            .stage_script_proposal("agent-1", 0, "trim c1 out -1s ripple", Vec::new())
+            .stage_script_proposal("agent-1", 0, "trim c1 out -1s ripple")
             .unwrap();
         assert_eq!(staged.revision, 0);
         let pending = serde_json::to_value(staged.pending_proposal.unwrap()).unwrap();

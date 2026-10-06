@@ -131,13 +131,6 @@ pub trait LlmProvider: Send + Sync {
 
 /// Injectable JSON HTTP boundary. Tests can replace it without a network.
 pub trait JsonHttpClient: Send + Sync {
-    fn get_json(&self, _url: &str, _headers: &[(String, String)]) -> Result<Value, ProviderError> {
-        Err(ProviderError::new(
-            "PROVIDER_HTTP_ERROR",
-            "model discovery is not supported by this HTTP client",
-        ))
-    }
-
     fn post_json(
         &self,
         url: &str,
@@ -177,29 +170,6 @@ impl Default for UreqHttpClient {
 }
 
 impl JsonHttpClient for UreqHttpClient {
-    fn get_json(&self, url: &str, headers: &[(String, String)]) -> Result<Value, ProviderError> {
-        let config = ureq::Agent::config_builder()
-            .timeout_global(Some(self.timeout))
-            .build();
-        let agent: ureq::Agent = config.into();
-        let mut request = agent.get(url);
-        for (name, value) in headers {
-            request = request.header(name, value);
-        }
-        let mut response = request.call().map_err(|error| {
-            ProviderError::new(
-                "PROVIDER_HTTP_ERROR",
-                format!("provider model check failed: {error}"),
-            )
-        })?;
-        response.body_mut().read_json().map_err(|error| {
-            ProviderError::new(
-                "PROVIDER_PROTOCOL_ERROR",
-                format!("provider returned an invalid model list: {error}"),
-            )
-        })
-    }
-
     fn post_json(
         &self,
         url: &str,
@@ -224,50 +194,6 @@ impl JsonHttpClient for UreqHttpClient {
         let body = self.send(url, headers, body)?;
         parse_stream_events(&body)
     }
-}
-
-/// Verify that provider credentials can see the selected model without
-/// consuming generation tokens.
-pub fn check_model_access(
-    provider: ProviderName,
-    api_key: &str,
-    base_url: Option<&str>,
-    model: &str,
-) -> Result<(), ProviderError> {
-    let base_url = base_url
-        .unwrap_or(match provider {
-            ProviderName::Anthropic => "https://api.anthropic.com/v1",
-            ProviderName::Openai => "https://api.openai.com/v1",
-        })
-        .trim_end_matches('/');
-    let headers = match provider {
-        ProviderName::Anthropic => vec![
-            ("anthropic-version".into(), "2023-06-01".into()),
-            ("x-api-key".into(), api_key.into()),
-        ],
-        ProviderName::Openai => vec![("authorization".into(), format!("Bearer {api_key}"))],
-    };
-    let response = UreqHttpClient::new(Duration::from_secs(15))
-        .get_json(&format!("{base_url}/models"), &headers)?;
-    if model_list_contains(&response, model) {
-        Ok(())
-    } else {
-        Err(ProviderError::new(
-            "MODEL_UNAVAILABLE",
-            format!("model {model} is not available for these credentials"),
-        ))
-    }
-}
-
-fn model_list_contains(response: &Value, model: &str) -> bool {
-    response
-        .get("data")
-        .and_then(Value::as_array)
-        .is_some_and(|models| {
-            models
-                .iter()
-                .any(|candidate| candidate.get("id").and_then(Value::as_str) == Some(model))
-        })
 }
 
 impl UreqHttpClient {
@@ -1343,7 +1269,6 @@ pub struct AgentTargetSummary {
     pub sources: Vec<String>,
     pub clips: Vec<String>,
     pub tracks: Vec<String>,
-    pub overlays: Vec<String>,
     pub jobs: Vec<String>,
 }
 
@@ -1354,21 +1279,11 @@ pub struct AgentTargetSummary {
 pub struct ToolResultSummary {
     pub targets: AgentTargetSummary,
     pub artifact_paths: Vec<String>,
-    pub observation: Option<ObservationSummary>,
     pub revision: Option<u64>,
     pub status: Option<String>,
     pub count: Option<usize>,
     pub error: Option<String>,
     pub truncated: bool,
-}
-
-/// Compact observation metadata used in the live agent activity stream.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ObservationSummary {
-    pub id: String,
-    pub phase: Option<String>,
-    pub range: Option<String>,
-    pub evidence: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -1796,7 +1711,6 @@ enum TargetKind {
     Source,
     Clip,
     Track,
-    Overlay,
     Job,
 }
 
@@ -1855,11 +1769,6 @@ fn collect_targets(
                     "trackId" => {
                         add_target(&mut summary.tracks, value.as_str(), MAX_AGENT_SUMMARY_ITEMS)
                     }
-                    "overlayId" => add_target(
-                        &mut summary.overlays,
-                        value.as_str(),
-                        MAX_AGENT_SUMMARY_ITEMS,
-                    ),
                     "jobId" => {
                         add_target(&mut summary.jobs, value.as_str(), MAX_AGENT_SUMMARY_ITEMS)
                     }
@@ -1880,11 +1789,6 @@ fn collect_targets(
                         Some(TargetKind::Track) => {
                             add_target(&mut summary.tracks, value.as_str(), MAX_AGENT_SUMMARY_ITEMS)
                         }
-                        Some(TargetKind::Overlay) => add_target(
-                            &mut summary.overlays,
-                            value.as_str(),
-                            MAX_AGENT_SUMMARY_ITEMS,
-                        ),
                         Some(TargetKind::Job) | None => {}
                     },
                     _ => {}
@@ -1903,7 +1807,6 @@ fn target_kind(key: &str) -> Option<TargetKind> {
         "source" | "sources" => Some(TargetKind::Source),
         "clip" | "clips" => Some(TargetKind::Clip),
         "track" | "tracks" => Some(TargetKind::Track),
-        "overlay" | "overlays" => Some(TargetKind::Overlay),
         "job" | "jobs" => Some(TargetKind::Job),
         _ => None,
     }
@@ -1923,53 +1826,11 @@ fn add_target(targets: &mut Vec<String>, value: Option<&str>, limit: usize) {
 fn summarize_tool_result(value: &Value) -> ToolResultSummary {
     let mut summary = ToolResultSummary {
         targets: summarize_targets(value),
-        observation: find_observation(value),
         ..ToolResultSummary::default()
     };
     let mut nodes = 0;
     collect_result_fields(value, &mut summary, &mut nodes);
     summary
-}
-
-fn find_observation(value: &Value) -> Option<ObservationSummary> {
-    match value {
-        Value::Array(values) => values.iter().find_map(find_observation),
-        Value::Object(object) => {
-            if let Some(reference) = object.get("observationRef") {
-                let id = reference.get("id").and_then(Value::as_str)?.to_owned();
-                let range = reference.get("range").and_then(|range| {
-                    Some(format!(
-                        "{:.2}–{:.2}s",
-                        range.get("start")?.as_f64()?,
-                        range.get("end")?.as_f64()?
-                    ))
-                });
-                let evidence = reference
-                    .get("evidence")
-                    .and_then(Value::as_array)
-                    .map(|values| {
-                        values
-                            .iter()
-                            .filter_map(Value::as_str)
-                            .take(MAX_AGENT_SUMMARY_ITEMS)
-                            .map(str::to_owned)
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                return Some(ObservationSummary {
-                    id: bounded_text(&id, MAX_AGENT_SUMMARY_TEXT_BYTES),
-                    phase: reference
-                        .get("phase")
-                        .and_then(Value::as_str)
-                        .map(|phase| bounded_text(phase, MAX_AGENT_SUMMARY_TEXT_BYTES)),
-                    range,
-                    evidence,
-                });
-            }
-            object.values().find_map(find_observation)
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => None,
-    }
 }
 
 fn collect_result_fields(value: &Value, summary: &mut ToolResultSummary, nodes: &mut usize) {
@@ -2728,20 +2589,6 @@ mod tests {
             summary.artifact_paths,
             vec!["/project/.cut/cache/derived/frame.png"]
         );
-
-        let observation = summarize_tool_result(&json!({
-            "action": "media.observe",
-            "observationRef": {
-                "id": "observation-123",
-                "phase": "targeted",
-                "range": {"start": 4.0, "end": 8.0},
-                "evidence": ["frames"]
-            }
-        }))
-        .observation
-        .expect("observation summary");
-        assert_eq!(observation.phase.as_deref(), Some("targeted"));
-        assert_eq!(observation.range.as_deref(), Some("4.00–8.00s"));
         assert!(!format!("{summary:?}").contains("should-not-be-retained"));
 
         let sensitive = ToolResultSummary::from_error("authorization: bearer secret");
@@ -2749,18 +2596,5 @@ mod tests {
             sensitive.error.as_deref(),
             Some("sensitive tool error redacted")
         );
-    }
-
-    #[test]
-    fn model_list_requires_an_exact_visible_model_id() {
-        let response = json!({
-            "data": [
-                {"id": "gpt-test"},
-                {"id": "provider/model-v2"}
-            ]
-        });
-        assert!(model_list_contains(&response, "provider/model-v2"));
-        assert!(!model_list_contains(&response, "model-v2"));
-        assert!(!model_list_contains(&json!({}), "gpt-test"));
     }
 }

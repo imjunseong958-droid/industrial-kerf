@@ -196,7 +196,6 @@ fn archived(content: &Value, message: usize, block: usize, limit: usize) -> Valu
     };
     json!({"archived":true,"readWith":{"tool":"session.read","message":message,"block":block},
         "revision":summary.revision,"status":summary.status,"error":summary.error,
-        "observation":summary.observation.map(|observation| json!({"id":observation.id,"range":observation.range,"phase":observation.phase})),
         "preview":preview,"note":"Partial historical evidence. Read the original before relying on omitted details; recheck current state and pending proposal before editing."})
 }
 

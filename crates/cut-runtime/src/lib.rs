@@ -73,110 +73,6 @@ pub struct StateSnapshot {
     pub import_warnings: Vec<String>,
 }
 
-/// A finite time interval of an observation.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProposalTimeRange {
-    pub start: f64,
-    pub end: f64,
-}
-
-/// A bounded media observation that can be attached to an agent proposal.
-///
-/// Observation artifacts remain in the regenerable cache. The proposal stores
-/// only this compact reference so reviewers can trace why a change was made
-/// without putting media bytes or transcript payloads in canonical project
-/// state.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ObservationReference {
-    pub id: String,
-    pub source_ref: String,
-    pub source_path: String,
-    pub source_identity: ObservationSourceIdentity,
-    pub range: ProposalTimeRange,
-    pub evidence: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub artifact_keys: Vec<String>,
-    /// Revision at which the observation was taken, when tied to a project.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub revision: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub phase: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub clip_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub track_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeline_range: Option<ProposalTimeRange>,
-    /// Index of the selected range within one rough-cut request.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub selection_index: Option<usize>,
-    /// Agent-provided reason for selecting this range.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rationale: Option<String>,
-    /// Optional coarse observation that led to this targeted observation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub coarse_observation: Option<Box<ObservationReference>>,
-}
-
-/// File identity carried by an [`ObservationReference`] for cache
-/// invalidation and provenance display.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ObservationSourceIdentity {
-    pub path: String,
-    pub size: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub modified_ns: Option<u64>,
-}
-
-impl ObservationReference {
-    /// Validate the bounded metadata accepted into a durable proposal.
-    pub fn validate(&self) -> Result<(), String> {
-        if self.id.trim().is_empty()
-            || self.source_ref.trim().is_empty()
-            || self.source_path.trim().is_empty()
-        {
-            return Err("observation reference requires source and id".into());
-        }
-        if !self.range.start.is_finite()
-            || !self.range.end.is_finite()
-            || self.range.start < 0.0
-            || self.range.end <= self.range.start
-            || self.range.end - self.range.start > 120.0 + 1e-9
-        {
-            return Err("observation reference range is invalid or exceeds 120 seconds".into());
-        }
-        if self.evidence.is_empty() || self.evidence.len() > 5 {
-            return Err("observation reference evidence must contain 1..=5 items".into());
-        }
-        if self.selection_index.is_some_and(|index| index >= 16) {
-            return Err("observation reference selection index is out of bounds".into());
-        }
-        if self
-            .rationale
-            .as_deref()
-            .is_some_and(|rationale| rationale.trim().is_empty())
-        {
-            return Err("observation reference rationale must not be empty".into());
-        }
-        if let Some(timeline_range) = &self.timeline_range {
-            if !timeline_range.start.is_finite()
-                || !timeline_range.end.is_finite()
-                || timeline_range.start < 0.0
-                || timeline_range.end <= timeline_range.start
-            {
-                return Err("observation reference timeline range is invalid".into());
-            }
-        }
-        if let Some(coarse_observation) = &self.coarse_observation {
-            coarse_observation.validate()?;
-        }
-        Ok(())
-    }
-}
-
 /// Whether a pending proposal still targets the canonical project revision.
 ///
 /// Older checkpoints omit this field and therefore deserialize as `Current`.
@@ -214,13 +110,6 @@ pub enum PendingProposal {
         document_diff: String,
         #[serde(default, skip_serializing_if = "ProposalFreshness::is_current")]
         freshness: ProposalFreshness,
-        /// Optional evidence reference produced by the agent workflow.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        observation: Option<ObservationReference>,
-        /// All evidence references produced for a multi-range agent proposal.
-        /// The singular field remains for compatibility with older clients.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        observations: Option<Vec<ObservationReference>>,
     },
     Accepted {
         #[serde(rename = "proposalId", alias = "proposal_id")]
@@ -229,12 +118,6 @@ pub enum PendingProposal {
         base_revision: u64,
         #[serde(rename = "appliedRevision", alias = "applied_revision")]
         applied_revision: u64,
-        /// Preserve the evidence reference after a proposal is accepted so
-        /// durable receipts retain the reason for the canonical edit.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        observation: Option<ObservationReference>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        observations: Option<Vec<ObservationReference>>,
     },
     Rejected {
         #[serde(rename = "proposalId", alias = "proposal_id")]
@@ -367,8 +250,6 @@ pub enum RuntimeRequest {
         #[serde(rename = "baseRevision")]
         base_revision: u64,
         script: String,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        observations: Vec<Value>,
     },
     Undo {
         actor: String,

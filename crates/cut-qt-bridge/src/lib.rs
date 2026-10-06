@@ -799,23 +799,12 @@ fn agent_worker(
                         } => (
                             "tool",
                             format!(
-                                "{name} · {}{}{}",
+                                "{name} · {}{}",
                                 if ok { "done" } else { "failed" },
                                 summary
                                     .status
                                     .map(|status| format!(" · {status}"))
                                     .unwrap_or_default(),
-                                summary
-                                    .observation
-                                    .map(|observation| {
-                                        format!(
-                                            " · {} {} {}",
-                                            observation.phase.unwrap_or_else(|| "observe".into()),
-                                            observation.range.unwrap_or_default(),
-                                            observation.evidence.join("+")
-                                        )
-                                    })
-                                    .unwrap_or_default()
                             ),
                         ),
                         AgentEvent::TurnStarted { .. } => ("status", "Planning next step…".into()),
@@ -1153,8 +1142,6 @@ mod tests {
             script: "track add T1 video\n".into(),
             document_diff: "+  track T1 video\n".into(),
             freshness: ProposalFreshness::Current,
-            observation: None,
-            observations: None,
         };
         let proposal_for_repeat = proposal.clone();
         publish(

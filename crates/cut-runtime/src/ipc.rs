@@ -301,13 +301,11 @@ impl RuntimeClient {
         request_key: &str,
         base_revision: u64,
         script: &str,
-        observations: Vec<Value>,
     ) -> Result<StateSnapshot, RuntimeError> {
         expect_state(self.request(RuntimeRequest::StageScriptProposal {
             request_key: request_key.to_owned(),
             base_revision,
             script: script.to_owned(),
-            observations,
         })?)
     }
 

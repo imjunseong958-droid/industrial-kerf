@@ -773,7 +773,7 @@ impl CutMcpRouter {
         }
         let snapshot = self
             .runtime
-            .stage_script_proposal(&operation_key("agent-edit"), revision, &script, Vec::new())
+            .stage_script_proposal(&operation_key("agent-edit"), revision, &script)
             .map_err(|error| match error.code.as_str() {
                 "PROPOSAL_PENDING" => McpError::new(
                     "PROPOSAL_PENDING",
@@ -1128,8 +1128,6 @@ sequence s1 rate=24 size=1920x1080
             script: "trim c1 out -6f".into(),
             document_diff: "-a\n+b\n".into(),
             freshness: ProposalFreshness::Stale,
-            observation: None,
-            observations: None,
         };
         let text = proposal_status(Some(&pending)).unwrap();
         assert!(text.contains("Proposal p1 (from revision 3)"));
