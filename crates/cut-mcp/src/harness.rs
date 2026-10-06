@@ -6,19 +6,28 @@
 //! for the user, returned with its document diff, the check findings, and a
 //! before/after preview of the range it changed.
 
-use super::{
-    engine_error, inline_image, operation_key, resolve_project_source_path, CapturePayload,
-    CutMcpRouter, McpError, ToolAnnotations,
-};
+use super::{engine_error, CutMcpRouter, McpError, ToolAnnotations};
+use base64::Engine;
 use cut_engine::derivatives::{DerivativeCache, SourceIdentity};
 use cut_engine::program::{compile_program, ProgramOptions};
 use cut_engine::render::{render_program, RenderOptions};
 use cut_lang::{apply_script, parse_document, print_document, reference, Clock, PrintOptions};
 use cut_model::{Catalog, Content, Media, Project, Sequence, Time};
-use cut_runtime::{PendingProposal, ProposalFreshness, RuntimeClient, RuntimeError};
+use cut_runtime::{
+    PendingProposal, ProposalFreshness, RenderJob, RenderRange, RuntimeClient, RuntimeError,
+};
 use cut_skills::Skill;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+static NEXT_KEY: AtomicU64 = AtomicU64::new(1);
+const MAX_INLINE_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
 
 /// The tools every agent and MCP client uses.
 pub const TOOL_NAMES: &[&str] = &["look", "edit", "render"];
@@ -859,6 +868,47 @@ impl CutMcpRouter {
         Ok(result)
     }
 
+    /// Start a render job of the project, or of a pending proposal, in the
+    /// background and return it queued.
+    fn render_start(
+        &self,
+        draft: bool,
+        range: Option<RenderRange>,
+        proposal: Option<&str>,
+    ) -> Result<(RenderJob, PathBuf), McpError> {
+        let (job, document, output) = self
+            .runtime
+            .start_render_range(if draft { "preview" } else { "full" }, range, proposal)
+            .map_err(McpError::from)?;
+        let runtime = self.runtime.clone();
+        let worker_job = job.clone();
+        let worker_output = output.clone();
+        thread::spawn(move || {
+            let mut last_progress = -1.0_f64;
+            let _ = cut_runtime::run_render_job(
+                &runtime,
+                &worker_job,
+                &document,
+                &worker_output,
+                draft,
+                |progress| {
+                    if progress < 1.0 && progress - last_progress < 0.01 {
+                        return;
+                    }
+                    last_progress = progress;
+                    let _ = runtime.update_job_with_progress(
+                        &worker_job.job_id,
+                        "running",
+                        None,
+                        None,
+                        Some(progress),
+                    );
+                },
+            );
+        });
+        Ok((job, output))
+    }
+
     pub(super) fn render(&self, arguments: Value) -> Result<Value, McpError> {
         let input: RenderInput = input(arguments)?;
         if let Some(job) = input.job.as_deref() {
@@ -916,12 +966,12 @@ impl CutMcpRouter {
                 (to - from).seconds(),
             )?);
         }
-        let started = self.render_start(draft, range, input.proposal.as_deref())?;
+        let (job, output) = self.render_start(draft, range, input.proposal.as_deref())?;
         let mut result = json!({
-            "job": started["jobId"],
-            "status": started["status"],
-            "output": started["output"],
-            "revision": started["revision"],
+            "job": job.job_id,
+            "status": job.status,
+            "output": output,
+            "revision": self.runtime.get_state()?.revision,
         });
         if let Some(id) = input.proposal {
             result["proposal"] = json!(id);
@@ -1044,6 +1094,69 @@ fn changed_range(before: &Project, after: &Project) -> Option<(Sequence, Time, T
     }
     let (from, to) = span?;
     (to > from).then(|| (sequence.clone(), from, to))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CapturePayload {
+    start: f64,
+    end: f64,
+    duration: f64,
+    path: String,
+    media_type: String,
+    frames: Vec<Value>,
+}
+
+fn resolve_project_source_path(dir: &Path, input: &str) -> PathBuf {
+    let path = Path::new(input);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        dir.join(path)
+    }
+}
+
+/// Inline the image at `object.path` as `imageBase64`, with its `mediaType`.
+fn inline_image(object: &mut Value) -> Result<(), McpError> {
+    let path = object
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| McpError::new("HANDLER_FAILED", "artifact path is missing"))?
+        .to_owned();
+    let media_type = match Path::new(&path).extension().and_then(|ext| ext.to_str()) {
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("png") => "image/png",
+        _ => {
+            return Err(McpError::new(
+                "HANDLER_FAILED",
+                format!("artifact is not an image: {path}"),
+            ))
+        }
+    };
+    let metadata = fs::metadata(&path).map_err(io_error)?;
+    if metadata.len() > MAX_INLINE_ARTIFACT_BYTES as u64 {
+        return Err(McpError::new(
+            "RESULT_TOO_LARGE",
+            format!("inline artifact exceeds {MAX_INLINE_ARTIFACT_BYTES} bytes"),
+        ));
+    }
+    let data = fs::read(path).map_err(io_error)?;
+    object["imageBase64"] = json!(base64::engine::general_purpose::STANDARD.encode(data));
+    object["mediaType"] = json!(media_type);
+    Ok(())
+}
+
+fn io_error(error: io::Error) -> McpError {
+    McpError::new("HANDLER_FAILED", error.to_string())
+}
+
+fn operation_key(kind: &str) -> String {
+    let sequence = NEXT_KEY.fetch_add(1, Ordering::Relaxed);
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{kind}-{}-{sequence}-{timestamp}", std::process::id())
 }
 
 #[cfg(test)]
