@@ -196,6 +196,19 @@ impl RuntimeError {
         }
     }
 
+    /// Whether the request did not reach cutd, or its answer was lost.
+    pub fn is_transport(&self) -> bool {
+        matches!(
+            self.code.as_str(),
+            "IPC_UNSUPPORTED"
+                | "IPC_CONNECT_ERROR"
+                | "IPC_PERMISSION_DENIED"
+                | "IPC_TIMEOUT"
+                | "IPC_ERROR"
+                | "RUNTIME_UNAVAILABLE"
+        )
+    }
+
     pub fn conflict(expected: u64, actual: u64) -> Self {
         Self {
             code: "REVISION_CONFLICT".into(),

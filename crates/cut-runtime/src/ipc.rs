@@ -230,7 +230,7 @@ impl RuntimeClient {
         let retryable = request_has_stable_idempotency_key(&request);
         match self.request_once(&request) {
             Ok(response) => Ok(response),
-            Err(error) if retryable && is_transport_error(&error) => {
+            Err(error) if retryable && error.is_transport() => {
                 // The first request may have committed before its response
                 // was lost.  Re-read authoritative state before retrying so
                 // the caller observes a current revision and the retry can
@@ -625,17 +625,6 @@ fn request_has_stable_idempotency_key(request: &RuntimeRequest) -> bool {
             ..
         } => false,
     }
-}
-
-fn is_transport_error(error: &RuntimeError) -> bool {
-    matches!(
-        error.code.as_str(),
-        "IPC_CONNECT_ERROR"
-            | "IPC_PERMISSION_DENIED"
-            | "IPC_TIMEOUT"
-            | "IPC_ERROR"
-            | "RUNTIME_UNAVAILABLE"
-    )
 }
 
 fn decode_response(value: &Value, expected_id: &str) -> Result<RuntimeResponse, RuntimeError> {

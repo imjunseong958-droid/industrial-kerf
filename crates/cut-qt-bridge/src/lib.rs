@@ -135,9 +135,11 @@ struct AgentRequest {
 fn emit(tx: &SyncSender<Value>, value: Value) {
     let _ = tx.send(value);
 }
+
 fn error(tx: &SyncSender<Value>, value: impl std::fmt::Display) {
     emit(tx, json!({"type":"error", "message":value.to_string()}));
 }
+
 fn key() -> String {
     static SEQUENCE: AtomicU64 = AtomicU64::new(1);
     format!(
@@ -150,6 +152,7 @@ fn key() -> String {
         SEQUENCE.fetch_add(1, Ordering::Relaxed)
     )
 }
+
 fn publish(
     state: StateSnapshot,
     shared: &Shared,
@@ -210,18 +213,6 @@ fn connection_event(tx: &SyncSender<Value>, status: &str, message: Option<&str>)
     emit(tx, event);
 }
 
-fn is_transport_error(error: &cut_runtime::RuntimeError) -> bool {
-    matches!(
-        error.code.as_str(),
-        "IPC_UNSUPPORTED"
-            | "IPC_CONNECT_ERROR"
-            | "IPC_PERMISSION_DENIED"
-            | "IPC_TIMEOUT"
-            | "IPC_ERROR"
-            | "RUNTIME_UNAVAILABLE"
-    )
-}
-
 fn connect_runtime(
     directory: &std::path::Path,
     binary: &std::path::Path,
@@ -278,7 +269,7 @@ fn runtime_worker(
                 if let Some(active_client) = client.as_ref() {
                     match active_client.get_state() {
                         Ok(state) => publish(state, &shared, &tx, &mut previous),
-                        Err(error) if is_transport_error(&error) => {
+                        Err(error) if error.is_transport() => {
                             let _ = media.try_send(Command::Pause);
                             connection_event(&tx, "disconnected", Some(&error.message));
                             client = None;
@@ -377,7 +368,7 @@ fn runtime_worker(
         match result {
             Ok(state) if force_refresh => publish_force(state, &shared, &tx, &mut previous),
             Ok(state) => publish(state, &shared, &tx, &mut previous),
-            Err(error) if is_transport_error(&error) => {
+            Err(error) if error.is_transport() => {
                 let _ = media.try_send(Command::Pause);
                 connection_event(&tx, "disconnected", Some(&error.message));
                 client = None;
