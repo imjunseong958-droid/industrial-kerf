@@ -36,6 +36,9 @@ const SOCKET_FILE: &str = ".cutd.sock";
 const CLIENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const SERVER_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const CLIENT_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+/// How often an idle daemon checks whether it has been orphaned.
+#[cfg(unix)]
+const ORPHAN_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 static TEST_RESPONSE_DROPPED: AtomicBool = AtomicBool::new(false);
 
 /// Address for the project-scoped local runtime endpoint.
@@ -191,7 +194,8 @@ impl RuntimeClient {
 
     /// Create a client that connects first and starts `binary` only when no
     /// daemon is listening.  The spawned process is intentionally detached
-    /// from the client lifetime; dropping this value never kills `cutd`.
+    /// from the client lifetime; dropping this value never kills `cutd`.  The
+    /// daemon exits on its own once the project directory is deleted.
     pub fn connect_or_spawn(directory: &Path, binary: Option<&Path>) -> Result<Self, RuntimeError> {
         Self::with_binary(directory, binary)
     }
@@ -864,11 +868,14 @@ pub fn response_value(id: &str, result: Result<RuntimeResponse, RuntimeError>) -
 ///
 /// One `RuntimeHandle` is created for the canonical project directory and is
 /// shared by short-lived connection workers.  Each worker handles one JSONL
-/// request and then closes its connection; the daemon and its mailbox remain
-/// alive until the process itself is terminated.
+/// request and then closes its connection.  The daemon outlives its clients,
+/// but returns once it is orphaned: its project directory is gone, or its
+/// socket was removed or replaced, so no client can reach it again.
 pub fn run_ipc(directory: &Path) -> Result<(), RuntimeError> {
     #[cfg(unix)]
     {
+        use std::os::unix::fs::MetadataExt;
+
         let directory = canonical_project_directory(directory)?;
         let endpoint = EndpointAddress::for_canonical_directory(&directory);
         let handle = RuntimeHandle::open(&directory)?;
@@ -876,19 +883,42 @@ pub fn run_ipc(directory: &Path) -> Result<(), RuntimeError> {
             RuntimeError::new("IPC_UNSUPPORTED", "Unix daemon requires a Unix endpoint")
         })?;
         let listener = bind_unix_listener(path)?;
-        for incoming in listener.incoming() {
-            match incoming {
-                Ok(stream) => {
+        // Poll with a timeout instead of blocking in `accept` so the daemon
+        // notices when it is orphaned.  Accepted streams would inherit
+        // non-blocking mode on BSDs, so each one is reset below.
+        listener.set_nonblocking(true).map_err(io_error)?;
+        let socket = fs::symlink_metadata(path).map_err(io_error)?;
+        let owns_socket = || {
+            fs::symlink_metadata(path)
+                .is_ok_and(|current| current.dev() == socket.dev() && current.ino() == socket.ino())
+        };
+        loop {
+            if !directory.is_dir() || !owns_socket() {
+                if owns_socket() {
+                    let _ = fs::remove_file(path);
+                }
+                return Ok(());
+            }
+            if !wait_for_connection(&listener, ORPHAN_CHECK_INTERVAL)? {
+                continue;
+            }
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    stream.set_nonblocking(false).map_err(io_error)?;
                     let handle = handle.clone();
                     thread::Builder::new()
                         .name("cutd-client".into())
                         .spawn(move || serve_unix_connection(stream, handle))
                         .map_err(io_error)?;
                 }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) => {}
                 Err(error) => return Err(io_error(error)),
             }
         }
-        Ok(())
     }
 
     #[cfg(not(unix))]
@@ -899,6 +929,28 @@ pub fn run_ipc(directory: &Path) -> Result<(), RuntimeError> {
             "Windows named-pipe transport is defined but not implemented yet",
         ))
     }
+}
+
+/// Wait up to `timeout` for a pending connection on `listener`.
+#[cfg(unix)]
+fn wait_for_connection(listener: &UnixListener, timeout: Duration) -> Result<bool, RuntimeError> {
+    let mut descriptor = libc::pollfd {
+        fd: listener.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let timeout = libc::c_int::try_from(timeout.as_millis()).unwrap_or(libc::c_int::MAX);
+    // The single `pollfd` is valid for this synchronous call, and the socket
+    // descriptor is borrowed from `listener`.
+    let ready = unsafe { libc::poll(&mut descriptor, 1, timeout) };
+    if ready < 0 {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::Interrupted {
+            return Ok(false);
+        }
+        return Err(io_error(error));
+    }
+    Ok(ready > 0)
 }
 
 #[cfg(unix)]
