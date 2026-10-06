@@ -407,14 +407,12 @@ fn export(
         tx,
         json!({"type":event_type,"status":"running","progress":0.0}),
     );
-    let cancel = cut_runtime::render_cancel_path(client.directory(), &job.job_id);
-    let result = cut_runtime::run_render(
-        job.job_id.clone(),
-        document.clone(),
-        output.clone(),
+    let result = cut_runtime::run_render_job(
+        client,
+        &job,
+        &document,
+        &output,
         quality == "preview",
-        None,
-        Some(cancel),
         |progress| {
             // Progress is replaceable; never stall rendering behind a busy GUI.
             let _ = tx.try_send(json!({"type":event_type,"status":"running","progress":progress}));
@@ -423,13 +421,6 @@ fn export(
     match result {
         Ok(()) => {
             let path = output.to_string_lossy().into_owned();
-            client.update_job_with_progress(
-                &job.job_id,
-                "completed",
-                None,
-                Some(path.clone()),
-                Some(1.0),
-            )?;
             if !preview {
                 emit(
                     tx,
@@ -439,7 +430,6 @@ fn export(
             Ok((path, document))
         }
         Err(err) => {
-            let _ = client.update_job(&job.job_id, "failed", Some(err.message.clone()), None);
             emit(tx, json!({"type":event_type,"status":"failed"}));
             Err(err)
         }

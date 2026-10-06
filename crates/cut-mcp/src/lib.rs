@@ -268,35 +268,28 @@ impl CutMcpRouter {
         range: Option<RenderRange>,
         proposal: Option<&str>,
     ) -> Result<Value, McpError> {
-        let (job, project, output) = self
+        let (job, document, output) = self
             .runtime
             .start_render_range(if draft { "preview" } else { "full" }, range, proposal)
             .map_err(McpError::from)?;
         let runtime = self.runtime.clone();
-        let job_id = job.job_id.clone();
-        let output_for_thread = output.clone();
-        let range_for_thread = job.range.clone();
-        let cancel_file = cut_runtime::render_cancel_path(runtime.directory(), &job_id);
-        let cancel_file_for_cleanup = cancel_file.clone();
+        let worker_job = job.clone();
+        let worker_output = output.clone();
         thread::spawn(move || {
-            let _ = runtime.update_job(&job_id, "running", None, None);
-            let progress_runtime = runtime.clone();
-            let progress_job_id = job_id.clone();
             let mut last_progress = -1.0_f64;
-            let result = cut_runtime::run_render(
-                job_id.clone(),
-                project,
-                output_for_thread.clone(),
+            let _ = cut_runtime::run_render_job(
+                &runtime,
+                &worker_job,
+                &document,
+                &worker_output,
                 draft,
-                range_for_thread,
-                Some(cancel_file),
-                move |progress| {
+                |progress| {
                     if progress < 1.0 && progress - last_progress < 0.01 {
                         return;
                     }
                     last_progress = progress;
-                    let _ = progress_runtime.update_job_with_progress(
-                        &progress_job_id,
+                    let _ = runtime.update_job_with_progress(
+                        &worker_job.job_id,
                         "running",
                         None,
                         None,
@@ -304,26 +297,6 @@ impl CutMcpRouter {
                     );
                 },
             );
-            match result {
-                Ok(()) => {
-                    let _ = runtime.update_job(
-                        &job_id,
-                        "completed",
-                        None,
-                        Some(output_for_thread.to_string_lossy().into_owned()),
-                    );
-                }
-                Err(error) => {
-                    if runtime
-                        .render_job(&job_id)
-                        .map(|job| job.status != "cancelled")
-                        .unwrap_or(false)
-                    {
-                        let _ = runtime.update_job(&job_id, "failed", Some(error.message), None);
-                    }
-                }
-            }
-            let _ = fs::remove_file(cancel_file_for_cleanup);
         });
         Ok(json!({
             "jobId": job.job_id,

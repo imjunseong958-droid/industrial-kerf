@@ -25,7 +25,7 @@ pub use ipc::{
     UNIX_SOCKET_PATH_LIMIT,
 };
 pub use kernel::{resolve_media_paths, EditOp, TrimSide};
-pub use render::{render_cancel_path, run_render};
+pub use render::{render_cancel_path, run_render_job};
 
 use cut_model::Project;
 use runtime::runtime_actor;

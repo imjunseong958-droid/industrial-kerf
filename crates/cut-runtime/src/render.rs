@@ -1,7 +1,8 @@
 //! Render workers. A worker renders a job's document in-process; the
 //! runtime keeps the job's durable state.
 
-use crate::{kernel, RenderRange, RuntimeError};
+use crate::{kernel, RenderJob, RenderRange, RuntimeClient, RuntimeError};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 const RENDER_CANCEL_FILE_PREFIX: &str = ".cut-render-";
@@ -15,34 +16,55 @@ pub fn render_cancel_path(directory: &Path, job_id: &str) -> PathBuf {
     directory.join(format!("{RENDER_CANCEL_FILE_PREFIX}{job_id}.cancel"))
 }
 
-fn engine_error(error: cut_engine::EngineError) -> RuntimeError {
-    match error {
-        cut_engine::EngineError::Cancelled => {
-            RuntimeError::new("CANCELLED", "render job was cancelled")
-        }
-        other => RuntimeError::new("ENGINE_ERROR", other.to_string()),
-    }
+/// Run a queued render job in-process and record with cutd how it ended:
+/// running, then completed with its output, or failed unless it was
+/// cancelled. `document` is the `.cut` text the job carries; its first
+/// sequence is rendered. `on_progress` runs on this thread and must not
+/// block on UI state.
+pub fn run_render_job(
+    client: &RuntimeClient,
+    job: &RenderJob,
+    document: &str,
+    output: &Path,
+    draft: bool,
+    on_progress: impl FnMut(f64),
+) -> Result<(), RuntimeError> {
+    let cancel_file = render_cancel_path(client.directory(), &job.job_id);
+    let _ = client.update_job(&job.job_id, "running", None, None);
+    let result = render(
+        document,
+        output,
+        draft,
+        job.range.as_ref(),
+        &cancel_file,
+        on_progress,
+    );
+    let recorded = match &result {
+        Ok(()) => client.update_job(
+            &job.job_id,
+            "completed",
+            None,
+            Some(output.to_string_lossy().into_owned()),
+        ),
+        Err(error) if error.code == "CANCELLED" => Ok(()),
+        Err(error) => client.update_job(&job.job_id, "failed", Some(error.message.clone()), None),
+    };
+    let _ = fs::remove_file(&cancel_file);
+    result.and(recorded)
 }
 
-/// Run one render worker in-process. `document` is the `.cut` text a render
-/// job carries; its first sequence is rendered, optionally only `range`.
-/// Creating `cancel_file` cancels the render. The runtime remains the durable
-/// owner of job state. `on_progress` runs on this worker thread and must not
-/// block on UI state.
-pub fn run_render<F>(
-    id: String,
-    document: String,
-    output: PathBuf,
+/// Render `document`, or `range` of it, to `output`. Creating `cancel_file`
+/// cancels the render.
+fn render(
+    document: &str,
+    output: &Path,
     draft: bool,
-    range: Option<RenderRange>,
-    cancel_file: Option<PathBuf>,
-    mut on_progress: F,
-) -> Result<(), RuntimeError>
-where
-    F: FnMut(f64),
-{
-    let project = kernel::parse(&document)?;
-    let window = match range.as_ref() {
+    range: Option<&RenderRange>,
+    cancel_file: &Path,
+    mut on_progress: impl FnMut(f64),
+) -> Result<(), RuntimeError> {
+    let project = kernel::parse(document)?;
+    let window = match range {
         Some(range) => {
             RenderRange::new(range.start, range.duration)?;
             Some(kernel::time_range(&project, range.start, range.end())?)
@@ -55,9 +77,10 @@ where
         ..cut_engine::render::RenderOptions::default()
     };
     let cancellation = cut_engine::CancellationToken::new();
-    let watcher = cancel_file.as_ref().map(|path| {
-        cut_engine::render::spawn_cancel_file_watcher(path.clone(), cancellation.clone())
-    });
+    let watcher = cut_engine::render::spawn_cancel_file_watcher(
+        cancel_file.to_path_buf(),
+        cancellation.clone(),
+    );
     let result = cut_engine::render::render_program_with_cancellation(
         &project,
         None,
@@ -67,27 +90,16 @@ where
         Some(&mut on_progress),
     );
     cancellation.cancel();
-    if let Some(watcher) = watcher {
-        let _ = watcher.join();
-    }
+    let _ = watcher.join();
     match result {
-        Ok(()) => {
-            if output.is_file() {
-                Ok(())
-            } else {
-                Err(RuntimeError::new(
-                    "ENGINE_ERROR",
-                    format!(
-                        "render job {id} completed without producing {}",
-                        output.display()
-                    ),
-                ))
-            }
-        }
-        Err(cut_engine::EngineError::Cancelled) => Err(RuntimeError::new(
-            "CANCELLED",
-            format!("render job {id} was cancelled"),
+        Ok(()) if output.is_file() => Ok(()),
+        Ok(()) => Err(RuntimeError::new(
+            "ENGINE_ERROR",
+            format!("render completed without producing {}", output.display()),
         )),
-        Err(error) => Err(engine_error(error)),
+        Err(cut_engine::EngineError::Cancelled) => {
+            Err(RuntimeError::new("CANCELLED", "render job was cancelled"))
+        }
+        Err(error) => Err(RuntimeError::new("ENGINE_ERROR", error.to_string())),
     }
 }
