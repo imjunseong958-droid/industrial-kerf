@@ -178,7 +178,7 @@ fn archived(content: &Value, message: usize, block: usize, limit: usize) -> Valu
         .as_str()
         .and_then(|text| serde_json::from_str::<Value>(text).ok());
     let value = decoded.as_ref().unwrap_or(content);
-    let summary = super::summarize_tool_result(value);
+    let summary = crate::summary::summarize_tool_result(value);
     let preview = if let Some(text) = content.as_str() {
         bounded_text(text, limit)
     } else if let Some(blocks) = content.as_array() {

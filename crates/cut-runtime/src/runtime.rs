@@ -28,13 +28,11 @@ use std::sync::Arc;
 
 /// The v1/v2 project file, read once to import a project and never written.
 const LEGACY_PROJECT_FILE: &str = "project.cut.json";
-
 const CHECKPOINT_INTERVAL: u64 = 32;
 
 /// History holds project snapshots, so it is bounded more tightly than the
 /// command history it replaced.
 const MAX_HISTORY_ENTRIES: usize = 100;
-
 const MAX_RECEIPTS: usize = 1024;
 
 #[allow(clippy::large_enum_variant)]

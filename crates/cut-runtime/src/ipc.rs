@@ -32,15 +32,10 @@ pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 /// bytes and macOS permits fewer bytes on some SDKs, so leave room for the
 /// terminating NUL and use the same threshold on both platforms.
 pub const UNIX_SOCKET_PATH_LIMIT: usize = 100;
-
 const SOCKET_FILE: &str = ".cutd.sock";
-
 const CLIENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-
 const SERVER_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-
 const CLIENT_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
-
 static TEST_RESPONSE_DROPPED: AtomicBool = AtomicBool::new(false);
 
 /// Address for the project-scoped local runtime endpoint.

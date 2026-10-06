@@ -15,20 +15,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub(crate) const PROJECT_FILE: &str = "project.cut";
-
 pub(crate) const JOURNAL_FILE: &str = ".cut-runtime.journal";
-
 pub(crate) const LOCK_FILE: &str = ".cut-runtime.lock";
-
 pub(crate) const CHECKPOINT_FILE: &str = ".cut-runtime.checkpoint.json";
-
 pub(crate) const CHECKPOINT_TEMP_FILE: &str = ".cut-runtime.checkpoint.json.tmp";
 
 /// Where state written by an older cutd is moved, untouched, on first open.
 pub(crate) const PREVIOUS_STATE_PREFIX: &str = ".cut-runtime.previous";
-
 pub(crate) const CHECKPOINT_VERSION: u64 = 4;
-
 pub(crate) const JOURNAL_VERSION: u64 = 3;
 
 /// A project directory has exactly one canonical runtime owner.  Keeping the
