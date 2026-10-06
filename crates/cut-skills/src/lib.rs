@@ -125,13 +125,6 @@ pub fn find_skill<'a>(skills: &'a [Skill], name: &str) -> Option<&'a Skill> {
     skills.iter().find(|skill| skill.name == name)
 }
 
-/// Read the body of one loaded skill without disclosing its filesystem path.
-pub fn read_skill(skills: &[Skill], name: &str) -> Result<String, String> {
-    find_skill(skills, name)
-        .map(|skill| skill.body.clone())
-        .ok_or_else(|| format!("skill not found: {name}"))
-}
-
 /// The longest skill body carried in a system prompt.
 const MAX_PROMPT_SKILL_BYTES: usize = 6 * 1024;
 

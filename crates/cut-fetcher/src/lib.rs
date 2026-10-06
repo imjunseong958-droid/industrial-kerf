@@ -1,4 +1,4 @@
-//! Array-argument yt-dlp adapter used by the CLI, MCP server, and agent.
+//! Array-argument yt-dlp adapter used by `lcut` to import URLs.
 //!
 //! The adapter owns process invocation and output discovery. It never invokes
 //! a shell, and it deliberately keeps cookie paths out of error messages.
@@ -86,12 +86,6 @@ pub struct FetchResult {
     pub title: Option<String>,
 }
 
-/// Accept non-empty inputs. yt-dlp also accepts search terms and extractor
-/// identifiers, so URL validation must not reject those at this boundary.
-pub fn is_youtube_url(value: &str) -> bool {
-    !value.trim().is_empty()
-}
-
 /// Resolve yt-dlp's version or return a typed missing-binary error.
 pub fn check_yt_dlp(binary: impl AsRef<Path>) -> Result<String, FetchError> {
     let binary = binary.as_ref();
@@ -109,16 +103,6 @@ pub fn check_yt_dlp(binary: impl AsRef<Path>) -> Result<String, FetchError> {
         });
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
-}
-
-/// Extract a yt-dlp download percentage from one output line or chunk.
-pub fn parse_progress_percent(text: &str) -> Option<f64> {
-    let marker = "[download]";
-    let start = text.find(marker)? + marker.len();
-    let rest = &text[start..];
-    let percent = rest.find('%')?;
-    let number = rest[..percent].trim().parse::<f64>().ok()?;
-    number.is_finite().then_some(number)
 }
 
 /// Build the exact argv used for a download.
@@ -146,37 +130,13 @@ pub fn build_yt_dlp_args(url: &str, options: &FetchOptions) -> Vec<String> {
 }
 
 /// Download into a directory and discover the newest video/subtitle files.
+/// `url` may also be a search term or extractor identifier; yt-dlp decides.
 pub fn fetch_video(
     url: &str,
     output_directory: &Path,
     options: &FetchOptions,
 ) -> Result<FetchResult, FetchError> {
-    fetch_video_impl(url, output_directory, options, None)
-}
-
-/// Download while reporting parseable yt-dlp progress values.
-///
-/// The callback is deliberately borrowed for one request, so callers do not
-/// need to put UI state or a channel inside `FetchOptions`.
-pub fn fetch_video_with_progress<F>(
-    url: &str,
-    output_directory: &Path,
-    options: &FetchOptions,
-    mut on_progress: F,
-) -> Result<FetchResult, FetchError>
-where
-    F: FnMut(f64),
-{
-    fetch_video_impl(url, output_directory, options, Some(&mut on_progress))
-}
-
-fn fetch_video_impl(
-    url: &str,
-    output_directory: &Path,
-    options: &FetchOptions,
-    on_progress: Option<&mut dyn FnMut(f64)>,
-) -> Result<FetchResult, FetchError> {
-    if !is_youtube_url(url) {
+    if url.trim().is_empty() {
         return Err(FetchError::InvalidInput(
             "URL or search input is required".into(),
         ));
@@ -189,13 +149,6 @@ fn fetch_video_impl(
     check_yt_dlp(&binary)?;
     let args = build_yt_dlp_args(url, options);
     let result = run_process(&binary, &args, output_directory, options.timeout)?;
-    if let Some(on_progress) = on_progress {
-        for line in result.stdout.lines().chain(result.stderr.lines()) {
-            if let Some(percent) = parse_progress_percent(line) {
-                on_progress(percent);
-            }
-        }
-    }
     if result.timed_out {
         return Err(FetchError::Process {
             message: "yt-dlp timed out".into(),
@@ -421,11 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_progress_and_prefers_korean_vtt() {
-        assert_eq!(
-            parse_progress_percent("[download] 42.5% of 1MiB"),
-            Some(42.5)
-        );
+    fn prefers_korean_vtt_subtitles() {
         let files = vec![
             "clip.en.vtt".into(),
             "clip.ko.srt".into(),
