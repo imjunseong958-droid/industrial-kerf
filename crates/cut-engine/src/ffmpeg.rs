@@ -19,14 +19,6 @@ pub struct CommandOutput {
     pub stderr: String,
 }
 
-/// Process output that may contain arbitrary bytes, such as raw PCM audio.
-#[derive(Debug, Clone)]
-pub struct BinaryCommandOutput {
-    pub code: i32,
-    pub stdout: Vec<u8>,
-    pub stderr: String,
-}
-
 fn bin_exists(candidate: &str) -> bool {
     Command::new(candidate)
         .arg("-version")
@@ -71,9 +63,6 @@ pub fn resolve_ffprobe_bin() -> &'static str {
                 }
             }
         }
-        if bin_exists("ffprobe") {
-            return "ffprobe".into();
-        }
         "ffprobe".into()
     })
     .as_str()
@@ -93,9 +82,7 @@ pub fn hwaccel_decode_args() -> &'static [String] {
             if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("none") {
                 return Vec::new();
             }
-            if trimmed.eq_ignore_ascii_case("auto") {
-                // fall through to platform default
-            } else {
+            if !trimmed.eq_ignore_ascii_case("auto") {
                 return vec!["-hwaccel".into(), trimmed.to_ascii_lowercase()];
             }
         }
@@ -162,34 +149,6 @@ pub fn run(bin: &str, args: &[String]) -> Result<CommandOutput> {
     }
 }
 
-/// Run a sidecar without lossy UTF-8 conversion of stdout.
-pub fn run_bytes(bin: &str, args: &[String]) -> Result<BinaryCommandOutput> {
-    let output = Command::new(bin)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|error| {
-            if error.kind() == io::ErrorKind::NotFound {
-                EngineError::msg(format!("{bin} not found on PATH"))
-            } else {
-                EngineError::from(error)
-            }
-        })?;
-    let code = output.status.code().unwrap_or(-1);
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    if code == 0 {
-        Ok(BinaryCommandOutput {
-            code,
-            stdout: output.stdout,
-            stderr,
-        })
-    } else {
-        Err(EngineError::Ffmpeg { code, stderr })
-    }
-}
-
 pub fn run_allow_failure(bin: &str, args: &[String]) -> Result<CommandOutput> {
     let output = Command::new(bin)
         .args(args)
@@ -223,12 +182,13 @@ pub fn parse_time_seconds(time_str: &str) -> Option<f64> {
         .filter(|value| value.is_finite())
 }
 
-fn tail(value: &str, max: usize) -> String {
-    if value.len() <= max {
-        value.to_string()
-    } else {
-        value[value.len() - max..].to_string()
+/// The last `max` bytes of `value`, starting at a character boundary.
+pub(crate) fn tail(value: &str, max: usize) -> &str {
+    let mut start = value.len().saturating_sub(max);
+    while !value.is_char_boundary(start) {
+        start += 1;
     }
+    &value[start..]
 }
 
 /// Prefix used on video decode/encode jobs: hwaccel (if any) plus a laptop-capped thread count.
@@ -245,12 +205,18 @@ fn decode_prefix_with_threads(threads: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_time_seconds;
+    use super::{parse_time_seconds, tail};
 
     #[test]
     fn parses_hms_and_raw_seconds() {
         assert!((parse_time_seconds("00:01:02.50").unwrap() - 62.5).abs() < 1e-9);
         assert!((parse_time_seconds("12.34").unwrap() - 12.34).abs() < 1e-9);
         assert_eq!(parse_time_seconds("garbage"), None);
+    }
+
+    #[test]
+    fn tail_keeps_whole_characters() {
+        assert_eq!(tail("영상.mp4", 6), ".mp4");
+        assert_eq!(tail("abc", 10), "abc");
     }
 }
