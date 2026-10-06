@@ -138,7 +138,6 @@ fn release_gate_decodes_real_4k_media() {
     let session = PlaybackSession::open(
         project.clone(),
         PlaybackConfig::default()
-            .with_ffmpeg_binary(&ffmpeg)
             .with_audio_enabled(false)
             .with_frame_size(3840, 2160)
             .with_decode_queue_capacity(1),
@@ -247,7 +246,6 @@ fn release_gate_accepts_vfr_and_long_gop_seek() {
     let session = PlaybackSession::open(
         project.clone(),
         PlaybackConfig::default()
-            .with_ffmpeg_binary(&ffmpeg)
             .with_audio_enabled(false)
             .with_frame_size(320, 180)
             .with_decode_queue_capacity(1),
@@ -311,7 +309,6 @@ fn release_gate_keeps_audio_clock_and_video_frames_on_one_timeline() {
     let session = PlaybackSession::open(
         project.clone(),
         PlaybackConfig::default()
-            .with_ffmpeg_binary(&ffmpeg)
             .with_frame_size(320, 180)
             .with_decode_queue_capacity(2),
     )

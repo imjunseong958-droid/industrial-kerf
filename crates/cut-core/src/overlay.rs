@@ -7,7 +7,7 @@ pub struct CaptionCue {
     pub text: String,
 }
 
-/// `String(Number(n.toFixed(6)))`. Round to 6 decimals, then trim trailing zeros.
+/// `value` rounded to 6 decimals, without trailing zeros.
 pub fn fmt(value: f64) -> String {
     let s = format!("{:.6}", value);
     let trimmed = s.trim_end_matches('0').trim_end_matches('.');

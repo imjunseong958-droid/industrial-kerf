@@ -7,8 +7,11 @@ use serde_json::{Map, Number, Value};
 
 use crate::encoder::{encode_output_args, SelectEncoderOptions, VideoCodec};
 use crate::error::{EngineError, Result};
-use crate::render::{detect_and_select_encoder, run_proxy_ffmpeg, stderr_progress_callback};
+use crate::render::{
+    detect_and_select_encoder, run_ffmpeg_with_progress, stderr_progress_callback,
+};
 use crate::resources::{budget, should_try_hardware_encode};
+use crate::sidecar::CancellationToken;
 
 #[derive(Debug, Clone, Default)]
 pub struct ProxySourceStat {
@@ -335,7 +338,12 @@ pub fn proxy_run(
     duration: Option<f64>,
 ) -> Result<()> {
     let args = proxy_ffmpeg_args(input, output, settings)?;
-    run_proxy_ffmpeg(&args, duration, Some(stderr_progress_callback()))
+    run_ffmpeg_with_progress(
+        &args,
+        duration.unwrap_or(0.0),
+        &CancellationToken::new(),
+        Some(stderr_progress_callback()),
+    )
 }
 
 fn absolute_path(path: &str) -> String {

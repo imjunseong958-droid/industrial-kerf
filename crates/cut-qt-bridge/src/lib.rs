@@ -1,6 +1,8 @@
 //! Qt's nonblocking, UTF-8 C ABI. Canonical edits stay in cutd; media frames
 //! travel through a latest-frame slot rather than JSON or an accumulating queue.
-use cut_agent::{AgentEvent, AgentSession, AgentSessionOptions, OpenAiApiMode, ProviderName};
+use cut_agent::{
+    AgentEvent, AgentSession, AgentSessionOptions, OpenAiApiMode, ProviderName, ReasoningEffort,
+};
 use cut_mcp::inbound;
 use cut_mcp::CutMcpRouter;
 use cut_model::{
@@ -133,9 +135,11 @@ struct AgentRequest {
 fn emit(tx: &SyncSender<Value>, value: Value) {
     let _ = tx.send(value);
 }
+
 fn error(tx: &SyncSender<Value>, value: impl std::fmt::Display) {
     emit(tx, json!({"type":"error", "message":value.to_string()}));
 }
+
 fn key() -> String {
     static SEQUENCE: AtomicU64 = AtomicU64::new(1);
     format!(
@@ -148,6 +152,7 @@ fn key() -> String {
         SEQUENCE.fetch_add(1, Ordering::Relaxed)
     )
 }
+
 fn publish(
     state: StateSnapshot,
     shared: &Shared,
@@ -208,18 +213,6 @@ fn connection_event(tx: &SyncSender<Value>, status: &str, message: Option<&str>)
     emit(tx, event);
 }
 
-fn is_transport_error(error: &cut_runtime::RuntimeError) -> bool {
-    matches!(
-        error.code.as_str(),
-        "IPC_UNSUPPORTED"
-            | "IPC_CONNECT_ERROR"
-            | "IPC_PERMISSION_DENIED"
-            | "IPC_TIMEOUT"
-            | "IPC_ERROR"
-            | "RUNTIME_UNAVAILABLE"
-    )
-}
-
 fn connect_runtime(
     directory: &std::path::Path,
     binary: &std::path::Path,
@@ -276,7 +269,7 @@ fn runtime_worker(
                 if let Some(active_client) = client.as_ref() {
                     match active_client.get_state() {
                         Ok(state) => publish(state, &shared, &tx, &mut previous),
-                        Err(error) if is_transport_error(&error) => {
+                        Err(error) if error.is_transport() => {
                             let _ = media.try_send(Command::Pause);
                             connection_event(&tx, "disconnected", Some(&error.message));
                             client = None;
@@ -375,7 +368,7 @@ fn runtime_worker(
         match result {
             Ok(state) if force_refresh => publish_force(state, &shared, &tx, &mut previous),
             Ok(state) => publish(state, &shared, &tx, &mut previous),
-            Err(error) if is_transport_error(&error) => {
+            Err(error) if error.is_transport() => {
                 let _ = media.try_send(Command::Pause);
                 connection_event(&tx, "disconnected", Some(&error.message));
                 client = None;
@@ -407,14 +400,12 @@ fn export(
         tx,
         json!({"type":event_type,"status":"running","progress":0.0}),
     );
-    let cancel = cut_runtime::render_cancel_path(client.directory(), &job.job_id);
-    let result = cut_runtime::run_render_with_cancel_file_progress(
-        job.job_id.clone(),
-        document.clone(),
-        output.clone(),
+    let result = cut_runtime::run_render_job(
+        client,
+        &job,
+        &document,
+        &output,
         quality == "preview",
-        None,
-        Some(cancel),
         |progress| {
             // Progress is replaceable; never stall rendering behind a busy GUI.
             let _ = tx.try_send(json!({"type":event_type,"status":"running","progress":progress}));
@@ -423,13 +414,6 @@ fn export(
     match result {
         Ok(()) => {
             let path = output.to_string_lossy().into_owned();
-            client.update_job_with_progress(
-                &job.job_id,
-                "completed",
-                None,
-                Some(path.clone()),
-                Some(1.0),
-            )?;
             if !preview {
                 emit(
                     tx,
@@ -439,7 +423,6 @@ fn export(
             Ok((path, document))
         }
         Err(err) => {
-            let _ = client.update_job(&job.job_id, "failed", Some(err.message.clone()), None);
             emit(tx, json!({"type":event_type,"status":"failed"}));
             Err(err)
         }
@@ -655,9 +638,9 @@ fn new_agent(
         provider
     } else {
         match std::env::var("CUT_PROVIDER").ok().as_deref() {
-            Some("openai") => ProviderName::Openai,
-            Some("anthropic") => ProviderName::Anthropic,
-            Some(_) => return Err("CUT_PROVIDER must be openai or anthropic".into()),
+            Some(name) => {
+                ProviderName::parse(name).ok_or("CUT_PROVIDER must be openai or anthropic")?
+            }
             None if settings
                 .api_key
                 .as_deref()
@@ -683,23 +666,18 @@ fn new_agent(
         .or_else(|| std::env::var(key_name).ok())
         .filter(|key| !key.trim().is_empty())
         .ok_or_else(|| format!("Add an API key in Agent Settings or set {key_name}"))?;
-    let api_mode =
-        match settings
-            .api_mode
-            .or_else(|| match std::env::var("OPENAI_API_MODE").ok().as_deref() {
-                Some("responses") => Some(OpenAiApiMode::Responses),
-                Some("chat") | None => Some(OpenAiApiMode::Chat),
-                _ => None,
-            }) {
-            Some(mode) => mode,
-            None => return Err("OPENAI_API_MODE must be chat or responses".into()),
-        };
+    let api_mode = match settings.api_mode {
+        Some(mode) => mode,
+        None => match std::env::var("OPENAI_API_MODE") {
+            Ok(name) => {
+                OpenAiApiMode::parse(&name).ok_or("OPENAI_API_MODE must be chat or responses")?
+            }
+            Err(_) => OpenAiApiMode::Chat,
+        },
+    };
     let reasoning_effort = std::env::var("OPENAI_REASONING_EFFORT")
         .ok()
-        .map(|value| {
-            serde_json::from_value(Value::String(value))
-                .map_err(|_| "Invalid OPENAI_REASONING_EFFORT".to_string())
-        })
+        .map(|value| ReasoningEffort::parse(&value).ok_or("Invalid OPENAI_REASONING_EFFORT"))
         .transpose()?;
     let router = CutMcpRouter::new(directory, Some(binary))?;
     let mut tools = router.agent_tools();
@@ -799,23 +777,12 @@ fn agent_worker(
                         } => (
                             "tool",
                             format!(
-                                "{name} · {}{}{}",
+                                "{name} · {}{}",
                                 if ok { "done" } else { "failed" },
                                 summary
                                     .status
                                     .map(|status| format!(" · {status}"))
                                     .unwrap_or_default(),
-                                summary
-                                    .observation
-                                    .map(|observation| {
-                                        format!(
-                                            " · {} {} {}",
-                                            observation.phase.unwrap_or_else(|| "observe".into()),
-                                            observation.range.unwrap_or_default(),
-                                            observation.evidence.join("+")
-                                        )
-                                    })
-                                    .unwrap_or_default()
                             ),
                         ),
                         AgentEvent::TurnStarted { .. } => ("status", "Planning next step…".into()),
@@ -1153,8 +1120,6 @@ mod tests {
             script: "track add T1 video\n".into(),
             document_diff: "+  track T1 video\n".into(),
             freshness: ProposalFreshness::Current,
-            observation: None,
-            observations: None,
         };
         let proposal_for_repeat = proposal.clone();
         publish(

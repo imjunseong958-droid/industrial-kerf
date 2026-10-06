@@ -1,9 +1,8 @@
 //! Render argument construction and ffmpeg spawn for `cut-model` projects.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{self, Receiver};
+use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
@@ -13,14 +12,13 @@ use crate::encoder::{
 };
 use crate::error::{EngineError, Result};
 use crate::ffmpeg::{
-    cached_encoder_listing, parse_time_seconds, resolve_ffmpeg_bin, video_decode_prefix,
+    cached_encoder_listing, parse_time_seconds, resolve_ffmpeg_bin, tail, video_decode_prefix,
 };
 use crate::program::{compile_program, ProgramOptions};
 use crate::resources::{budget, should_try_hardware_encode};
-use crate::transcription::CancellationToken;
+use crate::sidecar::{self, CancellationToken};
 
-const RENDER_POLL_INTERVAL: Duration = Duration::from_millis(20);
-const STDERR_QUEUE_CAPACITY: usize = 128;
+const CANCEL_FILE_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 pub fn detect_and_select_encoder(options: &SelectEncoderOptions) -> Result<EncoderSelection> {
     let ffmpeg = resolve_ffmpeg_bin();
@@ -167,41 +165,6 @@ where
     render_program_with_cancellation(project, sequence, range, opts, &cancellation, on_progress)
 }
 
-struct FfmpegChild {
-    child: Child,
-}
-
-impl FfmpegChild {
-    fn spawn(args: &[String]) -> Result<Self> {
-        let ffmpeg = resolve_ffmpeg_bin();
-        let child = Command::new(ffmpeg)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()?;
-        Ok(Self { child })
-    }
-
-    fn take_stderr(&mut self) -> Option<std::process::ChildStderr> {
-        self.child.stderr.take()
-    }
-
-    fn kill(&mut self) {
-        let _ = self.child.kill();
-    }
-
-    fn reap_after_kill(&mut self) {
-        let _ = self.child.wait();
-    }
-}
-
-impl Drop for FfmpegChild {
-    fn drop(&mut self) {
-        self.kill();
-    }
-}
-
 fn extract_time(line: &str) -> Option<&str> {
     let index = line.find("time=")?;
     let rest = &line[index + 5..];
@@ -209,83 +172,9 @@ fn extract_time(line: &str) -> Option<&str> {
     Some(&rest[..end])
 }
 
-fn tail_stderr(value: &str, max: usize) -> String {
-    if value.len() <= max {
-        value.to_string()
-    } else {
-        value[value.len() - max..].to_string()
-    }
-}
-
-fn emit_progress_line(ratio: f64) {
-    let _ = writeln!(std::io::stderr(), r#"{{"progress":{ratio}}}"#);
-}
-
-fn drain_stderr<F>(
-    receiver: &Receiver<String>,
-    stderr_tail: &mut String,
-    duration: f64,
-    on_progress: &mut Option<F>,
-) where
-    F: FnMut(f64),
-{
-    for line in receiver.try_iter() {
-        stderr_tail.push_str(&line);
-        stderr_tail.push('\n');
-        if stderr_tail.len() > 4_000 {
-            let mut start = stderr_tail.len() - 2_000;
-            while start < stderr_tail.len() && !stderr_tail.is_char_boundary(start) {
-                start += 1;
-            }
-            stderr_tail.drain(..start);
-        }
-        if let Some(time_str) = extract_time(&line) {
-            if let Some(seconds) = parse_time_seconds(time_str) {
-                if duration > 0.0 {
-                    let ratio = (seconds / duration).clamp(0.0, 1.0);
-                    if let Some(callback) = on_progress.as_mut() {
-                        callback(ratio);
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn finish_stderr_reader<F>(
-    reader: thread::JoinHandle<()>,
-    receiver: &Receiver<String>,
-    stderr_tail: &mut String,
-    duration: f64,
-    on_progress: &mut Option<F>,
-) where
-    F: FnMut(f64),
-{
-    while !reader.is_finished() {
-        drain_stderr(receiver, stderr_tail, duration, on_progress);
-        thread::sleep(RENDER_POLL_INTERVAL);
-    }
-    let _ = reader.join();
-    drain_stderr(receiver, stderr_tail, duration, on_progress);
-}
-
-fn result_from_status(status: std::process::ExitStatus, stderr: &str) -> Result<()> {
-    if status.success() {
-        Ok(())
-    } else {
-        let detail = stderr.trim();
-        Err(EngineError::Ffmpeg {
-            code: status.code().unwrap_or(-1),
-            stderr: if detail.is_empty() {
-                "ffmpeg failed".into()
-            } else {
-                tail_stderr(detail, 2000)
-            },
-        })
-    }
-}
-
-fn run_ffmpeg_with_progress<F>(
+/// Run ffmpeg to completion, reporting progress through `duration` seconds
+/// of output when it is positive.
+pub(crate) fn run_ffmpeg_with_progress<F>(
     args: &[String],
     duration: f64,
     cancellation: &CancellationToken,
@@ -294,92 +183,28 @@ fn run_ffmpeg_with_progress<F>(
 where
     F: FnMut(f64),
 {
-    if cancellation.is_cancelled() {
-        return Err(EngineError::Cancelled);
-    }
-    let mut ffmpeg = FfmpegChild::spawn(args)?;
-    let stderr = ffmpeg.take_stderr().ok_or_else(|| {
-        ffmpeg.kill();
-        ffmpeg.reap_after_kill();
-        EngineError::msg("ffmpeg stderr pipe is unavailable")
-    })?;
-    let (sender, receiver) = mpsc::sync_channel::<String>(STDERR_QUEUE_CAPACITY);
-    let reader = thread::spawn(move || {
-        let reader = BufReader::new(stderr);
-        for line in reader.lines().map_while(std::result::Result::ok) {
-            if sender.send(line).is_err() {
-                break;
-            }
-        }
-    });
-    let mut stderr_tail = String::new();
-    loop {
-        drain_stderr(&receiver, &mut stderr_tail, duration, &mut on_progress);
-        if cancellation.is_cancelled() {
-            ffmpeg.kill();
-            ffmpeg.reap_after_kill();
-            finish_stderr_reader(
-                reader,
-                &receiver,
-                &mut stderr_tail,
-                duration,
-                &mut on_progress,
-            );
-            return Err(EngineError::Cancelled);
-        }
-        let status = match ffmpeg.child.try_wait() {
-            Ok(status) => status,
-            Err(error) => {
-                ffmpeg.kill();
-                ffmpeg.reap_after_kill();
-                finish_stderr_reader(
-                    reader,
-                    &receiver,
-                    &mut stderr_tail,
-                    duration,
-                    &mut on_progress,
-                );
-                return Err(error.into());
-            }
+    let mut command = Command::new(resolve_ffmpeg_bin());
+    command.args(args);
+    let finished = sidecar::run(command, cancellation, |line| {
+        let Some(seconds) = extract_time(line).and_then(parse_time_seconds) else {
+            return;
         };
-        if let Some(status) = status {
-            finish_stderr_reader(
-                reader,
-                &receiver,
-                &mut stderr_tail,
-                duration,
-                &mut on_progress,
-            );
-            return result_from_status(status, &stderr_tail);
+        if let (Some(callback), true) = (on_progress.as_mut(), duration > 0.0) {
+            callback((seconds / duration).clamp(0.0, 1.0));
         }
-        thread::sleep(RENDER_POLL_INTERVAL);
+    })?;
+    if finished.status.success() {
+        return Ok(());
     }
-}
-
-/// Run ffmpeg for proxy transcode with optional stderr progress lines.
-pub fn run_proxy_ffmpeg_with_cancellation<F>(
-    args: &[String],
-    duration: Option<f64>,
-    cancellation: &CancellationToken,
-    on_progress: Option<F>,
-) -> Result<()>
-where
-    F: FnMut(f64),
-{
-    let total = duration.filter(|value| *value > 0.0).unwrap_or(0.0);
-    run_ffmpeg_with_progress(args, total, cancellation, on_progress)
-}
-
-pub fn run_proxy_ffmpeg<F>(
-    args: &[String],
-    duration: Option<f64>,
-    on_progress: Option<F>,
-) -> Result<()>
-where
-    F: FnMut(f64),
-{
-    let cancellation = CancellationToken::new();
-    run_proxy_ffmpeg_with_cancellation(args, duration, &cancellation, on_progress)
+    let detail = finished.stderr.trim();
+    Err(EngineError::Ffmpeg {
+        code: finished.status.code().unwrap_or(-1),
+        stderr: if detail.is_empty() {
+            "ffmpeg failed".into()
+        } else {
+            tail(detail, 2000).to_owned()
+        },
+    })
 }
 
 /// Watch a project-local cancellation marker for one render invocation.
@@ -393,7 +218,7 @@ pub fn spawn_cancel_file_watcher(
                 cancellation.cancel();
                 break;
             }
-            thread::sleep(RENDER_POLL_INTERVAL);
+            thread::sleep(CANCEL_FILE_POLL_INTERVAL);
         }
     })
 }
@@ -407,7 +232,7 @@ pub fn stderr_progress_callback() -> impl FnMut(f64) {
             return;
         }
         last = rounded;
-        emit_progress_line(rounded);
+        let _ = writeln!(std::io::stderr(), r#"{{"progress":{rounded}}}"#);
     }
 }
 

@@ -1,8 +1,8 @@
 # cut-engine
 
-Native media engine for Cut. The Rust application and adapters invoke this
-binary (`target/release/cut-engine`, `target/debug/cut-engine`, or
-`CUT_ENGINE_BIN`).
+Native media engine for Cut. `cutd`, the agent harness, and the Qt bridge call
+it in-process as the `cut_engine` library; the `cut-engine` binary exposes the
+same operations for debugging and scripting.
 
 ```
 cargo test -p cut-engine
@@ -41,10 +41,7 @@ Commands:
 | `probe transcribe/listen` | Optional local whisper.cpp transcription and explicitly bounded listening observations |
 | `encoders` / `select-encoder` | hardware encoder discovery (`select-encoder` stays opt-in) |
 | `resources` | laptop CPU/encode budget |
-| `compile-v1` / `compile-v2` / `duration-v1` / `duration-v2` / `render-v2` | filtergraph, duration, ffmpeg argv (`--prefer-hardware` / `--software`) |
-| `overlay` | path/drawtext escape, atempo, captions, subtitles |
-| `proxy-key` / `proxy-args` | deterministic proxy cache keys |
-| `plan` / `crop` | Region keyframe planning and aspect-aware crop planning from observed boxes |
+| `proxy-key` / `proxy-args` / `proxy-run` | deterministic proxy cache keys, proxy ffmpeg argv, and proxy transcodes |
 
 Transcription uses `CUT_WHISPER_BIN` (or `whisper-cli` on `PATH`) and
 `CUT_WHISPER_MODEL`. It prepares mono 16 kHz WAV ranges and stores typed JSON

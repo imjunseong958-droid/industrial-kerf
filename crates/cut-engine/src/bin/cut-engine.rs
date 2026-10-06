@@ -21,9 +21,6 @@ use cut_engine::proxy::{
     ProxySourceStat,
 };
 use cut_engine::resources::budget;
-use cut_engine::vision::{
-    build_tracking_plan, crop_plan_from_json, TrackingPlanInput, TrackingPlanOptions,
-};
 use cut_engine::{
     CancellationToken, TimeRange, TranscriptionBackend, TranscriptionOptions,
     TranscriptionProgress, TranscriptionStage,
@@ -86,17 +83,6 @@ enum Commands {
         #[arg(long)]
         output: String,
     },
-    Plan {
-        #[arg(long)]
-        min_confidence: Option<f64>,
-        #[arg(long)]
-        max_gap: Option<f64>,
-        #[arg(long)]
-        smoothing: Option<f64>,
-        #[arg(long)]
-        crop_aspect: Option<f64>,
-    },
-    Crop,
 }
 
 #[derive(Subcommand)]
@@ -422,40 +408,6 @@ fn main() -> Result<()> {
             let duration = settings.duration;
             proxy_run(&input, &output, &settings, duration)?;
             print_json(&json!({ "ok": true, "output": output }))?;
-        }
-        Commands::Plan {
-            min_confidence,
-            max_gap,
-            smoothing,
-            crop_aspect,
-        } => {
-            let input: Value = serde_json::from_str(&read_stdin()?)?;
-            let detections: Vec<cut_engine::vision::NormalizedDetection> =
-                if let Some(list) = input.get("detections") {
-                    serde_json::from_value(list.clone())?
-                } else {
-                    serde_json::from_value(input.clone())?
-                };
-            let plan = build_tracking_plan(
-                TrackingPlanInput::Detections(&detections),
-                &TrackingPlanOptions {
-                    min_confidence,
-                    max_gap_seconds: max_gap,
-                    smoothing_factor: smoothing,
-                    ..TrackingPlanOptions::default()
-                },
-            )?;
-            let mut payload = serde_json::to_value(&plan)?;
-            if let Some(aspect) = crop_aspect {
-                payload["crop"] = serde_json::to_value(crop_plan_from_json(&json!({
-                    "aspectRatio": aspect
-                }))?)?;
-            }
-            print_json(&payload)?;
-        }
-        Commands::Crop => {
-            let input: Value = serde_json::from_str(&read_stdin()?)?;
-            print_json(&crop_plan_from_json(&input)?)?;
         }
     }
     Ok(())

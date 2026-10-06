@@ -30,18 +30,6 @@ pub enum PreviewMode {
     Unavailable,
 }
 
-impl PreviewMode {
-    /// Whether this mode can be presented as an exact native preview.
-    pub const fn is_native_exact(self) -> bool {
-        matches!(self, Self::NativeExact)
-    }
-
-    /// Whether this mode requires the rendered fallback path.
-    pub const fn requires_render(self) -> bool {
-        matches!(self, Self::RenderedFallback)
-    }
-}
-
 /// A bounded project-time interval selected for a rendered preview.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,16 +43,6 @@ impl PreviewRange {
     pub fn new(start: f64, end: f64) -> Option<Self> {
         (start.is_finite() && end.is_finite() && start >= 0.0 && end > start)
             .then_some(Self { start, end })
-    }
-
-    /// Whether this range intersects another range.
-    pub fn intersects(self, other: Self) -> bool {
-        self.start < other.end && other.start < self.end
-    }
-
-    /// Return the range duration.
-    pub fn duration(self) -> f64 {
-        self.end - self.start
     }
 }
 
@@ -96,12 +74,7 @@ pub struct PreviewPlan {
 impl PreviewPlan {
     /// Whether the viewer may present native playback as exact.
     pub const fn native_exact(&self) -> bool {
-        self.mode.is_native_exact()
-    }
-
-    /// Whether the viewer should request a rendered fallback.
-    pub const fn needs_rendered_fallback(&self) -> bool {
-        self.mode.requires_render()
+        matches!(self.mode, PreviewMode::NativeExact)
     }
 
     /// Whether errors prevent either preview path from being trusted.

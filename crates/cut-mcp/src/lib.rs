@@ -9,33 +9,15 @@ pub mod docs;
 pub mod harness;
 pub mod inbound;
 
-use base64::Engine;
 use cut_agent::{AgentTool, ToolMap};
-use cut_runtime::{RenderRange, RuntimeClient, RuntimeError};
+use cut_runtime::{RuntimeClient, RuntimeError};
 use cut_skills::{load_skills_with_bundled, Skill};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::fmt;
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-static NEXT_KEY: AtomicU64 = AtomicU64::new(1);
-const MAX_INLINE_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CapturePayload {
-    start: f64,
-    end: f64,
-    duration: f64,
-    path: String,
-    media_type: String,
-    frames: Vec<Value>,
-}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -259,79 +241,6 @@ impl CutMcpRouter {
             )),
         }
     }
-
-    /// Start a render job of the project, or of a pending proposal, in the
-    /// background and return it queued.
-    fn render_start(
-        &self,
-        draft: bool,
-        range: Option<RenderRange>,
-        proposal: Option<&str>,
-    ) -> Result<Value, McpError> {
-        let (job, project, output) = self
-            .runtime
-            .start_render_range(if draft { "preview" } else { "full" }, range, proposal)
-            .map_err(McpError::from)?;
-        let runtime = self.runtime.clone();
-        let job_id = job.job_id.clone();
-        let output_for_thread = output.clone();
-        let range_for_thread = job.range.clone();
-        let cancel_file = cut_runtime::render_cancel_path(runtime.directory(), &job_id);
-        let cancel_file_for_cleanup = cancel_file.clone();
-        thread::spawn(move || {
-            let _ = runtime.update_job(&job_id, "running", None, None);
-            let progress_runtime = runtime.clone();
-            let progress_job_id = job_id.clone();
-            let mut last_progress = -1.0_f64;
-            let result = cut_runtime::run_render_with_cancel_file_progress(
-                job_id.clone(),
-                project,
-                output_for_thread.clone(),
-                draft,
-                range_for_thread,
-                Some(cancel_file),
-                move |progress| {
-                    if progress < 1.0 && progress - last_progress < 0.01 {
-                        return;
-                    }
-                    last_progress = progress;
-                    let _ = progress_runtime.update_job_with_progress(
-                        &progress_job_id,
-                        "running",
-                        None,
-                        None,
-                        Some(progress),
-                    );
-                },
-            );
-            match result {
-                Ok(()) => {
-                    let _ = runtime.update_job(
-                        &job_id,
-                        "completed",
-                        None,
-                        Some(output_for_thread.to_string_lossy().into_owned()),
-                    );
-                }
-                Err(error) => {
-                    if runtime
-                        .render_job(&job_id)
-                        .map(|job| job.status != "cancelled")
-                        .unwrap_or(false)
-                    {
-                        let _ = runtime.update_job(&job_id, "failed", Some(error.message), None);
-                    }
-                }
-            }
-            let _ = fs::remove_file(cancel_file_for_cleanup);
-        });
-        Ok(json!({
-            "jobId": job.job_id,
-            "output": output,
-            "revision": self.runtime.get_state()?.revision,
-            "status": "queued",
-        }))
-    }
 }
 
 const DOCUMENT_URI: &str = "cut://document";
@@ -525,61 +434,14 @@ fn take_images(value: &mut Value, images: &mut Vec<Value>) {
         _ => {}
     }
 }
-fn resolve_project_source_path(dir: &Path, input: &str) -> PathBuf {
-    let path = Path::new(input);
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        dir.join(path)
-    }
-}
-
-/// Inline the image at `object.path` as `imageBase64`, with its `mediaType`.
-fn inline_image(object: &mut Value) -> Result<(), McpError> {
-    let path = object
-        .get("path")
-        .and_then(Value::as_str)
-        .ok_or_else(|| McpError::new("HANDLER_FAILED", "artifact path is missing"))?
-        .to_owned();
-    let media_type = match Path::new(&path).extension().and_then(|ext| ext.to_str()) {
-        Some("jpg" | "jpeg") => "image/jpeg",
-        Some("png") => "image/png",
-        _ => {
-            return Err(McpError::new(
-                "HANDLER_FAILED",
-                format!("artifact is not an image: {path}"),
-            ))
-        }
-    };
-    let metadata = fs::metadata(&path).map_err(io_error)?;
-    if metadata.len() > MAX_INLINE_ARTIFACT_BYTES as u64 {
-        return Err(McpError::new(
-            "RESULT_TOO_LARGE",
-            format!("inline artifact exceeds {MAX_INLINE_ARTIFACT_BYTES} bytes"),
-        ));
-    }
-    let data = fs::read(path).map_err(io_error)?;
-    object["imageBase64"] = json!(base64::engine::general_purpose::STANDARD.encode(data));
-    object["mediaType"] = json!(media_type);
-    Ok(())
-}
-
-fn load_project_skills(dir: &Path) -> io::Result<Vec<Skill>> {
+/// Bundled skills, then the user's (`~/.cut/skills`), then the project's.
+pub fn load_project_skills(dir: &Path) -> io::Result<Vec<Skill>> {
     let mut directories = Vec::new();
     if let Some(home) = std::env::var_os("HOME") {
         directories.push(PathBuf::from(home).join(".cut").join("skills"));
     }
     directories.push(dir.join(".cut").join("skills"));
     load_skills_with_bundled(&directories)
-}
-
-fn operation_key(kind: &str) -> String {
-    let sequence = NEXT_KEY.fetch_add(1, Ordering::Relaxed);
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("{kind}-{}-{sequence}-{timestamp}", std::process::id())
 }
 
 fn runtime_error_text(error: RuntimeError) -> String {
@@ -596,10 +458,6 @@ fn engine_error(error: cut_engine::EngineError) -> McpError {
         cut_engine::EngineError::Cancelled => McpError::new("CANCELLED", "operation cancelled"),
         error => McpError::new("HANDLER_FAILED", error.to_string()),
     }
-}
-
-fn io_error(error: io::Error) -> McpError {
-    McpError::new("HANDLER_FAILED", error.to_string())
 }
 
 fn json_rpc_result(id: Value, result: Value) -> Value {

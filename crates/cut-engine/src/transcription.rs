@@ -8,16 +8,12 @@ use crate::derivatives::{CacheEntry, DerivativeCache, SourceIdentity};
 use crate::error::{EngineError, Result};
 use crate::ffmpeg::resolve_ffmpeg_bin;
 use crate::probe::info;
+use crate::sidecar::{self, CancellationToken};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::fs;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
-use std::thread;
-use std::time::Duration;
+use std::process::{Command, Stdio};
 
 /// Schema version for derived transcript JSON.
 pub const TRANSCRIPTION_SCHEMA_VERSION: u8 = 1;
@@ -29,8 +25,6 @@ pub const MAX_TRANSCRIPTION_RANGE_SECONDS: f64 = 15.0 * 60.0;
 pub const MAX_LISTEN_RANGE_SECONDS: f64 = 2.0 * 60.0;
 
 const MAX_TRANSCRIPT_BYTES: u64 = 16 * 1024 * 1024;
-const MAX_SIDECAR_STDERR_BYTES: usize = 16 * 1024;
-const SIDECAR_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const DEFAULT_WHISPER_BACKEND_VERSION: &str = "whisper.cpp/unknown";
 
 /// A bounded project-time range used by transcription and listening.
@@ -95,49 +89,6 @@ impl TranscriptionOptions {
             backend_version: None,
             binary: None,
         }
-    }
-}
-
-/// Cancellation handle shared with the sidecar runner.
-#[derive(Clone, Debug, Default)]
-pub struct CancellationToken {
-    cancelled: Arc<AtomicBool>,
-}
-
-impl CancellationToken {
-    /// Create a non-cancelled token.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Request cancellation.  The active FFmpeg or whisper.cpp child is
-    /// killed by the worker at its next polling point.
-    pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
-    }
-
-    /// Return whether cancellation has been requested.
-    pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::SeqCst)
-    }
-
-    /// Route process termination signals to this operation's token.
-    ///
-    /// A command-line engine process owns one active render/transcription
-    /// operation, so registering the signal against that operation keeps the
-    /// cancellation state scoped to the child rather than using a shared
-    /// process-wide flag in the media worker.
-    pub fn register_signal_handlers(&self) -> Result<()> {
-        #[cfg(unix)]
-        {
-            signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&self.cancelled))
-                .map_err(|error| EngineError::msg(format!("could not register SIGINT: {error}")))?;
-            signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&self.cancelled))
-                .map_err(|error| {
-                    EngineError::msg(format!("could not register SIGTERM: {error}"))
-                })?;
-        }
-        Ok(())
     }
 }
 
@@ -641,109 +592,22 @@ fn run_sidecar(
     stage: TranscriptionStage,
     on_progress: &mut impl FnMut(TranscriptionProgress),
 ) -> Result<()> {
-    ensure_not_cancelled(cancellation)?;
-    let mut child = Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            EngineError::msg(format!(
-                "{} sidecar could not start: {error}",
-                program.display()
-            ))
-        })?;
-    let stderr = match child.stderr.take() {
-        Some(stderr) => stderr,
-        None => {
-            terminate_child(&mut child);
-            return Err(EngineError::msg("sidecar stderr pipe is unavailable"));
+    let mut command = Command::new(program);
+    command.args(args);
+    let finished = sidecar::run(command, cancellation, |line| {
+        if let Some(progress) = parse_sidecar_progress(line) {
+            on_progress(TranscriptionProgress { stage, progress });
         }
-    };
-    let (sender, receiver) = mpsc::sync_channel::<String>(64);
-    let reader = thread::spawn(move || {
-        let reader = BufReader::new(stderr);
-        for line in reader.lines().map_while(std::result::Result::ok) {
-            if sender.send(line).is_err() {
-                break;
-            }
-        }
-    });
-
-    let mut stderr_tail = String::new();
-    let status = loop {
-        drain_sidecar_lines(&receiver, &mut stderr_tail, stage, on_progress);
-        if cancellation.is_cancelled() {
-            terminate_child(&mut child);
-            while !reader.is_finished() {
-                drain_sidecar_lines(&receiver, &mut stderr_tail, stage, on_progress);
-                thread::sleep(SIDECAR_POLL_INTERVAL);
-            }
-            let _ = reader.join();
-            drain_sidecar_lines(&receiver, &mut stderr_tail, stage, on_progress);
-            return Err(EngineError::Cancelled);
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => thread::sleep(SIDECAR_POLL_INTERVAL),
-            Err(error) => {
-                terminate_child(&mut child);
-                while !reader.is_finished() {
-                    drain_sidecar_lines(&receiver, &mut stderr_tail, stage, on_progress);
-                    thread::sleep(SIDECAR_POLL_INTERVAL);
-                }
-                let _ = reader.join();
-                return Err(EngineError::from(error));
-            }
-        }
-    };
-    while !reader.is_finished() {
-        drain_sidecar_lines(&receiver, &mut stderr_tail, stage, on_progress);
-        thread::sleep(SIDECAR_POLL_INTERVAL);
-    }
-    let _ = reader.join();
-    drain_sidecar_lines(&receiver, &mut stderr_tail, stage, on_progress);
-    if !status.success() {
+    })?;
+    if !finished.status.success() {
         return Err(EngineError::msg(format!(
             "{} sidecar failed with {}: {}",
             program.display(),
-            status,
-            stderr_tail.trim()
+            finished.status,
+            finished.stderr.trim()
         )));
     }
     Ok(())
-}
-
-fn terminate_child(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-fn drain_sidecar_lines(
-    receiver: &mpsc::Receiver<String>,
-    stderr_tail: &mut String,
-    stage: TranscriptionStage,
-    on_progress: &mut impl FnMut(TranscriptionProgress),
-) {
-    for line in receiver.try_iter() {
-        append_bounded(stderr_tail, &line, MAX_SIDECAR_STDERR_BYTES);
-        if let Some(progress) = parse_sidecar_progress(&line) {
-            on_progress(TranscriptionProgress { stage, progress });
-        }
-    }
-}
-
-fn append_bounded(target: &mut String, value: &str, max_bytes: usize) {
-    target.push_str(value);
-    target.push('\n');
-    if target.len() > max_bytes {
-        let mut start = target.len() - max_bytes;
-        while start < target.len() && !target.is_char_boundary(start) {
-            start += 1;
-        }
-        target.drain(..start);
-    }
 }
 
 fn parse_sidecar_progress(line: &str) -> Option<f64> {
@@ -1071,7 +935,8 @@ mod tests {
     use serde_json::json;
     use std::fs;
     use std::process::Command;
-    use std::time::Instant;
+    use std::thread;
+    use std::time::{Duration, Instant};
     use tempfile::tempdir;
 
     #[test]

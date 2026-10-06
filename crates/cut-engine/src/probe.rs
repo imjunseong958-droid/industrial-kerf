@@ -12,7 +12,7 @@ use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::SystemTime;
 
 use crate::derivatives::DerivativeCache;
-use crate::error::Result;
+use crate::error::{EngineError, Result};
 use crate::ffmpeg::{resolve_ffmpeg_bin, resolve_ffprobe_bin, run, video_decode_prefix};
 use crate::resources::extract_job_count;
 
@@ -388,60 +388,66 @@ pub fn extract_frames(
     max_width: u32,
 ) -> Result<Vec<ExtractedFrame>> {
     if max_width == 0 {
-        return Err(crate::error::EngineError::msg(format!(
+        return Err(EngineError::msg(format!(
             "extractFrames maxWidth must be finite and positive, got {max_width}"
         )));
     }
     std::fs::create_dir_all(out_dir)?;
-    let width = max_width.max(1);
-    let scale = format!("scale=w='min(iw,{width})':h=-2");
+    let scale = format!("scale=w='min(iw,{max_width})':h=-2");
     let ffmpeg = resolve_ffmpeg_bin();
-    let jobs = extract_job_count().max(1);
-    let mut results: Vec<Option<ExtractedFrame>> = vec![None; times.len()];
-    let mut index = 0usize;
-    while index < times.len() {
-        let end = (index + jobs).min(times.len());
-        std::thread::scope(|scope| {
-            let mut handles = Vec::with_capacity(end - index);
-            for (offset, &time) in times[index..end].iter().enumerate() {
-                let slot = index + offset;
-                let out_path = std::path::Path::new(out_dir).join(format!("frame_{slot}.png"));
-                let out_path_str = out_path.to_string_lossy().into_owned();
-                let scale = scale.as_str();
-                handles.push((
-                    slot,
-                    scope.spawn(move || extract_one_frame(ffmpeg, src, time, scale, out_path_str)),
-                ));
-            }
-            for (slot, handle) in handles {
-                let frame = handle.join().map_err(|_| {
-                    crate::error::EngineError::msg("frame extraction thread panicked")
-                })??;
-                results[slot] = Some(frame);
-            }
-            Ok::<(), crate::error::EngineError>(())
-        })?;
-        index = end;
-    }
-    results
-        .into_iter()
-        .map(|frame| frame.ok_or_else(|| crate::error::EngineError::msg("missing extracted frame")))
-        .collect()
+    extract_in_parallel(times.len(), |slot| {
+        let out_path = Path::new(out_dir).join(format!("frame_{slot}.png"));
+        extract_one_frame(
+            ffmpeg,
+            src,
+            times[slot],
+            &scale,
+            out_path.to_string_lossy().into_owned(),
+        )
+    })
 }
 
-fn validate_exact_times(times: &[f64]) -> Result<()> {
+/// Run `extract(slot)` for every slot in `0..count`, at most
+/// `extract_job_count()` at a time, and return the results in slot order.
+fn extract_in_parallel<T, F>(count: usize, extract: F) -> Result<Vec<T>>
+where
+    T: Send,
+    F: Fn(usize) -> Result<T> + Sync,
+{
+    let jobs = extract_job_count().max(1);
+    let mut results = Vec::with_capacity(count);
+    let extract = &extract;
+    for start in (0..count).step_by(jobs) {
+        std::thread::scope(|scope| {
+            let handles = (start..count.min(start + jobs))
+                .map(|slot| scope.spawn(move || extract(slot)))
+                .collect::<Vec<_>>();
+            for handle in handles {
+                let result = handle
+                    .join()
+                    .map_err(|_| EngineError::msg("frame extraction thread panicked"))?;
+                results.push(result?);
+            }
+            Ok::<(), EngineError>(())
+        })?;
+    }
+    Ok(results)
+}
+
+fn validate_frame_request(times: &[f64], max_width: u32) -> Result<()> {
+    if max_width == 0 {
+        return Err(EngineError::msg("maxWidth must be finite and positive"));
+    }
     if times.is_empty() {
-        return Err(crate::error::EngineError::msg(
-            "at least one frame timestamp is required",
-        ));
+        return Err(EngineError::msg("at least one frame timestamp is required"));
     }
     if times.len() > MAX_FRAME_TIMES {
-        return Err(crate::error::EngineError::msg(format!(
+        return Err(EngineError::msg(format!(
             "frame timestamp count exceeds {MAX_FRAME_TIMES}"
         )));
     }
     if times.iter().any(|time| !time.is_finite() || *time < 0.0) {
-        return Err(crate::error::EngineError::msg(
+        return Err(EngineError::msg(
             "frame timestamps must be finite and nonnegative",
         ));
     }
@@ -494,56 +500,6 @@ fn extract_one_exact_frame(
     })
 }
 
-fn extract_exact_frames_to_dir(
-    src: &str,
-    times: &[f64],
-    out_dir: &Path,
-    max_width: u32,
-) -> Result<Vec<FrameGrab>> {
-    validate_exact_times(times)?;
-    if max_width == 0 {
-        return Err(crate::error::EngineError::msg(
-            "maxWidth must be finite and positive",
-        ));
-    }
-    fs::create_dir_all(out_dir)?;
-    let scale = format!("scale=w='min(iw,{max_width})':h=-2");
-    let ffmpeg = resolve_ffmpeg_bin();
-    let jobs = extract_job_count().max(1);
-    let names = frame_file_names(times.len());
-    let mut results: Vec<Option<FrameGrab>> = vec![None; times.len()];
-    let mut index = 0usize;
-    while index < times.len() {
-        let end = (index + jobs).min(times.len());
-        std::thread::scope(|scope| {
-            let mut handles = Vec::with_capacity(end - index);
-            for slot in index..end {
-                let output = out_dir.join(&names[slot]).to_string_lossy().into_owned();
-                let scale = scale.as_str();
-                handles.push((
-                    slot,
-                    scope.spawn(move || {
-                        extract_one_exact_frame(ffmpeg, src, times[slot], scale, output)
-                    }),
-                ));
-            }
-            for (slot, handle) in handles {
-                results[slot] = Some(handle.join().map_err(|_| {
-                    crate::error::EngineError::msg("exact frame extraction thread panicked")
-                })??);
-            }
-            Ok::<(), crate::error::EngineError>(())
-        })?;
-        index = end;
-    }
-    results
-        .into_iter()
-        .map(|frame| {
-            frame.ok_or_else(|| crate::error::EngineError::msg("missing exact extracted frame"))
-        })
-        .collect()
-}
-
 /// Extract exact timestamp frames into a caller-selected derivative directory.
 pub fn extract_exact_frames(
     src: &str,
@@ -551,7 +507,15 @@ pub fn extract_exact_frames(
     out_dir: &Path,
     max_width: u32,
 ) -> Result<Vec<FrameGrab>> {
-    extract_exact_frames_to_dir(src, times, out_dir, max_width)
+    validate_frame_request(times, max_width)?;
+    fs::create_dir_all(out_dir)?;
+    let scale = format!("scale=w='min(iw,{max_width})':h=-2");
+    let ffmpeg = resolve_ffmpeg_bin();
+    let names = frame_file_names(times.len());
+    extract_in_parallel(times.len(), |slot| {
+        let output = out_dir.join(&names[slot]).to_string_lossy().into_owned();
+        extract_one_exact_frame(ffmpeg, src, times[slot], &scale, output)
+    })
 }
 
 /// Extract frames at exact requested timestamps and cache the result below the
@@ -562,12 +526,7 @@ pub fn cached_exact_frames(
     times: &[f64],
     max_width: u32,
 ) -> Result<FrameGrabSet> {
-    validate_exact_times(times)?;
-    if max_width == 0 {
-        return Err(crate::error::EngineError::msg(
-            "maxWidth must be finite and positive",
-        ));
-    }
+    validate_frame_request(times, max_width)?;
     let options = json!({
         "exact": true,
         "times": times,
@@ -578,7 +537,7 @@ pub fn cached_exact_frames(
     let required = names.iter().map(String::as_str).collect::<Vec<_>>();
     let cached = entry.is_complete(&required);
     if !cached {
-        extract_exact_frames_to_dir(src, times, &entry.directory, max_width)?;
+        extract_exact_frames(src, times, &entry.directory, max_width)?;
         entry.mark_complete(&required)?;
     }
     let frames = times
@@ -600,24 +559,24 @@ pub fn cached_exact_frames(
 /// Build a JPEG contact sheet from exact frames named by `frame_file_name`.
 pub fn create_contact_sheet(frame_paths: &[String], output: &Path, columns: usize) -> Result<()> {
     if frame_paths.is_empty() {
-        return Err(crate::error::EngineError::msg(
+        return Err(EngineError::msg(
             "contact sheet requires at least one frame",
         ));
     }
     if !(1..=16).contains(&columns) {
-        return Err(crate::error::EngineError::msg(
+        return Err(EngineError::msg(
             "contact sheet columns must be between 1 and 16",
         ));
     }
     let first = Path::new(&frame_paths[0]);
     let parent = first
         .parent()
-        .ok_or_else(|| crate::error::EngineError::msg("frame path has no parent directory"))?;
+        .ok_or_else(|| EngineError::msg("frame path has no parent directory"))?;
     if frame_paths
         .iter()
         .any(|path| Path::new(path).parent() != Some(parent))
     {
-        return Err(crate::error::EngineError::msg(
+        return Err(EngineError::msg(
             "contact sheet frames must share a directory",
         ));
     }
@@ -654,12 +613,7 @@ pub fn cached_filmstrip(
     max_width: u32,
     columns: usize,
 ) -> Result<FilmstripResult> {
-    validate_exact_times(times)?;
-    if max_width == 0 {
-        return Err(crate::error::EngineError::msg(
-            "maxWidth must be finite and positive",
-        ));
-    }
+    validate_frame_request(times, max_width)?;
     let columns = columns.clamp(1, 16);
     let options = json!({
         "exact": true,
@@ -673,7 +627,7 @@ pub fn cached_filmstrip(
     required.push("filmstrip.jpg");
     let cached = entry.is_complete(&required);
     if !cached {
-        extract_exact_frames_to_dir(src, times, &entry.directory, max_width)?;
+        extract_exact_frames(src, times, &entry.directory, max_width)?;
         let frame_paths = names
             .iter()
             .map(|name| entry.path(name).to_string_lossy().into_owned())
@@ -743,7 +697,7 @@ fn decode_waveform_buckets(
         Some(stdout) => stdout,
         None => {
             reap_waveform_child(&mut child);
-            return Err(crate::error::EngineError::msg(
+            return Err(EngineError::msg(
                 "ffmpeg waveform decoder did not expose stdout",
             ));
         }
@@ -752,7 +706,7 @@ fn decode_waveform_buckets(
         Some(stderr) => stderr,
         None => {
             reap_waveform_child(&mut child);
-            return Err(crate::error::EngineError::msg(
+            return Err(EngineError::msg(
                 "ffmpeg waveform decoder did not expose stderr",
             ));
         }
@@ -806,44 +760,16 @@ fn decode_waveform_buckets(
     };
     let stderr = stderr_reader
         .join()
-        .map_err(|_| crate::error::EngineError::msg("ffmpeg stderr reader panicked"))??;
+        .map_err(|_| EngineError::msg("ffmpeg stderr reader panicked"))??;
     if !status.success() {
-        return Err(crate::error::EngineError::msg(waveform_decode_error(
-            &stderr,
-        )));
+        return Err(EngineError::msg(waveform_decode_error(&stderr)));
     }
     if index == 0 {
-        return Err(crate::error::EngineError::msg(
+        return Err(EngineError::msg(
             "audio stream did not produce waveform samples",
         ));
     }
-    if expected == 0 {
-        return Ok(waveform_buckets_from_counts(
-            &mins,
-            &maxs,
-            &sums,
-            &counts,
-            bucket_count,
-        ));
-    }
-    Ok((0..bucket_count)
-        .map(|slot| {
-            let count = counts[slot].max(1) as f64;
-            WaveformBucket {
-                min: if mins[slot].is_finite() {
-                    mins[slot]
-                } else {
-                    0.0
-                },
-                max: if maxs[slot].is_finite() {
-                    maxs[slot]
-                } else {
-                    0.0
-                },
-                rms: (sums[slot] / count).sqrt(),
-            }
-        })
-        .collect())
+    Ok(waveform_buckets_from_counts(&mins, &maxs, &sums, &counts))
 }
 
 const MAX_WAVEFORM_STDERR_BYTES: usize = 16 * 1024;
@@ -904,24 +830,13 @@ fn waveform_buckets_from_counts(
     maxs: &[f64],
     sums: &[f64],
     counts: &[usize],
-    bucket_count: usize,
 ) -> Vec<WaveformBucket> {
-    (0..bucket_count)
-        .map(|slot| {
-            let count = counts[slot].max(1) as f64;
-            WaveformBucket {
-                min: if mins[slot].is_finite() {
-                    mins[slot]
-                } else {
-                    0.0
-                },
-                max: if maxs[slot].is_finite() {
-                    maxs[slot]
-                } else {
-                    0.0
-                },
-                rms: (sums[slot] / count).sqrt(),
-            }
+    let finite_or_zero = |value: f64| if value.is_finite() { value } else { 0.0 };
+    (0..counts.len())
+        .map(|slot| WaveformBucket {
+            min: finite_or_zero(mins[slot]),
+            max: finite_or_zero(maxs[slot]),
+            rms: (sums[slot] / counts[slot].max(1) as f64).sqrt(),
         })
         .collect()
 }
@@ -1000,12 +915,12 @@ pub fn cached_waveform_range(
 ) -> Result<WaveformResult> {
     let bucket_count = bucket_count.clamp(1, MAX_WAVEFORM_BUCKETS);
     if !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start {
-        return Err(crate::error::EngineError::msg(
+        return Err(EngineError::msg(
             "waveform range must be finite with 0 <= start < end",
         ));
     }
     if image_width == 0 || image_height == 0 {
-        return Err(crate::error::EngineError::msg(
+        return Err(EngineError::msg(
             "waveform image dimensions must be finite and positive",
         ));
     }
@@ -1029,18 +944,14 @@ pub fn cached_waveform_range(
     } else {
         let meta = info(src)?;
         if meta.has_audio == Some(false) {
-            return Err(crate::error::EngineError::msg(
-                "media does not contain an audio stream",
-            ));
+            return Err(EngineError::msg("media does not contain an audio stream"));
         }
         let source_duration = meta
             .duration
             .filter(|duration| duration.is_finite() && *duration >= 0.0)
             .unwrap_or(0.0);
         if source_duration > 0.0 && end > source_duration + 1e-6 {
-            return Err(crate::error::EngineError::msg(
-                "waveform range exceeds source duration",
-            ));
+            return Err(EngineError::msg("waveform range exceeds source duration"));
         }
         let duration = end - start;
         let buckets = decode_waveform_buckets(src, duration, bucket_count, start)?;

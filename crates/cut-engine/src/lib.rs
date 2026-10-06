@@ -1,8 +1,8 @@
-//! Cut media engine. Probe, encode, compile, proxy, and region planning.
+//! Cut media engine. Probe, encode, compile, render, proxy, and transcription.
 
 // Timeline compilation is kept in the lightweight `cut-core` crate. Re-export
 // its modules from the engine crate so Rust consumers have one coherent API
-// while media/vision changes do not rebuild the compiler.
+// while media changes do not rebuild the compiler.
 pub use cut_core::{overlay, program};
 pub mod derivatives;
 pub mod encoder;
@@ -12,8 +12,8 @@ pub mod probe;
 pub mod proxy;
 pub mod render;
 pub mod resources;
+pub mod sidecar;
 pub mod transcription;
-pub mod vision;
 
 pub use encoder::{
     encoder_args, parse_encoder_capabilities, select_video_encoder, EncoderCapabilities,
@@ -28,9 +28,10 @@ pub use probe::{
 };
 pub use proxy::{create_proxy_cache_key, proxy_ffmpeg_args};
 pub use resources::{budget, budget_for_cpus, HardwareEncodePolicy, ResourceBudget};
+pub use sidecar::CancellationToken;
 pub use transcription::{
-    listen_cached, parse_whisper_json, transcribe_cached, CancellationToken, TimeRange, Transcript,
-    TranscriptCue, TranscriptWord, TranscriptionBackend, TranscriptionOptions,
-    TranscriptionProgress, TranscriptionResult, TranscriptionStage, MAX_LISTEN_RANGE_SECONDS,
+    listen_cached, parse_whisper_json, transcribe_cached, TimeRange, Transcript, TranscriptCue,
+    TranscriptWord, TranscriptionBackend, TranscriptionOptions, TranscriptionProgress,
+    TranscriptionResult, TranscriptionStage, MAX_LISTEN_RANGE_SECONDS,
     MAX_TRANSCRIPTION_RANGE_SECONDS, TRANSCRIPTION_SCHEMA_VERSION,
 };

@@ -51,7 +51,6 @@ pub(crate) struct VideoDecoder {
 impl VideoDecoder {
     #[allow(clippy::too_many_arguments)]
     pub fn open(
-        _ffmpeg_binary: &Path,
         timeline: &PlaybackTimeline,
         clip: &PlaybackClip,
         source: &PlaybackSource,

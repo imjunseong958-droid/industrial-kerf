@@ -16,8 +16,6 @@ pub enum EngineError {
     Program(#[from] cut_core::program::ProgramError),
     #[error("ffmpeg failed ({code}): {stderr}")]
     Ffmpeg { code: i32, stderr: String },
-    #[error("cut-engine binary not found")]
-    BinaryNotFound,
 }
 
 impl EngineError {

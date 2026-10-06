@@ -19,7 +19,6 @@ pub use timeline::{
 use audio::AudioRuntime;
 use decoder::{DecodedVideoFrame, VideoDecoder};
 use std::collections::VecDeque;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
@@ -130,18 +129,6 @@ pub enum PlaybackEvent {
     Error(PlaybackError),
 }
 
-/// Commands accepted by the stable playback interface.
-#[derive(Clone, Debug)]
-pub enum PlaybackCommand {
-    Open(Box<cut_model::Project>),
-    Play,
-    Pause,
-    Seek(f64),
-    SetVolume(f32),
-    SetMuted(bool),
-    Shutdown,
-}
-
 #[derive(Debug)]
 enum WorkerCommand {
     Open {
@@ -209,16 +196,10 @@ impl PlaybackHandle {
     pub fn open(&self, project: cut_model::Project) -> Result<(), PlaybackError> {
         let mut control = self.lock_control();
         let request_id = control.allocate_request_id();
-        let result = self
-            .commands
-            .try_send(WorkerCommand::Open {
-                project: Box::new(project),
-                request_id,
-            })
-            .map_err(|error| match error {
-                TrySendError::Full(_) => PlaybackError::CommandQueueFull,
-                TrySendError::Disconnected(_) => PlaybackError::WorkerUnavailable,
-            });
+        let result = self.send(WorkerCommand::Open {
+            project: Box::new(project),
+            request_id,
+        });
         if result.is_ok() {
             // Publish the boundary when the command is accepted so events
             // from an earlier open cannot escape while this one is queued.
@@ -228,11 +209,11 @@ impl PlaybackHandle {
     }
 
     pub fn play(&self) -> Result<(), PlaybackError> {
-        self.send(PlaybackCommand::Play)
+        self.send(WorkerCommand::Play)
     }
 
     pub fn pause(&self) -> Result<(), PlaybackError> {
-        self.send(PlaybackCommand::Pause)
+        self.send(WorkerCommand::Pause)
     }
 
     pub fn seek(&self, position: f64) -> Result<(), PlaybackError> {
@@ -274,31 +255,18 @@ impl PlaybackHandle {
                 "volume must be finite and between 0 and 1".into(),
             ));
         }
-        self.send(PlaybackCommand::SetVolume(volume))
+        self.send(WorkerCommand::SetVolume(volume))
     }
 
     pub fn set_muted(&self, muted: bool) -> Result<(), PlaybackError> {
-        self.send(PlaybackCommand::SetMuted(muted))
+        self.send(WorkerCommand::SetMuted(muted))
     }
 
     pub fn shutdown(&self) -> Result<(), PlaybackError> {
-        self.send(PlaybackCommand::Shutdown)
+        self.send(WorkerCommand::Shutdown)
     }
 
-    fn send(&self, command: PlaybackCommand) -> Result<(), PlaybackError> {
-        let command = match command {
-            PlaybackCommand::Open(project) => {
-                return self.open(*project);
-            }
-            PlaybackCommand::Play => WorkerCommand::Play,
-            PlaybackCommand::Pause => WorkerCommand::Pause,
-            PlaybackCommand::Seek(position) => {
-                return self.seek(position);
-            }
-            PlaybackCommand::SetVolume(volume) => WorkerCommand::SetVolume(volume),
-            PlaybackCommand::SetMuted(muted) => WorkerCommand::SetMuted(muted),
-            PlaybackCommand::Shutdown => WorkerCommand::Shutdown,
-        };
+    fn send(&self, command: WorkerCommand) -> Result<(), PlaybackError> {
         self.commands
             .try_send(command)
             .map_err(|error| match error {
@@ -312,14 +280,6 @@ impl PlaybackHandle {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
-}
-
-/// Stable controller/event boundary used by native clients. Implementations
-/// must keep media work off the caller's UI thread.
-pub trait PlaybackInterface {
-    fn handle(&self) -> PlaybackHandle;
-    fn try_next_event(&self) -> Option<PlaybackEvent>;
-    fn next_event_timeout(&self, timeout: Duration) -> Option<PlaybackEvent>;
 }
 
 /// A worker-backed playback session.
@@ -351,11 +311,7 @@ impl PlaybackSession {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .epoch,
         );
-        let audio = AudioRuntime::spawn(
-            timeline.clone(),
-            &config.ffmpeg_binary,
-            config.audio_enabled,
-        )?;
+        let audio = AudioRuntime::spawn(timeline.clone(), config.audio_enabled)?;
         let worker = Worker {
             timeline,
             config,
@@ -395,11 +351,6 @@ impl PlaybackSession {
             events: event_rx,
             control,
         })
-    }
-
-    /// Open with the default decoder/audio configuration.
-    pub fn open_default(project: cut_model::Project) -> Result<Self, PlaybackError> {
-        Self::open(project, PlaybackConfig::default())
     }
 
     pub fn handle(&self) -> PlaybackHandle {
@@ -462,20 +413,6 @@ impl PlaybackSession {
     }
 }
 
-impl PlaybackInterface for PlaybackSession {
-    fn handle(&self) -> PlaybackHandle {
-        self.handle()
-    }
-
-    fn try_next_event(&self) -> Option<PlaybackEvent> {
-        self.try_next_event()
-    }
-
-    fn next_event_timeout(&self, timeout: Duration) -> Option<PlaybackEvent> {
-        self.next_event_timeout(timeout)
-    }
-}
-
 impl Drop for PlaybackSession {
     fn drop(&mut self) {
         let _ = self.handle.shutdown();
@@ -483,11 +420,8 @@ impl Drop for PlaybackSession {
 }
 
 /// Configuration for the in-process libav decoder and bounded worker queues.
-/// `ffmpeg_binary` is unused for decode; tests still pass it when they spawn
-/// ffmpeg only to generate fixtures.
 #[derive(Clone, Debug)]
 pub struct PlaybackConfig {
-    pub ffmpeg_binary: PathBuf,
     pub decode_queue_capacity: usize,
     pub event_queue_capacity: usize,
     pub frame_width: Option<u32>,
@@ -498,7 +432,6 @@ pub struct PlaybackConfig {
 impl Default for PlaybackConfig {
     fn default() -> Self {
         Self {
-            ffmpeg_binary: resolve_ffmpeg_binary(),
             decode_queue_capacity: DEFAULT_DECODE_QUEUE_CAPACITY,
             event_queue_capacity: DEFAULT_EVENT_QUEUE_CAPACITY,
             frame_width: None,
@@ -512,17 +445,6 @@ impl PlaybackConfig {
     /// Bound the number of decoded video frames kept ahead of the UI.
     pub fn with_decode_queue_capacity(mut self, capacity: usize) -> Self {
         self.decode_queue_capacity = capacity.max(1);
-        self
-    }
-
-    /// Bound the number of events waiting for the UI adapter.
-    pub fn with_event_queue_capacity(mut self, capacity: usize) -> Self {
-        self.event_queue_capacity = capacity.max(8);
-        self
-    }
-
-    pub fn with_ffmpeg_binary(mut self, binary: impl Into<PathBuf>) -> Self {
-        self.ffmpeg_binary = binary.into();
         self
     }
 
@@ -991,7 +913,6 @@ impl Worker {
             }
         }
         self.decoder = Some(VideoDecoder::open(
-            &self.config.ffmpeg_binary,
             &self.timeline,
             &clip,
             &source,
@@ -1039,7 +960,6 @@ impl Worker {
                     let clip = &self.timeline.clips()[clip_index];
                     let source = &self.timeline.sources()[source_index];
                     VideoDecoder::open(
-                        &self.config.ffmpeg_binary,
                         &self.timeline,
                         clip,
                         source,
@@ -1273,19 +1193,6 @@ mod reuse_tests {
     }
 }
 
-fn resolve_ffmpeg_binary() -> PathBuf {
-    std::env::var_os("CUT_FFMPEG")
-        .map(PathBuf::from)
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or_else(|| {
-            PathBuf::from(if cfg!(windows) {
-                "ffmpeg.exe"
-            } else {
-                "ffmpeg"
-            })
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1341,8 +1248,7 @@ mod tests {
         let (events, event_receiver) = mpsc::sync_channel(16);
         let control = Arc::new(Mutex::new(ControlState::new()));
         let epoch = Arc::clone(&control.lock().expect("control").epoch);
-        let audio = AudioRuntime::spawn(timeline.clone(), PathBuf::from("ffmpeg").as_path(), false)
-            .expect("audio worker");
+        let audio = AudioRuntime::spawn(timeline.clone(), false).expect("audio worker");
         let worker = Worker {
             timeline,
             config: PlaybackConfig::default().with_audio_enabled(false),

@@ -140,11 +140,6 @@ impl DerivativeCache {
         }
     }
 
-    /// Absolute cache root, useful for diagnostics and clients displaying paths.
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
     /// Build an entry keyed by a source's current identity and normalized options.
     pub fn source_entry(&self, source: &Path, kind: &str, options: &Value) -> Result<CacheEntry> {
         let identity = SourceIdentity::from_path(source)?;

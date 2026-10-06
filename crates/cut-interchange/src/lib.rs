@@ -19,7 +19,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
-pub const NATIVE_ADAPTERS: &[&str] = &["otio_json", "otioz"];
 
 #[derive(Clone, Debug)]
 pub struct InterchangeConfig {
@@ -152,10 +151,6 @@ impl OpenTimelineIoAdapter {
         })
     }
 
-    pub fn with_defaults() -> Result<Self, InterchangeError> {
-        Self::new(InterchangeConfig::default())
-    }
-
     pub fn config(&self) -> &InterchangeConfig {
         &self.config
     }
@@ -224,30 +219,7 @@ impl OpenTimelineIoAdapter {
         adapter: Option<&str>,
     ) -> Result<ImportResult, InterchangeError> {
         let invocation = self.build_import_invocation(input_path, adapter)?;
-        let args = invocation.args.clone();
-        let output = run_process(
-            &invocation.command,
-            &args,
-            invocation.cwd.as_deref(),
-            None,
-            self.config.timeout,
-        )?;
-        if output.timed_out {
-            return Err(InterchangeError::new(
-                "INTERCHANGE_TIMEOUT",
-                format!(
-                    "OpenTimelineIO conversion timed out after {:?}",
-                    self.config.timeout
-                ),
-            ));
-        }
-        if output.code != Some(0) {
-            return Err(InterchangeError::new(
-                "INTERCHANGE_PROCESS_FAILED",
-                process_error_message(output.code, &output.stderr),
-            ));
-        }
-        let parsed = parse_bridge_output(&output.stdout)?;
+        let parsed = self.run_bridge(invocation)?;
         let timeline = parsed.get("timeline").cloned().ok_or_else(|| {
             InterchangeError::new(
                 "INTERCHANGE_OUTPUT_INVALID",
@@ -285,6 +257,25 @@ impl OpenTimelineIoAdapter {
         let adapter = normalize_adapter(adapter, Some(output_path))?;
         let (invocation, issues) =
             self.build_export_invocation(project, output_path, Some(&adapter))?;
+        let parsed = self.run_bridge(invocation)?;
+        let report = report_from_value("export", Some(&adapter), parsed.get("report"));
+        Ok(ExportResult {
+            output_path: output_path.to_path_buf(),
+            report: create_report(
+                "export",
+                Some(&adapter),
+                issues.into_iter().chain(report.issues),
+            ),
+            adapter,
+        })
+    }
+
+    /// Run the bridge to completion within the configured timeout and read
+    /// its JSON response.
+    fn run_bridge(
+        &self,
+        invocation: ProcessInvocation,
+    ) -> Result<Map<String, Value>, InterchangeError> {
         let output = run_process(
             &invocation.command,
             &invocation.args,
@@ -307,21 +298,9 @@ impl OpenTimelineIoAdapter {
                 process_error_message(output.code, &output.stderr),
             ));
         }
-        let parsed = parse_bridge_output(&output.stdout)?;
-        let report = report_from_value("export", Some(&adapter), parsed.get("report"));
-        Ok(ExportResult {
-            output_path: output_path.to_path_buf(),
-            report: create_report(
-                "export",
-                Some(&adapter),
-                issues.into_iter().chain(report.issues),
-            ),
-            adapter,
-        })
+        parse_bridge_output(&output.stdout)
     }
 }
-
-pub type OtioAdapter = OpenTimelineIoAdapter;
 
 pub fn normalize_adapter(
     value: Option<&str>,

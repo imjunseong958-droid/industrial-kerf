@@ -95,55 +95,19 @@ impl Default for SelectEncoderOptions {
     }
 }
 
-pub fn known_hardware_encoders() -> Vec<EncoderCapability> {
-    let mut out = Vec::with_capacity(HardwareEncoderFamily::ALL.len() * 2);
-    for family in HardwareEncoderFamily::ALL {
-        for codec in [VideoCodec::H264, VideoCodec::Hevc] {
-            out.push(EncoderCapability {
-                family,
-                encoder: family.encoder_name(codec).to_string(),
-                available: false,
-                reason: Some("Not detected".into()),
-            });
-        }
-    }
-    out
-}
-
 /// Parse a captured `ffmpeg -encoders` listing without running a process.
 pub fn parse_encoder_capabilities(output: &str, ffmpeg_bin: &str) -> EncoderCapabilities {
-    capabilities_for_output(output, ffmpeg_bin)
-}
-
-fn capabilities_for_output(output: &str, ffmpeg_bin: &str) -> EncoderCapabilities {
-    let mut available_names = std::collections::HashSet::new();
-    for family in HardwareEncoderFamily::ALL {
-        for codec in [VideoCodec::H264, VideoCodec::Hevc] {
-            let name = family.encoder_name(codec);
-            if encoder_listed(output, name) {
-                available_names.insert(name);
-            }
-        }
-    }
     let mut encoders = Vec::with_capacity(HardwareEncoderFamily::ALL.len() * 2);
     for family in HardwareEncoderFamily::ALL {
         for codec in [VideoCodec::H264, VideoCodec::Hevc] {
-            let encoder = family.encoder_name(codec).to_string();
-            if available_names.contains(encoder.as_str()) {
-                encoders.push(EncoderCapability {
-                    family,
-                    encoder,
-                    available: true,
-                    reason: None,
-                });
-            } else {
-                encoders.push(EncoderCapability {
-                    family,
-                    encoder,
-                    available: false,
-                    reason: Some("Encoder was not listed by ffmpeg".into()),
-                });
-            }
+            let encoder = family.encoder_name(codec);
+            let available = encoder_listed(output, encoder);
+            encoders.push(EncoderCapability {
+                family,
+                encoder: encoder.to_string(),
+                available,
+                reason: (!available).then(|| "Encoder was not listed by ffmpeg".into()),
+            });
         }
     }
     EncoderCapabilities {
@@ -154,14 +118,9 @@ fn capabilities_for_output(output: &str, ffmpeg_bin: &str) -> EncoderCapabilitie
 }
 
 fn encoder_listed(output: &str, name: &str) -> bool {
-    for line in output.lines() {
-        for token in line.split_whitespace() {
-            if token == name {
-                return true;
-            }
-        }
-    }
-    false
+    output
+        .lines()
+        .any(|line| line.split_whitespace().any(|token| token == name))
 }
 
 pub fn select_video_encoder(
