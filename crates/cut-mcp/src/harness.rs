@@ -808,7 +808,7 @@ impl CutMcpRouter {
         Ok(json!({
             "proposal": proposal_id,
             "baseRevision": revision,
-            "status": "waiting for the user's review",
+            "status": "awaiting_review",
             "script": script,
             "diff": document_diff,
             "check": check,

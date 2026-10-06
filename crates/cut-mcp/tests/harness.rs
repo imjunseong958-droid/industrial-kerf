@@ -214,7 +214,7 @@ fn edit_stages_a_checked_proposal_with_a_preview() {
     );
     let id = revised["proposal"].as_str().unwrap();
     assert_ne!(id, proposal["proposal"].as_str().unwrap());
-    assert_eq!(revised["status"], "waiting for the user's review");
+    assert_eq!(revised["status"], "awaiting_review");
     let diff = revised["diff"].as_str().unwrap();
     assert!(
         diff.contains("+    clip c1 media=m1 src=00:00:00:00 at=00:00:00:00 dur=00:00:03:00"),
