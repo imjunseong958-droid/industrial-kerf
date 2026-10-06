@@ -259,3 +259,22 @@ fn a_v2_project_round_trips_through_cutd_on_the_kernel() {
     );
     let _ = fs::remove_dir_all(&directory);
 }
+
+#[test]
+fn daemon_exits_once_its_project_directory_is_deleted() {
+    let directory = project_directory("orphan");
+    fs::create_dir_all(&directory).unwrap();
+    let mut daemon = start_daemon(&directory);
+    wait_until_ready(&RuntimeClient::new(&directory).unwrap());
+
+    fs::remove_dir_all(&directory).unwrap();
+    for _ in 0..250 {
+        if let Some(status) = daemon.try_wait().unwrap() {
+            assert!(status.success(), "{status}");
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    stop_daemon(daemon);
+    panic!("cutd kept running after its project directory was deleted");
+}
