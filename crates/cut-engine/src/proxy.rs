@@ -368,6 +368,80 @@ fn json_f64(value: f64) -> Value {
         .unwrap_or(Value::Null)
 }
 
+/// Proxies are at most this wide.
+pub const PROXY_WIDTH: u32 = 960;
+const PROXY_FILE: &str = "proxy.mp4";
+
+fn proxy_entry(
+    src: &Path,
+    cache: &crate::derivatives::DerivativeCache,
+) -> Result<crate::derivatives::CacheEntry> {
+    cache.source_entry(
+        src,
+        "proxy",
+        &serde_json::json!({"version": 1, "width": PROXY_WIDTH}),
+    )
+}
+
+/// The proxy of `src`, when one has been made.
+pub fn cached_proxy(
+    src: &Path,
+    cache: &crate::derivatives::DerivativeCache,
+) -> Option<std::path::PathBuf> {
+    let entry = proxy_entry(src, cache).ok()?;
+    entry
+        .is_complete(&[PROXY_FILE])
+        .then(|| entry.path(PROXY_FILE))
+}
+
+/// Make the proxy of `src`: its picture at most [`PROXY_WIDTH`] wide, frame
+/// for frame, with its sound. `None` when `src` has no picture or is no
+/// wider than a proxy.
+pub fn make_proxy(
+    src: &Path,
+    cache: &crate::derivatives::DerivativeCache,
+    cancellation: &CancellationToken,
+) -> Result<Option<std::path::PathBuf>> {
+    let probe = crate::probe::info(&src.to_string_lossy())?;
+    if probe.width.is_none_or(|width| width <= PROXY_WIDTH) {
+        return Ok(None);
+    }
+    let entry = proxy_entry(src, cache)?;
+    if entry.is_complete(&[PROXY_FILE]) {
+        return Ok(Some(entry.path(PROXY_FILE)));
+    }
+    let partial = entry.path("proxy.partial.mp4");
+    let mut command = std::process::Command::new(crate::ffmpeg::resolve_ffmpeg_bin());
+    command
+        .args(crate::ffmpeg::video_decode_prefix())
+        .args(["-hide_banner", "-nostats", "-y", "-i"])
+        .arg(src)
+        .args(["-map", "0:v:0", "-map", "0:a:0?"])
+        .args(["-vf", &format!("scale={PROXY_WIDTH}:-2")])
+        .args([
+            "-fps_mode",
+            "passthrough",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+        ])
+        .args(["-crf", "23", "-g", "30", "-pix_fmt", "yuv420p"])
+        .args(["-c:a", "aac", "-b:a", "128k", "-f", "mp4"])
+        .arg(&partial);
+    let finished = crate::sidecar::run(command, cancellation, |_| {})?;
+    if !finished.status.success() {
+        let _ = std::fs::remove_file(&partial);
+        return Err(EngineError::msg(format!(
+            "proxy failed: {}",
+            finished.stderr.trim()
+        )));
+    }
+    std::fs::rename(&partial, entry.path(PROXY_FILE))?;
+    entry.mark_complete(&[PROXY_FILE])?;
+    Ok(Some(entry.path(PROXY_FILE)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

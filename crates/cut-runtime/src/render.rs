@@ -32,11 +32,11 @@ pub fn run_render_job(
     let cancel_file = render_cancel_path(client.directory(), &job.job_id);
     let _ = client.update_job(&job.job_id, "running", None, None);
     let result = render(
+        job,
         document,
+        client.directory(),
         output,
         draft,
-        job.sequence.as_deref(),
-        job.range.as_ref(),
         &cancel_file,
         on_progress,
     );
@@ -54,20 +54,25 @@ pub fn run_render_job(
     result.and(recorded)
 }
 
-/// Render `document`, or `range` of it, to `output`. Creating `cancel_file`
-/// cancels the render.
+/// Render `job`'s sequence of `document`, or its range, to `output`; a
+/// draft from the proxies in `directory`'s cache where there are some.
+/// Creating `cancel_file` cancels the render.
 fn render(
+    job: &RenderJob,
     document: &str,
+    directory: &Path,
     output: &Path,
     draft: bool,
-    sequence: Option<&str>,
-    range: Option<&RenderRange>,
     cancel_file: &Path,
     mut on_progress: impl FnMut(f64),
 ) -> Result<(), RuntimeError> {
-    let project = kernel::parse(document)?;
+    let mut project = kernel::parse(document)?;
+    if draft {
+        kernel::use_proxies(&mut project, directory);
+    }
+    let sequence = job.sequence.as_deref();
     let target = kernel::render_sequence(&project, sequence)?;
-    let window = match range {
+    let window = match job.range.as_ref() {
         Some(range) => {
             RenderRange::new(range.start, range.duration)?;
             Some(kernel::time_range(target, range.start, range.end())?)

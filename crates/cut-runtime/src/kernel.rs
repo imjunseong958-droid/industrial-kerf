@@ -81,6 +81,31 @@ pub fn resolve_media_paths(project: &mut Project, directory: &std::path::Path) {
     }
 }
 
+/// Point media at their proxies where `directory`'s cache has one. Paths
+/// must already be resolved. For drafts: a proxy is smaller, frame for
+/// frame.
+pub fn use_proxies(project: &mut Project, directory: &std::path::Path) {
+    let cache = cut_engine::derivatives::DerivativeCache::new(directory);
+    for media in &mut project.media {
+        if let Some(proxy) = cut_engine::cached_proxy(std::path::Path::new(&media.path), &cache) {
+            media.path = proxy.to_string_lossy().into_owned();
+        }
+    }
+}
+
+/// Index `path` and make its proxy, in the background, so agents and
+/// drafts find them ready. Failures leave nothing behind; the work is
+/// done again when it is asked for.
+pub(crate) fn prepare_media(path: String, directory: std::path::PathBuf) {
+    std::thread::spawn(move || {
+        let cache = cut_engine::derivatives::DerivativeCache::new(&directory);
+        let cancellation = cut_engine::CancellationToken::new();
+        let path = std::path::Path::new(&path);
+        let _ = cut_engine::media_index(path, &cache, &cancellation);
+        let _ = cut_engine::make_proxy(path, &cache, &cancellation);
+    });
+}
+
 /// The document of `project` with media paths resolved, for a renderer.
 pub(crate) fn renderable(project: &Project, directory: &std::path::Path) -> String {
     let mut project = project.clone();
