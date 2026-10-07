@@ -434,12 +434,6 @@ impl CutMcpRouter {
                 "words times a transcript; pass transcript: true",
             ));
         }
-        if input.words && !input.transcript {
-            return Err(McpError::new(
-                "INVALID_ARGUMENTS",
-                "words times a transcript; pass transcript: true",
-            ));
-        }
         if input.at.len() > MAX_LOOK_FRAMES {
             return Err(McpError::new(
                 "INVALID_ARGUMENTS",
