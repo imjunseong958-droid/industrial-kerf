@@ -17,7 +17,7 @@ use cut_runtime::{
     PendingProposal, ProposalFreshness, RenderJob, RenderRange, RuntimeClient, RuntimeError,
 };
 use cut_skills::Skill;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::fs;
 use std::io;
@@ -43,19 +43,23 @@ const PREVIEW_WIDTH: u32 = 480;
 /// The largest document carried as context; `look` returns all of it.
 const MAX_CONTEXT_DOCUMENT_BYTES: usize = 96 * 1024;
 const MAX_CONTEXT_DIFF_BYTES: usize = 8 * 1024;
-const SCENE_THRESHOLD: f64 = 0.35;
-const PAUSE_NOISE_DB: f64 = -35.0;
-const PAUSE_SECONDS: f64 = 0.35;
+/// Onsets a media index lists without a range.
+const MAX_INDEX_ONSETS: usize = 100;
+const DEFAULT_SHEET_TILE_WIDTH: u32 = 320;
+const SHEET_COLUMNS: usize = 4;
+const MAX_SHEET_FRAMES: usize = 16;
 
 const GUIDE: &str = "You edit video in Cut. The project is a `.cut` text \
 document, annotated with each clip's end and source out. Change it with edit \
 scripts in the language below.
 
 - `look` shows what is there: with no arguments the document; with `media` \
-that media's index (where it is used, its scene cuts and pauses, and what is \
-said on request, word by word with `words`); with `at` frames — source \
-frames of a media, or program frames of the sequence; with `transcript` and \
-no media, what the sequence says. `sequence` picks one other than the first. \
+that media's index (where it is used, its scene cuts, pauses, loudest \
+moments, sound onsets, and tempo, and what is said on request, word by word \
+with `words`); with `sheet` a contact sheet of a range in one image, the \
+cheap way to scan; with `at` frames — source frames of a media, or program \
+frames of the sequence; with `transcript` and no media, what the sequence \
+says. `sequence` picks one other than the first. \
 With `proposal` it shows what a pending proposal would make: its document, \
 its frames, and what it says.
 - `edit` runs one script. It becomes a proposal for the user, returned with \
@@ -159,7 +163,8 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
         "look" => (
             "See the project and its footage. No arguments: the annotated document and \
              proposal state. `media`: that media's index — where it is used, scene cuts, \
-             pauses, and with `transcript` what is said (`words` times each word). \
+             pauses, loudest moments, sound onsets, tempo, and with `transcript` what \
+             is said (`words` times each word). `sheet`: a contact sheet of a range. \
              `at`: frames, as source frames of `media` or program frames of the \
              sequence. `transcript` without `media`: what the sequence says. \
              `proposal`: the same, as a pending proposal would make the project.",
@@ -176,9 +181,10 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     },
                     "transcript": {"type": "boolean", "description": "What is said, by local transcription, up to 15 minutes per call: of `media`, or else of the sequence as it plays."},
                     "words": {"type": "boolean", "description": "With `transcript`: time every word, for cutting on speech. Choose a short range; it is long."},
-                    "from": {"type": "string", "description": format!("With `transcript`: the first position to transcribe, of `media` or the sequence. {time}")},
-                    "to": {"type": "string", "description": "With `transcript`: the position to stop at."},
-                    "width": {"type": "integer", "minimum": 64, "maximum": 1920, "description": "Frame width in pixels (default 960)."},
+                    "sheet": {"type": "integer", "minimum": 2, "maximum": MAX_SHEET_FRAMES, "description": "A contact sheet of this many frames spread evenly over `from`–`to` (all of it by default) as one image, four to a row: of `media`, or else of the sequence. Scan with a sheet, then look `at` the moments that matter."},
+                    "from": {"type": "string", "description": format!("The start of the range for `transcript`, `sheet`, or a media's onsets. Positions of `media`, or else of the sequence. {time}")},
+                    "to": {"type": "string", "description": "The end of that range."},
+                    "width": {"type": "integer", "minimum": 64, "maximum": 1920, "description": "Frame width in pixels (default 960; 320 for each frame of a sheet)."},
                     "sequence": {"type": "string", "description": sequence},
                     "proposal": {"type": "string", "description": proposal}
                 },
@@ -248,6 +254,7 @@ struct LookInput {
     transcript: bool,
     #[serde(default)]
     words: bool,
+    sheet: Option<usize>,
     from: Option<String>,
     to: Option<String>,
     width: Option<u32>,
@@ -274,13 +281,6 @@ struct RenderInput {
     job: Option<String>,
     #[serde(default)]
     cancel: bool,
-}
-
-/// Scene cuts and pauses of one media file, in seconds from its first frame.
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct Analysis {
-    cuts: Vec<f64>,
-    pauses: Vec<(f64, f64)>,
 }
 
 fn input<T: serde::de::DeserializeOwned>(arguments: Value) -> Result<T, McpError> {
@@ -416,11 +416,26 @@ impl CutMcpRouter {
                 "`sequence` chooses program frames or what a sequence says; not with `media`",
             ));
         }
-        if !input.transcript && (input.from.is_some() || input.to.is_some()) {
+        let ranged = input.transcript || input.sheet.is_some() || input.media.is_some();
+        if !ranged && (input.from.is_some() || input.to.is_some()) {
             return Err(McpError::new(
                 "INVALID_ARGUMENTS",
-                "from and to choose a transcript range; pass transcript: true",
+                "from and to choose a range for `transcript`, `sheet`, or a media's onsets",
             ));
+        }
+        if let Some(count) = input.sheet {
+            if !(2..=MAX_SHEET_FRAMES).contains(&count) {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    format!("a sheet has 2 to {MAX_SHEET_FRAMES} frames"),
+                ));
+            }
+            if input.transcript || !input.at.is_empty() {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    "pass one of `sheet`, `at`, or `transcript`",
+                ));
+            }
         }
         if input.media.is_none() && input.transcript && !input.at.is_empty() {
             return Err(McpError::new(
@@ -443,6 +458,7 @@ impl CutMcpRouter {
         if input.media.is_none()
             && input.at.is_empty()
             && !input.transcript
+            && input.sheet.is_none()
             && input.sequence.is_none()
             && input.proposal.is_none()
         {
@@ -455,9 +471,17 @@ impl CutMcpRouter {
             }));
         }
         let (revision, project) = self.project_at(input.proposal.as_deref())?;
-        let width = input.width.unwrap_or(DEFAULT_FRAME_WIDTH).clamp(64, 1920);
+        let default_width = if input.sheet.is_some() {
+            DEFAULT_SHEET_TILE_WIDTH
+        } else {
+            DEFAULT_FRAME_WIDTH
+        };
+        let width = input.width.unwrap_or(default_width).clamp(64, 1920);
         let mut result = match input.media.as_deref() {
             None if input.transcript => self.program_transcript(&project, revision, &input)?,
+            None if input.sheet.is_some() => {
+                self.program_sheet(&project, revision, &input, width)?
+            }
             None if input.at.is_empty() => json!({
                 "revision": revision,
                 "document": print_document(&project, catalog(), PrintOptions { annotate: true }),
@@ -476,7 +500,9 @@ impl CutMcpRouter {
                         format!("no media `{media_id}` in the project"),
                     )
                 })?;
-                if input.at.is_empty() {
+                if input.sheet.is_some() {
+                    self.source_sheet(media, &input, width)?
+                } else if input.at.is_empty() {
                     self.media_index(&project, media, &input)?
                 } else {
                     self.source_frames(media, &input.at, width)?
@@ -528,23 +554,51 @@ impl CutMcpRouter {
             "end": clock.print_position(media.duration),
             "uses": uses,
         });
-        match self.analysis(&path, media) {
-            Ok(analysis) => {
-                result["cuts"] = json!(analysis
-                    .cuts
-                    .iter()
-                    .map(|cut| print_seconds(&clock, *cut))
-                    .collect::<Vec<_>>());
-                result["pauses"] = json!(analysis
+        let index = cut_engine::media_index(
+            &path,
+            &DerivativeCache::new(&self.dir),
+            &cut_engine::CancellationToken::new(),
+        );
+        match index {
+            Ok(index) => {
+                let at = |seconds: f64| print_seconds(&clock, seconds);
+                result["cuts"] = json!(index.cuts.iter().map(|cut| at(*cut)).collect::<Vec<_>>());
+                result["pauses"] = json!(index
                     .pauses
                     .iter()
-                    .map(|(from, to)| json!({
-                        "from": print_seconds(&clock, *from),
-                        "to": print_seconds(&clock, *to),
-                    }))
+                    .map(|(from, to)| json!({"from": at(*from), "to": at(*to)}))
                     .collect::<Vec<_>>());
+                result["loudest"] = json!(index
+                    .peaks
+                    .iter()
+                    .map(|peak| json!({"at": at(peak.at), "level": format!("{} dB", peak.level)}))
+                    .collect::<Vec<_>>());
+                if let Some(tempo) = &index.tempo {
+                    result["tempo"] = json!({
+                        "bpm": tempo.bpm,
+                        "firstBeat": at(tempo.first),
+                        "confidence": tempo.confidence,
+                    });
+                }
+                let (from, to) = self.media_range(media, &clock, input)?;
+                let onsets: Vec<String> = index
+                    .onsets
+                    .iter()
+                    .filter(|onset| (from..to).contains(*onset))
+                    .map(|onset| at(*onset))
+                    .collect();
+                let ranged = input.from.is_some() || input.to.is_some();
+                if !ranged && onsets.len() > MAX_INDEX_ONSETS {
+                    result["onsets"] = json!(onsets[..MAX_INDEX_ONSETS]);
+                    result["moreOnsets"] = json!(format!(
+                        "{} more; pass from and to for those in a range",
+                        onsets.len() - MAX_INDEX_ONSETS
+                    ));
+                } else {
+                    result["onsets"] = json!(onsets);
+                }
             }
-            Err(error) => result["analysis"] = json!(format!("unavailable: {}", error.message)),
+            Err(error) => result["analysis"] = json!(format!("unavailable: {error}")),
         }
         if input.transcript {
             result["transcript"] = self.transcript(&path, media, &clock, input)?;
@@ -552,48 +606,147 @@ impl CutMcpRouter {
         Ok(result)
     }
 
-    /// Scene cuts and pauses, cached beside the media's other derivatives.
-    fn analysis(&self, path: &std::path::Path, media: &Media) -> Result<Analysis, McpError> {
-        let cache = DerivativeCache::new(&self.dir);
-        let entry = cache
-            .source_entry(
-                path,
-                "media-index",
-                &json!({
-                    "version": 1,
-                    "sceneThreshold": SCENE_THRESHOLD,
-                    "pauseNoiseDb": PAUSE_NOISE_DB,
-                    "pauseSeconds": PAUSE_SECONDS,
-                }),
-            )
-            .map_err(engine_error)?;
-        if entry.is_complete(&["index.json"]) {
-            return entry.read_json("index.json").map_err(engine_error);
+    /// `from`–`to` of `media` in seconds, all of it by default.
+    fn media_range(
+        &self,
+        media: &Media,
+        clock: &Clock,
+        input: &LookInput,
+    ) -> Result<(f64, f64), McpError> {
+        let from = match &input.from {
+            Some(text) => position(clock, text)?,
+            None => Time::ZERO,
+        };
+        let to = match &input.to {
+            Some(text) => position(clock, text)?.min(media.duration),
+            None => media.duration,
+        };
+        if from.is_negative() || to <= from {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                format!("choose a range inside media `{}`", media.id),
+            ));
         }
-        let source = path.to_string_lossy();
-        let mut analysis = Analysis::default();
-        if media.video.is_some() {
-            analysis.cuts = cut_engine::detect_scenes(&source, SCENE_THRESHOLD)
-                .map_err(engine_error)?
-                .into_iter()
-                .map(|scene| scene.start)
-                .filter(|start| *start > 0.0)
-                .collect();
+        Ok((from.seconds(), to.seconds()))
+    }
+
+    /// A contact sheet of `media`: `input.sheet` frames spread over its
+    /// range, from its proxy when one is made and wide enough.
+    fn source_sheet(
+        &self,
+        media: &Media,
+        input: &LookInput,
+        width: u32,
+    ) -> Result<Value, McpError> {
+        if media.video.is_none() {
+            return Err(McpError::new(
+                "NO_VIDEO",
+                format!("media `{}` has no picture", media.id),
+            ));
         }
-        if media.audio.is_some() {
-            let end = media.duration.seconds();
-            analysis.pauses =
-                cut_engine::probe::silence_detect(&source, PAUSE_NOISE_DB, PAUSE_SECONDS)
-                    .map_err(engine_error)?
-                    .into_iter()
-                    .map(|pause| (pause.start, pause.end.unwrap_or(end)))
-                    .collect();
+        let clock = Clock::of_media(media);
+        let (from, to) = self.media_range(media, &clock, input)?;
+        let count = input.sheet.unwrap_or(MAX_SHEET_FRAMES);
+        let times: Vec<f64> = (0..count)
+            .map(|index| {
+                let time =
+                    Time::from_seconds(from + (to - from) * (index as f64 + 0.5) / count as f64)
+                        .unwrap_or(Time::ZERO);
+                media.rate.round(time).seconds()
+            })
+            .collect();
+        let grabbed = cut_engine::cached_exact_frames(
+            &self.viewable(media, width).to_string_lossy(),
+            &DerivativeCache::new(&self.dir),
+            &times,
+            width,
+        )
+        .map_err(engine_error)?;
+        let paths: Vec<String> = grabbed
+            .frames
+            .iter()
+            .map(|frame| frame.path.clone())
+            .collect();
+        let sheet = Path::new(&paths[0]).with_file_name("sheet.jpg");
+        if !sheet.is_file() {
+            cut_engine::create_contact_sheet(&paths, &sheet, SHEET_COLUMNS.min(count))
+                .map_err(engine_error)?;
         }
-        entry
-            .write_json("index.json", &analysis)
-            .map_err(engine_error)?;
-        entry.mark_complete(&["index.json"]).map_err(engine_error)?;
-        Ok(analysis)
+        let mut result = json!({
+            "media": media.id.to_string(),
+            "frames": times.iter().map(|time| print_seconds(&clock, *time)).collect::<Vec<_>>(),
+            "path": sheet,
+        });
+        inline_image(&mut result)?;
+        Ok(result)
+    }
+
+    /// A contact sheet of the sequence: `input.sheet` program frames spread
+    /// over its range.
+    fn program_sheet(
+        &self,
+        project: &Project,
+        revision: u64,
+        input: &LookInput,
+        width: u32,
+    ) -> Result<Value, McpError> {
+        let sequence = program(project, input.sequence.as_deref())?;
+        let clock = Clock::of_sequence(sequence);
+        let duration = sequence.duration();
+        let from = match &input.from {
+            Some(text) => position(&clock, text)?,
+            None => Time::ZERO,
+        };
+        let to = match &input.to {
+            Some(text) => position(&clock, text)?.min(duration),
+            None => duration,
+        };
+        if from.is_negative() || to <= from {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                format!("choose a range inside sequence `{}`", sequence.id),
+            ));
+        }
+        let count = input.sheet.unwrap_or(MAX_SHEET_FRAMES);
+        let span = (to - from).seconds();
+        let mut times: Vec<Time> = (0..count)
+            .map(|index| {
+                let offset = Time::from_seconds(span * (index as f64 + 0.5) / count as f64)
+                    .unwrap_or(Time::ZERO);
+                sequence
+                    .rate
+                    .round(from + offset)
+                    .min(duration - sequence.rate.frame_duration())
+            })
+            .collect();
+        times.dedup();
+        let mut resolved = project.clone();
+        cut_runtime::resolve_media_paths(&mut resolved, &self.dir);
+        let capture = self.capture_frames(
+            &resolved,
+            sequence.id.as_str(),
+            &times,
+            width,
+            Some(SHEET_COLUMNS.min(times.len())),
+        )?;
+        let mut result = json!({
+            "sequence": sequence.id.to_string(),
+            "revision": revision,
+            "frames": times.iter().map(|time| clock.print_position(*time)).collect::<Vec<_>>(),
+            "path": capture.sheet,
+        });
+        inline_image(&mut result)?;
+        Ok(result)
+    }
+
+    /// The file to take frames of `media` from at `width`: its proxy when
+    /// one is made and wide enough, or else the media itself.
+    fn viewable(&self, media: &Media, width: u32) -> PathBuf {
+        let path = resolve_project_source_path(&self.dir, &media.path);
+        if width > cut_engine::PROXY_WIDTH {
+            return path;
+        }
+        cut_engine::cached_proxy(&path, &DerivativeCache::new(&self.dir)).unwrap_or(path)
     }
 
     fn transcript(
@@ -670,6 +823,7 @@ impl CutMcpRouter {
         }
         let mut resolved = project.clone();
         cut_runtime::resolve_media_paths(&mut resolved, &self.dir);
+        cut_runtime::use_proxies(&mut resolved, &self.dir);
         let entry = self.program_entry(
             &resolved,
             sequence.id.as_str(),
@@ -769,9 +923,8 @@ impl CutMcpRouter {
                 Ok(time.seconds())
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let path = resolve_project_source_path(&self.dir, &media.path);
         let grabbed = cut_engine::cached_exact_frames(
-            &path.to_string_lossy(),
+            &self.viewable(media, width).to_string_lossy(),
             &DerivativeCache::new(&self.dir),
             &times,
             width,

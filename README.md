@@ -96,7 +96,7 @@ tools cover the work:
 
 | Tool | Purpose |
 |---|---|
-| `look` | No arguments: the annotated document and proposal state. `media`: that media's index — where it is used, scene cuts, pauses, and with `transcript: true` what is said (`words: true` times each word). `at`: up to eight full-size frames — source frames of `media`, or program frames of the sequence. `transcript: true` without `media`: what the sequence says as it plays. `sequence` picks a sequence other than the first. `proposal`: the same, as a pending proposal would make the project |
+| `look` | No arguments: the annotated document and proposal state. `media`: that media's index — where it is used, scene cuts, pauses, loudest moments, sound onsets, and tempo, and with `transcript: true` what is said (`words: true` times each word). `sheet: N`: a contact sheet of N frames over `from`–`to`, of `media` or the sequence, as one image. `at`: up to eight full-size frames — source frames of `media`, or program frames of the sequence. `transcript: true` without `media`: what the sequence says as it plays. `sequence` picks a sequence other than the first. `proposal`: the same, as a pending proposal would make the project |
 | `edit` | Run an edit script. It becomes a proposal, returned with the document diff, check findings, and a before/after preview: the frames either side of each cut it made or moved, and the middle of a clip it changed in place. `extend` runs the script on top of a pending proposal and makes the two one proposal; `revise` replaces it |
 | `render` | Render the sequence (or another `sequence`), or `from`–`to`, as a draft or full-quality file — of the project, or of a pending `proposal`; `job` reads progress, `cancel` stops it |
 
@@ -109,6 +109,13 @@ transcribed for the check).
 Times are timecode (`01:00:04:12`), frames (`96f`), or seconds (`4.5s`):
 media positions with `media`, sequence positions otherwise. The project
 changes only when a person accepts a proposal.
+
+When media is imported, `cutd` indexes it in the background — one FFmpeg
+pass for scene cuts, pauses, and a loudness envelope from which loudest
+moments, onsets, and tempo are found — and makes a proxy at most 960 pixels
+wide for pictures wider than that. Draft renders and frames up to that width
+use the proxy when it is ready; full renders and program frames use the
+original. Indexes and proxies are cached in `.cut/cache/derived`.
 
 Transcripts come from local `whisper.cpp` (`CUT_WHISPER_BIN` and
 `CUT_WHISPER_MODEL`, described below); media is never uploaded. Scene cuts

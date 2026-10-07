@@ -1183,6 +1183,13 @@ impl Runtime {
                 proposal,
             },
         )?;
+        kernel::prepare_media(
+            path,
+            self.project_path
+                .parent()
+                .unwrap_or(Path::new("."))
+                .to_path_buf(),
+        );
         Ok((snapshot, media_id, clip_id))
     }
 

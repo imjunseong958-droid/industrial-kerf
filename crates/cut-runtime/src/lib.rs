@@ -24,7 +24,7 @@ pub use ipc::{
     response_value, run_ipc, run_stdio, EndpointAddress, RuntimeClient, MAX_REQUEST_BYTES,
     UNIX_SOCKET_PATH_LIMIT,
 };
-pub use kernel::{resolve_media_paths, EditOp, TrimSide};
+pub use kernel::{resolve_media_paths, use_proxies, EditOp, TrimSide};
 pub use render::{render_cancel_path, run_render_job};
 
 use cut_model::Project;

@@ -283,6 +283,105 @@ fn render_runs_a_range_to_a_file() {
 }
 
 #[test]
+fn look_scans_with_sheets_and_indexes_sound() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    let index = ok(&router, "look", json!({"media": "m1"}));
+    for key in ["loudest", "onsets"] {
+        assert!(index[key].is_array(), "{key}: {index}");
+    }
+    // The tone starts the sound; nothing starts after 2s.
+    assert_eq!(index["onsets"], json!(["00:00:00:00"]), "{index}");
+    let later = ok(&router, "look", json!({"media": "m1", "from": "2s"}));
+    assert_eq!(later["onsets"], json!([]), "{later}");
+
+    let sheet = ok(&router, "look", json!({"media": "m1", "sheet": 4}));
+    assert_eq!(
+        sheet["frames"],
+        json!(["00:00:00:15", "00:00:01:15", "00:00:02:15", "00:00:03:15"]),
+        "{sheet}"
+    );
+    assert!(is_jpeg(&sheet), "{sheet}");
+    let program = ok(
+        &router,
+        "look",
+        json!({"sheet": 2, "from": "1s", "to": "3s", "width": 160}),
+    );
+    assert_eq!(
+        program["frames"],
+        json!(["00:00:01:15", "00:00:02:15"]),
+        "{program}"
+    );
+    assert!(is_jpeg(&program), "{program}");
+
+    let both = error(
+        &router,
+        "look",
+        json!({"media": "m1", "sheet": 4, "at": ["1s"]}),
+    );
+    assert_eq!(both["code"], "INVALID_ARGUMENTS");
+    let lonely = error(&router, "look", json!({"from": "1s"}));
+    assert_eq!(lonely["code"], "INVALID_ARGUMENTS");
+}
+
+#[test]
+fn imported_media_is_indexed_and_proxied_in_the_background() {
+    let Some((directory, router)) = router() else {
+        return;
+    };
+    let wide = directory.path().join("wide.mp4");
+    let status = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y"])
+        .args([
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=1280x720:rate=25:duration=2",
+        ])
+        .args([
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000:duration=2",
+        ])
+        .args([
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+        ])
+        .args(["-c:a", "aac", "-shortest"])
+        .arg(&wide)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let revision = router.runtime().get_state().unwrap().revision;
+    router
+        .runtime()
+        .import_media_request("ui", "import-wide", &wide.to_string_lossy(), revision)
+        .unwrap();
+    let cache = cut_engine::derivatives::DerivativeCache::new(directory.path());
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let proxy = loop {
+        if let Some(proxy) = cut_engine::cached_proxy(&wide, &cache) {
+            break proxy;
+        }
+        assert!(Instant::now() < deadline, "no proxy was made");
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    assert!(proxy.is_file());
+    let indexed = cache
+        .source_entries(&wide, "media-index")
+        .unwrap()
+        .into_iter()
+        .any(|entry| entry.is_complete(&["index.json"]));
+    assert!(indexed, "the index is made before the proxy");
+}
+
+#[test]
 fn edits_are_checked_like_an_editor_would() {
     let Some((_directory, router)) = router() else {
         return;

@@ -8,6 +8,7 @@ pub mod derivatives;
 pub mod encoder;
 pub mod error;
 pub mod ffmpeg;
+pub mod index;
 pub mod probe;
 pub mod proxy;
 pub mod render;
@@ -20,13 +21,14 @@ pub use encoder::{
     EncoderCapability, EncoderSelection, HardwareEncoderFamily, SelectEncoderOptions, VideoCodec,
 };
 pub use error::{EngineError, Result};
+pub use index::{media_index, MediaIndex, Peak, Tempo};
 pub use probe::{
     cached_exact_frames, cached_filmstrip, cached_waveform, cached_waveform_range,
     create_contact_sheet, detect_scenes, extract_exact_frames, extract_frames, info,
     parse_scene_times, parse_silencedetect, FilmstripResult, FrameGrab, FrameGrabSet, ProbeInfo,
     SceneRange, SilenceRange, WaveformBucket, WaveformResult,
 };
-pub use proxy::{create_proxy_cache_key, proxy_ffmpeg_args};
+pub use proxy::{cached_proxy, create_proxy_cache_key, make_proxy, proxy_ffmpeg_args, PROXY_WIDTH};
 pub use resources::{budget, budget_for_cpus, HardwareEncodePolicy, ResourceBudget};
 pub use sidecar::CancellationToken;
 pub use transcription::{
