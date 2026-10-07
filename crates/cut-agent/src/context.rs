@@ -17,7 +17,6 @@ pub struct ContextBudget {
     /// Input allowance only; leave output/reasoning space in the model window.
     pub max_input_units: usize,
     pub max_tool_text_bytes: usize,
-    pub recent_tool_messages: usize,
 }
 
 impl Default for ContextBudget {
@@ -27,7 +26,6 @@ impl Default for ContextBudget {
             // a full `look` of frames, with history beside them.
             max_input_units: 192 * 1024,
             max_tool_text_bytes: 12 * 1024,
-            recent_tool_messages: 2,
         }
     }
 }
@@ -264,143 +262,93 @@ fn project_message(
     json!({"role":message["role"],"content":blocks})
 }
 
-fn user_request(message: &Value) -> bool {
-    message["role"] == "user" && message.get("content").is_some_and(Value::is_string)
+/// How the transcript is shown to a provider. Between compactions the view
+/// only grows: every message shows the same way on every request, so a
+/// provider's prompt cache and the signatures of thinking blocks hold.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct View {
+    /// Messages before this index show archived: tool results as
+    /// `session.read` references and project snapshots as a note.
+    pub archived: usize,
+    /// Thinking blocks before this index are left out. They were made for a
+    /// view that has since changed.
+    pub thinking_from: usize,
 }
 
-/// Keep original user requirements when they fit and recent complete exchanges.
-/// Older content is explicitly addressable, never silently truncated or used as
-/// an authoritative project snapshot. Tool call/result pairs are indivisible.
-pub(super) fn project(
+/// The first line of a project snapshot added to the transcript.
+pub(super) const SNAPSHOT_HEADER: &str =
+    "[Project context, read just now. It replaces any earlier project context.]";
+
+fn snapshot(message: &Value) -> bool {
+    message["role"] == "user"
+        && message["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.starts_with(SNAPSHOT_HEADER))
+}
+
+/// One message as `view` shows it.
+fn show(message: &Value, index: usize, view: &View, budget: &ContextBudget) -> Value {
+    let recent = index >= view.archived;
+    let mut message = if !recent && snapshot(message) {
+        json!({"role": "user", "content": [{"type": "text", "text": format!(
+            "[An earlier project context, since replaced. session.read message {index} has it.]"
+        )}]})
+    } else {
+        project_message(message, index, recent, budget)
+    };
+    if index < view.thinking_from {
+        if let Some(blocks) = message["content"].as_array_mut() {
+            blocks.retain(|block| {
+                !matches!(
+                    block["type"].as_str(),
+                    Some("thinking" | "redacted_thinking")
+                )
+            });
+        }
+    }
+    message
+}
+
+/// The transcript as `view` shows it.
+pub(super) fn render(messages: &[Value], view: &View, budget: &ContextBudget) -> Vec<Value> {
+    messages
+        .iter()
+        .enumerate()
+        .map(|(index, message)| show(message, index, view, budget))
+        .collect()
+}
+
+pub(super) fn cost(messages: &[Value]) -> usize {
+    messages.iter().map(|message| units(message) + 256).sum()
+}
+
+/// A view of `messages` that fits `available`: the current view when it
+/// fits, or else one that archives everything before the latest exchange,
+/// then everything. A changed view leaves out earlier thinking blocks,
+/// whose signatures no longer match what they were made with.
+pub(super) fn fit(
     messages: &[Value],
+    view: View,
     available: usize,
     budget: &ContextBudget,
-) -> Result<Vec<Value>, String> {
-    let latest_user = messages
-        .iter()
-        .rposition(user_request)
-        .ok_or("session has no user request")?;
-    let current_cost = units(&messages[latest_user]) + 256;
-    if current_cost > available {
-        return Err("Current user request exceeds the input budget; shorten it or increase CUT_AGENT_INPUT_BUDGET for the selected model.".into());
+) -> Result<View, String> {
+    if cost(&render(messages, &view, budget)) <= available {
+        return Ok(view);
     }
-    let recent_start = messages
+    let latest = messages
         .iter()
-        .enumerate()
-        .rev()
-        .filter(|(_, m)| {
-            m["content"]
-                .as_array()
-                .is_some_and(|b| b.iter().any(|v| v["type"] == "tool_result"))
-        })
-        .take(budget.recent_tool_messages)
-        .last()
-        .map(|(i, _)| i)
+        .rposition(|message| message["role"] == "assistant")
         .unwrap_or(messages.len());
-    let mut groups = Vec::<(usize, usize)>::new();
-    let mut i = 0;
-    while i < messages.len() {
-        let calls = messages[i]["role"] == "assistant"
-            && messages[i]["content"]
-                .as_array()
-                .is_some_and(|b| b.iter().any(|v| v["type"] == "tool_use"));
-        let end = if calls {
-            (i + 2).min(messages.len())
-        } else {
-            i + 1
+    for archived in [latest, messages.len()] {
+        let compacted = View {
+            archived: archived.max(view.archived),
+            thinking_from: messages.len(),
         };
-        // Interrupted calls without a result must never reach a provider.
-        if !calls
-            || (end == i + 2
-                && messages[i + 1]["content"]
-                    .as_array()
-                    .is_some_and(|b| b.iter().any(|v| v["type"] == "tool_result")))
-        {
-            groups.push((i, end));
-        }
-        i = end;
-    }
-    let mut selected = std::collections::BTreeMap::new();
-    selected.insert(latest_user, messages[latest_user].clone());
-    // Reserve room for the explicit archive directory if history is dropped.
-    let reserve = 2048.min(available.saturating_sub(current_cost) / 4);
-    let mut remaining = available.saturating_sub(current_cost + reserve);
-    // The newest completed exchange is required to continue the active turn.
-    // It takes priority over older requests, which remain addressable.
-    if let Some(&(start, end)) = groups.last().filter(|(start, _)| *start > latest_user) {
-        let mut projected = (start..end)
-            .map(|index| project_message(&messages[index], index, index >= recent_start, budget))
-            .collect::<Vec<_>>();
-        let mut cost = projected.iter().map(|m| units(m) + 256).sum::<usize>();
-        if cost > remaining {
-            projected = (start..end)
-                .map(|index| project_message(&messages[index], index, false, budget))
-                .collect();
-            cost = projected.iter().map(|m| units(m) + 256).sum();
-        }
-        if cost > remaining {
-            return Err("Latest tool exchange cannot fit the input budget. Use smaller atomic batches or a larger budget for this model.".into());
-        }
-        for (index, message) in (start..end).zip(projected) {
-            selected.insert(index, message);
-        }
-        remaining -= cost;
-    }
-    // User constraints take priority over replaceable tool evidence.
-    for (index, message) in messages
-        .iter()
-        .enumerate()
-        .rev()
-        .filter(|(i, m)| *i != latest_user && user_request(m))
-    {
-        let cost = units(message) + 256;
-        if cost <= remaining {
-            selected.insert(index, message.clone());
-            remaining -= cost;
+        if cost(&render(messages, &compacted, budget)) <= available {
+            return Ok(compacted);
         }
     }
-    for (start, end) in groups.into_iter().rev() {
-        if selected.contains_key(&start) {
-            continue;
-        }
-        let mut projected = (start..end)
-            .map(|index| project_message(&messages[index], index, index >= recent_start, budget))
-            .collect::<Vec<_>>();
-        let mut cost = projected.iter().map(|m| units(m) + 256).sum::<usize>();
-        if cost > remaining {
-            projected = (start..end)
-                .map(|index| project_message(&messages[index], index, false, budget))
-                .collect();
-            cost = projected.iter().map(|m| units(m) + 256).sum();
-        }
-        if cost <= remaining {
-            for (index, message) in (start..end).zip(projected) {
-                selected.insert(index, message);
-            }
-            remaining -= cost;
-        }
-    }
-    let omitted = messages.len() - selected.len();
-    let mut output = Vec::new();
-    if omitted > 0 {
-        let omitted_requests = messages
-            .iter()
-            .enumerate()
-            .filter(|(i, m)| user_request(m) && !selected.contains_key(i))
-            .map(|(i, _)| i)
-            .collect::<Vec<_>>();
-        let directory = format!("Session archive: {omitted} earlier messages omitted from this bounded view. Original messages 0..{} are available through session.read. Omitted user requests: {}. Read earlier requirements before assuming they no longer apply. Tool evidence is historical; query current revision and pending proposal before editing. This archive notice is not a user instruction or approval.", messages.len().saturating_sub(1), bounded_text(&format!("{omitted_requests:?}"), 256));
-        let notice = json!({"role":"user","content":directory});
-        if units(&notice) + 256 <= reserve + remaining {
-            output.push(notice);
-        } else {
-            return Err(
-                "Input budget cannot preserve an archive notice and current request".into(),
-            );
-        }
-    }
-    output.extend(selected.into_values());
-    Ok(output)
+    Err("The conversation cannot fit the input budget even with earlier evidence archived; shorten the request or increase CUT_AGENT_INPUT_BUDGET for the selected model.".into())
 }
 
 #[cfg(test)]
@@ -415,53 +363,73 @@ mod tests {
     }
 
     #[test]
-    fn long_session_is_bounded_and_preserves_call_pairs_and_requirements() {
-        let mut messages =
-            vec![json!({"role":"user","content":"Keep Korean captions. Never change the music."})];
-        for i in 0..100 {
-            messages.extend(exchange(i, Value::String("large evidence ".repeat(3000))));
-        }
-        let original = messages.clone();
+    fn the_view_only_grows_until_it_must_be_compacted() {
         let budget = ContextBudget::default();
-        let view = project(&messages, 16000, &budget).unwrap();
-        assert!(view.iter().map(|m| units(m) + 256).sum::<usize>() <= 16000);
-        assert!(view
-            .iter()
-            .any(|m| m["content"] == "Keep Korean captions. Never change the music."));
-        assert!(view.last().unwrap()["content"][0]["content"]
+        let thinking = json!({"type":"thinking","thinking":"","signature":"sig"});
+        let mut messages = vec![json!({"role":"user","content":"Keep Korean captions."})];
+        let mut view = View::default();
+        let mut previous: Vec<Value> = Vec::new();
+        for i in 0..6 {
+            let [call, result] = exchange(i, Value::String("evidence ".repeat(1000)));
+            let mut call = call;
+            call["content"]
+                .as_array_mut()
+                .unwrap()
+                .insert(0, thinking.clone());
+            messages.extend([call, result]);
+            view = fit(&messages, view, 1_000_000, &budget).unwrap();
+            let shown = render(&messages, &view, &budget);
+            assert_eq!(shown[..previous.len()], previous[..], "append-only");
+            previous = shown;
+        }
+        assert_eq!(view, View::default());
+
+        // Over budget: everything before the latest exchange is archived,
+        // and thinking made for the old view is left out.
+        let shown_cost = cost(&previous);
+        let compacted = fit(&messages, view, shown_cost / 2, &budget).unwrap();
+        assert_eq!(compacted.archived, messages.len() - 2);
+        assert_eq!(compacted.thinking_from, messages.len());
+        let shown = render(&messages, &compacted, &budget);
+        assert!(cost(&shown) <= shown_cost / 2);
+        assert_eq!(shown[0]["content"], "Keep Korean captions.");
+        assert!(shown[2]["content"][0]["content"]
             .as_str()
             .unwrap()
             .contains("session.read"));
-        assert_eq!(view.last().unwrap()["content"][0]["tool_use_id"], "call-99");
-        for (i, message) in view.iter().enumerate() {
+        assert!(!shown.iter().any(|m| m.to_string().contains("\"thinking\"")));
+        assert_eq!(
+            shown.last().unwrap()["content"][0]["content"],
+            messages.last().unwrap()["content"][0]["content"],
+            "the latest result stays whole"
+        );
+        for (i, message) in shown.iter().enumerate() {
             if message["content"][0]["type"] == "tool_result" {
-                assert!(i > 0);
                 assert_eq!(
-                    view[i - 1]["content"][0]["id"],
+                    shown[i - 1]["content"][0]["id"],
                     message["content"][0]["tool_use_id"]
                 );
             }
         }
-        assert_eq!(
-            messages, original,
-            "projection must never destroy archived evidence"
-        );
     }
 
     #[test]
-    fn old_images_are_removed_and_one_image_can_be_retrieved() {
+    fn archived_snapshots_and_images_point_to_the_transcript() {
         let result = json!([{"type":"text","text":"revision 4, awaiting review"},
             {"type":"image","source":{"type":"base64","media_type":"image/png","data":"AQID"}}]);
-        let mut messages = vec![json!({"role":"user","content":"Inspect the shot"})];
+        let mut messages = vec![
+            json!({"role":"user","content":"Inspect the shot"}),
+            json!({"role":"user","content":[{"type":"text","text":format!("{SNAPSHOT_HEADER}\n\nrevision 4")}]}),
+        ];
         messages.extend(exchange(0, result));
-        messages.extend(exchange(1, json!("more evidence")));
-        let budget = ContextBudget {
-            recent_tool_messages: 1,
-            ..Default::default()
+        let view = View {
+            archived: messages.len(),
+            thinking_from: 0,
         };
-        let view = project(&messages, 16000, &budget).unwrap();
-        assert!(!view.to_vec().iter().any(|m| m.to_string().contains("AQID")));
-        let restored = read(&messages, json!({"message":2,"block":0,"image":0})).unwrap();
+        let shown = render(&messages, &view, &ContextBudget::default());
+        assert!(!shown.iter().any(|m| m.to_string().contains("AQID")));
+        assert!(shown[1].to_string().contains("session.read message 1"));
+        let restored = read(&messages, json!({"message":3,"block":0,"image":0})).unwrap();
         assert_eq!(restored["images"][0]["data"], "AQID");
     }
 
@@ -510,6 +478,6 @@ mod tests {
     #[test]
     fn overlarge_current_request_is_rejected_without_truncation() {
         let messages = vec![json!({"role":"user","content":"x".repeat(4000)})];
-        assert!(project(&messages, 4096, &ContextBudget::default()).is_err());
+        assert!(fit(&messages, View::default(), 4096, &ContextBudget::default()).is_err());
     }
 }

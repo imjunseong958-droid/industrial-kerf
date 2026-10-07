@@ -9,7 +9,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-20250514";
+pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-opus-5-5";
 pub const DEFAULT_OPENAI_MODEL: &str = "gpt-4o";
 pub const DEFAULT_RESPONSES_MODEL: &str = "gpt-5.6-luna";
 
@@ -108,8 +108,10 @@ impl UreqHttpClient {
 }
 
 impl Default for UreqHttpClient {
+    /// Ten minutes: a response is read whole, and a model that thinks
+    /// before a long answer can take several.
     fn default() -> Self {
-        Self::new(Duration::from_secs(120))
+        Self::new(Duration::from_secs(600))
     }
 }
 
@@ -198,11 +200,17 @@ fn parse_stream_events(body: &str) -> Result<Vec<Value>, ProviderError> {
     Ok(events)
 }
 
-/// Anthropic messages adapter.
+/// The most a response may write, thinking included.
+const ANTHROPIC_MAX_TOKENS: u32 = 32_000;
+
+/// Anthropic messages adapter. The system prompt and the conversation so
+/// far are marked for prompt caching; thinking blocks are kept with their
+/// signatures so they can be sent back unchanged.
 pub struct AnthropicProvider {
     client: Arc<dyn JsonHttpClient>,
     api_key: Option<String>,
     base_url: String,
+    effort: Option<ReasoningEffort>,
 }
 
 impl fmt::Debug for AnthropicProvider {
@@ -232,8 +240,34 @@ impl AnthropicProvider {
                 .unwrap_or_else(|| "https://api.anthropic.com/v1".into())
                 .trim_end_matches('/')
                 .to_owned(),
+            effort: None,
         }
     }
+
+    /// How hard the model thinks. `none` and `minimal` ask for `low`, the
+    /// least Anthropic models take; unset leaves the model's default.
+    pub fn with_effort(mut self, effort: Option<ReasoningEffort>) -> Self {
+        self.effort = effort;
+        self
+    }
+}
+
+/// `messages` with a cache breakpoint on the last block, so the next
+/// request reads everything before it from the cache.
+fn with_cache_breakpoint(messages: &[Value]) -> Vec<Value> {
+    let mut messages = messages.to_vec();
+    if let Some(last) = messages.last_mut() {
+        if let Some(text) = last["content"].as_str() {
+            last["content"] = json!([{"type": "text", "text": text}]);
+        }
+        if let Some(block) = last["content"]
+            .as_array_mut()
+            .and_then(|blocks| blocks.last_mut())
+        {
+            block["cache_control"] = json!({"type": "ephemeral"});
+        }
+    }
+    messages
 }
 
 impl LlmProvider for AnthropicProvider {
@@ -253,14 +287,27 @@ impl LlmProvider for AnthropicProvider {
         if let Some(key) = &self.api_key {
             headers.push(("x-api-key".into(), key.clone()));
         }
-        let body = json!({
+        let mut body = json!({
             "model": request.model,
-            "max_tokens": 8192,
-            "system": request.system,
+            "max_tokens": ANTHROPIC_MAX_TOKENS,
             "tools": request.tools.iter().map(anthropic_tool).collect::<Vec<_>>(),
-            "messages": request.messages,
+            "messages": with_cache_breakpoint(&request.messages),
             "stream": true,
         });
+        if !request.system.is_empty() {
+            body["system"] = json!([{
+                "type": "text",
+                "text": request.system,
+                "cache_control": {"type": "ephemeral"},
+            }]);
+        }
+        if let Some(effort) = self.effort {
+            let effort = match effort {
+                ReasoningEffort::None | ReasoningEffort::Minimal => "low",
+                other => other.name(),
+            };
+            body["output_config"] = json!({"effort": effort});
+        }
         let events =
             self.client
                 .post_stream(&format!("{}/messages", self.base_url), &headers, &body)?;
@@ -324,6 +371,24 @@ fn anthropic_stream_chunks(events: &[Value]) -> Vec<ProviderChunk> {
                                 *block_text = Value::String(format!("{current}{text}"));
                             }
                             chunks.push(ProviderChunk::TextDelta { text: text.into() });
+                        }
+                    }
+                    Some("thinking_delta") => {
+                        let thinking = delta
+                            .get("thinking")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        if let Some(block) = blocks.get_mut(index) {
+                            let current = block["thinking"].as_str().unwrap_or_default();
+                            block["thinking"] = Value::String(format!("{current}{thinking}"));
+                        }
+                    }
+                    Some("signature_delta") => {
+                        if let (Some(block), Some(signature)) = (
+                            blocks.get_mut(index),
+                            delta.get("signature").and_then(Value::as_str),
+                        ) {
+                            block["signature"] = Value::String(signature.into());
                         }
                     }
                     Some("input_json_delta") => {
@@ -1100,10 +1165,12 @@ fn visual_link_text(id: &str) -> String {
 }
 
 fn normalize_stop_reason(value: Option<&str>) -> String {
-    matches!(value, Some("tool_use" | "tool_calls" | "function_call"))
-        .then_some("tool_use")
-        .unwrap_or("end_turn")
-        .into()
+    match value {
+        Some("tool_use" | "tool_calls" | "function_call") => "tool_use",
+        Some("refusal") => "refusal",
+        _ => "end_turn",
+    }
+    .into()
 }
 
 fn normalize_openai_stop_reason(value: Option<&str>, content: &[Value]) -> String {

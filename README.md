@@ -114,23 +114,34 @@ lands — not tool procedures. Bundled skills are compiled into `cut-skills`;
 user (`~/.cut/skills`) and project (`.cut/skills`) skills override them by
 name. Every skill's guidance is part of the agent's instructions.
 
-The built-in agent retains its original transcript but constructs a bounded
-view for each provider request. It prioritizes the current user request,
-the latest tool exchange, and earlier user requirements. Older evidence and
-images are replaced by explicit `session.read` references; a recent result
-whose text is too long keeps its frames and previews. That tool can
-retrieve a message, a tool result's JSON pointer, or one archived image.
-When earlier requirements cannot fit, the view identifies their archive
-indices and tells the agent to read them before making assumptions. This is
-deterministic context reduction, not an LLM-generated semantic summary.
+The built-in agent keeps its whole transcript and sends it to the provider
+append-only, so the system prompt and everything already sent stay the same
+from request to request: the prompt cache holds, and the signatures on a
+model's thinking blocks stay valid. The project document and proposal state
+are added to the conversation as a new message whenever they change, not
+rewritten into the system prompt. Anthropic requests mark the system prompt
+and the latest message for prompt caching and send thinking blocks back
+unchanged.
+
+When the transcript outgrows the input allowance, it is compacted once:
+tool results before the latest exchange become `session.read` references
+(frames and previews included), earlier project snapshots become notes, the
+current project is added again, and earlier thinking is left out. User
+requests stay whole. From there the transcript grows append-only again.
+`session.read` retrieves a message, a tool result's JSON pointer, or one
+archived image. A single tool result whose text is too long is archived
+when it arrives, keeping its frames and previews. This is deterministic
+context reduction, not an LLM-generated summary.
 
 `CUT_AGENT_INPUT_BUDGET` controls the input allowance (default 196608 units).
 The allowance conservatively charges text by UTF-8 bytes plus overhead and
 reserves 4096 units per image; it is not an exact vendor token count. Choose
 an allowance below the selected model's context window, leaving room for
-output and reasoning. A context-limit response causes one retry with a
-smaller view, without re-executing tools. A user request or fixed catalog that
-cannot fit produces an explicit error instead of silent truncation.
+output and reasoning. A context-limit response causes one retry with half
+the allowance, and a provider that refuses earlier thinking blocks causes
+one retry without them; neither re-executes tools. A user request or fixed
+catalog that cannot fit produces an explicit error instead of silent
+truncation.
 
 Inbound MCP transport limits each message to 4 MiB. On Unix, it times out
 after 30 seconds (`CUT_MCP_TIMEOUT_MS` overrides it) and running calls observe
@@ -168,7 +179,9 @@ target/release/lcut --provider openai --model anthropic/claude-sonnet-4 \
 ```
 
 Responses mode and reasoning effort are selected with `--api-mode responses`
-and `--reasoning-effort low|medium|high|...`.
+and `--reasoning-effort low|medium|high|...`. With Anthropic, the default
+model is `claude-opus-5-5`, and `--reasoning-effort` sets its effort
+(`none` and `minimal` ask for `low`).
 
 ## MCP
 

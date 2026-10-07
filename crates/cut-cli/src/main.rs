@@ -41,7 +41,7 @@ struct Args {
     #[arg(long = "api-mode")]
     api_mode: Option<String>,
 
-    /// OpenAI Responses reasoning effort.
+    /// Reasoning effort: OpenAI Responses reasoning, or Anthropic effort.
     #[arg(long = "reasoning-effort")]
     reasoning_effort: Option<String>,
 
