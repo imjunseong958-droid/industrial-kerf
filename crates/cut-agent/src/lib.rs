@@ -172,8 +172,9 @@ impl AgentTool {
 pub type ToolMap = BTreeMap<String, AgentTool>;
 
 /// Context read fresh for every model request, such as the current project
-/// document. It follows the fixed system prompt, so the fixed part stays
-/// cacheable while the context tracks every edit.
+/// document. When it changes it is added to the conversation as a new
+/// message, so the system prompt and everything already sent stay the same
+/// and stay cached.
 pub type ContextSource = Arc<dyn Fn() -> Result<String, String> + Send + Sync>;
 
 /// Progress emitted by an agent session. Payloads intended for a UI are
@@ -224,6 +225,13 @@ impl fmt::Display for AgentError {
 
 impl std::error::Error for AgentError {}
 
+/// A provider refused thinking blocks made for a different view of the
+/// conversation.
+fn is_thinking_mismatch(error: &ProviderError) -> bool {
+    let text = format!("{} {}", error.code, error.message);
+    text.contains("`thinking` block") && text.contains("signature")
+}
+
 fn is_context_limit(error: &ProviderError) -> bool {
     let text = format!("{} {}", error.code, error.message).to_lowercase();
     [
@@ -249,6 +257,9 @@ pub struct AgentSession {
     llm: Box<dyn LlmProvider>,
     max_turns: usize,
     context_budget: ContextBudget,
+    view: context::View,
+    /// The context last added to the conversation.
+    snapshot: Option<String>,
     aborted: Arc<AtomicBool>,
 }
 
@@ -301,10 +312,10 @@ impl Default for AgentSessionOptions {
 impl AgentSession {
     pub fn new(options: AgentSessionOptions) -> Self {
         let llm: Box<dyn LlmProvider> = match (options.provider, options.api_mode) {
-            (ProviderName::Anthropic, _) => Box::new(AnthropicProvider::new(
-                options.api_key.clone(),
-                options.base_url.clone(),
-            )),
+            (ProviderName::Anthropic, _) => Box::new(
+                AnthropicProvider::new(options.api_key.clone(), options.base_url.clone())
+                    .with_effort(options.reasoning_effort),
+            ),
             (ProviderName::Openai, OpenAiApiMode::Chat) => Box::new(OpenAiProvider::new(
                 options.api_key.clone(),
                 options.base_url.clone(),
@@ -367,6 +378,8 @@ impl AgentSession {
             llm,
             max_turns: max_turns.max(1),
             context_budget: ContextBudget::default(),
+            view: context::View::default(),
+            snapshot: None,
             aborted: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -408,22 +421,27 @@ impl AgentSession {
             .execute(input, &self.aborted)
     }
 
-    /// The fixed system prompt followed by the current context.
-    pub fn system(&self) -> String {
-        match self.context.as_ref().map(|context| context()) {
-            None => self.system_prompt.clone(),
-            Some(Ok(context)) if context.is_empty() => self.system_prompt.clone(),
-            Some(Ok(context)) => format!("{}\n\n{context}", self.system_prompt),
-            Some(Err(error)) => format!(
-                "{}\n\nThe current project could not be read: {error}",
-                self.system_prompt
-            ),
+    /// Add the current context to the conversation when it differs from
+    /// the last one added. The conversation only grows.
+    fn add_context(&mut self) {
+        let Some(context) = self.context.as_ref() else {
+            return;
+        };
+        let text = context()
+            .unwrap_or_else(|error| format!("The current project could not be read: {error}"));
+        if text.is_empty() || self.snapshot.as_deref() == Some(text.as_str()) {
+            return;
         }
+        self.messages.push(json!({"role": "user", "content": [{
+            "type": "text",
+            "text": format!("{}\n\n{text}", context::SNAPSHOT_HEADER),
+        }]}));
+        self.snapshot = Some(text);
     }
 
-    fn provider_request(&self, budget: &ContextBudget) -> Result<ProviderRequest, AgentError> {
+    fn provider_request(&mut self, budget: &ContextBudget) -> Result<ProviderRequest, AgentError> {
         let tools = self.normalized_tools();
-        let system = self.system();
+        let system = self.system_prompt.clone();
         let fixed = system.len()
             + context::units(
                 &serde_json::to_value(&tools)
@@ -432,29 +450,44 @@ impl AgentSession {
             + tools.len() * 256
             + 1024;
         let available = budget.max_input_units.checked_sub(fixed)
-            .ok_or_else(|| AgentError::ContextBudget("System prompt, project context, and tool definitions exceed the input allowance. Increase the budget for this model.".into()))?;
-        let messages = context::project(&self.messages, available, budget)
+            .ok_or_else(|| AgentError::ContextBudget("System prompt and tool definitions exceed the input allowance. Increase the budget for this model.".into()))?;
+        self.add_context();
+        let view = context::fit(&self.messages, self.view, available, budget)
+            .map_err(AgentError::ContextBudget)?;
+        if view.archived != self.view.archived {
+            // Compacting archived the project context; show it again.
+            self.snapshot = None;
+            self.add_context();
+        }
+        self.view = context::fit(&self.messages, view, available, budget)
             .map_err(AgentError::ContextBudget)?;
         Ok(ProviderRequest {
             model: self.model.clone(),
             system,
             tools,
-            messages,
+            messages: context::render(&self.messages, &self.view, budget),
         })
     }
 
     fn stream_bounded(&mut self) -> Result<Vec<ProviderChunk>, AgentError> {
-        let request = self.provider_request(&self.context_budget)?;
+        let budget = self.context_budget.clone();
+        let request = self.provider_request(&budget)?;
+        // No tools have run for a refused request. Retry once; never restart
+        // an edit or replay a mutating tool call.
         match self.llm.stream(&request) {
             Ok(chunks) => Ok(chunks),
             Err(error) if is_context_limit(&error) => {
-                // No tools have run for this request. Retry once with a smaller
-                // view; never restart an edit or replay a mutating tool call.
-                let mut smaller = self.context_budget.clone();
+                let mut smaller = budget;
                 smaller.max_input_units /= 2;
-                smaller.recent_tool_messages = 0;
+                self.context_budget = smaller.clone();
                 let request = self.provider_request(&smaller)?;
-                self.context_budget = smaller;
+                self.llm.stream(&request).map_err(AgentError::Provider)
+            }
+            Err(error) if is_thinking_mismatch(&error) => {
+                // Earlier thinking no longer matches the conversation it was
+                // made in; leave it out from here on.
+                self.view.thinking_from = self.messages.len();
+                let request = self.provider_request(&budget)?;
                 self.llm.stream(&request).map_err(AgentError::Provider)
             }
             Err(error) => Err(AgentError::Provider(error)),
@@ -519,6 +552,12 @@ impl AgentSession {
                 })
             {
                 return Err(AgentError::Provider(ProviderError::new("INVALID_PROVIDER_RESPONSE","Tool calls must have unique non-empty IDs, names, object inputs, and a tool-use stop reason. No tools were executed.")));
+            }
+            if stop_reason == "refusal" {
+                return Err(AgentError::Provider(ProviderError::new(
+                    "REFUSED",
+                    "The model declined this request.",
+                )));
             }
             emit(AgentEvent::TurnStarted {
                 stop_reason: bounded_text(&stop_reason, MAX_AGENT_SUMMARY_TEXT_BYTES),
@@ -617,6 +656,9 @@ impl AgentSession {
         let mut session = Self::new(options);
         session.messages = serde_json::from_slice(&bytes)
             .map_err(|error| AgentError::Serialization(error.to_string()))?;
+        // Thinking from the earlier session was made for a view of it this
+        // session does not reproduce.
+        session.view.thinking_from = session.messages.len();
         Ok(session)
     }
 }
@@ -911,9 +953,134 @@ mod tests {
     }
 
     #[test]
-    fn context_is_read_fresh_after_the_fixed_prompt_for_every_request() {
+    fn anthropic_requests_cache_their_prefix_and_keep_signed_thinking() {
+        let client = Arc::new(FakeStreamingClient {
+            events: vec![
+                json!({"type":"message_start","message":{"id":"msg"}}),
+                json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}),
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Check the cut."}}),
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"EqQB"}}),
+                json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call_1","name":"look","input":{}}}),
+                json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{}"}}),
+                json!({"type":"message_delta","delta":{"stop_reason":"tool_use"}}),
+            ],
+            bodies: Mutex::new(Vec::new()),
+        });
+        let provider = AnthropicProvider::with_client(client.clone(), None, None)
+            .with_effort(Some(ReasoningEffort::High));
+        let chunks = provider.stream(&provider_request()).unwrap();
+        let ProviderChunk::MessageEnd {
+            stop_reason,
+            content,
+        } = chunks.last().unwrap()
+        else {
+            panic!("expected message end");
+        };
+        assert_eq!(stop_reason, "tool_use");
+        assert_eq!(
+            content[0],
+            json!({"type":"thinking","thinking":"Check the cut.","signature":"EqQB"})
+        );
+        assert!(!chunks
+            .iter()
+            .any(|chunk| matches!(chunk, ProviderChunk::TextDelta { .. })));
+
+        let body = &client.bodies.lock().unwrap()[0];
+        assert_eq!(body["system"][0]["text"], "fixture-system");
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(
+            body["messages"][0]["content"],
+            json!([{"type":"text","text":"hello","cache_control":{"type":"ephemeral"}}])
+        );
+        assert_eq!(body["output_config"]["effort"], "high");
+        assert_eq!(DEFAULT_ANTHROPIC_MODEL, "claude-opus-5-5");
+    }
+
+    #[test]
+    fn a_refusal_is_an_error_not_an_answer() {
+        let provider = FakeProvider {
+            chunks: vec![ProviderChunk::MessageEnd {
+                stop_reason: "refusal".into(),
+                content: vec![],
+            }],
+        };
+        let mut session = AgentSession::from_provider(
+            Box::new(provider),
+            None,
+            None,
+            vec![],
+            ToolMap::new(),
+            2,
+            OpenAiApiMode::Chat,
+            None,
+        );
+        let error = session.run("edit").unwrap_err().to_string();
+        assert!(error.contains("REFUSED"), "{error}");
+        assert_eq!(session.messages.len(), 1);
+    }
+
+    #[test]
+    fn a_thinking_mismatch_retries_once_without_earlier_thinking() {
+        struct Strict {
+            requests: Arc<Mutex<Vec<ProviderRequest>>>,
+        }
+        impl LlmProvider for Strict {
+            fn name(&self) -> ProviderName {
+                ProviderName::Anthropic
+            }
+            fn default_model(&self) -> &'static str {
+                "test"
+            }
+            fn stream(
+                &self,
+                request: &ProviderRequest,
+            ) -> Result<Vec<ProviderChunk>, ProviderError> {
+                self.requests.lock().unwrap().push(request.clone());
+                if request
+                    .messages
+                    .iter()
+                    .any(|m| m.to_string().contains("\"thinking\""))
+                {
+                    return Err(ProviderError::new(
+                        "invalid_request_error",
+                        "messages.1.content.0: Invalid `signature` in `thinking` block.",
+                    ));
+                }
+                Ok(vec![ProviderChunk::MessageEnd {
+                    stop_reason: "end_turn".into(),
+                    content: vec![json!({"type":"text","text":"done"})],
+                }])
+            }
+        }
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let mut session = AgentSession::from_provider(
+            Box::new(Strict {
+                requests: Arc::clone(&requests),
+            }),
+            None,
+            None,
+            vec![],
+            ToolMap::new(),
+            2,
+            OpenAiApiMode::Chat,
+            None,
+        );
+        session.messages = vec![
+            json!({"role":"user","content":"first"}),
+            json!({"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"old"},{"type":"text","text":"ok"}]}),
+        ];
+        assert_eq!(session.run("again").unwrap(), "done");
+        assert_eq!(requests.lock().unwrap().len(), 2);
+        assert!(
+            session.messages[1].to_string().contains("old"),
+            "the transcript keeps it"
+        );
+    }
+
+    #[test]
+    fn context_is_added_when_it_changes_and_the_conversation_only_grows() {
         struct RecordingProvider {
-            systems: Arc<Mutex<Vec<String>>>,
+            requests: Arc<Mutex<Vec<ProviderRequest>>>,
         }
         impl LlmProvider for RecordingProvider {
             fn name(&self) -> ProviderName {
@@ -926,25 +1093,30 @@ mod tests {
                 &self,
                 request: &ProviderRequest,
             ) -> Result<Vec<ProviderChunk>, ProviderError> {
-                let mut systems = self.systems.lock().unwrap();
-                systems.push(request.system.clone());
-                let content = if systems.len() == 1 {
-                    vec![json!({"type":"tool_use","id":"call_1","name":"edit","input":{}})]
-                } else {
-                    vec![json!({"type":"text","text":"done"})]
+                let mut requests = self.requests.lock().unwrap();
+                requests.push(request.clone());
+                // Two edits, then a look that changes nothing, then done.
+                let (stop, content) = match requests.len() {
+                    1 | 2 => (
+                        "tool_use",
+                        json!({"type":"tool_use","id":format!("edit_{}", requests.len()),"name":"edit","input":{}}),
+                    ),
+                    3 => (
+                        "tool_use",
+                        json!({"type":"tool_use","id":"look_3","name":"look","input":{}}),
+                    ),
+                    _ => ("end_turn", json!({"type":"text","text":"done"})),
                 };
                 Ok(vec![ProviderChunk::MessageEnd {
-                    stop_reason: if systems.len() == 1 {
-                        "tool_use"
-                    } else {
-                        "end_turn"
-                    }
-                    .into(),
-                    content,
+                    stop_reason: stop.into(),
+                    content: vec![
+                        json!({"type":"thinking","thinking":"","signature":"sig"}),
+                        content,
+                    ],
                 }])
             }
         }
-        let systems = Arc::new(Mutex::new(Vec::new()));
+        let requests = Arc::new(Mutex::new(Vec::new()));
         let revision = Arc::new(std::sync::atomic::AtomicU64::new(1));
         let mut tools = ToolMap::new();
         let edited = Arc::clone(&revision);
@@ -955,16 +1127,20 @@ mod tests {
                 Ok(json!({"staged":true}))
             }),
         );
+        tools.insert(
+            "look".into(),
+            AgentTool::new("look", "look", json!({"type":"object"}), |_| Ok(json!({}))),
+        );
         let read = Arc::clone(&revision);
         let mut session = AgentSession::from_provider(
             Box::new(RecordingProvider {
-                systems: Arc::clone(&systems),
+                requests: Arc::clone(&requests),
             }),
             None,
             Some("fixed".into()),
             vec![],
             tools,
-            4,
+            8,
             OpenAiApiMode::Chat,
             None,
         )
@@ -972,17 +1148,36 @@ mod tests {
             Ok(format!("revision {}", read.load(Ordering::SeqCst)))
         }));
         assert_eq!(session.run("cut it").unwrap(), "done");
+        let requests = requests.lock().unwrap();
+        assert!(requests.iter().all(|request| request.system == "fixed"));
+        for pair in requests.windows(2) {
+            assert_eq!(
+                pair[1].messages[..pair[0].messages.len()],
+                pair[0].messages[..],
+                "every request extends the one before it"
+            );
+        }
+        let snapshots = requests
+            .last()
+            .unwrap()
+            .messages
+            .iter()
+            .filter_map(|message| message["content"][0]["text"].as_str())
+            .filter(|text| text.starts_with(context::SNAPSHOT_HEADER))
+            .map(|text| text.lines().last().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        // A snapshot for each revision, none for the look that changed nothing.
+        assert_eq!(snapshots, ["revision 1", "revision 2", "revision 3"]);
         assert_eq!(
-            *systems.lock().unwrap(),
-            vec!["fixed\n\nrevision 1", "fixed\n\nrevision 2"]
+            requests[3].messages[2]["content"][0]["signature"], "sig",
+            "thinking goes back unchanged"
         );
-        assert_eq!(session.system_prompt, "fixed");
         let names = session
             .normalized_tools()
             .into_iter()
             .map(|tool| tool.name)
             .collect::<Vec<_>>();
-        assert_eq!(names, ["edit", "session.read"]);
+        assert_eq!(names, ["edit", "look", "session.read"]);
         assert!(session.execute_tool("tools.call", json!({})).is_err());
     }
 
