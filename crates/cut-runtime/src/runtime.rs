@@ -1018,6 +1018,7 @@ impl Runtime {
         quality: &str,
         range: Option<RenderRange>,
         proposal: Option<&str>,
+        sequence: Option<&str>,
     ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
         if !matches!(quality, "preview" | "full") {
             return Err(RuntimeError::new(
@@ -1028,7 +1029,9 @@ impl Runtime {
         let proposed = proposal.map(|id| self.proposal_result(id)).transpose()?;
         let project = proposed.as_ref().unwrap_or(&self.state.project);
         let document = self.renderable(project);
-        let duration = kernel::program_duration(project).seconds();
+        let duration = kernel::render_sequence(project, sequence)?
+            .duration()
+            .seconds();
         if let Some(range) = range.as_ref() {
             RenderRange::new(range.start, range.duration)?;
             if range.end() > duration + 1e-9 {
@@ -1061,6 +1064,7 @@ impl Runtime {
             output_path: Some(output.to_string_lossy().into_owned()),
             error: None,
             range,
+            sequence: sequence.map(str::to_owned),
             progress: 0.0,
         };
         let mut candidate = self.state.clone();
@@ -1337,6 +1341,7 @@ impl Runtime {
                 start,
                 duration,
                 proposal_id,
+                sequence,
             } => {
                 let range = match (start, duration) {
                     (None, None) => None,
@@ -1348,8 +1353,12 @@ impl Runtime {
                         ))
                     }
                 };
-                let (job, document, output) =
-                    self.start_render_range(&quality, range, proposal_id.as_deref())?;
+                let (job, document, output) = self.start_render_range(
+                    &quality,
+                    range,
+                    proposal_id.as_deref(),
+                    sequence.as_deref(),
+                )?;
                 Ok(RuntimeResponse::RenderStarted {
                     job,
                     document,
@@ -2747,7 +2756,9 @@ mod tests {
             std::env::temp_dir().join(format!("cut-runtime-job-recovery-{}", unique_id()));
         let job_id = {
             let mut runtime = Runtime::open(&directory).unwrap();
-            let (job, _, _) = runtime.start_render_range("preview", None, None).unwrap();
+            let (job, _, _) = runtime
+                .start_render_range("preview", None, None, None)
+                .unwrap();
             assert_eq!(job.status, "queued");
             job.job_id
         };
@@ -2768,8 +2779,12 @@ mod tests {
             std::env::temp_dir().join(format!("cut-runtime-job-cancel-{}", unique_id()));
         let (cancelled_id, queued_id) = {
             let mut runtime = Runtime::open(&directory).unwrap();
-            let (cancelled, _, _) = runtime.start_render_range("preview", None, None).unwrap();
-            let (queued, _, _) = runtime.start_render_range("preview", None, None).unwrap();
+            let (cancelled, _, _) = runtime
+                .start_render_range("preview", None, None, None)
+                .unwrap();
+            let (queued, _, _) = runtime
+                .start_render_range("preview", None, None, None)
+                .unwrap();
             let cancel_path = render_cancel_path(&directory, &cancelled.job_id);
             let queued_path = render_cancel_path(&directory, &queued.job_id);
             let cancelled_job = runtime.cancel_render(&cancelled.job_id).unwrap();
@@ -2853,13 +2868,23 @@ mod tests {
         assert_eq!(snapshot.duration, 4.0);
 
         let (_, document, _) = runtime
-            .start_render_range("preview", Some(RenderRange::new(1.0, 2.0).unwrap()), None)
+            .start_render_range(
+                "preview",
+                Some(RenderRange::new(1.0, 2.0).unwrap()),
+                None,
+                None,
+            )
             .unwrap();
         let rendered = parse_document(&document).unwrap();
         assert_eq!(rendered.media[0].path, media);
         assert_eq!(
             runtime
-                .start_render_range("preview", Some(RenderRange::new(3.0, 2.0).unwrap()), None)
+                .start_render_range(
+                    "preview",
+                    Some(RenderRange::new(3.0, 2.0).unwrap()),
+                    None,
+                    None,
+                )
                 .unwrap_err()
                 .code,
             "INVALID_RENDER_RANGE"
@@ -2886,6 +2911,7 @@ mod tests {
                 "preview",
                 Some(RenderRange::new(1.0, 2.0).unwrap()),
                 Some(&proposal_id),
+                None,
             )
             .unwrap();
         let proposed = parse_document(&document).unwrap();
@@ -2897,6 +2923,7 @@ mod tests {
                     "preview",
                     Some(RenderRange::new(2.0, 2.0).unwrap()),
                     Some(&proposal_id),
+                    None,
                 )
                 .unwrap_err()
                 .code,
@@ -2904,7 +2931,14 @@ mod tests {
         );
         assert_eq!(
             runtime
-                .start_render_range("preview", None, Some("proposal-0"))
+                .start_render_range("preview", None, None, Some("s9"))
+                .unwrap_err()
+                .code,
+            "UNKNOWN_SEQUENCE"
+        );
+        assert_eq!(
+            runtime
+                .start_render_range("preview", None, Some("proposal-0"), None)
                 .unwrap_err()
                 .code,
             "PROPOSAL_NOT_FOUND"

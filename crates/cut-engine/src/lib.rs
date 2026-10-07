@@ -30,8 +30,8 @@ pub use proxy::{create_proxy_cache_key, proxy_ffmpeg_args};
 pub use resources::{budget, budget_for_cpus, HardwareEncodePolicy, ResourceBudget};
 pub use sidecar::CancellationToken;
 pub use transcription::{
-    listen_cached, parse_whisper_json, transcribe_cached, TimeRange, Transcript, TranscriptCue,
-    TranscriptWord, TranscriptionBackend, TranscriptionOptions, TranscriptionProgress,
-    TranscriptionResult, TranscriptionStage, MAX_LISTEN_RANGE_SECONDS,
+    cached_transcripts, listen_cached, parse_whisper_json, transcribe_cached, TimeRange,
+    Transcript, TranscriptCue, TranscriptWord, TranscriptionBackend, TranscriptionOptions,
+    TranscriptionProgress, TranscriptionResult, TranscriptionStage, MAX_LISTEN_RANGE_SECONDS,
     MAX_TRANSCRIPTION_RANGE_SECONDS, TRANSCRIPTION_SCHEMA_VERSION,
 };

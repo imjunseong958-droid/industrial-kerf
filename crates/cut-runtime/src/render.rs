@@ -18,8 +18,8 @@ pub fn render_cancel_path(directory: &Path, job_id: &str) -> PathBuf {
 
 /// Run a queued render job in-process and record with cutd how it ended:
 /// running, then completed with its output, or failed unless it was
-/// cancelled. `document` is the `.cut` text the job carries; its first
-/// sequence is rendered. `on_progress` runs on this thread and must not
+/// cancelled. `document` is the `.cut` text the job carries; the job's
+/// sequence, or the first, is rendered. `on_progress` runs on this thread and must not
 /// block on UI state.
 pub fn run_render_job(
     client: &RuntimeClient,
@@ -35,6 +35,7 @@ pub fn run_render_job(
         document,
         output,
         draft,
+        job.sequence.as_deref(),
         job.range.as_ref(),
         &cancel_file,
         on_progress,
@@ -59,15 +60,17 @@ fn render(
     document: &str,
     output: &Path,
     draft: bool,
+    sequence: Option<&str>,
     range: Option<&RenderRange>,
     cancel_file: &Path,
     mut on_progress: impl FnMut(f64),
 ) -> Result<(), RuntimeError> {
     let project = kernel::parse(document)?;
+    let target = kernel::render_sequence(&project, sequence)?;
     let window = match range {
         Some(range) => {
             RenderRange::new(range.start, range.duration)?;
-            Some(kernel::time_range(&project, range.start, range.end())?)
+            Some(kernel::time_range(target, range.start, range.end())?)
         }
         None => None,
     };
@@ -83,7 +86,7 @@ fn render(
     );
     let result = cut_engine::render::render_program_with_cancellation(
         &project,
-        None,
+        sequence,
         window,
         &opts,
         &cancellation,

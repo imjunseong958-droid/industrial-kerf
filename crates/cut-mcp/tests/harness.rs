@@ -282,6 +282,102 @@ fn render_runs_a_range_to_a_file() {
     assert_eq!(invalid["code"], "INVALID_ARGUMENTS");
 }
 
+#[test]
+fn edits_are_checked_like_an_editor_would() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    // Lifting the first second leaves nothing on screen there.
+    let lifted = ok(&router, "edit", json!({"script": "lift from=0f to=1s"}));
+    let findings = lifted["check"]["findings"].as_array().unwrap();
+    let black = findings
+        .iter()
+        .find(|finding| finding["code"] == "picture.black")
+        .unwrap_or_else(|| panic!("{lifted}"));
+    assert!(
+        black["message"]
+            .as_str()
+            .unwrap()
+            .contains("from 00:00:00:00 to 00:00:01:00"),
+        "{black}"
+    );
+    assert_eq!(lifted["check"]["valid"], true, "a warning: {lifted}");
+}
+
+#[test]
+fn any_sequence_can_be_seen_and_rendered() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    let script = "sequence add s2 rate=30 size=180x320
+use s2
+track add VS2 video
+insert media=m1 src=1s dur=1s at=0f on=VS2 as=v2";
+    let proposal = ok(&router, "edit", json!({"script": script}));
+    let id = proposal["proposal"].as_str().unwrap().to_owned();
+    assert_eq!(proposal["preview"]["sequence"], "s2", "{proposal}");
+    assert!(has_image(&proposal["preview"]["after"]), "{proposal}");
+    // A wide picture in a tall frame leaves its edges black.
+    let edges = proposal["check"]["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|finding| finding["code"] == "picture.edges")
+        .unwrap_or_else(|| panic!("{proposal}"))
+        .clone();
+    assert_eq!(edges["entity"], "v2", "{edges}");
+
+    let frames = ok(
+        &router,
+        "look",
+        json!({"at": ["15f"], "sequence": "s2", "proposal": id}),
+    );
+    assert_eq!(frames["sequence"], "s2");
+    assert!(has_image(&frames["frames"][0]), "{frames}");
+    let unknown = error(&router, "look", json!({"at": ["0f"], "sequence": "s9"}));
+    assert_eq!(unknown["code"], "UNKNOWN_SEQUENCE");
+    let mixed = error(&router, "look", json!({"media": "m1", "sequence": "s2"}));
+    assert_eq!(mixed["code"], "INVALID_ARGUMENTS");
+
+    let started = ok(
+        &router,
+        "render",
+        json!({"sequence": "s2", "proposal": id, "quality": "full"}),
+    );
+    assert_eq!(started["sequence"], "s2");
+    let finished = finish(&router, started["job"].as_str().unwrap());
+    assert_eq!(finished["status"], "completed", "{finished}");
+    let probe = Command::new("ffprobe")
+        .args(["-v", "error", "-select_streams", "v:0"])
+        .args(["-show_entries", "stream=width,height", "-of", "csv=p=0"])
+        .arg(finished["output"].as_str().unwrap())
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&probe.stdout).trim(), "180,320");
+}
+
+#[test]
+fn look_hears_what_the_sequence_says() {
+    if std::env::var_os("CUT_WHISPER_MODEL").is_none() {
+        eprintln!("skipping: CUT_WHISPER_MODEL is not set");
+        return;
+    }
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    let heard = ok(
+        &router,
+        "look",
+        json!({"transcript": true, "from": "1s", "to": "3s"}),
+    );
+    assert_eq!(heard["sequence"], "s1");
+    assert_eq!(heard["from"], "00:00:01:00");
+    assert_eq!(heard["to"], "00:00:03:00");
+    assert!(heard["transcript"].is_array(), "{heard}");
+    let mixed = error(&router, "look", json!({"transcript": true, "at": ["1s"]}));
+    assert_eq!(mixed["code"], "INVALID_ARGUMENTS");
+}
+
 fn finish(router: &CutMcpRouter, job: &str) -> Value {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {

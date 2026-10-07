@@ -54,8 +54,10 @@ scripts in the language below.
 - `look` shows what is there: with no arguments the document; with `media` \
 that media's index (where it is used, its scene cuts and pauses, and what is \
 said on request, word by word with `words`); with `at` frames — source \
-frames of a media, or program frames of the sequence. With `proposal` it shows what a pending proposal \
-would make: its document and its program frames.
+frames of a media, or program frames of the sequence; with `transcript` and \
+no media, what the sequence says. `sequence` picks one other than the first. \
+With `proposal` it shows what a pending proposal would make: its document, \
+its frames, and what it says.
 - `edit` runs one script. It becomes a proposal for the user, returned with \
 the document diff, check findings, and a before/after preview: the frames \
 either side of each cut it made or moved, and the middle of a clip it changed \
@@ -65,9 +67,13 @@ pending proposal's id as `extend` to run more lines on top of it, or as \
 - `render` renders the sequence, or a range of it, to a file; with \
 `proposal`, what that proposal would make.
 
+Check findings include what an editor would catch: black frames, picture that \
+leaves the frame's edges black, flash frames, and sound cut inside a word \
+(known once a transcript of that media has been made).
+
 Work like an editor. Look at the footage before choosing ranges, and look at \
-the proposal before saying it is done: its preview, and with `proposal` the \
-frames around its cuts. Base every time, word, and frame on something you \
+the proposal before saying it is done: its preview, its findings, and with \
+`proposal` the frames around its cuts and, for speech, what it says. Base every time, word, and frame on something you \
 saw or heard; never invent them. A refused script names the line and the \
 clip that stopped it.";
 
@@ -148,14 +154,15 @@ fn bounded_lines(text: &str, max: usize, note: &str) -> String {
 pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotations)> {
     let time = "Timecode (`01:00:04:12`), frames (`96f`), or seconds (`4.5s`).";
     let proposal = "The id of the pending proposal to see: what it would make of the project.";
+    let sequence = "A sequence id from the document; the first sequence when absent.";
     Some(match name {
         "look" => (
             "See the project and its footage. No arguments: the annotated document and \
              proposal state. `media`: that media's index — where it is used, scene cuts, \
              pauses, and with `transcript` what is said (`words` times each word). \
              `at`: frames, as source frames of `media` or program frames of the \
-             sequence. `proposal`: the same, as a \
-             pending proposal would make the project.",
+             sequence. `transcript` without `media`: what the sequence says. \
+             `proposal`: the same, as a pending proposal would make the project.",
             json!({
                 "type": "object",
                 "properties": {
@@ -167,11 +174,12 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                         "maxItems": MAX_LOOK_FRAMES,
                         "description": format!("Frames to see: media positions with `media`, otherwise sequence positions. {time}")
                     },
-                    "transcript": {"type": "boolean", "description": "With `media`: include what is said (local transcription, up to 15 minutes per call)."},
+                    "transcript": {"type": "boolean", "description": "What is said, by local transcription, up to 15 minutes per call: of `media`, or else of the sequence as it plays."},
                     "words": {"type": "boolean", "description": "With `transcript`: time every word, for cutting on speech. Choose a short range; it is long."},
-                    "from": {"type": "string", "description": format!("With `transcript`: the first media position to transcribe. {time}")},
-                    "to": {"type": "string", "description": "With `transcript`: the media position to stop at."},
+                    "from": {"type": "string", "description": format!("With `transcript`: the first position to transcribe, of `media` or the sequence. {time}")},
+                    "to": {"type": "string", "description": "With `transcript`: the position to stop at."},
                     "width": {"type": "integer", "minimum": 64, "maximum": 1920, "description": "Frame width in pixels (default 960)."},
+                    "sequence": {"type": "string", "description": sequence},
                     "proposal": {"type": "string", "description": proposal}
                 },
                 "additionalProperties": false
@@ -184,8 +192,8 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
         ),
         "edit" => (
             "Run an edit script. It becomes a proposal for the user, returned with the \
-             document diff, check findings, and a before/after preview of the changed \
-             range. The project is unchanged until the user accepts it. `extend` builds \
+             document diff, check findings, and a before/after preview of the frames \
+             around each cut it changed. The project is unchanged until the user accepts it. `extend` builds \
              on a pending proposal; `revise` replaces it.",
             json!({
                 "type": "object",
@@ -213,6 +221,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "quality": {"type": "string", "enum": ["draft", "full"], "description": "Default draft."},
                     "from": {"type": "string", "description": format!("Sequence position. {time}")},
                     "to": {"type": "string", "description": "Sequence position."},
+                    "sequence": {"type": "string", "description": sequence},
                     "proposal": {"type": "string", "description": proposal},
                     "job": {"type": "string", "description": "A render job id."},
                     "cancel": {"type": "boolean"}
@@ -242,6 +251,7 @@ struct LookInput {
     from: Option<String>,
     to: Option<String>,
     width: Option<u32>,
+    sequence: Option<String>,
     proposal: Option<String>,
 }
 
@@ -259,6 +269,7 @@ struct RenderInput {
     quality: Option<String>,
     from: Option<String>,
     to: Option<String>,
+    sequence: Option<String>,
     proposal: Option<String>,
     job: Option<String>,
     #[serde(default)]
@@ -300,12 +311,49 @@ fn diagnostics(errors: &[cut_model::Diagnostic]) -> String {
         .join("\n")
 }
 
-/// The sequence the renderer plays: the first one.
-fn program(project: &Project) -> Result<&Sequence, McpError> {
-    project
-        .sequences
-        .first()
-        .ok_or_else(|| McpError::new("NO_SEQUENCE", "the project has no sequence"))
+/// The sequence a request is about: `id`, or the first one.
+fn program<'a>(project: &'a Project, id: Option<&str>) -> Result<&'a Sequence, McpError> {
+    match id {
+        Some(id) => project.sequence(id).ok_or_else(|| {
+            McpError::new(
+                "UNKNOWN_SEQUENCE",
+                format!("no sequence `{id}` in the project"),
+            )
+        }),
+        None => project
+            .sequences
+            .first()
+            .ok_or_else(|| McpError::new("NO_SEQUENCE", "the project has no sequence")),
+    }
+}
+
+/// The cues of `transcript`, `offset` seconds later, on `clock`; with
+/// `words`, each word's time too.
+fn cues(transcript: &cut_engine::Transcript, offset: f64, clock: &Clock, words: bool) -> Value {
+    let at = |seconds: f64| print_seconds(clock, offset + seconds);
+    json!(transcript
+        .cues
+        .iter()
+        .map(|cue| {
+            let mut value = json!({
+                "from": at(cue.start),
+                "to": at(cue.end),
+                "text": cue.text.trim(),
+            });
+            if words {
+                value["words"] = json!(cue
+                    .words
+                    .iter()
+                    .map(|word| json!({
+                        "from": at(word.start),
+                        "to": at(word.end),
+                        "text": word.text.trim(),
+                    }))
+                    .collect::<Vec<_>>());
+            }
+            value
+        })
+        .collect::<Vec<_>>())
 }
 
 fn position(clock: &Clock, text: &str) -> Result<Time, McpError> {
@@ -362,11 +410,22 @@ impl CutMcpRouter {
 
     pub(super) fn look(&self, arguments: Value) -> Result<Value, McpError> {
         let input: LookInput = input(arguments)?;
-        if input.media.is_none() && (input.transcript || input.from.is_some() || input.to.is_some())
-        {
+        if input.media.is_some() && input.sequence.is_some() {
             return Err(McpError::new(
                 "INVALID_ARGUMENTS",
-                "transcript, from, and to need `media`",
+                "`sequence` chooses program frames or what a sequence says; not with `media`",
+            ));
+        }
+        if !input.transcript && (input.from.is_some() || input.to.is_some()) {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "from and to choose a transcript range; pass transcript: true",
+            ));
+        }
+        if input.media.is_none() && input.transcript && !input.at.is_empty() {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "pass `at` for frames or `transcript` for what is said, not both",
             ));
         }
         if input.words && !input.transcript {
@@ -381,7 +440,12 @@ impl CutMcpRouter {
                 format!("look shows at most {MAX_LOOK_FRAMES} frames at a time"),
             ));
         }
-        if input.media.is_none() && input.at.is_empty() && input.proposal.is_none() {
+        if input.media.is_none()
+            && input.at.is_empty()
+            && !input.transcript
+            && input.sequence.is_none()
+            && input.proposal.is_none()
+        {
             let (revision, document) = self.runtime.get_document(true)?;
             let state = self.runtime.get_state()?;
             return Ok(json!({
@@ -393,11 +457,18 @@ impl CutMcpRouter {
         let (revision, project) = self.project_at(input.proposal.as_deref())?;
         let width = input.width.unwrap_or(DEFAULT_FRAME_WIDTH).clamp(64, 1920);
         let mut result = match input.media.as_deref() {
+            None if input.transcript => self.program_transcript(&project, revision, &input)?,
             None if input.at.is_empty() => json!({
                 "revision": revision,
                 "document": print_document(&project, catalog(), PrintOptions { annotate: true }),
             }),
-            None => self.program_frames(&project, revision, &input.at, width)?,
+            None => self.program_frames(
+                &project,
+                input.sequence.as_deref(),
+                revision,
+                &input.at,
+                width,
+            )?,
             Some(media_id) => {
                 let media = project.media(media_id).ok_or_else(|| {
                     McpError::new(
@@ -477,11 +548,6 @@ impl CutMcpRouter {
         }
         if input.transcript {
             result["transcript"] = self.transcript(&path, media, &clock, input)?;
-        } else if input.from.is_some() || input.to.is_some() {
-            return Err(McpError::new(
-                "INVALID_ARGUMENTS",
-                "from and to choose a transcript range; pass transcript: true",
-            ));
         }
         Ok(result)
     }
@@ -568,30 +634,118 @@ impl CutMcpRouter {
             |_| {},
         )
         .map_err(engine_error)?;
-        Ok(json!(result
-            .transcript
-            .cues
-            .iter()
-            .map(|cue| {
-                let mut value = json!({
-                    "from": print_seconds(clock, cue.start),
-                    "to": print_seconds(clock, cue.end),
-                    "text": cue.text.trim(),
-                });
-                if input.words {
-                    value["words"] = json!(cue
-                        .words
-                        .iter()
-                        .map(|word| json!({
-                            "from": print_seconds(clock, word.start),
-                            "to": print_seconds(clock, word.end),
-                            "text": word.text.trim(),
-                        }))
-                        .collect::<Vec<_>>());
-                }
-                value
+        Ok(cues(&result.transcript, 0.0, clock, input.words))
+    }
+
+    /// What the sequence says from `from` to `to`, as it plays: its sound
+    /// is rendered and transcribed. Times are sequence positions.
+    fn program_transcript(
+        &self,
+        project: &Project,
+        revision: u64,
+        input: &LookInput,
+    ) -> Result<Value, McpError> {
+        let sequence = program(project, input.sequence.as_deref())?;
+        let clock = Clock::of_sequence(sequence);
+        let duration = sequence.duration();
+        let from = match &input.from {
+            Some(text) => position(&clock, text)?,
+            None => Time::ZERO,
+        };
+        let to = match &input.to {
+            Some(text) => position(&clock, text)?.min(duration),
+            None => duration,
+        };
+        if from.is_negative() || to <= from {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                format!("choose a range inside sequence `{}`", sequence.id),
+            ));
+        }
+        if (to - from).seconds() > cut_engine::MAX_TRANSCRIPTION_RANGE_SECONDS + 1e-9 {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "a transcript covers at most 15 minutes; choose a range with from and to",
+            ));
+        }
+        let mut resolved = project.clone();
+        cut_runtime::resolve_media_paths(&mut resolved, &self.dir);
+        let entry = self.program_entry(
+            &resolved,
+            sequence.id.as_str(),
+            "program-sound",
+            &json!({"from": from.flicks(), "to": to.flicks()}),
+        )?;
+        let sound = entry.path("sound.mp4");
+        if !entry.is_complete(&["sound.mp4"]) {
+            render_program::<fn(f64)>(
+                &resolved,
+                Some(sequence.id.as_str()),
+                Some((from, to)),
+                &RenderOptions {
+                    output: sound.to_string_lossy().into_owned(),
+                    draft: true,
+                    force_software: true,
+                    ..RenderOptions::default()
+                },
+                None,
+            )
+            .map_err(engine_error)?;
+            entry.mark_complete(&["sound.mp4"]).map_err(engine_error)?;
+        }
+        let range = cut_engine::TimeRange::new(0.0, (to - from).seconds())
+            .map_err(|error| McpError::new("INVALID_ARGUMENTS", error.to_string()))?;
+        let result = cut_engine::transcribe_cached(
+            &sound.to_string_lossy(),
+            &DerivativeCache::new(&self.dir),
+            &cut_engine::TranscriptionOptions::new(range),
+            &cut_engine::CancellationToken::new(),
+            |_| {},
+        )
+        .map_err(engine_error)?;
+        Ok(json!({
+            "sequence": sequence.id.to_string(),
+            "revision": revision,
+            "from": clock.print_position(from),
+            "to": clock.print_position(to),
+            "transcript": cues(&result.transcript, from.seconds(), &clock, input.words),
+        }))
+    }
+
+    /// A cache entry for what `sequence` of `project`, whose media paths
+    /// are resolved, renders to; refused when it cannot be rendered.
+    fn program_entry(
+        &self,
+        project: &Project,
+        sequence: &str,
+        kind: &str,
+        options: &Value,
+    ) -> Result<cut_engine::derivatives::CacheEntry, McpError> {
+        compile_program(
+            project,
+            catalog(),
+            &ProgramOptions {
+                sequence: Some(sequence.to_owned()),
+                ..ProgramOptions::default()
+            },
+        )
+        .map_err(|error| McpError::new("UNRENDERABLE", error.to_string()))?;
+        let document = print_document(project, catalog(), PrintOptions::default());
+        let identities = used_media(project)
+            .map(|media| {
+                SourceIdentity::from_path(std::path::Path::new(&media.path)).map_err(|error| {
+                    McpError::new(
+                        "MEDIA_UNAVAILABLE",
+                        format!("media `{}` cannot be read: {error}", media.id),
+                    )
+                })
             })
-            .collect::<Vec<_>>()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut options = options.clone();
+        options["sequence"] = json!(sequence);
+        DerivativeCache::new(&self.dir)
+            .project_entry(&json!(document), &identities, kind, &options)
+            .map_err(engine_error)
     }
 
     fn source_frames(&self, media: &Media, at: &[String], width: u32) -> Result<Value, McpError> {
@@ -635,11 +789,12 @@ impl CutMcpRouter {
     fn program_frames(
         &self,
         project: &Project,
+        sequence: Option<&str>,
         revision: u64,
         at: &[String],
         width: u32,
     ) -> Result<Value, McpError> {
-        let sequence = program(project)?;
+        let sequence = program(project, sequence)?;
         let clock = Clock::of_sequence(sequence);
         let duration = sequence.duration();
         let times = at
@@ -657,7 +812,7 @@ impl CutMcpRouter {
             .collect::<Result<Vec<_>, _>>()?;
         let mut resolved = project.clone();
         cut_runtime::resolve_media_paths(&mut resolved, &self.dir);
-        let capture = self.capture_frames(&resolved, &times, width, None)?;
+        let capture = self.capture_frames(&resolved, sequence.id.as_str(), &times, width, None)?;
         let mut frames = Vec::new();
         for (text, path) in at.iter().zip(capture.frames) {
             let mut value = json!({"at": text, "path": path});
@@ -674,32 +829,22 @@ impl CutMcpRouter {
     fn capture_frames(
         &self,
         project: &Project,
+        sequence: &str,
         times: &[Time],
         width: u32,
         columns: Option<usize>,
     ) -> Result<Capture, McpError> {
-        let sequence = program(project)?;
-        compile_program(project, catalog(), &ProgramOptions::default())
-            .map_err(|error| McpError::new("UNRENDERABLE", error.to_string()))?;
-        let document = print_document(project, catalog(), PrintOptions::default());
-        let identities = used_media(project)
-            .map(|media| {
-                SourceIdentity::from_path(std::path::Path::new(&media.path)).map_err(|error| {
-                    McpError::new(
-                        "MEDIA_UNAVAILABLE",
-                        format!("media `{}` cannot be read: {error}", media.id),
-                    )
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let options = json!({
-            "times": times.iter().map(|time| time.flicks()).collect::<Vec<_>>(),
-            "maxWidth": width,
-            "columns": columns,
-        });
-        let entry = DerivativeCache::new(&self.dir)
-            .project_entry(&json!(document), &identities, "program-frames", &options)
-            .map_err(engine_error)?;
+        let entry = self.program_entry(
+            project,
+            sequence,
+            "program-frames",
+            &json!({
+                "times": times.iter().map(|time| time.flicks()).collect::<Vec<_>>(),
+                "maxWidth": width,
+                "columns": columns,
+            }),
+        )?;
+        let sequence = program(project, Some(sequence))?;
         let names: Vec<String> = (0..times.len())
             .map(cut_engine::probe::frame_file_name)
             .collect();
@@ -717,7 +862,7 @@ impl CutMcpRouter {
                 let clip = entry.path(&format!("frame-{index:03}.mp4"));
                 render_program::<fn(f64)>(
                     project,
-                    None,
+                    Some(sequence.id.as_str()),
                     Some((start, (start + frame).min(duration))),
                     &RenderOptions {
                         output: clip.to_string_lossy().into_owned(),
@@ -828,7 +973,7 @@ impl CutMcpRouter {
         let after_program = parse(&after_document)?;
         let mut before_program = before.clone();
         cut_runtime::resolve_media_paths(&mut before_program, &self.dir);
-        let check = check(&after_program);
+        let check = check(&after_program, &self.dir);
         let preview = match changed_range(&before, &applied.project) {
             None => json!({"unavailable": "the edit changes nothing on the sequence"}),
             Some((sequence, from, to)) => self
@@ -860,17 +1005,23 @@ impl CutMcpRouter {
     ) -> Result<Value, McpError> {
         let clock = Clock::of_sequence(sequence);
         let mut result = json!({
+            "sequence": sequence.id.to_string(),
             "from": clock.print_position(from),
             "to": clock.print_position(to),
         });
         for (side, project, other) in [("before", before, after), ("after", after, before)] {
-            let times = preview_times(project, other);
+            let times = preview_times(project, other, sequence.id.as_str());
             if times.is_empty() {
                 result[side] = json!({"empty": true});
                 continue;
             }
-            let capture =
-                self.capture_frames(project, &times, PREVIEW_WIDTH, Some(PREVIEW_COLUMNS))?;
+            let capture = self.capture_frames(
+                project,
+                sequence.id.as_str(),
+                &times,
+                PREVIEW_WIDTH,
+                Some(PREVIEW_COLUMNS),
+            )?;
             let mut sheet = json!({
                 "frames": times.iter().map(|time| clock.print_position(*time)).collect::<Vec<_>>(),
                 "path": capture.sheet,
@@ -888,10 +1039,16 @@ impl CutMcpRouter {
         draft: bool,
         range: Option<RenderRange>,
         proposal: Option<&str>,
+        sequence: Option<&str>,
     ) -> Result<(RenderJob, PathBuf), McpError> {
         let (job, document, output) = self
             .runtime
-            .start_render_range(if draft { "preview" } else { "full" }, range, proposal)
+            .start_render_range(
+                if draft { "preview" } else { "full" },
+                range,
+                proposal,
+                sequence,
+            )
             .map_err(McpError::from)?;
         let runtime = self.runtime.clone();
         let worker_job = job.clone();
@@ -928,11 +1085,12 @@ impl CutMcpRouter {
             if input.quality.is_some()
                 || input.from.is_some()
                 || input.to.is_some()
+                || input.sequence.is_some()
                 || input.proposal.is_some()
             {
                 return Err(McpError::new(
                     "INVALID_ARGUMENTS",
-                    "`job` reads a render; it takes no quality, range, or proposal",
+                    "`job` reads a render; it takes no quality, range, sequence, or proposal",
                 ));
             }
             let job = if input.cancel {
@@ -962,9 +1120,9 @@ impl CutMcpRouter {
             }
         };
         let (_, project) = self.project_at(input.proposal.as_deref())?;
+        let sequence = program(&project, input.sequence.as_deref())?;
         let mut range = None;
         if input.from.is_some() || input.to.is_some() {
-            let sequence = program(&project)?;
             let clock = Clock::of_sequence(sequence);
             let from = match &input.from {
                 Some(text) => position(&clock, text)?,
@@ -979,11 +1137,17 @@ impl CutMcpRouter {
                 (to - from).seconds(),
             )?);
         }
-        let (job, output) = self.render_start(draft, range, input.proposal.as_deref())?;
+        let (job, output) = self.render_start(
+            draft,
+            range,
+            input.proposal.as_deref(),
+            input.sequence.as_deref(),
+        )?;
         let mut result = json!({
             "job": job.job_id,
             "status": job.status,
             "output": output,
+            "sequence": sequence.id.to_string(),
             "revision": self.runtime.get_state()?.revision,
         });
         if let Some(id) = input.proposal {
@@ -1007,9 +1171,10 @@ fn used_media(project: &Project) -> impl Iterator<Item = &Media> {
 }
 
 /// What stands between a project and its render: media that cannot be
-/// read, features the renderer cannot lower, and the model's warnings.
-/// `project` has its media paths resolved.
-fn check(project: &Project) -> Value {
+/// read, features the renderer cannot lower, and the model's warnings;
+/// and what an editor would catch in the cut. `project` has its media paths
+/// resolved; `dir` is the project, whose transcripts show where words are.
+fn check(project: &Project, dir: &Path) -> Value {
     let mut findings = Vec::new();
     for media in used_media(project) {
         if !std::path::Path::new(&media.path).is_file() {
@@ -1021,13 +1186,19 @@ fn check(project: &Project) -> Value {
             }));
         }
     }
-    if let Err(error) = compile_program(project, catalog(), &ProgramOptions::default()) {
-        findings.push(json!({
-            "severity": "error",
-            "code": "unrenderable",
-            "entity": error.entity(),
-            "message": error.to_string(),
-        }));
+    for sequence in &project.sequences {
+        let options = ProgramOptions {
+            sequence: Some(sequence.id.to_string()),
+            ..ProgramOptions::default()
+        };
+        if let Err(error) = compile_program(project, catalog(), &options) {
+            findings.push(json!({
+                "severity": "error",
+                "code": "unrenderable",
+                "entity": error.entity().unwrap_or(sequence.id.as_str()),
+                "message": error.to_string(),
+            }));
+        }
     }
     for warning in cut_model::validate(project, catalog()) {
         findings.push(json!({
@@ -1037,18 +1208,35 @@ fn check(project: &Project) -> Value {
             "message": warning.message,
         }));
     }
+    let cache = DerivativeCache::new(dir);
+    findings.extend(crate::lint::findings(project, |media| {
+        cut_engine::cached_transcripts(&media.path, &cache)
+            .unwrap_or_default()
+            .into_iter()
+            .flat_map(|transcript| transcript.cues)
+            .flat_map(|cue| cue.words)
+            .map(|word| (word.start, word.end, word.text.trim().to_owned()))
+            .collect()
+    }));
     let valid = !findings
         .iter()
         .any(|finding| finding["severity"] == "error");
     json!({"valid": valid, "findings": findings})
 }
 
-/// The span of the program that differs between two projects: every clip
-/// added, removed, or changed, and the transitions around them. A change to
-/// a track itself (enabled, muted) spans the whole sequence.
+/// The first sequence that differs between two projects, and the span of
+/// it that differs: every clip added, removed, or changed, and the
+/// transitions around them. A change to a track itself (enabled, muted)
+/// spans the whole sequence.
 fn changed_range(before: &Project, after: &Project) -> Option<(Sequence, Time, Time)> {
-    let sequence = after.sequences.first()?;
-    let old = before.sequence(sequence.id.as_str());
+    after.sequences.iter().find_map(|sequence| {
+        let (from, to) = changed_span(sequence, before.sequence(sequence.id.as_str()))?;
+        Some((sequence.clone(), from, to))
+    })
+}
+
+/// The span of `sequence` that differs from `old`, what it was.
+fn changed_span(sequence: &Sequence, old: Option<&Sequence>) -> Option<(Time, Time)> {
     let mut span: Option<(Time, Time)> = None;
     let mut extend = |from: Time, to: Time| {
         span = Some(match span {
@@ -1106,15 +1294,15 @@ fn changed_range(before: &Project, after: &Project) -> Option<(Sequence, Time, T
         }
     }
     let (from, to) = span?;
-    (to > from).then(|| (sequence.clone(), from, to))
+    (to > from).then_some((from, to))
 }
 
-/// The program positions that show what an edit changed on `side`, the
+/// The positions in `sequence` that show what an edit changed on `side`, the
 /// project before or after it, compared with `other`: the last frame
 /// before and the first frame of every cut it made or moved, and the middle
 /// frame of a clip it changed in place. The earliest come first.
-fn preview_times(side: &Project, other: &Project) -> Vec<Time> {
-    let Some(sequence) = side.sequences.first() else {
+fn preview_times(side: &Project, other: &Project, sequence: &str) -> Vec<Time> {
+    let Some(sequence) = side.sequence(sequence) else {
         return Vec::new();
     };
     let old = other.sequence(sequence.id.as_str());
@@ -1288,11 +1476,11 @@ sequence s1 rate=24 size=1920x1080
             .unwrap()
             .project;
         assert_eq!(
-            print(&rippled, preview_times(&rippled, &before)),
+            print(&rippled, preview_times(&rippled, &before, "s1")),
             ["00:00:00:00", "00:00:03:23"]
         );
         assert_eq!(
-            print(&before, preview_times(&before, &rippled)),
+            print(&before, preview_times(&before, &rippled, "s1")),
             ["00:00:00:00", "00:00:03:23", "00:00:04:00", "00:00:07:23"]
         );
 
@@ -1301,7 +1489,7 @@ sequence s1 rate=24 size=1920x1080
             .unwrap()
             .project;
         assert_eq!(
-            print(&faded, preview_times(&faded, &before)),
+            print(&faded, preview_times(&faded, &before, "s1")),
             ["00:00:06:00"]
         );
     }

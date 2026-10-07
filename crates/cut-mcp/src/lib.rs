@@ -8,6 +8,7 @@
 pub mod docs;
 pub mod harness;
 pub mod inbound;
+mod lint;
 
 use cut_agent::{AgentTool, ToolMap};
 use cut_runtime::{RuntimeClient, RuntimeError};
