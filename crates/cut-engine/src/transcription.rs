@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// Schema version for derived transcript JSON.
-pub const TRANSCRIPTION_SCHEMA_VERSION: u8 = 1;
+pub const TRANSCRIPTION_SCHEMA_VERSION: u8 = 2;
 /// Audio sample rate passed to whisper.cpp.
 pub const TRANSCRIPTION_SAMPLE_RATE: u32 = 16_000;
 /// Maximum range accepted by a transcription request.
@@ -816,7 +816,15 @@ fn parse_token_words(
         let (start, end) = timestamp_pair(object)
             .map(|pair| shift_range(pair, range))
             .unwrap_or(fallback);
-        let (start, end) = clamp_range(start, end, range).unwrap_or(fallback);
+        // whisper.cpp times some tokens as an instant; that is where the
+        // token is, not the whole cue.
+        let (start, end) = clamp_range(start, end, range)
+            .or_else(|| {
+                (start.is_finite() && start == end)
+                    .then(|| start.clamp(range.start, range.end))
+                    .map(|at| (at, at))
+            })
+            .unwrap_or(fallback);
         let starts_new = current.is_some()
             && (raw_text.starts_with(char::is_whitespace) || raw_text.starts_with('▁'));
         if starts_new {
@@ -964,6 +972,30 @@ mod tests {
         assert_eq!(transcript.cues[0].words[0].text, "Hello");
         assert_eq!(transcript.cues[0].words[0].start, 10.5);
         assert_eq!(transcript.cues[0].words[1].confidence, Some(0.9));
+    }
+
+    #[test]
+    fn an_instant_token_keeps_its_time_instead_of_the_cue() {
+        let range = TimeRange::new(0.0, 20.0).expect("range");
+        let transcript = parse_whisper_json(
+            &json!({
+                "transcription": [{
+                    "offsets": {"from": 0, "to": 10580},
+                    "text": " And so",
+                    "tokens": [
+                        {"text": "[_BEG_]", "offsets": {"from": 0, "to": 0}},
+                        {"text": " And", "offsets": {"from": 320, "to": 320}},
+                        {"text": " so", "offsets": {"from": 330, "to": 530}}
+                    ]
+                }]
+            })
+            .to_string(),
+            range,
+        )
+        .expect("transcript");
+        let words = &transcript.cues[0].words;
+        assert_eq!((words[0].start, words[0].end), (0.32, 0.32));
+        assert_eq!((words[1].start, words[1].end), (0.33, 0.53));
     }
 
     #[test]
