@@ -382,6 +382,45 @@ fn imported_media_is_indexed_and_proxied_in_the_background() {
 }
 
 #[test]
+fn scripts_anchor_to_clips_and_caption_only_what_was_heard() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    let appended = ok(
+        &router,
+        "edit",
+        json!({"script": "insert media=m1 src=1s dur=1s at=end on=V1,A1 as=c2,a2"}),
+    );
+    let diff = appended["diff"].as_str().unwrap();
+    assert!(
+        diff.contains("clip c2 media=m1 src=00:00:01:00 at=00:00:04:00"),
+        "{diff}"
+    );
+    router
+        .runtime()
+        .reject_proposal(appended["proposal"].as_str().unwrap())
+        .unwrap();
+
+    let unheard = error(
+        &router,
+        "edit",
+        json!({"script": "track add S1 subtitle\ncaptions c1 on=S1"}),
+    );
+    assert_eq!(unheard["code"], "SCRIPT_REFUSED");
+    let message = unheard["message"].as_str().unwrap();
+    assert!(message.contains(" 2:1: no transcript of `m1`"), "{message}");
+    let unknown = error(
+        &router,
+        "edit",
+        json!({"script": "track add S1 subtitle\ncaptions c1 on=S1 size=2"}),
+    );
+    assert!(unknown["message"]
+        .as_str()
+        .unwrap()
+        .contains("unexpected `size=2`"));
+}
+
+#[test]
 fn edits_are_checked_like_an_editor_would() {
     let Some((_directory, router)) = router() else {
         return;

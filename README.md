@@ -110,6 +110,12 @@ Times are timecode (`01:00:04:12`), frames (`96f`), or seconds (`4.5s`):
 media positions with `media`, sequence positions otherwise. The project
 changes only when a person accepts a proposal.
 
+Edit scripts can place by anchor instead of timecode (`at=end`,
+`at=c3.end`, `to=c3.start-6f`), trim to a source position
+(`trim c1 out src=00:00:07:29`, such as a word's time), and caption what a
+clip says with `captions c1 on=S1 [words=<n>]`, which uses a transcript of
+its media made earlier and stages the caption lines it becomes.
+
 When media is imported, `cutd` indexes it in the background — one FFmpeg
 pass for scene cuts, pauses, and a loudness envelope from which loudest
 moments, onsets, and tempo are found — and makes a proxy at most 960 pixels

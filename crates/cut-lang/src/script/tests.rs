@@ -198,3 +198,51 @@ fn print_op_switches_sequences_explicitly() {
         "use s2\nblade at=00:00:01:00"
     );
 }
+
+#[test]
+fn positions_can_anchor_to_the_end_and_to_clips() {
+    let project = base();
+    // Append at the end, then insert just after c1, both without timecode.
+    let applied = run(
+        &project,
+        "insert media=m1 src=00:02:00:00 dur=24f at=end on=V1,A1 as=c3,a3
+insert media=m1 src=00:03:00:00 dur=12f at=c1.end on=V1,A1 as=c4,a4
+marker add at=c4.start+6f as=mk1",
+    );
+    let sequence = &applied.project.sequences[0];
+    let clock = Clock::of_sequence(sequence);
+    let at = |id: &str| clock.print_position(sequence.tracks[0].clip(id).unwrap().start);
+    assert_eq!(at("c3"), "01:00:07:12", "after c2, moved by c4's insert");
+    assert_eq!(at("c4"), "01:00:04:00");
+    assert_eq!(at("c2"), "01:00:04:12");
+    assert_eq!(clock.print_position(sequence.markers[0].at), "01:00:04:06");
+
+    let lifted = run(&project, "lift from=c1.start+1s to=c1.end-1s");
+    assert_eq!(lifted.project.sequences[0].tracks[0].clips.len(), 3);
+
+    assert!(fails(&project, "split c1 at=c9.end")
+        .message
+        .contains("no clip `c9`"));
+    assert!(fails(&project, "split c1 at=c1.end6f")
+        .message
+        .contains("amount"));
+}
+
+#[test]
+fn trim_to_a_source_position() {
+    let project = base();
+    // c1 plays m1 from 00:00:10:00; end it on 00:00:12:12 of the media.
+    let trimmed = run(&project, "trim c1 out src=00:00:12:12 ripple");
+    let clip = trimmed.project.sequences[0].tracks[0].clip("c1").unwrap();
+    assert_eq!(frames(clip.duration), 60);
+    // At double speed, a second of source is half a second of sequence.
+    let fast = run(&project, "speed c1 2\ntrim c1 in src=00:00:11:00");
+    let clip = fast.project.sequences[0].tracks[0].clip("c1").unwrap();
+    assert_eq!(
+        clip.source_range().unwrap().0,
+        Time::from_seconds(11.0).unwrap()
+    );
+    assert!(fails(&project, "trim c1 out src=12s to=01:00:01:00")
+        .message
+        .contains("not both"));
+}

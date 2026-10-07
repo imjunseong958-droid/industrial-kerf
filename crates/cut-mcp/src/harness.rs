@@ -46,6 +46,8 @@ const MAX_CONTEXT_DIFF_BYTES: usize = 8 * 1024;
 /// Onsets a media index lists without a range.
 const MAX_INDEX_ONSETS: usize = 100;
 const DEFAULT_SHEET_TILE_WIDTH: u32 = 320;
+/// Words a caption holds unless `captions … words=<n>` says otherwise.
+const DEFAULT_CAPTION_WORDS: usize = 4;
 const SHEET_COLUMNS: usize = 4;
 const MAX_SHEET_FRAMES: usize = 16;
 
@@ -70,6 +72,10 @@ pending proposal's id as `extend` to run more lines on top of it, or as \
 `revise` to replace it.
 - `render` renders the sequence, or a range of it, to a file; with \
 `proposal`, what that proposal would make.
+
+In an edit script, `captions <clip> on=<subtitle track> [words=<n>]` captions \
+what the clip says, timed to its speech, from a transcript of its media made \
+earlier with `look`; the proposal's script shows the lines it became.
 
 Check findings include what an editor would catch: black frames, picture that \
 leaves the frame's edges black, flash frames, and sound cut inside a word \
@@ -1085,16 +1091,17 @@ impl CutMcpRouter {
         // `extend` runs the script on what the proposal makes; `revise` on
         // the project.
         let (revision, before) = self.project_at(input.extend.as_deref())?;
-        let applied = apply_script(&before, catalog(), &input.script)
-            .map_err(|errors| McpError::new("SCRIPT_REFUSED", diagnostics(&errors)))?;
+        let (expanded, origins) = self.expand_captions(&before, &input.script)?;
+        let applied = apply_script(&before, catalog(), &expanded)
+            .map_err(|errors| refused(errors, &origins))?;
         if print_document(&applied.project, catalog(), PrintOptions::default())
             == print_document(&before, catalog(), PrintOptions::default())
         {
             return Err(McpError::new("NO_CHANGE", "the script changes nothing"));
         }
         let script = match prior.filter(|_| input.extend.is_some()) {
-            Some(prior) => format!("{}\n{}", prior.trim_end(), input.script),
-            None => input.script.clone(),
+            Some(prior) => format!("{}\n{expanded}", prior.trim_end()),
+            None => expanded,
         };
         if let Some(id) = replaced {
             self.runtime.reject_proposal(id)?;
@@ -1142,6 +1149,89 @@ impl CutMcpRouter {
             "check": check,
             "preview": preview,
         }))
+    }
+
+    /// `script` with each `captions <clip> on=<track> [words=<n>]` line
+    /// replaced by the lines that caption what the clip says, from
+    /// transcripts of its media already made; and the line of `script`
+    /// each line came from.
+    fn expand_captions(
+        &self,
+        project: &Project,
+        script: &str,
+    ) -> Result<(String, Vec<usize>), McpError> {
+        let mut lines: Vec<String> = Vec::new();
+        let mut origins = Vec::new();
+        for (index, line) in script.lines().enumerate() {
+            let number = index + 1;
+            let mut words = line.split_whitespace();
+            if words.next() != Some("captions") {
+                lines.push(line.to_owned());
+                origins.push(number);
+                continue;
+            }
+            let error = |message: String| {
+                McpError::new(
+                    "SCRIPT_REFUSED",
+                    format!("error[captions] {number}:1: {message}"),
+                )
+            };
+            let clip = words
+                .next()
+                .ok_or_else(|| error("captions needs a clip".into()))?;
+            let (mut track, mut most) = (None, DEFAULT_CAPTION_WORDS);
+            for field in words {
+                match field.split_once('=') {
+                    Some(("on", id)) => track = Some(id),
+                    Some(("words", count)) => {
+                        most = count
+                            .parse()
+                            .ok()
+                            .filter(|count| *count > 0)
+                            .ok_or_else(|| error(format!("`{count}` is not a word count")))?;
+                    }
+                    _ => {
+                        return Err(error(format!(
+                            "unexpected `{field}`; captions takes on=<subtitle track> and words=<n>"
+                        )))
+                    }
+                }
+            }
+            let track = track.ok_or_else(|| error("captions needs on=<subtitle track>".into()))?;
+            // The clip as the lines before this one leave it.
+            let so_far = apply_script(project, catalog(), &lines.join("\n"))
+                .map_err(|errors| refused(errors, &origins))?
+                .project;
+            let media = so_far
+                .locate(clip)
+                .map(|at| &so_far.clip_at(at).content)
+                .and_then(|content| match content {
+                    Content::Media { media, .. } => so_far.media(media.as_str()),
+                    _ => None,
+                })
+                .ok_or_else(|| error(format!("no media clip `{clip}`")))?;
+            let (spoken, covered) = known_speech(&self.dir, media);
+            let (source_in, source_out) = so_far
+                .clip_at(so_far.locate(clip).expect("located above"))
+                .source_range()
+                .unwrap_or_default();
+            if !covers(&covered, source_in.seconds(), source_out.seconds()) {
+                let clock = Clock::of_media(media);
+                return Err(error(format!(
+                    "no transcript of `{}` covers `{clip}` ({}–{}); look at it with transcript, from, and to first",
+                    media.id,
+                    clock.print_position(source_in),
+                    clock.print_position(source_out),
+                )));
+            }
+            let captions =
+                cut_lang::caption_script(&so_far, clip, track, &spoken, most).map_err(error)?;
+            for caption in captions.lines() {
+                lines.push(caption.to_owned());
+                origins.push(number);
+            }
+        }
+        Ok((lines.join("\n"), origins))
     }
 
     /// Contact sheets of what the edit changed in `from`–`to`, before and
@@ -1310,6 +1400,59 @@ impl CutMcpRouter {
     }
 }
 
+/// A script refusal, with each line numbered as the agent wrote it.
+fn refused(errors: Vec<cut_model::Diagnostic>, origins: &[usize]) -> McpError {
+    let errors: Vec<_> = errors
+        .into_iter()
+        .map(|mut error| {
+            if let Some(span) = error.span.as_mut() {
+                span.line = origins.get(span.line - 1).copied().unwrap_or(span.line);
+            }
+            error
+        })
+        .collect();
+    McpError::new("SCRIPT_REFUSED", diagnostics(&errors))
+}
+
+/// The words of `media` that transcripts already made know, in seconds of
+/// the media, and the ranges those transcripts cover. Nothing is
+/// transcribed.
+fn known_speech(dir: &Path, media: &Media) -> (Vec<cut_lang::Word>, Vec<(f64, f64)>) {
+    let path = resolve_project_source_path(dir, &media.path);
+    let transcripts =
+        cut_engine::cached_transcripts(&path.to_string_lossy(), &DerivativeCache::new(dir))
+            .unwrap_or_default();
+    let ranges = transcripts
+        .iter()
+        .map(|transcript| (transcript.range.start, transcript.range.end))
+        .collect();
+    let words = transcripts
+        .into_iter()
+        .flat_map(|transcript| transcript.cues)
+        .flat_map(|cue| cue.words)
+        .map(|word| cut_lang::Word {
+            start: word.start,
+            end: word.end,
+            text: word.text.trim().to_owned(),
+        })
+        .collect();
+    (words, ranges)
+}
+
+/// Whether `ranges` together cover `from`–`to`, give or take a frame.
+fn covers(ranges: &[(f64, f64)], from: f64, to: f64) -> bool {
+    let mut ranges = ranges.to_vec();
+    ranges.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut reached = from;
+    for (start, end) in ranges {
+        if start > reached + 0.05 {
+            break;
+        }
+        reached = reached.max(end);
+    }
+    reached + 0.05 >= to
+}
+
 /// Media that some clip uses.
 fn used_media(project: &Project) -> impl Iterator<Item = &Media> {
     project.media.iter().filter(|media| {
@@ -1361,14 +1504,11 @@ fn check(project: &Project, dir: &Path) -> Value {
             "message": warning.message,
         }));
     }
-    let cache = DerivativeCache::new(dir);
     findings.extend(crate::lint::findings(project, |media| {
-        cut_engine::cached_transcripts(&media.path, &cache)
-            .unwrap_or_default()
+        known_speech(dir, media)
+            .0
             .into_iter()
-            .flat_map(|transcript| transcript.cues)
-            .flat_map(|cue| cue.words)
-            .map(|word| (word.start, word.end, word.text.trim().to_owned()))
+            .map(|word| (word.start, word.end, word.text))
             .collect()
     }));
     let valid = !findings
