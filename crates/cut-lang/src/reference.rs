@@ -15,7 +15,10 @@ line, applied in order and atomically. Later lines see what earlier lines did.
 
 ## Times
 - Positions are sequence timecode (`01:00:04:12`, drop-frame `01:00:04;12`)
-  or offsets from the sequence start (`96f`, `4.5s`).
+  or offsets from the sequence start (`96f`, `4.5s`), or anchors: `end` (the
+  end of the sequence), `c3.start`, or `c3.end`, each with an optional
+  amount, such as `at=end`, `at=c3.end`, or `to=c3.start-6f`. Prefer anchors
+  to computing timecode.
 - Source positions (`src=`, `out=`) are media timecode or offsets from the
   media's first frame.
 - Durations: `00:00:02:12`, `60f`, or `2.5s`. Amounts: `+12f`, `-6f`, `-0.5s`.
@@ -34,7 +37,8 @@ delete <clip> …                         remove clips (and linked partners), le
 ripple-delete <clip> …                  remove and close the gap on every unlocked track
 lift from=<pos> to=<pos> [tracks=…]     clear a range, leaving a gap
 extract from=<pos> to=<pos> [tracks=…]  cut a range out and close it
-trim <clip> in|out <amount>|to=<pos> [ripple]
+trim <clip> in|out <amount>|to=<pos>|src=<src> [ripple]
+                                        src= puts the edge on that source position, such as a word's time
 roll <clip> <amount>|to=<pos>           move the cut after the clip
 slip <clip> <amount>                    play different source frames in the same place
 slide <clip> <amount>|to=<pos>          move a clip between its neighbors

@@ -53,6 +53,10 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
 - **Durations** (`dur=`) count frames in the same `HH:MM:SS:FF` shape.
 - Anywhere a time is read, `96f` and `4.5s` also work as offsets from the
   start. Seconds round to the nearest frame.
+- A position in a script may also be an **anchor**: `end` (the end of the
+  sequence), `c3.start`, or `c3.end`, each with an optional amount, as in
+  `at=end`, `at=c3.end`, or `to=c3.start-6f`. Anchors read the project as
+  the line runs, so they follow earlier lines' edits.
 - Keyframe times are relative to the clip: `{0f:0 12f:1:ease}`.
 
 Internally every time is an exact integer of flicks (1/705,600,000 s), so
@@ -81,6 +85,9 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
   track to leave it out.
 - `trim`, `roll`, `slide`, and `move` accept either an amount (`+12f`) or an
   absolute `to=`/`at=` position.
+- `trim … src=<source position>` puts the edge where the clip plays that
+  position of its media, so a cut can land on a word's time from a
+  transcript.
 - With several sequences, `use s2` selects the one later lines act on.
 
 Every operation prints back as script (`print_op`, `print_ops`), so history,
@@ -89,10 +96,9 @@ UI actions, and agent edits share one readable log.
 ## In `cutd`
 
 `cutd` keeps the project as `project.cut`, written after every change. Edits
-arrive as scripts (`apply_script`), typed operations from the editor
-(`apply_ops`, frame counts on the sequence), or v2 commands from older
-clients. Each change is journaled as the script it ran, and undo restores
-the project as it was. Agent edits stay pending proposals that show the
+arrive as scripts (`apply_script`) or typed operations from the editor
+(`apply_ops`, frame counts on the sequence). Each change is journaled as
+the script it ran, and undo restores the project as it was. Agent edits stay pending proposals that show the
 script and a diff of the document; `get_document` returns the document,
 optionally annotated. Render jobs and proposal previews hand renderers the
 document with media paths resolved against the project.

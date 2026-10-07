@@ -22,8 +22,8 @@ use crate::text::{parse_param, quote, Clock, Fields};
 use cut_model::time::parse_timecode;
 use cut_model::{
     apply, Catalog, Clip, ClipChange, Content, Diagnostic, Domain, Edge, Effect, Id, MarkerChange,
-    NewClip, Op, ParamDef, Params, Project, Rate, Ratio, Report, SequenceChange, Time, TrackChange,
-    TrackKind,
+    NewClip, Op, ParamDef, Params, Project, Rate, Ratio, Report, Sequence, SequenceChange, Time,
+    TrackChange, TrackKind,
 };
 use std::fmt::Write as _;
 
@@ -90,6 +90,63 @@ struct Script<'c> {
 
 type Parsed<T = Vec<Op>> = Result<T, Diagnostic>;
 
+/// Positions on one sequence. Besides timecode, frames, and seconds, a
+/// position may be `end`, the end of the sequence, or `<clip>.start` or
+/// `<clip>.end` of a clip on it, each with an optional amount: `c3.end-6f`.
+struct Positions<'a> {
+    clock: Clock,
+    sequence: &'a Sequence,
+}
+
+impl<'a> Positions<'a> {
+    fn of(sequence: &'a Sequence) -> Self {
+        Self {
+            clock: Clock::of_sequence(sequence),
+            sequence,
+        }
+    }
+
+    fn position(&self, text: &str) -> Result<Time, String> {
+        let anchor = [(".start", false), (".end", true)]
+            .into_iter()
+            .find_map(|(suffix, end)| {
+                let at = text.find(suffix)?;
+                Some((&text[..at], end, &text[at + suffix.len()..]))
+            });
+        let (base, rest) = match anchor {
+            Some((id, end, rest)) => {
+                let clip = self
+                    .sequence
+                    .tracks
+                    .iter()
+                    .find_map(|track| track.clip(id))
+                    .ok_or_else(|| format!("no clip `{id}` in sequence `{}`", self.sequence.id))?;
+                (if end { clip.end() } else { clip.start }, rest)
+            }
+            None => match text.strip_prefix("end") {
+                Some(rest) => (self.sequence.duration(), rest),
+                None => return self.clock.position(text),
+            },
+        };
+        match rest {
+            "" => Ok(base),
+            amount if amount.starts_with(['+', '-']) => Ok(base + self.clock.delta(amount)?),
+            _ => Err(format!(
+                "`{text}`: after an anchor comes an amount such as +12f or -0.5s"
+            )),
+        }
+    }
+}
+
+/// Everything else a sequence clock reads and prints.
+impl std::ops::Deref for Positions<'_> {
+    type Target = Clock;
+
+    fn deref(&self) -> &Clock {
+        &self.clock
+    }
+}
+
 impl Script<'_> {
     fn parse(&mut self, line: &Line) -> Parsed {
         let mut fields = Fields::new(line)?;
@@ -130,7 +187,7 @@ impl Script<'_> {
             }
             "lift" | "extract" => {
                 let s = self.current(line)?;
-                let clock = Clock::of_sequence(&self.project.sequences[s]);
+                let clock = Positions::of(&self.project.sequences[s]);
                 let from = required(&mut fields, "from", |t| clock.position(t))?;
                 let to = required(&mut fields, "to", |t| clock.position(t))?;
                 let tracks = fields.take_ids("tracks")?;
@@ -188,7 +245,7 @@ impl Script<'_> {
             }
             "blade" => {
                 let s = self.current(line)?;
-                let clock = Clock::of_sequence(&self.project.sequences[s]);
+                let clock = Positions::of(&self.project.sequences[s]);
                 let at = required(&mut fields, "at", |t| clock.position(t))?;
                 let tracks = fields.take_ids("tracks")?;
                 fields.finish(1)?;
@@ -255,14 +312,14 @@ impl Script<'_> {
         }
     }
 
-    fn clip(&self, id: &Id, line: &Line) -> Parsed<(&Clip, Clock)> {
+    fn clip(&self, id: &Id, line: &Line) -> Parsed<(&Clip, Positions<'_>)> {
         let at = self
             .project
             .locate(id.as_str())
             .ok_or_else(|| line.error(1, format!("no clip `{id}`")))?;
         Ok((
             self.project.clip_at(at),
-            Clock::of_sequence(&self.project.sequences[at.sequence]),
+            Positions::of(&self.project.sequences[at.sequence]),
         ))
     }
 
@@ -412,7 +469,8 @@ impl Script<'_> {
         let sequence = &self.project.sequences[s];
         let clock = Clock::of_sequence(sequence);
         let (mut content, source) = content(&mut fields, &self.project)?;
-        let at = required(&mut fields, "at", |t| clock.position(t))?;
+        let positions = Positions::of(sequence);
+        let at = required(&mut fields, "at", |t| positions.position(t))?;
         let duration = match (
             fields.take_with("dur", |t| clock.duration(t))?,
             fields.take("out"),
@@ -549,17 +607,34 @@ impl Script<'_> {
             .iter()
             .filter(|arg| arg.value != Atom::Word("ripple".into()))
             .collect();
-        let delta = match (
+        let to = match (
             fields.take_with("to", |t| clock.position(t))?,
-            amounts.as_slice(),
+            fields.take("src"),
         ) {
+            (Some(_), Some(_)) => return Err(line.error(1, "give to= or src=, not both")),
+            (Some(to), None) => Some(to),
+            (None, Some(src)) => {
+                let text = fields.text(src)?;
+                Some(
+                    self.source_edge(found, clock.rate, text)
+                        .map_err(|m| fields.error(src, m))?,
+                )
+            }
+            (None, None) => None,
+        };
+        let delta = match (to, amounts.as_slice()) {
             (Some(to), []) => to - edge_time,
             (None, [amount]) => {
                 let text = fields.text(amount)?;
                 clock.delta(text).map_err(|m| fields.error(amount, m))?
             }
-            (Some(_), _) => return Err(line.error(1, "give an amount or to=, not both")),
-            (None, []) => return Err(line.error(1, "trim needs an amount like -6f or to=<time>")),
+            (Some(_), _) => return Err(line.error(1, "give an amount, to=, or src=, not more")),
+            (None, []) => {
+                return Err(line.error(
+                    1,
+                    "trim needs an amount like -6f, to=<time>, or src=<source time>",
+                ))
+            }
             (None, [_, extra, ..]) => return Err(fields.error(extra, "unexpected argument")),
         };
         let count = fields.positional().len();
@@ -570,6 +645,47 @@ impl Script<'_> {
             delta,
             ripple,
         }])
+    }
+
+    /// Where on the sequence `clip` plays the source position `text`, on
+    /// the nearest frame: where a trim to that source position puts the
+    /// edge.
+    fn source_edge(&self, clip: &Clip, rate: Rate, text: &str) -> Result<Time, String> {
+        let (source, source_in, speed) = match &clip.content {
+            Content::Media {
+                media,
+                source_in,
+                speed,
+            } => {
+                let media = self
+                    .project
+                    .media(media.as_str())
+                    .ok_or_else(|| format!("no media `{media}`"))?;
+                (Clock::of_media(media), *source_in, *speed)
+            }
+            Content::Sequence {
+                sequence,
+                source_in,
+                speed,
+            } => {
+                let nested = self
+                    .project
+                    .sequence(sequence.as_str())
+                    .ok_or_else(|| format!("no sequence `{sequence}`"))?;
+                (Clock::of_sequence(nested), *source_in, *speed)
+            }
+            _ => return Err(format!("clip `{}` has no source; use to=", clip.id)),
+        };
+        if speed.is_reverse() {
+            return Err(format!("clip `{}` plays in reverse; use to=", clip.id));
+        }
+        let span = source.position(text)? - source_in;
+        let offset = if span.is_negative() {
+            -speed.timeline_span(-span)
+        } else {
+            speed.timeline_span(span)
+        };
+        Ok(rate.round(clip.start + offset))
     }
 
     fn set(&mut self, mut fields: Fields<'_>) -> Parsed {
@@ -810,7 +926,7 @@ impl Script<'_> {
         let (op, used) = match action {
             "add" => {
                 let s = self.current(line)?;
-                let clock = Clock::of_sequence(&self.project.sequences[s]);
+                let clock = Positions::of(&self.project.sequences[s]);
                 let op = Op::AddMarker {
                     sequence: self.project.sequences[s].id.clone(),
                     id: fields.take_id("as")?,
@@ -835,7 +951,7 @@ impl Script<'_> {
                 if action == "remove" {
                     (Op::RemoveMarker { id }, 3)
                 } else {
-                    let clock = Clock::of_sequence(&self.project.sequences[s]);
+                    let clock = Positions::of(&self.project.sequences[s]);
                     let optional = |text: &str| (!text.is_empty()).then(|| text.to_owned());
                     let change = MarkerChange {
                         at: fields.take_with("at", |t| clock.position(t))?,
