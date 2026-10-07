@@ -179,6 +179,8 @@ fn look_shows_the_document_media_index_and_frames() {
 
     let outside = error(&router, "look", json!({"media": "m1", "at": ["10s"]}));
     assert_eq!(outside["code"], "INVALID_ARGUMENTS");
+    let untimed = error(&router, "look", json!({"media": "m1", "words": true}));
+    assert_eq!(untimed["code"], "INVALID_ARGUMENTS");
     let unknown = error(&router, "look", json!({"media": "m9"}));
     assert_eq!(unknown["code"], "UNKNOWN_MEDIA");
 
@@ -229,6 +231,12 @@ fn edit_stages_a_checked_proposal_with_a_preview() {
     assert_eq!(preview["from"], "00:00:00:00");
     assert_eq!(preview["to"], "00:00:04:00");
     assert!(has_image(&preview["before"]), "{preview}");
+    // The frames either side of the cut the trim moved.
+    assert_eq!(
+        preview["after"]["frames"],
+        json!(["00:00:00:00", "00:00:02:29"]),
+        "{preview}"
+    );
     assert!(is_jpeg(&preview["after"]), "contact sheet");
     assert!(has_image(&preview["after"]), "{preview}");
 

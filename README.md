@@ -96,8 +96,8 @@ tools cover the work:
 
 | Tool | Purpose |
 |---|---|
-| `look` | No arguments: the annotated document and proposal state. `media`: that media's index — where it is used, scene cuts, pauses, and with `transcript: true` what is said. `at`: up to eight frames — source frames of `media`, or program frames of the sequence. `proposal`: the same, as a pending proposal would make the project |
-| `edit` | Run an edit script. It becomes a proposal, returned with the document diff, check findings, and a before/after preview of the changed range. `extend` runs the script on top of a pending proposal and makes the two one proposal; `revise` replaces it |
+| `look` | No arguments: the annotated document and proposal state. `media`: that media's index — where it is used, scene cuts, pauses, and with `transcript: true` what is said (`words: true` times each word). `at`: up to eight full-size frames — source frames of `media`, or program frames of the sequence. `proposal`: the same, as a pending proposal would make the project |
+| `edit` | Run an edit script. It becomes a proposal, returned with the document diff, check findings, and a before/after preview: the frames either side of each cut it made or moved, and the middle of a clip it changed in place. `extend` runs the script on top of a pending proposal and makes the two one proposal; `revise` replaces it |
 | `render` | Render the sequence, or `from`–`to`, as a draft or full-quality file — of the project, or of a pending `proposal`; `job` reads progress, `cancel` stops it |
 
 Times are timecode (`01:00:04:12`), frames (`96f`), or seconds (`4.5s`):

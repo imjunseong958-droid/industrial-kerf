@@ -35,10 +35,11 @@ pub const TOOL_NAMES: &[&str] = &["look", "edit", "render"];
 /// As many frames as one tool result carries to a model.
 const MAX_LOOK_FRAMES: usize = cut_agent::MAX_TOOL_RESULT_IMAGES;
 const DEFAULT_FRAME_WIDTH: u32 = 960;
-const PREVIEW_FRAMES: usize = 4;
+/// A preview shows the frames either side of the first four cuts an edit
+/// made or moved, two cuts to a row.
+const PREVIEW_FRAMES: usize = 8;
+const PREVIEW_COLUMNS: usize = 4;
 const PREVIEW_WIDTH: u32 = 480;
-/// The longest stretch a preview covers, starting at the first change.
-const MAX_PREVIEW_SECONDS: f64 = 120.0;
 /// The largest document carried as context; `look` returns all of it.
 const MAX_CONTEXT_DOCUMENT_BYTES: usize = 96 * 1024;
 const MAX_CONTEXT_DIFF_BYTES: usize = 8 * 1024;
@@ -52,12 +53,13 @@ scripts in the language below.
 
 - `look` shows what is there: with no arguments the document; with `media` \
 that media's index (where it is used, its scene cuts and pauses, and what is \
-said on request); with `at` frames — source frames of a media, or program \
-frames of the sequence. With `proposal` it shows what a pending proposal \
+said on request, word by word with `words`); with `at` frames — source \
+frames of a media, or program frames of the sequence. With `proposal` it shows what a pending proposal \
 would make: its document and its program frames.
 - `edit` runs one script. It becomes a proposal for the user, returned with \
-the document diff, check findings, and a before/after preview of the range \
-it changed. The project does not change until the user accepts it. Pass a \
+the document diff, check findings, and a before/after preview: the frames \
+either side of each cut it made or moved, and the middle of a clip it changed \
+in place. The project does not change until the user accepts it. Pass a \
 pending proposal's id as `extend` to run more lines on top of it, or as \
 `revise` to replace it.
 - `render` renders the sequence, or a range of it, to a file; with \
@@ -150,8 +152,9 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
         "look" => (
             "See the project and its footage. No arguments: the annotated document and \
              proposal state. `media`: that media's index — where it is used, scene cuts, \
-             pauses, and with `transcript` what is said. `at`: frames, as source frames \
-             of `media` or program frames of the sequence. `proposal`: the same, as a \
+             pauses, and with `transcript` what is said (`words` times each word). \
+             `at`: frames, as source frames of `media` or program frames of the \
+             sequence. `proposal`: the same, as a \
              pending proposal would make the project.",
             json!({
                 "type": "object",
@@ -165,6 +168,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                         "description": format!("Frames to see: media positions with `media`, otherwise sequence positions. {time}")
                     },
                     "transcript": {"type": "boolean", "description": "With `media`: include what is said (local transcription, up to 15 minutes per call)."},
+                    "words": {"type": "boolean", "description": "With `transcript`: time every word, for cutting on speech. Choose a short range; it is long."},
                     "from": {"type": "string", "description": format!("With `transcript`: the first media position to transcribe. {time}")},
                     "to": {"type": "string", "description": "With `transcript`: the media position to stop at."},
                     "width": {"type": "integer", "minimum": 64, "maximum": 1920, "description": "Frame width in pixels (default 960)."},
@@ -233,6 +237,8 @@ struct LookInput {
     at: Vec<String>,
     #[serde(default)]
     transcript: bool,
+    #[serde(default)]
+    words: bool,
     from: Option<String>,
     to: Option<String>,
     width: Option<u32>,
@@ -361,6 +367,12 @@ impl CutMcpRouter {
             return Err(McpError::new(
                 "INVALID_ARGUMENTS",
                 "transcript, from, and to need `media`",
+            ));
+        }
+        if input.words && !input.transcript {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "words times a transcript; pass transcript: true",
             ));
         }
         if input.at.len() > MAX_LOOK_FRAMES {
@@ -560,11 +572,25 @@ impl CutMcpRouter {
             .transcript
             .cues
             .iter()
-            .map(|cue| json!({
-                "from": print_seconds(clock, cue.start),
-                "to": print_seconds(clock, cue.end),
-                "text": cue.text.trim(),
-            }))
+            .map(|cue| {
+                let mut value = json!({
+                    "from": print_seconds(clock, cue.start),
+                    "to": print_seconds(clock, cue.end),
+                    "text": cue.text.trim(),
+                });
+                if input.words {
+                    value["words"] = json!(cue
+                        .words
+                        .iter()
+                        .map(|word| json!({
+                            "from": print_seconds(clock, word.start),
+                            "to": print_seconds(clock, word.end),
+                            "text": word.text.trim(),
+                        }))
+                        .collect::<Vec<_>>());
+                }
+                value
+            })
             .collect::<Vec<_>>()))
     }
 
@@ -616,52 +642,45 @@ impl CutMcpRouter {
         let sequence = program(project)?;
         let clock = Clock::of_sequence(sequence);
         let duration = sequence.duration();
+        let times = at
+            .iter()
+            .map(|text| {
+                let time = position(&clock, text)?;
+                if time.is_negative() || time >= duration {
+                    return Err(McpError::new(
+                        "INVALID_ARGUMENTS",
+                        format!("`{text}` is outside sequence `{}`", sequence.id),
+                    ));
+                }
+                Ok(time)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let mut resolved = project.clone();
         cut_runtime::resolve_media_paths(&mut resolved, &self.dir);
+        let capture = self.capture_frames(&resolved, &times, width, None)?;
         let mut frames = Vec::new();
-        for text in at {
-            let time = position(&clock, text)?;
-            if time.is_negative() || time >= duration {
-                return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
-                    format!("`{text}` is outside sequence `{}`", sequence.id),
-                ));
-            }
-            let end = (time + sequence.rate.frame_duration()).min(duration);
-            let capture =
-                self.capture_program(&resolved, time, end, &[time.seconds()], width, 1, "look")?;
-            let mut value = json!({"at": text, "path": capture["frames"][0]["path"]});
+        for (text, path) in at.iter().zip(capture.frames) {
+            let mut value = json!({"at": text, "path": path});
             inline_image(&mut value)?;
             frames.push(value);
         }
         Ok(json!({"sequence": sequence.id.to_string(), "revision": revision, "frames": frames}))
     }
 
-    /// Render `[start, end)` of the program as a draft and extract frames at
-    /// `times` (program seconds) with a contact sheet of them. `project`
-    /// has its media paths resolved. Results are cached by document, media
-    /// identity, and options.
-    #[allow(clippy::too_many_arguments)]
-    fn capture_program(
+    /// Render the program at each of `times` at full size and quality and
+    /// take its frame there, at most `width` wide; with `columns`, also a
+    /// contact sheet of them. `project` has its media paths resolved.
+    /// Results are cached by document, media identity, and options.
+    fn capture_frames(
         &self,
         project: &Project,
-        start: Time,
-        end: Time,
-        times: &[f64],
+        times: &[Time],
         width: u32,
-        columns: usize,
-        kind: &str,
-    ) -> Result<Value, McpError> {
-        let range = Some((start, end));
-        compile_program(
-            project,
-            catalog(),
-            &ProgramOptions {
-                range,
-                ..ProgramOptions::default()
-            },
-        )
-        .map_err(|error| McpError::new("UNRENDERABLE", error.to_string()))?;
+        columns: Option<usize>,
+    ) -> Result<Capture, McpError> {
+        let sequence = program(project)?;
+        compile_program(project, catalog(), &ProgramOptions::default())
+            .map_err(|error| McpError::new("UNRENDERABLE", error.to_string()))?;
         let document = print_document(project, catalog(), PrintOptions::default());
         let identities = used_media(project)
             .map(|media| {
@@ -674,80 +693,82 @@ impl CutMcpRouter {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let options = json!({
-            "start": start.seconds(),
-            "end": end.seconds(),
-            "times": times,
+            "times": times.iter().map(|time| time.flicks()).collect::<Vec<_>>(),
             "maxWidth": width,
             "columns": columns,
         });
         let entry = DerivativeCache::new(&self.dir)
-            .project_entry(
-                &json!(document),
-                &identities,
-                &format!("program-{kind}"),
-                &options,
-            )
+            .project_entry(&json!(document), &identities, "program-frames", &options)
             .map_err(engine_error)?;
-        let frame_names: Vec<String> = (0..times.len())
+        let names: Vec<String> = (0..times.len())
             .map(cut_engine::probe::frame_file_name)
             .collect();
-        let mut required = vec!["capture.mp4", "capture.jpg", "capture.json"];
-        required.extend(frame_names.iter().map(String::as_str));
-        let cached = entry.is_complete(&required);
-        let payload = if cached {
-            entry
-                .read_json::<CapturePayload>("capture.json")
-                .map_err(engine_error)?
-        } else {
-            let output = entry.path("capture.mp4");
-            render_program::<fn(f64)>(
-                project,
-                None,
-                range,
-                &RenderOptions {
-                    output: output.to_string_lossy().into_owned(),
-                    draft: true,
-                    force_software: true,
-                    ..RenderOptions::default()
-                },
-                None,
-            )
-            .map_err(engine_error)?;
-            let relative: Vec<f64> = times.iter().map(|time| time - start.seconds()).collect();
-            let frames = cut_engine::probe::extract_exact_frames(
-                &output.to_string_lossy(),
-                &relative,
-                &entry.directory,
-                width,
-            )
-            .map_err(engine_error)?;
-            let paths: Vec<String> = frames.iter().map(|frame| frame.path.clone()).collect();
-            cut_engine::probe::create_contact_sheet(&paths, &entry.path("capture.jpg"), columns)
+        let mut required: Vec<&str> = names.iter().map(String::as_str).collect();
+        if columns.is_some() {
+            required.push("sheet.jpg");
+        }
+        if !entry.is_complete(&required) {
+            let frame = sequence.rate.frame_duration();
+            let duration = sequence.duration();
+            // One frame long render of each time, so a frame never comes
+            // from a draft's lower size or rate.
+            let render = |index: usize| -> Result<(), McpError> {
+                let start = times[index];
+                let clip = entry.path(&format!("frame-{index:03}.mp4"));
+                render_program::<fn(f64)>(
+                    project,
+                    None,
+                    Some((start, (start + frame).min(duration))),
+                    &RenderOptions {
+                        output: clip.to_string_lossy().into_owned(),
+                        force_software: true,
+                        ..RenderOptions::default()
+                    },
+                    None,
+                )
                 .map_err(engine_error)?;
-            let payload = CapturePayload {
-                start: start.seconds(),
-                end: end.seconds(),
-                duration: (end - start).seconds(),
-                path: entry.path("capture.jpg").to_string_lossy().into_owned(),
-                media_type: cut_engine::probe::FRAME_MEDIA_TYPE.into(),
-                frames: frames
-                    .into_iter()
-                    .zip(times)
-                    .map(|(frame, time)| {
-                        json!({"time": time, "path": frame.path, "mediaType": frame.media_type})
-                    })
-                    .collect(),
+                let directory = entry.path(&format!("frame-{index:03}"));
+                let grabbed = cut_engine::probe::extract_exact_frames(
+                    &clip.to_string_lossy(),
+                    &[0.0],
+                    &directory,
+                    width,
+                )
+                .map_err(engine_error)?;
+                fs::rename(&grabbed[0].path, entry.path(&names[index])).map_err(io_error)?;
+                let _ = fs::remove_dir_all(directory);
+                let _ = fs::remove_file(clip);
+                Ok(())
             };
-            entry
-                .write_json("capture.json", &payload)
+            let render = &render;
+            thread::scope(|scope| {
+                (0..times.len())
+                    .map(|index| scope.spawn(move || render(index)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .try_for_each(|handle| handle.join().expect("frame render panicked"))
+            })?;
+            if let Some(columns) = columns {
+                let paths: Vec<String> = names
+                    .iter()
+                    .map(|name| entry.path(name).to_string_lossy().into_owned())
+                    .collect();
+                cut_engine::probe::create_contact_sheet(
+                    &paths,
+                    &entry.path("sheet.jpg"),
+                    columns.min(times.len()),
+                )
                 .map_err(engine_error)?;
+            }
             entry.mark_complete(&required).map_err(engine_error)?;
-            payload
-        };
-        let mut result = serde_json::to_value(&payload)
-            .map_err(|error| McpError::new("SERIALIZATION_FAILED", error.to_string()))?;
-        result["cached"] = json!(cached);
-        Ok(result)
+        }
+        Ok(Capture {
+            frames: names
+                .iter()
+                .map(|name| entry.path(name).to_string_lossy().into_owned())
+                .collect(),
+            sheet: columns.map(|_| entry.path("sheet.jpg").to_string_lossy().into_owned()),
+        })
     }
 
     pub(super) fn edit(&self, arguments: Value) -> Result<Value, McpError> {
@@ -825,8 +846,10 @@ impl CutMcpRouter {
         }))
     }
 
-    /// Contact sheets of the changed range before and after the edit.
-    /// `before` and `after` have their media paths resolved.
+    /// Contact sheets of what the edit changed in `from`–`to`, before and
+    /// after: the frames either side of each cut it made or moved, and the
+    /// middle of a clip it changed in place. `before` and `after` have their
+    /// media paths resolved.
     fn preview(
         &self,
         sequence: &Sequence,
@@ -836,32 +859,22 @@ impl CutMcpRouter {
         after: &Project,
     ) -> Result<Value, McpError> {
         let clock = Clock::of_sequence(sequence);
-        let longest = Time::from_seconds(MAX_PREVIEW_SECONDS).unwrap_or(to);
-        let end = to.min(from + longest);
         let mut result = json!({
             "from": clock.print_position(from),
-            "to": clock.print_position(end),
+            "to": clock.print_position(to),
         });
-        for (side, project) in [("before", before), ("after", after)] {
-            let end = end.min(program(project)?.duration());
-            if end <= from {
+        for (side, project, other) in [("before", before, after), ("after", after, before)] {
+            let times = preview_times(project, other);
+            if times.is_empty() {
                 result[side] = json!({"empty": true});
                 continue;
             }
-            let span = (end - from).seconds();
-            let times: Vec<f64> = (0..PREVIEW_FRAMES)
-                .map(|index| from.seconds() + span * (index as f64 + 0.5) / PREVIEW_FRAMES as f64)
-                .collect();
-            let capture = self.capture_program(
-                project,
-                from,
-                end,
-                &times,
-                PREVIEW_WIDTH,
-                PREVIEW_FRAMES,
-                side,
-            )?;
-            let mut sheet = json!({"path": capture["path"]});
+            let capture =
+                self.capture_frames(project, &times, PREVIEW_WIDTH, Some(PREVIEW_COLUMNS))?;
+            let mut sheet = json!({
+                "frames": times.iter().map(|time| clock.print_position(*time)).collect::<Vec<_>>(),
+                "path": capture.sheet,
+            });
             inline_image(&mut sheet)?;
             result[side] = sheet;
         }
@@ -1096,15 +1109,64 @@ fn changed_range(before: &Project, after: &Project) -> Option<(Sequence, Time, T
     (to > from).then(|| (sequence.clone(), from, to))
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CapturePayload {
-    start: f64,
-    end: f64,
-    duration: f64,
-    path: String,
-    media_type: String,
-    frames: Vec<Value>,
+/// The program positions that show what an edit changed on `side`, the
+/// project before or after it, compared with `other`: the last frame
+/// before and the first frame of every cut it made or moved, and the middle
+/// frame of a clip it changed in place. The earliest come first.
+fn preview_times(side: &Project, other: &Project) -> Vec<Time> {
+    let Some(sequence) = side.sequences.first() else {
+        return Vec::new();
+    };
+    let old = other.sequence(sequence.id.as_str());
+    let rate = sequence.rate;
+    let mut times = Vec::new();
+    let mut cut = |at: Time| times.extend([at - rate.frame_duration(), at]);
+    let mut middles = Vec::new();
+    for track in &sequence.tracks {
+        let previous = old.and_then(|old| old.track(track.id.as_str()));
+        for clip in &track.clips {
+            match previous.and_then(|previous| previous.clip(clip.id.as_str())) {
+                Some(was) if was == clip => {}
+                Some(was) if (was.start, was.end()) == (clip.start, clip.end()) => {
+                    let (first, last) =
+                        (rate.frames_floor(clip.start), rate.frames_floor(clip.end()));
+                    middles.push(rate.time_of(first + (last - first) / 2));
+                }
+                _ => {
+                    cut(clip.start);
+                    cut(clip.end());
+                }
+            }
+        }
+        let Some(previous) = previous else {
+            continue;
+        };
+        for was in &previous.clips {
+            if track.clip(was.id.as_str()).is_none() {
+                cut(was.start);
+            }
+        }
+        for transition in &track.transitions {
+            if previous.transition(transition.id.as_str()) != Some(transition) {
+                if let Some(clip) = track.clip(transition.from.as_str()) {
+                    cut(clip.end());
+                }
+            }
+        }
+    }
+    times.extend(middles);
+    let duration = sequence.duration();
+    times.retain(|time| !time.is_negative() && *time < duration);
+    times.sort();
+    times.dedup();
+    times.truncate(PREVIEW_FRAMES);
+    times
+}
+
+/// Frames of the program, and their contact sheet when one was asked for.
+struct Capture {
+    frames: Vec<String>,
+    sheet: Option<String>,
 }
 
 fn resolve_project_source_path(dir: &Path, input: &str) -> PathBuf {
@@ -1207,6 +1269,41 @@ sequence s1 rate=24 size=1920x1080
             .unwrap()
             .project;
         assert!(changed_range(&before, &marked).is_none());
+    }
+
+    #[test]
+    fn preview_shows_the_frames_around_each_changed_cut() {
+        let before = project(DOCUMENT);
+        let print = |project: &Project, times: Vec<Time>| {
+            let clock = Clock::of_sequence(&project.sequences[0]);
+            times
+                .into_iter()
+                .map(|time| clock.print_position(time))
+                .collect::<Vec<_>>()
+        };
+
+        // A ripple delete at the head moves every later clip, but the
+        // preview starts at the cut it made.
+        let rippled = apply_script(&before, catalog(), "ripple-delete c1")
+            .unwrap()
+            .project;
+        assert_eq!(
+            print(&rippled, preview_times(&rippled, &before)),
+            ["00:00:00:00", "00:00:03:23"]
+        );
+        assert_eq!(
+            print(&before, preview_times(&before, &rippled)),
+            ["00:00:00:00", "00:00:03:23", "00:00:04:00", "00:00:07:23"]
+        );
+
+        // A change in place shows the middle of the clip.
+        let faded = apply_script(&before, catalog(), "set c2 opacity=0.5")
+            .unwrap()
+            .project;
+        assert_eq!(
+            print(&faded, preview_times(&faded, &before)),
+            ["00:00:06:00"]
+        );
     }
 
     #[test]
