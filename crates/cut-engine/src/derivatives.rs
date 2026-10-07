@@ -158,6 +158,46 @@ impl DerivativeCache {
         self.entry(kind, identity, options)
     }
 
+    /// The complete entries of `kind` made from `source` as it is now, with
+    /// whatever options they were made with.
+    pub fn source_entries(&self, source: &Path, kind: &str) -> Result<Vec<CacheEntry>> {
+        let identity = serde_json::to_value(SourceIdentity::from_path(source)?)?;
+        let prefix = format!("{kind}-");
+        let directories = match fs::read_dir(&self.root) {
+            Ok(directories) => directories,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+        let mut entries = Vec::new();
+        for directory in directories {
+            let directory = directory?.path();
+            let named = directory
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(&prefix));
+            let Some(manifest) = named
+                .then(|| fs::read(directory.join("manifest.json")).ok())
+                .flatten()
+                .and_then(|bytes| serde_json::from_slice::<DerivedManifest>(&bytes).ok())
+            else {
+                continue;
+            };
+            if manifest.schema_version == MANIFEST_VERSION
+                && manifest.kind == kind
+                && manifest.identity == identity
+            {
+                entries.push(CacheEntry {
+                    key: manifest.key,
+                    directory,
+                    kind: manifest.kind,
+                    identity: manifest.identity,
+                    options: manifest.options,
+                });
+            }
+        }
+        Ok(entries)
+    }
+
     fn entry(&self, kind: &str, identity: Value, options: &Value) -> Result<CacheEntry> {
         if kind.is_empty()
             || !kind
@@ -256,6 +296,35 @@ mod tests {
             .source_entry(&source, "frames", &json!({"times":[0.0]}))
             .expect("second entry");
         assert_ne!(first.key, second.key);
+    }
+
+    #[test]
+    fn source_entries_find_complete_entries_of_the_source() {
+        let root = tempdir().expect("temp directory");
+        let source = root.path().join("source.bin");
+        let other = root.path().join("other.bin");
+        fs::write(&source, b"source").expect("write source");
+        fs::write(&other, b"other").expect("write other");
+        let cache = DerivativeCache::new(root.path());
+        for (path, options) in [
+            (&source, json!({"n": 1})),
+            (&source, json!({"n": 2})),
+            (&other, json!({"n": 1})),
+        ] {
+            let entry = cache.source_entry(path, "frames", &options).expect("entry");
+            entry.mark_complete(&[]).expect("publish");
+        }
+        cache
+            .source_entry(&source, "frames", &json!({"n": 3}))
+            .expect("incomplete entry");
+        cache
+            .source_entry(&source, "waveform", &json!({"n": 1}))
+            .expect("entry")
+            .mark_complete(&[])
+            .expect("publish");
+        let entries = cache.source_entries(&source, "frames").expect("entries");
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().all(|entry| entry.is_complete(&[])));
     }
 
     #[test]

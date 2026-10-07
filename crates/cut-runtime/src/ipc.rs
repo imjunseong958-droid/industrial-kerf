@@ -360,7 +360,7 @@ impl RuntimeClient {
         &self,
         quality: &str,
     ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
-        self.start_render_range(quality, None, None)
+        self.start_render_range(quality, None, None, None)
     }
 
     /// Queue a render job of the project, or of what a pending `proposal`
@@ -370,6 +370,7 @@ impl RuntimeClient {
         quality: &str,
         range: Option<RenderRange>,
         proposal: Option<&str>,
+        sequence: Option<&str>,
     ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
         let (start, duration) = range
             .map(|range| (Some(range.start), Some(range.duration)))
@@ -379,6 +380,7 @@ impl RuntimeClient {
             start,
             duration,
             proposal_id: proposal.map(str::to_owned),
+            sequence: sequence.map(str::to_owned),
         })? {
             RuntimeResponse::RenderStarted {
                 job,

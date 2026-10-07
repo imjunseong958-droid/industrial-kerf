@@ -174,6 +174,9 @@ pub struct RenderJob {
     pub error: Option<String>,
     #[serde(default)]
     pub range: Option<RenderRange>,
+    /// The sequence rendered; the first when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<String>,
     #[serde(default = "default_render_progress")]
     pub progress: f64,
 }
@@ -299,6 +302,9 @@ pub enum RuntimeRequest {
             skip_serializing_if = "Option::is_none"
         )]
         proposal_id: Option<String>,
+        /// The sequence to render; the first when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sequence: Option<String>,
     },
     GetRender {
         #[serde(rename = "jobId")]

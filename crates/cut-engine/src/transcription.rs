@@ -192,6 +192,23 @@ where
     transcribe_cached_inner(src, cache, options, cancellation, on_progress, false)
 }
 
+/// The transcripts already made of `src` as it is now, of any range, by
+/// any model. Nothing is transcribed.
+pub fn cached_transcripts(src: &str, cache: &DerivativeCache) -> Result<Vec<Transcript>> {
+    let mut transcripts = Vec::new();
+    for entry in cache.source_entries(Path::new(src), "transcription")? {
+        if !entry.is_complete(&["transcript.json"]) {
+            continue;
+        }
+        if let Ok(transcript) = entry.read_json::<Transcript>("transcript.json") {
+            if transcript.schema_version == TRANSCRIPTION_SCHEMA_VERSION {
+                transcripts.push(transcript);
+            }
+        }
+    }
+    Ok(transcripts)
+}
+
 /// Prepare and transcribe a bounded range for a listening observation.
 ///
 /// The same cached transcript as `transcribe_cached` is reused.  The result

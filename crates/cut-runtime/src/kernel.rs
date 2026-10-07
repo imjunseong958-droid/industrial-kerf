@@ -33,17 +33,28 @@ pub(crate) fn program_duration(project: &Project) -> Time {
         .map_or(Time::ZERO, cut_model::Sequence::duration)
 }
 
-/// `[start, end)` seconds of the first sequence as frame-aligned times.
+/// The sequence a render plays: `id`, or the first.
+pub(crate) fn render_sequence<'a>(
+    project: &'a Project,
+    id: Option<&str>,
+) -> Result<&'a cut_model::Sequence, RuntimeError> {
+    match id {
+        Some(id) => project
+            .sequence(id)
+            .ok_or_else(|| RuntimeError::new("UNKNOWN_SEQUENCE", format!("no sequence `{id}`"))),
+        None => project.sequences.first().ok_or_else(|| {
+            RuntimeError::new("INVALID_RENDER_RANGE", "the project has no sequence")
+        }),
+    }
+}
+
+/// `[start, end)` seconds of `sequence` as frame-aligned times.
 pub(crate) fn time_range(
-    project: &Project,
+    sequence: &cut_model::Sequence,
     start: f64,
     end: f64,
 ) -> Result<(Time, Time), RuntimeError> {
-    let rate = project
-        .sequences
-        .first()
-        .map(|sequence| sequence.rate)
-        .ok_or_else(|| RuntimeError::new("INVALID_RENDER_RANGE", "the project has no sequence"))?;
+    let rate = sequence.rate;
     let time = |seconds: f64| {
         Time::from_seconds(seconds)
             .map(|time| rate.round(time))
