@@ -1,11 +1,13 @@
 #include "main_window.h"
 #include "bridge.h"
+#include "command_registry.h"
 #include "editor_common.h"
 #include "editor_style.h"
 #include "media_artwork.h"
 #include "timeline_widget.h"
 #include "viewer_widget.h"
 
+#include <QActionGroup>
 #include <QApplication>
 #include <QClipboard>
 #include <QColorDialog>
@@ -129,22 +131,21 @@ void MainWindow::importMedia() {
     const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Import media"), QString(),
                                                        QStringLiteral("Media files (*.mov *.mp4 *.m4v *.mkv *.webm *.wav *.mp3);;All files (*)"));
     if (path.isEmpty()) return;
-    if (!sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("import")},
-                           {QStringLiteral("path"), path},
-                           {QStringLiteral("revision"), QJsonValue::fromVariant(QVariant::fromValue(m_revision))}})) return;
+    if (!execute(QStringLiteral("file.import"), QJsonObject{{QStringLiteral("path"), path}})) return;
     addActivity(QStringLiteral("import"), QStringLiteral("Importing %1").arg(QFileInfo(path).fileName()));
 }
 
 void MainWindow::exportProject() {
     const QString quality = m_quality->currentData().toString();
-    if (!sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("export")}, {QStringLiteral("quality"), quality}})) return;
+    if (!execute(QStringLiteral("file.export"), QJsonObject{{QStringLiteral("quality"), quality}})) return;
     addActivity(QStringLiteral("export"), QStringLiteral("Export started (%1)").arg(m_quality->currentText()));
 }
 
 void MainWindow::renderPreview() {
-    if (!sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("preview")}})) return;
+    if (!execute(QStringLiteral("sequence.renderPreview"))) return;
     addActivity(QStringLiteral("preview"), QStringLiteral("Rendering preview"));
-    m_previewButton->setEnabled(false);
+    m_previewStatus = QStringLiteral("running");
+    updateCommandStates();
 }
 
 void MainWindow::canvasPresetChanged(int index) {
@@ -162,10 +163,9 @@ void MainWindow::canvasPresetChanged(int index) {
         syncCanvasPreset(m_canvasSize);
         return;
     }
-    const QJsonObject op{{QStringLiteral("op"), QStringLiteral("set-sequence")},
-                         {QStringLiteral("width"), width},
-                         {QStringLiteral("height"), height}};
-    if (!sendEdit(QJsonArray{op})) syncCanvasPreset(m_canvasSize);
+    if (!execute(QStringLiteral("sequence.setFormat"),
+                 QJsonObject{{QStringLiteral("width"), width}, {QStringLiteral("height"), height}}))
+        syncCanvasPreset(m_canvasSize);
 }
 
 void MainWindow::addTrack() {
@@ -174,15 +174,7 @@ void MainWindow::addTrack() {
     auto *audio = menu.addAction(QStringLiteral("Add audio track"));
     const QAction *choice = menu.exec(m_timeline->mapToGlobal(m_timeline->addLaneButtonCenter()));
     if (choice != video && choice != audio) return;
-    const QString kind = choice == audio ? QStringLiteral("audio") : QStringLiteral("video");
-    int count = 0;
-    for (const QJsonValue &value : m_project.value(QStringLiteral("tracks")).toArray())
-        if (value.toObject().value(QStringLiteral("type")).toString() == kind) ++count;
-    const QString name = choice == audio ? QStringLiteral("Audio %1").arg(count + 1)
-                                          : QStringLiteral("Video %1").arg(count + 1);
-    sendEdit(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("add-track")},
-                                    {QStringLiteral("kind"), kind},
-                                    {QStringLiteral("name"), name}}});
+    execute(choice == audio ? QStringLiteral("sequence.addAudioTrack") : QStringLiteral("sequence.addVideoTrack"));
 }
 
 void MainWindow::togglePlayback() {
@@ -211,6 +203,7 @@ void MainWindow::queueSeek(double time) {
     m_playhead = m_pendingSeek;
     m_timeline->setPlayhead(m_playhead);
     updateTransport();
+    updateCommandStates();
     m_viewer->setLiveScrub(true);
     if (m_pendingSeekScrub) m_exactSeekTimer.start(50);
     else m_exactSeekTimer.stop();
@@ -278,6 +271,7 @@ void MainWindow::selectClip(const QString &id) {
     m_selectedClip = id;
     m_timeline->setSelectedClip(id);
     updateInspector();
+    updateCommandStates();
 }
 
 bool MainWindow::sendEdit(const QJsonArray &ops) {
@@ -306,9 +300,7 @@ void MainWindow::moveClip(const QString &id, double start) {
     if (clip.isEmpty()) return;
     const qint64 frames = frameAt(start) - clipFrames(clip, QStringLiteral("startFrame"));
     if (frames == 0) return;
-    sendEdit(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("move")},
-                                    {QStringLiteral("clip"), id},
-                                    {QStringLiteral("frames"), frames}}});
+    execute(QStringLiteral("clip.move"), QJsonObject{{QStringLiteral("clip"), id}, {QStringLiteral("frames"), frames}});
 }
 
 void MainWindow::trimClip(const QString &id, bool leading, double frame) {
@@ -318,18 +310,13 @@ void MainWindow::trimClip(const QString &id, bool leading, double frame) {
     const qint64 edge = leading ? start : start + clipFrames(clip, QStringLiteral("durationFrames"));
     const qint64 frames = std::llround(frame) - edge;
     if (frames == 0) return;
-    sendEdit(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("trim")},
-                                    {QStringLiteral("clip"), id},
-                                    {QStringLiteral("edge"), leading ? QStringLiteral("in") : QStringLiteral("out")},
-                                    {QStringLiteral("frames"), frames}}});
+    execute(QStringLiteral("clip.trim"), QJsonObject{{QStringLiteral("clip"), id},
+                                                     {QStringLiteral("edge"), leading ? QStringLiteral("in") : QStringLiteral("out")},
+                                                     {QStringLiteral("frames"), frames}});
 }
 
 void MainWindow::splitClip() {
-    if (m_selectedClip.isEmpty()) return;
-    sendEdit(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("split")},
-                                    {QStringLiteral("clip"), m_selectedClip},
-                                    {QStringLiteral("at"), frameAt(m_playhead)},
-                                    {QStringLiteral("tail"), QStringLiteral("clip-%1").arg(QDateTime::currentMSecsSinceEpoch())}}});
+    execute(QStringLiteral("clip.split"));
 }
 
 QJsonObject MainWindow::cropProps(const QJsonObject &box) {
@@ -654,9 +641,7 @@ void MainWindow::focusRegion() {
 }
 
 void MainWindow::deleteSelected() {
-    if (m_selectedClip.isEmpty()) return;
-    sendEdit(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("delete")},
-                                    {QStringLiteral("clips"), QJsonArray{m_selectedClip}}}});
+    execute(QStringLiteral("clip.delete"));
 }
 
 void MainWindow::sendChat() {
@@ -893,15 +878,6 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
         m_timeline->fitToWidth(m_timelineScroll->viewport()->width());
     }
     return QMainWindow::eventFilter(object, event);
-}
-
-void MainWindow::keyPressEvent(QKeyEvent *event) {
-    if (event->key() == Qt::Key_S && m_timeline && m_timeline->hasFocus()) {
-        splitClip();
-        event->accept();
-        return;
-    }
-    QMainWindow::keyPressEvent(event);
 }
 
 void MainWindow::buildUi() {
@@ -1523,74 +1499,51 @@ void MainWindow::syncCanvasPreset(const QSize &size) {
 }
 
 void MainWindow::setupActions() {
+    // Menus, shortcuts, and the toolbar come from the command registry.
+    // Frontend commands and engine commands that need a dialog first have
+    // handlers here; every other command resolves to a bridge request.
+    m_commands = new CommandRegistry(QSettings().value(QStringLiteral("commands/keymap")).toString(), m_timeline, this);
+    m_commandHandlers = {
+        {QStringLiteral("file.import"), [this] { importMedia(); }},
+        {QStringLiteral("file.export"), [this] { exportProject(); }},
+        {QStringLiteral("app.quit"), [] { QApplication::quit(); }},
+        {QStringLiteral("clip.focusRegion"), [this] { focusRegion(); }},
+        {QStringLiteral("sequence.renderPreview"), [this] { renderPreview(); }},
+        {QStringLiteral("playback.toggle"), [this] { togglePlayback(); }},
+        {QStringLiteral("playback.goToStart"), [this] { seekToStart(); }},
+        {QStringLiteral("playback.previousFrame"), [this] { stepBackward(); }},
+        {QStringLiteral("playback.nextFrame"), [this] { stepForward(); }},
+        {QStringLiteral("playback.goToEnd"), [this] { seekToEnd(); }},
+        {QStringLiteral("view.fitTracks"), [this] { m_timeline->fitTracksToView(); }},
+        {QStringLiteral("view.resetTrackHeights"), [this] { m_timeline->resetTrackHeights(); }},
+    };
+    connect(m_commands, &CommandRegistry::triggered, this, &MainWindow::triggerCommand);
+    connect(m_commands, &CommandRegistry::toggled, this, [this](const QString &id, bool checked) {
+        if (id == QStringLiteral("view.assistantPanel")) m_agentPanel->setVisible(checked);
+    });
+    connect(m_commands, &CommandRegistry::shortcutsChanged, this, &MainWindow::updateTransport);
+    m_commands->action(QStringLiteral("view.assistantPanel"))->setChecked(true);
+
     menuBar()->setNativeMenuBar(true);
-    auto *view = menuBar()->addMenu(QStringLiteral("View"));
-    auto addPanelToggle = [view](const QString &title, QWidget *panel) {
-        auto *action = view->addAction(title);
-        action->setCheckable(true);
-        action->setChecked(true);
-        connect(action, &QAction::toggled, panel, &QWidget::setVisible);
-    };
-    addPanelToggle(QStringLiteral("Agent and inspector"), m_agentPanel);
-    view->addSeparator();
-    auto *fitTracks = view->addAction(QStringLiteral("Fit tracks to panel"));
-    connect(fitTracks, &QAction::triggered, m_timeline, &TimelineWidget::fitTracksToView);
-    auto *resetTracks = view->addAction(QStringLiteral("Reset track heights"));
-    connect(resetTracks, &QAction::triggered, m_timeline, &TimelineWidget::resetTrackHeights);
-    auto *file = menuBar()->addMenu(QStringLiteral("File"));
-    auto *import = file->addAction(QStringLiteral("Import media…"));
-    import->setShortcut(QKeySequence::Open);
-    connect(import, &QAction::triggered, this, &MainWindow::importMedia);
-    auto *exportAction = file->addAction(QStringLiteral("Export…"));
-    exportAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+E")));
-    connect(exportAction, &QAction::triggered, this, &MainWindow::exportProject);
-    file->addSeparator();
-    auto *refreshAction = file->addAction(QStringLiteral("Refresh project"));
-    connect(refreshAction, &QAction::triggered, this, &MainWindow::refresh);
-    file->addSeparator();
-    auto *quit = file->addAction(QStringLiteral("Quit"));
-    quit->setShortcut(QKeySequence::Quit);
-    connect(quit, &QAction::triggered, qApp, &QApplication::quit);
-
-    auto *edit = menuBar()->addMenu(QStringLiteral("Edit"));
-    auto *undoAction = edit->addAction(QStringLiteral("Undo"));
-    m_undoAction = undoAction; undoAction->setEnabled(false);
-    undoAction->setShortcut(QKeySequence::Undo);
-    connect(undoAction, &QAction::triggered, this, &MainWindow::undo);
-    auto *redoAction = edit->addAction(QStringLiteral("Redo"));
-    m_redoAction = redoAction; redoAction->setEnabled(false);
-    redoAction->setShortcut(QKeySequence::Redo);
-    connect(redoAction, &QAction::triggered, this, &MainWindow::redo);
-    edit->addSeparator();
-    auto *deleteAction = edit->addAction(QStringLiteral("Delete selected clip"));
-    deleteAction->setShortcut(QKeySequence::Delete);
-    deleteAction->setShortcutContext(Qt::WidgetShortcut);
-    m_timeline->addAction(deleteAction);
-    connect(deleteAction, &QAction::triggered, this, &MainWindow::deleteSelected);
-    auto *splitAction = edit->addAction(QStringLiteral("Split at playhead"));
-    connect(splitAction, &QAction::triggered, this, &MainWindow::splitClip);
-    auto *focusAction = edit->addAction(QStringLiteral("Focus region…"));
-    connect(focusAction, &QAction::triggered, this, &MainWindow::focusRegion);
-
-    auto *playback = menuBar()->addMenu(QStringLiteral("Playback"));
-    auto *play = playback->addAction(QStringLiteral("Play / Pause"));
-    play->setShortcut(Qt::Key_Space);
-    play->setShortcutContext(Qt::WidgetShortcut);
-    m_timeline->addAction(play);
-    connect(play, &QAction::triggered, this, &MainWindow::togglePlayback);
-    playback->addSeparator();
-    const auto transportAction = [&](const QString &title, Qt::Key key, void (MainWindow::*slot)()) {
-        auto *action = playback->addAction(title);
-        action->setShortcut(key);
-        action->setShortcutContext(Qt::WidgetShortcut);
-        m_timeline->addAction(action);
-        connect(action, &QAction::triggered, this, slot);
-        return action;
-    };
-    auto *toStart = transportAction(QStringLiteral("Go to start"), Qt::Key_Home, &MainWindow::seekToStart);
-    auto *previousFrame = transportAction(QStringLiteral("Previous frame"), Qt::Key_Left, &MainWindow::stepBackward);
-    auto *nextFrame = transportAction(QStringLiteral("Next frame"), Qt::Key_Right, &MainWindow::stepForward);
-    auto *toEnd = transportAction(QStringLiteral("Go to end"), Qt::Key_End, &MainWindow::seekToEnd);
+    const QHash<QString, QMenu *> menus = m_commands->buildMenus(menuBar());
+    if (QMenu *edit = menus.value(QStringLiteral("Edit"))) {
+        edit->addSeparator();
+        auto *keymapMenu = edit->addMenu(QStringLiteral("Keyboard Shortcuts"));
+        auto *keymapGroup = new QActionGroup(keymapMenu);
+        for (const QJsonValue &value : m_commands->keymaps()) {
+            const QJsonObject keymap = value.toObject();
+            const QString id = keymap.value(QStringLiteral("id")).toString();
+            auto *choice = keymapMenu->addAction(keymap.value(QStringLiteral("label")).toString());
+            choice->setObjectName(QStringLiteral("keymap.%1").arg(id));
+            choice->setCheckable(true);
+            choice->setChecked(id == m_commands->keymap());
+            keymapGroup->addAction(choice);
+            connect(choice, &QAction::triggered, this, [this, id] {
+                m_commands->setKeymap(id);
+                QSettings().setValue(QStringLiteral("commands/keymap"), id);
+            });
+        }
+    }
 
     auto *toolbar = addToolBar(QStringLiteral("Main"));
     toolbar->setMovable(false);
@@ -1604,7 +1557,9 @@ void MainWindow::setupActions() {
         menuButton->setAccessibleName(QStringLiteral("Application menu"));
         menuButton->setPopupMode(QToolButton::InstantPopup);
         auto *applicationMenu = new QMenu(menuButton);
-        for (auto *menu : {view, file, edit, playback}) {
+        for (const QString &name : m_commands->menuNames()) {
+            QMenu *menu = menus.value(name);
+            if (!menu) continue;
             applicationMenu->addMenu(menu);
             for (auto *action : menu->actions()) {
                 if (action->shortcutContext() != Qt::WidgetShortcut)
@@ -1645,20 +1600,20 @@ void MainWindow::setupActions() {
         painter.drawPath(path);
         return QIcon(pixmap);
     };
-    import->setIcon(icon(QStringLiteral("↓")));
-    undoAction->setIcon(icon(QStringLiteral("↶")));
-    redoAction->setIcon(icon(QStringLiteral("↷")));
-    toolbar->addAction(import);
+    const auto toolbarCommand = [&](const QString &id, const QString &text, const QString &glyph = QString()) {
+        QAction *action = m_commands->action(id);
+        action->setIconText(text);
+        if (!glyph.isEmpty()) action->setIcon(icon(glyph));
+        toolbar->addAction(action);
+        return qobject_cast<QToolButton *>(toolbar->widgetForAction(action));
+    };
+    toolbarCommand(QStringLiteral("file.import"), QStringLiteral("Import"), QStringLiteral("↓"));
     toolbar->addSeparator();
-    toolbar->addAction(undoAction);
-    toolbar->addAction(redoAction);
+    toolbarCommand(QStringLiteral("edit.undo"), QStringLiteral("Undo"), QStringLiteral("↶"));
+    toolbarCommand(QStringLiteral("edit.redo"), QStringLiteral("Redo"), QStringLiteral("↷"));
     toolbar->addSeparator();
-    auto *split = toolbar->addAction(QStringLiteral("Split"));
-    split->setIcon(icon(QStringLiteral("✂")));
-    connect(split, &QAction::triggered, this, &MainWindow::splitClip);
-    auto *deleteToolbar = toolbar->addAction(QStringLiteral("Delete"));
-    deleteToolbar->setIcon(icon(QStringLiteral("×")));
-    connect(deleteToolbar, &QAction::triggered, this, &MainWindow::deleteSelected);
+    toolbarCommand(QStringLiteral("clip.split"), QStringLiteral("Split"), QStringLiteral("✂"));
+    toolbarCommand(QStringLiteral("clip.delete"), QStringLiteral("Delete"), QStringLiteral("×"));
     toolbar->addSeparator();
     auto *spacer = new QWidget;
     spacer->setStyleSheet(QStringLiteral("background: transparent"));
@@ -1688,19 +1643,62 @@ void MainWindow::setupActions() {
     connect(m_canvasPreset, qOverload<int>(&QComboBox::currentIndexChanged),
             this, &MainWindow::canvasPresetChanged);
     toolbar->addWidget(m_canvasPreset);
-    auto *exportToolbar = toolbar->addAction(QStringLiteral("Export"));
-    exportToolbar->setToolTip(QStringLiteral("Export the timeline"));
-    connect(exportToolbar, &QAction::triggered, this, &MainWindow::exportProject);
-    if (auto *exportButton = qobject_cast<QToolButton *>(toolbar->widgetForAction(exportToolbar)))
+    if (auto *exportButton = toolbarCommand(QStringLiteral("file.export"), QStringLiteral("Export")))
         exportButton->setObjectName(QStringLiteral("toolbarPrimary"));
-    m_previewButton = toolbar->addAction(QStringLiteral("Render"));
-    m_previewButton->setToolTip(QStringLiteral("Render a preview of the timeline"));
-    m_previewButton->setEnabled(false);
-    connect(m_previewButton, &QAction::triggered, this, &MainWindow::renderPreview);
-    if (auto *renderButton = qobject_cast<QToolButton *>(toolbar->widgetForAction(m_previewButton)))
+    if (auto *renderButton = toolbarCommand(QStringLiteral("sequence.renderPreview"), QStringLiteral("Render")))
         renderButton->setObjectName(QStringLiteral("toolbarQuiet"));
-    m_runtimeActions = {import, exportAction, refreshAction, splitAction, deleteAction, play, split, deleteToolbar, exportToolbar,
-                        toStart, previousFrame, nextFrame, toEnd};
+    updateCommandStates();
+}
+
+void MainWindow::triggerCommand(const QString &id) {
+    if (!m_commands->isEnabled(id)) return;
+    const auto handler = m_commandHandlers.constFind(id);
+    if (handler != m_commandHandlers.cend()) (*handler)();
+    else execute(id);
+}
+
+bool MainWindow::execute(const QString &id, const QJsonObject &params) {
+    const QJsonObject result = CommandRegistry::run(id, params, commandContext());
+    if (result.contains(QStringLiteral("error"))) {
+        statusBar()->showMessage(result.value(QStringLiteral("error")).toString(), 4000);
+        return false;
+    }
+    return sendSimple(result.value(QStringLiteral("request")).toObject());
+}
+
+QJsonObject MainWindow::commandContext() const {
+    int videoTracks = 0;
+    int audioTracks = 0;
+    for (const QJsonValue &value : m_project.value(QStringLiteral("tracks")).toArray()) {
+        const QString type = value.toObject().value(QStringLiteral("type")).toString();
+        if (type == QStringLiteral("video")) ++videoTracks;
+        else if (type == QStringLiteral("audio")) ++audioTracks;
+    }
+    QJsonObject context{{QStringLiteral("connected"), m_connected},
+                        {QStringLiteral("revision"), revisionValue()},
+                        {QStringLiteral("canUndo"), m_snapshot.value(QStringLiteral("canUndo")).toBool()},
+                        {QStringLiteral("canRedo"), m_snapshot.value(QStringLiteral("canRedo")).toBool()},
+                        {QStringLiteral("playheadFrame"), frameAt(m_playhead)},
+                        {QStringLiteral("previewRequired"), m_previewRequired},
+                        {QStringLiteral("previewRenderable"), m_previewStatus == QStringLiteral("required")},
+                        {QStringLiteral("videoTracks"), videoTracks},
+                        {QStringLiteral("audioTracks"), audioTracks}};
+    const QJsonObject clip = selectedClipObject();
+    if (!clip.isEmpty()) {
+        context.insert(QStringLiteral("selection"),
+                       QJsonObject{{QStringLiteral("clip"), m_selectedClip},
+                                   {QStringLiteral("track"), selectedTrackType()},
+                                   {QStringLiteral("startFrame"), clipFrames(clip, QStringLiteral("startFrame"))},
+                                   {QStringLiteral("durationFrames"), clipFrames(clip, QStringLiteral("durationFrames"))}});
+    }
+    return context;
+}
+
+void MainWindow::updateCommandStates() {
+    if (!m_commands) return;
+    m_commands->update(commandContext());
+    for (auto *button : m_transportButtons)
+        button->setEnabled(m_commands->isEnabled(button->property("command").toString()));
 }
 
 QWidget *MainWindow::buildTransport() {
@@ -1716,23 +1714,24 @@ QWidget *MainWindow::buildTransport() {
     m_transportTime->setMinimumWidth(120);
     layout->addWidget(m_transportTime);
     layout->addStretch(1);
-    const auto button = [&](TransportGlyph glyph, const QString &tip, void (MainWindow::*slot)()) {
+    // Each button runs a playback command; updateTransport labels it with
+    // the command's shortcut.
+    const auto button = [&](TransportGlyph glyph, const QString &command) {
         auto *control = new QToolButton;
         control->setObjectName(QStringLiteral("transportButton"));
+        control->setProperty("command", command);
         control->setIcon(transportIcon(glyph));
         control->setIconSize(QSize(14, 14));
-        control->setToolTip(tip);
-        control->setAccessibleName(tip);
-        connect(control, &QToolButton::clicked, this, slot);
+        connect(control, &QToolButton::clicked, this, [this, command] { triggerCommand(command); });
         layout->addWidget(control);
         m_transportButtons.append(control);
         return control;
     };
-    button(TransportGlyph::Start, QStringLiteral("Go to start (Home)"), &MainWindow::seekToStart);
-    button(TransportGlyph::PreviousFrame, QStringLiteral("Previous frame (Left)"), &MainWindow::stepBackward);
-    m_transportPlay = button(TransportGlyph::Play, QStringLiteral("Play (Space)"), &MainWindow::togglePlayback);
-    button(TransportGlyph::NextFrame, QStringLiteral("Next frame (Right)"), &MainWindow::stepForward);
-    button(TransportGlyph::End, QStringLiteral("Go to end (End)"), &MainWindow::seekToEnd);
+    button(TransportGlyph::Start, QStringLiteral("playback.goToStart"));
+    button(TransportGlyph::PreviousFrame, QStringLiteral("playback.previousFrame"));
+    m_transportPlay = button(TransportGlyph::Play, QStringLiteral("playback.toggle"));
+    button(TransportGlyph::NextFrame, QStringLiteral("playback.nextFrame"));
+    button(TransportGlyph::End, QStringLiteral("playback.goToEnd"));
     layout->addStretch(1);
     m_transportDuration = new QLabel(timelineTimecode(0.0, m_fps));
     m_transportDuration->setObjectName(QStringLiteral("transportDuration"));
@@ -1750,7 +1749,15 @@ void MainWindow::updateTransport() {
     if (m_transportShowsPause != m_playing) {
         m_transportShowsPause = m_playing;
         m_transportPlay->setIcon(transportIcon(m_playing ? TransportGlyph::Pause : TransportGlyph::Play));
-        m_transportPlay->setToolTip(m_playing ? QStringLiteral("Pause (Space)") : QStringLiteral("Play (Space)"));
+    }
+    if (!m_commands) return;
+    for (auto *button : m_transportButtons) {
+        const QString command = button->property("command").toString();
+        const QString tip = button == m_transportPlay
+            ? m_commands->labelWithShortcut(command, m_playing ? QStringLiteral("Pause") : QStringLiteral("Play"))
+            : m_commands->labelWithShortcut(command);
+        button->setToolTip(tip);
+        button->setAccessibleName(tip);
     }
 }
 
@@ -1879,6 +1886,7 @@ void MainWindow::handleEvent(QJsonObject event) {
             m_timeline->setPlayhead(m_playhead);
         }
         updateTransport();
+        updateCommandStates();
     } else if (type == QStringLiteral("playback")) {
         m_playing = m_connected && event.value(QStringLiteral("playing")).toBool();
         updateTransport();
@@ -1887,6 +1895,7 @@ void MainWindow::handleEvent(QJsonObject event) {
             m_hoverSkimming = false;
             m_timeline->clearSkimmer();
         }
+        updateCommandStates();
     } else if (type == QStringLiteral("export")) {
         const double progress = event.value(QStringLiteral("progress")).toDouble();
         m_exportProgress->setValue(static_cast<int>(std::clamp(progress, 0.0, 1.0) * 100.0));
@@ -1900,9 +1909,9 @@ void MainWindow::handleEvent(QJsonObject event) {
     } else if (type == QStringLiteral("preview")) {
         const QString status = event.value(QStringLiteral("status")).toString();
         const QString message = event.value(QStringLiteral("message")).toString();
+        if (!status.isEmpty()) m_previewStatus = status;
         if (status == QStringLiteral("required") || status == QStringLiteral("unavailable")) {
             m_previewRequired = true;
-            m_previewButton->setEnabled(m_connected && status == QStringLiteral("required"));
             m_viewer->clearFrame();
             const QString detail = message.isEmpty() ? QStringLiteral("Rendered preview required") : message;
             statusBar()->setToolTip(detail);
@@ -1910,12 +1919,10 @@ void MainWindow::handleEvent(QJsonObject event) {
             addActivity(QStringLiteral("preview"), message.isEmpty() ? QStringLiteral("Native preview unavailable") : message);
         } else if (status == QStringLiteral("running")) {
             m_previewRequired = true;
-            m_previewButton->setEnabled(false);
             m_exportProgress->setValue(static_cast<int>(std::clamp(event.value(QStringLiteral("progress")).toDouble(), 0.0, 1.0) * 100.0));
             m_exportProgress->show();
         } else if (status == QStringLiteral("ready")) {
             m_previewRequired = false;
-            m_previewButton->setEnabled(false);
             m_exportProgress->setValue(0);
             m_exportProgress->hide();
             statusBar()->showMessage(QStringLiteral("Preview ready"), 4000);
@@ -1923,6 +1930,7 @@ void MainWindow::handleEvent(QJsonObject event) {
     } else if (type == QStringLiteral("caption")) {
         m_viewer->setCaption(event.value(QStringLiteral("text")).toString());
     }
+    if (type == QStringLiteral("preview")) updateCommandStates();
 }
 
 void MainWindow::applySnapshot(const QJsonObject &snapshot) {
@@ -1946,8 +1954,6 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
         track.insert("clips", displayClips); displayTracks.append(track);
     }
     m_project.insert("tracks", displayTracks);
-    m_undoAction->setEnabled(m_connected && snapshot.value("canUndo").toBool());
-    m_redoAction->setEnabled(m_connected && snapshot.value("canRedo").toBool());
     m_fps = m_project.value(QStringLiteral("fps")).toDouble(24.0);
     m_projectTitle->setText(m_project.value(QStringLiteral("name")).toString(QStringLiteral("Untitled project")));
     const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
@@ -1972,6 +1978,7 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     m_artwork->request(sources, m_projectDirectory);
     updateProposal(snapshot.value(QStringLiteral("pendingProposal")));
     updateInspector();
+    updateCommandStates();
 }
 
 QString MainWindow::selectedTrackType() const {
@@ -2156,8 +2163,6 @@ void MainWindow::setConnection(const QString &status, const QString &message) {
     m_timeline->setEnabled(m_connected);
     if (m_canvasPreset) m_canvasPreset->setEnabled(m_connected);
     m_chatInput->setEnabled(m_connected && !m_agentBusy);
-    for (auto *action : m_runtimeActions) action->setEnabled(m_connected);
-    for (auto *button : m_transportButtons) button->setEnabled(m_connected);
     if (m_statusConnection) {
         const QString state = m_connected ? QStringLiteral("ready")
             : status == QStringLiteral("connecting") ? QStringLiteral("connecting") : QStringLiteral("disconnected");
@@ -2167,9 +2172,6 @@ void MainWindow::setConnection(const QString &status, const QString &message) {
         m_statusConnection->style()->unpolish(m_statusConnection);
         m_statusConnection->style()->polish(m_statusConnection);
     }
-    m_undoAction->setEnabled(m_connected && m_snapshot.value(QStringLiteral("canUndo")).toBool());
-    m_redoAction->setEnabled(m_connected && m_snapshot.value(QStringLiteral("canRedo")).toBool());
-    m_previewButton->setEnabled(m_connected && m_previewRequired);
     if (!m_connected) {
         m_playing = false;
         updateTransport();
@@ -2188,6 +2190,7 @@ void MainWindow::setConnection(const QString &status, const QString &message) {
     updateInspector();
     updateProposal(m_snapshot.value(QStringLiteral("pendingProposal")));
     updateChatControls();
+    updateCommandStates();
     QTimer::singleShot(0, this, [this] {
         if (m_timelineScroll && m_timeline && m_timelineScroll->viewport()->width() > 0) {
             m_timeline->fitToWidth(m_timelineScroll->viewport()->width());

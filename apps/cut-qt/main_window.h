@@ -28,9 +28,11 @@
 #include <QWidget>
 
 #include <cmath>
+#include <functional>
 
 namespace cut {
 
+class CommandRegistry;
 class MediaArtwork;
 class TimelineWidget;
 class ViewerWidget;
@@ -49,9 +51,9 @@ private slots:
     void renderPreview();
     void canvasPresetChanged(int index);
     void addTrack();
-    void undo() { sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("undo")}, {QStringLiteral("revision"), revisionValue()}}); }
-    void redo() { sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("redo")}, {QStringLiteral("revision"), revisionValue()}}); }
-    void refresh() { sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("refresh")}}); }
+    // Run a command from a menu, shortcut, or control: its handler when the
+    // window carries it out, otherwise the request it resolves to.
+    void triggerCommand(const QString &id);
     void togglePlayback();
     void queueSeek(double time);
     void queueHoverSeek(double time);
@@ -103,7 +105,6 @@ private slots:
 
 protected:
     bool eventFilter(QObject *object, QEvent *event) override;
-    void keyPressEvent(QKeyEvent *event) override;
 
 private:
     void buildUi();
@@ -114,6 +115,11 @@ private:
     static void setPropertyValue(QWidget *editor, const QJsonValue &value);
     void syncCanvasPreset(const QSize &size);
     void setupActions();
+    // Resolve a command in the current context and send its request.
+    bool execute(const QString &id, const QJsonObject &params = {});
+    // What commands read: connection, selection, playhead, history, preview.
+    QJsonObject commandContext() const;
+    void updateCommandStates();
 
     // Transport under the viewer: playhead timecode, the usual buttons, and
     // the program length.
@@ -164,7 +170,8 @@ private:
     QLabel *m_errorMessage = nullptr;
     QWidget *m_agentPanel = nullptr;
     QScrollArea *m_timelineScroll = nullptr;
-    QList<QAction *> m_runtimeActions;
+    CommandRegistry *m_commands = nullptr;
+    QHash<QString, std::function<void()>> m_commandHandlers;
     QList<QToolButton *> m_transportButtons;
     QToolButton *m_transportPlay = nullptr;
     QLabel *m_transportTime = nullptr;
@@ -188,6 +195,8 @@ private:
     bool m_pendingHoverScrub = false;
     bool m_playing = false;
     bool m_previewRequired = false;
+    // The latest preview status: required, unavailable, running, or ready.
+    QString m_previewStatus;
     bool m_hoverSkimming = false;
     bool m_pointerOwnsPlayhead = false;
     bool m_hasShownFrame = false;
@@ -245,9 +254,6 @@ private:
     QComboBox *m_quality = nullptr;
     QComboBox *m_canvasPreset = nullptr;
     QProgressBar *m_exportProgress = nullptr;
-    QAction *m_undoAction = nullptr;
-    QAction *m_redoAction = nullptr;
-    QAction *m_previewButton = nullptr;
 };
 
 } // namespace cut

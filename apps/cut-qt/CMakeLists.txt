@@ -17,6 +17,8 @@ endif()
 
 set(CUT_QT_SOURCES
     bridge.h
+    command_registry.cpp
+    command_registry.h
     editor_common.cpp
     editor_common.h
     editor_style.h

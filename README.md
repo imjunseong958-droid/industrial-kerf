@@ -39,6 +39,13 @@ sequence as cuts and asks for a rendered preview whenever it would show
 something different. Editor snapshots carry the document and a timeline
 view of it; the editor sends its edits back as typed operations.
 
+Editor actions are commands in one registry (`cut-commands`, see
+[ADR 0007](docs/architecture/0007-editor-first-workspace.md)): each has an id,
+a label, its menu, shortcuts in the Cut, Premiere Pro, and Final Cut Pro
+keymaps, and an enabled state that says why it is unavailable. The editor
+builds its menus, shortcuts, and toolbar from it, and engine commands
+resolve to the typed operations or runtime requests that carry them out.
+
 FFmpeg, ffprobe, and yt-dlp remain controlled native sidecars. Editing
 playbooks are data in `skills/*/SKILL.md` and are loaded by `cut-skills`.
 
