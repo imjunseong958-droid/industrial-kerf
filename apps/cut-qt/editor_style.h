@@ -433,6 +433,14 @@ QStatusBar QLabel#statusConnection[state="connecting"] { color: #e6c98a; }
 QStatusBar QLabel#statusConnection[state="disconnected"] { color: #e0a0a0; }
 QFrame#connectionBanner,
 QFrame#errorBanner { background: #352b36; border: 1px solid #896985; border-radius: 4px; }
+QToolBar#toolPalette { background: #171717; border: 0; border-right: 1px solid #0a0a0a; spacing: 2px; padding: 4px 2px; }
+QToolBar#toolPalette QToolButton { color: #a9a9a9; font-size: 15px; min-width: 24px; min-height: 24px; border-radius: 3px; }
+QToolBar#toolPalette QToolButton:hover { background: #2c2c2c; color: #e6e6e6; }
+QToolBar#toolPalette QToolButton:checked { background: #3a3220; color: #f0b429; }
+QListWidget#projectBin { background: #161616; border: 0; }
+QListWidget#projectBin::item { color: #cfcfcf; border-radius: 3px; padding: 4px; }
+QListWidget#projectBin::item:selected { background: #2f2f2f; color: #f0f0f0; }
+QWidget#sourceMonitor { background: #1a1a1a; }
 )QSS");
 }
 

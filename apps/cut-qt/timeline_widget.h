@@ -17,6 +17,9 @@ namespace cut {
 
 class MediaArtwork;
 
+// Editing tools, as in other edit suites: what a click or drag on a clip does.
+enum class TimelineTool { Selection, Razor, Ripple, Roll, Slip, Slide };
+
 class TimelineWidget final : public QWidget {
     Q_OBJECT
 public:
@@ -31,6 +34,13 @@ public:
     bool isFitToWidth() const { return m_fitWidth > 0; }
     void setArtwork(MediaArtwork *artwork);
     void clearSkimmer();
+    void setTool(TimelineTool tool);
+    TimelineTool tool() const { return m_tool; }
+    // Dragged edges snap to clip edges, the playhead, and the start.
+    void setSnapping(bool snapping) { m_snapping = snapping; }
+    bool snapping() const { return m_snapping; }
+    // The track header toggles: picture output or sound mute, and lock.
+    QRect headerToggleRect(int row, int index) const;
 
     // Every track shares the visible panel height, the way Pro Tools fits
     // tracks to the window. The empty add-track row stays reachable below.
@@ -49,8 +59,12 @@ signals:
     void hoverSeekRequested(double time);
     void hoverSeekEnded();
     void clipSelected(const QString &clipId);
+    // A body drag, with the Selection, Slip, or Slide tool.
     void moveRequested(const QString &clipId, double timelineStart);
+    // An edge drag, with the Selection, Ripple, or Roll tool.
     void trimRequested(const QString &clipId, bool leading, double timelineFrame);
+    void razorRequested(const QString &clipId, double timelineFrame);
+    void trackToggleRequested(const QString &trackId, const QString &field, bool value);
     void addLaneRequested();
 
 protected:
@@ -143,6 +157,13 @@ private:
     QRect addLaneHitRect() const;
     void updateAddLane(const QPoint &point);
     ClipHit clipAt(const QPoint &point) const;
+    // The header toggle under the pointer: its row and the track field it sets.
+    bool toggleAt(const QPoint &point, int *row, QString *field) const;
+    bool trimsEdges() const { return m_tool == TimelineTool::Selection || m_tool == TimelineTool::Ripple || m_tool == TimelineTool::Roll; }
+    bool dragsBodies() const { return m_tool == TimelineTool::Selection || m_tool == TimelineTool::Slip || m_tool == TimelineTool::Slide; }
+    void setToolCursor(const ClipHit &hit, int edge);
+    // The dragged edge or start, snapped to the nearest edit point in reach.
+    double snapped(double time, double length) const;
 
     MediaArtwork *m_artwork = nullptr;
     QJsonObject m_project;
@@ -177,6 +198,8 @@ private:
     bool m_dragTrailing = false;
     bool m_dragMoved = false;
     bool m_addLaneVisible = false;
+    bool m_snapping = true;
+    TimelineTool m_tool = TimelineTool::Selection;
     QPointF m_feedbackPoint;
     QPixmap m_laneCache;
     QHash<QString, QImage> m_waveTints;

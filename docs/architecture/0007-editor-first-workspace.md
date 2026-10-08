@@ -1,6 +1,6 @@
 # ADR 0007: An editor first, with AI on the selection
 
-Status: accepted (phases 1 and 2 implemented)
+Status: accepted (phases 1–3 implemented)
 Date: 2026-10-09
 
 ## Context
@@ -79,3 +79,32 @@ visibility, workspaces, and Settings are registry commands in a new Window
 menu and in Edit. The provider and MCP settings moved from the agent column
 into the Settings dialog. Until phase 4 the Assistant stays a dockable
 panel so the agent remains reachable.
+
+## Phase 3
+
+Two panels join the workspace: a Project bin of the media and a Source
+monitor that scrubs one piece of media frame by frame (decoded in the
+background, latest request first) with in and out marks. The Editing
+workspace follows the edit-suite arrangement — Source and Program over the
+Project bin and the Timeline.
+
+New registry commands carry the standard interaction:
+
+- `source.insert` (`,`) and `source.overwrite` (`.`) resolve the marked
+  range, the playhead, and the target tracks (the first unlocked track of
+  each kind the media has) to the kernel's insert and overwrite, which link
+  a picture and its sound.
+- `source.markIn` (I), `source.markOut` (O), `source.clearMarks`, and frame
+  steps are scoped to the source monitor; a key may mean different things
+  in different focused panels, and the keymap test refuses only real
+  collisions.
+- Six tools (`tool.selection` V, `tool.razor` C, `tool.ripple` B,
+  `tool.roll` N, `tool.slip` Y, `tool.slide` U) decide what a timeline drag
+  becomes: a move, split, ripple trim, roll of the cut, slip, or slide, each
+  its own kernel operation.
+- `sequence.snap` snaps drags to clip edges, the playhead, and the start.
+- `track.set` backs the track header toggles for output, mute, and lock.
+
+Sync lock is not in the kernel yet; ripple edits already act on every
+unlocked track. Drag and drop from the bin to the timeline and source
+playback (J, K, L) are left for later.

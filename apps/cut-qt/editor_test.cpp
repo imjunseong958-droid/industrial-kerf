@@ -4,6 +4,7 @@
 #include "editor_style.h"
 #include "main_window.h"
 #include "media_artwork.h"
+#include "source_monitor_panel.h"
 #include "timeline_widget.h"
 #include "viewer_widget.h"
 #include "workspace.h"
@@ -475,7 +476,7 @@ private slots:
         MainWindow window{QString(), QString()};
         QStringList menus;
         for (const QAction *menu : window.menuBar()->actions()) menus.append(menu->text());
-        QCOMPARE(menus, (QStringList{"File", "Edit", "Sequence", "Playback", "View", "Window"}));
+        QCOMPARE(menus, (QStringList{"File", "Edit", "Clip", "Sequence", "Markers", "Playback", "View", "Window"}));
         QVERIFY(window.findChild<QAction *>(QStringLiteral("keymap.premiere")));
 
         QAction *split = window.m_commands->action(QStringLiteral("clip.split"));
@@ -657,13 +658,138 @@ private slots:
             QTest::mouseMove(&timeline, QPoint(edge + 72, y));
             QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(edge + 72, y));
             QCOMPARE(trims.constLast()[1].toBool(), leading);
-            QCOMPARE(trims.constLast()[2].toDouble(), double(std::llround((edge + 72 - kTimelineLabelWidth) / 72.0 * 24)));
+            // The edge moves by the drag distance, landing where the preview showed it.
+            QCOMPARE(trims.constLast()[2].toDouble(), double((leading ? 24 : 120) + 24));
         }
         QCOMPARE(trims.count(), 2);
         timeline.setSelectedClip(QStringLiteral("clip"));
         timeline.setPlayhead(2.5);
         const QString screenshot = qEnvironmentVariable("CUT_QT_UI_SCREENSHOT");
         if (!screenshot.isEmpty()) QVERIFY(timeline.grab().save(screenshot + QStringLiteral(".timeline.png")));
+    }
+
+    void sourceMarksInsertAndOverwriteOnTargetTracks() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(QJsonObject{{"revision", 2}, {"duration", 4}, {"timeline", QJsonObject{
+            {"fps", 24},
+            {"sources", QJsonArray{QJsonObject{{"id", "m1"}, {"path", "missing.mov"}, {"duration", 10.0},
+                                               {"rate", "24"}, {"width", 1920}, {"height", 1080}, {"hasAudio", true}}}},
+            {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{}}},
+                                  QJsonObject{{"id", "A1"}, {"type", "audio"}, {"locked", true}, {"clips", QJsonArray{}}},
+                                  QJsonObject{{"id", "A2"}, {"type", "audio"}, {"clips", QJsonArray{}}}}}}}});
+        QAction *insert = window.m_commands->action(QStringLiteral("source.insert"));
+        QCOMPARE(window.m_commands->reason(QStringLiteral("source.insert")), QStringLiteral("Open media in the source monitor"));
+        window.openSource(QStringLiteral("m1"));
+        window.m_sourceMonitor->seek(1.0);
+        window.m_commands->action(QStringLiteral("source.markIn"))->trigger();
+        window.m_sourceMonitor->seek(2.0);
+        window.m_commands->action(QStringLiteral("source.markOut"))->trigger();
+        QCOMPARE(window.m_sourceMonitor->inPoint(), 1.0);
+        QVERIFY(insert->isEnabled());
+        window.queueSeek(0.5);
+        insert->trigger();
+        const QJsonObject op = window.m_lastCommand.value("ops").toArray().first().toObject();
+        QCOMPARE(op.value("op").toString(), QStringLiteral("insert"));
+        QCOMPARE(op.value("media").toString(), QStringLiteral("m1"));
+        QCOMPARE(op.value("sourceIn").toInt(), 24);
+        // The out mark includes the frame on screen.
+        QCOMPARE(op.value("frames").toInt(), 25);
+        QCOMPARE(op.value("at").toInt(), 12);
+        // Locked tracks are not targets.
+        QCOMPARE(op.value("tracks").toArray(), (QJsonArray{"V1", "A2"}));
+        window.m_commands->action(QStringLiteral("source.overwrite"))->trigger();
+        QCOMPARE(window.m_lastCommand.value("ops").toArray().first().toObject().value("op").toString(), QStringLiteral("overwrite"));
+    }
+
+    void sourceMonitorShowsTheFrameAtItsPosition() {
+        QTemporaryDir directory;
+        const QString video = directory.filePath(QStringLiteral("bars.mp4"));
+        QCOMPARE(QProcess::execute(QStringLiteral("ffmpeg"), {
+            QStringLiteral("-v"), QStringLiteral("error"), QStringLiteral("-f"), QStringLiteral("lavfi"),
+            QStringLiteral("-i"), QStringLiteral("testsrc2=size=320x180:rate=24"), QStringLiteral("-t"), QStringLiteral("2"),
+            QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"), QStringLiteral("-y"), video}), 0);
+        SourceMonitorPanel monitor;
+        monitor.open(QJsonObject{{"id", "bars"}, {"path", "bars.mp4"}, {"duration", 2.0}, {"rate", "24"}, {"width", 320}}, video);
+        QTRY_VERIFY_WITH_TIMEOUT(!monitor.frame().isNull(), 10000);
+        monitor.step(12);
+        QCOMPARE(monitor.position(), 0.5);
+        // Positions stay before the last frame.
+        monitor.seek(9.0);
+        QCOMPARE(monitor.position(), 2.0 - 1.0 / 24);
+        monitor.markOut();
+        QCOMPARE(monitor.outPoint(), 2.0);
+        monitor.close();
+        QVERIFY(!monitor.isOpen());
+    }
+
+    void toolsChooseTheEditAClipDragMakes() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(QJsonObject{{"revision", 1}, {"duration", 4}, {"timeline", QJsonObject{
+            {"fps", 24}, {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+                QJsonObject{{"id", "a"}, {"timelineStart", 0.0}, {"duration", 1.0}, {"startFrame", 0}, {"durationFrames", 24}},
+                QJsonObject{{"id", "b"}, {"timelineStart", 1.0}, {"duration", 1.0}, {"startFrame", 24}, {"durationFrames", 24}}}}}}}}}});
+        auto op = [&window] { return window.m_lastCommand.value("ops").toArray().first().toObject(); };
+        window.m_commands->action(QStringLiteral("tool.slip"))->trigger();
+        QCOMPARE(window.m_timeline->tool(), TimelineTool::Slip);
+        window.moveClip(QStringLiteral("b"), 1.5);
+        QCOMPARE(op().value("op").toString(), QStringLiteral("slip"));
+        QCOMPARE(op().value("frames").toInt(), -12);
+        window.m_commands->action(QStringLiteral("tool.slide"))->trigger();
+        window.moveClip(QStringLiteral("b"), 1.5);
+        QCOMPARE(op().value("op").toString(), QStringLiteral("slide"));
+        QCOMPARE(op().value("frames").toInt(), 12);
+        window.m_commands->action(QStringLiteral("tool.ripple"))->trigger();
+        window.trimClip(QStringLiteral("b"), false, 42);
+        QCOMPARE(op().value("op").toString(), QStringLiteral("trim"));
+        QVERIFY(op().value("ripple").toBool());
+        // Rolling b's in point moves the cut after a.
+        window.m_commands->action(QStringLiteral("tool.roll"))->trigger();
+        window.trimClip(QStringLiteral("b"), true, 30);
+        QCOMPARE(op().value("op").toString(), QStringLiteral("roll"));
+        QCOMPARE(op().value("clip").toString(), QStringLiteral("a"));
+        QCOMPARE(op().value("frames").toInt(), 6);
+        // Only one tool is chosen at a time.
+        QVERIFY(!window.m_commands->action(QStringLiteral("tool.slip"))->isChecked());
+    }
+
+    void timelineRazorSnapAndTrackToggles() {
+        TimelineWidget timeline;
+        timeline.resize(700, 240);
+        timeline.setProject(QJsonObject{{"tracks", QJsonArray{
+            QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+                QJsonObject{{"id", "a"}, {"timelineStart", 0.0}, {"duration", 2.0}},
+                QJsonObject{{"id", "b"}, {"timelineStart", 4.0}, {"duration", 1.0}}}}}}}}, 8, 24);
+        timeline.fitToWidth(720);
+        timeline.show();
+        QSignalSpy razors(&timeline, &TimelineWidget::razorRequested);
+        QSignalSpy moves(&timeline, &TimelineWidget::moveRequested);
+        QSignalSpy toggles(&timeline, &TimelineWidget::trackToggleRequested);
+        const int y = kRulerHeight + kTrackHeight / 2;
+        const auto x = [&timeline](double seconds) {
+            return kTimelineLabelWidth + int(std::lround(seconds * (timeline.width() - kTimelineLabelWidth) / 8.0));
+        };
+        timeline.setTool(TimelineTool::Razor);
+        QTest::mouseClick(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(x(1.0), y));
+        QCOMPARE(razors.count(), 1);
+        QCOMPARE(razors[0][0].toString(), QStringLiteral("a"));
+        QVERIFY(std::abs(razors[0][1].toDouble() - 24.0) <= 1.0);
+        // Dragging b to just past a's end snaps it onto the cut.
+        timeline.setTool(TimelineTool::Selection);
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(x(4.5), y));
+        QTest::mouseMove(&timeline, QPoint(x(4.5) - (x(4.0) - x(2.0)) + 3, y));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(x(4.5) - (x(4.0) - x(2.0)) + 3, y));
+        QCOMPARE(moves.count(), 1);
+        QCOMPARE(moves[0][1].toDouble(), 2.0);
+        // Header toggles: picture output, then lock.
+        QTest::mouseClick(&timeline, Qt::LeftButton, Qt::NoModifier, timeline.headerToggleRect(0, 0).center());
+        QTest::mouseClick(&timeline, Qt::LeftButton, Qt::NoModifier, timeline.headerToggleRect(0, 1).center());
+        QCOMPARE(toggles.count(), 2);
+        QCOMPARE(toggles[0][1].toString(), QStringLiteral("enabled"));
+        QCOMPARE(toggles[0][2].toBool(), false);
+        QCOMPARE(toggles[1][1].toString(), QStringLiteral("locked"));
+        QCOMPARE(toggles[1][2].toBool(), true);
     }
 
     void timelineRevealsAddLaneFromTheHeader() {

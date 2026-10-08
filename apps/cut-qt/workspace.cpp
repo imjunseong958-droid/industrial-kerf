@@ -12,7 +12,7 @@ namespace cut {
 namespace {
 
 // Bump when the panels change so stale layouts are not restored.
-constexpr int kLayoutVersion = 1;
+constexpr int kLayoutVersion = 2;
 
 QString layoutKey(const QString &group, const QString &name) {
     return QStringLiteral("workspace/%1/%2").arg(group, name);
@@ -44,15 +44,19 @@ ads::CDockWidget *Workspace::addPanel(const QString &id, const QString &title, Q
 }
 
 void Workspace::arrangeEditing() {
-    // Program over the timeline, with Effect Controls and the Assistant
-    // tabbed beside the program.
-    auto *top = m_manager->addDockWidget(ads::TopDockWidgetArea, m_panels.value(QStringLiteral("program")));
-    auto *side = m_manager->addDockWidget(ads::RightDockWidgetArea, m_panels.value(QStringLiteral("effectControls")), top);
-    m_manager->addDockWidget(ads::CenterDockWidgetArea, m_panels.value(QStringLiteral("assistant")), side);
-    side->setCurrentDockWidget(m_panels.value(QStringLiteral("effectControls")));
-    auto *bottom = m_manager->addDockWidget(ads::BottomDockWidgetArea, m_panels.value(QStringLiteral("timeline")));
-    m_manager->setSplitterSizes(top, {1100, 400});
-    m_manager->setSplitterSizes(bottom, {420, 460});
+    // The edit-suite arrangement: Source (with Effect Controls and the
+    // Assistant behind it) beside the Program monitor, over the Project bin
+    // and the Timeline.
+    const auto panel = [this](const char *id) { return m_panels.value(QString::fromLatin1(id)); };
+    auto *source = m_manager->addDockWidget(ads::LeftDockWidgetArea, panel("source"));
+    m_manager->addDockWidget(ads::CenterDockWidgetArea, panel("effectControls"), source);
+    m_manager->addDockWidget(ads::CenterDockWidgetArea, panel("assistant"), source);
+    source->setCurrentDockWidget(panel("source"));
+    m_manager->addDockWidget(ads::RightDockWidgetArea, panel("program"), source);
+    auto *project = m_manager->addDockWidget(ads::BottomDockWidgetArea, panel("project"));
+    m_manager->addDockWidget(ads::RightDockWidgetArea, panel("timeline"), project);
+    m_manager->setSplitterSizes(source, {640, 860});
+    m_manager->setSplitterSizes(project, {320, 1180});
 }
 
 void Workspace::start() {

@@ -26,8 +26,8 @@ QByteArray compact(const QJsonObject &value) {
 
 } // namespace
 
-CommandRegistry::CommandRegistry(const QString &keymap, QWidget *timeline, QObject *parent)
-    : QObject(parent), m_timeline(timeline) {
+CommandRegistry::CommandRegistry(const QString &keymap, const QHash<QString, QWidget *> &scopes, QObject *parent)
+    : QObject(parent), m_scopes(scopes) {
     load(keymap);
 }
 
@@ -47,9 +47,13 @@ void CommandRegistry::load(const QString &keymap) {
             action->setObjectName(id);
             action->setData(id);
             action->setCheckable(command.value(QStringLiteral("checkable")).toBool());
-            if (command.value(QStringLiteral("scope")).toString() == QStringLiteral("timeline")) {
-                action->setShortcutContext(Qt::WidgetShortcut);
-                if (m_timeline) m_timeline->addAction(action);
+            const QString scope = command.value(QStringLiteral("scope")).toString();
+            if (QWidget *panel = m_scopes.value(scope)) {
+                // The timeline takes focus itself; the source monitor's
+                // shortcuts also apply while one of its controls has it.
+                action->setShortcutContext(scope == QStringLiteral("timeline") ? Qt::WidgetShortcut
+                                                                                : Qt::WidgetWithChildrenShortcut);
+                panel->addAction(action);
             }
             if (action->isCheckable())
                 connect(action, &QAction::toggled, this, [this, id](bool checked) { emit toggled(id, checked); });

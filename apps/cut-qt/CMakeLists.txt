@@ -41,6 +41,10 @@ set(CUT_QT_SOURCES
     main_window.h
     media_artwork.cpp
     media_artwork.h
+    project_panel.cpp
+    project_panel.h
+    source_monitor_panel.cpp
+    source_monitor_panel.h
     timeline_widget.cpp
     timeline_widget.h
     viewer_widget.cpp

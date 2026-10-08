@@ -2,6 +2,8 @@
 #include "bridge.h"
 #include "command_registry.h"
 #include "effect_controls_panel.h"
+#include "project_panel.h"
+#include "source_monitor_panel.h"
 #include "workspace.h"
 #include "editor_common.h"
 #include "editor_style.h"
@@ -304,7 +306,12 @@ void MainWindow::moveClip(const QString &id, double start) {
     if (clip.isEmpty()) return;
     const qint64 frames = frameAt(start) - clipFrames(clip, QStringLiteral("startFrame"));
     if (frames == 0) return;
-    execute(QStringLiteral("clip.move"), QJsonObject{{QStringLiteral("clip"), id}, {QStringLiteral("frames"), frames}});
+    // Slipping right shows earlier media; sliding moves the clip between its neighbours.
+    const TimelineTool tool = m_timeline->tool();
+    const QString command = tool == TimelineTool::Slip ? QStringLiteral("clip.slip")
+        : tool == TimelineTool::Slide ? QStringLiteral("clip.slide") : QStringLiteral("clip.move");
+    execute(command, QJsonObject{{QStringLiteral("clip"), id},
+                                 {QStringLiteral("frames"), tool == TimelineTool::Slip ? -frames : frames}});
 }
 
 void MainWindow::trimClip(const QString &id, bool leading, double frame) {
@@ -314,9 +321,71 @@ void MainWindow::trimClip(const QString &id, bool leading, double frame) {
     const qint64 edge = leading ? start : start + clipFrames(clip, QStringLiteral("durationFrames"));
     const qint64 frames = std::llround(frame) - edge;
     if (frames == 0) return;
+    if (m_timeline->tool() == TimelineTool::Roll) {
+        // A roll moves the cut after a clip: this one's, or its neighbour's
+        // when the in point is dragged.
+        QString before = id;
+        if (leading) {
+            before.clear();
+            for (const QJsonValue &value : clipTrack(id).value(QStringLiteral("clips")).toArray()) {
+                const QJsonObject other = value.toObject();
+                if (clipFrames(other, QStringLiteral("startFrame")) + clipFrames(other, QStringLiteral("durationFrames")) == start)
+                    before = other.value(QStringLiteral("id")).toString();
+            }
+            if (before.isEmpty()) {
+                statusBar()->showMessage(QStringLiteral("A roll needs a clip on the other side of the cut"), 4000);
+                return;
+            }
+        }
+        execute(QStringLiteral("clip.roll"), QJsonObject{{QStringLiteral("clip"), before}, {QStringLiteral("frames"), frames}});
+        return;
+    }
     execute(QStringLiteral("clip.trim"), QJsonObject{{QStringLiteral("clip"), id},
                                                      {QStringLiteral("edge"), leading ? QStringLiteral("in") : QStringLiteral("out")},
-                                                     {QStringLiteral("frames"), frames}});
+                                                     {QStringLiteral("frames"), frames},
+                                                     {QStringLiteral("ripple"), m_timeline->tool() == TimelineTool::Ripple}});
+}
+
+QJsonObject MainWindow::clipTrack(const QString &id) const {
+    for (const QJsonValue &trackValue : m_project.value(QStringLiteral("tracks")).toArray()) {
+        const QJsonObject track = trackValue.toObject();
+        for (const QJsonValue &clipValue : track.value(QStringLiteral("clips")).toArray())
+            if (clipValue.toObject().value(QStringLiteral("id")).toString() == id) return track;
+    }
+    return {};
+}
+
+void MainWindow::openSource(const QString &mediaId) {
+    for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray()) {
+        const QJsonObject source = value.toObject();
+        if (source.value(QStringLiteral("id")).toString() != mediaId) continue;
+        m_sourceMonitor->open(source, QDir(m_projectDirectory).absoluteFilePath(source.value(QStringLiteral("path")).toString()));
+        if (ads::CDockWidget *panel = m_workspace->panel(QStringLiteral("source"))) {
+            panel->toggleView(true);
+            panel->setAsCurrentTab();
+        }
+        m_sourceMonitor->setFocus();
+        return;
+    }
+}
+
+QStringList MainWindow::sourceTargets() const {
+    // The first unlocked track of each kind the source media has.
+    const QJsonObject source = m_sourceMonitor->source();
+    QStringList targets;
+    for (const QString &kind : {QStringLiteral("video"), QStringLiteral("audio")}) {
+        const bool has = kind == QStringLiteral("video") ? source.contains(QStringLiteral("width"))
+                                                         : source.value(QStringLiteral("hasAudio")).toBool();
+        if (!has) continue;
+        for (const QJsonValue &value : m_project.value(QStringLiteral("tracks")).toArray()) {
+            const QJsonObject track = value.toObject();
+            if (track.value(QStringLiteral("type")).toString() == kind && !track.value(QStringLiteral("locked")).toBool()) {
+                targets.append(track.value(QStringLiteral("id")).toString());
+                break;
+            }
+        }
+    }
+    return targets;
 }
 
 void MainWindow::splitClip() {
@@ -907,8 +976,23 @@ void MainWindow::buildUi() {
     timelineScroll->setWidget(m_timeline);
     timelineScroll->viewport()->installEventFilter(this);
     timelineLayout->addWidget(timelineScroll);
-    timelinePanelLayout->addWidget(timelineFrame, 1);
+    auto *timelineRow = new QHBoxLayout;
+    timelineRow->setContentsMargins(0, 0, 0, 0);
+    timelineRow->setSpacing(0);
+    // The editing tools, filled in from the command registry.
+    m_toolPalette = new QToolBar(QStringLiteral("Tools"));
+    m_toolPalette->setObjectName(QStringLiteral("toolPalette"));
+    m_toolPalette->setOrientation(Qt::Vertical);
+    m_toolPalette->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    timelineRow->addWidget(m_toolPalette);
+    timelineRow->addWidget(timelineFrame, 1);
+    timelinePanelLayout->addLayout(timelineRow, 1);
     timelinePanel->setMinimumHeight(220);
+
+    m_projectPanel = new ProjectPanel(m_artwork);
+    connect(m_projectPanel, &ProjectPanel::openRequested, this, &MainWindow::openSource);
+    m_sourceMonitor = new SourceMonitorPanel;
+    connect(m_sourceMonitor, &SourceMonitorPanel::changed, this, &MainWindow::updateCommandStates);
 
     auto *right = new QWidget;
     right->setObjectName(QStringLiteral("assistantPanel"));
@@ -1290,6 +1374,8 @@ void MainWindow::buildUi() {
     m_workspace->addPanel(QStringLiteral("timeline"), QStringLiteral("Timeline"), timelinePanel)
         ->setTitleBarActions({m_timelineDetail});
     m_workspace->addPanel(QStringLiteral("effectControls"), QStringLiteral("Effect Controls"), m_effectControls);
+    m_workspace->addPanel(QStringLiteral("project"), QStringLiteral("Project"), m_projectPanel);
+    m_workspace->addPanel(QStringLiteral("source"), QStringLiteral("Source"), m_sourceMonitor);
     m_workspace->addPanel(QStringLiteral("assistant"), QStringLiteral("Cut Assistant"), right);
     setCentralWidget(central);
 
@@ -1314,6 +1400,12 @@ void MainWindow::buildUi() {
     connect(m_timeline, &TimelineWidget::clipSelected, this, &MainWindow::selectClip);
     connect(m_timeline, &TimelineWidget::moveRequested, this, &MainWindow::moveClip);
     connect(m_timeline, &TimelineWidget::trimRequested, this, &MainWindow::trimClip);
+    connect(m_timeline, &TimelineWidget::razorRequested, this, [this](const QString &id, double frame) {
+        execute(QStringLiteral("clip.split"), QJsonObject{{QStringLiteral("clip"), id}, {QStringLiteral("at"), std::llround(frame)}});
+    });
+    connect(m_timeline, &TimelineWidget::trackToggleRequested, this, [this](const QString &track, const QString &field, bool value) {
+        execute(QStringLiteral("track.set"), QJsonObject{{QStringLiteral("track"), track}, {field, value}});
+    });
     updateProposal(QJsonValue());
     updateInspector();
 }
@@ -1344,7 +1436,8 @@ void MainWindow::setupActions() {
     // Menus, shortcuts, and the toolbar come from the command registry.
     // Frontend commands and engine commands that need a dialog first have
     // handlers here; every other command resolves to a bridge request.
-    m_commands = new CommandRegistry(QSettings().value(QStringLiteral("commands/keymap")).toString(), m_timeline, this);
+    m_commands = new CommandRegistry(QSettings().value(QStringLiteral("commands/keymap")).toString(),
+                                     {{QStringLiteral("timeline"), m_timeline}, {QStringLiteral("source"), m_sourceMonitor}}, this);
     m_commandHandlers = {
         {QStringLiteral("file.import"), [this] { importMedia(); }},
         {QStringLiteral("file.export"), [this] { exportProject(); }},
@@ -1375,20 +1468,58 @@ void MainWindow::setupActions() {
                 statusBar()->showMessage(QStringLiteral("A workspace called %1 already exists").arg(name.trimmed()), 4000);
         }},
         {QStringLiteral("window.resetWorkspace"), [this] { m_workspace->resetCurrent(); }},
+        {QStringLiteral("source.markIn"), [this] { m_sourceMonitor->markIn(); }},
+        {QStringLiteral("source.markOut"), [this] { m_sourceMonitor->markOut(); }},
+        {QStringLiteral("source.clearMarks"), [this] { m_sourceMonitor->clearMarks(); }},
+        {QStringLiteral("source.previousFrame"), [this] { m_sourceMonitor->step(-1); }},
+        {QStringLiteral("source.nextFrame"), [this] { m_sourceMonitor->step(1); }},
     };
     connect(m_commands, &CommandRegistry::triggered, this, &MainWindow::triggerCommand);
     // Window ▸ panel commands show and hide docked panels, and follow
     // panels closed from their tabs.
     const QHash<QString, QString> panelCommands{
+        {QStringLiteral("window.project"), QStringLiteral("project")},
+        {QStringLiteral("window.source"), QStringLiteral("source")},
         {QStringLiteral("window.program"), QStringLiteral("program")},
         {QStringLiteral("window.timeline"), QStringLiteral("timeline")},
         {QStringLiteral("window.effectControls"), QStringLiteral("effectControls")},
         {QStringLiteral("window.assistant"), QStringLiteral("assistant")},
     };
-    connect(m_commands, &CommandRegistry::toggled, this, [this, panelCommands](const QString &id, bool checked) {
+    // Tools are one exclusive choice; snapping is a switch.
+    const QHash<QString, TimelineTool> tools{
+        {QStringLiteral("tool.selection"), TimelineTool::Selection}, {QStringLiteral("tool.razor"), TimelineTool::Razor},
+        {QStringLiteral("tool.ripple"), TimelineTool::Ripple}, {QStringLiteral("tool.roll"), TimelineTool::Roll},
+        {QStringLiteral("tool.slip"), TimelineTool::Slip}, {QStringLiteral("tool.slide"), TimelineTool::Slide},
+    };
+    connect(m_commands, &CommandRegistry::toggled, this, [this, panelCommands, tools](const QString &id, bool checked) {
         if (ads::CDockWidget *panel = m_workspace->panel(panelCommands.value(id)))
             if (panel->isClosed() == checked) panel->toggleView(checked);
+        if (tools.contains(id) && checked) m_timeline->setTool(tools.value(id));
+        if (id == QStringLiteral("sequence.snap")) m_timeline->setSnapping(checked);
     });
+    auto *toolGroup = new QActionGroup(this);
+    toolGroup->setExclusive(true);
+    for (const QString &id : {QStringLiteral("tool.selection"), QStringLiteral("tool.razor"), QStringLiteral("tool.ripple"),
+                              QStringLiteral("tool.roll"), QStringLiteral("tool.slip"), QStringLiteral("tool.slide")}) {
+        QAction *action = m_commands->action(id);
+        toolGroup->addAction(action);
+        // Tool letters, the way edit suites label their palettes.
+        static const QHash<QString, QString> glyphs{
+            {QStringLiteral("tool.selection"), QStringLiteral("▸")}, {QStringLiteral("tool.razor"), QStringLiteral("✂")},
+            {QStringLiteral("tool.ripple"), QStringLiteral("⇤")}, {QStringLiteral("tool.roll"), QStringLiteral("⇹")},
+            {QStringLiteral("tool.slip"), QStringLiteral("↔")}, {QStringLiteral("tool.slide"), QStringLiteral("⇆")}};
+        action->setIconText(glyphs.value(id));
+        m_toolPalette->addAction(action);
+    }
+    m_commands->action(QStringLiteral("tool.selection"))->setChecked(true);
+    m_commands->action(QStringLiteral("sequence.snap"))->setChecked(m_timeline->snapping());
+    for (const auto &[id, text] : {std::pair{QStringLiteral("source.markIn"), QStringLiteral("{")},
+                                   std::pair{QStringLiteral("source.markOut"), QStringLiteral("}")},
+                                   std::pair{QStringLiteral("source.insert"), QStringLiteral("Insert")},
+                                   std::pair{QStringLiteral("source.overwrite"), QStringLiteral("Overwrite")}})
+        m_commands->action(id)->setIconText(text);
+    m_sourceMonitor->setActions({m_commands->action(QStringLiteral("source.markIn")), m_commands->action(QStringLiteral("source.markOut")),
+                                 m_commands->action(QStringLiteral("source.insert")), m_commands->action(QStringLiteral("source.overwrite"))});
     for (auto it = panelCommands.cbegin(); it != panelCommands.cend(); ++it) {
         QAction *action = m_commands->action(it.key());
         ads::CDockWidget *panel = m_workspace->panel(it.value());
@@ -1589,7 +1720,16 @@ QJsonObject MainWindow::commandContext() const {
                         {QStringLiteral("previewRequired"), m_previewRequired},
                         {QStringLiteral("previewRenderable"), m_previewStatus == QStringLiteral("required")},
                         {QStringLiteral("videoTracks"), videoTracks},
-                        {QStringLiteral("audioTracks"), audioTracks}};
+                        {QStringLiteral("audioTracks"), audioTracks},
+                        {QStringLiteral("sourceTargets"), QJsonArray::fromStringList(sourceTargets())}};
+    if (m_sourceMonitor->isOpen()) {
+        // The marked range: in frames of the media, length in frames of the sequence.
+        const double in = m_sourceMonitor->inPoint();
+        context.insert(QStringLiteral("source"),
+                       QJsonObject{{QStringLiteral("media"), m_sourceMonitor->mediaId()},
+                                   {QStringLiteral("inFrame"), std::llround(in * m_sourceMonitor->fps())},
+                                   {QStringLiteral("durationFrames"), frameAt(m_sourceMonitor->outPoint() - in)}});
+    }
     const QJsonObject clip = selectedClipObject();
     if (!clip.isEmpty()) {
         context.insert(QStringLiteral("selection"),
@@ -1885,6 +2025,13 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     }
     updateTransport();
     m_artwork->request(sources, m_projectDirectory);
+    m_projectPanel->setSources(sources);
+    if (m_sourceMonitor->isOpen()) {
+        const bool present = std::any_of(sources.cbegin(), sources.cend(), [this](const QJsonValue &value) {
+            return value.toObject().value(QStringLiteral("id")).toString() == m_sourceMonitor->mediaId();
+        });
+        if (!present) m_sourceMonitor->close();
+    }
     updateProposal(snapshot.value(QStringLiteral("pendingProposal")));
     updateInspector();
     updateCommandStates();
