@@ -60,6 +60,15 @@ cargo build --release -p cut-cli --bin lcut
 cargo build --release -p cut-mcp --bin cut-mcp
 ```
 
+Or build and install everything to `~/.local/bin`, with the editor's own
+libraries in `~/.local/lib/cut` (`CUT_LOCAL_BIN` and `CUT_LOCAL_LIB` move
+them). The install does not refer back to the checkout, so cleaning `target`
+is safe; Qt and FFmpeg still come from the system:
+
+```bash
+scripts/install-cut-local.sh        # or: cli, qt
+```
+
 Open the Qt editor for a project:
 
 ```bash
