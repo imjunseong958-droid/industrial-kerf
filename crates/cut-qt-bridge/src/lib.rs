@@ -992,6 +992,81 @@ pub unsafe extern "C" fn cut_bridge_string_free(value: *mut c_char) {
     }
 }
 
+// ---- command registry ----------------------------------------------------------
+
+/// Read a UTF-8 JSON argument; a null pointer or invalid text reads as null.
+///
+/// # Safety
+/// `value` must be null or a NUL-terminated string.
+unsafe fn json_argument(value: *const c_char) -> Value {
+    if value.is_null() {
+        return Value::Null;
+    }
+    // SAFETY: The caller guarantees a NUL-terminated string.
+    let text = unsafe { CStr::from_ptr(value) };
+    text.to_str()
+        .ok()
+        .and_then(|text| serde_json::from_str(text).ok())
+        .unwrap_or(Value::Null)
+}
+
+fn owned_json(value: Value) -> *mut c_char {
+    CString::new(value.to_string()).map_or(std::ptr::null_mut(), CString::into_raw)
+}
+
+fn command_context(value: &Value) -> cut_commands::Context {
+    serde_json::from_value(value.clone()).unwrap_or_default()
+}
+
+/// The command registry with shortcuts in `keymap` (a JSON string such as
+/// `"premiere"`, or plain text). Free the result with `cut_bridge_string_free`.
+/// # Safety
+/// `keymap` must be null or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn cut_commands_catalog(keymap: *const c_char) -> *mut c_char {
+    let keymap = if keymap.is_null() {
+        String::new()
+    } else {
+        // SAFETY: The caller guarantees a NUL-terminated string.
+        unsafe { CStr::from_ptr(keymap) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    owned_json(cut_commands::catalog(&keymap))
+}
+
+/// Why each command is unavailable in a JSON context, or null when it is
+/// available. Free the result with `cut_bridge_string_free`.
+/// # Safety
+/// `context` must be null or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn cut_commands_states(context: *const c_char) -> *mut c_char {
+    // SAFETY: Forwarded from the caller's guarantee.
+    let context = unsafe { json_argument(context) };
+    owned_json(cut_commands::states(&command_context(&context)))
+}
+
+/// Resolve `{command, params, context}` to `{request}`, the bridge command
+/// that carries it out, or `{error}`. Free the result with
+/// `cut_bridge_string_free`.
+/// # Safety
+/// `invocation` must be null or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn cut_commands_run(invocation: *const c_char) -> *mut c_char {
+    // SAFETY: Forwarded from the caller's guarantee.
+    let invocation = unsafe { json_argument(invocation) };
+    owned_json(run_command(&invocation))
+}
+
+fn run_command(invocation: &Value) -> Value {
+    let id = invocation["command"].as_str().unwrap_or_default();
+    let context = command_context(&invocation["context"]);
+    match cut_commands::run(id, &context, &invocation["params"]) {
+        Ok(request) => json!({"request": request}),
+        Err(error) => json!({"error": error}),
+    }
+}
+
 /// A borrowed RGBA frame; bytes live until the next frame poll or bridge free.
 #[repr(C)]
 pub struct CutFrame {
@@ -1148,6 +1223,39 @@ mod tests {
             rx.try_recv().is_err(),
             "unchanged snapshots must be coalesced"
         );
+    }
+
+    #[test]
+    fn command_requests_are_bridge_commands() {
+        let context = json!({
+            "connected": true, "revision": 4, "canUndo": true, "playheadFrame": 30,
+            "selection": {"clip": "c1", "track": "video", "startFrame": 0, "durationFrames": 48},
+        });
+        for (command, params) in [
+            ("file.import", json!({"path": "/tmp/a.mov"})),
+            ("file.export", json!({"quality": "full"})),
+            ("file.refresh", json!(null)),
+            ("edit.undo", json!(null)),
+            ("clip.split", json!(null)),
+            ("clip.rippleDelete", json!(null)),
+            ("sequence.addVideoTrack", json!(null)),
+            (
+                "clip.trim",
+                json!({"clip": "c1", "edge": "in", "frames": 2}),
+            ),
+        ] {
+            let result = super::run_command(
+                &json!({"command": command, "params": params, "context": context}),
+            );
+            let request = result["request"].clone();
+            assert!(
+                serde_json::from_value::<Command>(request).is_ok(),
+                "{command} resolved to {result}"
+            );
+        }
+        let refused =
+            super::run_command(&json!({"command": "clip.delete", "context": {"connected": true}}));
+        assert_eq!(refused["error"], "Select a clip first");
     }
 
     #[test]

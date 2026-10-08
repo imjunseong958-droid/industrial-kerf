@@ -27,7 +27,9 @@ class Provider(http.server.BaseHTTPRequestHandler):
         if len(requests) == 1:
             system = request['messages'][0]['content']
             assert request['messages'][0]['role'] == 'system', request['messages'][0]
-            assert '# Cut edit script' in system and '```cut' in system, system[:400]
+            assert '# Cut edit script' in system, system[:400]
+            # The project document arrives as a message after the system prompt.
+            assert any('```cut' in str(m.get('content')) for m in request['messages'][1:]), request['messages'][1:]
             assert [tool['function']['name'] for tool in request['tools']] == ['edit', 'look', 'render', 'session.read'], request['tools']
             message = {'role': 'assistant', 'content': None, 'tool_calls': [{
                 'id': 'edit-1', 'type': 'function', 'function': {

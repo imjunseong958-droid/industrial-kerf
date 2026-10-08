@@ -25,4 +25,13 @@ void cut_bridge_string_free(char *value);
 struct CutFrame { const uint8_t *pixels; size_t length; uint32_t width; uint32_t height; double time; };
 // Latest RGBA frame only. Bytes live until the next frame poll or bridge free.
 bool cut_bridge_frame(void *bridge, CutFrame *frame);
+// The command registry (cut-commands). Synchronous and pure, so it can be
+// called before a bridge exists. Results are owned JSON strings, freed with
+// cut_bridge_string_free.
+// The registry with shortcuts in a keymap id: {keymap, keymaps, menus, commands}.
+char *cut_commands_catalog(const char *keymap);
+// {commandId: reason or null} for a JSON editor context.
+char *cut_commands_states(const char *context);
+// {command, params, context} -> {request} (a cut_bridge_send command) or {error}.
+char *cut_commands_run(const char *invocation);
 }

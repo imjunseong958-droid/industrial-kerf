@@ -21,11 +21,19 @@ The positional arguments may also be supplied as `CUT_PROJECT_DIR` and
 
 Sources live in the `cut` namespace, one class per header/source pair:
 `main_window` (the window and its panels), `timeline_widget`,
-`viewer_widget` (the viewer and the focus-region picker), and
+`viewer_widget` (the viewer and the focus-region picker),
+`command_registry` (the editor's side of the command registry), and
 `media_artwork` (background thumbnails and waveforms). `editor_common`
 holds shared constants and helpers, `editor_style.h` the stylesheet, and
 `main.cpp` only `main()`. `editor_test.cpp` builds into `cut-qt-tests`
 instead of `main.cpp`.
+
+Menus, shortcuts, the toolbar, the transport buttons, and timeline gestures
+run commands from the registry in `crates/cut-commands` (ADR 0007). Each
+command is one `QAction` whose label, shortcuts, and enabled state come
+from the registry; an unavailable command says why in its tooltip and the
+status bar. Edit → Keyboard Shortcuts switches between the Cut, Premiere
+Pro, and Final Cut Pro keymaps, and the choice is remembered.
 
 On macOS the default bridge path is
 `target/debug/libcut_qt_bridge.dylib`; on Linux pass
@@ -70,8 +78,9 @@ panel. The timeline fits the window on its own. All tracks remain vertically
 scrollable when their combined height exceeds the timeline panel.
 Import media from File. Moving the pointer across the timeline
 scrubs the viewer and shows the time beside the pointer. Play and pause are
-Space; with the timeline focused, Home and End jump to the start and end, and
-Left and Right step one frame. The transport under the viewer has the same
+Space; with the timeline focused, Home and End jump to the start and end,
+Left and Right step one frame, S splits the selected clip at the playhead,
+and Delete and Shift+Delete delete or ripple-delete it (Cut keymap). The transport under the viewer has the same
 controls between the playhead timecode and the program length. The assistant
 fills a narrow column on the right from top to bottom. An empty timeline starts without tracks. Hover over the
 empty row in the left track header to reveal a plus; click it to add a video

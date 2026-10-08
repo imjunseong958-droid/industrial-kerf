@@ -7,6 +7,7 @@ members = [
     "crates/cut-playback",
     "crates/cut-runtime",
     "crates/cut-qt-bridge",
+    "crates/cut-commands",
     "crates/cut-skills",
     "crates/cut-fetcher",
     "crates/cut-interchange",

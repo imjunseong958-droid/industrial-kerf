@@ -1,3 +1,4 @@
+#include "command_registry.h"
 #include "editor_common.h"
 #include "editor_style.h"
 #include "main_window.h"
@@ -5,6 +6,7 @@
 #include "timeline_widget.h"
 #include "viewer_widget.h"
 
+#include <QAction>
 #include <QApplication>
 #include <QClipboard>
 #include <QComboBox>
@@ -21,6 +23,7 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenuBar>
 #include <QPainter>
 #include <QPixmap>
 #include <QProcess>
@@ -452,6 +455,53 @@ private slots:
         QCOMPARE(box.value("x").toDouble(), 0.25);
         QCOMPARE(box.value("width").toDouble(), 0.5);
         QVERIFY(MainWindow::cropBox(QJsonObject{}).isEmpty());
+    }
+
+    void commandsBuildMenusShortcutsAndRequests() {
+        MainWindow window{QString(), QString()};
+        QStringList menus;
+        for (const QAction *menu : window.menuBar()->actions()) menus.append(menu->text());
+        QCOMPARE(menus, (QStringList{"File", "Edit", "Sequence", "Playback", "View"}));
+        QVERIFY(window.findChild<QAction *>(QStringLiteral("keymap.premiere")));
+
+        QAction *split = window.m_commands->action(QStringLiteral("clip.split"));
+        QAction *undo = window.m_commands->action(QStringLiteral("edit.undo"));
+        QVERIFY(split && undo);
+        // Unavailable commands say why.
+        QVERIFY(!split->isEnabled());
+        QVERIFY(split->toolTip().contains(QStringLiteral("Waiting for the project connection")));
+
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(QJsonObject{{"revision", 3}, {"duration", 4}, {"canUndo", true}, {"timeline", QJsonObject{
+            {"fps", 24}, {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+                QJsonObject{{"id", "c1"}, {"kind", "media"}, {"timelineStart", 1.0}, {"duration", 2.0},
+                            {"startFrame", 24}, {"durationFrames", 48}}}}}}}}}});
+        QCOMPARE(window.m_commands->reason(QStringLiteral("clip.split")), QStringLiteral("Select a clip first"));
+        QVERIFY(undo->isEnabled());
+        undo->trigger();
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("undo"));
+        QCOMPARE(window.m_lastCommand.value("revision").toInt(), 3);
+
+        window.selectClip(QStringLiteral("c1"));
+        window.queueSeek(2.0);
+        QVERIFY(split->isEnabled());
+        window.m_lastCommand = {};
+        window.show();
+        window.m_timeline->setFocus();
+        QTRY_VERIFY(window.m_timeline->hasFocus());
+        QTest::keyClick(window.m_timeline, Qt::Key_S);
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("edit"));
+        const QJsonObject op = window.m_lastCommand.value("ops").toArray().first().toObject();
+        QCOMPARE(op.value("op").toString(), QStringLiteral("split"));
+        QCOMPARE(op.value("at").toInt(), 48);
+
+        // Keymaps rebind the same actions; transport tooltips follow.
+        const QKeySequence portable = QKeySequence::fromString(QStringLiteral("Ctrl+K"), QKeySequence::PortableText);
+        window.m_commands->setKeymap(QStringLiteral("premiere"));
+        QCOMPARE(split->shortcut(), portable);
+        window.m_commands->setKeymap(QStringLiteral("cut"));
+        QCOMPARE(split->shortcut(), QKeySequence(Qt::Key_S));
+        QVERIFY(window.m_transportPlay->toolTip().startsWith(QStringLiteral("Play (")));
     }
 
     void inspectorEditsTheCatalogPropertiesOfTheTrackType() {
