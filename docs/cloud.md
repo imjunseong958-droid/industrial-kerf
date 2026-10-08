@@ -44,7 +44,9 @@ when rate limited, with a `message` in the JSON body.
 
 ## In the editor
 
-Settings → AI chooses Cut Cloud (the default) or My own API key. Cut Cloud
+Settings → AI chooses Cut Cloud or My own API key. Cut Cloud is the default
+unless a key of one's own is already saved, so existing setups keep working;
+an explicit choice is remembered. Cut Cloud
 shows the account, its plan, and the requests left, with Sign in and Sign out;
 Plans is a placeholder until pricing exists. Advanced holds the two
 own-key slots (Anthropic Messages and OpenAI-compatible) and the MCP

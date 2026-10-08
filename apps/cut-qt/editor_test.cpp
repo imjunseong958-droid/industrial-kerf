@@ -802,6 +802,35 @@ private slots:
         QCOMPARE(toggles[1][2].toBool(), true);
     }
 
+    void savedOwnKeysKeepTheOwnKeyConnection() {
+        QSettings settings;
+        const QVariant connection = settings.value(QStringLiteral("agent/connection"));
+        const QVariant key = settings.value(QStringLiteral("agent/anthropic/apiKey"));
+        settings.remove(QStringLiteral("agent/connection"));
+        settings.setValue(QStringLiteral("agent/anthropic/apiKey"), QStringLiteral("sk-ant-saved"));
+        {
+            MainWindow window{QString(), QString()};
+            QVERIFY(window.m_ownKeyRadio->isChecked());
+        }
+        settings.setValue(QStringLiteral("agent/anthropic/apiKey"), QString());
+        settings.remove(QStringLiteral("agent/connection"));
+        if (qEnvironmentVariableIsEmpty("ANTHROPIC_API_KEY") && qEnvironmentVariableIsEmpty("OPENAI_API_KEY")) {
+            settings.setValue(QStringLiteral("agent/openai/apiKey"), QString());
+            MainWindow window{QString(), QString()};
+            QVERIFY(window.m_cloudRadio->isChecked());
+        }
+        settings.setValue(QStringLiteral("agent/connection"), QStringLiteral("cloud"));
+        settings.setValue(QStringLiteral("agent/anthropic/apiKey"), QStringLiteral("sk-ant-saved"));
+        {
+            // An explicit choice wins over a saved key.
+            MainWindow window{QString(), QString()};
+            QVERIFY(window.m_cloudRadio->isChecked());
+        }
+        if (connection.isValid()) settings.setValue(QStringLiteral("agent/connection"), connection);
+        else settings.remove(QStringLiteral("agent/connection"));
+        settings.setValue(QStringLiteral("agent/anthropic/apiKey"), key);
+    }
+
     void cutCloudIsTheDefaultConnectionAndReflectsTheAccount() {
         MainWindow window{QString(), QString()};
         {

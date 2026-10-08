@@ -983,7 +983,11 @@ void MainWindow::loadAgentSettings() {
         m_openaiActiveRadio->setChecked(true);
     else
         m_anthropicActiveRadio->setChecked(true);
-    const bool cloud = settings.value(QStringLiteral("agent/connection"), QStringLiteral("cloud")).toString() != QStringLiteral("own");
+    // Cut Cloud unless a key of one's own is already set up, so existing
+    // setups keep working; an explicit choice wins.
+    const bool hasOwnKey = !m_anthropicKey->text().trimmed().isEmpty() || !m_openaiKey->text().trimmed().isEmpty();
+    const bool cloud = settings.value(QStringLiteral("agent/connection"), hasOwnKey ? QStringLiteral("own") : QStringLiteral("cloud"))
+                           .toString() != QStringLiteral("own");
     (cloud ? m_cloudRadio : m_ownKeyRadio)->setChecked(true);
     updateCloudStatus();
     const QString mode = settings.value(QStringLiteral("agent/openai/apiMode"), qEnvironmentVariable("OPENAI_API_MODE", QStringLiteral("chat"))).toString().toLower();

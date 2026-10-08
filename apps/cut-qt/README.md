@@ -152,7 +152,8 @@ or split them into smaller changes.
 
 Agent settings are in Settings (Edit → Settings…, ⌘, ; on macOS in the
 application menu), also reachable from the Cut Assistant panel. Settings → AI
-chooses Cut Cloud, the hosted model (the default; see
+chooses Cut Cloud, the hosted model (the default unless a key of your own
+is already saved; see
 [docs/cloud.md](../../docs/cloud.md)), or My own API key. Cut Cloud shows the
 account, plan, and requests left, with Sign in (a token, for now) and Sign
 out; Ask Cut stays unavailable, with the reason, until the account can make
