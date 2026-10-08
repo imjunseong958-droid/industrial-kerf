@@ -2,9 +2,9 @@
 
 This is the native Qt6 desktop shell for Cut. It keeps the project state in
 `cutd` through the small C ABI in `bridge.h`; the window does not maintain a
-second editable copy of the timeline. Its docked panels — Program,
-Timeline, Effect Controls, and Cut Assistant — are all backed by the bridge
-event stream.
+second editable copy of the timeline. Its docked panels — Project,
+Source, Program, Timeline, Effect Controls, and Cut Assistant — are all
+backed by the bridge event stream.
 
 Build the Rust bridge first, then configure and build the app from the
 repository root:
@@ -22,7 +22,8 @@ The positional arguments may also be supplied as `CUT_PROJECT_DIR` and
 
 Sources live in the `cut` namespace, one class per header/source pair:
 `main_window` (the window, which builds and connects the panels),
-`workspace` (the docked panels and workspaces), `effect_controls_panel`,
+`workspace` (the docked panels and workspaces), `project_panel` (the bin),
+`source_monitor_panel`, `effect_controls_panel`,
 `timeline_widget`, `viewer_widget` (the viewer and the focus-region picker),
 `command_registry` (the editor's side of the command registry), and
 `media_artwork` (background thumbnails and waveforms). `editor_common`
@@ -48,15 +49,31 @@ and timeline and Effect Controls edits go to `cutd` as typed operations counted 
 frames of the sequence.
 
 The timeline supports click-to-seek, clip selection, drag-to-move, edge
-trimming, split-at-playhead, and Delete. Effect Controls edits a clip's timing,
+trimming, split-at-playhead, and Delete. The tool palette beside the track
+headers picks what a click or drag on a clip does, with the usual keys while
+the timeline has focus: Selection (V) moves and trims, Razor (C) splits
+where you click, Ripple Edit (B) trims and closes or opens the gap, Rolling
+Edit (N) moves a cut between two clips, Slip (Y) shows other media in the
+same span, and Slide (U) moves a clip between its neighbours. With Snap on
+(Sequence → Snap, Shift+S), dragged clips and edges snap to clip edges, the
+playhead, and the start. A drop lands where the drag's preview showed it.
+
+The Project panel shows the project's media as a bin; double-click an item
+to open it in the Source monitor. There, scrub the bar under the picture or
+step with Left and Right, and mark the range with I and O (Clear In and Out
+is Ctrl+Shift+X). Insert (,) and Overwrite (.) place the marked range at
+the playhead on the first unlocked picture and sound tracks the media needs;
+a picture and its sound are placed as linked clips, and Insert ripples the
+rest of the sequence. Effect Controls edits a clip's timing,
 the catalog properties of its track type, and a generator's parameters, from
 the definitions each snapshot carries; animated properties are read-only
 there. Its values commit on focus loss.
 Tracks follow the classic edit-suite order: picture tracks stack upward from
 V1, because a later picture track plays over the ones below it, and sound
 tracks run downward from A1. The ruler and track headers stay pinned while the
-timeline scrolls. Headers show LOCK, M, or OFF when the project marks a track
-locked, muted, or disabled; these are indicators, not toggles. While a clip
+timeline scrolls. Each header has two toggles after the track number: the
+eye turns a picture track's output on and off (M mutes a sound track), and
+the padlock locks the track against edits. While a clip
 moves or trims, a readout shows the new edge timecode and its offset.
 
 Drag the bottom edge of a track header to resize that track. Right-click a
@@ -90,8 +107,10 @@ scrubs the viewer and shows the time beside the pointer. Play and pause are
 Space; with the timeline focused, Home and End jump to the start and end,
 Left and Right step one frame, S splits the selected clip at the playhead,
 and Delete and Shift+Delete delete or ripple-delete it (Cut keymap). The transport under the viewer has the same
-controls between the playhead timecode and the program length. The Cut
-Assistant panel sits behind Effect Controls in the Editing workspace. An empty timeline starts without tracks. Hover over the
+controls between the playhead timecode and the program length. The Editing
+workspace puts the Source monitor (with Effect Controls and the Cut
+Assistant behind it) beside the Program monitor, over the Project bin and
+the Timeline. An empty timeline starts without tracks. Hover over the
 empty row in the left track header to reveal a plus; click it to add a video
 or audio track. In Chat, Return sends
 the message and Shift+Return inserts a new line.

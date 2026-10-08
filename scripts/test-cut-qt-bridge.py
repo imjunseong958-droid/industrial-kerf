@@ -64,6 +64,16 @@ lib.cut_bridge_string_free.argtypes = [C.c_void_p]
 class Frame(C.Structure):
     _fields_ = [('pixels', C.POINTER(C.c_uint8)), ('length', C.c_size_t), ('width', C.c_uint32), ('height', C.c_uint32), ('time', C.c_double)]
 
+lib.cut_commands_run.argtypes = [C.c_char_p]
+lib.cut_commands_run.restype = C.c_void_p
+
+def run_command(invocation):
+    pointer = lib.cut_commands_run(json.dumps(invocation).encode())
+    value = json.loads(C.string_at(pointer))
+    lib.cut_bridge_string_free(pointer)
+    assert 'request' in value, value
+    return value['request']
+
 lib.cut_bridge_frame.argtypes = [C.c_void_p, C.POINTER(Frame)]
 lib.cut_bridge_frame.restype = C.c_bool
 
@@ -213,7 +223,21 @@ with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as tempo
         send({'type': 'preview'})
         wait(lambda event: event['type'] == 'preview' and event['status'] == 'ready', 60)
         assert any(event.get('kind') == 'tool' for event in observed)
-        print(json.dumps({'result': 'passed', 'checks': ['connection lifecycle/reconnect', 'import', 'trim', 'undo', 'redo', 'external CLI edit sync', '200 seeks/latest frame', 'local provider/tool activity', 'proposal/accept', 'conversation history', 'real export', 'effect rendered fallback'], 'max_enqueue_ms': round(max(timings), 3), 'frame': [frame.width, frame.height]}, indent=2))
+        # A source edit from the command registry: half a second of the media
+        # inserted at the start of the picture track ripples the cut.
+        send({'type': 'refresh'})
+        current = state()
+        video = next(track for track in current['timeline']['tracks'] if track['type'] == 'video')
+        before = len(video['clips'])
+        send(run_command({'command': 'source.insert', 'context': {
+            'connected': True, 'revision': current['revision'], 'playheadFrame': 0,
+            'source': {'media': current['timeline']['sources'][0]['id'], 'inFrame': 0, 'durationFrames': 15},
+            'sourceTargets': [video['id']]}}))
+        inserted = state()
+        placed = next(track for track in inserted['timeline']['tracks'] if track['id'] == video['id'])['clips']
+        assert len(placed) == before + 1 and placed[0]['startFrame'] == 0 and placed[0]['durationFrames'] == 15, placed
+        assert abs(inserted['duration'] - current['duration'] - .5) < .05
+        print(json.dumps({'result': 'passed', 'checks': ['source insert', 'connection lifecycle/reconnect', 'import', 'trim', 'undo', 'redo', 'external CLI edit sync', '200 seeks/latest frame', 'local provider/tool activity', 'proposal/accept', 'conversation history', 'real export', 'effect rendered fallback'], 'max_enqueue_ms': round(max(timings), 3), 'frame': [frame.width, frame.height]}, indent=2))
     finally:
         lib.cut_bridge_free(bridge)
         if daemon.poll() is None:

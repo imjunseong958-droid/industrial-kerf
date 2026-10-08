@@ -25,6 +25,7 @@
 #include <QTextCursor>
 #include <QTextEdit>
 #include <QTimer>
+#include <QToolBar>
 #include <QToolButton>
 #include <QVector>
 #include <QWidget>
@@ -36,6 +37,8 @@ namespace cut {
 
 class CommandRegistry;
 class EffectControlsPanel;
+class ProjectPanel;
+class SourceMonitorPanel;
 class Workspace;
 class MediaArtwork;
 class TimelineWidget;
@@ -75,6 +78,10 @@ private slots:
     void moveClip(const QString &id, double start);
     void trimClip(const QString &id, bool leading, double frame);
     void splitClip();
+    QJsonObject clipTrack(const QString &id) const;
+    // Load bin media into the source monitor and bring it forward.
+    void openSource(const QString &mediaId);
+    QStringList sourceTargets() const;
 
     // A crop box {x, y, width, height} as the model's crop properties; an
     // empty box restores the full frame.
@@ -178,6 +185,9 @@ private:
     QAction *m_timelineDetail = nullptr;
     Workspace *m_workspace = nullptr;
     EffectControlsPanel *m_effectControls = nullptr;
+    ProjectPanel *m_projectPanel = nullptr;
+    SourceMonitorPanel *m_sourceMonitor = nullptr;
+    QToolBar *m_toolPalette = nullptr;
     QDialog *m_preferences = nullptr;
     QLabel *m_statusConnection = nullptr;
     QLabel *m_statusRevision = nullptr;

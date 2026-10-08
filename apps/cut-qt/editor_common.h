@@ -9,7 +9,7 @@
 
 namespace cut {
 
-constexpr int kTimelineLabelWidth = 160;
+constexpr int kTimelineLabelWidth = 196;
 constexpr int kTimelineTail = 30;
 constexpr int kRulerHeight = 26;
 // Medium: the sound-track default and the add-track row.

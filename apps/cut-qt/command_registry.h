@@ -20,8 +20,9 @@ namespace cut {
 class CommandRegistry final : public QObject {
     Q_OBJECT
 public:
-    // Timeline-scoped shortcuts are attached to `timeline`.
-    CommandRegistry(const QString &keymap, QWidget *timeline, QObject *parent = nullptr);
+    // Shortcuts of a panel scope (`timeline`, `source`) are attached to the
+    // panel's widget and apply while it has focus.
+    CommandRegistry(const QString &keymap, const QHash<QString, QWidget *> &scopes, QObject *parent = nullptr);
 
     QAction *action(const QString &id) const { return m_actions.value(id); }
     // The registry's menus in menu-bar order, with a separator between groups.
@@ -52,7 +53,7 @@ private:
     void load(const QString &keymap);
     void refreshTip(const QString &id);
 
-    QWidget *m_timeline = nullptr;
+    QHash<QString, QWidget *> m_scopes;
     QJsonArray m_commands;
     QJsonArray m_keymaps;
     QStringList m_menus;

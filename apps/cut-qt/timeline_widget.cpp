@@ -177,6 +177,14 @@ void TimelineWidget::mousePressEvent(QMouseEvent *event) {
         return;
     }
     m_addLaneVisible = false;
+    int toggleRow = -1;
+    QString field;
+    if (toggleAt(pos, &toggleRow, &field)) {
+        const QJsonObject track = m_project.value(QStringLiteral("tracks")).toArray().at(m_rows.at(toggleRow).track).toObject();
+        const bool current = track.value(field).toBool(field == QStringLiteral("enabled"));
+        emit trackToggleRequested(track.value(QStringLiteral("id")).toString(), field, !current);
+        return;
+    }
     if (inHeader(pos)) return;
     if (inRuler(pos)) {
         beginScrub(event->position());
@@ -187,6 +195,16 @@ void TimelineWidget::mousePressEvent(QMouseEvent *event) {
         beginScrub(event->position());
         return;
     }
+    if (m_tool == TimelineTool::Razor) {
+        emit razorRequested(hit.id, static_cast<double>(std::llround(timeAt(event->position().x()) * m_fps)));
+        return;
+    }
+    const bool onEdge = pos.x() - hit.rect.left() < kTrimHandle || hit.rect.right() - pos.x() < kTrimHandle;
+    // A tool that has nothing to drag here only selects.
+    if (!(onEdge && trimsEdges()) && !dragsBodies()) {
+        emit clipSelected(hit.id);
+        return;
+    }
     m_dragging = true;
     m_dragMoved = false;
     m_dragClipId = hit.id;
@@ -194,8 +212,8 @@ void TimelineWidget::mousePressEvent(QMouseEvent *event) {
     m_dragStart = hit.start;
     m_dragDuration = hit.duration;
     m_pressTime = timeAt(event->position().x());
-    m_dragLeading = pos.x() - hit.rect.left() < kTrimHandle;
-    m_dragTrailing = hit.rect.right() - pos.x() < kTrimHandle;
+    m_dragLeading = trimsEdges() && pos.x() - hit.rect.left() < kTrimHandle;
+    m_dragTrailing = trimsEdges() && hit.rect.right() - pos.x() < kTrimHandle;
     // A trailing trim previews the out point; starting from the in point
     // would collapse the clip to one frame until the pointer moves.
     m_previewTime = m_dragTrailing && !m_dragLeading ? hit.start + hit.duration : hit.start;
@@ -256,20 +274,16 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent *event) {
             invalidateLanes();
             update();
         }
-        if (hit.id.isEmpty()) {
-            setCursor(Qt::ArrowCursor);
-        } else if (edge != 0) {
-            setCursor(Qt::SizeHorCursor);
-        } else {
-            setCursor(Qt::OpenHandCursor);
-        }
+        setToolCursor(hit, edge);
         updateSkimmer(event->position());
         return;
     }
     clearSkimmer();
     const double delta = timeAt(event->position().x()) - m_pressTime;
     m_dragMoved = m_dragMoved || std::abs(delta * pixelsPerSecond()) >= QApplication::startDragDistance();
-    m_previewTime = std::round(std::max(0.0, dragOrigin() + delta) * m_fps) / m_fps;
+    const bool body = !m_dragLeading && !m_dragTrailing;
+    m_previewTime = snapped(std::round(std::max(0.0, dragOrigin() + delta) * m_fps) / m_fps,
+                            body && m_tool != TimelineTool::Slip ? m_dragDuration : 0.0);
     setCursor((m_dragLeading || m_dragTrailing) ? Qt::SizeHorCursor : Qt::ClosedHandCursor);
     invalidateLanes();
     update();
@@ -300,13 +314,11 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent *event) {
         update();
         return;
     }
-    const double target = std::max(0.0, m_dragStart + delta);
+    // The drop lands where the preview showed it, snapping included.
     if (m_dragLeading || m_dragTrailing) {
-        // Trim commands use the absolute timeline edge under the pointer.
-        const auto frame = static_cast<double>(std::llround(timeAt(event->position().x()) * m_fps));
-        emit trimRequested(m_dragClipId, m_dragLeading, frame);
+        emit trimRequested(m_dragClipId, m_dragLeading, static_cast<double>(std::llround(m_previewTime * m_fps)));
     } else {
-        emit moveRequested(m_dragClipId, target);
+        emit moveRequested(m_dragClipId, m_previewTime);
     }
     m_dragClipId.clear();
     setCursor(Qt::ArrowCursor);
@@ -509,7 +521,7 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     codeFont.setStyleHint(QFont::Monospace);
     codeFont.setPixelSize(10);
     codeFont.setWeight(QFont::Bold);
-    const QRect badge(left + 10, blockTop, 26, 16);
+    const QRect badge(left + 10, blockTop, 22, 16);
     p.fillRect(badge, QColor("#2a2a2a"));
     frameInside(p, badge, 1, QColor("#454545"));
     p.setFont(codeFont);
@@ -537,7 +549,36 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     nameFont.setPixelSize(11);
     nameFont.setWeight(QFont::Medium);
     p.setFont(nameFont);
-    const int nameLeft = badge.right() + 6;
+    // Output (or mute) and lock toggles sit after the track number.
+    const auto drawToggle = [&](int index, bool on, const QString &field) {
+        const QRect box = headerToggleRect(row, index).translated(left - stickyOrigin().x(), 0);
+        p.save();
+        p.fillRect(box, on ? QColor("#e6b450") : QColor("#2a2a2a"));
+        frameInside(p, box, 1, on ? QColor("#e6b450") : QColor("#454545"));
+        p.setPen(QPen(on ? QColor("#141414") : QColor("#9a9a9a"), 1.2));
+        p.setBrush(Qt::NoBrush);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        const QPointF c = QRectF(box).center();
+        if (field == QStringLiteral("locked")) {
+            p.drawArc(QRectF(c.x() - 3, c.y() - 6, 6, 7), 0, 180 * 16);
+            p.drawRect(QRectF(c.x() - 4, c.y() - 2, 8, 6));
+        } else if (field == QStringLiteral("muted")) {
+            QFont mute(QStringLiteral("Menlo"));
+            mute.setPixelSize(9);
+            mute.setWeight(QFont::Bold);
+            p.setFont(mute);
+            p.drawText(box, Qt::AlignCenter, QStringLiteral("M"));
+        } else {
+            p.drawEllipse(c, 5.0, 3.0);
+            p.drawEllipse(c, 1.2, 1.2);
+            if (!on) p.drawLine(QPointF(c.x() - 5, c.y() + 4), QPointF(c.x() + 5, c.y() - 4));
+        }
+        p.restore();
+    };
+    if (layout.audio) drawToggle(0, track.value(QStringLiteral("muted")).toBool(), QStringLiteral("muted"));
+    else drawToggle(0, enabled, QStringLiteral("enabled"));
+    drawToggle(1, track.value(QStringLiteral("locked")).toBool(), QStringLiteral("locked"));
+    const int nameLeft = headerToggleRect(row, 1).translated(left - stickyOrigin().x(), 0).right() + 7;
     const int nameRight = preview.isNull() ? header.right() - 8 : slot.left() - 8;
     QString name = track.value(QStringLiteral("name")).toString().trimmed();
     if (name.isEmpty()) name = (layout.audio ? QStringLiteral("Audio %1") : QStringLiteral("Video %1")).arg(layout.number);
@@ -556,23 +597,69 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     p.setPen(QColor("#7c7c7c"));
     p.drawText(meta, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, count);
 
-    // State the runtime reports. These are indicators, not toggles.
-    int chipX = meta.left() + QFontMetrics(metaFont).horizontalAdvance(count) + 7;
-    const auto chip = [&](const QString &text) {
-        QFont chipFont = codeFont;
-        chipFont.setPixelSize(8);
-        const int chipWidth = QFontMetrics(chipFont).horizontalAdvance(text) + 8;
-        if (chipX + chipWidth > nameRight) return;
-        const QRect box(chipX, meta.top(), chipWidth, meta.height());
-        p.fillRect(box, QColor("#c9c9c9"));
-        p.setFont(chipFont);
-        p.setPen(QColor("#141414"));
-        p.drawText(box, Qt::AlignCenter, text);
-        chipX += chipWidth + 4;
-    };
-    if (track.value(QStringLiteral("locked")).toBool()) chip(QStringLiteral("LOCK"));
-    if (track.value(QStringLiteral("muted")).toBool()) chip(QStringLiteral("M"));
-    if (!enabled) chip(QStringLiteral("OFF"));
+}
+
+void TimelineWidget::setTool(TimelineTool tool) {
+    m_tool = tool;
+    clearHoverClip();
+    setCursor(Qt::ArrowCursor);
+}
+
+QRect TimelineWidget::headerToggleRect(int row, int index) const {
+    const TrackRow &layout = m_rows.at(row);
+    const int height = layout.height - 1;
+    const int top = layout.height >= 40 ? layout.top + (height - 31) / 2 : layout.top + (height - 16) / 2;
+    return QRect(stickyOrigin().x() + 36 + index * 20, top, 16, 16);
+}
+
+bool TimelineWidget::toggleAt(const QPoint &point, int *row, QString *field) const {
+    if (!inHeader(point) || inRuler(point)) return false;
+    const int at = rowAt(point.y());
+    if (at < 0 || at >= m_rows.size()) return false;
+    for (int index = 0; index < 2; ++index) {
+        if (!headerToggleRect(at, index).contains(point)) continue;
+        *row = at;
+        *field = index == 1 ? QStringLiteral("locked") : m_rows.at(at).audio ? QStringLiteral("muted") : QStringLiteral("enabled");
+        return true;
+    }
+    return false;
+}
+
+void TimelineWidget::setToolCursor(const ClipHit &hit, int edge) {
+    if (hit.id.isEmpty()) setCursor(Qt::ArrowCursor);
+    else if (m_tool == TimelineTool::Razor) setCursor(Qt::CrossCursor);
+    else if (edge != 0 && trimsEdges()) setCursor(m_tool == TimelineTool::Roll ? Qt::SplitHCursor : Qt::SizeHorCursor);
+    else if (dragsBodies()) setCursor(m_tool == TimelineTool::Selection ? Qt::OpenHandCursor : Qt::SizeHorCursor);
+    else setCursor(Qt::ArrowCursor);
+}
+
+double TimelineWidget::snapped(double time, double length) const {
+    if (!m_snapping) return time;
+    // Edit points: the start, the playhead, and every other clip's edges.
+    QVector<double> points{0.0, m_playhead};
+    for (const QJsonValue &track : m_project.value(QStringLiteral("tracks")).toArray()) {
+        for (const QJsonValue &value : track.toObject().value(QStringLiteral("clips")).toArray()) {
+            const QJsonObject clip = value.toObject();
+            if (clip.value(QStringLiteral("id")).toString() == m_dragClipId) continue;
+            const double start = clip.value(QStringLiteral("timelineStart")).toDouble();
+            points << start << start + clip.value(QStringLiteral("duration")).toDouble();
+        }
+    }
+    const double reach = 8.0 / pixelsPerSecond();
+    double best = time;
+    double distance = reach;
+    // A moved clip snaps by either end; an edge by itself.
+    const QVector<double> edges = length > 0.0 ? QVector<double>{0.0, length} : QVector<double>{0.0};
+    for (const double edge : edges) {
+        for (const double point : points) {
+            const double gap = std::abs(time + edge - point);
+            if (gap < distance) {
+                distance = gap;
+                best = point - edge;
+            }
+        }
+    }
+    return std::max(0.0, std::round(best * m_fps) / m_fps);
 }
 
 void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const QJsonObject &clip, const QColor &accent, bool audio) {
@@ -583,7 +670,7 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
     if (dragged) {
         if (m_dragLeading) { duration = std::max(1.0 / m_fps, m_dragStart + m_dragDuration - m_previewTime); start = m_previewTime; }
         else if (m_dragTrailing) duration = std::max(1.0 / m_fps, m_previewTime - m_dragStart);
-        else start = m_previewTime;
+        else if (m_tool != TimelineTool::Slip) start = m_previewTime;
     }
     const QRectF rect = clipRect(row, start, duration);
     if (!rect.intersects(visible)) return;

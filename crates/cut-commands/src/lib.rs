@@ -31,6 +31,8 @@ pub enum Scope {
     Window,
     /// Only while the timeline has focus, so typing elsewhere is unaffected.
     Timeline,
+    /// Only while the source monitor has focus.
+    Source,
 }
 
 /// The menus, in menu-bar order.
@@ -38,7 +40,9 @@ pub enum Scope {
 pub enum Menu {
     File,
     Edit,
+    Clip,
     Sequence,
+    Markers,
     Playback,
     View,
     Window,
@@ -47,7 +51,9 @@ pub enum Menu {
 pub const MENUS: &[Menu] = &[
     Menu::File,
     Menu::Edit,
+    Menu::Clip,
     Menu::Sequence,
+    Menu::Markers,
     Menu::Playback,
     Menu::View,
     Menu::Window,
@@ -70,6 +76,22 @@ pub struct Context {
     pub preview_renderable: bool,
     pub video_tracks: u32,
     pub audio_tracks: u32,
+    /// The marked range of the media open in the source monitor.
+    pub source: Option<SourceRange>,
+    /// The tracks a source edit places the media on: the first unlocked
+    /// track of each kind the media has.
+    pub source_targets: Vec<String>,
+}
+
+/// A range of media for a source edit.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SourceRange {
+    pub media: String,
+    /// The in point, in frames of the media.
+    pub in_frame: i64,
+    /// The length of the range, in frames of the sequence.
+    pub duration_frames: i64,
 }
 
 /// The selected clip, in frames of the sequence.
@@ -197,6 +219,26 @@ fn can_render_preview(context: &Context) -> Result<(), &'static str> {
     }
 }
 
+fn has_source(context: &Context) -> Result<(), &'static str> {
+    if context.source.is_some() {
+        Ok(())
+    } else {
+        Err("Open media in the source monitor")
+    }
+}
+
+fn can_edit_source(context: &Context) -> Result<(), &'static str> {
+    connected(context)?;
+    match &context.source {
+        None => Err("Open media in the source monitor"),
+        Some(range) if range.duration_frames <= 0 => Err("Mark an out point after the in point"),
+        Some(_) if context.source_targets.is_empty() => {
+            Err("Add an unlocked track for the source media")
+        }
+        Some(_) => Ok(()),
+    }
+}
+
 fn can_play(context: &Context) -> Result<(), &'static str> {
     connected(context)?;
     if context.preview_required {
@@ -234,6 +276,11 @@ const fn frontend(mut command: Command) -> Command {
 
 const fn timeline(mut command: Command) -> Command {
     command.scope = Scope::Timeline;
+    command
+}
+
+const fn source(mut command: Command) -> Command {
+    command.scope = Scope::Source;
     command
 }
 
@@ -335,6 +382,68 @@ pub static COMMANDS: &[Command] = &[
         )),
         &["Ctrl+,"],
     ),
+    keys(
+        params(
+            menu(
+                command("source.insert", "Insert", can_edit_source),
+                Menu::Clip,
+                0,
+            ),
+            r#"{"media": string, "sourceIn": frame, "frames": int, "at": frame, "tracks": [string]}"#,
+        ),
+        &[","],
+    ),
+    keys(
+        params(
+            menu(
+                command("source.overwrite", "Overwrite", can_edit_source),
+                Menu::Clip,
+                0,
+            ),
+            r#"{"media": string, "sourceIn": frame, "frames": int, "at": frame, "tracks": [string]}"#,
+        ),
+        &["."],
+    ),
+    keys(
+        source(frontend(menu(
+            command("source.markIn", "Mark In", has_source),
+            Menu::Markers,
+            0,
+        ))),
+        &["I"],
+    ),
+    keys(
+        source(frontend(menu(
+            command("source.markOut", "Mark Out", has_source),
+            Menu::Markers,
+            0,
+        ))),
+        &["O"],
+    ),
+    keys(
+        source(frontend(menu(
+            command("source.clearMarks", "Clear In and Out", has_source),
+            Menu::Markers,
+            0,
+        ))),
+        &["Ctrl+Shift+X"],
+    ),
+    keys(
+        source(frontend(command(
+            "source.previousFrame",
+            "Previous Frame",
+            has_source,
+        ))),
+        &["Left"],
+    ),
+    keys(
+        source(frontend(command(
+            "source.nextFrame",
+            "Next Frame",
+            has_source,
+        ))),
+        &["Right"],
+    ),
     menu(
         command(
             "sequence.renderPreview",
@@ -370,8 +479,60 @@ pub static COMMANDS: &[Command] = &[
     ),
     params(
         command("clip.trim", "Trim Clip", connected),
-        r#"{"clip": string, "edge": "in" | "out", "frames": int}"#,
+        r#"{"clip": string, "edge": "in" | "out", "frames": int, "ripple": bool}"#,
     ),
+    params(
+        command("clip.roll", "Roll Edit", connected),
+        r#"{"clip": string, "frames": int}"#,
+    ),
+    params(
+        command("clip.slip", "Slip Clip", connected),
+        r#"{"clip": string, "frames": int}"#,
+    ),
+    params(
+        command("clip.slide", "Slide Clip", connected),
+        r#"{"clip": string, "frames": int}"#,
+    ),
+    params(
+        command("track.set", "Set Track", connected),
+        r#"{"track": string, "locked": bool, "muted": bool, "enabled": bool}"#,
+    ),
+    checkable(keys(
+        frontend(menu(
+            command("sequence.snap", "Snap", always),
+            Menu::Sequence,
+            2,
+        )),
+        &["Shift+S"],
+    )),
+    checkable(keys(
+        timeline(frontend(command(
+            "tool.selection",
+            "Selection Tool",
+            always,
+        ))),
+        &["V"],
+    )),
+    checkable(keys(
+        timeline(frontend(command("tool.razor", "Razor Tool", always))),
+        &["C"],
+    )),
+    checkable(keys(
+        timeline(frontend(command("tool.ripple", "Ripple Edit Tool", always))),
+        &["B"],
+    )),
+    checkable(keys(
+        timeline(frontend(command("tool.roll", "Rolling Edit Tool", always))),
+        &["N"],
+    )),
+    checkable(keys(
+        timeline(frontend(command("tool.slip", "Slip Tool", always))),
+        &["Y"],
+    )),
+    checkable(keys(
+        timeline(frontend(command("tool.slide", "Slide Tool", always))),
+        &["U"],
+    )),
     keys(
         timeline(frontend(menu(
             command("playback.toggle", "Play / Pause", can_play),
@@ -445,6 +606,16 @@ pub static COMMANDS: &[Command] = &[
         &["Alt+Shift+0"],
     ),
     checkable(frontend(menu(
+        command("window.project", "Project", always),
+        Menu::Window,
+        1,
+    ))),
+    checkable(frontend(menu(
+        command("window.source", "Source Monitor", always),
+        Menu::Window,
+        1,
+    ))),
+    checkable(frontend(menu(
         command("window.program", "Program Monitor", always),
         Menu::Window,
         1,
@@ -487,6 +658,7 @@ pub static KEYMAPS: &[Keymap] = &[
             ("file.export", &["Ctrl+M"]),
             ("clip.split", &["Ctrl+K"]),
             ("sequence.renderPreview", &["Return"]),
+            ("sequence.snap", &["S"]),
         ],
     },
     Keymap {
@@ -499,6 +671,15 @@ pub static KEYMAPS: &[Keymap] = &[
             ("clip.rippleDelete", &["Delete", "Backspace"]),
             ("clip.split", &["Ctrl+B"]),
             ("sequence.renderPreview", &["Meta+R"]),
+            ("source.insert", &["W"]),
+            ("source.overwrite", &["D"]),
+            ("sequence.snap", &["N"]),
+            ("tool.selection", &["A"]),
+            ("tool.razor", &["B"]),
+            ("tool.ripple", &[]),
+            ("tool.roll", &[]),
+            ("tool.slip", &[]),
+            ("tool.slide", &[]),
         ],
     },
 ];
@@ -644,8 +825,64 @@ pub fn run(id: &str, context: &Context, params: &Value) -> Result<Request, Strin
                 other => return Err(format!("unknown trim edge `{other}`")),
             },
             frames: params.require_int("frames")?,
-            ripple: false,
+            ripple: params.bool("ripple")?.unwrap_or(false),
         }),
+        "clip.roll" => edit(EditOp::Roll {
+            clip: params.require_string("clip")?,
+            frames: params.require_int("frames")?,
+        }),
+        "clip.slip" => edit(EditOp::Slip {
+            clip: params.require_string("clip")?,
+            frames: params.require_int("frames")?,
+        }),
+        "clip.slide" => edit(EditOp::Slide {
+            clip: params.require_string("clip")?,
+            frames: params.require_int("frames")?,
+        }),
+        "track.set" => edit(EditOp::SetTrack {
+            track: params.require_string("track")?,
+            sequence: None,
+            enabled: params.bool("enabled")?,
+            locked: params.bool("locked")?,
+            muted: params.bool("muted")?,
+        }),
+        "source.insert" | "source.overwrite" => {
+            let range = context.source.clone().unwrap_or_default();
+            let media = params.string("media").unwrap_or(range.media);
+            let source_in = params.int("sourceIn")?.unwrap_or(range.in_frame);
+            let frames = params.int("frames")?.unwrap_or(range.duration_frames);
+            let at = params.int("at")?.unwrap_or(context.playhead_frame);
+            let tracks = match params.get("tracks") {
+                Some(tracks) => serde_json::from_value(tracks.clone())
+                    .map_err(|_| "parameter `tracks` must be a list of track ids".to_string())?,
+                None => context.source_targets.clone(),
+            };
+            if media.is_empty() || frames <= 0 || tracks.is_empty() {
+                return Err("a source edit needs media, a length, and tracks".into());
+            }
+            let (ids, sequence) = (Vec::new(), None);
+            edit(if id == "source.insert" {
+                EditOp::Insert {
+                    media,
+                    source_in,
+                    frames,
+                    at,
+                    tracks,
+                    ids,
+                    sequence,
+                }
+            } else {
+                EditOp::Overwrite {
+                    media,
+                    source_in,
+                    frames,
+                    at,
+                    tracks,
+                    ids,
+                    sequence,
+                }
+            })
+        }
         _ => return Err(format!("`{id}` has no engine request")),
     })
 }
@@ -688,6 +925,16 @@ impl<'a> Params<'a> {
                 value
                     .as_i64()
                     .ok_or_else(|| format!("parameter `{name}` must be an integer"))
+            })
+            .transpose()
+    }
+
+    fn bool(&self, name: &str) -> Result<Option<bool>, String> {
+        self.get(name)
+            .map(|value| {
+                value
+                    .as_bool()
+                    .ok_or_else(|| format!("parameter `{name}` must be true or false"))
             })
             .transpose()
     }
@@ -750,15 +997,25 @@ mod tests {
 
     #[test]
     fn no_keymap_binds_one_key_to_two_commands() {
+        // A key may mean different things in different focused panels, but
+        // never collide with a window-wide key or within one panel.
+        let overlap = |a: Scope, b: Scope| a == b || a == Scope::Window || b == Scope::Window;
         for keymap in KEYMAPS {
-            let mut seen = HashSet::new();
-            for command in COMMANDS {
-                for key in keymap.keys(command) {
+            let bound: Vec<(&str, Scope, &str)> = COMMANDS
+                .iter()
+                .flat_map(|command| {
+                    keymap
+                        .keys(command)
+                        .iter()
+                        .map(move |key| (*key, command.scope, command.id))
+                })
+                .collect();
+            for (index, (key, scope, id)) in bound.iter().enumerate() {
+                for (other_key, other_scope, other_id) in &bound[index + 1..] {
                     assert!(
-                        seen.insert(*key),
-                        "{} binds {key} twice (again for {})",
-                        keymap.id,
-                        command.id
+                        key != other_key || !overlap(*scope, *other_scope),
+                        "{} binds {key} to {id} and {other_id}",
+                        keymap.id
                     );
                 }
             }
@@ -880,6 +1137,75 @@ mod tests {
                 width: 1080,
                 height: 1920,
                 sequence: None
+            }]
+        );
+    }
+
+    #[test]
+    fn source_edits_place_the_marked_range_at_the_playhead() {
+        let mut context = ready();
+        assert_eq!(
+            run("source.insert", &context, &Value::Null).unwrap_err(),
+            "Open media in the source monitor"
+        );
+        context.source = Some(SourceRange {
+            media: "m1".into(),
+            in_frame: 50,
+            duration_frames: 24,
+        });
+        assert_eq!(
+            run("source.overwrite", &context, &Value::Null).unwrap_err(),
+            "Add an unlocked track for the source media"
+        );
+        context.source_targets = vec!["V1".into(), "A1".into()];
+        let insert = ops(run("source.insert", &context, &Value::Null).unwrap());
+        assert_eq!(
+            insert,
+            [EditOp::Insert {
+                media: "m1".into(),
+                source_in: 50,
+                frames: 24,
+                at: 48,
+                tracks: vec!["V1".into(), "A1".into()],
+                ids: vec![],
+                sequence: None
+            }]
+        );
+        let overwrite = ops(run("source.overwrite", &context, &json!({"tracks": ["V2"]})).unwrap());
+        assert!(matches!(&overwrite[0], EditOp::Overwrite { tracks, .. } if tracks == &["V2"]));
+    }
+
+    #[test]
+    fn trims_tools_and_tracks_resolve_to_their_operations() {
+        let ripple = ops(run(
+            "clip.trim",
+            &ready(),
+            &json!({"clip": "c1", "edge": "in", "frames": 3, "ripple": true}),
+        )
+        .unwrap());
+        assert!(matches!(ripple[0], EditOp::Trim { ripple: true, .. }));
+        for (id, expected) in [
+            ("clip.roll", "roll"),
+            ("clip.slip", "slip"),
+            ("clip.slide", "slide"),
+        ] {
+            let op = ops(run(id, &ready(), &json!({"clip": "c1", "frames": -2})).unwrap());
+            assert_eq!(serde_json::to_value(&op[0]).unwrap()["op"], expected);
+        }
+        let lock = ops(run(
+            "track.set",
+            &ready(),
+            &json!({"track": "V1", "locked": true}),
+        )
+        .unwrap());
+        assert_eq!(
+            lock,
+            [EditOp::SetTrack {
+                track: "V1".into(),
+                sequence: None,
+                enabled: None,
+                locked: Some(true),
+                muted: None
             }]
         );
     }
