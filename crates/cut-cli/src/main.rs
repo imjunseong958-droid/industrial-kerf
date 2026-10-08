@@ -4,7 +4,7 @@
 //! project-scoped terminal agent available for scripts and interactive shells.
 
 use anyhow::{anyhow, bail, Context, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use cut_agent::{
     AgentEvent, AgentSession, AgentSessionOptions, AgentTargetSummary, OpenAiApiMode, ProviderName,
     ReasoningEffort,
@@ -22,6 +22,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Debug, Parser)]
 #[command(name = "lcut", version, about = "Cut native editor and terminal agent")]
 struct Args {
+    #[command(subcommand)]
+    command: Option<Command>,
     /// Local media path or a URL to import before opening the editor/session.
     media: Option<String>,
 
@@ -50,11 +52,11 @@ struct Args {
     base_url: Option<String>,
 
     /// Project directory owned by cutd.
-    #[arg(long, default_value = ".")]
+    #[arg(long, default_value = ".", global = true)]
     dir: PathBuf,
 
     /// Explicit cutd sidecar path.
-    #[arg(long)]
+    #[arg(long, global = true)]
     cutd: Option<PathBuf>,
 
     /// yt-dlp cookie file.
@@ -94,6 +96,43 @@ struct Args {
     no_open: bool,
 }
 
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Save, inspect, share and apply portable editing patterns. No API key needed.
+    Preset {
+        #[command(subcommand)]
+        action: PresetAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum PresetAction {
+    /// List presets in the project root and .cut/presets.
+    List,
+    /// Save the accepted sequence to a new .cutpreset file.
+    Save {
+        file: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        sequence: Option<String>,
+    },
+    /// Inspect the pattern, minimum source lengths, and text slots.
+    Show { file: String },
+    /// Stage a proposal replacing a sequence; accept it in the editor.
+    Apply {
+        file: String,
+        /// SLOT=MEDIA or SLOT=MEDIA@FROM (e.g. slot1=m2@1.5s).
+        #[arg(long = "bind")]
+        bindings: Vec<String>,
+        /// TEMPLATE_CLIP=TEXT; quote values containing spaces.
+        #[arg(long = "text")]
+        texts: Vec<String>,
+        #[arg(long)]
+        sequence: Option<String>,
+    },
+}
+
 fn main() {
     if let Err(error) = run() {
         eprintln!("lcut: {error:#}");
@@ -111,6 +150,10 @@ fn run() -> Result<()> {
             args.dir.canonicalize()
         })
         .context("resolve project directory")?;
+
+    if let Some(Command::Preset { action }) = &args.command {
+        return run_preset(action, &directory, args.cutd.as_deref());
+    }
 
     if !uses_terminal(&args) {
         return run_gui(&args, &directory);
@@ -228,13 +271,105 @@ fn run() -> Result<()> {
 
 // Optional MCP configuration belongs to the agent, not the UI selection.
 fn uses_terminal(args: &Args) -> bool {
-    args.terminal
+    args.command.is_some()
+        || args.terminal
         || args.prompt.is_some()
         || args.skills
         || args.mcp
         || args.generate_docs
         || args.add_agents_pointer
         || args.mcp_tools
+}
+
+fn run_preset(action: &PresetAction, directory: &Path, cutd: Option<&Path>) -> Result<()> {
+    let (tool, arguments) = preset_request(action)?;
+    let router = open_router(directory, cutd)?;
+    let response = router.call(tool, arguments);
+    if response["ok"] != true {
+        bail!(
+            "{}: {}",
+            response["error"]["code"].as_str().unwrap_or("PRESET_ERROR"),
+            response["error"]["message"]
+                .as_str()
+                .unwrap_or("preset operation failed")
+        );
+    }
+    let mut result = response["result"].clone();
+    // Images remain available in the editor and MCP response; the terminal
+    // prints their paths, without megabytes of inline image data.
+    fn omit_images(value: &mut Value) {
+        match value {
+            Value::Object(fields) => {
+                fields.remove("imageBase64");
+                for value in fields.values_mut() {
+                    omit_images(value);
+                }
+            }
+            Value::Array(values) => {
+                for value in values {
+                    omit_images(value);
+                }
+            }
+            _ => {}
+        }
+    }
+    omit_images(&mut result);
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+fn preset_request(action: &PresetAction) -> Result<(&'static str, Value)> {
+    Ok(match action {
+        PresetAction::List => ("look", json!({"presets": true})),
+        PresetAction::Show { file } => ("look", json!({"preset": file})),
+        PresetAction::Save {
+            file,
+            name,
+            sequence,
+        } => (
+            "edit",
+            json!({"savePreset": file, "name": name, "sequence": sequence}),
+        ),
+        PresetAction::Apply {
+            file,
+            bindings,
+            texts,
+            sequence,
+        } => {
+            let mut media = serde_json::Map::new();
+            for binding in bindings {
+                let (slot, source) = binding
+                    .split_once('=')
+                    .context("--bind needs SLOT=MEDIA or SLOT=MEDIA@FROM")?;
+                let (id, from) = source.split_once('@').unwrap_or((source, "0f"));
+                if slot.is_empty() || id.is_empty() || from.is_empty() {
+                    bail!("empty slot, media or source start in --bind");
+                }
+                if media
+                    .insert(slot.into(), json!({"media": id, "from": from}))
+                    .is_some()
+                {
+                    bail!("duplicate binding for `{slot}`");
+                }
+            }
+            let mut overrides = serde_json::Map::new();
+            for text in texts {
+                let (clip, value) = text
+                    .split_once('=')
+                    .context("--text needs TEMPLATE_CLIP=TEXT")?;
+                if clip.is_empty() {
+                    bail!("empty text slot");
+                }
+                if overrides.insert(clip.into(), json!(value)).is_some() {
+                    bail!("duplicate text for `{clip}`");
+                }
+            }
+            (
+                "edit",
+                json!({"preset": file, "bindings": media, "texts": overrides, "sequence": sequence}),
+            )
+        }
+    })
 }
 
 fn run_gui(args: &Args, directory: &Path) -> Result<()> {
@@ -607,7 +742,7 @@ fn operation_key(kind: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{uses_terminal, Args};
+    use super::{preset_request, uses_terminal, Args, Command, PresetAction};
     use clap::Parser;
 
     #[test]
@@ -615,6 +750,40 @@ mod tests {
         let args = Args::try_parse_from(["lcut"]).expect("parse default launcher args");
 
         assert!(!uses_terminal(&args));
+    }
+
+    #[test]
+    fn preset_commands_need_no_agent_and_keep_source_offsets_and_text_literal() {
+        let args = Args::try_parse_from([
+            "lcut",
+            "--dir",
+            "/tmp/project",
+            "preset",
+            "apply",
+            "style.cutpreset",
+            "--bind",
+            "slot1=m2@1.5s",
+            "--text",
+            "title1=New = title",
+        ])
+        .unwrap();
+        assert!(uses_terminal(&args));
+        let Some(Command::Preset { action }) = args.command else {
+            panic!("preset command");
+        };
+        let (tool, request) = preset_request(&action).unwrap();
+        assert_eq!(tool, "edit");
+        assert_eq!(request["bindings"]["slot1"]["from"], "1.5s");
+        assert_eq!(request["texts"]["title1"], "New = title");
+        assert!(preset_request(&PresetAction::Apply {
+            file: "style.cutpreset".into(),
+            bindings: vec!["slot1=m1".into(), "slot1=m2".into()],
+            texts: vec![],
+            sequence: None
+        })
+        .is_err());
+        let media = Args::try_parse_from(["lcut", "video.mp4"]).unwrap();
+        assert_eq!(media.media.as_deref(), Some("video.mp4"));
     }
 
     #[test]

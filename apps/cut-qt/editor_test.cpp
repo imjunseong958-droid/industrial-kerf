@@ -16,6 +16,7 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDir>
+#include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QFile>
 #include <QFileInfo>
@@ -30,6 +31,7 @@
 #include <QMenuBar>
 #include <QPainter>
 #include <QPixmap>
+#include <QPlainTextEdit>
 #include <QProcess>
 #include <QPushButton>
 #include <QRadioButton>
@@ -70,6 +72,58 @@ class EditorTest final : public QObject {
     }
 
 private slots:
+    void nativePresetExportAndMediaSlots() {
+        QTemporaryDir project;
+        QVERIFY(project.isValid());
+        MainWindow window{project.path(), QString()};
+        const QString path = QDir(project.path()).filePath(QStringLiteral("style.cutpreset"));
+        const QString document = QStringLiteral("cut 1\nproject name=\"Style\"\n");
+        window.handleEvent(QJsonObject{{"type", "preset_export"}, {"path", path}, {"document", document}});
+        QFile saved(path);
+        QVERIFY(saved.open(QIODevice::ReadOnly));
+        QCOMPARE(saved.readAll(), document.toUtf8());
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(QJsonObject{{"revision", 7}, {"duration", 4}, {"timeline", QJsonObject{
+            {"fps", 30}, {"sources", QJsonArray{
+                QJsonObject{{"id", "silent"}, {"path", "silent.mp4"}, {"width", 320}, {"duration", 4}},
+                QJsonObject{{"id", "replacement"}, {"path", "new.mp4"}, {"width", 320}, {"hasAudio", true}, {"duration", 4}}}},
+            {"tracks", QJsonArray{}}}}});
+        QVERIFY(window.m_commands->action(QStringLiteral("file.exportPreset")));
+        QVERIFY(window.m_commands->action(QStringLiteral("file.applyPreset")));
+        QTimer::singleShot(0, &window, [&window, &document] {
+            auto *dialog = window.findChild<QDialog *>(QStringLiteral("presetBindingsDialog"));
+            QVERIFY(dialog);
+            // Ensure assertion failures cannot strand the modal test dialog.
+            QTimer::singleShot(2000, dialog, &QDialog::reject);
+            auto *choice = dialog->findChild<QComboBox *>(QStringLiteral("presetMedia_slot1"));
+            auto *start = dialog->findChild<QDoubleSpinBox *>(QStringLiteral("presetFrom_slot1"));
+            auto *text = dialog->findChild<QLineEdit *>(QStringLiteral("presetText_title1"));
+            auto *code = dialog->findChild<QPlainTextEdit *>(QStringLiteral("presetCode"));
+            auto *buttons = dialog->findChild<QDialogButtonBox *>();
+            QVERIFY(choice && start && text && code && buttons);
+            QCOMPARE(choice->count(), 2); // A linked video/audio slot excludes silent media.
+            QVERIFY(!buttons->button(QDialogButtonBox::Ok)->isEnabled());
+            QCOMPARE(code->toPlainText(), document);
+            QVERIFY(code->isReadOnly());
+            choice->setCurrentIndex(1);
+            QCOMPARE(start->maximum(), 2.0);
+            start->setValue(1.25);
+            text->setText(QStringLiteral("New title"));
+            text->setModified(true);
+            QVERIFY(buttons->button(QDialogButtonBox::Ok)->isEnabled());
+            buttons->button(QDialogButtonBox::Ok)->click();
+        });
+        window.showPresetBindings(path, QJsonObject{{"name", "Style"}, {"document", document},
+            {"slots", QJsonArray{QJsonObject{{"id", "slot1"}, {"seconds", 2}, {"video", true}, {"audio", true}}}},
+            {"textSlots", QJsonObject{{"title1", "Original"}}}});
+        const QJsonObject request = window.m_lastCommand;
+        QCOMPARE(request.value("type").toString(), QStringLiteral("preset_apply"));
+        QCOMPARE(request.value("revision").toInt(), 7);
+        QCOMPARE(request.value("bindings").toObject().value("slot1").toObject().value("media").toString(), QStringLiteral("replacement"));
+        QCOMPARE(request.value("bindings").toObject().value("slot1").toObject().value("from").toString(), QStringLiteral("1.250s"));
+        QCOMPARE(request.value("texts").toObject().value("title1").toString(), QStringLiteral("New title"));
+    }
+
     void initTestCase() {
         QApplication::setStyle(QStringLiteral("Fusion"));
         qApp->setStyleSheet(editorStyleSheet());

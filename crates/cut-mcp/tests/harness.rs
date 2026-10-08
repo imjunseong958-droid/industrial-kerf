@@ -107,6 +107,115 @@ fn is_jpeg(value: &Value) -> bool {
 }
 
 #[test]
+fn presets_share_native_edit_code_and_apply_replacement_media_as_a_proposal() {
+    let Some((source_directory, source)) = router() else {
+        return;
+    };
+    let revision = source.runtime().get_state().unwrap().revision;
+    source
+        .runtime()
+        .apply_script_request("ui", "preset-trim", "trim c1 out -60f", revision)
+        .unwrap();
+    let before_save = source.runtime().get_document(false).unwrap();
+    let saved = ok(
+        &source,
+        "edit",
+        json!({"savePreset":"style.cutpreset", "name":"Two seconds"}),
+    );
+    assert_eq!(saved["slots"], 1);
+    assert_eq!(source.runtime().get_document(false).unwrap(), before_save);
+    assert_eq!(
+        ok(&source, "look", json!({"presets":true}))["presets"],
+        json!(["style.cutpreset"])
+    );
+    let overwrite = error(&source, "edit", json!({"savePreset":"style.cutpreset"}));
+    assert_eq!(overwrite["code"], "PRESET_IO");
+    assert_eq!(
+        error(&source, "edit", json!({"savePreset":"project.cut"}))["code"],
+        "INVALID_PRESET"
+    );
+
+    let Some((destination_directory, destination)) = router() else {
+        return;
+    };
+    std::fs::copy(
+        source_directory.path().join("style.cutpreset"),
+        destination_directory.path().join("style.cutpreset"),
+    )
+    .unwrap();
+    let inspected = ok(&destination, "look", json!({"preset":"style.cutpreset"}));
+    assert_eq!(inspected["slots"][0]["seconds"], 2.0);
+    assert!(!inspected["document"].as_str().unwrap().contains("shot.mp4"));
+    let before = destination.runtime().get_document(false).unwrap();
+    let missing = error(&destination, "edit", json!({"preset":"style.cutpreset"}));
+    assert_eq!(missing["code"], "INVALID_PRESET");
+    let short = error(
+        &destination,
+        "edit",
+        json!({"preset":"style.cutpreset", "bindings":{"slot1":{"media":"m1","from":"3s"}}}),
+    );
+    assert_eq!(short["code"], "INVALID_PRESET");
+    assert_eq!(destination.runtime().get_document(false).unwrap(), before);
+    assert!(destination
+        .runtime()
+        .get_state()
+        .unwrap()
+        .pending_proposal
+        .is_none());
+
+    let proposed = ok(
+        &destination,
+        "edit",
+        json!({"preset":"style.cutpreset", "bindings":{"slot1":{"media":"m1","from":"2s"}}}),
+    );
+    assert_eq!(proposed["check"]["valid"], true, "{proposed}");
+    assert!(has_image(&proposed["preview"]["after"]));
+    assert_eq!(destination.runtime().get_document(false).unwrap(), before);
+    let frame = ok(
+        &destination,
+        "look",
+        json!({"proposal":proposed["proposal"], "at":["0f"]}),
+    );
+    let path = frame["frames"][0]["path"].as_str().unwrap();
+    let pixels = Command::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-i",
+            path,
+            "-vf",
+            "scale=1:1",
+            "-frames:v",
+            "1",
+            "-pix_fmt",
+            "rgb24",
+            "-f",
+            "rawvideo",
+            "-",
+        ])
+        .output()
+        .unwrap();
+    assert!(pixels.status.success());
+    assert_eq!(pixels.stdout.len(), 3);
+    assert!(
+        pixels.stdout[2] > 200 && pixels.stdout[0] < 40,
+        "replacement is blue, not original red: {:?}",
+        pixels.stdout
+    );
+    let accepted = destination
+        .runtime()
+        .accept_proposal(
+            proposed["proposal"].as_str().unwrap(),
+            "ui",
+            "accept-preset",
+            before.0,
+        )
+        .unwrap();
+    assert_eq!(accepted.duration, 2.0);
+    assert_eq!(accepted.revision, before.0 + 1);
+}
+
+#[test]
 fn lists_three_tools_and_the_reference() {
     let directory = TempDir::new().unwrap();
     let router = CutMcpRouter::new(directory.path(), None).unwrap();

@@ -117,6 +117,13 @@ at the clip's in point.
 
 ## Asking Cut
 
+File → Export Editing Preset… saves the accepted edit as a portable
+`.cutpreset` containing media slots and Cut editing code. File → Import
+Editing Preset… opens a native dialog to assign media from the Project bin,
+set source starts, change title/caption text, and inspect the code. Create
+proposal opens the normal timeline review before acceptance. See the
+[preset contract](../../docs/presets.md).
+
 Ask Cut (Clip → Ask Cut…, ⌘J), Option-double-click a clip, or right-click
 it and choose Ask Cut… A prompt opens over the selected clip — or over the
 timeline at the playhead when nothing is selected — naming what it is about.

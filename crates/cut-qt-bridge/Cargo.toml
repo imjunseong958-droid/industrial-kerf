@@ -10,6 +10,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 cut-core = { path = "../cut-core" }
+cut-lang = { path = "../cut-lang" }
 cut-model = { path = "../cut-model" }
 cut-runtime = { path = "../cut-runtime" }
 cut-playback = { path = "../cut-playback" }

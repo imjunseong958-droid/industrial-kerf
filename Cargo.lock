@@ -620,6 +620,7 @@ dependencies = [
  "cut-cloud",
  "cut-commands",
  "cut-core",
+ "cut-lang",
  "cut-mcp",
  "cut-model",
  "cut-playback",

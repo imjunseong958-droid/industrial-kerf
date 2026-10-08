@@ -19,6 +19,7 @@ use cut_runtime::{
 use cut_skills::Skill;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -71,7 +72,17 @@ in place. The project does not change until the user accepts it. Pass a \
 pending proposal's id as `extend` to run more lines on top of it, or as \
 `revise` to replace it.
 - `render` renders the sequence, or a range of it, to a file; with \
-`proposal`, what that proposal would make.
+  `proposal`, what that proposal would make.
+
+Reusable presets are portable .cutpreset files. `look` with `presets: true` \
+lists project presets; with `preset: \"file.cutpreset\"` it shows the pattern, \
+required media slots and text slots. `edit` with `savePreset: \"file.cutpreset\"` \
+saves the accepted sequence (optional `sequence` and `name`), without changing \
+the project. To reuse one, `edit` with `preset`, `bindings` mapping each slot \
+to {media: \"imported-media-id\", from: \"0f\"}, and optional `texts` mapping \
+template clip ids to new text. This replaces the chosen sequence (the first \
+by default) as a normal proposal. Every slot must be bound; its minimum \
+duration includes transition handles. Inspect the preset before binding it.
 
 In an edit script, `captions <clip> on=<subtitle track> [words=<n>]` captions \
 what the clip says, timed to its speech, from a transcript of its media made \
@@ -192,7 +203,9 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "to": {"type": "string", "description": "The end of that range."},
                     "width": {"type": "integer", "minimum": 64, "maximum": 1920, "description": "Frame width in pixels (default 960; 320 for each frame of a sheet)."},
                     "sequence": {"type": "string", "description": sequence},
-                    "proposal": {"type": "string", "description": proposal}
+                    "proposal": {"type": "string", "description": proposal},
+                    "preset": {"type": "string", "description": "Inspect a .cutpreset file: pattern, required media slots and text slots. Use alone."},
+                    "presets": {"type": "boolean", "description": "List .cutpreset files in the project root and .cut/presets. Use alone with true."}
                 },
                 "additionalProperties": false
             }),
@@ -206,15 +219,26 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
             "Run an edit script. It becomes a proposal for the user, returned with the \
              document diff, check findings, and a before/after preview of the frames \
              around each cut it changed. The project is unchanged until the user accepts it. `extend` builds \
-             on a pending proposal; `revise` replaces it.",
+             on a pending proposal; `revise` replaces it. `savePreset` saves a portable \
+             .cutpreset file without changing the project. `preset` with `bindings` \
+             applies one as a proposal replacing the chosen sequence.",
             json!({
                 "type": "object",
                 "properties": {
                     "script": {"type": "string", "minLength": 1, "description": "One operation per line, applied in order and atomically."},
+                    "savePreset": {"type": "string", "description": "Save the accepted sequence to a new .cutpreset file inside the project. Existing files are never overwritten."},
+                    "name": {"type": "string", "description": "Name for savePreset."},
+                    "preset": {"type": "string", "description": "A .cutpreset file to apply. Inspect it with look first."},
+                    "sequence": {"type": "string", "description": "Sequence to save or replace with a preset; first by default."},
+                    "bindings": {"type": "object", "additionalProperties": {"type": "object", "properties": {
+                        "media": {"type": "string", "description": "Imported replacement media id."},
+                        "from": {"type": "string", "description": "Source start, including handles; default 0f."}
+                    }, "required": ["media"], "additionalProperties": false}},
+                    "texts": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Template caption/title clip id to replacement text."},
                     "extend": {"type": "string", "description": "The id of a pending proposal to build on: the script runs on what it makes, the two become one proposal, and the preview shows what this script changed."},
                     "revise": {"type": "string", "description": "The id of a pending proposal this one replaces; the script runs on the project."}
                 },
-                "required": ["script"],
+                "oneOf": [{"required": ["script"]}, {"required": ["preset"]}, {"required": ["savePreset"]}],
                 "additionalProperties": false
             }),
             ToolAnnotations {
@@ -253,6 +277,9 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LookInput {
+    preset: Option<String>,
+    #[serde(default)]
+    presets: bool,
     media: Option<String>,
     #[serde(default)]
     at: Vec<String>,
@@ -271,7 +298,16 @@ struct LookInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EditInput {
-    script: String,
+    script: Option<String>,
+    #[serde(rename = "savePreset")]
+    save_preset: Option<String>,
+    name: Option<String>,
+    preset: Option<String>,
+    sequence: Option<String>,
+    #[serde(default)]
+    bindings: BTreeMap<String, crate::presets::BindingInput>,
+    #[serde(default)]
+    texts: BTreeMap<String, String>,
     extend: Option<String>,
     revise: Option<String>,
 }
@@ -415,7 +451,20 @@ impl CutMcpRouter {
     }
 
     pub(super) fn look(&self, arguments: Value) -> Result<Value, McpError> {
+        let preset_only = arguments.as_object().is_some_and(|o| o.len() == 1);
         let input: LookInput = input(arguments)?;
+        if input.preset.is_some() || input.presets {
+            if !preset_only {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    "use preset or presets alone",
+                ));
+            }
+            return match input.preset {
+                Some(file) => self.inspect_preset(&file),
+                None => self.list_presets(),
+            };
+        }
         if input.media.is_some() && input.sequence.is_some() {
             return Err(McpError::new(
                 "INVALID_ARGUMENTS",
@@ -1077,6 +1126,51 @@ impl CutMcpRouter {
 
     pub(super) fn edit(&self, arguments: Value) -> Result<Value, McpError> {
         let input: EditInput = input(arguments)?;
+        if [
+            input.script.is_some(),
+            input.preset.is_some(),
+            input.save_preset.is_some(),
+        ]
+        .into_iter()
+        .filter(|v| *v)
+        .count()
+            != 1
+        {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "pass exactly one of script, preset, or savePreset",
+            ));
+        }
+        if let Some(file) = &input.save_preset {
+            if input.extend.is_some()
+                || input.revise.is_some()
+                || !input.bindings.is_empty()
+                || !input.texts.is_empty()
+            {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    "savePreset takes only sequence and name",
+                ));
+            }
+            let (_, project) = self.project_at(None)?;
+            return self.save_preset(
+                &project,
+                file,
+                input.sequence.as_deref(),
+                input.name.as_deref(),
+            );
+        }
+        if input.name.is_some()
+            || (input.script.is_some()
+                && (input.sequence.is_some()
+                    || !input.bindings.is_empty()
+                    || !input.texts.is_empty()))
+        {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "sequence, bindings and texts are for presets; name is for savePreset",
+            ));
+        }
         if input.extend.is_some() && input.revise.is_some() {
             return Err(McpError::new(
                 "INVALID_ARGUMENTS",
@@ -1091,7 +1185,17 @@ impl CutMcpRouter {
         // `extend` runs the script on what the proposal makes; `revise` on
         // the project.
         let (revision, before) = self.project_at(input.extend.as_deref())?;
-        let (expanded, origins) = self.expand_captions(&before, &input.script)?;
+        let source_script = match input.preset {
+            Some(file) => self.preset_script(
+                &before,
+                &file,
+                input.sequence.as_deref(),
+                &input.bindings,
+                &input.texts,
+            )?,
+            None => input.script.expect("checked script input"),
+        };
+        let (expanded, origins) = self.expand_captions(&before, &source_script)?;
         let applied = apply_script(&before, catalog(), &expanded)
             .map_err(|errors| refused(errors, &origins))?;
         if print_document(&applied.project, catalog(), PrintOptions::default())

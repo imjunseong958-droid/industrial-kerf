@@ -190,6 +190,26 @@ with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as tempo
         assert abs(undone['duration'] - 4) < .05
         send({'type': 'redo', 'revision': undone['revision']})
         redone = state()
+        # A native preset is exported directly from the accepted edit, without
+        # asking a model. It carries empty media slots and reusable .cut code.
+        preset_path = directory / 'native.cutpreset'
+        send(run_command({'command': 'file.exportPreset', 'params': {'path': str(preset_path)},
+                          'context': {'connected': True, 'revision': redone['revision']}}))
+        preset_event = wait(lambda event: event['type'] == 'preset_export')
+        assert 'slot:slot1' in preset_event['document'] and str(media) not in preset_event['document']
+        preset_path.write_text(preset_event['document'])  # Qt writes this with QSaveFile.
+        send({'type': 'preset_inspect', 'path': str(preset_path)})
+        inspected = wait(lambda event: event['type'] == 'preset_inspect')['preset']
+        assert len(inspected['slots']) == 1 and inspected['slots'][0]['seconds'] == 3
+        send(run_command({'command': 'file.applyPreset', 'params': {'path': str(preset_path),
+                          'bindings': {'slot1': {'media': redone['timeline']['sources'][0]['id'], 'from': '1s'}}},
+                          'context': {'connected': True, 'revision': redone['revision']}}))
+        applied_preset = wait(lambda event: event['type'] == 'preset_applied')
+        pending_preset = state()
+        assert pending_preset['revision'] == redone['revision'] and pending_preset.get('proposalTimeline', {}).get('tracks')
+        assert pending_preset['document'] == redone['document']
+        send({'type': 'reject', 'proposalId': applied_preset['proposal'], 'revision': pending_preset['revision']})
+        redone = state()
         external = runtime_request(directory, {
             'operation': 'apply_script',
             'actor': 'mcp',
@@ -277,7 +297,7 @@ with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as tempo
         send({'type': 'cloud_sign_out'})
         wait(lambda event: event['type'] == 'cloud' and event['access'] == 'signedOut')
         assert 'token' not in json.loads((directory / 'home/.cut/cloud.json').read_text())
-        print(json.dumps({'result': 'passed', 'checks': ['cut cloud sign-in/account/request', 'focused agent request', 'proposal timeline', 'source insert', 'connection lifecycle/reconnect', 'import', 'trim', 'undo', 'redo', 'external CLI edit sync', '200 seeks/latest frame', 'local provider/tool activity', 'proposal/accept', 'conversation history', 'real export', 'effect rendered fallback'], 'max_enqueue_ms': round(max(timings), 3), 'frame': [frame.width, frame.height]}, indent=2))
+        print(json.dumps({'result': 'passed', 'checks': ['native preset export/inspect/apply/reject', 'cut cloud sign-in/account/request', 'focused agent request', 'proposal timeline', 'source insert', 'connection lifecycle/reconnect', 'import', 'trim', 'undo', 'redo', 'external CLI edit sync', '200 seeks/latest frame', 'local provider/tool activity', 'proposal/accept', 'conversation history', 'real export', 'effect rendered fallback'], 'max_enqueue_ms': round(max(timings), 3), 'frame': [frame.width, frame.height]}, indent=2))
     finally:
         lib.cut_bridge_free(bridge)
         if daemon.poll() is None:
