@@ -37,6 +37,9 @@ struct AgentSettings {
     mcp_enabled: bool,
     #[serde(rename = "mcpConfigVersion", default)]
     mcp_config_version: u64,
+    /// Use Cut Cloud, the hosted model, instead of a key of one's own.
+    #[serde(default)]
+    cloud: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,6 +96,12 @@ enum Command {
     Export {
         quality: String,
     },
+    /// Keep a Cut Cloud token and read its account.
+    CloudSignIn {
+        token: String,
+    },
+    CloudSignOut,
+    CloudRefresh,
 }
 
 /// What the viewer plays: the project itself, or a rendered preview of it.
@@ -122,6 +131,7 @@ struct Shared {
 }
 
 struct Bridge {
+    events_tx: SyncSender<Value>,
     commands: SyncSender<Command>,
     media: SyncSender<Command>,
     prompts: SyncSender<AgentRequest>,
@@ -651,7 +661,18 @@ fn new_agent(
     settings: &AgentSettings,
     tx: &SyncSender<Value>,
 ) -> Result<AgentSession, String> {
-    let provider = if let Some(provider) = settings.provider {
+    // Cut Cloud speaks the Anthropic Messages protocol with the account token.
+    let cloud = if settings.cloud {
+        let store = cut_cloud::Store::default_path()
+            .map(|path| cut_cloud::Store::load(&path))
+            .unwrap_or_default();
+        Some(cut_cloud::model_credentials(&store).map_err(|error| error.to_string())?)
+    } else {
+        None
+    };
+    let provider = if cloud.is_some() {
+        ProviderName::Anthropic
+    } else if let Some(provider) = settings.provider {
         provider
     } else {
         match std::env::var("CUT_PROVIDER").ok().as_deref() {
@@ -676,9 +697,10 @@ fn new_agent(
     } else {
         "ANTHROPIC_API_KEY"
     };
-    let api_key = settings
-        .api_key
-        .clone()
+    let api_key = cloud
+        .as_ref()
+        .map(|(_, token)| token.clone())
+        .or_else(|| settings.api_key.clone())
         .filter(|key| !key.trim().is_empty())
         .or_else(|| std::env::var(key_name).ok())
         .filter(|key| !key.trim().is_empty())
@@ -720,9 +742,9 @@ fn new_agent(
             .clone()
             .filter(|model| !model.trim().is_empty())
             .or_else(|| std::env::var("CUT_MODEL").ok()),
-        base_url: settings
-            .base_url
-            .clone()
+        base_url: cloud
+            .map(|(url, _)| url)
+            .or_else(|| settings.base_url.clone())
             .filter(|url| !url.trim().is_empty())
             .or_else(|| {
                 std::env::var(if provider == ProviderName::Openai {
@@ -737,6 +759,55 @@ fn new_agent(
         context: Some(router.agent_context()),
         ..Default::default()
     }))
+}
+
+/// Carry out a Cut Cloud command, if any, then report the account:
+/// `{type: "cloud", access, account?, message?}`.
+fn cloud_status(tx: &SyncSender<Value>, command: Option<Command>) {
+    let Some(path) = cut_cloud::Store::default_path() else {
+        emit(tx, json!({"type":"cloud","access":"unavailable"}));
+        return;
+    };
+    let mut store = cut_cloud::Store::load(&path);
+    let mut message = None;
+    match command {
+        Some(Command::CloudSignIn { token }) => store.token = Some(token.trim().to_string()),
+        Some(Command::CloudSignOut) => store.token = None,
+        _ => {}
+    }
+    let changed = store != cut_cloud::Store::load(&path);
+    if changed {
+        if let Err(error) = store.save(&path) {
+            message = Some(error.to_string());
+        }
+    }
+    let event = match (store.service_url(), store.token()) {
+        (None, _) => json!({"type":"cloud","access":"unavailable"}),
+        (Some(_), None) => json!({"type":"cloud","access":"signedOut"}),
+        (Some(url), Some(token)) => match cut_cloud::fetch_account(&url, token) {
+            Ok(account) => json!({
+                "type":"cloud",
+                "access": cut_cloud::Access::of(&account),
+                "account": account,
+            }),
+            Err(cut_cloud::CloudError::Unauthorized) => {
+                store.token = None;
+                let _ = store.save(&path);
+                message = Some(cut_cloud::CloudError::Unauthorized.to_string());
+                json!({"type":"cloud","access":"signedOut"})
+            }
+            // Keep the session; the service may be briefly unreachable.
+            Err(error) => {
+                message = Some(error.to_string());
+                json!({"type":"cloud","access":"unreachable"})
+            }
+        },
+    };
+    let mut event = event;
+    if let Some(message) = message {
+        event["message"] = json!(message);
+    }
+    emit(tx, event);
 }
 
 fn mcp_connection_status(line: &str) -> &'static str {
@@ -885,7 +956,12 @@ pub unsafe extern "C" fn cut_bridge_new(
         let commands = commands.clone();
         thread::spawn(move || agent_worker(directory, binary, prompt_rx, commands, tx, shared));
     }
+    {
+        let tx = emit.clone();
+        thread::spawn(move || cloud_status(&tx, None));
+    }
     Box::into_raw(Box::new(Bridge {
+        events_tx: emit,
         commands,
         media,
         prompts,
@@ -960,6 +1036,11 @@ pub unsafe extern "C" fn cut_bridge_send(bridge: *mut c_void, message: *const c_
             } else {
                 false
             }
+        }
+        Command::CloudSignIn { .. } | Command::CloudSignOut | Command::CloudRefresh => {
+            let tx = bridge.events_tx.clone();
+            thread::spawn(move || cloud_status(&tx, Some(command)));
+            true
         }
         Command::Agent {
             text,
@@ -1286,6 +1367,26 @@ mod tests {
     }
 
     #[test]
+    fn cloud_commands_and_settings_are_read() {
+        for command in [
+            json!({"type": "cloud_sign_in", "token": "tok"}),
+            json!({"type": "cloud_sign_out"}),
+            json!({"type": "cloud_refresh"}),
+        ] {
+            assert!(
+                serde_json::from_value::<Command>(command.clone()).is_ok(),
+                "{command}"
+            );
+        }
+        let Command::Agent { settings, .. } =
+            serde_json::from_value(json!({"type": "agent", "text": "x", "cloud": true})).unwrap()
+        else {
+            panic!("expected agent command");
+        };
+        assert!(settings.cloud);
+    }
+
+    #[test]
     fn agent_requests_carry_their_focus() {
         let command: Command = serde_json::from_value(json!({
             "type": "agent", "text": "Tighten this",
@@ -1365,6 +1466,7 @@ mod tests {
                 model: Some("local-model".into()),
                 mcp_enabled: true,
                 mcp_config_version: 7,
+                cloud: false,
             }
         );
     }

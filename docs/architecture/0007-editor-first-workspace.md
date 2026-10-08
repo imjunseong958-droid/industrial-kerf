@@ -1,6 +1,6 @@
 # ADR 0007: An editor first, with AI on the selection
 
-Status: accepted (phases 1–4 implemented)
+Status: accepted (phases 1–5 implemented; phase 5 awaits its service)
 Date: 2026-10-09
 
 ## Context
@@ -129,3 +129,17 @@ that resolve to the bridge's accept, reject, and abort. The Cut Assistant
 panel stays as the conversation history and starts closed. Plain
 double-click keeps its edit-suite meaning: open the clip in the source
 monitor.
+
+## Phase 5
+
+The service is not built yet, so this phase is its client side and the
+contract it follows (`docs/cloud.md`). `cut-cloud` keeps the service URL and
+the account token in `~/.cut/cloud.json`, reads the account
+(`GET /v1/account`), and turns it into an access state; the hosted model is
+the Anthropic Messages protocol under `/v1` with the token. The bridge signs
+in and out, reports the account as `cloud` events, and runs an agent request
+with `"cloud": true` against the service. Settings → AI makes Cut Cloud the
+default and keeps one's own key under Advanced; `ai.ask` names why it is
+unavailable (no service, signed out, plan, credits, no key). Entitlements stay
+on the server. Pricing, the service's location, and browser sign-in are
+open; none of them changes the client contract.

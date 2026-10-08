@@ -151,8 +151,13 @@ whose field diff was truncated cannot be accepted; ask the agent to restage
 or split them into smaller changes.
 
 Agent settings are in Settings (Edit → Settings…, ⌘, ; on macOS in the
-application menu), also reachable from the Cut Assistant panel. Settings
-holds two protocol slots: Anthropic Messages and OpenAI-compatible. Each slot
+application menu), also reachable from the Cut Assistant panel. Settings → AI
+chooses Cut Cloud, the hosted model (the default; see
+[docs/cloud.md](../../docs/cloud.md)), or My own API key. Cut Cloud shows the
+account, plan, and requests left, with Sign in (a token, for now) and Sign
+out; Ask Cut stays unavailable, with the reason, until the account can make
+requests. The status bar shows the connection in use. Advanced
+holds two protocol slots for your own key: Anthropic Messages and OpenAI-compatible. Each slot
 has an API key, Base URL, and model. The OpenAI-compatible slot also has Chat
 Completions vs Responses. Gemini and other compatible hosts use that slot and
 its Base URL. Chat sends the active Settings connection plus the model combo.

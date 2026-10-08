@@ -14,6 +14,7 @@
 
 #include <QActionGroup>
 #include <QApplication>
+#include <QButtonGroup>
 #include <QClipboard>
 #include <QColorDialog>
 #include <QDateTime>
@@ -725,14 +726,9 @@ void MainWindow::sendChat() {
 }
 
 bool MainWindow::sendAgent(const QString &text, const QJsonObject &focus, const QString &focusLabel) {
-    const QJsonObject settings = agentSettingsPayload();
-    QJsonObject request{{QStringLiteral("type"), QStringLiteral("agent")},
-                        {QStringLiteral("text"), text},
-                        {QStringLiteral("provider"), settings.value(QStringLiteral("provider"))},
-                        {QStringLiteral("apiMode"), settings.value(QStringLiteral("apiMode"))},
-                        {QStringLiteral("apiKey"), settings.value(QStringLiteral("apiKey"))},
-                        {QStringLiteral("baseUrl"), settings.value(QStringLiteral("baseUrl"))},
-                        {QStringLiteral("model"), settings.value(QStringLiteral("model"))}};
+    QJsonObject request = agentSettingsPayload();
+    request.insert(QStringLiteral("type"), QStringLiteral("agent"));
+    request.insert(QStringLiteral("text"), text);
     if (!focus.isEmpty()) request.insert(QStringLiteral("focus"), focus);
     // The AI bar names what Cut works on once the bridge reports it busy.
     m_agentFocusLabel = focusLabel;
@@ -750,6 +746,58 @@ bool MainWindow::sendAgent(const QString &text, const QJsonObject &focus, const 
     updateAiBar();
     updateCommandStates();
     return true;
+}
+
+bool MainWindow::usesCloud() const {
+    return m_cloudRadio && m_cloudRadio->isChecked();
+}
+
+bool MainWindow::sendCloud(const QJsonObject &command) {
+    if (!m_bridge) {
+        m_lastCommand = command;
+        return false;
+    }
+    const QByteArray payload = QJsonDocument(command).toJson(QJsonDocument::Compact);
+    return cut_bridge_send(m_bridge, payload.constData());
+}
+
+QString MainWindow::aiAccess() const {
+    if (usesCloud()) return m_cloudAccess.isEmpty() ? QStringLiteral("unavailable") : m_cloudAccess;
+    const bool openai = activeProviderId() == QStringLiteral("openai");
+    const QString key = (openai ? m_openaiKey : m_anthropicKey)->text().trimmed();
+    const bool environment = !qEnvironmentVariable(openai ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY").isEmpty();
+    return key.isEmpty() && !environment ? QStringLiteral("noKey") : QStringLiteral("ready");
+}
+
+void MainWindow::updateCloudStatus() {
+    if (!m_cloudStatus) return;
+    const QString email = m_cloudAccount.value(QStringLiteral("email")).toString();
+    const bool signedIn = !email.isEmpty() && m_cloudAccess != QStringLiteral("signedOut");
+    QString text;
+    if (m_cloudAccess == QStringLiteral("unavailable") || m_cloudAccess.isEmpty()) {
+        text = QStringLiteral("Cut Cloud isn't available yet. Until it is, choose My own API key and add it under Advanced.");
+    } else if (!signedIn) {
+        text = m_cloudAccess == QStringLiteral("unreachable") ? QStringLiteral("Cut Cloud can't be reached right now.")
+                                                               : QStringLiteral("Signed out. Paste your Cut Cloud token to sign in.");
+    } else {
+        const QJsonValue credits = m_cloudAccount.value(QStringLiteral("credits"));
+        text = QStringLiteral("Signed in as %1  ·  %2 plan%3").arg(email, m_cloudAccount.value(QStringLiteral("plan")).toString(),
+            credits.isDouble() ? QStringLiteral("  ·  %1 requests left").arg(credits.toInteger()) : QString());
+        if (m_cloudAccess == QStringLiteral("notIncluded")) text += QStringLiteral("\nThis plan doesn't include Cut Cloud requests.");
+        if (m_cloudAccess == QStringLiteral("outOfCredits")) text += QStringLiteral("\nYou've used this period's requests.");
+    }
+    if (!m_cloudMessage.isEmpty()) text += QStringLiteral("\n") + m_cloudMessage;
+    m_cloudStatus->setText(text);
+    const bool available = !m_cloudAccess.isEmpty() && m_cloudAccess != QStringLiteral("unavailable");
+    m_cloudToken->setVisible(available && !signedIn);
+    m_cloudSignIn->setVisible(available && !signedIn);
+    m_cloudSignOut->setVisible(available && signedIn);
+    if (m_statusAccount) {
+        m_statusAccount->setText(!usesCloud() ? QStringLiteral("Own API key")
+            : signedIn ? QStringLiteral("Cut Cloud · %1").arg(m_cloudAccount.value(QStringLiteral("plan")).toString())
+            : QStringLiteral("Cut Cloud · signed out"));
+    }
+    updateCommandStates();
 }
 
 void MainWindow::askAi() {
@@ -835,6 +883,12 @@ QString MainWindow::activeProviderId() const {
 }
 
 QJsonObject MainWindow::agentSettingsPayload() const {
+    if (usesCloud()) {
+        // The service picks the model; MCP tools still run locally.
+        return QJsonObject{{QStringLiteral("cloud"), true},
+                           {QStringLiteral("mcpEnabled"), m_mcpEnabled && m_mcpEnabled->isChecked()},
+                           {QStringLiteral("mcpConfigVersion"), static_cast<qint64>(m_mcpConfigVersion)}};
+    }
     const bool openai = activeProviderId() == QStringLiteral("openai");
     const QLineEdit *key = openai ? m_openaiKey : m_anthropicKey;
     const QLineEdit *baseUrl = openai ? m_openaiBaseUrl : m_anthropicBaseUrl;
@@ -889,6 +943,15 @@ void MainWindow::saveInboundMcpConfig() {
 
 void MainWindow::updateAgentModelChoices() {
     if (!m_modelSelect) return;
+    m_modelSelect->setEnabled(!usesCloud());
+    if (usesCloud()) {
+        const QSignalBlocker blocker(m_modelSelect);
+        m_modelSelect->clear();
+        m_modelSelect->addItem(QStringLiteral("Cut Cloud"));
+        m_modelSelect->setToolTip(QStringLiteral("Cut Cloud picks the model"));
+        return;
+    }
+    m_modelSelect->setToolTip(QStringLiteral("Model ID sent with each chat request. Suggestions follow the active connection in Settings."));
     const bool openai = activeProviderId() == QStringLiteral("openai");
     const QString current = m_modelSelect->currentText();
     const QString configured = openai ? m_openaiModel->text().trimmed() : m_anthropicModel->text().trimmed();
@@ -920,6 +983,9 @@ void MainWindow::loadAgentSettings() {
         m_openaiActiveRadio->setChecked(true);
     else
         m_anthropicActiveRadio->setChecked(true);
+    const bool cloud = settings.value(QStringLiteral("agent/connection"), QStringLiteral("cloud")).toString() != QStringLiteral("own");
+    (cloud ? m_cloudRadio : m_ownKeyRadio)->setChecked(true);
+    updateCloudStatus();
     const QString mode = settings.value(QStringLiteral("agent/openai/apiMode"), qEnvironmentVariable("OPENAI_API_MODE", QStringLiteral("chat"))).toString().toLower();
     const int modeIndex = m_openaiMode->findData(mode == QStringLiteral("responses") ? QStringLiteral("responses") : QStringLiteral("chat"));
     m_openaiMode->setCurrentIndex(std::max(0, modeIndex));
@@ -1262,10 +1328,83 @@ void MainWindow::buildUi() {
     auto *settingsLayout = new QVBoxLayout(settingsContent);
     settingsLayout->setContentsMargins(0, 0, 2, 0);
     settingsLayout->setSpacing(10);
+    // Cut Cloud, the hosted model, comes first. Keys of one's own and MCP
+    // live under Advanced.
+    auto *connectionGroup = new QGroupBox(QStringLiteral("AI"));
+    connectionGroup->setObjectName(QStringLiteral("aiConnection"));
+    auto *cloudLayout = new QVBoxLayout(connectionGroup);
+    cloudLayout->setContentsMargins(10, 12, 10, 10);
+    cloudLayout->setSpacing(6);
+    m_cloudRadio = new QRadioButton(QStringLiteral("Cut Cloud"));
+    m_cloudRadio->setObjectName(QStringLiteral("agentConnectionCloud"));
+    m_ownKeyRadio = new QRadioButton(QStringLiteral("My own API key (set up under Advanced)"));
+    m_ownKeyRadio->setObjectName(QStringLiteral("agentConnectionOwnKey"));
+    auto *connectionChoice = new QButtonGroup(connectionGroup);
+    connectionChoice->addButton(m_cloudRadio);
+    connectionChoice->addButton(m_ownKeyRadio);
+    cloudLayout->addWidget(m_cloudRadio);
+    cloudLayout->addWidget(m_ownKeyRadio);
+    m_cloudStatus = new QLabel;
+    m_cloudStatus->setObjectName(QStringLiteral("cloudStatus"));
+    m_cloudStatus->setWordWrap(true);
+    cloudLayout->addWidget(m_cloudStatus);
+    m_cloudToken = new QLineEdit;
+    m_cloudToken->setObjectName(QStringLiteral("cloudToken"));
+    m_cloudToken->setEchoMode(QLineEdit::Password);
+    m_cloudToken->setPlaceholderText(QStringLiteral("Cut Cloud sign-in token"));
+    cloudLayout->addWidget(m_cloudToken);
+    auto *cloudButtons = new QHBoxLayout;
+    m_cloudSignIn = new QPushButton(QStringLiteral("Sign in"));
+    m_cloudSignIn->setObjectName(QStringLiteral("primaryButton"));
+    connect(m_cloudSignIn, &QPushButton::clicked, this, [this] {
+        const QString token = m_cloudToken->text().trimmed();
+        if (token.isEmpty()) return;
+        if (sendCloud(QJsonObject{{QStringLiteral("type"), QStringLiteral("cloud_sign_in")}, {QStringLiteral("token"), token}}))
+            m_cloudToken->clear();
+    });
+    m_cloudSignOut = new QPushButton(QStringLiteral("Sign out"));
+    connect(m_cloudSignOut, &QPushButton::clicked, this, [this] {
+        sendCloud(QJsonObject{{QStringLiteral("type"), QStringLiteral("cloud_sign_out")}});
+    });
+    auto *plans = new QPushButton(QStringLiteral("Plans"));
+    plans->setObjectName(QStringLiteral("cloudPlans"));
+    plans->setEnabled(false);
+    plans->setToolTip(QStringLiteral("Plans are coming soon"));
+    cloudButtons->addWidget(m_cloudSignIn);
+    cloudButtons->addWidget(m_cloudSignOut);
+    cloudButtons->addStretch(1);
+    cloudButtons->addWidget(plans);
+    cloudLayout->addLayout(cloudButtons);
+    settingsLayout->addWidget(connectionGroup);
+    const auto onConnectionChanged = [this](bool checked) {
+        if (!checked) return;
+        QSettings().setValue(QStringLiteral("agent/connection"), m_cloudRadio->isChecked() ? QStringLiteral("cloud") : QStringLiteral("own"));
+        updateAgentModelChoices();
+        updateCloudStatus();
+    };
+    connect(m_cloudRadio, &QRadioButton::toggled, this, onConnectionChanged);
+    connect(m_ownKeyRadio, &QRadioButton::toggled, this, onConnectionChanged);
+
+    auto *advancedToggle = new QToolButton;
+    advancedToggle->setObjectName(QStringLiteral("advancedToggle"));
+    advancedToggle->setText(QStringLiteral("▸ Advanced"));
+    settingsLayout->addWidget(advancedToggle);
+    m_advancedSettings = new QWidget;
+    m_advancedSettings->setObjectName(QStringLiteral("advancedSettings"));
+    auto *advancedLayout = new QVBoxLayout(m_advancedSettings);
+    advancedLayout->setContentsMargins(0, 0, 0, 0);
+    advancedLayout->setSpacing(10);
+    settingsLayout->addWidget(m_advancedSettings);
+    m_advancedSettings->hide();
+    connect(advancedToggle, &QToolButton::clicked, this, [this, advancedToggle] {
+        const bool show = m_advancedSettings->isHidden();
+        m_advancedSettings->setVisible(show);
+        advancedToggle->setText(show ? QStringLiteral("▾ Advanced") : QStringLiteral("▸ Advanced"));
+    });
     auto *settingsIntro = new QLabel(QStringLiteral("Two protocol slots. One active connection for chat. Gemini, Groq, and OpenRouter use the OpenAI-compatible slot with that vendor's compatible base URL."));
     settingsIntro->setObjectName(QStringLiteral("chatHint"));
     settingsIntro->setWordWrap(true);
-    settingsLayout->addWidget(settingsIntro);
+    advancedLayout->addWidget(settingsIntro);
     auto *activeConnection = new QGroupBox(QStringLiteral("Active connection"));
     auto *activeLayout = new QVBoxLayout(activeConnection);
     activeLayout->setContentsMargins(10, 12, 10, 10);
@@ -1276,7 +1415,7 @@ void MainWindow::buildUi() {
     m_openaiActiveRadio->setObjectName(QStringLiteral("agentActiveOpenai"));
     activeLayout->addWidget(m_anthropicActiveRadio);
     activeLayout->addWidget(m_openaiActiveRadio);
-    settingsLayout->addWidget(activeConnection);
+    advancedLayout->addWidget(activeConnection);
 
     auto *anthropicGroup = new QGroupBox(QStringLiteral("Anthropic Messages"));
     anthropicGroup->setObjectName(QStringLiteral("providerBox"));
@@ -1293,7 +1432,7 @@ void MainWindow::buildUi() {
     anthropicForm->addRow(QStringLiteral("API key"), m_anthropicKey);
     anthropicForm->addRow(QStringLiteral("Base URL"), m_anthropicBaseUrl);
     anthropicForm->addRow(QStringLiteral("Model"), m_anthropicModel);
-    settingsLayout->addWidget(anthropicGroup);
+    advancedLayout->addWidget(anthropicGroup);
 
     auto *openaiGroup = new QGroupBox(QStringLiteral("OpenAI-compatible"));
     openaiGroup->setObjectName(QStringLiteral("providerBox"));
@@ -1318,15 +1457,15 @@ void MainWindow::buildUi() {
     openaiForm->addRow(QString(), openaiBaseUrlHint);
     openaiForm->addRow(QStringLiteral("Model"), m_openaiModel);
     openaiForm->addRow(QStringLiteral("API shape"), m_openaiMode);
-    settingsLayout->addWidget(openaiGroup);
+    advancedLayout->addWidget(openaiGroup);
     auto *settingsNote = new QLabel(QStringLiteral("Credentials stay outside project files and are never included in chat activity."));
     settingsNote->setObjectName(QStringLiteral("muted"));
     settingsNote->setWordWrap(true);
-    settingsLayout->addWidget(settingsNote);
+    advancedLayout->addWidget(settingsNote);
     auto *saveSettings = new QPushButton(QStringLiteral("Save agent connection"));
     saveSettings->setObjectName(QStringLiteral("primaryButton"));
     connect(saveSettings, &QPushButton::clicked, this, &MainWindow::saveAgentSettings);
-    settingsLayout->addWidget(saveSettings);
+    advancedLayout->addWidget(saveSettings);
 
     auto *inboundSection = new QGroupBox(QStringLiteral("Use MCP tools in Cut chat"));
     inboundSection->setObjectName(QStringLiteral("inboundMcpSection"));
@@ -1376,7 +1515,7 @@ void MainWindow::buildUi() {
         settings.sync();
         m_inboundMcpStatus->setText(QStringLiteral("MCP preference saved. Applies on the next chat request. CUT_ENABLE_MCP=1 also enables tools."));
     });
-    settingsLayout->addWidget(inboundSection);
+    advancedLayout->addWidget(inboundSection);
 
     auto *mcpSection = new QGroupBox(QStringLiteral("Use Cut from Cursor / Claude"));
     mcpSection->setObjectName(QStringLiteral("mcpSection"));
@@ -1413,7 +1552,7 @@ void MainWindow::buildUi() {
     });
     mcpLayout->addWidget(copyMcp);
     mcpLayout->addWidget(mcpCopyStatus);
-    settingsLayout->addWidget(mcpSection);
+    advancedLayout->addWidget(mcpSection);
     settingsLayout->addStretch(1);
     settingsScroll->setWidget(settingsContent);
     settingsTabLayout->addWidget(settingsScroll);
@@ -1840,7 +1979,8 @@ QJsonObject MainWindow::commandContext() const {
                         {QStringLiteral("videoTracks"), videoTracks},
                         {QStringLiteral("audioTracks"), audioTracks},
                         {QStringLiteral("sourceTargets"), QJsonArray::fromStringList(sourceTargets())},
-                        {QStringLiteral("agentBusy"), m_agentBusy}};
+                        {QStringLiteral("agentBusy"), m_agentBusy},
+                        {QStringLiteral("aiAccess"), m_cloudRadio ? aiAccess() : QStringLiteral("ready")}};
     if (!m_proposalId.isEmpty()) {
         QJsonObject proposal{{QStringLiteral("id"), m_proposalId}};
         if (m_proposalBlocked) proposal.insert(QStringLiteral("blocked"), QStringLiteral("stale"));
@@ -1944,8 +2084,13 @@ void MainWindow::setupStatusBar() {
     m_statusRevision->hide();
     m_statusConnection = new QLabel;
     m_statusConnection->setObjectName(QStringLiteral("statusConnection"));
+    m_statusAccount = new QLabel;
+    m_statusAccount->setObjectName(QStringLiteral("statusAccount"));
+    m_statusAccount->setToolTip(QStringLiteral("The agent's connection (Settings)"));
+    statusBar()->addPermanentWidget(m_statusAccount);
     statusBar()->addPermanentWidget(m_statusRevision);
     statusBar()->addPermanentWidget(m_statusConnection);
+    updateCloudStatus();
 }
 
 bool MainWindow::sendSimple(const QJsonObject &value) {
@@ -2100,6 +2245,11 @@ void MainWindow::handleEvent(QJsonObject event) {
             m_exportProgress->hide();
             statusBar()->showMessage(QStringLiteral("Preview ready"), 4000);
         }
+    } else if (type == QStringLiteral("cloud")) {
+        m_cloudAccess = event.value(QStringLiteral("access")).toString();
+        m_cloudAccount = event.value(QStringLiteral("account")).toObject();
+        m_cloudMessage = event.value(QStringLiteral("message")).toString();
+        updateCloudStatus();
     } else if (type == QStringLiteral("caption")) {
         m_viewer->setCaption(event.value(QStringLiteral("text")).toString());
     }

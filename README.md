@@ -184,7 +184,13 @@ cargo build -p cut-qt-bridge -p cut-runtime --lib --bin cutd
 python3 scripts/test-cut-qt-bridge.py
 ```
 
-## Optional embedded-agent providers
+## Cut Cloud and optional embedded-agent providers
+
+The editor is free. Cut Cloud, the hosted model, is the paid tier: Settings →
+AI signs in to it, and the service meters requests and enforces plans. It is
+not deployed yet; [docs/cloud.md](docs/cloud.md) is the contract the editor
+follows, and `CUT_CLOUD_URL` points the editor at a service. Until then, use
+your own key under Settings → Advanced, as described below.
 
 Provider APIs are optional and only power Cut's embedded assistant (and its
 terminal agent workflow). They are not required for external agents using
