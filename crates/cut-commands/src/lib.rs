@@ -41,6 +41,7 @@ pub enum Menu {
     Sequence,
     Playback,
     View,
+    Window,
 }
 
 pub const MENUS: &[Menu] = &[
@@ -49,6 +50,7 @@ pub const MENUS: &[Menu] = &[
     Menu::Sequence,
     Menu::Playback,
     Menu::View,
+    Menu::Window,
 ];
 
 /// The state of the editor a command reads: what the frontend shows.
@@ -325,6 +327,14 @@ pub static COMMANDS: &[Command] = &[
         Menu::Edit,
         2,
     )),
+    keys(
+        frontend(menu(
+            command("app.preferences", "Settings…", always),
+            Menu::Edit,
+            3,
+        )),
+        &["Ctrl+,"],
+    ),
     menu(
         command(
             "sequence.renderPreview",
@@ -402,11 +412,6 @@ pub static COMMANDS: &[Command] = &[
         ))),
         &["End"],
     ),
-    checkable(frontend(menu(
-        command("view.assistantPanel", "Agent and Inspector", always),
-        Menu::View,
-        0,
-    ))),
     frontend(menu(
         command("view.fitTracks", "Fit Tracks to Panel", always),
         Menu::View,
@@ -417,6 +422,48 @@ pub static COMMANDS: &[Command] = &[
         Menu::View,
         1,
     )),
+    frontend(menu(
+        command(
+            "window.saveWorkspace",
+            "Save Changes to This Workspace",
+            always,
+        ),
+        Menu::Window,
+        0,
+    )),
+    frontend(menu(
+        command("window.saveWorkspaceAs", "Save as New Workspace…", always),
+        Menu::Window,
+        0,
+    )),
+    keys(
+        frontend(menu(
+            command("window.resetWorkspace", "Reset to Saved Layout", always),
+            Menu::Window,
+            0,
+        )),
+        &["Alt+Shift+0"],
+    ),
+    checkable(frontend(menu(
+        command("window.program", "Program Monitor", always),
+        Menu::Window,
+        1,
+    ))),
+    checkable(frontend(menu(
+        command("window.timeline", "Timeline", always),
+        Menu::Window,
+        1,
+    ))),
+    checkable(frontend(menu(
+        command("window.effectControls", "Effect Controls", always),
+        Menu::Window,
+        1,
+    ))),
+    checkable(frontend(menu(
+        command("window.assistant", "Cut Assistant", always),
+        Menu::Window,
+        1,
+    ))),
 ];
 
 /// A keyboard layout: the Cut keys, with the commands it binds differently.
