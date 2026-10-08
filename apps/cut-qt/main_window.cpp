@@ -1,6 +1,8 @@
 #include "main_window.h"
 #include "bridge.h"
 #include "command_registry.h"
+#include "effect_controls_panel.h"
+#include "workspace.h"
 #include "editor_common.h"
 #include "editor_style.h"
 #include "media_artwork.h"
@@ -20,6 +22,7 @@
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QIcon>
 #include <QJsonDocument>
 #include <QKeySequence>
@@ -37,12 +40,13 @@
 #include <QScrollBar>
 #include <QSettings>
 #include <QSignalBlocker>
-#include <QSplitter>
 #include <QStatusBar>
-#include <QTabWidget>
 #include <QTextFrame>
 #include <QToolBar>
 #include <QVBoxLayout>
+
+#include <DockManager.h>
+#include <DockWidget.h>
 
 #include <algorithm>
 #include <limits>
@@ -813,56 +817,6 @@ void MainWindow::rejectProposal() {
     sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("reject")}, {QStringLiteral("proposalId"), m_proposalId}, {QStringLiteral("revision"), revisionValue()}});
 }
 
-void MainWindow::clipValueEdited() {
-    if (m_selectedClip.isEmpty() || m_updatingInspector) return;
-    const QString field = sender()->property("clipField").toString();
-    const QDoubleSpinBox *spin = qobject_cast<QDoubleSpinBox *>(sender());
-    const QJsonObject clip = selectedClipObject();
-    if (!spin || field.isEmpty() || clip.isEmpty()) return;
-    const double value = spin->value();
-    const double speed = std::max(0.01, clip.value(QStringLiteral("speed")).toDouble(1.0));
-    auto amount = [this](const QString &op, double frames, const QString &edge = QString()) {
-        const qint64 whole = std::llround(frames);
-        if (whole == 0) return QJsonObject{};
-        QJsonObject edit{{QStringLiteral("op"), op}, {QStringLiteral("clip"), m_selectedClip},
-                         {QStringLiteral("frames"), whole}};
-        if (!edge.isEmpty()) edit.insert(QStringLiteral("edge"), edge);
-        return edit;
-    };
-    QJsonObject edit;
-    if (field == QStringLiteral("timelineStart")) {
-        edit = amount(QStringLiteral("move"), double(frameAt(value) - clipFrames(clip, QStringLiteral("startFrame"))));
-    } else if (field == QStringLiteral("duration")) {
-        edit = amount(QStringLiteral("trim"), double(frameAt(value) - clipFrames(clip, QStringLiteral("durationFrames"))), QStringLiteral("out"));
-    } else if (field == QStringLiteral("in")) {
-        edit = amount(QStringLiteral("slip"), (value - clip.value(QStringLiteral("in")).toDouble()) / speed * m_fps);
-    } else if (field == QStringLiteral("out")) {
-        edit = amount(QStringLiteral("trim"), (value - clip.value(QStringLiteral("out")).toDouble()) / speed * m_fps, QStringLiteral("out"));
-    } else if (field == QStringLiteral("speed")) {
-        QString ratio = QString::number(value, 'f', 4);
-        while (ratio.endsWith(QLatin1Char('0'))) ratio.chop(1);
-        if (ratio.endsWith(QLatin1Char('.'))) ratio.chop(1);
-        if (clip.value(QStringLiteral("reverse")).toBool()) ratio.prepend(QLatin1Char('-'));
-        edit = QJsonObject{{QStringLiteral("op"), QStringLiteral("speed")}, {QStringLiteral("clip"), m_selectedClip},
-                           {QStringLiteral("speed"), ratio}};
-    }
-    if (!edit.isEmpty()) sendEdit(QJsonArray{edit});
-}
-
-void MainWindow::propertyEdited(const QString &name, const QJsonValue &value) {
-    if (m_selectedClip.isEmpty() || m_updatingInspector) return;
-    QJsonValue fallback;
-    for (const QJsonValue &def : m_propertyDefs)
-        if (def.toObject().value(QStringLiteral("name")).toString() == name) fallback = def.toObject().value(QStringLiteral("default"));
-    const QJsonValue current = selectedClipObject().value(QStringLiteral("props")).toObject().value(name);
-    auto same = [](const QJsonValue &a, const QJsonValue &b) {
-        return a.isDouble() && b.isDouble() ? std::abs(a.toDouble() - b.toDouble()) < 5e-4 : a == b;
-    };
-    if (same(value, current.isUndefined() ? fallback : current)) return;
-    sendEdit(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("set")}, {QStringLiteral("clip"), m_selectedClip},
-                                    {QStringLiteral("props"), QJsonObject{{name, same(value, fallback) ? QJsonValue() : value}}}}});
-}
-
 bool MainWindow::eventFilter(QObject *object, QEvent *event) {
     if (object == m_chatInput && (event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut))
         updateChatControls();
@@ -920,37 +874,17 @@ void MainWindow::buildUi() {
     m_errorBanner->hide();
     root->addWidget(m_errorBanner);
 
-    auto *workspace = new QSplitter(Qt::Horizontal);
-    workspace->setObjectName(QStringLiteral("workspaceSplitter"));
-    workspace->setHandleWidth(2);
-    workspace->setChildrenCollapsible(false);
-    root->addWidget(workspace, 1);
-
-    auto *editorSplit = new QSplitter(Qt::Vertical);
-    editorSplit->setObjectName(QStringLiteral("editorSplitter"));
-    editorSplit->setHandleWidth(2);
-    editorSplit->setChildrenCollapsible(false);
-    workspace->addWidget(editorSplit);
+    m_workspace = new Workspace(central);
+    root->addWidget(m_workspace->manager(), 1);
 
     auto *viewerFrame = new QFrame;
     viewerFrame->setObjectName(QStringLiteral("viewerFrame"));
     auto *viewerLayout = new QVBoxLayout(viewerFrame);
     viewerLayout->setContentsMargins(0, 0, 0, 0);
     viewerLayout->setSpacing(0);
-    const PanelHeader viewerHeader = panelHeader(QStringLiteral("Viewer"));
-    m_viewerDetail = viewerHeader.detail;
-    viewerLayout->addWidget(viewerHeader.widget);
     m_viewer = new ViewerWidget;
     viewerLayout->addWidget(m_viewer, 1);
     viewerLayout->addWidget(buildTransport());
-    editorSplit->addWidget(viewerFrame);
-
-    auto *bottomBand = new QWidget;
-    bottomBand->setObjectName(QStringLiteral("bottomBand"));
-    bottomBand->setAttribute(Qt::WA_StyledBackground);
-    auto *bottomLayout = new QVBoxLayout(bottomBand);
-    bottomLayout->setContentsMargins(0, 0, 0, 0);
-    bottomLayout->setSpacing(0);
 
     auto *timelinePanel = new QWidget;
     timelinePanel->setObjectName(QStringLiteral("timelinePanel"));
@@ -958,10 +892,6 @@ void MainWindow::buildUi() {
     auto *timelinePanelLayout = new QVBoxLayout(timelinePanel);
     timelinePanelLayout->setContentsMargins(0, 0, 0, 0);
     timelinePanelLayout->setSpacing(0);
-
-    const PanelHeader timelineHeader = panelHeader(QStringLiteral("Timeline"));
-    m_timelineDetail = timelineHeader.detail;
-    timelinePanelLayout->addWidget(timelineHeader.widget);
 
     auto *timelineFrame = new QFrame;
     timelineFrame->setObjectName(QStringLiteral("timelineFrame"));
@@ -979,39 +909,31 @@ void MainWindow::buildUi() {
     timelineLayout->addWidget(timelineScroll);
     timelinePanelLayout->addWidget(timelineFrame, 1);
     timelinePanel->setMinimumHeight(220);
-    bottomLayout->addWidget(timelinePanel, 1);
-    editorSplit->addWidget(bottomBand);
-    editorSplit->setStretchFactor(0, 1);
-    editorSplit->setStretchFactor(1, 1);
-    editorSplit->setSizes({420, 460});
 
     auto *right = new QWidget;
-    m_agentPanel = right;
     right->setObjectName(QStringLiteral("assistantPanel"));
     right->setAttribute(Qt::WA_StyledBackground);
     right->setMinimumWidth(248);
-    auto *rightFrame = new QVBoxLayout(right);
-    rightFrame->setContentsMargins(0, 0, 0, 0);
-    rightFrame->setSpacing(0);
-    const PanelHeader agentHeader = panelHeader(QStringLiteral("Cut Assistant"), QStringLiteral("assistantTitle"));
-    agentHeader.detail->hide();
-    m_agentStatus = new QLabel(QStringLiteral("READY"));
-    m_agentStatus->setObjectName(QStringLiteral("statusPill"));
-    agentHeader.layout->addWidget(m_agentStatus);
-    rightFrame->addWidget(agentHeader.widget);
-    auto *rightBody = new QWidget;
-    rightFrame->addWidget(rightBody, 1);
-    auto *rightLayout = new QVBoxLayout(rightBody);
+    auto *rightLayout = new QVBoxLayout(right);
     rightLayout->setContentsMargins(8, 2, 8, 8);
-    rightLayout->setSpacing(6);
-
-    auto *tabs = new QTabWidget;
-    tabs->setObjectName(QStringLiteral("rightTabs"));
-    rightLayout->addWidget(tabs, 1);
     auto *chatTab = new QWidget;
+    rightLayout->addWidget(chatTab);
     auto *chatTabLayout = new QVBoxLayout(chatTab);
     chatTabLayout->setContentsMargins(0, 6, 0, 0);
     chatTabLayout->setSpacing(6);
+    auto *statusRow = new QHBoxLayout;
+    statusRow->setContentsMargins(0, 0, 0, 0);
+    auto *preferencesLink = new QToolButton;
+    preferencesLink->setObjectName(QStringLiteral("assistantSettings"));
+    preferencesLink->setText(QStringLiteral("Agent settings…"));
+    preferencesLink->setToolTip(QStringLiteral("Provider, model, and MCP settings"));
+    connect(preferencesLink, &QToolButton::clicked, this, [this] { triggerCommand(QStringLiteral("app.preferences")); });
+    statusRow->addWidget(preferencesLink);
+    statusRow->addStretch(1);
+    m_agentStatus = new QLabel(QStringLiteral("READY"));
+    m_agentStatus->setObjectName(QStringLiteral("statusPill"));
+    statusRow->addWidget(m_agentStatus);
+    chatTabLayout->addLayout(statusRow);
     // Review and activity can overflow on short windows; the composer stays fixed.
     auto *chatScroll = new QScrollArea;
     chatScroll->setFrameShape(QFrame::NoFrame);
@@ -1162,43 +1084,16 @@ void MainWindow::buildUi() {
     proposalLayout->addLayout(proposalButtons);
     chatLayout->addWidget(proposalBox);
     chatTabLayout->addWidget(composer);
-    tabs->addTab(chatTab, QStringLiteral("Chat"));
+    m_effectControls = new EffectControlsPanel;
+    connect(m_effectControls, &EffectControlsPanel::editRequested, this, &MainWindow::sendEdit);
 
-    auto *inspectorTab = new QWidget;
-    auto *inspectorLayout = new QVBoxLayout(inspectorTab);
-    inspectorLayout->setContentsMargins(0, 8, 0, 0);
-    auto *inspectorTitle = new QLabel(QStringLiteral("INSPECTOR"));
-    inspectorTitle->setObjectName(QStringLiteral("eyebrow"));
-    inspectorLayout->addWidget(inspectorTitle);
-    auto *inspector = new QWidget;
-    auto *form = new QFormLayout(inspector);
-    form->setContentsMargins(0, 0, 0, 0);
-    form->setSpacing(6);
-    m_inspectorClip = new QLabel(QStringLiteral("Select a clip"));
-    m_inspectorClip->setObjectName(QStringLiteral("inspectorClip"));
-    form->addRow(m_inspectorClip);
-    m_position = inspectorSpin(0.0, 0.0, 86400.0, 0.01, QStringLiteral("timelineStart"));
-    m_durationSpin = inspectorSpin(1.0, 0.01, 86400.0, 0.01, QStringLiteral("duration"));
-    m_inSpin = inspectorSpin(0.0, 0.0, 86400.0, 0.01, QStringLiteral("in"));
-    m_outSpin = inspectorSpin(1.0, 0.01, 86400.0, 0.01, QStringLiteral("out"));
-    m_speedSpin = inspectorSpin(1.0, 0.01, 20.0, 0.01, QStringLiteral("speed"));
-    form->addRow(QStringLiteral("Position"), m_position);
-    form->addRow(QStringLiteral("Duration"), m_durationSpin);
-    form->addRow(QStringLiteral("Source in"), m_inSpin);
-    form->addRow(QStringLiteral("Source out"), m_outSpin);
-    form->addRow(QStringLiteral("Speed"), m_speedSpin);
-    inspectorLayout->addWidget(inspector);
-    auto *properties = new QWidget;
-    m_propertyForm = new QFormLayout(properties);
-    m_propertyForm->setContentsMargins(0, 0, 0, 0);
-    m_propertyForm->setSpacing(6);
-    inspectorLayout->addWidget(properties);
-    inspectorLayout->addStretch(1);
-    tabs->addTab(inspectorTab, QStringLiteral("Inspector"));
-
-    auto *settingsTab = new QWidget;
-    auto *settingsTabLayout = new QVBoxLayout(settingsTab);
-    settingsTabLayout->setContentsMargins(0, 8, 0, 0);
+    // Agent settings live in the Settings dialog, out of the editing surface.
+    m_preferences = new QDialog(this);
+    m_preferences->setObjectName(QStringLiteral("preferencesDialog"));
+    m_preferences->setWindowTitle(QStringLiteral("Settings"));
+    m_preferences->resize(520, 680);
+    auto *settingsTabLayout = new QVBoxLayout(m_preferences);
+    settingsTabLayout->setContentsMargins(12, 12, 12, 12);
     auto *settingsScroll = new QScrollArea;
     settingsScroll->setWidgetResizable(true);
     settingsScroll->setFrameShape(QFrame::NoFrame);
@@ -1361,7 +1256,9 @@ void MainWindow::buildUi() {
     settingsLayout->addStretch(1);
     settingsScroll->setWidget(settingsContent);
     settingsTabLayout->addWidget(settingsScroll);
-    tabs->addTab(settingsTab, QStringLiteral("Settings"));
+    auto *closeSettings = new QDialogButtonBox(QDialogButtonBox::Close);
+    connect(closeSettings, &QDialogButtonBox::rejected, m_preferences, &QDialog::hide);
+    settingsTabLayout->addWidget(closeSettings);
 
     loadAgentSettings();
     const auto onActiveConnectionChanged = [this](bool checked) {
@@ -1379,10 +1276,21 @@ void MainWindow::buildUi() {
     connect(m_openaiModel, &QLineEdit::editingFinished, this, &MainWindow::saveAgentSettings);
     connect(m_openaiMode, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::saveAgentSettings);
 
-    workspace->addWidget(right);
-    workspace->setStretchFactor(0, 1);
-    workspace->setStretchFactor(1, 0);
-    workspace->setSizes({1228, 272});
+    // Panels; the workspace arranges them once the window's actions exist.
+    m_viewerDetail = new QAction(this);
+    m_viewerDetail->setObjectName(QStringLiteral("viewerDetail"));
+    m_viewerDetail->setEnabled(false);
+    m_viewerDetail->setVisible(false);
+    m_workspace->addPanel(QStringLiteral("program"), QStringLiteral("Program"), viewerFrame)
+        ->setTitleBarActions({m_viewerDetail});
+    m_timelineDetail = new QAction(this);
+    m_timelineDetail->setObjectName(QStringLiteral("timelineDetail"));
+    m_timelineDetail->setEnabled(false);
+    m_timelineDetail->setVisible(false);
+    m_workspace->addPanel(QStringLiteral("timeline"), QStringLiteral("Timeline"), timelinePanel)
+        ->setTitleBarActions({m_timelineDetail});
+    m_workspace->addPanel(QStringLiteral("effectControls"), QStringLiteral("Effect Controls"), m_effectControls);
+    m_workspace->addPanel(QStringLiteral("assistant"), QStringLiteral("Cut Assistant"), right);
     setCentralWidget(central);
 
     connect(m_timeline, &TimelineWidget::seekRequested, this, &MainWindow::queueSeek);
@@ -1408,72 +1316,6 @@ void MainWindow::buildUi() {
     connect(m_timeline, &TimelineWidget::trimRequested, this, &MainWindow::trimClip);
     updateProposal(QJsonValue());
     updateInspector();
-}
-
-QDoubleSpinBox *MainWindow::inspectorSpin(double value, double minimum, double maximum, double step, const QString &field) {
-    auto *spin = new QDoubleSpinBox;
-    spin->setRange(minimum, maximum);
-    spin->setSingleStep(step);
-    spin->setDecimals(2);
-    spin->setValue(value);
-    spin->setProperty("clipField", field);
-    connect(spin, &QDoubleSpinBox::editingFinished, this, &MainWindow::clipValueEdited);
-    return spin;
-}
-
-QWidget *MainWindow::propertyEditor(const QJsonObject &def) {
-    const QString name = def.value(QStringLiteral("name")).toString();
-    const QString type = def.value(QStringLiteral("type")).toString();
-    QWidget *editor = nullptr;
-    if (type == QStringLiteral("number")) {
-        auto *spin = new QDoubleSpinBox;
-        const double minimum = def.value(QStringLiteral("min")).toDouble(-1e6);
-        const double maximum = def.value(QStringLiteral("max")).toDouble(1e6);
-        spin->setRange(minimum, maximum);
-        spin->setDecimals(3);
-        spin->setSingleStep(maximum - minimum > 10.0 ? 1.0 : 0.01);
-        connect(spin, &QDoubleSpinBox::editingFinished, this, [this, spin, name] { propertyEdited(name, spin->value()); });
-        editor = spin;
-    } else if (type == QStringLiteral("enum")) {
-        auto *combo = new QComboBox;
-        for (const QJsonValue &option : def.value(QStringLiteral("options")).toArray()) combo->addItem(option.toString());
-        connect(combo, &QComboBox::activated, this, [this, combo, name] { propertyEdited(name, combo->currentText()); });
-        editor = combo;
-    } else if (type == QStringLiteral("bool")) {
-        auto *check = new QCheckBox;
-        connect(check, &QCheckBox::clicked, this, [this, name](bool checked) { propertyEdited(name, checked); });
-        editor = check;
-    } else if (type == QStringLiteral("color")) {
-        auto *button = new QPushButton;
-        connect(button, &QPushButton::clicked, this, [this, button, name] {
-            const QColor color = QColorDialog::getColor(modelColor(button->text()), this, name,
-                                                        QColorDialog::ShowAlphaChannel);
-            if (color.isValid()) propertyEdited(name, modelColorName(color));
-        });
-        editor = button;
-    } else {
-        auto *line = new QLineEdit;
-        connect(line, &QLineEdit::editingFinished, this, [this, line, name] { propertyEdited(name, line->text()); });
-        editor = line;
-    }
-    QString tip = def.value(QStringLiteral("doc")).toString();
-    if (def.value(QStringLiteral("unit")).isString()) tip += QStringLiteral(" (%1)").arg(def.value(QStringLiteral("unit")).toString());
-    editor->setToolTip(tip.trimmed());
-    return editor;
-}
-
-void MainWindow::setPropertyValue(QWidget *editor, const QJsonValue &value) {
-    const QSignalBlocker blocker(editor);
-    if (auto *spin = qobject_cast<QDoubleSpinBox *>(editor)) spin->setValue(value.toDouble());
-    else if (auto *combo = qobject_cast<QComboBox *>(editor)) combo->setCurrentText(value.toString());
-    else if (auto *check = qobject_cast<QCheckBox *>(editor)) check->setChecked(value.toBool());
-    else if (auto *button = qobject_cast<QPushButton *>(editor)) {
-        QPixmap swatch(12, 12);
-        swatch.fill(modelColor(value.toString()));
-        button->setIcon(swatch);
-        button->setText(value.toString());
-    }
-    else if (auto *line = qobject_cast<QLineEdit *>(editor)) line->setText(value.toString());
 }
 
 void MainWindow::syncCanvasPreset(const QSize &size) {
@@ -1506,7 +1348,8 @@ void MainWindow::setupActions() {
     m_commandHandlers = {
         {QStringLiteral("file.import"), [this] { importMedia(); }},
         {QStringLiteral("file.export"), [this] { exportProject(); }},
-        {QStringLiteral("app.quit"), [] { QApplication::quit(); }},
+        // Closing first keeps the workspace layout for the next launch.
+        {QStringLiteral("app.quit"), [this] { if (close()) QApplication::quit(); }},
         {QStringLiteral("clip.focusRegion"), [this] { focusRegion(); }},
         {QStringLiteral("sequence.renderPreview"), [this] { renderPreview(); }},
         {QStringLiteral("playback.toggle"), [this] { togglePlayback(); }},
@@ -1516,13 +1359,45 @@ void MainWindow::setupActions() {
         {QStringLiteral("playback.goToEnd"), [this] { seekToEnd(); }},
         {QStringLiteral("view.fitTracks"), [this] { m_timeline->fitTracksToView(); }},
         {QStringLiteral("view.resetTrackHeights"), [this] { m_timeline->resetTrackHeights(); }},
+        {QStringLiteral("app.preferences"), [this] {
+            m_preferences->show();
+            m_preferences->raise();
+            m_preferences->activateWindow();
+        }},
+        {QStringLiteral("window.saveWorkspace"), [this] {
+            m_workspace->saveCurrent();
+            statusBar()->showMessage(QStringLiteral("Saved the %1 workspace").arg(m_workspace->current()), 4000);
+        }},
+        {QStringLiteral("window.saveWorkspaceAs"), [this] {
+            const QString name = QInputDialog::getText(this, QStringLiteral("New Workspace"), QStringLiteral("Name"));
+            if (name.trimmed().isEmpty()) return;
+            if (!m_workspace->saveAs(name))
+                statusBar()->showMessage(QStringLiteral("A workspace called %1 already exists").arg(name.trimmed()), 4000);
+        }},
+        {QStringLiteral("window.resetWorkspace"), [this] { m_workspace->resetCurrent(); }},
     };
     connect(m_commands, &CommandRegistry::triggered, this, &MainWindow::triggerCommand);
-    connect(m_commands, &CommandRegistry::toggled, this, [this](const QString &id, bool checked) {
-        if (id == QStringLiteral("view.assistantPanel")) m_agentPanel->setVisible(checked);
+    // Window ▸ panel commands show and hide docked panels, and follow
+    // panels closed from their tabs.
+    const QHash<QString, QString> panelCommands{
+        {QStringLiteral("window.program"), QStringLiteral("program")},
+        {QStringLiteral("window.timeline"), QStringLiteral("timeline")},
+        {QStringLiteral("window.effectControls"), QStringLiteral("effectControls")},
+        {QStringLiteral("window.assistant"), QStringLiteral("assistant")},
+    };
+    connect(m_commands, &CommandRegistry::toggled, this, [this, panelCommands](const QString &id, bool checked) {
+        if (ads::CDockWidget *panel = m_workspace->panel(panelCommands.value(id)))
+            if (panel->isClosed() == checked) panel->toggleView(checked);
     });
+    for (auto it = panelCommands.cbegin(); it != panelCommands.cend(); ++it) {
+        QAction *action = m_commands->action(it.key());
+        ads::CDockWidget *panel = m_workspace->panel(it.value());
+        connect(panel, &ads::CDockWidget::viewToggled, action, [action](bool open) {
+            const QSignalBlocker blocker(action);
+            action->setChecked(open);
+        });
+    }
     connect(m_commands, &CommandRegistry::shortcutsChanged, this, &MainWindow::updateTransport);
-    m_commands->action(QStringLiteral("view.assistantPanel"))->setChecked(true);
 
     menuBar()->setNativeMenuBar(true);
     const QHash<QString, QMenu *> menus = m_commands->buildMenus(menuBar());
@@ -1543,6 +1418,19 @@ void MainWindow::setupActions() {
                 QSettings().setValue(QStringLiteral("commands/keymap"), id);
             });
         }
+    }
+    if (QMenu *window = menus.value(QStringLiteral("Window"))) {
+        auto *workspaces = new QMenu(QStringLiteral("Workspaces"), window);
+        workspaces->setObjectName(QStringLiteral("workspacesMenu"));
+        window->insertMenu(window->actions().value(0), workspaces);
+        window->insertSeparator(window->actions().value(1));
+        connect(workspaces, &QMenu::aboutToShow, this, [this, workspaces] { buildWorkspaceMenu(workspaces); });
+        buildWorkspaceMenu(workspaces);
+    }
+    m_workspace->start();
+    for (auto it = panelCommands.cbegin(); it != panelCommands.cend(); ++it) {
+        const QSignalBlocker blocker(m_commands->action(it.key()));
+        m_commands->action(it.key())->setChecked(!m_workspace->panel(it.value())->isClosed());
     }
 
     auto *toolbar = addToolBar(QStringLiteral("Main"));
@@ -1648,6 +1536,25 @@ void MainWindow::setupActions() {
     if (auto *renderButton = toolbarCommand(QStringLiteral("sequence.renderPreview"), QStringLiteral("Render")))
         renderButton->setObjectName(QStringLiteral("toolbarQuiet"));
     updateCommandStates();
+}
+
+void MainWindow::buildWorkspaceMenu(QMenu *menu) {
+    menu->clear();
+    qDeleteAll(menu->findChildren<QActionGroup *>(Qt::FindDirectChildrenOnly));
+    auto *group = new QActionGroup(menu);
+    for (const QString &name : m_workspace->names()) {
+        QAction *choice = menu->addAction(name);
+        choice->setObjectName(QStringLiteral("workspace.%1").arg(name));
+        choice->setCheckable(true);
+        choice->setChecked(name == m_workspace->current());
+        group->addAction(choice);
+        connect(choice, &QAction::triggered, this, [this, name] { m_workspace->activate(name); });
+    }
+}
+
+void MainWindow::closeEvent(QCloseEvent *event) {
+    m_workspace->persist();
+    QMainWindow::closeEvent(event);
 }
 
 void MainWindow::triggerCommand(const QString &id) {
@@ -1970,6 +1877,8 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     m_timelineDetail->setText(QStringLiteral("%1  ·  %2")
                                   .arg(m_trackCount == 1 ? QStringLiteral("1 track") : QStringLiteral("%1 tracks").arg(m_trackCount),
                                        timelineTimecode(m_duration, m_fps)));
+    m_viewerDetail->setVisible(true);
+    m_timelineDetail->setVisible(true);
     if (m_statusRevision) {
         m_statusRevision->setText(QStringLiteral("Revision %1").arg(m_revision));
         m_statusRevision->show();
@@ -2003,50 +1912,16 @@ QJsonObject MainWindow::selectedClipObject() const {
 }
 
 void MainWindow::updateInspector() {
-    m_updatingInspector = true;
     const QJsonObject clip = selectedClipObject();
-    const bool hasClip = m_connected && !clip.isEmpty();
-    m_inspectorClip->setText(hasClip ? clipName(clip) : QStringLiteral("Select a clip"));
-    auto setSpin = [hasClip](QDoubleSpinBox *spin, double value) {
-        spin->setEnabled(hasClip);
-        const QSignalBlocker blocker(spin);
-        spin->setValue(value);
-    };
-    setSpin(m_position, clip.value(QStringLiteral("timelineStart")).toDouble());
-    setSpin(m_durationSpin, std::max(0.01, clip.value(QStringLiteral("duration")).toDouble(1.0)));
-    setSpin(m_inSpin, clip.value(QStringLiteral("in")).toDouble());
-    setSpin(m_outSpin, std::max(0.01, clip.value(QStringLiteral("out")).toDouble(1.0)));
-    setSpin(m_speedSpin, clip.value(QStringLiteral("speed")).toDouble(1.0));
-    // Property editors follow the catalog definitions for a generator's
-    // parameters and the clip's track type; animated properties show their
-    // first key and are read-only.
-    QJsonArray defs;
-    if (hasClip) {
-        defs = m_project.value(QStringLiteral("generators")).toObject().value(clip.value(QStringLiteral("fx")).toString()).toArray();
-        for (const QJsonValue &def : m_project.value(QStringLiteral("properties")).toObject().value(selectedTrackType()).toArray())
-            defs.append(def);
+    if (!m_connected || clip.isEmpty()) {
+        m_effectControls->setClip(QString(), QJsonObject{}, QJsonArray{}, m_fps);
+        return;
     }
-    if (defs != m_propertyDefs) {
-        while (m_propertyForm->rowCount() > 0) m_propertyForm->removeRow(0);
-        m_propertyEditors.clear();
-        m_propertyDefs = defs;
-        for (const QJsonValue &def : defs) {
-            QWidget *editor = propertyEditor(def.toObject());
-            const QString name = def.toObject().value(QStringLiteral("name")).toString();
-            m_propertyEditors.insert(name, editor);
-            m_propertyForm->addRow(name, editor);
-        }
-    }
-    const QJsonObject props = clip.value(QStringLiteral("props")).toObject();
-    for (const QJsonValue &def : defs) {
-        const QString name = def.toObject().value(QStringLiteral("name")).toString();
-        const QJsonValue prop = props.value(name);
-        QWidget *editor = m_propertyEditors.value(name);
-        setPropertyValue(editor, prop.isArray() ? prop.toArray().first().toObject().value(QStringLiteral("value"))
-                                 : prop.isUndefined() ? def.toObject().value(QStringLiteral("default")) : prop);
-        editor->setEnabled(!prop.isArray());
-    }
-    m_updatingInspector = false;
+    // A generator's parameters, then the properties of the clip's track type.
+    QJsonArray defs = m_project.value(QStringLiteral("generators")).toObject().value(clip.value(QStringLiteral("fx")).toString()).toArray();
+    for (const QJsonValue &def : m_project.value(QStringLiteral("properties")).toObject().value(selectedTrackType()).toArray())
+        defs.append(def);
+    m_effectControls->setClip(m_selectedClip, clip, defs, m_fps);
 }
 
 void MainWindow::updateProposal(const QJsonValue &value) {

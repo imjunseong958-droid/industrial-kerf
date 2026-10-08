@@ -85,22 +85,6 @@ QFrame#timelineFrame {
     background: transparent;
     border: 0;
 }
-QWidget#bottomBand { background: #0e0e0e; }
-QWidget#panelHeader {
-    background: #1f1f1f;
-    border-bottom: 1px solid #0a0a0a;
-}
-QLabel#panelTitle,
-QWidget#panelHeader QLabel#assistantTitle {
-    color: #cfcfcf;
-    font-size: 11px;
-    font-weight: 600;
-}
-QLabel#panelDetail {
-    color: #8c8c8c;
-    font-family: Menlo, Monaco, monospace;
-    font-size: 10px;
-}
 QWidget#transport {
     background: #191919;
     border: 0;
@@ -284,7 +268,6 @@ QLabel#statusPill {
 QLabel#timecode { color: #e2e2e2; font-family: Menlo, Monaco, monospace; font-size: 11px; }
 QLabel#inspectorClip { color: #eeeeee; font-weight: 600; padding: 5px 0; }
 QLabel#projectTitle { color: #e1e1e1; font-weight: 600; padding: 0 20px; }
-QLabel#assistantTitle { color: #e9e9e9; font-size: 12px; font-weight: 600; }
 QWidget#assistantPanel { background: #161616; border-left: 1px solid #0c0c0c; }
 QWidget#assistantPanel QLabel#statusPill {
     color: #e6c98a;
@@ -433,8 +416,6 @@ QTabBar::tab:selected {
     background: #2d2d2d;
     border-color: #424242;
 }
-QTabWidget#rightTabs QTabBar::tab { padding: 5px 10px; border-radius: 0; border: 0; border-bottom: 2px solid transparent; }
-QTabWidget#rightTabs QTabBar::tab:selected { background: #222222; border-bottom-color: #e6b450; }
 
 QSlider::groove:horizontal { background: #101010; border: 1px solid #2c2c2c; height: 5px; border-radius: 3px; }
 QSlider::handle:horizontal { background: #b3b3b3; border: 1px solid #d6d6d6; width: 11px; margin: -4px 0; border-radius: 4px; }
@@ -452,5 +433,28 @@ QStatusBar QLabel#statusConnection[state="connecting"] { color: #e6c98a; }
 QStatusBar QLabel#statusConnection[state="disconnected"] { color: #e0a0a0; }
 QFrame#connectionBanner,
 QFrame#errorBanner { background: #352b36; border: 1px solid #896985; border-radius: 4px; }
+)QSS");
+}
+
+// Docked panels, layered over the dock manager's own stylesheet: dark title
+// strips with the panel names as tabs and an amber line under the focused one.
+inline QString dockStyleSheet() {
+    return QStringLiteral(R"QSS(
+ads--CDockContainerWidget { background: #0e0e0e; }
+ads--CDockContainerWidget > QSplitter { padding: 0; }
+ads--CDockSplitter::handle { background: #0a0a0a; }
+ads--CDockSplitter::handle:hover { background: #4e4e4e; }
+ads--CDockAreaWidget { background: #1a1a1a; border: 0; }
+ads--CDockAreaTitleBar { background: #1f1f1f; border-bottom: 1px solid #0c0c0c; min-height: 26px; max-height: 26px; }
+ads--CDockAreaTabBar { background: #1f1f1f; }
+ads--CDockWidgetTab { background: #1f1f1f; border: 0; border-right: 1px solid #141414; padding: 0 8px; }
+ads--CDockWidgetTab QLabel { color: #8e8e8e; font-size: 11px; font-weight: 600; }
+ads--CDockWidgetTab[activeTab="true"] { background: #262626; }
+ads--CDockWidgetTab[activeTab="true"] QLabel { color: #e6e6e6; }
+ads--CDockWidgetTab[focused="true"] { border-bottom: 2px solid #e6b450; }
+ads--CDockWidget { background: #1a1a1a; border: 0; }
+ads--CTitleBarButton { color: #8e8e8e; font-size: 10px; padding: 0 6px; }
+ads--CTitleBarButton:disabled { color: #8e8e8e; }
+ads--CFloatingDockContainer { background: #1a1a1a; }
 )QSS");
 }

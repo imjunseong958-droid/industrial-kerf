@@ -79,7 +79,7 @@ target/release/lcut --terminal --dir ./my-project --mcp-tools -p "use the connec
 ```
 
 In editor mode, `lcut` imports a local media path or an HTTP(S) URL before
-opening the native window. The editor's agent rail uses the same provider
+opening the native window. The editor's Cut Assistant panel uses the same provider
 configuration as the terminal agent. `--cutd PATH` selects an explicit
 daemon; the `CUTD_BIN` environment variable does the same.
 
@@ -184,7 +184,7 @@ python3 scripts/test-cut-qt-bridge.py
 
 ## Optional embedded-agent providers
 
-Provider APIs are optional and only power Cut's embedded agent rail (and its
+Provider APIs are optional and only power Cut's embedded assistant (and its
 terminal agent workflow). They are not required for external agents using
 `cut-mcp` or for native editing.
 

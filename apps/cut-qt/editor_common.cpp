@@ -243,25 +243,6 @@ void blitLaneCache(QPainter &painter, const QPixmap &cache, const QRegion &clip)
     painter.restore();
 }
 
-PanelHeader panelHeader(const QString &title, const QString &titleName) {
-    PanelHeader header;
-    header.widget = new QWidget;
-    header.widget->setObjectName(QStringLiteral("panelHeader"));
-    header.widget->setAttribute(Qt::WA_StyledBackground);
-    header.widget->setFixedHeight(24);
-    header.layout = new QHBoxLayout(header.widget);
-    header.layout->setContentsMargins(10, 0, 8, 0);
-    header.layout->setSpacing(8);
-    auto *name = new QLabel(title);
-    name->setObjectName(titleName);
-    header.layout->addWidget(name);
-    header.layout->addStretch(1);
-    header.detail = new QLabel;
-    header.detail->setObjectName(QStringLiteral("panelDetail"));
-    header.layout->addWidget(header.detail);
-    return header;
-}
-
 QIcon transportIcon(TransportGlyph glyph) {
     QPixmap pixmap(32, 32);
     pixmap.setDevicePixelRatio(2);

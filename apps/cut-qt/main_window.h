@@ -3,6 +3,7 @@
 #include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDialog>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QFrame>
@@ -16,6 +17,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMainWindow>
+#include <QMenu>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRadioButton>
@@ -33,6 +35,8 @@
 namespace cut {
 
 class CommandRegistry;
+class EffectControlsPanel;
+class Workspace;
 class MediaArtwork;
 class TimelineWidget;
 class ViewerWidget;
@@ -98,21 +102,15 @@ private slots:
     void saveAgentSettings();
     void acceptProposal();
     void rejectProposal();
-    void clipValueEdited();
-
-    // A catalog property edit; the default value clears the property.
-    void propertyEdited(const QString &name, const QJsonValue &value);
 
 protected:
     bool eventFilter(QObject *object, QEvent *event) override;
+    void closeEvent(QCloseEvent *event) override;
 
 private:
     void buildUi();
-    QDoubleSpinBox *inspectorSpin(double value, double minimum, double maximum, double step, const QString &field);
-
-    // An editor for one catalog property definition.
-    QWidget *propertyEditor(const QJsonObject &def);
-    static void setPropertyValue(QWidget *editor, const QJsonValue &value);
+    // Window ▸ Workspaces: the workspaces, and saving or resetting the current one.
+    void buildWorkspaceMenu(QMenu *menu);
     void syncCanvasPreset(const QSize &size);
     void setupActions();
     // Resolve a command in the current context and send its request.
@@ -168,7 +166,6 @@ private:
     QPushButton *m_reconnectButton = nullptr;
     QFrame *m_errorBanner = nullptr;
     QLabel *m_errorMessage = nullptr;
-    QWidget *m_agentPanel = nullptr;
     QScrollArea *m_timelineScroll = nullptr;
     CommandRegistry *m_commands = nullptr;
     QHash<QString, std::function<void()>> m_commandHandlers;
@@ -176,8 +173,12 @@ private:
     QToolButton *m_transportPlay = nullptr;
     QLabel *m_transportTime = nullptr;
     QLabel *m_transportDuration = nullptr;
-    QLabel *m_viewerDetail = nullptr;
-    QLabel *m_timelineDetail = nullptr;
+    // Panel details shown in the panels' title strips.
+    QAction *m_viewerDetail = nullptr;
+    QAction *m_timelineDetail = nullptr;
+    Workspace *m_workspace = nullptr;
+    EffectControlsPanel *m_effectControls = nullptr;
+    QDialog *m_preferences = nullptr;
     QLabel *m_statusConnection = nullptr;
     QLabel *m_statusRevision = nullptr;
     bool m_transportShowsPause = false;
@@ -200,7 +201,6 @@ private:
     bool m_hoverSkimming = false;
     bool m_pointerOwnsPlayhead = false;
     bool m_hasShownFrame = false;
-    bool m_updatingInspector = false;
     bool m_updatingCanvasPreset = false;
     bool m_conversationEmpty = true;
     bool m_agentBusy = false;
@@ -242,15 +242,6 @@ private:
     QPushButton *m_acceptButton = nullptr;
     QPushButton *m_rejectButton = nullptr;
     QGroupBox *m_proposalBox = nullptr;
-    QLabel *m_inspectorClip = nullptr;
-    QDoubleSpinBox *m_position = nullptr;
-    QDoubleSpinBox *m_durationSpin = nullptr;
-    QDoubleSpinBox *m_inSpin = nullptr;
-    QDoubleSpinBox *m_outSpin = nullptr;
-    QDoubleSpinBox *m_speedSpin = nullptr;
-    QFormLayout *m_propertyForm = nullptr;
-    QJsonArray m_propertyDefs;
-    QHash<QString, QWidget *> m_propertyEditors;
     QComboBox *m_quality = nullptr;
     QComboBox *m_canvasPreset = nullptr;
     QProgressBar *m_exportProgress = nullptr;

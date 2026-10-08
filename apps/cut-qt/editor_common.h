@@ -1,10 +1,8 @@
 #pragma once
 
-#include <QHBoxLayout>
 #include <QIcon>
 #include <QJsonArray>
 #include <QJsonObject>
-#include <QLabel>
 #include <QPainter>
 #include <QPixmap>
 #include <QWidget>
@@ -91,16 +89,6 @@ void frameInside(QPainter &p, const QRectF &rect, qreal thickness, const QColor 
 
 // Cache source coordinates use device pixels while the paint target uses logical pixels.
 void blitLaneCache(QPainter &painter, const QPixmap &cache, const QRegion &clip);
-
-// Docked-panel title strip, the way desktop edit suites label each pane: the
-// panel name on the left and live details on the right.
-struct PanelHeader {
-    QWidget *widget = nullptr;
-    QHBoxLayout *layout = nullptr;
-    QLabel *detail = nullptr;
-};
-
-PanelHeader panelHeader(const QString &title, const QString &titleName = QStringLiteral("panelTitle"));
 
 enum class TransportGlyph { Start, PreviousFrame, Play, Pause, NextFrame, End };
 

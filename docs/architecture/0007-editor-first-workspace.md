@@ -1,6 +1,6 @@
 # ADR 0007: An editor first, with AI on the selection
 
-Status: accepted (phase 1 implemented)
+Status: accepted (phases 1 and 2 implemented)
 Date: 2026-10-09
 
 ## Context
@@ -63,4 +63,19 @@ parameters take the place of the context, so an agent can run
 `clip.delete {"clip": "c3"}` without a selection.
 
 The inspector's property edits and the focus-region crop still send typed
-operations directly; they become commands with Effect Controls in phase 2.
+operations directly.
+
+## Phase 2
+
+The window is a dock manager (Qt Advanced Docking System 5.1.1, fetched at
+configure time) holding four panels: Program (viewer and transport),
+Timeline, Effect Controls (the former inspector, its own class), and Cut
+Assistant (chat, activity, and proposal review). `Workspace` arranges the
+built-in Editing layout — Program over the Timeline, with Effect Controls
+and the Assistant tabbed beside the Program — and keeps named workspaces
+in settings: each has a saved layout (Editing's is built in) and the changes
+made to it, which persist across launches until it is reset. Panel
+visibility, workspaces, and Settings are registry commands in a new Window
+menu and in Edit. The provider and MCP settings moved from the agent column
+into the Settings dialog. Until phase 4 the Assistant stays a dockable
+panel so the agent remains reachable.

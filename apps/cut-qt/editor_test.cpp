@@ -1,10 +1,12 @@
 #include "command_registry.h"
 #include "editor_common.h"
+#include "effect_controls_panel.h"
 #include "editor_style.h"
 #include "main_window.h"
 #include "media_artwork.h"
 #include "timeline_widget.h"
 #include "viewer_widget.h"
+#include "workspace.h"
 
 #include <QAction>
 #include <QApplication>
@@ -49,6 +51,8 @@
 #include <QToolButton>
 #include <QWidget>
 
+#include <DockWidget.h>
+
 #include <algorithm>
 #include <cmath>
 
@@ -56,6 +60,12 @@ namespace cut {
 
 class EditorTest final : public QObject {
     Q_OBJECT
+    // Bring the Cut Assistant tab to the front; hidden tabs are detached.
+    static void showAssistant(MainWindow &window) {
+        window.m_workspace->panel(QStringLiteral("assistant"))->setAsCurrentTab();
+        QCoreApplication::processEvents();
+    }
+
 private slots:
     void initTestCase() {
         QApplication::setStyle(QStringLiteral("Fusion"));
@@ -182,14 +192,15 @@ private slots:
 
     void agentPayloadFollowsSettingsProtocol() {
         MainWindow window{QString(), QString()};
+        showAssistant(window);
         QVERIFY(!window.findChild<QComboBox *>(QStringLiteral("agentProvider")));
         QVERIFY(!window.findChild<QFrame *>(QStringLiteral("agentContext")));
         QVERIFY(!window.findChild<QLabel *>(QStringLiteral("agentConfig")));
         QVERIFY(window.findChild<QComboBox *>(QStringLiteral("agentModel")));
-        auto *tabs = window.findChild<QTabWidget *>(QStringLiteral("rightTabs"));
-        QVERIFY(tabs);
-        QWidget *chatTab = tabs->widget(0);
+        // Provider details live in Settings, not beside the chat.
+        QWidget *chatTab = window.findChild<QWidget *>(QStringLiteral("assistantPanel"));
         QVERIFY(chatTab);
+        QVERIFY(window.m_preferences->isAncestorOf(window.m_anthropicKey));
         for (auto *label : chatTab->findChildren<QLabel *>()) {
             QVERIFY(!label->text().contains(QStringLiteral("OpenAI")));
             QVERIFY(!label->text().contains(QStringLiteral("Anthropic")));
@@ -233,6 +244,7 @@ private slots:
     void editorChromeKeepsComposerAtTheBottom() {
         MainWindow window{QString(), QString()};
         window.show();
+        showAssistant(window);
         QTest::qWait(20);
 
         // The status bar carries live state instead of sitting empty.
@@ -245,9 +257,7 @@ private slots:
         window.setConnection(QStringLiteral("disconnected"));
         QVERIFY(std::none_of(window.m_transportButtons.cbegin(), window.m_transportButtons.cend(),
                              [](const QToolButton *button) { return button->isEnabled(); }));
-        auto *title = window.findChild<QLabel *>(QStringLiteral("assistantTitle"));
-        QVERIFY(title);
-        QCOMPARE(title->text(), QStringLiteral("Cut Assistant"));
+        QCOMPARE(window.m_workspace->panel(QStringLiteral("assistant"))->windowTitle(), QStringLiteral("Cut Assistant"));
 
         auto *composer = window.findChild<QFrame *>(QStringLiteral("chatComposer"));
         QVERIFY(composer);
@@ -272,6 +282,7 @@ private slots:
     void chatComposerSupportsMultilineWithoutAccidentalSend() {
         MainWindow window{QString(), QString()};
         window.show();
+        showAssistant(window);
         window.m_chatInput->setEnabled(true);
         window.m_chatInput->setFocus();
         window.m_chatInput->setPlainText(QStringLiteral("First edit"));
@@ -289,6 +300,7 @@ private slots:
     void conversationSeparatesActivityAndKeepsStreamInItsMessage() {
         MainWindow window{QString(), QString()};
         window.show();
+        showAssistant(window);
         QVERIFY(window.m_conversation->toPlainText().contains(QStringLiteral("Make your next cut.")));
         const QString emptyState = window.m_conversation->toPlainText();
         window.appendConversationNote(QStringLiteral("Tool"), QStringLiteral("Inspecting timeline"));
@@ -331,6 +343,7 @@ private slots:
         MainWindow window{QString(), QString()};
         window.resize(1080, 700);
         window.show();
+        showAssistant(window);
         QCOMPARE(window.m_chatComposer->property("state").toString(), QStringLiteral("offline"));
         window.setConnection(QStringLiteral("ready"));
         window.activateWindow();
@@ -388,8 +401,9 @@ private slots:
         QVERIFY(viewerPanel && timelinePanel);
         const int viewerBottom = viewerPanel->mapTo(&window, QPoint(0, viewerPanel->height())).y();
         const int timelineTop = timelinePanel->mapTo(&window, QPoint(0, 0)).y();
+        // Only the timeline's title strip sits between them.
         QVERIFY(timelineTop >= viewerBottom - 4);
-        QVERIFY(timelineTop <= viewerBottom + 8);
+        QVERIFY(timelineTop <= viewerBottom + 36);
         QVERIFY(window.m_timelineScroll->height() >= 280);
         const QString screenshot = qEnvironmentVariable("CUT_QT_UI_SCREENSHOT");
         if (!screenshot.isEmpty()) {
@@ -461,7 +475,7 @@ private slots:
         MainWindow window{QString(), QString()};
         QStringList menus;
         for (const QAction *menu : window.menuBar()->actions()) menus.append(menu->text());
-        QCOMPARE(menus, (QStringList{"File", "Edit", "Sequence", "Playback", "View"}));
+        QCOMPARE(menus, (QStringList{"File", "Edit", "Sequence", "Playback", "View", "Window"}));
         QVERIFY(window.findChild<QAction *>(QStringLiteral("keymap.premiere")));
 
         QAction *split = window.m_commands->action(QStringLiteral("clip.split"));
@@ -504,6 +518,43 @@ private slots:
         QVERIFY(window.m_transportPlay->toolTip().startsWith(QStringLiteral("Play (")));
     }
 
+    void workspacesDockPanelsAndRememberLayouts() {
+        QSettings().remove(QStringLiteral("workspace"));
+        {
+            MainWindow window{QString(), QString()};
+            window.show();
+            Workspace *workspace = window.m_workspace;
+            ads::CDockWidget *timeline = workspace->panel(QStringLiteral("timeline"));
+            ads::CDockWidget *assistant = workspace->panel(QStringLiteral("assistant"));
+            QAction *toggle = window.m_commands->action(QStringLiteral("window.timeline"));
+            QVERIFY(toggle->isChecked());
+            QVERIFY(!timeline->isClosed());
+            toggle->trigger();
+            QVERIFY(timeline->isClosed());
+            // Reopening a panel from its own controls keeps the menu in step.
+            timeline->toggleView(true);
+            QVERIFY(toggle->isChecked());
+
+            QCOMPARE(workspace->names(), QStringList{QStringLiteral("Editing")});
+            QVERIFY(workspace->saveAs(QStringLiteral("Review")));
+            QVERIFY(!workspace->saveAs(QStringLiteral("review")));
+            QCOMPARE(workspace->current(), QStringLiteral("Review"));
+            assistant->toggleView(false);
+            workspace->activate(QStringLiteral("Editing"));
+            QVERIFY(!assistant->isClosed());
+            // Each workspace keeps its changes until it is reset.
+            workspace->activate(QStringLiteral("Review"));
+            QVERIFY(assistant->isClosed());
+            QVERIFY(!window.m_commands->action(QStringLiteral("window.assistant"))->isChecked());
+            workspace->resetCurrent();
+            QVERIFY(!assistant->isClosed());
+
+            window.m_commands->action(QStringLiteral("app.preferences"))->trigger();
+            QVERIFY(window.m_preferences->isVisible());
+        }
+        QSettings().remove(QStringLiteral("workspace"));
+    }
+
     void inspectorEditsTheCatalogPropertiesOfTheTrackType() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
@@ -536,47 +587,47 @@ private slots:
             const QJsonObject op = command.value("ops").toArray().first().toObject();
             return op.value("op").toString() == QStringLiteral("set") ? op : QJsonObject{};
         };
-        QVERIFY(window.m_propertyEditors.isEmpty());
+        QVERIFY(window.m_effectControls->m_propertyEditors.isEmpty());
         window.selectClip(QStringLiteral("v"));
-        QCOMPARE(window.m_propertyEditors.size(), 3);
-        auto *opacity = qobject_cast<QDoubleSpinBox *>(window.m_propertyEditors.value("opacity"));
-        auto *x = qobject_cast<QDoubleSpinBox *>(window.m_propertyEditors.value("x"));
-        auto *blend = qobject_cast<QComboBox *>(window.m_propertyEditors.value("blend"));
+        QCOMPARE(window.m_effectControls->m_propertyEditors.size(), 3);
+        auto *opacity = qobject_cast<QDoubleSpinBox *>(window.m_effectControls->m_propertyEditors.value("opacity"));
+        auto *x = qobject_cast<QDoubleSpinBox *>(window.m_effectControls->m_propertyEditors.value("x"));
+        auto *blend = qobject_cast<QComboBox *>(window.m_effectControls->m_propertyEditors.value("blend"));
         QVERIFY(opacity && x && blend);
         QCOMPARE(opacity->value(), 0.5);
         QCOMPARE(opacity->maximum(), 1.0);
         QVERIFY(!x->isEnabled());
         QCOMPARE(x->value(), 0.25);
         QCOMPARE(blend->currentText(), QStringLiteral("normal"));
-        window.propertyEdited("opacity", 0.5);
+        window.m_effectControls->propertyEdited("opacity", 0.5);
         QVERIFY(set().isEmpty());
-        window.propertyEdited("opacity", 0.75);
+        window.m_effectControls->propertyEdited("opacity", 0.75);
         QCOMPARE(set().value("props").toObject().value("opacity").toDouble(), 0.75);
-        window.propertyEdited("opacity", 1.0);
+        window.m_effectControls->propertyEdited("opacity", 1.0);
         QVERIFY(set().value("props").toObject().value("opacity").isNull());
-        window.propertyEdited("blend", "add");
+        window.m_effectControls->propertyEdited("blend", "add");
         QCOMPARE(set().value("props").toObject().value("blend").toString(), QStringLiteral("add"));
         window.selectClip(QStringLiteral("g"));
-        QCOMPARE(window.m_propertyEditors.size(), 5);
-        auto *text = qobject_cast<QLineEdit *>(window.m_propertyEditors.value("text"));
-        auto *color = qobject_cast<QPushButton *>(window.m_propertyEditors.value("color"));
-        QVERIFY(text && color && window.m_propertyEditors.contains("opacity"));
+        QCOMPARE(window.m_effectControls->m_propertyEditors.size(), 5);
+        auto *text = qobject_cast<QLineEdit *>(window.m_effectControls->m_propertyEditors.value("text"));
+        auto *color = qobject_cast<QPushButton *>(window.m_effectControls->m_propertyEditors.value("color"));
+        QVERIFY(text && color && window.m_effectControls->m_propertyEditors.contains("opacity"));
         QCOMPARE(text->text(), QStringLiteral("Day One"));
         QCOMPARE(color->text(), QStringLiteral("#ffffff"));
         QVERIFY(!color->icon().isNull());
         QCOMPARE(modelColor(QStringLiteral("#ff000080")).alpha(), 0x80);
         QCOMPARE(modelColorName(QColor(255, 0, 0, 0x80)), QStringLiteral("#ff000080"));
         QCOMPARE(modelColorName(Qt::white), QStringLiteral("#ffffff"));
-        window.propertyEdited("text", "Day Two");
+        window.m_effectControls->propertyEdited("text", "Day Two");
         QCOMPARE(set().value("props").toObject().value("text").toString(), QStringLiteral("Day Two"));
-        window.propertyEdited("color", "#ffffff");
+        window.m_effectControls->propertyEdited("color", "#ffffff");
         QVERIFY(set().isEmpty());
-        window.propertyEdited("color", "#ff0000");
+        window.m_effectControls->propertyEdited("color", "#ff0000");
         QCOMPARE(set().value("props").toObject().value("color").toString(), QStringLiteral("#ff0000"));
         window.selectClip(QStringLiteral("a"));
-        QCOMPARE(window.m_propertyEditors.keys(), QList<QString>{"gain"});
-        QVERIFY(window.m_propertyEditors.value("gain")->toolTip().contains("dB"));
-        window.propertyEdited("gain", -6.0);
+        QCOMPARE(window.m_effectControls->m_propertyEditors.keys(), QList<QString>{"gain"});
+        QVERIFY(window.m_effectControls->m_propertyEditors.value("gain")->toolTip().contains("dB"));
+        window.m_effectControls->propertyEdited("gain", -6.0);
         QCOMPARE(set().value("props").toObject().value("gain").toDouble(), -6.0);
     }
 

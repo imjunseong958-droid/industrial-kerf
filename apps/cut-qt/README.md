@@ -2,8 +2,9 @@
 
 This is the native Qt6 desktop shell for Cut. It keeps the project state in
 `cutd` through the small C ABI in `bridge.h`; the window does not maintain a
-second editable copy of the timeline. The viewer, timeline, inspector, and agent rail are all
-backed by the bridge event stream.
+second editable copy of the timeline. Its docked panels — Program,
+Timeline, Effect Controls, and Cut Assistant — are all backed by the bridge
+event stream.
 
 Build the Rust bridge first, then configure and build the app from the
 repository root:
@@ -20,8 +21,9 @@ The positional arguments may also be supplied as `CUT_PROJECT_DIR` and
 `--screenshot /tmp/cut.png --quit-after-ms 900`.
 
 Sources live in the `cut` namespace, one class per header/source pair:
-`main_window` (the window and its panels), `timeline_widget`,
-`viewer_widget` (the viewer and the focus-region picker),
+`main_window` (the window, which builds and connects the panels),
+`workspace` (the docked panels and workspaces), `effect_controls_panel`,
+`timeline_widget`, `viewer_widget` (the viewer and the focus-region picker),
 `command_registry` (the editor's side of the command registry), and
 `media_artwork` (background thumbnails and waveforms). `editor_common`
 holds shared constants and helpers, `editor_style.h` the stylesheet, and
@@ -42,14 +44,14 @@ The project directory is created by the runtime when it does not already
 exist. Importing media, timeline edits, undo/redo, proposal approval, preview
 seeking, and export are sent as bounded asynchronous bridge commands. The
 timeline draws the `timeline` view of the model that each snapshot carries,
-and timeline and inspector edits go to `cutd` as typed operations counted in
+and timeline and Effect Controls edits go to `cutd` as typed operations counted in
 frames of the sequence.
 
 The timeline supports click-to-seek, clip selection, drag-to-move, edge
-trimming, split-at-playhead, and Delete. The inspector edits a clip's timing,
+trimming, split-at-playhead, and Delete. Effect Controls edits a clip's timing,
 the catalog properties of its track type, and a generator's parameters, from
 the definitions each snapshot carries; animated properties are read-only
-there. Inspector values commit on focus loss.
+there. Its values commit on focus loss.
 Tracks follow the classic edit-suite order: picture tracks stack upward from
 V1, because a later picture track plays over the ones below it, and sound
 tracks run downward from A1. The ruler and track headers stay pinned while the
@@ -73,16 +75,23 @@ For an agent crop proposal, use Adjust box in the proposal review to replace
 the suggested rectangle before accepting it as one edit.
 The offline preview shows the crop; native playback requires a rendered preview
 for this edit.
-Drag the panel dividers to resize the workspace, and use View to hide either
-panel. The timeline fits the window on its own. All tracks remain vertically
+Panels dock with the Qt Advanced Docking System (LGPL-2.1, fetched at a
+pinned release when configuring and linked as a shared library). Drag a
+panel's tab to dock it elsewhere, tab it with another panel, or float it;
+drag the dividers to resize. Window lists the panels to show or hide and
+the workspaces: Editing is built in, and Save as New Workspace adds your
+own. A workspace keeps the changes made to it, across launches, until
+Reset to Saved Layout (Alt+Shift+0) returns it to its saved layout; Save
+Changes to This Workspace makes the current arrangement that layout. The
+timeline fits the window on its own. All tracks remain vertically
 scrollable when their combined height exceeds the timeline panel.
 Import media from File. Moving the pointer across the timeline
 scrubs the viewer and shows the time beside the pointer. Play and pause are
 Space; with the timeline focused, Home and End jump to the start and end,
 Left and Right step one frame, S splits the selected clip at the playhead,
 and Delete and Shift+Delete delete or ripple-delete it (Cut keymap). The transport under the viewer has the same
-controls between the playhead timecode and the program length. The assistant
-fills a narrow column on the right from top to bottom. An empty timeline starts without tracks. Hover over the
+controls between the playhead timecode and the program length. The Cut
+Assistant panel sits behind Effect Controls in the Editing workspace. An empty timeline starts without tracks. Hover over the
 empty row in the left track header to reveal a plus; click it to add a video
 or audio track. In Chat, Return sends
 the message and Shift+Return inserts a new line.
@@ -103,7 +112,8 @@ before/after field values in a scrollable view. Stale proposals and proposals
 whose field diff was truncated cannot be accepted; ask the agent to restage
 or split them into smaller changes.
 
-The Agent panel includes a Chat view and an Agent settings view. Settings
+Agent settings are in Settings (Edit → Settings…, ⌘, ; on macOS in the
+application menu), also reachable from the Cut Assistant panel. Settings
 holds two protocol slots: Anthropic Messages and OpenAI-compatible. Each slot
 has an API key, Base URL, and model. The OpenAI-compatible slot also has Chat
 Completions vs Responses. Gemini and other compatible hosts use that slot and
