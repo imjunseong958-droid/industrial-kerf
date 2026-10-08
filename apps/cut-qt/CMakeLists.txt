@@ -29,6 +29,8 @@ if(NOT EXISTS "${CUT_BRIDGE_LIBRARY}")
 endif()
 
 set(CUT_QT_SOURCES
+    ask_prompt.cpp
+    ask_prompt.h
     bridge.h
     command_registry.cpp
     command_registry.h

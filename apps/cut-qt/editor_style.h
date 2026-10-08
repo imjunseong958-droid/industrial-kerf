@@ -441,6 +441,15 @@ QListWidget#projectBin { background: #161616; border: 0; }
 QListWidget#projectBin::item { color: #cfcfcf; border-radius: 3px; padding: 4px; }
 QListWidget#projectBin::item:selected { background: #2f2f2f; color: #f0f0f0; }
 QWidget#sourceMonitor { background: #1a1a1a; }
+QFrame#askPrompt { background: #232323; border: 1px solid #f0b429; border-radius: 8px; }
+QLabel#askTitle { color: #f0b429; font-size: 12px; font-weight: 600; }
+QTextEdit#askInput { background: #161616; border: 1px solid #3a3a3a; border-radius: 5px; padding: 4px; color: #ededed; }
+QFrame#aiBar { background: #2a2414; border: 0; border-bottom: 1px solid #5a4a1c; }
+QLabel#aiBarText { color: #f3d58a; font-size: 11px; }
+QFrame#aiBar QToolButton { color: #e6e6e6; padding: 2px 10px; border: 1px solid #5a4a1c; border-radius: 4px; }
+QFrame#aiBar QToolButton:hover { background: #3a3220; }
+QFrame#aiBar QToolButton#aiAccept { background: #f0b429; color: #141414; border-color: #f0b429; font-weight: 600; }
+QFrame#aiBar QToolButton:disabled { color: #7a7a7a; background: transparent; border-color: #3a3a3a; }
 )QSS");
 }
 

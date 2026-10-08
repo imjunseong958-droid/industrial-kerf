@@ -35,6 +35,7 @@
 
 namespace cut {
 
+class AskPrompt;
 class CommandRegistry;
 class EffectControlsPanel;
 class ProjectPanel;
@@ -99,6 +100,12 @@ private slots:
     void focusRegion();
     void deleteSelected();
     void sendChat();
+    // An agent request, anchored to `focus` when it is about a selection.
+    bool sendAgent(const QString &text, const QJsonObject &focus, const QString &focusLabel);
+    // Ask Cut about the selected clip, or the sequence at the playhead.
+    void askAi();
+    void askSubmitted(const QString &text, const QString &scope);
+    void updateAiBar();
     void updateChatControls();
     QString activeProviderId() const;
     QJsonObject agentSettingsPayload() const;
@@ -188,6 +195,11 @@ private:
     ProjectPanel *m_projectPanel = nullptr;
     SourceMonitorPanel *m_sourceMonitor = nullptr;
     QToolBar *m_toolPalette = nullptr;
+    AskPrompt *m_askPrompt = nullptr;
+    QFrame *m_aiBar = nullptr;
+    QLabel *m_aiBarText = nullptr;
+    QString m_agentFocusLabel;
+    bool m_proposalBlocked = false;
     QDialog *m_preferences = nullptr;
     QLabel *m_statusConnection = nullptr;
     QLabel *m_statusRevision = nullptr;

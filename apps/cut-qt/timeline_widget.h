@@ -41,6 +41,13 @@ public:
     bool snapping() const { return m_snapping; }
     // The track header toggles: picture output or sound mute, and lock.
     QRect headerToggleRect(int row, int index) const;
+    // A clip's rectangle in widget coordinates; empty when it is not shown.
+    QRect clipBounds(const QString &id) const;
+    // The timeline a pending proposal would make, drawn over this one:
+    // new and changed clips as outlines where they would land, removed
+    // clips struck through. An empty object clears it.
+    void setProposal(const QJsonObject &timeline);
+    bool hasProposal() const { return !m_proposal.isEmpty(); }
 
     // Every track shares the visible panel height, the way Pro Tools fits
     // tracks to the window. The empty add-track row stays reachable below.
@@ -65,6 +72,11 @@ signals:
     void trimRequested(const QString &clipId, bool leading, double timelineFrame);
     void razorRequested(const QString &clipId, double timelineFrame);
     void trackToggleRequested(const QString &trackId, const QString &field, bool value);
+    // Double-click: open the clip's media in the source monitor.
+    void clipActivated(const QString &clipId);
+    // Option-double-click: ask Cut about the clip.
+    void askRequested(const QString &clipId);
+    void clipMenuRequested(const QString &clipId, const QPoint &globalPosition);
     void addLaneRequested();
 
 protected:
@@ -74,6 +86,7 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
     void contextMenuEvent(QContextMenuEvent *event) override;
     void leaveEvent(QEvent *) override;
 
@@ -122,6 +135,7 @@ private:
     void paintHeaders(QPainter &p, const QRect &dirty);
     void paintTrackHeader(QPainter &p, int row, const QJsonObject &track, int left);
     void paintClip(QPainter &p, const QRect &visible, int row, const QJsonObject &clip, const QColor &accent, bool audio);
+    void paintProposal(QPainter &p, int row, const QJsonObject &track);
     void paintRuler(QPainter &p, const QRect &dirty, int top);
 
     // Painted every frame on top of the lane cache, in stacking order: lane
@@ -167,6 +181,7 @@ private:
 
     MediaArtwork *m_artwork = nullptr;
     QJsonObject m_project;
+    QJsonObject m_proposal;
     QVector<TrackRow> m_rows;
     // Track heights are a view preference keyed by track id, so they survive
     // snapshots and reordering without touching the project.

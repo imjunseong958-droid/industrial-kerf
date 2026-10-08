@@ -16,10 +16,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 mod context;
+mod focus;
 mod provider;
 mod summary;
 
 pub use context::ContextBudget;
+pub use focus::{focused_request, Focus, FocusScope};
 pub use provider::{
     to_openai_messages, to_openai_responses_input, to_openai_responses_tool, to_openai_tool,
     AnthropicProvider, JsonHttpClient, LlmProvider, NormalizedTool, OpenAiProvider,

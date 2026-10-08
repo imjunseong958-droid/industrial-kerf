@@ -199,10 +199,15 @@ with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as tempo
             time.sleep(.005)
         else:
             raise AssertionError('Latest seek frame did not arrive')
-        send({'type': 'agent', 'text': 'Rename this project and show me the proposal.'})
+        send({'type': 'agent', 'text': 'Rename this project and show me the proposal.',
+              'focus': {'scope': 'clip', 'clip': clip['id'], 'fromFrame': 0, 'toFrame': 30}})
         proposal_state = state()
         proposal = proposal_state['pendingProposal']
         assert proposal, observed[-10:]
+        # The request reached the model with its focus, and the state carries
+        # the timeline the proposal would make.
+        assert f"Focus: clip {clip['id']} (0f–30f)" in json.dumps(requests[0]['messages'], ensure_ascii=False)
+        assert proposal_state.get('proposalTimeline', {}).get('tracks'), proposal_state.keys()
         assert proposal_state['revision'] == external_state['revision']
         proposal_id = proposal.get('id', proposal.get('proposalId'))
         assert proposal_id, proposal
@@ -237,7 +242,7 @@ with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as tempo
         placed = next(track for track in inserted['timeline']['tracks'] if track['id'] == video['id'])['clips']
         assert len(placed) == before + 1 and placed[0]['startFrame'] == 0 and placed[0]['durationFrames'] == 15, placed
         assert abs(inserted['duration'] - current['duration'] - .5) < .05
-        print(json.dumps({'result': 'passed', 'checks': ['source insert', 'connection lifecycle/reconnect', 'import', 'trim', 'undo', 'redo', 'external CLI edit sync', '200 seeks/latest frame', 'local provider/tool activity', 'proposal/accept', 'conversation history', 'real export', 'effect rendered fallback'], 'max_enqueue_ms': round(max(timings), 3), 'frame': [frame.width, frame.height]}, indent=2))
+        print(json.dumps({'result': 'passed', 'checks': ['focused agent request', 'proposal timeline', 'source insert', 'connection lifecycle/reconnect', 'import', 'trim', 'undo', 'redo', 'external CLI edit sync', '200 seeks/latest frame', 'local provider/tool activity', 'proposal/accept', 'conversation history', 'real export', 'effect rendered fallback'], 'max_enqueue_ms': round(max(timings), 3), 'frame': [frame.width, frame.height]}, indent=2))
     finally:
         lib.cut_bridge_free(bridge)
         if daemon.poll() is None:
