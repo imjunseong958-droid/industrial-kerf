@@ -326,8 +326,20 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent *event) {
     update();
 }
 
+void TimelineWidget::mouseDoubleClickEvent(QMouseEvent *event) {
+    const ClipHit hit = clipAt(event->position().toPoint());
+    if (event->button() != Qt::LeftButton || hit.id.isEmpty()) return;
+    if (event->modifiers() & Qt::AltModifier) emit askRequested(hit.id);
+    else emit clipActivated(hit.id);
+}
+
 void TimelineWidget::contextMenuEvent(QContextMenuEvent *event) {
     const QPoint pos = event->pos();
+    if (const ClipHit hit = clipAt(pos); !hit.id.isEmpty()) {
+        emit clipSelected(hit.id);
+        emit clipMenuRequested(hit.id, event->globalPos());
+        return;
+    }
     if (!inHeader(pos) || inRuler(pos)) return;
     const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
     const int row = rowAt(pos.y());
@@ -473,6 +485,7 @@ void TimelineWidget::paintLane(QPainter &p, const QRect &visible, int row, const
     if (!track.value(QStringLiteral("enabled")).toBool(true)) p.setOpacity(0.4);
     for (const QJsonValue &value : track.value(QStringLiteral("clips")).toArray())
         paintClip(p, visible, row, value.toObject(), accent, layout.audio);
+    if (!m_proposal.isEmpty()) paintProposal(p, row, track);
     p.restore();
 
     p.fillRect(lane.left(), layout.bottom() - 1, lane.width(), 1, QColor("#0c0c0c"));
@@ -597,6 +610,68 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     p.setPen(QColor("#7c7c7c"));
     p.drawText(meta, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, count);
 
+}
+
+QRect TimelineWidget::clipBounds(const QString &id) const {
+    const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
+    for (int row = 0; row < m_rows.size(); ++row) {
+        for (const QJsonValue &value : tracks.at(m_rows.at(row).track).toObject().value(QStringLiteral("clips")).toArray()) {
+            const QJsonObject clip = value.toObject();
+            if (clip.value(QStringLiteral("id")).toString() == id)
+                return clipRect(row, clip.value(QStringLiteral("timelineStart")).toDouble(),
+                                clip.value(QStringLiteral("duration")).toDouble()).toAlignedRect();
+        }
+    }
+    return {};
+}
+
+void TimelineWidget::setProposal(const QJsonObject &timeline) {
+    if (timeline == m_proposal) return;
+    m_proposal = timeline;
+    invalidateLanes();
+    update();
+}
+
+void TimelineWidget::paintProposal(QPainter &p, int row, const QJsonObject &track) {
+    const QString id = track.value(QStringLiteral("id")).toString();
+    QJsonArray proposed;
+    for (const QJsonValue &value : m_proposal.value(QStringLiteral("tracks")).toArray())
+        if (value.toObject().value(QStringLiteral("id")).toString() == id) proposed = value.toObject().value(QStringLiteral("clips")).toArray();
+    // What a clip is, apart from how it is labelled.
+    const auto essence = [](QJsonObject clip) {
+        clip.remove(QStringLiteral("name"));
+        return clip;
+    };
+    QHash<QString, QJsonObject> current;
+    for (const QJsonValue &value : track.value(QStringLiteral("clips")).toArray())
+        current.insert(value.toObject().value(QStringLiteral("id")).toString(), essence(value.toObject()));
+    const QColor accent("#f0b429");
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, false);
+    for (const QJsonValue &value : proposed) {
+        const QJsonObject clip = value.toObject();
+        const QString clipId = clip.value(QStringLiteral("id")).toString();
+        if (current.value(clipId) == essence(clip)) {
+            current.remove(clipId);
+            continue;
+        }
+        current.remove(clipId);
+        const QRectF rect = clipRect(row, clip.value(QStringLiteral("timelineStart")).toDouble(),
+                                     clip.value(QStringLiteral("duration")).toDouble()).adjusted(1, 1, -1, -1);
+        p.fillRect(rect, QColor(240, 180, 41, 46));
+        p.setPen(QPen(accent, 1.5, Qt::DashLine));
+        p.setBrush(Qt::NoBrush);
+        p.drawRect(rect);
+    }
+    // Clips the proposal leaves out.
+    for (auto it = current.cbegin(); it != current.cend(); ++it) {
+        const QRectF rect = clipRect(row, it.value().value(QStringLiteral("timelineStart")).toDouble(),
+                                     it.value().value(QStringLiteral("duration")).toDouble());
+        p.fillRect(rect, QBrush(QColor(232, 96, 96, 150), Qt::BDiagPattern));
+        p.setPen(QPen(QColor("#e86060"), 1.5));
+        p.drawRect(rect.adjusted(1, 1, -1, -1));
+    }
+    p.restore();
 }
 
 void TimelineWidget::setTool(TimelineTool tool) {

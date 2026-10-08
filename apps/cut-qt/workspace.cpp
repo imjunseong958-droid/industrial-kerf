@@ -12,7 +12,7 @@ namespace cut {
 namespace {
 
 // Bump when the panels change so stale layouts are not restored.
-constexpr int kLayoutVersion = 2;
+constexpr int kLayoutVersion = 3;
 
 QString layoutKey(const QString &group, const QString &name) {
     return QStringLiteral("workspace/%1/%2").arg(group, name);
@@ -44,9 +44,8 @@ ads::CDockWidget *Workspace::addPanel(const QString &id, const QString &title, Q
 }
 
 void Workspace::arrangeEditing() {
-    // The edit-suite arrangement: Source (with Effect Controls and the
-    // Assistant behind it) beside the Program monitor, over the Project bin
-    // and the Timeline.
+    // The edit-suite arrangement: Source (with Effect Controls behind it)
+    // beside the Program monitor, over the Project bin and the Timeline.
     const auto panel = [this](const char *id) { return m_panels.value(QString::fromLatin1(id)); };
     auto *source = m_manager->addDockWidget(ads::LeftDockWidgetArea, panel("source"));
     m_manager->addDockWidget(ads::CenterDockWidgetArea, panel("effectControls"), source);
@@ -57,6 +56,9 @@ void Workspace::arrangeEditing() {
     m_manager->addDockWidget(ads::RightDockWidgetArea, panel("timeline"), project);
     m_manager->setSplitterSizes(source, {640, 860});
     m_manager->setSplitterSizes(project, {320, 1180});
+    // Cut is asked from the timeline (Ask Cut…); its conversation is a panel
+    // to open from Window or the timeline's AI bar.
+    panel("assistant")->toggleView(false);
 }
 
 void Workspace::start() {

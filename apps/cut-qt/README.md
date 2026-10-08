@@ -108,12 +108,31 @@ Space; with the timeline focused, Home and End jump to the start and end,
 Left and Right step one frame, S splits the selected clip at the playhead,
 and Delete and Shift+Delete delete or ripple-delete it (Cut keymap). The transport under the viewer has the same
 controls between the playhead timecode and the program length. The Editing
-workspace puts the Source monitor (with Effect Controls and the Cut
-Assistant behind it) beside the Program monitor, over the Project bin and
-the Timeline. An empty timeline starts without tracks. Hover over the
+workspace puts the Source monitor (with Effect Controls behind it) beside
+the Program monitor, over the Project bin and the Timeline. An empty
+timeline starts without tracks. Hover over the
 empty row in the left track header to reveal a plus; click it to add a video
-or audio track. In Chat, Return sends
-the message and Shift+Return inserts a new line.
+or audio track. Double-click a clip to open its media in the Source monitor
+at the clip's in point.
+
+## Asking Cut
+
+Ask Cut (Clip → Ask Cut…, ⌘J), Option-double-click a clip, or right-click
+it and choose Ask Cut… A prompt opens over the selected clip — or over the
+timeline at the playhead when nothing is selected — naming what it is about.
+Return sends; Shift+Return adds a line. With a clip, choose This clip (Cut
+changes only that clip, and the clips around it follow by ripple) or Whole
+sequence (centred on the clip). The request reaches the agent with that
+focus, in frames of the sequence.
+
+While Cut works, a bar over the timeline says what it is working on and
+offers Stop. Its proposal then shows on the timeline before anything
+changes: clips it adds or changes are outlined where they would land, and
+clips it removes are struck through. The bar offers Accept (⌘Return),
+Reject (Escape with the timeline focused), and Details, which opens the
+Cut Assistant panel with the conversation and the proposed script. The Cut
+Assistant panel starts closed; open it from Window to keep chatting there,
+where Return sends and Shift+Return inserts a new line.
 
 Use the project-format picker in the toolbar to switch between standard
 1920×1080 (16:9) and vertical 1080×1920 (9:16). The viewer fits either canvas

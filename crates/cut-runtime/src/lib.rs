@@ -554,3 +554,15 @@ fn unique_id() -> String {
 pub fn parse_document(text: &str) -> Result<Project, RuntimeError> {
     kernel::parse(text)
 }
+
+/// The timeline view of `document` as a proposal's `script` would leave it,
+/// in the same shape as a snapshot's `timeline`, so an editor can show a
+/// proposal in place before it is accepted.
+pub fn proposal_timeline(document: &str, script: &str) -> Result<Value, RuntimeError> {
+    let project = kernel::parse(document)?;
+    let edited = kernel::Edit::Script {
+        script: script.to_string(),
+    }
+    .run(&project)?;
+    Ok(timeline::timeline_json(&edited.project))
+}

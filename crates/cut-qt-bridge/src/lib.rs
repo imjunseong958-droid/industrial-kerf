@@ -71,6 +71,9 @@ enum Command {
     },
     Agent {
         text: String,
+        /// The clip, range, or playhead the request is about.
+        #[serde(default)]
+        focus: Option<cut_agent::Focus>,
         #[serde(flatten)]
         settings: AgentSettings,
     },
@@ -201,8 +204,22 @@ fn publish_snapshot(
             Err(err) => error(tx, err.message),
         }
     }
-    *previous = Some(snapshot);
-    emit(tx, json!({"type":"state", "snapshot":state}));
+    *previous = Some(snapshot.clone());
+    emit(
+        tx,
+        json!({"type":"state", "snapshot":with_proposal_timeline(snapshot, &state)}),
+    );
+}
+
+/// A pending proposal's timeline beside the current one, so the editor can
+/// show the proposal on the timeline before it is accepted.
+fn with_proposal_timeline(mut snapshot: Value, state: &StateSnapshot) -> Value {
+    if let Some(cut_runtime::PendingProposal::Pending { script, .. }) = &state.pending_proposal {
+        if let Ok(timeline) = cut_runtime::proposal_timeline(&state.document, script) {
+            snapshot["proposalTimeline"] = timeline;
+        }
+    }
+    snapshot
 }
 
 fn connection_event(tx: &SyncSender<Value>, status: &str, message: Option<&str>) {
@@ -944,10 +961,18 @@ pub unsafe extern "C" fn cut_bridge_send(bridge: *mut c_void, message: *const c_
                 false
             }
         }
-        Command::Agent { text, settings } => {
+        Command::Agent {
+            text,
+            focus,
+            settings,
+        } => {
             if text.trim().is_empty() || bridge.shared.agent_busy.swap(true, Ordering::SeqCst) {
                 return false;
             }
+            let text = match &focus {
+                Some(focus) => cut_agent::focused_request(&text, focus),
+                None => text,
+            };
             if bridge
                 .prompts
                 .try_send(AgentRequest { text, settings })
@@ -1228,7 +1253,7 @@ mod tests {
     #[test]
     fn command_requests_are_bridge_commands() {
         let context = json!({
-            "connected": true, "revision": 4, "canUndo": true, "playheadFrame": 30,
+            "connected": true, "revision": 4, "canUndo": true, "playheadFrame": 30, "agentBusy": true,
             "selection": {"clip": "c1", "track": "video", "startFrame": 0, "durationFrames": 48},
         });
         for (command, params) in [
@@ -1243,6 +1268,8 @@ mod tests {
                 "clip.trim",
                 json!({"clip": "c1", "edge": "in", "frames": 2}),
             ),
+            ("proposal.reject", json!({"proposal": "p1"})),
+            ("ai.stop", json!(null)),
         ] {
             let result = super::run_command(
                 &json!({"command": command, "params": params, "context": context}),
@@ -1256,6 +1283,40 @@ mod tests {
         let refused =
             super::run_command(&json!({"command": "clip.delete", "context": {"connected": true}}));
         assert_eq!(refused["error"], "Select a clip first");
+    }
+
+    #[test]
+    fn agent_requests_carry_their_focus() {
+        let command: Command = serde_json::from_value(json!({
+            "type": "agent", "text": "Tighten this",
+            "focus": {"scope": "clip", "clip": "c3", "fromFrame": 24, "toFrame": 72},
+        }))
+        .expect("focused agent command");
+        let Command::Agent { focus, .. } = command else {
+            panic!("expected agent command");
+        };
+        let focus = focus.expect("focus");
+        assert!(cut_agent::focused_request("Tighten this", &focus)
+            .starts_with("Focus: clip c3 (24f–72f)."));
+    }
+
+    #[test]
+    fn pending_proposals_carry_the_timeline_they_would_make() {
+        let state = snapshot(
+            DOCUMENT,
+            Some(PendingProposal::Pending {
+                proposal_id: "p1".into(),
+                base_revision: 0,
+                script: "track add T9 video\n".into(),
+                document_diff: String::new(),
+                freshness: ProposalFreshness::Current,
+            }),
+        );
+        let value = super::with_proposal_timeline(serde_json::to_value(&state).unwrap(), &state);
+        let tracks = value["proposalTimeline"]["tracks"]
+            .as_array()
+            .expect("proposal tracks");
+        assert!(tracks.iter().any(|track| track["id"] == "T9"), "{tracks:?}");
     }
 
     #[test]
@@ -1290,7 +1351,7 @@ mod tests {
             "mcpConfigVersion": 7
         }))
         .expect("agent command should deserialize");
-        let Command::Agent { text, settings } = command else {
+        let Command::Agent { text, settings, .. } = command else {
             panic!("expected agent command");
         };
         assert_eq!(text, "Trim the opening");

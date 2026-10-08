@@ -1,6 +1,6 @@
 # ADR 0007: An editor first, with AI on the selection
 
-Status: accepted (phases 1–3 implemented)
+Status: accepted (phases 1–4 implemented)
 Date: 2026-10-09
 
 ## Context
@@ -108,3 +108,24 @@ New registry commands carry the standard interaction:
 Sync lock is not in the kernel yet; ripple edits already act on every
 unlocked track. Drag and drop from the bin to the timeline and source
 playback (J, K, L) are left for later.
+
+## Phase 4
+
+`ai.ask` (⌘J, Option-double-click, or a clip's context menu) opens a
+prompt over the selected clip or the playhead. Its request carries a focus
+— the scope (`clip`, `range`, or `sequence`), the clip, and its span in
+sequence frames — and `cut-agent` states that focus ahead of the person's
+words (`focused_request`), so every adapter sends the same anchored request.
+The clips around a focused clip move by the kernel's ripple rules, not by
+the model.
+
+For a pending proposal the bridge applies its script to the current
+document (`cut_runtime::proposal_timeline`) and adds the resulting timeline
+to the state event. The timeline draws it over the current one — outlines
+for added and changed clips, strikes for removed ones — and a bar above the
+timeline carries the agent's progress and the review: `proposal.accept`
+(⌘Return), `proposal.reject` (Escape), and `ai.stop` are registry commands
+that resolve to the bridge's accept, reject, and abort. The Cut Assistant
+panel stays as the conversation history and starts closed. Plain
+double-click keeps its edit-suite meaning: open the clip in the source
+monitor.

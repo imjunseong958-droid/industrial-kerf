@@ -1,4 +1,5 @@
 #include "main_window.h"
+#include "ask_prompt.h"
 #include "bridge.h"
 #include "command_registry.h"
 #include "effect_controls_panel.h"
@@ -719,25 +720,90 @@ void MainWindow::deleteSelected() {
 
 void MainWindow::sendChat() {
     const QString text = m_chatInput->toPlainText().trimmed();
-    if (text.isEmpty()) return;
-    const QJsonObject settings = agentSettingsPayload();
-    if (!sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("agent")},
-                                {QStringLiteral("text"), text},
-                                {QStringLiteral("provider"), settings.value(QStringLiteral("provider"))},
-                                {QStringLiteral("apiMode"), settings.value(QStringLiteral("apiMode"))},
-                                {QStringLiteral("apiKey"), settings.value(QStringLiteral("apiKey"))},
-                                {QStringLiteral("baseUrl"), settings.value(QStringLiteral("baseUrl"))},
-                                {QStringLiteral("model"), settings.value(QStringLiteral("model"))}})) return;
+    if (text.isEmpty() || !sendAgent(text, QJsonObject{}, QString())) return;
     m_chatInput->clear();
+}
+
+bool MainWindow::sendAgent(const QString &text, const QJsonObject &focus, const QString &focusLabel) {
+    const QJsonObject settings = agentSettingsPayload();
+    QJsonObject request{{QStringLiteral("type"), QStringLiteral("agent")},
+                        {QStringLiteral("text"), text},
+                        {QStringLiteral("provider"), settings.value(QStringLiteral("provider"))},
+                        {QStringLiteral("apiMode"), settings.value(QStringLiteral("apiMode"))},
+                        {QStringLiteral("apiKey"), settings.value(QStringLiteral("apiKey"))},
+                        {QStringLiteral("baseUrl"), settings.value(QStringLiteral("baseUrl"))},
+                        {QStringLiteral("model"), settings.value(QStringLiteral("model"))}};
+    if (!focus.isEmpty()) request.insert(QStringLiteral("focus"), focus);
+    // The AI bar names what Cut works on once the bridge reports it busy.
+    m_agentFocusLabel = focusLabel;
+    if (!sendSimple(request)) return false;
     m_agentBusy = true;
     m_agentText.clear();
     m_agentStatus->setText(QStringLiteral("WORKING"));
     m_chatInput->setEnabled(false);
     m_abortButton->setEnabled(true);
     updateChatControls();
+    if (!focusLabel.isEmpty()) appendConversationNote(QStringLiteral("Focus"), focusLabel);
     appendConversation(QStringLiteral("You"), text);
     appendConversationNote(QStringLiteral("Progress"), QStringLiteral("Request sent"));
     addActivity(QStringLiteral("agent"), QStringLiteral("Request sent"));
+    updateAiBar();
+    updateCommandStates();
+    return true;
+}
+
+void MainWindow::askAi() {
+    // Anchor to the selected clip, or to the timeline at the playhead.
+    const QJsonObject clip = selectedClipObject();
+    const QRect bounds = clip.isEmpty() ? QRect() : m_timeline->clipBounds(m_selectedClip);
+    const QRect visible = m_timelineScroll->viewport()->rect();
+    QPoint anchor = m_timelineScroll->viewport()->mapToGlobal(QPoint(visible.center().x(), 48));
+    if (!bounds.isEmpty()) {
+        const QPoint top = m_timeline->mapTo(m_timelineScroll->viewport(), bounds.topLeft() + QPoint(bounds.width() / 2, 0));
+        if (visible.contains(QPoint(std::clamp(top.x(), 0, visible.width() - 1), std::clamp(top.y(), 0, visible.height() - 1))))
+            anchor = m_timelineScroll->viewport()->mapToGlobal(QPoint(std::clamp(top.x(), 24, visible.width() - 24), std::max(top.y(), 24)));
+    }
+    if (clip.isEmpty()) {
+        m_askPrompt->open(anchor, QStringLiteral("Sequence at %1").arg(timelineTimecode(m_playhead, m_fps)), false);
+        return;
+    }
+    const double start = clip.value(QStringLiteral("timelineStart")).toDouble();
+    const double end = start + clip.value(QStringLiteral("duration")).toDouble();
+    m_askPrompt->open(anchor, QStringLiteral("%1  ·  %2–%3").arg(clipName(clip), timelineTimecode(start, m_fps), timelineTimecode(end, m_fps)), true);
+}
+
+void MainWindow::askSubmitted(const QString &text, const QString &scope) {
+    const QJsonObject clip = selectedClipObject();
+    QJsonObject focus{{QStringLiteral("scope"), scope}};
+    QString label;
+    if (!clip.isEmpty()) {
+        const qint64 start = clipFrames(clip, QStringLiteral("startFrame"));
+        focus.insert(QStringLiteral("clip"), m_selectedClip);
+        focus.insert(QStringLiteral("fromFrame"), start);
+        focus.insert(QStringLiteral("toFrame"), start + clipFrames(clip, QStringLiteral("durationFrames")));
+        label = scope == QStringLiteral("clip") ? clipName(clip) : QStringLiteral("Sequence around %1").arg(clipName(clip));
+    } else {
+        focus.insert(QStringLiteral("fromFrame"), frameAt(m_playhead));
+        focus.insert(QStringLiteral("toFrame"), frameAt(m_playhead));
+        label = QStringLiteral("Sequence at %1").arg(timelineTimecode(m_playhead, m_fps));
+    }
+    sendAgent(text, focus, label);
+}
+
+void MainWindow::updateAiBar() {
+    if (!m_aiBar) return;
+    const bool pending = !m_proposalId.isEmpty();
+    m_aiBar->setVisible(m_connected && (m_agentBusy || pending));
+    if (m_agentBusy) {
+        m_aiBarText->setText(m_agentFocusLabel.isEmpty() ? QStringLiteral("Cut is working…")
+                                                         : QStringLiteral("Cut is working on %1…").arg(m_agentFocusLabel));
+    } else if (pending) {
+        m_aiBarText->setText(QStringLiteral("Proposal  ·  %1").arg(m_proposalSummary->text()));
+    }
+    for (QToolButton *button : m_aiBar->findChildren<QToolButton *>()) {
+        const QString id = button->defaultAction() ? button->defaultAction()->objectName() : QString();
+        button->setVisible(id == QStringLiteral("ai.stop") ? m_agentBusy : id.startsWith(QStringLiteral("proposal.")) ? pending && !m_agentBusy : true);
+    }
 }
 
 void MainWindow::updateChatControls() {
@@ -877,13 +943,11 @@ void MainWindow::saveAgentSettings() {
 }
 
 void MainWindow::acceptProposal() {
-    if (m_proposalId.isEmpty()) return;
-    sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("accept")}, {QStringLiteral("proposalId"), m_proposalId}, {QStringLiteral("revision"), revisionValue()}});
+    execute(QStringLiteral("proposal.accept"));
 }
 
 void MainWindow::rejectProposal() {
-    if (m_proposalId.isEmpty()) return;
-    sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("reject")}, {QStringLiteral("proposalId"), m_proposalId}, {QStringLiteral("revision"), revisionValue()}});
+    execute(QStringLiteral("proposal.reject"));
 }
 
 bool MainWindow::eventFilter(QObject *object, QEvent *event) {
@@ -986,7 +1050,20 @@ void MainWindow::buildUi() {
     m_toolPalette->setToolButtonStyle(Qt::ToolButtonTextOnly);
     timelineRow->addWidget(m_toolPalette);
     timelineRow->addWidget(timelineFrame, 1);
+    // What Cut is doing, and the proposal to review, where the edit happens.
+    m_aiBar = new QFrame;
+    m_aiBar->setObjectName(QStringLiteral("aiBar"));
+    auto *aiLayout = new QHBoxLayout(m_aiBar);
+    aiLayout->setContentsMargins(10, 3, 8, 3);
+    aiLayout->setSpacing(6);
+    m_aiBarText = new QLabel;
+    m_aiBarText->setObjectName(QStringLiteral("aiBarText"));
+    aiLayout->addWidget(m_aiBarText, 1);
+    m_aiBar->hide();
+    timelinePanelLayout->addWidget(m_aiBar);
     timelinePanelLayout->addLayout(timelineRow, 1);
+    m_askPrompt = new AskPrompt(this);
+    connect(m_askPrompt, &AskPrompt::submitted, this, &MainWindow::askSubmitted);
     timelinePanel->setMinimumHeight(220);
 
     m_projectPanel = new ProjectPanel(m_artwork);
@@ -1104,7 +1181,7 @@ void MainWindow::buildUi() {
     m_abortButton = abortButton;
     abortButton->setEnabled(false);
     connect(abortButton, &QToolButton::clicked, this, [this] {
-        if (!sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("abort")}})) return;
+        if (!execute(QStringLiteral("ai.stop"))) return;
         m_abortButton->setEnabled(false);
         m_agentStatus->setText(QStringLiteral("STOPPING"));
         appendConversationNote(QStringLiteral("Progress"), QStringLiteral("Stopping request…"));
@@ -1400,6 +1477,27 @@ void MainWindow::buildUi() {
     connect(m_timeline, &TimelineWidget::clipSelected, this, &MainWindow::selectClip);
     connect(m_timeline, &TimelineWidget::moveRequested, this, &MainWindow::moveClip);
     connect(m_timeline, &TimelineWidget::trimRequested, this, &MainWindow::trimClip);
+    connect(m_timeline, &TimelineWidget::clipActivated, this, [this](const QString &id) {
+        // Double-click opens the clip's media in the source monitor at its in point.
+        const QJsonObject clip = clipObject(id);
+        const QString media = clip.value(QStringLiteral("sourceId")).toString();
+        if (media.isEmpty()) return;
+        openSource(media);
+        m_sourceMonitor->seek(clip.value(QStringLiteral("in")).toDouble());
+    });
+    connect(m_timeline, &TimelineWidget::askRequested, this, [this](const QString &id) {
+        selectClip(id);
+        triggerCommand(QStringLiteral("ai.ask"));
+    });
+    connect(m_timeline, &TimelineWidget::clipMenuRequested, this, [this](const QString &, const QPoint &at) {
+        QMenu menu(this);
+        for (const QString &id : {QStringLiteral("ai.ask"), QString(), QStringLiteral("clip.split"), QStringLiteral("clip.delete"),
+                                  QStringLiteral("clip.rippleDelete"), QString(), QStringLiteral("clip.focusRegion")}) {
+            if (id.isEmpty()) menu.addSeparator();
+            else menu.addAction(m_commands->action(id));
+        }
+        menu.exec(at);
+    });
     connect(m_timeline, &TimelineWidget::razorRequested, this, [this](const QString &id, double frame) {
         execute(QStringLiteral("clip.split"), QJsonObject{{QStringLiteral("clip"), id}, {QStringLiteral("at"), std::llround(frame)}});
     });
@@ -1468,6 +1566,7 @@ void MainWindow::setupActions() {
                 statusBar()->showMessage(QStringLiteral("A workspace called %1 already exists").arg(name.trimmed()), 4000);
         }},
         {QStringLiteral("window.resetWorkspace"), [this] { m_workspace->resetCurrent(); }},
+        {QStringLiteral("ai.ask"), [this] { askAi(); }},
         {QStringLiteral("source.markIn"), [this] { m_sourceMonitor->markIn(); }},
         {QStringLiteral("source.markOut"), [this] { m_sourceMonitor->markOut(); }},
         {QStringLiteral("source.clearMarks"), [this] { m_sourceMonitor->clearMarks(); }},
@@ -1518,6 +1617,25 @@ void MainWindow::setupActions() {
                                    std::pair{QStringLiteral("source.insert"), QStringLiteral("Insert")},
                                    std::pair{QStringLiteral("source.overwrite"), QStringLiteral("Overwrite")}})
         m_commands->action(id)->setIconText(text);
+    m_commands->action(QStringLiteral("proposal.accept"))->setIconText(QStringLiteral("Accept"));
+    m_commands->action(QStringLiteral("proposal.reject"))->setIconText(QStringLiteral("Reject"));
+    m_commands->action(QStringLiteral("ai.stop"))->setIconText(QStringLiteral("Stop"));
+    for (const QString &id : {QStringLiteral("proposal.accept"), QStringLiteral("proposal.reject"), QStringLiteral("ai.stop")}) {
+        auto *button = new QToolButton;
+        button->setObjectName(id == QStringLiteral("proposal.accept") ? QStringLiteral("aiAccept") : QStringLiteral("aiButton"));
+        button->setDefaultAction(m_commands->action(id));
+        m_aiBar->layout()->addWidget(button);
+    }
+    auto *details = new QToolButton;
+    details->setObjectName(QStringLiteral("aiButton"));
+    details->setText(QStringLiteral("Details"));
+    details->setToolTip(QStringLiteral("Show the conversation and the proposed script"));
+    connect(details, &QToolButton::clicked, this, [this] {
+        ads::CDockWidget *panel = m_workspace->panel(QStringLiteral("assistant"));
+        panel->toggleView(true);
+        panel->setAsCurrentTab();
+    });
+    m_aiBar->layout()->addWidget(details);
     m_sourceMonitor->setActions({m_commands->action(QStringLiteral("source.markIn")), m_commands->action(QStringLiteral("source.markOut")),
                                  m_commands->action(QStringLiteral("source.insert")), m_commands->action(QStringLiteral("source.overwrite"))});
     for (auto it = panelCommands.cbegin(); it != panelCommands.cend(); ++it) {
@@ -1721,7 +1839,13 @@ QJsonObject MainWindow::commandContext() const {
                         {QStringLiteral("previewRenderable"), m_previewStatus == QStringLiteral("required")},
                         {QStringLiteral("videoTracks"), videoTracks},
                         {QStringLiteral("audioTracks"), audioTracks},
-                        {QStringLiteral("sourceTargets"), QJsonArray::fromStringList(sourceTargets())}};
+                        {QStringLiteral("sourceTargets"), QJsonArray::fromStringList(sourceTargets())},
+                        {QStringLiteral("agentBusy"), m_agentBusy}};
+    if (!m_proposalId.isEmpty()) {
+        QJsonObject proposal{{QStringLiteral("id"), m_proposalId}};
+        if (m_proposalBlocked) proposal.insert(QStringLiteral("blocked"), QStringLiteral("stale"));
+        context.insert(QStringLiteral("proposal"), proposal);
+    }
     if (m_sourceMonitor->isOpen()) {
         // The marked range: in frames of the media, length in frames of the sequence.
         const double in = m_sourceMonitor->inPoint();
@@ -1914,6 +2038,8 @@ void MainWindow::handleEvent(QJsonObject event) {
         else m_agentStatus->setText(QStringLiteral("READY"));
         m_chatInput->setEnabled(m_connected && !busy);
         updateChatControls();
+        updateAiBar();
+        updateCommandStates();
     } else if (type == QStringLiteral("agent_state")) {
         const QString state = event.value(QStringLiteral("state")).toString();
         m_agentRunState = state;
@@ -2033,6 +2159,7 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
         if (!present) m_sourceMonitor->close();
     }
     updateProposal(snapshot.value(QStringLiteral("pendingProposal")));
+    m_timeline->setProposal(m_proposalId.isEmpty() ? QJsonObject{} : snapshot.value(QStringLiteral("proposalTimeline")).toObject());
     updateInspector();
     updateCommandStates();
 }
@@ -2073,6 +2200,7 @@ void MainWindow::updateInspector() {
 
 void MainWindow::updateProposal(const QJsonValue &value) {
     m_proposalId.clear();
+    m_proposalBlocked = false;
     bool pending = value.isObject() && value.toObject().value(QStringLiteral("status")).toString() == QStringLiteral("pending");
     m_acceptButton->setEnabled(m_connected && pending);
     m_rejectButton->setEnabled(m_connected && pending);
@@ -2080,6 +2208,7 @@ void MainWindow::updateProposal(const QJsonValue &value) {
     if (!pending) {
         m_proposalSummary->setText(QStringLiteral("No pending changes"));
         m_proposalDiff->clear();
+        updateAiBar();
         return;
     }
     const QJsonObject proposal = value.toObject();
@@ -2102,6 +2231,8 @@ void MainWindow::updateProposal(const QJsonValue &value) {
     text += QStringLiteral("\n") + diff;
     m_proposalDiff->setPlainText(text);
     m_acceptButton->setEnabled(m_connected && !stale);
+    m_proposalBlocked = stale;
+    updateAiBar();
 }
 
 void MainWindow::appendConversation(const QString &speaker, const QString &text) {

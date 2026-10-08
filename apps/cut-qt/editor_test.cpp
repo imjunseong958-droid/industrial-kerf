@@ -1,3 +1,4 @@
+#include "ask_prompt.h"
 #include "command_registry.h"
 #include "editor_common.h"
 #include "effect_controls_panel.h"
@@ -63,6 +64,7 @@ class EditorTest final : public QObject {
     Q_OBJECT
     // Bring the Cut Assistant tab to the front; hidden tabs are detached.
     static void showAssistant(MainWindow &window) {
+        window.m_workspace->panel(QStringLiteral("assistant"))->toggleView(true);
         window.m_workspace->panel(QStringLiteral("assistant"))->setAsCurrentTab();
         QCoreApplication::processEvents();
     }
@@ -526,7 +528,7 @@ private slots:
             window.show();
             Workspace *workspace = window.m_workspace;
             ads::CDockWidget *timeline = workspace->panel(QStringLiteral("timeline"));
-            ads::CDockWidget *assistant = workspace->panel(QStringLiteral("assistant"));
+            ads::CDockWidget *project = workspace->panel(QStringLiteral("project"));
             QAction *toggle = window.m_commands->action(QStringLiteral("window.timeline"));
             QVERIFY(toggle->isChecked());
             QVERIFY(!timeline->isClosed());
@@ -537,18 +539,20 @@ private slots:
             QVERIFY(toggle->isChecked());
 
             QCOMPARE(workspace->names(), QStringList{QStringLiteral("Editing")});
+            // Cut is asked from the timeline; its conversation panel starts closed.
+            QVERIFY(workspace->panel(QStringLiteral("assistant"))->isClosed());
             QVERIFY(workspace->saveAs(QStringLiteral("Review")));
             QVERIFY(!workspace->saveAs(QStringLiteral("review")));
             QCOMPARE(workspace->current(), QStringLiteral("Review"));
-            assistant->toggleView(false);
+            project->toggleView(false);
             workspace->activate(QStringLiteral("Editing"));
-            QVERIFY(!assistant->isClosed());
+            QVERIFY(!project->isClosed());
             // Each workspace keeps its changes until it is reset.
             workspace->activate(QStringLiteral("Review"));
-            QVERIFY(assistant->isClosed());
-            QVERIFY(!window.m_commands->action(QStringLiteral("window.assistant"))->isChecked());
+            QVERIFY(project->isClosed());
+            QVERIFY(!window.m_commands->action(QStringLiteral("window.project"))->isChecked());
             workspace->resetCurrent();
-            QVERIFY(!assistant->isClosed());
+            QVERIFY(!project->isClosed());
 
             window.m_commands->action(QStringLiteral("app.preferences"))->trigger();
             QVERIFY(window.m_preferences->isVisible());
@@ -790,6 +794,99 @@ private slots:
         QCOMPARE(toggles[0][2].toBool(), false);
         QCOMPARE(toggles[1][1].toString(), QStringLiteral("locked"));
         QCOMPARE(toggles[1][2].toBool(), true);
+    }
+
+    void askingCutSendsTheSelectionAsFocus() {
+        MainWindow window{QString(), QString()};
+        window.show();
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(QJsonObject{{"revision", 3}, {"duration", 4}, {"timeline", QJsonObject{
+            {"fps", 24}, {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+                QJsonObject{{"id", "c1"}, {"name", "Opening"}, {"timelineStart", 1.0}, {"duration", 2.0},
+                            {"startFrame", 24}, {"durationFrames", 48}}}}}}}}}});
+        window.selectClip(QStringLiteral("c1"));
+        window.m_commands->action(QStringLiteral("ai.ask"))->trigger();
+        QTRY_VERIFY(window.m_askPrompt->isVisible());
+        QVERIFY(window.m_askPrompt->m_title->text().contains(QStringLiteral("Opening")));
+        QCOMPARE(window.m_askPrompt->scope(), QStringLiteral("clip"));
+        window.m_askPrompt->m_input->setPlainText(QStringLiteral("Tighten the start"));
+        if (const QString shot = qEnvironmentVariable("CUT_QT_UI_SCREENSHOT"); !shot.isEmpty())
+            QVERIFY(window.m_askPrompt->grab().save(shot + QStringLiteral(".ask.png")));
+        QTest::keyClick(window.m_askPrompt->m_input, Qt::Key_Return);
+        QVERIFY(!window.m_askPrompt->isVisible());
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("agent"));
+        QCOMPARE(window.m_lastCommand.value("text").toString(), QStringLiteral("Tighten the start"));
+        const QJsonObject focus = window.m_lastCommand.value("focus").toObject();
+        QCOMPARE(focus.value("scope").toString(), QStringLiteral("clip"));
+        QCOMPARE(focus.value("clip").toString(), QStringLiteral("c1"));
+        QCOMPARE(focus.value("fromFrame").toInt(), 24);
+        QCOMPARE(focus.value("toFrame").toInt(), 72);
+        // While Cut works, the timeline says so and offers Stop.
+        window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
+        QVERIFY(window.m_aiBar->isVisible());
+        QVERIFY(window.m_aiBarText->text().contains(QStringLiteral("Opening")));
+        QVERIFY(window.m_commands->isEnabled(QStringLiteral("ai.stop")));
+        QCOMPARE(window.m_commands->reason(QStringLiteral("ai.ask")), QStringLiteral("Cut is working on a request"));
+    }
+
+    void proposalsShowOnTheTimelineAndAreReviewedInPlace() {
+        MainWindow window{QString(), QString()};
+        window.show();
+        window.setConnection(QStringLiteral("ready"));
+        const QJsonObject current{{"fps", 24}, {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+            QJsonObject{{"id", "c1"}, {"timelineStart", 0.0}, {"duration", 2.0}}}}}}}};
+        const QJsonObject proposed{{"fps", 24}, {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+            QJsonObject{{"id", "c1"}, {"timelineStart", 0.0}, {"duration", 1.0}}}}}}}};
+        QJsonObject proposal{{"status", "pending"}, {"proposalId", "p1"}, {"script", "trim c1 out -24f\n"},
+                             {"documentDiff", "-    clip c1 dur=2s\n+    clip c1 dur=1s\n"}};
+        window.applySnapshot(QJsonObject{{"revision", 4}, {"duration", 2}, {"timeline", current},
+                                         {"pendingProposal", proposal}, {"proposalTimeline", proposed}});
+        QVERIFY(window.m_timeline->hasProposal());
+        QVERIFY(window.m_aiBar->isVisible());
+        if (const QString shot = qEnvironmentVariable("CUT_QT_UI_SCREENSHOT"); !shot.isEmpty()) {
+            window.resize(1500, 940);
+            QCoreApplication::processEvents();
+            QVERIFY(window.grab().save(shot + QStringLiteral(".proposal.png")));
+        }
+        QVERIFY(window.m_aiBarText->text().startsWith(QStringLiteral("Proposal")));
+        QAction *accept = window.m_commands->action(QStringLiteral("proposal.accept"));
+        QVERIFY(accept->isEnabled());
+        accept->trigger();
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("accept"));
+        QCOMPARE(window.m_lastCommand.value("proposalId").toString(), QStringLiteral("p1"));
+        QCOMPARE(window.m_lastCommand.value("revision").toInt(), 4);
+        // Escape on the timeline rejects.
+        window.m_timeline->setFocus();
+        QTRY_VERIFY(window.m_timeline->hasFocus());
+        QTest::keyClick(window.m_timeline, Qt::Key_Escape);
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("reject"));
+        proposal.insert(QStringLiteral("freshness"), QStringLiteral("stale"));
+        window.applySnapshot(QJsonObject{{"revision", 5}, {"duration", 2}, {"timeline", current},
+                                         {"pendingProposal", proposal}, {"proposalTimeline", proposed}});
+        QVERIFY(!accept->isEnabled());
+        window.applySnapshot(QJsonObject{{"revision", 6}, {"duration", 2}, {"timeline", current}});
+        QVERIFY(!window.m_timeline->hasProposal());
+        QVERIFY(!window.m_aiBar->isVisible());
+    }
+
+    void timelineDoubleClicksOpenOrAsk() {
+        TimelineWidget timeline;
+        timeline.resize(700, 240);
+        timeline.setProject(QJsonObject{{"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+            QJsonObject{{"id", "a"}, {"timelineStart", 0.0}, {"duration", 4.0}}}}}}}}, 8, 24);
+        timeline.show();
+        QSignalSpy opened(&timeline, &TimelineWidget::clipActivated);
+        QSignalSpy asked(&timeline, &TimelineWidget::askRequested);
+        const QPoint point = timeline.clipBounds(QStringLiteral("a")).center();
+        QVERIFY(!timeline.clipBounds(QStringLiteral("a")).isEmpty());
+        QTest::mouseDClick(&timeline, Qt::LeftButton, Qt::NoModifier, point);
+        QTest::mouseDClick(&timeline, Qt::LeftButton, Qt::AltModifier, point);
+        QCOMPARE(opened.count(), 1);
+        QCOMPARE(asked.count(), 1);
+        QCOMPARE(asked[0][0].toString(), QStringLiteral("a"));
+        // End with the button up and the interval past, so later tests' clicks stand alone.
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, point);
+        QTest::qWait(QApplication::doubleClickInterval() + 50);
     }
 
     void timelineRevealsAddLaneFromTheHeader() {

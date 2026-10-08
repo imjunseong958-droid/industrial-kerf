@@ -81,6 +81,18 @@ pub struct Context {
     /// The tracks a source edit places the media on: the first unlocked
     /// track of each kind the media has.
     pub source_targets: Vec<String>,
+    /// The agent's pending proposal.
+    pub proposal: Option<ProposalState>,
+    /// The agent is working on a request.
+    pub agent_busy: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ProposalState {
+    pub id: String,
+    /// Why it cannot be accepted as it is, such as being out of date.
+    pub blocked: Option<String>,
 }
 
 /// A range of media for a source edit.
@@ -111,11 +123,33 @@ pub struct Selection {
 pub enum Request {
     Refresh,
     Preview,
-    Import { path: String },
-    Export { quality: String },
-    Edit { ops: Vec<EditOp>, revision: u64 },
-    Undo { revision: u64 },
-    Redo { revision: u64 },
+    Import {
+        path: String,
+    },
+    Export {
+        quality: String,
+    },
+    Edit {
+        ops: Vec<EditOp>,
+        revision: u64,
+    },
+    Undo {
+        revision: u64,
+    },
+    Redo {
+        revision: u64,
+    },
+    Accept {
+        #[serde(rename = "proposalId")]
+        proposal_id: String,
+        revision: u64,
+    },
+    Reject {
+        #[serde(rename = "proposalId")]
+        proposal_id: String,
+        revision: u64,
+    },
+    Abort,
 }
 
 type Check = fn(&Context) -> Result<(), &'static str>;
@@ -236,6 +270,43 @@ fn can_edit_source(context: &Context) -> Result<(), &'static str> {
             Err("Add an unlocked track for the source media")
         }
         Some(_) => Ok(()),
+    }
+}
+
+fn can_accept(context: &Context) -> Result<(), &'static str> {
+    connected(context)?;
+    match &context.proposal {
+        None => Err("There is no proposal to review"),
+        Some(ProposalState {
+            blocked: Some(_), ..
+        }) => Err("Ask Cut to prepare this proposal again"),
+        Some(_) => Ok(()),
+    }
+}
+
+fn has_proposal(context: &Context) -> Result<(), &'static str> {
+    connected(context)?;
+    context
+        .proposal
+        .as_ref()
+        .map(|_| ())
+        .ok_or("There is no proposal to review")
+}
+
+fn can_ask(context: &Context) -> Result<(), &'static str> {
+    connected(context)?;
+    if context.agent_busy {
+        Err("Cut is working on a request")
+    } else {
+        Ok(())
+    }
+}
+
+fn agent_busy(context: &Context) -> Result<(), &'static str> {
+    if context.agent_busy {
+        Ok(())
+    } else {
+        Err("Cut is not working on a request")
     }
 }
 
@@ -382,6 +453,27 @@ pub static COMMANDS: &[Command] = &[
         )),
         &["Ctrl+,"],
     ),
+    keys(
+        frontend(menu(command("ai.ask", "Ask Cut…", can_ask), Menu::Clip, 1)),
+        &["Ctrl+J"],
+    ),
+    keys(
+        menu(
+            command("proposal.accept", "Accept Proposal", can_accept),
+            Menu::Clip,
+            1,
+        ),
+        &["Ctrl+Return"],
+    ),
+    keys(
+        timeline(menu(
+            command("proposal.reject", "Reject Proposal", has_proposal),
+            Menu::Clip,
+            1,
+        )),
+        &["Escape"],
+    ),
+    menu(command("ai.stop", "Stop Cut", agent_busy), Menu::Clip, 1),
     keys(
         params(
             menu(
@@ -846,6 +938,24 @@ pub fn run(id: &str, context: &Context, params: &Value) -> Result<Request, Strin
             locked: params.bool("locked")?,
             muted: params.bool("muted")?,
         }),
+        "proposal.accept" | "proposal.reject" => {
+            let proposal_id = match params.string("proposal") {
+                Some(id) => id,
+                None => context.proposal.clone().unwrap_or_default().id,
+            };
+            if id == "proposal.accept" {
+                Request::Accept {
+                    proposal_id,
+                    revision,
+                }
+            } else {
+                Request::Reject {
+                    proposal_id,
+                    revision,
+                }
+            }
+        }
+        "ai.stop" => Request::Abort,
         "source.insert" | "source.overwrite" => {
             let range = context.source.clone().unwrap_or_default();
             let media = params.string("media").unwrap_or(range.media);
@@ -1208,6 +1318,39 @@ mod tests {
                 muted: None
             }]
         );
+    }
+
+    #[test]
+    fn proposals_are_reviewed_through_commands() {
+        let mut context = ready();
+        assert_eq!(
+            run("proposal.accept", &context, &Value::Null).unwrap_err(),
+            "There is no proposal to review"
+        );
+        context.proposal = Some(ProposalState {
+            id: "p1".into(),
+            blocked: Some("stale".into()),
+        });
+        assert!(run("proposal.accept", &context, &Value::Null).is_err());
+        assert_eq!(
+            run("proposal.reject", &context, &Value::Null),
+            Ok(Request::Reject {
+                proposal_id: "p1".into(),
+                revision: 7
+            })
+        );
+        context.proposal.as_mut().unwrap().blocked = None;
+        assert_eq!(
+            serde_json::to_value(run("proposal.accept", &context, &Value::Null).unwrap()).unwrap(),
+            json!({"type": "accept", "proposalId": "p1", "revision": 7})
+        );
+        assert_eq!(
+            states(&context)["ai.stop"],
+            "Cut is not working on a request"
+        );
+        context.agent_busy = true;
+        assert_eq!(states(&context)["ai.ask"], "Cut is working on a request");
+        assert_eq!(run("ai.stop", &context, &Value::Null), Ok(Request::Abort));
     }
 
     #[test]

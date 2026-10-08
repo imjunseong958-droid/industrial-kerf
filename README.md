@@ -115,7 +115,9 @@ transcribed for the check).
 
 Times are timecode (`01:00:04:12`), frames (`96f`), or seconds (`4.5s`):
 media positions with `media`, sequence positions otherwise. The project
-changes only when a person accepts a proposal.
+changes only when a person accepts a proposal. In the editor, Cut is asked
+about the selection (⌘J): the request carries the clip or range it is about,
+and the proposal shows on the timeline to accept or reject in place.
 
 Edit scripts can place by anchor instead of timecode (`at=end`,
 `at=c3.end`, `to=c3.start-6f`), trim to a source position
