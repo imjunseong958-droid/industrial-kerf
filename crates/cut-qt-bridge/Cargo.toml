@@ -14,6 +14,7 @@ cut-model = { path = "../cut-model" }
 cut-runtime = { path = "../cut-runtime" }
 cut-playback = { path = "../cut-playback" }
 cut-agent = { path = "../cut-agent" }
+cut-cloud = { path = "../cut-cloud" }
 cut-commands = { path = "../cut-commands" }
 cut-mcp = { path = "../cut-mcp" }
 serde = { version = "1", features = ["derive"] }

@@ -85,6 +85,10 @@ pub struct Context {
     pub proposal: Option<ProposalState>,
     /// The agent is working on a request.
     pub agent_busy: bool,
+    /// Why the agent's connection cannot take requests: `noKey` for one's own
+    /// key, or a Cut Cloud access state such as `signedOut`. Absent when it
+    /// can.
+    pub ai_access: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -296,9 +300,16 @@ fn has_proposal(context: &Context) -> Result<(), &'static str> {
 fn can_ask(context: &Context) -> Result<(), &'static str> {
     connected(context)?;
     if context.agent_busy {
-        Err("Cut is working on a request")
-    } else {
-        Ok(())
+        return Err("Cut is working on a request");
+    }
+    match context.ai_access.as_deref() {
+        None | Some("ready") => Ok(()),
+        Some("noKey") => Err("Add your API key in Settings → Advanced"),
+        Some(state) => {
+            let access = serde_json::from_value::<cut_cloud::Access>(Value::from(state))
+                .unwrap_or(cut_cloud::Access::Unavailable);
+            access.reason().map_or(Ok(()), Err)
+        }
     }
 }
 
@@ -1350,6 +1361,20 @@ mod tests {
         );
         context.agent_busy = true;
         assert_eq!(states(&context)["ai.ask"], "Cut is working on a request");
+        context.agent_busy = false;
+        context.ai_access = Some("signedOut".into());
+        assert_eq!(
+            states(&context)["ai.ask"],
+            "Sign in to Cut Cloud in Settings"
+        );
+        context.ai_access = Some("noKey".into());
+        assert_eq!(
+            states(&context)["ai.ask"],
+            "Add your API key in Settings → Advanced"
+        );
+        context.ai_access = Some("ready".into());
+        assert_eq!(states(&context)["ai.ask"], Value::Null);
+        context.agent_busy = true;
         assert_eq!(run("ai.stop", &context, &Value::Null), Ok(Request::Abort));
     }
 

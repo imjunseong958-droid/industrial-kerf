@@ -21,8 +21,28 @@ class Provider(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
+    def reply(self, status, value):
+        data = json.dumps(value).encode()
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    # A stand-in for Cut Cloud: the account, and the hosted model's messages.
+    def do_GET(self):
+        if self.path == '/v1/account' and self.headers.get('Authorization') == 'Bearer tok-cloud':
+            self.reply(200, {'email': 'editor@example.com', 'plan': 'Pro', 'ai': True, 'credits': 42})
+        else:
+            self.reply(401, {})
+
     def do_POST(self):
         request = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        if self.path == '/v1/messages':
+            cloud_requests.append((self.headers.get('x-api-key'), request))
+            self.reply(200, {'type': 'message', 'role': 'assistant', 'stop_reason': 'end_turn',
+                             'content': [{'type': 'text', 'text': 'Cloud reply.'}]})
+            return
         requests.append(request)
         if len(requests) == 1:
             system = request['messages'][0]['content']
@@ -47,6 +67,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+cloud_requests = []
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Provider)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 os.environ.update(CUT_PROVIDER='openai', OPENAI_API_MODE='chat', OPENAI_API_KEY='local-test-only', OPENAI_BASE_URL=f'http://127.0.0.1:{server.server_port}', CUT_MODEL='local-fixture')
@@ -95,6 +116,8 @@ def runtime_request(directory, request):
 
 with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as temporary:
     directory = Path(temporary)
+    # The Cut Cloud session lives in ~/.cut; keep it inside the test.
+    os.environ.update(HOME=str(directory / 'home'), CUT_CLOUD_URL=f'http://127.0.0.1:{server.server_port}')
     media = directory / 'fixture.mp4'
     subprocess.run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30', '-t', '4', '-c:v', 'libx264', '-preset', 'ultrafast', str(media)], check=True)
     daemon = subprocess.Popen([str(ROOT / 'target/debug/cutd'), '--dir', str(directory)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -242,7 +265,19 @@ with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as tempo
         placed = next(track for track in inserted['timeline']['tracks'] if track['id'] == video['id'])['clips']
         assert len(placed) == before + 1 and placed[0]['startFrame'] == 0 and placed[0]['durationFrames'] == 15, placed
         assert abs(inserted['duration'] - current['duration'] - .5) < .05
-        print(json.dumps({'result': 'passed', 'checks': ['focused agent request', 'proposal timeline', 'source insert', 'connection lifecycle/reconnect', 'import', 'trim', 'undo', 'redo', 'external CLI edit sync', '200 seeks/latest frame', 'local provider/tool activity', 'proposal/accept', 'conversation history', 'real export', 'effect rendered fallback'], 'max_enqueue_ms': round(max(timings), 3), 'frame': [frame.width, frame.height]}, indent=2))
+        # Cut Cloud: sign in, read the account, and send a request with the token.
+        send({'type': 'cloud_sign_in', 'token': 'tok-cloud'})
+        signed_in = wait(lambda event: event['type'] == 'cloud' and event.get('account'))
+        assert signed_in['access'] == 'ready' and signed_in['account']['plan'] == 'Pro', signed_in
+        send({'type': 'agent', 'text': 'Hello from the cloud.', 'cloud': True})
+        wait(lambda event: event['type'] == 'agent_busy' and event['busy'] is False)
+        assert cloud_requests and cloud_requests[-1][0] == 'tok-cloud', cloud_requests
+        assert 'Hello from the cloud.' in json.dumps(cloud_requests[-1][1]['messages'])
+        assert any(event.get('type') == 'agent' and 'Cloud reply.' in event.get('text', '') for event in observed)
+        send({'type': 'cloud_sign_out'})
+        wait(lambda event: event['type'] == 'cloud' and event['access'] == 'signedOut')
+        assert 'token' not in json.loads((directory / 'home/.cut/cloud.json').read_text())
+        print(json.dumps({'result': 'passed', 'checks': ['cut cloud sign-in/account/request', 'focused agent request', 'proposal timeline', 'source insert', 'connection lifecycle/reconnect', 'import', 'trim', 'undo', 'redo', 'external CLI edit sync', '200 seeks/latest frame', 'local provider/tool activity', 'proposal/accept', 'conversation history', 'real export', 'effect rendered fallback'], 'max_enqueue_ms': round(max(timings), 3), 'frame': [frame.width, frame.height]}, indent=2))
     finally:
         lib.cut_bridge_free(bridge)
         if daemon.poll() is None:

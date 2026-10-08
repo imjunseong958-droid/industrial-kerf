@@ -506,9 +506,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cut-cloud"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
 name = "cut-commands"
 version = "0.1.0"
 dependencies = [
+ "cut-cloud",
  "cut-runtime",
  "serde",
  "serde_json",
@@ -607,6 +617,7 @@ name = "cut-qt-bridge"
 version = "0.1.0"
 dependencies = [
  "cut-agent",
+ "cut-cloud",
  "cut-commands",
  "cut-core",
  "cut-mcp",

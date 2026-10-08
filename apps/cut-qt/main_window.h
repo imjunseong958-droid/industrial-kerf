@@ -106,6 +106,12 @@ private slots:
     void askAi();
     void askSubmitted(const QString &text, const QString &scope);
     void updateAiBar();
+    // Cut Cloud, the hosted model, or a key of one's own (Advanced).
+    bool usesCloud() const;
+    bool sendCloud(const QJsonObject &command);
+    // What the registry needs to know about the agent's connection.
+    QString aiAccess() const;
+    void updateCloudStatus();
     void updateChatControls();
     QString activeProviderId() const;
     QJsonObject agentSettingsPayload() const;
@@ -200,6 +206,18 @@ private:
     QLabel *m_aiBarText = nullptr;
     QString m_agentFocusLabel;
     bool m_proposalBlocked = false;
+    QRadioButton *m_cloudRadio = nullptr;
+    QRadioButton *m_ownKeyRadio = nullptr;
+    QLabel *m_cloudStatus = nullptr;
+    QLineEdit *m_cloudToken = nullptr;
+    QPushButton *m_cloudSignIn = nullptr;
+    QPushButton *m_cloudSignOut = nullptr;
+    QWidget *m_advancedSettings = nullptr;
+    QLabel *m_statusAccount = nullptr;
+    // The last account report from the bridge.
+    QString m_cloudAccess;
+    QJsonObject m_cloudAccount;
+    QString m_cloudMessage;
     QDialog *m_preferences = nullptr;
     QLabel *m_statusConnection = nullptr;
     QLabel *m_statusRevision = nullptr;

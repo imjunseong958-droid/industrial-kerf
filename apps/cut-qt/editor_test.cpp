@@ -214,6 +214,12 @@ private slots:
         QVERIFY(openaiRadio);
         const QSignalBlocker anthropicBlock(anthropicRadio);
         const QSignalBlocker openaiBlock(openaiRadio);
+        // Keys of one's own are the Advanced connection.
+        QVERIFY(window.m_advancedSettings->isAncestorOf(anthropicRadio));
+        {
+            const QSignalBlocker ownBlock(window.m_ownKeyRadio);
+            window.m_ownKeyRadio->setChecked(true);
+        }
 
         const QString anthropicKey = QStringLiteral("sk-ant-test");
         const QString anthropicUrl = QStringLiteral("https://anthropic.example/v1");
@@ -796,6 +802,89 @@ private slots:
         QCOMPARE(toggles[1][2].toBool(), true);
     }
 
+    void savedOwnKeysKeepTheOwnKeyConnection() {
+        QSettings settings;
+        const QVariant connection = settings.value(QStringLiteral("agent/connection"));
+        const QVariant key = settings.value(QStringLiteral("agent/anthropic/apiKey"));
+        settings.remove(QStringLiteral("agent/connection"));
+        settings.setValue(QStringLiteral("agent/anthropic/apiKey"), QStringLiteral("sk-ant-saved"));
+        {
+            MainWindow window{QString(), QString()};
+            QVERIFY(window.m_ownKeyRadio->isChecked());
+        }
+        settings.setValue(QStringLiteral("agent/anthropic/apiKey"), QString());
+        settings.remove(QStringLiteral("agent/connection"));
+        if (qEnvironmentVariableIsEmpty("ANTHROPIC_API_KEY") && qEnvironmentVariableIsEmpty("OPENAI_API_KEY")) {
+            settings.setValue(QStringLiteral("agent/openai/apiKey"), QString());
+            MainWindow window{QString(), QString()};
+            QVERIFY(window.m_cloudRadio->isChecked());
+        }
+        settings.setValue(QStringLiteral("agent/connection"), QStringLiteral("cloud"));
+        settings.setValue(QStringLiteral("agent/anthropic/apiKey"), QStringLiteral("sk-ant-saved"));
+        {
+            // An explicit choice wins over a saved key.
+            MainWindow window{QString(), QString()};
+            QVERIFY(window.m_cloudRadio->isChecked());
+        }
+        if (connection.isValid()) settings.setValue(QStringLiteral("agent/connection"), connection);
+        else settings.remove(QStringLiteral("agent/connection"));
+        settings.setValue(QStringLiteral("agent/anthropic/apiKey"), key);
+    }
+
+    void cutCloudIsTheDefaultConnectionAndReflectsTheAccount() {
+        MainWindow window{QString(), QString()};
+        {
+            const QSignalBlocker cloudBlock(window.m_cloudRadio);
+            window.m_cloudRadio->setChecked(true);
+        }
+        window.setConnection(QStringLiteral("ready"));
+        QVERIFY(window.m_advancedSettings->isHidden());
+        // Without a service, Cut Cloud says so and points at Advanced.
+        window.handleEvent(QJsonObject{{"type", "cloud"}, {"access", "unavailable"}});
+        QVERIFY(window.m_commands->reason(QStringLiteral("ai.ask")).contains(QStringLiteral("Settings → Advanced")));
+        QVERIFY(window.m_cloudStatus->text().contains(QStringLiteral("isn't available yet")));
+        QVERIFY(window.m_cloudSignIn->isHidden());
+        QCOMPARE(window.agentSettingsPayload().value(QStringLiteral("cloud")).toBool(), true);
+        QVERIFY(!window.agentSettingsPayload().contains(QStringLiteral("apiKey")));
+
+        window.handleEvent(QJsonObject{{"type", "cloud"}, {"access", "signedOut"}});
+        QCOMPARE(window.m_commands->reason(QStringLiteral("ai.ask")), QStringLiteral("Sign in to Cut Cloud in Settings"));
+        QVERIFY(!window.m_cloudSignIn->isHidden());
+        window.m_cloudToken->setText(QStringLiteral("tok-1"));
+        window.m_cloudSignIn->click();
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("cloud_sign_in"));
+        QCOMPARE(window.m_lastCommand.value("token").toString(), QStringLiteral("tok-1"));
+
+        window.handleEvent(QJsonObject{{"type", "cloud"}, {"access", "ready"}, {"account", QJsonObject{
+            {"email", "lim@example.com"}, {"plan", "Pro"}, {"ai", true}, {"credits", 1200}}}});
+        QVERIFY(window.m_cloudStatus->text().contains(QStringLiteral("lim@example.com")));
+        QVERIFY(window.m_cloudStatus->text().contains(QStringLiteral("1200 requests left")));
+        QCOMPARE(window.m_statusAccount->text(), QStringLiteral("Cut Cloud · Pro"));
+        if (const QString shot = qEnvironmentVariable("CUT_QT_UI_SCREENSHOT"); !shot.isEmpty()) {
+            window.m_preferences->show();
+            QCoreApplication::processEvents();
+            QVERIFY(window.m_preferences->grab().save(shot + QStringLiteral(".settings.png")));
+            window.m_preferences->hide();
+        }
+        QVERIFY(window.m_cloudSignIn->isHidden());
+        QCOMPARE(window.m_commands->reason(QStringLiteral("ai.ask")), QString());
+        window.handleEvent(QJsonObject{{"type", "cloud"}, {"access", "outOfCredits"}, {"account", QJsonObject{
+            {"email", "lim@example.com"}, {"plan", "Pro"}, {"ai", true}, {"credits", 0}}}});
+        QCOMPARE(window.m_commands->reason(QStringLiteral("ai.ask")), QStringLiteral("You've used this period's Cut Cloud requests"));
+        window.m_cloudSignOut->click();
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("cloud_sign_out"));
+        // A key of one's own needs the key.
+        {
+            const QSignalBlocker ownBlock(window.m_ownKeyRadio);
+            window.m_ownKeyRadio->setChecked(true);
+        }
+        window.m_anthropicActiveRadio->setChecked(true);
+        window.m_anthropicKey->clear();
+        window.updateCommandStates();
+        if (qEnvironmentVariableIsEmpty("ANTHROPIC_API_KEY"))
+            QCOMPARE(window.m_commands->reason(QStringLiteral("ai.ask")), QStringLiteral("Add your API key in Settings → Advanced"));
+    }
+
     void askingCutSendsTheSelectionAsFocus() {
         MainWindow window{QString(), QString()};
         window.show();
@@ -805,6 +894,13 @@ private slots:
                 QJsonObject{{"id", "c1"}, {"name", "Opening"}, {"timelineStart", 1.0}, {"duration", 2.0},
                             {"startFrame", 24}, {"durationFrames", 48}}}}}}}}}});
         window.selectClip(QStringLiteral("c1"));
+        {
+            const QSignalBlocker ownBlock(window.m_ownKeyRadio);
+            window.m_ownKeyRadio->setChecked(true);
+        }
+        window.m_anthropicActiveRadio->setChecked(true);
+        window.m_anthropicKey->setText(QStringLiteral("sk-ant-test"));
+        window.updateCommandStates();
         window.m_commands->action(QStringLiteral("ai.ask"))->trigger();
         QTRY_VERIFY(window.m_askPrompt->isVisible());
         QVERIFY(window.m_askPrompt->m_title->text().contains(QStringLiteral("Opening")));
