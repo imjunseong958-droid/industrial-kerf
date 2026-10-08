@@ -133,6 +133,15 @@ pub enum Request {
     Export {
         quality: String,
     },
+    PresetExport {
+        path: String,
+    },
+    PresetApply {
+        path: String,
+        bindings: Value,
+        texts: Value,
+        revision: u64,
+    },
     Edit {
         ops: Vec<EditOp>,
         revision: u64,
@@ -400,6 +409,22 @@ pub static COMMANDS: &[Command] = &[
             r#"{"quality": "preview" | "full"}"#,
         ),
         &["Ctrl+E"],
+    ),
+    params(
+        menu(
+            command("file.exportPreset", "Export Editing Preset…", connected),
+            Menu::File,
+            1,
+        ),
+        r#"{"path": string}"#,
+    ),
+    params(
+        menu(
+            command("file.applyPreset", "Import Editing Preset…", connected),
+            Menu::File,
+            1,
+        ),
+        r#"{"path": string, "bindings": object, "texts": object}"#,
     ),
     menu(
         command("file.refresh", "Refresh Project", connected),
@@ -894,6 +919,23 @@ pub fn run(id: &str, context: &Context, params: &Value) -> Result<Request, Strin
             },
         },
         "file.refresh" => Request::Refresh,
+        "file.exportPreset" => Request::PresetExport {
+            path: params.require_string("path")?,
+        },
+        "file.applyPreset" => Request::PresetApply {
+            path: params.require_string("path")?,
+            bindings: params
+                .get("bindings")
+                .filter(|v| v.is_object())
+                .cloned()
+                .ok_or("preset bindings must be an object")?,
+            texts: params
+                .get("texts")
+                .filter(|v| v.is_object())
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+            revision,
+        },
         "edit.undo" => Request::Undo { revision },
         "edit.redo" => Request::Redo { revision },
         "clip.delete" => edit(EditOp::Delete {

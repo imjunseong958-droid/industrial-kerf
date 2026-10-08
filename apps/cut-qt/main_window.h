@@ -56,6 +56,9 @@ private slots:
     void pollBridge();
     void importMedia();
     void exportProject();
+    void exportEditingPreset();
+    void importEditingPreset();
+    void showPresetBindings(const QString &path, const QJsonObject &preset);
     void renderPreview();
     void canvasPresetChanged(int index);
     void addTrack();

@@ -8,6 +8,7 @@ mod captions;
 mod diff;
 mod doc;
 mod lex;
+pub mod preset;
 mod reference;
 mod script;
 mod text;

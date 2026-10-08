@@ -96,6 +96,18 @@ enum Command {
     Export {
         quality: String,
     },
+    PresetExport {
+        path: String,
+    },
+    PresetInspect {
+        path: String,
+    },
+    PresetApply {
+        path: String,
+        bindings: Value,
+        texts: Value,
+        revision: u64,
+    },
     /// Keep a Cut Cloud token and read its account.
     CloudSignIn {
         token: String,
@@ -344,6 +356,105 @@ fn runtime_worker(
                 proposal_id,
                 revision,
             } => active_client.reject_proposal_request(&proposal_id, "ui", &operation, revision),
+            Command::PresetExport { path } => {
+                match active_client
+                    .get_document(false)
+                    .and_then(|(_, text)| cut_runtime::parse_document(&text))
+                {
+                    Ok(project) => {
+                        let result = project
+                            .sequences
+                            .first()
+                            .ok_or_else(|| "no sequence to export".to_owned())
+                            .and_then(|sequence| {
+                                cut_lang::preset::export(
+                                    &project,
+                                    cut_model::Catalog::builtin(),
+                                    &sequence.id,
+                                    &sequence.name,
+                                )
+                            })
+                            .and_then(|document| {
+                                cut_lang::preset::parse(&document, cut_model::Catalog::builtin())?;
+                                if document.len() > 1024 * 1024 {
+                                    return Err("preset exceeds 1 MiB".into());
+                                }
+                                Ok(document)
+                            });
+                        match result {
+                            Ok(document) => emit(
+                                &tx,
+                                json!({"type":"preset_export", "path":path, "document":document}),
+                            ),
+                            Err(message) => error(&tx, message),
+                        }
+                    }
+                    Err(err) => error(&tx, err.message),
+                }
+                continue;
+            }
+            Command::PresetInspect { path } => {
+                match CutMcpRouter::new(&directory, Some(&binary)) {
+                    Ok(router) => {
+                        let response = router.call("look", json!({"preset":path}));
+                        if response["ok"] == true {
+                            emit(
+                                &tx,
+                                json!({"type":"preset_inspect", "path":path, "preset":response["result"]}),
+                            );
+                        } else {
+                            error(
+                                &tx,
+                                response["error"]["message"]
+                                    .as_str()
+                                    .unwrap_or("cannot read preset"),
+                            );
+                        }
+                    }
+                    Err(message) => error(&tx, message),
+                }
+                continue;
+            }
+            Command::PresetApply {
+                path,
+                bindings,
+                texts,
+                revision,
+            } => {
+                match active_client.get_state() {
+                    Ok(state) if state.revision == revision => {
+                        match CutMcpRouter::new(&directory, Some(&binary)) {
+                            Ok(router) => {
+                                let response = router.call(
+                                    "edit",
+                                    json!({"preset":path,"bindings":bindings,"texts":texts}),
+                                );
+                                if response["ok"] == true {
+                                    emit(
+                                        &tx,
+                                        json!({"type":"preset_applied", "path":path, "proposal":response["result"]["proposal"]}),
+                                    );
+                                } else {
+                                    error(
+                                        &tx,
+                                        response["error"]["message"]
+                                            .as_str()
+                                            .unwrap_or("cannot apply preset"),
+                                    );
+                                }
+                            }
+                            Err(message) => error(&tx, message),
+                        }
+                    }
+                    Ok(_) => error(
+                        &tx,
+                        "The project changed while choosing preset media. Apply the preset again.",
+                    ),
+                    Err(err) => error(&tx, err.message),
+                }
+                // Publish the same proposal state used by the native review UI.
+                active_client.get_state()
+            }
             Command::Preview | Command::Export { .. } => {
                 let preview = matches!(command, Command::Preview);
                 let quality = match command {
@@ -1340,6 +1451,11 @@ mod tests {
         for (command, params) in [
             ("file.import", json!({"path": "/tmp/a.mov"})),
             ("file.export", json!({"quality": "full"})),
+            ("file.exportPreset", json!({"path":"/tmp/style.cutpreset"})),
+            (
+                "file.applyPreset",
+                json!({"path":"/tmp/style.cutpreset", "bindings":{}, "texts":{}}),
+            ),
             ("file.refresh", json!(null)),
             ("edit.undo", json!(null)),
             ("clip.split", json!(null)),

@@ -102,6 +102,11 @@ available as an environment fallback. Qt remains a presentation layer.
 
 ## Agents
 
+Native editing presets are exported from **File → Export Editing Preset…**
+as one `.cutpreset` file containing media slots and `.cut` editing code.
+**File → Import Editing Preset…** binds new media and stages the same pattern
+as a proposal. See [native preset format and reuse](docs/presets.md).
+
 Agents edit the same `.cut` document people do (see
 [the Cut language](docs/cut-language.md)). Their context is the language
 reference, generated from the feature catalog, and the current document,

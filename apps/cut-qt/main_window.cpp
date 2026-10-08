@@ -38,6 +38,7 @@
 #include <QPainterPath>
 #include <QPixmap>
 #include <QPolygonF>
+#include <QPlainTextEdit>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QSaveFile>
@@ -147,6 +148,126 @@ void MainWindow::exportProject() {
     const QString quality = m_quality->currentData().toString();
     if (!execute(QStringLiteral("file.export"), QJsonObject{{QStringLiteral("quality"), quality}})) return;
     addActivity(QStringLiteral("export"), QStringLiteral("Export started (%1)").arg(m_quality->currentText()));
+}
+
+void MainWindow::exportEditingPreset() {
+    QFileDialog dialog(this, QStringLiteral("Export editing preset"),
+        QDir(m_projectDirectory).filePath(QStringLiteral("editing.cutpreset")), QStringLiteral("Cut editing preset (*.cutpreset)"));
+    dialog.setAcceptMode(QFileDialog::AcceptSave);
+    dialog.setDefaultSuffix(QStringLiteral("cutpreset"));
+    if (dialog.exec() != QDialog::Accepted) return;
+    const QString path = dialog.selectedFiles().value(0);
+    if (QFileInfo(path).suffix() != QStringLiteral("cutpreset")) {
+        showError(QStringLiteral("Save editing presets with the .cutpreset extension."));
+        return;
+    }
+    execute(QStringLiteral("file.exportPreset"), QJsonObject{{QStringLiteral("path"), path}});
+}
+
+void MainWindow::importEditingPreset() {
+    const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Import editing preset"),
+        m_projectDirectory, QStringLiteral("Cut editing preset (*.cutpreset)"));
+    if (!path.isEmpty()) sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("preset_inspect")},
+                                               {QStringLiteral("path"), path}});
+}
+
+void MainWindow::showPresetBindings(const QString &path, const QJsonObject &preset) {
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("presetBindingsDialog"));
+    dialog.setWindowTitle(QStringLiteral("Apply preset — %1").arg(preset.value(QStringLiteral("name")).toString()));
+    dialog.resize(640, 620);
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *intro = new QLabel(QStringLiteral("Choose media for each slot. Cut keeps the preset's timing, effects and animation. "
+        "Applying replaces this sequence as a proposal for you to review."));
+    intro->setWordWrap(true);
+    layout->addWidget(intro);
+    auto *scroll = new QScrollArea;
+    scroll->setWidgetResizable(true);
+    auto *contents = new QWidget;
+    auto *form = new QFormLayout(contents);
+    QHash<QString, QComboBox *> media;
+    QHash<QString, QDoubleSpinBox *> starts;
+    QHash<QString, QLineEdit *> texts;
+    const QJsonArray sources = m_project.value(QStringLiteral("sources")).toArray();
+    for (const QJsonValue &value : preset.value(QStringLiteral("slots")).toArray()) {
+        const QJsonObject slot = value.toObject();
+        const QString id = slot.value(QStringLiteral("id")).toString();
+        const double required = slot.value(QStringLiteral("seconds")).toDouble();
+        auto *choice = new QComboBox;
+        choice->setObjectName(QStringLiteral("presetMedia_%1").arg(id));
+        choice->addItem(QStringLiteral("Choose imported media…"), QString());
+        for (const QJsonValue &sourceValue : sources) {
+            const QJsonObject source = sourceValue.toObject();
+            if ((slot.value(QStringLiteral("video")).toBool() && !source.contains(QStringLiteral("width"))) ||
+                (slot.value(QStringLiteral("audio")).toBool() && !source.value(QStringLiteral("hasAudio")).toBool()) ||
+                source.value(QStringLiteral("duration")).toDouble() + 0.000001 < required) continue;
+            choice->addItem(QStringLiteral("%1 — %2").arg(source.value(QStringLiteral("id")).toString(),
+                QFileInfo(source.value(QStringLiteral("path")).toString()).fileName()), source.value(QStringLiteral("id")).toString());
+            choice->setItemData(choice->count() - 1, source.value(QStringLiteral("duration")).toDouble(), Qt::UserRole + 1);
+        }
+        if (choice->count() == 1) choice->setItemText(0, QStringLiteral("Import matching media first"));
+        auto *from = new QDoubleSpinBox;
+        from->setObjectName(QStringLiteral("presetFrom_%1").arg(id));
+        from->setDecimals(3);
+        from->setSuffix(QStringLiteral(" s"));
+        from->setRange(0, 0);
+        from->setToolTip(QStringLiteral("Start in the replacement media, including the preset's transition handles"));
+        connect(choice, &QComboBox::currentIndexChanged, from, [choice, from, required] {
+            from->setMaximum(std::max(0.0, choice->currentData(Qt::UserRole + 1).toDouble() - required));
+        });
+        auto *row = new QWidget;
+        auto *rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+        rowLayout->addWidget(choice, 1);
+        rowLayout->addWidget(from);
+        form->addRow(QStringLiteral("%1 · %2 s").arg(id).arg(required, 0, 'f', 3), row);
+        media.insert(id, choice);
+        starts.insert(id, from);
+    }
+    const QJsonObject textSlots = preset.value(QStringLiteral("textSlots")).toObject();
+    for (auto it = textSlots.begin(); it != textSlots.end(); ++it) {
+        auto *text = new QLineEdit(it.value().toString());
+        text->setObjectName(QStringLiteral("presetText_%1").arg(it.key()));
+        form->addRow(it.key(), text);
+        texts.insert(it.key(), text);
+    }
+    scroll->setWidget(contents);
+    layout->addWidget(scroll, 1);
+    auto *code = new QPlainTextEdit(preset.value(QStringLiteral("document")).toString());
+    code->setObjectName(QStringLiteral("presetCode"));
+    code->setReadOnly(true);
+    code->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    code->setMaximumHeight(150);
+    layout->addWidget(code);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Create proposal"));
+    const auto updateReady = [buttons, media] {
+        bool ready = true;
+        for (auto *choice : media) ready = ready && !choice->currentData().toString().isEmpty();
+        buttons->button(QDialogButtonBox::Ok)->setEnabled(ready);
+    };
+    for (auto *choice : media) connect(choice, &QComboBox::currentIndexChanged, buttons, updateReady);
+    updateReady();
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    const QJsonValue revision = revisionValue();
+    if (dialog.exec() != QDialog::Accepted) return;
+    if (revision != revisionValue()) {
+        showError(QStringLiteral("The project changed while choosing preset media. Import the preset again."));
+        return;
+    }
+    QJsonObject bindings;
+    for (auto it = media.begin(); it != media.end(); ++it) {
+        bindings.insert(it.key(), QJsonObject{{QStringLiteral("media"), it.value()->currentData().toString()},
+            {QStringLiteral("from"), QString::number(starts.value(it.key())->value(), 'f', 3) + QStringLiteral("s")}});
+    }
+    QJsonObject overrides;
+    for (auto it = texts.begin(); it != texts.end(); ++it) {
+        if (it.value()->isModified()) overrides.insert(it.key(), it.value()->text());
+    }
+    execute(QStringLiteral("file.applyPreset"), QJsonObject{{QStringLiteral("path"), path},
+        {QStringLiteral("bindings"), bindings}, {QStringLiteral("texts"), overrides}});
 }
 
 void MainWindow::renderPreview() {
@@ -1682,6 +1803,8 @@ void MainWindow::setupActions() {
     m_commandHandlers = {
         {QStringLiteral("file.import"), [this] { importMedia(); }},
         {QStringLiteral("file.export"), [this] { exportProject(); }},
+        {QStringLiteral("file.exportPreset"), [this] { exportEditingPreset(); }},
+        {QStringLiteral("file.applyPreset"), [this] { importEditingPreset(); }},
         // Closing first keeps the workspace layout for the next launch.
         {QStringLiteral("app.quit"), [this] { if (close()) QApplication::quit(); }},
         {QStringLiteral("clip.focusRegion"), [this] { focusRegion(); }},
@@ -2151,6 +2274,20 @@ void MainWindow::handleEvent(QJsonObject event) {
         m_hasShownFrame = false;
     } else if (type == QStringLiteral("error")) {
         showError(event.value(QStringLiteral("message")).toString(QStringLiteral("Runtime error")));
+    } else if (type == QStringLiteral("preset_export")) {
+        const QString path = event.value(QStringLiteral("path")).toString();
+        const QByteArray document = event.value(QStringLiteral("document")).toString().toUtf8();
+        QSaveFile file(path);
+        if (!file.open(QIODevice::WriteOnly) || file.write(document) != document.size() || !file.commit()) {
+            showError(QStringLiteral("Could not export preset: %1").arg(file.errorString()));
+            return;
+        }
+        statusBar()->showMessage(QStringLiteral("Preset exported: %1").arg(QFileInfo(path).fileName()), 6000);
+        addActivity(QStringLiteral("preset"), path);
+    } else if (type == QStringLiteral("preset_inspect")) {
+        showPresetBindings(event.value(QStringLiteral("path")).toString(), event.value(QStringLiteral("preset")).toObject());
+    } else if (type == QStringLiteral("preset_applied")) {
+        statusBar()->showMessage(QStringLiteral("Preset proposal ready for review"), 6000);
     } else if (type == QStringLiteral("agent")) {
         const QString kind = event.value(QStringLiteral("kind")).toString(QStringLiteral("agent"));
         const QString text = event.value(QStringLiteral("text")).toString();
