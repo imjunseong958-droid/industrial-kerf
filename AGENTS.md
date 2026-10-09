@@ -1,7 +1,6 @@
 # Working with Lim
 
-I'm Lim. Favor simple, clear, maintainable solutions. Keep changes
-focused on the task; don't refactor or reformat unrelated code.
+I'm Lim. Favor simple, clear, maintainable solutions.
 
 ## Subagents
 
