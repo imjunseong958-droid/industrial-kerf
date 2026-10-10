@@ -76,7 +76,9 @@ pending proposal's id as `extend` to run more lines on top of it, or as \
 
 Reusable presets are portable .cutpreset files. `look` with `presets: true` \
 lists project presets; with `preset: \"file.cutpreset\"` it shows the pattern, \
-required media slots and text slots. `edit` with `savePreset: \"file.cutpreset\"` \
+text slots, and each media slot with the clips that use it and the imported \
+media that fit it (`fits`, with the latest `from` frame as `latestFrame`). \
+`edit` with `savePreset: \"file.cutpreset\"` \
 saves the accepted sequence (optional `sequence` and `name`), without changing \
 the project. To reuse one, `edit` with `preset`, `bindings` mapping each slot \
 to {media: \"imported-media-id\", from: \"0f\"}, and optional `texts` mapping \
@@ -204,7 +206,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "width": {"type": "integer", "minimum": 64, "maximum": 1920, "description": "Frame width in pixels (default 960; 320 for each frame of a sheet)."},
                     "sequence": {"type": "string", "description": sequence},
                     "proposal": {"type": "string", "description": proposal},
-                    "preset": {"type": "string", "description": "Inspect a .cutpreset file: pattern, required media slots and text slots. Use alone."},
+                    "preset": {"type": "string", "description": "Inspect a .cutpreset file: pattern, text slots, and media slots with the imported media that fit each. Use alone."},
                     "presets": {"type": "boolean", "description": "List .cutpreset files in the project root and .cut/presets. Use alone with true."}
                 },
                 "additionalProperties": false
@@ -461,7 +463,7 @@ impl CutMcpRouter {
                 ));
             }
             return match input.preset {
-                Some(file) => self.inspect_preset(&file),
+                Some(file) => self.inspect_preset(&self.project_at(None)?.1, &file),
                 None => self.list_presets(),
             };
         }

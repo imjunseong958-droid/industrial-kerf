@@ -145,6 +145,19 @@ fn presets_share_native_edit_code_and_apply_replacement_media_as_a_proposal() {
     .unwrap();
     let inspected = ok(&destination, "look", json!({"preset":"style.cutpreset"}));
     assert_eq!(inspected["slots"][0]["seconds"], 2.0);
+    // 4s of 30 fps media fills a 2s slot from any frame up to 60.
+    assert_eq!(
+        inspected["slots"][0]["fits"],
+        json!([{"media": "m1", "latestFrame": 60}])
+    );
+    assert_eq!(
+        inspected["slots"][0]["clips"][0]["track"].as_str(),
+        Some("V1")
+    );
+    assert_eq!(
+        inspected["slots"][0]["clips"][0]["at"].as_str(),
+        Some("00:00:00:00")
+    );
     assert!(!inspected["document"].as_str().unwrap().contains("shot.mp4"));
     let before = destination.runtime().get_document(false).unwrap();
     let missing = error(&destination, "edit", json!({"preset":"style.cutpreset"}));

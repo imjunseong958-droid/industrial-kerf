@@ -201,6 +201,7 @@ with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as tempo
         send({'type': 'preset_inspect', 'path': str(preset_path)})
         inspected = wait(lambda event: event['type'] == 'preset_inspect')['preset']
         assert len(inspected['slots']) == 1 and inspected['slots'][0]['seconds'] == 3
+        assert [fit['media'] for fit in inspected['slots'][0]['fits']] == [redone['timeline']['sources'][0]['id']], inspected
         send(run_command({'command': 'file.applyPreset', 'params': {'path': str(preset_path),
                           'bindings': {'slot1': {'media': redone['timeline']['sources'][0]['id'], 'from': '1s'}}},
                           'context': {'connected': True, 'revision': redone['revision']}}))
