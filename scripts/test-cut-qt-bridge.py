@@ -98,10 +98,14 @@ def run_command(invocation):
 lib.cut_bridge_frame.argtypes = [C.c_void_p, C.POINTER(Frame)]
 lib.cut_bridge_frame.restype = C.c_bool
 
-def runtime_request(directory, request):
+def runtime_endpoint(directory):
+    # Ask cutd: a project path too long for a socket moves it to a runtime directory.
+    return subprocess.run([str(ROOT / 'target/debug/cutd'), '--dir', str(directory), '--endpoint'],
+                          check=True, capture_output=True, text=True).stdout.strip()
+
+def runtime_request(endpoint, request):
     payload = {'protocolVersion': 1, 'id': f'qt-test-{time.time_ns()}'}
     payload.update(request)
-    endpoint = directory / '.cutd.sock'
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
         connection.settimeout(5)
         connection.connect(os.fsencode(endpoint))
@@ -121,7 +125,7 @@ with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as tempo
     media = directory / 'fixture.mp4'
     subprocess.run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30', '-t', '4', '-c:v', 'libx264', '-preset', 'ultrafast', str(media)], check=True)
     daemon = subprocess.Popen([str(ROOT / 'target/debug/cutd'), '--dir', str(directory)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    endpoint = directory / '.cutd.sock'
+    endpoint = runtime_endpoint(directory)
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         if daemon.poll() is not None:
@@ -201,6 +205,7 @@ with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as tempo
         send({'type': 'preset_inspect', 'path': str(preset_path)})
         inspected = wait(lambda event: event['type'] == 'preset_inspect')['preset']
         assert len(inspected['slots']) == 1 and inspected['slots'][0]['seconds'] == 3
+        assert [fit['media'] for fit in inspected['slots'][0]['fits']] == [redone['timeline']['sources'][0]['id']], inspected
         send(run_command({'command': 'file.applyPreset', 'params': {'path': str(preset_path),
                           'bindings': {'slot1': {'media': redone['timeline']['sources'][0]['id'], 'from': '1s'}}},
                           'context': {'connected': True, 'revision': redone['revision']}}))
@@ -210,7 +215,7 @@ with tempfile.TemporaryDirectory(prefix='cut-qt-', dir=ROOT / 'target') as tempo
         assert pending_preset['document'] == redone['document']
         send({'type': 'reject', 'proposalId': applied_preset['proposal'], 'revision': pending_preset['revision']})
         redone = state()
-        external = runtime_request(directory, {
+        external = runtime_request(endpoint, {
             'operation': 'apply_script',
             'actor': 'mcp',
             'idempotencyKey': 'qt-external-edit',

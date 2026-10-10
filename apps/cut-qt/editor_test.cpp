@@ -85,8 +85,8 @@ private slots:
         window.setConnection(QStringLiteral("ready"));
         window.applySnapshot(QJsonObject{{"revision", 7}, {"duration", 4}, {"timeline", QJsonObject{
             {"fps", 30}, {"sources", QJsonArray{
-                QJsonObject{{"id", "silent"}, {"path", "silent.mp4"}, {"width", 320}, {"duration", 4}},
-                QJsonObject{{"id", "replacement"}, {"path", "new.mp4"}, {"width", 320}, {"hasAudio", true}, {"duration", 4}}}},
+                QJsonObject{{"id", "silent"}, {"path", "silent.mp4"}, {"width", 320}, {"duration", 4}, {"fps", 24}},
+                QJsonObject{{"id", "replacement"}, {"path", "new.mp4"}, {"width", 320}, {"hasAudio", true}, {"duration", 4}, {"fps", 24}}}},
             {"tracks", QJsonArray{}}}}});
         QVERIFY(window.m_commands->action(QStringLiteral("file.exportPreset")));
         QVERIFY(window.m_commands->action(QStringLiteral("file.applyPreset")));
@@ -101,26 +101,35 @@ private slots:
             auto *code = dialog->findChild<QPlainTextEdit *>(QStringLiteral("presetCode"));
             auto *buttons = dialog->findChild<QDialogButtonBox *>();
             QVERIFY(choice && start && text && code && buttons);
-            QCOMPARE(choice->count(), 2); // A linked video/audio slot excludes silent media.
+            QCOMPARE(choice->count(), 2); // Only media Cut found able to fill the slot.
+            QCOMPARE(choice->itemData(1).toString(), QStringLiteral("replacement"));
+            QStringList uses;
+            for (auto *label : dialog->findChildren<QLabel *>(QStringLiteral("muted"))) uses << label->text();
+            QVERIFY(uses.contains(QStringLiteral("V1 00:00:02:00 “Opening” · child › A1 00:00:00:00")));
             QVERIFY(!buttons->button(QDialogButtonBox::Ok)->isEnabled());
             QCOMPARE(code->toPlainText(), document);
             QVERIFY(code->isReadOnly());
             choice->setCurrentIndex(1);
-            QCOMPARE(start->maximum(), 2.0);
+            QCOMPARE(start->maximum(), 1.958); // Frame 47 at 24 fps, shown to the millisecond.
+            QCOMPARE(start->singleStep(), 1.0 / 24);
             start->setValue(1.25);
             text->setText(QStringLiteral("New title"));
             text->setModified(true);
             QVERIFY(buttons->button(QDialogButtonBox::Ok)->isEnabled());
             buttons->button(QDialogButtonBox::Ok)->click();
         });
-        window.showPresetBindings(path, QJsonObject{{"name", "Style"}, {"document", document},
-            {"slots", QJsonArray{QJsonObject{{"id", "slot1"}, {"seconds", 2}, {"video", true}, {"audio", true}}}},
+        window.showPresetBindings(path, QJsonObject{{"name", "Style"}, {"document", document}, {"sequence", "s1"},
+            {"slots", QJsonArray{QJsonObject{{"id", "slot1"}, {"seconds", 2}, {"video", true}, {"audio", true},
+                {"clips", QJsonArray{
+                    QJsonObject{{"id", "c1"}, {"name", "Opening"}, {"sequence", "s1"}, {"track", "V1"}, {"at", "00:00:02:00"}},
+                    QJsonObject{{"id", "a1"}, {"sequence", "child"}, {"track", "A1"}, {"at", "00:00:00:00"}}}},
+                {"fits", QJsonArray{QJsonObject{{"media", "replacement"}, {"latestFrame", 47}}}}}}},
             {"textSlots", QJsonObject{{"title1", "Original"}}}});
         const QJsonObject request = window.m_lastCommand;
         QCOMPARE(request.value("type").toString(), QStringLiteral("preset_apply"));
         QCOMPARE(request.value("revision").toInt(), 7);
         QCOMPARE(request.value("bindings").toObject().value("slot1").toObject().value("media").toString(), QStringLiteral("replacement"));
-        QCOMPARE(request.value("bindings").toObject().value("slot1").toObject().value("from").toString(), QStringLiteral("1.250s"));
+        QCOMPARE(request.value("bindings").toObject().value("slot1").toObject().value("from").toString(), QStringLiteral("30f"));
         QCOMPARE(request.value("texts").toObject().value("title1").toString(), QStringLiteral("New title"));
     }
 

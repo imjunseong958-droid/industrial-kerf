@@ -4,8 +4,8 @@
 
 use crate::{apply_script, parse_document, print_document, print_ops, PrintOptions};
 use cut_model::{
-    Catalog, ClipChange, Content, Id, Media, NewClip, Op, Param, Project, Sequence, SequenceChange,
-    Time, TrackChange, TrackKind, Value,
+    Catalog, Clip, ClipChange, Content, Id, Media, NewClip, Op, Param, Project, Rate, Sequence,
+    SequenceChange, Time, TrackChange, TrackKind, Transition, Value,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -89,30 +89,13 @@ pub fn export(
     for sequence in &mut pattern.sequences {
         for track in &mut sequence.tracks {
             for clip in &mut track.clips {
-                let Some((mut low, mut high)) = clip.source_range() else {
+                let Some((low, high)) = required_source(clip, &track.transitions, sequence.rate)
+                else {
                     continue;
                 };
-                let speed = clip.speed();
                 let Content::Media { media, .. } = &mut clip.content else {
                     continue;
                 };
-                for transition in &track.transitions {
-                    let (before, after) = transition.split_at_cut(sequence.rate);
-                    if transition.to == clip.id {
-                        if speed.is_reverse() {
-                            high += speed.source_span(before);
-                        } else {
-                            low -= speed.source_span(before);
-                        }
-                    }
-                    if transition.from == clip.id {
-                        if speed.is_reverse() {
-                            low -= speed.source_span(after);
-                        } else {
-                            high += speed.source_span(after);
-                        }
-                    }
-                }
                 let source = project.media(media.as_str()).expect("validated media");
                 let key = (
                     clip.link.clone().unwrap_or_else(|| clip.id.clone()),
@@ -167,6 +150,36 @@ pub fn export(
     Ok(print_document(&pattern, catalog, PrintOptions::default()))
 }
 
+/// The source interval a clip plays plus the handles its transitions read
+/// before its first and after its last frame. Handles round up, so the
+/// validator's handle check holds for a slot cut to exactly this interval.
+fn required_source(clip: &Clip, transitions: &[Transition], rate: Rate) -> Option<(Time, Time)> {
+    let (mut low, mut high) = clip.source_range()?;
+    let speed = clip.speed();
+    for transition in transitions {
+        let (before, after) = transition.split_at_cut(rate);
+        let head = if transition.to == clip.id {
+            speed.source_span_covering(before)
+        } else {
+            Time::ZERO
+        };
+        let tail = if transition.from == clip.id {
+            speed.source_span_covering(after)
+        } else {
+            Time::ZERO
+        };
+        // Reverse clips read their head from later source and their tail from earlier.
+        if speed.is_reverse() {
+            low -= tail;
+            high += head;
+        } else {
+            low -= head;
+            high += tail;
+        }
+    }
+    Some((low, high))
+}
+
 /// Read and validate a portable preset. Every media input must be a slot;
 /// unbound file paths and hidden, unused sequences are rejected.
 pub fn parse(document: &str, catalog: &Catalog) -> Result<Project, String> {
@@ -208,6 +221,34 @@ pub fn parse(document: &str, catalog: &Catalog) -> Result<Project, String> {
         }
     }
     Ok(project)
+}
+
+/// How far into `media` a binding may start and still fill `slot`; negative
+/// when the media is too short. Errors when it lacks a stream the slot needs.
+fn room(slot: &Media, media: &Media) -> Result<Time, String> {
+    let missing: Vec<_> = [
+        ("video", slot.video.is_some() && media.video.is_none()),
+        ("audio", slot.audio.is_some() && media.audio.is_none()),
+    ]
+    .into_iter()
+    .filter_map(|(stream, missing)| missing.then_some(stream))
+    .collect();
+    if !missing.is_empty() {
+        return Err(format!(
+            "slot `{}` needs {}, which `{}` lacks",
+            slot.id,
+            missing.join(" and "),
+            media.id
+        ));
+    }
+    Ok(media.duration - slot.duration)
+}
+
+/// The latest whole frame of `media` from which it can fill `slot`, or `None`
+/// when it lacks a needed stream or enough material.
+pub fn latest_start(slot: &Media, media: &Media) -> Option<Time> {
+    let room = room(slot, media).ok().filter(|room| !room.is_negative())?;
+    Some(media.rate.time_of(media.rate.frames_floor(room)))
 }
 
 /// Captions and title generator text that can be overridden by template clip id.
@@ -270,20 +311,7 @@ pub fn instantiate(
         let media = project
             .media(binding.media.as_str())
             .ok_or_else(|| format!("no media `{}`", binding.media))?;
-        if (slot.video.is_some() && media.video.is_none())
-            || (slot.audio.is_some() && media.audio.is_none())
-        {
-            return Err(format!(
-                "slot `{}` needs {}{}",
-                slot.id,
-                if slot.video.is_some() { "video" } else { "" },
-                if slot.audio.is_some() { " audio" } else { "" }
-            ));
-        }
-        if binding.from.is_negative()
-            || binding.from > media.duration
-            || slot.duration > media.duration - binding.from
-        {
+        if binding.from.is_negative() || binding.from > room(slot, media)? {
             return Err(format!("slot `{}` needs {} of media from {} (including transition handles), but `{}` is {} long",
                 slot.id, slot.duration, binding.from, media.id, media.duration));
         }

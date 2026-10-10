@@ -3,7 +3,7 @@
 
 use crate::{CutMcpRouter, McpError};
 use cut_lang::{preset, Clock};
-use cut_model::{Catalog, Id, Project};
+use cut_model::{Catalog, Content, Id, Project};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -44,7 +44,8 @@ impl CutMcpRouter {
         })
     }
 
-    fn read_preset(&self, file: &str) -> Result<String, McpError> {
+    /// The preset's text and its validated pattern.
+    fn read_preset(&self, file: &str) -> Result<(String, Project), McpError> {
         let mut document = String::new();
         File::open(self.preset_path(file)?)
             .map_err(io_error)?
@@ -54,8 +55,8 @@ impl CutMcpRouter {
         if document.len() as u64 > MAX_PRESET_BYTES {
             return Err(invalid("preset exceeds 1 MiB"));
         }
-        preset::parse(&document, Catalog::builtin()).map_err(invalid)?;
-        Ok(document)
+        let pattern = preset::parse(&document, Catalog::builtin()).map_err(invalid)?;
+        Ok((document, pattern))
     }
 
     pub(super) fn list_presets(&self) -> Result<Value, McpError> {
@@ -85,19 +86,33 @@ impl CutMcpRouter {
         Ok(json!({"presets": files, "more": more}))
     }
 
-    pub(super) fn inspect_preset(&self, file: &str) -> Result<Value, McpError> {
-        let document = self.read_preset(file)?;
-        let pattern = preset::parse(&document, Catalog::builtin()).map_err(invalid)?;
-        let slots: Vec<_> = pattern.media.iter().map(|media| {
-            let clips: Vec<_> = pattern.sequences.iter().flat_map(|s| &s.tracks).flat_map(|t| &t.clips)
-                .filter(|c| matches!(&c.content, cut_model::Content::Media { media: id, .. } if id == &media.id))
-                .map(|c| json!({"id": c.id.as_str(), "name": c.name})).collect();
-            json!({"id": media.id.as_str(), "video": media.video.is_some(), "audio": media.audio.is_some(),
-                "minimumDuration": Clock::of_media(media).print_duration(media.duration),
-                "seconds": media.duration.seconds(), "clips": clips})
-        }).collect();
+    /// The pattern, its text slots, and each media slot with the clips that
+    /// use it and the project's imported media that can fill it.
+    pub(super) fn inspect_preset(&self, project: &Project, file: &str) -> Result<Value, McpError> {
+        let (document, pattern) = self.read_preset(file)?;
+        let slots: Vec<_> = pattern
+            .media
+            .iter()
+            .map(|slot| {
+                // Judged from imported metadata; applying re-probes the files.
+                let fits: Vec<_> = project
+                    .media
+                    .iter()
+                    .filter_map(|media| {
+                        let latest = preset::latest_start(slot, media)?;
+                        Some(json!({"media": media.id.as_str(),
+                            "latestFrame": media.rate.frames_floor(latest)}))
+                    })
+                    .collect();
+                json!({"id": slot.id.as_str(), "video": slot.video.is_some(), "audio": slot.audio.is_some(),
+                    "minimumDuration": Clock::of_media(slot).print_duration(slot.duration),
+                    "seconds": slot.duration.seconds(), "clips": slot_clips(&pattern, &slot.id),
+                    "fits": fits})
+            })
+            .collect();
         Ok(
             json!({"preset": file, "name": pattern.name, "document": document,
+            "sequence": pattern.sequences[0].id.as_str(),
             "slots": slots, "textSlots": preset::text_slots(&pattern)}),
         )
     }
@@ -156,8 +171,7 @@ impl CutMcpRouter {
         inputs: &BTreeMap<String, BindingInput>,
         texts: &BTreeMap<String, String>,
     ) -> Result<String, McpError> {
-        let document = self.read_preset(file)?;
-        let pattern = preset::parse(&document, Catalog::builtin()).map_err(invalid)?;
+        let (document, pattern) = self.read_preset(file)?;
         let mut bindings = BTreeMap::new();
         for slot in &pattern.media {
             if !inputs.contains_key(slot.id.as_str()) {
@@ -228,4 +242,22 @@ impl CutMcpRouter {
         )
         .map_err(invalid)
     }
+}
+
+/// Where a slot appears in the pattern, so a person can tell slots apart.
+fn slot_clips(pattern: &Project, slot: &Id) -> Vec<Value> {
+    let mut clips = Vec::new();
+    for sequence in &pattern.sequences {
+        let clock = Clock::of_sequence(sequence);
+        for track in &sequence.tracks {
+            for clip in &track.clips {
+                if matches!(&clip.content, Content::Media { media, .. } if media == slot) {
+                    clips.push(json!({"id": clip.id.as_str(), "name": clip.name,
+                        "sequence": sequence.id.as_str(), "track": track.id.as_str(),
+                        "at": clock.print_position(clip.start)}));
+                }
+            }
+        }
+    }
+    clips
 }

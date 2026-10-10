@@ -25,6 +25,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFontDatabase>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QIcon>
@@ -188,22 +189,29 @@ void MainWindow::showPresetBindings(const QString &path, const QJsonObject &pres
     QHash<QString, QComboBox *> media;
     QHash<QString, QDoubleSpinBox *> starts;
     QHash<QString, QLineEdit *> texts;
-    const QJsonArray sources = m_project.value(QStringLiteral("sources")).toArray();
+    QHash<QString, QJsonObject> sources;
+    for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray())
+        sources.insert(value.toObject().value(QStringLiteral("id")).toString(), value.toObject());
+    // Cut lists the media able to fill each slot and the latest frame each can
+    // start from. Starts are shown in seconds but sent as whole frames.
+    constexpr int latestFrameRole = Qt::UserRole + 1;
+    constexpr int fpsRole = Qt::UserRole + 2;
+    const QString root = preset.value(QStringLiteral("sequence")).toString();
     for (const QJsonValue &value : preset.value(QStringLiteral("slots")).toArray()) {
         const QJsonObject slot = value.toObject();
         const QString id = slot.value(QStringLiteral("id")).toString();
-        const double required = slot.value(QStringLiteral("seconds")).toDouble();
         auto *choice = new QComboBox;
         choice->setObjectName(QStringLiteral("presetMedia_%1").arg(id));
         choice->addItem(QStringLiteral("Choose imported media…"), QString());
-        for (const QJsonValue &sourceValue : sources) {
-            const QJsonObject source = sourceValue.toObject();
-            if ((slot.value(QStringLiteral("video")).toBool() && !source.contains(QStringLiteral("width"))) ||
-                (slot.value(QStringLiteral("audio")).toBool() && !source.value(QStringLiteral("hasAudio")).toBool()) ||
-                source.value(QStringLiteral("duration")).toDouble() + 0.000001 < required) continue;
-            choice->addItem(QStringLiteral("%1 — %2").arg(source.value(QStringLiteral("id")).toString(),
-                QFileInfo(source.value(QStringLiteral("path")).toString()).fileName()), source.value(QStringLiteral("id")).toString());
-            choice->setItemData(choice->count() - 1, source.value(QStringLiteral("duration")).toDouble(), Qt::UserRole + 1);
+        for (const QJsonValue &fitValue : slot.value(QStringLiteral("fits")).toArray()) {
+            const QJsonObject fit = fitValue.toObject();
+            const QJsonObject source = sources.value(fit.value(QStringLiteral("media")).toString());
+            if (source.isEmpty()) continue;
+            const QString sourceId = source.value(QStringLiteral("id")).toString();
+            choice->addItem(QStringLiteral("%1 — %2").arg(sourceId,
+                QFileInfo(source.value(QStringLiteral("path")).toString()).fileName()), sourceId);
+            choice->setItemData(choice->count() - 1, fit.value(QStringLiteral("latestFrame")).toInteger(), latestFrameRole);
+            choice->setItemData(choice->count() - 1, source.value(QStringLiteral("fps")).toDouble(), fpsRole);
         }
         if (choice->count() == 1) choice->setItemText(0, QStringLiteral("Import matching media first"));
         auto *from = new QDoubleSpinBox;
@@ -212,15 +220,33 @@ void MainWindow::showPresetBindings(const QString &path, const QJsonObject &pres
         from->setSuffix(QStringLiteral(" s"));
         from->setRange(0, 0);
         from->setToolTip(QStringLiteral("Start in the replacement media, including the preset's transition handles"));
-        connect(choice, &QComboBox::currentIndexChanged, from, [choice, from, required] {
-            from->setMaximum(std::max(0.0, choice->currentData(Qt::UserRole + 1).toDouble() - required));
+        connect(choice, &QComboBox::currentIndexChanged, from, [choice, from] {
+            const double fps = choice->currentData(fpsRole).toDouble();
+            from->setSingleStep(fps > 0 ? 1 / fps : 1);
+            from->setMaximum(fps > 0 ? choice->currentData(latestFrameRole).toDouble() / fps : 0);
         });
+        QStringList uses;
+        for (const QJsonValue &clipValue : slot.value(QStringLiteral("clips")).toArray()) {
+            const QJsonObject clip = clipValue.toObject();
+            QString use = QStringLiteral("%1 %2").arg(clip.value(QStringLiteral("track")).toString(),
+                                                      clip.value(QStringLiteral("at")).toString());
+            const QString sequence = clip.value(QStringLiteral("sequence")).toString();
+            if (sequence != root) use = QStringLiteral("%1 › %2").arg(sequence, use);
+            const QString name = clip.value(QStringLiteral("name")).toString();
+            if (!name.isEmpty()) use += QStringLiteral(" “%1”").arg(name);
+            uses << use;
+        }
+        auto *usedBy = new QLabel(uses.join(QStringLiteral(" · ")));
+        usedBy->setObjectName(QStringLiteral("muted"));
+        usedBy->setWordWrap(true);
         auto *row = new QWidget;
-        auto *rowLayout = new QHBoxLayout(row);
+        auto *rowLayout = new QGridLayout(row);
         rowLayout->setContentsMargins(0, 0, 0, 0);
-        rowLayout->addWidget(choice, 1);
-        rowLayout->addWidget(from);
-        form->addRow(QStringLiteral("%1 · %2 s").arg(id).arg(required, 0, 'f', 3), row);
+        rowLayout->addWidget(choice, 0, 0);
+        rowLayout->addWidget(from, 0, 1);
+        rowLayout->addWidget(usedBy, 1, 0, 1, 2);
+        rowLayout->setColumnStretch(0, 1);
+        form->addRow(QStringLiteral("%1 · %2 s").arg(id).arg(slot.value(QStringLiteral("seconds")).toDouble(), 0, 'f', 3), row);
         media.insert(id, choice);
         starts.insert(id, from);
     }
@@ -259,8 +285,12 @@ void MainWindow::showPresetBindings(const QString &path, const QJsonObject &pres
     }
     QJsonObject bindings;
     for (auto it = media.begin(); it != media.end(); ++it) {
+        // Clamp: the shown maximum is rounded to the spin box's decimals.
+        const qint64 frame = std::clamp<qint64>(
+            qRound64(starts.value(it.key())->value() * it.value()->currentData(fpsRole).toDouble()),
+            0, it.value()->currentData(latestFrameRole).toLongLong());
         bindings.insert(it.key(), QJsonObject{{QStringLiteral("media"), it.value()->currentData().toString()},
-            {QStringLiteral("from"), QString::number(starts.value(it.key())->value(), 'f', 3) + QStringLiteral("s")}});
+            {QStringLiteral("from"), QStringLiteral("%1f").arg(frame)}});
     }
     QJsonObject overrides;
     for (auto it = texts.begin(); it != texts.end(); ++it) {

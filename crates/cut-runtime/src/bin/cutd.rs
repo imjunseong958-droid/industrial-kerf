@@ -1,6 +1,6 @@
 //! Standalone Cut runtime daemon.
 
-use cut_runtime::{run_ipc, run_stdio};
+use cut_runtime::{run_ipc, run_stdio, EndpointAddress, RuntimeClient};
 use std::env;
 use std::io;
 use std::path::PathBuf;
@@ -13,7 +13,14 @@ fn main() {
         .map(|pair| PathBuf::from(&pair[1]))
         .or_else(|| env::var_os("CUT_PROJECT_DIR").map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from(".cut/runtime"));
-    let result = if args.iter().any(|arg| arg == "--stdio") {
+    let result = if args.iter().any(|arg| arg == "--endpoint") {
+        // Print where clients reach this project's daemon: `<dir>/.cutd.sock`,
+        // or a per-user socket when that path is too long for the OS.
+        RuntimeClient::new(&directory).map(|client| match client.endpoint() {
+            EndpointAddress::Unix { path } => println!("{}", path.display()),
+            EndpointAddress::WindowsNamedPipe { name } => println!("{name}"),
+        })
+    } else if args.iter().any(|arg| arg == "--stdio") {
         run_stdio(
             &directory,
             io::stdin().lock(),

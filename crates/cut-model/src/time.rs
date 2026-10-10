@@ -475,6 +475,14 @@ impl Ratio {
             i128::from(self.num.unsigned_abs()),
         )
     }
+
+    /// Source time covered by `duration` of timeline, rounded up so that its
+    /// `timeline_span` is never shorter than `duration`. Use it for handles:
+    /// `source_span` rounds to the nearest flick and can fall one short.
+    pub fn source_span_covering(self, duration: Time) -> Time {
+        let product = i128::from(duration.0) * i128::from(self.num.unsigned_abs());
+        Time(-(-product).div_euclid(i128::from(self.den)) as i64)
+    }
 }
 
 impl fmt::Display for Ratio {
@@ -631,5 +639,22 @@ mod tests {
         assert_eq!(Ratio::parse("3/2").unwrap().to_string(), "1.5");
         assert!(Ratio::parse("0").is_err());
         assert!(Ratio::parse("1000").is_err());
+    }
+
+    #[test]
+    fn covering_spans_play_back_at_least_as_long() {
+        let six_frames = Rate::FPS_29_97.time_of(6);
+        let speed = Ratio::parse("0.37").unwrap();
+        // Rounding to the nearest flick loses one here.
+        assert!(speed.timeline_span(speed.source_span(six_frames)) < six_frames);
+        for speed in ["0.37", "-0.37", "0.3333", "7/13", "2.33", "100", "0.01"] {
+            let speed = Ratio::parse(speed).unwrap();
+            for frames in 0..48 {
+                let duration = Rate::FPS_29_97.time_of(frames);
+                let span = speed.source_span_covering(duration);
+                assert!(speed.timeline_span(span) >= duration, "{speed} {frames}f");
+                assert!(span.flicks() - speed.source_span(duration).flicks() <= 1);
+            }
+        }
     }
 }

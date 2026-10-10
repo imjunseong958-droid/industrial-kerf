@@ -12,7 +12,10 @@ rendered video or translate another editor's template format.
 3. In another project, import the replacement footage into the Project bin.
 4. Choose **File → Import Editing Preset…** and open the shared file.
 5. Assign media to each slot, choose its source start, and optionally replace
-   title/caption text. The dialog also shows the preset's editing code.
+   title/caption text. Each slot shows the track and time of the clips that
+   use it, and lists only imported media with the streams and length it
+   needs; the start snaps to a whole frame of that media. The dialog also
+   shows the preset's editing code.
 6. Choose **Create proposal**, review the timeline, and accept the proposal.
 
 Export does not change the project. Applying replaces the program sequence;
@@ -107,5 +110,8 @@ The assistant and external MCP clients keep the three-tool interface:
 ```
 
 Listing covers the project root and `.cut/presets`. Inspect/apply can read a
-shared `.cutpreset` at an explicitly supplied path. Application uses the same
+shared `.cutpreset` at an explicitly supplied path. Inspecting lists, for each
+slot, the clips that use it and the project's imported media that can fill it
+(`fits`), each with the latest start frame (`latestFrame`, usable as
+`"from": "<n>f"`). Application uses the same
 proposal diff, checks, and before/after preview as other edits.

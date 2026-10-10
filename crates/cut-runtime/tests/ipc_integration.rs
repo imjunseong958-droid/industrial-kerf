@@ -278,3 +278,29 @@ fn daemon_exits_once_its_project_directory_is_deleted() {
     stop_daemon(daemon);
     panic!("cutd kept running after its project directory was deleted");
 }
+
+#[test]
+fn endpoint_flag_prints_the_socket_even_when_a_long_path_moves_it() {
+    let base = project_directory("endpoint");
+    let long = base.join("a".repeat(120));
+    for directory in [&base, &long] {
+        let output = Command::new(env!("CARGO_BIN_EXE_cutd"))
+            .arg("--dir")
+            .arg(directory)
+            .arg("--endpoint")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let printed = PathBuf::from(String::from_utf8(output.stdout).unwrap().trim());
+        let client = RuntimeClient::new(directory).unwrap();
+        assert_eq!(Some(printed.as_path()), client.endpoint().as_path());
+        if directory == &long {
+            assert!(!printed.starts_with(client.directory()), "{printed:?}");
+        }
+        let daemon = start_daemon(directory);
+        wait_until_ready(&client);
+        assert!(UnixStream::connect(&printed).is_ok());
+        stop_daemon(daemon);
+    }
+    fs::remove_dir_all(&base).unwrap();
+}

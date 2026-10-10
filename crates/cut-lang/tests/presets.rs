@@ -223,7 +223,7 @@ fn refuses_missing_unknown_short_wrong_stream_and_negative_bindings() {
     assert!(attempt(&project, &bindings()).contains("including transition handles"));
     project.media[0].duration = Time::from_seconds(10.0).unwrap();
     project.media[0].audio = None;
-    assert!(attempt(&project, &bindings()).contains("audio"));
+    assert!(attempt(&project, &bindings()).contains("needs audio, which `replacement` lacks"));
     project = destination();
     input = bindings();
     input.get_mut("slot1").unwrap().from = Time::from_seconds(-1.0).unwrap();
@@ -308,6 +308,54 @@ sequence unused rate=30 size=320x180
             .len(),
         1
     );
+}
+
+#[test]
+fn exports_transitions_between_retimed_clips_at_every_rate() {
+    // Handles that round to the nearest flick can fall one flick short of
+    // what the validator requires, e.g. at 29.97 with 37% speed.
+    for rate in ["23.976", "25", "29.97", "30", "59.94"] {
+        for speed in ["0.37", "-0.37", "0.3333", "7/13"] {
+            for frames in 1..=24 {
+                for align in ["center", "start", "end"] {
+                    let original = parse(&format!(
+                        r#"cut 1
+project name="Retimed"
+media m path="private.mov" rate={rate} dur=600s video=320x180
+sequence s rate={rate} size=320x180
+  track V1 video
+    clip a media=m src=3000f at=0f dur=90f speed={speed}
+    clip b media=m src=9000f at=90f dur=90f speed={speed}
+    transition t from=a to=b fx=dissolve dur={frames}f align={align}
+"#
+                    ));
+                    preset::export(&original, Catalog::builtin(), &Id::new("s").unwrap(), "P")
+                        .unwrap_or_else(|e| {
+                            panic!("{rate}fps speed {speed}, {frames}f {align}: {e}")
+                        });
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn latest_start_is_the_last_whole_frame_that_fills_the_slot() {
+    let pattern = preset::parse(&exported(), Catalog::builtin()).unwrap();
+    let slot = pattern.media("slot1").unwrap();
+    let mut media = destination().media[0].clone();
+    // 10s at 24 fps less 2.2s of slot leaves 7.8s: frame 187.2, so frame 187.
+    assert_eq!(
+        preset::latest_start(slot, &media),
+        Some(media.rate.time_of(187))
+    );
+    media.duration = slot.duration;
+    assert_eq!(preset::latest_start(slot, &media), Some(Time::ZERO));
+    media.duration = Time::from_seconds(2.0).unwrap();
+    assert_eq!(preset::latest_start(slot, &media), None);
+    media.duration = Time::from_seconds(10.0).unwrap();
+    media.audio = None;
+    assert_eq!(preset::latest_start(slot, &media), None);
 }
 
 #[test]

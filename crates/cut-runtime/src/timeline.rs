@@ -27,6 +27,7 @@ pub(crate) fn timeline_json(project: &Project) -> Json {
                 "path": media.path,
                 "duration": media.duration.seconds(),
                 "rate": media.rate.to_string(),
+                "fps": media.rate.fps(),
                 "hasAudio": media.audio.is_some(),
             });
             if let Some(video) = media.video {
@@ -297,6 +298,7 @@ mod tests {
         .project;
         let value = timeline_json(&project);
         assert_eq!(value["fps"], 24.0);
+        assert_eq!(value["sources"][0]["fps"], 24.0);
         assert_eq!(value["duration"], 3.0);
         let v1 = &value["tracks"][0];
         assert_eq!(v1["clips"][0]["duration"], 2.0);
