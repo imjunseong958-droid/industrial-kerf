@@ -1,7 +1,3 @@
-# Working with Lim
-
-I'm Lim. Favor simple, clear, maintainable solutions.
-
 ## Subagents
 
 Do not spawn subagents unless I ask.
