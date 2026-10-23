@@ -9,10 +9,13 @@
 #include <QTimer>
 
 // Settings saved by Cut, Kerf's earlier name, carry over on first launch.
+// Fallbacks stay off so system-wide settings are neither counted nor copied.
 static void migrateCutSettings() {
     QSettings settings;
+    settings.setFallbacksEnabled(false);
     if (!settings.allKeys().isEmpty()) return;
-    const QSettings cut(QStringLiteral("Cut"), QStringLiteral("Cut"));
+    QSettings cut(QStringLiteral("Cut"), QStringLiteral("Cut"));
+    cut.setFallbacksEnabled(false);
     for (const QString &key : cut.allKeys()) settings.setValue(key, cut.value(key));
     if (settings.value(QStringLiteral("commands/keymap")).toString() == QStringLiteral("cut"))
         settings.setValue(QStringLiteral("commands/keymap"), QStringLiteral("kerf"));
