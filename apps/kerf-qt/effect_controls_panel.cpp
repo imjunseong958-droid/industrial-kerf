@@ -6,12 +6,14 @@
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPixmap>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -57,6 +59,12 @@ EffectControlsPanel::EffectControlsPanel(QWidget *parent) : QWidget(parent) {
     m_propertyForm->setContentsMargins(0, 0, 0, 0);
     m_propertyForm->setSpacing(6);
     layout->addWidget(properties);
+    auto *effects = new QWidget;
+    effects->setObjectName(QStringLiteral("inspectorEffects"));
+    m_effectsLayout = new QVBoxLayout(effects);
+    m_effectsLayout->setContentsMargins(0, 6, 0, 0);
+    m_effectsLayout->setSpacing(8);
+    layout->addWidget(effects);
     layout->addStretch(1);
     setClip(QString(), QJsonObject{}, QJsonArray{}, m_fps);
 }
@@ -110,7 +118,113 @@ void EffectControlsPanel::setClip(const QString &id, const QJsonObject &clip, co
                                  : prop.isUndefined() ? def.toObject().value(QStringLiteral("default")) : prop);
         editor->setEnabled(!prop.isArray());
     }
+    showEffects();
     m_updating = false;
+}
+
+void EffectControlsPanel::setEffectCatalog(const QJsonArray &catalog) {
+    m_effectDefs.clear();
+    for (const QJsonValue &value : catalog) {
+        const QJsonObject fx = value.toObject();
+        m_effectDefs.insert(fx.value(QStringLiteral("id")).toString(), fx);
+    }
+    m_effectsShown.clear();
+}
+
+void EffectControlsPanel::showEffects() {
+    const QJsonArray effects = m_clip.value(QStringLiteral("effects")).toArray();
+    QStringList stack{m_clipId};
+    for (const QJsonValue &effect : effects) stack << effect.toObject().value(QStringLiteral("fx")).toString();
+    const QString shown = stack.join(QLatin1Char('|'));
+    if (shown == m_effectsShown) {
+        // The same stack: refresh the values in place, keeping focus.
+        for (int index = 0; index < effects.size(); ++index) {
+            const QJsonObject effect = effects.at(index).toObject();
+            const QJsonObject params = effect.value(QStringLiteral("params")).toObject();
+            QWidget *box = m_effectsLayout->itemAt(index) ? m_effectsLayout->itemAt(index)->widget() : nullptr;
+            if (!box) continue;
+            if (auto *enabled = box->findChild<QCheckBox *>(QStringLiteral("effectEnabled"))) {
+                const QSignalBlocker blocker(enabled);
+                enabled->setChecked(effect.value(QStringLiteral("enabled")).toBool(true));
+            }
+            for (const QJsonValue &def : m_effectDefs.value(effect.value(QStringLiteral("fx")).toString())
+                                            .value(QStringLiteral("params"))
+                                            .toArray()) {
+                const QString name = def.toObject().value(QStringLiteral("name")).toString();
+                QWidget *editor = box->findChild<QWidget *>(QStringLiteral("effectParam_") + name);
+                if (!editor) continue;
+                const QJsonValue value = params.value(name);
+                setPropertyValue(editor, value.isArray() ? value.toArray().first().toObject().value(QStringLiteral("value"))
+                                         : value.isUndefined() ? def.toObject().value(QStringLiteral("default")) : value);
+                editor->setEnabled(!value.isArray());
+            }
+        }
+        return;
+    }
+    m_effectsShown = shown;
+    while (QLayoutItem *item = m_effectsLayout->takeAt(0)) {
+        delete item->widget();
+        delete item;
+    }
+    for (int index = 0; index < effects.size(); ++index) {
+        const QJsonObject effect = effects.at(index).toObject();
+        const QString fx = effect.value(QStringLiteral("fx")).toString();
+        const QJsonObject def = m_effectDefs.value(fx);
+        auto *box = new QWidget;
+        box->setObjectName(QStringLiteral("effectBox"));
+        auto *boxLayout = new QVBoxLayout(box);
+        boxLayout->setContentsMargins(0, 0, 0, 0);
+        boxLayout->setSpacing(4);
+        auto *header = new QHBoxLayout;
+        auto *enabled = new QCheckBox(def.value(QStringLiteral("name")).toString(fx));
+        enabled->setObjectName(QStringLiteral("effectEnabled"));
+        enabled->setChecked(effect.value(QStringLiteral("enabled")).toBool(true));
+        enabled->setToolTip(def.value(QStringLiteral("doc")).toString(effect.value(QStringLiteral("doc")).toString()));
+        connect(enabled, &QCheckBox::clicked, this, [this, index](bool on) {
+            if (m_clipId.isEmpty() || m_updating) return;
+            edit(QJsonObject{{QStringLiteral("op"), QStringLiteral("fx-set")}, {QStringLiteral("clip"), m_clipId},
+                             {QStringLiteral("index"), index}, {QStringLiteral("enabled"), on}});
+        });
+        auto *remove = new QToolButton;
+        remove->setObjectName(QStringLiteral("effectRemove"));
+        remove->setText(QStringLiteral("✕"));
+        remove->setToolTip(QStringLiteral("Remove this effect"));
+        connect(remove, &QToolButton::clicked, this, [this, index] {
+            if (m_clipId.isEmpty()) return;
+            edit(QJsonObject{{QStringLiteral("op"), QStringLiteral("fx-remove")}, {QStringLiteral("clip"), m_clipId},
+                             {QStringLiteral("index"), index}});
+        });
+        header->addWidget(enabled, 1);
+        header->addWidget(remove);
+        boxLayout->addLayout(header);
+        auto *form = new QFormLayout;
+        form->setSpacing(4);
+        const QJsonObject params = effect.value(QStringLiteral("params")).toObject();
+        for (const QJsonValue &paramValue : def.value(QStringLiteral("params")).toArray()) {
+            const QJsonObject param = paramValue.toObject();
+            const QString name = param.value(QStringLiteral("name")).toString();
+            const QJsonValue fallback = param.value(QStringLiteral("default"));
+            QWidget *editor = valueEditor(param, name, [this, index, name, fallback](const QJsonValue &value) {
+                if (m_clipId.isEmpty() || m_updating) return;
+                const bool isDefault = value.isDouble() && fallback.isDouble()
+                                           ? std::abs(value.toDouble() - fallback.toDouble()) < 5e-4
+                                           : value == fallback;
+                edit(QJsonObject{{QStringLiteral("op"), QStringLiteral("fx-set")}, {QStringLiteral("clip"), m_clipId},
+                                 {QStringLiteral("index"), index},
+                                 {QStringLiteral("params"), QJsonObject{{name, isDefault ? QJsonValue() : value}}}});
+            });
+            editor->setObjectName(QStringLiteral("effectParam_") + name);
+            const QJsonValue value = params.value(name);
+            setPropertyValue(editor, value.isArray() ? value.toArray().first().toObject().value(QStringLiteral("value"))
+                                     : value.isUndefined() ? fallback : value);
+            editor->setEnabled(!value.isArray());
+            QString label = param.value(QStringLiteral("doc")).toString(name);
+            if (label.isEmpty()) label = name;
+            form->addRow(label, editor);
+        }
+        boxLayout->addLayout(form);
+        m_effectsLayout->addWidget(box);
+    }
 }
 
 void EffectControlsPanel::edit(const QJsonObject &op) {
@@ -168,6 +282,11 @@ void EffectControlsPanel::propertyEdited(const QString &name, const QJsonValue &
 
 QWidget *EffectControlsPanel::propertyEditor(const QJsonObject &def) {
     const QString name = def.value(QStringLiteral("name")).toString();
+    return valueEditor(def, name, [this, name](const QJsonValue &value) { propertyEdited(name, value); });
+}
+
+QWidget *EffectControlsPanel::valueEditor(const QJsonObject &def, const QString &title,
+                                          std::function<void(const QJsonValue &)> edited) {
     const QString type = def.value(QStringLiteral("type")).toString();
     QWidget *editor = nullptr;
     if (type == QStringLiteral("number")) {
@@ -177,28 +296,28 @@ QWidget *EffectControlsPanel::propertyEditor(const QJsonObject &def) {
         spin->setRange(minimum, maximum);
         spin->setDecimals(3);
         spin->setSingleStep(maximum - minimum > 10.0 ? 1.0 : 0.01);
-        connect(spin, &QDoubleSpinBox::editingFinished, this, [this, spin, name] { propertyEdited(name, spin->value()); });
+        connect(spin, &QDoubleSpinBox::editingFinished, this, [spin, edited] { edited(spin->value()); });
         editor = spin;
     } else if (type == QStringLiteral("enum")) {
         auto *combo = new QComboBox;
         for (const QJsonValue &option : def.value(QStringLiteral("options")).toArray()) combo->addItem(option.toString());
-        connect(combo, &QComboBox::activated, this, [this, combo, name] { propertyEdited(name, combo->currentText()); });
+        connect(combo, &QComboBox::activated, this, [combo, edited] { edited(combo->currentText()); });
         editor = combo;
     } else if (type == QStringLiteral("bool")) {
         auto *check = new QCheckBox;
-        connect(check, &QCheckBox::clicked, this, [this, name](bool checked) { propertyEdited(name, checked); });
+        connect(check, &QCheckBox::clicked, this, [edited](bool checked) { edited(checked); });
         editor = check;
     } else if (type == QStringLiteral("color")) {
         auto *button = new QPushButton;
-        connect(button, &QPushButton::clicked, this, [this, button, name] {
-            const QColor color = QColorDialog::getColor(modelColor(button->text()), this, name,
+        connect(button, &QPushButton::clicked, this, [this, button, title, edited] {
+            const QColor color = QColorDialog::getColor(modelColor(button->text()), this, title,
                                                         QColorDialog::ShowAlphaChannel);
-            if (color.isValid()) propertyEdited(name, modelColorName(color));
+            if (color.isValid()) edited(modelColorName(color));
         });
         editor = button;
     } else {
         auto *line = new QLineEdit;
-        connect(line, &QLineEdit::editingFinished, this, [this, line, name] { propertyEdited(name, line->text()); });
+        connect(line, &QLineEdit::editingFinished, this, [line, edited] { edited(line->text()); });
         editor = line;
     }
     QString tip = def.value(QStringLiteral("doc")).toString();

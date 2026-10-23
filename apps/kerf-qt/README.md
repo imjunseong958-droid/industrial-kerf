@@ -109,11 +109,23 @@ Left and Right step one frame, S splits the selected clip at the playhead,
 and Delete and Shift+Delete delete or ripple-delete it (Kerf keymap). The transport under the viewer has the same
 controls between the playhead timecode and the program length. The Editing
 workspace puts the Source monitor (with Effect Controls behind it) beside
-the Program monitor, over the Project bin and the Timeline. An empty
+the Program monitor, over the Project bin (with Effects behind it) and the
+Timeline. An empty
 timeline starts without tracks. Hover over the
 empty row in the left track header to reveal a plus; click it to add a video
 or audio track. Double-click a clip to open its media in the Source monitor
 at the clip's in point.
+
+## Effects
+
+The Effects panel (Window → Effects) shows the catalog's picture effects as
+cards, narrowed by category and by words ("glow", "zoom", "retro"), each
+card the selected media clip's picture at the playhead through that effect.
+Double-click a card, or press Return, to add the effect to the selected clip;
+the edit is an ordinary one, undone like any other. Effect Controls lists the
+clip's effects in order: the checkbox turns one off, ✕ removes it, and its
+parameters edit like the clip's properties, resetting to the default when
+set back to it.
 
 ## Asking Kerf
 

@@ -5,15 +5,19 @@
 #include <QJsonObject>
 #include <QWidget>
 
+#include <functional>
+
 class QDoubleSpinBox;
 class QFormLayout;
 class QLabel;
+class QVBoxLayout;
 
 namespace kerf {
 
-// Effect Controls: the selected clip's timing and the catalog properties of
-// its track type or generator. Edits leave as typed operations counted in
-// frames of the sequence; values commit on focus loss.
+// Effect Controls: the selected clip's timing, the catalog properties of
+// its track type or generator, and its effect stack, each effect with its
+// switch, removal, and parameters. Edits leave as typed operations counted
+// in frames of the sequence; values commit on focus loss.
 class EffectControlsPanel final : public QWidget {
     Q_OBJECT
     friend class EditorTest;
@@ -22,6 +26,8 @@ public:
 
     // Show `clip` with editors for `defs`; an empty id shows nothing to edit.
     void setClip(const QString &id, const QJsonObject &clip, const QJsonArray &defs, double fps);
+    // The catalog from kerf_fx_catalog, for the effects' parameters.
+    void setEffectCatalog(const QJsonArray &catalog);
 
 signals:
     void editRequested(const QJsonArray &ops);
@@ -29,6 +35,8 @@ signals:
 private:
     QDoubleSpinBox *timingSpin(double minimum, double maximum, double step, const QString &field);
     QWidget *propertyEditor(const QJsonObject &def);
+    QWidget *valueEditor(const QJsonObject &def, const QString &title, std::function<void(const QJsonValue &)> edited);
+    void showEffects();
     static void setPropertyValue(QWidget *editor, const QJsonValue &value);
     void timingEdited();
     // A catalog property edit; the default value clears the property.
@@ -48,6 +56,10 @@ private:
     QFormLayout *m_propertyForm = nullptr;
     QJsonArray m_propertyDefs;
     QHash<QString, QWidget *> m_propertyEditors;
+    QVBoxLayout *m_effectsLayout = nullptr;
+    QHash<QString, QJsonObject> m_effectDefs;
+    // The effects shown, as clip and stack, to rebuild only when they change.
+    QString m_effectsShown;
 };
 
 } // namespace kerf

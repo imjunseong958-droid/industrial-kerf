@@ -53,6 +53,8 @@ void Workspace::arrangeEditing() {
     source->setCurrentDockWidget(panel("source"));
     m_manager->addDockWidget(ads::RightDockWidgetArea, panel("program"), source);
     auto *project = m_manager->addDockWidget(ads::BottomDockWidgetArea, panel("project"));
+    m_manager->addDockWidget(ads::CenterDockWidgetArea, panel("effects"), project);
+    project->setCurrentDockWidget(panel("project"));
     m_manager->addDockWidget(ads::RightDockWidgetArea, panel("timeline"), project);
     m_manager->setSplitterSizes(source, {640, 860});
     m_manager->setSplitterSizes(project, {320, 1180});

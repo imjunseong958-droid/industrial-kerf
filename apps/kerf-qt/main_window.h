@@ -38,6 +38,7 @@ namespace kerf {
 class AskPrompt;
 class CommandRegistry;
 class EffectControlsPanel;
+class EffectsPanel;
 class ProjectPanel;
 class SourceMonitorPanel;
 class Workspace;
@@ -201,6 +202,7 @@ private:
     QAction *m_timelineDetail = nullptr;
     Workspace *m_workspace = nullptr;
     EffectControlsPanel *m_effectControls = nullptr;
+    EffectsPanel *m_effects = nullptr;
     ProjectPanel *m_projectPanel = nullptr;
     SourceMonitorPanel *m_sourceMonitor = nullptr;
     QToolBar *m_toolPalette = nullptr;

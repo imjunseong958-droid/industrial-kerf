@@ -2,6 +2,7 @@
 """Exercise the real Qt C ABI, daemon, decoder, and agent proposal loop locally.
 Requires built kerfd/libkerf_qt_bridge and ffmpeg. No external provider is contacted.
 """
+import base64
 import ctypes as C
 import http.server
 import json
@@ -87,6 +88,8 @@ class Frame(C.Structure):
 
 lib.kerf_commands_run.argtypes = [C.c_char_p]
 lib.kerf_commands_run.restype = C.c_void_p
+lib.kerf_fx_catalog.argtypes = []
+lib.kerf_fx_catalog.restype = C.c_void_p
 
 def run_command(invocation):
     pointer = lib.kerf_commands_run(json.dumps(invocation).encode())
@@ -193,6 +196,23 @@ with tempfile.TemporaryDirectory(prefix='kerf-qt-', dir=ROOT / 'target') as temp
         undone = state()
         assert abs(undone['duration'] - 4) < .05
         send({'type': 'redo', 'revision': undone['revision']})
+        redone = state()
+        # The effects offered, how one looks on the clip, and adding it.
+        pointer = lib.kerf_fx_catalog()
+        catalog = json.loads(C.string_at(pointer))
+        lib.kerf_bridge_string_free(pointer)
+        assert any(fx['id'] == 'stylize.glow' and fx['params'] for fx in catalog), catalog[:2]
+        send({'type': 'effect_previews', 'clip': clip['id'], 'at': 1.0,
+              'effects': ['channel.invert', 'color.basic'], 'width': 64})
+        preview = wait(lambda event: event['type'] == 'effect_preview')
+        assert preview['fx'] == 'channel.invert' and preview['width'] == 64, preview['fx']
+        assert len(base64.b64decode(preview['rgba'])) == 64 * preview['height'] * 4
+        send({'type': 'edit', 'revision': redone['revision'],
+              'ops': [{'op': 'fx-add', 'clip': clip['id'], 'fx': 'channel.invert'}]})
+        with_effect = state()
+        effects = with_effect['timeline']['tracks'][0]['clips'][0].get('effects', [])
+        assert [effect['fx'] for effect in effects] == ['channel.invert'], effects
+        send({'type': 'undo', 'revision': with_effect['revision']})
         redone = state()
         # A native preset is exported directly from the accepted edit, without
         # asking a model. It carries empty media slots and reusable .kerf code.
@@ -302,7 +322,7 @@ with tempfile.TemporaryDirectory(prefix='kerf-qt-', dir=ROOT / 'target') as temp
         send({'type': 'cloud_sign_out'})
         wait(lambda event: event['type'] == 'cloud' and event['access'] == 'signedOut')
         assert 'token' not in json.loads((directory / 'home/.kerf/cloud.json').read_text())
-        print(json.dumps({'result': 'passed', 'checks': ['native preset export/inspect/apply/reject', 'kerf cloud sign-in/account/request', 'focused agent request', 'proposal timeline', 'source insert', 'connection lifecycle/reconnect', 'import', 'trim', 'undo', 'redo', 'external CLI edit sync', '200 seeks/latest frame', 'local provider/tool activity', 'proposal/accept', 'conversation history', 'real export', 'effect rendered fallback'], 'max_enqueue_ms': round(max(timings), 3), 'frame': [frame.width, frame.height]}, indent=2))
+        print(json.dumps({'result': 'passed', 'checks': ['native preset export/inspect/apply/reject', 'kerf cloud sign-in/account/request', 'focused agent request', 'proposal timeline', 'source insert', 'connection lifecycle/reconnect', 'import', 'trim', 'undo', 'redo', 'external CLI edit sync', '200 seeks/latest frame', 'local provider/tool activity', 'proposal/accept', 'conversation history', 'real export', 'effect rendered fallback', 'effect catalog/previews/add'], 'max_enqueue_ms': round(max(timings), 3), 'frame': [frame.width, frame.height]}, indent=2))
     finally:
         lib.kerf_bridge_free(bridge)
         if daemon.poll() is None:

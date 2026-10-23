@@ -3,6 +3,7 @@
 #include "bridge.h"
 #include "command_registry.h"
 #include "effect_controls_panel.h"
+#include "effects_panel.h"
 #include "project_panel.h"
 #include "source_monitor_panel.h"
 #include "workspace.h"
@@ -29,6 +30,7 @@
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QIcon>
+#include <QImage>
 #include <QJsonDocument>
 #include <QKeySequence>
 #include <QMenu>
@@ -1468,6 +1470,28 @@ void MainWindow::buildUi() {
     chatTabLayout->addWidget(composer);
     m_effectControls = new EffectControlsPanel;
     connect(m_effectControls, &EffectControlsPanel::editRequested, this, &MainWindow::sendEdit);
+    // The effects offered: cards on the selected clip, and the parameters
+    // the inspector edits.
+    m_effects = new EffectsPanel;
+    if (char *catalog = kerf_fx_catalog()) {
+        const QJsonArray effects = QJsonDocument::fromJson(QByteArray(catalog)).array();
+        kerf_bridge_string_free(catalog);
+        m_effects->setCatalog(effects);
+        m_effectControls->setEffectCatalog(effects);
+    }
+    connect(m_effects, &EffectsPanel::addRequested, this, [this](const QString &fx) {
+        if (m_selectedClip.isEmpty()) return;
+        sendEdit(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("fx-add")},
+                                        {QStringLiteral("clip"), m_selectedClip},
+                                        {QStringLiteral("fx"), fx}}});
+    });
+    connect(m_effects, &EffectsPanel::previewsWanted, this, [this](const QString &clip, const QStringList &effects) {
+        sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("effect_previews")},
+                               {QStringLiteral("clip"), clip},
+                               {QStringLiteral("at"), m_playhead},
+                               {QStringLiteral("effects"), QJsonArray::fromStringList(effects)},
+                               {QStringLiteral("width"), 160}});
+    });
 
     // Agent settings live in the Settings dialog, out of the editing surface.
     m_preferences = new QDialog(this);
@@ -1745,6 +1769,7 @@ void MainWindow::buildUi() {
     m_workspace->addPanel(QStringLiteral("timeline"), QStringLiteral("Timeline"), timelinePanel)
         ->setTitleBarActions({m_timelineDetail});
     m_workspace->addPanel(QStringLiteral("effectControls"), QStringLiteral("Effect Controls"), m_effectControls);
+    m_workspace->addPanel(QStringLiteral("effects"), QStringLiteral("Effects"), m_effects);
     m_workspace->addPanel(QStringLiteral("project"), QStringLiteral("Project"), m_projectPanel);
     m_workspace->addPanel(QStringLiteral("source"), QStringLiteral("Source"), m_sourceMonitor);
     m_workspace->addPanel(QStringLiteral("assistant"), QStringLiteral("Kerf Assistant"), right);
@@ -1878,6 +1903,7 @@ void MainWindow::setupActions() {
         {QStringLiteral("window.program"), QStringLiteral("program")},
         {QStringLiteral("window.timeline"), QStringLiteral("timeline")},
         {QStringLiteral("window.effectControls"), QStringLiteral("effectControls")},
+        {QStringLiteral("window.effects"), QStringLiteral("effects")},
         {QStringLiteral("window.assistant"), QStringLiteral("assistant")},
     };
     // Tools are one exclusive choice; snapping is a switch.
@@ -2421,6 +2447,16 @@ void MainWindow::handleEvent(QJsonObject event) {
         m_cloudAccount = event.value(QStringLiteral("account")).toObject();
         m_cloudMessage = event.value(QStringLiteral("message")).toString();
         updateCloudStatus();
+    } else if (type == QStringLiteral("effect_preview")) {
+        const int width = event.value(QStringLiteral("width")).toInt();
+        const int height = event.value(QStringLiteral("height")).toInt();
+        const QByteArray rgba = QByteArray::fromBase64(event.value(QStringLiteral("rgba")).toString().toLatin1());
+        if (width > 0 && height > 0 && rgba.size() >= qsizetype(width) * height * 4) {
+            const QImage image(reinterpret_cast<const uchar *>(rgba.constData()), width, height, width * 4,
+                               QImage::Format_RGBA8888);
+            m_effects->setPreview(event.value(QStringLiteral("clip")).toString(),
+                                  event.value(QStringLiteral("fx")).toString(), image.copy());
+        }
     } else if (type == QStringLiteral("caption")) {
         m_viewer->setCaption(event.value(QStringLiteral("text")).toString());
     }
@@ -2510,8 +2546,11 @@ void MainWindow::updateInspector() {
     const QJsonObject clip = selectedClipObject();
     if (!m_connected || clip.isEmpty()) {
         m_effectControls->setClip(QString(), QJsonObject{}, QJsonArray{}, m_fps);
+        m_effects->setClip(QString(), false);
         return;
     }
+    m_effects->setClip(m_selectedClip, selectedTrackType() == QStringLiteral("video") &&
+                                           clip.value(QStringLiteral("kind")).toString() == QStringLiteral("media"));
     // A generator's parameters, then the properties of the clip's track type.
     QJsonArray defs = m_project.value(QStringLiteral("generators")).toObject().value(clip.value(QStringLiteral("fx")).toString()).toArray();
     for (const QJsonValue &def : m_project.value(QStringLiteral("properties")).toObject().value(selectedTrackType()).toArray())

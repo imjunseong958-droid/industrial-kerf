@@ -2,6 +2,7 @@
 #include "command_registry.h"
 #include "editor_common.h"
 #include "effect_controls_panel.h"
+#include "effects_panel.h"
 #include "editor_style.h"
 #include "main_window.h"
 #include "media_artwork.h"
@@ -22,7 +23,9 @@
 #include <QFileInfo>
 #include <QFrame>
 #include <QGroupBox>
+#include <QCheckBox>
 #include <QImage>
+#include <QListWidget>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -627,6 +630,85 @@ private slots:
             QVERIFY(window.m_preferences->isVisible());
         }
         QSettings().remove(QStringLiteral("workspace"));
+    }
+
+    void effectsPanelShowsCardsAndAddsToTheSelectedClip() {
+        QSettings().remove(QStringLiteral("workspace"));
+        MainWindow window{QString(), QString()};
+        // The Editing layout keeps Effects behind the Project bin.
+        QVERIFY(!window.m_workspace->panel(QStringLiteral("effects"))->isClosed());
+        QVERIFY(window.m_commands->action(QStringLiteral("window.effects")));
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(QJsonObject{{"revision", 3}, {"duration", 4}, {"timeline", QJsonObject{
+            {"fps", 24},
+            {"tracks", QJsonArray{
+                QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+                    QJsonObject{{"id", "c1"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 0.0},
+                                {"duration", 2.0}}}}}}}}}});
+        EffectsPanel *panel = window.m_effects;
+        // The whole raster catalog is offered, by category and words.
+        QVERIFY(panel->m_items.size() > 100);
+        QVERIFY(panel->m_items.contains(QStringLiteral("stylize.glow")));
+        QVERIFY(!panel->m_items.contains(QStringLiteral("transition.linearwipe")));
+        panel->m_search->setText(QStringLiteral("neon"));
+        QVERIFY(!panel->m_items.value(QStringLiteral("stylize.glow"))->isHidden());
+        QVERIFY(panel->m_items.value(QStringLiteral("channel.invert"))->isHidden());
+        window.selectClip(QStringLiteral("c1"));
+        QCOMPARE(panel->m_clip, QStringLiteral("c1"));
+        QVERIFY(panel->m_picture);
+        // The cards shown ask for previews of themselves on the clip.
+        panel->requestPreviews();
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("effect_previews"));
+        QCOMPARE(window.m_lastCommand.value("clip").toString(), QStringLiteral("c1"));
+        QVERIFY(window.m_lastCommand.value("effects").toArray().contains(QJsonValue("stylize.glow")));
+        QImage red(16, 9, QImage::Format_RGBA8888);
+        red.fill(Qt::red);
+        window.handleEvent(QJsonObject{{"type", "effect_preview"}, {"clip", "c1"}, {"fx", "stylize.glow"},
+                                       {"width", 16}, {"height", 9},
+                                       {"rgba", QString::fromLatin1(QByteArray(reinterpret_cast<const char *>(red.constBits()), 16 * 9 * 4).toBase64())}});
+        const QImage card = panel->m_items.value(QStringLiteral("stylize.glow"))->icon().pixmap(QSize(160, 90)).toImage();
+        QCOMPARE(card.pixelColor(card.width() / 2, card.height() / 2), QColor(Qt::red));
+        // Double-click adds the effect to the selected clip.
+        emit panel->m_cards->itemActivated(panel->m_items.value(QStringLiteral("stylize.glow")));
+        const QJsonObject op = window.m_lastCommand.value("ops").toArray().first().toObject();
+        QCOMPARE(op.value("op").toString(), QStringLiteral("fx-add"));
+        QCOMPARE(op.value("clip").toString(), QStringLiteral("c1"));
+        QCOMPARE(op.value("fx").toString(), QStringLiteral("stylize.glow"));
+    }
+
+    void inspectorShowsAndEditsTheEffectStack() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(QJsonObject{{"revision", 3}, {"duration", 4}, {"timeline", QJsonObject{
+            {"fps", 24},
+            {"tracks", QJsonArray{
+                QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+                    QJsonObject{{"id", "c1"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 0.0},
+                                {"duration", 2.0}, {"effects", QJsonArray{
+                                    QJsonObject{{"fx", "stylize.glow"}, {"enabled", true}, {"params", QJsonObject{{"radius", 40}}}},
+                                    QJsonObject{{"fx", "channel.invert"}, {"enabled", false}, {"params", QJsonObject{}}}}}}}}}}}}}});
+        window.selectClip(QStringLiteral("c1"));
+        EffectControlsPanel *inspector = window.m_effectControls;
+        const auto boxes = inspector->findChildren<QWidget *>(QStringLiteral("effectBox"));
+        QCOMPARE(boxes.size(), 2);
+        auto *glow = boxes.at(0)->findChild<QCheckBox *>(QStringLiteral("effectEnabled"));
+        auto *radius = boxes.at(0)->findChild<QDoubleSpinBox *>(QStringLiteral("effectParam_radius"));
+        QVERIFY(glow && radius);
+        QCOMPARE(glow->text(), QStringLiteral("Glow"));
+        QVERIFY(glow->isChecked());
+        QCOMPARE(radius->value(), 40.0);
+        QVERIFY(!boxes.at(1)->findChild<QCheckBox *>(QStringLiteral("effectEnabled"))->isChecked());
+        auto op = [&window] { return window.m_lastCommand.value("ops").toArray().first().toObject(); };
+        glow->click();
+        QCOMPARE(op().value("op").toString(), QStringLiteral("fx-set"));
+        QCOMPARE(op().value("index").toInt(), 0);
+        QCOMPARE(op().value("enabled").toBool(), false);
+        radius->setValue(10.0); // the default
+        emit radius->editingFinished();
+        QCOMPARE(op().value("params").toObject().value("radius"), QJsonValue());
+        boxes.at(1)->findChild<QToolButton *>(QStringLiteral("effectRemove"))->click();
+        QCOMPARE(op().value("op").toString(), QStringLiteral("fx-remove"));
+        QCOMPARE(op().value("index").toInt(), 1);
     }
 
     void inspectorEditsTheCatalogPropertiesOfTheTrackType() {

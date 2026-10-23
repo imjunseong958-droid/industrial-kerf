@@ -8,9 +8,9 @@ use crate::RuntimeError;
 use kerf_engine::ProbeInfo;
 use kerf_lang::{apply_script, parse_document, print_document, print_ops, PrintOptions};
 use kerf_model::{
-    apply, AudioInfo, Catalog, ClipChange, Content, Diagnostic, Edge, Id, MarkerColor, Media,
-    NewClip, Op, Param, ParamType, Project, Rate, Ratio, Rejected, Sequence, SequenceChange, Time,
-    TrackChange, TrackKind, Value, VideoInfo,
+    apply, AudioInfo, Catalog, ClipChange, Content, Diagnostic, Edge, Effect, FxDef, Id,
+    MarkerColor, Media, NewClip, Op, Param, ParamType, Project, Rate, Ratio, Rejected, Sequence,
+    SequenceChange, Time, TrackChange, TrackKind, Value, VideoInfo,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
@@ -404,6 +404,30 @@ pub enum EditOp {
         clip: String,
         speed: String,
     },
+    /// Add an effect to the end of the clip's stack, or at `index`, with
+    /// static parameter values; the rest stay at their defaults.
+    FxAdd {
+        clip: String,
+        fx: String,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        params: BTreeMap<String, Json>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<usize>,
+    },
+    /// Turn the effect at `index` on or off, or set its parameters; `null`
+    /// restores a parameter's default.
+    FxSet {
+        clip: String,
+        index: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        enabled: Option<bool>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        params: BTreeMap<String, Json>,
+    },
+    FxRemove {
+        clip: String,
+        index: usize,
+    },
     Insert {
         media: String,
         source_in: i64,
@@ -618,6 +642,53 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
             clip: edit_id(clip)?,
             speed: Ratio::parse(speed).map_err(|error| invalid(error.to_string()))?,
         },
+        EditOp::FxAdd {
+            clip,
+            fx,
+            params,
+            index,
+        } => {
+            let def = catalog()
+                .fx(fx)
+                .ok_or_else(|| invalid(format!("no effect `{fx}`")))?;
+            let params = fx_params(def, params)?
+                .into_iter()
+                .filter_map(|(name, param)| param.map(|param| (name, param)))
+                .collect();
+            Op::FxAdd {
+                clip: edit_id(clip)?,
+                effect: Effect {
+                    fx: def.id.clone(),
+                    enabled: true,
+                    params,
+                },
+                index: *index,
+            }
+        }
+        EditOp::FxSet {
+            clip,
+            index,
+            enabled,
+            params,
+        } => {
+            let effect = project
+                .clip(clip)
+                .and_then(|found| found.effects.get(*index))
+                .ok_or_else(|| invalid(format!("clip `{clip}` has no effect {index}")))?;
+            let def = catalog()
+                .fx(effect.fx.as_str())
+                .ok_or_else(|| invalid(format!("no effect `{}`", effect.fx)))?;
+            Op::FxSet {
+                clip: edit_id(clip)?,
+                index: *index,
+                enabled: *enabled,
+                params: fx_params(def, params)?,
+            }
+        }
+        EditOp::FxRemove { clip, index } => Op::FxRemove {
+            clip: edit_id(clip)?,
+            index: *index,
+        },
         EditOp::Insert {
             media,
             source_in,
@@ -764,6 +835,29 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
             },
         },
     }])
+}
+
+/// An effect's parameters from JSON: a static value each, or `None` (for
+/// `null`) to restore the default.
+fn fx_params(
+    def: &FxDef,
+    params: &BTreeMap<String, Json>,
+) -> Result<Vec<(String, Option<Param>)>, RuntimeError> {
+    params
+        .iter()
+        .map(|(name, value)| {
+            let param = def
+                .find(name)
+                .ok_or_else(|| invalid(format!("`{}` has no parameter `{name}`", def.id)))?;
+            let value = match value {
+                Json::Null => None,
+                value => Some(Param::Static(json_value(&param.ty, value).ok_or_else(
+                    || invalid(format!("`{name}` expects a {}", param.ty.name())),
+                )?)),
+            };
+            Ok((name.clone(), value))
+        })
+        .collect()
 }
 
 fn json_value(ty: &ParamType, value: &Json) -> Option<Value> {
