@@ -10,6 +10,8 @@
 //! decoder rather than opening another, so frames drawn on several threads
 //! still decode each file once. Frames are converted to RGBA by
 //! libavfilter, as the graph converts them, and kept in a bounded cache.
+//! A clip never shown at its full size is converted at the size it is
+//! shown, as the graph scales it.
 
 use effectcraft_project::{Footage as FootageItem, ItemId};
 use effectcraft_render::{FootageSource, Image};
@@ -49,9 +51,24 @@ pub(crate) struct ClipSource {
     pub source_in: Time,
     pub speed: Ratio,
     pub duration: Time,
+    /// The most of the picture's size it is shown at, when it is never
+    /// shown larger than that: its frames are decoded at that size, which
+    /// the renderer then draws pixel for pixel.
+    pub shown: Option<f64>,
 }
 
 impl ClipSource {
+    /// The size frames are decoded at for a render that asks for `size`.
+    fn decoded_size(&self, size: (u32, u32)) -> (u32, u32) {
+        match self.shown {
+            Some(shown) => {
+                let side = |length: u32| ((f64::from(length) * shown).round() as u32).max(1);
+                (side(size.0), side(size.1))
+            }
+            None => size,
+        }
+    }
+
     /// The media frame shown at clip time `at`: the one showing at its
     /// source time, which a reversed clip runs back from its source out.
     pub fn frame_at(&self, at: Tick) -> i64 {
@@ -133,7 +150,7 @@ impl LibavFootage {
     fn read(&self, item: ItemId, at: Tick, size: Option<(u32, u32)>) -> Option<Arc<Image>> {
         let clip = self.clips.get(&item)?;
         let index = clip.frame_at(at);
-        let size = size.unwrap_or((clip.width, clip.height));
+        let size = clip.decoded_size(size.unwrap_or((clip.width, clip.height)));
         let key = (clip.path.clone(), index, size);
         if let Some(image) = lock(&self.cache).get(&key) {
             return Some(image);
@@ -714,6 +731,7 @@ mod tests {
             source_in: Rate::FPS_24.time_of(source_in),
             speed: Ratio::parse(speed).unwrap(),
             duration: Rate::FPS_24.time_of(duration),
+            shown: None,
         }
     }
 
