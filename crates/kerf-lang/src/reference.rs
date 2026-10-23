@@ -108,10 +108,12 @@ pub fn reference(catalog: &Catalog) -> String {
 }
 
 const RASTER: &str = "## Raster effects
-Raster effects come from EffectCraft and run on a media clip's source picture
-before it is placed, so they come before the effects above whatever the
-stack order. Renders bake them once and reuse the result. They work on media
-clips only. `look` with `effect: \"<id>\"` lists an effect's parameters.";
+Raster effects come from EffectCraft and run on a clip's own picture before
+it is placed, so they come before the effects above whatever the stack
+order. Raster transitions (`transition.*`) are written like any transition.
+`look` with `effects: \"<words>\"` finds entries by the look or moment you
+want, each with when to use it, and `look` with `effect: \"<id>\"` lists one
+entry's parameters.";
 
 /// One catalog definition as the reference lists it: its id, domain, and
 /// doc, then a line per parameter.

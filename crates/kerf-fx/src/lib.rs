@@ -19,6 +19,8 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::OnceLock;
 
+mod guide;
+
 /// The EffectCraft commit the table and the effects come from.
 pub const EFFECTCRAFT_REV: &str = "9581b53c3f8945683252af0eb5fac79e0e43aed4";
 
@@ -58,6 +60,10 @@ const NEEDS_MORE: &[&str] = &[
     "ec.matte.rotobrush",
     "ec.perspective.cameratracker",
     "ec.utility.facemeasurements",
+    // These read a face or segmentation model, or a reference frame.
+    "ec.color.colorstabilizer",
+    "ec.matte.objectmatte",
+    "ec.utility.facetrackpoints",
 ];
 
 /// Effects named after other products: Kerf's id and name for each, or
@@ -65,7 +71,7 @@ const NEEDS_MORE: &[&str] = &[
 const RENAMED: &[(&str, Option<(&str, &str)>)] = &[
     (
         "ec.keying.keylight",
-        Some(("keying.screenkey", "Screen Key")),
+        Some(("key.screenmatte", "Screen Matte")),
     ),
     (
         "ec.stylize.ccthreshold",
@@ -201,7 +207,17 @@ pub fn catalog_table() -> String {
         let Some((id, name, kind)) = carried(spec) else {
             continue;
         };
-        writeln!(out, "{}\t{id}\t{}\t{name}", kind.name(), spec.category).unwrap();
+        let guidance = guide::GUIDE
+            .iter()
+            .find(|(guided, _)| *guided == id)
+            .map_or("", |(_, guidance)| guidance);
+        writeln!(
+            out,
+            "{}\t{id}\t{}\t{name}\t{guidance}",
+            kind.name(),
+            spec.category
+        )
+        .unwrap();
         let listed = spec
             .params
             .iter()
@@ -489,9 +505,33 @@ mod tests {
             }
         }
         assert!(spec("blur.cross").is_some());
-        assert!(spec("keying.screenkey").is_some());
+        assert!(spec("key.screenmatte").is_some());
         assert!(spec("keying.keylight").is_none());
         assert!(spec("transition.linearwipe").is_some());
+    }
+
+    #[test]
+    fn every_carried_effect_says_when_to_use_it() {
+        let carried: Vec<String> = effectcraft_effects::registry()
+            .iter()
+            .filter_map(|spec| carried(spec).map(|(id, ..)| id))
+            .collect();
+        for id in &carried {
+            assert!(
+                guide::GUIDE.iter().any(|(guided, _)| guided == id),
+                "no guidance for {id}"
+            );
+        }
+        for (guided, guidance) in guide::GUIDE {
+            assert!(
+                carried.iter().any(|id| id == guided),
+                "guidance for {guided}, which is not carried"
+            );
+            assert!(
+                guidance.ends_with('.') && !guidance.contains('\t'),
+                "{guided}"
+            );
+        }
     }
 
     #[test]
