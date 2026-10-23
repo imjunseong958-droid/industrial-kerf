@@ -15,6 +15,7 @@ pub mod raster;
 pub mod render;
 pub mod resources;
 pub mod sidecar;
+pub mod still;
 pub mod transcription;
 
 pub use encoder::{

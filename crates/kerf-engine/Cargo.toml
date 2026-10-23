@@ -16,8 +16,10 @@ path = "src/bin/kerf-engine.rs"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+kerf-compose = { path = "../kerf-compose" }
 kerf-core = { path = "../kerf-core" }
 kerf-fx = { path = "../kerf-fx" }
+kerf-lang = { path = "../kerf-lang" }
 kerf-model = { path = "../kerf-model" }
 hex = "0.4"
 mimalloc = { version = "0.1", default-features = false }
@@ -29,7 +31,6 @@ sha2 = "0.10"
 thiserror = "2"
 
 [dev-dependencies]
-kerf-lang = { path = "../kerf-lang" }
 approx = "0.5"
 criterion = "0.5"
 kerf-playback = { path = "../kerf-playback", default-features = false }

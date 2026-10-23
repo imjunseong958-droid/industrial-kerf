@@ -83,6 +83,24 @@ enum Commands {
         #[arg(long)]
         output: String,
     },
+    /// Draw one frame of a project through the compositor, as a PNG.
+    Frame {
+        /// The `.kerf` document.
+        project: PathBuf,
+        /// Where in the sequence: seconds, or frames with `f` (`48f`).
+        #[arg(long)]
+        at: String,
+        #[arg(long)]
+        sequence: Option<String>,
+        /// The size drawn, as a fraction of the canvas.
+        #[arg(long, default_value_t = 1.0)]
+        scale: f64,
+        /// Burn captions in, as a render does.
+        #[arg(long)]
+        captions: bool,
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -409,6 +427,14 @@ fn main() -> Result<()> {
             proxy_run(&input, &output, &settings, duration)?;
             print_json(&json!({ "ok": true, "output": output }))?;
         }
+        Commands::Frame {
+            project,
+            at,
+            sequence,
+            scale,
+            captions,
+            out,
+        } => print_json(&draw_frame(&project, &at, sequence, scale, captions, &out)?)?,
     }
     Ok(())
 }
@@ -497,6 +523,62 @@ fn run_transcription(
             &mut on_progress,
         )?)
     }
+}
+
+/// Draw a frame of `path` with the compositor and write it to `out`.
+fn draw_frame(
+    path: &std::path::Path,
+    at: &str,
+    sequence: Option<String>,
+    scale: f64,
+    captions: bool,
+    out: &std::path::Path,
+) -> Result<Value> {
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let catalog = kerf_model::Catalog::builtin();
+    let mut project = kerf_lang::parse_document(&text, catalog)
+        .map_err(|errors| {
+            let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
+            anyhow::anyhow!("{}: {}", path.display(), lines.join("; "))
+        })?
+        .project;
+    // Documents keep media paths relative to themselves.
+    let directory = path.parent().unwrap_or(std::path::Path::new("."));
+    for media in &mut project.media {
+        if std::path::Path::new(&media.path).is_relative() {
+            media.path = directory.join(&media.path).to_string_lossy().into_owned();
+        }
+    }
+    let compositor = kerf_compose::Compositor::new(
+        &project,
+        catalog,
+        &kerf_compose::ComposeOptions { sequence, captions },
+    )?;
+    let rate = compositor.rate();
+    let time = match at.strip_suffix('f') {
+        Some(frames) => rate.time_of(frames.trim().parse().context("--at frames")?),
+        None => {
+            let seconds: f64 = at
+                .trim()
+                .parse()
+                .context("--at must be seconds or `<n>f`")?;
+            let time = kerf_model::Time::from_seconds(seconds).context("--at is out of range")?;
+            rate.time_of(rate.frames_floor(time))
+        }
+    };
+    let started = std::time::Instant::now();
+    let frame = compositor.frame(time, scale);
+    let millis = started.elapsed().as_secs_f64() * 1000.0;
+    kerf_engine::still::write_png(&frame, out)?;
+    Ok(json!({
+        "out": out,
+        "frame": rate.frames_floor(time),
+        "width": frame.width,
+        "height": frame.height,
+        "ms": (millis * 10.0).round() / 10.0,
+        "problems": compositor.problems(),
+    }))
 }
 
 fn read_stdin() -> Result<String> {
