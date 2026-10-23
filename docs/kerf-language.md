@@ -9,6 +9,11 @@ generators is generated from the catalog:
 cargo run -p kerf-lang --example reference
 ```
 
+Raster effects (from EffectCraft) are listed there by id; `look` with
+`effect` gives one effect's parameters, and they are written like any other
+effect (`fx c1 add stylize.glow`). They run on a media clip's source picture
+before it is placed, so they apply before the clip's other effects.
+
 ## Documents
 
 ```text

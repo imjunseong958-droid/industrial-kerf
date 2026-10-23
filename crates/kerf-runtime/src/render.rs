@@ -82,6 +82,7 @@ fn render(
     let opts = kerf_engine::render::RenderOptions {
         output: output.to_string_lossy().into_owned(),
         draft,
+        project_dir: Some(directory.to_path_buf()),
         ..kerf_engine::render::RenderOptions::default()
     };
     let cancellation = kerf_engine::CancellationToken::new();

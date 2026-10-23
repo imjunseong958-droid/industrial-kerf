@@ -5,7 +5,8 @@
 //! drifts from what the kernel accepts.
 
 use crate::text::{number, print_value};
-use kerf_model::{Catalog, Domain, FxKind, MarkerColor, ParamDef, ParamType};
+use kerf_model::{Catalog, Domain, Engine, FxDef, FxKind, MarkerColor, ParamDef, ParamType};
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 const GRAMMAR: &str = r#"# Kerf edit script
@@ -84,12 +85,40 @@ pub fn reference(catalog: &Catalog) -> String {
         (FxKind::Generator, "Generators"),
     ] {
         writeln!(out, "\n## {title}").unwrap();
-        for fx in catalog.all().filter(|fx| fx.kind == kind) {
-            writeln!(out, "- `{}` ({}): {}", fx.id, fx.domain.name(), fx.doc).unwrap();
-            for param in &fx.params {
-                writeln!(out, "  - {}", describe(param)).unwrap();
-            }
+        for fx in catalog
+            .all()
+            .filter(|fx| fx.kind == kind && fx.engine == Engine::Graph)
+        {
+            out.push_str(&fx_reference(fx));
         }
+    }
+    writeln!(out, "\n{RASTER}").unwrap();
+    let mut categories: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for fx in catalog.all().filter(|fx| fx.engine == Engine::Raster) {
+        categories
+            .entry(fx.category.as_str())
+            .or_default()
+            .push(fx.id.as_str());
+    }
+    for (category, ids) in categories {
+        let ids: Vec<String> = ids.iter().map(|id| format!("`{id}`")).collect();
+        writeln!(out, "- {category}: {}", ids.join(", ")).unwrap();
+    }
+    out
+}
+
+const RASTER: &str = "## Raster effects
+Raster effects come from EffectCraft and run on a media clip's source picture
+before it is placed, so they come before the effects above whatever the
+stack order. Renders bake them once and reuse the result. They work on media
+clips only. `look` with `effect: \"<id>\"` lists an effect's parameters.";
+
+/// One catalog definition as the reference lists it: its id, domain, and
+/// doc, then a line per parameter.
+pub fn fx_reference(fx: &FxDef) -> String {
+    let mut out = format!("- `{}` ({}): {}\n", fx.id, fx.domain.name(), fx.doc);
+    for param in &fx.params {
+        writeln!(out, "  - {}", describe(param)).unwrap();
     }
     out
 }
@@ -141,5 +170,9 @@ mod tests {
         assert!(text.contains("`opacity=1` (0..1, animatable) Layer opacity."));
         assert!(text.contains("`blend=normal` (normal|add|multiply"));
         assert!(text.contains("`gain=0` (-96..24, dB, animatable)"));
+        // Raster effects are listed by id; their parameters come from `look`.
+        assert!(text.contains("- Channel: `channel.arithmetic`"));
+        assert!(!text.contains("Blend With Original"));
+        assert!(text.len() < 16 * 1024, "{}", text.len());
     }
 }

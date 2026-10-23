@@ -258,3 +258,55 @@ fn a_cropped_cut_shows_its_region_between_full_frames() {
         assert!(is(color, expected), "frame {frame}: {color:?}");
     }
 }
+
+#[test]
+fn raster_effects_are_baked_once_and_follow_their_keyframes() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(
+        dir.path(),
+        "sequence s1 rate=24 size=160x90 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip c1 media=red src=0f at=0f dur=48f\n\
+         \x20     fx channel.invert blend={0f:0 47f:100}\n",
+    );
+    let output = dir.path().join("inverted.mp4");
+    let options = RenderOptions {
+        output: output.to_string_lossy().into_owned(),
+        force_software: true,
+        project_dir: Some(dir.path().to_path_buf()),
+        ..RenderOptions::default()
+    };
+    render_program::<fn(f64)>(&project, None, None, &options, None).expect("renders");
+    // Red inverted is cyan; blending back to the original ends on red.
+    assert!(
+        is(pixel(&output, 0), [0, 255, 255]),
+        "{:?}",
+        pixel(&output, 0)
+    );
+    assert!(
+        is(pixel(&output, 47), [255, 0, 0]),
+        "{:?}",
+        pixel(&output, 47)
+    );
+
+    let bakes = || {
+        std::fs::read_dir(
+            dir.path()
+                .join(kerf_engine::derivatives::DERIVED_CACHE_RELATIVE_PATH),
+        )
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("raster-"))
+        .map(|entry| entry.path().join("frames.mkv"))
+        .collect::<Vec<_>>()
+    };
+    let baked = bakes();
+    assert_eq!(baked.len(), 1);
+    let made = std::fs::metadata(&baked[0]).unwrap().modified().unwrap();
+    render_program::<fn(f64)>(&project, None, None, &options, None).expect("renders again");
+    assert_eq!(bakes(), baked);
+    assert_eq!(
+        std::fs::metadata(&baked[0]).unwrap().modified().unwrap(),
+        made
+    );
+}

@@ -13,7 +13,7 @@ pub mod time;
 pub mod validate;
 pub mod value;
 
-pub use catalog::{Catalog, Domain, FxDef, FxKind, ParamDef, ParamType};
+pub use catalog::{Catalog, Domain, Engine, FxDef, FxKind, ParamDef, ParamType};
 pub use diag::{Diagnostic, Severity, Span};
 pub use id::{Id, IdGen, InvalidId};
 pub use model::{

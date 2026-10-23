@@ -19,8 +19,8 @@
 use crate::overlay::{atempo_filters, captions_filter, escape_drawtext_text, fmt, CaptionCue};
 use kerf_model::time::FLICKS_PER_SECOND;
 use kerf_model::{
-    Catalog, Clip, Content, Domain, Id, Interp, Param, Project, Rate, Rgba, Sequence, Time, Track,
-    TrackKind, Transition, Value,
+    Catalog, Clip, Content, Domain, Engine, Id, Interp, Param, Project, Rate, Rgba, Sequence, Time,
+    Track, TrackKind, Transition, Value,
 };
 use std::collections::HashMap;
 
@@ -826,6 +826,15 @@ impl<'a> Graph<'a> {
             let def = self.catalog.fx(effect.fx.as_str()).ok_or_else(|| {
                 ProgramError::Invalid(format!("clip `{}` uses unknown effect", clip.id))
             })?;
+            if def.engine == Engine::Raster {
+                return Err(ProgramError::unsupported(
+                    &clip.id,
+                    format!(
+                        "raster effect `{}` here (raster effects run on media clips)",
+                        effect.fx
+                    ),
+                ));
+            }
             let value = |name: &str| -> Result<f64> {
                 match effect.params.get(name) {
                     None => Ok(def

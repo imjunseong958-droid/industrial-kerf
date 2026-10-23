@@ -7,3 +7,4 @@
 pub mod overlay;
 pub mod preview;
 pub mod program;
+pub mod raster;

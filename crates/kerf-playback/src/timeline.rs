@@ -449,9 +449,16 @@ pub fn preview_plan(project: &Project) -> PreviewPlan {
     let mut unavailable = false;
     match program_sequence(project, None) {
         Ok(sequence) if sequence.duration().is_positive() => {
-            if let Err(error) =
-                compile_program(project, Catalog::builtin(), &ProgramOptions::default())
-            {
+            // Rendering bakes raster effects first; compile what it would.
+            let planned = kerf_core::raster::plan(project, Catalog::builtin(), |job| {
+                Ok::<_, std::convert::Infallible>(job.source.clone())
+            })
+            .unwrap_or_else(|never| match never {});
+            if let Err(error) = compile_program(
+                &planned.project,
+                Catalog::builtin(),
+                &ProgramOptions::default(),
+            ) {
                 unavailable = true;
                 reasons.push(reason(
                     "compiler_rejected_feature",
