@@ -56,6 +56,7 @@ fn scene() -> Project {
         video: Some(VideoInfo {
             width: 1920,
             height: 1080,
+            alpha: false,
         }),
         audio: Some(AudioInfo {
             channels: 2,

@@ -38,6 +38,9 @@ pub struct ProgramOptions {
     pub range: Option<(Time, Time)>,
     /// Filters applied to the finished picture before captions are drawn.
     pub video_post_filters: Vec<String>,
+    /// Keep the picture's transparency: composite over nothing and finish
+    /// in RGBA, as for a file other renders read.
+    pub transparent: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -124,18 +127,27 @@ pub fn compile_program(
         )));
     }
     let mut graph = Graph::new(project, catalog, sequence.rate);
-    let video = match graph.concat_program(sequence, from, to)? {
-        Some(video) => video,
-        None => graph.composite(sequence, from, to, Background::Black, false)?,
+    let video = if options.transparent {
+        graph.composite(sequence, from, to, Background::Clear, false)?
+    } else {
+        match graph.concat_program(sequence, from, to)? {
+            Some(video) => video,
+            None => graph.composite(sequence, from, to, Background::Black, false)?,
+        }
     };
     let finished = graph.label("program");
     graph.parts.push(format!(
-        "[{video}]{}format=yuv420p[{finished}]",
+        "[{video}]{}format={}[{finished}]",
         options
             .video_post_filters
             .iter()
             .map(|filter| format!("{filter},"))
-            .collect::<String>()
+            .collect::<String>(),
+        if options.transparent {
+            "rgba"
+        } else {
+            "yuv420p"
+        }
     ));
     let video = graph.captions(sequence, from, to, finished);
     let audio = graph.mix(sequence, from, to)?;
@@ -316,6 +328,7 @@ impl<'a> Graph<'a> {
             })
             .collect();
         let mut dips = Vec::new();
+        let mut over = Vec::new();
         for transition in &track.transitions {
             let (Some(from), Some(to)) = (
                 track.clip_index(transition.from.as_str()),
@@ -327,6 +340,20 @@ impl<'a> Graph<'a> {
             let (before, after) = transition.split_at_cut(rate);
             let (start, end) = (cut - before, cut + after);
             let reveal = match transition.fx.as_str() {
+                crate::raster::BAKED_TRANSITION => {
+                    // The outgoing clip, baked to disappear by itself, plays
+                    // over the incoming one until it is gone.
+                    shown[from].to = start;
+                    shown[to].from = start;
+                    over.push(Shown {
+                        clip: &track.clips[from],
+                        from: start,
+                        to: end,
+                        fade_in: None,
+                        fade_out: None,
+                    });
+                    continue;
+                }
                 "dip" => {
                     let middle = start + Time::from_flicks((end - start).flicks() / 2);
                     shown[from].to = middle;
@@ -348,10 +375,18 @@ impl<'a> Graph<'a> {
                         == "equal-power",
                 },
                 other => {
+                    let raster = self
+                        .catalog
+                        .fx(other)
+                        .is_some_and(|fx| fx.engine == Engine::Raster);
                     return Err(ProgramError::unsupported(
                         &transition.id,
-                        format!("transition `{other}`"),
-                    ))
+                        if raster {
+                            format!("raster transition `{other}` out of a clip that is not a media clip")
+                        } else {
+                            format!("transition `{other}`")
+                        },
+                    ));
                 }
             };
             shown[from].to = end;
@@ -359,6 +394,8 @@ impl<'a> Graph<'a> {
             shown[to].from = start;
             shown[to].fade_in = Some((reveal, start, end));
         }
+        // Drawn after the clips they leave over.
+        shown.extend(over);
         Ok((shown, dips))
     }
 
@@ -541,14 +578,16 @@ impl<'a> Graph<'a> {
         let (width, height) = canvas(sequence);
         let length = portion.hi - portion.decode;
         let mut filters = Vec::new();
+        let mut transparent = false;
         let source = match &clip.content {
             Content::Media { media, .. } => {
                 let media = self.project.media(media.as_str()).ok_or_else(|| {
                     ProgramError::Invalid(format!("clip `{}` uses missing media", clip.id))
                 })?;
-                if media.video.is_none() {
+                let Some(video) = media.video else {
                     return Ok(None);
-                }
+                };
+                transparent = video.alpha;
                 let (start, end) = Self::source_window(clip, portion.decode, portion.hi)
                     .expect("media clips have a source");
                 let index = self.input(&media.path, start, end - start);
@@ -617,10 +656,11 @@ impl<'a> Graph<'a> {
                 (end - start).seconds(),
             )
         });
-        alpha |= fade.is_some() || !is_number(&opacity, 1.0) || !fit;
+        alpha |= transparent || fade.is_some() || !is_number(&opacity, 1.0) || !fit;
         if geometry.identity && matches!(clip.content, Content::Media { .. }) {
             filters.push(format!(
-                "pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1"
+                "pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={},setsar=1",
+                if transparent { "black@0" } else { "black" }
             ));
         }
         filters.push(

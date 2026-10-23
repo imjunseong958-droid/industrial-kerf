@@ -2134,6 +2134,7 @@ mod tests {
             height: Some(720),
             fps: Some(24.0),
             has_audio: Some(true),
+            alpha: None,
             video_codec: None,
             audio_codec: None,
         };

@@ -310,3 +310,143 @@ fn raster_effects_are_baked_once_and_follow_their_keyframes() {
         made
     );
 }
+
+#[test]
+fn transparency_from_raster_effects_shows_the_track_below() {
+    let dir = tempfile::tempdir().unwrap();
+    let black = source(dir.path(), "black.mp4", "black", 330);
+    let project = project(
+        dir.path(),
+        &format!(
+            "media black path=\"{black}\" rate=24 dur=96f video=160x90 audio=2ch@48000\n\
+             sequence s1 rate=24 size=160x90 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20   clip c1 media=red src=0f at=0f dur=24f\n\
+             \x20 track V2 video\n\
+             \x20   clip c2 media=black src=0f at=0f dur=24f\n\
+             \x20     fx key.unmult\n"
+        ),
+    );
+    let output = dir.path().join("keyed.mp4");
+    let options = RenderOptions {
+        output: output.to_string_lossy().into_owned(),
+        force_software: true,
+        project_dir: Some(dir.path().to_path_buf()),
+        ..RenderOptions::default()
+    };
+    render_program::<fn(f64)>(&project, None, None, &options, None).expect("renders");
+    // Unmult keys black out, so the red clip beneath shows through.
+    assert!(
+        is(pixel(&output, 12), [255, 0, 0]),
+        "{:?}",
+        pixel(&output, 12)
+    );
+}
+
+/// The RGB color at pixel (`x`, 45) of frame `index`.
+fn pixel_at(path: &Path, index: u32, x: usize) -> [u8; 3] {
+    let raw = run(Command::new(resolve_ffmpeg_bin())
+        .args(["-hide_banner", "-loglevel", "error", "-i"])
+        .arg(path)
+        .arg("-vf")
+        .arg(format!("select=eq(n\\,{index}),scale=160:90"))
+        .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]));
+    let at = (45 * 160 + x) * 3;
+    [raw[at], raw[at + 1], raw[at + 2]]
+}
+
+#[test]
+fn raster_transitions_wipe_from_one_clip_to_the_next() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(
+        dir.path(),
+        "sequence s1 rate=24 size=160x90 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip c1 media=red src=0f at=0f dur=24f\n\
+         \x20   clip c2 media=blue src=24f at=24f dur=24f\n\
+         \x20   transition t1 from=c1 to=c2 fx=transition.linearwipe dur=12f\n",
+    );
+    let output = dir.path().join("wipe.mp4");
+    let options = RenderOptions {
+        output: output.to_string_lossy().into_owned(),
+        force_software: true,
+        project_dir: Some(dir.path().to_path_buf()),
+        ..RenderOptions::default()
+    };
+    render_program::<fn(f64)>(&project, None, None, &options, None).expect("renders");
+    let red = [255, 0, 0];
+    let blue = [0, 0, 255];
+    assert!(
+        is(pixel_at(&output, 16, 80), red),
+        "{:?}",
+        pixel_at(&output, 16, 80)
+    );
+    assert!(
+        is(pixel_at(&output, 31, 80), blue),
+        "{:?}",
+        pixel_at(&output, 31, 80)
+    );
+    // Halfway, the wipe has crossed half the picture.
+    let (left, right) = (pixel_at(&output, 24, 10), pixel_at(&output, 24, 150));
+    assert!(
+        (is(left, red) && is(right, blue)) || (is(left, blue) && is(right, red)),
+        "{left:?} {right:?}"
+    );
+}
+
+#[test]
+fn titles_solids_and_nested_sequences_take_raster_effects() {
+    let dir = tempfile::tempdir().unwrap();
+    let title = if has_drawtext() {
+        "\x20 track V2 video\n\
+         \x20   clip t1 gen=title at=24f dur=24f\n\
+         \x20     set text=\"Hi\" size=0.5\n\
+         \x20     fx channel.invert\n"
+    } else {
+        ""
+    };
+    let project = project(
+        dir.path(),
+        &format!(
+            "sequence s1 rate=24 size=160x90 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20   clip n1 seq=s2 src=0f at=0f dur=24f\n\
+             \x20     fx channel.invert\n\
+             \x20   clip c1 media=red src=0f at=24f dur=24f\n\
+             \x20   clip g1 gen=solid at=48f dur=24f\n\
+             \x20     set color=#ff0000\n\
+             \x20     fx channel.invert\n\
+             {title}\
+             sequence s2 rate=24 size=160x90 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20   clip c2 media=red src=0f at=0f dur=24f\n"
+        ),
+    );
+    let output = dir.path().join("generated.mp4");
+    let options = RenderOptions {
+        output: output.to_string_lossy().into_owned(),
+        force_software: true,
+        project_dir: Some(dir.path().to_path_buf()),
+        ..RenderOptions::default()
+    };
+    render_program::<fn(f64)>(&project, None, None, &options, None).expect("renders");
+    let cyan = [0, 255, 255];
+    // The nested sequence's red, inverted.
+    assert!(
+        is(pixel_at(&output, 12, 80), cyan),
+        "{:?}",
+        pixel_at(&output, 12, 80)
+    );
+    // The inverted title keeps its transparency: red shows around it.
+    assert!(
+        is(pixel_at(&output, 36, 3), [255, 0, 0]),
+        "{:?}",
+        pixel_at(&output, 36, 3)
+    );
+    // The red solid, inverted.
+    assert!(
+        is(pixel_at(&output, 60, 80), cyan),
+        "{:?}",
+        pixel_at(&output, 60, 80)
+    );
+}

@@ -1,12 +1,15 @@
-//! Baking raster effects: a media clip's source frames through its raster
-//! effects into a lossless file that the graph plays in the clip's place.
-//! Which clips need it, and how the project changes, is
-//! `kerf_core::raster`; this makes the files, cached by source and job.
+//! Baking raster effects: a clip's frames through its raster effects into a
+//! lossless file that the graph plays in the clip's place. Which clips need
+//! it, and how the project changes, is `kerf_core::raster`; this makes the
+//! files, cached by what they are made from: a prerender (a title, solid,
+//! or nested sequence rendered on its own, with its transparency) by the
+//! sequences it renders and their media, and a bake by its source and job.
 
-use crate::derivatives::{CacheEntry, DerivativeCache};
+use crate::derivatives::{CacheEntry, DerivativeCache, SourceIdentity};
 use crate::error::{EngineError, Result};
+use crate::program::{compile_program, secs, ProgramOptions};
 use crate::sidecar::CancellationToken;
-pub use kerf_core::raster::{plan, BakeJob, Planned};
+pub use kerf_core::raster::{plan, BakeJob, Job, Planned, Prerender};
 use kerf_fx::RasterStack;
 use kerf_model::{Catalog, Project};
 use rayon::prelude::*;
@@ -17,40 +20,132 @@ use std::process::{Child, Command, Stdio};
 
 const BAKE_FILE: &str = "frames.mkv";
 
-/// Plan the bakes `project` needs, placed in `cache`. Its media must be
-/// readable: each bake is keyed by its source as the source is now.
+/// What rendering `sequence` of `project` needs, placed in `cache`, with
+/// the cache entry of each prerender and each bake. Its media must be
+/// readable: files are keyed by their sources as the sources are now.
 pub fn plan_bakes(
     project: &Project,
+    sequence: Option<&str>,
     cache: &DerivativeCache,
-) -> Result<(Planned, Vec<CacheEntry>)> {
-    let mut entries = Vec::new();
-    let planned = plan(project, Catalog::builtin(), |job| {
-        let entry = cache.source_entry(
-            Path::new(&job.source),
-            "raster",
-            &json!({"job": job.identity(), "effectcraft": kerf_fx::EFFECTCRAFT_REV}),
-        )?;
+) -> Result<(Planned, Vec<CacheEntry>, Vec<CacheEntry>)> {
+    let options = json!({"effectcraft": kerf_fx::EFFECTCRAFT_REV});
+    let (mut prerenders, mut bakes) = (Vec::new(), Vec::new());
+    let planned = plan(project, Catalog::builtin(), sequence, |job| {
+        let (entry, entries) = match job {
+            Job::Prerender(prerender) => {
+                let sources = prerender
+                    .media()
+                    .iter()
+                    .map(|media| SourceIdentity::from_path(Path::new(&media.path)))
+                    .collect::<Result<Vec<_>>>()?;
+                let entry = cache.project_entry(
+                    &json!(prerender.identity()),
+                    &sources,
+                    "prerender",
+                    &options,
+                )?;
+                (entry, &mut prerenders)
+            }
+            Job::Bake(job) if job.prerender.is_some() => {
+                // A prerender's file is named for everything it is made from.
+                let entry = cache.project_entry(&json!(job.identity()), &[], "raster", &options)?;
+                (entry, &mut bakes)
+            }
+            Job::Bake(job) => {
+                let entry = cache.source_entry(
+                    Path::new(&job.source),
+                    "raster",
+                    &json!({"job": job.identity(), "effectcraft": kerf_fx::EFFECTCRAFT_REV}),
+                )?;
+                (entry, &mut bakes)
+            }
+        };
         let path = entry.path(BAKE_FILE).to_string_lossy().into_owned();
         entries.push(entry);
         Ok::<_, EngineError>(path)
     })?;
-    Ok((planned, entries))
+    Ok((planned, prerenders, bakes))
 }
 
-/// `project` as a render plays it: every raster effect on a media clip
-/// baked into `cache`, making the bakes that are not there yet.
+/// `project` as rendering `sequence` of it plays it: every raster effect
+/// baked into `cache`, making the files that are not there yet.
 pub fn bake(
     project: &Project,
+    sequence: Option<&str>,
     cache: &DerivativeCache,
     cancellation: &CancellationToken,
 ) -> Result<Project> {
-    let (planned, entries) = plan_bakes(project, cache)?;
-    for (job, entry) in planned.jobs.iter().zip(&entries) {
+    let (planned, prerenders, bakes) = plan_bakes(project, sequence, cache)?;
+    for (prerender, entry) in planned.prerenders.iter().zip(&prerenders) {
+        if !entry.is_complete(&[BAKE_FILE]) {
+            prerender_job(prerender, entry, cache, cancellation)?;
+        }
+    }
+    for (job, entry) in planned.jobs.iter().zip(&bakes) {
         if !entry.is_complete(&[BAKE_FILE]) {
             bake_job(job, entry, cancellation)?;
         }
     }
     Ok(planned.project)
+}
+
+/// Render a prerender's sequence, its own raster effects baked first, to a
+/// lossless file that keeps its transparency.
+fn prerender_job(
+    prerender: &Prerender,
+    entry: &CacheEntry,
+    cache: &DerivativeCache,
+    cancellation: &CancellationToken,
+) -> Result<()> {
+    let sequence = prerender.sequence.as_str();
+    let project = bake(&prerender.project, Some(sequence), cache, cancellation)?;
+    let compiled = compile_program(
+        &project,
+        Catalog::builtin(),
+        &ProgramOptions {
+            sequence: Some(sequence.to_owned()),
+            range: Some((prerender.from, prerender.to)),
+            transparent: true,
+            ..ProgramOptions::default()
+        },
+    )?;
+    let partial = entry.path("frames.partial.mkv");
+    let mut args = crate::ffmpeg::program_decode_prefix(&compiled.argv);
+    args.extend(compiled.argv.iter().skip(1).cloned());
+    args.extend(
+        [
+            "-c:v",
+            "ffv1",
+            "-level",
+            "3",
+            "-pix_fmt",
+            "bgra",
+            "-c:a",
+            "pcm_s16le",
+            "-r",
+        ]
+        .map(str::to_owned),
+    );
+    args.extend([
+        compiled.rate_arg(),
+        "-t".to_owned(),
+        secs(compiled.duration),
+        "-f".to_owned(),
+        "matroska".to_owned(),
+        partial.to_string_lossy().into_owned(),
+    ]);
+    if let Err(error) = crate::render::run_ffmpeg_with_progress(
+        &args,
+        compiled.duration.seconds(),
+        cancellation,
+        None::<fn(f64)>,
+    ) {
+        let _ = std::fs::remove_file(&partial);
+        return Err(error);
+    }
+    std::fs::rename(&partial, entry.path(BAKE_FILE))?;
+    entry.mark_complete(&[BAKE_FILE])?;
+    Ok(())
 }
 
 fn bake_job(job: &BakeJob, entry: &CacheEntry, cancellation: &CancellationToken) -> Result<()> {

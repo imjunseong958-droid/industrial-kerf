@@ -228,11 +228,16 @@ pub(crate) fn import_media(
         .unwrap_or(sequence.rate);
     let has_audio = probe.and_then(|info| info.has_audio) == Some(true);
     let video = match probe.and_then(|info| info.width.zip(info.height)) {
-        Some((width, height)) => Some(VideoInfo { width, height }),
+        Some((width, height)) => Some(VideoInfo {
+            width,
+            height,
+            alpha: probe.and_then(|info| info.alpha) == Some(true),
+        }),
         // Unprobed media is assumed to be picture at the sequence size.
         None if !has_audio => Some(VideoInfo {
             width: sequence.width,
             height: sequence.height,
+            alpha: false,
         }),
         None => None,
     };
