@@ -3,12 +3,15 @@
 # own libraries (the Qt bridge and docking) in ~/.local/lib/kerf. The install
 # does not refer back to this checkout, so cleaning or moving it is safe.
 # System libraries (Qt, FFmpeg) still come from their package manager.
+# The bridge is built optimized: the editor's live preview and its exports
+# draw frames inside it.
 set -euo pipefail
 
 kerf_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$kerf_root"
 dest="${KERF_LOCAL_BIN:-$HOME/.local/bin}"
 lib_dir="${KERF_LOCAL_LIB:-$(dirname "$dest")/lib/kerf}"
+bridge_dir="$kerf_root/target/release"
 mkdir -p "$dest"
 
 mode="${1:-all}"
@@ -20,11 +23,17 @@ build_cli() {
 }
 
 build_qt() {
-    cargo build -p kerf-qt-bridge
+    cargo build --release -p kerf-qt-bridge
+    local bridge
+    case "$(uname -s)" in
+        Darwin) bridge="$bridge_dir/libkerf_qt_bridge.dylib" ;;
+        *) bridge="$bridge_dir/libkerf_qt_bridge.so" ;;
+    esac
     if command -v brew >/dev/null 2>&1; then
-        cmake -S apps/kerf-qt -B target/qt -DCMAKE_PREFIX_PATH="$(brew --prefix qt)"
+        cmake -S apps/kerf-qt -B target/qt -DCMAKE_PREFIX_PATH="$(brew --prefix qt)" \
+            -DKERF_BRIDGE_LIBRARY="$bridge"
     else
-        cmake -S apps/kerf-qt -B target/qt
+        cmake -S apps/kerf-qt -B target/qt -DKERF_BRIDGE_LIBRARY="$bridge"
     fi
     cmake --build target/qt --parallel
 }
@@ -50,7 +59,7 @@ relink_qt_macos() {
     local editor="$dest/kerf-qt"
     local bridge_ref
     bridge_ref="$(otool -L "$editor" | awk '/libkerf_qt_bridge/ {print $1; exit}')"
-    place "$kerf_root/target/debug/libkerf_qt_bridge.dylib" "$lib_dir/libkerf_qt_bridge.dylib"
+    place "$bridge_dir/libkerf_qt_bridge.dylib" "$lib_dir/libkerf_qt_bridge.dylib"
     install_name_tool -id @rpath/libkerf_qt_bridge.dylib "$lib_dir/libkerf_qt_bridge.dylib"
     install_name_tool -change "$bridge_ref" @rpath/libkerf_qt_bridge.dylib "$editor"
     local ref name
@@ -69,12 +78,12 @@ relink_qt_macos() {
 
 relink_qt_linux() {
     local editor="$dest/kerf-qt" library
-    for library in "$kerf_root/target/debug/libkerf_qt_bridge.so" \
+    for library in "$bridge_dir/libkerf_qt_bridge.so" \
                    $(find "$kerf_root/target/qt" -name 'libqtadvanceddocking*.so*' -type f); do
         place "$library" "$lib_dir/$(basename "$library")"
     done
     if command -v patchelf >/dev/null 2>&1; then
-        patchelf --replace-needed "$kerf_root/target/debug/libkerf_qt_bridge.so" libkerf_qt_bridge.so "$editor" 2>/dev/null || true
+        patchelf --replace-needed "$bridge_dir/libkerf_qt_bridge.so" libkerf_qt_bridge.so "$editor" 2>/dev/null || true
         patchelf --set-rpath "$lib_dir" "$editor"
     else
         echo "warning: patchelf not found; kerf-qt still loads its libraries from $kerf_root/target" >&2
