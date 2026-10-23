@@ -514,9 +514,9 @@ fn builtin_catalog() -> Catalog {
 const RASTER_EFFECTS: &str = include_str!("raster_effects.tsv");
 
 /// Read the generated table: an `effect` or `transition` line (id,
-/// category, name) per definition, then a tab-indented line per parameter
-/// (type, name, default, `min..max` or `option|option`, unit, label). `#`
-/// lines are comments.
+/// category, name, and when to use it) per definition, then a tab-indented
+/// line per parameter (type, name, default, `min..max` or `option|option`,
+/// unit, label). `#` lines are comments.
 fn raster_definitions(text: &str) -> Vec<FxDef> {
     let mut definitions: Vec<FxDef> = Vec::new();
     for line in text
@@ -530,8 +530,11 @@ fn raster_definitions(text: &str) -> Vec<FxDef> {
             _ => None,
         };
         if let Some(kind) = kind {
-            let mut def = FxDef::new(fields[1], kind, Domain::Video, &format!("{}.", fields[3]))
-                .category(fields[2]);
+            let doc = match fields.get(4).filter(|guidance| !guidance.is_empty()) {
+                Some(guidance) => format!("{}: {guidance}", fields[3]),
+                None => format!("{}.", fields[3]),
+            };
+            let mut def = FxDef::new(fields[1], kind, Domain::Video, &doc).category(fields[2]);
             def.engine = Engine::Raster;
             definitions.push(def);
             continue;

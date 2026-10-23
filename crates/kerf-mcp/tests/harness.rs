@@ -804,6 +804,15 @@ fn raster_effects_are_looked_up_checked_and_previewed() {
         error(&router, "look", json!({"effect": "channel.nothing"}))["code"],
         "INVALID_ARGUMENTS"
     );
+    // Effects are found by the look wanted, each saying when to use it.
+    let found = ok(&router, "look", json!({"effects": "neon glow"}));
+    assert_eq!(found["effects"][0]["id"], "stylize.glow", "{found}");
+    assert!(found["effects"][0]["doc"]
+        .as_str()
+        .unwrap()
+        .contains("neon"));
+    let wipes = ok(&router, "look", json!({"effects": "retro tv transition"}));
+    assert_eq!(wipes["effects"][0]["id"], "transition.venetian", "{wipes}");
 
     let proposal = ok(
         &router,

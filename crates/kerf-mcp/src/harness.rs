@@ -208,7 +208,8 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "proposal": {"type": "string", "description": proposal},
                     "preset": {"type": "string", "description": "Inspect a .kerfpreset file: pattern, text slots, and media slots with the imported media that fit each. Use alone."},
                     "presets": {"type": "boolean", "description": "List .kerfpreset files in the project root and .kerf/presets. Use alone with true."},
-                    "effect": {"type": "string", "description": "An effect, transition, or generator id: its parameters, as the reference lists them. Raster effects are listed by id only. Use alone."}
+                    "effect": {"type": "string", "description": "An effect, transition, or generator id: its parameters, as the reference lists them. Raster effects are listed by id only. Use alone."},
+                    "effects": {"type": "string", "description": "Words for the look or moment you want, such as \"glow neon\", \"zoom hit\", or \"retro tv\": the effects, transitions, and generators whose id, category, or guidance match, best first, each with when to use it. Use alone."}
                 },
                 "additionalProperties": false
             }),
@@ -284,6 +285,7 @@ struct LookInput {
     #[serde(default)]
     presets: bool,
     effect: Option<String>,
+    effects: Option<String>,
     media: Option<String>,
     #[serde(default)]
     at: Vec<String>,
@@ -457,6 +459,12 @@ impl KerfMcpRouter {
     pub(super) fn look(&self, arguments: Value) -> Result<Value, McpError> {
         let preset_only = arguments.as_object().is_some_and(|o| o.len() == 1);
         let input: LookInput = input(arguments)?;
+        if let Some(words) = &input.effects {
+            if !preset_only {
+                return Err(McpError::new("INVALID_ARGUMENTS", "use effects alone"));
+            }
+            return Ok(json!({"effects": find_fx(words)}));
+        }
         if let Some(id) = &input.effect {
             if !preset_only {
                 return Err(McpError::new("INVALID_ARGUMENTS", "use effect alone"));
@@ -1534,6 +1542,43 @@ impl KerfMcpRouter {
 }
 
 /// A script refusal, with each line numbered as the agent wrote it.
+/// The most catalog entries `look` with `effects` returns.
+const MAX_FOUND_FX: usize = 20;
+
+/// Catalog entries matching `words`, by how many of the words their id,
+/// category, and doc contain, then in catalog order.
+fn find_fx(words: &str) -> Vec<Value> {
+    let words: Vec<String> = words
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    let mut found: Vec<(usize, &kerf_model::FxDef)> = catalog()
+        .all()
+        .filter_map(|fx| {
+            let haystack = format!("{} {} {}", fx.id, fx.category, fx.doc).to_lowercase();
+            let score = words
+                .iter()
+                .filter(|word| haystack.contains(word.as_str()))
+                .count();
+            (score > 0).then_some((score, fx))
+        })
+        .collect();
+    found.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+    found
+        .into_iter()
+        .take(MAX_FOUND_FX)
+        .map(|(_, fx)| {
+            json!({
+                "id": fx.id.as_str(),
+                "kind": fx.kind.name(),
+                "category": fx.category,
+                "doc": fx.doc,
+            })
+        })
+        .collect()
+}
+
 fn refused(errors: Vec<kerf_model::Diagnostic>, origins: &[usize]) -> McpError {
     let errors: Vec<_> = errors
         .into_iter()
