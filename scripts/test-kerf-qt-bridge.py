@@ -307,6 +307,12 @@ with tempfile.TemporaryDirectory(prefix='kerf-qt-', dir=ROOT / 'target') as temp
         state()
         # Cuts cannot show the half-transparent clip; the compositor draws it
         # live, and a seek shows its frame.
+        live = wait(lambda event: event['type'] == 'preview' and event['status'] == 'live')
+        assert 'gpu' in live, live
+        # With the GPU off, the live program opens again, drawn on the CPU.
+        send({'type': 'gpu', 'enabled': False})
+        assert wait(lambda event: event['type'] == 'preview' and event['status'] == 'live')['gpu'] is None
+        send({'type': 'gpu', 'enabled': True})
         wait(lambda event: event['type'] == 'preview' and event['status'] == 'live')
         send({'type': 'seek', 'position': 1.0})
         deadline = time.monotonic() + 15

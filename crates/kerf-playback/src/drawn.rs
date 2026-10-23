@@ -7,7 +7,7 @@
 //! again while frames take longer than their time.
 
 use crate::PlaybackError;
-use kerf_compose::{ComposeOptions, Compositor, Frame};
+use kerf_compose::{ComposeOptions, Compositor, Device, Frame};
 use kerf_model::{Catalog, Project, Rate};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -55,15 +55,20 @@ pub(crate) struct Drawing {
 }
 
 impl Drawn {
-    /// The first sequence of `project`, drawn at most `frame_size`.
-    /// `epoch` is the playback's seek counter: work asked for before the
-    /// latest seek is skipped.
+    /// The first sequence of `project`, drawn at most `frame_size`, on the
+    /// GPU too when `gpu` and it is faster. `epoch` is the playback's seek
+    /// counter: work asked for before the latest seek is skipped.
     pub fn open(
         project: &Project,
         frame_size: Option<(u32, u32)>,
+        gpu: bool,
         epoch: Arc<AtomicU64>,
     ) -> Result<Self, PlaybackError> {
-        let compositor = Compositor::new(project, Catalog::builtin(), &ComposeOptions::default())
+        let options = ComposeOptions {
+            device: if gpu { Device::Auto } else { Device::Cpu },
+            ..ComposeOptions::default()
+        };
+        let compositor = Compositor::new(project, Catalog::builtin(), &options)
             .map_err(|error| PlaybackError::InvalidProject(error.to_string()))?;
         let (width, height) = compositor.size();
         let (width, height) = (f64::from(width.max(1)), f64::from(height.max(1)));

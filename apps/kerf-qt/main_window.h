@@ -227,6 +227,8 @@ private:
     QPushButton *m_cloudSignOut = nullptr;
     QWidget *m_advancedSettings = nullptr;
     QLabel *m_statusAccount = nullptr;
+    // Where the live preview draws: the GPU adapter, or the CPU.
+    QLabel *m_statusDevice = nullptr;
     // The last account report from the bridge.
     QString m_cloudAccess;
     QJsonObject m_cloudAccount;
@@ -284,6 +286,7 @@ private:
     QLineEdit *m_openaiModel = nullptr;
     QComboBox *m_openaiMode = nullptr;
     QCheckBox *m_mcpEnabled = nullptr;
+    QCheckBox *m_gpuEnabled = nullptr;
     QTextEdit *m_inboundMcpJson = nullptr;
     QLabel *m_inboundMcpStatus = nullptr;
     quint64 m_mcpConfigVersion = 0;

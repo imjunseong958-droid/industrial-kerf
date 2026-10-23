@@ -3,17 +3,29 @@
 //! A sequence is drawn frame by frame through EffectCraft's renderer
 //! instead of an FFmpeg filter graph. [`Compositor::new`] turns the
 //! sequence into an EffectCraft project held in memory (`scene` says how
-//! each part maps), and [`Compositor::frame`] renders one frame of it on
-//! the CPU, reading media through libav. Effects run as part of the frame,
-//! raster effects included, so nothing is baked first.
+//! each part maps), and [`Compositor::frame`] renders one frame of it,
+//! reading media through libav. Effects run as part of the frame, raster
+//! effects included, so nothing is baked first.
+//!
+//! With [`Device::Auto`] and a GPU present, each frame is drawn where it is
+//! drawn faster: EffectCraft times both and keeps the quicker for the
+//! sequence and size. The GPU opens in the background ([`warm_gpu`]): the
+//! first time a program uses it, macOS can take most of a minute to build
+//! its shaders, and frames are drawn on the CPU meanwhile. Light frames, a few layers of
+//! footage, stay on the CPU, which only touches what the layers cover;
+//! heavy ones, blurs and glows over the frame, go to the GPU. The CPU
+//! renderer stays the reference and draws whatever the GPU declines,
+//! every frame after its device is lost included.
 
 mod color;
 mod footage;
 mod scene;
 
-use effectcraft_render::{Image, LayerCache, RenderOpts, Renderer};
+use effectcraft_gpu::Gpu;
+use effectcraft_render::{Accelerator, Backend, Image, LayerCache, RenderOpts, Renderer};
 use footage::LibavFootage;
 use kerf_model::{Catalog, Project, Rate, Time};
+use std::sync::{Once, OnceLock};
 
 /// Processed layers kept between frames.
 const LAYER_CACHE: usize = 256 << 20;
@@ -43,6 +55,59 @@ pub struct ComposeOptions {
     /// Draw captions into the picture, as a render burns them in. A viewer
     /// that shows captions itself leaves them out.
     pub captions: bool,
+    /// Where frames are drawn.
+    pub device: Device,
+}
+
+/// Where frames are drawn. Without a GPU, they all are on the CPU.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Device {
+    #[default]
+    Cpu,
+    /// On whichever of the CPU and the GPU draws the sequence faster, once
+    /// the GPU is open; on the CPU until then.
+    Auto,
+    /// On the GPU, the CPU drawing only what it declines. Waits for the GPU
+    /// to open.
+    Gpu,
+}
+
+/// The GPU frames are drawn on, opened once for the process: `None`
+/// without a usable adapter.
+static GPU: OnceLock<Option<Gpu>> = OnceLock::new();
+
+/// Open the GPU in the background, once, so frames that can use it find it
+/// open.
+pub fn warm_gpu() {
+    static STARTED: Once = Once::new();
+    STARTED.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("kerf-gpu".into())
+            .spawn(|| {
+                GPU.get_or_init(Gpu::headless);
+            });
+    });
+}
+
+/// The GPU, opened here if need be.
+fn shared_gpu() -> Option<&'static Gpu> {
+    GPU.get_or_init(Gpu::headless).as_ref()
+}
+
+/// The GPU if it is open, without waiting for it.
+fn opened_gpu() -> Option<&'static Gpu> {
+    GPU.get().and_then(Option::as_ref)
+}
+
+/// The GPU adapter frames are drawn on (`"Apple M2 (Metal)"`), once it is
+/// open; `None` while it opens, and on a machine without one.
+pub fn gpu_adapter() -> Option<String> {
+    opened_gpu().map(Accelerator::name)
+}
+
+/// Open the GPU now, waiting for it, and name its adapter (benchmarks).
+pub fn open_gpu() -> Option<String> {
+    shared_gpu().map(Accelerator::name)
 }
 
 /// One frame of straight RGBA, row by row.
@@ -58,6 +123,7 @@ pub struct Compositor {
     scene: scene::Scene,
     footage: LibavFootage,
     cache: LayerCache,
+    device: Device,
 }
 
 impl Compositor {
@@ -77,7 +143,30 @@ impl Compositor {
             scene,
             footage: LibavFootage::new(clips),
             cache: LayerCache::new(LAYER_CACHE),
+            device: options.device,
         })
+        .inspect(|compositor| match compositor.device {
+            Device::Cpu => {}
+            Device::Auto => warm_gpu(),
+            Device::Gpu => {
+                shared_gpu();
+            }
+        })
+    }
+
+    /// The GPU this compositor draws on now, if any.
+    fn device(&self) -> Option<&'static Gpu> {
+        match self.device {
+            Device::Cpu => None,
+            Device::Auto => opened_gpu(),
+            Device::Gpu => shared_gpu(),
+        }
+        .filter(|gpu| gpu.available())
+    }
+
+    /// The GPU adapter this compositor draws on now, if any.
+    pub fn gpu(&self) -> Option<String> {
+        self.device().map(Accelerator::name)
     }
 
     /// The canvas, made even as a render makes it.
@@ -124,13 +213,20 @@ impl Compositor {
 
     /// The premultiplied picture at `at`, transparent where nothing is.
     fn image(&self, at: Time, scale: f64) -> Image {
+        let gpu = self.device();
         let opts = RenderOpts {
             scale: scale.clamp(1.0 / 16.0, 1.0),
             motion_blur: false,
+            backend: match (self.device, gpu) {
+                (Device::Auto, Some(_)) => Backend::Auto,
+                (Device::Gpu, Some(_)) => Backend::Gpu,
+                _ => Backend::Cpu,
+            },
             ..RenderOpts::default()
         };
         let mut renderer = Renderer::new(&self.scene.project, &self.footage, opts);
         renderer.cache = Some(&self.cache);
+        renderer.accel = gpu.map(|gpu| gpu as &dyn Accelerator);
         renderer.comp_frame(self.scene.comp, scene::ticks(at))
     }
 }

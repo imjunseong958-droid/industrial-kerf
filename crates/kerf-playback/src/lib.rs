@@ -16,6 +16,7 @@ mod drawn;
 mod libav;
 mod timeline;
 
+pub use kerf_compose::gpu_adapter;
 pub use timeline::{
     preview_plan, CaptionCue, ClipKind, PlaybackClip, PlaybackSource, PlaybackTimeline,
     ResolvedClip,
@@ -321,6 +322,7 @@ impl PlaybackSession {
             Some(Drawn::open(
                 &project,
                 config.frame_size(),
+                config.gpu,
                 Arc::clone(&epoch),
             )?)
         } else {
@@ -447,6 +449,8 @@ pub struct PlaybackConfig {
     pub audio_enabled: bool,
     /// The compositor draws the picture instead of the native decoders.
     pub composited: bool,
+    /// The compositor draws on the GPU too, when that is faster.
+    pub gpu: bool,
 }
 
 impl Default for PlaybackConfig {
@@ -458,6 +462,7 @@ impl Default for PlaybackConfig {
             frame_height: None,
             audio_enabled: true,
             composited: false,
+            gpu: true,
         }
     }
 }
@@ -484,6 +489,12 @@ impl PlaybackConfig {
     /// says plays composited.
     pub fn with_composited(mut self, composited: bool) -> Self {
         self.composited = composited;
+        self
+    }
+
+    /// Let the compositor draw on the GPU when that is faster.
+    pub fn with_gpu(mut self, gpu: bool) -> Self {
+        self.gpu = gpu;
         self
     }
 
@@ -637,7 +648,8 @@ impl Worker {
                     if self.drawn.is_some() {
                         self.drawn = None;
                         let size = self.config.frame_size();
-                        match Drawn::open(&project, size, Arc::clone(&self.epoch)) {
+                        match Drawn::open(&project, size, self.config.gpu, Arc::clone(&self.epoch))
+                        {
                             Ok(drawn) => self.drawn = Some(drawn),
                             Err(error) => self.emit(PlaybackEvent::Error(error)),
                         }

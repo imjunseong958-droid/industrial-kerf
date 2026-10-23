@@ -1,7 +1,7 @@
 //! What the compositor draws where the graph cannot be asked: text,
 //! blend modes, and raster effects on adjustment layers.
 
-use kerf_compose::{ComposeError, ComposeOptions, Compositor, Frame};
+use kerf_compose::{ComposeError, ComposeOptions, Compositor, Device, Frame};
 use kerf_lang::parse_document;
 use kerf_model::{Catalog, Rate};
 
@@ -18,6 +18,7 @@ fn compositor(body: &str, captions: bool) -> Result<Compositor, ComposeError> {
         &ComposeOptions {
             sequence: None,
             captions,
+            device: Device::Cpu,
         },
     )
 }
@@ -155,4 +156,81 @@ fn unsupported_things_are_named() {
         Err(other) => panic!("{other}"),
         Ok(_) => panic!("a dissolve out of an adjustment layer draws"),
     }
+}
+
+#[test]
+#[ignore = "opens the GPU, which macOS takes most of a minute to ready for a new build; run with --ignored"]
+fn the_gpu_draws_what_the_cpu_draws() {
+    // Opening a compositor on the GPU waits for it.
+    let probe = Compositor::new(
+        &parse_document(
+            &format!("kerf 1\nproject name=\"p\"\n{SEQUENCE}"),
+            Catalog::builtin(),
+        )
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project,
+        Catalog::builtin(),
+        &ComposeOptions {
+            device: Device::Gpu,
+            ..ComposeOptions::default()
+        },
+    );
+    let Some(adapter) = probe.ok().and_then(|compositor| compositor.gpu()) else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let project = parse_document(
+        &format!(
+            "kerf 1\nproject name=\"t\"\n{SEQUENCE}\
+             \x20 track V1 video\n\
+             \x20   clip g1 gen=solid at=0f dur=24f\n\
+             \x20     set color=#3070b0\n\
+             \x20   clip g2 gen=solid at=24f dur=24f\n\
+             \x20     set color=#b07030\n\
+             \x20   transition x1 from=g1 to=g2 fx=dissolve dur=12f\n\
+             \x20 track V2 video\n\
+             \x20   clip g3 gen=solid at=0f dur=48f\n\
+             \x20     set color=#f0f0f0 scale=0.4 rotation=12 x=0.2 opacity=0.8\n\
+             \x20     fx blur.gaussian radius=8\n\
+             \x20     fx stylize.glow\n\
+             \x20 track V3 video\n\
+             \x20   clip t1 gen=title at=0f dur=48f\n\
+             \x20     set text=\"KERF\" size=0.2 y=0.25\n"
+        ),
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project;
+    let draw = |device| {
+        let compositor = Compositor::new(
+            &project,
+            Catalog::builtin(),
+            &ComposeOptions {
+                device,
+                ..ComposeOptions::default()
+            },
+        )
+        .expect("composes");
+        compositor.frame(Rate::FPS_24.time_of(24), 1.0)
+    };
+    let (cpu, gpu) = (draw(Device::Cpu), draw(Device::Gpu));
+    assert_eq!((cpu.width, cpu.height), (gpu.width, gpu.height));
+    let total: u64 = cpu
+        .rgba
+        .iter()
+        .zip(&gpu.rgba)
+        .map(|(a, b)| u64::from(a.abs_diff(*b)))
+        .sum();
+    let mean = total as f64 / cpu.rgba.len() as f64;
+    let off = cpu
+        .rgba
+        .chunks_exact(4)
+        .zip(gpu.rgba.chunks_exact(4))
+        .filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 16))
+        .count();
+    let off = off as f64 / (cpu.rgba.len() / 4) as f64;
+    assert!(
+        mean < 1.0 && off < 0.002,
+        "{adapter}: mean {mean}, off {off}"
+    );
 }
