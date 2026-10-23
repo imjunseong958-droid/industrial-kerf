@@ -32,7 +32,7 @@ holds shared constants and helpers, `editor_style.h` the stylesheet, and
 instead of `main.cpp`.
 
 Menus, shortcuts, the toolbar, the transport buttons, and timeline gestures
-run commands from the registry in `crates/cut-commands` (ADR 0007). Each
+run commands from the registry in `crates/cut-commands`. Each
 command is one `QAction` whose label, shortcuts, and enabled state come
 from the registry; an unavailable command says why in its tooltip and the
 status bar. Edit → Keyboard Shortcuts switches between the Cut, Premiere

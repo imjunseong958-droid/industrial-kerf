@@ -7,7 +7,7 @@
 //! in `runtime`; its journal and checkpoints are in `store`.
 //!
 //! The canonical project is a `cut_model::Project` stored as the `.cut`
-//! document `project.cut` (ADR 0006). Edits arrive as scripts or typed
+//! document `project.cut`. Edits arrive as scripts or typed
 //! operations (see `kernel`) and are journaled as scripts. Snapshots carry
 //! the document and a timeline view of the model; proposals carry the script
 //! and the document diff. Renders and proposal previews hand renderers the
