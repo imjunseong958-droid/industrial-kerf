@@ -1,7 +1,8 @@
 //! Qt's nonblocking, UTF-8 C ABI. Canonical edits stay in kerfd; media frames
 //! travel through a latest-frame slot rather than JSON or an accumulating queue.
 use kerf_agent::{
-    AgentEvent, AgentSession, AgentSessionOptions, OpenAiApiMode, ProviderName, ReasoningEffort,
+    AgentEvent, AgentSession, AgentSessionOptions, AgentTool, OpenAiApiMode, ProviderName,
+    ReasoningEffort,
 };
 use kerf_mcp::inbound;
 use kerf_mcp::KerfMcpRouter;
@@ -863,6 +864,51 @@ fn new_agent(
         "Could not load MCP configuration. Check ~/.kerf/mcp.json and project .kerf/mcp.json."
             .to_owned()
     })?;
+    let next = tx.clone();
+    tools.insert(
+        "suggest".to_owned(),
+        AgentTool::new(
+            "suggest",
+            SUGGEST_DOC,
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["steps"],
+                "properties": {"steps": {
+                    "type": "array", "minItems": 1, "maxItems": MAX_NEXT_STEPS,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["label", "request"],
+                        "properties": {
+                            "label": {"type": "string", "maxLength": 40, "description": "The button: a few words, such as \"Stronger glow\"."},
+                            "request": {"type": "string", "description": "What the person asks by pressing it, in their words."}
+                        }
+                    }
+                }}
+            }),
+            move |input| {
+                let steps: Vec<Value> = input["steps"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|step| {
+                        let label = step["label"].as_str()?.trim();
+                        let request = step["request"].as_str()?.trim();
+                        (!label.is_empty() && !request.is_empty()).then(|| {
+                            json!({"label": label.chars().take(40).collect::<String>(), "request": request})
+                        })
+                    })
+                    .take(MAX_NEXT_STEPS)
+                    .collect();
+                if steps.is_empty() {
+                    return Err("give one to three steps, each with a label and a request".into());
+                }
+                emit(&next, json!({"type": "agent_next", "steps": steps}));
+                Ok(json!({"shown": steps.len()}))
+            },
+        ),
+    );
     Ok(AgentSession::new(AgentSessionOptions {
         provider,
         api_mode,
@@ -885,12 +931,30 @@ fn new_agent(
                 })
                 .ok()
             }),
-        system_prompt: Some(router.agent_system_prompt()),
+        system_prompt: Some(format!(
+            "{}\n\n{EDITOR_GUIDE}",
+            router.agent_system_prompt()
+        )),
         tools,
         context: Some(router.agent_context()),
         ..Default::default()
     }))
 }
+
+/// The most next steps the editor shows at once.
+const MAX_NEXT_STEPS: usize = 3;
+
+const SUGGEST_DOC: &str = "Offer the person one to three next steps as buttons in the editor. \
+Pressing one sends its request to you as if they had typed it.";
+
+/// What the built-in agent does in the editor beyond the shared guide.
+const EDITOR_GUIDE: &str = "# In the editor\n\n\
+The person works in Kerf's editor and answers with buttons more easily than \
+by typing. End each turn by calling `suggest` with one to three next steps \
+they are likely to want: a variation on what you just did (another effect or \
+transition for that moment, stronger or subtler), the next part of the edit, \
+or checking the result. Labels are a few words; requests are what the person \
+would say. Do not repeat a step they just took.";
 
 /// Carry out a Kerf Cloud command, if any, then report the account:
 /// `{type: "cloud", access, account?, message?}`.

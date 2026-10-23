@@ -676,6 +676,29 @@ private slots:
         QCOMPARE(op.value("fx").toString(), QStringLiteral("stylize.glow"));
     }
 
+    void nextStepsAreButtonsThatAskForThem() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        // The last request was about clip c1.
+        const QJsonObject focus{{"scope", "clip"}, {"clip", "c1"}, {"fromFrame", 0}, {"toFrame", 24}};
+        window.m_lastFocus = focus;
+        window.m_lastFocusLabel = QStringLiteral("clip c1");
+        window.handleEvent(QJsonObject{{"type", "agent_next"}, {"steps", QJsonArray{
+            QJsonObject{{"label", "Stronger glow"}, {"request", "Make the glow stronger."}},
+            QJsonObject{{"label", "Wipe out"}, {"request", "Use a linear wipe into the next shot."}}}}});
+        const auto chips = window.m_nextSteps->findChildren<QPushButton *>(QStringLiteral("nextStep"));
+        QCOMPARE(chips.size(), 2);
+        QCOMPARE(chips.at(0)->text(), QStringLiteral("Stronger glow"));
+        QVERIFY(!window.m_aiBar->isHidden());
+        QCOMPARE(window.m_aiBarText->text(), QStringLiteral("Next with Kerf"));
+        QCOMPARE(window.m_chatNextSteps->findChildren<QPushButton *>(QStringLiteral("nextStep")).size(), 2);
+        // Pressing one asks for it, about what the last request was about.
+        chips.at(1)->click();
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("agent"));
+        QCOMPARE(window.m_lastCommand.value("text").toString(), QStringLiteral("Use a linear wipe into the next shot."));
+        QCOMPARE(window.m_lastCommand.value("focus").toObject(), focus);
+    }
+
     void inspectorShowsAndEditsTheEffectStack() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
