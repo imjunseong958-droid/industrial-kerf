@@ -239,3 +239,101 @@ fn raster_effects_play_live_inside_the_letterbox() {
     );
     assert_eq!(at(32, 2), [0, 0, 0, 255]);
 }
+
+/// A source whose frames grow brighter, 64x36 at 10 fps: frame `n` is
+/// gray `16 + 10n`.
+fn counting_source(binary: &str, directory: &std::path::Path) -> std::path::PathBuf {
+    let source = directory.join("counting.mp4");
+    let status = Command::new(binary)
+        .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i"])
+        .arg("color=c=black:s=64x36:r=10:d=2,format=gray,geq=lum='16+N*10'")
+        .args(["-c:v", "libx264", "-qp", "0", "-pix_fmt", "yuv420p", "-y"])
+        .arg(&source)
+        .status()
+        .expect("run ffmpeg fixture");
+    assert!(status.success(), "fixture ffmpeg process failed");
+    source
+}
+
+fn next_frame(
+    session: &PlaybackSession,
+    wanted: impl Fn(f64) -> bool,
+) -> kerf_playback::PlaybackFrame {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if let Some(PlaybackEvent::Frame(frame)) =
+            session.next_event_timeout(Duration::from_millis(100))
+        {
+            if wanted(frame.timeline_time) {
+                return frame;
+            }
+        }
+    }
+    panic!("no frame arrived");
+}
+
+fn gray(frame: &kerf_playback::PlaybackFrame, x: usize, y: usize) -> u8 {
+    let at = (y * frame.width as usize + x) * 4;
+    frame.pixels[at + 1]
+}
+
+#[test]
+fn composited_programs_play_and_seek_frame_exactly() {
+    let binary = ffmpeg_binary();
+    if !ffmpeg_available(&binary) {
+        eprintln!("skipping playback integration test: ffmpeg is unavailable");
+        return;
+    }
+    let directory = tempdir().expect("temporary directory");
+    let source = counting_source(&binary, directory.path());
+    let text = format!(
+        "kerf 1\nproject name=\"Composited\"\n\
+         media source-a path=\"{}\" rate=10 dur=20f video=64x36\n\
+         sequence s1 rate=10 size=64x36 audio=48000\n\
+         \x20 track video-1 video\n\
+         \x20   clip clip-a media=source-a src=0f at=0f dur=20f\n\
+         \x20     set scale=0.5\n",
+        source.display()
+    );
+    let project = kerf_lang::parse_document(&text, kerf_model::Catalog::builtin())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+    assert_eq!(
+        kerf_playback::preview_plan(&project).mode,
+        kerf_core::preview::PreviewMode::Composited
+    );
+    let session = PlaybackSession::open(
+        project,
+        PlaybackConfig::default()
+            .with_audio_enabled(false)
+            .with_frame_size(64, 36)
+            .with_composited(true),
+    )
+    .expect("open playback session");
+    let expected = |time: f64| 16.0 + (time * 10.0).round() * 10.0;
+
+    // A seek shows the frame there, half the size of the canvas.
+    session.seek(1.2).expect("seek");
+    let frame = next_frame(&session, |time| (time - 1.2).abs() < 1e-6);
+    assert_eq!((frame.width, frame.height), (64, 36));
+    let center = f64::from(gray(&frame, 32, 18));
+    assert!((center - expected(1.2)).abs() < 4.0, "{center}");
+    assert_eq!(gray(&frame, 2, 2), 0);
+
+    // Playing shows later frames in order, each the frame of its time.
+    session.seek(0.0).expect("seek");
+    session.play().expect("play");
+    let mut times = Vec::new();
+    while times.len() < 4 {
+        let frame = next_frame(&session, |_| true);
+        let center = f64::from(gray(&frame, 32, 18));
+        assert!(
+            (center - expected(frame.timeline_time)).abs() < 4.0,
+            "{} at {}",
+            center,
+            frame.timeline_time
+        );
+        times.push(frame.timeline_time);
+    }
+    assert!(times.windows(2).all(|pair| pair[0] < pair[1]), "{times:?}");
+}

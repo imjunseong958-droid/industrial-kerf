@@ -5,9 +5,14 @@
 //! events from a worker thread. Video and audio decode run in-process through
 //! libav; export stays on the ffmpeg CLI in `kerf-engine`. Native clients own
 //! the adapter that presents delivered RGBA frames.
+//!
+//! A program cut-only playback cannot show plays composited: the compositor
+//! (`kerf-compose`) draws its picture while sound plays natively (see
+//! [`preview_plan`] and [`PlaybackConfig::with_composited`]).
 
 mod audio;
 mod decoder;
+mod drawn;
 mod libav;
 mod timeline;
 
@@ -18,7 +23,8 @@ pub use timeline::{
 
 use audio::AudioRuntime;
 use decoder::{DecodedVideoFrame, VideoDecoder};
-use std::collections::VecDeque;
+use drawn::Drawn;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
@@ -311,6 +317,15 @@ impl PlaybackSession {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .epoch,
         );
+        let drawn = if config.composited {
+            Some(Drawn::open(
+                &project,
+                config.frame_size(),
+                Arc::clone(&epoch),
+            )?)
+        } else {
+            None
+        };
         let audio = AudioRuntime::spawn(timeline.clone(), config.audio_enabled)?;
         let worker = Worker {
             timeline,
@@ -338,6 +353,9 @@ impl PlaybackSession {
             retarget_early: false,
             serve_epoch: 0,
             epoch,
+            drawn,
+            drawn_ready: BTreeMap::new(),
+            drawn_shown: None,
         };
         thread::Builder::new()
             .name("kerf-playback".into())
@@ -427,6 +445,8 @@ pub struct PlaybackConfig {
     pub frame_width: Option<u32>,
     pub frame_height: Option<u32>,
     pub audio_enabled: bool,
+    /// The compositor draws the picture instead of the native decoders.
+    pub composited: bool,
 }
 
 impl Default for PlaybackConfig {
@@ -437,6 +457,7 @@ impl Default for PlaybackConfig {
             frame_width: None,
             frame_height: None,
             audio_enabled: true,
+            composited: false,
         }
     }
 }
@@ -457,6 +478,17 @@ impl PlaybackConfig {
         self.frame_width = Some(width.max(2));
         self.frame_height = Some(height.max(2));
         self
+    }
+
+    /// Draw the picture with the compositor, for a program [`preview_plan`]
+    /// says plays composited.
+    pub fn with_composited(mut self, composited: bool) -> Self {
+        self.composited = composited;
+        self
+    }
+
+    fn frame_size(&self) -> Option<(u32, u32)> {
+        self.frame_width.zip(self.frame_height)
     }
 }
 
@@ -486,6 +518,12 @@ struct Worker {
     retarget_early: bool,
     serve_epoch: u64,
     epoch: Arc<AtomicU64>,
+    /// The compositor's pictures, when it draws them, and those drawn for
+    /// the current seek by frame, with the share of the canvas each was
+    /// drawn at.
+    drawn: Option<Drawn>,
+    drawn_ready: BTreeMap<i64, (PlaybackFrame, f64)>,
+    drawn_shown: Option<i64>,
 }
 
 impl Worker {
@@ -596,6 +634,15 @@ impl Worker {
                 Ok(timeline) => {
                     self.accept_open(request_id);
                     self.stop_decoder();
+                    if self.drawn.is_some() {
+                        self.drawn = None;
+                        let size = self.config.frame_size();
+                        match Drawn::open(&project, size, Arc::clone(&self.epoch)) {
+                            Ok(drawn) => self.drawn = Some(drawn),
+                            Err(error) => self.emit(PlaybackEvent::Error(error)),
+                        }
+                        self.reset_drawn();
+                    }
                     self.timeline = timeline.clone();
                     self.audio.open(timeline);
                     self.position = 0.0;
@@ -649,6 +696,7 @@ impl Worker {
         self.decode_cursor = self.position;
         self.decode_queue.clear();
         self.stop_decoder();
+        self.reset_drawn();
         self.preview_requested = false;
         self.set_state(PlaybackState::Playing);
         self.emit_clock(true);
@@ -676,6 +724,7 @@ impl Worker {
         let was_playing = self.state == PlaybackState::Playing;
         self.audio.seek(next);
         self.position = next;
+        self.reset_drawn();
         let scrub = !exact && !was_playing;
         self.preview_rough = scrub;
         if scrub {
@@ -791,6 +840,10 @@ impl Worker {
     }
 
     fn tick_playing(&mut self) {
+        if self.drawn.is_some() {
+            self.tick_playing_drawn();
+            return;
+        }
         if self.needs_retarget {
             let early = self.retarget_early;
             self.needs_retarget = false;
@@ -823,6 +876,10 @@ impl Worker {
     fn tick_preview(&mut self) {
         if self.seek_waiting() {
             self.preview_requested = false;
+            return;
+        }
+        if self.drawn.is_some() {
+            self.tick_preview_drawn();
             return;
         }
         if self.needs_retarget {
@@ -1013,6 +1070,122 @@ impl Worker {
                 }
             }
         }
+    }
+
+    /// Playing composited: draw the frames just ahead of the clock and show
+    /// the newest one due.
+    fn tick_playing_drawn(&mut self) {
+        let position = self.clock().position.min(self.timeline.duration.max(0.0));
+        self.position = position;
+        if position >= self.timeline.duration && self.timeline.duration > 0.0 {
+            self.audio.pause();
+            self.set_state(PlaybackState::Ended);
+            self.reset_drawn();
+            self.emit(PlaybackEvent::Ended);
+            self.emit_clock(true);
+            return;
+        }
+        self.collect_drawn(true);
+        let Some(drawn) = self.drawn.as_mut() else {
+            return;
+        };
+        let now = drawn.index_at(position);
+        let ahead = self.config.decode_queue_capacity.max(1) as i64;
+        let scale = drawn.moving();
+        for index in now..=(now + ahead).min(drawn.last()) {
+            if !self.drawn_ready.contains_key(&index)
+                && !drawn.request(index, scale, self.serve_epoch)
+            {
+                break;
+            }
+        }
+        let due = self
+            .drawn_ready
+            .range(..=now)
+            .next_back()
+            .map(|(index, _)| *index);
+        if let Some(index) = due {
+            let later = self.drawn_ready.split_off(&(index + 1));
+            let (frame, _) = std::mem::replace(&mut self.drawn_ready, later)
+                .remove(&index)
+                .expect("the frame due is ready");
+            if self.drawn_shown.is_none_or(|shown| index > shown) {
+                self.drawn_shown = Some(index);
+                self.emit(PlaybackEvent::Frame(frame));
+            }
+        }
+    }
+
+    /// Paused composited: draw the frame at the position, quickly first when
+    /// scrubbing.
+    fn tick_preview_drawn(&mut self) {
+        self.collect_drawn(false);
+        let Some(drawn) = self.drawn.as_mut() else {
+            self.preview_requested = false;
+            return;
+        };
+        let index = drawn.index_at(self.position);
+        let wanted = if self.preview_rough {
+            drawn.moving()
+        } else {
+            drawn.still()
+        };
+        if let Some((frame, scale)) = self.drawn_ready.remove(&index) {
+            self.drawn_shown = Some(index);
+            self.emit(PlaybackEvent::Frame(frame));
+            if scale >= wanted {
+                self.preview_requested = false;
+                self.preview_rough = false;
+                return;
+            }
+        }
+        let Some(drawn) = self.drawn.as_mut() else {
+            return;
+        };
+        if !drawn.is_drawing(index, self.serve_epoch) {
+            drawn.request(index, wanted, self.serve_epoch);
+        }
+    }
+
+    /// Keep the frames drawn for the current seek.
+    fn collect_drawn(&mut self, playing: bool) {
+        let Some(drawn) = self.drawn.as_mut() else {
+            return;
+        };
+        for drawing in drawn.take(playing) {
+            let Some(picture) = drawing.frame else {
+                continue;
+            };
+            let late = playing && self.drawn_shown.is_some_and(|shown| drawing.index <= shown);
+            if drawing.epoch != self.serve_epoch || late {
+                continue;
+            }
+            let timeline_time = drawn.seconds(drawing.index);
+            let frame = PlaybackFrame {
+                sequence: self.sequence,
+                timeline_time,
+                source_time: timeline_time,
+                clip_id: String::new(),
+                width: picture.width,
+                height: picture.height,
+                pixels: Arc::from(picture.rgba.into_boxed_slice()),
+                captions: self.timeline.captions_at(timeline_time),
+            };
+            self.sequence += 1;
+            let sharper = self
+                .drawn_ready
+                .get(&drawing.index)
+                .is_none_or(|(_, scale)| *scale < drawing.scale);
+            if sharper {
+                self.drawn_ready
+                    .insert(drawing.index, (frame, drawing.scale));
+            }
+        }
+    }
+
+    fn reset_drawn(&mut self) {
+        self.drawn_ready.clear();
+        self.drawn_shown = None;
     }
 
     fn make_frame(
@@ -1275,6 +1448,9 @@ mod tests {
             retarget_early: false,
             serve_epoch: 0,
             epoch,
+            drawn: None,
+            drawn_ready: BTreeMap::new(),
+            drawn_shown: None,
         };
         drop(commands);
         (worker, event_receiver, control)

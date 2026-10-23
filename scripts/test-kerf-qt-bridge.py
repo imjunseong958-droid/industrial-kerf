@@ -305,7 +305,20 @@ with tempfile.TemporaryDirectory(prefix='kerf-qt-', dir=ROOT / 'target') as temp
         assert Path(exported['path']).is_file()
         send({'type': 'edit', 'revision': refreshed['revision'], 'ops': [{'op': 'set', 'clip': clip['id'], 'props': {'opacity': 0.5}}]})
         state()
-        wait(lambda event: event['type'] == 'preview' and event['status'] == 'required')
+        # Cuts cannot show the half-transparent clip; the compositor draws it
+        # live, and a seek shows its frame.
+        wait(lambda event: event['type'] == 'preview' and event['status'] == 'live')
+        send({'type': 'seek', 'position': 1.0})
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            poll()
+            if lib.kerf_bridge_frame(bridge, C.byref(frame)) and abs(frame.time - 1.0) < 0.02:
+                assert frame.length == frame.width * frame.height * 4
+                break
+            time.sleep(.005)
+        else:
+            raise AssertionError('The composited frame did not arrive')
+        # A rendered preview still plays it exactly.
         send({'type': 'preview'})
         wait(lambda event: event['type'] == 'preview' and event['status'] == 'ready', 60)
         assert any(event.get('kind') == 'tool' for event in observed)

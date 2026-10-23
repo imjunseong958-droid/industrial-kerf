@@ -249,7 +249,8 @@ private:
     bool m_pendingHoverScrub = false;
     bool m_playing = false;
     bool m_previewRequired = false;
-    // The latest preview status: required, unavailable, running, or ready.
+    // The latest preview status: required, unavailable, running, ready, or
+    // live (the compositor draws the picture).
     QString m_previewStatus;
     bool m_hoverSkimming = false;
     bool m_pointerOwnsPlayhead = false;
