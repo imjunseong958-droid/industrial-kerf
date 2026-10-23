@@ -13,7 +13,9 @@
 //!   moved. Animated properties are sampled at every frame the layer shows
 //!   into linear keys, so each frame is exactly what Kerf evaluates. Media
 //!   left where fitting puts it is letterboxed with black, as the graph
-//!   pads it.
+//!   pads it. Media never shown at its full size is decoded at the size it
+//!   is shown, as the graph scales it before overlaying it, unless a
+//!   raster effect works on its pixels.
 //! - Effects run in the clip's order in layer space: raster effects as
 //!   EffectCraft built them, `color.basic` as a plug-in with the graph's
 //!   arithmetic, `blur.gaussian` as Gaussian Blur at the same size on
@@ -407,9 +409,15 @@ impl<'a> Builder<'a> {
         let geometry = if letterboxed {
             Geometry {
                 scale: Curve::Constant([1.0]),
+                largest: 1.0,
             }
         } else {
-            self.geometry(&mut layer, clip, &frames, picture.size, picture.fit, canvas)?
+            let geometry =
+                self.geometry(&mut layer, clip, &frames, picture.size, picture.fit, canvas)?;
+            if !self.baked(item) {
+                self.decode_as_shown(&picture.source, &geometry);
+            }
+            geometry
         };
         let reveal = item.reveal;
         let alpha = picture.opacity;
@@ -519,21 +527,36 @@ impl<'a> Builder<'a> {
             }
             _ => false,
         };
-        let baked = item.raster_out
-            || clip.effects.iter().any(|effect| {
-                effect.enabled
-                    && self
-                        .catalog
-                        .fx(effect.fx.as_str())
-                        .is_some_and(|fx| fx.engine == Engine::Raster)
-            });
         opaque
-            && !baked
+            && !self.baked(item)
             && ["x", "y", "rotation", "anchor_x", "anchor_y"]
                 .iter()
                 .all(|name| is(name, 0.0))
             && unit("scale_x")
             && unit("scale_y")
+    }
+
+    /// Whether a raster effect works on a shown clip's pixels, which the
+    /// graph bakes into its picture at the picture's own size.
+    fn baked(&self, item: &Shown) -> bool {
+        item.raster_out
+            || item.clip.effects.iter().any(|effect| {
+                effect.enabled
+                    && self
+                        .catalog
+                        .fx(effect.fx.as_str())
+                        .is_some_and(|fx| fx.engine == Engine::Raster)
+            })
+    }
+
+    /// Decode a media layer's frames at the most it is shown at, when that
+    /// is less than their size.
+    fn decode_as_shown(&mut self, source: &LayerSource, geometry: &Geometry) {
+        if let LayerSource::Footage { item } = source {
+            if let Some(clip) = self.clips.get_mut(item) {
+                clip.shown = (geometry.largest < 1.0).then_some(geometry.largest);
+            }
+        }
     }
 
     /// A clip's fitted picture on black the size of the canvas, in a comp
@@ -567,14 +590,16 @@ impl<'a> Builder<'a> {
             &mut self.out,
             &inner,
             clip.id.as_str(),
-            picture.source,
+            picture.source.clone(),
             picture.size,
             None,
         );
         // The picture's layer time is still clip time.
         layer.start_time = ticks(clip.start - lo);
         layer.switches.motion_blur = false;
-        self.geometry(&mut layer, clip, frames, picture.size, true, canvas)?;
+        let geometry = self.geometry(&mut layer, clip, frames, picture.size, true, canvas)?;
+        // Its effects run on the letterboxed picture, not on the media.
+        self.decode_as_shown(&picture.source, &geometry);
         inner.layers = vec![layer, bars];
         let item = self.out.add_item(
             clip.id.as_str(),
@@ -640,6 +665,7 @@ impl<'a> Builder<'a> {
                         source_in: *source_in,
                         speed: *speed,
                         duration: clip.duration,
+                        shown: None,
                     },
                 );
                 Picture {
@@ -936,7 +962,7 @@ impl<'a> Builder<'a> {
     }
 
     /// Crop, fit, scale, flip, rotation, anchor, and position. Returns how
-    /// many canvas pixels a layer pixel covers at each clip time.
+    /// many canvas pixels a layer pixel covers.
     fn geometry(
         &mut self,
         layer: &mut Layer,
@@ -1045,6 +1071,11 @@ impl<'a> Builder<'a> {
         }
         Ok(Geometry {
             scale: curve.map(|v| (v[4] * v[5]).abs().sqrt() / 100.0),
+            // Between keys the scale runs straight, so its largest is at one.
+            largest: curve
+                .values()
+                .map(|v| v[4].abs().max(v[5].abs()) / 100.0)
+                .fold(0.0, f64::max),
         })
     }
 
@@ -1573,7 +1604,10 @@ impl Curve<1> {
 
 /// How many canvas pixels a layer pixel covers.
 struct Geometry {
+    /// Across, at each clip time.
     scale: Curve<1>,
+    /// Along either side, at the most.
+    largest: f64,
 }
 
 fn set<const N: usize>(

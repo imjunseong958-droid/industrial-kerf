@@ -446,6 +446,38 @@ fn effects_match_the_graph() {
             // far; luma is blurred alike.
             color: 10.0,
         },
+        // Media shown smaller is decoded at the size it is shown, and its
+        // effects run there.
+        Case {
+            name: "color scaled",
+            body: "sequence s1 rate=24 size=320x180 audio=48000\n\
+                   \x20 track V1 video\n\
+                   \x20   clip c1 media=b src=0f at=0f dur=24f\n\
+                   \x20 track V2 video\n\
+                   \x20   clip c2 media=t src=0f at=0f dur=24f\n\
+                   \x20     set scale=0.4 x=0.25 y=0.25\n\
+                   \x20     fx color.basic exposure=0.3 contrast=1.2 saturation=1.4\n",
+            window: false,
+            frames: &[4],
+            luma: 2.5,
+            off: 0.02,
+            color: 6.0,
+        },
+        Case {
+            name: "blur scaled",
+            body: "sequence s1 rate=24 size=320x180 audio=48000\n\
+                   \x20 track V1 video\n\
+                   \x20   clip c1 media=b src=0f at=0f dur=24f\n\
+                   \x20 track V2 video\n\
+                   \x20   clip c2 media=t src=0f at=0f dur=24f\n\
+                   \x20     set scale=0.5 x=-0.2\n\
+                   \x20     fx blur.gaussian radius=3\n",
+            window: false,
+            frames: &[4],
+            luma: 2.5,
+            off: 0.02,
+            color: 10.0,
+        },
         Case {
             name: "raster",
             body: "sequence s1 rate=24 size=320x180 audio=48000\n\
