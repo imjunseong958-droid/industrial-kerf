@@ -1,34 +1,40 @@
-# cut
+# Industrial Kerf
 
-Cut is a native, agentic video editor. `lcut` opens the Qt6 editor by default;
-pass `--terminal` for the project-scoped terminal agent. `cut-mcp` is the
+Industrial Kerf is a native, agentic video editor. `kerf` opens the Qt6 editor by default;
+pass `--terminal` for the project-scoped terminal agent. `kerf-mcp` is the
 project-scoped MCP server and primary external-agent integration surface.
-External Claude, Cursor, and Codex-like clients connect through `cut-mcp`
+External Claude, Cursor, and Codex-like clients connect through `kerf-mcp`
 using their own agent configuration; they do not need a provider API key
-configured in Cut.
+configured in Kerf.
 
 ## Architecture
 
-`cutd` is the only owner of project state, revisions, history, idempotency
+`kerfd` is the only owner of project state, revisions, history, idempotency
 receipts, proposals, and render jobs. The native editor, terminal agent, and
 MCP server are adapters over the same project-scoped IPC boundary.
 
-The canonical project is the `project.cut` text document
-([the Cut language](docs/cut-language.md)). On first open, `cutd` imports an
-existing v1 or v2 `project.cut.json` once and leaves it untouched. Edits are
+The canonical project is the `project.kerf` text document
+([the Kerf language](docs/kerf-language.md)). On first open, `kerfd` imports an
+existing `project.cut` (from Cut, Kerf's earlier name) or v1 or v2
+`project.cut.json` once and leaves it untouched. Edits are
 edit scripts or typed operations; agent proposals carry their script and the
 diff of the document they would produce.
 
+Upgrading from Cut needs no manual steps: `kerf`, `kerf-mcp`, and the editor
+move `~/.cut` to `~/.kerf` and a project's `.cut` to `.kerf` when Kerf's own
+directory does not exist yet, write a `.kerfpreset` beside each `.cutpreset`,
+and the editor copies its saved settings (keymap, workspaces) on first launch.
+
 ```text
 Qt6 editor ──────────────────────────┐
-Rust agent and CLI ──────────────────┼─> cutd ─> cut-model ─> project.cut
+Rust agent and CLI ──────────────────┼─> kerfd ─> kerf-model ─> project.kerf
 Rust MCP server ─────────────────────┘     │
-                                           └─> .cut document ─> render compiler,
+                                           └─> .kerf document ─> render compiler,
                                                                 playback, previews
 ```
 
 Renders, playback, and previews read the model. A render job and a proposal
-preview carry the `.cut` document with media paths resolved against the
+preview carry the `.kerf` document with media paths resolved against the
 project, and the render compiler lowers its first sequence to one FFmpeg
 graph with exact times: picture tracks stack in order, sound comes from
 audio tracks, transitions play across their cuts using the clips' handles,
@@ -39,75 +45,75 @@ sequence as cuts and asks for a rendered preview whenever it would show
 something different. Editor snapshots carry the document and a timeline
 view of it; the editor sends its edits back as typed operations.
 
-Editor actions are commands in one registry (`cut-commands`): each has an id,
-a label, its menu, shortcuts in the Cut, Premiere Pro, and Final Cut Pro
+Editor actions are commands in one registry (`kerf-commands`): each has an id,
+a label, its menu, shortcuts in the Kerf, Premiere Pro, and Final Cut Pro
 keymaps, and an enabled state that says why it is unavailable. The editor
 builds its menus, shortcuts, and toolbar from it, and engine commands
 resolve to the typed operations or runtime requests that carry them out.
 
 FFmpeg, ffprobe, and yt-dlp remain controlled native sidecars. Editing
-playbooks are data in `skills/*/SKILL.md` and are loaded by `cut-skills`.
+playbooks are data in `skills/*/SKILL.md` and are loaded by `kerf-skills`.
 
 ## Build and run
 
 ```bash
-cargo build --release -p cut-runtime --bin cutd
-cargo build -p cut-qt-bridge
-cmake -S apps/cut-qt -B target/qt
+cargo build --release -p kerf-runtime --bin kerfd
+cargo build -p kerf-qt-bridge
+cmake -S apps/kerf-qt -B target/qt
 cmake --build target/qt
-cargo build --release -p cut-cli --bin lcut
-cargo build --release -p cut-mcp --bin cut-mcp
+cargo build --release -p kerf-cli --bin kerf
+cargo build --release -p kerf-mcp --bin kerf-mcp
 ```
 
 Or build and install everything to `~/.local/bin`, with the editor's own
-libraries in `~/.local/lib/cut` (`CUT_LOCAL_BIN` and `CUT_LOCAL_LIB` move
+libraries in `~/.local/lib/kerf` (`KERF_LOCAL_BIN` and `KERF_LOCAL_LIB` move
 them). The install does not refer back to the checkout, so cleaning `target`
 is safe; Qt and FFmpeg still come from the system:
 
 ```bash
-scripts/install-cut-local.sh        # or: cli, qt
+scripts/install-kerf-local.sh        # or: cli, qt
 ```
 
 Open the Qt editor for a project:
 
 ```bash
-CUT_QT_BIN="$PWD/target/qt/cut-qt" target/release/lcut \
-  --dir ./my-project --cutd "$PWD/target/release/cutd"
+KERF_QT_BIN="$PWD/target/qt/kerf-qt" target/release/kerf \
+  --dir ./my-project --kerfd "$PWD/target/release/kerfd"
 ```
 
 Run the terminal workflow:
 
 ```bash
-target/release/lcut --terminal --dir ./my-project video.mp4
-target/release/lcut --terminal --dir ./my-project -p "trim the first clip to two seconds"
-target/release/lcut --terminal --dir ./my-project --skills
-target/release/lcut --terminal --dir ./my-project --generate-docs
-target/release/lcut --terminal --dir ./my-project --mcp
-target/release/lcut --terminal --dir ./my-project --mcp-tools -p "use the connected research tool"
+target/release/kerf --terminal --dir ./my-project video.mp4
+target/release/kerf --terminal --dir ./my-project -p "trim the first clip to two seconds"
+target/release/kerf --terminal --dir ./my-project --skills
+target/release/kerf --terminal --dir ./my-project --generate-docs
+target/release/kerf --terminal --dir ./my-project --mcp
+target/release/kerf --terminal --dir ./my-project --mcp-tools -p "use the connected research tool"
 ```
 
-In editor mode, `lcut` imports a local media path or an HTTP(S) URL before
-opening the native window. The editor's Cut Assistant panel uses the same provider
-configuration as the terminal agent. `--cutd PATH` selects an explicit
-daemon; the `CUTD_BIN` environment variable does the same.
+In editor mode, `kerf` imports a local media path or an HTTP(S) URL before
+opening the native window. The editor's Kerf Assistant panel uses the same provider
+configuration as the terminal agent. `--kerfd PATH` selects an explicit
+daemon; the `KERFD_BIN` environment variable does the same.
 
 `--mcp` lists the native catalog and any servers configured in
-`~/.cut/mcp.json` or `<project>/.cut/mcp.json`. `--mcp-tools` (or
-`CUT_ENABLE_MCP=1`) attaches those inbound stdio servers through `mcp_search`,
+`~/.kerf/mcp.json` or `<project>/.kerf/mcp.json`. `--mcp-tools` (or
+`KERF_ENABLE_MCP=1`) attaches those inbound stdio servers through `mcp_search`,
 `mcp_describe`, and `mcp_call`; configured tool allowlists are enforced.
 The Qt editor's Settings tab can enable the same attachment for its Chat,
-edit the project config, or import a Cursor config. `CUT_ENABLE_MCP=1` remains
+edit the project config, or import a Cursor config. `KERF_ENABLE_MCP=1` remains
 available as an environment fallback. Qt remains a presentation layer.
 
 ## Agents
 
 Native editing presets are exported from **File → Export Editing Preset…**
-as one `.cutpreset` file containing media slots and `.cut` editing code.
+as one `.kerfpreset` file containing media slots and `.kerf` editing code.
 **File → Import Editing Preset…** binds new media and stages the same pattern
 as a proposal. See [native preset format and reuse](docs/presets.md).
 
-Agents edit the same `.cut` document people do (see
-[the Cut language](docs/cut-language.md)). Their context is the language
+Agents edit the same `.kerf` document people do (see
+[the Kerf language](docs/kerf-language.md)). Their context is the language
 reference, generated from the feature catalog, and the current document,
 annotated with each clip's end and source out. The built-in agent reads the
 document again before every model request, so it always sees the current
@@ -128,7 +134,7 @@ transcribed for the check).
 
 Times are timecode (`01:00:04:12`), frames (`96f`), or seconds (`4.5s`):
 media positions with `media`, sequence positions otherwise. The project
-changes only when a person accepts a proposal. In the editor, Cut is asked
+changes only when a person accepts a proposal. In the editor, Kerf is asked
 about the selection (⌘J): the request carries the clip or range it is about,
 and the proposal shows on the timeline to accept or reject in place.
 
@@ -138,21 +144,21 @@ Edit scripts can place by anchor instead of timecode (`at=end`,
 clip says with `captions c1 on=S1 [words=<n>]`, which uses a transcript of
 its media made earlier and stages the caption lines it becomes.
 
-When media is imported, `cutd` indexes it in the background — one FFmpeg
+When media is imported, `kerfd` indexes it in the background — one FFmpeg
 pass for scene cuts, pauses, and a loudness envelope from which loudest
 moments, onsets, and tempo are found — and makes a proxy at most 960 pixels
 wide for pictures wider than that. Draft renders and frames up to that width
 use the proxy when it is ready; full renders and program frames use the
-original. Indexes and proxies are cached in `.cut/cache/derived`.
+original. Indexes and proxies are cached in `.kerf/cache/derived`.
 
-Transcripts come from local `whisper.cpp` (`CUT_WHISPER_BIN` and
-`CUT_WHISPER_MODEL`, described below); media is never uploaded. Scene cuts
+Transcripts come from local `whisper.cpp` (`KERF_WHISPER_BIN` and
+`KERF_WHISPER_MODEL`, described below); media is never uploaded. Scene cuts
 and pauses are cached with the media's other derivatives in
-`.cut/cache/derived`.
+`.kerf/cache/derived`.
 
 Skills hold editorial guidance only — what makes a good short, how a meme
-lands — not tool procedures. Bundled skills are compiled into `cut-skills`;
-user (`~/.cut/skills`) and project (`.cut/skills`) skills override them by
+lands — not tool procedures. Bundled skills are compiled into `kerf-skills`;
+user (`~/.kerf/skills`) and project (`.kerf/skills`) skills override them by
 name. Every skill's guidance is part of the agent's instructions.
 
 The built-in agent keeps its whole transcript and sends it to the provider
@@ -174,7 +180,7 @@ archived image. A single tool result whose text is too long is archived
 when it arrives, keeping its frames and previews. This is deterministic
 context reduction, not an LLM-generated summary.
 
-`CUT_AGENT_INPUT_BUDGET` controls the input allowance (default 196608 units).
+`KERF_AGENT_INPUT_BUDGET` controls the input allowance (default 196608 units).
 The allowance conservatively charges text by UTF-8 bytes plus overhead and
 reserves 4096 units per image; it is not an exact vendor token count. Choose
 an allowance below the selected model's context window, leaving room for
@@ -185,7 +191,7 @@ catalog that cannot fit produces an explicit error instead of silent
 truncation.
 
 Inbound MCP transport limits each message to 4 MiB. On Unix, it times out
-after 30 seconds (`CUT_MCP_TIMEOUT_MS` overrides it) and running calls observe
+after 30 seconds (`KERF_MCP_TIMEOUT_MS` overrides it) and running calls observe
 the agent's cancellation flag. A cancelled external operation
 may have already taken effect; verify its state before retrying it.
 
@@ -193,21 +199,21 @@ The Qt bridge, daemon, decoder, agent proposal, and restart smoke test are
 available at:
 
 ```bash
-cargo build -p cut-qt-bridge -p cut-runtime --lib --bin cutd
-python3 scripts/test-cut-qt-bridge.py
+cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
+python3 scripts/test-kerf-qt-bridge.py
 ```
 
-## Cut Cloud and optional embedded-agent providers
+## Kerf Cloud and optional embedded-agent providers
 
-The editor is free. Cut Cloud, the hosted model, is the paid tier: Settings →
+The editor is free. Kerf Cloud, the hosted model, is the paid tier: Settings →
 AI signs in to it, and the service meters requests and enforces plans. It is
 not deployed yet; [docs/cloud.md](docs/cloud.md) is the contract the editor
-follows, and `CUT_CLOUD_URL` points the editor at a service. Until then, use
+follows, and `KERF_CLOUD_URL` points the editor at a service. Until then, use
 your own key under Settings → Advanced, as described below.
 
-Provider APIs are optional and only power Cut's embedded assistant (and its
+Provider APIs are optional and only power Kerf's embedded assistant (and its
 terminal agent workflow). They are not required for external agents using
-`cut-mcp` or for native editing.
+`kerf-mcp` or for native editing.
 
 | Provider | Key | Transports |
 |---|---|---|
@@ -215,13 +221,13 @@ terminal agent workflow). They are not required for external agents using
 | OpenAI | `OPENAI_API_KEY` | Chat Completions or Responses |
 
 Provider selection uses `--provider`, then the configured key. Models and
-OpenAI-compatible endpoints can be set with CLI flags or `~/.cut/config.json`.
+OpenAI-compatible endpoints can be set with CLI flags or `~/.kerf/config.json`.
 Keep credentials outside project directories and never commit them.
 
 ```bash
 export OPENAI_API_KEY=...
 export OPENAI_BASE_URL=https://openrouter.ai/api/v1
-target/release/lcut --provider openai --model anthropic/claude-sonnet-4 \
+target/release/kerf --provider openai --model anthropic/claude-sonnet-4 \
   --dir ./my-project -p "make a short vertical preview"
 ```
 
@@ -232,68 +238,68 @@ model is `claude-opus-5-5`, and `--reasoning-effort` sets its effort
 
 ## MCP
 
-`cut-mcp` speaks JSON-RPC MCP over stdin/stdout. Diagnostics go to stderr and
-all project mutations go through `cutd`.
+`kerf-mcp` speaks JSON-RPC MCP over stdin/stdout. Diagnostics go to stderr and
+all project mutations go through `kerfd`.
 
 Generate a generic MCP client configuration, then copy the JSON into your
 external client's MCP settings:
 
 ```bash
-target/release/cut-mcp --dir ./my-project --print-config
+target/release/kerf-mcp --dir ./my-project --print-config
 ```
 
 `--print-config` prints pretty JSON with the absolute path of the running
-`cut-mcp` executable and an absolute project path. Relative project paths are
+`kerf-mcp` executable and an absolute project path. Relative project paths are
 resolved against the current working directory; the project need not exist.
-This mode exits without starting `cutd` or changing the project.
-`CUT_PROJECT_DIR` supplies the default project path when `--dir` is omitted.
+This mode exits without starting `kerfd` or changing the project.
+`KERF_PROJECT_DIR` supplies the default project path when `--dir` is omitted.
 
 To run the stdio server directly:
 
 ```bash
-target/release/cut-mcp --dir ./my-project
+target/release/kerf-mcp --dir ./my-project
 ```
 
-Keep `cutd` beside `cut-mcp`, put it on `PATH`, or set `CUTD_BIN` in the client
+Keep `kerfd` beside `kerf-mcp`, put it on `PATH`, or set `KERFD_BIN` in the client
 process environment. The generated configuration has this shape:
 
 ```json
 {
   "mcpServers": {
-    "cut": {
-      "command": "/absolute/path/to/target/release/cut-mcp",
+    "kerf": {
+      "command": "/absolute/path/to/target/release/kerf-mcp",
       "args": ["--dir", "/absolute/path/to/my-project"]
     }
   }
 }
 ```
 
-`cut-mcp` serves the agent tools above — `look`, `edit`, and `render`. The
+`kerf-mcp` serves the agent tools above — `look`, `edit`, and `render`. The
 server instructions carry the language reference and editorial guidance;
-`look` with no arguments, or the resource `cut://document`, returns the
-annotated document, and `cut://reference` the reference. Frames and previews
+`look` with no arguments, or the resource `kerf://document`, returns the
+annotated document, and `kerf://reference` the reference. Frames and previews
 arrive as MCP image content, as JPEG. An `edit` from an external client is a proposal
 like any other: the project and revision stay unchanged until a person
-accepts it in the editor. `CUT_MCP_NAMESPACE` prefixes the tool names (for
-example `cut.look`).
+accepts it in the editor. `KERF_MCP_NAMESPACE` prefixes the tool names (for
+example `kerf.look`).
 
 Local transcription is optional and never uploads media. Install a
 `whisper.cpp` `whisper-cli` binary and configure a local GGML model before
 using `look` with `transcript: true`:
 
 ```bash
-export CUT_WHISPER_BIN=/absolute/path/to/whisper-cli
-export CUT_WHISPER_MODEL=/absolute/path/to/ggml-base.bin
-target/debug/cut-engine probe listen input.mp4 --start 12 --duration 30 --project-dir ./my-project
+export KERF_WHISPER_BIN=/absolute/path/to/whisper-cli
+export KERF_WHISPER_MODEL=/absolute/path/to/ggml-base.bin
+target/debug/kerf-engine probe listen input.mp4 --start 12 --duration 30 --project-dir ./my-project
 ```
 
-Set `CUT_WHISPER_CPP_VERSION` and `CUT_WHISPER_MODEL_VERSION` when packaging
+Set `KERF_WHISPER_CPP_VERSION` and `KERF_WHISPER_MODEL_VERSION` when packaging
 or pinning sidecar/model versions.
 
-`lcut --generate-docs` writes deterministic, machine-owned protocol, tool,
+`kerf --generate-docs` writes deterministic, machine-owned protocol, tool,
 skill, and current-project summary files under
-`.cut/docs/generated/`. Keep editorial guidance in
-`.cut/docs/conventions.md`; the generator never overwrites it or a root
+`.kerf/docs/generated/`. Keep editorial guidance in
+`.kerf/docs/conventions.md`; the generator never overwrites it or a root
 `AGENTS.md`. If a root pointer is useful, pass the explicit
 `--add-agents-pointer` opt-in; it appends an idempotent pointer without
 replacing existing instructions. The project summary lists the sequences
@@ -301,12 +307,12 @@ and media of the current document and cannot change project state.
 
 ## Interchange
 
-`cut-interchange` converts the program sequence of a project to a
+`kerf-interchange` converts the program sequence of a project to a
 frame-exact timeline (positions in frames of the sequence, media times in
 frames of the media) and invokes the configured native or external adapter
 through a small JSON bridge, reporting what the conversion leaves out.
 OpenTimelineIO conversion uses the bundled
-`crates/cut-interchange/python/otio_bridge.py` and requires an environment
+`crates/kerf-interchange/python/otio_bridge.py` and requires an environment
 with `opentimelineio` plus the requested adapter installed.
 
 ## Verification

@@ -1,14 +1,14 @@
 # Native editing presets
 
-A Cut preset is a single `.cutpreset` text file containing **media slots and
-Cut editing code**. It is exported directly from the accepted native timeline.
+A Kerf preset is a single `.kerfpreset` text file containing **media slots and
+Kerf editing code**. It is exported directly from the accepted native timeline.
 The importer accepts this native contract; it does not infer an edit from a
 rendered video or translate another editor's template format.
 
 ## In the editor
 
 1. Edit the sequence normally, then choose **File → Export Editing Preset…**.
-2. Share the resulting `.cutpreset` file.
+2. Share the resulting `.kerfpreset` file.
 3. In another project, import the replacement footage into the Project bin.
 4. Choose **File → Import Editing Preset…** and open the shared file.
 5. Assign media to each slot, choose its source start, and optionally replace
@@ -23,19 +23,19 @@ the existing project stays intact until acceptance, and acceptance can be
 undone. Locked destination tracks must be unlocked first. A sequence that is
 itself used by another sequence cannot be replaced this way.
 
-Cut timing, gaps, tracks, transitions, constant speeds (including reverse),
+Kerf timing, gaps, tracks, transitions, constant speeds (including reverse),
 transforms, keyframes, effect stacks, generators, captions, markers, linked
 clips, and nested sequences come from the model. There is no model request
 or editorial guess in export or application.
 
 ## File contract, version 1
 
-The file uses the [Cut language](cut-language.md), starting with `cut 1`.
+The file uses the [Kerf language](kerf-language.md), starting with `kerf 1`.
 Its first sequence is the pattern's entry point. Only sequences reachable
 from it may be included. The project name is the preset name.
 
 ```text
-cut 1
+kerf 1
 project name="Two-shot product"
 media slot1 path="slot:slot1" rate=30 dur=00:00:02:00 video=1920x1080
 media slot2 path="slot:slot2" rate=30 dur=00:00:03:00 video=1920x1080
@@ -72,12 +72,12 @@ sequence s1 name="Two-shot product" rate=30 size=1080x1920
   insufficient source material, incompatible streams, invalid nesting,
   and unknown text overrides are rejected. Files are limited to 1 MiB.
 - Instantiation allocates fresh project IDs, including link/transition IDs,
-  and emits an ordinary atomic edit script for `cutd`. Other sequences and
+  and emits an ordinary atomic edit script for `kerfd`. Other sequences and
   existing media remain in the project. A repeated application may allocate
   different IDs; for the same preset, bindings and target state the emitted
   edit is deterministic.
 
-Other tools can create presets by producing this contract and passing Cut's
+Other tools can create presets by producing this contract and passing Kerf's
 normal language/model validation. Presets contain declarative editing data,
 not executable JavaScript, HTML, shell commands, or Python.
 
@@ -87,10 +87,10 @@ The native menu is the primary workflow. The same implementation is available
 without a provider API key through the CLI:
 
 ```bash
-lcut --dir ./project preset save product.cutpreset --name "Product"
-lcut --dir ./project preset list
-lcut --dir ./project preset show product.cutpreset
-lcut --dir ./project preset apply product.cutpreset \
+kerf --dir ./project preset save product.kerfpreset --name "Product"
+kerf --dir ./project preset list
+kerf --dir ./project preset show product.kerfpreset
+kerf --dir ./project preset apply product.kerfpreset \
   --bind slot1=m1@0s --bind slot2=m2@1s --text 'title1=New product'
 ```
 
@@ -104,13 +104,13 @@ The assistant and external MCP clients keep the three-tool interface:
 
 ```json
 {"tool":"look","arguments":{"presets":true}}
-{"tool":"look","arguments":{"preset":"product.cutpreset"}}
-{"tool":"edit","arguments":{"savePreset":"product.cutpreset","name":"Product"}}
-{"tool":"edit","arguments":{"preset":"product.cutpreset","bindings":{"slot1":{"media":"m1","from":"0s"},"slot2":{"media":"m2","from":"1s"}},"texts":{"title1":"New product"}}}
+{"tool":"look","arguments":{"preset":"product.kerfpreset"}}
+{"tool":"edit","arguments":{"savePreset":"product.kerfpreset","name":"Product"}}
+{"tool":"edit","arguments":{"preset":"product.kerfpreset","bindings":{"slot1":{"media":"m1","from":"0s"},"slot2":{"media":"m2","from":"1s"}},"texts":{"title1":"New product"}}}
 ```
 
-Listing covers the project root and `.cut/presets`. Inspect/apply can read a
-shared `.cutpreset` at an explicitly supplied path. Inspecting lists, for each
+Listing covers the project root and `.kerf/presets`. Inspect/apply can read a
+shared `.kerfpreset` at an explicitly supplied path. Inspecting lists, for each
 slot, the clips that use it and the project's imported media that can fill it
 (`fits`), each with the latest start frame (`latestFrame`, usable as
 `"from": "<n>f"`). Application uses the same

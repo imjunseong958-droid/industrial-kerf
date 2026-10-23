@@ -1,20 +1,20 @@
 [workspace]
 members = [
-    "crates/cut-core",
-    "crates/cut-model",
-    "crates/cut-lang",
-    "crates/cut-engine",
-    "crates/cut-playback",
-    "crates/cut-runtime",
-    "crates/cut-qt-bridge",
-    "crates/cut-commands",
-    "crates/cut-cloud",
-    "crates/cut-skills",
-    "crates/cut-fetcher",
-    "crates/cut-interchange",
-    "crates/cut-agent",
-    "crates/cut-mcp",
-    "crates/cut-cli",
+    "crates/kerf-core",
+    "crates/kerf-model",
+    "crates/kerf-lang",
+    "crates/kerf-engine",
+    "crates/kerf-playback",
+    "crates/kerf-runtime",
+    "crates/kerf-qt-bridge",
+    "crates/kerf-commands",
+    "crates/kerf-cloud",
+    "crates/kerf-skills",
+    "crates/kerf-fetcher",
+    "crates/kerf-interchange",
+    "crates/kerf-agent",
+    "crates/kerf-mcp",
+    "crates/kerf-cli",
 ]
 resolver = "2"
 
@@ -33,7 +33,7 @@ panic = "abort"
 strip = "symbols"
 
 # Whole-program LTO for a local max-speed binary:
-#   cargo build --profile maxperf -p cut-engine
+#   cargo build --profile maxperf -p kerf-engine
 [profile.maxperf]
 inherits = "release"
 lto = "fat"

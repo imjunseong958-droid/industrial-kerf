@@ -6,16 +6,16 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "crates/**"
-      - "apps/cut-qt/**"
-      - "scripts/test-cut-qt-bridge.py"
+      - "apps/kerf-qt/**"
+      - "scripts/test-kerf-qt-bridge.py"
       - ".github/workflows/rust-runtime.yml"
   pull_request:
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
       - "crates/**"
-      - "apps/cut-qt/**"
-      - "scripts/test-cut-qt-bridge.py"
+      - "apps/kerf-qt/**"
+      - "scripts/test-kerf-qt-bridge.py"
       - ".github/workflows/rust-runtime.yml"
 
 jobs:
@@ -25,9 +25,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Test kernel and v2 import
-        run: cargo test -p cut-model -p cut-lang -p cut-interchange
+        run: cargo test -p kerf-model -p kerf-lang -p kerf-interchange
       - name: Test durable runtime
-        run: cargo test -p cut-runtime --all-targets
+        run: cargo test -p kerf-runtime --all-targets
 
   macos-editor:
     runs-on: macos-latest
@@ -42,18 +42,18 @@ jobs:
           echo "FFMPEG_DIR=$ffmpeg_prefix" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=$ffmpeg_prefix/lib/pkgconfig" >> "$GITHUB_ENV"
       - name: Check bridge and playback
-        run: cargo check -p cut-qt-bridge -p cut-playback --all-targets
+        run: cargo check -p kerf-qt-bridge -p kerf-playback --all-targets
       - name: Test runtime and bridge
-        run: cargo test -p cut-runtime -p cut-qt-bridge --lib
+        run: cargo test -p kerf-runtime -p kerf-qt-bridge --lib
       - name: Test waveform failure handling
-        run: cargo test -p cut-engine waveform_stderr
+        run: cargo test -p kerf-engine waveform_stderr
       - name: Build native bridge and daemon for integration tests
-        run: cargo build -p cut-qt-bridge -p cut-runtime --lib --bin cutd
+        run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
       - name: Build Qt editor and UI tests
         run: |
-          cmake -S apps/cut-qt -B target/qt -DCMAKE_PREFIX_PATH="$(brew --prefix qt)" -DCUT_QT_BUILD_TESTS=ON
+          cmake -S apps/kerf-qt -B target/qt -DCMAKE_PREFIX_PATH="$(brew --prefix qt)" -DKERF_QT_BUILD_TESTS=ON
           cmake --build target/qt --parallel 2
       - name: Test Qt UI
         run: ctest --test-dir target/qt --output-on-failure
       - name: Test real media and cross-client workflow
-        run: python3 scripts/test-cut-qt-bridge.py
+        run: python3 scripts/test-kerf-qt-bridge.py

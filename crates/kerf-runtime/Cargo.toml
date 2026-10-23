@@ -1,0 +1,21 @@
+[package]
+name = "kerf-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Single-owner durable runtime and command mailbox for Kerf"
+
+[lib]
+name = "kerf_runtime"
+path = "src/lib.rs"
+
+[dependencies]
+kerf-engine = { path = "../kerf-engine" }
+kerf-interchange = { path = "../kerf-interchange" }
+kerf-lang = { path = "../kerf-lang" }
+kerf-model = { path = "../kerf-model" }
+fs2 = "0.4"
+libc = "0.2"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+sha2 = "0.10"
