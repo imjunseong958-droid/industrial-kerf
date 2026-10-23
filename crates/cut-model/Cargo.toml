@@ -1,8 +1,0 @@
-[package]
-name = "cut-model"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-description = "Exact-time editing kernel for Cut: model, catalog, validation, and NLE operations"
-
-[dependencies]

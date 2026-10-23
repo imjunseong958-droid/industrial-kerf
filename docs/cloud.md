@@ -1,14 +1,14 @@
-# Cut Cloud
+# Kerf Cloud
 
-Cut Cloud is the hosted model behind Cut's paid tier. The editor is free and
+Kerf Cloud is the hosted model behind Kerf's paid tier. The editor is free and
 open source; a subscription buys requests to the hosted model. The service is
 not deployed yet. This document is the contract the editor already follows,
 so the service can be built to it.
 
 ## Where the service is
 
-The editor reads the service URL from `CUT_CLOUD_URL`, else from `url` in
-`~/.cut/cloud.json`. Without either, Cut Cloud reports itself unavailable and
+The editor reads the service URL from `KERF_CLOUD_URL`, else from `url` in
+`~/.kerf/cloud.json`. Without either, Kerf Cloud reports itself unavailable and
 the editor points people to their own API key (Settings → Advanced). The same
 file keeps the account token (`token`); it is written atomically with mode
 0600 and never stored in a project.
@@ -36,7 +36,7 @@ which speaks the Anthropic Messages protocol.
 
 The service must enforce every entitlement itself — plan, credits, rate
 limits. The editor only reflects what `GET /v1/account` reports: it disables
-Ask Cut and says why when the account has no access, but a modified client
+Ask Kerf and says why when the account has no access, but a modified client
 gains nothing, because the service refuses its requests.
 
 Errors the editor shows as they are: `402` when credits are used up, `429`
@@ -44,9 +44,9 @@ when rate limited, with a `message` in the JSON body.
 
 ## In the editor
 
-Settings → AI chooses Cut Cloud or My own API key. Cut Cloud is the default
+Settings → AI chooses Kerf Cloud or My own API key. Kerf Cloud is the default
 unless a key of one's own is already saved, so existing setups keep working;
-an explicit choice is remembered. Cut Cloud
+an explicit choice is remembered. Kerf Cloud
 shows the account, its plan, and the requests left, with Sign in and Sign out;
 Plans is a placeholder until pricing exists. Advanced holds the two
 own-key slots (Anthropic Messages and OpenAI-compatible) and the MCP

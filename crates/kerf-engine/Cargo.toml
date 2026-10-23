@@ -1,0 +1,38 @@
+[package]
+name = "kerf-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Kerf media engine: probe, encode, compile, render, proxy, and transcription"
+
+[lib]
+name = "kerf_engine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kerf-engine"
+path = "src/bin/kerf-engine.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+kerf-core = { path = "../kerf-core" }
+kerf-model = { path = "../kerf-model" }
+hex = "0.4"
+mimalloc = { version = "0.1", default-features = false }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+
+[dev-dependencies]
+kerf-lang = { path = "../kerf-lang" }
+approx = "0.5"
+criterion = "0.5"
+kerf-playback = { path = "../kerf-playback", default-features = false }
+tempfile = "3"
+
+[[bench]]
+name = "engine_hotpath"
+harness = false

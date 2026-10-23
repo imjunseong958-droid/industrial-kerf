@@ -5,9 +5,9 @@ dist/
 !.cursor/skills/
 !.cursor/skills/**
 .env
-.cut/config.json
-.cut/vision.json
-.cut/cache/
+.kerf/config.json
+.kerf/vision.json
+.kerf/cache/
 *.pt
 *.mp4
 *.mov
@@ -21,12 +21,12 @@ dist/
 *.vtt
 target/
 
-# cutd state from local runs
-.cut-runtime.*
-.cutd.sock
-.cut-render-*
-project.cut
+# kerfd state from local runs
+.kerf-runtime.*
+.kerfd.sock
+.kerf-render-*
+project.kerf
 project.cut.json
 project.cut.history.json
-.cut/runtime/
-.cut/native-project/
+.kerf/runtime/
+.kerf/native-project/

@@ -480,178 +480,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cut-agent"
-version = "0.1.0"
-dependencies = [
- "base64",
- "cut-runtime",
- "cut-skills",
- "serde",
- "serde_json",
- "ureq",
-]
-
-[[package]]
-name = "cut-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "cut-agent",
- "cut-fetcher",
- "cut-mcp",
- "cut-runtime",
- "cut-skills",
- "serde_json",
-]
-
-[[package]]
-name = "cut-cloud"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "ureq",
-]
-
-[[package]]
-name = "cut-commands"
-version = "0.1.0"
-dependencies = [
- "cut-cloud",
- "cut-runtime",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "cut-core"
-version = "0.1.0"
-dependencies = [
- "cut-lang",
- "cut-model",
- "serde",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "cut-engine"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "approx",
- "clap",
- "criterion",
- "cut-core",
- "cut-lang",
- "cut-model",
- "cut-playback",
- "hex",
- "mimalloc",
- "regex",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "cut-fetcher"
-version = "0.1.0"
-
-[[package]]
-name = "cut-interchange"
-version = "0.1.0"
-dependencies = [
- "cut-lang",
- "cut-model",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "cut-lang"
-version = "0.1.0"
-dependencies = [
- "cut-model",
-]
-
-[[package]]
-name = "cut-mcp"
-version = "0.1.0"
-dependencies = [
- "base64",
- "cut-agent",
- "cut-engine",
- "cut-lang",
- "cut-model",
- "cut-runtime",
- "cut-skills",
- "libc",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "cut-model"
-version = "0.1.0"
-
-[[package]]
-name = "cut-playback"
-version = "0.1.0"
-dependencies = [
- "cpal",
- "cut-core",
- "cut-lang",
- "cut-model",
- "ffmpeg-next",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "cut-qt-bridge"
-version = "0.1.0"
-dependencies = [
- "cut-agent",
- "cut-cloud",
- "cut-commands",
- "cut-core",
- "cut-lang",
- "cut-mcp",
- "cut-model",
- "cut-playback",
- "cut-runtime",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "cut-runtime"
-version = "0.1.0"
-dependencies = [
- "cut-engine",
- "cut-interchange",
- "cut-lang",
- "cut-model",
- "fs2",
- "libc",
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
-name = "cut-skills"
-version = "0.1.0"
-dependencies = [
- "tempfile",
-]
-
-[[package]]
 name = "dasp_sample"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1112,6 +940,178 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "kerf-agent"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "kerf-runtime",
+ "kerf-skills",
+ "serde",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
+name = "kerf-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "kerf-agent",
+ "kerf-fetcher",
+ "kerf-mcp",
+ "kerf-runtime",
+ "kerf-skills",
+ "serde_json",
+]
+
+[[package]]
+name = "kerf-cloud"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
+name = "kerf-commands"
+version = "0.1.0"
+dependencies = [
+ "kerf-cloud",
+ "kerf-runtime",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "kerf-core"
+version = "0.1.0"
+dependencies = [
+ "kerf-lang",
+ "kerf-model",
+ "serde",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "kerf-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "approx",
+ "clap",
+ "criterion",
+ "hex",
+ "kerf-core",
+ "kerf-lang",
+ "kerf-model",
+ "kerf-playback",
+ "mimalloc",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "kerf-fetcher"
+version = "0.1.0"
+
+[[package]]
+name = "kerf-interchange"
+version = "0.1.0"
+dependencies = [
+ "kerf-lang",
+ "kerf-model",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "kerf-lang"
+version = "0.1.0"
+dependencies = [
+ "kerf-model",
+]
+
+[[package]]
+name = "kerf-mcp"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "kerf-agent",
+ "kerf-engine",
+ "kerf-lang",
+ "kerf-model",
+ "kerf-runtime",
+ "kerf-skills",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "kerf-model"
+version = "0.1.0"
+
+[[package]]
+name = "kerf-playback"
+version = "0.1.0"
+dependencies = [
+ "cpal",
+ "ffmpeg-next",
+ "kerf-core",
+ "kerf-lang",
+ "kerf-model",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "kerf-qt-bridge"
+version = "0.1.0"
+dependencies = [
+ "kerf-agent",
+ "kerf-cloud",
+ "kerf-commands",
+ "kerf-core",
+ "kerf-lang",
+ "kerf-mcp",
+ "kerf-model",
+ "kerf-playback",
+ "kerf-runtime",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "kerf-runtime"
+version = "0.1.0"
+dependencies = [
+ "fs2",
+ "kerf-engine",
+ "kerf-interchange",
+ "kerf-lang",
+ "kerf-model",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "kerf-skills"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
 ]
 
 [[package]]
