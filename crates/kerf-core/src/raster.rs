@@ -575,8 +575,9 @@ fn reachable<'a>(project: &'a Project, root: &Id) -> Vec<&'a Sequence> {
     found
 }
 
-/// FNV-1a of a clip id, so random effects differ between clips.
-fn seed(id: &str) -> u32 {
+/// The seed of a clip's raster effects: FNV-1a of its id, so random effects
+/// differ between clips and match between bakes and live playback.
+pub fn seed(id: &str) -> u32 {
     id.bytes().fold(0x811c_9dc5_u32, |hash, byte| {
         (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193)
     })

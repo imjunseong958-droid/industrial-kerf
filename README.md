@@ -41,8 +41,10 @@ audio tracks, transitions play across their cuts using the clips' handles,
 nested sequences composite on their own canvas, and effects, transitions,
 and generators lower from their catalog definitions. A feature without a
 lowering is reported with the clip it is on. Native playback plays the same
-sequence as cuts and asks for a rendered preview whenever it would show
-something different. Editor snapshots carry the document and a timeline
+sequence as cuts, running a media clip's raster effects live on each
+picture (except keys and mattes, whose transparency needs the tracks
+below), and asks for a rendered preview whenever it would show something
+different. Editor snapshots carry the document and a timeline
 view of it; the editor sends its edits back as typed operations.
 
 Raster effects and transitions come from

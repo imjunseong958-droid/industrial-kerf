@@ -167,3 +167,75 @@ fn small_forward_seek_still_delivers_a_later_frame() {
     );
     assert!(second.has_valid_pixels());
 }
+
+#[test]
+fn raster_effects_play_live_inside_the_letterbox() {
+    let binary = ffmpeg_binary();
+    if !ffmpeg_available(&binary) {
+        eprintln!("skipping playback integration test: ffmpeg is unavailable");
+        return;
+    }
+    let directory = tempdir().expect("temporary directory");
+    let source = directory.path().join("source.mp4");
+    let status = Command::new(&binary)
+        .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i"])
+        .arg("color=c=red:s=64x36:r=10")
+        .args(["-t", "0.4", "-c:v", "libx264", "-pix_fmt", "yuv420p"])
+        .arg(&source)
+        .status()
+        .expect("run ffmpeg fixture");
+    assert!(status.success(), "fixture ffmpeg process failed");
+    // A wide picture in a square sequence, inverted.
+    let text = format!(
+        "kerf 1\nproject name=\"Live effects\"\n\
+         media source-a path=\"{}\" rate=10 dur=4f video=64x36\n\
+         sequence s1 rate=10 size=64x64 audio=48000\n\
+         \x20 track video-1 video\n\
+         \x20   clip clip-a media=source-a src=0f at=0f dur=4f\n\
+         \x20     fx channel.invert\n",
+        source.display()
+    );
+    let project = kerf_lang::parse_document(&text, kerf_model::Catalog::builtin())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+    assert_eq!(
+        kerf_playback::preview_plan(&project).mode,
+        kerf_core::preview::PreviewMode::NativeExact
+    );
+    let session = PlaybackSession::open(
+        project,
+        PlaybackConfig::default()
+            .with_audio_enabled(false)
+            .with_frame_size(64, 64),
+    )
+    .expect("open playback session");
+    session.play().expect("play");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut frame = None;
+    while Instant::now() < deadline {
+        if let Some(PlaybackEvent::Frame(value)) =
+            session.next_event_timeout(Duration::from_millis(100))
+        {
+            frame = Some(value);
+            break;
+        }
+    }
+    let frame = frame.expect("a decoded frame");
+    assert_eq!((frame.width, frame.height), (64, 64));
+    let at = |x: usize, y: usize| {
+        let i = (y * 64 + x) * 4;
+        [
+            frame.pixels[i],
+            frame.pixels[i + 1],
+            frame.pixels[i + 2],
+            frame.pixels[i + 3],
+        ]
+    };
+    // Red inverted is cyan; the bars stay black, untouched by the effect.
+    let center = at(32, 32);
+    assert!(
+        center[0] < 15 && center[1] > 240 && center[2] > 240,
+        "{center:?}"
+    );
+    assert_eq!(at(32, 2), [0, 0, 0, 255]);
+}

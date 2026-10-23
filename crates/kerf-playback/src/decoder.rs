@@ -5,9 +5,46 @@ use ffmpeg_next as ffmpeg;
 use ffmpeg_next::format::context::Input;
 use ffmpeg_next::util::format::Pixel;
 use ffmpeg_next::{decoder, filter, media};
+use kerf_fx::RasterStack;
+use kerf_model::Time;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+
+/// A clip's raster effects, run on each picture before it is letterboxed
+/// into the frame, as a render's bake runs them.
+struct Live {
+    stack: RasterStack,
+    /// The clip time at the clip's source in, its source in, and speed.
+    offset: f64,
+    source_in: f64,
+    speed: f64,
+    fps: f64,
+}
+
+impl Live {
+    fn for_clip(clip: &PlaybackClip, fps: f64) -> Result<Option<Self>, PlaybackError> {
+        let (width, height) = clip.layer;
+        if clip.effects.is_empty() || width == 0 || height == 0 {
+            return Ok(None);
+        }
+        let stack = RasterStack::new(&clip.effects, width, height, clip.seed)
+            .map_err(PlaybackError::InvalidProject)?;
+        Ok(Some(Self {
+            stack,
+            offset: clip.clip_offset,
+            source_in: clip.source_in,
+            speed: if clip.speed > 0.0 { clip.speed } else { 1.0 },
+            fps,
+        }))
+    }
+
+    /// The clip time of the picture at `source_time`.
+    fn clip_time(&self, source_time: f64) -> Time {
+        Time::from_seconds(self.offset + (source_time - self.source_in) / self.speed)
+            .unwrap_or(Time::ZERO)
+    }
+}
 
 /// A frame read from the in-process decoder before timeline metadata is
 /// attached by the playback worker.
@@ -46,6 +83,8 @@ pub(crate) struct VideoDecoder {
     last_source_time: Option<f64>,
     epoch: Arc<AtomicU64>,
     serve_epoch: u64,
+    /// The clip's raster effects, when it has any.
+    live: Option<Live>,
 }
 
 impl VideoDecoder {
@@ -117,6 +156,7 @@ impl VideoDecoder {
             last_source_time: None,
             epoch,
             serve_epoch,
+            live: Live::for_clip(clip, timeline.fps)?,
         };
         let graph = match decoder.build_filter(timeline, clip, source, remaining_source) {
             Ok(graph) => graph,
@@ -183,6 +223,7 @@ impl VideoDecoder {
         self.preview_graph = release_early;
         self.last_source_time = None;
         self.serve_epoch = serve_epoch;
+        self.live = Live::for_clip(clip, timeline.fps)?;
         self.filter = None;
         let graph = match self.build_filter(timeline, clip, source, remaining_source) {
             Ok(graph) => graph,
@@ -292,12 +333,23 @@ impl VideoDecoder {
             sar.numerator(),
             sar.denominator().max(1)
         );
+        // A clip with raster effects leaves the graph unletterboxed, and
+        // without burned-in subtitles, for its effects to run first.
+        let letterbox = self.live.is_none();
         let spec = if self.release_early {
             // No fps/trim hold. The first picture after the seek — usually the
             // keyframe — leaves the graph immediately.
+            let pad = if letterbox {
+                format!(
+                    ",pad={}:{}:(ow-iw)/2:(oh-ih)/2:color=black",
+                    self.width, self.height
+                )
+            } else {
+                String::new()
+            };
             format!(
-                "scale=w={}:h={}:force_original_aspect_ratio=decrease,pad={}:{}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=rgba",
-                self.width, self.height, self.width, self.height
+                "scale=w={}:h={}:force_original_aspect_ratio=decrease{pad},setsar=1,format=rgba",
+                self.width, self.height
             )
         } else {
             video_filter(
@@ -306,7 +358,8 @@ impl VideoDecoder {
                 self.width,
                 self.height,
                 remaining_source,
-                include_subtitles,
+                include_subtitles && letterbox,
+                letterbox,
                 source,
             )
         };
@@ -342,7 +395,18 @@ impl VideoDecoder {
                 Ok(()) => Ok(Some(DecodedVideoFrame {
                     width: self.width,
                     height: self.height,
-                    pixels: libav::packed_rgba(&filtered, self.width, self.height)?,
+                    pixels: match &self.live {
+                        None => libav::packed_rgba(&filtered, self.width, self.height)?,
+                        Some(live) => {
+                            let (width, height) = (filtered.width(), filtered.height());
+                            let mut picture =
+                                libav::packed_rgba(&filtered, width, height)?.to_vec();
+                            let at =
+                                live.clip_time(self.last_source_time.unwrap_or(self.source_time));
+                            live.stack.apply(&mut picture, width, height, at, live.fps);
+                            letterbox(&picture, width, height, self.width, self.height).into()
+                        }
+                    },
                     source_time: self.last_source_time,
                 })),
                 Err(error) if libav::is_again(&error) || libav::is_eof(&error) => Ok(None),
@@ -455,6 +519,7 @@ impl Drop for VideoDecoder {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn video_filter(
     timeline: &PlaybackTimeline,
     clip: &PlaybackClip,
@@ -462,6 +527,7 @@ fn video_filter(
     height: u32,
     remaining_source: f64,
     include_subtitles: bool,
+    letterbox: bool,
     source: &PlaybackSource,
 ) -> String {
     let speed = libav::format_number(clip.speed);
@@ -472,9 +538,13 @@ fn video_filter(
         format!("setpts=PTS/{speed}"),
         format!("fps={fps}"),
         format!("scale=w={width}:h={height}:force_original_aspect_ratio=decrease"),
-        format!("pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black"),
-        "setsar=1".to_string(),
     ];
+    if letterbox {
+        filters.push(format!(
+            "pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black"
+        ));
+    }
+    filters.push("setsar=1".to_string());
     if include_subtitles {
         for subtitle in &source.subtitles {
             if subtitle.is_file() {
@@ -495,6 +565,38 @@ fn video_filter(
     }
     filters.push("format=rgba".to_string());
     filters.join(",")
+}
+
+/// Center an RGBA picture on a black frame, as the graph's `pad` would,
+/// showing black through whatever the effects made transparent.
+fn letterbox(
+    picture: &[u8],
+    width: u32,
+    height: u32,
+    frame_width: u32,
+    frame_height: u32,
+) -> Vec<u8> {
+    let mut frame = vec![0; frame_width as usize * frame_height as usize * 4];
+    for alpha in frame.iter_mut().skip(3).step_by(4) {
+        *alpha = 255;
+    }
+    let (left, top) = (
+        (frame_width.saturating_sub(width) / 2) as usize,
+        (frame_height.saturating_sub(height) / 2) as usize,
+    );
+    let columns = width.min(frame_width) as usize;
+    for row in 0..height.min(frame_height) as usize {
+        for column in 0..columns {
+            let from = (row * width as usize + column) * 4;
+            let to = ((row + top) * frame_width as usize + column + left) * 4;
+            let alpha = u16::from(picture[from + 3]);
+            for channel in 0..3 {
+                frame[to + channel] =
+                    ((u16::from(picture[from + channel]) * alpha + 127) / 255) as u8;
+            }
+        }
+    }
+    frame
 }
 
 fn pixel_name(format: Pixel) -> String {
