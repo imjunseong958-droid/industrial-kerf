@@ -288,8 +288,11 @@ pub fn from_timeline(
     for (index, item) in timeline.media.iter().enumerate() {
         let media_rate = Rate::from_fps(item.rate).unwrap_or(rate);
         let on_audio = used_on(WireKind::Audio, index);
-        let video =
-            (used_on(WireKind::Video, index) || !on_audio).then_some(VideoInfo { width, height });
+        let video = (used_on(WireKind::Video, index) || !on_audio).then_some(VideoInfo {
+            width,
+            height,
+            alpha: false,
+        });
         media.push(Media {
             id: claim(item.id.as_deref(), "m"),
             path: item.path.clone(),

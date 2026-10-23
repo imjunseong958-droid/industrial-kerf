@@ -45,15 +45,21 @@ sequence as cuts and asks for a rendered preview whenever it would show
 something different. Editor snapshots carry the document and a timeline
 view of it; the editor sends its edits back as typed operations.
 
-Raster effects come from [EffectCraft](https://github.com/storytold/effectcraft)
-(MIT/Apache, pinned in `crates/kerf-fx`): about a hundred color, blur,
-distort, keying, matte, noise, stylize, and simulation effects whose
-parameters the catalog can hold. They run on a media clip's source picture
-before it is placed. A render first bakes each such clip's frames into a
-lossless file in `.kerf/cache/derived` (reused until the media, the clip's
-timing, or its effects change) and plays that file in the clip's place.
-`kerf-fx` generates their catalog table; after moving the pinned commit,
-run `UPDATE_CATALOG=1 cargo test -p kerf-fx`.
+Raster effects and transitions come from
+[EffectCraft](https://github.com/storytold/effectcraft) (MIT/Apache, pinned
+in `crates/kerf-fx`): about 170 color, blur, distort, generate, keying,
+matte, noise, perspective, simulation, stylize, and utility effects, and
+wipes, blinds, and dissolves as transitions, whose parameters the catalog
+can hold (a point is written as an `_x` and a `_y` across the picture).
+They run on a clip's own picture before it is placed: a render first bakes
+each such clip's frames into a lossless file with transparency in
+`.kerf/cache/derived` (reused until what it is made from changes) and plays
+that file in the clip's place. A title, solid, or nested sequence is first
+rendered on its own for that. A raster transition is baked into the clip it
+leaves, which then plays over the next one while it disappears. Media can
+carry transparency too (`alpha=true`, found from the pixel format on
+import), which compositing keeps. `kerf-fx` generates the catalog table;
+after moving the pinned commit, run `UPDATE_CATALOG=1 cargo test -p kerf-fx`.
 
 Editor actions are commands in one registry (`kerf-commands`): each has an id,
 a label, its menu, shortcuts in the Kerf, Premiere Pro, and Final Cut Pro

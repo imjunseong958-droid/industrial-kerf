@@ -52,6 +52,8 @@ impl Media {
 pub struct VideoInfo {
     pub width: u32,
     pub height: u32,
+    /// The picture carries transparency, which compositing keeps.
+    pub alpha: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -952,9 +952,12 @@ impl KerfMcpRouter {
         kind: &str,
         options: &Value,
     ) -> Result<kerf_engine::derivatives::CacheEntry, McpError> {
-        let (planned, _) =
-            kerf_engine::raster::plan_bakes(project, &DerivativeCache::new(&self.dir))
-                .map_err(engine_error)?;
+        let (planned, ..) = kerf_engine::raster::plan_bakes(
+            project,
+            Some(sequence),
+            &DerivativeCache::new(&self.dir),
+        )
+        .map_err(engine_error)?;
         compile_program(
             &planned.project,
             catalog(),
@@ -1612,12 +1615,13 @@ fn check(project: &Project, dir: &Path) -> Value {
             }));
         }
     }
-    // What a render compiles: raster effects baked, wherever the bakes go.
-    let planned = kerf_engine::raster::plan(project, catalog(), |job| {
-        Ok::<_, std::convert::Infallible>(job.source.clone())
-    })
-    .unwrap_or_else(|never| match never {});
     for sequence in &project.sequences {
+        // What a render compiles: raster effects baked, wherever they go.
+        let planned =
+            kerf_engine::raster::plan(project, catalog(), Some(sequence.id.as_str()), |_| {
+                Ok::<_, std::convert::Infallible>("baked.mkv".to_owned())
+            })
+            .unwrap_or_else(|never| match never {});
         let options = ProgramOptions {
             sequence: Some(sequence.id.to_string()),
             ..ProgramOptions::default()

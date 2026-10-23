@@ -197,6 +197,17 @@ pub fn video_decode_prefix() -> &'static [String] {
     PREFIX.get_or_init(|| decode_prefix_with_threads(ffmpeg_thread_count()))
 }
 
+/// [`video_decode_prefix`] for a compiled program's arguments, or nothing
+/// when the program reads no file (only titles and solids): its options
+/// would land on the output.
+pub fn program_decode_prefix(argv: &[String]) -> Vec<String> {
+    if argv.iter().any(|arg| arg == "-i") {
+        video_decode_prefix().to_vec()
+    } else {
+        Vec::new()
+    }
+}
+
 fn decode_prefix_with_threads(threads: usize) -> Vec<String> {
     let mut args = hwaccel_decode_args().to_vec();
     args.extend(["-threads".into(), threads.max(1).to_string()]);

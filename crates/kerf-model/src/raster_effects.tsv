@@ -8,6 +8,17 @@ effect	blur.cross	Blur & Sharpen	Cross Blur
 	number	radiusX	10	0..500		Radius X
 	number	radiusY	10	0..500		Radius Y
 	enum	transferMode	blend	blend|add|screen|lighten		Transfer Mode
+effect	blur.radialzoom	Blur & Sharpen	Radial Zoom Blur
+	enum	type	fading-zoom	straight-zoom|fading-zoom|centered|rotate|rotate-fading		Type
+	number	amount	10	-100..100		Amount
+	number	quality	50	1..100		Quality
+	number	center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
+effect	blur.radialfast	Blur & Sharpen	Radial Fast Blur
+	number	center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	number	amount	50	0..100		Amount
+	enum	zoom	standard	standard|brightest|darkest		Zoom
 effect	blur.vector	Blur & Sharpen	Vector Blur
 	enum	type	natural	natural|constant-length|perpendicular|direction-center|direction-fading		Type
 	number	amount	10	0..500		Amount
@@ -28,6 +39,12 @@ effect	blur.fastbox	Blur & Sharpen	Fast Box Blur
 	number	iterations	3	1..50		Iterations
 	enum	dimensions	horizontal-and-vertical	horizontal-and-vertical|horizontal|vertical		Blur Dimensions
 	bool	repeatEdge	false			Repeat Edge Pixels
+effect	blur.radial	Blur & Sharpen	Radial Blur
+	number	amount	10	0..100		Amount
+	number	center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	enum	type	spin	spin|zoom		Type
+	enum	antialiasing	low	low|high		Antialiasing (Best Quality)
 effect	blur.sharpen	Blur & Sharpen	Sharpen
 	number	amount	0	0..500		Sharpen Amount
 effect	blur.smart	Blur & Sharpen	Smart Blur
@@ -193,6 +210,16 @@ effect	color.colorbalancehls	Color Correction	Color Balance (HLS)
 	number	hue	0		degrees	Hue
 	number	lightness	0	-100..100		Lightness
 	number	saturation	0	-100..100		Saturation
+effect	color.colorstabilizer	Color Correction	Color Stabilizer
+	number	referenceFrame	0	-100000..100000		Reference Frame (s)
+	enum	stabilize	brightness	brightness|levels|curves		Stabilize
+	number	blackPoint_x	0.25		picture widths	Black Point (0 left, 1 right)
+	number	blackPoint_y	0.75		picture heights	Black Point (0 top, 1 bottom)
+	number	midPoint_x	0.5		picture widths	Mid Point (0 left, 1 right)
+	number	midPoint_y	0.5		picture heights	Mid Point (0 top, 1 bottom)
+	number	whitePoint_x	0.75		picture widths	White Point (0 left, 1 right)
+	number	whitePoint_y	0.25		picture heights	White Point (0 top, 1 bottom)
+	number	sampleSize	5	1..100		Sample Size
 effect	color.equalize	Color Correction	Equalize
 	enum	style	rgb	rgb|brightness|photoshop-style		Equalize
 	number	amount	100	0..100		Amount to Equalize
@@ -434,20 +461,244 @@ effect	color.videolimiter	Color Correction	Video Limiter
 	enum	compressionBeforeClipping	5	none|3|5|10|20		Compression before Clipping
 	bool	gamutWarning	false			Gamut Warning
 	color	gamutWarningColor	#ff0000			Gamut Warning Color
+effect	distort.bezierwarp	Distort	Bezier Warp
+	number	topLeftVertex_x	0		picture widths	Top Left Vertex (0 left, 1 right)
+	number	topLeftVertex_y	0		picture heights	Top Left Vertex (0 top, 1 bottom)
+	number	topLeftTangent_x	0.3333333333333333		picture widths	Top Left Tangent (0 left, 1 right)
+	number	topLeftTangent_y	0		picture heights	Top Left Tangent (0 top, 1 bottom)
+	number	topRightTangent_x	0.6666666666666666		picture widths	Top Right Tangent (0 left, 1 right)
+	number	topRightTangent_y	0		picture heights	Top Right Tangent (0 top, 1 bottom)
+	number	rightTopVertex_x	1		picture widths	Right Top Vertex (0 left, 1 right)
+	number	rightTopVertex_y	0		picture heights	Right Top Vertex (0 top, 1 bottom)
+	number	rightTopTangent_x	1		picture widths	Right Top Tangent (0 left, 1 right)
+	number	rightTopTangent_y	0.3333333333333333		picture heights	Right Top Tangent (0 top, 1 bottom)
+	number	rightBottomTangent_x	1		picture widths	Right Bottom Tangent (0 left, 1 right)
+	number	rightBottomTangent_y	0.6666666666666666		picture heights	Right Bottom Tangent (0 top, 1 bottom)
+	number	bottomRightVertex_x	1		picture widths	Bottom Right Vertex (0 left, 1 right)
+	number	bottomRightVertex_y	1		picture heights	Bottom Right Vertex (0 top, 1 bottom)
+	number	bottomRightTangent_x	0.6666666666666666		picture widths	Bottom Right Tangent (0 left, 1 right)
+	number	bottomRightTangent_y	1		picture heights	Bottom Right Tangent (0 top, 1 bottom)
+	number	bottomLeftTangent_x	0.3333333333333333		picture widths	Bottom Left Tangent (0 left, 1 right)
+	number	bottomLeftTangent_y	1		picture heights	Bottom Left Tangent (0 top, 1 bottom)
+	number	leftBottomVertex_x	0		picture widths	Left Bottom Vertex (0 left, 1 right)
+	number	leftBottomVertex_y	1		picture heights	Left Bottom Vertex (0 top, 1 bottom)
+	number	leftBottomTangent_x	0		picture widths	Left Bottom Tangent (0 left, 1 right)
+	number	leftBottomTangent_y	0.6666666666666666		picture heights	Left Bottom Tangent (0 top, 1 bottom)
+	number	leftTopTangent_x	0		picture widths	Left Top Tangent (0 left, 1 right)
+	number	leftTopTangent_y	0.3333333333333333		picture heights	Left Top Tangent (0 top, 1 bottom)
+	number	quality	8	1..10		Quality
+effect	distort.bulge	Distort	Bulge
+	number	hradius	50	0..4000		Horizontal Radius
+	number	vradius	50	0..4000		Vertical Radius
+	number	center_x	0.5		picture widths	Bulge Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Bulge Center (0 top, 1 bottom)
+	number	height	1	-4..4		Bulge Height
+	number	taperRadius	0	0..100		Taper Radius
+	bool	pinAllEdges	false			Pin All Edges
+effect	distort.bendit	Distort	Bend It
+	number	bend	0		degrees	Bend
+	number	start_x	0.5		picture widths	Start (0 left, 1 right)
+	number	start_y	0.2		picture heights	Start (0 top, 1 bottom)
+	number	end_x	0.5		picture widths	End (0 left, 1 right)
+	number	end_y	0.8		picture heights	End (0 top, 1 bottom)
+	enum	renderPrestart	static	none|static		Render Prestart
+effect	distort.bender	Distort	Bender
+	number	amount	0	-200..200		Amount
+	enum	style	bend	bend|marilyn|sharp|boxer		Style
+	bool	adjustToDistance	false			Adjust To Distance
+	number	top_x	0.5		picture widths	Top (0 left, 1 right)
+	number	top_y	0		picture heights	Top (0 top, 1 bottom)
+	number	base_x	0.5		picture widths	Base (0 left, 1 right)
+	number	base_y	1		picture heights	Base (0 top, 1 bottom)
+effect	distort.flomotion	Distort	Flo Motion
+	number	knot1_x	0.25		picture widths	Knot 1 (0 left, 1 right)
+	number	knot1_y	0.5		picture heights	Knot 1 (0 top, 1 bottom)
+	number	amount1	50	-400..100		Amount 1
+	number	knot2_x	0.75		picture widths	Knot 2 (0 left, 1 right)
+	number	knot2_y	0.5		picture heights	Knot 2 (0 top, 1 bottom)
+	number	amount2	-50	-400..100		Amount 2
+	bool	tileEdges	false			Tile Edges
+	enum	antialiasing	medium	low|medium|high		Antialiasing
+	number	falloff	2	0.01..10		Falloff
 effect	distort.griddler	Distort	Griddler
 	number	horizontalScale	100	1..1000		Horizontal Scale
 	number	verticalScale	100	1..1000		Vertical Scale
 	number	tileSize	10	0.5..100		Tile Size
 	number	rotation	0		degrees	Rotation
 	bool	cutTiles	false			Cut Tiles
+effect	distort.lens	Distort	Lens
+	number	center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	number	size	50	0..400		Size
+	number	convergence	0	-100..100		Convergence
+effect	distort.pageturn	Distort	Page Turn
+	number	foldPosition_x	0.7		picture widths	Fold Position (0 left, 1 right)
+	number	foldPosition_y	0.7		picture heights	Fold Position (0 top, 1 bottom)
+	number	foldDirection	315		degrees	Fold Direction
+	number	foldRadius	20	0..1000		Fold Radius
+	number	lightDirection	-45		degrees	Light Direction
+	enum	render	front-back-page	front-back-page|back-page|front-page		Render
+	number	backPageOpacity	75	0..100		Back Opacity
+	color	paperColor	#ffffff			Paper Color
+effect	distort.powerpin	Distort	Power Pin
+	number	topLeft_x	0		picture widths	Top Left (0 left, 1 right)
+	number	topLeft_y	0		picture heights	Top Left (0 top, 1 bottom)
+	number	topRight_x	1		picture widths	Top Right (0 left, 1 right)
+	number	topRight_y	0		picture heights	Top Right (0 top, 1 bottom)
+	number	bottomLeft_x	0		picture widths	Bottom Left (0 left, 1 right)
+	number	bottomLeft_y	1		picture heights	Bottom Left (0 top, 1 bottom)
+	number	bottomRight_x	1		picture widths	Bottom Right (0 left, 1 right)
+	number	bottomRight_y	1		picture heights	Bottom Right (0 top, 1 bottom)
+	number	perspective	100	0..100		Perspective
+	bool	unstretch	false			Unstretch
+	number	expandTop	0	-100..1000		Top
+	number	expandLeft	0	-100..1000		Left
+	number	expandRight	0	-100..1000		Right
+	number	expandBottom	0	-100..1000		Bottom
+effect	distort.ripplepulse	Distort	Ripple Pulse
+	number	center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	number	pulseLevel	0	-1000..1000		Pulse Level (animate)
+	number	timeSpan	1	0.01..100		Time Span (sec)
+	number	amplitude	100	-1000..1000		Amplitude
+	bool	renderBump	false			Render Bump As Well
+effect	distort.slant	Distort	Slant
+	number	slant	0	-1000..1000		Slant
+	bool	stretching	false			Stretching
+	number	height	100	-1000..1000		Height
+	number	floor_x	0.5		picture widths	Floor (0 left, 1 right)
+	number	floor_y	1		picture heights	Floor (0 top, 1 bottom)
+effect	distort.pullsmear	Distort	Pull Smear
+	number	from_x	0.35		picture widths	From (0 left, 1 right)
+	number	from_y	0.5		picture heights	From (0 top, 1 bottom)
+	number	to_x	0.65		picture widths	To (0 left, 1 right)
+	number	to_y	0.5		picture heights	To (0 top, 1 bottom)
+	number	reach	50	-100..100		Reach
+	number	radius	50	0..4000		Radius
+effect	distort.split	Distort	Split
+	number	pointA_x	0.25		picture widths	Point A (0 left, 1 right)
+	number	pointA_y	0.5		picture heights	Point A (0 top, 1 bottom)
+	number	pointB_x	0.75		picture widths	Point B (0 left, 1 right)
+	number	pointB_y	0.5		picture heights	Point B (0 top, 1 bottom)
+	number	split	50	0..1000		Split
+effect	distort.split2	Distort	Split 2
+	number	pointA_x	0.25		picture widths	Point A (0 left, 1 right)
+	number	pointA_y	0.5		picture heights	Point A (0 top, 1 bottom)
+	number	pointB_x	0.75		picture widths	Point B (0 left, 1 right)
+	number	pointB_y	0.5		picture heights	Point B (0 top, 1 bottom)
+	number	split1	50	0..1000		Split 1
+	number	split2	50	0..1000		Split 2
+effect	distort.tiler	Distort	Tiler
+	number	scale	50	1..10000		Scale
+	number	center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	number	blendWithOriginal	0	0..100		Blend w. Original
+effect	distort.cornerpin	Distort	Corner Pin
+	number	ul_x	0		picture widths	Upper Left (0 left, 1 right)
+	number	ul_y	0		picture heights	Upper Left (0 top, 1 bottom)
+	number	ur_x	1		picture widths	Upper Right (0 left, 1 right)
+	number	ur_y	0		picture heights	Upper Right (0 top, 1 bottom)
+	number	ll_x	0		picture widths	Lower Left (0 left, 1 right)
+	number	ll_y	1		picture heights	Lower Left (0 top, 1 bottom)
+	number	lr_x	1		picture widths	Lower Right (0 left, 1 right)
+	number	lr_y	1		picture heights	Lower Right (0 top, 1 bottom)
 effect	distort.upscale	Distort	Detail-preserving Upscale
 	number	scale	100	100..1000		Scale
 	number	reduceNoise	0	0..100		Reduce Noise
 	number	detail	20	0..100		Detail
 	enum	alpha	bicubic	bilinear|bicubic		Alpha
+effect	distort.magnify	Distort	Magnify
+	enum	shape	circle	circle|square		Shape
+	number	center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	number	magnification	200	1..10000		Magnification
+	enum	link	none	none|size-to-magnification|size-feather-to-magnification		Link
+	number	size	100	0..4000		Size
+	number	feather	0	0..4000		Feather
+	number	opacity	100	0..100		Opacity
+	enum	scaling	standard	standard|soft|scatter		Scaling
+	enum	blendingMode	normal	none|normal|add|multiply|screen|overlay|soft-light|hard-light|color-dodge|color-burn|darken|lighten|difference|exclusion|hue|saturation|color|luminosity		Blending Mode
+	bool	resizeLayer	false			Resize Layer
+effect	distort.mirror	Distort	Mirror
+	number	center_x	0.5		picture widths	Reflection Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Reflection Center (0 top, 1 bottom)
+	number	angle	0		degrees	Reflection Angle
+effect	distort.offset	Distort	Offset
+	number	shift_x	0.5		picture widths	Shift Center To (0 left, 1 right)
+	number	shift_y	0.5		picture heights	Shift Center To (0 top, 1 bottom)
+	number	blend	0	0..100		Blend With Original
+effect	distort.opticscompensation	Distort	Optics Compensation
+	number	fieldOfView	0	0..180		Field Of View (FOV)
+	bool	reverseLensDistortion	false			Reverse Lens Distortion
+	enum	fovOrientation	horizontal	horizontal|vertical|diagonal		FOV Orientation
+	number	viewCenter_x	0.5		picture widths	View Center (0 left, 1 right)
+	number	viewCenter_y	0.5		picture heights	View Center (0 top, 1 bottom)
+	bool	optimalPixels	false			Optimal Pixels (Invalidates Resize)
+	enum	resize	off	off|max-2x|max-4x|unlimited		Resize
 effect	distort.polar	Distort	Polar Coordinates
 	number	interpolation	0	0..100		Interpolation
 	enum	conversion	rect-to-polar	rect-to-polar|polar-to-rect		Type of Conversion
+effect	distort.ripple	Distort	Ripple
+	number	radius	50	0..100		Radius
+	number	center_x	0.5		picture widths	Center of Ripple (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center of Ripple (0 top, 1 bottom)
+	enum	conversion	asymmetric	asymmetric|symmetric		Type of Conversion
+	number	speed	1	-15..15		Wave Speed
+	number	waveWidth	20	1..1000		Wave Width
+	number	waveHeight	10	0..400		Wave Height
+	number	phase	0		degrees	Ripple Phase
+effect	distort.smear	Distort	Smear
+	enum	sourceMask	none	none|mask-1|mask-2|mask-3|mask-4|mask-5|mask-6|mask-7|mask-8		Source Mask
+	enum	boundaryMask	none	none|mask-1|mask-2|mask-3|mask-4|mask-5|mask-6|mask-7|mask-8		Boundary Mask
+	number	maskOffset_x	0		picture widths	Mask Offset (0 left, 1 right)
+	number	maskOffset_y	0		picture heights	Mask Offset (0 top, 1 bottom)
+	number	maskRotation	0		degrees	Mask Rotation
+	number	maskScale	100	1..1000		Mask Scale
+	number	percent	100	0..100		Percent
+	enum	elasticity	absolutely-normal	stiff|less-stiff|below-normal|absolutely-normal|above-average|loose|liquid|super-fluid		Elasticity
+	enum	interpolation	linear	discrete|linear|smooth		Interpolation Method
+effect	distort.spherize	Distort	Spherize
+	number	radius	0	0..2500		Radius
+	number	center_x	0.5		picture widths	Center of Sphere (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center of Sphere (0 top, 1 bottom)
+effect	distort.transform	Distort	Transform
+	number	anchor_x	0.5		picture widths	Anchor Point (0 left, 1 right)
+	number	anchor_y	0.5		picture heights	Anchor Point (0 top, 1 bottom)
+	number	position_x	0.5		picture widths	Position (0 left, 1 right)
+	number	position_y	0.5		picture heights	Position (0 top, 1 bottom)
+	bool	uniform	true			Uniform Scale
+	number	scaleHeight	100	-10000..10000		Scale Height
+	number	scaleWidth	100	-10000..10000		Scale Width
+	number	skew	0	-70..70		Skew
+	number	skewAxis	0		degrees	Skew Axis
+	number	rotation	0		degrees	Rotation
+	number	opacity	100	0..100		Opacity
+	bool	useCompositionShutterAngle	true			Use Composition's Shutter Angle
+	number	shutterAngle	0	0..720		Shutter Angle
+	enum	sampling	bilinear	bilinear|bicubic		Sampling
+effect	distort.turbulentdisplace	Distort	Turbulent Displace
+	enum	displacement	turbulent	turbulent|bulge|twist|turbulent-smoother|bulge-smoother|twist-smoother|vertical-displacement|horizontal-displacement|cross-displacement		Displacement
+	number	amount	50	-1000..1000		Amount
+	number	size	100	2..4000		Size
+	number	offset_x	0.5		picture widths	Offset (Turbulence) (0 left, 1 right)
+	number	offset_y	0.5		picture heights	Offset (Turbulence) (0 top, 1 bottom)
+	number	complexity	1	1..10		Complexity
+	number	evolution	0		degrees	Evolution
+	bool	evolutionOptions/cycleEvolution	false			Cycle Evolution
+	number	evolutionOptions/cycle	1	1..1000		Cycle (in Revolutions)
+	number	evolutionOptions/randomSeed	0	0..10000		Random Seed
+	enum	pinning	pin-all	none|pin-all|pin-horizontal|pin-vertical|pin-left|pin-top|pin-right|pin-bottom|pin-all-locked|pin-horizontal-locked|pin-vertical-locked|pin-left-locked|pin-top-locked|pin-right-locked|pin-bottom-locked		Pinning
+	bool	resizeLayer	false			Resize Layer
+effect	distort.twirl	Distort	Twirl
+	number	angle	0		degrees	Angle
+	number	radius	30	0..100		Twirl Radius
+	number	center_x	0.5		picture widths	Twirl Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Twirl Center (0 top, 1 bottom)
+effect	distort.twirllegacy	Distort	Twirl (Legacy)
+	number	angle	0		degrees	Angle
+	number	radius	30	0..100		Twirl Radius
+	number	center_x	0.5		picture widths	Twirl Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Twirl Center (0 top, 1 bottom)
 effect	distort.warp	Distort	Warp
 	enum	warpStyle	arc	arc|arc-lower|arc-upper|arch|bulge|shell-lower|shell-upper|flag|wave|fish|rise|fisheye|inflate|squeeze|twist		Warp Style
 	enum	warpAxis	horizontal	horizontal|vertical		Warp Axis
@@ -462,6 +713,171 @@ effect	distort.wavewarp	Distort	Wave Warp
 	number	speed	1	-100..100		Wave Speed
 	enum	pinning	none	none|all-edges|center|left-edge|top-edge|right-edge|bottom-edge|horizontal-edges|vertical-edges		Pinning
 	number	phase	0		degrees	Phase
+effect	generate.fourcolor	Generate	4-Color Gradient
+	number	positionsColors/point1_x	0.1		picture widths	Point 1 (0 left, 1 right)
+	number	positionsColors/point1_y	0.1		picture heights	Point 1 (0 top, 1 bottom)
+	color	positionsColors/color1	#ffff00			Color 1
+	number	positionsColors/point2_x	0.9		picture widths	Point 2 (0 left, 1 right)
+	number	positionsColors/point2_y	0.1		picture heights	Point 2 (0 top, 1 bottom)
+	color	positionsColors/color2	#00ff00			Color 2
+	number	positionsColors/point3_x	0.1		picture widths	Point 3 (0 left, 1 right)
+	number	positionsColors/point3_y	0.9		picture heights	Point 3 (0 top, 1 bottom)
+	color	positionsColors/color3	#ff00ff			Color 3
+	number	positionsColors/point4_x	0.9		picture widths	Point 4 (0 left, 1 right)
+	number	positionsColors/point4_y	0.9		picture heights	Point 4 (0 top, 1 bottom)
+	color	positionsColors/color4	#0000ff			Color 4
+	number	blend	100	1..1000		Blend
+	number	jitter	0	0..100		Jitter
+	number	opacity	100	0..100		Opacity
+	enum	blendingMode	none	none|normal|add|multiply|screen|overlay|soft-light|hard-light|color-dodge|color-burn|darken|lighten|difference|exclusion|hue|saturation|color|luminosity		Blending Mode
+effect	generate.advancedlightning	Generate	Advanced Lightning
+	enum	lightningType	strike	direction|strike|breaking|bouncy|omni|anywhere|vertical|two-way-strike		Lightning Type
+	number	origin_x	0.25		picture widths	Origin (0 left, 1 right)
+	number	origin_y	0.2		picture heights	Origin (0 top, 1 bottom)
+	number	direction_x	0.75		picture widths	Direction (0 left, 1 right)
+	number	direction_y	0.8		picture heights	Direction (0 top, 1 bottom)
+	number	conductivityState	10	0..100000		Conductivity State
+	number	coreSettings/coreRadius	3	0..100		Core Radius
+	number	coreSettings/coreOpacity	75	0..100		Core Opacity
+	color	coreSettings/coreColor	#ffffff			Core Color
+	number	glowSettings/glowRadius	50	0..1000		Glow Radius
+	number	glowSettings/glowOpacity	50	0..100		Glow Opacity
+	color	glowSettings/glowColor	#4059ff			Glow Color
+	number	turbulence	1	0..10		Turbulence
+	number	forking	25	0..100		Forking
+	number	decay	0.3	0..1		Decay
+	bool	decayMainCore	false			Decay Main Core
+	number	alphaObstacle	0	-10..10		Alpha Obstacle
+	bool	compositeOnOriginal	true			Composite On Original
+	number	expertSettings/complexity	6	1..12		Complexity
+	number	expertSettings/minForkDistance	0	0..1000		Min Fork Distance
+	number	expertSettings/terminationThreshold	5	0..100		Termination Threshold
+	bool	expertSettings/mainCoreCollisionOnly	false			Main Core Collision Only
+	enum	expertSettings/fractalType	linear	linear|semi-linear|spline		Fractal Type
+	number	expertSettings/coreDrain	0	0..100		Core Drain
+	number	expertSettings/forkStrength	50	0..100		Fork Strength
+	number	expertSettings/forkVariation	0	0..100		Fork Variation
+effect	generate.beam	Generate	Beam
+	number	startPoint_x	0.25		picture widths	Starting Point (0 left, 1 right)
+	number	startPoint_y	0.5		picture heights	Starting Point (0 top, 1 bottom)
+	number	endPoint_x	0.75		picture widths	Ending Point (0 left, 1 right)
+	number	endPoint_y	0.5		picture heights	Ending Point (0 top, 1 bottom)
+	number	length	25	0..100		Length
+	number	time	0	0..100		Time
+	number	startThickness	8	0..1000		Starting Thickness
+	number	endThickness	8	0..1000		Ending Thickness
+	number	softness	20	0..100		Softness
+	color	insideColor	#ffffff			Inside Color
+	color	outsideColor	#6666ff			Outside Color
+	bool	perspective3d	true			3D Perspective
+	bool	compositeOnOriginal	true			Composite On Original
+effect	generate.gluegun	Generate	Glue Gun
+	number	brushPosition_x	0.5		picture widths	Brush Position (0 left, 1 right)
+	number	brushPosition_y	0.5		picture heights	Brush Position (0 top, 1 bottom)
+	number	strokeWidth	25	0..500		Stroke Width
+	number	density	5	0..32		Density
+	number	timeSpan	1	0..60		Time Span (sec)
+	number	reflection	45		degrees	Reflection
+	number	strength	100	0..100		Strength
+	enum	style	over-layer	over-layer|glue-only		Style
+effect	generate.lightburst	Generate	Light Burst 2.5
+	number	center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	number	intensity	100	0..600		Intensity
+	number	rayLength	50	0..100		Ray Length
+	enum	burst	straight	straight|fade|center		Burst
+	bool	setColor	false			Set Color
+	color	color	#ffffff			Color
+effect	generate.lightrays	Generate	Light Rays
+	number	intensity	100	0..600		Intensity
+	number	center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	number	radius	40	0..4000		Radius
+	number	warpSoftness	50	0..400		Warp Softness
+	enum	shape	round	round|square		Shape
+	bool	colorFromSource	true			Color from Source
+	color	color	#ffffff			Color
+	enum	transferMode	add	add|lighten|screen|none		Transfer Mode
+effect	generate.lightsweep	Generate	Light Sweep
+	number	center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	number	direction	-30		degrees	Direction
+	enum	shape	smooth	linear|smooth|sharp		Shape
+	number	width	50	0..4000		Width
+	number	sweepIntensity	50	0..500		Sweep Intensity
+	number	edgeIntensity	100	0..500		Edge Intensity
+	number	edgeThickness	1	0..100		Edge Thickness
+	color	lightColor	#ffffff			Light Color
+	enum	lightReceptionMode	add	add|composite|cutout		Light Reception
+effect	generate.threads	Generate	Threads
+	number	width	50	1..1000		Width
+	number	height	50	1..1000		Height
+	number	overlaps	1	1..20		Overlaps
+	number	direction	0		degrees	Direction
+	number	center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	number	coverage	80	0..100		Coverage
+	number	shadowing	50	0..100		Shadowing
+	number	texture	10	0..100		Texture
+effect	generate.cellpattern	Generate	Cell Pattern
+	enum	cellPattern	bubbles	bubbles|crystals|plates|static-plates|crystallize|pillow|crystals-hq|plates-hq|static-plates-hq|crystallize-hq|mixed-crystals-hq|tubular		Cell Pattern
+	bool	invert	false			Invert
+	number	contrast	100	0..10000		Contrast
+	enum	overflow	clip	clip|soft-clamp|wrap-back		Overflow
+	number	disperse	1	0..1.5		Disperse
+	number	size	60	2..4000		Size
+	number	offset_x	0.5		picture widths	Offset (0 left, 1 right)
+	number	offset_y	0.5		picture heights	Offset (0 top, 1 bottom)
+	bool	tilingOptions/enableTiling	false			Enable Tiling
+	number	tilingOptions/cellsHorizontal	16	1..1000		Cells Horizontal
+	number	tilingOptions/cellsVertical	16	1..1000		Cells Vertical
+	number	evolution	0		degrees	Evolution
+	bool	evolutionOptions/cycleEvolution	false			Cycle Evolution
+	number	evolutionOptions/cycle	1	1..1000		Cycle (in Revolutions)
+	number	evolutionOptions/randomSeed	0	0..100000		Random Seed
+effect	generate.checkerboard	Generate	Checkerboard
+	number	anchor_x	0		picture widths	Anchor (0 left, 1 right)
+	number	anchor_y	0		picture heights	Anchor (0 top, 1 bottom)
+	enum	sizeFrom	width-slider	corner-point|width-slider|width-height-sliders		Size From
+	number	corner_x	0.1		picture widths	Corner (0 left, 1 right)
+	number	corner_y	0.1		picture heights	Corner (0 top, 1 bottom)
+	number	width	64	1..4000		Width
+	number	height	64	1..4000		Height
+	number	feather/featherWidth	0	0..1000		Width
+	number	feather/featherHeight	0	0..1000		Height
+	color	color	#ffffff			Color
+	number	opacity	100	0..100		Opacity
+	enum	blendingMode	none	none|normal|add|multiply|screen|overlay|soft-light|hard-light|color-dodge|color-burn|darken|lighten|difference|exclusion|hue|saturation|color|luminosity|stencil-alpha|silhouette-alpha		Blending Mode
+effect	generate.circle	Generate	Circle
+	number	center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	number	radius	75	0..4000		Radius
+	enum	edge	none	none|edge-radius|thickness|thickness-radius|thickness-feather-radius		Edge
+	number	edgeRadius	0	0..4000		Edge Radius
+	number	thickness	10	0..4000		Thickness
+	number	feather/feather	0	0..1000		Feather Outer Edge
+	number	feather/featherInner	0	0..1000		Feather Inner Edge
+	bool	invert	false			Invert Circle
+	color	color	#ffffff			Color
+	number	opacity	100	0..100		Opacity
+	enum	blendingMode	none	none|normal|add|multiply|screen|overlay|soft-light|hard-light|color-dodge|color-burn|darken|lighten|difference|exclusion|hue|saturation|color|luminosity|stencil-alpha|silhouette-alpha		Blending Mode
+effect	generate.ellipse	Generate	Ellipse
+	number	center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	number	width	100	0..30000		Width
+	number	height	100	0..30000		Height
+	number	thickness	10	0..3000		Thickness
+	number	softness	0	0..100		Softness
+	color	insideColor	#ffffff			Inside Color
+	color	outsideColor	#0099ff			Outside Color
+	bool	compositeOnOriginal	false			Composite On Original
+effect	generate.eyedropperfill	Generate	Eyedropper Fill
+	number	samplePoint_x	0.5		picture widths	Sample Point (0 left, 1 right)
+	number	samplePoint_y	0.5		picture heights	Sample Point (0 top, 1 bottom)
+	number	sampleRadius	0	0..1000		Sample Radius
+	enum	averagePixelColors	skip-empty	skip-empty|all|all-premultiplied|including-alpha		Average Pixel Colors
+	bool	maintainOriginalAlpha	false			Maintain Original Alpha
+	number	blendWithOriginal	0	0..100		Blend With Original
 effect	generate.fractal	Generate	Fractal
 	enum	setChoice	mandelbrot	mandelbrot|mandelbrot-inverse|mandelbrot-over-julia|mandelbrot-inverse-over-julia|julia|julia-inverse		Set Choice
 	enum	equation	z-z-2-c	z-z-2-c|z-z-3-c|z-z-4-c		Equation
@@ -484,6 +900,62 @@ effect	generate.fractal	Generate	Fractal
 	bool	fractalColor/edgeHighlight	false			Edge Highlight
 	enum	highQualitySettings/samplingMethod	edge-detect-fast-may-miss-pixels	edge-detect-fast-may-miss-pixels|brute-force-slow-every-pixel		Oversample Method
 	number	highQualitySettings/samplingFactor	2	1..9		Oversample Factor
+effect	generate.gradientramp	Generate	Gradient Ramp
+	number	start_x	0.5		picture widths	Start of Ramp (0 left, 1 right)
+	number	start_y	0		picture heights	Start of Ramp (0 top, 1 bottom)
+	color	startColor	#000000			Start Color
+	number	end_x	0.5		picture widths	End of Ramp (0 left, 1 right)
+	number	end_y	1		picture heights	End of Ramp (0 top, 1 bottom)
+	color	endColor	#ffffff			End Color
+	enum	shape	linear-ramp	linear-ramp|radial-ramp		Ramp Shape
+	number	scatter	0	0..512		Ramp Scatter
+	number	blend	0	0..100		Blend With Original
+effect	generate.grid	Generate	Grid
+	number	anchor_x	0		picture widths	Anchor (0 left, 1 right)
+	number	anchor_y	0		picture heights	Anchor (0 top, 1 bottom)
+	enum	sizeFrom	width-slider	corner-point|width-slider|width-height-sliders		Size From
+	number	corner_x	0.1		picture widths	Corner (0 left, 1 right)
+	number	corner_y	0.1		picture heights	Corner (0 top, 1 bottom)
+	number	width	64	1..4000		Width
+	number	height	64	1..4000		Height
+	number	border	2	0..400		Border
+	number	feather/featherWidth	0	0..1000		Width
+	number	feather/featherHeight	0	0..1000		Height
+	bool	invertGrid	false			Invert Grid
+	color	color	#ffffff			Color
+	number	opacity	100	0..100		Opacity
+	enum	blendingMode	none	none|normal|add|multiply|screen|overlay|soft-light|hard-light|color-dodge|color-burn|darken|lighten|difference|exclusion|hue|saturation|color|luminosity|stencil-alpha|silhouette-alpha		Blending Mode
+effect	generate.lensflare	Generate	Lens Flare
+	number	flareCenter_x	0.25		picture widths	Flare Center (0 left, 1 right)
+	number	flareCenter_y	0.25		picture heights	Flare Center (0 top, 1 bottom)
+	number	flareBrightness	100	0..300		Flare Brightness
+	enum	lensType	50-300mm-zoom	50-300mm-zoom|35mm-prime|105mm-prime		Lens Type
+	number	blendWithOriginal	0	0..100		Blend With Original
+effect	generate.paintbucket	Generate	Paint Bucket
+	number	fillPoint_x	0.5		picture widths	Fill Point (0 left, 1 right)
+	number	fillPoint_y	0.5		picture heights	Fill Point (0 top, 1 bottom)
+	enum	fillSelector	color-alpha	color-alpha|straight-color|transparency|opacity|alpha-channel		Fill Selector
+	number	tolerance	10	0..255		Tolerance
+	bool	viewThreshold	false			View Threshold
+	enum	stroke	antialias	antialias|feather|spread|choke|stroke		Stroke
+	number	featherSoftness	10	0..100		Feather Softness
+	number	spreadRadius	3	0..100		Spread Radius
+	number	strokeWidth	2	0..100		Stroke Width
+	color	color	#ff0000			Color
+	number	opacity	100	0..100		Opacity
+	enum	blendingMode	normal	normal|add|multiply|screen|hue|saturation|color|luminosity|behind|fill-only		Blending Mode
+effect	generate.writeon	Generate	Write-on
+	number	brushPosition_x	0.5		picture widths	Brush Position (0 left, 1 right)
+	number	brushPosition_y	0.5		picture heights	Brush Position (0 top, 1 bottom)
+	color	color	#ffffff			Color
+	number	brushSize	6	0..50		Brush Size
+	number	brushHardness	75	0..100		Brush Hardness
+	number	brushOpacity	100	0..100		Brush Opacity
+	number	strokeLength	0	0..30		Stroke Length (secs)
+	number	brushSpacing	0.001	0.001..5		Brush Spacing (secs)
+	enum	paintTimeProperties	none	none|opacity|color		Paint Time Properties
+	enum	brushTimeProperties	none	none|size|hardness|size-hardness		Brush Time Properties
+	enum	paintStyle	on-original-image	on-original-image|on-transparent|reveal-original-image		Paint Style
 effect	key.advancedspill	Keying	Advanced Spill Suppressor
 	enum	method	standard	standard|ultra		Method
 	number	suppression	100	0..200		Suppression
@@ -493,6 +965,16 @@ effect	key.advancedspill	Keying	Advanced Spill Suppressor
 	number	ultraSettings/spillRange	50	0..100		Spill Range
 	number	ultraSettings/spillColorCorrection	0	0..100		Spill Color Correction
 	number	ultraSettings/lumaCorrection	0	0..100		Luma Correction
+effect	key.simplewireremoval	Keying	Simple Wire Removal
+	number	pointA_x	0.25		picture widths	Point A (0 left, 1 right)
+	number	pointA_y	0.25		picture heights	Point A (0 top, 1 bottom)
+	number	pointB_x	0.75		picture widths	Point B (0 left, 1 right)
+	number	pointB_y	0.75		picture heights	Point B (0 top, 1 bottom)
+	enum	removalStyle	displace	fade|frame-offset|displace|displace-horizontal		Removal Style
+	number	thickness	5	0..100		Thickness
+	number	slope	0	0..100		Slope
+	number	mirrorBlend	0	0..100		Mirror Blend
+	number	frameOffset	0	-100..100		Frame Offset
 effect	key.colordifference	Keying	Color Difference Key
 	enum	view	final-output	source|uncorrected-matte-partial-a|corrected-matte-partial-a|uncorrected-matte-partial-b|corrected-matte-partial-b|uncorrected-matte|corrected-matte|final-output|a-b-matte-corrected-final		View
 	color	keyColor	#0000ff			Key Color
@@ -711,6 +1193,23 @@ effect	matte.mattechoker	Matte	Matte Choker
 	number	choke2	0	-127..127		Choke 2
 	number	grayLevelSoftness2	100	0..100		Gray Level Softness 2
 	number	iterations	1	1..100		Iterations
+effect	matte.objectmatte	Matte	Object Matte
+	number	objectPoint_x	0.5		picture widths	Object Point (0 left, 1 right)
+	number	objectPoint_y	0.5		picture heights	Object Point (0 top, 1 bottom)
+	bool	useBox	false			Use Box
+	number	boxTopLeft_x	0.25		picture widths	Box Top Left (0 left, 1 right)
+	number	boxTopLeft_y	0.25		picture heights	Box Top Left (0 top, 1 bottom)
+	number	boxBottomRight_x	0.75		picture widths	Box Bottom Right (0 left, 1 right)
+	number	boxBottomRight_y	0.75		picture heights	Box Bottom Right (0 top, 1 bottom)
+	bool	objectTracking/trackObject	true			Track Object
+	number	objectTracking/referenceFrame	0			Reference Frame
+	number	objectTracking/framesBefore	30	0..600		Frames Before
+	number	objectTracking/framesAfter	30	0..600		Frames After
+	number	objectMatte/feather	0	0..100		Feather
+	number	objectMatte/contrast	0	0..100		Contrast
+	number	objectMatte/shiftEdge	0	-100..100		Shift Edge
+	bool	invert	false			Invert
+	enum	view	final-output	final-output|matte		View
 effect	matte.refinehard	Matte	Refine Hard Matte
 	number	smooth	20	0..100		Smooth
 	number	feather	0	0..100		Feather
@@ -731,10 +1230,85 @@ effect	matte.refinehard	Matte	Refine Hard Matte
 effect	matte.simplechoker	Matte	Simple Choker
 	enum	view	final-output	final-output|matte		View
 	number	chokeMatte	0	-100..100		Choke Matte
+effect	noise.addgrain	Noise & Grain	Add Grain
+	enum	viewingMode	final-output	preview|blending-matte|final-output		Viewing Mode
+	enum	preset	none	none|fine-35mm|coarse-16mm|vintage-8mm|video-noise|monochrome-high-speed		Preset
+	number	previewRegion/center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	previewRegion/center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	number	previewRegion/width	200	1..10000		Width
+	number	previewRegion/height	200	1..10000		Height
+	bool	previewRegion/showBox	true			Show Box
+	color	previewRegion/boxColor	#ffffff			Box Color
+	number	tweaking/intensity	1	0..100		Intensity
+	number	tweaking/channelIntensities/redIntensity	1	0..10		Red Intensity
+	number	tweaking/channelIntensities/greenIntensity	1	0..10		Green Intensity
+	number	tweaking/channelIntensities/blueIntensity	1	0..10		Blue Intensity
+	number	tweaking/size	1	0.05..100		Size
+	number	tweaking/channelSize/redSize	1	0..10		Red Size
+	number	tweaking/channelSize/greenSize	1	0..10		Green Size
+	number	tweaking/channelSize/blueSize	1	0..10		Blue Size
+	number	tweaking/softness	0	0..100		Softness
+	number	tweaking/aspectRatio	1	0.05..20		Aspect Ratio
+	bool	color/monochromatic	false			Monochromatic
+	number	color/saturation	1	0..10		Saturation
+	number	color/tintAmount	0	0..1		Tint Amount
+	color	color/tintColor	#ffffff			Tint Color
+	number	color/redBalance	1	0..10		Red Balance
+	number	color/greenBalance	1	0..10		Green Balance
+	number	color/blueBalance	1	0..10		Blue Balance
+	enum	application/blendingMode	film	film|multiply|add|screen|overlay		Blending Mode
+	number	application/shadows	1	0..10		Shadows
+	number	application/midtones	1	0..10		Midtones
+	number	application/highlights	1	0..10		Highlights
+	number	application/midpoint	0.5	0..1		Midpoint
+	number	animation/animationSpeed	1	0..100		Animation Speed
+	bool	animation/animateSmoothly	true			Animate Smoothly
+	number	animation/randomSeed	0	0..100000		Random Seed
+effect	noise.curlnoise	Noise & Grain	Curl Noise
+	enum	view	final-output	final-output|flow-field		View
+	number	displacementAmount	20	-1000..1000		Displacement Amount
+	number	scale	100	1..10000		Scale
+	number	rotation	0		degrees	Rotation
+	number	offset_x	0.5		picture widths	Offset Turbulence (0 left, 1 right)
+	number	offset_y	0.5		picture heights	Offset Turbulence (0 top, 1 bottom)
+	number	complexity	3	1..20		Complexity
+	number	evolution	0		degrees	Evolution
+	number	steps	4	1..16		Flow Steps
+	enum	edgeBehavior	clamp	clamp|wrap		Edge Behavior
+	number	randomSeed	0	0..100000		Random Seed
 effect	noise.dustscratches	Noise & Grain	Dust & Scratches
 	number	radius	1	0..255		Radius
 	number	threshold	0	0..255		Threshold
 	bool	operateOnAlpha	false			Operate On Alpha Channel
+effect	noise.fractal	Noise & Grain	Fractal Noise
+	enum	fractalType	basic	basic|turbulent-smooth|turbulent-basic|turbulent-sharp|dynamic|dynamic-twist|dynamic-progressive|max|strings		Fractal Type
+	enum	noiseType	soft-linear	block|linear|soft-linear|spline		Noise Type
+	bool	invert	false			Invert
+	number	contrast	100	0..10000		Contrast
+	number	brightness	0	-10000..10000		Brightness
+	enum	overflow	allow-hdr-results	clip|soft-clamp|wrap-back|allow-hdr-results		Overflow
+	number	transform/rotation	0		degrees	Rotation
+	bool	transform/uniformScaling	true			Uniform Scaling
+	number	transform/scale	100	1..10000		Scale
+	number	transform/scaleWidth	100	1..10000		Scale Width
+	number	transform/scaleHeight	100	1..10000		Scale Height
+	number	transform/offset_x	0.5		picture widths	Offset Turbulence (0 left, 1 right)
+	number	transform/offset_y	0.5		picture heights	Offset Turbulence (0 top, 1 bottom)
+	bool	transform/perspectiveOffset	false			Perspective Offset
+	number	complexity	6	1..20		Complexity
+	number	subSettings/subInfluence	70	0..100		Sub Influence (%)
+	number	subSettings/subScaling	56	10..100		Sub Scaling
+	number	subSettings/subRotation	0		degrees	Sub Rotation
+	number	subSettings/subOffset_x	0		picture widths	Sub Offset (0 left, 1 right)
+	number	subSettings/subOffset_y	0		picture heights	Sub Offset (0 top, 1 bottom)
+	bool	subSettings/centerSubscale	false			Center Subscale
+	number	evolution	0		degrees	Evolution
+	bool	evolutionOptions/cycleEvolution	false			Cycle Evolution
+	number	evolutionOptions/cycle	1	1..1000		Cycle (in Revolutions)
+	number	evolutionOptions/seed	0	0..100000		Random Seed
+	number	opacity	100	0..100		Opacity
+	enum	blendingMode	normal	none|normal|add|multiply|screen|overlay|soft-light|hard-light|color-dodge|color-burn|darken|lighten|difference|exclusion|hue|saturation|color|luminosity|stencil-alpha|stencil-luma|silhouette-alpha|silhouette-luma|alpha-add|luminescent-premul		Blending Mode
+	number	blend	0	0..100		Blend With Original
 effect	noise.median	Noise & Grain	Median
 	number	radius	0	0..255		Radius
 	bool	operateOnAlpha	false			Operate On Alpha Channel
@@ -768,6 +1342,52 @@ effect	noise.noisehlsauto	Noise & Grain	Noise HLS Auto
 	number	saturation	0	0..100		Saturation
 	number	grainSize	1	0.1..100		Grain Size
 	number	noiseAnimationSpeed	10	0..1000		Noise Animation Speed
+effect	noise.removegrain	Noise & Grain	Remove Grain
+	enum	viewingMode	final-output	preview|noise-samples|blending-matte|final-output		Viewing Mode
+	number	previewRegion/center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	previewRegion/center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	number	previewRegion/width	200	1..10000		Width
+	number	previewRegion/height	200	1..10000		Height
+	bool	previewRegion/showBox	true			Show Box
+	color	previewRegion/boxColor	#ffffff			Box Color
+	number	noiseReductionSettings/noiseReduction	1	0..5		Noise Reduction
+	number	noiseReductionSettings/passes	1	1..8		Passes
+	enum	noiseReductionSettings/mode	multichannel	multichannel|single-channel		Mode
+	number	fineTuning/texture	0	0..1		Texture
+	number	unsharpMask/amount	0	0..500		Amount
+	number	unsharpMask/radius	1	0.1..100		Radius
+	number	unsharpMask/threshold	0	0..255		Threshold
+	bool	temporalFiltering/enabled	false			Enabled
+	number	temporalFiltering/amount	100	0..100		Amount
+	number	temporalFiltering/motionSensitivity	0.5	0..1		Motion Sensitivity
+	enum	sampling/samplingProcess	automatic	automatic		Sampling Process
+	number	sampling/numberOfSamples	80	1..500		Number of Samples
+	number	sampling/sampleSize	9	3..64		Sample Size
+	color	sampling/sampleBoxColor	#ffff00			Sample Box Color
+effect	noise.turbulent	Noise & Grain	Turbulent Noise
+	enum	fractalType	turbulent-smooth	basic|turbulent-smooth|turbulent-basic|turbulent-sharp|dynamic|dynamic-twist|dynamic-progressive|max|strings		Fractal Type
+	enum	noiseType	soft-linear	block|linear|soft-linear|spline		Noise Type
+	bool	invert	false			Invert
+	number	contrast	100	0..10000		Contrast
+	number	brightness	0	-10000..10000		Brightness
+	enum	overflow	clip	clip|soft-clamp|wrap-back|allow-hdr-results		Overflow
+	number	transform/rotation	0		degrees	Rotation
+	bool	transform/uniformScaling	true			Uniform Scaling
+	number	transform/scale	100	1..10000		Scale
+	number	transform/scaleWidth	100	1..10000		Scale Width
+	number	transform/scaleHeight	100	1..10000		Scale Height
+	number	transform/offset_x	0.5		picture widths	Offset Turbulence (0 left, 1 right)
+	number	transform/offset_y	0.5		picture heights	Offset Turbulence (0 top, 1 bottom)
+	bool	transform/perspectiveOffset	false			Perspective Offset
+	number	complexity	6	1..20		Complexity
+	number	subSettings/subInfluence	70	0..100		Sub Influence (%)
+	number	subSettings/subScaling	56	10..100		Sub Scaling
+	number	evolution	0		degrees	Evolution
+	number	evolutionOptions/turbulenceFactor	0.5	0..10		Turbulence Factor
+	number	evolutionOptions/randomSeed	0	0..100000		Random Seed
+	number	opacity	100	0..100		Opacity
+	enum	blendingMode	normal	none|normal|add|multiply|screen|overlay|soft-light|hard-light|color-dodge|color-burn|darken|lighten|difference|exclusion|hue|saturation|color|luminosity|stencil-alpha|stencil-luma|silhouette-alpha|silhouette-luma|alpha-add|luminescent-premul		Blending Mode
+	number	blend	0	0..100		Blend With Original
 effect	perspective.bevelalpha	Perspective	Bevel Alpha
 	number	edgeThickness	2	0..200		Edge Thickness
 	number	lightAngle	-60		degrees	Light Angle
@@ -778,6 +1398,50 @@ effect	perspective.beveledges	Perspective	Bevel Edges
 	number	lightAngle	-60		degrees	Light Angle
 	color	lightColor	#ffffff			Light Color
 	number	lightIntensity	0.25	0..1		Light Intensity
+effect	perspective.cylinder	Perspective	Cylinder
+	number	radius	100	0..400		Radius
+	number	position_x	0.5		picture widths	Position (0 left, 1 right)
+	number	position_y	0.5		picture heights	Position (0 top, 1 bottom)
+	number	rotation	0		degrees	Rotation
+	number	rotationX	0		degrees	Rotation X
+	number	rotationY	0		degrees	Rotation Y
+	number	rotationZ	0		degrees	Rotation Z
+	enum	render	full	full|outside|inside		Render
+	number	lightIntensity	100	0..400		Light Intensity
+	color	lightColor	#ffffff			Light Color
+	number	lightHeight	50	-90..90		Light Height
+	number	lightDirection	-45		degrees	Light Direction
+	number	ambient	20	0..200		Ambient
+	number	diffuse	80	0..200		Diffuse
+	number	specular	20	0..200		Specular
+	number	roughness	0.05	0.001..0.5		Roughness
+effect	perspective.sphere	Perspective	Sphere
+	number	radius	120	0..4000		Radius
+	number	offset_x	0.5		picture widths	Offset (0 left, 1 right)
+	number	offset_y	0.5		picture heights	Offset (0 top, 1 bottom)
+	number	rotationX	0		degrees	Rotation X
+	number	rotationY	0		degrees	Rotation Y
+	number	rotationZ	0		degrees	Rotation Z
+	enum	render	full	full|outside|inside		Render
+	number	lightIntensity	100	0..400		Light Intensity
+	color	lightColor	#ffffff			Light Color
+	number	lightHeight	50	-90..90		Light Height
+	number	lightDirection	-45		degrees	Light Direction
+	number	ambient	20	0..200		Ambient
+	number	diffuse	80	0..200		Diffuse
+	number	specular	20	0..200		Specular
+	number	roughness	0.05	0.001..0.5		Roughness
+effect	perspective.spotlight	Perspective	Spotlight
+	number	from_x	0.3		picture widths	From (0 left, 1 right)
+	number	from_y	0.2		picture heights	From (0 top, 1 bottom)
+	number	to_x	0.5		picture widths	To (0 left, 1 right)
+	number	to_y	0.5		picture heights	To (0 top, 1 bottom)
+	number	height	50	0..1000		Height
+	number	coneAngle	20	0.1..89.9		Cone Angle
+	number	edgeSoftness	25	0..100		Edge Softness
+	color	color	#ffffff			Color
+	number	intensity	100	0..400		Intensity
+	enum	render	light	light|light-only		Render
 effect	perspective.dropshadow	Perspective	Drop Shadow
 	color	color	#000000			Shadow Color
 	number	opacity	50	0..100		Opacity
@@ -785,6 +1449,17 @@ effect	perspective.dropshadow	Perspective	Drop Shadow
 	number	distance	5	0..32000		Distance
 	number	softness	0	0..1000		Softness
 	bool	shadowOnly	false			Shadow Only
+effect	perspective.radialshadow	Perspective	Radial Shadow
+	color	color	#000000			Shadow Color
+	number	opacity	50	0..100		Opacity
+	number	lightSource_x	0.3		picture widths	Light Source (0 left, 1 right)
+	number	lightSource_y	0.2		picture heights	Light Source (0 top, 1 bottom)
+	number	projectionDistance	10	0..1000		Projection Distance
+	number	softness	0	0..1000		Softness
+	enum	render	regular	regular|glass-edge		Render
+	number	colorInfluence	0	0..100		Color Influence
+	bool	shadowOnly	false			Shadow Only
+	bool	resizeLayer	false			Resize Layer
 effect	sim.ballaction	Simulation	Ball Action
 	number	scatter	0	0..2000		Scatter
 	enum	rotationAxis	x-axis	x-axis|y-axis|z-axis|xy-axis|xz-axis|yz-axis|xyz-axis		Rotation Axis
@@ -817,6 +1492,54 @@ effect	sim.drizzle	Simulation	Drizzle
 	number	shading/diffuse	0	0..200		Diffuse
 	number	shading/specular	20	0..200		Specular
 	number	shading/roughness	0.05	0.001..1		Roughness
+effect	sim.mrmercury	Simulation	Mr. Mercury
+	number	radiusX	50	0..2000		Radius X
+	number	radiusY	50	0..2000		Radius Y
+	number	producer_x	0.5		picture widths	Producer (0 left, 1 right)
+	number	producer_y	0.5		picture heights	Producer (0 top, 1 bottom)
+	number	direction	0		degrees	Direction
+	number	velocity	1	-20..20		Velocity
+	number	birthRate	1	0..20		Birth Rate
+	number	longevity	2	0..100		Longevity (sec)
+	number	gravity	0.5	-20..20		Gravity
+	number	resistance	0	0..20		Resistance
+	number	extra	1	0..10		Extra
+	enum	animation	explosive	explosive|direction-axis|cone-axis|viscouse|twirly|vortex|fire|jet-sideways|fractal-omni|fractal-uni		Animation
+	number	blobInfluence	100	0..400		Blob Influence
+	number	blobBirthSize	0.5	0..10		Blob Birth Size
+	number	blobDeathSize	0.25	0..10		Blob Death Size
+	number	light/lightIntensity	100	0..400		Light Intensity
+	color	light/lightColor	#ffffff			Light Color
+	number	light/lightHeight	50	-100..100		Light Height
+	number	light/lightDirection	-45		degrees	Light Direction
+	number	shading/ambient	0	-200..200		Ambient
+	number	shading/diffuse	75	0..200		Diffuse
+	number	shading/specular	50	0..200		Specular
+	number	shading/roughness	0.05	0.001..1		Roughness
+	number	shading/metal	100	0..100		Metal
+effect	sim.particlesystems2	Simulation	Particle Systems II
+	number	birthRate	2	0..100		Birth Rate
+	number	longevity	1	0..100		Longevity (sec)
+	number	producer/position_x	0.5		picture widths	Position (0 left, 1 right)
+	number	producer/position_y	0.5		picture heights	Position (0 top, 1 bottom)
+	number	producer/radiusX	0	0..2000		Radius X
+	number	producer/radiusY	0	0..2000		Radius Y
+	enum	physics/animation	explosive	explosive|direction-axis|cone-axis|viscouse|twirly|vortex|fire|jet-sideways|fractal-omni|fractal-uni		Animation
+	number	physics/velocity	2	-20..20		Velocity
+	number	physics/inheritVelocity	0	-100..100		Inherit Velocity %
+	number	physics/gravity	1	-20..20		Gravity
+	number	physics/resistance	0	0..20		Resistance
+	number	physics/direction	0		degrees	Direction
+	number	physics/extra	1	0..10		Extra
+	enum	particle/particleType	line	line|shaded-sphere|faded-sphere|bubble|star|motion-polygon|tri-polygon|cube|textured-square		Particle Type
+	number	particle/birthSize	0.5	0..20		Birth Size
+	number	particle/deathSize	1.5	0..20		Death Size
+	number	particle/sizeVariation	0	0..100		Size Variation
+	number	particle/maxOpacity	75	0..100		Max Opacity
+	color	particle/birthColor	#ffff00			Birth Color
+	color	particle/deathColor	#990000			Death Color
+	enum	particle/transferMode	composite	composite|screen|add|black-matte		Transfer Mode
+	number	randomSeed	0	0..10000		Random Seed
 effect	sim.particleworld	Simulation	Particle World
 	number	birthRate	0.5	0..100		Birth Rate
 	number	longevity	1	0..100		Longevity (sec)
@@ -853,11 +1576,60 @@ effect	sim.particleworld	Simulation	Particle World
 	number	extras/effectCamera/rotationZ	0		degrees	Rotation Z
 	number	extras/effectCamera/fov	50	1..179		FOV
 	number	extras/randomSeed	0	0..10000		Random Seed
+effect	sim.pixelpolly	Simulation	Pixel Polly
+	number	force	100	-1000..1000		Force
+	number	gravity	1	-20..20		Gravity
+	number	spinning	0		degrees	Spinning
+	number	forceCenter_x	0.5		picture widths	Force Center (0 left, 1 right)
+	number	forceCenter_y	0.5		picture heights	Force Center (0 top, 1 bottom)
+	number	directionRandomness	10	0..100		Direction Randomness
+	number	speedRandomness	10	0..100		Speed Randomness
+	number	gridSpacing	10	1..500		Grid Spacing
+	enum	object	polygon	polygon|textured-polygon|square|textured-square		Object
+	bool	enableDepthSort	true			Enable Depth Sort
+	number	startTime	0	-1000..1000		Start Time (sec)
+effect	sim.rainfall	Simulation	Rainfall
+	number	drops	5000	0..100000		Drops
+	number	size	1	0..50		Size
+	number	sceneDepth	5000	0..20000		Scene Depth
+	number	speed	4000	0..20000		Speed
+	number	wind	0	-10000..10000		Wind
+	number	windVariation	0	0..100		Variation % (Wind)
+	number	spread	0	0..1000		Spread
+	color	color	#cccccc			Color
+	number	opacity	25	0..100		Opacity
+	enum	transferMode	lighten	composite|lighten		Transfer Mode
+	bool	compositeWithOriginal	true			Composite With Original
+	enum	extras/appearance	refracting	refracting|soft-solid		Appearance
+	number	extras/offset_x	0.5		picture widths	Offset (0 left, 1 right)
+	number	extras/offset_y	0.5		picture heights	Offset (0 top, 1 bottom)
+	number	extras/randomSeed	0	0..10000		Random Seed
 effect	sim.scatterize	Simulation	Scatterize
 	number	scatter	0	0..1000		Scatter
 	number	rightTwist	0		degrees	Right Twist
 	number	leftTwist	0		degrees	Left Twist
 	enum	transferMode	composite	composite|add		Transfer Mode
+effect	sim.snowfall	Simulation	Snowfall
+	number	flakes	10000	0..200000		Flakes
+	number	size	3	0..50		Size
+	number	sizeVariation	50	0..100		Variation % (Size)
+	number	sceneDepth	5000	0..20000		Scene Depth
+	number	speed	100	0..5000		Speed
+	number	speedVariation	50	0..100		Variation % (Speed)
+	number	wind	25	-5000..5000		Wind
+	number	windVariation	50	0..100		Variation % (Wind)
+	number	spread	0	0..1000		Spread
+	number	wiggle/wiggleAmount	2	0..100		Amount
+	number	wiggle/wiggleAmountVariation	50	0..100		Variation % (Amount)
+	number	wiggle/wiggleFrequency	1	0..20		Frequency
+	number	wiggle/wiggleFrequencyVariation	50	0..100		Variation % (Frequency)
+	color	color	#ffffff			Color
+	number	opacity	100	0..100		Opacity
+	enum	transferMode	composite	composite|lighten		Transfer Mode
+	bool	compositeWithOriginal	true			Composite With Original
+	number	extras/offset_x	0.5		picture widths	Offset (0 left, 1 right)
+	number	extras/offset_y	0.5		picture heights	Offset (0 top, 1 bottom)
+	number	extras/randomSeed	0	0..10000		Random Seed
 effect	sim.starburst	Simulation	Star Burst
 	number	scatter	100	0..1000		Scatter
 	number	speed	1	-10..10		Speed
@@ -879,6 +1651,24 @@ effect	stylize.blockload	Stylize	Block Load
 	bool	smoothing	true			Smoothing
 	bool	startCleared	true			Start Cleared
 	bool	bilinear	false			Bilinear
+effect	stylize.burnfilm	Stylize	Burn Film
+	number	burn	0	0..100		Burn
+	number	center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	number	randomSeed	0	0..10000		Random Seed
+effect	stylize.hextile	Stylize	HexTile
+	enum	render	normal	normal|mirrored|rotated		Render
+	number	radius	50	1..4000		Radius
+	number	center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	number	rotate	0		degrees	Rotate
+	number	smearing	0	0..100		Smearing
+effect	stylize.kaleida	Stylize	Kaleida
+	number	center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	number	size	100	1..1000		Size
+	enum	mirroring	flower	flower|starlish|unfold|wheel|triangles		Mirroring
+	number	rotation	0		degrees	Rotation
 effect	stylize.repetile	Stylize	RepeTile
 	number	expandRight	0	0..4000		Expand Right
 	number	expandLeft	0	0..4000		Expand Left
@@ -898,6 +1688,12 @@ effect	stylize.thresholdrgb	Stylize	Threshold RGB
 	bool	invertGreen	false			Invert Green Channel
 	bool	invertBlue	false			Invert Blue Channel
 	number	blend	0	0..100		Blend w. Original
+effect	stylize.vignette	Stylize	Vignette
+	number	amount	50	-100..100		Amount
+	number	angleOfView	60	0..179		Angle of View
+	number	center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	number	pinHighlights	0	0..100		Pin Highlights
 effect	stylize.cartoon	Stylize	Cartoon
 	enum	render	fill-edges	fill|edges|fill-edges		Render
 	number	detailRadius	8	0..50		Detail Radius
@@ -943,8 +1739,33 @@ effect	stylize.mosaic	Stylize	Mosaic
 	number	horizontal	10	1..4000		Horizontal Blocks
 	number	vertical	10	1..4000		Vertical Blocks
 	bool	sharpColors	false			Sharp Colors
+effect	stylize.motiontile	Stylize	Motion Tile
+	number	tileCenter_x	0.5		picture widths	Tile Center (0 left, 1 right)
+	number	tileCenter_y	0.5		picture heights	Tile Center (0 top, 1 bottom)
+	number	tileWidth	100	1..1000		Tile Width
+	number	tileHeight	100	1..1000		Tile Height
+	number	outputWidth	100	1..1000		Output Width
+	number	outputHeight	100	1..1000		Output Height
+	bool	mirrorEdges	false			Mirror Edges
+	number	phase	0		degrees	Phase
+	bool	horizontalPhaseShift	false			Horizontal Phase Shift
 effect	stylize.posterize	Stylize	Posterize
 	number	level	6	2..255		Level
+effect	stylize.roughenedges	Stylize	Roughen Edges
+	enum	edgeType	roughen	roughen|roughen-color|cut|spiky|rusty|rusty-color|photocopy|photocopy-color		Edge Type
+	color	edgeColor	#8c4d1a			Edge Color
+	number	border	8	0..500		Border
+	number	edgeSharpness	1	0..10		Edge Sharpness
+	number	fractalInfluence	1	0..1		Fractal Influence
+	number	scale	100	10..1000		Scale
+	number	stretch	0	-10..10		Stretch Width or Height
+	number	offset_x	0		picture widths	Offset (Turbulence) (0 left, 1 right)
+	number	offset_y	0		picture heights	Offset (Turbulence) (0 top, 1 bottom)
+	number	complexity	2	1..10		Complexity
+	number	evolution	0		degrees	Evolution
+	bool	evolutionOptions/cycleEvolution	false			Cycle Evolution
+	number	evolutionOptions/cycle	1	1..1000		Cycle (in Revolutions)
+	number	evolutionOptions/randomSeed	0	0..10000		Random Seed
 effect	stylize.scatter	Stylize	Scatter
 	number	amount	0	0..127		Scatter Amount
 	enum	grain	both	both|horizontal|vertical		Grain
@@ -959,6 +1780,57 @@ effect	stylize.strobe	Stylize	Strobe Light
 	enum	strobeOperator	copy	copy|add|subtract|multiply|difference|screen|lighten|darken		Strobe Operator
 effect	stylize.threshold	Stylize	Threshold
 	number	level	128	0..255		Level
+transition	transition.blockdissolve	Transition	Block Dissolve
+	number	blockWidth	1	1..4000		Block Width
+	number	blockHeight	1	1..4000		Block Height
+	number	feather	0	0..400		Feather
+	bool	softEdges	true			Soft Edges (Best Quality)
+transition	transition.gridwipe	Transition	Grid Wipe
+	number	center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	number	rotation	0		degrees	Rotation
+	number	border	0	0..100		Border
+	number	tiles	10	1..500		Tiles
+	enum	shape	radial	doors|radial|rectangular		Shape
+	bool	reverse	false			Reverse Transition
+transition	transition.jaws	Transition	Jaws
+	number	center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	number	direction	0		degrees	Direction
+	number	height	50	0..100		Height
+	number	width	50	1..1000		Width
+	enum	shape	spikes	spikes|robojaw|block|waves		Shape
+transition	transition.lightwipe	Transition	Light Wipe
+	number	center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	number	intensity	100	0..1000		Intensity
+	enum	shape	round	doors|round|square		Shape
+	number	direction	0		degrees	Direction
+	bool	colorFromSource	false			Color from Source
+	color	color	#ffffff			Color
+	bool	reverse	false			Reverse Transition
+transition	transition.linesweep	Transition	Line Sweep
+	number	direction	0		degrees	Direction
+	number	thickness	20	1..500		Thickness
+	number	slant	20	-500..500		Slant
+	bool	flipDirection	false			Flip Direction
+transition	transition.radialscalewipe	Transition	Radial ScaleWipe
+	number	center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	bool	reverse	false			Reverse Transition
+transition	transition.linearwipe	Transition	Linear Wipe
+	number	angle	90		degrees	Wipe Angle
+	number	feather	0	0..32000		Feather
+transition	transition.radialwipe	Transition	Radial Wipe
+	number	startAngle	0		degrees	Start Angle
+	number	center_x	0.5		picture widths	Wipe Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Wipe Center (0 top, 1 bottom)
+	enum	wipe	clockwise	clockwise|counterclockwise|both		Wipe
+	number	feather	0	0..360		Feather
+transition	transition.venetian	Transition	Venetian Blinds
+	number	direction	90		degrees	Direction
+	number	width	30	2..1000		Width
+	number	feather	0	0..100		Feather
 effect	utility.overbrights	Utility	Overbrights
 	enum	channel	max-rgb	max-rgb|red|green|blue|alpha|luminance		Channel
 	color	highlightColor	#ff0000			Highlight Color
@@ -978,6 +1850,59 @@ effect	utility.colorprofileconverter	Utility	Color Profile Converter
 	enum	intent	relative-colorimetric	perceptual|relative-colorimetric|saturation|absolute-colorimetric		Intent
 	bool	useBlackPointCompensation	true			Use Black Point Compensation
 	enum	sceneRefCompensation	use-project-setting	on|off|use-project-setting		Scene-ref. Profile Compensation
+effect	utility.facetrackpoints	Utility	Face Track Points
+	number	leftEyebrowInner_x	0.46		picture widths	Left Eyebrow Inner (0 left, 1 right)
+	number	leftEyebrowInner_y	0.39		picture heights	Left Eyebrow Inner (0 top, 1 bottom)
+	number	leftEyebrowMiddle_x	0.42		picture widths	Left Eyebrow Middle (0 left, 1 right)
+	number	leftEyebrowMiddle_y	0.375		picture heights	Left Eyebrow Middle (0 top, 1 bottom)
+	number	leftEyebrowOuter_x	0.38		picture widths	Left Eyebrow Outer (0 left, 1 right)
+	number	leftEyebrowOuter_y	0.39		picture heights	Left Eyebrow Outer (0 top, 1 bottom)
+	number	rightEyebrowInner_x	0.54		picture widths	Right Eyebrow Inner (0 left, 1 right)
+	number	rightEyebrowInner_y	0.39		picture heights	Right Eyebrow Inner (0 top, 1 bottom)
+	number	rightEyebrowMiddle_x	0.58		picture widths	Right Eyebrow Middle (0 left, 1 right)
+	number	rightEyebrowMiddle_y	0.375		picture heights	Right Eyebrow Middle (0 top, 1 bottom)
+	number	rightEyebrowOuter_x	0.62		picture widths	Right Eyebrow Outer (0 left, 1 right)
+	number	rightEyebrowOuter_y	0.39		picture heights	Right Eyebrow Outer (0 top, 1 bottom)
+	number	leftEyeInner_x	0.4575		picture widths	Left Eye Inner (0 left, 1 right)
+	number	leftEyeInner_y	0.445		picture heights	Left Eye Inner (0 top, 1 bottom)
+	number	leftEyeOuter_x	0.3875		picture widths	Left Eye Outer (0 left, 1 right)
+	number	leftEyeOuter_y	0.445		picture heights	Left Eye Outer (0 top, 1 bottom)
+	number	leftEyeTop_x	0.4225		picture widths	Left Eye Top (0 left, 1 right)
+	number	leftEyeTop_y	0.427		picture heights	Left Eye Top (0 top, 1 bottom)
+	number	leftEyeBottom_x	0.4225		picture widths	Left Eye Bottom (0 left, 1 right)
+	number	leftEyeBottom_y	0.463		picture heights	Left Eye Bottom (0 top, 1 bottom)
+	number	leftPupil_x	0.4225		picture widths	Left Pupil (0 left, 1 right)
+	number	leftPupil_y	0.445		picture heights	Left Pupil (0 top, 1 bottom)
+	number	rightEyeInner_x	0.5425		picture widths	Right Eye Inner (0 left, 1 right)
+	number	rightEyeInner_y	0.445		picture heights	Right Eye Inner (0 top, 1 bottom)
+	number	rightEyeOuter_x	0.6125		picture widths	Right Eye Outer (0 left, 1 right)
+	number	rightEyeOuter_y	0.445		picture heights	Right Eye Outer (0 top, 1 bottom)
+	number	rightEyeTop_x	0.5775		picture widths	Right Eye Top (0 left, 1 right)
+	number	rightEyeTop_y	0.427		picture heights	Right Eye Top (0 top, 1 bottom)
+	number	rightEyeBottom_x	0.5775		picture widths	Right Eye Bottom (0 left, 1 right)
+	number	rightEyeBottom_y	0.463		picture heights	Right Eye Bottom (0 top, 1 bottom)
+	number	rightPupil_x	0.5775		picture widths	Right Pupil (0 left, 1 right)
+	number	rightPupil_y	0.445		picture heights	Right Pupil (0 top, 1 bottom)
+	number	noseTip_x	0.5		picture widths	Nose Tip (0 left, 1 right)
+	number	noseTip_y	0.535		picture heights	Nose Tip (0 top, 1 bottom)
+	number	leftNostril_x	0.48		picture widths	Left Nostril (0 left, 1 right)
+	number	leftNostril_y	0.55		picture heights	Left Nostril (0 top, 1 bottom)
+	number	rightNostril_x	0.52		picture widths	Right Nostril (0 left, 1 right)
+	number	rightNostril_y	0.55		picture heights	Right Nostril (0 top, 1 bottom)
+	number	mouthLeft_x	0.44		picture widths	Mouth Left (0 left, 1 right)
+	number	mouthLeft_y	0.625		picture heights	Mouth Left (0 top, 1 bottom)
+	number	mouthRight_x	0.56		picture widths	Mouth Right (0 left, 1 right)
+	number	mouthRight_y	0.625		picture heights	Mouth Right (0 top, 1 bottom)
+	number	mouthTop_x	0.5		picture widths	Mouth Top (0 left, 1 right)
+	number	mouthTop_y	0.60875		picture heights	Mouth Top (0 top, 1 bottom)
+	number	mouthBottom_x	0.5		picture widths	Mouth Bottom (0 left, 1 right)
+	number	mouthBottom_y	0.64125		picture heights	Mouth Bottom (0 top, 1 bottom)
+	number	chin_x	0.5		picture widths	Chin (0 left, 1 right)
+	number	chin_y	0.75		picture heights	Chin (0 top, 1 bottom)
+	number	leftJaw_x	0.34650000000000003		picture widths	Left Jaw (0 left, 1 right)
+	number	leftJaw_y	0.6435		picture heights	Left Jaw (0 top, 1 bottom)
+	number	rightJaw_x	0.6535		picture widths	Right Jaw (0 left, 1 right)
+	number	rightJaw_y	0.6435		picture heights	Right Jaw (0 top, 1 bottom)
 effect	utility.growbounds	Utility	Grow Bounds
 	number	pixels	0	0..4000		Pixels
 effect	utility.hdrcompander	Utility	HDR Compander

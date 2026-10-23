@@ -234,12 +234,17 @@ impl Importer<'_> {
                 Some((w, h)) => Some(VideoInfo {
                     width: w.round() as u32,
                     height: h.round() as u32,
+                    alpha: false,
                 }),
                 None if on_video || !on_audio => {
                     self.warn(format!(
                         "media `{id}` has no recorded frame size; assumed {width}x{height}"
                     ));
-                    Some(VideoInfo { width, height })
+                    Some(VideoInfo {
+                        width,
+                        height,
+                        alpha: false,
+                    })
                 }
                 None => None,
             };

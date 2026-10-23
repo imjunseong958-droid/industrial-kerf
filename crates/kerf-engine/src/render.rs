@@ -11,9 +11,7 @@ use crate::encoder::{
     SelectEncoderOptions, VideoCodec,
 };
 use crate::error::{EngineError, Result};
-use crate::ffmpeg::{
-    cached_encoder_listing, parse_time_seconds, resolve_ffmpeg_bin, tail, video_decode_prefix,
-};
+use crate::ffmpeg::{cached_encoder_listing, parse_time_seconds, resolve_ffmpeg_bin, tail};
 use crate::program::{compile_program, ProgramOptions};
 use crate::resources::{budget, should_try_hardware_encode};
 use crate::sidecar::{self, CancellationToken};
@@ -120,9 +118,10 @@ pub fn render_program_args(
             } else {
                 Vec::new()
             },
+            ..ProgramOptions::default()
         },
     )?;
-    let mut args: Vec<String> = video_decode_prefix().to_vec();
+    let mut args = crate::ffmpeg::program_decode_prefix(&compiled.argv);
     args.extend(compiled.argv.iter().skip(1).cloned());
     args.extend(if opts.draft {
         draft_codec_args()
@@ -155,7 +154,7 @@ where
     let project = match &opts.project_dir {
         Some(directory) => {
             let cache = crate::derivatives::DerivativeCache::new(directory);
-            baked = crate::raster::bake(project, &cache, cancellation)?;
+            baked = crate::raster::bake(project, sequence, &cache, cancellation)?;
             &baked
         }
         None => project,

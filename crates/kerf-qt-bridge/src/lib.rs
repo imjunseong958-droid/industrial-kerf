@@ -604,6 +604,7 @@ fn rendered_preview(program: &Project, output: &str) -> Option<Project> {
             video: Some(VideoInfo {
                 width: sequence.width,
                 height: sequence.height,
+                alpha: false,
             }),
             audio: Some(AudioInfo {
                 channels: 2,

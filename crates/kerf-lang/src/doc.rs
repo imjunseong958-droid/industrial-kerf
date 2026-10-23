@@ -535,7 +535,7 @@ fn unknown_param(
     )
 }
 
-/// `path= rate= [tc=] dur= [video=] [audio=] [reel=]`.
+/// `path= rate= [tc=] dur= [video= [alpha=]] [audio=] [reel=]`.
 pub(crate) fn media_fields(fields: &mut Fields<'_>, id: Id) -> Result<Media, Diagnostic> {
     let line = fields.line();
     let path = fields
@@ -558,9 +558,16 @@ pub(crate) fn media_fields(fields: &mut Fields<'_>, id: Id) -> Result<Media, Dia
     let duration = fields
         .take_with("dur", |text| clock.duration(text))?
         .ok_or_else(|| line.error(1, "missing `dur=`"))?;
-    let video = fields
-        .take_with("video", parse_size)?
-        .map(|(width, height)| VideoInfo { width, height });
+    let size = fields.take_with("video", parse_size)?;
+    let alpha = fields.take_bool("alpha")?.unwrap_or(false);
+    if alpha && size.is_none() {
+        return Err(line.error(1, "`alpha=` needs `video=`"));
+    }
+    let video = size.map(|(width, height)| VideoInfo {
+        width,
+        height,
+        alpha,
+    });
     let audio = fields.take_with("audio", parse_audio)?;
     let reel = fields.take_text("reel")?.map(str::to_owned);
     Ok(Media {
@@ -681,6 +688,9 @@ pub(crate) fn media_line(media: &Media) -> String {
     write!(line, " dur={}", clock.print_duration(media.duration)).unwrap();
     if let Some(video) = media.video {
         write!(line, " video={}x{}", video.width, video.height).unwrap();
+        if video.alpha {
+            line.push_str(" alpha=true");
+        }
     }
     if let Some(audio) = media.audio {
         write!(line, " audio={}ch@{}", audio.channels, audio.sample_rate).unwrap();
@@ -962,6 +972,20 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
         assert_eq!(printed, SAMPLE);
         let again = parse_document(&printed, Catalog::builtin()).unwrap();
         assert_eq!(again.project, document.project);
+    }
+
+    #[test]
+    fn transparent_pictures_round_trip() {
+        let text = SAMPLE.replace("video=3840x2160", "video=3840x2160 alpha=true");
+        let project = parse_document(&text, Catalog::builtin()).unwrap().project;
+        assert!(project.media[0].video.unwrap().alpha);
+        assert_eq!(
+            print_document(&project, Catalog::builtin(), PrintOptions::default()),
+            text
+        );
+        let without = SAMPLE.replace("video=3840x2160", "alpha=true");
+        let errors = parse_document(&without, Catalog::builtin()).unwrap_err();
+        assert!(errors[0].message.contains("needs `video=`"), "{errors:?}");
     }
 
     #[test]

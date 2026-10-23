@@ -9,10 +9,13 @@ generators is generated from the catalog:
 cargo run -p kerf-lang --example reference
 ```
 
-Raster effects (from EffectCraft) are listed there by id; `look` with
-`effect` gives one effect's parameters, and they are written like any other
-effect (`fx c1 add stylize.glow`). They run on a media clip's source picture
-before it is placed, so they apply before the clip's other effects.
+Raster effects and transitions (from EffectCraft) are listed there by id;
+`look` with `effect` gives one's parameters, and they are written like any
+other (`fx c1 add stylize.glow`, `transition add from=c1 to=c2
+fx=transition.radialwipe dur=12f`). A point parameter is two numbers across
+the picture, such as `center_x=0.5 center_y=0.5`. Raster effects run on the
+clip's own picture before it is placed, so they apply before the clip's
+other effects; a raster transition's progress follows the transition.
 
 ## Documents
 
@@ -37,6 +40,8 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   marker mk1 at=01:00:05:00 name="pickup needed" color=red
 ```
 
+- `alpha=true` after `video=` marks media whose picture carries
+  transparency; compositing keeps it.
 - `retired=` on the `project` line lists ids of deleted items. Ids are never
   reused, so an edit cannot claim one and generated ids skip them.
 - One line is one thing; two-space indentation nests tracks in sequences,

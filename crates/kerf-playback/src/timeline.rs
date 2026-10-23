@@ -450,8 +450,8 @@ pub fn preview_plan(project: &Project) -> PreviewPlan {
     match program_sequence(project, None) {
         Ok(sequence) if sequence.duration().is_positive() => {
             // Rendering bakes raster effects first; compile what it would.
-            let planned = kerf_core::raster::plan(project, Catalog::builtin(), |job| {
-                Ok::<_, std::convert::Infallible>(job.source.clone())
+            let planned = kerf_core::raster::plan(project, Catalog::builtin(), None, |_| {
+                Ok::<_, std::convert::Infallible>("baked.mkv".to_owned())
             })
             .unwrap_or_else(|never| match never {});
             if let Err(error) = compile_program(
@@ -559,6 +559,15 @@ impl NativeCheck<'_> {
             return Some("effects");
         }
         match &clip.content {
+            Content::Media { media, .. }
+                if self
+                    .project
+                    .media(media.as_str())
+                    .and_then(|media| media.video)
+                    .is_some_and(|video| video.alpha) =>
+            {
+                return Some("a picture with transparency")
+            }
             Content::Generator { .. } => return Some("a generator"),
             Content::Caption { .. } => return Some("captions"),
             Content::Sequence { .. } if clip.speed().value() != 1.0 => {

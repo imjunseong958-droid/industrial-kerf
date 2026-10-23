@@ -36,6 +36,9 @@ pub struct ProbeInfo {
     pub fps: Option<f64>,
     #[serde(rename = "hasAudio", skip_serializing_if = "Option::is_none")]
     pub has_audio: Option<bool>,
+    /// Whether the picture's pixel format carries transparency.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alpha: Option<bool>,
     #[serde(rename = "videoCodec", skip_serializing_if = "Option::is_none")]
     pub video_codec: Option<String>,
     #[serde(rename = "audioCodec", skip_serializing_if = "Option::is_none")]
@@ -147,6 +150,7 @@ struct FfprobeStream {
     codec_name: Option<String>,
     width: Option<u32>,
     height: Option<u32>,
+    pix_fmt: Option<String>,
     avg_frame_rate: Option<String>,
     r_frame_rate: Option<String>,
 }
@@ -173,6 +177,14 @@ pub fn parse_rate(rate: Option<&str>) -> Option<f64> {
     Some(numerator / denominator)
 }
 
+/// Whether an FFmpeg pixel format carries transparency: `yuva420p`,
+/// `rgba`, `bgra`, `argb`, `gbrap`, `ya8`, and their deeper variants.
+fn has_alpha(pix_fmt: &str) -> bool {
+    ["yuva", "gbrap", "ya", "rgba", "bgra", "argb", "abgr"]
+        .iter()
+        .any(|prefix| pix_fmt.starts_with(prefix))
+}
+
 pub fn parse_ffprobe_json(stdout: &str) -> Result<ProbeInfo> {
     let parsed: FfprobeOutput = serde_json::from_str(stdout)?;
     let streams = parsed.streams.unwrap_or_default();
@@ -197,6 +209,7 @@ pub fn parse_ffprobe_json(stdout: &str) -> Result<ProbeInfo> {
         result.fps = parse_rate(video.avg_frame_rate.as_deref())
             .or_else(|| parse_rate(video.r_frame_rate.as_deref()));
         result.video_codec = video.codec_name.clone();
+        result.alpha = video.pix_fmt.as_deref().map(has_alpha);
     }
     if let Some(audio) = audio {
         result.audio_codec = audio.codec_name.clone();
@@ -995,6 +1008,24 @@ pub fn cached_waveform_range(
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn transparency_comes_from_the_pixel_format() {
+        for format in [
+            "yuva420p",
+            "rgba",
+            "bgra",
+            "argb",
+            "gbrap10le",
+            "ya8",
+            "rgba64le",
+        ] {
+            assert!(has_alpha(format), "{format}");
+        }
+        for format in ["yuv420p", "yuvj422p", "rgb24", "gbrp", "nv12", "gray"] {
+            assert!(!has_alpha(format), "{format}");
+        }
+    }
 
     #[test]
     fn pairs_silence_start_end() {

@@ -2,14 +2,19 @@
 //!
 //! EffectCraft's effects run on premultiplied floating-point RGBA in layer
 //! space. Kerf carries those whose parameters it can write (numbers, angles,
-//! choices, switches, and colors) under its own ids: the catalog lists them
+//! choices, switches, colors, and points, which become an `_x` and a `_y`
+//! number across the picture) under its own ids: the catalog lists them
 //! from a table this crate generates (`kerf-model/src/raster_effects.tsv`),
 //! and [`RasterStack`] runs a clip's raster effects on its source frames.
+//!
+//! EffectCraft's transitions are effects too: a layer disappears as its
+//! `completion` goes from 0 to 100. Kerf carries them as transitions and
+//! drives `completion` across the transition itself.
 
 use effectcraft_effects::{Buf, EffectCtx, EffectEnv, EffectSpec, Image, ParamSpec, Params};
 use effectcraft_keyframe::Value as FxValue;
 use effectcraft_project::ParamUi;
-use kerf_model::{Catalog, Effect, Engine, Rgba, Time, Value};
+use kerf_model::{Catalog, Effect, Engine, FxKind, Rgba, Time, Value};
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::OnceLock;
@@ -19,8 +24,7 @@ pub const EFFECTCRAFT_REV: &str = "9581b53c3f8945683252af0eb5fac79e0e43aed4";
 
 /// Categories left out: sound, controls without a picture, effects kept for
 /// old projects, and those that need more than a clip's own pixels (other
-/// layers or frames, 3D channels, strokes, text layers). Transitions come
-/// later as Kerf transitions.
+/// layers or frames, 3D channels, strokes, text layers).
 const LEFT_OUT: &[&str] = &[
     "3D Channel",
     "Audio",
@@ -30,8 +34,14 @@ const LEFT_OUT: &[&str] = &[
     "Paint",
     "Text",
     "Time",
-    "Transition",
 ];
+
+/// The category whose effects Kerf carries as transitions.
+const TRANSITIONS: &str = "Transition";
+
+/// The parameter a transition is driven by, from 0 (all there) to 100
+/// (gone). Kerf animates it across the transition; it is not listed.
+pub const COMPLETION: &str = "completion";
 
 /// Effects that work from tracking or analysis data, painted strokes, or
 /// neighbouring frames, which a clip's own pixels do not give.
@@ -61,14 +71,29 @@ const RENAMED: &[(&str, Option<(&str, &str)>)] = &[
         "ec.stylize.ccthreshold",
         Some(("stylize.smooththreshold", "Smooth Threshold")),
     ),
+    (
+        "ec.blur.ccradial",
+        Some(("blur.radialzoom", "Radial Zoom Blur")),
+    ),
+    (
+        "ec.distort.ccsmear",
+        Some(("distort.pullsmear", "Pull Smear")),
+    ),
     ("ec.obsolete.mochashape", None),
 ];
 
-/// Kerf's id and name for an EffectCraft effect, if Kerf carries it.
-fn carried(spec: &EffectSpec) -> Option<(String, String)> {
+/// Kerf's id, name, and kind for an EffectCraft effect, if Kerf carries
+/// it.
+fn carried(spec: &EffectSpec) -> Option<(String, String, FxKind)> {
+    let kind = if spec.category == TRANSITIONS {
+        FxKind::Transition
+    } else {
+        FxKind::Effect
+    };
     if LEFT_OUT.contains(&spec.category)
         || NEEDS_MORE.contains(&spec.id)
         || !spec.params.iter().all(|p| writable(&p.ui))
+        || (kind == FxKind::Transition && !spec.params.iter().any(|p| p.id == COMPLETION))
     {
         return None;
     }
@@ -92,7 +117,7 @@ fn carried(spec: &EffectSpec) -> Option<(String, String)> {
     let graph = Catalog::builtin()
         .fx(&id)
         .is_some_and(|fx| fx.engine == Engine::Graph);
-    (!graph).then_some((id, name))
+    (!graph).then_some((id, name, kind))
 }
 
 fn writable(ui: &ParamUi) -> bool {
@@ -104,8 +129,14 @@ fn writable(ui: &ParamUi) -> bool {
             | ParamUi::Popup { .. }
             | ParamUi::Checkbox
             | ParamUi::Color
+            | ParamUi::Point
             | ParamUi::Hidden
     )
+}
+
+/// The `_x` and `_y` numbers a point parameter is written as.
+fn point_names(id: &str) -> [String; 2] {
+    [format!("{id}_x"), format!("{id}_y")]
 }
 
 /// The EffectCraft effect behind a Kerf raster effect id.
@@ -115,7 +146,7 @@ pub fn spec(id: &str) -> Option<&'static EffectSpec> {
         .get_or_init(|| {
             effectcraft_effects::registry()
                 .iter()
-                .filter_map(|spec| carried(spec).map(|(id, _)| (id, spec)))
+                .filter_map(|spec| carried(spec).map(|(id, ..)| (id, spec)))
                 .collect()
         })
         .get(id)
@@ -167,11 +198,47 @@ pub fn catalog_table() -> String {
          # Regenerate with `UPDATE_CATALOG=1 cargo test -p kerf-fx`.\n"
     );
     for spec in effectcraft_effects::registry() {
-        let Some((id, name)) = carried(spec) else {
+        let Some((id, name, kind)) = carried(spec) else {
             continue;
         };
-        writeln!(out, "effect\t{id}\t{}\t{name}", spec.category).unwrap();
-        for param in spec.params.iter().filter(|p| p.ui != ParamUi::Hidden) {
+        writeln!(out, "{}\t{id}\t{}\t{name}", kind.name(), spec.category).unwrap();
+        let listed = spec
+            .params
+            .iter()
+            .filter(|p| p.ui != ParamUi::Hidden)
+            .filter(|p| kind != FxKind::Transition || p.id != COMPLETION);
+        for param in listed {
+            assert!(
+                !param.id.contains(['\t', ' ', '=', '"', '{', '}']),
+                "{}: parameter `{}` is not a script word",
+                spec.id,
+                param.id
+            );
+            if let (ParamUi::Point, FxValue::Vec2([x, y])) = (&param.ui, &param.default) {
+                // A point is written as two numbers across the picture.
+                let [x_name, y_name] = point_names(param.id);
+                for other in &spec.params {
+                    assert!(
+                        other.id != x_name && other.id != y_name,
+                        "{}: {}",
+                        spec.id,
+                        other.id
+                    );
+                }
+                writeln!(
+                    out,
+                    "\tnumber\t{x_name}\t{x}\t\tpicture widths\t{} (0 left, 1 right)",
+                    param.name
+                )
+                .unwrap();
+                writeln!(
+                    out,
+                    "\tnumber\t{y_name}\t{y}\t\tpicture heights\t{} (0 top, 1 bottom)",
+                    param.name
+                )
+                .unwrap();
+                continue;
+            }
             let (ty, default, constraint, unit) = match (&param.ui, &param.default) {
                 (ParamUi::Popup { options }, FxValue::Enum(index)) => {
                     let choices = choices(options);
@@ -197,12 +264,6 @@ pub fn catalog_table() -> String {
                 },
                 (ui, default) => panic!("{}: `{}` is {ui:?} with {default:?}", spec.id, param.id),
             };
-            assert!(
-                !param.id.contains(['\t', ' ', '=', '"', '{', '}']),
-                "{}: parameter `{}` is not a script word",
-                spec.id,
-                param.id
-            );
             writeln!(
                 out,
                 "\t{ty}\t{}\t{default}\t{constraint}\t{unit}\t{}",
@@ -312,12 +373,26 @@ impl Step {
             .params
             .iter()
             .map(|param| {
-                let value = self
-                    .params
-                    .get(param.id)
-                    .filter(|_| param.ui != ParamUi::Hidden)
-                    .and_then(|set| convert(set.value_at(at), param))
-                    .unwrap_or_else(|| effectcraft_effects::default_value(param, layer_size));
+                let value = match (&param.ui, &param.default) {
+                    (ParamUi::Point, FxValue::Vec2(default)) => {
+                        // `_x` and `_y` across the picture, in its pixels.
+                        let [x, y] = point_names(param.id).map(|name| {
+                            self.params
+                                .get(&name)
+                                .and_then(|set| set.value_at(at).as_number())
+                        });
+                        FxValue::Vec2([
+                            x.unwrap_or(default[0]) * layer_size[0],
+                            y.unwrap_or(default[1]) * layer_size[1],
+                        ])
+                    }
+                    _ => self
+                        .params
+                        .get(param.id)
+                        .filter(|_| param.ui != ParamUi::Hidden)
+                        .and_then(|set| convert(set.value_at(at), param))
+                        .unwrap_or_else(|| effectcraft_effects::default_value(param, layer_size)),
+                };
                 (param.id.to_owned(), value)
             })
             .collect();
@@ -403,17 +478,35 @@ mod tests {
         for fx in raster {
             let spec = spec(fx.id.as_str()).unwrap_or_else(|| panic!("{}", fx.id));
             for param in &fx.params {
-                assert!(
-                    spec.params.iter().any(|p| p.id == param.name),
-                    "{}: {}",
-                    fx.id,
-                    param.name
-                );
+                let named = |p: &ParamSpec| {
+                    p.id == param.name
+                        || (p.ui == ParamUi::Point && point_names(p.id).contains(&param.name))
+                };
+                assert!(spec.params.iter().any(named), "{}: {}", fx.id, param.name);
+            }
+            if fx.kind == FxKind::Transition {
+                assert!(fx.find(COMPLETION).is_none(), "{}", fx.id);
             }
         }
         assert!(spec("blur.cross").is_some());
         assert!(spec("keying.screenkey").is_some());
         assert!(spec("keying.keylight").is_none());
+        assert!(spec("transition.linearwipe").is_some());
+    }
+
+    #[test]
+    fn points_are_written_across_the_picture() {
+        let spec = spec("transition.radialwipe").unwrap();
+        let step = Step {
+            spec,
+            params: [("center_x".to_owned(), Param::Static(Value::Number(0.25)))]
+                .into_iter()
+                .collect(),
+            seed: 0,
+        };
+        let values = step.values(Time::ZERO, [200.0, 100.0]);
+        // x as set, y at its default of the middle, both in pixels.
+        assert_eq!(values.v2("center"), [50.0, 50.0]);
     }
 
     #[test]
