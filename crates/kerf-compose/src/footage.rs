@@ -1,0 +1,655 @@
+//! Footage for the renderer: the frames each media clip shows, decoded by
+//! libav.
+//!
+//! Every media clip is a footage item of its own, and its layer's time is
+//! clip time, so the frame a clip shows is worked out here, exactly, from
+//! the clip's source in and speed. A frame is the one whose display starts
+//! at or before that source time, as a cut shows it. Decoders keep their
+//! place in a file and read on to the next frame; they seek only to go
+//! back or far ahead. Frames are converted to RGBA by libavfilter, as the
+//! graph converts them, and kept in a bounded cache.
+
+use effectcraft_project::{Footage as FootageItem, ItemId};
+use effectcraft_render::{FootageSource, Image};
+use effectcraft_time::{Tick, TICKS_PER_SECOND};
+use ffmpeg_next as ffmpeg;
+use ffmpeg_next::format::context::Input;
+use ffmpeg_next::{decoder, filter, frame, media};
+use kerf_model::time::FLICKS_PER_SECOND;
+use kerf_model::{Rate, Ratio, Time};
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex, OnceLock};
+
+/// Ticks per flick: EffectCraft's time unit divides Kerf's exactly.
+pub(crate) const TICKS_PER_FLICK: i64 = TICKS_PER_SECOND / FLICKS_PER_SECOND;
+
+/// Decoders kept open across reads.
+const MAX_DECODERS: usize = 8;
+
+/// How far ahead a decoder reads on instead of seeking.
+const READ_AHEAD_SECONDS: i64 = 2;
+
+/// Decoded frames kept by default.
+const CACHE_BUDGET: usize = 512 << 20;
+
+/// What a media clip shows: its media's frames, from `source_in` at
+/// `speed`.
+#[derive(Clone, Debug)]
+pub(crate) struct ClipSource {
+    pub path: String,
+    /// The media's picture rate and length in frames.
+    pub rate: Rate,
+    pub frames: i64,
+    pub width: u32,
+    pub height: u32,
+    /// The picture's transparency counts; otherwise it is opaque.
+    pub alpha: bool,
+    pub source_in: Time,
+    pub speed: Ratio,
+    pub duration: Time,
+}
+
+impl ClipSource {
+    /// The media frame shown at clip time `at`: the one showing at its
+    /// source time, which a reversed clip runs back from its source out.
+    pub fn frame_at(&self, at: Tick) -> i64 {
+        let ticks = |time: Time| i128::from(time.flicks()) * i128::from(TICKS_PER_FLICK);
+        let (num, den) = (
+            i128::from(self.speed.num().unsigned_abs()),
+            i128::from(self.speed.den()),
+        );
+        // Frames per tick, as a fraction over the clip speed's denominator.
+        let per = i128::from(TICKS_PER_SECOND) * i128::from(self.rate.den()) * den;
+        let at = i128::from(at.0);
+        let frame = if self.speed.is_reverse() {
+            // The frame showing just before the source position.
+            let out = ticks(self.source_in + self.speed.source_span(self.duration));
+            let position = (out * den - at * num) * i128::from(self.rate.num());
+            -(-position).div_euclid(per) - 1
+        } else {
+            let position = (ticks(self.source_in) * den + at * num) * i128::from(self.rate.num());
+            position.div_euclid(per)
+        };
+        frame.clamp(0, i128::from(self.frames.max(1) - 1)) as i64
+    }
+}
+
+/// The frames in a media of `duration` at `rate`, counting a last partial
+/// frame.
+pub(crate) fn frame_count(rate: Rate, duration: Time) -> i64 {
+    let per = i128::from(FLICKS_PER_SECOND) * i128::from(rate.den());
+    let span = i128::from(duration.flicks()) * i128::from(rate.num());
+    (-(-span).div_euclid(per)) as i64
+}
+
+/// The footage source a scene's renders read.
+pub(crate) struct LibavFootage {
+    clips: HashMap<ItemId, ClipSource>,
+    decoders: Mutex<Vec<Decoder>>,
+    cache: Mutex<FrameCache>,
+    problems: Mutex<BTreeMap<String, String>>,
+}
+
+impl LibavFootage {
+    pub fn new(clips: HashMap<ItemId, ClipSource>) -> Self {
+        Self {
+            clips,
+            decoders: Mutex::new(Vec::new()),
+            cache: Mutex::new(FrameCache::new(CACHE_BUDGET)),
+            problems: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    /// Files that could not be read, with why.
+    pub fn problems(&self) -> Vec<(String, String)> {
+        lock(&self.problems)
+            .iter()
+            .map(|(path, problem)| (path.clone(), problem.clone()))
+            .collect()
+    }
+
+    fn read(&self, item: ItemId, at: Tick, size: Option<(u32, u32)>) -> Option<Arc<Image>> {
+        let clip = self.clips.get(&item)?;
+        let index = clip.frame_at(at);
+        let size = size.unwrap_or((clip.width, clip.height));
+        let key = (clip.path.clone(), index, size);
+        if let Some(image) = lock(&self.cache).get(&key) {
+            return Some(image);
+        }
+        let mut decoder = match self.checkout(clip, index) {
+            Ok(decoder) => decoder,
+            Err(problem) => {
+                lock(&self.problems).insert(clip.path.clone(), problem);
+                return None;
+            }
+        };
+        let read = decoder.frame(index, size, clip.alpha);
+        self.give_back(decoder);
+        match read {
+            Ok(image) => {
+                let image = Arc::new(image);
+                lock(&self.cache).insert(key, image.clone());
+                Some(image)
+            }
+            Err(problem) => {
+                lock(&self.problems).insert(clip.path.clone(), problem);
+                None
+            }
+        }
+    }
+
+    /// A decoder for `clip`'s file: the one that can read on to `index`
+    /// soonest, or a new one.
+    fn checkout(&self, clip: &ClipSource, index: i64) -> Result<Decoder, String> {
+        let mut decoders = lock(&self.decoders);
+        let ahead = i64::from(clip.rate.num()) * READ_AHEAD_SECONDS / i64::from(clip.rate.den());
+        let reads_on = |decoder: &Decoder| {
+            decoder
+                .position()
+                .filter(|at| *at <= index && index - *at <= ahead.max(1))
+        };
+        let same_file = decoders
+            .iter()
+            .enumerate()
+            .filter(|(_, decoder)| decoder.path == clip.path);
+        let best = same_file
+            .clone()
+            .filter_map(|(at, decoder)| reads_on(decoder).map(|position| (at, position)))
+            .max_by_key(|(_, position)| *position)
+            .map(|(at, _)| at)
+            .or_else(|| same_file.map(|(at, _)| at).next_back());
+        match best {
+            Some(at) => Ok(decoders.remove(at)),
+            None => {
+                drop(decoders);
+                Decoder::open(&clip.path, clip.rate)
+            }
+        }
+    }
+
+    fn give_back(&self, decoder: Decoder) {
+        let mut decoders = lock(&self.decoders);
+        decoders.push(decoder);
+        if decoders.len() > MAX_DECODERS {
+            decoders.remove(0);
+        }
+    }
+}
+
+impl FootageSource for LibavFootage {
+    fn frame(&self, item: ItemId, _footage: &FootageItem, t: Tick) -> Option<Arc<Image>> {
+        self.read(item, t, None)
+    }
+
+    fn frame_at_size(
+        &self,
+        item: ItemId,
+        _footage: &FootageItem,
+        t: Tick,
+        width: u32,
+        height: u32,
+    ) -> Option<Arc<Image>> {
+        self.read(item, t, Some((width.max(1), height.max(1))))
+    }
+
+    fn set_cache_budget(&self, bytes: usize) {
+        lock(&self.cache).budget = bytes;
+    }
+
+    fn purge(&self) {
+        lock(&self.cache).clear();
+    }
+
+    fn forget(&self, path: &str) {
+        lock(&self.cache).forget(path);
+        lock(&self.decoders).retain(|decoder| decoder.path != path);
+        lock(&self.problems).remove(path);
+    }
+
+    fn cache_budget(&self) -> Option<usize> {
+        Some(lock(&self.cache).budget)
+    }
+
+    fn problem(&self, footage: &FootageItem) -> Option<String> {
+        lock(&self.problems).get(&footage.path).cloned()
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+type FrameKey = (String, i64, (u32, u32));
+
+/// Decoded frames, the least recently used dropped first past the budget.
+struct FrameCache {
+    frames: HashMap<FrameKey, (Arc<Image>, u64)>,
+    bytes: usize,
+    budget: usize,
+    clock: u64,
+}
+
+impl FrameCache {
+    fn new(budget: usize) -> Self {
+        Self {
+            frames: HashMap::new(),
+            bytes: 0,
+            budget,
+            clock: 0,
+        }
+    }
+
+    fn get(&mut self, key: &FrameKey) -> Option<Arc<Image>> {
+        self.clock += 1;
+        let clock = self.clock;
+        self.frames.get_mut(key).map(|(image, used)| {
+            *used = clock;
+            image.clone()
+        })
+    }
+
+    fn insert(&mut self, key: FrameKey, image: Arc<Image>) {
+        let bytes = image_bytes(&image);
+        if bytes > self.budget {
+            return;
+        }
+        self.clock += 1;
+        if let Some((old, _)) = self.frames.insert(key, (image, self.clock)) {
+            self.bytes -= image_bytes(&old);
+        }
+        self.bytes += bytes;
+        while self.bytes > self.budget {
+            let Some(oldest) = self
+                .frames
+                .iter()
+                .min_by_key(|(_, (_, used))| *used)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            if let Some((image, _)) = self.frames.remove(&oldest) {
+                self.bytes -= image_bytes(&image);
+            }
+        }
+    }
+
+    fn forget(&mut self, path: &str) {
+        let gone: Vec<FrameKey> = self
+            .frames
+            .keys()
+            .filter(|(file, ..)| file == path)
+            .cloned()
+            .collect();
+        for key in gone {
+            if let Some((image, _)) = self.frames.remove(&key) {
+                self.bytes -= image_bytes(&image);
+            }
+        }
+    }
+
+    fn clear(&mut self) {
+        self.frames.clear();
+        self.bytes = 0;
+    }
+}
+
+fn image_bytes(image: &Image) -> usize {
+    image.data.len() * std::mem::size_of::<[f32; 4]>()
+}
+
+fn init() -> Result<(), String> {
+    static INIT: OnceLock<Result<(), String>> = OnceLock::new();
+    INIT.get_or_init(|| {
+        ffmpeg::init()
+            .map(|()| ffmpeg::log::set_level(ffmpeg::log::Level::Error))
+            .map_err(|error| error.to_string())
+    })
+    .clone()
+}
+
+/// One open file, read forward frame by frame.
+struct Decoder {
+    path: String,
+    input: Input,
+    decoder: decoder::Video,
+    stream: usize,
+    time_base: (i64, i64),
+    /// The timestamp of the media's first frame.
+    first: i64,
+    rate: Rate,
+    /// The last frame read and the one after it, read ahead to see where
+    /// the last one ends.
+    current: Option<(i64, frame::Video)>,
+    ahead: Option<(i64, frame::Video)>,
+    eof: bool,
+    convert: Option<Convert>,
+}
+
+impl Decoder {
+    fn open(path: &str, rate: Rate) -> Result<Self, String> {
+        init()?;
+        let failed = |error: ffmpeg::Error| format!("{path}: {error}");
+        let input = ffmpeg::format::input(&path).map_err(failed)?;
+        let (stream, time_base, first, parameters) = {
+            let stream = input
+                .streams()
+                .best(media::Type::Video)
+                .ok_or_else(|| format!("{path}: no picture"))?;
+            let time_base = stream.time_base();
+            let start = stream.start_time();
+            (
+                stream.index(),
+                (
+                    i64::from(time_base.numerator()),
+                    i64::from(time_base.denominator()).max(1),
+                ),
+                if start == ffmpeg::ffi::AV_NOPTS_VALUE {
+                    0
+                } else {
+                    start
+                },
+                stream.parameters(),
+            )
+        };
+        let decoder = ffmpeg::codec::context::Context::from_parameters(parameters)
+            .and_then(|context| context.decoder().video())
+            .map_err(failed)?;
+        Ok(Self {
+            path: path.to_owned(),
+            input,
+            decoder,
+            stream,
+            time_base,
+            first,
+            rate,
+            current: None,
+            ahead: None,
+            eof: false,
+            convert: None,
+        })
+    }
+
+    /// The index of the last frame read, by the media's rate.
+    fn position(&self) -> Option<i64> {
+        self.current.as_ref().map(|(pts, _)| self.index_of(*pts))
+    }
+
+    /// Where frame `index` starts, in the stream's time base.
+    fn pts_of(&self, index: i64) -> i64 {
+        let (num, den) = self.time_base;
+        let ticks = i128::from(index) * i128::from(self.rate.den()) * i128::from(den);
+        let per = i128::from(self.rate.num()) * i128::from(num.max(1));
+        self.first + (ticks + per / 2).div_euclid(per) as i64
+    }
+
+    fn index_of(&self, pts: i64) -> i64 {
+        let (num, den) = self.time_base;
+        let ticks = i128::from(pts - self.first) * i128::from(num) * i128::from(self.rate.num());
+        let per = i128::from(den) * i128::from(self.rate.den());
+        // Rounded, as `pts_of` rounds.
+        (ticks + per / 2).div_euclid(per) as i64
+    }
+
+    /// Frame `index` as premultiplied RGBA at `size`: the last frame
+    /// starting by its start, give or take half a frame for timestamps
+    /// that round.
+    fn frame(&mut self, index: i64, size: (u32, u32), alpha: bool) -> Result<Image, String> {
+        let target = self.pts_of(index);
+        let limit = (target + self.pts_of(index + 1)) / 2;
+        let ahead = i64::from(self.rate.num()) * READ_AHEAD_SECONDS / i64::from(self.rate.den());
+        let far = self.pts_of(index - ahead.max(1));
+        let reads_on = self
+            .current
+            .as_ref()
+            .is_some_and(|(pts, _)| (far..=limit).contains(pts));
+        if !reads_on {
+            self.seek(target)?;
+        }
+        loop {
+            if self.ahead.is_none() {
+                self.ahead = self.next()?;
+            }
+            match &self.ahead {
+                Some((pts, _)) if *pts <= limit => self.current = self.ahead.take(),
+                _ => break,
+            }
+        }
+        // Before the first frame, the first frame shows.
+        let shown = self
+            .current
+            .as_ref()
+            .or(self.ahead.as_ref())
+            .map(|(_, frame)| frame)
+            .ok_or_else(|| format!("{}: frame {index} could not be read", self.path))?;
+        let mut convert = match self.convert.take() {
+            Some(convert) if convert.fits(shown, size) => convert,
+            _ => Convert::new(shown, size).map_err(|error| format!("{}: {error}", self.path))?,
+        };
+        let image = convert
+            .run(shown, alpha)
+            .map_err(|error| format!("{}: {error}", self.path));
+        self.convert = Some(convert);
+        image
+    }
+
+    fn seek(&mut self, pts: i64) -> Result<(), String> {
+        let (num, den) = self.time_base;
+        let micros = (i128::from(pts) * i128::from(num) * 1_000_000).div_euclid(i128::from(den));
+        let micros = micros as i64;
+        if self.input.seek(micros, ..micros).is_err() {
+            // Some files cannot seek; read them again from the top.
+            *self = Self::open(&self.path, self.rate)?;
+            return Ok(());
+        }
+        self.decoder.flush();
+        self.current = None;
+        self.ahead = None;
+        self.eof = false;
+        Ok(())
+    }
+
+    /// The next frame in decode order with its timestamp, or `None` at the
+    /// end.
+    fn next(&mut self) -> Result<Option<(i64, frame::Video)>, String> {
+        loop {
+            let mut decoded = frame::Video::empty();
+            match self.decoder.receive_frame(&mut decoded) {
+                Ok(()) => {
+                    let pts = decoded.timestamp().unwrap_or_else(|| {
+                        self.ahead
+                            .as_ref()
+                            .or(self.current.as_ref())
+                            .map_or(self.first, |(pts, _)| pts + self.pts_of(1) - self.first)
+                    });
+                    return Ok(Some((pts, decoded)));
+                }
+                Err(ffmpeg::Error::Eof) => return Ok(None),
+                Err(error) if is_again(&error) => {}
+                Err(error) => return Err(format!("{}: {error}", self.path)),
+            }
+            if self.eof {
+                return Ok(None);
+            }
+            match self.input.packets().next() {
+                Some((stream, packet)) if stream.index() == self.stream => {
+                    match self.decoder.send_packet(&packet) {
+                        Ok(()) => {}
+                        Err(error) if is_again(&error) => {}
+                        Err(ffmpeg::Error::Eof) => self.eof = true,
+                        // A damaged packet: read on.
+                        Err(_) => {}
+                    }
+                }
+                Some(_) => {}
+                None => {
+                    self.eof = true;
+                    let _ = self.decoder.send_eof();
+                }
+            }
+        }
+    }
+}
+
+fn is_again(error: &ffmpeg::Error) -> bool {
+    matches!(error, ffmpeg::Error::Other { errno } if *errno == ffmpeg::util::error::EAGAIN)
+}
+
+/// A filter graph turning decoded frames of one format and size into RGBA
+/// of another size.
+struct Convert {
+    graph: filter::Graph,
+    input: (ffmpeg::format::Pixel, u32, u32),
+    size: (u32, u32),
+}
+
+impl Convert {
+    fn new(frame: &frame::Video, size: (u32, u32)) -> Result<Self, ffmpeg::Error> {
+        let (width, height) = (frame.width(), frame.height());
+        let format = frame.format();
+        let name = format
+            .descriptor()
+            .map(|descriptor| descriptor.name().to_owned())
+            .filter(|name| !name.is_empty() && name != "none")
+            .unwrap_or_else(|| "yuv420p".to_owned());
+        let aspect = frame.aspect_ratio();
+        let aspect = if aspect.numerator() <= 0 || aspect.denominator() <= 0 {
+            (1, 1)
+        } else {
+            (aspect.numerator(), aspect.denominator())
+        };
+        let args = format!(
+            "video_size={width}x{height}:pix_fmt={name}:time_base=1/1:pixel_aspect={}/{}",
+            aspect.0, aspect.1
+        );
+        let spec = if (width, height) == size {
+            "format=rgba".to_owned()
+        } else {
+            format!("scale=w={}:h={}:flags=bicubic,format=rgba", size.0, size.1)
+        };
+        let mut graph = filter::Graph::new();
+        let buffer = filter::find("buffer").ok_or(ffmpeg::Error::FilterNotFound)?;
+        let sink = filter::find("buffersink").ok_or(ffmpeg::Error::FilterNotFound)?;
+        graph.add(&buffer, "in", &args)?;
+        graph.add(&sink, "out", "")?;
+        graph.output("in", 0)?.input("out", 0)?.parse(&spec)?;
+        graph.validate()?;
+        Ok(Self {
+            graph,
+            input: (format, width, height),
+            size,
+        })
+    }
+
+    fn fits(&self, frame: &frame::Video, size: (u32, u32)) -> bool {
+        self.input == (frame.format(), frame.width(), frame.height()) && self.size == size
+    }
+
+    fn run(&mut self, frame: &frame::Video, alpha: bool) -> Result<Image, String> {
+        let mut source = self
+            .graph
+            .get("in")
+            .ok_or("the filter graph has no source")?;
+        source
+            .source()
+            .add(frame)
+            .map_err(|error| error.to_string())?;
+        let mut sink = self
+            .graph
+            .get("out")
+            .ok_or("the filter graph has no sink")?;
+        let mut rgba = frame::Video::empty();
+        sink.sink()
+            .frame(&mut rgba)
+            .map_err(|error| error.to_string())?;
+        Ok(premultiplied(&rgba, alpha))
+    }
+}
+
+/// Straight 8-bit RGBA as EffectCraft's premultiplied float image, opaque
+/// unless `alpha` says the picture's transparency counts.
+fn premultiplied(rgba: &frame::Video, alpha: bool) -> Image {
+    let (width, height) = (rgba.width(), rgba.height());
+    let stride = rgba.stride(0);
+    let data = rgba.data(0);
+    let mut image = Image::new(width, height);
+    for (y, row) in image.data.chunks_exact_mut(width as usize).enumerate() {
+        let line = &data[y * stride..y * stride + width as usize * 4];
+        for (pixel, bytes) in row.iter_mut().zip(line.chunks_exact(4)) {
+            let alpha = if alpha {
+                f32::from(bytes[3]) / 255.0
+            } else {
+                1.0
+            };
+            let channel = |value: u8| f32::from(value) / 255.0 * alpha;
+            *pixel = [
+                channel(bytes[0]),
+                channel(bytes[1]),
+                channel(bytes[2]),
+                alpha,
+            ];
+        }
+    }
+    image
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn clip(source_in: i64, speed: &str, duration: i64) -> ClipSource {
+        ClipSource {
+            path: String::new(),
+            rate: Rate::FPS_24,
+            frames: 240,
+            width: 16,
+            height: 9,
+            alpha: false,
+            source_in: Rate::FPS_24.time_of(source_in),
+            speed: Ratio::parse(speed).unwrap(),
+            duration: Rate::FPS_24.time_of(duration),
+        }
+    }
+
+    fn at(frames: i64, rate: Rate) -> Tick {
+        Tick(rate.time_of(frames).flicks() * TICKS_PER_FLICK)
+    }
+
+    #[test]
+    fn clips_show_their_source_frame_by_frame() {
+        let forward = clip(10, "1", 48);
+        assert_eq!(forward.frame_at(at(0, Rate::FPS_24)), 10);
+        assert_eq!(forward.frame_at(at(5, Rate::FPS_24)), 15);
+        // Handles before the clip show the frames before its source in.
+        assert_eq!(forward.frame_at(at(-3, Rate::FPS_24)), 7);
+        let fast = clip(10, "2", 24);
+        assert_eq!(fast.frame_at(at(5, Rate::FPS_24)), 20);
+        let slow = clip(10, "1/2", 48);
+        assert_eq!(slow.frame_at(at(5, Rate::FPS_24)), 12);
+    }
+
+    #[test]
+    fn reversed_clips_run_back_from_their_source_out() {
+        // Source [10, 58): the first frame is 57.
+        let reverse = clip(10, "-1", 48);
+        assert_eq!(reverse.frame_at(at(0, Rate::FPS_24)), 57);
+        assert_eq!(reverse.frame_at(at(47, Rate::FPS_24)), 10);
+        let fast = clip(10, "-2", 24);
+        assert_eq!(fast.frame_at(at(0, Rate::FPS_24)), 57);
+        assert_eq!(fast.frame_at(at(1, Rate::FPS_24)), 55);
+    }
+
+    #[test]
+    fn other_rates_take_the_frame_showing() {
+        // 30 fps media in a 24 fps sequence: frame 1 of the sequence is at
+        // 1.25 media frames.
+        let clip = ClipSource {
+            rate: Rate::FPS_30,
+            ..clip(0, "1", 48)
+        };
+        assert_eq!(clip.frame_at(at(1, Rate::FPS_24)), 1);
+        assert_eq!(clip.frame_at(at(4, Rate::FPS_24)), 5);
+        assert_eq!(frame_count(Rate::FPS_30, Rate::FPS_24.time_of(1)), 2);
+    }
+}

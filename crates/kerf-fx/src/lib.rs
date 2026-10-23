@@ -381,38 +381,60 @@ impl RasterStack {
 }
 
 impl Step {
-    /// EffectCraft's parameters at clip time `at`: Kerf's value where the
-    /// clip sets one, the effect's default otherwise.
+    /// EffectCraft's parameters at clip time `at`.
     fn values(&self, at: Time, layer_size: [f64; 2]) -> Params {
         let values = self
             .spec
             .params
             .iter()
             .map(|param| {
-                let value = match (&param.ui, &param.default) {
-                    (ParamUi::Point, FxValue::Vec2(default)) => {
-                        // `_x` and `_y` across the picture, in its pixels.
-                        let [x, y] = point_names(param.id).map(|name| {
-                            self.params
-                                .get(&name)
-                                .and_then(|set| set.value_at(at).as_number())
-                        });
-                        FxValue::Vec2([
-                            x.unwrap_or(default[0]) * layer_size[0],
-                            y.unwrap_or(default[1]) * layer_size[1],
-                        ])
-                    }
-                    _ => self
-                        .params
-                        .get(param.id)
-                        .filter(|_| param.ui != ParamUi::Hidden)
-                        .and_then(|set| convert(set.value_at(at), param))
-                        .unwrap_or_else(|| effectcraft_effects::default_value(param, layer_size)),
-                };
-                (param.id.to_owned(), value)
+                (
+                    param.id.to_owned(),
+                    value_at(param, &self.params, at, layer_size),
+                )
             })
             .collect();
         Params { values }
+    }
+}
+
+/// The value of an EffectCraft parameter at clip time `at`: Kerf's value
+/// where the clip sets one, the effect's default otherwise. A point is
+/// read from its `_x` and `_y` numbers across a picture of `layer_size`
+/// pixels.
+pub fn value_at(
+    param: &ParamSpec,
+    params: &kerf_model::Params,
+    at: Time,
+    layer_size: [f64; 2],
+) -> FxValue {
+    match (&param.ui, &param.default) {
+        (ParamUi::Point, FxValue::Vec2(default)) => {
+            let [x, y] = point_names(param.id).map(|name| {
+                params
+                    .get(&name)
+                    .and_then(|set| set.value_at(at).as_number())
+            });
+            FxValue::Vec2([
+                x.unwrap_or(default[0]) * layer_size[0],
+                y.unwrap_or(default[1]) * layer_size[1],
+            ])
+        }
+        _ => params
+            .get(param.id)
+            .filter(|_| param.ui != ParamUi::Hidden)
+            .and_then(|set| convert(set.value_at(at), param))
+            .unwrap_or_else(|| effectcraft_effects::default_value(param, layer_size)),
+    }
+}
+
+/// Whether the clip's Kerf parameters animate an EffectCraft parameter.
+pub fn is_animated(param: &ParamSpec, params: &kerf_model::Params) -> bool {
+    let animated = |name: &str| matches!(params.get(name), Some(kerf_model::Param::Animated(_)));
+    match param.ui {
+        ParamUi::Point => point_names(param.id).iter().any(|name| animated(name)),
+        ParamUi::Hidden => false,
+        _ => animated(param.id),
     }
 }
 

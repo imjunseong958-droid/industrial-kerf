@@ -1,0 +1,158 @@
+//! What the compositor draws where the graph cannot be asked: text,
+//! blend modes, and raster effects on adjustment layers.
+
+use kerf_compose::{ComposeError, ComposeOptions, Compositor, Frame};
+use kerf_lang::parse_document;
+use kerf_model::{Catalog, Rate};
+
+fn compositor(body: &str, captions: bool) -> Result<Compositor, ComposeError> {
+    let project = parse_document(
+        &format!("kerf 1\nproject name=\"t\"\n{body}"),
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project;
+    Compositor::new(
+        &project,
+        Catalog::builtin(),
+        &ComposeOptions {
+            sequence: None,
+            captions,
+        },
+    )
+}
+
+fn frame(body: &str, at: i64, captions: bool) -> Frame {
+    let compositor = compositor(body, captions).expect("composes");
+    compositor.frame(Rate::FPS_24.time_of(at), 1.0)
+}
+
+fn pixel(frame: &Frame, x: u32, y: u32) -> [u8; 3] {
+    let at = ((y * frame.width + x) * 4) as usize;
+    [frame.rgba[at], frame.rgba[at + 1], frame.rgba[at + 2]]
+}
+
+/// The bounds of the pixels brighter than `level`, as (left, top, right,
+/// bottom), if any are.
+fn bright(frame: &Frame, level: u8) -> Option<(u32, u32, u32, u32)> {
+    let mut bounds: Option<(u32, u32, u32, u32)> = None;
+    for y in 0..frame.height {
+        for x in 0..frame.width {
+            if pixel(frame, x, y).iter().all(|c| *c > level) {
+                let (l, t, r, b) = bounds.unwrap_or((x, y, x, y));
+                bounds = Some((l.min(x), t.min(y), r.max(x), b.max(y)));
+            }
+        }
+    }
+    bounds
+}
+
+const SEQUENCE: &str = "sequence s1 rate=24 size=320x180 audio=48000\n";
+
+#[test]
+fn titles_are_centered_on_the_frame() {
+    let body = format!(
+        "{SEQUENCE}\
+         \x20 track V1 video\n\
+         \x20   clip t1 gen=title at=0f dur=24f\n\
+         \x20     set text=\"KERF\" size=0.25\n"
+    );
+    let frame = frame(&body, 6, false);
+    let (left, top, right, bottom) = bright(&frame, 200).expect("the title shows");
+    let (x, y) = ((left + right) / 2, (top + bottom) / 2);
+    assert!(
+        x.abs_diff(160) <= 6 && y.abs_diff(90) <= 8,
+        "centered at {x}, {y}"
+    );
+    // A quarter of the frame tall: capitals about 0.7 of that.
+    assert!((25..=45).contains(&(bottom - top)), "{} tall", bottom - top);
+}
+
+#[test]
+fn titles_aligned_left_begin_at_the_center() {
+    let body = format!(
+        "{SEQUENCE}\
+         \x20 track V1 video\n\
+         \x20   clip t1 gen=title at=0f dur=24f\n\
+         \x20     set text=\"KERF\" size=0.2 align=left x=0.1\n"
+    );
+    let frame = frame(&body, 0, false);
+    let (left, ..) = bright(&frame, 200).expect("the title shows");
+    // The center, moved a tenth of the frame right.
+    assert!(left.abs_diff(192) <= 6, "begins at {left}");
+}
+
+#[test]
+fn captions_are_burned_in_only_when_asked() {
+    let body = format!(
+        "{SEQUENCE}\
+         \x20 track S1 subtitle\n\
+         \x20   clip c1 caption=\"Hello there\" at=0f dur=24f\n"
+    );
+    let shown = frame(&body, 3, true);
+    let (_, top, _, bottom) = bright(&shown, 200).expect("the caption shows");
+    assert!(top > 140 && bottom < 180, "at rows {top}..{bottom}");
+    assert!(bright(&frame(&body, 3, false), 200).is_none());
+    // Not after it ends.
+    assert!(bright(&frame(&body, 30, true), 200).is_none());
+}
+
+#[test]
+fn blend_modes_combine_with_the_layers_below() {
+    let body = format!(
+        "{SEQUENCE}\
+         \x20 track V1 video\n\
+         \x20   clip g1 gen=solid at=0f dur=24f\n\
+         \x20     set color=#808080\n\
+         \x20 track V2 video\n\
+         \x20   clip g2 gen=solid at=0f dur=24f\n\
+         \x20     set color=#ff8000 blend=multiply\n\
+         \x20 track V3 video\n\
+         \x20   clip g3 gen=solid at=0f dur=24f\n\
+         \x20     set color=#202020 blend=screen scale=0.5\n"
+    );
+    let frame = frame(&body, 0, false);
+    let multiplied = pixel(&frame, 10, 10);
+    assert!(
+        multiplied[0].abs_diff(128) <= 2 && multiplied[1].abs_diff(64) <= 2 && multiplied[2] <= 2,
+        "{multiplied:?}"
+    );
+    // Screen lightens: 1 - (1 - a)(1 - b).
+    let screened = pixel(&frame, 160, 90);
+    assert!(screened[0].abs_diff(144) <= 3, "{screened:?}");
+}
+
+#[test]
+fn adjustment_layers_take_raster_effects() {
+    let body = format!(
+        "{SEQUENCE}\
+         \x20 track V1 video\n\
+         \x20   clip g1 gen=solid at=0f dur=24f\n\
+         \x20     set color=#ff0000\n\
+         \x20 track V2 video\n\
+         \x20   clip a1 gen=adjustment at=0f dur=12f\n\
+         \x20     fx channel.invert\n"
+    );
+    // Red inverted is cyan while the adjustment layer lasts.
+    assert_eq!(pixel(&frame(&body, 4, false), 50, 50), [0, 255, 255]);
+    assert_eq!(pixel(&frame(&body, 16, false), 50, 50), [255, 0, 0]);
+}
+
+#[test]
+fn unsupported_things_are_named() {
+    let body = format!(
+        "{SEQUENCE}\
+         \x20 track V1 video\n\
+         \x20   clip a1 gen=adjustment at=0f dur=24f\n\
+         \x20     fx channel.invert\n\
+         \x20   clip g1 gen=solid at=24f dur=24f\n\
+         \x20   transition x1 from=a1 to=g1 fx=dissolve dur=6f\n"
+    );
+    match compositor(&body, false) {
+        Err(error @ ComposeError::Unsupported { .. }) => {
+            assert_eq!(error.entity(), Some("a1"), "{error}");
+        }
+        Err(other) => panic!("{other}"),
+        Ok(_) => panic!("a dissolve out of an adjustment layer draws"),
+    }
+}

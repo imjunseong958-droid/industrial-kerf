@@ -3,6 +3,7 @@ members = [
     "crates/kerf-core",
     "crates/kerf-model",
     "crates/kerf-fx",
+    "crates/kerf-compose",
     "crates/kerf-lang",
     "crates/kerf-engine",
     "crates/kerf-playback",
