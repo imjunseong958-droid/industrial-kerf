@@ -1,4 +1,5 @@
 use crate::PlaybackError;
+use kerf_compose::{ComposeOptions, Compositor};
 use kerf_core::preview::{FindingSeverity, PreviewMode, PreviewPlan, PreviewRange, PreviewReason};
 use kerf_core::program::{compile_program, program_sequence, ProgramError, ProgramOptions};
 use kerf_model::{
@@ -479,61 +480,97 @@ impl Flattener<'_> {
     }
 }
 
-/// Whether native playback shows the first sequence exactly as a render
-/// would. Anything it cannot show is a reason to play a rendered preview
-/// instead; anything the renderer cannot render makes both unavailable.
+/// How the viewer plays the first sequence: natively when that shows it
+/// exactly as a render would, otherwise with the compositor drawing the
+/// picture live. Its reasons then say what playback or an export does not
+/// match yet: sound that native playback approximates, and what an export
+/// cannot render. A rendered preview stands in when the compositor cannot
+/// draw the program either, and nothing plays when neither it nor a render
+/// can.
 pub fn preview_plan(project: &Project) -> PreviewPlan {
-    let mut reasons = Vec::new();
-    let mut unavailable = false;
-    match program_sequence(project, None) {
-        Ok(sequence) if sequence.duration().is_positive() => {
-            // Rendering bakes raster effects first; compile what it would.
-            let planned = kerf_core::raster::plan(project, Catalog::builtin(), None, |_| {
-                Ok::<_, std::convert::Infallible>("baked.mkv".to_owned())
-            })
-            .unwrap_or_else(|never| match never {});
-            if let Err(error) = compile_program(
-                &planned.project,
-                Catalog::builtin(),
-                &ProgramOptions::default(),
-            ) {
-                unavailable = true;
-                reasons.push(reason(
-                    "compiler_rejected_feature",
-                    error.entity(),
-                    None,
-                    error.to_string(),
-                    FindingSeverity::Error,
-                ));
-            }
-            NativeCheck {
-                project,
-                reasons: &mut reasons,
-                depth: 0,
-            }
-            .sequence(sequence, Time::ZERO);
-        }
-        Ok(_) => {}
+    let sequence = match program_sequence(project, None) {
+        Ok(sequence) => sequence,
         Err(ProgramError::Invalid(message) | ProgramError::Unsupported { what: message, .. }) => {
-            unavailable = true;
+            return plan(
+                PreviewMode::Unavailable,
+                vec![reason(
+                    "compiler_rejected_feature",
+                    None,
+                    None,
+                    message,
+                    FindingSeverity::Error,
+                )],
+            );
+        }
+    };
+    if !sequence.duration().is_positive() {
+        return plan(PreviewMode::NativeExact, Vec::new());
+    }
+    // Rendering bakes raster effects first; compile what it would.
+    let planned = kerf_core::raster::plan(project, Catalog::builtin(), None, |_| {
+        Ok::<_, std::convert::Infallible>("baked.mkv".to_owned())
+    })
+    .unwrap_or_else(|never| match never {});
+    let rejected = compile_program(
+        &planned.project,
+        Catalog::builtin(),
+        &ProgramOptions::default(),
+    )
+    .err()
+    .map(|error| {
+        reason(
+            "compiler_rejected_feature",
+            error.entity(),
+            None,
+            error.to_string(),
+            FindingSeverity::Error,
+        )
+    });
+    let mut check = NativeCheck {
+        project,
+        picture: Vec::new(),
+        sound: Vec::new(),
+        depth: 0,
+    };
+    check.sequence(sequence, Time::ZERO);
+    let NativeCheck { picture, sound, .. } = check;
+    if rejected.is_none() && picture.is_empty() && sound.is_empty() {
+        return plan(PreviewMode::NativeExact, Vec::new());
+    }
+    match Compositor::new(project, Catalog::builtin(), &ComposeOptions::default()) {
+        Ok(_) => {
+            let mut reasons = sound;
+            reasons.extend(rejected.map(|reason| PreviewReason {
+                severity: FindingSeverity::Warning,
+                ..reason
+            }));
+            plan(PreviewMode::Composited, reasons)
+        }
+        Err(error) => {
+            let mut reasons = picture;
+            reasons.extend(sound);
             reasons.push(reason(
-                "compiler_rejected_feature",
+                "compositor_rejected_feature",
+                error.entity(),
                 None,
-                None,
-                message,
+                error.to_string(),
                 FindingSeverity::Error,
             ));
+            let mode = match rejected {
+                None => PreviewMode::RenderedFallback,
+                Some(rejected) => {
+                    reasons.push(rejected);
+                    PreviewMode::Unavailable
+                }
+            };
+            plan(mode, reasons)
         }
     }
+}
+
+fn plan(mode: PreviewMode, mut reasons: Vec<PreviewReason>) -> PreviewPlan {
     let reasons_truncated = reasons.len() > kerf_core::preview::MAX_PREVIEW_REASONS;
     reasons.truncate(kerf_core::preview::MAX_PREVIEW_REASONS);
-    let mode = if unavailable {
-        PreviewMode::Unavailable
-    } else if reasons.is_empty() {
-        PreviewMode::NativeExact
-    } else {
-        PreviewMode::RenderedFallback
-    };
     PreviewPlan {
         mode,
         range: None,
@@ -559,9 +596,12 @@ fn reason(
     }
 }
 
+/// What native playback does not show of a sequence, picture and sound
+/// apart.
 struct NativeCheck<'a> {
     project: &'a Project,
-    reasons: &'a mut Vec<PreviewReason>,
+    picture: Vec<PreviewReason>,
+    sound: Vec<PreviewReason>,
     depth: usize,
 }
 
@@ -571,14 +611,16 @@ impl NativeCheck<'_> {
             return;
         }
         for track in sequence.tracks.iter().filter(|track| track.enabled) {
+            let sound = track.kind == TrackKind::Audio;
             for transition in &track.transitions {
-                self.push(&transition.id, None, "a transition");
+                let what = if sound { "a crossfade" } else { "a transition" };
+                self.push(&transition.id, None, what, sound);
             }
             for clip in track.clips.iter().filter(|clip| clip.enabled) {
                 let range =
                     PreviewRange::new((clip.start + at).seconds(), (clip.end() + at).seconds());
                 if let Some(what) = self.unsupported(track.kind, clip) {
-                    self.push(&clip.id, range, what);
+                    self.push(&clip.id, range, what, sound);
                 }
                 if let Content::Sequence { sequence: id, .. } = &clip.content {
                     if let Some(nested) = self.project.sequence(id.as_str()) {
@@ -648,12 +690,29 @@ impl NativeCheck<'_> {
         })
     }
 
-    fn push(&mut self, entity: &kerf_model::Id, range: Option<PreviewRange>, what: &str) {
-        self.reasons.push(reason(
+    fn push(
+        &mut self,
+        entity: &kerf_model::Id,
+        range: Option<PreviewRange>,
+        what: &str,
+        sound: bool,
+    ) {
+        let (reasons, message) = if sound {
+            (
+                &mut self.sound,
+                format!("`{entity}` uses {what}, whose sound only a render plays exactly"),
+            )
+        } else {
+            (
+                &mut self.picture,
+                format!("`{entity}` uses {what}, which native playback does not show"),
+            )
+        };
+        reasons.push(reason(
             "live_offline_capability_mismatch",
             Some(entity.as_str()),
             range,
-            format!("`{entity}` uses {what}, which native playback does not show"),
+            message,
             FindingSeverity::Warning,
         ));
     }
@@ -783,23 +842,50 @@ mod tests {
     }
 
     #[test]
-    fn preview_plan_asks_for_a_render_when_playback_would_differ() {
+    fn preview_plan_draws_what_native_playback_cannot() {
         let plain = project("  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n");
         assert_eq!(preview_plan(&plain).mode, PreviewMode::NativeExact);
         let cropped = project(
             "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      set crop_l=0.5\n",
         );
+        // The compositor draws it, so nothing is left to say.
         let plan = preview_plan(&cropped);
-        assert_eq!(plan.mode, PreviewMode::RenderedFallback);
-        assert_eq!(plan.reasons[0].entity_id.as_deref(), Some("c1"));
+        assert_eq!(plan.mode, PreviewMode::Composited);
+        assert!(plan.reasons.is_empty(), "{:?}", plan.reasons);
+        // The compositor blends, though an export cannot yet.
         let blended = project(
             "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      set blend=screen\n",
         );
-        assert_eq!(preview_plan(&blended).mode, PreviewMode::Unavailable);
+        let plan = preview_plan(&blended);
+        assert_eq!(plan.mode, PreviewMode::Composited);
+        assert_eq!(plan.reasons[0].code, "compiler_rejected_feature");
         let gained = project(
             "  track A1 audio\n    clip a1 media=source-b src=0s at=0s dur=2s\n      set gain=-3\n",
         );
         assert_eq!(preview_plan(&gained).mode, PreviewMode::NativeExact);
+        // Sound native playback approximates is noted, not a reason to render.
+        let crossfaded = project(
+            "  track A1 audio\n    clip a1 media=source-b src=1s at=0s dur=2s\n    \
+             clip a2 media=source-b src=4s at=2s dur=2s\n    \
+             transition x1 from=a1 to=a2 fx=crossfade dur=10f\n",
+        );
+        let plan = preview_plan(&crossfaded);
+        assert_eq!(plan.mode, PreviewMode::Composited);
+        assert!(
+            plan.reasons[0]
+                .message
+                .contains("only a render plays exactly"),
+            "{:?}",
+            plan.reasons
+        );
+        // Neither the compositor nor a render plays a transition out of an
+        // adjustment layer.
+        let adjusted = project(
+            "  track V1 video\n    clip a1 gen=adjustment at=0s dur=2s\n    \
+             clip g1 gen=solid at=2s dur=2s\n    \
+             transition x1 from=a1 to=g1 fx=dissolve dur=10f\n",
+        );
+        assert_eq!(preview_plan(&adjusted).mode, PreviewMode::Unavailable);
     }
 
     #[test]

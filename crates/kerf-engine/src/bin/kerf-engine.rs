@@ -83,24 +83,34 @@ enum Commands {
         #[arg(long)]
         output: String,
     },
-    /// Draw one frame of a project through the compositor, as a PNG.
+    /// Draw a frame of a project through the compositor, as a PNG.
     Frame {
-        /// The `.kerf` document.
-        project: PathBuf,
-        /// Where in the sequence: seconds, or frames with `f` (`48f`).
-        #[arg(long)]
-        at: String,
-        #[arg(long)]
-        sequence: Option<String>,
-        /// The size drawn, as a fraction of the canvas.
-        #[arg(long, default_value_t = 1.0)]
-        scale: f64,
-        /// Burn captions in, as a render does.
-        #[arg(long)]
-        captions: bool,
-        #[arg(long)]
-        out: PathBuf,
+        #[command(flatten)]
+        options: FrameArgs,
     },
+}
+
+#[derive(clap::Args)]
+struct FrameArgs {
+    /// The `.kerf` document.
+    project: PathBuf,
+    /// Where in the sequence: seconds, or frames with `f` (`48f`).
+    #[arg(long)]
+    at: String,
+    #[arg(long)]
+    sequence: Option<String>,
+    /// The size drawn, as a fraction of the canvas.
+    #[arg(long, default_value_t = 1.0)]
+    scale: f64,
+    /// Burn captions in, as a render does.
+    #[arg(long)]
+    captions: bool,
+    /// Draw this many frames on from `--at`, as playback does, and time
+    /// them; the last is written.
+    #[arg(long, default_value_t = 1)]
+    frames: u32,
+    #[arg(long)]
+    out: PathBuf,
 }
 
 #[derive(Subcommand)]
@@ -427,14 +437,7 @@ fn main() -> Result<()> {
             proxy_run(&input, &output, &settings, duration)?;
             print_json(&json!({ "ok": true, "output": output }))?;
         }
-        Commands::Frame {
-            project,
-            at,
-            sequence,
-            scale,
-            captions,
-            out,
-        } => print_json(&draw_frame(&project, &at, sequence, scale, captions, &out)?)?,
+        Commands::Frame { options } => print_json(&draw_frame(&options)?)?,
     }
     Ok(())
 }
@@ -525,15 +528,9 @@ fn run_transcription(
     }
 }
 
-/// Draw a frame of `path` with the compositor and write it to `out`.
-fn draw_frame(
-    path: &std::path::Path,
-    at: &str,
-    sequence: Option<String>,
-    scale: f64,
-    captions: bool,
-    out: &std::path::Path,
-) -> Result<Value> {
+/// Draw frames of a project with the compositor and write the last.
+fn draw_frame(args: &FrameArgs) -> Result<Value> {
+    let path = args.project.as_path();
     let text =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let catalog = kerf_model::Catalog::builtin();
@@ -553,9 +550,13 @@ fn draw_frame(
     let compositor = kerf_compose::Compositor::new(
         &project,
         catalog,
-        &kerf_compose::ComposeOptions { sequence, captions },
+        &kerf_compose::ComposeOptions {
+            sequence: args.sequence.clone(),
+            captions: args.captions,
+        },
     )?;
     let rate = compositor.rate();
+    let at = args.at.as_str();
     let time = match at.strip_suffix('f') {
         Some(frames) => rate.time_of(frames.trim().parse().context("--at frames")?),
         None => {
@@ -567,16 +568,27 @@ fn draw_frame(
             rate.time_of(rate.frames_floor(time))
         }
     };
-    let started = std::time::Instant::now();
-    let frame = compositor.frame(time, scale);
-    let millis = started.elapsed().as_secs_f64() * 1000.0;
-    kerf_engine::still::write_png(&frame, out)?;
+    let first = rate.frames_floor(time);
+    let mut times = Vec::new();
+    let mut frame = None;
+    for index in first..first + i64::from(args.frames.max(1)) {
+        let started = std::time::Instant::now();
+        frame = Some(compositor.frame(rate.time_of(index), args.scale));
+        times.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    let frame = frame.expect("at least one frame is drawn");
+    kerf_engine::still::write_png(&frame, &args.out)?;
+    let ms = |value: f64| (value * 10.0).round() / 10.0;
+    // The first frame opens and seeks the media; the rest read on.
+    let steady = &times[1.min(times.len() - 1)..];
     Ok(json!({
-        "out": out,
-        "frame": rate.frames_floor(time),
+        "out": args.out,
+        "frame": first + times.len() as i64 - 1,
         "width": frame.width,
         "height": frame.height,
-        "ms": (millis * 10.0).round() / 10.0,
+        "ms": ms(times[0]),
+        "steady_ms": ms(steady.iter().sum::<f64>() / steady.len() as f64),
+        "slowest_ms": ms(steady.iter().copied().fold(0.0, f64::max)),
         "problems": compositor.problems(),
     }))
 }

@@ -1,5 +1,5 @@
-//! Native-preview decisions: whether the viewer can play a project natively
-//! or needs a rendered preview.
+//! Native-preview decisions: whether the viewer can play a project natively,
+//! draws it with the compositor, or needs a rendered preview.
 //!
 //! The plan is a presentation decision only. It never changes a project and
 //! it does not replace the canonical runtime or the offline compiler.
@@ -23,6 +23,9 @@ pub const MAX_PREVIEW_REASONS: usize = 32;
 pub enum PreviewMode {
     /// Native playback is complete for the relevant project state.
     NativeExact,
+    /// The compositor draws the picture live and sound plays natively. The
+    /// reasons say what playback or an export does not match yet.
+    Composited,
     /// Native playback is incomplete, so a rendered preview is required.
     RenderedFallback,
     /// The project cannot currently be rendered or played until an error is
@@ -75,6 +78,11 @@ impl PreviewPlan {
     /// Whether the viewer may present native playback as exact.
     pub const fn native_exact(&self) -> bool {
         matches!(self.mode, PreviewMode::NativeExact)
+    }
+
+    /// Whether the viewer plays with the compositor drawing the picture.
+    pub const fn composited(&self) -> bool {
+        matches!(self.mode, PreviewMode::Composited)
     }
 
     /// Whether errors prevent either preview path from being trusted.

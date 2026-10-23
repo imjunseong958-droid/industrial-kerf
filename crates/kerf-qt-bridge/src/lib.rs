@@ -676,23 +676,41 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
             emit(&tx, json!({"type":"viewer_reset"}));
             emit(&tx, json!({"type":"caption","text":""}));
             let plan = kerf_playback::preview_plan(&project);
-            if !rendered && !plan.native_exact() {
+            let message = plan
+                .reasons
+                .iter()
+                .map(|reason| reason.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            let composited = !rendered && plan.composited();
+            if !rendered && !plan.native_exact() && !composited {
                 session = None;
                 playing = false;
                 emit(&tx, json!({"type":"playback","playing":false}));
                 emit(
                     &tx,
-                    json!({"type":"preview","status":if plan.unavailable() { "unavailable" } else { "required" }, "message":plan.reasons.iter().map(|reason| reason.message.as_str()).collect::<Vec<_>>().join("; ")}),
+                    json!({"type":"preview","status":if plan.unavailable() { "unavailable" } else { "required" }, "message":message}),
                 );
                 thread::sleep(Duration::from_millis(4));
                 continue;
             }
-            emit(&tx, json!({"type":"preview","status":"ready"}));
+            // The compositor draws a program cuts cannot show, live; what it
+            // or an export does not match yet comes along as a note.
+            emit(
+                &tx,
+                if composited {
+                    json!({"type":"preview","status":"live","message":message})
+                } else {
+                    json!({"type":"preview","status":"ready"})
+                },
+            );
             let size = preview_frame_size(&project);
             // A new worker prevents old-project frames from resurfacing after an edit.
             session = match PlaybackSession::open(
                 project,
-                PlaybackConfig::default().with_frame_size(size.0, size.1),
+                PlaybackConfig::default()
+                    .with_frame_size(size.0, size.1)
+                    .with_composited(composited),
             ) {
                 Ok(session) => {
                     let _ = session.handle().set_volume(volume);
@@ -1872,9 +1890,11 @@ mod tests {
              \x20     set crop_l=0.25\n",
         )
         .unwrap();
+        // The compositor draws a crop live; a rendered preview still plays
+        // exactly.
         assert_eq!(
             kerf_playback::preview_plan(&program).mode,
-            kerf_core::preview::PreviewMode::RenderedFallback
+            kerf_core::preview::PreviewMode::Composited
         );
         let rendered = rendered_preview(&program, "/renders/preview.mp4").unwrap();
         assert!(kerf_model::validate::errors(&rendered, kerf_model::Catalog::builtin()).is_empty());

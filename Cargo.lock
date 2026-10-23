@@ -1359,6 +1359,7 @@ version = "0.1.0"
 dependencies = [
  "cpal",
  "ffmpeg-next",
+ "kerf-compose",
  "kerf-core",
  "kerf-fx",
  "kerf-lang",

@@ -1427,6 +1427,23 @@ private slots:
         QVERIFY(reliableEnd <= 2.5);
     }
 
+    void livePreviewPlaysAndCanStillRender() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.handleEvent(QJsonObject{{"type", "preview"}, {"status", "required"}});
+        QVERIFY(window.m_previewRequired);
+        // The compositor draws the program, so it plays; its note says what
+        // only a render matches.
+        window.handleEvent(QJsonObject{{"type", "preview"}, {"status", "live"},
+                                       {"message", "`a1` uses a crossfade, whose sound only a render plays exactly"}});
+        QVERIFY(!window.m_previewRequired);
+        QCOMPARE(window.m_previewStatus, QStringLiteral("live"));
+        QVERIFY(window.statusBar()->toolTip().contains(QStringLiteral("crossfade")));
+        QCOMPARE(window.m_commands->reason(QStringLiteral("sequence.renderPreview")), QString());
+        window.handleEvent(QJsonObject{{"type", "preview"}, {"status", "ready"}});
+        QVERIFY(!window.m_commands->reason(QStringLiteral("sequence.renderPreview")).isEmpty());
+    }
+
     void disconnectedControlsAndRecovery() {
         MainWindow window{QString(), QString()};
         QCOMPARE(window.m_agentStatus->text(), QStringLiteral("CONNECTING"));

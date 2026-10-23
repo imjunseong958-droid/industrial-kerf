@@ -2205,7 +2205,8 @@ QJsonObject MainWindow::commandContext() const {
                         {QStringLiteral("canRedo"), m_snapshot.value(QStringLiteral("canRedo")).toBool()},
                         {QStringLiteral("playheadFrame"), frameAt(m_playhead)},
                         {QStringLiteral("previewRequired"), m_previewRequired},
-                        {QStringLiteral("previewRenderable"), m_previewStatus == QStringLiteral("required")},
+                        {QStringLiteral("previewRenderable"), m_previewStatus == QStringLiteral("required") ||
+                                                                  m_previewStatus == QStringLiteral("live")},
                         {QStringLiteral("videoTracks"), videoTracks},
                         {QStringLiteral("audioTracks"), audioTracks},
                         {QStringLiteral("sourceTargets"), QJsonArray::fromStringList(sourceTargets())},
@@ -2487,7 +2488,18 @@ void MainWindow::handleEvent(QJsonObject event) {
             m_previewRequired = false;
             m_exportProgress->setValue(0);
             m_exportProgress->hide();
+            statusBar()->setToolTip(QString());
             statusBar()->showMessage(QStringLiteral("Preview ready"), 4000);
+        } else if (status == QStringLiteral("live")) {
+            // The compositor draws the picture as it plays; a render still
+            // gives the exact preview.
+            m_previewRequired = false;
+            m_exportProgress->setValue(0);
+            m_exportProgress->hide();
+            statusBar()->setToolTip(message);
+            const QString note = message.isEmpty() ? QStringLiteral("Live preview")
+                                                   : QStringLiteral("Live preview: ") + message;
+            statusBar()->showMessage(note.left(112) + (note.size() > 112 ? QStringLiteral("…") : QString()), 4000);
         }
     } else if (type == QStringLiteral("cloud")) {
         m_cloudAccess = event.value(QStringLiteral("access")).toString();

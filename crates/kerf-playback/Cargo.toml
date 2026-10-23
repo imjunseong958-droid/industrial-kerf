@@ -16,6 +16,7 @@ native-audio = ["dep:cpal"]
 
 [dependencies]
 cpal = { version = "0.15.3", optional = true }
+kerf-compose = { path = "../kerf-compose" }
 kerf-core = { path = "../kerf-core" }
 kerf-fx = { path = "../kerf-fx" }
 kerf-model = { path = "../kerf-model" }
