@@ -5,6 +5,9 @@
 // Calls are nonblocking and confined to the Qt GUI thread. Runtime, media and
 // agent work run on Rust workers. All strings are UTF-8.
 extern "C" {
+// Moves what Cut, Kerf's earlier name, left in ~/.cut and the project's .cut
+// to where Kerf reads it. Call once at startup, before kerf_bridge_new.
+void kerf_migrate_from_cut(const char *project_directory);
 void *kerf_bridge_new(const char *project_directory, const char *kerfd_binary);
 void kerf_bridge_free(void *bridge);
 // JSON commands: refresh, reconnect, preview, import {path}, edit {ops,revision},
@@ -22,9 +25,9 @@ bool kerf_bridge_send(void *bridge, const char *json);
 // viewer_reset, preview {status,progress,message}, export {status,path,progress}.
 char *kerf_bridge_poll(void *bridge);
 void kerf_bridge_string_free(char *value);
-struct CutFrame { const uint8_t *pixels; size_t length; uint32_t width; uint32_t height; double time; };
+struct KerfFrame { const uint8_t *pixels; size_t length; uint32_t width; uint32_t height; double time; };
 // Latest RGBA frame only. Bytes live until the next frame poll or bridge free.
-bool kerf_bridge_frame(void *bridge, CutFrame *frame);
+bool kerf_bridge_frame(void *bridge, KerfFrame *frame);
 // The command registry (kerf-commands). Synchronous and pure, so it can be
 // called before a bridge exists. Results are owned JSON strings, freed with
 // kerf_bridge_string_free.

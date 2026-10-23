@@ -9,7 +9,7 @@ use kerf_agent::{
     AgentEvent, AgentSession, AgentSessionOptions, AgentTargetSummary, OpenAiApiMode, ProviderName,
     ReasoningEffort,
 };
-use kerf_mcp::{docs::add_agents_pointer, inbound, load_project_skills, CutMcpRouter};
+use kerf_mcp::{docs::add_agents_pointer, inbound, load_project_skills, KerfMcpRouter};
 use kerf_runtime::RuntimeClient;
 use kerf_skills::Skill;
 use serde_json::{json, Value};
@@ -154,6 +154,10 @@ fn run() -> Result<()> {
             args.dir.canonicalize()
         })
         .context("resolve project directory")?;
+    let home = env::var_os("HOME").map(PathBuf::from);
+    for note in kerf_runtime::migrate_from_cut(home.as_deref(), Some(&directory)) {
+        eprintln!("kerf: {note}");
+    }
 
     if let Some(Command::Preset { action }) = &args.command {
         return run_preset(action, &directory, args.kerfd.as_deref());
@@ -544,9 +548,9 @@ fn print_skills(skills: &[Skill]) {
     }
 }
 
-fn open_router(directory: &Path, kerfd: Option<&Path>) -> Result<CutMcpRouter> {
+fn open_router(directory: &Path, kerfd: Option<&Path>) -> Result<KerfMcpRouter> {
     let kerfd = kerfd.map(Path::to_path_buf).or_else(discover_kerfd);
-    CutMcpRouter::new(directory, kerfd.as_deref()).map_err(|error| anyhow!(error))
+    KerfMcpRouter::new(directory, kerfd.as_deref()).map_err(|error| anyhow!(error))
 }
 
 fn discover_kerfd() -> Option<PathBuf> {

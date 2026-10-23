@@ -119,7 +119,7 @@ void MainWindow::pollBridge() {
         const QJsonDocument doc = QJsonDocument::fromJson(bytes);
         if (doc.isObject()) handleEvent(doc.object());
     }
-    CutFrame frame{};
+    KerfFrame frame{};
     if (kerf_bridge_frame(m_bridge, &frame) && m_connected && frame.pixels && frame.length > 0 && frame.width > 0 && frame.height > 0) {
         const qsizetype expected = static_cast<qsizetype>(frame.width) * static_cast<qsizetype>(frame.height) * 4;
         if (expected > 0 && frame.length >= static_cast<size_t>(expected)) {

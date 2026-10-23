@@ -3,6 +3,7 @@
 //! the journal before publishing `project.kerf`.
 
 use crate::kernel::{self, Edit, Edited};
+use crate::legacy::{self, CUT_PROJECT_FILE};
 use crate::render::render_cancel_path;
 use crate::store::{
     append_journal_record, inspect_projection, load_checkpoint, load_journal,
@@ -178,7 +179,7 @@ impl Runtime {
         let lock = RuntimeLock::acquire(directory)?;
         let project_path = directory.join(PROJECT_FILE);
         let journal_path = directory.join(JOURNAL_FILE);
-        let mut notes = Vec::new();
+        let mut notes = legacy::migrate_from_cut(None, Some(directory));
         let checkpoint = match load_checkpoint(directory)? {
             Loaded::Current(checkpoint) => Some(checkpoint),
             Loaded::Previous => {
@@ -1736,13 +1737,24 @@ fn validate_request_identity(actor: &str, key: &str) -> Result<(), RuntimeError>
 }
 
 /// The project of a directory without runtime state: `project.kerf`, else a
-/// one-time import of `project.cut.json` (left untouched) with its
-/// warnings, else an empty project.
+/// one-time import of Cut's `project.cut` or of `project.cut.json` (left
+/// untouched) with its warnings, else an empty project.
 fn load_bootstrap_project(directory: &Path) -> Result<(Project, Vec<String>), RuntimeError> {
     let document = directory.join(PROJECT_FILE);
     if document.is_file() {
         let text = fs::read_to_string(&document).map_err(io_error)?;
         return Ok((kernel::parse(&text)?, Vec::new()));
+    }
+    let cut = directory.join(CUT_PROJECT_FILE);
+    if cut.is_file() {
+        let text = fs::read_to_string(&cut).map_err(io_error)?;
+        let project = kernel::parse(&legacy::kerf_document(&text))?;
+        return Ok((
+            project,
+            vec![format!(
+                "imported {CUT_PROJECT_FILE} into {PROJECT_FILE}; {CUT_PROJECT_FILE} is no longer read or written"
+            )],
+        ));
     }
     let legacy = directory.join(LEGACY_PROJECT_FILE);
     if !legacy.is_file() {
@@ -2677,6 +2689,35 @@ mod tests {
         assert_eq!(reopened.snapshot().projection_status, "current");
         assert!(reopened.document(false).contains("clip clip1"));
         drop(reopened);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn first_launch_imports_a_cut_project_and_its_directory() {
+        let directory =
+            std::env::temp_dir().join(format!("kerf-runtime-cut-import-{}", unique_id()));
+        fs::create_dir_all(directory.join(".cut/skills")).unwrap();
+        let cut = "cut 1\nproject name=\"From Cut\"\n";
+        fs::write(directory.join(CUT_PROJECT_FILE), cut).unwrap();
+        let runtime = Runtime::open(&directory).unwrap();
+        let warnings = runtime.snapshot().import_warnings;
+        assert!(
+            warnings.iter().any(|w| w.contains("imported project.cut")),
+            "{warnings:?}"
+        );
+        assert!(runtime
+            .document(false)
+            .contains("project name=\"From Cut\""));
+        drop(runtime);
+        assert!(fs::read_to_string(directory.join(PROJECT_FILE))
+            .unwrap()
+            .starts_with("kerf 1\n"));
+        assert_eq!(
+            fs::read_to_string(directory.join(CUT_PROJECT_FILE)).unwrap(),
+            cut
+        );
+        assert!(directory.join(".kerf/skills").is_dir());
+        assert!(!directory.join(".cut").exists());
         let _ = fs::remove_dir_all(directory);
     }
 

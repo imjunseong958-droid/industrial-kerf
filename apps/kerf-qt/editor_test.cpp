@@ -894,7 +894,7 @@ private slots:
         settings.setValue(QStringLiteral("agent/anthropic/apiKey"), key);
     }
 
-    void cutCloudIsTheDefaultConnectionAndReflectsTheAccount() {
+    void kerfCloudIsTheDefaultConnectionAndReflectsTheAccount() {
         MainWindow window{QString(), QString()};
         {
             const QSignalBlocker cloudBlock(window.m_cloudRadio);

@@ -6,7 +6,7 @@
 //! for the user, returned with its document diff, the check findings, and a
 //! before/after preview of the range it changed.
 
-use super::{engine_error, CutMcpRouter, McpError, ToolAnnotations};
+use super::{engine_error, KerfMcpRouter, McpError, ToolAnnotations};
 use base64::Engine;
 use kerf_engine::derivatives::{DerivativeCache, SourceIdentity};
 use kerf_engine::program::{compile_program, ProgramOptions};
@@ -412,7 +412,7 @@ fn print_seconds(clock: &Clock, seconds: f64) -> String {
     clock.print_position(clock.rate.round(time))
 }
 
-impl CutMcpRouter {
+impl KerfMcpRouter {
     /// The script and base revision of `id`, the proposal waiting for review.
     fn pending(&self, id: &str) -> Result<(String, u64), McpError> {
         match self.runtime.get_state()?.pending_proposal {

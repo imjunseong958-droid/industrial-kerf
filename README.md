@@ -15,9 +15,15 @@ MCP server are adapters over the same project-scoped IPC boundary.
 
 The canonical project is the `project.kerf` text document
 ([the Kerf language](docs/kerf-language.md)). On first open, `kerfd` imports an
-existing v1 or v2 `project.cut.json` once and leaves it untouched. Edits are
+existing `project.cut` (from Cut, Kerf's earlier name) or v1 or v2
+`project.cut.json` once and leaves it untouched. Edits are
 edit scripts or typed operations; agent proposals carry their script and the
 diff of the document they would produce.
+
+Upgrading from Cut needs no manual steps: `kerf`, `kerf-mcp`, and the editor
+move `~/.cut` to `~/.kerf` and a project's `.cut` to `.kerf` when Kerf's own
+directory does not exist yet, write a `.kerfpreset` beside each `.cutpreset`,
+and the editor copies its saved settings (keymap, workspaces) on first launch.
 
 ```text
 Qt6 editor ──────────────────────────┐

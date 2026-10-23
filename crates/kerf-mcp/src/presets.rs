@@ -1,7 +1,7 @@
 //! File adapters for portable Kerf presets. Applying one still goes through the
 //! harness's normal edit proposal, checks, and before/after preview.
 
-use crate::{CutMcpRouter, McpError};
+use crate::{KerfMcpRouter, McpError};
 use kerf_lang::{preset, Clock};
 use kerf_model::{Catalog, Content, Id, Project};
 use serde::Deserialize;
@@ -31,7 +31,7 @@ fn io_error(error: std::io::Error) -> McpError {
     McpError::new("PRESET_IO", error.to_string())
 }
 
-impl CutMcpRouter {
+impl KerfMcpRouter {
     fn preset_path(&self, file: &str) -> Result<PathBuf, McpError> {
         let path = Path::new(file);
         if path.extension().and_then(|s| s.to_str()) != Some("kerfpreset") {

@@ -15,6 +15,7 @@
 
 mod ipc;
 mod kernel;
+mod legacy;
 mod render;
 mod runtime;
 mod store;
@@ -25,6 +26,7 @@ pub use ipc::{
     UNIX_SOCKET_PATH_LIMIT,
 };
 pub use kernel::{resolve_media_paths, use_proxies, EditOp, TrimSide};
+pub use legacy::migrate_from_cut;
 pub use render::{render_cancel_path, run_render_job};
 
 use kerf_model::Project;

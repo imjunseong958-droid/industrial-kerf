@@ -1,6 +1,6 @@
 //! `look`, `edit`, and `render` against a real kerfd and real footage.
 
-use kerf_mcp::{CutMcpRouter, McpServer};
+use kerf_mcp::{KerfMcpRouter, McpServer};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -55,7 +55,7 @@ fn footage(directory: &Path) {
     assert!(status.success());
 }
 
-fn router() -> Option<(TempDir, CutMcpRouter)> {
+fn router() -> Option<(TempDir, KerfMcpRouter)> {
     if !ffmpeg_available() {
         eprintln!("skipping: ffmpeg is not installed");
         return None;
@@ -76,17 +76,17 @@ sequence s1 rate=30 size=320x180
     )
     .unwrap();
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/kerfd");
-    let router = CutMcpRouter::new(directory.path(), Some(&kerfd)).unwrap();
+    let router = KerfMcpRouter::new(directory.path(), Some(&kerfd)).unwrap();
     Some((directory, router))
 }
 
-fn ok(router: &CutMcpRouter, name: &str, arguments: Value) -> Value {
+fn ok(router: &KerfMcpRouter, name: &str, arguments: Value) -> Value {
     let response = router.call(name, arguments);
     assert_eq!(response["ok"], true, "{name}: {response}");
     response["result"].clone()
 }
 
-fn error(router: &CutMcpRouter, name: &str, arguments: Value) -> Value {
+fn error(router: &KerfMcpRouter, name: &str, arguments: Value) -> Value {
     let response = router.call(name, arguments);
     assert_eq!(response["ok"], false, "{name}: {response}");
     response["error"].clone()
@@ -231,7 +231,7 @@ fn presets_share_native_edit_code_and_apply_replacement_media_as_a_proposal() {
 #[test]
 fn lists_three_tools_and_the_reference() {
     let directory = TempDir::new().unwrap();
-    let router = CutMcpRouter::new(directory.path(), None).unwrap();
+    let router = KerfMcpRouter::new(directory.path(), None).unwrap();
     let names = router
         .list_tools()
         .into_iter()
@@ -638,7 +638,7 @@ fn look_hears_what_the_sequence_says() {
     assert_eq!(mixed["code"], "INVALID_ARGUMENTS");
 }
 
-fn finish(router: &CutMcpRouter, job: &str) -> Value {
+fn finish(router: &KerfMcpRouter, job: &str) -> Value {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let status = ok(router, "render", json!({"job": job}));

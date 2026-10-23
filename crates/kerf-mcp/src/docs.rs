@@ -4,7 +4,7 @@
 //! adapters. It is never read back as project state and never replaces the
 //! user-owned `.kerf/docs/conventions.md` file.
 
-use super::{CutMcpRouter, ToolDefinition};
+use super::{KerfMcpRouter, ToolDefinition};
 use kerf_lang::Clock;
 use kerf_model::{Catalog, Project};
 use kerf_runtime::{RequestEnvelope, RuntimeError};
@@ -83,7 +83,7 @@ impl From<io::Error> for DocsError {
 }
 
 /// Generate the four project-local agent documentation files.
-pub fn generate_agent_docs(router: &CutMcpRouter) -> Result<GeneratedDocs, DocsError> {
+pub fn generate_agent_docs(router: &KerfMcpRouter) -> Result<GeneratedDocs, DocsError> {
     let (revision, document) = router.runtime().get_document(false)?;
     let project = kerf_lang::parse_document(&document, Catalog::builtin())
         .map(|document| document.project)

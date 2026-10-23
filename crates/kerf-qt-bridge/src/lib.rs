@@ -4,7 +4,7 @@ use kerf_agent::{
     AgentEvent, AgentSession, AgentSessionOptions, OpenAiApiMode, ProviderName, ReasoningEffort,
 };
 use kerf_mcp::inbound;
-use kerf_mcp::CutMcpRouter;
+use kerf_mcp::KerfMcpRouter;
 use kerf_model::{
     AudioInfo, Clip, Content, Id, Media, Project, Ratio, Sequence, Time, Track, TrackKind,
     VideoInfo,
@@ -397,7 +397,7 @@ fn runtime_worker(
                 continue;
             }
             Command::PresetInspect { path } => {
-                match CutMcpRouter::new(&directory, Some(&binary)) {
+                match KerfMcpRouter::new(&directory, Some(&binary)) {
                     Ok(router) => {
                         let response = router.call("look", json!({"preset":path}));
                         if response["ok"] == true {
@@ -426,7 +426,7 @@ fn runtime_worker(
             } => {
                 match active_client.get_state() {
                     Ok(state) if state.revision == revision => {
-                        match CutMcpRouter::new(&directory, Some(&binary)) {
+                        match KerfMcpRouter::new(&directory, Some(&binary)) {
                             Ok(router) => {
                                 let response = router.call(
                                     "edit",
@@ -832,7 +832,7 @@ fn new_agent(
         .ok()
         .map(|value| ReasoningEffort::parse(&value).ok_or("Invalid OPENAI_REASONING_EFFORT"))
         .transpose()?;
-    let router = CutMcpRouter::new(directory, Some(binary))?;
+    let router = KerfMcpRouter::new(directory, Some(binary))?;
     let mut tools = router.agent_tools();
     inbound::add_agent_tools(&mut tools, directory, settings.mcp_enabled, |line| {
         // Connection errors may contain command arguments or server responses.
@@ -1013,6 +1013,24 @@ fn agent_worker(
         shared.agent_busy.store(false, Ordering::SeqCst);
         emit(&tx, json!({"type":"agent_busy","busy":false}));
         let _ = commands.send(Command::Refresh);
+    }
+}
+
+/// Move what Cut, Kerf's earlier name, left in the user's home and in
+/// `project_directory` to where Kerf reads it, reporting each move on
+/// stderr. Call once at startup, before a bridge opens the project.
+/// # Safety
+/// `project_directory` must be null or a live, NUL-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn kerf_migrate_from_cut(project_directory: *const c_char) {
+    let project = (!project_directory.is_null())
+        // SAFETY: The caller supplies a live C string as documented above.
+        .then(|| unsafe { CStr::from_ptr(project_directory) }.to_str().ok())
+        .flatten()
+        .map(PathBuf::from);
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    for note in kerf_runtime::migrate_from_cut(home.as_deref(), project.as_deref()) {
+        eprintln!("kerf-qt: {note}");
     }
 }
 
@@ -1289,7 +1307,7 @@ fn run_command(invocation: &Value) -> Value {
 
 /// A borrowed RGBA frame; bytes live until the next frame poll or bridge free.
 #[repr(C)]
-pub struct CutFrame {
+pub struct KerfFrame {
     pub pixels: *const u8,
     pub length: usize,
     pub width: u32,
@@ -1300,9 +1318,9 @@ pub struct CutFrame {
 /// Take the newest frame without copying its pixels.
 /// # Safety
 /// `bridge` must be live and exclusively accessed. `output` must point to a
-/// writable `CutFrame`. Previously returned pixels expire on this call.
+/// writable `KerfFrame`. Previously returned pixels expire on this call.
 #[no_mangle]
-pub unsafe extern "C" fn kerf_bridge_frame(bridge: *mut c_void, output: *mut CutFrame) -> bool {
+pub unsafe extern "C" fn kerf_bridge_frame(bridge: *mut c_void, output: *mut KerfFrame) -> bool {
     if bridge.is_null() || output.is_null() {
         return false;
     }
@@ -1324,7 +1342,7 @@ pub unsafe extern "C" fn kerf_bridge_frame(bridge: *mut c_void, output: *mut Cut
         .expect("frame was just stored");
     // SAFETY: output is writable and pixels remain owned by this bridge.
     unsafe {
-        *output = CutFrame {
+        *output = KerfFrame {
             pixels: frame.pixels.as_ptr(),
             length: frame.pixels.len(),
             width: frame.width,

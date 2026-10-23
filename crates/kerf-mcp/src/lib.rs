@@ -102,24 +102,24 @@ impl From<RuntimeError> for McpError {
 
 /// Project-scoped capability router.
 #[derive(Clone)]
-pub struct CutMcpRouter {
+pub struct KerfMcpRouter {
     dir: PathBuf,
     runtime: RuntimeClient,
     skills: Vec<Skill>,
     namespace: String,
 }
 
-impl fmt::Debug for CutMcpRouter {
+impl fmt::Debug for KerfMcpRouter {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("CutMcpRouter")
+            .debug_struct("KerfMcpRouter")
             .field("dir", &self.dir)
             .field("namespace", &self.namespace)
             .finish_non_exhaustive()
     }
 }
 
-impl CutMcpRouter {
+impl KerfMcpRouter {
     pub fn new(directory: impl AsRef<Path>, kerfd_binary: Option<&Path>) -> Result<Self, String> {
         let dir = directory.as_ref().to_path_buf();
         fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
@@ -250,14 +250,14 @@ const REFERENCE_URI: &str = "kerf://reference";
 
 /// MCP JSON-RPC server over newline-delimited stdin/stdout.
 pub struct McpServer {
-    router: CutMcpRouter,
+    router: KerfMcpRouter,
     name: String,
     version: String,
     instructions: String,
 }
 
 impl McpServer {
-    pub fn new(router: CutMcpRouter) -> Self {
+    pub fn new(router: KerfMcpRouter) -> Self {
         Self {
             name: "kerf-mcp".into(),
             version: env!("CARGO_PKG_VERSION").into(),
@@ -270,7 +270,7 @@ impl McpServer {
         }
     }
 
-    pub fn router(&self) -> &CutMcpRouter {
+    pub fn router(&self) -> &KerfMcpRouter {
         &self.router
     }
 
@@ -498,7 +498,7 @@ mod tests {
     #[test]
     fn stdio_server_handles_initialize_and_tools_list_without_runtime_io() {
         let root = TempDir::new().expect("temp dir");
-        let router = CutMcpRouter::new(root.path(), None).expect("router");
+        let router = KerfMcpRouter::new(root.path(), None).expect("router");
         let server = McpServer::new(router);
         let input = concat!(
             "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\"}}\n",
@@ -524,7 +524,7 @@ mod tests {
     #[test]
     fn unknown_and_namespaced_names_resolve_to_harness_tools() {
         let root = TempDir::new().expect("temp dir");
-        let mut router = CutMcpRouter::new(root.path(), None).expect("router");
+        let mut router = KerfMcpRouter::new(root.path(), None).expect("router");
         let unknown = router.call("timeline.apply", json!({}));
         assert_eq!(unknown["error"]["code"], "UNKNOWN_TOOL");
         router.namespace = "kerf".into();
