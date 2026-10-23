@@ -110,6 +110,9 @@ private slots:
     void askAi();
     void askSubmitted(const QString &text, const QString &scope);
     void updateAiBar();
+    // Kerf's next steps as buttons in the AI bar and over the composer;
+    // pressing one asks for it with the focus of the last request.
+    void showNextSteps(const QJsonArray &steps);
     // Kerf Cloud, the hosted model, or a key of one's own (Advanced).
     bool usesCloud() const;
     bool sendCloud(const QJsonObject &command);
@@ -203,6 +206,11 @@ private:
     Workspace *m_workspace = nullptr;
     EffectControlsPanel *m_effectControls = nullptr;
     EffectsPanel *m_effects = nullptr;
+    QWidget *m_nextSteps = nullptr;
+    QWidget *m_chatNextSteps = nullptr;
+    QJsonArray m_steps;
+    QJsonObject m_lastFocus;
+    QString m_lastFocusLabel;
     ProjectPanel *m_projectPanel = nullptr;
     SourceMonitorPanel *m_sourceMonitor = nullptr;
     QToolBar *m_toolPalette = nullptr;

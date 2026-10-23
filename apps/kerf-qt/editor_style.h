@@ -449,6 +449,8 @@ QLabel#aiBarText { color: #f3d58a; font-size: 11px; }
 QFrame#aiBar QToolButton { color: #e6e6e6; padding: 2px 10px; border: 1px solid #5a4a1c; border-radius: 4px; }
 QFrame#aiBar QToolButton:hover { background: #3a3220; }
 QFrame#aiBar QToolButton#aiAccept { background: #f0b429; color: #141414; border-color: #f0b429; font-weight: 600; }
+QPushButton#nextStep { color: #f3d58a; background: #2a2414; padding: 3px 10px; border: 1px solid #5a4a1c; border-radius: 11px; font-size: 11px; }
+QPushButton#nextStep:hover { background: #3a3220; border-color: #f0b429; }
 QFrame#aiBar QToolButton:disabled { color: #7a7a7a; background: transparent; border-color: #3a3a3a; }
 )QSS");
 }

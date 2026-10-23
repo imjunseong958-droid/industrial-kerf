@@ -42,6 +42,7 @@
 #include <QPixmap>
 #include <QPolygonF>
 #include <QPlainTextEdit>
+#include <QPushButton>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QSaveFile>
@@ -886,6 +887,9 @@ bool MainWindow::sendAgent(const QString &text, const QJsonObject &focus, const 
     // The AI bar names what Kerf works on once the bridge reports it busy.
     m_agentFocusLabel = focusLabel;
     if (!sendSimple(request)) return false;
+    m_lastFocus = focus;
+    m_lastFocusLabel = focusLabel;
+    showNextSteps(QJsonArray{});
     m_agentBusy = true;
     m_agentText.clear();
     m_agentStatus->setText(QStringLiteral("WORKING"));
@@ -994,17 +998,46 @@ void MainWindow::askSubmitted(const QString &text, const QString &scope) {
 void MainWindow::updateAiBar() {
     if (!m_aiBar) return;
     const bool pending = !m_proposalId.isEmpty();
-    m_aiBar->setVisible(m_connected && (m_agentBusy || pending));
+    const bool next = !m_steps.isEmpty() && !m_agentBusy;
+    m_aiBar->setVisible(m_connected && (m_agentBusy || pending || next));
+    m_nextSteps->setVisible(next);
     if (m_agentBusy) {
         m_aiBarText->setText(m_agentFocusLabel.isEmpty() ? QStringLiteral("Kerf is working…")
                                                          : QStringLiteral("Kerf is working on %1…").arg(m_agentFocusLabel));
     } else if (pending) {
         m_aiBarText->setText(QStringLiteral("Proposal  ·  %1").arg(m_proposalSummary->text()));
+    } else if (next) {
+        m_aiBarText->setText(QStringLiteral("Next with Kerf"));
     }
     for (QToolButton *button : m_aiBar->findChildren<QToolButton *>()) {
         const QString id = button->defaultAction() ? button->defaultAction()->objectName() : QString();
         button->setVisible(id == QStringLiteral("ai.stop") ? m_agentBusy : id.startsWith(QStringLiteral("proposal.")) ? pending && !m_agentBusy : true);
     }
+}
+
+void MainWindow::showNextSteps(const QJsonArray &steps) {
+    m_steps = steps;
+    for (QWidget *row : {m_nextSteps, m_chatNextSteps}) {
+        while (QLayoutItem *item = row->layout()->takeAt(0)) {
+            // A pressed button sends the request that clears it.
+            if (item->widget()) item->widget()->deleteLater();
+            delete item;
+        }
+        for (const QJsonValue &value : steps) {
+            const QJsonObject step = value.toObject();
+            const QString request = step.value(QStringLiteral("request")).toString();
+            auto *button = new QPushButton(step.value(QStringLiteral("label")).toString());
+            button->setObjectName(QStringLiteral("nextStep"));
+            button->setToolTip(request);
+            button->setCursor(Qt::PointingHandCursor);
+            connect(button, &QPushButton::clicked, this, [this, request] {
+                if (!m_agentBusy) sendAgent(request, m_lastFocus, m_lastFocusLabel);
+            });
+            row->layout()->addWidget(button);
+        }
+    }
+    m_chatNextSteps->setVisible(!steps.isEmpty());
+    updateAiBar();
 }
 
 void MainWindow::updateChatControls() {
@@ -1282,6 +1315,13 @@ void MainWindow::buildUi() {
     m_aiBarText = new QLabel;
     m_aiBarText->setObjectName(QStringLiteral("aiBarText"));
     aiLayout->addWidget(m_aiBarText, 1);
+    m_nextSteps = new QWidget;
+    m_nextSteps->setObjectName(QStringLiteral("nextSteps"));
+    auto *nextLayout = new QHBoxLayout(m_nextSteps);
+    nextLayout->setContentsMargins(0, 0, 0, 0);
+    nextLayout->setSpacing(6);
+    m_nextSteps->hide();
+    aiLayout->addWidget(m_nextSteps);
     m_aiBar->hide();
     timelinePanelLayout->addWidget(m_aiBar);
     timelinePanelLayout->addLayout(timelineRow, 1);
@@ -1467,6 +1507,13 @@ void MainWindow::buildUi() {
     proposalLayout->addWidget(m_proposalDiff);
     proposalLayout->addLayout(proposalButtons);
     chatLayout->addWidget(proposalBox);
+    m_chatNextSteps = new QWidget;
+    m_chatNextSteps->setObjectName(QStringLiteral("nextSteps"));
+    auto *chatNextLayout = new QHBoxLayout(m_chatNextSteps);
+    chatNextLayout->setContentsMargins(0, 0, 0, 0);
+    chatNextLayout->setSpacing(6);
+    m_chatNextSteps->hide();
+    chatTabLayout->addWidget(m_chatNextSteps);
     chatTabLayout->addWidget(composer);
     m_effectControls = new EffectControlsPanel;
     connect(m_effectControls, &EffectControlsPanel::editRequested, this, &MainWindow::sendEdit);
@@ -2447,6 +2494,8 @@ void MainWindow::handleEvent(QJsonObject event) {
         m_cloudAccount = event.value(QStringLiteral("account")).toObject();
         m_cloudMessage = event.value(QStringLiteral("message")).toString();
         updateCloudStatus();
+    } else if (type == QStringLiteral("agent_next")) {
+        showNextSteps(event.value(QStringLiteral("steps")).toArray());
     } else if (type == QStringLiteral("effect_preview")) {
         const int width = event.value(QStringLiteral("width")).toInt();
         const int height = event.value(QStringLiteral("height")).toInt();

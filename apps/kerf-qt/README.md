@@ -151,7 +151,10 @@ clips it removes are struck through. The bar offers Accept (⌘Return),
 Reject (Escape with the timeline focused), and Details, which opens the
 Kerf Assistant panel with the conversation and the proposed script. The Kerf
 Assistant panel starts closed; open it from Window to keep chatting there,
-where Return sends and Shift+Return inserts a new line.
+where Return sends and Shift+Return inserts a new line. Kerf ends each turn
+with up to three next steps, shown as buttons on the bar and over the
+composer ("Stronger glow", "Wipe to the next shot"); pressing one asks for it
+about the same selection.
 
 Use the project-format picker in the toolbar to switch between standard
 1920×1080 (16:9) and vertical 1080×1920 (9:16). The viewer fits either canvas

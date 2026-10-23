@@ -51,11 +51,22 @@ class Provider(http.server.BaseHTTPRequestHandler):
             assert '# Kerf edit script' in system, system[:400]
             # The project document arrives as a message after the system prompt.
             assert any('```kerf' in str(m.get('content')) for m in request['messages'][1:]), request['messages'][1:]
-            assert [tool['function']['name'] for tool in request['tools']] == ['edit', 'look', 'render', 'session.read'], request['tools']
+            assert [tool['function']['name'] for tool in request['tools']] == ['edit', 'look', 'render', 'suggest', 'session.read'], request['tools']
+            assert '`suggest`' in system, system[-600:]
             message = {'role': 'assistant', 'content': None, 'tool_calls': [{
                 'id': 'edit-1', 'type': 'function', 'function': {
                     'name': 'edit',
                     'arguments': json.dumps({'script': 'marker add at=0f name="Agent reviewed"'})
+                }}]}
+            finish = 'tool_calls'
+        elif len(requests) == 2:
+            # The editor's agent ends its turn with next steps as buttons.
+            message = {'role': 'assistant', 'content': None, 'tool_calls': [{
+                'id': 'suggest-1', 'type': 'function', 'function': {
+                    'name': 'suggest',
+                    'arguments': json.dumps({'steps': [
+                        {'label': 'Add a glow', 'request': 'Add a soft glow to the opening clip.'},
+                        {'label': 'Wipe to the next shot', 'request': 'Use a linear wipe into the next shot.'}]})
                 }}]}
             finish = 'tool_calls'
         else:
@@ -284,7 +295,9 @@ with tempfile.TemporaryDirectory(prefix='kerf-qt-', dir=ROOT / 'target') as temp
         assert sorted(marker.get('label') for marker in accepted['timeline']['markers']) == ['Agent reviewed', 'external'], accepted['timeline']['markers']
         send({'type': 'agent', 'text': 'Keep the previous change.'})
         wait(lambda event: event['type'] == 'agent_busy' and event['busy'] is False)
-        assert len(requests) == 3
+        assert len(requests) == 4
+        steps = [event['steps'] for event in observed if event.get('type') == 'agent_next']
+        assert steps and steps[0][1]['label'] == 'Wipe to the next shot', steps
         assert any('Rename this project' in json.dumps(message) for message in requests[-1]['messages'])
         refreshed = state()  # Agent refresh completes before the export.
         send({'type': 'export', 'quality': 'preview'})
@@ -322,7 +335,7 @@ with tempfile.TemporaryDirectory(prefix='kerf-qt-', dir=ROOT / 'target') as temp
         send({'type': 'cloud_sign_out'})
         wait(lambda event: event['type'] == 'cloud' and event['access'] == 'signedOut')
         assert 'token' not in json.loads((directory / 'home/.kerf/cloud.json').read_text())
-        print(json.dumps({'result': 'passed', 'checks': ['native preset export/inspect/apply/reject', 'kerf cloud sign-in/account/request', 'focused agent request', 'proposal timeline', 'source insert', 'connection lifecycle/reconnect', 'import', 'trim', 'undo', 'redo', 'external CLI edit sync', '200 seeks/latest frame', 'local provider/tool activity', 'proposal/accept', 'conversation history', 'real export', 'effect rendered fallback', 'effect catalog/previews/add'], 'max_enqueue_ms': round(max(timings), 3), 'frame': [frame.width, frame.height]}, indent=2))
+        print(json.dumps({'result': 'passed', 'checks': ['native preset export/inspect/apply/reject', 'kerf cloud sign-in/account/request', 'focused agent request', 'proposal timeline', 'source insert', 'connection lifecycle/reconnect', 'import', 'trim', 'undo', 'redo', 'external CLI edit sync', '200 seeks/latest frame', 'local provider/tool activity', 'proposal/accept', 'conversation history', 'real export', 'effect rendered fallback', 'effect catalog/previews/add', 'next-step buttons'], 'max_enqueue_ms': round(max(timings), 3), 'frame': [frame.width, frame.height]}, indent=2))
     finally:
         lib.kerf_bridge_free(bridge)
         if daemon.poll() is None:
