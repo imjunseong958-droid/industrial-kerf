@@ -483,10 +483,9 @@ impl Flattener<'_> {
 /// How the viewer plays the first sequence: natively when that shows it
 /// exactly as a render would, otherwise with the compositor drawing the
 /// picture live. Its reasons then say what playback or an export does not
-/// match yet: sound that native playback approximates, and what an export
-/// cannot render. A rendered preview stands in when the compositor cannot
-/// draw the program either, and nothing plays when neither it nor a render
-/// can.
+/// match yet: sound that native playback approximates, and sound an export
+/// cannot mix. Nothing plays when the compositor cannot draw the program,
+/// which no render can then either.
 pub fn preview_plan(project: &Project) -> PreviewPlan {
     let sequence = match program_sequence(project, None) {
         Ok(sequence) => sequence,
@@ -506,15 +505,15 @@ pub fn preview_plan(project: &Project) -> PreviewPlan {
     if !sequence.duration().is_positive() {
         return plan(PreviewMode::NativeExact, Vec::new());
     }
-    // Rendering bakes raster effects first; compile what it would.
-    let planned = kerf_core::raster::plan(project, Catalog::builtin(), None, |_| {
-        Ok::<_, std::convert::Infallible>("baked.mkv".to_owned())
-    })
-    .unwrap_or_else(|never| match never {});
-    let rejected = compile_program(
-        &planned.project,
+    // A render mixes the sound with the graph and draws the picture with
+    // the compositor.
+    let unmixed = compile_program(
+        project,
         Catalog::builtin(),
-        &ProgramOptions::default(),
+        &ProgramOptions {
+            audio_only: true,
+            ..ProgramOptions::default()
+        },
     )
     .err()
     .map(|error| {
@@ -526,6 +525,7 @@ pub fn preview_plan(project: &Project) -> PreviewPlan {
             FindingSeverity::Error,
         )
     });
+    let drawn = Compositor::new(project, Catalog::builtin(), &ComposeOptions::default());
     let mut check = NativeCheck {
         project,
         picture: Vec::new(),
@@ -534,13 +534,13 @@ pub fn preview_plan(project: &Project) -> PreviewPlan {
     };
     check.sequence(sequence, Time::ZERO);
     let NativeCheck { picture, sound, .. } = check;
-    if rejected.is_none() && picture.is_empty() && sound.is_empty() {
-        return plan(PreviewMode::NativeExact, Vec::new());
-    }
-    match Compositor::new(project, Catalog::builtin(), &ComposeOptions::default()) {
+    match drawn {
+        Ok(_) if unmixed.is_none() && picture.is_empty() && sound.is_empty() => {
+            plan(PreviewMode::NativeExact, Vec::new())
+        }
         Ok(_) => {
             let mut reasons = sound;
-            reasons.extend(rejected.map(|reason| PreviewReason {
+            reasons.extend(unmixed.map(|reason| PreviewReason {
                 severity: FindingSeverity::Warning,
                 ..reason
             }));
@@ -556,14 +556,8 @@ pub fn preview_plan(project: &Project) -> PreviewPlan {
                 error.to_string(),
                 FindingSeverity::Error,
             ));
-            let mode = match rejected {
-                None => PreviewMode::RenderedFallback,
-                Some(rejected) => {
-                    reasons.push(rejected);
-                    PreviewMode::Unavailable
-                }
-            };
-            plan(mode, reasons)
+            reasons.extend(unmixed);
+            plan(PreviewMode::Unavailable, reasons)
         }
     }
 }
@@ -852,13 +846,13 @@ mod tests {
         let plan = preview_plan(&cropped);
         assert_eq!(plan.mode, PreviewMode::Composited);
         assert!(plan.reasons.is_empty(), "{:?}", plan.reasons);
-        // The compositor blends, though an export cannot yet.
+        // The compositor blends, live and in a render.
         let blended = project(
             "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      set blend=screen\n",
         );
         let plan = preview_plan(&blended);
         assert_eq!(plan.mode, PreviewMode::Composited);
-        assert_eq!(plan.reasons[0].code, "compiler_rejected_feature");
+        assert!(plan.reasons.is_empty(), "{:?}", plan.reasons);
         let gained = project(
             "  track A1 audio\n    clip a1 media=source-b src=0s at=0s dur=2s\n      set gain=-3\n",
         );

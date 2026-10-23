@@ -6,8 +6,10 @@
 //! the clip's source in and speed. A frame is the one whose display starts
 //! at or before that source time, as a cut shows it. Decoders keep their
 //! place in a file and read on to the next frame; they seek only to go
-//! back or far ahead. Frames are converted to RGBA by libavfilter, as the
-//! graph converts them, and kept in a bounded cache.
+//! back or far ahead. A frame just after one being read waits for that
+//! decoder rather than opening another, so frames drawn on several threads
+//! still decode each file once. Frames are converted to RGBA by
+//! libavfilter, as the graph converts them, and kept in a bounded cache.
 
 use effectcraft_project::{Footage as FootageItem, ItemId};
 use effectcraft_render::{FootageSource, Image};
@@ -18,7 +20,7 @@ use ffmpeg_next::{decoder, filter, frame, media};
 use kerf_model::time::FLICKS_PER_SECOND;
 use kerf_model::{Rate, Ratio, Time};
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 /// Ticks per flick: EffectCraft's time unit divides Kerf's exactly.
 pub(crate) const TICKS_PER_FLICK: i64 = TICKS_PER_SECOND / FLICKS_PER_SECOND;
@@ -85,16 +87,36 @@ pub(crate) fn frame_count(rate: Rate, duration: Time) -> i64 {
 /// The footage source a scene's renders read.
 pub(crate) struct LibavFootage {
     clips: HashMap<ItemId, ClipSource>,
-    decoders: Mutex<Vec<Decoder>>,
+    decoders: Mutex<Decoders>,
+    /// Signalled when a decoder comes back.
+    returned: Condvar,
     cache: Mutex<FrameCache>,
     problems: Mutex<BTreeMap<String, String>>,
+}
+
+/// Open decoders: those free, and those being read with the frame each
+/// reads to.
+#[derive(Default)]
+struct Decoders {
+    idle: Vec<Decoder>,
+    busy: Vec<(u64, String, i64)>,
+    lent: u64,
+}
+
+impl Decoders {
+    fn lend(&mut self, path: &str, index: i64) -> u64 {
+        self.lent += 1;
+        self.busy.push((self.lent, path.to_owned(), index));
+        self.lent
+    }
 }
 
 impl LibavFootage {
     pub fn new(clips: HashMap<ItemId, ClipSource>) -> Self {
         Self {
             clips,
-            decoders: Mutex::new(Vec::new()),
+            decoders: Mutex::new(Decoders::default()),
+            returned: Condvar::new(),
             cache: Mutex::new(FrameCache::new(CACHE_BUDGET)),
             problems: Mutex::new(BTreeMap::new()),
         }
@@ -116,15 +138,15 @@ impl LibavFootage {
         if let Some(image) = lock(&self.cache).get(&key) {
             return Some(image);
         }
-        let mut decoder = match self.checkout(clip, index) {
-            Ok(decoder) => decoder,
+        let (loan, mut decoder) = match self.checkout(clip, index) {
+            Ok(checked_out) => checked_out,
             Err(problem) => {
                 lock(&self.problems).insert(clip.path.clone(), problem);
                 return None;
             }
         };
         let read = decoder.frame(index, size, clip.alpha);
-        self.give_back(decoder);
+        self.give_back(loan, decoder);
         match read {
             Ok(image) => {
                 let image = Arc::new(image);
@@ -138,41 +160,93 @@ impl LibavFootage {
         }
     }
 
-    /// A decoder for `clip`'s file: the one that can read on to `index`
-    /// soonest, or a new one.
-    fn checkout(&self, clip: &ClipSource, index: i64) -> Result<Decoder, String> {
-        let mut decoders = lock(&self.decoders);
-        let ahead = i64::from(clip.rate.num()) * READ_AHEAD_SECONDS / i64::from(clip.rate.den());
-        let reads_on = |decoder: &Decoder| {
-            decoder
-                .position()
-                .filter(|at| *at <= index && index - *at <= ahead.max(1))
+    /// The frame `item` shows at clip time `at`, opaque RGBA at its own
+    /// size, as it is decoded: for a frame that is nothing but that clip.
+    pub fn rgba(&self, item: ItemId, at: Tick) -> Option<Vec<u8>> {
+        let clip = self.clips.get(&item)?;
+        let index = clip.frame_at(at);
+        let (loan, mut decoder) = match self.checkout(clip, index) {
+            Ok(checked_out) => checked_out,
+            Err(problem) => {
+                lock(&self.problems).insert(clip.path.clone(), problem);
+                return None;
+            }
         };
-        let same_file = decoders
-            .iter()
-            .enumerate()
-            .filter(|(_, decoder)| decoder.path == clip.path);
-        let best = same_file
-            .clone()
-            .filter_map(|(at, decoder)| reads_on(decoder).map(|position| (at, position)))
-            .max_by_key(|(_, position)| *position)
-            .map(|(at, _)| at)
-            .or_else(|| same_file.map(|(at, _)| at).next_back());
-        match best {
-            Some(at) => Ok(decoders.remove(at)),
-            None => {
-                drop(decoders);
-                Decoder::open(&clip.path, clip.rate)
+        let read = decoder.picture(index, (clip.width, clip.height));
+        self.give_back(loan, decoder);
+        match read {
+            Ok(picture) => Some(packed(&picture)),
+            Err(problem) => {
+                lock(&self.problems).insert(clip.path.clone(), problem);
+                None
             }
         }
     }
 
-    fn give_back(&self, decoder: Decoder) {
+    /// A decoder for `clip`'s file, lent with a token to give it back by:
+    /// the free one that reads on to `index` soonest; else, after it, one
+    /// being read to just before `index`; else one that seeks, or a new
+    /// one.
+    fn checkout(&self, clip: &ClipSource, index: i64) -> Result<(u64, Decoder), String> {
+        let ahead = i64::from(clip.rate.num()) * READ_AHEAD_SECONDS / i64::from(clip.rate.den());
+        let reads_on = |at: i64| at <= index && index - at <= ahead.max(1);
         let mut decoders = lock(&self.decoders);
-        decoders.push(decoder);
-        if decoders.len() > MAX_DECODERS {
-            decoders.remove(0);
+        loop {
+            let free = decoders
+                .idle
+                .iter()
+                .enumerate()
+                .filter(|(_, decoder)| decoder.path == clip.path)
+                .filter_map(|(at, decoder)| {
+                    decoder
+                        .position()
+                        .filter(|position| reads_on(*position))
+                        .map(|position| (at, position))
+                })
+                .max_by_key(|(_, position)| *position)
+                .map(|(at, _)| at);
+            if let Some(at) = free {
+                let decoder = decoders.idle.remove(at);
+                return Ok((decoders.lend(&clip.path, index), decoder));
+            }
+            let coming = decoders
+                .busy
+                .iter()
+                .any(|(_, path, to)| *path == clip.path && reads_on(*to));
+            if !coming {
+                break;
+            }
+            decoders = self
+                .returned
+                .wait(decoders)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
+        let loan = decoders.lend(&clip.path, index);
+        if let Some(at) = decoders
+            .idle
+            .iter()
+            .rposition(|decoder| decoder.path == clip.path)
+        {
+            return Ok((loan, decoders.idle.remove(at)));
+        }
+        drop(decoders);
+        Decoder::open(&clip.path, clip.rate)
+            .map(|decoder| (loan, decoder))
+            .inspect_err(|_| {
+                lock(&self.decoders).busy.retain(|(lent, ..)| *lent != loan);
+                self.returned.notify_all();
+            })
+    }
+
+    fn give_back(&self, loan: u64, decoder: Decoder) {
+        let mut decoders = lock(&self.decoders);
+        decoders.busy.retain(|(lent, ..)| *lent != loan);
+        decoders.idle.push(decoder);
+        if decoders.idle.len() > MAX_DECODERS {
+            decoders.idle.remove(0);
+        }
+        drop(decoders);
+        self.returned.notify_all();
     }
 }
 
@@ -202,7 +276,9 @@ impl FootageSource for LibavFootage {
 
     fn forget(&self, path: &str) {
         lock(&self.cache).forget(path);
-        lock(&self.decoders).retain(|decoder| decoder.path != path);
+        lock(&self.decoders)
+            .idle
+            .retain(|decoder| decoder.path != path);
         lock(&self.problems).remove(path);
     }
 
@@ -354,7 +430,13 @@ impl Decoder {
             )
         };
         let decoder = ffmpeg::codec::context::Context::from_parameters(parameters)
-            .and_then(|context| context.decoder().video())
+            .and_then(|mut context| {
+                // Decode on every core, as FFmpeg's command line does.
+                context.set_threading(ffmpeg::codec::threading::Config::kind(
+                    ffmpeg::codec::threading::Type::Frame,
+                ));
+                context.decoder().video()
+            })
             .map_err(failed)?;
         Ok(Self {
             path: path.to_owned(),
@@ -396,6 +478,12 @@ impl Decoder {
     /// starting by its start, give or take half a frame for timestamps
     /// that round.
     fn frame(&mut self, index: i64, size: (u32, u32), alpha: bool) -> Result<Image, String> {
+        self.picture(index, size)
+            .map(|rgba| premultiplied(&rgba, alpha))
+    }
+
+    /// Frame `index` as straight RGBA at `size`.
+    fn picture(&mut self, index: i64, size: (u32, u32)) -> Result<frame::Video, String> {
         let target = self.pts_of(index);
         let limit = (target + self.pts_of(index + 1)) / 2;
         let ahead = i64::from(self.rate.num()) * READ_AHEAD_SECONDS / i64::from(self.rate.den());
@@ -427,11 +515,11 @@ impl Decoder {
             Some(convert) if convert.fits(shown, size) => convert,
             _ => Convert::new(shown, size).map_err(|error| format!("{}: {error}", self.path))?,
         };
-        let image = convert
-            .run(shown, alpha)
+        let picture = convert
+            .run(shown)
             .map_err(|error| format!("{}: {error}", self.path));
         self.convert = Some(convert);
-        image
+        picture
     }
 
     fn seek(&mut self, pts: i64) -> Result<(), String> {
@@ -546,7 +634,7 @@ impl Convert {
         self.input == (frame.format(), frame.width(), frame.height()) && self.size == size
     }
 
-    fn run(&mut self, frame: &frame::Video, alpha: bool) -> Result<Image, String> {
+    fn run(&mut self, frame: &frame::Video) -> Result<frame::Video, String> {
         let mut source = self
             .graph
             .get("in")
@@ -563,8 +651,22 @@ impl Convert {
         sink.sink()
             .frame(&mut rgba)
             .map_err(|error| error.to_string())?;
-        Ok(premultiplied(&rgba, alpha))
+        Ok(rgba)
     }
+}
+
+/// RGBA rows packed together, opaque.
+fn packed(rgba: &frame::Video) -> Vec<u8> {
+    let (width, height) = (rgba.width() as usize, rgba.height() as usize);
+    let (stride, data) = (rgba.stride(0), rgba.data(0));
+    let mut out = Vec::with_capacity(width * height * 4);
+    for y in 0..height {
+        out.extend_from_slice(&data[y * stride..y * stride + width * 4]);
+    }
+    for pixel in out.chunks_exact_mut(4) {
+        pixel[3] = 255;
+    }
+    out
 }
 
 /// Straight 8-bit RGBA as EffectCraft's premultiplied float image, opaque

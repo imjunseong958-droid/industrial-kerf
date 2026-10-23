@@ -35,7 +35,8 @@ use effectcraft_keyframe::{Interp as FxInterp, Justify, ShapePath, TextDoc};
 use effectcraft_project::build::{self, Ids};
 use effectcraft_project::{
     AlphaMode, BitDepth, Comp, Footage, FootageKind, ItemId, ItemKind, Keyframe as FxKeyframe,
-    Layer, LayerSource, MaskMode, ParamUi, Project as FxProject, Property, Solid, Value as FxValue,
+    Layer, LayerId, LayerSource, MaskMode, ParamUi, Project as FxProject, Property, Solid,
+    Value as FxValue,
 };
 use effectcraft_time::{FrameRate, Tick, TICKS_PER_SECOND};
 use kerf_core::program::{canvas, program_sequence};
@@ -70,6 +71,9 @@ pub(crate) struct Scene {
     pub rate: Rate,
     pub duration: Time,
     pub clips: HashMap<ItemId, ClipSource>,
+    /// The top comp's layers that are their media's picture as decoded,
+    /// with the footage each shows (see `Builder::plain`).
+    pub plain: HashMap<LayerId, ItemId>,
 }
 
 type Result<T> = std::result::Result<T, ComposeError>;
@@ -84,9 +88,9 @@ pub(crate) fn build(
     let sequence = program_sequence(project, sequence)
         .map_err(|error| ComposeError::Invalid(error.to_string()))?;
     let mut out = FxProject::default();
-    // Effects quantise to 16 bits, as close to the graph's 8-bit filters as
-    // banding allows.
-    out.settings.bit_depth = BitDepth::Bpc16;
+    // Pictures are worked on in floating point: no banding, and no rounding
+    // between steps.
+    out.settings.bit_depth = BitDepth::Bpc32;
     let mut builder = Builder {
         project,
         catalog,
@@ -95,6 +99,7 @@ pub(crate) fn build(
         nesting: vec![sequence.id.clone()],
         captions,
         effects: 0,
+        plain: HashMap::new(),
     };
     let comp = builder.comp(sequence)?;
     let (width, height) = canvas(sequence);
@@ -106,6 +111,7 @@ pub(crate) fn build(
         rate: sequence.rate,
         duration: sequence.duration(),
         clips: builder.clips,
+        plain: builder.plain,
     })
 }
 
@@ -186,6 +192,7 @@ struct Builder<'a> {
     captions: bool,
     /// Effect groups made so far, for their uids (see `effect_group`).
     effects: u64,
+    plain: HashMap<LayerId, ItemId>,
 }
 
 impl<'a> Builder<'a> {
@@ -392,7 +399,7 @@ impl<'a> Builder<'a> {
             return Ok(None);
         };
         let frames = Frames::new(comp, clip, lo, hi);
-        let letterboxed = self.letterboxed(item, &picture);
+        let letterboxed = self.letterboxed(item, &picture, canvas);
         if letterboxed {
             picture = self.letterbox(comp, clip, &frames, picture, lo, hi)?;
         }
@@ -441,7 +448,43 @@ impl<'a> Builder<'a> {
         if let Some(remap) = picture.remap {
             self.remap(&mut layer, clip, remap, lo, hi);
         }
+        if let (true, LayerSource::Footage { item: footage }) =
+            (self.plain(item, &picture, canvas), &picture.source)
+        {
+            self.plain.insert(layer.id, *footage);
+        }
         Ok(Some(layer))
+    }
+
+    /// Whether a clip's layer in the top comp is its media's picture as
+    /// decoded: opaque, the size of the canvas, unmoved and untouched. A
+    /// frame showing it alone is that picture, and is read as it is.
+    fn plain(&self, item: &Shown, picture: &Picture, canvas: (u32, u32)) -> bool {
+        let clip = item.clip;
+        let LayerSource::Footage { item: footage } = picture.source else {
+            return false;
+        };
+        let is = |name: &str, value: f64| matches!(self.param(clip, name), Param::Static(Value::Number(n)) if n == value);
+        let normal = matches!(
+            self.param(clip, "blend"),
+            Param::Static(Value::Enum(blend) | Value::Text(blend)) if blend == "normal"
+        );
+        self.nesting.len() == 1
+            && picture.size == canvas
+            && normal
+            && item.reveal.is_none()
+            && item.leave.is_none()
+            && self.clips.get(&footage).is_some_and(|source| !source.alpha)
+            && clip.effects.iter().all(|effect| !effect.enabled)
+            && [
+                "x", "y", "rotation", "anchor_x", "anchor_y", "crop_l", "crop_r", "crop_t",
+                "crop_b",
+            ]
+            .iter()
+            .all(|name| is(name, 0.0))
+            && ["scale", "scale_x", "scale_y", "opacity"]
+                .iter()
+                .all(|name| is(name, 1.0))
     }
 
     /// Whether the graph pads a clip's picture to the canvas with black:
@@ -449,11 +492,25 @@ impl<'a> Builder<'a> {
     /// included), with no raster effect baked into it. Its bars then cover
     /// the tracks below, and its opacity, effects, and transitions take
     /// them along.
-    fn letterboxed(&self, item: &Shown, picture: &Picture) -> bool {
+    fn letterboxed(&self, item: &Shown, picture: &Picture, canvas: (u32, u32)) -> bool {
         let clip = item.clip;
         let LayerSource::Footage { item: footage } = picture.source else {
             return false;
         };
+        // A picture that fills the canvas leaves no bars to draw.
+        let crop =
+            ["crop_l", "crop_r", "crop_t", "crop_b"].map(|name| match self.param(clip, name) {
+                Param::Static(Value::Number(edge)) => Some(edge),
+                _ => None,
+            });
+        if let [Some(l), Some(r), Some(t), Some(b)] = crop {
+            let (sw, sh) = (f64::from(picture.size.0), f64::from(picture.size.1));
+            let (cw, ch) = (f64::from(canvas.0), f64::from(canvas.1));
+            let (fw, fh) = fitted(sw * (1.0 - l - r), sh * (1.0 - t - b), cw, ch);
+            if fw >= cw && fh >= ch {
+                return false;
+            }
+        }
         let opaque = self.clips.get(&footage).is_some_and(|source| !source.alpha);
         let is = |name: &str, value: f64| matches!(self.param(clip, name), Param::Static(Value::Number(n)) if n == value);
         let unit = |axis: &str| match (self.param(clip, "scale"), self.param(clip, axis)) {

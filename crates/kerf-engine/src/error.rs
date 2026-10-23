@@ -14,6 +14,8 @@ pub enum EngineError {
     Json(#[from] serde_json::Error),
     #[error("{0}")]
     Program(#[from] kerf_core::program::ProgramError),
+    #[error("{0}")]
+    Compose(#[from] kerf_compose::ComposeError),
     #[error("ffmpeg failed ({code}): {stderr}")]
     Ffmpeg { code: i32, stderr: String },
 }
@@ -21,6 +23,16 @@ pub enum EngineError {
 impl EngineError {
     pub fn msg(message: impl Into<String>) -> Self {
         Self::Message(message.into())
+    }
+
+    /// The clip, transition, or sequence a render cannot draw, if the error
+    /// names one.
+    pub fn entity(&self) -> Option<&str> {
+        match self {
+            Self::Program(error) => error.entity(),
+            Self::Compose(error) => error.entity(),
+            _ => None,
+        }
     }
 
     pub fn capability_unavailable(

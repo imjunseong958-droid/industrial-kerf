@@ -260,7 +260,7 @@ fn a_cropped_cut_shows_its_region_between_full_frames() {
 }
 
 #[test]
-fn raster_effects_are_baked_once_and_follow_their_keyframes() {
+fn raster_effects_follow_their_keyframes_and_the_graph_bakes_them_once() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(
         dir.path(),
@@ -270,25 +270,32 @@ fn raster_effects_are_baked_once_and_follow_their_keyframes() {
          \x20     fx channel.invert blend={0f:0 47f:100}\n",
     );
     let output = dir.path().join("inverted.mp4");
-    let options = RenderOptions {
+    let composited = RenderOptions {
         output: output.to_string_lossy().into_owned(),
         force_software: true,
         project_dir: Some(dir.path().to_path_buf()),
         ..RenderOptions::default()
     };
-    render_program::<fn(f64)>(&project, None, None, &options, None).expect("renders");
-    // Red inverted is cyan; blending back to the original ends on red.
-    assert!(
-        is(pixel(&output, 0), [0, 255, 255]),
-        "{:?}",
-        pixel(&output, 0)
-    );
-    assert!(
-        is(pixel(&output, 47), [255, 0, 0]),
-        "{:?}",
-        pixel(&output, 47)
-    );
+    let options = RenderOptions {
+        graph: true,
+        ..composited.clone()
+    };
+    for options in [&composited, &options] {
+        render_program::<fn(f64)>(&project, None, None, options, None).expect("renders");
+        // Red inverted is cyan; blending back to the original ends on red.
+        assert!(
+            is(pixel(&output, 0), [0, 255, 255]),
+            "{:?}",
+            pixel(&output, 0)
+        );
+        assert!(
+            is(pixel(&output, 47), [255, 0, 0]),
+            "{:?}",
+            pixel(&output, 47)
+        );
+    }
 
+    // The graph bakes the effect once, and reads the bake again.
     let bakes = || {
         std::fs::read_dir(
             dir.path()

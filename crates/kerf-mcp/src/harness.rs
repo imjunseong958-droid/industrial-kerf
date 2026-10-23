@@ -9,7 +9,6 @@
 use super::{engine_error, KerfMcpRouter, McpError, ToolAnnotations};
 use base64::Engine;
 use kerf_engine::derivatives::{DerivativeCache, SourceIdentity};
-use kerf_engine::program::{compile_program, ProgramOptions};
 use kerf_engine::render::{render_program, RenderOptions};
 use kerf_lang::{apply_script, parse_document, print_document, reference, Clock, PrintOptions};
 use kerf_model::{Catalog, Content, Media, Project, Sequence, Time};
@@ -960,21 +959,8 @@ impl KerfMcpRouter {
         kind: &str,
         options: &Value,
     ) -> Result<kerf_engine::derivatives::CacheEntry, McpError> {
-        let (planned, ..) = kerf_engine::raster::plan_bakes(
-            project,
-            Some(sequence),
-            &DerivativeCache::new(&self.dir),
-        )
-        .map_err(engine_error)?;
-        compile_program(
-            &planned.project,
-            catalog(),
-            &ProgramOptions {
-                sequence: Some(sequence.to_owned()),
-                ..ProgramOptions::default()
-            },
-        )
-        .map_err(|error| McpError::new("UNRENDERABLE", error.to_string()))?;
+        kerf_engine::render::renderable(project, Some(sequence), &RenderOptions::default())
+            .map_err(|error| McpError::new("UNRENDERABLE", error.to_string()))?;
         let document = print_document(project, catalog(), PrintOptions::default());
         let identities = used_media(project)
             .map(|media| {
@@ -1661,21 +1647,14 @@ fn check(project: &Project, dir: &Path) -> Value {
         }
     }
     for sequence in &project.sequences {
-        // What a render compiles: raster effects baked, wherever they go.
-        let planned =
-            kerf_engine::raster::plan(project, catalog(), Some(sequence.id.as_str()), |_| {
-                Ok::<_, std::convert::Infallible>("baked.mkv".to_owned())
-            })
-            .unwrap_or_else(|never| match never {});
-        let options = ProgramOptions {
-            sequence: Some(sequence.id.to_string()),
-            ..ProgramOptions::default()
-        };
-        if let Err(error) = compile_program(&planned.project, catalog(), &options) {
+        let id = sequence.id.as_str();
+        if let Err(error) =
+            kerf_engine::render::renderable(project, Some(id), &RenderOptions::default())
+        {
             findings.push(json!({
                 "severity": "error",
                 "code": "unrenderable",
-                "entity": error.entity().unwrap_or(sequence.id.as_str()),
+                "entity": error.entity().unwrap_or(id),
                 "message": error.to_string(),
             }));
         }
