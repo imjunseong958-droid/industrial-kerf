@@ -230,3 +230,35 @@ fn empty_sequences_are_refused() {
         Err(ProgramError::Invalid(_))
     ));
 }
+
+#[test]
+fn the_sound_compiles_alone_for_a_picture_drawn_elsewhere() {
+    let project = project(
+        "sequence s1 rate=24 size=1920x1080 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip c1 media=m1 src=00:00:02:00 at=00:00:00:00 dur=00:00:01:00\n\
+         \x20     set blend=screen\n\
+         \x20 track A1 audio\n\
+         \x20   clip a1 media=m2 src=00:00:02:00 at=00:00:00:00 dur=00:00:01:00\n",
+    );
+    // The graph cannot blend the picture; the sound does not need it to.
+    assert!(compile_program(&project, Catalog::builtin(), &ProgramOptions::default()).is_err());
+    let compiled = compile_program(
+        &project,
+        Catalog::builtin(),
+        &ProgramOptions {
+            audio_only: true,
+            ..ProgramOptions::default()
+        },
+    )
+    .expect("compiles");
+    let argv = compiled.argv.join(" ");
+    assert!(argv.contains("-i /media/b.mov"), "{argv}");
+    assert!(!argv.contains("/media/a.mov"), "{argv}");
+    assert_eq!(compiled.argv.iter().filter(|arg| *arg == "-map").count(), 1);
+    assert!(
+        !compiled.filter_complex.contains("color="),
+        "{}",
+        compiled.filter_complex
+    );
+}

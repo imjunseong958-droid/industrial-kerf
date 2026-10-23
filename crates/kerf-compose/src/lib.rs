@@ -185,6 +185,9 @@ impl Compositor {
     /// The picture at sequence time `at` over black, at `scale` of the
     /// canvas (1 is full size).
     pub fn frame(&self, at: Time, scale: f64) -> Frame {
+        if let Some(frame) = self.plain_frame(at, scale) {
+            return frame;
+        }
         let image = self.image(at, scale);
         let rgba = image
             .data
@@ -209,6 +212,30 @@ impl Compositor {
             .into_iter()
             .map(|(_, problem)| problem)
             .collect()
+    }
+
+    /// A frame that is one clip's media alone, at full size: its picture as
+    /// decoded, which drawing it would give again.
+    fn plain_frame(&self, at: Time, scale: f64) -> Option<Frame> {
+        if scale < 1.0 {
+            return None;
+        }
+        let comp = self.scene.project.comp(self.scene.comp)?;
+        let t = scene::ticks(at);
+        let mut showing = comp.layers.iter().filter(|layer| layer.is_active_at(t));
+        let layer = showing.next()?;
+        if showing.next().is_some() {
+            return None;
+        }
+        let footage = self.scene.plain.get(&layer.id)?;
+        let rgba = self
+            .footage
+            .rgba(*footage, effectcraft_time::Tick(t.0 - layer.start_time.0))?;
+        Some(Frame {
+            width: self.scene.width,
+            height: self.scene.height,
+            rgba,
+        })
     }
 
     /// The premultiplied picture at `at`, transparent where nothing is.

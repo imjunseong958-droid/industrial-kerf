@@ -88,6 +88,21 @@ enum Commands {
         #[command(flatten)]
         options: FrameArgs,
     },
+    /// Render a project's sequence to a file, as an export does.
+    Render {
+        /// The `.kerf` document.
+        project: PathBuf,
+        #[arg(long)]
+        sequence: Option<String>,
+        /// 360p at 15 fps, encoded fast.
+        #[arg(long)]
+        draft: bool,
+        /// Draw the picture with the FFmpeg graph, as before the compositor.
+        #[arg(long)]
+        graph: bool,
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 
 #[derive(clap::Args)]
@@ -448,6 +463,33 @@ fn main() -> Result<()> {
             print_json(&json!({ "ok": true, "output": output }))?;
         }
         Commands::Frame { options } => print_json(&draw_frame(&options)?)?,
+        Commands::Render {
+            project,
+            sequence,
+            draft,
+            graph,
+            out,
+        } => {
+            let document = read_project(&project)?;
+            let started = std::time::Instant::now();
+            kerf_engine::render::render_program::<fn(f64)>(
+                &document,
+                sequence.as_deref(),
+                None,
+                &kerf_engine::render::RenderOptions {
+                    output: out.to_string_lossy().into_owned(),
+                    draft,
+                    graph,
+                    project_dir: project.parent().map(std::path::Path::to_path_buf),
+                    ..kerf_engine::render::RenderOptions::default()
+                },
+                None,
+            )?;
+            print_json(&json!({
+                "out": out,
+                "seconds": (started.elapsed().as_secs_f64() * 100.0).round() / 100.0,
+            }))?;
+        }
     }
     Ok(())
 }
@@ -538,13 +580,11 @@ fn run_transcription(
     }
 }
 
-/// Draw frames of a project with the compositor and write the last.
-fn draw_frame(args: &FrameArgs) -> Result<Value> {
-    let path = args.project.as_path();
+/// A `.kerf` document's project, its media paths resolved against it.
+fn read_project(path: &std::path::Path) -> Result<kerf_model::Project> {
     let text =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let catalog = kerf_model::Catalog::builtin();
-    let mut project = kerf_lang::parse_document(&text, catalog)
+    let mut project = kerf_lang::parse_document(&text, kerf_model::Catalog::builtin())
         .map_err(|errors| {
             let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
             anyhow::anyhow!("{}: {}", path.display(), lines.join("; "))
@@ -557,6 +597,13 @@ fn draw_frame(args: &FrameArgs) -> Result<Value> {
             media.path = directory.join(&media.path).to_string_lossy().into_owned();
         }
     }
+    Ok(project)
+}
+
+/// Draw frames of a project with the compositor and write the last.
+fn draw_frame(args: &FrameArgs) -> Result<Value> {
+    let catalog = kerf_model::Catalog::builtin();
+    let project = read_project(&args.project)?;
     let compositor = kerf_compose::Compositor::new(
         &project,
         catalog,

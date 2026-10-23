@@ -41,6 +41,9 @@ pub struct ProgramOptions {
     /// Keep the picture's transparency: composite over nothing and finish
     /// in RGBA, as for a file other renders read.
     pub transparent: bool,
+    /// Compile the sound alone, for a picture drawn elsewhere: the program
+    /// maps `[audio]` and nothing else.
+    pub audio_only: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -127,29 +130,33 @@ pub fn compile_program(
         )));
     }
     let mut graph = Graph::new(project, catalog, sequence.rate);
-    let video = if options.transparent {
-        graph.composite(sequence, from, to, Background::Clear, false)?
+    let video = if options.audio_only {
+        None
     } else {
-        match graph.concat_program(sequence, from, to)? {
-            Some(video) => video,
-            None => graph.composite(sequence, from, to, Background::Black, false)?,
-        }
-    };
-    let finished = graph.label("program");
-    graph.parts.push(format!(
-        "[{video}]{}format={}[{finished}]",
-        options
-            .video_post_filters
-            .iter()
-            .map(|filter| format!("{filter},"))
-            .collect::<String>(),
-        if options.transparent {
-            "rgba"
+        let video = if options.transparent {
+            graph.composite(sequence, from, to, Background::Clear, false)?
         } else {
-            "yuv420p"
-        }
-    ));
-    let video = graph.captions(sequence, from, to, finished);
+            match graph.concat_program(sequence, from, to)? {
+                Some(video) => video,
+                None => graph.composite(sequence, from, to, Background::Black, false)?,
+            }
+        };
+        let finished = graph.label("program");
+        graph.parts.push(format!(
+            "[{video}]{}format={}[{finished}]",
+            options
+                .video_post_filters
+                .iter()
+                .map(|filter| format!("{filter},"))
+                .collect::<String>(),
+            if options.transparent {
+                "rgba"
+            } else {
+                "yuv420p"
+            }
+        ));
+        Some(graph.captions(sequence, from, to, finished))
+    };
     let audio = graph.mix(sequence, from, to)?;
     let (width, height) = canvas(sequence);
     let filter_complex = graph.parts.join(";\n");
@@ -168,11 +175,11 @@ pub fn compile_program(
     argv.extend([
         "-filter_complex".to_owned(),
         filter_complex.replace('\n', ""),
-        "-map".to_owned(),
-        format!("[{video}]"),
-        "-map".to_owned(),
-        format!("[{audio}]"),
     ]);
+    if let Some(video) = video {
+        argv.extend(["-map".to_owned(), format!("[{video}]")]);
+    }
+    argv.extend(["-map".to_owned(), format!("[{audio}]")]);
     Ok(CompiledProgram {
         argv,
         filter_complex,
