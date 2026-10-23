@@ -17,6 +17,7 @@ native-audio = ["dep:cpal"]
 [dependencies]
 cpal = { version = "0.15.3", optional = true }
 kerf-core = { path = "../kerf-core" }
+kerf-fx = { path = "../kerf-fx" }
 kerf-model = { path = "../kerf-model" }
 ffmpeg-next = { version = "9.0", default-features = false, features = ["codec", "filter", "format", "software-resampling", "software-scaling"] }
 serde_json = "1"

@@ -1181,6 +1181,7 @@ dependencies = [
  "cpal",
  "ffmpeg-next",
  "kerf-core",
+ "kerf-fx",
  "kerf-lang",
  "kerf-model",
  "serde_json",

@@ -2,7 +2,8 @@ use crate::PlaybackError;
 use kerf_core::preview::{FindingSeverity, PreviewMode, PreviewPlan, PreviewRange, PreviewReason};
 use kerf_core::program::{compile_program, program_sequence, ProgramError, ProgramOptions};
 use kerf_model::{
-    Catalog, Clip, Content, Domain, Param, Project, Sequence, Time, TrackKind, Value,
+    Catalog, Clip, Content, Domain, Effect, Engine, Param, Project, Sequence, Time, TrackKind,
+    Value,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -49,6 +50,14 @@ pub struct PlaybackClip {
     pub speed: f64,
     pub volume: f32,
     pub track_muted: bool,
+    /// Raster effects run on each picture, in stack order; empty for sound.
+    pub effects: Vec<Effect>,
+    /// The picture size the effects measure against: the media's.
+    pub layer: (u32, u32),
+    /// The clip time at `timeline_start`, where its keyframes are read.
+    pub clip_offset: f64,
+    /// The seed of its random effects, as a bake uses.
+    pub seed: u32,
 }
 
 impl PlaybackClip {
@@ -352,6 +361,17 @@ impl PlaybackTimeline {
     }
 }
 
+/// Whether an effect is a raster effect, which playback runs itself.
+fn raster(effect: &Effect) -> bool {
+    Catalog::builtin()
+        .fx(effect.fx.as_str())
+        .is_some_and(|fx| fx.engine == Engine::Raster)
+}
+
+/// Raster effect categories whose effects make parts of a picture
+/// transparent, which playback, showing one picture at a time, cannot.
+const TRANSPARENCY: &[&str] = &["Keying", "Matte"];
+
 /// Lays the clips of a sequence, and of the sequences nested in it, on the
 /// program timeline.
 struct Flattener<'a> {
@@ -407,6 +427,20 @@ impl Flattener<'_> {
                             Some(Param::Static(Value::Number(gain))) => *gain,
                             _ => 0.0,
                         };
+                        let video = self
+                            .project
+                            .media(media.as_str())
+                            .and_then(|media| media.video)
+                            .filter(|_| kind == ClipKind::Video);
+                        let effects = match video {
+                            Some(_) => clip
+                                .effects
+                                .iter()
+                                .filter(|effect| effect.enabled && raster(effect))
+                                .cloned()
+                                .collect(),
+                            None => Vec::new(),
+                        };
                         self.clips.push(PlaybackClip {
                             id: clip.id.to_string(),
                             track_id: track.id.to_string(),
@@ -419,6 +453,10 @@ impl Flattener<'_> {
                             speed: speed.value(),
                             volume: 10f64.powf(gain / 20.0) as f32,
                             track_muted: muted || track.muted,
+                            effects,
+                            layer: video.map_or((0, 0), |video| (video.width, video.height)),
+                            clip_offset: (lo - clip.start).seconds(),
+                            seed: kerf_core::raster::seed(clip.id.as_str()),
                         });
                     }
                     Content::Sequence { sequence: id, .. } if speed.value() == 1.0 => {
@@ -555,7 +593,20 @@ impl NativeCheck<'_> {
     }
 
     fn unsupported(&self, kind: TrackKind, clip: &Clip) -> Option<&'static str> {
-        if clip.effects.iter().any(|effect| effect.enabled) {
+        // Raster effects on a media picture run live, unless they make it
+        // transparent.
+        let live = |effect: &Effect| {
+            kind == TrackKind::Video
+                && matches!(clip.content, Content::Media { .. })
+                && Catalog::builtin().fx(effect.fx.as_str()).is_some_and(|fx| {
+                    fx.engine == Engine::Raster && !TRANSPARENCY.contains(&fx.category.as_str())
+                })
+        };
+        if clip
+            .effects
+            .iter()
+            .any(|effect| effect.enabled && !live(effect))
+        {
             return Some("effects");
         }
         match &clip.content {
@@ -765,6 +816,10 @@ mod tests {
             speed: 2.0,
             volume: 1.0,
             track_muted: false,
+            effects: Vec::new(),
+            layer: (0, 0),
+            clip_offset: 0.0,
+            seed: 0,
         };
         assert!((clip.timeline_time_for_source(1.0) - 2.0).abs() < 1e-9);
         assert!((clip.timeline_time_for_source(5.0) - 4.0).abs() < 1e-9);
