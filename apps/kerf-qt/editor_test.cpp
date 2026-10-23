@@ -1435,13 +1435,27 @@ private slots:
         // The compositor draws the program, so it plays; its note says what
         // only a render matches.
         window.handleEvent(QJsonObject{{"type", "preview"}, {"status", "live"},
-                                       {"message", "`a1` uses a crossfade, whose sound only a render plays exactly"}});
+                                       {"message", "`a1` uses a crossfade, whose sound only a render plays exactly"},
+                                       {"gpu", "Apple M1 (Metal)"}});
         QVERIFY(!window.m_previewRequired);
         QCOMPARE(window.m_previewStatus, QStringLiteral("live"));
+        QVERIFY(!window.m_statusDevice->isHidden());
+        QCOMPARE(window.m_statusDevice->text(), QStringLiteral("Live · Apple M1 (Metal)"));
         QVERIFY(window.statusBar()->toolTip().contains(QStringLiteral("crossfade")));
         QCOMPARE(window.m_commands->reason(QStringLiteral("sequence.renderPreview")), QString());
+        // A live preview that starts on the CPU says when the GPU opens.
+        window.handleEvent(QJsonObject{{"type", "preview"}, {"status", "live"}});
+        QCOMPARE(window.m_statusDevice->text(), QStringLiteral("Live · CPU"));
+        window.handleEvent(QJsonObject{{"type", "preview_device"}, {"gpu", "Apple M1 (Metal)"}});
+        QCOMPARE(window.m_statusDevice->text(), QStringLiteral("Live · Apple M1 (Metal)"));
         window.handleEvent(QJsonObject{{"type", "preview"}, {"status", "ready"}});
         QVERIFY(!window.m_commands->reason(QStringLiteral("sequence.renderPreview")).isEmpty());
+        QVERIFY(window.m_statusDevice->isHidden());
+        // The GPU choice is kept in Settings.
+        const bool gpu = window.m_gpuEnabled->isChecked();
+        window.m_gpuEnabled->setChecked(!gpu);
+        QCOMPARE(QSettings().value(QStringLiteral("playback/gpu")).toBool(), !gpu);
+        window.m_gpuEnabled->setChecked(gpu);
     }
 
     void disconnectedControlsAndRecovery() {

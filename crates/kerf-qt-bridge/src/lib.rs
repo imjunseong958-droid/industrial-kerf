@@ -94,6 +94,11 @@ enum Command {
     Volume {
         value: f32,
     },
+    /// Let the live preview's compositor draw on the GPU when that is
+    /// faster.
+    Gpu {
+        enabled: bool,
+    },
     Export {
         quality: String,
     },
@@ -128,6 +133,7 @@ enum Command {
 
 /// What the viewer plays: the project itself, or a rendered preview of it.
 /// Both have their media paths resolved.
+#[derive(Clone)]
 enum MediaProject {
     Native(Project),
     Rendered(Project),
@@ -663,7 +669,42 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
     let mut position = 0.0_f64;
     let mut playing = false;
     let mut volume = 1.0_f32;
+    // Whether the compositor may draw on the GPU, and the program it draws
+    // live, to open again when that changes.
+    let mut gpu = true;
+    let mut live: Option<Project> = None;
+    // The GPU adapter the editor was last told the live preview uses.
+    let mut announced: Option<String> = None;
     while !shared.closed.load(Ordering::Relaxed) {
+        for command in rx.try_iter() {
+            let handle = session.as_ref().map(PlaybackSession::handle);
+            let result = match command {
+                Command::Play => {
+                    playing = true;
+                    handle.map(|handle| handle.play())
+                }
+                Command::Pause => {
+                    playing = false;
+                    handle.map(|handle| handle.pause())
+                }
+                Command::Volume { value } => {
+                    volume = value;
+                    handle.map(|handle| handle.set_volume(value))
+                }
+                Command::Gpu { enabled } if enabled != gpu => {
+                    gpu = enabled;
+                    if let (Some(program), Ok(mut slot)) = (live.take(), shared.project.lock()) {
+                        // A newer program waiting to open wins.
+                        slot.get_or_insert(MediaProject::Native(program));
+                    }
+                    None
+                }
+                _ => None,
+            };
+            if let Some(Err(err)) = result {
+                error(&tx, err);
+            }
+        }
         let project = shared.project.lock().ok().and_then(|mut slot| slot.take());
         if let Some(project) = project {
             let (project, rendered) = match project {
@@ -683,6 +724,7 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
                 .collect::<Vec<_>>()
                 .join("; ");
             let composited = !rendered && plan.composited();
+            live = composited.then(|| project.clone());
             if !rendered && !plan.native_exact() && !composited {
                 session = None;
                 playing = false;
@@ -699,7 +741,8 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
             emit(
                 &tx,
                 if composited {
-                    json!({"type":"preview","status":"live","message":message})
+                    announced = gpu.then(kerf_playback::gpu_adapter).flatten();
+                    json!({"type":"preview","status":"live","message":message,"gpu":announced})
                 } else {
                     json!({"type":"preview","status":"ready"})
                 },
@@ -710,7 +753,8 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
                 project,
                 PlaybackConfig::default()
                     .with_frame_size(size.0, size.1)
-                    .with_composited(composited),
+                    .with_composited(composited)
+                    .with_gpu(gpu),
             ) {
                 Ok(session) => {
                     let _ = session.handle().set_volume(volume);
@@ -726,28 +770,16 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
                 }
             };
         }
+        // The GPU opens in the background; say when the live preview can use
+        // it.
+        if live.is_some() && gpu && announced.is_none() {
+            announced = kerf_playback::gpu_adapter();
+            if announced.is_some() {
+                emit(&tx, json!({"type":"preview_device","gpu":announced}));
+            }
+        }
         if let Some(session) = &session {
             let handle = session.handle();
-            for command in rx.try_iter() {
-                let result = match command {
-                    Command::Play => {
-                        playing = true;
-                        handle.play()
-                    }
-                    Command::Pause => {
-                        playing = false;
-                        handle.pause()
-                    }
-                    Command::Volume { value } => {
-                        volume = value;
-                        handle.set_volume(value)
-                    }
-                    _ => continue,
-                };
-                if let Err(err) = result {
-                    error(&tx, err);
-                }
-            }
             let seek = shared.seek.lock().ok().and_then(|mut slot| slot.take());
             if let Some(seek) = seek {
                 // Keep the picture that is already on screen. The UI drops a
@@ -1371,7 +1403,7 @@ pub unsafe extern "C" fn kerf_bridge_send(bridge: *mut c_void, message: *const c
                 false
             }
         }
-        Command::Play | Command::Pause | Command::Volume { .. } => {
+        Command::Play | Command::Pause | Command::Volume { .. } | Command::Gpu { .. } => {
             bridge.media.try_send(command).is_ok()
         }
         Command::Abort => {
