@@ -515,8 +515,11 @@ impl Decoder {
             Some(convert) if convert.fits(shown, size) => convert,
             _ => Convert::new(shown, size).map_err(|error| format!("{}: {error}", self.path))?,
         };
+        // The filter takes the frame it is given and leaves it empty, so it
+        // gets a copy: the frame read stays to be drawn again, at another
+        // size or for another layer.
         let picture = convert
-            .run(shown)
+            .run(&shown.clone())
             .map_err(|error| format!("{}: {error}", self.path));
         self.convert = Some(convert);
         picture
