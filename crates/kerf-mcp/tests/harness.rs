@@ -784,3 +784,38 @@ fn look_shows_no_more_frames_than_a_model_receives() {
         kerf_agent::MAX_TOOL_RESULT_IMAGES
     );
 }
+
+#[test]
+fn raster_effects_are_looked_up_checked_and_previewed() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    let invert = ok(&router, "look", json!({"effect": "channel.invert"}));
+    assert_eq!(invert["engine"], "raster");
+    assert_eq!(invert["category"], "Channel");
+    assert!(
+        invert["reference"]
+            .as_str()
+            .unwrap()
+            .contains("`blend=0` (0..100"),
+        "{invert}"
+    );
+    assert_eq!(
+        error(&router, "look", json!({"effect": "channel.nothing"}))["code"],
+        "INVALID_ARGUMENTS"
+    );
+
+    let proposal = ok(
+        &router,
+        "edit",
+        json!({"script": "fx c1 add stylize.findedges\n"}),
+    );
+    assert_eq!(proposal["check"]["valid"], true, "{proposal}");
+    assert!(
+        !proposal["check"]["findings"]
+            .to_string()
+            .contains("unrenderable"),
+        "{proposal}"
+    );
+    assert!(has_image(&proposal["preview"]["after"]), "{proposal}");
+}

@@ -83,6 +83,9 @@ pub struct RenderOptions {
     pub prefer_hardware: bool,
     pub force_software: bool,
     pub codec: VideoCodec,
+    /// The project directory, whose cache holds baked raster effects.
+    /// Without one, a project with raster effects cannot be rendered.
+    pub project_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for RenderOptions {
@@ -93,6 +96,7 @@ impl Default for RenderOptions {
             prefer_hardware: false,
             force_software: false,
             codec: VideoCodec::H264,
+            project_dir: None,
         }
     }
 }
@@ -147,6 +151,15 @@ pub fn render_program_with_cancellation<F>(
 where
     F: FnMut(f64),
 {
+    let baked;
+    let project = match &opts.project_dir {
+        Some(directory) => {
+            let cache = crate::derivatives::DerivativeCache::new(directory);
+            baked = crate::raster::bake(project, &cache, cancellation)?;
+            &baked
+        }
+        None => project,
+    };
     let (args, duration) = render_program_args(project, sequence, range, opts)?;
     run_ffmpeg_with_progress(&args, duration, cancellation, on_progress)
 }

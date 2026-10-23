@@ -1,0 +1,14 @@
+[package]
+name = "kerf-fx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Raster effects Kerf carries from EffectCraft: the catalog table and a clip's effect stack on its frames"
+
+# EffectCraft is pinned to one reviewed commit; moving it means regenerating
+# the catalog table (see `raster_catalog_is_current`).
+[dependencies]
+kerf-model = { path = "../kerf-model" }
+effectcraft-effects = { git = "https://github.com/storytold/effectcraft", rev = "9581b53c3f8945683252af0eb5fac79e0e43aed4" }
+effectcraft-keyframe = { git = "https://github.com/storytold/effectcraft", rev = "9581b53c3f8945683252af0eb5fac79e0e43aed4" }
+effectcraft-project = { git = "https://github.com/storytold/effectcraft", rev = "9581b53c3f8945683252af0eb5fac79e0e43aed4" }

@@ -11,6 +11,7 @@ pub mod ffmpeg;
 pub mod index;
 pub mod probe;
 pub mod proxy;
+pub mod raster;
 pub mod render;
 pub mod resources;
 pub mod sidecar;

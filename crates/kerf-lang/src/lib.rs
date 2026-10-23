@@ -16,6 +16,6 @@ mod text;
 pub use captions::{caption_script, Word};
 pub use diff::diff_text;
 pub use doc::{parse_document, print_document, Document, PrintOptions, VERSION};
-pub use reference::reference;
+pub use reference::{fx_reference, reference};
 pub use script::{apply_script, print_op, print_ops, Applied};
 pub use text::Clock;

@@ -207,7 +207,8 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "sequence": {"type": "string", "description": sequence},
                     "proposal": {"type": "string", "description": proposal},
                     "preset": {"type": "string", "description": "Inspect a .kerfpreset file: pattern, text slots, and media slots with the imported media that fit each. Use alone."},
-                    "presets": {"type": "boolean", "description": "List .kerfpreset files in the project root and .kerf/presets. Use alone with true."}
+                    "presets": {"type": "boolean", "description": "List .kerfpreset files in the project root and .kerf/presets. Use alone with true."},
+                    "effect": {"type": "string", "description": "An effect, transition, or generator id: its parameters, as the reference lists them. Raster effects are listed by id only. Use alone."}
                 },
                 "additionalProperties": false
             }),
@@ -282,6 +283,7 @@ struct LookInput {
     preset: Option<String>,
     #[serde(default)]
     presets: bool,
+    effect: Option<String>,
     media: Option<String>,
     #[serde(default)]
     at: Vec<String>,
@@ -455,6 +457,23 @@ impl KerfMcpRouter {
     pub(super) fn look(&self, arguments: Value) -> Result<Value, McpError> {
         let preset_only = arguments.as_object().is_some_and(|o| o.len() == 1);
         let input: LookInput = input(arguments)?;
+        if let Some(id) = &input.effect {
+            if !preset_only {
+                return Err(McpError::new("INVALID_ARGUMENTS", "use effect alone"));
+            }
+            let fx = catalog().fx(id).ok_or_else(|| {
+                McpError::new(
+                    "INVALID_ARGUMENTS",
+                    format!("no effect `{id}` in the catalog"),
+                )
+            })?;
+            return Ok(json!({
+                "effect": fx.id.as_str(),
+                "category": fx.category,
+                "engine": fx.engine.name(),
+                "reference": kerf_lang::fx_reference(fx),
+            }));
+        }
         if input.preset.is_some() || input.presets {
             if !preset_only {
                 return Err(McpError::new(
@@ -897,6 +916,7 @@ impl KerfMcpRouter {
                     output: sound.to_string_lossy().into_owned(),
                     draft: true,
                     force_software: true,
+                    project_dir: Some(self.dir.clone()),
                     ..RenderOptions::default()
                 },
                 None,
@@ -932,8 +952,11 @@ impl KerfMcpRouter {
         kind: &str,
         options: &Value,
     ) -> Result<kerf_engine::derivatives::CacheEntry, McpError> {
+        let (planned, _) =
+            kerf_engine::raster::plan_bakes(project, &DerivativeCache::new(&self.dir))
+                .map_err(engine_error)?;
         compile_program(
-            project,
+            &planned.project,
             catalog(),
             &ProgramOptions {
                 sequence: Some(sequence.to_owned()),
@@ -1077,6 +1100,7 @@ impl KerfMcpRouter {
                     &RenderOptions {
                         output: clip.to_string_lossy().into_owned(),
                         force_software: true,
+                        project_dir: Some(self.dir.clone()),
                         ..RenderOptions::default()
                     },
                     None,
@@ -1588,12 +1612,17 @@ fn check(project: &Project, dir: &Path) -> Value {
             }));
         }
     }
+    // What a render compiles: raster effects baked, wherever the bakes go.
+    let planned = kerf_engine::raster::plan(project, catalog(), |job| {
+        Ok::<_, std::convert::Infallible>(job.source.clone())
+    })
+    .unwrap_or_else(|never| match never {});
     for sequence in &project.sequences {
         let options = ProgramOptions {
             sequence: Some(sequence.id.to_string()),
             ..ProgramOptions::default()
         };
-        if let Err(error) = compile_program(project, catalog(), &options) {
+        if let Err(error) = compile_program(&planned.project, catalog(), &options) {
             findings.push(json!({
                 "severity": "error",
                 "code": "unrenderable",
