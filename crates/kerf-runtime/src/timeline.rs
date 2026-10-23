@@ -10,7 +10,9 @@
 //! per snapshot, keyed by track type, and `generators` the parameter
 //! definitions of each generator. Each clip's `props` holds only the
 //! properties and generator parameters it sets: a static value, or a keyframe
-//! list when animated. Anything absent is at its default.
+//! list when animated. Anything absent is at its default. Its `effects` list
+//! the effect stack in order, each with the parameters it sets the same way;
+//! their definitions are [`fx_catalog_json`].
 
 use kerf_model::{
     Catalog, Clip, Content, Domain, FxKind, Param, ParamDef, ParamType, Project, Rate, Sequence,
@@ -211,16 +213,48 @@ fn clip_json(project: &Project, rate: Rate, clip: &Clip) -> Json {
             clip.effects
                 .iter()
                 .map(|effect| {
+                    let params: Map<String, Json> = effect
+                        .params
+                        .iter()
+                        .map(|(name, param)| (name.clone(), param_json(param)))
+                        .collect();
                     json!({
                         "fx": effect.fx.as_str(),
                         "enabled": effect.enabled,
                         "doc": Catalog::builtin().fx(effect.fx.as_str()).map(|def| def.doc.as_str()),
+                        "params": params,
                     })
                 })
                 .collect(),
         );
     }
     value
+}
+
+/// The picture effects and transitions an editor offers, by category, each
+/// with its display name, when to use it, what renders it, and its
+/// parameter definitions.
+pub fn fx_catalog_json() -> Json {
+    let entries: Vec<Json> = Catalog::builtin()
+        .all()
+        .filter(|fx| fx.domain == Domain::Video && fx.kind != FxKind::Generator)
+        .map(|fx| {
+            let name = fx
+                .doc
+                .split_once(": ")
+                .map_or_else(|| fx.doc.trim_end_matches('.'), |(name, _)| name);
+            json!({
+                "id": fx.id.as_str(),
+                "kind": fx.kind.name(),
+                "category": fx.category,
+                "name": name,
+                "doc": fx.doc,
+                "engine": fx.engine.name(),
+                "params": fx.params.iter().map(param_def_json).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    Json::Array(entries)
 }
 
 fn param_def_json(def: &ParamDef) -> Json {

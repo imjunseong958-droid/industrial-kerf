@@ -1193,10 +1193,13 @@ dependencies = [
 name = "kerf-qt-bridge"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "kerf-agent",
  "kerf-cloud",
  "kerf-commands",
  "kerf-core",
+ "kerf-engine",
+ "kerf-fx",
  "kerf-lang",
  "kerf-mcp",
  "kerf-model",

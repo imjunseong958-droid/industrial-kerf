@@ -1884,6 +1884,71 @@ mod tests {
     }
 
     #[test]
+    fn typed_edits_add_set_and_remove_effects() {
+        let mut runtime = runtime();
+        edit(
+            &mut runtime,
+            "track add V1 video\n\
+             media add m1 path=\"a.mov\" rate=30 dur=60f video=320x180\n\
+             insert media=m1 dur=30f at=0f on=V1 as=c1",
+            0,
+        )
+        .unwrap();
+        let mut ops = |ops: Vec<EditOp>| {
+            let revision = runtime.state.revision;
+            runtime
+                .apply_ops_request("ui", &unique_id(), ops, revision)
+                .map(|state| state.document)
+        };
+        let added = ops(vec![
+            EditOp::FxAdd {
+                clip: "c1".into(),
+                fx: "stylize.glow".into(),
+                params: [("radius".to_owned(), json!(40))].into_iter().collect(),
+                index: None,
+            },
+            EditOp::FxAdd {
+                clip: "c1".into(),
+                fx: "channel.invert".into(),
+                params: Default::default(),
+                index: None,
+            },
+        ])
+        .unwrap();
+        assert!(
+            added.contains("      fx stylize.glow radius=40\n      fx channel.invert\n"),
+            "{added}"
+        );
+        let set = ops(vec![EditOp::FxSet {
+            clip: "c1".into(),
+            index: 0,
+            enabled: Some(false),
+            params: [("radius".to_owned(), Value::Null)].into_iter().collect(),
+        }])
+        .unwrap();
+        assert!(
+            set.contains("      fx stylize.glow enabled=false\n"),
+            "{set}"
+        );
+        let removed = ops(vec![EditOp::FxRemove {
+            clip: "c1".into(),
+            index: 1,
+        }])
+        .unwrap();
+        assert!(!removed.contains("channel.invert"), "{removed}");
+        let error = ops(vec![EditOp::FxAdd {
+            clip: "c1".into(),
+            fx: "stylize.glow".into(),
+            params: [("intensity".to_owned(), json!("loud"))]
+                .into_iter()
+                .collect(),
+            index: None,
+        }])
+        .unwrap_err();
+        assert!(error.message.contains("expects a number"), "{error:?}");
+    }
+
+    #[test]
     fn edits_are_atomic_and_revisioned() {
         let mut runtime = runtime();
         let state = edit(&mut runtime, "track add T1 subtitle", 0).unwrap();

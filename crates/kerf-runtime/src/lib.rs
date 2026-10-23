@@ -28,6 +28,7 @@ pub use ipc::{
 pub use kernel::{resolve_media_paths, use_proxies, EditOp, TrimSide};
 pub use legacy::migrate_from_cut;
 pub use render::{render_cancel_path, run_render_job};
+pub use timeline::fx_catalog_json;
 
 use kerf_model::Project;
 use runtime::runtime_actor;

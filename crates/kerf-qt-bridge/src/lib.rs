@@ -6,8 +6,8 @@ use kerf_agent::{
 use kerf_mcp::inbound;
 use kerf_mcp::KerfMcpRouter;
 use kerf_model::{
-    AudioInfo, Clip, Content, Id, Media, Project, Ratio, Sequence, Time, Track, TrackKind,
-    VideoInfo,
+    AudioInfo, Catalog, Clip, Content, Effect, Engine, FxKind, Id, Media, Project, Ratio, Sequence,
+    Time, Track, TrackKind, VideoInfo,
 };
 use kerf_playback::{PlaybackConfig, PlaybackEvent, PlaybackFrame, PlaybackSession, PlaybackState};
 use kerf_runtime::{RuntimeClient, StateSnapshot};
@@ -108,6 +108,15 @@ enum Command {
         texts: Value,
         revision: u64,
     },
+    /// How `effects` would look added to `clip`, on its picture at sequence
+    /// time `at`: an `effect_preview` event per raster effect, `width`
+    /// pixels wide. A newer request supersedes it.
+    EffectPreviews {
+        clip: String,
+        at: f64,
+        effects: Vec<String>,
+        width: u32,
+    },
     /// Keep a Kerf Cloud token and read its account.
     CloudSignIn {
         token: String,
@@ -137,6 +146,10 @@ struct Shared {
     frame: Mutex<Option<PlaybackFrame>>,
     seek: Mutex<Option<PendingSeek>>,
     project: Mutex<Option<MediaProject>>,
+    /// The project as edited, its media paths resolved.
+    model: Mutex<Option<Project>>,
+    /// The latest effect preview request; older ones stop.
+    previews: AtomicU64,
     /// The project directory, which relative media paths are resolved
     /// against.
     directory: PathBuf,
@@ -218,6 +231,9 @@ fn publish_snapshot(
         match kerf_runtime::parse_document(&state.document) {
             Ok(mut project) => {
                 kerf_runtime::resolve_media_paths(&mut project, &shared.directory);
+                if let Ok(mut model) = shared.model.lock() {
+                    *model = Some(project.clone());
+                }
                 if let Ok(mut slot) = shared.project.lock() {
                     shared.revision.fetch_add(1, Ordering::SeqCst);
                     *slot = Some(MediaProject::Native(project));
@@ -1035,6 +1051,120 @@ pub unsafe extern "C" fn kerf_migrate_from_cut(project_directory: *const c_char)
     }
 }
 
+/// Emit how each of `effects` would look added to `clip`: its picture at
+/// sequence time `at`, `width` pixels wide, through the clip's own raster
+/// effects and then the effect, as RGBA. Graph effects have no preview.
+/// Stops when a newer request than `request` arrives.
+fn effect_previews(
+    shared: &Shared,
+    request: u64,
+    clip: &str,
+    at: f64,
+    effects: &[String],
+    width: u32,
+    tx: &SyncSender<Value>,
+) -> Result<(), String> {
+    use base64::Engine as _;
+    let project = shared
+        .model
+        .lock()
+        .map_err(|_| "the project is unavailable".to_owned())?
+        .clone()
+        .ok_or_else(|| "no project is open".to_owned())?;
+    let found = project
+        .clip(clip)
+        .ok_or_else(|| format!("no clip `{clip}`"))?;
+    let Content::Media {
+        media,
+        source_in,
+        speed,
+    } = &found.content
+    else {
+        return Ok(());
+    };
+    let Some(media) = project.media(media.as_str()) else {
+        return Ok(());
+    };
+    let Some(video) = media.video else {
+        return Ok(());
+    };
+    let at = Time::from_seconds(at)
+        .unwrap_or(Time::ZERO)
+        .clamp(found.start, found.end() - media.rate.frame_duration());
+    let clip_time = at - found.start;
+    let source = if speed.is_reverse() {
+        *source_in + speed.source_span(found.duration - clip_time)
+    } else {
+        *source_in + speed.source_span(clip_time)
+    };
+    let width = width.clamp(16, 640) & !1;
+    let height = ((u64::from(width) * u64::from(video.height) / u64::from(video.width.max(1)))
+        as u32)
+        .max(2)
+        & !1;
+    let output = std::process::Command::new(kerf_engine::ffmpeg::resolve_ffmpeg_bin())
+        .args(["-hide_banner", "-loglevel", "error", "-ss"])
+        .arg(kerf_engine::program::secs(source))
+        .arg("-i")
+        .arg(&media.path)
+        .args(["-frames:v", "1", "-vf"])
+        .arg(format!("scale={width}:{height},format=rgba"))
+        .args(["-f", "rawvideo", "-"])
+        .output()
+        .map_err(|err| err.to_string())?;
+    let size = width as usize * height as usize * 4;
+    if !output.status.success() || output.stdout.len() < size {
+        return Err(format!("no picture of `{clip}` at that time"));
+    }
+    let picture = &output.stdout[..size];
+    let own: Vec<Effect> = found
+        .effects
+        .iter()
+        .filter(|effect| {
+            effect.enabled
+                && Catalog::builtin()
+                    .fx(effect.fx.as_str())
+                    .is_some_and(|fx| fx.engine == Engine::Raster)
+        })
+        .cloned()
+        .collect();
+    let seed = kerf_core::raster::seed(clip);
+    for id in effects {
+        if shared.previews.load(Ordering::SeqCst) != request {
+            return Ok(());
+        }
+        let Some(fx) = Catalog::builtin()
+            .fx(id)
+            .filter(|fx| fx.engine == Engine::Raster && fx.kind == FxKind::Effect)
+        else {
+            continue;
+        };
+        let mut stack = own.clone();
+        stack.push(Effect {
+            fx: fx.id.clone(),
+            enabled: true,
+            params: Default::default(),
+        });
+        let Ok(stack) = kerf_fx::RasterStack::new(&stack, video.width, video.height, seed) else {
+            continue;
+        };
+        let mut frame = picture.to_vec();
+        stack.apply(&mut frame, width, height, clip_time, media.rate.fps());
+        emit(
+            tx,
+            json!({
+                "type": "effect_preview",
+                "clip": clip,
+                "fx": id,
+                "width": width,
+                "height": height,
+                "rgba": base64::engine::general_purpose::STANDARD.encode(&frame),
+            }),
+        );
+    }
+    Ok(())
+}
+
 /// Start workers without waiting for project I/O.
 /// # Safety
 /// Both arguments must be live, NUL-terminated UTF-8 strings for this call.
@@ -1069,6 +1199,8 @@ pub unsafe extern "C" fn kerf_bridge_new(
         frame: Mutex::new(None),
         seek: Mutex::new(None),
         project: Mutex::new(None),
+        model: Mutex::new(None),
+        previews: AtomicU64::new(0),
     });
     {
         let directory = directory.clone();
@@ -1169,6 +1301,24 @@ pub unsafe extern "C" fn kerf_bridge_send(bridge: *mut c_void, message: *const c
             } else {
                 false
             }
+        }
+        Command::EffectPreviews {
+            clip,
+            at,
+            effects,
+            width,
+        } => {
+            let request = bridge.shared.previews.fetch_add(1, Ordering::SeqCst) + 1;
+            let shared = bridge.shared.clone();
+            let tx = bridge.events_tx.clone();
+            thread::spawn(move || {
+                if let Err(message) =
+                    effect_previews(&shared, request, &clip, at, &effects, width, &tx)
+                {
+                    error(&tx, message);
+                }
+            });
+            true
         }
         Command::CloudSignIn { .. } | Command::CloudSignOut | Command::CloudRefresh => {
             let tx = bridge.events_tx.clone();
@@ -1274,6 +1424,14 @@ pub unsafe extern "C" fn kerf_commands_catalog(keymap: *const c_char) -> *mut c_
     owned_json(kerf_commands::catalog(&keymap))
 }
 
+/// The picture effects and transitions the editor offers, as a JSON array
+/// of `{id, kind, category, name, doc, engine, params}`. Free the result
+/// with `kerf_bridge_string_free`.
+#[no_mangle]
+pub extern "C" fn kerf_fx_catalog() -> *mut c_char {
+    owned_json(kerf_runtime::fx_catalog_json())
+}
+
 /// Why each command is unavailable in a JSON context, or null when it is
 /// available. Free the result with `kerf_bridge_string_free`.
 /// # Safety
@@ -1377,6 +1535,8 @@ mod tests {
             frame: Mutex::new(None),
             seek: Mutex::new(None),
             project: Mutex::new(None),
+            model: Mutex::new(None),
+            previews: AtomicU64::new(0),
         }
     }
 

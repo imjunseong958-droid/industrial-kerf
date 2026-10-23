@@ -759,6 +759,11 @@ pub static COMMANDS: &[Command] = &[
         1,
     ))),
     checkable(frontend(menu(
+        command("window.effects", "Effects", always),
+        Menu::Window,
+        1,
+    ))),
+    checkable(frontend(menu(
         command("window.assistant", "Kerf Assistant", always),
         Menu::Window,
         1,
