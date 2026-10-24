@@ -24,7 +24,8 @@ Sources live in the `kerf` namespace, one class per header/source pair:
 `main_window` (the window, which builds and connects the panels),
 `workspace` (the docked panels and workspaces), `project_panel` (the bin),
 `source_monitor_panel`, `effect_controls_panel`,
-`timeline_widget`, `viewer_widget` (the viewer and the focus-region picker),
+`timeline_widget`, `viewer_widget` (the viewer, its mask drawing, and the
+focus-region picker),
 `command_registry` (the editor's side of the command registry), and
 `media_artwork` (background thumbnails and waveforms). `editor_common`
 holds shared constants and helpers, `editor_style.h` the stylesheet, and
@@ -126,6 +127,24 @@ the edit is an ordinary one, undone like any other. Effect Controls lists the
 clip's effects in order: the checkbox turns one off, ✕ removes it, and its
 parameters edit like the clip's properties, resetting to the default when
 set back to it.
+
+## Masks
+
+The Rectangle, Ellipse, and Pen mask tools sit in the Program panel's title
+bar and beside Masks in Effect Controls; they draw on the selected picture
+clip. Drag out a rectangle or an ellipse on the Program monitor; with the
+pen, click each corner and click the first one again to close the outline,
+or press Return to leave it open as a path (Escape drops it). A new mask is
+named `k1`, `k2`, … and selected. While the clip shows masks, the monitor
+holds its picture: drag a handle to move a corner or point, drag inside a
+mask to move it, and press Delete to remove the selected one. Masks are
+drawn where the clip's picture lands, after its crop, scale, rotation, and
+position; a mask with mode `none` is dashed, a path that effects such as
+Stroke and Reshape read. Effect Controls lists the masks with their mode,
+inversion, feather, opacity, and expansion, and an effect's mask parameters
+pick from them. Each change is one edit (`mask-add`, `mask-set`, or
+`mask-remove`), undone like any other; a masked clip previews through the
+compositor.
 
 ## Asking Kerf
 

@@ -225,6 +225,44 @@ with tempfile.TemporaryDirectory(prefix='kerf-qt-', dir=ROOT / 'target') as temp
         assert [effect['fx'] for effect in effects] == ['channel.invert'], effects
         send({'type': 'undo', 'revision': with_effect['revision']})
         redone = state()
+        # A mask drawn on the viewer is a typed edit: the document gains its
+        # line, the compositor draws the program with the picture cut to it,
+        # and undo takes it away.
+        send({'type': 'edit', 'revision': redone['revision'],
+              'ops': [{'op': 'mask-add', 'clip': clip['id'], 'name': 'k1', 'rect': [0.25, 0.25, 0.75, 0.75]}]})
+        masked = state()
+        assert 'mask k1 rect=0.25,0.25,0.75,0.75' in masked['document'], masked['document']
+        masks = masked['timeline']['tracks'][0]['clips'][0].get('masks', [])
+        assert [(mask['name'], mask['rect']) for mask in masks] == [('k1', [0.25, 0.25, 0.75, 0.75])], masks
+        assert any(prop['name'] == 'feather' for prop in masked['timeline']['maskProperties'])
+        wait(lambda event: event['type'] == 'preview' and event['status'] == 'live')
+        send({'type': 'seek', 'position': 1.0})
+        frame = Frame()
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            poll()
+            if lib.kerf_bridge_frame(bridge, C.byref(frame)) and abs(frame.time - 1.0) < .05:
+                break
+            time.sleep(.005)
+        else:
+            raise AssertionError('The masked frame did not arrive')
+        pixels = C.string_at(frame.pixels, frame.length)
+
+        def brightness(x0, y0, x1, y1):
+            total = count = 0
+            for y in range(int(y0 * frame.height), int(y1 * frame.height), 4):
+                for x in range(int(x0 * frame.width), int(x1 * frame.width), 4):
+                    at = (y * frame.width + x) * 4
+                    total += pixels[at] + pixels[at + 1] + pixels[at + 2]
+                    count += 3
+            return total / count
+
+        outside, inside = brightness(0.02, 0.02, 0.2, 0.2), brightness(0.35, 0.35, 0.65, 0.65)
+        assert outside < 2 and inside > 30, (outside, inside)
+        send({'type': 'undo', 'revision': masked['revision']})
+        redone = state()
+        assert 'mask ' not in redone['document'], redone['document']
+        assert 'masks' not in redone['timeline']['tracks'][0]['clips'][0]
         # A native preset is exported directly from the accepted edit, without
         # asking a model. It carries empty media slots and reusable .kerf code.
         preset_path = directory / 'native.kerfpreset'
@@ -354,7 +392,7 @@ with tempfile.TemporaryDirectory(prefix='kerf-qt-', dir=ROOT / 'target') as temp
         send({'type': 'cloud_sign_out'})
         wait(lambda event: event['type'] == 'cloud' and event['access'] == 'signedOut')
         assert 'token' not in json.loads((directory / 'home/.kerf/cloud.json').read_text())
-        print(json.dumps({'result': 'passed', 'checks': ['native preset export/inspect/apply/reject', 'kerf cloud sign-in/account/request', 'focused agent request', 'proposal timeline', 'source insert', 'connection lifecycle/reconnect', 'import', 'trim', 'undo', 'redo', 'external CLI edit sync', '200 seeks/latest frame', 'local provider/tool activity', 'proposal/accept', 'conversation history', 'real export', 'effect rendered fallback', 'effect catalog/previews/add', 'next-step buttons'], 'max_enqueue_ms': round(max(timings), 3), 'frame': [frame.width, frame.height]}, indent=2))
+        print(json.dumps({'result': 'passed', 'checks': ['native preset export/inspect/apply/reject', 'kerf cloud sign-in/account/request', 'focused agent request', 'proposal timeline', 'source insert', 'connection lifecycle/reconnect', 'import', 'trim', 'undo', 'redo', 'external CLI edit sync', '200 seeks/latest frame', 'local provider/tool activity', 'proposal/accept', 'conversation history', 'real export', 'effect rendered fallback', 'effect catalog/previews/add', 'mask add/composite/undo', 'next-step buttons'], 'max_enqueue_ms': round(max(timings), 3), 'frame': [frame.width, frame.height]}, indent=2))
     finally:
         lib.kerf_bridge_free(bridge)
         if daemon.poll() is None:

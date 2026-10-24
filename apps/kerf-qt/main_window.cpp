@@ -1517,6 +1517,40 @@ void MainWindow::buildUi() {
     chatTabLayout->addWidget(composer);
     m_effectControls = new EffectControlsPanel;
     connect(m_effectControls, &EffectControlsPanel::editRequested, this, &MainWindow::sendEdit);
+    // Mask tools draw a new mask on the selected picture clip over the
+    // Program monitor; the Program panel's title bar and Effect Controls
+    // both carry them.
+    auto *maskTools = new QActionGroup(this);
+    maskTools->setExclusionPolicy(QActionGroup::ExclusionPolicy::ExclusiveOptional);
+    struct MaskToolAction {
+        MaskTool tool;
+        const char *id;
+        QString label;
+    };
+    for (const MaskToolAction &entry : {
+             MaskToolAction{MaskTool::Rectangle, "maskRectangle", tr("Rectangle mask")},
+             MaskToolAction{MaskTool::Ellipse, "maskEllipse", tr("Ellipse mask")},
+             MaskToolAction{MaskTool::Pen, "maskPen",
+                            tr("Pen mask: click its corners, then the first again to close it (Return leaves it open)")}}) {
+        const MaskTool tool = entry.tool;
+        auto *action = new QAction(maskToolIcon(tool), entry.label, maskTools);
+        action->setObjectName(QString::fromLatin1(entry.id));
+        action->setCheckable(true);
+        action->setEnabled(false);
+        action->setData(static_cast<int>(tool));
+        connect(action, &QAction::toggled, this, [this, tool](bool on) {
+            if (on) m_viewer->setMaskTool(tool);
+            else if (m_viewer->maskTool() == tool) m_viewer->setMaskTool(MaskTool::None);
+        });
+        m_maskTools.append(action);
+    }
+    m_effectControls->setMaskTools(m_maskTools);
+    connect(m_viewer, &ViewerWidget::maskToolChanged, this, [this](MaskTool tool) {
+        for (QAction *action : m_maskTools) action->setChecked(action->data().toInt() == static_cast<int>(tool));
+    });
+    connect(m_viewer, &ViewerWidget::editRequested, this, &MainWindow::sendEdit);
+    connect(m_viewer, &ViewerWidget::maskSelected, m_effectControls, &EffectControlsPanel::selectMask);
+    connect(m_effectControls, &EffectControlsPanel::maskSelected, m_viewer, &ViewerWidget::selectMask);
     // The effects offered: cards on the selected clip, and the parameters
     // the inspector edits.
     m_effects = new EffectsPanel;
@@ -1828,7 +1862,7 @@ void MainWindow::buildUi() {
     m_viewerDetail->setEnabled(false);
     m_viewerDetail->setVisible(false);
     m_workspace->addPanel(QStringLiteral("program"), QStringLiteral("Program"), viewerFrame)
-        ->setTitleBarActions({m_viewerDetail});
+        ->setTitleBarActions(QList<QAction *>(m_maskTools) << m_viewerDetail);
     m_timelineDetail = new QAction(this);
     m_timelineDetail->setObjectName(QStringLiteral("timelineDetail"));
     m_timelineDetail->setEnabled(false);
@@ -2403,6 +2437,8 @@ void MainWindow::handleEvent(QJsonObject event) {
         m_hasShownFrame = false;
     } else if (type == QStringLiteral("error")) {
         showError(event.value(QStringLiteral("message")).toString(QStringLiteral("Runtime error")));
+        // A refused mask edit puts the outline back.
+        updateViewerMasks();
     } else if (type == QStringLiteral("preset_export")) {
         const QString path = event.value(QStringLiteral("path")).toString();
         const QByteArray document = event.value(QStringLiteral("document")).toString().toUtf8();
@@ -2475,6 +2511,8 @@ void MainWindow::handleEvent(QJsonObject event) {
         }
         updateTransport();
         updateCommandStates();
+        // An animated clip's picture moves with the playhead, and its masks with it.
+        if (!m_selectedClip.isEmpty()) updateViewerMasks();
     } else if (type == QStringLiteral("playback")) {
         m_playing = m_connected && event.value(QStringLiteral("playing")).toBool();
         updateTransport();
@@ -2642,8 +2680,45 @@ QJsonObject MainWindow::selectedClipObject() const {
     return {};
 }
 
+QSizeF MainWindow::selectedPictureSize(bool *fit) const {
+    // A picture clip draws media, a nested sequence, or a generator.
+    const QJsonObject clip = selectedClipObject();
+    const QString kind = clip.value(QStringLiteral("kind")).toString();
+    if (clip.isEmpty() || selectedTrackType() != QStringLiteral("video") || kind == QStringLiteral("caption")) return {};
+    *fit = kind == QStringLiteral("media") || kind == QStringLiteral("sequence");
+    const QJsonArray sources = m_project.value(QStringLiteral("sources")).toArray();
+    if (kind == QStringLiteral("media")) {
+        for (const QJsonValue &value : sources) {
+            const QJsonObject source = value.toObject();
+            if (source.value(QStringLiteral("id")).toString() != clip.value(QStringLiteral("sourceId")).toString()) continue;
+            const QSizeF size(source.value(QStringLiteral("width")).toDouble(), source.value(QStringLiteral("height")).toDouble());
+            return size.isEmpty() ? QSizeF() : size;
+        }
+        return {};
+    }
+    // Generators fill the canvas; a nested sequence is fitted to it.
+    return QSizeF(resolvedCanvasSize(m_project, sources));
+}
+
+void MainWindow::updateViewerMasks() {
+    bool fit = false;
+    const QSizeF picture = m_connected ? selectedPictureSize(&fit) : QSizeF();
+    for (QAction *action : m_maskTools) action->setEnabled(!picture.isEmpty());
+    if (picture.isEmpty()) {
+        m_viewer->setMasks(QString(), QJsonArray{}, QTransform{});
+        return;
+    }
+    const QJsonObject clip = selectedClipObject();
+    const double clipTime = std::clamp(m_playhead - clip.value(QStringLiteral("timelineStart")).toDouble(), 0.0,
+                                       clip.value(QStringLiteral("duration")).toDouble());
+    const QSizeF canvas(resolvedCanvasSize(m_project, m_project.value(QStringLiteral("sources")).toArray()));
+    m_viewer->setMasks(m_selectedClip, clip.value(QStringLiteral("masks")).toArray(),
+                       picturePlacement(clip, picture, fit, canvas, clipTime));
+}
+
 void MainWindow::updateInspector() {
     const QJsonObject clip = selectedClipObject();
+    updateViewerMasks();
     if (!m_connected || clip.isEmpty()) {
         m_effectControls->setClip(QString(), QJsonObject{}, QJsonArray{}, m_fps);
         m_effects->setClip(QString(), false);
@@ -2671,7 +2746,13 @@ void MainWindow::updateInspector() {
     QJsonArray defs = m_project.value(QStringLiteral("generators")).toObject().value(clip.value(QStringLiteral("fx")).toString()).toArray();
     for (const QJsonValue &def : m_project.value(QStringLiteral("properties")).toObject().value(selectedTrackType()).toArray())
         defs.append(def);
+    bool fit = false;
+    m_effectControls->setMaskable(!selectedPictureSize(&fit).isEmpty());
+    QStringList maskModes;
+    for (const QJsonValue &mode : m_project.value(QStringLiteral("maskModes")).toArray()) maskModes << mode.toString();
+    m_effectControls->setMaskCatalog(m_project.value(QStringLiteral("maskProperties")).toArray(), maskModes);
     m_effectControls->setClip(m_selectedClip, clip, defs, m_fps);
+    m_effectControls->selectMask(m_viewer->selectedMask());
 }
 
 void MainWindow::updateProposal(const QJsonValue &value) {

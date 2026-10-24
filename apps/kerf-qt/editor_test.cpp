@@ -734,6 +734,249 @@ private slots:
         QCOMPARE(op().value("index").toInt(), 1);
     }
 
+    // Mouse events sent straight to `widget`, which need not be on screen.
+    static void mouse(QWidget *widget, QEvent::Type type, const QPointF &at) {
+        const Qt::MouseButton button = type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton;
+        const Qt::MouseButtons buttons = type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::MouseButtons(Qt::LeftButton);
+        QMouseEvent event(type, at, widget->mapToGlobal(at), button, buttons, Qt::NoModifier);
+        QCoreApplication::sendEvent(widget, &event);
+    }
+    static void key(QWidget *widget, int code) {
+        QKeyEvent event(QEvent::KeyPress, code, Qt::NoModifier);
+        QCoreApplication::sendEvent(widget, &event);
+    }
+    static bool near(const QJsonValue &values, std::initializer_list<double> expected) {
+        const QJsonArray array = values.toArray();
+        if (array.size() != static_cast<int>(expected.size())) return false;
+        int index = 0;
+        for (double value : expected)
+            if (std::abs(array.at(index++).toDouble() - value) > 1e-3) return false;
+        return true;
+    }
+
+    void maskPicturePlacementFollowsTheCompositor() {
+        // A 4:3 picture fitted to a 16:9 canvas is pillarboxed.
+        const QSizeF canvas(1920, 1080);
+        const QTransform fitted = picturePlacement(QJsonObject{}, QSizeF(640, 480), true, canvas, 0.0);
+        QCOMPARE(fitted.map(QPointF(0, 0)), QPointF(240, 0));
+        QCOMPARE(fitted.map(QPointF(1, 1)), QPointF(1680, 1080));
+        // Scale about the center, then move by frame widths.
+        const QTransform moved = picturePlacement(QJsonObject{{"props", QJsonObject{{"scale", 0.5}, {"x", 0.25}}}},
+                                                  QSizeF(1920, 1080), true, canvas, 0.0);
+        QCOMPARE(moved.map(QPointF(0.5, 0.5)), QPointF(1440, 540));
+        QCOMPARE(moved.map(QPointF(0, 0)), QPointF(960, 270));
+        // Rotation is clockwise about the anchor.
+        const QPointF right = picturePlacement(QJsonObject{{"props", QJsonObject{{"rotation", 90.0}}}},
+                                               QSizeF(1920, 1080), true, canvas, 0.0).map(QPointF(1, 0.5));
+        QVERIFY(std::abs(right.x() - 960) < 1e-6 && std::abs(right.y() - 1500) < 1e-6);
+        // A crop keeps the picture's fractions where they were in the source.
+        const QTransform cropped = picturePlacement(QJsonObject{{"props", QJsonObject{{"crop_l", 0.5}}}},
+                                                    QSizeF(1920, 1080), false, canvas, 0.0);
+        QCOMPARE(cropped.map(QPointF(0.5, 0.5)), QPointF(960 - 480, 540));
+        // Animated properties are read at the clip time.
+        const QJsonObject keyed{{"x", QJsonArray{QJsonObject{{"at", 0.0}, {"value", 0.0}}, QJsonObject{{"at", 2.0}, {"value", 1.0}}}}};
+        QCOMPARE(propertyAt(keyed, "x", 1.0, 0.0), 0.5);
+        QCOMPARE(propertyAt(keyed, "x", 3.0, 0.0), 1.0);
+        QCOMPARE(propertyAt(keyed, "y", 1.0, 0.25), 0.25);
+        QVERIFY(maskPath(QJsonObject{{"points", QJsonArray{QJsonArray{0, 0}, QJsonArray{1, 0}, QJsonArray{1, 1}}}, {"closed", false}})
+                    .elementCount() == 3);
+    }
+
+    void viewerDrawsAndEditsMasksAsTypedOperations() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        const QJsonArray maskProperties{
+            QJsonObject{{"name", "feather"}, {"type", "number"}, {"default", 0.0}, {"min", 0.0}, {"max", 10000.0}, {"unit", "pixels"}},
+            QJsonObject{{"name", "opacity"}, {"type", "number"}, {"default", 1.0}, {"min", 0.0}, {"max", 1.0}}};
+        const auto snapshot = [&window, &maskProperties](int revision, const QJsonArray &masks) {
+            QJsonObject clip{{"id", "c1"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 0.0}, {"duration", 2.0},
+                             {"effects", QJsonArray{QJsonObject{{"fx", "distort.reshape"}, {"enabled", true}, {"params", QJsonObject{}}}}}};
+            if (!masks.isEmpty()) clip.insert("masks", masks);
+            window.applySnapshot(QJsonObject{{"revision", revision}, {"duration", 2}, {"timeline", QJsonObject{
+                {"fps", 24}, {"width", 1920}, {"height", 1080}, {"maskProperties", maskProperties},
+                {"maskModes", QJsonArray{"add", "subtract", "none"}},
+                {"sources", QJsonArray{QJsonObject{{"id", "m1"}, {"path", "a.mov"}, {"width", 1920}, {"height", 1080}, {"duration", 2}}}},
+                {"tracks", QJsonArray{
+                    QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{clip}}},
+                    QJsonObject{{"id", "A1"}, {"type", "audio"}, {"clips", QJsonArray{
+                        QJsonObject{{"id", "a1"}, {"timelineStart", 0.0}, {"duration", 2.0}}}}}}}}}});
+        };
+        const QJsonObject k1{{"name", "k1"}, {"rect", QJsonArray{0.25, 0.25, 0.75, 0.75}}, {"mode", "add"},
+                             {"inverted", false}, {"params", QJsonObject{}}};
+        auto op = [&window] {
+            const QJsonObject command = window.m_lastCommand;
+            window.m_lastCommand = {};
+            return command.value("type").toString() == QStringLiteral("edit")
+                ? command.value("ops").toArray().first().toObject() : QJsonObject{};
+        };
+        snapshot(3, {});
+        ViewerWidget *viewer = window.m_viewer;
+        viewer->resize(960, 560);
+        auto *rectangle = window.findChild<QAction *>(QStringLiteral("maskRectangle"));
+        auto *ellipse = window.findChild<QAction *>(QStringLiteral("maskEllipse"));
+        auto *pen = window.findChild<QAction *>(QStringLiteral("maskPen"));
+        QVERIFY(rectangle && ellipse && pen);
+        QVERIFY(!rectangle->isEnabled());
+        // A sound clip has no picture to mask.
+        window.selectClip(QStringLiteral("a1"));
+        QVERIFY(!rectangle->isEnabled());
+        QVERIFY(!window.m_effectControls->m_masksSection->isVisibleTo(window.m_effectControls));
+        window.selectClip(QStringLiteral("c1"));
+        QVERIFY(rectangle->isEnabled());
+        QVERIFY(window.m_effectControls->m_masksSection->isVisibleTo(window.m_effectControls));
+        QCOMPARE(window.m_effectControls->findChildren<QToolButton *>(QStringLiteral("maskTool")).size(), 3);
+        // With no masks and no tool, the viewer still scrubs.
+        QSignalSpy scrubs(viewer, &ViewerWidget::scrubbed);
+        mouse(viewer, QEvent::MouseMove, QPointF(300, 200));
+        QCOMPARE(scrubs.size(), 1);
+
+        // A drag with the rectangle tool adds k1 where it was drawn, then
+        // puts the tool down with the new mask selected.
+        rectangle->trigger();
+        QCOMPARE(viewer->maskTool(), MaskTool::Rectangle);
+        QTransform toWidget = viewer->pictureToWidget();
+        mouse(viewer, QEvent::MouseButtonPress, toWidget.map(QPointF(0.25, 0.25)));
+        mouse(viewer, QEvent::MouseMove, toWidget.map(QPointF(0.5, 0.6)));
+        QCOMPARE(scrubs.size(), 1);
+        mouse(viewer, QEvent::MouseButtonRelease, toWidget.map(QPointF(0.75, 0.75)));
+        QJsonObject added = op();
+        QCOMPARE(added.value("op").toString(), QStringLiteral("mask-add"));
+        QCOMPARE(added.value("clip").toString(), QStringLiteral("c1"));
+        QCOMPARE(added.value("name").toString(), QStringLiteral("k1"));
+        QVERIFY2(near(added.value("rect"), {0.25, 0.25, 0.75, 0.75}), qPrintable(QJsonDocument(added).toJson()));
+        QCOMPARE(viewer->maskTool(), MaskTool::None);
+        QVERIFY(!rectangle->isChecked());
+        QCOMPARE(viewer->selectedMask(), QStringLiteral("k1"));
+        // A snapshot read before the edit landed does not drop the selection.
+        snapshot(3, {});
+        QCOMPARE(viewer->selectedMask(), QStringLiteral("k1"));
+
+        // The snapshot carries it. A corner drags on its own, and a drag
+        // inside moves the whole mask.
+        snapshot(4, QJsonArray{k1});
+        QCOMPARE(viewer->m_masks.size(), 1);
+        QCOMPARE(viewer->selectedMask(), QStringLiteral("k1"));
+        toWidget = viewer->pictureToWidget();
+        mouse(viewer, QEvent::MouseButtonPress, toWidget.map(QPointF(0.75, 0.75)));
+        mouse(viewer, QEvent::MouseMove, toWidget.map(QPointF(0.9, 0.8)));
+        mouse(viewer, QEvent::MouseButtonRelease, toWidget.map(QPointF(0.9, 0.8)));
+        QJsonObject set = op();
+        QCOMPARE(set.value("op").toString(), QStringLiteral("mask-set"));
+        QCOMPARE(set.value("name").toString(), QStringLiteral("k1"));
+        QVERIFY2(near(set.value("rect"), {0.25, 0.25, 0.9, 0.8}), qPrintable(QJsonDocument(set).toJson()));
+        mouse(viewer, QEvent::MouseButtonPress, toWidget.map(QPointF(0.5, 0.5)));
+        mouse(viewer, QEvent::MouseMove, toWidget.map(QPointF(0.6, 0.5)));
+        mouse(viewer, QEvent::MouseButtonRelease, toWidget.map(QPointF(0.6, 0.5)));
+        set = op();
+        QVERIFY2(near(set.value("rect"), {0.35, 0.25, 1.0, 0.8}), qPrintable(QJsonDocument(set).toJson()));
+        // A click without a drag changes nothing; the picture holds still
+        // while masks are shown.
+        mouse(viewer, QEvent::MouseButtonPress, toWidget.map(QPointF(0.5, 0.5)));
+        mouse(viewer, QEvent::MouseButtonRelease, toWidget.map(QPointF(0.5, 0.5)));
+        QVERIFY(op().isEmpty());
+        mouse(viewer, QEvent::MouseMove, QPointF(20, 20));
+        QCOMPARE(scrubs.size(), 1);
+
+        // Effect Controls edits its mode, inversion, and properties, and an
+        // effect's mask parameter picks it.
+        snapshot(5, QJsonArray{k1});
+        EffectControlsPanel *inspector = window.m_effectControls;
+        const auto boxes = inspector->findChildren<QWidget *>(QStringLiteral("maskBox"));
+        QCOMPARE(boxes.size(), 1);
+        QVERIFY(boxes.at(0)->findChild<QToolButton *>(QStringLiteral("maskName"))->isChecked());
+        auto *mode = boxes.at(0)->findChild<QComboBox *>(QStringLiteral("maskMode"));
+        auto *inverted = boxes.at(0)->findChild<QCheckBox *>(QStringLiteral("maskInverted"));
+        auto *feather = boxes.at(0)->findChild<QDoubleSpinBox *>(QStringLiteral("maskParam_feather"));
+        QVERIFY(mode && inverted && feather);
+        QCOMPARE(mode->count(), 3);
+        QCOMPARE(mode->currentText(), QStringLiteral("add"));
+        mode->setCurrentIndex(2);
+        emit mode->activated(2);
+        set = op();
+        QCOMPARE(set.value("op").toString(), QStringLiteral("mask-set"));
+        QCOMPARE(set.value("mode").toString(), QStringLiteral("none"));
+        inverted->click();
+        QCOMPARE(op().value("inverted").toBool(), true);
+        feather->setValue(12.0);
+        emit feather->editingFinished();
+        QCOMPARE(op().value("params").toObject().value("feather").toDouble(), 12.0);
+        feather->setValue(0.0);
+        emit feather->editingFinished();
+        QVERIFY(op().value("params").toObject().value("feather").isNull());
+        auto *source = inspector->findChild<QComboBox *>(QStringLiteral("effectParam_sourceMask"));
+        QVERIFY(source);
+        QCOMPARE(source->count(), 2);
+        QCOMPARE(source->itemText(1), QStringLiteral("k1"));
+        // A mask with mode none is a path only, still drawn and edited.
+        snapshot(6, QJsonArray{QJsonObject{{"name", "k1"}, {"rect", QJsonArray{0.25, 0.25, 0.75, 0.75}}, {"mode", "none"},
+                                           {"inverted", false}, {"params", QJsonObject{{"feather", 12.0}}}}});
+        QCOMPARE(mode->currentText(), QStringLiteral("none"));
+        QCOMPARE(feather->value(), 12.0);
+        QCOMPARE(viewer->maskAt(toWidget.map(QPointF(0.5, 0.5))), QStringLiteral("k1"));
+        // Choosing it in the panel selects it on the viewer; Delete there
+        // removes it, as ✕ in the panel does.
+        viewer->selectMask(QString());
+        boxes.at(0)->findChild<QToolButton *>(QStringLiteral("maskName"))->click();
+        QCOMPARE(viewer->selectedMask(), QStringLiteral("k1"));
+        key(viewer, Qt::Key_Delete);
+        QJsonObject removed = op();
+        QCOMPARE(removed.value("op").toString(), QStringLiteral("mask-remove"));
+        QCOMPARE(removed.value("name").toString(), QStringLiteral("k1"));
+        snapshot(7, QJsonArray{k1});
+        inspector->findChild<QToolButton *>(QStringLiteral("maskRemove"))->click();
+        QCOMPARE(op().value("op").toString(), QStringLiteral("mask-remove"));
+
+        // The pen closes an outline on its first point, and Return leaves
+        // it open; names take the next free number.
+        snapshot(8, {});
+        QVERIFY(inspector->findChildren<QWidget *>(QStringLiteral("maskBox")).isEmpty());
+        pen->trigger();
+        for (const QPointF &corner : {QPointF(0.1, 0.1), QPointF(0.9, 0.1), QPointF(0.5, 0.9), QPointF(0.1, 0.1)}) {
+            mouse(viewer, QEvent::MouseButtonPress, toWidget.map(corner));
+            mouse(viewer, QEvent::MouseButtonRelease, toWidget.map(corner));
+        }
+        added = op();
+        QCOMPARE(added.value("op").toString(), QStringLiteral("mask-add"));
+        QCOMPARE(added.value("name").toString(), QStringLiteral("k1"));
+        QCOMPARE(added.value("closed").toBool(), true);
+        const QJsonArray points = added.value("points").toArray();
+        QCOMPARE(points.size(), 3);
+        QVERIFY(near(points.at(2), {0.5, 0.9}));
+        QCOMPARE(viewer->maskTool(), MaskTool::None);
+        ellipse->trigger();
+        mouse(viewer, QEvent::MouseButtonPress, toWidget.map(QPointF(0.2, 0.2)));
+        mouse(viewer, QEvent::MouseButtonRelease, toWidget.map(QPointF(0.6, 0.8)));
+        added = op();
+        QCOMPARE(added.value("name").toString(), QStringLiteral("k2"));
+        QVERIFY2(near(added.value("ellipse"), {0.4, 0.5, 0.2, 0.3}), qPrintable(QJsonDocument(added).toJson()));
+        pen->trigger();
+        for (const QPointF &point : {QPointF(0.1, 0.5), QPointF(0.9, 0.5)}) {
+            mouse(viewer, QEvent::MouseButtonPress, toWidget.map(point));
+            mouse(viewer, QEvent::MouseButtonRelease, toWidget.map(point));
+        }
+        key(viewer, Qt::Key_Return);
+        added = op();
+        QCOMPARE(added.value("name").toString(), QStringLiteral("k3"));
+        QCOMPARE(added.value("closed").toBool(), false);
+        // Escape drops a path being drawn, then puts the tool down.
+        pen->trigger();
+        mouse(viewer, QEvent::MouseButtonPress, toWidget.map(QPointF(0.3, 0.3)));
+        mouse(viewer, QEvent::MouseButtonRelease, toWidget.map(QPointF(0.3, 0.3)));
+        key(viewer, Qt::Key_Escape);
+        QVERIFY(viewer->m_penPoints.isEmpty());
+        QCOMPARE(viewer->maskTool(), MaskTool::Pen);
+        key(viewer, Qt::Key_Escape);
+        QCOMPARE(viewer->maskTool(), MaskTool::None);
+        QVERIFY(!pen->isChecked());
+        QVERIFY(op().isEmpty());
+        // Deselecting the clip hides its masks and stops a tool.
+        rectangle->trigger();
+        window.selectClip(QString());
+        QCOMPARE(viewer->maskTool(), MaskTool::None);
+        QVERIFY(viewer->m_maskClip.isEmpty());
+        QVERIFY(!rectangle->isEnabled());
+    }
+
     void inspectorEditsTheCatalogPropertiesOfTheTrackType() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));

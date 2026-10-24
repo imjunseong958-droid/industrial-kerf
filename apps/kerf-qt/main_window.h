@@ -165,6 +165,12 @@ private:
     void applySnapshot(const QJsonObject &snapshot);
     QString selectedTrackType() const;
     QJsonObject selectedClipObject() const;
+    // The size of the selected clip's picture, in its own pixels, and
+    // whether it is fitted to the canvas; empty when it has none to mask.
+    QSizeF selectedPictureSize(bool *fit) const;
+    // The selected picture clip's masks on the viewer, where its picture
+    // lands at the playhead.
+    void updateViewerMasks();
     void updateInspector();
 
     // A proposal is the script the agent wants to run and the diff of the
@@ -205,6 +211,8 @@ private:
     QAction *m_timelineDetail = nullptr;
     Workspace *m_workspace = nullptr;
     EffectControlsPanel *m_effectControls = nullptr;
+    // Rectangle, Ellipse, and Pen: the mask tools.
+    QList<QAction *> m_maskTools;
     EffectsPanel *m_effects = nullptr;
     QWidget *m_nextSteps = nullptr;
     QWidget *m_chatNextSteps = nullptr;

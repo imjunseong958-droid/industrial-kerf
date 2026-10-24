@@ -1,16 +1,127 @@
 #include "viewer_widget.h"
 #include "editor_common.h"
 
+#include <QCursor>
+#include <QKeyEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPainterPathStroker>
 #include <QPolygonF>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <initializer_list>
 
 namespace kerf {
 
+namespace {
+
+constexpr double kHandleSize = 7.0;
+// How near the pointer must be to a handle, or a path, to take it.
+constexpr double kHandleReach = 6.0;
+
+QColor maskColor(bool selected) { return selected ? QColor("#f2bd69") : QColor(242, 189, 105, 170); }
+
+// Fractions of the picture are kept to four places, under half a pixel of
+// a 4K picture, so the document stays readable.
+double fraction(double value) { return std::round(value * 10000.0) / 10000.0; }
+
+QJsonArray fractions(std::initializer_list<double> values) {
+    QJsonArray out;
+    for (double value : values) out.append(fraction(value));
+    return out;
+}
+
+QPointF pointOf(const QJsonValue &value) {
+    const QJsonArray point = value.toArray();
+    return {point.at(0).toDouble(), point.at(1).toDouble()};
+}
+
+QJsonArray pointsOf(const QVector<QPointF> &points) {
+    QJsonArray out;
+    for (const QPointF &point : points) out.append(fractions({point.x(), point.y()}));
+    return out;
+}
+
+std::array<double, 4> fourOf(const QJsonObject &mask, const QString &key) {
+    const QJsonArray values = mask.value(key).toArray();
+    std::array<double, 4> out{};
+    for (int index = 0; index < 4 && index < values.size(); ++index) out[index] = values.at(index).toDouble();
+    return out;
+}
+
+// The outline of a mask as an operation carries it.
+QJsonObject outlineOf(const QJsonObject &mask) {
+    for (const QString &key : {QStringLiteral("rect"), QStringLiteral("ellipse")})
+        if (mask.contains(key)) return QJsonObject{{key, mask.value(key)}};
+    return QJsonObject{{QStringLiteral("points"), mask.value(QStringLiteral("points"))},
+                       {QStringLiteral("closed"), mask.value(QStringLiteral("closed")).toBool(true)}};
+}
+
+QJsonObject withOutline(QJsonObject mask, const QJsonObject &outline) {
+    for (const QString &key : {QStringLiteral("rect"), QStringLiteral("ellipse"), QStringLiteral("points"), QStringLiteral("closed")})
+        mask.remove(key);
+    for (auto it = outline.begin(); it != outline.end(); ++it) mask.insert(it.key(), it.value());
+    return mask;
+}
+
+// A rectangle's corners clockwise from its top left, an ellipse's left,
+// right, top, and bottom, or a path's points.
+QVector<QPointF> handlesOf(const QJsonObject &mask) {
+    if (mask.contains(QStringLiteral("rect"))) {
+        const auto [l, t, r, b] = fourOf(mask, QStringLiteral("rect"));
+        return {{l, t}, {r, t}, {r, b}, {l, b}};
+    }
+    if (mask.contains(QStringLiteral("ellipse"))) {
+        const auto [x, y, rx, ry] = fourOf(mask, QStringLiteral("ellipse"));
+        return {{x - rx, y}, {x + rx, y}, {x, y - ry}, {x, y + ry}};
+    }
+    QVector<QPointF> points;
+    for (const QJsonValue &point : mask.value(QStringLiteral("points")).toArray()) points.append(pointOf(point));
+    return points;
+}
+
+// `mask` with its handle `index` dragged to `to`: a rectangle keeps the
+// opposite corner, an ellipse its center.
+QJsonObject withHandle(const QJsonObject &mask, int index, const QPointF &to) {
+    if (mask.contains(QStringLiteral("rect"))) {
+        const QRectF rect = QRectF(to, handlesOf(mask).value((index + 2) % 4)).normalized();
+        return withOutline(mask, {{QStringLiteral("rect"), fractions({rect.left(), rect.top(), rect.right(), rect.bottom()})}});
+    }
+    if (mask.contains(QStringLiteral("ellipse"))) {
+        auto [x, y, rx, ry] = fourOf(mask, QStringLiteral("ellipse"));
+        if (index < 2) rx = std::abs(to.x() - x);
+        else ry = std::abs(to.y() - y);
+        return withOutline(mask, {{QStringLiteral("ellipse"), fractions({x, y, rx, ry})}});
+    }
+    QVector<QPointF> points = handlesOf(mask);
+    if (index >= 0 && index < points.size()) points[index] = to;
+    QJsonObject outline = outlineOf(mask);
+    outline.insert(QStringLiteral("points"), pointsOf(points));
+    return withOutline(mask, outline);
+}
+
+QJsonObject movedBy(const QJsonObject &mask, const QPointF &by) {
+    if (mask.contains(QStringLiteral("rect"))) {
+        const auto [l, t, r, b] = fourOf(mask, QStringLiteral("rect"));
+        return withOutline(mask, {{QStringLiteral("rect"), fractions({l + by.x(), t + by.y(), r + by.x(), b + by.y()})}});
+    }
+    if (mask.contains(QStringLiteral("ellipse"))) {
+        const auto [x, y, rx, ry] = fourOf(mask, QStringLiteral("ellipse"));
+        return withOutline(mask, {{QStringLiteral("ellipse"), fractions({x + by.x(), y + by.y(), rx, ry})}});
+    }
+    QVector<QPointF> points = handlesOf(mask);
+    for (QPointF &point : points) point += by;
+    QJsonObject outline = outlineOf(mask);
+    outline.insert(QStringLiteral("points"), pointsOf(points));
+    return withOutline(mask, outline);
+}
+
+} // namespace
+
 ViewerWidget::ViewerWidget(QWidget *parent) : QWidget(parent) {
+    setObjectName(QStringLiteral("viewer"));
     setMinimumSize(320, 180);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setMouseTracking(true);
@@ -68,23 +179,369 @@ QRectF ViewerWidget::captionRect() const {
                   std::max(1.0, canvas.width() - horizontalMargin * 2.0), captionHeight);
 }
 
+void ViewerWidget::setMasks(const QString &clip, const QJsonArray &masks, const QTransform &placement) {
+    // A drag in progress keeps its outline until it is let go.
+    if (m_dragHandle != -1 && clip == m_maskClip) {
+        m_placement = placement;
+        return;
+    }
+    if (clip == m_maskClip && masks == m_masks && placement == m_placement) return;
+    if (clip != m_maskClip) {
+        cancelDrawing();
+        m_selectedMask.clear();
+    }
+    m_maskClip = clip;
+    m_masks = masks;
+    m_placement = placement;
+    if (clip.isEmpty()) setMaskTool(MaskTool::None);
+    // The selection outlives a snapshot that lacks it, as one read before
+    // a new mask was added does.
+    update();
+}
+
+void ViewerWidget::setMaskTool(MaskTool tool) {
+    if (m_maskClip.isEmpty()) tool = MaskTool::None;
+    if (tool == m_maskTool) return;
+    cancelDrawing();
+    m_maskTool = tool;
+    if (tool != MaskTool::None) setFocus(Qt::OtherFocusReason);
+    updateCursor(mapFromGlobal(QCursor::pos()));
+    update();
+    emit maskToolChanged(tool);
+}
+
+void ViewerWidget::selectMask(const QString &name) {
+    const QString selected = maskIndex(name) < 0 ? QString() : name;
+    if (selected == m_selectedMask) return;
+    m_selectedMask = selected;
+    update();
+}
+
+bool ViewerWidget::editsMasks() const {
+    return !m_maskClip.isEmpty() && (m_maskTool != MaskTool::None || !m_masks.isEmpty());
+}
+
+QTransform ViewerWidget::pictureToWidget() const {
+    const QRectF canvas = videoRect();
+    const double canvasWidth = m_width > 0 ? m_width : m_frame.isNull() ? canvas.width() : m_frame.width();
+    const double scale = canvas.width() / std::max(1.0, canvasWidth);
+    QTransform view;
+    view.translate(canvas.left(), canvas.top());
+    view.scale(scale, scale);
+    return m_placement * view;
+}
+
+QPointF ViewerWidget::picturePoint(const QPointF &widget) const {
+    bool invertible = false;
+    const QTransform toPicture = pictureToWidget().inverted(&invertible);
+    return invertible ? toPicture.map(widget) : QPointF();
+}
+
+int ViewerWidget::maskIndex(const QString &name) const {
+    if (name.isEmpty()) return -1;
+    for (int index = 0; index < m_masks.size(); ++index)
+        if (m_masks.at(index).toObject().value(QStringLiteral("name")).toString() == name) return index;
+    return -1;
+}
+
+int ViewerWidget::handleAt(const QPointF &widget) const {
+    const int index = maskIndex(m_selectedMask);
+    if (index < 0) return -1;
+    const QTransform toWidget = pictureToWidget();
+    const QVector<QPointF> handles = handlesOf(m_masks.at(index).toObject());
+    for (int handle = handles.size() - 1; handle >= 0; --handle) {
+        const QPointF delta = toWidget.map(handles.at(handle)) - widget;
+        if (std::abs(delta.x()) <= kHandleReach && std::abs(delta.y()) <= kHandleReach) return handle;
+    }
+    return -1;
+}
+
+QString ViewerWidget::maskAt(const QPointF &widget) const {
+    const QTransform toWidget = pictureToWidget();
+    QPainterPathStroker stroker;
+    stroker.setWidth(kHandleReach * 2.0);
+    const auto hit = [&](int index) {
+        const QJsonObject mask = m_masks.at(index).toObject();
+        const QPainterPath path = toWidget.map(maskPath(mask));
+        const bool closed = !mask.contains(QStringLiteral("points")) || mask.value(QStringLiteral("closed")).toBool(true);
+        return (closed && path.contains(widget)) || stroker.createStroke(path).contains(widget);
+    };
+    const int selected = maskIndex(m_selectedMask);
+    if (selected >= 0 && hit(selected)) return m_selectedMask;
+    for (int index = m_masks.size() - 1; index >= 0; --index)
+        if (hit(index)) return m_masks.at(index).toObject().value(QStringLiteral("name")).toString();
+    return {};
+}
+
+void ViewerWidget::updateCursor(const QPointF &widget) {
+    if (m_maskTool != MaskTool::None) setCursor(Qt::CrossCursor);
+    else if (!editsMasks()) unsetCursor();
+    else if (m_dragHandle == kMoveMask) setCursor(Qt::ClosedHandCursor);
+    else if (m_dragHandle >= 0 || handleAt(widget) >= 0) setCursor(Qt::PointingHandCursor);
+    else if (!maskAt(widget).isEmpty()) setCursor(Qt::OpenHandCursor);
+    else unsetCursor();
+}
+
+void ViewerWidget::addMask(QJsonObject mask) {
+    QString name;
+    for (int n = 1; name.isEmpty() || maskIndex(name) >= 0; ++n) name = QStringLiteral("k%1").arg(n);
+    QJsonObject op = outlineOf(mask);
+    op.insert(QStringLiteral("op"), QStringLiteral("mask-add"));
+    op.insert(QStringLiteral("clip"), m_maskClip);
+    op.insert(QStringLiteral("name"), name);
+    // Shown at once; the next snapshot replaces it.
+    mask.insert(QStringLiteral("name"), name);
+    mask.insert(QStringLiteral("mode"), QStringLiteral("add"));
+    mask.insert(QStringLiteral("inverted"), false);
+    m_masks.append(mask);
+    m_selectedMask = name;
+    setMaskTool(MaskTool::None);
+    update();
+    emit maskSelected(name);
+    emit editRequested(QJsonArray{op});
+}
+
+void ViewerWidget::finishPen(bool closed) {
+    if (m_penPoints.size() < (closed ? 3 : 2)) return;
+    const QJsonArray points = pointsOf(m_penPoints);
+    m_penPoints.clear();
+    addMask(QJsonObject{{QStringLiteral("points"), points}, {QStringLiteral("closed"), closed}});
+}
+
+void ViewerWidget::cancelDrawing() {
+    if (!m_drawing && m_penPoints.isEmpty()) return;
+    m_drawing = false;
+    m_penPoints.clear();
+    update();
+}
+
+void ViewerWidget::removeSelectedMask() {
+    const int index = maskIndex(m_selectedMask);
+    if (index < 0) return;
+    const QString name = m_selectedMask;
+    m_masks.removeAt(index);
+    m_selectedMask.clear();
+    update();
+    emit maskSelected(QString());
+    emit editRequested(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("mask-remove")},
+                                              {QStringLiteral("clip"), m_maskClip},
+                                              {QStringLiteral("name"), name}}});
+}
+
+bool ViewerWidget::event(QEvent *event) {
+    // Keys the masks take ahead of the editor's shortcuts.
+    if (event->type() == QEvent::ShortcutOverride) {
+        const int key = static_cast<QKeyEvent *>(event)->key();
+        const bool drawing = m_drawing || !m_penPoints.isEmpty();
+        const bool takes = (key == Qt::Key_Escape && (drawing || m_maskTool != MaskTool::None)) ||
+                           ((key == Qt::Key_Return || key == Qt::Key_Enter) && m_penPoints.size() >= 2) ||
+                           ((key == Qt::Key_Delete || key == Qt::Key_Backspace) &&
+                            (drawing || maskIndex(m_selectedMask) >= 0));
+        if (takes) {
+            event->accept();
+            return true;
+        }
+    }
+    return QWidget::event(event);
+}
+
+void ViewerWidget::keyPressEvent(QKeyEvent *event) {
+    switch (event->key()) {
+    case Qt::Key_Escape:
+        if (m_drawing || !m_penPoints.isEmpty()) cancelDrawing();
+        else setMaskTool(MaskTool::None);
+        return;
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+        // An open path, as Stroke draws along.
+        finishPen(false);
+        return;
+    case Qt::Key_Delete:
+    case Qt::Key_Backspace:
+        if (!m_penPoints.isEmpty()) {
+            m_penPoints.removeLast();
+            update();
+        } else if (!m_drawing) {
+            removeSelectedMask();
+        }
+        return;
+    default: QWidget::keyPressEvent(event);
+    }
+}
+
 void ViewerWidget::mousePressEvent(QMouseEvent *event) {
     if (event->button() != Qt::LeftButton) return;
-    emit seekRequested(fractionAt(event->position().x()));
+    const QPointF position = event->position();
+    if (!editsMasks()) {
+        emit seekRequested(fractionAt(position.x()));
+        return;
+    }
+    setFocus(Qt::MouseFocusReason);
+    const QPointF at = picturePoint(position);
+    if (m_maskTool == MaskTool::Pen) {
+        // A click on the first point closes the outline.
+        if (m_penPoints.size() >= 3) {
+            const QPointF delta = pictureToWidget().map(m_penPoints.first()) - position;
+            if (std::abs(delta.x()) <= kHandleReach && std::abs(delta.y()) <= kHandleReach) {
+                finishPen(true);
+                return;
+            }
+        }
+        m_penPoints.append(at);
+        m_pointer = position;
+        update();
+        return;
+    }
+    if (m_maskTool != MaskTool::None) {
+        m_drawing = true;
+        m_drawStart = m_drawEnd = at;
+        update();
+        return;
+    }
+    const int handle = handleAt(position);
+    const QString name = handle >= 0 ? m_selectedMask : maskAt(position);
+    if (name != m_selectedMask) {
+        m_selectedMask = name;
+        update();
+        emit maskSelected(name);
+    }
+    if (name.isEmpty()) return;
+    m_dragHandle = handle >= 0 ? handle : kMoveMask;
+    m_dragFrom = at;
+    m_dragOriginal = m_masks.at(maskIndex(name)).toObject();
+    updateCursor(position);
 }
 
 void ViewerWidget::mouseMoveEvent(QMouseEvent *event) {
-    const double fraction = fractionAt(event->position().x());
+    const QPointF position = event->position();
+    if (m_drawing) {
+        m_drawEnd = picturePoint(position);
+        update();
+        return;
+    }
+    if (m_dragHandle != -1) {
+        const QPointF at = picturePoint(position);
+        const int index = maskIndex(m_dragOriginal.value(QStringLiteral("name")).toString());
+        if (index >= 0)
+            m_masks[index] = m_dragHandle == kMoveMask ? movedBy(m_dragOriginal, at - m_dragFrom)
+                                                       : withHandle(m_dragOriginal, m_dragHandle, at);
+        update();
+        return;
+    }
+    if (editsMasks()) {
+        // The picture holds still while masks are edited.
+        if (m_maskTool == MaskTool::Pen && !m_penPoints.isEmpty()) {
+            m_pointer = position;
+            update();
+        }
+        updateCursor(position);
+        return;
+    }
+    const double fraction = fractionAt(position.x());
     if (m_skimming && std::abs(fraction - m_skimFraction) < 0.0005) return;
     m_skimming = true;
     m_skimFraction = fraction;
     emit scrubbed(fraction);
 }
 
+void ViewerWidget::mouseReleaseEvent(QMouseEvent *event) {
+    if (event->button() != Qt::LeftButton) return;
+    if (m_drawing) {
+        m_drawing = false;
+        m_drawEnd = picturePoint(event->position());
+        const QTransform toWidget = pictureToWidget();
+        const QRectF drawn = QRectF(toWidget.map(m_drawStart), toWidget.map(m_drawEnd)).normalized();
+        update();
+        // A click, not a drag, draws nothing.
+        if (drawn.width() < 4.0 && drawn.height() < 4.0) return;
+        const QRectF box = QRectF(m_drawStart, m_drawEnd).normalized();
+        if (m_maskTool == MaskTool::Ellipse)
+            addMask(QJsonObject{{QStringLiteral("ellipse"), fractions({box.center().x(), box.center().y(),
+                                                                       box.width() / 2.0, box.height() / 2.0})}});
+        else
+            addMask(QJsonObject{{QStringLiteral("rect"), fractions({box.left(), box.top(), box.right(), box.bottom()})}});
+        return;
+    }
+    if (m_dragHandle == -1) return;
+    m_dragHandle = -1;
+    const QString name = m_dragOriginal.value(QStringLiteral("name")).toString();
+    const QJsonObject original = m_dragOriginal;
+    m_dragOriginal = {};
+    updateCursor(event->position());
+    const int index = maskIndex(name);
+    if (index < 0) return;
+    const QJsonObject outline = outlineOf(m_masks.at(index).toObject());
+    if (outline == outlineOf(original)) return;
+    QJsonObject op = outline;
+    op.insert(QStringLiteral("op"), QStringLiteral("mask-set"));
+    op.insert(QStringLiteral("clip"), m_maskClip);
+    op.insert(QStringLiteral("name"), name);
+    emit editRequested(QJsonArray{op});
+}
+
 void ViewerWidget::leaveEvent(QEvent *) {
     if (!m_skimming) return;
     m_skimming = false;
     emit scrubEnded();
+}
+
+void ViewerWidget::paintMasks(QPainter &p) {
+    if (m_maskClip.isEmpty()) return;
+    const QTransform toWidget = pictureToWidget();
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setBrush(Qt::NoBrush);
+    // A dark rule under each outline keeps it visible on any picture; a
+    // path only (mode none) is dashed.
+    const auto outline = [&p](const QPainterPath &path, bool selected, bool pathOnly) {
+        p.setPen(QPen(QColor(0, 0, 0, 140), selected ? 3.6 : 3.0));
+        p.drawPath(path);
+        QPen pen(maskColor(selected), selected ? 1.6 : 1.1);
+        if (pathOnly) pen.setStyle(Qt::DashLine);
+        p.setPen(pen);
+        p.drawPath(path);
+    };
+    const auto handle = [&p](const QPointF &center, bool filled) {
+        p.setPen(QPen(maskColor(true), 1.2));
+        p.setBrush(filled ? maskColor(true) : QColor("#141414"));
+        p.drawRect(QRectF(center - QPointF(kHandleSize / 2.0, kHandleSize / 2.0), QSizeF(kHandleSize, kHandleSize)));
+        p.setBrush(Qt::NoBrush);
+    };
+    QFont font = p.font();
+    font.setPointSizeF(std::max(7.0, font.pointSizeF() - 2.0));
+    p.setFont(font);
+    for (const QJsonValue &value : m_masks) {
+        const QJsonObject mask = value.toObject();
+        const QString name = mask.value(QStringLiteral("name")).toString();
+        const bool selected = name == m_selectedMask;
+        const QPainterPath path = toWidget.map(maskPath(mask));
+        outline(path, selected, mask.value(QStringLiteral("mode")).toString() == QStringLiteral("none"));
+        p.setPen(maskColor(selected));
+        p.drawText(path.boundingRect().topLeft() + QPointF(4.0, -5.0), name);
+        if (!selected) continue;
+        for (const QPointF &point : handlesOf(mask)) handle(toWidget.map(point), false);
+    }
+    if (m_drawing) {
+        const QRectF box = QRectF(m_drawStart, m_drawEnd).normalized();
+        QPainterPath path;
+        if (m_maskTool == MaskTool::Ellipse) path.addEllipse(box);
+        else path.addRect(box);
+        outline(toWidget.map(path), true, false);
+    }
+    if (!m_penPoints.isEmpty()) {
+        QPainterPath path(toWidget.map(m_penPoints.first()));
+        for (int index = 1; index < m_penPoints.size(); ++index) path.lineTo(toWidget.map(m_penPoints.at(index)));
+        outline(path, true, false);
+        QPen rubber(maskColor(false), 1.0, Qt::DashLine);
+        p.setPen(rubber);
+        p.drawLine(toWidget.map(m_penPoints.last()), m_pointer);
+        const QPointF first = toWidget.map(m_penPoints.first());
+        const QPointF reach = first - m_pointer;
+        // The first point fills when a click there would close the outline.
+        const bool closes = m_penPoints.size() >= 3 && std::abs(reach.x()) <= kHandleReach && std::abs(reach.y()) <= kHandleReach;
+        for (int index = 0; index < m_penPoints.size(); ++index) handle(toWidget.map(m_penPoints.at(index)), index == 0 && closes);
+    }
+    p.restore();
 }
 
 void ViewerWidget::paintEvent(QPaintEvent *) {
@@ -142,6 +599,7 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
         p.setPen(QColor("#eeeeee"));
         p.drawText(caption.adjusted(10, 4, -10, -4), Qt::AlignCenter | Qt::TextWordWrap, m_caption);
     }
+    paintMasks(p);
 }
 
 double ViewerWidget::fractionAt(int x) const {
