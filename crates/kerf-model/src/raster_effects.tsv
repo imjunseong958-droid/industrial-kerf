@@ -949,6 +949,27 @@ effect	distort.warp	Distort	Warp	Arc, bulge, wave, fish, and other shape warps; 
 	number	bend	0	-100..100		Bend
 	number	horizontalDistortion	0	-100..100		Horizontal Distortion
 	number	verticalDistortion	0	-100..100		Vertical Distortion
+effect	distort.warpstabilizer	Distort	Warp Stabilizer	Smooths or removes camera shake, from an analysis of the clip's frames that runs in the background once it is added; handheld and shaky footage.
+	enum	stabilization/result	smooth-motion	smooth-motion|no-motion		Result
+	number	stabilization/smoothness	50	0..1000		Smoothness
+	enum	stabilization/method	subspace-warp	position|position-scale-rotation|perspective|subspace-warp		Method
+	bool	stabilization/preserveScale	false			Preserve Scale
+	enum	borders/framing	stabilize-crop-auto-scale	stabilize-only|stabilize-crop|stabilize-crop-auto-scale|stabilize-synthesize-edges		Framing
+	number	borders/autoScale/maximumScale	150	100..1000		Maximum Scale
+	number	borders/autoScale/actionSafeMargin	0	0..45		Action-safe Margin
+	number	borders/additionalScale	100	1..1000		Additional Scale
+	bool	advanced/detailedAnalysis	false			Detailed Analysis
+	enum	advanced/rollingShutterRipple	automatic-reduction	automatic-reduction|enhanced-reduction		Rolling Shutter Ripple
+	number	advanced/cropLessSmoothMore	50	0..100		Crop Less <-> Smooth More
+	number	advanced/synthesizeInputRange	1	0..10		Synthesis Input Range (seconds)
+	number	advanced/synthesizeEdgeFeather	0	0..100		Synthesis Edge Feather
+	number	advanced/edgeCropping/left	0	0..1000		Left
+	number	advanced/edgeCropping/top	0	0..1000		Top
+	number	advanced/edgeCropping/right	0	0..1000		Right
+	number	advanced/edgeCropping/bottom	0	0..1000		Bottom
+	bool	advanced/hideWarningBanner	false			Hide Warning Banner
+	bool	advanced/showTrackPoints	false			Show Track Points
+	number	advanced/trackPointSize	100	0..1000		Track Point Size
 effect	distort.wavewarp	Distort	Wave Warp	Moving waves across the picture; flags, water, wobbling text.
 	enum	waveType	sine	sine|square|triangle|sawtooth|circle|semicircle|uncircle|noise|smooth-noise		Wave Type
 	number	height	10	-1000..1000		Wave Height

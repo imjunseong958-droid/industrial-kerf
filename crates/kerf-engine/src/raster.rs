@@ -263,7 +263,7 @@ fn bake_job(job: &BakeJob, entry: &CacheEntry, cancellation: &CancellationToken)
 }
 
 /// Fill `frame` from `input`; false at the end of the stream.
-fn read_frame(input: &mut impl Read, frame: &mut [u8]) -> Result<bool> {
+pub(crate) fn read_frame(input: &mut impl Read, frame: &mut [u8]) -> Result<bool> {
     let mut filled = 0;
     while filled < frame.len() {
         match input.read(&mut frame[filled..])? {
@@ -277,7 +277,7 @@ fn read_frame(input: &mut impl Read, frame: &mut [u8]) -> Result<bool> {
 
 /// Wait for an FFmpeg process (killing it first when `kill`), reporting
 /// its errors.
-fn finish(child: &mut Child, kill: bool) -> std::result::Result<(), String> {
+pub(crate) fn finish(child: &mut Child, kill: bool) -> std::result::Result<(), String> {
     if kill {
         let _ = child.kill();
     }

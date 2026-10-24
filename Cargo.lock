@@ -1525,6 +1525,8 @@ dependencies = [
  "approx",
  "clap",
  "criterion",
+ "effectcraft-raster",
+ "effectcraft-track",
  "hex",
  "kerf-compose",
  "kerf-core",

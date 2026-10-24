@@ -216,7 +216,10 @@ where
     let project = match &opts.project_dir {
         Some(directory) => {
             let cache = crate::derivatives::DerivativeCache::new(directory);
-            baked = crate::raster::bake(project, sequence, &cache, cancellation)?;
+            crate::stabilize::analyze_stabilizations(project, &cache, cancellation)?;
+            let mut stabilized = project.clone();
+            crate::stabilize::attach_stabilizations(&mut stabilized, &cache);
+            baked = crate::raster::bake(&stabilized, sequence, &cache, cancellation)?;
             &baked
         }
         None => project,
@@ -362,6 +365,20 @@ where
     if cancellation.is_cancelled() {
         return Err(EngineError::Cancelled);
     }
+    // Warp Stabilizers draw from analyses, made first where the cache has
+    // none.
+    let stabilized;
+    let project = match &opts.project_dir {
+        Some(directory) => {
+            let cache = crate::derivatives::DerivativeCache::new(directory);
+            crate::stabilize::analyze_stabilizations(project, &cache, cancellation)?;
+            let mut attached = project.clone();
+            crate::stabilize::attach_stabilizations(&mut attached, &cache);
+            stabilized = attached;
+            &stabilized
+        }
+        None => project,
+    };
     let compositor = Compositor::new(
         project,
         kerf_model::Catalog::builtin(),

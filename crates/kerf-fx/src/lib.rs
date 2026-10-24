@@ -35,8 +35,6 @@ pub const COMPLETION: &str = "completion";
 
 /// Effects Kerf cannot feed yet.
 const NEEDS_MORE: &[&str] = &[
-    // An analysis made ahead of rendering.
-    "ec.distort.warpstabilizer",
     // Pins, meshes, or painted strokes, which the editor cannot draw yet.
     "ec.distort.liquify",
     "ec.distort.meshwarp",
@@ -52,11 +50,13 @@ const NEEDS_MORE: &[&str] = &[
 
 /// Carried effects outside the Time category that read the clip's other
 /// frames: they fix what changes between neighbouring frames, or match a
-/// reference frame.
+/// reference frame. The Warp Stabilizer can fill its borders from
+/// neighbouring frames.
 const READS_OTHER_FRAMES: &[&str] = &[
     "ec.blur.camerashakedeblur",
     "ec.color.colorstabilizer",
     "ec.distort.rollingshutterrepair",
+    "ec.distort.warpstabilizer",
     "ec.matte.refinesoft",
 ];
 
@@ -434,9 +434,10 @@ pub fn value_at(
                 y.unwrap_or(default[1]) * layer_size[1],
             ])
         }
+        // A hidden parameter is set only by Kerf itself, as a renderer puts
+        // in the Warp Stabilizer's analysis; the catalog lists none.
         _ => params
             .get(param.id)
-            .filter(|_| param.ui != ParamUi::Hidden)
             .and_then(|set| convert(set.value_at(at), param))
             .unwrap_or_else(|| effectcraft_effects::default_value(param, layer_size)),
     }
@@ -462,7 +463,9 @@ fn convert(value: Value, param: &ParamSpec) -> Option<FxValue> {
         (Value::Enum(choice), ParamUi::Popup { options }) => {
             FxValue::Enum(choices(options).iter().position(|c| *c == choice)? as u32)
         }
-        (Value::Text(text), ParamUi::Text | ParamUi::File { .. }) => FxValue::Str(text),
+        (Value::Text(text), ParamUi::Text | ParamUi::File { .. } | ParamUi::Hidden) => {
+            FxValue::Str(text)
+        }
         _ => return None,
     })
 }

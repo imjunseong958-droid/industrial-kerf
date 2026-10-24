@@ -280,6 +280,10 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
     ),
     // Distort
     (
+        "distort.warpstabilizer",
+        "Smooths or removes camera shake, from an analysis of the clip's frames that runs in the background once it is added; handheld and shaky footage.",
+    ),
+    (
         "distort.rollingshutterrepair",
         "Straightens the skew and wobble a rolling shutter leaves, from the motion between frames; fast pans on phones and DSLRs.",
     ),

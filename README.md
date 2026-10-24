@@ -50,7 +50,9 @@ catalog can hold (a point is written as an `_x` and a `_y` across the
 picture, a file as a path, another layer as a picture track, such as a
 matte or a displacement map on V2, and a mask as one of the clip's masks:
 rectangles, ellipses, and outlines written in the document, which also cut
-the picture).
+the picture). The Warp Stabilizer draws from an analysis of the clip's
+frames, made in the background for the preview (and first, for an export)
+and kept in `.kerf/cache/derived`; until it is ready the clip plays as shot.
 They run on a clip's own picture before it is placed: a render first bakes
 each such clip's frames into a lossless file with transparency in
 `.kerf/cache/derived` (reused until what it is made from changes) and plays

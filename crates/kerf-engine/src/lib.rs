@@ -15,6 +15,7 @@ pub mod raster;
 pub mod render;
 pub mod resources;
 pub mod sidecar;
+pub mod stabilize;
 pub mod still;
 pub mod transcription;
 
@@ -33,6 +34,7 @@ pub use probe::{
 pub use proxy::{cached_proxy, create_proxy_cache_key, make_proxy, proxy_ffmpeg_args, PROXY_WIDTH};
 pub use resources::{budget, budget_for_cpus, HardwareEncodePolicy, ResourceBudget};
 pub use sidecar::CancellationToken;
+pub use stabilize::{analyze_stabilizations, attach_stabilizations};
 pub use transcription::{
     cached_transcripts, listen_cached, parse_whisper_json, transcribe_cached, TimeRange,
     Transcript, TranscriptCue, TranscriptWord, TranscriptionBackend, TranscriptionOptions,

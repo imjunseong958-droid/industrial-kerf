@@ -2494,6 +2494,11 @@ void MainWindow::handleEvent(QJsonObject event) {
         m_exportProgress->setVisible(!finished);
         if (!status.isEmpty()) statusBar()->showMessage(QStringLiteral("Export %1").arg(status));
         if (!event.value(QStringLiteral("path")).toString().isEmpty()) addActivity(QStringLiteral("export"), event.value(QStringLiteral("path")).toString());
+    } else if (type == QStringLiteral("analysis")) {
+        // Analyses effects draw from, made in the background.
+        const QString message = event.value(QStringLiteral("message")).toString();
+        statusBar()->showMessage(message, 6000);
+        addActivity(QStringLiteral("analysis"), message);
     } else if (type == QStringLiteral("preview")) {
         const QString status = event.value(QStringLiteral("status")).toString();
         const QString message = event.value(QStringLiteral("message")).toString();
