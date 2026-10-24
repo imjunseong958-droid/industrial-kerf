@@ -67,11 +67,11 @@ jobs:
             libclang-dev libasound2-dev \
             qt6-base-dev qt6-base-private-dev qt6-qpa-plugins libgl-dev \
             libvulkan-dev libxkbcommon-dev libxcb1-dev fonts-dejavu-core
-      # Ubuntu ships FFmpeg 8, but Kerf builds against 9 on macOS and Windows,
-      # and the compositor parity tolerances hold for 9's filters, not 8's.
-      # Take a pinned FFmpeg 9.0 shared build with libx264; BtbN keeps its
-      # month-end builds for about two years. Tests, kerfd, and the bridge
-      # load its libraries through LD_LIBRARY_PATH.
+      # Ubuntu ships FFmpeg 8; Kerf builds against 9, as on macOS and
+      # Windows, so all three test the same FFmpeg. Take a pinned FFmpeg 9.0
+      # shared build with libx264; BtbN keeps its month-end builds for about
+      # two years. Tests, kerfd, and the bridge load its libraries through
+      # LD_LIBRARY_PATH.
       - name: Install FFmpeg
         run: |
           build=autobuild-2026-09-30-13-08
@@ -90,7 +90,20 @@ jobs:
       # Workspace crates, the EffectCraft ones included, rebuild each run.
       - uses: Swatinem/rust-cache@v2
       - name: Test workspace
-        run: cargo test --workspace
+        env:
+          KERF_PARITY_DUMP: ${{ runner.temp }}/parity
+        run: |
+          mkdir -p "$KERF_PARITY_DUMP"
+          cargo test --workspace
+      # The frames the compositor parity tests compared, drawn both ways,
+      # to look at when one fails.
+      - name: Upload compositor parity frames
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compositor-parity-frames
+          path: ${{ runner.temp }}/parity
+          retention-days: 14
       - name: Build native bridge and daemon for integration tests
         run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
       - name: Build Qt editor and UI tests
