@@ -10,8 +10,8 @@ use crate::catalog::{Catalog, Domain, FxKind};
 use crate::diag::Diagnostic;
 use crate::id::{Id, IdGen};
 use crate::model::{
-    Align, Clip, ClipAt, Content, Effect, Marker, MarkerColor, Media, Params, Project, Sequence,
-    Track, TrackKind, Transition,
+    Align, Clip, ClipAt, Content, Effect, Marker, MarkerColor, Mask, MaskMode, MaskShape, Media,
+    Params, Project, Sequence, Track, TrackKind, Transition,
 };
 use crate::time::{format_timecode, Rate, Ratio, Time};
 use crate::validate::{accepts, errors};
@@ -217,6 +217,26 @@ pub enum Op {
         clip: Id,
         index: usize,
         to: usize,
+    },
+    /// Add a mask at `index` (the end when absent) of a picture clip's masks.
+    MaskAdd {
+        clip: Id,
+        mask: Mask,
+        index: Option<usize>,
+    },
+    /// Change a mask's outline, mode, inversion, or properties (`None`
+    /// resets a property).
+    MaskSet {
+        clip: Id,
+        name: Id,
+        shape: Option<MaskShape>,
+        mode: Option<MaskMode>,
+        inverted: Option<bool>,
+        params: Vec<(String, Option<Param>)>,
+    },
+    MaskRemove {
+        clip: Id,
+        name: Id,
     },
     AddTransition {
         id: Option<Id>,
@@ -595,6 +615,51 @@ impl Editor<'_> {
                 effects.insert(to, effect);
                 Ok(())
             }
+            // The outline, mode, and properties are checked with the rest of
+            // the project when the edit is done.
+            Op::MaskAdd { clip, mask, index } => {
+                let at = self.editable(clip)?;
+                let masks = &mut self.project.clip_at_mut(at).masks;
+                if masks.iter().any(|other| other.name == mask.name) {
+                    return Err(fail(
+                        "mask.duplicate",
+                        format!("clip `{clip}` already has a mask `{}`", mask.name),
+                    ));
+                }
+                let index = index.unwrap_or(masks.len()).min(masks.len());
+                masks.insert(index, mask.clone());
+                Ok(())
+            }
+            Op::MaskSet {
+                clip,
+                name,
+                shape,
+                mode,
+                inverted,
+                params,
+            } => {
+                let at = self.editable(clip)?;
+                let index = self.mask(at, name)?;
+                let mask = &mut self.project.clip_at_mut(at).masks[index];
+                if let Some(shape) = shape {
+                    mask.shape = shape.clone();
+                }
+                mask.mode = mode.unwrap_or(mask.mode);
+                mask.inverted = inverted.unwrap_or(mask.inverted);
+                for (name, value) in params {
+                    match value {
+                        Some(value) => mask.params.insert(name.clone(), value.clone()),
+                        None => mask.params.remove(name),
+                    };
+                }
+                Ok(())
+            }
+            Op::MaskRemove { clip, name } => {
+                let at = self.editable(clip)?;
+                let index = self.mask(at, name)?;
+                self.project.clip_at_mut(at).masks.remove(index);
+                Ok(())
+            }
             Op::AddTransition {
                 id,
                 from,
@@ -796,6 +861,20 @@ impl Editor<'_> {
             .kind
             .domain()
             .ok_or_else(|| fail("clip.domain", "captions carry no properties or effects"))
+    }
+
+    /// The index of the clip's mask `name`.
+    fn mask(&self, at: ClipAt, name: &Id) -> Outcome<usize> {
+        let clip = self.clip(at);
+        clip.masks
+            .iter()
+            .position(|mask| mask.name == *name)
+            .ok_or_else(|| {
+                fail(
+                    "mask.missing",
+                    format!("clip `{}` has no mask `{name}`", clip.id),
+                )
+            })
     }
 
     fn effect(&self, at: ClipAt, index: usize) -> Outcome<&Effect> {

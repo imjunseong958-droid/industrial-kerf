@@ -405,6 +405,26 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
     ),
     // Generate
     (
+        "generate.fill",
+        "Fills one of the clip's masks with a color (fillMask=k1); shapes, highlights, and flat graphic panels.",
+    ),
+    (
+        "generate.radiowaves",
+        "Rings ripple out from a point or a mask's outline (waveMask/mask=k1); sonar, signal, and pulse graphics.",
+    ),
+    (
+        "generate.scribble",
+        "Scribbles inside or along a mask (mask=k1), drawing on over time; hand-drawn fills and highlights.",
+    ),
+    (
+        "generate.stroke",
+        "Paints along a mask's outline, which can draw on from start to end (path=k1); outlines, circled details, and write-on lines.",
+    ),
+    (
+        "generate.vegas",
+        "Light runs along a mask's outline (path=k1) or another track's contours; neon chases and marquee lights.",
+    ),
+    (
         "generate.fourcolor",
         "A gradient from four colored corners; backgrounds and color washes.",
     ),
@@ -673,6 +693,10 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "A shadow cast from a point light; realistic shadows.",
     ),
     // Simulation
+    (
+        "sim.particleplayground",
+        "Fires particles from a cannon, grid, or exploding picture, walled in by a mask (wall/wallBoundary=k1); confetti, sparks, and dissolving pictures.",
+    ),
     (
         "sim.hair",
         "Grows hair or fur over the picture, its fall shaped by another track (hairfallMap/mapLayer=V2); fuzzy, furry, and grassy textures.",

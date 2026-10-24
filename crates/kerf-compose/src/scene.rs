@@ -27,6 +27,9 @@
 //! - Titles are text layers in a comp the size of the canvas, solids are
 //!   solid layers, and an adjustment layer is an adjustment solid carrying
 //!   the clip's effects over everything beneath it.
+//! - A clip's masks are the layer's masks, in the clip's order, ahead of a
+//!   crop's, which intersects them; an effect's mask parameter is the
+//!   mask's place among them.
 //! - A track an effect reads (a track parameter, as a displacement map or a
 //!   matte) is drawn on its own in a comp of its own, whose layer sits out
 //!   of sight at the bottom of the comp for the effect to read, even when
@@ -40,15 +43,15 @@ use effectcraft_effects::EffectSpec;
 use effectcraft_keyframe::{Interp as FxInterp, Justify, ShapePath, TextDoc};
 use effectcraft_project::build::{self, Ids};
 use effectcraft_project::{
-    AlphaMode, BitDepth, Comp, Footage, FootageKind, ItemId, ItemKind, Keyframe as FxKeyframe,
-    Layer, LayerId, LayerSource, MaskMode, ParamUi, Project as FxProject, Property, Solid,
-    Value as FxValue,
+    AlphaMode, BitDepth, Comp, Footage, FootageKind, GroupKind, ItemId, ItemKind,
+    Keyframe as FxKeyframe, Layer, LayerId, LayerSource, MaskMode, ParamUi, Project as FxProject,
+    Property, Solid, Value as FxValue,
 };
 use effectcraft_time::{FrameRate, Tick, TICKS_PER_SECOND};
 use kerf_core::program::{canvas, program_sequence};
 use kerf_model::{
-    Catalog, Clip, Content, Domain, Engine, FxKind, Id, Param, ParamType, Project, Rate, Rgba,
-    Sequence, Time, Track, TrackKind, Transition, Value,
+    Catalog, Clip, Content, Domain, Engine, FxKind, Id, Mask, MaskShape, Param, ParamType, Project,
+    Rate, Rgba, Sequence, Time, Track, TrackKind, Transition, Value,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -510,6 +513,7 @@ impl<'a> Builder<'a> {
         } else {
             let geometry =
                 self.geometry(&mut layer, clip, &frames, picture.size, picture.fit, canvas)?;
+            self.masks(&mut layer, clip, &frames, picture.size);
             if !self.baked(item) {
                 self.decode_as_shown(&picture.source, &geometry);
             }
@@ -580,6 +584,7 @@ impl<'a> Builder<'a> {
             && item.leave.is_none()
             && self.clips.get(&footage).is_some_and(|source| !source.alpha)
             && clip.effects.iter().all(|effect| !effect.enabled)
+            && clip.masks.is_empty()
             && [
                 "x", "y", "rotation", "anchor_x", "anchor_y", "crop_l", "crop_r", "crop_t",
                 "crop_b",
@@ -623,7 +628,9 @@ impl<'a> Builder<'a> {
             }
             _ => false,
         };
+        // Masks cut the picture, not bars around it.
         opaque
+            && clip.masks.is_empty()
             && !self.baked(item)
             && ["x", "y", "rotation", "anchor_x", "anchor_y"]
                 .iter()
@@ -1007,6 +1014,7 @@ impl<'a> Builder<'a> {
         layer.switches.adjustment = true;
         let frames = Frames::new(comp, clip, clip.start, clip.end());
         let geometry = self.geometry(&mut layer, clip, &frames, canvas, false, canvas)?;
+        self.masks(&mut layer, clip, &frames, canvas);
         self.opacity(&mut layer, clip, &frames, &|_, _| 1.0);
         layer.blend_mode = self.blend(clip)?;
         let mut seeds = Seeds::new(clip);
@@ -1144,12 +1152,13 @@ impl<'a> Builder<'a> {
             .values()
             .any(|v| v[7..11].iter().any(|edge| *edge != 0.0))
         {
-            // A crop is a mask around what is left, in source pixels.
+            // A crop is a mask around what is left, in source pixels. It
+            // intersects the clip's own masks; alone, it covers as Add does.
             let mask = build::mask(
                 &mut Ids(&mut self.out.next_id),
                 "crop",
                 ShapePath::rect([0.0; 2], 0.0, 0.0),
-                MaskMode::Add,
+                MaskMode::Intersect,
                 [255; 3],
             );
             if let Some(masks) = layer.props.sub_mut("masks") {
@@ -1218,6 +1227,84 @@ impl<'a> Builder<'a> {
 
     // ---- effects -----------------------------------------------------------------
 
+    /// The clip's masks, in fractions of its `size`-pixel picture, ahead of
+    /// a crop's mask.
+    fn masks(&mut self, layer: &mut Layer, clip: &Clip, frames: &Frames, size: (u32, u32)) {
+        let (w, h) = (f64::from(size.0), f64::from(size.1));
+        let at = |x: f64, y: f64| [x * w, y * h];
+        let mut groups = Vec::new();
+        for mask in &clip.masks {
+            let path = match &mask.shape {
+                MaskShape::Rect([l, t, r, b]) => {
+                    ShapePath::rect(at((l + r) / 2.0, (t + b) / 2.0), (r - l) * w, (b - t) * h)
+                }
+                MaskShape::Ellipse([x, y, rx, ry]) => {
+                    ShapePath::ellipse(at(*x, *y), 2.0 * rx * w, 2.0 * ry * h)
+                }
+                MaskShape::Polygon { points, closed } => {
+                    let points: Vec<[f64; 2]> = points.iter().map(|[x, y]| at(*x, *y)).collect();
+                    ShapePath::polygon(&points, *closed)
+                }
+            };
+            let mode = match mask.mode {
+                kerf_model::MaskMode::Add => MaskMode::Add,
+                kerf_model::MaskMode::Subtract => MaskMode::Subtract,
+                kerf_model::MaskMode::Intersect => MaskMode::Intersect,
+                kerf_model::MaskMode::Lighten => MaskMode::Lighten,
+                kerf_model::MaskMode::Darken => MaskMode::Darken,
+                kerf_model::MaskMode::Difference => MaskMode::Difference,
+                kerf_model::MaskMode::None => MaskMode::None,
+            };
+            let mut group = build::mask(
+                &mut Ids(&mut self.out.next_id),
+                mask.name.as_str(),
+                path,
+                mode,
+                [255, 200, 0],
+            );
+            if let GroupKind::Mask { inverted, .. } = &mut group.kind {
+                *inverted = mask.inverted;
+            }
+            // Set on the group itself: every mask shares a match id, so a
+            // path through the layer could find another.
+            for name in ["feather", "opacity", "expansion"] {
+                let param = mask.params.get(name).cloned().unwrap_or_else(|| {
+                    Param::Static(
+                        self.catalog
+                            .mask_prop(name)
+                            .map_or(Value::Number(0.0), |def| def.default.clone()),
+                    )
+                });
+                let curve = frames.curve(matches!(param, Param::Animated(_)), |time| {
+                    [number(&param.value_at(time))]
+                });
+                match name {
+                    "feather" => set_group(
+                        &mut group,
+                        name,
+                        &curve,
+                        |v| FxValue::Vec2([v[0]; 2]),
+                        false,
+                    ),
+                    "opacity" => set_group(
+                        &mut group,
+                        name,
+                        &curve,
+                        |v| FxValue::Scalar(v[0] * 100.0),
+                        false,
+                    ),
+                    _ => set_group(&mut group, name, &curve, |v| FxValue::Scalar(v[0]), false),
+                }
+            }
+            groups.push(group);
+        }
+        if let Some(masks) = layer.props.sub_mut("masks") {
+            for (index, group) in groups.into_iter().enumerate() {
+                masks.children.insert(index, group.into());
+            }
+        }
+    }
+
     fn effects(
         &mut self,
         layer: &mut Layer,
@@ -1240,7 +1327,14 @@ impl<'a> Builder<'a> {
                     let spec = kerf_fx::spec(id).ok_or_else(|| {
                         ComposeError::Invalid(format!("`{id}` is not a raster effect"))
                     })?;
-                    self.raster_group(spec, &effect.params, frames, layer_size, seeds.next())
+                    self.raster_group(
+                        spec,
+                        &effect.params,
+                        &clip.masks,
+                        frames,
+                        layer_size,
+                        seeds.next(),
+                    )
                 }
                 (Engine::Graph, "color.basic") => {
                     let spec = color::color_basic();
@@ -1325,12 +1419,27 @@ impl<'a> Builder<'a> {
         &mut self,
         spec: &'static EffectSpec,
         params: &kerf_model::Params,
+        masks: &[Mask],
         frames: &Frames,
         layer_size: [f64; 2],
         seed: u32,
     ) -> effectcraft_project::PropGroup {
         let mut group = self.effect_group(spec, layer_size, seed);
         for param in &spec.params {
+            if param.ui == ParamUi::Mask {
+                // The named mask's place among the layer's masks, from 1;
+                // 0 for none.
+                let place = match params.get(param.id) {
+                    Some(Param::Static(Value::Text(name))) => {
+                        masks.iter().position(|mask| mask.name == name.as_str())
+                    }
+                    _ => None,
+                };
+                if let Some(prop) = group.prop_mut(param.id) {
+                    prop.value = FxValue::Scalar(place.map_or(0.0, |index| (index + 1) as f64));
+                }
+                continue;
+            }
             if param.ui == ParamUi::Layer {
                 // The layer of the track the parameter names, if any.
                 let read = match params.get(param.id) {
@@ -1436,8 +1545,14 @@ impl<'a> Builder<'a> {
             ComposeError::Invalid(format!("`{}` is not a raster transition", transition.fx))
         })?;
         let layer_size = [f64::from(size.0), f64::from(size.1)];
-        let mut group =
-            self.raster_group(spec, &transition.params, frames, layer_size, seeds.next());
+        let mut group = self.raster_group(
+            spec,
+            &transition.params,
+            &clip.masks,
+            frames,
+            layer_size,
+            seeds.next(),
+        );
         if let Some(prop) = group.prop_mut(kerf_fx::COMPLETION) {
             set_values(
                 prop,

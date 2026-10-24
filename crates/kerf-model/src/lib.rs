@@ -17,8 +17,8 @@ pub use catalog::{Catalog, Domain, Engine, FxDef, FxKind, ParamDef, ParamType};
 pub use diag::{Diagnostic, Severity, Span};
 pub use id::{Id, IdGen, InvalidId};
 pub use model::{
-    Align, AudioInfo, Clip, ClipAt, Content, Effect, Marker, MarkerColor, Media, Params, Project,
-    Sequence, Track, TrackKind, Transition, VideoInfo,
+    Align, AudioInfo, Clip, ClipAt, Content, Effect, Marker, MarkerColor, Mask, MaskMode,
+    MaskShape, Media, Params, Project, Sequence, Track, TrackKind, Transition, VideoInfo,
 };
 pub use ops::{
     apply, ClipChange, Edge, MarkerChange, NewClip, Op, Rejected, Report, SequenceChange,

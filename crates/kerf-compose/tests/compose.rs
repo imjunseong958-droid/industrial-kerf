@@ -180,6 +180,59 @@ fn effects_read_other_tracks_even_hidden_ones() {
 }
 
 #[test]
+fn masks_cut_the_picture_and_effects_draw_along_them() {
+    let solid = |lines: &str| {
+        format!(
+            "{SEQUENCE}\
+             \x20 track V1 video\n\
+             \x20   clip g1 gen=solid at=0f dur=24f\n\
+             \x20     set color=#ff0000\n\
+             {lines}"
+        )
+    };
+    // A rectangle keeps the middle; outside it the black below shows.
+    let kept = frame(
+        &solid("\x20     mask k1 rect=0.25,0.25,0.75,0.75\n"),
+        4,
+        false,
+    );
+    assert_eq!(pixel(&kept, 160, 90), [255, 0, 0]);
+    assert_eq!(pixel(&kept, 10, 10), [0, 0, 0]);
+    // Inverted, it cuts the middle out instead.
+    let cut = frame(
+        &solid("\x20     mask k1 rect=0.25,0.25,0.75,0.75 inverted=true\n"),
+        4,
+        false,
+    );
+    assert_eq!(pixel(&cut, 160, 90), [0, 0, 0]);
+    assert_eq!(pixel(&cut, 10, 10), [255, 0, 0]);
+    // A crop intersects the masks: cropping the left half away leaves the
+    // right half (centered), which a mask keeping only the left half
+    // empties.
+    let cropped = frame(&solid("\x20     set crop_l=0.5\n"), 4, false);
+    assert_eq!(pixel(&cropped, 160, 90), [255, 0, 0]);
+    let both = frame(
+        &solid("\x20     set crop_l=0.5\n\x20     mask k1 rect=0,0,0.5,1\n"),
+        4,
+        false,
+    );
+    assert_eq!(pixel(&both, 160, 90), [0, 0, 0]);
+    // A mask that cuts nothing is a path: Stroke paints white along it and
+    // the red stays everywhere else.
+    let stroked = frame(
+        &solid(
+            "\x20     mask ring rect=0.25,0.25,0.75,0.75 mode=none\n\
+             \x20     fx generate.stroke path=ring color=#ffffff brushSize=6\n",
+        ),
+        4,
+        false,
+    );
+    assert_eq!(pixel(&stroked, 160, 45), [255, 255, 255]);
+    assert_eq!(pixel(&stroked, 160, 90), [255, 0, 0]);
+    assert_eq!(pixel(&stroked, 10, 10), [255, 0, 0]);
+}
+
+#[test]
 fn unsupported_things_are_named() {
     let body = format!(
         "{SEQUENCE}\

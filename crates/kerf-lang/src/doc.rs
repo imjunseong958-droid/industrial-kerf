@@ -17,14 +17,14 @@
 //! Positions are timecode; durations count frames as `HH:MM:SS:FF`. Printing
 //! is deterministic and omits defaults, so a document diff is an edit diff.
 
-use crate::lex::{lex, Atom, Line};
-use crate::text::{print_param, quote, Clock, Fields};
+use crate::lex::{lex, Arg, Atom, Line};
+use crate::text::{number, print_param, quote, Clock, Fields};
 use kerf_model::time::parse_timecode;
 use kerf_model::Align;
 use kerf_model::{
     validate, AudioInfo, Catalog, Clip, Content, Diagnostic, Domain, Effect, Id, Marker,
-    MarkerColor, Media, ParamDef, Params, Project, Rate, Ratio, Sequence, Time, Track, TrackKind,
-    Transition, VideoInfo,
+    MarkerColor, Mask, MaskMode, MaskShape, Media, Param, ParamDef, ParamType, Params, Project,
+    Rate, Ratio, Sequence, Time, Track, TrackKind, Transition, Value, VideoInfo,
 };
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -223,16 +223,18 @@ impl Parser<'_> {
                         },
                         _ => Err(line.error(1, "clips and transitions belong under a track")),
                     },
-                    (3, word) => match (sequence, track, clip) {
-                        (Some(s), Some(t), Some(c)) => match word {
-                            "set" => self.set_line(s, t, c, line),
-                            "fx" => self.fx_line(s, t, c, line),
-                            other => {
-                                Err(line.error(1, format!("expected set or fx, not `{other}`")))
-                            }
-                        },
-                        _ => Err(line.error(1, "set and fx lines belong under a clip")),
-                    },
+                    (3, word) => {
+                        match (sequence, track, clip) {
+                            (Some(s), Some(t), Some(c)) => match word {
+                                "set" => self.set_line(s, t, c, line),
+                                "mask" => self.mask_line(s, c, t, line),
+                                "fx" => self.fx_line(s, t, c, line),
+                                other => Err(line
+                                    .error(1, format!("expected set, mask, or fx, not `{other}`"))),
+                            },
+                            _ => Err(line.error(1, "set, mask, and fx lines belong under a clip")),
+                        }
+                    }
                     _ => Err(line.error(1, "too deeply indented")),
                 };
             if let Err(error) = result {
@@ -355,6 +357,30 @@ impl Parser<'_> {
             target.insert(name.to_owned(), param);
         }
         fields.finish(1)
+    }
+
+    fn mask_line(&mut self, s: usize, c: usize, t: usize, line: &Line) -> Step {
+        let rate = self.project.sequences[s].rate;
+        let mut fields = Fields::new(line)?;
+        let name = fields.id(1, "a mask name")?;
+        let shape = take_mask_shape(&mut fields)?
+            .ok_or_else(|| line.error(1, "a mask needs rect=, ellipse=, or points="))?;
+        let mode = fields
+            .take_with("mode", parse_mask_mode)?
+            .unwrap_or_default();
+        let inverted = fields.take_bool("inverted")?.unwrap_or(false);
+        let params = parse_params(&mut fields, self.catalog.mask_props(), &name, rate)?;
+        fields.finish(2)?;
+        self.project.sequences[s].tracks[t].clips[c]
+            .masks
+            .push(Mask {
+                name,
+                shape,
+                mode,
+                inverted,
+                params,
+            });
+        Ok(())
     }
 
     fn fx_line(&mut self, s: usize, t: usize, c: usize, line: &Line) -> Step {
@@ -638,6 +664,112 @@ pub(crate) fn parse_audio(text: &str) -> Result<AudioInfo, String> {
     })
 }
 
+pub(crate) fn parse_mask_mode(text: &str) -> Result<MaskMode, String> {
+    MaskMode::parse(text).ok_or_else(|| {
+        let names: Vec<&str> = MaskMode::ALL.iter().map(|mode| mode.name()).collect();
+        format!("`{text}` is not a mask mode ({})", names.join(", "))
+    })
+}
+
+/// A mask's outline from `rect=`, `ellipse=`, or `points=` (with
+/// `closed=`), in fractions of the picture; none when absent.
+pub(crate) fn take_mask_shape(fields: &mut Fields<'_>) -> Result<Option<MaskShape>, Diagnostic> {
+    let rect = fields.take("rect");
+    let ellipse = fields.take("ellipse");
+    let points = fields.take("points");
+    let closed = fields.take("closed");
+    let given: Vec<&Arg> = [rect, ellipse, points].into_iter().flatten().collect();
+    if let Some(second) = given.get(1) {
+        return Err(fields.error(
+            second,
+            "a mask has one outline: rect=, ellipse=, or points=",
+        ));
+    }
+    if let (Some(closed), None) = (closed, points) {
+        return Err(fields.error(closed, "`closed=` goes with `points=`"));
+    }
+    let numbers = |arg: &Arg, text: &str| -> Result<Vec<f64>, Diagnostic> {
+        text.split(',')
+            .map(|part| {
+                part.trim()
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|n| n.is_finite())
+                    .ok_or_else(|| fields.error(arg, format!("`{part}` is not a number")))
+            })
+            .collect()
+    };
+    let four = |arg: &Arg, what: &str| -> Result<[f64; 4], Diagnostic> {
+        let values = numbers(arg, fields.text(arg)?)?;
+        values
+            .try_into()
+            .map_err(|_| fields.error(arg, format!("expected {what}")))
+    };
+    if let Some(arg) = rect {
+        return Ok(Some(MaskShape::Rect(four(arg, "left,top,right,bottom")?)));
+    }
+    if let Some(arg) = ellipse {
+        return Ok(Some(MaskShape::Ellipse(four(
+            arg,
+            "x,y,radius across,radius down",
+        )?)));
+    }
+    let Some(arg) = points else {
+        return Ok(None);
+    };
+    let points = fields
+        .text(arg)?
+        .split_whitespace()
+        .map(|point| {
+            let values = numbers(arg, point)?;
+            <[f64; 2]>::try_from(values)
+                .map_err(|_| fields.error(arg, format!("`{point}` is not x,y")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let closed = match closed.map(|closed| fields.text(closed)).transpose()? {
+        None | Some("true") => true,
+        Some("false") => false,
+        Some(other) => {
+            return Err(fields.error(arg, format!("`closed` is true or false, not `{other}`")))
+        }
+    };
+    Ok(Some(MaskShape::Polygon { points, closed }))
+}
+
+/// `rect=`, `ellipse=`, or `points=` (and `closed=false`) for an outline.
+pub(crate) fn mask_shape_text(shape: &MaskShape) -> String {
+    let list = |values: &[f64]| {
+        values
+            .iter()
+            .map(|v| number(*v))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    match shape {
+        MaskShape::Rect(rect) => format!(" rect={}", list(rect)),
+        MaskShape::Ellipse(ellipse) => format!(" ellipse={}", list(ellipse)),
+        MaskShape::Polygon { points, closed } => {
+            let points: Vec<String> = points.iter().map(|point| list(point)).collect();
+            let open = if *closed { "" } else { " closed=false" };
+            format!(" points={}{open}", quote(&points.join(" ")))
+        }
+    }
+}
+
+/// A mask after its name: its outline, mode and inversion when not the
+/// defaults, and its properties.
+pub(crate) fn mask_text(mask: &Mask, catalog: &Catalog, rate: Rate) -> String {
+    let mut out = mask_shape_text(&mask.shape);
+    if mask.mode != MaskMode::Add {
+        write!(out, " mode={}", mask.mode.name()).unwrap();
+    }
+    if mask.inverted {
+        out.push_str(" inverted=true");
+    }
+    out.push_str(&params_text(&mask.params, catalog.mask_props(), rate));
+    out
+}
+
 pub(crate) fn parse_align(text: &str) -> Result<Align, String> {
     Align::parse(text).ok_or_else(|| format!("`{text}` is not center, start, or end"))
 }
@@ -899,6 +1031,15 @@ fn print_clip(
     if !set.is_empty() {
         writeln!(out, "      set{set}").unwrap();
     }
+    for mask in &clip.masks {
+        writeln!(
+            out,
+            "      mask {}{}",
+            mask.name,
+            mask_text(mask, catalog, clock.rate)
+        )
+        .unwrap();
+    }
     for effect in &clip.effects {
         write!(out, "      fx {}", effect.fx).unwrap();
         if !effect.enabled {
@@ -923,7 +1064,16 @@ pub(crate) fn params_text(params: &Params, defs: &[ParamDef], rate: Rate) -> Str
         .iter()
         .filter(|(name, _)| !defs.iter().any(|d| &d.name == *name));
     for (name, param) in known.chain(unknown) {
-        write!(out, " {name}={}", print_param(param, rate)).unwrap();
+        // A track or mask name is a word, as ids are.
+        let reference = defs
+            .iter()
+            .any(|def| def.name == *name && matches!(def.ty, ParamType::Track | ParamType::Mask));
+        match param {
+            Param::Static(Value::Text(id)) if reference && Id::new(id.as_str()).is_ok() => {
+                write!(out, " {name}={id}").unwrap();
+            }
+            _ => write!(out, " {name}={}", print_param(param, rate)).unwrap(),
+        }
     }
     out
 }
@@ -1066,6 +1216,41 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
     }
 
     #[test]
+    fn masks_round_trip_and_name_what_effects_read() {
+        let masked = SAMPLE.replace(
+            "      fx color.basic exposure=0.3 saturation=1.2\n",
+            "      mask k1 rect=0.1,0.2,0.9,0.8 feather=6 opacity={0f:0 12f:1}\n      \
+             mask ring ellipse=0.5,0.5,0.25,0.3 mode=none inverted=true\n      \
+             mask path points=\"0,0 0.5,1 1,0\" closed=false mode=none\n      \
+             fx color.basic exposure=0.3 saturation=1.2\n      \
+             fx generate.stroke path=ring\n",
+        );
+        let document = parse_document(&masked, Catalog::builtin()).unwrap();
+        let printed = print_document(
+            &document.project,
+            Catalog::builtin(),
+            PrintOptions::default(),
+        );
+        assert_eq!(printed, masked);
+        for (from, to, needle) in [
+            ("path=ring", "path=nothing", "not a mask of clip"),
+            ("mask path points", "mask k1 points", "two masks named"),
+            (
+                "ellipse=0.5,0.5,0.25,0.3",
+                "ellipse=0.5,0.5,0,0.3",
+                "radii above 0",
+            ),
+            ("feather=6", "feather=-1", "outside"),
+        ] {
+            let errors = parse_document(&masked.replace(from, to), Catalog::builtin()).unwrap_err();
+            assert!(
+                errors.iter().any(|e| e.message.contains(needle)),
+                "{needle}: {errors:#?}"
+            );
+        }
+    }
+
+    #[test]
     fn effects_read_other_picture_tracks_only() {
         let reading = |c1: &str, c3: &str| {
             SAMPLE
@@ -1080,13 +1265,13 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
         };
         let reads = |track: &str| format!("      fx channel.setmatte takeMatteFromLayer={track}\n");
         let document = parse_document(&reading(&reads("V2"), ""), Catalog::builtin()).unwrap();
-        // The track name prints back as text.
+        // The track name prints back as a word.
         assert!(print_document(
             &document.project,
             Catalog::builtin(),
             PrintOptions::default()
         )
-        .contains("takeMatteFromLayer=\"V2\""));
+        .contains("takeMatteFromLayer=V2\n"));
         for (c1, c3, needle) in [
             (reads("V9"), String::new(), "not a picture track"),
             (reads("A1"), String::new(), "not a picture track"),

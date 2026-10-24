@@ -223,6 +223,16 @@ fn features_without_a_lowering_are_named() {
         compile_program(&project, Catalog::builtin(), &ProgramOptions::default()).unwrap_err();
     assert_eq!(error.entity(), Some("c1"));
     assert!(error.to_string().contains("blend `multiply`"), "{error}");
+    let masked = self::project(
+        "sequence s1 rate=24 size=1920x1080 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip c1 media=m1 src=0f at=0f dur=24f\n\
+         \x20     mask k1 rect=0.1,0.1,0.9,0.9\n",
+    );
+    let error =
+        compile_program(&masked, Catalog::builtin(), &ProgramOptions::default()).unwrap_err();
+    assert_eq!(error.entity(), Some("c1"));
+    assert!(error.to_string().contains("masks"), "{error}");
 }
 
 #[test]

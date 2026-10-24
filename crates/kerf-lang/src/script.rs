@@ -14,16 +14,17 @@
 //! script applies atomically, and errors point at the line that failed.
 
 use crate::doc::{
-    content, content_text, media_fields, media_line, params_text, parse_align, parse_marker_color,
-    parse_sample_rate, parse_size, sequence_fields, sequence_line,
+    content, content_text, mask_shape_text, mask_text, media_fields, media_line, params_text,
+    parse_align, parse_marker_color, parse_mask_mode, parse_sample_rate, parse_size,
+    sequence_fields, sequence_line, take_mask_shape,
 };
 use crate::lex::{lex, Arg, Atom, Line};
 use crate::text::{parse_param, quote, Clock, Fields};
 use kerf_model::time::parse_timecode;
 use kerf_model::{
     apply, Catalog, Clip, ClipChange, Content, Diagnostic, Domain, Edge, Effect, Id, MarkerChange,
-    NewClip, Op, ParamDef, Params, Project, Rate, Ratio, Report, Sequence, SequenceChange, Time,
-    TrackChange, TrackKind,
+    Mask, NewClip, Op, ParamDef, Params, Project, Rate, Ratio, Report, Sequence, SequenceChange,
+    Time, TrackChange, TrackKind,
 };
 use std::fmt::Write as _;
 
@@ -80,7 +81,7 @@ pub fn apply_script(
     })
 }
 
-const COMMANDS: &str = "use, media, sequence, track, insert, overwrite, delete, ripple-delete, lift, extract, trim, roll, slip, slide, split, blade, move, set, speed, fx, transition, marker, link, unlink";
+const COMMANDS: &str = "use, media, sequence, track, insert, overwrite, delete, ripple-delete, lift, extract, trim, roll, slip, slide, split, blade, move, set, speed, mask, fx, transition, marker, link, unlink";
 
 struct Script<'c> {
     project: Project,
@@ -284,6 +285,7 @@ impl Script<'_> {
                 fields.finish(3)?;
                 Ok(vec![Op::Speed { clip, speed }])
             }
+            "mask" => self.mask(fields),
             "fx" => self.fx(fields),
             "transition" => self.transition(fields),
             "marker" => self.marker(fields),
@@ -758,6 +760,66 @@ impl Script<'_> {
             ));
         }
         Ok(vec![Op::Set { clip, changes }])
+    }
+
+    fn mask(&mut self, mut fields: Fields<'_>) -> Parsed {
+        let line = fields.line();
+        let clip = fields.id(1, "a clip id")?;
+        let (_, clock) = self.clip(&clip, line)?;
+        let action = fields.word(2, "add, set, or remove")?;
+        let name = fields.id(3, "a mask name")?;
+        let defs = self.catalog.mask_props();
+        let op = match action {
+            "add" => {
+                let shape = take_mask_shape(&mut fields)?
+                    .ok_or_else(|| line.error(1, "mask add needs rect=, ellipse=, or points="))?;
+                let index = fields.take_with("at", position_index)?;
+                let mode = fields
+                    .take_with("mode", parse_mask_mode)?
+                    .unwrap_or_default();
+                let inverted = fields.take_bool("inverted")?.unwrap_or(false);
+                let params = params(&mut fields, defs, &name, clock.rate)?;
+                Op::MaskAdd {
+                    clip,
+                    mask: Mask {
+                        name,
+                        shape,
+                        mode,
+                        inverted,
+                        params,
+                    },
+                    index,
+                }
+            }
+            "set" => {
+                let shape = take_mask_shape(&mut fields)?;
+                let mode = fields.take_with("mode", parse_mask_mode)?;
+                let inverted = fields.take_bool("inverted")?;
+                let mut changes = Vec::new();
+                if let Some(reset) = fields.take("reset") {
+                    for property in fields.text(reset)?.split(',') {
+                        changes.push((property.to_owned(), None));
+                    }
+                }
+                changes.extend(
+                    params(&mut fields, defs, &name, clock.rate)?
+                        .into_iter()
+                        .map(|(k, v)| (k, Some(v))),
+                );
+                Op::MaskSet {
+                    clip,
+                    name,
+                    shape,
+                    mode,
+                    inverted,
+                    params: changes,
+                }
+            }
+            "remove" => Op::MaskRemove { clip, name },
+            other => return Err(line.error(1, format!("mask {other}? use add, set, or remove"))),
+        };
+        fields.finish(4)?;
+        Ok(vec![op])
     }
 
     fn fx(&mut self, mut fields: Fields<'_>) -> Parsed {
@@ -1412,6 +1474,38 @@ fn op_line(project: &Project, catalog: &Catalog, op: &Op) -> String {
             text.push_str(&changes(params, clock.rate));
             text
         }
+        Op::MaskAdd { clip, mask, index } => {
+            let clock = clip_clock(clip).unwrap_or(fallback);
+            let mut text = format!("mask {clip} add {}", mask.name);
+            text.push_str(&mask_text(mask, catalog, clock.rate));
+            if let Some(index) = index {
+                write!(text, " at={}", index + 1).unwrap();
+            }
+            text
+        }
+        Op::MaskSet {
+            clip,
+            name,
+            shape,
+            mode,
+            inverted,
+            params,
+        } => {
+            let clock = clip_clock(clip).unwrap_or(fallback);
+            let mut text = format!("mask {clip} set {name}");
+            if let Some(shape) = shape {
+                text.push_str(&mask_shape_text(shape));
+            }
+            if let Some(mode) = mode {
+                write!(text, " mode={}", mode.name()).unwrap();
+            }
+            if let Some(inverted) = inverted {
+                write!(text, " inverted={inverted}").unwrap();
+            }
+            text.push_str(&changes(params, clock.rate));
+            text
+        }
+        Op::MaskRemove { clip, name } => format!("mask {clip} remove {name}"),
         Op::FxRemove { clip, index } => format!("fx {clip} remove {}", index + 1),
         Op::FxMove { clip, index, to } => format!("fx {clip} move {} to={}", index + 1, to + 1),
         Op::AddTransition {

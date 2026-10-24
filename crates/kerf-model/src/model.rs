@@ -206,6 +206,8 @@ pub struct Clip {
     pub link: Option<Id>,
     /// Intrinsic properties from the catalog; absent means default.
     pub props: Params,
+    /// Masks on a picture clip, combined in order.
+    pub masks: Vec<Mask>,
     pub effects: Vec<Effect>,
 }
 
@@ -242,8 +244,13 @@ impl Clip {
             name: None,
             link: None,
             props: Params::new(),
+            masks: Vec::new(),
             effects: Vec::new(),
         }
+    }
+
+    pub fn mask(&self, name: &str) -> Option<&Mask> {
+        self.masks.iter().find(|mask| mask.name == name)
     }
 
     pub fn end(&self) -> Time {
@@ -370,6 +377,89 @@ pub struct Effect {
     pub fx: Id,
     pub enabled: bool,
     pub params: Params,
+}
+
+/// A mask on a clip's picture. It shows the picture inside its outline
+/// (or, by its mode, outside it, or only where it overlaps the masks
+/// before it), and effects can read its outline by name.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Mask {
+    /// Unique among the clip's masks.
+    pub name: Id,
+    pub shape: MaskShape,
+    pub mode: MaskMode,
+    pub inverted: bool,
+    /// Feather, opacity, and expansion (`Catalog::mask_props`); absent
+    /// means default.
+    pub params: Params,
+}
+
+impl Mask {
+    pub fn new(name: Id, shape: MaskShape) -> Self {
+        Self {
+            name,
+            shape,
+            mode: MaskMode::Add,
+            inverted: false,
+            params: Params::new(),
+        }
+    }
+}
+
+/// A mask's outline, in fractions of the clip's picture: 0, 0 is its top
+/// left corner and 1, 1 its bottom right.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MaskShape {
+    /// Left, top, right, bottom.
+    Rect([f64; 4]),
+    /// Center x and y, then the radius across (a fraction of the width)
+    /// and down (of the height).
+    Ellipse([f64; 4]),
+    /// Corners in order. An open outline cuts nothing; effects still read
+    /// it as a path.
+    Polygon { points: Vec<[f64; 2]>, closed: bool },
+}
+
+/// How a mask combines with the masks before it, as After Effects'.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum MaskMode {
+    #[default]
+    Add,
+    Subtract,
+    Intersect,
+    Lighten,
+    Darken,
+    Difference,
+    /// Cuts nothing; a path only effects read.
+    None,
+}
+
+impl MaskMode {
+    pub const ALL: [Self; 7] = [
+        Self::Add,
+        Self::Subtract,
+        Self::Intersect,
+        Self::Lighten,
+        Self::Darken,
+        Self::Difference,
+        Self::None,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::Subtract => "subtract",
+            Self::Intersect => "intersect",
+            Self::Lighten => "lighten",
+            Self::Darken => "darken",
+            Self::Difference => "difference",
+            Self::None => "none",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.name() == text)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
