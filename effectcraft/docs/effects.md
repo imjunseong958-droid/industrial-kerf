@@ -3,44 +3,13 @@
 <!-- Generated from the effect registry (crates/effects/src/catalog.rs); do not edit by hand.
      Regenerate: UPDATE_DOCS=1 cargo test -p effectcraft-effects --lib effects_doc_is_current -->
 
-EffectCraft ships 307 effects with 3032 parameters in total, grouped into the same categories as the Effects & Presets panel. Every effect is our own implementation, written from public behaviour descriptions and standard image-processing literature. Parameter names, order, popup options, units, defaults and ranges follow the reference application so that projects, expressions and muscle memory carry over.
+EffectCraft ships 265 effects with 2806 parameters in total, grouped into the same categories as the Effects & Presets panel. Every effect is our own implementation, written from public behaviour descriptions and standard image-processing literature. Parameter names, order, popup options, units, defaults and ranges follow the reference application so that projects, expressions and muscle memory carry over.
 
-- **GPU**: 280 effects also run on the GPU compositor with identical results.
-- **32**: 307 effects process 32-bit float (HDR, overbright) pixels without clamping.
-- **Status**: 307 implemented in full, 0 partial (what is missing is listed).
+- **GPU**: 253 effects also run on the GPU compositor with identical results.
+- **32**: 265 effects process 32-bit float (HDR, overbright) pixels without clamping.
+- **Status**: 265 implemented in full, 0 partial (what is missing is listed).
 
 Effects are addressed by id (`ec.<category>.<name>`) or display name in commands, scripts and the control channel, and every parameter by its id (`effects/#1/blurriness`).
-
-## 3D Channel
-
-| Effect | Id | Params | GPU | 32 | Status |
-|---|---|---:|:-:|:-:|---|
-| 3D Channel Extract | `ec.3d.channelextract` | 6 | GPU | 32 | Implemented |
-| Cryptomatte | `ec.3d.cryptomatte` | 4 | GPU | 32 | Implemented |
-| Depth Matte | `ec.3d.depthmatte` | 3 | GPU | 32 | Implemented |
-| Depth of Field | `ec.3d.depthoffield` | 4 | GPU | 32 | Implemented |
-| EXtractoR | `ec.3d.extractor` | 8 | GPU | 32 | Implemented |
-| Fog 3D | `ec.3d.fog3d` | 8 | GPU | 32 | Implemented |
-| ID Matte | `ec.3d.idmatte` | 5 | GPU | 32 | Implemented |
-| IDentifier | `ec.3d.identifier` | 3 | GPU | 32 | Implemented |
-
-## Audio
-
-| Effect | Id | Params | GPU | 32 | Status |
-|---|---|---:|:-:|:-:|---|
-| Backwards | `ec.audio.backwards` | 1 |  | 32 | Implemented |
-| Bass & Treble | `ec.audio.basstreble` | 2 |  | 32 | Implemented |
-| Compressor | `ec.audio.compressor` | 8 |  | 32 | Implemented |
-| Delay | `ec.audio.delay` | 5 |  | 32 | Implemented |
-| Distortion | `ec.audio.distortion` | 7 |  | 32 | Implemented |
-| Flange & Chorus | `ec.audio.flangechorus` | 9 |  | 32 | Implemented |
-| Gate | `ec.audio.gate` | 4 |  | 32 | Implemented |
-| High-Low Pass | `ec.audio.highlowpass` | 4 |  | 32 | Implemented |
-| Modulator | `ec.audio.modulator` | 4 |  | 32 | Implemented |
-| Parametric EQ | `ec.audio.parametriceq` | 12 |  | 32 | Implemented |
-| Reverb | `ec.audio.reverb` | 6 |  | 32 | Implemented |
-| Stereo Mixer | `ec.audio.stereomixer` | 5 |  | 32 | Implemented |
-| Tone | `ec.audio.tone` | 7 |  | 32 | Implemented |
 
 ## Blur & Sharpen
 
@@ -170,20 +139,6 @@ Effects are addressed by id (`ec.<category>.<name>`) or display name in commands
 | Warp Stabilizer | `ec.distort.warpstabilizer` | 20 |  | 32 | Implemented |
 | Wave Warp | `ec.distort.wavewarp` | 7 | GPU | 32 | Implemented |
 
-## Expression Controls
-
-| Effect | Id | Params | GPU | 32 | Status |
-|---|---|---:|:-:|:-:|---|
-| 3D Point Control | `ec.control.point3d` | 1 | GPU | 32 | Implemented |
-| Angle Control | `ec.control.angle` | 1 | GPU | 32 | Implemented |
-| Checkbox Control | `ec.control.checkbox` | 1 | GPU | 32 | Implemented |
-| Color Control | `ec.control.color` | 1 | GPU | 32 | Implemented |
-| Dropdown Menu Control | `ec.control.dropdown` | 1 | GPU | 32 | Implemented |
-| Layer Control | `ec.control.layer` | 1 | GPU | 32 | Implemented |
-| Point Control | `ec.control.point` | 1 | GPU | 32 | Implemented |
-| Slider Control | `ec.control.slider` | 1 | GPU | 32 | Implemented |
-| Stereo 3D Controls | `ec.control.stereo3d` | 5 | GPU | 32 | Implemented |
-
 ## Generate
 
 | Effect | Id | Params | GPU | 32 | Status |
@@ -254,7 +209,6 @@ Effects are addressed by id (`ec.<category>.<name>`) or display name in commands
 | Effect | Id | Params | GPU | 32 | Status |
 |---|---|---:|:-:|:-:|---|
 | Matte Choker | `ec.matte.mattechoker` | 7 | GPU | 32 | Implemented |
-| Mocha shape | `ec.obsolete.mochashape` | 6 |  | 32 | Implemented |
 | Object Matte | `ec.matte.objectmatte` | 13 |  | 32 | Implemented |
 | Refine Hard Matte | `ec.matte.refinehard` | 16 | GPU | 32 | Implemented |
 | Refine Soft Matte | `ec.matte.refinesoft` | 18 | GPU | 32 | Implemented |
@@ -278,26 +232,6 @@ Effects are addressed by id (`ec.<category>.<name>`) or display name in commands
 | Noise HLS Auto | `ec.noise.noisehlsauto` | 6 | GPU | 32 | Implemented |
 | Remove Grain | `ec.noise.removegrain` | 20 | GPU | 32 | Implemented |
 | Turbulent Noise | `ec.noise.turbulent` | 22 | GPU | 32 | Implemented |
-
-## Obsolete
-
-| Effect | Id | Params | GPU | 32 | Status |
-|---|---|---:|:-:|:-:|---|
-| Basic 3D | `ec.obsolete.basic3d` | 5 | GPU | 32 | Implemented |
-| Basic Text | `ec.obsolete.basictext` | 11 | GPU | 32 | Implemented |
-| Color Key | `ec.key.colorkey` | 4 | GPU | 32 | Implemented |
-| Gaussian Blur (Legacy) | `ec.obsolete.gaussianlegacy` | 2 | GPU | 32 | Implemented |
-| Lightning | `ec.obsolete.lightning` | 25 | GPU | 32 | Implemented |
-| Luma Key | `ec.key.luma` | 5 | GPU | 32 | Implemented |
-| Path Text | `ec.obsolete.pathtext` | 32 | GPU | 32 | Implemented |
-| Reduce Interlace Flicker | `ec.blur.reduceflicker` | 1 | GPU | 32 | Implemented |
-| Spill Suppressor | `ec.key.spill` | 3 | GPU | 32 | Implemented |
-
-## Paint
-
-| Effect | Id | Params | GPU | 32 | Status |
-|---|---|---:|:-:|:-:|---|
-| Paint | `ec.paint.paint` | 1 |  | 32 | Implemented |
 
 ## Perspective
 
@@ -399,12 +333,11 @@ Effects are addressed by id (`ec.<category>.<name>`) or display name in commands
 | CC Light Wipe | `ec.transition.cclightwipe` | 8 | GPU | 32 | Implemented |
 | CC Line Sweep | `ec.transition.cclinesweep` | 5 | GPU | 32 | Implemented |
 | CC Radial ScaleWipe | `ec.transition.ccradialscalewipe` | 3 | GPU | 32 | Implemented |
-| CC Scale Wipe | `ec.transition.ccscalewipe` | 3 | GPU | 32 | Implemented |
 | CC Twister | `ec.transition.cctwister` | 5 | GPU | 32 | Implemented |
 | CC WarpoMatic | `ec.transition.ccwarpomatic` | 8 | GPU | 32 | Implemented |
 | Card Wipe | `ec.transition.cardwipe` | 44 | GPU | 32 | Implemented |
 | Gradient Wipe | `ec.transition.gradientwipe` | 5 | GPU | 32 | Implemented |
-| Iris Wipe | `ec.transition.iriswipe` | 7 | GPU | 32 | Implemented |
+| Iris Wipe | `ec.transition.iriswipe` | 8 | GPU | 32 | Implemented |
 | Linear Wipe | `ec.transition.linearwipe` | 3 | GPU | 32 | Implemented |
 | Radial Wipe | `ec.transition.radialwipe` | 5 | GPU | 32 | Implemented |
 | Venetian Blinds | `ec.transition.venetian` | 4 | GPU | 32 | Implemented |

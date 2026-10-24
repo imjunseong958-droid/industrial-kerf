@@ -227,42 +227,6 @@ fn fg2_pair(@builtin(global_invocation_id) gid: vec3<u32>) {
     textureStore(out, p, vec4<f32>(s.x, textureLoad(aux, p, 0).x, s.y, 0.0));
 }
 
-// textfx::lightning's composite: aux = (outer, glow, core); u[0].x = blending mode;
-// f[0] = outside colour, f[1] = inside colour.
-@compute @workgroup_size(16, 16)
-fn fg2_bolt(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let p = vec2<i32>(gid.xy);
-    if (!fg2_inside(p)) {
-        return;
-    }
-    let px = textureLoad(src, p, 0);
-    let m = textureLoad(aux, p, 0);
-    let o = max(m.x, m.y * 0.8);
-    let c = m.z;
-    let a = min(max(o, c), 1.0);
-    if (a <= 0.0) {
-        textureStore(out, p, px);
-        return;
-    }
-    let t = c / a;
-    let oc = P.f[0].xyz;
-    let colr = oc + (P.f[1].xyz - oc) * t;
-    var r: vec4<f32>;
-    switch P.u[0].x {
-        case 1u: {
-            r = vec4<f32>(px.xyz + colr * a, min(px.w + a * (1.0 - px.w), 1.0));
-        }
-        case 2u: {
-            let s = vec4<f32>(colr * a, a);
-            r = px + s - px * s;
-        }
-        default: {
-            r = fg2_over(px, vec4<f32>(colr * a, a));
-        }
-    }
-    textureStore(out, p, r);
-}
-
 // generate2::advanced_lightning's composite: aux = (core, blurred core); u[0] = (composite, glow);
 // f[0] = (core opacity, glow opacity); f[1] = core colour, f[2] = glow colour.
 @compute @workgroup_size(16, 16)
@@ -287,55 +251,6 @@ fn fg2_adv_bolt(@builtin(global_invocation_id) gid: vec3<u32>) {
     } else {
         textureStore(out, p, vec4<f32>(l, la));
     }
-}
-
-// textfx::text_px over the previous pass: aux = (fill, outer, inner) coverages.
-// u[0] = (display, keep the layer, stroked, inner ring); f[0] = fill, f[1] = stroke colour;
-// f[2].x = opacity.
-fn fg2_tint(c: vec4<f32>, a0: f32) -> vec4<f32> {
-    let a = clamp(a0 * c.w, 0.0, 1.0);
-    return vec4<f32>(c.xyz * a, a);
-}
-
-@compute @workgroup_size(16, 16)
-fn fg2_text(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let p = vec2<i32>(gid.xy);
-    if (!fg2_inside(p)) {
-        return;
-    }
-    let cov = textureLoad(aux, p, 0);
-    let op = P.f[2].x;
-    let f = cov.x * op;
-    var ring = 0.0;
-    if (P.u[0].z != 0u) {
-        var inner = 0.0;
-        if (P.u[0].w != 0u) {
-            inner = cov.z;
-        }
-        ring = max(cov.y - inner, 0.0);
-    }
-    let s = ring * op;
-    var o = vec4<f32>(0.0);
-    if (P.u[0].y != 0u) {
-        o = textureLoad(src, p, 0);
-    }
-    let fill = fg2_tint(P.f[0], f);
-    let stroke = fg2_tint(P.f[1], s);
-    switch P.u[0].x {
-        case 1u: {
-            o = fg2_over(o, stroke);
-        }
-        case 2u: {
-            o = fg2_over(fg2_over(o, stroke), fill);
-        }
-        case 3u: {
-            o = fg2_over(fg2_over(o, fill), stroke);
-        }
-        default: {
-            o = fg2_over(o, fill);
-        }
-    }
-    textureStore(out, p, o);
 }
 
 // ---------------------------------------------------------------- Radio Waves (generate2::radio_waves)

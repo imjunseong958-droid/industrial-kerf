@@ -1,8 +1,7 @@
 //! GPU effects, keying, matte and channel family (kernels in `shaders/fx_key.wgsl`, every entry
 //! point prefixed `fxk_`): the CPU effects' exact steps with the pixel loops as compute kernels.
 //!
-//! The keyers (Color Key, Luma Key, Color Range, Extract, Difference Matte, Color Difference
-//! Key, Screen Key) build their matte in a plane pass, run the CPU's edge thin (morphology) and
+//! The keyers (Color Range, Extract, Difference Matte, Color Difference Key, Screen Key) build their matte in a plane pass, run the CPU's edge thin (morphology) and
 //! feather (Gaussian) on it, and apply it in a second pass; spill suppression, Unmult and the
 //! channel effects are one per-pixel pass (`fxk_point`). Simple / Matte Choker and Key Cleaner
 //! work on the alpha plane and put it back with `util::set_alpha` (straight colour kept, the
@@ -23,14 +22,11 @@ pub(crate) const KERNELS: &[&str] = &["fxk_point", "fxk_fit", "fxk_reduce"];
 
 /// Effect ids implemented here.
 pub(crate) const IDS: &[&str] = &[
-    "ec.key.colorkey",
-    "ec.key.luma",
     "ec.key.colorrange",
     "ec.key.extract",
     "ec.key.differencematte",
     "ec.key.colordifference",
     "ec.key.screen",
-    "ec.key.spill",
     "ec.key.advancedspill",
     "ec.key.keycleaner",
     "ec.key.unmult",
@@ -53,7 +49,7 @@ pub(crate) const IDS: &[&str] = &[
 /// Run effect `id` (one of [`IDS`]); `None` = this parameter combination runs on the CPU.
 pub(crate) fn apply(e: &mut Enc, id: &str, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
     match id {
-        "ec.key.colorkey" | "ec.key.luma" | "ec.key.colorrange" | "ec.key.extract" => matte_key(e, id, ctx, b),
+        "ec.key.colorrange" | "ec.key.extract" => matte_key(e, id, ctx, b),
         "ec.key.differencematte" => difference_matte(e, ctx, b),
         "ec.key.screen" => screen_key(e, ctx, b),
         "ec.key.advancedspill" => advanced_spill(e, ctx, b),
@@ -115,18 +111,6 @@ fn layer_or_self(e: &mut Enc, ctx: &EffectCtx, b: &GBuf, id: &str, stretch: bool
     Some(fitted(e, ctx, b, id, true, stretch)?.unwrap_or_else(|| b.img.clone()))
 }
 
-/// keying::thin_feather on a matte plane (x channel).
-fn thin_feather(e: &mut Enc, m: GpuImage, thin: f64, feather: f64) -> GpuImage {
-    let m = if thin > 0.0 {
-        morph_frac(e, &m, thin, ERODE_X)
-    } else if thin < 0.0 {
-        morph_frac(e, &m, -thin, DILATE_X)
-    } else {
-        m
-    };
-    if feather > 0.0 { gaussian_blur(e, &m, feather * 0.5, feather * 0.5, true) } else { m }
-}
-
 /// keying::apply_matte (view 0 final, 1 source, 2 matte).
 fn apply_matte(e: &mut Enc, b: GBuf, m: &GpuImage, view: u32) -> GBuf {
     if view == 1 {
@@ -164,22 +148,7 @@ fn matte_key(e: &mut Enc, id: &str, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
     let pr = ctx.params;
     let f = |k: &str| pr.f(k) as f32;
     let mut p = Params::default();
-    let mut thin = 0.0;
-    let mut feather = 0.0;
     match id {
-        "ec.key.colorkey" => {
-            let k = pr.color("keyColor");
-            p.u[0][0] = 1;
-            p.f[0] = [k[0], k[1], k[2], f("colorTolerance") / 255.0];
-            thin = pr.f("edgeThin") * b.scale;
-            feather = pr.f("edgeFeather") * b.scale;
-        }
-        "ec.key.luma" => {
-            p.u[0] = [2, pr.e("keyType"), 0, 0];
-            p.f[0] = [f("threshold") / 255.0, f("tolerance") / 255.0, 0.0, 0.0];
-            thin = pr.f("edgeThin") * b.scale;
-            feather = pr.f("edgeFeather") * b.scale;
-        }
         "ec.key.colorrange" => {
             p.u[0] = [3, pr.e("colorSpace"), 0, 0];
             p.f[0] = [f("minL"), f("minA"), f("minB"), 0.0];
@@ -192,7 +161,6 @@ fn matte_key(e: &mut Enc, id: &str, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
         }
     }
     let m = run(e, &p, &b.img, None, None);
-    let m = thin_feather(e, m, thin, feather);
     Some(apply_matte(e, b, &m, 0))
 }
 
@@ -481,25 +449,6 @@ fn point(e: &mut Enc, id: &str, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
     let mut p = Params::default();
     let mut aux = None;
     match id {
-        "ec.key.spill" => {
-            let k = pr.color("colorToSuppress");
-            let amt = f("suppression") / 100.0;
-            if pr.e("colorAccuracy") == 1 {
-                let kg = (k[0] + k[1] + k[2]) / 3.0;
-                let kc = [k[0] - kg, k[1] - kg, k[2] - kg];
-                let kn = (kc[0] * kc[0] + kc[1] * kc[1] + kc[2] * kc[2]).sqrt();
-                if kn < 1e-5 {
-                    return Some(b);
-                }
-                p.u[0] = [7, 1, 0, 0];
-                p.f[0] = [kc[0] / kn, kc[1] / kn, kc[2] / kn, amt];
-            } else {
-                let ix = primary(k);
-                p.u[0] = [7, 0, 0, 0];
-                p.u[1] = [ix[0], ix[1], ix[2], 0];
-                p.f[0][3] = amt;
-            }
-        }
         "ec.key.colordifference" => {
             let view = pr.e("view");
             if view == 0 {

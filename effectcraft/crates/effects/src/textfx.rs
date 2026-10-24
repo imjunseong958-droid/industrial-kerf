@@ -1,20 +1,17 @@
-//! Text effects (Numbers, Timecode) and the obsolete generators Basic Text, Path Text and
-//! Lightning.
+//! Text effects: Numbers and Timecode.
 //!
 //! Effects sit below the text engine in the crate layering, so text here is drawn with a small
 //! built-in single-stroke font (original work: capitals, digits and common punctuation laid out
 //! on a 4 × 6 unit grid; lowercase letters use the capitals) and rasterised as anti-aliased round
 //! strokes.
 
-use std::f64::consts::PI;
-
 use effectcraft_keyframe::Value;
 use effectcraft_project::ParamUi;
 use effectcraft_raster::{Image, Px};
 use rayon::prelude::*;
 
-use crate::generate3::{Seg, mask_px, poly_segs, raster_segs};
-use crate::util::{Plane, gauss_plane, hash1, poly_length, poly_point_at};
+use crate::generate3::{poly_segs, raster_segs};
+use crate::util::{Plane, hash1};
 use crate::{Buf, EffectCtx, EffectSpec, col, num, p, popup, slider};
 
 fn spec(id: &'static str, name: &'static str, category: &'static str, params: Vec<crate::ParamSpec>, render: crate::RenderFn) -> EffectSpec {
@@ -185,25 +182,6 @@ pub struct TextLook {
     pub opacity: f32,
 }
 
-/// One drawing pass of Basic Text / Path Text, shared with the GPU compositor (effectcraft-gpu
-/// `fx_gen2`): glyph stroke polylines (buffer px) of radius `r`, drawn with `look` over the
-/// result of the previous pass.
-#[derive(Clone, Debug)]
-pub struct TextPass {
-    pub polys: Vec<Vec<[f64; 2]>>,
-    pub r: f64,
-    pub look: TextLook,
-}
-
-/// The [`TextPass`]es of Basic Text or Path Text on `b`'s geometry.
-pub fn text_passes(id: &str, ctx: &EffectCtx, b: &Buf) -> Option<Vec<TextPass>> {
-    match id {
-        "ec.obsolete.basictext" => Some(vec![basic_text_pass(ctx, b)]),
-        "ec.obsolete.pathtext" => Some(path_text_passes(ctx, b)),
-        _ => None,
-    }
-}
-
 fn over(dst: Px, src: Px) -> Px {
     let k = 1.0 - src[3];
     [src[0] + dst[0] * k, src[1] + dst[1] * k, src[2] + dst[2] * k, src[3] + dst[3] * k]
@@ -252,17 +230,6 @@ fn text_px(px: Px, f: f32, s: f32, look: &TextLook) -> Px {
         _ => out = over(out, tint(look.fill, f)),
     }
     out
-}
-
-/// Draw text polylines with the given look (`r` = glyph stroke radius in px).
-fn draw_text(b: &mut Buf, polys: &[Vec<[f64; 2]>], r: f64, look: &TextLook) {
-    let (fill, ring) = text_coverage(b.img.width as usize, b.img.height as usize, polys, r, look);
-    let op = look.opacity;
-    b.img.data.par_iter_mut().enumerate().for_each(|(i, px)| {
-        let f = fill.data[i] * op;
-        let s = ring.as_ref().map(|r| r.data[i]).unwrap_or(0.0) * op;
-        *px = text_px(*px, f, s, look);
-    });
 }
 
 /// Parameter `id`, read from its `group` twirl-down when the effect nests it there.
@@ -527,380 +494,9 @@ fn timecode_fx(ctx: &EffectCtx, b: Buf) -> Buf {
     draw_plan(b, &plan)
 }
 
-// ---------------------------------------------------------------- Basic Text
-
-fn basic_text(ctx: &EffectCtx, mut b: Buf) -> Buf {
-    let pass = basic_text_pass(ctx, &b);
-    draw_text(&mut b, &pass.polys, pass.r, &pass.look);
-    b
-}
-
-fn basic_text_pass(ctx: &EffectCtx, b: &Buf) -> TextPass {
-    let pr = ctx.params;
-    let size = (pr.f("size") * b.scale).max(0.5);
-    let tracking = pr.f("tracking") * b.scale;
-    let lead = size * pr.f("lineSpacing") / 100.0 * 1.2;
-    let pos = b.to_px(pr.v2("position"));
-    let align = pr.e("alignment");
-    let lines: Vec<&str> = pr.s("text").split(['\n', '\r']).collect();
-    let n = lines.len() as f64;
-    let mut polys = Vec::new();
-    for (i, l) in lines.iter().enumerate() {
-        let wdt = line_width(l, size, tracking, true);
-        let x = match align {
-            0 => pos.0,
-            2 => pos.0 - wdt,
-            _ => pos.0 - wdt * 0.5,
-        };
-        let y = pos.1 + unit(size) * 3.0 + (i as f64 - (n - 1.0) * 0.5) * lead;
-        layout_line(l, [x, y], size, tracking, true, &mut polys);
-    }
-    let look = look_from(ctx, b, "compositeOnOriginal");
-    TextPass { polys, r: weight(size), look }
-}
-
-// ---------------------------------------------------------------- Path Text
-
-fn path_text(ctx: &EffectCtx, mut b: Buf) -> Buf {
-    for pass in path_text_passes(ctx, &b) {
-        draw_text(&mut b, &pass.polys, pass.r, &pass.look);
-    }
-    b
-}
-
-fn path_text_passes(ctx: &EffectCtx, b: &Buf) -> Vec<TextPass> {
-    let pr = ctx.params;
-    let g = |group: &str, id: &str| grouped(pr, group, id).cloned().unwrap_or(Value::Scalar(0.0));
-    let px = |id: &str| {
-        let q = b.to_px(g("pathOptions/controlPoints", id).as_vec2());
-        [q.0, q.1]
-    };
-    let (mut path, mut closed) = match mask_px(ctx, b, g("pathOptions", "customPath").as_f64().round() as usize) {
-        Some((p, c, _)) => (p, c),
-        None => match g("pathOptions", "shapeType").as_enum() {
-            1 | 2 => {
-                let c = px("vertex1");
-                let s = px("tangent1");
-                let r = ((s[0] - c[0]).powi(2) + (s[1] - c[1]).powi(2)).sqrt().max(1.0);
-                let a0 = (s[1] - c[1]).atan2(s[0] - c[0]);
-                let n = 128;
-                (
-                    (0..n)
-                        .map(|i| {
-                            let a = a0 + 2.0 * PI * i as f64 / n as f64;
-                            [c[0] + a.cos() * r, c[1] + a.sin() * r]
-                        })
-                        .collect(),
-                    true,
-                )
-            }
-            3 => (vec![px("vertex1"), px("vertex2")], false),
-            _ => {
-                let (v1, t1, t2, v2) = (px("vertex1"), px("tangent1"), px("tangent2"), px("vertex2"));
-                (
-                    (0..=64)
-                        .map(|i| {
-                            let t = i as f64 / 64.0;
-                            let u = 1.0 - t;
-                            let f = |k: usize| u * u * u * v1[k] + 3.0 * u * u * t * t1[k] + 3.0 * u * t * t * t2[k] + t * t * t * v2[k];
-                            [f(0), f(1)]
-                        })
-                        .collect(),
-                    false,
-                )
-            }
-        },
-    };
-    if g("pathOptions", "reversePath").as_bool() {
-        path.reverse();
-    }
-    if path.len() < 2 {
-        closed = false;
-    }
-    let len = poly_length(&path, closed);
-    let visible = g("advanced", "visibleCharacters").as_f64().max(0.0);
-    let all: Vec<char> = pr.s("text").chars().collect();
-    let n_all = all.len();
-    let size = (g("character", "size").as_f64() * b.scale).max(0.5);
-    let u = unit(size);
-    let tracking = g("character", "tracking").as_f64() * b.scale;
-    let lm = g("paragraph", "leftMargin").as_f64() * b.scale;
-    let rm = g("paragraph", "rightMargin").as_f64() * b.scale;
-    let shift = g("paragraph", "baselineShift").as_f64() * b.scale;
-    let line_spacing = pr.get("paragraph/lineSpacing").map(Value::as_f64).unwrap_or(size / b.scale * 1.2) * b.scale;
-    let rot = g("character/orientation", "characterRotation").as_f64().to_radians();
-    let shear = pr.f("character/orientation/characterShear").to_radians().tan();
-    let hshear = pr.f("character/horizontalShear").to_radians().tan();
-    let sx = pr.get("character/horizontalScale").map(Value::as_f64).unwrap_or(100.0) / 100.0;
-    let sy = pr.get("character/verticalScale").map(Value::as_f64).unwrap_or(100.0) / 100.0;
-    // Kerning: "index:value …" — the gap after character `index` (0-based) in 1/1000 em.
-    let kerning: Vec<(usize, f64)> = pr
-        .s("character/kerning")
-        .split_whitespace()
-        .filter_map(|t| {
-            let (i, v) = t.split_once(':')?;
-            Some((i.trim().parse().ok()?, v.trim().parse().ok()?))
-        })
-        .collect();
-    let kern = |i: usize| kerning.iter().filter(|(k, _)| *k == i).map(|(_, v)| v / 1000.0 * size).sum::<f64>();
-    // Jitter: per character, re-randomised every frame.
-    let jit = |id: &str| pr.f(&format!("advanced/jitterSettings/{id}"));
-    let (j_base, j_kern, j_rot, j_scale) =
-        (jit("baselineJitterMax") * b.scale, jit("kerningJitterMax") * b.scale, jit("rotationJitterMax").to_radians(), jit("scaleJitterMax") / 100.0);
-    let frame = (ctx.time * ctx.fps()).floor() as i64 as u32;
-    let rnd = |i: usize, k: u32| hash1(i as u32, k.wrapping_add(frame.wrapping_mul(7919)), 0x7e17) as f64 * 2.0 - 1.0;
-    // Fade Time: characters fade in over this share of the visible characters.
-    let fade = pr.f("advanced/fadeTime").clamp(0.0, 100.0) / 100.0 * n_all.max(1) as f64;
-    let char_alpha = |i: usize| -> f32 {
-        if fade <= 0.0 { if (i as f64) < visible.floor() { 1.0 } else { 0.0 } } else { ((visible - i as f64) / fade).clamp(0.0, 1.0) as f32 }
-    };
-    // Lines (separated by line breaks) stack along the path's normal by Line Spacing.
-    let mut polys_by_alpha: Vec<(f32, Vec<Vec<[f64; 2]>>)> = Vec::new();
-    let mut gi = 0usize;
-    for (li, line) in all.split(|c| *c == '\n' || *c == '\r').enumerate() {
-        let idx0 = gi;
-        gi += line.len() + 1;
-        let n = line.len();
-        let advs: Vec<f64> = line.iter().map(|&c| advance(c, true) * u * sx).collect();
-        let kerns: Vec<f64> = (0..n).map(|k| kern(idx0 + k) + if j_kern != 0.0 { rnd(idx0 + k, 2) * j_kern } else { 0.0 }).collect();
-        let natural: f64 = advs.iter().sum::<f64>() + tracking * (n.max(1) as f64 - 1.0) + kerns.iter().take(n.saturating_sub(1)).sum::<f64>();
-        let avail = (len - lm - rm).max(0.0);
-        let (mut cursor, extra) = match g("paragraph", "alignment").as_enum() {
-            1 => (len - rm - natural, 0.0),
-            2 => (lm + (avail - natural) * 0.5, 0.0),
-            3 => (lm, if n > 1 { (avail - natural) / (n as f64 - 1.0) } else { 0.0 }),
-            _ => (lm, 0.0),
-        };
-        let line_off = li as f64 * line_spacing;
-        for (k, (&c, adv)) in line.iter().zip(advs).enumerate() {
-            let i = idx0 + k;
-            let mid = cursor + adv * 0.5;
-            cursor += adv + tracking + extra + kerns[k];
-            let alpha = char_alpha(i);
-            if alpha <= 0.0 || (!closed && (mid < 0.0 || mid > len)) {
-                continue;
-            }
-            let (q, d) = poly_point_at(&path, closed, if closed { mid.rem_euclid(len.max(1e-9)) } else { mid });
-            let ang = d[1].atan2(d[0]) + rot + if j_rot != 0.0 { rnd(i, 3) * j_rot } else { 0.0 };
-            let (s, co) = ang.sin_cos();
-            let js = if j_scale != 0.0 { (1.0 + rnd(i, 4) * j_scale).max(0.05) } else { 1.0 };
-            let jb = if j_base != 0.0 { rnd(i, 1) * j_base } else { 0.0 };
-            let left = ink_left(c, true);
-            if !polys_by_alpha.iter().any(|(a, _)| (*a - alpha).abs() < 1e-4) {
-                polys_by_alpha.push((alpha, Vec::new()));
-            }
-            let Some((_, set)) = polys_by_alpha.iter_mut().find(|(a, _)| (*a - alpha).abs() < 1e-4) else { continue };
-            for st in parse_glyph(c) {
-                set.push(
-                    st.iter()
-                        .map(|gl| {
-                            // Glyph space (baseline at 0, y down), then scale, shear and lift.
-                            let gx = ((gl[0] - left - 0.8) * u + 0.8 * u) * sx * js - adv * 0.5;
-                            let gy = (gl[1] - 6.0) * u * sy * js;
-                            let gx = gx - gy * (shear + hshear);
-                            let gy = gy - shift - jb + line_off;
-                            [q[0] + gx * co - gy * s, q[1] + gx * s + gy * co]
-                        })
-                        .collect(),
-                );
-            }
-        }
-    }
-    let mut look = look_from(ctx, b, "compositeOnOriginal");
-    let base_op = look.opacity;
-    let mut first = true;
-    let mut passes = Vec::new();
-    for (alpha, polys) in polys_by_alpha.iter_mut() {
-        look.opacity = base_op * *alpha;
-        passes.push(TextPass { polys: std::mem::take(polys), r: weight(size), look });
-        if first {
-            // Later passes go over the first one.
-            look.on_original = true;
-            first = false;
-        }
-    }
-    if polys_by_alpha.is_empty() {
-        passes.push(TextPass { polys: vec![], r: weight(size), look });
-    }
-    passes
-}
-
-// ---------------------------------------------------------------- Lightning (obsolete)
-
-/// Smooth 1-D value noise in [-1, 1].
-fn vnoise(i: u32, t: f64, seed: u32) -> f64 {
-    let k = t.floor();
-    let f = t - k;
-    let a = hash1(i, k as i64 as u32, seed) as f64 * 2.0 - 1.0;
-    let c = hash1(i, (k as i64 + 1) as u32, seed) as f64 * 2.0 - 1.0;
-    let s = f * f * (3.0 - 2.0 * f);
-    a + (c - a) * s
-}
-
-struct Bolt<'a> {
-    seed: u32,
-    phase: f64,
-    stability: f64,
-    detail: u32,
-    detail_amp: f64,
-    pull: [f64; 2],
-    out: &'a mut Vec<Seg>,
-    counter: u32,
-}
-
-impl Bolt<'_> {
-    /// One bolt from `a` to `z` with `n` segments of amplitude `amp`; returns its points.
-    fn path(&mut self, a: [f64; 2], z: [f64; 2], n: usize, amp: f64, fixed_end: bool) -> Vec<[f64; 2]> {
-        let (dx, dy) = (z[0] - a[0], z[1] - a[1]);
-        let len = (dx * dx + dy * dy).sqrt().max(1e-9);
-        let nrm = [-dy / len, dx / len];
-        let id = self.counter;
-        self.counter += 1;
-        let mut pts = Vec::with_capacity(n + 1);
-        for i in 0..=n {
-            let t = i as f64 / n as f64;
-            let env = if fixed_end { (t * PI).sin() } else { t.sqrt() };
-            let off = vnoise(id * 1000 + i as u32, self.phase * (1.0 - self.stability * 0.9) + i as f64 * 0.37, self.seed) * amp * env;
-            let pull = t * t * len * 0.25;
-            pts.push([a[0] + dx * t + nrm[0] * off + self.pull[0] * pull, a[1] + dy * t + nrm[1] * off + self.pull[1] * pull]);
-        }
-        // Detail: midpoint displacement.
-        for lvl in 0..self.detail {
-            let mut nx = Vec::with_capacity(pts.len() * 2);
-            for (j, w) in pts.windows(2).enumerate() {
-                let (p0, p1) = (w[0], w[1]);
-                let (ex, ey) = (p1[0] - p0[0], p1[1] - p0[1]);
-                let l = (ex * ex + ey * ey).sqrt();
-                let o = vnoise(id * 7919 + lvl * 131 + j as u32, self.phase * 1.7 + j as f64 * 0.61, self.seed ^ 0x55) * l * self.detail_amp;
-                nx.push(p0);
-                nx.push([(p0[0] + p1[0]) * 0.5 - ey / l.max(1e-9) * o, (p0[1] + p1[1]) * 0.5 + ex / l.max(1e-9) * o]);
-            }
-            nx.push(*pts.last().unwrap_or(&a));
-            pts = nx;
-        }
-        pts
-    }
-}
-
-/// Lightning, shared with the GPU compositor (effectcraft-gpu `fx_gen2`): the bolt segments
-/// (outer radius per segment) and how they are drawn.
-#[derive(Clone, Debug)]
-pub struct BoltPlan {
-    pub segs: Vec<Seg>,
-    /// Width (buffer px): the glow's blur.
-    pub width: f64,
-    /// Core Width (fraction of each segment's radius).
-    pub core: f64,
-    pub outside: [f32; 4],
-    pub inside: [f32; 4],
-    /// Blending Mode: 0 normal, 1 add, 2 screen.
-    pub mode: u32,
-}
-
-fn lightning(ctx: &EffectCtx, mut b: Buf) -> Buf {
-    let plan = bolt_plan(ctx, &b);
-    let (segs, width, core) = (&plan.segs, plan.width, plan.core);
-    let (wd, ht) = (b.img.width as usize, b.img.height as usize);
-    let outer = raster_segs(wd, ht, segs, 0.0);
-    let core_segs: Vec<Seg> = segs.iter().map(|g| Seg { r: (g.r * core).max(0.3), ..*g }).collect();
-    let inner = raster_segs(wd, ht, &core_segs, 0.6);
-    let glow = gauss_plane(&outer, width * 0.5, width * 0.5);
-    let (oc, ic, mode) = (plan.outside, plan.inside, plan.mode);
-    b.img.data.par_iter_mut().enumerate().for_each(|(i, px)| {
-        let o = outer.data[i].max(glow.data[i] * 0.8);
-        let c = inner.data[i];
-        let a = o.max(c).min(1.0);
-        if a <= 0.0 {
-            return;
-        }
-        let t = if a > 0.0 { c / a } else { 0.0 };
-        let colr = [oc[0] + (ic[0] - oc[0]) * t, oc[1] + (ic[1] - oc[1]) * t, oc[2] + (ic[2] - oc[2]) * t];
-        *px = match mode {
-            1 => [px[0] + colr[0] * a, px[1] + colr[1] * a, px[2] + colr[2] * a, (px[3] + a * (1.0 - px[3])).min(1.0)],
-            2 => {
-                let sc = |d: f32, s: f32| d + s - d * s;
-                [sc(px[0], colr[0] * a), sc(px[1], colr[1] * a), sc(px[2], colr[2] * a), sc(px[3], a)]
-            }
-            _ => over(*px, [colr[0] * a, colr[1] * a, colr[2] * a, a]),
-        };
-    });
-    b
-}
-
-/// [`BoltPlan`] of Lightning on `b`'s geometry.
-pub fn bolt_plan(ctx: &EffectCtx, b: &Buf) -> BoltPlan {
-    let pr = ctx.params;
-    let s = b.to_px(pr.v2("startPoint"));
-    let e = b.to_px(pr.v2("endPoint"));
-    let sc = b.scale;
-    let rerun = pr.b("rerunAtEachFrame");
-    let speed = pr.f("speed");
-    let frame = (ctx.time * ctx.fps()).floor();
-    let seed = (pr.f("randomSeed") as i64 as u32) ^ ctx.seed ^ if rerun { (frame as i64 as u32).wrapping_mul(2_654_435_761) } else { 0 };
-    let phase = if rerun { 0.0 } else { ctx.time * speed * 0.25 };
-    let pd = (pr.f("pullDirection") - 90.0).to_radians();
-    let pf = pr.f("pullForce") / 100.0;
-    let width = (pr.f("width") * sc).max(0.2);
-    let wvar = pr.f("widthVariation").clamp(0.0, 1.0);
-    let core = pr.f("coreWidth").clamp(0.0, 1.0);
-    let mut segs: Vec<Seg> = Vec::new();
-    let mut bolt = Bolt {
-        seed,
-        phase,
-        stability: pr.f("stability").clamp(0.0, 1.0),
-        detail: pr.f("detailLevel").round().clamp(0.0, 6.0) as u32,
-        detail_amp: pr.f("detailAmplitude").clamp(0.0, 1.0) * 0.5,
-        pull: [pd.cos() * pf, pd.sin() * pf],
-        out: &mut segs,
-        counter: 0,
-    };
-    let nseg = pr.f("segments").round().clamp(1.0, 64.0) as usize;
-    let amp = pr.f("amplitude") * sc;
-    let main = bolt.path([s.0, s.1], [e.0, e.1], nseg, amp, pr.b("fixedEndpoint"));
-    let branching = pr.f("branching").clamp(0.0, 1.0);
-    let rebranch = pr.f("rebranching").clamp(0.0, 1.0);
-    let bang = pr.f("branchAngle").to_radians();
-    let bseg_len = pr.f("branchSegLength").max(0.0);
-    let bsegs = pr.f("branchSegments").round().clamp(1.0, 32.0) as usize;
-    let bwidth = pr.f("branchWidth").clamp(0.0, 1.0);
-    let main_len = poly_length(&main, false);
-    let seg_len = main_len / nseg as f64;
-    let mut lines: Vec<(Vec<[f64; 2]>, f64)> = vec![(main.clone(), 1.0)];
-    let mut queue: Vec<(Vec<[f64; 2]>, f64, u32)> = vec![(main, 1.0, 0)];
-    while let Some((pts, w, depth)) = queue.pop() {
-        if depth >= 3 || lines.len() > 256 {
-            continue;
-        }
-        let prob = if depth == 0 { branching } else { rebranch };
-        for (i, wpair) in pts.windows(2).enumerate() {
-            if hash1(i as u32 + depth * 977, lines.len() as u32, seed ^ 0xB7) as f64 >= prob * 0.35 {
-                continue;
-            }
-            let (p0, p1) = (wpair[0], wpair[1]);
-            let base = (p1[1] - p0[1]).atan2(p1[0] - p0[0]);
-            let side = if hash1(i as u32, depth + 3, seed) < 0.5 { -1.0 } else { 1.0 };
-            let a = base + side * bang * (0.5 + hash1(i as u32, depth + 9, seed) as f64);
-            let l = seg_len * bseg_len * bsegs as f64;
-            let z = [p0[0] + a.cos() * l, p0[1] + a.sin() * l];
-            let br = bolt.path(p0, z, bsegs, amp * 0.5, false);
-            let bw = w * bwidth;
-            lines.push((br.clone(), bw));
-            queue.push((br, bw, depth + 1));
-        }
-    }
-    for (li, (pts, w)) in lines.iter().enumerate() {
-        for (i, wpair) in pts.windows(2).enumerate() {
-            let v = 1.0 - wvar * hash1(i as u32, li as u32, seed ^ 0x77) as f64;
-            bolt.out.push(Seg { a: wpair[0], b: wpair[1], r: width * 0.5 * w * v, v: 1.0 });
-        }
-    }
-    BoltPlan { segs, width, core, outside: pr.color("outsideColor"), inside: pr.color("insideColor"), mode: pr.e("blendingMode") }
-}
-
 // ---------------------------------------------------------------- registry
 
 pub fn specs() -> Vec<EffectSpec> {
-    let ang = || ParamUi::Angle;
     let check = |id: &'static str, name: &'static str, v: bool| p(id, name, Value::Bool(v), ParamUi::Checkbox);
     let pt = |x: f64, y: f64| Value::Vec2([x, y]);
     let display = || popup(&["Fill Only", "Stroke Only", "Fill Over Stroke", "Stroke Over Fill"]);
@@ -964,106 +560,13 @@ pub fn specs() -> Vec<EffectSpec> {
             ],
             timecode_fx,
         ),
-        spec(
-            "ec.obsolete.basictext",
-            "Basic Text",
-            "Obsolete",
-            vec![
-                p("text", "Text", Value::Str("Text".into()), ParamUi::Text),
-                p("alignment", "Alignment", Value::Enum(1), popup(&["Left", "Center", "Right"])),
-                p("position", "Position", pt(0.5, 0.5), ParamUi::Point),
-                p("fillAndStroke/displayOptions", "Display Options", Value::Enum(0), display()),
-                p("fillAndStroke/fillColor", "Fill Color", col(1.0, 0.0, 0.0), ParamUi::Color),
-                p("fillAndStroke/strokeColor", "Stroke Color", col(1.0, 1.0, 1.0), ParamUi::Color),
-                p("fillAndStroke/strokeWidth", "Stroke Width", num(2.0), slider(0.0, 50.0, 0.0, 50.0, 1)),
-                p("size", "Size", num(36.0), size()),
-                p("tracking", "Tracking", num(0.0), slider(-100.0, 100.0, -20.0, 50.0, 1)),
-                p("lineSpacing", "Line Spacing", num(100.0), slider(0.0, 1000.0, 0.0, 300.0, 1)),
-                check("compositeOnOriginal", "Composite On Original", true),
-            ],
-            basic_text,
-        ),
-        spec(
-            "ec.obsolete.pathtext",
-            "Path Text",
-            "Obsolete",
-            vec![
-                p("text", "Text", Value::Str("Text".into()), ParamUi::Text),
-                p("pathOptions/shapeType", "Shape Type", Value::Enum(0), popup(&["Bezier", "Circle", "Loop", "Line"])),
-                p("pathOptions/controlPoints/tangent1", "Tangent 1/Circle Point", pt(0.3, 0.3), ParamUi::Point),
-                p("pathOptions/controlPoints/vertex1", "Vertex 1/Circle Center", pt(0.1, 0.6), ParamUi::Point),
-                p("pathOptions/controlPoints/tangent2", "Tangent 2", pt(0.7, 0.3), ParamUi::Point),
-                p("pathOptions/controlPoints/vertex2", "Vertex 2/Line Right", pt(0.9, 0.6), ParamUi::Point),
-                p("pathOptions/customPath", "Custom Path", num(0.0), slider(0.0, 32.0, 0.0, 8.0, 0)),
-                check("pathOptions/reversePath", "Reverse Path", false),
-                p("fillAndStroke/displayOptions", "Options", Value::Enum(0), display()),
-                p("fillAndStroke/fillColor", "Fill Color", col(1.0, 0.0, 0.0), ParamUi::Color),
-                p("fillAndStroke/strokeColor", "Stroke Color", col(1.0, 1.0, 1.0), ParamUi::Color),
-                p("fillAndStroke/strokeWidth", "Stroke Width", num(2.0), slider(0.0, 50.0, 0.0, 50.0, 1)),
-                p("character/size", "Size", num(36.0), size()),
-                p("character/tracking", "Tracking", num(0.0), slider(-100.0, 100.0, -20.0, 50.0, 1)),
-                // Kerning: "index:value" pairs, the gap after character `index` in 1/1000 em.
-                p("character/kerning", "Kerning", Value::Str(String::new()), ParamUi::Text),
-                p("character/orientation/characterRotation", "Character Rotation", num(0.0), ang()),
-                p("character/orientation/characterShear", "Character Shear", num(0.0), slider(-70.0, 70.0, -70.0, 70.0, 1)),
-                p("character/horizontalShear", "Horizontal Shear", num(0.0), slider(-70.0, 70.0, -70.0, 70.0, 1)),
-                p("character/horizontalScale", "Horizontal Scale", num(100.0), slider(1.0, 1000.0, 10.0, 400.0, 1)),
-                p("character/verticalScale", "Vertical Scale", num(100.0), slider(1.0, 1000.0, 10.0, 400.0, 1)),
-                p("paragraph/alignment", "Alignment", Value::Enum(0), popup(&["Left", "Right", "Center", "Force"])),
-                p("paragraph/leftMargin", "Left Margin", num(0.0), slider(-10000.0, 10000.0, -500.0, 500.0, 1)),
-                p("paragraph/rightMargin", "Right Margin", num(0.0), slider(-10000.0, 10000.0, -500.0, 500.0, 1)),
-                p("paragraph/lineSpacing", "Line Spacing", num(43.0), slider(-1000.0, 1000.0, 0.0, 200.0, 1)),
-                p("paragraph/baselineShift", "Baseline Shift", num(0.0), slider(-1000.0, 1000.0, -100.0, 100.0, 1)),
-                p("advanced/visibleCharacters", "Visible Characters", num(1024.0), slider(0.0, 1024.0, 0.0, 1024.0, 0)),
-                p("advanced/fadeTime", "Fade Time", num(0.0), slider(0.0, 100.0, 0.0, 100.0, 1)),
-                p("advanced/jitterSettings/baselineJitterMax", "Baseline Jitter Max", num(0.0), slider(0.0, 1000.0, 0.0, 100.0, 1)),
-                p("advanced/jitterSettings/kerningJitterMax", "Kerning Jitter Max", num(0.0), slider(0.0, 1000.0, 0.0, 100.0, 1)),
-                p("advanced/jitterSettings/rotationJitterMax", "Rotation Jitter Max", num(0.0), slider(0.0, 360.0, 0.0, 360.0, 1)),
-                p("advanced/jitterSettings/scaleJitterMax", "Scale Jitter Max", num(0.0), slider(0.0, 1000.0, 0.0, 100.0, 1)),
-                check("compositeOnOriginal", "Composite On Original", true),
-            ],
-            path_text,
-        ),
-        spec(
-            "ec.obsolete.lightning",
-            "Lightning",
-            "Obsolete",
-            vec![
-                p("startPoint", "Start Point", pt(0.1, 0.5), ParamUi::Point),
-                p("endPoint", "End Point", pt(0.9, 0.5), ParamUi::Point),
-                p("segments", "Segments", num(7.0), slider(1.0, 64.0, 1.0, 32.0, 0)),
-                p("amplitude", "Amplitude", num(10.0), slider(0.0, 1000.0, 0.0, 100.0, 1)),
-                p("detailLevel", "Detail Level", num(2.0), slider(0.0, 6.0, 0.0, 6.0, 0)),
-                p("detailAmplitude", "Detail Amplitude", num(0.3), slider(0.0, 1.0, 0.0, 1.0, 3)),
-                p("branching", "Branching", num(0.4), slider(0.0, 1.0, 0.0, 1.0, 3)),
-                p("rebranching", "Rebranching", num(0.3), slider(0.0, 1.0, 0.0, 1.0, 3)),
-                p("branchAngle", "Branch Angle", num(20.0), ang()),
-                p("branchSegLength", "Branch Seg. Length", num(0.5), slider(0.0, 2.0, 0.0, 2.0, 3)),
-                p("branchSegments", "Branch Segments", num(4.0), slider(1.0, 32.0, 1.0, 16.0, 0)),
-                p("branchWidth", "Branch Width", num(0.7), slider(0.0, 1.0, 0.0, 1.0, 3)),
-                p("speed", "Speed", num(10.0), slider(-100.0, 100.0, -50.0, 50.0, 1)),
-                p("stability", "Stability", num(0.3), slider(0.0, 1.0, 0.0, 1.0, 3)),
-                check("fixedEndpoint", "Fixed Endpoint", true),
-                p("width", "Width", num(10.0), slider(0.0, 100.0, 0.0, 50.0, 1)),
-                p("widthVariation", "Width Variation", num(0.25), slider(0.0, 1.0, 0.0, 1.0, 3)),
-                p("coreWidth", "Core Width", num(0.4), slider(0.0, 1.0, 0.0, 1.0, 3)),
-                p("outsideColor", "Outside Color", col(0.36, 0.25, 0.9), ParamUi::Color),
-                p("insideColor", "Inside Color", col(1.0, 1.0, 1.0), ParamUi::Color),
-                p("pullForce", "Pull Force", num(0.0), slider(-100.0, 100.0, -100.0, 100.0, 1)),
-                p("pullDirection", "Pull Direction", num(0.0), ang()),
-                p("randomSeed", "Random Seed", num(1.0), slider(0.0, 10000.0, 0.0, 100.0, 0)),
-                p("blendingMode", "Blending Mode", Value::Enum(0), popup(&["Normal", "Add", "Screen"])),
-                check("rerunAtEachFrame", "Rerun At Each Frame", false),
-            ],
-            lightning,
-        ),
     ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{EffectEnv, MaskShape, Params};
+    use crate::{EffectEnv, Params};
 
     fn run_env(id: &str, set: &[(&str, Value)], img: Image, time: f64, env: EffectEnv) -> Buf {
         let s = crate::find(id).unwrap();
@@ -1084,10 +587,6 @@ mod tests {
 
     fn run(id: &str, set: &[(&str, Value)], img: Image, time: f64) -> Buf {
         run_env(id, set, img, time, EffectEnv::default())
-    }
-
-    fn ink(img: &Image) -> f32 {
-        img.data.iter().map(|p| p[3]).sum()
     }
 
     #[test]
@@ -1163,90 +662,5 @@ mod tests {
         assert_eq!(timecode(30 * 61 + 5, 30.0), "00:01:01:05");
         assert_eq!(drop_frame(1800, 30), "00;01;00;02");
         assert_eq!(drop_frame(17982, 30), "00;10;00;00");
-    }
-
-    #[test]
-    fn basic_text_draws_and_respects_composite() {
-        let img = Image::filled(100, 50, [0.0, 0.0, 1.0, 1.0]);
-        let a = run("ec.obsolete.basictext", &[("text", Value::Str("Hi".into()))], img.clone(), 0.0);
-        assert_eq!(a.img.get(1, 1), [0.0, 0.0, 1.0, 1.0]);
-        assert!(a.img.data.iter().any(|p| p[0] > 0.9));
-        let t = run("ec.obsolete.basictext", &[("text", Value::Str("Hi".into())), ("compositeOnOriginal", Value::Bool(false))], img, 0.0);
-        assert_eq!(t.img.get(1, 1)[3], 0.0);
-        assert!(ink(&t.img) > 10.0);
-    }
-
-    #[test]
-    fn path_text_follows_line_and_mask() {
-        let img = Image::new(120, 60);
-        let line = run(
-            "ec.obsolete.pathtext",
-            &[
-                ("pathOptions/shapeType", Value::Enum(3)),
-                ("pathOptions/controlPoints/vertex1", Value::Vec2([5.0, 50.0])),
-                ("pathOptions/controlPoints/vertex2", Value::Vec2([115.0, 50.0])),
-                ("character/size", num(20.0)),
-            ],
-            img.clone(),
-            0.0,
-        );
-        assert!(ink(&line.img) > 10.0);
-        // Text sits above the baseline at y = 50.
-        let below: f32 = (52..60).flat_map(|y| (0..120).map(move |x| (x, y))).map(|(x, y)| line.img.get(x, y)[3]).sum();
-        assert!(below < 1.0);
-        let masks = vec![MaskShape { name: "M".into(), points: vec![[10.0, 20.0], [110.0, 20.0]], closed: false, inverted: false }];
-        let env = EffectEnv { masks: &masks, ..Default::default() };
-        let m = run_env("ec.obsolete.pathtext", &[("pathOptions/customPath", num(1.0)), ("character/size", num(20.0))], img.clone(), 0.0, env);
-        let near: f32 = (0..24).flat_map(|y| (0..120).map(move |x| (x, y))).map(|(x, y)| m.img.get(x, y)[3]).sum();
-        assert!(near > 10.0 && (ink(&m.img) - near).abs() < 1.0);
-        let circle = run("ec.obsolete.pathtext", &[("pathOptions/shapeType", Value::Enum(1)), ("text", Value::Str("CIRCLE TEXT".into()))], img, 0.0);
-        assert!(ink(&circle.img) > 10.0);
-    }
-
-    #[test]
-    fn path_text_kerning_scale_lines_fade_and_jitter() {
-        let img = Image::new(160, 100);
-        let line = [
-            ("pathOptions/shapeType", Value::Enum(3)),
-            ("pathOptions/controlPoints/vertex1", Value::Vec2([5.0, 40.0])),
-            ("pathOptions/controlPoints/vertex2", Value::Vec2([155.0, 40.0])),
-            ("character/size", num(20.0)),
-            ("text", Value::Str("AB".into())),
-        ];
-        let with = |extra: &[(&str, Value)], t: f64| run("ec.obsolete.pathtext", &[line.as_slice(), extra].concat(), img.clone(), t).img;
-        let right_edge = |i: &Image| (0..160).rev().find(|&x| (0..100).any(|y| i.get(x, y)[3] > 0.3)).unwrap_or(0);
-        let base = with(&[], 0.0);
-        // Kerning after the first character pushes the second one along.
-        assert!(right_edge(&with(&[("character/kerning", Value::Str("0:500".into()))], 0.0)) >= right_edge(&base) + 8);
-        // Horizontal Scale widens, shear changes the shapes.
-        assert!(right_edge(&with(&[("character/horizontalScale", num(200.0))], 0.0)) > right_edge(&base) + 5);
-        assert_ne!(with(&[("character/horizontalShear", num(30.0))], 0.0), base);
-        // A second line sits Line Spacing below the first.
-        let two = with(&[("text", Value::Str("AB\rCD".into())), ("paragraph/lineSpacing", num(30.0))], 0.0);
-        let ink_rows = |i: &Image, y0: i64, y1: i64| (y0..y1).flat_map(|y| (0..160).map(move |x| (x, y))).map(|(x, y)| i.get(x, y)[3]).sum::<f32>();
-        assert!(ink_rows(&two, 52, 72) > 5.0 && ink_rows(&base, 52, 72) < 0.5);
-        // Fade Time: the character being revealed is partly transparent.
-        let fading = with(&[("advanced/visibleCharacters", num(1.5)), ("advanced/fadeTime", num(50.0))], 0.0);
-        let total = |i: &Image| i.data.iter().map(|p| p[3]).sum::<f32>();
-        let (one, both) = (with(&[("advanced/visibleCharacters", num(1.0))], 0.0), with(&[("advanced/visibleCharacters", num(2.0))], 0.0));
-        assert!(total(&fading) > total(&one) + 1.0 && total(&fading) < total(&both) - 1.0, "{} {} {}", total(&one), total(&fading), total(&both));
-        // Jitter differs between frames but is repeatable.
-        let j = [("advanced/jitterSettings/baselineJitterMax", num(10.0))];
-        assert_ne!(with(&j, 0.0), with(&j, 0.5));
-        assert_eq!(with(&j, 0.5), with(&j, 0.5));
-    }
-
-    #[test]
-    fn lightning_deterministic_and_animates() {
-        let img = Image::new(96, 64);
-        let a = run("ec.obsolete.lightning", &[], img.clone(), 0.5);
-        let b = run("ec.obsolete.lightning", &[], img.clone(), 0.5);
-        assert_eq!(a.img.data, b.img.data);
-        assert!(a.img.get(48, 32)[3] > 0.0 || ink(&a.img) > 50.0);
-        let c = run("ec.obsolete.lightning", &[], img.clone(), 1.5);
-        assert_ne!(a.img.data, c.img.data);
-        let r1 = run("ec.obsolete.lightning", &[("rerunAtEachFrame", Value::Bool(true))], img.clone(), 0.5);
-        let r2 = run("ec.obsolete.lightning", &[("rerunAtEachFrame", Value::Bool(true))], img, 0.5);
-        assert_eq!(r1.img.data, r2.img.data);
     }
 }

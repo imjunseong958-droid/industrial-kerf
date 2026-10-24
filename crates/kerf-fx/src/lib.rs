@@ -26,20 +26,6 @@ mod guide;
 /// there that changes a picture, so files made before it are made again.
 pub const EFFECTS_VERSION: u32 = 1;
 
-/// Categories left out: sound, controls without a picture, effects kept for
-/// old projects, and those that need more than a clip's own pixels (other
-/// layers or frames, 3D channels, strokes, text layers).
-const LEFT_OUT: &[&str] = &[
-    "3D Channel",
-    "Audio",
-    "Expression Controls",
-    "Immersive Video",
-    "Obsolete",
-    "Paint",
-    "Text",
-    "Time",
-];
-
 /// The category whose effects Kerf carries as transitions.
 const TRANSITIONS: &str = "Transition";
 
@@ -68,26 +54,15 @@ const NEEDS_MORE: &[&str] = &[
     "ec.utility.facetrackpoints",
 ];
 
-/// Effects named after other products: Kerf's id and name for each, or
-/// `None` to leave it out.
-const RENAMED: &[(&str, Option<(&str, &str)>)] = &[
-    (
-        "ec.keying.keylight",
-        Some(("key.screenmatte", "Screen Matte")),
-    ),
+/// Effects named after other products: Kerf's id and name for each.
+const RENAMED: &[(&str, (&str, &str))] = &[
+    ("ec.keying.keylight", ("key.screenmatte", "Screen Matte")),
     (
         "ec.stylize.ccthreshold",
-        Some(("stylize.smooththreshold", "Smooth Threshold")),
+        ("stylize.smooththreshold", "Smooth Threshold"),
     ),
-    (
-        "ec.blur.ccradial",
-        Some(("blur.radialzoom", "Radial Zoom Blur")),
-    ),
-    (
-        "ec.distort.ccsmear",
-        Some(("distort.pullsmear", "Pull Smear")),
-    ),
-    ("ec.obsolete.mochashape", None),
+    ("ec.blur.ccradial", ("blur.radialzoom", "Radial Zoom Blur")),
+    ("ec.distort.ccsmear", ("distort.pullsmear", "Pull Smear")),
 ];
 
 /// Kerf's id, name, and kind for an EffectCraft effect, if Kerf carries
@@ -98,15 +73,14 @@ fn carried(spec: &EffectSpec) -> Option<(String, String, FxKind)> {
     } else {
         FxKind::Effect
     };
-    if LEFT_OUT.contains(&spec.category)
-        || NEEDS_MORE.contains(&spec.id)
+    if NEEDS_MORE.contains(&spec.id)
         || !spec.params.iter().all(|p| writable(&p.ui))
         || (kind == FxKind::Transition && !spec.params.iter().any(|p| p.id == COMPLETION))
     {
         return None;
     }
     let (id, name) = match RENAMED.iter().find(|(id, _)| *id == spec.id) {
-        Some((_, renamed)) => renamed.map(|(id, name)| (id.to_owned(), name.to_owned()))?,
+        Some((_, (id, name))) => ((*id).to_owned(), (*name).to_owned()),
         None => {
             let id = spec.id.strip_prefix("ec.")?;
             match spec.name.strip_prefix("CC ") {

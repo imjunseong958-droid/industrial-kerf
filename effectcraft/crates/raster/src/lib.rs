@@ -6,7 +6,6 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod blur;
-pub mod channels3d;
 pub mod cuts;
 pub mod flow;
 pub mod inpaint;
@@ -17,7 +16,6 @@ use effectcraft_color::{BlendMode, blend_pixel};
 use rayon::prelude::*;
 
 pub use blur::{box_blur, directional_blur, gaussian_blur, radial_blur};
-pub use channels3d::AuxChannels;
 pub use warp::{Sampling, WarpOpts, accumulate_warp, composite_warp, composite_warp_reference, resample};
 
 pub type Px = [f32; 4];

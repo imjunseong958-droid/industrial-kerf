@@ -1157,22 +1157,6 @@ mod tests {
         a.iter().zip(b).all(|(x, y)| (x - y).abs() <= eps)
     }
 
-    /// Projects saved before Use Legacy / the Photo Filter menu existed keep rendering as before.
-    #[test]
-    fn old_saves_get_legacy_values_for_added_params() {
-        use effectcraft_project::build::Ids;
-        let mut next = 1;
-        for (id, param, want) in
-            [("ec.color.brightnesscontrast", "useLegacy", Value::Bool(true)), ("ec.color.photofilter", "filter", Value::Enum(PHOTO_FILTER_CUSTOM))]
-        {
-            let spec = crate::find(id).unwrap();
-            let mut g = crate::instantiate(spec, &mut Ids(&mut next), spec.name, [10.0, 10.0]);
-            g.children.retain(|c| c.match_id() != param);
-            crate::migrate::upgrade_instance(spec, &mut g, &mut Ids(&mut next), [10.0, 10.0]);
-            assert_eq!(g.get(param).unwrap().value, want, "{id}");
-        }
-    }
-
     #[test]
     fn colorama_reads_get_phase_from() {
         // Same intensity, different red: Intensity gives one colour, Red gives two.

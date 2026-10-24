@@ -605,15 +605,6 @@ fn vector_blur(ctx: &EffectCtx, mut b: Buf) -> Buf {
 // ---------------------------------------------------------------------------------------------
 // Reduce Interlace Flicker / CC Cross Blur
 
-fn reduce_flicker(ctx: &EffectCtx, mut b: Buf) -> Buf {
-    let s = ctx.params.f("softness").max(0.0) * b.scale;
-    if s < 0.05 {
-        return b;
-    }
-    b.img = gaussian_blur(&b.img, 0.0, s, true);
-    b
-}
-
 fn cross_blur(ctx: &EffectCtx, mut b: Buf) -> Buf {
     let rx = (ctx.params.f("radiusX").max(0.0) * b.scale).round() as usize;
     let ry = (ctx.params.f("radiusY").max(0.0) * b.scale).round() as usize;
@@ -741,15 +732,6 @@ pub fn specs() -> Vec<EffectSpec> {
             ],
             vector_blur,
         ),
-        EffectSpec {
-            category: "Obsolete",
-            ..spec(
-                "ec.blur.reduceflicker",
-                "Reduce Interlace Flicker",
-                vec![p("softness", "Softness", num(0.0), slider(0.0, 100.0, 0.0, 10.0, 2))],
-                reduce_flicker,
-            )
-        },
         spec(
             "ec.blur.cccross",
             "CC Cross Blur",
@@ -904,17 +886,6 @@ mod tests {
         assert_eq!(s0.1, -s0.2);
         let circle = iris_spans(10.0, 0, 0.0, 0.0);
         assert_eq!(circle.len(), 21);
-    }
-
-    #[test]
-    fn reduce_flicker_blurs_vertically_only() {
-        let mut img = Image::filled(8, 8, [0.0, 0.0, 0.0, 1.0]);
-        for x in 0..8 {
-            img.set(x, 4, [1.0, 1.0, 1.0, 1.0]);
-        }
-        let out = run("ec.blur.reduceflicker", &img, &[("softness", num(1.0))]).img;
-        assert!(out.get(3, 4)[0] < 0.9 && out.get(3, 3)[0] > 0.05);
-        assert!((out.get(0, 4)[0] - out.get(7, 4)[0]).abs() < 1e-6);
     }
 
     #[test]

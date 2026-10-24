@@ -14,18 +14,8 @@ fn layer(id: u64) -> Value {
     Value::Layer(Some(id))
 }
 
-fn text(s: &str) -> Value {
-    Value::Str(s.into())
-}
-
 #[test]
 fn lightning() {
-    env_case("ec.obsolete.lightning", &[]);
-    env_case(
-        "ec.obsolete.lightning",
-        &[("branching", n(0.9)), ("rebranching", n(0.6)), ("detailLevel", n(4.0)), ("blendingMode", e(1)), ("pullForce", n(40.0))],
-    );
-    env_case("ec.obsolete.lightning", &[("blendingMode", e(2)), ("rerunAtEachFrame", on()), ("fixedEndpoint", on()), ("coreWidth", n(0.8))]);
     env_case("ec.generate.advancedlightning", &[]);
     env_case("ec.generate.advancedlightning", &[("lightningType", e(4)), ("forking", n(60.0)), ("decayMainCore", on()), ("expertSettings/coreDrain", n(40.0))]);
     env_case(
@@ -151,26 +141,4 @@ fn audio() {
     env_case("ec.generate.audiowaveform", &[a()]);
     env_case("ec.generate.audiowaveform", &[a(), ("displayOptions", e(0)), ("waveformOptions", e(2)), ("usePolarPath", on())]);
     env_case("ec.generate.audiowaveform", &[a(), ("displayOptions", e(2)), ("path", n(1.0)), ("compositeOnOriginal", on())]);
-}
-
-#[test]
-fn text_effects() {
-    env_case("ec.obsolete.basictext", &[]);
-    env_case("ec.obsolete.basictext", &[("text", text("Hi\nthere")), ("fillAndStroke/displayOptions", e(2)), ("alignment", e(0)), ("size", n(14.0))]);
-    env_case("ec.obsolete.basictext", &[("fillAndStroke/displayOptions", e(3)), ("fillAndStroke/strokeWidth", n(5.0)), ("compositeOnOriginal", on())]);
-    env_case("ec.obsolete.basictext", &[("fillAndStroke/displayOptions", e(1)), ("fillAndStroke/strokeWidth", n(1.0)), ("size", n(20.0))]);
-    env_case("ec.obsolete.pathtext", &[]);
-    env_case(
-        "ec.obsolete.pathtext",
-        &[("pathOptions/shapeType", e(1)), ("advanced/visibleCharacters", n(2.5)), ("advanced/fadeTime", n(50.0)), ("character/size", n(14.0))],
-    );
-    env_case(
-        "ec.obsolete.pathtext",
-        &[
-            ("pathOptions/customPath", n(3.0)),
-            ("fillAndStroke/displayOptions", e(2)),
-            ("advanced/jitterSettings/rotationJitterMax", n(20.0)),
-            ("compositeOnOriginal", on()),
-        ],
-    );
 }

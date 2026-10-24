@@ -8,7 +8,6 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-pub mod audio_fx;
 mod blur2;
 mod blur3;
 pub mod camera_tracker;
@@ -16,11 +15,9 @@ mod card3d;
 pub mod catalog;
 mod channel;
 mod channel2;
-mod channel3d;
 mod color2;
 mod color3;
 mod color_fx;
-pub mod controls;
 mod distort;
 mod distort2;
 mod distort3;
@@ -34,17 +31,13 @@ mod keying;
 mod keying2;
 pub mod keylight;
 mod matte;
-pub mod migrate;
 mod misc;
-pub mod mocha_shape;
 mod noise;
 mod noise2;
 mod noise3;
 pub mod object_matte;
-mod obsolete;
 mod ocio;
 pub mod ocio_config;
-pub mod paint;
 mod perspective;
 mod perspective2;
 pub mod plugin;
@@ -84,7 +77,7 @@ pub use distort4::liquify_mesh;
 use effectcraft_keyframe::Value;
 use effectcraft_project::build::Ids;
 use effectcraft_project::{GroupKind, ParamUi, PropGroup, Property};
-pub use effectcraft_raster::{AuxChannels, Image};
+pub use effectcraft_raster::Image;
 pub use misc::{INVERT_ALPHA, INVERT_CHANNELS, glow_ab_t, glow_operation};
 pub use sim::particle_state;
 pub use sim3::{PgBlit, PgPlan, playground_plan, playground_state};
@@ -98,8 +91,7 @@ pub use generate3::{
     Coverage, MarksPlan, PaintPlan, Seg, eyedropper_color, marks_plan, paint_bucket_region, paint_plan, plan_reads_pixels, poly_segs, scribble_style,
 };
 pub use noise::GrainLook;
-pub use textfx::{BoltPlan, TextLook, TextPass, bolt_plan, text_passes};
-pub use transition::place_layer;
+pub use transition::{iris_radii, place_layer};
 // effectcraft-gpu fx_noise.
 pub use keying2::{InnerOuterPlan, inner_outer_plan};
 pub use noise::remove_grain_level;
@@ -109,8 +101,7 @@ pub use textfx::{TextLayer, text_layer};
 pub use time_fx::{PixelMotion, TimewarpPlan, TwStep, pmb_plan, posterized_time, time_frames, timewarp_crop, timewarp_plan};
 // effectcraft-gpu fx_tone.
 pub use ocio::color_stabilizer_maps;
-// GPU effects, part B (3D Channel, Immersive Video, colour management, simulation render passes).
-pub use channel3d::{CRYPTO_LAYERS, crypto_aux_image, id_color, selection_hashes};
+// GPU effects, part B (Immersive Video, colour management, simulation render passes).
 pub use ocio::{ColorOp, Straight, Tf, color_program};
 pub use sim::{Acc, Blob, Bubble, Post, Shape, Sprite, SpritePlan, Tint, bubble_list, drizzle_drops, mercury_blobs, sprite_plan};
 pub use sim2::{
@@ -122,20 +113,15 @@ pub use vr::{equi_dir as vr_equi_dir, rotation as vr_rotation};
 
 /// Effect categories in Effects & Presets order.
 pub const CATEGORIES: &[&str] = &[
-    "3D Channel",
-    "Audio",
     "Blur & Sharpen",
     "Channel",
     "Color Correction",
     "Distort",
-    "Expression Controls",
     "Generate",
     "Immersive Video",
     "Keying",
     "Matte",
     "Noise & Grain",
-    "Obsolete",
-    "Paint",
     "Perspective",
     "Simulation",
     "Stylize",
@@ -366,13 +352,6 @@ pub trait EffectHost: Sync {
     fn layer_at(&self, _id: u64, _comp_time: f64, _masks_and_effects: bool) -> Option<LayerPixels> {
         None
     }
-    /// Auxiliary 3D channels (depth, object / material IDs, normals, Cryptomatte, any named
-    /// EXR channel) of the effect's own layer source at the current time, in layer space (see
-    /// [`AuxChannels`]). `None` when the source has none (the 3D Channel effects then pass the
-    /// layer through).
-    fn aux(&self) -> Option<std::sync::Arc<AuxChannels>> {
-        None
-    }
     /// The composition's camera and first light relative to the effect's layer (Card
     /// Dance / Shatter / Card Wipe's Comp Camera and First Comp Light). `None` when unknown.
     fn comp_scene(&self) -> Option<CompScene> {
@@ -490,7 +469,6 @@ pub fn registry() -> &'static [EffectSpec] {
         v.extend(color_fx::specs());
         v.extend(generate::specs());
         v.extend(distort::specs());
-        v.extend(controls::specs());
         v.extend(keying::specs());
         v.extend(matte::specs());
         v.extend(channel::specs());
@@ -517,18 +495,13 @@ pub fn registry() -> &'static [EffectSpec] {
         v.extend(noise2::specs());
         v.extend(noise3::specs());
         v.extend(color3::specs());
-        v.extend(obsolete::specs());
         v.extend(ocio::specs());
         v.extend(vr::specs());
         v.extend(blur3::specs());
         v.extend(distort4::specs());
         v.extend(keylight::specs());
-        v.extend(mocha_shape::specs());
         v.extend(sim3::specs());
-        v.extend(channel3d::specs());
         v.extend(time_fx::specs());
-        v.extend(audio_fx::specs());
-        v.extend(paint::specs());
         v.extend(puppet::specs());
         v.extend(warp_stab::specs());
         v.extend(camera_tracker::specs());
@@ -591,10 +564,6 @@ pub fn lookup(name_or_id: &str) -> Option<&'static EffectSpec> {
     find(name_or_id)
         .or_else(|| all().into_iter().find(|s| s.name.eq_ignore_ascii_case(name_or_id)))
         .or_else(|| ALIASES.iter().find(|(_, names)| names.iter().any(|a| a.eq_ignore_ascii_case(name_or_id))).and_then(|(id, _)| find(id)))
-        .or_else(|| {
-            // Display names of earlier versions.
-            migrate::EFFECT_NAME_ALIASES.iter().find(|(old, _)| old.eq_ignore_ascii_case(name_or_id)).and_then(|(_, id)| find(id))
-        })
 }
 
 /// A parameter's default value on a layer of `layer_size` (point defaults are fractions of the
@@ -927,14 +896,11 @@ pub const GPU_EFFECTS: &[&str] = &[
     "ec.key.linearcolor",
     "ec.keying.keylight",
     // effectcraft-gpu fx_key (keying, matte, channel)
-    "ec.key.colorkey",
-    "ec.key.luma",
     "ec.key.colorrange",
     "ec.key.extract",
     "ec.key.differencematte",
     "ec.key.colordifference",
     "ec.key.screen",
-    "ec.key.spill",
     "ec.key.advancedspill",
     "ec.key.keycleaner",
     "ec.key.unmult",
@@ -1038,16 +1004,6 @@ pub const GPU_EFFECTS: &[&str] = &[
     "ec.transition.iriswipe",
     "ec.perspective.bevelalpha",
     "ec.perspective.beveledges",
-    "ec.obsolete.gaussianlegacy",
-    // GPU effects, part B: 3D Channel.
-    "ec.3d.channelextract",
-    "ec.3d.cryptomatte",
-    "ec.3d.depthmatte",
-    "ec.3d.depthoffield",
-    "ec.3d.extractor",
-    "ec.3d.fog3d",
-    "ec.3d.idmatte",
-    "ec.3d.identifier",
     // Colour management.
     "ec.utility.applylut",
     "ec.color.ociocdl",
@@ -1104,7 +1060,6 @@ pub const GPU_EFFECTS: &[&str] = &[
     "ec.transition.ccjaws",
     "ec.transition.cclinesweep",
     "ec.transition.ccradialscalewipe",
-    "ec.transition.ccscalewipe",
     "ec.transition.cctwister",
     "ec.transition.ccwarpomatic",
     "ec.perspective.radialshadow",
@@ -1129,7 +1084,6 @@ pub const GPU_EFFECTS: &[&str] = &[
     "ec.blur.cccross",
     "ec.blur.ccradial",
     "ec.blur.ccvector",
-    "ec.blur.reduceflicker",
     "ec.channel.cccomposite",
     "ec.color.colorlink",
     "ec.utility.cineon",
@@ -1145,9 +1099,7 @@ pub const GPU_EFFECTS: &[&str] = &[
     "ec.stylize.ccplastic",
     "ec.key.innerouter",
     "ec.key.ccsimplewireremoval",
-    "ec.obsolete.basic3d",
     // effectcraft-gpu fx_gen2 (generators, part C: CPU plans rasterised on the GPU)
-    "ec.obsolete.lightning",
     "ec.generate.advancedlightning",
     "ec.generate.beam",
     "ec.generate.lensflare",
@@ -1162,8 +1114,6 @@ pub const GPU_EFFECTS: &[&str] = &[
     "ec.generate.ccthreads",
     "ec.generate.audiospectrum",
     "ec.generate.audiowaveform",
-    "ec.obsolete.basictext",
-    "ec.obsolete.pathtext",
 ];
 
 /// Effects that can read [`EffectHost::comp_scene`] (the comp camera or the first comp light):
@@ -1186,14 +1136,11 @@ pub const TIME_DEPENDENT: &[&str] = &[
     "ec.noise.removegrain",
     "ec.noise.noisealpha",
     "ec.noise.noisehlsauto",
-    "ec.obsolete.lightning",
     "ec.text.timecode",
     "ec.text.numbers",
     // The audio visualisers read the Audio Layer's samples around the frame time.
     "ec.generate.audiospectrum",
     "ec.generate.audiowaveform",
-    // Path Text's jitter changes every frame.
-    "ec.obsolete.pathtext",
     // Time effects read neighbouring frames of the layer.
     "ec.time.echo",
     "ec.time.posterizetime",
@@ -1219,7 +1166,6 @@ pub const TIME_DEPENDENT: &[&str] = &[
     "ec.vr.digitalglitch",
     "ec.blur.camerashakedeblur",
     "ec.distort.rollingshutterrepair",
-    "ec.obsolete.mochashape",
     // Each frame gets its own stabilizing warp.
     warp_stab::ID,
     // Render Track Points draws each frame's solved points.
@@ -1263,7 +1209,8 @@ mod tests {
     #[test]
     fn run_fx_passthrough() {
         let img = Image::filled(4, 3, [0.5, 0.25, 0.125, 1.0]);
-        let out = run_fx("ec.control.slider", &[("slider", num(3.0))], img.clone(), 0.0, EffectEnv::default());
+        // Iris Wipe at its defaults (no radius) leaves the layer as it is.
+        let out = run_fx("ec.transition.iriswipe", &[], img.clone(), 0.0, EffectEnv::default());
         assert_eq!(out.img.data, img.data);
     }
 

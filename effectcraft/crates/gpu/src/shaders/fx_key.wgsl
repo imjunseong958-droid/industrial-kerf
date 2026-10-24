@@ -189,36 +189,6 @@ fn fxk_point(@builtin(global_invocation_id) gid: vec3<u32>) {
     let f0 = P.f[0];
     var o = px;
     switch u0.x {
-        case 1u: {
-            let k = f0.xyz;
-            let d = max(max(abs(c.x - k.x), abs(c.y - k.y)), abs(c.z - k.z));
-            o = vec4<f32>(select(1.0, 0.0, d <= f0.w));
-        }
-        case 2u: {
-            let l = luminance(c);
-            let thr = f0.x;
-            let tol = f0.y;
-            var m: f32;
-            switch u0.y {
-                case 0u: {
-                    if (tol > 0.0) {
-                        m = clamp((thr + tol - l) / tol, 0.0, 1.0);
-                    } else {
-                        m = select(1.0, 0.0, l > thr);
-                    }
-                }
-                case 2u: { m = select(1.0, 0.0, abs(l - thr) <= tol); }
-                case 3u: { m = select(0.0, 1.0, abs(l - thr) <= tol); }
-                default: {
-                    if (tol > 0.0) {
-                        m = clamp((l - (thr - tol)) / tol, 0.0, 1.0);
-                    } else {
-                        m = select(1.0, 0.0, l < thr);
-                    }
-                }
-            }
-            o = vec4<f32>(m);
-        }
         case 3u: {
             let v = fxk_range_components(u0.y, c);
             var out_d = 0.0;
@@ -289,25 +259,6 @@ fn fxk_point(@builtin(global_invocation_id) gid: vec3<u32>) {
                 m = clamp((d - f0.x) / f0.y, 0.0, 1.0);
             }
             o = vec4<f32>(m);
-        }
-        case 7u: {
-            if (px.w <= 0.0) {
-                textureStore(out, p, px);
-                return;
-            }
-            var s = px.xyz / px.w;
-            if (u0.y == 1u) {
-                let g = (s.x + s.y + s.z) / 3.0;
-                let dir = f0.xyz;
-                let proj = (s.x - g) * dir.x + (s.y - g) * dir.y + (s.z - g) * dir.z;
-                if (proj > 0.0) {
-                    s = s - proj * dir * f0.w;
-                }
-            } else {
-                let spill = max(s[u1.x] - max(s[u1.y], s[u1.z]), 0.0);
-                s[u1.x] = s[u1.x] - spill * f0.w;
-            }
-            o = vec4<f32>(s * px.w, px.w);
         }
         case 8u: {
             if (px.w <= 0.0) {

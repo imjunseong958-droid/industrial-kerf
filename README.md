@@ -36,17 +36,18 @@ and generators lower from their catalog definitions. A feature without a
 lowering is reported with the clip it is on. Native playback plays the same
 sequence as cuts, running a media clip's raster effects live on each
 picture (except keys and mattes, whose transparency needs the tracks
-below), and asks for a rendered preview whenever it would show something
-different. Editor snapshots carry the document and a timeline
+below, and time effects, which read the clip's other frames), and asks for
+a rendered preview whenever it would show something different. Editor snapshots carry the document and a timeline
 view of it; the editor sends its edits back as typed operations.
 
 Raster effects and transitions come from
 [EffectCraft](https://github.com/storytold/effectcraft) (MIT/Apache), whose
 crates Kerf carries and develops in `effectcraft/` (see its README): about
-170 color, blur, distort, generate, keying, matte, noise, perspective,
-simulation, stylize, and utility effects, and wipes, blinds, and dissolves
-as transitions, whose parameters the catalog can hold (a point is written
-as an `_x` and a `_y` across the picture).
+200 color, blur, distort, generate, 360° video, keying, matte, noise,
+perspective, simulation, stylize, text, time, and utility effects, and
+wipes, blinds, dissolves, and irises as transitions, whose parameters the
+catalog can hold (a point is written as an `_x` and a `_y` across the
+picture).
 They run on a clip's own picture before it is placed: a render first bakes
 each such clip's frames into a lossless file with transparency in
 `.kerf/cache/derived` (reused until what it is made from changes) and plays

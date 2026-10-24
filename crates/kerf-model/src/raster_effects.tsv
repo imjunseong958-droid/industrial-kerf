@@ -946,6 +946,126 @@ effect	generate.writeon	Generate	Write-on	Draws a stroke like handwriting as its
 	enum	paintTimeProperties	none	none|opacity|color		Paint Time Properties
 	enum	brushTimeProperties	none	none|size|hardness|size-hardness		Brush Time Properties
 	enum	paintStyle	on-original-image	on-original-image|on-transparent|reveal-original-image		Paint Style
+effect	vr.blur	Immersive Video	VR Blur	Blurs a 360° frame evenly on the sphere, seams and poles included; soft 360 backgrounds.
+	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
+	number	blurriness	10	0..1000		Blurriness
+effect	vr.chromaticaberrations	Immersive Video	VR Chromatic Aberrations	Splits color channels around a point on a 360° frame; lens-like fringing in VR.
+	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
+	number	centerTilt	0		degrees	Center Tilt
+	number	centerPan	0		degrees	Center Pan
+	number	aberrationRed	10	-100..100		Aberration (Red)
+	number	aberrationGreen	0	-100..100		Aberration (Green)
+	number	aberrationBlue	-10	-100..100		Aberration (Blue)
+	number	falloff	50	0..100		Falloff Distance
+	bool	falloffInvert	false			Falloff Invert
+effect	vr.colorgradients	Immersive Video	VR Color Gradients	Lays soft color gradients over a 360° frame; tinting a whole VR sky or room.
+	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
+	bool	enablePoint1	true			Enable Point 1
+	number	point1_x	0.25		picture widths	Point 1 (0 left, 1 right)
+	number	point1_y	0.5		picture heights	Point 1 (0 top, 1 bottom)
+	color	color1	#ff0000			Color 1
+	bool	enablePoint2	true			Enable Point 2
+	number	point2_x	0.5		picture widths	Point 2 (0 left, 1 right)
+	number	point2_y	0.25		picture heights	Point 2 (0 top, 1 bottom)
+	color	color2	#ffff00			Color 2
+	bool	enablePoint3	true			Enable Point 3
+	number	point3_x	0.75		picture widths	Point 3 (0 left, 1 right)
+	number	point3_y	0.5		picture heights	Point 3 (0 top, 1 bottom)
+	color	color3	#0000ff			Color 3
+	bool	enablePoint4	true			Enable Point 4
+	number	point4_x	0.5		picture widths	Point 4 (0 left, 1 right)
+	number	point4_y	0.75		picture heights	Point 4 (0 top, 1 bottom)
+	color	color4	#00ff00			Color 4
+	bool	enablePoint5	false			Enable Point 5
+	number	point5_x	0		picture widths	Point 5 (0 left, 1 right)
+	number	point5_y	0.5		picture heights	Point 5 (0 top, 1 bottom)
+	color	color5	#ff00ff			Color 5
+	number	blend	2	0.1..10		Gradient Power
+	number	opacity	100	0..100		Opacity
+	enum	blendingMode	none	none|normal|add|multiply|screen|overlay		Blending Mode
+effect	vr.converter	Immersive Video	VR Converter	Converts between 360° equirectangular, cube maps, fisheye, and a flat view; reframing VR footage.
+	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
+	enum	sourceProjection	equirectangular-2-1	equirectangular-2-1|cube-map-4-3|cube-map-pano2vr-3-2|cube-map-gearvr-6-1|sphere-map|2d-source|cube-map-facebook-3-2|cube-map-eac-3-2|fisheye-fulldome		Source Projection
+	number	sourceHorizontalFov	90	1..360		Source Horizontal FOV
+	enum	targetProjection	cube-map-pano2vr-3-2	equirectangular-2-1|cube-map-4-3|cube-map-pano2vr-3-2|cube-map-gearvr-6-1|sphere-map|2d-source|cube-map-facebook-3-2|cube-map-eac-3-2|fisheye-fulldome		Target Projection
+	number	targetHorizontalFov	90	1..360		Target Horizontal FOV
+	number	tilt	0		degrees	Tilt (X Axis)
+	number	pan	0		degrees	Pan (Y Axis)
+	number	roll	0		degrees	Roll (Z Axis)
+effect	vr.denoise	Immersive Video	VR De-Noise	Reduces noise on a 360° frame without seams; cleaning VR footage.
+	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
+	enum	noiseType	random-valued	random-valued|salt-and-pepper		Noise Type
+	number	noiseLevel	20	0..100		Noise Level
+	number	detail	0	0..100		Detail
+effect	vr.digitalglitch	Immersive Video	VR Digital Glitch	Glitch blocks and color shifts that wrap around a 360° frame; broken-signal looks in VR.
+	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
+	number	masterAmplitude	100	0..500		Master Amplitude
+	number	distortionRate	5	0..60		Distortion Rate
+	number	distortionComplexity	16	1..100		Distortion Complexity
+	number	distortionEvolution	0		degrees	Distortion Evolution
+	bool	evolutionOptions/cycleEvolution	false			Cycle Evolution
+	number	evolutionOptions/cycle	1	1..1000		Cycle (in Revolutions)
+	number	geometricDistortion	50	0..100		Geometric Distortion
+	number	geometric/horizontalDisplacement	100	0..400		Horizontal Displacement
+	number	geometric/verticalDisplacement	0	0..400		Vertical Displacement
+	number	colorDistortion	50	0..100		Color Distortion
+	number	color/redOffset	-1	-10..10		Red Offset
+	number	color/greenOffset	0	-10..10		Green Offset
+	number	color/blueOffset	1	-10..10		Blue Offset
+	number	scanlines	20	0..100		Scanlines
+	number	scanlineSpacing	2	2..100		Scanline Spacing
+	number	target/tilt	0		degrees	Target Tilt
+	number	target/pan	0		degrees	Target Pan
+	number	target/radius	0	0..180		Target Radius
+	number	target/feather	0	0..180		Target Feather
+	number	randomSeed	0	0..10000		Random Seed
+effect	vr.fractalnoise	Immersive Video	VR Fractal Noise	Seamless animated noise on a 360° frame; fog, clouds, and textures that wrap in VR.
+	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
+	enum	fractalType	basic	basic|turbulent-sharp|max|strings		Fractal Type
+	number	contrast	100	0..10000		Contrast
+	number	brightness	0	-10000..10000		Brightness
+	bool	invert	false			Invert
+	number	complexity	6	1..20		Complexity
+	number	evolution	0		degrees	Evolution
+	number	transform/scale	100	1..10000		Scale
+	number	transform/tilt	0		degrees	Tilt (X Axis)
+	number	transform/pan	0		degrees	Pan (Y Axis)
+	number	transform/roll	0		degrees	Roll (Z Axis)
+	number	subSettings/subInfluence	50	0..100		Sub Influence
+	number	subSettings/subScaling	50	10..100		Sub Scaling
+	number	randomSeed	0	0..10000		Random Seed
+	number	opacity	100	0..100		Opacity
+	enum	blendingMode	none	none|normal|add|multiply|screen|overlay		Blending Mode
+effect	vr.glow	Immersive Video	VR Glow	Makes highlights glow evenly across a 360° frame; dreamy VR light.
+	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
+	number	luminanceThreshold	60	0..100		Luma Threshold
+	number	glowRadius	20	0..1000		Glow Radius
+	number	glowBrightness	100	0..1000		Glow Brightness
+	number	glowSaturation	100	0..400		Glow Saturation
+	bool	useTintColor	false			Use Tint Color
+	color	tintColor	#ffcc80			Tint Color
+effect	vr.planetosphere	Immersive Video	VR Plane to Sphere	Places a flat picture onto a 360° frame; titles and graphics inside VR.
+	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
+	number	scale	90	1..179		Scale (Degrees)
+	number	feather	0	0..100		Feather
+	number	tilt	0		degrees	Tilt (X Axis)
+	number	pan	0		degrees	Pan (Y Axis)
+	number	roll	0		degrees	Roll (Z Axis)
+effect	vr.rotatesphere	Immersive Video	VR Rotate Sphere	Turns a 360° frame around its axes; leveling the horizon or choosing the front view.
+	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
+	bool	invertRotation	false			Invert Rotation
+	number	tilt	0		degrees	Tilt (X Axis)
+	number	pan	0		degrees	Pan (Y Axis)
+	number	roll	0		degrees	Roll (Z Axis)
+effect	vr.sharpen	Immersive Video	VR Sharpen	Sharpens a 360° frame evenly without seams; crisper VR footage.
+	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
+	number	sharpenAmount	20	0..100		Sharpen Amount
+effect	vr.spheretoplane	Immersive Video	VR Sphere to Plane	Takes a flat view out of a 360° frame; framing a regular shot from VR footage.
+	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
+	number	horizontalFov	90	1..179		Horizontal FOV
+	number	tilt	0		degrees	Tilt (X Axis)
+	number	pan	0		degrees	Pan (Y Axis)
+	number	roll	0		degrees	Roll (Z Axis)
 effect	key.advancedspill	Keying	Advanced Spill Suppressor	Removes green or blue spill; cleanup after keying.
 	enum	method	standard	standard|ultra		Method
 	number	suppression	100	0..200		Suppression
@@ -1753,6 +1873,58 @@ effect	stylize.strobe	Stylize	Strobe Light	Flashes the picture on a rhythm; beat
 	enum	strobeOperator	copy	copy|add|subtract|multiply|difference|screen|lighten|darken		Strobe Operator
 effect	stylize.threshold	Stylize	Threshold	A black-and-white threshold; graphic, photocopied looks.
 	number	level	128	0..255		Level
+effect	text.numbers	Text	Numbers	Draws numbers, dates, or timecode on the picture; counters and data readouts.
+	enum	format/type	number	number|number-leading-zeros|timecode-30|timecode-25|timecode-24|time|numerical-date|short-date|long-date|hexadecimal		Type
+	bool	format/randomValues	false			Random Values
+	number	format/value	0	-30000..30000		Value/Offset/Random Max
+	number	format/decimalPlaces	2	0..10		Decimal Places
+	bool	format/currentTimeDate	false			Current Time/Date
+	number	fillAndStroke/position_x	0.5		picture widths	Position (0 left, 1 right)
+	number	fillAndStroke/position_y	0.5		picture heights	Position (0 top, 1 bottom)
+	enum	fillAndStroke/displayOptions	fill-only	fill-only|stroke-only|fill-over-stroke|stroke-over-fill		Display Options
+	color	fillAndStroke/fillColor	#ff0000			Fill Color
+	color	fillAndStroke/strokeColor	#ffffff			Stroke Color
+	number	fillAndStroke/strokeWidth	2	0..50		Stroke Width
+	number	size	36	0..512		Size
+	number	tracking	0	-100..100		Tracking
+	bool	proportionalSpacing	true			Proportional Spacing
+	bool	compositeOnOriginal	true			Composite On Original
+effect	text.timecode	Text	Timecode	Burns the timecode or frame count into the picture; review copies and slates.
+	enum	displayFormat	smpte-hh-mm-ss-ff	smpte-hh-mm-ss-ff|frames|feet-frames-35mm|feet-frames-16mm		Display Format
+	enum	timeSource	layer-source	layer-source|composition|custom		Time Source
+	number	timeUnits	30	1..120		Time Units
+	bool	dropFrame	false			Drop Frame
+	number	startingFrame	0	-1000000..1000000		Starting Frame
+	number	textPosition_x	0.5		picture widths	Text Position (0 left, 1 right)
+	number	textPosition_y	0.9		picture heights	Text Position (0 top, 1 bottom)
+	number	textSize	36	0..512		Text Size
+	color	textColor	#ffffff			Text Color
+	bool	showBox	true			Show Box
+	color	boxColor	#000000			Box Color
+	number	opacity	100	0..100		Opacity
+	bool	renderOnOriginal	true			Composite on Original
+effect	time.forcemotionblur	Time	Force Motion Blur	Adds motion blur from the clip's own movement between frames; smoother fast action.
+	number	motionBlurLevels	8	2..64		Motion Blur Levels
+	bool	overrideShutterAngle	true			Override Shutter Angle
+	number	shutterAngle	180	0..3600		Shutter Angle
+	enum	nativeMotionBlur	off	off|on		Native Motion Blur
+effect	time.widetime	Time	Wide Time	Blends several neighbouring frames; long-exposure smears and dreamy motion.
+	number	forwardSteps	3	0..45		Forward Steps
+	number	backwardSteps	3	0..45		Backward Steps
+	enum	nativeMotionBlur	off	off|on		Native Motion Blur
+effect	time.echo	Time	Echo	Blends earlier or later frames over the current one; trails, ghosting, and motion echoes.
+	number	echoTime	-0.03333333333333333	-30..30		Echo Time (seconds)
+	number	numberOfEchoes	1	0..255		Number Of Echoes
+	number	startingIntensity	1	0..1		Starting Intensity
+	number	decay	1	0..1		Decay
+	enum	echoOperator	add	add|maximum|minimum|screen|composite-in-back|composite-in-front|blend		Echo Operator
+effect	time.pixelmotionblur	Time	Pixel Motion Blur	Motion blur from tracked pixel motion; natural blur on footage shot too sharp.
+	enum	shutterControl	automatic	automatic|manual		Shutter Control
+	number	shutterAngle	180	0..720		Shutter Angle
+	number	shutterSamples	16	1..64		Shutter Samples
+	number	vectorDetail	20	0..100		Vector Detail
+effect	time.posterizetime	Time	Posterize Time	Holds frames to play at a lower frame rate; choppy, stop-motion, or stylized movement.
+	number	frameRate	12	0.1..99		Frame Rate
 transition	transition.blockdissolve	Transition	Block Dissolve	Dissolves in random blocks; digital, glitchy transitions.
 	number	blockWidth	1	1..4000		Block Width
 	number	blockHeight	1	1..4000		Block Height
@@ -1791,6 +1963,15 @@ transition	transition.radialscalewipe	Transition	Radial ScaleWipe	A circular hol
 	number	center_x	0.5		picture widths	Center (0 left, 1 right)
 	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
 	bool	reverse	false			Reverse Transition
+transition	transition.iriswipe	Transition	Iris Wipe	A polygon or star-shaped iris opens from a point; classic iris-out and spotlight reveals.
+	number	center_x	0.5		picture widths	Iris Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Iris Center (0 top, 1 bottom)
+	number	points	6	6..32		Iris Points
+	number	outerRadius	0	0..32000		Outer Radius
+	bool	useInnerRadius	false			Use Inner Radius
+	number	innerRadius	0	0..32000		Inner Radius
+	number	rotation	0		degrees	Rotation
+	number	feather	0	0..1000		Feather
 transition	transition.linearwipe	Transition	Linear Wipe	A straight-edged wipe; classic wipes in any direction.
 	number	angle	90		degrees	Wipe Angle
 	number	feather	0	0..32000		Feather

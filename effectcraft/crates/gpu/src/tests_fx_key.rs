@@ -40,14 +40,7 @@ fn discontinuous_case(id: &str, vals: &[(&str, Value)]) {
 }
 
 #[test]
-fn colour_luma_range_extract_keys() {
-    effect_case("ec.key.colorkey", &[("keyColor", c(0.7, 0.6, 0.5)), ("colorTolerance", n(60.0))]);
-    effect_case("ec.key.colorkey", &[("keyColor", c(0.5, 0.6, 0.5)), ("colorTolerance", n(70.0)), ("edgeThin", n(1.5)), ("edgeFeather", n(4.0))]);
-    effect_case("ec.key.colorkey", &[("keyColor", c(0.5, 0.6, 0.5)), ("colorTolerance", n(70.0)), ("edgeThin", n(-2.0))]);
-    effect_case("ec.key.luma", &[("threshold", n(120.0)), ("tolerance", n(40.0))]);
-    effect_case("ec.key.luma", &[("keyType", e(0)), ("threshold", n(140.0)), ("tolerance", n(30.0)), ("edgeFeather", n(3.0))]);
-    effect_case("ec.key.luma", &[("keyType", e(2)), ("threshold", n(128.0)), ("tolerance", n(25.0)), ("edgeThin", n(1.0))]);
-    effect_case("ec.key.luma", &[("keyType", e(3)), ("threshold", n(100.0)), ("tolerance", n(50.0))]);
+fn range_and_extract_keys() {
     effect_case("ec.key.colorrange", &[("fuzziness", n(20.0))]);
     effect_case("ec.key.colorrange", &[("colorSpace", e(1)), ("minL", n(60.0)), ("maxA", n(150.0)), ("minB", n(90.0)), ("fuzziness", n(15.0))]);
     effect_case("ec.key.colorrange", &[("colorSpace", e(2)), ("minL", n(80.0)), ("maxA", n(180.0)), ("minB", n(40.0)), ("fuzziness", n(30.0))]);
@@ -99,8 +92,6 @@ fn difference_colour_difference_and_screen_keys() {
 
 #[test]
 fn spill_unmult_and_key_cleaner() {
-    effect_case("ec.key.spill", &[("colorToSuppress", c(0.2, 0.9, 0.1))]);
-    effect_case("ec.key.spill", &[("colorToSuppress", c(0.9, 0.8, 0.1)), ("colorAccuracy", e(1)), ("suppression", n(150.0))]);
     effect_case("ec.key.advancedspill", &[]);
     effect_case("ec.key.advancedspill", &[("suppression", n(80.0)), ("ultraSettings/spillRange", n(20.0)), ("ultraSettings/lumaCorrection", n(50.0))]);
     effect_case(

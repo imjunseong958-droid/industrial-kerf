@@ -476,47 +476,6 @@ mod tests {
         run_fx(id, vals, Image::filled(40, 24, [0.2, 0.4, 0.6, 1.0]), 0.0, EffectEnv::default()).img
     }
 
-    /// A Fractal Noise saved before the twirl-downs existed: flat ids move into their groups and
-    /// the new controls take values that keep the old look.
-    #[test]
-    fn old_fractal_noise_instances_upgrade() {
-        use effectcraft_project::build::Ids;
-        use effectcraft_project::{GroupKind, Property};
-        let spec = crate::find("ec.noise.fractal").unwrap();
-        let mut next = 1;
-        let mut ids = Ids(&mut next);
-        let mut g = ids.group(spec.id, "Fractal Noise");
-        g.kind = GroupKind::Effect { effect: spec.id.into() };
-        for (m, v) in [
-            ("fractalType", Value::Enum(1)),
-            ("invert", Value::Bool(false)),
-            ("contrast", num(150.0)),
-            ("brightness", num(0.0)),
-            ("scale", num(40.0)),
-            ("offset", Value::Vec2([5.0, 6.0])),
-            ("rotation", num(30.0)),
-            ("complexity", num(3.0)),
-            ("evolution", num(0.0)),
-            ("seed", num(9.0)),
-            ("opacity", num(100.0)),
-            ("blend", num(0.0)),
-        ] {
-            let id = ids.alloc();
-            g.children.push(Property::new(id, m, m, v).into());
-        }
-        assert!(crate::migrate::upgrade_instance(spec, &mut g, &mut ids, [40.0, 24.0]));
-        assert_eq!(g.prop("transform/scale").unwrap().value, num(40.0));
-        assert_eq!(g.prop("transform/offset").unwrap().value, Value::Vec2([5.0, 6.0]));
-        assert_eq!(g.prop("evolutionOptions/seed").unwrap().value, num(9.0));
-        assert!(g.get("scale").is_none() && g.get("seed").is_none());
-        // Clip, half-weight half-size octaves and the noise drawn alone, as before.
-        assert_eq!(g.get("overflow").unwrap().value, Value::Enum(0));
-        assert_eq!(g.prop("subSettings/subInfluence").unwrap().value, num(50.0));
-        assert_eq!(g.prop("subSettings/subScaling").unwrap().value, num(50.0));
-        assert_eq!(g.get("blendingMode").unwrap().value, Value::Enum(BLEND_NONE));
-        assert_eq!(g.sub("transform").unwrap().name, "Transform");
-    }
-
     #[test]
     fn noise_types_differ_and_block_is_piecewise_constant() {
         let a = run("ec.noise.fractal", &[("noiseType", Value::Enum(0)), ("complexity", num(1.0)), ("transform/scale", num(10.0))]);

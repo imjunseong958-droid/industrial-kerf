@@ -9,10 +9,9 @@ use effectcraft_render::FxStep;
 use crate::context::{Enc, GpuImage, Params};
 use crate::ops;
 
-/// Effects with a GPU implementation (must equal `effectcraft_effects::GPU_EFFECTS`), plus the
-/// expression controls (pass-throughs).
+/// Effects with a GPU implementation (must equal `effectcraft_effects::GPU_EFFECTS`).
 pub fn supports(id: &str) -> bool {
-    effectcraft_effects::GPU_EFFECTS.contains(&id) || id.starts_with("ec.control.")
+    effectcraft_effects::GPU_EFFECTS.contains(&id)
 }
 
 /// A layer buffer on the GPU (see [`Buf`]).
@@ -181,7 +180,6 @@ fn apply(e: &mut Enc, id: &str, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
         "ec.color.levels" if !effectcraft_effects::levels_channels_identity(ctx) => crate::fx_tone::levels(e, ctx, b),
         "ec.channel.invert" if (4..=11).contains(&ctx.params.e("channel")) => crate::fx_tone::invert(e, ctx, b),
         "ec.noise.fractal" if crate::fx_noise::fractal_extra(ctx) => crate::fx_noise::fractal(e, ctx, b, false),
-        _ if id.starts_with("ec.control.") => Some(b),
         _ if crate::fx_color::IDS.contains(&id) => crate::fx_color::apply(e, id, ctx, b),
         _ if crate::fx_distort::IDS.contains(&id) => crate::fx_distort::apply(e, id, ctx, b),
         _ if crate::fx_generate::IDS.contains(&id) => crate::fx_generate::apply(e, id, ctx, b),
@@ -191,7 +189,6 @@ fn apply(e: &mut Enc, id: &str, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
         _ if crate::fx_tone::IDS.contains(&id) => crate::fx_tone::apply(e, id, ctx, b),
         _ if crate::fx_warp::IDS.contains(&id) => crate::fx_warp::apply(e, id, ctx, b),
         _ if crate::fx_extra::IDS.contains(&id) => crate::fx_extra::apply(e, id, ctx, b),
-        _ if crate::fx_depth::IDS.contains(&id) => crate::fx_depth::apply(e, id, ctx, b),
         _ if crate::fx_lut::IDS.contains(&id) => crate::fx_lut::apply(e, id, ctx, b),
         _ if crate::fx_sim::IDS.contains(&id) => crate::fx_sim::apply(e, id, ctx, b),
         _ if crate::fx_particles::IDS.contains(&id) => crate::fx_particles::apply(e, id, ctx, b),

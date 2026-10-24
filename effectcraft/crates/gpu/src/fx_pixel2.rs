@@ -1,9 +1,9 @@
 //! GPU effects, pixel ports of part C (kernels in `shaders/fx_pixel2.wgsl`, every entry point
-//! prefixed `fp2_`): CC Cross Blur, CC Radial Blur, CC Vector Blur, Reduce Interlace Flicker,
-//! CC Composite, Color Link, Cineon Converter, HDR Compander, HDR Highlight Compression, Grow
-//! Bounds, CC Overbrights, CC Block Load, CC Burn Film, CC Glass, CC HexTile, CC Mr. Smoothie,
-//! CC Plastic, Inner/Outer Key, CC Simple Wire Removal and Basic 3D, with the CPU effects'
-//! exact steps (padding, box-blur radii, parameter conversions in f64 on the CPU).
+//! prefixed `fp2_`): CC Cross Blur, CC Radial Blur, CC Vector Blur, CC Composite, Color Link,
+//! Cineon Converter, HDR Compander, HDR Highlight Compression, Grow Bounds, CC Overbrights, CC
+//! Block Load, CC Burn Film, CC Glass, CC HexTile, CC Mr. Smoothie, CC Plastic, Inner/Outer Key
+//! and CC Simple Wire Removal, with the CPU effects' exact steps (padding, box-blur radii,
+//! parameter conversions in f64 on the CPU).
 //!
 //! What only depends on parameters and geometry is prepared on the CPU and shared with the CPU
 //! effect: Inner/Outer Key's trimap and Cleanup strokes (`effects::inner_outer_plan`), CC Glass /
@@ -16,7 +16,7 @@ use effectcraft_effects::EffectCtx;
 use effectcraft_raster::Image;
 
 use crate::context::{Enc, GpuImage, Params};
-use crate::effects::{GBuf, box_passes, gaussian_blur};
+use crate::effects::{GBuf, box_passes};
 use crate::ops::mode_id;
 
 /// Compute entry points in `fx_pixel2.wgsl`.
@@ -39,7 +39,6 @@ pub(crate) const KERNELS: &[&str] = &[
     "fp2_io_strokes",
     "fp2_io_final",
     "fp2_wire",
-    "fp2_basic3d",
 ];
 
 /// Effect ids implemented here.
@@ -47,7 +46,6 @@ pub(crate) const IDS: &[&str] = &[
     "ec.blur.cccross",
     "ec.blur.ccradial",
     "ec.blur.ccvector",
-    "ec.blur.reduceflicker",
     "ec.channel.cccomposite",
     "ec.color.colorlink",
     "ec.utility.cineon",
@@ -63,7 +61,6 @@ pub(crate) const IDS: &[&str] = &[
     "ec.stylize.ccplastic",
     "ec.key.innerouter",
     "ec.key.ccsimplewireremoval",
-    "ec.obsolete.basic3d",
 ];
 
 /// Run effect `id` (one of [`IDS`]); `None` = this parameter combination runs on the CPU.
@@ -72,7 +69,6 @@ pub(crate) fn apply(e: &mut Enc, id: &str, ctx: &EffectCtx, b: GBuf) -> Option<G
         "ec.blur.cccross" => cross_blur(e, ctx, b),
         "ec.blur.ccradial" => radial_blur(e, ctx, b),
         "ec.blur.ccvector" => vector_blur(e, ctx, b),
-        "ec.blur.reduceflicker" => reduce_flicker(e, ctx, b),
         "ec.utility.growbounds" => grow_bounds(e, ctx, b),
         "ec.stylize.ccblockload" => block_load(e, ctx, b),
         "ec.stylize.ccburnfilm" => burn_film(e, ctx, b),
@@ -81,7 +77,6 @@ pub(crate) fn apply(e: &mut Enc, id: &str, ctx: &EffectCtx, b: GBuf) -> Option<G
         "ec.stylize.ccmrsmoothie" => smoothie(e, ctx, b),
         "ec.key.innerouter" => inner_outer(e, ctx, b),
         "ec.key.ccsimplewireremoval" => wire_removal(e, ctx, b),
-        "ec.obsolete.basic3d" => basic_3d(e, ctx, b),
         _ => point(e, id, ctx, b),
     }
 }
@@ -171,15 +166,6 @@ fn vector_blur(e: &mut Enc, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
     p.u[0][0] = ctx.params.e("type");
     p.f[0] = [amount as f32, ctx.params.f("angleOffset").to_radians() as f32, 0.0, 0.0];
     run(e, "fp2_vector", &p, b, Some(&map), None)
-}
-
-fn reduce_flicker(e: &mut Enc, ctx: &EffectCtx, mut b: GBuf) -> Option<GBuf> {
-    let s = ctx.params.f("softness").max(0.0) * b.scale;
-    if s < 0.05 {
-        return Some(b);
-    }
-    b.img = gaussian_blur(e, &b.img, 0.0, s, true);
-    Some(b)
 }
 
 fn grow_bounds(e: &mut Enc, ctx: &EffectCtx, mut b: GBuf) -> Option<GBuf> {
@@ -495,34 +481,4 @@ fn wire_removal(e: &mut Enc, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
     p.f[0] = [a.0 as f32, a.1 as f32, -ty as f32, tx as f32];
     p.f[1] = [half as f32, (half * slope as f64) as f32, mirror, len as f32];
     run(e, "fp2_wire", &p, b, None, None)
-}
-
-// ---------------------------------------------------------------- Basic 3D (obsolete)
-
-fn basic_3d(e: &mut Enc, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
-    let swivel = ctx.params.f("swivel").to_radians();
-    let tilt = ctx.params.f("tilt").to_radians();
-    let dist = ctx.params.f("distanceToImage") * b.scale;
-    let spec_on = ctx.params.b("specularHighlight");
-    let wire = ctx.params.b("preview/drawPreviewWireframe");
-    if swivel == 0.0 && tilt == 0.0 && dist == 0.0 && !spec_on && !wire {
-        return Some(b);
-    }
-    let (lx, ly, lw, lh) = (b.offset[0], b.offset[1], ctx.layer_size[0] * b.scale, ctx.layer_size[1] * b.scale);
-    let (cx, cy) = (lx + lw * 0.5, ly + lh * 0.5);
-    let f = lw.max(lh).max(1.0) * 1.4;
-    let (cs, ss) = (swivel.cos(), swivel.sin());
-    let (ct, st) = (tilt.cos(), tilt.sin());
-    let v3 = |v: [f64; 3]| [v[0] as f32, v[1] as f32, v[2] as f32, 0.0];
-    let l = [-0.5f64, -0.6, -1.0];
-    let k = 1.0 / (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt();
-    let mut p = Params::default();
-    p.u[0] = [spec_on as u32, wire as u32, 0, 0];
-    p.f[0] = [cx as f32, cy as f32, f as f32, dist as f32];
-    p.f[1] = v3([cs, 0.0, -ss]);
-    p.f[2] = v3([ss * st, ct, cs * st]);
-    p.f[3] = v3([ss * ct, -st, cs * ct]);
-    p.f[4] = v3(l.map(|v| v * k));
-    p.f[5] = [(lw * 0.5) as f32, (lh * 0.5) as f32, 0.0, 0.0];
-    run(e, "fp2_basic3d", &p, b, None, None)
 }

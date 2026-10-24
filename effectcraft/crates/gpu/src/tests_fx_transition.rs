@@ -37,8 +37,6 @@ fn grid_and_scale_wipes() {
     effect_case("ec.transition.ccgridwipe", &[("completion", n(35.0)), ("shape", e(2)), ("reverse", on()), ("tiles", n(5.0))]);
     effect_case("ec.transition.ccradialscalewipe", &[("completion", n(40.0)), ("center", pt(30.0, 20.0))]);
     effect_case("ec.transition.ccradialscalewipe", &[("completion", n(30.0)), ("center", pt(40.0, 25.0)), ("reverse", on())]);
-    effect_case("ec.transition.ccscalewipe", &[("stretch", n(2.0)), ("center", pt(30.0, 20.0))]);
-    effect_case("ec.transition.ccscalewipe", &[("stretch", n(0.7)), ("direction", n(200.0))]);
 }
 
 #[test]

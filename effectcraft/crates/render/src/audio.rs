@@ -1,20 +1,13 @@
-//! Audio mixdown of a composition: every audible layer (footage with audio, precomps, and any
-//! layer with a sound-generating effect such as Tone) summed with its Audio Levels (dB, per
-//! channel), respecting in/out points, the Audio switch and solo. Layer audio effects
-//! (Effect > Audio, see [`effectcraft_effects::audio_fx`]) run on each layer's audio before
-//! its levels; Backwards plays the layer's [in, out) span reversed.
+//! Audio mixdown of a composition: every audible layer (footage with audio and precomps) summed
+//! with its Audio Levels (dB, per channel), respecting in/out points, the Audio switch and solo.
 //!
-//! Callers mix in short blocks (one video frame, or an audio device buffer). Effects and levels
-//! are evaluated once per block. To make the result independent of block boundaries, layer
-//! effects are run from a cleared state over a pre-roll of earlier audio and only the block's
-//! tail is kept — so preview playback and export produce identical samples.
+//! Callers mix in short blocks (one video frame, or an audio device buffer); levels are
+//! evaluated once per block.
 //!
 //! Time-stretched layers are resampled nearest-sample; reversed (negative stretch) layers are
 //! silent for now.
 
-use effectcraft_effects::Params;
-use effectcraft_effects::audio_fx;
-use effectcraft_project::{Comp, GroupKind, ItemId, ItemKind, Layer, LayerSource, Node, Project};
+use effectcraft_project::{Comp, ItemId, ItemKind, Layer, LayerSource, Project};
 use effectcraft_time::{TICKS_PER_SECOND, Tick};
 
 use crate::{EvalCtx, ExprHost, FootageSource};
@@ -29,49 +22,33 @@ pub fn mix_comp(project: &Project, footage: &dyn FootageSource, expr: Option<&dy
     out
 }
 
-/// Whether the comp has anything audible (footage with audio, a sound generator, or a precomp
-/// that has).
+/// Whether the comp has anything audible (footage with audio, or a precomp that has).
 pub fn comp_has_audio(project: &Project, comp: ItemId) -> bool {
     fn walk(project: &Project, comp: ItemId, depth: usize) -> bool {
         let Some(c) = project.comp(comp) else { return false };
         depth < MAX_DEPTH
             && c.layers.iter().any(|l| {
                 l.switches.audio
-                    && (generates(l)
-                        || match &l.source {
-                            LayerSource::Footage { item } => {
-                                matches!(project.item(*item).map(|i| &i.kind), Some(ItemKind::Footage(f)) if f.has_audio && !f.missing)
-                            }
-                            LayerSource::Comp { item } => walk(project, *item, depth + 1),
-                            _ => false,
-                        })
+                    && match &l.source {
+                        LayerSource::Footage { item } => {
+                            matches!(project.item(*item).map(|i| &i.kind), Some(ItemKind::Footage(f)) if f.has_audio && !f.missing)
+                        }
+                        LayerSource::Comp { item } => walk(project, *item, depth + 1),
+                        _ => false,
+                    }
             })
     }
     walk(project, comp, 0)
 }
 
-/// Enabled audio effects of a layer (in stack order) with their effect ids.
-fn audio_effect_groups(l: &Layer) -> impl Iterator<Item = (&str, &effectcraft_project::PropGroup)> {
-    l.effects().filter(|_| l.switches.effects).into_iter().flat_map(|fx| fx.groups()).filter(|g| g.enabled).filter_map(|g| match &g.kind {
-        GroupKind::Effect { effect } if audio_fx::is_audio_effect(effect) => Some((effect.as_str(), g)),
-        _ => None,
-    })
-}
-
-/// The layer makes sound on its own (Tone).
-fn generates(l: &Layer) -> bool {
-    audio_effect_groups(l).any(|(id, _)| audio_fx::generates_audio(id))
-}
-
 /// Does the layer contribute to the mix (Audio switch on and something to hear)?
 pub fn audible(project: &Project, l: &Layer) -> bool {
     l.switches.audio
-        && (generates(l)
-            || match &l.source {
-                LayerSource::Footage { item } => matches!(project.item(*item).map(|i| &i.kind), Some(ItemKind::Footage(f)) if f.has_audio),
-                LayerSource::Comp { .. } => true,
-                _ => false,
-            })
+        && match &l.source {
+            LayerSource::Footage { item } => matches!(project.item(*item).map(|i| &i.kind), Some(ItemKind::Footage(f)) if f.has_audio),
+            LayerSource::Comp { .. } => true,
+            _ => false,
+        }
 }
 
 /// Linear gain of an Audio Levels value in dB; -96 dB and below is silence.
@@ -108,30 +85,12 @@ impl MixEnv<'_> {
         ctx
     }
 
-    /// The layer's own (pre-effect) audio for comp sample indices `i0 .. i0 + n`, silent
-    /// outside its [in, out) span. Comp sample index `k` maps to `in + out − 1 − k` when
-    /// `reversed`.
-    fn layer_raw(&self, l: &Layer, i0: i64, n: usize, reversed: bool) -> Vec<f32> {
+    /// The layer's own audio for comp sample indices `i0 .. i0 + n`, silent outside its
+    /// [in, out) span.
+    fn layer_raw(&self, l: &Layer, i0: i64, n: usize) -> Vec<f32> {
         let rate = self.rate;
         let mut out = vec![0.0f32; n * 2];
         let (in_i, out_i) = (units_ceil(l.in_point, rate), units_ceil(l.out_point, rate));
-        if reversed {
-            // Mirror the clipped range, fetch it forwards, reverse.
-            let a = i0.max(in_i);
-            let b = (i0 + n as i64).min(out_i);
-            if a >= b {
-                return out;
-            }
-            let (ma, mb) = (in_i + out_i - b, in_i + out_i - a);
-            let fwd = self.layer_raw(l, ma, (mb - ma) as usize, false);
-            for k in a..b {
-                let j = (in_i + out_i - 1 - k - ma) as usize;
-                let o = (k - i0) as usize;
-                out[o * 2] = fwd[j * 2];
-                out[o * 2 + 1] = fwd[j * 2 + 1];
-            }
-            return out;
-        }
         let a = (in_i - i0).clamp(0, n as i64) as usize;
         let b = (out_i - i0).clamp(0, n as i64) as usize;
         if a >= b {
@@ -172,38 +131,6 @@ impl MixEnv<'_> {
         }
         out
     }
-
-    /// Effect parameters at comp time `t`.
-    fn params(&self, l: &Layer, g: &effectcraft_project::PropGroup, t: Tick) -> Params {
-        let ctx = self.ctx(t);
-        let mut p = Params::default();
-        for c in &g.children {
-            if let Node::Prop(pr) = c {
-                p.values.insert(pr.match_id.clone(), ctx.value(l, pr));
-            }
-        }
-        p
-    }
-
-    /// The layer's processed audio (effects applied, levels not) for comp sample indices
-    /// `i0 .. i0 + n`.
-    fn layer_audio(&self, l: &Layer, i0: i64, n: usize) -> Vec<f32> {
-        let t = sample_tick(i0, self.rate);
-        let fx: Vec<(&str, Params)> = audio_effect_groups(l).map(|(id, g)| (id, self.params(l, g, t))).collect();
-        if fx.is_empty() {
-            return self.layer_raw(l, i0, n, false);
-        }
-        let reversed = fx.iter().any(|(id, _)| audio_fx::reverses(id));
-        let pre_s: f64 = fx.iter().map(|(id, p)| audio_fx::preroll(id, p)).sum();
-        let pre = (pre_s * self.rate as f64).ceil() as usize;
-        let mut buf = self.layer_raw(l, i0 - pre as i64, n + pre, reversed);
-        let start = l.layer_time(sample_tick(i0 - pre as i64, self.rate)).seconds();
-        for (id, p) in &fx {
-            audio_fx::process(id, p, &mut buf, self.rate, start);
-        }
-        buf.drain(..pre * 2);
-        buf
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -243,7 +170,7 @@ fn mix_into(
         if ll == 0.0 && lr == 0.0 {
             continue;
         }
-        let buf = env.layer_audio(l, s0 + a as i64, b - a);
+        let buf = env.layer_raw(l, s0 + a as i64, b - a);
         for (i, f) in buf.as_chunks::<2>().0.iter().enumerate() {
             out[(a + i) * 2] += f[0] * ll;
             out[(a + i) * 2 + 1] += f[1] * lr;

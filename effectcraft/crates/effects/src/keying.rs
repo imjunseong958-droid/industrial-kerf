@@ -41,18 +41,6 @@ fn apply_matte(img: &mut Image, m: &Plane, view: u32) {
     });
 }
 
-/// Edge thin (positive erodes, negative grows) and feather (Gaussian) of a matte, in buffer pixels.
-fn thin_feather(m: Plane, thin: f64, feather: f64) -> Plane {
-    let m = if thin > 0.0 {
-        morph_frac(&m, thin, false)
-    } else if thin < 0.0 {
-        morph_frac(&m, -thin, true)
-    } else {
-        m
-    };
-    if feather > 0.0 { gauss_plane(&m, feather * 0.5, feather * 0.5) } else { m }
-}
-
 /// Plane of `f(straight colour, alpha)` over the image.
 fn matte_of(img: &Image, f: impl Fn([f32; 3], f32) -> f32 + Sync) -> Plane {
     Plane::from_image(img, |px| {
@@ -121,65 +109,7 @@ fn linear_color_key(ctx: &EffectCtx, mut b: Buf) -> Buf {
 
 // ---- Color Key (obsolete) ----
 
-fn color_key(ctx: &EffectCtx, mut b: Buf) -> Buf {
-    let k = ctx.params.color("keyColor");
-    let tol = ctx.params.f("colorTolerance") as f32 / 255.0;
-    let m = matte_of(&b.img, |c, _| {
-        let d = (c[0] - k[0]).abs().max((c[1] - k[1]).abs()).max((c[2] - k[2]).abs());
-        if d <= tol { 0.0 } else { 1.0 }
-    });
-    let m = thin_feather(m, ctx.params.f("edgeThin") * b.scale, ctx.params.f("edgeFeather") * b.scale);
-    apply_matte(&mut b.img, &m, 0);
-    b
-}
-
 // ---- Luma Key ----
-
-fn luma_key(ctx: &EffectCtx, mut b: Buf) -> Buf {
-    let kind = ctx.params.e("keyType");
-    let thr = ctx.params.f("threshold") as f32 / 255.0;
-    let tol = ctx.params.f("tolerance") as f32 / 255.0;
-    let m = matte_of(&b.img, |c, _| {
-        let l = luminance(c[0], c[1], c[2]);
-        match kind {
-            0 => {
-                if tol > 0.0 {
-                    ((thr + tol - l) / tol).clamp(0.0, 1.0)
-                } else if l > thr {
-                    0.0
-                } else {
-                    1.0
-                }
-            }
-            2 => {
-                if (l - thr).abs() <= tol {
-                    0.0
-                } else {
-                    1.0
-                }
-            }
-            3 => {
-                if (l - thr).abs() <= tol {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
-            _ => {
-                if tol > 0.0 {
-                    ((l - (thr - tol)) / tol).clamp(0.0, 1.0)
-                } else if l < thr {
-                    0.0
-                } else {
-                    1.0
-                }
-            }
-        }
-    });
-    let m = thin_feather(m, ctx.params.f("edgeThin") * b.scale, ctx.params.f("edgeFeather") * b.scale);
-    apply_matte(&mut b.img, &m, 0);
-    b
-}
 
 // ---- Color Difference Key ----
 
@@ -430,39 +360,6 @@ fn screen_key(ctx: &EffectCtx, mut b: Buf) -> Buf {
 
 // ---- Spill suppression ----
 
-/// Faster: limit the key's primary channel to the larger of the other two. Better: remove the
-/// part of each pixel's chroma that points along the key colour's chroma (works for any key
-/// colour, not only primaries).
-fn spill_suppressor(ctx: &EffectCtx, mut b: Buf) -> Buf {
-    let k = ctx.params.color("colorToSuppress");
-    let amt = ctx.params.f("suppression") as f32 / 100.0;
-    if ctx.params.e("colorAccuracy") == 1 {
-        let kg = (k[0] + k[1] + k[2]) / 3.0;
-        let kc = [k[0] - kg, k[1] - kg, k[2] - kg];
-        let kn = (kc[0] * kc[0] + kc[1] * kc[1] + kc[2] * kc[2]).sqrt();
-        if kn < 1e-5 {
-            return b;
-        }
-        let dir = kc.map(|v| v / kn);
-        b.img.map_straight(|c| {
-            let g = (c[0] + c[1] + c[2]) / 3.0;
-            let proj = (c[0] - g) * dir[0] + (c[1] - g) * dir[1] + (c[2] - g) * dir[2];
-            if proj <= 0.0 {
-                return c;
-            }
-            [0, 1, 2].map(|i| c[i] - proj * dir[i] * amt)
-        });
-        return b;
-    }
-    let (pi, o1, o2) = primary(k);
-    b.img.map_straight(|mut c| {
-        let spill = (c[pi] - c[o1].max(c[o2])).max(0.0);
-        c[pi] -= spill * amt;
-        c
-    });
-    b
-}
-
 const LUMA_W: [f32; 3] = [0.2126, 0.7152, 0.0722];
 
 fn advanced_spill(ctx: &EffectCtx, mut b: Buf) -> Buf {
@@ -561,8 +458,6 @@ fn key_cleaner(ctx: &EffectCtx, mut b: Buf) -> Buf {
 }
 
 pub fn specs() -> Vec<EffectSpec> {
-    let thin = || slider(-5.0, 5.0, -5.0, 5.0, 1);
-    let feather = || slider(0.0, 100.0, 0.0, 20.0, 1);
     let b255 = || slider(0.0, 255.0, 0.0, 255.0, 0);
     let gamma = || slider(0.01, 10.0, 0.1, 3.0, 2);
     vec![
@@ -579,31 +474,6 @@ pub fn specs() -> Vec<EffectSpec> {
                 p("keyOperation", "Key Operation", Value::Enum(0), popup(&["Key Colors", "Keep Colors"])),
             ],
             linear_color_key,
-        ),
-        spec(
-            "ec.key.colorkey",
-            "Color Key",
-            "Obsolete",
-            vec![
-                p("keyColor", "Key Color", col(0.0, 0.0, 1.0), ParamUi::Color),
-                p("colorTolerance", "Color Tolerance", num(0.0), b255()),
-                p("edgeThin", "Edge Thin", num(0.0), thin()),
-                p("edgeFeather", "Edge Feather", num(0.0), feather()),
-            ],
-            color_key,
-        ),
-        spec(
-            "ec.key.luma",
-            "Luma Key",
-            "Obsolete",
-            vec![
-                p("keyType", "Key Type", Value::Enum(1), popup(&["Key Out Brighter", "Key Out Darker", "Key Out Similar", "Key Out Dissimilar"])),
-                p("threshold", "Threshold", num(0.0), b255()),
-                p("tolerance", "Tolerance", num(0.0), b255()),
-                p("edgeThin", "Edge Thin", num(0.0), thin()),
-                p("edgeFeather", "Edge Feather", num(0.0), feather()),
-            ],
-            luma_key,
         ),
         spec(
             "ec.key.colordifference",
@@ -677,17 +547,6 @@ pub fn specs() -> Vec<EffectSpec> {
                 p("edgeColor", "Edge Colour", Value::Enum(0), popup(&["Screen Subtract", "Source"])),
             ],
             screen_key,
-        ),
-        spec(
-            "ec.key.spill",
-            "Spill Suppressor",
-            "Obsolete",
-            vec![
-                p("colorToSuppress", "Color To Suppress", col(0.0, 0.0, 1.0), ParamUi::Color),
-                p("colorAccuracy", "Color Accuracy", Value::Enum(0), popup(&["Faster", "Better"])),
-                p("suppression", "Suppression", num(100.0), slider(0.0, 200.0, 0.0, 100.0, 0)),
-            ],
-            spill_suppressor,
         ),
         spec(
             "ec.key.advancedspill",
@@ -793,16 +652,6 @@ mod tests {
     }
 
     #[test]
-    fn luma_key_darker() {
-        let mut img = Image::new(4, 1);
-        img.set(0, 0, [0.1, 0.1, 0.1, 1.0]);
-        img.set(1, 0, [0.9, 0.9, 0.9, 1.0]);
-        let out = run("ec.key.luma", &[("threshold", num(128.0))], img);
-        assert_eq!(out.get(0, 0)[3], 0.0);
-        assert_eq!(out.get(1, 0)[3], 1.0);
-    }
-
-    #[test]
     fn extract_keeps_range() {
         let mut img = Image::new(3, 1);
         img.set(0, 0, [0.05, 0.05, 0.05, 1.0]);
@@ -812,14 +661,6 @@ mod tests {
         assert_eq!(out.get(0, 0)[3], 0.0);
         assert_eq!(out.get(1, 0)[3], 1.0);
         assert_eq!(out.get(2, 0)[3], 0.0);
-    }
-
-    #[test]
-    fn spill_suppressor_limits_green() {
-        let img = Image::filled(2, 2, [0.3, 0.8, 0.4, 1.0]);
-        let out = run("ec.key.spill", &[("colorToSuppress", green())], img);
-        let px = out.get(0, 0);
-        assert!((px[1] - 0.4).abs() < 1e-5 && px[0] == 0.3 && px[2] == 0.4);
     }
 
     #[test]
@@ -844,17 +685,6 @@ mod tests {
         let four = run("ec.key.colordifference", &[("keyColor", green()), ("view", Value::Enum(8))], green_screen());
         assert_eq!(four.get(2, 2)[3], 1.0, "matte panel is opaque");
         assert!(four.get(12, 6)[3] > 0.99, "final output keeps the foreground");
-    }
-
-    #[test]
-    fn spill_suppressor_better_handles_secondary_key_colours() {
-        // A yellow cast on a grey pixel: Faster only limits the primary channel, Better removes
-        // the yellow chroma along the key direction.
-        let img = Image::filled(1, 1, [0.7, 0.7, 0.3, 1.0]);
-        let yellow = Value::Color([1.0, 1.0, 0.0, 1.0]);
-        let better = run("ec.key.spill", &[("colorToSuppress", yellow), ("colorAccuracy", Value::Enum(1))], img);
-        let px = better.get(0, 0);
-        assert!((px[0] - px[2]).abs() < 1e-4 && (px[1] - px[2]).abs() < 1e-4, "{px:?}");
     }
 
     #[test]
