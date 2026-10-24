@@ -530,9 +530,16 @@ pub fn preview_plan(project: &Project) -> PreviewPlan {
         project,
         picture: Vec::new(),
         sound: Vec::new(),
+        heard: Vec::new(),
+        lanes: 0,
         depth: 0,
     };
-    check.sequence(sequence, Time::ZERO);
+    check.sequence(
+        sequence,
+        Time::ZERO,
+        Some((Time::ZERO, sequence.duration())),
+    );
+    check.overlaps();
     let NativeCheck { picture, sound, .. } = check;
     match drawn {
         Ok(_) if unmixed.is_none() && picture.is_empty() && sound.is_empty() => {
@@ -596,16 +603,33 @@ struct NativeCheck<'a> {
     project: &'a Project,
     picture: Vec<PreviewReason>,
     sound: Vec<PreviewReason>,
+    /// Where each audible media clip sounds on the program, by track.
+    heard: Vec<Heard<'a>>,
+    lanes: usize,
     depth: usize,
 }
 
-impl NativeCheck<'_> {
-    fn sequence(&mut self, sequence: &Sequence, at: Time) {
+/// A media clip's sound on the program, on one track of one nesting.
+struct Heard<'a> {
+    clip: &'a kerf_model::Id,
+    lane: usize,
+    start: Time,
+    end: Time,
+}
+
+impl<'a> NativeCheck<'a> {
+    /// Check `sequence` placed at program time `at`. Its audio tracks are
+    /// heard within `heard`, as a render mixes them: not at all when it is
+    /// nested on a picture track or a muted one.
+    fn sequence(&mut self, sequence: &'a Sequence, at: Time, heard: Option<(Time, Time)>) {
         if self.depth > MAX_NESTING {
             return;
         }
         for track in sequence.tracks.iter().filter(|track| track.enabled) {
             let sound = track.kind == TrackKind::Audio;
+            let heard = heard.filter(|_| sound && !track.muted);
+            let lane = self.lanes;
+            self.lanes += 1;
             for transition in &track.transitions {
                 let what = if sound { "a crossfade" } else { "a transition" };
                 self.push(&transition.id, None, what, sound);
@@ -616,15 +640,56 @@ impl NativeCheck<'_> {
                 if let Some(what) = self.unsupported(track.kind, clip) {
                     self.push(&clip.id, range, what, sound);
                 }
-                if let Content::Sequence { sequence: id, .. } = &clip.content {
-                    if let Some(nested) = self.project.sequence(id.as_str()) {
-                        self.depth += 1;
-                        let source_in = clip.source_range().map_or(Time::ZERO, |(start, _)| start);
-                        self.sequence(nested, clip.start + at - source_in);
-                        self.depth -= 1;
+                let within = heard
+                    .map(|(from, to)| ((clip.start + at).max(from), (clip.end() + at).min(to)));
+                match &clip.content {
+                    Content::Media { media, .. } => {
+                        let audible = self
+                            .project
+                            .media(media.as_str())
+                            .is_some_and(|media| media.audio.is_some());
+                        if let Some((start, end)) = within.filter(|_| audible) {
+                            if start < end {
+                                self.heard.push(Heard {
+                                    clip: &clip.id,
+                                    lane,
+                                    start,
+                                    end,
+                                });
+                            }
+                        }
                     }
+                    Content::Sequence { sequence: id, .. } => {
+                        if let Some(nested) = self.project.sequence(id.as_str()) {
+                            self.depth += 1;
+                            let source_in =
+                                clip.source_range().map_or(Time::ZERO, |(start, _)| start);
+                            self.sequence(nested, clip.start + at - source_in, within);
+                            self.depth -= 1;
+                        }
+                    }
+                    Content::Generator { .. } | Content::Caption { .. } => {}
                 }
             }
+        }
+    }
+
+    /// Native playback plays one sound at a time, so sound on two tracks at
+    /// once plays exactly only in a render.
+    fn overlaps(&mut self) {
+        let mut heard = std::mem::take(&mut self.heard);
+        heard.sort_by_key(|heard| heard.start);
+        for (index, later) in heard.iter().enumerate() {
+            let Some(earlier) = heard[..index]
+                .iter()
+                .find(|earlier| earlier.lane != later.lane && earlier.end > later.start)
+            else {
+                continue;
+            };
+            let range =
+                PreviewRange::new(later.start.seconds(), later.end.min(earlier.end).seconds());
+            let what = format!("sound over `{}` on another track", earlier.clip);
+            self.push(later.clip, range, &what, true);
         }
     }
 
@@ -880,6 +945,70 @@ mod tests {
              transition x1 from=a1 to=g1 fx=dissolve dur=10f\n",
         );
         assert_eq!(preview_plan(&adjusted).mode, PreviewMode::Unavailable);
+    }
+
+    #[test]
+    fn sound_on_two_tracks_at_once_is_noted() {
+        let one_track = project(
+            "  track A1 audio\n    clip d1 media=source-b src=0s at=0s dur=2s\n    \
+             clip d2 media=source-b src=0s at=2s dur=2s\n",
+        );
+        assert_eq!(preview_plan(&one_track).mode, PreviewMode::NativeExact);
+        let dialog_and_music = project(
+            "  track A1 audio\n    clip d1 media=source-b src=0s at=0s dur=4s\n\
+             \x20 track A2 audio\n    clip m1 media=source-b src=0s at=1s dur=4s\n",
+        );
+        let plan = preview_plan(&dialog_and_music);
+        assert_eq!(plan.mode, PreviewMode::Composited);
+        assert_eq!(plan.reasons.len(), 1, "{:?}", plan.reasons);
+        assert_eq!(plan.reasons[0].entity_id.as_deref(), Some("m1"));
+        assert!(
+            plan.reasons[0]
+                .message
+                .contains("sound over `d1` on another track"),
+            "{:?}",
+            plan.reasons
+        );
+        assert_eq!(
+            plan.reasons[0]
+                .time_range
+                .map(|range| (range.start, range.end)),
+            Some((1.0, 4.0))
+        );
+        // A muted track, and sound that ends where the next track's starts,
+        // overlap nothing.
+        let apart = project(
+            "  track A1 audio\n    clip d1 media=source-b src=0s at=0s dur=2s\n\
+             \x20 track A2 audio\n    clip m1 media=source-b src=0s at=2s dur=4s\n\
+             \x20 track A3 audio muted=true\n    clip m2 media=source-b src=0s at=0s dur=4s\n",
+        );
+        assert_eq!(preview_plan(&apart).mode, PreviewMode::NativeExact);
+    }
+
+    #[test]
+    fn sound_on_two_tracks_of_a_nested_sequence_is_noted() {
+        let text = "kerf 1\nproject name=\"n\"\n\
+             media m path=\"/tmp/m.mp4\" rate=30 dur=00:00:10:00 video=320x180 audio=2ch@48000\n\
+             sequence main rate=30 size=320x180 audio=48000\n\
+             \x20 track A1 audio\n\
+             \x20   clip n1 seq=inner src=0s at=0s dur=2s\n\
+             \x20 track V1 video\n\
+             \x20   clip n2 seq=inner src=0s at=0s dur=4s\n\
+             sequence inner rate=30 size=320x180 audio=48000\n\
+             \x20 track A1 audio\n\
+             \x20   clip i1 media=m src=0s at=0s dur=4s\n\
+             \x20 track A2 audio\n\
+             \x20   clip i2 media=m src=0s at=3s dur=1s\n";
+        // `n1` plays only the first two seconds of `inner`, and a picture
+        // track mixes no sound.
+        let project = parse_document(text, Catalog::builtin()).unwrap().project;
+        assert_eq!(preview_plan(&project).mode, PreviewMode::NativeExact);
+        let longer = parse_document(&text.replace("dur=2s", "dur=4s"), Catalog::builtin())
+            .unwrap()
+            .project;
+        let plan = preview_plan(&longer);
+        assert_eq!(plan.mode, PreviewMode::Composited);
+        assert_eq!(plan.reasons[0].entity_id.as_deref(), Some("i2"));
     }
 
     #[test]
