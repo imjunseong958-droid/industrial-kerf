@@ -12,11 +12,15 @@
 //! properties and generator parameters it sets: a static value, or a keyframe
 //! list when animated. Anything absent is at its default. Its `effects` list
 //! the effect stack in order, each with the parameters it sets the same way;
-//! their definitions are [`fx_catalog_json`].
+//! their definitions are [`fx_catalog_json`]. Its `masks` list a picture
+//! clip's masks in order: each one's outline as the language writes it
+//! (`rect`, `ellipse`, or `points` and `closed`), its mode and inversion, and
+//! the properties it sets, which `maskProperties` defines; `maskModes` lists
+//! the modes.
 
 use kerf_model::{
-    Catalog, Clip, Content, Domain, FxKind, Param, ParamDef, ParamType, Project, Rate, Sequence,
-    Time, Track, Value,
+    Catalog, Clip, Content, Domain, FxKind, Mask, MaskMode, MaskShape, Param, ParamDef, ParamType,
+    Project, Rate, Sequence, Time, Track, Value,
 };
 use serde_json::{json, Map, Value as Json};
 
@@ -42,6 +46,8 @@ pub(crate) fn timeline_json(project: &Project) -> Json {
             json!({"id": sequence.id.as_str(), "name": sequence.name})
         }).collect::<Vec<_>>(),
         "properties": properties_json(),
+        "maskProperties": Catalog::builtin().mask_props().iter().map(param_def_json).collect::<Vec<_>>(),
+        "maskModes": MaskMode::ALL.map(MaskMode::name),
         "generators": Catalog::builtin()
             .all()
             .filter(|def| def.kind == FxKind::Generator)
@@ -228,6 +234,31 @@ fn clip_json(project: &Project, rate: Rate, clip: &Clip) -> Json {
                 .collect(),
         );
     }
+    if !clip.masks.is_empty() {
+        object.insert("masks".into(), clip.masks.iter().map(mask_json).collect());
+    }
+    value
+}
+
+fn mask_json(mask: &Mask) -> Json {
+    let mut value = json!({
+        "name": mask.name.as_str(),
+        "mode": mask.mode.name(),
+        "inverted": mask.inverted,
+        "params": mask
+            .params
+            .iter()
+            .map(|(name, param)| (name.clone(), param_json(param)))
+            .collect::<Map<String, Json>>(),
+    });
+    match &mask.shape {
+        MaskShape::Rect(rect) => value["rect"] = json!(rect),
+        MaskShape::Ellipse(ellipse) => value["ellipse"] = json!(ellipse),
+        MaskShape::Polygon { points, closed } => {
+            value["points"] = json!(points);
+            value["closed"] = json!(closed);
+        }
+    }
     value
 }
 
@@ -369,5 +400,48 @@ mod tests {
             (gain["name"].as_str(), gain["unit"].as_str()),
             (Some("gain"), Some("dB"))
         );
+    }
+
+    #[test]
+    fn masks_carry_their_outlines_in_order() {
+        let project = kerf_lang::parse_document(
+            "kerf 1\nproject name=\"t\"\n\
+             media m1 path=\"a.mov\" rate=24 dur=00:01:00:00 video=1920x1080\n\
+             sequence s1 rate=24 size=1920x1080 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20   clip c1 media=m1 src=0f at=0f dur=48f\n\
+             \x20     mask k1 rect=0.25,0.25,0.75,0.75 feather=6\n\
+             \x20     mask ring ellipse=0.5,0.5,0.25,0.3 mode=none inverted=true\n\
+             \x20     mask path points=\"0,0 0.5,1 1,0\" closed=false mode=none\n",
+            Catalog::builtin(),
+        )
+        .unwrap()
+        .project;
+        let value = timeline_json(&project);
+        let masks = &value["tracks"][0]["clips"][0]["masks"];
+        assert_eq!(
+            masks[0],
+            json!({"name": "k1", "rect": [0.25, 0.25, 0.75, 0.75], "mode": "add",
+                   "inverted": false, "params": {"feather": 6.0}})
+        );
+        assert_eq!(masks[1]["ellipse"], json!([0.5, 0.5, 0.25, 0.3]));
+        assert_eq!(
+            (masks[1]["mode"].as_str(), masks[1]["inverted"].as_bool()),
+            (Some("none"), Some(true))
+        );
+        assert_eq!(
+            masks[2]["points"],
+            json!([[0.0, 0.0], [0.5, 1.0], [1.0, 0.0]])
+        );
+        assert_eq!(masks[2]["closed"], false);
+        let props = value["maskProperties"].as_array().unwrap();
+        assert!(props
+            .iter()
+            .any(|def| def["name"] == "feather" && def["unit"] == "pixels"));
+        assert_eq!(value["maskModes"][0], "add");
+        assert!(value["maskModes"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("none")));
     }
 }

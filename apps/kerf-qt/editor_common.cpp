@@ -7,6 +7,7 @@
 #include <QPolygonF>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 
@@ -263,6 +264,102 @@ QIcon transportIcon(TransportGlyph glyph) {
     case TransportGlyph::End: triangle(3.0, 10.5); painter.drawRect(QRectF(11.4, 3.5, 1.6, 9.0)); break;
     }
     return QIcon(pixmap);
+}
+
+QIcon maskToolIcon(MaskTool tool) {
+    QPixmap pixmap(32, 32);
+    pixmap.setDevicePixelRatio(2);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(QColor("#d7d7d7"), 1.4));
+    painter.setBrush(Qt::NoBrush);
+    switch (tool) {
+    case MaskTool::None: break;
+    case MaskTool::Rectangle: painter.drawRect(QRectF(2.5, 3.5, 11.0, 9.0)); break;
+    case MaskTool::Ellipse: painter.drawEllipse(QRectF(2.0, 3.0, 12.0, 10.0)); break;
+    case MaskTool::Pen: {
+        const QPolygonF corners{{2.5, 12.5}, {5.5, 3.0}, {13.0, 6.0}, {10.0, 13.0}};
+        painter.drawPolygon(corners);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor("#d7d7d7"));
+        for (const QPointF &corner : corners) painter.drawRect(QRectF(corner - QPointF(1.5, 1.5), QSizeF(3.0, 3.0)));
+        break;
+    }
+    }
+    return QIcon(pixmap);
+}
+
+double propertyAt(const QJsonObject &props, const QString &name, double clipTime, double fallback) {
+    const QJsonValue value = props.value(name);
+    if (value.isDouble()) return value.toDouble();
+    const QJsonArray keys = value.toArray();
+    if (keys.isEmpty()) return fallback;
+    const auto at = [&keys](int index) { return keys.at(index).toObject().value(QStringLiteral("at")).toDouble(); };
+    const auto valueOf = [&keys](int index) { return keys.at(index).toObject().value(QStringLiteral("value")).toDouble(); };
+    if (clipTime <= at(0)) return valueOf(0);
+    for (int index = 1; index < keys.size(); ++index) {
+        if (clipTime > at(index)) continue;
+        const double span = at(index) - at(index - 1);
+        const double t = span > 0.0 ? (clipTime - at(index - 1)) / span : 1.0;
+        return valueOf(index - 1) + (valueOf(index) - valueOf(index - 1)) * t;
+    }
+    return valueOf(keys.size() - 1);
+}
+
+QTransform picturePlacement(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas,
+                            double clipTime) {
+    // The compositor's geometry (kerf-compose `Scene::geometry`).
+    const QJsonObject props = clip.value(QStringLiteral("props")).toObject();
+    const auto prop = [&](const char *name, double fallback) {
+        return propertyAt(props, QString::fromLatin1(name), clipTime, fallback);
+    };
+    const double l = prop("crop_l", 0.0), r = prop("crop_r", 0.0), t = prop("crop_t", 0.0), b = prop("crop_b", 0.0);
+    const double sw = std::max(1.0, picture.width()), sh = std::max(1.0, picture.height());
+    const double cw = canvas.width(), ch = canvas.height();
+    const double width = sw * std::max(1e-6, 1.0 - l - r), height = sh * std::max(1e-6, 1.0 - t - b);
+    double fw = width, fh = height;
+    if (fit) {
+        fw = std::max(1.0, std::min(std::round(ch * width / height), cw));
+        fh = std::max(1.0, std::min(std::round(cw * height / width), ch));
+    }
+    const double scale = prop("scale", 1.0);
+    const double kx = scale * prop("scale_x", 1.0), ky = scale * prop("scale_y", 1.0);
+    const double ax = prop("anchor_x", 0.0), ay = prop("anchor_y", 0.0);
+    QTransform placement;
+    placement.translate(cw / 2.0 + prop("x", 0.0) * cw + ax * fw, ch / 2.0 + prop("y", 0.0) * ch + ay * fh);
+    placement.rotate(prop("rotation", 0.0));
+    placement.scale(fw / width * kx, fh / height * ky);
+    placement.translate(-(sw * l + width * (0.5 + ax)), -(sh * t + height * (0.5 + ay)));
+    placement.scale(sw, sh);
+    return placement;
+}
+
+QPainterPath maskPath(const QJsonObject &mask) {
+    QPainterPath path;
+    const auto numbers = [&mask](const char *key) {
+        const QJsonArray values = mask.value(QString::fromLatin1(key)).toArray();
+        std::array<double, 4> out{};
+        for (int index = 0; index < 4 && index < values.size(); ++index) out[index] = values.at(index).toDouble();
+        return out;
+    };
+    if (mask.contains(QStringLiteral("rect"))) {
+        const auto [left, top, right, bottom] = numbers("rect");
+        path.addRect(QRectF(QPointF(left, top), QPointF(right, bottom)));
+    } else if (mask.contains(QStringLiteral("ellipse"))) {
+        const auto [x, y, rx, ry] = numbers("ellipse");
+        path.addEllipse(QPointF(x, y), rx, ry);
+    } else {
+        const QJsonArray points = mask.value(QStringLiteral("points")).toArray();
+        for (int index = 0; index < points.size(); ++index) {
+            const QJsonArray point = points.at(index).toArray();
+            const QPointF at(point.at(0).toDouble(), point.at(1).toDouble());
+            if (index == 0) path.moveTo(at);
+            else path.lineTo(at);
+        }
+        if (mask.value(QStringLiteral("closed")).toBool(true) && points.size() > 2) path.closeSubpath();
+    }
+    return path;
 }
 
 } // namespace kerf

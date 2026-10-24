@@ -1914,6 +1914,105 @@ mod tests {
     }
 
     #[test]
+    fn typed_edits_add_set_and_remove_masks() {
+        let mut runtime = runtime();
+        edit(
+            &mut runtime,
+            "track add V1 video\n\
+             media add m1 path=\"a.mov\" rate=30 dur=60f video=320x180\n\
+             insert media=m1 dur=30f at=0f on=V1 as=c1",
+            0,
+        )
+        .unwrap();
+        let mut ops = |ops: Value| {
+            let revision = runtime.state.revision;
+            let ops: Vec<EditOp> = serde_json::from_value(ops).unwrap();
+            runtime.apply_ops_request("ui", &unique_id(), ops, revision)
+        };
+        let added = ops(json!([
+            {"op": "mask-add", "clip": "c1", "rect": [0.25, 0.25, 0.75, 0.75]},
+            {"op": "mask-add", "clip": "c1", "points": [[0, 0], [0.5, 1], [1, 0]],
+             "closed": false, "mode": "none"}
+        ]))
+        .unwrap();
+        assert!(
+            added.document.contains(
+                "      mask k1 rect=0.25,0.25,0.75,0.75\n      \
+                 mask k2 points=\"0,0 0.5,1 1,0\" closed=false mode=none\n"
+            ),
+            "{}",
+            added.document
+        );
+        let masks = &added.timeline["tracks"][0]["clips"][0]["masks"];
+        assert_eq!(masks[0]["rect"], json!([0.25, 0.25, 0.75, 0.75]));
+        assert_eq!(masks[1]["name"], "k2");
+        let set = ops(json!([
+            {"op": "mask-set", "clip": "c1", "name": "k1", "ellipse": [0.5, 0.5, 0.2, 0.3],
+             "mode": "subtract", "inverted": true, "params": {"feather": 12}}
+        ]))
+        .unwrap();
+        assert!(
+            set.document.contains(
+                "      mask k1 ellipse=0.5,0.5,0.2,0.3 mode=subtract inverted=true feather=12\n"
+            ),
+            "{}",
+            set.document
+        );
+        let reset = ops(json!([
+            {"op": "mask-set", "clip": "c1", "name": "k1", "params": {"feather": null}}
+        ]))
+        .unwrap();
+        assert!(
+            reset
+                .document
+                .contains("      mask k1 ellipse=0.5,0.5,0.2,0.3 mode=subtract inverted=true\n"),
+            "{}",
+            reset.document
+        );
+        for (op, message) in [
+            (
+                json!({"op": "mask-add", "clip": "c1", "rect": [0.5, 0.5, 0.25, 0.75]}),
+                "right past its left",
+            ),
+            (
+                json!({"op": "mask-add", "clip": "c1", "rect": [0, 0, 1, 1], "ellipse": [0.5, 0.5, 0.1, 0.1]}),
+                "one outline",
+            ),
+            (
+                json!({"op": "mask-add", "clip": "c1", "name": "k2", "rect": [0, 0, 1, 1]}),
+                "already has a mask",
+            ),
+            (
+                json!({"op": "mask-set", "clip": "c1", "name": "k1", "mode": "multiply"}),
+                "not a mask mode",
+            ),
+            (
+                json!({"op": "mask-set", "clip": "c1", "name": "k1", "params": {"glow": 1}}),
+                "no property `glow`",
+            ),
+        ] {
+            let error = ops(json!([op])).unwrap_err();
+            assert!(error.message.contains(message), "{error:?}");
+        }
+        let removed = ops(json!([{"op": "mask-remove", "clip": "c1", "name": "k2"}])).unwrap();
+        assert!(
+            !removed.document.contains("mask k2"),
+            "{}",
+            removed.document
+        );
+        // Each of the four edits undoes on its own; undoing the first leaves
+        // no masks.
+        let mut state = removed;
+        for _ in 0..4 {
+            state = undo(&mut runtime, state.revision).unwrap();
+        }
+        assert!(!state.document.contains("mask "), "{}", state.document);
+        assert!(state.timeline["tracks"][0]["clips"][0]
+            .get("masks")
+            .is_none());
+    }
+
+    #[test]
     fn edits_are_atomic_and_revisioned() {
         let mut runtime = runtime();
         let state = edit(&mut runtime, "track add T1 subtitle", 0).unwrap();

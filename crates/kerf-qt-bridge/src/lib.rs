@@ -1660,7 +1660,7 @@ mod tests {
         preview_frame_size, publish, publish_force, rendered_preview, AgentSettings, Command,
         Shared,
     };
-    use kerf_runtime::{PendingProposal, ProposalFreshness, StateSnapshot};
+    use kerf_runtime::{EditOp, PendingProposal, ProposalFreshness, StateSnapshot};
     use serde_json::json;
     use std::sync::atomic::{AtomicBool, AtomicU64};
     use std::sync::mpsc;
@@ -1878,6 +1878,36 @@ mod tests {
             panic!("expected an edit command");
         };
         assert_eq!((ops.len(), revision), (3, 4));
+    }
+
+    #[test]
+    fn mask_edits_from_the_viewer_are_typed_operations() {
+        let command: Command = serde_json::from_value(json!({
+            "type": "edit",
+            "revision": 2,
+            "ops": [
+                {"op": "mask-add", "clip": "c1", "name": "k1", "rect": [0.25, 0.25, 0.75, 0.75]},
+                {"op": "mask-set", "clip": "c1", "name": "k1",
+                 "points": [[0.1, 0.1], [0.9, 0.1], [0.5, 0.9]], "params": {"feather": null}},
+                {"op": "mask-remove", "clip": "c1", "name": "k1"}
+            ]
+        }))
+        .expect("mask edits should deserialize");
+        let Command::Edit { ops, .. } = command else {
+            panic!("expected an edit command");
+        };
+        let [EditOp::MaskAdd { name, outline, .. }, EditOp::MaskSet {
+            outline: set,
+            params,
+            ..
+        }, EditOp::MaskRemove { .. }] = ops.as_slice()
+        else {
+            panic!("expected mask edits, got {ops:?}");
+        };
+        assert_eq!(name.as_deref(), Some("k1"));
+        assert_eq!(outline.rect, Some([0.25, 0.25, 0.75, 0.75]));
+        assert_eq!(set.points.as_ref().map(Vec::len), Some(3));
+        assert_eq!(params.get("feather"), Some(&serde_json::Value::Null));
     }
 
     #[test]

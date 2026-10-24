@@ -9,8 +9,8 @@ use kerf_engine::ProbeInfo;
 use kerf_lang::{apply_script, parse_document, print_document, print_ops, PrintOptions};
 use kerf_model::{
     apply, AudioInfo, Catalog, ClipChange, Content, Diagnostic, Edge, Effect, FxDef, Id,
-    MarkerColor, Media, NewClip, Op, Param, ParamType, Project, Rate, Ratio, Rejected, Sequence,
-    SequenceChange, Time, TrackChange, TrackKind, Value, VideoInfo,
+    MarkerColor, Mask, MaskMode, MaskShape, Media, NewClip, Op, Param, ParamType, Project, Rate,
+    Ratio, Rejected, Sequence, SequenceChange, Time, TrackChange, TrackKind, Value, VideoInfo,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
@@ -425,6 +425,42 @@ pub enum EditOp {
         clip: String,
         index: usize,
     },
+    /// Add a mask to a picture clip, after its others or at `index`. Its
+    /// name is the first of `k1`, `k2`, … the clip does not use unless
+    /// `name` gives one; `params` sets feather, opacity, and expansion.
+    MaskAdd {
+        clip: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(flatten)]
+        outline: MaskOutline,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        inverted: Option<bool>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        params: BTreeMap<String, Json>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<usize>,
+    },
+    /// Replace a mask's outline, or change its mode, inversion, or
+    /// properties; `null` restores a property's default.
+    MaskSet {
+        clip: String,
+        name: String,
+        #[serde(flatten)]
+        outline: MaskOutline,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        inverted: Option<bool>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        params: BTreeMap<String, Json>,
+    },
+    MaskRemove {
+        clip: String,
+        name: String,
+    },
     Insert {
         media: String,
         source_in: i64,
@@ -500,6 +536,89 @@ pub enum EditOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sequence: Option<String>,
     },
+}
+
+/// A mask's outline, as the language writes it: at most one of `rect`
+/// (left, top, right, bottom), `ellipse` (center x and y, then the radius
+/// across and down), or `points` (corners in order, closed unless `closed`
+/// is false), in fractions of the clip's picture with 0, 0 at its top left.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MaskOutline {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rect: Option<[f64; 4]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ellipse: Option<[f64; 4]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub points: Option<Vec<[f64; 2]>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed: Option<bool>,
+}
+
+impl MaskOutline {
+    /// The outline it gives, or `None` when it gives none.
+    fn shape(&self) -> Result<Option<MaskShape>, RuntimeError> {
+        let given = [
+            self.rect.is_some(),
+            self.ellipse.is_some(),
+            self.points.is_some(),
+        ];
+        if given.into_iter().filter(|given| *given).count() > 1 {
+            return Err(invalid("a mask has one outline: rect, ellipse, or points"));
+        }
+        if self.closed.is_some() && self.points.is_none() {
+            return Err(invalid("`closed` goes with `points`"));
+        }
+        Ok(match (self.rect, self.ellipse, &self.points) {
+            (Some(rect), _, _) => Some(MaskShape::Rect(rect)),
+            (_, Some(ellipse), _) => Some(MaskShape::Ellipse(ellipse)),
+            (_, _, Some(points)) => Some(MaskShape::Polygon {
+                points: points.clone(),
+                closed: self.closed.unwrap_or(true),
+            }),
+            _ => None,
+        })
+    }
+}
+
+fn mask_mode(mode: &Option<String>) -> Result<Option<MaskMode>, RuntimeError> {
+    mode.as_deref()
+        .map(|mode| {
+            MaskMode::parse(mode).ok_or_else(|| invalid(format!("`{mode}` is not a mask mode")))
+        })
+        .transpose()
+}
+
+/// A mask's properties from JSON, as `fx_params` reads an effect's.
+fn mask_params(
+    params: &BTreeMap<String, Json>,
+) -> Result<Vec<(String, Option<Param>)>, RuntimeError> {
+    params
+        .iter()
+        .map(|(name, value)| {
+            let def = catalog()
+                .mask_prop(name)
+                .ok_or_else(|| invalid(format!("a mask has no property `{name}`")))?;
+            let value = match value {
+                Json::Null => None,
+                value => Some(Param::Static(json_value(&def.ty, value).ok_or_else(
+                    || invalid(format!("`{name}` expects a {}", def.ty.name())),
+                )?)),
+            };
+            Ok((name.clone(), value))
+        })
+        .collect()
+}
+
+/// The first of `k1`, `k2`, … that none of the clip's masks is named.
+fn new_mask_name(project: &Project, clip: &str) -> Result<Id, RuntimeError> {
+    let target = project
+        .clip(clip)
+        .ok_or_else(|| invalid(format!("no clip `{clip}`")))?;
+    let name = (1..)
+        .map(|n| format!("k{n}"))
+        .find(|name| target.mask(name).is_none())
+        .expect("a free mask name");
+    edit_id(&name)
 }
 
 fn invalid(message: impl Into<String>) -> RuntimeError {
@@ -685,6 +804,57 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
         EditOp::FxRemove { clip, index } => Op::FxRemove {
             clip: edit_id(clip)?,
             index: *index,
+        },
+        // Outlines and values are checked with the rest of the project.
+        EditOp::MaskAdd {
+            clip,
+            name,
+            outline,
+            mode,
+            inverted,
+            params,
+            index,
+        } => {
+            let name = match name {
+                Some(name) => edit_id(name)?,
+                None => new_mask_name(project, clip)?,
+            };
+            let shape = outline
+                .shape()?
+                .ok_or_else(|| invalid("a mask needs rect, ellipse, or points"))?;
+            Op::MaskAdd {
+                clip: edit_id(clip)?,
+                mask: Mask {
+                    name,
+                    shape,
+                    mode: mask_mode(mode)?.unwrap_or_default(),
+                    inverted: inverted.unwrap_or(false),
+                    params: mask_params(params)?
+                        .into_iter()
+                        .filter_map(|(name, param)| param.map(|param| (name, param)))
+                        .collect(),
+                },
+                index: *index,
+            }
+        }
+        EditOp::MaskSet {
+            clip,
+            name,
+            outline,
+            mode,
+            inverted,
+            params,
+        } => Op::MaskSet {
+            clip: edit_id(clip)?,
+            name: edit_id(name)?,
+            shape: outline.shape()?,
+            mode: mask_mode(mode)?,
+            inverted: *inverted,
+            params: mask_params(params)?,
+        },
+        EditOp::MaskRemove { clip, name } => Op::MaskRemove {
+            clip: edit_id(clip)?,
+            name: edit_id(name)?,
         },
         EditOp::Insert {
             media,

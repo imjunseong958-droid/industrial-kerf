@@ -62,6 +62,25 @@ EffectControlsPanel::EffectControlsPanel(QWidget *parent) : QWidget(parent) {
     m_propertyForm->setContentsMargins(0, 0, 0, 0);
     m_propertyForm->setSpacing(6);
     layout->addWidget(properties);
+    // Masks: the tools that draw one on the Program monitor, then each mask
+    // with its mode, inversion, and properties.
+    m_masksSection = new QWidget;
+    m_masksSection->setObjectName(QStringLiteral("inspectorMasks"));
+    auto *masksLayout = new QVBoxLayout(m_masksSection);
+    masksLayout->setContentsMargins(0, 6, 0, 0);
+    masksLayout->setSpacing(6);
+    m_maskHeader = new QHBoxLayout;
+    m_maskHeader->setSpacing(2);
+    m_maskHeader->addWidget(new QLabel(tr("Masks")), 1);
+    masksLayout->addLayout(m_maskHeader);
+    m_masksHint = new QLabel(tr("Choose a mask tool, then draw on the Program monitor."));
+    m_masksHint->setObjectName(QStringLiteral("muted"));
+    m_masksHint->setWordWrap(true);
+    masksLayout->addWidget(m_masksHint);
+    m_masksLayout = new QVBoxLayout;
+    m_masksLayout->setSpacing(8);
+    masksLayout->addLayout(m_masksLayout);
+    layout->addWidget(m_masksSection);
     auto *effects = new QWidget;
     effects->setObjectName(QStringLiteral("inspectorEffects"));
     m_effectsLayout = new QVBoxLayout(effects);
@@ -121,6 +140,7 @@ void EffectControlsPanel::setClip(const QString &id, const QJsonObject &clip, co
                                  : prop.isUndefined() ? def.toObject().value(QStringLiteral("default")) : prop);
         editor->setEnabled(!prop.isArray());
     }
+    showMasks();
     showEffects();
     m_updating = false;
 }
@@ -146,9 +166,155 @@ void EffectControlsPanel::setSoundTracks(const QStringList &tracks) {
     m_effectsShown.clear();
 }
 
+void EffectControlsPanel::setMaskTools(const QList<QAction *> &tools) {
+    for (QAction *tool : tools) {
+        auto *button = new QToolButton;
+        button->setObjectName(QStringLiteral("maskTool"));
+        button->setDefaultAction(tool);
+        button->setAutoRaise(true);
+        m_maskHeader->addWidget(button);
+    }
+}
+
+void EffectControlsPanel::setMaskCatalog(const QJsonArray &defs, const QStringList &modes) {
+    if (defs == m_maskDefs && modes == m_maskModes) return;
+    m_maskDefs = defs;
+    m_maskModes = modes;
+    m_masksShown.clear();
+}
+
+void EffectControlsPanel::setMaskable(bool maskable) {
+    m_maskable = maskable;
+}
+
+void EffectControlsPanel::selectMask(const QString &name) {
+    m_selectedMask = name;
+    for (auto *button : m_masksSection->findChildren<QToolButton *>(QStringLiteral("maskName"))) {
+        const QSignalBlocker blocker(button);
+        button->setChecked(button->text() == name);
+    }
+}
+
+void EffectControlsPanel::showMasks() {
+    const QJsonArray masks = m_clip.value(QStringLiteral("masks")).toArray();
+    QStringList names;
+    for (const QJsonValue &mask : masks) names << mask.toObject().value(QStringLiteral("name")).toString();
+    m_maskNames = names;
+    m_masksSection->setVisible(!m_clipId.isEmpty() && m_maskable);
+    m_masksHint->setVisible(masks.isEmpty());
+    if (!names.contains(m_selectedMask)) m_selectedMask.clear();
+    const QString shown = m_clipId + QLatin1Char('|') + names.join(QLatin1Char(','));
+    if (shown != m_masksShown) {
+        m_masksShown = shown;
+        while (QLayoutItem *item = m_masksLayout->takeAt(0)) {
+            delete item->widget();
+            delete item;
+        }
+        for (const QString &name : names) {
+            auto *box = new QWidget;
+            box->setObjectName(QStringLiteral("maskBox"));
+            auto *boxLayout = new QVBoxLayout(box);
+            boxLayout->setContentsMargins(0, 0, 0, 0);
+            boxLayout->setSpacing(4);
+            auto *header = new QHBoxLayout;
+            auto *select = new QToolButton;
+            select->setObjectName(QStringLiteral("maskName"));
+            select->setText(name);
+            select->setCheckable(true);
+            select->setAutoRaise(true);
+            select->setToolTip(tr("Show this mask's handles on the Program monitor"));
+            connect(select, &QToolButton::clicked, this, [this, name] {
+                selectMask(name);
+                emit maskSelected(name);
+            });
+            auto *remove = new QToolButton;
+            remove->setObjectName(QStringLiteral("maskRemove"));
+            remove->setText(QStringLiteral("✕"));
+            remove->setToolTip(tr("Remove this mask"));
+            connect(remove, &QToolButton::clicked, this, [this, name] {
+                if (m_clipId.isEmpty()) return;
+                edit(QJsonObject{{QStringLiteral("op"), QStringLiteral("mask-remove")}, {QStringLiteral("clip"), m_clipId},
+                                 {QStringLiteral("name"), name}});
+            });
+            header->addWidget(select);
+            header->addStretch(1);
+            header->addWidget(remove);
+            boxLayout->addLayout(header);
+            auto *form = new QFormLayout;
+            form->setSpacing(4);
+            auto *mode = new QComboBox;
+            mode->setObjectName(QStringLiteral("maskMode"));
+            mode->addItems(m_maskModes);
+            mode->setToolTip(tr("How the mask combines with the ones above it; none leaves a path for effects"));
+            connect(mode, &QComboBox::activated, this, [this, name, mode] {
+                maskEdited(name, QJsonObject{{QStringLiteral("mode"), mode->currentText()}});
+            });
+            form->addRow(tr("Mode"), mode);
+            auto *inverted = new QCheckBox;
+            inverted->setObjectName(QStringLiteral("maskInverted"));
+            connect(inverted, &QCheckBox::clicked, this, [this, name](bool on) {
+                maskEdited(name, QJsonObject{{QStringLiteral("inverted"), on}});
+            });
+            form->addRow(tr("Inverted"), inverted);
+            for (const QJsonValue &defValue : m_maskDefs) {
+                const QJsonObject def = defValue.toObject();
+                const QString param = def.value(QStringLiteral("name")).toString();
+                const QJsonValue fallback = def.value(QStringLiteral("default"));
+                QWidget *editor = valueEditor(def, param, [this, name, param, fallback](const QJsonValue &value) {
+                    const bool isDefault = value.isDouble() && fallback.isDouble()
+                                               ? std::abs(value.toDouble() - fallback.toDouble()) < 5e-4
+                                               : value == fallback;
+                    maskEdited(name, QJsonObject{{QStringLiteral("params"),
+                                                  QJsonObject{{param, isDefault ? QJsonValue() : value}}}});
+                });
+                editor->setObjectName(QStringLiteral("maskParam_") + param);
+                form->addRow(param, editor);
+            }
+            boxLayout->addLayout(form);
+            m_masksLayout->addWidget(box);
+        }
+    }
+    // The values, refreshed in place so a field being edited keeps focus.
+    for (int index = 0; index < masks.size(); ++index) {
+        const QJsonObject mask = masks.at(index).toObject();
+        QWidget *box = m_masksLayout->itemAt(index) ? m_masksLayout->itemAt(index)->widget() : nullptr;
+        if (!box) continue;
+        if (auto *select = box->findChild<QToolButton *>(QStringLiteral("maskName"))) {
+            const QSignalBlocker blocker(select);
+            select->setChecked(names.at(index) == m_selectedMask);
+        }
+        if (auto *mode = box->findChild<QComboBox *>(QStringLiteral("maskMode")))
+            setPropertyValue(mode, mask.value(QStringLiteral("mode")).toString(QStringLiteral("add")));
+        if (auto *inverted = box->findChild<QCheckBox *>(QStringLiteral("maskInverted")))
+            setPropertyValue(inverted, mask.value(QStringLiteral("inverted")).toBool());
+        const QJsonObject params = mask.value(QStringLiteral("params")).toObject();
+        for (const QJsonValue &defValue : m_maskDefs) {
+            const QJsonObject def = defValue.toObject();
+            const QString param = def.value(QStringLiteral("name")).toString();
+            QWidget *editor = box->findChild<QWidget *>(QStringLiteral("maskParam_") + param);
+            if (!editor) continue;
+            const QJsonValue value = params.value(param);
+            setPropertyValue(editor, value.isArray() ? value.toArray().first().toObject().value(QStringLiteral("value"))
+                                     : value.isUndefined() ? def.value(QStringLiteral("default")) : value);
+            editor->setEnabled(!value.isArray());
+        }
+    }
+}
+
+void EffectControlsPanel::maskEdited(const QString &name, const QJsonObject &change) {
+    if (m_clipId.isEmpty() || m_updating) return;
+    QJsonObject op = change;
+    op.insert(QStringLiteral("op"), QStringLiteral("mask-set"));
+    op.insert(QStringLiteral("clip"), m_clipId);
+    op.insert(QStringLiteral("name"), name);
+    edit(op);
+}
+
 void EffectControlsPanel::showEffects() {
     const QJsonArray effects = m_clip.value(QStringLiteral("effects")).toArray();
-    QStringList stack{m_clipId};
+    // Mask parameters list the clip's masks, so new or removed masks
+    // rebuild them.
+    QStringList stack{m_clipId, m_maskNames.join(QLatin1Char(','))};
     for (const QJsonValue &effect : effects) stack << effect.toObject().value(QStringLiteral("fx")).toString();
     const QString shown = stack.join(QLatin1Char('|'));
     if (shown == m_effectsShown) {
@@ -330,12 +496,13 @@ QWidget *EffectControlsPanel::valueEditor(const QJsonObject &def, const QString 
             if (color.isValid()) edited(modelColorName(color));
         });
         editor = button;
-    } else if (type == QStringLiteral("track") || type == QStringLiteral("sound")) {
-        // Another picture track, or a sound track, or none (the empty first
-        // entry).
+    } else if (type == QStringLiteral("track") || type == QStringLiteral("sound") || type == QStringLiteral("mask")) {
+        // Another picture track, a sound track, or one of the clip's masks,
+        // or none (the empty first entry).
         auto *combo = new QComboBox;
         combo->addItem(QString());
-        combo->addItems(type == QStringLiteral("track") ? m_pictureTracks : m_soundTracks);
+        combo->addItems(type == QStringLiteral("track") ? m_pictureTracks
+                        : type == QStringLiteral("sound") ? m_soundTracks : m_maskNames);
         connect(combo, &QComboBox::activated, this, [combo, edited] { edited(combo->currentText()); });
         editor = combo;
     } else if (type == QStringLiteral("file")) {

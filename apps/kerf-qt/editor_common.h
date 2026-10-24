@@ -4,7 +4,9 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPixmap>
+#include <QTransform>
 #include <QWidget>
 
 namespace kerf {
@@ -94,5 +96,28 @@ enum class TransportGlyph { Start, PreviousFrame, Play, Pause, NextFrame, End };
 
 // Transport symbols drawn on a 16-point grid so they share weight and size.
 QIcon transportIcon(TransportGlyph glyph);
+
+// What a drag or click on the Program monitor draws: nothing, or a new mask
+// on the selected picture clip.
+enum class MaskTool { None, Rectangle, Ellipse, Pen };
+
+// Mask tool symbols on the transport icons' grid.
+QIcon maskToolIcon(MaskTool tool);
+
+// A clip property at `clipTime` seconds into the clip: its static value,
+// its keyframes' value there (linear between keys), or `fallback`.
+double propertyAt(const QJsonObject &props, const QString &name, double clipTime, double fallback);
+
+// Where a clip's picture lands on the canvas, as the compositor places it:
+// fitted to the canvas when `fit` (media and nested sequences), cropped,
+// scaled, rotated about its anchor, and moved. It maps fractions of the
+// `picture`-pixel picture (0, 0 its top left, 1, 1 its bottom right), the
+// space masks are drawn in, to canvas pixels.
+QTransform picturePlacement(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas,
+                            double clipTime);
+
+// A snapshot mask's outline, in fractions of the clip's picture; open
+// paths are not closed.
+QPainterPath maskPath(const QJsonObject &mask);
 
 } // namespace kerf
