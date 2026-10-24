@@ -595,6 +595,9 @@ impl<'a> Graph<'a> {
         window: Time,
     ) -> Result<Option<Layer>> {
         let clip = item.clip;
+        if !clip.masks.is_empty() {
+            return Err(ProgramError::unsupported(&clip.id, "masks"));
+        }
         let (width, height) = canvas(sequence);
         let length = portion.hi - portion.decode;
         let mut filters = Vec::new();

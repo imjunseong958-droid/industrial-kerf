@@ -18,6 +18,9 @@ pub enum ParamType {
     /// A path to a file with one of these extensions, held as text. A
     /// relative path is relative to the project (see `Project::resolve_paths`).
     File(Vec<String>),
+    /// One of the clip's masks, by name, held as text; empty for none.
+    /// Effects read its outline, as a stroke or a fill does.
+    Mask,
     /// A picture track of the clip's sequence, by id, held as text; empty
     /// for none. Effects read its picture, as After Effects' layer
     /// parameters read another layer.
@@ -34,6 +37,7 @@ impl ParamType {
             Self::Text => "text",
             Self::File(_) => "file",
             Self::Track => "track",
+            Self::Mask => "mask",
             Self::Color => "color",
             Self::Enum(_) => "enum",
         }
@@ -67,6 +71,10 @@ impl ParamDef {
 
     pub fn track(name: &str) -> Self {
         Self::new(name, ParamType::Track, Value::Text(String::new()), false)
+    }
+
+    pub fn mask(name: &str) -> Self {
+        Self::new(name, ParamType::Mask, Value::Text(String::new()), false)
     }
 
     pub fn file(name: &str, extensions: &[&str]) -> Self {
@@ -152,7 +160,10 @@ impl ParamDef {
                 }
             }
             (ParamType::Bool, Value::Bool(_))
-            | (ParamType::Text | ParamType::File(_) | ParamType::Track, Value::Text(_))
+            | (
+                ParamType::Text | ParamType::File(_) | ParamType::Track | ParamType::Mask,
+                Value::Text(_),
+            )
             | (ParamType::Color, Value::Color(_)) => Ok(()),
             _ => Err(format!("`{}` expects a {}", self.name, self.ty.name())),
         }
@@ -278,6 +289,7 @@ pub struct Catalog {
     fx: BTreeMap<Id, FxDef>,
     video_props: Vec<ParamDef>,
     audio_props: Vec<ParamDef>,
+    mask_props: Vec<ParamDef>,
 }
 
 impl Catalog {
@@ -286,6 +298,7 @@ impl Catalog {
             fx: BTreeMap::new(),
             video_props,
             audio_props,
+            mask_props: mask_props(),
         }
     }
 
@@ -330,11 +343,36 @@ impl Catalog {
         self.props(domain).iter().find(|param| param.name == name)
     }
 
+    /// A mask's properties besides its outline and mode.
+    pub fn mask_props(&self) -> &[ParamDef] {
+        &self.mask_props
+    }
+
+    pub fn mask_prop(&self, name: &str) -> Option<&ParamDef> {
+        self.mask_props.iter().find(|param| param.name == name)
+    }
+
     /// The built-in catalog.
     pub fn builtin() -> &'static Self {
         static BUILTIN: OnceLock<Catalog> = OnceLock::new();
         BUILTIN.get_or_init(builtin_catalog)
     }
+}
+
+fn mask_props() -> Vec<ParamDef> {
+    vec![
+        ParamDef::number("feather", 0.0)
+            .range(0.0, 10_000.0)
+            .unit("pixels")
+            .doc("How far the edge softens, in picture pixels."),
+        ParamDef::number("opacity", 1.0)
+            .range(0.0, 1.0)
+            .doc("How much the mask counts, 0 to 1."),
+        ParamDef::number("expansion", 0.0)
+            .range(-10_000.0, 10_000.0)
+            .unit("pixels")
+            .doc("Grows (or, negative, shrinks) the outline, in picture pixels."),
+    ]
 }
 
 fn builtin_catalog() -> Catalog {
@@ -576,6 +614,7 @@ fn raster_definitions(text: &str) -> Vec<FxDef> {
             "bool" => ParamDef::toggle(name, default == "true"),
             "text" => ParamDef::text(name, default),
             "track" => ParamDef::track(name),
+            "mask" => ParamDef::mask(name),
             "file" => {
                 let mut param = ParamDef::file(name, &constraint.split('|').collect::<Vec<_>>());
                 param.default = Value::Text(default.to_owned());

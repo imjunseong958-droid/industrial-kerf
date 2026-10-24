@@ -1097,6 +1097,14 @@ effect	generate.eyedropperfill	Generate	Eyedropper Fill	Fills with a color sampl
 	enum	averagePixelColors	skip-empty	skip-empty|all|all-premultiplied|including-alpha		Average Pixel Colors
 	bool	maintainOriginalAlpha	false			Maintain Original Alpha
 	number	blendWithOriginal	0	0..100		Blend With Original
+effect	generate.fill	Generate	Fill	Fills one of the clip's masks with a color (fillMask=k1); shapes, highlights, and flat graphic panels.
+	mask	fillMask				Fill Mask
+	bool	allMasks	false			All Masks
+	color	color	#ff0000			Color
+	bool	invert	false			Invert
+	number	horizontalFeather	0	0..5000		Horizontal Feather
+	number	verticalFeather	0	0..5000		Vertical Feather
+	number	opacity	100	0..100		Opacity
 effect	generate.fractal	Generate	Fractal	Fractal patterns; psychedelic backgrounds.
 	enum	setChoice	mandelbrot	mandelbrot|mandelbrot-inverse|mandelbrot-over-julia|mandelbrot-inverse-over-julia|julia|julia-inverse		Set Choice
 	enum	equation	z-z-2-c	z-z-2-c|z-z-3-c|z-z-4-c		Equation
@@ -1163,6 +1171,105 @@ effect	generate.paintbucket	Generate	Paint Bucket	Fills a region from a point; r
 	color	color	#ff0000			Color
 	number	opacity	100	0..100		Opacity
 	enum	blendingMode	normal	normal|add|multiply|screen|hue|saturation|color|luminosity|behind|fill-only		Blending Mode
+effect	generate.radiowaves	Generate	Radio Waves	Rings ripple out from a point or a mask's outline (waveMask/mask=k1); sonar, signal, and pulse graphics.
+	number	producerPoint_x	0.5		picture widths	Producer Point (0 left, 1 right)
+	number	producerPoint_y	0.5		picture heights	Producer Point (0 top, 1 bottom)
+	enum	parametersAreSetAt	each-frame	birth|each-frame		Parameters Are Set At
+	number	renderQuality	4	1..10		Render Quality
+	enum	waveType	polygon	polygon|image-contours|mask		Wave Type
+	number	polygon/sides	64	3..64		Sides
+	bool	polygon/star	false			Star
+	number	polygon/starDepth	-0.3	-1..1		Star Depth
+	track	imageContour/sourceLayer				Source Layer
+	number	imageContour/sourceCenter_x	0.5		picture widths	Source Center (0 left, 1 right)
+	number	imageContour/sourceCenter_y	0.5		picture heights	Source Center (0 top, 1 bottom)
+	enum	imageContour/valueChannel	luminance	red|green|blue|alpha|luminance|hue|lightness|saturation		Value Channel
+	bool	imageContour/invertInput	false			Invert Input
+	number	imageContour/valueThreshold	128	0..255		Value Threshold
+	number	imageContour/preBlur	1	0..100		Pre-Blur
+	number	imageContour/tolerance	1	0..100		Tolerance
+	number	imageContour/contour	0	0..100		Contour
+	mask	waveMask/mask				Mask
+	number	waveMotion/frequency	1	0.01..100		Frequency
+	number	waveMotion/expansion	100	0..10000		Expansion
+	number	waveMotion/orientation	0		degrees	Orientation
+	number	waveMotion/direction	90		degrees	Direction
+	number	waveMotion/velocity	0	0..10000		Velocity
+	number	waveMotion/spin	0	-3600..3600		Spin
+	number	waveMotion/lifespan	2	0.01..100		Lifespan (sec)
+	bool	waveMotion/reflection	false			Reflection
+	enum	waveStroke/profile	square	square|taper-front|taper-back|taper-both|sine|sawtooth-out|sawtooth-in		Profile
+	color	waveStroke/color	#ffffff			Color
+	number	waveStroke/opacity	100	0..100		Opacity
+	number	waveStroke/fadeInTime	0	0..100		Fade-in Time
+	number	waveStroke/fadeOutTime	0	0..100		Fade-out Time
+	number	waveStroke/startWidth	5	0..1000		Start Width
+	number	waveStroke/endWidth	5	0..1000		End Width
+effect	generate.scribble	Generate	Scribble	Scribbles inside or along a mask (mask=k1), drawing on over time; hand-drawn fills and highlights.
+	enum	scribble	single-mask	single-mask|all-masks|all-masks-using-modes		Scribble
+	mask	mask				Mask
+	enum	fillType	inside	inside|centered-edge|inside-edge|outside-edge|left-edge|right-edge		Fill Type
+	number	edgeOptions/edgeWidth	10	0..1000		Edge Width
+	enum	edgeOptions/endCap	round	round|butt|projecting		End Cap
+	enum	edgeOptions/join	round	round|miter|bevel		Join
+	number	edgeOptions/miterLimit	4	1..100		Miter Limit
+	color	color	#ff0000			Color
+	number	opacity	100	0..100		Opacity
+	number	angle	45		degrees	Angle
+	number	strokeWidth	2	0.1..50		Stroke Width
+	number	strokeOptions/curviness	50	0..100		Curviness
+	number	strokeOptions/curvinessVariation	50	0..100		Curviness Variation
+	number	strokeOptions/spacing	5	0.1..100		Spacing
+	number	strokeOptions/spacingVariation	50	0..100		Spacing Variation
+	number	strokeOptions/pathOverlap	0	-100..100		Path Overlap
+	number	strokeOptions/pathOverlapVariation	50	0..100		Path Overlap Variation
+	number	start	0	0..100		Start
+	number	end	100	0..100		End
+	enum	startEndApplyTo	all-strokes	all-strokes|each-stroke		Start/End Apply To
+	bool	fillPathsSequentially	true			Fill Paths Sequentially
+	enum	wiggleType	jumpy	static|jumpy|smooth		Wiggle Type
+	number	wigglesPerSecond	5	0..100		Wiggles/Second
+	number	randomSeed	1	0..10000		Random Seed
+	enum	composite	on-transparent	on-original-image|on-transparent|reveal-original-image		Composite
+effect	generate.stroke	Generate	Stroke	Paints along a mask's outline, which can draw on from start to end (path=k1); outlines, circled details, and write-on lines.
+	mask	path				Path
+	bool	allMasks	false			All Masks
+	bool	strokeSequentially	true			Stroke Sequentially
+	color	color	#ffffff			Color
+	number	brushSize	2	0..50		Brush Size
+	number	brushHardness	75	0..100		Brush Hardness
+	number	opacity	100	0..100		Opacity
+	number	start	0	0..100		Start
+	number	end	100	0..100		End
+	number	spacing	15	0..100		Spacing
+	enum	paintStyle	on-original-image	on-original-image|on-transparent|reveal-original-image		Paint Style
+effect	generate.vegas	Generate	Vegas	Light runs along a mask's outline (path=k1) or another track's contours; neon chases and marquee lights.
+	enum	stroke	image-contours	image-contours|mask-path		Stroke
+	track	inputLayer				Image Contours: Input Layer
+	bool	invertInput	false			Image Contours: Invert Input
+	enum	ifLayerSizesDiffer	center	center|stretch-to-fit		Image Contours: If Layer Sizes Differ
+	enum	channel	intensity	intensity|red|green|blue|alpha		Image Contours: Channel
+	number	threshold	50	0..100		Image Contours: Threshold
+	number	preBlur	1	0..100		Image Contours: Pre-Blur
+	number	tolerance	0.01	0..1		Image Contours: Tolerance
+	enum	renderMode	all-contours	all-contours|selected-contour		Image Contours: Render
+	number	selectedContour	1	1..1000		Image Contours: Selected Contour
+	enum	shorterContoursHave	same-number-of-segments	same-number-of-segments|fewer-segments		Image Contours: Shorter Contours Have
+	mask	path				Mask/Path: Path
+	number	segments	32	1..1000		Segments: Segments
+	number	length	0.5	0..1		Segments: Length
+	enum	segmentDistribution	bunched	bunched|even		Segments: Segment Distribution
+	number	rotation	0		degrees	Segments: Rotation
+	bool	randomPhase	false			Segments: Random Phase
+	number	randomSeed	1	1..10000		Segments: Random Seed
+	enum	blendMode	over	transparent|over|under|stencil		Rendering: Blend Mode
+	color	color	#ffffff			Rendering: Color
+	number	width	2	0..100		Rendering: Width
+	number	hardness	0.5	0..1		Rendering: Hardness
+	number	startOpacity	1	0..1		Rendering: Start Opacity
+	number	midpointOpacity	0.5	0..1		Rendering: Mid-point Opacity
+	number	midpointPosition	0.5	0..1		Rendering: Mid-point Position
+	number	endOpacity	0	0..1		Rendering: End Opacity
 effect	generate.writeon	Generate	Write-on	Draws a stroke like handwriting as its point moves; underlines and doodles.
 	number	brushPosition_x	0.5		picture widths	Brush Position (0 left, 1 right)
 	number	brushPosition_y	0.5		picture heights	Brush Position (0 top, 1 bottom)
@@ -2168,6 +2275,101 @@ effect	sim.foam	Simulation	Foam	Bubbles that float and flow, textured or steered
 	enum	flowMap/flowMapFits	background	background|universe		Flow Map Fits
 	enum	flowMap/simulationQuality	normal	normal|high|intense		Simulation Quality
 	number	randomSeed	1	0..10000		Random Seed
+effect	sim.particleplayground	Simulation	Particle Playground	Fires particles from a cannon, grid, or exploding picture, walled in by a mask (wall/wallBoundary=k1); confetti, sparks, and dissolving pictures.
+	text	options/cannonText				Cannon Text
+	text	options/gridText				Grid Text
+	bool	options/autoOrientRotation	false			Auto-Orient Rotation
+	number	cannon/cannonPosition_x	0.5		picture widths	Position (0 left, 1 right)
+	number	cannon/cannonPosition_y	0.9		picture heights	Position (0 top, 1 bottom)
+	number	cannon/barrelRadius	0	-1000..1000		Barrel Radius
+	number	cannon/particlesPerSecond	60	0..5000		Particles Per Second
+	number	cannon/barrelAngle	0		degrees	Direction
+	number	cannon/directionRandomSpread	20	0..3600		Direction Random Spread
+	number	cannon/velocity	130	0..10000		Velocity
+	number	cannon/velocityRandomSpread	20	0..5000		Velocity Random Spread
+	color	cannon/cannonColor	#ff0000			Color
+	number	cannon/cannonParticleRadius	2	0..500		Particle Radius
+	number	grid/gridPosition_x	0.5		picture widths	Position (0 left, 1 right)
+	number	grid/gridPosition_y	0.5		picture heights	Position (0 top, 1 bottom)
+	number	grid/gridWidth	100	0..20000		Width
+	number	grid/gridHeight	100	0..20000		Height
+	number	grid/particlesAcross	0	0..1000		Particles Across
+	number	grid/particlesDown	0	0..1000		Particles Down
+	color	grid/gridColor	#ffffff			Color
+	number	grid/gridParticleRadius	2	0..500		Particle Radius
+	track	layerExploder/explodeLayer				Explode Layer
+	number	layerExploder/radiusOfNewParticles	2	0..500		Radius of New Particles
+	number	layerExploder/velocityDispersion	20	0..5000		Velocity Dispersion
+	number	particleExploder/radiusOfNewParticles	0	0..500		Radius of New Particles
+	number	particleExploder/velocityDispersion	20	0..5000		Velocity Dispersion
+	enum	particleExploder/affects/particlesFrom	all	all|cannon|grid|layer-exploder|particle-exploder|grid-layer-exploder|cannon-grid|cannon-particle-exploder		Particles From
+	track	particleExploder/affects/selectionMap				Selection Map
+	text	particleExploder/affects/characters				Characters
+	number	particleExploder/affects/olderYoungerThan	0	-1000..1000		Older/Younger than
+	number	particleExploder/affects/ageFeather	0	0..1000		Age Feather
+	track	layerMap/layerMapLayer				Use Layer
+	enum	layerMap/timeOffsetType	relative	relative|absolute|relative-random|absolute-random		Time Offset Type
+	number	layerMap/timeOffset	0	-1000..1000		Time Offset
+	enum	layerMap/affects/particlesFrom	all	all|cannon|grid|layer-exploder|particle-exploder|grid-layer-exploder|cannon-grid|cannon-particle-exploder		Particles From
+	track	layerMap/affects/selectionMap				Selection Map
+	text	layerMap/affects/characters				Characters
+	number	layerMap/affects/olderYoungerThan	0	-1000..1000		Older/Younger than
+	number	layerMap/affects/ageFeather	0	0..1000		Age Feather
+	number	gravity/gravityForce	108	0..10000		Force
+	number	gravity/gravityForceRandomSpread	0	0..1000		Force Random Spread
+	number	gravity/gravityDirection	180		degrees	Direction
+	enum	gravity/affects/particlesFrom	all	all|cannon|grid|layer-exploder|particle-exploder|grid-layer-exploder|cannon-grid|cannon-particle-exploder		Particles From
+	track	gravity/affects/selectionMap				Selection Map
+	text	gravity/affects/characters				Characters
+	number	gravity/affects/olderYoungerThan	0	-1000..1000		Older/Younger than
+	number	gravity/affects/ageFeather	0	0..1000		Age Feather
+	number	repel/repelForce	0	-100..100		Force
+	number	repel/repelForceRadius	0	0..1000		Force Radius
+	enum	repel/affects/particlesFrom	all	all|cannon|grid|layer-exploder|particle-exploder|grid-layer-exploder|cannon-grid|cannon-particle-exploder		Particles From
+	track	repel/affects/selectionMap				Selection Map
+	text	repel/affects/characters				Characters
+	number	repel/affects/olderYoungerThan	0	-1000..1000		Older/Younger than
+	number	repel/affects/ageFeather	0	0..1000		Age Feather
+	mask	wall/wallBoundary				Boundary
+	enum	wall/affects/particlesFrom	all	all|cannon|grid|layer-exploder|particle-exploder|grid-layer-exploder|cannon-grid|cannon-particle-exploder		Particles From
+	track	wall/affects/selectionMap				Selection Map
+	text	wall/affects/characters				Characters
+	number	wall/affects/olderYoungerThan	0	-1000..1000		Older/Younger than
+	number	wall/affects/ageFeather	0	0..1000		Age Feather
+	track	persistentPropertyMapper/useLayerAsMap				Use Layer As Map
+	enum	persistentPropertyMapper/mapRedTo	none	none|red|green|blue|kinetic-friction|static-friction|angle|angular-velocity|torque|scale|x-scale|y-scale|x|y|gradient-velocity|x-speed|y-speed|gradient-force|x-force|y-force|opacity|mass|lifespan|character|font-size|time-offset|scale-speed		Map Red To
+	number	persistentPropertyMapper/redMin	0	-10000..10000		Min
+	number	persistentPropertyMapper/redMax	1	-10000..10000		Max
+	enum	persistentPropertyMapper/mapGreenTo	none	none|red|green|blue|kinetic-friction|static-friction|angle|angular-velocity|torque|scale|x-scale|y-scale|x|y|gradient-velocity|x-speed|y-speed|gradient-force|x-force|y-force|opacity|mass|lifespan|character|font-size|time-offset|scale-speed		Map Green To
+	number	persistentPropertyMapper/greenMin	0	-10000..10000		Min
+	number	persistentPropertyMapper/greenMax	1	-10000..10000		Max
+	enum	persistentPropertyMapper/mapBlueTo	none	none|red|green|blue|kinetic-friction|static-friction|angle|angular-velocity|torque|scale|x-scale|y-scale|x|y|gradient-velocity|x-speed|y-speed|gradient-force|x-force|y-force|opacity|mass|lifespan|character|font-size|time-offset|scale-speed		Map Blue To
+	number	persistentPropertyMapper/blueMin	0	-10000..10000		Min
+	number	persistentPropertyMapper/blueMax	1	-10000..10000		Max
+	enum	persistentPropertyMapper/affects/particlesFrom	all	all|cannon|grid|layer-exploder|particle-exploder|grid-layer-exploder|cannon-grid|cannon-particle-exploder		Particles From
+	track	persistentPropertyMapper/affects/selectionMap				Selection Map
+	text	persistentPropertyMapper/affects/characters				Characters
+	number	persistentPropertyMapper/affects/olderYoungerThan	0	-1000..1000		Older/Younger than
+	number	persistentPropertyMapper/affects/ageFeather	0	0..1000		Age Feather
+	track	ephemeralPropertyMapper/useLayerAsMap				Use Layer As Map
+	enum	ephemeralPropertyMapper/mapRedTo	none	none|red|green|blue|kinetic-friction|static-friction|angle|angular-velocity|torque|scale|x-scale|y-scale|x|y|gradient-velocity|x-speed|y-speed|gradient-force|x-force|y-force|opacity|mass|lifespan|character|font-size|time-offset|scale-speed		Map Red To
+	enum	ephemeralPropertyMapper/redOperator	set	set|add|difference|subtract|multiply|min|max		Operator
+	number	ephemeralPropertyMapper/redMin	0	-10000..10000		Min
+	number	ephemeralPropertyMapper/redMax	1	-10000..10000		Max
+	enum	ephemeralPropertyMapper/mapGreenTo	none	none|red|green|blue|kinetic-friction|static-friction|angle|angular-velocity|torque|scale|x-scale|y-scale|x|y|gradient-velocity|x-speed|y-speed|gradient-force|x-force|y-force|opacity|mass|lifespan|character|font-size|time-offset|scale-speed		Map Green To
+	enum	ephemeralPropertyMapper/greenOperator	set	set|add|difference|subtract|multiply|min|max		Operator
+	number	ephemeralPropertyMapper/greenMin	0	-10000..10000		Min
+	number	ephemeralPropertyMapper/greenMax	1	-10000..10000		Max
+	enum	ephemeralPropertyMapper/mapBlueTo	none	none|red|green|blue|kinetic-friction|static-friction|angle|angular-velocity|torque|scale|x-scale|y-scale|x|y|gradient-velocity|x-speed|y-speed|gradient-force|x-force|y-force|opacity|mass|lifespan|character|font-size|time-offset|scale-speed		Map Blue To
+	enum	ephemeralPropertyMapper/blueOperator	set	set|add|difference|subtract|multiply|min|max		Operator
+	number	ephemeralPropertyMapper/blueMin	0	-10000..10000		Min
+	number	ephemeralPropertyMapper/blueMax	1	-10000..10000		Max
+	enum	ephemeralPropertyMapper/affects/particlesFrom	all	all|cannon|grid|layer-exploder|particle-exploder|grid-layer-exploder|cannon-grid|cannon-particle-exploder		Particles From
+	track	ephemeralPropertyMapper/affects/selectionMap				Selection Map
+	text	ephemeralPropertyMapper/affects/characters				Characters
+	number	ephemeralPropertyMapper/affects/olderYoungerThan	0	-1000..1000		Older/Younger than
+	number	ephemeralPropertyMapper/affects/ageFeather	0	0..1000		Age Feather
+	number	randomSeed	0	0..10000		Random Seed
 effect	sim.shatter	Simulation	Shatter	Breaks the picture into flying pieces, optionally by a gradient track (gradient/gradientLayer=V2); explosions and glass-shatter transitions.
 	enum	view	wireframe-front-view	rendered|wireframe-front-view|wireframe|wireframe-front-view-forces|wireframe-forces		View
 	enum	render	all	all|layer|pieces		Render

@@ -36,6 +36,7 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   track V1 video
     clip c1 media=m1 src=14:22:35:00 at=01:00:00:00 dur=00:00:06:12 link=L1
       set opacity=0.9 scale={0f:1 48f:1.1:ease}
+      mask k1 ellipse=0.5,0.45,0.35,0.4 feather=40
       fx color.basic exposure=0.3
     clip c2 media=m1 src=14:23:02:00 at=01:00:06:12 dur=00:00:03:00
     transition t1 from=c1 to=c2 fx=dissolve dur=00:00:00:12
@@ -57,6 +58,16 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   `gen=` (a generator such as `title`), or `caption=`.
 - `set` holds intrinsic properties (position, scale, crop, opacity, gain, …)
   and generator parameters. `fx` lines are the effect stack, top to bottom.
+- `mask` lines are a picture clip's masks, combined in order. The outline is
+  one of `rect=left,top,right,bottom`, `ellipse=x,y,radius across,radius
+  down`, or `points="x,y x,y …"` (with `closed=false` for an open path), in
+  fractions of the clip's picture, 0,0 at its top left. `mode=` is `add` (the
+  default), `subtract`, `intersect`, `lighten`, `darken`, `difference`, or
+  `none`, which cuts nothing and leaves a path for effects; `inverted=true`
+  flips it. `feather=` and `expansion=` are in picture pixels and `opacity=`
+  runs 0 to 1; all three animate. A crop still applies over the masks.
+  Effects name a mask by its name (`fx generate.stroke path=k1`); names are
+  unique within the clip.
 - Clips sharing a `link=` group, such as a picture and its sound, edit
   together.
 - Printing is deterministic and omits defaults. Printing with annotations
@@ -87,6 +98,7 @@ trim c9 out -6f
 roll c1 +12f
 set c9 opacity={0f:0 12f:1}
 fx c9 add color.basic exposure=0.3
+mask c9 add k1 rect=0.1,0.1,0.9,0.9 feather=20
 transition add from=c1 to=c9 fx=dissolve dur=12f
 ```
 

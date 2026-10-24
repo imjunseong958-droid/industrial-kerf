@@ -51,6 +51,9 @@ speed <clip> <ratio>                    2, 0.5, or -1 for reverse; keeps the sou
 fx <clip> add <effect> [at=<n>] [<param>=<value> …]
 fx <clip> set <n|effect> [enabled=…] [reset=…] [<param>=<value> …]
 fx <clip> remove <n|effect>  ·  fx <clip> move <n|effect> to=<n>
+mask <clip> add <name> rect=L,T,R,B|ellipse=X,Y,RX,RY|points="x,y x,y …" [closed=false] [mode=…] [inverted=true] [feather=<px>] [opacity=<0-1>] [expansion=<px>] [at=<n>]
+                                        a picture clip's mask, in fractions of its picture (0,0 top left)
+mask <clip> set <name> [outline] [mode=…] [inverted=…] [reset=…] [<prop>=<value> …]  ·  mask <clip> remove <name>
 transition add from=<clip> to=<clip> fx=<transition> dur=<dur> [align=center|start|end] [as=<id>] [<param>=<value> …]
 transition set <id> [dur=…] [align=…] [<param>=<value> …]  ·  transition remove <id>
 marker add at=<pos> [dur=<dur>] [name="…"] [color=<color>] [note="…"] [as=<id>]
@@ -63,8 +66,10 @@ media relink <id> path="…"  ·  media remove <id>
 sequence add <id> rate=<fps> size=WxH [name="…"] [start=<tc>]  ·  sequence set|remove <id> …
 ```
 
-Linked clips (a picture and its sound) move, trim, split, slip, and delete
-together. Ripple edits act on every unlocked track so sync holds; lock a
+Masks combine in order by `mode` (add, subtract, intersect, lighten,
+darken, difference); `mode=none` cuts nothing and leaves a path that
+effects such as `generate.stroke path=<name>` read. Linked clips (a picture
+and its sound) move, trim, split, slip, and delete together. Ripple edits act on every unlocked track so sync holds; lock a
 track to leave it out. Edits that would cut through another track's clip are
 refused with the clip named.
 "#;
@@ -134,6 +139,7 @@ fn describe(param: &ParamDef) -> String {
     match &param.ty {
         ParamType::Enum(options) => facts.push(options.join("|")),
         ParamType::Track => facts.push("a picture track of the sequence, such as V2".into()),
+        ParamType::Mask => facts.push("one of the clip's masks, by name".into()),
         ParamType::File(extensions) => facts.push(format!(
             "a file ({}), relative to the project",
             extensions

@@ -182,6 +182,47 @@ overwrite gen=title text="Day One" dur=48f at=01:00:00:00 on=V2 y=0.3
 }
 
 #[test]
+fn masks_are_added_changed_and_removed() {
+    let project = base();
+    let applied = run(
+        &project,
+        r#"
+mask c1 add k1 rect=0.25,0.25,0.75,0.75 feather=4
+mask c1 add ring ellipse=0.5,0.5,0.3,0.2 mode=none at=1
+mask c1 add line points="0,0 1,1" closed=false mode=none
+fx c1 add generate.stroke path=ring
+mask c1 set k1 mode=subtract inverted=true opacity={0f:0 12f:1} reset=feather
+mask c1 remove line
+"#,
+    );
+    let clip = applied.project.clip("c1").unwrap();
+    let names: Vec<&str> = clip.masks.iter().map(|mask| mask.name.as_str()).collect();
+    assert_eq!(names, ["ring", "k1"]);
+    let k1 = clip.mask("k1").unwrap();
+    assert_eq!(k1.mode, kerf_model::MaskMode::Subtract);
+    assert!(k1.inverted && !k1.params.contains_key("feather"));
+    // The journal's script replays the same masks.
+    let printed = print_ops(&project, Catalog::builtin(), &applied.ops);
+    assert_eq!(
+        run(&project, &printed).project,
+        applied.project,
+        "{printed}"
+    );
+    // A mask an effect reads stays; masks belong to pictures.
+    let error = fails(&applied.project, "mask c1 remove ring");
+    assert!(error.message.contains("not a mask of clip"), "{error:?}");
+    let error = fails(&project, "mask a1 add k1 rect=0,0,1,1");
+    assert!(
+        error.message.contains("only pictures carry masks"),
+        "{error:?}"
+    );
+    let error = fails(&project, "mask c1 add k1 rect=0.5,0,0.25,1");
+    assert!(error.message.contains("right past its left"), "{error:?}");
+    let error = fails(&project, "mask c1 add k1 rect=0,0,1,1 points=\"0,0 1,1\"");
+    assert!(error.message.contains("one outline"), "{error:?}");
+}
+
+#[test]
 fn print_op_switches_sequences_explicitly() {
     let two = run(
         &base(),

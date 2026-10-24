@@ -6,7 +6,7 @@
 use crate::catalog::{Catalog, Domain, FxKind, ParamType};
 use crate::diag::Diagnostic;
 use crate::id::Id;
-use crate::model::{Clip, Content, Params, Project, Sequence, Track, TrackKind};
+use crate::model::{Clip, Content, MaskShape, Params, Project, Sequence, Track, TrackKind};
 use crate::time::Time;
 use crate::value::{Param, Value};
 use std::collections::{HashMap, HashSet};
@@ -338,7 +338,102 @@ impl Validator<'_> {
         self.transitions(sequence, track);
     }
 
+    /// A picture clip's masks: unique names, outlines that enclose
+    /// something, and properties from the catalog; and the masks its
+    /// effects (and the transitions out of it) read are its own.
+    fn masks(&mut self, track: &Track, clip: &Clip) {
+        let id = &clip.id;
+        if !clip.masks.is_empty() && track.kind != TrackKind::Video {
+            self.error(
+                "mask.domain",
+                id,
+                format!("clip `{id}`: only pictures carry masks"),
+            );
+        }
+        let mut names = HashSet::new();
+        for mask in &clip.masks {
+            let name = &mask.name;
+            if !names.insert(name.as_str()) {
+                self.error(
+                    "mask.duplicate",
+                    id,
+                    format!("clip `{id}` has two masks named `{name}`"),
+                );
+            }
+            let fine = |values: &[f64]| values.iter().all(|value| value.is_finite());
+            let problem = match &mask.shape {
+                MaskShape::Rect(r) if !fine(r) || r[2] <= r[0] || r[3] <= r[1] => {
+                    Some("a rectangle needs its right past its left and its bottom below its top")
+                }
+                MaskShape::Ellipse(e) if !fine(e) || e[2] <= 0.0 || e[3] <= 0.0 => {
+                    Some("an ellipse needs radii above 0")
+                }
+                MaskShape::Polygon { points, closed }
+                    if !fine(points.as_flattened())
+                        || points.len() < if *closed { 3 } else { 2 } =>
+                {
+                    Some("an outline needs 3 corners, or 2 points when open")
+                }
+                _ => None,
+            };
+            if let Some(problem) = problem {
+                self.error(
+                    "mask.shape",
+                    id,
+                    format!("clip `{id}` mask `{name}`: {problem}"),
+                );
+            }
+            for (key, param) in &mask.params {
+                match self.catalog.mask_prop(key) {
+                    None => self.error(
+                        "param.unknown",
+                        id,
+                        format!("clip `{id}` mask `{name}` has no property `{key}`"),
+                    ),
+                    Some(def) => {
+                        if let Err(message) = def.check(param) {
+                            self.error(
+                                "param.invalid",
+                                id,
+                                format!("clip `{id}` mask `{name}`: {message}"),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        let transitions = track.transitions.iter().filter(|t| t.from == *id);
+        let uses = clip
+            .effects
+            .iter()
+            .map(|effect| (id, &effect.fx, &effect.params))
+            .chain(transitions.map(|t| (&t.id, &t.fx, &t.params)));
+        for (owner, fx, params) in uses.collect::<Vec<_>>() {
+            let Some(def) = self.catalog.fx(fx.as_str()) else {
+                continue;
+            };
+            for (key, param) in params {
+                let named = match (def.find(key), param) {
+                    (Some(param_def), Param::Static(Value::Text(named)))
+                        if param_def.ty == ParamType::Mask && !named.is_empty() =>
+                    {
+                        named
+                    }
+                    _ => continue,
+                };
+                if clip.mask(named).is_none() {
+                    self.error(
+                        "mask.read",
+                        owner,
+                        format!("`{owner}` {fx}: `{key}` names `{named}`, which is not a mask of clip `{id}`"),
+                    );
+                }
+            }
+        }
+    }
+
     fn clip(&mut self, sequence: &Sequence, track: &Track, clip: &Clip) {
+        self.masks(track, clip);
         let id = &clip.id;
         let domain = track.kind.domain();
         match (&clip.content, domain) {

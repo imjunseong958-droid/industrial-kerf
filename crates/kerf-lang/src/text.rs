@@ -193,7 +193,9 @@ fn parse_word_value(text: &str, def: &ParamDef) -> Result<Value, String> {
             "false" => Ok(Value::Bool(false)),
             _ => Err(expected()),
         },
-        ParamType::Text | ParamType::File(_) | ParamType::Track => Ok(Value::Text(text.to_owned())),
+        ParamType::Text | ParamType::File(_) | ParamType::Track | ParamType::Mask => {
+            Ok(Value::Text(text.to_owned()))
+        }
         ParamType::Color => Rgba::parse(text)
             .map(Value::Color)
             .ok_or_else(|| format!("`{}` expects a color like #ff8800, not `{text}`", def.name)),
@@ -208,7 +210,7 @@ pub fn parse_param(atom: &Atom, def: &ParamDef, rate: Rate) -> Result<Param, Str
         Atom::Str(text)
             if matches!(
                 def.ty,
-                ParamType::Text | ParamType::File(_) | ParamType::Track
+                ParamType::Text | ParamType::File(_) | ParamType::Track | ParamType::Mask
             ) =>
         {
             Ok(Param::Static(Value::Text(text.clone())))

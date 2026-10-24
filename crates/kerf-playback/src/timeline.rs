@@ -659,6 +659,9 @@ impl NativeCheck<'_> {
         {
             return Some("effects");
         }
+        if !clip.masks.is_empty() {
+            return Some("masks");
+        }
         match &clip.content {
             Content::Media { media, .. }
                 if self
@@ -873,6 +876,11 @@ mod tests {
             "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx channel.invert\n",
         );
         assert_eq!(preview_plan(&inverted).mode, PreviewMode::NativeExact);
+        // So does a mask.
+        let masked = project(
+            "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      mask k1 rect=0.1,0.1,0.9,0.9\n",
+        );
+        assert_eq!(preview_plan(&masked).mode, PreviewMode::Composited);
         // So does one that reads another track.
         let matted = project(
             "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx channel.setmatte takeMatteFromLayer=V2\n  \

@@ -37,6 +37,7 @@ pub const COMPLETION: &str = "completion";
 /// neighbouring frames, which a clip's own pixels do not give.
 const NEEDS_MORE: &[&str] = &[
     "ec.blur.camerashakedeblur",
+    "ec.distort.liquify",
     "ec.distort.meshwarp",
     "ec.distort.puppet",
     "ec.distort.reshape",
@@ -50,6 +51,9 @@ const NEEDS_MORE: &[&str] = &[
     "ec.color.colorstabilizer",
     "ec.matte.objectmatte",
     "ec.utility.facetrackpoints",
+    // These draw a track's sound, which the compositor does not decode.
+    "ec.generate.audiospectrum",
+    "ec.generate.audiowaveform",
 ];
 
 /// Effects named after other products: Kerf's id and name for each.
@@ -117,6 +121,7 @@ fn writable(ui: &ParamUi) -> bool {
             | ParamUi::Text
             | ParamUi::File { .. }
             | ParamUi::Layer
+            | ParamUi::Mask
             | ParamUi::Hidden
     )
 }
@@ -249,6 +254,9 @@ pub fn catalog_table() -> String {
                     ("color", color(*rgba).to_string(), String::new(), "")
                 }
                 (ParamUi::Text, FxValue::Str(text)) => ("text", text.clone(), String::new(), ""),
+                // A mask is one of the clip's, by name (EffectCraft counts
+                // them from 1, and 0 is none).
+                (ParamUi::Mask, FxValue::Scalar(_)) => ("mask", String::new(), String::new(), ""),
                 // Another layer is a picture track of the sequence.
                 (ParamUi::Layer, FxValue::Layer(None)) => {
                     ("track", String::new(), String::new(), "")
