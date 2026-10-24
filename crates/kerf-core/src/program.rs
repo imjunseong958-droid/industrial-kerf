@@ -24,6 +24,10 @@ use kerf_model::{
 };
 use std::collections::HashMap;
 
+mod sound;
+
+pub use sound::{program_sound, ProgramSound, SoundCut};
+
 /// Output audio sample rate.
 pub const SAMPLE_RATE: u32 = 48_000;
 
@@ -258,19 +262,64 @@ struct Dip {
     to: Time,
 }
 
-/// The decoded part of a shown clip inside a window.
-struct Portion {
+/// The decoded part of a shown clip inside a window, in its sequence's time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Portion {
     /// First decoded timeline time. Material before `lo` is decoded only so
     /// a transition that began before the window fades correctly.
-    decode: Time,
-    lo: Time,
-    hi: Time,
+    pub decode: Time,
+    /// The part shown or heard, `[lo, hi)`.
+    pub lo: Time,
+    pub hi: Time,
 }
 
 impl Portion {
     /// Clip-relative offset of the first decoded frame.
-    fn offset(&self, clip: &Clip) -> Time {
+    pub fn offset(&self, clip: &Clip) -> Time {
         self.decode - clip.start
+    }
+}
+
+impl Shown<'_> {
+    /// The part of the item inside `[from, to)`, kept inside the `length`
+    /// of its media or nested sequence.
+    fn portion(&self, length: Option<Time>, from: Time, to: Time) -> Option<Portion> {
+        let item = self;
+        let mut lo = item.from.max(from);
+        let mut hi = item.to.min(to);
+        // Keep the source inside the media or nested sequence.
+        if let (Some(length), Some((source_in, _))) = (length, item.clip.source_range()) {
+            let speed = item.clip.speed();
+            let clip = item.clip;
+            let (earliest, latest) = if speed.is_reverse() {
+                let out = source_in + speed.source_span(clip.duration);
+                (
+                    clip.start - speed.timeline_span(length - out),
+                    clip.start + speed.timeline_span(out),
+                )
+            } else {
+                (
+                    clip.start - speed.timeline_span(source_in),
+                    clip.start + speed.timeline_span(length - source_in),
+                )
+            };
+            lo = lo.max(earliest);
+            hi = hi.min(latest);
+        }
+        if lo >= hi {
+            return None;
+        }
+        let mut decode = lo;
+        // An outgoing clip fades only in a crossfade.
+        let fade_out = item
+            .fade_out
+            .filter(|(reveal, ..)| matches!(reveal, Reveal::Crossfade { .. }));
+        for (_, start, end) in [item.fade_in, fade_out].into_iter().flatten() {
+            if start < lo && lo < end {
+                decode = decode.min(start.max(item.from));
+            }
+        }
+        Some(Portion { decode, lo, hi })
     }
 }
 
@@ -408,43 +457,7 @@ impl<'a> Graph<'a> {
 
     /// The part of `item` inside `[from, to)`, with its source bounds.
     fn portion(&self, item: &Shown, from: Time, to: Time) -> Option<Portion> {
-        let mut lo = item.from.max(from);
-        let mut hi = item.to.min(to);
-        // Keep the source inside the media or nested sequence.
-        if let (Some(length), Some((source_in, _))) =
-            (self.source_length(item.clip), item.clip.source_range())
-        {
-            let speed = item.clip.speed();
-            let clip = item.clip;
-            let (earliest, latest) = if speed.is_reverse() {
-                let out = source_in + speed.source_span(clip.duration);
-                (
-                    clip.start - speed.timeline_span(length - out),
-                    clip.start + speed.timeline_span(out),
-                )
-            } else {
-                (
-                    clip.start - speed.timeline_span(source_in),
-                    clip.start + speed.timeline_span(length - source_in),
-                )
-            };
-            lo = lo.max(earliest);
-            hi = hi.min(latest);
-        }
-        if lo >= hi {
-            return None;
-        }
-        let mut decode = lo;
-        // An outgoing clip fades only in a crossfade.
-        let fade_out = item
-            .fade_out
-            .filter(|(reveal, ..)| matches!(reveal, Reveal::Crossfade { .. }));
-        for (_, start, end) in [item.fade_in, fade_out].into_iter().flatten() {
-            if start < lo && lo < end {
-                decode = decode.min(start.max(item.from));
-            }
-        }
-        Some(Portion { decode, lo, hi })
+        item.portion(self.source_length(item.clip), from, to)
     }
 
     fn source_length(&self, clip: &Clip) -> Option<Time> {
@@ -1148,7 +1161,6 @@ impl<'a> Graph<'a> {
         total: Time,
     ) -> Result<Option<String>> {
         let clip = item.clip;
-        let mut filters = Vec::new();
         let input = match &clip.content {
             Content::Media { media, .. } => {
                 let media = self.project.media(media.as_str()).ok_or_else(|| {
@@ -1160,11 +1172,6 @@ impl<'a> Graph<'a> {
                 let (start, end) = Self::source_window(clip, portion.decode, portion.hi)
                     .expect("media clips have a source");
                 let index = self.input(&media.path, start, end - start);
-                filters.push(format!("atrim=start=0:end={}", secs(end - start)));
-                filters.push("asetpts=PTS-STARTPTS".into());
-                filters.push(format!(
-                    "aformat=sample_fmts=fltp:sample_rates={SAMPLE_RATE}:channel_layouts=stereo"
-                ));
                 format!("{index}:a")
             }
             Content::Sequence {
@@ -1180,121 +1187,26 @@ impl<'a> Graph<'a> {
             }
             Content::Generator { .. } | Content::Caption { .. } => return Ok(None),
         };
-        let speed = clip.speed();
-        if speed.is_reverse() {
-            filters.push("areverse".into());
-        }
-        filters.extend(atempo_filters(speed.value().abs()));
-        let local = clip_time("t", portion.offset(clip));
-        match self.param(clip, Domain::Audio, "gain") {
-            Param::Static(Value::Number(gain)) if gain != 0.0 => {
-                filters.push(format!("volume={}dB", fmt(gain)));
-            }
-            gain @ Param::Animated(_) => filters.push(format!(
-                "volume='pow(10,({})/20)':eval=frame",
-                expression(&gain, &local)
-            )),
-            _ => {}
-        }
-        match self.param(clip, Domain::Audio, "pan") {
-            Param::Static(Value::Number(pan)) if pan != 0.0 => filters.push(format!(
-                "pan=stereo|c0={}*c0|c1={}*c1",
-                fmt((1.0 - pan).min(1.0)),
-                fmt((1.0 + pan).min(1.0))
-            )),
-            Param::Animated(_) => {
-                return Err(ProgramError::unsupported(&clip.id, "animated pan"));
-            }
-            _ => {}
-        }
-        filters.extend(self.audio_effects(clip)?);
-        for (direction, fade) in [("in", item.fade_in), ("out", item.fade_out)] {
-            let Some((Reveal::Crossfade { equal_power }, start, end)) = fade else {
-                continue;
-            };
-            // A fade in over before the first decoded sample leaves it all
-            // heard.
-            if direction == "in" && end <= portion.decode {
-                continue;
-            }
-            filters.push(format!(
-                "afade=t={direction}:st={}:d={}:curve={}",
-                secs(start - portion.decode),
-                secs(end - start),
-                if equal_power { "qsin" } else { "tri" }
-            ));
-        }
-        filters.push(format!(
-            "atrim=start={}:duration={}",
-            secs(portion.lo - portion.decode),
-            secs(portion.hi - portion.lo)
-        ));
-        filters.push("asetpts=PTS-STARTPTS".into());
-        let delay = samples(portion.lo - window);
-        if delay > 0 {
-            filters.push(format!("adelay=delays={delay}S:all=1"));
-            // `adelay` leaves the silence it adds before its first input
-            // frame untimed, and times what follows from there, which
-            // `atrim` misreads as the stream's end: count the samples.
-            filters.push("asetpts=N/SR/TB".into());
-        }
-        filters.push(format!("apad,atrim=duration={}", secs(total)));
-        filters.push("asetpts=PTS-STARTPTS".into());
+        let filters = sound_filters(
+            self.catalog,
+            clip,
+            Crossfade::of(item.fade_in),
+            Crossfade::of(item.fade_out),
+            portion,
+        )?;
         let label = self.label("sound");
-        self.parts
-            .push(format!("[{input}]{}[{label}]", filters.join(",")));
+        self.parts.push(format!(
+            "[{input}]{filters},{}[{label}]",
+            place(samples(portion.lo - window), total)
+        ));
         Ok(Some(label))
-    }
-
-    fn audio_effects(&self, clip: &Clip) -> Result<Vec<String>> {
-        let mut filters = Vec::new();
-        for effect in clip.effects.iter().filter(|effect| effect.enabled) {
-            let value = |name: &str| -> Result<f64> {
-                match effect.params.get(name) {
-                    None => Ok(0.0),
-                    Some(Param::Static(Value::Number(n))) => Ok(*n),
-                    Some(_) => Err(ProgramError::unsupported(
-                        &clip.id,
-                        format!("animated `{}` {name}", effect.fx),
-                    )),
-                }
-            };
-            match effect.fx.as_str() {
-                "audio.eq3" => {
-                    let (low, mid, high) = (value("low")?, value("mid")?, value("high")?);
-                    if low != 0.0 {
-                        filters.push(format!("bass=g={}:f=250", fmt(low)));
-                    }
-                    if mid != 0.0 {
-                        filters.push(format!("equalizer=f=1000:t=o:w=1:g={}", fmt(mid)));
-                    }
-                    if high != 0.0 {
-                        filters.push(format!("treble=g={}:f=4000", fmt(high)));
-                    }
-                }
-                other => {
-                    return Err(ProgramError::unsupported(
-                        &clip.id,
-                        format!("effect `{other}` on sound"),
-                    ))
-                }
-            }
-        }
-        Ok(filters)
     }
 
     // ---- parameters ------------------------------------------------------------
 
     /// A clip property, or its catalog default.
     fn param(&self, clip: &Clip, domain: Domain, name: &str) -> Param {
-        clip.props.get(name).cloned().unwrap_or_else(|| {
-            Param::Static(
-                self.catalog
-                    .prop(domain, name)
-                    .map(|def| def.default.clone())
-                    .unwrap_or(Value::Number(0.0)),
-            )
-        })
+        param(self.catalog, clip, domain, name)
     }
 
     fn static_number(&self, transition: &Transition, fx: &str, name: &str) -> Result<f64> {
@@ -1354,6 +1266,189 @@ impl<'a> Graph<'a> {
             },
         }
     }
+}
+
+/// How a clip's sound fades across a crossfade, over `[start, end)` of its
+/// sequence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Crossfade {
+    pub start: Time,
+    pub end: Time,
+    /// An equal-power curve rather than a linear one.
+    pub equal_power: bool,
+}
+
+impl Crossfade {
+    fn of(fade: Option<(Reveal, Time, Time)>) -> Option<Self> {
+        match fade? {
+            (Reveal::Crossfade { equal_power }, start, end) => Some(Self {
+                start,
+                end,
+                equal_power,
+            }),
+            _ => None,
+        }
+    }
+
+    fn reveal(self) -> (Reveal, Time, Time) {
+        (
+            Reveal::Crossfade {
+                equal_power: self.equal_power,
+            },
+            self.start,
+            self.end,
+        )
+    }
+}
+
+/// The filters that make one audio clip's sound, as a render mixes it,
+/// before it is placed on its sequence.
+///
+/// The clip is decoded from `portion.decode`, and `[portion.lo,
+/// portion.hi)` of it is heard: the chain outputs stereo at
+/// [`SAMPLE_RATE`] starting at `lo`. A media clip's chain reads its
+/// decoded samples timed from the first one; a nested sequence's reads the
+/// sequence's mix from the time decoded. `fade_in` and `fade_out` are the
+/// crossfades it plays through.
+pub fn sound_filters(
+    catalog: &Catalog,
+    clip: &Clip,
+    fade_in: Option<Crossfade>,
+    fade_out: Option<Crossfade>,
+    portion: &Portion,
+) -> Result<String> {
+    let mut filters = Vec::new();
+    if let Content::Media { .. } = clip.content {
+        let (start, end) = Graph::source_window(clip, portion.decode, portion.hi)
+            .expect("media clips have a source");
+        filters.push(format!("atrim=start=0:end={}", secs(end - start)));
+        filters.push("asetpts=PTS-STARTPTS".into());
+        filters.push(format!(
+            "aformat=sample_fmts=fltp:sample_rates={SAMPLE_RATE}:channel_layouts=stereo"
+        ));
+    }
+    let speed = clip.speed();
+    if speed.is_reverse() {
+        filters.push("areverse".into());
+    }
+    filters.extend(atempo_filters(speed.value().abs()));
+    let local = clip_time("t", portion.offset(clip));
+    match param(catalog, clip, Domain::Audio, "gain") {
+        Param::Static(Value::Number(gain)) if gain != 0.0 => {
+            filters.push(format!("volume={}dB", fmt(gain)));
+        }
+        gain @ Param::Animated(_) => filters.push(format!(
+            "volume='pow(10,({})/20)':eval=frame",
+            expression(&gain, &local)
+        )),
+        _ => {}
+    }
+    match param(catalog, clip, Domain::Audio, "pan") {
+        Param::Static(Value::Number(pan)) if pan != 0.0 => filters.push(format!(
+            "pan=stereo|c0={}*c0|c1={}*c1",
+            fmt((1.0 - pan).min(1.0)),
+            fmt((1.0 + pan).min(1.0))
+        )),
+        Param::Animated(_) => {
+            return Err(ProgramError::unsupported(&clip.id, "animated pan"));
+        }
+        _ => {}
+    }
+    filters.extend(audio_effects(clip)?);
+    for (direction, fade) in [("in", fade_in), ("out", fade_out)] {
+        let Some(Crossfade {
+            start,
+            end,
+            equal_power,
+        }) = fade
+        else {
+            continue;
+        };
+        // A fade in over before the first decoded sample leaves it all
+        // heard.
+        if direction == "in" && end <= portion.decode {
+            continue;
+        }
+        filters.push(format!(
+            "afade=t={direction}:st={}:d={}:curve={}",
+            secs(start - portion.decode),
+            secs(end - start),
+            if equal_power { "qsin" } else { "tri" }
+        ));
+    }
+    filters.push(format!(
+        "atrim=start={}:duration={}",
+        secs(portion.lo - portion.decode),
+        secs(portion.hi - portion.lo)
+    ));
+    filters.push("asetpts=PTS-STARTPTS".into());
+    Ok(filters.join(","))
+}
+
+/// The filters that start a sound `delay` samples into a stream `total`
+/// long.
+fn place(delay: i64, total: Time) -> String {
+    // `adelay` leaves the silence it adds before its first input frame
+    // untimed, and times what follows from there, which `atrim` misreads
+    // as the stream's end: count the samples instead.
+    let delay = if delay > 0 {
+        format!("adelay=delays={delay}S:all=1,asetpts=N/SR/TB,")
+    } else {
+        String::new()
+    };
+    format!(
+        "{delay}apad,atrim=duration={},asetpts=PTS-STARTPTS",
+        secs(total)
+    )
+}
+
+fn audio_effects(clip: &Clip) -> Result<Vec<String>> {
+    let mut filters = Vec::new();
+    for effect in clip.effects.iter().filter(|effect| effect.enabled) {
+        let value = |name: &str| -> Result<f64> {
+            match effect.params.get(name) {
+                None => Ok(0.0),
+                Some(Param::Static(Value::Number(n))) => Ok(*n),
+                Some(_) => Err(ProgramError::unsupported(
+                    &clip.id,
+                    format!("animated `{}` {name}", effect.fx),
+                )),
+            }
+        };
+        match effect.fx.as_str() {
+            "audio.eq3" => {
+                let (low, mid, high) = (value("low")?, value("mid")?, value("high")?);
+                if low != 0.0 {
+                    filters.push(format!("bass=g={}:f=250", fmt(low)));
+                }
+                if mid != 0.0 {
+                    filters.push(format!("equalizer=f=1000:t=o:w=1:g={}", fmt(mid)));
+                }
+                if high != 0.0 {
+                    filters.push(format!("treble=g={}:f=4000", fmt(high)));
+                }
+            }
+            other => {
+                return Err(ProgramError::unsupported(
+                    &clip.id,
+                    format!("effect `{other}` on sound"),
+                ))
+            }
+        }
+    }
+    Ok(filters)
+}
+
+/// A clip property, or its catalog default.
+fn param(catalog: &Catalog, clip: &Clip, domain: Domain, name: &str) -> Param {
+    clip.props.get(name).cloned().unwrap_or_else(|| {
+        Param::Static(
+            catalog
+                .prop(domain, name)
+                .map(|def| def.default.clone())
+                .unwrap_or(Value::Number(0.0)),
+        )
+    })
 }
 
 enum Source {

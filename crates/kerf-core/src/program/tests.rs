@@ -288,3 +288,125 @@ fn a_range_after_a_crossfade_plays_the_incoming_clip_whole() {
     assert!(!graph.contains("afade"), "{graph}");
     assert!(graph.contains("atrim=start=0:duration=1"), "{graph}");
 }
+
+fn sound_graph(project: &Project, range: Option<(Time, Time)>) -> String {
+    compile_program(
+        project,
+        Catalog::builtin(),
+        &ProgramOptions {
+            range,
+            audio_only: true,
+            ..ProgramOptions::default()
+        },
+    )
+    .expect("compiles")
+    .filter_complex
+}
+
+#[test]
+fn the_sound_comes_clip_by_clip_as_the_mix_chains_it() {
+    let project = project(
+        "sequence s1 rate=24 size=1920x1080 audio=48000\n\
+         \x20 track A1 audio\n\
+         \x20   clip a1 media=m1 src=00:00:02:00 at=0f dur=48f\n\
+         \x20   clip a2 media=m2 src=00:00:02:00 at=48f dur=48f\n\
+         \x20   transition t2 from=a1 to=a2 fx=crossfade dur=12f\n\
+         \x20 track A2 audio\n\
+         \x20   clip b1 media=m2 src=0f at=24f dur=48f\n\
+         \x20     set gain=-6\n\
+         \x20     set pan=0.5\n\
+         \x20 track A3 audio muted=true\n\
+         \x20   clip x1 media=m2 src=0f at=0f dur=48f\n",
+    );
+    let f = |frames| Rate::FPS_24.time_of(frames);
+    let catalog = Catalog::builtin();
+    let sounds = program_sound(&project, catalog, None).unwrap();
+    let spans: Vec<_> = sounds
+        .iter()
+        .map(|sound| (sound.clip.as_str(), sound.start, sound.end))
+        .collect();
+    // Each side of the crossfade plays through its handle.
+    assert_eq!(
+        spans,
+        [
+            ("a1", f(0), f(54)),
+            ("b1", f(24), f(72)),
+            ("a2", f(42), f(96))
+        ]
+    );
+    let graph = sound_graph(&project, None);
+    for sound in &sounds {
+        let cut = sound.cut(catalog, Time::ZERO, f(96)).unwrap().unwrap();
+        assert_eq!(cut.start, sound.start);
+        assert!(graph.contains(&cut.filters), "{}\n{graph}", cut.filters);
+    }
+    // From inside the crossfade, the incoming clip decodes from the fade's
+    // start, as a render of that range does.
+    let cut = sounds[2].cut(catalog, f(45), f(96)).unwrap().unwrap();
+    assert_eq!(cut.start, f(45));
+    assert_eq!(cut.source, (f(48 - 6), f(48 + 48)));
+    let graph = sound_graph(&project, Some((f(45), f(96))));
+    assert!(graph.contains(&cut.filters), "{}\n{graph}", cut.filters);
+    assert!(sounds[0].cut(catalog, f(54), f(96)).unwrap().is_none());
+}
+
+#[test]
+fn nested_sound_plays_through_the_clips_holding_it() {
+    let project = project(
+        "sequence main rate=24 size=1920x1080 audio=48000\n\
+         \x20 track A1 audio\n\
+         \x20   clip n1 seq=inner src=12f at=24f dur=24f\n\
+         \x20     set gain=-6\n\
+         \x20   clip n2 seq=inner src=0f at=48f dur=12f speed=2\n\
+         \x20 track V1 video\n\
+         \x20   clip n3 seq=inner src=0f at=0f dur=48f\n\
+         \x20 track A2 audio\n\
+         \x20   clip n4 seq=inner src=0f at=72f dur=24f\n\
+         \x20     fx audio.eq3 low=6\n\
+         sequence inner rate=24 size=1920x1080 audio=48000\n\
+         \x20 track A1 audio\n\
+         \x20   clip i1 media=m1 src=0f at=0f dur=48f\n\
+         \x20 track A2 audio\n\
+         \x20   clip i2 media=m2 src=0f at=24f dur=24f\n\
+         \x20 track A3 audio\n\
+         \x20   clip i3 media=m2 src=0f at=0f dur=12f\n",
+    );
+    let f = |frames| Rate::FPS_24.time_of(frames);
+    let catalog = Catalog::builtin();
+    let sounds = program_sound(&project, catalog, None).unwrap();
+    let spans: Vec<_> = sounds
+        .iter()
+        .map(|sound| (sound.clip.as_str(), sound.start, sound.end))
+        .collect();
+    // `n1` plays [12f, 36f) of `inner`; a picture track mixes no sound, and
+    // `n2` changes the speed of its mix as a whole.
+    assert_eq!(
+        spans,
+        [
+            ("i1", f(24), f(48)),
+            ("i2", f(36), f(48)),
+            ("i1", f(72), f(96)),
+            ("i3", f(72), f(84))
+        ]
+    );
+    // The inner chain fills the window `n1` decodes, then `n1`'s plays.
+    let cut = sounds[1].cut(catalog, f(36), f(48)).unwrap().unwrap();
+    assert_eq!((cut.start, cut.source), (f(36), (f(0), f(12))));
+    assert!(
+        cut.filters.ends_with(
+            ",apad,atrim=duration=0.5,asetpts=PTS-STARTPTS,\
+             volume=-6dB,atrim=start=0:duration=0.5,asetpts=PTS-STARTPTS"
+        ),
+        "{}",
+        cut.filters
+    );
+    // An effect on the holder rings on past the nested clip's end, inside
+    // the holder.
+    let cut = sounds[3].cut(catalog, f(72), f(96)).unwrap().unwrap();
+    assert!(cut.filters.contains("bass=g=6:f=250"), "{}", cut.filters);
+    assert!(
+        cut.filters.contains("apad,atrim=duration=0.75,"),
+        "{}",
+        cut.filters
+    );
+}
