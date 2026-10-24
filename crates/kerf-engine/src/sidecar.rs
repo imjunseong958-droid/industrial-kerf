@@ -103,13 +103,17 @@ pub(crate) fn run(
         }
     };
     // The reader ends once the child's stderr closes; keep draining so a
-    // full queue cannot block it.
-    while !reader.is_finished() {
+    // full queue cannot block it. A killed child's own children can hold
+    // stderr open long after it, so a run that killed it does not wait: the
+    // reader stops on its own once they close it or the queue is dropped.
+    if outcome.is_ok() {
+        while !reader.is_finished() {
+            drain(&mut tail);
+            thread::sleep(POLL_INTERVAL);
+        }
+        let _ = reader.join();
         drain(&mut tail);
-        thread::sleep(POLL_INTERVAL);
     }
-    let _ = reader.join();
-    drain(&mut tail);
     outcome.map(|status| Finished {
         status,
         stderr: tail,

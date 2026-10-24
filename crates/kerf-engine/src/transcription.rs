@@ -1097,9 +1097,11 @@ mod tests {
         });
         let start = Instant::now();
         let mut progress = |_| {};
+        // Two commands, so every shell forks `sleep`, which outlives the
+        // killed shell with its stderr.
         let result = run_sidecar(
             Path::new("sh"),
-            &["-c".into(), "sleep 30".into()],
+            &["-c".into(), "sleep 30; exit".into()],
             &token,
             TranscriptionStage::Transcribe,
             &mut progress,
