@@ -1,13 +1,16 @@
 use crate::PlaybackError;
 use kerf_compose::{ComposeOptions, Compositor};
 use kerf_core::preview::{FindingSeverity, PreviewMode, PreviewPlan, PreviewRange, PreviewReason};
-use kerf_core::program::{compile_program, program_sequence, ProgramError, ProgramOptions};
+use kerf_core::program::{
+    compile_program, program_sequence, program_sound, ProgramError, ProgramOptions, ProgramSound,
+};
 use kerf_model::{
     Catalog, Clip, Content, Domain, Effect, Engine, Param, Project, Sequence, Time, TrackKind,
     Value,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Nested sequences deeper than this are not played natively.
 const MAX_NESTING: usize = 16;
@@ -119,8 +122,9 @@ impl ResolvedClip {
 /// The plan is deliberately separate from the project: it contains only the
 /// resolved media data required by a decoder and can be moved to a worker
 /// thread without giving that worker ownership of project state. It plays
-/// the first sequence as cuts: the topmost picture and every sound clip.
-/// [`preview_plan`] says when that is not the whole program.
+/// the first sequence: the topmost picture as cuts, and the sound as a
+/// render mixes it. [`preview_plan`] says when that is not the whole
+/// program.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlaybackTimeline {
     pub fps: f64,
@@ -135,6 +139,7 @@ pub struct PlaybackTimeline {
     caption_prefix_max_end: Vec<f64>,
     clip_index: Vec<ClipIndexEntry>,
     clip_prefix_max_end: Vec<f64>,
+    sounds: Arc<[ProgramSound]>,
 }
 
 impl PlaybackTimeline {
@@ -152,6 +157,12 @@ impl PlaybackTimeline {
     pub fn captions(&self) -> &[CaptionCue] {
         &self.captions
     }
+
+    /// The program's sound clip by clip, as a render mixes it.
+    pub(crate) fn sounds(&self) -> Arc<[ProgramSound]> {
+        Arc::clone(&self.sounds)
+    }
+
     /// Build a playback plan from the first sequence of a validated project.
     /// A project without a sequence plays nothing.
     pub fn from_project(project: &Project) -> Result<Self, PlaybackError> {
@@ -218,6 +229,9 @@ impl PlaybackTimeline {
             })
             .collect();
         let (width, height) = sequence.map_or((1920, 1080), kerf_core::program::canvas);
+        // A program a render cannot mix plays no sound; the preview plan
+        // says why.
+        let sounds = program_sound(project, Catalog::builtin(), None).unwrap_or_default();
         Ok(Self {
             fps: sequence.map_or(30.0, |sequence| sequence.rate.fps()),
             width,
@@ -231,6 +245,7 @@ impl PlaybackTimeline {
             caption_prefix_max_end,
             clip_index,
             clip_prefix_max_end,
+            sounds: sounds.into(),
         })
     }
 
@@ -293,23 +308,6 @@ impl PlaybackTimeline {
             .get(&self.clips[entry.clip_index].source_id)
             .copied()?;
         Some((entry.clip_index, source_index))
-    }
-
-    pub(crate) fn audio_at_indices(&self, timeline_time: f64) -> Option<(usize, usize)> {
-        self.indexed_entries_at(timeline_time)
-            .into_iter()
-            .flatten()
-            .filter_map(|entry| {
-                let clip = &self.clips[entry.clip_index];
-                if clip.track_kind != ClipKind::Audio || clip.track_muted {
-                    return None;
-                }
-                let source_index = self.source_indices.get(&clip.source_id).copied()?;
-                self.sources[source_index]
-                    .has_audio
-                    .then_some((entry.clip_index, source_index))
-            })
-            .min_by_key(|(clip_index, _)| *clip_index)
     }
 
     pub fn next_video_start_after(&self, timeline_time: f64) -> Option<f64> {
@@ -860,10 +858,18 @@ mod tests {
             timeline.video_at_indices(2.5).map(|(_, source)| source),
             Some(1)
         );
-        let (clip, _) = timeline.audio_at_indices(2.5).expect("sound");
-        assert_eq!(timeline.clips()[clip].id, "audio-a");
-        assert!((timeline.clips()[clip].volume - 0.501).abs() < 0.001);
-        assert_eq!(timeline.audio_at(2.5).len(), 1);
+        let sound = timeline.audio_at(2.5);
+        assert_eq!(sound.len(), 1);
+        assert_eq!(sound[0].clip.id, "audio-a");
+        assert!((sound[0].clip.volume - 0.501).abs() < 0.001);
+        let sounds = timeline.sounds();
+        assert_eq!(
+            sounds
+                .iter()
+                .map(|sound| sound.clip.as_str())
+                .collect::<Vec<_>>(),
+            ["audio-a", "audio-b"]
+        );
         assert!(timeline.video_at(f64::NAN).is_none());
         assert_eq!(timeline.next_video_start_after(f64::NAN), None);
     }

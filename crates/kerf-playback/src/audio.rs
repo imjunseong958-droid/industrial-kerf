@@ -1,10 +1,6 @@
-use crate::libav;
-use crate::timeline::{PlaybackClip, PlaybackSource, PlaybackTimeline};
+use crate::mix::{Mixer, Resampler};
+use crate::timeline::PlaybackTimeline;
 use crate::{ClockSource, PlaybackError};
-use ffmpeg_next as ffmpeg;
-use ffmpeg_next::format::context::Input;
-use ffmpeg_next::util::format::Sample;
-use ffmpeg_next::{decoder, filter, media, ChannelLayout};
 #[cfg(feature = "native-audio")]
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
@@ -15,7 +11,13 @@ use std::time::{Duration, Instant};
 
 const AUDIO_COMMAND_QUEUE_CAPACITY: usize = 16;
 const AUDIO_BUFFER_SECONDS: f64 = 0.35;
+/// Room in the device's queue past the buffered time, for the block that
+/// tops it up: a queue that overflowed would drop sound not yet played.
+#[cfg(feature = "native-audio")]
+const AUDIO_HEADROOM_SECONDS: f64 = 0.1;
 const AUDIO_TICK: Duration = Duration::from_millis(4);
+/// Frames mixed at a time, at the mix's rate.
+const MIX_FRAMES: usize = 1024;
 
 #[derive(Clone)]
 pub(crate) struct AudioRuntime {
@@ -37,7 +39,8 @@ impl AudioRuntime {
                     commands: receiver,
                     clock: worker_clock,
                     output,
-                    decoder: None,
+                    mixer: None,
+                    resampler: None,
                     playing: false,
                     position: 0.0,
                     volume: 1.0,
@@ -272,7 +275,9 @@ struct AudioWorker {
     commands: Receiver<AudioCommand>,
     clock: AudioClock,
     output: Box<dyn AudioOutput>,
-    decoder: Option<AudioDecoder>,
+    /// The mix from `position` on, while playing.
+    mixer: Option<Mixer>,
+    resampler: Option<Resampler>,
     playing: bool,
     position: f64,
     volume: f32,
@@ -355,383 +360,41 @@ impl AudioWorker {
     }
 
     fn decode_until_buffered(&mut self) {
-        if !self.enabled
-            || self.output.queued_frames()
-                >= (self.output.sample_rate() as f64 * AUDIO_BUFFER_SECONDS) as usize
-        {
+        let target = (self.output.sample_rate() as f64 * AUDIO_BUFFER_SECONDS) as usize;
+        if !self.enabled || self.output.queued_frames() >= target {
             return;
         }
-        let channels = self.output.channels();
-        let sample_rate = self.output.sample_rate();
-        loop {
-            let Some((clip_index, source_index)) = self.timeline.audio_at_indices(self.position)
+        if self.mixer.is_none() {
+            let Ok(resampler) = Resampler::new(self.output.sample_rate(), self.output.channels())
             else {
-                let Some(next_start) = self.next_audio_start_after(self.position) else {
-                    self.stop_decoder();
-                    return;
-                };
-                self.position = next_start;
-                continue;
-            };
-            let clip_id = self.timeline.clips()[clip_index].id.as_str();
-            let clip_end = self.timeline.clips()[clip_index].timeline_end();
-            let decoder_matches = self
-                .decoder
-                .as_ref()
-                .is_some_and(|decoder| decoder.clip_id() == clip_id);
-            if !decoder_matches {
-                self.stop_decoder();
-                self.decoder = {
-                    let clip = &self.timeline.clips()[clip_index];
-                    let source = &self.timeline.sources()[source_index];
-                    AudioDecoder::open(clip, source, self.position, sample_rate, channels).ok()
-                };
-                if self.decoder.is_none() {
-                    self.position = clip_end;
-                    continue;
-                }
-            }
-            let Some(decoder) = self.decoder.as_mut() else {
                 return;
             };
-            match decoder.next_samples() {
-                Ok(Some(samples)) if !samples.is_empty() => {
-                    let frames = samples.len() / channels.max(1);
-                    self.output.push(&samples);
-                    self.position += frames as f64 / sample_rate as f64;
-                    if self.position >= clip_end {
-                        self.position = clip_end;
-                        self.stop_decoder();
-                    }
-                }
-                Ok(Some(_)) => return,
-                Ok(None) | Err(_) => {
-                    self.stop_decoder();
-                    self.position = clip_end;
-                }
-            }
-            if self.output.queued_frames()
-                >= (self.output.sample_rate() as f64 * AUDIO_BUFFER_SECONDS) as usize
-            {
-                return;
-            }
+            self.resampler = resampler;
+            self.mixer = Some(Mixer::new(self.timeline.sounds(), self.position));
         }
-    }
-
-    fn next_audio_start_after(&self, position: f64) -> Option<f64> {
-        self.timeline
-            .clips()
-            .iter()
-            .filter(|clip| {
-                clip.track_kind == crate::ClipKind::Audio && clip.timeline_start > position
-            })
-            .map(|clip| clip.timeline_start)
-            .min_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal))
+        let Some(mixer) = self.mixer.as_mut() else {
+            return;
+        };
+        while self.output.queued_frames() < target {
+            let mixed = mixer.mix(MIX_FRAMES);
+            let samples = match self.resampler.as_mut() {
+                Some(resampler) => match resampler.convert(&mixed) {
+                    Ok(samples) => samples,
+                    Err(_) => return,
+                },
+                None => mixed,
+            };
+            if samples.is_empty() {
+                return;
+            }
+            self.output.push(&samples);
+        }
     }
 
     fn stop_decoder(&mut self) {
-        if let Some(mut decoder) = self.decoder.take() {
-            decoder.stop();
-        }
+        self.mixer = None;
+        self.resampler = None;
     }
-}
-
-struct AudioDecoder {
-    input: Input,
-    decoder: decoder::Audio,
-    filter: filter::Graph,
-    stream_index: usize,
-    time_base: ffmpeg::Rational,
-    source_time: f64,
-    clip_id: String,
-    eof: bool,
-    flushed: bool,
-}
-
-impl AudioDecoder {
-    fn open(
-        clip: &PlaybackClip,
-        source: &PlaybackSource,
-        timeline_time: f64,
-        sample_rate: u32,
-        channels: usize,
-    ) -> Result<Self, PlaybackError> {
-        libav::ensure_init().map_err(audio_error)?;
-        let source_time = clip.source_time_at(timeline_time);
-        let remaining = (clip.source_out - source_time).max(0.0);
-        if remaining <= 0.0 {
-            return Err(PlaybackError::Audio(format!(
-                "audio clip {} has no source time remaining",
-                clip.id
-            )));
-        }
-        let mut input = ffmpeg::format::input(&source.path)
-            .map_err(|error| audio_error(libav::map_error(error)))?;
-        let (stream_index, time_base) = {
-            let stream = input
-                .streams()
-                .best(media::Type::Audio)
-                .ok_or_else(|| PlaybackError::Audio("no audio stream".into()))?;
-            (stream.index(), stream.time_base())
-        };
-        let decoder = {
-            let stream = input
-                .streams()
-                .best(media::Type::Audio)
-                .ok_or_else(|| PlaybackError::Audio("no audio stream".into()))?;
-            let context = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
-                .map_err(|error| audio_error(libav::map_error(error)))?;
-            context
-                .decoder()
-                .audio()
-                .map_err(|error| audio_error(libav::map_error(error)))?
-        };
-        libav::seek_to(&mut input, source_time);
-        let filter = audio_filter_graph(&decoder, clip, remaining, sample_rate, channels)?;
-        Ok(Self {
-            input,
-            decoder,
-            filter,
-            stream_index,
-            time_base,
-            source_time,
-            clip_id: clip.id.clone(),
-            eof: false,
-            flushed: false,
-        })
-    }
-
-    fn clip_id(&self) -> &str {
-        &self.clip_id
-    }
-
-    fn next_samples(&mut self) -> Result<Option<Vec<f32>>, PlaybackError> {
-        loop {
-            if let Some(samples) = self.pull_filtered()? {
-                if samples.is_empty() {
-                    continue;
-                }
-                return Ok(Some(samples));
-            }
-            if self.eof && self.flushed {
-                return Ok(None);
-            }
-            self.pump()?;
-        }
-    }
-
-    fn stop(&mut self) {
-        self.eof = true;
-        self.flushed = true;
-    }
-
-    fn pull_filtered(&mut self) -> Result<Option<Vec<f32>>, PlaybackError> {
-        let mut filtered = ffmpeg::frame::Audio::empty();
-        let result = {
-            let mut sink = self
-                .filter
-                .get("out")
-                .ok_or_else(|| PlaybackError::Audio("missing abuffersink".into()))?;
-            sink.sink().frame(&mut filtered)
-        };
-        match result {
-            Ok(()) => libav::packed_f32(&filtered).map(Some).map_err(audio_error),
-            Err(error) if libav::is_again(&error) || libav::is_eof(&error) => Ok(None),
-            Err(error) => Err(audio_error(libav::map_error(error))),
-        }
-    }
-
-    fn pump(&mut self) -> Result<(), PlaybackError> {
-        if !self.eof {
-            let packet = self
-                .input
-                .packets()
-                .next()
-                .map(|(stream, packet)| (stream.index(), packet));
-            match packet {
-                Some((index, packet)) if index == self.stream_index => {
-                    self.send_packet(&packet)?;
-                    self.drain_decoder()?;
-                    return Ok(());
-                }
-                Some(_) => return Ok(()),
-                None => {
-                    self.eof = true;
-                    let _ = self.decoder.send_eof();
-                    self.drain_decoder()?;
-                    return Ok(());
-                }
-            }
-        }
-        if !self.flushed {
-            self.flushed = true;
-            if let Some(mut src) = self.filter.get("in") {
-                let _ = src.source().flush();
-            }
-        }
-        Ok(())
-    }
-
-    fn send_packet(&mut self, packet: &ffmpeg::Packet) -> Result<(), PlaybackError> {
-        loop {
-            match self.decoder.send_packet(packet) {
-                Ok(()) => return Ok(()),
-                Err(error) if libav::is_again(&error) => self.drain_decoder()?,
-                Err(error) if libav::is_eof(&error) => {
-                    self.eof = true;
-                    return Ok(());
-                }
-                Err(error) => return Err(audio_error(libav::map_error(error))),
-            }
-        }
-    }
-
-    fn drain_decoder(&mut self) -> Result<(), PlaybackError> {
-        let mut decoded = ffmpeg::frame::Audio::empty();
-        loop {
-            match self.decoder.receive_frame(&mut decoded) {
-                Ok(()) => self.push_decoded(&decoded)?,
-                Err(error) if libav::is_again(&error) || libav::is_eof(&error) => return Ok(()),
-                Err(error) => return Err(audio_error(libav::map_error(error))),
-            }
-        }
-    }
-
-    fn push_decoded(&mut self, decoded: &ffmpeg::frame::Audio) -> Result<(), PlaybackError> {
-        if let Some(ts) = decoded.timestamp() {
-            if libav::seconds(ts, self.time_base) + 1e-4 < self.source_time {
-                return Ok(());
-            }
-        }
-        let mut src = self
-            .filter
-            .get("in")
-            .ok_or_else(|| PlaybackError::Audio("missing abuffer source".into()))?;
-        src.source()
-            .add(decoded)
-            .map_err(|error| audio_error(libav::map_error(error)))
-    }
-}
-
-impl Drop for AudioDecoder {
-    fn drop(&mut self) {
-        self.stop();
-    }
-}
-
-fn audio_error(error: PlaybackError) -> PlaybackError {
-    match error {
-        PlaybackError::Ffmpeg(message) => PlaybackError::Audio(message),
-        other => other,
-    }
-}
-
-fn audio_filter_graph(
-    decoder: &decoder::Audio,
-    clip: &PlaybackClip,
-    remaining: f64,
-    sample_rate: u32,
-    channels: usize,
-) -> Result<filter::Graph, PlaybackError> {
-    let time_base = decoder.time_base();
-    let (tb_num, tb_den) = if time_base.denominator() == 0 {
-        (1, decoder.rate().max(1) as i32)
-    } else {
-        (time_base.numerator(), time_base.denominator())
-    };
-    let sample_fmt = decoder.format().name();
-    let layout = channel_layout_arg(decoder);
-    let args = format!(
-        "time_base={tb_num}/{tb_den}:sample_rate={}:sample_fmt={sample_fmt}:channel_layout={layout}",
-        decoder.rate().max(1)
-    );
-    let mut spec_parts = vec![
-        "asetpts=PTS-STARTPTS".to_string(),
-        format!("atrim=duration={}", libav::format_number(remaining)),
-    ];
-    spec_parts.extend(atempo_filters(clip.speed));
-    if (clip.volume - 1.0).abs() > f32::EPSILON {
-        spec_parts.push(format!("volume={}", clip.volume));
-    }
-    spec_parts.push(format!(
-        "aformat=sample_fmts=flt:channel_layouts={}:sample_rates={}",
-        output_layout_name(channels),
-        sample_rate.max(1)
-    ));
-    let spec = spec_parts.join(",");
-    let mut graph = filter::Graph::new();
-    let buffer = filter::find("abuffer")
-        .ok_or_else(|| PlaybackError::Audio("libavfilter abuffer is unavailable".into()))?;
-    let sink = filter::find("abuffersink")
-        .ok_or_else(|| PlaybackError::Audio("libavfilter abuffersink is unavailable".into()))?;
-    graph
-        .add(&buffer, "in", &args)
-        .map_err(|error| audio_error(libav::map_error(error)))?;
-    graph
-        .add(&sink, "out", "")
-        .map_err(|error| audio_error(libav::map_error(error)))?;
-    {
-        let mut out = graph
-            .get("out")
-            .ok_or_else(|| PlaybackError::Audio("missing abuffersink".into()))?;
-        out.set_sample_format(Sample::F32(ffmpeg::format::sample::Type::Packed));
-        out.set_sample_rate(sample_rate.max(1));
-        out.set_channel_layout(output_layout(channels));
-    }
-    graph
-        .output("in", 0)
-        .map_err(|error| audio_error(libav::map_error(error)))?
-        .input("out", 0)
-        .map_err(|error| audio_error(libav::map_error(error)))?
-        .parse(&spec)
-        .map_err(|error| audio_error(libav::map_error(error)))?;
-    graph
-        .validate()
-        .map_err(|error| audio_error(libav::map_error(error)))?;
-    Ok(graph)
-}
-
-fn channel_layout_arg(decoder: &decoder::Audio) -> String {
-    let layout = decoder.channel_layout();
-    if layout.is_empty() {
-        output_layout_name(decoder.channels() as usize)
-    } else {
-        format!("0x{:x}", layout.bits())
-    }
-}
-
-fn output_layout(channels: usize) -> ChannelLayout {
-    match channels {
-        1 => ChannelLayout::MONO,
-        _ => ChannelLayout::STEREO,
-    }
-}
-
-fn output_layout_name(channels: usize) -> String {
-    match channels {
-        1 => "mono".into(),
-        _ => "stereo".into(),
-    }
-}
-
-fn atempo_filters(speed: f64) -> Vec<String> {
-    if !speed.is_finite() || speed <= 0.0 {
-        return Vec::new();
-    }
-    let mut remaining = speed;
-    let mut filters = Vec::new();
-    while remaining > 100.0 {
-        filters.push("atempo=100".into());
-        remaining /= 100.0;
-    }
-    while remaining < 0.5 {
-        filters.push("atempo=0.5".into());
-        remaining /= 0.5;
-    }
-    if (remaining - 1.0).abs() > 1e-6 {
-        filters.push(format!("atempo={}", libav::format_number(remaining)));
-    }
-    filters
 }
 
 #[cfg(feature = "native-audio")]
@@ -747,7 +410,8 @@ impl AudioBuffer {
     fn new(sample_rate: u32, channels: usize) -> Self {
         Self {
             samples: Mutex::new(VecDeque::new()),
-            max_samples: ((sample_rate as f64 * AUDIO_BUFFER_SECONDS) as usize)
+            max_samples: ((sample_rate as f64 * (AUDIO_BUFFER_SECONDS + AUDIO_HEADROOM_SECONDS))
+                as usize)
                 .saturating_mul(channels.max(1)),
             volume: AtomicU32::new(1.0_f32.to_bits()),
             muted: AtomicBool::new(false),
@@ -970,7 +634,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{atempo_filters, AudioClock};
+    use super::AudioClock;
     use crate::ClockSource;
     use std::thread;
     use std::time::Duration;
@@ -990,10 +654,15 @@ mod tests {
         assert!((clock.now() - paused_position).abs() < 0.01);
     }
 
+    #[cfg(feature = "native-audio")]
     #[test]
-    fn atempo_chain_keeps_each_filter_inside_ffmpeg_limits() {
-        assert_eq!(atempo_filters(2.0), vec!["atempo=2"]);
-        assert_eq!(atempo_filters(0.25), vec!["atempo=0.5", "atempo=0.5"]);
-        assert_eq!(atempo_filters(250.0), vec!["atempo=100", "atempo=2.5"]);
+    fn topping_up_the_queue_keeps_the_sound_not_played_yet() {
+        use super::{AudioBuffer, AUDIO_BUFFER_SECONDS, MIX_FRAMES};
+        let buffer = AudioBuffer::new(48_000, 2);
+        let buffered = (48_000.0 * AUDIO_BUFFER_SECONDS) as usize;
+        buffer.push(&vec![1.0; (buffered - 1) * 2]);
+        buffer.push(&vec![2.0; MIX_FRAMES * 2]);
+        assert_eq!(buffer.queued_frames(2), buffered - 1 + MIX_FRAMES);
+        assert_eq!(buffer.pop(), Some(1.0));
     }
 }
