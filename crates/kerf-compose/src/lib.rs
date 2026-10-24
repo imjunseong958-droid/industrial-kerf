@@ -20,6 +20,7 @@
 mod color;
 mod footage;
 mod scene;
+mod sound;
 
 use effectcraft_gpu::Gpu;
 use effectcraft_render::{Accelerator, Backend, Image, LayerCache, RenderOpts, Renderer};

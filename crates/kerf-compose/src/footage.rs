@@ -104,6 +104,8 @@ pub(crate) fn frame_count(rate: Rate, duration: Time) -> i64 {
 /// The footage source a scene's renders read.
 pub(crate) struct LibavFootage {
     clips: HashMap<ItemId, ClipSource>,
+    /// The sound of files clips play, for effects that draw it.
+    sounds: crate::sound::Sounds,
     decoders: Mutex<Decoders>,
     /// Signalled when a decoder comes back.
     returned: Condvar,
@@ -132,6 +134,7 @@ impl LibavFootage {
     pub fn new(clips: HashMap<ItemId, ClipSource>) -> Self {
         Self {
             clips,
+            sounds: crate::sound::Sounds::default(),
             decoders: Mutex::new(Decoders::default()),
             returned: Condvar::new(),
             cache: Mutex::new(FrameCache::new(CACHE_BUDGET)),
@@ -283,6 +286,36 @@ impl FootageSource for LibavFootage {
         self.read(item, t, Some((width.max(1), height.max(1))))
     }
 
+    /// The sound a clip plays from clip time `t`: its media's from the
+    /// clip's source in, at its speed, silent past the file's end.
+    fn audio(
+        &self,
+        item: ItemId,
+        _footage: &FootageItem,
+        t: Tick,
+        frames: usize,
+        rate: u32,
+    ) -> Option<Vec<f32>> {
+        let clip = self.clips.get(&item)?;
+        let sound = self.sounds.of(&clip.path)?;
+        let kept = f64::from(crate::sound::RATE);
+        let first = (clip.source_in.seconds() + t.seconds() * clip.speed.value()) * kept;
+        let step = clip.speed.value() * kept / f64::from(rate.max(1));
+        let length = sound.len() / 2;
+        Some(
+            (0..frames)
+                .flat_map(|index| {
+                    let at = first + index as f64 * step;
+                    match at as usize {
+                        _ if at < 0.0 => [0.0; 2],
+                        sample if sample < length => [sound[2 * sample], sound[2 * sample + 1]],
+                        _ => [0.0; 2],
+                    }
+                })
+                .collect(),
+        )
+    }
+
     fn set_cache_budget(&self, bytes: usize) {
         lock(&self.cache).budget = bytes;
     }
@@ -392,7 +425,7 @@ fn image_bytes(image: &Image) -> usize {
     image.data.len() * std::mem::size_of::<[f32; 4]>()
 }
 
-fn init() -> Result<(), String> {
+pub(crate) fn init() -> Result<(), String> {
     static INIT: OnceLock<Result<(), String>> = OnceLock::new();
     INIT.get_or_init(|| {
         ffmpeg::init()

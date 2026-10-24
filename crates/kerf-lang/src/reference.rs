@@ -119,7 +119,8 @@ order. Raster transitions (`transition.*`) are written like any transition.
 A file parameter (a LUT, an OpenColorIO config) is a quoted path, relative
 to the project. A track parameter names another picture track of the
 sequence (`takeMatteFromLayer=V2`), whose picture the effect reads even while
-the track is hidden. `look` with `effects: \"<words>\"` finds entries by the look or moment you
+the track is hidden; a sound parameter names a sound track whose sound it
+draws (`audioLayer=A1`). `look` with `effects: \"<words>\"` finds entries by the look or moment you
 want, each with when to use it, and `look` with `effect: \"<id>\"` lists one
 entry's parameters.";
 
@@ -139,6 +140,7 @@ fn describe(param: &ParamDef) -> String {
     match &param.ty {
         ParamType::Enum(options) => facts.push(options.join("|")),
         ParamType::Track => facts.push("a picture track of the sequence, such as V2".into()),
+        ParamType::Sound => facts.push("a sound track of the sequence, such as A1".into()),
         ParamType::Mask => facts.push("one of the clip's masks, by name".into()),
         ParamType::File(extensions) => facts.push(format!(
             "a file ({}), relative to the project",

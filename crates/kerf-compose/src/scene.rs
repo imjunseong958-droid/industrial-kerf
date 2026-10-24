@@ -33,7 +33,8 @@
 //! - A track an effect reads (a track parameter, as a displacement map or a
 //!   matte) is drawn on its own in a comp of its own, whose layer sits out
 //!   of sight at the bottom of the comp for the effect to read, even when
-//!   the track itself is hidden.
+//!   the track itself is hidden. A sound track an effect draws (a sound
+//!   parameter) is a comp of its media clips' sound, the same way.
 
 use crate::color;
 use crate::footage::{frame_count, ClipSource, TICKS_PER_FLICK};
@@ -239,7 +240,11 @@ impl<'a> Builder<'a> {
                 ));
             }
             self.nesting.push(sequence.id.clone());
-            let item = self.comp_of(sequence, Some(read));
+            let item = if read.kind == TrackKind::Audio {
+                Ok(self.sound_comp(sequence, read))
+            } else {
+                self.comp_of(sequence, Some(read))
+            };
             self.nesting.pop();
             let source = LayerSource::Comp { item: item? };
             let mut layer = build::layer(
@@ -285,8 +290,75 @@ impl<'a> Builder<'a> {
             .add_item(&name, Label::None, None, ItemKind::Comp(Arc::new(comp))))
     }
 
-    /// The picture tracks of `sequence` that the effects and transitions on
-    /// the `built` tracks read, each once.
+    /// A sound track as a comp of its media clips' sound, for effects that
+    /// draw it; none of it is seen.
+    fn sound_comp(&mut self, sequence: &'a Sequence, track: &'a Track) -> ItemId {
+        let (width, height) = canvas(sequence);
+        let rate = sequence.rate;
+        let duration = sequence.duration().max(rate.frame_duration());
+        let mut comp = Comp::new(width, height, frame_rate(rate), ticks(duration));
+        let mut layers = Vec::new();
+        for clip in track.clips.iter().filter(|clip| clip.enabled) {
+            let Content::Media {
+                media,
+                source_in,
+                speed,
+            } = &clip.content
+            else {
+                continue;
+            };
+            let Some(media) = self
+                .project
+                .media(media.as_str())
+                .filter(|media| media.audio.is_some() && !speed.is_reverse())
+            else {
+                continue;
+            };
+            let footage = Footage {
+                path: media.path.clone(),
+                kind: FootageKind::Audio,
+                frame_rate: frame_rate(media.rate),
+                duration: ticks(media.duration),
+                has_video: false,
+                has_audio: true,
+                ..Footage::default()
+            };
+            let item = self.out.add_item(
+                clip.id.as_str(),
+                Label::None,
+                None,
+                ItemKind::Footage(footage),
+            );
+            self.clips.insert(
+                item,
+                ClipSource {
+                    path: media.path.clone(),
+                    rate: media.rate,
+                    frames: frame_count(media.rate, media.duration),
+                    width: 0,
+                    height: 0,
+                    alpha: false,
+                    source_in: *source_in,
+                    speed: *speed,
+                    duration: clip.duration,
+                    shown: None,
+                },
+            );
+            let source = LayerSource::Footage { item };
+            let mut layer =
+                self.layer(&comp, clip, source, (width, height), clip.start, clip.end());
+            layer.switches.video = false;
+            layers.push(layer);
+        }
+        layers.reverse();
+        comp.layers = layers;
+        let name = format!("{} {}", sequence.name, track.id);
+        self.out
+            .add_item(&name, Label::None, None, ItemKind::Comp(Arc::new(comp)))
+    }
+
+    /// The tracks of `sequence` that the effects and transitions on the
+    /// `built` tracks read, each once: picture tracks and sound tracks.
     fn read_tracks(
         &self,
         sequence: &'a Sequence,
@@ -311,18 +383,21 @@ impl<'a> Builder<'a> {
             let Some(def) = self.catalog.fx(fx.as_str()) else {
                 continue;
             };
-            for param in def
-                .params
-                .iter()
-                .filter(|param| param.ty == ParamType::Track)
-            {
+            for param in &def.params {
+                // A track parameter reads a picture track; a sound one, a
+                // sound track.
+                let kind = match param.ty {
+                    ParamType::Track => TrackKind::Video,
+                    ParamType::Sound => TrackKind::Audio,
+                    _ => continue,
+                };
                 let Some(Param::Static(Value::Text(id))) = params.get(&param.name) else {
                     continue;
                 };
                 let track = sequence
                     .tracks
                     .iter()
-                    .find(|track| track.kind == TrackKind::Video && track.id == id.as_str());
+                    .find(|track| track.kind == kind && track.id == id.as_str());
                 if let Some(track) =
                     track.filter(|track| !read.iter().any(|r| std::ptr::eq(*r, *track)))
                 {

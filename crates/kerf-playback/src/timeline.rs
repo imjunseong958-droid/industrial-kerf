@@ -643,7 +643,7 @@ impl NativeCheck<'_> {
                 && matches!(clip.content, Content::Media { .. })
                 && Catalog::builtin().fx(effect.fx.as_str()).is_some_and(|fx| {
                     let reads_a_track = fx.params.iter().any(|param| {
-                        param.ty == ParamType::Track
+                        matches!(param.ty, ParamType::Track | ParamType::Sound)
                             && matches!(effect.params.get(&param.name), Some(Param::Static(Value::Text(track))) if !track.is_empty())
                     });
                     fx.engine == Engine::Raster
@@ -876,6 +876,12 @@ mod tests {
             "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx channel.invert\n",
         );
         assert_eq!(preview_plan(&inverted).mode, PreviewMode::NativeExact);
+        // So does an effect that draws a sound track.
+        let drawn = project(
+            "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx generate.audiowaveform audioLayer=A1\n  \
+             track A1 audio\n    clip a1 media=source-b src=0s at=0s dur=2s\n",
+        );
+        assert_eq!(preview_plan(&drawn).mode, PreviewMode::Composited);
         // So does a fix that compares neighbouring frames.
         let steadied = project(
             "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx color.colorstabilizer\n",

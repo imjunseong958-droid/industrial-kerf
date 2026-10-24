@@ -18,6 +18,9 @@ pub enum ParamType {
     /// A path to a file with one of these extensions, held as text. A
     /// relative path is relative to the project (see `Project::resolve_paths`).
     File(Vec<String>),
+    /// A sound track of the clip's sequence, by id, held as text; empty for
+    /// none. Effects draw its sound, as an audio spectrum does.
+    Sound,
     /// One of the clip's masks, by name, held as text; empty for none.
     /// Effects read its outline, as a stroke or a fill does.
     Mask,
@@ -37,6 +40,7 @@ impl ParamType {
             Self::Text => "text",
             Self::File(_) => "file",
             Self::Track => "track",
+            Self::Sound => "sound",
             Self::Mask => "mask",
             Self::Color => "color",
             Self::Enum(_) => "enum",
@@ -71,6 +75,10 @@ impl ParamDef {
 
     pub fn track(name: &str) -> Self {
         Self::new(name, ParamType::Track, Value::Text(String::new()), false)
+    }
+
+    pub fn sound(name: &str) -> Self {
+        Self::new(name, ParamType::Sound, Value::Text(String::new()), false)
     }
 
     pub fn mask(name: &str) -> Self {
@@ -161,7 +169,11 @@ impl ParamDef {
             }
             (ParamType::Bool, Value::Bool(_))
             | (
-                ParamType::Text | ParamType::File(_) | ParamType::Track | ParamType::Mask,
+                ParamType::Text
+                | ParamType::File(_)
+                | ParamType::Track
+                | ParamType::Sound
+                | ParamType::Mask,
                 Value::Text(_),
             )
             | (ParamType::Color, Value::Color(_)) => Ok(()),
@@ -614,6 +626,7 @@ fn raster_definitions(text: &str) -> Vec<FxDef> {
             "bool" => ParamDef::toggle(name, default == "true"),
             "text" => ParamDef::text(name, default),
             "track" => ParamDef::track(name),
+            "sound" => ParamDef::sound(name),
             "mask" => ParamDef::mask(name),
             "file" => {
                 let mut param = ParamDef::file(name, &constraint.split('|').collect::<Vec<_>>());

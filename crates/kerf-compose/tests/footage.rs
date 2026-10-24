@@ -94,3 +94,59 @@ fn two_layers_of_one_file_both_show_it() {
     }
     assert!(compositor.problems().is_empty(), "{:?}", compositor.problems());
 }
+
+#[test]
+fn audio_waveform_draws_the_sound_track_it_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let sound = |name: &str, source: &str| {
+        let path = dir.path().join(name);
+        let output = Command::new(ffmpeg())
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi"])
+            .args(["-i", source, "-t", "1", "-ac", "2", "-ar", "48000"])
+            .arg(&path)
+            .output()
+            .expect("ffmpeg runs");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        path.display().to_string()
+    };
+    let tone = sound("tone.wav", "sine=frequency=220:sample_rate=48000");
+    let quiet = sound("quiet.wav", "anullsrc=r=48000:cl=stereo");
+    // The rows a white line crosses on black.
+    let rows = |path: &str| {
+        let text = format!(
+            "kerf 1\nproject name=\"t\"\n\
+             media a path=\"{path}\" rate=24 dur=24f audio=2ch@48000\n\
+             sequence s1 rate=24 size=320x180 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20   clip g1 gen=solid at=0f dur=24f\n\
+             \x20     set color=#000000\n\
+             \x20     fx generate.audiowaveform audioLayer=A1 maximumHeight=160 thickness=2\n\
+             \x20 track A1 audio\n\
+             \x20   clip a1 media=a src=0f at=0f dur=24f\n"
+        );
+        let project = parse_document(&text, Catalog::builtin())
+            .unwrap_or_else(|errors| panic!("{errors:?}"))
+            .project;
+        let options = ComposeOptions {
+            sequence: None,
+            captions: false,
+            device: Device::Cpu,
+        };
+        let frame = Compositor::new(&project, Catalog::builtin(), &options)
+            .unwrap()
+            .frame(Rate::FPS_24.time_of(12), 1.0);
+        (0..frame.height)
+            .filter(|y| {
+                (0..frame.width).any(|x| frame.rgba[((y * frame.width + x) * 4) as usize] > 128)
+            })
+            .count()
+    };
+    // Silence is a flat line; the tone swings well above and below it.
+    let (flat, swinging) = (rows(&quiet), rows(&tone));
+    assert!(flat > 0 && flat < 12, "{flat}");
+    assert!(swinging > flat * 3, "{swinging} vs {flat}");
+}

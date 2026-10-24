@@ -862,7 +862,11 @@ fn json_value(ty: &ParamType, value: &Json) -> Option<Value> {
         (ParamType::Number, Json::Number(n)) => Value::Number(n.as_f64()?),
         (ParamType::Bool, Json::Bool(b)) => Value::Bool(*b),
         (
-            ParamType::Text | ParamType::File(_) | ParamType::Track | ParamType::Mask,
+            ParamType::Text
+            | ParamType::File(_)
+            | ParamType::Track
+            | ParamType::Sound
+            | ParamType::Mask,
             Json::String(s),
         ) => Value::Text(s.clone()),
         (ParamType::Enum(_), Json::String(s)) => Value::Enum(s.clone()),

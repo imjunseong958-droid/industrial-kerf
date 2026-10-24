@@ -215,14 +215,17 @@ impl Validator<'_> {
 
     /// Effects' and transitions' track parameters name another picture
     /// track of the sequence, and no tracks read each other in a loop: a
-    /// track an effect reads is drawn on its own for it.
+    /// track an effect reads is drawn on its own for it. Sound parameters
+    /// name a sound track.
     fn track_reads(&mut self, sequence: &Sequence) {
-        let picture = |id: &str| {
+        let of_kind = |kind: TrackKind, id: &str| {
             sequence
                 .tracks
                 .iter()
-                .any(|track| track.kind == TrackKind::Video && track.id == id)
+                .any(|track| track.kind == kind && track.id == id)
         };
+        let picture = |id: &str| of_kind(TrackKind::Video, id);
+        let sound = |id: &str| of_kind(TrackKind::Audio, id);
         // (reading track, read track, clip or transition)
         let mut reads: Vec<(&str, &str, &Id)> = Vec::new();
         for track in &sequence.tracks {
@@ -241,14 +244,26 @@ impl Validator<'_> {
                     continue;
                 };
                 for (name, param) in params {
-                    let read = match (def.find(name), param) {
+                    let (ty, read) = match (def.find(name), param) {
                         (Some(param_def), Param::Static(Value::Text(read)))
-                            if param_def.ty == ParamType::Track && !read.is_empty() =>
+                            if matches!(param_def.ty, ParamType::Track | ParamType::Sound)
+                                && !read.is_empty() =>
                         {
-                            read.as_str()
+                            (&param_def.ty, read.as_str())
                         }
                         _ => continue,
                     };
+                    // A sound track is only heard: it reads nothing back.
+                    if *ty == ParamType::Sound {
+                        if !sound(read) {
+                            self.error(
+                                "track.read",
+                                id,
+                                format!("`{id}` {fx}: `{name}` names `{read}`, which is not a sound track of this sequence"),
+                            );
+                        }
+                        continue;
+                    }
                     if !picture(read) {
                         self.error(
                             "track.read",

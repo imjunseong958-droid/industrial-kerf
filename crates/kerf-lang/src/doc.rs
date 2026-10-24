@@ -1065,9 +1065,13 @@ pub(crate) fn params_text(params: &Params, defs: &[ParamDef], rate: Rate) -> Str
         .filter(|(name, _)| !defs.iter().any(|d| &d.name == *name));
     for (name, param) in known.chain(unknown) {
         // A track or mask name is a word, as ids are.
-        let reference = defs
-            .iter()
-            .any(|def| def.name == *name && matches!(def.ty, ParamType::Track | ParamType::Mask));
+        let reference = defs.iter().any(|def| {
+            def.name == *name
+                && matches!(
+                    def.ty,
+                    ParamType::Track | ParamType::Sound | ParamType::Mask
+                )
+        });
         match param {
             Param::Static(Value::Text(id)) if reference && Id::new(id.as_str()).is_ok() => {
                 write!(out, " {name}={id}").unwrap();
@@ -1213,6 +1217,32 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
         assert!(parse_document(&unknown, Catalog::builtin()).unwrap_err()[0]
             .message
             .contains("color.fancy"));
+    }
+
+    #[test]
+    fn sound_parameters_name_sound_tracks() {
+        let drawing = |track: &str| {
+            SAMPLE.replace(
+                "      set y=0.3 text=\"Day One\" size=0.1\n",
+                &format!(
+                    "      set y=0.3 text=\"Day One\" size=0.1\n      fx generate.audiowaveform audioLayer={track}\n"
+                ),
+            )
+        };
+        let document = parse_document(&drawing("A2"), Catalog::builtin()).unwrap();
+        assert!(print_document(
+            &document.project,
+            Catalog::builtin(),
+            PrintOptions::default()
+        )
+        .contains("audioLayer=A2\n"));
+        let errors = parse_document(&drawing("V1"), Catalog::builtin()).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("not a sound track")),
+            "{errors:#?}"
+        );
     }
 
     #[test]
