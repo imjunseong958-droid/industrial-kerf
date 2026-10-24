@@ -134,6 +134,12 @@ void EffectControlsPanel::setEffectCatalog(const QJsonArray &catalog) {
     m_effectsShown.clear();
 }
 
+void EffectControlsPanel::setPictureTracks(const QStringList &tracks) {
+    if (tracks == m_pictureTracks) return;
+    m_pictureTracks = tracks;
+    m_effectsShown.clear();
+}
+
 void EffectControlsPanel::showEffects() {
     const QJsonArray effects = m_clip.value(QStringLiteral("effects")).toArray();
     QStringList stack{m_clipId};
@@ -318,6 +324,13 @@ QWidget *EffectControlsPanel::valueEditor(const QJsonObject &def, const QString 
             if (color.isValid()) edited(modelColorName(color));
         });
         editor = button;
+    } else if (type == QStringLiteral("track")) {
+        // Another picture track, or none (the empty first entry).
+        auto *combo = new QComboBox;
+        combo->addItem(QString());
+        combo->addItems(m_pictureTracks);
+        connect(combo, &QComboBox::activated, this, [combo, edited] { edited(combo->currentText()); });
+        editor = combo;
     } else if (type == QStringLiteral("file")) {
         // A path, typed or chosen; relative paths are relative to the project.
         auto *line = new QLineEdit;

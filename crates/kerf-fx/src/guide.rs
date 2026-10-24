@@ -5,6 +5,14 @@
 pub(crate) const GUIDE: &[(&str, &str)] = &[
     // Blur & Sharpen
     (
+        "blur.cameralens",
+        "Lens-shaped defocus with bokeh, shaped by a depth map from another track (blurMap/blurMapLayer=V2); realistic focus falloff and rack focus.",
+    ),
+    (
+        "blur.compound",
+        "Blurs more where another track is brighter (blurLayer=V2); depth-of-field fakes and selective softness.",
+    ),
+    (
         "blur.bilateral",
         "Smooths flat areas while keeping edges; skin smoothing and beauty passes.",
     ),
@@ -54,6 +62,30 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
     ),
     // Channel
     (
+        "channel.blend",
+        "Blends with another track's picture by a chosen mode (blendWithLayer=V2); quick double exposures and color mixes.",
+    ),
+    (
+        "channel.calculations",
+        "Combines channels of the clip and another track (secondLayer=V2) by a blending mode; channel-based composites and mattes.",
+    ),
+    (
+        "channel.combiner",
+        "Converts between color models or splits channels, optionally from another track (sourceLayer=V2); technical channel work.",
+    ),
+    (
+        "channel.compoundarithmetic",
+        "Adds, subtracts, or multiplies the clip with another track (secondSource=V2); difference checks and light composites.",
+    ),
+    (
+        "channel.setchannels",
+        "Builds each channel from a channel of other tracks (sourceLayer1=V2 and so on); channel swaps and custom mattes.",
+    ),
+    (
+        "channel.setmatte",
+        "Takes the clip's transparency from another track (takeMatteFromLayer=V2); track mattes, text and shape masks.",
+    ),
+    (
         "channel.arithmetic",
         "Per-channel math such as add or multiply; technical color tweaks.",
     ),
@@ -82,6 +114,14 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Composites the picture over a solid color; flat backgrounds and fills.",
     ),
     // Color Correction
+    (
+        "color.colorlink",
+        "Tints the clip with the average color of another track (sourceLayer=V2); matching a shot's color to a background plate.",
+    ),
+    (
+        "color.colorama",
+        "Cycles colors through a palette by luminance, optionally phased or masked by other tracks (inputPhase/addPhase=V2); psychedelic and thermal looks.",
+    ),
     (
         "color.curves",
         "Bends tone with curves for RGB and each channel, each written as points x,y from 0 to 1 (rgb=\"0,0 0.5,0.6 1,1\" lifts the mids); contrast, fades, and color casts.",
@@ -231,6 +271,14 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Limits luma and chroma to the legal range; delivery compliance.",
     ),
     // Distort
+    (
+        "distort.blobbylize",
+        "Melts the picture into glossy blobs shaped by another track (blobLayer=V2); liquid and gooey looks.",
+    ),
+    (
+        "distort.displacementmap",
+        "Pushes pixels by another track's brightness (displacementMapLayer=V2); heat haze, water ripples, glass, and warped reveals.",
+    ),
     (
         "distort.bezierwarp",
         "Warps the picture by curved edges; flag or paper bends, fitting to shapes.",
@@ -480,6 +528,10 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
     ),
     // Keying
     (
+        "key.differencematte",
+        "Keys out what matches a clean plate on another track (differenceLayer=V2); removing a static background without a green screen.",
+    ),
+    (
         "key.advancedspill",
         "Removes green or blue spill; cleanup after keying.",
     ),
@@ -535,6 +587,10 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
     ),
     // Noise & Grain
     (
+        "noise.matchgrain",
+        "Copies the grain of another track onto the clip (noiseSourceLayer=V2); making inserts and graphics sit in grainy footage.",
+    ),
+    (
         "noise.addgrain",
         "Film grain; a filmic texture, or matching footage.",
     ),
@@ -581,6 +637,14 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
     ),
     // Perspective
     (
+        "perspective.3dglasses",
+        "Combines a left and a right view from two tracks (leftView=V2 rightView=V3) into anaglyph or side-by-side 3D; stereo 3D output.",
+    ),
+    (
+        "perspective.environment",
+        "Reflects another track as an environment around the picture (environment=V2); shiny, chrome, and reflective surfaces.",
+    ),
+    (
         "perspective.bevelalpha",
         "A beveled edge on the picture's alpha; 3D-looking text and logos.",
     ),
@@ -609,6 +673,30 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "A shadow cast from a point light; realistic shadows.",
     ),
     // Simulation
+    (
+        "sim.hair",
+        "Grows hair or fur over the picture, its fall shaped by another track (hairfallMap/mapLayer=V2); fuzzy, furry, and grassy textures.",
+    ),
+    (
+        "sim.carddance",
+        "Splits the picture into cards that move by gradient tracks (gradientLayer1=V2) with another track on their backs (backLayer=V3); card-flip reveals and mosaics.",
+    ),
+    (
+        "sim.caustics",
+        "Light ripples like sunlight through water, using tracks as the bottom, water surface, and sky (water/waterSurface=V2); pools and underwater light.",
+    ),
+    (
+        "sim.foam",
+        "Bubbles that float and flow, textured or steered by other tracks (flowMap/flowMap=V2); foam, bubbles, and particle swarms.",
+    ),
+    (
+        "sim.shatter",
+        "Breaks the picture into flying pieces, optionally by a gradient track (gradient/gradientLayer=V2); explosions and glass-shatter transitions.",
+    ),
+    (
+        "sim.waveworld",
+        "Simulates water waves, with another track as the ground they run over (ground/ground=V2); wave maps for displacement and caustics.",
+    ),
     (
         "sim.ballaction",
         "Turns the picture into balls; dotted, ball-pixel looks.",
@@ -648,6 +736,22 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "A star field bursting outward; warp speed and sparkle bursts.",
     ),
     // Stylize
+    (
+        "stylize.glass",
+        "Distorts the picture as if seen through glass bumps from another track (bumpMap=V2); frosted and textured glass.",
+    ),
+    (
+        "stylize.mrsmoothie",
+        "Smears color along the flow of another track (flowLayer=V2); psychedelic, painterly color flow.",
+    ),
+    (
+        "stylize.plastic",
+        "Gives the picture a shiny raised surface from another track's bumps (bumpLayer=V2); embossed plastic and molded looks.",
+    ),
+    (
+        "stylize.texturize",
+        "Embosses another track's texture into the picture (textureLayer=V2); canvas, paper, and surface textures.",
+    ),
     (
         "stylize.brushstrokes",
         "Painterly brush strokes; painting looks.",
@@ -737,6 +841,18 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
     ),
     // Time
     (
+        "time.timedifference",
+        "Shows the difference between the clip and another track over time (targetLayer=V2); spotting motion and changes between takes.",
+    ),
+    (
+        "time.timedisplacement",
+        "Shows each pixel from a different moment by another track's brightness (displacementMapLayer=V2); time slices and rolling-shutter-style warps.",
+    ),
+    (
+        "time.timewarp",
+        "Retimes the clip with frame blending or motion-estimated frames, optionally guided by other tracks (warpLayer=V2); smooth slow motion and speed ramps.",
+    ),
+    (
         "time.echo",
         "Blends earlier or later frames over the current one; trails, ghosting, and motion echoes.",
     ),
@@ -757,6 +873,30 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Blends several neighbouring frames; long-exposure smears and dreamy motion.",
     ),
     // Transitions
+    (
+        "transition.cardwipe",
+        "Cards flip over to reveal the next shot, optionally timed by a gradient track (gradientLayer=V2); techy grid flips.",
+    ),
+    (
+        "transition.glasswipe",
+        "Wipes through rippled glass shaped by a gradient track (gradientLayer=V2); liquid, refractive transitions.",
+    ),
+    (
+        "transition.gradientwipe",
+        "Wipes in the order of a gradient track's brightness, dark first (gradientLayer=V2); custom-shaped wipes from any picture.",
+    ),
+    (
+        "transition.imagewipe",
+        "Wipes by the brightness of another track (layer=V2); wipes shaped by a texture or logo.",
+    ),
+    (
+        "transition.twister",
+        "Twists the picture away like a ribbon, with another track on its back (backside=V2); playful spinning transitions.",
+    ),
+    (
+        "transition.warpomatic",
+        "Warps the picture away by the brightness of another track (reactorLayer=V2); melting, organic transitions.",
+    ),
     (
         "transition.blockdissolve",
         "Dissolves in random blocks; digital, glitchy transitions.",

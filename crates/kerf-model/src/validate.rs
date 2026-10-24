@@ -3,11 +3,12 @@
 //! Operations keep these invariants; `validate` checks a whole project, such
 //! as one just read from text or converted from another format.
 
-use crate::catalog::{Catalog, Domain, FxKind};
+use crate::catalog::{Catalog, Domain, FxKind, ParamType};
 use crate::diag::Diagnostic;
 use crate::id::Id;
 use crate::model::{Clip, Content, Params, Project, Sequence, Track, TrackKind};
 use crate::time::Time;
+use crate::value::{Param, Value};
 use std::collections::{HashMap, HashSet};
 
 pub fn validate(project: &Project, catalog: &Catalog) -> Vec<Diagnostic> {
@@ -196,6 +197,7 @@ impl Validator<'_> {
             }
             self.track(sequence, track);
         }
+        self.track_reads(sequence);
         for marker in &sequence.markers {
             if marker.at.is_negative()
                 || marker.duration.is_negative()
@@ -208,6 +210,92 @@ impl Validator<'_> {
                     format!("marker `{}` must start and last whole frames", marker.id),
                 );
             }
+        }
+    }
+
+    /// Effects' and transitions' track parameters name another picture
+    /// track of the sequence, and no tracks read each other in a loop: a
+    /// track an effect reads is drawn on its own for it.
+    fn track_reads(&mut self, sequence: &Sequence) {
+        let picture = |id: &str| {
+            sequence
+                .tracks
+                .iter()
+                .any(|track| track.kind == TrackKind::Video && track.id == id)
+        };
+        // (reading track, read track, clip or transition)
+        let mut reads: Vec<(&str, &str, &Id)> = Vec::new();
+        for track in &sequence.tracks {
+            // (owner, effect or transition, its parameters)
+            let mut uses: Vec<(&Id, &Id, &Params)> = Vec::new();
+            for clip in &track.clips {
+                uses.extend(
+                    clip.effects
+                        .iter()
+                        .map(|effect| (&clip.id, &effect.fx, &effect.params)),
+                );
+            }
+            uses.extend(track.transitions.iter().map(|t| (&t.id, &t.fx, &t.params)));
+            for (id, fx, params) in uses {
+                let Some(def) = self.catalog.fx(fx.as_str()) else {
+                    continue;
+                };
+                for (name, param) in params {
+                    let read = match (def.find(name), param) {
+                        (Some(param_def), Param::Static(Value::Text(read)))
+                            if param_def.ty == ParamType::Track && !read.is_empty() =>
+                        {
+                            read.as_str()
+                        }
+                        _ => continue,
+                    };
+                    if !picture(read) {
+                        self.error(
+                            "track.read",
+                            id,
+                            format!("`{id}` {fx}: `{name}` names `{read}`, which is not a picture track of this sequence"),
+                        );
+                    } else if read == track.id.as_str() {
+                        self.error(
+                            "track.read",
+                            id,
+                            format!("`{id}` {fx}: `{name}` cannot read the track it is on"),
+                        );
+                    } else {
+                        reads.push((track.id.as_str(), read, id));
+                    }
+                }
+            }
+        }
+        let reaches = |from: &str, to: &str| {
+            let mut stack = vec![from];
+            let mut seen = HashSet::new();
+            while let Some(at) = stack.pop() {
+                if at == to {
+                    return true;
+                }
+                if seen.insert(at) {
+                    stack.extend(
+                        reads
+                            .iter()
+                            .filter(|(r, _, _)| *r == at)
+                            .map(|(_, t, _)| *t),
+                    );
+                }
+            }
+            false
+        };
+        let loops: Vec<(&str, &str, &Id)> = reads
+            .iter()
+            .filter(|(reader, read, _)| reaches(read, reader))
+            .copied()
+            .collect();
+        for (reader, read, clip) in loops {
+            self.error(
+                "track.read",
+                clip,
+                format!("`{clip}` reads track {read}, which reads track {reader} back"),
+            );
         }
     }
 

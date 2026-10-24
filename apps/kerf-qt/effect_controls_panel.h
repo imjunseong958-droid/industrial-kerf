@@ -28,6 +28,8 @@ public:
     void setClip(const QString &id, const QJsonObject &clip, const QJsonArray &defs, double fps);
     // The catalog from kerf_fx_catalog, for the effects' parameters.
     void setEffectCatalog(const QJsonArray &catalog);
+    // The picture tracks an effect on the clip may read (track parameters).
+    void setPictureTracks(const QStringList &tracks);
 
 signals:
     void editRequested(const QJsonArray &ops);
@@ -58,6 +60,7 @@ private:
     QHash<QString, QWidget *> m_propertyEditors;
     QVBoxLayout *m_effectsLayout = nullptr;
     QHash<QString, QJsonObject> m_effectDefs;
+    QStringList m_pictureTracks;
     // The effects shown, as clip and stack, to rebuild only when they change.
     QString m_effectsShown;
 };

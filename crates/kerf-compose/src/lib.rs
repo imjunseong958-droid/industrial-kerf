@@ -222,7 +222,11 @@ impl Compositor {
         }
         let comp = self.scene.project.comp(self.scene.comp)?;
         let t = scene::ticks(at);
-        let mut showing = comp.layers.iter().filter(|layer| layer.is_active_at(t));
+        // Layers of tracks effects read are out of sight.
+        let mut showing = comp
+            .layers
+            .iter()
+            .filter(|layer| layer.switches.video && layer.is_active_at(t));
         let layer = showing.next()?;
         if showing.next().is_some() {
             return None;

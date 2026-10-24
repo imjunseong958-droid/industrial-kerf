@@ -112,7 +112,9 @@ Raster effects come from EffectCraft and run on a clip's own picture before
 it is placed, so they come before the effects above whatever the stack
 order. Raster transitions (`transition.*`) are written like any transition.
 A file parameter (a LUT, an OpenColorIO config) is a quoted path, relative
-to the project. `look` with `effects: \"<words>\"` finds entries by the look or moment you
+to the project. A track parameter names another picture track of the
+sequence (`takeMatteFromLayer=V2`), whose picture the effect reads even while
+the track is hidden. `look` with `effects: \"<words>\"` finds entries by the look or moment you
 want, each with when to use it, and `look` with `effect: \"<id>\"` lists one
 entry's parameters.";
 
@@ -131,6 +133,7 @@ fn describe(param: &ParamDef) -> String {
     let mut facts = Vec::new();
     match &param.ty {
         ParamType::Enum(options) => facts.push(options.join("|")),
+        ParamType::Track => facts.push("a picture track of the sequence, such as V2".into()),
         ParamType::File(extensions) => facts.push(format!(
             "a file ({}), relative to the project",
             extensions
