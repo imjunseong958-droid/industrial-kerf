@@ -851,7 +851,8 @@ pub fn specs() -> Vec<EffectSpec> {
             vec![
                 p("phase", "Phase", num(0.0), slider(-1000.0, 1000.0, 0.0, 255.0, 0)),
                 p("applyPhaseMapToAlpha", "Apply Phase Map To Alpha", Value::Bool(false), ParamUi::Checkbox),
-                p("map", "Map", Value::Str(String::new()), ParamUi::Hidden),
+                // The output level for each input level, evenly spaced: "0,1,2 … 255" (or 0 to 1).
+                p("map", "Map", Value::Str(String::new()), ParamUi::Text),
             ],
             arbitrary_map,
         ),

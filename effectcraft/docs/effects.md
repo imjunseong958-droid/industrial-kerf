@@ -72,7 +72,7 @@ Effects are addressed by id (`ec.<category>.<name>`) or display name in commands
 | Color Link | `ec.color.colorlink` | 6 | GPU | 32 | Implemented |
 | Color Stabilizer | `ec.color.colorstabilizer` | 6 | GPU | 32 | Implemented |
 | Colorama | `ec.color.colorama` | 20 | GPU | 32 | Implemented |
-| Curves | `ec.color.curves` | 0 | GPU | 32 | Implemented |
+| Curves | `ec.color.curves` | 5 | GPU | 32 | Implemented |
 | Equalize | `ec.color.equalize` | 2 | GPU | 32 | Implemented |
 | Exposure | `ec.color.exposure` | 14 | GPU | 32 | Implemented |
 | Gamma/Pedestal/Gain | `ec.color.gammapedestalgain` | 10 | GPU | 32 | Implemented |
@@ -86,7 +86,7 @@ Effects are addressed by id (`ec.<category>.<name>`) or display name in commands
 | OCIO Display Transform | `ec.color.ociodisplay` | 9 | GPU | 32 | Implemented |
 | OCIO File Transform | `ec.color.ociofile` | 4 | GPU | 32 | Implemented |
 | OCIO Look Transform | `ec.color.ociolook` | 6 | GPU | 32 | Implemented |
-| PS Arbitrary Map | `ec.color.psarbitrarymap` | 2 | GPU | 32 | Implemented |
+| PS Arbitrary Map | `ec.color.psarbitrarymap` | 3 | GPU | 32 | Implemented |
 | Photo Filter | `ec.color.photofilter` | 4 | GPU | 32 | Implemented |
 | Selective Color | `ec.color.selectivecolor` | 38 | GPU | 32 | Implemented |
 | Shadow/Highlight | `ec.color.shadowhighlight` | 14 | GPU | 32 | Implemented |

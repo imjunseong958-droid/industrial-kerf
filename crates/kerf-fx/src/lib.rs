@@ -37,8 +37,6 @@ pub const COMPLETION: &str = "completion";
 /// neighbouring frames, which a clip's own pixels do not give.
 const NEEDS_MORE: &[&str] = &[
     "ec.blur.camerashakedeblur",
-    "ec.color.curves",
-    "ec.color.psarbitrarymap",
     "ec.distort.meshwarp",
     "ec.distort.puppet",
     "ec.distort.reshape",
@@ -63,6 +61,10 @@ const RENAMED: &[(&str, (&str, &str))] = &[
     ),
     ("ec.blur.ccradial", ("blur.radialzoom", "Radial Zoom Blur")),
     ("ec.distort.ccsmear", ("distort.pullsmear", "Pull Smear")),
+    (
+        "ec.color.psarbitrarymap",
+        ("color.arbitrarymap", "Arbitrary Map"),
+    ),
 ];
 
 /// Kerf's id, name, and kind for an EffectCraft effect, if Kerf carries
@@ -600,6 +602,17 @@ mod tests {
         stack.apply(&mut frame, 2, 1, Time::ZERO, 24.0);
         let _ = std::fs::remove_file(&path);
         assert_eq!(frame, [255, 255, 255, 255, 0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn curves_are_written_as_points() {
+        let curve = Param::Static(Value::Text("0,0 0.5,0.75 1,1".into()));
+        let stack =
+            RasterStack::new(&[effect("color.curves", &[("rgb", curve)])], 1, 1, 0).unwrap();
+        let mut frame = [128, 128, 128, 255];
+        stack.apply(&mut frame, 1, 1, Time::ZERO, 24.0);
+        // The midpoint lifted to three quarters.
+        assert!(frame[0].abs_diff(191) <= 2, "{frame:?}");
     }
 
     #[test]
