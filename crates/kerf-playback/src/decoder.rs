@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-/// A clip's raster effects, run on each picture before it is letterboxed
-/// into the frame, as a render's bake runs them.
+/// A clip's masks and raster effects, run on each picture before it is
+/// letterboxed into the frame: the masks cut it as the compositor cuts a
+/// layer, and the effects run as a render's bake runs them.
 struct Live {
     stack: RasterStack,
     /// The clip time at the clip's source in, its source in, and speed.
@@ -25,11 +26,15 @@ struct Live {
 impl Live {
     fn for_clip(clip: &PlaybackClip, fps: f64) -> Result<Option<Self>, PlaybackError> {
         let (width, height) = clip.layer;
-        if clip.effects.is_empty() || width == 0 || height == 0 {
+        if width == 0 || height == 0 {
             return Ok(None);
         }
         let stack = RasterStack::new(&clip.effects, width, height, clip.seed)
-            .map_err(PlaybackError::InvalidProject)?;
+            .map_err(PlaybackError::InvalidProject)?
+            .with_masks(&clip.masks);
+        if stack.is_empty() {
+            return Ok(None);
+        }
         Ok(Some(Self {
             stack,
             offset: clip.clip_offset,
@@ -39,10 +44,14 @@ impl Live {
         }))
     }
 
-    /// The clip time of the picture at `source_time`.
-    fn clip_time(&self, source_time: f64) -> Time {
-        Time::from_seconds(self.offset + (source_time - self.source_in) / self.speed)
-            .unwrap_or(Time::ZERO)
+    /// The clip time `frames` frames after the picture at `source_time`.
+    fn clip_time(&self, source_time: f64, frames: u32) -> Time {
+        Time::from_seconds(
+            self.offset
+                + (source_time - self.source_in) / self.speed
+                + f64::from(frames) / self.fps,
+        )
+        .unwrap_or(Time::ZERO)
     }
 }
 
@@ -81,9 +90,14 @@ pub(crate) struct VideoDecoder {
     preview_graph: bool,
     cancelled: bool,
     last_source_time: Option<f64>,
+    /// Pictures the graph has given out since the seek to `source_time`.
+    /// The graph holds pictures back to pace them, so the one it gives out
+    /// is not the last one decoded; playback shows it this many frames
+    /// after the seek.
+    served: u32,
     epoch: Arc<AtomicU64>,
     serve_epoch: u64,
-    /// The clip's raster effects, when it has any.
+    /// The clip's masks and raster effects, when it has any.
     live: Option<Live>,
 }
 
@@ -154,6 +168,7 @@ impl VideoDecoder {
             preview_graph: release_early,
             cancelled: false,
             last_source_time: None,
+            served: 0,
             epoch,
             serve_epoch,
             live: Live::for_clip(clip, timeline.fps)?,
@@ -222,6 +237,7 @@ impl VideoDecoder {
         self.release_early = release_early;
         self.preview_graph = release_early;
         self.last_source_time = None;
+        self.served = 0;
         self.serve_epoch = serve_epoch;
         self.live = Live::for_clip(clip, timeline.fps)?;
         self.filter = None;
@@ -270,7 +286,10 @@ impl VideoDecoder {
                     sink.sink().frame(&mut filtered)
                 };
                 match result {
-                    Ok(()) => return Ok(true),
+                    Ok(()) => {
+                        self.served += 1;
+                        return Ok(true);
+                    }
                     Err(error) if libav::is_again(&error) || libav::is_eof(&error) => {}
                     Err(error) => return Err(libav::map_error(error)),
                 }
@@ -333,8 +352,9 @@ impl VideoDecoder {
             sar.numerator(),
             sar.denominator().max(1)
         );
-        // A clip with raster effects leaves the graph unletterboxed, and
-        // without burned-in subtitles, for its effects to run first.
+        // A clip with masks or raster effects leaves the graph
+        // unletterboxed, and without burned-in subtitles, for them to run
+        // first.
         let letterbox = self.live.is_none();
         let spec = if self.release_early {
             // No fps/trim hold. The first picture after the seek — usually the
@@ -392,23 +412,32 @@ impl VideoDecoder {
                 sink.sink().frame(&mut filtered)
             };
             return match result {
-                Ok(()) => Ok(Some(DecodedVideoFrame {
-                    width: self.width,
-                    height: self.height,
-                    pixels: match &self.live {
+                Ok(()) => {
+                    let served = self.served;
+                    self.served += 1;
+                    let pixels = match &self.live {
                         None => libav::packed_rgba(&filtered, self.width, self.height)?,
                         Some(live) => {
                             let (width, height) = (filtered.width(), filtered.height());
                             let mut picture =
                                 libav::packed_rgba(&filtered, width, height)?.to_vec();
-                            let at =
-                                live.clip_time(self.last_source_time.unwrap_or(self.source_time));
+                            // The scrub preview holds nothing back.
+                            let at = if self.preview_graph {
+                                live.clip_time(self.last_source_time.unwrap_or(self.source_time), 0)
+                            } else {
+                                live.clip_time(self.source_time, served)
+                            };
                             live.stack.apply(&mut picture, width, height, at, live.fps);
                             letterbox(&picture, width, height, self.width, self.height).into()
                         }
-                    },
-                    source_time: self.last_source_time,
-                })),
+                    };
+                    Ok(Some(DecodedVideoFrame {
+                        width: self.width,
+                        height: self.height,
+                        pixels,
+                        source_time: self.last_source_time,
+                    }))
+                }
                 Err(error) if libav::is_again(&error) || libav::is_eof(&error) => Ok(None),
                 Err(error) => Err(libav::map_error(error)),
             };
@@ -568,7 +597,7 @@ fn video_filter(
 }
 
 /// Center an RGBA picture on a black frame, as the graph's `pad` would,
-/// showing black through whatever the effects made transparent.
+/// showing black through whatever the masks or effects made transparent.
 fn letterbox(
     picture: &[u8],
     width: u32,

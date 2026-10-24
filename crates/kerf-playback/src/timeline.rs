@@ -5,8 +5,8 @@ use kerf_core::program::{
     compile_program, program_sequence, program_sound, ProgramError, ProgramOptions, ProgramSound,
 };
 use kerf_model::{
-    Catalog, Clip, Content, Domain, Effect, Engine, Param, ParamType, Project, Sequence, Time,
-    TrackKind, Value,
+    Catalog, Clip, Content, Domain, Effect, Engine, Mask, Param, ParamType, Project, Sequence,
+    Time, TrackKind, Value,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -56,6 +56,8 @@ pub struct PlaybackClip {
     pub track_muted: bool,
     /// Raster effects run on each picture, in stack order; empty for sound.
     pub effects: Vec<Effect>,
+    /// Masks that cut each picture before its effects run; empty for sound.
+    pub masks: Vec<Mask>,
     /// The picture size the effects measure against: the media's.
     pub layer: (u32, u32),
     /// The clip time at `timeline_start`, where its keyframes are read.
@@ -431,14 +433,16 @@ impl Flattener<'_> {
                             .media(media.as_str())
                             .and_then(|media| media.video)
                             .filter(|_| kind == ClipKind::Video);
-                        let effects = match video {
-                            Some(_) => clip
-                                .effects
-                                .iter()
-                                .filter(|effect| effect.enabled && raster(effect))
-                                .cloned()
-                                .collect(),
-                            None => Vec::new(),
+                        let (effects, masks) = match video {
+                            Some(_) => (
+                                clip.effects
+                                    .iter()
+                                    .filter(|effect| effect.enabled && raster(effect))
+                                    .cloned()
+                                    .collect(),
+                                clip.masks.clone(),
+                            ),
+                            None => (Vec::new(), Vec::new()),
                         };
                         self.clips.push(PlaybackClip {
                             id: clip.id.to_string(),
@@ -453,6 +457,7 @@ impl Flattener<'_> {
                             volume: 10f64.powf(gain / 20.0) as f32,
                             track_muted: muted || track.muted,
                             effects,
+                            masks,
                             layer: video.map_or((0, 0), |video| (video.width, video.height)),
                             clip_offset: (lo - clip.start).seconds(),
                             seed: kerf_core::raster::seed(clip.id.as_str()),
@@ -528,9 +533,10 @@ pub fn preview_plan(project: &Project) -> PreviewPlan {
         project,
         picture: Vec::new(),
         sound: Vec::new(),
+        shown: Vec::new(),
         depth: 0,
     };
-    check.sequence(sequence, Time::ZERO);
+    check.sequence(sequence, Time::ZERO, (Time::ZERO, sequence.duration()));
     let NativeCheck { picture, sound, .. } = check;
     match drawn {
         Ok(_) if unmixed.is_none() && picture.is_empty() && sound.is_empty() => {
@@ -594,11 +600,16 @@ struct NativeCheck<'a> {
     project: &'a Project,
     picture: Vec<PreviewReason>,
     sound: Vec<PreviewReason>,
+    /// When the pictures checked so far show, in program time: what shows
+    /// beneath the clips of later tracks.
+    shown: Vec<(Time, Time)>,
     depth: usize,
 }
 
 impl NativeCheck<'_> {
-    fn sequence(&mut self, sequence: &Sequence, at: Time) {
+    /// Check `sequence` placed at program time `at`, where it shows during
+    /// `window`.
+    fn sequence(&mut self, sequence: &Sequence, at: Time, window: (Time, Time)) {
         if self.depth > MAX_NESTING {
             return;
         }
@@ -613,18 +624,52 @@ impl NativeCheck<'_> {
             for clip in track.clips.iter().filter(|clip| clip.enabled) {
                 let range =
                     PreviewRange::new((clip.start + at).seconds(), (clip.end() + at).seconds());
+                let shows = (
+                    (clip.start + at).max(window.0),
+                    (clip.end() + at).min(window.1),
+                );
                 if let Some(what) = self.unsupported(track.kind, clip) {
                     self.push(&clip.id, range, what, sound);
+                } else if track.kind == TrackKind::Video
+                    && !clip.masks.is_empty()
+                    && self.covers(shows)
+                {
+                    // Native playback shows one picture at a time: black,
+                    // not the tracks below, where masks leave it clear.
+                    self.push(&clip.id, range, "a mask over another picture", false);
+                }
+                if track.kind == TrackKind::Video && shows.0 < shows.1 && self.has_picture(clip) {
+                    self.shown.push(shows);
                 }
                 if let Content::Sequence { sequence: id, .. } = &clip.content {
                     if let Some(nested) = self.project.sequence(id.as_str()) {
                         self.depth += 1;
                         let source_in = clip.source_range().map_or(Time::ZERO, |(start, _)| start);
-                        self.sequence(nested, clip.start + at - source_in);
+                        self.sequence(nested, clip.start + at - source_in, shows);
                         self.depth -= 1;
                     }
                 }
             }
+        }
+    }
+
+    /// Whether a picture checked so far shows during any of `(from, to)`.
+    fn covers(&self, (from, to): (Time, Time)) -> bool {
+        self.shown
+            .iter()
+            .any(|&(start, end)| start < to && from < end)
+    }
+
+    /// Whether a clip on a picture track draws a picture of its own; a
+    /// nested sequence's are its clips'.
+    fn has_picture(&self, clip: &Clip) -> bool {
+        match &clip.content {
+            Content::Media { media, .. } => self
+                .project
+                .media(media.as_str())
+                .is_some_and(|media| media.video.is_some()),
+            Content::Generator { .. } | Content::Caption { .. } => true,
+            Content::Sequence { .. } => false,
         }
     }
 
@@ -637,7 +682,8 @@ impl NativeCheck<'_> {
                 .then_some("a speed change on a nested sequence");
         }
         // Raster effects on a media picture run live, unless they make it
-        // transparent, read its other frames, or read another track.
+        // transparent, read its other frames, read another track, or read
+        // the clip's masks, which only the compositor hands them.
         let live = |effect: &Effect| {
             kind == TrackKind::Video
                 && matches!(clip.content, Content::Media { .. })
@@ -646,10 +692,13 @@ impl NativeCheck<'_> {
                         matches!(param.ty, ParamType::Track | ParamType::Sound)
                             && matches!(effect.params.get(&param.name), Some(Param::Static(Value::Text(track))) if !track.is_empty())
                     });
+                    let reads_a_mask = !clip.masks.is_empty()
+                        && fx.params.iter().any(|param| param.ty == ParamType::Mask);
                     fx.engine == Engine::Raster
                         && !NOT_LIVE.contains(&fx.category.as_str())
                         && !kerf_fx::reads_other_frames(effect.fx.as_str())
                         && !reads_a_track
+                        && !reads_a_mask
                 })
         };
         if clip
@@ -659,8 +708,10 @@ impl NativeCheck<'_> {
         {
             return Some("effects");
         }
-        if !clip.masks.is_empty() {
-            return Some("masks");
+        // Masks cut a media picture live, but not a nested sequence's.
+        if matches!(clip.content, Content::Sequence { .. }) && clip.masks.iter().any(kerf_fx::cuts)
+        {
+            return Some("masks on a nested sequence");
         }
         match &clip.content {
             Content::Media { media, .. }
@@ -723,10 +774,10 @@ impl NativeCheck<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{preview_plan, ClipKind, PlaybackClip, PlaybackTimeline};
+    use super::{preview_plan, ClipKind, NativeCheck, PlaybackClip, PlaybackTimeline};
     use kerf_core::preview::PreviewMode;
     use kerf_lang::parse_document;
-    use kerf_model::{Catalog, Project};
+    use kerf_model::{Catalog, Project, Time};
 
     fn project(body: &str) -> Project {
         let text = format!(
@@ -887,11 +938,6 @@ mod tests {
             "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx color.colorstabilizer\n",
         );
         assert_eq!(preview_plan(&steadied).mode, PreviewMode::Composited);
-        // So does a mask.
-        let masked = project(
-            "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      mask k1 rect=0.1,0.1,0.9,0.9\n",
-        );
-        assert_eq!(preview_plan(&masked).mode, PreviewMode::Composited);
         // So does one that reads another track.
         let matted = project(
             "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx channel.setmatte takeMatteFromLayer=V2\n  \
@@ -924,6 +970,126 @@ mod tests {
              transition x1 from=a1 to=g1 fx=dissolve dur=10f\n",
         );
         assert_eq!(preview_plan(&adjusted).mode, PreviewMode::Unavailable);
+    }
+
+    /// What native playback leaves out of the picture of the first
+    /// sequence, which the compositor then draws.
+    fn unshown(project: &Project) -> Vec<String> {
+        let sequence = &project.sequences[0];
+        let mut check = NativeCheck {
+            project,
+            picture: Vec::new(),
+            sound: Vec::new(),
+            shown: Vec::new(),
+            depth: 0,
+        };
+        check.sequence(sequence, Time::ZERO, (Time::ZERO, sequence.duration()));
+        check
+            .picture
+            .into_iter()
+            .map(|reason| reason.message)
+            .collect()
+    }
+
+    #[test]
+    fn masks_cut_the_picture_live() {
+        let clip = "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n";
+        let native = |body: &str| {
+            let plan = preview_plan(&project(body));
+            assert_eq!(
+                plan.mode,
+                PreviewMode::NativeExact,
+                "{body}: {:?}",
+                plan.reasons
+            );
+        };
+        native(&format!("{clip}      mask k1 rect=0.1,0.1,0.9,0.9\n"));
+        native(&format!(
+            "{clip}      mask k1 ellipse=0.5,0.5,0.3,0.4 feather={{0f:0 30f:12}} expansion=-2\n      \
+             mask k2 points=\"0.2,0.2 0.8,0.3 0.5,0.9\" mode=subtract inverted=true opacity=0.5\n      \
+             mask k3 rect=0,0,0.6,1 mode=intersect\n      \
+             fx channel.invert\n"
+        ));
+        // A path for effects cuts nothing.
+        native(&format!(
+            "{clip}      mask k1 rect=0.1,0.1,0.9,0.9 mode=none\n"
+        ));
+        // Masked clips one after another.
+        native(&format!(
+            "{clip}      mask k1 rect=0.1,0.1,0.9,0.9\n    \
+             clip c2 media=source-a src=0s at=2s dur=2s\n      mask k1 rect=0.2,0.2,0.8,0.8\n"
+        ));
+
+        let composited = |body: &str, what: &str| {
+            let project = project(body);
+            assert_eq!(
+                preview_plan(&project).mode,
+                PreviewMode::Composited,
+                "{body}"
+            );
+            let unshown = unshown(&project);
+            assert!(
+                unshown.iter().any(|reason| reason.contains(what)),
+                "{body}: {unshown:?}"
+            );
+        };
+        // Native playback shows black where a mask leaves the picture
+        // clear; the compositor shows the track below.
+        composited(
+            &format!(
+                "{clip}  track V2 video\n    clip c2 media=source-a src=0s at=1s dur=2s\n      \
+                 mask k1 rect=0.1,0.1,0.9,0.9\n"
+            ),
+            "`c2` uses a mask over another picture",
+        );
+        // An effect that reads a mask needs the compositor to hand it over.
+        composited(
+            &format!("{clip}      mask k1 rect=0.1,0.1,0.9,0.9 mode=none\n      fx generate.stroke path=k1\n"),
+            "`c1` uses effects",
+        );
+    }
+
+    #[test]
+    fn masks_over_nested_sequences_need_the_compositor() {
+        let nested = |outer: &str| -> Project {
+            let text = format!(
+                "kerf 1\nproject name=\"n\"\n\
+                 media m path=\"/tmp/m.mp4\" rate=30 dur=00:00:10:00 video=320x180\n\
+                 sequence main rate=30 size=320x180 audio=48000\n\
+                 \x20 track V1 video\n\
+                 \x20   clip n1 seq=inner src=0s at=0s dur=2s\n{outer}\
+                 sequence inner rate=30 size=320x180 audio=48000\n\
+                 \x20 track V1 video\n\
+                 \x20   clip i1 media=m src=0s at=0s dur=2s\n\
+                 \x20   clip i2 media=m src=0s at=4s dur=2s\n\
+                 \x20 track V2 video\n\
+                 \x20   clip i3 media=m src=0s at=3s dur=2s\n\
+                 \x20     mask k1 rect=0.1,0.1,0.9,0.9\n"
+            );
+            parse_document(&text, Catalog::builtin()).unwrap().project
+        };
+        // The nested clip shows only i1, and nothing is beneath i3 there.
+        let project = nested("");
+        let plan = preview_plan(&project);
+        assert_eq!(plan.mode, PreviewMode::NativeExact, "{:?}", plan.reasons);
+        // A mask on the nested clip cuts the nested picture as a whole.
+        let project = nested("\x20     mask k1 rect=0.1,0.1,0.9,0.9\n");
+        assert_eq!(preview_plan(&project).mode, PreviewMode::Composited);
+        assert_eq!(
+            unshown(&project),
+            ["`n1` uses masks on a nested sequence, which native playback does not show"]
+        );
+        // Over the nested clip, a masked clip shows it beneath.
+        let project = nested(
+            "\x20 track V2 video\n\
+             \x20   clip c2 media=m src=0s at=1s dur=1s\n\
+             \x20     mask k1 ellipse=0.5,0.5,0.4,0.4\n",
+        );
+        assert_eq!(preview_plan(&project).mode, PreviewMode::Composited);
+        assert_eq!(
+            unshown(&project),
+            ["`c2` uses a mask over another picture, which native playback does not show"]
+        );
     }
 
     #[test]
@@ -974,6 +1140,7 @@ mod tests {
             volume: 1.0,
             track_muted: false,
             effects: Vec::new(),
+            masks: Vec::new(),
             layer: (0, 0),
             clip_offset: 0.0,
             seed: 0,

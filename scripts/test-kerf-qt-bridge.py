@@ -226,8 +226,8 @@ with tempfile.TemporaryDirectory(prefix='kerf-qt-', dir=ROOT / 'target') as temp
         send({'type': 'undo', 'revision': with_effect['revision']})
         redone = state()
         # A mask drawn on the viewer is a typed edit: the document gains its
-        # line, the compositor draws the program with the picture cut to it,
-        # and undo takes it away.
+        # line, native playback shows the picture cut to it, and undo takes
+        # it away.
         send({'type': 'edit', 'revision': redone['revision'],
               'ops': [{'op': 'mask-add', 'clip': clip['id'], 'name': 'k1', 'rect': [0.25, 0.25, 0.75, 0.75]}]})
         masked = state()
@@ -235,7 +235,7 @@ with tempfile.TemporaryDirectory(prefix='kerf-qt-', dir=ROOT / 'target') as temp
         masks = masked['timeline']['tracks'][0]['clips'][0].get('masks', [])
         assert [(mask['name'], mask['rect']) for mask in masks] == [('k1', [0.25, 0.25, 0.75, 0.75])], masks
         assert any(prop['name'] == 'feather' for prop in masked['timeline']['maskProperties'])
-        wait(lambda event: event['type'] == 'preview' and event['status'] == 'live')
+        wait(lambda event: event['type'] == 'preview' and event['status'] == 'ready')
         send({'type': 'seek', 'position': 1.0})
         frame = Frame()
         deadline = time.monotonic() + 20
