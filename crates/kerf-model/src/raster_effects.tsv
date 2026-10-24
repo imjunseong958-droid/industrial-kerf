@@ -24,6 +24,23 @@ effect	blur.vector	Blur & Sharpen	Vector Blur	Blurs along the picture's own cont
 	number	amount	10	0..500		Amount
 	number	angleOffset	0		degrees	Angle Offset
 	number	mapSoftness	15	0..100		Map Softness
+effect	blur.cameralens	Blur & Sharpen	Camera Lens Blur	Lens-shaped defocus with bokeh, shaped by a depth map from another track (blurMap/blurMapLayer=V2); realistic focus falloff and rack focus.
+	number	blurRadius	10	0..500		Blur Radius
+	enum	irisProperties/irisShape	hexagon	triangle|square|pentagon|hexagon|heptagon|octagon|nonagon|decagon|circle		Shape
+	number	irisProperties/irisRoundness	0	0..100		Roundness
+	number	irisProperties/irisAspectRatio	1	0.01..100		Aspect Ratio
+	number	irisProperties/irisRotation	0		degrees	Rotation
+	number	irisProperties/diffractionFringe	0	0..500		Diffraction Fringe
+	track	blurMap/blurMapLayer				Layer
+	enum	blurMap/channel	luminance	luminance|alpha|color		Channel
+	enum	blurMap/placement	stretch	center|stretch		Placement
+	number	blurMap/blurFocalDistance	0	0..255		Blur Focal Distance
+	bool	blurMap/invertBlurMap	false			Invert Blur Map
+	number	highlight/specularBrightness	0	0..100		Gain
+	number	highlight/specularThreshold	255	0..255		Threshold
+	number	highlight/highlightSaturation	100	0..100		Saturation
+	bool	repeatEdge	false			Repeat Edge Pixels
+	bool	useLinear	false			Use Linear Working Space
 effect	blur.channel	Blur & Sharpen	Channel Blur	Blurs red, green, blue, or alpha separately; color fringing and glitchy softness.
 	number	redBlurriness	0	0..3000		Red Blurriness
 	number	greenBlurriness	0	0..3000		Green Blurriness
@@ -31,6 +48,11 @@ effect	blur.channel	Blur & Sharpen	Channel Blur	Blurs red, green, blue, or alpha
 	number	alphaBlurriness	0	0..3000		Alpha Blurriness
 	bool	repeatEdge	false			Repeat Edge Pixels
 	enum	dimensions	horizontal-and-vertical	horizontal-and-vertical|horizontal|vertical		Blur Dimensions
+effect	blur.compound	Blur & Sharpen	Compound Blur	Blurs more where another track is brighter (blurLayer=V2); depth-of-field fakes and selective softness.
+	track	blurLayer				Blur Layer
+	number	maximumBlur	20	0..1000		Maximum Blur
+	bool	stretchMapToFit	true			Stretch Map to Fit
+	bool	invertBlur	false			Invert Blur
 effect	blur.directional	Blur & Sharpen	Directional Blur	Motion blur in one direction; fake fast motion and whip pans.
 	number	direction	0		degrees	Direction
 	number	length	0	0..1000		Blur Length
@@ -61,10 +83,39 @@ effect	channel.arithmetic	Channel	Arithmetic	Per-channel math such as add or mul
 	number	greenValue	0	0..255		Green Value
 	number	blueValue	0	0..255		Blue Value
 	bool	clip	true			Clip Result Values
+effect	channel.blend	Channel	Blend	Blends with another track's picture by a chosen mode (blendWithLayer=V2); quick double exposures and color mixes.
+	track	blendWithLayer				Blend With Layer
+	enum	mode	crossfade	crossfade|color-only|tint-only|darken-only|lighten-only		Mode
+	number	blendWithOriginal	0	0..100		Blend With Original
+	enum	ifLayerSizesDiffer	center	center|stretch-to-fit		If Layer Sizes Differ
 effect	channel.composite	Channel	Composite	Blends the picture with itself by a mode; quick contrast and glow looks.
 	number	opacity	100	0..100		Opacity
 	enum	compositeOriginal	in-front	in-front|in-back|add|multiply|screen|overlay|soft-light|hard-light|darken|lighten|difference|hue|saturation|color|luminosity|stencil-alpha		Composite Original
 	bool	rgbOnly	false			RGB Only
+effect	channel.calculations	Channel	Calculations	Combines channels of the clip and another track (secondLayer=V2) by a blending mode; channel-based composites and mattes.
+	enum	inputChannel	rgba	rgba|gray|red|green|blue|alpha		Input Channel
+	bool	invertInput	false			Invert Input
+	track	secondLayer				Second Layer
+	enum	secondLayerChannel	rgba	rgba|gray|red|green|blue|alpha		Second Layer Channel
+	number	secondLayerOpacity	100	0..100		Second Layer Opacity
+	bool	invertSecondLayer	false			Invert Second Layer
+	bool	stretchSecondLayerToFit	true			Stretch Second Layer to Fit
+	enum	blendingMode	normal	normal|darken|multiply|color-burn|linear-burn|add|lighten|screen|color-dodge|linear-dodge|overlay|soft-light|hard-light|linear-light|vivid-light|pin-light|hard-mix|difference|exclusion|hue|saturation|luminosity		Blending Mode
+	bool	preserveTransparency	false			Preserve Transparency
+effect	channel.combiner	Channel	Channel Combiner	Converts between color models or splits channels, optionally from another track (sourceLayer=V2); technical channel work.
+	bool	useSecondLayer	false			Use 2nd Layer
+	track	sourceLayer				Source Layer
+	enum	from	lightness	rgb-to-hls|hls-to-rgb|rgb-to-yuv|yuv-to-rgb|red|green|blue|alpha|lightness|hue|saturation|luminance|max-rgb|min-rgb		From
+	enum	to	lightness-only	red-only|green-only|blue-only|alpha-only|lightness-only|hue-only|saturation-only|grayscale|saturation-multiplied		To
+	bool	invert	false			Invert
+	bool	solidAlpha	false			Solid Alpha
+effect	channel.compoundarithmetic	Channel	Compound Arithmetic	Adds, subtracts, or multiplies the clip with another track (secondSource=V2); difference checks and light composites.
+	track	secondSource				Second Source Layer
+	enum	operator	copy	copy|add|subtract|multiply|difference|and|or|xor|lighten|darken|minimum|maximum|screen|overlay|hard-light		Operator
+	enum	operateOnChannels	rgb	rgb|argb|alpha		Operate On Channels
+	enum	overflowBehavior	clip	clip|wrap|scale		Overflow Behavior
+	bool	stretchSecondSourceToFit	true			Stretch Second Source to Fit
+	number	blendWithOriginal	0	0..100		Blend With Original
 effect	channel.invert	Channel	Invert	Inverts colors or one channel; negative-film looks, flash frames, glitches.
 	enum	channel	rgb	rgb|red|green|blue|hls|hue|lightness|saturation|yiq|luminance|in-phase-chrominance|quadrature-chrominance|alpha		Channel
 	number	blend	0	0..100		Blend With Original
@@ -77,6 +128,23 @@ effect	channel.minimax	Channel	Minimax	Grows or shrinks bright or dark areas; th
 effect	channel.removecolormatting	Channel	Remove Color Matting	Removes halos from premultiplied edges; cleanup after keying.
 	color	backgroundColor	#000000			Background Color
 	bool	clipHdr	true			Clip HDR Values
+effect	channel.setchannels	Channel	Set Channels	Builds each channel from a channel of other tracks (sourceLayer1=V2 and so on); channel swaps and custom mattes.
+	track	sourceLayer1				Source Layer 1
+	enum	setRedTo	red	red|green|blue|alpha|luminance|hue|lightness|saturation|full|half|off		Set Red To Source 1's
+	track	sourceLayer2				Source Layer 2
+	enum	setGreenTo	green	red|green|blue|alpha|luminance|hue|lightness|saturation|full|half|off		Set Green To Source 2's
+	track	sourceLayer3				Source Layer 3
+	enum	setBlueTo	blue	red|green|blue|alpha|luminance|hue|lightness|saturation|full|half|off		Set Blue To Source 3's
+	track	sourceLayer4				Source Layer 4
+	enum	setAlphaTo	alpha	red|green|blue|alpha|luminance|hue|lightness|saturation|full|half|off		Set Alpha To Source 4's
+	bool	stretchLayersToFit	true			Stretch Layers to Fit
+effect	channel.setmatte	Channel	Set Matte	Takes the clip's transparency from another track (takeMatteFromLayer=V2); track mattes, text and shape masks.
+	track	takeMatteFromLayer				Take Matte From Layer
+	enum	takeMatteFrom	alpha	red|green|blue|alpha|luminance|hue|lightness|saturation|full|off		Use For Matte
+	bool	invertMatte	false			Invert Matte
+	bool	stretchMatteToFit	true			Stretch Matte to Fit
+	bool	compositeMatteWithOriginal	true			Composite Matte with Original
+	bool	premultiplyMatteLayer	true			Premultiply Matte Layer
 effect	channel.shiftchannels	Channel	Shift Channels	Swaps or replaces color channels; surreal color and RGB-split looks.
 	enum	takeAlphaFrom	alpha	alpha|red|green|blue|luminance|hue|lightness|saturation|full-on|half-on|full-off		Take Alpha From
 	enum	takeRedFrom	red	alpha|red|green|blue|luminance|hue|lightness|saturation|full-on|half-on|full-off		Take Red From
@@ -210,6 +278,34 @@ effect	color.colorbalancehls	Color Correction	Color Balance (HLS)	Hue, lightness
 	number	hue	0		degrees	Hue
 	number	lightness	0	-100..100		Lightness
 	number	saturation	0	-100..100		Saturation
+effect	color.colorlink	Color Correction	Color Link	Tints the clip with the average color of another track (sourceLayer=V2); matching a shot's color to a background plate.
+	track	sourceLayer				Source Layer
+	enum	sampleSource	average	average|median|brightest|darkest|max-rgb|min-rgb|average-alpha|median-alpha|max-alpha|min-alpha		Sample
+	number	clip	0	0..100		Clip
+	bool	stencilOriginalAlpha	true			Stencil Original Alpha
+	number	opacity	100	0..100		Opacity
+	enum	blendingMode	normal	normal|add|multiply|screen|overlay|soft-light|hard-light|darken|lighten|difference|hue|color|luminosity		Blending Mode
+effect	color.colorama	Color Correction	Colorama	Cycles colors through a palette by luminance, optionally phased or masked by other tracks (inputPhase/addPhase=V2); psychedelic and thermal looks.
+	enum	inputPhase/mode	intensity	intensity|red|green|blue|hue|lightness|saturation|value|alpha|zero		Get Phase From
+	track	inputPhase/addPhase				Add Phase
+	enum	inputPhase/addPhaseFrom	intensity	intensity|red|green|blue|hue|lightness|saturation|value|alpha|zero		Add Phase From
+	enum	inputPhase/addMode	wrap	wrap|clamp|average|screen		Add Mode
+	number	inputPhase/phaseShift	0		degrees	Phase Shift
+	enum	outputCycle/usePresetPalette	hue-cycle	hue-cycle|ramp-grayscale|fire|ice|ramp-red|ramp-green|ramp-blue|pastel-cycle|custom		Use Preset Palette
+	text	outputCycle/palette	0:1,0,0 0.1667:1,1,0 0.3333:0,1,0 0.5:0,1,1 0.6667:0,0,1 0.8333:1,0,1			Output Cycle
+	number	outputCycle/cycles	1	0..100		Cycle Repetitions
+	bool	outputCycle/interpolatePalette	true			Interpolate Palette
+	enum	modify/modify	all	all|red|green|blue|hue|lightness|saturation|value|red-green|green-blue|blue-red|none		Modify
+	bool	modify/modifyAlpha	false			Modify Alpha
+	bool	modify/changeEmptyPixels	false			Change Empty Pixels
+	color	pixelSelection/matchingColor	#ffffff			Matching Color
+	number	pixelSelection/matchingTolerance	0	0..100		Matching Tolerance
+	number	pixelSelection/matchingSoftness	0	0..100		Matching Softness
+	enum	pixelSelection/matchingMode	off	off|rgb|hue|chroma		Matching Mode
+	track	masking/maskLayer				Mask Layer
+	enum	masking/maskingMode	off	off|luminance|inverted-luminance|alpha|inverted-alpha		Masking Mode
+	bool	masking/compositeOverLayer	true			Composite Over Layer
+	number	blend	0	0..100		Blend With Original
 effect	color.curves	Color Correction	Curves	Bends tone with curves for RGB and each channel, each written as points x,y from 0 to 1 (rgb="0,0 0.5,0.6 1,1" lifts the mids); contrast, fades, and color casts.
 	text	rgb	0,0 1,1			RGB
 	text	red	0,0 1,1			Red
@@ -607,6 +703,23 @@ effect	distort.bender	Distort	Bender	Bends from a base toward a top; wobbly bend
 	number	top_y	0		picture heights	Top (0 top, 1 bottom)
 	number	base_x	0.5		picture widths	Base (0 left, 1 right)
 	number	base_y	1		picture heights	Base (0 top, 1 bottom)
+effect	distort.blobbylize	Distort	Blobbylize	Melts the picture into glossy blobs shaped by another track (blobLayer=V2); liquid and gooey looks.
+	track	blobLayer				Blob Layer
+	enum	property	alpha	red|green|blue|alpha|luminance|hue|lightness|saturation		Property
+	number	softness	6	0..200		Softness
+	number	cutAway	0	0..100		Cut Away
+	number	lightIntensity	100	0..400		Light Intensity
+	color	lightColor	#ffffff			Light Color
+	enum	lightType	distant-light	distant-light|point-light		Light Type
+	number	lightHeight	50	0..100		Light Height
+	number	lightPosition_x	0.25		picture widths	Light Position (0 left, 1 right)
+	number	lightPosition_y	0.25		picture heights	Light Position (0 top, 1 bottom)
+	number	lightDirection	-45		degrees	Light Direction
+	number	ambient	20	0..200		Ambient
+	number	diffuse	70	0..200		Diffuse
+	number	specular	40	0..200		Specular
+	number	roughness	0.05	0.001..0.5		Roughness
+	number	metal	100	0..100		Metal
 effect	distort.flomotion	Distort	Flo Motion	Pulls the picture toward or away from two points; liquid warps.
 	number	knot1_x	0.25		picture widths	Knot 1 (0 left, 1 right)
 	number	knot1_y	0.5		picture heights	Knot 1 (0 top, 1 bottom)
@@ -704,6 +817,15 @@ effect	distort.upscale	Distort	Detail-preserving Upscale	Enlarges while keeping 
 	number	reduceNoise	0	0..100		Reduce Noise
 	number	detail	20	0..100		Detail
 	enum	alpha	bicubic	bilinear|bicubic		Alpha
+effect	distort.displacementmap	Distort	Displacement Map	Pushes pixels by another track's brightness (displacementMapLayer=V2); heat haze, water ripples, glass, and warped reveals.
+	track	displacementMapLayer				Displacement Map Layer
+	enum	useForHorizontal	red	red|green|blue|alpha|luminance|hue|lightness|saturation|full|half|off		Use For Horizontal Displacement
+	number	maxHorizontal	5	-32000..32000		Max Horizontal Displacement
+	enum	useForVertical	green	red|green|blue|alpha|luminance|hue|lightness|saturation|full|half|off		Use For Vertical Displacement
+	number	maxVertical	5	-32000..32000		Max Vertical Displacement
+	enum	displacementMapBehavior	center-map	center-map|stretch-map-to-fit|tile-map		Displacement Map Behavior
+	bool	wrapPixelsAround	false			Wrap Pixels Around
+	bool	expandOutput	true			Expand Output
 effect	distort.magnify	Distort	Magnify	A magnifying circle or square; zoom in on a detail.
 	enum	shape	circle	circle|square		Shape
 	number	center_x	0.5		picture widths	Center (0 left, 1 right)
@@ -1218,6 +1340,13 @@ effect	key.colorrange	Keying	Color Range	Keys a range of colors; uneven screens.
 	number	maxA	100	0..255		Max (a, U, G)
 	number	minB	128	0..255		Min (b, V, B)
 	number	maxB	255	0..255		Max (b, V, B)
+effect	key.differencematte	Keying	Difference Matte	Keys out what matches a clean plate on another track (differenceLayer=V2); removing a static background without a green screen.
+	enum	view	final-output	final-output|source-only|matte-only		View
+	track	differenceLayer				Difference Layer
+	enum	ifLayerSizesDiffer	center	center|stretch-to-fit		If Layer Sizes Differ
+	number	matchingTolerance	15	0..100		Matching Tolerance
+	number	matchingSoftness	0	0..100		Matching Softness
+	number	blurBeforeDifference	0	0..1000		Blur Before Difference
 effect	key.extract	Keying	Extract	Keys by brightness; removes black or white backgrounds.
 	enum	channel	luminance	luminance|red|green|blue|alpha		Channel
 	number	blackPoint	0	0..255		Black Point
@@ -1509,6 +1638,45 @@ effect	noise.fractal	Noise & Grain	Fractal Noise	Fractal noise; clouds, smoke, a
 	number	opacity	100	0..100		Opacity
 	enum	blendingMode	normal	none|normal|add|multiply|screen|overlay|soft-light|hard-light|color-dodge|color-burn|darken|lighten|difference|exclusion|hue|saturation|color|luminosity|stencil-alpha|stencil-luma|silhouette-alpha|silhouette-luma|alpha-add|luminescent-premul		Blending Mode
 	number	blend	0	0..100		Blend With Original
+effect	noise.matchgrain	Noise & Grain	Match Grain	Copies the grain of another track onto the clip (noiseSourceLayer=V2); making inserts and graphics sit in grainy footage.
+	enum	viewingMode	final-output	preview|noise-samples|compensation-samples|blending-matte|final-output		Viewing Mode
+	track	noiseSourceLayer				Noise Source Layer
+	number	compensateForExistingNoise	0	0..100		Compensate for Existing Noise
+	number	previewRegion/center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	previewRegion/center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	number	previewRegion/width	200	1..10000		Width
+	number	previewRegion/height	200	1..10000		Height
+	bool	previewRegion/showBox	true			Show Box
+	color	previewRegion/boxColor	#ffffff			Box Color
+	enum	sampling/samplingProcess	automatic	automatic		Sampling Process
+	number	sampling/numberOfSamples	80	1..500		Number of Samples
+	number	sampling/sampleSize	9	3..64		Sample Size
+	color	sampling/sampleBoxColor	#ffff00			Sample Box Color
+	number	tweaking/intensity	1	0..100		Intensity
+	number	tweaking/channelIntensities/redIntensity	1	0..10		Red Intensity
+	number	tweaking/channelIntensities/greenIntensity	1	0..10		Green Intensity
+	number	tweaking/channelIntensities/blueIntensity	1	0..10		Blue Intensity
+	number	tweaking/size	1	0.05..100		Size
+	number	tweaking/channelSize/redSize	1	0..10		Red Size
+	number	tweaking/channelSize/greenSize	1	0..10		Green Size
+	number	tweaking/channelSize/blueSize	1	0..10		Blue Size
+	number	tweaking/softness	0	0..100		Softness
+	number	tweaking/aspectRatio	1	0.05..20		Aspect Ratio
+	bool	color/monochromatic	false			Monochromatic
+	number	color/saturation	1	0..10		Saturation
+	number	color/tintAmount	0	0..1		Tint Amount
+	color	color/tintColor	#ffffff			Tint Color
+	number	color/redBalance	1	0..10		Red Balance
+	number	color/greenBalance	1	0..10		Green Balance
+	number	color/blueBalance	1	0..10		Blue Balance
+	enum	application/blendingMode	film	film|multiply|add|screen|overlay		Blending Mode
+	number	application/shadows	1	0..10		Shadows
+	number	application/midtones	1	0..10		Midtones
+	number	application/highlights	1	0..10		Highlights
+	number	application/midpoint	0.5	0..1		Midpoint
+	number	animation/animationSpeed	1	0..100		Animation Speed
+	bool	animation/animateSmoothly	true			Animate Smoothly
+	number	animation/randomSeed	0	0..100000		Random Seed
 effect	noise.median	Noise & Grain	Median	A median filter; removes noise, painterly smoothing.
 	number	radius	0	0..255		Radius
 	bool	operateOnAlpha	false			Operate On Alpha Channel
@@ -1588,6 +1756,15 @@ effect	noise.turbulent	Noise & Grain	Turbulent Noise	Turbulent noise; fire, smok
 	number	opacity	100	0..100		Opacity
 	enum	blendingMode	normal	none|normal|add|multiply|screen|overlay|soft-light|hard-light|color-dodge|color-burn|darken|lighten|difference|exclusion|hue|saturation|color|luminosity|stencil-alpha|stencil-luma|silhouette-alpha|silhouette-luma|alpha-add|luminescent-premul		Blending Mode
 	number	blend	0	0..100		Blend With Original
+effect	perspective.3dglasses	Perspective	3D Glasses	Combines a left and a right view from two tracks (leftView=V2 rightView=V3) into anaglyph or side-by-side 3D; stereo 3D output.
+	track	leftView				Left View
+	track	rightView				Right View
+	number	sceneConvergence	0	-1000..1000		Scene Convergence
+	number	verticalAlignment	0	-1000..1000		Vertical Alignment
+	enum	units	pixels	pixels|of-source		Units
+	bool	leftRightSwap	false			Swap Left-Right
+	enum	view3d	balanced-colored-red-blue	stereo-pair-side-by-side|over-under|interlace-upper-l-lower-r|red-green-lr|red-blue-lr|balanced-colored-red-blue|balanced-red-green-lr|balanced-red-blue-lr|difference		3D View
+	number	balance	7	0..20		Balance
 effect	perspective.bevelalpha	Perspective	Bevel Alpha	A beveled edge on the picture's alpha; 3D-looking text and logos.
 	number	edgeThickness	2	0..200		Edge Thickness
 	number	lightAngle	-60		degrees	Light Angle
@@ -1615,6 +1792,11 @@ effect	perspective.cylinder	Perspective	Cylinder	Wraps the picture onto a cylind
 	number	diffuse	80	0..200		Diffuse
 	number	specular	20	0..200		Specular
 	number	roughness	0.05	0.001..0.5		Roughness
+effect	perspective.environment	Perspective	Environment	Reflects another track as an environment around the picture (environment=V2); shiny, chrome, and reflective surfaces.
+	track	environment				Environment
+	enum	mapping	spherical	spherical|probe|vertical-cross		Mapping
+	bool	filterEnvironment	true			Filter Environment
+	number	height	10	0..100		Height
 effect	perspective.sphere	Perspective	Sphere	Wraps the picture onto a sphere; planets and balls.
 	number	radius	120	0..4000		Radius
 	number	offset_x	0.5		picture widths	Offset (0 left, 1 right)
@@ -1692,6 +1874,27 @@ effect	sim.drizzle	Simulation	Drizzle	Raindrop ripples on a surface; rain on wat
 	number	shading/diffuse	0	0..200		Diffuse
 	number	shading/specular	20	0..200		Specular
 	number	shading/roughness	0.05	0.001..1		Roughness
+effect	sim.hair	Simulation	Hair	Grows hair or fur over the picture, its fall shaped by another track (hairfallMap/mapLayer=V2); fuzzy, furry, and grassy textures.
+	number	length	30	0..2000		Length
+	number	thickness	1	0.05..20		Thickness
+	number	weight	0.2	-10..10		Weight
+	bool	constantMass	false			Constant Mass
+	number	density	100	0..10000		Density
+	number	hairfallMap/mapStrength	0	0..100		Map Strength
+	track	hairfallMap/mapLayer				Map Layer
+	number	hairfallMap/mapSoftness	0	0..1000		Map Softness
+	number	hairfallMap/addNoise	0	0..100		Add Noise
+	color	hairColor/hairColor	#594026			Color
+	number	hairColor/brightness	100	0..4000		Brightness
+	number	hairColor/opacity	100	0..100		Opacity
+	number	hairColor/colorInheritance	0	0..100		Color Inheritance
+	number	light/lightIntensity	100	0..4000		Light Intensity
+	number	light/lightDirection	-45		degrees	Light Direction
+	number	shading/ambient	40	0..100		Ambient
+	number	shading/diffuse	60	0..100		Diffuse
+	number	shading/specular	30	0..100		Specular
+	number	shading/roughness	20	0..100		Roughness
+	number	randomSeed	0	0..10000		Random Seed
 effect	sim.mrmercury	Simulation	Mr. Mercury	Liquid metal blobs; melting and gooey effects.
 	number	radiusX	50	0..2000		Radius X
 	number	radiusY	50	0..2000		Radius Y
@@ -1837,6 +2040,242 @@ effect	sim.starburst	Simulation	Star Burst	A star field bursting outward; warp s
 	number	gridSpacing	2	1..100		Grid Spacing
 	number	size	100	0..1000		Size
 	number	blendWithOriginal	0	0..100		Blend w. Original
+effect	sim.carddance	Simulation	Card Dance	Splits the picture into cards that move by gradient tracks (gradientLayer1=V2) with another track on their backs (backLayer=V3); card-flip reveals and mosaics.
+	enum	rowsColumns	independent	independent|columns-follows-rows		Rows & Columns
+	number	rows	10	1..1000		Rows
+	number	columns	10	1..1000		Columns
+	track	backLayer				Back Layer
+	track	gradientLayer1				Gradient Layer 1
+	track	gradientLayer2				Gradient Layer 2
+	enum	xPosition/xPosSource	none	none|intensity-1|red-1|green-1|blue-1|alpha-1|intensity-2|red-2|green-2|blue-2|alpha-2		Source
+	number	xPosition/xPosMultiplier	0	-100..100		Multiplier
+	number	xPosition/xPosOffset	0	-100..100		Offset
+	enum	yPosition/yPosSource	none	none|intensity-1|red-1|green-1|blue-1|alpha-1|intensity-2|red-2|green-2|blue-2|alpha-2		Source
+	number	yPosition/yPosMultiplier	0	-100..100		Multiplier
+	number	yPosition/yPosOffset	0	-100..100		Offset
+	enum	zPosition/zPosSource	none	none|intensity-1|red-1|green-1|blue-1|alpha-1|intensity-2|red-2|green-2|blue-2|alpha-2		Source
+	number	zPosition/zPosMultiplier	0	-100..100		Multiplier
+	number	zPosition/zPosOffset	0	-100..100		Offset
+	enum	xRotation/xRotSource	none	none|intensity-1|red-1|green-1|blue-1|alpha-1|intensity-2|red-2|green-2|blue-2|alpha-2		Source
+	number	xRotation/xRotMultiplier	0	-3600..3600		Multiplier
+	number	xRotation/xRotOffset	0	-3600..3600		Offset
+	enum	yRotation/yRotSource	none	none|intensity-1|red-1|green-1|blue-1|alpha-1|intensity-2|red-2|green-2|blue-2|alpha-2		Source
+	number	yRotation/yRotMultiplier	0	-3600..3600		Multiplier
+	number	yRotation/yRotOffset	0	-3600..3600		Offset
+	enum	zRotation/zRotSource	none	none|intensity-1|red-1|green-1|blue-1|alpha-1|intensity-2|red-2|green-2|blue-2|alpha-2		Source
+	number	zRotation/zRotMultiplier	0	-3600..3600		Multiplier
+	number	zRotation/zRotOffset	0	-3600..3600		Offset
+	enum	xScale/xScaleSource	none	none|intensity-1|red-1|green-1|blue-1|alpha-1|intensity-2|red-2|green-2|blue-2|alpha-2		Source
+	number	xScale/xScaleMultiplier	0	-100..100		Multiplier
+	number	xScale/xScaleOffset	1	-100..100		Offset
+	enum	yScale/yScaleSource	none	none|intensity-1|red-1|green-1|blue-1|alpha-1|intensity-2|red-2|green-2|blue-2|alpha-2		Source
+	number	yScale/yScaleMultiplier	0	-100..100		Multiplier
+	number	yScale/yScaleOffset	1	-100..100		Offset
+	enum	cameraSystem	camera-position	camera-position|corner-pins|comp-camera		Camera System
+	number	cameraPosition/xRotation	0		degrees	X Rotation
+	number	cameraPosition/yRotation	0		degrees	Y Rotation
+	number	cameraPosition/zRotation	0		degrees	Z Rotation
+	number	cameraPosition/xyPosition_x	0.5		picture widths	X, Y Position (0 left, 1 right)
+	number	cameraPosition/xyPosition_y	0.5		picture heights	X, Y Position (0 top, 1 bottom)
+	number	cameraPosition/cameraZ	2	0.05..10		Z Position
+	number	cameraPosition/focalLength	70	1..500		Focal Length
+	enum	cameraPosition/transformOrder	rotate-xyz-position	rotate-xyz-position|rotate-xzy-position|rotate-yxz-position|rotate-yzx-position|rotate-zxy-position|rotate-zyx-position|position-rotate-xyz|position-rotate-xzy|position-rotate-yxz|position-rotate-yzx|position-rotate-zxy|position-rotate-zyx		Transform Order
+	number	cornerPins/upperLeftCorner_x	0		picture widths	Upper Left Corner (0 left, 1 right)
+	number	cornerPins/upperLeftCorner_y	0		picture heights	Upper Left Corner (0 top, 1 bottom)
+	number	cornerPins/upperRightCorner_x	1		picture widths	Upper Right Corner (0 left, 1 right)
+	number	cornerPins/upperRightCorner_y	0		picture heights	Upper Right Corner (0 top, 1 bottom)
+	number	cornerPins/lowerLeftCorner_x	0		picture widths	Lower Left Corner (0 left, 1 right)
+	number	cornerPins/lowerLeftCorner_y	1		picture heights	Lower Left Corner (0 top, 1 bottom)
+	number	cornerPins/lowerRightCorner_x	1		picture widths	Lower Right Corner (0 left, 1 right)
+	number	cornerPins/lowerRightCorner_y	1		picture heights	Lower Right Corner (0 top, 1 bottom)
+	bool	cornerPins/autoFocalLength	true			Auto Focal Length
+	number	cornerPins/focalLength	70	1..500		Focal Length
+	enum	lighting/lightType	distant-source	distant-source|point-source|first-comp-light		Light Type
+	number	lighting/lightIntensity	1	0..4		Light Intensity
+	color	lighting/lightColor	#ffffff			Light Color
+	number	lighting/lightPosition_x	0.5		picture widths	Light Position (0 left, 1 right)
+	number	lighting/lightPosition_y	0.5		picture heights	Light Position (0 top, 1 bottom)
+	number	lighting/lightDepth	1	-10..10		Light Depth
+	number	lighting/ambientLight	0.25	0..2		Ambient Light
+	number	material/diffuse	0.75	0..2		Diffuse Reflection
+	number	material/specular	0	0..2		Specular Reflection
+	number	material/highlightSharpness	15	1..100		Highlight Sharpness
+effect	sim.caustics	Simulation	Caustics	Light ripples like sunlight through water, using tracks as the bottom, water surface, and sky (water/waterSurface=V2); pools and underwater light.
+	track	bottom/bottom				Bottom
+	number	bottom/scaling	1	0.01..10		Scaling
+	enum	bottom/repeatMode	reflected	once|tiled|reflected		Repeat Mode
+	enum	bottom/bottomSizeDiffers	stretch-to-fit	center|stretch-to-fit		If Layer Size Differs
+	number	bottom/blur	0	0..100		Blur
+	track	water/waterSurface				Water Surface
+	number	water/waveHeight	0.2	-1..1		Wave Height
+	number	water/smoothing	5	0..100		Smoothing
+	number	water/waterDepth	0.1	0..1		Water Depth
+	number	water/refractiveIndex	1.2	1..3		Refractive Index
+	color	water/surfaceColor	#ffffff			Surface Color
+	number	water/surfaceOpacity	0.3	0..1		Surface Opacity
+	number	water/causticsStrength	0	0..1		Caustics Strength
+	track	sky/sky				Sky
+	number	sky/scaling	1	0.01..10		Scaling
+	enum	sky/repeatMode	reflected	once|tiled|reflected		Repeat Mode
+	enum	sky/skySizeDiffers	stretch-to-fit	center|stretch-to-fit		If Layer Size Differs
+	number	sky/intensity	0.3	0..1		Intensity
+	number	sky/convergence	0.5	0..1		Convergence
+	enum	lighting/lightType	distant-source	distant-source|point-source|first-comp-light		Light Type
+	number	lighting/lightIntensity	1	0..4		Light Intensity
+	color	lighting/lightColor	#ffffff			Light Color
+	number	lighting/lightPosition_x	0		picture widths	Light Position (0 left, 1 right)
+	number	lighting/lightPosition_y	0		picture heights	Light Position (0 top, 1 bottom)
+	number	lighting/lightHeight	1	0..10		Light Height
+	number	lighting/ambientLight	0.35	0..2		Ambient Light
+	number	material/diffuse	0.75	0..2		Diffuse Reflection
+	number	material/specular	0.2	0..2		Specular Reflection
+	number	material/highlightSharpness	15	1..100		Highlight Sharpness
+effect	sim.foam	Simulation	Foam	Bubbles that float and flow, textured or steered by other tracks (flowMap/flowMap=V2); foam, bubbles, and particle swarms.
+	enum	view	draft	draft|draft-flow-map|rendered		View
+	number	producer/producerPoint_x	0.5		picture widths	Producer Point (0 left, 1 right)
+	number	producer/producerPoint_y	0.5		picture heights	Producer Point (0 top, 1 bottom)
+	number	producer/producerXSize	0.05	0..2		Producer X Size
+	number	producer/producerYSize	0.05	0..2		Producer Y Size
+	number	producer/producerOrientation	0		degrees	Producer Orientation
+	bool	producer/zoomProducerPoint	false			Zoom Producer Point
+	number	producer/productionRate	1	0..50		Production Rate
+	number	bubbles/size	0.5	0..10		Size
+	number	bubbles/sizeVariance	0.5	0..1		Size Variance
+	number	bubbles/lifespan	300	1..30000		Lifespan
+	number	bubbles/growthSpeed	0.1	0.0001..10		Bubble Growth Speed
+	number	bubbles/strength	10	0..100		Strength
+	number	physics/initialSpeed	0	-100..100		Initial Speed
+	number	physics/initialDirection	0		degrees	Initial Direction
+	number	physics/windSpeed	0.5	-100..100		Wind Speed
+	number	physics/windDirection	90		degrees	Wind Direction
+	number	physics/turbulence	0.5	0..10		Turbulence
+	number	physics/wobbleAmount	0.05	0..10		Wobble Amount
+	number	physics/repulsion	1	0..10		Repulsion
+	number	physics/popVelocity	1	-100..100		Pop Velocity
+	number	physics/viscosity	0.1	0..1		Viscosity
+	number	physics/stickiness	0.75	0..1		Stickiness
+	number	zoom	1	0.01..50		Zoom
+	number	universeSize	1	0.01..10		Universe Size
+	enum	rendering/blendMode	transparent	transparent|solid-old-on-top|solid-new-on-top		Blend Mode
+	enum	rendering/bubbleTexture	default-bubble	default-bubble|spit|bubblegum|dishwater|milky|user-defined		Bubble Texture
+	track	rendering/bubbleTextureLayer				Bubble Texture Layer
+	enum	rendering/bubbleOrientation	fixed	fixed|physical-orientation|bubble-velocity		Bubble Orientation
+	track	rendering/environmentMap				Environment Map
+	number	rendering/reflectionStrength	0	0..1		Reflection Strength
+	number	rendering/reflectionConvergence	0	0..1		Reflection Convergence
+	track	flowMap/flowMap				Flow Map
+	number	flowMap/flowMapSteepness	0.05	-100..100		Flow Map Steepness
+	enum	flowMap/flowMapFits	background	background|universe		Flow Map Fits
+	enum	flowMap/simulationQuality	normal	normal|high|intense		Simulation Quality
+	number	randomSeed	1	0..10000		Random Seed
+effect	sim.shatter	Simulation	Shatter	Breaks the picture into flying pieces, optionally by a gradient track (gradient/gradientLayer=V2); explosions and glass-shatter transitions.
+	enum	view	wireframe-front-view	rendered|wireframe-front-view|wireframe|wireframe-front-view-forces|wireframe-forces		View
+	enum	render	all	all|layer|pieces		Render
+	enum	shape/pattern	bricks	bricks|glass|hexagons|squares|triangles|custom		Pattern
+	number	shape/repetitions	10	1..500		Repetitions
+	number	shape/direction	0		degrees	Direction
+	number	shape/origin_x	0.5		picture widths	Origin (0 left, 1 right)
+	number	shape/origin_y	0.5		picture heights	Origin (0 top, 1 bottom)
+	track	shape/customShatterMap				Custom Shatter Map
+	bool	shape/whiteTilesFixed	false			White Tiles Fixed
+	number	shape/extrusionDepth	0.05	0..1		Extrusion Depth
+	number	force1/force1Position_x	0.5		picture widths	Position (0 left, 1 right)
+	number	force1/force1Position_y	0.5		picture heights	Position (0 top, 1 bottom)
+	number	force1/force1Depth	0.1	-1..1		Depth
+	number	force1/force1Radius	0.4	0..4		Radius
+	number	force1/force1Strength	5	-20..20		Strength
+	number	force2/force2Position_x	0.25		picture widths	Position (0 left, 1 right)
+	number	force2/force2Position_y	0.25		picture heights	Position (0 top, 1 bottom)
+	number	force2/force2Depth	0.1	-1..1		Depth
+	number	force2/force2Radius	0	0..4		Radius
+	number	force2/force2Strength	5	-20..20		Strength
+	number	physics/rotationSpeed	0.2	0..5		Rotation Speed
+	enum	physics/tumbleAxis	free	free|none|x|y|z|xy|xz|yz		Tumble Axis
+	number	physics/randomness	0.1	0..1		Randomness
+	number	physics/viscosity	0.1	0..1		Viscosity
+	number	physics/massVariance	30	0..100		Mass Variance
+	number	physics/gravity	3	0..100		Gravity
+	number	physics/gravityDirection	180		degrees	Gravity Direction
+	number	physics/gravityInclination	0	-90..90		Gravity Inclination
+	number	gradient/shatterThreshold	0	0..100		Shatter Threshold
+	track	gradient/gradientLayer				Gradient Layer
+	bool	gradient/invertGradient	false			Invert Gradient
+	color	textures/color	#ffffff			Color
+	number	textures/opacity	1	0..1		Opacity
+	enum	textures/frontMode	layer	color|layer|tinted-layer		Front Mode
+	enum	textures/sideMode	color	color|layer|tinted-layer		Side Mode
+	enum	textures/backMode	layer	color|layer|tinted-layer		Back Mode
+	track	textures/frontLayer				Front Layer
+	track	textures/sideLayer				Side Layer
+	track	textures/backLayer				Back Layer
+	enum	cameraSystem	camera-position	camera-position|corner-pins|comp-camera		Camera System
+	number	cameraPosition/xRotation	0		degrees	X Rotation
+	number	cameraPosition/yRotation	0		degrees	Y Rotation
+	number	cameraPosition/zRotation	0		degrees	Z Rotation
+	number	cameraPosition/xyPosition_x	0.5		picture widths	X, Y Position (0 left, 1 right)
+	number	cameraPosition/xyPosition_y	0.5		picture heights	X, Y Position (0 top, 1 bottom)
+	number	cameraPosition/cameraZ	4	0.05..10		Z Position
+	number	cameraPosition/focalLength	70	1..500		Focal Length
+	enum	cameraPosition/transformOrder	rotate-xyz-position	rotate-xyz-position|rotate-xzy-position|rotate-yxz-position|rotate-yzx-position|rotate-zxy-position|rotate-zyx-position|position-rotate-xyz|position-rotate-xzy|position-rotate-yxz|position-rotate-yzx|position-rotate-zxy|position-rotate-zyx		Transform Order
+	number	cornerPins/upperLeftCorner_x	0		picture widths	Upper Left Corner (0 left, 1 right)
+	number	cornerPins/upperLeftCorner_y	0		picture heights	Upper Left Corner (0 top, 1 bottom)
+	number	cornerPins/upperRightCorner_x	1		picture widths	Upper Right Corner (0 left, 1 right)
+	number	cornerPins/upperRightCorner_y	0		picture heights	Upper Right Corner (0 top, 1 bottom)
+	number	cornerPins/lowerLeftCorner_x	0		picture widths	Lower Left Corner (0 left, 1 right)
+	number	cornerPins/lowerLeftCorner_y	1		picture heights	Lower Left Corner (0 top, 1 bottom)
+	number	cornerPins/lowerRightCorner_x	1		picture widths	Lower Right Corner (0 left, 1 right)
+	number	cornerPins/lowerRightCorner_y	1		picture heights	Lower Right Corner (0 top, 1 bottom)
+	bool	cornerPins/autoFocalLength	true			Auto Focal Length
+	number	cornerPins/focalLength	70	1..500		Focal Length
+	enum	lighting/lightType	distant-source	distant-source|point-source|first-comp-light		Light Type
+	number	lighting/lightIntensity	1	0..4		Light Intensity
+	color	lighting/lightColor	#ffffff			Light Color
+	number	lighting/lightPosition_x	0.5		picture widths	Light Position (0 left, 1 right)
+	number	lighting/lightPosition_y	0.5		picture heights	Light Position (0 top, 1 bottom)
+	number	lighting/lightDepth	1	-10..10		Light Depth
+	number	lighting/ambientLight	0.25	0..2		Ambient Light
+	number	material/diffuse	0.75	0..2		Diffuse Reflection
+	number	material/specular	0	0..2		Specular Reflection
+	number	material/highlightSharpness	15	1..100		Highlight Sharpness
+	number	randomSeed	0	0..10000		Random Seed
+effect	sim.waveworld	Simulation	Wave World	Simulates water waves, with another track as the ground they run over (ground/ground=V2); wave maps for displacement and caustics.
+	enum	view	wireframe-preview	wireframe-preview|height-map		View
+	number	wireframeControls/horizontalRotation	0		degrees	Horizontal Rotation
+	number	wireframeControls/verticalRotation	53	0..90		Vertical Rotation
+	number	wireframeControls/verticalScale	0.5	0..10		Vertical Scale
+	number	heightMapControls/brightness	0.5	-1..2		Brightness
+	number	heightMapControls/contrast	0.75	0..4		Contrast
+	number	heightMapControls/gamma	1	0.01..10		Gamma Adjustment
+	enum	heightMapControls/renderDryAreasAs	solid	solid|transparent		Render Dry Areas As
+	number	heightMapControls/transparency	0	0..1		Transparency
+	number	simulation/gridResolution	60	1..400		Grid Resolution
+	bool	simulation/gridResDownsamples	false			Grid Res Downsamples
+	number	simulation/waveSpeed	0.2	0..5		Wave Speed
+	number	simulation/damping	0.05	0..5		Damping
+	enum	simulation/reflectEdges	none	none|left|top|right|bottom|all		Reflect Edges
+	number	simulation/preRoll	0	0..30		Pre-roll (seconds)
+	track	ground/ground				Ground
+	number	ground/steepness	0.25	0..2		Steepness
+	number	ground/height	0.25	0..2		Height
+	number	ground/waveStrength	0	0..1		Wave Strength
+	enum	producer1/producer1Type	ring	ring|line		Type
+	number	producer1/producer1Position_x	0.5		picture widths	Position (0 left, 1 right)
+	number	producer1/producer1Position_y	0.5		picture heights	Position (0 top, 1 bottom)
+	number	producer1/producer1Length	0.1	0..2		Height/Length
+	number	producer1/producer1Width	0.1	0..2		Width
+	number	producer1/producer1Angle	0		degrees	Angle
+	number	producer1/producer1Amplitude	0.5	-5..5		Amplitude
+	number	producer1/producer1Frequency	1	0..30		Frequency
+	number	producer1/producer1Phase	0		degrees	Phase
+	enum	producer2/producer2Type	ring	ring|line		Type
+	number	producer2/producer2Position_x	0.25		picture widths	Position (0 left, 1 right)
+	number	producer2/producer2Position_y	0.25		picture heights	Position (0 top, 1 bottom)
+	number	producer2/producer2Length	0.1	0..2		Height/Length
+	number	producer2/producer2Width	0.1	0..2		Width
+	number	producer2/producer2Angle	0		degrees	Angle
+	number	producer2/producer2Amplitude	0	-5..5		Amplitude
+	number	producer2/producer2Frequency	1	0..30		Frequency
+	number	producer2/producer2Phase	0		degrees	Phase
 effect	stylize.brushstrokes	Stylize	Brush Strokes	Painterly brush strokes; painting looks.
 	number	strokeAngle	135		degrees	Stroke Angle
 	number	brushSize	2	0..5		Brush Size
@@ -1856,6 +2295,25 @@ effect	stylize.burnfilm	Stylize	Burn Film	A hole burning through the film; film-
 	number	center_x	0.5		picture widths	Center (0 left, 1 right)
 	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
 	number	randomSeed	0	0..10000		Random Seed
+effect	stylize.glass	Stylize	Glass	Distorts the picture as if seen through glass bumps from another track (bumpMap=V2); frosted and textured glass.
+	track	bumpMap				Bump Map
+	enum	property	alpha	red|green|blue|alpha|luminance|lightness		Property
+	number	softness	10	0..200		Softness
+	number	height	50	-100..100		Height
+	number	displacement	100	-500..500		Displacement
+	enum	using	effect-light	effect-light|ae-lights		Using
+	number	lightIntensity	100	0..400		Light Intensity
+	color	lightColor	#ffffff			Light Color
+	enum	lightType	distant-light	distant-light|point-light		Light Type
+	number	lightHeight	50	-100..100		Light Height
+	number	lightPosition_x	0.25		picture widths	Light Position (0 left, 1 right)
+	number	lightPosition_y	0.25		picture heights	Light Position (0 top, 1 bottom)
+	number	lightDirection	-45		degrees	Light Direction
+	number	ambient	75	0..200		Ambient
+	number	diffuse	32	0..200		Diffuse
+	number	specular	26	0..200		Specular
+	number	roughness	0.05	0.001..0.5		Roughness
+	number	metal	100	0..100		Metal
 effect	stylize.hextile	Stylize	HexTile	Hexagon tiles; honeycomb and techy textures.
 	enum	render	normal	normal|mirrored|rotated		Render
 	number	radius	50	1..4000		Radius
@@ -1869,6 +2327,36 @@ effect	stylize.kaleida	Stylize	Kaleida	A kaleidoscope; trippy symmetric patterns
 	number	size	100	1..1000		Size
 	enum	mirroring	flower	flower|starlish|unfold|wheel|triangles		Mirroring
 	number	rotation	0		degrees	Rotation
+effect	stylize.mrsmoothie	Stylize	Mr. Smoothie	Smears color along the flow of another track (flowLayer=V2); psychedelic, painterly color flow.
+	track	flowLayer				Flow Layer
+	enum	property	luminance	red|green|blue|alpha|luminance|lightness|hue|saturation		Property
+	number	smoothness	20	0..200		Smoothness
+	number	sampleA_x	0.25		picture widths	Sample A (0 left, 1 right)
+	number	sampleA_y	0.5		picture heights	Sample A (0 top, 1 bottom)
+	number	sampleB_x	0.75		picture widths	Sample B (0 left, 1 right)
+	number	sampleB_y	0.5		picture heights	Sample B (0 top, 1 bottom)
+	number	phase	0		degrees	Phase
+	enum	colorLoop	1x	1x|2x|3x|4x		Color Loop
+effect	stylize.plastic	Stylize	Plastic	Gives the picture a shiny raised surface from another track's bumps (bumpLayer=V2); embossed plastic and molded looks.
+	track	bumpLayer				Bump Layer
+	enum	property	alpha	red|green|blue|alpha|luminance|lightness		Property
+	number	softness	10	0..200		Softness
+	number	height	25	-100..100		Height
+	number	cutMin	0	0..100		Cut Min
+	number	cutMax	100	0..100		Cut Max
+	enum	using	effect-light	effect-light|ae-lights		Using
+	number	lightIntensity	100	0..400		Light Intensity
+	color	lightColor	#ffffff			Light Color
+	enum	lightType	distant-light	distant-light|point-light		Light Type
+	number	lightHeight	50	-100..100		Light Height
+	number	lightPosition_x	0.25		picture widths	Light Position (0 left, 1 right)
+	number	lightPosition_y	0.25		picture heights	Light Position (0 top, 1 bottom)
+	number	lightDirection	-45		degrees	Light Direction
+	number	ambient	100	0..200		Ambient
+	number	diffuse	70	0..200		Diffuse
+	number	specular	50	0..200		Specular
+	number	roughness	0.05	0.001..0.5		Roughness
+	number	metal	50	0..100		Metal
 effect	stylize.repetile	Stylize	RepeTile	Repeats the picture past its edges; extended backgrounds, mirrored tiles.
 	number	expandRight	0	0..4000		Expand Right
 	number	expandLeft	0	0..4000		Expand Left
@@ -1978,6 +2466,11 @@ effect	stylize.strobe	Stylize	Strobe Light	Flashes the picture on a rhythm; beat
 	number	randomStrobeProbability	0	0..100		Random Strobe Probability
 	enum	strobe	operates-on-color-only	operates-on-color-only|makes-layer-transparent		Strobe
 	enum	strobeOperator	copy	copy|add|subtract|multiply|difference|screen|lighten|darken		Strobe Operator
+effect	stylize.texturize	Stylize	Texturize	Embosses another track's texture into the picture (textureLayer=V2); canvas, paper, and surface textures.
+	track	textureLayer				Texture Layer
+	number	lightDirection	135		degrees	Light Direction
+	number	textureContrast	1	0..2		Texture Contrast
+	enum	texturePlacement	tile-texture	tile-texture|center-texture|stretch-texture-to-fit		Texture Placement
 effect	stylize.threshold	Stylize	Threshold	A black-and-white threshold; graphic, photocopied looks.
 	number	level	128	0..255		Level
 effect	text.numbers	Text	Numbers	Draws numbers, dates, or timecode on the picture; counters and data readouts.
@@ -2032,11 +2525,56 @@ effect	time.pixelmotionblur	Time	Pixel Motion Blur	Motion blur from tracked pixe
 	number	vectorDetail	20	0..100		Vector Detail
 effect	time.posterizetime	Time	Posterize Time	Holds frames to play at a lower frame rate; choppy, stop-motion, or stylized movement.
 	number	frameRate	12	0.1..99		Frame Rate
+effect	time.timedifference	Time	Time Difference	Shows the difference between the clip and another track over time (targetLayer=V2); spotting motion and changes between takes.
+	track	targetLayer				Target
+	number	timeOffset	0	-30..30		Time Offset (sec)
+	number	contrast	0	0..100		Contrast
+	bool	absoluteDifference	true			Absolute Difference
+	enum	alphaChannel	original	original|target|blend|max|full-on|lightness-of-result|max-of-result|alpha-difference|alpha-difference-only		Alpha Channel
+effect	time.timedisplacement	Time	Time Displacement	Shows each pixel from a different moment by another track's brightness (displacementMapLayer=V2); time slices and rolling-shutter-style warps.
+	track	displacementMapLayer				Time Displacement Layer
+	number	maxDisplacementTime	1	-30..30		Max Displacement Time (sec)
+	number	timeResolution	60	1..999		Time Resolution (fps)
+	bool	stretchMap	true			Stretch Map To Fit
+effect	time.timewarp	Time	Timewarp	Retimes the clip with frame blending or motion-estimated frames, optionally guided by other tracks (warpLayer=V2); smooth slow motion and speed ramps.
+	enum	method	pixel-motion	whole-frames|frame-mix|pixel-motion		Method
+	enum	adjustTimeBy	speed	speed|source-frame		Adjust Time By
+	number	speed	50	-10000..10000		Speed
+	number	sourceFrame	0	-100000..100000		Source Frame
+	number	tuning/vectorDetail	20	0..100		Vector Detail
+	number	tuning/smoothing/globalSmoothness	0.5	0..1		Global Smoothness
+	number	tuning/smoothing/localSmoothness	0.5	0..1		Local Smoothness
+	number	tuning/smoothing/smoothingIterations	20	0..200		Smoothing Iterations
+	bool	tuning/buildFromOneImage	false			Build From One Image
+	bool	tuning/correctLuminanceChanges	false			Correct Luminance Changes
+	enum	tuning/filtering	normal	normal|extreme		Filtering
+	number	tuning/errorThreshold	10	0..100		Error Threshold
+	number	tuning/blockSize	8	4..64		Block Size
+	number	tuning/weighting/redWeighting	0.3	0..1		Red Weighting
+	number	tuning/weighting/greenWeighting	0.59	0..1		Green Weighting
+	number	tuning/weighting/blueWeighting	0.11	0..1		Blue Weighting
+	bool	motionBlur/enableMotionBlur	false			Enable Motion Blur
+	enum	motionBlur/shutterControl	automatic	automatic|manual		Shutter Control
+	number	motionBlur/shutterAngle	180	0..720		Shutter Angle
+	number	motionBlur/shutterSamples	5	1..64		Shutter Samples
+	track	matteLayer				Matte Layer
+	enum	matteChannel	alpha	alpha|inverted-alpha|luminance|inverted-luminance		Matte Channel
+	track	warpLayer				Warp Layer
+	enum	show	normal	normal|foreground-only|background-only|matte		Show
+	number	sourceCrops/leftCrop	0	0..4000		Left Crop
+	number	sourceCrops/rightCrop	0	0..4000		Right Crop
+	number	sourceCrops/bottomCrop	0	0..4000		Bottom Crop
+	number	sourceCrops/topCrop	0	0..4000		Top Crop
 transition	transition.blockdissolve	Transition	Block Dissolve	Dissolves in random blocks; digital, glitchy transitions.
 	number	blockWidth	1	1..4000		Block Width
 	number	blockHeight	1	1..4000		Block Height
 	number	feather	0	0..400		Feather
 	bool	softEdges	true			Soft Edges (Best Quality)
+transition	transition.glasswipe	Transition	Glass Wipe	Wipes through rippled glass shaped by a gradient track (gradientLayer=V2); liquid, refractive transitions.
+	track	layerToReveal				Layer to Reveal
+	track	gradientLayer				Gradient Layer
+	number	softness	10	0..100		Softness
+	number	displacementAmount	10	-100..100		Displacement Amount
 transition	transition.gridwipe	Transition	Grid Wipe	A grid of tiles wipes away; techy reveals.
 	number	center_x	0.5		picture widths	Center (0 left, 1 right)
 	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
@@ -2045,6 +2583,13 @@ transition	transition.gridwipe	Transition	Grid Wipe	A grid of tiles wipes away; 
 	number	tiles	10	1..500		Tiles
 	enum	shape	radial	doors|radial|rectangular		Shape
 	bool	reverse	false			Reverse Transition
+transition	transition.imagewipe	Transition	Image Wipe	Wipes by the brightness of another track (layer=V2); wipes shaped by a texture or logo.
+	number	borderSoftness	0	0..100		Border Softness
+	bool	autoSoftness	true			Auto Softness
+	track	layer				Layer
+	enum	property	luminance	red|green|blue|alpha|luminance|lightness|saturation		Property
+	number	blur	0	0..200		Blur
+	bool	inverseGradient	false			Inverse Gradient
 transition	transition.jaws	Transition	Jaws	A jagged, teeth-like wipe; aggressive or comic transitions.
 	number	center_x	0.5		picture widths	Center (0 left, 1 right)
 	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
@@ -2070,6 +2615,75 @@ transition	transition.radialscalewipe	Transition	Radial ScaleWipe	A circular hol
 	number	center_x	0.5		picture widths	Center (0 left, 1 right)
 	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
 	bool	reverse	false			Reverse Transition
+transition	transition.twister	Transition	Twister	Twists the picture away like a ribbon, with another track on its back (backside=V2); playful spinning transitions.
+	track	backside				Backside
+	bool	shading	true			Shading
+	number	center_x	0.5		picture widths	Center (0 left, 1 right)
+	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
+	number	axis	45		degrees	Axis
+transition	transition.warpomatic	Transition	WarpoMatic	Warps the picture away by the brightness of another track (reactorLayer=V2); melting, organic transitions.
+	track	layerToReveal				Layer to Reveal
+	track	reactorLayer				Reactor Layer
+	enum	reactor	brightness	brightness|contrast-differences|local-differences		Reactor
+	number	smoothness	10	0..200		Smoothness
+	number	warpAmount	50	-1000..1000		Warp Amount
+	enum	warpDirection	joint	joint|opposing|twisting		Warp Direction
+	number	blendSpan	10	0..100		Blend Span
+transition	transition.cardwipe	Transition	Card Wipe	Cards flip over to reveal the next shot, optionally timed by a gradient track (gradientLayer=V2); techy grid flips.
+	number	transitionWidth	50	1..100		Transition Width
+	track	backLayer				Back Layer
+	enum	rowsAndColumns	independent	independent|columns-follows-rows		Rows & Columns
+	number	rows	8	1..1000		Rows
+	number	columns	8	1..1000		Columns
+	number	cardScale	1	0.01..10		Card Scale
+	enum	flipAxis	x	x|y|random		Flip Axis
+	enum	flipDirection	positive	positive|negative|random		Flip Direction
+	enum	flipOrder	left-to-right	left-to-right|right-to-left|top-to-bottom|bottom-to-top|top-left-to-bottom-right|top-right-to-bottom-left|bottom-left-to-top-right|bottom-right-to-top-left|gradient		Flip Order
+	track	gradientLayer				Gradient Layer
+	number	timingRandomness	0	0..1		Timing Randomness
+	number	randomSeed	1	0..10000		Random Seed
+	enum	cameraSystem	camera-position	camera-position|corner-pins|comp-camera		Camera System
+	number	cameraPosition/xRotation	0		degrees	X Rotation
+	number	cameraPosition/yRotation	0		degrees	Y Rotation
+	number	cameraPosition/zRotation	0		degrees	Z Rotation
+	number	cameraPosition/xyPosition_x	0.5		picture widths	X, Y Position (0 left, 1 right)
+	number	cameraPosition/xyPosition_y	0.5		picture heights	X, Y Position (0 top, 1 bottom)
+	number	cameraPosition/cameraZ	2	0.05..10		Z Position
+	number	cameraPosition/focalLength	70	1..500		Focal Length
+	enum	cameraPosition/transformOrder	rotate-xyz-position	rotate-xyz-position|rotate-xzy-position|rotate-yxz-position|rotate-yzx-position|rotate-zxy-position|rotate-zyx-position|position-rotate-xyz|position-rotate-xzy|position-rotate-yxz|position-rotate-yzx|position-rotate-zxy|position-rotate-zyx		Transform Order
+	number	cornerPins/upperLeftCorner_x	0		picture widths	Upper Left Corner (0 left, 1 right)
+	number	cornerPins/upperLeftCorner_y	0		picture heights	Upper Left Corner (0 top, 1 bottom)
+	number	cornerPins/upperRightCorner_x	1		picture widths	Upper Right Corner (0 left, 1 right)
+	number	cornerPins/upperRightCorner_y	0		picture heights	Upper Right Corner (0 top, 1 bottom)
+	number	cornerPins/lowerLeftCorner_x	0		picture widths	Lower Left Corner (0 left, 1 right)
+	number	cornerPins/lowerLeftCorner_y	1		picture heights	Lower Left Corner (0 top, 1 bottom)
+	number	cornerPins/lowerRightCorner_x	1		picture widths	Lower Right Corner (0 left, 1 right)
+	number	cornerPins/lowerRightCorner_y	1		picture heights	Lower Right Corner (0 top, 1 bottom)
+	bool	cornerPins/autoFocalLength	true			Auto Focal Length
+	number	cornerPins/focalLength	70	1..500		Focal Length
+	enum	lighting/lightType	distant-source	distant-source|point-source|first-comp-light		Light Type
+	number	lighting/lightIntensity	1	0..4		Light Intensity
+	color	lighting/lightColor	#ffffff			Light Color
+	number	lighting/lightPosition_x	0.5		picture widths	Light Position (0 left, 1 right)
+	number	lighting/lightPosition_y	0.5		picture heights	Light Position (0 top, 1 bottom)
+	number	lighting/lightDepth	1	-10..10		Light Depth
+	number	lighting/ambientLight	0.25	0..2		Ambient Light
+	number	material/diffuse	0.75	0..2		Diffuse Reflection
+	number	material/specular	0	0..2		Specular Reflection
+	number	material/highlightSharpness	15	1..100		Highlight Sharpness
+	number	positionJitter/xJitterAmount	0	0..100		X Jitter Amount
+	number	positionJitter/jitterSpeed	1	0..100		Jitter Speed
+	number	positionJitter/yJitterAmount	0	0..100		Y Jitter Amount
+	number	positionJitter/zJitterAmount	0	0..100		Z Jitter Amount
+	number	rotationJitter/xRotJitterAmount	0	0..360		X Rot Jitter Amount
+	number	rotationJitter/rotJitterSpeed	1	0..100		Rot Jitter Speed
+	number	rotationJitter/yRotJitterAmount	0	0..360		Y Rot Jitter Amount
+	number	rotationJitter/zRotJitterAmount	0	0..360		Z Rot Jitter Amount
+transition	transition.gradientwipe	Transition	Gradient Wipe	Wipes in the order of a gradient track's brightness, dark first (gradientLayer=V2); custom-shaped wipes from any picture.
+	number	softness	0	0..100		Transition Softness
+	track	gradientLayer				Gradient Layer
+	enum	gradientPlacement	stretch-gradient-to-fit	tile-gradient|center-gradient|stretch-gradient-to-fit		Gradient Placement
+	bool	invert	false			Invert Gradient
 transition	transition.iriswipe	Transition	Iris Wipe	A polygon or star-shaped iris opens from a point; classic iris-out and spotlight reveals.
 	number	center_x	0.5		picture widths	Iris Center (0 left, 1 right)
 	number	center_y	0.5		picture heights	Iris Center (0 top, 1 bottom)

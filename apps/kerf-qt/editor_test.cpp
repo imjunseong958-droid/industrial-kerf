@@ -818,6 +818,18 @@ private slots:
         window.m_effectControls->setPropertyValue(file, QStringLiteral("looks/warm.cube"));
         QCOMPARE(fileLine->text(), QStringLiteral("looks/warm.cube"));
         delete file;
+        // A track parameter picks a picture track other than the clip's, or
+        // none; the sound clip `a` may read both.
+        QCOMPARE(window.m_effectControls->m_pictureTracks, (QStringList{"V1", "V2"}));
+        QWidget *track = window.m_effectControls->valueEditor(
+            QJsonObject{{"name", "map"}, {"type", "track"}, {"default", ""}}, QStringLiteral("map"),
+            [](const QJsonValue &) {});
+        auto *trackCombo = qobject_cast<QComboBox *>(track);
+        QVERIFY(trackCombo);
+        QCOMPARE(trackCombo->count(), 3);
+        window.m_effectControls->setPropertyValue(track, QStringLiteral("V2"));
+        QCOMPARE(trackCombo->currentText(), QStringLiteral("V2"));
+        delete track;
     }
 
     void timelineKeepsSeekSelectMoveAndTrimCoordinates() {

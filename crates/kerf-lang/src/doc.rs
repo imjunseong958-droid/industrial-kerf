@@ -1066,6 +1066,44 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
     }
 
     #[test]
+    fn effects_read_other_picture_tracks_only() {
+        let reading = |c1: &str, c3: &str| {
+            SAMPLE
+                .replace(
+                    "      fx color.basic exposure=0.3 saturation=1.2\n",
+                    &format!("      fx color.basic exposure=0.3 saturation=1.2\n{c1}"),
+                )
+                .replace(
+                    "      set y=0.3 text=\"Day One\" size=0.1\n",
+                    &format!("      set y=0.3 text=\"Day One\" size=0.1\n{c3}"),
+                )
+        };
+        let reads = |track: &str| format!("      fx channel.setmatte takeMatteFromLayer={track}\n");
+        let document = parse_document(&reading(&reads("V2"), ""), Catalog::builtin()).unwrap();
+        // The track name prints back as text.
+        assert!(print_document(
+            &document.project,
+            Catalog::builtin(),
+            PrintOptions::default()
+        )
+        .contains("takeMatteFromLayer=\"V2\""));
+        for (c1, c3, needle) in [
+            (reads("V9"), String::new(), "not a picture track"),
+            (reads("A1"), String::new(), "not a picture track"),
+            (reads("V1"), String::new(), "the track it is on"),
+            (reads("V2"), reads("V1"), "reads track V1 back"),
+        ] {
+            let errors = parse_document(&reading(&c1, &c3), Catalog::builtin()).unwrap_err();
+            assert!(
+                errors
+                    .iter()
+                    .any(|e| e.code == "track.read" && e.message.contains(needle)),
+                "{needle}: {errors:#?}"
+            );
+        }
+    }
+
+    #[test]
     fn rejects_structure_out_of_place() {
         for (text, needle) in [
             ("", "kerf 1"),

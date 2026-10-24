@@ -43,11 +43,12 @@ view of it; the editor sends its edits back as typed operations.
 Raster effects and transitions come from
 [EffectCraft](https://github.com/storytold/effectcraft) (MIT/Apache), whose
 crates Kerf carries and develops in `effectcraft/` (see its README): about
-200 color, blur, distort, generate, 360° video, keying, matte, noise,
+240 color, blur, distort, generate, 360° video, keying, matte, noise,
 perspective, simulation, stylize, text, time, and utility effects, and
 wipes, blinds, dissolves, and irises as transitions, whose parameters the
 catalog can hold (a point is written as an `_x` and a `_y` across the
-picture).
+picture, a file as a path, and another layer as a picture track, such as a
+matte or a displacement map on V2).
 They run on a clip's own picture before it is placed: a render first bakes
 each such clip's frames into a lossless file with transparency in
 `.kerf/cache/derived` (reused until what it is made from changes) and plays

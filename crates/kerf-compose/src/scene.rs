@@ -27,6 +27,10 @@
 //! - Titles are text layers in a comp the size of the canvas, solids are
 //!   solid layers, and an adjustment layer is an adjustment solid carrying
 //!   the clip's effects over everything beneath it.
+//! - A track an effect reads (a track parameter, as a displacement map or a
+//!   matte) is drawn on its own in a comp of its own, whose layer sits out
+//!   of sight at the bottom of the comp for the effect to read, even when
+//!   the track itself is hidden.
 
 use crate::color;
 use crate::footage::{frame_count, ClipSource, TICKS_PER_FLICK};
@@ -43,8 +47,8 @@ use effectcraft_project::{
 use effectcraft_time::{FrameRate, Tick, TICKS_PER_SECOND};
 use kerf_core::program::{canvas, program_sequence};
 use kerf_model::{
-    Catalog, Clip, Content, Domain, Engine, FxKind, Id, Param, Project, Rate, Rgba, Sequence, Time,
-    Track, TrackKind, Transition, Value,
+    Catalog, Clip, Content, Domain, Engine, FxKind, Id, Param, ParamType, Project, Rate, Rgba,
+    Sequence, Time, Track, TrackKind, Transition, Value,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -102,6 +106,7 @@ pub(crate) fn build(
         captions,
         effects: 0,
         plain: HashMap::new(),
+        track_layers: HashMap::new(),
     };
     let comp = builder.comp(sequence)?;
     let (width, height) = canvas(sequence);
@@ -195,10 +200,19 @@ struct Builder<'a> {
     /// Effect groups made so far, for their uids (see `effect_group`).
     effects: u64,
     plain: HashMap<LayerId, ItemId>,
+    /// The layers of the tracks effects read in the comp being built, by
+    /// track id (see `comp_of`).
+    track_layers: HashMap<String, LayerId>,
 }
 
 impl<'a> Builder<'a> {
     fn comp(&mut self, sequence: &'a Sequence) -> Result<ItemId> {
+        self.comp_of(sequence, None)
+    }
+
+    /// `sequence` as a comp: its enabled picture tracks, or `only` that
+    /// track, shown or not, for the effects that read it.
+    fn comp_of(&mut self, sequence: &'a Sequence, only: Option<&'a Track>) -> Result<ItemId> {
         let (width, height) = canvas(sequence);
         let rate = sequence.rate;
         let duration = sequence.duration().max(rate.frame_duration());
@@ -206,13 +220,46 @@ impl<'a> Builder<'a> {
         // Nested comps show their own frames, as the graph composites a
         // nested sequence at its rate.
         comp.preserve_frame_rate = true;
+        let built = |track: &Track| {
+            track.kind == TrackKind::Video
+                && only.map_or(track.enabled, |only| std::ptr::eq(only, track))
+        };
+        // The tracks effects here read come first, at the bottom and out of
+        // sight; effects find them by track id.
+        let outer = std::mem::take(&mut self.track_layers);
         let mut layers = Vec::new();
+        for read in self.read_tracks(sequence, &built) {
+            if self.nesting.len() >= MAX_NESTING {
+                return Err(unsupported(
+                    &read.id,
+                    "tracks read through this many others",
+                ));
+            }
+            self.nesting.push(sequence.id.clone());
+            let item = self.comp_of(sequence, Some(read));
+            self.nesting.pop();
+            let source = LayerSource::Comp { item: item? };
+            let mut layer = build::layer(
+                &mut self.out,
+                &comp,
+                read.id.as_str(),
+                source,
+                (width, height),
+                None,
+            );
+            layer.switches.video = false;
+            layer.switches.audio = false;
+            layer.switches.motion_blur = false;
+            self.track_layers.insert(read.id.to_string(), layer.id);
+            layers.push(layer);
+        }
         for track in &sequence.tracks {
-            if track.kind == TrackKind::Video && track.enabled {
+            if built(track) {
                 self.track(sequence, &comp, track, &mut layers)?;
             }
         }
-        if self.captions {
+        self.track_layers = outer;
+        if self.captions && only.is_none() {
             for track in &sequence.tracks {
                 if track.kind == TrackKind::Subtitle && track.enabled {
                     for clip in &track.clips {
@@ -226,12 +273,61 @@ impl<'a> Builder<'a> {
         // EffectCraft lists the top layer first.
         layers.reverse();
         comp.layers = layers;
-        Ok(self.out.add_item(
-            sequence.name.as_str(),
-            Label::None,
-            None,
-            ItemKind::Comp(Arc::new(comp)),
-        ))
+        let name = match only {
+            Some(track) => format!("{} {}", sequence.name, track.id),
+            None => sequence.name.clone(),
+        };
+        Ok(self
+            .out
+            .add_item(&name, Label::None, None, ItemKind::Comp(Arc::new(comp))))
+    }
+
+    /// The picture tracks of `sequence` that the effects and transitions on
+    /// the `built` tracks read, each once.
+    fn read_tracks(
+        &self,
+        sequence: &'a Sequence,
+        built: &dyn Fn(&Track) -> bool,
+    ) -> Vec<&'a Track> {
+        let mut read: Vec<&'a Track> = Vec::new();
+        let mut uses: Vec<(&Id, &kerf_model::Params)> = Vec::new();
+        for track in sequence.tracks.iter().filter(|track| built(track)) {
+            let clips = track.clips.iter().filter(|clip| clip.enabled);
+            let effects = clips
+                .flat_map(|clip| &clip.effects)
+                .filter(|effect| effect.enabled);
+            uses.extend(effects.map(|effect| (&effect.fx, &effect.params)));
+            uses.extend(
+                track
+                    .transitions
+                    .iter()
+                    .map(|transition| (&transition.fx, &transition.params)),
+            );
+        }
+        for (fx, params) in uses {
+            let Some(def) = self.catalog.fx(fx.as_str()) else {
+                continue;
+            };
+            for param in def
+                .params
+                .iter()
+                .filter(|param| param.ty == ParamType::Track)
+            {
+                let Some(Param::Static(Value::Text(id))) = params.get(&param.name) else {
+                    continue;
+                };
+                let track = sequence
+                    .tracks
+                    .iter()
+                    .find(|track| track.kind == TrackKind::Video && track.id == id.as_str());
+                if let Some(track) =
+                    track.filter(|track| !read.iter().any(|r| std::ptr::eq(*r, *track)))
+                {
+                    read.push(track);
+                }
+            }
+        }
+        read
     }
 
     fn track(
@@ -1235,6 +1331,17 @@ impl<'a> Builder<'a> {
     ) -> effectcraft_project::PropGroup {
         let mut group = self.effect_group(spec, layer_size, seed);
         for param in &spec.params {
+            if param.ui == ParamUi::Layer {
+                // The layer of the track the parameter names, if any.
+                let read = match params.get(param.id) {
+                    Some(Param::Static(Value::Text(track))) => self.track_layers.get(track),
+                    _ => None,
+                };
+                if let Some(prop) = group.prop_mut(param.id) {
+                    prop.value = FxValue::Layer(read.map(|layer| layer.0));
+                }
+                continue;
+            }
             let hold = matches!(param.ui, ParamUi::Checkbox | ParamUi::Popup { .. });
             let animated = kerf_fx::is_animated(param, params);
             let values: Vec<(Tick, FxValue)> = if animated {

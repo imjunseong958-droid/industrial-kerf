@@ -861,7 +861,9 @@ fn json_value(ty: &ParamType, value: &Json) -> Option<Value> {
     Some(match (ty, value) {
         (ParamType::Number, Json::Number(n)) => Value::Number(n.as_f64()?),
         (ParamType::Bool, Json::Bool(b)) => Value::Bool(*b),
-        (ParamType::Text | ParamType::File(_), Json::String(s)) => Value::Text(s.clone()),
+        (ParamType::Text | ParamType::File(_) | ParamType::Track, Json::String(s)) => {
+            Value::Text(s.clone())
+        }
         (ParamType::Enum(_), Json::String(s)) => Value::Enum(s.clone()),
         (ParamType::Color, Json::String(s)) => Value::Color(kerf_model::Rgba::parse(s)?),
         _ => return None,

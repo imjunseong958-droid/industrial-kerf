@@ -18,6 +18,10 @@ pub enum ParamType {
     /// A path to a file with one of these extensions, held as text. A
     /// relative path is relative to the project (see `Project::resolve_paths`).
     File(Vec<String>),
+    /// A picture track of the clip's sequence, by id, held as text; empty
+    /// for none. Effects read its picture, as After Effects' layer
+    /// parameters read another layer.
+    Track,
     Color,
     Enum(Vec<String>),
 }
@@ -29,6 +33,7 @@ impl ParamType {
             Self::Bool => "bool",
             Self::Text => "text",
             Self::File(_) => "file",
+            Self::Track => "track",
             Self::Color => "color",
             Self::Enum(_) => "enum",
         }
@@ -58,6 +63,10 @@ impl ParamDef {
 
     pub fn text(name: &str, default: &str) -> Self {
         Self::new(name, ParamType::Text, Value::Text(default.into()), false)
+    }
+
+    pub fn track(name: &str) -> Self {
+        Self::new(name, ParamType::Track, Value::Text(String::new()), false)
     }
 
     pub fn file(name: &str, extensions: &[&str]) -> Self {
@@ -143,7 +152,7 @@ impl ParamDef {
                 }
             }
             (ParamType::Bool, Value::Bool(_))
-            | (ParamType::Text | ParamType::File(_), Value::Text(_))
+            | (ParamType::Text | ParamType::File(_) | ParamType::Track, Value::Text(_))
             | (ParamType::Color, Value::Color(_)) => Ok(()),
             _ => Err(format!("`{}` expects a {}", self.name, self.ty.name())),
         }
@@ -566,6 +575,7 @@ fn raster_definitions(text: &str) -> Vec<FxDef> {
             }
             "bool" => ParamDef::toggle(name, default == "true"),
             "text" => ParamDef::text(name, default),
+            "track" => ParamDef::track(name),
             "file" => {
                 let mut param = ParamDef::file(name, &constraint.split('|').collect::<Vec<_>>());
                 param.default = Value::Text(default.to_owned());

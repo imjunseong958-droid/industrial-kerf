@@ -161,6 +161,25 @@ fn time_effects_read_the_clips_other_frames() {
 }
 
 #[test]
+fn effects_read_other_tracks_even_hidden_ones() {
+    // A red solid takes its matte from a small white solid on a hidden
+    // track: red where the matte is, nothing elsewhere, and no white.
+    let body = format!(
+        "{SEQUENCE}\
+         \x20 track V1 video\n\
+         \x20   clip g1 gen=solid at=0f dur=24f\n\
+         \x20     set color=#ff0000\n\
+         \x20     fx channel.setmatte takeMatteFromLayer=V2\n\
+         \x20 track V2 video enabled=false\n\
+         \x20   clip m1 gen=solid at=0f dur=24f\n\
+         \x20     set color=#ffffff scale=0.5\n"
+    );
+    let frame = frame(&body, 4, false);
+    assert_eq!(pixel(&frame, 160, 90), [255, 0, 0]);
+    assert_eq!(pixel(&frame, 10, 10), [0, 0, 0]);
+}
+
+#[test]
 fn unsupported_things_are_named() {
     let body = format!(
         "{SEQUENCE}\

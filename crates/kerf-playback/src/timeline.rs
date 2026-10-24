@@ -5,8 +5,8 @@ use kerf_core::program::{
     compile_program, program_sequence, program_sound, ProgramError, ProgramOptions, ProgramSound,
 };
 use kerf_model::{
-    Catalog, Clip, Content, Domain, Effect, Engine, Param, Project, Sequence, Time, TrackKind,
-    Value,
+    Catalog, Clip, Content, Domain, Effect, Engine, Param, ParamType, Project, Sequence, Time,
+    TrackKind, Value,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -638,12 +638,18 @@ impl NativeCheck<'_> {
                 .then_some("a speed change on a nested sequence");
         }
         // Raster effects on a media picture run live, unless they make it
-        // transparent or read its other frames.
+        // transparent, read its other frames, or read another track.
         let live = |effect: &Effect| {
             kind == TrackKind::Video
                 && matches!(clip.content, Content::Media { .. })
                 && Catalog::builtin().fx(effect.fx.as_str()).is_some_and(|fx| {
-                    fx.engine == Engine::Raster && !NOT_LIVE.contains(&fx.category.as_str())
+                    let reads_a_track = fx.params.iter().any(|param| {
+                        param.ty == ParamType::Track
+                            && matches!(effect.params.get(&param.name), Some(Param::Static(Value::Text(track))) if !track.is_empty())
+                    });
+                    fx.engine == Engine::Raster
+                        && !NOT_LIVE.contains(&fx.category.as_str())
+                        && !reads_a_track
                 })
         };
         if clip
@@ -867,6 +873,12 @@ mod tests {
             "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx channel.invert\n",
         );
         assert_eq!(preview_plan(&inverted).mode, PreviewMode::NativeExact);
+        // So does one that reads another track.
+        let matted = project(
+            "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx channel.setmatte takeMatteFromLayer=V2\n  \
+             track V2 video\n    clip c2 media=source-a src=0s at=0s dur=2s\n",
+        );
+        assert_eq!(preview_plan(&matted).mode, PreviewMode::Composited);
         let echoed = project(
             "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx time.echo\n",
         );

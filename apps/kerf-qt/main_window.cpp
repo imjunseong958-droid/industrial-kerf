@@ -2646,6 +2646,17 @@ void MainWindow::updateInspector() {
     }
     m_effects->setClip(m_selectedClip, selectedTrackType() == QStringLiteral("video") &&
                                            clip.value(QStringLiteral("kind")).toString() == QStringLiteral("media"));
+    // Effects on the clip may read the other picture tracks.
+    QStringList pictureTracks;
+    for (const QJsonValue &trackValue : m_project.value(QStringLiteral("tracks")).toArray()) {
+        const QJsonObject track = trackValue.toObject();
+        bool holdsClip = false;
+        for (const QJsonValue &clipValue : track.value(QStringLiteral("clips")).toArray())
+            holdsClip |= clipValue.toObject().value(QStringLiteral("id")).toString() == m_selectedClip;
+        if (track.value(QStringLiteral("type")).toString() == QStringLiteral("video") && !holdsClip)
+            pictureTracks << track.value(QStringLiteral("id")).toString();
+    }
+    m_effectControls->setPictureTracks(pictureTracks);
     // A generator's parameters, then the properties of the clip's track type.
     QJsonArray defs = m_project.value(QStringLiteral("generators")).toObject().value(clip.value(QStringLiteral("fx")).toString()).toArray();
     for (const QJsonValue &def : m_project.value(QStringLiteral("properties")).toObject().value(selectedTrackType()).toArray())

@@ -116,6 +116,7 @@ fn writable(ui: &ParamUi) -> bool {
             | ParamUi::Point
             | ParamUi::Text
             | ParamUi::File { .. }
+            | ParamUi::Layer
             | ParamUi::Hidden
     )
 }
@@ -248,6 +249,10 @@ pub fn catalog_table() -> String {
                     ("color", color(*rgba).to_string(), String::new(), "")
                 }
                 (ParamUi::Text, FxValue::Str(text)) => ("text", text.clone(), String::new(), ""),
+                // Another layer is a picture track of the sequence.
+                (ParamUi::Layer, FxValue::Layer(None)) => {
+                    ("track", String::new(), String::new(), "")
+                }
                 (ParamUi::File { filters }, FxValue::Str(path)) => {
                     ("file", path.clone(), filters.join("|"), "")
                 }
