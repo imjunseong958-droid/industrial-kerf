@@ -265,3 +265,26 @@ fn the_sound_compiles_alone_for_a_picture_drawn_elsewhere() {
         compiled.filter_complex
     );
 }
+
+#[test]
+fn a_range_after_a_crossfade_plays_the_incoming_clip_whole() {
+    let project = project(
+        "sequence s1 rate=24 size=1920x1080 audio=48000\n\
+         \x20 track A1 audio\n\
+         \x20   clip a1 media=m1 src=00:00:02:00 at=0f dur=48f\n\
+         \x20   clip a2 media=m2 src=00:00:02:00 at=48f dur=48f\n\
+         \x20   transition t2 from=a1 to=a2 fx=crossfade dur=12f\n",
+    );
+    let f = |frames| Rate::FPS_24.time_of(frames);
+    let options = ProgramOptions {
+        range: Some((f(72), f(96))),
+        audio_only: true,
+        ..ProgramOptions::default()
+    };
+    // FFmpeg refuses a fade that starts before the stream does.
+    let graph = compile_program(&project, Catalog::builtin(), &options)
+        .unwrap()
+        .filter_complex;
+    assert!(!graph.contains("afade"), "{graph}");
+    assert!(graph.contains("atrim=start=0:duration=1"), "{graph}");
+}

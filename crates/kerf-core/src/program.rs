@@ -1212,6 +1212,11 @@ impl<'a> Graph<'a> {
             let Some((Reveal::Crossfade { equal_power }, start, end)) = fade else {
                 continue;
             };
+            // A fade in over before the first decoded sample leaves it all
+            // heard.
+            if direction == "in" && end <= portion.decode {
+                continue;
+            }
             filters.push(format!(
                 "afade=t={direction}:st={}:d={}:curve={}",
                 secs(start - portion.decode),

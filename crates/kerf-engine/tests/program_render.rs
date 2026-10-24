@@ -174,6 +174,15 @@ fn cuts_transitions_and_ranges_render_frame_exact() {
     assert!((audio - 1.0).abs() < 0.05, "audio lasts {audio}");
     let middle = pixel(&ranged, 6);
     assert!(middle[0] > 60 && middle[2] > 60, "{middle:?}");
+
+    // A range from after the crossfade hears the incoming clip whole.
+    let after = dir.path().join("after.mp4");
+    render(&project, None, Some((60, 96)), &after);
+    let (frames, audio) = probe(&after);
+    assert_eq!(frames, 36);
+    assert!((audio - 1.5).abs() < 0.05, "audio lasts {audio}");
+    let heard = loudness(&after, 0.0, 1.5);
+    assert!(heard > 0.05 && heard < 0.1, "after the crossfade: {heard}");
 }
 
 /// Titles and captions need FFmpeg built with libfreetype.
