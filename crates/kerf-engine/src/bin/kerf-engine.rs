@@ -243,6 +243,7 @@ enum CliCodec {
 }
 
 fn main() -> Result<()> {
+    kerf_engine::sidecar::forward_termination_signals();
     let cli = Cli::parse();
     match cli.command {
         Commands::Probe { action } => match action {

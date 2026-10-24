@@ -13,6 +13,7 @@ path = "src/main.rs"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 kerf-agent = { path = "../kerf-agent" }
+kerf-engine = { path = "../kerf-engine" }
 kerf-fetcher = { path = "../kerf-fetcher" }
 kerf-mcp = { path = "../kerf-mcp" }
 kerf-runtime = { path = "../kerf-runtime" }
