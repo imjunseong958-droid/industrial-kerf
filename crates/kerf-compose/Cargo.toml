@@ -5,19 +5,19 @@ edition.workspace = true
 license.workspace = true
 description = "Kerf's compositor: a sequence drawn frame by frame through EffectCraft's renderer, with footage decoded by libav"
 
-# EffectCraft is pinned to the commit kerf-fx carries; the two move together.
+# EffectCraft's crates live in `effectcraft/`, as for kerf-fx.
 [dependencies]
 kerf-core = { path = "../kerf-core" }
 kerf-fx = { path = "../kerf-fx" }
 kerf-model = { path = "../kerf-model" }
-effectcraft-color = { git = "https://github.com/storytold/effectcraft", rev = "9581b53c3f8945683252af0eb5fac79e0e43aed4" }
-effectcraft-effects = { git = "https://github.com/storytold/effectcraft", rev = "9581b53c3f8945683252af0eb5fac79e0e43aed4" }
-effectcraft-gpu = { git = "https://github.com/storytold/effectcraft", rev = "9581b53c3f8945683252af0eb5fac79e0e43aed4" }
-effectcraft-keyframe = { git = "https://github.com/storytold/effectcraft", rev = "9581b53c3f8945683252af0eb5fac79e0e43aed4" }
-effectcraft-project = { git = "https://github.com/storytold/effectcraft", rev = "9581b53c3f8945683252af0eb5fac79e0e43aed4" }
-effectcraft-render = { git = "https://github.com/storytold/effectcraft", rev = "9581b53c3f8945683252af0eb5fac79e0e43aed4" }
-effectcraft-text = { git = "https://github.com/storytold/effectcraft", rev = "9581b53c3f8945683252af0eb5fac79e0e43aed4" }
-effectcraft-time = { git = "https://github.com/storytold/effectcraft", rev = "9581b53c3f8945683252af0eb5fac79e0e43aed4" }
+effectcraft-color = { path = "../../effectcraft/crates/color" }
+effectcraft-effects = { path = "../../effectcraft/crates/effects" }
+effectcraft-gpu = { path = "../../effectcraft/crates/gpu" }
+effectcraft-keyframe = { path = "../../effectcraft/crates/keyframe" }
+effectcraft-project = { path = "../../effectcraft/crates/project" }
+effectcraft-render = { path = "../../effectcraft/crates/render" }
+effectcraft-text = { path = "../../effectcraft/crates/text" }
+effectcraft-time = { path = "../../effectcraft/crates/time" }
 ffmpeg-next = { version = "9.0", default-features = false, features = ["codec", "filter", "format", "software-scaling"] }
 rayon = "1"
 thiserror = "2"
