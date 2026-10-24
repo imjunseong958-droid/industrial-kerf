@@ -436,10 +436,6 @@ fn time_dependent(layer: &Layer, effects: bool) -> bool {
             {
                 return true;
             }
-            // Clone strokes reading another layer or another time.
-            if g.enabled && effectcraft_effects::paint::is_paint(g) && effectcraft_effects::paint::cache_key(g, 0.0).1 {
-                return true;
-            }
         }
     }
     if matches!(layer.source, LayerSource::Shape)
@@ -614,15 +610,6 @@ fn key_any(ctx: &EvalCtx, layer: &Layer, scale: f64, draft: bool, blur: bool, fo
         hash_debug(&mut h, c);
         if let Node::Group(g) = c {
             hash_values(&mut h, ctx, layer, g);
-        }
-    }
-    // Paint strokes appear and disappear with their Duration spans (not property values).
-    if layer.switches.effects
-        && let Some(fx) = layer.effects()
-    {
-        let lt = layer.layer_time(ctx.time).seconds();
-        for g in fx.groups().filter(|g| g.enabled && effectcraft_effects::paint::is_paint(g)) {
-            effectcraft_effects::paint::cache_key(g, lt).0.hash(&mut h);
         }
     }
     if time_dependent(layer, effects != Some(0)) {

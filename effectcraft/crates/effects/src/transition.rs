@@ -1,5 +1,5 @@
 //! Transition effects (batch 2): Block Dissolve, Gradient Wipe (gradient layer or self), Iris Wipe, Card
-//! Wipe (3D cards with camera, lighting and jitter), CC Grid Wipe, CC Radial ScaleWipe, CC Scale Wipe and CC Light Wipe.
+//! Wipe (3D cards with camera, lighting and jitter), CC Grid Wipe, CC Radial ScaleWipe and CC Light Wipe.
 //!
 //! Every transition is the identity at 0 % completion. Angles are clockwise from "up".
 
@@ -123,13 +123,42 @@ fn cross(a: (f64, f64), b: (f64, f64)) -> f64 {
     a.0 * b.1 - a.1 * b.0
 }
 
+/// Iris Wipe's outer and inner radii in pixels of a buffer of `size` pixels at `scale` and
+/// `offset` (see [`Buf::to_px`]). Completion grows the iris from Outer Radius until its edge,
+/// feather included, clears every corner of the layer and the buffer, keeping the star's
+/// inner-to-outer ratio, so the layer is gone at 100 %.
+pub fn iris_radii(ctx: &EffectCtx, scale: f64, offset: [f64; 2], size: [u32; 2]) -> (f64, f64) {
+    let pr = ctx.params;
+    let star = pr.b("useInnerRadius");
+    let outer = pr.f("outerRadius").max(0.0) * scale;
+    let inner = if star { pr.f("innerRadius").max(0.0) * scale } else { outer };
+    let done = completion(ctx);
+    if done <= 0.0 {
+        return (outer, inner);
+    }
+    let ratio = if star && outer > 0.0 { inner / outer } else { 1.0 };
+    let to_px = |p: [f64; 2]| (p[0] * scale + offset[0], p[1] * scale + offset[1]);
+    let c = to_px(pr.v2("center"));
+    let [w, h] = ctx.layer_size;
+    let (bw, bh) = (size[0] as f64, size[1] as f64);
+    let corners = [to_px([0.0, 0.0]), to_px([w, 0.0]), to_px([0.0, h]), to_px([w, h]), (0.0, 0.0), (bw, 0.0), (0.0, bh), (bw, bh)];
+    let cover = corners.iter().map(|p| (p.0 - c.0).hypot(p.1 - c.1)).fold(0.0, f64::max);
+    // The polygon's edge comes no nearer than its smaller radius times the cosine of the angle
+    // between neighbouring vertices.
+    let n = pr.f("points").round().clamp(3.0, 64.0);
+    let step = std::f64::consts::TAU / if star { n * 2.0 } else { n };
+    let edge = step.cos().max(0.05) * ratio.min(1.0).max(0.05);
+    let target = (cover + pr.f("feather").max(0.0) * scale * 0.5 + 1.0) / edge;
+    let outer = outer + (target - outer).max(0.0) * done;
+    (outer, outer * ratio)
+}
+
 fn iris_wipe(ctx: &EffectCtx, mut b: Buf) -> Buf {
-    let outer = ctx.params.f("outerRadius").max(0.0) * b.scale;
+    let (outer, inner) = iris_radii(ctx, b.scale, b.offset, [b.img.width, b.img.height]);
     if outer <= 0.0 {
         return b;
     }
     let n = ctx.params.f("points").round().clamp(3.0, 64.0) as usize;
-    let inner = if ctx.params.b("useInnerRadius") { ctx.params.f("innerRadius").max(0.0) * b.scale } else { outer };
     let star = ctx.params.b("useInnerRadius");
     let rot = ctx.params.f("rotation").to_radians();
     let feather = ctx.params.f("feather") * b.scale;
@@ -397,26 +426,6 @@ fn radial_scale_wipe(ctx: &EffectCtx, mut b: Buf) -> Buf {
     b
 }
 
-fn scale_wipe(ctx: &EffectCtx, mut b: Buf) -> Buf {
-    let stretch = ctx.params.f("stretch").max(0.0);
-    if stretch <= 0.0 {
-        return b;
-    }
-    let c = b.to_px(ctx.params.v2("center"));
-    let a = ctx.params.f("direction").to_radians();
-    let dir = (a.sin(), -a.cos());
-    let src = b.img.clone();
-    b.img = remap(&src, true, |x, y| {
-        let u = (x - c.0) * dir.0 + (y - c.1) * dir.1;
-        if u <= 0.0 {
-            return Some((x, y));
-        }
-        let back = u - u / (1.0 + stretch);
-        Some((x - dir.0 * back, y - dir.1 * back))
-    });
-    b
-}
-
 fn light_wipe(ctx: &EffectCtx, mut b: Buf) -> Buf {
     let done = completion(ctx);
     if done <= 0.0 {
@@ -498,6 +507,7 @@ pub fn specs() -> Vec<EffectSpec> {
             "ec.transition.iriswipe",
             "Iris Wipe",
             vec![
+                done(),
                 p("center", "Iris Center", pt(0.5, 0.5), ParamUi::Point),
                 p("points", "Iris Points", num(6.0), slider(6.0, 32.0, 6.0, 32.0, 0)),
                 p("outerRadius", "Outer Radius", num(0.0), slider(0.0, 32000.0, 0.0, 2000.0, 1)),
@@ -579,16 +589,6 @@ pub fn specs() -> Vec<EffectSpec> {
             "CC Radial ScaleWipe",
             vec![cc_done(), p("center", "Center", pt(0.5, 0.5), ParamUi::Point), p("reverse", "Reverse Transition", Value::Bool(false), ParamUi::Checkbox)],
             radial_scale_wipe,
-        ),
-        spec(
-            "ec.transition.ccscalewipe",
-            "CC Scale Wipe",
-            vec![
-                p("stretch", "Stretch", num(0.0), slider(0.0, 1000.0, 0.0, 50.0, 2)),
-                p("center", "Center", pt(0.5, 0.5), ParamUi::Point),
-                p("direction", "Direction", num(90.0), ParamUi::Angle),
-            ],
-            scale_wipe,
         ),
         spec(
             "ec.transition.cclightwipe",
@@ -734,17 +734,6 @@ mod tests {
         let rev = run("ec.transition.ccradialscalewipe", &img, &[("completion", num(30.0)), ("reverse", Value::Bool(true))]);
         assert!(rev.get(20, 20)[3] > 0.0);
         assert_eq!(rev.get(0, 0)[3], 0.0);
-    }
-
-    #[test]
-    fn scale_wipe_smears_past_the_center_line() {
-        let img = ramp(40, 4);
-        assert_eq!(run("ec.transition.ccscalewipe", &img, &[]), img);
-        let out = run("ec.transition.ccscalewipe", &img, &[("stretch", num(1000.0))]);
-        // direction 90° → to the right of centre, everything samples (almost) the centre column.
-        assert_eq!(out.get(10, 1), img.get(10, 1));
-        let centre = img.get(20, 1)[0];
-        assert!((out.get(38, 1)[0] - centre).abs() < 0.03, "{}", out.get(38, 1)[0]);
     }
 
     #[test]

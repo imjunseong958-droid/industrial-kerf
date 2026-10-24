@@ -55,7 +55,6 @@ pub(crate) const IDS: &[&str] = &[
     "ec.transition.ccjaws",
     "ec.transition.cclinesweep",
     "ec.transition.ccradialscalewipe",
-    "ec.transition.ccscalewipe",
     "ec.transition.cctwister",
     "ec.transition.ccwarpomatic",
     "ec.perspective.radialshadow",
@@ -78,7 +77,6 @@ pub(crate) fn apply(e: &mut Enc, id: &str, ctx: &EffectCtx, b: GBuf) -> Option<G
         "ec.transition.ccjaws" => jaws(e, ctx, b),
         "ec.transition.cclinesweep" => line_sweep(e, ctx, b),
         "ec.transition.ccradialscalewipe" => radial_scale_wipe(e, ctx, b),
-        "ec.transition.ccscalewipe" => scale_wipe(e, ctx, b),
         "ec.transition.cctwister" => twister(e, ctx, b),
         "ec.transition.ccwarpomatic" => warpomatic(e, ctx, b),
         "ec.perspective.radialshadow" => radial_shadow(e, ctx, b),
@@ -235,19 +233,6 @@ fn radial_scale_wipe(e: &mut Enc, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
     p.u[0][0] = ctx.params.b("reverse") as u32;
     p.f[0] = f4([c.0, c.1, maxd, done]);
     run(e, "ftr_radial_scale", &p, b, None, None)
-}
-
-fn scale_wipe(e: &mut Enc, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
-    let stretch = ctx.params.f("stretch").max(0.0);
-    if stretch <= 0.0 {
-        return Some(b);
-    }
-    let c = b.to_px(ctx.params.v2("center"));
-    let a = ctx.params.f("direction").to_radians();
-    let mut p = Params::default();
-    p.f[0] = f4([c.0, c.1, a.sin(), -a.cos()]);
-    p.f[1][0] = stretch as f32;
-    run(e, "ftr_scale", &p, b, None, None)
 }
 
 // ---------------------------------------------------------------- CC Glass Wipe / Image Wipe / WarpoMatic (transition2.rs)

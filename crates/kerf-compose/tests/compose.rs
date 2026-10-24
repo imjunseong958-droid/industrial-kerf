@@ -140,6 +140,27 @@ fn adjustment_layers_take_raster_effects() {
 }
 
 #[test]
+fn time_effects_read_the_clips_other_frames() {
+    // A black solid inverted more and more, to white at the end.
+    let fading = |fx: &str| {
+        format!(
+            "{SEQUENCE}\
+             \x20 track V1 video\n\
+             \x20   clip g1 gen=solid at=0f dur=24f\n\
+             \x20     set color=#000000\n\
+             \x20     fx channel.invert blend={{0f:100 23f:0}}\n\
+             {fx}"
+        )
+    };
+    // Halfway through it is mid grey; held at one frame a second, it is
+    // still the black it starts as.
+    let plain = pixel(&frame(&fading(""), 12, false), 50, 50)[0];
+    assert!(plain.abs_diff(133) <= 8, "{plain}");
+    let held = fading("\x20     fx time.posterizetime frameRate=1\n");
+    assert!(pixel(&frame(&held, 12, false), 50, 50)[0] <= 8);
+}
+
+#[test]
 fn unsupported_things_are_named() {
     let body = format!(
         "{SEQUENCE}\

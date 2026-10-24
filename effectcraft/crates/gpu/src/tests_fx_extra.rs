@@ -41,11 +41,9 @@ fn iris_wipe() {
 }
 
 #[test]
-fn bevels_and_legacy_gaussian() {
+fn bevels() {
     effect_case("ec.perspective.bevelalpha", &[("edgeThickness", n(4.0)), ("lightIntensity", n(0.6))]);
     effect_case("ec.perspective.bevelalpha", &[("edgeThickness", n(2.0)), ("lightAngle", n(200.0)), ("lightColor", c(1.0, 0.8, 0.5))]);
     effect_case("ec.perspective.beveledges", &[("edgeThickness", n(0.1)), ("lightIntensity", n(0.5))]);
     effect_case("ec.perspective.beveledges", &[("edgeThickness", n(0.3)), ("lightAngle", n(130.0))]);
-    effect_case("ec.obsolete.gaussianlegacy", &[("blurriness", n(7.0))]);
-    effect_case("ec.obsolete.gaussianlegacy", &[("blurriness", n(5.0)), ("blurDimensions", e(2))]);
 }

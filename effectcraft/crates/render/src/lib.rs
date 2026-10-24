@@ -79,12 +79,6 @@ pub trait FootageSource: Send + Sync {
     fn audio(&self, _item: ItemId, _footage: &Footage, _t: Tick, _frames: usize, _rate: u32) -> Option<Vec<f32>> {
         None
     }
-    /// Auxiliary 3D channels of `item` at source time `t` (multi-layer OpenEXR: depth, IDs,
-    /// Cryptomatte, any named channel), with `scale` relative to the file's pixels. `None` when
-    /// the footage has none.
-    fn aux(&self, _item: ItemId, _footage: &Footage, _t: Tick) -> Option<Arc<effectcraft_raster::AuxChannels>> {
-        None
-    }
     /// The parsed 3D model of a [`effectcraft_project::FootageKind::Model`] item (Advanced 3D).
     fn model(&self, _item: ItemId, _footage: &Footage) -> Option<Arc<effectcraft_model::Model>> {
         None
@@ -161,9 +155,6 @@ impl FootageSource for CancellableFootage<'_> {
     }
     fn audio(&self, item: ItemId, footage: &Footage, t: Tick, frames: usize, rate: u32) -> Option<Vec<f32>> {
         self.inner.audio(item, footage, t, frames, rate)
-    }
-    fn aux(&self, item: ItemId, footage: &Footage, t: Tick) -> Option<Arc<effectcraft_raster::AuxChannels>> {
-        self.inner.aux(item, footage, t)
     }
     fn model(&self, item: ItemId, footage: &Footage) -> Option<Arc<effectcraft_model::Model>> {
         self.inner.model(item, footage)
@@ -311,29 +302,6 @@ impl EffectHost for FxHost<'_, '_, '_> {
         let t = self.layer.comp_time(Tick::from_seconds_f64(layer_time));
         let sub = self.r.nested();
         sub.layer_input(&self.ctx.at(t), self.layer, n).map(|b| (*b).clone())
-    }
-
-    fn aux(&self) -> Option<Arc<effectcraft_raster::AuxChannels>> {
-        match &self.layer.source {
-            LayerSource::Footage { item } => {
-                let ItemKind::Footage(f) = &self.r.project.item(*item)?.kind else { return None };
-                let a = self.r.footage.aux(*item, f, self.ctx.source_time(self.layer))?;
-                // Aux pixels per layer pixel (the layer is the footage at its nominal size).
-                if f.width > 0 && a.width > 0 {
-                    let mut a = (*a).clone();
-                    a.scale = a.width as f64 / f.width as f64;
-                    return Some(Arc::new(a));
-                }
-                Some(a)
-            }
-            LayerSource::Comp { item } => {
-                if self.r.depth > MAX_FX_DEPTH || self.r.project.comp_contains(*item, self.ctx.comp_id) {
-                    return None;
-                }
-                self.r.nested().comp_aux(*item, self.ctx.nested_time(self.layer)).map(Arc::new)
-            }
-            _ => None,
-        }
     }
 
     fn params_at(&self, layer_time: f64) -> Option<Params> {
@@ -1154,8 +1122,7 @@ impl<'a> Renderer<'a> {
         // already has, so tiling or displacement can place pixels outside the content instead
         // of losing them at its edge. Only when something will actually run, and not for an
         // adjustment layer, whose buffer is the comp below and already spans it.
-        if !adjustment
-            && fx.groups().any(|g| g.enabled && matches!(&g.kind, GroupKind::Effect { effect } if effectcraft_effects::find(effect).is_some_and(|s| !effectcraft_effects::audio_fx::is_audio_effect(s.id)))) {
+        if !adjustment && fx.groups().any(|g| g.enabled && matches!(&g.kind, GroupKind::Effect { effect } if effectcraft_effects::find(effect).is_some())) {
             target.cover(layer_size);
         }
         let mut mask_shapes = masks::shapes(ctx, layer);
@@ -1196,7 +1163,6 @@ impl<'a> Renderer<'a> {
                 GroupKind::Effect { effect } => effectcraft_effects::find(effect).map(|s| (i, g, s)),
                 _ => None,
             })
-            .filter(|(_, _, s)| !effectcraft_effects::audio_fx::is_audio_effect(s.id))
             .collect();
         let accel = self.active_accel();
         let mut k = 0;
@@ -2096,13 +2062,6 @@ impl<'a> Renderer<'a> {
         self.depth
     }
 
-    /// The auxiliary 3D channels of comp `comp_id` at comp time `t` (depth, layer IDs, normals,
-    /// UVs, Cryptomatte; see `three_d::compose::aux_pass`), at the renderer's output scale.
-    pub fn comp_aux(&self, comp_id: ItemId, t: Tick) -> Option<effectcraft_raster::AuxChannels> {
-        let ctx = self.eval_ctx(comp_id, t)?;
-        Some(three_d::compose::aux_pass(self, &ctx))
-    }
-
     /// Evaluation context of comp `comp_id` at comp time `t`.
     pub fn eval_ctx(&self, comp_id: ItemId, t: Tick) -> Option<EvalCtx<'a>> {
         Some(self.ctx(comp_id, self.project.comp(comp_id)?, t))
@@ -2402,10 +2361,6 @@ pub fn kurbo_path(sp: &effectcraft_keyframe::ShapePath) -> kurbo::BezPath {
     effectcraft_path::to_kurbo(sp)
 }
 #[cfg(test)]
-mod tests_audio_fx;
-#[cfg(test)]
-mod tests_aux;
-#[cfg(test)]
 mod tests_collapse;
 #[cfg(test)]
 mod tests_color;
@@ -2421,7 +2376,5 @@ mod tests_mask_blur;
 mod tests_mask_expansion;
 #[cfg(test)]
 mod tests_nested;
-#[cfg(test)]
-mod tests_paint;
 #[cfg(test)]
 mod tests_time;

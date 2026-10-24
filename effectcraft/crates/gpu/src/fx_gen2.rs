@@ -1,12 +1,12 @@
 //! GPU effects, generators of part C (kernels in `shaders/fx_gen2.wgsl`, every entry point
-//! prefixed `fg2_`): Lightning, Advanced Lightning, Beam, Fractal, Lens Flare, Radio Waves,
-//! Vegas, Stroke, Scribble, Write-on, Paint Bucket, Eyedropper Fill, CC Glue Gun, CC Threads,
-//! Audio Spectrum, Audio Waveform, Basic Text and Path Text.
+//! prefixed `fg2_`): Advanced Lightning, Beam, Fractal, Lens Flare, Radio Waves, Vegas,
+//! Stroke, Scribble, Write-on, Paint Bucket, Eyedropper Fill, CC Glue Gun, CC Threads, Audio
+//! Spectrum and Audio Waveform.
 //!
 //! Geometry stays on the CPU and is shared with the CPU effect as a per-frame plan: the bolts
-//! (`effects::bolt_plan`, `effects::lightning_segments`), mask strokes, scribbles and contour
-//! segments (`effects::paint_plan`), audio marks (`effects::marks_plan`: the FFT and peak
-//! analysis), glyph strokes (`effects::text_passes`), live waves and their contour
+//! (`effects::lightning_segments`), mask strokes, scribbles and contour segments
+//! (`effects::paint_plan`), audio marks (`effects::marks_plan`: the FFT and peak analysis),
+//! live waves and their contour
 //! (`effects::radio_plan`), Paint Bucket's flood-filled region and Eyedropper Fill's sampled
 //! colour (both over the read-back layer). The plans' segments and polygons are binned into
 //! 16 × 16 tiles on the CPU and rasterised here with the CPU's coverage functions
@@ -32,9 +32,7 @@ pub(crate) const KERNELS: &[&str] = &[
     "fg2_paint",
     "fg2_marks",
     "fg2_pair",
-    "fg2_bolt",
     "fg2_adv_bolt",
-    "fg2_text",
     "fg2_radio",
     "fg2_beam",
     "fg2_flare",
@@ -47,7 +45,6 @@ pub(crate) const KERNELS: &[&str] = &[
 
 /// Effect ids implemented here.
 pub(crate) const IDS: &[&str] = &[
-    "ec.obsolete.lightning",
     "ec.generate.advancedlightning",
     "ec.generate.beam",
     "ec.generate.lensflare",
@@ -62,8 +59,6 @@ pub(crate) const IDS: &[&str] = &[
     "ec.generate.ccthreads",
     "ec.generate.audiospectrum",
     "ec.generate.audiowaveform",
-    "ec.obsolete.basictext",
-    "ec.obsolete.pathtext",
 ];
 
 /// Largest item table (floats) the raster kernels take; bigger plans render on the CPU.
@@ -75,7 +70,6 @@ const NO_MIN: f32 = -3.0e38;
 /// Run effect `id` (one of [`IDS`]); `None` = this parameter combination runs on the CPU.
 pub(crate) fn apply(e: &mut Enc, id: &str, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
     match id {
-        "ec.obsolete.lightning" => lightning(e, ctx, b),
         "ec.generate.advancedlightning" => advanced_lightning(e, ctx, b),
         "ec.generate.beam" => beam(e, ctx, b),
         "ec.generate.lensflare" => lens_flare(e, ctx, b),
@@ -86,7 +80,6 @@ pub(crate) fn apply(e: &mut Enc, id: &str, ctx: &EffectCtx, b: GBuf) -> Option<G
         "ec.generate.ccgluegun" => glue_gun(e, ctx, b),
         "ec.generate.ccthreads" => threads(e, ctx, b),
         "ec.generate.audiospectrum" | "ec.generate.audiowaveform" => marks(e, id, ctx, b),
-        "ec.obsolete.basictext" | "ec.obsolete.pathtext" => text(e, id, ctx, b),
         _ => None,
     }
 }
@@ -294,23 +287,7 @@ fn marks(e: &mut Enc, id: &str, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
     run(e, "fg2_marks", &p, b, Some(&cov), None)
 }
 
-// ---------------------------------------------------------------- Lightning / Advanced Lightning
-
-fn lightning(e: &mut Enc, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
-    let cpu = cpu_buf(e, &b, false)?;
-    let plan = effectcraft_effects::bolt_plan(ctx, &cpu);
-    let (w, h) = (b.img.width, b.img.height);
-    let core = Variant { mul: plan.core, min: 0.3, ..Variant::plain(0.6) };
-    let cov = raster_segs(e, w, h, plan.segs.iter().map(|s| (s.a, s.b, s.r, s.v)), &[Variant::plain(0.0), core])?;
-    let glow = gauss_plane(e, &cov, plan.width * 0.5, plan.width * 0.5);
-    let m = e.scratch(w, h);
-    e.pixels("fg2_pair", &Params::default(), &cov, Some(&glow), &m, None);
-    let mut p = Params::default();
-    p.u[0][0] = plan.mode;
-    p.f[0] = rgb(plan.outside);
-    p.f[1] = rgb(plan.inside);
-    run(e, "fg2_bolt", &p, b, Some(&m), None)
-}
+// ---------------------------------------------------------------- Advanced Lightning
 
 fn advanced_lightning(e: &mut Enc, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
     let pr = ctx.params;
@@ -331,31 +308,6 @@ fn advanced_lightning(e: &mut Enc, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
     p.f[1] = rgb(pr.color("coreSettings/coreColor"));
     p.f[2] = rgb(pr.color("glowSettings/glowColor"));
     run(e, "fg2_adv_bolt", &p, b, Some(&m), None)
-}
-
-// ---------------------------------------------------------------- Basic Text / Path Text
-
-fn text(e: &mut Enc, id: &str, ctx: &EffectCtx, mut b: GBuf) -> Option<GBuf> {
-    let cpu = cpu_buf(e, &b, false)?;
-    let passes = effectcraft_effects::text_passes(id, ctx, &cpu)?;
-    let (w, h) = (b.img.width, b.img.height);
-    for pass in passes {
-        let look = pass.look;
-        let mut segs = Vec::new();
-        for pl in &pass.polys {
-            effectcraft_effects::poly_segs(pl, false, pass.r, 1.0, &mut segs);
-        }
-        let sw = look.stroke_w.max(0.0);
-        let at = |add: f64| Variant { add, min: 0.05, ..Variant::plain(1.0) };
-        let cov = raster_segs(e, w, h, segs.iter().map(|s| (s.a, s.b, s.r, s.v)), &[at(0.0), at(sw * 0.5), at(-sw * 0.5)])?;
-        let mut p = Params::default();
-        p.u[0] = [look.display, look.on_original as u32, (look.display != 0 && sw > 0.0) as u32, (pass.r - sw * 0.5 > 0.05) as u32];
-        p.f[0] = look.fill;
-        p.f[1] = look.stroke;
-        p.f[2][0] = look.opacity;
-        b = run(e, "fg2_text", &p, b, Some(&cov), None)?;
-    }
-    Some(b)
 }
 
 // ---------------------------------------------------------------- Radio Waves

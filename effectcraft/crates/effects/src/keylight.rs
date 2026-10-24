@@ -615,30 +615,6 @@ mod tests {
         assert!(crate::name_matches(spec, "keylight") && crate::name_matches(spec, "key light") && !crate::name_matches(spec, "blur"));
     }
 
-    /// Instances saved with the flat layout get their parameters moved into the twirl-downs.
-    #[test]
-    fn flat_instances_move_into_twirl_downs() {
-        use effectcraft_project::build::Ids;
-        let spec = crate::find("ec.keying.keylight").unwrap();
-        let mut next = 1;
-        let mut ids = Ids(&mut next);
-        let mut g = crate::instantiate(spec, &mut ids, "Key Light", [10.0, 10.0]);
-        // Flatten it the way older versions saved it.
-        let mut flat = vec![];
-        g.walk_mut(&mut |p| flat.push(p.clone()));
-        g.children = flat.into_iter().map(Into::into).collect();
-        let clip = g.children.iter_mut().find_map(|c| match c {
-            effectcraft_project::Node::Prop(p) if p.match_id == "clipWhite" => Some(p),
-            _ => None,
-        });
-        clip.unwrap().value = num(42.0);
-        assert!(crate::migrate::upgrade_instance(spec, &mut g, &mut ids, [10.0, 10.0]));
-        assert_eq!(g.sub("screenMatte").map(|s| s.name.as_str()), Some("Screen Matte"));
-        assert_eq!(g.sub("screenMatte").and_then(|s| s.get("clipWhite")).map(|p| p.value.clone()), Some(num(42.0)));
-        assert_eq!(g.sub("insideMask").and_then(|s| s.get("insideMask")).map(|p| p.name.as_str()), Some("Inside Mask"));
-        assert!(g.get("clipWhite").is_none());
-    }
-
     #[test]
     fn colour_suppression_balancing_and_crop_methods() {
         // Suppress Red pulls red down to the balance of green and blue; Cyan the shared G+B.

@@ -401,6 +401,55 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "generate.writeon",
         "Draws a stroke like handwriting as its point moves; underlines and doodles.",
     ),
+    // Immersive Video
+    (
+        "vr.blur",
+        "Blurs a 360° frame evenly on the sphere, seams and poles included; soft 360 backgrounds.",
+    ),
+    (
+        "vr.chromaticaberrations",
+        "Splits color channels around a point on a 360° frame; lens-like fringing in VR.",
+    ),
+    (
+        "vr.colorgradients",
+        "Lays soft color gradients over a 360° frame; tinting a whole VR sky or room.",
+    ),
+    (
+        "vr.converter",
+        "Converts between 360° equirectangular, cube maps, fisheye, and a flat view; reframing VR footage.",
+    ),
+    (
+        "vr.denoise",
+        "Reduces noise on a 360° frame without seams; cleaning VR footage.",
+    ),
+    (
+        "vr.digitalglitch",
+        "Glitch blocks and color shifts that wrap around a 360° frame; broken-signal looks in VR.",
+    ),
+    (
+        "vr.fractalnoise",
+        "Seamless animated noise on a 360° frame; fog, clouds, and textures that wrap in VR.",
+    ),
+    (
+        "vr.glow",
+        "Makes highlights glow evenly across a 360° frame; dreamy VR light.",
+    ),
+    (
+        "vr.planetosphere",
+        "Places a flat picture onto a 360° frame; titles and graphics inside VR.",
+    ),
+    (
+        "vr.rotatesphere",
+        "Turns a 360° frame around its axes; leveling the horizon or choosing the front view.",
+    ),
+    (
+        "vr.sharpen",
+        "Sharpens a 360° frame evenly without seams; crisper VR footage.",
+    ),
+    (
+        "vr.spheretoplane",
+        "Takes a flat view out of a 360° frame; framing a regular shot from VR footage.",
+    ),
     // Keying
     (
         "key.advancedspill",
@@ -649,6 +698,36 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "stylize.threshold",
         "A black-and-white threshold; graphic, photocopied looks.",
     ),
+    // Text
+    (
+        "text.numbers",
+        "Draws numbers, dates, or timecode on the picture; counters and data readouts.",
+    ),
+    (
+        "text.timecode",
+        "Burns the timecode or frame count into the picture; review copies and slates.",
+    ),
+    // Time
+    (
+        "time.echo",
+        "Blends earlier or later frames over the current one; trails, ghosting, and motion echoes.",
+    ),
+    (
+        "time.forcemotionblur",
+        "Adds motion blur from the clip's own movement between frames; smoother fast action.",
+    ),
+    (
+        "time.pixelmotionblur",
+        "Motion blur from tracked pixel motion; natural blur on footage shot too sharp.",
+    ),
+    (
+        "time.posterizetime",
+        "Holds frames to play at a lower frame rate; choppy, stop-motion, or stylized movement.",
+    ),
+    (
+        "time.widetime",
+        "Blends several neighbouring frames; long-exposure smears and dreamy motion.",
+    ),
     // Transitions
     (
         "transition.blockdissolve",
@@ -657,6 +736,10 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
     (
         "transition.gridwipe",
         "A grid of tiles wipes away; techy reveals.",
+    ),
+    (
+        "transition.iriswipe",
+        "A polygon or star-shaped iris opens from a point; classic iris-out and spotlight reveals.",
     ),
     (
         "transition.jaws",

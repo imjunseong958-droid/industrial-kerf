@@ -1,7 +1,7 @@
 //! Golden hashes of the CPU effects that draw through a shared per-frame plan (M13.28).
 //!
 //! The GPU compositor rasterises these effects from geometry the CPU computes (bolts, strokes,
-//! glyphs, audio marks, wave lists, flood-fill regions, sampled colours); the CPU effects were
+//! audio marks, wave lists, flood-fill regions, sampled colours); the CPU effects were
 //! refactored to build the same plans. The hashes guard against unintended output changes;
 //! intended behavior changes require a focused regression test before re-pinning. Each effect
 //! renders on a generated layer with masks, another layer and an audio track, at default
@@ -115,14 +115,6 @@ type Set = Vec<(&'static str, Value)>;
 fn cases() -> Vec<(&'static str, Vec<Set>)> {
     vec![
         (
-            "ec.obsolete.lightning",
-            vec![
-                vec![],
-                vec![("branching", n(0.9)), ("rebranching", n(0.6)), ("detailLevel", n(4.0)), ("blendingMode", e(1)), ("pullForce", n(40.0))],
-                vec![("blendingMode", e(2)), ("rerunAtEachFrame", b(true)), ("fixedEndpoint", b(true)), ("coreWidth", n(0.8))],
-            ],
-        ),
-        (
             "ec.generate.advancedlightning",
             vec![
                 vec![],
@@ -208,27 +200,6 @@ fn cases() -> Vec<(&'static str, Vec<Set>)> {
                 vec![("audioLayer", Value::Layer(Some(MAP)))],
                 vec![("audioLayer", Value::Layer(Some(MAP))), ("displayOptions", e(0)), ("waveformOptions", e(2)), ("usePolarPath", b(true))],
                 vec![("audioLayer", Value::Layer(Some(MAP))), ("displayOptions", e(2)), ("path", n(1.0)), ("compositeOnOriginal", b(true))],
-            ],
-        ),
-        (
-            "ec.obsolete.basictext",
-            vec![
-                vec![],
-                vec![("text", Value::Str("Hi\nthere".into())), ("fillAndStroke/displayOptions", e(2)), ("alignment", e(0)), ("size", n(14.0))],
-                vec![("fillAndStroke/displayOptions", e(3)), ("fillAndStroke/strokeWidth", n(5.0)), ("compositeOnOriginal", b(true))],
-            ],
-        ),
-        (
-            "ec.obsolete.pathtext",
-            vec![
-                vec![],
-                vec![("pathOptions/shapeType", e(1)), ("advanced/visibleCharacters", n(2.5)), ("advanced/fadeTime", n(50.0)), ("character/size", n(14.0))],
-                vec![
-                    ("pathOptions/customPath", n(3.0)),
-                    ("fillAndStroke/displayOptions", e(2)),
-                    ("advanced/jitterSettings/rotationJitterMax", n(20.0)),
-                    ("compositeOnOriginal", b(true)),
-                ],
             ],
         ),
         (
@@ -411,24 +382,6 @@ fn plan_effects_golden_hashes() {
 
 /// Pinned hashes (aarch64 macOS).
 const GOLDEN: &[(&str, u64)] = &[
-    ("ec.obsolete.lightning/0/8bpc/t0.4", 0xd829bb3a79ec2d61),
-    ("ec.obsolete.lightning/0/8bpc/t1.3", 0xb2221364c0defe9b),
-    ("ec.obsolete.lightning/0/32bpc/t0.4", 0x828cc4e53d579af7),
-    ("ec.obsolete.lightning/0/32bpc/t1.3", 0x15770238cde9e766),
-    ("ec.obsolete.lightning/0/32bpc/half/t0.4", 0xf64f2b87fa9a09d3),
-    ("ec.obsolete.lightning/0/32bpc/half/t1.3", 0x625a00bd52fde5aa),
-    ("ec.obsolete.lightning/1/8bpc/t0.4", 0xa7c8cb94beebca84),
-    ("ec.obsolete.lightning/1/8bpc/t1.3", 0x6e583b1d1f455099),
-    ("ec.obsolete.lightning/1/32bpc/t0.4", 0x2ffd973cc7de98f7),
-    ("ec.obsolete.lightning/1/32bpc/t1.3", 0x8f35e6018cac57d7),
-    ("ec.obsolete.lightning/1/32bpc/half/t0.4", 0x96c14e911783f8d6),
-    ("ec.obsolete.lightning/1/32bpc/half/t1.3", 0x620ee605f56c2068),
-    ("ec.obsolete.lightning/2/8bpc/t0.4", 0x119e5cedac21cd9b),
-    ("ec.obsolete.lightning/2/8bpc/t1.3", 0x04b775fba837ddce),
-    ("ec.obsolete.lightning/2/32bpc/t0.4", 0xfee767091adac4ce),
-    ("ec.obsolete.lightning/2/32bpc/t1.3", 0x2ae26f9670c93751),
-    ("ec.obsolete.lightning/2/32bpc/half/t0.4", 0x99111f77bf26704f),
-    ("ec.obsolete.lightning/2/32bpc/half/t1.3", 0x8eb781efc14183c3),
     ("ec.generate.advancedlightning/0/8bpc/t0.4", 0x5a53bf1e0236225d),
     ("ec.generate.advancedlightning/0/8bpc/t1.3", 0x5a53bf1e0236225d),
     ("ec.generate.advancedlightning/0/32bpc/t0.4", 0x6817bf5b3583e0a0),
@@ -622,42 +575,6 @@ const GOLDEN: &[(&str, u64)] = &[
     ("ec.generate.audiowaveform/2/32bpc/t1.3", 0xc5f3b7bc698f6328),
     ("ec.generate.audiowaveform/2/32bpc/half/t0.4", 0x2409e86ae0f5e841),
     ("ec.generate.audiowaveform/2/32bpc/half/t1.3", 0x5518084e651af2c6),
-    ("ec.obsolete.basictext/0/8bpc/t0.4", 0x97a4c8907a44ab03),
-    ("ec.obsolete.basictext/0/8bpc/t1.3", 0x97a4c8907a44ab03),
-    ("ec.obsolete.basictext/0/32bpc/t0.4", 0x79bfd2ba4e76c65e),
-    ("ec.obsolete.basictext/0/32bpc/t1.3", 0x79bfd2ba4e76c65e),
-    ("ec.obsolete.basictext/0/32bpc/half/t0.4", 0xd1c0bf17ed973ec3),
-    ("ec.obsolete.basictext/0/32bpc/half/t1.3", 0xd1c0bf17ed973ec3),
-    ("ec.obsolete.basictext/1/8bpc/t0.4", 0xa3457f3a34ff4655),
-    ("ec.obsolete.basictext/1/8bpc/t1.3", 0xa3457f3a34ff4655),
-    ("ec.obsolete.basictext/1/32bpc/t0.4", 0x2583d7ce25436fe8),
-    ("ec.obsolete.basictext/1/32bpc/t1.3", 0x2583d7ce25436fe8),
-    ("ec.obsolete.basictext/1/32bpc/half/t0.4", 0x2c08ade06e4e7bbc),
-    ("ec.obsolete.basictext/1/32bpc/half/t1.3", 0x2c08ade06e4e7bbc),
-    ("ec.obsolete.basictext/2/8bpc/t0.4", 0xfce091451c0ac93a),
-    ("ec.obsolete.basictext/2/8bpc/t1.3", 0xfce091451c0ac93a),
-    ("ec.obsolete.basictext/2/32bpc/t0.4", 0x86cd4111d46f6bf8),
-    ("ec.obsolete.basictext/2/32bpc/t1.3", 0x86cd4111d46f6bf8),
-    ("ec.obsolete.basictext/2/32bpc/half/t0.4", 0xe8c740683bcf309f),
-    ("ec.obsolete.basictext/2/32bpc/half/t1.3", 0xe8c740683bcf309f),
-    ("ec.obsolete.pathtext/0/8bpc/t0.4", 0x70ca391f2e77dd8b),
-    ("ec.obsolete.pathtext/0/8bpc/t1.3", 0x70ca391f2e77dd8b),
-    ("ec.obsolete.pathtext/0/32bpc/t0.4", 0x98faf5dd968c859b),
-    ("ec.obsolete.pathtext/0/32bpc/t1.3", 0x98faf5dd968c859b),
-    ("ec.obsolete.pathtext/0/32bpc/half/t0.4", 0xf903dfeeb23c8394),
-    ("ec.obsolete.pathtext/0/32bpc/half/t1.3", 0xf903dfeeb23c8394),
-    ("ec.obsolete.pathtext/1/8bpc/t0.4", 0xeac5ee9e29df401c),
-    ("ec.obsolete.pathtext/1/8bpc/t1.3", 0xeac5ee9e29df401c),
-    ("ec.obsolete.pathtext/1/32bpc/t0.4", 0x2228529a378510e0),
-    ("ec.obsolete.pathtext/1/32bpc/t1.3", 0x2228529a378510e0),
-    ("ec.obsolete.pathtext/1/32bpc/half/t0.4", 0x15f6edfc65f2baec),
-    ("ec.obsolete.pathtext/1/32bpc/half/t1.3", 0x15f6edfc65f2baec),
-    ("ec.obsolete.pathtext/2/8bpc/t0.4", 0x3ae68427950162d9),
-    ("ec.obsolete.pathtext/2/8bpc/t1.3", 0x3879c008d5655bcc),
-    ("ec.obsolete.pathtext/2/32bpc/t0.4", 0xdc9616ff88ce1362),
-    ("ec.obsolete.pathtext/2/32bpc/t1.3", 0x0062c20d2a4c9d99),
-    ("ec.obsolete.pathtext/2/32bpc/half/t0.4", 0x373d3ede825faeed),
-    ("ec.obsolete.pathtext/2/32bpc/half/t1.3", 0xc2680bc43740918a),
     ("ec.key.innerouter/0/8bpc/t0.4", 0x4342d220a1bee59b),
     ("ec.key.innerouter/0/8bpc/t1.3", 0x4342d220a1bee59b),
     ("ec.key.innerouter/0/32bpc/t0.4", 0x7251dbed6a1fafe6),

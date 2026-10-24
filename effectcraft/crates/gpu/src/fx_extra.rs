@@ -1,8 +1,8 @@
 //! GPU effects, shapes and bevels (kernels in `shaders/fx_extra.wgsl`, every entry point
-//! prefixed `fxe_`): Circle, Ellipse, Iris Wipe, Bevel Alpha, Bevel Edges and Gaussian Blur
-//! (Legacy), with the CPU effects' exact steps. Radii, feathers, light directions and Iris
-//! Wipe's polygon are computed on the CPU in f64 as the CPU effect does; the kernels work
-//! relative to the shape's centre.
+//! prefixed `fxe_`): Circle, Ellipse, Iris Wipe, Bevel Alpha and Bevel Edges, with the CPU
+//! effects' exact steps. Radii, feathers, light directions and Iris Wipe's polygon are
+//! computed on the CPU in f64 as the CPU effect does; the kernels work relative to the shape's
+//! centre.
 
 use effectcraft_effects::EffectCtx;
 
@@ -13,14 +13,8 @@ use crate::effects::{GBuf, gaussian_blur};
 pub(crate) const KERNELS: &[&str] = &["fxe_circle", "fxe_ellipse", "fxe_iris", "fxe_alpha", "fxe_bevel_alpha", "fxe_bevel_edges"];
 
 /// Effect ids implemented here.
-pub(crate) const IDS: &[&str] = &[
-    "ec.generate.circle",
-    "ec.generate.ellipse",
-    "ec.transition.iriswipe",
-    "ec.perspective.bevelalpha",
-    "ec.perspective.beveledges",
-    "ec.obsolete.gaussianlegacy",
-];
+pub(crate) const IDS: &[&str] =
+    &["ec.generate.circle", "ec.generate.ellipse", "ec.transition.iriswipe", "ec.perspective.bevelalpha", "ec.perspective.beveledges"];
 
 /// Run effect `id` (one of [`IDS`]); `None` = this parameter combination runs on the CPU.
 pub(crate) fn apply(e: &mut Enc, id: &str, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
@@ -30,7 +24,6 @@ pub(crate) fn apply(e: &mut Enc, id: &str, ctx: &EffectCtx, b: GBuf) -> Option<G
         "ec.transition.iriswipe" => iris_wipe(e, ctx, b),
         "ec.perspective.bevelalpha" => bevel_alpha(e, ctx, b),
         "ec.perspective.beveledges" => bevel_edges(e, ctx, b),
-        "ec.obsolete.gaussianlegacy" => gaussian_legacy(e, ctx, b),
         _ => None,
     }
 }
@@ -104,13 +97,12 @@ fn ellipse(e: &mut Enc, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
 
 fn iris_wipe(e: &mut Enc, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
     let pr = ctx.params;
-    let outer = pr.f("outerRadius").max(0.0) * b.scale;
+    let (outer, inner) = effectcraft_effects::iris_radii(ctx, b.scale, b.offset, [b.img.width, b.img.height]);
     if outer <= 0.0 {
         return Some(b);
     }
     let n = pr.f("points").round().clamp(3.0, 64.0) as usize;
     let star = pr.b("useInnerRadius");
-    let inner = if star { pr.f("innerRadius").max(0.0) * b.scale } else { outer };
     let rot = pr.f("rotation").to_radians();
     let c = b.to_px(pr.v2("center"));
     let m = if star { n * 2 } else { n };
@@ -174,23 +166,4 @@ fn bevel_edges(e: &mut Enc, ctx: &EffectCtx, b: GBuf) -> Option<GBuf> {
     p.f[1] = [light[0], light[1], light[2], inten];
     p.f[2] = f4([x0, y0, w, h]);
     run(e, "fxe_bevel_edges", &p, b, None, None)
-}
-
-// ---------------------------------------------------------------- Gaussian Blur (Legacy) (obsolete.rs)
-
-fn gaussian_legacy(e: &mut Enc, ctx: &EffectCtx, mut b: GBuf) -> Option<GBuf> {
-    let s = ctx.params.f("blurriness").max(0.0) * 0.5 * b.scale;
-    if s <= 0.0 {
-        return Some(b);
-    }
-    let (kx, ky) = match ctx.params.e("blurDimensions") {
-        1 => (1.0, 0.0),
-        2 => (0.0, 1.0),
-        _ => (1.0, 1.0),
-    };
-    if !ctx.adjustment {
-        b.pad(e, (s * 3.0).ceil() as u32)?;
-    }
-    b.img = gaussian_blur(e, &b.img, s * kx, s * ky, ctx.adjustment);
-    Some(b)
 }

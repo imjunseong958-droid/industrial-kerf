@@ -367,9 +367,10 @@ fn raster(effect: &Effect) -> bool {
         .is_some_and(|fx| fx.engine == Engine::Raster)
 }
 
-/// Raster effect categories whose effects make parts of a picture
-/// transparent, which playback, showing one picture at a time, cannot.
-const TRANSPARENCY: &[&str] = &["Keying", "Matte"];
+/// Raster effect categories playback cannot run on the one picture it holds:
+/// keys and mattes make parts of it transparent, and time effects read the
+/// clip's other frames.
+const NOT_LIVE: &[&str] = &["Keying", "Matte", "Time"];
 
 /// Lays the clips of a sequence, and of the sequences nested in it, on the
 /// program timeline.
@@ -637,12 +638,12 @@ impl NativeCheck<'_> {
                 .then_some("a speed change on a nested sequence");
         }
         // Raster effects on a media picture run live, unless they make it
-        // transparent.
+        // transparent or read its other frames.
         let live = |effect: &Effect| {
             kind == TrackKind::Video
                 && matches!(clip.content, Content::Media { .. })
                 && Catalog::builtin().fx(effect.fx.as_str()).is_some_and(|fx| {
-                    fx.engine == Engine::Raster && !TRANSPARENCY.contains(&fx.category.as_str())
+                    fx.engine == Engine::Raster && !NOT_LIVE.contains(&fx.category.as_str())
                 })
         };
         if clip
@@ -858,6 +859,18 @@ mod tests {
             "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      set blend=screen\n",
         );
         let plan = preview_plan(&blended);
+        assert_eq!(plan.mode, PreviewMode::Composited);
+        assert!(plan.reasons.is_empty(), "{:?}", plan.reasons);
+        // A raster effect runs on the picture playback holds; one that reads
+        // the clip's other frames needs the compositor.
+        let inverted = project(
+            "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx channel.invert\n",
+        );
+        assert_eq!(preview_plan(&inverted).mode, PreviewMode::NativeExact);
+        let echoed = project(
+            "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx time.echo\n",
+        );
+        let plan = preview_plan(&echoed);
         assert_eq!(plan.mode, PreviewMode::Composited);
         assert!(plan.reasons.is_empty(), "{:?}", plan.reasons);
         let gained = project(
