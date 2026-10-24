@@ -2126,11 +2126,12 @@ mod tests {
             assert_eq!(first.revision, replay.revision);
             assert_eq!((&media_id, &clip_id), (&replay_media, &replay_clip));
             // Unprobed media is a second of picture at the sequence size,
-            // cut in on a new picture track.
+            // cut in on a new picture track. The document quotes the path,
+            // doubling a Windows path's backslashes.
             assert!(
                 first.document.contains(&format!(
                     "media {media_id} path=\"{}\" rate=30 dur=00:00:01:00 video=1920x1080",
-                    media.display()
+                    media.display().to_string().replace('\\', "\\\\")
                 )),
                 "{}",
                 first.document
