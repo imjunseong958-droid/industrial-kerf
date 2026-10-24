@@ -83,6 +83,14 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
     ),
     // Color Correction
     (
+        "color.curves",
+        "Bends tone with curves for RGB and each channel, each written as points x,y from 0 to 1 (rgb=\"0,0 0.5,0.6 1,1\" lifts the mids); contrast, fades, and color casts.",
+    ),
+    (
+        "color.arbitrarymap",
+        "Remaps every level through a table of 256 output levels (map=\"255,254 … 0\" inverts); posterized, solarized, and graphic tone maps.",
+    ),
+    (
         "color.lumetri",
         "A full grade in one effect: white balance and tone, a creative look or LUT, curves, color wheels, a secondary color pick, and a vignette; everyday color correction.",
     ),

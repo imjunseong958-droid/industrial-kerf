@@ -958,7 +958,8 @@ pub fn specs() -> Vec<EffectSpec> {
     k_params.push(p("scale", "Scale", num(1.0), slider(-100.0, 100.0, 0.0, 4.0, 3)));
     k_params.push(p("offset", "Offset", num(0.0), slider(-1.0, 1.0, -1.0, 1.0, 3)));
     k_params.push(p("absolute", "Absolute Value", Value::Bool(false), ParamUi::Checkbox));
-    let curve = |id: &'static str, name: &'static str| p(id, name, Value::Str("0,0 1,1".into()), ParamUi::Hidden);
+    // Each curve is its points, "x,y x,y …" from 0 to 1.
+    let curve = |id: &'static str, name: &'static str| p(id, name, Value::Str("0,0 1,1".into()), ParamUi::Text);
     vec![
         spec(
             "ec.color.curves",

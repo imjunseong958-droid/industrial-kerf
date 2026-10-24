@@ -210,6 +210,12 @@ effect	color.colorbalancehls	Color Correction	Color Balance (HLS)	Hue, lightness
 	number	hue	0		degrees	Hue
 	number	lightness	0	-100..100		Lightness
 	number	saturation	0	-100..100		Saturation
+effect	color.curves	Color Correction	Curves	Bends tone with curves for RGB and each channel, each written as points x,y from 0 to 1 (rgb="0,0 0.5,0.6 1,1" lifts the mids); contrast, fades, and color casts.
+	text	rgb	0,0 1,1			RGB
+	text	red	0,0 1,1			Red
+	text	green	0,0 1,1			Green
+	text	blue	0,0 1,1			Blue
+	text	alpha	0,0 1,1			Alpha
 effect	color.equalize	Color Correction	Equalize	Spreads brightness evenly across the range; reveals detail, harsh look.
 	enum	style	rgb	rgb|brightness|photoshop-style		Equalize
 	number	amount	100	0..100		Amount to Equalize
@@ -471,6 +477,10 @@ effect	color.ociolook	Color Correction	OCIO Look Transform	Applies looks named i
 	enum	look	none	none|warm|cool|high-contrast|low-contrast|desaturated|vivid		Look
 	text	looks				Looks
 	enum	direction	forward	forward|inverse		Direction
+effect	color.arbitrarymap	Color Correction	Arbitrary Map	Remaps every level through a table of 256 output levels (map="255,254 … 0" inverts); posterized, solarized, and graphic tone maps.
+	number	phase	0	-1000..1000		Phase
+	bool	applyPhaseMapToAlpha	false			Apply Phase Map To Alpha
+	text	map				Map
 effect	color.photofilter	Color Correction	Photo Filter	A colored lens filter, warming or cooling; a quick mood tint.
 	enum	filter	warming-filter-85	warming-filter-85|warming-filter-lba|warming-filter-81|cooling-filter-80|cooling-filter-lbb|cooling-filter-82|red|orange|yellow|green|cyan|blue|violet|magenta|sepia|deep-red|deep-blue|deep-emerald|deep-yellow|underwater|custom		Filter
 	color	color	#ed8a17			Color
