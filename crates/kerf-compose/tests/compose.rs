@@ -233,6 +233,41 @@ fn masks_cut_the_picture_and_effects_draw_along_them() {
 }
 
 #[test]
+fn reshape_moves_what_one_mask_holds_into_another() {
+    // A white box filled into the red, then morphed from its own outline
+    // to one further right, inside a boundary around both.
+    let boxed = |fx: &str| {
+        format!(
+            "{SEQUENCE}\
+             \x20 track V1 video\n\
+             \x20   clip g1 gen=solid at=0f dur=24f\n\
+             \x20     set color=#ff0000\n\
+             \x20     mask box rect=0.25,0.3,0.45,0.7 mode=none\n\
+             \x20     mask moved rect=0.55,0.3,0.75,0.7 mode=none\n\
+             \x20     mask around rect=0.05,0.1,0.95,0.9 mode=none\n\
+             \x20     fx generate.fill fillMask=box color=#ffffff\n\
+             {fx}"
+        )
+    };
+    let plain = frame(&boxed(""), 4, false);
+    assert_eq!(pixel(&plain, 112, 90), [255, 255, 255]);
+    assert_eq!(pixel(&plain, 208, 90), [255, 0, 0]);
+    let reshaped = boxed(
+        "\x20     fx distort.reshape sourceMask=box destinationMask=moved boundaryMask=around\n",
+    );
+    let reshaped = frame(&reshaped, 4, false);
+    // The box fills the destination, edge to edge, and leaves its old place.
+    for x in [180, 208, 236] {
+        assert_eq!(pixel(&reshaped, x, 90), [255, 255, 255], "x={x}");
+    }
+    assert_eq!(pixel(&reshaped, 112, 90), [255, 0, 0]);
+    let (_, _, right, _) = bright(&reshaped, 200).expect("the box, moved");
+    assert!(right <= 242, "{right}");
+    // Outside the boundary nothing moves.
+    assert_eq!(pixel(&reshaped, 5, 5), [255, 0, 0]);
+}
+
+#[test]
 fn color_stabilizer_holds_the_reference_frame() {
     // A dark grey solid inverted more and more, so it brightens over time.
     let brightening = |fx: &str| {

@@ -876,6 +876,13 @@ effect	distort.opticscompensation	Distort	Optics Compensation	Adds or removes le
 effect	distort.polar	Distort	Polar Coordinates	Converts between rectangular and polar coordinates; tiny planets, radial looks.
 	number	interpolation	0	0..100		Interpolation
 	enum	conversion	rect-to-polar	rect-to-polar|polar-to-rect		Type of Conversion
+effect	distort.reshape	Distort	Reshape	Morphs the picture from one mask's outline to another's (sourceMask=k1 destinationMask=k2), inside a boundary mask; reshaping objects and shape morphs.
+	mask	sourceMask				Source Mask
+	mask	destinationMask				Destination Mask
+	mask	boundaryMask				Boundary Mask
+	number	percent	100	0..100		Percent
+	enum	elasticity	stiff	stiff|less-stiff|below-normal|absolutely-normal|above-average|loose|liquid|super-fluid		Elasticity
+	enum	interpolation	linear	discrete|linear|smooth		Interpolation Method
 effect	distort.ripple	Distort	Ripple	Concentric water ripples; dream sequences and water drops.
 	number	radius	50	0..100		Radius
 	number	center_x	0.5		picture widths	Center of Ripple (0 left, 1 right)
@@ -891,9 +898,9 @@ effect	distort.rollingshutterrepair	Distort	Rolling Shutter Repair	Straightens t
 	enum	advanced/method	warp	warp|pixel-motion		Method
 	bool	advanced/detailedAnalysis	false			Detailed Analysis
 	number	advanced/pixelMotionDetail	20	0..100		Pixel Motion Detail
-effect	distort.smear	Distort	Smear	Smears an area of the picture like liquid; warped highlights.
-	enum	sourceMask	none	none|mask-1|mask-2|mask-3|mask-4|mask-5|mask-6|mask-7|mask-8		Source Mask
-	enum	boundaryMask	none	none|mask-1|mask-2|mask-3|mask-4|mask-5|mask-6|mask-7|mask-8		Boundary Mask
+effect	distort.smear	Distort	Smear	Drags the area inside one mask by an offset, held inside a boundary mask (sourceMask=k1 boundaryMask=k2); liquid pulls and warped highlights.
+	mask	sourceMask				Source Mask
+	mask	boundaryMask				Boundary Mask
 	number	maskOffset_x	0		picture widths	Mask Offset (0 left, 1 right)
 	number	maskOffset_y	0		picture heights	Mask Offset (0 top, 1 bottom)
 	number	maskRotation	0		degrees	Mask Rotation
