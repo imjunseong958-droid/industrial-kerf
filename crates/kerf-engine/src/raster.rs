@@ -28,7 +28,7 @@ pub fn plan_bakes(
     sequence: Option<&str>,
     cache: &DerivativeCache,
 ) -> Result<(Planned, Vec<CacheEntry>, Vec<CacheEntry>)> {
-    let options = json!({"effectcraft": kerf_fx::EFFECTCRAFT_REV});
+    let options = json!({"effects": kerf_fx::EFFECTS_VERSION});
     let (mut prerenders, mut bakes) = (Vec::new(), Vec::new());
     let planned = plan(project, Catalog::builtin(), sequence, |job| {
         let (entry, entries) = match job {
@@ -55,7 +55,7 @@ pub fn plan_bakes(
                 let entry = cache.source_entry(
                     Path::new(&job.source),
                     "raster",
-                    &json!({"job": job.identity(), "effectcraft": kerf_fx::EFFECTCRAFT_REV}),
+                    &json!({"job": job.identity(), "effects": kerf_fx::EFFECTS_VERSION}),
                 )?;
                 (entry, &mut bakes)
             }

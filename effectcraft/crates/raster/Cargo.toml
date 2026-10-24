@@ -1,0 +1,15 @@
+[package]
+name = "effectcraft-raster"
+description = "f32 premultiplied RGBA images: sampling, projective warps, blurs, convolution, compositing (rayon-parallel)"
+version = "0.16.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.95"
+
+[lints]
+workspace = true
+
+[dependencies]
+effectcraft-geom = { workspace = true }
+effectcraft-color = { workspace = true }
+rayon = { workspace = true }
