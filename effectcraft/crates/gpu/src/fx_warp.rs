@@ -206,7 +206,7 @@ fn reshape(e: &mut Enc, ctx: &EffectCtx, mut b: GBuf) -> Option<GBuf> {
     }
     let buf = e.data(&data);
     let mut p = Params::default();
-    p.u[0] = [0, nb as u32, s.smooth as u32, 0];
+    p.u[0] = [s.closed as u32, nb as u32, s.smooth as u32, 0];
     p.f[0] = [(s.kexp * 0.5) as f32, s.pct as f32, 0.0, 0.0];
     b.img = run(e, "fxw_reshape", &p, &b.img, None, Some(&buf));
     Some(b)

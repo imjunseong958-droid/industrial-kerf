@@ -155,10 +155,10 @@ fn composite_with_masks(id: &str, vals: &[(&str, Value)]) {
 #[test]
 fn smear_and_reshape() {
     let smear: &[&[(&str, Value)]] = &[
-        &[("sourceMask", e(1)), ("boundaryMask", e(3)), ("maskOffset", pt(10.0, 3.0))],
+        &[("sourceMask", n(1.0)), ("boundaryMask", n(3.0)), ("maskOffset", pt(10.0, 3.0))],
         &[
-            ("sourceMask", e(1)),
-            ("boundaryMask", e(3)),
+            ("sourceMask", n(1.0)),
+            ("boundaryMask", n(3.0)),
             ("maskOffset", pt(-4.0, 6.0)),
             ("maskRotation", n(30.0)),
             ("maskScale", n(130.0)),
@@ -171,12 +171,12 @@ fn smear_and_reshape() {
         composite_with_masks("ec.distort.smear", vals);
     }
     let reshape: &[&[(&str, Value)]] = &[
-        &[("sourceMask", e(1)), ("destinationMask", e(2))],
-        &[("sourceMask", e(1)), ("destinationMask", e(2)), ("boundaryMask", e(3)), ("interpolation", e(2)), ("elasticity", e(0))],
+        &[("sourceMask", n(1.0)), ("destinationMask", n(2.0))],
+        &[("sourceMask", n(1.0)), ("destinationMask", n(2.0)), ("boundaryMask", n(3.0)), ("interpolation", e(2)), ("elasticity", e(0))],
         &[
-            ("sourceMask", e(1)),
-            ("destinationMask", e(2)),
-            ("boundaryMask", e(3)),
+            ("sourceMask", n(1.0)),
+            ("destinationMask", n(2.0)),
+            ("boundaryMask", n(3.0)),
             ("correspondencePoints", Value::Str("0,0.25 0.5,0.8".into())),
             ("percent", n(60.0)),
         ],

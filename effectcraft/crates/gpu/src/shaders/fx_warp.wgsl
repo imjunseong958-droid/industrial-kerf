@@ -351,7 +351,8 @@ fn fxw_smear(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 // ---------------------------------------------------------------- Reshape (distort3::reshape)
 // data = 48 destination points, their 48 displacements, then the boundary outline;
-// u[0] = (_, boundary points (0 = none), smooth); f[0] = (elasticity / 2, percent).
+// u[0] = (destination closed, boundary points (0 = none), smooth); f[0] = (elasticity / 2,
+// percent).
 
 @compute @workgroup_size(16, 16)
 fn fxw_reshape(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -378,7 +379,7 @@ fn fxw_reshape(@builtin(global_invocation_id) gid: vec3<u32>) {
         ws += w;
     }
     var fade = 1.0;
-    if (nb > 0u) {
+    if (nb > 0u && !(P.u[0].x != 0u && fxw_in_poly(0u, 48u, q.x, q.y))) {
         let db = fxw_dist_poly(bbase, nb, q);
         fade = db / max(db + sqrt(dmin), 1e-9);
         if (P.u[0].z != 0u) {

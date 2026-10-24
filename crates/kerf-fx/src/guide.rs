@@ -344,8 +344,12 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Smears pixels from one point toward another; stretchy pulls.",
     ),
     (
+        "distort.reshape",
+        "Morphs the picture from one mask's outline to another's (sourceMask=k1 destinationMask=k2), inside a boundary mask; reshaping objects and shape morphs.",
+    ),
+    (
         "distort.smear",
-        "Smears an area of the picture like liquid; warped highlights.",
+        "Drags the area inside one mask by an offset, held inside a boundary mask (sourceMask=k1 boundaryMask=k2); liquid pulls and warped highlights.",
     ),
     (
         "distort.split",

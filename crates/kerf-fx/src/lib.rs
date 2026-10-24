@@ -39,7 +39,6 @@ const NEEDS_MORE: &[&str] = &[
     "ec.distort.liquify",
     "ec.distort.meshwarp",
     "ec.distort.puppet",
-    "ec.distort.reshape",
     "ec.matte.rotobrush",
     // A segmentation model and the strokes that prompt it.
     "ec.matte.objectmatte",

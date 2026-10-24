@@ -24,12 +24,10 @@ fn pt(x: f64, y: f64) -> Value {
     Value::Vec2([x, y])
 }
 
-/// Mask choices for mask popups ("None", "Mask 1" … "Mask 8").
-const MASK_CHOICES: [&str; 9] = ["None", "Mask 1", "Mask 2", "Mask 3", "Mask 4", "Mask 5", "Mask 6", "Mask 7", "Mask 8"];
-
-/// The chosen mask as a polyline in buffer pixels (`None` for "None" or a missing mask).
+/// The chosen mask (a 1-based index; 0 is none) as a polyline in buffer pixels (`None` for
+/// none or a missing mask).
 fn mask_px(ctx: &EffectCtx, b: &Buf, id: &str) -> Option<(Vec<[f64; 2]>, bool)> {
-    let i = ctx.params.e(id) as usize;
+    let i = ctx.params.f(id).round().max(0.0) as usize;
     if i == 0 {
         return None;
     }
@@ -528,6 +526,8 @@ pub struct ReshapeSetup {
     /// outline at each.
     pub dest: Vec<[f64; 2]>,
     pub disp: Vec<[f64; 2]>,
+    /// The destination outline is closed: what lies inside it moves the whole way.
+    pub closed: bool,
     pub bound: Option<Vec<[f64; 2]>>,
     /// Elasticity exponent.
     pub kexp: f64,
@@ -579,12 +579,12 @@ pub fn reshape_setup(ctx: &EffectCtx, b: &Buf) -> Option<ReshapeSetup> {
         })
         .collect();
     let smooth = ctx.params.e("interpolation") == 2;
-    Some(ReshapeSetup { dest: d, disp, bound, kexp, pct, smooth })
+    Some(ReshapeSetup { dest: d, disp, closed: dc, bound, kexp, pct, smooth })
 }
 
 fn reshape(ctx: &EffectCtx, mut b: Buf) -> Buf {
     const N: usize = RESHAPE_POINTS;
-    let Some(ReshapeSetup { dest: d, disp, bound, kexp, pct, smooth }) = reshape_setup(ctx, &b) else { return b };
+    let Some(ReshapeSetup { dest: d, disp, closed, bound, kexp, pct, smooth }) = reshape_setup(ctx, &b) else { return b };
     b.img = remap(&b.img, false, |x, y| {
         if let Some(bd) = &bound
             && !point_in_poly(bd, x, y)
@@ -601,8 +601,12 @@ fn reshape(ctx: &EffectCtx, mut b: Buf) -> Buf {
             wy += w * disp[i][1];
             ws += w;
         }
+        // Between the destination outline and the boundary the move fades out; inside the
+        // destination it is whole, so the source's contents land there.
         let mut fade = 1.0;
-        if let Some(bd) = &bound {
+        if let Some(bd) = &bound
+            && !(closed && point_in_poly(&d, x, y))
+        {
             let db = dist_to_poly(bd, true, x, y);
             let dq = dmin.sqrt();
             fade = db / (db + dq).max(1e-9);
@@ -973,8 +977,8 @@ pub fn specs() -> Vec<EffectSpec> {
             "ec.distort.smear",
             "Smear",
             vec![
-                p("sourceMask", "Source Mask", Value::Enum(0), popup(&MASK_CHOICES)),
-                p("boundaryMask", "Boundary Mask", Value::Enum(0), popup(&MASK_CHOICES)),
+                p("sourceMask", "Source Mask", num(0.0), ParamUi::Mask),
+                p("boundaryMask", "Boundary Mask", num(0.0), ParamUi::Mask),
                 p("maskOffset", "Mask Offset", pt(0.0, 0.0), ParamUi::Point),
                 p("maskRotation", "Mask Rotation", num(0.0), ParamUi::Angle),
                 p("maskScale", "Mask Scale", num(100.0), slider(1.0, 1000.0, 1.0, 400.0, 1)),
@@ -988,9 +992,9 @@ pub fn specs() -> Vec<EffectSpec> {
             "ec.distort.reshape",
             "Reshape",
             vec![
-                p("sourceMask", "Source Mask", Value::Enum(0), popup(&MASK_CHOICES)),
-                p("destinationMask", "Destination Mask", Value::Enum(0), popup(&MASK_CHOICES)),
-                p("boundaryMask", "Boundary Mask", Value::Enum(0), popup(&MASK_CHOICES)),
+                p("sourceMask", "Source Mask", num(0.0), ParamUi::Mask),
+                p("destinationMask", "Destination Mask", num(0.0), ParamUi::Mask),
+                p("boundaryMask", "Boundary Mask", num(0.0), ParamUi::Mask),
                 p("percent", "Percent", num(100.0), pct()),
                 p("elasticity", "Elasticity", Value::Enum(0), popup(&ELASTICITY)),
                 p("interpolation", "Interpolation Method", Value::Enum(1), popup(&["Discrete", "Linear", "Smooth"])),
@@ -1112,8 +1116,8 @@ mod tests {
             ("ec.distort.ccsmear", vec![]),
             ("ec.distort.ccsplit", vec![]),
             ("ec.distort.ccsplit2", vec![("split2", num(10.0))]),
-            ("ec.distort.smear", vec![("sourceMask", Value::Enum(1)), ("boundaryMask", Value::Enum(3)), ("maskOffset", pt(4.0, 2.0))]),
-            ("ec.distort.reshape", vec![("sourceMask", Value::Enum(1)), ("destinationMask", Value::Enum(2)), ("boundaryMask", Value::Enum(3))]),
+            ("ec.distort.smear", vec![("sourceMask", num(1.0)), ("boundaryMask", num(3.0)), ("maskOffset", pt(4.0, 2.0))]),
+            ("ec.distort.reshape", vec![("sourceMask", num(1.0)), ("destinationMask", num(2.0)), ("boundaryMask", num(3.0))]),
             ("ec.distort.twirllegacy", vec![("angle", num(90.0))]),
             ("ec.distort.warp", vec![("bend", num(50.0)), ("horizontalDistortion", num(20.0))]),
             ("ec.distort.upscale", vec![("scale", num(200.0))]),
@@ -1235,7 +1239,7 @@ mod tests {
         // A bright square at the source mask; reshape to a shifted destination mask.
         let im = crate::util::gen_image(40, 40, |x, y| if (10..20).contains(&x) && (10..20).contains(&y) { [1.0; 4] } else { [0.0, 0.0, 0.0, 1.0] });
         let masks = [rect_mask(10.0, 10.0, 20.0, 20.0), rect_mask(16.0, 10.0, 26.0, 20.0), rect_mask(0.0, 0.0, 40.0, 40.0)];
-        let o = run("ec.distort.reshape", &[("sourceMask", Value::Enum(1)), ("destinationMask", Value::Enum(2)), ("boundaryMask", Value::Enum(3))], im, &masks);
+        let o = run("ec.distort.reshape", &[("sourceMask", num(1.0)), ("destinationMask", num(2.0)), ("boundaryMask", num(3.0))], im, &masks);
         assert!(o.img.get(24, 15)[0] > 0.8, "{:?}", o.img.get(24, 15));
         assert!(o.img.get(11, 15)[0] < 0.3, "{:?}", o.img.get(11, 15));
     }
@@ -1245,7 +1249,7 @@ mod tests {
         // Matching outlines with a zero pair change nothing; a quarter-turn offset twists.
         let im = img(40, 40);
         let masks = [rect_mask(10.0, 10.0, 30.0, 30.0), rect_mask(10.0, 10.0, 30.0, 30.0), rect_mask(0.0, 0.0, 40.0, 40.0)];
-        let base = [("sourceMask", Value::Enum(1)), ("destinationMask", Value::Enum(2)), ("boundaryMask", Value::Enum(3))];
+        let base = [("sourceMask", num(1.0)), ("destinationMask", num(2.0)), ("boundaryMask", num(3.0))];
         let same = run("ec.distort.reshape", &[base.as_slice(), &[("correspondencePoints", Value::Str("0,0".into()))]].concat(), im.clone(), &masks);
         assert!(maxd(&same.img, &im) < 1e-3, "matching outlines: no change");
         let twisted = run("ec.distort.reshape", &[base.as_slice(), &[("correspondencePoints", Value::Str("0.25,0".into()))]].concat(), im.clone(), &masks);
