@@ -709,7 +709,7 @@ pub fn specs() -> Vec<EffectSpec> {
         p("highDynamicRange", "High Dynamic Range", Value::Bool(false), ParamUi::Checkbox),
         p("basicCorrection/inputLut", "Input LUT", Value::Enum(0), popup(&["None", "Custom"])),
         // A .cube file path (or the file's text) for Input LUT = Custom.
-        p("basicCorrection/inputLutFile", "Input LUT File", Value::Str(String::new()), ParamUi::Text),
+        p("basicCorrection/inputLutFile", "Input LUT File", Value::Str(String::new()), crate::file_ui(&["cube"])),
         p("basicCorrection/whiteBalance/temperature", "Temperature", num(0.0), bipolar()),
         p("basicCorrection/whiteBalance/tint", "Tint", num(0.0), bipolar()),
         p("basicCorrection/tone/exposure", "Exposure", num(0.0), slider(-5.0, 5.0, -5.0, 5.0, 2)),
@@ -722,7 +722,7 @@ pub fn specs() -> Vec<EffectSpec> {
         p("basicCorrection/tone/hdrSpecular", "HDR Specular", num(0.0), bipolar()),
         p("basicCorrection/saturation", "Saturation", num(100.0), slider(0.0, 200.0, 0.0, 200.0, 1)),
         p("creative/look", "Look", Value::Enum(0), popup(&LUMETRI_LOOKS)),
-        p("creative/lookFile", "Look File", Value::Str(String::new()), ParamUi::Text),
+        p("creative/lookFile", "Look File", Value::Str(String::new()), crate::file_ui(&["cube"])),
         p("creative/lookIntensity", "Intensity", num(100.0), slider(0.0, 200.0, 0.0, 200.0, 1)),
         p("creative/adjustments/fadedFilm", "Faded Film", num(0.0), pct()),
         p("creative/adjustments/sharpen", "Sharpen", num(0.0), bipolar()),

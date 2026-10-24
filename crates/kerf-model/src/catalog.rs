@@ -15,6 +15,9 @@ pub enum ParamType {
     Number,
     Bool,
     Text,
+    /// A path to a file with one of these extensions, held as text. A
+    /// relative path is relative to the project (see `Project::resolve_paths`).
+    File(Vec<String>),
     Color,
     Enum(Vec<String>),
 }
@@ -25,6 +28,7 @@ impl ParamType {
             Self::Number => "number",
             Self::Bool => "bool",
             Self::Text => "text",
+            Self::File(_) => "file",
             Self::Color => "color",
             Self::Enum(_) => "enum",
         }
@@ -54,6 +58,16 @@ impl ParamDef {
 
     pub fn text(name: &str, default: &str) -> Self {
         Self::new(name, ParamType::Text, Value::Text(default.into()), false)
+    }
+
+    pub fn file(name: &str, extensions: &[&str]) -> Self {
+        let extensions = extensions.iter().map(|e| (*e).to_owned()).collect();
+        Self::new(
+            name,
+            ParamType::File(extensions),
+            Value::Text(String::new()),
+            false,
+        )
     }
 
     pub fn color(name: &str, default: Rgba) -> Self {
@@ -129,7 +143,7 @@ impl ParamDef {
                 }
             }
             (ParamType::Bool, Value::Bool(_))
-            | (ParamType::Text, Value::Text(_))
+            | (ParamType::Text | ParamType::File(_), Value::Text(_))
             | (ParamType::Color, Value::Color(_)) => Ok(()),
             _ => Err(format!("`{}` expects a {}", self.name, self.ty.name())),
         }
@@ -515,8 +529,8 @@ const RASTER_EFFECTS: &str = include_str!("raster_effects.tsv");
 
 /// Read the generated table: an `effect` or `transition` line (id,
 /// category, name, and when to use it) per definition, then a tab-indented
-/// line per parameter (type, name, default, `min..max` or `option|option`,
-/// unit, label). `#` lines are comments.
+/// line per parameter (type, name, default, `min..max`, `option|option`, or
+/// a file's `extension|extension`, unit, label). `#` lines are comments.
 fn raster_definitions(text: &str) -> Vec<FxDef> {
     let mut definitions: Vec<FxDef> = Vec::new();
     for line in text
@@ -551,6 +565,12 @@ fn raster_definitions(text: &str) -> Vec<FxDef> {
                 }
             }
             "bool" => ParamDef::toggle(name, default == "true"),
+            "text" => ParamDef::text(name, default),
+            "file" => {
+                let mut param = ParamDef::file(name, &constraint.split('|').collect::<Vec<_>>());
+                param.default = Value::Text(default.to_owned());
+                param
+            }
             "color" => ParamDef::color(
                 name,
                 Rgba::parse(default).expect("raster colors are #rrggbb[aa]"),
@@ -636,6 +656,10 @@ mod tests {
         let invert = catalog.fx("channel.invert").unwrap();
         assert_eq!(invert.engine, Engine::Raster);
         assert!(invert.find("blend").is_some());
+        // A LUT is a file the effect reads.
+        let lut = catalog.fx("utility.applylut").unwrap().find("lut").unwrap();
+        assert_eq!(lut.ty, ParamType::File(vec!["cube".into()]));
+        assert_eq!(lut.default, Value::Text(String::new()));
     }
 
     #[test]

@@ -13,7 +13,9 @@ Raster effects and transitions (from EffectCraft) are listed there by id;
 `look` with `effect` gives one's parameters, and they are written like any
 other (`fx c1 add stylize.glow`, `transition add from=c1 to=c2
 fx=transition.radialwipe dur=12f`). A point parameter is two numbers across
-the picture, such as `center_x=0.5 center_y=0.5`. Raster effects run on the
+the picture, such as `center_x=0.5 center_y=0.5`. A file parameter (a LUT,
+an OpenColorIO config) is a quoted path, relative to the project, such as
+`fx c1 add utility.applylut lut="looks/warm.cube"`. Raster effects run on the
 clip's own picture before it is placed, so they apply before the clip's
 other effects; a raster transition's progress follows the transition.
 

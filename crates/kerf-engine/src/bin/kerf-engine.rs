@@ -590,13 +590,9 @@ fn read_project(path: &std::path::Path) -> Result<kerf_model::Project> {
             anyhow::anyhow!("{}: {}", path.display(), lines.join("; "))
         })?
         .project;
-    // Documents keep media paths relative to themselves.
+    // Documents keep media and effect file paths relative to themselves.
     let directory = path.parent().unwrap_or(std::path::Path::new("."));
-    for media in &mut project.media {
-        if std::path::Path::new(&media.path).is_relative() {
-            media.path = directory.join(&media.path).to_string_lossy().into_owned();
-        }
-    }
+    project.resolve_paths(kerf_model::Catalog::builtin(), directory);
     Ok(project)
 }
 

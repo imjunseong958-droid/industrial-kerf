@@ -70,15 +70,12 @@ pub(crate) fn time_range(
     Ok((from, to))
 }
 
-/// Make relative media paths absolute against `directory`. Documents keep
-/// paths relative to the project so it can move; renderers and players run
-/// elsewhere and need them resolved.
+/// Make relative paths absolute against `directory`: media and the files
+/// effects read, such as LUTs. Documents keep paths relative to the
+/// project so it can move; renderers and players run elsewhere and need
+/// them resolved.
 pub fn resolve_media_paths(project: &mut Project, directory: &std::path::Path) {
-    for media in &mut project.media {
-        if std::path::Path::new(&media.path).is_relative() {
-            media.path = directory.join(&media.path).to_string_lossy().into_owned();
-        }
-    }
+    project.resolve_paths(catalog(), directory);
 }
 
 /// Point media at their proxies where `directory`'s cache has one. Paths
@@ -864,7 +861,7 @@ fn json_value(ty: &ParamType, value: &Json) -> Option<Value> {
     Some(match (ty, value) {
         (ParamType::Number, Json::Number(n)) => Value::Number(n.as_f64()?),
         (ParamType::Bool, Json::Bool(b)) => Value::Bool(*b),
-        (ParamType::Text, Json::String(s)) => Value::Text(s.clone()),
+        (ParamType::Text | ParamType::File(_), Json::String(s)) => Value::Text(s.clone()),
         (ParamType::Enum(_), Json::String(s)) => Value::Enum(s.clone()),
         (ParamType::Color, Json::String(s)) => Value::Color(kerf_model::Rgba::parse(s)?),
         _ => return None,

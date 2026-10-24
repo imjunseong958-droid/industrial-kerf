@@ -361,6 +361,73 @@ effect	color.levelsic	Color Correction	Levels (Individual Controls)	Levels with 
 	number	alpha/alphaOutWhite	1	-1..2		Alpha Output White
 	enum	clipToOutputBlack	off-for-32-bpc-color	off|on|off-for-32-bpc-color		Clip To Output Black
 	enum	clipToOutputWhite	off-for-32-bpc-color	off|on|off-for-32-bpc-color		Clip To Output White
+effect	color.lumetri	Color Correction	Lumetri Color	A full grade in one effect: white balance and tone, a creative look or LUT, curves, color wheels, a secondary color pick, and a vignette; everyday color correction.
+	bool	highDynamicRange	false			High Dynamic Range
+	enum	basicCorrection/inputLut	none	none|custom		Input LUT
+	file	basicCorrection/inputLutFile		cube		Input LUT File
+	number	basicCorrection/whiteBalance/temperature	0	-100..100		Temperature
+	number	basicCorrection/whiteBalance/tint	0	-100..100		Tint
+	number	basicCorrection/tone/exposure	0	-5..5		Exposure
+	number	basicCorrection/tone/contrast	0	-100..100		Contrast
+	number	basicCorrection/tone/highlights	0	-100..100		Highlights
+	number	basicCorrection/tone/shadows	0	-100..100		Shadows
+	number	basicCorrection/tone/whites	0	-100..100		Whites
+	number	basicCorrection/tone/blacks	0	-100..100		Blacks
+	number	basicCorrection/tone/hdrWhite	100	100..10000		HDR White
+	number	basicCorrection/tone/hdrSpecular	0	-100..100		HDR Specular
+	number	basicCorrection/saturation	100	0..200		Saturation
+	enum	creative/look	none	none|custom|ec-warm-film|ec-cool-night|ec-bleach-bypass|ec-teal-orange|ec-faded-matte|ec-monochrome		Look
+	file	creative/lookFile		cube		Look File
+	number	creative/lookIntensity	100	0..200		Intensity
+	number	creative/adjustments/fadedFilm	0	0..100		Faded Film
+	number	creative/adjustments/sharpen	0	-100..100		Sharpen
+	number	creative/adjustments/vibrance	0	-100..100		Vibrance
+	number	creative/adjustments/creativeSaturation	100	0..200		Saturation
+	color	creative/adjustments/shadowTint	#808080			Shadow Tint
+	color	creative/adjustments/highlightTint	#808080			Highlight Tint
+	number	creative/adjustments/tintBalance	0	-100..100		Tint Balance
+	number	curves/curveMasterShadows	0	-100..100		RGB Curve Shadows
+	number	curves/curveMasterMidtones	0	-100..100		RGB Curve Midtones
+	number	curves/curveMasterHighlights	0	-100..100		RGB Curve Highlights
+	number	curves/curveRedShadows	0	-100..100		Red Curve Shadows
+	number	curves/curveRedMidtones	0	-100..100		Red Curve Midtones
+	number	curves/curveRedHighlights	0	-100..100		Red Curve Highlights
+	number	curves/curveGreenShadows	0	-100..100		Green Curve Shadows
+	number	curves/curveGreenMidtones	0	-100..100		Green Curve Midtones
+	number	curves/curveGreenHighlights	0	-100..100		Green Curve Highlights
+	number	curves/curveBlueShadows	0	-100..100		Blue Curve Shadows
+	number	curves/curveBlueMidtones	0	-100..100		Blue Curve Midtones
+	number	curves/curveBlueHighlights	0	-100..100		Blue Curve Highlights
+	color	colorWheels/shadowsWheel	#808080			Shadows
+	color	colorWheels/midtonesWheel	#808080			Midtones
+	color	colorWheels/highlightsWheel	#808080			Highlights
+	bool	hslSecondary/key/hueEnabled	true			H
+	number	hslSecondary/key/hueCenter	0		degrees	Hue Center
+	number	hslSecondary/key/hueRange	180	0..180		Hue Range
+	number	hslSecondary/key/hueSoftness	0	0..180		Hue Softness
+	bool	hslSecondary/key/saturationEnabled	true			S
+	number	hslSecondary/key/saturationLow	0	0..100		Saturation Low
+	number	hslSecondary/key/saturationHigh	100	0..100		Saturation High
+	number	hslSecondary/key/saturationSoftness	0	0..100		Saturation Softness
+	bool	hslSecondary/key/lightnessEnabled	true			L
+	number	hslSecondary/key/lightnessLow	0	0..100		Lightness Low
+	number	hslSecondary/key/lightnessHigh	100	0..100		Lightness High
+	number	hslSecondary/key/lightnessSoftness	0	0..100		Lightness Softness
+	bool	hslSecondary/key/showMask	false			Show Mask
+	enum	hslSecondary/key/maskStyle	color-gray	color-gray|color-black|white-black		Mask Style
+	bool	hslSecondary/key/invertMask	false			Invert Mask
+	number	hslSecondary/refine/denoise	0	0..100		Denoise
+	number	hslSecondary/refine/blur	0	0..100		Blur
+	color	hslSecondary/correction/correctionWheel	#808080			Correction
+	number	hslSecondary/correction/temperature	0	-100..100		Temperature
+	number	hslSecondary/correction/tint	0	-100..100		Tint
+	number	hslSecondary/correction/contrast	0	-100..100		Contrast
+	number	hslSecondary/correction/sharpen	0	-100..100		Sharpen
+	number	hslSecondary/correction/saturation	100	0..200		Saturation
+	number	vignette/vignetteAmount	0	-5..5		Amount
+	number	vignette/vignetteMidpoint	50	0..100		Midpoint
+	number	vignette/vignetteRoundness	0	-100..100		Roundness
+	number	vignette/vignetteFeather	50	0..100		Feather
 effect	color.ociocdl	Color Correction	OCIO CDL Transform	An ASC CDL (slope, offset, power, saturation); matching a colorist's grade.
 	number	slopeRed	1	0..100		Slope Red
 	number	slopeGreen	1	0..100		Slope Green
@@ -373,6 +440,36 @@ effect	color.ociocdl	Color Correction	OCIO CDL Transform	An ASC CDL (slope, offs
 	number	powerBlue	1	0..100		Power Blue
 	number	saturation	1	0..100		Saturation
 	enum	style	asc-cdl-v1-2	asc-cdl-v1-2|no-clamp		Style
+	enum	direction	forward	forward|inverse		Direction
+effect	color.ociocolorspace	Color Correction	OCIO Color Space Transform	Converts between two color spaces named in an OpenColorIO config; log footage to Rec.709, ACES workflows.
+	enum	config	built-in-effectcraft-minimal	built-in-effectcraft-minimal|custom-ocio-file		Configuration
+	file	configFile		ocio		Config File (.ocio)
+	enum	source	linear-rec-709-srgb	aces2065-1|acescg|acescct|linear-rec-709-srgb|srgb|gamma-2-4-rec-709|linear-rec-2020|gamma-2-4-rec-2020|linear-p3-d65|display-p3|cie-xyz-d65|raw		Source
+	text	sourceName				Source (config name)
+	enum	destination	srgb	aces2065-1|acescg|acescct|linear-rec-709-srgb|srgb|gamma-2-4-rec-709|linear-rec-2020|gamma-2-4-rec-2020|linear-p3-d65|display-p3|cie-xyz-d65|raw		Destination
+	text	destinationName				Destination (config name)
+	enum	direction	forward	forward|inverse		Direction
+effect	color.ociodisplay	Color Correction	OCIO Display Transform	Shows the picture through an OpenColorIO display and view; previewing log or ACES footage as it will be seen.
+	enum	config	built-in-effectcraft-minimal	built-in-effectcraft-minimal|custom-ocio-file		Configuration
+	file	configFile		ocio		Config File (.ocio)
+	enum	source	linear-rec-709-srgb	aces2065-1|acescg|acescct|linear-rec-709-srgb|srgb|gamma-2-4-rec-709|linear-rec-2020|gamma-2-4-rec-2020|linear-p3-d65|display-p3|cie-xyz-d65|raw		Input Color Space
+	text	sourceName				Source (config name)
+	enum	display	srgb	srgb|rec-1886-rec-709|display-p3|rec-2100-pq		Display Device
+	text	displayName				Display (config name)
+	enum	view	standard	standard|tone-mapped|raw		View Transform
+	text	viewName				View (config name)
+	enum	direction	forward	forward|inverse		Direction
+effect	color.ociofile	Color Correction	OCIO File Transform	Applies a color transform file (.cube, .3dl, .cdl, and other LUT formats) through OpenColorIO; camera LUTs and CDL grades.
+	file	file		cube|3dl|csp|cc|ccc|cdl|spi1d|spi3d|spimtx		File
+	text	cccId				CCC ID
+	enum	interpolation	best	nearest|linear|tetrahedral|best		Interpolation
+	enum	direction	forward	forward|inverse		Direction
+effect	color.ociolook	Color Correction	OCIO Look Transform	Applies looks named in an OpenColorIO config; show looks and creative grades from a pipeline.
+	enum	config	built-in-effectcraft-minimal	built-in-effectcraft-minimal		Configuration
+	enum	source	acescg	aces2065-1|acescg|acescct|linear-rec-709-srgb|srgb|gamma-2-4-rec-709|linear-rec-2020|gamma-2-4-rec-2020|linear-p3-d65|display-p3|cie-xyz-d65|raw		Source
+	enum	destination	acescg	aces2065-1|acescg|acescct|linear-rec-709-srgb|srgb|gamma-2-4-rec-709|linear-rec-2020|gamma-2-4-rec-2020|linear-p3-d65|display-p3|cie-xyz-d65|raw		Destination
+	enum	look	none	none|warm|cool|high-contrast|low-contrast|desaturated|vivid		Look
+	text	looks				Looks
 	enum	direction	forward	forward|inverse		Direction
 effect	color.photofilter	Color Correction	Photo Filter	A colored lens filter, warming or cooling; a quick mood tint.
 	enum	filter	warming-filter-85	warming-filter-85|warming-filter-lba|warming-filter-81|cooling-filter-80|cooling-filter-lbb|cooling-filter-82|red|orange|yellow|green|cyan|blue|violet|magenta|sepia|deep-red|deep-blue|deep-emerald|deep-yellow|underwater|custom		Filter
@@ -1985,6 +2082,8 @@ transition	transition.venetian	Transition	Venetian Blinds	Venetian blind stripes
 	number	direction	90		degrees	Direction
 	number	width	30	2..1000		Width
 	number	feather	0	0..100		Feather
+effect	utility.applylut	Utility	Apply Color LUT	Applies a .cube LUT file; camera log to Rec.709, film emulation, and ready-made looks.
+	file	lut		cube		LUT
 effect	utility.overbrights	Utility	Overbrights	Shows or clips overbright pixels; HDR checks.
 	enum	channel	max-rgb	max-rgb|red|green|blue|alpha|luminance		Channel
 	color	highlightColor	#ff0000			Highlight Color

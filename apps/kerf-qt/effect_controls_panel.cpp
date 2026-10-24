@@ -1,10 +1,12 @@
 #include "effect_controls_panel.h"
 #include "editor_common.h"
 
+#include <QAction>
 #include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QFileDialog>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -13,6 +15,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -315,6 +318,23 @@ QWidget *EffectControlsPanel::valueEditor(const QJsonObject &def, const QString 
             if (color.isValid()) edited(modelColorName(color));
         });
         editor = button;
+    } else if (type == QStringLiteral("file")) {
+        // A path, typed or chosen; relative paths are relative to the project.
+        auto *line = new QLineEdit;
+        QStringList patterns;
+        for (const QJsonValue &extension : def.value(QStringLiteral("extensions")).toArray())
+            patterns << QStringLiteral("*.%1").arg(extension.toString());
+        const QString filter = QStringLiteral("%1 (%2)").arg(title, patterns.join(QLatin1Char(' ')));
+        QAction *choose = line->addAction(style()->standardIcon(QStyle::SP_DirOpenIcon), QLineEdit::TrailingPosition);
+        choose->setToolTip(tr("Choose a file"));
+        connect(choose, &QAction::triggered, this, [this, line, title, filter, edited] {
+            const QString path = QFileDialog::getOpenFileName(this, title, line->text(), filter);
+            if (path.isEmpty()) return;
+            line->setText(path);
+            edited(path);
+        });
+        connect(line, &QLineEdit::editingFinished, this, [line, edited] { edited(line->text()); });
+        editor = line;
     } else {
         auto *line = new QLineEdit;
         connect(line, &QLineEdit::editingFinished, this, [line, edited] { edited(line->text()); });

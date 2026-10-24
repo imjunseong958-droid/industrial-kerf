@@ -112,6 +112,8 @@ fn writable(ui: &ParamUi) -> bool {
             | ParamUi::Checkbox
             | ParamUi::Color
             | ParamUi::Point
+            | ParamUi::Text
+            | ParamUi::File { .. }
             | ParamUi::Hidden
     )
 }
@@ -243,6 +245,10 @@ pub fn catalog_table() -> String {
                 (ParamUi::Color, FxValue::Color(rgba)) => {
                     ("color", color(*rgba).to_string(), String::new(), "")
                 }
+                (ParamUi::Text, FxValue::Str(text)) => ("text", text.clone(), String::new(), ""),
+                (ParamUi::File { filters }, FxValue::Str(path)) => {
+                    ("file", path.clone(), filters.join("|"), "")
+                }
                 (ui, FxValue::Scalar(value)) => match ui {
                     // The valid range, widened to hold the default.
                     ParamUi::Slider { min, max, .. } => (
@@ -256,6 +262,12 @@ pub fn catalog_table() -> String {
                 },
                 (ui, default) => panic!("{}: `{}` is {ui:?} with {default:?}", spec.id, param.id),
             };
+            assert!(
+                !default.contains(['\t', '\n']),
+                "{}: `{}` has a default the table cannot hold",
+                spec.id,
+                param.id
+            );
             writeln!(
                 out,
                 "\t{ty}\t{}\t{default}\t{constraint}\t{unit}\t{}",
@@ -424,6 +436,7 @@ fn convert(value: Value, param: &ParamSpec) -> Option<FxValue> {
         (Value::Enum(choice), ParamUi::Popup { options }) => {
             FxValue::Enum(choices(options).iter().position(|c| *c == choice)? as u32)
         }
+        (Value::Text(text), ParamUi::Text | ParamUi::File { .. }) => FxValue::Str(text),
         _ => return None,
     })
 }
@@ -565,6 +578,28 @@ mod tests {
                 .map(|(name, param)| ((*name).to_owned(), param.clone()))
                 .collect(),
         }
+    }
+
+    #[test]
+    fn a_lut_file_grades_the_frame() {
+        // A 2×2×2 .cube that inverts: black becomes white and white black.
+        let mut cube = String::from("LUT_3D_SIZE 2\n");
+        for b in 0..2 {
+            for g in 0..2 {
+                for r in 0..2 {
+                    cube.push_str(&format!("{} {} {}\n", 1 - r, 1 - g, 1 - b));
+                }
+            }
+        }
+        let path = std::env::temp_dir().join(format!("kerf-fx-invert-{}.cube", std::process::id()));
+        std::fs::write(&path, cube).unwrap();
+        let lut = Param::Static(Value::Text(path.to_string_lossy().into_owned()));
+        let stack =
+            RasterStack::new(&[effect("utility.applylut", &[("lut", lut)])], 2, 1, 0).unwrap();
+        let mut frame = [0, 0, 0, 255, 255, 255, 255, 255];
+        stack.apply(&mut frame, 2, 1, Time::ZERO, 24.0);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(frame, [255, 255, 255, 255, 0, 0, 0, 255]);
     }
 
     #[test]

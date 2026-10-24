@@ -83,6 +83,26 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
     ),
     // Color Correction
     (
+        "color.lumetri",
+        "A full grade in one effect: white balance and tone, a creative look or LUT, curves, color wheels, a secondary color pick, and a vignette; everyday color correction.",
+    ),
+    (
+        "color.ociocolorspace",
+        "Converts between two color spaces named in an OpenColorIO config; log footage to Rec.709, ACES workflows.",
+    ),
+    (
+        "color.ociodisplay",
+        "Shows the picture through an OpenColorIO display and view; previewing log or ACES footage as it will be seen.",
+    ),
+    (
+        "color.ociofile",
+        "Applies a color transform file (.cube, .3dl, .cdl, and other LUT formats) through OpenColorIO; camera LUTs and CDL grades.",
+    ),
+    (
+        "color.ociolook",
+        "Applies looks named in an OpenColorIO config; show looks and creative grades from a pipeline.",
+    ),
+    (
         "color.autocolor",
         "Automatic color balance; a quick fix for color casts.",
     ),
@@ -770,6 +790,10 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Venetian blind stripes; retro TV transitions.",
     ),
     // Utility
+    (
+        "utility.applylut",
+        "Applies a .cube LUT file; camera log to Rec.709, film emulation, and ready-made looks.",
+    ),
     (
         "utility.overbrights",
         "Shows or clips overbright pixels; HDR checks.",
