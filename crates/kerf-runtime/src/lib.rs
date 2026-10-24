@@ -15,7 +15,6 @@
 
 mod ipc;
 mod kernel;
-mod legacy;
 mod render;
 mod runtime;
 mod store;
@@ -26,7 +25,6 @@ pub use ipc::{
     UNIX_SOCKET_PATH_LIMIT,
 };
 pub use kernel::{resolve_media_paths, use_proxies, EditOp, TrimSide};
-pub use legacy::migrate_from_cut;
 pub use render::{render_cancel_path, run_render_job};
 pub use timeline::fx_catalog_json;
 
@@ -39,7 +37,7 @@ use std::sync::mpsc::{self, Sender};
 use std::thread;
 
 /// `StateSnapshot::source_version` of the canonical `.kerf` document; 1 and 2
-/// were the `project.cut.json` formats.
+/// were earlier project formats.
 const SOURCE_VERSION: u8 = 3;
 
 /// Maximum duration of one bounded rendered-preview request.
@@ -70,8 +68,7 @@ pub struct StateSnapshot {
     pub source_version: u8,
     #[serde(default = "default_projection_status")]
     pub projection_status: String,
-    /// What the one-time import of `project.cut.json` changed or left
-    /// behind.
+    /// What opening the project changed or left behind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub import_warnings: Vec<String>,
 }

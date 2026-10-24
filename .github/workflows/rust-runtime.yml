@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Test kernel and v2 import
+      - name: Test kernel and interchange
         run: cargo test -p kerf-model -p kerf-lang -p kerf-interchange
       - name: Test durable runtime
         run: cargo test -p kerf-runtime --all-targets

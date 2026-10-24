@@ -3,7 +3,6 @@
 #![cfg(unix)]
 
 use kerf_runtime::{EndpointAddress, RuntimeClient, StateSnapshot, MAX_REQUEST_BYTES};
-use serde_json::json;
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
@@ -160,24 +159,24 @@ fn real_daemon_rejects_an_oversized_request_before_reducer_execution() {
 }
 
 #[test]
-fn a_v2_project_round_trips_through_kerfd_on_the_kernel() {
+fn a_project_round_trips_through_kerfd_on_the_kernel() {
     let directory = project_directory("kernel");
     fs::create_dir_all(&directory).unwrap();
-    let legacy = serde_json::to_vec_pretty(&json!({
-        "version": 2,
-        "name": "Round Trip",
-        "fps": 24,
-        "width": 1920,
-        "height": 1080,
-        "sources": [{"id": "src-1", "path": "/media/a.mov", "duration": 60, "width": 1920, "height": 1080, "hasAudio": true}],
-        "tracks": [{"id": "v1", "type": "video", "clips": [
-            {"id": "clip-a", "sourceId": "src-1", "in": 0, "out": 4, "timelineStart": 0},
-            {"id": "clip-b", "sourceId": "src-1", "in": 10, "out": 12, "timelineStart": 4}
-        ]}],
-        "overlays": [], "gaps": [], "transitions": [], "effects": [], "markers": []
-    }))
-    .unwrap();
-    fs::write(directory.join("project.cut.json"), &legacy).unwrap();
+    let document = "\
+kerf 1
+project name=\"Round Trip\"
+
+media src-1 path=\"/media/a.mov\" rate=24 dur=00:01:00:00 video=1920x1080 audio=2ch@48000
+
+sequence s1 name=\"Round Trip\" rate=24 size=1920x1080 audio=48000 start=00:00:00:00
+  track v1 video
+    clip clip-a media=src-1 src=00:00:00:00 at=00:00:00:00 dur=00:00:04:00 link=L1
+    clip clip-b media=src-1 src=00:00:10:00 at=00:00:04:00 dur=00:00:02:00 link=L2
+  track A1 audio
+    clip clip-a_a media=src-1 src=00:00:00:00 at=00:00:00:00 dur=00:00:04:00 link=L1
+    clip clip-b_a media=src-1 src=00:00:10:00 at=00:00:04:00 dur=00:00:02:00 link=L2
+";
+    fs::write(directory.join("project.kerf"), document).unwrap();
 
     let daemon = start_daemon(&directory);
     let client = RuntimeClient::new(&directory).unwrap();
@@ -185,14 +184,6 @@ fn a_v2_project_round_trips_through_kerfd_on_the_kernel() {
     let opened = client.get_state().unwrap();
     assert_eq!(opened.revision, 0);
     assert_eq!(opened.source_version, 3);
-    assert!(opened
-        .import_warnings
-        .iter()
-        .any(|warning| warning.contains("imported project.cut.json")));
-    let imported = fs::read_to_string(directory.join("project.kerf")).unwrap();
-    assert!(imported.contains("clip clip-a media=src-1"), "{imported}");
-    // The embedded sound became a linked clip on its own track.
-    assert!(imported.contains("clip clip-a_a media=src-1"), "{imported}");
 
     // A ripple trim keeps picture and sound in sync; the clip after moves.
     let trimmed = client
@@ -253,10 +244,6 @@ fn a_v2_project_round_trips_through_kerfd_on_the_kernel() {
         reused.message
     );
     stop_daemon(restarted);
-    assert_eq!(
-        fs::read(directory.join("project.cut.json")).unwrap(),
-        legacy
-    );
     let _ = fs::remove_dir_all(&directory);
 }
 

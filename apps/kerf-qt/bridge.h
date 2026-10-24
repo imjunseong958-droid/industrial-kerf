@@ -5,9 +5,6 @@
 // Calls are nonblocking and confined to the Qt GUI thread. Runtime, media and
 // agent work run on Rust workers. All strings are UTF-8.
 extern "C" {
-// Moves what Cut, Kerf's earlier name, left in ~/.cut and the project's .cut
-// to where Kerf reads it. Call once at startup, before kerf_bridge_new.
-void kerf_migrate_from_cut(const char *project_directory);
 void *kerf_bridge_new(const char *project_directory, const char *kerfd_binary);
 void kerf_bridge_free(void *bridge);
 // JSON commands: refresh, reconnect, preview, import {path}, edit {ops,revision},

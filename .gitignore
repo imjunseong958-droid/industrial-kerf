@@ -26,7 +26,5 @@ target/
 .kerfd.sock
 .kerf-render-*
 project.kerf
-project.cut.json
-project.cut.history.json
 .kerf/runtime/
 .kerf/native-project/

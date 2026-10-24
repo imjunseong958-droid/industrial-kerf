@@ -3,7 +3,6 @@
 //! the journal before publishing `project.kerf`.
 
 use crate::kernel::{self, Edit, Edited};
-use crate::legacy::{self, CUT_PROJECT_FILE};
 use crate::render::render_cancel_path;
 use crate::store::{
     append_journal_record, inspect_projection, load_checkpoint, load_journal,
@@ -27,8 +26,6 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 
-/// The v1/v2 project file, read once to import a project and never written.
-const LEGACY_PROJECT_FILE: &str = "project.cut.json";
 const CHECKPOINT_INTERVAL: u64 = 32;
 
 /// History holds project snapshots, so it is bounded more tightly than the
@@ -179,13 +176,13 @@ impl Runtime {
         let lock = RuntimeLock::acquire(directory)?;
         let project_path = directory.join(PROJECT_FILE);
         let journal_path = directory.join(JOURNAL_FILE);
-        let mut notes = legacy::migrate_from_cut(None, Some(directory));
+        let mut notes = Vec::new();
         let checkpoint = match load_checkpoint(directory)? {
             Loaded::Current(checkpoint) => Some(checkpoint),
             Loaded::Previous => {
-                // State from an older kerfd. Its project.kerf (or, before the
-                // kernel, project.cut.json) is the last published project;
-                // keep its runtime files untouched and reopen the project.
+                // State from an older kerfd. Its project.kerf is the last
+                // published project; keep its runtime files untouched and
+                // reopen the project.
                 preserve_previous_state(directory)?;
                 notes.push(format!(
                     "previous kerfd state was preserved as {PREVIOUS_STATE_PREFIX}.*"
@@ -217,8 +214,7 @@ impl Runtime {
                 projection_digest: checkpoint.projection_digest,
             }
         } else {
-            let (project, mut warnings) = load_bootstrap_project(directory)?;
-            notes.append(&mut warnings);
+            let project = load_bootstrap_project(directory)?;
             Self {
                 _lock: lock,
                 project_path,
@@ -287,8 +283,7 @@ impl Runtime {
         }
 
         if checkpoint_project.is_none() {
-            // First launch is the one controlled bootstrap point: import
-            // project.cut.json once if there is no project.kerf, then write the
+            // First launch is the one controlled bootstrap point: write the
             // canonical document and checkpoint.
             runtime.materialize_project()?;
             runtime.projection_status = ProjectionStatus::Current;
@@ -1736,45 +1731,15 @@ fn validate_request_identity(actor: &str, key: &str) -> Result<(), RuntimeError>
     Ok(())
 }
 
-/// The project of a directory without runtime state: `project.kerf`, else a
-/// one-time import of Cut's `project.cut` or of `project.cut.json` (left
-/// untouched) with its warnings, else an empty project.
-fn load_bootstrap_project(directory: &Path) -> Result<(Project, Vec<String>), RuntimeError> {
+/// The project of a directory without runtime state: `project.kerf`, else an
+/// empty project.
+fn load_bootstrap_project(directory: &Path) -> Result<Project, RuntimeError> {
     let document = directory.join(PROJECT_FILE);
-    if document.is_file() {
-        let text = fs::read_to_string(&document).map_err(io_error)?;
-        return Ok((kernel::parse(&text)?, Vec::new()));
+    if !document.is_file() {
+        return Ok(kernel::empty_project());
     }
-    let cut = directory.join(CUT_PROJECT_FILE);
-    if cut.is_file() {
-        let text = fs::read_to_string(&cut).map_err(io_error)?;
-        let project = kernel::parse(&legacy::kerf_document(&text))?;
-        return Ok((
-            project,
-            vec![format!(
-                "imported {CUT_PROJECT_FILE} into {PROJECT_FILE}; {CUT_PROJECT_FILE} is no longer read or written"
-            )],
-        ));
-    }
-    let legacy = directory.join(LEGACY_PROJECT_FILE);
-    if !legacy.is_file() {
-        return Ok((kernel::empty_project(), Vec::new()));
-    }
-    let text = fs::read_to_string(&legacy).map_err(io_error)?;
-    let imported = kerf_interchange::v2::import_json(&text).map_err(|errors| {
-        RuntimeError::new(
-            "INVALID_PROJECT",
-            format!(
-                "{LEGACY_PROJECT_FILE} could not be imported: {}",
-                errors.join("; ")
-            ),
-        )
-    })?;
-    let mut warnings = vec![format!(
-        "imported {LEGACY_PROJECT_FILE} into {PROJECT_FILE}; {LEGACY_PROJECT_FILE} is no longer read or written"
-    )];
-    warnings.extend(imported.warnings);
-    Ok((imported.project, warnings))
+    let text = fs::read_to_string(&document).map_err(io_error)?;
+    kernel::parse(&text)
 }
 
 fn bound_history(entries: &mut Vec<HistoryEntry>) {
@@ -2716,74 +2681,6 @@ mod tests {
         assert!(has_marker(&runtime.snapshot(), "saved"));
         assert!(!directory.join(CHECKPOINT_TEMP_FILE).exists());
         drop(runtime);
-        let _ = fs::remove_dir_all(directory);
-    }
-
-    #[test]
-    fn first_launch_imports_project_json_once_and_leaves_it_untouched() {
-        let directory =
-            std::env::temp_dir().join(format!("kerf-runtime-v1-bootstrap-{}", unique_id()));
-        fs::create_dir_all(&directory).unwrap();
-        let legacy = serde_json::to_vec(&json!({
-            "version": 1,
-            "fps": 24,
-            "sources": [{"id":"src1","path":"clip.mp4","duration":4}],
-            "tracks": [{"id":"v1","clips":[{"id":"clip1","src":"src1","in":0,"out":4}]}],
-            "overlays": []
-        }))
-        .unwrap();
-        fs::write(directory.join(LEGACY_PROJECT_FILE), &legacy).unwrap();
-        let runtime = Runtime::open(&directory).unwrap();
-        let state = runtime.snapshot();
-        assert_eq!(state.source_version, SOURCE_VERSION);
-        assert_eq!(state.projection_status, "current");
-        assert!(state.import_warnings[0].contains("imported project.cut.json"));
-        assert!(directory.join(CHECKPOINT_FILE).is_file());
-        drop(runtime);
-        let document = fs::read_to_string(directory.join(PROJECT_FILE)).unwrap();
-        assert!(document.starts_with("kerf 1\n"), "{document}");
-        assert!(document.contains("clip clip1 media=src1"), "{document}");
-        assert_eq!(
-            fs::read(directory.join(LEGACY_PROJECT_FILE)).unwrap(),
-            legacy
-        );
-
-        // project.kerf is canonical from now on: a later project.cut.json is
-        // ignored.
-        fs::write(directory.join(LEGACY_PROJECT_FILE), b"{}").unwrap();
-        let reopened = Runtime::open(&directory).unwrap();
-        assert_eq!(reopened.snapshot().projection_status, "current");
-        assert!(reopened.document(false).contains("clip clip1"));
-        drop(reopened);
-        let _ = fs::remove_dir_all(directory);
-    }
-
-    #[test]
-    fn first_launch_imports_a_cut_project_and_its_directory() {
-        let directory =
-            std::env::temp_dir().join(format!("kerf-runtime-cut-import-{}", unique_id()));
-        fs::create_dir_all(directory.join(".cut/skills")).unwrap();
-        let cut = "cut 1\nproject name=\"From Cut\"\n";
-        fs::write(directory.join(CUT_PROJECT_FILE), cut).unwrap();
-        let runtime = Runtime::open(&directory).unwrap();
-        let warnings = runtime.snapshot().import_warnings;
-        assert!(
-            warnings.iter().any(|w| w.contains("imported project.cut")),
-            "{warnings:?}"
-        );
-        assert!(runtime
-            .document(false)
-            .contains("project name=\"From Cut\""));
-        drop(runtime);
-        assert!(fs::read_to_string(directory.join(PROJECT_FILE))
-            .unwrap()
-            .starts_with("kerf 1\n"));
-        assert_eq!(
-            fs::read_to_string(directory.join(CUT_PROJECT_FILE)).unwrap(),
-            cut
-        );
-        assert!(directory.join(".kerf/skills").is_dir());
-        assert!(!directory.join(".cut").exists());
         let _ = fs::remove_dir_all(directory);
     }
 

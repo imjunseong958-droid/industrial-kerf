@@ -154,10 +154,6 @@ fn run() -> Result<()> {
             args.dir.canonicalize()
         })
         .context("resolve project directory")?;
-    let home = env::var_os("HOME").map(PathBuf::from);
-    for note in kerf_runtime::migrate_from_cut(home.as_deref(), Some(&directory)) {
-        eprintln!("kerf: {note}");
-    }
 
     if let Some(Command::Preset { action }) = &args.command {
         return run_preset(action, &directory, args.kerfd.as_deref());
