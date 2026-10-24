@@ -9,6 +9,7 @@ struct Options {
 }
 
 fn main() {
+    kerf_engine::sidecar::forward_termination_signals();
     if let Err(error) = run() {
         eprintln!("kerf-mcp: {error}");
         std::process::exit(1);

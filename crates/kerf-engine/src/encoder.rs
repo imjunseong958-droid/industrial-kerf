@@ -158,6 +158,34 @@ pub fn select_video_encoder(
     }
 }
 
+/// Mark the listed hardware encoders that do not open as unavailable, in
+/// the order `options` prefers them, stopping at the first that opens:
+/// FFmpeg builds list NVENC, QSV, and AMF whether or not the machine has
+/// the hardware and its driver. `opens` tries one family's encoder.
+pub fn keep_encoders_that_open(
+    capabilities: &mut [EncoderCapability],
+    options: &SelectEncoderOptions,
+    mut opens: impl FnMut(HardwareEncoderFamily) -> bool,
+) {
+    if !options.prefer_hardware {
+        return;
+    }
+    for family in &options.preference {
+        let encoder = family.encoder_name(options.codec);
+        let Some(capability) = capabilities
+            .iter_mut()
+            .find(|entry| entry.family == *family && entry.encoder == encoder && entry.available)
+        else {
+            continue;
+        };
+        if opens(*family) {
+            return;
+        }
+        capability.available = false;
+        capability.reason = Some("Encoder is listed but does not open on this machine".into());
+    }
+}
+
 pub fn encoder_args(selection: &EncoderSelection) -> Vec<String> {
     vec!["-c:v".into(), selection.encoder.clone()]
 }
@@ -246,6 +274,38 @@ mod tests {
         let hevc = select_video_encoder(&capabilities.encoders, &hw);
         assert_eq!(hevc.encoder, "hevc_qsv");
         assert_eq!(hevc.family, Some(HardwareEncoderFamily::Qsv));
+    }
+
+    #[test]
+    fn listed_hardware_encoders_that_do_not_open_fall_through() {
+        let listing = [
+            " V....D h264_nvenc NVIDIA NVENC H.264 encoder",
+            " V....D h264_qsv H.264 (Intel Quick Sync Video acceleration)",
+            " V....D h264_amf AMD AMF H.264 Encoder",
+        ]
+        .join("\n");
+        let options = SelectEncoderOptions {
+            prefer_hardware: true,
+            ..Default::default()
+        };
+
+        let mut capabilities = parse_encoder_capabilities(&listing, "ffmpeg").encoders;
+        let mut tried = Vec::new();
+        keep_encoders_that_open(&mut capabilities, &options, |family| {
+            tried.push(family);
+            family == HardwareEncoderFamily::Qsv
+        });
+        assert_eq!(
+            tried,
+            [HardwareEncoderFamily::Nvenc, HardwareEncoderFamily::Qsv]
+        );
+        assert_eq!(select_video_encoder(&capabilities, &options).encoder, "h264_qsv");
+
+        let mut capabilities = parse_encoder_capabilities(&listing, "ffmpeg").encoders;
+        keep_encoders_that_open(&mut capabilities, &options, |_| false);
+        let selection = select_video_encoder(&capabilities, &options);
+        assert_eq!(selection.encoder, "libx264");
+        assert!(!selection.hardware);
     }
 
     #[test]

@@ -12,7 +12,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{mpsc, Condvar, Mutex};
+use std::sync::{mpsc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 
@@ -20,11 +20,14 @@ use kerf_compose::{ComposeOptions, Compositor, Device, Frame};
 use kerf_model::{Rate, Time};
 
 use crate::encoder::{
-    encode_output_args, parse_encoder_capabilities, select_video_encoder, EncoderSelection,
-    SelectEncoderOptions, VideoCodec,
+    encode_output_args, keep_encoders_that_open, parse_encoder_capabilities,
+    select_video_encoder, EncoderSelection, HardwareEncoderFamily, SelectEncoderOptions,
+    VideoCodec,
 };
 use crate::error::{EngineError, Result};
-use crate::ffmpeg::{cached_encoder_listing, parse_time_seconds, resolve_ffmpeg_bin, tail};
+use crate::ffmpeg::{
+    cached_encoder_listing, parse_time_seconds, resolve_ffmpeg_bin, run_allow_failure, tail,
+};
 use crate::program::{compile_program, ProgramOptions};
 use crate::resources::{budget, should_try_hardware_encode};
 use crate::sidecar::{self, CancellationToken};
@@ -34,8 +37,48 @@ const CANCEL_FILE_POLL_INTERVAL: Duration = Duration::from_millis(20);
 pub fn detect_and_select_encoder(options: &SelectEncoderOptions) -> Result<EncoderSelection> {
     let ffmpeg = resolve_ffmpeg_bin();
     let listing = cached_encoder_listing()?;
-    let capabilities = parse_encoder_capabilities(listing, ffmpeg);
+    let mut capabilities = parse_encoder_capabilities(listing, ffmpeg);
+    keep_encoders_that_open(&mut capabilities.encoders, options, |family| {
+        hardware_encoder_opens(family, options.codec)
+    });
     Ok(select_video_encoder(&capabilities.encoders, options))
+}
+
+/// Whether `family`'s encoder for `codec` encodes a frame with the
+/// arguments and pixel format a render gives it. Tried once per process.
+fn hardware_encoder_opens(family: HardwareEncoderFamily, codec: VideoCodec) -> bool {
+    static OPENS: Mutex<BTreeMap<&'static str, bool>> = Mutex::new(BTreeMap::new());
+    let encoder = family.encoder_name(codec);
+    let mut opens = OPENS.lock().unwrap_or_else(PoisonError::into_inner);
+    *opens.entry(encoder).or_insert_with(|| {
+        let selection = EncoderSelection {
+            encoder: encoder.to_owned(),
+            hardware: true,
+            family: Some(family),
+            reason: String::new(),
+        };
+        let budget = budget();
+        let mut args: Vec<String> = [
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=black:s=256x256:r=30",
+            "-frames:v",
+            "1",
+        ]
+        .map(String::from)
+        .into();
+        args.extend(encode_output_args(
+            &selection,
+            budget.software_crf,
+            budget.software_preset,
+        ));
+        args.extend(["-pix_fmt", "yuv420p", "-f", "null", "-"].map(String::from));
+        run_allow_failure(resolve_ffmpeg_bin(), &args).is_ok_and(|output| output.code == 0)
+    })
 }
 
 fn draft_post_filters() -> Vec<String> {

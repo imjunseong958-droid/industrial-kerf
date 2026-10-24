@@ -7,6 +7,9 @@
 //! wrong frame, place, or size is far outside them. Luma carries the
 //! comparison because the graph works in 4:2:0, where color edges are
 //! half as sharp and filters such as `gblur` spread color twice as far.
+//! FFmpeg's x86_64 code blends and fades a little differently from its
+//! Arm code, about one more luma step in a dip or under a raster effect,
+//! and the tolerances cover both.
 
 use kerf_compose::{ComposeOptions, Compositor};
 use kerf_engine::derivatives::DerivativeCache;
@@ -410,9 +413,9 @@ fn transitions_match_the_graph() {
                    \x20   transition x1 from=c1 to=c2 fx=dip dur=12f color=#ffffff\n",
             window: false,
             frames: &[20, 24, 27],
-            luma: 1.0,
+            luma: 2.0,
             off: 0.002,
-            color: 2.0,
+            color: 3.0,
         },
     ]);
 }
@@ -486,9 +489,9 @@ fn effects_match_the_graph() {
                    \x20     fx channel.invert blend={0f:0 23f:100}\n",
             window: false,
             frames: &[0, 12],
-            luma: 1.0,
+            luma: 2.0,
             off: 0.002,
-            color: 2.0,
+            color: 3.0,
         },
         Case {
             name: "raster moved",
@@ -529,7 +532,7 @@ fn effects_match_the_graph() {
                    \x20     fx color.basic saturation=0 brightness=0.1\n",
             window: false,
             frames: &[4],
-            luma: 1.5,
+            luma: 2.0,
             off: 0.002,
             color: 2.0,
         },

@@ -6,6 +6,7 @@ use std::io;
 use std::path::PathBuf;
 
 fn main() {
+    kerf_engine::sidecar::forward_termination_signals();
     let args: Vec<String> = env::args().collect();
     let directory = args
         .windows(2)

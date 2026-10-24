@@ -1,10 +1,19 @@
 name: Rust runtime
 
+# Linux runs first and carries the testing, the Qt editor included: on a
+# private repository Windows minutes bill at twice the Linux rate and macOS
+# at ten times. Windows and macOS start only once Linux passes, and check
+# only what differs on them. They run on pull requests and by hand
+# (Actions > Rust runtime > Run workflow); a merge to main reruns Linux
+# alone, as the pull request already ran them. Feature branches are not
+# built on push: their pull request runs the jobs.
 on:
   push:
+    branches: [main]
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
+      - ".cargo/**"
       - "crates/**"
       - "effectcraft/**"
       - "apps/kerf-qt/**"
@@ -14,47 +23,165 @@ on:
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
+      - ".cargo/**"
       - "crates/**"
       - "effectcraft/**"
       - "apps/kerf-qt/**"
       - "scripts/test-kerf-qt-bridge.py"
       - ".github/workflows/rust-runtime.yml"
+  workflow_dispatch:
+
+# A newer push to a pull request supersedes its running checks; runs on main
+# each finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
 
 jobs:
-  windows-runtime:
-    runs-on: windows-latest
+  linux:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    env:
+      # The runner has no GPU. Limiting wgpu to Vulkan, which has no driver
+      # here, keeps it off Mesa's software GL, so the GPU tests skip
+      # themselves rather than compare against a software rasterizer.
+      WGPU_BACKEND: vulkan
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # libclang for ffmpeg-sys-next's bindgen; ALSA for playback's audio
+      # output (cpal); Qt with its private GUI headers and xcb for the
+      # docking library; the offscreen platform plugin and a font for the
+      # UI tests.
+      - name: Install native and Qt dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libclang-dev libasound2-dev \
+            qt6-base-dev qt6-base-private-dev qt6-qpa-plugins libgl-dev \
+            libvulkan-dev libxkbcommon-dev libxcb1-dev fonts-dejavu-core
+      # Ubuntu ships FFmpeg 8; Kerf builds against 9, as on macOS and
+      # Windows, so all three test the same FFmpeg. Take a pinned FFmpeg 9.0
+      # shared build with libx264; BtbN keeps its month-end builds for about
+      # two years. Tests, kerfd, and the bridge load its libraries through
+      # LD_LIBRARY_PATH.
+      - name: Install FFmpeg
+        run: |
+          build=autobuild-2026-09-30-13-08
+          name=ffmpeg-n9.0.2-17-g2a571b6068-linux64-gpl-shared-9.0
+          sha256=01a9764d0b5364b66cfeb4617557c64321b0e232e172ec73f0a701c5f7694326
+          archive="$RUNNER_TEMP/ffmpeg.tar.xz"
+          curl -fsSL -o "$archive" "https://github.com/BtbN/FFmpeg-Builds/releases/download/$build/$name.tar.xz"
+          echo "$sha256  $archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$RUNNER_TEMP"
+          root="$RUNNER_TEMP/$name"
+          echo "$root/bin" >> "$GITHUB_PATH"
+          echo "FFMPEG_DIR=$root" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$root/lib" >> "$GITHUB_ENV"
+          LD_LIBRARY_PATH="$root/lib" "$root/bin/ffmpeg" -hide_banner -version | head -n 1
+      # Caches the registry and dependency builds, keyed on Cargo.lock.
+      # Workspace crates, the EffectCraft ones included, rebuild each run.
+      - uses: Swatinem/rust-cache@v2
+      - name: Test workspace
+        env:
+          KERF_PARITY_DUMP: ${{ runner.temp }}/parity
+        run: |
+          mkdir -p "$KERF_PARITY_DUMP"
+          cargo test --workspace
+      # The frames the compositor parity tests compared, drawn both ways,
+      # to look at when one fails.
+      - name: Upload compositor parity frames
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compositor-parity-frames
+          path: ${{ runner.temp }}/parity
+          retention-days: 14
+      - name: Build native bridge and daemon for integration tests
+        run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
+      - name: Build Qt editor and UI tests
+        run: |
+          cmake -S apps/kerf-qt -B target/qt -DKERF_QT_BUILD_TESTS=ON
+          cmake --build target/qt --parallel "$(nproc)"
+      - name: Test Qt UI
+        run: ctest --test-dir target/qt --output-on-failure
+      - name: Test real media and cross-client workflow
+        run: python3 scripts/test-kerf-qt-bridge.py
+
+  windows-runtime:
+    needs: linux
+    if: github.event_name != 'push'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # kerf-runtime reaches libav through kerf-engine and kerf-compose
+      # (ffmpeg-sys-next), which needs FFmpeg's headers and import libraries
+      # and libclang for bindgen. The runner has LLVM but no FFmpeg, so take
+      # a pinned shared build; its DLLs go on PATH for the tests.
+      - name: Install FFmpeg
+        shell: pwsh
+        run: |
+          $version = '9.0.2'
+          $sha256 = '4d2060a8b34a940aa47d785142055bb92a63053781e55f2ace4546edd519a8f5'
+          $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg.7z'
+          $target = Join-Path $env:RUNNER_TEMP 'ffmpeg'
+          Invoke-WebRequest "https://github.com/GyanD/codexffmpeg/releases/download/$version/ffmpeg-$version-full_build-shared.7z" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $sha256) { throw "FFmpeg $version archive does not match its checksum" }
+          7z x $archive "-o$target" | Out-Null
+          $root = (Get-ChildItem $target -Directory | Select-Object -First 1).FullName
+          "FFMPEG_DIR=$root" >> $env:GITHUB_ENV
+          "$root\bin" >> $env:GITHUB_PATH
+          $llvm = 'C:\Program Files\LLVM\bin'
+          if (-not (Test-Path "$llvm\libclang.dll")) { throw "libclang.dll not found in $llvm" }
+          "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
+      - uses: Swatinem/rust-cache@v2
+      # The kernel and the durable runtime against Windows paths, line
+      # endings, and processes.
       - name: Test kernel and interchange
         run: cargo test -p kerf-model -p kerf-lang -p kerf-interchange
       - name: Test durable runtime
         run: cargo test -p kerf-runtime --all-targets
 
   macos-editor:
+    needs: linux
+    if: github.event_name != 'push'
     runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # Homebrew's current FFmpeg, as developers and scripts/install-kerf-local.sh
+      # build against; ffmpeg-next 9 binds it.
       - name: Install native media and Qt dependencies
         run: |
-          brew install ffmpeg@7 qt pkg-config cmake
-          ffmpeg_prefix="$(brew --prefix ffmpeg@7)"
+          brew install ffmpeg qt pkg-config cmake
+          ffmpeg_prefix="$(brew --prefix ffmpeg)"
           echo "$ffmpeg_prefix/bin" >> "$GITHUB_PATH"
           echo "FFMPEG_DIR=$ffmpeg_prefix" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=$ffmpeg_prefix/lib/pkgconfig" >> "$GITHUB_ENV"
-      - name: Check bridge and playback
-        run: cargo check -p kerf-qt-bridge -p kerf-playback --all-targets
-      - name: Test runtime and bridge
-        run: cargo test -p kerf-runtime -p kerf-qt-bridge --lib
-      - name: Test waveform failure handling
-        run: cargo test -p kerf-engine waveform_stderr
+      - uses: Swatinem/rust-cache@v2
+      # Only what Linux cannot show: the editor's dylib against Homebrew's
+      # libav and Qt, the macOS Qt build, and the daemon's macOS peer check
+      # and sockets, which the bridge workflow below goes through.
       - name: Build native bridge and daemon for integration tests
         run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
       - name: Build Qt editor and UI tests
         run: |
           cmake -S apps/kerf-qt -B target/qt -DCMAKE_PREFIX_PATH="$(brew --prefix qt)" -DKERF_QT_BUILD_TESTS=ON
-          cmake --build target/qt --parallel 2
+          cmake --build target/qt --parallel 3
       - name: Test Qt UI
         run: ctest --test-dir target/qt --output-on-failure
       - name: Test real media and cross-client workflow
