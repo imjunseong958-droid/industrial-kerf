@@ -108,7 +108,10 @@ fn transitions_use_handles_and_reveal_the_incoming_clip() {
         graph.contains("afade=t=in:st=0:d=0.5:curve=qsin"),
         "{graph}"
     );
-    assert!(graph.contains("adelay=delays=84000S"), "{graph}");
+    assert!(
+        graph.contains("adelay=delays=84000S:all=1,asetpts=N/SR/TB"),
+        "{graph}"
+    );
 }
 
 #[test]

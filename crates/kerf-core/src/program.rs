@@ -1228,6 +1228,10 @@ impl<'a> Graph<'a> {
         let delay = samples(portion.lo - window);
         if delay > 0 {
             filters.push(format!("adelay=delays={delay}S:all=1"));
+            // `adelay` leaves the silence it adds before its first input
+            // frame untimed, and times what follows from there, which
+            // `atrim` misreads as the stream's end: count the samples.
+            filters.push("asetpts=N/SR/TB".into());
         }
         filters.push(format!("apad,atrim=duration={}", secs(total)));
         filters.push("asetpts=PTS-STARTPTS".into());
