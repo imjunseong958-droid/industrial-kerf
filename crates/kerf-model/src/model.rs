@@ -5,11 +5,12 @@
 //! `at` from the first frame of its clip. Timecode (`Media::start`,
 //! `Sequence::start`) is added only when presenting or reading text.
 
-use crate::catalog::Domain;
+use crate::catalog::{Catalog, Domain, ParamType};
 use crate::id::{Id, IdGen};
 use crate::time::{Rate, Ratio, Time};
-use crate::value::Param;
+use crate::value::{Param, Value};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 pub type Params = BTreeMap<String, Param>;
 
@@ -499,6 +500,39 @@ impl Project {
         self.media.iter().find(|media| media.id == id)
     }
 
+    /// Make the paths a document keeps relative to its project absolute
+    /// against `directory`: media files and the files clips' effects read
+    /// (`ParamType::File`).
+    pub fn resolve_paths(&mut self, catalog: &Catalog, directory: &Path) {
+        let resolve = |path: &mut String| {
+            if !path.is_empty() && Path::new(path.as_str()).is_relative() {
+                *path = directory.join(path.as_str()).to_string_lossy().into_owned();
+            }
+        };
+        for media in &mut self.media {
+            resolve(&mut media.path);
+        }
+        let effects = self
+            .sequences
+            .iter_mut()
+            .flat_map(|sequence| sequence.tracks.iter_mut())
+            .flat_map(|track| track.clips.iter_mut())
+            .flat_map(|clip| clip.effects.iter_mut());
+        for effect in effects {
+            let Some(fx) = catalog.fx(effect.fx.as_str()) else {
+                continue;
+            };
+            for (name, param) in &mut effect.params {
+                let file = fx
+                    .find(name)
+                    .is_some_and(|def| matches!(def.ty, ParamType::File(_)));
+                if let (true, Param::Static(Value::Text(path))) = (file, param) {
+                    resolve(path);
+                }
+            }
+        }
+    }
+
     pub fn sequence(&self, id: &str) -> Option<&Sequence> {
         self.sequences.iter().find(|sequence| sequence.id == id)
     }
@@ -596,6 +630,58 @@ mod tests {
             frames(10),
             frames(48),
         )
+    }
+
+    #[test]
+    fn relative_media_and_effect_files_resolve_against_the_project() {
+        let text = |value: &str| Param::Static(Value::Text(value.into()));
+        let mut clip = media_clip("1");
+        clip.effects = vec![
+            Effect {
+                fx: Id::new("utility.applylut").unwrap(),
+                enabled: true,
+                params: [("lut".to_owned(), text("looks/warm.cube"))].into(),
+            },
+            // A look's name is text, not a file.
+            Effect {
+                fx: Id::new("color.ociolook").unwrap(),
+                enabled: true,
+                params: [("looks".to_owned(), text("warm"))].into(),
+            },
+        ];
+        let mut track = Track::new(Id::new("V1").unwrap(), TrackKind::Video);
+        track.clips.push(clip);
+        let mut project = Project::new("p");
+        project.media.push(Media {
+            id: Id::new("m1").unwrap(),
+            path: "clips/a.mp4".into(),
+            rate: Rate::FPS_24,
+            drop_frame: false,
+            start: Time::ZERO,
+            duration: frames(240),
+            video: None,
+            audio: None,
+            reel: None,
+        });
+        project.sequences.push(Sequence {
+            id: Id::new("s1").unwrap(),
+            name: "s1".into(),
+            rate: Rate::FPS_24,
+            drop_frame: false,
+            width: 320,
+            height: 180,
+            sample_rate: 48_000,
+            start: Time::ZERO,
+            tracks: vec![track],
+            markers: Vec::new(),
+        });
+        let directory = Path::new("/projects/p");
+        project.resolve_paths(Catalog::builtin(), directory);
+        let joined = |path: &str| directory.join(path).to_string_lossy().into_owned();
+        assert_eq!(project.media[0].path, joined("clips/a.mp4"));
+        let effects = &project.sequences[0].tracks[0].clips[0].effects;
+        assert_eq!(effects[0].params["lut"], text(&joined("looks/warm.cube")));
+        assert_eq!(effects[1].params["looks"], text("warm"));
     }
 
     #[test]

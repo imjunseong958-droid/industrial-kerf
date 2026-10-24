@@ -274,8 +274,10 @@ fn param_def_json(def: &ParamDef) -> Json {
     if let Some(unit) = &def.unit {
         value["unit"] = json!(unit);
     }
-    if let ParamType::Enum(options) = &def.ty {
-        value["options"] = json!(options);
+    match &def.ty {
+        ParamType::Enum(options) => value["options"] = json!(options),
+        ParamType::File(extensions) => value["extensions"] = json!(extensions),
+        _ => {}
     }
     value
 }

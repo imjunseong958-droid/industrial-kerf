@@ -808,6 +808,16 @@ private slots:
         QVERIFY(window.m_effectControls->m_propertyEditors.value("gain")->toolTip().contains("dB"));
         window.m_effectControls->propertyEdited("gain", -6.0);
         QCOMPARE(set().value("props").toObject().value("gain").toDouble(), -6.0);
+        // A file parameter is a line of text with a button that chooses the file.
+        QWidget *file = window.m_effectControls->valueEditor(
+            QJsonObject{{"name", "lut"}, {"type", "file"}, {"extensions", QJsonArray{"cube"}}, {"default", ""}},
+            QStringLiteral("LUT"), [](const QJsonValue &) {});
+        auto *fileLine = qobject_cast<QLineEdit *>(file);
+        QVERIFY(fileLine);
+        QCOMPARE(fileLine->actions().size(), 1);
+        window.m_effectControls->setPropertyValue(file, QStringLiteral("looks/warm.cube"));
+        QCOMPARE(fileLine->text(), QStringLiteral("looks/warm.cube"));
+        delete file;
     }
 
     void timelineKeepsSeekSelectMoveAndTrimCoordinates() {
