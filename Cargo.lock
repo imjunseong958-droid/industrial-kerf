@@ -1556,8 +1556,11 @@ name = "kerf-fx"
 version = "0.1.0"
 dependencies = [
  "effectcraft-effects",
+ "effectcraft-geom",
  "effectcraft-keyframe",
+ "effectcraft-path",
  "effectcraft-project",
+ "effectcraft-raster",
  "kerf-model",
 ]
 

@@ -51,8 +51,8 @@ use effectcraft_project::{
 use effectcraft_time::{FrameRate, Tick, TICKS_PER_SECOND};
 use kerf_core::program::{canvas, program_sequence};
 use kerf_model::{
-    Catalog, Clip, Content, Domain, Engine, FxKind, Id, Mask, MaskShape, Param, ParamType, Project,
-    Rate, Rgba, Sequence, Time, Track, TrackKind, Transition, Value,
+    Catalog, Clip, Content, Domain, Engine, FxKind, Id, Mask, Param, ParamType, Project, Rate,
+    Rgba, Sequence, Time, Track, TrackKind, Transition, Value,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -1306,21 +1306,10 @@ impl<'a> Builder<'a> {
     /// a crop's mask.
     fn masks(&mut self, layer: &mut Layer, clip: &Clip, frames: &Frames, size: (u32, u32)) {
         let (w, h) = (f64::from(size.0), f64::from(size.1));
-        let at = |x: f64, y: f64| [x * w, y * h];
         let mut groups = Vec::new();
         for mask in &clip.masks {
-            let path = match &mask.shape {
-                MaskShape::Rect([l, t, r, b]) => {
-                    ShapePath::rect(at((l + r) / 2.0, (t + b) / 2.0), (r - l) * w, (b - t) * h)
-                }
-                MaskShape::Ellipse([x, y, rx, ry]) => {
-                    ShapePath::ellipse(at(*x, *y), 2.0 * rx * w, 2.0 * ry * h)
-                }
-                MaskShape::Polygon { points, closed } => {
-                    let points: Vec<[f64; 2]> = points.iter().map(|[x, y]| at(*x, *y)).collect();
-                    ShapePath::polygon(&points, *closed)
-                }
-            };
+            // Live playback cuts the picture along the same outline.
+            let path = kerf_fx::outline(&mask.shape, w, h);
             let mode = match mask.mode {
                 kerf_model::MaskMode::Add => MaskMode::Add,
                 kerf_model::MaskMode::Subtract => MaskMode::Subtract,

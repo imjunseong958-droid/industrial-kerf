@@ -5,7 +5,8 @@
 //! choices, switches, colors, and points, which become an `_x` and a `_y`
 //! number across the picture) under its own ids: the catalog lists them
 //! from a table this crate generates (`kerf-model/src/raster_effects.tsv`),
-//! and [`RasterStack`] runs a clip's raster effects on its source frames.
+//! and [`RasterStack`] runs a clip's raster effects on its source frames,
+//! after its masks cut them.
 //!
 //! EffectCraft's transitions are effects too: a layer disappears as its
 //! `completion` goes from 0 to 100. Kerf carries them as transitions and
@@ -20,6 +21,9 @@ use std::fmt::Write as _;
 use std::sync::OnceLock;
 
 mod guide;
+mod masks;
+
+pub use masks::{cuts, outline};
 
 /// The version of what the EffectCraft crates in `effectcraft/` draw, in
 /// the cache key of every baked and prerendered file. Bump it with a change
@@ -312,6 +316,8 @@ pub fn catalog_table() -> String {
 /// A clip's raster effects, ready to run on its source frames.
 pub struct RasterStack {
     steps: Vec<Step>,
+    /// The clip's masks, which cut each frame before the effects run.
+    cut: masks::Cut,
     layer_size: [f64; 2],
 }
 
@@ -345,14 +351,23 @@ impl RasterStack {
                 })
             })
             .collect::<Result<_, String>>()?;
+        let layer_size = [f64::from(width), f64::from(height)];
         Ok(Self {
             steps,
-            layer_size: [f64::from(width), f64::from(height)],
+            cut: masks::Cut::new(&[], layer_size),
+            layer_size,
         })
     }
 
+    /// Cut each frame with `masks` first, as a layer's masks cut it before
+    /// its effects run. Masks that cut nothing are left out.
+    pub fn with_masks(mut self, masks: &[kerf_model::Mask]) -> Self {
+        self.cut = masks::Cut::new(masks, self.layer_size);
+        self
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.steps.is_empty()
+        self.steps.is_empty() && self.cut.is_empty()
     }
 
     /// Run the stack on one frame of straight 8-bit RGBA at clip time `at`.
@@ -371,6 +386,7 @@ impl RasterStack {
                 alpha,
             ];
         }
+        self.cut.apply(&mut image, scale, at);
         let mut buf = Buf {
             img: image,
             offset: [0.0; 2],

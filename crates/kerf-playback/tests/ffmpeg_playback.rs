@@ -337,3 +337,111 @@ fn composited_programs_play_and_seek_frame_exactly() {
     }
     assert!(times.windows(2).all(|pair| pair[0] < pair[1]), "{times:?}");
 }
+
+#[test]
+fn masked_clips_play_live_as_the_compositor_draws_them() {
+    let binary = ffmpeg_binary();
+    if !ffmpeg_available(&binary) {
+        eprintln!("skipping playback integration test: ffmpeg is unavailable");
+        return;
+    }
+    let directory = tempdir().expect("temporary directory");
+    let source = directory.path().join("pattern.mp4");
+    let status = Command::new(&binary)
+        .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i"])
+        .arg("testsrc2=size=96x54:rate=10:d=1")
+        .args(["-c:v", "libx264", "-qp", "0", "-pix_fmt", "yuv444p", "-y"])
+        .arg(&source)
+        .status()
+        .expect("run ffmpeg fixture");
+    assert!(status.success(), "fixture ffmpeg process failed");
+    let project = |masks: &str, effects: &str| {
+        let text = format!(
+            "kerf 1\nproject name=\"Live masks\"\n\
+             media source-a path=\"{}\" rate=10 dur=10f video=96x54\n\
+             sequence s1 rate=10 size=96x54 audio=48000\n\
+             \x20 track video-1 video\n\
+             \x20   clip clip-a media=source-a src=0f at=0f dur=10f\n{masks}{effects}",
+            source.display()
+        );
+        kerf_lang::parse_document(&text, kerf_model::Catalog::builtin())
+            .unwrap_or_else(|errors| panic!("{errors:?}"))
+            .project
+    };
+    let at = kerf_model::Time::from_seconds(0.5).expect("time");
+    let drawn = |project: &kerf_model::Project, scale: f64| {
+        kerf_compose::Compositor::new(
+            project,
+            kerf_model::Catalog::builtin(),
+            &kerf_compose::ComposeOptions::default(),
+        )
+        .expect("compositor")
+        .frame(at, scale)
+    };
+    // The largest and the mean difference between two frames' colors.
+    let difference = |left: &[u8], right: &[u8]| {
+        let (mut most, mut total) = (0u8, 0u64);
+        for (left, right) in left.chunks_exact(4).zip(right.chunks_exact(4)) {
+            for channel in 0..3 {
+                let difference = left[channel].abs_diff(right[channel]);
+                most = most.max(difference);
+                total += u64::from(difference);
+            }
+        }
+        (most, total as f64 / (left.len() / 4 * 3) as f64)
+    };
+    // Every shape, mode, and setting, an animated feather, and an effect
+    // after the masks.
+    for (masks, effects) in [
+        (
+            "\x20     mask k1 ellipse=0.45,0.5,0.35,0.42 feather={0f:2 10f:12} expansion=3\n\
+             \x20     mask k2 points=\"0.1,0.1 0.9,0.2 0.6,0.9\" mode=subtract opacity=0.7\n\
+             \x20     mask k3 rect=0.2,0.1,0.95,0.8 mode=intersect inverted=true feather=4\n",
+            "",
+        ),
+        (
+            "\x20     mask k1 rect=0.15,0.2,0.8,0.85 mode=subtract expansion=-2 feather=6\n\
+             \x20     mask k2 ellipse=0.5,0.5,0.2,0.3 opacity=0.6\n\
+             \x20     mask k3 points=\"0.5,0 1,1 0,1\" mode=none\n",
+            "\x20     fx channel.invert\n",
+        ),
+    ] {
+        let masked = project(masks, effects);
+        let plan = kerf_playback::preview_plan(&masked);
+        assert_eq!(
+            plan.mode,
+            kerf_core::preview::PreviewMode::NativeExact,
+            "{:?}",
+            plan.reasons
+        );
+        // The masks clear a good part of the picture.
+        let whole = drawn(&project("", effects), 1.0);
+        let cut = whole
+            .rgba
+            .chunks_exact(4)
+            .zip(drawn(&masked, 1.0).rgba.chunks_exact(4))
+            .filter(|(whole, masked)| (0..3).any(|c| whole[c].abs_diff(masked[c]) > 32))
+            .count();
+        assert!(cut > 96 * 54 / 5, "{effects:?}: {cut}");
+        // Live playback clears the same part, edges and feathers included,
+        // at full size and at the half a smaller viewer plays.
+        for (width, height, scale) in [(96, 54, 1.0), (48, 27, 0.5)] {
+            let session = PlaybackSession::open(
+                masked.clone(),
+                PlaybackConfig::default()
+                    .with_audio_enabled(false)
+                    .with_frame_size(width, height),
+            )
+            .expect("open playback session");
+            session.seek(0.5).expect("seek");
+            let live = next_frame(&session, |time| (time - 0.5).abs() < 1e-6);
+            let drawn = drawn(&masked, scale);
+            assert_eq!((live.width, live.height), (drawn.width, drawn.height));
+            let (most, mean) = difference(&live.pixels, &drawn.rgba);
+            assert!(
+                most <= 4 && mean < 0.25,
+                "{effects:?} at {width}x{height}: most {most}, mean {mean}"
+            );
+        }
+    }
+}
