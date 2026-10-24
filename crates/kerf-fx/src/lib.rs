@@ -33,28 +33,39 @@ const TRANSITIONS: &str = "Transition";
 /// (gone). Kerf animates it across the transition; it is not listed.
 pub const COMPLETION: &str = "completion";
 
-/// Effects that work from tracking or analysis data, painted strokes, or
-/// neighbouring frames, which a clip's own pixels do not give.
+/// Effects Kerf cannot feed yet.
 const NEEDS_MORE: &[&str] = &[
-    "ec.blur.camerashakedeblur",
+    // An analysis made ahead of rendering.
+    "ec.distort.warpstabilizer",
+    // Pins, meshes, or painted strokes, which the editor cannot draw yet.
     "ec.distort.liquify",
     "ec.distort.meshwarp",
     "ec.distort.puppet",
     "ec.distort.reshape",
-    "ec.distort.rollingshutterrepair",
-    "ec.distort.warpstabilizer",
-    "ec.matte.refinesoft",
     "ec.matte.rotobrush",
-    "ec.perspective.cameratracker",
-    "ec.utility.facemeasurements",
-    // These read a face or segmentation model, or a reference frame.
-    "ec.color.colorstabilizer",
+    // A segmentation model and the strokes that prompt it.
     "ec.matte.objectmatte",
-    "ec.utility.facetrackpoints",
-    // These draw a track's sound, which the compositor does not decode.
+    // A track's sound, which the compositor does not decode.
     "ec.generate.audiospectrum",
     "ec.generate.audiowaveform",
 ];
+
+/// Carried effects outside the Time category that read the clip's other
+/// frames: they fix what changes between neighbouring frames, or match a
+/// reference frame.
+const READS_OTHER_FRAMES: &[&str] = &[
+    "ec.blur.camerashakedeblur",
+    "ec.color.colorstabilizer",
+    "ec.distort.rollingshutterrepair",
+    "ec.matte.refinesoft",
+];
+
+/// Whether the raster effect `id` reads the clip's other frames, which only
+/// the compositor gives it; on one picture alone it passes that picture
+/// through.
+pub fn reads_other_frames(id: &str) -> bool {
+    spec(id).is_some_and(|spec| spec.category == "Time" || READS_OTHER_FRAMES.contains(&spec.id))
+}
 
 /// Effects named after other products: Kerf's id and name for each.
 const RENAMED: &[(&str, (&str, &str))] = &[

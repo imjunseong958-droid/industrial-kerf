@@ -233,6 +233,29 @@ fn masks_cut_the_picture_and_effects_draw_along_them() {
 }
 
 #[test]
+fn color_stabilizer_holds_the_reference_frame() {
+    // A dark grey solid inverted more and more, so it brightens over time.
+    let brightening = |fx: &str| {
+        format!(
+            "{SEQUENCE}\
+             \x20 track V1 video\n\
+             \x20   clip g1 gen=solid at=0f dur=24f\n\
+             \x20     set color=#404040\n\
+             \x20     fx channel.invert blend={{0f:100 23f:0}}\n\
+             {fx}"
+        )
+    };
+    let plain = i32::from(pixel(&frame(&brightening(""), 12, false), 50, 50)[0]);
+    let held = brightening("\x20     fx color.colorstabilizer referenceFrame=0\n");
+    let held = i32::from(pixel(&frame(&held, 12, false), 50, 50)[0]);
+    // Back toward the first frame's grey (64).
+    assert!(
+        (held - 64).abs() * 2 < (plain - 64).abs(),
+        "{held} vs {plain}"
+    );
+}
+
+#[test]
 fn unsupported_things_are_named() {
     let body = format!(
         "{SEQUENCE}\

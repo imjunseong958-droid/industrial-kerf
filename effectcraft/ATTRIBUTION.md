@@ -23,25 +23,18 @@ with full details.
 ## Trained models (not bundled)
 
 The repository contains no model weights, and Kerf does not download them. `crates/segment` can
-read these models with its own Rust implementation and is not affiliated with or endorsed by their
+read this model with its own Rust implementation and is not affiliated with or endorsed by its
 authors.
 
 | Model | Authors | Source | Licence |
 |---|---|---|---|
 | MobileSAM (`mobile_sam.pt`) | Chaoning Zhang et al., building on Meta AI's Segment Anything and Microsoft's TinyViT | https://github.com/ChaoningZhang/MobileSAM | Apache-2.0 |
-| MediaPipe Face Landmarker (`face_landmarker.task`: BlazeFace short-range detector, Face Mesh V2, blendshapes) | Google LLC | https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker (model cards: https://storage.googleapis.com/mediapipe-assets/MediaPipe%20BlazeFace%20Model%20Card%20(Short%20Range).pdf, https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Face%20Mesh%20V2.pdf) | Apache-2.0 |
 
 ## Formats and parameters from other open-source projects
 
-Written in Rust for EffectCraft; no code is copied. They follow published specifications and
-configuration from these Apache-2.0 projects:
+Written in Rust for EffectCraft; no code is copied. It follows published architectures from
+these Apache-2.0 projects:
 
-- `crates/segment/src/tflite.rs` reads TensorFlow Lite files using the field layout of TensorFlow
-  Lite's `schema.fbs` (The TensorFlow Authors, https://github.com/tensorflow/tensorflow,
-  Apache-2.0).
-- `crates/segment/src/mediapipe.rs` follows MediaPipe's published face landmarker graph: the SSD
-  anchor layout, detection decoding, crop sizes and the face-mesh point indices it uses (Google
-  LLC, https://github.com/google-ai-edge/mediapipe, Apache-2.0).
 - `crates/segment/src/mobilesam.rs` follows the MobileSAM, TinyViT and Segment Anything
   architectures and their Apache-2.0 reference code.
 

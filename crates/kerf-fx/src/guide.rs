@@ -5,6 +5,10 @@
 pub(crate) const GUIDE: &[(&str, &str)] = &[
     // Blur & Sharpen
     (
+        "blur.camerashakedeblur",
+        "Swaps frames blurred by camera shake for sharper neighbouring frames; handheld shots with smeared frames.",
+    ),
+    (
         "blur.cameralens",
         "Lens-shaped defocus with bokeh, shaped by a depth map from another track (blurMap/blurMapLayer=V2); realistic focus falloff and rack focus.",
     ),
@@ -114,6 +118,10 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Composites the picture over a solid color; flat backgrounds and fills.",
     ),
     // Color Correction
+    (
+        "color.colorstabilizer",
+        "Holds brightness, levels, or curves steady against a reference frame (referenceFrame in seconds); flicker from changing light or auto exposure.",
+    ),
     (
         "color.colorlink",
         "Tints the clip with the average color of another track (sourceLayer=V2); matching a shot's color to a background plate.",
@@ -271,6 +279,10 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Limits luma and chroma to the legal range; delivery compliance.",
     ),
     // Distort
+    (
+        "distort.rollingshutterrepair",
+        "Straightens the skew and wobble a rolling shutter leaves, from the motion between frames; fast pans on phones and DSLRs.",
+    ),
     (
         "distort.blobbylize",
         "Melts the picture into glossy blobs shaped by another track (blobLayer=V2); liquid and gooey looks.",
@@ -593,6 +605,10 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Makes black transparent; lay light leaks, fire, and sparks over footage.",
     ),
     // Matte
+    (
+        "matte.refinesoft",
+        "Refines a key's soft edges, such as hair and motion blur, and steadies edges that chatter between frames; after a key.",
+    ),
     (
         "matte.mattechoker",
         "Chokes or spreads a matte; tighter key edges.",

@@ -10,7 +10,6 @@
 
 mod blur2;
 mod blur3;
-pub mod camera_tracker;
 mod card3d;
 pub mod catalog;
 mod channel;
@@ -22,7 +21,6 @@ mod distort;
 mod distort2;
 mod distort3;
 pub mod distort4;
-pub mod face_track;
 pub mod fidelity;
 mod generate;
 mod generate2;
@@ -504,8 +502,6 @@ pub fn registry() -> &'static [EffectSpec] {
         v.extend(time_fx::specs());
         v.extend(puppet::specs());
         v.extend(warp_stab::specs());
-        v.extend(camera_tracker::specs());
-        v.extend(face_track::specs());
         v.extend(roto::specs());
         v.extend(object_matte::specs());
         v.sort_by(|a, b| a.category.cmp(b.category).then(a.name.cmp(b.name)));
@@ -1168,8 +1164,6 @@ pub const TIME_DEPENDENT: &[&str] = &[
     "ec.distort.rollingshutterrepair",
     // Each frame gets its own stabilizing warp.
     warp_stab::ID,
-    // Render Track Points draws each frame's solved points.
-    camera_tracker::ID,
     // Each frame has its own segmentation.
     roto::ID,
     object_matte::ID,

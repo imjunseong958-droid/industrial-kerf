@@ -367,10 +367,9 @@ fn raster(effect: &Effect) -> bool {
         .is_some_and(|fx| fx.engine == Engine::Raster)
 }
 
-/// Raster effect categories playback cannot run on the one picture it holds:
-/// keys and mattes make parts of it transparent, and time effects read the
-/// clip's other frames.
-const NOT_LIVE: &[&str] = &["Keying", "Matte", "Time"];
+/// Raster effect categories playback cannot run on the one picture it holds,
+/// as keys and mattes make parts of it transparent.
+const NOT_LIVE: &[&str] = &["Keying", "Matte"];
 
 /// Lays the clips of a sequence, and of the sequences nested in it, on the
 /// program timeline.
@@ -649,6 +648,7 @@ impl NativeCheck<'_> {
                     });
                     fx.engine == Engine::Raster
                         && !NOT_LIVE.contains(&fx.category.as_str())
+                        && !kerf_fx::reads_other_frames(effect.fx.as_str())
                         && !reads_a_track
                 })
         };
@@ -876,6 +876,11 @@ mod tests {
             "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx channel.invert\n",
         );
         assert_eq!(preview_plan(&inverted).mode, PreviewMode::NativeExact);
+        // So does a fix that compares neighbouring frames.
+        let steadied = project(
+            "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx color.colorstabilizer\n",
+        );
+        assert_eq!(preview_plan(&steadied).mode, PreviewMode::Composited);
         // So does a mask.
         let masked = project(
             "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      mask k1 rect=0.1,0.1,0.9,0.9\n",

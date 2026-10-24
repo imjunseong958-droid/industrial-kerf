@@ -41,6 +41,15 @@ effect	blur.cameralens	Blur & Sharpen	Camera Lens Blur	Lens-shaped defocus with 
 	number	highlight/highlightSaturation	100	0..100		Saturation
 	bool	repeatEdge	false			Repeat Edge Pixels
 	bool	useLinear	false			Use Linear Working Space
+effect	blur.camerashakedeblur	Blur & Sharpen	Camera-Shake Deblur	Swaps frames blurred by camera shake for sharper neighbouring frames; handheld shots with smeared frames.
+	number	blurDuration	2	1..10		Blur Duration
+	enum	deblurMethod	high-quality-slower	high-quality-slower|standard		Deblur Method
+	number	strength	100	100..200		Strength
+	number	shakeSensitivity	50	0..100		Shake Sensitivity
+	number	searchRange	8	0..64		Search Range
+	number	patchSize	32	8..256		Patch Size
+	number	threshold	20	0..500		Threshold
+	bool	showBlurryFrames	false			Show Blurry Frames
 effect	blur.channel	Blur & Sharpen	Channel Blur	Blurs red, green, blue, or alpha separately; color fringing and glitchy softness.
 	number	redBlurriness	0	0..3000		Red Blurriness
 	number	greenBlurriness	0	0..3000		Green Blurriness
@@ -285,6 +294,16 @@ effect	color.colorlink	Color Correction	Color Link	Tints the clip with the avera
 	bool	stencilOriginalAlpha	true			Stencil Original Alpha
 	number	opacity	100	0..100		Opacity
 	enum	blendingMode	normal	normal|add|multiply|screen|overlay|soft-light|hard-light|darken|lighten|difference|hue|color|luminosity		Blending Mode
+effect	color.colorstabilizer	Color Correction	Color Stabilizer	Holds brightness, levels, or curves steady against a reference frame (referenceFrame in seconds); flicker from changing light or auto exposure.
+	number	referenceFrame	0	-100000..100000		Reference Frame (s)
+	enum	stabilize	brightness	brightness|levels|curves		Stabilize
+	number	blackPoint_x	0.25		picture widths	Black Point (0 left, 1 right)
+	number	blackPoint_y	0.75		picture heights	Black Point (0 top, 1 bottom)
+	number	midPoint_x	0.5		picture widths	Mid Point (0 left, 1 right)
+	number	midPoint_y	0.5		picture heights	Mid Point (0 top, 1 bottom)
+	number	whitePoint_x	0.75		picture widths	White Point (0 left, 1 right)
+	number	whitePoint_y	0.25		picture heights	White Point (0 top, 1 bottom)
+	number	sampleSize	5	1..100		Sample Size
 effect	color.colorama	Color Correction	Colorama	Cycles colors through a palette by luminance, optionally phased or masked by other tracks (inputPhase/addPhase=V2); psychedelic and thermal looks.
 	enum	inputPhase/mode	intensity	intensity|red|green|blue|hue|lightness|saturation|value|alpha|zero		Get Phase From
 	track	inputPhase/addPhase				Add Phase
@@ -866,6 +885,12 @@ effect	distort.ripple	Distort	Ripple	Concentric water ripples; dream sequences a
 	number	waveWidth	20	1..1000		Wave Width
 	number	waveHeight	10	0..400		Wave Height
 	number	phase	0		degrees	Ripple Phase
+effect	distort.rollingshutterrepair	Distort	Rolling Shutter Repair	Straightens the skew and wobble a rolling shutter leaves, from the motion between frames; fast pans on phones and DSLRs.
+	number	rollingShutterRate	50	0..100		Rolling Shutter Rate
+	enum	scanDirection	top-bottom	top-bottom|bottom-top|left-right|right-left		Scan Direction
+	enum	advanced/method	warp	warp|pixel-motion		Method
+	bool	advanced/detailedAnalysis	false			Detailed Analysis
+	number	advanced/pixelMotionDetail	20	0..100		Pixel Motion Detail
 effect	distort.smear	Distort	Smear	Smears an area of the picture like liquid; warped highlights.
 	enum	sourceMask	none	none|mask-1|mask-2|mask-3|mask-4|mask-5|mask-6|mask-7|mask-8		Source Mask
 	enum	boundaryMask	none	none|mask-1|mask-2|mask-3|mask-4|mask-5|mask-6|mask-7|mask-8		Boundary Mask
@@ -1662,6 +1687,25 @@ effect	matte.refinehard	Matte	Refine Hard Matte	Refines hard matte edges; clean 
 	bool	viewDecontaminationMap	false			View Decontamination Map
 	number	radius	3	1..200		Additional Edge Radius
 	number	alphaContrast	300	100..1000		Alpha Contrast
+	bool	invert	false			Invert
+effect	matte.refinesoft	Matte	Refine Soft Matte	Refines a key's soft edges, such as hair and motion blur, and steadies edges that chatter between frames; after a key.
+	bool	calculateEdgeDetails	true			Calculate Edge Details
+	number	radius	10	1..200		Additional Edge Radius
+	bool	viewEdgeRegion	false			View Edge Region
+	number	smooth	0	0..100		Smooth
+	number	feather	10	0..100		Feather
+	number	contrast	0	0..100		Contrast
+	number	shiftEdge	0	-100..100		Shift Edge
+	number	reduceChatter	0	0..100		Reduce Chatter
+	bool	useMotionBlur	false			Use Motion Blur
+	number	motionBlur/motionBlurSamples	16	1..64		Motion Blur Samples
+	number	motionBlur/shutterAngle	180	0..720		Shutter Angle
+	bool	motionBlur/higherQuality	false			Higher Quality
+	bool	decontaminate	true			Decontaminate Edge Colors
+	number	decontamination/decontaminationAmount	100	0..100		Decontamination Amount
+	bool	decontamination/extendWhereSmoothed	true			Extend Where Smoothed
+	number	decontamination/increaseDecontaminationRadius	0	0..100		Increase Decontamination Radius
+	bool	decontamination/viewDecontaminationMap	false			View Decontamination Map
 	bool	invert	false			Invert
 effect	matte.simplechoker	Matte	Simple Choker	Shrinks or grows the matte edge; quick edge cleanup.
 	enum	view	final-output	final-output|matte		View
