@@ -6,8 +6,9 @@ from [storytold/effectcraft](https://github.com/storytold/effectcraft) at
 `9581b53c3f8945683252af0eb5fac79e0e43aed4` (Release 0.16.0) and are developed
 here from then on; Kerf does not follow upstream. Kerf has no use for
 EffectCraft's audio, expression-control, paint, 3D-channel, and obsolete
-effects, nor for upgrading saved EffectCraft projects, so they are not
-here.
+effects, its face tracking and 3D Camera Tracker (and the camera solver and
+face model behind them), nor for upgrading saved EffectCraft projects, so
+they are not here.
 
 They are workspace members, so `cargo check` and `cargo test` cover them. They
 keep EffectCraft's edition (2024), lints (in the root `Cargo.toml`),

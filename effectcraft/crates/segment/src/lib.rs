@@ -1,28 +1,21 @@
-//! Trained models for Roto Brush and face tracking, each kind behind one swappable interface.
+//! Trained models for Roto Brush, behind one swappable interface.
 //!
 //! - [`MaskModel`]: what Roto Brush asks of a model, the foreground probability of each pixel of a
 //!   frame given prompts (foreground / background points from the strokes, a box, a prior mask).
 //!   Anything implementing it can be plugged in; the classical graph-cut segmenter in
 //!   `effectcraft-track` stays the built-in fallback when no model is chosen.
-//! - [`face::FaceModel`]: what face tracking asks of a model: find a face in a region, follow it
-//!   from frame to frame. The classical face tracker stays the built-in fallback.
 //! - [`MODELS`]: the registry. Every entry is open source under a licence compatible with
 //!   EffectCraft's (MIT OR Apache-2.0), with its authors, source, size and SHA-256. Weights are
 //!   never bundled: they are fetched on demand (or installed from a file), verified ([`sha256`])
 //!   and loaded by [`load`].
-//! - [`pt`]: a PyTorch checkpoint reader; [`tflite`]: a TensorFlow Lite reader and interpreter;
-//!   so official weights load as published.
-//! - [`mobilesam`]: MobileSAM (Apache-2.0) and [`mediapipe`]: MediaPipe Face Landmarker
-//!   (Apache-2.0), in plain Rust ([`nn`] kernels on rayon).
+//! - [`pt`]: a PyTorch checkpoint reader, so official weights load as published.
+//! - [`mobilesam`]: MobileSAM (Apache-2.0), in plain Rust ([`nn`] kernels on rayon).
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::todo, clippy::unreachable)]
 
-pub mod face;
-pub mod mediapipe;
 pub mod mobilesam;
 pub mod nn;
 pub mod pt;
-pub mod tflite;
 
 use std::sync::Arc;
 
@@ -52,8 +45,6 @@ pub trait MaskModel: Send + Sync {
 pub enum Task {
     /// Roto Brush ([`MaskModel`]).
     Mask,
-    /// Face tracking ([`face::FaceModel`]).
-    Face,
 }
 
 /// A model in the registry: what it is, who made it, its licence and where its weights come from.
@@ -96,26 +87,11 @@ pub const MOBILE_SAM: ModelInfo = ModelInfo {
     sha256: "6dbb90523a35330fedd7f1d3dfc66f995213d81b29a5ca8108dbcdd4e37d6c2f",
 };
 
-pub const FACE_LANDMARKER: ModelInfo = ModelInfo {
-    id: "mediapipe-face",
-    task: Task::Face,
-    name: "MediaPipe Face Landmarker",
-    description: "Google's BlazeFace detector and 478-point Face Mesh V2. Follows faces turned to the side, partly covered or in difficult light, where the classic tracker loses them.",
-    authors: "Google LLC (MediaPipe)",
-    licence: "Apache-2.0",
-    licence_url: "https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Face%20Mesh%20V2.pdf",
-    homepage: "https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker",
-    url: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-    file_name: "face_landmarker.task",
-    size: 3_758_596,
-    sha256: "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
-};
-
 /// The trained models, besides the built-in classical engines.
-pub const MODELS: &[ModelInfo] = &[MOBILE_SAM, FACE_LANDMARKER];
+pub const MODELS: &[ModelInfo] = &[MOBILE_SAM];
 
-/// The id of the built-in classical engines (graph cut segmenter, shape-model face tracker): no
-/// weights, always available.
+/// The id of the built-in classical engine (the graph cut segmenter): no weights, always
+/// available.
 pub const CLASSICAL: &str = "classical";
 
 pub fn info(id: &str) -> Option<&'static ModelInfo> {
@@ -131,7 +107,6 @@ pub fn models(task: Task) -> impl Iterator<Item = &'static ModelInfo> {
 #[derive(Clone)]
 pub enum Loaded {
     Mask(Arc<dyn MaskModel>),
-    Face(Arc<dyn face::FaceModel>),
 }
 
 /// Check a weights file against the registry and build the model.
@@ -149,7 +124,6 @@ pub fn load(id: &str, bytes: &[u8]) -> Result<Loaded> {
             let w = pt::read(bytes)?;
             Ok(Loaded::Mask(Arc::new(Sam { net: mobilesam::MobileSam::from_weights(&w)? })))
         }
-        "mediapipe-face" => Ok(Loaded::Face(Arc::new(mediapipe::FaceLandmarker::from_task(bytes)?))),
         _ => Err(format!("no loader for `{id}`")),
     }
 }
@@ -263,8 +237,7 @@ mod tests {
             assert!(m.url.starts_with("https://") && m.licence_url.starts_with("https://") && m.homepage.starts_with("https://"));
             assert!(!m.authors.is_empty() && notice(m).contains(m.authors));
         }
-        assert_eq!(models(Task::Face).map(|m| m.id).collect::<Vec<_>>(), ["mediapipe-face"]);
-        assert!(load("mediapipe-face", b"nope").err().is_some_and(|e| e.contains("does not match")));
+        assert_eq!(models(Task::Mask).map(|m| m.id).collect::<Vec<_>>(), ["mobilesam"]);
         // A file that isn't the published one is refused before anything is parsed.
         assert!(load("mobilesam", b"not the weights").err().is_some_and(|e| e.contains("does not match")));
         assert!(load("nope", b"").is_err());

@@ -21,10 +21,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod camtrack;
-pub mod face;
 pub mod fit;
 pub mod klt;
-pub mod mask;
 pub mod plane;
 pub mod roto;
 pub mod solve;
