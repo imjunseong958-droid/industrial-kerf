@@ -2651,8 +2651,10 @@ void MainWindow::updateInspector() {
     }
     m_effects->setClip(m_selectedClip, selectedTrackType() == QStringLiteral("video") &&
                                            clip.value(QStringLiteral("kind")).toString() == QStringLiteral("media"));
-    // Effects on the clip may read the other picture tracks.
+    // Effects on the clip may read the other picture tracks and draw the
+    // sound tracks.
     QStringList pictureTracks;
+    QStringList soundTracks;
     for (const QJsonValue &trackValue : m_project.value(QStringLiteral("tracks")).toArray()) {
         const QJsonObject track = trackValue.toObject();
         bool holdsClip = false;
@@ -2660,8 +2662,11 @@ void MainWindow::updateInspector() {
             holdsClip |= clipValue.toObject().value(QStringLiteral("id")).toString() == m_selectedClip;
         if (track.value(QStringLiteral("type")).toString() == QStringLiteral("video") && !holdsClip)
             pictureTracks << track.value(QStringLiteral("id")).toString();
+        if (track.value(QStringLiteral("type")).toString() == QStringLiteral("audio"))
+            soundTracks << track.value(QStringLiteral("id")).toString();
     }
     m_effectControls->setPictureTracks(pictureTracks);
+    m_effectControls->setSoundTracks(soundTracks);
     // A generator's parameters, then the properties of the clip's track type.
     QJsonArray defs = m_project.value(QStringLiteral("generators")).toObject().value(clip.value(QStringLiteral("fx")).toString()).toArray();
     for (const QJsonValue &def : m_project.value(QStringLiteral("properties")).toObject().value(selectedTrackType()).toArray())

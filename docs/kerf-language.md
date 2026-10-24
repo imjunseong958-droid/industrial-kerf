@@ -19,7 +19,9 @@ an OpenColorIO config) is a quoted path, relative to the project, such as
 another picture track of the sequence, whose picture the effect reads even
 while the track is hidden, as a matte or a displacement map does
 (`fx c1 add channel.setmatte takeMatteFromLayer=V2`); an effect cannot read
-its own track, and tracks cannot read each other in a loop. Raster effects
+its own track, and tracks cannot read each other in a loop. A sound
+parameter names a sound track whose sound the effect draws
+(`fx c1 add generate.audiowaveform audioLayer=A1`). Raster effects
 run on the clip's own picture before it is placed, so they apply before the
 clip's other effects; a raster transition's progress follows the
 transition.

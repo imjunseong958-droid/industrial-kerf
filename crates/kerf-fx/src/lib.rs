@@ -43,9 +43,6 @@ const NEEDS_MORE: &[&str] = &[
     "ec.matte.rotobrush",
     // A segmentation model and the strokes that prompt it.
     "ec.matte.objectmatte",
-    // A track's sound, which the compositor does not decode.
-    "ec.generate.audiospectrum",
-    "ec.generate.audiowaveform",
 ];
 
 /// Carried effects outside the Time category that read the clip's other
@@ -66,6 +63,10 @@ const READS_OTHER_FRAMES: &[&str] = &[
 pub fn reads_other_frames(id: &str) -> bool {
     spec(id).is_some_and(|spec| spec.category == "Time" || READS_OTHER_FRAMES.contains(&spec.id))
 }
+
+/// Layer parameters whose layer an effect only hears (the audio
+/// visualizers' Audio Layer): in Kerf they name a sound track.
+const SOUND_LAYERS: &[&str] = &["audioLayer"];
 
 /// Effects named after other products: Kerf's id and name for each.
 const RENAMED: &[(&str, (&str, &str))] = &[
@@ -268,7 +269,11 @@ pub fn catalog_table() -> String {
                 // A mask is one of the clip's, by name (EffectCraft counts
                 // them from 1, and 0 is none).
                 (ParamUi::Mask, FxValue::Scalar(_)) => ("mask", String::new(), String::new(), ""),
-                // Another layer is a picture track of the sequence.
+                // Another layer is a track of the sequence: a sound track
+                // where the effect draws its sound, a picture track else.
+                (ParamUi::Layer, FxValue::Layer(None)) if SOUND_LAYERS.contains(&param.id) => {
+                    ("sound", String::new(), String::new(), "")
+                }
                 (ParamUi::Layer, FxValue::Layer(None)) => {
                     ("track", String::new(), String::new(), "")
                 }

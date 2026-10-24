@@ -830,6 +830,15 @@ private slots:
         window.m_effectControls->setPropertyValue(track, QStringLiteral("V2"));
         QCOMPARE(trackCombo->currentText(), QStringLiteral("V2"));
         delete track;
+        // A sound parameter picks a sound track, or none.
+        QCOMPARE(window.m_effectControls->m_soundTracks, QStringList{"A1"});
+        QWidget *sound = window.m_effectControls->valueEditor(
+            QJsonObject{{"name", "audioLayer"}, {"type", "sound"}, {"default", ""}}, QStringLiteral("audioLayer"),
+            [](const QJsonValue &) {});
+        auto *soundCombo = qobject_cast<QComboBox *>(sound);
+        QVERIFY(soundCombo);
+        QCOMPARE(soundCombo->count(), 2);
+        delete sound;
     }
 
     void timelineKeepsSeekSelectMoveAndTrimCoordinates() {

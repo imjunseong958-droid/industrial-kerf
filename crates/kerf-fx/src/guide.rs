@@ -421,6 +421,14 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
     ),
     // Generate
     (
+        "generate.audiospectrum",
+        "Draws a sound track's frequencies as bars or lines (audioLayer=A1), along a mask if one is named; music visualizers and podcast clips.",
+    ),
+    (
+        "generate.audiowaveform",
+        "Draws a sound track's waveform as a line (audioLayer=A1), along a mask if one is named; voice clips and music visualizers.",
+    ),
+    (
         "generate.fill",
         "Fills one of the clip's masks with a color (fillMask=k1); shapes, highlights, and flat graphic panels.",
     ),
