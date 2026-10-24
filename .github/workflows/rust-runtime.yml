@@ -1,10 +1,12 @@
 name: Rust runtime
 
-# Pull requests run Linux and Windows. Linux carries most of the testing, the
-# Qt editor included, because macOS minutes bill at ten times the Linux rate
-# on a private repository. macOS runs after a merge to main, or by hand
-# (Actions > Rust runtime > Run workflow), for what only it can show.
-# Feature branches are not built on push: their pull request runs the jobs.
+# Linux runs first and carries the testing, the Qt editor included: on a
+# private repository Windows minutes bill at twice the Linux rate and macOS
+# at ten times. Windows and macOS start only once Linux passes, and check
+# only what differs on them. They run on pull requests and by hand
+# (Actions > Rust runtime > Run workflow); a merge to main reruns Linux
+# alone, as the pull request already ran them. Feature branches are not
+# built on push: their pull request runs the jobs.
 on:
   push:
     branches: [main]
@@ -83,6 +85,8 @@ jobs:
         run: python3 scripts/test-kerf-qt-bridge.py
 
   windows-runtime:
+    needs: linux
+    if: github.event_name != 'push'
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -109,13 +113,16 @@ jobs:
           if (-not (Test-Path "$llvm\libclang.dll")) { throw "libclang.dll not found in $llvm" }
           "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
       - uses: Swatinem/rust-cache@v2
+      # The kernel and the durable runtime against Windows paths, line
+      # endings, and processes.
       - name: Test kernel and interchange
         run: cargo test -p kerf-model -p kerf-lang -p kerf-interchange
       - name: Test durable runtime
         run: cargo test -p kerf-runtime --all-targets
 
   macos-editor:
-    if: github.event_name != 'pull_request'
+    needs: linux
+    if: github.event_name != 'push'
     runs-on: macos-latest
     timeout-minutes: 45
     env:
@@ -135,11 +142,9 @@ jobs:
           echo "FFMPEG_DIR=$ffmpeg_prefix" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=$ffmpeg_prefix/lib/pkgconfig" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
-      # What Linux cannot show: the daemon's macOS peer check and sockets,
-      # the editor's dylib against Homebrew's libav and Qt, and the macOS Qt
-      # build. Linux runs the rest of the workspace's tests.
-      - name: Test durable runtime
-        run: cargo test -p kerf-runtime --all-targets
+      # Only what Linux cannot show: the editor's dylib against Homebrew's
+      # libav and Qt, the macOS Qt build, and the daemon's macOS peer check
+      # and sockets, which the bridge workflow below goes through.
       - name: Build native bridge and daemon for integration tests
         run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
       - name: Build Qt editor and UI tests
