@@ -1,8 +1,10 @@
 name: Rust runtime
 
-# Runs on pull requests and on main. Feature branches are not built on push:
-# their pull request already runs the same jobs, and macOS minutes bill at ten
-# times the Linux rate on a private repository.
+# Pull requests run Linux and Windows. Linux carries most of the testing, the
+# Qt editor included, because macOS minutes bill at ten times the Linux rate
+# on a private repository. macOS runs after a merge to main, or by hand
+# (Actions > Rust runtime > Run workflow), for what only it can show.
+# Feature branches are not built on push: their pull request runs the jobs.
 on:
   push:
     branches: [main]
@@ -41,6 +43,45 @@ env:
   RUST_BACKTRACE: "1"
 
 jobs:
+  linux:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    env:
+      # The runner has no GPU. Limiting wgpu to Vulkan, which has no driver
+      # here, keeps it off Mesa's software GL, so the GPU tests skip
+      # themselves rather than compare against a software rasterizer.
+      WGPU_BACKEND: vulkan
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # libav and libclang for ffmpeg-sys-next; Qt with its private GUI
+      # headers and xcb for the docking library; the offscreen platform
+      # plugin and a font for the UI tests.
+      - name: Install native media and Qt dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libclang-dev ffmpeg libavcodec-dev libavdevice-dev libavfilter-dev \
+            libavformat-dev libavutil-dev libswresample-dev libswscale-dev \
+            qt6-base-dev qt6-base-private-dev qt6-qpa-plugins libgl-dev \
+            libvulkan-dev libxkbcommon-dev libxcb1-dev fonts-dejavu-core
+          ffmpeg -hide_banner -version | head -n 1
+      # Caches the registry and dependency builds, keyed on Cargo.lock.
+      # Workspace crates, the EffectCraft ones included, rebuild each run.
+      - uses: Swatinem/rust-cache@v2
+      - name: Test workspace
+        run: cargo test --workspace
+      - name: Build native bridge and daemon for integration tests
+        run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
+      - name: Build Qt editor and UI tests
+        run: |
+          cmake -S apps/kerf-qt -B target/qt -DKERF_QT_BUILD_TESTS=ON
+          cmake --build target/qt --parallel "$(nproc)"
+      - name: Test Qt UI
+        run: ctest --test-dir target/qt --output-on-failure
+      - name: Test real media and cross-client workflow
+        run: python3 scripts/test-kerf-qt-bridge.py
+
   windows-runtime:
     runs-on: windows-latest
     timeout-minutes: 45
@@ -67,8 +108,6 @@ jobs:
           $llvm = 'C:\Program Files\LLVM\bin'
           if (-not (Test-Path "$llvm\libclang.dll")) { throw "libclang.dll not found in $llvm" }
           "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
-      # Caches the registry and dependency builds, keyed on Cargo.lock.
-      # Workspace crates, the EffectCraft ones included, rebuild each run.
       - uses: Swatinem/rust-cache@v2
       - name: Test kernel and interchange
         run: cargo test -p kerf-model -p kerf-lang -p kerf-interchange
@@ -76,8 +115,9 @@ jobs:
         run: cargo test -p kerf-runtime --all-targets
 
   macos-editor:
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
       HOMEBREW_NO_INSTALL_CLEANUP: "1"
@@ -95,18 +135,11 @@ jobs:
           echo "FFMPEG_DIR=$ffmpeg_prefix" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=$ffmpeg_prefix/lib/pkgconfig" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
-      - name: Check bridge and playback
-        run: cargo check -p kerf-qt-bridge -p kerf-playback --all-targets
-      - name: Test runtime and bridge
-        run: cargo test -p kerf-runtime -p kerf-qt-bridge --lib
-      # The effects' golden hashes, the Kerf side of the effects, and the
-      # compositor and engine against libav. EffectCraft's GPU suite (most of
-      # the workspace's test time) and the remaining crates are left to local
-      # runs, which cover them on the same platform. Rendering here draws
-      # on the CPU when no GPU adapter opens, and the one GPU-vs-CPU
-      # comparison in kerf-compose is #[ignore]d.
-      - name: Test effects, compositor, and engine
-        run: cargo test -p effectcraft-effects -p kerf-fx -p kerf-compose -p kerf-engine
+      # What Linux cannot show: the daemon's macOS peer check and sockets,
+      # the editor's dylib against Homebrew's libav and Qt, and the macOS Qt
+      # build. Linux runs the rest of the workspace's tests.
+      - name: Test durable runtime
+        run: cargo test -p kerf-runtime --all-targets
       - name: Build native bridge and daemon for integration tests
         run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
       - name: Build Qt editor and UI tests
