@@ -194,7 +194,8 @@ void ViewerWidget::setMasks(const QString &clip, const QJsonArray &masks, const 
     m_masks = masks;
     m_placement = placement;
     if (clip.isEmpty()) setMaskTool(MaskTool::None);
-    if (maskIndex(m_selectedMask) < 0) m_selectedMask.clear();
+    // The selection outlives a snapshot that lacks it, as one read before
+    // a new mask was added does.
     update();
 }
 
@@ -335,7 +336,7 @@ bool ViewerWidget::event(QEvent *event) {
         const bool takes = (key == Qt::Key_Escape && (drawing || m_maskTool != MaskTool::None)) ||
                            ((key == Qt::Key_Return || key == Qt::Key_Enter) && m_penPoints.size() >= 2) ||
                            ((key == Qt::Key_Delete || key == Qt::Key_Backspace) &&
-                            (drawing || (editsMasks() && !m_selectedMask.isEmpty())));
+                            (drawing || maskIndex(m_selectedMask) >= 0));
         if (takes) {
             event->accept();
             return true;

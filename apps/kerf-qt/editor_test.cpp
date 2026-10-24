@@ -847,6 +847,9 @@ private slots:
         QCOMPARE(viewer->maskTool(), MaskTool::None);
         QVERIFY(!rectangle->isChecked());
         QCOMPARE(viewer->selectedMask(), QStringLiteral("k1"));
+        // A snapshot read before the edit landed does not drop the selection.
+        snapshot(3, {});
+        QCOMPARE(viewer->selectedMask(), QStringLiteral("k1"));
 
         // The snapshot carries it. A corner drags on its own, and a drag
         // inside moves the whole mask.
