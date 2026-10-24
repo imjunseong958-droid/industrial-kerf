@@ -1636,7 +1636,6 @@ version = "0.1.0"
 dependencies = [
  "fs2",
  "kerf-engine",
- "kerf-interchange",
  "kerf-lang",
  "kerf-model",
  "libc",

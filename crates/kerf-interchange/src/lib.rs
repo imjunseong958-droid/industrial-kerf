@@ -6,7 +6,6 @@
 //! model.
 
 pub mod otio;
-pub mod v2;
 
 use kerf_model::Project;
 use serde::{Deserialize, Serialize};

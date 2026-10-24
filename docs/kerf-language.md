@@ -112,14 +112,3 @@ the script it ran, and undo restores the project as it was. Agent edits stay pen
 script and a diff of the document; `get_document` returns the document,
 optionally annotated. Render jobs and proposal previews hand renderers the
 document with media paths resolved against the project.
-
-## Importing v2 projects
-
-`kerf_interchange::v2::import_json` converts a v1 or v2 `project.cut.json`:
-
-- Times snap to the project frame grid.
-- Overlapping clips with a v2 transition become a cut at the overlap's
-  center, and the overlap becomes handles.
-- A picture clip's embedded sound moves to a linked clip on a new audio track.
-- Captions become a subtitle track.
-- Anything without an equivalent is listed in the warnings.

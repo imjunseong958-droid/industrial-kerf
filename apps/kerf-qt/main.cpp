@@ -1,31 +1,15 @@
-#include "bridge.h"
 #include "editor_style.h"
 #include "main_window.h"
 
 #include <QApplication>
 #include <QDir>
 #include <QFontDatabase>
-#include <QSettings>
 #include <QTimer>
-
-// Settings saved by Cut, Kerf's earlier name, carry over on first launch.
-// Fallbacks stay off so system-wide settings are neither counted nor copied.
-static void migrateCutSettings() {
-    QSettings settings;
-    settings.setFallbacksEnabled(false);
-    if (!settings.allKeys().isEmpty()) return;
-    QSettings cut(QStringLiteral("Cut"), QStringLiteral("Cut"));
-    cut.setFallbacksEnabled(false);
-    for (const QString &key : cut.allKeys()) settings.setValue(key, cut.value(key));
-    if (settings.value(QStringLiteral("commands/keymap")).toString() == QStringLiteral("cut"))
-        settings.setValue(QStringLiteral("commands/keymap"), QStringLiteral("kerf"));
-}
 
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("Industrial Kerf"));
     QApplication::setOrganizationName(QStringLiteral("Industrial Kerf"));
-    migrateCutSettings();
     QFont interfaceFont = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
     if (QFontDatabase::families().contains(QStringLiteral("Avenir Next")))
         interfaceFont.setFamily(QStringLiteral("Avenir Next"));
@@ -63,7 +47,6 @@ int main(int argc, char **argv) {
     kerfd = positional.value(1, qEnvironmentVariable("KERFD_BIN"));
     if (kerfd.isEmpty()) kerfd = qEnvironmentVariable("KERFD_BINARY");
     if (kerfd.isEmpty()) kerfd = QStringLiteral("kerfd");
-    kerf_migrate_from_cut(QDir(project).absolutePath().toUtf8().constData());
     kerf::MainWindow window(project, kerfd);
     window.show();
     if (renderPreview) {

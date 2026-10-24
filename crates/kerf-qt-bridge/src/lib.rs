@@ -1147,24 +1147,6 @@ fn agent_worker(
     }
 }
 
-/// Move what Cut, Kerf's earlier name, left in the user's home and in
-/// `project_directory` to where Kerf reads it, reporting each move on
-/// stderr. Call once at startup, before a bridge opens the project.
-/// # Safety
-/// `project_directory` must be null or a live, NUL-terminated UTF-8 string.
-#[no_mangle]
-pub unsafe extern "C" fn kerf_migrate_from_cut(project_directory: *const c_char) {
-    let project = (!project_directory.is_null())
-        // SAFETY: The caller supplies a live C string as documented above.
-        .then(|| unsafe { CStr::from_ptr(project_directory) }.to_str().ok())
-        .flatten()
-        .map(PathBuf::from);
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    for note in kerf_runtime::migrate_from_cut(home.as_deref(), project.as_deref()) {
-        eprintln!("kerf-qt: {note}");
-    }
-}
-
 /// Emit how each of `effects` would look added to `clip`: its picture at
 /// sequence time `at`, `width` pixels wide, through the clip's own raster
 /// effects and then the effect, as RGBA. Graph effects have no preview.
