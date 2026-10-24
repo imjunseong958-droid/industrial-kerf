@@ -47,6 +47,10 @@ struct AgentSettings {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Command {
     Refresh,
+    /// Read the project again even when its document is unchanged, as when
+    /// analyses it draws from become ready.
+    #[serde(skip)]
+    Reload,
     Reconnect,
     Preview,
     Import {
@@ -160,6 +164,10 @@ struct Shared {
     /// The project directory, which relative media paths are resolved
     /// against.
     directory: PathBuf,
+    /// The runtime worker's commands, for work that finishes on its own.
+    commands: SyncSender<Command>,
+    /// Warp Stabilizer analyses are being made for the preview.
+    stabilizing: AtomicBool,
 }
 
 struct Bridge {
@@ -200,7 +208,7 @@ fn key() -> String {
 
 fn publish(
     state: StateSnapshot,
-    shared: &Shared,
+    shared: &Arc<Shared>,
     tx: &SyncSender<Value>,
     previous: &mut Option<Value>,
 ) {
@@ -209,7 +217,7 @@ fn publish(
 
 fn publish_force(
     state: StateSnapshot,
-    shared: &Shared,
+    shared: &Arc<Shared>,
     tx: &SyncSender<Value>,
     previous: &mut Option<Value>,
 ) {
@@ -218,7 +226,7 @@ fn publish_force(
 
 fn publish_snapshot(
     state: StateSnapshot,
-    shared: &Shared,
+    shared: &Arc<Shared>,
     tx: &SyncSender<Value>,
     previous: &mut Option<Value>,
     force: bool,
@@ -238,6 +246,10 @@ fn publish_snapshot(
         match kerf_runtime::parse_document(&state.document) {
             Ok(mut project) => {
                 kerf_runtime::resolve_media_paths(&mut project, &shared.directory);
+                let cache = kerf_engine::derivatives::DerivativeCache::new(&shared.directory);
+                if !kerf_engine::attach_stabilizations(&mut project, &cache).is_empty() {
+                    stabilize(project.clone(), shared, tx);
+                }
                 if let Ok(mut model) = shared.model.lock() {
                     *model = Some(project.clone());
                 }
@@ -254,6 +266,33 @@ fn publish_snapshot(
         tx,
         json!({"type":"state", "snapshot":with_proposal_timeline(snapshot, &state)}),
     );
+}
+
+/// Make the Warp Stabilizer analyses `project` lacks, one batch at a time,
+/// then read the project again so the preview draws from them. Until then
+/// those clips play unstabilized.
+fn stabilize(project: Project, shared: &Arc<Shared>, tx: &SyncSender<Value>) {
+    if shared.stabilizing.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    emit(
+        tx,
+        json!({"type":"analysis","message":"Analysing shaky clips for Warp Stabilizer…"}),
+    );
+    let (shared, tx) = (shared.clone(), tx.clone());
+    thread::spawn(move || {
+        let cache = kerf_engine::derivatives::DerivativeCache::new(&shared.directory);
+        let cancellation = kerf_engine::CancellationToken::new();
+        let message = match kerf_engine::analyze_stabilizations(&project, &cache, &cancellation) {
+            Ok(()) => "Warp Stabilizer analysis is ready".to_owned(),
+            Err(error) => format!("Warp Stabilizer analysis failed: {error}"),
+        };
+        emit(&tx, json!({"type":"analysis","message":message}));
+        shared.stabilizing.store(false, Ordering::SeqCst);
+        if !shared.closed.load(Ordering::Relaxed) {
+            let _ = shared.commands.try_send(Command::Reload);
+        }
+    });
 }
 
 /// A pending proposal's timeline beside the current one, so the editor can
@@ -279,7 +318,7 @@ fn connect_runtime(
     directory: &std::path::Path,
     binary: &std::path::Path,
     tx: &SyncSender<Value>,
-    shared: &Shared,
+    shared: &Arc<Shared>,
     previous: &mut Option<Value>,
 ) -> Option<RuntimeClient> {
     connection_event(tx, "connecting", None);
@@ -358,9 +397,14 @@ fn runtime_worker(
             continue;
         };
         let operation = key();
-        let force_refresh = matches!(&command, Command::Refresh);
+        let force_refresh = matches!(&command, Command::Refresh | Command::Reload);
         let result = match command {
             Command::Refresh => active_client.get_state(),
+            Command::Reload => {
+                // Forgetting the last snapshot reads the project again.
+                previous = None;
+                active_client.get_state()
+            }
             Command::Import { path } => active_client.get_state().and_then(|state| {
                 active_client
                     .import_media_request("ui", &operation, &path, state.revision)
@@ -1297,6 +1341,8 @@ pub unsafe extern "C" fn kerf_bridge_new(
         project: Mutex::new(None),
         model: Mutex::new(None),
         previews: AtomicU64::new(0),
+        commands: commands.clone(),
+        stabilizing: AtomicBool::new(false),
     });
     {
         let directory = directory.clone();
@@ -1633,6 +1679,8 @@ mod tests {
             project: Mutex::new(None),
             model: Mutex::new(None),
             previews: AtomicU64::new(0),
+            commands: mpsc::sync_channel(1).0,
+            stabilizing: AtomicBool::new(false),
         }
     }
 
