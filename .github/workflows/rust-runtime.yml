@@ -56,15 +56,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      # libav and libclang for ffmpeg-sys-next; Qt with its private GUI
-      # headers and xcb for the docking library; the offscreen platform
-      # plugin and a font for the UI tests.
+      # libav and libclang for ffmpeg-sys-next; ALSA for playback's audio
+      # output (cpal); Qt with its private GUI headers and xcb for the
+      # docking library; the offscreen platform plugin and a font for the
+      # UI tests.
       - name: Install native media and Qt dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libclang-dev ffmpeg libavcodec-dev libavdevice-dev libavfilter-dev \
-            libavformat-dev libavutil-dev libswresample-dev libswscale-dev \
+            libavformat-dev libavutil-dev libswresample-dev libswscale-dev libasound2-dev \
             qt6-base-dev qt6-base-private-dev qt6-qpa-plugins libgl-dev \
             libvulkan-dev libxkbcommon-dev libxcb1-dev fonts-dejavu-core
           ffmpeg -hide_banner -version | head -n 1
