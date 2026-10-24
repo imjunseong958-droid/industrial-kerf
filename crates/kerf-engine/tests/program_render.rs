@@ -93,6 +93,20 @@ fn probe(path: &Path) -> (u64, f64) {
     )
 }
 
+/// How loud the sound of `[from, to)` seconds is: its RMS.
+fn loudness(path: &Path, from: f64, to: f64) -> f64 {
+    let raw = run(Command::new(resolve_ffmpeg_bin())
+        .args(["-hide_banner", "-loglevel", "error", "-i"])
+        .arg(path)
+        .args(["-ss", &from.to_string(), "-t", &(to - from).to_string()])
+        .args(["-map", "0:a", "-c:a", "pcm_f32le", "-f", "f32le", "-"]));
+    let samples: Vec<f64> = raw
+        .chunks_exact(4)
+        .map(|bytes| f64::from(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])))
+        .collect();
+    (samples.iter().map(|sample| sample * sample).sum::<f64>() / samples.len().max(1) as f64).sqrt()
+}
+
 /// The RGB color at the center of frame `index`.
 fn pixel(path: &Path, index: u32) -> [u8; 3] {
     let raw = run(Command::new(resolve_ffmpeg_bin())
@@ -147,6 +161,11 @@ fn cuts_transitions_and_ranges_render_frame_exact() {
         middle[0] > 60 && middle[2] > 60,
         "the dissolve mixes both clips at the cut: {middle:?}"
     );
+    // One tone plays before the crossfade and the other after it, not both
+    // at once from the start.
+    let (before, after) = (loudness(&output, 0.5, 1.5), loudness(&output, 2.5, 3.5));
+    assert!(before > 0.05 && before < 0.1, "before the cut: {before}");
+    assert!(after > 0.05 && after < 0.1, "after the cut: {after}");
 
     let ranged = dir.path().join("range.mp4");
     render(&project, None, Some((42, 66)), &ranged);
@@ -155,6 +174,15 @@ fn cuts_transitions_and_ranges_render_frame_exact() {
     assert!((audio - 1.0).abs() < 0.05, "audio lasts {audio}");
     let middle = pixel(&ranged, 6);
     assert!(middle[0] > 60 && middle[2] > 60, "{middle:?}");
+
+    // A range from after the crossfade hears the incoming clip whole.
+    let after = dir.path().join("after.mp4");
+    render(&project, None, Some((60, 96)), &after);
+    let (frames, audio) = probe(&after);
+    assert_eq!(frames, 36);
+    assert!((audio - 1.5).abs() < 0.05, "audio lasts {audio}");
+    let heard = loudness(&after, 0.0, 1.5);
+    assert!(heard > 0.05 && heard < 0.1, "after the crossfade: {heard}");
 }
 
 /// Titles and captions need FFmpeg built with libfreetype.

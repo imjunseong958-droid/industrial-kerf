@@ -14,6 +14,7 @@ mod audio;
 mod decoder;
 mod drawn;
 mod libav;
+mod mix;
 mod timeline;
 
 pub use kerf_compose::gpu_adapter;
