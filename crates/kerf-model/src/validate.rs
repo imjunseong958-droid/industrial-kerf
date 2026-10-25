@@ -569,7 +569,10 @@ impl Validator<'_> {
             self.error(
                 "fx.unknown",
                 owner,
-                format!("`{owner}` uses unknown {} `{fx}`", kind.name()),
+                format!(
+                    "`{owner}`: {}",
+                    crate::catalog::unknown(kind.name(), fx.as_str())
+                ),
             );
             return;
         };

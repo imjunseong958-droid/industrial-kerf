@@ -2,14 +2,14 @@
 //! (Auto Levels / Contrast / Color, Equalize), Shadow/Highlight, Selective Color, Color Balance
 //! (HLS), Color Link, Broadcast Colors and the CC toners/offsets/kernel.
 
-use effectcraft_color::{BlendMode, blend_pixel, hsl_to_rgb, luminance, rgb_to_hsl};
-use effectcraft_keyframe::Value;
-use effectcraft_project::ParamUi;
+use effectcraft_color::luminance;
+use crate::Value;
+use crate::ParamUi;
 use effectcraft_raster::Image;
 use rayon::prelude::*;
 
 use crate::util::{Plane, gauss_plane, lerp3, premul, unpremul};
-use crate::{Buf, EffectCtx, EffectSpec, col, num, p, popup, slider};
+use crate::{Buf, EffectCtx, EffectSpec, num, p, popup, slider};
 
 fn spec(id: &'static str, name: &'static str, params: Vec<crate::ParamSpec>, render: crate::RenderFn) -> EffectSpec {
     EffectSpec { id, name, category: "Color Correction", params, render, gpu: false, float: true }
@@ -119,12 +119,6 @@ impl Curve {
         h00 * self.ys[k] + h10 * h * self.ms[k] + h01 * self.ys[k + 1] + h11 * h * self.ms[k + 1]
     }
 
-    /// Control points (x, y), Hermite tangents and the 1025-entry table over 0..1 that
-    /// [`Curve::eval`] interpolates (the GPU path uploads them).
-    pub fn tables(&self) -> (&[f32], &[f32], &[f32], &[f32]) {
-        (&self.xs, &self.ys, &self.ms, &self.lut)
-    }
-
     pub fn eval(&self, x: f32) -> f32 {
         if !(0.0..=1.0).contains(&x) {
             return self.eval_exact(x);
@@ -176,50 +170,6 @@ const LV_NAMES: [[&str; 5]; 5] = [
     ["Blue Input Black", "Blue Input White", "Blue Gamma", "Blue Output Black", "Blue Output White"],
     ["Alpha Input Black", "Alpha Input White", "Alpha Gamma", "Alpha Output Black", "Alpha Output White"],
 ];
-
-#[derive(Clone, Copy)]
-struct Lv {
-    ib: f32,
-    iw: f32,
-    g: f32,
-    ob: f32,
-    ow: f32,
-}
-
-impl Lv {
-    fn identity(&self) -> bool {
-        self.ib == 0.0 && self.iw == 1.0 && self.g == 1.0 && self.ob == 0.0 && self.ow == 1.0
-    }
-    fn apply(&self, v: f32, (clip_b, clip_w): (bool, bool)) -> f32 {
-        if self.identity() {
-            return v;
-        }
-        let mut t = (v - self.ib) / (self.iw - self.ib).max(1e-6);
-        if clip_b {
-            t = t.max(0.0);
-        }
-        if clip_w {
-            t = t.min(1.0);
-        }
-        self.ob + (self.ow - self.ob) * t.max(0.0).powf(1.0 / self.g.max(0.01))
-    }
-}
-
-fn levels_ic(ctx: &EffectCtx, mut b: Buf) -> Buf {
-    let lv = LV_IDS.map(|ids| Lv {
-        ib: ctx.params.f(ids[0]) as f32,
-        iw: ctx.params.f(ids[1]) as f32,
-        g: ctx.params.f(ids[2]) as f32,
-        ob: ctx.params.f(ids[3]) as f32,
-        ow: ctx.params.f(ids[4]) as f32,
-    });
-    if lv.iter().all(Lv::identity) {
-        return b;
-    }
-    let clip = crate::color_fx::levels_clip(ctx);
-    map_ca(&mut b.img, |c, a| ([0, 1, 2].map(|i| lv[i + 1].apply(lv[0].apply(c[i], clip), clip)), lv[4].apply(a, clip).clamp(0.0, 1.0)));
-    b
-}
 
 // ---------------------------------------------------------------------------------------------
 // Histograms and automatic corrections
@@ -393,63 +343,6 @@ fn auto_color(ctx: &EffectCtx, b: Buf) -> Buf {
     auto_correct(ctx, b, 2)
 }
 
-fn cdf(h: &[f64]) -> Vec<f32> {
-    let total: f64 = h.iter().sum::<f64>().max(1e-12);
-    let mut acc = 0.0;
-    h.iter()
-        .map(|v| {
-            acc += v;
-            (acc / total) as f32
-        })
-        .collect()
-}
-
-/// Equalize's lookup tables (`BINS` entries each) for `img`: the R, G and B cumulative
-/// histograms (Style RGB), the luminance one (Brightness) or the combined one (Photoshop Style).
-pub fn equalize_tables(img: &Image, style: u32) -> Vec<Vec<f32>> {
-    let h = histograms(img);
-    match style {
-        1 => vec![cdf(&h[3])],
-        2 => {
-            let mut combined = vec![0.0; BINS];
-            for k in 0..3 {
-                for i in 0..BINS {
-                    combined[i] += h[k][i];
-                }
-            }
-            vec![cdf(&combined)]
-        }
-        _ => vec![cdf(&h[0]), cdf(&h[1]), cdf(&h[2])],
-    }
-}
-
-fn equalize(ctx: &EffectCtx, mut b: Buf) -> Buf {
-    let amt = (ctx.params.f("amount") / 100.0).clamp(0.0, 1.0) as f32;
-    if amt <= 0.0 {
-        return b;
-    }
-    let style = ctx.params.e("style");
-    let t = equalize_tables(&b.img, style);
-    let look = |c: &Vec<f32>, v: f32| c[((v.clamp(0.0, 1.0) * (BINS - 1) as f32).round() as usize).min(BINS - 1)];
-    match style {
-        1 => {
-            map_ca(&mut b.img, |col, a| {
-                let l = luminance(col[0], col[1], col[2]);
-                let nl = look(&t[0], l);
-                let o = if l > 1e-5 { col.map(|v| v * nl / l) } else { [nl; 3] };
-                (lerp3(col, o, amt), a)
-            });
-        }
-        2 => {
-            map_ca(&mut b.img, |col, a| (lerp3(col, col.map(|v| look(&t[0], v)), amt), a));
-        }
-        _ => {
-            map_ca(&mut b.img, |col, a| (lerp3(col, [0, 1, 2].map(|k| look(&t[k], col[k])), amt), a));
-        }
-    }
-    b
-}
-
 // ---------------------------------------------------------------------------------------------
 // Shadow/Highlight
 
@@ -599,327 +492,11 @@ fn selective_color(ctx: &EffectCtx, mut b: Buf) -> Buf {
 // ---------------------------------------------------------------------------------------------
 // Color Balance (HLS), Color Link, Broadcast Colors
 
-fn color_balance_hls(ctx: &EffectCtx, mut b: Buf) -> Buf {
-    let dh = (ctx.params.f("hue") / 360.0) as f32;
-    let dl = (ctx.params.f("lightness") / 100.0) as f32;
-    let ds = (ctx.params.f("saturation") / 100.0) as f32;
-    if dh == 0.0 && dl == 0.0 && ds == 0.0 {
-        return b;
-    }
-    b.img.map_straight(|c| {
-        let (h, s, l) = rgb_to_hsl(c[0], c[1], c[2]);
-        let l = if dl > 0.0 { l + (1.0 - l) * dl } else { l + l * dl };
-        let s = if ds > 0.0 { s + (1.0 - s) * ds } else { s + s * ds };
-        let (r, g, bb) = hsl_to_rgb(h + dh, s.clamp(0.0, 1.0), l.clamp(0.0, 1.0));
-        [r, g, bb]
-    });
-    b
-}
-
-const LINK_MODES: [(&str, BlendMode); 13] = [
-    ("Normal", BlendMode::Normal),
-    ("Add", BlendMode::Add),
-    ("Multiply", BlendMode::Multiply),
-    ("Screen", BlendMode::Screen),
-    ("Overlay", BlendMode::Overlay),
-    ("Soft Light", BlendMode::SoftLight),
-    ("Hard Light", BlendMode::HardLight),
-    ("Darken", BlendMode::Darken),
-    ("Lighten", BlendMode::Lighten),
-    ("Difference", BlendMode::Difference),
-    ("Hue", BlendMode::Hue),
-    ("Color", BlendMode::Color),
-    ("Luminosity", BlendMode::Luminosity),
-];
-
-/// Color Link's Sample options.
-pub const LINK_SAMPLES: [&str; 10] =
-    ["Average", "Median", "Brightest", "Darkest", "Max RGB", "Min RGB", "Average Alpha", "Median Alpha", "Max Alpha", "Min Alpha"];
-
-/// Element of sorted `v` at fraction `q`.
-fn quantile(v: &[f32], q: f64) -> f32 {
-    if v.is_empty() {
-        return 0.0;
-    }
-    v[((q * (v.len() - 1) as f64).round() as usize).min(v.len() - 1)]
-}
-
-/// Mean of `v` without the fraction `clip` at each end.
-fn trimmed_mean(v: &mut [f32], clip: f64) -> f32 {
-    if v.is_empty() {
-        return 0.0;
-    }
-    v.sort_by(f32::total_cmp);
-    let cut = (v.len() as f64 * clip) as usize;
-    let s = &v[cut..v.len() - cut];
-    if s.is_empty() { quantile(v, 0.5) } else { (s.iter().map(|x| *x as f64).sum::<f64>() / s.len() as f64) as f32 }
-}
-
-/// Representative colour (RGB) and alpha of an image for a Sample option (see [`LINK_SAMPLES`]),
-/// ignoring the fraction `clip` of pixels at each extreme. Fully transparent pixels are skipped
-/// for the colour samples.
-fn sample_color(img: &Image, how: u32, clip: f64) -> ([f32; 3], f32) {
-    let clip = clip.clamp(0.0, 0.49);
-    let alpha_mode = how >= 6;
-    let mut ch: [Vec<f32>; 3] = Default::default();
-    let mut lum: Vec<(f32, [f32; 3])> = vec![];
-    let mut alphas: Vec<f32> = Vec::with_capacity(img.data.len());
-    let mut wsum = [0.0f64; 4];
-    for px in &img.data {
-        let (c, a) = unpremul(*px);
-        alphas.push(a);
-        if alpha_mode || a <= 1e-3 {
-            continue;
-        }
-        for k in 0..3 {
-            ch[k].push(c[k]);
-        }
-        lum.push((luminance(c[0], c[1], c[2]), c));
-        for k in 0..3 {
-            wsum[k] += (c[k] * a) as f64;
-        }
-        wsum[3] += a as f64;
-    }
-    if alpha_mode {
-        alphas.sort_by(f32::total_cmp);
-        let a = match how {
-            7 => quantile(&alphas, 0.5),
-            8 => quantile(&alphas, 1.0 - clip),
-            9 => quantile(&alphas, clip),
-            _ => trimmed_mean(&mut alphas, clip),
-        };
-        return ([0.0; 3], a);
-    }
-    if lum.is_empty() {
-        return ([0.0; 3], 1.0);
-    }
-    let c = match how {
-        1 => ch.each_mut().map(|v| {
-            v.sort_by(f32::total_cmp);
-            quantile(v, 0.5)
-        }),
-        2 | 3 => {
-            lum.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let q = if how == 2 { 1.0 - clip } else { clip };
-            lum[((q * (lum.len() - 1) as f64).round() as usize).min(lum.len() - 1)].1
-        }
-        4 | 5 => ch.each_mut().map(|v| {
-            v.sort_by(f32::total_cmp);
-            quantile(v, if how == 4 { 1.0 - clip } else { clip })
-        }),
-        // Plain Average is alpha-weighted.
-        0 if clip <= 0.0 => [0, 1, 2].map(|k| (wsum[k] / wsum[3]) as f32),
-        _ => ch.each_mut().map(|v| trimmed_mean(v, clip)),
-    };
-    (c, 1.0)
-}
-
-/// Color Link: colours the layer with a colour sampled from the Source Layer (its source, no
-/// masks or effects) or, with no source layer, from the layer itself.
-/// Color Link's sampled colour (RGB) and alpha: from the Source Layer, or from `img` (the
-/// layer's own pixels; `None` = the caller has not read them back) when no source is chosen.
-/// `None` when the own pixels are needed but not given.
-pub fn color_link_sample(ctx: &EffectCtx, img: Option<&Image>) -> Option<([f32; 3], f32)> {
-    let how = ctx.params.e("sampleSource");
-    let clip = ctx.params.f("clip") / 100.0;
-    Some(match ctx.layer_param("sourceLayer", false) {
-        Some(lp) => sample_color(&lp.buf.img, how, clip),
-        None => sample_color(img?, how, clip),
-    })
-}
-
-/// Color Link's Blending Mode.
-pub fn color_link_mode(ctx: &EffectCtx) -> BlendMode {
-    LINK_MODES[(ctx.params.e("blendingMode") as usize).min(LINK_MODES.len() - 1)].1
-}
-
-fn color_link(ctx: &EffectCtx, mut b: Buf) -> Buf {
-    let how = ctx.params.e("sampleSource");
-    let Some((c, sa)) = color_link_sample(ctx, Some(&b.img)) else { return b };
-    let op = (ctx.params.f("opacity") / 100.0).clamp(0.0, 1.0) as f32;
-    let stencil = ctx.params.b("stencilOriginalAlpha");
-    if how >= 6 {
-        // Alpha samples set the layer's alpha (blending modes don't apply).
-        b.img.data.par_iter_mut().for_each(|px| {
-            let (c0, a0) = unpremul(*px);
-            let mut na = a0 + (sa - a0) * op;
-            if stencil {
-                na = na.min(a0);
-            }
-            *px = premul(c0, na.clamp(0.0, 1.0));
-        });
-        return b;
-    }
-    let mode = color_link_mode(ctx);
-    let src = [c[0] * op, c[1] * op, c[2] * op, op];
-    b.img.data.par_iter_mut().for_each(|px| {
-        let a0 = px[3];
-        let mut o = blend_pixel(mode, *px, src, 0.5);
-        o[3] = o[3].clamp(0.0, 1.0);
-        if stencil {
-            let (sc, _) = unpremul(o);
-            o = premul(sc, a0);
-        }
-        *px = o;
-    });
-    b
-}
-
-fn broadcast_colors(ctx: &EffectCtx, mut b: Buf) -> Buf {
-    let pal = ctx.params.e("locale") == 1;
-    let how = ctx.params.e("howToMakeSafe");
-    let limit = ctx.params.f("maxSignal") as f32;
-    let (setup, span) = if pal { (0.0, 100.0) } else { (7.5, 92.5) };
-    let chroma = |c: [f32; 3]| -> (f32, f32) {
-        let y = 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
-        let ch = if pal {
-            let (u, v) = (0.492 * (c[2] - y), 0.877 * (c[0] - y));
-            (u * u + v * v).sqrt()
-        } else {
-            let i = 0.596 * c[0] - 0.274 * c[1] - 0.322 * c[2];
-            let q = 0.211 * c[0] - 0.523 * c[1] + 0.312 * c[2];
-            (i * i + q * q).sqrt()
-        };
-        (y, ch)
-    };
-    let max_norm = (limit - setup) / span;
-    b.img.data.par_iter_mut().for_each(|px| {
-        let (c, a) = unpremul(*px);
-        if a <= 0.0 {
-            return;
-        }
-        let (y, ch) = chroma(c);
-        let unsafe_ = y + ch > max_norm + 1e-5;
-        match how {
-            2 => {
-                if unsafe_ {
-                    *px = [0.0; 4];
-                }
-            }
-            3 => {
-                if !unsafe_ {
-                    *px = [0.0; 4];
-                }
-            }
-            1 => {
-                if unsafe_ {
-                    let target = (max_norm - y).max(0.0);
-                    let s = if ch > 1e-6 { target / ch } else { 1.0 };
-                    let mut o = c.map(|v| y + (v - y) * s);
-                    if y > max_norm {
-                        o = o.map(|v| v * max_norm / y);
-                    }
-                    *px = premul(o, a);
-                }
-            }
-            _ => {
-                if unsafe_ {
-                    let k = max_norm / (y + ch);
-                    *px = premul(c.map(|v| v * k), a);
-                }
-            }
-        }
-    });
-    b
-}
-
 // ---------------------------------------------------------------------------------------------
 // CC Toner, CC Color Offset, CC Kernel
 
-fn cc_toner(ctx: &EffectCtx, mut b: Buf) -> Buf {
-    let g = |id: &str| {
-        let c = ctx.params.color(id);
-        [c[0], c[1], c[2]]
-    };
-    let stops: Vec<[f32; 3]> = match ctx.params.e("tones") {
-        0 => vec![g("shadows"), g("highlights")],
-        2 => vec![g("shadows"), g("darktones"), g("midtones"), g("brights"), g("highlights")],
-        _ => vec![g("shadows"), g("midtones"), g("highlights")],
-    };
-    let blend = (ctx.params.f("blend") / 100.0).clamp(0.0, 1.0) as f32;
-    let n = stops.len() - 1;
-    b.img.map_straight(|c| {
-        let t = luminance(c[0], c[1], c[2]).clamp(0.0, 1.0) * n as f32;
-        let k = (t.floor() as usize).min(n - 1);
-        let tone = lerp3(stops[k], stops[k + 1], t - k as f32);
-        lerp3(tone, c, blend)
-    });
-    b
-}
-
-fn cc_color_offset(ctx: &EffectCtx, mut b: Buf) -> Buf {
-    let offs = ["redPhase", "greenPhase", "bluePhase"].map(|id| (ctx.params.f(id) / 360.0).rem_euclid(1.0) as f32);
-    if offs.iter().all(|o| *o == 0.0) {
-        return b;
-    }
-    let overflow = ctx.params.e("overflow");
-    b.img.map_straight(|c| {
-        [0, 1, 2].map(|k| {
-            if offs[k] == 0.0 {
-                return c[k];
-            }
-            let x = c[k] + offs[k];
-            if x <= 1.0 {
-                return x;
-            }
-            match overflow {
-                1 => (2.0 - x).max(0.0),
-                2 => {
-                    if x - 1.0 < 0.5 {
-                        0.0
-                    } else {
-                        1.0
-                    }
-                }
-                _ => x.rem_euclid(1.0),
-            }
-        })
-    });
-    b
-}
-
 const K_IDS: [&str; 9] = ["k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9"];
 const K_NAMES: [&str; 9] = ["Top Left", "Top", "Top Right", "Left", "Center", "Right", "Bottom Left", "Bottom", "Bottom Right"];
-
-fn cc_kernel(ctx: &EffectCtx, mut b: Buf) -> Buf {
-    let k = K_IDS.map(|id| ctx.params.f(id) as f32);
-    let scale = ctx.params.f("scale") as f32;
-    let offset = ctx.params.f("offset") as f32;
-    let abs = ctx.params.b("absolute");
-    let identity = k.iter().enumerate().all(|(i, v)| if i == 4 { *v == 1.0 } else { *v == 0.0 });
-    if identity && scale == 1.0 && offset == 0.0 {
-        return b;
-    }
-    let src = b.img.clone();
-    b.img.rows_mut().for_each(|(y, row)| {
-        for (x, px) in row.iter_mut().enumerate() {
-            let a = px[3];
-            if a <= 0.0 {
-                continue;
-            }
-            let mut acc = [0.0f32; 3];
-            for j in 0..3 {
-                for i in 0..3 {
-                    let w = k[j * 3 + i];
-                    if w == 0.0 {
-                        continue;
-                    }
-                    let q = src.get_clamped(x as i64 + i as i64 - 1, y as i64 + j as i64 - 1);
-                    let (c, _) = unpremul(q);
-                    for ch in 0..3 {
-                        acc[ch] += c[ch] * w;
-                    }
-                }
-            }
-            let o = acc.map(|v| {
-                let v = v * scale + offset;
-                (if abs { v.abs() } else { v }).max(0.0)
-            });
-            *px = premul(o, a);
-        }
-    });
-    b
-}
 
 pub fn specs() -> Vec<EffectSpec> {
     let mut lv_params = Vec::new();
@@ -975,19 +552,9 @@ pub fn specs() -> Vec<EffectSpec> {
             ],
             curves,
         ),
-        spec("ec.color.levelsic", "Levels (Individual Controls)", lv_params, levels_ic),
         spec("ec.color.autolevels", "Auto Levels", clip_params(false), auto_levels),
         spec("ec.color.autocontrast", "Auto Contrast", clip_params(false), auto_contrast),
         spec("ec.color.autocolor", "Auto Color", clip_params(true), auto_color),
-        spec(
-            "ec.color.equalize",
-            "Equalize",
-            vec![
-                p("style", "Equalize", Value::Enum(0), popup(&["RGB", "Brightness", "Photoshop Style"])),
-                p("amount", "Amount to Equalize", num(100.0), slider(0.0, 100.0, 0.0, 100.0, 1)),
-            ],
-            equalize,
-        ),
         spec(
             "ec.color.shadowhighlight",
             "Shadow/Highlight",
@@ -1010,68 +577,6 @@ pub fn specs() -> Vec<EffectSpec> {
             shadow_highlight,
         ),
         spec("ec.color.selectivecolor", "Selective Color", sc_params, selective_color),
-        spec(
-            "ec.color.colorbalancehls",
-            "Color Balance (HLS)",
-            vec![p("hue", "Hue", num(0.0), ParamUi::Angle), p("lightness", "Lightness", num(0.0), pct()), p("saturation", "Saturation", num(0.0), pct())],
-            color_balance_hls,
-        ),
-        spec(
-            "ec.color.colorlink",
-            "Color Link",
-            vec![
-                p("sourceLayer", "Source Layer", Value::Layer(None), ParamUi::Layer),
-                // A chosen source layer is sampled without its masks and effects.
-                p("sourceLayerSource", "Source Layer Source", Value::Enum(0), ParamUi::Hidden),
-                p("sampleSource", "Sample", Value::Enum(0), popup(&LINK_SAMPLES)),
-                p("clip", "Clip", num(0.0), slider(0.0, 100.0, 0.0, 100.0, 1)),
-                p("stencilOriginalAlpha", "Stencil Original Alpha", Value::Bool(true), ParamUi::Checkbox),
-                p("opacity", "Opacity", num(100.0), slider(0.0, 100.0, 0.0, 100.0, 1)),
-                p("blendingMode", "Blending Mode", Value::Enum(0), popup(&LINK_MODES.map(|m| m.0))),
-            ],
-            color_link,
-        ),
-        spec(
-            "ec.color.broadcast",
-            "Broadcast Colors",
-            vec![
-                p("locale", "Broadcast Locale", Value::Enum(0), popup(&["NTSC", "PAL"])),
-                p(
-                    "howToMakeSafe",
-                    "How To Make Color Safe",
-                    Value::Enum(0),
-                    popup(&["Reduce Luminance", "Reduce Saturation", "Key Out Unsafe", "Key Out Safe"]),
-                ),
-                p("maxSignal", "Maximum Signal Amplitude (IRE)", num(110.0), slider(90.0, 120.0, 90.0, 120.0, 0)),
-            ],
-            broadcast_colors,
-        ),
-        spec(
-            "ec.color.cctoner",
-            "CC Toner",
-            vec![
-                p("tones", "Tones", Value::Enum(1), popup(&["Duotone", "Tritone", "Pentone"])),
-                p("highlights", "Highlights", col(1.0, 1.0, 1.0), ParamUi::Color),
-                p("brights", "Brights", col(0.86, 0.78, 0.64), ParamUi::Color),
-                p("midtones", "Midtones", col(0.55, 0.43, 0.28), ParamUi::Color),
-                p("darktones", "Darktones", col(0.26, 0.18, 0.1), ParamUi::Color),
-                p("shadows", "Shadows", col(0.0, 0.0, 0.0), ParamUi::Color),
-                p("blend", "Blend w. Original", num(0.0), slider(0.0, 100.0, 0.0, 100.0, 1)),
-            ],
-            cc_toner,
-        ),
-        spec(
-            "ec.color.cccoloroffset",
-            "CC Color Offset",
-            vec![
-                p("redPhase", "Red Phase", num(0.0), ParamUi::Angle),
-                p("greenPhase", "Green Phase", num(0.0), ParamUi::Angle),
-                p("bluePhase", "Blue Phase", num(0.0), ParamUi::Angle),
-                p("overflow", "Overflow", Value::Enum(0), popup(&["Wrap", "Solarize", "Polarize"])),
-            ],
-            cc_color_offset,
-        ),
-        spec("ec.color.cckernel", "CC Kernel", k_params, cc_kernel),
     ]
 }
 
@@ -1141,15 +646,6 @@ mod tests {
     }
 
     #[test]
-    fn levels_ic_identity_and_red_only() {
-        let img = ramp();
-        assert_eq!(run("ec.color.levelsic", &img, &[]), img);
-        let out = run("ec.color.levelsic", &img, &[("red/redOutWhite", num(0.5))]);
-        let p = out.get(15, 3);
-        assert!((p[0] - 0.5).abs() < 1e-4 && (p[1] - 0.0).abs() < 1e-4);
-    }
-
-    #[test]
     fn auto_levels_stretches_low_contrast() {
         let mut img = Image::new(32, 4);
         for y in 0..4 {
@@ -1181,20 +677,6 @@ mod tests {
     }
 
     #[test]
-    fn equalize_flattens_histogram() {
-        let mut img = Image::new(64, 1);
-        for x in 0..64 {
-            let v = if x < 48 { 0.1 + x as f32 * 0.001 } else { 0.9 };
-            img.set(x, 0, [v, v, v, 1.0]);
-        }
-        let out = run("ec.color.equalize", &img, &[]);
-        // The crowded dark values are spread across the range.
-        assert!(out.get(47, 0)[0] > 0.6, "{}", out.get(47, 0)[0]);
-        assert!(out.get(0, 0)[0] < 0.1);
-        assert_eq!(run("ec.color.equalize", &img, &[("amount", num(0.0))]), img);
-    }
-
-    #[test]
     fn selective_color_zero_is_identity_and_reds_respond() {
         let img = ramp();
         assert_eq!(run("ec.color.selectivecolor", &img, &[]), img);
@@ -1206,68 +688,10 @@ mod tests {
     }
 
     #[test]
-    fn color_offset_full_turn_is_identity() {
-        let img = ramp();
-        let out = run("ec.color.cccoloroffset", &img, &[("redPhase", num(360.0)), ("greenPhase", num(720.0))]);
-        assert_eq!(out, img);
-        let out = run("ec.color.cccoloroffset", &img, &[("redPhase", num(180.0))]);
-        assert!((out.get(0, 3)[0] - 0.5).abs() < 1e-4);
-    }
-
-    #[test]
-    fn broadcast_reduces_unsafe_color() {
-        let img = Image::filled(2, 2, [1.0, 1.0, 0.0, 1.0]);
-        let out = run("ec.color.broadcast", &img, &[]);
-        assert!(out.data[0][0] < 1.0);
-        let key = run("ec.color.broadcast", &img, &[("howToMakeSafe", Value::Enum(2))]);
-        assert_eq!(key.data[0][3], 0.0);
-        let gray = Image::filled(2, 2, [0.5, 0.5, 0.5, 1.0]);
-        assert_eq!(run("ec.color.broadcast", &gray, &[]), gray);
-    }
-
-    #[test]
-    fn color_balance_hls_zero_identity_and_hue_shift() {
-        let img = ramp();
-        assert_eq!(run("ec.color.colorbalancehls", &img, &[]), img);
-        let red = Image::filled(1, 1, [1.0, 0.0, 0.0, 1.0]);
-        let out = run("ec.color.colorbalancehls", &red, &[("hue", num(120.0))]);
-        assert!(out.data[0][1] > 0.99 && out.data[0][0] < 0.01);
-    }
-
-    #[test]
-    fn color_link_fills_with_average_keeping_alpha() {
-        let mut img = Image::new(2, 1);
-        img.set(0, 0, [1.0, 0.0, 0.0, 1.0]);
-        img.set(1, 0, [0.0, 0.0, 0.5, 0.5]);
-        let out = run("ec.color.colorlink", &img, &[]);
-        assert!((out.data[1][3] - 0.5).abs() < 1e-5);
-        let (c, _) = unpremul(out.data[0]);
-        assert!((c[0] - 2.0 / 3.0).abs() < 1e-3 && (c[2] - 1.0 / 3.0).abs() < 1e-3, "{c:?}");
-    }
-
-    #[test]
-    fn cc_kernel_identity_and_toner_duotone() {
-        let img = ramp();
-        assert_eq!(run("ec.color.cckernel", &img, &[]), img);
-        let g = Image::filled(1, 1, [0.5, 0.5, 0.5, 1.0]);
-        let t = run("ec.color.cctoner", &g, &[("tones", Value::Enum(0)), ("highlights", col(1.0, 0.0, 0.0))]);
-        assert!((t.data[0][0] - 0.5).abs() < 1e-3 && t.data[0][1] < 1e-3);
-    }
-
-    #[test]
     fn shadow_highlight_lifts_shadows() {
         let img = Image::filled(8, 8, [0.1, 0.1, 0.1, 1.0]);
         let out = run("ec.color.shadowhighlight", &img, &[("autoAmounts", Value::Bool(false))]);
         assert!(out.data[0][0] > 0.15);
-    }
-
-    #[test]
-    fn levels_ic_clip_popups() {
-        let img = Image::filled(2, 2, [0.9, 0.9, 0.9, 1.0]);
-        let lv = [("rgb/rgbInWhite", num(0.5))];
-        assert!((run("ec.color.levelsic", &img, &lv).data[0][0] - 1.0).abs() < 1e-6);
-        let off = [("rgb/rgbInWhite", num(0.5)), ("clipToOutputWhite", Value::Enum(0))];
-        assert!(run("ec.color.levelsic", &img, &off).data[0][0] > 1.5);
     }
 
     /// A host whose other layers and other frames are a fixed image.
@@ -1287,27 +711,6 @@ mod tests {
     fn run_host(id: &str, img: &Image, over: &[(&str, Value)], host: &ImgHost) -> Image {
         let env = crate::EffectEnv { host: Some(host), frame_rate: 10.0, ..Default::default() };
         crate::run_fx(id, over, img.clone(), 1.0, env).img
-    }
-
-    #[test]
-    fn color_link_samples_clip_and_source_layer() {
-        let mut img = Image::new(5, 1);
-        for (x, v) in [0.0f32, 0.1, 0.2, 0.3, 1.0].iter().enumerate() {
-            img.set(x as u32, 0, [*v, *v, *v, 1.0]);
-        }
-        // Median ignores the outlier the average follows.
-        let med = run("ec.color.colorlink", &img, &[("sampleSource", Value::Enum(1))]);
-        assert!((med.data[0][0] - 0.2).abs() < 1e-5);
-        // Brightest with 20 % clip skips the brightest pixel.
-        let br = run("ec.color.colorlink", &img, &[("sampleSource", Value::Enum(2)), ("clip", num(20.0))]);
-        assert!((br.data[0][0] - 0.3).abs() < 1e-5);
-        // Min Alpha of a half-transparent source layer sets the alpha.
-        let host = ImgHost(Image::filled(2, 2, [0.25, 0.25, 0.25, 0.5]));
-        let out = run_host("ec.color.colorlink", &img, &[("sourceLayer", Value::Layer(Some(9))), ("sampleSource", Value::Enum(9))], &host);
-        assert!((out.data[4][3] - 0.5).abs() < 1e-5);
-        // Average of the source layer (not the effect's own pixels).
-        let out = run_host("ec.color.colorlink", &img, &[("sourceLayer", Value::Layer(Some(9)))], &host);
-        assert!((out.data[4][0] - 0.5).abs() < 1e-5);
     }
 
     #[test]

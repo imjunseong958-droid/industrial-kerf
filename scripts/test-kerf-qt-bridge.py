@@ -212,7 +212,7 @@ with tempfile.TemporaryDirectory(prefix='kerf-qt-', dir=ROOT / 'target') as temp
         pointer = lib.kerf_fx_catalog()
         catalog = json.loads(C.string_at(pointer))
         lib.kerf_bridge_string_free(pointer)
-        assert any(fx['id'] == 'stylize.glow' and fx['params'] for fx in catalog), catalog[:2]
+        assert any(fx['id'] == 'light.edgeglow' and fx['params'] for fx in catalog), catalog[:2]
         send({'type': 'effect_previews', 'clip': clip['id'], 'at': 1.0,
               'effects': ['channel.invert', 'color.basic'], 'width': 64})
         preview = wait(lambda event: event['type'] == 'effect_preview')
@@ -345,12 +345,6 @@ with tempfile.TemporaryDirectory(prefix='kerf-qt-', dir=ROOT / 'target') as temp
         state()
         # Cuts cannot show the half-transparent clip; the compositor draws it
         # live, and a seek shows its frame.
-        live = wait(lambda event: event['type'] == 'preview' and event['status'] == 'live')
-        assert 'gpu' in live, live
-        # With the GPU off, the live program opens again, drawn on the CPU.
-        send({'type': 'gpu', 'enabled': False})
-        assert wait(lambda event: event['type'] == 'preview' and event['status'] == 'live')['gpu'] is None
-        send({'type': 'gpu', 'enabled': True})
         wait(lambda event: event['type'] == 'preview' and event['status'] == 'live')
         send({'type': 'seek', 'position': 1.0})
         deadline = time.monotonic() + 15

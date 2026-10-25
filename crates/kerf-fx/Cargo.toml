@@ -3,10 +3,11 @@ name = "kerf-fx"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Kerf's effects and transitions: the video effects and transitions carried from FilmCraft, and the raster effects carried from EffectCraft with a clip's masks and effect stack on its frames"
+description = "Kerf's effects and transitions: the video effects and transitions carried from FilmCraft, and the EffectCraft effects Kerf keeps"
 
-# EffectCraft's crates live in `effectcraft/`; a change to its effects means
-# regenerating the catalog table (see `raster_catalog_is_current`).
+# The EffectCraft effects Kerf keeps live in `effectcraft/`; a change to
+# their parameters means regenerating the catalog table (see
+# `raster_catalog_is_current`).
 [dependencies]
 kerf-draw = { path = "../kerf-draw" }
 kerf-model = { path = "../kerf-model" }
@@ -16,8 +17,3 @@ filmcraft-text.workspace = true
 filmcraft-time.workspace = true
 rayon = "1"
 effectcraft-effects = { path = "../../effectcraft/crates/effects" }
-effectcraft-geom = { path = "../../effectcraft/crates/geom" }
-effectcraft-keyframe = { path = "../../effectcraft/crates/keyframe" }
-effectcraft-path = { path = "../../effectcraft/crates/path" }
-effectcraft-project = { path = "../../effectcraft/crates/project" }
-effectcraft-raster = { path = "../../effectcraft/crates/raster" }

@@ -1,10 +1,9 @@
 use crate::PlaybackError;
-use kerf_compose::{ComposeOptions, Compositor, Renderer};
+use kerf_compose::{ComposeOptions, Compositor};
 use kerf_core::preview::{FindingSeverity, PreviewMode, PreviewPlan, PreviewRange, PreviewReason};
 use kerf_core::program::{
     compile_program, program_sequence, program_sound, ProgramError, ProgramOptions, ProgramSound,
 };
-use kerf_fx::MaskStyle;
 use kerf_model::{
     Catalog, Clip, Content, Domain, Effect, Engine, Mask, Param, ParamType, Project, Sequence,
     Time, TrackKind, Value,
@@ -65,8 +64,6 @@ pub struct PlaybackClip {
     pub clip_offset: f64,
     /// The seed of its random effects, as a bake uses.
     pub seed: u32,
-    /// How its masks cut it: as the renderer drawing the program does.
-    pub mask_style: MaskStyle,
 }
 
 impl PlaybackClip {
@@ -183,24 +180,11 @@ impl PlaybackTimeline {
                 subtitles: Vec::new(),
             })
             .collect();
-        // Masks cut as the renderer a render draws the program with cuts.
-        let mask_style = match Compositor::resolve(
-            project,
-            Catalog::builtin(),
-            &ComposeOptions {
-                renderer: Renderer::default().from_env(),
-                ..ComposeOptions::default()
-            },
-        ) {
-            Ok(Renderer::Kerf) => MaskStyle::Kerf,
-            _ => MaskStyle::EffectCraft,
-        };
         let mut flattener = Flattener {
             project,
             clips: Vec::new(),
             captions: Vec::new(),
             depth: 0,
-            mask_style,
         };
         let duration = sequence.map_or(Time::ZERO, Sequence::duration);
         if let Some(sequence) = sequence {
@@ -396,7 +380,6 @@ struct Flattener<'a> {
     clips: Vec<PlaybackClip>,
     captions: Vec<CaptionCue>,
     depth: usize,
-    mask_style: MaskStyle,
 }
 
 impl Flattener<'_> {
@@ -478,7 +461,6 @@ impl Flattener<'_> {
                             layer: video.map_or((0, 0), |video| (video.width, video.height)),
                             clip_offset: (lo - clip.start).seconds(),
                             seed: kerf_core::raster::seed(clip.id.as_str()),
-                            mask_style: self.mask_style,
                         });
                     }
                     Content::Sequence { sequence: id, .. } if speed.value() == 1.0 => {
@@ -941,10 +923,10 @@ mod tests {
         assert!(plan.reasons.is_empty(), "{:?}", plan.reasons);
         // A raster effect runs on the picture playback holds; one that reads
         // the clip's other frames needs the compositor.
-        let thresholded = project(
-            "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx stylize.threshold\n",
+        let saturated = project(
+            "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx color.huesaturation\n",
         );
-        assert_eq!(preview_plan(&thresholded).mode, PreviewMode::NativeExact);
+        assert_eq!(preview_plan(&saturated).mode, PreviewMode::NativeExact);
         // So do FilmCraft's effects, which Kerf's renderer draws.
         let inverted = project(
             "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx channel.invert\n",
@@ -958,12 +940,12 @@ mod tests {
         assert_eq!(preview_plan(&drawn).mode, PreviewMode::Composited);
         // So does a fix that compares neighbouring frames.
         let steadied = project(
-            "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx color.colorstabilizer\n",
+            "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx distort.rollingshutterrepair\n",
         );
         assert_eq!(preview_plan(&steadied).mode, PreviewMode::Composited);
         // So does one that reads another track.
         let matted = project(
-            "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx channel.setmatte takeMatteFromLayer=V2\n  \
+            "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx key.trackmatte matte=V2\n  \
              track V2 video\n    clip c2 media=source-a src=0s at=0s dur=2s\n",
         );
         assert_eq!(preview_plan(&matted).mode, PreviewMode::Composited);
@@ -1031,7 +1013,7 @@ mod tests {
             "{clip}      mask k1 ellipse=0.5,0.5,0.3,0.4 feather={{0f:0 30f:12}} expansion=-2\n      \
              mask k2 points=\"0.2,0.2 0.8,0.3 0.5,0.9\" mode=subtract inverted=true opacity=0.5\n      \
              mask k3 rect=0,0,0.6,1 mode=intersect\n      \
-             fx stylize.threshold\n"
+             fx color.huesaturation\n"
         ));
         // A path for effects cuts nothing.
         native(&format!(
@@ -1067,7 +1049,7 @@ mod tests {
         );
         // An effect that reads a mask needs the compositor to hand it over.
         composited(
-            &format!("{clip}      mask k1 rect=0.1,0.1,0.9,0.9 mode=none\n      fx generate.stroke path=k1\n"),
+            &format!("{clip}      mask k1 rect=0.1,0.1,0.9,0.9 mode=none\n      fx generate.audiowaveform path=k1\n"),
             "`c1` uses effects",
         );
     }
@@ -1167,7 +1149,6 @@ mod tests {
             layer: (0, 0),
             clip_offset: 0.0,
             seed: 0,
-            mask_style: kerf_fx::MaskStyle::Kerf,
         };
         assert!((clip.timeline_time_for_source(1.0) - 2.0).abs() < 1e-9);
         assert!((clip.timeline_time_for_source(5.0) - 4.0).abs() < 1e-9);

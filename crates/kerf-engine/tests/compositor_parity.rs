@@ -11,15 +11,14 @@
 //! Arm code, about one more luma step in a dip or under a raster effect,
 //! and the tolerances cover both.
 //!
-//! Both renderers are compared: EffectCraft's, and Kerf's own, which leaves
-//! raster effects to EffectCraft for now. Kerf's mixes light linearly where
-//! the graph mixes encoded values, so wherever pictures mix (opacity, a
-//! dissolve or dip midway, a transparent solid, a blur, an adjustment
-//! layer's opacity) it is brighter, by up to a sixth of the range midway
-//! through a dip; those cases carry a tolerance of their own for it, and
+//! The compositor mixes light linearly where the graph mixes encoded
+//! values, so wherever pictures mix (opacity, a dissolve or dip midway, a
+//! transparent solid, a blur, an adjustment layer's opacity) it is
+//! brighter, by up to a sixth of the range midway through a dip; those
+//! cases carry a tolerance of their own for it (`kerf`), and
 //! `kerf-compose`'s tests check what it draws there.
 
-use kerf_compose::{ComposeError, ComposeOptions, Compositor, Renderer};
+use kerf_compose::{ComposeOptions, Compositor};
 use kerf_engine::derivatives::DerivativeCache;
 use kerf_engine::ffmpeg::resolve_ffmpeg_bin;
 use kerf_engine::program::{compile_program, program_sequence, ProgramOptions};
@@ -118,31 +117,21 @@ fn graph(project: &Project, dir: &Path, frame: i64, window: bool) -> Vec<u8> {
     frames[frames.len() - size..].to_vec()
 }
 
-/// The same frame from the compositor, as RGB; none when `renderer` does
-/// not draw the program.
-fn composed(project: &Project, frame: i64, renderer: Renderer) -> Option<Vec<u8>> {
-    let options = ComposeOptions {
-        renderer,
-        ..ComposeOptions::default()
-    };
-    let compositor = match Compositor::new(project, Catalog::builtin(), &options) {
-        Ok(compositor) => compositor,
-        Err(ComposeError::Unsupported { .. }) if renderer == Renderer::Kerf => return None,
-        Err(error) => panic!("{error}"),
-    };
+/// The same frame from the compositor, as RGB.
+fn composed(project: &Project, frame: i64) -> Vec<u8> {
+    let compositor = Compositor::new(project, Catalog::builtin(), &ComposeOptions::default())
+        .unwrap_or_else(|error| panic!("{error}"));
     let picture = compositor.frame(compositor.rate().time_of(frame), 1.0);
     assert!(
         compositor.problems().is_empty(),
         "{:?}",
         compositor.problems()
     );
-    Some(
-        picture
-            .rgba
-            .chunks_exact(4)
-            .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
-            .collect(),
-    )
+    picture
+        .rgba
+        .chunks_exact(4)
+        .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
+        .collect()
 }
 
 /// How far apart two pictures are, out of 255.
@@ -223,26 +212,13 @@ fn check(cases: &[Case]) {
         let project = project(&media, case.body);
         for &frame in case.frames {
             let graph = graph(&project, dir.path(), frame, case.window);
-            for (renderer, by) in [
-                (Renderer::EffectCraft, "effectcraft"),
-                (Renderer::Kerf, "kerf"),
-            ] {
-                let Some(composed) = composed(&project, frame, renderer) else {
-                    continue;
-                };
-                dump(&project, case.name, frame, &graph, &composed, by);
-                let difference = difference(&graph, &composed);
-                eprintln!("{} frame {frame} ({by}): {difference:?}", case.name);
-                let (luma, off, color) = match (renderer, case.kerf) {
-                    (Renderer::Kerf, Some(tolerance)) => tolerance,
-                    _ => (case.luma, case.off, case.color),
-                };
-                if difference.luma > luma || difference.off > off || difference.color > color {
-                    failures.push(format!(
-                        "{} frame {frame} ({by}): {difference:?}",
-                        case.name
-                    ));
-                }
+            let composed = composed(&project, frame);
+            dump(&project, case.name, frame, &graph, &composed, "kerf");
+            let difference = difference(&graph, &composed);
+            eprintln!("{} frame {frame}: {difference:?}", case.name);
+            let (luma, off, color) = case.kerf.unwrap_or((case.luma, case.off, case.color));
+            if difference.luma > luma || difference.off > off || difference.color > color {
+                failures.push(format!("{} frame {frame}: {difference:?}", case.name));
             }
         }
     }
@@ -535,7 +511,7 @@ fn effects_match_the_graph() {
             body: "sequence s1 rate=24 size=320x180 audio=48000\n\
                    \x20 track V1 video\n\
                    \x20   clip c1 media=t src=0f at=0f dur=24f\n\
-                   \x20     fx color.exposure master/exposure={0f:0 23f:1}\n",
+                   \x20     fx color.huesaturation saturation={0f:0 23f:-100}\n",
             window: false,
             frames: &[0, 12],
             luma: 2.0,
@@ -551,26 +527,12 @@ fn effects_match_the_graph() {
                    \x20 track V2 video\n\
                    \x20   clip c2 media=t src=0f at=0f dur=24f\n\
                    \x20     set scale=0.5 x=0.2\n\
-                   \x20     fx color.exposure master/exposure=1\n",
+                   \x20     fx color.huesaturation saturation=-50\n",
             window: false,
             frames: &[9],
             luma: 2.5,
             off: 0.02,
             color: 6.0,
-            kerf: None,
-        },
-        Case {
-            name: "raster transition",
-            body: "sequence s1 rate=24 size=320x180 audio=48000\n\
-                   \x20 track V1 video\n\
-                   \x20   clip c1 media=t src=12f at=0f dur=24f\n\
-                   \x20   clip c2 media=b src=12f at=24f dur=24f\n\
-                   \x20   transition x1 from=c1 to=c2 fx=transition.radialwipe@1 dur=12f\n",
-            window: false,
-            frames: &[19, 24, 28],
-            luma: 1.0,
-            off: 0.002,
-            color: 3.0,
             kerf: None,
         },
         Case {

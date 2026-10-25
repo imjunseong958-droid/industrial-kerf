@@ -646,12 +646,12 @@ private slots:
                     QJsonObject{{"id", "c1"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 0.0},
                                 {"duration", 2.0}}}}}}}}}});
         EffectsPanel *panel = window.m_effects;
-        // The whole raster catalog is offered, by category and words.
+        // The whole effects catalog is offered, by category and words.
         QVERIFY(panel->m_items.size() > 100);
-        QVERIFY(panel->m_items.contains(QStringLiteral("stylize.glow")));
-        QVERIFY(!panel->m_items.contains(QStringLiteral("transition.linearwipe")));
+        QVERIFY(panel->m_items.contains(QStringLiteral("light.edgeglow")));
+        QVERIFY(!panel->m_items.contains(QStringLiteral("push")));
         panel->m_search->setText(QStringLiteral("neon"));
-        QVERIFY(!panel->m_items.value(QStringLiteral("stylize.glow"))->isHidden());
+        QVERIFY(!panel->m_items.value(QStringLiteral("light.edgeglow"))->isHidden());
         QVERIFY(panel->m_items.value(QStringLiteral("channel.invert"))->isHidden());
         window.selectClip(QStringLiteral("c1"));
         QCOMPARE(panel->m_clip, QStringLiteral("c1"));
@@ -660,20 +660,20 @@ private slots:
         panel->requestPreviews();
         QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("effect_previews"));
         QCOMPARE(window.m_lastCommand.value("clip").toString(), QStringLiteral("c1"));
-        QVERIFY(window.m_lastCommand.value("effects").toArray().contains(QJsonValue("stylize.glow")));
+        QVERIFY(window.m_lastCommand.value("effects").toArray().contains(QJsonValue("light.edgeglow")));
         QImage red(16, 9, QImage::Format_RGBA8888);
         red.fill(Qt::red);
-        window.handleEvent(QJsonObject{{"type", "effect_preview"}, {"clip", "c1"}, {"fx", "stylize.glow"},
+        window.handleEvent(QJsonObject{{"type", "effect_preview"}, {"clip", "c1"}, {"fx", "light.edgeglow"},
                                        {"width", 16}, {"height", 9},
                                        {"rgba", QString::fromLatin1(QByteArray(reinterpret_cast<const char *>(red.constBits()), 16 * 9 * 4).toBase64())}});
-        const QImage card = panel->m_items.value(QStringLiteral("stylize.glow"))->icon().pixmap(QSize(160, 90)).toImage();
+        const QImage card = panel->m_items.value(QStringLiteral("light.edgeglow"))->icon().pixmap(QSize(160, 90)).toImage();
         QCOMPARE(card.pixelColor(card.width() / 2, card.height() / 2), QColor(Qt::red));
         // Double-click adds the effect to the selected clip.
-        emit panel->m_cards->itemActivated(panel->m_items.value(QStringLiteral("stylize.glow")));
+        emit panel->m_cards->itemActivated(panel->m_items.value(QStringLiteral("light.edgeglow")));
         const QJsonObject op = window.m_lastCommand.value("ops").toArray().first().toObject();
         QCOMPARE(op.value("op").toString(), QStringLiteral("fx-add"));
         QCOMPARE(op.value("clip").toString(), QStringLiteral("c1"));
-        QCOMPARE(op.value("fx").toString(), QStringLiteral("stylize.glow"));
+        QCOMPARE(op.value("fx").toString(), QStringLiteral("light.edgeglow"));
     }
 
     void nextStepsAreButtonsThatAskForThem() {
@@ -708,7 +708,7 @@ private slots:
                 QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
                     QJsonObject{{"id", "c1"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 0.0},
                                 {"duration", 2.0}, {"effects", QJsonArray{
-                                    QJsonObject{{"fx", "stylize.glow"}, {"enabled", true}, {"params", QJsonObject{{"radius", 40}}}},
+                                    QJsonObject{{"fx", "light.edgeglow"}, {"enabled", true}, {"params", QJsonObject{{"radius", 40}}}},
                                     QJsonObject{{"fx", "channel.invert"}, {"enabled", false}, {"params", QJsonObject{}}}}}}}}}}}}}});
         window.selectClip(QStringLiteral("c1"));
         EffectControlsPanel *inspector = window.m_effectControls;
@@ -717,7 +717,7 @@ private slots:
         auto *glow = boxes.at(0)->findChild<QCheckBox *>(QStringLiteral("effectEnabled"));
         auto *radius = boxes.at(0)->findChild<QDoubleSpinBox *>(QStringLiteral("effectParam_radius"));
         QVERIFY(glow && radius);
-        QCOMPARE(glow->text(), QStringLiteral("Glow"));
+        QCOMPARE(glow->text(), QStringLiteral("Edge Glow"));
         QVERIFY(glow->isChecked());
         QCOMPARE(radius->value(), 40.0);
         QVERIFY(!boxes.at(1)->findChild<QCheckBox *>(QStringLiteral("effectEnabled"))->isChecked());
@@ -790,7 +790,7 @@ private slots:
             QJsonObject{{"name", "opacity"}, {"type", "number"}, {"default", 1.0}, {"min", 0.0}, {"max", 1.0}}};
         const auto snapshot = [&window, &maskProperties](int revision, const QJsonArray &masks) {
             QJsonObject clip{{"id", "c1"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 0.0}, {"duration", 2.0},
-                             {"effects", QJsonArray{QJsonObject{{"fx", "distort.reshape"}, {"enabled", true}, {"params", QJsonObject{}}}}}};
+                             {"effects", QJsonArray{QJsonObject{{"fx", "generate.audiowaveform"}, {"enabled", true}, {"params", QJsonObject{}}}}}};
             if (!masks.isEmpty()) clip.insert("masks", masks);
             window.applySnapshot(QJsonObject{{"revision", revision}, {"duration", 2}, {"timeline", QJsonObject{
                 {"fps", 24}, {"width", 1920}, {"height", 1080}, {"maskProperties", maskProperties},
@@ -903,7 +903,7 @@ private slots:
         feather->setValue(0.0);
         emit feather->editingFinished();
         QVERIFY(op().value("params").toObject().value("feather").isNull());
-        auto *source = inspector->findChild<QComboBox *>(QStringLiteral("effectParam_sourceMask"));
+        auto *source = inspector->findChild<QComboBox *>(QStringLiteral("effectParam_path"));
         QVERIFY(source);
         QCOMPARE(source->count(), 2);
         QCOMPARE(source->itemText(1), QStringLiteral("k1"));
@@ -1709,27 +1709,16 @@ private slots:
         // The compositor draws the program, so it plays; its note says what
         // only a render matches.
         window.handleEvent(QJsonObject{{"type", "preview"}, {"status", "live"},
-                                       {"message", "`a1` uses a crossfade, whose sound only a render plays exactly"},
-                                       {"gpu", "Apple M1 (Metal)"}});
+                                       {"message", "`a1` uses a crossfade, whose sound only a render plays exactly"}});
         QVERIFY(!window.m_previewRequired);
         QCOMPARE(window.m_previewStatus, QStringLiteral("live"));
         QVERIFY(!window.m_statusDevice->isHidden());
-        QCOMPARE(window.m_statusDevice->text(), QStringLiteral("Live · Apple M1 (Metal)"));
+        QCOMPARE(window.m_statusDevice->text(), QStringLiteral("Live"));
         QVERIFY(window.statusBar()->toolTip().contains(QStringLiteral("crossfade")));
         QCOMPARE(window.m_commands->reason(QStringLiteral("sequence.renderPreview")), QString());
-        // A live preview that starts on the CPU says when the GPU opens.
-        window.handleEvent(QJsonObject{{"type", "preview"}, {"status", "live"}});
-        QCOMPARE(window.m_statusDevice->text(), QStringLiteral("Live · CPU"));
-        window.handleEvent(QJsonObject{{"type", "preview_device"}, {"gpu", "Apple M1 (Metal)"}});
-        QCOMPARE(window.m_statusDevice->text(), QStringLiteral("Live · Apple M1 (Metal)"));
         window.handleEvent(QJsonObject{{"type", "preview"}, {"status", "ready"}});
         QVERIFY(!window.m_commands->reason(QStringLiteral("sequence.renderPreview")).isEmpty());
         QVERIFY(window.m_statusDevice->isHidden());
-        // The GPU choice is kept in Settings.
-        const bool gpu = window.m_gpuEnabled->isChecked();
-        window.m_gpuEnabled->setChecked(!gpu);
-        QCOMPARE(QSettings().value(QStringLiteral("playback/gpu")).toBool(), !gpu);
-        window.m_gpuEnabled->setChecked(gpu);
     }
 
     void disconnectedControlsAndRecovery() {

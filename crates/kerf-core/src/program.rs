@@ -384,7 +384,6 @@ impl<'a> Graph<'a> {
             })
             .collect();
         let mut dips = Vec::new();
-        let mut over = Vec::new();
         for transition in &track.transitions {
             let (Some(from), Some(to)) = (
                 track.clip_index(transition.from.as_str()),
@@ -396,20 +395,6 @@ impl<'a> Graph<'a> {
             let (before, after) = transition.split_at_cut(rate);
             let (start, end) = (cut - before, cut + after);
             let reveal = match transition.fx.as_str() {
-                crate::raster::BAKED_TRANSITION => {
-                    // The outgoing clip, baked to disappear by itself, plays
-                    // over the incoming one until it is gone.
-                    shown[from].to = start;
-                    shown[to].from = start;
-                    over.push(Shown {
-                        clip: &track.clips[from],
-                        from: start,
-                        to: end,
-                        fade_in: None,
-                        fade_out: None,
-                    });
-                    continue;
-                }
                 "dip" => {
                     let middle = start + Time::from_flicks((end - start).flicks() / 2);
                     shown[from].to = middle;
@@ -431,17 +416,9 @@ impl<'a> Graph<'a> {
                         == "equal-power",
                 },
                 other => {
-                    let raster = self
-                        .catalog
-                        .fx(other)
-                        .is_some_and(|fx| fx.engine == Engine::Raster);
                     return Err(ProgramError::unsupported(
                         &transition.id,
-                        if raster {
-                            format!("raster transition `{other}` out of a clip that is not a media clip")
-                        } else {
-                            format!("transition `{other}`")
-                        },
+                        format!("transition `{other}`"),
                     ));
                 }
             };
@@ -450,8 +427,6 @@ impl<'a> Graph<'a> {
             shown[to].from = start;
             shown[to].fade_in = Some((reveal, start, end));
         }
-        // Drawn after the clips they leave over.
-        shown.extend(over);
         Ok((shown, dips))
     }
 

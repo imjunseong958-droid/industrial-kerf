@@ -215,7 +215,7 @@ fn masks_are_added_changed_and_removed() {
 mask c1 add k1 rect=0.25,0.25,0.75,0.75 feather=4
 mask c1 add ring ellipse=0.5,0.5,0.3,0.2 mode=none at=1
 mask c1 add line points="0,0 1,1" closed=false mode=none
-fx c1 add generate.stroke path=ring
+fx c1 add generate.audiowaveform path=ring
 mask c1 set k1 mode=subtract inverted=true opacity={0f:0 12f:1} reset=feather
 mask c1 remove line
 "#,

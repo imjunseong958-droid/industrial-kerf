@@ -40,39 +40,28 @@ below, and time effects, which read the clip's other frames), and asks for
 a rendered preview whenever it would show something different. Editor snapshots carry the document and a timeline
 view of it; the editor sends its edits back as typed operations.
 
-Raster effects and transitions come from
-[EffectCraft](https://github.com/storytold/effectcraft) (MIT/Apache), whose
-crates Kerf carries and develops in `effectcraft/` (see its README): about
-250 color, blur, distort, generate, 360° video, keying, matte, noise,
-perspective, simulation, stylize, text, time, and utility effects, and
-wipes, blinds, dissolves, and irises as transitions, whose parameters the
-catalog can hold (a point is written as an `_x` and a `_y` across the
-picture, a file as a path, another layer as a picture track, such as a
-matte or a displacement map on V2, and a mask as one of the clip's masks:
-rectangles, ellipses, and outlines written in the document, which also cut
-the picture). The Warp Stabilizer draws from an analysis of the clip's
-frames, made in the background for the preview (and first, for an export)
-and kept in `.kerf/cache/derived`; until it is ready the clip plays as shot.
-They run on a clip's own picture before it is placed: a render first bakes
-each such clip's frames into a lossless file with transparency in
-`.kerf/cache/derived` (reused until what it is made from changes) and plays
-that file in the clip's place. A title, solid, or nested sequence is first
-rendered on its own for that. A raster transition is baked into the clip it
-leaves, which then plays over the next one while it disappears. Media can
-carry transparency too (`alpha=true`, found from the pixel format on
-import), which compositing keeps. `kerf-fx` generates the catalog table;
-after changing the effects, run `UPDATE_CATALOG=1 cargo test -p kerf-fx`.
-
-Kerf is moving from EffectCraft to FilmCraft's video-editing effects, with
-playful effects as looks ([docs/looks.md](docs/looks.md)). Its own renderer
-(`kerf-draw`, drawn by `kerf-compose`) draws Kerf's model directly in linear
-light with drawing carried from
+Kerf draws with its own renderer (`kerf-draw`, drawn by `kerf-compose`): it
+draws Kerf's model directly in linear light, with drawing carried from
 [FilmCraft](https://github.com/storytold/filmcraft) (MIT/Apache, crates in
-`filmcraft/`). It draws renders, previews, and live playback, except a
-program with raster effects or transitions, which EffectCraft's still
-draws; live playback cuts masks as the renderer drawing the program does.
-`KERF_RENDERER=kerf|effectcraft|auto`, or `kerf-engine frame --renderer`,
-chooses.
+`filmcraft/`), for renders, previews, and live playback. A video editor's
+transitions (pushes, whips, zooms, flashes, light leaks, glitches, irises)
+and effects (Lumetri, blurs, keys and track mattes, glows, distortions, moves,
+burn-ins, 360° video) are FilmCraft's, carried into `kerf-fx`. Kerf also keeps
+24 effects from [EffectCraft](https://github.com/storytold/effectcraft)
+(MIT/Apache, in `effectcraft/`, see its README) that FilmCraft has nothing
+like: restoration, key and matte clean-up, curves and finer color, a few
+blurs and distortions, and the audio visualizers. An effect's parameters are
+written in the catalog's terms (a point as an `_x` and a `_y` across the
+picture, a file as a path, another track by id, a mask by name), and an id
+EffectCraft had that Kerf no longer does is an error that names what to use
+instead. Playful effects are coming as looks ([docs/looks.md](docs/looks.md)).
+The graph can still render a program without FilmCraft's effects and
+transitions: it first bakes a clip's kept EffectCraft effects into a lossless
+file with transparency in `.kerf/cache/derived`, and plays that in the
+clip's place. Media can carry transparency too (`alpha=true`, found from the
+pixel format on import), which compositing keeps. `kerf-fx` generates the
+catalog tables; after changing the effects, run
+`UPDATE_CATALOG=1 cargo test -p kerf-fx`.
 
 Editor actions are commands in one registry (`kerf-commands`): each has an id,
 a label, its menu, shortcuts in the Kerf, Premiere Pro, and Final Cut Pro

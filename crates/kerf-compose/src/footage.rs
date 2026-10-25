@@ -11,14 +11,9 @@
 //! still decode each file once. Frames are converted to RGBA by
 //! libavfilter, as the graph converts them, and kept in a bounded cache.
 //! A clip never shown at its full size is converted at the size it is
-//! shown, as the graph scales it.
-//!
-//! The decoders are shared by both compositors: [`LibavFootage`] serves
-//! EffectCraft's renderer, and [`Pictures`] Kerf's own, in linear light.
+//! shown, as the graph scales it. [`Pictures`] gives them to the compositor
+//! in linear light.
 
-use effectcraft_project::{Footage as FootageItem, ItemId};
-use effectcraft_render::{FootageSource, Image};
-use effectcraft_time::{Tick, TICKS_PER_SECOND};
 use ffmpeg_next as ffmpeg;
 use ffmpeg_next::format::context::Input;
 use ffmpeg_next::{decoder, filter, frame, media};
@@ -27,9 +22,6 @@ use kerf_model::time::FLICKS_PER_SECOND;
 use kerf_model::{Rate, Ratio, Time};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
-
-/// Ticks per flick: EffectCraft's time unit divides Kerf's exactly.
-pub(crate) const TICKS_PER_FLICK: i64 = TICKS_PER_SECOND / FLICKS_PER_SECOND;
 
 /// Decoders kept open across reads.
 const MAX_DECODERS: usize = 8;
@@ -55,43 +47,15 @@ pub(crate) struct ClipSource {
     pub source_in: Time,
     pub speed: Ratio,
     pub duration: Time,
-    /// The most of the picture's size it is shown at, when it is never
-    /// shown larger than that: its frames are decoded at that size, which
-    /// the renderer then draws pixel for pixel.
-    pub shown: Option<f64>,
 }
 
 impl ClipSource {
-    /// The size frames are decoded at for a render that asks for `size`.
-    fn decoded_size(&self, size: (u32, u32)) -> (u32, u32) {
-        match self.shown {
-            Some(shown) => {
-                let side = |length: u32| ((f64::from(length) * shown).round() as u32).max(1);
-                (side(size.0), side(size.1))
-            }
-            None => size,
-        }
-    }
-
-    /// The media frame shown at clip time `at`, in EffectCraft's ticks.
-    pub fn frame_at(&self, at: Tick) -> i64 {
-        self.frame_at_units(
-            i128::from(at.0),
-            i128::from(TICKS_PER_FLICK),
-            i128::from(TICKS_PER_SECOND),
-        )
-    }
-
-    /// The media frame shown at clip time `at`.
+    /// The media frame shown at clip time `at`: the one showing at its
+    /// source time, which a reversed clip runs back from its source out.
     pub fn frame_at_time(&self, at: Time) -> i64 {
-        self.frame_at_units(i128::from(at.flicks()), 1, i128::from(FLICKS_PER_SECOND))
-    }
-
-    /// The media frame shown at clip time `at`, counted in units of which a
-    /// flick has `per_flick` and a second `per_second`: the one showing at
-    /// its source time, which a reversed clip runs back from its source out.
-    fn frame_at_units(&self, at: i128, per_flick: i128, per_second: i128) -> i64 {
-        let units = |time: Time| i128::from(time.flicks()) * per_flick;
+        let at = i128::from(at.flicks());
+        let per_second = i128::from(FLICKS_PER_SECOND);
+        let units = |time: Time| i128::from(time.flicks());
         let (num, den) = (
             i128::from(self.speed.num().unsigned_abs()),
             i128::from(self.speed.den()),
@@ -160,10 +124,6 @@ impl DecoderPool {
             .iter()
             .map(|(path, problem)| (path.clone(), problem.clone()))
             .collect()
-    }
-
-    fn problem(&self, path: &str) -> Option<String> {
-        lock(&self.problems).get(path).cloned()
     }
 
     /// Frame `index` of `clip`'s file as straight RGBA at `size`; none for
@@ -249,136 +209,10 @@ impl DecoderPool {
         drop(decoders);
         self.returned.notify_all();
     }
-
-    /// Close `path`'s decoders and forget its problem, for a file that
-    /// changed.
-    fn forget(&self, path: &str) {
-        lock(&self.decoders)
-            .idle
-            .retain(|decoder| decoder.path != path);
-        lock(&self.problems).remove(path);
-    }
 }
 
-/// The footage source EffectCraft's renderer reads.
-pub(crate) struct LibavFootage {
-    clips: HashMap<ItemId, ClipSource>,
-    /// The sound of files clips play, for effects that draw it.
-    sounds: crate::sound::Sounds,
-    pool: DecoderPool,
-    cache: Mutex<FrameCache<Image>>,
-}
-
-impl LibavFootage {
-    pub fn new(clips: HashMap<ItemId, ClipSource>) -> Self {
-        Self {
-            clips,
-            sounds: crate::sound::Sounds::default(),
-            pool: DecoderPool::new(),
-            cache: Mutex::new(FrameCache::new(CACHE_BUDGET, image_bytes)),
-        }
-    }
-
-    /// Files that could not be read, with why.
-    pub fn problems(&self) -> Vec<(String, String)> {
-        self.pool.problems()
-    }
-
-    fn read(&self, item: ItemId, at: Tick, size: Option<(u32, u32)>) -> Option<Arc<Image>> {
-        let clip = self.clips.get(&item)?;
-        let index = clip.frame_at(at);
-        let size = clip.decoded_size(size.unwrap_or((clip.width, clip.height)));
-        let key = (clip.path.clone(), index, size);
-        if let Some(image) = lock(&self.cache).get(&key) {
-            return Some(image);
-        }
-        let picture = self.pool.picture(clip, index, size)?;
-        let image = Arc::new(premultiplied(&picture, clip.alpha));
-        lock(&self.cache).insert(key, image.clone());
-        Some(image)
-    }
-
-    /// The frame `item` shows at clip time `at`, opaque RGBA at its own
-    /// size, as it is decoded: for a frame that is nothing but that clip.
-    pub fn rgba(&self, item: ItemId, at: Tick) -> Option<Vec<u8>> {
-        let clip = self.clips.get(&item)?;
-        let picture = self
-            .pool
-            .picture(clip, clip.frame_at(at), (clip.width, clip.height))?;
-        Some(packed(&picture))
-    }
-}
-
-impl FootageSource for LibavFootage {
-    fn frame(&self, item: ItemId, _footage: &FootageItem, t: Tick) -> Option<Arc<Image>> {
-        self.read(item, t, None)
-    }
-
-    fn frame_at_size(
-        &self,
-        item: ItemId,
-        _footage: &FootageItem,
-        t: Tick,
-        width: u32,
-        height: u32,
-    ) -> Option<Arc<Image>> {
-        self.read(item, t, Some((width.max(1), height.max(1))))
-    }
-
-    /// The sound a clip plays from clip time `t`: its media's from the
-    /// clip's source in, at its speed, silent past the file's end.
-    fn audio(
-        &self,
-        item: ItemId,
-        _footage: &FootageItem,
-        t: Tick,
-        frames: usize,
-        rate: u32,
-    ) -> Option<Vec<f32>> {
-        let clip = self.clips.get(&item)?;
-        let sound = self.sounds.of(&clip.path)?;
-        let kept = f64::from(crate::sound::RATE);
-        let first = (clip.source_in.seconds() + t.seconds() * clip.speed.value()) * kept;
-        let step = clip.speed.value() * kept / f64::from(rate.max(1));
-        let length = sound.len() / 2;
-        Some(
-            (0..frames)
-                .flat_map(|index| {
-                    let at = first + index as f64 * step;
-                    match at as usize {
-                        _ if at < 0.0 => [0.0; 2],
-                        sample if sample < length => [sound[2 * sample], sound[2 * sample + 1]],
-                        _ => [0.0; 2],
-                    }
-                })
-                .collect(),
-        )
-    }
-
-    fn set_cache_budget(&self, bytes: usize) {
-        lock(&self.cache).budget = bytes;
-    }
-
-    fn purge(&self) {
-        lock(&self.cache).clear();
-    }
-
-    fn forget(&self, path: &str) {
-        lock(&self.cache).forget(path);
-        self.pool.forget(path);
-    }
-
-    fn cache_budget(&self) -> Option<usize> {
-        Some(lock(&self.cache).budget)
-    }
-
-    fn problem(&self, footage: &FootageItem) -> Option<String> {
-        self.pool.problem(&footage.path)
-    }
-}
-
-/// The frames Kerf's own compositor reads: each media clip's, in linear
-/// light, by the clip's place in the scene.
+/// The frames the compositor reads: each media clip's, in linear light, by
+/// the clip's place in the scene.
 pub(crate) struct Pictures {
     clips: Vec<ClipSource>,
     pool: DecoderPool,
@@ -493,29 +327,6 @@ impl<T> FrameCache<T> {
             }
         }
     }
-
-    fn forget(&mut self, path: &str) {
-        let gone: Vec<FrameKey> = self
-            .frames
-            .keys()
-            .filter(|(file, ..)| file == path)
-            .cloned()
-            .collect();
-        for key in gone {
-            if let Some((image, _)) = self.frames.remove(&key) {
-                self.bytes -= (self.weigh)(&image);
-            }
-        }
-    }
-
-    fn clear(&mut self) {
-        self.frames.clear();
-        self.bytes = 0;
-    }
-}
-
-fn image_bytes(image: &Image) -> usize {
-    image.data.len() * std::mem::size_of::<[f32; 4]>()
 }
 
 fn picture_bytes(picture: &Picture) -> usize {
@@ -812,33 +623,6 @@ fn packed(rgba: &frame::Video) -> Vec<u8> {
     out
 }
 
-/// Straight 8-bit RGBA as EffectCraft's premultiplied float image, opaque
-/// unless `alpha` says the picture's transparency counts.
-fn premultiplied(rgba: &frame::Video, alpha: bool) -> Image {
-    let (width, height) = (rgba.width(), rgba.height());
-    let stride = rgba.stride(0);
-    let data = rgba.data(0);
-    let mut image = Image::new(width, height);
-    for (y, row) in image.data.chunks_exact_mut(width as usize).enumerate() {
-        let line = &data[y * stride..y * stride + width as usize * 4];
-        for (pixel, bytes) in row.iter_mut().zip(line.chunks_exact(4)) {
-            let alpha = if alpha {
-                f32::from(bytes[3]) / 255.0
-            } else {
-                1.0
-            };
-            let channel = |value: u8| f32::from(value) / 255.0 * alpha;
-            *pixel = [
-                channel(bytes[0]),
-                channel(bytes[1]),
-                channel(bytes[2]),
-                alpha,
-            ];
-        }
-    }
-    image
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -854,36 +638,35 @@ mod tests {
             source_in: Rate::FPS_24.time_of(source_in),
             speed: Ratio::parse(speed).unwrap(),
             duration: Rate::FPS_24.time_of(duration),
-            shown: None,
         }
     }
 
-    fn at(frames: i64, rate: Rate) -> Tick {
-        Tick(rate.time_of(frames).flicks() * TICKS_PER_FLICK)
+    fn at(frames: i64, rate: Rate) -> Time {
+        rate.time_of(frames)
     }
 
     #[test]
     fn clips_show_their_source_frame_by_frame() {
         let forward = clip(10, "1", 48);
-        assert_eq!(forward.frame_at(at(0, Rate::FPS_24)), 10);
-        assert_eq!(forward.frame_at(at(5, Rate::FPS_24)), 15);
+        assert_eq!(forward.frame_at_time(at(0, Rate::FPS_24)), 10);
+        assert_eq!(forward.frame_at_time(at(5, Rate::FPS_24)), 15);
         // Handles before the clip show the frames before its source in.
-        assert_eq!(forward.frame_at(at(-3, Rate::FPS_24)), 7);
+        assert_eq!(forward.frame_at_time(at(-3, Rate::FPS_24)), 7);
         let fast = clip(10, "2", 24);
-        assert_eq!(fast.frame_at(at(5, Rate::FPS_24)), 20);
+        assert_eq!(fast.frame_at_time(at(5, Rate::FPS_24)), 20);
         let slow = clip(10, "1/2", 48);
-        assert_eq!(slow.frame_at(at(5, Rate::FPS_24)), 12);
+        assert_eq!(slow.frame_at_time(at(5, Rate::FPS_24)), 12);
     }
 
     #[test]
     fn reversed_clips_run_back_from_their_source_out() {
         // Source [10, 58): the first frame is 57.
         let reverse = clip(10, "-1", 48);
-        assert_eq!(reverse.frame_at(at(0, Rate::FPS_24)), 57);
-        assert_eq!(reverse.frame_at(at(47, Rate::FPS_24)), 10);
+        assert_eq!(reverse.frame_at_time(at(0, Rate::FPS_24)), 57);
+        assert_eq!(reverse.frame_at_time(at(47, Rate::FPS_24)), 10);
         let fast = clip(10, "-2", 24);
-        assert_eq!(fast.frame_at(at(0, Rate::FPS_24)), 57);
-        assert_eq!(fast.frame_at(at(1, Rate::FPS_24)), 55);
+        assert_eq!(fast.frame_at_time(at(0, Rate::FPS_24)), 57);
+        assert_eq!(fast.frame_at_time(at(1, Rate::FPS_24)), 55);
     }
 
     #[test]
@@ -894,8 +677,8 @@ mod tests {
             rate: Rate::FPS_30,
             ..clip(0, "1", 48)
         };
-        assert_eq!(clip.frame_at(at(1, Rate::FPS_24)), 1);
-        assert_eq!(clip.frame_at(at(4, Rate::FPS_24)), 5);
+        assert_eq!(clip.frame_at_time(at(1, Rate::FPS_24)), 1);
+        assert_eq!(clip.frame_at_time(at(4, Rate::FPS_24)), 5);
         assert_eq!(frame_count(Rate::FPS_30, Rate::FPS_24.time_of(1)), 2);
     }
 }

@@ -1645,26 +1645,6 @@ void MainWindow::buildUi() {
     connect(m_cloudRadio, &QRadioButton::toggled, this, onConnectionChanged);
     connect(m_ownKeyRadio, &QRadioButton::toggled, this, onConnectionChanged);
 
-    auto *playbackGroup = new QGroupBox(QStringLiteral("Playback"));
-    playbackGroup->setObjectName(QStringLiteral("playbackSettings"));
-    auto *playbackLayout = new QVBoxLayout(playbackGroup);
-    playbackLayout->setContentsMargins(10, 12, 10, 10);
-    playbackLayout->setSpacing(6);
-    m_gpuEnabled = new QCheckBox(QStringLiteral("Draw the live preview on the GPU"));
-    m_gpuEnabled->setObjectName(QStringLiteral("gpuEnabled"));
-    m_gpuEnabled->setChecked(QSettings().value(QStringLiteral("playback/gpu"), true).toBool());
-    playbackLayout->addWidget(m_gpuEnabled);
-    auto *gpuHint = new QLabel(QStringLiteral("Transitions, effects, and titles play live. Each frame is drawn where it is "
-                                              "drawn faster; off, the CPU draws them all."));
-    gpuHint->setObjectName(QStringLiteral("muted"));
-    gpuHint->setWordWrap(true);
-    playbackLayout->addWidget(gpuHint);
-    settingsLayout->addWidget(playbackGroup);
-    connect(m_gpuEnabled, &QCheckBox::toggled, this, [this](bool enabled) {
-        QSettings().setValue(QStringLiteral("playback/gpu"), enabled);
-        if (m_bridge) sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("gpu")}, {QStringLiteral("enabled"), enabled}});
-    });
-
     auto *advancedToggle = new QToolButton;
     advancedToggle->setObjectName(QStringLiteral("advancedToggle"));
     advancedToggle->setText(QStringLiteral("▸ Advanced"));
@@ -2371,7 +2351,7 @@ void MainWindow::setupStatusBar() {
     m_statusConnection->setObjectName(QStringLiteral("statusConnection"));
     m_statusDevice = new QLabel;
     m_statusDevice->setObjectName(QStringLiteral("statusDevice"));
-    m_statusDevice->setToolTip(QStringLiteral("Where the live preview is drawn (Settings → Playback)"));
+    m_statusDevice->setToolTip(QStringLiteral("The live preview is drawn as it plays"));
     m_statusDevice->hide();
     statusBar()->addPermanentWidget(m_statusDevice);
     m_statusAccount = new QLabel;
@@ -2542,8 +2522,7 @@ void MainWindow::handleEvent(QJsonObject event) {
         const QString message = event.value(QStringLiteral("message")).toString();
         if (!status.isEmpty()) m_previewStatus = status;
         if (m_statusDevice && !status.isEmpty()) {
-            const QString gpu = event.value(QStringLiteral("gpu")).toString();
-            m_statusDevice->setText(gpu.isEmpty() ? QStringLiteral("Live · CPU") : QStringLiteral("Live · ") + gpu);
+            m_statusDevice->setText(QStringLiteral("Live"));
             m_statusDevice->setVisible(status == QStringLiteral("live"));
         }
         if (status == QStringLiteral("required") || status == QStringLiteral("unavailable")) {
@@ -2574,10 +2553,6 @@ void MainWindow::handleEvent(QJsonObject event) {
                                                    : QStringLiteral("Live preview: ") + message;
             statusBar()->showMessage(note.left(112) + (note.size() > 112 ? QStringLiteral("…") : QString()), 4000);
         }
-    } else if (type == QStringLiteral("preview_device")) {
-        // The GPU finished opening while the live preview played.
-        if (m_statusDevice && m_previewStatus == QStringLiteral("live"))
-            m_statusDevice->setText(QStringLiteral("Live · ") + event.value(QStringLiteral("gpu")).toString());
     } else if (type == QStringLiteral("cloud")) {
         m_cloudAccess = event.value(QStringLiteral("access")).toString();
         m_cloudAccount = event.value(QStringLiteral("account")).toObject();
@@ -2896,9 +2871,6 @@ void MainWindow::setConnection(const QString &status, const QString &message) {
         m_viewer->setCaption(QString());
     } else if (!wasConnected) {
         addActivity(QStringLiteral("system"), QStringLiteral("Project connected"));
-        // The media worker starts on the GPU; say if it should not.
-        if (m_bridge && m_gpuEnabled && !m_gpuEnabled->isChecked())
-            sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("gpu")}, {QStringLiteral("enabled"), false}});
     }
     updateInspector();
     updateProposal(m_snapshot.value(QStringLiteral("pendingProposal")));

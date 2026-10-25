@@ -15,8 +15,7 @@ irises, page peels, and more, drawn from both clips across the cut
 (`transition add from=c1 to=c2 fx=push@1 dur=12f direction=from-east`). A
 `direction` names the side the incoming clip enters from; a center is
 `center_x` and `center_y` in fractions of the frame; pixel sizes are canvas
-pixels. Kerf's own renderer draws them, and a program that has them cannot
-also use raster effects until those come to it too.
+pixels. Kerf's own renderer draws them.
 
 A video editor's effects, carried from FilmCraft, are listed there by
 category too: Lumetri grades, blurs, keys and track mattes, glows, light
@@ -31,26 +30,24 @@ while it is hidden. Sizes are the clip's source pixels. Where FilmCraft's
 effect replaced an EffectCraft one under the same id, it is version 2 of
 that id (`channel.invert@2`), and version 1 no longer reads.
 
-Raster effects and transitions (from EffectCraft) are listed there by id;
-`look` with `effect` gives one's parameters, and they are written like any
-other (`fx c1 add stylize.glow`, `transition add from=c1 to=c2
-fx=transition.radialwipe dur=12f`). A point parameter is two numbers across
-the picture, such as `center_x=0.5 center_y=0.5`. A file parameter (a LUT,
-an OpenColorIO config) is a quoted path, relative to the project, such as
-`fx c1 add utility.applylut lut="looks/warm.cube"`. A track parameter names
-another picture track of the sequence, whose picture the effect reads even
-while the track is hidden, as a matte or a displacement map does
-(`fx c1 add channel.setmatte takeMatteFromLayer=V2`); an effect cannot read
-its own track, and tracks cannot read each other in a loop. A sound
-parameter names a sound track whose sound the effect draws
-(`fx c1 add generate.audiowaveform audioLayer=A1`). Raster effects
-run on the clip's own picture before it is placed, so they apply before the
-clip's other effects; a raster transition's progress follows the
-transition. Kerf keeps 24 of them that FilmCraft has nothing like (grain,
-dust, rolling shutter, lens and upscaling repair; key and matte clean-up;
-curves, Hue/Saturation, Selective Color, Photo Filter, and the Auto
-corrections; a few blurs and distortions; the audio visualizers), and its
-own renderer runs those in stack order beside FilmCraft's effects.
+Kerf also keeps 24 of EffectCraft's effects that FilmCraft has nothing like
+(grain, dust, rolling shutter, lens and upscaling repair; key and matte
+clean-up; Curves, Hue/Saturation, Selective Color, Photo Filter, and the Auto
+corrections; a few blurs and distortions; the audio visualizers), listed
+there by id; `look` with `effect` gives one's parameters, and they are
+written like any other (`fx c1 add color.curves rgb="0,0 0.5,0.6 1,1"`). A
+point parameter is two numbers across the picture, such as `center_x=0.5
+center_y=0.5`. A sound parameter names a sound track whose sound the effect
+draws (`fx c1 add generate.audiowaveform audioLayer=A1`), and a mask
+parameter one of the clip's masks (`path=k1`). Kerf's own renderer runs them
+in stack order beside FilmCraft's effects. Any other id EffectCraft had is
+an error that names what to use instead (`stylize.glow` is
+`light.wonderglow@1` now).
+
+A track parameter names another picture track of the sequence, whose
+picture the effect reads even while the track is hidden, as a track matte
+does; an effect cannot read its own track, and tracks cannot read each other
+in a loop.
 
 ## Documents
 

@@ -1,8 +1,5 @@
-//! Kerf's own compositor: a sequence drawn from Kerf's model directly, in
-//! linear light, with the drawing carried from FilmCraft's renderer
-//! (`kerf-draw`), and media decoded by libav.
-//!
-//! It draws what the EffectCraft compositor (`scene`) draws, the same way:
+//! A sequence drawn from Kerf's model, in linear light, with the drawing
+//! carried from FilmCraft's renderer (`kerf-draw`):
 //!
 //! - Picture tracks stack in sequence order, and captions play over them
 //!   all. A nested sequence is drawn at its own canvas and frame rate, at
@@ -18,14 +15,10 @@
 //!   two clips' pictures, each drawn as it shows there, across the cut.
 //! - Titles are text centered on a transparent canvas, solids a color, and
 //!   an adjustment layer applies its effects to the picture beneath it.
-//! - The video effects carried from FilmCraft (`kerf_fx::filmcraft`) run on
-//!   a clip's picture in order, after its masks, and read its other frames
-//!   and the sequence's other tracks as they need.
-//!
-//! Raster effects and transitions (EffectCraft's) are not drawn here yet:
-//! a program with them is reported as unsupported, and EffectCraft's
-//! renderer, which draws them, does not draw FilmCraft's transitions or
-//! effects.
+//! - The video effects carried from FilmCraft (`kerf_fx::filmcraft`) and
+//!   the EffectCraft effects Kerf keeps (`kerf_fx::kept`) run on a clip's
+//!   picture in order, after its masks, and read its other frames, the
+//!   sequence's other tracks, and its sound tracks as they need.
 
 use crate::footage::{frame_count, ClipSource, Pictures};
 use crate::{ComposeError, Frame};
@@ -1290,7 +1283,6 @@ impl<'a> Builder<'a> {
                     source_in: *source_in,
                     speed: *speed,
                     duration: clip.duration,
-                    shown: None,
                 });
                 (
                     Source::Media {

@@ -3,24 +3,14 @@ name = "kerf-compose"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Kerf's compositor: a sequence drawn frame by frame by Kerf's own renderer or EffectCraft's, with footage decoded by libav"
+description = "Kerf's compositor: a sequence drawn frame by frame in linear light, with footage decoded by libav"
 
-# EffectCraft's crates live in `effectcraft/`, as for kerf-fx.
 [dependencies]
 kerf-core = { path = "../kerf-core" }
 kerf-draw = { path = "../kerf-draw" }
 kerf-fx = { path = "../kerf-fx" }
 kerf-model = { path = "../kerf-model" }
-effectcraft-color = { path = "../../effectcraft/crates/color" }
-effectcraft-effects = { path = "../../effectcraft/crates/effects" }
-effectcraft-gpu = { path = "../../effectcraft/crates/gpu" }
-effectcraft-keyframe = { path = "../../effectcraft/crates/keyframe" }
-effectcraft-project = { path = "../../effectcraft/crates/project" }
-effectcraft-render = { path = "../../effectcraft/crates/render" }
-effectcraft-text = { path = "../../effectcraft/crates/text" }
-effectcraft-time = { path = "../../effectcraft/crates/time" }
 ffmpeg-next = { version = "9.0", default-features = false, features = ["codec", "filter", "format", "software-scaling"] }
-rayon = "1"
 thiserror = "2"
 
 [dev-dependencies]

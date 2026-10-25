@@ -839,10 +839,12 @@ impl Script<'_> {
         if action == "add" {
             let (fx, version) =
                 parse_fx_ref(target_word).map_err(|m| line.error(target_column, m))?;
-            let def = self
-                .catalog
-                .fx(fx.as_str())
-                .ok_or_else(|| line.error(target_column, format!("unknown effect `{fx}`")))?;
+            let def = self.catalog.fx(fx.as_str()).ok_or_else(|| {
+                line.error(
+                    target_column,
+                    kerf_model::catalog::unknown("effect", fx.as_str()),
+                )
+            })?;
             let version = pinned(def, version).map_err(|m| line.error(target_column, m))?;
             let index = fields.take_with("at", position_index)?;
             let enabled = fields.take_bool("enabled")?.unwrap_or(true);
@@ -916,10 +918,9 @@ impl Script<'_> {
                 let (_, clock) = self.clip(&from, line)?;
                 let duration = required(&mut fields, "dur", |t| clock.duration(t))?;
                 let align = fields.take_with("align", parse_align)?.unwrap_or_default();
-                let def = self
-                    .catalog
-                    .fx(fx.as_str())
-                    .ok_or_else(|| line.error(1, format!("unknown transition `{fx}`")))?;
+                let def = self.catalog.fx(fx.as_str()).ok_or_else(|| {
+                    line.error(1, kerf_model::catalog::unknown("transition", fx.as_str()))
+                })?;
                 let version = pinned(def, version).map_err(|m| line.error(1, m))?;
                 let params = params(&mut fields, &def.params, &fx, clock.rate)?;
                 fields.finish(2)?;
