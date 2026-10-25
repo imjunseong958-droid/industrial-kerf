@@ -20,13 +20,13 @@ mod generate;
 mod generate3;
 mod keying;
 mod keying2;
+mod klt;
 mod matte;
 mod noise;
 mod noise2;
+mod plane;
 mod stylize2;
 mod util;
-mod klt;
-mod plane;
 mod value;
 
 pub use value::{ParamUi, Value};
@@ -248,8 +248,6 @@ pub struct EffectEnv<'a> {
     pub frame_rate: f64,
     /// Index of the running effect in its layer's stack (for [`EffectHost::self_at`]).
     pub effect_index: usize,
-    /// The project's working colour space (`None` = unmanaged, treated as sRGB).
-    pub working_space: Option<effectcraft_color::ColorSpace>,
     /// Working-space pixels are linear light (Linearize Working Space).
     pub working_linear: bool,
     /// The composition's shutter (angle and phase in degrees, samples per frame) when both the

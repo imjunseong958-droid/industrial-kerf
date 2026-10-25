@@ -223,10 +223,6 @@ impl Face {
             .as_ref()
             .map(FaceBytes::get)
     }
-    /// A copy of the font file's bytes (None if it is missing or unreadable).
-    pub fn data(&self) -> Option<Vec<u8>> {
-        self.bytes().map(<[u8]>::to_vec)
-    }
     /// The parsed font (None if the file is missing or unreadable).
     pub fn font(&self) -> Option<FontRef<'_>> {
         FontRef::from_index(self.bytes()?, self.info.index).ok()
@@ -244,18 +240,6 @@ impl Face {
     }
     pub fn has_char(&self, c: char) -> bool {
         self.glyph(c).is_some()
-    }
-    /// Whether the face covers every character of `text`. Unlike [`Face::has_char`], a face whose
-    /// file is not loaded yet is read into a temporary buffer that is dropped afterwards, so
-    /// probing many system faces does not keep every font file in memory.
-    pub fn covers_text(&self, text: &str) -> bool {
-        if let (FaceData::File(p), None) = (&self.info.data, self.bytes.get()) {
-            let Ok(data) = std::fs::read(p) else { return false };
-            let Ok(font) = FontRef::from_index(&data, self.info.index) else { return false };
-            let charmap = font.charmap();
-            return text.chars().all(|c| charmap.map(c).is_some_and(|g| g.to_u32() != 0));
-        }
-        text.chars().all(|c| self.has_char(c))
     }
     /// Height of the glyph's vertical origin above its baseline, in pixels.
     /// OpenType VORG takes precedence; TrueType uses the ink top plus vmtx's top bearing.
@@ -297,6 +281,7 @@ impl Face {
             underline_thickness: m.underline.map_or(px * 0.06, |u| u.thickness.max(px * 0.03)),
         }
     }
+    #[cfg(test)]
     /// Whether the face's GSUB offers an OpenType feature (e.g. `smcp`).
     pub fn has_feature(&self, tag: &[u8; 4]) -> bool {
         use skrifa::raw::TableProvider;
@@ -610,27 +595,5 @@ mod tests {
         assert!(f.has_char('A') && f.has_char('Ж'));
         assert!(!f.has_char('\u{5d0}'), "Inter has no Hebrew");
         assert!(f.has_feature(b"liga") || f.has_feature(b"calt"));
-    }
-
-    #[test]
-    fn covers_text_does_not_keep_file_bytes() {
-        let path = std::env::temp_dir().join(format!("filmcraft-covers-text-{}.ttf", std::process::id()));
-        std::fs::write(&path, INTER_REGULAR).expect("write temp font");
-        let info = FaceInfo {
-            family: "Inter".into(),
-            style: "Regular".into(),
-            weight: 400,
-            italic: false,
-            index: 0,
-            data: FaceData::File(path.clone()),
-            origin: "system",
-        };
-        let f = Face { id: 0, info, bytes: OnceLock::new(), shaper: OnceLock::new() };
-        assert!(f.covers_text("A\u{416}"));
-        assert!(!f.covers_text("A\u{5d0}"));
-        assert!(f.bytes.get().is_none(), "probing coverage must not cache the file");
-        assert!(f.data().is_some());
-        assert!(f.bytes.get().is_some());
-        let _ = std::fs::remove_file(&path);
     }
 }

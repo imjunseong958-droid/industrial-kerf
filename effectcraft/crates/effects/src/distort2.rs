@@ -11,8 +11,8 @@
 //! vertex's offset in layer pixels. An empty string (or one with the wrong count) is the
 //! undistorted mesh.
 
-use crate::Value;
 use crate::ParamUi;
+use crate::Value;
 use std::f64::consts::FRAC_PI_2;
 
 use crate::util::{layer_rect, remap};

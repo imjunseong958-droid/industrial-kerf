@@ -1,8 +1,8 @@
 //! Noise & Grain effects: film grain, median-family filters, denoising and procedural noise.
 
-use effectcraft_color::luminance;
-use crate::Value;
 use crate::ParamUi;
+use crate::Value;
+use effectcraft_color::luminance;
 use effectcraft_raster::{Image, Px};
 use rayon::prelude::*;
 

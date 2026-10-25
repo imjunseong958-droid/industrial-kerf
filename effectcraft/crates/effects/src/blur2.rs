@@ -2,10 +2,10 @@
 //! blurs (Channel, Compound, CC Vector), bokeh (Camera Lens Blur), radial streaks and small
 //! utilities (Reduce Interlace Flicker, CC Cross Blur).
 
+use crate::ParamUi;
+use crate::Value;
 use crate::{Buf, EffectCtx, EffectSpec, num, p, slider};
 use effectcraft_color::luminance;
-use crate::Value;
-use crate::ParamUi;
 use effectcraft_raster::{Image, Px};
 use rayon::prelude::*;
 

@@ -23,9 +23,13 @@
 //! Compression (threshold 0.8, limit 1.25, power 1.2); colours inside 80 % of the gamut boundary
 //! are unchanged.
 
-use crate::log::{Domain, normalized_from_signal, signal_from_normalized};
+use crate::log::signal_from_normalized;
+#[cfg(test)]
+use crate::log::{Domain, normalized_from_signal};
 use crate::spaces::{ColorPipeline, ColorSpace, Curve, Gamut, gamut_matrix, to_f32};
-use crate::{Range, hlg_inverse_oetf, hlg_oetf, linear_to_srgb, pq_eotf, pq_inverse_eotf, srgb_to_linear};
+use crate::{Range, hlg_inverse_oetf, pq_eotf, pq_inverse_eotf, srgb_to_linear};
+#[cfg(test)]
+use crate::{hlg_oetf, linear_to_srgb};
 
 /// BT.2408 HDR reference white.
 pub const REFERENCE_WHITE_NITS: f64 = 203.0;
@@ -55,6 +59,7 @@ pub fn decode_channel(v: f64, curve: Curve, range: Range) -> f64 {
     }
 }
 
+#[cfg(test)]
 /// Encode one channel: working-linear → decoder-normalised signal (inverse of [`decode_channel`]).
 pub fn encode_channel(l: f64, curve: Curve, range: Range) -> f64 {
     match curve {
@@ -331,66 +336,7 @@ pub fn desaturate_into_gamut(c: [f32; 3], luma: [f32; 3]) -> [f32; 3] {
     c.map(|v| (y + (v - y) * t).max(0.0))
 }
 
-/// Working space → monitor (display-referred SDR BT.709) or → encoded export signal.
-#[derive(Clone, Debug)]
-pub struct OutputTransform {
-    pub target: ColorSpace,
-    matrix: [[f32; 3]; 3],
-    identity_matrix: bool,
-    tone: Option<ToneMap>,
-    /// Target luma weights when the working gamut is wider than the target's.
-    compress: Option<[f32; 3]>,
-}
-
-impl OutputTransform {
-    /// For the monitors: SDR BT.709 linear (encode with the sRGB curve as usual).
-    pub fn display(pipe: &ColorPipeline) -> Self {
-        Self::new(pipe, ColorSpace::Rec709)
-    }
-    /// For export/encode into `target` (Rec709, Rec2100Pq or Rec2100Hlg).
-    pub fn new(pipe: &ColorPipeline, target: ColorSpace) -> Self {
-        let wg = pipe.working_gamut();
-        let tg = target.gamut();
-        let tone = (pipe.working.is_hdr() && !target.is_hdr()).then(|| ToneMap::new(HDR_PEAK_NITS, REFERENCE_WHITE_NITS));
-        let l = tg.luma();
-        let compress = (!gamut_within(wg, tg)).then(|| [l[0] as f32, l[1] as f32, l[2] as f32]);
-        OutputTransform { target, matrix: to_f32(&gamut_matrix(wg, tg)), identity_matrix: wg == tg, tone, compress }
-    }
-    pub fn is_identity(&self) -> bool {
-        self.identity_matrix && self.tone.is_none()
-    }
-    /// Working linear → target linear (SDR: 1.0 = white; HDR: working units).
-    #[inline]
-    pub fn apply(&self, mut c: [f32; 3]) -> [f32; 3] {
-        if let Some(t) = &self.tone {
-            c = t.apply(c);
-        }
-        if !self.identity_matrix {
-            c = crate::spaces::apply3(&self.matrix, c);
-        }
-        if let Some(l) = self.compress {
-            c = desaturate_into_gamut(c, l);
-        }
-        c
-    }
-    /// Working linear → encoded signal (0..1, full scale) of the target colour space.
-    pub fn encode(&self, c: [f32; 3]) -> [f32; 3] {
-        let l = self.apply(c);
-        match self.target.curve() {
-            Curve::Hlg => {
-                // inverse OOTF (BT.2100): display light (normalised to the 1000 cd/m² peak) → scene
-                let k = (REFERENCE_WHITE_NITS / HDR_PEAK_NITS) as f32;
-                let fd = l.map(|v| (v * k).clamp(0.0, 1.0));
-                let lm = Gamut::Bt2020.luma();
-                let yd = (lm[0] as f32 * fd[0] + lm[1] as f32 * fd[1] + lm[2] as f32 * fd[2]).max(1e-9);
-                let g = yd.powf(((1.0 - HLG_GAMMA) / HLG_GAMMA) as f32);
-                fd.map(|v| hlg_oetf((v * g).clamp(0.0, 1.0)))
-            }
-            curve => l.map(|v| encode_channel(v as f64, curve, Range::Full).clamp(0.0, 1.0) as f32),
-        }
-    }
-}
-
+#[cfg(test)]
 /// Convenience: a log colour space → display Rec. 709 (tone mapped), used for the built-in
 /// camera conversion LUTs.
 pub fn log_to_rec709(src: ColorSpace, rgb_signal: [f32; 3], range: Range) -> [f32; 3] {
@@ -399,6 +345,7 @@ pub fn log_to_rec709(src: ColorSpace, rgb_signal: [f32; 3], range: Range) -> [f3
     l.map(|v| linear_to_srgb(v.clamp(0.0, 1.0)))
 }
 
+#[cfg(test)]
 /// Decoder-normalised value of a curve-domain value — re-exported for callers that build their
 /// own tables.
 pub fn domain_value(v: f64, range: Range, d: Domain) -> f64 {
@@ -441,12 +388,6 @@ mod tests {
         let t = InputTransform::new(ColorSpace::Rec2100Hlg, Range::Full, &hdr(WorkingSpace::Rec2100Hlg), None);
         let w = t.convert([0.75, 0.75, 0.75]);
         assert!((w[0] - 1.0).abs() < 0.01, "{w:?}");
-        // and back through the HLG output
-        let o = OutputTransform::new(&hdr(WorkingSpace::Rec2100Hlg), ColorSpace::Rec2100Hlg);
-        let e = o.encode(w);
-        assert!((e[0] - 0.75).abs() < 1e-3, "{e:?}");
-        let o = OutputTransform::new(&hdr(WorkingSpace::Rec2100Pq), ColorSpace::Rec2100Pq);
-        assert!((o.encode([1.0; 3])[1] as f64 - pq203).abs() < 1e-4);
     }
 
     #[test]
@@ -530,7 +471,7 @@ mod tests {
     }
 
     #[test]
-    fn sdr_in_hdr_keeps_values_and_display_tone_maps() {
+    fn sdr_in_hdr_keeps_values() {
         let pipe = hdr(WorkingSpace::Rec2100Pq);
         let t = InputTransform::new(ColorSpace::Rec709, Range::Limited, &pipe, None);
         let w = t.convert([1.0, 1.0, 1.0]);
@@ -538,16 +479,5 @@ mod tests {
         let red = t.convert([1.0, 0.0, 0.0]);
         // 709 red in 2020 (BT.2087)
         assert!((red[0] - 0.6274).abs() < 1e-3 && (red[1] - 0.0691).abs() < 1e-3 && (red[2] - 0.0164).abs() < 1e-3);
-        let d = OutputTransform::display(&pipe);
-        let back = d.apply(red);
-        assert!((back[0] - 0.8).abs() < 0.2 && back[1].abs() < 1e-4 && back[2].abs() < 1e-4, "{back:?}");
-        // a BT.2020-only green is desaturated into 709 keeping its luminance
-        let g = d.apply([0.0, 0.5, 0.0]);
-        assert!(g.iter().all(|v| *v >= 0.0) && g[1] > g[0] && g[1] > g[2], "{g:?}");
-        // a 1000-nit highlight comes back at SDR peak
-        let hi = d.apply([1000.0 / 203.0; 3]);
-        assert!((hi[0] - 1.0).abs() < 0.01);
-        // plain pipeline is an identity
-        assert!(OutputTransform::display(&ColorPipeline::REC709).is_identity());
     }
 }

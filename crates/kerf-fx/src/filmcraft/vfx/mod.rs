@@ -32,7 +32,9 @@ use rayon::prelude::*;
 use crate::filmcraft::effects::FxCtx;
 use kerf_draw::Image;
 
-pub use temporal::{clear_stabilizer_cache, stabilizer_path, StabilizerPath};
+#[cfg(test)]
+pub use temporal::clear_stabilizer_cache;
+pub use temporal::{stabilizer_path, StabilizerPath};
 
 /// What an effect may know about the clip beyond its own pixels.
 pub trait FxEnv: Sync {

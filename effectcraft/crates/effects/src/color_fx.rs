@@ -1,8 +1,8 @@
 //! Color Correction effects.
 
-use effectcraft_color::{hsl_to_rgb, luminance, rgb_to_hsl};
-use crate::Value;
 use crate::ParamUi;
+use crate::Value;
+use effectcraft_color::{hsl_to_rgb, luminance, rgb_to_hsl};
 
 use crate::{Buf, EffectCtx, EffectSpec, col, num, p, popup, slider};
 

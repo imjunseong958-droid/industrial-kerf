@@ -49,6 +49,7 @@ pub enum LogCurve {
 }
 
 impl LogCurve {
+    #[cfg(test)]
     pub const ALL: [LogCurve; 10] = [
         LogCurve::SLog3,
         LogCurve::VLog,
@@ -69,21 +70,7 @@ impl LogCurve {
         }
     }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            LogCurve::SLog3 => "S-Log3",
-            LogCurve::VLog => "V-Log",
-            LogCurve::CLog2 => "Canon Log 2",
-            LogCurve::CLog3 => "Canon Log 3",
-            LogCurve::LogC3 => "ARRI LogC3",
-            LogCurve::LogC4 => "ARRI LogC4",
-            LogCurve::AppleLog => "Apple Log",
-            LogCurve::DLog => "DJI D-Log",
-            LogCurve::FLog => "Fujifilm F-Log",
-            LogCurve::FLog2 => "Fujifilm F-Log2",
-        }
-    }
-
+    #[cfg(test)]
     /// Scene-linear → signal (curve domain).
     pub fn encode(self, x: f64) -> f64 {
         match self {
@@ -136,6 +123,7 @@ pub fn signal_from_normalized(v: f64, range: Range, d: Domain) -> f64 {
     }
 }
 
+#[cfg(test)]
 /// Curve-domain signal → decoder-normalised value (0..1 in the file's range).
 pub fn normalized_from_signal(s: f64, range: Range, d: Domain) -> f64 {
     match (range, d) {
@@ -148,6 +136,7 @@ pub fn normalized_from_signal(s: f64, range: Range, d: Domain) -> f64 {
 // ---------------------------------------------------------------- Sony S-Log3
 // Sony, "Technical Summary for S-Gamut3.Cine/S-Log3 and S-Gamut3/S-Log3" (2014).
 
+#[cfg(test)]
 pub fn slog3_encode(x: f64) -> f64 {
     if x >= 0.011_25 { (420.0 + ((x + 0.01) / (0.18 + 0.01)).log10() * 261.5) / 1023.0 } else { (x * (171.210_294_692_9 - 95.0) / 0.011_25 + 95.0) / 1023.0 }
 }
@@ -166,6 +155,7 @@ const VLOG_B: f64 = 0.008_73;
 const VLOG_C: f64 = 0.241_514;
 const VLOG_D: f64 = 0.598_206;
 
+#[cfg(test)]
 pub fn vlog_encode(x: f64) -> f64 {
     if x < 0.01 { 5.6 * x + 0.125 } else { VLOG_C * (x + VLOG_B).log10() + VLOG_D }
 }
@@ -177,6 +167,7 @@ pub fn vlog_decode(y: f64) -> f64 {
 // Canon, "Canon Log Gamma Curves — Description of the Canon Log, Canon Log 2 and Canon Log 3"
 // (white paper, 2018). The formulas take x = reflectance / 0.9 and give IRE.
 
+#[cfg(test)]
 pub fn clog2_encode(r: f64) -> f64 {
     let x = r / 0.9;
     if x < 0.0 { -0.241_360_77 * (-x * 87.099_375_46 + 1.0).log10() + 0.092_864_125 } else { 0.241_360_77 * (x * 87.099_375_46 + 1.0).log10() + 0.092_864_125 }
@@ -190,6 +181,7 @@ pub fn clog2_decode(y: f64) -> f64 {
     x * 0.9
 }
 
+#[cfg(test)]
 pub fn clog3_encode(r: f64) -> f64 {
     let x = r / 0.9;
     if x < -0.014 {
@@ -216,6 +208,7 @@ pub fn clog3_decode(y: f64) -> f64 {
 
 const LOGC3: (f64, f64, f64, f64, f64, f64, f64) = (0.010_591, 5.555_556, 0.052_272, 0.247_190, 0.385_537, 5.367_655, 0.092_809);
 
+#[cfg(test)]
 pub fn logc3_encode(x: f64) -> f64 {
     let (cut, a, b, c, d, e, f) = LOGC3;
     if x > cut { c * (a * x + b).log10() + d } else { e * x + f }
@@ -236,6 +229,7 @@ fn logc4_consts() -> (f64, f64, f64, f64, f64) {
     let t = (2f64.powf(14.0 * (-c / b) + 6.0) - 64.0) / a;
     (a, b, c, s, t)
 }
+#[cfg(test)]
 pub fn logc4_encode(x: f64) -> f64 {
     let (a, b, c, s, t) = logc4_consts();
     if x >= t { ((a * x + 64.0).log2() - 6.0) / 14.0 * b + c } else { (x - t) / s }
@@ -250,6 +244,7 @@ pub fn logc4_decode(y: f64) -> f64 {
 
 const APPLE: (f64, f64, f64, f64, f64, f64) = (-0.056_410_88, 0.01, 47.287_112_36, 0.009_640_52, 0.085_504_79, 0.693_369_45);
 
+#[cfg(test)]
 pub fn apple_log_encode(r: f64) -> f64 {
     let (r0, rt, c, beta, gamma, delta) = APPLE;
     if r >= rt {
@@ -275,6 +270,7 @@ pub fn apple_log_decode(p: f64) -> f64 {
 // ---------------------------------------------------------------- DJI D-Log
 // DJI, "White Paper on D-Log and D-Gamut of DJI Cinema Color System" (2017).
 
+#[cfg(test)]
 pub fn dlog_encode(x: f64) -> f64 {
     if x <= 0.0078 { 6.025 * x + 0.0929 } else { (x * 0.9892 + 0.0108).log10() * 0.256_663 + 0.584_555 }
 }
@@ -295,15 +291,35 @@ struct Fujifilm {
     d: f64,
     e: f64,
     f: f64,
+    #[cfg(test)]
     cut1: f64,
     cut2: f64,
 }
 
-const FLOG: Fujifilm =
-    Fujifilm { a: 0.555_556, b: 0.009_468, c: 0.344_676, d: 0.790_453, e: 8.735_631, f: 0.092_864, cut1: 0.000_89, cut2: 0.100_537_775_223_865 };
-const FLOG2: Fujifilm =
-    Fujifilm { a: 5.555_556, b: 0.064_829, c: 0.245_281, d: 0.384_316, e: 8.799_461, f: 0.092_864, cut1: 0.000_889, cut2: 0.100_686_685_370_811 };
+const FLOG: Fujifilm = Fujifilm {
+    a: 0.555_556,
+    b: 0.009_468,
+    c: 0.344_676,
+    d: 0.790_453,
+    e: 8.735_631,
+    f: 0.092_864,
+    #[cfg(test)]
+    cut1: 0.000_89,
+    cut2: 0.100_537_775_223_865,
+};
+const FLOG2: Fujifilm = Fujifilm {
+    a: 5.555_556,
+    b: 0.064_829,
+    c: 0.245_281,
+    d: 0.384_316,
+    e: 8.799_461,
+    f: 0.092_864,
+    #[cfg(test)]
+    cut1: 0.000_889,
+    cut2: 0.100_686_685_370_811,
+};
 
+#[cfg(test)]
 fn fujifilm_encode(k: &Fujifilm, x: f64) -> f64 {
     if x >= k.cut1 { k.c * (k.a * x + k.b).log10() + k.d } else { k.e * x + k.f }
 }

@@ -6,8 +6,8 @@
 //! Also home of the shared anti-aliased segment rasteriser ([`raster_segs`]) used by the text
 //! effects.
 
-use crate::Value;
 use crate::ParamUi;
+use crate::Value;
 use effectcraft_raster::Px;
 use rayon::prelude::*;
 use std::f64::consts::PI;

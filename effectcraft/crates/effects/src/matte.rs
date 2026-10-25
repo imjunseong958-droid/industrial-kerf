@@ -1,8 +1,8 @@
 //! Matte effects: chokers (grey-scale morphology and blur/threshold stages) and edge-aware matte
 //! refinement (guided filter, He et al. 2010).
 
-use crate::Value;
 use crate::ParamUi;
+use crate::Value;
 use rayon::prelude::*;
 
 use crate::util::{Plane, morph_frac, set_alpha};

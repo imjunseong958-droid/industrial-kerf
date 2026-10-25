@@ -32,33 +32,9 @@ pub const fn vec3(x: f64, y: f64, z: f64) -> Vec3 {
 }
 
 impl Vec2 {
-    pub const ZERO: Vec2 = vec2(0.0, 0.0);
-    pub const ONE: Vec2 = vec2(1.0, 1.0);
-    pub fn dot(self, o: Vec2) -> f64 {
-        self.x * o.x + self.y * o.y
-    }
-    pub fn cross(self, o: Vec2) -> f64 {
-        self.x * o.y - self.y * o.x
-    }
+    #[cfg(test)]
     pub fn length(self) -> f64 {
-        self.dot(self).sqrt()
-    }
-    pub fn normalize(self) -> Vec2 {
-        let l = self.length();
-        if l > 0.0 { self / l } else { self }
-    }
-    pub fn lerp(self, o: Vec2, t: f64) -> Vec2 {
-        self + (o - self) * t
-    }
-    pub fn extend(self, z: f64) -> Vec3 {
-        vec3(self.x, self.y, z)
-    }
-    pub fn rotate_deg(self, deg: f64) -> Vec2 {
-        let (s, c) = deg.to_radians().sin_cos();
-        vec2(self.x * c - self.y * s, self.x * s + self.y * c)
-    }
-    pub fn mul_elem(self, o: Vec2) -> Vec2 {
-        vec2(self.x * o.x, self.y * o.y)
+        (self.x * self.x + self.y * self.y).sqrt()
     }
 }
 

@@ -1,6 +1,6 @@
 //! Distort effects: inverse-mapped warps (each output pixel samples the source).
-use crate::Value;
 use crate::ParamUi;
+use crate::Value;
 use effectcraft_raster::Image;
 use rayon::prelude::*;
 

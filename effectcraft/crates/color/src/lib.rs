@@ -8,12 +8,9 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod blend;
-pub mod icc;
-pub mod space;
 
 pub use blend::{BlendMode, blend_pixel};
 use serde::{Deserialize, Serialize};
-pub use space::{ColorSpace, Conversion};
 
 /// Straight (un-premultiplied) RGBA, 0..1 nominal (32 bpc may exceed).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]

@@ -10,8 +10,8 @@
 //!   a small translation search (sum of squared differences on luma) and substituted with
 //!   feathered patch blending. Deterministic; neighbours come from [`crate::EffectHost::self_at`].
 
-use crate::Value;
 use crate::ParamUi;
+use crate::Value;
 use rayon::prelude::*;
 
 use crate::{Buf, EffectCtx, EffectSpec, num, p, popup, slider};

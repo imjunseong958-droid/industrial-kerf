@@ -6,10 +6,6 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod blur;
-pub mod cuts;
-pub mod flow;
-pub mod inpaint;
-pub mod scopes;
 pub mod warp;
 
 use effectcraft_color::{BlendMode, blend_pixel};
@@ -195,19 +191,6 @@ impl Image {
             }
         });
     }
-    /// Straight-alpha 8-bit RGBA (sRGB-encoded values as stored).
-    pub fn to_rgba8(&self) -> Vec<u8> {
-        let mut out = vec![0u8; self.data.len() * 4];
-        out.par_chunks_mut(4).zip(self.data.par_iter()).for_each(|(o, p)| {
-            let a = p[3].clamp(0.0, 1.0);
-            let inv = if a > 0.0 { 1.0 / p[3] } else { 0.0 };
-            for c in 0..3 {
-                o[c] = ((p[c] * inv).clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-            }
-            o[3] = (a * 255.0 + 0.5) as u8;
-        });
-        out
-    }
     /// Composite over an opaque background colour and return opaque 8-bit RGBA.
     pub fn to_rgba8_over(&self, bg: [f32; 3]) -> Vec<u8> {
         let mut out = vec![0u8; self.data.len() * 4];
@@ -219,15 +202,6 @@ impl Image {
             o[3] = 255;
         });
         out
-    }
-    /// From straight-alpha 8-bit RGBA.
-    pub fn from_rgba8(width: u32, height: u32, rgba: &[u8]) -> Image {
-        let mut img = Image::new(width, height);
-        img.data.par_iter_mut().zip(rgba.par_chunks(4)).for_each(|(p, s)| {
-            let a = s[3] as f32 / 255.0;
-            *p = [s[0] as f32 / 255.0 * a, s[1] as f32 / 255.0 * a, s[2] as f32 / 255.0 * a, a];
-        });
-        img
     }
     /// Straight-alpha colour at a pixel.
     pub fn straight(&self, x: i64, y: i64) -> Px {
@@ -262,22 +236,6 @@ impl Image {
             }
         });
     }
-    /// Bounding box of non-transparent pixels (x0, y0, x1, y1), None if empty.
-    pub fn alpha_bounds(&self) -> Option<(u32, u32, u32, u32)> {
-        let w = self.width as usize;
-        let mut b: Option<(u32, u32, u32, u32)> = None;
-        for (y, row) in self.data.chunks(w.max(1)).enumerate() {
-            if let Some(first) = row.iter().position(|p| p[3] > 1e-6) {
-                let last = row.iter().rposition(|p| p[3] > 1e-6).unwrap_or(first);
-                let (y, f, l) = (y as u32, first as u32, last as u32 + 1);
-                b = Some(match b {
-                    None => (f, y, l, y + 1),
-                    Some((x0, y0, x1, _)) => (x0.min(f), y0, x1.max(l), y + 1),
-                });
-            }
-        }
-        b
-    }
 }
 
 /// Deterministic per-pixel noise in 0..1.
@@ -298,35 +256,11 @@ pub struct Mask {
     pub data: Vec<f32>,
 }
 
-impl Mask {
-    pub fn new(width: u32, height: u32, v: f32) -> Mask {
-        Mask { width, height, data: vec![v; width as usize * height as usize] }
-    }
-    pub fn to_image(&self) -> Image {
-        Image { width: self.width, height: self.height, data: self.data.iter().map(|&a| [a, a, a, a]).collect() }
-    }
-    pub fn from_alpha(img: &Image) -> Mask {
-        Mask { width: img.width, height: img.height, data: img.data.iter().map(|p| p[3]).collect() }
-    }
-}
+impl Mask {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn rgba8_roundtrip() {
-        let src: Vec<u8> = vec![255, 128, 0, 255, 10, 20, 30, 128, 0, 0, 0, 0, 1, 2, 3, 4];
-        let img = Image::from_rgba8(2, 2, &src);
-        let back = img.to_rgba8();
-        for (a, b) in src.chunks(4).zip(back.chunks(4)) {
-            if a[3] >= 128 {
-                assert!(a.iter().zip(b).all(|(x, y)| (*x as i32 - *y as i32).abs() <= 1), "{a:?} {b:?}");
-            } else {
-                assert!((a[3] as i32 - b[3] as i32).abs() <= 1);
-            }
-        }
-    }
 
     #[test]
     fn bilinear_at_centres_is_exact() {
@@ -335,14 +269,6 @@ mod tests {
         assert_eq!(img.sample_bilinear(1.5, 1.5), [0.5, 0.25, 0.125, 1.0]);
         let half = img.sample_bilinear(2.0, 1.5);
         assert!((half[3] - 0.5).abs() < 1e-6);
-    }
-
-    #[test]
-    fn alpha_bounds_found() {
-        let mut img = Image::new(10, 10);
-        img.set(3, 4, [1.0; 4]);
-        img.set(6, 7, [1.0; 4]);
-        assert_eq!(img.alpha_bounds(), Some((3, 4, 7, 8)));
     }
 
     #[test]

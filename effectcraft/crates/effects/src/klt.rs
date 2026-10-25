@@ -79,10 +79,6 @@ impl GrayPyramid {
     }
 }
 
-
-
-
-
 /// Lucas–Kanade options.
 #[derive(Clone, Copy, Debug)]
 pub struct LkOpts {
@@ -207,12 +203,4 @@ pub fn track(a: &GrayPyramid, b: &GrayPyramid, pts: &[[f64; 2]], guesses: Option
 pub fn analysis_factor(w: u32, h: u32, max_side: u32) -> usize {
     let long = w.max(h).max(1);
     long.div_ceil(max_side.max(16)).max(1) as usize
-}
-
-#[cfg(test)]
-mod tests {
-
-
-
-
 }

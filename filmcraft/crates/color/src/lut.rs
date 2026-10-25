@@ -52,6 +52,7 @@ pub struct Lut3d {
 }
 
 impl Lut3d {
+    #[cfg(test)]
     pub fn identity(size: usize) -> Self {
         Self::from_fn(size, |c| c)
     }
@@ -75,6 +76,7 @@ impl Lut3d {
         self.data[r + g * self.size + b * self.size * self.size]
     }
 
+    #[cfg(test)]
     /// Parse a `.cube` file that contains a 3D table (a shaper, if present, is rejected; use
     /// [`Lut::parse_cube`] for those).
     pub fn parse_cube(text: &str) -> Result<Lut3d, String> {
@@ -128,6 +130,7 @@ impl Lut3d {
         o
     }
 
+    #[cfg(test)]
     /// Trilinear interpolation (kept for comparison; LUTs render tetrahedrally).
     pub fn apply_trilinear(&self, rgb: [f32; 3]) -> [f32; 3] {
         let n = self.size;

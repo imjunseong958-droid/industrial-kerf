@@ -60,27 +60,6 @@ impl Rect {
     pub fn bottom(&self) -> f64 {
         self.y + self.h
     }
-    pub fn contains(&self, p: Vec2) -> bool {
-        p.x >= self.x && p.y >= self.y && p.x < self.right() && p.y < self.bottom()
-    }
-    pub fn intersect(&self, o: &Rect) -> Option<Rect> {
-        let x0 = self.x.max(o.x);
-        let y0 = self.y.max(o.y);
-        let x1 = self.right().min(o.right());
-        let y1 = self.bottom().min(o.bottom());
-        (x1 > x0 && y1 > y0).then(|| Rect::new(x0, y0, x1 - x0, y1 - y0))
-    }
-    pub fn union(&self, o: &Rect) -> Rect {
-        let x0 = self.x.min(o.x);
-        let y0 = self.y.min(o.y);
-        Rect::new(x0, y0, self.right().max(o.right()) - x0, self.bottom().max(o.bottom()) - y0)
-    }
-    /// Fit `inner` (w,h) inside this rect preserving aspect, centered.
-    pub fn fit(&self, w: f64, h: f64) -> Rect {
-        let s = (self.w / w).min(self.h / h);
-        let (fw, fh) = (w * s, h * s);
-        Rect::new(self.x + (self.w - fw) / 2.0, self.y + (self.h - fh) / 2.0, fw, fh)
-    }
 }
 
 /// Affine transform `[a c e; b d f; 0 0 1]` mapping (x, y) → (a x + c y + e, b x + d y + f).
@@ -184,11 +163,5 @@ mod tests {
         let m = Affine::motion(Vec2::new(960.0, 540.0), Vec2::new(2.0, 2.0), 90.0, Vec2::new(10.0, 20.0));
         let p = m.apply(Vec2::new(10.0, 20.0));
         assert!((p - Vec2::new(960.0, 540.0)).length() < 1e-9);
-    }
-
-    #[test]
-    fn fit_rect() {
-        let r = Rect::new(0.0, 0.0, 200.0, 100.0).fit(16.0, 9.0);
-        assert!((r.h - 100.0).abs() < 1e-9 && (r.w - 177.777).abs() < 0.01);
     }
 }
