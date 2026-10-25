@@ -27,6 +27,11 @@ line, applied in order and atomically. Later lines see what earlier lines did.
 - Keyframes use clip-relative times: `opacity={0f:0 12f:1:ease}`.
   Interpolation: linear (default), hold, ease-in, ease-out, ease.
 
+## Versions
+Effects, transitions, and generators have versions, listed below as
+`id@version`. Documents keep the version an edit used (`fx c1 add
+blur.gaussian@1`); leave it out to take the current one.
+
 ## Operations
 ```
 use <sequence>                          choose the sequence when there are several
@@ -127,7 +132,13 @@ entry's parameters.";
 /// One catalog definition as the reference lists it: its id, domain, and
 /// doc, then a line per parameter.
 pub fn fx_reference(fx: &FxDef) -> String {
-    let mut out = format!("- `{}` ({}): {}\n", fx.id, fx.domain.name(), fx.doc);
+    let mut out = format!(
+        "- `{}@{}` ({}): {}\n",
+        fx.id,
+        fx.version,
+        fx.domain.name(),
+        fx.doc
+    );
     for param in &fx.params {
         writeln!(out, "  - {}", describe(param)).unwrap();
     }
@@ -187,7 +198,11 @@ mod tests {
         let catalog = Catalog::builtin();
         let text = reference(catalog);
         for fx in catalog.all() {
-            assert!(text.contains(&format!("`{}`", fx.id)), "{}", fx.id);
+            let listed = match fx.engine {
+                Engine::Graph => format!("`{}@{}`", fx.id, fx.version),
+                Engine::Raster => format!("`{}`", fx.id),
+            };
+            assert!(text.contains(&listed), "{}", fx.id);
         }
         assert!(text.contains("`opacity=1` (0..1, animatable) Layer opacity."));
         assert!(text.contains("`blend=normal` (normal|add|multiply"));

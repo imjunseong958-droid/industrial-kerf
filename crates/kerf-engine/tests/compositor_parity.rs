@@ -364,7 +364,7 @@ fn transforms_and_opacity_match_the_graph() {
                    \x20 track V1 video\n\
                    \x20   clip c1 media=t src=0f at=0f dur=24f\n\
                    \x20 track V2 video\n\
-                   \x20   clip g1 gen=solid at=0f dur=24f\n\
+                   \x20   clip g1 gen=solid@1 at=0f dur=24f\n\
                    \x20     set color=#3060c080 scale=0.5\n",
             window: false,
             frames: &[4],
@@ -384,7 +384,7 @@ fn transitions_match_the_graph() {
                    \x20 track V1 video\n\
                    \x20   clip c1 media=t src=12f at=0f dur=24f\n\
                    \x20   clip c2 media=b src=12f at=24f dur=24f\n\
-                   \x20   transition x1 from=c1 to=c2 fx=dissolve dur=12f\n",
+                   \x20   transition x1 from=c1 to=c2 fx=dissolve@1 dur=12f\n",
             window: false,
             frames: &[19, 24, 28],
             luma: 2.0,
@@ -397,7 +397,7 @@ fn transitions_match_the_graph() {
                    \x20 track V1 video\n\
                    \x20   clip c1 media=t src=12f at=0f dur=24f\n\
                    \x20   clip c2 media=b src=12f at=24f dur=24f\n\
-                   \x20   transition x1 from=c1 to=c2 fx=wipe dur=12f angle=30 softness=0.2\n",
+                   \x20   transition x1 from=c1 to=c2 fx=wipe@1 dur=12f angle=30 softness=0.2\n",
             window: false,
             frames: &[20, 24, 27],
             luma: 2.0,
@@ -410,7 +410,7 @@ fn transitions_match_the_graph() {
                    \x20 track V1 video\n\
                    \x20   clip c1 media=t src=12f at=0f dur=24f\n\
                    \x20   clip c2 media=b src=12f at=24f dur=24f\n\
-                   \x20   transition x1 from=c1 to=c2 fx=dip dur=12f color=#ffffff\n",
+                   \x20   transition x1 from=c1 to=c2 fx=dip@1 dur=12f color=#ffffff\n",
             window: false,
             frames: &[20, 24, 27],
             luma: 2.0,
@@ -514,7 +514,7 @@ fn effects_match_the_graph() {
                    \x20 track V1 video\n\
                    \x20   clip c1 media=t src=12f at=0f dur=24f\n\
                    \x20   clip c2 media=b src=12f at=24f dur=24f\n\
-                   \x20   transition x1 from=c1 to=c2 fx=transition.radialwipe dur=12f\n",
+                   \x20   transition x1 from=c1 to=c2 fx=transition.radialwipe@1 dur=12f\n",
             window: false,
             frames: &[19, 24, 28],
             luma: 1.0,
@@ -527,7 +527,7 @@ fn effects_match_the_graph() {
                    \x20 track V1 video\n\
                    \x20   clip c1 media=t src=0f at=0f dur=24f\n\
                    \x20 track V2 video\n\
-                   \x20   clip a1 gen=adjustment at=0f dur=24f\n\
+                   \x20   clip a1 gen=adjustment@1 at=0f dur=24f\n\
                    \x20     set opacity=0.7\n\
                    \x20     fx color.basic saturation=0 brightness=0.1\n",
             window: false,

@@ -958,16 +958,16 @@ mod tests {
         let crossfaded = project(
             "  track A1 audio\n    clip a1 media=source-b src=1s at=0s dur=2s\n    \
              clip a2 media=source-b src=4s at=2s dur=2s\n    \
-             transition x1 from=a1 to=a2 fx=crossfade dur=10f\n",
+             transition x1 from=a1 to=a2 fx=crossfade@1 dur=10f\n",
         );
         let plan = preview_plan(&crossfaded);
         assert_eq!(plan.mode, PreviewMode::NativeExact, "{:?}", plan.reasons);
         // Neither the compositor nor a render plays a transition out of an
         // adjustment layer.
         let adjusted = project(
-            "  track V1 video\n    clip a1 gen=adjustment at=0s dur=2s\n    \
-             clip g1 gen=solid at=2s dur=2s\n    \
-             transition x1 from=a1 to=g1 fx=dissolve dur=10f\n",
+            "  track V1 video\n    clip a1 gen=adjustment@1 at=0s dur=2s\n    \
+             clip g1 gen=solid@1 at=2s dur=2s\n    \
+             transition x1 from=a1 to=g1 fx=dissolve@1 dur=10f\n",
         );
         assert_eq!(preview_plan(&adjusted).mode, PreviewMode::Unavailable);
     }

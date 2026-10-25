@@ -883,7 +883,7 @@ impl<'a> Builder<'a> {
                     }),
                 }
             }
-            Content::Generator { fx, params } => match fx.as_str() {
+            Content::Generator { fx, params, .. } => match fx.as_str() {
                 "solid" => {
                     let color = self.color(&clip.id, params, "solid", "color")?;
                     let item = self.solid(clip.id.as_str(), color, canvas);

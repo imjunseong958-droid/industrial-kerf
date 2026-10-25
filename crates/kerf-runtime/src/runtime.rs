@@ -1881,7 +1881,7 @@ mod tests {
         ])
         .unwrap();
         assert!(
-            added.contains("      fx stylize.glow radius=40\n      fx channel.invert\n"),
+            added.contains("      fx stylize.glow@1 radius=40\n      fx channel.invert@1\n"),
             "{added}"
         );
         let set = ops(vec![EditOp::FxSet {
@@ -1892,7 +1892,7 @@ mod tests {
         }])
         .unwrap();
         assert!(
-            set.contains("      fx stylize.glow enabled=false\n"),
+            set.contains("      fx stylize.glow@1 enabled=false\n"),
             "{set}"
         );
         let removed = ops(vec![EditOp::FxRemove {

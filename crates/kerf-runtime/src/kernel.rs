@@ -775,6 +775,7 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
                 clip: edit_id(clip)?,
                 effect: Effect {
                     fx: def.id.clone(),
+                    version: def.version,
                     enabled: true,
                     params,
                 },

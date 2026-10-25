@@ -1282,6 +1282,7 @@ fn effect_previews(
         let mut stack = own.clone();
         stack.push(Effect {
             fx: fx.id.clone(),
+            version: fx.version,
             enabled: true,
             params: Default::default(),
         });

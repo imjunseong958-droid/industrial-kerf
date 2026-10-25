@@ -120,6 +120,31 @@ pub fn amount(text: &str, rate: Rate) -> Result<Time, String> {
 }
 
 /// A clip-relative offset such as a keyframe time: `12f` or `9fl`.
+/// Read a catalog reference, `blur.gaussian@1` or, without its version,
+/// `blur.gaussian`.
+pub fn parse_fx_ref(text: &str) -> Result<(Id, Option<u32>), String> {
+    let (id, version) = match text.split_once('@') {
+        None => (text, None),
+        Some((id, digits)) => {
+            let version = digits
+                .parse::<u32>()
+                .ok()
+                .filter(|version| *version > 0 && version.to_string() == digits)
+                .ok_or_else(|| {
+                    format!("`{text}` needs a whole version from 1 after `@`, as in `{id}@1`")
+                })?;
+            (id, Some(version))
+        }
+    };
+    let id = Id::new(id).map_err(|e| e.to_string())?;
+    Ok((id, version))
+}
+
+/// A catalog reference as documents write it.
+pub fn print_fx_ref(id: &Id, version: u32) -> String {
+    format!("{id}@{version}")
+}
+
 pub fn print_offset(time: Time, rate: Rate) -> String {
     match rate.frames_exact(time) {
         Some(frames) => format!("{frames}f"),
@@ -318,6 +343,23 @@ impl<'a> Fields<'a> {
     pub fn id(&self, index: usize, what: &str) -> Result<Id, Diagnostic> {
         let word = self.word(index, what)?;
         Id::new(word).map_err(|e| self.error(self.positional[index], e.to_string()))
+    }
+
+    /// The positional `id@version` at `index`; the version is `None` when
+    /// it is not written.
+    pub fn fx_ref(&self, index: usize, what: &str) -> Result<(Id, Option<u32>), Diagnostic> {
+        let word = self.word(index, what)?;
+        parse_fx_ref(word).map_err(|message| self.error(self.positional[index], message))
+    }
+
+    /// The `id@version` given as `key=`.
+    pub fn take_fx_ref(&mut self, key: &'a str) -> Result<Option<(Id, Option<u32>)>, Diagnostic> {
+        self.take(key)
+            .map(|arg| {
+                let text = self.text(arg)?;
+                parse_fx_ref(text).map_err(|message| self.error(arg, message))
+            })
+            .transpose()
     }
 
     pub fn take(&mut self, key: &'a str) -> Option<&'a Arg> {

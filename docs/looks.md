@@ -1,7 +1,7 @@
 # Effects, looks, and versions
 
-> Status: design. Versions are being implemented first; looks follow once
-> the built-in effects are settled (see the plan at the end).
+> Status: versions are in. Looks follow once the built-in effects are
+> settled (see the plan at the end).
 
 Kerf draws with a small set of **built-in effects**: transitions, color,
 blur, keys, distortion, transform, and the few others an editor reaches for.

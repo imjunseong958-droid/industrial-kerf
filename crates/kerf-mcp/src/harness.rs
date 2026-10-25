@@ -1962,7 +1962,7 @@ sequence s1 rate=24 size=1920x1080
         let prompt = system_prompt(&kerf_skills::bundled_skills());
         assert!(prompt.starts_with("You edit video in Kerf."));
         assert!(prompt.contains("# Kerf edit script"));
-        assert!(prompt.contains("`dissolve`"));
+        assert!(prompt.contains("`dissolve@1`"));
         assert!(prompt.contains("## shorts"));
         for retired in [
             "tools.search",

@@ -122,7 +122,7 @@ fn audio_waveform_draws_the_sound_track_it_names() {
              media a path=\"{path}\" rate=24 dur=24f audio=2ch@48000\n\
              sequence s1 rate=24 size=320x180 audio=48000\n\
              \x20 track V1 video\n\
-             \x20   clip g1 gen=solid at=0f dur=24f\n\
+             \x20   clip g1 gen=solid@1 at=0f dur=24f\n\
              \x20     set color=#000000\n\
              \x20     fx generate.audiowaveform audioLayer=A1 maximumHeight=160 thickness=2\n\
              \x20 track A1 audio\n\

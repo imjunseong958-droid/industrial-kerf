@@ -131,6 +131,7 @@ fn track_json(project: &Project, sequence: &Sequence, track: &Track) -> Json {
                 "from": transition.from.as_str(),
                 "to": transition.to.as_str(),
                 "fx": transition.fx.as_str(),
+                "version": transition.version,
                 "align": transition.align.name(),
                 "start": (cut - before).seconds(),
                 "end": (cut + after).seconds(),
@@ -185,9 +186,14 @@ fn clip_json(project: &Project, rate: Rate, clip: &Clip) -> Json {
                 .entry("name")
                 .or_insert_with(|| json!(sequence.as_str()));
         }
-        Content::Generator { fx, params } => {
+        Content::Generator {
+            fx,
+            version,
+            params,
+        } => {
             object.insert("kind".into(), json!("generator"));
             object.insert("fx".into(), json!(fx.as_str()));
+            object.insert("version".into(), json!(version));
             let name = match params.get("text") {
                 Some(Param::Static(Value::Text(text))) => text.clone(),
                 _ => fx.to_string(),
@@ -226,6 +232,7 @@ fn clip_json(project: &Project, rate: Rate, clip: &Clip) -> Json {
                         .collect();
                     json!({
                         "fx": effect.fx.as_str(),
+                        "version": effect.version,
                         "enabled": effect.enabled,
                         "doc": Catalog::builtin().fx(effect.fx.as_str()).map(|def| def.doc.as_str()),
                         "params": params,
@@ -352,12 +359,12 @@ mod tests {
              \x20   clip c1 media=m1 src=2s at=0f dur=48f\n\
              \x20     set opacity=0.5 crop_l=0.25\n\
              \x20   clip c2 media=m1 src=10s at=48f dur=24f speed=-1\n\
-             \x20   transition t1 from=c1 to=c2 fx=dissolve dur=12f\n\
+             \x20   transition t1 from=c1 to=c2 fx=dissolve@1 dur=12f\n\
              \x20 track A1 audio\n\
              \x20   clip a1 media=m1 src=2s at=0f dur=48f\n\
              \x20     set gain=-6\n\
              \x20 track V2 video\n\
-             \x20   clip g1 gen=title at=0f dur=24f\n\
+             \x20   clip g1 gen=title@1 at=0f dur=24f\n\
              \x20     set y=0.3 text=\"Day One\"\n",
             Catalog::builtin(),
         )

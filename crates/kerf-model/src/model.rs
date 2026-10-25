@@ -226,6 +226,8 @@ pub enum Content {
     },
     Generator {
         fx: Id,
+        /// The generator's version, as documents name it (`title@1`).
+        version: u32,
         params: Params,
     },
     Caption {
@@ -375,6 +377,8 @@ impl Clip {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Effect {
     pub fx: Id,
+    /// The effect's version, as documents name it (`blur.gaussian@1`).
+    pub version: u32,
     pub enabled: bool,
     pub params: Params,
 }
@@ -495,6 +499,8 @@ pub struct Transition {
     pub from: Id,
     pub to: Id,
     pub fx: Id,
+    /// The transition's version, as documents name it (`dissolve@1`).
+    pub version: u32,
     pub duration: Time,
     pub align: Align,
     pub params: Params,
@@ -729,12 +735,14 @@ mod tests {
         clip.effects = vec![
             Effect {
                 fx: Id::new("utility.applylut").unwrap(),
+                version: 1,
                 enabled: true,
                 params: [("lut".to_owned(), text("looks/warm.cube"))].into(),
             },
             // A look's name is text, not a file.
             Effect {
                 fx: Id::new("color.ociolook").unwrap(),
+                version: 1,
                 enabled: true,
                 params: [("looks".to_owned(), text("warm"))].into(),
             },
@@ -843,6 +851,7 @@ mod tests {
             from: Id::new("a").unwrap(),
             to: Id::new("b").unwrap(),
             fx: Id::new("dissolve").unwrap(),
+            version: 1,
             duration: frames(13),
             align: Align::Center,
             params: Params::new(),

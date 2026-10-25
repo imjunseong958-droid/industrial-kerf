@@ -55,7 +55,7 @@ fn titles_are_centered_on_the_frame() {
     let body = format!(
         "{SEQUENCE}\
          \x20 track V1 video\n\
-         \x20   clip t1 gen=title at=0f dur=24f\n\
+         \x20   clip t1 gen=title@1 at=0f dur=24f\n\
          \x20     set text=\"KERF\" size=0.25\n"
     );
     let frame = frame(&body, 6, false);
@@ -74,7 +74,7 @@ fn titles_aligned_left_begin_at_the_center() {
     let body = format!(
         "{SEQUENCE}\
          \x20 track V1 video\n\
-         \x20   clip t1 gen=title at=0f dur=24f\n\
+         \x20   clip t1 gen=title@1 at=0f dur=24f\n\
          \x20     set text=\"KERF\" size=0.2 align=left x=0.1\n"
     );
     let frame = frame(&body, 0, false);
@@ -103,13 +103,13 @@ fn blend_modes_combine_with_the_layers_below() {
     let body = format!(
         "{SEQUENCE}\
          \x20 track V1 video\n\
-         \x20   clip g1 gen=solid at=0f dur=24f\n\
+         \x20   clip g1 gen=solid@1 at=0f dur=24f\n\
          \x20     set color=#808080\n\
          \x20 track V2 video\n\
-         \x20   clip g2 gen=solid at=0f dur=24f\n\
+         \x20   clip g2 gen=solid@1 at=0f dur=24f\n\
          \x20     set color=#ff8000 blend=multiply\n\
          \x20 track V3 video\n\
-         \x20   clip g3 gen=solid at=0f dur=24f\n\
+         \x20   clip g3 gen=solid@1 at=0f dur=24f\n\
          \x20     set color=#202020 blend=screen scale=0.5\n"
     );
     let frame = frame(&body, 0, false);
@@ -128,10 +128,10 @@ fn adjustment_layers_take_raster_effects() {
     let body = format!(
         "{SEQUENCE}\
          \x20 track V1 video\n\
-         \x20   clip g1 gen=solid at=0f dur=24f\n\
+         \x20   clip g1 gen=solid@1 at=0f dur=24f\n\
          \x20     set color=#ff0000\n\
          \x20 track V2 video\n\
-         \x20   clip a1 gen=adjustment at=0f dur=12f\n\
+         \x20   clip a1 gen=adjustment@1 at=0f dur=12f\n\
          \x20     fx channel.invert\n"
     );
     // Red inverted is cyan while the adjustment layer lasts.
@@ -146,7 +146,7 @@ fn time_effects_read_the_clips_other_frames() {
         format!(
             "{SEQUENCE}\
              \x20 track V1 video\n\
-             \x20   clip g1 gen=solid at=0f dur=24f\n\
+             \x20   clip g1 gen=solid@1 at=0f dur=24f\n\
              \x20     set color=#000000\n\
              \x20     fx channel.invert blend={{0f:100 23f:0}}\n\
              {fx}"
@@ -167,11 +167,11 @@ fn effects_read_other_tracks_even_hidden_ones() {
     let body = format!(
         "{SEQUENCE}\
          \x20 track V1 video\n\
-         \x20   clip g1 gen=solid at=0f dur=24f\n\
+         \x20   clip g1 gen=solid@1 at=0f dur=24f\n\
          \x20     set color=#ff0000\n\
          \x20     fx channel.setmatte takeMatteFromLayer=V2\n\
          \x20 track V2 video enabled=false\n\
-         \x20   clip m1 gen=solid at=0f dur=24f\n\
+         \x20   clip m1 gen=solid@1 at=0f dur=24f\n\
          \x20     set color=#ffffff scale=0.5\n"
     );
     let frame = frame(&body, 4, false);
@@ -185,7 +185,7 @@ fn masks_cut_the_picture_and_effects_draw_along_them() {
         format!(
             "{SEQUENCE}\
              \x20 track V1 video\n\
-             \x20   clip g1 gen=solid at=0f dur=24f\n\
+             \x20   clip g1 gen=solid@1 at=0f dur=24f\n\
              \x20     set color=#ff0000\n\
              {lines}"
         )
@@ -240,7 +240,7 @@ fn reshape_moves_what_one_mask_holds_into_another() {
         format!(
             "{SEQUENCE}\
              \x20 track V1 video\n\
-             \x20   clip g1 gen=solid at=0f dur=24f\n\
+             \x20   clip g1 gen=solid@1 at=0f dur=24f\n\
              \x20     set color=#ff0000\n\
              \x20     mask box rect=0.25,0.3,0.45,0.7 mode=none\n\
              \x20     mask moved rect=0.55,0.3,0.75,0.7 mode=none\n\
@@ -274,7 +274,7 @@ fn color_stabilizer_holds_the_reference_frame() {
         format!(
             "{SEQUENCE}\
              \x20 track V1 video\n\
-             \x20   clip g1 gen=solid at=0f dur=24f\n\
+             \x20   clip g1 gen=solid@1 at=0f dur=24f\n\
              \x20     set color=#404040\n\
              \x20     fx channel.invert blend={{0f:100 23f:0}}\n\
              {fx}"
@@ -295,10 +295,10 @@ fn unsupported_things_are_named() {
     let body = format!(
         "{SEQUENCE}\
          \x20 track V1 video\n\
-         \x20   clip a1 gen=adjustment at=0f dur=24f\n\
+         \x20   clip a1 gen=adjustment@1 at=0f dur=24f\n\
          \x20     fx channel.invert\n\
-         \x20   clip g1 gen=solid at=24f dur=24f\n\
-         \x20   transition x1 from=a1 to=g1 fx=dissolve dur=6f\n"
+         \x20   clip g1 gen=solid@1 at=24f dur=24f\n\
+         \x20   transition x1 from=a1 to=g1 fx=dissolve@1 dur=6f\n"
     );
     match compositor(&body, false) {
         Err(error @ ComposeError::Unsupported { .. }) => {
@@ -334,18 +334,18 @@ fn the_gpu_draws_what_the_cpu_draws() {
         &format!(
             "kerf 1\nproject name=\"t\"\n{SEQUENCE}\
              \x20 track V1 video\n\
-             \x20   clip g1 gen=solid at=0f dur=24f\n\
+             \x20   clip g1 gen=solid@1 at=0f dur=24f\n\
              \x20     set color=#3070b0\n\
-             \x20   clip g2 gen=solid at=24f dur=24f\n\
+             \x20   clip g2 gen=solid@1 at=24f dur=24f\n\
              \x20     set color=#b07030\n\
-             \x20   transition x1 from=g1 to=g2 fx=dissolve dur=12f\n\
+             \x20   transition x1 from=g1 to=g2 fx=dissolve@1 dur=12f\n\
              \x20 track V2 video\n\
-             \x20   clip g3 gen=solid at=0f dur=48f\n\
+             \x20   clip g3 gen=solid@1 at=0f dur=48f\n\
              \x20     set color=#f0f0f0 scale=0.4 rotation=12 x=0.2 opacity=0.8\n\
              \x20     fx blur.gaussian radius=8\n\
              \x20     fx stylize.glow\n\
              \x20 track V3 video\n\
-             \x20   clip t1 gen=title at=0f dur=48f\n\
+             \x20   clip t1 gen=title@1 at=0f dur=48f\n\
              \x20     set text=\"KERF\" size=0.2 y=0.25\n"
         ),
         Catalog::builtin(),

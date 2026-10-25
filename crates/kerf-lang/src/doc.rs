@@ -10,7 +10,7 @@
 //!   track V1 video
 //!     clip c1 media=m1 src=14:22:35:00 at=01:00:00:00 dur=00:00:06:12
 //!       set opacity=0.9
-//!       fx color.basic exposure=0.3
+//!       fx color.basic@1 exposure=0.3
 //!   marker mk1 at=01:00:05:00 name="pickup" color=red
 //! ```
 //!
@@ -18,11 +18,11 @@
 //! is deterministic and omits defaults, so a document diff is an edit diff.
 
 use crate::lex::{lex, Arg, Atom, Line};
-use crate::text::{number, print_param, quote, Clock, Fields};
+use crate::text::{number, print_fx_ref, print_param, quote, Clock, Fields};
 use kerf_model::time::parse_timecode;
 use kerf_model::Align;
 use kerf_model::{
-    validate, AudioInfo, Catalog, Clip, Content, Diagnostic, Domain, Effect, Id, Marker,
+    validate, AudioInfo, Catalog, Clip, Content, Diagnostic, Domain, Effect, FxDef, Id, Marker,
     MarkerColor, Mask, MaskMode, MaskShape, Media, Param, ParamDef, ParamType, Params, Project,
     Rate, Ratio, Sequence, Time, Track, TrackKind, Transition, Value, VideoInfo,
 };
@@ -294,7 +294,7 @@ impl Parser<'_> {
         let clock = Clock::of_sequence(&self.project.sequences[s]);
         let mut fields = Fields::new(line)?;
         let id = fields.id(1, "a clip id")?;
-        let (content, _) = content(&mut fields, &self.project)?;
+        let (content, _) = content(&mut fields, &self.project, self.catalog)?;
         let start = fields
             .take_with("at", |text| clock.position(text))?
             .ok_or_else(|| line.error(1, "missing `at=`"))?;
@@ -326,7 +326,7 @@ impl Parser<'_> {
             let (def, target) = match catalog.prop(domain, name) {
                 Some(def) => (def, &mut clip.props),
                 None => match &mut clip.content {
-                    Content::Generator { fx, params } => {
+                    Content::Generator { fx, params, .. } => {
                         let generator = catalog.fx(fx.as_str());
                         match generator.and_then(|g| g.find(name)) {
                             Some(def) => (def, params),
@@ -386,10 +386,12 @@ impl Parser<'_> {
     fn fx_line(&mut self, s: usize, t: usize, c: usize, line: &Line) -> Step {
         let rate = self.project.sequences[s].rate;
         let mut fields = Fields::new(line)?;
-        let fx = fields.id(1, "an effect id")?;
+        let (fx, version) = fields.fx_ref(1, "an effect id")?;
         let def = self.catalog.fx(fx.as_str()).ok_or_else(|| {
             fields.error(fields.positional()[1], format!("unknown effect `{fx}`"))
         })?;
+        let version = pinned(def, version)
+            .map_err(|message| fields.error(fields.positional()[1], message))?;
         let enabled = fields.take_bool("enabled")?.unwrap_or(true);
         let params = parse_params(&mut fields, def.params.as_slice(), &fx, rate)?;
         fields.finish(2)?;
@@ -397,6 +399,7 @@ impl Parser<'_> {
             .effects
             .push(Effect {
                 fx,
+                version,
                 enabled,
                 params,
             });
@@ -413,8 +416,8 @@ impl Parser<'_> {
         let to = fields
             .take_id("to")?
             .ok_or_else(|| line.error(1, "missing `to=`"))?;
-        let fx = fields
-            .take_id("fx")?
+        let (fx, version) = fields
+            .take_fx_ref("fx")?
             .ok_or_else(|| line.error(1, "missing `fx=`"))?;
         let duration = fields
             .take_with("dur", |text| clock.duration(text))?
@@ -424,6 +427,7 @@ impl Parser<'_> {
             .catalog
             .fx(fx.as_str())
             .ok_or_else(|| line.error(1, format!("unknown transition `{fx}`")))?;
+        let version = pinned(def, version).map_err(|message| line.error(1, message))?;
         let params = parse_params(&mut fields, def.params.as_slice(), &fx, clock.rate)?;
         fields.finish(2)?;
         self.record(&id, line);
@@ -434,6 +438,7 @@ impl Parser<'_> {
                 from,
                 to,
                 fx,
+                version,
                 duration,
                 align,
                 params,
@@ -442,17 +447,26 @@ impl Parser<'_> {
     }
 }
 
+/// The version a reference to `def` names, or the catalog's when it names
+/// none, as long as this Kerf reads it.
+pub(crate) fn pinned(def: &FxDef, version: Option<u32>) -> Result<u32, String> {
+    let version = version.unwrap_or(def.version);
+    def.reads(version)?;
+    Ok(version)
+}
+
 /// Read the content of a clip: `media=`, `seq=`, `gen=`, or `caption=`, with
 /// `src=` and `speed=` for media and nested sequences. Also returns the
 /// source clock, if any. Shared with the script's insert and overwrite.
 pub(crate) fn content(
     fields: &mut Fields<'_>,
     project: &Project,
+    catalog: &Catalog,
 ) -> Result<(Content, Option<Clock>), Diagnostic> {
     let line = fields.line();
     let media = fields.take_id("media")?;
     let sequence = fields.take_id("seq")?;
-    let generator = fields.take_id("gen")?;
+    let generator = fields.take_fx_ref("gen")?;
     let caption = fields.take_text("caption")?.map(str::to_owned);
     let given = [
         media.is_some(),
@@ -504,10 +518,19 @@ pub(crate) fn content(
             source_in,
             speed,
         },
-        (_, _, Some(fx), _) => Content::Generator {
-            fx,
-            params: Params::new(),
-        },
+        (_, _, Some((fx, version)), _) => {
+            // An unknown generator keeps the version it names; validation
+            // reports the generator.
+            let version = match catalog.fx(fx.as_str()) {
+                Some(def) => pinned(def, version).map_err(|message| line.error(1, message))?,
+                None => version.unwrap_or(1),
+            };
+            Content::Generator {
+                fx,
+                version,
+                params: Params::new(),
+            }
+        }
         (.., Some(text)) => Content::Caption { text },
         _ => unreachable!("exactly one content key"),
     };
@@ -893,7 +916,7 @@ fn print_sequence(
                 transition.id,
                 transition.from,
                 transition.to,
-                transition.fx,
+                print_fx_ref(&transition.fx, transition.version),
                 clock.print_duration(transition.duration)
             )
             .unwrap();
@@ -967,7 +990,7 @@ pub(crate) fn content_text(project: &Project, content: &Content) -> String {
             );
             format!("{key}={id} src={src}")
         }
-        Content::Generator { fx, .. } => format!("gen={fx}"),
+        Content::Generator { fx, version, .. } => format!("gen={}", print_fx_ref(fx, *version)),
         Content::Caption { text } => format!("caption={}", quote(text)),
     }
 }
@@ -1021,7 +1044,7 @@ fn print_clip(
     if let Some(domain) = domain {
         set.push_str(&params_text(&clip.props, catalog.props(domain), clock.rate));
     }
-    if let Content::Generator { fx, params } = &clip.content {
+    if let Content::Generator { fx, params, .. } = &clip.content {
         let defs = catalog
             .fx(fx.as_str())
             .map(|d| d.params.as_slice())
@@ -1041,7 +1064,7 @@ fn print_clip(
         .unwrap();
     }
     for effect in &clip.effects {
-        write!(out, "      fx {}", effect.fx).unwrap();
+        write!(out, "      fx {}", print_fx_ref(&effect.fx, effect.version)).unwrap();
         if !effect.enabled {
             out.push_str(" enabled=false");
         }
@@ -1096,18 +1119,18 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   track V1 video
     clip c1 media=m1 src=14:22:35:00 at=01:00:00:00 dur=00:00:06:12 link=L1
       set x=0.1 scale={0f:1 48f:1.1:ease} opacity=0.9
-      fx color.basic exposure=0.3 saturation=1.2
+      fx color.basic@1 exposure=0.3 saturation=1.2
     clip c2 media=m1 src=14:23:02:00 at=01:00:06:12 dur=00:00:03:00 speed=-1.5
-    transition t1 from=c1 to=c2 fx=dip dur=00:00:00:12 align=start color=#ffffff
+    transition t1 from=c1 to=c2 fx=dip@1 dur=00:00:00:12 align=start color=#ffffff
   track V2 video name="Titles"
-    clip c3 gen=title at=01:00:01:00 dur=00:00:02:00
+    clip c3 gen=title@1 at=01:00:01:00 dur=00:00:02:00
       set y=0.3 text="Day One" size=0.1
   track A1 audio
     clip a1 media=m1 src=14:22:35:00 at=01:00:00:00 dur=00:00:06:12 link=L1
       set gain=-3
   track A2 audio locked=true
     clip a2 media=m2 src=00:00:10:00 at=01:00:00:00 dur=00:00:20:00
-      fx audio.eq3 low=-6
+      fx audio.eq3@1 low=-6
   track S1 subtitle
     clip cap1 caption="Where are we?" at=01:00:01:00 dur=00:00:02:00
   marker mk1 at=01:00:05:00 name="pickup needed" color=red note="ADR \"line 4\""
@@ -1126,6 +1149,100 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
         assert_eq!(printed, SAMPLE);
         let again = parse_document(&printed, Catalog::builtin()).unwrap();
         assert_eq!(again.project, document.project);
+    }
+
+    #[test]
+    fn references_pin_the_version_they_were_read_with() {
+        // Without a version, a reference takes this Kerf's, and prints it.
+        let bare = SAMPLE
+            .replace("fx color.basic@1", "fx color.basic")
+            .replace("fx=dip@1", "fx=dip")
+            .replace("gen=title@1", "gen=title");
+        let project = parse_document(&bare, Catalog::builtin()).unwrap().project;
+        assert_eq!(
+            print_document(&project, Catalog::builtin(), PrintOptions::default()),
+            SAMPLE
+        );
+        for (from, to, needle) in [
+            (
+                "fx color.basic@1",
+                "fx color.basic@2",
+                "newer than this Kerf",
+            ),
+            ("fx=dip@1", "fx=dip@9", "`dip@9` is newer"),
+            ("gen=title@1", "gen=title@2", "`title@2` is newer"),
+            (
+                "fx color.basic@1",
+                "fx color.basic@0",
+                "a whole version from 1",
+            ),
+            (
+                "fx color.basic@1",
+                "fx color.basic@01",
+                "a whole version from 1",
+            ),
+            ("fx=dip@1", "fx=dip@", "a whole version from 1"),
+        ] {
+            let errors = parse_document(&SAMPLE.replace(from, to), Catalog::builtin()).unwrap_err();
+            assert!(
+                errors.iter().any(|e| e.message.contains(needle)),
+                "{to}: {errors:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn older_versions_still_read_are_drawn_by_the_current_one() {
+        let builtin = Catalog::builtin();
+        let mut catalog = Catalog::new(
+            builtin.props(Domain::Video).to_vec(),
+            builtin.props(Domain::Audio).to_vec(),
+        );
+        catalog
+            .define(
+                FxDef::new(
+                    "test.glow",
+                    kerf_model::FxKind::Effect,
+                    Domain::Video,
+                    "A test effect.",
+                )
+                .version(3, 2),
+            )
+            .unwrap();
+        let document = |version: u32| {
+            format!(
+                "kerf 1\nproject name=\"\"\n\n\
+                 media m1 path=\"a.mov\" rate=24 dur=00:00:10:00 video=1920x1080\n\n\
+                 sequence s1 name=\"\" rate=24 size=1920x1080 audio=48000 start=00:00:00:00\n  \
+                 track V1 video\n    \
+                 clip c1 media=m1 src=00:00:00:00 at=00:00:00:00 dur=00:00:01:00\n      \
+                 fx test.glow@{version}\n"
+            )
+        };
+        let current = parse_document(&document(3), &catalog).unwrap();
+        assert_eq!(current.warnings, vec![]);
+        let older = parse_document(&document(2), &catalog).unwrap();
+        assert!(
+            older
+                .warnings
+                .iter()
+                .any(|w| w.code == "fx.version_older"
+                    && w.message.contains("draws as `test.glow@3`")),
+            "{:#?}",
+            older.warnings
+        );
+        // The document keeps the version it names.
+        assert_eq!(
+            print_document(&older.project, &catalog, PrintOptions::default()),
+            document(2)
+        );
+        let gone = parse_document(&document(1), &catalog).unwrap_err();
+        assert!(gone[0].message.contains("no longer read"), "{gone:#?}");
+        let newer = parse_document(&document(4), &catalog).unwrap_err();
+        assert!(
+            newer[0].message.contains("newer than this Kerf"),
+            "{newer:#?}"
+        );
     }
 
     #[test]
@@ -1248,12 +1365,12 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
     #[test]
     fn masks_round_trip_and_name_what_effects_read() {
         let masked = SAMPLE.replace(
-            "      fx color.basic exposure=0.3 saturation=1.2\n",
+            "      fx color.basic@1 exposure=0.3 saturation=1.2\n",
             "      mask k1 rect=0.1,0.2,0.9,0.8 feather=6 opacity={0f:0 12f:1}\n      \
              mask ring ellipse=0.5,0.5,0.25,0.3 mode=none inverted=true\n      \
              mask path points=\"0,0 0.5,1 1,0\" closed=false mode=none\n      \
-             fx color.basic exposure=0.3 saturation=1.2\n      \
-             fx generate.stroke path=ring\n",
+             fx color.basic@1 exposure=0.3 saturation=1.2\n      \
+             fx generate.stroke@1 path=ring\n",
         );
         let document = parse_document(&masked, Catalog::builtin()).unwrap();
         let printed = print_document(
@@ -1285,15 +1402,16 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
         let reading = |c1: &str, c3: &str| {
             SAMPLE
                 .replace(
-                    "      fx color.basic exposure=0.3 saturation=1.2\n",
-                    &format!("      fx color.basic exposure=0.3 saturation=1.2\n{c1}"),
+                    "      fx color.basic@1 exposure=0.3 saturation=1.2\n",
+                    &format!("      fx color.basic@1 exposure=0.3 saturation=1.2\n{c1}"),
                 )
                 .replace(
                     "      set y=0.3 text=\"Day One\" size=0.1\n",
                     &format!("      set y=0.3 text=\"Day One\" size=0.1\n{c3}"),
                 )
         };
-        let reads = |track: &str| format!("      fx channel.setmatte takeMatteFromLayer={track}\n");
+        let reads =
+            |track: &str| format!("      fx channel.setmatte@1 takeMatteFromLayer={track}\n");
         let document = parse_document(&reading(&reads("V2"), ""), Catalog::builtin()).unwrap();
         // The track name prints back as a word.
         assert!(print_document(

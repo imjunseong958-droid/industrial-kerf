@@ -272,6 +272,7 @@ impl Planner<'_> {
                 );
                 effects.push(Effect {
                     fx: transition.fx.clone(),
+                    version: transition.version,
                     enabled: true,
                     params,
                 });
@@ -438,7 +439,11 @@ impl Planner<'_> {
                     )
                 }
             }
-            Content::Generator { fx, params } if fx.as_str() != "adjustment" => {
+            Content::Generator {
+                fx,
+                version,
+                params,
+            } if fx.as_str() != "adjustment" => {
                 // The generator alone over its span and handles, in a
                 // sequence made for it, as large as the clip's.
                 let length = pre + clip.duration + post;
@@ -446,6 +451,7 @@ impl Planner<'_> {
                     Id::new("c1").expect("a valid id"),
                     Content::Generator {
                         fx: fx.clone(),
+                        version: *version,
                         params: params
                             .iter()
                             .map(|(name, param)| (name.clone(), param.shifted(pre)))
@@ -614,10 +620,10 @@ media m1 path=\"a.mov\" rate=24 dur=10s video=1920x1080 audio=2ch@48000
 sequence s1 rate=24 size=1920x1080
   track V1 video
     clip c1 media=m1 src=48f at=0f dur=48f
-      fx channel.invert
-      fx color.basic exposure=0.5
+      fx channel.invert@1
+      fx color.basic@1 exposure=0.5
     clip c2 media=m1 src=120f at=48f dur=24f
-    transition t1 from=c1 to=c2 fx=dissolve dur=12f
+    transition t1 from=c1 to=c2 fx=dissolve@1 dur=12f
 ";
 
     #[test]
@@ -653,7 +659,7 @@ sequence s1 rate=24 size=1920x1080
     #[test]
     fn raster_transitions_bake_into_the_clip_they_leave() {
         let original = project(&DOCUMENT.replace(
-            "fx=dissolve dur=12f",
+            "fx=dissolve@1 dur=12f",
             "fx=transition.linearwipe dur=12f feather=10",
         ));
         let planned = planned(&original);
@@ -682,15 +688,15 @@ media m1 path=\"a.mov\" rate=24 dur=10s video=1920x1080
 sequence s1 rate=24 size=1280x720
   track V1 video
     clip n1 seq=s2 src=24f at=0f dur=48f
-      fx stylize.glow
+      fx stylize.glow@1
   track V2 video
-    clip t1 gen=title at=0f dur=24f
+    clip t1 gen=title@1 at=0f dur=24f
       set text=\"Hello\" y=0.3
-      fx stylize.glow
+      fx stylize.glow@1
 sequence s2 rate=24 size=640x360
   track V1 video
     clip c1 media=m1 src=0f at=0f dur=96f
-      fx channel.invert
+      fx channel.invert@1
 ",
         );
         let planned = planned(&original);
@@ -732,7 +738,7 @@ sequence s2 rate=24 size=640x360
 
     #[test]
     fn projects_without_raster_effects_need_no_bakes() {
-        let original = project(&DOCUMENT.replace("      fx channel.invert\n", ""));
+        let original = project(&DOCUMENT.replace("      fx channel.invert@1\n", ""));
         let planned = planned(&original);
         assert!(planned.jobs.is_empty());
         assert_eq!(planned.project, original);
