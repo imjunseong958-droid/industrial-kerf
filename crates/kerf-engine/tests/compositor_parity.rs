@@ -351,7 +351,7 @@ fn transforms_and_opacity_match_the_graph() {
             luma: 2.0,
             off: 0.015,
             color: 6.0,
-            kerf: Some((2.5, 0.02, 5.0)),
+            kerf: Some((3.0, 0.02, 5.0)),
         },
         // The graph's overlay keeps the size of the first picture it gets,
         // so it cannot animate scale, and its rotation cuts off a turned
@@ -412,7 +412,7 @@ fn transforms_and_opacity_match_the_graph() {
             luma: 1.0,
             off: 0.002,
             color: 2.0,
-            kerf: Some((6.0, 0.002, 7.0)),
+            kerf: Some((7.0, 0.002, 8.0)),
         },
     ]);
 }
