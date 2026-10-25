@@ -12,11 +12,13 @@ pub const TICKS_PER_SECOND: i64 = 254_016_000_000;
 pub struct Tick(pub i64);
 
 impl Tick {
+    #[cfg(test)]
     pub const ZERO: Tick = Tick(0);
 
     pub fn from_seconds_f64(s: f64) -> Tick {
         Tick((s * TICKS_PER_SECOND as f64).round() as i64)
     }
+    #[cfg(test)]
     pub fn seconds(self) -> f64 {
         self.0 as f64 / TICKS_PER_SECOND as f64
     }

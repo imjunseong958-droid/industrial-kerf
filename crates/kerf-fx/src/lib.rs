@@ -458,16 +458,6 @@ pub fn value_at(
     }
 }
 
-/// Whether the clip's Kerf parameters animate an EffectCraft parameter.
-pub fn is_animated(param: &ParamSpec, params: &kerf_model::Params) -> bool {
-    let animated = |name: &str| matches!(params.get(name), Some(kerf_model::Param::Animated(_)));
-    match param.ui {
-        ParamUi::Point => point_names(param.id).iter().any(|name| animated(name)),
-        ParamUi::Hidden => false,
-        _ => animated(param.id),
-    }
-}
-
 fn convert(value: Value, param: &ParamSpec) -> Option<FxValue> {
     Some(match (value, &param.ui) {
         (Value::Number(number), _) => FxValue::Scalar(number),

@@ -47,6 +47,7 @@ impl GradeSpace {
         !matches!(self, GradeSpace::Sdr)
     }
 
+    #[cfg(test)]
     /// HDR White in cd/m² (None for SDR).
     pub fn white_nits(&self) -> Option<f32> {
         match *self {
@@ -97,12 +98,14 @@ impl GradeSpace {
         }
     }
 
+    #[cfg(test)]
     /// The signal of a grey of `nits` cd/m² (HDR) — what a nit-scaled slider position means.
     pub fn signal_of_nits(&self, nits: f32) -> f32 {
         let w = nits / REFERENCE_WHITE_NITS as f32;
         self.encode([w; 3])[1]
     }
 
+    #[cfg(test)]
     /// The cd/m² of a grey of signal `s` (HDR).
     pub fn nits_of_signal(&self, s: f32) -> f32 {
         self.decode([s; 3])[1] * REFERENCE_WHITE_NITS as f32

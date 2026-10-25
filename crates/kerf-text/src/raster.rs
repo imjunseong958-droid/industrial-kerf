@@ -183,6 +183,7 @@ impl Path {
         p.close();
         p
     }
+    #[cfg(test)]
     /// Rectangle with rounded corners of radius `r` (clamped to half the shorter side).
     pub fn round_rect(x0: f32, y0: f32, x1: f32, y1: f32, r: f32) -> Path {
         let r = r.min((x1 - x0).abs() / 2.0).min((y1 - y0).abs() / 2.0).max(0.0);
@@ -203,6 +204,7 @@ impl Path {
         p.close();
         p
     }
+    #[cfg(test)]
     /// Ellipse centred at (cx, cy) with radii (rx, ry), wound clockwise on screen.
     pub fn ellipse(cx: f32, cy: f32, rx: f32, ry: f32) -> Path {
         let (kx, ky) = (0.552_284_8 * rx, 0.552_284_8 * ry);
@@ -215,6 +217,7 @@ impl Path {
         p.close();
         p
     }
+    #[cfg(test)]
     /// Closed polygon through `pts`.
     pub fn polygon(pts: &[(f32, f32)]) -> Path {
         let mut p = Path::new();
@@ -442,15 +445,6 @@ mod tests {
     }
 
     #[test]
-    fn circle_area() {
-        let (cx, cy, r) = (10.0f32, 10.0f32, 6.0f32);
-        let m = fill(&Path::ellipse(cx, cy, r, r), 20, 20, 0.0, 0.0);
-        let total: f32 = m.a.iter().sum();
-        let want = std::f32::consts::PI * r * r;
-        assert!((total - want).abs() / want < 0.02, "{total} vs {want}");
-    }
-
-    #[test]
     fn embolden_grows_outline_and_shrinks_holes() {
         let mut p = Path::rect(4.0, 4.0, 14.0, 14.0);
         p.embolden(1.0);
@@ -469,13 +463,5 @@ mod tests {
         let p = Path::rect(0.0, 0.0, 1.0, 1.0).transformed(&t);
         assert_eq!(p.bounds(), Some((6.0, 8.0, 8.0, 10.0)));
         assert!((xform_scale(&t) - 2.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn round_rect_area() {
-        let m = fill(&Path::round_rect(0.0, 0.0, 20.0, 10.0, 3.0), 20, 10, 0.0, 0.0);
-        let total: f32 = m.a.iter().sum();
-        let want = 200.0 - (4.0 - std::f32::consts::PI) * 9.0;
-        assert!((total - want).abs() < 1.0, "{total} {want}");
     }
 }

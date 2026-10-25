@@ -124,6 +124,7 @@ pub fn filmcraft_id(id: &str) -> Option<String> {
     })
 }
 
+#[cfg(test)]
 /// Render transition `e` at progress `p` (full-resolution parameters).
 pub fn apply(e: &Fx, a: &Image, b: &Image, p: f32) -> Image {
     apply_scaled(e, a, b, p, 1.0)

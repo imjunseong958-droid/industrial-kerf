@@ -35,6 +35,7 @@ pub struct CraftFont {
 
 include!(concat!(env!("OUT_DIR"), "/craft_fonts.rs"));
 
+#[cfg(test)]
 /// The craft-fonts entries for Japanese (`Jpan`), in [`CRAFT_FONTS`] order. Empty when the app was
 /// built without craft-fonts.
 pub fn craft_japanese() -> impl Iterator<Item = &'static CraftFont> {

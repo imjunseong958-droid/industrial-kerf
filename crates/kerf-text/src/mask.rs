@@ -130,41 +130,6 @@ pub fn stroke(m: &Mask, width: f32, kind: StrokeKind) -> Mask {
     Mask { w: m.w, h: m.h, a }
 }
 
-fn box_pass(src: &[f32], dst: &mut [f32], n: usize, stride: usize, count: usize, lanes: usize, lane_stride: usize, r: usize) {
-    let norm = 1.0 / (2 * r + 1) as f32;
-    for l in 0..lanes {
-        let base = l * lane_stride;
-        let at = |i: isize| -> f32 { if i < 0 || i as usize >= count { 0.0 } else { src[base + i as usize * stride] } };
-        let mut acc = 0.0f32;
-        for i in -(r as isize)..=(r as isize) {
-            acc += at(i);
-        }
-        for i in 0..count {
-            dst[base + i * stride] = acc * norm;
-            acc += at(i as isize + r as isize + 1) - at(i as isize - r as isize);
-        }
-    }
-    let _ = n;
-}
-
-/// Blur a mask with three box passes per axis (≈ Gaussian of standard deviation `sigma`).
-pub fn blur(m: &Mask, sigma: f32) -> Mask {
-    if sigma < 0.3 || m.w == 0 || m.h == 0 {
-        return m.clone();
-    }
-    // box radius for 3 passes ≈ sigma * sqrt(3)
-    let r = ((sigma * sigma + 1.0).sqrt().round() as usize).max(1);
-    let mut a = m.a.clone();
-    let mut b = vec![0.0f32; a.len()];
-    for _ in 0..3 {
-        box_pass(&a, &mut b, 0, 1, m.w, m.h, m.w, r);
-        std::mem::swap(&mut a, &mut b);
-        box_pass(&a, &mut b, 0, m.w, m.h, m.w, 1, r);
-        std::mem::swap(&mut a, &mut b);
-    }
-    Mask { w: m.w, h: m.h, a }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,14 +156,5 @@ mod tests {
         assert!(inner.get(12, 20) > 0.99 && inner.get(7, 20) < 0.01 && inner.get(20, 20) < 0.01);
         let centre = stroke(&m, 4.0, StrokeKind::Center);
         assert!(centre.get(9, 20) > 0.99 && centre.get(11, 20) > 0.99 && centre.get(20, 20) < 0.01 && centre.get(5, 20) < 0.01);
-    }
-
-    #[test]
-    fn blur_keeps_mass() {
-        let m = fill(&Path::rect(20.0, 20.0, 30.0, 30.0), 50, 50, 0.0, 0.0);
-        let b = blur(&m, 3.0);
-        let (s0, s1): (f32, f32) = (m.a.iter().sum(), b.a.iter().sum());
-        assert!((s0 - s1).abs() < 0.5, "{s0} {s1}");
-        assert!(b.get(18, 25) > 0.05 && b.get(25, 25) < 1.0);
     }
 }

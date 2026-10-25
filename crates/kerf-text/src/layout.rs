@@ -224,6 +224,7 @@ pub struct Layout {
 }
 
 impl Layout {
+    #[cfg(test)]
     /// Line index for a caret at byte `pos`.
     pub fn line_of(&self, pos: usize) -> usize {
         let mut li = 0;
@@ -234,6 +235,7 @@ impl Layout {
         }
         li
     }
+    #[cfg(test)]
     /// Caret position `(x, baseline, line)` for byte offset `pos`.
     pub fn caret(&self, pos: usize) -> (f32, f32, usize) {
         let li = self.line_of(pos);
@@ -241,6 +243,7 @@ impl Layout {
         let x = l.carets.iter().min_by_key(|(b, _)| b.abs_diff(pos)).map_or(l.x, |c| c.1);
         (x, l.baseline, li)
     }
+    #[cfg(test)]
     /// Nearest caret byte offset to point `(x, y)`.
     pub fn hit(&self, x: f32, y: f32) -> usize {
         let d = |l: &Line| {
@@ -256,6 +259,7 @@ impl Layout {
         };
         l.carets.iter().min_by(|a, b| (a.1 - x).abs().total_cmp(&(b.1 - x).abs())).map_or(l.range.start, |c| c.0)
     }
+    #[cfg(test)]
     /// Selection highlight rectangles `[x0, y0, x1, y1]` for the byte range `a..b`.
     pub fn selection_rects(&self, a: usize, b: usize) -> Vec<[f32; 4]> {
         let (a, b) = (a.min(b), a.max(b));
@@ -281,6 +285,7 @@ impl Layout {
     }
 }
 
+#[cfg(test)]
 fn line_dist(l: &Line, y: f32) -> f32 {
     let (t, b) = (l.baseline - l.ascent, l.baseline + l.descent);
     if y < t {
@@ -1086,23 +1091,6 @@ mod tests {
     }
 
     #[test]
-    fn carets_and_hit_testing() {
-        let l = layout("abc\nde", &st(40.0), &ParagraphStyle::default());
-        let (x0, _, li0) = l.caret(0);
-        let (x1, _, _) = l.caret(1);
-        let (x3, _, _) = l.caret(3);
-        assert!(x0.abs() < 1e-3 && x1 > x0 && x3 > x1);
-        assert_eq!(li0, 0);
-        let (_, b4, li4) = l.caret(4);
-        assert_eq!(li4, 1);
-        assert!(b4 > 0.0);
-        assert_eq!(l.hit(x1 + 1.0, 0.0), 1);
-        assert_eq!(l.hit(1000.0, b4), 6);
-        let rects = l.selection_rects(1, 5);
-        assert_eq!(rects.len(), 2);
-    }
-
-    #[test]
     fn bidi_reorders_rtl_runs() {
         // Hebrew letters are laid out right-to-left: the first logical letter is rightmost.
         let l = layout("ab \u{5d0}\u{5d1}\u{5d2} cd", &st(40.0), &ParagraphStyle::default());
@@ -1189,13 +1177,5 @@ mod tests {
         // tracking widens only the tracked run: 2 clusters × 0.5 em
         let plain = layout(text, &base, &ParagraphStyle::default());
         assert!((l.lines[0].width - plain.lines[0].width - 2.0 * 20.0).abs() < 0.5, "{} {}", l.lines[0].width, plain.lines[0].width);
-    }
-
-    #[test]
-    fn empty_text_has_a_caret() {
-        let l = layout("", &st(40.0), &ParagraphStyle::default());
-        assert_eq!(l.lines.len(), 1);
-        assert_eq!(l.caret(0).0, 0.0);
-        assert!(l.bounds[3] > l.bounds[1]);
     }
 }

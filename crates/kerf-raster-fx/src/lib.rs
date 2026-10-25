@@ -36,6 +36,7 @@ use std::sync::OnceLock;
 
 pub use kerf_raster::Image;
 
+#[cfg(test)]
 /// Effect categories in Effects & Presets order.
 pub const CATEGORIES: &[&str] = &[
     "Blur & Sharpen",
@@ -95,23 +96,6 @@ impl Params {
             Some(Value::Str(s)) => s,
             _ => "",
         }
-    }
-    /// Key prefixes (`{prefix}#1/`, `{prefix}#2/`, …) of the nested groups flattened under
-    /// `prefix` by [`flatten_params`], in order.
-    pub fn groups(&self, prefix: &str) -> Vec<String> {
-        let mut out = vec![];
-        for i in 1.. {
-            let pre = format!("{prefix}#{i}/");
-            if !self.values.contains_key(&format!("{pre}@match")) {
-                break;
-            }
-            out.push(pre);
-        }
-        out
-    }
-    /// The first nested group under `prefix` with match id `m`.
-    pub fn group(&self, prefix: &str, m: &str) -> Option<String> {
-        self.groups(prefix).into_iter().find(|g| self.s(&format!("{g}@match")) == m)
     }
 }
 

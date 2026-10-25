@@ -86,6 +86,7 @@ impl EffectDef {
     pub fn param(&self, id: &str) -> Option<&ParamDef> {
         self.params.iter().find(|p| p.id == id)
     }
+    #[cfg(test)]
     pub fn instance(&self) -> EffectInstance {
         EffectInstance {
             effect: self.id.to_string(),
@@ -113,9 +114,6 @@ impl EffectInstance {
     pub fn param(&self, id: &str) -> Option<&Param> {
         self.params.get(id)
     }
-    pub fn param_mut(&mut self, id: &str) -> Option<&mut Param> {
-        self.params.get_mut(id)
-    }
     pub fn f64_at(&self, id: &str, t: crate::filmcraft::tick::Tick) -> f64 {
         self.params
             .get(id)
@@ -127,12 +125,14 @@ impl EffectInstance {
             })
             .unwrap_or(0.0)
     }
+    #[cfg(test)]
     pub fn vec2_at(&self, id: &str, t: crate::filmcraft::tick::Tick) -> Vec2 {
         self.params
             .get(id)
             .map(|p| p.vec2_at(t))
             .unwrap_or_default()
     }
+    #[cfg(test)]
     pub fn is_animated(&self) -> bool {
         self.params.values().any(Param::is_animated)
     }

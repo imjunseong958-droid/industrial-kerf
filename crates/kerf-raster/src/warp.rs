@@ -77,6 +77,7 @@ pub fn accumulate_warp(dst: &mut Image, src: &Image, m: &Mat3, sampling: Samplin
     });
 }
 
+#[cfg(test)]
 /// The straightforward per-pixel implementation (reference for the fast path's tests).
 pub fn composite_warp_reference(dst: &mut Image, src: &Image, m: &Mat3, opts: &WarpOpts) {
     composite_warp_impl(dst, src, m, opts, false, None);
@@ -314,17 +315,6 @@ fn composite_warp_impl(dst: &mut Image, src: &Image, m: &Mat3, opts: &WarpOpts, 
     }
 }
 
-/// Resize with bilinear filtering (box pre-filter when shrinking).
-pub fn resample(src: &Image, w: u32, h: u32) -> Image {
-    let mut out = Image::new(w, h);
-    if src.is_empty() || w == 0 || h == 0 {
-        return out;
-    }
-    let m = Mat3::scale(vec2(w as f64 / src.width as f64, h as f64 / src.height as f64));
-    composite_warp(&mut out, src, &m, &WarpOpts::default());
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,13 +408,5 @@ mod tests {
                 assert!((p[c] - q[c]).abs() < 1e-4, "{p:?} vs {q:?}");
             }
         }
-    }
-
-    #[test]
-    fn downscale_preserves_average() {
-        let src = Image::filled(64, 64, [0.25, 0.5, 0.75, 1.0]);
-        let out = resample(&src, 8, 8);
-        let p = out.get(4, 4);
-        assert!((p[1] - 0.5).abs() < 1e-4 && (p[3] - 1.0).abs() < 1e-4, "{p:?}");
     }
 }

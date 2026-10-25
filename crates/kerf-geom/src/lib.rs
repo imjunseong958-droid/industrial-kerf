@@ -235,10 +235,7 @@ impl Mat3 {
         let (s, c) = deg.to_radians().sin_cos();
         Mat3([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
     }
-    pub fn skew_deg(skew: f64, axis_deg: f64) -> Mat3 {
-        let k = skew.to_radians().tan();
-        Mat3::rotate_deg(axis_deg) * Mat3([[1.0, k, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]) * Mat3::rotate_deg(-axis_deg)
-    }
+    #[cfg(test)]
     /// The After Effects 2D layer transform: layer space → parent space.
     /// `p' = position + R(rotation) · S(scale/100) · (p - anchor)`.
     pub fn layer_2d(anchor: Vec2, position: Vec2, scale_pct: Vec2, rotation_deg: f64) -> Mat3 {

@@ -88,6 +88,7 @@ impl Lut3d {
         }
     }
 
+    #[cfg(test)]
     pub fn to_cube(&self) -> String {
         Lut { title: self.title.clone(), shaper: None, cube: Some(self.clone()) }.to_cube()
     }
@@ -406,6 +407,7 @@ impl Lut {
         Ok(Lut { title: String::new(), shaper, cube: Some(Lut3d { title: String::new(), size: n, domain_min: dmin, domain_max: dmax, data }) })
     }
 
+    #[cfg(test)]
     /// Write a `.3dl` (10-bit input mesh, 12-bit output). Shapers are baked into the cube.
     pub fn to_3dl(&self) -> Result<String, String> {
         let cube = self.baked_cube(33)?;
@@ -428,6 +430,7 @@ impl Lut {
         Ok(s)
     }
 
+    #[cfg(test)]
     /// The LUT as a single cube over 0..1 (resampled when there is a shaper or a non-unit domain).
     pub fn baked_cube(&self, size: usize) -> Result<Lut3d, String> {
         match (&self.shaper, &self.cube) {
