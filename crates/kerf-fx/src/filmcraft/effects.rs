@@ -6,11 +6,9 @@
 //! straight colour where artists expect it (contrast, levels, posterize), linear light elsewhere.
 
 use crate::filmcraft::project::{EffectInstance, ParamValue};
-use filmcraft_color::{
-    hsl_to_rgb, linear_to_srgb, luma709, rgb_to_hsl, srgb_to_linear, GradeSpace,
-};
-use filmcraft_geom::{Affine, Vec2};
-use filmcraft_time::Tick;
+use crate::filmcraft::tick::Tick;
+use kerf_color::{hsl_to_rgb, linear_to_srgb, luma709, rgb_to_hsl, srgb_to_linear, GradeSpace};
+use kerf_geom::{Affine, Vec2};
 use rayon::prelude::*;
 
 use kerf_draw::Image;
@@ -34,8 +32,8 @@ pub struct FxCtx<'a> {
     /// Sequence frame rate (shutter-angle motion blur); also known where `env` is `None`.
     pub frame_rate: f64,
     /// The sequence's working colour space: Lumetri grades HDR (PQ / HLG) working spaces in their
-    /// own signal, normalised to HDR White ([`filmcraft_color::GradeSpace`]).
-    pub working: filmcraft_color::WorkingSpace,
+    /// own signal, normalised to HDR White ([`kerf_color::GradeSpace`]).
+    pub working: kerf_color::WorkingSpace,
 }
 
 pub(crate) fn f(e: &EffectInstance, id: &str, cx: &FxCtx) -> f32 {
@@ -701,7 +699,7 @@ pub(crate) fn key(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     } else {
         color(e, "color", cx)
     };
-    let kycc = filmcraft_color::rgb_to_ycbcr(kc[0], kc[1], kc[2], filmcraft_color::Matrix::Bt709);
+    let kycc = kerf_color::rgb_to_ycbcr(kc[0], kc[1], kc[2], kerf_color::Matrix::Bt709);
     let (tol, soft, spill, output) = if ultra {
         let tol =
             0.05 + f(e, "tolerance", cx) / 100.0 * 0.25 + f(e, "transparency", cx) / 100.0 * 0.05;
@@ -731,7 +729,7 @@ pub(crate) fn key(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
             return;
         }
         let c = enc([p[0] / p[3], p[1] / p[3], p[2] / p[3]]);
-        let ycc = filmcraft_color::rgb_to_ycbcr(c[0], c[1], c[2], filmcraft_color::Matrix::Bt709);
+        let ycc = kerf_color::rgb_to_ycbcr(c[0], c[1], c[2], kerf_color::Matrix::Bt709);
         let d = ((ycc[1] - kycc[1]).powi(2) + (ycc[2] - kycc[2]).powi(2)).sqrt()
             + (ycc[0] - kycc[0]).abs() * 0.15;
         let alpha = ((d - tol) / soft).clamp(0.0, 1.0);
@@ -1202,7 +1200,7 @@ mod tests {
             project: None,
             env: None,
             frame_rate: 24.0,
-            working: filmcraft_color::WorkingSpace::Rec709,
+            working: kerf_color::WorkingSpace::Rec709,
         }
     }
 
@@ -1788,7 +1786,7 @@ mod lumetri_cpu_parity_tests {
     use super::*;
     use crate::filmcraft::gpufx::FxOp;
     use crate::filmcraft::project::{find_effect, EffectInstance, ParamValue};
-    use filmcraft_time::Tick;
+    use crate::filmcraft::tick::Tick;
 
     fn test_picture(w: usize, h: usize) -> Image {
         let mut px = Vec::with_capacity(w * h * 4);
@@ -1802,12 +1800,12 @@ mod lumetri_cpu_parity_tests {
                     2 => [fy, fy, fy],
                     3 => [1.6 * fy, 1.2 * fy, 0.3],
                     _ => {
-                        let rgb = filmcraft_color::hsl_to_rgb(
+                        let rgb = kerf_color::hsl_to_rgb(
                             fx,
                             0.25 + 0.75 * ((y % 5) as f32 / 4.0),
                             0.1 + 0.8 * fy,
                         );
-                        rgb.map(filmcraft_color::srgb_to_linear)
+                        rgb.map(kerf_color::srgb_to_linear)
                     }
                 };
                 let a = match y % 7 {
@@ -1940,7 +1938,7 @@ mod lumetri_cpu_parity_tests {
             project: None,
             env: None,
             frame_rate: 24.0,
-            working: filmcraft_color::WorkingSpace::Rec709,
+            working: kerf_color::WorkingSpace::Rec709,
         };
 
         for (name, params) in cases {
@@ -1984,7 +1982,7 @@ mod lumetri_cpu_parity_tests {
             project: None,
             env: None,
             frame_rate: 24.0,
-            working: filmcraft_color::WorkingSpace::Rec709,
+            working: kerf_color::WorkingSpace::Rec709,
         };
         let render = |roundness: f64| {
             let e = effect(&[

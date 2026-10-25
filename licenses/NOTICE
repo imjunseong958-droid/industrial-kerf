@@ -1,0 +1,21 @@
+Kerf carries code from EffectCraft and FilmCraft, and bundles three fonts.
+Their notices follow. README.md says where each part lives.
+
+EffectCraft
+Copyright (c) 2026 ArtCraft Team and the EffectCraft contributors.
+Licensed under the MIT License or the Apache License, Version 2.0, at your option
+(LICENSE-MIT-ArtCraft, LICENSE-APACHE-2.0).
+
+FilmCraft
+Copyright (c) 2026 ArtCraft Team and the FilmCraft contributors.
+Licensed under the MIT License or the Apache License, Version 2.0, at your option
+(LICENSE-MIT-ArtCraft, LICENSE-APACHE-2.0).
+
+The ArtCraft name, wordmark and logos are trademarks of the ArtCraft Team. They are not open
+source, are not covered by the licenses above, and are not carried here.
+
+Third-party material
+
+Inter font (crates/kerf-text/fonts/Inter-*.ttf) — OFL-1.1. See OFL-Inter.txt.
+Noto Serif font (crates/kerf-text/fonts/NotoSerif-Regular.ttf) — OFL-1.1. See OFL-NotoSerif.txt.
+JetBrains Mono font (crates/kerf-text/fonts/JetBrainsMono-Regular.ttf) — OFL-1.1. See OFL-JetBrainsMono.txt.

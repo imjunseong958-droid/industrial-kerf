@@ -414,7 +414,7 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
                         if invert {
                             g = 1.0 - g;
                         }
-                        let gl = filmcraft_color::srgb_to_linear(g);
+                        let gl = kerf_color::srgb_to_linear(g);
                         let p = &mut row[x * 4..x * 4 + 4];
                         let base = Image::unpremul([p[0], p[1], p[2], p[3]]);
                         let o = lerp3(base, blend_simple(mode, base, [gl; 3]), op);

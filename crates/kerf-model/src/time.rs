@@ -87,13 +87,6 @@ impl Time {
     pub const fn in_range(self) -> bool {
         self.0.abs() <= MAX_TIME.0
     }
-
-    pub fn checked_add(self, other: Self) -> Option<Self> {
-        self.0
-            .checked_add(other.0)
-            .map(Self)
-            .filter(|t| t.in_range())
-    }
 }
 
 impl Add for Time {

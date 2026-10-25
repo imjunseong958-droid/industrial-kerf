@@ -2,7 +2,7 @@
 
 use crate::filmcraft::project::effect::LIGHT_IDS;
 use crate::filmcraft::project::EffectInstance;
-use filmcraft_color::{hsl_to_rgb, rgb_to_hsl, rgb_to_ycbcr, Matrix};
+use kerf_color::{hsl_to_rgb, rgb_to_hsl, rgb_to_ycbcr, Matrix};
 use rayon::prelude::*;
 
 use super::*;
@@ -285,7 +285,7 @@ pub fn ultra_key(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
             let l = dec(v);
             match output {
                 1 => {
-                    let g = filmcraft_color::srgb_to_linear(a);
+                    let g = kerf_color::srgb_to_linear(a);
                     p.copy_from_slice(&[g * src_a, g * src_a, g * src_a, src_a]);
                 }
                 2 => p.copy_from_slice(&[l[0] * src_a, l[1] * src_a, l[2] * src_a, src_a]),
@@ -334,7 +334,7 @@ pub(crate) fn apply_matte(
                 let o = m.apply(Vec2::new(x as f64 + 0.5, y as f64 + 0.5));
                 let s = matte.sample_bilinear(o.x as f32, o.y as f32);
                 let mut v = if use_luma {
-                    filmcraft_color::linear_to_srgb(luma([s[0], s[1], s[2]]).clamp(0.0, 1.0))
+                    kerf_color::linear_to_srgb(luma([s[0], s[1], s[2]]).clamp(0.0, 1.0))
                 } else {
                     s[3]
                 };

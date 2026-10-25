@@ -124,6 +124,7 @@ pub fn filmcraft_id(id: &str) -> Option<String> {
     })
 }
 
+#[cfg(test)]
 /// Render transition `e` at progress `p` (full-resolution parameters).
 pub fn apply(e: &Fx, a: &Image, b: &Image, p: f32) -> Image {
     apply_scaled(e, a, b, p, 1.0)
@@ -172,18 +173,6 @@ pub fn apply_scaled(e: &Fx, a: &Image, b: &Image, p: f32, scale: f32) -> Image {
         .or_else(|| grunge::apply(id, &t))
         .or_else(|| special::apply(id, &t))
         .unwrap_or_else(|| paint(t.w, t.h, |x, y| mix(t.sa(x, y), t.sb(x, y), p)))
-}
-
-/// Audio crossfade gains (out, in) for progress p.
-pub fn audio_gains(kind: &str, p: f32) -> (f32, f32) {
-    match kind {
-        "constant_gain" => (1.0 - p, p),
-        "exponential_fade" => ((1.0 - p).powi(3), 1.0 - (1.0 - p).powi(3)),
-        _ => (
-            (p * std::f32::consts::FRAC_PI_2).cos(),
-            (p * std::f32::consts::FRAC_PI_2).sin(),
-        ),
-    }
 }
 
 // ---------------------------------------------------------------------------------------------

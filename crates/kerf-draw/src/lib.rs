@@ -30,5 +30,5 @@ pub mod text;
 pub mod wipe;
 
 pub use blend::Blend;
-pub use filmcraft_geom::{Affine, Rect, Vec2};
 pub use image::Image;
+pub use kerf_geom::{Affine, Rect, Vec2};

@@ -1,0 +1,16 @@
+[package]
+name = "kerf-geom"
+description = "Kerf's 2D geometry: vectors, rectangles, affine transforms, and projective matrices (from FilmCraft and EffectCraft)"
+version.workspace = true
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.95"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

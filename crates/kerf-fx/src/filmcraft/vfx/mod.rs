@@ -25,8 +25,8 @@ mod text;
 mod tests;
 
 use crate::filmcraft::project::{EffectInstance, ParamValue};
-use filmcraft_geom::{Affine, Vec2};
-use filmcraft_time::Tick;
+use crate::filmcraft::tick::Tick;
+use kerf_geom::{Affine, Vec2};
 use rayon::prelude::*;
 
 use crate::filmcraft::effects::FxCtx;

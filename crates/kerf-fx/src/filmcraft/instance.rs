@@ -5,14 +5,15 @@ use super::catalog::{axes, carried, written, Written};
 use super::project::{
     EffectDef, EffectInstance, Param as FxParam, ParamDef, ParamValue, Project, ProjectLut,
 };
-use filmcraft_geom::Vec2;
-use filmcraft_time::Tick;
+use crate::filmcraft::tick::Tick;
+use kerf_geom::Vec2;
 use kerf_model::{Effect, Param, Rgba, Time, Value};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// FilmCraft ticks per Kerf flick.
-const TICKS_PER_FLICK: i64 = filmcraft_time::TICKS_PER_SECOND / kerf_model::time::FLICKS_PER_SECOND;
+const TICKS_PER_FLICK: i64 =
+    crate::filmcraft::tick::TICKS_PER_SECOND / kerf_model::time::FLICKS_PER_SECOND;
 
 /// A Kerf time as FilmCraft's.
 pub fn tick(time: Time) -> Tick {
@@ -93,7 +94,7 @@ pub fn apply(picture: &mut kerf_draw::Image, instance: &EffectInstance, run: &Ru
         env: run.env,
         frame_rate: run.frame_rate,
         // Kerf draws in linear Rec. 709 (sRGB primaries).
-        working: filmcraft_color::WorkingSpace::Rec709,
+        working: kerf_color::WorkingSpace::Rec709,
     };
     super::effects::apply(picture, instance, &cx);
 }
@@ -506,7 +507,7 @@ mod tests {
                 project: None,
                 env: None,
                 frame_rate: 24.0,
-                working: filmcraft_color::WorkingSpace::Rec709,
+                working: kerf_color::WorkingSpace::Rec709,
             };
             apply(&mut picture, &set, &cx);
             assert!(picture.px.iter().all(|v| v.is_finite()), "{id}");
@@ -518,10 +519,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kerf-lut-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("swap.cube");
-        let cube = filmcraft_color::Lut::from_cube(filmcraft_color::Lut3d::from_fn(3, |c| {
-            [c[2], c[1], c[0]]
-        }))
-        .to_cube();
+        let cube =
+            kerf_color::Lut::from_cube(kerf_color::Lut3d::from_fn(3, |c| [c[2], c[1], c[0]]))
+                .to_cube();
         std::fs::write(&path, cube).unwrap();
         let path = path.to_str().unwrap().to_owned();
         let graded = effect(

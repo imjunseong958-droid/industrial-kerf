@@ -54,6 +54,7 @@ impl Project {
     }
 }
 
+#[cfg(test)]
 /// Fill a point parameter left "auto" (a NaN coordinate) in with where it starts: the effect's
 /// auto position across the frame (`anchor`: across the source), or else the centre (`end`: the
 /// bottom centre).

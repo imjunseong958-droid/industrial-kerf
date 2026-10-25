@@ -299,7 +299,10 @@ mod tests {
             tried,
             [HardwareEncoderFamily::Nvenc, HardwareEncoderFamily::Qsv]
         );
-        assert_eq!(select_video_encoder(&capabilities, &options).encoder, "h264_qsv");
+        assert_eq!(
+            select_video_encoder(&capabilities, &options).encoder,
+            "h264_qsv"
+        );
 
         let mut capabilities = parse_encoder_capabilities(&listing, "ffmpeg").encoders;
         keep_encoders_that_open(&mut capabilities, &options, |_| false);

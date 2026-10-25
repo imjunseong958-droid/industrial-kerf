@@ -163,13 +163,6 @@ pub fn carried(id: &str) -> Option<&'static EffectDef> {
     super::project::find_effect(filmcraft)
 }
 
-/// Whether a FilmCraft effect replaced the EffectCraft effect Kerf listed as `id`.
-pub fn takes_over(id: &str) -> bool {
-    CARRIED
-        .iter()
-        .any(|(_, kerf, version, _)| *kerf == id && *version > 1)
-}
-
 /// How a FilmCraft parameter is written in Kerf.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Written {
@@ -491,7 +484,7 @@ fn lines(def: &EffectDef, param: &ParamDef, label: &str) -> Vec<String> {
 /// Where a point starts, across the picture: where FilmCraft puts an "auto" point (`end`, the
 /// bottom centre; otherwise the effect's auto position or the centre), or the edge its default
 /// (0 pixels) names.
-fn place(effect: &str, param: &str, v: filmcraft_geom::Vec2) -> (f64, f64) {
+fn place(effect: &str, param: &str, v: kerf_geom::Vec2) -> (f64, f64) {
     let (ax, ay) = super::project::effect::auto_point(effect, param)
         .unwrap_or((0.5, if param == "end" { 1.0 } else { 0.5 }));
     let at = |v: f64, auto: f64| {

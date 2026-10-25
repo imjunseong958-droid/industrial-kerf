@@ -1,7 +1,7 @@
 //! Text burn-ins: Simple Text and Metadata & Timecode Burn-in.
 
 use crate::filmcraft::project::EffectInstance;
-use filmcraft_text::{layout, render, Align, ParagraphStyle, TextStyle};
+use kerf_text::{layout, render, Align, ParagraphStyle, TextStyle};
 
 use super::*;
 use crate::filmcraft::graphics::paint_mask;
@@ -41,13 +41,12 @@ pub(crate) fn draw_text(
             ..Default::default()
         },
     );
-    let vm =
-        filmcraft_text::fonts::face(filmcraft_text::resolve(family, "Regular").face).metrics(px);
+    let vm = kerf_text::fonts::face(kerf_text::resolve(family, "Regular").face).metrics(px);
     let (bx, by) = (pos.x as f32, pos.y as f32 + vm.cap_height / 2.0);
     let b = l.bounds;
     if box_alpha > 0.0 {
         let pad = px * 0.25;
-        let boxp = filmcraft_text::Path::rect(
+        let boxp = kerf_text::Path::rect(
             bx + b[0] - pad,
             by + b[1] - pad,
             bx + b[2] + pad,
@@ -55,7 +54,7 @@ pub(crate) fn draw_text(
         );
         if let Some(bb) = boxp.bounds() {
             let (x0, y0) = (bb.0.floor() as i32, bb.1.floor() as i32);
-            let m = filmcraft_text::raster::fill(
+            let m = kerf_text::raster::fill(
                 &boxp,
                 (bb.2.ceil() as i32 - x0).max(1) as usize,
                 (bb.3.ceil() as i32 - y0).max(1) as usize,

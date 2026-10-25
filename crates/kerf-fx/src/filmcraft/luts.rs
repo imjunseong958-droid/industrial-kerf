@@ -4,7 +4,7 @@
 //! * `""` — none;
 //! * `lib:<id>` — a LUT in the project's LUT library (`Project::luts`, imported `.cube`/`.3dl`);
 //! * `builtin:<id>` — a LUT FilmCraft generates from code: camera log → Rec. 709 conversions
-//!   (from the published curves in `filmcraft-color`; input is video-range normalised, as camera
+//!   (from the published curves in `kerf-color`; input is video-range normalised, as camera
 //!   LUTs expect) and the procedural Creative looks.
 //!
 //! Parsed LUTs are cached by content, so a library LUT is parsed once however many clips use it.
@@ -14,7 +14,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::filmcraft::project::{Project, MAX_LUT_TEXT_BYTES};
-use filmcraft_color::{ColorSpace, Lut, Lut3d, LutFormat, Range};
+use kerf_color::{ColorSpace, Lut, Lut3d, LutFormat, Range};
 
 /// A built-in LUT: id, label, and how it is made.
 pub struct Builtin {
@@ -87,15 +87,15 @@ impl Builtin {
     pub fn generate(&self) -> Lut {
         let mut cube = match self.kind {
             BuiltinKind::LogTo709(cs) => {
-                let t = filmcraft_color::InputTransform::new(
+                let t = kerf_color::InputTransform::new(
                     cs,
                     Range::Limited,
-                    &filmcraft_color::ColorPipeline::REC709,
+                    &kerf_color::ColorPipeline::REC709,
                     None,
                 );
                 Lut3d::from_fn(33, |c| {
                     t.convert(c)
-                        .map(|v| filmcraft_color::linear_to_srgb(v.clamp(0.0, 1.0)))
+                        .map(|v| kerf_color::linear_to_srgb(v.clamp(0.0, 1.0)))
                 })
             }
             BuiltinKind::Look(n) => Lut3d::from_fn(33, |c| {
@@ -187,7 +187,7 @@ mod tests {
         // Lumetri) → ≈ 18 % linear on the sRGB curve
         let g = l.apply([(420.0 - 64.0) / 876.0; 3]);
         assert!(
-            (g[0] - filmcraft_color::linear_to_srgb(0.18)).abs() < 0.03,
+            (g[0] - kerf_color::linear_to_srgb(0.18)).abs() < 0.03,
             "{g:?}"
         );
         assert!(resolve(None, "builtin:slog3-sgamut3cine-to-rec709").is_some());

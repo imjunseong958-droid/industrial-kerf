@@ -1,0 +1,15 @@
+[package]
+name = "kerf-raster"
+description = "f32 premultiplied RGBA images for the raster effects (from EffectCraft): sampling, projective warps, blurs, compositing (rayon-parallel)"
+version.workspace = true
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.95"
+
+[lints]
+workspace = true
+
+[dependencies]
+kerf-geom = { path = "../kerf-geom" }
+kerf-color = { path = "../kerf-color" }
+rayon = { workspace = true }

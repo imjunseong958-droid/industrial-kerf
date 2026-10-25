@@ -2,7 +2,7 @@
 //! folders and for the dissolves whose output the golden images pin (Cross Dissolve, Dip to
 //! Black/White, Film/Additive Dissolve, Wipe).
 
-use filmcraft_geom::Affine;
+use kerf_geom::Affine;
 use rayon::prelude::*;
 
 use kerf_draw::Image;

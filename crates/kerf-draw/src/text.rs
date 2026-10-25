@@ -4,10 +4,10 @@
 
 use crate::color;
 use crate::image::Image;
-use filmcraft_text::mask::{stroke, StrokeKind};
-use filmcraft_text::raster::Mask;
-use filmcraft_text::{layout, render, Align, ParagraphStyle, TextStyle};
 use kerf_model::Rgba;
+use kerf_text::mask::{stroke, StrokeKind};
+use kerf_text::raster::Mask;
+use kerf_text::{layout, render, Align, ParagraphStyle, TextStyle};
 use rayon::prelude::*;
 
 /// The families generic font names stand for, all bundled.

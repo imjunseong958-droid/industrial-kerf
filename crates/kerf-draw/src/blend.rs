@@ -5,11 +5,11 @@
 //! artists expect from every editing app), so their math runs on sRGB-encoded straight colour and
 //! the result is converted back to linear. Formulas follow the W3C Compositing and Blending spec.
 
-use filmcraft_color::{linear_to_srgb, srgb_to_linear};
+use kerf_color::{linear_to_srgb, srgb_to_linear};
 use rayon::prelude::*;
 
 use crate::image::Image;
-use filmcraft_geom::{Affine, Rect};
+use kerf_geom::{Affine, Rect};
 use std::str::FromStr;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -424,10 +424,10 @@ mod tests {
             *v = (i % 7) as f32 / 8.0;
         }
         let m = Affine::motion(
-            filmcraft_geom::Vec2::new(5.0, 4.0),
-            filmcraft_geom::Vec2::new(1.3, 0.9),
+            kerf_geom::Vec2::new(5.0, 4.0),
+            kerf_geom::Vec2::new(1.3, 0.9),
             17.0,
-            filmcraft_geom::Vec2::new(3.0, 2.0),
+            kerf_geom::Vec2::new(3.0, 2.0),
         );
         let rect = Rect::new(0.5, 0.0, 5.0, 4.0);
         for mode in [Blend::Normal, Blend::Screen] {

@@ -9,11 +9,11 @@
 //! them and decoded after.
 
 use crate::{spec, value_at};
-use effectcraft_effects::{
-    Buf, EffectCtx, EffectEnv, EffectHost, Image, LayerPixels, ParamUi, Params, Value as FxValue,
-};
 use kerf_draw::color::{to_encoded, to_linear};
 use kerf_model::{Effect, Mask, MaskShape, Param, Time, Value};
+use kerf_raster_fx::{
+    Buf, EffectCtx, EffectEnv, EffectHost, Image, LayerPixels, ParamUi, Params, Value as FxValue,
+};
 
 /// The kept effects, by Kerf id.
 pub const KEPT: &[&str] = &[
@@ -87,10 +87,10 @@ pub fn apply(picture: &mut kerf_draw::Image, effect: &Effect, run: &Run) {
     let per_source = run.per_source.max(1e-6);
     // The layer is the picture in source pixels.
     let layer_size = [picture.w as f64 / per_source, picture.h as f64 / per_source];
-    let masks: Vec<effectcraft_effects::MaskShape> = run
+    let masks: Vec<kerf_raster_fx::MaskShape> = run
         .masks
         .iter()
-        .map(|mask| effectcraft_effects::MaskShape {
+        .map(|mask| kerf_raster_fx::MaskShape {
             name: mask.name.to_string(),
             points: kerf_draw::mask::outline(&mask.shape, layer_size[0], layer_size[1], 1.0)
                 .into_iter()
@@ -145,7 +145,7 @@ pub fn apply(picture: &mut kerf_draw::Image, effect: &Effect, run: &Run) {
         offset: [0.0; 2],
         scale: per_source,
     };
-    let buf = effectcraft_effects::apply(spec, &ctx, buf);
+    let buf = kerf_raster_fx::apply(spec, &ctx, buf);
     decode_into(&buf, picture, per_source);
 }
 

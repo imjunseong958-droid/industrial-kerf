@@ -3,7 +3,7 @@
 
 use std::sync::OnceLock;
 
-pub use filmcraft_color::{linear_to_srgb, srgb_to_linear};
+pub use kerf_color::{linear_to_srgb, srgb_to_linear};
 
 /// Steps of the linear-to-byte table: fine enough that every byte taken
 /// into linear light comes back as itself.
@@ -11,7 +11,7 @@ const ENCODE_STEPS: usize = 65_535;
 
 /// sRGB-encoded byte to linear light.
 pub fn decode_table() -> &'static [f32; 256] {
-    filmcraft_color::srgb_u8_to_linear_table()
+    kerf_color::srgb_u8_to_linear_table()
 }
 
 /// Linear light (clamped to 0..1) to an sRGB-encoded byte.
