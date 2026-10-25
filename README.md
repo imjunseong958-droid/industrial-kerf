@@ -129,7 +129,8 @@ available as an environment fallback. Qt remains a presentation layer.
 ## Agents
 
 Native editing presets are exported from **File → Export Editing Preset…**
-as one `.kerfpreset` file containing media slots and `.kerf` editing code.
+as one `.kerfpreset` file containing media slots, `.kerf` editing code, and
+the project's own looks it uses.
 **File → Import Editing Preset…** binds new media and stages the same pattern
 as a proposal. See [native preset format and reuse](docs/presets.md).
 

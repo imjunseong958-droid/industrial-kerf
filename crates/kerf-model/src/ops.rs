@@ -622,9 +622,11 @@ impl Editor<'_> {
             Op::FxFlatten { clip, index } => {
                 let at = self.editable(clip)?;
                 self.effect(at, *index)?;
-                let rate = self.project.sequences[at.sequence].rate;
+                let sequence = &self.project.sequences[at.sequence];
+                let (rate, markers) = (sequence.rate, sequence.markers.clone());
                 let catalog = self.catalog;
-                crate::look::flatten_into(self.project.clip_at_mut(at), *index, rate, catalog)
+                let clip = self.project.clip_at_mut(at);
+                crate::look::flatten_into(clip, *index, rate, &markers, catalog)
                     .map_err(|message| fail("look.flatten", message))
             }
             Op::FxMove { clip, index, to } => {

@@ -19,8 +19,8 @@ rendered video or translate another editor's template format.
 6. Choose **Create proposal**, review the timeline, and accept the proposal.
 
 Export does not change the project. Applying replaces the program sequence;
-the existing project stays intact until acceptance, and acceptance can be
-undone. Locked destination tracks must be unlocked first. A sequence that is
+the existing project stays intact until acceptance, apart from the looks the
+preset brings (see below), and acceptance can be undone. Locked destination tracks must be unlocked first. A sequence that is
 itself used by another sequence cannot be replaced this way.
 
 Kerf timing, gaps, tracks, transitions, constant speeds (including reverse),
@@ -77,6 +77,49 @@ sequence s1 name="Two-shot product" rate=30 size=1080x1920
   different IDs; for the same preset, bindings and target state the emitted
   edit is deterministic.
 
+## Looks and beats
+
+A preset carries the [looks](looks.md) its pattern uses that Kerf does not
+bundle, so it draws the same where they are not installed. Each follows the
+sequences as a `look` line at the top level, with the rest of its
+`.kerflook` file indented under it:
+
+```text
+kerf 1
+project name="Punch"
+media slot1 path="slot:slot1" rate=30 dur=00:00:02:00 video=1920x1080
+sequence s1 name="Punch" rate=30 size=1080x1920
+  track V1 video
+    clip c1 media=slot1 src=00:00:00:00 at=00:00:00:00 dur=00:00:02:00
+      fx look.studio.punch@1 hit=beat1
+  marker beat1 at=00:00:01:00
+
+look look.studio.punch version=1 name="Punch" category="Motion" on=clip
+  doc "A zoom punch at a hit."
+  param hit time default=0f
+  set scale={$hit:1 $hit+3f:1.15 $hit+9f:1:ease}
+```
+
+- A carried look must be one the pattern uses. A look that Kerf or the
+  receiving project already has by that id and version must be the same
+  look, or the preset is rejected.
+- Applying copies the looks the project lacks into
+  `.kerf/looks/<id>@<version>.kerflook`, so the edit keeps drawing after the
+  preset file is gone. That copy is the one change made before the proposal
+  is accepted.
+
+A look's time can name a marker (`hit=beat1` above), so the look lands
+wherever the marker is. A binding marked as music (`beats`) moves every
+marker over a clip that plays it to the nearest sound onset of the new
+media, from its media index:
+
+- Markers land on whole frames, each after the one before it.
+- A marker with no onset left in its clip stays where it is, as do markers
+  over other clips.
+- Cuts do not move.
+
+So the punches and flashes of a pattern hit the new music's beats.
+
 Other tools can create presets by producing this contract and passing Kerf's
 normal language/model validation. Presets contain declarative editing data,
 not executable JavaScript, HTML, shell commands, or Python.
@@ -92,6 +135,8 @@ kerf --dir ./project preset list
 kerf --dir ./project preset show product.kerfpreset
 kerf --dir ./project preset apply product.kerfpreset \
   --bind slot1=m1@0s --bind slot2=m2@1s --text 'title1=New product'
+kerf --dir ./project preset apply product.kerfpreset \
+  --bind slot1=m1 --bind slot2=song --beats slot2
 ```
 
 Bindings use already-imported media IDs from the target project. Optional
@@ -107,10 +152,15 @@ The assistant and external MCP clients keep the three-tool interface:
 {"tool":"look","arguments":{"preset":"product.kerfpreset"}}
 {"tool":"edit","arguments":{"savePreset":"product.kerfpreset","name":"Product"}}
 {"tool":"edit","arguments":{"preset":"product.kerfpreset","bindings":{"slot1":{"media":"m1","from":"0s"},"slot2":{"media":"m2","from":"1s"}},"texts":{"title1":"New product"}}}
+{"tool":"edit","arguments":{"preset":"product.kerfpreset","bindings":{"slot1":{"media":"m1"},"slot2":{"media":"song","beats":true}}}}
 ```
 
+`beats` is available from the CLI and the assistant; the editor's dialog
+does not offer it yet.
+
 Listing covers the project root and `.kerf/presets`. Inspect/apply can read a
-shared `.kerfpreset` at an explicitly supplied path. Inspecting lists, for each
+shared `.kerfpreset` at an explicitly supplied path. Inspecting lists the
+looks the preset carries (`looks`) and, for each
 slot, the clips that use it and the project's imported media that can fill it
 (`fits`), each with the latest start frame (`latestFrame`, usable as
 `"from": "<n>f"`). Application uses the same

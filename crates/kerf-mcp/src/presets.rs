@@ -1,9 +1,13 @@
 //! File adapters for portable Kerf presets. Applying one still goes through the
-//! harness's normal edit proposal, checks, and before/after preview.
+//! harness's normal edit proposal, checks, and before/after preview; the looks
+//! it carries join the project's.
 
 use crate::{KerfMcpRouter, McpError};
-use kerf_lang::{preset, Clock};
-use kerf_model::{Catalog, Content, Id, Project};
+use kerf_engine::derivatives::DerivativeCache;
+use kerf_lang::preset::{self, Preset};
+use kerf_lang::Clock;
+use kerf_model::look::Look;
+use kerf_model::{Catalog, Content, Id, Project, Time};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -19,6 +23,9 @@ pub(super) struct BindingInput {
     media: String,
     #[serde(default = "zero")]
     from: String,
+    /// Place the pattern's markers on this music's onsets.
+    #[serde(default)]
+    beats: bool,
 }
 
 fn zero() -> String {
@@ -44,8 +51,8 @@ impl KerfMcpRouter {
         })
     }
 
-    /// The preset's text and its validated pattern.
-    fn read_preset(&self, file: &str) -> Result<(String, Project), McpError> {
+    /// The preset's text, read and validated.
+    fn read_preset(&self, file: &str) -> Result<(String, Preset), McpError> {
         let mut document = String::new();
         File::open(self.preset_path(file)?)
             .map_err(io_error)?
@@ -55,8 +62,45 @@ impl KerfMcpRouter {
         if document.len() as u64 > MAX_PRESET_BYTES {
             return Err(invalid("preset exceeds 1 MiB"));
         }
-        let pattern = preset::parse(&document, Catalog::builtin()).map_err(invalid)?;
-        Ok((document, pattern))
+        let preset = preset::parse(&document, Catalog::builtin()).map_err(invalid)?;
+        Ok((document, preset))
+    }
+
+    /// Copy the looks a preset carries that the project lacks into its
+    /// looks folder, so what the preset made keeps drawing without it.
+    fn keep_looks(&self, looks: &[Look]) -> Result<(), McpError> {
+        let folder = kerf_model::look::project_looks(&self.dir);
+        for look in looks {
+            if Catalog::builtin()
+                .look(look.id.as_str(), look.version)
+                .is_some()
+            {
+                continue;
+            }
+            fs::create_dir_all(&folder).map_err(io_error)?;
+            let path = folder.join(format!("{}@{}.kerflook", look.id, look.version));
+            let mut output = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .map_err(|error| {
+                    invalid(format!(
+                        "cannot keep `{}@{}` as {}: {error}",
+                        look.id,
+                        look.version,
+                        path.display()
+                    ))
+                })?;
+            if let Err(error) = output
+                .write_all(look.text.as_bytes())
+                .and_then(|_| output.sync_all())
+            {
+                let _ = fs::remove_file(&path);
+                return Err(io_error(error));
+            }
+        }
+        kerf_model::look::refresh_project_looks(&self.dir).map_err(invalid)?;
+        Ok(())
     }
 
     pub(super) fn list_presets(&self) -> Result<Value, McpError> {
@@ -89,7 +133,8 @@ impl KerfMcpRouter {
     /// The pattern, its text slots, and each media slot with the clips that
     /// use it and the project's imported media that can fill it.
     pub(super) fn inspect_preset(&self, project: &Project, file: &str) -> Result<Value, McpError> {
-        let (document, pattern) = self.read_preset(file)?;
+        let (document, preset) = self.read_preset(file)?;
+        let pattern = &preset.pattern;
         let slots: Vec<_> = pattern
             .media
             .iter()
@@ -106,14 +151,19 @@ impl KerfMcpRouter {
                     .collect();
                 json!({"id": slot.id.as_str(), "video": slot.video.is_some(), "audio": slot.audio.is_some(),
                     "minimumDuration": Clock::of_media(slot).print_duration(slot.duration),
-                    "seconds": slot.duration.seconds(), "clips": slot_clips(&pattern, &slot.id),
+                    "seconds": slot.duration.seconds(), "clips": slot_clips(pattern, &slot.id),
                     "fits": fits})
             })
+            .collect();
+        let looks: Vec<_> = preset
+            .looks
+            .iter()
+            .map(|look| json!({"id": look.id.as_str(), "version": look.version, "name": look.name}))
             .collect();
         Ok(
             json!({"preset": file, "name": pattern.name, "document": document,
             "sequence": pattern.sequences[0].id.as_str(),
-            "slots": slots, "textSlots": preset::text_slots(&pattern)}),
+            "slots": slots, "textSlots": preset::text_slots(pattern), "looks": looks}),
         )
     }
 
@@ -133,7 +183,7 @@ impl KerfMcpRouter {
         let document =
             preset::export(project, Catalog::builtin(), &sequence.id, name).map_err(invalid)?;
         // Verify the exported document before writing; an empty sequence is not a preset.
-        let pattern = preset::parse(&document, Catalog::builtin()).map_err(invalid)?;
+        let preset = preset::parse(&document, Catalog::builtin()).map_err(invalid)?;
         if document.len() as u64 > MAX_PRESET_BYTES {
             return Err(invalid("preset exceeds 1 MiB"));
         }
@@ -160,7 +210,13 @@ impl KerfMcpRouter {
             let _ = fs::remove_file(&path);
             return Err(io_error(error));
         }
-        Ok(json!({"status": "saved", "preset": file, "name": name, "slots": pattern.media.len()}))
+        let looks: Vec<_> = preset
+            .looks
+            .iter()
+            .map(|look| format!("{}@{}", look.id, look.version))
+            .collect();
+        Ok(json!({"status": "saved", "preset": file, "name": name,
+            "slots": preset.pattern.media.len(), "looks": looks}))
     }
 
     pub(super) fn preset_script(
@@ -171,7 +227,8 @@ impl KerfMcpRouter {
         inputs: &BTreeMap<String, BindingInput>,
         texts: &BTreeMap<String, String>,
     ) -> Result<String, McpError> {
-        let (document, pattern) = self.read_preset(file)?;
+        let (document, preset) = self.read_preset(file)?;
+        let pattern = &preset.pattern;
         let mut bindings = BTreeMap::new();
         for slot in &pattern.media {
             if !inputs.contains_key(slot.id.as_str()) {
@@ -219,11 +276,33 @@ impl KerfMcpRouter {
             {
                 return Err(invalid(format!("replacement `{}` cannot fill slot `{slot}`; check its actual duration and streams", media.id)));
             }
+            let beats = if input.beats {
+                let index = kerf_engine::media_index(
+                    &path,
+                    &DerivativeCache::new(&self.dir),
+                    &kerf_engine::CancellationToken::new(),
+                )
+                .map_err(|e| invalid(e.to_string()))?;
+                if index.onsets.is_empty() {
+                    return Err(invalid(format!(
+                        "`{}` has no sound onsets to place markers on",
+                        media.id
+                    )));
+                }
+                index
+                    .onsets
+                    .iter()
+                    .filter_map(|seconds| Time::from_seconds(*seconds))
+                    .collect()
+            } else {
+                Vec::new()
+            };
             bindings.insert(
                 slot.clone(),
                 preset::Binding {
                     media: Id::new(&input.media).map_err(|e| invalid(e.to_string()))?,
                     from,
+                    beats,
                 },
             );
         }
@@ -232,7 +311,7 @@ impl KerfMcpRouter {
             None => project.sequences.first(),
         }
         .ok_or_else(|| invalid("no target sequence"))?;
-        preset::instantiate(
+        let script = preset::instantiate(
             project,
             Catalog::builtin(),
             &document,
@@ -240,7 +319,9 @@ impl KerfMcpRouter {
             &bindings,
             texts,
         )
-        .map_err(invalid)
+        .map_err(invalid)?;
+        self.keep_looks(&preset.looks)?;
+        Ok(script)
     }
 }
 

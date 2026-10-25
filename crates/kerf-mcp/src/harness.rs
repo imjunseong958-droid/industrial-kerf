@@ -235,7 +235,8 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "sequence": {"type": "string", "description": "Sequence to save or replace with a preset; first by default."},
                     "bindings": {"type": "object", "additionalProperties": {"type": "object", "properties": {
                         "media": {"type": "string", "description": "Imported replacement media id."},
-                        "from": {"type": "string", "description": "Source start, including handles; default 0f."}
+                        "from": {"type": "string", "description": "Source start, including handles; default 0f."},
+                        "beats": {"type": "boolean", "description": "Music: move the markers over its clips to its nearest sound onsets, so looks that hit them land on its beats."}
                     }, "required": ["media"], "additionalProperties": false}},
                     "texts": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Template caption/title clip id to replacement text."},
                     "extend": {"type": "string", "description": "The id of a pending proposal to build on: the script runs on what it makes, the two become one proposal, and the preview shows what this script changed."},

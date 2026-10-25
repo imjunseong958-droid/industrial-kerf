@@ -230,6 +230,8 @@ fn publish_snapshot(
         .and_then(Value::as_str)
         != Some(state.document.as_str());
     if project_changed {
+        // The document may use looks another process added to the project.
+        let _ = kerf_model::look::refresh_project_looks(&shared.directory);
         match kerf_runtime::parse_document(&state.document) {
             Ok(mut project) => {
                 kerf_runtime::resolve_media_paths(&mut project, &shared.directory);

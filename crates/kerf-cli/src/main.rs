@@ -132,6 +132,9 @@ enum PresetAction {
         /// TEMPLATE_CLIP=TEXT; quote values containing spaces.
         #[arg(long = "text")]
         texts: Vec<String>,
+        /// SLOT of music: move the markers over its clips to its beats.
+        #[arg(long = "beats")]
+        beats: Vec<String>,
         #[arg(long)]
         sequence: Option<String>,
     },
@@ -339,6 +342,7 @@ fn preset_request(action: &PresetAction) -> Result<(&'static str, Value)> {
             file,
             bindings,
             texts,
+            beats,
             sequence,
         } => {
             let mut media = serde_json::Map::new();
@@ -356,6 +360,12 @@ fn preset_request(action: &PresetAction) -> Result<(&'static str, Value)> {
                 {
                     bail!("duplicate binding for `{slot}`");
                 }
+            }
+            for slot in beats {
+                let binding = media
+                    .get_mut(slot)
+                    .with_context(|| format!("--beats {slot}: bind `{slot}` with --bind"))?;
+                binding["beats"] = json!(true);
             }
             let mut overrides = serde_json::Map::new();
             for text in texts {
@@ -784,6 +794,31 @@ mod tests {
             file: "style.kerfpreset".into(),
             bindings: vec!["slot1=m1".into(), "slot1=m2".into()],
             texts: vec![],
+            beats: vec![],
+            sequence: None
+        })
+        .is_err());
+        let music = Args::try_parse_from([
+            "kerf",
+            "preset",
+            "apply",
+            "style.kerfpreset",
+            "--bind",
+            "slot2=song",
+            "--beats",
+            "slot2",
+        ])
+        .unwrap();
+        let Some(Command::Preset { action }) = music.command else {
+            panic!("preset command");
+        };
+        let (_, request) = preset_request(&action).unwrap();
+        assert_eq!(request["bindings"]["slot2"]["beats"], true);
+        assert!(preset_request(&PresetAction::Apply {
+            file: "style.kerfpreset".into(),
+            bindings: vec![],
+            texts: vec![],
+            beats: vec!["slot2".into()],
             sequence: None
         })
         .is_err());

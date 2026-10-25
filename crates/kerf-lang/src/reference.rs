@@ -227,7 +227,9 @@ fn describe(param: &ParamDef) -> String {
                 facts.push(format!("{}..{}", number(min), number(max)));
             }
         }
-        ParamType::Time => facts.push("a time in the clip, such as 12f or 0.5s".into()),
+        ParamType::Time => {
+            facts.push("a time in the clip, such as 12f or 0.5s, or a marker's id".into())
+        }
         other => facts.push(other.name().to_owned()),
     }
     if let Some(unit) = &param.unit {

@@ -11,7 +11,7 @@
 //! open from anyone.
 
 use crate::catalog::{Catalog, Domain, Engine, FxDef, FxKind, ParamDef, ParamType};
-use crate::model::{Clip, Content, Effect, Mask, MaskMode, MaskShape, Params, Project};
+use crate::model::{Clip, Content, Effect, Marker, Mask, MaskMode, MaskShape, Params, Project};
 use crate::{Id, Interp, Keyframe, Param, Rate, Rgba, Time, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -79,6 +79,8 @@ pub struct Look {
     pub lines: Vec<Line>,
     /// Where it was read from: a file, or `bundled`.
     pub source: String,
+    /// The file as written, which a preset carries.
+    pub text: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -301,6 +303,7 @@ pub fn read(text: &str, source: &str) -> Result<Look, LookError> {
         params: Vec::new(),
         lines: Vec::new(),
         source: source.to_owned(),
+        text: text.to_owned(),
     };
     for (n, text) in lines {
         let args = split(text).map_err(|(column, message)| fail(n, column, message))?;
@@ -948,6 +951,25 @@ fn literal(expr: &Expr, kind: Kind, rate: Rate) -> Option<f64> {
 }
 
 impl Look {
+    /// Whether `other` defines the same look, however it is written and
+    /// wherever it was read from.
+    pub fn same(&self, other: &Look) -> bool {
+        let bare = |look: &Look| {
+            let mut look = Look {
+                source: String::new(),
+                text: String::new(),
+                ..look.clone()
+            };
+            for line in &mut look.lines {
+                let (Line::Set { line, .. } | Line::Fx { line, .. } | Line::Mask { line, .. }) =
+                    line;
+                *line = 0;
+            }
+            look
+        };
+        bare(self) == bare(other)
+    }
+
     /// Check that expressions use declared parameters and give the kind
     /// each place needs.
     fn check_expressions(&self) -> Result<(), LookError> {
@@ -1274,9 +1296,20 @@ impl Env {
     }
 }
 
+/// Where a clip look's times count from: the clip's start, in sequence
+/// seconds, and the sequence's markers, which a time may name.
+type Anchor<'a> = (f64, &'a [Marker]);
+
 /// The parameters an effect instance gives a look: its own values, else
-/// the look's defaults, at `rate`.
-fn env(look: &Look, params: &Params, rate: Rate, span: Option<(f64, f64)>) -> Result<Env, String> {
+/// the look's defaults, at `rate`. A time that names a marker is the time
+/// from `anchor`'s start to it; a transition has no anchor.
+fn env(
+    look: &Look,
+    params: &Params,
+    rate: Rate,
+    span: Option<(f64, f64)>,
+    anchor: Option<Anchor>,
+) -> Result<Env, String> {
     let mut values = BTreeMap::new();
     let defaults = Env {
         values: BTreeMap::new(),
@@ -1286,6 +1319,19 @@ fn env(look: &Look, params: &Params, rate: Rate, span: Option<(f64, f64)>) -> Re
     };
     for param in &look.params {
         let value = match params.get(&param.def.name) {
+            Some(Param::Static(Value::Text(marker))) if param.def.ty == ParamType::Time => {
+                let (start, markers) = anchor.ok_or_else(|| {
+                    format!(
+                        "`{}`: a transition's times do not name markers",
+                        param.def.name
+                    )
+                })?;
+                let marker = markers
+                    .iter()
+                    .find(|m| m.id == marker.as_str())
+                    .ok_or_else(|| format!("`{}`: no marker `{marker}`", param.def.name))?;
+                Value::Number(marker.at.seconds() - start)
+            }
             Some(Param::Static(value)) => value.clone(),
             Some(Param::Animated(_)) => {
                 return Err(format!(
@@ -1505,6 +1551,7 @@ pub fn expand(project: &Project, catalog: &Catalog) -> Result<Project, String> {
     let mut out = project.clone();
     for sequence in &mut out.sequences {
         let rate = sequence.rate;
+        let markers = sequence.markers.clone();
         for track in &mut sequence.tracks {
             // Transitions first: they change the clips either side.
             for index in 0..track.transitions.len() {
@@ -1521,7 +1568,7 @@ pub fn expand(project: &Project, catalog: &Catalog) -> Result<Project, String> {
                 let cut = track.clips[from].end();
                 let (before, after) = transition.split_at_cut(rate);
                 let span = ((cut - before).seconds(), (cut + after).seconds());
-                let env = env(look, &transition.params, rate, Some(span))
+                let env = env(look, &transition.params, rate, Some(span), None)
                     .map_err(|e| format!("`{}`: {e}", transition.id))?;
                 for (side, index) in [(Side::A, from), (Side::B, to)] {
                     let clip = &mut track.clips[index];
@@ -1559,7 +1606,7 @@ pub fn expand(project: &Project, catalog: &Catalog) -> Result<Project, String> {
                     if !effect.enabled {
                         continue;
                     }
-                    let parts = flatten(look, &effect, clip, index, rate, catalog)
+                    let parts = flatten(look, &effect, clip, index, rate, &markers, catalog)
                         .map_err(|e| format!("`{}`: {e}", clip.id))?;
                     let added = parts.effects.len();
                     apply(clip, parts, index, catalog);
@@ -1582,6 +1629,7 @@ fn flatten(
     clip: &Clip,
     index: usize,
     rate: Rate,
+    markers: &[Marker],
     catalog: &Catalog,
 ) -> Result<Parts, String> {
     if look.on == On::Title
@@ -1589,7 +1637,8 @@ fn flatten(
     {
         return Err(format!("`{}` is a look for titles", look.id));
     }
-    let env = env(look, &effect.params, rate, None)?;
+    let anchor = (clip.start.seconds(), markers);
+    let env = env(look, &effect.params, rate, None, Some(anchor))?;
     let taken: Vec<Id> = clip.masks.iter().map(|m| m.name.clone()).collect();
     parts(
         look,
@@ -1603,11 +1652,13 @@ fn flatten(
 }
 
 /// Replace the look at `index` among `clip`'s effects with what it expands
-/// to, for hand tuning; the rest of the clip stays as it is.
+/// to, for hand tuning; the rest of the clip stays as it is. `markers` are
+/// its sequence's, which the look's times may name.
 pub fn flatten_into(
     clip: &mut Clip,
     index: usize,
     rate: Rate,
+    markers: &[Marker],
     catalog: &Catalog,
 ) -> Result<(), String> {
     let effect = clip
@@ -1618,7 +1669,7 @@ pub fn flatten_into(
     let look = catalog
         .look(effect.fx.as_str(), effect.version)
         .ok_or_else(|| format!("`{}@{}` is not a look", effect.fx, effect.version))?;
-    let parts = flatten(look, &effect, clip, index, rate, catalog)?;
+    let parts = flatten(look, &effect, clip, index, rate, markers, catalog)?;
     clip.effects.remove(index);
     apply(clip, parts, index, catalog);
     Ok(())
@@ -1652,10 +1703,60 @@ pub fn project_looks(directory: &std::path::Path) -> std::path::PathBuf {
 /// Draw with the looks of the project in `directory`, on top of the
 /// bundled ones, from now on; how many it has.
 pub fn install_project_looks(directory: &std::path::Path) -> Result<usize, String> {
-    let looks = read_dir(&project_looks(directory))?;
+    let folder = project_looks(directory);
+    // Taken before reading, so a look added meanwhile is read next time.
+    let stamp = stamp(&folder);
+    *INSTALLED_FROM
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((folder.clone(), stamp));
+    let looks = read_dir(&folder)?;
     let count = looks.len();
     Catalog::install_looks(looks)?;
     Ok(count)
+}
+
+/// Install the looks of the project in `directory` again when its looks
+/// folder changed since they were last installed, so a process sees the
+/// looks another adds beside it (an applied preset's, say); whether it did.
+pub fn refresh_project_looks(directory: &std::path::Path) -> Result<bool, String> {
+    let folder = project_looks(directory);
+    let current = INSTALLED_FROM
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .is_some_and(|(installed, at)| *installed == folder && *at == stamp(&folder));
+    if current {
+        return Ok(false);
+    }
+    install_project_looks(directory).map(|_| true)
+}
+
+/// The looks folder last installed from, and its stamp then.
+static INSTALLED_FROM: std::sync::Mutex<Option<(std::path::PathBuf, Stamp)>> =
+    std::sync::Mutex::new(None);
+
+/// A looks folder's files: name, length, and when each last changed.
+type Stamp = Vec<(std::ffi::OsString, u64, Option<std::time::SystemTime>)>;
+
+fn stamp(folder: &std::path::Path) -> Stamp {
+    let mut files: Stamp = std::fs::read_dir(folder)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let name = entry.file_name();
+            if !std::path::Path::new(&name)
+                .extension()
+                .is_some_and(|e| e == "kerflook")
+            {
+                return None;
+            }
+            let meta = entry.metadata().ok()?;
+            Some((name, meta.len(), meta.modified().ok()))
+        })
+        .collect();
+    files.sort();
+    files
 }
 
 /// Read the look files of a folder (`*.kerflook`), in name order.
@@ -1759,6 +1860,47 @@ look look.test.shake version=1 name="Shake" category="Fun" on=clip
     }
 
     #[test]
+    fn a_look_s_time_can_land_on_a_marker() {
+        let mut catalog = Catalog::builtin().clone();
+        catalog
+            .define_look(read(SHAKE, "shake.kerflook").unwrap())
+            .unwrap();
+        let mut clip = Clip::new(
+            Id::new("c1").unwrap(),
+            Content::Generator {
+                fx: Id::new("solid").unwrap(),
+                version: 1,
+                params: Params::new(),
+            },
+            Rate::FPS_24.time_of(24),
+            Rate::FPS_24.time_of(48),
+        );
+        clip.effects.push(Effect {
+            fx: Id::new("look.test.shake").unwrap(),
+            version: 1,
+            enabled: true,
+            params: [("hit".to_owned(), Param::Static(Value::Text("mk1".into())))].into(),
+        });
+        let marker = Marker {
+            id: Id::new("mk1").unwrap(),
+            at: Rate::FPS_24.time_of(36),
+            duration: Time::ZERO,
+            name: None,
+            color: None,
+            note: None,
+        };
+        let mut missed = clip.clone();
+        let error = flatten_into(&mut missed, 0, Rate::FPS_24, &[], &catalog).unwrap_err();
+        assert!(error.contains("no marker `mk1`"), "{error}");
+        // The marker is 12 frames into the clip, which starts at 24.
+        flatten_into(&mut clip, 0, Rate::FPS_24, &[marker], &catalog).unwrap();
+        let Param::Animated(keys) = &clip.props["x"] else {
+            panic!("x animates")
+        };
+        assert_eq!(Rate::FPS_24.frames_round(keys[0].at), 12);
+    }
+
+    #[test]
     fn a_clip_look_expands_into_its_parts_on_top_of_the_edit() {
         let mut catalog = Catalog::builtin().clone();
         catalog
@@ -1786,7 +1928,7 @@ look look.test.shake version=1 name="Shake" category="Fun" on=clip
             ]
             .into(),
         });
-        flatten_into(&mut clip, 0, Rate::FPS_24, &catalog).unwrap();
+        flatten_into(&mut clip, 0, Rate::FPS_24, &[], &catalog).unwrap();
         // Scale multiplies the clip's own: 2 × 1.1.
         assert_eq!(clip.props["scale"], Param::Static(Value::Number(2.0 * 1.1)));
         // x keys at the hit (12f), two frames on, …, and the settle (10f on).
@@ -1903,6 +2045,13 @@ look look.test.shake version=1 name="Shake" category="Fun" on=clip
         std::fs::write(project_looks(&dir).join("shake.kerflook"), &text).unwrap();
         assert_eq!(install_project_looks(&dir).unwrap(), 1);
         assert!(Catalog::builtin().look("look.project.shake", 1).is_some());
+        // Installed again only when the folder changes.
+        assert!(!refresh_project_looks(&dir).unwrap());
+        let added = SHAKE.replace("look.test.shake", "look.project.added");
+        std::fs::write(project_looks(&dir).join("added.kerflook"), added).unwrap();
+        assert!(refresh_project_looks(&dir).unwrap());
+        assert!(Catalog::builtin().look("look.project.added", 1).is_some());
+        assert!(!refresh_project_looks(&dir).unwrap());
         assert!(
             Catalog::builtin().look("look.shake", 1).is_some(),
             "the bundled ones stay"

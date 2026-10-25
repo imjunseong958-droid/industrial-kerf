@@ -55,6 +55,7 @@ fn bindings() -> BTreeMap<String, preset::Binding> {
                 preset::Binding {
                     media: Id::new("replacement").unwrap(),
                     from: Time::ZERO,
+                    beats: Vec::new(),
                 },
             )
         })
@@ -76,7 +77,9 @@ fn exports_independent_cuts_but_keeps_linked_audio_in_the_same_slot() {
     let document = exported();
     assert!(!document.contains("original-footage"));
     assert!(!document.contains("PRIVATE_REEL"));
-    let pattern = preset::parse(&document, Catalog::builtin()).unwrap();
+    let pattern = preset::parse(&document, Catalog::builtin())
+        .unwrap()
+        .pattern;
     assert_eq!(pattern.media.len(), 2);
     assert_eq!(pattern.name, "Product pattern");
     assert!((pattern.media[0].duration.seconds() - 2.2).abs() < 1e-9);
@@ -281,7 +284,9 @@ sequence unused rate=30 size=320x180
         "Nested",
     )
     .unwrap();
-    let template = preset::parse(&document, Catalog::builtin()).unwrap();
+    let template = preset::parse(&document, Catalog::builtin())
+        .unwrap()
+        .pattern;
     assert_eq!(template.sequences.len(), 2);
     assert_eq!(template.media[0].duration.seconds(), 2.2);
     assert_eq!(template.media[1].duration.seconds(), 2.2);
@@ -341,7 +346,9 @@ sequence s rate={rate} size=320x180
 
 #[test]
 fn latest_start_is_the_last_whole_frame_that_fills_the_slot() {
-    let pattern = preset::parse(&exported(), Catalog::builtin()).unwrap();
+    let pattern = preset::parse(&exported(), Catalog::builtin())
+        .unwrap()
+        .pattern;
     let slot = pattern.media("slot1").unwrap();
     let mut media = destination().media[0].clone();
     // 10s at 24 fps less 2.2s of slot leaves 7.8s: frame 187.2, so frame 187.
@@ -369,4 +376,205 @@ fn slot_ids_do_not_collide_with_existing_clip_ids() {
     )
     .unwrap();
     preset::parse(&document, Catalog::builtin()).unwrap();
+}
+
+const MINE: &str = r#"kerf-look 1
+# A look of this project's own.
+look look.test.mine version=1 name="Mine" category="Test" on=clip
+  doc "Nudges the picture at a hit."
+  param hit time default=0f
+set x={$hit:0 $hit+2f:0.1 $hit+4f:0}
+"#;
+
+/// A catalog with a project look beside the bundled ones.
+fn with_mine() -> Catalog {
+    let mut catalog = Catalog::builtin().clone();
+    catalog
+        .define_look(kerf_model::look::read(MINE, "mine.kerflook").unwrap())
+        .unwrap();
+    catalog
+}
+
+const BEATS: &str = r#"kerf 1
+project name="Beats"
+media m1 path="/private/song.mov" rate=30 dur=60s video=1920x1080 audio=2ch@48000
+sequence s1 name="Beats" rate=30 size=1080x1920
+  track V1 video
+    clip c1 media=m1 src=0f at=0f dur=4s
+      fx look.test.mine@1 hit=mk1
+      fx look.shake@1 hit=mk2
+  track A1 audio
+    clip music media=m1 src=0f at=0f dur=4s
+  marker mk1 at=30f
+  marker mk2 at=90f
+"#;
+
+fn beats_preset() -> String {
+    let catalog = with_mine();
+    let original = parse_document(BEATS, &catalog).unwrap().project;
+    preset::export(&original, &catalog, &Id::new("s1").unwrap(), "Beats").unwrap()
+}
+
+#[test]
+fn a_preset_carries_the_looks_kerf_does_not_bundle() {
+    let document = beats_preset();
+    // The project's look travels, indented under its `look` line; the
+    // bundled shake does not.
+    assert!(
+        document.contains("\nlook look.test.mine version=1")
+            && document.contains("\n  set x={$hit:0"),
+        "{document}"
+    );
+    assert!(!document.contains("look look.shake"), "{document}");
+    // It reads where the look is not installed, and its time still names
+    // the marker.
+    assert!(Catalog::builtin().look("look.test.mine", 1).is_none());
+    let read = preset::parse(&document, Catalog::builtin()).unwrap();
+    assert_eq!(read.looks.len(), 1);
+    assert!(read.catalog.look("look.test.mine", 1).is_some());
+    assert!(document.contains("hit=mk1"), "{document}");
+    // Where the look is installed already, it must be the same one.
+    preset::parse(&document, &with_mine()).unwrap();
+    let changed = document.replace("$hit+2f:0.1", "$hit+2f:0.5");
+    let error = preset::parse(&changed, &with_mine()).unwrap_err();
+    assert!(error.contains("is not the one in mine.kerflook"), "{error}");
+    // A look the pattern does not use is not carried.
+    let unused = format!(
+        "{document}{}",
+        MINE.replace("kerf-look 1\n", "")
+            .replace("look.test.mine", "look.test.unused")
+            .replace("\nset", "\n  set")
+    );
+    let error = preset::parse(&unused, Catalog::builtin()).unwrap_err();
+    assert!(
+        error.contains("`look.test.unused@1`, which it does not use"),
+        "{error}"
+    );
+    // Errors in a carried look name the preset's own line.
+    let broken = document.replace("param hit time", "param hit sometimes");
+    let line = broken
+        .lines()
+        .position(|line| line.contains("param hit sometimes"))
+        .unwrap()
+        + 1;
+    let error = preset::parse(&broken, Catalog::builtin()).unwrap_err();
+    assert!(error.starts_with(&format!("preset:{line}:")), "{error}");
+}
+
+#[test]
+fn markers_land_on_the_new_music_s_beats_and_looks_follow_them() {
+    let document = beats_preset();
+    let read = preset::parse(&document, Catalog::builtin()).unwrap();
+    let slot = |audio: bool| {
+        read.pattern
+            .media
+            .iter()
+            .find(|m| m.audio.is_some() == audio && m.video.is_some() != audio)
+            .unwrap()
+            .id
+            .to_string()
+    };
+    let destination = parse_document(
+        r#"kerf 1
+project name="New"
+media pic path="pic.mov" rate=30 dur=10s video=1920x1080
+media song path="song.wav" rate=30 dur=60s audio=2ch@48000
+sequence target rate=30 size=1080x1920
+"#,
+        Catalog::builtin(),
+    )
+    .unwrap()
+    .project;
+    let second = |s: f64| Time::from_seconds(s).unwrap();
+    let bindings = BTreeMap::from([
+        (
+            slot(false),
+            preset::Binding {
+                media: Id::new("pic").unwrap(),
+                from: Time::ZERO,
+                beats: Vec::new(),
+            },
+        ),
+        (
+            slot(true),
+            preset::Binding {
+                media: Id::new("song").unwrap(),
+                from: second(1.0),
+                // Media time; the clip plays it from 1s, so 0.9s is not heard.
+                beats: [0.9, 2.2, 3.1, 4.4].map(second).to_vec(),
+            },
+        ),
+    ]);
+    let script = preset::instantiate(
+        &destination,
+        &read.catalog,
+        &document,
+        &Id::new("target").unwrap(),
+        &bindings,
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    let applied = apply_script(&destination, &read.catalog, &script)
+        .unwrap()
+        .project;
+    let sequence = applied.sequence("target").unwrap();
+    let rate = sequence.rate;
+    let mut markers: Vec<_> = sequence.markers.iter().collect();
+    markers.sort_by_key(|m| m.at);
+    // 30f lands on 2.2s (1.2s in the sequence, 36f); 90f on 4.4s (102f),
+    // nearer than 3.1s (63f).
+    assert_eq!(
+        markers
+            .iter()
+            .map(|m| rate.frames_round(m.at))
+            .collect::<Vec<_>>(),
+        [36, 102]
+    );
+    // The looks hit the markers they name, by their new ids.
+    let expanded = kerf_model::look::expand(&applied, &read.catalog).unwrap();
+    let clip = expanded
+        .sequence("target")
+        .unwrap()
+        .tracks
+        .iter()
+        .flat_map(|t| &t.clips)
+        .find(|c| c.props.contains_key("x"))
+        .unwrap();
+    let kerf_model::Param::Animated(keys) = &clip.props["x"] else {
+        panic!("x animates")
+    };
+    let frames: Vec<_> = keys.iter().map(|k| rate.frames_round(k.at)).collect();
+    assert!(
+        frames.contains(&36) && frames.contains(&102) && frames[0] == 36,
+        "{frames:?}"
+    );
+    let first = applied
+        .sequence("target")
+        .unwrap()
+        .tracks
+        .iter()
+        .flat_map(|t| &t.clips)
+        .flat_map(|c| &c.effects)
+        .find(|e| e.fx == "look.test.mine")
+        .unwrap();
+    assert_eq!(
+        first.params["hit"],
+        kerf_model::Param::Static(kerf_model::Value::Text(markers[0].id.to_string()))
+    );
+}
+
+#[test]
+fn the_presets_in_the_docs_read() {
+    // A Windows checkout may end its lines with CRLF.
+    let docs = include_str!("../../../docs/presets.md").replace("\r\n", "\n");
+    let examples: Vec<&str> = docs
+        .split("```text\n")
+        .skip(1)
+        .filter_map(|block| block.split("```").next())
+        .filter(|block| block.starts_with("kerf 1"))
+        .collect();
+    assert_eq!(examples.len(), 2);
+    for example in examples {
+        preset::parse(example, Catalog::builtin()).unwrap_or_else(|e| panic!("{e}\n{example}"));
+    }
 }

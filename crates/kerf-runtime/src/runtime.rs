@@ -1271,6 +1271,12 @@ impl Runtime {
 
     fn execute(&mut self, request: RuntimeRequest) -> Result<RuntimeResponse, RuntimeError> {
         self.refresh_projection_status();
+        // Looks another process added, as an applied preset's, join the
+        // catalog edits are checked with; one that does not read leaves the
+        // catalog as it was, and edits that use it say so.
+        if let Some(directory) = self.project_path.parent() {
+            let _ = kerf_model::look::refresh_project_looks(directory);
+        }
         match request {
             RuntimeRequest::GetState => Ok(RuntimeResponse::State(self.snapshot())),
             RuntimeRequest::GetDocument { annotated } => Ok(RuntimeResponse::Document {

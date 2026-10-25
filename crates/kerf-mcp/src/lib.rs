@@ -205,6 +205,9 @@ impl KerfMcpRouter {
     /// frames come back whole: the document is the agent's context and
     /// frames travel as images.
     pub fn call(&self, presented_name: &str, arguments: Value) -> Value {
+        // Looks another process added since, as an applied preset's; one
+        // that does not read leaves the catalog as it was.
+        let _ = kerf_model::look::refresh_project_looks(&self.dir);
         let name = if self.namespace.is_empty() {
             presented_name
         } else {
