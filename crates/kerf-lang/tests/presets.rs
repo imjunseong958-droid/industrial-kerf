@@ -565,7 +565,8 @@ sequence target rate=30 size=1080x1920
 
 #[test]
 fn the_presets_in_the_docs_read() {
-    let docs = include_str!("../../../docs/presets.md");
+    // A Windows checkout may end its lines with CRLF.
+    let docs = include_str!("../../../docs/presets.md").replace("\r\n", "\n");
     let examples: Vec<&str> = docs
         .split("```text\n")
         .skip(1)
