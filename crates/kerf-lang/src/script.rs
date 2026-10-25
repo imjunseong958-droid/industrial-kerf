@@ -826,7 +826,7 @@ impl Script<'_> {
         let line = fields.line();
         let clip = fields.id(1, "a clip id")?;
         let (found, clock) = self.clip(&clip, line)?;
-        let action = fields.word(2, "add, set, remove, or move")?;
+        let action = fields.word(2, "add, set, remove, move, or flatten")?;
         let target_word = fields.word(
             3,
             if action == "add" {
@@ -887,13 +887,17 @@ impl Script<'_> {
                 }
             }
             "remove" => Op::FxRemove { clip, index },
+            "flatten" => Op::FxFlatten { clip, index },
             "move" => Op::FxMove {
                 clip,
                 index,
                 to: required(&mut fields, "to", position_index)?,
             },
             other => {
-                return Err(line.error(1, format!("fx {other}? use add, set, remove, or move")))
+                return Err(line.error(
+                    1,
+                    format!("fx {other}? use add, set, remove, move, or flatten"),
+                ))
             }
         };
         fields.finish(4)?;
@@ -1518,6 +1522,7 @@ fn op_line(project: &Project, catalog: &Catalog, op: &Op) -> String {
         }
         Op::MaskRemove { clip, name } => format!("mask {clip} remove {name}"),
         Op::FxRemove { clip, index } => format!("fx {clip} remove {}", index + 1),
+        Op::FxFlatten { clip, index } => format!("fx {clip} flatten {}", index + 1),
         Op::FxMove { clip, index, to } => format!("fx {clip} move {} to={}", index + 1, to + 1),
         Op::AddTransition {
             id,

@@ -44,6 +44,16 @@ in stack order beside FilmCraft's effects. Any other id EffectCraft had is
 an error that names what to use instead (`stylize.glow` is
 `light.wonderglow@1` now).
 
+Looks are the playful effects of a short-form editor written in the Kerf
+language from those effects ([looks.md](looks.md)): shakes, zoom pulses,
+flashes, glitches, film and VHS looks, title pop-ins, and whips and zooms
+through a cut. They are listed there too and written like any effect or
+transition (`fx c1 add look.shake@1 intensity=0.7 hit=12f`, `transition add
+from=c1 to=c2 fx=look.whip@1 dur=12f`); a time parameter is a time in the
+clip. The document keeps the one line and the look expands when it draws;
+`fx c1 flatten 1` replaces it with what it expands to. A project's own looks
+are `.kerf/looks/*.kerflook` files.
+
 A track parameter names another picture track of the sequence, whose
 picture the effect reads even while the track is hidden, as a track matte
 does; an effect cannot read its own track, and tracks cannot read each other

@@ -1,0 +1,7 @@
+kerf-look 1
+look look.noir version=1 name="Noir" category="Color" on=clip
+  doc "Black and white with deep contrast and dark corners; drama, mystery, and flashbacks."
+  param amount number default=1 range=0..1 doc="How deep the contrast and corners are."
+  fx color.blackwhite@2
+  fx color.basic@1 contrast=1+0.4*$amount
+  fx stylize.vignette@2 amount=-40*$amount

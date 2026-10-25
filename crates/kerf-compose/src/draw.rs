@@ -134,7 +134,12 @@ struct Shown {
 #[derive(Clone, Copy)]
 enum Reveal {
     Dissolve,
-    Wipe { angle: f64, softness: f64 },
+    Wipe {
+        angle: f64,
+        softness: f64,
+    },
+    /// Over the outgoing clip as it is: a look's transition draws it.
+    Over,
 }
 
 /// A dip's color between the two clips of its cut.
@@ -198,6 +203,9 @@ impl Drawing {
         sequence: Option<&str>,
         captions: bool,
     ) -> Result<Self> {
+        // Looks draw as the built-ins they stand for.
+        let expanded = kerf_model::look::expand(project, catalog).map_err(ComposeError::Invalid)?;
+        let project = &expanded;
         let top = program_sequence(project, sequence)
             .map_err(|error| ComposeError::Invalid(error.to_string()))?;
         let mut builder = Builder {
@@ -1112,6 +1120,7 @@ impl<'a> Builder<'a> {
                     continue;
                 }
                 "dissolve" | "crossfade" => Reveal::Dissolve,
+                kerf_model::look::STACK => Reveal::Over,
                 "wipe" => Reveal::Wipe {
                     angle: static_number(
                         self.catalog,

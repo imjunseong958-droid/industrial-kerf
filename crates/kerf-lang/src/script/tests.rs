@@ -312,3 +312,32 @@ fn trim_to_a_source_position() {
         .message
         .contains("not both"));
 }
+
+#[test]
+fn looks_are_written_like_effects_and_flatten_into_what_they_stand_for() {
+    let applied = run(&base(), "fx c1 add look.shake@1 intensity=0.7 hit=12f\n");
+    let clip = applied.project.clip("c1").unwrap();
+    // The document keeps the one line, the time as a time.
+    let printed = print_document(
+        &applied.project,
+        Catalog::builtin(),
+        PrintOptions::default(),
+    );
+    assert!(
+        printed.contains("      fx look.shake@1 intensity=0.7 hit=12f\n"),
+        "{printed}"
+    );
+    assert_eq!(clip.effects.len(), 1);
+    // Flattened, it is the properties and effects it expands to.
+    let flat = run(&applied.project, "fx c1 flatten 1\n");
+    let clip = flat.project.clip("c1").unwrap();
+    assert_eq!(clip.effects.len(), 1);
+    assert_eq!(clip.effects[0].fx.as_str(), "blur.directional");
+    let kerf_model::Param::Animated(keys) = &clip.props["x"] else {
+        panic!("x animates");
+    };
+    assert_eq!(frames(keys[0].at), 12);
+    // A look for titles is not one for this clip.
+    let error = fails(&base(), "fx c1 add look.pop-in@1\n");
+    assert!(error.message.contains("a look for titles"), "{error:?}");
+}

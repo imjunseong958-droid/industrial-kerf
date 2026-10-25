@@ -1,0 +1,7 @@
+kerf-look 1
+look look.film version=1 name="Film" category="Retro" on=clip
+  doc "Shot on film: grain, warm light leaks, and darkened corners; vlogs, travel, and nostalgic edits."
+  param amount number default=1 range=0..2 doc="How strong the film look is."
+  fx noise.addgrain@1 tweaking/intensity=0.5*$amount
+  fx light.leaks@1 intensity=35*$amount
+  fx stylize.vignette@2 amount=-30*$amount

@@ -1,0 +1,7 @@
+kerf-look 1
+look look.pop-in version=1 name="Pop In" category="Titles" on=title
+  doc "The title pops in with a springy overshoot; lower thirds, labels, and punchy text."
+  param start time default=0f doc="When it pops in."
+  param length time default=10f range=2f..2s doc="How long the pop takes."
+  set scale={$start:0:ease-out $start+$length*0.6:1.15:ease $start+$length:1}
+  set opacity={$start:0 $start+$length*0.3:1}

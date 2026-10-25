@@ -1,0 +1,7 @@
+kerf-look 1
+look look.wobble version=1 name="Wobble" category="Titles" on=title
+  doc "The title wobbles side to side and settles; playful captions and jokes."
+  param amount angle default=6 range=0..45 doc="How far it tips."
+  param start time default=0f doc="When it starts."
+  param length time default=18f range=4f..5s doc="How long it wobbles."
+  set rotation={$start:0 $start+$length*0.2:$amount $start+$length*0.45:-0.6*$amount $start+$length*0.7:0.3*$amount:ease $start+$length:0}

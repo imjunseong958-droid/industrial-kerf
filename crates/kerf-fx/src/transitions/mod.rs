@@ -108,9 +108,11 @@ impl<'a> Fx<'a> {
 
 /// The FilmCraft transition that draws Kerf's transition `id`, if Kerf's renderer draws it.
 pub fn filmcraft_id(id: &str) -> Option<String> {
-    let known = kerf_model::Catalog::builtin().fx(id).is_some_and(|def| {
-        def.engine == kerf_model::Engine::Kerf && def.kind == kerf_model::FxKind::Transition
-    });
+    // Kerf's renderer draws `stack` itself.
+    let known = id != kerf_model::look::STACK
+        && kerf_model::Catalog::builtin().fx(id).is_some_and(|def| {
+            def.engine == kerf_model::Engine::Kerf && def.kind == kerf_model::FxKind::Transition
+        });
     if !known {
         return None;
     }

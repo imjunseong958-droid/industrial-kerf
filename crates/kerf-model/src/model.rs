@@ -778,7 +778,10 @@ mod tests {
         let joined = |path: &str| directory.join(path).to_string_lossy().into_owned();
         assert_eq!(project.media[0].path, joined("clips/a.mp4"));
         let effects = &project.sequences[0].tracks[0].clips[0].effects;
-        assert_eq!(effects[0].params["look_lut"], text(&joined("looks/warm.cube")));
+        assert_eq!(
+            effects[0].params["look_lut"],
+            text(&joined("looks/warm.cube"))
+        );
         assert_eq!(effects[1].params["text"], text("warm"));
     }
 

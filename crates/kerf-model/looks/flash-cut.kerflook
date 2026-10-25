@@ -1,0 +1,7 @@
+kerf-look 1
+look look.flash-cut version=1 name="Flash Cut" category="Transitions" on=transition
+  doc "Cuts through a bright flash; beat drops, camera flashes, and dramatic reveals."
+  param strength number default=1 range=0..1.5 doc="How bright the flash is."
+  a fx color.basic@1 exposure={0%:0:ease-in 50%:2*$strength}
+  b fx color.basic@1 exposure={50%:2*$strength:ease-out 100%:0}
+  b set opacity={0%:0:hold 50%:1}

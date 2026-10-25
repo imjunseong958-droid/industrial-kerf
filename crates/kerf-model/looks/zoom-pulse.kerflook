@@ -1,0 +1,7 @@
+kerf-look 1
+look look.zoom-pulse version=1 name="Zoom Pulse" category="Motion" on=clip
+  doc "Punches the picture in on a beat and eases back; music edits and emphasis."
+  param amount number default=0.15 range=0..1 doc="How far it zooms in."
+  param hit time default=0f doc="When it pulses."
+  param length time default=8f range=2f..2s doc="How long the pulse lasts."
+  set scale={$hit:1:ease-out $hit+$length*0.25:1+$amount:ease $hit+$length:1}

@@ -1,0 +1,5 @@
+kerf-look 1
+look look.sparkle version=1 name="Sparkle" category="Light" on=clip
+  doc "Star glints on the brightest spots; jewelry, sunlight on water, and magic moments."
+  param amount number default=1 range=0..2 doc="How big and bright the glints are."
+  fx light.glint@1 intensity=100*$amount length=80*$amount threshold=70

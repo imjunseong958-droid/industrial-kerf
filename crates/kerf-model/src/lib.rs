@@ -7,6 +7,7 @@
 pub mod catalog;
 pub mod diag;
 pub mod id;
+pub mod look;
 pub mod model;
 pub mod ops;
 pub mod time;

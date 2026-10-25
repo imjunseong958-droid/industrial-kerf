@@ -121,6 +121,17 @@ pub fn reference(catalog: &Catalog) -> String {
             writeln!(out, "- {category}: {}", ids.join(", ")).unwrap();
         }
     }
+    writeln!(out, "\n{LOOKS}").unwrap();
+    let mut categories: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    for fx in catalog.all().filter(|fx| fx.engine == Engine::Look) {
+        categories
+            .entry(fx.category.as_str())
+            .or_default()
+            .push(format!("`{}@{}`", fx.id, fx.version));
+    }
+    for (category, ids) in categories {
+        writeln!(out, "- {category}: {}", ids.join(", ")).unwrap();
+    }
     writeln!(out, "\n{RASTER}").unwrap();
     let mut categories: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for fx in catalog.all().filter(|fx| fx.engine == Engine::Raster) {
@@ -156,6 +167,15 @@ is a quoted `.cube` or `.3dl` path, and another track is its id
 (`matte=V2`), read even while it is hidden. Sizes are the clip's source
 pixels. An id at version 2 was an EffectCraft effect that FilmCraft's
 replaced; version 1 of it no longer reads.";
+
+const LOOKS: &str = "## Looks
+Playful effects written in the Kerf language from the effects above, behind
+a few parameters (`docs/looks.md`). A clip takes one like any effect (`fx c1
+add look.shake@1 intensity=0.7 hit=12f`), a title the Titles ones, and a cut
+the Transitions ones like any transition. A time parameter is a time in the
+clip (`12f`, `0.5s`). The document keeps the one line; `fx c1 flatten 1`
+replaces the look at that place with what it expands to, for hand tuning.
+A project's own looks are `.kerf/looks/*.kerflook` files.";
 
 const RASTER: &str = "## Effects kept from EffectCraft
 The EffectCraft effects Kerf keeps, which FilmCraft has nothing like:
@@ -207,6 +227,7 @@ fn describe(param: &ParamDef) -> String {
                 facts.push(format!("{}..{}", number(min), number(max)));
             }
         }
+        ParamType::Time => facts.push("a time in the clip, such as 12f or 0.5s".into()),
         other => facts.push(other.name().to_owned()),
     }
     if let Some(unit) = &param.unit {
@@ -240,7 +261,9 @@ mod tests {
         let text = reference(catalog);
         for fx in catalog.all() {
             let listed = match fx.engine {
-                Engine::Graph | Engine::Kerf => format!("`{}@{}`", fx.id, fx.version),
+                Engine::Graph | Engine::Kerf | Engine::Look => {
+                    format!("`{}@{}`", fx.id, fx.version)
+                }
                 Engine::Raster => format!("`{}`", fx.id),
             };
             assert!(text.contains(&listed), "{}", fx.id);

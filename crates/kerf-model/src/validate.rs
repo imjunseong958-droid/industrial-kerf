@@ -530,6 +530,17 @@ impl Validator<'_> {
                         domain,
                         &effect.params,
                     );
+                    let title =
+                        matches!(&clip.content, Content::Generator { fx, .. } if fx == "title");
+                    if let Some(look) = self.catalog.look(effect.fx.as_str(), effect.version) {
+                        if look.on == crate::look::On::Title && !title {
+                            self.error(
+                                "look.on",
+                                id,
+                                format!("`{id}`: `{}` is a look for titles", effect.fx),
+                            );
+                        }
+                    }
                 }
             }
             None if !clip.props.is_empty() || !clip.effects.is_empty() => self.error(

@@ -148,6 +148,10 @@ pub fn plan<E>(
     sequence: Option<&str>,
     mut place: impl FnMut(Job<'_>) -> Result<String, E>,
 ) -> Result<Planned, E> {
+    // The bake runs the built-ins a look stands for; a look that does not
+    // expand is the compiler's to report.
+    let expanded = kerf_model::look::expand(project, catalog).unwrap_or_else(|_| project.clone());
+    let project = &expanded;
     let mut planned = Planned {
         project: project.clone(),
         prerenders: Vec::new(),

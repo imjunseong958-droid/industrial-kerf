@@ -177,6 +177,11 @@ impl Runtime {
         let project_path = directory.join(PROJECT_FILE);
         let journal_path = directory.join(JOURNAL_FILE);
         let mut notes = Vec::new();
+        // The project's own looks join the catalog it is edited with; a look
+        // that does not read leaves them all out, and says why.
+        if let Err(error) = kerf_model::look::install_project_looks(directory) {
+            notes.push(format!("the project's looks are not loaded: {error}"));
+        }
         let checkpoint = match load_checkpoint(directory)? {
             Loaded::Current(checkpoint) => Some(checkpoint),
             Loaded::Previous => {

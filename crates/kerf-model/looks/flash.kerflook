@@ -1,0 +1,7 @@
+kerf-look 1
+look look.flash version=1 name="Flash" category="Light" on=clip
+  doc "A bright flash at a hit that fades out; beat hits, camera flashes, and scene changes."
+  param strength number default=1 range=0..1.5 doc="How bright the flash is."
+  param hit time default=0f doc="When it flashes."
+  param fade time default=6f range=1f..2s doc="How long it fades."
+  fx color.basic@1 exposure={$hit:0 $hit+1f:2*$strength:ease-out $hit+1f+$fade:0}

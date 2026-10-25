@@ -1,0 +1,8 @@
+kerf-look 1
+look look.vhs version=1 name="VHS" category="Retro" on=clip
+  doc "A worn VHS tape: faded color, color bleed, noise, and a gentle wobble; retro, nostalgic, and found-footage looks."
+  param amount number default=1 range=0..2 doc="How worn the tape is."
+  fx color.basic@1 saturation=1-0.3*$amount contrast=1+0.1*$amount
+  fx light.rgbsplit@1 amount=6*$amount
+  fx noise.noise@2 amount=12*$amount
+  fx distort.wavewarp@2 height=2*$amount width=600 direction=0 speed=2

@@ -168,6 +168,10 @@ impl PlaybackTimeline {
     /// Build a playback plan from the first sequence of a validated project.
     /// A project without a sequence plays nothing.
     pub fn from_project(project: &Project) -> Result<Self, PlaybackError> {
+        // Looks play as the built-ins they stand for.
+        let expanded = kerf_model::look::expand(project, Catalog::builtin())
+            .map_err(PlaybackError::InvalidProject)?;
+        let project = &expanded;
         let sequence = project.sequences.first();
         let sources: Vec<PlaybackSource> = project
             .media
@@ -490,6 +494,22 @@ impl Flattener<'_> {
 /// mix. Nothing plays when the compositor cannot draw the program, which no
 /// render can then either.
 pub fn preview_plan(project: &Project) -> PreviewPlan {
+    let expanded = match kerf_model::look::expand(project, Catalog::builtin()) {
+        Ok(expanded) => expanded,
+        Err(message) => {
+            return plan(
+                PreviewMode::Unavailable,
+                vec![reason(
+                    "compiler_rejected_feature",
+                    None,
+                    None,
+                    message,
+                    FindingSeverity::Error,
+                )],
+            )
+        }
+    };
+    let project = &expanded;
     let sequence = match program_sequence(project, None) {
         Ok(sequence) => sequence,
         Err(ProgramError::Invalid(message) | ProgramError::Unsupported { what: message, .. }) => {

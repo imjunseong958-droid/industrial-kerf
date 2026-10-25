@@ -6,7 +6,7 @@
 //! `KERF_BLESS=1 cargo test -p kerf-fx transitions::tests::golden_fingerprints` and review the
 //! diff.
 
-use kerf_model::{Catalog, Engine, FxDef, FxKind, Param, ParamDef, ParamType, Params, Rgba, Value};
+use kerf_model::{Catalog, FxDef, Param, ParamDef, ParamType, Params, Rgba, Value};
 
 use super::*;
 
@@ -44,7 +44,7 @@ fn frame_b() -> Image {
 fn transitions() -> impl Iterator<Item = &'static FxDef> {
     Catalog::builtin()
         .all()
-        .filter(|d| d.engine == Engine::Kerf && d.kind == FxKind::Transition)
+        .filter(|d| filmcraft_id(d.id.as_str()).is_some())
 }
 
 fn def(id: &str) -> &'static FxDef {

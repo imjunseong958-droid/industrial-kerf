@@ -115,6 +115,9 @@ pub fn compile_program(
     catalog: &Catalog,
     options: &ProgramOptions,
 ) -> Result<CompiledProgram> {
+    // Looks draw as the built-ins they stand for.
+    let expanded = kerf_model::look::expand(project, catalog).map_err(ProgramError::Invalid)?;
+    let project = &expanded;
     let sequence = program_sequence(project, options.sequence.as_deref())?;
     let (from, to) = match options.range {
         Some((from, to)) => {

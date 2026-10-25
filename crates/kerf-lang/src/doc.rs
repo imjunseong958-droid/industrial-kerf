@@ -1097,9 +1097,16 @@ pub(crate) fn params_text(params: &Params, defs: &[ParamDef], rate: Rate) -> Str
                     ParamType::Track | ParamType::Sound | ParamType::Mask
                 )
         });
+        let time = defs
+            .iter()
+            .any(|def| def.name == *name && def.ty == ParamType::Time);
         match param {
             Param::Static(Value::Text(id)) if reference && Id::new(id.as_str()).is_ok() => {
                 write!(out, " {name}={id}").unwrap();
+            }
+            Param::Static(Value::Number(seconds)) if time => {
+                let at = Time::from_seconds(*seconds).unwrap_or(Time::ZERO);
+                write!(out, " {name}={}", crate::text::print_offset(at, rate)).unwrap();
             }
             _ => write!(out, " {name}={}", print_param(param, rate)).unwrap(),
         }
@@ -1412,8 +1419,7 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
                     &format!("      set y=0.3 text=\"Day One\" size=0.1\n{c3}"),
                 )
         };
-        let reads =
-            |track: &str| format!("      fx key.trackmatte@1 matte={track}\n");
+        let reads = |track: &str| format!("      fx key.trackmatte@1 matte={track}\n");
         let document = parse_document(&reading(&reads("V2"), ""), Catalog::builtin()).unwrap();
         // The track name prints back as a word.
         assert!(print_document(

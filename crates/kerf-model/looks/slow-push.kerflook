@@ -1,0 +1,6 @@
+kerf-look 1
+look look.slow-push version=1 name="Slow Push" category="Motion" on=clip
+  doc "A slow push in across the shot; interviews, establishing shots, and building tension."
+  param amount number default=0.1 range=0..1 doc="How far it pushes in."
+  param length time default=3s range=0.2s..60s doc="How long the push takes."
+  set scale={0s:1:ease $length:1+$amount}
