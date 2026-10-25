@@ -10,6 +10,11 @@ effects, its face tracking and 3D Camera Tracker (and the camera solver and
 face model behind them), nor for upgrading saved EffectCraft projects, so
 they are not here.
 
+Kerf is moving off these crates: its built-in effects are becoming
+FilmCraft's video-editing set, and playful effects become looks
+([docs/looks.md](../docs/looks.md)). No more EffectCraft effects are being
+carried.
+
 They are workspace members, so `cargo check` and `cargo test` cover them. They
 keep EffectCraft's edition (2024), lints (in the root `Cargo.toml`),
 `rustfmt.toml`, and `clippy.toml`. The layout is upstream's (`crates/`,
