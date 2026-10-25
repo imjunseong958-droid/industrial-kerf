@@ -12,6 +12,9 @@
 //! libavfilter, as the graph converts them, and kept in a bounded cache.
 //! A clip never shown at its full size is converted at the size it is
 //! shown, as the graph scales it.
+//!
+//! The decoders are shared by both compositors: [`LibavFootage`] serves
+//! EffectCraft's renderer, and [`Pictures`] Kerf's own, in linear light.
 
 use effectcraft_project::{Footage as FootageItem, ItemId};
 use effectcraft_render::{FootageSource, Image};
@@ -19,6 +22,7 @@ use effectcraft_time::{Tick, TICKS_PER_SECOND};
 use ffmpeg_next as ffmpeg;
 use ffmpeg_next::format::context::Input;
 use ffmpeg_next::{decoder, filter, frame, media};
+use kerf_draw::Image as Picture;
 use kerf_model::time::FLICKS_PER_SECOND;
 use kerf_model::{Rate, Ratio, Time};
 use std::collections::{BTreeMap, HashMap};
@@ -69,24 +73,38 @@ impl ClipSource {
         }
     }
 
-    /// The media frame shown at clip time `at`: the one showing at its
-    /// source time, which a reversed clip runs back from its source out.
+    /// The media frame shown at clip time `at`, in EffectCraft's ticks.
     pub fn frame_at(&self, at: Tick) -> i64 {
-        let ticks = |time: Time| i128::from(time.flicks()) * i128::from(TICKS_PER_FLICK);
+        self.frame_at_units(
+            i128::from(at.0),
+            i128::from(TICKS_PER_FLICK),
+            i128::from(TICKS_PER_SECOND),
+        )
+    }
+
+    /// The media frame shown at clip time `at`.
+    pub fn frame_at_time(&self, at: Time) -> i64 {
+        self.frame_at_units(i128::from(at.flicks()), 1, i128::from(FLICKS_PER_SECOND))
+    }
+
+    /// The media frame shown at clip time `at`, counted in units of which a
+    /// flick has `per_flick` and a second `per_second`: the one showing at
+    /// its source time, which a reversed clip runs back from its source out.
+    fn frame_at_units(&self, at: i128, per_flick: i128, per_second: i128) -> i64 {
+        let units = |time: Time| i128::from(time.flicks()) * per_flick;
         let (num, den) = (
             i128::from(self.speed.num().unsigned_abs()),
             i128::from(self.speed.den()),
         );
-        // Frames per tick, as a fraction over the clip speed's denominator.
-        let per = i128::from(TICKS_PER_SECOND) * i128::from(self.rate.den()) * den;
-        let at = i128::from(at.0);
+        // Frames per unit, as a fraction over the clip speed's denominator.
+        let per = per_second * i128::from(self.rate.den()) * den;
         let frame = if self.speed.is_reverse() {
             // The frame showing just before the source position.
-            let out = ticks(self.source_in + self.speed.source_span(self.duration));
+            let out = units(self.source_in + self.speed.source_span(self.duration));
             let position = (out * den - at * num) * i128::from(self.rate.num());
             -(-position).div_euclid(per) - 1
         } else {
-            let position = (ticks(self.source_in) * den + at * num) * i128::from(self.rate.num());
+            let position = (units(self.source_in) * den + at * num) * i128::from(self.rate.num());
             position.div_euclid(per)
         };
         frame.clamp(0, i128::from(self.frames.max(1) - 1)) as i64
@@ -101,15 +119,12 @@ pub(crate) fn frame_count(rate: Rate, duration: Time) -> i64 {
     (-(-span).div_euclid(per)) as i64
 }
 
-/// The footage source a scene's renders read.
-pub(crate) struct LibavFootage {
-    clips: HashMap<ItemId, ClipSource>,
-    /// The sound of files clips play, for effects that draw it.
-    sounds: crate::sound::Sounds,
+/// Open decoders, shared by reads on several threads, and the files that
+/// could not be read, with why.
+pub(crate) struct DecoderPool {
     decoders: Mutex<Decoders>,
     /// Signalled when a decoder comes back.
     returned: Condvar,
-    cache: Mutex<FrameCache>,
     problems: Mutex<BTreeMap<String, String>>,
 }
 
@@ -130,14 +145,11 @@ impl Decoders {
     }
 }
 
-impl LibavFootage {
-    pub fn new(clips: HashMap<ItemId, ClipSource>) -> Self {
+impl DecoderPool {
+    fn new() -> Self {
         Self {
-            clips,
-            sounds: crate::sound::Sounds::default(),
             decoders: Mutex::new(Decoders::default()),
             returned: Condvar::new(),
-            cache: Mutex::new(FrameCache::new(CACHE_BUDGET)),
             problems: Mutex::new(BTreeMap::new()),
         }
     }
@@ -150,41 +162,13 @@ impl LibavFootage {
             .collect()
     }
 
-    fn read(&self, item: ItemId, at: Tick, size: Option<(u32, u32)>) -> Option<Arc<Image>> {
-        let clip = self.clips.get(&item)?;
-        let index = clip.frame_at(at);
-        let size = clip.decoded_size(size.unwrap_or((clip.width, clip.height)));
-        let key = (clip.path.clone(), index, size);
-        if let Some(image) = lock(&self.cache).get(&key) {
-            return Some(image);
-        }
-        let (loan, mut decoder) = match self.checkout(clip, index) {
-            Ok(checked_out) => checked_out,
-            Err(problem) => {
-                lock(&self.problems).insert(clip.path.clone(), problem);
-                return None;
-            }
-        };
-        let read = decoder.frame(index, size, clip.alpha);
-        self.give_back(loan, decoder);
-        match read {
-            Ok(image) => {
-                let image = Arc::new(image);
-                lock(&self.cache).insert(key, image.clone());
-                Some(image)
-            }
-            Err(problem) => {
-                lock(&self.problems).insert(clip.path.clone(), problem);
-                None
-            }
-        }
+    fn problem(&self, path: &str) -> Option<String> {
+        lock(&self.problems).get(path).cloned()
     }
 
-    /// The frame `item` shows at clip time `at`, opaque RGBA at its own
-    /// size, as it is decoded: for a frame that is nothing but that clip.
-    pub fn rgba(&self, item: ItemId, at: Tick) -> Option<Vec<u8>> {
-        let clip = self.clips.get(&item)?;
-        let index = clip.frame_at(at);
+    /// Frame `index` of `clip`'s file as straight RGBA at `size`; none for
+    /// a file that could not be read, whose problem is kept.
+    fn picture(&self, clip: &ClipSource, index: i64, size: (u32, u32)) -> Option<frame::Video> {
         let (loan, mut decoder) = match self.checkout(clip, index) {
             Ok(checked_out) => checked_out,
             Err(problem) => {
@@ -192,15 +176,12 @@ impl LibavFootage {
                 return None;
             }
         };
-        let read = decoder.picture(index, (clip.width, clip.height));
+        let read = decoder.picture(index, size);
         self.give_back(loan, decoder);
-        match read {
-            Ok(picture) => Some(packed(&picture)),
-            Err(problem) => {
-                lock(&self.problems).insert(clip.path.clone(), problem);
-                None
-            }
-        }
+        read.inspect_err(|problem| {
+            lock(&self.problems).insert(clip.path.clone(), problem.clone());
+        })
+        .ok()
     }
 
     /// A decoder for `clip`'s file, lent with a token to give it back by:
@@ -268,6 +249,64 @@ impl LibavFootage {
         drop(decoders);
         self.returned.notify_all();
     }
+
+    /// Close `path`'s decoders and forget its problem, for a file that
+    /// changed.
+    fn forget(&self, path: &str) {
+        lock(&self.decoders)
+            .idle
+            .retain(|decoder| decoder.path != path);
+        lock(&self.problems).remove(path);
+    }
+}
+
+/// The footage source EffectCraft's renderer reads.
+pub(crate) struct LibavFootage {
+    clips: HashMap<ItemId, ClipSource>,
+    /// The sound of files clips play, for effects that draw it.
+    sounds: crate::sound::Sounds,
+    pool: DecoderPool,
+    cache: Mutex<FrameCache<Image>>,
+}
+
+impl LibavFootage {
+    pub fn new(clips: HashMap<ItemId, ClipSource>) -> Self {
+        Self {
+            clips,
+            sounds: crate::sound::Sounds::default(),
+            pool: DecoderPool::new(),
+            cache: Mutex::new(FrameCache::new(CACHE_BUDGET, image_bytes)),
+        }
+    }
+
+    /// Files that could not be read, with why.
+    pub fn problems(&self) -> Vec<(String, String)> {
+        self.pool.problems()
+    }
+
+    fn read(&self, item: ItemId, at: Tick, size: Option<(u32, u32)>) -> Option<Arc<Image>> {
+        let clip = self.clips.get(&item)?;
+        let index = clip.frame_at(at);
+        let size = clip.decoded_size(size.unwrap_or((clip.width, clip.height)));
+        let key = (clip.path.clone(), index, size);
+        if let Some(image) = lock(&self.cache).get(&key) {
+            return Some(image);
+        }
+        let picture = self.pool.picture(clip, index, size)?;
+        let image = Arc::new(premultiplied(&picture, clip.alpha));
+        lock(&self.cache).insert(key, image.clone());
+        Some(image)
+    }
+
+    /// The frame `item` shows at clip time `at`, opaque RGBA at its own
+    /// size, as it is decoded: for a frame that is nothing but that clip.
+    pub fn rgba(&self, item: ItemId, at: Tick) -> Option<Vec<u8>> {
+        let clip = self.clips.get(&item)?;
+        let picture = self
+            .pool
+            .picture(clip, clip.frame_at(at), (clip.width, clip.height))?;
+        Some(packed(&picture))
+    }
 }
 
 impl FootageSource for LibavFootage {
@@ -326,10 +365,7 @@ impl FootageSource for LibavFootage {
 
     fn forget(&self, path: &str) {
         lock(&self.cache).forget(path);
-        lock(&self.decoders)
-            .idle
-            .retain(|decoder| decoder.path != path);
-        lock(&self.problems).remove(path);
+        self.pool.forget(path);
     }
 
     fn cache_budget(&self) -> Option<usize> {
@@ -337,7 +373,62 @@ impl FootageSource for LibavFootage {
     }
 
     fn problem(&self, footage: &FootageItem) -> Option<String> {
-        lock(&self.problems).get(&footage.path).cloned()
+        self.pool.problem(&footage.path)
+    }
+}
+
+/// The frames Kerf's own compositor reads: each media clip's, in linear
+/// light, by the clip's place in the scene.
+pub(crate) struct Pictures {
+    clips: Vec<ClipSource>,
+    pool: DecoderPool,
+    cache: Mutex<FrameCache<Picture>>,
+}
+
+impl Pictures {
+    pub fn new(clips: Vec<ClipSource>) -> Self {
+        Self {
+            clips,
+            pool: DecoderPool::new(),
+            cache: Mutex::new(FrameCache::new(CACHE_BUDGET, picture_bytes)),
+        }
+    }
+
+    /// Files that could not be read, with why.
+    pub fn problems(&self) -> Vec<(String, String)> {
+        self.pool.problems()
+    }
+
+    /// The frame clip `index` shows at clip time `at`, decoded at `size`.
+    pub fn picture(&self, index: usize, at: Time, size: (u32, u32)) -> Option<Arc<Picture>> {
+        let clip = self.clips.get(index)?;
+        let frame = clip.frame_at_time(at);
+        let size = (size.0.max(1), size.1.max(1));
+        let key = (clip.path.clone(), frame, size);
+        if let Some(picture) = lock(&self.cache).get(&key) {
+            return Some(picture);
+        }
+        let rgba = self.pool.picture(clip, frame, size)?;
+        let picture = Arc::new(Picture::from_rgba8(
+            rgba.data(0),
+            rgba.width() as usize,
+            rgba.height() as usize,
+            rgba.stride(0),
+            clip.alpha,
+        ));
+        lock(&self.cache).insert(key, picture.clone());
+        Some(picture)
+    }
+
+    /// The frame clip `index` shows at clip time `at`, opaque RGBA at its
+    /// own size as it is decoded: for a frame that is nothing but that
+    /// clip.
+    pub fn rgba(&self, index: usize, at: Time) -> Option<Vec<u8>> {
+        let clip = self.clips.get(index)?;
+        let picture = self
+            .pool
+            .picture(clip, clip.frame_at_time(at), (clip.width, clip.height))?;
+        Some(packed(&picture))
     }
 }
 
@@ -350,24 +441,26 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 type FrameKey = (String, i64, (u32, u32));
 
 /// Decoded frames, the least recently used dropped first past the budget.
-struct FrameCache {
-    frames: HashMap<FrameKey, (Arc<Image>, u64)>,
+struct FrameCache<T> {
+    frames: HashMap<FrameKey, (Arc<T>, u64)>,
     bytes: usize,
     budget: usize,
     clock: u64,
+    weigh: fn(&T) -> usize,
 }
 
-impl FrameCache {
-    fn new(budget: usize) -> Self {
+impl<T> FrameCache<T> {
+    fn new(budget: usize, weigh: fn(&T) -> usize) -> Self {
         Self {
             frames: HashMap::new(),
             bytes: 0,
             budget,
             clock: 0,
+            weigh,
         }
     }
 
-    fn get(&mut self, key: &FrameKey) -> Option<Arc<Image>> {
+    fn get(&mut self, key: &FrameKey) -> Option<Arc<T>> {
         self.clock += 1;
         let clock = self.clock;
         self.frames.get_mut(key).map(|(image, used)| {
@@ -376,14 +469,14 @@ impl FrameCache {
         })
     }
 
-    fn insert(&mut self, key: FrameKey, image: Arc<Image>) {
-        let bytes = image_bytes(&image);
+    fn insert(&mut self, key: FrameKey, image: Arc<T>) {
+        let bytes = (self.weigh)(&image);
         if bytes > self.budget {
             return;
         }
         self.clock += 1;
         if let Some((old, _)) = self.frames.insert(key, (image, self.clock)) {
-            self.bytes -= image_bytes(&old);
+            self.bytes -= (self.weigh)(&old);
         }
         self.bytes += bytes;
         while self.bytes > self.budget {
@@ -396,7 +489,7 @@ impl FrameCache {
                 break;
             };
             if let Some((image, _)) = self.frames.remove(&oldest) {
-                self.bytes -= image_bytes(&image);
+                self.bytes -= (self.weigh)(&image);
             }
         }
     }
@@ -410,7 +503,7 @@ impl FrameCache {
             .collect();
         for key in gone {
             if let Some((image, _)) = self.frames.remove(&key) {
-                self.bytes -= image_bytes(&image);
+                self.bytes -= (self.weigh)(&image);
             }
         }
     }
@@ -423,6 +516,10 @@ impl FrameCache {
 
 fn image_bytes(image: &Image) -> usize {
     image.data.len() * std::mem::size_of::<[f32; 4]>()
+}
+
+fn picture_bytes(picture: &Picture) -> usize {
+    picture.px.len() * std::mem::size_of::<f32>()
 }
 
 pub(crate) fn init() -> Result<(), String> {
@@ -524,15 +621,8 @@ impl Decoder {
         (ticks + per / 2).div_euclid(per) as i64
     }
 
-    /// Frame `index` as premultiplied RGBA at `size`: the last frame
-    /// starting by its start, give or take half a frame for timestamps
-    /// that round.
-    fn frame(&mut self, index: i64, size: (u32, u32), alpha: bool) -> Result<Image, String> {
-        self.picture(index, size)
-            .map(|rgba| premultiplied(&rgba, alpha))
-    }
-
-    /// Frame `index` as straight RGBA at `size`.
+    /// Frame `index` as straight RGBA at `size`: the last frame starting
+    /// by its start, give or take half a frame for timestamps that round.
     fn picture(&mut self, index: i64, size: (u32, u32)) -> Result<frame::Video, String> {
         let target = self.pts_of(index);
         let limit = (target + self.pts_of(index + 1)) / 2;

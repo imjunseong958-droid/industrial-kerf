@@ -123,6 +123,9 @@ struct FrameArgs {
     /// Where to draw: cpu, auto (whichever is faster), or gpu.
     #[arg(long, default_value = "cpu")]
     device: CliDevice,
+    /// What draws: effectcraft, or kerf (Kerf's own renderer, on the CPU).
+    #[arg(long, default_value = "effectcraft")]
+    renderer: CliRenderer,
     /// Draw this many frames on from `--at`, as playback does, and time
     /// them; the last is written.
     #[arg(long, default_value_t = 1)]
@@ -234,6 +237,12 @@ enum CliDevice {
     Cpu,
     Auto,
     Gpu,
+}
+
+#[derive(Clone, ValueEnum)]
+enum CliRenderer {
+    Effectcraft,
+    Kerf,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -611,6 +620,10 @@ fn draw_frame(args: &FrameArgs) -> Result<Value> {
                 CliDevice::Cpu => kerf_compose::Device::Cpu,
                 CliDevice::Auto => kerf_compose::Device::Auto,
                 CliDevice::Gpu => kerf_compose::Device::Gpu,
+            },
+            renderer: match args.renderer {
+                CliRenderer::Effectcraft => kerf_compose::Renderer::EffectCraft,
+                CliRenderer::Kerf => kerf_compose::Renderer::Kerf,
             },
         },
     )?;

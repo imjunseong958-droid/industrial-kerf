@@ -63,6 +63,15 @@ carry transparency too (`alpha=true`, found from the pixel format on
 import), which compositing keeps. `kerf-fx` generates the catalog table;
 after changing the effects, run `UPDATE_CATALOG=1 cargo test -p kerf-fx`.
 
+Kerf is moving from EffectCraft to FilmCraft's video-editing effects, with
+playful effects as looks ([docs/looks.md](docs/looks.md)). Its own renderer
+(`kerf-draw`, drawn by `kerf-compose`) draws Kerf's model directly in linear
+light with drawing carried from
+[FilmCraft](https://github.com/storytold/filmcraft) (MIT/Apache, crates in
+`filmcraft/`); it does not draw raster effects yet. EffectCraft's renderer
+still draws by default: `KERF_RENDERER=kerf`, or `kerf-engine frame
+--renderer kerf`, draws with Kerf's.
+
 Editor actions are commands in one registry (`kerf-commands`): each has an id,
 a label, its menu, shortcuts in the Kerf, Premiere Pro, and Final Cut Pro
 keymaps, and an enabled state that says why it is unavailable. The editor

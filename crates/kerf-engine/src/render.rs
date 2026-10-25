@@ -16,7 +16,7 @@ use std::sync::{mpsc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 
-use kerf_compose::{ComposeOptions, Compositor, Device, Frame};
+use kerf_compose::{ComposeOptions, Compositor, Device, Frame, Renderer};
 use kerf_model::{Rate, Time};
 
 use crate::encoder::{
@@ -194,6 +194,7 @@ pub fn renderable(
                 sequence: sequence.map(str::to_owned),
                 captions: true,
                 device: Device::Cpu,
+                renderer: Renderer::default().from_env(),
             },
         )?;
         compile_program(project, catalog, &options)?;
@@ -429,6 +430,7 @@ where
             sequence: sequence.map(str::to_owned),
             captions: true,
             device: Device::Auto,
+            renderer: Renderer::default().from_env(),
         },
     )?;
     let render = composited_render(project, sequence, range, opts, compositor.size())?;
