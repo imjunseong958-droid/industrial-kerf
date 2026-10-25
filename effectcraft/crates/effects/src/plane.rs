@@ -4,9 +4,6 @@
 //! Continuous coordinates follow the raster crate: pixel `i` covers `[i, i + 1)` and its centre is
 //! at `i + 0.5`. Downsampling by 2 keeps that convention (level-1 coordinate = level-0 / 2).
 
-
-
-
 /// An interleaved float plane.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Plane {
@@ -68,9 +65,6 @@ impl Plane {
         }
     }
 
-
-
-
     /// Half resolution (2 × 2 box average; odd sizes round up with the edge repeated).
     pub fn downsample(&self) -> Plane {
         let w = self.w.div_ceil(2).max(1);
@@ -131,5 +125,4 @@ mod tests {
         p.sample(3.0, 3.0, &mut o0);
         assert!((o[0] - o0[0]).abs() < 1e-5, "{} vs {}", o[0], o0[0]);
     }
-
 }

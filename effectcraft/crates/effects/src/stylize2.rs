@@ -1,8 +1,8 @@
 //! Stylize effects (batch 2): cartoon, roughened edges, scatter, strobe, relief, painterly
 //! strokes, kaleidoscope, tiling, colour emboss, vignette and thresholds.
-use crate::{Buf, EffectCtx, EffectSpec, num, p, slider};
-use crate::Value;
 use crate::ParamUi;
+use crate::Value;
+use crate::{Buf, EffectCtx, EffectSpec, num, p, slider};
 use effectcraft_raster::Image;
 use rayon::prelude::*;
 

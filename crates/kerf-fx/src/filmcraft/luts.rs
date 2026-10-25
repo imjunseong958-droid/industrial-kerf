@@ -171,27 +171,6 @@ pub fn resolve(project: Option<&Project>, spec: &str) -> Option<Arc<Lut>> {
     cached(key, || Lut::parse(&entry.text, fmt).ok())
 }
 
-/// Human-readable name of a LUT reference (for panels).
-pub fn label(project: Option<&Project>, spec: &str) -> String {
-    if spec.is_empty() {
-        return "None".into();
-    }
-    if let Some(id) = spec.strip_prefix("builtin:") {
-        return builtins()
-            .iter()
-            .find(|b| b.id == id)
-            .map(|b| b.label.clone())
-            .unwrap_or_else(|| id.to_string());
-    }
-    if let Some(id) = spec.strip_prefix("lib:") {
-        return project
-            .and_then(|p| p.luts.iter().find(|l| l.id == id))
-            .map(|l| l.name.clone())
-            .unwrap_or_else(|| format!("{id} (missing)"));
-    }
-    spec.to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,8 +216,6 @@ mod tests {
         });
         let l = resolve(Some(&p), "lib:lut1").unwrap();
         assert_eq!(l.apply([1.0, 0.0, 0.0]), [0.0, 0.0, 1.0]);
-        assert_eq!(label(Some(&p), "lib:lut1"), "Swap");
-        assert_eq!(label(Some(&p), "lib:x"), "x (missing)");
     }
 
     #[test]

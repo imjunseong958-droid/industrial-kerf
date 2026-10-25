@@ -109,15 +109,7 @@ struct ClipIndexEntry {
     end: f64,
 }
 
-impl ResolvedClip {
-    pub fn timeline_end(&self) -> f64 {
-        self.clip.timeline_end()
-    }
-
-    pub fn source_time_at(&self, timeline_time: f64) -> f64 {
-        self.clip.source_time_at(timeline_time)
-    }
-}
+impl ResolvedClip {}
 
 /// Immutable playback plan derived from a `kerf-model` project.
 ///

@@ -49,6 +49,7 @@ pub enum BlendMode {
 }
 
 impl BlendMode {
+    #[cfg(test)]
     pub const ALL: [BlendMode; 38] = [
         BlendMode::Normal,
         BlendMode::Dissolve,
@@ -89,68 +90,6 @@ impl BlendMode {
         BlendMode::AlphaAdd,
         BlendMode::LuminescentPremul,
     ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            BlendMode::Normal => "Normal",
-            BlendMode::Dissolve => "Dissolve",
-            BlendMode::DancingDissolve => "Dancing Dissolve",
-            BlendMode::Darken => "Darken",
-            BlendMode::Multiply => "Multiply",
-            BlendMode::ColorBurn => "Color Burn",
-            BlendMode::ClassicColorBurn => "Classic Color Burn",
-            BlendMode::LinearBurn => "Linear Burn",
-            BlendMode::DarkerColor => "Darker Color",
-            BlendMode::Add => "Add",
-            BlendMode::Lighten => "Lighten",
-            BlendMode::Screen => "Screen",
-            BlendMode::ColorDodge => "Color Dodge",
-            BlendMode::ClassicColorDodge => "Classic Color Dodge",
-            BlendMode::LinearDodge => "Linear Dodge",
-            BlendMode::LighterColor => "Lighter Color",
-            BlendMode::Overlay => "Overlay",
-            BlendMode::SoftLight => "Soft Light",
-            BlendMode::HardLight => "Hard Light",
-            BlendMode::LinearLight => "Linear Light",
-            BlendMode::VividLight => "Vivid Light",
-            BlendMode::PinLight => "Pin Light",
-            BlendMode::HardMix => "Hard Mix",
-            BlendMode::Difference => "Difference",
-            BlendMode::ClassicDifference => "Classic Difference",
-            BlendMode::Exclusion => "Exclusion",
-            BlendMode::Subtract => "Subtract",
-            BlendMode::Divide => "Divide",
-            BlendMode::Hue => "Hue",
-            BlendMode::Saturation => "Saturation",
-            BlendMode::Color => "Color",
-            BlendMode::Luminosity => "Luminosity",
-            BlendMode::StencilAlpha => "Stencil Alpha",
-            BlendMode::StencilLuma => "Stencil Luma",
-            BlendMode::SilhouetteAlpha => "Silhouette Alpha",
-            BlendMode::SilhouetteLuma => "Silhouette Luma",
-            BlendMode::AlphaAdd => "Alpha Add",
-            BlendMode::LuminescentPremul => "Luminescent Premul",
-        }
-    }
-
-    pub fn from_name(s: &str) -> Option<BlendMode> {
-        let k: String = s.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_ascii_lowercase();
-        BlendMode::ALL.into_iter().find(|m| m.label().chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_ascii_lowercase() == k)
-    }
-
-    /// Menu groups (a separator follows the last mode of each group).
-    pub fn ends_group(self) -> bool {
-        matches!(
-            self,
-            BlendMode::DancingDissolve
-                | BlendMode::DarkerColor
-                | BlendMode::LighterColor
-                | BlendMode::HardMix
-                | BlendMode::Divide
-                | BlendMode::Luminosity
-                | BlendMode::SilhouetteLuma
-        )
-    }
 
     /// Modes that act on everything below (the accumulated comp) rather than compositing on top.
     pub fn is_stencil(self) -> bool {
@@ -203,15 +142,6 @@ impl BlendMode {
             BlendMode::ClassicColorBurn => Some(1.0),
             _ => None,
         }
-    }
-
-    pub fn next(self) -> BlendMode {
-        let i = BlendMode::ALL.iter().position(|m| *m == self).unwrap_or(0);
-        BlendMode::ALL[(i + 1) % BlendMode::ALL.len()]
-    }
-    pub fn previous(self) -> BlendMode {
-        let i = BlendMode::ALL.iter().position(|m| *m == self).unwrap_or(0);
-        BlendMode::ALL[(i + BlendMode::ALL.len() - 1) % BlendMode::ALL.len()]
     }
 }
 
@@ -526,13 +456,5 @@ mod tests {
         let e = set_lum([0.2, 0.4, 0.6], 2.0);
         assert!((0..3).all(|i| close(l[i], e[i])), "{l:?} {e:?}");
         assert!((l[0] - 1.0).abs() > 0.1, "not the white of a top layer clamped to 1: {l:?}");
-    }
-
-    #[test]
-    fn names_roundtrip() {
-        for m in BlendMode::ALL {
-            assert_eq!(BlendMode::from_name(m.label()), Some(m));
-        }
-        assert_eq!(BlendMode::from_name("soft-light"), Some(BlendMode::SoftLight));
     }
 }

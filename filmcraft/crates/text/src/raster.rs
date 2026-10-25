@@ -262,6 +262,7 @@ impl Mask {
     pub fn new(w: usize, h: usize) -> Self {
         Self { w, h, a: vec![0.0; w * h] }
     }
+    #[cfg(test)]
     pub fn get(&self, x: usize, y: usize) -> f32 {
         self.a[y * self.w + x]
     }

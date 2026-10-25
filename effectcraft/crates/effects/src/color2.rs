@@ -2,9 +2,9 @@
 //! (Auto Levels / Contrast / Color, Equalize), Shadow/Highlight, Selective Color, Color Balance
 //! (HLS), Color Link, Broadcast Colors and the CC toners/offsets/kernel.
 
-use effectcraft_color::luminance;
-use crate::Value;
 use crate::ParamUi;
+use crate::Value;
+use effectcraft_color::luminance;
 use effectcraft_raster::Image;
 use rayon::prelude::*;
 

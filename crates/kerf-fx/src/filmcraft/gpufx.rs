@@ -201,44 +201,6 @@ pub enum FxOp {
     },
 }
 
-/// Effect ids [`FxOp::eval`] understands (the GPU-capable standard effects).
-pub const GPU_EFFECTS: &[&str] = &[
-    "brightness_contrast",
-    "proc_amp",
-    "tint",
-    "black_white",
-    "color_balance",
-    "leave_color",
-    "change_to_color",
-    "color_pass",
-    "gamma_correction",
-    "levels",
-    "extract",
-    "invert",
-    "posterize",
-    "gaussian_blur",
-    "gaussian_blur_legacy",
-    "camera_blur",
-    "directional_blur",
-    "directional_blur_legacy",
-    "sharpen",
-    "unsharp_mask",
-    "crop",
-    "edge_feather",
-    "transform",
-    "horizontal_flip",
-    "vertical_flip",
-    "mirror",
-    "offset",
-    "asc_cdl",
-    "channel_mix",
-    "color_replace",
-    "alpha_adjust",
-    "vignette",
-    "video_limiter",
-    "lumetri",
-];
-
 /// `Image::transformed` without the mip path: the destination rectangle it writes and the inverse.
 fn resample(w: usize, h: usize, m: &Affine, opacity: f32) -> Resample {
     let Some(inv) = m.inverse() else {

@@ -165,13 +165,6 @@ pub fn blur(m: &Mask, sigma: f32) -> Mask {
     Mask { w: m.w, h: m.h, a }
 }
 
-/// Shift a mask by whole pixels (content moving out is dropped).
-pub fn offset(m: &Mask, dx: i32, dy: i32) -> Mask {
-    let mut o = Mask::new(m.w, m.h);
-    o.add(m, dx, dy);
-    o
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,7 +200,5 @@ mod tests {
         let (s0, s1): (f32, f32) = (m.a.iter().sum(), b.a.iter().sum());
         assert!((s0 - s1).abs() < 0.5, "{s0} {s1}");
         assert!(b.get(18, 25) > 0.05 && b.get(25, 25) < 1.0);
-        let o = offset(&m, 5, -5);
-        assert!(o.get(33, 18) > 0.9);
     }
 }

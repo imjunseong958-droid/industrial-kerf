@@ -4,8 +4,8 @@
 //!
 //! All warps are inverse mapped: every output pixel finds the source point that lands on it.
 //! Pixel-sized parameters are multiplied by the buffer scale (downsampled previews).
-use crate::{Buf, EffectCtx, EffectSpec, num, p, popup, slider};
 use crate::Value;
+use crate::{Buf, EffectCtx, EffectSpec, num, p, popup, slider};
 use effectcraft_raster::{Image, Px};
 use rayon::prelude::*;
 
@@ -152,8 +152,8 @@ pub fn specs() -> Vec<EffectSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{EffectEnv, MaskShape, Params};
     use crate::ParamUi;
+    use crate::{EffectEnv, MaskShape, Params};
 
     fn img(w: u32, h: u32) -> Image {
         crate::util::gen_image(w, h, |x, y| [x as f32 / w as f32, y as f32 / h as f32, ((x * 7 + y * 3) % 11) as f32 / 11.0, 1.0])

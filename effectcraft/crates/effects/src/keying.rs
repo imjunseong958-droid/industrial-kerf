@@ -1,8 +1,8 @@
 //! Keying effects: colour, luma, difference, range and screen keyers plus spill suppression and
 //! matte clean-up. Written from public behaviour descriptions and the standard colour-difference /
 //! blue-screen matting literature (Vlahos; Smith & Blinn, "Blue Screen Matting").
-use crate::Value;
 use crate::ParamUi;
+use crate::Value;
 use effectcraft_raster::gaussian_blur;
 use rayon::prelude::*;
 

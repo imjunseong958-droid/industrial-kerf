@@ -257,6 +257,7 @@ fn path_cache() -> &'static PathCache {
     C.get_or_init(Default::default)
 }
 
+#[cfg(test)]
 /// Forget every cached stabilizer analysis (e.g. after the media changed).
 pub fn clear_stabilizer_cache() {
     if let Ok(mut c) = path_cache().lock() {

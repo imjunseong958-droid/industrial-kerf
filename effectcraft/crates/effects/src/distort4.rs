@@ -17,9 +17,9 @@
 //!   direction) and `v` the per-frame velocity (Warp: one smooth velocity per scanline band;
 //!   Pixel Motion: a dense interpolated field).
 
-use crate::{Buf, EffectCtx, EffectSpec, num, p, popup, slider};
-use crate::Value;
 use crate::ParamUi;
+use crate::Value;
+use crate::{Buf, EffectCtx, EffectSpec, num, p, popup, slider};
 use effectcraft_raster::Image;
 use rayon::prelude::*;
 

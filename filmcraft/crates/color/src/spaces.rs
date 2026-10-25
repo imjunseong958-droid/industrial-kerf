@@ -7,8 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::Primaries;
 use crate::log::LogCurve;
-use crate::{ColorInfo, Primaries, Transfer};
 
 pub type Mat3 = [[f64; 3]; 3];
 
@@ -250,13 +250,6 @@ impl ColorSpace {
         }
     }
 
-    /// Parse an id or a label (case-insensitive, punctuation ignored).
-    pub fn parse(s: &str) -> Option<ColorSpace> {
-        let norm = |x: &str| x.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_lowercase();
-        let n = norm(s);
-        ColorSpace::ALL.into_iter().find(|c| norm(c.id()) == n || norm(c.label()) == n)
-    }
-
     pub fn gamut(self) -> Gamut {
         match self {
             ColorSpace::Rec709 | ColorSpace::Srgb | ColorSpace::Linear709 => Gamut::Bt709,
@@ -302,20 +295,6 @@ impl ColorSpace {
     pub fn is_log(self) -> bool {
         matches!(self.curve(), Curve::Log(_))
     }
-
-    /// The colour space signalled by stream metadata (VUI / `colr` / MKV Colour).
-    pub fn from_info(c: &ColorInfo) -> ColorSpace {
-        match (c.transfer, c.primaries) {
-            (Transfer::Pq, _) => ColorSpace::Rec2100Pq,
-            (Transfer::Hlg, _) => ColorSpace::Rec2100Hlg,
-            (Transfer::Linear, _) => ColorSpace::Linear709,
-            (Transfer::Srgb, Primaries::P3D65) => ColorSpace::P3D65,
-            (Transfer::Srgb, _) => ColorSpace::Srgb,
-            (_, Primaries::Bt2020) => ColorSpace::Rec2020,
-            (_, Primaries::P3D65) => ColorSpace::P3D65,
-            _ => ColorSpace::Rec709,
-        }
-    }
 }
 
 /// Sequence working colour space (Sequence Settings ▸ Color).
@@ -328,8 +307,6 @@ pub enum WorkingSpace {
 }
 
 impl WorkingSpace {
-    pub const ALL: [WorkingSpace; 3] = [WorkingSpace::Rec709, WorkingSpace::Rec2100Pq, WorkingSpace::Rec2100Hlg];
-
     pub fn id(self) -> &'static str {
         match self {
             WorkingSpace::Rec709 => "rec709",
@@ -343,11 +320,6 @@ impl WorkingSpace {
             WorkingSpace::Rec2100Pq => "Rec. 2100 PQ",
             WorkingSpace::Rec2100Hlg => "Rec. 2100 HLG",
         }
-    }
-    pub fn parse(s: &str) -> Option<WorkingSpace> {
-        let norm = |x: &str| x.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_lowercase();
-        let n = norm(s);
-        WorkingSpace::ALL.into_iter().find(|w| norm(w.id()) == n || norm(w.label()) == n)
     }
     pub fn is_hdr(self) -> bool {
         self != WorkingSpace::Rec709
@@ -425,18 +397,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn ids_parse() {
-        for c in ColorSpace::ALL {
-            assert_eq!(ColorSpace::parse(c.id()), Some(c));
-            assert_eq!(ColorSpace::parse(c.label()), Some(c));
-        }
-        assert_eq!(WorkingSpace::parse("Rec. 2100 PQ"), Some(WorkingSpace::Rec2100Pq));
-        assert_eq!(WorkingSpace::parse("rec709"), Some(WorkingSpace::Rec709));
-        let hdr = ColorInfo { transfer: Transfer::Hlg, primaries: Primaries::Bt2020, ..ColorInfo::REC709 };
-        assert_eq!(ColorSpace::from_info(&hdr), ColorSpace::Rec2100Hlg);
-        assert_eq!(ColorSpace::from_info(&ColorInfo::REC709), ColorSpace::Rec709);
     }
 }

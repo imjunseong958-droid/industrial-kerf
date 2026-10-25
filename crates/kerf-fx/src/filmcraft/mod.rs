@@ -12,7 +12,6 @@ pub mod effects;
 pub mod gpufx;
 pub mod graphics;
 pub mod instance;
-pub mod lumetri_presets;
 pub mod luts;
 pub mod project;
 pub mod track;

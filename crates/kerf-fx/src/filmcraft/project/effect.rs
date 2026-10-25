@@ -1652,29 +1652,13 @@ pub fn find_effect(id: &str) -> Option<&'static EffectDef> {
     effect_defs().iter().find(|e| e.id == id)
 }
 
+#[cfg(test)]
 /// Case-insensitive lookup by id or display name.
 pub fn find_effect_by_name(name: &str) -> Option<&'static EffectDef> {
     let n = name.to_ascii_lowercase();
     effect_defs()
         .iter()
         .find(|e| e.id == n || e.name.to_ascii_lowercase() == n)
-}
-
-/// Intrinsic video effects every video track item carries (Motion, Opacity, Time Remapping).
-pub fn intrinsic_video() -> Vec<EffectInstance> {
-    ["motion", "opacity", "time_remap"]
-        .iter()
-        .filter_map(|id| find_effect(id))
-        .map(EffectDef::instance)
-        .collect()
-}
-
-pub fn intrinsic_audio() -> Vec<EffectInstance> {
-    ["volume", "channel_volume", "panner"]
-        .iter()
-        .filter_map(|id| find_effect(id))
-        .map(EffectDef::instance)
-        .collect()
 }
 
 #[cfg(test)]
@@ -1697,6 +1681,5 @@ mod tests {
             find_effect_by_name("Gaussian Blur").unwrap().id,
             "gaussian_blur"
         );
-        assert_eq!(intrinsic_video().len(), 3);
     }
 }

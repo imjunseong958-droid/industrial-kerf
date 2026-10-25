@@ -2,8 +2,8 @@
 //! from masks with colour-based edge estimation and decontamination), Unmult and CC Simple
 //! Wire Removal.
 
-use crate::Value;
 use crate::ParamUi;
+use crate::Value;
 use rayon::prelude::*;
 
 use crate::util::{premul, unpremul};
