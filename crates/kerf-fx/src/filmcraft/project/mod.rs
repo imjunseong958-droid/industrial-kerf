@@ -74,10 +74,4 @@ pub fn resolve_auto_points(e: &mut EffectInstance, frame: (u32, u32), source: (u
 }
 
 /// FilmCraft's graphic layers (text and shapes) are not effects in Kerf.
-pub mod graphic {
-    use super::EffectInstance;
-
-    pub fn is_layer(_: &EffectInstance) -> bool {
-        false
-    }
-}
+pub mod graphic {}

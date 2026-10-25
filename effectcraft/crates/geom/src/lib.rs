@@ -132,20 +132,8 @@ impl Rect {
     pub fn from_size(w: f64, h: f64) -> Rect {
         Rect { x0: 0.0, y0: 0.0, x1: w, y1: h }
     }
-    pub fn width(&self) -> f64 {
-        (self.x1 - self.x0).max(0.0)
-    }
-    pub fn height(&self) -> f64 {
-        (self.y1 - self.y0).max(0.0)
-    }
     pub fn is_empty(&self) -> bool {
         !(self.x1 > self.x0 && self.y1 > self.y0)
-    }
-    pub fn center(&self) -> Vec2 {
-        vec2((self.x0 + self.x1) * 0.5, (self.y0 + self.y1) * 0.5)
-    }
-    pub fn union(&self, o: &Rect) -> Rect {
-        Rect { x0: self.x0.min(o.x0), y0: self.y0.min(o.y0), x1: self.x1.max(o.x1), y1: self.y1.max(o.y1) }
     }
     pub fn intersect(&self, o: &Rect) -> Rect {
         Rect { x0: self.x0.max(o.x0), y0: self.y0.max(o.y0), x1: self.x1.min(o.x1), y1: self.y1.min(o.y1) }
@@ -158,9 +146,6 @@ impl Rect {
     }
     pub fn inflate(&self, d: f64) -> Rect {
         Rect { x0: self.x0 - d, y0: self.y0 - d, x1: self.x1 + d, y1: self.y1 + d }
-    }
-    pub fn contains(&self, p: Vec2) -> bool {
-        p.x >= self.x0 && p.x < self.x1 && p.y >= self.y0 && p.y < self.y1
     }
     pub fn corners(&self) -> [Vec2; 4] {
         [vec2(self.x0, self.y0), vec2(self.x1, self.y0), vec2(self.x1, self.y1), vec2(self.x0, self.y1)]

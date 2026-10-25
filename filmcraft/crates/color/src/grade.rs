@@ -21,10 +21,6 @@
 use crate::spaces::{Gamut, WorkingSpace};
 use crate::{REFERENCE_WHITE_NITS, hlg_inverse_oetf, hlg_oetf, linear_to_srgb, pq_eotf, pq_inverse_eotf, srgb_to_linear};
 
-/// Default HDR White / curve HDR Range (cd/m²): the nominal HLG display peak and the usual PQ
-/// mastering peak.
-pub const DEFAULT_HDR_WHITE_NITS: f32 = 1000.0;
-
 /// The signal a grading operation works on.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum GradeSpace {

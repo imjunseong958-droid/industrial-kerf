@@ -46,14 +46,6 @@ pub enum FillMethod {
 }
 
 impl FillMethod {
-    pub fn from_name(s: &str) -> Option<FillMethod> {
-        match s.to_ascii_lowercase().replace([' ', '_', '-'], "").as_str() {
-            "object" => Some(FillMethod::Object),
-            "surface" => Some(FillMethod::Surface),
-            "edgeblend" | "edge" => Some(FillMethod::EdgeBlend),
-            _ => None,
-        }
-    }
     pub fn name(self) -> &'static str {
         match self {
             FillMethod::Object => "object",

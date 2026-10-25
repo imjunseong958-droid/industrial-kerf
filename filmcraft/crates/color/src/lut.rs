@@ -24,10 +24,6 @@ pub struct Lut1d {
 }
 
 impl Lut1d {
-    pub fn identity(size: usize) -> Self {
-        let n = (size - 1) as f32;
-        Lut1d { domain_min: [0.0; 3], domain_max: [1.0; 3], data: (0..size).map(|i| [i as f32 / n; 3]).collect() }
-    }
     pub fn size(&self) -> usize {
         self.data.len()
     }

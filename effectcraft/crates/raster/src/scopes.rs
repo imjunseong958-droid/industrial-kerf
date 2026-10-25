@@ -75,16 +75,6 @@ pub enum ScopeKind {
 }
 
 impl ScopeKind {
-    pub const ALL: [ScopeKind; 8] = [
-        ScopeKind::WaveformRgb,
-        ScopeKind::WaveformLuma,
-        ScopeKind::WaveformYc,
-        ScopeKind::VectorscopeYuv,
-        ScopeKind::VectorscopeHls,
-        ScopeKind::Histogram,
-        ScopeKind::ParadeRgb,
-        ScopeKind::ParadeYuv,
-    ];
     pub fn name(self) -> &'static str {
         match self {
             ScopeKind::WaveformRgb => "waveformRgb",
@@ -96,26 +86,6 @@ impl ScopeKind {
             ScopeKind::ParadeRgb => "paradeRgb",
             ScopeKind::ParadeYuv => "paradeYuv",
         }
-    }
-    pub fn label(self) -> &'static str {
-        match self {
-            ScopeKind::WaveformRgb => "Waveform (RGB)",
-            ScopeKind::WaveformLuma => "Waveform (Luma)",
-            ScopeKind::WaveformYc => "Waveform (YC)",
-            ScopeKind::VectorscopeYuv => "Vectorscope YUV",
-            ScopeKind::VectorscopeHls => "Vectorscope HLS",
-            ScopeKind::Histogram => "Histogram",
-            ScopeKind::ParadeRgb => "Parade (RGB)",
-            ScopeKind::ParadeYuv => "Parade (YUV)",
-        }
-    }
-    pub fn from_name(s: &str) -> Option<ScopeKind> {
-        let n = s.to_ascii_lowercase().replace([' ', '(', ')', '_', '-'], "");
-        Self::ALL.iter().copied().find(|k| k.name().to_ascii_lowercase() == n || k.label().to_ascii_lowercase().replace([' ', '(', ')'], "") == n)
-    }
-    /// Vectorscopes are square.
-    pub fn is_vectorscope(self) -> bool {
-        matches!(self, ScopeKind::VectorscopeYuv | ScopeKind::VectorscopeHls)
     }
 }
 
@@ -392,31 +362,6 @@ pub fn hls(c: [f32; 3]) -> (f32, f32, f32) {
 pub fn histogram_bars(s: &Scope) -> [Vec<u32>; 3] {
     let w = s.width as usize;
     [s.counts[0][..w].to_vec(), s.counts[1][..w].to_vec(), s.counts[2][..w].to_vec()]
-}
-
-/// Where a vectorscope target (75 % colour bars' primaries and secondaries) sits, as (u, v) in
-/// −0.5…0.5, for the graticule.
-pub fn vector_targets(standard: ColorStandard, hls_mode: bool) -> Vec<(&'static str, [f32; 2])> {
-    let cols: [(&str, [f32; 3]); 6] = [
-        ("R", [0.75, 0.0, 0.0]),
-        ("Mg", [0.75, 0.0, 0.75]),
-        ("B", [0.0, 0.0, 0.75]),
-        ("Cy", [0.0, 0.75, 0.75]),
-        ("G", [0.0, 0.75, 0.0]),
-        ("Yl", [0.75, 0.75, 0.0]),
-    ];
-    cols.iter()
-        .map(|(n, c)| {
-            if hls_mode {
-                let (h, _, s) = hls(*c);
-                let a = h.to_radians();
-                (*n, [s * 0.5 * a.cos(), s * 0.5 * a.sin()])
-            } else {
-                let [_, cb, cr] = standard.ycbcr(*c);
-                (*n, [cb, cr])
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]

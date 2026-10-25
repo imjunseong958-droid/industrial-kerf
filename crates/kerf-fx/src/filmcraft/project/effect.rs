@@ -1669,14 +1669,6 @@ pub fn intrinsic_video() -> Vec<EffectInstance> {
         .collect()
 }
 
-pub fn intrinsic_audio() -> Vec<EffectInstance> {
-    ["volume", "channel_volume", "panner"]
-        .iter()
-        .filter_map(|id| find_effect(id))
-        .map(EffectDef::instance)
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -73,10 +73,6 @@ impl Blend {
         Blend::Color,
         Blend::Luminosity,
     ];
-    /// Position in [`Blend::ALL`].
-    pub fn index(self) -> u32 {
-        Self::ALL.iter().position(|b| *b == self).unwrap_or(0) as u32
-    }
 
     /// The name a clip's `blend` property gives the mode.
     pub fn name(self) -> &'static str {
@@ -109,15 +105,6 @@ impl Blend {
             Blend::Color => "color",
             Blend::Luminosity => "luminosity",
         }
-    }
-    /// Whether compositing needs the destination colour (every mode but Normal and Dissolve,
-    /// which are plain "over" per pixel).
-    pub fn reads_destination(self) -> bool {
-        !matches!(self, Blend::Normal | Blend::Dissolve)
-    }
-    /// The mode at `i` in [`Blend::ALL`], normal past the end.
-    pub fn from_index(i: u32) -> Blend {
-        Self::ALL.get(i as usize).copied().unwrap_or(Blend::Normal)
     }
 }
 
