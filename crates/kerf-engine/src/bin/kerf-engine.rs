@@ -123,8 +123,9 @@ struct FrameArgs {
     /// Where to draw: cpu, auto (whichever is faster), or gpu.
     #[arg(long, default_value = "cpu")]
     device: CliDevice,
-    /// What draws: effectcraft, or kerf (Kerf's own renderer, on the CPU).
-    #[arg(long, default_value = "effectcraft")]
+    /// What draws: auto (Kerf's renderer where it draws the program),
+    /// kerf, or effectcraft.
+    #[arg(long, default_value = "auto")]
     renderer: CliRenderer,
     /// Draw this many frames on from `--at`, as playback does, and time
     /// them; the last is written.
@@ -241,6 +242,7 @@ enum CliDevice {
 
 #[derive(Clone, ValueEnum)]
 enum CliRenderer {
+    Auto,
     Effectcraft,
     Kerf,
 }
@@ -622,6 +624,7 @@ fn draw_frame(args: &FrameArgs) -> Result<Value> {
                 CliDevice::Gpu => kerf_compose::Device::Gpu,
             },
             renderer: match args.renderer {
+                CliRenderer::Auto => kerf_compose::Renderer::Auto,
                 CliRenderer::Effectcraft => kerf_compose::Renderer::EffectCraft,
                 CliRenderer::Kerf => kerf_compose::Renderer::Kerf,
             },
@@ -666,6 +669,10 @@ fn draw_frame(args: &FrameArgs) -> Result<Value> {
         "steady_ms": ms(steady.iter().sum::<f64>() / steady.len() as f64),
         "slowest_ms": ms(steady.iter().copied().fold(0.0, f64::max)),
         "gpu": compositor.gpu(),
+        "renderer": match compositor.renderer() {
+            kerf_compose::Renderer::Kerf => "kerf",
+            _ => "effectcraft",
+        },
         "problems": compositor.problems(),
     }))
 }

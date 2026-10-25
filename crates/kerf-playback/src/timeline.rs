@@ -1,9 +1,10 @@
 use crate::PlaybackError;
-use kerf_compose::{ComposeOptions, Compositor};
+use kerf_compose::{ComposeOptions, Compositor, Renderer};
 use kerf_core::preview::{FindingSeverity, PreviewMode, PreviewPlan, PreviewRange, PreviewReason};
 use kerf_core::program::{
     compile_program, program_sequence, program_sound, ProgramError, ProgramOptions, ProgramSound,
 };
+use kerf_fx::MaskStyle;
 use kerf_model::{
     Catalog, Clip, Content, Domain, Effect, Engine, Mask, Param, ParamType, Project, Sequence,
     Time, TrackKind, Value,
@@ -64,6 +65,8 @@ pub struct PlaybackClip {
     pub clip_offset: f64,
     /// The seed of its random effects, as a bake uses.
     pub seed: u32,
+    /// How its masks cut it: as the renderer drawing the program does.
+    pub mask_style: MaskStyle,
 }
 
 impl PlaybackClip {
@@ -180,11 +183,24 @@ impl PlaybackTimeline {
                 subtitles: Vec::new(),
             })
             .collect();
+        // Masks cut as the renderer a render draws the program with cuts.
+        let mask_style = match Compositor::resolve(
+            project,
+            Catalog::builtin(),
+            &ComposeOptions {
+                renderer: Renderer::default().from_env(),
+                ..ComposeOptions::default()
+            },
+        ) {
+            Ok(Renderer::Kerf) => MaskStyle::Kerf,
+            _ => MaskStyle::EffectCraft,
+        };
         let mut flattener = Flattener {
             project,
             clips: Vec::new(),
             captions: Vec::new(),
             depth: 0,
+            mask_style,
         };
         let duration = sequence.map_or(Time::ZERO, Sequence::duration);
         if let Some(sequence) = sequence {
@@ -380,6 +396,7 @@ struct Flattener<'a> {
     clips: Vec<PlaybackClip>,
     captions: Vec<CaptionCue>,
     depth: usize,
+    mask_style: MaskStyle,
 }
 
 impl Flattener<'_> {
@@ -461,6 +478,7 @@ impl Flattener<'_> {
                             layer: video.map_or((0, 0), |video| (video.width, video.height)),
                             clip_offset: (lo - clip.start).seconds(),
                             seed: kerf_core::raster::seed(clip.id.as_str()),
+                            mask_style: self.mask_style,
                         });
                     }
                     Content::Sequence { sequence: id, .. } if speed.value() == 1.0 => {
@@ -1144,6 +1162,7 @@ mod tests {
             layer: (0, 0),
             clip_offset: 0.0,
             seed: 0,
+            mask_style: kerf_fx::MaskStyle::Kerf,
         };
         assert!((clip.timeline_time_for_source(1.0) - 2.0).abs() < 1e-9);
         assert!((clip.timeline_time_for_source(5.0) - 4.0).abs() < 1e-9);

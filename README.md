@@ -68,9 +68,11 @@ playful effects as looks ([docs/looks.md](docs/looks.md)). Its own renderer
 (`kerf-draw`, drawn by `kerf-compose`) draws Kerf's model directly in linear
 light with drawing carried from
 [FilmCraft](https://github.com/storytold/filmcraft) (MIT/Apache, crates in
-`filmcraft/`); it does not draw raster effects yet. EffectCraft's renderer
-still draws by default: `KERF_RENDERER=kerf`, or `kerf-engine frame
---renderer kerf`, draws with Kerf's.
+`filmcraft/`). It draws renders, previews, and live playback, except a
+program with raster effects or transitions, which EffectCraft's still
+draws; live playback cuts masks as the renderer drawing the program does.
+`KERF_RENDERER=kerf|effectcraft|auto`, or `kerf-engine frame --renderer`,
+chooses.
 
 Editor actions are commands in one registry (`kerf-commands`): each has an id,
 a label, its menu, shortcuts in the Kerf, Premiere Pro, and Final Cut Pro
