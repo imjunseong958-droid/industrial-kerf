@@ -9,25 +9,13 @@
 //! [`plan`] says which files a render needs and rewrites the project to use
 //! them. It reads and writes nothing, so a check compiles exactly what a
 //! render would; `kerf-engine` makes the files.
-//!
-//! A raster transition is baked into its outgoing clip: the transition's
-//! effect runs last in that clip's stack, its `completion` going from 0 to
-//! 100 across the transition, and the graph plays the outgoing clip over
-//! the incoming one there ([`BAKED_TRANSITION`]).
 
 use crate::program::canvas;
 use kerf_model::{
-    Catalog, Clip, Content, Effect, Engine, FxKind, Id, IdGen, Interp, Keyframe, Media, Param,
-    Project, Rate, Ratio, Sequence, Time, Track, TrackKind, Transition, Value, VideoInfo,
+    Catalog, Clip, Content, Effect, Engine, Id, IdGen, Media, Project, Rate, Ratio, Sequence, Time,
+    Track, TrackKind, VideoInfo,
 };
 use std::collections::BTreeSet;
-
-/// What a baked raster transition becomes: the outgoing clip, which now
-/// disappears by itself, plays over the incoming one.
-pub const BAKED_TRANSITION: &str = "baked";
-
-/// The parameter a raster transition is driven by, from 0 to 100.
-const COMPLETION: &str = "completion";
 
 /// A sequence rendered on its own, with its transparency, for a clip that
 /// has no file: a title or solid (in a sequence made for it), or a nested
@@ -227,12 +215,6 @@ impl Planner<'_> {
             .is_some_and(|fx| fx.engine == Engine::Raster)
     }
 
-    fn raster_transition(&self, transition: &Transition) -> bool {
-        self.catalog
-            .fx(transition.fx.as_str())
-            .is_some_and(|fx| fx.engine == Engine::Raster && fx.kind == FxKind::Transition)
-    }
-
     fn track<E>(
         &mut self,
         sequence: &Sequence,
@@ -242,41 +224,13 @@ impl Planner<'_> {
         place: &mut impl FnMut(Job<'_>) -> Result<String, E>,
     ) -> Result<(), E> {
         let mut baked = Vec::new();
-        let mut transitions = Vec::new();
         for clip in &track.clips {
-            let mut effects: Vec<Effect> = clip
+            let effects: Vec<Effect> = clip
                 .effects
                 .iter()
                 .filter(|effect| effect.enabled && self.raster(effect))
                 .cloned()
                 .collect();
-            // Its raster transitions out run last, completing across the
-            // transition.
-            let leaving: Vec<&Transition> = track
-                .transitions
-                .iter()
-                .filter(|t| t.from == clip.id && self.raster_transition(t))
-                .collect();
-            for transition in &leaving {
-                let (before, after) = transition.split_at_cut(sequence.rate);
-                let (start, end) = (clip.end() - before, clip.end() + after);
-                let key = |at: Time, value: f64| Keyframe {
-                    at: at - clip.start,
-                    value: Value::Number(value),
-                    interp: Interp::Linear,
-                };
-                let mut params = transition.params.clone();
-                params.insert(
-                    COMPLETION.to_owned(),
-                    Param::Animated(vec![key(start, 0.0), key(end, 100.0)]),
-                );
-                effects.push(Effect {
-                    fx: transition.fx.clone(),
-                    version: transition.version,
-                    enabled: true,
-                    params,
-                });
-            }
             if effects.is_empty() {
                 continue;
             }
@@ -315,7 +269,6 @@ impl Planner<'_> {
                 source_in: job.source_in - job.from,
                 speed: job.speed,
             });
-            transitions.extend(leaving.iter().map(|t| t.id.clone()));
             jobs.push(job);
         }
         for baked in baked {
@@ -335,15 +288,6 @@ impl Planner<'_> {
                     .fx(effect.fx.as_str())
                     .is_some_and(|fx| fx.engine == Engine::Raster)
             });
-        }
-        for id in transitions {
-            let transition = track
-                .transitions
-                .iter_mut()
-                .find(|t| t.id == id)
-                .expect("baked transitions stay on their track");
-            transition.fx = Id::new(BAKED_TRANSITION).expect("a valid id");
-            transition.params.clear();
         }
         Ok(())
     }
@@ -620,7 +564,7 @@ media m1 path=\"a.mov\" rate=24 dur=10s video=1920x1080 audio=2ch@48000
 sequence s1 rate=24 size=1920x1080
   track V1 video
     clip c1 media=m1 src=48f at=0f dur=48f
-      fx stylize.threshold@1
+      fx color.huesaturation@1
       fx color.basic@1 exposure=0.5
     clip c2 media=m1 src=120f at=48f dur=24f
     transition t1 from=c1 to=c2 fx=dissolve@1 dur=12f
@@ -657,29 +601,6 @@ sequence s1 rate=24 size=1920x1080
     }
 
     #[test]
-    fn raster_transitions_bake_into_the_clip_they_leave() {
-        let original = project(&DOCUMENT.replace(
-            "fx=dissolve@1 dur=12f",
-            "fx=transition.linearwipe dur=12f feather=10",
-        ));
-        let planned = planned(&original);
-        let job = &planned.jobs[0];
-        let fx: Vec<_> = job.effects.iter().map(|e| e.fx.as_str()).collect();
-        assert_eq!(fx, ["stylize.threshold", "transition.linearwipe"]);
-        let wipe = &job.effects[1].params;
-        assert_eq!(wipe["feather"], Param::Static(Value::Number(10.0)));
-        // Completion runs 0 to 100 over the six frames either side of the cut
-        // at 48f, in the clip's own time.
-        let frame = |n| Rate::FPS_24.time_of(n);
-        assert_eq!(wipe[COMPLETION].value_at(frame(42)), Value::Number(0.0));
-        assert_eq!(wipe[COMPLETION].value_at(frame(48)), Value::Number(50.0));
-        assert_eq!(wipe[COMPLETION].value_at(frame(54)), Value::Number(100.0));
-        let transition = &planned.project.sequences[0].tracks[0].transitions[0];
-        assert_eq!(transition.fx.as_str(), BAKED_TRANSITION);
-        assert!(transition.params.is_empty());
-    }
-
-    #[test]
     fn titles_and_nested_sequences_are_rendered_alone_first() {
         let original = project(
             "kerf 1
@@ -688,15 +609,15 @@ media m1 path=\"a.mov\" rate=24 dur=10s video=1920x1080
 sequence s1 rate=24 size=1280x720
   track V1 video
     clip n1 seq=s2 src=24f at=0f dur=48f
-      fx stylize.glow@1
+      fx color.curves@1
   track V2 video
     clip t1 gen=title@1 at=0f dur=24f
       set text=\"Hello\" y=0.3
-      fx stylize.glow@1
+      fx color.curves@1
 sequence s2 rate=24 size=640x360
   track V1 video
     clip c1 media=m1 src=0f at=0f dur=96f
-      fx stylize.threshold@1
+      fx color.huesaturation@1
 ",
         );
         let planned = planned(&original);
@@ -738,7 +659,7 @@ sequence s2 rate=24 size=640x360
 
     #[test]
     fn projects_without_raster_effects_need_no_bakes() {
-        let original = project(&DOCUMENT.replace("      fx stylize.threshold@1\n", ""));
+        let original = project(&DOCUMENT.replace("      fx color.huesaturation@1\n", ""));
         let planned = planned(&original);
         assert!(planned.jobs.is_empty());
         assert_eq!(planned.project, original);

@@ -178,7 +178,13 @@ with tempfile.TemporaryDirectory(prefix='kerf-qt-', dir=ROOT / 'target') as temp
             raise AssertionError(value)
         return value
 
-    def wait(predicate, timeout=20):
+    def wait(predicate, timeout=20, since=None):
+        # Events from two workers arrive in either order: one already read
+        # since `since` (an index into `observed`) counts too.
+        if since is not None:
+            for event in observed[since:]:
+                if predicate(event):
+                    return event
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             event = poll()
@@ -212,7 +218,7 @@ with tempfile.TemporaryDirectory(prefix='kerf-qt-', dir=ROOT / 'target') as temp
         pointer = lib.kerf_fx_catalog()
         catalog = json.loads(C.string_at(pointer))
         lib.kerf_bridge_string_free(pointer)
-        assert any(fx['id'] == 'stylize.glow' and fx['params'] for fx in catalog), catalog[:2]
+        assert any(fx['id'] == 'light.edgeglow' and fx['params'] for fx in catalog), catalog[:2]
         send({'type': 'effect_previews', 'clip': clip['id'], 'at': 1.0,
               'effects': ['channel.invert', 'color.basic'], 'width': 64})
         preview = wait(lambda event: event['type'] == 'effect_preview')
@@ -228,6 +234,7 @@ with tempfile.TemporaryDirectory(prefix='kerf-qt-', dir=ROOT / 'target') as temp
         # A mask drawn on the viewer is a typed edit: the document gains its
         # line, native playback shows the picture cut to it, and undo takes
         # it away.
+        mark = len(observed)
         send({'type': 'edit', 'revision': redone['revision'],
               'ops': [{'op': 'mask-add', 'clip': clip['id'], 'name': 'k1', 'rect': [0.25, 0.25, 0.75, 0.75]}]})
         masked = state()
@@ -235,7 +242,7 @@ with tempfile.TemporaryDirectory(prefix='kerf-qt-', dir=ROOT / 'target') as temp
         masks = masked['timeline']['tracks'][0]['clips'][0].get('masks', [])
         assert [(mask['name'], mask['rect']) for mask in masks] == [('k1', [0.25, 0.25, 0.75, 0.75])], masks
         assert any(prop['name'] == 'feather' for prop in masked['timeline']['maskProperties'])
-        wait(lambda event: event['type'] == 'preview' and event['status'] == 'ready')
+        wait(lambda event: event['type'] == 'preview' and event['status'] == 'ready', since=mark)
         send({'type': 'seek', 'position': 1.0})
         frame = Frame()
         deadline = time.monotonic() + 20
@@ -341,17 +348,12 @@ with tempfile.TemporaryDirectory(prefix='kerf-qt-', dir=ROOT / 'target') as temp
         send({'type': 'export', 'quality': 'preview'})
         exported = wait(lambda event: event['type'] == 'export' and event['status'] == 'completed', 60)
         assert Path(exported['path']).is_file()
+        mark = len(observed)
         send({'type': 'edit', 'revision': refreshed['revision'], 'ops': [{'op': 'set', 'clip': clip['id'], 'props': {'opacity': 0.5}}]})
         state()
         # Cuts cannot show the half-transparent clip; the compositor draws it
         # live, and a seek shows its frame.
-        live = wait(lambda event: event['type'] == 'preview' and event['status'] == 'live')
-        assert 'gpu' in live, live
-        # With the GPU off, the live program opens again, drawn on the CPU.
-        send({'type': 'gpu', 'enabled': False})
-        assert wait(lambda event: event['type'] == 'preview' and event['status'] == 'live')['gpu'] is None
-        send({'type': 'gpu', 'enabled': True})
-        wait(lambda event: event['type'] == 'preview' and event['status'] == 'live')
+        wait(lambda event: event['type'] == 'preview' and event['status'] == 'live', since=mark)
         send({'type': 'seek', 'position': 1.0})
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:

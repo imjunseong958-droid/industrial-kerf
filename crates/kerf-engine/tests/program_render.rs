@@ -295,9 +295,9 @@ fn raster_effects_follow_their_keyframes_and_the_graph_bakes_them_once() {
         "sequence s1 rate=24 size=160x90 audio=48000\n\
          \x20 track V1 video\n\
          \x20   clip c1 media=red src=0f at=0f dur=48f\n\
-         \x20     fx stylize.threshold level={0f:0 47f:255}\n",
+         \x20     fx color.huesaturation lightness={0f:100 47f:-100}\n",
     );
-    let output = dir.path().join("thresholded.mp4");
+    let output = dir.path().join("lightened.mp4");
     let composited = RenderOptions {
         output: output.to_string_lossy().into_owned(),
         force_software: true,
@@ -310,8 +310,7 @@ fn raster_effects_follow_their_keyframes_and_the_graph_bakes_them_once() {
     };
     for options in [&composited, &options] {
         render_program::<fn(f64)>(&project, None, None, options, None).expect("renders");
-        // Red is above a threshold of 0, so white, and below one of 255,
-        // so black.
+        // Red at full lightness is white, and at none black.
         assert!(
             is(pixel(&output, 0), [255, 255, 255]),
             "{:?}",
@@ -392,7 +391,7 @@ fn pixel_at(path: &Path, index: u32, x: usize) -> [u8; 3] {
 }
 
 #[test]
-fn raster_transitions_wipe_from_one_clip_to_the_next() {
+fn filmcraft_transitions_render_from_one_clip_to_the_next() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(
         dir.path(),
@@ -400,9 +399,9 @@ fn raster_transitions_wipe_from_one_clip_to_the_next() {
          \x20 track V1 video\n\
          \x20   clip c1 media=red src=0f at=0f dur=24f\n\
          \x20   clip c2 media=blue src=24f at=24f dur=24f\n\
-         \x20   transition t1 from=c1 to=c2 fx=transition.linearwipe@1 dur=12f\n",
+         \x20   transition t1 from=c1 to=c2 fx=push@1 dur=12f motion_blur=0\n",
     );
-    let output = dir.path().join("wipe.mp4");
+    let output = dir.path().join("push.mp4");
     let options = RenderOptions {
         output: output.to_string_lossy().into_owned(),
         force_software: true,
@@ -422,7 +421,7 @@ fn raster_transitions_wipe_from_one_clip_to_the_next() {
         "{:?}",
         pixel_at(&output, 31, 80)
     );
-    // Halfway, the wipe has crossed half the picture.
+    // Halfway, the push has moved half the picture.
     let (left, right) = (pixel_at(&output, 24, 10), pixel_at(&output, 24, 150));
     assert!(
         (is(left, red) && is(right, blue)) || (is(left, blue) && is(right, red)),

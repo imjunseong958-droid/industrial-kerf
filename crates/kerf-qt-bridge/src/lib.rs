@@ -94,11 +94,6 @@ enum Command {
     Volume {
         value: f32,
     },
-    /// Let the live preview's compositor draw on the GPU when that is
-    /// faster.
-    Gpu {
-        enabled: bool,
-    },
     Export {
         quality: String,
     },
@@ -669,12 +664,6 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
     let mut position = 0.0_f64;
     let mut playing = false;
     let mut volume = 1.0_f32;
-    // Whether the compositor may draw on the GPU, and the program it draws
-    // live, to open again when that changes.
-    let mut gpu = true;
-    let mut live: Option<Project> = None;
-    // The GPU adapter the editor was last told the live preview uses.
-    let mut announced: Option<String> = None;
     while !shared.closed.load(Ordering::Relaxed) {
         for command in rx.try_iter() {
             let handle = session.as_ref().map(PlaybackSession::handle);
@@ -690,14 +679,6 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
                 Command::Volume { value } => {
                     volume = value;
                     handle.map(|handle| handle.set_volume(value))
-                }
-                Command::Gpu { enabled } if enabled != gpu => {
-                    gpu = enabled;
-                    if let (Some(program), Ok(mut slot)) = (live.take(), shared.project.lock()) {
-                        // A newer program waiting to open wins.
-                        slot.get_or_insert(MediaProject::Native(program));
-                    }
-                    None
                 }
                 _ => None,
             };
@@ -724,7 +705,6 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
                 .collect::<Vec<_>>()
                 .join("; ");
             let composited = !rendered && plan.composited();
-            live = composited.then(|| project.clone());
             if !rendered && !plan.native_exact() && !composited {
                 session = None;
                 playing = false;
@@ -741,8 +721,7 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
             emit(
                 &tx,
                 if composited {
-                    announced = gpu.then(kerf_playback::gpu_adapter).flatten();
-                    json!({"type":"preview","status":"live","message":message,"gpu":announced})
+                    json!({"type":"preview","status":"live","message":message})
                 } else {
                     json!({"type":"preview","status":"ready"})
                 },
@@ -753,8 +732,7 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
                 project,
                 PlaybackConfig::default()
                     .with_frame_size(size.0, size.1)
-                    .with_composited(composited)
-                    .with_gpu(gpu),
+                    .with_composited(composited),
             ) {
                 Ok(session) => {
                     let _ = session.handle().set_volume(volume);
@@ -769,14 +747,6 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
                     None
                 }
             };
-        }
-        // The GPU opens in the background; say when the live preview can use
-        // it.
-        if live.is_some() && gpu && announced.is_none() {
-            announced = kerf_playback::gpu_adapter();
-            if announced.is_some() {
-                emit(&tx, json!({"type":"preview_device","gpu":announced}));
-            }
         }
         if let Some(session) = &session {
             let handle = session.handle();
@@ -1408,7 +1378,7 @@ pub unsafe extern "C" fn kerf_bridge_send(bridge: *mut c_void, message: *const c
                 false
             }
         }
-        Command::Play | Command::Pause | Command::Volume { .. } | Command::Gpu { .. } => {
+        Command::Play | Command::Pause | Command::Volume { .. } => {
             bridge.media.try_send(command).is_ok()
         }
         Command::Abort => {

@@ -1,13 +1,13 @@
 //! Noise & Grain effects: film grain, median-family filters, denoising and procedural noise.
 
-use effectcraft_color::{hsl_to_rgb, luminance, rgb_to_hsl};
-use effectcraft_keyframe::Value;
-use effectcraft_project::ParamUi;
+use effectcraft_color::luminance;
+use crate::Value;
+use crate::ParamUi;
 use effectcraft_raster::{Image, Px};
 use rayon::prelude::*;
 
 use crate::generate::value_noise;
-use crate::util::{Plane, gauss_plane, guided_filter, hash1, join, lerp, premul, smoothstep, split, unpremul};
+use crate::util::{Plane, gauss_plane, guided_filter, join, premul, smoothstep, split, unpremul};
 use crate::{Buf, EffectCtx, EffectSpec, num, p, popup, slider};
 
 fn spec(id: &'static str, name: &'static str, params: Vec<crate::ParamSpec>, render: crate::RenderFn) -> EffectSpec {
@@ -16,22 +16,6 @@ fn spec(id: &'static str, name: &'static str, params: Vec<crate::ParamSpec>, ren
 
 fn pct() -> ParamUi {
     slider(0.0, 100.0, 0.0, 100.0, 1)
-}
-
-/// Fractional-octave fBm of value noise in 0..1 (octave amplitude 0.5, frequency 2).
-pub(crate) fn fbm(u: f32, v: f32, z: f32, seed: u32, octaves: f32) -> f32 {
-    let octaves = octaves.clamp(1.0, 20.0);
-    let n = octaves.ceil() as usize;
-    let frac = octaves - octaves.floor();
-    let (mut sum, mut norm, mut amp, mut f) = (0.0, 0.0, 1.0, 1.0);
-    for o in 0..n {
-        let w = if o + 1 == n && frac > 0.0 { frac } else { 1.0 };
-        sum += value_noise(u * f, v * f, z + o as f32 * 7.31, seed.wrapping_add(o as u32)) * amp * w;
-        norm += amp * w;
-        amp *= 0.5;
-        f *= 2.0;
-    }
-    sum / norm.max(1e-6)
 }
 
 // ---- Add Grain / Match Grain shared look ----
@@ -427,17 +411,6 @@ fn median_px(orig: Px, m: Px, on_alpha: bool) -> Px {
     premul([m[0] / m[3], m[1] / m[3], m[2] / m[3]].map(|v| v.min(1.0)), a)
 }
 
-fn median(ctx: &EffectCtx, mut b: Buf) -> Buf {
-    let r = (ctx.params.f("radius") * b.scale).round().max(0.0) as usize;
-    if r == 0 {
-        return b;
-    }
-    let on_alpha = ctx.params.b("operateOnAlpha");
-    let m = median_image(&b.img, r);
-    b.img.data.par_iter_mut().zip(m.data.par_iter()).for_each(|(o, &mv)| *o = median_px(*o, mv, on_alpha));
-    b
-}
-
 fn dust_scratches(ctx: &EffectCtx, mut b: Buf) -> Buf {
     let r = (ctx.params.f("radius") * b.scale).round().max(0.0) as usize;
     if r == 0 {
@@ -491,12 +464,6 @@ fn grain_level(img: &Image, boxes: &[(usize, usize, usize)]) -> f32 {
     let st = crate::noise2::grain_stats_masked(img, Some(&m));
     let s = (st.std[0] + st.std[1] + st.std[2]) / 3.0;
     if boxes.is_empty() { 1.0 } else { (s / 0.02).clamp(0.5, 2.0) }
-}
-
-/// Remove Grain's measured grain level for buffer `b` without Temporal Filtering (the GPU
-/// kernels' spatial pass, effectcraft-gpu `fx_noise`).
-pub fn remove_grain_level(ctx: &EffectCtx, b: &Buf) -> f32 {
-    grain_level(&b.img, &sampling_boxes(ctx, &b.img, b.scale))
 }
 
 fn remove_grain(ctx: &EffectCtx, mut b: Buf) -> Buf {
@@ -613,130 +580,6 @@ fn remove_grain(ctx: &EffectCtx, mut b: Buf) -> Buf {
 
 // ---- Noise Alpha / Noise HLS ----
 
-/// Per-pixel noise in 0..1 that changes smoothly with `phase` (whole units = new pattern).
-#[inline]
-fn phased(x: u32, y: u32, seed: u32, phase: f32) -> f32 {
-    phased_cycle(x, y, seed, phase, 0)
-}
-
-/// [`phased`] whose patterns repeat every `cycle` whole units (0 = never): Cycle Noise.
-#[inline]
-fn phased_cycle(x: u32, y: u32, seed: u32, phase: f32, cycle: i64) -> f32 {
-    let k = phase.floor();
-    let t = phase - k;
-    let k = k as i64;
-    let wrap = |k: i64| if cycle > 0 { k.rem_euclid(cycle) } else { k } as u32;
-    let a = hash1(x, y, seed.wrapping_add(wrap(k).wrapping_mul(0x632b)));
-    let b = hash1(x, y, seed.wrapping_add(wrap(k + 1).wrapping_mul(0x632b)));
-    lerp(a, b, t * t * (3.0 - 2.0 * t))
-}
-
-fn noise_alpha(ctx: &EffectCtx, mut b: Buf) -> Buf {
-    let k = ctx.params.f("amount") as f32 / 100.0;
-    if k <= 0.0 {
-        return b;
-    }
-    let kind = ctx.params.e("noise");
-    let orig = ctx.params.e("originalAlpha");
-    let ov = ctx.params.e("overflow");
-    let seed = (ctx.params.f("randomSeed") as i64 as u32) ^ ctx.seed.wrapping_mul(0x2f1);
-    let phase = ctx.params.f("noisePhase") as f32 / 360.0 + if kind >= 2 { ctx.time as f32 } else { 0.0 };
-    let cycle = if ctx.params.b("noiseOptions/cycleNoise") { ctx.params.f("noiseOptions/cycle").round().max(1.0) as i64 } else { 0 };
-    b.img.rows_mut().for_each(|(y, row)| {
-        for (x, px) in row.iter_mut().enumerate() {
-            let ph = if kind >= 2 { phase } else { phase.floor() };
-            let mut n = phased_cycle(x as u32, y as u32, seed, ph, cycle);
-            if kind % 2 == 1 {
-                n *= n;
-            }
-            let (c, a) = unpremul(*px);
-            let na = match orig {
-                0 => a + n * k,
-                1 => {
-                    if a > 0.0 {
-                        a + n * k
-                    } else {
-                        0.0
-                    }
-                }
-                2 => a * (1.0 + (2.0 * n - 1.0) * k),
-                _ => a + (2.0 * n - 1.0) * k * 4.0 * a * (1.0 - a),
-            };
-            let na = match ov {
-                1 => {
-                    let t = na.rem_euclid(2.0);
-                    if t > 1.0 { 2.0 - t } else { t }
-                }
-                2 => {
-                    if !(0.0..=1.0).contains(&na) {
-                        na.rem_euclid(1.0)
-                    } else {
-                        na
-                    }
-                }
-                _ => na,
-            }
-            .clamp(0.0, 1.0);
-            *px = premul(c, na);
-        }
-    });
-    b
-}
-
-fn noise_hls_core(ctx: &EffectCtx, mut b: Buf, phase: f32) -> Buf {
-    let hue = ctx.params.f("hue") as f32 / 100.0;
-    let light = ctx.params.f("lightness") as f32 / 100.0;
-    let satv = ctx.params.f("saturation") as f32 / 100.0;
-    if hue == 0.0 && light == 0.0 && satv == 0.0 {
-        return b;
-    }
-    let kind = ctx.params.e("noise");
-    let gs = (ctx.params.f("grainSize") * b.scale).max(0.1) as f32;
-    let seed = ctx.seed.wrapping_mul(0x51f3);
-    b.img.rows_mut().for_each(|(y, row)| {
-        for (x, px) in row.iter_mut().enumerate() {
-            let (c, a) = unpremul(*px);
-            if a <= 0.0 {
-                continue;
-            }
-            let n = |k: u32| -> f32 {
-                let s = seed.wrapping_add(k * 7919);
-                match kind {
-                    2 => ((value_noise(x as f32 / gs, y as f32 / gs, phase, s) - 0.5) * 3.0).clamp(-1.0, 1.0),
-                    1 => {
-                        let v = phased(x as u32, y as u32, s, phase) * 2.0 - 1.0;
-                        v * v.abs()
-                    }
-                    _ => phased(x as u32, y as u32, s, phase) * 2.0 - 1.0,
-                }
-            };
-            let (mut h, mut s, mut l) = rgb_to_hsl(c[0], c[1], c[2]);
-            if hue != 0.0 {
-                h = (h + n(0) * hue * 0.5).rem_euclid(1.0);
-            }
-            if light != 0.0 {
-                l = (l + n(1) * light).clamp(0.0, 1.0);
-            }
-            if satv != 0.0 {
-                s = (s + n(2) * satv).clamp(0.0, 1.0);
-            }
-            let (r, g, bl) = hsl_to_rgb(h, s, l);
-            *px = premul([r, g, bl], a);
-        }
-    });
-    b
-}
-
-fn noise_hls(ctx: &EffectCtx, b: Buf) -> Buf {
-    let phase = ctx.params.f("noisePhase") as f32 / 360.0;
-    noise_hls_core(ctx, b, phase)
-}
-
-fn noise_hls_auto(ctx: &EffectCtx, b: Buf) -> Buf {
-    let phase = ctx.time as f32 * ctx.params.f("noiseAnimationSpeed") as f32;
-    noise_hls_core(ctx, b, phase)
-}
-
 pub fn specs() -> Vec<EffectSpec> {
     let hls_common = || {
         vec![
@@ -758,15 +601,6 @@ pub fn specs() -> Vec<EffectSpec> {
                 vec![p("viewingMode", "Viewing Mode", Value::Enum(2), popup(&ADD_GRAIN_VIEWS)), p("preset", "Preset", Value::Enum(0), popup(&GRAIN_PRESETS))];
             spec("ec.noise.addgrain", "Add Grain", [head, preview_params(), tweaking, color, application, animation].into_iter().flatten().collect(), add_grain)
         },
-        spec(
-            "ec.noise.median",
-            "Median",
-            vec![
-                p("radius", "Radius", num(0.0), slider(0.0, 255.0, 0.0, 50.0, 0)),
-                p("operateOnAlpha", "Operate On Alpha Channel", Value::Bool(false), ParamUi::Checkbox),
-            ],
-            median,
-        ),
         spec(
             "ec.noise.dustscratches",
             "Dust & Scratches",
@@ -802,23 +636,6 @@ pub fn specs() -> Vec<EffectSpec> {
             .collect(),
             remove_grain,
         ),
-        spec(
-            "ec.noise.noisealpha",
-            "Noise Alpha",
-            vec![
-                p("noise", "Noise", Value::Enum(0), popup(&["Uniform Random", "Squared Random", "Uniform Animation", "Squared Animation"])),
-                p("amount", "Amount", num(0.0), pct()),
-                p("originalAlpha", "Original Alpha", Value::Enum(1), popup(&["Add", "Clamp", "Scale", "Edges"])),
-                p("overflow", "Overflow", Value::Enum(0), popup(&["Clip", "Wrap Back", "Wrap"])),
-                p("randomSeed", "Random Seed", num(0.0), slider(0.0, 100000.0, 0.0, 1000.0, 0)),
-                p("noisePhase", "Noise Phase", num(0.0), ParamUi::Angle),
-                p("noiseOptions/cycleNoise", "Cycle Noise", Value::Bool(false), ParamUi::Checkbox),
-                p("noiseOptions/cycle", "Cycle", num(1.0), slider(1.0, 100.0, 1.0, 30.0, 0)),
-            ],
-            noise_alpha,
-        ),
-        spec("ec.noise.noisehls", "Noise HLS", hls, noise_hls),
-        spec("ec.noise.noisehlsauto", "Noise HLS Auto", hls_auto, noise_hls_auto),
     ]
 }
 
@@ -826,6 +643,7 @@ pub fn specs() -> Vec<EffectSpec> {
 mod tests {
     use super::*;
     use crate::Params;
+    use crate::util::hash1;
 
     fn run(id: &str, vals: &[(&str, Value)], img: Image, time: f64) -> Buf {
         let s = crate::find(id).unwrap();
@@ -839,18 +657,6 @@ mod tests {
 
     fn gray(w: u32, h: u32, v: f32) -> Image {
         Image::filled(w, h, [v, v, v, 1.0])
-    }
-
-    #[test]
-    fn median_removes_salt_noise() {
-        let mut img = gray(16, 16, 0.5);
-        for (x, y) in [(3, 3), (8, 2), (12, 12), (5, 10)] {
-            img.set(x, y, [1.0, 1.0, 1.0, 1.0]);
-        }
-        let out = run("ec.noise.median", &[("radius", num(1.0))], img, 0.0);
-        for p in &out.img.data {
-            assert!((p[0] - 0.5).abs() < 2.0 / 511.0, "{p:?}");
-        }
     }
 
     #[test]
@@ -892,43 +698,6 @@ mod tests {
         assert!((keep.img.get(6, 6)[0] - 0.56).abs() < 1e-6);
         let rm = run("ec.noise.dustscratches", &[("radius", num(1.0)), ("threshold", num(5.0))], img, 0.0);
         assert!((rm.img.get(6, 6)[0] - 0.5).abs() < 2.0 / 511.0);
-    }
-
-    #[test]
-    fn turbulent_noise_seeded() {
-        let a = run("ec.noise.turbulent", &[("evolutionOptions/randomSeed", num(4.0))], gray(24, 16, 0.0), 0.0);
-        let b = run("ec.noise.turbulent", &[("evolutionOptions/randomSeed", num(4.0))], gray(24, 16, 0.0), 0.0);
-        let c = run("ec.noise.turbulent", &[("evolutionOptions/randomSeed", num(5.0))], gray(24, 16, 0.0), 0.0);
-        assert_eq!(a.img, b.img);
-        assert_ne!(a.img, c.img);
-        assert!(a.img.data.iter().all(|p| (0.0..=1.0).contains(&p[0])));
-    }
-
-    #[test]
-    fn noise_alpha_in_range() {
-        for orig in 0..4 {
-            for ov in 0..3 {
-                let mut img = gray(10, 10, 0.5);
-                img.data[3] = [0.0; 4];
-                img.data[4] = [0.1, 0.1, 0.1, 0.2];
-                let out = run("ec.noise.noisealpha", &[("amount", num(80.0)), ("originalAlpha", Value::Enum(orig)), ("overflow", Value::Enum(ov))], img, 0.3);
-                assert!(out.img.data.iter().all(|p| (0.0..=1.0).contains(&p[3]) && p[0] <= p[3] + 1e-6));
-            }
-        }
-    }
-
-    #[test]
-    fn noise_hls_changes_and_animates() {
-        let mut img = Image::new(8, 8);
-        for (i, p) in img.data.iter_mut().enumerate() {
-            *p = premul([0.6, 0.3, (i % 7) as f32 / 7.0], 1.0);
-        }
-        let a = run("ec.noise.noisehlsauto", &[("lightness", num(30.0))], img.clone(), 0.0);
-        let b = run("ec.noise.noisehlsauto", &[("lightness", num(30.0))], img.clone(), 0.55);
-        assert_ne!(a.img, img);
-        assert_ne!(a.img, b.img);
-        let still = run("ec.noise.noisehls", &[], img.clone(), 0.0);
-        assert_eq!(still.img, img);
     }
 
     #[test]
@@ -1065,26 +834,5 @@ mod tests {
         let out = crate::run_fx("ec.noise.removegrain", &vals, frame(5), 0.5, env).img;
         let dev = |i: &Image| i.data.iter().map(|p| (p[0] - 0.5).abs()).sum::<f32>();
         assert!(dev(&out) < dev(&frame(5)) * 0.75, "{} vs {}", dev(&out), dev(&frame(5)));
-    }
-
-    #[test]
-    fn noise_alpha_cycle_repeats() {
-        let at = |phase: f64| {
-            run(
-                "ec.noise.noisealpha",
-                &[
-                    ("amount", num(60.0)),
-                    ("noise", Value::Enum(2)),
-                    ("noisePhase", num(phase)),
-                    ("noiseOptions/cycleNoise", Value::Bool(true)),
-                    ("noiseOptions/cycle", num(3.0)),
-                ],
-                Image::filled(12, 12, [0.25, 0.25, 0.25, 0.5]),
-                0.0,
-            )
-            .img
-        };
-        assert_eq!(at(90.0), at(90.0 + 3.0 * 360.0));
-        assert_ne!(at(90.0), at(90.0 + 360.0));
     }
 }

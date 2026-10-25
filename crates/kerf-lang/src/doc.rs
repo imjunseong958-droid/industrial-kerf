@@ -388,7 +388,10 @@ impl Parser<'_> {
         let mut fields = Fields::new(line)?;
         let (fx, version) = fields.fx_ref(1, "an effect id")?;
         let def = self.catalog.fx(fx.as_str()).ok_or_else(|| {
-            fields.error(fields.positional()[1], format!("unknown effect `{fx}`"))
+            fields.error(
+                fields.positional()[1],
+                kerf_model::catalog::unknown("effect", fx.as_str()),
+            )
         })?;
         let version = pinned(def, version)
             .map_err(|message| fields.error(fields.positional()[1], message))?;
@@ -423,10 +426,9 @@ impl Parser<'_> {
             .take_with("dur", |text| clock.duration(text))?
             .ok_or_else(|| line.error(1, "missing `dur=`"))?;
         let align = fields.take_with("align", parse_align)?.unwrap_or_default();
-        let def = self
-            .catalog
-            .fx(fx.as_str())
-            .ok_or_else(|| line.error(1, format!("unknown transition `{fx}`")))?;
+        let def = self.catalog.fx(fx.as_str()).ok_or_else(|| {
+            line.error(1, kerf_model::catalog::unknown("transition", fx.as_str()))
+        })?;
         let version = pinned(def, version).map_err(|message| line.error(1, message))?;
         let params = parse_params(&mut fields, def.params.as_slice(), &fx, clock.rate)?;
         fields.finish(2)?;
@@ -1370,7 +1372,7 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
              mask ring ellipse=0.5,0.5,0.25,0.3 mode=none inverted=true\n      \
              mask path points=\"0,0 0.5,1 1,0\" closed=false mode=none\n      \
              fx color.basic@1 exposure=0.3 saturation=1.2\n      \
-             fx generate.stroke@1 path=ring\n",
+             fx generate.audiowaveform@1 path=ring\n",
         );
         let document = parse_document(&masked, Catalog::builtin()).unwrap();
         let printed = print_document(
@@ -1411,7 +1413,7 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
                 )
         };
         let reads =
-            |track: &str| format!("      fx channel.setmatte@1 takeMatteFromLayer={track}\n");
+            |track: &str| format!("      fx key.trackmatte@1 matte={track}\n");
         let document = parse_document(&reading(&reads("V2"), ""), Catalog::builtin()).unwrap();
         // The track name prints back as a word.
         assert!(print_document(
@@ -1419,7 +1421,7 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
             Catalog::builtin(),
             PrintOptions::default()
         )
-        .contains("takeMatteFromLayer=V2\n"));
+        .contains("matte=V2\n"));
         for (c1, c3, needle) in [
             (reads("V9"), String::new(), "not a picture track"),
             (reads("A1"), String::new(), "not a picture track"),

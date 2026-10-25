@@ -73,7 +73,7 @@ sequence add <id> rate=<fps> size=WxH [name="…"] [start=<tc>]  ·  sequence se
 
 Masks combine in order by `mode` (add, subtract, intersect, lighten,
 darken, difference); `mode=none` cuts nothing and leaves a path that
-effects such as `generate.stroke path=<name>` read. Linked clips (a picture
+effects such as `generate.audiowaveform path=<name>` read. Linked clips (a picture
 and its sound) move, trim, split, slip, and delete together. Ripple edits act on every unlocked track so sync holds; lock a
 track to leave it out. Edits that would cut through another track's clip are
 refused with the clip named.
@@ -157,20 +157,18 @@ is a quoted `.cube` or `.3dl` path, and another track is its id
 pixels. An id at version 2 was an EffectCraft effect that FilmCraft's
 replaced; version 1 of it no longer reads.";
 
-const RASTER: &str = "## Raster effects
-Raster effects come from EffectCraft and run on a clip's own picture before
-it is placed, so they come before the effects above whatever the stack
-order. Kerf's own renderer runs those Kerf keeps (restoration, keying
-clean-up, curves and finer color, the audio visualizers) in stack order
-beside FilmCraft's; the others need EffectCraft's renderer. Raster
-transitions (`transition.*`) are written like any transition.
-A file parameter (a LUT, an OpenColorIO config) is a quoted path, relative
-to the project. A track parameter names another picture track of the
-sequence (`takeMatteFromLayer=V2`), whose picture the effect reads even while
-the track is hidden; a sound parameter names a sound track whose sound it
-draws (`audioLayer=A1`). `look` with `effects: \"<words>\"` finds entries by the look or moment you
-want, each with when to use it, and `look` with `effect: \"<id>\"` lists one
-entry's parameters.";
+const RASTER: &str = "## Effects kept from EffectCraft
+The EffectCraft effects Kerf keeps, which FilmCraft has nothing like:
+restoration (grain, dust, rolling shutter, lens, upscaling), key and matte
+clean-up, curves and finer color, a few blurs and distortions, and the
+audio visualizers. They run in stack order beside FilmCraft's effects. A
+file parameter is a quoted path, relative to the project; a sound parameter
+names a sound track whose sound the effect draws (`audioLayer=A1`); a mask
+parameter names one of the clip's masks (`path=k1`). `look` with
+`effects: \"<words>\"` finds entries by the look or moment you want, each
+with when to use it, and `look` with `effect: \"<id>\"` lists one entry's
+parameters. An id EffectCraft had that Kerf no longer does is an error
+that names what to use instead.";
 
 /// One catalog definition as the reference lists it: its id, domain, and
 /// doc, then a line per parameter.
@@ -250,9 +248,9 @@ mod tests {
         assert!(text.contains("`opacity=1` (0..1, animatable) Layer opacity."));
         assert!(text.contains("`blend=normal` (normal|add|multiply"));
         assert!(text.contains("`gain=0` (-96..24, dB, animatable)"));
-        // Raster effects are listed by id; their parameters come from `look`.
-        assert!(text.contains("- Channel: `channel.arithmetic`"));
+        // Kept effects are listed by id; their parameters come from `look`.
+        assert!(text.contains("- Blur & Sharpen: `blur.bilateral`"));
         assert!(!text.contains("Blend With Original"));
-        assert!(text.len() < 20 * 1024, "{}", text.len());
+        assert!(text.len() < 16 * 1024, "{}", text.len());
     }
 }

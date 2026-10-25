@@ -120,13 +120,6 @@ struct FrameArgs {
     /// Burn captions in, as a render does.
     #[arg(long)]
     captions: bool,
-    /// Where to draw: cpu, auto (whichever is faster), or gpu.
-    #[arg(long, default_value = "cpu")]
-    device: CliDevice,
-    /// What draws: auto (Kerf's renderer where it draws the program),
-    /// kerf, or effectcraft.
-    #[arg(long, default_value = "auto")]
-    renderer: CliRenderer,
     /// Draw this many frames on from `--at`, as playback does, and time
     /// them; the last is written.
     #[arg(long, default_value_t = 1)]
@@ -231,20 +224,6 @@ struct TranscriptionArgs {
     language: Option<String>,
     #[arg(long, default_value = "local")]
     backend: String,
-}
-
-#[derive(Clone, ValueEnum)]
-enum CliDevice {
-    Cpu,
-    Auto,
-    Gpu,
-}
-
-#[derive(Clone, ValueEnum)]
-enum CliRenderer {
-    Auto,
-    Effectcraft,
-    Kerf,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -618,22 +597,8 @@ fn draw_frame(args: &FrameArgs) -> Result<Value> {
         &kerf_compose::ComposeOptions {
             sequence: args.sequence.clone(),
             captions: args.captions,
-            device: match args.device {
-                CliDevice::Cpu => kerf_compose::Device::Cpu,
-                CliDevice::Auto => kerf_compose::Device::Auto,
-                CliDevice::Gpu => kerf_compose::Device::Gpu,
-            },
-            renderer: match args.renderer {
-                CliRenderer::Auto => kerf_compose::Renderer::Auto,
-                CliRenderer::Effectcraft => kerf_compose::Renderer::EffectCraft,
-                CliRenderer::Kerf => kerf_compose::Renderer::Kerf,
-            },
         },
     )?;
-    if !matches!(args.device, CliDevice::Cpu) {
-        // Time frames, not the GPU opening.
-        kerf_compose::open_gpu();
-    }
     let rate = compositor.rate();
     let at = args.at.as_str();
     let time = match at.strip_suffix('f') {
@@ -668,11 +633,6 @@ fn draw_frame(args: &FrameArgs) -> Result<Value> {
         "ms": ms(times[0]),
         "steady_ms": ms(steady.iter().sum::<f64>() / steady.len() as f64),
         "slowest_ms": ms(steady.iter().copied().fold(0.0, f64::max)),
-        "gpu": compositor.gpu(),
-        "renderer": match compositor.renderer() {
-            kerf_compose::Renderer::Kerf => "kerf",
-            _ => "effectcraft",
-        },
         "problems": compositor.problems(),
     }))
 }

@@ -185,14 +185,14 @@ fn raster_effects_play_live_inside_the_letterbox() {
         .status()
         .expect("run ffmpeg fixture");
     assert!(status.success(), "fixture ffmpeg process failed");
-    // A wide picture in a square sequence, thresholded.
+    // A wide picture in a square sequence, lightened to white.
     let text = format!(
         "kerf 1\nproject name=\"Live effects\"\n\
          media source-a path=\"{}\" rate=10 dur=4f video=64x36\n\
          sequence s1 rate=10 size=64x64 audio=48000\n\
          \x20 track video-1 video\n\
          \x20   clip clip-a media=source-a src=0f at=0f dur=4f\n\
-         \x20     fx stylize.threshold level=20\n",
+         \x20     fx color.huesaturation lightness=100\n",
         source.display()
     );
     let project = kerf_lang::parse_document(&text, kerf_model::Catalog::builtin())
@@ -231,8 +231,8 @@ fn raster_effects_play_live_inside_the_letterbox() {
             frame.pixels[i + 3],
         ]
     };
-    // Red is brighter than the threshold, so white; the bars stay black,
-    // untouched by the effect.
+    // Red at full lightness is white; the bars stay black, untouched by
+    // the effect.
     let center = at(32, 32);
     assert!(
         center[0] > 240 && center[1] > 240 && center[2] > 240,
@@ -404,7 +404,7 @@ fn masked_clips_play_live_as_the_compositor_draws_them() {
             "\x20     mask k1 rect=0.15,0.2,0.8,0.85 mode=subtract expansion=-2 feather=6\n\
              \x20     mask k2 ellipse=0.5,0.5,0.2,0.3 opacity=0.6\n\
              \x20     mask k3 points=\"0.5,0 1,1 0,1\" mode=none\n",
-            "\x20     fx stylize.threshold level=20\n",
+            "\x20     fx color.curves rgb=\"0,0 0.3,1 1,1\"\n",
         ),
     ] {
         let masked = project(masks, effects);

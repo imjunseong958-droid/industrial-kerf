@@ -1,0 +1,169 @@
+# EffectCraft effects and transitions Kerf no longer has, with what to use
+# instead: a catalog reference, or words; empty for nothing like it.
+blur.cross	blur.directional@2
+blur.radialfast	blur.radialzoom@1
+blur.vector	blur.directional@2
+blur.cameralens	blur.bokeh@1
+blur.camerashakedeblur	distort.warpstabilizer@2
+blur.fastbox	blur.gaussian@1
+blur.radial	blur.radialzoom@1
+blur.smart	blur.bilateral@1
+channel.arithmetic	color.levels@2
+channel.blend	the clip's blend property
+channel.composite	the clip's blend property
+channel.calculations	key.trackmatte@1
+channel.combiner	color.channelmixer@2
+channel.compoundarithmetic	the clip's blend property
+channel.minimax	matte.simplechoker@1
+channel.removecolormatting	key.unmult@1
+channel.setchannels	color.channelmixer@2
+channel.setmatte	key.trackmatte@1
+channel.shiftchannels	color.channelmixer@2
+channel.solidcomposite	a solid on the track below
+color.broadcast	color.videolimiter@2
+color.colorneutralizer	color.lumetri@2
+color.coloroffset	color.asccdl@1
+color.kernel	blur.sharpen@2
+color.toner	color.tint@2
+color.changecolor	color.changetocolor@2
+color.colorbalancehls	color.huesaturation@1
+color.colorlink	color.lumetri@2
+color.colorstabilizer	color.autocolor@1
+color.colorama	color.lumetri@2
+color.equalize	color.autolevels@1
+color.exposure	color.basic@1
+color.gammapedestalgain	color.asccdl@1
+color.levelsic	color.levels@2
+color.ociocdl	color.asccdl@1
+color.ociocolorspace	color.lumetri@2
+color.ociodisplay	color.lumetri@2
+color.ociofile	color.lumetri@2
+color.ociolook	color.lumetri@2
+color.arbitrarymap	color.curves@1
+color.tritone	color.tint@2
+color.vibrance	color.lumetri@2
+distort.bezierwarp	distort.cornerpin@2
+distort.bendit	distort.wavewarp@2
+distort.bender	distort.wavewarp@2
+distort.blobbylize	distort.turbulentdisplace@2
+distort.flomotion	distort.twirl@2
+distort.griddler	stylize.replicate@1
+distort.pageturn	page-peel@1
+distort.powerpin	distort.cornerpin@2
+distort.ripplepulse	distort.wavewarp@2
+distort.slant	distort.transform@2
+distort.pullsmear	distort.turbulentdisplace@2
+distort.split	utility.clone@1
+distort.split2	utility.clone@1
+distort.tiler	stylize.replicate@1
+distort.displacementmap	distort.turbulentdisplace@2
+distort.polar	vr.projection@1
+distort.reshape	distort.cornerpin@2
+distort.ripple	distort.wavewarp@2
+distort.smear	distort.turbulentdisplace@2
+distort.twirllegacy	distort.twirl@2
+distort.warp	distort.bulge@1
+generate.advancedlightning	generate.lightning@1
+generate.beam	generate.lightning@1
+generate.gluegun	utility.stroke@1
+generate.lightburst	light.rays@1
+generate.lightrays	light.rays@1
+generate.lightsweep	light.leaks@1
+generate.threads	generate.grid@2
+generate.eyedropperfill	generate.paintbucket@2
+generate.fill	a solid (gen=solid@1)
+generate.fractal	vr.fractalnoise@2
+generate.radiowaves	generate.circle@2
+generate.scribble	generate.writeon@2
+generate.stroke	utility.stroke@1
+generate.vegas	light.edgeglow@1
+vr.converter	vr.projection@1
+vr.spheretoplane	vr.projection@1
+key.simplewireremoval	noise.dustscratches@1
+key.colordifference	key.ultra@1
+key.colorrange	key.color@1
+key.differencematte	key.trackmatte@1
+key.innerouter	key.ultra@1
+key.screenmatte	key.ultra@1
+key.linearcolor	key.color@1
+key.screen	key.ultra@1
+matte.mattechoker	matte.simplechoker@1
+matte.refinehard	matte.simplechoker@1
+matte.refinesoft	key.keycleaner@1
+noise.curlnoise	distort.turbulentdisplace@2
+noise.fractal	vr.fractalnoise@2
+noise.matchgrain	noise.addgrain@1
+noise.medianlegacy	noise.median@2
+noise.noisealpha	noise.noise@2
+noise.noisehls	noise.noise@2
+noise.noisehlsauto	noise.noise@2
+noise.turbulent	distort.turbulentdisplace@2
+perspective.3dglasses	light.rgbsplit@1
+perspective.beveledges	perspective.bevelalpha@2
+perspective.cylinder	distort.spherize@2
+perspective.environment	
+perspective.sphere	distort.spherize@2
+perspective.spotlight	light.lighting@1
+perspective.radialshadow	perspective.dropshadow@2
+sim.ballaction	
+sim.bubbles	
+sim.drizzle	
+sim.hair	
+sim.mrmercury	
+sim.particlesystems2	
+sim.particleworld	
+sim.pixelpolly	
+sim.rainfall	
+sim.scatterize	
+sim.snowfall	
+sim.starburst	
+sim.carddance	
+sim.caustics	
+sim.foam	
+sim.particleplayground	
+sim.shatter	
+sim.waveworld	
+stylize.blockload	stylize.mosaic@2
+stylize.burnfilm	burn-alpha@1
+stylize.glass	stylize.emboss@2
+stylize.hextile	stylize.mosaic@2
+stylize.kaleida	distort.mirror@2
+stylize.mrsmoothie	
+stylize.plastic	stylize.emboss@2
+stylize.repetile	stylize.replicate@1
+stylize.smooththreshold	stylize.posterize@2
+stylize.thresholdrgb	stylize.posterize@2
+stylize.cartoon	stylize.posterize@2
+stylize.glow	light.wonderglow@1
+stylize.scatter	stylize.roughenedges@2
+stylize.texturize	stylize.emboss@2
+stylize.threshold	stylize.posterize@2
+text.numbers	text.burnin@1
+time.forcemotionblur	distort.transform@2
+time.widetime	time.echo@2
+time.pixelmotionblur	distort.transform@2
+time.timedifference	
+time.timedisplacement	time.echo@2
+time.timewarp	the clip's speed
+transition.blockdissolve	mosaic@1
+transition.glasswipe	glass@1
+transition.gridwipe	panel-wipe@1
+transition.imagewipe	luma-fade@1
+transition.jaws	plateau-wipe@1
+transition.lightwipe	light-sweep@1
+transition.linesweep	wipe@1
+transition.radialscalewipe	iris-round@1
+transition.twister	wave@1
+transition.warpomatic	liquid-distortion@1
+transition.cardwipe	louver@1
+transition.gradientwipe	luma-fade@1
+transition.iriswipe	iris-round@1
+transition.linearwipe	wipe@1
+transition.radialwipe	clock-wipe@1
+transition.venetian	louver@1
+utility.applylut	color.lumetri@2
+utility.overbrights	
+utility.colorprofileconverter	color.lumetri@2
+utility.growbounds	
+utility.hdrcompander	
+utility.hdrcompression	color.lumetri@2

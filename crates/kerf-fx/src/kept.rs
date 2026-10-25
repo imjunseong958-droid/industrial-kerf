@@ -9,9 +9,9 @@
 //! them and decoded after.
 
 use crate::{spec, value_at};
-use effectcraft_effects::{Buf, EffectCtx, EffectEnv, EffectHost, Image, LayerPixels, Params};
-use effectcraft_keyframe::Value as FxValue;
-use effectcraft_project::ParamUi;
+use effectcraft_effects::{
+    Buf, EffectCtx, EffectEnv, EffectHost, Image, LayerPixels, ParamUi, Params, Value as FxValue,
+};
 use kerf_draw::color::{to_encoded, to_linear};
 use kerf_model::{Effect, Mask, MaskShape, Param, Time, Value};
 
@@ -167,7 +167,12 @@ fn encoded(picture: &kerf_draw::Image) -> Image {
             [0.0; 4]
         } else {
             let channel = |c: f32| to_encoded((c / alpha).max(0.0)) * alpha;
-            [channel(linear[0]), channel(linear[1]), channel(linear[2]), alpha]
+            [
+                channel(linear[0]),
+                channel(linear[1]),
+                channel(linear[2]),
+                alpha,
+            ]
         };
     }
     image
@@ -196,7 +201,12 @@ fn decode_into(buf: &Buf, picture: &mut kerf_draw::Image, per_source: f64) {
                 to_linear((c / alpha).max(0.0)) * alpha
             }
         };
-        out.copy_from_slice(&[channel(pixel[0]), channel(pixel[1]), channel(pixel[2]), alpha]);
+        out.copy_from_slice(&[
+            channel(pixel[0]),
+            channel(pixel[1]),
+            channel(pixel[2]),
+            alpha,
+        ]);
     }
 }
 
@@ -218,7 +228,9 @@ impl EffectHost for Adapter<'_> {
     }
 
     fn self_at(&self, layer_time: f64, effects: usize) -> Option<Buf> {
-        let picture = self.host.picture_at(Time::from_seconds(layer_time)?, effects)?;
+        let picture = self
+            .host
+            .picture_at(Time::from_seconds(layer_time)?, effects)?;
         Some(Buf {
             img: encoded(&picture),
             offset: [0.0; 2],
@@ -275,7 +287,11 @@ mod tests {
         let mut picture = kerf_draw::Image::filled(8, 8, [0.2, 0.05, 0.6, 1.0]);
         let before = picture.px.clone();
         apply(&mut picture, &effect("color.huesaturation", &[]), &run());
-        assert!(picture.px.iter().zip(&before).all(|(a, b)| (a - b).abs() < 1e-3));
+        assert!(picture
+            .px
+            .iter()
+            .zip(&before)
+            .all(|(a, b)| (a - b).abs() < 1e-3));
         // Desaturated fully, it is grey.
         let grey = effect(
             "color.huesaturation",
@@ -283,6 +299,9 @@ mod tests {
         );
         apply(&mut picture, &grey, &run());
         let p = &picture.px[..4];
-        assert!((p[0] - p[1]).abs() < 1e-3 && (p[1] - p[2]).abs() < 1e-3, "{p:?}");
+        assert!(
+            (p[0] - p[1]).abs() < 1e-3 && (p[1] - p[2]).abs() < 1e-3,
+            "{p:?}"
+        );
     }
 }

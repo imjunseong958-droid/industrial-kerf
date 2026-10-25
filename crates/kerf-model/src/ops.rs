@@ -1058,10 +1058,12 @@ impl Editor<'_> {
         domain: Domain,
         params: &Params,
     ) -> Outcome {
-        let def = self
-            .catalog
-            .fx(fx.as_str())
-            .ok_or_else(|| fail("fx.unknown", format!("unknown {} `{fx}`", kind.name())))?;
+        let def = self.catalog.fx(fx.as_str()).ok_or_else(|| {
+            fail(
+                "fx.unknown",
+                crate::catalog::unknown(kind.name(), fx.as_str()),
+            )
+        })?;
         def.reads(version)
             .map_err(|message| fail("fx.version", message))?;
         if def.kind != kind || def.domain != domain {

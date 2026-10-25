@@ -1,6 +1,6 @@
 [package]
 name = "effectcraft-effects"
-description = "Effect registry (specs, parameters, categories) and CPU implementations of the effects library"
+description = "The EffectCraft effects Kerf keeps: their specs, parameters, and CPU implementations"
 version = "0.16.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -10,15 +10,7 @@ rust-version = "1.95"
 workspace = true
 
 [dependencies]
-effectcraft-geom = { workspace = true }
 effectcraft-color = { workspace = true }
-effectcraft-keyframe = { workspace = true }
-effectcraft-project = { workspace = true }
 effectcraft-raster = { workspace = true }
-effectcraft-segment = { workspace = true }
-effectcraft-track = { workspace = true }
 rayon = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-log = { workspace = true }
 

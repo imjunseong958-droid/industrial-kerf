@@ -3,25 +3,22 @@
 //! [`transitions`] are the transitions carried from FilmCraft, which Kerf's
 //! own renderer draws from both clips across a cut, and [`filmcraft`] the
 //! video effects carried from FilmCraft, which it runs on a clip's picture.
-//! The rest of this crate is the raster effects Kerf carries from
-//! EffectCraft.
+//! The rest of this crate is the EffectCraft effects Kerf keeps ([`kept`]),
+//! which FilmCraft has nothing like.
 //!
 //! EffectCraft's effects run on premultiplied floating-point RGBA in layer
-//! space. Kerf carries those whose parameters it can write (numbers, angles,
-//! choices, switches, colors, and points, which become an `_x` and a `_y`
-//! number across the picture) under its own ids: the catalog lists them
-//! from a table this crate generates (`kerf-model/src/raster_effects.tsv`),
-//! and [`RasterStack`] runs a clip's raster effects on its source frames,
-//! after its masks cut them.
-//!
-//! EffectCraft's transitions are effects too: a layer disappears as its
-//! `completion` goes from 0 to 100. Kerf carries them as transitions and
-//! drives `completion` across the transition itself.
+//! space. Kerf writes their parameters as numbers, angles, choices,
+//! switches, colors, and points, which become an `_x` and a `_y` number
+//! across the picture: the catalog lists them from a table this crate
+//! generates (`kerf-model/src/raster_effects.tsv`). Kerf's renderer runs
+//! them through [`kept`]; [`RasterStack`] runs them on a clip's 8-bit
+//! source frames, after its masks cut them, as playback and the graph's
+//! bake do.
 
-use effectcraft_effects::{Buf, EffectCtx, EffectEnv, EffectSpec, Image, ParamSpec, Params};
-use effectcraft_keyframe::Value as FxValue;
-use effectcraft_project::ParamUi;
-use kerf_model::{Catalog, Effect, Engine, FxKind, Rgba, Time, Value};
+use effectcraft_effects::{
+    Buf, EffectCtx, EffectEnv, EffectSpec, Image, ParamSpec, ParamUi, Params, Value as FxValue,
+};
+use kerf_model::{Catalog, Effect, Engine, Rgba, Time, Value};
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::OnceLock;
@@ -29,45 +26,18 @@ use std::sync::OnceLock;
 pub mod filmcraft;
 mod guide;
 pub mod kept;
-mod masks;
 pub mod transitions;
 
-pub use masks::{cuts, outline};
+pub use kerf_draw::mask::cuts;
 
 /// The version of what the EffectCraft crates in `effectcraft/` draw, in
 /// the cache key of every baked and prerendered file. Bump it with a change
 /// there that changes a picture, so files made before it are made again.
 pub const EFFECTS_VERSION: u32 = 1;
 
-/// The category whose effects Kerf carries as transitions.
-const TRANSITIONS: &str = "Transition";
-
-/// The parameter a transition is driven by, from 0 (all there) to 100
-/// (gone). Kerf animates it across the transition; it is not listed.
-pub const COMPLETION: &str = "completion";
-
-/// Effects Kerf cannot feed yet.
-const NEEDS_MORE: &[&str] = &[
-    // Pins, meshes, or painted strokes, which the editor cannot draw yet.
-    "ec.distort.liquify",
-    "ec.distort.meshwarp",
-    "ec.distort.puppet",
-    "ec.matte.rotobrush",
-    // A segmentation model and the strokes that prompt it.
-    "ec.matte.objectmatte",
-];
-
-/// Carried effects outside the Time category that read the clip's other
-/// frames: they fix what changes between neighbouring frames, or match a
-/// reference frame. The Warp Stabilizer can fill its borders from
-/// neighbouring frames.
-const READS_OTHER_FRAMES: &[&str] = &[
-    "ec.blur.camerashakedeblur",
-    "ec.color.colorstabilizer",
-    "ec.distort.rollingshutterrepair",
-    "ec.distort.warpstabilizer",
-    "ec.matte.refinesoft",
-];
+/// Kept effects that read the clip's other frames: they fix what changes
+/// between neighbouring frames.
+const READS_OTHER_FRAMES: &[&str] = &["ec.distort.rollingshutterrepair"];
 
 /// Whether the raster effect `id` reads the clip's other frames, which only
 /// the compositor gives it; on one picture alone it passes that picture
@@ -81,32 +51,12 @@ pub fn reads_other_frames(id: &str) -> bool {
 const SOUND_LAYERS: &[&str] = &["audioLayer"];
 
 /// Effects named after other products: Kerf's id and name for each.
-const RENAMED: &[(&str, (&str, &str))] = &[
-    ("ec.keying.keylight", ("key.screenmatte", "Screen Matte")),
-    (
-        "ec.stylize.ccthreshold",
-        ("stylize.smooththreshold", "Smooth Threshold"),
-    ),
-    ("ec.blur.ccradial", ("blur.radialzoom", "Radial Zoom Blur")),
-    ("ec.distort.ccsmear", ("distort.pullsmear", "Pull Smear")),
-    (
-        "ec.color.psarbitrarymap",
-        ("color.arbitrarymap", "Arbitrary Map"),
-    ),
-];
+const RENAMED: &[(&str, (&str, &str))] =
+    &[("ec.blur.ccradial", ("blur.radialzoom", "Radial Zoom Blur"))];
 
-/// Kerf's id, name, and kind for an EffectCraft effect, if Kerf carries
-/// it.
-fn carried(spec: &EffectSpec) -> Option<(String, String, FxKind)> {
-    let kind = if spec.category == TRANSITIONS {
-        FxKind::Transition
-    } else {
-        FxKind::Effect
-    };
-    if NEEDS_MORE.contains(&spec.id)
-        || !spec.params.iter().all(|p| writable(&p.ui))
-        || (kind == FxKind::Transition && !spec.params.iter().any(|p| p.id == COMPLETION))
-    {
+/// Kerf's id and name for an EffectCraft effect, if Kerf keeps it.
+fn carried(spec: &EffectSpec) -> Option<(String, String)> {
+    if !spec.params.iter().all(|p| writable(&p.ui)) {
         return None;
     }
     let (id, name) = match RENAMED.iter().find(|(id, _)| *id == spec.id) {
@@ -125,12 +75,7 @@ fn carried(spec: &EffectSpec) -> Option<(String, String, FxKind)> {
             }
         }
     };
-    // The graph's own definitions win, and FilmCraft's effects replace
-    // EffectCraft's under their ids.
-    let graph = Catalog::builtin()
-        .fx(&id)
-        .is_some_and(|fx| fx.engine == Engine::Graph);
-    (!graph && !filmcraft::catalog::takes_over(&id)).then_some((id, name, kind))
+    kept::kept(&id).then_some((id, name))
 }
 
 fn writable(ui: &ParamUi) -> bool {
@@ -211,29 +156,19 @@ fn color(rgba: [f64; 4]) -> Rgba {
 /// category, then name). See `kerf_model::catalog` for the format.
 pub fn catalog_table() -> String {
     let mut out = format!(
-        "# Raster effects Kerf carries from EffectCraft, generated by kerf-fx.\n\
+        "# The EffectCraft effects Kerf keeps, generated by kerf-fx.\n\
          # Regenerate with `UPDATE_CATALOG=1 cargo test -p kerf-fx`.\n"
     );
     for spec in effectcraft_effects::registry() {
-        let Some((id, name, kind)) = carried(spec) else {
+        let Some((id, name)) = carried(spec) else {
             continue;
         };
         let guidance = guide::GUIDE
             .iter()
             .find(|(guided, _)| *guided == id)
             .map_or("", |(_, guidance)| guidance);
-        writeln!(
-            out,
-            "{}\t{id}\t{}\t{name}\t{guidance}",
-            kind.name(),
-            spec.category
-        )
-        .unwrap();
-        let listed = spec
-            .params
-            .iter()
-            .filter(|p| p.ui != ParamUi::Hidden)
-            .filter(|p| kind != FxKind::Transition || p.id != COMPLETION);
+        writeln!(out, "effect\t{id}\t{}\t{name}\t{guidance}", spec.category).unwrap();
+        let listed = spec.params.iter().filter(|p| p.ui != ParamUi::Hidden);
         for param in listed {
             assert!(
                 !param.id.contains(['\t', ' ', '=', '"', '{', '}']),
@@ -323,25 +258,12 @@ pub fn catalog_table() -> String {
     out
 }
 
-/// How a clip's masks cut its frames: as the renderer that draws the
-/// program cuts them.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum MaskStyle {
-    /// As EffectCraft's renderer: a Gaussian feather, on encoded values.
-    #[default]
-    EffectCraft,
-    /// As Kerf's (`kerf_draw::mask`): a feather by distance, in linear
-    /// light, over black.
-    Kerf,
-}
-
 /// A clip's raster effects, ready to run on its source frames.
 pub struct RasterStack {
     steps: Vec<Step>,
-    /// The clip's masks, which cut each frame before the effects run.
-    cut: masks::Cut,
-    /// The masks Kerf's renderer cuts with, when it draws the program.
-    kerf_masks: Vec<kerf_model::Mask>,
+    /// The clip's masks, which cut each frame before the effects run, as
+    /// Kerf's renderer cuts them (`kerf_draw::mask`).
+    masks: Vec<kerf_model::Mask>,
     layer_size: [f64; 2],
 }
 
@@ -378,30 +300,24 @@ impl RasterStack {
         let layer_size = [f64::from(width), f64::from(height)];
         Ok(Self {
             steps,
-            cut: masks::Cut::new(&[], layer_size),
-            kerf_masks: Vec::new(),
+            masks: Vec::new(),
             layer_size,
         })
     }
 
-    /// Cut each frame with `masks` first, as a layer's masks cut it before
-    /// its effects run, in `style`. Masks that cut nothing are left out.
-    pub fn with_masks(mut self, masks: &[kerf_model::Mask], style: MaskStyle) -> Self {
-        match style {
-            MaskStyle::EffectCraft => self.cut = masks::Cut::new(masks, self.layer_size),
-            MaskStyle::Kerf => {
-                self.kerf_masks = masks
-                    .iter()
-                    .filter(|mask| kerf_draw::mask::cuts(mask))
-                    .cloned()
-                    .collect();
-            }
-        }
+    /// Cut each frame with `masks` first, as a clip's masks cut it before
+    /// its effects run. Masks that cut nothing are left out.
+    pub fn with_masks(mut self, masks: &[kerf_model::Mask]) -> Self {
+        self.masks = masks
+            .iter()
+            .filter(|mask| kerf_draw::mask::cuts(mask))
+            .cloned()
+            .collect();
         self
     }
 
     pub fn is_empty(&self) -> bool {
-        self.steps.is_empty() && self.cut.is_empty() && self.kerf_masks.is_empty()
+        self.steps.is_empty() && self.masks.is_empty()
     }
 
     /// Run the stack on one frame of straight 8-bit RGBA at clip time `at`.
@@ -409,23 +325,27 @@ impl RasterStack {
     /// measured in pixels keep their size relative to the picture.
     pub fn apply(&self, rgba: &mut [u8], width: u32, height: u32, at: Time, frame_rate: f64) {
         let scale = f64::from(width) / self.layer_size[0];
-        if !self.kerf_masks.is_empty() {
-            kerf_cut(
-                rgba,
-                width,
-                height,
-                &self.kerf_masks,
-                self.layer_size,
+        if self.steps.is_empty() {
+            kerf_cut(rgba, width, height, &self.masks, self.layer_size, scale, at);
+            return;
+        }
+        // The masks cut the picture to transparency, as Kerf's renderer cuts
+        // it, and the effects run on that; the frame is then over black.
+        let covered = if self.masks.is_empty() {
+            None
+        } else {
+            let flat = kerf_draw::mask::prepare(
+                &self.masks,
+                (self.layer_size[0], self.layer_size[1]),
                 scale,
                 at,
             );
-            if self.steps.is_empty() && self.cut.is_empty() {
-                return;
-            }
-        }
+            kerf_draw::mask::coverage(&flat, width as usize, height as usize)
+        };
         let mut image = Image::new(width, height);
-        for (pixel, bytes) in image.data.iter_mut().zip(rgba.chunks_exact(4)) {
-            let alpha = f32::from(bytes[3]) / 255.0;
+        for (index, (pixel, bytes)) in image.data.iter_mut().zip(rgba.chunks_exact(4)).enumerate() {
+            let cover = covered.as_ref().map_or(1.0, |covered| covered[index]);
+            let alpha = f32::from(bytes[3]) / 255.0 * cover;
             let channel = |value: u8| f32::from(value) / 255.0 * alpha;
             *pixel = [
                 channel(bytes[0]),
@@ -434,7 +354,6 @@ impl RasterStack {
                 alpha,
             ];
         }
-        self.cut.apply(&mut image, scale, at);
         let mut buf = Buf {
             img: image,
             offset: [0.0; 2],
@@ -459,6 +378,9 @@ impl RasterStack {
             buf = effectcraft_effects::apply(step.spec, &ctx, buf);
         }
         write_back(&buf, rgba, width, height, scale);
+        if covered.is_some() {
+            over_black(rgba);
+        }
     }
 }
 
@@ -565,6 +487,18 @@ fn convert(value: Value, param: &ParamSpec) -> Option<FxValue> {
 /// Copy the buffer back over the frame it came from. Effects may grow the
 /// buffer (a glow past the edges) or move its origin; the frame keeps its
 /// own rectangle.
+/// Straight 8-bit RGBA over black, opaque, mixed in linear light.
+fn over_black(rgba: &mut [u8]) {
+    let decode = kerf_draw::color::decode_table();
+    for pixel in rgba.chunks_exact_mut(4) {
+        let alpha = f32::from(pixel[3]) / 255.0;
+        for channel in &mut pixel[..3] {
+            *channel = kerf_draw::color::encode(decode[usize::from(*channel)] * alpha);
+        }
+        pixel[3] = 255;
+    }
+}
+
 fn write_back(buf: &Buf, rgba: &mut [u8], width: u32, height: u32, scale: f64) {
     let ratio = buf.scale / scale;
     let (source_width, source_height) = (i64::from(buf.img.width), i64::from(buf.img.height));
@@ -622,7 +556,7 @@ mod tests {
             .all()
             .filter(|fx| fx.engine == Engine::Raster)
             .collect();
-        assert!(raster.len() > 100, "{}", raster.len());
+        assert_eq!(raster.len(), kept::KEPT.len());
         for fx in raster {
             let spec = spec(fx.id.as_str()).unwrap_or_else(|| panic!("{}", fx.id));
             for param in &fx.params {
@@ -632,14 +566,10 @@ mod tests {
                 };
                 assert!(spec.params.iter().any(named), "{}: {}", fx.id, param.name);
             }
-            if fx.kind == FxKind::Transition {
-                assert!(fx.find(COMPLETION).is_none(), "{}", fx.id);
-            }
         }
-        assert!(spec("blur.cross").is_some());
-        assert!(spec("key.screenmatte").is_some());
-        assert!(spec("keying.keylight").is_none());
-        assert!(spec("transition.linearwipe").is_some());
+        assert!(spec("blur.radialzoom").is_some());
+        assert!(spec("blur.cross").is_none());
+        assert!(spec("transition.linearwipe").is_none());
     }
 
     #[test]
@@ -668,7 +598,7 @@ mod tests {
 
     #[test]
     fn points_are_written_across_the_picture() {
-        let spec = spec("transition.radialwipe").unwrap();
+        let spec = spec("distort.bulge").unwrap();
         let step = Step {
             spec,
             params: [("center_x".to_owned(), Param::Static(Value::Number(0.25)))]
@@ -703,28 +633,6 @@ mod tests {
     }
 
     #[test]
-    fn a_lut_file_grades_the_frame() {
-        // A 2×2×2 .cube that inverts: black becomes white and white black.
-        let mut cube = String::from("LUT_3D_SIZE 2\n");
-        for b in 0..2 {
-            for g in 0..2 {
-                for r in 0..2 {
-                    cube.push_str(&format!("{} {} {}\n", 1 - r, 1 - g, 1 - b));
-                }
-            }
-        }
-        let path = std::env::temp_dir().join(format!("kerf-fx-invert-{}.cube", std::process::id()));
-        std::fs::write(&path, cube).unwrap();
-        let lut = Param::Static(Value::Text(path.to_string_lossy().into_owned()));
-        let stack =
-            RasterStack::new(&[effect("utility.applylut", &[("lut", lut)])], 2, 1, 0).unwrap();
-        let mut frame = [0, 0, 0, 255, 255, 255, 255, 255];
-        stack.apply(&mut frame, 2, 1, Time::ZERO, 24.0);
-        let _ = std::fs::remove_file(&path);
-        assert_eq!(frame, [255, 255, 255, 255, 0, 0, 0, 255]);
-    }
-
-    #[test]
     fn curves_are_written_as_points() {
         let curve = Param::Static(Value::Text("0,0 0.5,0.75 1,1".into()));
         let stack =
@@ -736,21 +644,28 @@ mod tests {
     }
 
     #[test]
-    fn threshold_turns_a_frame_black_and_white() {
-        let stack = RasterStack::new(&[effect("stylize.threshold", &[])], 2, 1, 0).unwrap();
-        let mut frame = [10, 20, 30, 255, 240, 230, 220, 255];
-        stack.apply(&mut frame, 2, 1, Time::ZERO, 24.0);
-        assert_eq!(frame, [0, 0, 0, 255, 255, 255, 255, 255]);
+    fn hue_saturation_desaturates_a_frame() {
+        let grey = Param::Static(Value::Number(-100.0));
+        let stack = RasterStack::new(
+            &[effect("color.huesaturation", &[("saturation", grey)])],
+            1,
+            1,
+            0,
+        )
+        .unwrap();
+        let mut frame = [200, 100, 0, 255];
+        stack.apply(&mut frame, 1, 1, Time::ZERO, 24.0);
+        assert!(frame[0] == frame[1] && frame[1] == frame[2], "{frame:?}");
     }
 
     #[test]
     fn parameters_follow_their_keyframes() {
-        let spec = spec("stylize.threshold").unwrap();
-        let level = spec
+        let spec = spec("color.huesaturation").unwrap();
+        let saturation = spec
             .params
             .iter()
-            .find(|p| p.id == "level")
-            .expect("threshold has a level");
+            .find(|p| p.id == "saturation")
+            .expect("Hue/Saturation has a saturation");
         let keys = Param::Animated(vec![
             kerf_model::Keyframe {
                 at: Time::ZERO,
@@ -765,10 +680,10 @@ mod tests {
         ]);
         let step = Step {
             spec,
-            params: [(level.id.to_owned(), keys)].into_iter().collect(),
+            params: [(saturation.id.to_owned(), keys)].into_iter().collect(),
             seed: 0,
         };
         let half = step.values(Time::from_flicks(352_800_000), [2.0, 1.0]);
-        assert_eq!(half.f("level"), 50.0);
+        assert_eq!(half.f("saturation"), 50.0);
     }
 }

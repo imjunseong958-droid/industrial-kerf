@@ -734,17 +734,17 @@ mod tests {
         let mut clip = media_clip("1");
         clip.effects = vec![
             Effect {
-                fx: Id::new("utility.applylut").unwrap(),
-                version: 1,
+                fx: Id::new("color.lumetri").unwrap(),
+                version: 2,
                 enabled: true,
-                params: [("lut".to_owned(), text("looks/warm.cube"))].into(),
+                params: [("look_lut".to_owned(), text("looks/warm.cube"))].into(),
             },
-            // A look's name is text, not a file.
+            // Text is not a file.
             Effect {
-                fx: Id::new("color.ociolook").unwrap(),
+                fx: Id::new("text.simple").unwrap(),
                 version: 1,
                 enabled: true,
-                params: [("looks".to_owned(), text("warm"))].into(),
+                params: [("text".to_owned(), text("warm"))].into(),
             },
         ];
         let mut track = Track::new(Id::new("V1").unwrap(), TrackKind::Video);
@@ -778,8 +778,8 @@ mod tests {
         let joined = |path: &str| directory.join(path).to_string_lossy().into_owned();
         assert_eq!(project.media[0].path, joined("clips/a.mp4"));
         let effects = &project.sequences[0].tracks[0].clips[0].effects;
-        assert_eq!(effects[0].params["lut"], text(&joined("looks/warm.cube")));
-        assert_eq!(effects[1].params["looks"], text("warm"));
+        assert_eq!(effects[0].params["look_lut"], text(&joined("looks/warm.cube")));
+        assert_eq!(effects[1].params["text"], text("warm"));
     }
 
     #[test]

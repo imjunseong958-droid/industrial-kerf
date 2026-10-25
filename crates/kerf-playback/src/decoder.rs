@@ -31,7 +31,7 @@ impl Live {
         }
         let stack = RasterStack::new(&clip.effects, width, height, clip.seed)
             .map_err(PlaybackError::InvalidProject)?
-            .with_masks(&clip.masks, clip.mask_style);
+            .with_masks(&clip.masks);
         if stack.is_empty() {
             return Ok(None);
         }

@@ -294,7 +294,6 @@ private:
     QLineEdit *m_openaiModel = nullptr;
     QComboBox *m_openaiMode = nullptr;
     QCheckBox *m_mcpEnabled = nullptr;
-    QCheckBox *m_gpuEnabled = nullptr;
     QTextEdit *m_inboundMcpJson = nullptr;
     QLabel *m_inboundMcpStatus = nullptr;
     quint64 m_mcpConfigVersion = 0;

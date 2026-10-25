@@ -469,10 +469,11 @@ impl KerfMcpRouter {
                 return Err(McpError::new("INVALID_ARGUMENTS", "use effect alone"));
             }
             let fx = catalog().fx(id).ok_or_else(|| {
-                McpError::new(
-                    "INVALID_ARGUMENTS",
-                    format!("no effect `{id}` in the catalog"),
-                )
+                let message = match kerf_model::catalog::retired(id) {
+                    Some(_) => kerf_model::catalog::unknown("effect", id),
+                    None => format!("no effect `{id}` in the catalog"),
+                };
+                McpError::new("INVALID_ARGUMENTS", message)
             })?;
             return Ok(json!({
                 "effect": fx.id.as_str(),

@@ -790,15 +790,15 @@ fn raster_effects_are_looked_up_checked_and_previewed() {
     let Some((_directory, router)) = router() else {
         return;
     };
-    let threshold = ok(&router, "look", json!({"effect": "stylize.threshold"}));
-    assert_eq!(threshold["engine"], "raster");
-    assert_eq!(threshold["category"], "Stylize");
+    let hue = ok(&router, "look", json!({"effect": "color.huesaturation"}));
+    assert_eq!(hue["engine"], "raster");
+    assert_eq!(hue["category"], "Color Correction");
     assert!(
-        threshold["reference"]
+        hue["reference"]
             .as_str()
             .unwrap()
-            .contains("`level=128` (0..255"),
-        "{threshold}"
+            .contains("`saturation=0` (-100..100"),
+        "{hue}"
     );
     // FilmCraft's effects are Kerf's renderer's.
     let invert = ok(&router, "look", json!({"effect": "channel.invert"}));
@@ -818,8 +818,11 @@ fn raster_effects_are_looked_up_checked_and_previewed() {
     let found = ok(&router, "look", json!({"effects": "neon glow"}));
     let doc = found["effects"][0]["doc"].as_str().unwrap();
     assert!(doc.contains("Glow") && doc.contains("neon"), "{found}");
-    let wipes = ok(&router, "look", json!({"effects": "retro tv transition"}));
-    assert_eq!(wipes["effects"][0]["id"], "transition.venetian", "{wipes}");
+    let retro = ok(&router, "look", json!({"effects": "retro tv transition"}));
+    assert_eq!(retro["effects"][0]["id"], "tv-power", "{retro}");
+    // An effect EffectCraft had says what replaced it.
+    let gone = error(&router, "look", json!({"effect": "stylize.glow"}));
+    assert!(gone.to_string().contains("light.wonderglow@1"), "{gone}");
     // A video editor's transitions are found by the moment too.
     let whip = ok(&router, "look", json!({"effects": "whip pan travel"}));
     assert_eq!(whip["effects"][0]["id"], "whip", "{whip}");

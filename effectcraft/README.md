@@ -1,35 +1,36 @@
 # EffectCraft in Kerf
 
-The EffectCraft crates Kerf draws with: its raster effects and transitions,
-keyframes, project model, text, and CPU and GPU renderers. They were copied
-from [storytold/effectcraft](https://github.com/storytold/effectcraft) at
-`9581b53c3f8945683252af0eb5fac79e0e43aed4` (Release 0.16.0) and are developed
-here from then on; Kerf does not follow upstream. Kerf has no use for
-EffectCraft's audio, expression-control, paint, 3D-channel, and obsolete
-effects, its face tracking and 3D Camera Tracker (and the camera solver and
-face model behind them), nor for upgrading saved EffectCraft projects, so
-they are not here.
+The EffectCraft effects Kerf keeps beside FilmCraft's, which FilmCraft has
+nothing like: Remove Grain, Dust & Scratches, Rolling Shutter Repair, Optics
+Compensation, Detail-preserving Upscale, Bilateral Blur, Radial Zoom Blur,
+Shadow/Highlight, Curves, Hue/Saturation, Selective Color, Photo Filter, the
+Auto Levels, Contrast, and Color corrections, Key Cleaner, Advanced Spill
+Suppressor, Unmult, Simple Choker, Bulge, Motion Tile, Add Grain, and the
+Audio Waveform and Spectrum. `effects` holds them; `raster`, `color`, and
+`geom` the pictures, color math, and geometry they run on. Kerf's renderer
+runs them through `kerf_fx::kept`, and native playback and the graph's bake
+through `kerf_fx::RasterStack`.
 
-Kerf is moving off these crates: its built-in effects are becoming
-FilmCraft's video-editing set, and playful effects become looks
-([docs/looks.md](../docs/looks.md)). No more EffectCraft effects are being
-carried.
+They were copied from
+[storytold/effectcraft](https://github.com/storytold/effectcraft) at
+`9581b53c3f8945683252af0eb5fac79e0e43aed4` (Release 0.16.0) and are developed
+here from then on; Kerf does not follow upstream. The rest of EffectCraft
+(its other effects and transitions, project model, keyframes, text, tracking,
+and CPU and GPU renderers) was taken out when Kerf drew everything with its
+own renderer; an id it had is an error that names what to use instead
+(`kerf-model/src/retired.tsv`).
 
 They are workspace members, so `cargo check` and `cargo test` cover them. They
 keep EffectCraft's edition (2024), lints (in the root `Cargo.toml`),
-`rustfmt.toml`, and `clippy.toml`. The layout is upstream's (`crates/`,
-`assets/fonts`, `docs/effects.md`), so an upstream fix can still be taken by
-hand: in an EffectCraft checkout, `git diff <from> <to> -- crates/<crate>`,
-then `git apply --directory=effectcraft` here.
+`rustfmt.toml`, and `clippy.toml`.
 
 After a change here:
 
-- If it changes a picture, bump `kerf_fx::EFFECTS_VERSION`, so files baked or
-  prerendered before it are made again.
-- If it changes the effect registry, regenerate the catalog table with
-  `UPDATE_CATALOG=1 cargo test -p kerf-fx` and the effects list with
-  `UPDATE_DOCS=1 cargo test -p effectcraft-effects --lib effects_doc_is_current`.
+- If it changes a picture, bump `kerf_fx::EFFECTS_VERSION`, so files baked
+  before it are made again.
+- If it changes an effect's parameters, regenerate the catalog table with
+  `UPDATE_CATALOG=1 cargo test -p kerf-fx`.
 
-The code is MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`, `NOTICE`); the
-bundled fonts are SIL OFL 1.1 (`ATTRIBUTION.md`). The ArtCraft name and logos
-are trademarks outside that licence and are not carried.
+The code is MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`, `NOTICE`). The
+ArtCraft name and logos are trademarks outside that licence and are not
+carried.
