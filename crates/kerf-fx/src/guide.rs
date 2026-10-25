@@ -13,10 +13,6 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Lens-shaped defocus with bokeh, shaped by a depth map from another track (blurMap/blurMapLayer=V2); realistic focus falloff and rack focus.",
     ),
     (
-        "blur.compound",
-        "Blurs more where another track is brighter (blurLayer=V2); depth-of-field fakes and selective softness.",
-    ),
-    (
         "blur.bilateral",
         "Smooths flat areas while keeping edges; skin smoothing and beauty passes.",
     ),
@@ -37,14 +33,6 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Blurs along the picture's own contours; painterly, flowing softness.",
     ),
     (
-        "blur.channel",
-        "Blurs red, green, blue, or alpha separately; color fringing and glitchy softness.",
-    ),
-    (
-        "blur.directional",
-        "Motion blur in one direction; fake fast motion and whip pans.",
-    ),
-    (
         "blur.fastbox",
         "Fast adjustable box blur; soft backgrounds, defocus, privacy blur.",
     ),
@@ -53,16 +41,8 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Spin or zoom blur around a center; whip spins, zoom hits, dizziness.",
     ),
     (
-        "blur.sharpen",
-        "Sharpens edges; crisp up soft footage, kept subtle.",
-    ),
-    (
         "blur.smart",
         "Blurs flat areas but keeps edges; clean, illustrated looks.",
-    ),
-    (
-        "blur.unsharp",
-        "Sharpens by contrast at edges; restores detail after scaling.",
     ),
     // Channel
     (
@@ -96,10 +76,6 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
     (
         "channel.composite",
         "Blends the picture with itself by a mode; quick contrast and glow looks.",
-    ),
-    (
-        "channel.invert",
-        "Inverts colors or one channel; negative-film looks, flash frames, glitches.",
     ),
     (
         "channel.minimax",
@@ -139,10 +115,6 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Remaps every level through a table of 256 output levels (map=\"255,254 … 0\" inverts); posterized, solarized, and graphic tone maps.",
     ),
     (
-        "color.lumetri",
-        "A full grade in one effect: white balance and tone, a creative look or LUT, curves, color wheels, a secondary color pick, and a vignette; everyday color correction.",
-    ),
-    (
         "color.ociocolorspace",
         "Converts between two color spaces named in an OpenColorIO config; log footage to Rec.709, ACES workflows.",
     ),
@@ -171,14 +143,6 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Automatic levels per channel; quick normalization.",
     ),
     (
-        "color.blackwhite",
-        "Black and white with control per color; dramatic or retro looks.",
-    ),
-    (
-        "color.brightnesscontrast",
-        "Plain brightness and contrast; basic correction.",
-    ),
-    (
         "color.broadcast",
         "Keeps colors within broadcast-safe limits; TV delivery.",
     ),
@@ -203,18 +167,6 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Shifts the hue and saturation of one color; recolor an object.",
     ),
     (
-        "color.changetocolor",
-        "Replaces one color with another; recolor clothing or props.",
-    ),
-    (
-        "color.channelmixer",
-        "Mixes color channels into each other; creative grades, custom black and white.",
-    ),
-    (
-        "color.colorbalance",
-        "Shifts color in shadows, midtones, and highlights; warm or cool grading.",
-    ),
-    (
         "color.colorbalancehls",
         "Hue, lightness, and saturation over the whole picture; quick mood shifts.",
     ),
@@ -233,14 +185,6 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
     (
         "color.huesaturation",
         "Hue, saturation, lightness, or colorize; desaturate, recolor, boost color.",
-    ),
-    (
-        "color.leavecolor",
-        "Keeps one color and desaturates the rest; color-pop highlights.",
-    ),
-    (
-        "color.levels",
-        "Input and output levels with gamma; contrast and exposure fixes.",
     ),
     (
         "color.levelsic",
@@ -263,10 +207,6 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Lifts shadows and recovers highlights; backlit or contrasty shots.",
     ),
     (
-        "color.tint",
-        "Maps black and white to two colors; duotones and monochrome tints.",
-    ),
-    (
         "color.tritone",
         "Maps shadows, midtones, and highlights to three colors; stylized grades.",
     ),
@@ -274,15 +214,7 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "color.vibrance",
         "Boosts muted colors more than saturated ones; natural pop.",
     ),
-    (
-        "color.videolimiter",
-        "Limits luma and chroma to the legal range; delivery compliance.",
-    ),
     // Distort
-    (
-        "distort.warpstabilizer",
-        "Smooths or removes camera shake, from an analysis of the clip's frames that runs in the background once it is added; handheld and shaky footage.",
-    ),
     (
         "distort.rollingshutterrepair",
         "Straightens the skew and wobble a rolling shutter leaves, from the motion between frames; fast pans on phones and DSLRs.",
@@ -318,10 +250,6 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
     (
         "distort.griddler",
         "Breaks the picture into a grid of turned tiles; mosaic tile looks.",
-    ),
-    (
-        "distort.lens",
-        "A refracting lens bubble; magnifying-glass effects.",
     ),
     (
         "distort.pageturn",
@@ -364,24 +292,8 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Repeats the picture as tiles; tiled walls and video grids.",
     ),
     (
-        "distort.cornerpin",
-        "Moves the four corners; fit a picture into a screen or frame.",
-    ),
-    (
         "distort.upscale",
         "Enlarges while keeping detail; low-resolution footage.",
-    ),
-    (
-        "distort.magnify",
-        "A magnifying circle or square; zoom in on a detail.",
-    ),
-    (
-        "distort.mirror",
-        "Mirrors the picture across a line; symmetric, surreal reflections.",
-    ),
-    (
-        "distort.offset",
-        "Shifts the picture with wraparound; seamless scrolls and glitch slides.",
     ),
     (
         "distort.opticscompensation",
@@ -396,32 +308,12 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Concentric water ripples; dream sequences and water drops.",
     ),
     (
-        "distort.spherize",
-        "Wraps an area onto a sphere; bulging, fisheye accents.",
-    ),
-    (
-        "distort.transform",
-        "Position, scale, rotation, and skew with motion blur; precise moves.",
-    ),
-    (
-        "distort.turbulentdisplace",
-        "Organic noise displacement; heat haze, wobble, liquid.",
-    ),
-    (
-        "distort.twirl",
-        "Swirls the picture around a center; dizziness and vortex transitions.",
-    ),
-    (
         "distort.twirllegacy",
         "The older twirl; the same uses as Twirl.",
     ),
     (
         "distort.warp",
         "Arc, bulge, wave, fish, and other shape warps; text and logo warps.",
-    ),
-    (
-        "distort.wavewarp",
-        "Moving waves across the picture; flags, water, wobbling text.",
     ),
     // Generate
     (
@@ -453,10 +345,6 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Light runs along a mask's outline (path=k1) or another track's contours; neon chases and marquee lights.",
     ),
     (
-        "generate.fourcolor",
-        "A gradient from four colored corners; backgrounds and color washes.",
-    ),
-    (
         "generate.advancedlightning",
         "Lightning bolts; energy, magic, and electric hits.",
     ),
@@ -485,22 +373,6 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "A woven thread pattern; fabric textures.",
     ),
     (
-        "generate.cellpattern",
-        "Cellular patterns; organic textures and backgrounds.",
-    ),
-    (
-        "generate.checkerboard",
-        "A checkerboard; backgrounds and patterns.",
-    ),
-    (
-        "generate.circle",
-        "Draws a filled circle or ring; highlights and callouts.",
-    ),
-    (
-        "generate.ellipse",
-        "Draws an ellipse outline; callouts and rings.",
-    ),
-    (
         "generate.eyedropperfill",
         "Fills with a color sampled from the picture; matching flat fills.",
     ),
@@ -508,67 +380,10 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "generate.fractal",
         "Fractal patterns; psychedelic backgrounds.",
     ),
-    (
-        "generate.gradientramp",
-        "A linear or radial gradient; skies, backgrounds, shading.",
-    ),
-    ("generate.grid", "Draws a grid; tech overlays and guides."),
-    (
-        "generate.lensflare",
-        "A lens flare; bright light hits and cinematic sun flares.",
-    ),
-    (
-        "generate.paintbucket",
-        "Fills a region from a point; recolor flat areas.",
-    ),
-    (
-        "generate.writeon",
-        "Draws a stroke like handwriting as its point moves; underlines and doodles.",
-    ),
     // Immersive Video
-    (
-        "vr.blur",
-        "Blurs a 360° frame evenly on the sphere, seams and poles included; soft 360 backgrounds.",
-    ),
-    (
-        "vr.chromaticaberrations",
-        "Splits color channels around a point on a 360° frame; lens-like fringing in VR.",
-    ),
-    (
-        "vr.colorgradients",
-        "Lays soft color gradients over a 360° frame; tinting a whole VR sky or room.",
-    ),
     (
         "vr.converter",
         "Converts between 360° equirectangular, cube maps, fisheye, and a flat view; reframing VR footage.",
-    ),
-    (
-        "vr.denoise",
-        "Reduces noise on a 360° frame without seams; cleaning VR footage.",
-    ),
-    (
-        "vr.digitalglitch",
-        "Glitch blocks and color shifts that wrap around a 360° frame; broken-signal looks in VR.",
-    ),
-    (
-        "vr.fractalnoise",
-        "Seamless animated noise on a 360° frame; fog, clouds, and textures that wrap in VR.",
-    ),
-    (
-        "vr.glow",
-        "Makes highlights glow evenly across a 360° frame; dreamy VR light.",
-    ),
-    (
-        "vr.planetosphere",
-        "Places a flat picture onto a 360° frame; titles and graphics inside VR.",
-    ),
-    (
-        "vr.rotatesphere",
-        "Turns a 360° frame around its axes; leveling the horizon or choosing the front view.",
-    ),
-    (
-        "vr.sharpen",
-        "Sharpens a 360° frame evenly without seams; crisper VR footage.",
     ),
     (
         "vr.spheretoplane",
@@ -592,10 +407,6 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Keys blue or green screens by color difference; glass, smoke, fine detail.",
     ),
     ("key.colorrange", "Keys a range of colors; uneven screens."),
-    (
-        "key.extract",
-        "Keys by brightness; removes black or white backgrounds.",
-    ),
     (
         "key.innerouter",
         "Separates fine edges between inner and outer bounds; hair and fur.",
@@ -659,14 +470,9 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Fractal noise; clouds, smoke, and textures.",
     ),
     (
-        "noise.median",
-        "A median filter; removes noise, painterly smoothing.",
-    ),
-    (
         "noise.medianlegacy",
         "The older median filter; the same uses as Median.",
     ),
-    ("noise.noise", "Random pixel noise; static and grit."),
     (
         "noise.noisealpha",
         "Noise in the alpha channel; dissolving textures.",
@@ -697,10 +503,6 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Reflects another track as an environment around the picture (environment=V2); shiny, chrome, and reflective surfaces.",
     ),
     (
-        "perspective.bevelalpha",
-        "A beveled edge on the picture's alpha; 3D-looking text and logos.",
-    ),
-    (
         "perspective.beveledges",
         "Beveled rectangular edges; button and tile looks.",
     ),
@@ -715,10 +517,6 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
     (
         "perspective.spotlight",
         "A pool of spotlight; draws attention, stage lighting.",
-    ),
-    (
-        "perspective.dropshadow",
-        "A drop shadow; separates text and cutouts from the background.",
     ),
     (
         "perspective.radialshadow",
@@ -809,10 +607,6 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Embosses another track's texture into the picture (textureLayer=V2); canvas, paper, and surface textures.",
     ),
     (
-        "stylize.brushstrokes",
-        "Painterly brush strokes; painting looks.",
-    ),
-    (
         "stylize.blockload",
         "Loads the picture in blocks; retro loading reveals.",
     ),
@@ -841,47 +635,18 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "A threshold per color channel; pop-art color posters.",
     ),
     (
-        "stylize.vignette",
-        "Darkens the edges; draws the eye to the center, cinematic mood.",
-    ),
-    (
         "stylize.cartoon",
         "Cartoon shading and outlines; comic looks.",
-    ),
-    (
-        "stylize.coloremboss",
-        "An emboss that keeps color; relief textures.",
-    ),
-    ("stylize.emboss", "A gray emboss; stamped relief looks."),
-    (
-        "stylize.findedges",
-        "Outlines edges; sketch and line-art looks.",
     ),
     (
         "stylize.glow",
         "Makes bright areas glow; neon, dreamy highlights, glowing text.",
     ),
     (
-        "stylize.mosaic",
-        "Pixelates into blocks; censoring and retro 8-bit.",
-    ),
-    (
         "stylize.motiontile",
         "Tiles the picture with mirroring and offset; seamless pans, kaleidoscopes.",
     ),
-    (
-        "stylize.posterize",
-        "Reduces the color levels; poster and pop-art looks.",
-    ),
-    (
-        "stylize.roughenedges",
-        "Roughens the picture's edges; torn paper, grunge text.",
-    ),
     ("stylize.scatter", "Scatters pixels; grainy breakups."),
-    (
-        "stylize.strobe",
-        "Flashes the picture on a rhythm; beat hits and strobe lights.",
-    ),
     (
         "stylize.threshold",
         "A black-and-white threshold; graphic, photocopied looks.",
@@ -890,10 +655,6 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
     (
         "text.numbers",
         "Draws numbers, dates, or timecode on the picture; counters and data readouts.",
-    ),
-    (
-        "text.timecode",
-        "Burns the timecode or frame count into the picture; review copies and slates.",
     ),
     // Time
     (
@@ -909,20 +670,12 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "Retimes the clip with frame blending or motion-estimated frames, optionally guided by other tracks (warpLayer=V2); smooth slow motion and speed ramps.",
     ),
     (
-        "time.echo",
-        "Blends earlier or later frames over the current one; trails, ghosting, and motion echoes.",
-    ),
-    (
         "time.forcemotionblur",
         "Adds motion blur from the clip's own movement between frames; smoother fast action.",
     ),
     (
         "time.pixelmotionblur",
         "Motion blur from tracked pixel motion; natural blur on footage shot too sharp.",
-    ),
-    (
-        "time.posterizetime",
-        "Holds frames to play at a lower frame rate; choppy, stop-motion, or stylized movement.",
     ),
     (
         "time.widetime",
@@ -1001,10 +754,6 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
     (
         "utility.overbrights",
         "Shows or clips overbright pixels; HDR checks.",
-    ),
-    (
-        "utility.cineon",
-        "Converts log Cineon footage; log to video.",
     ),
     (
         "utility.colorprofileconverter",

@@ -1,8 +1,10 @@
 //! Kerf's effects and transitions.
 //!
 //! [`transitions`] are the transitions carried from FilmCraft, which Kerf's
-//! own renderer draws from both clips across a cut. The rest of this crate is
-//! the raster effects Kerf carries from EffectCraft.
+//! own renderer draws from both clips across a cut, and [`filmcraft`] the
+//! video effects carried from FilmCraft, which it runs on a clip's picture.
+//! The rest of this crate is the raster effects Kerf carries from
+//! EffectCraft.
 //!
 //! EffectCraft's effects run on premultiplied floating-point RGBA in layer
 //! space. Kerf carries those whose parameters it can write (numbers, angles,
@@ -24,7 +26,9 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::OnceLock;
 
+pub mod filmcraft;
 mod guide;
+pub mod kept;
 mod masks;
 pub mod transitions;
 
@@ -121,11 +125,12 @@ fn carried(spec: &EffectSpec) -> Option<(String, String, FxKind)> {
             }
         }
     };
-    // The graph's own definitions win.
+    // The graph's own definitions win, and FilmCraft's effects replace
+    // EffectCraft's under their ids.
     let graph = Catalog::builtin()
         .fx(&id)
         .is_some_and(|fx| fx.engine == Engine::Graph);
-    (!graph).then_some((id, name, kind))
+    (!graph && !filmcraft::catalog::takes_over(&id)).then_some((id, name, kind))
 }
 
 fn writable(ui: &ParamUi) -> bool {
@@ -731,21 +736,21 @@ mod tests {
     }
 
     #[test]
-    fn invert_turns_a_frame_into_its_negative() {
-        let stack = RasterStack::new(&[effect("channel.invert", &[])], 2, 1, 0).unwrap();
-        let mut frame = [10, 20, 30, 255, 200, 100, 0, 255];
+    fn threshold_turns_a_frame_black_and_white() {
+        let stack = RasterStack::new(&[effect("stylize.threshold", &[])], 2, 1, 0).unwrap();
+        let mut frame = [10, 20, 30, 255, 240, 230, 220, 255];
         stack.apply(&mut frame, 2, 1, Time::ZERO, 24.0);
-        assert_eq!(frame, [245, 235, 225, 255, 55, 155, 255, 255]);
+        assert_eq!(frame, [0, 0, 0, 255, 255, 255, 255, 255]);
     }
 
     #[test]
     fn parameters_follow_their_keyframes() {
-        let spec = spec("channel.invert").unwrap();
-        let blend = spec
+        let spec = spec("stylize.threshold").unwrap();
+        let level = spec
             .params
             .iter()
-            .find(|p| p.id == "blend")
-            .expect("invert blends");
+            .find(|p| p.id == "level")
+            .expect("threshold has a level");
         let keys = Param::Animated(vec![
             kerf_model::Keyframe {
                 at: Time::ZERO,
@@ -760,10 +765,10 @@ mod tests {
         ]);
         let step = Step {
             spec,
-            params: [(blend.id.to_owned(), keys)].into_iter().collect(),
+            params: [(level.id.to_owned(), keys)].into_iter().collect(),
             seed: 0,
         };
         let half = step.values(Time::from_flicks(352_800_000), [2.0, 1.0]);
-        assert_eq!(half.f("blend"), 50.0);
+        assert_eq!(half.f("level"), 50.0);
     }
 }

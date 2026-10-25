@@ -46,7 +46,7 @@ look look.shake version=1 name="Shake" category="Fun" on=clip
   param settle time default=10f range=1f..2s
   set x={$hit:0 $hit+2f:0.02*$intensity $hit+4f:-0.015*$intensity $hit+$settle:0:ease}
   set rotation={$hit:0 $hit+2f:1.5*$intensity $hit+$settle:0:ease}
-  fx blur.directional@1 length={$hit:0 $hit+2f:30*$intensity $hit+6f:0}
+  fx blur.directional@2 length={$hit:0 $hit+2f:30*$intensity $hit+6f:0}
 ```
 
 A clip uses it like any effect, `fx look.shake@1 intensity=0.7 hit=12f`, and

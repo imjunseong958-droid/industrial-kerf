@@ -161,10 +161,11 @@ fn adjustment_layers_take_raster_effects() {
          \x20     set color=#ff0000\n\
          \x20 track V2 video\n\
          \x20   clip a1 gen=adjustment@1 at=0f dur=12f\n\
-         \x20     fx channel.invert\n"
+         \x20     fx stylize.threshold\n"
     );
-    // Red inverted is cyan while the adjustment layer lasts.
-    assert_eq!(pixel(&frame(&body, 4, false), 50, 50), [0, 255, 255]);
+    // Red is darker than the threshold, so black while the adjustment
+    // layer lasts.
+    assert_eq!(pixel(&frame(&body, 4, false), 50, 50), [0, 0, 0]);
     assert_eq!(pixel(&frame(&body, 16, false), 50, 50), [255, 0, 0]);
 }
 
@@ -181,12 +182,12 @@ fn time_effects_read_the_clips_other_frames() {
              {fx}"
         )
     };
-    // Halfway through it is mid grey; held at one frame a second, it is
-    // still the black it starts as.
-    let plain = pixel(&frame(&fading(""), 12, false), 50, 50)[0];
-    assert!(plain.abs_diff(133) <= 8, "{plain}");
-    let held = fading("\x20     fx time.posterizetime frameRate=1\n");
-    assert!(pixel(&frame(&held, 12, false), 50, 50)[0] <= 8);
+    // Halfway through it is grey; held at one frame a second, it is still
+    // the black it starts as.
+    let at = |body: &str| pixel(&frame_by(Renderer::Kerf, body, 12, false), 50, 50)[0];
+    let plain = at(&fading(""));
+    assert!((100..=200).contains(&plain), "{plain}");
+    assert!(at(&fading("\x20     fx time.posterizetime rate=1\n")) <= 8);
 }
 
 #[test]
@@ -303,14 +304,14 @@ fn reshape_moves_what_one_mask_holds_into_another() {
 
 #[test]
 fn color_stabilizer_holds_the_reference_frame() {
-    // A dark grey solid inverted more and more, so it brightens over time.
+    // A dark grey solid exposed more and more, so it brightens over time.
     let brightening = |fx: &str| {
         format!(
             "{SEQUENCE}\
              \x20 track V1 video\n\
              \x20   clip g1 gen=solid@1 at=0f dur=24f\n\
              \x20     set color=#404040\n\
-             \x20     fx channel.invert blend={{0f:100 23f:0}}\n\
+             \x20     fx color.exposure master/exposure={{0f:0 23f:2}}\n\
              {fx}"
         )
     };
@@ -330,7 +331,7 @@ fn unsupported_things_are_named() {
         "{SEQUENCE}\
          \x20 track V1 video\n\
          \x20   clip a1 gen=adjustment@1 at=0f dur=24f\n\
-         \x20     fx channel.invert\n\
+         \x20     fx color.basic exposure=1\n\
          \x20   clip g1 gen=solid@1 at=24f dur=24f\n\
          \x20   transition x1 from=a1 to=g1 fx=dissolve@1 dur=6f\n"
     );
@@ -536,4 +537,77 @@ fn filmcraft_transitions_mix_both_clips_across_the_cut() {
         Err(other) => panic!("{other}"),
         Ok(_) => panic!("EffectCraft draws a FilmCraft transition"),
     }
+}
+
+#[test]
+fn filmcraft_effects_run_on_kerfs_renderer() {
+    let solid = |lines: &str| {
+        format!(
+            "{SEQUENCE}\
+             \x20 track V1 video\n\
+             \x20   clip g1 gen=solid@1 at=0f dur=24f\n\
+             \x20     set color=#ff0000\n\
+             {lines}"
+        )
+    };
+    let at = |body: &str, x: u32, y: u32| pixel(&frame_by(Renderer::Kerf, body, 4, false), x, y);
+    // Red inverted is cyan; the renderer chosen by default draws it, and
+    // EffectCraft's cannot.
+    let inverted = solid("\x20     fx channel.invert\n");
+    assert_eq!(at(&inverted, 160, 90), [0, 255, 255]);
+    assert!(compositor_by(Renderer::Auto, &inverted, false)
+        .is_ok_and(|c| c.renderer() == Renderer::Kerf));
+    match compositor_by(Renderer::EffectCraft, &inverted, false) {
+        Err(error @ ComposeError::Unsupported { .. }) => assert_eq!(error.entity(), Some("g1")),
+        Err(other) => panic!("{other}"),
+        Ok(_) => panic!("EffectCraft draws a FilmCraft effect"),
+    }
+    // A point is a place across the picture.
+    let circled = solid("\x20     fx generate.circle center_x=0.25 radius=20 color=#00ff00\n");
+    assert_eq!(at(&circled, 80, 90), [0, 255, 0]);
+    assert_eq!(at(&circled, 240, 90), [255, 0, 0]);
+    // A track matte reads another track, hidden or not: the red shows only
+    // where the small white solid is.
+    let matted = solid(
+        "\x20     fx key.trackmatte matte=V2\n\
+         \x20 track V2 video enabled=false\n\
+         \x20   clip m1 gen=solid@1 at=0f dur=24f\n\
+         \x20     set color=#ffffff scale=0.5\n",
+    );
+    assert_eq!(at(&matted, 160, 90), [255, 0, 0]);
+    assert_eq!(at(&matted, 10, 10), [0, 0, 0]);
+    // On an adjustment layer, the effect changes what is beneath it.
+    let adjusted = solid(
+        "\x20 track V2 video\n\
+         \x20   clip a1 gen=adjustment@1 at=0f dur=24f\n\
+         \x20     fx channel.invert\n",
+    );
+    assert_eq!(at(&adjusted, 160, 90), [0, 255, 255]);
+}
+
+#[test]
+fn kept_effectcraft_effects_run_on_kerfs_renderer_beside_filmcrafts() {
+    let body = |lines: &str| {
+        format!(
+            "{SEQUENCE}\
+             \x20 track V1 video\n\
+             \x20   clip g1 gen=solid@1 at=0f dur=24f\n\
+             \x20     set color=#ff0000\n\
+             {lines}"
+        )
+    };
+    let at = |body: &str| pixel(&frame_by(Renderer::Kerf, body, 4, false), 160, 90);
+    // Hue/Saturation, kept from EffectCraft, desaturates red to grey.
+    let grey = body("\x20     fx color.huesaturation saturation=-100\n");
+    let [r, g, b] = at(&grey);
+    assert!(r.abs_diff(g) <= 1 && g.abs_diff(b) <= 1 && r > 20, "{r} {g} {b}");
+    // With FilmCraft's Invert after it, on the renderer chosen by default.
+    let both = body(
+        "\x20     fx color.huesaturation saturation=-100\n\
+         \x20     fx channel.invert\n",
+    );
+    let inverted = at(&both);
+    assert!(inverted.iter().all(|c| c.abs_diff(255 - r) <= 2), "{inverted:?} after {r}");
+    assert!(compositor_by(Renderer::Auto, &both, false)
+        .is_ok_and(|c| c.renderer() == Renderer::Kerf));
 }

@@ -136,7 +136,7 @@ fn audio_waveform_draws_the_sound_track_it_names() {
     let tone = sound("tone.wav", "sine=frequency=220:sample_rate=48000");
     let quiet = sound("quiet.wav", "anullsrc=r=48000:cl=stereo");
     // The rows a white line crosses on black.
-    let rows = |path: &str| {
+    let rows = |path: &str, renderer: Renderer| {
         let text = format!(
             "kerf 1\nproject name=\"t\"\n\
              media a path=\"{path}\" rate=24 dur=24f audio=2ch@48000\n\
@@ -155,7 +155,7 @@ fn audio_waveform_draws_the_sound_track_it_names() {
             sequence: None,
             captions: false,
             device: Device::Cpu,
-            renderer: Renderer::EffectCraft,
+            renderer,
         };
         let frame = Compositor::new(&project, Catalog::builtin(), &options)
             .unwrap()
@@ -167,7 +167,9 @@ fn audio_waveform_draws_the_sound_track_it_names() {
             .count()
     };
     // Silence is a flat line; the tone swings well above and below it.
-    let (flat, swinging) = (rows(&quiet), rows(&tone));
-    assert!(flat > 0 && flat < 12, "{flat}");
-    assert!(swinging > flat * 3, "{swinging} vs {flat}");
+    for renderer in [Renderer::EffectCraft, Renderer::Kerf] {
+        let (flat, swinging) = (rows(&quiet, renderer), rows(&tone, renderer));
+        assert!(flat > 0 && flat < 12, "{renderer:?}: {flat}");
+        assert!(swinging > flat * 3, "{renderer:?}: {swinging} vs {flat}");
+    }
 }

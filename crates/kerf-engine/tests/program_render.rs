@@ -295,9 +295,9 @@ fn raster_effects_follow_their_keyframes_and_the_graph_bakes_them_once() {
         "sequence s1 rate=24 size=160x90 audio=48000\n\
          \x20 track V1 video\n\
          \x20   clip c1 media=red src=0f at=0f dur=48f\n\
-         \x20     fx channel.invert blend={0f:0 47f:100}\n",
+         \x20     fx stylize.threshold level={0f:0 47f:255}\n",
     );
-    let output = dir.path().join("inverted.mp4");
+    let output = dir.path().join("thresholded.mp4");
     let composited = RenderOptions {
         output: output.to_string_lossy().into_owned(),
         force_software: true,
@@ -310,14 +310,15 @@ fn raster_effects_follow_their_keyframes_and_the_graph_bakes_them_once() {
     };
     for options in [&composited, &options] {
         render_program::<fn(f64)>(&project, None, None, options, None).expect("renders");
-        // Red inverted is cyan; blending back to the original ends on red.
+        // Red is above a threshold of 0, so white, and below one of 255,
+        // so black.
         assert!(
-            is(pixel(&output, 0), [0, 255, 255]),
+            is(pixel(&output, 0), [255, 255, 255]),
             "{:?}",
             pixel(&output, 0)
         );
         assert!(
-            is(pixel(&output, 47), [255, 0, 0]),
+            is(pixel(&output, 47), [0, 0, 0]),
             "{:?}",
             pixel(&output, 47)
         );
@@ -430,7 +431,7 @@ fn raster_transitions_wipe_from_one_clip_to_the_next() {
 }
 
 #[test]
-fn titles_solids_and_nested_sequences_take_raster_effects() {
+fn titles_solids_and_nested_sequences_take_effects() {
     let dir = tempfile::tempdir().unwrap();
     let title = if has_drawtext() {
         "\x20 track V2 video\n\

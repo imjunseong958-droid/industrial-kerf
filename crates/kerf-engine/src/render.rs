@@ -20,9 +20,8 @@ use kerf_compose::{ComposeOptions, Compositor, Device, Frame, Renderer};
 use kerf_model::{Rate, Time};
 
 use crate::encoder::{
-    encode_output_args, keep_encoders_that_open, parse_encoder_capabilities,
-    select_video_encoder, EncoderSelection, HardwareEncoderFamily, SelectEncoderOptions,
-    VideoCodec,
+    encode_output_args, keep_encoders_that_open, parse_encoder_capabilities, select_video_encoder,
+    EncoderSelection, HardwareEncoderFamily, SelectEncoderOptions, VideoCodec,
 };
 use crate::error::{EngineError, Result};
 use crate::ffmpeg::{
@@ -260,10 +259,7 @@ where
     let project = match &opts.project_dir {
         Some(directory) => {
             let cache = crate::derivatives::DerivativeCache::new(directory);
-            crate::stabilize::analyze_stabilizations(project, &cache, cancellation)?;
-            let mut stabilized = project.clone();
-            crate::stabilize::attach_stabilizations(&mut stabilized, &cache);
-            baked = crate::raster::bake(&stabilized, sequence, &cache, cancellation)?;
+            baked = crate::raster::bake(project, sequence, &cache, cancellation)?;
             &baked
         }
         None => project,
@@ -409,20 +405,6 @@ where
     if cancellation.is_cancelled() {
         return Err(EngineError::Cancelled);
     }
-    // Warp Stabilizers draw from analyses, made first where the cache has
-    // none.
-    let stabilized;
-    let project = match &opts.project_dir {
-        Some(directory) => {
-            let cache = crate::derivatives::DerivativeCache::new(directory);
-            crate::stabilize::analyze_stabilizations(project, &cache, cancellation)?;
-            let mut attached = project.clone();
-            crate::stabilize::attach_stabilizations(&mut attached, &cache);
-            stabilized = attached;
-            &stabilized
-        }
-        None => project,
-    };
     let compositor = Compositor::new(
         project,
         kerf_model::Catalog::builtin(),

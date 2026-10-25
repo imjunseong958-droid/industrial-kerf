@@ -277,25 +277,48 @@ impl Image {
             });
     }
 
+    /// A premultiplied pixel's straight color.
+    #[inline]
+    pub fn unpremul(pixel: [f32; 4]) -> [f32; 3] {
+        if pixel[3] <= 1e-6 {
+            [0.0; 3]
+        } else {
+            [
+                pixel[0] / pixel[3],
+                pixel[1] / pixel[3],
+                pixel[2] / pixel[3],
+            ]
+        }
+    }
+
     /// Change each pixel's straight color, in linear light, leaving its
-    /// alpha.
-    pub fn map_rgb(&mut self, f: impl Fn([f32; 3]) -> [f32; 3] + Sync) {
-        self.px.par_chunks_mut(4).for_each(|pixel| {
-            let alpha = pixel[3];
-            if alpha <= 1e-6 {
-                return;
-            }
-            let [r, g, b] = f([pixel[0] / alpha, pixel[1] / alpha, pixel[2] / alpha]);
-            pixel[0] = r * alpha;
-            pixel[1] = g * alpha;
-            pixel[2] = b * alpha;
-        });
+    /// alpha; `f` also gets the pixel's column and row.
+    pub fn map_rgb(&mut self, f: impl Fn([f32; 3], usize, usize) -> [f32; 3] + Sync) {
+        let w = self.w;
+        if w == 0 {
+            return;
+        }
+        self.px
+            .par_chunks_mut(w * 4)
+            .enumerate()
+            .for_each(|(y, row)| {
+                for (x, pixel) in row.chunks_exact_mut(4).enumerate() {
+                    let alpha = pixel[3];
+                    if alpha <= 1e-6 {
+                        continue;
+                    }
+                    let [r, g, b] = f([pixel[0] / alpha, pixel[1] / alpha, pixel[2] / alpha], x, y);
+                    pixel[0] = r * alpha;
+                    pixel[1] = g * alpha;
+                    pixel[2] = b * alpha;
+                }
+            });
     }
 
     /// Change each pixel's straight sRGB-encoded color (0..1), for
     /// corrections written for encoded values.
     pub fn map_encoded(&mut self, f: impl Fn([f32; 3]) -> [f32; 3] + Sync) {
-        self.map_rgb(|rgb| f(rgb.map(color::to_encoded)).map(color::to_linear));
+        self.map_rgb(|rgb, _, _| f(rgb.map(color::to_encoded)).map(color::to_linear));
     }
 
     /// Whether every pixel is opaque.

@@ -50,21 +50,6 @@ effect	blur.camerashakedeblur	Blur & Sharpen	Camera-Shake Deblur	Swaps frames bl
 	number	patchSize	32	8..256		Patch Size
 	number	threshold	20	0..500		Threshold
 	bool	showBlurryFrames	false			Show Blurry Frames
-effect	blur.channel	Blur & Sharpen	Channel Blur	Blurs red, green, blue, or alpha separately; color fringing and glitchy softness.
-	number	redBlurriness	0	0..3000		Red Blurriness
-	number	greenBlurriness	0	0..3000		Green Blurriness
-	number	blueBlurriness	0	0..3000		Blue Blurriness
-	number	alphaBlurriness	0	0..3000		Alpha Blurriness
-	bool	repeatEdge	false			Repeat Edge Pixels
-	enum	dimensions	horizontal-and-vertical	horizontal-and-vertical|horizontal|vertical		Blur Dimensions
-effect	blur.compound	Blur & Sharpen	Compound Blur	Blurs more where another track is brighter (blurLayer=V2); depth-of-field fakes and selective softness.
-	track	blurLayer				Blur Layer
-	number	maximumBlur	20	0..1000		Maximum Blur
-	bool	stretchMapToFit	true			Stretch Map to Fit
-	bool	invertBlur	false			Invert Blur
-effect	blur.directional	Blur & Sharpen	Directional Blur	Motion blur in one direction; fake fast motion and whip pans.
-	number	direction	0		degrees	Direction
-	number	length	0	0..1000		Blur Length
 effect	blur.fastbox	Blur & Sharpen	Fast Box Blur	Fast adjustable box blur; soft backgrounds, defocus, privacy blur.
 	number	radius	0	0..3000		Blur Radius
 	number	iterations	3	1..50		Iterations
@@ -76,16 +61,10 @@ effect	blur.radial	Blur & Sharpen	Radial Blur	Spin or zoom blur around a center;
 	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
 	enum	type	spin	spin|zoom		Type
 	enum	antialiasing	low	low|high		Antialiasing (Best Quality)
-effect	blur.sharpen	Blur & Sharpen	Sharpen	Sharpens edges; crisp up soft footage, kept subtle.
-	number	amount	0	0..500		Sharpen Amount
 effect	blur.smart	Blur & Sharpen	Smart Blur	Blurs flat areas but keeps edges; clean, illustrated looks.
 	number	radius	3	0..100		Radius
 	number	threshold	25	0..100		Threshold
 	enum	mode	normal	normal|edge-only|overlay-edge		Mode
-effect	blur.unsharp	Blur & Sharpen	Unsharp Mask	Sharpens by contrast at edges; restores detail after scaling.
-	number	amount	50	0..500		Amount
-	number	radius	1	0.1..500		Radius
-	number	threshold	0	0..255		Threshold
 effect	channel.arithmetic	Channel	Arithmetic	Per-channel math such as add or multiply; technical color tweaks.
 	enum	operator	add	and|or|xor|add|subtract|difference|min|max|block-above|block-below|slice|multiply|screen		Operator
 	number	redValue	0	0..255		Red Value
@@ -125,9 +104,6 @@ effect	channel.compoundarithmetic	Channel	Compound Arithmetic	Adds, subtracts, o
 	enum	overflowBehavior	clip	clip|wrap|scale		Overflow Behavior
 	bool	stretchSecondSourceToFit	true			Stretch Second Source to Fit
 	number	blendWithOriginal	0	0..100		Blend With Original
-effect	channel.invert	Channel	Invert	Inverts colors or one channel; negative-film looks, flash frames, glitches.
-	enum	channel	rgb	rgb|red|green|blue|hls|hue|lightness|saturation|yiq|luminance|in-phase-chrominance|quadrature-chrominance|alpha		Channel
-	number	blend	0	0..100		Blend With Original
 effect	channel.minimax	Channel	Minimax	Grows or shrinks bright or dark areas; thicker lines, choked mattes.
 	enum	operation	maximum	minimum|maximum|minimum-then-maximum|maximum-then-minimum		Operation
 	number	radius	0	0..500		Radius
@@ -183,19 +159,6 @@ effect	color.autolevels	Color Correction	Auto Levels	Automatic levels per channe
 	number	blackClip	0.1	0..49		Black Clip
 	number	whiteClip	0.1	0..49		White Clip
 	number	blend	0	0..100		Blend With Original
-effect	color.blackwhite	Color Correction	Black & White	Black and white with control per color; dramatic or retro looks.
-	number	reds	40	-200..300		Reds
-	number	yellows	60	-200..300		Yellows
-	number	greens	40	-200..300		Greens
-	number	cyans	60	-200..300		Cyans
-	number	blues	20	-200..300		Blues
-	number	magentas	80	-200..300		Magentas
-	bool	tint	false			Tint
-	color	tintColor	#e0c299			Tint Color
-effect	color.brightnesscontrast	Color Correction	Brightness & Contrast	Plain brightness and contrast; basic correction.
-	number	brightness	0	-150..150		Brightness
-	number	contrast	0	-100..100		Contrast
-	bool	useLegacy	false			Use Legacy
 effect	color.broadcast	Color Correction	Broadcast Colors	Keeps colors within broadcast-safe limits; TV delivery.
 	enum	locale	ntsc	ntsc|pal		Broadcast Locale
 	enum	howToMakeSafe	reduce-luminance	reduce-luminance|reduce-saturation|key-out-unsafe|key-out-safe		How To Make Color Safe
@@ -248,41 +211,6 @@ effect	color.changecolor	Color Correction	Change Color	Shifts the hue and satura
 	number	matchingSoftness	0	0..100		Matching Softness
 	enum	matchColors	using-hue	using-rgb|using-hue|using-chroma		Match Colors
 	bool	invertColorCorrectionMask	false			Invert Color Correction Mask
-effect	color.changetocolor	Color Correction	Change to Color	Replaces one color with another; recolor clothing or props.
-	color	from	#ff0000			From
-	color	to	#0000ff			To
-	enum	change	hue	hue|hue-lightness|hue-saturation|hue-lightness-saturation		Change
-	enum	changeBy	setting-to-color	setting-to-color|transforming-to-color		Change By
-	number	toleranceGroup/hue	5	0..100		Hue
-	number	toleranceGroup/lightness	50	0..100		Lightness
-	number	toleranceGroup/saturation	50	0..100		Saturation
-	number	softness	50	0..100		Softness
-	bool	viewCorrectionMatte	false			View Correction Matte
-effect	color.channelmixer	Color Correction	Channel Mixer	Mixes color channels into each other; creative grades, custom black and white.
-	number	rr	100	-200..200		Red-Red
-	number	rg	0	-200..200		Red-Green
-	number	rb	0	-200..200		Red-Blue
-	number	rc	0	-200..200		Red-Const
-	number	gr	0	-200..200		Green-Red
-	number	gg	100	-200..200		Green-Green
-	number	gb	0	-200..200		Green-Blue
-	number	gc	0	-200..200		Green-Const
-	number	br	0	-200..200		Blue-Red
-	number	bg	0	-200..200		Blue-Green
-	number	bb	100	-200..200		Blue-Blue
-	number	bc	0	-200..200		Blue-Const
-	bool	monochrome	false			Monochrome
-effect	color.colorbalance	Color Correction	Color Balance	Shifts color in shadows, midtones, and highlights; warm or cool grading.
-	number	shadowRed	0	-100..100		Shadow Red Balance
-	number	shadowGreen	0	-100..100		Shadow Green Balance
-	number	shadowBlue	0	-100..100		Shadow Blue Balance
-	number	midRed	0	-100..100		Midtone Red Balance
-	number	midGreen	0	-100..100		Midtone Green Balance
-	number	midBlue	0	-100..100		Midtone Blue Balance
-	number	hiRed	0	-100..100		Highlight Red Balance
-	number	hiGreen	0	-100..100		Highlight Green Balance
-	number	hiBlue	0	-100..100		Highlight Blue Balance
-	bool	preserveLuminosity	false			Preserve Luminosity
 effect	color.colorbalancehls	Color Correction	Color Balance (HLS)	Hue, lightness, and saturation over the whole picture; quick mood shifts.
 	number	hue	0		degrees	Hue
 	number	lightness	0	-100..100		Lightness
@@ -411,49 +339,6 @@ effect	color.huesaturation	Color Correction	Hue/Saturation	Hue, saturation, ligh
 	number	colorizeHue	0		degrees	Colorize Hue
 	number	colorizeSaturation	25	0..100		Colorize Saturation
 	number	colorizeLightness	0	-100..100		Colorize Lightness
-effect	color.leavecolor	Color Correction	Leave Color	Keeps one color and desaturates the rest; color-pop highlights.
-	number	amount	0	0..100		Amount to Decolor
-	color	color	#ff0000			Color To Leave
-	number	tolerance	15	0..100		Tolerance
-	number	edgeSoftness	0	0..100		Edge Softness
-	enum	matchColors	using-rgb	using-rgb|using-hue		Match Colors
-effect	color.levels	Color Correction	Levels	Input and output levels with gamma; contrast and exposure fixes.
-	enum	channel	rgb	rgb|red|green|blue|alpha		Channel
-	number	inBlack	0	-1..2		Input Black
-	number	inWhite	1	-1..2		Input White
-	number	gamma	1	0.1..10		Gamma
-	number	outBlack	0	-1..2		Output Black
-	number	outWhite	1	-1..2		Output White
-	enum	clipToOutputBlack	off-for-32-bpc-color	off|on|off-for-32-bpc-color		Clip To Output Black
-	enum	clipToOutputWhite	off-for-32-bpc-color	off|on|off-for-32-bpc-color		Clip To Output White
-	number	redInBlack	0	-1..2		Red Input Black
-	number	redInWhite	1	-1..2		Red Input White
-	number	redGamma	1	0.1..10		Red Gamma
-	number	redOutBlack	0	-1..2		Red Output Black
-	number	redOutWhite	1	-1..2		Red Output White
-	enum	redClipToOutputBlack	off-for-32-bpc-color	off|on|off-for-32-bpc-color		Red Clip To Output Black
-	enum	redClipToOutputWhite	off-for-32-bpc-color	off|on|off-for-32-bpc-color		Red Clip To Output White
-	number	greenInBlack	0	-1..2		Green Input Black
-	number	greenInWhite	1	-1..2		Green Input White
-	number	greenGamma	1	0.1..10		Green Gamma
-	number	greenOutBlack	0	-1..2		Green Output Black
-	number	greenOutWhite	1	-1..2		Green Output White
-	enum	greenClipToOutputBlack	off-for-32-bpc-color	off|on|off-for-32-bpc-color		Green Clip To Output Black
-	enum	greenClipToOutputWhite	off-for-32-bpc-color	off|on|off-for-32-bpc-color		Green Clip To Output White
-	number	blueInBlack	0	-1..2		Blue Input Black
-	number	blueInWhite	1	-1..2		Blue Input White
-	number	blueGamma	1	0.1..10		Blue Gamma
-	number	blueOutBlack	0	-1..2		Blue Output Black
-	number	blueOutWhite	1	-1..2		Blue Output White
-	enum	blueClipToOutputBlack	off-for-32-bpc-color	off|on|off-for-32-bpc-color		Blue Clip To Output Black
-	enum	blueClipToOutputWhite	off-for-32-bpc-color	off|on|off-for-32-bpc-color		Blue Clip To Output White
-	number	alphaInBlack	0	-1..2		Alpha Input Black
-	number	alphaInWhite	1	-1..2		Alpha Input White
-	number	alphaGamma	1	0.1..10		Alpha Gamma
-	number	alphaOutBlack	0	-1..2		Alpha Output Black
-	number	alphaOutWhite	1	-1..2		Alpha Output White
-	enum	alphaClipToOutputBlack	off-for-32-bpc-color	off|on|off-for-32-bpc-color		Alpha Clip To Output Black
-	enum	alphaClipToOutputWhite	off-for-32-bpc-color	off|on|off-for-32-bpc-color		Alpha Clip To Output White
 effect	color.levelsic	Color Correction	Levels (Individual Controls)	Levels with controls per channel; precise grading.
 	number	rgb/rgbInBlack	0	-1..2		Input Black
 	number	rgb/rgbInWhite	1	-1..2		Input White
@@ -482,73 +367,6 @@ effect	color.levelsic	Color Correction	Levels (Individual Controls)	Levels with 
 	number	alpha/alphaOutWhite	1	-1..2		Alpha Output White
 	enum	clipToOutputBlack	off-for-32-bpc-color	off|on|off-for-32-bpc-color		Clip To Output Black
 	enum	clipToOutputWhite	off-for-32-bpc-color	off|on|off-for-32-bpc-color		Clip To Output White
-effect	color.lumetri	Color Correction	Lumetri Color	A full grade in one effect: white balance and tone, a creative look or LUT, curves, color wheels, a secondary color pick, and a vignette; everyday color correction.
-	bool	highDynamicRange	false			High Dynamic Range
-	enum	basicCorrection/inputLut	none	none|custom		Input LUT
-	file	basicCorrection/inputLutFile		cube		Input LUT File
-	number	basicCorrection/whiteBalance/temperature	0	-100..100		Temperature
-	number	basicCorrection/whiteBalance/tint	0	-100..100		Tint
-	number	basicCorrection/tone/exposure	0	-5..5		Exposure
-	number	basicCorrection/tone/contrast	0	-100..100		Contrast
-	number	basicCorrection/tone/highlights	0	-100..100		Highlights
-	number	basicCorrection/tone/shadows	0	-100..100		Shadows
-	number	basicCorrection/tone/whites	0	-100..100		Whites
-	number	basicCorrection/tone/blacks	0	-100..100		Blacks
-	number	basicCorrection/tone/hdrWhite	100	100..10000		HDR White
-	number	basicCorrection/tone/hdrSpecular	0	-100..100		HDR Specular
-	number	basicCorrection/saturation	100	0..200		Saturation
-	enum	creative/look	none	none|custom|ec-warm-film|ec-cool-night|ec-bleach-bypass|ec-teal-orange|ec-faded-matte|ec-monochrome		Look
-	file	creative/lookFile		cube		Look File
-	number	creative/lookIntensity	100	0..200		Intensity
-	number	creative/adjustments/fadedFilm	0	0..100		Faded Film
-	number	creative/adjustments/sharpen	0	-100..100		Sharpen
-	number	creative/adjustments/vibrance	0	-100..100		Vibrance
-	number	creative/adjustments/creativeSaturation	100	0..200		Saturation
-	color	creative/adjustments/shadowTint	#808080			Shadow Tint
-	color	creative/adjustments/highlightTint	#808080			Highlight Tint
-	number	creative/adjustments/tintBalance	0	-100..100		Tint Balance
-	number	curves/curveMasterShadows	0	-100..100		RGB Curve Shadows
-	number	curves/curveMasterMidtones	0	-100..100		RGB Curve Midtones
-	number	curves/curveMasterHighlights	0	-100..100		RGB Curve Highlights
-	number	curves/curveRedShadows	0	-100..100		Red Curve Shadows
-	number	curves/curveRedMidtones	0	-100..100		Red Curve Midtones
-	number	curves/curveRedHighlights	0	-100..100		Red Curve Highlights
-	number	curves/curveGreenShadows	0	-100..100		Green Curve Shadows
-	number	curves/curveGreenMidtones	0	-100..100		Green Curve Midtones
-	number	curves/curveGreenHighlights	0	-100..100		Green Curve Highlights
-	number	curves/curveBlueShadows	0	-100..100		Blue Curve Shadows
-	number	curves/curveBlueMidtones	0	-100..100		Blue Curve Midtones
-	number	curves/curveBlueHighlights	0	-100..100		Blue Curve Highlights
-	color	colorWheels/shadowsWheel	#808080			Shadows
-	color	colorWheels/midtonesWheel	#808080			Midtones
-	color	colorWheels/highlightsWheel	#808080			Highlights
-	bool	hslSecondary/key/hueEnabled	true			H
-	number	hslSecondary/key/hueCenter	0		degrees	Hue Center
-	number	hslSecondary/key/hueRange	180	0..180		Hue Range
-	number	hslSecondary/key/hueSoftness	0	0..180		Hue Softness
-	bool	hslSecondary/key/saturationEnabled	true			S
-	number	hslSecondary/key/saturationLow	0	0..100		Saturation Low
-	number	hslSecondary/key/saturationHigh	100	0..100		Saturation High
-	number	hslSecondary/key/saturationSoftness	0	0..100		Saturation Softness
-	bool	hslSecondary/key/lightnessEnabled	true			L
-	number	hslSecondary/key/lightnessLow	0	0..100		Lightness Low
-	number	hslSecondary/key/lightnessHigh	100	0..100		Lightness High
-	number	hslSecondary/key/lightnessSoftness	0	0..100		Lightness Softness
-	bool	hslSecondary/key/showMask	false			Show Mask
-	enum	hslSecondary/key/maskStyle	color-gray	color-gray|color-black|white-black		Mask Style
-	bool	hslSecondary/key/invertMask	false			Invert Mask
-	number	hslSecondary/refine/denoise	0	0..100		Denoise
-	number	hslSecondary/refine/blur	0	0..100		Blur
-	color	hslSecondary/correction/correctionWheel	#808080			Correction
-	number	hslSecondary/correction/temperature	0	-100..100		Temperature
-	number	hslSecondary/correction/tint	0	-100..100		Tint
-	number	hslSecondary/correction/contrast	0	-100..100		Contrast
-	number	hslSecondary/correction/sharpen	0	-100..100		Sharpen
-	number	hslSecondary/correction/saturation	100	0..200		Saturation
-	number	vignette/vignetteAmount	0	-5..5		Amount
-	number	vignette/vignetteMidpoint	50	0..100		Midpoint
-	number	vignette/vignetteRoundness	0	-100..100		Roundness
-	number	vignette/vignetteFeather	50	0..100		Feather
 effect	color.ociocdl	Color Correction	OCIO CDL Transform	An ASC CDL (slope, offset, power, saturation); matching a colorist's grade.
 	number	slopeRed	1	0..100		Slope Red
 	number	slopeGreen	1	0..100		Slope Green
@@ -655,10 +473,6 @@ effect	color.shadowhighlight	Color Correction	Shadow/Highlight	Lifts shadows and
 	number	moreOptions/blackClip	0.01	0..49		Black Clip
 	number	moreOptions/whiteClip	0.01	0..49		White Clip
 	number	blend	0	0..100		Blend With Original
-effect	color.tint	Color Correction	Tint	Maps black and white to two colors; duotones and monochrome tints.
-	color	black	#000000			Map Black To
-	color	white	#ffffff			Map White To
-	number	amount	100	0..100		Amount to Tint
 effect	color.tritone	Color Correction	Tritone	Maps shadows, midtones, and highlights to three colors; stylized grades.
 	color	highlights	#ffffff			Highlights
 	color	midtones	#80664d			Midtones
@@ -667,12 +481,6 @@ effect	color.tritone	Color Correction	Tritone	Maps shadows, midtones, and highli
 effect	color.vibrance	Color Correction	Vibrance	Boosts muted colors more than saturated ones; natural pop.
 	number	vibrance	0	-100..100		Vibrance
 	number	saturation	0	-100..100		Saturation
-effect	color.videolimiter	Color Correction	Video Limiter	Limits luma and chroma to the legal range; delivery compliance.
-	enum	clipLevel	100	90|95|100|105|109		Clip Level
-	enum	clipMethod	smart-limit	luma|chroma|smart-limit		Clip Method
-	enum	compressionBeforeClipping	5	none|3|5|10|20		Compression before Clipping
-	bool	gamutWarning	false			Gamut Warning
-	color	gamutWarningColor	#ff0000			Gamut Warning Color
 effect	distort.bezierwarp	Distort	Bezier Warp	Warps the picture by curved edges; flag or paper bends, fitting to shapes.
 	number	topLeftVertex_x	0		picture widths	Top Left Vertex (0 left, 1 right)
 	number	topLeftVertex_y	0		picture heights	Top Left Vertex (0 top, 1 bottom)
@@ -755,11 +563,6 @@ effect	distort.griddler	Distort	Griddler	Breaks the picture into a grid of turne
 	number	tileSize	10	0.5..100		Tile Size
 	number	rotation	0		degrees	Rotation
 	bool	cutTiles	false			Cut Tiles
-effect	distort.lens	Distort	Lens	A refracting lens bubble; magnifying-glass effects.
-	number	center_x	0.5		picture widths	Center (0 left, 1 right)
-	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
-	number	size	50	0..400		Size
-	number	convergence	0	-100..100		Convergence
 effect	distort.pageturn	Distort	Page Turn	Curls the picture like a page; storybook page flips.
 	number	foldPosition_x	0.7		picture widths	Fold Position (0 left, 1 right)
 	number	foldPosition_y	0.7		picture heights	Fold Position (0 top, 1 bottom)
@@ -822,15 +625,6 @@ effect	distort.tiler	Distort	Tiler	Repeats the picture as tiles; tiled walls and
 	number	center_x	0.5		picture widths	Center (0 left, 1 right)
 	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
 	number	blendWithOriginal	0	0..100		Blend w. Original
-effect	distort.cornerpin	Distort	Corner Pin	Moves the four corners; fit a picture into a screen or frame.
-	number	ul_x	0		picture widths	Upper Left (0 left, 1 right)
-	number	ul_y	0		picture heights	Upper Left (0 top, 1 bottom)
-	number	ur_x	1		picture widths	Upper Right (0 left, 1 right)
-	number	ur_y	0		picture heights	Upper Right (0 top, 1 bottom)
-	number	ll_x	0		picture widths	Lower Left (0 left, 1 right)
-	number	ll_y	1		picture heights	Lower Left (0 top, 1 bottom)
-	number	lr_x	1		picture widths	Lower Right (0 left, 1 right)
-	number	lr_y	1		picture heights	Lower Right (0 top, 1 bottom)
 effect	distort.upscale	Distort	Detail-preserving Upscale	Enlarges while keeping detail; low-resolution footage.
 	number	scale	100	100..1000		Scale
 	number	reduceNoise	0	0..100		Reduce Noise
@@ -845,26 +639,6 @@ effect	distort.displacementmap	Distort	Displacement Map	Pushes pixels by another
 	enum	displacementMapBehavior	center-map	center-map|stretch-map-to-fit|tile-map		Displacement Map Behavior
 	bool	wrapPixelsAround	false			Wrap Pixels Around
 	bool	expandOutput	true			Expand Output
-effect	distort.magnify	Distort	Magnify	A magnifying circle or square; zoom in on a detail.
-	enum	shape	circle	circle|square		Shape
-	number	center_x	0.5		picture widths	Center (0 left, 1 right)
-	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
-	number	magnification	200	1..10000		Magnification
-	enum	link	none	none|size-to-magnification|size-feather-to-magnification		Link
-	number	size	100	0..4000		Size
-	number	feather	0	0..4000		Feather
-	number	opacity	100	0..100		Opacity
-	enum	scaling	standard	standard|soft|scatter		Scaling
-	enum	blendingMode	normal	none|normal|add|multiply|screen|overlay|soft-light|hard-light|color-dodge|color-burn|darken|lighten|difference|exclusion|hue|saturation|color|luminosity		Blending Mode
-	bool	resizeLayer	false			Resize Layer
-effect	distort.mirror	Distort	Mirror	Mirrors the picture across a line; symmetric, surreal reflections.
-	number	center_x	0.5		picture widths	Reflection Center (0 left, 1 right)
-	number	center_y	0.5		picture heights	Reflection Center (0 top, 1 bottom)
-	number	angle	0		degrees	Reflection Angle
-effect	distort.offset	Distort	Offset	Shifts the picture with wraparound; seamless scrolls and glitch slides.
-	number	shift_x	0.5		picture widths	Shift Center To (0 left, 1 right)
-	number	shift_y	0.5		picture heights	Shift Center To (0 top, 1 bottom)
-	number	blend	0	0..100		Blend With Original
 effect	distort.opticscompensation	Distort	Optics Compensation	Adds or removes lens barrel distortion; fisheye looks or wide-lens fixes.
 	number	fieldOfView	0	0..180		Field Of View (FOV)
 	bool	reverseLensDistortion	false			Reverse Lens Distortion
@@ -908,43 +682,6 @@ effect	distort.smear	Distort	Smear	Drags the area inside one mask by an offset, 
 	number	percent	100	0..100		Percent
 	enum	elasticity	absolutely-normal	stiff|less-stiff|below-normal|absolutely-normal|above-average|loose|liquid|super-fluid		Elasticity
 	enum	interpolation	linear	discrete|linear|smooth		Interpolation Method
-effect	distort.spherize	Distort	Spherize	Wraps an area onto a sphere; bulging, fisheye accents.
-	number	radius	0	0..2500		Radius
-	number	center_x	0.5		picture widths	Center of Sphere (0 left, 1 right)
-	number	center_y	0.5		picture heights	Center of Sphere (0 top, 1 bottom)
-effect	distort.transform	Distort	Transform	Position, scale, rotation, and skew with motion blur; precise moves.
-	number	anchor_x	0.5		picture widths	Anchor Point (0 left, 1 right)
-	number	anchor_y	0.5		picture heights	Anchor Point (0 top, 1 bottom)
-	number	position_x	0.5		picture widths	Position (0 left, 1 right)
-	number	position_y	0.5		picture heights	Position (0 top, 1 bottom)
-	bool	uniform	true			Uniform Scale
-	number	scaleHeight	100	-10000..10000		Scale Height
-	number	scaleWidth	100	-10000..10000		Scale Width
-	number	skew	0	-70..70		Skew
-	number	skewAxis	0		degrees	Skew Axis
-	number	rotation	0		degrees	Rotation
-	number	opacity	100	0..100		Opacity
-	bool	useCompositionShutterAngle	true			Use Composition's Shutter Angle
-	number	shutterAngle	0	0..720		Shutter Angle
-	enum	sampling	bilinear	bilinear|bicubic		Sampling
-effect	distort.turbulentdisplace	Distort	Turbulent Displace	Organic noise displacement; heat haze, wobble, liquid.
-	enum	displacement	turbulent	turbulent|bulge|twist|turbulent-smoother|bulge-smoother|twist-smoother|vertical-displacement|horizontal-displacement|cross-displacement		Displacement
-	number	amount	50	-1000..1000		Amount
-	number	size	100	2..4000		Size
-	number	offset_x	0.5		picture widths	Offset (Turbulence) (0 left, 1 right)
-	number	offset_y	0.5		picture heights	Offset (Turbulence) (0 top, 1 bottom)
-	number	complexity	1	1..10		Complexity
-	number	evolution	0		degrees	Evolution
-	bool	evolutionOptions/cycleEvolution	false			Cycle Evolution
-	number	evolutionOptions/cycle	1	1..1000		Cycle (in Revolutions)
-	number	evolutionOptions/randomSeed	0	0..10000		Random Seed
-	enum	pinning	pin-all	none|pin-all|pin-horizontal|pin-vertical|pin-left|pin-top|pin-right|pin-bottom|pin-all-locked|pin-horizontal-locked|pin-vertical-locked|pin-left-locked|pin-top-locked|pin-right-locked|pin-bottom-locked		Pinning
-	bool	resizeLayer	false			Resize Layer
-effect	distort.twirl	Distort	Twirl	Swirls the picture around a center; dizziness and vortex transitions.
-	number	angle	0		degrees	Angle
-	number	radius	30	0..100		Twirl Radius
-	number	center_x	0.5		picture widths	Twirl Center (0 left, 1 right)
-	number	center_y	0.5		picture heights	Twirl Center (0 top, 1 bottom)
 effect	distort.twirllegacy	Distort	Twirl (Legacy)	The older twirl; the same uses as Twirl.
 	number	angle	0		degrees	Angle
 	number	radius	30	0..100		Twirl Radius
@@ -956,52 +693,6 @@ effect	distort.warp	Distort	Warp	Arc, bulge, wave, fish, and other shape warps; 
 	number	bend	0	-100..100		Bend
 	number	horizontalDistortion	0	-100..100		Horizontal Distortion
 	number	verticalDistortion	0	-100..100		Vertical Distortion
-effect	distort.warpstabilizer	Distort	Warp Stabilizer	Smooths or removes camera shake, from an analysis of the clip's frames that runs in the background once it is added; handheld and shaky footage.
-	enum	stabilization/result	smooth-motion	smooth-motion|no-motion		Result
-	number	stabilization/smoothness	50	0..1000		Smoothness
-	enum	stabilization/method	subspace-warp	position|position-scale-rotation|perspective|subspace-warp		Method
-	bool	stabilization/preserveScale	false			Preserve Scale
-	enum	borders/framing	stabilize-crop-auto-scale	stabilize-only|stabilize-crop|stabilize-crop-auto-scale|stabilize-synthesize-edges		Framing
-	number	borders/autoScale/maximumScale	150	100..1000		Maximum Scale
-	number	borders/autoScale/actionSafeMargin	0	0..45		Action-safe Margin
-	number	borders/additionalScale	100	1..1000		Additional Scale
-	bool	advanced/detailedAnalysis	false			Detailed Analysis
-	enum	advanced/rollingShutterRipple	automatic-reduction	automatic-reduction|enhanced-reduction		Rolling Shutter Ripple
-	number	advanced/cropLessSmoothMore	50	0..100		Crop Less <-> Smooth More
-	number	advanced/synthesizeInputRange	1	0..10		Synthesis Input Range (seconds)
-	number	advanced/synthesizeEdgeFeather	0	0..100		Synthesis Edge Feather
-	number	advanced/edgeCropping/left	0	0..1000		Left
-	number	advanced/edgeCropping/top	0	0..1000		Top
-	number	advanced/edgeCropping/right	0	0..1000		Right
-	number	advanced/edgeCropping/bottom	0	0..1000		Bottom
-	bool	advanced/hideWarningBanner	false			Hide Warning Banner
-	bool	advanced/showTrackPoints	false			Show Track Points
-	number	advanced/trackPointSize	100	0..1000		Track Point Size
-effect	distort.wavewarp	Distort	Wave Warp	Moving waves across the picture; flags, water, wobbling text.
-	enum	waveType	sine	sine|square|triangle|sawtooth|circle|semicircle|uncircle|noise|smooth-noise		Wave Type
-	number	height	10	-1000..1000		Wave Height
-	number	width	40	1..10000		Wave Width
-	number	direction	90		degrees	Direction
-	number	speed	1	-100..100		Wave Speed
-	enum	pinning	none	none|all-edges|center|left-edge|top-edge|right-edge|bottom-edge|horizontal-edges|vertical-edges		Pinning
-	number	phase	0		degrees	Phase
-effect	generate.fourcolor	Generate	4-Color Gradient	A gradient from four colored corners; backgrounds and color washes.
-	number	positionsColors/point1_x	0.1		picture widths	Point 1 (0 left, 1 right)
-	number	positionsColors/point1_y	0.1		picture heights	Point 1 (0 top, 1 bottom)
-	color	positionsColors/color1	#ffff00			Color 1
-	number	positionsColors/point2_x	0.9		picture widths	Point 2 (0 left, 1 right)
-	number	positionsColors/point2_y	0.1		picture heights	Point 2 (0 top, 1 bottom)
-	color	positionsColors/color2	#00ff00			Color 2
-	number	positionsColors/point3_x	0.1		picture widths	Point 3 (0 left, 1 right)
-	number	positionsColors/point3_y	0.9		picture heights	Point 3 (0 top, 1 bottom)
-	color	positionsColors/color3	#ff00ff			Color 3
-	number	positionsColors/point4_x	0.9		picture widths	Point 4 (0 left, 1 right)
-	number	positionsColors/point4_y	0.9		picture heights	Point 4 (0 top, 1 bottom)
-	color	positionsColors/color4	#0000ff			Color 4
-	number	blend	100	1..1000		Blend
-	number	jitter	0	0..100		Jitter
-	number	opacity	100	0..100		Opacity
-	enum	blendingMode	none	none|normal|add|multiply|screen|overlay|soft-light|hard-light|color-dodge|color-burn|darken|lighten|difference|exclusion|hue|saturation|color|luminosity		Blending Mode
 effect	generate.advancedlightning	Generate	Advanced Lightning	Lightning bolts; energy, magic, and electric hits.
 	enum	lightningType	strike	direction|strike|breaking|bouncy|omni|anywhere|vertical|two-way-strike		Lightning Type
 	number	origin_x	0.25		picture widths	Origin (0 left, 1 right)
@@ -1137,58 +828,6 @@ effect	generate.threads	Generate	Threads	A woven thread pattern; fabric textures
 	number	coverage	80	0..100		Coverage
 	number	shadowing	50	0..100		Shadowing
 	number	texture	10	0..100		Texture
-effect	generate.cellpattern	Generate	Cell Pattern	Cellular patterns; organic textures and backgrounds.
-	enum	cellPattern	bubbles	bubbles|crystals|plates|static-plates|crystallize|pillow|crystals-hq|plates-hq|static-plates-hq|crystallize-hq|mixed-crystals-hq|tubular		Cell Pattern
-	bool	invert	false			Invert
-	number	contrast	100	0..10000		Contrast
-	enum	overflow	clip	clip|soft-clamp|wrap-back		Overflow
-	number	disperse	1	0..1.5		Disperse
-	number	size	60	2..4000		Size
-	number	offset_x	0.5		picture widths	Offset (0 left, 1 right)
-	number	offset_y	0.5		picture heights	Offset (0 top, 1 bottom)
-	bool	tilingOptions/enableTiling	false			Enable Tiling
-	number	tilingOptions/cellsHorizontal	16	1..1000		Cells Horizontal
-	number	tilingOptions/cellsVertical	16	1..1000		Cells Vertical
-	number	evolution	0		degrees	Evolution
-	bool	evolutionOptions/cycleEvolution	false			Cycle Evolution
-	number	evolutionOptions/cycle	1	1..1000		Cycle (in Revolutions)
-	number	evolutionOptions/randomSeed	0	0..100000		Random Seed
-effect	generate.checkerboard	Generate	Checkerboard	A checkerboard; backgrounds and patterns.
-	number	anchor_x	0		picture widths	Anchor (0 left, 1 right)
-	number	anchor_y	0		picture heights	Anchor (0 top, 1 bottom)
-	enum	sizeFrom	width-slider	corner-point|width-slider|width-height-sliders		Size From
-	number	corner_x	0.1		picture widths	Corner (0 left, 1 right)
-	number	corner_y	0.1		picture heights	Corner (0 top, 1 bottom)
-	number	width	64	1..4000		Width
-	number	height	64	1..4000		Height
-	number	feather/featherWidth	0	0..1000		Width
-	number	feather/featherHeight	0	0..1000		Height
-	color	color	#ffffff			Color
-	number	opacity	100	0..100		Opacity
-	enum	blendingMode	none	none|normal|add|multiply|screen|overlay|soft-light|hard-light|color-dodge|color-burn|darken|lighten|difference|exclusion|hue|saturation|color|luminosity|stencil-alpha|silhouette-alpha		Blending Mode
-effect	generate.circle	Generate	Circle	Draws a filled circle or ring; highlights and callouts.
-	number	center_x	0.5		picture widths	Center (0 left, 1 right)
-	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
-	number	radius	75	0..4000		Radius
-	enum	edge	none	none|edge-radius|thickness|thickness-radius|thickness-feather-radius		Edge
-	number	edgeRadius	0	0..4000		Edge Radius
-	number	thickness	10	0..4000		Thickness
-	number	feather/feather	0	0..1000		Feather Outer Edge
-	number	feather/featherInner	0	0..1000		Feather Inner Edge
-	bool	invert	false			Invert Circle
-	color	color	#ffffff			Color
-	number	opacity	100	0..100		Opacity
-	enum	blendingMode	none	none|normal|add|multiply|screen|overlay|soft-light|hard-light|color-dodge|color-burn|darken|lighten|difference|exclusion|hue|saturation|color|luminosity|stencil-alpha|silhouette-alpha		Blending Mode
-effect	generate.ellipse	Generate	Ellipse	Draws an ellipse outline; callouts and rings.
-	number	center_x	0.5		picture widths	Center (0 left, 1 right)
-	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
-	number	width	100	0..30000		Width
-	number	height	100	0..30000		Height
-	number	thickness	10	0..3000		Thickness
-	number	softness	0	0..100		Softness
-	color	insideColor	#ffffff			Inside Color
-	color	outsideColor	#0099ff			Outside Color
-	bool	compositeOnOriginal	false			Composite On Original
 effect	generate.eyedropperfill	Generate	Eyedropper Fill	Fills with a color sampled from the picture; matching flat fills.
 	number	samplePoint_x	0.5		picture widths	Sample Point (0 left, 1 right)
 	number	samplePoint_y	0.5		picture heights	Sample Point (0 top, 1 bottom)
@@ -1226,50 +865,6 @@ effect	generate.fractal	Generate	Fractal	Fractal patterns; psychedelic backgroun
 	bool	fractalColor/edgeHighlight	false			Edge Highlight
 	enum	highQualitySettings/samplingMethod	edge-detect-fast-may-miss-pixels	edge-detect-fast-may-miss-pixels|brute-force-slow-every-pixel		Oversample Method
 	number	highQualitySettings/samplingFactor	2	1..9		Oversample Factor
-effect	generate.gradientramp	Generate	Gradient Ramp	A linear or radial gradient; skies, backgrounds, shading.
-	number	start_x	0.5		picture widths	Start of Ramp (0 left, 1 right)
-	number	start_y	0		picture heights	Start of Ramp (0 top, 1 bottom)
-	color	startColor	#000000			Start Color
-	number	end_x	0.5		picture widths	End of Ramp (0 left, 1 right)
-	number	end_y	1		picture heights	End of Ramp (0 top, 1 bottom)
-	color	endColor	#ffffff			End Color
-	enum	shape	linear-ramp	linear-ramp|radial-ramp		Ramp Shape
-	number	scatter	0	0..512		Ramp Scatter
-	number	blend	0	0..100		Blend With Original
-effect	generate.grid	Generate	Grid	Draws a grid; tech overlays and guides.
-	number	anchor_x	0		picture widths	Anchor (0 left, 1 right)
-	number	anchor_y	0		picture heights	Anchor (0 top, 1 bottom)
-	enum	sizeFrom	width-slider	corner-point|width-slider|width-height-sliders		Size From
-	number	corner_x	0.1		picture widths	Corner (0 left, 1 right)
-	number	corner_y	0.1		picture heights	Corner (0 top, 1 bottom)
-	number	width	64	1..4000		Width
-	number	height	64	1..4000		Height
-	number	border	2	0..400		Border
-	number	feather/featherWidth	0	0..1000		Width
-	number	feather/featherHeight	0	0..1000		Height
-	bool	invertGrid	false			Invert Grid
-	color	color	#ffffff			Color
-	number	opacity	100	0..100		Opacity
-	enum	blendingMode	none	none|normal|add|multiply|screen|overlay|soft-light|hard-light|color-dodge|color-burn|darken|lighten|difference|exclusion|hue|saturation|color|luminosity|stencil-alpha|silhouette-alpha		Blending Mode
-effect	generate.lensflare	Generate	Lens Flare	A lens flare; bright light hits and cinematic sun flares.
-	number	flareCenter_x	0.25		picture widths	Flare Center (0 left, 1 right)
-	number	flareCenter_y	0.25		picture heights	Flare Center (0 top, 1 bottom)
-	number	flareBrightness	100	0..300		Flare Brightness
-	enum	lensType	50-300mm-zoom	50-300mm-zoom|35mm-prime|105mm-prime		Lens Type
-	number	blendWithOriginal	0	0..100		Blend With Original
-effect	generate.paintbucket	Generate	Paint Bucket	Fills a region from a point; recolor flat areas.
-	number	fillPoint_x	0.5		picture widths	Fill Point (0 left, 1 right)
-	number	fillPoint_y	0.5		picture heights	Fill Point (0 top, 1 bottom)
-	enum	fillSelector	color-alpha	color-alpha|straight-color|transparency|opacity|alpha-channel		Fill Selector
-	number	tolerance	10	0..255		Tolerance
-	bool	viewThreshold	false			View Threshold
-	enum	stroke	antialias	antialias|feather|spread|choke|stroke		Stroke
-	number	featherSoftness	10	0..100		Feather Softness
-	number	spreadRadius	3	0..100		Spread Radius
-	number	strokeWidth	2	0..100		Stroke Width
-	color	color	#ff0000			Color
-	number	opacity	100	0..100		Opacity
-	enum	blendingMode	normal	normal|add|multiply|screen|hue|saturation|color|luminosity|behind|fill-only		Blending Mode
 effect	generate.radiowaves	Generate	Radio Waves	Rings ripple out from a point or a mask's outline (waveMask/mask=k1); sonar, signal, and pulse graphics.
 	number	producerPoint_x	0.5		picture widths	Producer Point (0 left, 1 right)
 	number	producerPoint_y	0.5		picture heights	Producer Point (0 top, 1 bottom)
@@ -1369,55 +964,6 @@ effect	generate.vegas	Generate	Vegas	Light runs along a mask's outline (path=k1)
 	number	midpointOpacity	0.5	0..1		Rendering: Mid-point Opacity
 	number	midpointPosition	0.5	0..1		Rendering: Mid-point Position
 	number	endOpacity	0	0..1		Rendering: End Opacity
-effect	generate.writeon	Generate	Write-on	Draws a stroke like handwriting as its point moves; underlines and doodles.
-	number	brushPosition_x	0.5		picture widths	Brush Position (0 left, 1 right)
-	number	brushPosition_y	0.5		picture heights	Brush Position (0 top, 1 bottom)
-	color	color	#ffffff			Color
-	number	brushSize	6	0..50		Brush Size
-	number	brushHardness	75	0..100		Brush Hardness
-	number	brushOpacity	100	0..100		Brush Opacity
-	number	strokeLength	0	0..30		Stroke Length (secs)
-	number	brushSpacing	0.001	0.001..5		Brush Spacing (secs)
-	enum	paintTimeProperties	none	none|opacity|color		Paint Time Properties
-	enum	brushTimeProperties	none	none|size|hardness|size-hardness		Brush Time Properties
-	enum	paintStyle	on-original-image	on-original-image|on-transparent|reveal-original-image		Paint Style
-effect	vr.blur	Immersive Video	VR Blur	Blurs a 360° frame evenly on the sphere, seams and poles included; soft 360 backgrounds.
-	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
-	number	blurriness	10	0..1000		Blurriness
-effect	vr.chromaticaberrations	Immersive Video	VR Chromatic Aberrations	Splits color channels around a point on a 360° frame; lens-like fringing in VR.
-	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
-	number	centerTilt	0		degrees	Center Tilt
-	number	centerPan	0		degrees	Center Pan
-	number	aberrationRed	10	-100..100		Aberration (Red)
-	number	aberrationGreen	0	-100..100		Aberration (Green)
-	number	aberrationBlue	-10	-100..100		Aberration (Blue)
-	number	falloff	50	0..100		Falloff Distance
-	bool	falloffInvert	false			Falloff Invert
-effect	vr.colorgradients	Immersive Video	VR Color Gradients	Lays soft color gradients over a 360° frame; tinting a whole VR sky or room.
-	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
-	bool	enablePoint1	true			Enable Point 1
-	number	point1_x	0.25		picture widths	Point 1 (0 left, 1 right)
-	number	point1_y	0.5		picture heights	Point 1 (0 top, 1 bottom)
-	color	color1	#ff0000			Color 1
-	bool	enablePoint2	true			Enable Point 2
-	number	point2_x	0.5		picture widths	Point 2 (0 left, 1 right)
-	number	point2_y	0.25		picture heights	Point 2 (0 top, 1 bottom)
-	color	color2	#ffff00			Color 2
-	bool	enablePoint3	true			Enable Point 3
-	number	point3_x	0.75		picture widths	Point 3 (0 left, 1 right)
-	number	point3_y	0.5		picture heights	Point 3 (0 top, 1 bottom)
-	color	color3	#0000ff			Color 3
-	bool	enablePoint4	true			Enable Point 4
-	number	point4_x	0.5		picture widths	Point 4 (0 left, 1 right)
-	number	point4_y	0.75		picture heights	Point 4 (0 top, 1 bottom)
-	color	color4	#00ff00			Color 4
-	bool	enablePoint5	false			Enable Point 5
-	number	point5_x	0		picture widths	Point 5 (0 left, 1 right)
-	number	point5_y	0.5		picture heights	Point 5 (0 top, 1 bottom)
-	color	color5	#ff00ff			Color 5
-	number	blend	2	0.1..10		Gradient Power
-	number	opacity	100	0..100		Opacity
-	enum	blendingMode	none	none|normal|add|multiply|screen|overlay		Blending Mode
 effect	vr.converter	Immersive Video	VR Converter	Converts between 360° equirectangular, cube maps, fisheye, and a flat view; reframing VR footage.
 	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
 	enum	sourceProjection	equirectangular-2-1	equirectangular-2-1|cube-map-4-3|cube-map-pano2vr-3-2|cube-map-gearvr-6-1|sphere-map|2d-source|cube-map-facebook-3-2|cube-map-eac-3-2|fisheye-fulldome		Source Projection
@@ -1427,74 +973,6 @@ effect	vr.converter	Immersive Video	VR Converter	Converts between 360° equirect
 	number	tilt	0		degrees	Tilt (X Axis)
 	number	pan	0		degrees	Pan (Y Axis)
 	number	roll	0		degrees	Roll (Z Axis)
-effect	vr.denoise	Immersive Video	VR De-Noise	Reduces noise on a 360° frame without seams; cleaning VR footage.
-	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
-	enum	noiseType	random-valued	random-valued|salt-and-pepper		Noise Type
-	number	noiseLevel	20	0..100		Noise Level
-	number	detail	0	0..100		Detail
-effect	vr.digitalglitch	Immersive Video	VR Digital Glitch	Glitch blocks and color shifts that wrap around a 360° frame; broken-signal looks in VR.
-	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
-	number	masterAmplitude	100	0..500		Master Amplitude
-	number	distortionRate	5	0..60		Distortion Rate
-	number	distortionComplexity	16	1..100		Distortion Complexity
-	number	distortionEvolution	0		degrees	Distortion Evolution
-	bool	evolutionOptions/cycleEvolution	false			Cycle Evolution
-	number	evolutionOptions/cycle	1	1..1000		Cycle (in Revolutions)
-	number	geometricDistortion	50	0..100		Geometric Distortion
-	number	geometric/horizontalDisplacement	100	0..400		Horizontal Displacement
-	number	geometric/verticalDisplacement	0	0..400		Vertical Displacement
-	number	colorDistortion	50	0..100		Color Distortion
-	number	color/redOffset	-1	-10..10		Red Offset
-	number	color/greenOffset	0	-10..10		Green Offset
-	number	color/blueOffset	1	-10..10		Blue Offset
-	number	scanlines	20	0..100		Scanlines
-	number	scanlineSpacing	2	2..100		Scanline Spacing
-	number	target/tilt	0		degrees	Target Tilt
-	number	target/pan	0		degrees	Target Pan
-	number	target/radius	0	0..180		Target Radius
-	number	target/feather	0	0..180		Target Feather
-	number	randomSeed	0	0..10000		Random Seed
-effect	vr.fractalnoise	Immersive Video	VR Fractal Noise	Seamless animated noise on a 360° frame; fog, clouds, and textures that wrap in VR.
-	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
-	enum	fractalType	basic	basic|turbulent-sharp|max|strings		Fractal Type
-	number	contrast	100	0..10000		Contrast
-	number	brightness	0	-10000..10000		Brightness
-	bool	invert	false			Invert
-	number	complexity	6	1..20		Complexity
-	number	evolution	0		degrees	Evolution
-	number	transform/scale	100	1..10000		Scale
-	number	transform/tilt	0		degrees	Tilt (X Axis)
-	number	transform/pan	0		degrees	Pan (Y Axis)
-	number	transform/roll	0		degrees	Roll (Z Axis)
-	number	subSettings/subInfluence	50	0..100		Sub Influence
-	number	subSettings/subScaling	50	10..100		Sub Scaling
-	number	randomSeed	0	0..10000		Random Seed
-	number	opacity	100	0..100		Opacity
-	enum	blendingMode	none	none|normal|add|multiply|screen|overlay		Blending Mode
-effect	vr.glow	Immersive Video	VR Glow	Makes highlights glow evenly across a 360° frame; dreamy VR light.
-	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
-	number	luminanceThreshold	60	0..100		Luma Threshold
-	number	glowRadius	20	0..1000		Glow Radius
-	number	glowBrightness	100	0..1000		Glow Brightness
-	number	glowSaturation	100	0..400		Glow Saturation
-	bool	useTintColor	false			Use Tint Color
-	color	tintColor	#ffcc80			Tint Color
-effect	vr.planetosphere	Immersive Video	VR Plane to Sphere	Places a flat picture onto a 360° frame; titles and graphics inside VR.
-	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
-	number	scale	90	1..179		Scale (Degrees)
-	number	feather	0	0..100		Feather
-	number	tilt	0		degrees	Tilt (X Axis)
-	number	pan	0		degrees	Pan (Y Axis)
-	number	roll	0		degrees	Roll (Z Axis)
-effect	vr.rotatesphere	Immersive Video	VR Rotate Sphere	Turns a 360° frame around its axes; leveling the horizon or choosing the front view.
-	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
-	bool	invertRotation	false			Invert Rotation
-	number	tilt	0		degrees	Tilt (X Axis)
-	number	pan	0		degrees	Pan (Y Axis)
-	number	roll	0		degrees	Roll (Z Axis)
-effect	vr.sharpen	Immersive Video	VR Sharpen	Sharpens a 360° frame evenly without seams; crisper VR footage.
-	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
-	number	sharpenAmount	20	0..100		Sharpen Amount
 effect	vr.spheretoplane	Immersive Video	VR Sphere to Plane	Takes a flat view out of a 360° frame; framing a regular shot from VR footage.
 	enum	frameLayout	monoscopic	monoscopic|stereo-over-under|stereo-side-by-side		Frame Layout
 	number	horizontalFov	90	1..179		Horizontal FOV
@@ -1553,13 +1031,6 @@ effect	key.differencematte	Keying	Difference Matte	Keys out what matches a clean
 	number	matchingTolerance	15	0..100		Matching Tolerance
 	number	matchingSoftness	0	0..100		Matching Softness
 	number	blurBeforeDifference	0	0..1000		Blur Before Difference
-effect	key.extract	Keying	Extract	Keys by brightness; removes black or white backgrounds.
-	enum	channel	luminance	luminance|red|green|blue|alpha		Channel
-	number	blackPoint	0	0..255		Black Point
-	number	whitePoint	255	0..255		White Point
-	number	blackSoftness	0	0..255		Black Softness
-	number	whiteSoftness	0	0..255		White Softness
-	bool	invert	false			Invert
 effect	key.innerouter	Keying	Inner/Outer Key	Separates fine edges between inner and outer bounds; hair and fur.
 	enum	foreground	none	none|mask-1|mask-2|mask-3|mask-4|mask-5|mask-6|mask-7|mask-8|mask-9|mask-10		Foreground (Inside)
 	enum	additionalForeground/foreground1	none	none|mask-1|mask-2|mask-3|mask-4|mask-5|mask-6|mask-7|mask-8|mask-9|mask-10		Foreground 1
@@ -1902,16 +1373,9 @@ effect	noise.matchgrain	Noise & Grain	Match Grain	Copies the grain of another tr
 	number	animation/animationSpeed	1	0..100		Animation Speed
 	bool	animation/animateSmoothly	true			Animate Smoothly
 	number	animation/randomSeed	0	0..100000		Random Seed
-effect	noise.median	Noise & Grain	Median	A median filter; removes noise, painterly smoothing.
-	number	radius	0	0..255		Radius
-	bool	operateOnAlpha	false			Operate On Alpha Channel
 effect	noise.medianlegacy	Noise & Grain	Median (Legacy)	The older median filter; the same uses as Median.
 	number	radius	1	0..255		Radius
 	bool	operateOnAlphaChannel	false			Operate On Alpha Channel
-effect	noise.noise	Noise & Grain	Noise	Random pixel noise; static and grit.
-	number	amount	0	0..100		Amount of Noise
-	bool	color	true			Use Color Noise
-	bool	clip	true			Clip Result Values
 effect	noise.noisealpha	Noise & Grain	Noise Alpha	Noise in the alpha channel; dissolving textures.
 	enum	noise	uniform-random	uniform-random|squared-random|uniform-animation|squared-animation		Noise
 	number	amount	0	0..100		Amount
@@ -1990,11 +1454,6 @@ effect	perspective.3dglasses	Perspective	3D Glasses	Combines a left and a right 
 	bool	leftRightSwap	false			Swap Left-Right
 	enum	view3d	balanced-colored-red-blue	stereo-pair-side-by-side|over-under|interlace-upper-l-lower-r|red-green-lr|red-blue-lr|balanced-colored-red-blue|balanced-red-green-lr|balanced-red-blue-lr|difference		3D View
 	number	balance	7	0..20		Balance
-effect	perspective.bevelalpha	Perspective	Bevel Alpha	A beveled edge on the picture's alpha; 3D-looking text and logos.
-	number	edgeThickness	2	0..200		Edge Thickness
-	number	lightAngle	-60		degrees	Light Angle
-	color	lightColor	#ffffff			Light Color
-	number	lightIntensity	0.4	0..1		Light Intensity
 effect	perspective.beveledges	Perspective	Bevel Edges	Beveled rectangular edges; button and tile looks.
 	number	edgeThickness	0.1	0..0.5		Edge Thickness
 	number	lightAngle	-60		degrees	Light Angle
@@ -2049,13 +1508,6 @@ effect	perspective.spotlight	Perspective	Spotlight	A pool of spotlight; draws at
 	color	color	#ffffff			Color
 	number	intensity	100	0..400		Intensity
 	enum	render	light	light|light-only		Render
-effect	perspective.dropshadow	Perspective	Drop Shadow	A drop shadow; separates text and cutouts from the background.
-	color	color	#000000			Shadow Color
-	number	opacity	50	0..100		Opacity
-	number	direction	135		degrees	Direction
-	number	distance	5	0..32000		Distance
-	number	softness	0	0..1000		Softness
-	bool	shadowOnly	false			Shadow Only
 effect	perspective.radialshadow	Perspective	Radial Shadow	A shadow cast from a point light; realistic shadows.
 	color	color	#000000			Shadow Color
 	number	opacity	50	0..100		Opacity
@@ -2596,14 +2048,6 @@ effect	sim.waveworld	Simulation	Wave World	Simulates water waves, with another t
 	number	producer2/producer2Amplitude	0	-5..5		Amplitude
 	number	producer2/producer2Frequency	1	0..30		Frequency
 	number	producer2/producer2Phase	0		degrees	Phase
-effect	stylize.brushstrokes	Stylize	Brush Strokes	Painterly brush strokes; painting looks.
-	number	strokeAngle	135		degrees	Stroke Angle
-	number	brushSize	2	0..5		Brush Size
-	number	strokeLength	4	0..40		Stroke Length
-	number	strokeDensity	1	0..2		Stroke Density
-	number	strokeRandomness	1	0..2		Stroke Randomness
-	enum	paintSurface	paint-on-original-image	paint-on-original-image|paint-on-transparent|paint-on-white|paint-on-black		Paint Surface
-	number	blendWithOriginal	0	0..100		Blend With Original
 effect	stylize.blockload	Stylize	Block Load	Loads the picture in blocks; retro loading reveals.
 	number	completion	0	0..100		Completion
 	bool	scanlines	true			Scanlines
@@ -2696,12 +2140,6 @@ effect	stylize.thresholdrgb	Stylize	Threshold RGB	A threshold per color channel;
 	bool	invertGreen	false			Invert Green Channel
 	bool	invertBlue	false			Invert Blue Channel
 	number	blend	0	0..100		Blend w. Original
-effect	stylize.vignette	Stylize	Vignette	Darkens the edges; draws the eye to the center, cinematic mood.
-	number	amount	50	-100..100		Amount
-	number	angleOfView	60	0..179		Angle of View
-	number	center_x	0.5		picture widths	Center (0 left, 1 right)
-	number	center_y	0.5		picture heights	Center (0 top, 1 bottom)
-	number	pinHighlights	0	0..100		Pin Highlights
 effect	stylize.cartoon	Stylize	Cartoon	Cartoon shading and outlines; comic looks.
 	enum	render	fill-edges	fill|edges|fill-edges		Render
 	number	detailRadius	8	0..50		Detail Radius
@@ -2715,19 +2153,6 @@ effect	stylize.cartoon	Stylize	Cartoon	Cartoon shading and outlines; comic looks
 	number	advanced/edgeEnhancement	0	-100..100		Edge Enhancement
 	number	advanced/edgeBlackLevel	0	0..100		Edge Black Level
 	number	advanced/edgeContrast	0.5	0..1		Edge Contrast
-effect	stylize.coloremboss	Stylize	Color Emboss	An emboss that keeps color; relief textures.
-	number	direction	45		degrees	Direction
-	number	relief	1.5	0..10		Relief
-	number	contrast	100	0..500		Contrast
-	number	blend	0	0..100		Blend With Original
-effect	stylize.emboss	Stylize	Emboss	A gray emboss; stamped relief looks.
-	number	direction	45		degrees	Direction
-	number	relief	1.5	0..10		Relief
-	number	contrast	100	0..500		Contrast
-	number	blend	0	0..100		Blend With Original
-effect	stylize.findedges	Stylize	Find Edges	Outlines edges; sketch and line-art looks.
-	bool	invert	false			Invert
-	number	blend	0	0..100		Blend With Original
 effect	stylize.glow	Stylize	Glow	Makes bright areas glow; neon, dreamy highlights, glowing text.
 	enum	based	color-channels	alpha-channel|color-channels		Glow Based On
 	number	threshold	60	0..100		Glow Threshold
@@ -2743,10 +2168,6 @@ effect	stylize.glow	Stylize	Glow	Makes bright areas glow; neon, dreamy highlight
 	color	colorA	#ffffff			Color A
 	color	colorB	#000000			Color B
 	enum	glowDimensions	horizontal-and-vertical	horizontal-and-vertical|horizontal|vertical		Glow Dimensions
-effect	stylize.mosaic	Stylize	Mosaic	Pixelates into blocks; censoring and retro 8-bit.
-	number	horizontal	10	1..4000		Horizontal Blocks
-	number	vertical	10	1..4000		Vertical Blocks
-	bool	sharpColors	false			Sharp Colors
 effect	stylize.motiontile	Stylize	Motion Tile	Tiles the picture with mirroring and offset; seamless pans, kaleidoscopes.
 	number	tileCenter_x	0.5		picture widths	Tile Center (0 left, 1 right)
 	number	tileCenter_y	0.5		picture heights	Tile Center (0 top, 1 bottom)
@@ -2757,35 +2178,10 @@ effect	stylize.motiontile	Stylize	Motion Tile	Tiles the picture with mirroring a
 	bool	mirrorEdges	false			Mirror Edges
 	number	phase	0		degrees	Phase
 	bool	horizontalPhaseShift	false			Horizontal Phase Shift
-effect	stylize.posterize	Stylize	Posterize	Reduces the color levels; poster and pop-art looks.
-	number	level	6	2..255		Level
-effect	stylize.roughenedges	Stylize	Roughen Edges	Roughens the picture's edges; torn paper, grunge text.
-	enum	edgeType	roughen	roughen|roughen-color|cut|spiky|rusty|rusty-color|photocopy|photocopy-color		Edge Type
-	color	edgeColor	#8c4d1a			Edge Color
-	number	border	8	0..500		Border
-	number	edgeSharpness	1	0..10		Edge Sharpness
-	number	fractalInfluence	1	0..1		Fractal Influence
-	number	scale	100	10..1000		Scale
-	number	stretch	0	-10..10		Stretch Width or Height
-	number	offset_x	0		picture widths	Offset (Turbulence) (0 left, 1 right)
-	number	offset_y	0		picture heights	Offset (Turbulence) (0 top, 1 bottom)
-	number	complexity	2	1..10		Complexity
-	number	evolution	0		degrees	Evolution
-	bool	evolutionOptions/cycleEvolution	false			Cycle Evolution
-	number	evolutionOptions/cycle	1	1..1000		Cycle (in Revolutions)
-	number	evolutionOptions/randomSeed	0	0..10000		Random Seed
 effect	stylize.scatter	Stylize	Scatter	Scatters pixels; grainy breakups.
 	number	amount	0	0..127		Scatter Amount
 	enum	grain	both	both|horizontal|vertical		Grain
 	bool	randomizeEveryFrame	false			Scatter Randomness
-effect	stylize.strobe	Stylize	Strobe Light	Flashes the picture on a rhythm; beat hits and strobe lights.
-	color	strobeColor	#ffffff			Strobe Color
-	number	blendWithOriginal	0	0..100		Blend With Original
-	number	strobeDuration	0.05	0..30		Strobe Duration (secs)
-	number	strobePeriod	1	0..30		Strobe Period (secs)
-	number	randomStrobeProbability	0	0..100		Random Strobe Probability
-	enum	strobe	operates-on-color-only	operates-on-color-only|makes-layer-transparent		Strobe
-	enum	strobeOperator	copy	copy|add|subtract|multiply|difference|screen|lighten|darken		Strobe Operator
 effect	stylize.texturize	Stylize	Texturize	Embosses another track's texture into the picture (textureLayer=V2); canvas, paper, and surface textures.
 	track	textureLayer				Texture Layer
 	number	lightDirection	135		degrees	Light Direction
@@ -2809,20 +2205,6 @@ effect	text.numbers	Text	Numbers	Draws numbers, dates, or timecode on the pictur
 	number	tracking	0	-100..100		Tracking
 	bool	proportionalSpacing	true			Proportional Spacing
 	bool	compositeOnOriginal	true			Composite On Original
-effect	text.timecode	Text	Timecode	Burns the timecode or frame count into the picture; review copies and slates.
-	enum	displayFormat	smpte-hh-mm-ss-ff	smpte-hh-mm-ss-ff|frames|feet-frames-35mm|feet-frames-16mm		Display Format
-	enum	timeSource	layer-source	layer-source|composition|custom		Time Source
-	number	timeUnits	30	1..120		Time Units
-	bool	dropFrame	false			Drop Frame
-	number	startingFrame	0	-1000000..1000000		Starting Frame
-	number	textPosition_x	0.5		picture widths	Text Position (0 left, 1 right)
-	number	textPosition_y	0.9		picture heights	Text Position (0 top, 1 bottom)
-	number	textSize	36	0..512		Text Size
-	color	textColor	#ffffff			Text Color
-	bool	showBox	true			Show Box
-	color	boxColor	#000000			Box Color
-	number	opacity	100	0..100		Opacity
-	bool	renderOnOriginal	true			Composite on Original
 effect	time.forcemotionblur	Time	Force Motion Blur	Adds motion blur from the clip's own movement between frames; smoother fast action.
 	number	motionBlurLevels	8	2..64		Motion Blur Levels
 	bool	overrideShutterAngle	true			Override Shutter Angle
@@ -2832,19 +2214,11 @@ effect	time.widetime	Time	Wide Time	Blends several neighbouring frames; long-exp
 	number	forwardSteps	3	0..45		Forward Steps
 	number	backwardSteps	3	0..45		Backward Steps
 	enum	nativeMotionBlur	off	off|on		Native Motion Blur
-effect	time.echo	Time	Echo	Blends earlier or later frames over the current one; trails, ghosting, and motion echoes.
-	number	echoTime	-0.03333333333333333	-30..30		Echo Time (seconds)
-	number	numberOfEchoes	1	0..255		Number Of Echoes
-	number	startingIntensity	1	0..1		Starting Intensity
-	number	decay	1	0..1		Decay
-	enum	echoOperator	add	add|maximum|minimum|screen|composite-in-back|composite-in-front|blend		Echo Operator
 effect	time.pixelmotionblur	Time	Pixel Motion Blur	Motion blur from tracked pixel motion; natural blur on footage shot too sharp.
 	enum	shutterControl	automatic	automatic|manual		Shutter Control
 	number	shutterAngle	180	0..720		Shutter Angle
 	number	shutterSamples	16	1..64		Shutter Samples
 	number	vectorDetail	20	0..100		Vector Detail
-effect	time.posterizetime	Time	Posterize Time	Holds frames to play at a lower frame rate; choppy, stop-motion, or stylized movement.
-	number	frameRate	12	0.1..99		Frame Rate
 effect	time.timedifference	Time	Time Difference	Shows the difference between the clip and another track over time (targetLayer=V2); spotting motion and changes between takes.
 	track	targetLayer				Target
 	number	timeOffset	0	-30..30		Time Offset (sec)
@@ -3031,14 +2405,6 @@ effect	utility.applylut	Utility	Apply Color LUT	Applies a .cube LUT file; camera
 effect	utility.overbrights	Utility	Overbrights	Shows or clips overbright pixels; HDR checks.
 	enum	channel	max-rgb	max-rgb|red|green|blue|alpha|luminance		Channel
 	color	highlightColor	#ff0000			Highlight Color
-effect	utility.cineon	Utility	Cineon Converter	Converts log Cineon footage; log to video.
-	enum	conversionType	log-to-linear	linear-to-log|log-to-linear|log-to-log		Conversion Type
-	number	tenBitBlackPoint	95	0..1023		10 Bit Black Point
-	number	internalBlackPoint	0	-1..2		Internal Black Point
-	number	tenBitWhitePoint	685	0..1023		10 Bit White Point
-	number	internalWhitePoint	1	-1..2		Internal White Point
-	number	gamma	1.7	0.1..5		Gamma
-	number	highlightRolloff	20	0..100		Highlight Rolloff
 effect	utility.colorprofileconverter	Utility	Color Profile Converter	Converts between color profiles; technical conversion.
 	enum	inputProfile	project-working-space	project-working-space|srgb-iec61966-2-1|hdtv-rec-709|rec-2020|display-p3|acescg|aces2065-1		Input Profile
 	bool	linearizeInputProfile	false			Linearize Input Profile

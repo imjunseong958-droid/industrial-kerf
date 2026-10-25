@@ -1,12 +1,14 @@
 # FilmCraft in Kerf
 
-The FilmCraft crates Kerf draws with: geometry, color science, and the text
-engine with its bundled fonts. They were copied from
+The FilmCraft crates Kerf draws with: geometry, color science, time, and the
+text engine with its bundled fonts. They were copied from
 [storytold/filmcraft](https://github.com/storytold/filmcraft) at
 `0f9966189daf46dcdc4bcb1fb73441bac80076be` and are developed here from then
 on; Kerf does not follow upstream. FilmCraft's renderer, transitions, and
-video effects are being carried into Kerf's own crates (`kerf-draw`,
-`kerf-fx`) in Kerf's terms, as [docs/looks.md](../docs/looks.md) plans.
+video effects are carried into Kerf's own crates in Kerf's terms, as
+[docs/looks.md](../docs/looks.md) plans: the drawing into `kerf-draw`, the
+transitions into `kerf-fx/src/transitions`, and the video effects with the
+effect definitions they read into `kerf-fx/src/filmcraft`.
 
 They are workspace members, so `cargo check` and `cargo test` cover them. They
 keep FilmCraft's edition (2024), lints (in the root `Cargo.toml`),

@@ -47,10 +47,6 @@ struct AgentSettings {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Command {
     Refresh,
-    /// Read the project again even when its document is unchanged, as when
-    /// analyses it draws from become ready.
-    #[serde(skip)]
-    Reload,
     Reconnect,
     Preview,
     Import {
@@ -164,10 +160,6 @@ struct Shared {
     /// The project directory, which relative media paths are resolved
     /// against.
     directory: PathBuf,
-    /// The runtime worker's commands, for work that finishes on its own.
-    commands: SyncSender<Command>,
-    /// Warp Stabilizer analyses are being made for the preview.
-    stabilizing: AtomicBool,
 }
 
 struct Bridge {
@@ -246,10 +238,6 @@ fn publish_snapshot(
         match kerf_runtime::parse_document(&state.document) {
             Ok(mut project) => {
                 kerf_runtime::resolve_media_paths(&mut project, &shared.directory);
-                let cache = kerf_engine::derivatives::DerivativeCache::new(&shared.directory);
-                if !kerf_engine::attach_stabilizations(&mut project, &cache).is_empty() {
-                    stabilize(project.clone(), shared, tx);
-                }
                 if let Ok(mut model) = shared.model.lock() {
                     *model = Some(project.clone());
                 }
@@ -266,33 +254,6 @@ fn publish_snapshot(
         tx,
         json!({"type":"state", "snapshot":with_proposal_timeline(snapshot, &state)}),
     );
-}
-
-/// Make the Warp Stabilizer analyses `project` lacks, one batch at a time,
-/// then read the project again so the preview draws from them. Until then
-/// those clips play unstabilized.
-fn stabilize(project: Project, shared: &Arc<Shared>, tx: &SyncSender<Value>) {
-    if shared.stabilizing.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    emit(
-        tx,
-        json!({"type":"analysis","message":"Analysing shaky clips for Warp Stabilizer…"}),
-    );
-    let (shared, tx) = (shared.clone(), tx.clone());
-    thread::spawn(move || {
-        let cache = kerf_engine::derivatives::DerivativeCache::new(&shared.directory);
-        let cancellation = kerf_engine::CancellationToken::new();
-        let message = match kerf_engine::analyze_stabilizations(&project, &cache, &cancellation) {
-            Ok(()) => "Warp Stabilizer analysis is ready".to_owned(),
-            Err(error) => format!("Warp Stabilizer analysis failed: {error}"),
-        };
-        emit(&tx, json!({"type":"analysis","message":message}));
-        shared.stabilizing.store(false, Ordering::SeqCst);
-        if !shared.closed.load(Ordering::Relaxed) {
-            let _ = shared.commands.try_send(Command::Reload);
-        }
-    });
 }
 
 /// A pending proposal's timeline beside the current one, so the editor can
@@ -397,14 +358,9 @@ fn runtime_worker(
             continue;
         };
         let operation = key();
-        let force_refresh = matches!(&command, Command::Refresh | Command::Reload);
+        let force_refresh = matches!(&command, Command::Refresh);
         let result = match command {
             Command::Refresh => active_client.get_state(),
-            Command::Reload => {
-                // Forgetting the last snapshot reads the project again.
-                previous = None;
-                active_client.get_state()
-            }
             Command::Import { path } => active_client.get_state().and_then(|state| {
                 active_client
                     .import_media_request("ui", &operation, &path, state.revision)
@@ -1257,40 +1213,62 @@ fn effect_previews(
         return Err(format!("no picture of `{clip}` at that time"));
     }
     let picture = &output.stdout[..size];
-    let own: Vec<Effect> = found
-        .effects
-        .iter()
-        .filter(|effect| {
-            effect.enabled
-                && Catalog::builtin()
-                    .fx(effect.fx.as_str())
-                    .is_some_and(|fx| fx.engine == Engine::Raster)
-        })
-        .cloned()
-        .collect();
+    // The clip's own raster effects, then FilmCraft's, which Kerf's
+    // renderer draws.
+    let own = |engine: Engine| -> Vec<Effect> {
+        found
+            .effects
+            .iter()
+            .filter(|effect| {
+                effect.enabled
+                    && Catalog::builtin()
+                        .fx(effect.fx.as_str())
+                        .is_some_and(|fx| fx.engine == engine)
+            })
+            .cloned()
+            .collect()
+    };
+    let (raster, kerf) = (own(Engine::Raster), own(Engine::Kerf));
     let seed = kerf_core::raster::seed(clip);
     for id in effects {
         if shared.previews.load(Ordering::SeqCst) != request {
             return Ok(());
         }
-        let Some(fx) = Catalog::builtin()
-            .fx(id)
-            .filter(|fx| fx.engine == Engine::Raster && fx.kind == FxKind::Effect)
-        else {
+        let Some(fx) = Catalog::builtin().fx(id).filter(|fx| {
+            fx.kind == FxKind::Effect && matches!(fx.engine, Engine::Raster | Engine::Kerf)
+        }) else {
             continue;
         };
-        let mut stack = own.clone();
-        stack.push(Effect {
+        let previewed = Effect {
             fx: fx.id.clone(),
             version: fx.version,
             enabled: true,
             params: Default::default(),
-        });
+        };
+        let (mut stack, mut filmcraft) = (raster.clone(), kerf.clone());
+        if fx.engine == Engine::Raster {
+            stack.push(previewed);
+        } else {
+            filmcraft.push(previewed);
+        }
         let Ok(stack) = kerf_fx::RasterStack::new(&stack, video.width, video.height, seed) else {
             continue;
         };
         let mut frame = picture.to_vec();
         stack.apply(&mut frame, width, height, clip_time, media.rate.fps());
+        let per_source = width as f32 / video.width.max(1) as f32;
+        if kerf_fx::filmcraft::instance::apply_rgba(
+            &mut frame,
+            (width as usize, height as usize),
+            &filmcraft,
+            clip_time,
+            per_source,
+            media.rate.fps(),
+        )
+        .is_err()
+        {
+            continue;
+        }
         emit(
             tx,
             json!({
@@ -1342,8 +1320,6 @@ pub unsafe extern "C" fn kerf_bridge_new(
         project: Mutex::new(None),
         model: Mutex::new(None),
         previews: AtomicU64::new(0),
-        commands: commands.clone(),
-        stabilizing: AtomicBool::new(false),
     });
     {
         let directory = directory.clone();
@@ -1680,8 +1656,6 @@ mod tests {
             project: Mutex::new(None),
             model: Mutex::new(None),
             previews: AtomicU64::new(0),
-            commands: mpsc::sync_channel(1).0,
-            stabilizing: AtomicBool::new(false),
         }
     }
 
