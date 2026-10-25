@@ -62,6 +62,12 @@ codegen-units = 1
 panic = "abort"
 strip = "symbols"
 
+# The editor links against the bridge, so leave its symbols in: a stripped
+# dylib's string table can land off an 8-byte boundary, which Apple's linker
+# refuses ("mis-aligned LINKEDIT string pool").
+[profile.release.package.kerf-qt-bridge]
+strip = false
+
 # Whole-program LTO for a local max-speed binary:
 #   cargo build --profile maxperf -p kerf-engine
 [profile.maxperf]
