@@ -257,7 +257,7 @@ fn lists_three_tools_and_the_reference() {
     assert!(reference["result"]["contents"][0]["text"]
         .as_str()
         .unwrap()
-        .contains("`color.basic`"));
+        .contains("`color.basic@1`"));
 }
 
 #[test]

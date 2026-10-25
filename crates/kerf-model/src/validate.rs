@@ -495,8 +495,15 @@ impl Validator<'_> {
                     );
                 }
             }
-            (Content::Generator { fx, params }, Some(domain)) => {
-                self.fx_params(id, fx, FxKind::Generator, domain, params);
+            (
+                Content::Generator {
+                    fx,
+                    version,
+                    params,
+                },
+                Some(domain),
+            ) => {
+                self.fx_params(id, (fx, *version), FxKind::Generator, domain, params);
             }
         }
         match domain {
@@ -516,7 +523,13 @@ impl Validator<'_> {
                     }
                 }
                 for effect in &clip.effects {
-                    self.fx_params(id, &effect.fx, FxKind::Effect, domain, &effect.params);
+                    self.fx_params(
+                        id,
+                        (&effect.fx, effect.version),
+                        FxKind::Effect,
+                        domain,
+                        &effect.params,
+                    );
                 }
             }
             None if !clip.props.is_empty() || !clip.effects.is_empty() => self.error(
@@ -544,7 +557,14 @@ impl Validator<'_> {
         }
     }
 
-    fn fx_params(&mut self, owner: &Id, fx: &Id, kind: FxKind, domain: Domain, params: &Params) {
+    fn fx_params(
+        &mut self,
+        owner: &Id,
+        (fx, version): (&Id, u32),
+        kind: FxKind,
+        domain: Domain,
+        params: &Params,
+    ) {
         let Some(def) = self.catalog.fx(fx.as_str()) else {
             self.error(
                 "fx.unknown",
@@ -553,6 +573,20 @@ impl Validator<'_> {
             );
             return;
         };
+        if let Err(message) = def.reads(version) {
+            self.error("fx.version", owner, format!("`{owner}`: {message}"));
+            return;
+        }
+        if version < def.version {
+            self.warning(
+                "fx.version_older",
+                owner,
+                format!(
+                    "`{owner}` names `{fx}@{version}`, which this Kerf draws as `{fx}@{}`",
+                    def.version
+                ),
+            );
+        }
         if def.kind != kind || def.domain != domain {
             self.error(
                 "fx.kind",
@@ -632,7 +666,7 @@ impl Validator<'_> {
             };
             self.fx_params(
                 id,
-                &transition.fx,
+                (&transition.fx, transition.version),
                 FxKind::Transition,
                 domain,
                 &transition.params,

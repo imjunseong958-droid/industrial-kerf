@@ -243,6 +243,7 @@ pub enum Op {
         from: Id,
         to: Id,
         fx: Id,
+        version: u32,
         duration: Time,
         align: Align,
         params: Params,
@@ -572,7 +573,13 @@ impl Editor<'_> {
             } => {
                 let at = self.editable(clip)?;
                 let domain = self.domain(at)?;
-                self.check_fx(&effect.fx, FxKind::Effect, domain, &effect.params)?;
+                self.check_fx(
+                    &effect.fx,
+                    effect.version,
+                    FxKind::Effect,
+                    domain,
+                    &effect.params,
+                )?;
                 let effects = &mut self.project.clip_at_mut(at).effects;
                 let index = index.unwrap_or(effects.len()).min(effects.len());
                 effects.insert(index, effect.clone());
@@ -594,7 +601,7 @@ impl Editor<'_> {
                         None => updated.remove(name),
                     };
                 }
-                self.check_fx(&effect.fx, FxKind::Effect, domain, &updated)?;
+                self.check_fx(&effect.fx, effect.version, FxKind::Effect, domain, &updated)?;
                 let target = &mut self.project.clip_at_mut(at).effects[*index];
                 target.params = updated;
                 target.enabled = enabled.unwrap_or(target.enabled);
@@ -665,10 +672,19 @@ impl Editor<'_> {
                 from,
                 to,
                 fx,
+                version,
                 duration,
                 align,
                 params,
-            } => self.add_transition(id.as_ref(), from, to, fx, *duration, *align, params),
+            } => self.add_transition(
+                id.as_ref(),
+                from,
+                to,
+                (fx, *version),
+                *duration,
+                *align,
+                params,
+            ),
             Op::SetTransition {
                 id,
                 duration,
@@ -695,6 +711,7 @@ impl Editor<'_> {
                 })?;
                 self.check_fx(
                     &transition.fx,
+                    transition.version,
                     FxKind::Transition,
                     domain,
                     &transition.params,
@@ -1033,11 +1050,20 @@ impl Editor<'_> {
         Ok(())
     }
 
-    fn check_fx(&self, fx: &Id, kind: FxKind, domain: Domain, params: &Params) -> Outcome {
+    fn check_fx(
+        &self,
+        fx: &Id,
+        version: u32,
+        kind: FxKind,
+        domain: Domain,
+        params: &Params,
+    ) -> Outcome {
         let def = self
             .catalog
             .fx(fx.as_str())
             .ok_or_else(|| fail("fx.unknown", format!("unknown {} `{fx}`", kind.name())))?;
+        def.reads(version)
+            .map_err(|message| fail("fx.version", message))?;
         if def.kind != kind || def.domain != domain {
             return Err(fail(
                 "fx.kind",
@@ -1103,8 +1129,15 @@ impl Editor<'_> {
                     return Err(fail("ref.missing", format!("no sequence `{sequence}`")));
                 }
             }
-            (Content::Generator { fx, params }, Some(domain)) => {
-                self.check_fx(fx, FxKind::Generator, domain, params)?;
+            (
+                Content::Generator {
+                    fx,
+                    version,
+                    params,
+                },
+                Some(domain),
+            ) => {
+                self.check_fx(fx, *version, FxKind::Generator, domain, params)?;
             }
             _ => {}
         }
@@ -1814,7 +1847,7 @@ impl Editor<'_> {
         id: Option<&Id>,
         from: &Id,
         to: &Id,
-        fx: &Id,
+        (fx, version): (&Id, u32),
         duration: Time,
         align: Align,
         params: &Params,
@@ -1849,7 +1882,7 @@ impl Editor<'_> {
             .kind
             .domain()
             .ok_or_else(|| fail("transition.domain", "subtitle tracks have no transitions"))?;
-        self.check_fx(fx, FxKind::Transition, domain, params)?;
+        self.check_fx(fx, version, FxKind::Transition, domain, params)?;
         let id = match id {
             Some(id) => {
                 self.claim(id)?;
@@ -1864,6 +1897,7 @@ impl Editor<'_> {
                 from: from.clone(),
                 to: to.clone(),
                 fx: fx.clone(),
+                version,
                 duration,
                 align,
                 params: params.clone(),

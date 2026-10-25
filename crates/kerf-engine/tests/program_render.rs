@@ -135,11 +135,11 @@ fn cuts_transitions_and_ranges_render_frame_exact() {
          \x20 track V1 video\n\
          \x20   clip c1 media=red src=12f at=0f dur=48f\n\
          \x20   clip c2 media=blue src=12f at=48f dur=48f\n\
-         \x20   transition t1 from=c1 to=c2 fx=dissolve dur=12f\n\
+         \x20   transition t1 from=c1 to=c2 fx=dissolve@1 dur=12f\n\
          \x20 track A1 audio\n\
          \x20   clip a1 media=red src=12f at=0f dur=48f\n\
          \x20   clip a2 media=blue src=12f at=48f dur=48f\n\
-         \x20   transition t2 from=a1 to=a2 fx=crossfade dur=12f\n",
+         \x20   transition t2 from=a1 to=a2 fx=crossfade@1 dur=12f\n",
     );
     let output = dir.path().join("full.mp4");
     render(&project, None, None, &output);
@@ -198,7 +198,7 @@ fn generators_nested_sequences_and_reverse_render() {
     let dir = tempfile::tempdir().unwrap();
     let text = if has_drawtext() {
         "\x20 track V2 video\n\
-         \x20   clip t1 gen=title at=0f dur=24f\n\
+         \x20   clip t1 gen=title@1 at=0f dur=24f\n\
          \x20     set text=\"Cut\" size=0.5\n\
          \x20 track S1 subtitle\n\
          \x20   clip cap caption=\"Hello\" at=48f dur=24f\n"
@@ -213,7 +213,7 @@ fn generators_nested_sequences_and_reverse_render() {
          \x20   clip i1 media=blue src=0f at=0f dur=48f\n\
          sequence main rate=24 size=160x90 audio=48000\n\
          \x20 track V1 video\n\
-         \x20   clip bg gen=solid at=0f dur=24f\n\
+         \x20   clip bg gen=solid@1 at=0f dur=24f\n\
          \x20     set color=#00ff00\n\
          \x20   clip n1 seq=inner src=0f at=24f dur=24f\n\
          \x20   clip r1 media=red src=0f at=48f dur=24f speed=-1\n\
@@ -399,7 +399,7 @@ fn raster_transitions_wipe_from_one_clip_to_the_next() {
          \x20 track V1 video\n\
          \x20   clip c1 media=red src=0f at=0f dur=24f\n\
          \x20   clip c2 media=blue src=24f at=24f dur=24f\n\
-         \x20   transition t1 from=c1 to=c2 fx=transition.linearwipe dur=12f\n",
+         \x20   transition t1 from=c1 to=c2 fx=transition.linearwipe@1 dur=12f\n",
     );
     let output = dir.path().join("wipe.mp4");
     let options = RenderOptions {
@@ -434,7 +434,7 @@ fn titles_solids_and_nested_sequences_take_raster_effects() {
     let dir = tempfile::tempdir().unwrap();
     let title = if has_drawtext() {
         "\x20 track V2 video\n\
-         \x20   clip t1 gen=title at=24f dur=24f\n\
+         \x20   clip t1 gen=title@1 at=24f dur=24f\n\
          \x20     set text=\"Hi\" size=0.5\n\
          \x20     fx channel.invert\n"
     } else {
@@ -448,7 +448,7 @@ fn titles_solids_and_nested_sequences_take_raster_effects() {
              \x20   clip n1 seq=s2 src=0f at=0f dur=24f\n\
              \x20     fx channel.invert\n\
              \x20   clip c1 media=red src=0f at=24f dur=24f\n\
-             \x20   clip g1 gen=solid at=48f dur=24f\n\
+             \x20   clip g1 gen=solid@1 at=48f dur=24f\n\
              \x20     set color=#ff0000\n\
              \x20     fx channel.invert\n\
              {title}\

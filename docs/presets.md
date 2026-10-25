@@ -45,7 +45,7 @@ sequence s1 name="Two-shot product" rate=30 size=1080x1920
       set scale={0f:1 30f:1.1:ease}
     clip c2 media=slot2 src=00:00:00:00 at=00:00:02:00 dur=00:00:03:00
   track V2 video
-    clip title1 gen=title at=00:00:00:00 dur=00:00:02:00
+    clip title1 gen=title@1 at=00:00:00:00 dur=00:00:02:00
       set text="Your product"
 ```
 

@@ -39,9 +39,9 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
     clip c1 media=m1 src=14:22:35:00 at=01:00:00:00 dur=00:00:06:12 link=L1
       set opacity=0.9 scale={0f:1 48f:1.1:ease}
       mask k1 ellipse=0.5,0.45,0.35,0.4 feather=40
-      fx color.basic exposure=0.3
+      fx color.basic@1 exposure=0.3
     clip c2 media=m1 src=14:23:02:00 at=01:00:06:12 dur=00:00:03:00
-    transition t1 from=c1 to=c2 fx=dissolve dur=00:00:00:12
+    transition t1 from=c1 to=c2 fx=dissolve@1 dur=00:00:00:12
   track A1 audio
     clip a1 media=m1 src=14:22:35:00 at=01:00:00:00 dur=00:00:06:12 link=L1
       set gain=-3
@@ -60,6 +60,11 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   `gen=` (a generator such as `title`), or `caption=`.
 - `set` holds intrinsic properties (position, scale, crop, opacity, gain, …)
   and generator parameters. `fx` lines are the effect stack, top to bottom.
+- Effects, transitions, and generators are named with their version,
+  `blur.gaussian@1`. Kerf always writes it; a reference without one, as in a
+  hand-written script, takes this Kerf's. A version newer than this Kerf's
+  is an error, and an older one it still reads is drawn by the current one
+  with a warning ([looks.md](looks.md#versions)).
 - `mask` lines are a picture clip's masks, combined in order. The outline is
   one of `rect=left,top,right,bottom`, `ellipse=x,y,radius across,radius
   down`, or `points="x,y x,y …"` (with `closed=false` for an open path), in

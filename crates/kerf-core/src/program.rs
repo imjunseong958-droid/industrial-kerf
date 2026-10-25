@@ -629,7 +629,7 @@ impl<'a> Graph<'a> {
                 self.nesting.pop();
                 Source::Stream(label)
             }
-            Content::Generator { fx, params } => {
+            Content::Generator { fx, params, .. } => {
                 let color = rate_arg(self.rate);
                 let span = secs(length);
                 match fx.as_str() {

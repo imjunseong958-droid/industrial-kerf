@@ -62,8 +62,8 @@ sequence s1 name="Main" rate=24 size=1920x1080 audio=48000 start=01:00:00:00
     clip c1 media=m1 src=00:00:10:00 at=01:00:00:00 dur=00:00:04:12 link=L1
     clip c2 media=m1 src=00:01:00:12 at=01:00:04:12 dur=00:00:02:12 link=L2
       set opacity={0f:0 12f:1:ease}
-      fx color.basic exposure=0.5
-    transition t1 from=c1 to=c2 fx=dissolve dur=00:00:00:12
+      fx color.basic@1 exposure=0.5
+    transition t1 from=c1 to=c2 fx=dissolve@1 dur=00:00:00:12
   track A1 audio
     clip a1 media=m1 src=00:00:10:00 at=01:00:00:00 dur=00:00:04:12 link=L1
     clip a2 media=m1 src=00:01:00:12 at=01:00:04:12 dur=00:00:02:12 link=L2
@@ -129,6 +129,31 @@ fn effects_are_addressed_by_id_or_position() {
     assert_eq!(
         clip.effects[0].params["radius"],
         kerf_model::Param::Static(Value::Number(2.0))
+    );
+
+    // A version may be written when adding or naming one; an add without
+    // one takes this Kerf's, and the journal says which.
+    let applied = run(
+        &base(),
+        "fx c1 add blur.gaussian@1 radius=8\nfx c1 set blur.gaussian@1 radius=3",
+    );
+    let effect = &applied.project.clip("c1").unwrap().effects[0];
+    assert_eq!((effect.fx.as_str(), effect.version), ("blur.gaussian", 1));
+    let applied = run(&base(), "fx c1 add blur.gaussian radius=8");
+    let printed = print_ops(&base(), Catalog::builtin(), &applied.ops);
+    assert!(
+        printed.contains("fx c1 add blur.gaussian@1 radius=8"),
+        "{printed}"
+    );
+    let error = fails(&base(), "fx c1 add blur.gaussian@2");
+    assert!(error.message.contains("newer than this Kerf"), "{error}");
+    let error = fails(
+        &base(),
+        "fx c1 add blur.gaussian\nfx c1 set blur.gaussian@2 radius=3",
+    );
+    assert!(
+        error.message.contains("no `blur.gaussian@2` effect"),
+        "{error}"
     );
 }
 

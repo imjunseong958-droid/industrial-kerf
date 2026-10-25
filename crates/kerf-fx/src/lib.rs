@@ -621,6 +621,7 @@ mod tests {
     fn effect(id: &str, params: &[(&str, Param)]) -> Effect {
         Effect {
             fx: Id::new(id).unwrap(),
+            version: 1,
             enabled: true,
             params: params
                 .iter()

@@ -601,7 +601,7 @@ mod tests {
              \x20   clip a1 media=d src=0.5s at=0s dur=1s\n\
              \x20   clip a2 media=d src=2s at=1s dur=1s\n\
              \x20     set gain={{0f:-12 15f:0:ease}}\n\
-             \x20   transition x1 from=a1 to=a2 fx=crossfade dur=10f\n\
+             \x20   transition x1 from=a1 to=a2 fx=crossfade@1 dur=10f\n\
              \x20 track A2 audio\n\
              \x20   clip m1 media=m src=0s at=0.5s dur=2s\n\
              \x20     set gain=-6 pan=-0.3\n\

@@ -541,6 +541,7 @@ fn transitions_need_handles_and_drop_when_their_cut_opens() {
         from: id(from),
         to: id(to),
         fx: id("dissolve"),
+        version: 1,
         duration: f(12),
         align: Align::Center,
         params: Params::new(),

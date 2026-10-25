@@ -260,7 +260,7 @@ pub fn text_slots(project: &Project) -> BTreeMap<String, String> {
         .flat_map(|t| &t.clips)
         .filter_map(|clip| match &clip.content {
             Content::Caption { text } => Some((clip.id.to_string(), text.clone())),
-            Content::Generator { fx, params } if fx == "title" => {
+            Content::Generator { fx, params, .. } if fx == "title" => {
                 let text = match params.get("text") {
                     Some(Param::Static(Value::Text(text))) => text.clone(),
                     _ => String::new(),
@@ -465,6 +465,7 @@ fn append_sequence(sequence: &Sequence, ops: &mut Vec<Op>) {
                 from: transition.from.clone(),
                 to: transition.to.clone(),
                 fx: transition.fx.clone(),
+                version: transition.version,
                 duration: transition.duration,
                 align: transition.align,
                 params: transition.params.clone(),

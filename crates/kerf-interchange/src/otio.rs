@@ -372,16 +372,20 @@ pub fn from_timeline(
                     if let Some((id, before, after)) = pending.take() {
                         match track.clips.last() {
                             Some(from) if from.end() == clip.start => {
+                                let fx = if kind == TrackKind::Video {
+                                    "dissolve"
+                                } else {
+                                    "crossfade"
+                                };
                                 let transition = Transition {
                                     id: claim(id, "t"),
                                     from: from.id.clone(),
                                     to: clip.id.clone(),
-                                    fx: Id::new(if kind == TrackKind::Video {
-                                        "dissolve"
-                                    } else {
-                                        "crossfade"
-                                    })
-                                    .expect("catalog id"),
+                                    fx: Id::new(fx).expect("catalog id"),
+                                    version: Catalog::builtin()
+                                        .fx(fx)
+                                        .expect("a built-in transition")
+                                        .version,
                                     duration: rate.time_of(before + after),
                                     align: match (before, after) {
                                         (0, _) => Align::Start,
@@ -473,7 +477,7 @@ sequence s1 name="Short" rate=23.976 size=1920x1080 audio=48000 start=01:00:00:0
   track V1 video
     clip c1 media=m1 src=01:00:10:00 at=01:00:00:00 dur=00:00:02:00
     clip c2 media=m1 src=01:00:20:00 at=01:00:02:00 dur=00:00:03:00
-    transition t1 from=c1 to=c2 fx=dissolve dur=00:00:00:12
+    transition t1 from=c1 to=c2 fx=dissolve@1 dur=00:00:00:12
   track A1 audio
     clip a1 media=m1 src=01:00:10:00 at=01:00:00:00 dur=00:00:02:00
     clip a2 media=m1 src=01:00:20:00 at=01:00:03:00 dur=00:00:02:00

@@ -266,6 +266,12 @@ pub struct FxDef {
     pub engine: Engine,
     pub params: Vec<ParamDef>,
     pub doc: String,
+    /// The version documents name it by (`blur.gaussian@1`). It goes up
+    /// when the same parameters draw a different picture.
+    pub version: u32,
+    /// The oldest version whose documents it still reads; they are drawn
+    /// as `version` draws.
+    pub reads_from: u32,
 }
 
 impl FxDef {
@@ -278,6 +284,8 @@ impl FxDef {
             engine: Engine::Graph,
             params: Vec::new(),
             doc: doc.to_owned(),
+            version: 1,
+            reads_from: 1,
         }
     }
 
@@ -289,6 +297,30 @@ impl FxDef {
     pub fn category(mut self, category: &str) -> Self {
         self.category = category.to_owned();
         self
+    }
+
+    /// Set the version, and the oldest version it still reads.
+    pub fn version(mut self, version: u32, reads_from: u32) -> Self {
+        self.version = version;
+        self.reads_from = reads_from;
+        self
+    }
+
+    /// Whether a document naming `version` can use this definition.
+    pub fn reads(&self, version: u32) -> Result<(), String> {
+        if version > self.version {
+            Err(format!(
+                "`{}@{version}` is newer than this Kerf, which has `{}@{}`",
+                self.id, self.id, self.version
+            ))
+        } else if version < self.reads_from {
+            Err(format!(
+                "`{}@{version}` is no longer read; this Kerf has `{}@{}`",
+                self.id, self.id, self.version
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     pub fn find(&self, name: &str) -> Option<&ParamDef> {

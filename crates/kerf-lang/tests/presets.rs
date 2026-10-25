@@ -9,16 +9,16 @@ sequence s1 name="Edit" rate=30 size=1080x1920 start=01:00:00:00
   track V1 video name="Picture"
     clip c1 media=m1 src=01:00:10:00 at=01:00:00:00 dur=2s link=L1 name="Opening"
       set scale={0f:1 30f:1.2:ease}
-      fx color.basic saturation=0.8 enabled=false
+      fx color.basic@1 saturation=0.8 enabled=false
     clip c2 media=m1 src=01:00:30:00 at=01:00:02:00 dur=2s speed=2 link=L2 name="Detail"
-    transition t1 from=c1 to=c2 fx=dissolve dur=12f
+    transition t1 from=c1 to=c2 fx=dissolve@1 dur=12f
   track A1 audio muted=true
     clip a1 media=m1 src=01:00:10:00 at=01:00:00:00 dur=2s link=L1
       set gain=-3
     clip a2 media=m1 src=01:00:30:00 at=01:00:02:00 dur=2s speed=2 link=L2
-    transition t2 from=a1 to=a2 fx=crossfade dur=12f
+    transition t2 from=a1 to=a2 fx=crossfade@1 dur=12f
   track V2 video locked=true
-    clip title1 gen=title at=01:00:00:00 dur=4s
+    clip title1 gen=title@1 at=01:00:00:00 dur=4s
       set text="Original title"
   track S1 subtitle
     clip cap1 caption="Original caption" at=01:00:01:00 dur=1s
@@ -40,7 +40,7 @@ sequence target rate=25 size=1920x1080
   marker oldmarker at=0f
 sequence unrelated rate=30 size=320x180
   track Keep video
-    clip keep gen=solid at=0f dur=1s
+    clip keep gen=solid@1 at=0f dur=1s
       set color=#ff0000
 "#,
     )
@@ -270,7 +270,7 @@ sequence child rate=30 size=320x180
   track V1 video
     clip first media=m src=10s at=0f dur=2s speed=-1
     clip second media=m src=20s at=2s dur=2s speed=-1
-    transition fade from=first to=second fx=dissolve dur=12f
+    transition fade from=first to=second fx=dissolve@1 dur=12f
 sequence unused rate=30 size=320x180
 "#,
     );
@@ -326,7 +326,7 @@ sequence s rate={rate} size=320x180
   track V1 video
     clip a media=m src=3000f at=0f dur=90f speed={speed}
     clip b media=m src=9000f at=90f dur=90f speed={speed}
-    transition t from=a to=b fx=dissolve dur={frames}f align={align}
+    transition t from=a to=b fx=dissolve@1 dur={frames}f align={align}
 "#
                     ));
                     preset::export(&original, Catalog::builtin(), &Id::new("s").unwrap(), "P")

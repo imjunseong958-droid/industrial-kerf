@@ -15,11 +15,11 @@
 
 use crate::doc::{
     content, content_text, mask_shape_text, mask_text, media_fields, media_line, params_text,
-    parse_align, parse_marker_color, parse_mask_mode, parse_sample_rate, parse_size,
+    parse_align, parse_marker_color, parse_mask_mode, parse_sample_rate, parse_size, pinned,
     sequence_fields, sequence_line, take_mask_shape,
 };
 use crate::lex::{lex, Arg, Atom, Line};
-use crate::text::{parse_param, quote, Clock, Fields};
+use crate::text::{parse_fx_ref, parse_param, print_fx_ref, quote, Clock, Fields};
 use kerf_model::time::parse_timecode;
 use kerf_model::{
     apply, Catalog, Clip, ClipChange, Content, Diagnostic, Domain, Edge, Effect, Id, MarkerChange,
@@ -470,7 +470,7 @@ impl Script<'_> {
         let s = self.current(line)?;
         let sequence = &self.project.sequences[s];
         let clock = Clock::of_sequence(sequence);
-        let (mut content, source) = content(&mut fields, &self.project)?;
+        let (mut content, source) = content(&mut fields, &self.project, self.catalog)?;
         let positions = Positions::of(sequence);
         let at = required(&mut fields, "at", |t| positions.position(t))?;
         let duration = match (
@@ -522,7 +522,7 @@ impl Script<'_> {
             .collect();
         let mut props: Vec<Params> = vec![Params::new(); tracks.len()];
         for (key, arg) in fields.rest() {
-            if let Content::Generator { fx, params } = &mut content {
+            if let Content::Generator { fx, params, .. } = &mut content {
                 if let Some(def) = self.catalog.fx(fx.as_str()).and_then(|d| d.find(key)) {
                     params.insert(
                         key.to_owned(),
@@ -837,11 +837,13 @@ impl Script<'_> {
         )?;
         let target_column = fields.positional()[3].column;
         if action == "add" {
-            let fx = Id::new(target_word).map_err(|e| line.error(target_column, e.to_string()))?;
+            let (fx, version) =
+                parse_fx_ref(target_word).map_err(|m| line.error(target_column, m))?;
             let def = self
                 .catalog
                 .fx(fx.as_str())
                 .ok_or_else(|| line.error(target_column, format!("unknown effect `{fx}`")))?;
+            let version = pinned(def, version).map_err(|m| line.error(target_column, m))?;
             let index = fields.take_with("at", position_index)?;
             let enabled = fields.take_bool("enabled")?.unwrap_or(true);
             let params = params(&mut fields, &def.params, &fx, clock.rate)?;
@@ -850,6 +852,7 @@ impl Script<'_> {
                 clip,
                 effect: Effect {
                     fx,
+                    version,
                     enabled,
                     params,
                 },
@@ -907,8 +910,8 @@ impl Script<'_> {
                 let to = fields
                     .take_id("to")?
                     .ok_or_else(|| line.error(1, "missing `to=`"))?;
-                let fx = fields
-                    .take_id("fx")?
+                let (fx, version) = fields
+                    .take_fx_ref("fx")?
                     .ok_or_else(|| line.error(1, "missing `fx=`"))?;
                 let (_, clock) = self.clip(&from, line)?;
                 let duration = required(&mut fields, "dur", |t| clock.duration(t))?;
@@ -917,6 +920,7 @@ impl Script<'_> {
                     .catalog
                     .fx(fx.as_str())
                     .ok_or_else(|| line.error(1, format!("unknown transition `{fx}`")))?;
+                let version = pinned(def, version).map_err(|m| line.error(1, m))?;
                 let params = params(&mut fields, &def.params, &fx, clock.rate)?;
                 fields.finish(2)?;
                 return Ok(vec![Op::AddTransition {
@@ -924,6 +928,7 @@ impl Script<'_> {
                     from,
                     to,
                     fx,
+                    version,
                     duration,
                     align,
                     params,
@@ -1075,8 +1080,13 @@ fn effect_index(clip: &Clip, target: &str) -> Result<usize, String> {
             Err(format!("`{}` has {} effects", clip.id, clip.effects.len()))
         };
     }
+    // An id may name its version too, as `blur.gaussian@1`.
+    let (id, version) = parse_fx_ref(target)?;
     let matches: Vec<usize> = (0..clip.effects.len())
-        .filter(|i| clip.effects[*i].fx == target)
+        .filter(|i| {
+            let effect = &clip.effects[*i];
+            effect.fx == id && version.is_none_or(|version| effect.version == version)
+        })
         .collect();
     match matches[..] {
         [index] => Ok(index),
@@ -1316,7 +1326,7 @@ fn op_line(project: &Project, catalog: &Catalog, op: &Op) -> String {
             if let Some(name) = &first.name {
                 write!(text, " name={}", quote(name)).unwrap();
             }
-            if let Content::Generator { fx, params } = &first.content {
+            if let Content::Generator { fx, params, .. } = &first.content {
                 let defs = catalog
                     .fx(fx.as_str())
                     .map(|d| d.params.as_slice())
@@ -1446,7 +1456,7 @@ fn op_line(project: &Project, catalog: &Catalog, op: &Op) -> String {
             index,
         } => {
             let clock = clip_clock(clip).unwrap_or(fallback);
-            let mut text = format!("fx {clip} add {}", effect.fx);
+            let mut text = format!("fx {clip} add {}", print_fx_ref(&effect.fx, effect.version));
             if let Some(index) = index {
                 write!(text, " at={}", index + 1).unwrap();
             }
@@ -1513,6 +1523,7 @@ fn op_line(project: &Project, catalog: &Catalog, op: &Op) -> String {
             from,
             to,
             fx,
+            version,
             duration,
             align,
             params,
@@ -1524,7 +1535,8 @@ fn op_line(project: &Project, catalog: &Catalog, op: &Op) -> String {
             }
             write!(
                 text,
-                " from={from} to={to} fx={fx} dur={}",
+                " from={from} to={to} fx={} dur={}",
+                print_fx_ref(fx, *version),
                 clock.print_duration(*duration)
             )
             .unwrap();
