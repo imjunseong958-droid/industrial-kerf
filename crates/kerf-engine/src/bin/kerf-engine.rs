@@ -575,6 +575,9 @@ fn run_transcription(
 fn read_project(path: &std::path::Path) -> Result<kerf_model::Project> {
     let text =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    // The project's own looks are in its folder.
+    let folder = path.parent().unwrap_or(std::path::Path::new("."));
+    kerf_model::look::install_project_looks(folder).map_err(anyhow::Error::msg)?;
     let mut project = kerf_lang::parse_document(&text, kerf_model::Catalog::builtin())
         .map_err(|errors| {
             let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();

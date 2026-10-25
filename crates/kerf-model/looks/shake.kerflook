@@ -1,0 +1,9 @@
+kerf-look 1
+look look.shake version=1 name="Shake" category="Motion" on=clip
+  doc "A hand-held jolt at a hit that settles; impacts, punchlines, and bass drops."
+  param intensity number default=0.5 range=0..1 doc="How hard the jolt is."
+  param hit time default=0f doc="When it hits."
+  param settle time default=10f range=2f..2s doc="How long it takes to settle."
+  set x={$hit:0 $hit+$settle*0.2:0.02*$intensity $hit+$settle*0.4:-0.015*$intensity $hit+$settle*0.6:0.008*$intensity:ease $hit+$settle:0}
+  set rotation={$hit:0 $hit+$settle*0.2:1.5*$intensity $hit+$settle*0.4:-1*$intensity:ease $hit+$settle:0}
+  fx blur.directional@2 direction=90 length={$hit:0 $hit+$settle*0.2:30*$intensity $hit+$settle*0.6:0}

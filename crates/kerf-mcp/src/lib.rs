@@ -126,6 +126,8 @@ impl KerfMcpRouter {
         let runtime =
             RuntimeClient::connect_or_spawn(&dir, kerfd_binary).map_err(runtime_error_text)?;
         let skills = load_project_skills(&dir).map_err(|error| error.to_string())?;
+        // The project's own looks, for checking and previewing edits.
+        kerf_model::look::install_project_looks(&dir)?;
         let namespace = std::env::var("KERF_MCP_NAMESPACE")
             .unwrap_or_default()
             .trim()

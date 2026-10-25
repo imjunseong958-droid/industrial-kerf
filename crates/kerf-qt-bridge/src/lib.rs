@@ -1274,6 +1274,9 @@ pub unsafe extern "C" fn kerf_bridge_new(
     };
     let directory = PathBuf::from(directory);
     let binary = PathBuf::from(binary);
+    // The project's own looks, for its previews; kerfd reports any that do
+    // not read.
+    let _ = kerf_model::look::install_project_looks(&directory);
     let (commands, rx) = mpsc::sync_channel(32);
     let (media, media_rx) = mpsc::sync_channel(32);
     let (prompts, prompt_rx) = mpsc::sync_channel(1);

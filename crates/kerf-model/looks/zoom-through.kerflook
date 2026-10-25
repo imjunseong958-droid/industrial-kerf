@@ -1,0 +1,8 @@
+kerf-look 1
+look look.zoom-through version=1 name="Zoom Through" category="Transitions" on=transition
+  doc "Punches into the outgoing shot and lands on the next; energetic cuts on a beat."
+  param strength number default=1 range=0..2 doc="How hard it punches in."
+  a set scale={0%:1:ease-in 100%:1+0.6*$strength}
+  a fx blur.radialzoom@1 amount={0%:0 100%:40*$strength}
+  b set scale={0%:1-0.3*$strength:ease-out 100%:1}
+  b set opacity={0%:0 30%:1}

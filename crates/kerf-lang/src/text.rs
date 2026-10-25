@@ -207,7 +207,7 @@ pub fn print_param(param: &Param, rate: Rate) -> String {
 fn parse_word_value(text: &str, def: &ParamDef) -> Result<Value, String> {
     let expected = || format!("`{}` expects a {}, not `{text}`", def.name, def.ty.name());
     match &def.ty {
-        ParamType::Number => text
+        ParamType::Number | ParamType::Time => text
             .parse::<f64>()
             .ok()
             .filter(|n| n.is_finite())
@@ -233,6 +233,9 @@ fn parse_word_value(text: &str, def: &ParamDef) -> Result<Value, String> {
 /// Read a value for `def`; `{time:value[:interp] …}` animates it.
 pub fn parse_param(atom: &Atom, def: &ParamDef, rate: Rate) -> Result<Param, String> {
     match atom {
+        Atom::Word(word) if def.ty == ParamType::Time => amount(word, rate)
+            .map(|time| Param::Static(Value::Number(time.seconds())))
+            .map_err(|error| format!("`{}`: {error}", def.name)),
         Atom::Word(word) => parse_word_value(word, def).map(Param::Static),
         Atom::Str(text)
             if matches!(

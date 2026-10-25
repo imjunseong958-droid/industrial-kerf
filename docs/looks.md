@@ -1,7 +1,9 @@
 # Effects, looks, and versions
 
-> Status: versions are in. Looks follow once the built-in effects are
-> settled (see the plan at the end).
+> Status: versions, the built-in effects, and looks are in: the reader,
+> the catalog layers, expansion, `flatten`, and 15 bundled looks
+> (`crates/kerf-model/looks`). Presets that carry their looks are next
+> (see the plan at the end).
 
 Kerf draws with a small set of **built-in effects**: transitions, color,
 blur, keys, distortion, transform, and the few others an editor reaches for.
@@ -43,10 +45,10 @@ look look.shake version=1 name="Shake" category="Fun" on=clip
   doc "A hand-held jolt that settles: hits, impacts, punchlines."
   param intensity number default=0.5 range=0..1
   param hit time default=0f
-  param settle time default=10f range=1f..2s
-  set x={$hit:0 $hit+2f:0.02*$intensity $hit+4f:-0.015*$intensity $hit+$settle:0:ease}
-  set rotation={$hit:0 $hit+2f:1.5*$intensity $hit+$settle:0:ease}
-  fx blur.directional@2 length={$hit:0 $hit+2f:30*$intensity $hit+6f:0}
+  param settle time default=10f range=2f..2s
+  set x={$hit:0 $hit+$settle*0.2:0.02*$intensity $hit+$settle*0.4:-0.015*$intensity:ease $hit+$settle:0}
+  set rotation={$hit:0 $hit+$settle*0.2:1.5*$intensity:ease $hit+$settle:0}
+  fx blur.directional@2 direction=90 length={$hit:0 $hit+$settle*0.2:30*$intensity $hit+$settle*0.6:0}
 ```
 
 A clip uses it like any effect, `fx look.shake@1 intensity=0.7 hit=12f`, and
@@ -63,11 +65,15 @@ hand tuning.
   guidance does for built-in effects; agents choose looks by it.
 - **`param`** lines declare its parameters: `number`, `time`, `angle`,
   `color`, `choice` (`options=a|b|c`), or `switch`, each with a default and
-  an optional `range=`. Times are relative to the clip, like keyframe times.
+  an optional `range=` and `doc=`. Times are relative to the clip, like
+  keyframe times; frames in a `param` line count at 30 a second for the
+  catalog's ranges, and at the sequence's rate when the look expands. A
+  look's parameters do not animate; its keyframes do.
 - **`set`** lines change the clip's properties, combined with the clip's own
   so a look rides on top of the edit: `x`, `y`, and `rotation` add; `scale`,
   `scale_x`, `scale_y`, and `opacity` multiply. Other properties are not
-  available to looks.
+  available to looks. A keyframe's interpolation (`:ease`, `:hold`, …) is
+  that of the move from it to the next, as in documents.
 - **`fx`** lines are built-in effects with a pinned version, run where the
   look sits in the clip's effect stack. Looks do not contain other looks.
 - **`mask`** lines add masks for the look's own effects to read. Their names
@@ -83,8 +89,9 @@ anyone.
 
 ### Titles
 
-A look `on=title` sets and animates a title's parameters and properties: a
-pop-in, a typewriter reveal, a wobble on a word.
+A look `on=title` animates a title's properties and runs effects on it: a
+pop-in, a wobble. Setting a title's own parameters (its text, size, color)
+is for later.
 
 ### Transitions
 
@@ -94,14 +101,17 @@ enters (`b`). Its keyframe times are percentages of the transition, from
 
 ```text
 kerf-look 1
-look look.zoom-through version=1 name="Zoom Through" category="Fun" on=transition
+look look.zoom-through version=1 name="Zoom Through" category="Transitions" on=transition
   doc "Punches into the outgoing shot and lands on the next; energetic cuts on a beat."
-  param strength number default=1 range=0..3
-  a set scale={0%:1 100%:1+0.6*$strength:ease-in}
+  param strength number default=1 range=0..2
+  a set scale={0%:1:ease-in 100%:1+0.6*$strength}
   a fx blur.radialzoom@1 amount={0%:0 100%:40*$strength}
-  b set scale={0%:1-0.3*$strength 100%:1:ease-out}
+  b set scale={0%:1-0.3*$strength:ease-out 100%:1}
   b set opacity={0%:0 30%:1}
 ```
+
+It draws over the built-in `stack` transition: both clips show across the
+cut, the incoming one over the outgoing, as the look's lines move them.
 
 ## Where looks come from
 

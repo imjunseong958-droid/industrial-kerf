@@ -388,3 +388,42 @@ fn kept_effectcraft_effects_run_on_kerfs_renderer_beside_filmcrafts() {
         "{inverted:?} after {r}"
     );
 }
+
+#[test]
+fn looks_draw_as_the_effects_they_stand_for() {
+    // A flash at frame 6: the grey solid is brighter just after the hit
+    // than before it, and back by the end of the fade.
+    let flashed = format!(
+        "{SEQUENCE}\
+         \x20 track V1 video\n\
+         \x20   clip g1 gen=solid@1 at=0f dur=24f\n\
+         \x20     set color=#404040\n\
+         \x20     fx look.flash@1 hit=6f fade=6f\n"
+    );
+    let at = |body: &str, index: i64| pixel(&frame(body, index, false), 160, 90)[0];
+    assert_eq!(at(&flashed, 3), 64);
+    assert!(at(&flashed, 7) > 150, "{}", at(&flashed, 7));
+    assert_eq!(at(&flashed, 20), 64);
+    // A whip across a cut: halfway, the outgoing clip has moved off to the
+    // left and the incoming one comes in from the right, over it.
+    let whipped = format!(
+        "{SEQUENCE}\
+         \x20 track V1 video\n\
+         \x20   clip g1 gen=solid@1 at=0f dur=24f\n\
+         \x20     set color=#ff0000\n\
+         \x20   clip g2 gen=solid@1 at=24f dur=24f\n\
+         \x20     set color=#0000ff\n\
+         \x20   transition x1 from=g1 to=g2 fx=look.whip@1 dur=12f\n"
+    );
+    let before = pixel(&frame(&whipped, 16, false), 160, 90);
+    assert_eq!(before, [255, 0, 0]);
+    let after = pixel(&frame(&whipped, 31, false), 160, 90);
+    assert_eq!(after, [0, 0, 255]);
+    let middle = frame(&whipped, 24, false);
+    let (left, right) = (pixel(&middle, 20, 90), pixel(&middle, 300, 90));
+    assert!(
+        right[2] > right[0],
+        "the incoming clip enters from the right: {right:?}"
+    );
+    assert!(left[0] >= left[2], "{left:?}");
+}

@@ -1030,7 +1030,7 @@ fn fx_params(
 
 fn json_value(ty: &ParamType, value: &Json) -> Option<Value> {
     Some(match (ty, value) {
-        (ParamType::Number, Json::Number(n)) => Value::Number(n.as_f64()?),
+        (ParamType::Number | ParamType::Time, Json::Number(n)) => Value::Number(n.as_f64()?),
         (ParamType::Bool, Json::Bool(b)) => Value::Bool(*b),
         (
             ParamType::Text

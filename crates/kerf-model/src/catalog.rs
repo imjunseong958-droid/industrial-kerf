@@ -8,11 +8,14 @@
 use crate::id::Id;
 use crate::value::{Param, Rgba, Value};
 use std::collections::BTreeMap;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, PoisonError, RwLock};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ParamType {
     Number,
+    /// A time, held as seconds and written as one (`12f`, `0.5s`): when
+    /// something happens in a clip, as a look's hit is.
+    Time,
     Bool,
     Text,
     /// A path to a file with one of these extensions, held as text. A
@@ -36,6 +39,7 @@ impl ParamType {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Number => "number",
+            Self::Time => "time",
             Self::Bool => "bool",
             Self::Text => "text",
             Self::File(_) => "file",
@@ -63,6 +67,11 @@ pub struct ParamDef {
 impl ParamDef {
     pub fn number(name: &str, default: f64) -> Self {
         Self::new(name, ParamType::Number, Value::Number(default), true)
+    }
+
+    /// A time in seconds.
+    pub fn time(name: &str, default: f64) -> Self {
+        Self::new(name, ParamType::Time, Value::Number(default), false)
     }
 
     pub fn toggle(name: &str, default: bool) -> Self {
@@ -140,7 +149,7 @@ impl ParamDef {
     /// Check a value's type and range.
     pub fn check_value(&self, value: &Value) -> Result<(), String> {
         match (&self.ty, value) {
-            (ParamType::Number, Value::Number(number)) => {
+            (ParamType::Number | ParamType::Time, Value::Number(number)) => {
                 if !number.is_finite() {
                     return Err(format!("`{}` must be a finite number", self.name));
                 }
@@ -248,6 +257,8 @@ pub enum Engine {
     /// Drawn by Kerf's own renderer alone (`kerf-fx`), as the transitions
     /// carried from FilmCraft are.
     Kerf,
+    /// A look (`crate::look`), expanded into built-ins before drawing.
+    Look,
 }
 
 impl Engine {
@@ -256,6 +267,7 @@ impl Engine {
             Self::Graph => "graph",
             Self::Raster => "raster",
             Self::Kerf => "kerf",
+            Self::Look => "look",
         }
     }
 }
@@ -335,6 +347,8 @@ impl FxDef {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Catalog {
     fx: BTreeMap<Id, FxDef>,
+    /// The looks defined, by id and version.
+    looks: BTreeMap<(Id, u32), crate::look::Look>,
     video_props: Vec<ParamDef>,
     audio_props: Vec<ParamDef>,
     mask_props: Vec<ParamDef>,
@@ -344,6 +358,7 @@ impl Catalog {
     pub fn new(video_props: Vec<ParamDef>, audio_props: Vec<ParamDef>) -> Self {
         Self {
             fx: BTreeMap::new(),
+            looks: BTreeMap::new(),
             video_props,
             audio_props,
             mask_props: mask_props(),
@@ -400,12 +415,119 @@ impl Catalog {
         self.mask_props.iter().find(|param| param.name == name)
     }
 
-    /// The built-in catalog.
+    /// The catalog this process draws with: the built-in effects, the looks
+    /// bundled with Kerf, and the open project's looks once
+    /// [`Catalog::install_looks`] adds them.
     pub fn builtin() -> &'static Self {
-        static BUILTIN: OnceLock<Catalog> = OnceLock::new();
-        BUILTIN.get_or_init(builtin_catalog)
+        let installed = *INSTALLED.read().unwrap_or_else(PoisonError::into_inner);
+        installed.unwrap_or_else(Self::bundled)
+    }
+
+    /// The built-in effects and the looks bundled with Kerf.
+    pub fn bundled() -> &'static Self {
+        static BUNDLED: OnceLock<Catalog> = OnceLock::new();
+        BUNDLED.get_or_init(builtin_catalog)
+    }
+
+    /// Draw with `looks` (a project's) on top of the bundled catalog from
+    /// now on. A look that does not check, or claims an id and version
+    /// another look has, is an error that names both.
+    pub fn install_looks(looks: Vec<crate::look::Look>) -> Result<(), String> {
+        let mut catalog = Self::bundled().clone();
+        for look in looks {
+            catalog.define_look(look)?;
+        }
+        // Kept for the life of the process: every reader holds `&'static`.
+        let catalog: &'static Catalog = Box::leak(Box::new(catalog));
+        *INSTALLED.write().unwrap_or_else(PoisonError::into_inner) = Some(catalog);
+        Ok(())
+    }
+
+    /// Add a look: it checks against the built-in effects, and lists as an
+    /// effect or transition of its own. Versions of one look sit side by
+    /// side; the catalog lists the newest.
+    pub fn define_look(&mut self, look: crate::look::Look) -> Result<(), String> {
+        look.check(self).map_err(|error| error.to_string())?;
+        let key = (look.id.clone(), look.version);
+        if let Some(other) = self.looks.get(&key) {
+            return Err(format!(
+                "`{}@{}` is defined twice: in {} and in {}",
+                look.id, look.version, other.source, look.source
+            ));
+        }
+        match self.fx.get(&look.id) {
+            Some(def) if def.engine != Engine::Look => {
+                return Err(format!(
+                    "{}: `{}` is a built-in effect",
+                    look.source, look.id
+                ));
+            }
+            Some(def) => {
+                let oldest = def.reads_from.min(look.version);
+                if look.version > def.version {
+                    let mut newest = look.def();
+                    newest.reads_from = oldest;
+                    self.fx.insert(look.id.clone(), newest);
+                } else if let Some(def) = self.fx.get_mut(&look.id) {
+                    def.reads_from = oldest;
+                }
+            }
+            None => {
+                self.fx.insert(look.id.clone(), look.def());
+            }
+        }
+        self.looks.insert(key, look);
+        Ok(())
+    }
+
+    /// The look `id` at `version`, if it is one.
+    pub fn look(&self, id: &str, version: u32) -> Option<&crate::look::Look> {
+        let id = Id::new(id).ok()?;
+        self.looks.get(&(id, version))
+    }
+
+    /// Every look defined, every version.
+    pub fn looks(&self) -> impl Iterator<Item = &crate::look::Look> {
+        self.looks.values()
     }
 }
+
+/// The catalog [`Catalog::install_looks`] made, once it has.
+static INSTALLED: RwLock<Option<&'static Catalog>> = RwLock::new(None);
+
+/// The looks bundled with Kerf: ordinary look files.
+const BUNDLED_LOOKS: &[(&str, &str)] = &[
+    ("dreamy.kerflook", include_str!("../looks/dreamy.kerflook")),
+    ("film.kerflook", include_str!("../looks/film.kerflook")),
+    (
+        "flash-cut.kerflook",
+        include_str!("../looks/flash-cut.kerflook"),
+    ),
+    ("flash.kerflook", include_str!("../looks/flash.kerflook")),
+    ("glitch.kerflook", include_str!("../looks/glitch.kerflook")),
+    ("noir.kerflook", include_str!("../looks/noir.kerflook")),
+    ("pop-in.kerflook", include_str!("../looks/pop-in.kerflook")),
+    ("shake.kerflook", include_str!("../looks/shake.kerflook")),
+    (
+        "slow-push.kerflook",
+        include_str!("../looks/slow-push.kerflook"),
+    ),
+    (
+        "sparkle.kerflook",
+        include_str!("../looks/sparkle.kerflook"),
+    ),
+    ("vhs.kerflook", include_str!("../looks/vhs.kerflook")),
+    ("whip.kerflook", include_str!("../looks/whip.kerflook")),
+    ("wobble.kerflook", include_str!("../looks/wobble.kerflook")),
+    (
+        "zoom-pulse.kerflook",
+        include_str!("../looks/zoom-pulse.kerflook"),
+    ),
+    (
+        "zoom-through.kerflook",
+        include_str!("../looks/zoom-through.kerflook"),
+    ),
+];
 
 fn mask_props() -> Vec<ParamDef> {
     vec![
@@ -564,6 +686,17 @@ fn builtin_catalog() -> Catalog {
         )
         .category("Transition")
         .param(P::color("color", Rgba::BLACK)),
+        {
+            let mut stack = FxDef::new(
+                crate::look::STACK,
+                FxKind::Transition,
+                Domain::Video,
+                "Both clips show across the cut, the incoming one over the outgoing: what a look's transition draws on.",
+            )
+            .category("Transition");
+            stack.engine = Engine::Kerf;
+            stack
+        },
         FxDef::new("wipe", FxKind::Transition, Domain::Video, "Linear wipe.")
             .category("Transition")
             .param(P::number("angle", 0.0).range(0.0, 360.0).unit("degrees"))
@@ -617,6 +750,12 @@ fn builtin_catalog() -> Catalog {
         catalog
             .define(definition)
             .expect("built-in definitions are consistent");
+    }
+    for (name, text) in BUNDLED_LOOKS {
+        let look = crate::look::read(text, name).unwrap_or_else(|error| panic!("{error}"));
+        catalog
+            .define_look(look)
+            .unwrap_or_else(|error| panic!("{error}"));
     }
     catalog
 }
@@ -803,7 +942,11 @@ mod tests {
         assert_eq!(curves.engine, Engine::Raster);
         assert!(curves.find("rgb").is_some());
         // A LUT is a file the effect reads.
-        let lut = catalog.fx("color.lumetri").unwrap().find("look_lut").unwrap();
+        let lut = catalog
+            .fx("color.lumetri")
+            .unwrap()
+            .find("look_lut")
+            .unwrap();
         assert_eq!(lut.ty, ParamType::File(vec!["cube".into(), "3dl".into()]));
         assert_eq!(lut.default, Value::Text(String::new()));
     }

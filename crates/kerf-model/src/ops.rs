@@ -213,6 +213,12 @@ pub enum Op {
         clip: Id,
         index: usize,
     },
+    /// Replace the look at `index` among the clip's effects with what it
+    /// expands to, for hand tuning.
+    FxFlatten {
+        clip: Id,
+        index: usize,
+    },
     FxMove {
         clip: Id,
         index: usize,
@@ -612,6 +618,14 @@ impl Editor<'_> {
                 self.effect(at, *index)?;
                 self.project.clip_at_mut(at).effects.remove(*index);
                 Ok(())
+            }
+            Op::FxFlatten { clip, index } => {
+                let at = self.editable(clip)?;
+                self.effect(at, *index)?;
+                let rate = self.project.sequences[at.sequence].rate;
+                let catalog = self.catalog;
+                crate::look::flatten_into(self.project.clip_at_mut(at), *index, rate, catalog)
+                    .map_err(|message| fail("look.flatten", message))
             }
             Op::FxMove { clip, index, to } => {
                 let at = self.editable(clip)?;

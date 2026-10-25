@@ -54,7 +54,10 @@ blurs and distortions, and the audio visualizers. An effect's parameters are
 written in the catalog's terms (a point as an `_x` and a `_y` across the
 picture, a file as a path, another track by id, a mask by name), and an id
 EffectCraft had that Kerf no longer does is an error that names what to use
-instead. Playful effects are coming as looks ([docs/looks.md](docs/looks.md)).
+instead. Playful effects are looks ([docs/looks.md](docs/looks.md)): text
+files in the Kerf language that combine those effects, keyframes, and masks
+behind a few parameters, bundled with Kerf or kept in a project's
+`.kerf/looks`, and expanded when a program draws.
 The graph can still render a program without FilmCraft's effects and
 transitions: it first bakes a clip's kept EffectCraft effects into a lossless
 file with transparency in `.kerf/cache/derived`, and plays that in the
