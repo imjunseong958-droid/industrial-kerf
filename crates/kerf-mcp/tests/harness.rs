@@ -790,9 +790,19 @@ fn raster_effects_are_looked_up_checked_and_previewed() {
     let Some((_directory, router)) = router() else {
         return;
     };
+    let threshold = ok(&router, "look", json!({"effect": "stylize.threshold"}));
+    assert_eq!(threshold["engine"], "raster");
+    assert_eq!(threshold["category"], "Stylize");
+    assert!(
+        threshold["reference"]
+            .as_str()
+            .unwrap()
+            .contains("`level=128` (0..255"),
+        "{threshold}"
+    );
+    // FilmCraft's effects are Kerf's renderer's.
     let invert = ok(&router, "look", json!({"effect": "channel.invert"}));
-    assert_eq!(invert["engine"], "raster");
-    assert_eq!(invert["category"], "Channel");
+    assert_eq!(invert["engine"], "kerf", "{invert}");
     assert!(
         invert["reference"]
             .as_str()
@@ -806,11 +816,8 @@ fn raster_effects_are_looked_up_checked_and_previewed() {
     );
     // Effects are found by the look wanted, each saying when to use it.
     let found = ok(&router, "look", json!({"effects": "neon glow"}));
-    assert_eq!(found["effects"][0]["id"], "stylize.glow", "{found}");
-    assert!(found["effects"][0]["doc"]
-        .as_str()
-        .unwrap()
-        .contains("neon"));
+    let doc = found["effects"][0]["doc"].as_str().unwrap();
+    assert!(doc.contains("Glow") && doc.contains("neon"), "{found}");
     let wipes = ok(&router, "look", json!({"effects": "retro tv transition"}));
     assert_eq!(wipes["effects"][0]["id"], "transition.venetian", "{wipes}");
     // A video editor's transitions are found by the moment too.

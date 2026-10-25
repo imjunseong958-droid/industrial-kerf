@@ -18,6 +18,19 @@ irises, page peels, and more, drawn from both clips across the cut
 pixels. Kerf's own renderer draws them, and a program that has them cannot
 also use raster effects until those come to it too.
 
+A video editor's effects, carried from FilmCraft, are listed there by
+category too: Lumetri grades, blurs, keys and track mattes, glows, light
+leaks, distortions, moves that animate over the clip, burn-ins, and 360°
+effects (`fx c1 add color.lumetri@2 exposure=0.5 look=teal-orange`). They
+run in stack order on the clip's picture after its masks, and Kerf's own
+renderer draws them. A point is `<name>_x` and `<name>_y` across the
+picture; an offset is in pixels; a curve is text of `x,y` points
+(`curve_luma="0,0 0.5,0.6 1,1"`); a LUT is a quoted `.cube` or `.3dl` path;
+another track is its id (`fx c1 add key.trackmatte matte=V2`), read even
+while it is hidden. Sizes are the clip's source pixels. Where FilmCraft's
+effect replaced an EffectCraft one under the same id, it is version 2 of
+that id (`channel.invert@2`), and version 1 no longer reads.
+
 Raster effects and transitions (from EffectCraft) are listed there by id;
 `look` with `effect` gives one's parameters, and they are written like any
 other (`fx c1 add stylize.glow`, `transition add from=c1 to=c2

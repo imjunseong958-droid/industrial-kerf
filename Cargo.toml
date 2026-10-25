@@ -49,6 +49,7 @@ effectcraft-gpu = { path = "effectcraft/crates/gpu" }
 filmcraft-geom = { path = "filmcraft/crates/geom" }
 filmcraft-color = { path = "filmcraft/crates/color" }
 filmcraft-text = { path = "filmcraft/crates/text" }
+filmcraft-time = { path = "filmcraft/crates/time" }
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }

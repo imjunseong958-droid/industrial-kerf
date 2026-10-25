@@ -18,10 +18,14 @@
 //!   two clips' pictures, each drawn as it shows there, across the cut.
 //! - Titles are text centered on a transparent canvas, solids a color, and
 //!   an adjustment layer applies its effects to the picture beneath it.
+//! - The video effects carried from FilmCraft (`kerf_fx::filmcraft`) run on
+//!   a clip's picture in order, after its masks, and read its other frames
+//!   and the sequence's other tracks as they need.
 //!
 //! Raster effects and transitions (EffectCraft's) are not drawn here yet:
 //! a program with them is reported as unsupported, and EffectCraft's
-//! renderer, which draws them, does not draw FilmCraft's transitions.
+//! renderer, which draws them, does not draw FilmCraft's transitions or
+//! effects.
 
 use crate::footage::{frame_count, ClipSource, Pictures};
 use crate::{ComposeError, Frame};
@@ -30,7 +34,9 @@ use kerf_draw::blend::{composite, composite_placed};
 use kerf_draw::correct::Correction;
 use kerf_draw::text::{self, Justify, Text};
 use kerf_draw::{blur, mask, wipe, Affine, Blend, Image, Rect, Vec2};
+use kerf_fx::filmcraft::{self, instance::Picture, vfx::FxEnv};
 use kerf_fx::transitions::{apply_scaled, Fx};
+use kerf_model::time::format_timecode;
 use kerf_model::{
     Catalog, Clip, Content, Domain, Effect, Engine, FxDef, Id, Param, Params, Project, Rate, Ratio,
     Rgba, Sequence, Time, Track, TrackKind, Value,
@@ -56,12 +62,18 @@ pub(crate) struct Drawing {
     sequences: Vec<SequencePlan>,
     pictures: Pictures,
     captions: bool,
+    /// The LUT files FilmCraft's effects name.
+    library: filmcraft::project::Project,
 }
 
 struct SequencePlan {
+    name: String,
     width: u32,
     height: u32,
     rate: Rate,
+    /// Timecode of the first frame.
+    start: Time,
+    drop_frame: bool,
     duration: Time,
     tracks: Vec<TrackPlan>,
     captions: Vec<CaptionPlan>,
@@ -74,6 +86,10 @@ struct CaptionPlan {
 }
 
 struct TrackPlan {
+    id: Id,
+    /// Whether it shows; a hidden track is drawn only for effects that read
+    /// it.
+    shows: bool,
     shown: Vec<Shown>,
     dips: Vec<Dip>,
     pairs: Vec<Pair>,
@@ -117,6 +133,8 @@ struct Dip {
 
 struct ClipPlan {
     clip: Clip,
+    /// Its name, or its media's file or nested sequence's name.
+    name: String,
     source: Source,
     /// The source's size in its own pixels.
     size: (u32, u32),
@@ -176,11 +194,14 @@ impl Drawing {
             built: HashMap::new(),
             clips: Vec::new(),
             nesting: vec![top.id.clone()],
+            effects: Vec::new(),
         };
         // The program's sequence is planned first, so it is the first.
         builder.sequences.push(None);
         let plan = builder.sequence(top)?;
         builder.sequences[0] = Some(plan);
+        let library =
+            filmcraft::instance::library(&builder.effects).map_err(ComposeError::Invalid)?;
         Ok(Self {
             sequences: builder
                 .sequences
@@ -189,6 +210,7 @@ impl Drawing {
                 .collect(),
             pictures: Pictures::new(builder.clips),
             captions,
+            library,
         })
     }
 
@@ -235,11 +257,15 @@ impl Drawing {
         if self.captions && plan.captions.iter().any(|caption| caption.shows(at)) {
             return None;
         }
-        let mut showing = plan.tracks.iter().flat_map(|track| {
-            let shown = track.shown.iter().filter(|shown| shown.shows(at)).map(Some);
-            let dips = track.dips.iter().filter(|dip| dip.shows(at)).map(|_| None);
-            shown.chain(dips)
-        });
+        let mut showing = plan
+            .tracks
+            .iter()
+            .filter(|track| track.shows)
+            .flat_map(|track| {
+                let shown = track.shown.iter().filter(|shown| shown.shows(at)).map(Some);
+                let dips = track.dips.iter().filter(|dip| dip.shows(at)).map(|_| None);
+                shown.chain(dips)
+            });
         let shown = showing.next()??;
         if showing.next().is_some() || !shown.plan.plain {
             return None;
@@ -261,36 +287,8 @@ impl Drawing {
         let plan = &self.sequences[index];
         let (w, h) = output_size(plan.width, plan.height, scale);
         let mut canvas = Image::new(w, h);
-        for track in &plan.tracks {
-            for (index, shown) in track.shown.iter().enumerate() {
-                if !shown.shows(at) {
-                    continue;
-                }
-                let pair = track.pairs.iter().find(|pair| {
-                    pair.start <= at && at < pair.end && (pair.from == index || pair.to == index)
-                });
-                match pair {
-                    // Drawn once, at the first of its clips that shows.
-                    Some(pair) if index == pair.from || !track.shown[pair.from].shows(at) => {
-                        self.pair(&mut canvas, plan, track, pair, at, scale);
-                    }
-                    Some(_) => {}
-                    None => self.layer(&mut canvas, plan, shown, at, scale, shown.plan.blend),
-                }
-            }
-            for dip in track.dips.iter().filter(|dip| dip.shows(at)) {
-                let opacity = f64::from(dip.color.a) / 255.0
-                    * (1.0 - (2.0 * progress(at, dip.from, dip.to) - 1.0).abs());
-                let solid = Image::filled(
-                    w,
-                    h,
-                    premultiplied(Rgba {
-                        a: 255,
-                        ..dip.color
-                    }),
-                );
-                composite(&mut canvas, &solid, opacity as f32, Blend::Normal);
-            }
+        for track in plan.tracks.iter().filter(|track| track.shows) {
+            self.track(&mut canvas, plan, track, at, scale);
         }
         if self.captions {
             for caption in plan.captions.iter().filter(|caption| caption.shows(at)) {
@@ -313,6 +311,46 @@ impl Drawing {
             }
         }
         canvas
+    }
+
+    /// A track of `sequence` at its time `at` over `canvas`.
+    fn track(
+        &self,
+        canvas: &mut Image,
+        sequence: &SequencePlan,
+        track: &TrackPlan,
+        at: Time,
+        scale: f64,
+    ) {
+        for (index, shown) in track.shown.iter().enumerate() {
+            if !shown.shows(at) {
+                continue;
+            }
+            let pair = track.pairs.iter().find(|pair| {
+                pair.start <= at && at < pair.end && (pair.from == index || pair.to == index)
+            });
+            match pair {
+                // Drawn once, at the first of its clips that shows.
+                Some(pair) if index == pair.from || !track.shown[pair.from].shows(at) => {
+                    self.pair(canvas, sequence, track, pair, at, scale);
+                }
+                Some(_) => {}
+                None => self.layer(canvas, sequence, shown, at, scale, shown.plan.blend),
+            }
+        }
+        for dip in track.dips.iter().filter(|dip| dip.shows(at)) {
+            let opacity = f64::from(dip.color.a) / 255.0
+                * (1.0 - (2.0 * progress(at, dip.from, dip.to) - 1.0).abs());
+            let solid = Image::filled(
+                canvas.w,
+                canvas.h,
+                premultiplied(Rgba {
+                    a: 255,
+                    ..dip.color
+                }),
+            );
+            composite(canvas, &solid, opacity as f32, Blend::Normal);
+        }
     }
 
     /// Two clips mixed by a FilmCraft transition at sequence time `at`,
@@ -374,38 +412,32 @@ impl Drawing {
             self.adjust(canvas, sequence, plan, time, scale);
             return;
         }
-        // Shared with the frame cache until something changes it.
-        let Some((mut picture, per_source)) = self.picture(sequence, plan, time, scale) else {
+        let (w, h) = (canvas.w, canvas.h);
+        let Some(Input {
+            mut picture,
+            to_output,
+            crop,
+            per_source,
+        }) = self.input(sequence, plan, time, scale, (w, h))
+        else {
             return;
         };
-        let size = (f64::from(plan.size.0), f64::from(plan.size.1));
-        let (w, h) = (canvas.w, canvas.h);
-        let place = Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time));
-        let mut crop = crop_rect(plan, time, size, per_source, (picture.w, picture.h));
-        let to_output = if plan.letterboxed {
-            // The fitted picture on black, the size of the canvas.
-            let mut boxed = Image::filled(w, h, [0.0, 0.0, 0.0, 1.0]);
-            let whole = Rect::new(0.0, 0.0, picture.w as f64, picture.h as f64);
-            composite_placed(
-                &mut boxed,
-                &picture,
-                &place.then_apply(&Affine::scale(1.0 / per_source, 1.0 / per_source)),
-                crop.take().unwrap_or(whole),
-                1.0,
-                Blend::Normal,
-            );
-            picture = Arc::new(boxed);
-            Affine::IDENTITY
-        } else {
-            let masks = mask::prepare(&clip.masks, size, per_source, time);
-            if let Some(covered) = mask::coverage(&masks, picture.w, picture.h) {
-                Arc::make_mut(&mut picture).mul_coverage(&covered);
-            }
-            place.then_apply(&Affine::scale(1.0 / per_source, 1.0 / per_source))
-        };
         if !plan.effects.is_empty() {
-            let spread = to_output.determinant().abs().sqrt().max(1e-6);
-            self.effects(Arc::make_mut(&mut picture), plan, time, scale / spread);
+            let placed = Placed {
+                sequence,
+                at,
+                scale,
+                to_output,
+                per_source,
+                env: true,
+            };
+            self.effects(
+                Arc::make_mut(&mut picture),
+                plan,
+                time,
+                &placed,
+                plan.effects.len(),
+            );
         }
         let reveal = shown
             .reveal
@@ -429,6 +461,54 @@ impl Drawing {
                 composite_placed(canvas, &picture, &to_output, crop, opacity, blend);
             }
         }
+    }
+
+    /// A clip's picture at clip time `time` as its effects get it, on a
+    /// `canvas` of output pixels: masked and cropped, or, letterboxed, on
+    /// black the size of the canvas.
+    fn input(
+        &self,
+        sequence: &SequencePlan,
+        plan: &ClipPlan,
+        time: Time,
+        scale: f64,
+        (w, h): (usize, usize),
+    ) -> Option<Input> {
+        // Shared with the frame cache until something changes it.
+        let (mut picture, per_source) = self.picture(sequence, plan, time, scale)?;
+        let size = (f64::from(plan.size.0), f64::from(plan.size.1));
+        let place = Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time));
+        let mut crop = crop_rect(plan, time, size, per_source, (picture.w, picture.h));
+        Some(if plan.letterboxed {
+            // The fitted picture on black, the size of the canvas.
+            let mut boxed = Image::filled(w, h, [0.0, 0.0, 0.0, 1.0]);
+            let whole = Rect::new(0.0, 0.0, picture.w as f64, picture.h as f64);
+            composite_placed(
+                &mut boxed,
+                &picture,
+                &place.then_apply(&Affine::scale(1.0 / per_source, 1.0 / per_source)),
+                crop.take().unwrap_or(whole),
+                1.0,
+                Blend::Normal,
+            );
+            Input {
+                picture: Arc::new(boxed),
+                to_output: Affine::IDENTITY,
+                crop,
+                per_source: place.determinant().abs().sqrt(),
+            }
+        } else {
+            let masks = mask::prepare(&plan.clip.masks, size, per_source, time);
+            if let Some(covered) = mask::coverage(&masks, picture.w, picture.h) {
+                Arc::make_mut(&mut picture).mul_coverage(&covered);
+            }
+            Input {
+                picture,
+                to_output: place.then_apply(&Affine::scale(1.0 / per_source, 1.0 / per_source)),
+                crop,
+                per_source,
+            }
+        })
     }
 
     /// A clip's picture at clip time `time` before its masks and effects,
@@ -497,10 +577,21 @@ impl Drawing {
         .0
     }
 
-    /// Run a clip's effects on its picture; `density` is how many of the
-    /// picture's pixels a canvas pixel is.
-    fn effects(&self, picture: &mut Image, plan: &ClipPlan, time: Time, density: f64) {
-        for effect in &plan.effects {
+    /// Run a clip's effects before the one at `upto` on its picture at clip
+    /// time `time`, placed as `placed` says. FilmCraft's effects that read
+    /// other frames are left out of a picture drawn for one of them.
+    fn effects(
+        &self,
+        picture: &mut Image,
+        plan: &ClipPlan,
+        time: Time,
+        placed: &Placed,
+        upto: usize,
+    ) {
+        // How many of the picture's pixels a canvas pixel is.
+        let density = placed.scale / placed.to_output.determinant().abs().sqrt().max(1e-6);
+        let nested = upto < plan.effects.len();
+        for (index, effect) in plan.effects[..upto].iter().enumerate() {
             let value = |name: &str| effect_number(effect, name, time);
             match effect.fx.as_str() {
                 "color.basic" => {
@@ -514,9 +605,63 @@ impl Drawing {
                     let sigma = (value("radius") / 2.0 * density) as f32;
                     blur::gaussian(picture, sigma, sigma, true);
                 }
-                _ => {}
+                _ => self.filmcraft(picture, plan, time, placed, index, nested),
             }
         }
+    }
+
+    /// Run the FilmCraft effect at `index` among a clip's effects; `nested`
+    /// when the picture is drawn for another of its effects.
+    fn filmcraft(
+        &self,
+        picture: &mut Image,
+        plan: &ClipPlan,
+        time: Time,
+        placed: &Placed,
+        index: usize,
+        nested: bool,
+    ) {
+        let effect = &plan.effects[index];
+        let sequence = placed.sequence;
+        let track = |id: &str| {
+            sequence
+                .tracks
+                .iter()
+                .position(|track| track.id == id)
+                .map(|place| place + 1)
+        };
+        let on = Picture {
+            size: (picture.w, picture.h),
+            per_source: placed.per_source as f32,
+        };
+        let Some(instance) = filmcraft::instance::instance(effect, time, on, &track) else {
+            return;
+        };
+        if nested && filmcraft::vfx::is_temporal(&instance.effect) {
+            return;
+        }
+        let env = ClipEnv {
+            drawing: self,
+            plan,
+            placed,
+            upto: index,
+            working: (picture.w, picture.h),
+        };
+        let timecode = format_timecode(
+            sequence.start + placed.at,
+            sequence.rate,
+            sequence.drop_frame,
+        );
+        let run = filmcraft::instance::Run {
+            at: time,
+            per_source: placed.per_source as f32,
+            timecode: &timecode,
+            clip_name: &plan.name,
+            library: &self.library,
+            env: placed.env.then_some(&env as &dyn FxEnv),
+            frame_rate: sequence.rate.fps(),
+        };
+        filmcraft::instance::apply(picture, &instance, &run);
     }
 
     /// An adjustment layer: its effects on the picture beneath it, weighed
@@ -531,7 +676,16 @@ impl Drawing {
     ) {
         let (w, h) = (canvas.w, canvas.h);
         let mut adjusted = canvas.clone();
-        self.effects(&mut adjusted, plan, time, scale);
+        // FilmCraft's effects see no clip of their own here.
+        let placed = Placed {
+            sequence,
+            at: plan.clip.start + time,
+            scale,
+            to_output: Affine::IDENTITY,
+            per_source: scale,
+            env: false,
+        };
+        self.effects(&mut adjusted, plan, time, &placed, plan.effects.len());
         let size = (f64::from(plan.size.0), f64::from(plan.size.1));
         let mut frame = Image::filled(w, h, [1.0; 4]);
         let masks = mask::prepare(&plan.clip.masks, size, scale, time);
@@ -570,6 +724,149 @@ impl Drawing {
     }
 }
 
+/// A clip's picture as its effects get it.
+struct Input {
+    picture: Arc<Image>,
+    /// Its pixels to output pixels.
+    to_output: Affine,
+    /// What its crop leaves of it, in its pixels.
+    crop: Option<Rect>,
+    /// How many of its pixels a source pixel is.
+    per_source: f64,
+}
+
+/// Where a clip's effects run: on its picture at sequence time `at`, drawn
+/// at `scale` of `sequence`'s canvas.
+struct Placed<'a> {
+    sequence: &'a SequencePlan,
+    at: Time,
+    scale: f64,
+    to_output: Affine,
+    per_source: f64,
+    /// Whether FilmCraft's effects may read the clip's other frames and the
+    /// sequence's other tracks.
+    env: bool,
+}
+
+/// What FilmCraft's effect at `upto` among a clip's effects reads beyond
+/// its picture.
+struct ClipEnv<'a> {
+    drawing: &'a Drawing,
+    plan: &'a ClipPlan,
+    placed: &'a Placed<'a>,
+    upto: usize,
+    /// The size of the picture the effect runs on.
+    working: (usize, usize),
+}
+
+impl FxEnv for ClipEnv<'_> {
+    fn frame(&self, dt: f64, _: &filmcraft::project::EffectInstance) -> Option<Image> {
+        let placed = self.placed;
+        let at = placed.at + Time::from_seconds(dt)?;
+        let time = at - self.plan.clip.start;
+        let (cw, ch) = output_size(placed.sequence.width, placed.sequence.height, placed.scale);
+        let input = self
+            .drawing
+            .input(placed.sequence, self.plan, time, placed.scale, (cw, ch))?;
+        let mut picture = Arc::unwrap_or_clone(input.picture);
+        if (picture.w, picture.h) != self.working {
+            let (w, h) = self.working;
+            let fit = Affine::scale(
+                w as f64 / picture.w.max(1) as f64,
+                h as f64 / picture.h.max(1) as f64,
+            );
+            picture = picture.transformed(w, h, &fit);
+        }
+        let earlier = Placed { at, ..*placed };
+        self.drawing
+            .effects(&mut picture, self.plan, time, &earlier, self.upto);
+        Some(picture)
+    }
+
+    fn source_frame(&self, dt: f64, scale: f32) -> Option<Image> {
+        let placed = self.placed;
+        let at = placed.at + Time::from_seconds(dt)?;
+        let time = at - self.plan.clip.start;
+        let (picture, _) = self.drawing.picture(
+            placed.sequence,
+            self.plan,
+            time,
+            f64::from(scale.clamp(1.0 / 64.0, 1.0)),
+        )?;
+        Some(Arc::unwrap_or_clone(picture))
+    }
+
+    fn track(&self, index: usize) -> Option<Image> {
+        let placed = self.placed;
+        let track = placed.sequence.tracks.get(index)?;
+        let (w, h) = output_size(placed.sequence.width, placed.sequence.height, placed.scale);
+        let mut canvas = Image::new(w, h);
+        self.drawing
+            .track(&mut canvas, placed.sequence, track, placed.at, placed.scale);
+        Some(canvas)
+    }
+
+    fn layer_to_output(&self) -> Affine {
+        self.placed.to_output
+    }
+
+    fn clip_seconds(&self) -> f64 {
+        self.plan.clip.duration.seconds()
+    }
+
+    fn clip_offset(&self) -> f64 {
+        (self.placed.at - self.plan.clip.start).seconds()
+    }
+
+    fn frame_rate(&self) -> f64 {
+        self.placed.sequence.rate.fps()
+    }
+
+    fn media_timecode(&self) -> String {
+        let time = self.placed.at - self.plan.clip.start;
+        let source = match &self.plan.clip.content {
+            Content::Media {
+                source_in, speed, ..
+            }
+            | Content::Sequence {
+                source_in, speed, ..
+            } => *source_in + speed.source_span(time),
+            _ => time,
+        };
+        let sequence = self.placed.sequence;
+        format_timecode(source, sequence.rate, sequence.drop_frame)
+    }
+
+    fn file_name(&self) -> String {
+        self.plan.name.clone()
+    }
+
+    fn sequence_name(&self) -> String {
+        self.placed.sequence.name.clone()
+    }
+
+    fn sequence_size(&self) -> (u32, u32) {
+        (self.placed.sequence.width, self.placed.sequence.height)
+    }
+
+    fn source_size(&self) -> (u32, u32) {
+        self.plan.size
+    }
+
+    fn clip_key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let clip = &self.plan.clip;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        clip.id.as_str().hash(&mut hasher);
+        clip.duration.flicks().hash(&mut hasher);
+        if let Some((source_in, _)) = clip.source_range() {
+            source_in.flicks().hash(&mut hasher);
+        }
+        format!("{:?}", clip.speed()).hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
 impl Shown {
     fn shows(&self, at: Time) -> bool {
         self.from <= at && at < self.to
@@ -597,6 +894,8 @@ struct Builder<'a> {
     built: HashMap<Id, usize>,
     clips: Vec<ClipSource>,
     nesting: Vec<Id>,
+    /// The effects of every clip planned, for the LUT files they name.
+    effects: Vec<Effect>,
 }
 
 impl<'a> Builder<'a> {
@@ -607,6 +906,15 @@ impl<'a> Builder<'a> {
         for track in &sequence.tracks {
             match track.kind {
                 TrackKind::Video if track.enabled => tracks.push(self.track(sequence, track)?),
+                // Effects read hidden tracks too; one that cannot be drawn
+                // reads as empty.
+                TrackKind::Video => tracks.push(self.track(sequence, track).unwrap_or(TrackPlan {
+                    id: track.id.clone(),
+                    shows: false,
+                    shown: Vec::new(),
+                    dips: Vec::new(),
+                    pairs: Vec::new(),
+                })),
                 TrackKind::Subtitle if track.enabled => {
                     for clip in track.clips.iter().filter(|clip| clip.enabled) {
                         if let Content::Caption { text } = &clip.content {
@@ -624,9 +932,12 @@ impl<'a> Builder<'a> {
             }
         }
         Ok(SequencePlan {
+            name: sequence.name.clone(),
             width,
             height,
             rate: sequence.rate,
+            start: sequence.start,
+            drop_frame: sequence.drop_frame,
             duration: sequence.duration(),
             tracks,
             captions,
@@ -765,7 +1076,13 @@ impl<'a> Builder<'a> {
                 })
             })
             .collect();
-        Ok(TrackPlan { shown, dips, pairs })
+        Ok(TrackPlan {
+            id: track.id.clone(),
+            shows: track.enabled,
+            shown,
+            dips,
+            pairs,
+        })
     }
 
     /// The part of a shown clip its source covers, as the graph clamps it.
@@ -809,6 +1126,7 @@ impl<'a> Builder<'a> {
         entering: bool,
     ) -> Result<Option<ClipPlan>> {
         let canvas = canvas(sequence);
+        let mut name = clip.name.clone().unwrap_or_else(|| clip.id.to_string());
         let (source, size, fit, alpha) = match &clip.content {
             Content::Media {
                 media,
@@ -821,6 +1139,11 @@ impl<'a> Builder<'a> {
                 let Some(video) = media.video else {
                     return Ok(None);
                 };
+                if clip.name.is_none() {
+                    if let Some(file) = std::path::Path::new(&media.path).file_name() {
+                        name = file.to_string_lossy().into_owned();
+                    }
+                }
                 self.clips.push(ClipSource {
                     path: media.path.clone(),
                     rate: media.rate,
@@ -856,6 +1179,9 @@ impl<'a> Builder<'a> {
                         clip.id
                     ))
                 })?;
+                if clip.name.is_none() {
+                    name = inner.name.clone();
+                }
                 let index = match self.built.get(nested) {
                     Some(index) => *index,
                     None => {
@@ -912,6 +1238,9 @@ impl<'a> Builder<'a> {
             }
             match (def.engine, effect.fx.as_str()) {
                 (Engine::Graph, "color.basic" | "blur.gaussian") => effects.push(effect.clone()),
+                (Engine::Kerf, id) if filmcraft::catalog::carried(id).is_some() => {
+                    effects.push(effect.clone())
+                }
                 (Engine::Raster, id) => {
                     return Err(unsupported(&clip.id, format!("raster effect `{id}`")))
                 }
@@ -930,8 +1259,10 @@ impl<'a> Builder<'a> {
             Param::Static(_) => Blend::Normal,
             Param::Animated(_) => return Err(unsupported(&clip.id, "animated `blend`")),
         };
+        self.effects.extend(effects.iter().cloned());
         let mut plan = ClipPlan {
             clip: clip.clone(),
+            name,
             source,
             size,
             fit,

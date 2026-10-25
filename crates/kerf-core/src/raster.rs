@@ -620,7 +620,7 @@ media m1 path=\"a.mov\" rate=24 dur=10s video=1920x1080 audio=2ch@48000
 sequence s1 rate=24 size=1920x1080
   track V1 video
     clip c1 media=m1 src=48f at=0f dur=48f
-      fx channel.invert@1
+      fx stylize.threshold@1
       fx color.basic@1 exposure=0.5
     clip c2 media=m1 src=120f at=48f dur=24f
     transition t1 from=c1 to=c2 fx=dissolve@1 dur=12f
@@ -665,7 +665,7 @@ sequence s1 rate=24 size=1920x1080
         let planned = planned(&original);
         let job = &planned.jobs[0];
         let fx: Vec<_> = job.effects.iter().map(|e| e.fx.as_str()).collect();
-        assert_eq!(fx, ["channel.invert", "transition.linearwipe"]);
+        assert_eq!(fx, ["stylize.threshold", "transition.linearwipe"]);
         let wipe = &job.effects[1].params;
         assert_eq!(wipe["feather"], Param::Static(Value::Number(10.0)));
         // Completion runs 0 to 100 over the six frames either side of the cut
@@ -696,7 +696,7 @@ sequence s1 rate=24 size=1280x720
 sequence s2 rate=24 size=640x360
   track V1 video
     clip c1 media=m1 src=0f at=0f dur=96f
-      fx channel.invert@1
+      fx stylize.threshold@1
 ",
         );
         let planned = planned(&original);
@@ -738,7 +738,7 @@ sequence s2 rate=24 size=640x360
 
     #[test]
     fn projects_without_raster_effects_need_no_bakes() {
-        let original = project(&DOCUMENT.replace("      fx channel.invert@1\n", ""));
+        let original = project(&DOCUMENT.replace("      fx stylize.threshold@1\n", ""));
         let planned = planned(&original);
         assert!(planned.jobs.is_empty());
         assert_eq!(planned.project, original);

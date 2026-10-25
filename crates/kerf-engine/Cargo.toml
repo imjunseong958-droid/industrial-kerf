@@ -17,7 +17,6 @@ path = "src/bin/kerf-engine.rs"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 effectcraft-raster = { path = "../../effectcraft/crates/raster" }
-effectcraft-track = { path = "../../effectcraft/crates/track" }
 kerf-compose = { path = "../kerf-compose" }
 kerf-core = { path = "../kerf-core" }
 kerf-fx = { path = "../kerf-fx" }

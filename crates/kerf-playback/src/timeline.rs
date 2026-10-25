@@ -941,10 +941,15 @@ mod tests {
         assert!(plan.reasons.is_empty(), "{:?}", plan.reasons);
         // A raster effect runs on the picture playback holds; one that reads
         // the clip's other frames needs the compositor.
+        let thresholded = project(
+            "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx stylize.threshold\n",
+        );
+        assert_eq!(preview_plan(&thresholded).mode, PreviewMode::NativeExact);
+        // So do FilmCraft's effects, which Kerf's renderer draws.
         let inverted = project(
             "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx channel.invert\n",
         );
-        assert_eq!(preview_plan(&inverted).mode, PreviewMode::NativeExact);
+        assert_eq!(preview_plan(&inverted).mode, PreviewMode::Composited);
         // So does an effect that draws a sound track.
         let drawn = project(
             "  track V1 video\n    clip c1 media=source-a src=0s at=0s dur=2s\n      fx generate.audiowaveform audioLayer=A1\n  \
@@ -1026,7 +1031,7 @@ mod tests {
             "{clip}      mask k1 ellipse=0.5,0.5,0.3,0.4 feather={{0f:0 30f:12}} expansion=-2\n      \
              mask k2 points=\"0.2,0.2 0.8,0.3 0.5,0.9\" mode=subtract inverted=true opacity=0.5\n      \
              mask k3 rect=0,0,0.6,1 mode=intersect\n      \
-             fx channel.invert\n"
+             fx stylize.threshold\n"
         ));
         // A path for effects cuts nothing.
         native(&format!(

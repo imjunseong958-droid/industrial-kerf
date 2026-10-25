@@ -535,7 +535,7 @@ fn effects_match_the_graph() {
             body: "sequence s1 rate=24 size=320x180 audio=48000\n\
                    \x20 track V1 video\n\
                    \x20   clip c1 media=t src=0f at=0f dur=24f\n\
-                   \x20     fx channel.invert blend={0f:0 23f:100}\n",
+                   \x20     fx color.exposure master/exposure={0f:0 23f:1}\n",
             window: false,
             frames: &[0, 12],
             luma: 2.0,
@@ -551,7 +551,7 @@ fn effects_match_the_graph() {
                    \x20 track V2 video\n\
                    \x20   clip c2 media=t src=0f at=0f dur=24f\n\
                    \x20     set scale=0.5 x=0.2\n\
-                   \x20     fx channel.invert\n",
+                   \x20     fx color.exposure master/exposure=1\n",
             window: false,
             frames: &[9],
             luma: 2.5,

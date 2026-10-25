@@ -102,16 +102,24 @@ pub fn reference(catalog: &Catalog) -> String {
             out.push_str(&fx_reference(fx));
         }
     }
-    writeln!(out, "\n{KERF}").unwrap();
-    let mut categories: BTreeMap<&str, Vec<String>> = BTreeMap::new();
-    for fx in catalog.all().filter(|fx| fx.engine == Engine::Kerf) {
-        categories
-            .entry(fx.category.as_str())
-            .or_default()
-            .push(format!("`{}@{}`", fx.id, fx.version));
-    }
-    for (category, ids) in categories {
-        writeln!(out, "- {category}: {}", ids.join(", ")).unwrap();
+    for (kind, text) in [
+        (FxKind::Transition, KERF_TRANSITIONS),
+        (FxKind::Effect, KERF_EFFECTS),
+    ] {
+        writeln!(out, "\n{text}").unwrap();
+        let mut categories: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+        for fx in catalog
+            .all()
+            .filter(|fx| fx.engine == Engine::Kerf && fx.kind == kind)
+        {
+            categories
+                .entry(fx.category.as_str())
+                .or_default()
+                .push(format!("`{}@{}`", fx.id, fx.version));
+        }
+        for (category, ids) in categories {
+            writeln!(out, "- {category}: {}", ids.join(", ")).unwrap();
+        }
     }
     writeln!(out, "\n{RASTER}").unwrap();
     let mut categories: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
@@ -128,13 +136,26 @@ pub fn reference(catalog: &Catalog) -> String {
     out
 }
 
-const KERF: &str = "## Transitions from FilmCraft
+const KERF_TRANSITIONS: &str = "## Transitions from FilmCraft
 A video editor's transitions, drawn from both clips across the cut: pushes,
 slides, whips, zooms, flashes, light leaks, glitches, irises, and more.
 Written like any transition (`transition add from=c1 to=c2 fx=push@1
 dur=12f direction=from-east`); `look` with `effect: \"<id>\"` lists one's
 parameters. A direction names the side the incoming clip enters from, and a
 center is `center_x`/`center_y` in fractions of the frame.";
+
+const KERF_EFFECTS: &str = "## Effects from FilmCraft
+A video editor's effects, run in stack order on a clip's picture after its
+masks: Lumetri grades and color correction, blurs, keys and track mattes,
+glows and light leaks, distortions, moves that animate over the clip,
+burn-ins, and 360° effects. Written like any effect (`fx c1 add
+color.lumetri@2 exposure=0.5`); `look` with `effect: \"<id>\"` lists one's
+parameters. A point is `<name>_x`/`<name>_y` across the picture (0 to 1),
+an offset is in pixels, a curve is text of `x,y` points from 0 to 1, a LUT
+is a quoted `.cube` or `.3dl` path, and another track is its id
+(`matte=V2`), read even while it is hidden. Sizes are the clip's source
+pixels. An id at version 2 was an EffectCraft effect that FilmCraft's
+replaced; version 1 of it no longer reads.";
 
 const RASTER: &str = "## Raster effects
 Raster effects come from EffectCraft and run on a clip's own picture before
@@ -229,6 +250,6 @@ mod tests {
         // Raster effects are listed by id; their parameters come from `look`.
         assert!(text.contains("- Channel: `channel.arithmetic`"));
         assert!(!text.contains("Blend With Original"));
-        assert!(text.len() < 16 * 1024, "{}", text.len());
+        assert!(text.len() < 20 * 1024, "{}", text.len());
     }
 }

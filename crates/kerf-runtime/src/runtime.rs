@@ -1881,7 +1881,7 @@ mod tests {
         ])
         .unwrap();
         assert!(
-            added.contains("      fx stylize.glow@1 radius=40\n      fx channel.invert@1\n"),
+            added.contains("      fx stylize.glow@1 radius=40\n      fx channel.invert@2\n"),
             "{added}"
         );
         let set = ops(vec![EditOp::FxSet {
