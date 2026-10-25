@@ -1602,8 +1602,10 @@ dependencies = [
  "effectcraft-path",
  "effectcraft-project",
  "effectcraft-raster",
+ "filmcraft-geom",
  "kerf-draw",
  "kerf-model",
+ "rayon",
 ]
 
 [[package]]

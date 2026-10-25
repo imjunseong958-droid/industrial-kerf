@@ -1,0 +1,274 @@
+# Transitions Kerf draws with its own renderer, carried from FilmCraft's
+# (crates/render/src/transitions), which kerf-fx runs. The same layout as
+# raster_effects.tsv; this table is written by hand.
+transition	block-motion	Animation	Block Motion	Slices the frame into blocks that slide in one after another; tech, data, and energetic list cuts.
+	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
+	number	blocks	6	2..32		Blocks
+	number	motion_blur	50	0..100	%	Motion Blur
+transition	flip-motion	Animation	Flip Motion	Flips the outgoing shot over like a card to show the next; reveals and before/after.
+	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
+	number	perspective	50	0..100	%	Perspective
+	number	motion_blur	50	0..100	%	Motion Blur
+transition	fold-motion	Animation	Fold Motion	Folds the outgoing shot away like paper; playful explainer and social cuts.
+	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
+	number	perspective	50	0..100	%	Perspective
+transition	pop-motion	Animation	Pop Motion	Pops the incoming shot in with a springy overshoot; fun, punchy reveals.
+	number	overshoot	20	0..100	%	Overshoot
+	number	motion_blur	50	0..100	%	Motion Blur
+transition	pull-motion	Animation	Pull Motion	Pulls the outgoing shot away toward an edge; quick scene changes.
+	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
+	number	motion_blur	50	0..100	%	Motion Blur
+transition	spin-motion	Animation	Spin Motion	Spins the shot out and the next in; high-energy, playful moments.
+	number	rotation	360	0..1440	degrees	Rotation
+	enum	spin	clockwise	clockwise|counter-clockwise		Spin Direction
+	number	motion_blur	50	0..100	%	Motion Blur
+transition	spring-motion	Animation	Spring Motion	Bounces the incoming shot in from a side; light, comic entrances.
+	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
+	number	bounce	40	0..100	%	Bounce
+	number	motion_blur	50	0..100	%	Motion Blur
+transition	travel-motion	Animation	Travel Motion	Zooms out, travels across, and lands on the next shot; journeys and montages.
+	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
+	number	zoom	40	0..90	%	Zoom Out
+	number	motion_blur	50	0..100	%	Motion Blur
+transition	additive-dissolve	Dissolve	Additive Dissolve	A dissolve that adds the two shots' light, so it blooms brighter midway; dreamy, glowing changes.
+transition	blur-dissolve	Dissolve	Blur Dissolve	Dissolves through a blur; soft time passing, memories, gentle changes.
+	number	blur	40	0..400	px	Blur
+transition	burn-alpha	Dissolve	Burn Alpha	Burns the outgoing shot away from glowing edges; fiery or vintage film changes.
+	color	burn_color	#ff731a			Burn Color
+	number	softness	25	0..100	%	Softness
+	number	seed	1	0..9999		Random Seed
+transition	film-dissolve	Dissolve	Film Dissolve	A dissolve as film blends it, in light; natural, cinematic changes between shots.
+transition	luma-fade	Dissolve	Luma Fade	Reveals the next shot through the brightness of one of them; artful, graphic dissolves.
+	enum	source	outgoing	outgoing|incoming		Luma Source
+	number	softness	20	0..100	%	Softness
+	bool	invert	false			Invert
+transition	morph-cut	Dissolve	Morph Cut	Smooths a jump cut in an interview by morphing between the two frames; removing ums and pauses from talking heads.
+transition	mosaic	Dissolve	Mosaic	Breaks into growing blocks and resolves into the next shot; retro, game, or glitchy changes.
+	number	block_size	64	0..400	px	Maximum Block Size
+	bool	dissolve	true			Dissolve Blocks
+transition	chaos	Grunge & Distort	Chaos	A burst of noise, displacement, and color tearing between shots; chaotic, intense moments.
+	number	amount	60	0..100	%	Amount
+	number	seed	1	0..9999		Random Seed
+transition	earthquake	Grunge & Distort	Earthquake	Shakes the frame hard across the cut; impacts, drops, and dramatic hits.
+	number	shake	40	0..400	px	Shake
+	number	seed	1	0..9999		Random Seed
+	number	motion_blur	50	0..100	%	Motion Blur
+transition	flicker	Grunge & Distort	Flicker	Flickers between the shots like a failing light; horror, suspense, and nostalgic moments.
+	number	flickers	8	1..40		Flickers
+	number	seed	1	0..9999		Random Seed
+transition	glass	Grunge & Distort	Glass	Shatters through refracting glass shards; bold reveals and breaks.
+	number	cell_size	90	0..1000	px	Shard Size
+	number	refraction	40	0..400	px	Refraction
+	number	seed	1	0..9999		Random Seed
+transition	glitch	Grunge & Distort	Glitch	Digital glitch with slices and color split across the cut; tech, gaming, and edgy short-form.
+	number	amount	60	0..100	%	Amount
+	number	seed	1	0..9999		Random Seed
+transition	grunge	Grunge & Distort	Grunge	Reveals through a dirty, eroded texture with a burnt edge; gritty, rough, and vintage looks.
+	number	scale	120	0..1000	px	Scale
+	color	edge_color	#382414			Edge Color
+	number	edge_width	12	0..200	px	Edge Width
+	number	seed	1	0..9999		Random Seed
+transition	kaleidoscope	Grunge & Distort	Kaleidoscope	Mirrors the frame into a kaleidoscope and out; psychedelic, music, and trippy moments.
+	number	segments	6	2..32		Segments
+	number	zoom	30	0..100	%	Zoom
+transition	liquid-distortion	Grunge & Distort	Liquid Distortion	Ripples the shot like liquid into the next; dream sequences and fluid changes.
+	number	amount	60	0..500	px	Amount
+	number	scale	200	0..2000	px	Scale
+	number	seed	1	0..9999		Random Seed
+transition	tv-power	Grunge & Distort	TV Power	Collapses the picture like an old TV switching off, then on; retro and comedic cuts.
+	color	glow_color	#d9f2ff			Glow Color
+	number	line	4	0..50	px	Line Thickness
+transition	vhs-damage	Grunge & Distort	VHS Damage	Tape wobble, noise, and color bleed across the cut; retro VHS and found-footage looks.
+	number	amount	60	0..100	%	Amount
+	number	seed	1	0..9999		Random Seed
+transition	burn-chroma	Lights & Blurs	Burn Chroma	Burns through hot, saturated color; music videos and stylish, energetic cuts.
+	number	amount	80	0..100	%	Amount
+transition	chroma-leak	Lights & Blurs	Chroma Leak	Color leaks across the frame between shots; dreamy, nostalgic, and fashion edits.
+	number	amount	70	0..100	%	Amount
+	number	seed	1	0..9999		Random Seed
+transition	cross-zoom	Lights & Blurs	Cross Zoom	Zooms into the outgoing shot with blur and out of the next; fast, energetic cuts on a beat.
+	number	center_x	0.5	-10..10	frame widths	Center X
+	number	center_y	0.5	-10..10	frame heights	Center Y
+	number	strength	60	0..100	%	Zoom Strength
+transition	directional-blur	Lights & Blurs	Directional Blur	Smears both shots along a direction across the cut; motion, speed, and swipes.
+	number	angle	90	-3600..3600	degrees	Angle
+	number	blur	160	0..1000	px	Blur Length
+transition	flare	Lights & Blurs	Flare	A lens flare sweeps across and carries in the next shot; cinematic, sunny, and epic moments.
+	color	color	#ffcc8c			Color
+	number	amount	80	0..100	%	Amount
+	number	angle	20	-3600..3600	degrees	Angle
+transition	flash	Lights & Blurs	Flash	Flashes to a bright color between the shots; impacts, photos, beats, and memories.
+	color	color	#ffffff			Color
+	number	intensity	100	0..100	%	Intensity
+transition	glow	Lights & Blurs	Glow	Blooms into a glow and out into the next shot; soft, magical, and romantic changes.
+	number	radius	40	0..400	px	Radius
+	number	intensity	80	0..100	%	Intensity
+transition	lens-blur	Lights & Blurs	Lens Blur	Racks out of focus with bokeh and into the next shot; cinematic, gentle changes.
+	number	radius	30	0..200	px	Iris Radius
+transition	light-leak	Lights & Blurs	Light Leak	A warm light leak washes over the cut; film, travel, and nostalgic edits.
+	color	color	#ff8c33			Color
+	number	amount	80	0..100	%	Amount
+	number	seed	1	0..9999		Random Seed
+transition	light-sweep	Lights & Blurs	Light Sweep	A bright band sweeps across and reveals the next shot; product shots, titles, and polish.
+	number	angle	70	-3600..3600	degrees	Angle
+	number	width	160	0..1000	px	Width
+	color	color	#fff7e6			Color
+	number	amount	80	0..100	%	Amount
+transition	phosphor	Lights & Blurs	Phosphor	Glowing phosphor afterimage of the outgoing shot; retro screens and sci-fi.
+	color	color	#8cff99			Phosphor Color
+	number	decay	50	0..100	%	Decay
+transition	radial-blur	Lights & Blurs	Radial Blur	Spins both shots in a radial blur around a point; dizzy, energetic changes.
+	number	center_x	0.5	-10..10	frame widths	Center X
+	number	center_y	0.5	-10..10	frame heights	Center Y
+	number	angle	40	0..180	degrees	Blur Angle
+transition	ray	Lights & Blurs	Ray	Light rays burst out of a point across the cut; revelations, epic, and divine moments.
+	number	center_x	0.5	-10..10	frame widths	Center X
+	number	center_y	0.5	-10..10	frame heights	Center Y
+	number	amount	80	0..100	%	Amount
+	number	length	50	0..100	%	Ray Length
+transition	solarize	Lights & Blurs	Solarize	Solarizes through inverted tones and back; psychedelic and experimental cuts.
+	number	amount	100	0..100	%	Amount
+transition	stripe	Lights & Blurs	Stripe	Bright stripes sweep across between the shots; graphic, sporty, and promo edits.
+	number	stripes	8	1..64		Stripes
+	number	angle	30	-3600..3600	degrees	Angle
+	color	color	#ffffff			Color
+transition	zoom-blur	Lights & Blurs	Zoom Blur	A zoom blur out of a point and into the next shot; fast-paced, punchy changes.
+	number	center_x	0.5	-10..10	frame widths	Center X
+	number	center_y	0.5	-10..10	frame heights	Center Y
+	number	strength	50	0..100	%	Strength
+transition	roll-3d	Slide	3D Roll	Rolls the frame over like a cylinder to the next shot; playful and techy changes.
+	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
+	number	perspective	50	0..100	%	Perspective
+transition	film-roll	Slide	Film Roll	Rolls the shots past like film frames with a gap between; retro and reel-like cuts.
+	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
+	number	gap	40	0..400	px	Gap
+	color	gap_color	#080808			Gap Color
+	number	motion_blur	50	0..100	%	Motion Blur
+transition	push	Slide	Push	The incoming shot pushes the outgoing one off the frame; clean directional scene changes and slideshows.
+	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
+	number	motion_blur	50	0..100	%	Motion Blur
+transition	roll	Slide	Roll	Rolls the incoming shot in over the frame edge; brisk directional changes.
+	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
+	number	motion_blur	50	0..100	%	Motion Blur
+transition	slide	Slide	Slide	The incoming shot slides in over the outgoing one; clean, simple directional changes.
+	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
+	number	motion_blur	50	0..100	%	Motion Blur
+transition	split	Slide	Split	The outgoing shot splits apart down the middle to reveal the next; reveals and openings.
+	enum	orientation	horizontal	horizontal|vertical		Orientation
+	number	motion_blur	50	0..100	%	Motion Blur
+transition	stretch	Slide	Stretch	Stretches the outgoing shot away and the next in; playful, elastic changes.
+	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
+transition	whip	Slide	Whip	A fast whip pan blur from one shot into the next; energetic, kinetic cuts and travel edits.
+	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
+	number	blur	80	0..100	%	Blur
+transition	spin-3d	Transformers	3D Spin	Spins the frame around in 3D to the next shot; showy, playful reveals.
+	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
+	number	perspective	50	0..100	%	Perspective
+transition	spinback-3d	Transformers	3D Spinback	Spins the frame back into depth and the next forward; dramatic, techy changes.
+	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
+	number	depth	60	0..100	%	Depth
+transition	frame	Transformers	Frame	Shrinks the shot into a framed card and grows the next; photo albums and recaps.
+	number	frame_width	24	0..200	px	Frame Width
+	color	frame_color	#ffffff			Frame Color
+	number	scale	60	10..95	%	Scale
+transition	louver	Transformers	Louver	Turns the frame on slats like louvers to the next shot; graphic, stylish changes.
+	number	slats	8	1..64		Slats
+	enum	orientation	horizontal	horizontal|vertical		Orientation
+transition	mirror	Transformers	Mirror	Mirrors the frame across the cut; symmetric, artful changes.
+	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
+transition	page-peel	Transformers	Page Peel	Peels the outgoing shot back like a page from a corner; storybooks and playful changes.
+	enum	corner	bottom-right	top-left|top-right|bottom-right|bottom-left		Corner
+	number	radius	60	0..500	px	Curl Radius
+	bool	shadow	true			Shadow
+transition	slice	Transformers	Slice	Slices the frame into strips that slide apart; dynamic, modern cuts.
+	number	slices	8	1..64		Slices
+	number	angle	20	-3600..3600	degrees	Angle
+	number	motion_blur	50	0..100	%	Motion Blur
+transition	wave	Transformers	Wave	Waves the frame like a flag into the next shot; playful, fluid changes.
+	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
+	number	amplitude	60	0..500	px	Amplitude
+	number	wavelength	300	0..3000	px	Wavelength
+transition	clock-wipe	Wipe	Clock Wipe	Sweeps around a center like a clock hand; time passing and countdowns.
+	number	center_x	0.5	-10..10	frame widths	Center X
+	number	center_y	0.5	-10..10	frame heights	Center Y
+	number	start	0	-3600..3600	degrees	Start Angle
+	number	feather	0	0..2000	px	Feather
+	number	border_width	0	0..200	px	Border Width
+	color	border_color	#000000			Border Color
+	enum	antialias	low	off|low|medium|high		Anti-aliasing Quality
+transition	neon-wipe	Wipe	Neon Wipe	A glowing neon line wipes across; nightlife, gaming, and tech edits.
+	number	angle	90	-3600..3600	degrees	Wipe Angle
+	color	color	#33e6ff			Neon Color
+	number	glow	40	0..400	px	Glow Width
+	number	amount	100	0..100	%	Amount
+transition	panel-wipe	Wipe	Panel Wipe	Wipes in panel by panel; graphic, organized reveals.
+	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
+	number	panels	6	1..64		Panels
+	number	feather	0	0..2000	px	Feather
+	number	border_width	0	0..200	px	Border Width
+	color	border_color	#000000			Border Color
+	enum	antialias	low	off|low|medium|high		Anti-aliasing Quality
+transition	plateau-wipe	Wipe	Plateau Wipe	Wipes in stepped plateaus along an angle; graphic, staggered reveals.
+	number	angle	90	-3600..3600	degrees	Wipe Angle
+	number	plateaus	5	1..64		Plateaus
+	number	feather	4	0..2000	px	Feather
+	number	border_width	0	0..200	px	Border Width
+	color	border_color	#000000			Border Color
+	enum	antialias	low	off|low|medium|high		Anti-aliasing Quality
+transition	radial-wipe	Wipe	Radial Wipe	Sweeps from a corner like a fan; graphic, classic reveals.
+	enum	corner	top-left	top-left|top-right|bottom-right|bottom-left		Corner
+	number	feather	0	0..2000	px	Feather
+	number	border_width	0	0..200	px	Border Width
+	color	border_color	#000000			Border Color
+	enum	antialias	low	off|low|medium|high		Anti-aliasing Quality
+transition	soft-wipe	Wipe	Soft Wipe	A wide, soft-edged wipe across; gentle directional changes.
+	number	angle	90	-3600..3600	degrees	Wipe Angle
+	number	feather	300	0..2000	px	Feather
+transition	star-wipe	Wipe	Star Wipe	Opens the next shot through a growing star; playful, retro, and comedic reveals.
+	number	center_x	0.5	-10..10	frame widths	Center X
+	number	center_y	0.5	-10..10	frame heights	Center Y
+	number	points	5	3..24		Points
+	number	inner	45	5..100	%	Inner Radius
+	number	rotation	0	-3600..3600	degrees	Rotation
+	number	feather	0	0..2000	px	Feather
+	number	border_width	0	0..200	px	Border Width
+	color	border_color	#000000			Border Color
+	enum	antialias	low	off|low|medium|high		Anti-aliasing Quality
+transition	stretch-wipe	Wipe	Stretch Wipe	Wipes across while stretching the picture; elastic, playful changes.
+	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
+	number	stretch	200	0..2000	px	Stretch
+transition	barn-doors	Wipe	Barn Doors	Opens or closes like barn doors from the center; reveals and openings.
+	enum	orientation	vertical	horizontal|vertical		Orientation
+	number	border_width	0	0..200	px	Border Width
+	color	border_color	#000000			Border Color
+	enum	antialias	low	off|low|medium|high		Anti-aliasing Quality
+transition	center-split	Slide	Center Split	Splits the frame into four quarters that slide away; retro, graphic reveals.
+transition	inset	Wipe	Inset	The next shot grows from a corner inset; picture-in-picture style reveals.
+	enum	corner	top-left	top-left|top-right|bottom-right|bottom-left		Corner
+	number	border_width	0	0..200	px	Border Width
+	color	border_color	#000000			Border Color
+	enum	antialias	low	off|low|medium|high		Anti-aliasing Quality
+transition	iris-box	Iris	Iris Box	Opens the next shot through a growing box; classic, retro iris reveals.
+	number	center_x	0.5	-10..10	frame widths	Center X
+	number	center_y	0.5	-10..10	frame heights	Center Y
+	number	border_width	0	0..200	px	Border Width
+	color	border_color	#000000			Border Color
+	enum	antialias	low	off|low|medium|high		Anti-aliasing Quality
+transition	iris-cross	Iris	Iris Cross	Opens the next shot through a growing cross; classic, graphic iris reveals.
+	number	center_x	0.5	-10..10	frame widths	Center X
+	number	center_y	0.5	-10..10	frame heights	Center Y
+	number	border_width	0	0..200	px	Border Width
+	color	border_color	#000000			Border Color
+	enum	antialias	low	off|low|medium|high		Anti-aliasing Quality
+transition	iris-diamond	Iris	Iris Diamond	Opens the next shot through a growing diamond; classic, retro iris reveals.
+	number	center_x	0.5	-10..10	frame widths	Center X
+	number	center_y	0.5	-10..10	frame heights	Center Y
+	number	border_width	0	0..200	px	Border Width
+	color	border_color	#000000			Border Color
+	enum	antialias	low	off|low|medium|high		Anti-aliasing Quality
+transition	iris-round	Iris	Iris Round	Opens or closes through a circle, as old films end a scene; retro, comedic, and classic moments.
+	number	center_x	0.5	-10..10	frame widths	Center X
+	number	center_y	0.5	-10..10	frame heights	Center Y
+	number	border_width	0	0..200	px	Border Width
+	color	border_color	#000000			Border Color
+	enum	antialias	low	off|low|medium|high		Anti-aliasing Quality

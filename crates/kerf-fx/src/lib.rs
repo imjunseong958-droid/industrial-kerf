@@ -1,4 +1,8 @@
-//! Raster effects Kerf carries from EffectCraft.
+//! Kerf's effects and transitions.
+//!
+//! [`transitions`] are the transitions carried from FilmCraft, which Kerf's
+//! own renderer draws from both clips across a cut. The rest of this crate is
+//! the raster effects Kerf carries from EffectCraft.
 //!
 //! EffectCraft's effects run on premultiplied floating-point RGBA in layer
 //! space. Kerf carries those whose parameters it can write (numbers, angles,
@@ -22,6 +26,7 @@ use std::sync::OnceLock;
 
 mod guide;
 mod masks;
+pub mod transitions;
 
 pub use masks::{cuts, outline};
 

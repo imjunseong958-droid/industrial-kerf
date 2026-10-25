@@ -9,6 +9,15 @@ generators is generated from the catalog:
 cargo run -p kerf-lang --example reference
 ```
 
+A video editor's transitions, carried from FilmCraft, are listed there by
+category: pushes, slides, whips, zooms, flashes, light leaks, glitches,
+irises, page peels, and more, drawn from both clips across the cut
+(`transition add from=c1 to=c2 fx=push@1 dur=12f direction=from-east`). A
+`direction` names the side the incoming clip enters from; a center is
+`center_x` and `center_y` in fractions of the frame; pixel sizes are canvas
+pixels. Kerf's own renderer draws them, and a program that has them cannot
+also use raster effects until those come to it too.
+
 Raster effects and transitions (from EffectCraft) are listed there by id;
 `look` with `effect` gives one's parameters, and they are written like any
 other (`fx c1 add stylize.glow`, `transition add from=c1 to=c2
