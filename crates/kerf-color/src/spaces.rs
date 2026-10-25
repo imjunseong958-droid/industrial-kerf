@@ -7,7 +7,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::Primaries;
 use crate::log::LogCurve;
 
 pub type Mat3 = [[f64; 3]; 3];
@@ -54,15 +53,6 @@ impl Gamut {
             Gamut::Awg4 => [[0.7347, 0.2653], [0.1424, 0.8576], [0.0991, -0.0308]],
             Gamut::DGamut => [[0.71, 0.31], [0.21, 0.88], [0.09, -0.08]],
             Gamut::FGamutC => [[0.7347, 0.2653], [0.0263, 0.9737], [0.1173, -0.0224]],
-        }
-    }
-
-    pub fn from_primaries(p: Primaries) -> Gamut {
-        match p {
-            Primaries::Bt2020 => Gamut::Bt2020,
-            Primaries::P3D65 => Gamut::P3D65,
-            // BT.601 primaries are close enough to BT.709 that NLEs treat them as such.
-            _ => Gamut::Bt709,
         }
     }
 
@@ -314,23 +304,8 @@ impl WorkingSpace {
             WorkingSpace::Rec2100Hlg => "rec2100-hlg",
         }
     }
-    pub fn label(self) -> &'static str {
-        match self {
-            WorkingSpace::Rec709 => "Rec. 709",
-            WorkingSpace::Rec2100Pq => "Rec. 2100 PQ",
-            WorkingSpace::Rec2100Hlg => "Rec. 2100 HLG",
-        }
-    }
     pub fn is_hdr(self) -> bool {
         self != WorkingSpace::Rec709
-    }
-    /// The colour space exports of this sequence are encoded in.
-    pub fn output_space(self) -> ColorSpace {
-        match self {
-            WorkingSpace::Rec709 => ColorSpace::Rec709,
-            WorkingSpace::Rec2100Pq => ColorSpace::Rec2100Pq,
-            WorkingSpace::Rec2100Hlg => ColorSpace::Rec2100Hlg,
-        }
     }
 }
 
@@ -350,10 +325,6 @@ impl ColorPipeline {
     /// Linear primaries of the compositing space.
     pub fn working_gamut(&self) -> Gamut {
         if self.working.is_hdr() || self.wide_gamut { Gamut::Bt2020 } else { Gamut::Bt709 }
-    }
-    /// The classic pipeline: linear BT.709, display-referred SDR.
-    pub fn is_plain(&self) -> bool {
-        !self.working.is_hdr() && !self.wide_gamut
     }
 }
 

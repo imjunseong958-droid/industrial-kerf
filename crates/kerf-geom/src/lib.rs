@@ -23,9 +23,6 @@ impl Vec2 {
     pub fn length(self) -> f64 {
         self.x.hypot(self.y)
     }
-    pub fn lerp(self, o: Vec2, t: f64) -> Vec2 {
-        Vec2::new(self.x + (o.x - self.x) * t, self.y + (o.y - self.y) * t)
-    }
 }
 pub const fn vec2(x: f64, y: f64) -> Vec2 {
     Vec2 { x, y }

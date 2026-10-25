@@ -147,11 +147,6 @@ impl PlaybackTimeline {
         &self.clips
     }
 
-    /// Inline captions sorted by timeline start.
-    pub fn captions(&self) -> &[CaptionCue] {
-        &self.captions
-    }
-
     /// The program's sound clip by clip, as a render mixes it.
     pub(crate) fn sounds(&self) -> Arc<[ProgramSound]> {
         Arc::clone(&self.sounds)

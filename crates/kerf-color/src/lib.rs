@@ -41,15 +41,6 @@ impl Matrix {
             Matrix::Bt2020Ncl => (0.2627, 0.0593),
         }
     }
-    /// From an ISO/IEC 23091-2 `matrix_coefficients` code.
-    pub fn from_code(c: u8) -> Option<Matrix> {
-        match c {
-            1 => Some(Matrix::Bt709),
-            5 | 6 => Some(Matrix::Bt601),
-            9 | 10 => Some(Matrix::Bt2020Ncl),
-            _ => None,
-        }
-    }
 }
 
 /// Transfer characteristics.
@@ -66,28 +57,7 @@ pub enum Transfer {
     Hlg,
 }
 
-impl Transfer {
-    pub fn from_code(c: u8) -> Option<Transfer> {
-        match c {
-            1 | 6 | 14 | 15 => Some(Transfer::Bt709),
-            13 => Some(Transfer::Srgb),
-            8 => Some(Transfer::Linear),
-            16 => Some(Transfer::Pq),
-            18 => Some(Transfer::Hlg),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Primaries {
-    #[default]
-    Bt709,
-    Bt601_625,
-    Bt601_525,
-    Bt2020,
-    P3D65,
-}
+impl Transfer {}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Range {
@@ -95,47 +65,6 @@ pub enum Range {
     #[default]
     Limited,
     Full,
-}
-
-/// Colour metadata attached to frames.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ColorInfo {
-    pub matrix: Matrix,
-    pub transfer: Transfer,
-    pub primaries: Primaries,
-    pub range: Range,
-}
-
-/// HDR static metadata of a stream: SMPTE ST 2086 mastering display luminance and the CTA-861.3
-/// content light levels (MaxCLL / MaxFALL), in cd/m². Read from `mdcv` / `clli` (MP4 / MOV) and
-/// Matroska `MasteringMetadata` / `MaxCLL` / `MaxFALL`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HdrMetadata {
-    pub mastering_max_nits: Option<f32>,
-    pub mastering_min_nits: Option<f32>,
-    pub max_cll: Option<f32>,
-    pub max_fall: Option<f32>,
-}
-
-impl HdrMetadata {
-    /// The content's peak for tone mapping: MaxCLL when signalled (the brightest pixel actually
-    /// in the content), else the mastering display's peak; `None` when neither is (0 means
-    /// unknown in both). Never below HDR reference white.
-    pub fn peak_nits(&self) -> Option<f32> {
-        let known = |v: Option<f32>| v.filter(|n| *n > 0.0);
-        let p = match (known(self.max_cll), known(self.mastering_max_nits)) {
-            (Some(c), Some(m)) => c.min(m),
-            (Some(c), None) => c,
-            (None, m) => m?,
-        };
-        Some(p.clamp(transform::REFERENCE_WHITE_NITS as f32, 10_000.0))
-    }
-}
-
-impl ColorInfo {
-    pub const SRGB_FULL: ColorInfo = ColorInfo { matrix: Matrix::Bt709, transfer: Transfer::Srgb, primaries: Primaries::Bt709, range: Range::Full };
-    pub const REC709: ColorInfo = ColorInfo { matrix: Matrix::Bt709, transfer: Transfer::Bt709, primaries: Primaries::Bt709, range: Range::Limited };
 }
 
 /// Convert normalised Y'CbCr (Y in 0..1, Cb/Cr in -0.5..0.5) to non-linear R'G'B'.

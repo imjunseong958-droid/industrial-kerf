@@ -143,12 +143,6 @@ impl Buf {
         self.offset[0] += dx as f64;
         self.offset[1] += dy as f64;
     }
-    /// Measure from `origin` (in the current coordinates): a point `p` becomes `p − origin`.
-    /// Moves between layer space and effect space (the renderer's `effect_bounds`).
-    pub fn rebase(&mut self, origin: [f64; 2]) {
-        self.offset[0] += origin[0] * self.scale;
-        self.offset[1] += origin[1] * self.scale;
-    }
     /// Grow by `pad` transparent pixels on every side.
     pub fn pad(&mut self, pad: u32) {
         if pad == 0 {
@@ -272,19 +266,6 @@ pub struct EffectCtx<'a> {
 }
 
 impl EffectCtx<'_> {
-    /// The layer chosen in layer parameter `id`, via the host.
-    /// `masks_and_effects` is the effect's built-in choice, used when the instance has no
-    /// source companion parameter (see [`layer_source_id`]).
-    pub fn layer_param(&self, id: &str, masks_and_effects: bool) -> Option<LayerPixels> {
-        let lid = self.params.get(id)?.as_layer()?;
-        let host = self.env.host?;
-        match self.params.get(&layer_source_id(id)).map(Value::as_enum) {
-            Some(0) => host.layer(lid, false),
-            Some(1) => host.layer_masks(lid),
-            Some(_) => host.layer(lid, true),
-            None => host.layer(lid, masks_and_effects),
-        }
-    }
     /// Frame rate for frame-based maths (comp rate, else 30).
     pub fn fps(&self) -> f64 {
         if self.env.frame_rate > 0.0 { self.env.frame_rate } else { 30.0 }
@@ -357,16 +338,6 @@ pub fn default_value(ps: &ParamSpec, layer_size: [f64; 2]) -> Value {
         (ParamUi::Point, Value::Vec2(f)) => Value::Vec2([f[0] * layer_size[0], f[1] * layer_size[1]]),
         _ => ps.default.clone(),
     }
-}
-
-/// Options of a layer parameter's source popup (After Effects shows it next to the layer
-/// popup): what of the chosen layer the effect sees.
-pub const LAYER_SOURCE_OPTIONS: [&str; 3] = ["Source", "Masks", "Effects & Masks"];
-
-/// Id of the hidden companion parameter holding layer parameter `id`'s source choice (an index
-/// into [`LAYER_SOURCE_OPTIONS`]).
-pub fn layer_source_id(id: &str) -> String {
-    format!("{id}Source")
 }
 
 /// Run an effect on a buffer.

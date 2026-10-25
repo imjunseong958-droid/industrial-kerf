@@ -7,12 +7,9 @@
 
 pub mod blur;
 pub mod warp;
-
-use kerf_color::{BlendMode, blend_pixel};
 use rayon::prelude::*;
 
 pub use blur::{box_blur, directional_blur, gaussian_blur, radial_blur};
-pub use warp::resample;
 
 pub type Px = [f32; 4];
 
@@ -143,35 +140,6 @@ impl Image {
         }
         out
     }
-    /// Sub-rectangle copy (clipped).
-    pub fn crop(&self, x: i64, y: i64, w: u32, h: u32) -> Image {
-        let mut out = Image::new(w, h);
-        out.rows_mut().for_each(|(oy, row)| {
-            for (ox, px) in row.iter_mut().enumerate() {
-                *px = self.get(x + ox as i64, y + oy as i64);
-            }
-        });
-        out
-    }
-    /// Multiply every pixel (premultiplied) by `k`.
-    pub fn scale_alpha(&mut self, k: f32) {
-        if (k - 1.0).abs() < 1e-7 {
-            return;
-        }
-        self.data.par_iter_mut().for_each(|p| {
-            for c in p.iter_mut() {
-                *c *= k;
-            }
-        });
-    }
-    /// Multiply each pixel by a coverage value from `mask` (same size).
-    pub fn mul_mask(&mut self, mask: &[f32]) {
-        self.data.par_iter_mut().zip(mask.par_iter()).for_each(|(p, &m)| {
-            for c in p.iter_mut() {
-                *c *= m;
-            }
-        });
-    }
     /// Clamp to [0, 1] (8/16 bpc working space).
     pub fn clamp01(&mut self) {
         self.data.par_iter_mut().for_each(|p| {
@@ -191,23 +159,6 @@ impl Image {
             }
         });
     }
-    /// Composite over an opaque background colour and return opaque 8-bit RGBA.
-    pub fn to_rgba8_over(&self, bg: [f32; 3]) -> Vec<u8> {
-        let mut out = vec![0u8; self.data.len() * 4];
-        out.par_chunks_mut(4).zip(self.data.par_iter()).for_each(|(o, p)| {
-            let k = 1.0 - p[3].clamp(0.0, 1.0);
-            for c in 0..3 {
-                o[c] = ((p[c] + bg[c] * k).clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-            }
-            o[3] = 255;
-        });
-        out
-    }
-    /// Straight-alpha colour at a pixel.
-    pub fn straight(&self, x: i64, y: i64) -> Px {
-        let p = self.get(x, y);
-        if p[3] > 0.0 { [p[0] / p[3], p[1] / p[3], p[2] / p[3], p[3]] } else { [0.0; 4] }
-    }
     /// Map every pixel through `f` on straight colour (keeps alpha).
     pub fn map_straight(&mut self, f: impl Fn([f32; 3]) -> [f32; 3] + Sync) {
         self.data.par_iter_mut().for_each(|p| {
@@ -217,23 +168,6 @@ impl Image {
             }
             let c = f([p[0] / a, p[1] / a, p[2] / a]);
             *p = [c[0] * a, c[1] * a, c[2] * a, a];
-        });
-    }
-    /// Blend `src` (same size) onto self with a mode and opacity.
-    pub fn blend_from(&mut self, src: &Image, mode: BlendMode, opacity: f32, seed: u32) {
-        let w = self.width as usize;
-        self.data.par_chunks_mut(w.max(1)).zip(src.data.par_chunks(w.max(1))).enumerate().for_each(|(y, (d, s))| {
-            for x in 0..d.len() {
-                let mut sp = s[x];
-                if sp[3] <= 0.0 && !mode.is_stencil() {
-                    continue;
-                }
-                for c in sp.iter_mut() {
-                    *c *= opacity;
-                }
-                let n = if matches!(mode, BlendMode::Dissolve | BlendMode::DancingDissolve) { hash_noise(x as u32, y as u32, seed) } else { 0.5 };
-                d[x] = blend_pixel(mode, d[x], sp, n);
-            }
         });
     }
 }
@@ -247,16 +181,6 @@ pub fn hash_noise(x: u32, y: u32, seed: u32) -> f32 {
     h ^= h >> 15;
     (h & 0x00ff_ffff) as f32 / 16_777_216.0
 }
-
-/// A single-channel coverage mask.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Mask {
-    pub width: u32,
-    pub height: u32,
-    pub data: Vec<f32>,
-}
-
-impl Mask {}
 
 #[cfg(test)]
 mod tests {

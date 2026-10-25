@@ -285,12 +285,6 @@ impl Mask {
             }
         }
     }
-    /// Per-pixel maximum with `o` (same size).
-    pub fn max_with(&mut self, o: &Mask) {
-        for (a, b) in self.a.iter_mut().zip(&o.a) {
-            *a = a.max(*b);
-        }
-    }
 }
 
 /// Fill `path` (non-zero winding) into a `w`×`h` mask, offsetting the path by `(dx, dy)`.

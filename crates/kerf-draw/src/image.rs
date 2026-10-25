@@ -320,11 +320,6 @@ impl Image {
     pub fn map_encoded(&mut self, f: impl Fn([f32; 3]) -> [f32; 3] + Sync) {
         self.map_rgb(|rgb, _, _| f(rgb.map(color::to_encoded)).map(color::to_linear));
     }
-
-    /// Whether every pixel is opaque.
-    pub fn is_opaque(&self) -> bool {
-        self.px.chunks_exact(4).all(|pixel| pixel[3] >= 1.0)
-    }
 }
 
 /// A picture placed in another, sampled at the other's pixels.

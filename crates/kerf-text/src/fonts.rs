@@ -339,14 +339,6 @@ pub fn add_source(src: &dyn FontSource) -> usize {
     n
 }
 
-/// Register a font from memory (e.g. a font file the user picked on the web). Returns its faces.
-pub fn add_font_data(data: Vec<u8>) -> Vec<FaceId> {
-    let data = Arc::new(data);
-    let names = read_faces_bytes(&data);
-    let mut d = db().write().unwrap_or_else(|e| e.into_inner());
-    names.into_iter().map(|n| push(&mut d, info_from(n, FaceData::Shared(data.clone()), "user"))).collect()
-}
-
 /// Scan the system font folders once (native only; a no-op on wasm). Returns the number of faces
 /// added by this call.
 pub fn scan_system() -> usize {

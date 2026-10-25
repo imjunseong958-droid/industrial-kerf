@@ -163,13 +163,6 @@ pub fn carried(id: &str) -> Option<&'static EffectDef> {
     super::project::find_effect(filmcraft)
 }
 
-/// Whether a FilmCraft effect replaced the EffectCraft effect Kerf listed as `id`.
-pub fn takes_over(id: &str) -> bool {
-    CARRIED
-        .iter()
-        .any(|(_, kerf, version, _)| *kerf == id && *version > 1)
-}
-
 /// How a FilmCraft parameter is written in Kerf.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Written {

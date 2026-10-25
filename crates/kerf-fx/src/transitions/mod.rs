@@ -174,18 +174,6 @@ pub fn apply_scaled(e: &Fx, a: &Image, b: &Image, p: f32, scale: f32) -> Image {
         .unwrap_or_else(|| paint(t.w, t.h, |x, y| mix(t.sa(x, y), t.sb(x, y), p)))
 }
 
-/// Audio crossfade gains (out, in) for progress p.
-pub fn audio_gains(kind: &str, p: f32) -> (f32, f32) {
-    match kind {
-        "constant_gain" => (1.0 - p, p),
-        "exponential_fade" => ((1.0 - p).powi(3), 1.0 - (1.0 - p).powi(3)),
-        _ => (
-            (p * std::f32::consts::FRAC_PI_2).cos(),
-            (p * std::f32::consts::FRAC_PI_2).sin(),
-        ),
-    }
-}
-
 // ---------------------------------------------------------------------------------------------
 // Inputs and parameters
 

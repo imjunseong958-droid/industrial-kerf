@@ -176,12 +176,6 @@ impl LutFormat {
             _ => None,
         }
     }
-    pub fn extension(self) -> &'static str {
-        match self {
-            LutFormat::Cube => "cube",
-            LutFormat::ThreeDl => "3dl",
-        }
-    }
 }
 
 fn floats(line: &str) -> Result<Vec<f32>, String> {

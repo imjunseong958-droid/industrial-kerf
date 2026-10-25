@@ -275,10 +275,6 @@ impl McpServer {
         }
     }
 
-    pub fn router(&self) -> &KerfMcpRouter {
-        &self.router
-    }
-
     pub fn handle(&self, request: &Value) -> Option<Value> {
         let id = request.get("id").cloned();
         let method = request

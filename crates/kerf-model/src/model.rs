@@ -93,10 +93,6 @@ impl Sequence {
         self.tracks.iter().find(|track| track.id == id)
     }
 
-    pub fn track_mut(&mut self, id: &str) -> Option<&mut Track> {
-        self.tracks.iter_mut().find(|track| track.id == id)
-    }
-
     pub fn marker(&self, id: &str) -> Option<&Marker> {
         self.markers.iter().find(|marker| marker.id == id)
     }
@@ -182,10 +178,6 @@ impl Track {
             .clips
             .partition_point(|other| other.start <= clip.start);
         self.clips.insert(index, clip);
-    }
-
-    pub fn sort(&mut self) {
-        self.clips.sort_by_key(|clip| clip.start);
     }
 
     pub fn transition(&self, id: &str) -> Option<&Transition> {
@@ -697,12 +689,6 @@ impl Project {
             }
         }
         self.retired.retain(|id| !live.contains(id));
-    }
-
-    /// Whether `id` names a media item, sequence, clip, transition, marker,
-    /// or link group.
-    pub fn has_id(&self, id: &str) -> bool {
-        self.ids().any(|existing| existing == id)
     }
 }
 
