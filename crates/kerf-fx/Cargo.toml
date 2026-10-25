@@ -8,6 +8,7 @@ description = "Raster effects Kerf carries from EffectCraft: the catalog table a
 # EffectCraft's crates live in `effectcraft/`; a change to its effects means
 # regenerating the catalog table (see `raster_catalog_is_current`).
 [dependencies]
+kerf-draw = { path = "../kerf-draw" }
 kerf-model = { path = "../kerf-model" }
 effectcraft-effects = { path = "../../effectcraft/crates/effects" }
 effectcraft-geom = { path = "../../effectcraft/crates/geom" }

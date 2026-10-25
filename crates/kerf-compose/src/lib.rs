@@ -3,7 +3,9 @@
 //! A sequence is drawn frame by frame by one of two renderers
 //! ([`Renderer`]): Kerf's own (`draw`), which draws Kerf's model directly
 //! in linear light with the drawing carried from FilmCraft, or
-//! EffectCraft's, described below, which it is replacing.
+//! EffectCraft's, described below, which it is replacing. By default a
+//! program is drawn by Kerf's, and by EffectCraft's only when it uses what
+//! Kerf's does not draw yet: raster effects and transitions.
 //!
 //! Through EffectCraft, [`Compositor::new`] turns the
 //! sequence into an EffectCraft project held in memory (`scene` says how
@@ -72,8 +74,10 @@ pub struct ComposeOptions {
 /// What draws a compositor's frames.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Renderer {
-    /// EffectCraft's renderer, on the CPU or the GPU.
+    /// Kerf's own where it draws the program, else EffectCraft's.
     #[default]
+    Auto,
+    /// EffectCraft's renderer, on the CPU or the GPU.
     EffectCraft,
     /// Kerf's own, on the CPU: the picture in linear light, with FilmCraft's
     /// drawing. It does not draw raster effects and transitions yet.
@@ -81,12 +85,13 @@ pub enum Renderer {
 }
 
 impl Renderer {
-    /// The renderer `KERF_RENDERER` names (`kerf` or `effectcraft`), or
-    /// this one.
+    /// The renderer `KERF_RENDERER` names (`kerf`, `effectcraft`, or
+    /// `auto`), or this one.
     pub fn from_env(self) -> Self {
         match std::env::var("KERF_RENDERER").as_deref() {
             Ok("kerf") => Self::Kerf,
             Ok("effectcraft") => Self::EffectCraft,
+            Ok("auto") => Self::Auto,
             _ => self,
         }
     }
@@ -175,21 +180,57 @@ impl Compositor {
         catalog: &Catalog,
         options: &ComposeOptions,
     ) -> Result<Self, ComposeError> {
-        let inner = match options.renderer {
-            Renderer::Kerf => Inner::Kerf(draw::Drawing::new(
+        let kerf = || {
+            draw::Drawing::new(
                 project,
                 catalog,
                 options.sequence.as_deref(),
                 options.captions,
-            )?),
+            )
+        };
+        let inner = match options.renderer {
+            Renderer::Kerf => Inner::Kerf(kerf()?),
             Renderer::EffectCraft => {
                 Inner::EffectCraft(EffectCraft::new(project, catalog, options)?)
             }
+            Renderer::Auto => match kerf() {
+                Ok(drawing) => Inner::Kerf(drawing),
+                Err(ComposeError::Unsupported { .. }) => {
+                    Inner::EffectCraft(EffectCraft::new(project, catalog, options)?)
+                }
+                Err(error) => return Err(error),
+            },
         };
         Ok(Self { inner })
     }
 
-    /// What draws this compositor's frames.
+    /// The renderer `options` draw `project` with, Kerf's or EffectCraft's,
+    /// found without making either ready to draw.
+    pub fn resolve(
+        project: &Project,
+        catalog: &Catalog,
+        options: &ComposeOptions,
+    ) -> Result<Renderer, ComposeError> {
+        let kerf = || {
+            draw::Drawing::new(
+                project,
+                catalog,
+                options.sequence.as_deref(),
+                options.captions,
+            )
+        };
+        match options.renderer {
+            Renderer::Auto => match kerf() {
+                Ok(_) => Ok(Renderer::Kerf),
+                Err(ComposeError::Unsupported { .. }) => Ok(Renderer::EffectCraft),
+                Err(error) => Err(error),
+            },
+            renderer => Ok(renderer),
+        }
+    }
+
+    /// What draws this compositor's frames: Kerf's renderer or
+    /// EffectCraft's, never [`Renderer::Auto`].
     pub fn renderer(&self) -> Renderer {
         match self.inner {
             Inner::EffectCraft(_) => Renderer::EffectCraft,

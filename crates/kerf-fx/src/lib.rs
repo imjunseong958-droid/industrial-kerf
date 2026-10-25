@@ -313,11 +313,25 @@ pub fn catalog_table() -> String {
     out
 }
 
+/// How a clip's masks cut its frames: as the renderer that draws the
+/// program cuts them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MaskStyle {
+    /// As EffectCraft's renderer: a Gaussian feather, on encoded values.
+    #[default]
+    EffectCraft,
+    /// As Kerf's (`kerf_draw::mask`): a feather by distance, in linear
+    /// light, over black.
+    Kerf,
+}
+
 /// A clip's raster effects, ready to run on its source frames.
 pub struct RasterStack {
     steps: Vec<Step>,
     /// The clip's masks, which cut each frame before the effects run.
     cut: masks::Cut,
+    /// The masks Kerf's renderer cuts with, when it draws the program.
+    kerf_masks: Vec<kerf_model::Mask>,
     layer_size: [f64; 2],
 }
 
@@ -355,19 +369,29 @@ impl RasterStack {
         Ok(Self {
             steps,
             cut: masks::Cut::new(&[], layer_size),
+            kerf_masks: Vec::new(),
             layer_size,
         })
     }
 
     /// Cut each frame with `masks` first, as a layer's masks cut it before
-    /// its effects run. Masks that cut nothing are left out.
-    pub fn with_masks(mut self, masks: &[kerf_model::Mask]) -> Self {
-        self.cut = masks::Cut::new(masks, self.layer_size);
+    /// its effects run, in `style`. Masks that cut nothing are left out.
+    pub fn with_masks(mut self, masks: &[kerf_model::Mask], style: MaskStyle) -> Self {
+        match style {
+            MaskStyle::EffectCraft => self.cut = masks::Cut::new(masks, self.layer_size),
+            MaskStyle::Kerf => {
+                self.kerf_masks = masks
+                    .iter()
+                    .filter(|mask| kerf_draw::mask::cuts(mask))
+                    .cloned()
+                    .collect();
+            }
+        }
         self
     }
 
     pub fn is_empty(&self) -> bool {
-        self.steps.is_empty() && self.cut.is_empty()
+        self.steps.is_empty() && self.cut.is_empty() && self.kerf_masks.is_empty()
     }
 
     /// Run the stack on one frame of straight 8-bit RGBA at clip time `at`.
@@ -375,6 +399,20 @@ impl RasterStack {
     /// measured in pixels keep their size relative to the picture.
     pub fn apply(&self, rgba: &mut [u8], width: u32, height: u32, at: Time, frame_rate: f64) {
         let scale = f64::from(width) / self.layer_size[0];
+        if !self.kerf_masks.is_empty() {
+            kerf_cut(
+                rgba,
+                width,
+                height,
+                &self.kerf_masks,
+                self.layer_size,
+                scale,
+                at,
+            );
+            if self.steps.is_empty() && self.cut.is_empty() {
+                return;
+            }
+        }
         let mut image = Image::new(width, height);
         for (pixel, bytes) in image.data.iter_mut().zip(rgba.chunks_exact(4)) {
             let alpha = f32::from(bytes[3]) / 255.0;
@@ -411,6 +449,30 @@ impl RasterStack {
             buf = effectcraft_effects::apply(step.spec, &ctx, buf);
         }
         write_back(&buf, rgba, width, height, scale);
+    }
+}
+
+/// Cut opaque straight RGBA by `masks` as Kerf's renderer cuts a picture
+/// over black: each pixel's light weighed by its coverage.
+fn kerf_cut(
+    rgba: &mut [u8],
+    width: u32,
+    height: u32,
+    masks: &[kerf_model::Mask],
+    layer_size: [f64; 2],
+    scale: f64,
+    at: Time,
+) {
+    let flat = kerf_draw::mask::prepare(masks, (layer_size[0], layer_size[1]), scale, at);
+    let Some(coverage) = kerf_draw::mask::coverage(&flat, width as usize, height as usize) else {
+        return;
+    };
+    let decode = kerf_draw::color::decode_table();
+    for (pixel, covered) in rgba.chunks_exact_mut(4).zip(coverage) {
+        for channel in &mut pixel[..3] {
+            *channel = kerf_draw::color::encode(decode[usize::from(*channel)] * covered);
+        }
+        pixel[3] = 255;
     }
 }
 
