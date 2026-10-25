@@ -1089,12 +1089,12 @@ pub(crate) fn params_text(params: &Params, defs: &[ParamDef], rate: Rate) -> Str
         .iter()
         .filter(|(name, _)| !defs.iter().any(|d| &d.name == *name));
     for (name, param) in known.chain(unknown) {
-        // A track or mask name is a word, as ids are.
+        // A track, mask, or marker name is a word, as ids are.
         let reference = defs.iter().any(|def| {
             def.name == *name
                 && matches!(
                     def.ty,
-                    ParamType::Track | ParamType::Sound | ParamType::Mask
+                    ParamType::Track | ParamType::Sound | ParamType::Mask | ParamType::Time
                 )
         });
         let time = defs

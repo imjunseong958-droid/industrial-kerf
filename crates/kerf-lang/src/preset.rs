@@ -1,11 +1,13 @@
 //! Portable editing patterns, written in the Kerf language. Media declarations
 //! are typed slots (`path="slot:slot1"`), never references to the author's files.
+//! The looks a pattern uses that Kerf does not bundle travel with it.
 //! Instantiation produces an ordinary edit script for the runtime to propose.
 
 use crate::{apply_script, parse_document, print_document, print_ops, PrintOptions};
+use kerf_model::look::{self, Look};
 use kerf_model::{
-    Catalog, Clip, ClipChange, Content, Id, Media, NewClip, Op, Param, Project, Rate, Sequence,
-    SequenceChange, Time, TrackChange, TrackKind, Transition, Value,
+    Catalog, Clip, ClipChange, Content, Id, Media, NewClip, Op, Param, ParamType, Project, Rate,
+    Sequence, SequenceChange, Time, TrackChange, TrackKind, Transition, Value,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -14,6 +16,21 @@ pub struct Binding {
     pub media: Id,
     /// Offset from the replacement media's first frame, including handles.
     pub from: Time,
+    /// The replacement's sound onsets, in its own time, when it is music the
+    /// pattern's markers should land on; empty leaves the markers where
+    /// they are.
+    pub beats: Vec<Time>,
+}
+
+/// A read preset.
+#[derive(Clone, Debug)]
+pub struct Preset {
+    pub pattern: Project,
+    /// The looks it carries, each once.
+    pub looks: Vec<Look>,
+    /// What the pattern reads with: the catalog it was read against and
+    /// the looks it carries.
+    pub catalog: Catalog,
 }
 
 fn diagnostics(errors: impl IntoIterator<Item = kerf_model::Diagnostic>) -> String {
@@ -147,7 +164,99 @@ pub fn export(
         })
         .collect();
     valid(&pattern, catalog)?;
-    Ok(print_document(&pattern, catalog, PrintOptions::default()))
+    let mut document = print_document(&pattern, catalog, PrintOptions::default());
+    for look in used_looks(&pattern, catalog).into_values() {
+        if Catalog::bundled()
+            .look(look.id.as_str(), look.version)
+            .is_none()
+        {
+            document.push('\n');
+            document.push_str(&carried(look));
+        }
+    }
+    Ok(document)
+}
+
+/// The looks `pattern` uses, each once.
+fn used_looks<'a>(pattern: &Project, catalog: &'a Catalog) -> BTreeMap<(Id, u32), &'a Look> {
+    let mut looks = BTreeMap::new();
+    for track in pattern.sequences.iter().flat_map(|s| &s.tracks) {
+        let effects = track
+            .clips
+            .iter()
+            .flat_map(|c| &c.effects)
+            .map(|e| (&e.fx, e.version));
+        let transitions = track.transitions.iter().map(|t| (&t.fx, t.version));
+        for (fx, version) in effects.chain(transitions) {
+            if let Some(look) = catalog.look(fx.as_str(), version) {
+                looks.insert((fx.clone(), version), look);
+            }
+        }
+    }
+    looks
+}
+
+/// A look as a preset carries it: its `look` line, and the rest of the
+/// file indented under it.
+fn carried(look: &Look) -> String {
+    let mut lines = look
+        .text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .skip_while(|line| line.starts_with('#') || *line == "kerf-look 1");
+    let mut out = String::new();
+    if let Some(header) = lines.next() {
+        out.push_str(header);
+        out.push('\n');
+    }
+    for line in lines {
+        out.push_str("  ");
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// Take the looks a preset carries out of its text: each a `look` line at
+/// the top level and the lines indented under it. Their lines are left
+/// blank, so the rest reads with the file's own line numbers.
+fn carried_looks(document: &str) -> Result<(String, Vec<Look>), String> {
+    let mut rest = Vec::new();
+    let mut blocks: Vec<(usize, Vec<&str>)> = Vec::new();
+    let mut inside = false;
+    for (index, line) in document.lines().enumerate() {
+        if !line.starts_with(' ') && !line.trim().is_empty() {
+            inside = line.split_whitespace().next() == Some("look");
+            if inside {
+                blocks.push((index + 1, Vec::new()));
+            }
+        }
+        if let (true, Some((_, lines))) = (inside, blocks.last_mut()) {
+            lines.push(line);
+            rest.push("");
+        } else {
+            rest.push(line);
+        }
+    }
+    let looks = blocks
+        .into_iter()
+        .map(|(first, mut lines)| {
+            while lines.last().is_some_and(|line| line.trim().is_empty()) {
+                lines.pop();
+            }
+            let body = lines.join("\n");
+            // Padded, so errors name the preset's own lines.
+            let padded = format!(
+                "kerf-look 1\n{}{body}\n",
+                "\n".repeat(first.saturating_sub(2))
+            );
+            let mut look = look::read(&padded, "preset").map_err(|e| e.to_string())?;
+            look.text = format!("kerf-look 1\n{body}\n");
+            Ok(look)
+        })
+        .collect::<Result<_, String>>()?;
+    Ok((rest.join("\n"), looks))
 }
 
 /// The source interval a clip plays plus the handles its transitions read
@@ -181,12 +290,46 @@ fn required_source(clip: &Clip, transitions: &[Transition], rate: Rate) -> Optio
 }
 
 /// Read and validate a portable preset. Every media input must be a slot;
-/// unbound file paths and hidden, unused sequences are rejected.
-pub fn parse(document: &str, catalog: &Catalog) -> Result<Project, String> {
-    let project = parse_document(document, catalog)
+/// unbound file paths and hidden, unused sequences are rejected. A look it
+/// carries must be one it uses, and the same as one `catalog` already has
+/// by that id and version.
+pub fn parse(document: &str, catalog: &Catalog) -> Result<Preset, String> {
+    let (document, carried) = carried_looks(document)?;
+    let mut catalog = catalog.clone();
+    let mut looks: Vec<Look> = Vec::new();
+    for look in carried {
+        if looks
+            .iter()
+            .any(|other| other.id == look.id && other.version == look.version)
+        {
+            continue;
+        }
+        match catalog.look(look.id.as_str(), look.version) {
+            Some(known) if known.same(&look) => {}
+            Some(known) => {
+                return Err(format!(
+                    "the preset's `{}@{}` is not the one in {}",
+                    look.id, look.version, known.source
+                ))
+            }
+            None => catalog.define_look(look.clone())?,
+        }
+        looks.push(look);
+    }
+    let project = parse_document(&document, &catalog)
         .map_err(diagnostics)?
         .project;
-    valid(&project, catalog)?;
+    valid(&project, &catalog)?;
+    let used = used_looks(&project, &catalog);
+    if let Some(look) = looks
+        .iter()
+        .find(|look| !used.contains_key(&(look.id.clone(), look.version)))
+    {
+        return Err(format!(
+            "the preset carries `{}@{}`, which it does not use",
+            look.id, look.version
+        ));
+    }
     let root = project
         .sequences
         .first()
@@ -220,7 +363,11 @@ pub fn parse(document: &str, catalog: &Catalog) -> Result<Project, String> {
             return Err(format!("unused slot `{}`", media.id));
         }
     }
-    Ok(project)
+    Ok(Preset {
+        pattern: project,
+        looks,
+        catalog,
+    })
 }
 
 /// How far into `media` a binding may start and still fill `slot`; negative
@@ -283,7 +430,12 @@ pub fn instantiate(
     bindings: &BTreeMap<String, Binding>,
     texts: &BTreeMap<String, String>,
 ) -> Result<String, String> {
-    let mut pattern = parse(document, catalog)?;
+    let Preset {
+        mut pattern,
+        catalog: carried,
+        ..
+    } = parse(document, catalog)?;
+    let catalog = &carried;
     let destination = project
         .sequence(target.as_str())
         .ok_or_else(|| format!("no sequence `{target}`"))?;
@@ -325,6 +477,8 @@ pub fn instantiate(
     let root = pattern.sequences[0].id.clone();
     let sequence_order = order(&pattern, &root)?;
     let mut generator = project.id_gen();
+    // The clips that play music a binding re-times, and its onsets.
+    let mut beats = BTreeMap::<Id, &[Time]>::new();
     let mut ids = BTreeMap::new();
     ids.insert(root.clone(), target.clone());
     for id in pattern.ids() {
@@ -355,6 +509,22 @@ pub fn instantiate(
                 }
                 clip.id = ids[&clip.id].clone();
                 clip.link = clip.link.as_ref().map(|id| ids[id].clone());
+                // A look's time that lands on a marker follows its new id.
+                for effect in &mut clip.effects {
+                    let Some(def) = catalog.fx(effect.fx.as_str()) else {
+                        continue;
+                    };
+                    for (name, param) in &mut effect.params {
+                        let time = def.find(name).is_some_and(|d| d.ty == ParamType::Time);
+                        if let (true, Param::Static(Value::Text(marker))) = (time, param) {
+                            if let Some(id) =
+                                Id::new(marker.as_str()).ok().and_then(|id| ids.get(&id))
+                            {
+                                *marker = id.to_string();
+                            }
+                        }
+                    }
+                }
                 match &mut clip.content {
                     Content::Media {
                         media, source_in, ..
@@ -362,12 +532,18 @@ pub fn instantiate(
                         let binding = &bindings[media.as_str()];
                         *media = binding.media.clone();
                         *source_in += binding.from;
+                        if !binding.beats.is_empty() {
+                            beats.insert(clip.id.clone(), &binding.beats);
+                        }
                     }
                     Content::Sequence { sequence, .. } => *sequence = ids[sequence].clone(),
                     _ => {}
                 }
             }
         }
+    }
+    for sequence in &mut pattern.sequences {
+        place_on_beats(sequence, &beats);
     }
     let mut ops = Vec::new();
     let clips: Vec<_> = destination
@@ -418,7 +594,80 @@ pub fn instantiate(
     Ok(script)
 }
 
+/// Move each of `sequence`'s markers over a clip in `beats` to the onset of
+/// its music nearest it, on a whole frame and after the marker before; the
+/// looks whose times land on them follow. Markers over other clips, or with
+/// no onset left in their clip, stay.
+fn place_on_beats(sequence: &mut Sequence, beats: &BTreeMap<Id, &[Time]>) {
+    let rate = sequence.rate;
+    let clips: Vec<(&Clip, &[Time])> = sequence
+        .tracks
+        .iter()
+        .flat_map(|t| &t.clips)
+        .filter_map(|clip| beats.get(&clip.id).map(|onsets| (clip, *onsets)))
+        .collect();
+    if clips.is_empty() {
+        return;
+    }
+    let mut order: Vec<usize> = (0..sequence.markers.len()).collect();
+    order.sort_by_key(|&index| sequence.markers[index].at);
+    let mut moved = Vec::new();
+    let mut last: Option<Time> = None;
+    for index in order {
+        let at = sequence.markers[index].at;
+        let Some((clip, onsets)) = clips
+            .iter()
+            .find(|(clip, _)| clip.start <= at && at < clip.end())
+        else {
+            continue;
+        };
+        let nearest = onsets
+            .iter()
+            .filter_map(|onset| played_at(clip, *onset))
+            .map(|time| rate.round(time))
+            .filter(|time| clip.start <= *time && *time < clip.end())
+            .filter(|time| last.is_none_or(|last| *time > last))
+            .min_by(|a, b| {
+                let distance = |time: &Time| (time.seconds() - at.seconds()).abs();
+                distance(a).total_cmp(&distance(b))
+            });
+        let placed = nearest.unwrap_or(at);
+        moved.push((index, placed));
+        last = Some(last.map_or(placed, |last| last.max(placed)));
+    }
+    for (index, placed) in moved {
+        sequence.markers[index].at = placed;
+    }
+}
+
+/// When `clip` plays `source` of its media, in sequence time.
+fn played_at(clip: &Clip, source: Time) -> Option<Time> {
+    let (low, high) = clip.source_range()?;
+    if source < low || source >= high {
+        return None;
+    }
+    let speed = clip.speed();
+    let offset = if speed.is_reverse() {
+        high - source
+    } else {
+        source - low
+    };
+    Some(clip.start + speed.timeline_span(offset))
+}
+
 fn append_sequence(sequence: &Sequence, ops: &mut Vec<Op>) {
+    // Markers first: a look's time may land on one.
+    for marker in &sequence.markers {
+        ops.push(Op::AddMarker {
+            sequence: sequence.id.clone(),
+            id: Some(marker.id.clone()),
+            at: marker.at,
+            duration: marker.duration,
+            name: marker.name.clone(),
+            color: marker.color,
+            note: marker.note.clone(),
+        });
+    }
     let mut links = BTreeMap::<Id, Vec<Id>>::new();
     for track in &sequence.tracks {
         ops.push(Op::AddTrack {
@@ -476,17 +725,6 @@ fn append_sequence(sequence: &Sequence, ops: &mut Vec<Op>) {
         ops.push(Op::Link {
             clips,
             group: Some(group),
-        });
-    }
-    for marker in &sequence.markers {
-        ops.push(Op::AddMarker {
-            sequence: sequence.id.clone(),
-            id: Some(marker.id.clone()),
-            at: marker.at,
-            duration: marker.duration,
-            name: marker.name.clone(),
-            color: marker.color,
-            note: marker.note.clone(),
         });
     }
     // Lock only after all content and link groups have been installed.

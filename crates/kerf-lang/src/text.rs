@@ -233,9 +233,14 @@ fn parse_word_value(text: &str, def: &ParamDef) -> Result<Value, String> {
 /// Read a value for `def`; `{time:value[:interp] …}` animates it.
 pub fn parse_param(atom: &Atom, def: &ParamDef, rate: Rate) -> Result<Param, String> {
     match atom {
-        Atom::Word(word) if def.ty == ParamType::Time => amount(word, rate)
-            .map(|time| Param::Static(Value::Number(time.seconds())))
-            .map_err(|error| format!("`{}`: {error}", def.name)),
+        // A time is an offset into the clip, or a marker's id to land on it.
+        Atom::Word(word) if def.ty == ParamType::Time => match amount(word, rate) {
+            Ok(time) => Ok(Param::Static(Value::Number(time.seconds()))),
+            Err(_) if Id::new(word.as_str()).is_ok() => {
+                Ok(Param::Static(Value::Text(word.clone())))
+            }
+            Err(error) => Err(format!("`{}`: {error}", def.name)),
+        },
         Atom::Word(word) => parse_word_value(word, def).map(Param::Static),
         Atom::Str(text)
             if matches!(

@@ -165,6 +165,13 @@ impl ParamDef {
                 }
                 Ok(())
             }
+            // A time may name a marker of the clip's sequence, to land on it.
+            (ParamType::Time, Value::Text(marker)) => Id::new(marker).map(|_| ()).map_err(|_| {
+                format!(
+                    "`{}` expects a time or a marker's id, not `{marker}`",
+                    self.name
+                )
+            }),
             (ParamType::Enum(options), Value::Enum(choice)) => {
                 if options.contains(choice) {
                     Ok(())

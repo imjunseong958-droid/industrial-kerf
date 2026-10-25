@@ -341,3 +341,25 @@ fn looks_are_written_like_effects_and_flatten_into_what_they_stand_for() {
     let error = fails(&base(), "fx c1 add look.pop-in@1\n");
     assert!(error.message.contains("a look for titles"), "{error:?}");
 }
+
+#[test]
+fn a_look_s_time_can_name_a_marker_it_lands_on() {
+    let applied = run(
+        &base(),
+        "marker add as=hit1 at=01:00:01:00\nfx c1 add look.shake@1 hit=hit1\n",
+    );
+    let printed = print_document(
+        &applied.project,
+        Catalog::builtin(),
+        PrintOptions::default(),
+    );
+    assert!(printed.contains("fx look.shake@1 hit=hit1\n"), "{printed}");
+    let flat = run(&applied.project, "fx c1 flatten 1\n");
+    let kerf_model::Param::Animated(keys) = &flat.project.clip("c1").unwrap().props["x"] else {
+        panic!("x animates");
+    };
+    assert_eq!(frames(keys[0].at), 24);
+    // The marker must be the clip's sequence's.
+    let error = fails(&base(), "fx c1 add look.shake@1 hit=nowhere\n");
+    assert_eq!(error.code, "marker.read", "{error:?}");
+}

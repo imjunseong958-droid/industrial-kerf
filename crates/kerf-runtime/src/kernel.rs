@@ -1037,7 +1037,9 @@ fn json_value(ty: &ParamType, value: &Json) -> Option<Value> {
             | ParamType::File(_)
             | ParamType::Track
             | ParamType::Sound
-            | ParamType::Mask,
+            | ParamType::Mask
+            // A time given as text names a marker to land on.
+            | ParamType::Time,
             Json::String(s),
         ) => Value::Text(s.clone()),
         (ParamType::Enum(_), Json::String(s)) => Value::Enum(s.clone()),

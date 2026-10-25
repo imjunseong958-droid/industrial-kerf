@@ -1,9 +1,9 @@
 # Effects, looks, and versions
 
-> Status: versions, the built-in effects, and looks are in: the reader,
-> the catalog layers, expansion, `flatten`, and 15 bundled looks
-> (`crates/kerf-model/looks`). Presets that carry their looks are next
-> (see the plan at the end).
+> Status: the plan at the end is in: versions, the built-in effects, looks
+> (the reader, the catalog layers, expansion, `flatten`, and 15 bundled
+> looks in `crates/kerf-model/looks`), presets that carry their looks, and
+> markers placed on new music's beats.
 
 Kerf draws with a small set of **built-in effects**: transitions, color,
 blur, keys, distortion, transform, and the few others an editor reaches for.
@@ -54,8 +54,13 @@ look look.shake version=1 name="Shake" category="Fun" on=clip
 A clip uses it like any effect, `fx look.shake@1 intensity=0.7 hit=12f`, and
 the document keeps that one line. The look is expanded only to draw, so
 people, agents, and presets read the intent rather than its keyframes.
-`fx c1 flatten look.shake` replaces the line with what it expands to, for
-hand tuning.
+`fx c1 flatten 1` replaces the clip's first effect, the look, with what it
+expands to, for hand tuning.
+
+A time can instead name a marker of the clip's sequence:
+`fx look.shake@1 hit=beat1` hits wherever `beat1` is, and moves with it. A
+preset applied to new music can move such markers onto its beats
+([presets.md](presets.md#looks-and-beats)).
 
 - **Ids** start with `look.`, which no built-in effect uses. A shared look
   can carry its author: `look.alice.shake`.
@@ -66,7 +71,7 @@ hand tuning.
 - **`param`** lines declare its parameters: `number`, `time`, `angle`,
   `color`, `choice` (`options=a|b|c`), or `switch`, each with a default and
   an optional `range=` and `doc=`. Times are relative to the clip, like
-  keyframe times; frames in a `param` line count at 30 a second for the
+  keyframe times, or name a marker; frames in a `param` line count at 30 a second for the
   catalog's ranges, and at the sequence's rate when the look expands. A
   look's parameters do not animate; its keyframes do.
 - **`set`** lines change the clip's properties, combined with the clip's own
@@ -122,7 +127,12 @@ The catalog a document is checked and drawn with is layered:
    are ordinary look files.
 3. The project's looks, in `.kerf/looks/*.kerflook`.
 4. Looks carried inside a preset, so a shared `.kerfpreset` draws the same
-   on another machine without anything installed.
+   on another machine without anything installed. Applying the preset
+   copies the ones the project lacks into `.kerf/looks`.
+
+A process that edits or plays a project reads its looks folder again when
+a file there is added, removed, or changed, so looks one adds (an applied
+preset's) are ones the others draw.
 
 An id and version is defined once; two different looks claiming the same
 `id@version` is an error that names both files.

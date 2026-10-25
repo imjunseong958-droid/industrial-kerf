@@ -198,6 +198,7 @@ impl Validator<'_> {
             self.track(sequence, track);
         }
         self.track_reads(sequence);
+        self.marker_reads(sequence);
         for marker in &sequence.markers {
             if marker.at.is_negative()
                 || marker.duration.is_negative()
@@ -311,6 +312,50 @@ impl Validator<'_> {
                 clip,
                 format!("`{clip}` reads track {read}, which reads track {reader} back"),
             );
+        }
+    }
+
+    /// A look's time that names a marker lands on it: the marker must be
+    /// the clip's sequence's, and transitions' times count across the cut.
+    fn marker_reads(&mut self, sequence: &Sequence) {
+        for track in &sequence.tracks {
+            let effects = track.clips.iter().flat_map(|clip| {
+                clip.effects
+                    .iter()
+                    .map(move |effect| (&clip.id, &effect.fx, &effect.params, false))
+            });
+            let transitions = track
+                .transitions
+                .iter()
+                .map(|t| (&t.id, &t.fx, &t.params, true));
+            for (owner, fx, params, transition) in effects.chain(transitions) {
+                let Some(def) = self.catalog.fx(fx.as_str()) else {
+                    continue;
+                };
+                for (name, param) in params {
+                    let marker = match (def.find(name), param) {
+                        (Some(param_def), Param::Static(Value::Text(marker)))
+                            if param_def.ty == ParamType::Time =>
+                        {
+                            marker
+                        }
+                        _ => continue,
+                    };
+                    if transition {
+                        self.error(
+                            "marker.read",
+                            owner,
+                            format!("`{owner}` {fx}: `{name}` names marker `{marker}`, but a transition's times count across the cut"),
+                        );
+                    } else if !sequence.markers.iter().any(|m| m.id == marker.as_str()) {
+                        self.error(
+                            "marker.read",
+                            owner,
+                            format!("`{owner}` {fx}: `{name}` names `{marker}`, which is not a marker of sequence `{}`", sequence.id),
+                        );
+                    }
+                }
+            }
         }
     }
 

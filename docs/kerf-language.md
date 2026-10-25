@@ -50,7 +50,7 @@ flashes, glitches, film and VHS looks, title pop-ins, and whips and zooms
 through a cut. They are listed there too and written like any effect or
 transition (`fx c1 add look.shake@1 intensity=0.7 hit=12f`, `transition add
 from=c1 to=c2 fx=look.whip@1 dur=12f`); a time parameter is a time in the
-clip. The document keeps the one line and the look expands when it draws;
+clip, or the id of a marker in its sequence to land on (`hit=beat1`). The document keeps the one line and the look expands when it draws;
 `fx c1 flatten 1` replaces it with what it expands to. A project's own looks
 are `.kerf/looks/*.kerflook` files.
 
