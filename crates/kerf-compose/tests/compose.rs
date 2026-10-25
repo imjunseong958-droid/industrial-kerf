@@ -486,3 +486,54 @@ fn the_gpu_draws_what_the_cpu_draws() {
         "{adapter}: mean {mean}, off {off}"
     );
 }
+
+#[test]
+fn filmcraft_transitions_mix_both_clips_across_the_cut() {
+    let cut = |transition: &str| {
+        format!(
+            "{SEQUENCE}\
+             \x20 track V1 video\n\
+             \x20   clip g1 gen=solid@1 at=0f dur=24f\n\
+             \x20     set color=#ff0000\n\
+             \x20   clip g2 gen=solid@1 at=24f dur=24f\n\
+             \x20     set color=#0000ff\n\
+             {transition}"
+        )
+    };
+    // A push from the west halfway through: the incoming clip fills the
+    // left half, the outgoing one is pushed into the right.
+    let push = cut("\x20   transition x1 from=g1 to=g2 fx=push@1 dur=12f motion_blur=0\n");
+    let middle = frame_by(Renderer::Kerf, &push, 24, false);
+    assert_eq!(pixel(&middle, 40, 90), [0, 0, 255]);
+    assert_eq!(pixel(&middle, 280, 90), [255, 0, 0]);
+    // Before and after, each clip alone.
+    assert_eq!(
+        pixel(&frame_by(Renderer::Kerf, &push, 16, false), 160, 90),
+        [255, 0, 0]
+    );
+    assert_eq!(
+        pixel(&frame_by(Renderer::Kerf, &push, 31, false), 160, 90),
+        [0, 0, 255]
+    );
+    // From the east, the other way round.
+    let east = cut(
+        "\x20   transition x1 from=g1 to=g2 fx=push@1 dur=12f motion_blur=0 direction=from-east\n",
+    );
+    let middle = frame_by(Renderer::Kerf, &east, 24, false);
+    assert_eq!(pixel(&middle, 280, 90), [0, 0, 255]);
+    assert_eq!(pixel(&middle, 40, 90), [255, 0, 0]);
+    // An iris opens the incoming clip from the middle.
+    let iris = cut("\x20   transition x1 from=g1 to=g2 fx=iris-round@1 dur=12f\n");
+    let opening = frame_by(Renderer::Kerf, &iris, 22, false);
+    assert_eq!(pixel(&opening, 160, 90), [0, 0, 255]);
+    assert_eq!(pixel(&opening, 2, 2), [255, 0, 0]);
+    // The renderer chosen by default draws them; EffectCraft's cannot.
+    assert!(
+        compositor_by(Renderer::Auto, &push, false).is_ok_and(|c| c.renderer() == Renderer::Kerf)
+    );
+    match compositor_by(Renderer::EffectCraft, &push, false) {
+        Err(error @ ComposeError::Unsupported { .. }) => assert_eq!(error.entity(), Some("x1")),
+        Err(other) => panic!("{other}"),
+        Ok(_) => panic!("EffectCraft draws a FilmCraft transition"),
+    }
+}

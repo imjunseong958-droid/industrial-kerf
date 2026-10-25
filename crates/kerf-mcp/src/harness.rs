@@ -1543,10 +1543,24 @@ fn find_fx(words: &str) -> Vec<Value> {
         .all()
         .filter_map(|fx| {
             let haystack = format!("{} {} {}", fx.id, fx.category, fx.doc).to_lowercase();
-            let score = words
+            let whole: Vec<&str> = haystack
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|word| !word.is_empty())
+                .collect();
+            // A word found whole counts twice what one found inside another
+            // does: `glow` over `glowing`.
+            let score: usize = words
                 .iter()
-                .filter(|word| haystack.contains(word.as_str()))
-                .count();
+                .map(|word| {
+                    if whole.contains(&word.as_str()) {
+                        2
+                    } else if haystack.contains(word.as_str()) {
+                        1
+                    } else {
+                        0
+                    }
+                })
+                .sum();
             (score > 0).then_some((score, fx))
         })
         .collect();

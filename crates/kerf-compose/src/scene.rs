@@ -1452,7 +1452,7 @@ impl<'a> Builder<'a> {
                     }
                     group
                 }
-                (Engine::Graph, other) => {
+                (Engine::Graph | Engine::Kerf, other) => {
                     return Err(unsupported(
                         &clip.id,
                         format!("effect `{other}` on a picture"),

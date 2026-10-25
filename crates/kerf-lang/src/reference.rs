@@ -102,6 +102,17 @@ pub fn reference(catalog: &Catalog) -> String {
             out.push_str(&fx_reference(fx));
         }
     }
+    writeln!(out, "\n{KERF}").unwrap();
+    let mut categories: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    for fx in catalog.all().filter(|fx| fx.engine == Engine::Kerf) {
+        categories
+            .entry(fx.category.as_str())
+            .or_default()
+            .push(format!("`{}@{}`", fx.id, fx.version));
+    }
+    for (category, ids) in categories {
+        writeln!(out, "- {category}: {}", ids.join(", ")).unwrap();
+    }
     writeln!(out, "\n{RASTER}").unwrap();
     let mut categories: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for fx in catalog.all().filter(|fx| fx.engine == Engine::Raster) {
@@ -116,6 +127,14 @@ pub fn reference(catalog: &Catalog) -> String {
     }
     out
 }
+
+const KERF: &str = "## Transitions from FilmCraft
+A video editor's transitions, drawn from both clips across the cut: pushes,
+slides, whips, zooms, flashes, light leaks, glitches, irises, and more.
+Written like any transition (`transition add from=c1 to=c2 fx=push@1
+dur=12f direction=from-east`); `look` with `effect: \"<id>\"` lists one's
+parameters. A direction names the side the incoming clip enters from, and a
+center is `center_x`/`center_y` in fractions of the frame.";
 
 const RASTER: &str = "## Raster effects
 Raster effects come from EffectCraft and run on a clip's own picture before
@@ -199,7 +218,7 @@ mod tests {
         let text = reference(catalog);
         for fx in catalog.all() {
             let listed = match fx.engine {
-                Engine::Graph => format!("`{}@{}`", fx.id, fx.version),
+                Engine::Graph | Engine::Kerf => format!("`{}@{}`", fx.id, fx.version),
                 Engine::Raster => format!("`{}`", fx.id),
             };
             assert!(text.contains(&listed), "{}", fx.id);

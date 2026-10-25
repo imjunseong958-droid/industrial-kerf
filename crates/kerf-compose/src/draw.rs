@@ -13,12 +13,15 @@
 //!   opacity and blend mode. Opaque media left where fitting puts it is
 //!   letterboxed with black, as the graph pads it.
 //! - A dissolve fades the incoming clip in over the outgoing one, a wipe
-//!   reveals it along its front, and a dip fades a solid through.
+//!   reveals it along its front, and a dip fades a solid through. The
+//!   transitions carried from FilmCraft (`kerf_fx::transitions`) mix the
+//!   two clips' pictures, each drawn as it shows there, across the cut.
 //! - Titles are text centered on a transparent canvas, solids a color, and
 //!   an adjustment layer applies its effects to the picture beneath it.
 //!
 //! Raster effects and transitions (EffectCraft's) are not drawn here yet:
-//! a program with them is reported as unsupported.
+//! a program with them is reported as unsupported, and EffectCraft's
+//! renderer, which draws them, does not draw FilmCraft's transitions.
 
 use crate::footage::{frame_count, ClipSource, Pictures};
 use crate::{ComposeError, Frame};
@@ -27,9 +30,10 @@ use kerf_draw::blend::{composite, composite_placed};
 use kerf_draw::correct::Correction;
 use kerf_draw::text::{self, Justify, Text};
 use kerf_draw::{blur, mask, wipe, Affine, Blend, Image, Rect, Vec2};
+use kerf_fx::transitions::{apply_scaled, Fx};
 use kerf_model::{
-    Catalog, Clip, Content, Domain, Effect, Engine, Id, Param, Project, Rate, Ratio, Rgba,
-    Sequence, Time, Track, TrackKind, Value,
+    Catalog, Clip, Content, Domain, Effect, Engine, FxDef, Id, Param, Params, Project, Rate, Ratio,
+    Rgba, Sequence, Time, Track, TrackKind, Value,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -72,6 +76,21 @@ struct CaptionPlan {
 struct TrackPlan {
     shown: Vec<Shown>,
     dips: Vec<Dip>,
+    pairs: Vec<Pair>,
+}
+
+/// A transition that mixes two shown clips' pictures across their cut.
+struct Pair {
+    /// The clips it leaves and enters, by their place in the track's shown;
+    /// the same clip when only one of them shows.
+    from: usize,
+    to: usize,
+    /// Only the clip it enters shows: it enters from nothing.
+    from_nothing: bool,
+    def: FxDef,
+    params: Params,
+    start: Time,
+    end: Time,
 }
 
 /// A clip as its track shows it: its span with transition handles, and
@@ -243,8 +262,21 @@ impl Drawing {
         let (w, h) = output_size(plan.width, plan.height, scale);
         let mut canvas = Image::new(w, h);
         for track in &plan.tracks {
-            for shown in track.shown.iter().filter(|shown| shown.shows(at)) {
-                self.layer(&mut canvas, plan, shown, at, scale);
+            for (index, shown) in track.shown.iter().enumerate() {
+                if !shown.shows(at) {
+                    continue;
+                }
+                let pair = track.pairs.iter().find(|pair| {
+                    pair.start <= at && at < pair.end && (pair.from == index || pair.to == index)
+                });
+                match pair {
+                    // Drawn once, at the first of its clips that shows.
+                    Some(pair) if index == pair.from || !track.shown[pair.from].shows(at) => {
+                        self.pair(&mut canvas, plan, track, pair, at, scale);
+                    }
+                    Some(_) => {}
+                    None => self.layer(&mut canvas, plan, shown, at, scale, shown.plan.blend),
+                }
             }
             for dip in track.dips.iter().filter(|dip| dip.shows(at)) {
                 let opacity = f64::from(dip.color.a) / 255.0
@@ -283,7 +315,49 @@ impl Drawing {
         canvas
     }
 
-    /// Draw a shown clip over `canvas` at sequence time `at`.
+    /// Two clips mixed by a FilmCraft transition at sequence time `at`,
+    /// over `canvas`.
+    fn pair(
+        &self,
+        canvas: &mut Image,
+        sequence: &SequencePlan,
+        track: &TrackPlan,
+        pair: &Pair,
+        at: Time,
+        scale: f64,
+    ) {
+        let (w, h) = (canvas.w, canvas.h);
+        let (from, to) = (&track.shown[pair.from], &track.shown[pair.to]);
+        let side = |shown: &Shown| {
+            let mut picture = Image::new(w, h);
+            if shown.shows(at) {
+                self.layer(&mut picture, sequence, shown, at, scale, Blend::Normal);
+            }
+            picture
+        };
+        let (a, b) = match (pair.from == pair.to, pair.from_nothing) {
+            (false, _) => (side(from), side(to)),
+            // One clip alone: it enters from nothing, or leaves into it.
+            (true, true) => (Image::new(w, h), side(to)),
+            (true, false) => (side(from), Image::new(w, h)),
+        };
+        let Some(fx) = Fx::new(&pair.def, &pair.params) else {
+            return;
+        };
+        let p = progress(at, pair.start, pair.end) as f32;
+        let mixed = apply_scaled(&fx, &a, &b, p, scale as f32);
+        // A fade from or to nothing keeps the one clip's blend mode;
+        // between two they mix normally.
+        let blend = match (from.shows(at), to.shows(at)) {
+            (true, false) => from.plan.blend,
+            (false, true) => to.plan.blend,
+            _ if pair.from == pair.to => from.plan.blend,
+            _ => Blend::Normal,
+        };
+        composite(canvas, &mixed, 1.0, blend);
+    }
+
+    /// Draw a shown clip over `canvas` at sequence time `at` with `blend`.
     fn layer(
         &self,
         canvas: &mut Image,
@@ -291,6 +365,7 @@ impl Drawing {
         shown: &Shown,
         at: Time,
         scale: f64,
+        blend: Blend,
     ) {
         let plan = &shown.plan;
         let clip = &plan.clip;
@@ -346,12 +421,12 @@ impl Drawing {
         let opacity = (number(&param(clip, "opacity").value_at(time)) * fade) as f32;
         match crop {
             None if (picture.w, picture.h) == (w, h) && identity(&to_output) => {
-                composite(canvas, &picture, opacity, plan.blend);
+                composite(canvas, &picture, opacity, blend);
             }
             crop => {
                 let whole = Rect::new(0.0, 0.0, picture.w as f64, picture.h as f64);
                 let crop = crop.unwrap_or(whole);
-                composite_placed(canvas, &picture, &to_output, crop, opacity, plan.blend);
+                composite_placed(canvas, &picture, &to_output, crop, opacity, blend);
             }
         }
     }
@@ -566,6 +641,8 @@ impl<'a> Builder<'a> {
             .map(|clip| (clip.start, clip.end(), None, false))
             .collect();
         let mut dips = Vec::new();
+        // FilmCraft's transitions, by the track's clips they join.
+        let mut mixes = Vec::new();
         for transition in &track.transitions {
             let (Some(from), Some(to)) = (
                 track.clip_index(transition.from.as_str()),
@@ -611,6 +688,17 @@ impl<'a> Builder<'a> {
                         "softness",
                     )?,
                 },
+                other if kerf_fx::transitions::filmcraft_id(other).is_some() => {
+                    let def = self.catalog.fx(other).ok_or_else(|| {
+                        ComposeError::Invalid(format!("unknown transition `{other}`"))
+                    })?;
+                    // Both clips show through the transition, which mixes them.
+                    spans[from].1 = end;
+                    spans[from].3 = true;
+                    spans[to].0 = start;
+                    mixes.push((from, to, def.clone(), transition.params.clone(), start, end));
+                    continue;
+                }
                 other => {
                     return Err(unsupported(&transition.id, format!("transition `{other}`")));
                 }
@@ -621,13 +709,18 @@ impl<'a> Builder<'a> {
             spans[to].2 = Some((reveal, start, end));
         }
         let mut shown = Vec::new();
-        for (clip, (from, to, reveal, fades_out)) in track.clips.iter().zip(spans) {
+        // Each clip's place in `shown`, by its place on the track.
+        let mut places = HashMap::new();
+        for (index, (clip, (from, to, reveal, fades_out))) in
+            track.clips.iter().zip(spans).enumerate()
+        {
             if !clip.enabled || matches!(clip.content, Content::Caption { .. }) {
                 continue;
             }
             let adjustment =
                 matches!(&clip.content, Content::Generator { fx, .. } if fx == "adjustment");
-            if adjustment && (reveal.is_some() || fades_out) {
+            let mixed = mixes.iter().any(|mix| mix.0 == index || mix.1 == index);
+            if adjustment && (reveal.is_some() || fades_out || mixed) {
                 return Err(unsupported(&clip.id, "a transition on an adjustment layer"));
             }
             let (from, to) = if adjustment {
@@ -638,9 +731,11 @@ impl<'a> Builder<'a> {
                     None => continue,
                 }
             };
-            let Some(plan) = self.clip(sequence, clip, from, to, reveal.is_none())? else {
+            let Some(plan) = self.clip(sequence, clip, from, to, reveal.is_none() && !mixed)?
+            else {
                 continue;
             };
+            places.insert(index, shown.len());
             shown.push(Shown {
                 plan,
                 from,
@@ -648,7 +743,29 @@ impl<'a> Builder<'a> {
                 reveal,
             });
         }
-        Ok(TrackPlan { shown, dips })
+        let pairs = mixes
+            .into_iter()
+            .filter_map(|(from, to, def, params, start, end)| {
+                let (from, to, from_nothing) = match (places.get(&from), places.get(&to)) {
+                    (Some(from), Some(to)) => (*from, *to, false),
+                    // One side alone mixes with nothing.
+                    (Some(only), None) => (*only, *only, false),
+                    (None, Some(only)) => (*only, *only, true),
+                    // Neither shows: nothing to draw.
+                    (None, None) => return None,
+                };
+                Some(Pair {
+                    from,
+                    to,
+                    from_nothing,
+                    def,
+                    params,
+                    start,
+                    end,
+                })
+            })
+            .collect();
+        Ok(TrackPlan { shown, dips, pairs })
     }
 
     /// The part of a shown clip its source covers, as the graph clamps it.

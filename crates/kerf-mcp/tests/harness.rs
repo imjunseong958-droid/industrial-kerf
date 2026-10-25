@@ -813,6 +813,18 @@ fn raster_effects_are_looked_up_checked_and_previewed() {
         .contains("neon"));
     let wipes = ok(&router, "look", json!({"effects": "retro tv transition"}));
     assert_eq!(wipes["effects"][0]["id"], "transition.venetian", "{wipes}");
+    // A video editor's transitions are found by the moment too.
+    let whip = ok(&router, "look", json!({"effects": "whip pan travel"}));
+    assert_eq!(whip["effects"][0]["id"], "whip", "{whip}");
+    let push = ok(&router, "look", json!({"effect": "push"}));
+    assert_eq!(push["engine"], "kerf", "{push}");
+    assert!(
+        push["reference"]
+            .as_str()
+            .unwrap()
+            .contains("`direction=from-west`"),
+        "{push}"
+    );
 
     let proposal = ok(
         &router,
