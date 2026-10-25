@@ -7,7 +7,7 @@
 //! again while frames take longer than their time.
 
 use crate::PlaybackError;
-use kerf_compose::{ComposeOptions, Compositor, Device, Frame};
+use kerf_compose::{ComposeOptions, Compositor, Device, Frame, Renderer};
 use kerf_model::{Catalog, Project, Rate};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -66,6 +66,7 @@ impl Drawn {
     ) -> Result<Self, PlaybackError> {
         let options = ComposeOptions {
             device: if gpu { Device::Auto } else { Device::Cpu },
+            renderer: Renderer::default().from_env(),
             ..ComposeOptions::default()
         };
         let compositor = Compositor::new(project, Catalog::builtin(), &options)

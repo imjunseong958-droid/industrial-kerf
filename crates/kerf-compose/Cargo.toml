@@ -3,11 +3,12 @@ name = "kerf-compose"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Kerf's compositor: a sequence drawn frame by frame through EffectCraft's renderer, with footage decoded by libav"
+description = "Kerf's compositor: a sequence drawn frame by frame by Kerf's own renderer or EffectCraft's, with footage decoded by libav"
 
 # EffectCraft's crates live in `effectcraft/`, as for kerf-fx.
 [dependencies]
 kerf-core = { path = "../kerf-core" }
+kerf-draw = { path = "../kerf-draw" }
 kerf-fx = { path = "../kerf-fx" }
 kerf-model = { path = "../kerf-model" }
 effectcraft-color = { path = "../../effectcraft/crates/color" }

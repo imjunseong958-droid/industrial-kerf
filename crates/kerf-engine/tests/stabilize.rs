@@ -103,6 +103,7 @@ fn a_shaky_clip_is_analysed_once_and_drawn_steady() {
                 sequence: None,
                 captions: false,
                 device: Device::Cpu,
+                ..ComposeOptions::default()
             },
         )
         .unwrap();

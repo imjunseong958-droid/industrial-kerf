@@ -17,7 +17,9 @@ members = [
     "crates/kerf-agent",
     "crates/kerf-mcp",
     "crates/kerf-cli",
+    "crates/kerf-draw",
     "effectcraft/crates/*",
+    "filmcraft/crates/*",
 ]
 resolver = "2"
 
@@ -26,8 +28,9 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
-# The EffectCraft crates (see effectcraft/README.md) name their dependencies
-# and lints from the workspace; Kerf's own crates name theirs directly.
+# The EffectCraft and FilmCraft crates (see their README.md) name their
+# dependencies and lints from the workspace; Kerf's own crates name theirs
+# directly.
 [workspace.dependencies]
 effectcraft-time = { path = "effectcraft/crates/time" }
 effectcraft-geom = { path = "effectcraft/crates/geom" }
@@ -43,6 +46,9 @@ effectcraft-track = { path = "effectcraft/crates/track" }
 effectcraft-model = { path = "effectcraft/crates/model" }
 effectcraft-render = { path = "effectcraft/crates/render" }
 effectcraft-gpu = { path = "effectcraft/crates/gpu" }
+filmcraft-geom = { path = "filmcraft/crates/geom" }
+filmcraft-color = { path = "filmcraft/crates/color" }
+filmcraft-text = { path = "filmcraft/crates/text" }
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }

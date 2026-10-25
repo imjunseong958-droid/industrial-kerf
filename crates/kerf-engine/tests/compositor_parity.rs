@@ -10,8 +10,16 @@
 //! FFmpeg's x86_64 code blends and fades a little differently from its
 //! Arm code, about one more luma step in a dip or under a raster effect,
 //! and the tolerances cover both.
+//!
+//! Both renderers are compared: EffectCraft's, and Kerf's own, which leaves
+//! raster effects to EffectCraft for now. Kerf's mixes light linearly where
+//! the graph mixes encoded values, so wherever pictures mix (opacity, a
+//! dissolve or dip midway, a transparent solid, a blur, an adjustment
+//! layer's opacity) it is brighter, by up to a sixth of the range midway
+//! through a dip; those cases carry a tolerance of their own for it, and
+//! `kerf-compose`'s tests check what it draws there.
 
-use kerf_compose::{ComposeOptions, Compositor};
+use kerf_compose::{ComposeError, ComposeOptions, Compositor, Renderer};
 use kerf_engine::derivatives::DerivativeCache;
 use kerf_engine::ffmpeg::resolve_ffmpeg_bin;
 use kerf_engine::program::{compile_program, program_sequence, ProgramOptions};
@@ -110,21 +118,31 @@ fn graph(project: &Project, dir: &Path, frame: i64, window: bool) -> Vec<u8> {
     frames[frames.len() - size..].to_vec()
 }
 
-/// The same frame from the compositor, as RGB.
-fn composed(project: &Project, frame: i64) -> Vec<u8> {
-    let compositor =
-        Compositor::new(project, Catalog::builtin(), &ComposeOptions::default()).expect("composes");
+/// The same frame from the compositor, as RGB; none when `renderer` does
+/// not draw the program.
+fn composed(project: &Project, frame: i64, renderer: Renderer) -> Option<Vec<u8>> {
+    let options = ComposeOptions {
+        renderer,
+        ..ComposeOptions::default()
+    };
+    let compositor = match Compositor::new(project, Catalog::builtin(), &options) {
+        Ok(compositor) => compositor,
+        Err(ComposeError::Unsupported { .. }) if renderer == Renderer::Kerf => return None,
+        Err(error) => panic!("{error}"),
+    };
     let picture = compositor.frame(compositor.rate().time_of(frame), 1.0);
     assert!(
         compositor.problems().is_empty(),
         "{:?}",
         compositor.problems()
     );
-    picture
-        .rgba
-        .chunks_exact(4)
-        .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
-        .collect()
+    Some(
+        picture
+            .rgba
+            .chunks_exact(4)
+            .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
+            .collect(),
+    )
 }
 
 /// How far apart two pictures are, out of 255.
@@ -170,16 +188,18 @@ struct Case {
     luma: f64,
     off: f64,
     color: f64,
+    /// Kerf's renderer's tolerance, when it differs: luma, off, color.
+    kerf: Option<(f64, f64, f64)>,
 }
 
 /// With `KERF_PARITY_DUMP` set to a folder, both pictures of every frame
 /// compared are written there to look at.
-fn dump(project: &Project, name: &str, frame: i64, graph: &[u8], composed: &[u8]) {
+fn dump(project: &Project, name: &str, frame: i64, graph: &[u8], composed: &[u8], by: &str) {
     let Some(folder) = std::env::var_os("KERF_PARITY_DUMP") else {
         return;
     };
     let sequence = program_sequence(project, None).expect("a sequence");
-    for (which, rgb) in [("graph", graph), ("composed", composed)] {
+    for (which, rgb) in [("graph", graph), (by, composed)] {
         let path =
             Path::new(&folder).join(format!("{}-{frame}-{which}.png", name.replace(' ', "-")));
         let mut child = ffmpeg()
@@ -203,15 +223,26 @@ fn check(cases: &[Case]) {
         let project = project(&media, case.body);
         for &frame in case.frames {
             let graph = graph(&project, dir.path(), frame, case.window);
-            let composed = composed(&project, frame);
-            dump(&project, case.name, frame, &graph, &composed);
-            let difference = difference(&graph, &composed);
-            eprintln!("{} frame {frame}: {difference:?}", case.name);
-            if difference.luma > case.luma
-                || difference.off > case.off
-                || difference.color > case.color
-            {
-                failures.push(format!("{} frame {frame}: {difference:?}", case.name));
+            for (renderer, by) in [
+                (Renderer::EffectCraft, "effectcraft"),
+                (Renderer::Kerf, "kerf"),
+            ] {
+                let Some(composed) = composed(&project, frame, renderer) else {
+                    continue;
+                };
+                dump(&project, case.name, frame, &graph, &composed, by);
+                let difference = difference(&graph, &composed);
+                eprintln!("{} frame {frame} ({by}): {difference:?}", case.name);
+                let (luma, off, color) = match (renderer, case.kerf) {
+                    (Renderer::Kerf, Some(tolerance)) => tolerance,
+                    _ => (case.luma, case.off, case.color),
+                };
+                if difference.luma > luma || difference.off > off || difference.color > color {
+                    failures.push(format!(
+                        "{} frame {frame} ({by}): {difference:?}",
+                        case.name
+                    ));
+                }
             }
         }
     }
@@ -232,6 +263,7 @@ fn cuts_fit_speed_and_nesting_match_the_graph() {
             luma: 0.5,
             off: 0.001,
             color: 1.0,
+            kerf: None,
         },
         Case {
             name: "fit",
@@ -243,6 +275,7 @@ fn cuts_fit_speed_and_nesting_match_the_graph() {
             luma: 1.0,
             off: 0.001,
             color: 2.5,
+            kerf: None,
         },
         Case {
             name: "speed",
@@ -256,6 +289,7 @@ fn cuts_fit_speed_and_nesting_match_the_graph() {
             luma: 0.5,
             off: 0.001,
             color: 1.0,
+            kerf: None,
         },
         Case {
             name: "other rate",
@@ -267,6 +301,7 @@ fn cuts_fit_speed_and_nesting_match_the_graph() {
             luma: 0.5,
             off: 0.001,
             color: 1.0,
+            kerf: None,
         },
         Case {
             name: "nested",
@@ -282,6 +317,7 @@ fn cuts_fit_speed_and_nesting_match_the_graph() {
             luma: 1.0,
             off: 0.001,
             color: 2.0,
+            kerf: None,
         },
     ]);
 }
@@ -302,6 +338,7 @@ fn transforms_and_opacity_match_the_graph() {
             luma: 2.5,
             off: 0.02,
             color: 6.0,
+            kerf: None,
         },
         Case {
             name: "flip and rotate",
@@ -314,6 +351,7 @@ fn transforms_and_opacity_match_the_graph() {
             luma: 2.0,
             off: 0.015,
             color: 6.0,
+            kerf: Some((3.0, 0.02, 5.0)),
         },
         // The graph's overlay keeps the size of the first picture it gets,
         // so it cannot animate scale, and its rotation cuts off a turned
@@ -331,6 +369,7 @@ fn transforms_and_opacity_match_the_graph() {
             luma: 2.5,
             off: 0.02,
             color: 6.0,
+            kerf: Some((11.0, 0.15, 12.0)),
         },
         Case {
             name: "crop",
@@ -343,6 +382,7 @@ fn transforms_and_opacity_match_the_graph() {
             luma: 2.0,
             off: 0.005,
             color: 4.5,
+            kerf: Some((2.0, 0.012, 4.0)),
         },
         Case {
             name: "opacity",
@@ -357,6 +397,7 @@ fn transforms_and_opacity_match_the_graph() {
             luma: 1.5,
             off: 0.002,
             color: 3.0,
+            kerf: Some((25.0, 0.25, 28.0)),
         },
         Case {
             name: "solid",
@@ -371,6 +412,7 @@ fn transforms_and_opacity_match_the_graph() {
             luma: 1.0,
             off: 0.002,
             color: 2.0,
+            kerf: Some((7.0, 0.002, 8.0)),
         },
     ]);
 }
@@ -390,6 +432,7 @@ fn transitions_match_the_graph() {
             luma: 2.0,
             off: 0.002,
             color: 3.0,
+            kerf: Some((25.0, 0.3, 28.0)),
         },
         Case {
             name: "wipe",
@@ -403,6 +446,7 @@ fn transitions_match_the_graph() {
             luma: 2.0,
             off: 0.005,
             color: 4.0,
+            kerf: Some((6.0, 0.06, 8.0)),
         },
         Case {
             name: "dip",
@@ -416,6 +460,7 @@ fn transitions_match_the_graph() {
             luma: 2.0,
             off: 0.002,
             color: 3.0,
+            kerf: Some((42.0, 0.7, 42.0)),
         },
     ]);
 }
@@ -434,6 +479,7 @@ fn effects_match_the_graph() {
             luma: 2.0,
             off: 0.015,
             color: 3.0,
+            kerf: None,
         },
         Case {
             name: "blur",
@@ -448,6 +494,7 @@ fn effects_match_the_graph() {
             // The graph blurs 4:2:0 color at half resolution, so twice as
             // far; luma is blurred alike.
             color: 10.0,
+            kerf: Some((10.5, 0.1, 12.5)),
         },
         // Media shown smaller is decoded at the size it is shown, and its
         // effects run there.
@@ -465,6 +512,7 @@ fn effects_match_the_graph() {
             luma: 2.5,
             off: 0.02,
             color: 6.0,
+            kerf: None,
         },
         Case {
             name: "blur scaled",
@@ -480,6 +528,7 @@ fn effects_match_the_graph() {
             luma: 2.5,
             off: 0.02,
             color: 10.0,
+            kerf: Some((3.5, 0.03, 10.0)),
         },
         Case {
             name: "raster",
@@ -492,6 +541,7 @@ fn effects_match_the_graph() {
             luma: 2.0,
             off: 0.002,
             color: 3.0,
+            kerf: None,
         },
         Case {
             name: "raster moved",
@@ -507,6 +557,7 @@ fn effects_match_the_graph() {
             luma: 2.5,
             off: 0.02,
             color: 6.0,
+            kerf: None,
         },
         Case {
             name: "raster transition",
@@ -520,6 +571,7 @@ fn effects_match_the_graph() {
             luma: 1.0,
             off: 0.002,
             color: 3.0,
+            kerf: None,
         },
         Case {
             name: "adjustment",
@@ -535,6 +587,7 @@ fn effects_match_the_graph() {
             luma: 2.0,
             off: 0.002,
             color: 2.0,
+            kerf: Some((12.5, 0.002, 15.5)),
         },
     ]);
 }

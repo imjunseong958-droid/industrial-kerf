@@ -1,7 +1,7 @@
 //! Media the compositor reads: a frame drawn again, at another size or by
 //! another layer, is the same picture.
 
-use kerf_compose::{ComposeOptions, Compositor, Device, Frame};
+use kerf_compose::{ComposeOptions, Compositor, Device, Frame, Renderer};
 use kerf_lang::parse_document;
 use kerf_model::{Catalog, Rate};
 use std::path::Path;
@@ -29,7 +29,7 @@ fn bars(dir: &Path) -> String {
     path.display().to_string()
 }
 
-fn compositor(dir: &Path, tracks: &str) -> Compositor {
+fn compositor(dir: &Path, tracks: &str, renderer: Renderer) -> Compositor {
     let text = format!(
         "kerf 1\nproject name=\"t\"\n\
          media m path=\"{}\" rate=24 dur=24f video=64x36\n\
@@ -46,10 +46,13 @@ fn compositor(dir: &Path, tracks: &str) -> Compositor {
             sequence: None,
             captions: false,
             device: Device::Cpu,
+            renderer,
         },
     )
     .expect("composes")
 }
+
+const RENDERERS: [Renderer; 2] = [Renderer::EffectCraft, Renderer::Kerf];
 
 /// The mean of each channel.
 fn mean(frame: &Frame) -> [f64; 3] {
@@ -65,34 +68,51 @@ fn mean(frame: &Frame) -> [f64; 3] {
 
 #[test]
 fn a_frame_drawn_again_at_another_size_still_shows_its_media() {
-    let dir = tempfile::tempdir().unwrap();
-    let compositor = compositor(
-        dir.path(),
-        "  track V1 video\n    clip c1 media=m src=0f at=0f dur=24f\n",
-    );
-    let at = Rate::FPS_24.time_of(5);
-    let full = compositor.frame(at, 1.0);
-    let half = compositor.frame(at, 0.5);
-    assert!(compositor.problems().is_empty(), "{:?}", compositor.problems());
-    let (full, half) = (mean(&full), mean(&half));
-    for (a, b) in full.iter().zip(&half) {
-        assert!((a - b).abs() < 6.0, "{full:?} at full size, {half:?} at half");
+    for renderer in RENDERERS {
+        let dir = tempfile::tempdir().unwrap();
+        let compositor = compositor(
+            dir.path(),
+            "  track V1 video\n    clip c1 media=m src=0f at=0f dur=24f\n",
+            renderer,
+        );
+        let at = Rate::FPS_24.time_of(5);
+        let full = compositor.frame(at, 1.0);
+        let half = compositor.frame(at, 0.5);
+        assert!(
+            compositor.problems().is_empty(),
+            "{:?}",
+            compositor.problems()
+        );
+        let (full, half) = (mean(&full), mean(&half));
+        for (a, b) in full.iter().zip(&half) {
+            assert!(
+                (a - b).abs() < 6.0,
+                "{renderer:?}: {full:?} at full size, {half:?} at half"
+            );
+        }
     }
 }
 
 #[test]
 fn two_layers_of_one_file_both_show_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let compositor = compositor(
-        dir.path(),
-        "  track V1 video\n    clip c1 media=m src=0f at=0f dur=24f\n\
-         \x20 track V2 video\n    clip c2 media=m src=0f at=0f dur=24f\n\
-         \x20     set scale=0.5 x=0.25\n",
-    );
-    for frame in 0..3 {
-        compositor.frame(Rate::FPS_24.time_of(frame), 0.5);
+    for renderer in RENDERERS {
+        let dir = tempfile::tempdir().unwrap();
+        let compositor = compositor(
+            dir.path(),
+            "  track V1 video\n    clip c1 media=m src=0f at=0f dur=24f\n\
+             \x20 track V2 video\n    clip c2 media=m src=0f at=0f dur=24f\n\
+             \x20     set scale=0.5 x=0.25\n",
+            renderer,
+        );
+        for frame in 0..3 {
+            compositor.frame(Rate::FPS_24.time_of(frame), 0.5);
+        }
+        assert!(
+            compositor.problems().is_empty(),
+            "{:?}",
+            compositor.problems()
+        );
     }
-    assert!(compositor.problems().is_empty(), "{:?}", compositor.problems());
 }
 
 #[test]
@@ -135,6 +155,7 @@ fn audio_waveform_draws_the_sound_track_it_names() {
             sequence: None,
             captions: false,
             device: Device::Cpu,
+            renderer: Renderer::EffectCraft,
         };
         let frame = Compositor::new(&project, Catalog::builtin(), &options)
             .unwrap()

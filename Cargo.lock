@@ -963,6 +963,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "filmcraft-color"
+version = "0.12.0"
+dependencies = [
+ "proptest",
+ "serde",
+]
+
+[[package]]
+name = "filmcraft-geom"
+version = "0.12.0"
+dependencies = [
+ "proptest",
+ "serde",
+]
+
+[[package]]
+name = "filmcraft-text"
+version = "0.12.0"
+dependencies = [
+ "filmcraft-color",
+ "harfrust",
+ "skrifa",
+ "tempfile",
+ "unicode-bidi",
+ "unicode-linebreak",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1500,6 +1529,7 @@ dependencies = [
  "effectcraft-time",
  "ffmpeg-next",
  "kerf-core",
+ "kerf-draw",
  "kerf-fx",
  "kerf-lang",
  "kerf-model",
@@ -1516,6 +1546,17 @@ dependencies = [
  "kerf-model",
  "serde",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "kerf-draw"
+version = "0.1.0"
+dependencies = [
+ "filmcraft-color",
+ "filmcraft-geom",
+ "filmcraft-text",
+ "kerf-model",
+ "rayon",
 ]
 
 [[package]]
@@ -2990,6 +3031,12 @@ name = "unicode-linebreak"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b09c83c3c29d37506a3e260c08c03743a6bb66a9cd432c6934ab501a190571f"
+
+[[package]]
+name = "unicode-segmentation"
+version = "1.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
 
 [[package]]
 name = "unicode-width"

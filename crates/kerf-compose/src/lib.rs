@@ -1,7 +1,11 @@
 //! Kerf's compositor.
 //!
-//! A sequence is drawn frame by frame through EffectCraft's renderer
-//! instead of an FFmpeg filter graph. [`Compositor::new`] turns the
+//! A sequence is drawn frame by frame by one of two renderers
+//! ([`Renderer`]): Kerf's own (`draw`), which draws Kerf's model directly
+//! in linear light with the drawing carried from FilmCraft, or
+//! EffectCraft's, described below, which it is replacing.
+//!
+//! Through EffectCraft, [`Compositor::new`] turns the
 //! sequence into an EffectCraft project held in memory (`scene` says how
 //! each part maps), and [`Compositor::frame`] renders one frame of it,
 //! reading media through libav. Effects run as part of the frame, raster
@@ -18,12 +22,15 @@
 //! every frame after its device is lost included.
 
 mod color;
+mod draw;
 mod footage;
 mod scene;
 mod sound;
 
 use effectcraft_gpu::Gpu;
-use effectcraft_render::{Accelerator, Backend, Image, LayerCache, RenderOpts, Renderer};
+use effectcraft_render::{
+    Accelerator, Backend, Image, LayerCache, RenderOpts, Renderer as EffectRenderer,
+};
 use footage::LibavFootage;
 use kerf_model::{Catalog, Project, Rate, Time};
 use std::sync::{Once, OnceLock};
@@ -58,6 +65,31 @@ pub struct ComposeOptions {
     pub captions: bool,
     /// Where frames are drawn.
     pub device: Device,
+    /// What draws them.
+    pub renderer: Renderer,
+}
+
+/// What draws a compositor's frames.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Renderer {
+    /// EffectCraft's renderer, on the CPU or the GPU.
+    #[default]
+    EffectCraft,
+    /// Kerf's own, on the CPU: the picture in linear light, with FilmCraft's
+    /// drawing. It does not draw raster effects and transitions yet.
+    Kerf,
+}
+
+impl Renderer {
+    /// The renderer `KERF_RENDERER` names (`kerf` or `effectcraft`), or
+    /// this one.
+    pub fn from_env(self) -> Self {
+        match std::env::var("KERF_RENDERER").as_deref() {
+            Ok("kerf") => Self::Kerf,
+            Ok("effectcraft") => Self::EffectCraft,
+            _ => self,
+        }
+    }
 }
 
 /// Where frames are drawn. Without a GPU, they all are on the CPU.
@@ -121,6 +153,16 @@ pub struct Frame {
 
 /// A sequence ready to draw.
 pub struct Compositor {
+    inner: Inner,
+}
+
+enum Inner {
+    EffectCraft(EffectCraft),
+    Kerf(draw::Drawing),
+}
+
+/// A sequence drawn by EffectCraft's renderer.
+struct EffectCraft {
     scene: scene::Scene,
     footage: LibavFootage,
     cache: LayerCache,
@@ -129,6 +171,88 @@ pub struct Compositor {
 
 impl Compositor {
     pub fn new(
+        project: &Project,
+        catalog: &Catalog,
+        options: &ComposeOptions,
+    ) -> Result<Self, ComposeError> {
+        let inner = match options.renderer {
+            Renderer::Kerf => Inner::Kerf(draw::Drawing::new(
+                project,
+                catalog,
+                options.sequence.as_deref(),
+                options.captions,
+            )?),
+            Renderer::EffectCraft => {
+                Inner::EffectCraft(EffectCraft::new(project, catalog, options)?)
+            }
+        };
+        Ok(Self { inner })
+    }
+
+    /// What draws this compositor's frames.
+    pub fn renderer(&self) -> Renderer {
+        match self.inner {
+            Inner::EffectCraft(_) => Renderer::EffectCraft,
+            Inner::Kerf(_) => Renderer::Kerf,
+        }
+    }
+
+    /// The GPU adapter this compositor draws on now, if any.
+    pub fn gpu(&self) -> Option<String> {
+        match &self.inner {
+            Inner::EffectCraft(compositor) => compositor.device().map(Accelerator::name),
+            Inner::Kerf(_) => None,
+        }
+    }
+
+    /// The canvas, made even as a render makes it.
+    pub fn size(&self) -> (u32, u32) {
+        match &self.inner {
+            Inner::EffectCraft(compositor) => (compositor.scene.width, compositor.scene.height),
+            Inner::Kerf(drawing) => drawing.size(),
+        }
+    }
+
+    pub fn rate(&self) -> Rate {
+        match &self.inner {
+            Inner::EffectCraft(compositor) => compositor.scene.rate,
+            Inner::Kerf(drawing) => drawing.rate(),
+        }
+    }
+
+    pub fn duration(&self) -> Time {
+        match &self.inner {
+            Inner::EffectCraft(compositor) => compositor.scene.duration,
+            Inner::Kerf(drawing) => drawing.duration(),
+        }
+    }
+
+    /// The picture at sequence time `at` over black, at `scale` of the
+    /// canvas (1 is full size).
+    pub fn frame(&self, at: Time, scale: f64) -> Frame {
+        match &self.inner {
+            Inner::EffectCraft(compositor) => compositor.frame(at, scale),
+            Inner::Kerf(drawing) => drawing.frame(at, scale),
+        }
+    }
+
+    /// Media that could not be read, each with why. Their clips draw
+    /// nothing.
+    pub fn problems(&self) -> Vec<String> {
+        match &self.inner {
+            Inner::EffectCraft(compositor) => compositor
+                .footage
+                .problems()
+                .into_iter()
+                .map(|(_, problem)| problem)
+                .collect(),
+            Inner::Kerf(drawing) => drawing.problems(),
+        }
+    }
+}
+
+impl EffectCraft {
+    fn new(
         project: &Project,
         catalog: &Catalog,
         options: &ComposeOptions,
@@ -165,27 +289,7 @@ impl Compositor {
         .filter(|gpu| gpu.available())
     }
 
-    /// The GPU adapter this compositor draws on now, if any.
-    pub fn gpu(&self) -> Option<String> {
-        self.device().map(Accelerator::name)
-    }
-
-    /// The canvas, made even as a render makes it.
-    pub fn size(&self) -> (u32, u32) {
-        (self.scene.width, self.scene.height)
-    }
-
-    pub fn rate(&self) -> Rate {
-        self.scene.rate
-    }
-
-    pub fn duration(&self) -> Time {
-        self.scene.duration
-    }
-
-    /// The picture at sequence time `at` over black, at `scale` of the
-    /// canvas (1 is full size).
-    pub fn frame(&self, at: Time, scale: f64) -> Frame {
+    fn frame(&self, at: Time, scale: f64) -> Frame {
         if let Some(frame) = self.plain_frame(at, scale) {
             return frame;
         }
@@ -203,16 +307,6 @@ impl Compositor {
             height: image.height,
             rgba,
         }
-    }
-
-    /// Media that could not be read, each with why. Their clips draw
-    /// nothing.
-    pub fn problems(&self) -> Vec<String> {
-        self.footage
-            .problems()
-            .into_iter()
-            .map(|(_, problem)| problem)
-            .collect()
     }
 
     /// A frame that is one clip's media alone, at full size: its picture as
@@ -256,7 +350,7 @@ impl Compositor {
             },
             ..RenderOpts::default()
         };
-        let mut renderer = Renderer::new(&self.scene.project, &self.footage, opts);
+        let mut renderer = EffectRenderer::new(&self.scene.project, &self.footage, opts);
         renderer.cache = Some(&self.cache);
         renderer.accel = gpu.map(|gpu| gpu as &dyn Accelerator);
         renderer.comp_frame(self.scene.comp, scene::ticks(at))
