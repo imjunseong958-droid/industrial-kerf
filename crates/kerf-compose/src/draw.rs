@@ -61,6 +61,8 @@ pub(crate) struct Drawing {
     /// The program's sequence first, then the sequences nested in it.
     sequences: Vec<SequencePlan>,
     pictures: Pictures,
+    /// The sound of media files, decoded for the effects that draw it.
+    sounds: crate::sound::Sounds,
     captions: bool,
     /// The LUT files FilmCraft's effects name.
     library: filmcraft::project::Project,
@@ -76,7 +78,25 @@ struct SequencePlan {
     drop_frame: bool,
     duration: Time,
     tracks: Vec<TrackPlan>,
+    /// Its sound tracks, for effects that draw their sound, and their ids
+    /// in order.
+    sounds: Vec<SoundPlan>,
+    sound_ids: Vec<String>,
     captions: Vec<CaptionPlan>,
+}
+
+struct SoundPlan {
+    id: String,
+    clips: Vec<SoundClip>,
+}
+
+/// A media clip's sound on a sound track.
+struct SoundClip {
+    path: String,
+    start: Time,
+    duration: Time,
+    source_in: Time,
+    speed: Ratio,
 }
 
 struct CaptionPlan {
@@ -209,6 +229,7 @@ impl Drawing {
                 .map(|plan| plan.expect("every sequence planned"))
                 .collect(),
             pictures: Pictures::new(builder.clips),
+            sounds: crate::sound::Sounds::default(),
             captions,
             library,
         })
@@ -605,9 +626,42 @@ impl Drawing {
                     let sigma = (value("radius") / 2.0 * density) as f32;
                     blur::gaussian(picture, sigma, sigma, true);
                 }
+                id if kerf_fx::kept::kept(id) => self.kept(picture, plan, time, placed, index),
                 _ => self.filmcraft(picture, plan, time, placed, index, nested),
             }
         }
+    }
+
+    /// Run the EffectCraft effect Kerf keeps at `index` among a clip's
+    /// effects.
+    fn kept(
+        &self,
+        picture: &mut Image,
+        plan: &ClipPlan,
+        time: Time,
+        placed: &Placed,
+        index: usize,
+    ) {
+        let env = ClipEnv {
+            drawing: self,
+            plan,
+            placed,
+            upto: index,
+            working: (picture.w, picture.h),
+        };
+        let sequence = placed.sequence;
+        let run = kerf_fx::kept::Run {
+            at: time,
+            sequence_time: placed.at.seconds(),
+            frame_rate: sequence.rate.fps(),
+            index,
+            seed: kerf_core::raster::seed(plan.clip.id.as_str()).wrapping_add(index as u32),
+            per_source: placed.per_source,
+            masks: &plan.clip.masks,
+            sounds: &sequence.sound_ids,
+            host: placed.env.then_some(&env as &dyn kerf_fx::kept::Host),
+        };
+        kerf_fx::kept::apply(picture, &plan.effects[index], &run);
     }
 
     /// Run the FilmCraft effect at `index` among a clip's effects; `nested`
@@ -750,6 +804,7 @@ struct Placed<'a> {
 
 /// What FilmCraft's effect at `upto` among a clip's effects reads beyond
 /// its picture.
+#[derive(Clone, Copy)]
 struct ClipEnv<'a> {
     drawing: &'a Drawing,
     plan: &'a ClipPlan,
@@ -759,10 +814,10 @@ struct ClipEnv<'a> {
     working: (usize, usize),
 }
 
-impl FxEnv for ClipEnv<'_> {
-    fn frame(&self, dt: f64, _: &filmcraft::project::EffectInstance) -> Option<Image> {
+impl ClipEnv<'_> {
+    /// The clip's picture at sequence time `at`, as the effect gets it.
+    fn picture_at(&self, at: Time) -> Option<Image> {
         let placed = self.placed;
-        let at = placed.at + Time::from_seconds(dt)?;
         let time = at - self.plan.clip.start;
         let (cw, ch) = output_size(placed.sequence.width, placed.sequence.height, placed.scale);
         let input = self
@@ -781,6 +836,57 @@ impl FxEnv for ClipEnv<'_> {
         self.drawing
             .effects(&mut picture, self.plan, time, &earlier, self.upto);
         Some(picture)
+    }
+}
+
+impl kerf_fx::kept::Host for ClipEnv<'_> {
+    fn picture_at(&self, at: Time, before: usize) -> Option<Image> {
+        let env = ClipEnv {
+            upto: before.min(self.upto),
+            ..*self
+        };
+        env.picture_at(self.plan.clip.start + at)
+    }
+
+    fn sound(&self, track: &str, start: f64, frames: usize, rate: u32) -> Option<Vec<f32>> {
+        let track = self.placed.sequence.sounds.iter().find(|t| t.id == track)?;
+        let mut mixed = vec![0.0; frames * 2];
+        let kept = f64::from(crate::sound::RATE);
+        for clip in &track.clips {
+            let Some(sound) = self.drawing.sounds.of(&clip.path) else {
+                continue;
+            };
+            let length = sound.len() / 2;
+            let (from, duration) = (clip.start.seconds(), clip.duration.seconds());
+            let speed = clip.speed.value().abs();
+            for (index, out) in mixed.chunks_exact_mut(2).enumerate() {
+                let offset = start + index as f64 / f64::from(rate.max(1)) - from;
+                if !(0.0..duration).contains(&offset) {
+                    continue;
+                }
+                let played = if clip.speed.is_reverse() {
+                    duration - offset
+                } else {
+                    offset
+                };
+                let at = (clip.source_in.seconds() + played * speed) * kept;
+                match at as usize {
+                    _ if at < 0.0 => {}
+                    sample if sample < length => {
+                        out[0] += sound[2 * sample];
+                        out[1] += sound[2 * sample + 1];
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Some(mixed)
+    }
+}
+
+impl FxEnv for ClipEnv<'_> {
+    fn frame(&self, dt: f64, _: &filmcraft::project::EffectInstance) -> Option<Image> {
+        self.picture_at(self.placed.at + Time::from_seconds(dt)?)
     }
 
     fn source_frame(&self, dt: f64, scale: f32) -> Option<Image> {
@@ -903,8 +1009,36 @@ impl<'a> Builder<'a> {
         let (width, height) = canvas(sequence);
         let mut tracks = Vec::new();
         let mut captions = Vec::new();
+        let mut sounds = Vec::new();
         for track in &sequence.tracks {
             match track.kind {
+                TrackKind::Audio => sounds.push(SoundPlan {
+                    id: track.id.to_string(),
+                    clips: track
+                        .clips
+                        .iter()
+                        .filter(|clip| clip.enabled)
+                        .filter_map(|clip| {
+                            let Content::Media {
+                                media,
+                                source_in,
+                                speed,
+                            } = &clip.content
+                            else {
+                                return None;
+                            };
+                            let media = self.project.media(media.as_str())?;
+                            media.audio.as_ref()?;
+                            Some(SoundClip {
+                                path: media.path.clone(),
+                                start: clip.start,
+                                duration: clip.duration,
+                                source_in: *source_in,
+                                speed: *speed,
+                            })
+                        })
+                        .collect(),
+                }),
                 TrackKind::Video if track.enabled => tracks.push(self.track(sequence, track)?),
                 // Effects read hidden tracks too; one that cannot be drawn
                 // reads as empty.
@@ -940,6 +1074,8 @@ impl<'a> Builder<'a> {
             drop_frame: sequence.drop_frame,
             duration: sequence.duration(),
             tracks,
+            sound_ids: sounds.iter().map(|sound| sound.id.clone()).collect(),
+            sounds,
             captions,
         })
     }
@@ -1241,6 +1377,7 @@ impl<'a> Builder<'a> {
                 (Engine::Kerf, id) if filmcraft::catalog::carried(id).is_some() => {
                     effects.push(effect.clone())
                 }
+                (Engine::Raster, id) if kerf_fx::kept::kept(id) => effects.push(effect.clone()),
                 (Engine::Raster, id) => {
                     return Err(unsupported(&clip.id, format!("raster effect `{id}`")))
                 }

@@ -584,3 +584,30 @@ fn filmcraft_effects_run_on_kerfs_renderer() {
     );
     assert_eq!(at(&adjusted, 160, 90), [0, 255, 255]);
 }
+
+#[test]
+fn kept_effectcraft_effects_run_on_kerfs_renderer_beside_filmcrafts() {
+    let body = |lines: &str| {
+        format!(
+            "{SEQUENCE}\
+             \x20 track V1 video\n\
+             \x20   clip g1 gen=solid@1 at=0f dur=24f\n\
+             \x20     set color=#ff0000\n\
+             {lines}"
+        )
+    };
+    let at = |body: &str| pixel(&frame_by(Renderer::Kerf, body, 4, false), 160, 90);
+    // Hue/Saturation, kept from EffectCraft, desaturates red to grey.
+    let grey = body("\x20     fx color.huesaturation saturation=-100\n");
+    let [r, g, b] = at(&grey);
+    assert!(r.abs_diff(g) <= 1 && g.abs_diff(b) <= 1 && r > 20, "{r} {g} {b}");
+    // With FilmCraft's Invert after it, on the renderer chosen by default.
+    let both = body(
+        "\x20     fx color.huesaturation saturation=-100\n\
+         \x20     fx channel.invert\n",
+    );
+    let inverted = at(&both);
+    assert!(inverted.iter().all(|c| c.abs_diff(255 - r) <= 2), "{inverted:?} after {r}");
+    assert!(compositor_by(Renderer::Auto, &both, false)
+        .is_ok_and(|c| c.renderer() == Renderer::Kerf));
+}

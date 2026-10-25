@@ -160,7 +160,10 @@ replaced; version 1 of it no longer reads.";
 const RASTER: &str = "## Raster effects
 Raster effects come from EffectCraft and run on a clip's own picture before
 it is placed, so they come before the effects above whatever the stack
-order. Raster transitions (`transition.*`) are written like any transition.
+order. Kerf's own renderer runs those Kerf keeps (restoration, keying
+clean-up, curves and finer color, the audio visualizers) in stack order
+beside FilmCraft's; the others need EffectCraft's renderer. Raster
+transitions (`transition.*`) are written like any transition.
 A file parameter (a LUT, an OpenColorIO config) is a quoted path, relative
 to the project. A track parameter names another picture track of the
 sequence (`takeMatteFromLayer=V2`), whose picture the effect reads even while

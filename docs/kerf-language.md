@@ -46,7 +46,11 @@ parameter names a sound track whose sound the effect draws
 (`fx c1 add generate.audiowaveform audioLayer=A1`). Raster effects
 run on the clip's own picture before it is placed, so they apply before the
 clip's other effects; a raster transition's progress follows the
-transition.
+transition. Kerf keeps 24 of them that FilmCraft has nothing like (grain,
+dust, rolling shutter, lens and upscaling repair; key and matte clean-up;
+curves, Hue/Saturation, Selective Color, Photo Filter, and the Auto
+corrections; a few blurs and distortions; the audio visualizers), and its
+own renderer runs those in stack order beside FilmCraft's effects.
 
 ## Documents
 

@@ -28,6 +28,7 @@ use std::sync::OnceLock;
 
 pub mod filmcraft;
 mod guide;
+pub mod kept;
 mod masks;
 pub mod transitions;
 
