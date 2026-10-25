@@ -10,8 +10,8 @@
 //! resample), otherwise the clip is rendered on the CPU as before.
 
 use crate::filmcraft::project::EffectInstance;
-use filmcraft_color::{hsl_to_rgb, linear_to_srgb, luma709, rgb_to_hsl};
-use filmcraft_geom::Affine;
+use kerf_color::{hsl_to_rgb, linear_to_srgb, luma709, rgb_to_hsl};
+use kerf_geom::Affine;
 use rayon::prelude::*;
 
 use crate::filmcraft::effects::{
@@ -210,7 +210,7 @@ fn resample(w: usize, h: usize, m: &Affine, opacity: f32) -> Resample {
             opacity,
         };
     };
-    let b = m.bounds(&filmcraft_geom::Rect::new(0.0, 0.0, w as f64, h as f64));
+    let b = m.bounds(&kerf_geom::Rect::new(0.0, 0.0, w as f64, h as f64));
     let y0 = (b.y.floor().max(0.0) as usize).min(h);
     let y1 = (b.bottom().ceil().max(0.0) as usize).min(h);
     let x0 = (b.x.floor().max(0.0) as usize).min(w);
@@ -1228,7 +1228,7 @@ impl FxOp {
                     }
                     a = (a * op).clamp(0.0, 1.0);
                     if mask_only {
-                        let g = filmcraft_color::srgb_to_linear(a);
+                        let g = kerf_color::srgb_to_linear(a);
                         p.copy_from_slice(&[g, g, g, 1.0]);
                     } else {
                         p.copy_from_slice(&[c[0] * a, c[1] * a, c[2] * a, a]);
@@ -1426,7 +1426,7 @@ pub fn lumetri_vignette_aspect(aspect: f32, vround: f32) -> f32 {
 #[inline]
 fn linear_to_enc(v: f32) -> f32 {
     if v <= 1.0 {
-        filmcraft_color::linear_to_srgb(v.max(0.0))
+        kerf_color::linear_to_srgb(v.max(0.0))
     } else {
         1.0 + (v - 1.0) / 2.4
     }
@@ -1434,7 +1434,7 @@ fn linear_to_enc(v: f32) -> f32 {
 #[inline]
 fn enc_to_linear(v: f32) -> f32 {
     if v <= 1.0 {
-        filmcraft_color::srgb_to_linear(v.max(0.0))
+        kerf_color::srgb_to_linear(v.max(0.0))
     } else {
         1.0 + (v - 1.0) * 2.4
     }
@@ -1451,8 +1451,8 @@ fn knee(v: f32, max: f32, comp: f32) -> f32 {
 }
 
 pub(crate) fn limit(v: [f32; 3], max: f32, comp: f32, axis: u32) -> [f32; 3] {
-    let m = filmcraft_color::Matrix::Bt709;
-    let ycc = filmcraft_color::rgb_to_ycbcr(v[0], v[1], v[2], m);
+    let m = kerf_color::Matrix::Bt709;
+    let ycc = kerf_color::rgb_to_ycbcr(v[0], v[1], v[2], m);
     let (kr, kb) = (0.2126f32, 0.0722f32);
     let to_rgb = |y: f32, cb: f32, cr: f32| {
         let r = y + 2.0 * (1.0 - kr) * cr;
@@ -1525,7 +1525,7 @@ fn resample_cpu(src: &Image, inv: &Affine, rect: [u32; 4]) -> Image {
 mod tests {
     use super::*;
     use crate::filmcraft::project::{find_effect, ParamValue};
-    use filmcraft_time::Tick;
+    use crate::filmcraft::tick::Tick;
 
     #[test]
     fn extract_zero_softness_has_no_fractional_edge() {
@@ -1538,7 +1538,7 @@ mod tests {
             project: None,
             env: None,
             frame_rate: 24.0,
-            working: filmcraft_color::WorkingSpace::Rec709,
+            working: kerf_color::WorkingSpace::Rec709,
         };
         // Both sides of each cutoff, including samples inside the former artificial fade.
         let lo = 90.0 / 255.0;
@@ -1559,7 +1559,7 @@ mod tests {
                         px: samples
                             .iter()
                             .flat_map(|v| {
-                                let c = filmcraft_color::srgb_to_linear(*v) * alpha;
+                                let c = kerf_color::srgb_to_linear(*v) * alpha;
                                 [c, c, c, alpha]
                             })
                             .collect(),

@@ -14,6 +14,7 @@ pub mod graphics;
 pub mod instance;
 pub mod luts;
 pub mod project;
+pub mod tick;
 pub mod track;
 pub mod vfx;
 

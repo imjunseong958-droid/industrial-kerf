@@ -1,0 +1,40 @@
+# Licenses
+
+Kerf is MIT licensed (`license` in the root `Cargo.toml`). This folder holds
+the licenses and notices of what Kerf carries from elsewhere: code from
+ArtCraft's EffectCraft and FilmCraft, and the fonts its text engine bundles.
+`NOTICE` gathers their notices.
+
+## EffectCraft and FilmCraft
+
+Kerf copied this code from
+[storytold/effectcraft](https://github.com/storytold/effectcraft) at
+`9581b53c3f8945683252af0eb5fac79e0e43aed4` (Release 0.16.0) and
+[storytold/filmcraft](https://github.com/storytold/filmcraft) at
+`0f9966189daf46dcdc4bcb1fb73441bac80076be`. It is developed here from then
+on, and Kerf does not follow upstream.
+
+| Where | What it carries |
+|---|---|
+| `crates/kerf-raster-fx` | The 24 EffectCraft effects Kerf keeps, with the tracking and plane code they run on |
+| `crates/kerf-raster` | EffectCraft's raster images, warps, and blurs |
+| `crates/kerf-color` | FilmCraft's color science and EffectCraft's blend modes |
+| `crates/kerf-geom` | FilmCraft's and EffectCraft's 2D geometry |
+| `crates/kerf-text` | FilmCraft's text engine |
+| `crates/kerf-draw` | FilmCraft's renderer, in Kerf's terms |
+| `crates/kerf-fx/src/filmcraft`, `crates/kerf-fx/src/transitions` | FilmCraft's video effects and transitions |
+
+That code is MIT OR Apache-2.0, at your option: `LICENSE-MIT-ArtCraft` and
+`LICENSE-APACHE-2.0`. The ArtCraft name, wordmark, and logos are trademarks
+outside that license and are not carried.
+
+## Fonts
+
+`crates/kerf-text/fonts` holds these fonts, unmodified. The text engine
+embeds them with `include_bytes!`.
+
+| Font | Author | Source | License |
+|---|---|---|---|
+| `Inter-Regular.ttf`, `Inter-Medium.ttf`, `Inter-SemiBold.ttf`, `Inter-Bold.ttf`, `Inter-Italic.ttf` | The Inter Project Authors | https://github.com/rsms/inter | OFL-1.1 (`OFL-Inter.txt`) |
+| `NotoSerif-Regular.ttf` | The Noto Project Authors | https://github.com/notofonts/latin-greek-cyrillic | OFL-1.1 (`OFL-NotoSerif.txt`) |
+| `JetBrainsMono-Regular.ttf` | The JetBrains Mono Project Authors | https://github.com/JetBrains/JetBrainsMono | OFL-1.1 (`OFL-JetBrainsMono.txt`) |

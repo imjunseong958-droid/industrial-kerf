@@ -5,15 +5,14 @@ edition.workspace = true
 license.workspace = true
 description = "Kerf's effects and transitions: the video effects and transitions carried from FilmCraft, and the EffectCraft effects Kerf keeps"
 
-# The EffectCraft effects Kerf keeps live in `effectcraft/`; a change to
+# The EffectCraft effects Kerf keeps live in `kerf-raster-fx`; a change to
 # their parameters means regenerating the catalog table (see
 # `raster_catalog_is_current`).
 [dependencies]
 kerf-draw = { path = "../kerf-draw" }
 kerf-model = { path = "../kerf-model" }
-filmcraft-color.workspace = true
-filmcraft-geom.workspace = true
-filmcraft-text.workspace = true
-filmcraft-time.workspace = true
+kerf-color = { path = "../kerf-color" }
+kerf-geom = { path = "../kerf-geom" }
+kerf-text = { path = "../kerf-text" }
+kerf-raster-fx = { path = "../kerf-raster-fx" }
 rayon = "1"
-effectcraft-effects = { path = "../../effectcraft/crates/effects" }

@@ -617,40 +617,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "effectcraft-color"
-version = "0.16.0"
-dependencies = [
- "proptest",
- "serde",
-]
-
-[[package]]
-name = "effectcraft-effects"
-version = "0.16.0"
-dependencies = [
- "effectcraft-color",
- "effectcraft-raster",
- "rayon",
-]
-
-[[package]]
-name = "effectcraft-geom"
-version = "0.16.0"
-dependencies = [
- "proptest",
- "serde",
-]
-
-[[package]]
-name = "effectcraft-raster"
-version = "0.16.0"
-dependencies = [
- "effectcraft-color",
- "effectcraft-geom",
- "rayon",
-]
-
-[[package]]
 name = "either"
 version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -701,43 +667,6 @@ dependencies = [
  "num_cpus",
  "pkg-config",
  "vcpkg",
-]
-
-[[package]]
-name = "filmcraft-color"
-version = "0.12.0"
-dependencies = [
- "proptest",
- "serde",
-]
-
-[[package]]
-name = "filmcraft-geom"
-version = "0.12.0"
-dependencies = [
- "proptest",
- "serde",
-]
-
-[[package]]
-name = "filmcraft-text"
-version = "0.12.0"
-dependencies = [
- "filmcraft-color",
- "harfrust",
- "skrifa",
- "tempfile",
- "unicode-bidi",
- "unicode-linebreak",
- "unicode-segmentation",
-]
-
-[[package]]
-name = "filmcraft-time"
-version = "0.12.0"
-dependencies = [
- "proptest",
- "serde",
 ]
 
 [[package]]
@@ -1173,6 +1102,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kerf-color"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+]
+
+[[package]]
 name = "kerf-commands"
 version = "0.1.0"
 dependencies = [
@@ -1210,10 +1147,10 @@ dependencies = [
 name = "kerf-draw"
 version = "0.1.0"
 dependencies = [
- "filmcraft-color",
- "filmcraft-geom",
- "filmcraft-text",
+ "kerf-color",
+ "kerf-geom",
  "kerf-model",
+ "kerf-text",
  "rayon",
 ]
 
@@ -1252,14 +1189,21 @@ version = "0.1.0"
 name = "kerf-fx"
 version = "0.1.0"
 dependencies = [
- "effectcraft-effects",
- "filmcraft-color",
- "filmcraft-geom",
- "filmcraft-text",
- "filmcraft-time",
+ "kerf-color",
  "kerf-draw",
+ "kerf-geom",
  "kerf-model",
+ "kerf-raster-fx",
+ "kerf-text",
  "rayon",
+]
+
+[[package]]
+name = "kerf-geom"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
 ]
 
 [[package]]
@@ -1337,6 +1281,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "kerf-raster"
+version = "0.1.0"
+dependencies = [
+ "kerf-color",
+ "kerf-geom",
+ "rayon",
+]
+
+[[package]]
+name = "kerf-raster-fx"
+version = "0.1.0"
+dependencies = [
+ "kerf-color",
+ "kerf-raster",
+ "rayon",
+]
+
+[[package]]
 name = "kerf-runtime"
 version = "0.1.0"
 dependencies = [
@@ -1355,6 +1317,19 @@ name = "kerf-skills"
 version = "0.1.0"
 dependencies = [
  "tempfile",
+]
+
+[[package]]
+name = "kerf-text"
+version = "0.1.0"
+dependencies = [
+ "harfrust",
+ "kerf-color",
+ "skrifa",
+ "tempfile",
+ "unicode-bidi",
+ "unicode-linebreak",
+ "unicode-segmentation",
 ]
 
 [[package]]

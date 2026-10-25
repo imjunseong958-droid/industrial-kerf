@@ -16,7 +16,7 @@ fn cx() -> FxCtx<'static> {
         project: None,
         env: None,
         frame_rate: 24.0,
-        working: filmcraft_color::WorkingSpace::Rec709,
+        working: kerf_color::WorkingSpace::Rec709,
     }
 }
 
@@ -1173,7 +1173,7 @@ impl FxEnv for ClipEnv {
 
 fn texture(x: f64, y: f64) -> [f32; 3] {
     let v = 0.5 + 0.45 * fbm(x as f32 / 9.0, y as f32 / 9.0, 0.3, 4.0, 11);
-    let l = filmcraft_color::srgb_to_linear(v.clamp(0.0, 1.0));
+    let l = kerf_color::srgb_to_linear(v.clamp(0.0, 1.0));
     [l, l, l]
 }
 /// Camera jitter at time t: a few pixels, changing every frame.

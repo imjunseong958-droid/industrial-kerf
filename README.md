@@ -42,14 +42,13 @@ view of it; the editor sends its edits back as typed operations.
 
 Kerf draws with its own renderer (`kerf-draw`, drawn by `kerf-compose`): it
 draws Kerf's model directly in linear light, with drawing carried from
-[FilmCraft](https://github.com/storytold/filmcraft) (MIT/Apache, crates in
-`filmcraft/`), for renders, previews, and live playback. A video editor's
+[FilmCraft](https://github.com/storytold/filmcraft) (MIT/Apache), for
+renders, previews, and live playback. A video editor's
 transitions (pushes, whips, zooms, flashes, light leaks, glitches, irises)
 and effects (Lumetri, blurs, keys and track mattes, glows, distortions, moves,
 burn-ins, 360° video) are FilmCraft's, carried into `kerf-fx`. Kerf also keeps
 24 effects from [EffectCraft](https://github.com/storytold/effectcraft)
-(MIT/Apache, in `effectcraft/`, see its README) that FilmCraft has nothing
-like: restoration, key and matte clean-up, curves and finer color, a few
+(MIT/Apache, in `kerf-raster-fx`) that FilmCraft has nothing like: restoration, key and matte clean-up, curves and finer color, a few
 blurs and distortions, and the audio visualizers. An effect's parameters are
 written in the catalog's terms (a point as an `_x` and a `_y` across the
 picture, a file as a path, another track by id, a mask by name), and an id
@@ -351,3 +350,10 @@ cargo clippy --workspace --all-targets --no-deps -- -D warnings
 The Qt release gate also includes a manual window check: open a project, edit
 it, restart it, enter Korean text, play/seek media, verify captions/mute, and
 accept or reject an agent proposal.
+
+## Licenses
+
+Kerf is MIT licensed. The code it carries from EffectCraft and FilmCraft is
+MIT OR Apache-2.0, and its text engine bundles fonts under the SIL OFL 1.1;
+[licenses/README.md](licenses/README.md) lists where each part lives and
+holds the license texts and notices.

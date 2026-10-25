@@ -3,8 +3,8 @@
 
 use std::sync::Arc;
 
-use filmcraft_geom::Vec2;
-use filmcraft_time::Tick;
+use crate::filmcraft::tick::Tick;
+use kerf_geom::Vec2;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ParamValue {

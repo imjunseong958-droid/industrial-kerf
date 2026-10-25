@@ -18,8 +18,11 @@ members = [
     "crates/kerf-mcp",
     "crates/kerf-cli",
     "crates/kerf-draw",
-    "effectcraft/crates/*",
-    "filmcraft/crates/*",
+    "crates/kerf-color",
+    "crates/kerf-geom",
+    "crates/kerf-text",
+    "crates/kerf-raster",
+    "crates/kerf-raster-fx",
 ]
 resolver = "2"
 
@@ -28,17 +31,10 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
-# The EffectCraft and FilmCraft crates (see their README.md) name their
-# dependencies and lints from the workspace; Kerf's own crates name theirs
-# directly.
+# The crates carried from EffectCraft and FilmCraft (kerf-color, kerf-geom,
+# kerf-text, kerf-raster, kerf-raster-fx; see licenses/README.md) take these
+# and the lints below from the workspace.
 [workspace.dependencies]
-effectcraft-geom = { path = "effectcraft/crates/geom" }
-effectcraft-color = { path = "effectcraft/crates/color" }
-effectcraft-raster = { path = "effectcraft/crates/raster" }
-filmcraft-geom = { path = "filmcraft/crates/geom" }
-filmcraft-color = { path = "filmcraft/crates/color" }
-filmcraft-text = { path = "filmcraft/crates/text" }
-filmcraft-time = { path = "filmcraft/crates/time" }
 serde = { version = "1", features = ["derive", "rc"] }
 rayon = "1"
 proptest = "1"
@@ -79,9 +75,9 @@ incremental = true
 # EffectCraft's pixel loops stay optimized in debug builds, as EffectCraft
 # builds them: effects and previews stay interactive, and the effects' golden
 # hashes (pinned from optimized float code) hold.
-[profile.dev.package.effectcraft-raster]
+[profile.dev.package.kerf-raster]
 opt-level = 3
 
-[profile.dev.package.effectcraft-effects]
+[profile.dev.package.kerf-raster-fx]
 opt-level = 3
 

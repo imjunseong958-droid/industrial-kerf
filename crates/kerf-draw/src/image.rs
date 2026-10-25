@@ -2,7 +2,7 @@
 //! row by row. Carried from FilmCraft's renderer (`image.rs`).
 
 use crate::color;
-use filmcraft_geom::{Affine, Rect};
+use kerf_geom::{Affine, Rect};
 use rayon::prelude::*;
 
 #[derive(Clone, Debug, PartialEq)]

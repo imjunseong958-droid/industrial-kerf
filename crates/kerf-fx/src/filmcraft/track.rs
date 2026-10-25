@@ -21,7 +21,7 @@
 //! the mask path to write the next Mask Path keyframe.
 
 use crate::filmcraft::project::TrackMethod;
-use filmcraft_geom::{Affine, Vec2};
+use kerf_geom::{Affine, Vec2};
 use rayon::prelude::*;
 
 /// Most features tracked per frame.

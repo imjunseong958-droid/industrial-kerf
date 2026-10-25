@@ -115,7 +115,7 @@ fn gray_of(img: &Image) -> Gray {
     let px = img
         .px
         .par_chunks(4)
-        .map(|p| filmcraft_color::linear_to_srgb(luma([p[0], p[1], p[2]]).clamp(0.0, 1.0)))
+        .map(|p| kerf_color::linear_to_srgb(luma([p[0], p[1], p[2]]).clamp(0.0, 1.0)))
         .collect();
     Gray::new(img.w, img.h, px)
 }
