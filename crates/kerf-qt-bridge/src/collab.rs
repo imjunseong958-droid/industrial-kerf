@@ -4,11 +4,12 @@
 //! Network and staging (which hashes new media) happen here, never inside
 //! kerfd. Live sync runs on the same worker between commands.
 
-use crate::{emit, key, media, Command, Shared};
+use crate::{emit, key, media, tasks, Command, Shared};
 use kerf_collab::git::{self, CollabError};
 use kerf_collab::scaffold::{self, GitHubRepository, MEDIA_DIR, PRESETS_DIR};
 use kerf_runtime::{RuntimeClient, RuntimeError, StateSnapshot};
 use serde_json::{json, Value};
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as Process;
@@ -131,10 +132,30 @@ fn all_branches(dir: &Path, local: &[String]) -> Vec<String> {
 /// The program git runs to merge `project.kerf`, as kerfd chooses it: the
 /// `KERF_MERGE_DRIVER` override, else this bridge's kerfd.
 fn merge_driver(binary: &Path) -> Option<PathBuf> {
-    std::env::var_os("KERF_MERGE_DRIVER")
+    let program = std::env::var_os("KERF_MERGE_DRIVER")
         .map(PathBuf::from)
-        .or_else(|| Some(binary.to_owned()))
-        .filter(|path| path.is_absolute() && path.is_file())
+        .unwrap_or_else(|| binary.to_owned());
+    program_path(&program, std::env::var_os("PATH").as_deref())
+}
+
+/// Where `program` is, as an absolute path: a bare name is looked up on
+/// `paths` (a `PATH` value), and a relative path is read against the
+/// working directory. `None` when there is no such file.
+pub(crate) fn program_path(program: &Path, paths: Option<&OsStr>) -> Option<PathBuf> {
+    let bare = !program.is_absolute()
+        && program
+            .parent()
+            .is_some_and(|parent| parent.as_os_str().is_empty());
+    let found = if bare {
+        std::env::split_paths(paths?)
+            .map(|folder| folder.join(program))
+            .find(|path| path.is_file())?
+    } else {
+        program.to_owned()
+    };
+    std::path::absolute(found)
+        .ok()
+        .filter(|path| path.is_file())
 }
 
 /// The collaboration worker's state; see [`run`].
@@ -160,7 +181,8 @@ struct Collab {
     synced: Option<u64>,
     /// The last `collab` status emitted.
     status: Option<Value>,
-    /// The last live sync failure reported, which is not repeated.
+    /// The failure the editor shows: live sync does not repeat it, and
+    /// reports `done` once a sync succeeds so the editor clears it.
     failure: Option<String>,
     /// Stages are not reported.
     quiet: bool,
@@ -231,7 +253,11 @@ impl Collab {
                 if let Some(seconds) = interval.filter(|seconds| seconds.is_finite()) {
                     self.interval = Duration::from_secs_f64(seconds.clamp(2.0, 3600.0));
                 }
-                self.failure = None;
+                // The next failure is reported afresh, so the last one is
+                // cleared rather than left on the editor's sync chip.
+                if self.failure.take().is_some() {
+                    self.done(empty_report());
+                }
                 self.next_cycle = Instant::now();
                 self.emit_status(true);
             }
@@ -265,6 +291,11 @@ impl Collab {
         }
         let edit_due = self.edited.is_some_and(|at| now >= at);
         if self.live && (edit_due || now >= self.next_cycle) {
+            // A copy into media/ that lands mid-sync would be hashed inside
+            // kerfd's commit; sync once copies are done.
+            if self.shared.copies.load(Ordering::SeqCst) > 0 {
+                return;
+            }
             self.edited = None;
             self.live_cycle();
             self.next_cycle = Instant::now() + self.interval;
@@ -294,8 +325,10 @@ impl Collab {
         self.quiet = false;
         match result {
             Ok(report) => {
-                self.failure = None;
-                if let Some(report) = report {
+                // A quiet cycle after a failure still tells the editor that
+                // syncing works again.
+                let recovered = self.failure.take().is_some();
+                if let Some(report) = report.or_else(|| recovered.then(empty_report)) {
                     self.done(report);
                 }
             }
@@ -314,9 +347,15 @@ impl Collab {
     fn manual(&mut self, operation: impl FnOnce(&mut Self) -> Result<Option<Value>, String>) {
         self.emit_busy();
         match operation(self) {
-            Ok(Some(report)) => self.done(report),
+            Ok(Some(report)) => {
+                self.failure = None;
+                self.done(report);
+            }
             Ok(None) => {}
-            Err(message) => self.failed(&message),
+            Err(message) => {
+                self.failed(&message);
+                self.failure = Some(message);
+            }
         }
         self.emit_status(false);
     }
@@ -590,8 +629,13 @@ impl Collab {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Kerf project".into());
-        self.stage("committing");
         let first = !git::is_repository(&dir);
+        // Without a remote, publishing only makes the project a repository
+        // on this computer, which a repository already is.
+        if !first && remote.is_none() && github.is_none() && git::remote_name(&dir).is_none() {
+            return Err("Name a remote URL or a GitHub repository to publish to".into());
+        }
+        self.stage("committing");
         if first {
             let io = |error: std::io::Error| error.to_string();
             fs::create_dir_all(dir.join(MEDIA_DIR)).map_err(io)?;
@@ -621,7 +665,8 @@ impl Collab {
                 git::set_remote(&dir, remote).map_err(text)?;
             }
             let Some(remote_name) = git::remote_name(&dir) else {
-                return Err("Name a remote URL or a GitHub repository to publish to".into());
+                // A repository on this computer only, as asked.
+                return Ok(Some(report));
             };
             self.stage("pushing");
             report["pushed"] = json!(git::push(&dir).map_err(text)?.pushed);
@@ -638,7 +683,11 @@ impl Collab {
             .get_document(false)
             .map_err(|error| self.lost(error))?;
         let project = kerf_runtime::parse_document(&document).map_err(|error| error.message)?;
-        let result = media::consolidate(&project, &self.directory);
+        let result = media::consolidate(&project, &self.directory, |file| {
+            tasks::probe(file)
+                .map(drop)
+                .map_err(|_| format!("{} does not read as media", file.display()))
+        });
         let mut report = empty_report();
         report["summary"] = json!(result.summary());
         if !result.relinks.is_empty() {
@@ -778,6 +827,148 @@ mod tests {
         // An unchanged status is not sent again unless asked.
         collab.emit_status(false);
         assert!(events.try_recv().is_err());
+    }
+
+    fn collab(project: &Path) -> (Collab, Receiver<Value>) {
+        let (tx, events) = mpsc::sync_channel(64);
+        let (runtime, _runtime) = mpsc::sync_channel(4);
+        let collab = Collab::new(
+            project.to_owned(),
+            Path::new("/nonexistent/kerfd"),
+            runtime,
+            tx,
+            Arc::new(shared(project)),
+        );
+        (collab, events)
+    }
+
+    #[test]
+    fn publishing_without_a_remote_makes_a_repository_on_this_computer() {
+        hermetic();
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("Solo");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(
+            project.join("project.kerf"),
+            "kerf 1\nproject name=\"Solo\"\n",
+        )
+        .unwrap();
+        let (mut collab, events) = collab(&project);
+        collab.manual(|collab| collab.publish(None, None));
+        let sync: Vec<Value> = events
+            .try_iter()
+            .filter(|event| event["type"] == "collab_sync")
+            .collect();
+        let done = sync.last().unwrap();
+        assert_eq!(done["stage"], "done", "{sync:?}");
+        assert!(done["report"]["committed"].is_string(), "{done}");
+        assert_eq!(done["report"]["pushed"], false);
+        assert!(git::is_repository(&project));
+        assert_eq!(sh(&project, &["log", "-1", "--format=%s"]), "Share Solo");
+
+        // A repository with nowhere to push is refused before committing.
+        fs::write(
+            project.join("project.kerf"),
+            "kerf 1\nproject name=\"Again\"\n",
+        )
+        .unwrap();
+        let refused = collab.publish(None, None).unwrap_err();
+        assert!(refused.contains("Name a remote"), "{refused}");
+        assert_eq!(sh(&project, &["log", "-1", "--format=%s"]), "Share Solo");
+    }
+
+    #[test]
+    fn a_live_sync_failure_is_cleared_once_syncing_works_again() {
+        hermetic();
+        let root = tempfile::tempdir().unwrap();
+        let remote = root.path().join("remote.git");
+        fs::create_dir_all(&remote).unwrap();
+        sh(&remote, &["init", "-q", "--bare", "-b", "main"]);
+        let project = root.path().join("work");
+        fs::create_dir_all(&project).unwrap();
+        sh(&project, &["init", "-q", "-b", "main"]);
+        fs::write(project.join("project.kerf"), "kerf 1\n").unwrap();
+        sh(&project, &["add", "-A"]);
+        sh(&project, &["commit", "-q", "-m", "Create"]);
+        let url = remote.to_string_lossy().into_owned();
+        sh(&project, &["remote", "add", "origin", &url]);
+        sh(&project, &["push", "-q", "-u", "origin", "main"]);
+        let (mut collab, events) = collab(&project);
+        collab.live = true;
+        let offline = root.path().join("offline.git");
+        let offline = offline.to_string_lossy();
+
+        sh(&project, &["remote", "set-url", "origin", &offline]);
+        collab.live_cycle();
+        assert_eq!(stages(&events), ["failed"]);
+        collab.live_cycle();
+        assert!(stages(&events).is_empty(), "a failure is not repeated");
+        // The network is back and there is nothing to do: the editor still
+        // hears that syncing works.
+        sh(&project, &["remote", "set-url", "origin", &url]);
+        collab.live_cycle();
+        assert_eq!(stages(&events), ["done"]);
+        collab.live_cycle();
+        assert!(stages(&events).is_empty());
+
+        // Turning live sync off clears a failure it showed.
+        sh(&project, &["remote", "set-url", "origin", &offline]);
+        collab.live_cycle();
+        assert_eq!(stages(&events), ["failed"]);
+        collab.handle(Command::CollabLive {
+            enabled: false,
+            interval: None,
+        });
+        assert_eq!(stages(&events), ["done"]);
+
+        // An operation someone asked for that failed is shown the same
+        // way, and cleared by the next cycle that works.
+        collab.manual(|_| Err("nowhere to push".into()));
+        assert_eq!(stages(&events), ["failed"]);
+        sh(&project, &["remote", "set-url", "origin", &url]);
+        collab.live_cycle();
+        assert_eq!(stages(&events), ["done"]);
+    }
+
+    #[test]
+    fn live_sync_waits_for_copies_into_media() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut collab, events) = collab(root.path());
+        collab.live = true;
+        collab.next_cycle = Instant::now();
+        collab.shared.copies.store(1, Ordering::SeqCst);
+        collab.tick();
+        assert!(stages(&events).is_empty(), "no cycle while a copy runs");
+        collab.shared.copies.store(0, Ordering::SeqCst);
+        collab.tick();
+        // The folder is not shared, so the cycle that runs fails.
+        assert_eq!(stages(&events), ["failed"]);
+    }
+
+    #[test]
+    fn the_merge_driver_is_found_from_a_relative_kerfd() {
+        let root = tempfile::tempdir().unwrap();
+        let kerfd = root.path().join("kerfd");
+        fs::write(&kerfd, "").unwrap();
+        let paths = std::env::join_paths([Path::new("/nonexistent"), root.path()]).unwrap();
+        assert_eq!(
+            program_path(Path::new("kerfd"), Some(&paths)),
+            Some(kerfd.clone())
+        );
+        assert_eq!(program_path(Path::new("kerfd"), None), None);
+        assert_eq!(program_path(Path::new("kerfd-missing"), Some(&paths)), None);
+        assert_eq!(program_path(&kerfd, None), Some(kerfd));
+        // A relative path is read against the working directory (tests
+        // run in the crate's folder).
+        let relative = Path::new("src/collab.rs");
+        let found = program_path(relative, None).unwrap();
+        assert!(
+            found.is_absolute() && found.ends_with(relative),
+            "{found:?}"
+        );
+        if std::env::var_os("KERF_MERGE_DRIVER").is_none() {
+            assert_eq!(merge_driver(relative), Some(found));
+        }
     }
 
     #[test]

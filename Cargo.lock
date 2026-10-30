@@ -1112,6 +1112,7 @@ dependencies = [
  "kerf-model",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 
@@ -1293,7 +1294,6 @@ dependencies = [
  "kerf-runtime",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
 ]
 

@@ -168,9 +168,9 @@ pub(crate) fn save(
     let failed = |error: io::Error| format!("cannot save {relative}: {error}");
     fs::create_dir_all(directory.join(PRESETS_DIR)).map_err(failed)?;
     if replace {
-        let temporary = directory
-            .join(PRESETS_DIR)
-            .join(format!(".{}.part", crate::key()));
+        // Written where Git does not look, so a sync never commits half.
+        let temporary =
+            kerf_collab::media::incoming_path(directory, ".kerfpreset").map_err(failed)?;
         let written = fs::write(&temporary, document).and_then(|_| fs::rename(&temporary, &path));
         if let Err(error) = written {
             let _ = fs::remove_file(&temporary);
@@ -264,6 +264,8 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(names.len(), 1, "{names:?}");
+        let incoming = directory.path().join(kerf_collab::media::INCOMING_DIR);
+        assert_eq!(fs::read_dir(incoming).unwrap().count(), 0);
     }
 
     #[test]

@@ -5,7 +5,7 @@ use crate::Shared;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
 use std::sync::{Mutex, Once};
 use std::time::{Duration, Instant};
 
@@ -14,6 +14,7 @@ pub(crate) fn shared(directory: &Path) -> Shared {
     Shared {
         directory: directory.to_owned(),
         media_status: Mutex::new(Default::default()),
+        copies: AtomicUsize::new(0),
         revision: AtomicU64::new(0),
         closed: AtomicBool::new(false),
         agent_busy: AtomicBool::new(false),

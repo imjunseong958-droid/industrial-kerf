@@ -2,7 +2,7 @@
 //! and a preset file hold, and tasks that make, clone, or check projects on
 //! a worker thread while the GUI polls them.
 
-use crate::collab::git_text;
+use crate::collab::{git_text, program_path};
 use crate::{key, media, presets};
 use kerf_collab::git;
 use kerf_collab::scaffold::{self, NewProject, PRESETS_DIR};
@@ -155,7 +155,7 @@ pub(crate) fn fits(preset: &Preset, media: &Media) -> Vec<String> {
 }
 
 /// A file as kerfd would import it, or why it cannot be used.
-fn probe(path: &Path) -> Result<Media, String> {
+pub(crate) fn probe(path: &Path) -> Result<Media, String> {
     if !path.is_file() {
         return Err(format!("{} is not a file", path.display()));
     }
@@ -433,13 +433,7 @@ fn kerfd_binary(named: Option<&Path>) -> Result<PathBuf, String> {
         .and_then(|program| program.parent().map(|folder| folder.join("kerfd")))
         .filter(|path| path.is_file());
     beside
-        .or_else(|| {
-            std::env::var_os("PATH").and_then(|paths| {
-                std::env::split_paths(&paths)
-                    .map(|folder| folder.join("kerfd"))
-                    .find(|path| path.is_file())
-            })
-        })
+        .or_else(|| program_path(Path::new("kerfd"), std::env::var_os("PATH").as_deref()))
         .ok_or_else(|| "cannot find kerfd; set KERFD_BIN to its path".into())
 }
 
