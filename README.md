@@ -1,6 +1,7 @@
 # Industrial Kerf
 
-Industrial Kerf is a native, agentic video editor. `kerf` opens the Qt6 editor by default;
+Industrial Kerf is a native, agentic video editor. `kerf` opens the Qt6 editor by default,
+on its project launcher when no project is named;
 pass `--terminal` for the project-scoped terminal agent. `kerf-mcp` is the
 project-scoped MCP server and primary external-agent integration surface.
 External Claude, Cursor, and Codex-like clients connect through `kerf-mcp`
@@ -16,7 +17,9 @@ MCP server are adapters over the same project-scoped IPC boundary.
 The canonical project is the `project.kerf` text document
 ([the Kerf language](docs/kerf-language.md)). Edits are edit scripts or typed
 operations; agent proposals carry their script and the diff of the document
-they would produce.
+they would produce. Because the project is text, people share it through Git
+and GitHub: a sync commits, merges, and pushes, and `project.kerf` merges by
+the ids of what it holds ([shared projects](docs/collaboration.md)).
 
 ```text
 Qt6 editor ──────────────────────────┐
@@ -94,11 +97,26 @@ is safe; Qt and FFmpeg still come from the system:
 scripts/install-kerf-local.sh        # or: cli, qt
 ```
 
-Open the Qt editor for a project:
+Open the Qt editor. Without a project it shows the project launcher, where
+you make a project from a template or a preset, clone one from GitHub, or
+open a recent one; `--dir` (or `KERF_PROJECT_DIR`) opens a project directly:
 
 ```bash
-KERF_QT_BIN="$PWD/target/qt/kerf-qt" target/release/kerf \
-  --dir ./my-project --kerfd "$PWD/target/release/kerfd"
+target/release/kerf
+target/release/kerf --dir ./my-project
+```
+
+`kerf` finds `kerf-qt` beside itself or in `target/qt` (`KERF_QT_BIN`
+overrides it), and `kerfd` beside itself or in `target`.
+`scripts/run-kerf-qt.sh [project]` builds the debug editor and opens it the
+same way.
+
+Make a project and share it from a terminal (see
+[shared projects](docs/collaboration.md)):
+
+```bash
+target/release/kerf new "My Film" --location ~/Movies --vertical --github
+target/release/kerf sync --dir ~/Movies/"My Film"
 ```
 
 Run the terminal workflow:
@@ -113,7 +131,9 @@ target/release/kerf --terminal --dir ./my-project --mcp-tools -p "use the connec
 ```
 
 In editor mode, `kerf` imports a local media path or an HTTP(S) URL before
-opening the native window. The editor's Kerf Assistant panel uses the same provider
+opening the native window. The terminal workflow, `kerf preset`, `kerf sync`,
+and a media import use the current directory unless `--dir` or
+`KERF_PROJECT_DIR` names a project. The editor's Kerf Assistant panel uses the same provider
 configuration as the terminal agent. `--kerfd PATH` selects an explicit
 daemon; the `KERFD_BIN` environment variable does the same.
 
@@ -131,7 +151,9 @@ Native editing presets are exported from **File → Export Editing Preset…**
 as one `.kerfpreset` file containing media slots, `.kerf` editing code, and
 the project's own looks it uses.
 **File → Import Editing Preset…** binds new media and stages the same pattern
-as a proposal. See [native preset format and reuse](docs/presets.md).
+as a proposal. A project's `presets/` folder is its preset library, shared with
+the project's repository. See [native preset format and reuse](docs/presets.md)
+and [shared presets and media slots](docs/collaboration.md#shared-presets-and-media-slots).
 
 Agents edit the same `.kerf` document people do (see
 [the Kerf language](docs/kerf-language.md)). Their context is the language
