@@ -2,7 +2,9 @@
 //! configuration and credentials, run without prompts.
 
 use crate::merge::Conflict;
+use crate::scaffold::LOCAL_SETTINGS;
 use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -160,6 +162,69 @@ fn git(dir: &Path) -> Command {
         .env("GIT_MERGE_AUTOEDIT", "no")
         .env("LC_ALL", "C");
     command
+}
+
+/// A `git` command for `dir` that reaches a remote (fetch, push, clone,
+/// `lfs pull`, `ls-remote`). ssh fails instead of prompting and stalled
+/// transfers give up, unless [`INTERACTIVE_ENV`] asks for prompts.
+pub fn network(dir: &Path) -> Command {
+    let mut command = git(dir);
+    non_interactive(&mut command, dir);
+    command
+}
+
+/// Set to `1` by a front end that runs in a terminal (the `kerf` CLI) so
+/// network git may prompt there, for an SSH passphrase or host key.
+pub const INTERACTIVE_ENV: &str = "KERF_GIT_INTERACTIVE";
+
+/// ssh that fails rather than prompting, and gives up on a host that does
+/// not answer or a connection that dies.
+const BATCH_SSH: &str =
+    "ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4";
+
+/// Configuration that [`non_interactive`] leaves to the person.
+const NETWORK_CONFIG: &str = r"^(core\.sshcommand|http\..*lowspeed(limit|time))$";
+
+/// Make `command`, a `git` or `gh` run for `dir` that reaches a remote, fail
+/// instead of waiting on a prompt nobody sees (ssh asks on the terminal the
+/// editor was started from) or on a stalled connection, unless
+/// [`INTERACTIVE_ENV`] asks for prompts. The person's own ssh command and
+/// stall limits win.
+fn non_interactive(command: &mut Command, dir: &Path) {
+    let configured = || git_text(dir, &["config", "--get-regexp", NETWORK_CONFIG]).unwrap_or_default();
+    for (key, value) in non_interactive_env(|name| std::env::var_os(name), configured) {
+        command.env(key, value);
+    }
+}
+
+/// The environment [`non_interactive`] adds, given the process environment
+/// `env` and the matching configuration as `git config --get-regexp`
+/// prints it.
+fn non_interactive_env(
+    env: impl Fn(&str) -> Option<OsString>,
+    configured: impl FnOnce() -> String,
+) -> Vec<(&'static str, &'static str)> {
+    if env(INTERACTIVE_ENV).is_some_and(|value| value == "1") {
+        return Vec::new();
+    }
+    let configured = configured();
+    let set = |suffix: &str| {
+        configured
+            .lines()
+            .filter_map(|line| line.split_whitespace().next())
+            .any(|key| key.ends_with(suffix))
+    };
+    let mut vars = vec![("SSH_ASKPASS_REQUIRE", "never")];
+    if env("GIT_SSH_COMMAND").is_none() && env("GIT_SSH").is_none() && !set(".sshcommand") {
+        vars.push(("GIT_SSH_COMMAND", BATCH_SSH));
+    }
+    if env("GIT_HTTP_LOW_SPEED_LIMIT").is_none() && !set(".lowspeedlimit") {
+        vars.push(("GIT_HTTP_LOW_SPEED_LIMIT", "1000"));
+    }
+    if env("GIT_HTTP_LOW_SPEED_TIME").is_none() && !set(".lowspeedtime") {
+        vars.push(("GIT_HTTP_LOW_SPEED_TIME", "60"));
+    }
+    vars
 }
 
 fn output(mut command: Command, what: &str) -> Result<Output> {
@@ -339,7 +404,10 @@ pub fn status(dir: &Path) -> Result<Status> {
             behind = parts.next().and_then(|n| n.ok()).unwrap_or(0);
         }
     }
-    let changed = git_text(dir, &["status", "--porcelain", "--", "."]).is_some();
+    let paths = project_paths();
+    let mut args = vec!["status", "--porcelain", "--"];
+    args.extend(paths.iter().map(String::as_str));
+    let changed = git_text(dir, &args).is_some();
     let conflicted = git_text(dir, &["diff", "--name-only", "--diff-filter=U"]).is_some();
     let branches = git_text(
         dir,
@@ -437,18 +505,45 @@ fn io(error: std::io::Error) -> CollabError {
     CollabError::new("IO_ERROR", error.to_string())
 }
 
+/// Everything in the project but its machine-local settings, as pathspecs
+/// for `git status`; `icase` matches them as a case-insensitive file system
+/// names them.
+fn project_paths() -> Vec<String> {
+    std::iter::once(".".to_owned())
+        .chain(LOCAL_SETTINGS.iter().map(|path| format!(":(exclude,icase){path}")))
+        .collect()
+}
+
+/// Take machine-local settings back out of the index. A shared `.gitignore`
+/// can let them in (`!.kerf/mcp.json` beats `info/exclude`), and an
+/// exclusion pathspec on `git add` cannot keep them out: git reports the
+/// path it names as ignored and fails.
+fn unstage_local_settings(dir: &Path) -> Result<()> {
+    let staged = git_text(dir, &["diff", "--cached", "--name-only", "--no-renames", "-z"]).unwrap_or_default();
+    let settings: Vec<&str> = staged.split('\0').filter(|path| is_local_setting(path)).collect();
+    if settings.is_empty() {
+        return Ok(());
+    }
+    let mut command = git(dir);
+    command
+        .env("GIT_LITERAL_PATHSPECS", "1")
+        .args(["reset", "-q", "--"])
+        .args(&settings);
+    run(command, "GIT_ADD_FAILED").map(|_| ())
+}
+
 /// Stage everything in the project directory, as a commit would. Hashing
 /// new media is the slow part of a commit, so callers that must commit
 /// quickly stage first. `false` when nothing differs from the last commit.
-/// Files too large for GitHub that Git LFS does not store are refused, and
-/// nothing is left staged.
+/// Machine-local settings are never staged. Files too large for GitHub that
+/// Git LFS does not store are refused, and nothing is left staged.
 pub fn stage(dir: &Path) -> Result<bool> {
     if !is_repository(dir) {
         return Err(CollabError::new("NOT_A_REPOSITORY", "the project is not a Git repository"));
     }
     exclude_runtime_files(dir)?;
     git_run(dir, &["add", "-A", "--", "."], "GIT_ADD_FAILED")?;
-    if let Err(error) = refuse_large_files(dir) {
+    if let Err(error) = unstage_local_settings(dir).and_then(|()| refuse_large_files(dir)) {
         let _ = git_run(dir, &["reset", "-q", "--", "."], "GIT_FAILED");
         return Err(error);
     }
@@ -523,6 +618,10 @@ fn fallback_identity(dir: &Path) -> Vec<(&'static str, String)> {
     identity
 }
 
+/// Refuse staged files that would be committed at GitHub's size limit or
+/// over. What was staged is measured, not the attributes: `filter=lfs`
+/// stays in `.gitattributes` on a machine without Git LFS, where `git add`
+/// stores the whole file.
 fn refuse_large_files(dir: &Path) -> Result<()> {
     let Some(top) = git_text(dir, &["rev-parse", "--show-toplevel"]) else {
         return Ok(());
@@ -530,7 +629,7 @@ fn refuse_large_files(dir: &Path) -> Result<()> {
     let top = PathBuf::from(top);
     let staged = git_text(
         dir,
-        &["diff", "--cached", "--name-only", "--diff-filter=AM", "-z"],
+        &["diff", "--cached", "--name-only", "--no-renames", "--diff-filter=AMT", "-z"],
     )
     .unwrap_or_default();
     let mut refused = Vec::new();
@@ -539,9 +638,10 @@ fn refuse_large_files(dir: &Path) -> Result<()> {
         if size < LARGE_FILE_BYTES {
             continue;
         }
-        let filter = git_text(dir, &["check-attr", "filter", "--", &top.join(path).to_string_lossy()])
-            .unwrap_or_default();
-        if !filter.ends_with(": lfs") {
+        let stored = git_text(dir, &["cat-file", "-s", &format!(":0:{path}")])
+            .and_then(|text| text.parse::<u64>().ok())
+            .unwrap_or(size);
+        if stored >= LARGE_FILE_BYTES {
             refused.push(format!("{path} ({} MB)", size / (1024 * 1024)));
         }
     }
@@ -563,8 +663,14 @@ pub fn fetch(dir: &Path) -> Result<bool> {
     let Some(remote) = remote_name(dir) else {
         return Ok(false);
     };
-    git_run(dir, &["fetch", "--quiet", "--prune", &remote], "GIT_FETCH_FAILED")?;
+    network_run(dir, &["fetch", "--quiet", "--prune", &remote], "GIT_FETCH_FAILED")?;
     Ok(true)
+}
+
+fn network_run(dir: &Path, args: &[&str], code: &'static str) -> Result<String> {
+    let mut command = network(dir);
+    command.args(args);
+    run(command, code)
 }
 
 /// The commits in `range`, newest first.
@@ -590,11 +696,40 @@ fn project_blob(dir: &Path, revision: &str) -> Option<String> {
     )
 }
 
+/// Refuse to check out `revision` when it tracks machine-local settings:
+/// git overwrites ignored files freely, so this machine's own would be
+/// replaced by a collaborator's, which Kerf reads and may run programs
+/// from. `.kerf` tracked as a file or link is refused too, and names are
+/// compared as a case-insensitive file system compares them.
+fn refuse_local_settings(dir: &Path, revision: &str, what: &str) -> Result<()> {
+    let tracked = git_text(dir, &["ls-tree", "-r", "-z", "--name-only", revision]).unwrap_or_default();
+    let found: Vec<&str> = tracked.split('\0').filter(|path| is_local_setting(path)).collect();
+    if found.is_empty() {
+        return Ok(());
+    }
+    Err(CollabError::new(
+        "LOCAL_SETTINGS_TRACKED",
+        format!(
+            "{what} tracks {}, machine-local settings that can hold credentials and start programs, so Kerf will not check it out. Remove them from the repository with `git rm --cached` and push, then try again.",
+            found.join(", ")
+        ),
+    ))
+}
+
+fn is_local_setting(path: &str) -> bool {
+    let path = path.to_lowercase();
+    path == ".kerf"
+        || LOCAL_SETTINGS
+            .iter()
+            .any(|setting| path == *setting || path.starts_with(&format!("{setting}/")))
+}
+
 /// Commit local edits, then merge the already-fetched upstream branch into
 /// this one, letting `driver` merge `project.kerf`. Conflicts the driver
 /// settles are reported, not left in the tree; a merge git cannot finish
-/// (two edits to the same look file, say) is aborted and reported as an
-/// error, leaving the branch as it was after the commit.
+/// (two edits to the same look file, say), or an upstream branch that
+/// tracks machine-local settings, is refused with an error, leaving the
+/// branch as it was after the commit.
 pub fn integrate(dir: &Path, driver: &Path, message: &str) -> Result<Integration> {
     if !is_repository(dir) {
         return Err(CollabError::new("NOT_A_REPOSITORY", "the project is not a Git repository"));
@@ -616,6 +751,7 @@ pub fn integrate(dir: &Path, driver: &Path, message: &str) -> Result<Integration
     if integration.incoming.is_empty() {
         return Ok(integration);
     }
+    refuse_local_settings(dir, "@{upstream}", "the upstream branch")?;
     ensure_merge_driver(dir, driver)?;
     integration.previous = git_text(dir, &["rev-parse", "HEAD"]);
     let before = project_blob(dir, "HEAD");
@@ -692,7 +828,7 @@ pub fn lfs_pull(dir: &Path) -> Result<bool> {
     if !tracked {
         return Ok(false);
     }
-    git_run(dir, &["lfs", "pull"], "GIT_LFS_FAILED")?;
+    network_run(dir, &["lfs", "pull"], "GIT_LFS_FAILED")?;
     Ok(true)
 }
 
@@ -738,7 +874,7 @@ pub fn push(dir: &Path) -> Result<Pushed> {
         let Some(remote) = remote_name(dir) else {
             return Ok(Pushed::default());
         };
-        git_run(
+        network_run(
             dir,
             &["push", "--quiet", "-u", &remote, &format!("HEAD:refs/heads/{branch}")],
             "GIT_PUSH_FAILED",
@@ -751,7 +887,7 @@ pub fn push(dir: &Path) -> Result<Pushed> {
     if commits(dir, "@{upstream}..HEAD").is_empty() {
         return Ok(Pushed::default());
     }
-    git_run(dir, &["push", "--quiet"], "GIT_PUSH_FAILED")?;
+    network_run(dir, &["push", "--quiet"], "GIT_PUSH_FAILED")?;
     Ok(Pushed {
         pushed: true,
         set_upstream: false,
@@ -760,8 +896,16 @@ pub fn push(dir: &Path) -> Result<Pushed> {
 
 /// Commit local edits, then switch to `branch`, creating it from here when
 /// `create` is set. A branch only the remote has is checked out tracking it.
+/// A branch that tracks machine-local settings is refused before anything
+/// is committed.
 pub fn switch(dir: &Path, branch_name: &str, create: bool, message: &str) -> Result<Switched> {
     validate_branch(dir, branch_name)?;
+    if !create {
+        let what = format!("`{branch_name}`");
+        for target in switch_targets(dir, branch_name) {
+            refuse_local_settings(dir, &target, &what)?;
+        }
+    }
     let committed = commit(dir, message)?;
     let previous = branch(dir);
     let before = project_blob(dir, "HEAD");
@@ -778,6 +922,24 @@ pub fn switch(dir: &Path, branch_name: &str, create: bool, message: &str) -> Res
         previous,
         project_changed: project_blob(dir, "HEAD") != before,
     })
+}
+
+/// The commits `git switch <name>` may check out: the local branch, else
+/// the remote branches of that name it would start tracking.
+fn switch_targets(dir: &Path, name: &str) -> Vec<String> {
+    if let Some(commit) = git_text(dir, &["rev-parse", "--verify", "-q", &format!("refs/heads/{name}")]) {
+        return vec![commit];
+    }
+    git_text(
+        dir,
+        &["for-each-ref", "--format=%(objectname) %(refname:lstrip=3)", "refs/remotes"],
+    )
+    .unwrap_or_default()
+    .lines()
+    .filter_map(|line| line.split_once(' '))
+    .filter(|(_, branch)| *branch == name)
+    .map(|(commit, _)| commit.to_owned())
+    .collect()
 }
 
 /// Put the branch back where a merge found it, when what the merge made
@@ -827,6 +989,7 @@ pub fn pull_request(dir: &Path, title: &str, body: &str) -> Result<PullRequest> 
             .current_dir(dir)
             .env("GH_PROMPT_DISABLED", "1")
             .args(["pr", "create", "--head", &branch, "--title", title, "--body", body]);
+        non_interactive(&mut command, dir);
         let out = output(command, "gh")?;
         let text = format!(
             "{}\n{}",
@@ -931,6 +1094,7 @@ pub fn create_github_repository(dir: &Path, name: &str, private: bool) -> Result
         .args(["repo", "create", name])
         .arg(if private { "--private" } else { "--public" })
         .args(["--source", ".", "--remote", "origin", "--push"]);
+    non_interactive(&mut command, dir);
     let out = output(command, "gh")?;
     if !out.status.success() {
         return Err(CollabError::new("GH_FAILED", failure(&out)));
@@ -942,24 +1106,36 @@ pub fn create_github_repository(dir: &Path, name: &str, private: bool) -> Result
 }
 
 /// Clone `url` into a new directory under `location`, named after the
-/// repository. Returns the project directory.
+/// repository. Returns the project directory. A repository that tracks
+/// machine-local settings is refused, and the clone removed.
 pub fn clone(url: &str, location: &Path) -> Result<PathBuf> {
     let name = repository_name(url)
         .ok_or_else(|| CollabError::new("INVALID_URL", format!("cannot name a folder for {url}")))?;
     let target = location.join(&name);
-    if target.exists() && fs::read_dir(&target).map(|mut d| d.next().is_some()).unwrap_or(true) {
+    let existed = target.exists();
+    if existed && fs::read_dir(&target).map(|mut d| d.next().is_some()).unwrap_or(true) {
         return Err(CollabError::new(
             "ALREADY_EXISTS",
             format!("{} already exists", target.display()),
         ));
     }
     fs::create_dir_all(location).map_err(io)?;
-    let mut command = git(location);
+    let mut command = network(location);
     command.args(["clone", "--quiet", url]).arg(&target);
     run(command, "GIT_CLONE_FAILED")?;
+    if has_head(&target) {
+        if let Err(error) = refuse_local_settings(&target, "HEAD", url) {
+            // The folder was empty or absent before the clone.
+            let _ = fs::remove_dir_all(&target);
+            if existed {
+                let _ = fs::create_dir(&target);
+            }
+            return Err(error);
+        }
+    }
     if git_ok(&target, &["lfs", "version"]) {
         let _ = git_run(&target, &["lfs", "install", "--local"], "GIT_LFS_FAILED");
-        let _ = git_run(&target, &["lfs", "pull"], "GIT_LFS_FAILED");
+        let _ = network_run(&target, &["lfs", "pull"], "GIT_LFS_FAILED");
     }
     Ok(target)
 }
@@ -989,4 +1165,83 @@ pub fn is_lfs_pointer(path: &Path) -> bool {
     fs::read(path)
         .map(|bytes| bytes.starts_with(b"version https://git-lfs.github.com/spec/"))
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env_with<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
+        move |name| {
+            vars.iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| OsString::from(value))
+        }
+    }
+
+    fn value<'a>(vars: &[(&str, &'a str)], key: &str) -> Option<&'a str> {
+        vars.iter().find(|(name, _)| *name == key).map(|(_, value)| *value)
+    }
+
+    #[test]
+    fn network_git_fails_instead_of_prompting_or_stalling() {
+        let vars = non_interactive_env(env_with(&[]), String::new);
+        let ssh = value(&vars, "GIT_SSH_COMMAND").unwrap();
+        for option in ["BatchMode=yes", "ConnectTimeout=", "ServerAliveInterval=", "ServerAliveCountMax="] {
+            assert!(ssh.contains(option), "{ssh}");
+        }
+        assert_eq!(value(&vars, "SSH_ASKPASS_REQUIRE"), Some("never"));
+        assert_eq!(value(&vars, "GIT_HTTP_LOW_SPEED_LIMIT"), Some("1000"));
+        assert_eq!(value(&vars, "GIT_HTTP_LOW_SPEED_TIME"), Some("60"));
+    }
+
+    #[test]
+    fn the_persons_own_ssh_command_and_stall_limits_win() {
+        for env in [[("GIT_SSH_COMMAND", "ssh -i key")], [("GIT_SSH", "/usr/bin/plink")]] {
+            let vars = non_interactive_env(env_with(&env), String::new);
+            assert_eq!(value(&vars, "GIT_SSH_COMMAND"), None, "{env:?}");
+            assert_eq!(value(&vars, "SSH_ASKPASS_REQUIRE"), Some("never"));
+        }
+        let vars = non_interactive_env(env_with(&[]), || {
+            "core.sshcommand ssh -i key\nhttp.https://example.com/.lowspeedtime 300\n".into()
+        });
+        assert_eq!(value(&vars, "GIT_SSH_COMMAND"), None);
+        assert_eq!(value(&vars, "GIT_HTTP_LOW_SPEED_TIME"), None);
+        assert_eq!(value(&vars, "GIT_HTTP_LOW_SPEED_LIMIT"), Some("1000"));
+        let vars = non_interactive_env(env_with(&[("GIT_HTTP_LOW_SPEED_LIMIT", "10")]), String::new);
+        assert_eq!(value(&vars, "GIT_HTTP_LOW_SPEED_LIMIT"), None);
+    }
+
+    #[test]
+    fn a_terminal_front_end_keeps_prompts() {
+        let vars = non_interactive_env(env_with(&[(INTERACTIVE_ENV, "1")]), || {
+            panic!("the configuration is not read when prompts are wanted")
+        });
+        assert!(vars.is_empty(), "{vars:?}");
+        let vars = non_interactive_env(env_with(&[(INTERACTIVE_ENV, "0")]), String::new);
+        assert!(value(&vars, "GIT_SSH_COMMAND").is_some());
+    }
+
+    #[test]
+    fn local_settings_are_recognized_in_any_case_and_through_kerf_itself() {
+        for path in [
+            ".kerf/mcp.json",
+            ".kerf/config.json",
+            ".kerf/vision.json",
+            ".KERF/MCP.json",
+            ".kerf/mcp.json/inner",
+            ".kerf",
+            ".Kerf",
+        ] {
+            assert!(is_local_setting(path), "{path}");
+        }
+        for path in [
+            ".kerf/looks/warm.kerflook",
+            "media/.kerf/mcp.json",
+            ".kerf/mcp.json.bak",
+            "project.kerf",
+        ] {
+            assert!(!is_local_setting(path), "{path}");
+        }
+    }
 }

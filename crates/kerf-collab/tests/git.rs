@@ -10,7 +10,8 @@ use std::process::Command;
 use std::sync::Once;
 
 /// Keep the person's global git configuration (signing, hooks, templates)
-/// out of the tests.
+/// and ssh setup out of the tests. An `ssh` that prints how it was run and
+/// fails stands in for the real one, so no test reaches the network.
 fn hermetic() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
@@ -22,7 +23,41 @@ fn hermetic() {
         std::env::set_var("GIT_AUTHOR_EMAIL", "test@example.com");
         std::env::set_var("GIT_COMMITTER_NAME", "Test");
         std::env::set_var("GIT_COMMITTER_EMAIL", "test@example.com");
+        for name in [
+            "GIT_SSH",
+            "GIT_SSH_COMMAND",
+            "GIT_HTTP_LOW_SPEED_LIMIT",
+            "GIT_HTTP_LOW_SPEED_TIME",
+            git::INTERACTIVE_ENV,
+        ] {
+            std::env::remove_var(name);
+        }
+        install_fake_ssh();
     });
+}
+
+#[cfg(unix)]
+fn install_fake_ssh() {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = std::env::temp_dir().join(format!("kerf-collab-fake-ssh-{}", std::process::id()));
+    fs::create_dir_all(&bin).unwrap();
+    let ssh = bin.join("ssh");
+    fs::write(
+        &ssh,
+        "#!/bin/sh\necho \"fake ssh (askpass ${SSH_ASKPASS_REQUIRE:-unset}): $*\" >&2\nexit 255\n",
+    )
+    .unwrap();
+    fs::set_permissions(&ssh, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let paths = std::iter::once(bin).chain(std::env::split_paths(&path));
+    std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
+}
+
+#[cfg(not(unix))]
+fn install_fake_ssh() {}
+
+fn sparse_file(path: &Path, len: u64) {
+    fs::File::create(path).unwrap().set_len(len).unwrap();
 }
 
 fn sh(dir: &Path, args: &[&str]) -> String {
@@ -100,13 +135,32 @@ fn a_new_shared_project_is_published_with_its_document_and_ignore_rules() {
 #[test]
 fn runtime_files_are_never_committed() {
     let team = team();
-    for name in [".kerf-runtime.journal", ".kerfd.sock", "0123-1.mp4"] {
+    for name in [".kerf-runtime.journal", ".kerfd.sock", "0123-1.mp4", "project.kerf.tmp"] {
         fs::write(team.alice.join(name), "local").unwrap();
     }
     fs::create_dir_all(team.alice.join(".kerf/cache/derived")).unwrap();
     fs::write(team.alice.join(".kerf/cache/derived/x"), "cache").unwrap();
     assert!(!git::status(&team.alice).unwrap().changed);
     assert_eq!(git::commit(&team.alice, "nothing").unwrap(), None);
+}
+
+#[test]
+fn local_settings_stay_out_even_when_a_shared_ignore_file_lets_them_in() {
+    let team = team();
+    let mut ignore = fs::read_to_string(team.alice.join(".gitignore")).unwrap();
+    for setting in scaffold::LOCAL_SETTINGS {
+        assert!(scaffold::GITIGNORE.lines().any(|line| line == setting), "{setting}");
+        ignore.push_str(&format!("!{setting}\n"));
+    }
+    fs::write(team.alice.join(".gitignore"), ignore).unwrap();
+    git::commit(&team.alice, "Let settings in").unwrap();
+    fs::create_dir_all(team.alice.join(".kerf")).unwrap();
+    for setting in scaffold::LOCAL_SETTINGS {
+        fs::write(team.alice.join(setting), r#"{"token":"alice"}"#).unwrap();
+    }
+    assert!(!git::status(&team.alice).unwrap().changed);
+    assert_eq!(git::commit(&team.alice, "settings").unwrap(), None);
+    assert!(sh(&team.alice, &["ls-files", ".kerf"]).is_empty());
 }
 
 #[test]
@@ -192,6 +246,105 @@ fn branches_publish_and_switch_back() {
     assert!(git::switch(&team.bob, "bad name", true, "").is_err());
 }
 
+/// Commit `path` in `dir` past every ignore rule, as `git add -f` in a
+/// terminal would.
+fn force_commit(dir: &Path, path: &str, text: &str) {
+    let file = dir.join(path);
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(file, text).unwrap();
+    sh(dir, &["add", "-f", "--", path]);
+    sh(dir, &["commit", "-q", "-m", &format!("Track {path}")]);
+}
+
+const ROGUE_MCP: &str = r#"{"mcpServers":{"mine":{"command":"/bin/sh"}}}"#;
+
+#[test]
+fn an_upstream_branch_that_tracks_local_settings_is_not_merged_or_cloned() {
+    let team = team();
+    force_commit(&team.alice, ".kerf/mcp.json", ROGUE_MCP);
+    assert!(git::push(&team.alice).unwrap().pushed);
+
+    fs::create_dir_all(team.bob.join(".kerf")).unwrap();
+    fs::write(team.bob.join(".kerf/mcp.json"), "bob's own").unwrap();
+    git::fetch(&team.bob).unwrap();
+    let error = git::integrate(&team.bob, Path::new("kerfd"), "").unwrap_err();
+    assert_eq!(error.code, "LOCAL_SETTINGS_TRACKED", "{}", error.message);
+    assert!(error.message.contains(".kerf/mcp.json"), "{}", error.message);
+    assert_eq!(fs::read_to_string(team.bob.join(".kerf/mcp.json")).unwrap(), "bob's own");
+    assert_eq!(git::status(&team.bob).unwrap().behind, 1);
+
+    let location = team.remote.parent().unwrap().join("carol");
+    let error = git::clone(&team.remote.to_string_lossy(), &location).unwrap_err();
+    assert_eq!(error.code, "LOCAL_SETTINGS_TRACKED");
+    assert!(!location.join("remote").exists());
+}
+
+#[test]
+fn a_branch_that_tracks_local_settings_is_not_switched_to() {
+    let team = team();
+    git::switch(&team.alice, "alice/settings", true, "").unwrap();
+    // Any case: a case-insensitive file system writes it to .kerf/mcp.json.
+    force_commit(&team.alice, ".KERF/MCP.json", ROGUE_MCP);
+    git::push(&team.alice).unwrap();
+    git::switch(&team.alice, "main", false, "").unwrap();
+    let error = git::switch(&team.alice, "alice/settings", false, "").unwrap_err();
+    assert_eq!(error.code, "LOCAL_SETTINGS_TRACKED");
+    assert_eq!(git::branch(&team.alice).as_deref(), Some("main"));
+
+    fs::create_dir_all(team.bob.join(".kerf")).unwrap();
+    fs::write(team.bob.join(".kerf/mcp.json"), "bob's own").unwrap();
+    git::fetch(&team.bob).unwrap();
+    let error = git::switch(&team.bob, "alice/settings", false, "").unwrap_err();
+    assert_eq!(error.code, "LOCAL_SETTINGS_TRACKED");
+    assert!(error.message.contains(".KERF/MCP.json"), "{}", error.message);
+    assert_eq!(git::branch(&team.bob).as_deref(), Some("main"));
+    assert_eq!(fs::read_to_string(team.bob.join(".kerf/mcp.json")).unwrap(), "bob's own");
+}
+
+/// Point `dir`'s remote at an SSH URL, which the stand-in ssh answers.
+fn ssh_remote(dir: &Path) {
+    git::set_remote(dir, "git@kerf.invalid:team/film.git").unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn network_git_runs_ssh_without_prompts() {
+    let team = team();
+    let batch = |message: &str| {
+        assert!(message.contains("BatchMode=yes"), "{message}");
+        assert!(message.contains("ConnectTimeout="), "{message}");
+        assert!(message.contains("askpass never"), "{message}");
+    };
+    ssh_remote(&team.bob);
+    let error = git::fetch(&team.bob).unwrap_err();
+    assert_eq!(error.code, "GIT_FETCH_FAILED");
+    batch(&error.message);
+
+    ssh_remote(&team.alice);
+    fs::write(team.alice.join("presets/a.kerfpreset"), "kerf 1\n").unwrap();
+    git::commit(&team.alice, "a").unwrap();
+    let error = git::push(&team.alice).unwrap_err();
+    assert_eq!(error.code, "GIT_PUSH_FAILED");
+    batch(&error.message);
+
+    let location = team.remote.parent().unwrap().join("carol");
+    let error = git::clone("git@kerf.invalid:team/film.git", &location).unwrap_err();
+    assert_eq!(error.code, "GIT_CLONE_FAILED");
+    batch(&error.message);
+    assert!(!location.join("film").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_configured_ssh_command_is_left_alone() {
+    let team = team();
+    ssh_remote(&team.bob);
+    sh(&team.bob, &["config", "core.sshCommand", "ssh -o KerfOwnOption=yes"]);
+    let error = git::fetch(&team.bob).unwrap_err();
+    assert!(error.message.contains("KerfOwnOption=yes"), "{}", error.message);
+    assert!(!error.message.contains("BatchMode"), "{}", error.message);
+}
+
 #[test]
 fn the_merge_driver_is_configured_for_the_repository() {
     let team = team();
@@ -212,15 +365,43 @@ fn the_merge_driver_is_configured_for_the_repository() {
 #[test]
 fn files_too_large_for_github_are_refused_unless_lfs_stores_them() {
     let team = team();
-    let big = team.alice.join("media/huge.mov");
-    fs::File::create(&big)
-        .unwrap()
-        .set_len(git::LARGE_FILE_BYTES)
-        .unwrap();
+    // Outside media/, so no Git LFS rule covers it whether or not this
+    // machine has Git LFS.
+    sparse_file(&team.alice.join("huge.mov"), git::LARGE_FILE_BYTES);
+    let error = git::commit(&team.alice, "huge").unwrap_err();
+    assert_eq!(error.code, "LARGE_FILE");
+    assert!(error.message.contains("huge.mov"), "{}", error.message);
+    assert!(sh(&team.alice, &["diff", "--cached", "--name-only"]).is_empty());
+}
+
+#[test]
+fn large_media_counts_as_lfs_only_when_git_lfs_stored_it() {
+    let team = team();
+    fs::write(team.alice.join(".gitattributes"), scaffold::gitattributes(true)).unwrap();
+    // A collaborator without Git LFS: the attribute says lfs, no filter runs.
+    let _ = Command::new("git")
+        .arg("-C")
+        .arg(&team.alice)
+        .args(["config", "--local", "--remove-section", "filter.lfs"])
+        .output();
+    sparse_file(&team.alice.join("media/huge.mov"), git::LARGE_FILE_BYTES);
     let error = git::commit(&team.alice, "huge").unwrap_err();
     assert_eq!(error.code, "LARGE_FILE");
     assert!(error.message.contains("media/huge.mov"), "{}", error.message);
     assert!(sh(&team.alice, &["diff", "--cached", "--name-only"]).is_empty());
+
+    // A filter that stores a pointer instead, as Git LFS does.
+    sh(
+        &team.alice,
+        &[
+            "config",
+            "filter.lfs.clean",
+            "cat >/dev/null; printf 'version https://git-lfs.github.com/spec/v1\\noid sha256:0\\nsize 104857600\\n'",
+        ],
+    );
+    assert!(git::commit(&team.alice, "huge").unwrap().is_some());
+    let stored: u64 = sh(&team.alice, &["cat-file", "-s", "HEAD:media/huge.mov"]).parse().unwrap();
+    assert!(stored < 1024, "{stored}");
 }
 
 #[test]
