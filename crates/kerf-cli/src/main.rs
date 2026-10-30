@@ -24,7 +24,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -183,7 +183,7 @@ impl NewArgs {
 
 #[derive(Debug, Subcommand)]
 enum PresetAction {
-    /// List presets in the project root and .kerf/presets.
+    /// List presets in presets/, .kerf/presets, and the project folder.
     List,
     /// Save the accepted sequence to a new .kerfpreset file.
     Save {
@@ -538,8 +538,10 @@ fn run_sync(directory: &Path, kerfd: Option<&Path>, message: Option<&str>) -> Re
         .map(Path::to_path_buf)
         .or_else(discover_kerfd)
         .unwrap_or_else(|| PathBuf::from(binary_name("kerfd")));
-    let runtime =
-        RuntimeClient::connect_or_spawn(directory, Some(&kerfd)).map_err(runtime_error)?;
+    // A merge runs inside kerfd; give it longer than an edit.
+    let runtime = RuntimeClient::connect_or_spawn(directory, Some(&kerfd))
+        .map_err(runtime_error)?
+        .with_request_timeout(Duration::from_secs(60));
     let (_, report) = runtime
         .collab_integrate("ui", &operation_key("sync"), message)
         .map_err(|error| match error.code.as_str() {

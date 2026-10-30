@@ -355,13 +355,14 @@ account, so check its plan before sharing hours of footage.
 
 A shared project is an ordinary repository, and every Git tool works on it.
 
-- **The merge driver.** Before a sync merges incoming commits, Kerf
-  configures `project.kerf`'s merge in the repository: `merge.kerf.driver`
-  in `.git/config` runs `kerfd merge-driver %O %A %B %P`, and
-  `.git/info/attributes` routes `project.kerf` to it. Neither file is
-  committed; each clone on each machine has its own. From the first such
-  sync on, `git merge` and `git pull` in a terminal merge `project.kerf`
-  structurally too, and print the conflicts they settle. Without it, Git
+- **The merge driver.** When the editor opens a shared project, and
+  before a sync merges incoming commits, Kerf configures `project.kerf`'s
+  merge in the repository: `merge.kerf.driver` in `.git/config` runs
+  `kerfd merge-driver %O %A %B %P`, and `.git/info/attributes` routes
+  `project.kerf` to it. Neither file is committed; each clone on each
+  machine has its own. Once a project has been opened in Kerf, `git merge`
+  and `git pull` in a terminal merge `project.kerf` structurally too, and
+  print the conflicts they settle. Without it, Git
   merges `project.kerf` line by line. To set it up by hand:
 
   ```bash
@@ -370,8 +371,8 @@ A shared project is an ordinary repository, and every Git tool works on it.
   echo "project.kerf merge=kerf" >> .git/info/attributes
   ```
 
-  The setting names the kerfd that wrote it. If that kerfd moves, the next
-  sync in Kerf that merges rewrites it; until then Git reports a conflict
+  The setting names the kerfd that wrote it. If that kerfd moves, opening
+  the project in Kerf again rewrites it; until then Git reports a conflict
   in `project.kerf`. Run `git merge --abort` and sync from Kerf.
 - **Merge, do not rebase.** Use `git pull --no-rebase`. A rebase swaps
   ours and theirs, so "kept yours" would keep the remote's version.
