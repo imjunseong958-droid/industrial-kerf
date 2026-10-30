@@ -437,10 +437,12 @@ fn io(error: std::io::Error) -> CollabError {
     CollabError::new("IO_ERROR", error.to_string())
 }
 
-/// Stage everything in the project directory and commit it. `None` when
-/// there was nothing to commit. Files too large for GitHub that Git LFS
-/// does not store are refused, and nothing is left staged.
-pub fn commit(dir: &Path, message: &str) -> Result<Option<String>> {
+/// Stage everything in the project directory, as a commit would. Hashing
+/// new media is the slow part of a commit, so callers that must commit
+/// quickly stage first. `false` when nothing differs from the last commit.
+/// Files too large for GitHub that Git LFS does not store are refused, and
+/// nothing is left staged.
+pub fn stage(dir: &Path) -> Result<bool> {
     if !is_repository(dir) {
         return Err(CollabError::new("NOT_A_REPOSITORY", "the project is not a Git repository"));
     }
@@ -450,7 +452,14 @@ pub fn commit(dir: &Path, message: &str) -> Result<Option<String>> {
         let _ = git_run(dir, &["reset", "-q", "--", "."], "GIT_FAILED");
         return Err(error);
     }
-    if git_ok(dir, &["diff", "--cached", "--quiet"]) {
+    Ok(!git_ok(dir, &["diff", "--cached", "--quiet"]))
+}
+
+/// Stage everything in the project directory and commit it. `None` when
+/// there was nothing to commit. Files too large for GitHub that Git LFS
+/// does not store are refused, and nothing is left staged.
+pub fn commit(dir: &Path, message: &str) -> Result<Option<String>> {
+    if !stage(dir)? {
         return Ok(None);
     }
     let message = if message.trim().is_empty() {
