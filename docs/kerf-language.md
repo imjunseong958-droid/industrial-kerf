@@ -117,13 +117,18 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
 
 - **Positions** (`at=`, `start=`, markers) are timecode on the sequence,
   `HH:MM:SS:FF`, or `HH:MM:SS;FF` for drop-frame 29.97 and 59.94.
-- **Source positions** (`src=`, `out=`) are timecode on the media.
+- **Source positions** (`src=`, `out=`) are timecode on the media, or a
+  quoted phrase that a transcript of the media made earlier heard, as in
+  `src="so we closed"`: an in point lands on the frame its first word starts,
+  an out point past the frame its last word ends. Case, punctuation, and
+  spacing do not count; a phrase said more than once is refused with the
+  times it was said.
 - **Durations** (`dur=`) count frames in the same `HH:MM:SS:FF` shape.
 - Anywhere a time is read, `96f` and `4.5s` also work as offsets from the
   start. Seconds round to the nearest frame.
 - A position in a script may also be an **anchor**: `end` (the end of the
   sequence), `c3.start` or `c3.end`, a marker's id (`beat1`, or `beat1.end`
-  where a marker with a duration ends), or `c3@<source position>`, where
+  where a marker with a duration ends), or `c3@<media timecode>`, where
   clip `c3` plays that position of its media (or nested sequence), on the
   nearest frame, with speed and reverse taken into account. Each takes an
   optional amount, as in `at=end`, `to=c3.start-6f`, `at=beat1+2f`, or
@@ -160,15 +165,24 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
   track to leave it out.
 - `trim`, `roll`, `slide`, and `move` accept either an amount (`+12f`) or an
   absolute `to=`/`at=` position.
+- `snap=pause|cut [within=<amount>]` on `trim`, `split`, `insert`, and
+  `overwrite` moves the edges the line gives (`insert` and `overwrite`:
+  `src=` and `out=`) into the nearest pause of the media's sound, clear of
+  the sound either side, or onto a cut of its picture, as the index made on
+  import found them; within half a second unless given. A split stays inside
+  its clip and a trimmed clip keeps a length. Without an index, or with
+  nothing in reach, the line is refused.
 - `trim … src=<source position>` puts the edge where the clip plays that
   position of its media, so a cut can land on a word's time from a
   transcript.
 - With several sequences, `use s2` selects the one later lines act on.
 - `captions c3 on=S1 [words=<n>]` captions what clip `c3` says, timed to its
-  speech, from transcripts of its media made earlier. It is the one line that
-  reads analysis: whoever runs the script says where facts come from
-  (`kerfd` reads its media cache), and without a transcript covering the clip
-  the line is refused. It runs as the caption lines it becomes.
+  speech, from transcripts of its media made earlier; without a transcript
+  covering the clip the line is refused. It runs as the caption lines it
+  becomes.
+- Quoted phrases, `snap=`, and `captions` read analysis. Whoever runs the
+  script says where it comes from (`kerfd` reads its media cache), and a
+  line that needs what is not there is refused.
 
 Every operation prints back as script (`print_op`, `print_ops`), so history,
 UI actions, and agent edits share one readable log.

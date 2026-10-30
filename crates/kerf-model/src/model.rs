@@ -290,6 +290,25 @@ impl Clip {
         Some(self.start + span)
     }
 
+    /// What this clip plays at `time` on its sequence, a time on its media
+    /// or nested sequence: past either edge, what it would play. The
+    /// inverse of [`Clip::played_at`].
+    pub fn source_at(&self, time: Time) -> Option<Time> {
+        let (low, high) = self.source_range()?;
+        let speed = self.speed();
+        let offset = time - self.start;
+        let span = if offset.is_negative() {
+            -speed.source_span(-offset)
+        } else {
+            speed.source_span(offset)
+        };
+        Some(if speed.is_reverse() {
+            high - span
+        } else {
+            low + span
+        })
+    }
+
     fn source_in_mut(&mut self) -> Option<&mut Time> {
         match &mut self.content {
             Content::Media { source_in, .. } | Content::Sequence { source_in, .. } => {
@@ -745,6 +764,12 @@ mod tests {
         let reverse = media_clip("-1");
         assert_eq!(reverse.played_at(frames(148)), Some(frames(10)));
         assert_eq!(reverse.played_at(frames(136)), Some(frames(22)));
+        for clip in [forward, fast, reverse] {
+            for at in [0, 10, 22, 58, 70] {
+                let source = clip.source_at(frames(at)).unwrap();
+                assert_eq!(clip.played_at(source), Some(frames(at)), "{at}");
+            }
+        }
     }
 
     #[test]

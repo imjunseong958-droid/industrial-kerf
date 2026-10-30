@@ -21,14 +21,14 @@ use crate::doc::{
     parse_align, parse_marker_color, parse_mask_mode, parse_sample_rate, parse_size, pinned,
     sequence_fields, sequence_line, take_mask_shape,
 };
-use crate::facts::{Facts, NoFacts};
+use crate::facts::{Facts, NoFacts, Snap};
 use crate::lex::{lex, Arg, Atom, Line};
 use crate::text::{parse_fx_ref, parse_param, print_fx_ref, quote, Clock, Fields};
-use kerf_model::time::parse_timecode;
+use kerf_model::time::{parse_timecode, FLICKS_PER_SECOND};
 use kerf_model::{
     apply, Catalog, Clip, ClipChange, Content, Diagnostic, Domain, Edge, Effect, Id, MarkerChange,
-    Mask, NewClip, Op, ParamDef, Params, Project, Rate, Ratio, Report, Sequence, SequenceChange,
-    Time, TrackChange, TrackKind,
+    Mask, Media, NewClip, Op, ParamDef, Params, Project, Rate, Ratio, Report, Sequence,
+    SequenceChange, Time, TrackChange, TrackKind,
 };
 use std::fmt::Write as _;
 
@@ -256,6 +256,8 @@ impl std::ops::Deref for Positions<'_> {
 
 impl Script<'_> {
     fn parse(&mut self, line: &Line) -> Parsed {
+        let spoken = self.spoken(line)?;
+        let line = spoken.as_ref().unwrap_or(line);
         let mut fields = Fields::new(line)?;
         let command = fields.word(0, "a command")?;
         match command {
@@ -344,9 +346,17 @@ impl Script<'_> {
             }
             "split" => {
                 let clip = fields.id(1, "a clip id")?;
-                let (_, clock) = self.clip(&clip, line)?;
-                let at = required(&mut fields, "at", |t| clock.position(t))?;
+                let (found, clock) = self.clip(&clip, line)?;
+                let mut at = required(&mut fields, "at", |t| clock.position(t))?;
                 let tail = fields.take_id("as")?;
+                if let Some(snap) = take_snap(&mut fields, &clock)? {
+                    // A split must fall inside the clip.
+                    at = self
+                        .snap_edge(found, at, snap, clock.rate, |at| {
+                            found.start < at && at < found.end()
+                        })
+                        .map_err(|m| line.error(1, m))?;
+                }
                 fields.finish(2)?;
                 Ok(vec![Op::Split { clip, at, tail }])
             }
@@ -578,6 +588,29 @@ impl Script<'_> {
         let sequence = &self.project.sequences[s];
         let clock = Clock::of_sequence(sequence);
         let (mut content, source) = content(&mut fields, &self.project, self.catalog)?;
+        let snap = take_snap(&mut fields, &clock)?;
+        let wrote = |key: &str| line.args.iter().any(|arg| arg.key.as_deref() == Some(key));
+        let media = match (&content, snap) {
+            (_, None) => None,
+            (Content::Media { .. }, Some(_)) if !wrote("src") && !wrote("out") => {
+                return Err(line.error(1, "snap= moves src= and out=; give one"))
+            }
+            (Content::Media { media, .. }, Some(_)) => self.project.media(media.as_str()),
+            (_, Some(_)) => return Err(line.error(1, "snap= needs media=")),
+        };
+        if let (
+            Some(media),
+            Some((to, within)),
+            Content::Media {
+                source_in, speed, ..
+            },
+            true,
+        ) = (media, snap, &mut content, wrote("src"))
+        {
+            *source_in = self
+                .snap_source(media, *source_in, to, speed.source_span(within), false)
+                .map_err(|m| line.error(1, m))?;
+        }
         let positions = Positions::of(&self.project, s);
         let at = required(&mut fields, "at", |t| positions.position(t))?;
         let duration = match (
@@ -589,9 +622,16 @@ impl Script<'_> {
             (None, Some(out)) => {
                 let source =
                     source.ok_or_else(|| fields.error(out, "out= needs media= or seq="))?;
-                let out_time = source
+                let mut out_time = source
                     .position(fields.text(out)?)
                     .map_err(|m| fields.error(out, m))?;
+                if let (Some(media), Some((to, within)), Content::Media { speed, .. }) =
+                    (media, snap, &content)
+                {
+                    out_time = self
+                        .snap_source(media, out_time, to, speed.source_span(within), true)
+                        .map_err(|m| fields.error(out, m))?;
+                }
                 let (Content::Media {
                     source_in, speed, ..
                 }
@@ -746,6 +786,19 @@ impl Script<'_> {
             }
             (None, [_, extra, ..]) => return Err(fields.error(extra, "unexpected argument")),
         };
+        let delta = match take_snap(&mut fields, &clock)? {
+            Some(snap) => {
+                // The trimmed clip must keep a length.
+                let keeps = |at: Time| match edge {
+                    Edge::In => at < found.end(),
+                    Edge::Out => at > found.start,
+                };
+                self.snap_edge(found, edge_time + delta, snap, clock.rate, keeps)
+                    .map_err(|m| line.error(1, m))?
+                    - edge_time
+            }
+            None => delta,
+        };
         let count = fields.positional().len();
         fields.finish(count)?;
         Ok(vec![Op::Trim {
@@ -754,6 +807,171 @@ impl Script<'_> {
             delta,
             ripple,
         }])
+    }
+
+    /// `line` with each quoted phrase in its `src=` or `out=` replaced by
+    /// when the phrase was said, from transcripts of the media: an in point
+    /// on the frame its first word starts, an out point past the frame its
+    /// last word ends. `None` when the line has no phrase.
+    fn spoken(&self, line: &Line) -> Parsed<Option<Line>> {
+        let is_phrase = |arg: &Arg| {
+            matches!(arg.value, Atom::Str(_)) && matches!(arg.key.as_deref(), Some("src" | "out"))
+        };
+        if !line.args.iter().any(is_phrase) {
+            return Ok(None);
+        }
+        // Positional arguments count as fields counts them, between keyed ones.
+        let positional: Vec<&Arg> = line.args.iter().filter(|arg| arg.key.is_none()).collect();
+        let word = |index: usize| match positional.get(index) {
+            Some(Arg {
+                value: Atom::Word(word),
+                ..
+            }) => Some(word.as_str()),
+            _ => None,
+        };
+        let keyed = |key: &str| {
+            line.args.iter().find_map(|arg| match &arg.value {
+                Atom::Word(word) if arg.key.as_deref() == Some(key) => Some(word.as_str()),
+                _ => None,
+            })
+        };
+        let (media, trims_out) = match word(0) {
+            Some("insert" | "overwrite") => {
+                (keyed("media").and_then(|id| self.project.media(id)), false)
+            }
+            Some("trim") => (
+                word(1)
+                    .and_then(|id| self.project.locate(id))
+                    .and_then(|at| self.media_of(self.project.clip_at(at))),
+                word(2) == Some("out"),
+            ),
+            // Other commands read their fields as they always do.
+            _ => return Ok(None),
+        };
+        // Without media, the line reads a quoted time as it always has, and
+        // says so when it is not one.
+        let Some(media) = media else {
+            return Ok(None);
+        };
+        let clock = Clock::of_media(media);
+        let speech = self.facts.speech(media);
+        let mut spoken = line.clone();
+        for arg in spoken.args.iter_mut().filter(|arg| is_phrase(arg)) {
+            let Atom::Str(phrase) = &arg.value else {
+                continue;
+            };
+            // A quoted time is still a time.
+            if clock.position(phrase).is_ok() {
+                continue;
+            }
+            let (from, to) = match speech.said(phrase)[..] {
+                [once] => once,
+                [] => {
+                    return Err(line.error(
+                        arg.column,
+                        format!(
+                            "no transcript of `{}` heard \"{phrase}\"; look at it with transcript first",
+                            media.id
+                        ),
+                    ))
+                }
+                ref many => {
+                    let times: Vec<String> = many
+                        .iter()
+                        .map(|(from, _)| clock.print_position(source_time(*from, clock.rate, false)))
+                        .collect();
+                    return Err(line.error(
+                        arg.column,
+                        format!(
+                            "\"{phrase}\" is said {} times in `{}`, at {}; give more words or the time",
+                            many.len(),
+                            media.id,
+                            times.join(", ")
+                        ),
+                    ));
+                }
+            };
+            let out = arg.key.as_deref() == Some("out") || trims_out;
+            let time = source_time(if out { to } else { from }, clock.rate, out);
+            arg.value = Atom::Word(clock.print_position(time));
+        }
+        Ok(Some(spoken))
+    }
+
+    fn media_of(&self, clip: &Clip) -> Option<&Media> {
+        match &clip.content {
+            Content::Media { media, .. } => self.project.media(media.as_str()),
+            _ => None,
+        }
+    }
+
+    /// `edge`, a time on the sequence where `clip` plays, moved to the
+    /// nearest place `snap` allows in the clip's media that `keeps`, on the
+    /// nearest frame.
+    fn snap_edge(
+        &self,
+        clip: &Clip,
+        edge: Time,
+        (snap, within): (Snap, Time),
+        rate: Rate,
+        keeps: impl Fn(Time) -> bool,
+    ) -> Result<Time, String> {
+        let media = self
+            .media_of(clip)
+            .ok_or_else(|| format!("clip `{}` plays no media to snap to", clip.id))?;
+        let source = clip.source_at(edge).expect("a media clip plays a source");
+        let reach = clip.speed().source_span(within);
+        self.snaps(media, source, snap, reach, false)?
+            .into_iter()
+            .map(|at| rate.round(clip.played_at(at).expect("a media clip plays a source")))
+            .find(|at| keeps(*at))
+            .ok_or_else(|| nothing_near(media, source, snap, reach))
+    }
+
+    /// `at`, a time on `media`, moved to the nearest place `snap` allows
+    /// within `reach`.
+    fn snap_source(
+        &self,
+        media: &Media,
+        at: Time,
+        snap: Snap,
+        reach: Time,
+        out: bool,
+    ) -> Result<Time, String> {
+        self.snaps(media, at, snap, reach, out)?
+            .first()
+            .copied()
+            .ok_or_else(|| nothing_near(media, at, snap, reach))
+    }
+
+    /// The places `snap` allows within `reach` of `at` on `media`, nearest
+    /// first, on the media's frames: a cut on the frame it starts, a place in
+    /// a pause on the frame it falls in, or for an `out` point after it.
+    fn snaps(
+        &self,
+        media: &Media,
+        at: Time,
+        snap: Snap,
+        reach: Time,
+        out: bool,
+    ) -> Result<Vec<Time>, String> {
+        let breaks = self.facts.breaks(media).ok_or_else(|| {
+            format!(
+                "`{}` is not indexed yet; look at it with media first",
+                media.id
+            )
+        })?;
+        Ok(breaks
+            .snaps(snap, at.seconds(), reach.seconds())
+            .into_iter()
+            .map(|seconds| match snap {
+                // An index's times are rounded to microseconds.
+                Snap::Cut => media
+                    .rate
+                    .round(Time::from_seconds(seconds.max(0.0)).unwrap_or(Time::ZERO)),
+                Snap::Pause => source_time(seconds, media.rate, out),
+            })
+            .collect())
     }
 
     /// Where on the sequence `clip` plays the source position `text`, on
@@ -1197,6 +1415,53 @@ impl Script<'_> {
             Some(error) => Err(line.error(1, error.message)),
             None => Ok(ops),
         }
+    }
+}
+
+/// Why nothing near `at` on `media` would do for `snap`.
+fn nothing_near(media: &Media, at: Time, snap: Snap, reach: Time) -> String {
+    let what = match snap {
+        Snap::Pause => "pause",
+        Snap::Cut => "cut",
+    };
+    format!(
+        "no {what} of `{}` within {:.2}s of {} would do here",
+        media.id,
+        reach.seconds(),
+        Clock::of_media(media).print_position(at)
+    )
+}
+
+/// `seconds` of a media on its frame grid: the frame it falls in, or for an
+/// out point the end of that frame, so a word at an edge is kept whole.
+fn source_time(seconds: f64, rate: Rate, out: bool) -> Time {
+    let time = Time::from_seconds(seconds.max(0.0)).unwrap_or(Time::ZERO);
+    let frames = rate.frames_floor(time);
+    let frames = if out && !rate.is_aligned(time) {
+        frames + 1
+    } else {
+        frames
+    };
+    rate.time_of(frames)
+}
+
+/// `snap=pause|cut` and `within=<amount>`, half a second unless given: what
+/// an edge snaps to and how far it may move.
+fn take_snap(fields: &mut Fields<'_>, clock: &Clock) -> Parsed<Option<(Snap, Time)>> {
+    let line = fields.line();
+    let snap = fields.take_with("snap", |text| match text {
+        "pause" => Ok(Snap::Pause),
+        "cut" => Ok(Snap::Cut),
+        other => Err(format!("snap={other}? use pause or cut")),
+    })?;
+    let within = fields.take_with("within", |text| clock.duration(text))?;
+    match (snap, within) {
+        (Some(snap), within) => Ok(Some((
+            snap,
+            within.unwrap_or_else(|| Time::from_flicks(FLICKS_PER_SECOND / 2)),
+        ))),
+        (None, Some(_)) => Err(line.error(1, "within= goes with snap=")),
+        (None, None) => Ok(None),
     }
 }
 

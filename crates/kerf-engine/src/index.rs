@@ -73,13 +73,8 @@ pub struct MediaIndex {
     pub tempo: Option<Tempo>,
 }
 
-/// The index of `src`, from the cache or made now.
-pub fn media_index(
-    src: &Path,
-    cache: &DerivativeCache,
-    cancellation: &CancellationToken,
-) -> Result<MediaIndex> {
-    let entry = cache.source_entry(
+fn index_entry(src: &Path, cache: &DerivativeCache) -> Result<crate::derivatives::CacheEntry> {
+    cache.source_entry(
         src,
         "media-index",
         &json!({
@@ -91,7 +86,26 @@ pub fn media_index(
             "sampleRate": SAMPLE_RATE,
             "hopSeconds": HOP_SECONDS,
         }),
-    )?;
+    )
+}
+
+/// The index of `src` when the cache already has it; nothing is made.
+pub fn cached_media_index(src: &Path, cache: &DerivativeCache) -> Option<MediaIndex> {
+    let entry = index_entry(src, cache).ok()?;
+    if entry.is_complete(&["index.json"]) {
+        entry.read_json("index.json").ok()
+    } else {
+        None
+    }
+}
+
+/// The index of `src`, from the cache or made now.
+pub fn media_index(
+    src: &Path,
+    cache: &DerivativeCache,
+    cancellation: &CancellationToken,
+) -> Result<MediaIndex> {
+    let entry = index_entry(src, cache)?;
     if entry.is_complete(&["index.json"]) {
         return entry.read_json("index.json");
     }

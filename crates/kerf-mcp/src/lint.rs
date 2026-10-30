@@ -1,9 +1,10 @@
 //! What an editor would catch in a cut that validation does not: black
-//! frames, picture that leaves the frame's edges uncovered, flash frames,
-//! and sound cut inside a word.
+//! frames, picture that leaves the frame's edges uncovered, flash frames
+//! (including a sliver of another shot at a clip's edge), and sound cut
+//! inside a word.
 
-use kerf_lang::Clock;
-use kerf_model::{Clip, Content, Media, Param, Project, Sequence, Time, TrackKind, Value};
+use kerf_lang::{Breaks, Clock, Facts, Speech};
+use kerf_model::{Clip, Content, Param, Project, Sequence, Time, TrackKind, Value};
 use serde_json::{json, Value as Json};
 
 /// A picture or sound clip shorter than this many frames is a flash frame.
@@ -15,17 +16,15 @@ const WORD_MARGIN: f64 = 0.06;
 const EDGE_TOLERANCE: f64 = 0.5;
 
 /// Findings for every sequence of `project`, whose media paths are
-/// resolved. `words` gives the spoken words of a media, in seconds of the
-/// media, as far as they are known without transcribing.
-pub(crate) fn findings(
-    project: &Project,
-    words: impl Fn(&Media) -> Vec<(f64, f64, String)>,
-) -> Vec<Json> {
+/// resolved. `facts` knows what transcripts and indexes already made of its
+/// media heard and found; nothing is analysed for a check.
+pub(crate) fn findings(project: &Project, facts: &dyn Facts) -> Vec<Json> {
     let mut findings = Vec::new();
     for sequence in &project.sequences {
         picture(project, sequence, &mut findings);
         flash_frames(sequence, &mut findings);
-        cuts_in_words(project, sequence, &words, &mut findings);
+        slivers(project, sequence, facts, &mut findings);
+        cuts_in_words(project, sequence, facts, &mut findings);
     }
     findings
 }
@@ -194,14 +193,71 @@ fn flash_frames(sequence: &Sequence, findings: &mut Vec<Json>) {
     }
 }
 
+/// Picture clips that show a frame or two of another shot at an edge: a
+/// cut of their media's picture just inside the clip, which plays as a
+/// flash frame.
+fn slivers(project: &Project, sequence: &Sequence, facts: &dyn Facts, findings: &mut Vec<Json>) {
+    let rate = sequence.rate;
+    let mut known: std::collections::HashMap<_, Option<Breaks>> = std::collections::HashMap::new();
+    for clip in pictures(project, sequence) {
+        let Content::Media { media, .. } = &clip.content else {
+            continue;
+        };
+        let Some(media) = project.media(media.as_str()) else {
+            continue;
+        };
+        let Some((low, high)) = clip.source_range() else {
+            continue;
+        };
+        let Some(breaks) = known
+            .entry(media.id.clone())
+            .or_insert_with(|| facts.breaks(media))
+        else {
+            continue;
+        };
+        for at in breaks
+            .cuts
+            .iter()
+            .filter_map(|cut| Time::from_seconds(*cut))
+        {
+            if at <= low || at >= high {
+                continue;
+            }
+            let Some(played) = clip.played_at(at).map(|time| rate.round(time)) else {
+                continue;
+            };
+            for (edge, frames) in [
+                ("starts", rate.frames_round(played - clip.start)),
+                ("ends", rate.frames_round(clip.end() - played)),
+            ] {
+                if frames <= 0 || frames >= FLASH_FRAMES {
+                    continue;
+                }
+                let clock = Clock::of_media(media);
+                findings.push(finding(
+                    "cut.near_scene_cut",
+                    clip.id.as_str(),
+                    format!(
+                        "clip `{}` {edge} with {frames} frame{} of another shot (`{}` cuts at {}, by its index)",
+                        clip.id,
+                        if frames == 1 { "" } else { "s" },
+                        media.id,
+                        clock.print_position(media.rate.round(at)),
+                    ),
+                ));
+            }
+        }
+    }
+}
+
 /// Sound clips whose first or last frame falls inside a word.
 fn cuts_in_words(
     project: &Project,
     sequence: &Sequence,
-    words: &impl Fn(&Media) -> Vec<(f64, f64, String)>,
+    facts: &dyn Facts,
     findings: &mut Vec<Json>,
 ) {
-    let mut known = std::collections::HashMap::new();
+    let mut known: std::collections::HashMap<_, Speech> = std::collections::HashMap::new();
     for track in sequence
         .tracks
         .iter()
@@ -222,13 +278,15 @@ fn cuts_in_words(
             }
             let spoken = known
                 .entry(media.id.clone())
-                .or_insert_with(|| words(media));
+                .or_insert_with(|| facts.speech(media));
             let clock = Clock::of_media(media);
             for (end, at) in [("starts", source_in), ("ends", source_out)] {
                 let at = at.seconds();
                 let Some((from, to, word)) = spoken
+                    .words
                     .iter()
-                    .find(|(from, to, _)| from + WORD_MARGIN < at && at < to - WORD_MARGIN)
+                    .map(|word| (&word.start, &word.end, word.text.trim()))
+                    .find(|(from, to, _)| *from + WORD_MARGIN < at && at < *to - WORD_MARGIN)
                 else {
                     continue;
                 };
@@ -296,8 +354,8 @@ fn subtract(spans: &[(Time, Time)], removed: &[(Time, Time)]) -> Vec<(Time, Time
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kerf_lang::{apply_script, parse_document};
-    use kerf_model::Catalog;
+    use kerf_lang::{apply_script, parse_document, Word};
+    use kerf_model::{Catalog, Media};
 
     const DOCUMENT: &str = "kerf 1
 project name=\"Test\"
@@ -311,15 +369,48 @@ sequence s1 rate=24 size=1920x1080
     clip a2 media=m1 src=00:00:10:00 at=00:00:04:00 dur=00:00:04:00 link=L2
 ";
 
+    /// What every media's transcripts heard and its index found.
+    struct Known {
+        words: Vec<Word>,
+        cuts: Vec<f64>,
+    }
+
+    impl Facts for Known {
+        fn speech(&self, _: &Media) -> Speech {
+            Speech {
+                words: self.words.clone(),
+                covered: Vec::new(),
+            }
+        }
+
+        fn breaks(&self, _: &Media) -> Option<Breaks> {
+            Some(Breaks {
+                pauses: Vec::new(),
+                cuts: self.cuts.clone(),
+            })
+        }
+    }
+
     fn codes(script: &str, words: &[(f64, f64, &str)]) -> Vec<(String, String)> {
+        found(script, words, &[])
+    }
+
+    fn found(script: &str, words: &[(f64, f64, &str)], cuts: &[f64]) -> Vec<(String, String)> {
         let catalog = Catalog::builtin();
         let project = parse_document(DOCUMENT, catalog).unwrap().project;
         let project = apply_script(&project, catalog, script).unwrap().project;
-        let words: Vec<_> = words
-            .iter()
-            .map(|(from, to, word)| (*from, *to, (*word).to_owned()))
-            .collect();
-        findings(&project, |_| words.clone())
+        let known = Known {
+            words: words
+                .iter()
+                .map(|(start, end, text)| Word {
+                    start: *start,
+                    end: *end,
+                    text: (*text).to_owned(),
+                })
+                .collect(),
+            cuts: cuts.to_vec(),
+        };
+        findings(&project, &known)
             .into_iter()
             .map(|finding| {
                 (
@@ -368,6 +459,25 @@ sequence s1 rate=24 size=1920x1080
                 "clip.flash".into(),
                 "clip `c1` on V1 is 2 frames long".into()
             )),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn a_sliver_of_another_shot_is_a_flash_frame() {
+        // c1 plays m1 from 0s to 4s; the picture cuts a frame after its
+        // start and a frame before its end, and in the middle of c2.
+        let found = found("set c1 opacity=1", &[], &[0.05, 3.95, 12.0]);
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(found.iter().all(|(code, _)| code == "cut.near_scene_cut"));
+        assert!(
+            found[0].1.contains(
+                "clip `c1` starts with 1 frame of another shot (`m1` cuts at 00:00:00:01"
+            ),
+            "{found:?}"
+        );
+        assert!(
+            found[1].1.contains("clip `c1` ends with 1 frame"),
             "{found:?}"
         );
     }
