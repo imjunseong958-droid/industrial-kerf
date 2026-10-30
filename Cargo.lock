@@ -1102,6 +1102,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kerf-collab"
+version = "0.1.0"
+dependencies = [
+ "kerf-lang",
+ "kerf-model",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "kerf-color"
 version = "0.1.0"
 dependencies = [

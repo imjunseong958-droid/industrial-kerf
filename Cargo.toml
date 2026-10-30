@@ -17,6 +17,7 @@ members = [
     "crates/kerf-agent",
     "crates/kerf-mcp",
     "crates/kerf-cli",
+    "crates/kerf-collab",
     "crates/kerf-draw",
     "crates/kerf-color",
     "crates/kerf-geom",
