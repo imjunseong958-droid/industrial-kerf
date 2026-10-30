@@ -655,8 +655,11 @@ fn split(line: &str) -> Result<Vec<Arg>, (usize, String)> {
     Ok(args)
 }
 
+/// Why a `param` line does not read, with the column it points at, if any.
+type ParamError = (Option<usize>, String);
+
 /// A `param` line's parameter.
-fn param(args: &[Arg]) -> Result<LookParam, (Option<usize>, String)> {
+fn param(args: &[Arg]) -> Result<LookParam, ParamError> {
     let (name, ty, rest) = match args {
         [name, ty, rest @ ..] if name.key.is_none() && ty.key.is_none() => (name, ty, rest),
         _ => {
@@ -688,7 +691,7 @@ fn param(args: &[Arg]) -> Result<LookParam, (Option<usize>, String)> {
         ));
     }
     let default = field("default");
-    let range = |kind: Kind| -> Result<Option<(f64, f64)>, (Option<usize>, String)> {
+    let range = |kind: Kind| -> Result<Option<(f64, f64)>, ParamError> {
         let Some(arg) = field("range") else {
             return Ok(None);
         };
@@ -696,7 +699,7 @@ fn param(args: &[Arg]) -> Result<LookParam, (Option<usize>, String)> {
             .value
             .split_once("..")
             .ok_or_else(|| (Some(arg.column), "a range is `low..high`".into()))?;
-        let bound = |text: &str| -> Result<f64, (Option<usize>, String)> {
+        let bound = |text: &str| -> Result<f64, ParamError> {
             let expr = expr(text).map_err(|message| (Some(arg.column), message))?;
             literal(&expr, kind, Rate::FPS_30)
                 .ok_or_else(|| (Some(arg.column), format!("`{text}` is not {}", kind.name())))

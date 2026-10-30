@@ -1738,8 +1738,8 @@ fn blur_plane(p: &mut [f32], w: usize, h: usize, sigma: f32) {
             let n = (2 * r + 1) as f32;
             let at = |i: isize| src[i.clamp(0, w as isize - 1) as usize];
             let mut acc: f32 = (-(r as isize)..=r as isize).map(at).sum();
-            for x in 0..w {
-                row[x] = acc / n;
+            for (x, value) in row.iter_mut().enumerate() {
+                *value = acc / n;
                 acc += at(x as isize + r as isize + 1) - at(x as isize - r as isize);
             }
         });

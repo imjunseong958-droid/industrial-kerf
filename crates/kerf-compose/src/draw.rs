@@ -128,8 +128,11 @@ struct Shown {
     plan: ClipPlan,
     from: Time,
     to: Time,
-    reveal: Option<(Reveal, Time, Time)>,
+    reveal: Option<Entrance>,
 }
+
+/// How a clip enters over the one before it, and from when to when.
+type Entrance = (Reveal, Time, Time);
 
 #[derive(Clone, Copy)]
 enum Reveal {
@@ -1083,7 +1086,7 @@ impl<'a> Builder<'a> {
 
     fn track(&mut self, sequence: &'a Sequence, track: &'a Track) -> Result<TrackPlan> {
         let rate = sequence.rate;
-        let mut spans: Vec<(Time, Time, Option<(Reveal, Time, Time)>, bool)> = track
+        let mut spans: Vec<(Time, Time, Option<Entrance>, bool)> = track
             .clips
             .iter()
             .map(|clip| (clip.start, clip.end(), None, false))

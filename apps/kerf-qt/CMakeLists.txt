@@ -21,6 +21,12 @@ FetchContent_Declare(qtads
     GIT_TAG v5.1.1
     GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(qtads)
+if(APPLE)
+    # Qt 6.11's moc follows framework headers to Q_OS_UNIX but not to
+    # Q_OS_MACOS, so it reads qtads' floating container as the Linux
+    # QDockWidget while the compiler builds the macOS QWidget.
+    set_property(TARGET qtadvanceddocking-qt6 APPEND PROPERTY AUTOMOC_MOC_OPTIONS -DQ_OS_MACOS)
+endif()
 
 set(KERF_BRIDGE_LIBRARY "${CMAKE_CURRENT_LIST_DIR}/../../target/debug/libkerf_qt_bridge${CMAKE_SHARED_LIBRARY_SUFFIX}"
     CACHE FILEPATH "Path to the Rust kerf_qt_bridge cdylib")
