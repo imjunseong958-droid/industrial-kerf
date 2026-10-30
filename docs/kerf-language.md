@@ -164,6 +164,11 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
   position of its media, so a cut can land on a word's time from a
   transcript.
 - With several sequences, `use s2` selects the one later lines act on.
+- `captions c3 on=S1 [words=<n>]` captions what clip `c3` says, timed to its
+  speech, from transcripts of its media made earlier. It is the one line that
+  reads analysis: whoever runs the script says where facts come from
+  (`kerfd` reads its media cache), and without a transcript covering the clip
+  the line is refused. It runs as the caption lines it becomes.
 
 Every operation prints back as script (`print_op`, `print_ops`), so history,
 UI actions, and agent edits share one readable log.
@@ -174,6 +179,7 @@ UI actions, and agent edits share one readable log.
 arrive as scripts (`apply_script`) or typed operations from the editor
 (`apply_ops`, frame counts on the sequence). Each change is journaled as
 the script it ran, and undo restores the project as it was. Agent edits stay pending proposals that show the
-script and a diff of the document; `get_document` returns the document,
+operations they run, the script as it was written (`source`, with its
+anchors and `captions` lines), and a diff of the document; `get_document` returns the document,
 optionally annotated. Render jobs and proposal previews hand renderers the
 document with media paths resolved against the project.

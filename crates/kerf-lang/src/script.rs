@@ -12,12 +12,16 @@
 //! Lines run in order against the project as it stands after the previous
 //! line, so later lines may name clips that earlier lines created. The whole
 //! script applies atomically, and errors point at the line that failed.
+//! Lines that read analysis, such as `captions`, read it from the facts the
+//! script runs with.
 
+use crate::captions::{caption_script, DEFAULT_CAPTION_WORDS};
 use crate::doc::{
     content, content_text, mask_shape_text, mask_text, media_fields, media_line, params_text,
     parse_align, parse_marker_color, parse_mask_mode, parse_sample_rate, parse_size, pinned,
     sequence_fields, sequence_line, take_mask_shape,
 };
+use crate::facts::{Facts, NoFacts};
 use crate::lex::{lex, Arg, Atom, Line};
 use crate::text::{parse_fx_ref, parse_param, print_fx_ref, quote, Clock, Fields};
 use kerf_model::time::parse_timecode;
@@ -37,15 +41,27 @@ pub struct Applied {
     pub report: Report,
 }
 
+/// Run `script` with no analysis: lines that read facts are refused.
 pub fn apply_script(
     project: &Project,
     catalog: &Catalog,
+    script: &str,
+) -> Result<Applied, Vec<Diagnostic>> {
+    apply_script_with(project, catalog, &NoFacts, script)
+}
+
+/// Run `script`, reading what analysis knows from `facts`.
+pub fn apply_script_with(
+    project: &Project,
+    catalog: &Catalog,
+    facts: &dyn Facts,
     script: &str,
 ) -> Result<Applied, Vec<Diagnostic>> {
     let lines = lex(script)?;
     let mut state = Script {
         project: project.clone(),
         catalog,
+        facts,
         sequence: None,
     };
     let mut ops = Vec::new();
@@ -81,11 +97,12 @@ pub fn apply_script(
     })
 }
 
-const COMMANDS: &str = "use, media, sequence, track, insert, overwrite, delete, ripple-delete, lift, extract, trim, roll, slip, slide, split, blade, move, set, speed, mask, fx, transition, marker, link, unlink";
+const COMMANDS: &str = "use, media, sequence, track, insert, overwrite, delete, ripple-delete, lift, extract, trim, roll, slip, slide, split, blade, move, set, speed, mask, fx, transition, marker, captions, link, unlink";
 
 struct Script<'c> {
     project: Project,
     catalog: &'c Catalog,
+    facts: &'c dyn Facts,
     sequence: Option<Id>,
 }
 
@@ -378,6 +395,7 @@ impl Script<'_> {
             "fx" => self.fx(fields),
             "transition" => self.transition(fields),
             "marker" => self.marker(fields),
+            "captions" => self.captions(fields),
             other => Err(line.error(
                 1,
                 format!("unknown command `{other}`; commands are {COMMANDS}"),
@@ -1108,6 +1126,77 @@ impl Script<'_> {
         };
         fields.finish(used)?;
         Ok(vec![op])
+    }
+
+    /// `captions <clip> on=<track> [words=<n>]`: the caption lines for what
+    /// the clip says, from the words transcripts of its media heard.
+    fn captions(&mut self, mut fields: Fields<'_>) -> Parsed {
+        let line = fields.line();
+        let clip = fields.id(1, "a clip id")?;
+        let track = fields
+            .take_id("on")?
+            .ok_or_else(|| line.error(1, "captions needs on=<subtitle track>"))?;
+        let most = fields
+            .take_with("words", |text| {
+                text.parse()
+                    .ok()
+                    .filter(|count| *count > 0)
+                    .ok_or_else(|| format!("`{text}` is not a word count"))
+            })?
+            .unwrap_or(DEFAULT_CAPTION_WORDS);
+        fields.finish(2)?;
+        let found = self
+            .project
+            .locate(clip.as_str())
+            .map(|at| self.project.clip_at(at));
+        let Some((found, media)) = found.and_then(|found| match &found.content {
+            Content::Media { media, .. } => Some((found, self.project.media(media.as_str())?)),
+            _ => None,
+        }) else {
+            return Err(line.error(1, format!("no media clip `{clip}`")));
+        };
+        let speech = self.facts.speech(media);
+        let (source_in, source_out) = found.source_range().unwrap_or_default();
+        if !speech.covers(source_in.seconds(), source_out.seconds()) {
+            let clock = Clock::of_media(media);
+            return Err(line.error(
+                1,
+                format!(
+                    "no transcript of `{}` covers `{clip}` ({}–{}); look at it with transcript, from, and to first",
+                    media.id,
+                    clock.print_position(source_in),
+                    clock.print_position(source_out),
+                ),
+            ));
+        }
+        let script = caption_script(
+            &self.project,
+            clip.as_str(),
+            track.as_str(),
+            &speech.words,
+            most,
+        )
+        .map_err(|message| line.error(1, message))?;
+        // The caption lines run in the clip's sequence; the script's own
+        // choice of sequence holds after them.
+        let lines = lex(&script).map_err(|mut errors| line.error(1, errors.remove(0).message))?;
+        let chosen = self.sequence.clone();
+        let mut ops = Vec::new();
+        let mut failed = None;
+        for generated in &lines {
+            match self.parse(generated) {
+                Ok(more) => ops.extend(more),
+                Err(error) => {
+                    failed = Some(error);
+                    break;
+                }
+            }
+        }
+        self.sequence = chosen;
+        match failed {
+            Some(error) => Err(line.error(1, error.message)),
+            None => Ok(ops),
+        }
     }
 }
 

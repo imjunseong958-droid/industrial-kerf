@@ -16,6 +16,9 @@ pub struct Word {
 /// A pause longer than this starts a new caption.
 const PAUSE_SECONDS: f64 = 0.5;
 
+/// Words a caption holds unless `captions … words=<n>` says otherwise.
+pub(crate) const DEFAULT_CAPTION_WORDS: usize = 4;
+
 /// Script lines that caption what `clip` says onto the subtitle `track`
 /// of its sequence, from `words` timed on its media. A caption holds at
 /// most `max_words` words and ends at a pause or the end of a sentence.
@@ -178,6 +181,55 @@ overwrite caption=\"Next\" at=00:00:04:00 dur=12f on=S1"
             script,
             "overwrite caption=\"So\" at=00:00:02:03 dur=3f on=S1"
         );
+    }
+
+    /// Facts that heard `words` over the whole of every media.
+    struct Heard(Vec<Word>);
+
+    impl crate::Facts for Heard {
+        fn speech(&self, _: &kerf_model::Media) -> crate::Speech {
+            crate::Speech {
+                words: self.0.clone(),
+                covered: vec![(0.0, 60.0)],
+            }
+        }
+    }
+
+    #[test]
+    fn a_captions_line_becomes_the_caption_lines() {
+        let catalog = Catalog::builtin();
+        let project = parse_document(DOCUMENT, catalog).unwrap().project;
+        let heard = Heard(vec![
+            word(10.25, 10.5, "So"),
+            word(10.5, 11.0, "here"),
+            word(11.0, 11.5, "we"),
+            word(11.5, 12.0, "are."),
+        ]);
+        let script = "captions c1 on=S1 words=3\nmarker add at=c1.end as=done";
+        let applied = crate::apply_script_with(&project, catalog, &heard, script).unwrap();
+        let captions = &applied.project.sequences[0].tracks[1].clips;
+        assert_eq!(captions.len(), 2);
+        assert_eq!(
+            crate::print_ops(&project, catalog, &applied.ops),
+            "overwrite caption=\"So here we\" at=00:00:02:06 dur=00:00:01:06 on=S1
+overwrite caption=\"are.\" at=00:00:03:12 dur=00:00:00:12 on=S1
+marker add as=done at=00:00:06:00
+"
+        );
+
+        // Without transcripts the line says what is missing, where it is.
+        let error = apply_script(&project, catalog, script)
+            .unwrap_err()
+            .remove(0);
+        assert!(
+            error.message.contains("no transcript of `m1` covers `c1`"),
+            "{error:?}"
+        );
+        assert_eq!(error.span.map(|span| span.line), Some(1));
+        let error = crate::apply_script_with(&project, catalog, &heard, "captions c1 on=S1 size=2")
+            .unwrap_err()
+            .remove(0);
+        assert!(error.message.contains("unknown key `size`"), "{error:?}");
     }
 
     #[test]

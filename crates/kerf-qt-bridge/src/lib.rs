@@ -1686,6 +1686,7 @@ mod tests {
             proposal_id: "proposal-1".into(),
             base_revision: 1,
             script: "track add T1 video\n".into(),
+            source: String::new(),
             document_diff: "+  track T1 video\n".into(),
             freshness: ProposalFreshness::Current,
         };
@@ -1801,6 +1802,7 @@ mod tests {
                 proposal_id: "p1".into(),
                 base_revision: 0,
                 script: "track add T9 video\n".into(),
+                source: String::new(),
                 document_diff: String::new(),
                 freshness: ProposalFreshness::Current,
             }),

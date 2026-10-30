@@ -518,9 +518,53 @@ fn scripts_anchor_to_clips_and_caption_only_what_was_heard() {
         diff.contains("clip c2 media=m1 src=00:00:01:00 at=00:00:04:00"),
         "{diff}"
     );
+    // Extending keeps both scripts as they were written.
+    let extended = ok(
+        &router,
+        "edit",
+        json!({"script": "marker add at=c2.end as=done", "extend": appended["proposal"]}),
+    );
+    let Some(kerf_runtime::PendingProposal::Pending { script, source, .. }) =
+        router.runtime().get_state().unwrap().pending_proposal
+    else {
+        panic!("expected a pending proposal");
+    };
+    assert_eq!(
+        source,
+        "insert media=m1 src=1s dur=1s at=end on=V1,A1 as=c2,a2\nmarker add at=c2.end as=done"
+    );
+    assert!(script.contains("marker add as=done at="), "{script}");
     router
         .runtime()
-        .reject_proposal(appended["proposal"].as_str().unwrap())
+        .reject_proposal(extended["proposal"].as_str().unwrap())
+        .unwrap();
+
+    // An extension that would act otherwise after the operations it follows
+    // is refused, and the proposal it extends stays.
+    let two = ok(
+        &router,
+        "edit",
+        json!({"script": "sequence add s2 rate=30 size=320x180\nuse s1\nmarker add at=0f as=k1"}),
+    );
+    let elsewhere = error(
+        &router,
+        "edit",
+        json!({
+            "script": "sequence add s3 rate=30 size=320x180\ntrack add V8 video",
+            "extend": two["proposal"],
+        }),
+    );
+    assert_eq!(elsewhere["code"], "SCRIPT_REFUSED");
+    assert!(
+        elsewhere["message"]
+            .as_str()
+            .unwrap()
+            .contains("use <sequence>"),
+        "{elsewhere}"
+    );
+    router
+        .runtime()
+        .reject_proposal(two["proposal"].as_str().unwrap())
         .unwrap();
 
     let unheard = error(
@@ -539,7 +583,7 @@ fn scripts_anchor_to_clips_and_caption_only_what_was_heard() {
     assert!(unknown["message"]
         .as_str()
         .unwrap()
-        .contains("unexpected `size=2`"));
+        .contains("unknown key `size`"));
 }
 
 #[test]

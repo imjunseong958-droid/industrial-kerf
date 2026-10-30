@@ -24,7 +24,7 @@ pub use ipc::{
     response_value, run_ipc, run_stdio, EndpointAddress, RuntimeClient, MAX_REQUEST_BYTES,
     UNIX_SOCKET_PATH_LIMIT,
 };
-pub use kernel::{resolve_media_paths, use_proxies, EditOp, MaskOutline, TrimSide};
+pub use kernel::{resolve_media_paths, use_proxies, CachedFacts, EditOp, MaskOutline, TrimSide};
 pub use render::{render_cancel_path, run_render_job};
 pub use timeline::fx_catalog_json;
 
@@ -105,6 +105,10 @@ pub enum PendingProposal {
         base_revision: u64,
         /// The proposed edit as an operation script.
         script: String,
+        /// The script as it was written: before anchors and the lines that
+        /// read analysis became the operations in `script`.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        source: String,
         /// Unified diff of the canonical document before and after.
         #[serde(rename = "documentDiff", alias = "document_diff")]
         document_diff: String,
@@ -266,6 +270,10 @@ pub enum RuntimeRequest {
         #[serde(rename = "baseRevision")]
         base_revision: u64,
         script: String,
+        /// The script as it was written, when `script` is not that: an
+        /// extension runs the operations of the proposal it extends.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
     },
     Undo {
         actor: String,
@@ -563,6 +571,6 @@ pub fn proposal_timeline(document: &str, script: &str) -> Result<Value, RuntimeE
     let edited = kernel::Edit::Script {
         script: script.to_string(),
     }
-    .run(&project)?;
+    .run(&project, &kerf_lang::NoFacts)?;
     Ok(timeline::timeline_json(&edited.project))
 }
