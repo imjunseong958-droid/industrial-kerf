@@ -157,27 +157,6 @@ QString untitledName(const QString &location) {
     return name;
 }
 
-bool systemIsDark() {
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
-    const Qt::ColorScheme scheme = QGuiApplication::styleHints()->colorScheme();
-    if (scheme != Qt::ColorScheme::Unknown) return scheme == Qt::ColorScheme::Dark;
-#endif
-    return QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
-}
-
-// The accent chosen in System Settings, or macOS's blue where the platform
-// has none to give (offscreen test runs among them).
-QColor systemAccent(bool dark) {
-#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
-    const QString platform = QGuiApplication::platformName();
-    if (platform != QStringLiteral("offscreen") && platform != QStringLiteral("minimal")) {
-        const QColor accent = QGuiApplication::palette().color(QPalette::Accent);
-        if (accent.isValid() && accent.alpha() == 255) return accent;
-    }
-#endif
-    return dark ? QColor("#0a84ff") : QColor("#007aff");
-}
-
 QPen linePen(const QColor &color, qreal width) {
     return QPen(color, width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
 }
@@ -788,9 +767,8 @@ ProjectLauncher::ProjectLauncher(const QString &kerfdBinary, QWidget *parent) : 
     setFont(interfaceFont);
     resize(1040, 650);
     setMinimumSize(860, 560);
-    const QByteArray forced = qgetenv("KERF_COLOR_SCHEME").trimmed().toLower();
-    if (forced == "light") m_scheme = ColorScheme::Light;
-    else if (forced == "dark") m_scheme = ColorScheme::Dark;
+    // The editor's scheme: KERF_COLOR_SCHEME's, or the system's.
+    m_scheme = editorColorScheme();
     m_inspectProject = [](const QJsonObject &request) { return callJson(kerf_project_inspect, request); };
     m_inspectPreset = [](const QJsonObject &request) { return callJson(kerf_preset_inspect, request); };
 #if KERF_LAUNCHER_OWN_TITLE_BAR
@@ -912,7 +890,7 @@ void ProjectLauncher::setColorScheme(ColorScheme scheme) {
 
 void ProjectLauncher::applyTheme(bool force) {
     if (m_theming) return;
-    const bool dark = m_scheme == ColorScheme::Dark || (m_scheme == ColorScheme::System && systemIsDark());
+    const bool dark = schemeIsDark(m_scheme);
     const QColor accent = systemAccent(dark);
     if (!force && m_themed && dark == m_theme.dark && accent == m_theme.accent) return;
     m_theming = true;

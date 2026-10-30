@@ -31,7 +31,12 @@ Workspace::Workspace(QWidget *host) : QObject(host) {
     Manager::setConfigFlag(Manager::EqualSplitOnInsertion, true);
     m_manager = new Manager(host);
     m_manager->setObjectName(QStringLiteral("dockManager"));
-    m_manager->setStyleSheet(m_manager->styleSheet() + dockStyleSheet());
+    // The dock manager's own sheet, with the editor's colours over it; both
+    // follow the appearance.
+    m_baseStyleSheet = m_manager->styleSheet();
+    m_manager->setStyleSheet(m_baseStyleSheet + dockStyleSheet(editorTheme()));
+    connect(EditorAppearance::instance(), &EditorAppearance::changed, this,
+            [this] { m_manager->setStyleSheet(m_baseStyleSheet + dockStyleSheet(editorTheme())); });
 }
 
 ads::CDockWidget *Workspace::addPanel(const QString &id, const QString &title, QWidget *content) {

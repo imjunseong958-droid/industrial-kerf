@@ -10,7 +10,7 @@
 #include "source_monitor_panel.h"
 #include "workspace.h"
 #include "editor_common.h"
-#include "editor_style.h"
+#include "editor_theme.h"
 #include "media_artwork.h"
 #include "timeline_widget.h"
 #include "viewer_widget.h"
@@ -54,6 +54,8 @@
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QStatusBar>
+#include <QTextBlock>
+#include <QTextDocument>
 #include <QTextFrame>
 #include <QToolBar>
 #include <QUrl>
@@ -80,7 +82,7 @@ protected:
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
         painter.setPen(Qt::NoPen);
-        painter.setBrush(isEnabled() ? QColor("#a7a7a7") : QColor("#727272"));
+        painter.setBrush(isEnabled() ? editorTheme().glyph : editorTheme().glyphDisabled);
         const qreal centerX = width() - 15.0;
         const qreal centerY = height() / 2.0;
         painter.drawPolygon(QPolygonF{{centerX - 4.5, centerY - 2.5},
@@ -88,6 +90,67 @@ protected:
                                       {centerX, centerY + 2.5}});
     }
 };
+
+// Toolbar symbols drawn on a shared grid so their weight and optical size match.
+QIcon toolbarIcon(const QString &glyph) {
+    QPixmap pixmap(40, 40);
+    pixmap.setDevicePixelRatio(2);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(editorTheme().glyph, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    QPainterPath path;
+    if (glyph == QStringLiteral("↓")) {
+        path.moveTo(10, 3); path.lineTo(10, 12);
+        path.moveTo(6.5, 8.5); path.lineTo(10, 12); path.lineTo(13.5, 8.5);
+        path.moveTo(4, 12); path.lineTo(4, 16); path.lineTo(16, 16); path.lineTo(16, 12);
+    } else if (glyph == QStringLiteral("↶") || glyph == QStringLiteral("↷")) {
+        if (glyph == QStringLiteral("↷")) { painter.translate(20, 0); painter.scale(-1, 1); }
+        path.moveTo(7, 4); path.lineTo(3.5, 7.5); path.lineTo(7, 11);
+        path.moveTo(4, 7.5); path.lineTo(11, 7.5);
+        path.cubicTo(17, 7.5, 17, 15.5, 11, 15.5);
+    } else if (glyph == QStringLiteral("✂")) {
+        painter.drawEllipse(QPointF(5, 5), 2.5, 2.5);
+        painter.drawEllipse(QPointF(5, 15), 2.5, 2.5);
+        path.moveTo(7, 6.5); path.lineTo(16, 16);
+        path.moveTo(7, 13.5); path.lineTo(16, 4);
+    } else {
+        path.moveTo(5, 5); path.lineTo(15, 15);
+        path.moveTo(15, 5); path.lineTo(5, 15);
+    }
+    painter.drawPath(path);
+    return QIcon(pixmap);
+}
+
+// The assistant's welcome, shown until the first message.
+QString conversationIntro(const EditorTheme &t) {
+    return QStringLiteral(
+        "<p style='margin-top:2px; color:%1; font-size:10px;'>YOUR EDITING PARTNER</p>"
+        "<p style='margin-top:2px; color:%2; font-size:14px; font-weight:600;'>Make your next cut.</p>"
+        "<p style='margin-top:4px; color:%3;'>Describe the change. Kerf uses this timeline.</p>"
+        "<p style='margin-top:10px; color:%4; font-size:10px;'>TRY ASKING</p>"
+        "<p style='margin-top:2px; color:%5;'>“Trim the opening to three seconds.”</p>"
+        "<p style='margin-top:2px; color:%5;'>“Lower the music under the dialogue.”</p>"
+        "<p style='margin-top:10px; color:%3; font-size:11px;'>Review a proposal before it changes the cut.</p>")
+        .arg(t.assistantText.name(), t.textStrong.name(), t.textSecondary.name(), t.textTertiary.name(), t.text.name());
+}
+
+// Conversation messages carry their kind, so a change of appearance can
+// recolour the ones already shown.
+enum class MessageKind { User = 1, Agent, Error };
+constexpr int kMessageKind = QTextFormat::UserProperty + 1;
+
+void styleMessage(QTextFrameFormat &frame, MessageKind kind) {
+    const EditorTheme &t = editorTheme();
+    frame.setBackground(kind == MessageKind::User ? t.messageUser : kind == MessageKind::Error ? t.errorSurface : t.messageAgent);
+    frame.setBorderBrush(kind == MessageKind::User ? t.messageUserBorder : kind == MessageKind::Error ? t.errorBorder
+                                                                                                 : t.messageAgentBorder);
+}
+
+QColor messageRoleColor(MessageKind kind) {
+    const EditorTheme &t = editorTheme();
+    return kind == MessageKind::User ? t.messageUserRole : kind == MessageKind::Error ? t.errorText : t.assistantText;
+}
 
 } // namespace
 
@@ -99,6 +162,7 @@ MainWindow::MainWindow(const QString &projectDirectory, const QString &kerfdBina
     buildUi();
     setupActions();
     setupStatusBar();
+    connect(EditorAppearance::instance(), &EditorAppearance::changed, this, &MainWindow::applyAppearance);
     m_exactSeekTimer.setSingleShot(true);
     connect(&m_exactSeekTimer, &QTimer::timeout, this, &MainWindow::settlePointerSeek);
     setConnection(QStringLiteral("connecting"));
@@ -1415,14 +1479,7 @@ void MainWindow::buildUi() {
     m_conversation->setMinimumHeight(80);
     m_conversation->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_conversation->document()->setDocumentMargin(2);
-    m_conversation->setHtml(QStringLiteral(
-        "<p style='margin-top:2px; color:#c6a15a; font-size:10px;'>YOUR EDITING PARTNER</p>"
-        "<p style='margin-top:2px; color:#f0f0f0; font-size:14px; font-weight:600;'>Make your next cut.</p>"
-        "<p style='margin-top:4px; color:#b6b6b6;'>Describe the change. Kerf uses this timeline.</p>"
-        "<p style='margin-top:10px; color:#888888; font-size:10px;'>TRY ASKING</p>"
-        "<p style='margin-top:2px; color:#dddddd;'>“Trim the opening to three seconds.”</p>"
-        "<p style='margin-top:2px; color:#dddddd;'>“Lower the music under the dialogue.”</p>"
-        "<p style='margin-top:10px; color:#999999; font-size:11px;'>Review a proposal before it changes the cut.</p>"));
+    m_conversation->setHtml(conversationIntro(editorTheme()));
     chatLayout->addWidget(m_conversation, 1);
     auto *composer = new QFrame;
     m_chatComposer = composer;
@@ -2180,40 +2237,13 @@ void MainWindow::setupActions() {
         toolbar->addWidget(menuButton);
         menuBar()->hide();
     }
-    // Draw toolbar symbols on a shared grid so their weight and optical size match.
-    auto icon = [](const QString &glyph) {
-        QPixmap pixmap(40, 40);
-        pixmap.setDevicePixelRatio(2);
-        pixmap.fill(Qt::transparent);
-        QPainter painter(&pixmap);
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(QPen(QColor("#d7d7d7"), 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        QPainterPath path;
-        if (glyph == QStringLiteral("↓")) {
-            path.moveTo(10, 3); path.lineTo(10, 12);
-            path.moveTo(6.5, 8.5); path.lineTo(10, 12); path.lineTo(13.5, 8.5);
-            path.moveTo(4, 12); path.lineTo(4, 16); path.lineTo(16, 16); path.lineTo(16, 12);
-        } else if (glyph == QStringLiteral("↶") || glyph == QStringLiteral("↷")) {
-            if (glyph == QStringLiteral("↷")) { painter.translate(20, 0); painter.scale(-1, 1); }
-            path.moveTo(7, 4); path.lineTo(3.5, 7.5); path.lineTo(7, 11);
-            path.moveTo(4, 7.5); path.lineTo(11, 7.5);
-            path.cubicTo(17, 7.5, 17, 15.5, 11, 15.5);
-        } else if (glyph == QStringLiteral("✂")) {
-            painter.drawEllipse(QPointF(5, 5), 2.5, 2.5);
-            painter.drawEllipse(QPointF(5, 15), 2.5, 2.5);
-            path.moveTo(7, 6.5); path.lineTo(16, 16);
-            path.moveTo(7, 13.5); path.lineTo(16, 4);
-        } else {
-            path.moveTo(5, 5); path.lineTo(15, 15);
-            path.moveTo(15, 5); path.lineTo(5, 15);
-        }
-        painter.drawPath(path);
-        return QIcon(pixmap);
-    };
     const auto toolbarCommand = [&](const QString &id, const QString &text, const QString &glyph = QString()) {
         QAction *action = m_commands->action(id);
         action->setIconText(text);
-        if (!glyph.isEmpty()) action->setIcon(icon(glyph));
+        if (!glyph.isEmpty()) {
+            action->setIcon(toolbarIcon(glyph));
+            m_toolbarGlyphs.append({action, glyph});
+        }
         toolbar->addAction(action);
         return qobject_cast<QToolButton *>(toolbar->widgetForAction(action));
     };
@@ -2843,6 +2873,7 @@ QWidget *MainWindow::buildTransport() {
         auto *control = new QToolButton;
         control->setObjectName(QStringLiteral("transportButton"));
         control->setProperty("command", command);
+        control->setProperty("glyph", static_cast<int>(glyph));
         control->setIcon(transportIcon(glyph));
         control->setIconSize(QSize(14, 14));
         connect(control, &QToolButton::clicked, this, [this, command] { triggerCommand(command); });
@@ -3372,10 +3403,11 @@ void MainWindow::appendConversation(const QString &speaker, const QString &text)
     frame.setBottomMargin(10);
     frame.setLeftMargin(user ? 32 : 0);
     frame.setRightMargin(user ? 0 : 16);
-    frame.setBackground(QColor(user ? "#333333" : error ? "#342729" : "#262626"));
+    const MessageKind kind = user ? MessageKind::User : error ? MessageKind::Error : MessageKind::Agent;
+    frame.setProperty(kMessageKind, static_cast<int>(kind));
+    styleMessage(frame, kind);
     frame.setBorder(1);
     frame.setBorderStyle(QTextFrameFormat::BorderStyle_Solid);
-    frame.setBorderBrush(QColor(error ? "#94666b" : user ? "#494949" : "#353535"));
     cursor = cursor.insertFrame(frame)->firstCursorPosition();
     QTextBlockFormat block;
     block.setBottomMargin(7);
@@ -3383,16 +3415,60 @@ void MainWindow::appendConversation(const QString &speaker, const QString &text)
     QTextCharFormat role;
     role.setFontWeight(QFont::DemiBold);
     role.setFontPointSize(9);
-    role.setForeground(QColor(error ? "#efb3b8" : user ? "#bfbfbf" : "#e6b450"));
+    role.setProperty(kMessageKind, static_cast<int>(kind));
+    role.setForeground(messageRoleColor(kind));
     cursor.insertText(user ? QStringLiteral("YOU") : error ? QStringLiteral("COULDN’T COMPLETE EDIT") : QStringLiteral("KERF"), role);
     QTextBlockFormat body;
     body.setLineHeight(145, QTextBlockFormat::ProportionalHeight);
+    // The body takes the conversation's own text colour, which follows the appearance.
     QTextCharFormat bodyText;
-    bodyText.setForeground(QColor("#e4e4e4"));
     cursor.insertBlock(body, bodyText);
     cursor.insertText(text);
     if (speaker == QStringLiteral("Kerf")) m_agentCursor = cursor;
     if (follow) m_conversation->verticalScrollBar()->setValue(m_conversation->verticalScrollBar()->maximum());
+}
+
+void MainWindow::applyAppearance() {
+    for (const auto &[action, glyph] : std::as_const(m_toolbarGlyphs)) action->setIcon(toolbarIcon(glyph));
+    for (QToolButton *button : std::as_const(m_transportButtons)) {
+        const auto glyph = static_cast<TransportGlyph>(button->property("glyph").toInt());
+        button->setIcon(transportIcon(button == m_transportPlay && m_transportShowsPause ? TransportGlyph::Pause : glyph));
+    }
+    for (QAction *action : std::as_const(m_maskTools)) action->setIcon(maskToolIcon(static_cast<MaskTool>(action->data().toInt())));
+    if (m_conversationEmpty) {
+        m_conversation->setHtml(conversationIntro(editorTheme()));
+        return;
+    }
+    // Recolour the messages already shown: their frames and the speaker
+    // names over them; bodies take the conversation's text colour.
+    QTextDocument *document = m_conversation->document();
+    QList<QPair<QTextFrame *, MessageKind>> frames;
+    for (QTextFrame *frame : document->rootFrame()->childFrames()) {
+        const int kind = frame->frameFormat().intProperty(kMessageKind);
+        if (kind) frames.append({frame, static_cast<MessageKind>(kind)});
+    }
+    for (const auto &[frame, kind] : std::as_const(frames)) {
+        QTextFrameFormat format = frame->frameFormat();
+        styleMessage(format, kind);
+        frame->setFrameFormat(format);
+    }
+    struct Run { int start; int end; MessageKind kind; };
+    QList<Run> runs;
+    for (QTextBlock block = document->begin(); block.isValid(); block = block.next()) {
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const QTextFragment fragment = it.fragment();
+            if (const int kind = fragment.charFormat().intProperty(kMessageKind))
+                runs.append({fragment.position(), fragment.position() + fragment.length(), static_cast<MessageKind>(kind)});
+        }
+    }
+    for (const Run &run : std::as_const(runs)) {
+        QTextCursor cursor(document);
+        cursor.setPosition(run.start);
+        cursor.setPosition(run.end, QTextCursor::KeepAnchor);
+        QTextCharFormat color;
+        color.setForeground(messageRoleColor(run.kind));
+        cursor.mergeCharFormat(color);
+    }
 }
 
 void MainWindow::appendConversationNote(const QString &kind, const QString &text) {

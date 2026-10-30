@@ -43,6 +43,8 @@ set(KERF_QT_SOURCES
     editor_common.cpp
     editor_common.h
     editor_style.h
+    editor_theme.cpp
+    editor_theme.h
     effect_controls_panel.cpp
     effect_controls_panel.h
     effects_panel.cpp

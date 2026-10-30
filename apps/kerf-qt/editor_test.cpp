@@ -25,6 +25,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFrame>
+#include <QGuiApplication>
 #include <QGroupBox>
 #include <QCheckBox>
 #include <QImage>
@@ -37,6 +38,7 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLinearGradient>
 #include <QMenuBar>
 #include <QPainter>
 #include <QPixmap>
@@ -44,8 +46,10 @@
 #include <QProcess>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QRegularExpression>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QScopeGuard>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSignalSpy>
@@ -61,9 +65,11 @@
 #include <QTextCursor>
 #include <QTextEdit>
 #include <QTextFrame>
+#include <QToolBar>
 #include <QToolButton>
 #include <QWidget>
 
+#include <DockManager.h>
 #include <DockWidget.h>
 
 #include <algorithm>
@@ -144,7 +150,10 @@ private slots:
 
     void initTestCase() {
         QApplication::setStyle(QStringLiteral("Fusion"));
-        qApp->setStyleSheet(editorStyleSheet());
+        // Tests draw in the dark appearance unless they pick one: offscreen
+        // reports a light system, and painted colours are checked in dark.
+        setEditorColorScheme(ColorScheme::Dark);
+        QVERIFY(editorTheme().dark);
     }
 
     void inboundMcpConfigValidatesStdioShape() {
@@ -2377,6 +2386,278 @@ private slots:
         ProjectLauncher::clearRecentProjects();
         QSettings().remove(QStringLiteral("launcher"));
         QSettings().remove(QStringLiteral("projects"));
+    }
+
+    // Saturated amber or gold, as the editor's old accent was.
+    static bool isAmber(const QColor &color) {
+        return color.hue() >= 30 && color.hue() <= 52 && color.saturation() > 140 && color.value() > 150;
+    }
+    static int amberPixels(const QImage &image) {
+        int count = 0;
+        for (int y = 0; y < image.height(); y += 2)
+            for (int x = 0; x < image.width(); x += 2)
+                if (isAmber(image.pixelColor(x, y))) ++count;
+        return count;
+    }
+    // The colour most of `image` is.
+    static QRgb dominantColor(const QImage &image) {
+        QHash<QRgb, int> counts;
+        for (int y = 0; y < image.height(); y += 2)
+            for (int x = 0; x < image.width(); x += 2) ++counts[image.pixel(x, y)];
+        QRgb best = 0;
+        int most = 0;
+        for (auto it = counts.cbegin(); it != counts.cend(); ++it)
+            if (it.value() > most) { most = it.value(); best = it.key(); }
+        return best;
+    }
+
+    // A cut with every kind of clip: two picture tracks (one of titles), a
+    // caption track, dialogue and music, a marker, and a pending proposal
+    // that trims one clip, drops another, and adds a title.
+    static QJsonObject showcaseSnapshot(int revision, const QString &projection) {
+        const auto clip = [](const char *id, const char *source, double start, double duration, double in = 0.0) {
+            return QJsonObject{{"id", id}, {"kind", "media"}, {"sourceId", source}, {"timelineStart", start},
+                               {"duration", duration}, {"in", in}, {"out", in + duration}};
+        };
+        QJsonObject graded = clip("v1c", "drone", 11.0, 7.0);
+        graded.insert("effects", QJsonArray{QJsonObject{{"fx", "color.grade"}, {"version", 1}, {"enabled", true}, {"params", QJsonObject{}}}});
+        const QJsonArray sources{
+            QJsonObject{{"id", "wide"}, {"path", "media/harbor-wide.mov"}, {"width", 1920}, {"height", 1080}, {"duration", 20}, {"fps", 24}, {"hasAudio", true}},
+            QJsonObject{{"id", "close"}, {"path", "media/fisher-close.mov"}, {"width", 1920}, {"height", 1080}, {"duration", 20}, {"fps", 24}, {"hasAudio", true}},
+            QJsonObject{{"id", "drone"}, {"path", "media/drone-pass.mov"}, {"width", 1920}, {"height", 1080}, {"duration", 20}, {"fps", 24}},
+            QJsonObject{{"id", "score"}, {"path", "media/harbor-score.wav"}, {"duration", 40}, {"hasAudio", true}}};
+        const QJsonObject title{{"id", "t1"}, {"kind", "generator"}, {"fx", "title"}, {"name", "Harbor Teaser"},
+                                {"timelineStart", 1.0}, {"duration", 4.0}};
+        const auto caption = [](const char *id, const char *text, double start, double duration) {
+            return QJsonObject{{"id", id}, {"kind", "caption"}, {"text", text}, {"name", text}, {"timelineStart", start}, {"duration", duration}};
+        };
+        const auto timeline = [&](bool proposed) {
+            QJsonObject v1b = clip("v1b", "close", 6.0, proposed ? 3.5 : 5.0, 2.0);
+            QJsonArray v1{clip("v1a", "wide", 0.0, 6.0), v1b};
+            if (!proposed) v1.append(graded);
+            QJsonArray titles{title};
+            if (proposed) titles.append(QJsonObject{{"id", "t2"}, {"kind", "generator"}, {"fx", "title"}, {"name", "Lower third"},
+                                                    {"timelineStart", 12.0}, {"duration", 3.0}});
+            return QJsonObject{
+                {"name", "Harbor Teaser"}, {"fps", 24}, {"width", 1920}, {"height", 1080}, {"sources", sources},
+                {"markers", QJsonArray{QJsonObject{{"id", "m1"}, {"time", 6.0}, {"duration", 0.0}, {"color", "red"}},
+                                       QJsonObject{{"id", "m2"}, {"time", 13.0}, {"duration", 2.0}, {"color", "blue"}}}},
+                {"tracks", QJsonArray{
+                    QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", v1}},
+                    QJsonObject{{"id", "V2"}, {"type", "video"}, {"name", "Titles"}, {"clips", titles}},
+                    QJsonObject{{"id", "S1"}, {"type", "subtitle"}, {"name", "Captions"}, {"clips", QJsonArray{
+                        caption("c1", "We open on the harbor at dawn.", 2.0, 4.0),
+                        caption("c2", "Every boat has a name.", 9.0, 4.0)}}},
+                    QJsonObject{{"id", "A1"}, {"type", "audio"}, {"name", "Dialogue"}, {"clips", QJsonArray{
+                        clip("a1a", "wide", 0.0, 6.0), clip("a1b", "close", 6.0, 5.0, 2.0)}}},
+                    QJsonObject{{"id", "A2"}, {"type", "audio"}, {"name", "Music"}, {"clips", QJsonArray{
+                        clip("a2", "score", 0.0, 18.0)}}}}}};
+        };
+        const QJsonObject proposal{{"status", "pending"}, {"proposalId", "p7"},
+                                   {"script", "trim v1b out -36f\nremove v1c\nadd title t2 at 00:00:12:00\n"},
+                                   {"documentDiff", "-    clip v1b dur=5s\n+    clip v1b dur=3.5s\n-    clip v1c\n+    title t2\n"}};
+        return QJsonObject{{"revision", revision}, {"duration", 18}, {"projectionStatus", projection},
+                           {"timeline", timeline(false)}, {"pendingProposal", proposal}, {"proposalTimeline", timeline(true)}};
+    }
+
+    // Stand-in thumbnails and waveforms, so filmstrips and waves draw
+    // without FFmpeg.
+    static void fakeArtwork(MediaArtwork *artwork) {
+        const auto frame = [](const QColor &sky, const QColor &ground) {
+            QImage image(160, 90, QImage::Format_RGB32);
+            QPainter painter(&image);
+            QLinearGradient gradient(0, 0, 0, 90);
+            gradient.setColorAt(0, sky.lighter(130));
+            gradient.setColorAt(0.55, sky);
+            gradient.setColorAt(0.56, ground);
+            gradient.setColorAt(1, ground.darker(160));
+            painter.fillRect(image.rect(), gradient);
+            painter.setBrush(QColor(255, 240, 220));
+            painter.setPen(Qt::NoPen);
+            painter.drawEllipse(QPointF(118, 30), 9, 9);
+            return image;
+        };
+        artwork->frames.insert(QStringLiteral("wide"), frame(QColor("#6f8fb5"), QColor("#2c4a5e")));
+        artwork->frames.insert(QStringLiteral("close"), frame(QColor("#b58a6f"), QColor("#4e3b2c")));
+        artwork->frames.insert(QStringLiteral("drone"), frame(QColor("#8fb5a8"), QColor("#2e5e4a")));
+        for (const char *id : {"wide", "close", "score"}) {
+            QImage wave(2048, 48, QImage::Format_ARGB32);
+            wave.fill(Qt::transparent);
+            QPainter painter(&wave);
+            const double seed = qHash(QByteArray(id)) % 97;
+            for (int x = 0; x < wave.width(); x += 2) {
+                const double level = 0.25 + 0.7 * std::abs(std::sin(x * 0.013 + seed) * std::sin(x * 0.0021 + seed * 0.5));
+                const int half = static_cast<int>(level * 23);
+                painter.fillRect(QRect(x, 24 - half, 2, half * 2), Qt::white);
+            }
+            artwork->waves.insert(QString::fromLatin1(id), wave);
+        }
+        emit artwork->changed();
+    }
+
+    void editorRendersBothAppearances() {
+        QSettings().remove(QStringLiteral("workspace"));
+        const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
+        const auto save = [&shots](const QImage &image, const QString &name) {
+            if (!shots.isEmpty()) QVERIFY(image.save(QDir(shots).filePath(name + QStringLiteral(".png"))));
+        };
+        // Back to the tests' dark appearance however this test ends.
+        const auto restore = qScopeGuard([] {
+            setEditorColorScheme(ColorScheme::Dark);
+            QSettings().remove(QStringLiteral("workspace"));
+        });
+        QSignalSpy changed(EditorAppearance::instance(), &EditorAppearance::changed);
+        const QJsonObject preset{{"name", "Harbor Intro"}, {"document", "kerf 1\nproject name=\"Harbor Intro\"\n"}, {"sequence", "s1"},
+            {"slots", QJsonArray{
+                QJsonObject{{"id", "Opening"}, {"seconds", 4}, {"video", true}, {"audio", true},
+                    {"clips", QJsonArray{QJsonObject{{"id", "v1a"}, {"name", "Wide"}, {"sequence", "s1"}, {"track", "V1"}, {"at", "00:00:00:00"}}}},
+                    {"fits", QJsonArray{QJsonObject{{"media", "wide"}, {"latestFrame", 380}}, QJsonObject{{"media", "close"}, {"latestFrame", 380}}}}},
+                QJsonObject{{"id", "Logo"}, {"seconds", 2}, {"video", true}, {"audio", false},
+                    {"clips", QJsonArray{QJsonObject{{"id", "t1"}, {"name", "Logo"}, {"sequence", "s1"}, {"track", "V2"}, {"at", "00:00:01:00"}}}},
+                    {"fits", QJsonArray{QJsonObject{{"media", "drone"}, {"latestFrame", 432}}}}}}},
+            {"textSlots", QJsonObject{{"title1", "Harbor Teaser"}}}};
+
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            const bool dark = scheme == ColorScheme::Dark;
+            const QString name = dark ? QStringLiteral("dark") : QStringLiteral("light");
+            // Each picture starts from the Editing layout.
+            QSettings().remove(QStringLiteral("workspace"));
+            // The API KERF_COLOR_SCHEME feeds.
+            setEditorColorScheme(scheme);
+            QCOMPARE(editorColorScheme(), scheme);
+            const EditorTheme &theme = editorTheme();
+            QCOMPARE(theme.dark, dark);
+            QVERIFY(dark ? theme.window.lightness() < 40 : theme.window.lightness() > 220);
+            QVERIFY(dark ? theme.text.lightness() > 180 : theme.text.lightness() < 60);
+            // Every token is filled in, and nothing amber or gold is left.
+            const QString sheet = qApp->styleSheet() + dockStyleSheet(theme);
+            QVERIFY(!sheet.contains(QLatin1Char('@')));
+            static const QRegularExpression hex(QStringLiteral("#[0-9a-fA-F]{6,8}\\b"));
+            for (auto it = hex.globalMatch(sheet); it.hasNext();) {
+                const QString code = it.next().captured();
+                QVERIFY2(!isAmber(QColor(code)), qPrintable(code));
+            }
+            // The system's Window and Accent stay the platform's, so
+            // detection keeps reading the system and not the theme.
+            QVERIFY(!QGuiApplication::palette().isBrushSet(QPalette::Active, QPalette::Accent));
+            QVERIFY(!QGuiApplication::palette().isBrushSet(QPalette::Active, QPalette::Window));
+            QCOMPARE(QGuiApplication::palette().color(QPalette::Active, QPalette::Base), theme.field);
+            // Clip labels read on their headers.
+            for (const ClipKind kind : {ClipKind::Video, ClipKind::Audio, ClipKind::Music, ClipKind::Generator, ClipKind::Caption})
+                QVERIFY(contrastRatio(theme.clip(kind).label, theme.clip(kind).header) >= 4.5);
+            QVERIFY(contrastRatio(theme.accentText, theme.panel) >= 4.5);
+            QVERIFY(contrastRatio(theme.onAssistant, theme.assistantStrong) >= 4.5);
+            QCOMPARE(theme.viewerSurround, QColor("#1c1c1c"));
+
+            MainWindow window{QString(), QString()};
+            window.setConnection(QStringLiteral("ready"));
+            window.applySnapshot(showcaseSnapshot(12, QStringLiteral("clean")));
+            window.selectClip(QStringLiteral("v1b"));
+            window.handleEvent(QJsonObject{{"type", "collab"}, {"status", sharedStatus()}});
+            window.handleEvent(QJsonObject{{"type", "preset_library"}, {"directory", "presets"}, {"presets", QJsonArray{
+                QJsonObject{{"path", "presets/harbor-intro.kerfpreset"}, {"name", "Harbor Intro"}, {"author", "jun"},
+                            {"updated", "2026-10-30T09:00:00Z"}, {"slots", QJsonArray{
+                                QJsonObject{{"id", "Opening"}, {"seconds", 4}, {"video", true}, {"audio", true}, {"clips", 2}},
+                                QJsonObject{{"id", "Logo"}, {"seconds", 2}, {"video", true}, {"audio", false}, {"clips", 1}}}},
+                            {"texts", QJsonObject{{"title1", "Title"}}}},
+                QJsonObject{{"path", "presets/lower-thirds.kerfpreset"}, {"name", "Lower Thirds"}, {"author", "mina"},
+                            {"updated", "2026-10-28T15:30:00Z"}, {"slots", QJsonArray{}}, {"texts", QJsonObject{{"name", "Name"}, {"role", "Role"}}}},
+                QJsonObject{{"path", "presets/old.kerfpreset"}, {"name", "old"}, {"error", "line 3: unknown statement"}}}}});
+            fakeArtwork(window.m_artwork);
+            window.resize(1440, 900);
+            window.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&window));
+            // Test builds have no runtime to send to; that is not this picture's subject.
+            window.m_errorBanner->hide();
+            // Nothing under the pointer.
+            QTest::mouseMove(window.statusBar(), QPoint(window.statusBar()->width() / 2, 4));
+            QVERIFY(window.m_timeline->hasProposal());
+            QVERIFY(window.m_aiBar->isVisible());
+            QCoreApplication::processEvents();
+            const QImage image = window.grab().toImage();
+            // The bars are the theme's: toolbar, status bar, and dock title strips.
+            auto *toolbar = window.findChild<QToolBar *>();
+            QVERIFY(toolbar);
+            QCOMPARE(dominantColor(toolbar->grab().toImage()), theme.chrome.rgb());
+            QCOMPARE(dominantColor(window.statusBar()->grab().toImage()), theme.statusBar.rgb());
+            QVERIFY(dark ? qGray(dominantColor(toolbar->grab().toImage())) < 40 : qGray(dominantColor(toolbar->grab().toImage())) > 220);
+            // The agent's bar is the assistant's purple, not amber.
+            const QImage aiBar = window.m_aiBar->grab().toImage();
+            QCOMPARE(dominantColor(aiBar), theme.assistantSurface.rgb());
+            QCOMPARE(amberPixels(aiBar), 0);
+            save(image, QStringLiteral("editor-%1").arg(name));
+
+            // Settings.
+            window.m_preferences->show();
+            QVERIFY(QTest::qWaitForWindowExposed(window.m_preferences));
+            QCoreApplication::processEvents();
+            const QImage settings = window.m_preferences->grab().toImage();
+            QCOMPARE(dominantColor(settings), theme.dialog.rgb());
+            save(settings, QStringLiteral("settings-%1").arg(name));
+            window.m_preferences->hide();
+
+            // A representative dialog: the preset's media bindings.
+            QTimer::singleShot(0, &window, [&] {
+                auto *dialog = window.findChild<QDialog *>(QStringLiteral("presetBindingsDialog"));
+                QVERIFY(dialog);
+                QTimer::singleShot(2000, dialog, &QDialog::reject);
+                if (auto *choice = dialog->findChild<QComboBox *>(QStringLiteral("presetMedia_Opening"))) choice->setCurrentIndex(1);
+                QCoreApplication::processEvents();
+                const QImage bindings = dialog->grab().toImage();
+                QCOMPARE(dominantColor(bindings), theme.dialog.rgb());
+                save(bindings, QStringLiteral("dialog-%1").arg(name));
+                dialog->reject();
+            });
+            window.showPresetBindings(QStringLiteral("presets/harbor-intro.kerfpreset"), preset);
+
+            // States: project.kerf changed on disk, the agent's proposal and
+            // next steps, and a conversation in the assistant panel.
+            window.applySnapshot(showcaseSnapshot(13, QStringLiteral("diverged")));
+            showAssistant(window);
+            window.appendConversation(QStringLiteral("You"), QStringLiteral("Tighten the fisher close-up and drop the drone pass."));
+            window.appendConversation(QStringLiteral("Kerf"),
+                QStringLiteral("I trimmed the close-up by 1.5 seconds, removed the drone pass, and added a lower third at 12 s."));
+            window.appendConversation(QStringLiteral("Error"), QStringLiteral("The music cue could not be found on disk."));
+            window.appendConversationNote(QStringLiteral("Tool"), QStringLiteral("Trimmed v1b · removed v1c"));
+            window.showNextSteps(QJsonArray{QJsonObject{{"label", "Add captions"}, {"request", "Caption the dialogue"}},
+                                            QJsonObject{{"label", "Duck the music"}, {"request", "Lower the music under the dialogue"}}});
+            QCoreApplication::processEvents();
+            window.m_errorBanner->hide();
+            QCoreApplication::processEvents();
+            QVERIFY(!window.m_divergedBanner->isHidden());
+            QVERIFY(window.m_aiBar->isVisible());
+            // The proposal's default button, Accept, is the accent.
+            QPushButton *primary = window.m_acceptButton;
+            QVERIFY(primary->isVisible() && primary->isEnabled());
+            QCOMPARE(primary->objectName(), QStringLiteral("primaryButton"));
+            const QImage primaryImage = primary->grab().toImage();
+            const QColor fill = primaryImage.pixelColor(QPoint(6, primary->height() / 2) * primaryImage.devicePixelRatio());
+            QVERIFY2(std::abs(fill.hue() - theme.accent.hue()) <= 4 && std::abs(fill.value() - theme.accent.value()) <= 24,
+                     qPrintable(fill.name()));
+            const QImage states = window.grab().toImage();
+            QCOMPARE(amberPixels(window.m_divergedBanner->grab().toImage()), 0);
+            save(states, QStringLiteral("states-%1").arg(name));
+            window.close();
+        }
+        QVERIFY(changed.count() >= 2);
+
+        // A change of appearance reaches a window that is already open: its
+        // docks and the messages it has shown.
+        setEditorColorScheme(ColorScheme::Light);
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.appendConversation(QStringLiteral("Kerf"), QStringLiteral("Done."));
+        QCOMPARE(window.m_conversation->document()->rootFrame()->childFrames().constFirst()->frameFormat().background().color(),
+                 editorTheme().messageAgent);
+        const int before = changed.count();
+        setEditorColorScheme(ColorScheme::Dark);
+        QCOMPARE(changed.count(), before + 1);
+        QVERIFY(window.m_workspace->manager()->styleSheet().contains(editorTheme().panelTitle.name()));
+        QCOMPARE(window.m_conversation->document()->rootFrame()->childFrames().constFirst()->frameFormat().background().color(),
+                 editorTheme().messageAgent);
+        // Re-applying the same appearance changes nothing.
+        applyEditorAppearance();
+        QCOMPARE(changed.count(), before + 1);
     }
 
     // Answer the next modal question with `button`, checking that it asks `text`.

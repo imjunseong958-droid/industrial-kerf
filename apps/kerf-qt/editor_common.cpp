@@ -1,4 +1,5 @@
 #include "editor_common.h"
+#include "editor_theme.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -251,7 +252,7 @@ QIcon transportIcon(TransportGlyph glyph) {
     QPainter painter(&pixmap);
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor("#d7d7d7"));
+    painter.setBrush(editorTheme().glyph);
     const auto triangle = [&painter](qreal base, qreal tip) {
         painter.drawPolygon(QPolygonF{{base, 3.5}, {tip, 8.0}, {base, 12.5}});
     };
@@ -272,7 +273,7 @@ QIcon maskToolIcon(MaskTool tool) {
     pixmap.fill(Qt::transparent);
     QPainter painter(&pixmap);
     painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(QPen(QColor("#d7d7d7"), 1.4));
+    painter.setPen(QPen(editorTheme().glyph, 1.4));
     painter.setBrush(Qt::NoBrush);
     switch (tool) {
     case MaskTool::None: break;
@@ -282,7 +283,7 @@ QIcon maskToolIcon(MaskTool tool) {
         const QPolygonF corners{{2.5, 12.5}, {5.5, 3.0}, {13.0, 6.0}, {10.0, 13.0}};
         painter.drawPolygon(corners);
         painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor("#d7d7d7"));
+        painter.setBrush(editorTheme().glyph);
         for (const QPointF &corner : corners) painter.drawRect(QRectF(corner - QPointF(1.5, 1.5), QSizeF(3.0, 3.0)));
         break;
     }

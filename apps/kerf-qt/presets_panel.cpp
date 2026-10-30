@@ -1,4 +1,5 @@
 #include "presets_panel.h"
+#include "editor_theme.h"
 
 #include <QAction>
 #include <QDateTime>
@@ -131,7 +132,7 @@ void PresetsPanel::setLibrary(const QJsonObject &library, const QString &project
         item->setData(kPathRole, path);
         item->setData(kReadableRole, error.isEmpty());
         item->setToolTip(tip.join(QLatin1Char('\n')));
-        if (!error.isEmpty()) item->setForeground(QColor("#8a6f72"));
+        if (!error.isEmpty()) item->setForeground(editorTheme().error);
         m_list->addItem(item);
         if (path == current) m_list->setCurrentItem(item);
     }

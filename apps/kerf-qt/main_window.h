@@ -142,6 +142,9 @@ protected:
 
 private:
     void buildUi();
+    // Rebuild what caches the theme's colours: symbols drawn in code and the
+    // conversation's messages.
+    void applyAppearance();
     // Window ▸ Workspaces: the workspaces, and saving or resetting the current one.
     void buildWorkspaceMenu(QMenu *menu);
     void syncCanvasPreset(const QSize &size);
@@ -244,6 +247,8 @@ private:
     CommandRegistry *m_commands = nullptr;
     QHash<QString, std::function<void()>> m_commandHandlers;
     QList<QToolButton *> m_transportButtons;
+    // Toolbar actions and the symbols drawn for them.
+    QList<QPair<QAction *, QString>> m_toolbarGlyphs;
     QToolButton *m_transportPlay = nullptr;
     QLabel *m_transportTime = nullptr;
     QLabel *m_transportDuration = nullptr;

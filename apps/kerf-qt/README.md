@@ -22,6 +22,12 @@ The positional arguments may also be supplied as `KERF_PROJECT_DIR` and
 run, add `--screenshot /tmp/kerf.png --quit-after-ms 900`; without a project
 it captures the launcher.
 
+The editor and the launcher follow the system's light or dark appearance and
+accent colour, and switch live when either changes; `KERF_COLOR_SCHEME=light`
+or `dark` picks one for the run. Agent work (the AI bar, proposals, Ask
+Kerf) is tinted with the system purple; the viewers keep a neutral dark
+surround in both appearances.
+
 Sources live in the `kerf` namespace, one class per header/source pair:
 `main_window` (the window, which builds and connects the panels),
 `project_launcher` (the Choose a Project window), `workspace` (the docked
@@ -31,7 +37,10 @@ project's preset library), `source_monitor_panel`, `effect_controls_panel`,
 focus-region picker),
 `command_registry` (the editor's side of the command registry), and
 `media_artwork` (background thumbnails and waveforms). `editor_common`
-holds shared constants and helpers, `editor_style.h` the stylesheet, and
+holds shared constants and helpers, `editor_theme` the appearance (the
+`EditorTheme` colour roles every widget draws with, light and dark, and the
+system appearance and accent detection the launcher shares),
+`editor_style.h` the stylesheet generated from those roles, and
 `main.cpp` only `main()`. `editor_test.cpp` builds into `kerf-qt-tests`
 instead of `main.cpp`.
 
@@ -124,7 +133,7 @@ at the clip's in point.
 
 A project is a folder: `project.kerf`, a `media/` folder, and a `presets/`
 library. Started without one, Kerf opens the launcher, like an edit suite's
-Choose a Project window. Unlike the editor, it follows the system's light or
+Choose a Project window. Like the editor, it follows the system's light or
 dark appearance and accent colour, and switches when they change
 (`KERF_COLOR_SCHEME=light` or `dark` picks one). New Project offers Empty
 16:9, Vertical 9:16, and Square 1:1 templates; Details sets the name,
@@ -281,8 +290,11 @@ The tests cover disconnected controls, reconnection state, error deduplication,
 long timeline fit, scrolling through many tracks, complete proposal review,
 the sync chip and Collaborate requests, the diverged banner, the Presets
 panel, media badges, and the launcher's validation (test builds never start
-launcher tasks) and its look in both appearances; with `KERF_SCREENSHOT_DIR`
-set, `launcherRendersBothAppearances` saves each page as
-`<page>-<light|dark>.png`.
+launcher tasks), and the launcher's and the editor's looks in both
+appearances; with `KERF_SCREENSHOT_DIR` set, `launcherRendersBothAppearances`
+saves each page as `<page>-<light|dark>.png`, and
+`editorRendersBothAppearances` saves the editor (`editor-`), Settings
+(`settings-`), the preset bindings dialog (`dialog-`), and the diverged banner
+with an agent proposal and conversation (`states-`), each `<light|dark>.png`.
 The macOS CI job also runs the real bridge/media workflow in
 `scripts/test-kerf-qt-bridge.py`.

@@ -3,6 +3,7 @@
 #include <QByteArray>
 #include <QHash>
 #include <QObject>
+#include <QString>
 #include <QStringList>
 
 class QWidget;
@@ -54,6 +55,7 @@ private:
     bool restore(const QByteArray &layout);
 
     ads::CDockManager *m_manager = nullptr;
+    QString m_baseStyleSheet;
     QHash<QString, ads::CDockWidget *> m_panels;
     QByteArray m_editing;
     QString m_current;

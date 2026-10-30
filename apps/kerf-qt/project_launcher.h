@@ -1,5 +1,6 @@
 #pragma once
 
+#include "editor_theme.h"
 #include "launcher_style.h"
 
 #include <QDialog>
@@ -39,8 +40,9 @@ class ProjectLauncher final : public QDialog {
 public:
     enum Page { NewProject, Recent, FromPreset, Clone };
     // System follows macOS's appearance as it changes; KERF_COLOR_SCHEME=light
-    // or dark picks one for the whole run.
-    enum class ColorScheme { System, Light, Dark };
+    // or dark picks one for the whole run. A launcher starts in the editor's
+    // scheme (editorColorScheme()).
+    using ColorScheme = kerf::ColorScheme;
 
     // `kerfdBinary` makes the first edit of a project made from a preset.
     explicit ProjectLauncher(const QString &kerfdBinary = QString(), QWidget *parent = nullptr);
