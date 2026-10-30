@@ -1892,7 +1892,7 @@ private slots:
         QCOMPARE(window.m_syncChip->property("state").toString(), QStringLiteral("idle"));
         const int count = window.m_activityList->count();
         QVERIFY(window.m_activityList->item(count - 2)->text().endsWith(QStringLiteral("jun · Trimmed c3")));
-        QVERIFY(window.m_activityList->item(count - 1)->text().endsWith(QStringLiteral("Kept yours · c3 duration")));
+        QVERIFY(window.m_activityList->item(count - 1)->text().endsWith(QStringLiteral("Kept yours · project.kerf: c3 duration")));
         QVERIFY(window.m_syncChip->toolTip().contains(QStringLiteral("jun · Trimmed c3")));
         QCOMPARE(window.statusBar()->currentMessage(), QStringLiteral("Synced: 1 commit in, pushed, 1 change kept yours"));
         QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("preset_library"));
@@ -2377,6 +2377,111 @@ private slots:
         ProjectLauncher::clearRecentProjects();
         QSettings().remove(QStringLiteral("launcher"));
         QSettings().remove(QStringLiteral("projects"));
+    }
+
+    // Answer the next modal question with `button`, checking that it asks `text`.
+    static void answerQuestion(QWidget *parent, QDialogButtonBox::StandardButton button, const QString &text) {
+        QTimer::singleShot(0, parent, [button, text] {
+            QWidget *modal = QApplication::activeModalWidget();
+            auto *buttons = modal ? modal->findChild<QDialogButtonBox *>() : nullptr;
+            if (!buttons || !buttons->button(button)) {
+                if (modal) modal->close();
+                QFAIL("no question");
+            }
+            const QString asked = modal->property("text").toString();
+            buttons->button(button)->click();
+            QCOMPARE(asked, text);
+        });
+    }
+
+    void pullRequestsOpenWithoutGh() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        QJsonObject status = sharedStatus();
+        status.insert("branch", "color");
+        status.insert("gh", false);
+        window.handleEvent(QJsonObject{{"type", "collab"}, {"status", status}});
+        QVERIFY(window.m_commands->isEnabled(QStringLiteral("collab.pullRequest")));
+        // Without gh the bridge answers with GitHub's page for starting one.
+        const QString compare = QStringLiteral("https://github.com/jun/film/compare/color?expand=1");
+        window.handleEvent(QJsonObject{{"type", "collab_pull_request"}, {"url", compare}, {"created", false}});
+        QCOMPARE(window.statusBar()->currentMessage(), QStringLiteral("Opened GitHub's page for a new pull request: ") + compare);
+        const QString existing = QStringLiteral("https://github.com/jun/compare/pull/4");
+        window.handleEvent(QJsonObject{{"type", "collab_pull_request"}, {"url", existing}, {"created", false}});
+        QCOMPARE(window.statusBar()->currentMessage(), QStringLiteral("This branch already has a pull request: ") + existing);
+    }
+
+    void syncConflictsSayWhereAndWhoseVersionWasKept() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.handleEvent(QJsonObject{{"type", "collab"}, {"status", sharedStatus()}});
+        window.handleEvent(QJsonObject{{"type", "collab_sync"}, {"stage", "done"}, {"report", QJsonObject{
+            {"incoming", QJsonArray{}}, {"fastForward", false}, {"pushed", false},
+            {"conflicts", QJsonArray{
+                QJsonObject{{"path", "s1/V1/c3"}, {"what", "duration changed on both sides"}, {"kept", "ours"}},
+                QJsonObject{{"path", "s1/V1/c9"}, {"what", "overlapped c5 on V1; moved to V2"}, {"kept", "theirs"}}}},
+            {"renamed", QJsonArray{}}, {"summary", QJsonArray{}}}}});
+        const int count = window.m_activityList->count();
+        QVERIFY(window.m_activityList->item(count - 2)->text().endsWith(QStringLiteral("Kept yours · s1/V1/c3: duration changed on both sides")));
+        QVERIFY(window.m_activityList->item(count - 1)->text().endsWith(QStringLiteral("Kept theirs · s1/V1/c9: overlapped c5 on V1; moved to V2")));
+        QCOMPARE(window.statusBar()->currentMessage(), QStringLiteral("Synced: 1 change kept yours, 1 change kept theirs"));
+    }
+
+    void presetsReloadWhenTheWorkTreeChanges() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.handleEvent(QJsonObject{{"type", "collab"}, {"status", sharedStatus()}});
+        // Switching branches brings in no commits, yet changes presets/.
+        window.m_lastCommand = {};
+        window.handleEvent(QJsonObject{{"type", "collab_sync"}, {"stage", "done"}, {"report", QJsonObject{
+            {"incoming", QJsonArray{}}, {"fastForward", false}, {"pushed", false}, {"conflicts", QJsonArray{}},
+            {"renamed", QJsonArray{}}, {"summary", QJsonArray{}}, {"branch", "color"}}}});
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "preset_library"}}));
+
+        // So does a pull in a terminal, seen as project.kerf changing on disk,
+        // and loading it.
+        const QJsonObject timeline{{"fps", 24}, {"tracks", QJsonArray{}}};
+        window.applySnapshot(QJsonObject{{"revision", 4}, {"duration", 0}, {"projectionStatus", "clean"}, {"timeline", timeline}});
+        window.m_lastCommand = {};
+        window.applySnapshot(QJsonObject{{"revision", 4}, {"duration", 0}, {"projectionStatus", "diverged"}, {"timeline", timeline}});
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "preset_library"}}));
+        window.m_loadFromDisk->click();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "projection_import"}}));
+        window.applySnapshot(QJsonObject{{"revision", 5}, {"duration", 0}, {"projectionStatus", "clean"}, {"timeline", timeline}});
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "preset_library"}}));
+        // An edit leaves the library alone.
+        window.m_lastCommand = {};
+        window.applySnapshot(QJsonObject{{"revision", 6}, {"duration", 0}, {"projectionStatus", "clean"}, {"timeline", timeline}});
+        QCOMPARE(window.m_lastCommand, QJsonObject{});
+    }
+
+    void savingOverAPresetAsksAboutTheFileTheBridgeNamed() {
+        QTemporaryDir project;
+        MainWindow window{project.path(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        const QJsonObject save{{"type", "preset_save"}, {"name", "Intro/Outro"}, {"replace", false}};
+        // The bridge saves "Intro/Outro" as presets/Intro-Outro.kerfpreset.
+        const QString exists = QStringLiteral("presets/Intro-Outro.kerfpreset already exists; choose another name or replace it");
+        const QString question = QStringLiteral("presets/Intro-Outro.kerfpreset already exists. Replace it?");
+        answerInput(&window, QStringLiteral("Intro/Outro"));
+        window.m_presets->m_save->click();
+        QCOMPARE(window.m_lastCommand, save);
+        answerQuestion(&window, QDialogButtonBox::No, question);
+        window.handleEvent(QJsonObject{{"type", "error"}, {"message", exists}});
+        QCOMPARE(window.m_lastCommand, save);
+
+        answerInput(&window, QStringLiteral("Intro/Outro"));
+        window.m_presets->m_save->click();
+        answerQuestion(&window, QDialogButtonBox::Yes, question);
+        window.handleEvent(QJsonObject{{"type", "error"}, {"message", exists}});
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "preset_save"}, {"name", "Intro/Outro"}, {"replace", true}}));
+
+        // Once answered, the same refusal is only an error.
+        QTimer::singleShot(1000, &window, [] {
+            if (QWidget *modal = QApplication::activeModalWidget()) modal->close();
+        });
+        window.handleEvent(QJsonObject{{"type", "error"}, {"message", exists}});
+        QCOMPARE(window.m_errorMessage->text(), exists);
     }
 };
 
