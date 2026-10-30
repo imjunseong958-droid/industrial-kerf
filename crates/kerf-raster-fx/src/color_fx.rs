@@ -241,17 +241,6 @@ mod tests {
         run_fx(id, vals, Image::filled(2, 2, c), 0.0, EffectEnv::default()).img.get(0, 0)
     }
 
-    /// After Effects non-legacy ramps (kasper9n, #681). B0 C-100 matched B0 C-50 and is omitted.
-
-    /// #1463: Black & White's sliders set the gray of each pure hue and blend between
-    /// neighbouring hues; neutral pixels keep their value, overbright ones too, and an overbright
-    /// colour stays finite (it used to divide by zero).
-
-    /// #1463: faint colour noise stays faint. The shadows of compressed footage carry a code or
-    /// two of colour noise, which Black & White turned into bright and black blocks (the HSL
-    /// saturation it scaled is near 1 for any tinted near-black pixel). At 8, 16 and 32 bpc the
-    /// gray of a dark ramp with ±2 steps of colour noise stays within 2 steps of the clean ramp's.
-
     #[test]
     fn photo_filter_presets_and_custom() {
         let g = [0.5, 0.5, 0.5, 1.0];

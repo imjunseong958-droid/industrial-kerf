@@ -359,6 +359,12 @@ pub fn poly_point_at(pts: &[[f64; 2]], closed: bool, s: f64) -> ([f64; 2], [f64;
     (pts[n - 1], [1.0, 0.0])
 }
 
+/// A hash of `a`, `b`, and `seed` in 0..1, for test pictures.
+#[cfg(test)]
+pub fn hash1(a: u32, b: u32, seed: u32) -> f32 {
+    kerf_raster::hash_noise(a, b, seed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,10 +398,4 @@ mod tests {
         let o = guided_filter(&g, &p, 2, 1e-3);
         assert!(o.data.iter().all(|v| (v - 0.7).abs() < 1e-3));
     }
-}
-
-/// A hash of `a`, `b`, and `seed` in 0..1, for test pictures.
-#[cfg(test)]
-pub fn hash1(a: u32, b: u32, seed: u32) -> f32 {
-    kerf_raster::hash_noise(a, b, seed)
 }

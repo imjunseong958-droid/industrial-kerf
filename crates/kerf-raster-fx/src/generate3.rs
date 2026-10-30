@@ -568,9 +568,6 @@ mod tests {
         assert_eq!(silent_zone, 0.0, "silent end has zero height, not boosted by dB scale");
     }
 
-    /// #536: an animated Brush Position draws a stroke that stays (Stroke Length 0), expires
-    /// after Stroke Length, and lays its dabs Brush Spacing seconds apart.
-
     struct Tone;
     impl EffectHost for Tone {
         fn layer(&self, _: u64, _: bool) -> Option<LayerPixels> {
