@@ -1,5 +1,12 @@
 //! Qt's nonblocking, UTF-8 C ABI. Canonical edits stay in kerfd; media frames
 //! travel through a latest-frame slot rather than JSON or an accumulating queue.
+mod collab;
+mod media;
+mod presets;
+mod tasks;
+#[cfg(test)]
+mod tests_support;
+
 use kerf_agent::{
     AgentEvent, AgentSession, AgentSessionOptions, AgentTool, OpenAiApiMode, ProviderName,
     ReasoningEffort,
@@ -15,7 +22,7 @@ use kerf_runtime::{RuntimeClient, StateSnapshot};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::ffi::{c_char, c_void, CStr, CString};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
@@ -109,6 +116,62 @@ enum Command {
         texts: Value,
         revision: u64,
     },
+    /// List the project's preset library: `preset_library`.
+    PresetLibrary,
+    /// Save the program as `presets/<name>.kerfpreset`: `preset_saved`.
+    PresetSave {
+        name: String,
+        #[serde(default)]
+        replace: bool,
+    },
+    /// Swap the file behind a media id, keeping every clip's timing. A
+    /// shared project copies the file into `media/` first.
+    MediaReplace {
+        media: String,
+        path: String,
+    },
+    /// Load a `project.kerf` changed outside Kerf as one revision.
+    ProjectionImport,
+    /// Write the editor's project over a `project.kerf` changed outside Kerf.
+    ProjectionRepair,
+    // Collaboration over Git, run by the collaboration worker.
+    CollabStatus,
+    CollabSync {
+        #[serde(default)]
+        message: Option<String>,
+    },
+    CollabLive {
+        enabled: bool,
+        /// Seconds between syncs.
+        #[serde(default)]
+        interval: Option<f64>,
+    },
+    CollabCommit {
+        #[serde(default)]
+        message: String,
+    },
+    CollabBranch {
+        name: String,
+        #[serde(default)]
+        create: bool,
+    },
+    CollabPullRequest {
+        title: String,
+        #[serde(default)]
+        body: Option<String>,
+    },
+    CollabPublish {
+        #[serde(default)]
+        remote: Option<String>,
+        #[serde(default)]
+        github: Option<kerf_collab::scaffold::GitHubRepository>,
+    },
+    CollabConsolidate,
+    /// Republish the state with the viewer's media reopened: files changed
+    /// on disk under an unchanged document. Sent by the bridge's own
+    /// workers only.
+    #[serde(skip)]
+    Reload,
     /// How `effects` would look added to `clip`, on its picture at sequence
     /// time `at`: an `effect_preview` event per raster effect, `width`
     /// pixels wide. A newer request supersedes it.
@@ -155,12 +218,15 @@ struct Shared {
     /// The project directory, which relative media paths are resolved
     /// against.
     directory: PathBuf,
+    /// The media status last emitted.
+    media_status: Mutex<media::MediaStatus>,
 }
 
 struct Bridge {
     events_tx: SyncSender<Value>,
     commands: SyncSender<Command>,
     media: SyncSender<Command>,
+    collab: SyncSender<Command>,
     prompts: SyncSender<AgentRequest>,
     events: Receiver<Value>,
     shared: Arc<Shared>,
@@ -234,6 +300,7 @@ fn publish_snapshot(
         let _ = kerf_model::look::refresh_project_looks(&shared.directory);
         match kerf_runtime::parse_document(&state.document) {
             Ok(mut project) => {
+                media::publish_status(shared, tx, &project);
                 kerf_runtime::resolve_media_paths(&mut project, &shared.directory);
                 if let Ok(mut model) = shared.model.lock() {
                     *model = Some(project.clone());
@@ -315,6 +382,7 @@ fn runtime_worker(
     directory: PathBuf,
     binary: PathBuf,
     rx: Receiver<Command>,
+    commands: SyncSender<Command>,
     media: SyncSender<Command>,
     tx: SyncSender<Value>,
     shared: Arc<Shared>,
@@ -358,11 +426,51 @@ fn runtime_worker(
         let force_refresh = matches!(&command, Command::Refresh);
         let result = match command {
             Command::Refresh => active_client.get_state(),
+            Command::Reload => {
+                previous = None;
+                active_client.get_state()
+            }
+            // A shared project copies the file into media/ on another
+            // thread, then imports the copy.
+            Command::Import { path } if media::needs_copy(&directory, Path::new(&path)) => {
+                media::copy_then(&directory, &path, &commands, &tx, |path| Command::Import {
+                    path,
+                });
+                continue;
+            }
             Command::Import { path } => active_client.get_state().and_then(|state| {
                 active_client
                     .import_media_request("ui", &operation, &path, state.revision)
                     .map(|(state, _, _)| state)
             }),
+            Command::MediaReplace { media, path }
+                if media::needs_copy(&directory, Path::new(&path)) =>
+            {
+                media::copy_then(&directory, &path, &commands, &tx, move |path| {
+                    Command::MediaReplace { media, path }
+                });
+                continue;
+            }
+            Command::MediaReplace { media, path } => active_client.get_state().and_then(|state| {
+                active_client.replace_media_request("ui", &operation, &media, &path, state.revision)
+            }),
+            Command::ProjectionImport => active_client.get_state().and_then(|state| {
+                active_client.import_projection_request("ui", &operation, state.revision)
+            }),
+            Command::ProjectionRepair => active_client.repair_projection(),
+            Command::PresetSave { name, replace } => {
+                let saved = active_client
+                    .get_document(false)
+                    .and_then(|(_, text)| kerf_runtime::parse_document(&text))
+                    .map_err(|error| error.message)
+                    .and_then(|project| presets::export_program(&project, Some(&name)))
+                    .and_then(|document| presets::save(&directory, &name, &document, replace));
+                match saved {
+                    Ok(path) => emit(&tx, json!({"type":"preset_saved", "path":path})),
+                    Err(message) => error(&tx, message),
+                }
+                continue;
+            }
             Command::Edit { ops, revision } => {
                 active_client.apply_ops_request("ui", &operation, ops, revision)
             }
@@ -381,37 +489,13 @@ fn runtime_worker(
                     .get_document(false)
                     .and_then(|(_, text)| kerf_runtime::parse_document(&text))
                 {
-                    Ok(project) => {
-                        let result = project
-                            .sequences
-                            .first()
-                            .ok_or_else(|| "no sequence to export".to_owned())
-                            .and_then(|sequence| {
-                                kerf_lang::preset::export(
-                                    &project,
-                                    kerf_model::Catalog::builtin(),
-                                    &sequence.id,
-                                    &sequence.name,
-                                )
-                            })
-                            .and_then(|document| {
-                                kerf_lang::preset::parse(
-                                    &document,
-                                    kerf_model::Catalog::builtin(),
-                                )?;
-                                if document.len() > 1024 * 1024 {
-                                    return Err("preset exceeds 1 MiB".into());
-                                }
-                                Ok(document)
-                            });
-                        match result {
-                            Ok(document) => emit(
-                                &tx,
-                                json!({"type":"preset_export", "path":path, "document":document}),
-                            ),
-                            Err(message) => error(&tx, message),
-                        }
-                    }
+                    Ok(project) => match presets::export_program(&project, None) {
+                        Ok(document) => emit(
+                            &tx,
+                            json!({"type":"preset_export", "path":path, "document":document}),
+                        ),
+                        Err(message) => error(&tx, message),
+                    },
                     Err(err) => error(&tx, err.message),
                 }
                 continue;
@@ -1282,9 +1366,11 @@ pub unsafe extern "C" fn kerf_bridge_new(
     let (commands, rx) = mpsc::sync_channel(32);
     let (media, media_rx) = mpsc::sync_channel(32);
     let (prompts, prompt_rx) = mpsc::sync_channel(1);
+    let (collab, collab_rx) = mpsc::sync_channel(16);
     let (emit, events) = mpsc::sync_channel(256);
     let shared = Arc::new(Shared {
         directory: directory.clone(),
+        media_status: Mutex::new(media::MediaStatus::default()),
         revision: AtomicU64::new(0),
         closed: AtomicBool::new(false),
         agent_busy: AtomicBool::new(false),
@@ -1299,10 +1385,19 @@ pub unsafe extern "C" fn kerf_bridge_new(
     {
         let directory = directory.clone();
         let binary = binary.clone();
+        let commands = commands.clone();
         let media = media.clone();
         let tx = emit.clone();
         let shared = shared.clone();
-        thread::spawn(move || runtime_worker(directory, binary, rx, media, tx, shared));
+        thread::spawn(move || runtime_worker(directory, binary, rx, commands, media, tx, shared));
+    }
+    {
+        let directory = directory.clone();
+        let binary = binary.clone();
+        let runtime = commands.clone();
+        let tx = emit.clone();
+        let shared = shared.clone();
+        thread::spawn(move || collab::run(directory, binary, collab_rx, runtime, tx, shared));
     }
     {
         let tx = emit.clone();
@@ -1323,6 +1418,7 @@ pub unsafe extern "C" fn kerf_bridge_new(
         events_tx: emit,
         commands,
         media,
+        collab,
         prompts,
         events,
         shared,
@@ -1419,6 +1515,20 @@ pub unsafe extern "C" fn kerf_bridge_send(bridge: *mut c_void, message: *const c
             thread::spawn(move || cloud_status(&tx, Some(command)));
             true
         }
+        Command::PresetLibrary => {
+            let directory = bridge.shared.directory.clone();
+            let tx = bridge.events_tx.clone();
+            thread::spawn(move || emit(&tx, presets::library(&directory)));
+            true
+        }
+        Command::CollabStatus
+        | Command::CollabSync { .. }
+        | Command::CollabLive { .. }
+        | Command::CollabCommit { .. }
+        | Command::CollabBranch { .. }
+        | Command::CollabPullRequest { .. }
+        | Command::CollabPublish { .. }
+        | Command::CollabConsolidate => bridge.collab.try_send(command).is_ok(),
         Command::Agent {
             text,
             focus,
@@ -1486,7 +1596,7 @@ pub unsafe extern "C" fn kerf_bridge_string_free(value: *mut c_char) {
 pub unsafe extern "C" fn kerf_project_inspect(request: *const c_char) -> *mut c_char {
     // SAFETY: forwarded from the caller's contract.
     let request = unsafe { json_argument(request) };
-    owned_json(json!({"path": request["path"], "error": "not implemented yet"}))
+    owned_json(tasks::inspect_project(&request))
 }
 
 /// A preset file's slots and how files would fill them.
@@ -1495,8 +1605,8 @@ pub unsafe extern "C" fn kerf_project_inspect(request: *const c_char) -> *mut c_
 #[no_mangle]
 pub unsafe extern "C" fn kerf_preset_inspect(request: *const c_char) -> *mut c_char {
     // SAFETY: forwarded from the caller's contract.
-    let _ = unsafe { json_argument(request) };
-    owned_json(json!({"error": "not implemented yet"}))
+    let request = unsafe { json_argument(request) };
+    owned_json(tasks::inspect_preset(&request))
 }
 
 /// Start a project task; poll it with `kerf_task_poll`.
@@ -1505,8 +1615,8 @@ pub unsafe extern "C" fn kerf_preset_inspect(request: *const c_char) -> *mut c_c
 #[no_mangle]
 pub unsafe extern "C" fn kerf_task_start(request: *const c_char) -> *mut c_void {
     // SAFETY: forwarded from the caller's contract.
-    let _ = unsafe { json_argument(request) };
-    Box::into_raw(Box::new(json!({"status": "failed", "error": "not implemented yet"}))).cast()
+    let request = unsafe { json_argument(request) };
+    Box::into_raw(Box::new(tasks::Task::start(request))).cast()
 }
 
 /// The task's latest status as an owned string.
@@ -1518,18 +1628,18 @@ pub unsafe extern "C" fn kerf_task_poll(task: *mut c_void) -> *mut c_char {
         return std::ptr::null_mut();
     }
     // SAFETY: a live task from kerf_task_start.
-    let status = unsafe { &*task.cast::<Value>() };
-    owned_json(status.clone())
+    let task = unsafe { &*task.cast::<tasks::Task>() };
+    owned_json(task.status())
 }
 
-/// Release a task.
+/// Release a task; one still running finishes on its own.
 /// # Safety
 /// `task` must be null or a live pointer from `kerf_task_start`, freed once.
 #[no_mangle]
 pub unsafe extern "C" fn kerf_task_free(task: *mut c_void) {
     if !task.is_null() {
         // SAFETY: ownership returns exactly once.
-        drop(unsafe { Box::from_raw(task.cast::<Value>()) });
+        drop(unsafe { Box::from_raw(task.cast::<tasks::Task>()) });
     }
 }
 
@@ -1677,6 +1787,7 @@ mod tests {
     fn shared() -> Shared {
         Shared {
             directory: std::env::temp_dir(),
+            media_status: Mutex::new(Default::default()),
             revision: AtomicU64::new(0),
             closed: AtomicBool::new(false),
             agent_busy: AtomicBool::new(false),

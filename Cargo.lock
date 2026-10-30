@@ -1278,6 +1278,7 @@ dependencies = [
  "base64",
  "kerf-agent",
  "kerf-cloud",
+ "kerf-collab",
  "kerf-commands",
  "kerf-core",
  "kerf-engine",
@@ -1289,6 +1290,8 @@ dependencies = [
  "kerf-runtime",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

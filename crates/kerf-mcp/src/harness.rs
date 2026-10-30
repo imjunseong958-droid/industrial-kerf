@@ -75,7 +75,8 @@ pending proposal's id as `extend` to run more lines on top of it, or as \
   `proposal`, what that proposal would make.
 
 Reusable presets are portable .kerfpreset files. `look` with `presets: true` \
-lists project presets; with `preset: \"file.kerfpreset\"` it shows the pattern, \
+lists project presets: the shared `presets/` library first, then \
+`.kerf/presets` and the project folder. With `preset: \"file.kerfpreset\"` it shows the pattern, \
 text slots, and each media slot with the clips that use it and the imported \
 media that fit it (`fits`, with the latest `from` frame as `latestFrame`). \
 `edit` with `savePreset: \"file.kerfpreset\"` \
@@ -207,7 +208,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "sequence": {"type": "string", "description": sequence},
                     "proposal": {"type": "string", "description": proposal},
                     "preset": {"type": "string", "description": "Inspect a .kerfpreset file: pattern, text slots, and media slots with the imported media that fit each. Use alone."},
-                    "presets": {"type": "boolean", "description": "List .kerfpreset files in the project root and .kerf/presets. Use alone with true."},
+                    "presets": {"type": "boolean", "description": "List .kerfpreset files in the project's shared presets/ library, then .kerf/presets and the project root. Use alone with true."},
                     "effect": {"type": "string", "description": "An effect, transition, or generator id: its parameters, as the reference lists them. Raster effects are listed by id only. Use alone."},
                     "effects": {"type": "string", "description": "Words for the look or moment you want, such as \"glow neon\", \"zoom hit\", or \"retro tv\": the effects, transitions, and generators whose id, category, or guidance match, best first, each with when to use it. Use alone."}
                 },
