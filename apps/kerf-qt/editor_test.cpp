@@ -2334,6 +2334,9 @@ private slots:
                 launcher.resize(1040, 650);
                 launcher.show();
                 QVERIFY(QTest::qWaitForWindowExposed(&launcher));
+                // A chosen recent project is blue while its list has focus.
+                if (page == ProjectLauncher::Recent) launcher.m_recent->setFocus();
+                QCoreApplication::processEvents();
                 QImage image = launcher.grab().toImage();
                 const qreal ratio = image.devicePixelRatio();
                 const auto at = [&image, ratio](int x, int y) { return image.pixelColor(QPoint(x, y) * ratio).rgb(); };
@@ -2341,11 +2344,20 @@ private slots:
                 QCOMPARE(at(100, launcher.height() - 10), launcher.theme().sidebar.rgb());
                 QVERIFY(dark ? launcher.theme().content.lightness() < 60 : launcher.theme().content.lightness() > 240);
                 if (launcher.m_choose->isEnabled()) {
+                    // The default button is the accent, lightening towards its top.
                     const QImage choose = launcher.m_choose->grab().toImage();
-                    QCOMPARE(choose.pixelColor(QPoint(6, launcher.m_choose->height() / 2) * choose.devicePixelRatio()).rgb(),
-                             launcher.theme().accent.rgb());
+                    const QColor fill = choose.pixelColor(QPoint(8, launcher.m_choose->height() / 2) * choose.devicePixelRatio());
+                    const QColor accent = launcher.theme().accent;
+                    QVERIFY2(std::abs(fill.hue() - accent.hue()) <= 4 && std::abs(fill.value() - accent.value()) <= 24,
+                             qPrintable(fill.name()));
                 }
                 QCOMPARE(amberPixels(image), 0);
+#if defined(Q_OS_MACOS) && QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
+                // The sidebar runs up under a transparent title bar; the content titles itself.
+                QVERIFY(launcher.windowFlags().testFlag(Qt::ExpandedClientAreaHint));
+                QCOMPARE(launcher.m_title->text(), launcher.windowTitle());
+                QCOMPARE(at(launcher.width() - 6, launcher.m_title->height() - 1), launcher.theme().titleRule.rgb());
+#endif
                 save(image, QStringLiteral("%1-%2").arg(QString::fromLatin1(pageNames[page]), schemeName));
                 if (page == ProjectLauncher::NewProject) {
                     // Details are folded away until opened, as in macOS.

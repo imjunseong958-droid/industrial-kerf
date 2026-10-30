@@ -66,10 +66,16 @@ set(KERF_QT_SOURCES
     viewer_widget.h
     workspace.cpp
     workspace.h)
+if(APPLE)
+    # The launcher hides the title AppKit draws over its own.
+    enable_language(OBJCXX)
+    list(APPEND KERF_QT_SOURCES macos_window.h macos_window.mm)
+    set(KERF_QT_PLATFORM_LIBRARIES "-framework AppKit")
+endif()
 
 add_executable(kerf-qt main.cpp ${KERF_QT_SOURCES})
 target_include_directories(kerf-qt PRIVATE ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(kerf-qt PRIVATE Qt6::Widgets ads::qtadvanceddocking-qt6 "${KERF_BRIDGE_LIBRARY}")
+target_link_libraries(kerf-qt PRIVATE Qt6::Widgets ads::qtadvanceddocking-qt6 "${KERF_BRIDGE_LIBRARY}" ${KERF_QT_PLATFORM_LIBRARIES})
 
 option(KERF_QT_BUILD_TESTS "Build Qt behavior tests" OFF)
 if(KERF_QT_BUILD_TESTS)
@@ -78,6 +84,7 @@ if(KERF_QT_BUILD_TESTS)
     add_executable(kerf-qt-tests editor_test.cpp ${KERF_QT_SOURCES})
     target_compile_definitions(kerf-qt-tests PRIVATE KERF_QT_TESTING)
     target_include_directories(kerf-qt-tests PRIVATE ${CMAKE_CURRENT_LIST_DIR})
-    target_link_libraries(kerf-qt-tests PRIVATE Qt6::Widgets Qt6::Test ads::qtadvanceddocking-qt6 "${KERF_BRIDGE_LIBRARY}")
+    target_link_libraries(kerf-qt-tests PRIVATE Qt6::Widgets Qt6::Test ads::qtadvanceddocking-qt6 "${KERF_BRIDGE_LIBRARY}"
+        ${KERF_QT_PLATFORM_LIBRARIES})
     add_test(NAME kerf-qt-ui COMMAND kerf-qt-tests -platform offscreen)
 endif()

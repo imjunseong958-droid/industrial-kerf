@@ -60,12 +60,16 @@ public:
 
 protected:
     void changeEvent(QEvent *event) override;
+    void showEvent(QShowEvent *event) override;
 
 private:
     // Restyle for the current appearance and accent; does nothing when
     // neither changed unless `force`.
     void applyTheme(bool force = false);
     void setDetailsOpen(bool open);
+    // Fit the sidebar's top and the title band to the title bar macOS
+    // draws over them.
+    void fitTitleBar();
     // Ring the focused field the way macOS does.
     void trackFocus(QWidget *now);
 
@@ -126,7 +130,11 @@ private:
     std::function<QJsonObject(const QJsonObject &)> m_inspectPreset;
 
     QListWidget *m_sidebar = nullptr;
+    QWidget *m_sidebarTop = nullptr;
+    QLabel *m_title = nullptr;
+    QVBoxLayout *m_pagesLayout = nullptr;
     QStackedWidget *m_pages = nullptr;
+    QWidget *m_headingBox = nullptr;
     QLabel *m_heading = nullptr;
     QLabel *m_subheading = nullptr;
     QListWidget *m_templates = nullptr;
