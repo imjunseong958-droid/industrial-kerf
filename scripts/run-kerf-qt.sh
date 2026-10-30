@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
+# Build kerfd, the bridge, and the Qt editor, then open the editor: on the
+# project given as the argument or in KERF_PROJECT_DIR, else on its project
+# launcher.
 set -euo pipefail
+project="${1:-${KERF_PROJECT_DIR:-}}"
+case "$project" in
+    "" | /*) ;;
+    *) project="$PWD/$project" ;;
+esac
 kerf_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$kerf_root"
 cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
@@ -9,4 +17,11 @@ else
     cmake -S apps/kerf-qt -B target/qt
 fi
 cmake --build target/qt --parallel
-exec "$kerf_root/target/qt/kerf-qt" "${1:-${KERF_PROJECT_DIR:-$kerf_root/.kerf/native-project}}" "${KERFD_BIN:-$kerf_root/target/debug/kerfd}"
+# kerfd goes through the environment, so without a project it is never read
+# as one.
+export KERFD_BIN="${KERFD_BIN:-$kerf_root/target/debug/kerfd}"
+if [ -n "$project" ]; then
+    exec "$kerf_root/target/qt/kerf-qt" "$project"
+fi
+unset KERF_PROJECT_DIR
+exec "$kerf_root/target/qt/kerf-qt"

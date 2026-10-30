@@ -1,7 +1,10 @@
 //! Native Kerf launcher and terminal entry point.
 //!
-//! `kerf` opens the native editor by default. `--terminal` keeps the
-//! project-scoped terminal agent available for scripts and interactive shells.
+//! `kerf` opens the native editor by default: on the project `--dir` names,
+//! or, without one, on its project launcher. `--terminal` keeps the
+//! project-scoped terminal agent available for scripts and interactive
+//! shells. `kerf new` makes a project folder and `kerf sync` shares a
+//! project's edits through Git.
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -9,11 +12,15 @@ use kerf_agent::{
     AgentEvent, AgentSession, AgentSessionOptions, AgentTargetSummary, OpenAiApiMode, ProviderName,
     ReasoningEffort,
 };
+use kerf_collab::git::{self, Pushed};
+use kerf_collab::scaffold::{self, Created, GitHubRepository, NewProject, Template};
 use kerf_mcp::{docs::add_agents_pointer, inbound, load_project_skills, KerfMcpRouter};
+use kerf_model::Catalog;
 use kerf_runtime::RuntimeClient;
 use kerf_skills::Skill;
 use serde_json::{json, Value};
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -55,9 +62,11 @@ struct Args {
     #[arg(long = "base-url")]
     base_url: Option<String>,
 
-    /// Project directory owned by kerfd.
-    #[arg(long, default_value = ".", global = true)]
-    dir: PathBuf,
+    /// Project directory owned by kerfd. Defaults to KERF_PROJECT_DIR, then
+    /// the current directory; without either, the editor opens its project
+    /// launcher.
+    #[arg(long, global = true)]
+    dir: Option<PathBuf>,
 
     /// Explicit kerfd sidecar path.
     #[arg(long, global = true)]
@@ -107,6 +116,69 @@ enum Command {
         #[command(subcommand)]
         action: PresetAction,
     },
+    /// Make a project folder, optionally shared through Git or GitHub.
+    New(NewArgs),
+    /// Commit local edits, merge what collaborators pushed, and push.
+    Sync {
+        /// Commit message for local edits; described from the edits when absent.
+        #[arg(short = 'm', long)]
+        message: Option<String>,
+    },
+}
+
+#[derive(Debug, clap::Args)]
+struct NewArgs {
+    /// Project name; the folder is named after it.
+    name: String,
+    /// Folder to make the project folder in.
+    #[arg(long, default_value = ".")]
+    location: PathBuf,
+    /// 1080×1920 (9:16) instead of 1920×1080 (16:9).
+    #[arg(long, conflicts_with = "square")]
+    vertical: bool,
+    /// 1080×1080 (1:1) instead of 1920×1080 (16:9).
+    #[arg(long)]
+    square: bool,
+    /// Frames per second: 23.976, 24, 25, 29.97, 30 (the default), or 60.
+    #[arg(long)]
+    rate: Option<String>,
+    /// Make the project a Git repository with a first commit.
+    #[arg(long)]
+    git: bool,
+    /// Publish the repository to this remote (implies --git).
+    #[arg(long, conflicts_with = "github")]
+    remote: Option<String>,
+    /// Create a private GitHub repository with gh and publish to it (implies --git).
+    #[arg(long)]
+    github: bool,
+    /// Make the GitHub repository public.
+    #[arg(long, requires = "github")]
+    public: bool,
+}
+
+impl NewArgs {
+    /// The project these arguments describe, made at an absolute location.
+    fn project(&self) -> Result<NewProject> {
+        let template = if self.vertical {
+            Template::Vertical
+        } else if self.square {
+            Template::Square
+        } else {
+            Template::Standard
+        };
+        Ok(NewProject {
+            name: self.name.clone(),
+            location: std::path::absolute(&self.location).context("resolve --location")?,
+            template,
+            rate: self.rate.clone(),
+            git: self.git,
+            remote: self.remote.clone(),
+            github: self.github.then_some(GitHubRepository {
+                name: None,
+                private: !self.public,
+            }),
+        })
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -150,23 +222,33 @@ fn main() {
 
 fn run() -> Result<()> {
     let args = Args::parse();
-    let directory = args
-        .dir
-        .canonicalize()
-        .or_else(|_| {
-            fs::create_dir_all(&args.dir)?;
-            args.dir.canonicalize()
-        })
-        .context("resolve project directory")?;
+    let requested = requested_project(&args, env::var_os("KERF_PROJECT_DIR"));
+    let current = || PathBuf::from(".");
 
-    if let Some(Command::Preset { action }) = &args.command {
-        return run_preset(action, &directory, args.kerfd.as_deref());
+    match &args.command {
+        Some(Command::New(new)) => return run_new(new),
+        Some(Command::Sync { message }) => {
+            let directory = requested.unwrap_or_else(current);
+            let directory = directory
+                .canonicalize()
+                .with_context(|| format!("no project at {}", directory.display()))?;
+            return run_sync(&directory, args.kerfd.as_deref(), message.as_deref());
+        }
+        Some(Command::Preset { action }) => {
+            let directory = resolve_directory(&requested.unwrap_or_else(current))?;
+            return run_preset(action, &directory, args.kerfd.as_deref());
+        }
+        None => {}
     }
 
     if !uses_terminal(&args) {
-        return run_gui(&args, &directory);
+        let directory = editor_project(&args, requested)
+            .map(|directory| resolve_directory(&directory))
+            .transpose()?;
+        return run_gui(&args, directory.as_deref());
     }
 
+    let directory = resolve_directory(&requested.unwrap_or_else(current))?;
     let skills = load_project_skills(&directory)?;
 
     if args.skills {
@@ -275,6 +357,34 @@ fn run() -> Result<()> {
     }
 
     run_repl(&mut session, &directory)
+}
+
+/// The project `--dir` names, else the one `KERF_PROJECT_DIR` (`environment`)
+/// names.
+fn requested_project(args: &Args, environment: Option<OsString>) -> Option<PathBuf> {
+    args.dir.clone().or_else(|| {
+        environment
+            .filter(|directory| !directory.is_empty())
+            .map(PathBuf::from)
+    })
+}
+
+/// The project the editor opens: the requested one, else the current
+/// directory when media is to be imported into it, else none, and the
+/// editor shows its project launcher.
+fn editor_project(args: &Args, requested: Option<PathBuf>) -> Option<PathBuf> {
+    requested.or_else(|| args.media.is_some().then(|| PathBuf::from(".")))
+}
+
+/// `directory` as an absolute path, made first when it does not exist.
+fn resolve_directory(directory: &Path) -> Result<PathBuf> {
+    directory
+        .canonicalize()
+        .or_else(|_| {
+            fs::create_dir_all(directory)?;
+            directory.canonicalize()
+        })
+        .context("resolve project directory")
 }
 
 // Optional MCP configuration belongs to the agent, not the UI selection.
@@ -387,11 +497,148 @@ fn preset_request(action: &PresetAction) -> Result<(&'static str, Value)> {
     })
 }
 
-fn run_gui(args: &Args, directory: &Path) -> Result<()> {
+fn run_new(new: &NewArgs) -> Result<()> {
+    let created = create_project(new)?;
+    println!("created {}", created.path.display());
+    if let Some(remote) = &created.remote {
+        println!("published to {remote}");
+    }
+    for warning in &created.warnings {
+        eprintln!("warning: {warning}");
+    }
+    Ok(())
+}
+
+fn create_project(new: &NewArgs) -> Result<Created> {
+    Ok(scaffold::create(&new.project()?, Catalog::builtin())?)
+}
+
+/// Commit local edits, merge what collaborators pushed, and push, as the
+/// editor's Sync Now does: staging and the network run here, and kerfd,
+/// which owns `project.kerf`, commits and merges.
+fn run_sync(directory: &Path, kerfd: Option<&Path>, message: Option<&str>) -> Result<()> {
+    if !git::is_repository(directory) {
+        if let Some(top) = git::enclosing_repository(directory) {
+            bail!(
+                "{} is a folder inside the repository {}, not a shared project of its own; run `git init` in the project to share it",
+                directory.display(),
+                top.display()
+            );
+        }
+        bail!(
+            "{} is not a Git repository; make a shared project with `kerf new --git`, or publish this one from the editor (Collaborate → Publish to GitHub…)",
+            directory.display()
+        );
+    }
+    // Hashing new media is the slow part of a commit; staged first, kerfd's
+    // commit is quick.
+    git::stage(directory).context("stage")?;
+    let fetched = git::fetch(directory).context("fetch")?;
+    let kerfd = kerfd
+        .map(Path::to_path_buf)
+        .or_else(discover_kerfd)
+        .unwrap_or_else(|| PathBuf::from(binary_name("kerfd")));
+    let runtime =
+        RuntimeClient::connect_or_spawn(directory, Some(&kerfd)).map_err(runtime_error)?;
+    let (_, report) = runtime
+        .collab_integrate("ui", &operation_key("sync"), message)
+        .map_err(|error| match error.code.as_str() {
+            "PROJECTION_DIVERGED" => anyhow!(
+                "project.kerf was changed outside Kerf; open the project in the editor and choose Load from Disk or Keep Editor Version, then sync"
+            ),
+            _ => runtime_error(error),
+        })?;
+    let pushed = git::push(directory).context("push")?;
+    let downloaded = fetched && git::lfs_pull(directory).context("download Git LFS media")?;
+    let upstream = git::upstream(directory);
+    for line in sync_report(&report, &pushed, upstream.as_deref(), downloaded) {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+/// What a sync did, as lines for the terminal: kerfd's `report` (the commit,
+/// incoming commits, conflicts the merge settled, renamed ids, and how the
+/// project changed), then the push and the Git LFS download.
+fn sync_report(
+    report: &Value,
+    pushed: &Pushed,
+    upstream: Option<&str>,
+    downloaded: bool,
+) -> Vec<String> {
+    let text = |value: &Value| value.as_str().unwrap_or_default().to_owned();
+    let list = |value: &Value| value.as_array().cloned().unwrap_or_default();
+    let mut lines = Vec::new();
+    if let Some(commit) = report["committed"].as_str() {
+        lines.push(format!("committed {commit}"));
+    }
+    let incoming = list(&report["incoming"]);
+    if !incoming.is_empty() {
+        let how = if report["fastForward"] == true {
+            " (fast-forward)"
+        } else {
+            ""
+        };
+        lines.push(format!(
+            "merged {} incoming commit(s){how}:",
+            incoming.len()
+        ));
+        for commit in &incoming {
+            lines.push(format!(
+                "  {} {} · {}",
+                text(&commit["commit"]),
+                text(&commit["author"]),
+                text(&commit["subject"])
+            ));
+        }
+    }
+    for conflict in list(&report["conflicts"]) {
+        let kept = if conflict["kept"] == "theirs" {
+            "theirs"
+        } else {
+            "yours"
+        };
+        lines.push(format!(
+            "conflict: {}: {} (kept {kept})",
+            text(&conflict["path"]),
+            text(&conflict["what"])
+        ));
+    }
+    for pair in list(&report["renamed"]) {
+        lines.push(format!(
+            "renamed incoming {} to {}, as both sides added {}",
+            text(&pair[0]),
+            text(&pair[1]),
+            text(&pair[0])
+        ));
+    }
+    let summary = list(&report["summary"]);
+    if !summary.is_empty() {
+        lines.push("changed in the project:".into());
+        lines.extend(summary.iter().map(|line| format!("  {}", text(line))));
+    }
+    if pushed.pushed {
+        let to = upstream.unwrap_or("the remote");
+        lines.push(if pushed.set_upstream {
+            format!("published the branch to {to}")
+        } else {
+            format!("pushed to {to}")
+        });
+    }
+    if downloaded {
+        lines.push("downloaded Git LFS media".into());
+    }
+    if lines.is_empty() {
+        lines.push("up to date".into());
+    }
+    lines
+}
+
+fn run_gui(args: &Args, directory: Option<&Path>) -> Result<()> {
     let llm = resolve_llm(args)?;
     configure_gui_agent(&llm);
 
-    if let Some(media) = args.media.as_deref() {
+    if let (Some(media), Some(directory)) = (args.media.as_deref(), directory) {
         let path = import_media(
             directory,
             args.kerfd.as_deref(),
@@ -407,15 +654,31 @@ fn run_gui(args: &Args, directory: &Path) -> Result<()> {
         .clone()
         .or_else(discover_kerfd)
         .unwrap_or_else(|| PathBuf::from(binary_name("kerfd")));
-    let status = std::process::Command::new(&qt)
-        .arg(directory)
-        .arg(&kerfd)
+    let status = editor_command(&qt, directory, &kerfd)
         .status()
         .with_context(|| format!("could not launch {}", qt.display()))?;
     if !status.success() {
         bail!("Qt editor exited with {status}");
     }
     Ok(())
+}
+
+/// The editor's command line: the project, when there is one, as its only
+/// argument, and kerfd through `KERFD_BIN`, so that without a project the
+/// kerfd path is never read as one and the editor shows its launcher.
+fn editor_command(qt: &Path, project: Option<&Path>, kerfd: &Path) -> std::process::Command {
+    let mut command = std::process::Command::new(qt);
+    command.env("KERFD_BIN", kerfd);
+    match project {
+        Some(project) => {
+            command.arg(project);
+        }
+        // An empty KERF_PROJECT_DIR names no project here; neither may it there.
+        None => {
+            command.env_remove("KERF_PROJECT_DIR");
+        }
+    }
+    command
 }
 
 fn configure_gui_agent(llm: &LlmConfig) {
@@ -757,14 +1020,341 @@ fn operation_key(kind: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{preset_request, uses_terminal, Args, Command, PresetAction};
+    use super::{
+        create_project, editor_command, editor_project, preset_request, requested_project,
+        run_sync, sync_report, uses_terminal, Args, Command, PresetAction,
+    };
     use clap::Parser;
+    use kerf_collab::git::Pushed;
+    use kerf_collab::scaffold::Template;
+    use serde_json::json;
+    use std::ffi::OsString;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::Once;
 
     #[test]
     fn kerf_opens_the_native_editor_by_default() {
         let args = Args::try_parse_from(["kerf"]).expect("parse default launcher args");
 
         assert!(!uses_terminal(&args));
+    }
+
+    #[test]
+    fn kerf_without_a_project_opens_the_launcher_and_dir_still_opens_one() {
+        let launcher = Args::try_parse_from(["kerf"]).unwrap();
+        assert_eq!(launcher.dir, None);
+        assert_eq!(
+            editor_project(&launcher, requested_project(&launcher, None)),
+            None
+        );
+        let empty = Some(OsString::new());
+        assert_eq!(
+            editor_project(&launcher, requested_project(&launcher, empty)),
+            None
+        );
+        let from_environment = requested_project(&launcher, Some("/films/a".into()));
+        assert_eq!(
+            editor_project(&launcher, from_environment),
+            Some(PathBuf::from("/films/a"))
+        );
+
+        let project = Args::try_parse_from(["kerf", "--dir", "./my-project"]).unwrap();
+        assert!(!uses_terminal(&project));
+        let requested = requested_project(&project, Some("/films/a".into()));
+        assert_eq!(requested, Some(PathBuf::from("./my-project")), "--dir wins");
+        assert_eq!(
+            editor_project(&project, requested),
+            Some(PathBuf::from("./my-project"))
+        );
+
+        // Media is imported into a project: the current directory by default.
+        let media = Args::try_parse_from(["kerf", "video.mp4"]).unwrap();
+        assert_eq!(
+            editor_project(&media, requested_project(&media, None)),
+            Some(PathBuf::from("."))
+        );
+    }
+
+    #[test]
+    fn the_editor_gets_kerfd_from_the_environment_and_a_project_only_when_there_is_one() {
+        let kerfd = Path::new("/opt/kerf/kerfd");
+        let launcher = editor_command(Path::new("kerf-qt"), None, kerfd);
+        assert_eq!(launcher.get_args().count(), 0);
+        let environment: Vec<_> = launcher.get_envs().collect();
+        assert!(environment.contains(&("KERFD_BIN".as_ref(), Some(kerfd.as_os_str()))));
+        assert!(environment.contains(&("KERF_PROJECT_DIR".as_ref(), None)));
+
+        let project = editor_command(Path::new("kerf-qt"), Some(Path::new("/films/a")), kerfd);
+        let arguments: Vec<_> = project.get_args().collect();
+        assert_eq!(arguments, ["/films/a"]);
+        assert!(project
+            .get_envs()
+            .any(|pair| pair == ("KERFD_BIN".as_ref(), Some(kerfd.as_os_str()))));
+    }
+
+    #[test]
+    fn project_commands_parse_in_their_old_and_new_forms() {
+        // `--dir` is global: before or after the subcommand.
+        for argv in [
+            vec!["kerf", "--dir", "p", "preset", "list"],
+            vec!["kerf", "preset", "list", "--dir", "p"],
+        ] {
+            let args = Args::try_parse_from(argv).unwrap();
+            assert!(matches!(
+                args.command,
+                Some(Command::Preset {
+                    action: PresetAction::List
+                })
+            ));
+            assert_eq!(args.dir, Some(PathBuf::from("p")));
+        }
+        let terminal = Args::try_parse_from(["kerf", "--terminal", "video.mp4"]).unwrap();
+        assert!(uses_terminal(&terminal));
+        assert_eq!(terminal.dir, None);
+        assert_eq!(terminal.media.as_deref(), Some("video.mp4"));
+
+        let sync =
+            Args::try_parse_from(["kerf", "sync", "--dir", "p", "-m", "Trim the intro"]).unwrap();
+        assert!(uses_terminal(&sync));
+        let Some(Command::Sync { message }) = sync.command else {
+            panic!("sync command");
+        };
+        assert_eq!(message.as_deref(), Some("Trim the intro"));
+        let Some(Command::Sync { message }) =
+            Args::try_parse_from(["kerf", "sync"]).unwrap().command
+        else {
+            panic!("sync command");
+        };
+        assert_eq!(message, None);
+    }
+
+    #[test]
+    fn new_takes_a_shape_a_rate_and_where_to_share_it() {
+        let args = Args::try_parse_from([
+            "kerf",
+            "new",
+            "Short Film",
+            "--location",
+            "/films",
+            "--vertical",
+            "--rate",
+            "23.976",
+            "--github",
+            "--public",
+        ])
+        .unwrap();
+        let Some(Command::New(new)) = args.command else {
+            panic!("new command");
+        };
+        let project = new.project().unwrap();
+        assert_eq!(project.name, "Short Film");
+        assert_eq!(project.location, PathBuf::from("/films"));
+        assert_eq!(project.template, Template::Vertical);
+        assert_eq!(project.rate.as_deref(), Some("23.976"));
+        let github = project.github.expect("a GitHub repository");
+        assert!(!github.private);
+        assert_eq!(github.name, None);
+
+        let Some(Command::New(new)) = Args::try_parse_from(["kerf", "new", "Plain"])
+            .unwrap()
+            .command
+        else {
+            panic!("new command");
+        };
+        let project = new.project().unwrap();
+        assert!(project.location.is_absolute());
+        assert_eq!(project.template, Template::Standard);
+        assert!(!project.git && project.remote.is_none() && project.github.is_none());
+
+        let Some(Command::New(new)) =
+            Args::try_parse_from(["kerf", "new", "Square", "--square", "--github"])
+                .unwrap()
+                .command
+        else {
+            panic!("new command");
+        };
+        let project = new.project().unwrap();
+        assert_eq!(project.template, Template::Square);
+        assert!(project.github.unwrap().private, "private unless --public");
+
+        for argv in [
+            vec!["kerf", "new"],
+            vec!["kerf", "new", "A", "--vertical", "--square"],
+            vec![
+                "kerf",
+                "new",
+                "A",
+                "--github",
+                "--remote",
+                "git@example.com:a.git",
+            ],
+            vec!["kerf", "new", "A", "--public"],
+        ] {
+            assert!(Args::try_parse_from(&argv).is_err(), "{argv:?}");
+        }
+    }
+
+    /// Keep the person's git configuration (signing, hooks, templates) out
+    /// of the tests.
+    fn hermetic() {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            let empty = std::env::temp_dir().join("kerf-cli-empty-gitconfig");
+            fs::write(&empty, "").unwrap();
+            std::env::set_var("GIT_CONFIG_GLOBAL", &empty);
+            std::env::set_var("GIT_CONFIG_NOSYSTEM", "1");
+            std::env::set_var("GIT_AUTHOR_NAME", "Test");
+            std::env::set_var("GIT_AUTHOR_EMAIL", "test@example.com");
+            std::env::set_var("GIT_COMMITTER_NAME", "Test");
+            std::env::set_var("GIT_COMMITTER_EMAIL", "test@example.com");
+        });
+    }
+
+    fn git(args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    }
+
+    #[test]
+    fn new_makes_a_shared_project_and_publishes_it_to_its_remote() {
+        hermetic();
+        let root = tempfile::tempdir().unwrap();
+        let remote = root.path().join("remote.git");
+        let remote_text = remote.to_str().unwrap();
+        git(&["init", "-q", "--bare", "-b", "main", remote_text]);
+        let location = root.path().join("projects");
+        let args = Args::try_parse_from([
+            "kerf",
+            "new",
+            "Short Film",
+            "--location",
+            location.to_str().unwrap(),
+            "--vertical",
+            "--rate",
+            "24",
+            "--remote",
+            remote_text,
+        ])
+        .unwrap();
+        let Some(Command::New(new)) = args.command else {
+            panic!("new command");
+        };
+        let created = create_project(&new).unwrap();
+
+        assert_eq!(created.path, location.join("Short Film"));
+        assert_eq!(created.remote.as_deref(), Some(remote_text));
+        let document = fs::read_to_string(created.path.join("project.kerf")).unwrap();
+        assert!(
+            document.contains("project name=\"Short Film\""),
+            "{document}"
+        );
+        assert!(document.contains("rate=24 size=1080x1920"), "{document}");
+        for folder in ["media", "presets"] {
+            assert!(created.path.join(folder).is_dir(), "{folder}/");
+        }
+        let attributes = fs::read_to_string(created.path.join(".gitattributes")).unwrap();
+        assert!(attributes.contains("*.kerf merge=kerf"), "{attributes}");
+        assert!(created.path.join(".gitignore").is_file());
+
+        let project = created.path.to_str().unwrap();
+        assert_eq!(
+            git(&["-C", project, "log", "-1", "--format=%s"]),
+            "Create Short Film"
+        );
+        assert_eq!(
+            git(&["-C", project, "rev-parse", "HEAD"]),
+            git(&["--git-dir", remote_text, "rev-parse", "main"]),
+            "the first commit is on the remote"
+        );
+        assert_eq!(
+            git(&["-C", project, "rev-parse", "--abbrev-ref", "@{upstream}"]),
+            "origin/main"
+        );
+        assert!(
+            created
+                .warnings
+                .iter()
+                .all(|warning| !warning.contains("not pushed")),
+            "{:?}",
+            created.warnings
+        );
+    }
+
+    #[test]
+    fn new_without_git_makes_only_the_folder_and_never_overwrites_one() {
+        let root = tempfile::tempdir().unwrap();
+        let location = root.path().to_str().unwrap();
+        let args = Args::try_parse_from(["kerf", "new", "Plain", "--location", location]).unwrap();
+        let Some(Command::New(new)) = args.command else {
+            panic!("new command");
+        };
+        let created = create_project(&new).unwrap();
+        assert!(created.path.join("project.kerf").is_file());
+        assert!(!created.path.join(".git").exists());
+        assert_eq!(created.remote, None);
+
+        let again = create_project(&new).unwrap_err();
+        assert!(format!("{again:#}").contains("already exists"), "{again:#}");
+    }
+
+    #[test]
+    fn sync_refuses_a_folder_that_is_not_a_repository() {
+        hermetic();
+        let root = tempfile::tempdir().unwrap();
+        let error = run_sync(root.path(), Some(Path::new("/nonexistent/kerfd")), None).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("not a Git repository"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn a_sync_report_reads_as_what_happened() {
+        let report = json!({
+            "committed": "1a2b3c4",
+            "incoming": [{"commit": "9f8e7d6", "author": "jun", "subject": "Trimmed c3"}],
+            "fastForward": false,
+            "conflicts": [
+                {"path": "s1/V1/c3", "what": "duration changed on both sides", "kept": "ours"},
+                {"path": "s1/V1/c9", "what": "overlapped c5 on V1; moved to V2", "kept": "theirs"}
+            ],
+            "renamed": [["c7", "c9"]],
+            "summary": ["Changed clip c3: duration", "Added clip c9 on V2"],
+        });
+        let pushed = Pushed {
+            pushed: true,
+            set_upstream: false,
+        };
+        assert_eq!(
+            sync_report(&report, &pushed, Some("origin/main"), true),
+            [
+                "committed 1a2b3c4",
+                "merged 1 incoming commit(s):",
+                "  9f8e7d6 jun · Trimmed c3",
+                "conflict: s1/V1/c3: duration changed on both sides (kept yours)",
+                "conflict: s1/V1/c9: overlapped c5 on V1; moved to V2 (kept theirs)",
+                "renamed incoming c7 to c9, as both sides added c7",
+                "changed in the project:",
+                "  Changed clip c3: duration",
+                "  Added clip c9 on V2",
+                "pushed to origin/main",
+                "downloaded Git LFS media",
+            ]
+        );
+        let idle = json!({"committed": null, "incoming": [], "fastForward": false});
+        assert_eq!(
+            sync_report(&idle, &Pushed::default(), None, false),
+            ["up to date"]
+        );
     }
 
     #[test]
