@@ -295,16 +295,20 @@ impl RuntimeClient {
         })?)
     }
 
+    /// Stage `script` as a proposal that keeps `source` as the script it
+    /// was written as, when that is not `script` itself.
     pub fn stage_script_proposal(
         &self,
         request_key: &str,
         base_revision: u64,
         script: &str,
+        source: Option<&str>,
     ) -> Result<StateSnapshot, RuntimeError> {
         expect_state(self.request(RuntimeRequest::StageScriptProposal {
             request_key: request_key.to_owned(),
             base_revision,
             script: script.to_owned(),
+            source: source.map(str::to_owned),
         })?)
     }
 

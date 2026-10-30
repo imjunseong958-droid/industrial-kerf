@@ -2,7 +2,7 @@
 //! receipts, proposals, and render jobs, and commits each change through
 //! the journal before publishing `project.kerf`.
 
-use crate::kernel::{self, Edit, Edited};
+use crate::kernel::{self, CachedFacts, Edit, Edited};
 use crate::render::render_cancel_path;
 use crate::store::{
     append_journal_record, inspect_projection, load_checkpoint, load_journal,
@@ -19,6 +19,7 @@ use crate::{
     ProposalFreshness, RenderJob, RenderRange, RuntimeError, RuntimeRequest, RuntimeResponse,
     StateSnapshot, SOURCE_VERSION,
 };
+use kerf_lang::NoFacts;
 use kerf_model::Project;
 use std::collections::HashMap;
 use std::fs;
@@ -547,7 +548,8 @@ impl Runtime {
             return replayed;
         }
         self.check_revision(Some(base_revision))?;
-        let (mut candidate, change) = self.edit_candidate(edit.run(&self.state.project)?);
+        let (mut candidate, change) =
+            self.edit_candidate(edit.run(&self.state.project, &self.facts())?);
         candidate.proposal = proposal;
         let snapshot = self.snapshot_of(&candidate);
         if let Some(proposal) = candidate.proposal.as_mut() {
@@ -576,12 +578,14 @@ impl Runtime {
         )
     }
 
-    /// Stage an agent's edit script as a pending proposal.
+    /// Stage an agent's edit script as a pending proposal that keeps
+    /// `source` as the script it was written as, or `script` itself.
     pub fn stage_script_proposal(
         &mut self,
         request_key: &str,
         base_revision: u64,
         script: &str,
+        source: Option<&str>,
     ) -> Result<StateSnapshot, RuntimeError> {
         if request_key.trim().is_empty() {
             return Err(RuntimeError::new(
@@ -613,7 +617,7 @@ impl Runtime {
             }
         }
 
-        let edited = edit.run(&self.state.project)?;
+        let edited = edit.run(&self.state.project, &self.facts())?;
         let document_diff = kerf_lang::diff_text(
             &kernel::print(&self.state.project),
             &kernel::print(&edited.project),
@@ -624,6 +628,7 @@ impl Runtime {
                 proposal_id: format!("proposal-{}", unique_id()),
                 base_revision,
                 script: edited.script,
+                source: source.unwrap_or(script).to_owned(),
                 document_diff,
                 freshness: ProposalFreshness::Current,
             },
@@ -1117,7 +1122,12 @@ impl Runtime {
         let edit = Edit::Script {
             script: script.clone(),
         };
-        Ok(edit.run(&self.state.project)?.project)
+        Ok(edit.run(&self.state.project, &NoFacts)?.project)
+    }
+
+    /// What analysis the project's cache holds, for scripts that read it.
+    fn facts(&self) -> CachedFacts {
+        CachedFacts::new(self.project_path.parent().unwrap_or(Path::new(".")))
     }
 
     /// The document for a renderer: media paths resolved against the
@@ -1309,10 +1319,12 @@ impl Runtime {
                 request_key,
                 base_revision,
                 script,
+                source,
             } => Ok(RuntimeResponse::State(self.stage_script_proposal(
                 &request_key,
                 base_revision,
                 &script,
+                source.as_deref(),
             )?)),
             RuntimeRequest::GetProposalDocuments { proposal_id } => {
                 let (before, after) = self.proposal_documents(&proposal_id)?;
@@ -1461,7 +1473,9 @@ impl Runtime {
             JournalAction::Apply => {
                 let change = record.change.as_ref().ok_or_else(|| missing("apply"))?;
                 let script = change.script.clone().ok_or_else(|| missing("apply"))?;
-                let edited = Edit::Script { script }.run(&self.state.project)?;
+                // Journaled scripts are the operations that ran, which
+                // read no analysis, so replay reads none either.
+                let edited = Edit::Script { script }.run(&self.state.project, &NoFacts)?;
                 verify_change(change, &edited.project, record.sequence)?;
                 let before = std::mem::replace(&mut self.state.project, edited.project);
                 self.state.past.push(HistoryEntry {
@@ -2080,7 +2094,7 @@ mod tests {
         let mut runtime = runtime();
         let before = runtime.snapshot();
         let staged = runtime
-            .stage_script_proposal("agent-reject", 0, "track add T1 subtitle")
+            .stage_script_proposal("agent-reject", 0, "track add T1 subtitle", None)
             .unwrap();
         assert!(matches!(
             staged.pending_proposal,
@@ -2104,6 +2118,43 @@ mod tests {
     }
 
     #[test]
+    fn a_proposal_keeps_its_script_as_written() {
+        let mut runtime = runtime();
+        let written = "track add T1 subtitle\nmarker add at=end as=intent";
+        let staged = runtime
+            .stage_script_proposal("agent-written", 0, written, None)
+            .unwrap();
+        let Some(PendingProposal::Pending {
+            proposal_id,
+            script,
+            source,
+            ..
+        }) = staged.pending_proposal
+        else {
+            panic!("expected a pending proposal");
+        };
+        assert_eq!(source, written);
+        // What runs is the operations, with the anchor resolved.
+        assert!(!script.contains("at=end"), "{script}");
+        assert!(script.contains("marker add as=intent at="), "{script}");
+
+        // An extension runs other text than it was written as.
+        runtime.reject_proposal(&proposal_id).unwrap();
+        let extended = runtime
+            .stage_script_proposal(
+                "agent-extended",
+                0,
+                "track add T1 subtitle\nmarker add as=intent at=00:00:00:00",
+                Some(written),
+            )
+            .unwrap();
+        let Some(PendingProposal::Pending { source, .. }) = extended.pending_proposal else {
+            panic!("expected a pending proposal");
+        };
+        assert_eq!(source, written);
+    }
+
+    #[test]
     fn accepting_a_proposal_is_one_revision_and_one_undo_entry() {
         let mut runtime = runtime();
         let staged = runtime
@@ -2111,6 +2162,7 @@ mod tests {
                 "agent-accept",
                 0,
                 "track add T1 subtitle\nmarker add at=0f as=intent",
+                None,
             )
             .unwrap();
         let proposal_id = pending_id(&staged);
@@ -2140,7 +2192,7 @@ mod tests {
     fn accepted_proposal_receipt_survives_later_mutation_and_rejects_reuse() {
         let mut runtime = runtime();
         let staged = runtime
-            .stage_script_proposal("agent-receipt", 0, "marker add at=0f as=approved")
+            .stage_script_proposal("agent-receipt", 0, "marker add at=0f as=approved", None)
             .unwrap();
         let proposal_id = pending_id(&staged);
         let first = runtime
@@ -2167,7 +2219,7 @@ mod tests {
     fn accepting_a_stale_proposal_conflicts_without_clearing_it() {
         let mut runtime = runtime();
         let staged = runtime
-            .stage_script_proposal("agent-stale", 0, "track add T1 subtitle")
+            .stage_script_proposal("agent-stale", 0, "track add T1 subtitle", None)
             .unwrap();
         let proposal_id = pending_id(&staged);
         edit(&mut runtime, "marker add at=0f as=changed", 0).unwrap();
@@ -2193,6 +2245,7 @@ mod tests {
                 "agent-invalid",
                 0,
                 "track add T1 subtitle\ntrack remove missing",
+                None,
             )
             .unwrap_err();
         assert_eq!(error.code, "EDIT_REJECTED");
@@ -2479,7 +2532,7 @@ mod tests {
         let proposal_id = {
             let mut runtime = Runtime::open(&directory).unwrap();
             let staged = runtime
-                .stage_script_proposal("agent-restart", 0, "marker add at=0f as=survives")
+                .stage_script_proposal("agent-restart", 0, "marker add at=0f as=survives", None)
                 .unwrap();
             pending_id(&staged)
         };
@@ -2509,7 +2562,12 @@ mod tests {
         let proposal_id = {
             let mut runtime = Runtime::open(&directory).unwrap();
             let staged = runtime
-                .stage_script_proposal("agent-accepted-restart", 0, "marker add at=0f as=persisted")
+                .stage_script_proposal(
+                    "agent-accepted-restart",
+                    0,
+                    "marker add at=0f as=persisted",
+                    None,
+                )
                 .unwrap();
             let proposal_id = pending_id(&staged);
             runtime
@@ -2578,6 +2636,7 @@ mod tests {
             proposal_id: "proposal-1".into(),
             base_revision: 2,
             script: "trim c1 out -12f\n".into(),
+            source: "trim c1 out to=c2.start-12f".into(),
             document_diff: "-a\n+b\n".into(),
             freshness: ProposalFreshness::Current,
         })
@@ -2589,6 +2648,7 @@ mod tests {
                 "proposalId": "proposal-1",
                 "baseRevision": 2,
                 "script": "trim c1 out -12f\n",
+                "source": "trim c1 out to=c2.start-12f",
                 "documentDiff": "-a\n+b\n"
             })
         );
@@ -2695,7 +2755,12 @@ mod tests {
     fn durable_rejection_receipt_survives_later_mutation_and_rejects_reuse() {
         let mut runtime = runtime();
         let staged = runtime
-            .stage_script_proposal("agent-reject-receipt", 0, "marker add at=0f as=proposed")
+            .stage_script_proposal(
+                "agent-reject-receipt",
+                0,
+                "marker add at=0f as=proposed",
+                None,
+            )
             .unwrap();
         let proposal_id = pending_id(&staged);
         let first = runtime
@@ -2944,7 +3009,7 @@ mod tests {
     fn proposal_documents_reconstruct_before_and_after_without_mutating_state() {
         let mut runtime = runtime();
         let staged = runtime
-            .stage_script_proposal("preview-proposal", 0, "marker add at=0f as=title")
+            .stage_script_proposal("preview-proposal", 0, "marker add at=0f as=title", None)
             .unwrap();
         let proposal_id = pending_id(&staged);
         let before_revision = runtime.snapshot().revision;
@@ -3014,7 +3079,12 @@ mod tests {
         );
 
         let staged = runtime
-            .stage_script_proposal("trim", runtime.snapshot().revision, "trim c1 out -24f")
+            .stage_script_proposal(
+                "trim",
+                runtime.snapshot().revision,
+                "trim c1 out -24f",
+                None,
+            )
             .unwrap();
         let Some(PendingProposal::Pending { proposal_id, .. }) = staged.pending_proposal else {
             panic!("expected a pending proposal");
@@ -3136,7 +3206,7 @@ mod tests {
     fn script_proposals_show_a_document_diff_and_apply_on_acceptance() {
         let (mut runtime, directory) = kernel_runtime("script-proposal");
         let staged = runtime
-            .stage_script_proposal("agent-1", 0, "trim c1 out -1s ripple")
+            .stage_script_proposal("agent-1", 0, "trim c1 out -1s ripple", None)
             .unwrap();
         assert_eq!(staged.revision, 0);
         let pending = serde_json::to_value(staged.pending_proposal.unwrap()).unwrap();

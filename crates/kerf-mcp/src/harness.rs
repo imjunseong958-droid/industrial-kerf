@@ -10,10 +10,14 @@ use super::{engine_error, KerfMcpRouter, McpError, ToolAnnotations};
 use base64::Engine;
 use kerf_engine::derivatives::{DerivativeCache, SourceIdentity};
 use kerf_engine::render::{render_program, RenderOptions};
-use kerf_lang::{apply_script, parse_document, print_document, reference, Clock, PrintOptions};
+use kerf_lang::{
+    apply_script, apply_script_with, parse_document, print_document, reference, Clock, Facts,
+    PrintOptions,
+};
 use kerf_model::{Catalog, Content, Media, Project, Sequence, Time};
 use kerf_runtime::{
-    PendingProposal, ProposalFreshness, RenderJob, RenderRange, RuntimeClient, RuntimeError,
+    CachedFacts, PendingProposal, ProposalFreshness, RenderJob, RenderRange, RuntimeClient,
+    RuntimeError,
 };
 use kerf_skills::Skill;
 use serde::Deserialize;
@@ -46,8 +50,6 @@ const MAX_CONTEXT_DIFF_BYTES: usize = 8 * 1024;
 /// Onsets a media index lists without a range.
 const MAX_INDEX_ONSETS: usize = 100;
 const DEFAULT_SHEET_TILE_WIDTH: u32 = 320;
-/// Words a caption holds unless `captions … words=<n>` says otherwise.
-const DEFAULT_CAPTION_WORDS: usize = 4;
 const SHEET_COLUMNS: usize = 4;
 const MAX_SHEET_FRAMES: usize = 16;
 
@@ -85,9 +87,8 @@ template clip ids to new text. This replaces the chosen sequence (the first \
 by default) as a normal proposal. Every slot must be bound; its minimum \
 duration includes transition handles. Inspect the preset before binding it.
 
-In an edit script, `captions <clip> on=<subtitle track> [words=<n>]` captions \
-what the clip says, timed to its speech, from a transcript of its media made \
-earlier with `look`; the proposal's script shows the lines it became.
+A script's `captions` line needs a transcript of the clip's media made \
+earlier with `look`; the proposal's script shows the caption lines it became.
 
 Check findings include what an editor would catch: black frames, picture that \
 leaves the frame's edges black, flash frames, and sound cut inside a word \
@@ -417,15 +418,25 @@ fn print_seconds(clock: &Clock, seconds: f64) -> String {
 }
 
 impl KerfMcpRouter {
-    /// The script and base revision of `id`, the proposal waiting for review.
-    fn pending(&self, id: &str) -> Result<(String, u64), McpError> {
+    /// The proposal `id` waiting for review: the operations it runs, the
+    /// script as it was written, and its base revision.
+    fn pending(&self, id: &str) -> Result<(String, String, u64), McpError> {
         match self.runtime.get_state()?.pending_proposal {
             Some(PendingProposal::Pending {
                 proposal_id,
                 script,
+                source,
                 base_revision,
                 ..
-            }) if proposal_id == id => Ok((script, base_revision)),
+            }) if proposal_id == id => {
+                // Proposals staged before they kept their source wrote none.
+                let source = if source.is_empty() {
+                    script.clone()
+                } else {
+                    source
+                };
+                Ok((script, source, base_revision))
+            }
             _ => Err(McpError::new(
                 "NOT_PENDING",
                 format!("proposal {id} is not waiting for review"),
@@ -441,7 +452,7 @@ impl KerfMcpRouter {
         let Some(id) = proposal else {
             return Ok((revision, project));
         };
-        let (script, base_revision) = self.pending(id)?;
+        let (script, _, base_revision) = self.pending(id)?;
         if base_revision != revision {
             return Err(McpError::new(
                 "PROPOSAL_STALE",
@@ -1204,7 +1215,7 @@ impl KerfMcpRouter {
         }
         let replaced = input.extend.as_deref().or(input.revise.as_deref());
         let prior = match replaced {
-            Some(id) => Some(self.pending(id)?.0),
+            Some(id) => Some(self.pending(id)?),
             None => None,
         };
         // `extend` runs the script on what the proposal makes; `revise` on
@@ -1220,24 +1231,53 @@ impl KerfMcpRouter {
             )?,
             None => input.script.expect("checked script input"),
         };
-        let (expanded, origins) = self.expand_captions(&before, &source_script)?;
-        let applied = apply_script(&before, catalog(), &expanded)
-            .map_err(|errors| refused(errors, &origins))?;
+        let facts = CachedFacts::new(&self.dir);
+        let applied =
+            apply_script_with(&before, catalog(), &facts, &source_script).map_err(refused)?;
         if print_document(&applied.project, catalog(), PrintOptions::default())
             == print_document(&before, catalog(), PrintOptions::default())
         {
             return Err(McpError::new("NO_CHANGE", "the script changes nothing"));
         }
-        let script = match prior.filter(|_| input.extend.is_some()) {
-            Some(prior) => format!("{}\n{expanded}", prior.trim_end()),
-            None => expanded,
+        // An extension runs the operations of the proposal it extends, which
+        // read nothing that could have changed since, and then this script;
+        // it keeps both scripts as they were written.
+        let (script, written) = match prior.filter(|_| input.extend.is_some()) {
+            Some((operations, source, _)) => {
+                let operations = operations.trim_end();
+                let script = format!("{operations}\n{source_script}");
+                let (_, base) = self.project_at(None)?;
+                let staged = apply_script_with(&base, catalog(), &facts, &script)
+                    .map_err(|errors| refused(after(errors, operations.lines().count())))?;
+                // Such as when the operations end on another sequence than
+                // this script started on.
+                if print_document(&staged.project, catalog(), PrintOptions::default())
+                    != print_document(&applied.project, catalog(), PrintOptions::default())
+                {
+                    return Err(McpError::new(
+                        "SCRIPT_REFUSED",
+                        "after the operations of the proposal it extends, this script does \
+                         something else than it did on its own; start it with `use <sequence>`",
+                    ));
+                }
+                (
+                    script,
+                    Some(format!("{}\n{source_script}", source.trim_end())),
+                )
+            }
+            None => (source_script, None),
         };
         if let Some(id) = replaced {
             self.runtime.reject_proposal(id)?;
         }
         let snapshot = self
             .runtime
-            .stage_script_proposal(&operation_key("agent-edit"), revision, &script)
+            .stage_script_proposal(
+                &operation_key("agent-edit"),
+                revision,
+                &script,
+                written.as_deref(),
+            )
             .map_err(|error| match error.code.as_str() {
                 "PROPOSAL_PENDING" => McpError::new(
                     "PROPOSAL_PENDING",
@@ -1278,89 +1318,6 @@ impl KerfMcpRouter {
             "check": check,
             "preview": preview,
         }))
-    }
-
-    /// `script` with each `captions <clip> on=<track> [words=<n>]` line
-    /// replaced by the lines that caption what the clip says, from
-    /// transcripts of its media already made; and the line of `script`
-    /// each line came from.
-    fn expand_captions(
-        &self,
-        project: &Project,
-        script: &str,
-    ) -> Result<(String, Vec<usize>), McpError> {
-        let mut lines: Vec<String> = Vec::new();
-        let mut origins = Vec::new();
-        for (index, line) in script.lines().enumerate() {
-            let number = index + 1;
-            let mut words = line.split_whitespace();
-            if words.next() != Some("captions") {
-                lines.push(line.to_owned());
-                origins.push(number);
-                continue;
-            }
-            let error = |message: String| {
-                McpError::new(
-                    "SCRIPT_REFUSED",
-                    format!("error[captions] {number}:1: {message}"),
-                )
-            };
-            let clip = words
-                .next()
-                .ok_or_else(|| error("captions needs a clip".into()))?;
-            let (mut track, mut most) = (None, DEFAULT_CAPTION_WORDS);
-            for field in words {
-                match field.split_once('=') {
-                    Some(("on", id)) => track = Some(id),
-                    Some(("words", count)) => {
-                        most = count
-                            .parse()
-                            .ok()
-                            .filter(|count| *count > 0)
-                            .ok_or_else(|| error(format!("`{count}` is not a word count")))?;
-                    }
-                    _ => {
-                        return Err(error(format!(
-                            "unexpected `{field}`; captions takes on=<subtitle track> and words=<n>"
-                        )))
-                    }
-                }
-            }
-            let track = track.ok_or_else(|| error("captions needs on=<subtitle track>".into()))?;
-            // The clip as the lines before this one leave it.
-            let so_far = apply_script(project, catalog(), &lines.join("\n"))
-                .map_err(|errors| refused(errors, &origins))?
-                .project;
-            let media = so_far
-                .locate(clip)
-                .map(|at| &so_far.clip_at(at).content)
-                .and_then(|content| match content {
-                    Content::Media { media, .. } => so_far.media(media.as_str()),
-                    _ => None,
-                })
-                .ok_or_else(|| error(format!("no media clip `{clip}`")))?;
-            let (spoken, covered) = known_speech(&self.dir, media);
-            let (source_in, source_out) = so_far
-                .clip_at(so_far.locate(clip).expect("located above"))
-                .source_range()
-                .unwrap_or_default();
-            if !covers(&covered, source_in.seconds(), source_out.seconds()) {
-                let clock = Clock::of_media(media);
-                return Err(error(format!(
-                    "no transcript of `{}` covers `{clip}` ({}–{}); look at it with transcript, from, and to first",
-                    media.id,
-                    clock.print_position(source_in),
-                    clock.print_position(source_out),
-                )));
-            }
-            let captions =
-                kerf_lang::caption_script(&so_far, clip, track, &spoken, most).map_err(error)?;
-            for caption in captions.lines() {
-                lines.push(caption.to_owned());
-                origins.push(number);
-            }
-        }
-        Ok((lines.join("\n"), origins))
     }
 
     /// Contact sheets of what the edit changed in `from`–`to`, before and
@@ -1581,56 +1538,19 @@ fn find_fx(words: &str) -> Vec<Value> {
         .collect()
 }
 
-fn refused(errors: Vec<kerf_model::Diagnostic>, origins: &[usize]) -> McpError {
-    let errors: Vec<_> = errors
-        .into_iter()
-        .map(|mut error| {
-            if let Some(span) = error.span.as_mut() {
-                span.line = origins.get(span.line - 1).copied().unwrap_or(span.line);
-            }
-            error
-        })
-        .collect();
+fn refused(errors: Vec<kerf_model::Diagnostic>) -> McpError {
     McpError::new("SCRIPT_REFUSED", diagnostics(&errors))
 }
 
-/// The words of `media` that transcripts already made know, in seconds of
-/// the media, and the ranges those transcripts cover. Nothing is
-/// transcribed.
-fn known_speech(dir: &Path, media: &Media) -> (Vec<kerf_lang::Word>, Vec<(f64, f64)>) {
-    let path = resolve_project_source_path(dir, &media.path);
-    let transcripts =
-        kerf_engine::cached_transcripts(&path.to_string_lossy(), &DerivativeCache::new(dir))
-            .unwrap_or_default();
-    let ranges = transcripts
-        .iter()
-        .map(|transcript| (transcript.range.start, transcript.range.end))
-        .collect();
-    let words = transcripts
-        .into_iter()
-        .flat_map(|transcript| transcript.cues)
-        .flat_map(|cue| cue.words)
-        .map(|word| kerf_lang::Word {
-            start: word.start,
-            end: word.end,
-            text: word.text.trim().to_owned(),
-        })
-        .collect();
-    (words, ranges)
-}
-
-/// Whether `ranges` together cover `from`–`to`, give or take a frame.
-fn covers(ranges: &[(f64, f64)], from: f64, to: f64) -> bool {
-    let mut ranges = ranges.to_vec();
-    ranges.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let mut reached = from;
-    for (start, end) in ranges {
-        if start > reached + 0.05 {
-            break;
+/// `errors` of a script run after `lines` lines of other script, with
+/// their lines counted in that script.
+fn after(mut errors: Vec<kerf_model::Diagnostic>, lines: usize) -> Vec<kerf_model::Diagnostic> {
+    for error in &mut errors {
+        if let Some(span) = error.span.as_mut() {
+            span.line = span.line.saturating_sub(lines);
         }
-        reached = reached.max(end);
     }
-    reached + 0.05 >= to
+    errors
 }
 
 /// Media that some clip uses.
@@ -1683,9 +1603,11 @@ fn check(project: &Project, dir: &Path) -> Value {
             "message": warning.message,
         }));
     }
+    let facts = CachedFacts::new(dir);
     findings.extend(crate::lint::findings(project, |media| {
-        known_speech(dir, media)
-            .0
+        facts
+            .speech(media)
+            .words
             .into_iter()
             .map(|word| (word.start, word.end, word.text))
             .collect()
@@ -1996,6 +1918,7 @@ sequence s1 rate=24 size=1920x1080
             proposal_id: "p1".into(),
             base_revision: 3,
             script: "trim c1 out -6f".into(),
+            source: String::new(),
             document_diff: "-a\n+b\n".into(),
             freshness: ProposalFreshness::Stale,
         };

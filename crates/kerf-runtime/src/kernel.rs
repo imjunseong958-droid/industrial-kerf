@@ -6,7 +6,9 @@
 
 use crate::RuntimeError;
 use kerf_engine::ProbeInfo;
-use kerf_lang::{apply_script, parse_document, print_document, print_ops, PrintOptions};
+use kerf_lang::{
+    apply_script_with, parse_document, print_document, print_ops, Facts, PrintOptions, Speech,
+};
 use kerf_model::{
     apply, AudioInfo, Catalog, ClipChange, Content, Diagnostic, Edge, Effect, FxDef, Id,
     MarkerColor, Mask, MaskMode, MaskShape, Media, NewClip, Op, Param, ParamType, Project, Rate,
@@ -86,6 +88,47 @@ pub fn use_proxies(project: &mut Project, directory: &std::path::Path) {
     for media in &mut project.media {
         if let Some(proxy) = kerf_engine::cached_proxy(std::path::Path::new(&media.path), &cache) {
             media.path = proxy.to_string_lossy().into_owned();
+        }
+    }
+}
+
+/// What analysis already made of a project's media, read from the
+/// project's cache when a script line asks. Nothing is analysed here.
+pub struct CachedFacts {
+    directory: std::path::PathBuf,
+}
+
+impl CachedFacts {
+    pub fn new(directory: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            directory: directory.into(),
+        }
+    }
+}
+
+impl Facts for CachedFacts {
+    /// The words transcripts already made of `media` heard, and the ranges
+    /// they cover. Nothing is transcribed.
+    fn speech(&self, media: &Media) -> Speech {
+        let path = self.directory.join(&media.path);
+        let cache = kerf_engine::derivatives::DerivativeCache::new(&self.directory);
+        let transcripts =
+            kerf_engine::cached_transcripts(&path.to_string_lossy(), &cache).unwrap_or_default();
+        Speech {
+            covered: transcripts
+                .iter()
+                .map(|transcript| (transcript.range.start, transcript.range.end))
+                .collect(),
+            words: transcripts
+                .into_iter()
+                .flat_map(|transcript| transcript.cues)
+                .flat_map(|cue| cue.words)
+                .map(|word| kerf_lang::Word {
+                    start: word.start,
+                    end: word.end,
+                    text: word.text.trim().to_owned(),
+                })
+                .collect(),
         }
     }
 }
@@ -177,10 +220,12 @@ impl Edit {
         serde_json::to_string(self).unwrap_or_default()
     }
 
-    pub fn run(&self, project: &Project) -> Result<Edited, RuntimeError> {
+    /// Run the edit on `project`; script lines that read analysis read it
+    /// from `facts`.
+    pub fn run(&self, project: &Project, facts: &dyn Facts) -> Result<Edited, RuntimeError> {
         match self {
             Self::Script { script } => {
-                let applied = apply_script(project, catalog(), script)
+                let applied = apply_script_with(project, catalog(), facts, script)
                     .map_err(|errors| diagnostics_error("EDIT_REJECTED", &errors))?;
                 Ok(Edited {
                     script: print_ops(project, catalog(), &applied.ops),
