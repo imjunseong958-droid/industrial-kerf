@@ -23,7 +23,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -220,6 +220,8 @@ struct Shared {
     directory: PathBuf,
     /// The media status last emitted.
     media_status: Mutex<media::MediaStatus>,
+    /// Copies into `media/` still running; live sync waits for them.
+    copies: AtomicUsize,
 }
 
 struct Bridge {
@@ -433,7 +435,7 @@ fn runtime_worker(
             // A shared project copies the file into media/ on another
             // thread, then imports the copy.
             Command::Import { path } if media::needs_copy(&directory, Path::new(&path)) => {
-                media::copy_then(&directory, &path, &commands, &tx, |path| Command::Import {
+                media::copy_then(&shared, &path, &commands, &tx, |path| Command::Import {
                     path,
                 });
                 continue;
@@ -446,7 +448,7 @@ fn runtime_worker(
             Command::MediaReplace { media, path }
                 if media::needs_copy(&directory, Path::new(&path)) =>
             {
-                media::copy_then(&directory, &path, &commands, &tx, move |path| {
+                media::copy_then(&shared, &path, &commands, &tx, move |path| {
                     Command::MediaReplace { media, path }
                 });
                 continue;
@@ -1114,6 +1116,9 @@ fn cloud_status(tx: &SyncSender<Value>, command: Option<Command>) {
 fn mcp_connection_status(line: &str) -> &'static str {
     if line.starts_with("mcp: connected ") {
         "MCP server connected"
+    } else if line == inbound::TRACKED_PROJECT_CONFIG {
+        "Skipped the project's .kerf/mcp.json: Git tracks it, so it came with the repository \
+         rather than from you. Untrack it (git rm --cached .kerf/mcp.json) to use its servers."
     } else {
         "MCP server unavailable; skipped. Check its local command and configuration."
     }
@@ -1371,6 +1376,7 @@ pub unsafe extern "C" fn kerf_bridge_new(
     let shared = Arc::new(Shared {
         directory: directory.clone(),
         media_status: Mutex::new(media::MediaStatus::default()),
+        copies: AtomicUsize::new(0),
         revision: AtomicU64::new(0),
         closed: AtomicBool::new(false),
         agent_busy: AtomicBool::new(false),
@@ -1780,25 +1786,11 @@ mod tests {
     };
     use kerf_runtime::{EditOp, PendingProposal, ProposalFreshness, StateSnapshot};
     use serde_json::json;
-    use std::sync::atomic::{AtomicBool, AtomicU64};
     use std::sync::mpsc;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     fn shared() -> Shared {
-        Shared {
-            directory: std::env::temp_dir(),
-            media_status: Mutex::new(Default::default()),
-            revision: AtomicU64::new(0),
-            closed: AtomicBool::new(false),
-            agent_busy: AtomicBool::new(false),
-            export_busy: AtomicBool::new(false),
-            abort: Mutex::new(None),
-            frame: Mutex::new(None),
-            seek: Mutex::new(None),
-            project: Mutex::new(None),
-            model: Mutex::new(None),
-            previews: AtomicU64::new(0),
-        }
+        crate::tests_support::shared(&std::env::temp_dir())
     }
 
     const DOCUMENT: &str = "kerf 1\nproject name=\"Bridge\"\n\
@@ -2073,6 +2065,11 @@ mod tests {
         );
         assert!(status.contains("unavailable"));
         assert!(!status.contains("secret"));
+        let skipped = super::mcp_connection_status(kerf_mcp::inbound::TRACKED_PROJECT_CONFIG);
+        assert!(
+            skipped.contains(".kerf/mcp.json") && skipped.contains("Git tracks it"),
+            "{skipped}"
+        );
     }
 
     #[test]

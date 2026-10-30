@@ -5,6 +5,7 @@
 
 mod driver;
 pub mod git;
+pub mod media;
 mod merge;
 pub mod scaffold;
 

@@ -883,27 +883,11 @@ fn import_media(
     media: &str,
     cookies: Option<&Path>,
 ) -> Result<PathBuf> {
-    let path = if media.starts_with("http://") || media.starts_with("https://") {
-        let result = kerf_fetcher::fetch_video(
-            media,
-            directory,
-            &kerf_fetcher::FetchOptions {
-                cookies: cookies.map(Path::to_path_buf),
-                ..kerf_fetcher::FetchOptions::default()
-            },
-        )?;
-        result.path
-    } else {
-        let path = PathBuf::from(media);
-        if path.is_absolute() {
-            path
-        } else {
-            directory.join(path)
-        }
+    let options = kerf_fetcher::FetchOptions {
+        cookies: cookies.map(Path::to_path_buf),
+        ..kerf_fetcher::FetchOptions::default()
     };
-    if !path.is_file() {
-        bail!("media file does not exist: {}", path.display());
-    }
+    let path = media_file(directory, media, &options)?;
     let router = open_router(directory, kerfd)?;
     let snapshot = router.runtime().get_state().map_err(runtime_error)?;
     let key = operation_key("cli-import");
@@ -911,6 +895,44 @@ fn import_media(
         .runtime()
         .import_media_request("agent", &key, &path.to_string_lossy(), snapshot.revision)
         .map_err(runtime_error)?;
+    Ok(path)
+}
+
+/// The file `kerf <media>` imports into the project in `directory`: a
+/// download of a URL, or a local file. A project that keeps its media in
+/// `media/` gets a copy there (named by its content) of a download and of a
+/// file its repository would not carry, as the editor's import does.
+fn media_file(
+    directory: &Path,
+    media: &str,
+    options: &kerf_fetcher::FetchOptions,
+) -> Result<PathBuf> {
+    if media.starts_with("http://") || media.starts_with("https://") {
+        if !kerf_collab::media::shares_media(directory) {
+            return Ok(kerf_fetcher::fetch_video(media, directory, options)?.path);
+        }
+        // Downloaded where Git does not look, so a sync meanwhile never
+        // commits half of it, then copied in.
+        let folder = kerf_collab::media::incoming_path(directory, "-download")
+            .context("make a download folder")?;
+        let copied = kerf_fetcher::fetch_video(media, &folder, options)
+            .map_err(anyhow::Error::from)
+            .and_then(|fetched| {
+                kerf_collab::media::copy_into_media(directory, &fetched.path)
+                    .with_context(|| format!("copy {} into media/", fetched.path.display()))
+            });
+        let _ = fs::remove_dir_all(&folder);
+        return Ok(directory.join(copied?));
+    }
+    let path = kerf_collab::media::absolute(directory, Path::new(media));
+    if !path.is_file() {
+        bail!("media file does not exist: {}", path.display());
+    }
+    if kerf_collab::media::needs_copy(directory, &path) {
+        let copy = kerf_collab::media::copy_into_media(directory, &path)
+            .with_context(|| format!("copy {} into media/", path.display()))?;
+        return Ok(directory.join(copy));
+    }
     Ok(path)
 }
 
@@ -1023,8 +1045,8 @@ fn operation_key(kind: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        create_project, editor_command, editor_project, preset_request, requested_project,
-        run_sync, sync_report, uses_terminal, Args, Command, PresetAction,
+        create_project, editor_command, editor_project, media_file, preset_request,
+        requested_project, run_sync, sync_report, uses_terminal, Args, Command, PresetAction,
     };
     use clap::Parser;
     use kerf_collab::git::Pushed;
@@ -1306,6 +1328,81 @@ mod tests {
 
         let again = create_project(&new).unwrap_err();
         assert!(format!("{again:#}").contains("already exists"), "{again:#}");
+    }
+
+    #[test]
+    fn imported_files_go_into_media_in_a_project_that_keeps_it() {
+        let root = tempfile::tempdir().unwrap();
+        let downloads = root.path().join("Downloads");
+        fs::create_dir_all(&downloads).unwrap();
+        let clip = downloads.join("a.mov");
+        fs::write(&clip, b"picture").unwrap();
+        let options = kerf_fetcher::FetchOptions::default();
+        let clip_text = clip.to_str().unwrap();
+
+        // A plain folder imports the file where it is.
+        let plain = root.path().join("Plain");
+        fs::create_dir_all(&plain).unwrap();
+        assert_eq!(media_file(&plain, clip_text, &options).unwrap(), clip);
+
+        // A shared one copies it into media/, named by its content.
+        let shared = root.path().join("Shared");
+        fs::create_dir_all(shared.join("media")).unwrap();
+        let copy = media_file(&shared, clip_text, &options).unwrap();
+        let name = copy.strip_prefix(shared.join("media")).unwrap();
+        let name = name.to_str().unwrap();
+        assert!(name.starts_with("a-") && name.ends_with(".mov"), "{name}");
+        assert_eq!(fs::read(&copy).unwrap(), b"picture");
+        // A file already in media/ is imported as it is.
+        assert_eq!(
+            media_file(&shared, &format!("media/{name}"), &options).unwrap(),
+            copy
+        );
+        assert!(media_file(&shared, "missing.mov", &options).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn downloads_into_a_shared_project_land_in_media() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        // A yt-dlp that writes a video where it runs.
+        let yt_dlp = root.path().join("yt-dlp");
+        fs::write(
+            &yt_dlp,
+            "#!/bin/sh\n[ \"$1\" = --version ] && { echo 2025.01.01; exit 0; }\n\
+             printf video > Clip.mp4\necho '[download] Destination: Clip.mp4'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&yt_dlp, fs::Permissions::from_mode(0o755)).unwrap();
+        let options = kerf_fetcher::FetchOptions {
+            yt_dlp_binary: Some(yt_dlp),
+            ..kerf_fetcher::FetchOptions::default()
+        };
+        let url = "https://example.com/watch?v=1";
+
+        let shared = root.path().join("Shared");
+        fs::create_dir_all(shared.join("media")).unwrap();
+        let copy = media_file(&shared, url, &options).unwrap();
+        assert_eq!(copy.parent(), Some(shared.join("media").as_path()));
+        let name = copy.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name.starts_with("Clip-") && name.ends_with(".mp4"),
+            "{name}"
+        );
+        assert_eq!(fs::read(&copy).unwrap(), b"video");
+        // Nothing is left beside project.kerf, where `/*.mp4` is ignored,
+        // or in the download folder.
+        assert!(!shared.join("Clip.mp4").exists());
+        let incoming = shared.join(kerf_collab::media::INCOMING_DIR);
+        assert_eq!(fs::read_dir(incoming).unwrap().count(), 0);
+
+        let plain = root.path().join("Plain");
+        fs::create_dir_all(&plain).unwrap();
+        assert_eq!(
+            media_file(&plain, url, &options).unwrap(),
+            plain.join("Clip.mp4")
+        );
     }
 
     #[test]

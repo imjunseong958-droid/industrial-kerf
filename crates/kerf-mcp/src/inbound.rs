@@ -125,8 +125,9 @@ impl InboundMcpRegistry {
     /// Load `~/.kerf/mcp.json` and `<project>/.kerf/mcp.json`, then connect to
     /// every valid server. Missing or unavailable servers are skipped with a
     /// warning so the local Kerf workflow remains usable without optional MCPs.
+    /// A project file that Git tracks is skipped too ([`TRACKED_PROJECT_CONFIG`]).
     pub fn connect(directory: &Path, mut log: impl FnMut(String)) -> Result<Self, String> {
-        let configs = load_configs(directory)?;
+        let configs = load_configs(directory, &mut log)?;
         let mut servers = BTreeMap::new();
         for (name, config) in configs {
             match ConnectedServer::connect(config) {
@@ -686,14 +687,26 @@ where
     (!server.is_empty() && !tool.is_empty()).then(|| (server.to_owned(), tool.to_owned()))
 }
 
-fn load_configs(directory: &Path) -> Result<BTreeMap<String, McpServerConfig>, String> {
+/// Where MCP servers are configured, in the home folder and in a project.
+const CONFIG_FILE: &str = ".kerf/mcp.json";
+
+/// What the log says when a project's `.kerf/mcp.json` is skipped because
+/// Git tracks it.
+pub const TRACKED_PROJECT_CONFIG: &str = "warning: mcp: skipped the project's .kerf/mcp.json \
+because Git tracks it, so it came with the repository rather than from you; untrack it \
+(git rm --cached .kerf/mcp.json) to use its servers";
+
+fn load_configs(
+    directory: &Path,
+    log: &mut impl FnMut(String),
+) -> Result<BTreeMap<String, McpServerConfig>, String> {
     let home = env::var_os("HOME").map(PathBuf::from);
     let mut merged = BTreeMap::new();
     let mut paths = Vec::new();
     if let Some(home) = home {
-        paths.push(home.join(".kerf/mcp.json"));
+        paths.push(home.join(CONFIG_FILE));
     }
-    paths.push(directory.join(".kerf/mcp.json"));
+    paths.extend(project_config(directory, log));
     for path in paths {
         let raw = match fs::read(&path) {
             Ok(raw) => raw,
@@ -707,15 +720,78 @@ fn load_configs(directory: &Path) -> Result<BTreeMap<String, McpServerConfig>, S
     Ok(merged)
 }
 
+/// The project's `.kerf/mcp.json`, unless Git tracks it. The file is meant
+/// to stay on one machine; a tracked one is whatever a collaborator
+/// committed, which a pull or sync writes over one's own, so its commands
+/// are never run.
+fn project_config(directory: &Path, log: &mut impl FnMut(String)) -> Option<PathBuf> {
+    let path = directory.join(CONFIG_FILE);
+    if path.exists() && tracked(directory, CONFIG_FILE) {
+        log(TRACKED_PROJECT_CONFIG.to_owned());
+        return None;
+    }
+    Some(path)
+}
+
+/// Whether Git tracks `path`, relative to `directory`.
+fn tracked(directory: &Path, path: &str) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(directory)
+        .args(["ls-files", "--error-unmatch", "--", path])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_tool_name, parse_tool_response, ConnectedServer, InboundMcpRegistry, McpServerConfig,
+        parse_tool_name, parse_tool_response, project_config, ConnectedServer, InboundMcpRegistry,
+        McpServerConfig, TRACKED_PROJECT_CONFIG,
     };
     use super::{AtomicBool, Duration, Instant, Ordering, MCP_MAX_MESSAGE_BYTES};
     use serde_json::json;
     use std::collections::BTreeMap;
+    use std::path::Path;
+    use std::process::Command;
     use std::sync::Arc;
+
+    fn git(directory: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(directory)
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    }
+
+    #[test]
+    fn a_project_config_git_tracks_is_never_loaded() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path();
+        let config = project.join(".kerf/mcp.json");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(
+            &config,
+            r#"{"mcpServers":{"mine":{"command":"/bin/sh","args":["-c","exit 1"]}}}"#,
+        )
+        .unwrap();
+        let mut lines = Vec::new();
+        let mut log = |line: String| lines.push(line);
+        // Outside a repository, and untracked in one, it is one's own.
+        assert_eq!(project_config(project, &mut log), Some(config.clone()));
+        git(project, &["init", "-q"]);
+        assert_eq!(project_config(project, &mut log), Some(config.clone()));
+        // Committed by someone (sync brings it to everyone), it is skipped.
+        git(project, &["add", "-f", ".kerf/mcp.json"]);
+        assert_eq!(project_config(project, &mut log), None);
+        assert_eq!(lines, [TRACKED_PROJECT_CONFIG]);
+    }
 
     #[test]
     fn namespaced_parser_prefers_the_longest_server_prefix() {

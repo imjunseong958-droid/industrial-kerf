@@ -24,7 +24,6 @@ kerf-fx = { path = "../kerf-fx" }
 base64 = "0.23"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"

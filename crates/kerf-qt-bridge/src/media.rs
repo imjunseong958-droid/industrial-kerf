@@ -1,254 +1,72 @@
-//! A shared project's media files: copies into `media/` named by what they
-//! hold, so every collaborator's copy of one file has one name, and which
-//! media are offline, not downloaded, or outside the project.
+//! A shared project's media files in the editor: copies into `media/` made
+//! off the runtime worker (named by what they hold; see
+//! [`kerf_collab::media`]), and which media are offline, not downloaded, or
+//! not carried by the project's repository.
 
 use crate::{emit, Command, Shared};
 use kerf_collab::git::is_lfs_pointer;
-use kerf_collab::scaffold::MEDIA_DIR;
+use kerf_collab::media::{absolute, external, relative_to};
+pub(crate) use kerf_collab::media::{copy_into_media, needs_copy};
 use kerf_model::{Catalog, Id, Op, Project};
 use serde::Serialize;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::fs::{self, File};
-use std::io::{self, Read, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::SyncSender;
+use std::sync::Arc;
 use std::thread;
-
-/// Hex digits of the SHA-256 a copy's name carries. Longer only when a
-/// different file already holds the shorter name.
-const NAME_DIGITS: [usize; 5] = [8, 12, 16, 32, 64];
-
-/// Whether importing `path` into the project in `directory` copies the file
-/// into `media/` first: the project keeps its media there (it has the
-/// folder, or it is a repository whose clone has not made it yet) and the
-/// file is outside the project.
-pub(crate) fn needs_copy(directory: &Path, path: &Path) -> bool {
-    let shares_media = directory.join(MEDIA_DIR).is_dir() || directory.join(".git").exists();
-    shares_media && !inside(directory, &absolute(directory, path))
-}
-
-fn absolute(directory: &Path, path: &Path) -> PathBuf {
-    if path.is_absolute() {
-        path.to_owned()
-    } else {
-        directory.join(path)
-    }
-}
-
-/// Whether `file` is inside `directory`, comparing folders as they resolve
-/// (macOS's `/var` is `/private/var`); the file's own name is kept even
-/// when it is a link.
-pub(crate) fn inside(directory: &Path, file: &Path) -> bool {
-    match (directory.canonicalize(), resolved_parent(file)) {
-        (Ok(directory), Some(parent)) => parent.starts_with(directory),
-        _ => false,
-    }
-}
-
-fn resolved_parent(file: &Path) -> Option<PathBuf> {
-    file.parent()
-        .map(|parent| {
-            if parent.as_os_str().is_empty() {
-                Path::new(".")
-            } else {
-                parent
-            }
-        })
-        .and_then(|parent| parent.canonicalize().ok())
-}
-
-/// `file` relative to `directory` with `/` separators, when it is inside.
-fn relative_to(directory: &Path, file: &Path) -> Option<String> {
-    let directory = directory.canonicalize().ok()?;
-    let path = resolved_parent(file)?.join(file.file_name()?);
-    let relative = path.strip_prefix(directory).ok()?;
-    let parts: Option<Vec<&str>> = relative
-        .components()
-        .map(|component| match component {
-            Component::Normal(part) => part.to_str(),
-            _ => None,
-        })
-        .collect();
-    parts
-        .filter(|parts| !parts.is_empty())
-        .map(|parts| parts.join("/"))
-}
 
 /// Copy the file at `path` into the project's `media/` folder on its own
 /// thread, then hand the runtime worker `then(copy)`, which names the copy
-/// by its project-relative path. A copy that fails is reported.
+/// by its project-relative path. A copy that fails is reported. Live sync
+/// waits while copies run.
 pub(crate) fn copy_then(
-    directory: &Path,
+    shared: &Arc<Shared>,
     path: &str,
     commands: &SyncSender<Command>,
     tx: &SyncSender<Value>,
     then: impl FnOnce(String) -> Command + Send + 'static,
 ) {
-    let source = absolute(directory, Path::new(path));
-    let directory = directory.to_owned();
+    let source = absolute(&shared.directory, Path::new(path));
+    let copying = Copying::start(shared);
     let (commands, tx) = (commands.clone(), tx.clone());
-    thread::spawn(move || match copy_into_media(&directory, &source) {
-        Ok(copy) => {
-            let _ = commands.send(then(copy));
+    thread::spawn(move || {
+        let copied = copy_into_media(&copying.0.directory, &source);
+        drop(copying);
+        match copied {
+            Ok(copy) => {
+                let _ = commands.send(then(copy));
+            }
+            Err(error) => crate::error(
+                &tx,
+                format!("cannot copy {} into media/: {error}", source.display()),
+            ),
         }
-        Err(error) => crate::error(
-            &tx,
-            format!("cannot copy {} into media/: {error}", source.display()),
-        ),
     });
 }
 
-/// Copy `source` into the project's `media/` folder as
-/// `<stem>-<8 hex of its SHA-256>.<ext>`, hashing while copying, and return
-/// the copy's project-relative path. A file already there with the same
-/// content is reused, so two people adding one file make one path; a
-/// different file never takes its name.
-pub(crate) fn copy_into_media(directory: &Path, source: &Path) -> io::Result<String> {
-    let mut input = File::open(source)?;
-    if !input.metadata()?.is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{} is not a file", source.display()),
-        ));
-    }
-    if is_lfs_pointer(source) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "{} is a Git LFS pointer, not the media itself; download it (git lfs pull) first",
-                source.display()
-            ),
-        ));
-    }
-    let folder = directory.join(MEDIA_DIR);
-    fs::create_dir_all(&folder)?;
-    let temporary = folder.join(format!(".kerf-copy-{}.part", crate::key()));
-    let copied = File::create(&temporary).and_then(|output| copy_hashing(&mut input, output));
-    let (digest, length) = match copied {
-        Ok(copied) => copied,
-        Err(error) => {
-            let _ = fs::remove_file(&temporary);
-            return Err(error);
-        }
-    };
-    let result = place(&folder, &temporary, source, &digest, length);
-    let _ = fs::remove_file(&temporary);
-    result.map(|name| format!("{MEDIA_DIR}/{name}"))
-}
+/// A copy into `media/` that is running, counted in `Shared::copies` until
+/// it is dropped.
+struct Copying(Arc<Shared>);
 
-/// Give the finished copy its content name, or reuse the identical file
-/// that has it. Returns the file name.
-fn place(
-    folder: &Path,
-    temporary: &Path,
-    source: &Path,
-    digest: &str,
-    length: u64,
-) -> io::Result<String> {
-    for digits in NAME_DIGITS {
-        let name = content_name(source, &digest[..digits]);
-        let target = folder.join(&name);
-        if target.exists() {
-            if same_content(&target, digest, length)? {
-                return Ok(name);
-            }
-            continue;
-        }
-        // A hard link never replaces a file another process just made;
-        // file systems without links take a rename instead.
-        match fs::hard_link(temporary, &target) {
-            Ok(()) => return Ok(name),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                if same_content(&target, digest, length)? {
-                    return Ok(name);
-                }
-            }
-            Err(_) => {
-                fs::rename(temporary, &target)?;
-                return Ok(name);
-            }
-        }
-    }
-    Err(io::Error::other(format!(
-        "no free name for {} in media/",
-        source.display()
-    )))
-}
-
-/// The name a copy of `source` gets: its stem, the hash, its extension. A
-/// stem that already ends in this hash (a file from another project's
-/// `media/`) keeps one.
-pub(crate) fn content_name(source: &Path, hash: &str) -> String {
-    let stem = source
-        .file_stem()
-        .map(|stem| stem.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let stem: String = stem
-        .trim()
-        .chars()
-        .map(|c| {
-            if c.is_control() || matches!(c, '/' | '\\' | ':') {
-                '-'
-            } else {
-                c
-            }
-        })
-        .collect();
-    let stem = stem.trim_start_matches('.');
-    let stem = stem
-        .strip_suffix(&format!("-{hash}"))
-        .unwrap_or(stem)
-        .trim();
-    let stem = if stem.is_empty() { "media" } else { stem };
-    match source.extension() {
-        Some(extension) => format!("{stem}-{hash}.{}", extension.to_string_lossy()),
-        None => format!("{stem}-{hash}"),
+impl Copying {
+    fn start(shared: &Arc<Shared>) -> Self {
+        shared.copies.fetch_add(1, Ordering::SeqCst);
+        Self(shared.clone())
     }
 }
 
-fn copy_hashing(input: &mut File, mut output: File) -> io::Result<(String, u64)> {
-    let mut hasher = Sha256::new();
-    let mut buffer = vec![0; 1 << 20];
-    let mut length = 0u64;
-    loop {
-        let read = match input.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(read) => read,
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(error),
-        };
-        hasher.update(&buffer[..read]);
-        output.write_all(&buffer[..read])?;
-        length += read as u64;
+impl Drop for Copying {
+    fn drop(&mut self) {
+        self.0.copies.fetch_sub(1, Ordering::SeqCst);
     }
-    output.sync_all()?;
-    Ok((hex(&hasher.finalize()), length))
 }
 
-fn hash_file(path: &Path) -> io::Result<String> {
-    let mut input = File::open(path)?;
-    let mut hasher = Sha256::new();
-    io::copy(&mut input, &mut hasher)?;
-    Ok(hex(&hasher.finalize()))
-}
-
-fn same_content(path: &Path, digest: &str, length: u64) -> io::Result<bool> {
-    if fs::metadata(path)?.len() != length {
-        return Ok(false);
-    }
-    Ok(hash_file(path)? == digest)
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-/// Media that cannot play as the project names them: offline (no file),
-/// Git LFS pointers (the file was not downloaded), and files outside the
-/// project folder, which collaborators do not have. Each media id is in at
-/// most one list, in that order.
+/// Media that cannot play as the project names them, or that collaborators
+/// do not get: offline (no file), Git LFS pointers (the file was not
+/// downloaded), and external files (outside the project folder, or ignored
+/// by Git). Each media id is in at most one list, in that order.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub(crate) struct MediaStatus {
     pub missing: Vec<String>,
@@ -267,6 +85,7 @@ impl MediaStatus {
 /// `directory`.
 pub(crate) fn status(project: &Project, directory: &Path) -> MediaStatus {
     let mut status = MediaStatus::default();
+    let mut present = Vec::new();
     for media in &project.media {
         let file = absolute(directory, Path::new(&media.path));
         let id = media.id.to_string();
@@ -274,7 +93,13 @@ pub(crate) fn status(project: &Project, directory: &Path) -> MediaStatus {
             status.missing.push(id);
         } else if is_lfs_pointer(&file) {
             status.pointers.push(id);
-        } else if !inside(directory, &file) {
+        } else {
+            present.push((id, file));
+        }
+    }
+    let files: Vec<PathBuf> = present.iter().map(|(_, file)| file.clone()).collect();
+    for ((id, _), external) in present.into_iter().zip(external(directory, &files)) {
+        if external {
             status.external.push(id);
         }
     }
@@ -339,33 +164,49 @@ impl Consolidation {
     }
 }
 
-/// Copy every media file of `project` (as the document names it) that is
-/// outside `directory` into `media/`, and store paths of files already
-/// inside it relative to it. Offline files are left and reported.
-pub(crate) fn consolidate(project: &Project, directory: &Path) -> Consolidation {
+/// Copy every media file of `project` that collaborators would not get
+/// (outside `directory`, or ignored by Git) into `media/`, and store paths
+/// of other files inside it relative to it. Only files `probe` reads as
+/// media are copied, so a path the document names cannot carry any other
+/// file into the repository; those and offline files are left and
+/// reported.
+pub(crate) fn consolidate(
+    project: &Project,
+    directory: &Path,
+    probe: impl Fn(&Path) -> Result<(), String>,
+) -> Consolidation {
     let mut result = Consolidation::default();
     let mut copies: BTreeMap<PathBuf, String> = BTreeMap::new();
-    for media in &project.media {
-        let path = Path::new(&media.path);
-        if path.is_relative() {
+    let files: Vec<PathBuf> = project
+        .media
+        .iter()
+        .map(|media| absolute(directory, Path::new(&media.path)))
+        .collect();
+    let external = external(directory, &files);
+    for ((media, file), external) in project.media.iter().zip(&files).zip(external) {
+        if !external && Path::new(&media.path).is_relative() {
             continue;
         }
-        if !path.is_file() {
+        if !file.is_file() {
             result
                 .skipped
                 .push(format!("Skipped {}: {} is offline", media.id, media.path));
             continue;
         }
-        if let Some(relative) = relative_to(directory, path) {
-            result.relinks.push((media.id.clone(), relative));
+        if !external {
+            if let Some(relative) = relative_to(directory, file) {
+                result.relinks.push((media.id.clone(), relative));
+            }
             continue;
         }
-        let copy = match copies.get(path) {
+        let copy = match copies.get(file) {
             Some(copy) => Ok(copy.clone()),
-            None => copy_into_media(directory, path).inspect(|copy| {
-                result.copied += 1;
-                copies.insert(path.to_owned(), copy.clone());
-            }),
+            None => probe(file)
+                .and_then(|()| copy_into_media(directory, file).map_err(|error| error.to_string()))
+                .inspect(|copy| {
+                    result.copied += 1;
+                    copies.insert(file.clone(), copy.clone());
+                }),
         };
         match copy {
             Ok(copy) => result.relinks.push((media.id.clone(), copy)),
@@ -380,6 +221,10 @@ pub(crate) fn consolidate(project: &Project, directory: &Path) -> Consolidation 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests_support::{hermetic, sh, shared};
+    use std::fs;
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     fn project(media: &[(&str, &str)]) -> Project {
         let mut text = String::from("kerf 1\nproject name=\"Media\"\n");
@@ -390,6 +235,19 @@ mod tests {
         }
         text.push_str("sequence s1 rate=24 size=64x64 audio=48000\n");
         kerf_runtime::parse_document(&text).unwrap()
+    }
+
+    /// Every file reads as media.
+    fn media(_: &Path) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// A shared project folder with Kerf's ignore rules.
+    fn repository(directory: &Path) {
+        hermetic();
+        fs::create_dir_all(directory.join("media")).unwrap();
+        kerf_collab::scaffold::prepare_repository_files(directory, false).unwrap();
+        sh(directory, &["init", "-q", "-b", "main"]);
     }
 
     #[test]
@@ -418,99 +276,29 @@ mod tests {
     }
 
     #[test]
-    fn copies_are_named_by_content_and_reused() {
+    fn copies_are_counted_until_they_finish() {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("Film");
         fs::create_dir_all(project.join("media")).unwrap();
-        let outside = root.path().join("Downloads");
-        fs::create_dir_all(&outside).unwrap();
-        let source = outside.join("Beach Day.mov");
-        fs::write(&source, b"the same picture").unwrap();
+        let shared = Arc::new(shared(&project));
+        let first = Copying::start(&shared);
+        let second = Copying::start(&shared);
+        assert_eq!(shared.copies.load(Ordering::SeqCst), 2);
+        drop((first, second));
+        assert_eq!(shared.copies.load(Ordering::SeqCst), 0);
 
-        assert!(needs_copy(&project, &source));
-        let first = copy_into_media(&project, &source).unwrap();
-        let hash = hex(&Sha256::digest(b"the same picture"));
-        assert_eq!(first, format!("media/Beach Day-{}.mov", &hash[..8]));
-        assert_eq!(fs::read(project.join(&first)).unwrap(), b"the same picture");
-        assert!(!needs_copy(&project, &project.join(&first)));
-        assert!(!needs_copy(&project, Path::new(&first)));
-
-        // The same file from somewhere else lands on the same name.
-        let again = root.path().join("Beach Day.mov");
-        fs::write(&again, b"the same picture").unwrap();
-        assert_eq!(copy_into_media(&project, &again).unwrap(), first);
-        let names: Vec<_> = fs::read_dir(project.join("media"))
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name())
-            .collect();
-        assert_eq!(names.len(), 1, "no temporary files are left: {names:?}");
-
-        // A different file with the same name gets its own.
-        fs::write(&again, b"another picture").unwrap();
-        let other = copy_into_media(&project, &again).unwrap();
-        assert_ne!(other, first);
-        assert!(other.starts_with("media/Beach Day-") && other.ends_with(".mov"));
-    }
-
-    #[test]
-    fn a_different_file_never_takes_a_name_that_is_held() {
-        let root = tempfile::tempdir().unwrap();
-        let source = root.path().join("clip.mp4");
-        fs::write(&source, b"mine").unwrap();
-        let hash = hex(&Sha256::digest(b"mine"));
-        // Someone else's file already holds the short name.
-        fs::create_dir_all(root.path().join("p/media")).unwrap();
-        let held = root.path().join(format!("p/media/clip-{}.mp4", &hash[..8]));
-        fs::write(&held, b"theirs").unwrap();
-        let copy = copy_into_media(&root.path().join("p"), &source).unwrap();
-        assert_eq!(copy, format!("media/clip-{}.mp4", &hash[..12]));
-        assert_eq!(fs::read(&held).unwrap(), b"theirs");
-        assert_eq!(fs::read(root.path().join("p").join(copy)).unwrap(), b"mine");
-    }
-
-    #[test]
-    fn content_names_keep_one_hash() {
-        assert_eq!(
-            content_name(Path::new("/a/clip-0123abcd.mov"), "0123abcd"),
-            "clip-0123abcd.mov"
-        );
-        assert_eq!(
-            content_name(Path::new("/a/notes"), "0123abcd"),
-            "notes-0123abcd"
-        );
-        assert_eq!(
-            content_name(Path::new("/a/ .mov"), "0123abcd"),
-            "media-0123abcd.mov"
-        );
-        assert_eq!(
-            content_name(Path::new("/a/.hidden"), "0123abcd"),
-            "hidden-0123abcd"
-        );
-    }
-
-    #[test]
-    fn only_shared_projects_copy_files_from_outside() {
-        let root = tempfile::tempdir().unwrap();
-        let source = root.path().join("a.mov");
-        fs::write(&source, b"x").unwrap();
-        let plain = root.path().join("plain");
-        fs::create_dir_all(&plain).unwrap();
-        assert!(!needs_copy(&plain, &source));
-        fs::create_dir_all(plain.join(".git")).unwrap();
-        assert!(needs_copy(&plain, &source));
-    }
-
-    #[test]
-    fn copying_a_git_lfs_pointer_is_refused() {
-        let root = tempfile::tempdir().unwrap();
-        let pointer = root.path().join("big.mov");
-        fs::write(
-            &pointer,
-            "version https://git-lfs.github.com/spec/v1\noid sha256:00\nsize 9\n",
-        )
-        .unwrap();
-        let error = copy_into_media(&root.path().join("p"), &pointer).unwrap_err();
-        assert!(error.to_string().contains("Git LFS pointer"), "{error}");
+        let source = root.path().join("clip.mov");
+        fs::write(&source, b"picture").unwrap();
+        let (commands, copied) = mpsc::sync_channel(1);
+        let (tx, _events) = mpsc::sync_channel(4);
+        copy_then(&shared, &source.to_string_lossy(), &commands, &tx, |path| {
+            Command::Import { path }
+        });
+        let Ok(Command::Import { path }) = copied.recv_timeout(Duration::from_secs(10)) else {
+            panic!("expected the copy's import");
+        };
+        assert!(path.starts_with("media/clip-"), "{path}");
+        assert_eq!(shared.copies.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -546,6 +334,36 @@ mod tests {
     }
 
     #[test]
+    fn media_git_ignores_is_external_and_consolidated_into_media() {
+        let root = tempfile::tempdir().unwrap();
+        let project_dir = root.path().join("My Film");
+        repository(&project_dir);
+        // A render beside project.kerf, which the shared .gitignore keeps
+        // out of the repository, and a shot that is shared.
+        fs::write(project_dir.join("interview.mp4"), b"render").unwrap();
+        fs::write(project_dir.join("shot.mov"), b"shot").unwrap();
+        let project = project(&[("m1", "interview.mp4"), ("m2", "shot.mov")]);
+        assert_eq!(status(&project, &project_dir).external, ["m1"]);
+
+        let result = consolidate(&project, &project_dir, media);
+        assert_eq!(result.copied, 1, "{:?}", result.skipped);
+        let [(id, copy)] = result.relinks.as_slice() else {
+            panic!("expected one relink: {:?}", result.relinks);
+        };
+        assert_eq!(id.as_str(), "m1");
+        assert!(copy.starts_with("media/interview-"), "{copy}");
+        assert_eq!(fs::read(project_dir.join(copy)).unwrap(), b"render");
+        let relinked =
+            kerf_lang::apply_script(&project, Catalog::builtin(), &result.script(&project))
+                .unwrap();
+        assert!(status(&relinked.project, &project_dir).external.is_empty());
+
+        // Added to the repository on purpose, it is shared after all.
+        sh(&project_dir, &["add", "-f", "interview.mp4"]);
+        assert!(status(&project, &project_dir).external.is_empty());
+    }
+
+    #[test]
     fn consolidating_copies_outside_files_once_and_relinks_them() {
         let root = tempfile::tempdir().unwrap();
         let project_dir = root.path().join("Film");
@@ -566,15 +384,19 @@ mod tests {
             ("m4", &inside_path),
             ("m5", &lost_path),
         ]);
-        let result = consolidate(&project, &project_dir);
+        let result = consolidate(&project, &project_dir, media);
         assert_eq!(result.copied, 1);
-        let hash = hex(&Sha256::digest(b"out"));
-        let copy = format!("media/outside-{}.mov", &hash[..8]);
         let relinks: Vec<(String, String)> = result
             .relinks
             .iter()
             .map(|(id, path)| (id.to_string(), path.clone()))
             .collect();
+        let copy = relinks[0].1.clone();
+        assert!(
+            copy.starts_with("media/outside-") && copy.ends_with(".mov"),
+            "{copy}"
+        );
+        assert_eq!(fs::read(project_dir.join(&copy)).unwrap(), b"out");
         assert_eq!(
             relinks,
             vec![
@@ -592,5 +414,43 @@ mod tests {
         );
         let relinked = kerf_lang::apply_script(&project, Catalog::builtin(), &script).unwrap();
         assert_eq!(relinked.project.media("m4").unwrap().path, "inside.mov");
+    }
+
+    #[test]
+    fn consolidating_never_copies_a_file_that_is_not_media() {
+        let root = tempfile::tempdir().unwrap();
+        let project_dir = root.path().join("Film");
+        fs::create_dir_all(project_dir.join("media")).unwrap();
+        // A collaborator names a secret where media belongs.
+        let secret = root.path().join("config.json");
+        fs::write(&secret, br#"{"token": "secret"}"#).unwrap();
+        let clip = root.path().join("clip.mov");
+        fs::write(&clip, b"picture").unwrap();
+        let project = project(&[
+            ("m1", &secret.to_string_lossy()),
+            ("m2", &clip.to_string_lossy()),
+        ]);
+        let probe = |file: &Path| match file.extension().and_then(|e| e.to_str()) {
+            Some("mov") => Ok(()),
+            _ => Err(format!("{} is not media", file.display())),
+        };
+        let result = consolidate(&project, &project_dir, probe);
+        assert_eq!(result.copied, 1);
+        assert_eq!(result.relinks.len(), 1);
+        assert_eq!(result.relinks[0].0.as_str(), "m2");
+        assert_eq!(result.skipped.len(), 1, "{:?}", result.skipped);
+        assert!(
+            result.skipped[0].starts_with("Skipped m1: "),
+            "{:?}",
+            result.skipped
+        );
+        let copied: Vec<_> = fs::read_dir(project_dir.join("media"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(copied.len(), 1, "{copied:?}");
+        assert!(copied[0].starts_with("clip-"), "{copied:?}");
+        // What the editor passes in reads a file the way an import does.
+        assert!(crate::tasks::probe(&secret).is_err());
     }
 }
