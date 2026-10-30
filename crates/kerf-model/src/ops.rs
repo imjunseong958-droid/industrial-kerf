@@ -87,10 +87,17 @@ pub struct MarkerChange {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Op {
     AddMedia(Media),
+    /// Point media at another path, keeping everything else it records.
     RelinkMedia {
         media: Id,
         path: String,
     },
+    /// Swap the file behind the media with this `id` for the one described:
+    /// its path, rate, timecode, duration, streams, and reel. Clips keep
+    /// their timing; the edit is refused, naming them, when a clip no longer
+    /// fits (its source range, a stream its track needs, transition
+    /// handles).
+    ReplaceMedia(Media),
     RemoveMedia {
         media: Id,
     },
@@ -399,6 +406,13 @@ impl Editor<'_> {
                 let found =
                     found.ok_or_else(|| fail("ref.missing", format!("no media `{media}`")))?;
                 found.path.clone_from(path);
+                Ok(())
+            }
+            Op::ReplaceMedia(media) => {
+                let found = self.project.media.iter_mut().find(|m| m.id == media.id);
+                let found =
+                    found.ok_or_else(|| fail("ref.missing", format!("no media `{}`", media.id)))?;
+                *found = media.clone();
                 Ok(())
             }
             Op::RemoveMedia { media } => self.remove_media(media),

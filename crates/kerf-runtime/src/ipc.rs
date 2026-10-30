@@ -168,6 +168,7 @@ pub struct RuntimeClient {
     inner: Arc<RuntimeClientInner>,
 }
 
+#[derive(Clone)]
 struct RuntimeClientInner {
     directory: PathBuf,
     endpoint: EndpointAddress,
@@ -212,6 +213,22 @@ impl RuntimeClient {
                 startup_timeout: CLIENT_STARTUP_TIMEOUT,
             }),
         })
+    }
+
+    /// This client, waiting up to `timeout` for each answer instead of 10
+    /// seconds, for requests that do slow work inside kerfd, such as a git
+    /// merge.
+    pub fn with_request_timeout(self, timeout: Duration) -> Self {
+        let mut inner = Arc::unwrap_or_clone(self.inner);
+        inner.request_timeout = timeout;
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// The longest this client waits for an answer.
+    pub fn request_timeout(&self) -> Duration {
+        self.inner.request_timeout
     }
 
     /// Return the canonical project directory used by this client.
@@ -411,6 +428,25 @@ impl RuntimeClient {
             } => Ok((state, media_id, clip_id)),
             _ => Err(unexpected_response("import")),
         }
+    }
+
+    /// Swap the file behind `media` for the one at `path`, keeping every
+    /// clip's timing.
+    pub fn replace_media_request(
+        &self,
+        actor: &str,
+        key: &str,
+        media: &str,
+        path: &str,
+        base_revision: u64,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::ReplaceMedia {
+            actor: actor.to_owned(),
+            idempotency_key: key.to_owned(),
+            base_revision,
+            media: media.to_owned(),
+            path: path.to_owned(),
+        })?)
     }
 
     pub fn start_render(
@@ -654,6 +690,9 @@ fn request_has_stable_idempotency_key(request: &RuntimeRequest) -> bool {
             idempotency_key, ..
         }
         | RuntimeRequest::Import {
+            idempotency_key, ..
+        }
+        | RuntimeRequest::ReplaceMedia {
             idempotency_key, ..
         }
         | RuntimeRequest::ImportProjection {
