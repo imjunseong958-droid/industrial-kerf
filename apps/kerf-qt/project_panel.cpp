@@ -1,5 +1,6 @@
 #include "project_panel.h"
 #include "editor_common.h"
+#include "editor_theme.h"
 #include "media_artwork.h"
 
 #include <QFontMetrics>
@@ -23,14 +24,15 @@ const QString kExternal = QStringLiteral("EXTERNAL");
 // A thumbnail letterboxed onto a fixed tile, so the bin keeps a grid, with
 // the media's badge in its corner.
 QIcon tile(const QImage &frame, bool audio, const QString &badge) {
+    const EditorTheme &theme = editorTheme();
     QPixmap pixmap(kThumbnail);
-    pixmap.fill(QColor("#0e0e0e"));
+    pixmap.fill(theme.thumbnail);
     QPainter painter(&pixmap);
     if (!frame.isNull() && badge != kOffline) {
         const QImage scaled = frame.scaled(kThumbnail, Qt::KeepAspectRatio, Qt::SmoothTransformation);
         painter.drawImage((kThumbnail.width() - scaled.width()) / 2, (kThumbnail.height() - scaled.height()) / 2, scaled);
     } else {
-        painter.setPen(QColor("#6f6f6f"));
+        painter.setPen(theme.thumbnailText);
         painter.drawText(pixmap.rect(), Qt::AlignCenter, audio ? QStringLiteral("AUDIO") : QStringLiteral("MEDIA"));
     }
     if (!badge.isEmpty()) {
@@ -40,8 +42,8 @@ QIcon tile(const QImage &frame, bool audio, const QString &badge) {
         painter.setFont(font);
         const QRect text = QFontMetrics(font).boundingRect(badge);
         const QRectF box(4, 4, text.width() + 8, 13);
-        const QColor fill = badge == kOffline ? QColor("#5a262c") : badge == kNotDownloaded ? QColor("#3a3220") : QColor("#2e2e2e");
-        const QColor ink = badge == kOffline ? QColor("#f3b9be") : badge == kNotDownloaded ? QColor("#f0b429") : QColor("#cfcfcf");
+        const QColor fill = badge == kOffline ? theme.badgeError : badge == kNotDownloaded ? theme.badgeInfo : theme.badgeNeutral;
+        const QColor ink = badge == kOffline ? theme.badgeErrorText : badge == kNotDownloaded ? theme.badgeInfoText : theme.badgeNeutralText;
         painter.setRenderHint(QPainter::Antialiasing);
         painter.setPen(Qt::NoPen);
         painter.setBrush(fill);
@@ -87,6 +89,9 @@ ProjectPanel::ProjectPanel(MediaArtwork *artwork, QWidget *parent) : QWidget(par
         emit menuRequested(item ? item->data(Qt::UserRole).toString() : QString(), m_list->viewport()->mapToGlobal(at));
     });
     if (m_artwork) connect(m_artwork, &MediaArtwork::changed, this, &ProjectPanel::refresh);
+    // Tiles are pixmaps in the theme's colours: redrawn in place, so the bin
+    // keeps its selection and scroll position.
+    connect(EditorAppearance::instance(), &EditorAppearance::changed, this, &ProjectPanel::refreshTiles);
 }
 
 void ProjectPanel::setSources(const QJsonArray &sources) {
@@ -107,15 +112,28 @@ void ProjectPanel::setMediaStatus(const QJsonObject &status) {
     refresh();
 }
 
+QIcon ProjectPanel::tileFor(const QJsonObject &source) const {
+    const QString id = source.value(QStringLiteral("id")).toString();
+    return tile(m_artwork ? m_artwork->frames.value(id) : QImage(), !source.contains(QStringLiteral("width")), m_badges.value(id));
+}
+
+void ProjectPanel::refreshTiles() {
+    // refresh() makes one item per source, in order.
+    if (m_list->count() != m_sources.size()) {
+        refresh();
+        return;
+    }
+    for (int row = 0; row < m_list->count(); ++row) m_list->item(row)->setIcon(tileFor(m_sources.at(row).toObject()));
+}
+
 void ProjectPanel::refresh() {
     const QString current = m_list->currentItem() ? m_list->currentItem()->data(Qt::UserRole).toString() : QString();
     m_list->clear();
     for (const QJsonValue &value : m_sources) {
         const QJsonObject source = value.toObject();
         const QString id = source.value(QStringLiteral("id")).toString();
-        const bool audioOnly = !source.contains(QStringLiteral("width"));
         const QString badge = m_badges.value(id);
-        auto *item = new QListWidgetItem(tile(m_artwork ? m_artwork->frames.value(id) : QImage(), audioOnly, badge),
+        auto *item = new QListWidgetItem(tileFor(source),
                                          QStringLiteral("%1\n%2").arg(sourceName(source),
                                                                       prettyTime(source.value(QStringLiteral("duration")).toDouble())));
         item->setData(Qt::UserRole, id);

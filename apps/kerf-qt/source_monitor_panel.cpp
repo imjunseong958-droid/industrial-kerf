@@ -1,5 +1,6 @@
 #include "source_monitor_panel.h"
 #include "editor_common.h"
+#include "editor_theme.h"
 
 #include <QAction>
 #include <QHBoxLayout>
@@ -35,9 +36,9 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter painter(this);
-        painter.fillRect(rect(), QColor("#0b0b0b"));
+        painter.fillRect(rect(), editorTheme().viewerSurround);
         if (frame.isNull()) {
-            painter.setPen(QColor("#7a7a7a"));
+            painter.setPen(editorTheme().viewerTextDim);
             painter.drawText(rect().adjusted(16, 0, -16, 0), Qt::AlignCenter | Qt::TextWordWrap, message);
             return;
         }
@@ -58,15 +59,16 @@ public:
 
 protected:
     void paintEvent(QPaintEvent *) override {
+        const EditorTheme &theme = editorTheme();
         QPainter painter(this);
         const QRect track = rect().adjusted(8, 6, -8, -6);
-        painter.fillRect(track, QColor("#262626"));
+        painter.fillRect(track, theme.scrubTrack);
         const double duration = m_panel->m_duration;
         if (duration <= 0.0) return;
         const auto x = [&](double seconds) { return track.left() + seconds / duration * track.width(); };
         painter.fillRect(QRectF(x(m_panel->m_in), track.top(), x(m_panel->m_out) - x(m_panel->m_in), track.height()),
-                         QColor("#6a5a2c"));
-        painter.setPen(QPen(QColor("#f0b429"), 2));
+                         theme.inOutRange);
+        painter.setPen(QPen(theme.playhead, 2));
         painter.drawLine(QPointF(x(m_panel->m_position), 2), QPointF(x(m_panel->m_position), height() - 2));
     }
     void mousePressEvent(QMouseEvent *event) override { seekTo(event->position().x()); }
