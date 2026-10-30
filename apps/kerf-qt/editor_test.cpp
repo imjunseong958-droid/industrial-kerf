@@ -1472,6 +1472,65 @@ private slots:
         QCOMPARE(image.pixelColor(chorus.left() + 4, chorus.top() + 2), QColor("#5fb85f"));
     }
 
+    // The timeline paints from the theme, in light and in dark, and repaints
+    // its cached lanes when the appearance changes under it.
+    void timelineFollowsTheAppearance() {
+        const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
+        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
+        setEditorColorScheme(ColorScheme::Light);
+        MediaArtwork artwork;
+        fakeArtwork(&artwork);
+        const QJsonObject snapshot = showcaseSnapshot(1, QStringLiteral("clean"));
+        TimelineWidget timeline;
+        timeline.setArtwork(&artwork);
+        timeline.setProject(snapshot.value("timeline").toObject(), 18, 24);
+        timeline.setProposal(snapshot.value("proposalTimeline").toObject());
+        timeline.setSelectedClip(QStringLiteral("v1b"));
+        timeline.setPlayhead(7.5);
+        timeline.resize(timeline.minimumWidth(), 360);
+        timeline.show();
+        const auto x = [](double seconds) { return kTimelineLabelWidth + int(std::lround(seconds * 72.0)); };
+        // Rows, top down: V3 captions, V2 titles, V1, A1 dialogue, A2 music.
+        const int captions = kRulerHeight + kVideoTrackHeight / 2;
+        const int titles = captions + kVideoTrackHeight;
+        const int music = kRulerHeight + 3 * kVideoTrackHeight + kTrackHeight + kTrackHeight / 2;
+        const QRect selected = timeline.clipBounds(QStringLiteral("v1b"));
+        const QRect unselected = timeline.clipBounds(QStringLiteral("v1a"));
+        // Dragging v1b by this much lands its end near the caption's end at 13 s.
+        const QPoint grip = selected.center();
+        const QPoint drop = grip + QPoint(x(13.0) - x(11.0) - 5, 0);
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            // Switched under the open timeline, with nothing else to invalidate its lanes.
+            setEditorColorScheme(scheme);
+            const EditorTheme &theme = editorTheme();
+            const QImage image = timeline.grab().toImage();
+            if (!shots.isEmpty())
+                QVERIFY(image.save(QDir(shots).filePath(QStringLiteral("timeline-%1.png").arg(theme.dark ? "dark" : "light"))));
+            QCOMPARE(image.pixelColor(4, 4), theme.rulerCorner);
+            QCOMPARE(image.pixelColor(x(9.0), titles), theme.trackLane);
+            QCOMPARE(image.pixelColor(x(7.5), titles), theme.playhead);
+            QCOMPARE(image.pixelColor(selected.right(), selected.center().y()), theme.clipSelectedRing);
+            QCOMPARE(image.pixelColor(unselected.left(), unselected.center().y()), theme.clipVideo.border);
+            // A header's stripe is its clips' colour.
+            QCOMPARE(image.pixelColor(1, captions), theme.clipCaption.header);
+            QCOMPARE(image.pixelColor(1, titles), theme.clipGenerator.header);
+            QCOMPARE(image.pixelColor(1, music), theme.clipMusic.header);
+            QCOMPARE(amberPixels(image), 0);
+
+            // A drag shows the edit point it snaps to, until it drops.
+            QCOMPARE(image.pixelColor(x(13.0), captions), theme.trackLane);
+            QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, grip);
+            QTest::mouseMove(&timeline, drop);
+            const QImage dragging = timeline.grab().toImage();
+            if (!shots.isEmpty())
+                QVERIFY(dragging.save(QDir(shots).filePath(QStringLiteral("timeline-drag-%1.png").arg(theme.dark ? "dark" : "light"))));
+            QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, drop);
+            QVERIFY(std::abs(qGray(dragging.pixel(x(13.0), captions)) - qGray(theme.trackLane.rgb())) > 100);
+            QCOMPARE(amberPixels(dragging), 0);
+            QCOMPARE(timeline.grab().toImage().pixelColor(x(13.0), captions), theme.trackLane);
+        }
+    }
+
     void timelineRevealsAddLaneFromTheHeader() {
         TimelineWidget timeline;
         timeline.resize(700, 240);

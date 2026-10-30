@@ -1,4 +1,5 @@
 #include "timeline_widget.h"
+#include "editor_theme.h"
 #include "media_artwork.h"
 
 #include <QAction>
@@ -16,21 +17,11 @@ namespace kerf {
 
 namespace {
 
-// The document's marker colors; a marker without one is green, as in
-// other edit suites.
-QColor markerColor(const QString &name) {
-    static const QHash<QString, QColor> colors{
-        {QStringLiteral("red"), QColor("#e5534b")},
-        {QStringLiteral("orange"), QColor("#e8913a")},
-        {QStringLiteral("yellow"), QColor("#e6c84a")},
-        {QStringLiteral("green"), QColor("#5fb85f")},
-        {QStringLiteral("cyan"), QColor("#4ec4d0")},
-        {QStringLiteral("blue"), QColor("#4f8de0")},
-        {QStringLiteral("purple"), QColor("#a275e0")},
-        {QStringLiteral("pink"), QColor("#e078b4")},
-        {QStringLiteral("white"), QColor("#e8e8e8")},
-    };
-    return colors.value(name, colors.value(QStringLiteral("green")));
+// The kind a track's header stands for: its first clip's, so a picture
+// track of titles reads as titles, else the track's own.
+ClipKind trackKind(const QJsonObject &track) {
+    const QJsonArray clips = track.value(QStringLiteral("clips")).toArray();
+    return clipKind(track, clips.isEmpty() ? QJsonObject() : clips.first().toObject());
 }
 
 } // namespace
@@ -41,6 +32,12 @@ TimelineWidget::TimelineWidget(QWidget *parent) : QWidget(parent) {
     setSizePolicy(QSizePolicy::Minimum, QSizePolicy::MinimumExpanding);
     updateContentSize();
     setMouseTracking(true);
+    // The lanes and tinted waveforms are cached in the old theme's colours.
+    connect(EditorAppearance::instance(), &EditorAppearance::changed, this, [this] {
+        m_waveTints.clear();
+        invalidateLanes();
+        update();
+    });
 }
 
 void TimelineWidget::setProject(const QJsonObject &project, double duration, double fps) {
@@ -228,6 +225,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent *event) {
     }
     m_dragging = true;
     m_dragMoved = false;
+    m_snapTime = -1.0;
     m_dragClipId = hit.id;
     m_dragRow = hit.row;
     m_dragStart = hit.start;
@@ -304,7 +302,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent *event) {
     m_dragMoved = m_dragMoved || std::abs(delta * pixelsPerSecond()) >= QApplication::startDragDistance();
     const bool body = !m_dragLeading && !m_dragTrailing;
     m_previewTime = snapped(std::round(std::max(0.0, dragOrigin() + delta) * m_fps) / m_fps,
-                            body && m_tool != TimelineTool::Slip ? m_dragDuration : 0.0);
+                            body && m_tool != TimelineTool::Slip ? m_dragDuration : 0.0, &m_snapTime);
     setCursor((m_dragLeading || m_dragTrailing) ? Qt::SizeHorCursor : Qt::ClosedHandCursor);
     invalidateLanes();
     update();
@@ -328,6 +326,7 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent *event) {
     }
     if (!m_dragging) return;
     m_dragging = false;
+    m_snapTime = -1.0;
     const double delta = timeAt(event->position().x()) - m_pressTime;
     if (std::abs(delta * pixelsPerSecond()) < QApplication::startDragDistance()) {
         m_dragClipId.clear();
@@ -485,7 +484,7 @@ void TimelineWidget::paintLanes(QPainter &p, const QRect &visible) {
     const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
     p.setRenderHint(QPainter::Antialiasing, false);
     // Below the last track is an empty well, so spare height never reads as a track.
-    p.fillRect(visible, QColor("#121212"));
+    p.fillRect(visible, editorTheme().timelineBackground);
     for (int row = 0; row < m_rows.size(); ++row) {
         const TrackRow &track = m_rows.at(row);
         if (track.bottom() <= visible.top() || track.top > visible.bottom()) continue;
@@ -494,34 +493,35 @@ void TimelineWidget::paintLanes(QPainter &p, const QRect &visible) {
 }
 
 void TimelineWidget::paintLane(QPainter &p, const QRect &visible, int row, const QJsonObject &track) {
+    const EditorTheme &theme = editorTheme();
     const TrackRow &layout = m_rows.at(row);
-    const QColor accent = trackAccent(track, layout.track);
     const QRect lane(kTimelineLabelWidth, layout.top, std::max(0, width() - kTimelineLabelWidth), layout.height - 1);
-    p.fillRect(lane, QColor("#1c1c1c"));
+    p.fillRect(lane, theme.trackLane);
     if (track.value(QStringLiteral("locked")).toBool())
-        p.fillRect(lane, QBrush(QColor(255, 255, 255, 14), Qt::BDiagPattern));
+        p.fillRect(lane, QBrush(theme.trackLaneLocked, Qt::BDiagPattern));
 
     p.save();
     p.setClipRect(lane.adjusted(0, 0, 0, 1).intersected(visible));
     if (!track.value(QStringLiteral("enabled")).toBool(true)) p.setOpacity(0.4);
     for (const QJsonValue &value : track.value(QStringLiteral("clips")).toArray())
-        paintClip(p, visible, row, value.toObject(), accent, layout.audio);
+        paintClip(p, visible, row, value.toObject(), track, layout.audio);
     if (!m_proposal.isEmpty()) paintProposal(p, row, track);
     p.restore();
 
-    p.fillRect(lane.left(), layout.bottom() - 1, lane.width(), 1, QColor("#0c0c0c"));
+    p.fillRect(lane.left(), layout.bottom() - 1, lane.width(), 1, theme.trackDivider);
     // Picture and sound read as two banks, the way a conform is laid out.
     if (row > 0 && m_rows.at(row - 1).audio != layout.audio)
-        p.fillRect(lane.left(), layout.top, lane.width(), 2, QColor("#050505"));
+        p.fillRect(lane.left(), layout.top, lane.width(), 2, theme.trackBankDivider);
 }
 
 void TimelineWidget::paintHeaders(QPainter &p, const QRect &dirty) {
     const QRect column = headerColumnRect();
     if (!column.intersects(dirty)) return;
+    const EditorTheme &theme = editorTheme();
     const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
     p.save();
     p.setClipRect(column, Qt::IntersectClip);
-    p.fillRect(column, QColor("#171717"));
+    p.fillRect(column, theme.trackHeaderColumn);
     for (int row = 0; row < m_rows.size(); ++row) {
         const TrackRow &track = m_rows.at(row);
         if (track.bottom() <= column.top() || track.top > dirty.bottom()) continue;
@@ -529,22 +529,25 @@ void TimelineWidget::paintHeaders(QPainter &p, const QRect &dirty) {
     }
     const int grip = m_resizeRow >= 0 ? m_resizeRow : m_hoverGrip;
     if (grip >= 0 && grip < m_rows.size())
-        p.fillRect(column.left(), m_rows.at(grip).bottom() - 2, column.width() - 1, 2, QColor("#8a8a8a"));
-    p.fillRect(column.left() + kTimelineLabelWidth - 1, column.top(), 1, column.height(), QColor("#0a0a0a"));
+        p.fillRect(column.left(), m_rows.at(grip).bottom() - 2, column.width() - 1, 2, theme.trackResizeGrip);
+    p.fillRect(column.left() + kTimelineLabelWidth - 1, column.top(), 1, column.height(), theme.divider);
     p.restore();
 }
 
 void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &track, int left) {
+    const EditorTheme &theme = editorTheme();
     const TrackRow &layout = m_rows.at(row);
-    const QColor accent = trackAccent(track, layout.track);
+    const ClipStyle &style = theme.clip(trackKind(track));
     const bool enabled = track.value(QStringLiteral("enabled")).toBool(true);
     const QRect header(left, layout.top, kTimelineLabelWidth - 1, layout.height - 1);
-    p.fillRect(header, QColor("#1f1f1f"));
-    p.fillRect(QRect(left, layout.top, header.width(), 1), QColor("#282828"));
-    p.fillRect(QRect(left, layout.top, 3, header.height()), enabled ? accent : accent.darker(240));
-    p.fillRect(QRect(left, layout.bottom() - 1, kTimelineLabelWidth, 1), QColor("#0c0c0c"));
+    p.fillRect(header, theme.trackHeader);
+    p.fillRect(QRect(left, layout.top, header.width(), 1), theme.trackHeaderEdge);
+    // The stripe takes the colour of the track's clips; a disabled track's fades into the header.
+    p.fillRect(QRect(left, layout.top, 3, header.height()),
+               enabled ? style.header : mixColor(theme.trackHeader, style.header, 0.35));
+    p.fillRect(QRect(left, layout.bottom() - 1, kTimelineLabelWidth, 1), theme.trackDivider);
     if (row > 0 && m_rows.at(row - 1).audio != layout.audio)
-        p.fillRect(QRect(left, layout.top, kTimelineLabelWidth, 2), QColor("#050505"));
+        p.fillRect(QRect(left, layout.top, kTimelineLabelWidth, 2), theme.trackBankDivider);
 
     // Tall rows show a name line over a detail line; short rows keep only
     // the track number and name, centered.
@@ -556,10 +559,10 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     codeFont.setPixelSize(10);
     codeFont.setWeight(QFont::Bold);
     const QRect badge(left + 10, blockTop, 22, 16);
-    p.fillRect(badge, QColor("#2a2a2a"));
-    frameInside(p, badge, 1, QColor("#454545"));
+    p.fillRect(badge, theme.trackBadge);
+    frameInside(p, badge, 1, theme.trackBadgeBorder);
     p.setFont(codeFont);
-    p.setPen(enabled ? QColor("#ececec") : QColor("#7a7a7a"));
+    p.setPen(enabled ? theme.trackBadgeText : theme.trackHeaderTextDisabled);
     p.drawText(badge, Qt::AlignCenter, trackRowLabel(row));
 
     const QJsonArray clips = track.value(QStringLiteral("clips")).toArray();
@@ -567,16 +570,16 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     if (detailed && m_artwork && !clips.isEmpty()) {
         const QString sourceId = clips.first().toObject().value(QStringLiteral("sourceId")).toString();
         if (layout.audio && m_artwork->waves.contains(sourceId)) {
-            preview = tintedWave(sourceId, clipColors(accent, false, false).wave);
+            preview = tintedWave(sourceId, style.wave);
         } else if (!layout.audio) {
             preview = m_artwork->frames.value(sourceId);
         }
     }
     const QRect slot = headerPreviewRect(row, left);
     if (!preview.isNull()) {
-        p.fillRect(slot, QColor("#0e0e0e"));
+        p.fillRect(slot, theme.headerPreview);
         p.drawImage(slot.adjusted(1, 1, -1, -1), preview);
-        frameInside(p, slot, 1, QColor("#0a0a0a"));
+        frameInside(p, slot, 1, theme.headerPreviewBorder);
     }
 
     QFont nameFont = font();
@@ -587,9 +590,9 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     const auto drawToggle = [&](int index, bool on, const QString &field) {
         const QRect box = headerToggleRect(row, index).translated(left - stickyOrigin().x(), 0);
         p.save();
-        p.fillRect(box, on ? QColor("#e6b450") : QColor("#2a2a2a"));
-        frameInside(p, box, 1, on ? QColor("#e6b450") : QColor("#454545"));
-        p.setPen(QPen(on ? QColor("#141414") : QColor("#9a9a9a"), 1.2));
+        p.fillRect(box, on ? theme.trackToggleOn : theme.trackToggle);
+        frameInside(p, box, 1, on ? theme.trackToggleOn : theme.trackToggleBorder);
+        p.setPen(QPen(on ? theme.trackToggleOnGlyph : theme.trackToggleGlyph, 1.2));
         p.setBrush(Qt::NoBrush);
         p.setRenderHint(QPainter::Antialiasing, true);
         const QPointF c = QRectF(box).center();
@@ -616,7 +619,7 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     const int nameRight = preview.isNull() ? header.right() - 8 : slot.left() - 8;
     QString name = track.value(QStringLiteral("name")).toString().trimmed();
     if (name.isEmpty()) name = (layout.audio ? QStringLiteral("Audio %1") : QStringLiteral("Video %1")).arg(layout.number);
-    p.setPen(enabled ? QColor("#d8d8d8") : QColor("#808080"));
+    p.setPen(enabled ? theme.trackHeaderText : theme.trackHeaderTextDisabled);
     p.drawText(QRect(nameLeft, badge.top(), std::max(1, nameRight - nameLeft), badge.height()),
                Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
                QFontMetrics(nameFont).elidedText(name, Qt::ElideRight, std::max(1, nameRight - nameLeft)));
@@ -628,7 +631,7 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     p.setFont(metaFont);
     const QString count = clips.size() == 1 ? QStringLiteral("1 clip") : QStringLiteral("%1 clips").arg(clips.size());
     const QRect meta(badge.left(), blockTop + 19, std::max(1, nameRight - badge.left()), 12);
-    p.setPen(QColor("#7c7c7c"));
+    p.setPen(theme.trackHeaderDetail);
     p.drawText(meta, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, count);
 
 }
@@ -675,21 +678,24 @@ void TimelineWidget::paintProposal(QPainter &p, int row, const QJsonObject &trac
     QHash<QString, QJsonObject> current;
     for (const QJsonValue &value : track.value(QStringLiteral("clips")).toArray())
         current.insert(value.toObject().value(QStringLiteral("id")).toString(), essence(value.toObject()));
-    const QColor accent("#f0b429");
+    const EditorTheme &theme = editorTheme();
     p.save();
     p.setRenderHint(QPainter::Antialiasing, false);
     for (const QJsonValue &value : proposed) {
         const QJsonObject clip = value.toObject();
         const QString clipId = clip.value(QStringLiteral("id")).toString();
-        if (current.value(clipId) == essence(clip)) {
+        const auto existing = current.constFind(clipId);
+        const bool added = existing == current.cend();
+        if (!added && existing.value() == essence(clip)) {
             current.remove(clipId);
             continue;
         }
         current.remove(clipId);
+        // Clips the proposal adds, and clips it changes.
         const QRectF rect = clipRect(row, clip.value(QStringLiteral("timelineStart")).toDouble(),
                                      clip.value(QStringLiteral("duration")).toDouble()).adjusted(1, 1, -1, -1);
-        p.fillRect(rect, QColor(240, 180, 41, 46));
-        p.setPen(QPen(accent, 1.5, Qt::DashLine));
+        p.fillRect(rect, added ? theme.proposalAddFill : theme.proposalChangeFill);
+        p.setPen(QPen(added ? theme.proposalAdd : theme.proposalChange, 1.5, Qt::DashLine));
         p.setBrush(Qt::NoBrush);
         p.drawRect(rect);
     }
@@ -697,8 +703,8 @@ void TimelineWidget::paintProposal(QPainter &p, int row, const QJsonObject &trac
     for (auto it = current.cbegin(); it != current.cend(); ++it) {
         const QRectF rect = clipRect(row, it.value().value(QStringLiteral("timelineStart")).toDouble(),
                                      it.value().value(QStringLiteral("duration")).toDouble());
-        p.fillRect(rect, QBrush(QColor(232, 96, 96, 150), Qt::BDiagPattern));
-        p.setPen(QPen(QColor("#e86060"), 1.5));
+        p.fillRect(rect, QBrush(theme.proposalRemoveHatch, Qt::BDiagPattern));
+        p.setPen(QPen(theme.proposalRemove, 1.5));
         p.drawRect(rect.adjusted(1, 1, -1, -1));
     }
     p.restore();
@@ -738,7 +744,8 @@ void TimelineWidget::setToolCursor(const ClipHit &hit, int edge) {
     else setCursor(Qt::ArrowCursor);
 }
 
-double TimelineWidget::snapped(double time, double length) const {
+double TimelineWidget::snapped(double time, double length, double *snapPoint) const {
+    if (snapPoint) *snapPoint = -1.0;
     if (!m_snapping) return time;
     // Edit points: the start, the playhead, and every other clip's edges.
     QVector<double> points{0.0, m_playhead};
@@ -766,13 +773,14 @@ double TimelineWidget::snapped(double time, double length) const {
             if (gap < distance) {
                 distance = gap;
                 best = point - edge;
+                if (snapPoint) *snapPoint = point;
             }
         }
     }
     return std::max(0.0, std::round(best * m_fps) / m_fps);
 }
 
-void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const QJsonObject &clip, const QColor &accent, bool audio) {
+void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const QJsonObject &clip, const QJsonObject &track, bool audio) {
     double start = clip.value(QStringLiteral("timelineStart")).toDouble();
     double duration = clip.value(QStringLiteral("duration")).toDouble();
     const QString id = clip.value(QStringLiteral("id")).toString();
@@ -786,7 +794,11 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
     if (!rect.intersects(visible)) return;
     const bool selected = id == m_selectedClip;
     const bool hovered = id == m_hoverClipId;
-    const ClipColors colors = clipColors(accent, selected, hovered);
+    const EditorTheme &theme = editorTheme();
+    const ClipStyle &style = theme.clip(clipKind(track, clip));
+    // A hovered or selected clip's body leans towards its name bar's colour;
+    // the name bar itself stays put, so its label keeps its contrast.
+    const QColor fill = mixColor(style.fill, style.header, selected ? 0.18 : hovered ? 0.1 : 0.0);
     // Short rows show only the name bar, as a mini track does.
     const qreal bandHeight = rect.height() >= 26.0 ? 13.0 : rect.height();
     const QRectF band(rect.left(), rect.top(), rect.width(), bandHeight);
@@ -795,21 +807,22 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
     p.save();
     p.setClipRect(rect, Qt::IntersectClip);
     QLinearGradient bandFill(0, band.top(), 0, band.bottom());
-    bandFill.setColorAt(0, colors.band.lighter(112));
-    bandFill.setColorAt(1, colors.band);
+    bandFill.setColorAt(0, style.header.lighter(108));
+    bandFill.setColorAt(1, style.header);
     p.fillRect(band, bandFill);
 
     const QString sourceId = clip.value(QStringLiteral("sourceId")).toString();
     if (body.height() > 0.0) {
         QLinearGradient bodyFill(0, body.top(), 0, body.bottom());
-        bodyFill.setColorAt(0, colors.body.lighter(125));
-        bodyFill.setColorAt(1, colors.body);
+        // lighter() would bleach a light fill to white.
+        bodyFill.setColorAt(0, theme.dark ? fill.lighter(125) : mixColor(fill, Qt::white, 0.3));
+        bodyFill.setColorAt(1, fill);
         p.fillRect(body, bodyFill);
     }
     if (body.height() > 0.0 && audio) {
-        p.fillRect(QRectF(body.left(), std::floor(body.center().y()), body.width(), 1), QColor(0, 0, 0, 70));
+        p.fillRect(QRectF(body.left(), std::floor(body.center().y()), body.width(), 1), theme.waveCenter);
         if (m_artwork && m_artwork->waves.contains(sourceId)) {
-            const QImage wave = tintedWave(sourceId, colors.wave);
+            const QImage wave = tintedWave(sourceId, style.wave);
             double sourceDuration = 1;
             for (const auto &source : m_project.value(QStringLiteral("sources")).toArray())
                 if (source.toObject().value(QStringLiteral("id")).toString() == sourceId)
@@ -829,7 +842,7 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
             const double stop = std::min(body.right(), double(visible.right()) + 1.0);
             for (double x = firstTile; x < stop; x += tileWidth) {
                 p.drawImage(QRectF(x, body.top(), tileWidth, tileHeight), frame);
-                p.fillRect(QRectF(x + tileWidth - 1, body.top(), 1, tileHeight), QColor(0, 0, 0, 120));
+                p.fillRect(QRectF(x + tileWidth - 1, body.top(), 1, tileHeight), theme.filmstripSeam);
             }
         }
     }
@@ -844,9 +857,9 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
             badgeFont.setPixelSize(8);
             badgeFont.setWeight(QFont::Bold);
             const QRectF fx(textRight - 16, band.center().y() - 5.0, 16, 10);
-            p.fillRect(fx, QColor(0, 0, 0, 110));
+            p.fillRect(fx, theme.clipFxBadge);
             p.setFont(badgeFont);
-            p.setPen(QColor("#ededed"));
+            p.setPen(theme.clipFxBadgeText);
             p.drawText(fx, Qt::AlignCenter, QStringLiteral("FX"));
             textRight = fx.left() - 4;
         }
@@ -858,18 +871,18 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
         const double speed = clip.value(QStringLiteral("speed")).toDouble(1.0);
         if (std::abs(speed - 1.0) > 0.0005) label += QStringLiteral("  [%1%]").arg(std::lround(speed * 100.0));
         const qreal textLeft = rect.left() + 6;
-        p.setPen(QColor("#f6f6f6"));
+        p.setPen(style.label);
         p.drawText(QRectF(textLeft, band.top(), std::max(1.0, textRight - textLeft), bandHeight),
                    Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
                    QFontMetrics(nameFont).elidedText(label, Qt::ElideRight, std::max(1, int(textRight - textLeft))));
     }
     p.restore();
 
-    p.fillRect(QRectF(rect.left() + 1, rect.top() + 1, rect.width() - 2, 1), colors.highlight);
+    p.fillRect(QRectF(rect.left() + 1, rect.top() + 1, rect.width() - 2, 1), theme.clipHighlight);
     if (selected) {
-        frameInside(p, rect, 2, QColor("#f0b429"));
+        frameInside(p, rect, 2, theme.clipSelectedRing);
     } else {
-        frameInside(p, rect, 1, QColor(0, 0, 0, 200));
+        frameInside(p, rect, 1, style.border);
     }
 
     // Trim bracket on the edge under the pointer, or the edge being trimmed.
@@ -877,7 +890,7 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
     if (dragged) edge = m_dragLeading ? -1 : m_dragTrailing ? 1 : 0;
     else if (hovered && !m_dragging) edge = m_hoverEdge;
     if (edge != 0) {
-        const QColor bracket("#f0b429");
+        const QColor bracket = theme.clipTrim;
         const qreal x = edge < 0 ? rect.left() : rect.right() - 3;
         p.fillRect(QRectF(x, rect.top(), 3, rect.height()), bracket);
         const qreal serif = edge < 0 ? rect.left() : rect.right() - 8;
@@ -889,12 +902,13 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
 void TimelineWidget::paintRuler(QPainter &p, const QRect &dirty, int top) {
     const QRect band(dirty.left(), top, dirty.width(), kRulerHeight);
     if (!band.intersects(dirty)) return;
+    const EditorTheme &theme = editorTheme();
     p.setRenderHint(QPainter::Antialiasing, false);
     QLinearGradient fill(0, top, 0, top + kRulerHeight);
-    fill.setColorAt(0, QColor("#2a2a2a"));
-    fill.setColorAt(1, QColor("#202020"));
+    fill.setColorAt(0, theme.ruler);
+    fill.setColorAt(1, theme.rulerBottom);
     p.fillRect(band.adjusted(0, 0, 0, -1), fill);
-    p.fillRect(QRect(band.left(), top + kRulerHeight - 1, band.width(), 1), QColor("#0a0a0a"));
+    p.fillRect(QRect(band.left(), top + kRulerHeight - 1, band.width(), 1), theme.divider);
 
     QFont font(QStringLiteral("Menlo"));
     font.setPixelSize(9);
@@ -912,9 +926,9 @@ void TimelineWidget::paintRuler(QPainter &p, const QRect &dirty, int top) {
     for (int index = first; index <= last; ++index) {
         const double time = index * major;
         const int x = static_cast<int>(std::floor(timeToX(time)));
-        p.fillRect(QRect(x, top + 3, 1, kRulerHeight - 4), QColor("#666666"));
+        p.fillRect(QRect(x, top + 3, 1, kRulerHeight - 4), theme.rulerTick);
         if (time <= m_duration + 0.0001) {
-            p.setPen(QColor("#b0b0b0"));
+            p.setPen(theme.rulerText);
             p.drawText(QRectF(x + 4, top + 1, std::max(12.0, major * pps - 8.0), 12),
                        Qt::AlignLeft | Qt::AlignVCenter,
                        timelineRulerLabel(std::min(time, m_duration), m_fps, m_duration));
@@ -925,7 +939,7 @@ void TimelineWidget::paintRuler(QPainter &p, const QRect &dirty, int top) {
             const bool half = scale.divisions % 2 == 0 && step * 2 == scale.divisions;
             const int length = half ? 8 : 4;
             p.fillRect(QRect(static_cast<int>(std::floor(timeToX(tick))), top + kRulerHeight - 1 - length, 1, length),
-                       QColor(half ? "#5a5a5a" : "#474747"));
+                       half ? theme.rulerTickHalf : theme.rulerTickMinor);
         }
     }
 }
@@ -940,13 +954,15 @@ QRectF TimelineWidget::markerRect(const QJsonObject &marker, int top) const {
 void TimelineWidget::paintMarkers(QPainter &p, const QRect &dirty, int top) {
     const QJsonArray markers = m_project.value(QStringLiteral("markers")).toArray();
     if (markers.isEmpty()) return;
+    const EditorTheme &theme = editorTheme();
     p.setRenderHint(QPainter::Antialiasing, true);
     p.setPen(Qt::NoPen);
     for (const QJsonValue &value : markers) {
         const QJsonObject marker = value.toObject();
         const QRectF rect = markerRect(marker, top);
         if (!rect.toAlignedRect().intersects(dirty)) continue;
-        const QColor color = markerColor(marker.value(QStringLiteral("color")).toString());
+        // A marker without a colour is green, as in other edit suites.
+        const QColor color = theme.marker(marker.value(QStringLiteral("color")).toString());
         const qreal x = rect.left() + 4.5;
         if (rect.width() > 9.0) {
             QColor band = color;
@@ -969,20 +985,24 @@ void TimelineWidget::paintMarkers(QPainter &p, const QRect &dirty, int top) {
 }
 
 void TimelineWidget::paintOverlay(QPainter &p, const QRect &dirty) {
+    const EditorTheme &theme = editorTheme();
     const QPoint origin = stickyOrigin();
     const bool skimming = m_hasSkimmer && !m_dragging && !m_scrubbing;
-    const QColor playColor = skimming ? QColor("#6a6a6a") : QColor("#f0b429");
+    const QColor playColor = skimming ? theme.playheadIdle : theme.playhead;
     const int laneTop = origin.y() + kRulerHeight;
     const int playX = static_cast<int>(std::floor(timeToX(m_playhead)));
     p.setRenderHint(QPainter::Antialiasing, false);
-    // A dark halo keeps the line readable over bright filmstrips.
-    if (!skimming) p.fillRect(QRect(playX - 1, laneTop, 3, height() - laneTop), QColor(0, 0, 0, 110));
+    // A halo keeps the line readable over bright filmstrips.
+    if (!skimming) p.fillRect(QRect(playX - 1, laneTop, 3, height() - laneTop), theme.playheadHalo);
     p.fillRect(QRect(playX, laneTop, 1, height() - laneTop), playColor);
+    // The edit point a drag has snapped to.
+    if (m_dragging && m_dragMoved && m_snapTime >= 0.0)
+        p.fillRect(QRect(static_cast<int>(std::floor(timeToX(m_snapTime))), laneTop, 1, height() - laneTop), theme.snapLine);
 
     paintRuler(p, dirty, origin.y());
     if (skimming) {
         const int skimX = static_cast<int>(std::floor(timeToX(m_skimmerTime)));
-        p.fillRect(QRect(skimX, origin.y(), 1, height() - origin.y()), QColor(240, 240, 240, 215));
+        p.fillRect(QRect(skimX, origin.y(), 1, height() - origin.y()), theme.skimmer);
     }
     p.fillRect(QRect(playX, laneTop - 3, 1, 3), playColor);
     p.setRenderHint(QPainter::Antialiasing, true);
@@ -1004,18 +1024,19 @@ void TimelineWidget::paintOverlay(QPainter &p, const QRect &dirty) {
 
     paintHeaders(p, dirty);
     if (m_addLaneVisible) {
-        p.fillRect(addLaneHitRect().adjusted(0, 0, -1, -1), QColor("#1d1d1d"));
+        p.fillRect(addLaneHitRect().adjusted(0, 0, -1, -1), theme.addLane);
         const QRect button = addLaneButtonRect();
-        p.fillRect(button, QColor("#2a2a2a"));
-        frameInside(p, button, 1, QColor("#555555"));
-        p.setPen(QColor("#ededed"));
+        p.fillRect(button, theme.addLaneButton);
+        frameInside(p, button, 1, theme.addLaneButtonBorder);
+        p.setPen(theme.addLaneText);
         QFont addFont = font();
         addFont.setPixelSize(11);
         addFont.setWeight(QFont::Medium);
         p.setFont(addFont);
         p.drawText(button, Qt::AlignCenter, QStringLiteral("+  Track"));
     }
-    paintCornerTime(p, origin, skimming ? m_skimmerTime : m_playhead, skimming ? QColor("#f4f4f4") : playColor);
+    // The playhead's time in the accent, deepened where needed to read on the corner.
+    paintCornerTime(p, origin, skimming ? m_skimmerTime : m_playhead, skimming ? theme.skimmerText : theme.accentText);
     if (m_dragging && m_dragMoved) paintDragReadout(p);
 }
 
@@ -1033,20 +1054,22 @@ void TimelineWidget::paintDragReadout(QPainter &p) {
     box.moveTop(std::max(stickyOrigin().y() + kRulerHeight + 2, m_rows.value(m_dragRow).top - 21));
     box.moveLeft(x + 6);
     if (box.right() > width() - 4) box.moveRight(x - 6);
+    const EditorTheme &theme = editorTheme();
     p.setRenderHint(QPainter::Antialiasing, false);
-    p.fillRect(box, QColor(10, 10, 10, 235));
-    frameInside(p, box, 1, QColor("#4a4a4a"));
+    p.fillRect(box, theme.readout);
+    frameInside(p, box, 1, theme.readoutBorder);
     p.setFont(font);
-    p.setPen(QColor("#f2f2f2"));
+    p.setPen(theme.readoutText);
     p.drawText(box, Qt::AlignCenter, text);
 }
 
 void TimelineWidget::paintCornerTime(QPainter &p, const QPoint &origin, double time, const QColor &color) const {
     const QRect corner(origin.x(), origin.y(), kTimelineLabelWidth - 1, kRulerHeight - 1);
+    const EditorTheme &theme = editorTheme();
     p.setRenderHint(QPainter::Antialiasing, false);
-    p.fillRect(corner, QColor("#1a1a1a"));
-    p.fillRect(QRect(corner.right() + 1, origin.y(), 1, kRulerHeight), QColor("#0a0a0a"));
-    p.fillRect(QRect(origin.x(), corner.bottom() + 1, kTimelineLabelWidth, 1), QColor("#0a0a0a"));
+    p.fillRect(corner, theme.rulerCorner);
+    p.fillRect(QRect(corner.right() + 1, origin.y(), 1, kRulerHeight), theme.divider);
+    p.fillRect(QRect(origin.x(), corner.bottom() + 1, kTimelineLabelWidth, 1), theme.divider);
     QFont font(QStringLiteral("Menlo"));
     font.setPixelSize(13);
     font.setStyleHint(QFont::Monospace);
@@ -1079,7 +1102,7 @@ void TimelineWidget::ensureLaneCache() {
         return;
     }
     cache.setDevicePixelRatio(dpr);
-    cache.fill(QColor("#121212"));
+    cache.fill(editorTheme().timelineBackground);
     QPainter painter(&cache);
     if (!painter.isActive()) {
         m_laneCache = QPixmap();
