@@ -289,12 +289,28 @@ pub enum RuntimeRequest {
         #[serde(rename = "baseRevision")]
         base_revision: u64,
     },
+    /// Add the media file at `path` and cut all of it in at the end of the
+    /// program. A relative path is read against the project folder, and a
+    /// file inside it is kept relative to it; a Git LFS pointer is refused.
     Import {
         actor: String,
         #[serde(rename = "idempotencyKey")]
         idempotency_key: String,
         #[serde(rename = "baseRevision")]
         base_revision: u64,
+        path: String,
+    },
+    /// Swap the file behind media id `media` for the one at `path` (read as
+    /// `Import` reads it), keeping every clip's timing. A file that is not
+    /// downloaded, does not probe, or is too short or lacks a stream the
+    /// clips need is refused, naming them.
+    ReplaceMedia {
+        actor: String,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "baseRevision")]
+        base_revision: u64,
+        media: String,
         path: String,
     },
     StartRender {

@@ -247,6 +247,82 @@ sequence s1 name=\"Round Trip\" rate=24 size=1920x1080 audio=48000 start=00:00:0
     let _ = fs::remove_dir_all(&directory);
 }
 
+/// `seconds` of 64x36 picture at 24 fps with a tone.
+fn media_file(path: &Path, seconds: u32) {
+    let output = Command::new(kerf_engine::ffmpeg::resolve_ffmpeg_bin())
+        .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i"])
+        .arg(format!("color=c=gray:s=64x36:r=24:d={seconds}"))
+        .args(["-f", "lavfi", "-i"])
+        .arg(format!("sine=f=440:sample_rate=48000:d={seconds}"))
+        .args([
+            "-c:a",
+            "aac",
+            "-shortest",
+            "-c:v",
+            "mpeg4",
+            "-pix_fmt",
+            "yuv420p",
+            "-y",
+        ])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn media_is_replaced_through_the_client_relative_to_the_project() {
+    let directory = project_directory("media");
+    fs::create_dir_all(directory.join("media")).unwrap();
+    media_file(&directory.join("media/a.mp4"), 2);
+    media_file(&directory.join("media/b.mp4"), 3);
+    media_file(&directory.join("media/short.mp4"), 1);
+    let daemon = start_daemon(&directory);
+    let client = RuntimeClient::new(&directory)
+        .unwrap()
+        .with_request_timeout(Duration::from_secs(60));
+    assert_eq!(client.request_timeout(), Duration::from_secs(60));
+    wait_until_ready(&client);
+
+    // kerfd runs elsewhere; relative paths name files in the project.
+    let (imported, media, _) = client
+        .import_media_request("ui", "import", "media/a.mp4", 0)
+        .unwrap();
+    assert!(
+        imported.document.contains("path=\"media/a.mp4\""),
+        "{}",
+        imported.document
+    );
+    // The first answer is lost; the client retries through the receipt.
+    let replaced = client
+        .replace_media_request("ui", "lost-response", &media, "media/b.mp4", 1)
+        .unwrap();
+    assert_eq!(replaced.revision, 2);
+    assert!(
+        replaced.document.contains(&format!(
+            "media {media} path=\"media/b.mp4\" rate=24 dur=00:00:03:00"
+        )),
+        "{}",
+        replaced.document
+    );
+    let refused = client
+        .replace_media_request("ui", "short", &media, "media/short.mp4", 2)
+        .unwrap_err();
+    assert_eq!(refused.code, "MEDIA_DOES_NOT_FIT", "{}", refused.message);
+    assert_eq!(
+        fs::read_to_string(directory.join("project.kerf")).unwrap(),
+        replaced.document
+    );
+    let undone = client.undo_request("ui", "undo-replace", 2).unwrap();
+    assert_eq!(undone.document, imported.document);
+    stop_daemon(daemon);
+    let _ = fs::remove_dir_all(&directory);
+}
+
 #[test]
 fn daemon_exits_once_its_project_directory_is_deleted() {
     let directory = project_directory("orphan");

@@ -451,7 +451,7 @@ impl Script<'_> {
 
     fn media(&mut self, mut fields: Fields<'_>) -> Parsed {
         let line = fields.line();
-        let action = fields.word(1, "add, relink, or remove")?;
+        let action = fields.word(1, "add, relink, replace, or remove")?;
         let id = fields.id(2, "a media id")?;
         let op = match action {
             "add" => Op::AddMedia(media_fields(&mut fields, id)?),
@@ -462,9 +462,13 @@ impl Script<'_> {
                     .and_then(|arg| fields.text(arg))?
                     .to_owned(),
             },
+            "replace" => Op::ReplaceMedia(media_fields(&mut fields, id)?),
             "remove" => Op::RemoveMedia { media: id },
             other => {
-                return Err(line.error(1, format!("media {other}? use add, relink, or remove")))
+                return Err(line.error(
+                    1,
+                    format!("media {other}? use add, relink, replace, or remove"),
+                ))
             }
         };
         fields.finish(3)?;
@@ -1641,6 +1645,7 @@ fn op_line(project: &Project, catalog: &Catalog, op: &Op) -> String {
     match op {
         Op::AddMedia(media) => media_line(media).replacen("media ", "media add ", 1),
         Op::RelinkMedia { media, path } => format!("media relink {media} path={}", quote(path)),
+        Op::ReplaceMedia(media) => media_line(media).replacen("media ", "media replace ", 1),
         Op::RemoveMedia { media } => format!("media remove {media}"),
         Op::AddSequence(sequence) => {
             sequence_line(sequence).replacen("sequence ", "sequence add ", 1)

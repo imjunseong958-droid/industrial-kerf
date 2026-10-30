@@ -277,52 +277,16 @@ pub(crate) fn import_media(
         .sequences
         .first()
         .ok_or_else(|| RuntimeError::new("INVALID_IMPORT", "the project has no sequence"))?;
-    let rate = probe
-        .and_then(|info| info.fps)
-        .and_then(|fps| Rate::from_fps(fps).ok())
-        .unwrap_or(sequence.rate);
-    let has_audio = probe.and_then(|info| info.has_audio) == Some(true);
-    let video = match probe.and_then(|info| info.width.zip(info.height)) {
-        Some((width, height)) => Some(VideoInfo {
-            width,
-            height,
-            alpha: probe.and_then(|info| info.alpha) == Some(true),
-        }),
-        // Unprobed media is assumed to be picture at the sequence size.
-        None if !has_audio => Some(VideoInfo {
-            width: sequence.width,
-            height: sequence.height,
-            alpha: false,
-        }),
-        None => None,
-    };
-    // Unprobed media is assumed to last one second.
-    let seconds = probe
-        .and_then(|info| info.duration)
-        .filter(|duration| *duration > 0.0)
-        .unwrap_or(1.0);
-    let duration = Time::from_seconds(seconds)
-        .map(|time| rate.round(time).max(rate.frame_duration()))
-        .ok_or_else(|| RuntimeError::new("INVALID_IMPORT", "the media is too long"))?;
     let mut ids = project.id_gen();
-    let media = Media {
-        id: ids.next("m"),
-        path: path.to_owned(),
-        rate,
-        drop_frame: false,
-        start: Time::ZERO,
-        duration,
-        video,
-        audio: has_audio.then_some(AudioInfo {
-            channels: 2,
-            sample_rate: 48_000,
-        }),
-        reel: None,
+    let id = ids.next("m");
+    let media = match probe.map(|probe| media_from_probe(id.clone(), path, probe, sequence.rate)) {
+        Some(Ok(media)) => media,
+        _ => assumed_media(id, path, probe, sequence)?,
     };
     let at = program_duration(project);
     let length = sequence
         .rate
-        .round(duration)
+        .round(media.duration)
         .max(sequence.rate.frame_duration());
     let content = Content::Media {
         media: media.id.clone(),
@@ -372,6 +336,110 @@ pub(crate) fn import_media(
         targets,
     });
     Ok((ops, media.id, clip))
+}
+
+/// The media `probe` found in the file at `path`, under `id`: its picture
+/// rate (`rate` when it has no picture), size, sound, and length on whole
+/// frames. Sound is recorded as stereo at 48 kHz, which is what playback
+/// and renders make of it. A probe that found no length, or neither picture
+/// nor sound, is refused rather than guessed.
+pub(crate) fn media_from_probe(
+    id: Id,
+    path: &str,
+    probe: &ProbeInfo,
+    rate: Rate,
+) -> Result<Media, RuntimeError> {
+    let unreadable = |what: &str| RuntimeError::new("MEDIA_UNREADABLE", format!("{path} {what}"));
+    let rate = probe
+        .fps
+        .and_then(|fps| Rate::from_fps(fps).ok())
+        .unwrap_or(rate);
+    let seconds = probe
+        .duration
+        .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+        .ok_or_else(|| unreadable("has no length that can be read"))?;
+    let duration = Time::from_seconds(seconds)
+        .filter(|time| time.in_range())
+        .map(|time| rate.round(time).max(rate.frame_duration()))
+        .ok_or_else(|| unreadable("is too long"))?;
+    let video = probe
+        .width
+        .zip(probe.height)
+        .filter(|(width, height)| *width > 0 && *height > 0)
+        .map(|(width, height)| VideoInfo {
+            width,
+            height,
+            alpha: probe.alpha == Some(true),
+        });
+    let audio = (probe.has_audio == Some(true)).then_some(AudioInfo {
+        channels: 2,
+        sample_rate: 48_000,
+    });
+    if video.is_none() && audio.is_none() {
+        return Err(unreadable("has neither picture nor sound"));
+    }
+    Ok(Media {
+        id,
+        path: path.to_owned(),
+        rate,
+        drop_frame: false,
+        start: Time::ZERO,
+        duration,
+        video,
+        audio,
+        reel: None,
+    })
+}
+
+/// What an import assumes of a file `probe` could not fully read: picture
+/// at the sequence's size and rate unless it found sound, lasting one
+/// second unless it found a length.
+fn assumed_media(
+    id: Id,
+    path: &str,
+    probe: Option<&ProbeInfo>,
+    sequence: &Sequence,
+) -> Result<Media, RuntimeError> {
+    let mut assumed = probe.cloned().unwrap_or_default();
+    if !assumed
+        .duration
+        .is_some_and(|seconds| seconds.is_finite() && seconds > 0.0)
+    {
+        assumed.duration = Some(1.0);
+    }
+    let sized = assumed
+        .width
+        .zip(assumed.height)
+        .is_some_and(|(width, height)| width > 0 && height > 0);
+    if !sized && assumed.has_audio != Some(true) {
+        assumed.width = Some(sequence.width);
+        assumed.height = Some(sequence.height);
+        assumed.alpha = None;
+    }
+    media_from_probe(id, path, &assumed, sequence.rate)
+}
+
+/// Swap the file behind `media.id` for the one `media` describes. Every
+/// clip keeps its timing; a file one no longer fits is refused with the
+/// clips (and transitions) it would break.
+pub(crate) fn replace_media(project: &Project, media: Media) -> Result<Edited, RuntimeError> {
+    let (id, path) = (media.id.clone(), media.path.clone());
+    let ops = [Op::ReplaceMedia(media)];
+    let (next, _) = apply(project, catalog(), &ops).map_err(|rejected| {
+        let reasons: Vec<String> = rejected
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.clone())
+            .collect();
+        RuntimeError::new(
+            "MEDIA_DOES_NOT_FIT",
+            format!("{path} cannot replace media `{id}`: {}", reasons.join("; ")),
+        )
+    })?;
+    Ok(Edited {
+        script: print_ops(project, catalog(), &ops),
+        project: next,
+    })
 }
 
 /// The first free `V<n>`, `A<n>`, or `S<n>` track id of `sequence`.

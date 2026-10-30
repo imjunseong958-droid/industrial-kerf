@@ -23,7 +23,7 @@ use kerf_lang::NoFacts;
 use kerf_model::Project;
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 
@@ -1165,10 +1165,11 @@ impl Runtime {
         self.check_revision(Some(base_revision))?;
         // Build the import candidate without mutating the actor, so a failed
         // probe or edit leaves every in-memory field untouched.
-        let path = validate_media_path(path)?.to_string_lossy().into_owned();
-        let probe = kerf_engine::probe::info(&path).ok();
+        let MediaFile { file, stored } = media_file(self.directory(), path)?;
+        let file = file.to_string_lossy().into_owned();
+        let probe = kerf_engine::probe::info(&file).ok();
         let (ops, media_id, clip_id) =
-            kernel::import_media(&self.state.project, &path, probe.as_ref())?;
+            kernel::import_media(&self.state.project, &stored, probe.as_ref())?;
         let (mut candidate, change) =
             self.edit_candidate(kernel::apply_ops(&self.state.project, &ops)?);
         let (media_id, clip_id) = (media_id.to_string(), clip_id.to_string());
@@ -1194,14 +1195,69 @@ impl Runtime {
                 proposal,
             },
         )?;
-        kernel::prepare_media(
-            path,
-            self.project_path
-                .parent()
-                .unwrap_or(Path::new("."))
-                .to_path_buf(),
-        );
+        kernel::prepare_media(file, self.directory().to_path_buf());
         Ok((snapshot, media_id, clip_id))
+    }
+
+    /// Swap the file behind `media` for the one at `path`, as an ordinary
+    /// undoable edit. The file must be downloaded and readable as media
+    /// (its length and streams are probed, never guessed); clips that would
+    /// no longer fit it are named and nothing changes.
+    pub fn replace_media_request(
+        &mut self,
+        actor: &str,
+        key: &str,
+        media: &str,
+        path: &str,
+        base_revision: u64,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        validate_request_identity(actor, key)?;
+        let operation = format!("{actor}:{key}");
+        let fingerprint = format!("{actor}:{base_revision}:replace_media:{media}:{path}");
+        if let Some(replayed) = self.replayed(&operation, &fingerprint) {
+            return replayed;
+        }
+        self.check_revision(Some(base_revision))?;
+        let existing = self
+            .state
+            .project
+            .media(media)
+            .ok_or_else(|| RuntimeError::new("UNKNOWN_MEDIA", format!("no media `{media}`")))?;
+        let MediaFile { file, stored } = media_file(self.directory(), path)?;
+        let file = file.to_string_lossy().into_owned();
+        let probe = kerf_engine::probe::info(&file).map_err(|error| {
+            RuntimeError::new(
+                "MEDIA_UNREADABLE",
+                format!("{path} cannot be read as media: {error}"),
+            )
+        })?;
+        // A file without picture keeps the timecode rate the media had.
+        let mut replacement =
+            kernel::media_from_probe(existing.id.clone(), &stored, &probe, existing.rate)?;
+        // No probe reads a reel, so the one the media was given stays.
+        replacement.reel.clone_from(&existing.reel);
+        let (mut candidate, change) =
+            self.edit_candidate(kernel::replace_media(&self.state.project, replacement)?);
+        let snapshot = self.snapshot_of(&candidate);
+        let operation = candidate.record_operation(operation, fingerprint, snapshot);
+        let proposal = candidate.proposal.clone();
+        let snapshot = self.commit_candidate(
+            candidate,
+            JournalEvent::Mutation {
+                action: JournalAction::Apply,
+                change: Some(change),
+                operation: Some(operation),
+                import: None,
+                proposal,
+            },
+        )?;
+        kernel::prepare_media(file, self.directory().to_path_buf());
+        Ok(snapshot)
+    }
+
+    /// The project folder: media paths in the document are relative to it.
+    fn directory(&self) -> &Path {
+        self.project_path.parent().unwrap_or(Path::new("."))
     }
 
     pub fn update_job(
@@ -1362,6 +1418,19 @@ impl Runtime {
                     clip_id,
                 })
             }
+            RuntimeRequest::ReplaceMedia {
+                actor,
+                idempotency_key,
+                base_revision,
+                media,
+                path,
+            } => Ok(RuntimeResponse::State(self.replace_media_request(
+                &actor,
+                &idempotency_key,
+                &media,
+                &path,
+                base_revision,
+            )?)),
             RuntimeRequest::StartRender {
                 quality,
                 start,
@@ -1964,30 +2033,93 @@ fn proposal_not_found(proposal_id: &str) -> RuntimeError {
     )
 }
 
-fn validate_media_path(path: &str) -> Result<PathBuf, RuntimeError> {
+/// A media file a request names: where it is, and the path the document
+/// keeps for it.
+struct MediaFile {
+    /// The file itself; a relative request path is read against the
+    /// project folder.
+    file: PathBuf,
+    /// Relative to the project folder with `/` separators when the file is
+    /// inside it, so the project reads the same on every collaborator's
+    /// machine; otherwise where it is.
+    stored: String,
+}
+
+/// Find the media file `path` names for the project in `directory`: it
+/// must be a file and not a Git LFS pointer, which stands for media that
+/// was not downloaded.
+fn media_file(directory: &Path, path: &str) -> Result<MediaFile, RuntimeError> {
     if path.trim().is_empty() {
         return Err(RuntimeError::new(
             "INVALID_IMPORT",
             "media path is required",
         ));
     }
-    let source_path = PathBuf::from(path);
-    let metadata = fs::metadata(&source_path).map_err(|error| {
+    let given = Path::new(path);
+    let file = if given.is_absolute() {
+        given.to_path_buf()
+    } else {
+        directory.join(given)
+    };
+    let metadata = fs::metadata(&file).map_err(|error| {
         RuntimeError::new(
             "INVALID_IMPORT",
             format!(
                 "media path is not a readable file: {} ({error})",
-                source_path.display()
+                file.display()
             ),
         )
     })?;
     if !metadata.is_file() {
         return Err(RuntimeError::new(
             "INVALID_IMPORT",
-            format!("media path is not a file: {}", source_path.display()),
+            format!("media path is not a file: {}", file.display()),
         ));
     }
-    Ok(source_path)
+    if kerf_collab::git::is_lfs_pointer(&file) {
+        return Err(RuntimeError::new(
+            "MEDIA_NOT_DOWNLOADED",
+            format!(
+                "{path} is a Git LFS pointer, not the media itself; download it (git lfs pull) first"
+            ),
+        ));
+    }
+    let stored = match project_relative(directory, &file) {
+        Some(relative) => relative,
+        None if given.is_absolute() => path.to_owned(),
+        None => file
+            .parent()
+            .and_then(|parent| parent.canonicalize().ok())
+            .zip(file.file_name())
+            .map_or_else(|| file.clone(), |(parent, name)| parent.join(name))
+            .to_string_lossy()
+            .into_owned(),
+    };
+    Ok(MediaFile { file, stored })
+}
+
+/// `file` relative to `directory` with `/` separators, when it is inside
+/// it. Folders are compared as they resolve, so a project reached through
+/// a symbolic link (macOS's `/var` and `/private/var`) still holds its
+/// files; the file's own name is kept even when it is a link.
+fn project_relative(directory: &Path, file: &Path) -> Option<String> {
+    let plain = |path: &Path| path.components().all(|c| matches!(c, Component::Normal(_)));
+    let relative = file
+        .strip_prefix(directory)
+        .ok()
+        .filter(|relative| plain(relative))
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            let directory = directory.canonicalize().ok()?;
+            let parent = file.parent()?.canonicalize().ok()?;
+            Some(parent.strip_prefix(directory).ok()?.join(file.file_name()?))
+        })
+        .filter(|relative| plain(relative))?;
+    let parts = relative
+        .components()
+        .map(|component| component.as_os_str().to_str())
+        .collect::<Option<Vec<_>>>()?;
+    (!parts.is_empty()).then(|| parts.join("/"))
 }
 
 #[cfg(test)]
@@ -2459,12 +2591,11 @@ mod tests {
             assert_eq!(first.revision, replay.revision);
             assert_eq!((&media_id, &clip_id), (&replay_media, &replay_clip));
             // Unprobed media is a second of picture at the sequence size,
-            // cut in on a new picture track. The document quotes the path,
-            // doubling a Windows path's backslashes.
+            // cut in on a new picture track. A file inside the project is
+            // kept relative to it.
             assert!(
                 first.document.contains(&format!(
-                    "media {media_id} path=\"{}\" rate=30 dur=00:00:01:00 video=1920x1080",
-                    media.display().to_string().replace('\\', "\\\\")
+                    "media {media_id} path=\"sample.mp4\" rate=30 dur=00:00:01:00 video=1920x1080"
                 )),
                 "{}",
                 first.document
@@ -2534,6 +2665,337 @@ mod tests {
         assert_eq!(runtime.snapshot().revision, 0);
         drop(runtime);
         let _ = fs::remove_dir_all(directory);
+    }
+
+    const LFS_POINTER: &str = "version https://git-lfs.github.com/spec/v1\n\
+        oid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\n\
+        size 12345\n";
+
+    /// A fresh project folder with a `media/` folder in it.
+    fn media_project(label: &str) -> PathBuf {
+        let directory = std::env::temp_dir().join(format!("kerf-runtime-{label}-{}", unique_id()));
+        fs::create_dir_all(directory.join("media")).unwrap();
+        directory
+    }
+
+    /// `seconds` of 64x36 picture at 24 fps, with a tone when `sound`.
+    fn media_clip(path: &Path, seconds: u32, sound: bool) {
+        let mut command = std::process::Command::new(kerf_engine::ffmpeg::resolve_ffmpeg_bin());
+        command
+            .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i"])
+            .arg(format!("color=c=gray:s=64x36:r=24:d={seconds}"));
+        if sound {
+            command
+                .args(["-f", "lavfi", "-i"])
+                .arg(format!("sine=f=440:sample_rate=48000:d={seconds}"))
+                .args(["-c:a", "aac", "-shortest"]);
+        }
+        let output = command
+            .args(["-c:v", "mpeg4", "-pix_fmt", "yuv420p", "-y"])
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// The clips of a snapshot's project that play `media`.
+    fn clips_of(state: &StateSnapshot, media: &str) -> Vec<String> {
+        let project = parse_document(&state.document).unwrap();
+        let mut clips: Vec<String> = project
+            .sequences
+            .iter()
+            .flat_map(|sequence| &sequence.tracks)
+            .flat_map(|track| &track.clips)
+            .filter(|clip| {
+                matches!(&clip.content, kerf_model::Content::Media { media: m, .. } if m.as_str() == media)
+            })
+            .map(|clip| clip.id.to_string())
+            .collect();
+        clips.sort();
+        clips
+    }
+
+    #[test]
+    fn replacing_media_swaps_the_file_behind_its_id_as_an_undoable_edit() {
+        let directory = media_project("replace");
+        media_clip(&directory.join("media/a.mp4"), 2, true);
+        media_clip(&directory.join("media/b.mp4"), 3, true);
+        let mut runtime = Runtime::open(&directory).unwrap();
+        let (imported, media, _) = runtime
+            .import_media_request("ui", "import", "media/a.mp4", 0)
+            .unwrap();
+        assert!(
+            imported
+                .document
+                .contains(&format!("media {media} path=\"media/a.mp4\" rate=24 dur=00:00:02:00 video=64x36 audio=2ch@48000")),
+            "{}",
+            imported.document
+        );
+        let clips = clips_of(&imported, &media);
+        assert_eq!(clips.len(), 2, "{}", imported.document);
+
+        // An absolute path inside the project is kept relative to it.
+        let longer = directory.join("media/b.mp4");
+        let replaced = runtime
+            .replace_media_request("ui", "replace", &media, longer.to_str().unwrap(), 1)
+            .unwrap();
+        assert_eq!((replaced.revision, replaced.can_undo), (2, true));
+        assert!(
+            replaced
+                .document
+                .contains(&format!("media {media} path=\"media/b.mp4\" rate=24 dur=00:00:03:00 video=64x36 audio=2ch@48000")),
+            "{}",
+            replaced.document
+        );
+        let before = parse_document(&imported.document).unwrap();
+        let after = parse_document(&replaced.document).unwrap();
+        assert_eq!(after.sequences, before.sequences);
+        assert_eq!(clips_of(&replaced, &media), clips);
+
+        // The same request replays its receipt; its key cannot name another.
+        let replay = runtime
+            .replace_media_request("ui", "replace", &media, longer.to_str().unwrap(), 1)
+            .unwrap();
+        assert_eq!(replay.revision, 2);
+        let reused = runtime
+            .replace_media_request("ui", "replace", &media, "media/a.mp4", 2)
+            .unwrap_err();
+        assert_eq!(reused.code, "IDEMPOTENCY_CONFLICT");
+
+        let undone = undo(&mut runtime, 2).unwrap();
+        assert_eq!(undone.revision, 3);
+        assert_eq!(undone.document, imported.document);
+        drop(runtime);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn replacing_media_refuses_files_its_clips_cannot_use() {
+        let directory = media_project("replace-refused");
+        media_clip(&directory.join("media/a.mp4"), 2, true);
+        media_clip(&directory.join("media/short.mp4"), 1, true);
+        media_clip(&directory.join("media/silent.mp4"), 3, false);
+        fs::write(directory.join("media/pointer.mp4"), LFS_POINTER).unwrap();
+        fs::write(directory.join("media/text.mp4"), "not media at all").unwrap();
+        let mut runtime = Runtime::open(&directory).unwrap();
+        let (imported, media, picture) = runtime
+            .import_media_request("ui", "import", "media/a.mp4", 0)
+            .unwrap();
+        let clips = clips_of(&imported, &media);
+        let sound = clips.iter().find(|clip| **clip != picture).unwrap().clone();
+        let mut replace = |path: &str| {
+            runtime
+                .replace_media_request("ui", &unique_id(), &media, path, 1)
+                .unwrap_err()
+        };
+
+        // Too short: both clips play two seconds of it.
+        let short = replace("media/short.mp4");
+        assert_eq!(short.code, "MEDIA_DOES_NOT_FIT", "{}", short.message);
+        for clip in &clips {
+            assert!(
+                short.message.contains(&format!("`{clip}`")),
+                "{}",
+                short.message
+            );
+        }
+        // No sound for the sound clip.
+        let silent = replace("media/silent.mp4");
+        assert_eq!(silent.code, "MEDIA_DOES_NOT_FIT", "{}", silent.message);
+        assert!(
+            silent.message.contains(&format!("`{sound}`")),
+            "{}",
+            silent.message
+        );
+        assert!(
+            !silent.message.contains(&format!("`{picture}`")),
+            "{}",
+            silent.message
+        );
+        // Not downloaded, not media, not there.
+        let pointer = replace("media/pointer.mp4");
+        assert_eq!(pointer.code, "MEDIA_NOT_DOWNLOADED", "{}", pointer.message);
+        assert!(pointer.message.contains("Git LFS"), "{}", pointer.message);
+        assert_eq!(replace("media/text.mp4").code, "MEDIA_UNREADABLE");
+        assert_eq!(replace("media/missing.mp4").code, "INVALID_IMPORT");
+        let unknown = runtime
+            .replace_media_request("ui", "unknown", "m9", "media/a.mp4", 1)
+            .unwrap_err();
+        assert_eq!(unknown.code, "UNKNOWN_MEDIA");
+        assert_eq!(runtime.snapshot().revision, 1);
+        assert_eq!(runtime.snapshot().document, imported.document);
+
+        // Importing a pointer is refused the same way.
+        let imported_pointer = runtime
+            .import_media_request("ui", "import-pointer", "media/pointer.mp4", 1)
+            .unwrap_err();
+        assert_eq!(imported_pointer.code, "MEDIA_NOT_DOWNLOADED");
+        drop(runtime);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn a_replacement_replays_from_the_journal_after_a_restart() {
+        let directory = media_project("replace-restart");
+        media_clip(&directory.join("media/a.mp4"), 2, false);
+        media_clip(&directory.join("media/b.mp4"), 3, false);
+        let (imported, replaced) = {
+            let mut runtime = Runtime::open(&directory).unwrap();
+            let (imported, media, _) = runtime
+                .import_media_request("ui", "import", "media/a.mp4", 0)
+                .unwrap();
+            let replaced = runtime
+                .replace_media_request("ui", "replace", &media, "media/b.mp4", 1)
+                .unwrap();
+            (imported, replaced)
+        };
+        assert!(directory.join(JOURNAL_FILE).is_file());
+        let mut reopened = Runtime::open(&directory).unwrap();
+        let recovered = reopened.snapshot();
+        assert_eq!(recovered.revision, 2);
+        assert_eq!(recovered.document, replaced.document);
+        assert_eq!(recovered.projection_status, "current");
+        assert!(recovered.can_undo);
+        // The receipt survived too.
+        let replay = reopened
+            .replace_media_request("ui", "replace", "m1", "media/b.mp4", 1)
+            .unwrap();
+        assert_eq!(replay.revision, 2);
+        assert_eq!(undo(&mut reopened, 2).unwrap().document, imported.document);
+        drop(reopened);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn media_paths_inside_the_project_are_kept_relative_to_it() {
+        let directory = media_project("relative");
+        let elsewhere = media_project("elsewhere");
+        for file in [
+            directory.join("media/inside.mov"),
+            directory.join("top.mov"),
+            elsewhere.join("media/outside.mov"),
+        ] {
+            fs::write(file, "not decoded here").unwrap();
+        }
+        let mut runtime = Runtime::open(&directory).unwrap();
+        let mut import = |path: &str| {
+            let revision = runtime.state.revision;
+            let (state, media, _) = runtime
+                .import_media_request("ui", &unique_id(), path, revision)
+                .unwrap();
+            let project = parse_document(&state.document).unwrap();
+            project.media(&media).unwrap().path.clone()
+        };
+        // Relative to the project, not to wherever kerfd runs.
+        assert_eq!(import("media/inside.mov"), "media/inside.mov");
+        assert_eq!(import("./media/inside.mov"), "media/inside.mov");
+        assert_eq!(
+            import(directory.join("media/inside.mov").to_str().unwrap()),
+            "media/inside.mov"
+        );
+        assert_eq!(
+            import(directory.join("top.mov").to_str().unwrap()),
+            "top.mov"
+        );
+        // Outside the project: where it is.
+        let outside = elsewhere.join("media/outside.mov");
+        assert_eq!(import(outside.to_str().unwrap()), outside.to_str().unwrap());
+        let name = elsewhere.file_name().unwrap().to_str().unwrap();
+        let climbed = import(&format!("../{name}/media/outside.mov"));
+        assert!(Path::new(&climbed).is_absolute(), "{climbed}");
+        assert_eq!(
+            fs::canonicalize(&climbed).unwrap(),
+            fs::canonicalize(&outside).unwrap()
+        );
+        drop(runtime);
+        let _ = fs::remove_dir_all(directory);
+        let _ = fs::remove_dir_all(elsewhere);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_project_reached_through_a_link_still_holds_its_media() {
+        let real = media_project("linked");
+        let link = real.with_file_name(format!("kerf-runtime-link-{}", unique_id()));
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let file = real.join("media").join("a.mov");
+        fs::write(&file, "x").unwrap();
+        assert_eq!(
+            project_relative(&link, &file).as_deref(),
+            Some("media/a.mov")
+        );
+        assert_eq!(
+            project_relative(&real, &link.join("media/a.mov")).as_deref(),
+            Some("media/a.mov")
+        );
+        assert_eq!(
+            project_relative(&real.join("media"), &real.join("a.mov")),
+            None
+        );
+        assert_eq!(project_relative(&real, &real.join("../a.mov")), None);
+        let _ = fs::remove_file(&link);
+        let _ = fs::remove_dir_all(&real);
+    }
+
+    #[test]
+    fn media_from_a_probe_is_read_never_guessed() {
+        let probe = kerf_engine::ProbeInfo {
+            duration: Some(2.5),
+            width: Some(1280),
+            height: Some(720),
+            fps: Some(25.0),
+            has_audio: Some(true),
+            alpha: Some(true),
+            ..Default::default()
+        };
+        let id = kerf_model::Id::new("m1").unwrap();
+        let media =
+            kernel::media_from_probe(id.clone(), "media/a.mov", &probe, kerf_model::Rate::FPS_30)
+                .unwrap();
+        assert_eq!(media.rate, kerf_model::Rate::FPS_25);
+        assert_eq!(media.duration, kerf_model::Rate::FPS_25.time_of(63));
+        assert_eq!(
+            media.video,
+            Some(kerf_model::VideoInfo {
+                width: 1280,
+                height: 720,
+                alpha: true
+            })
+        );
+        assert!(media.audio.is_some());
+        // Sound alone keeps the rate it is given.
+        let sound = kerf_engine::ProbeInfo {
+            duration: Some(1.0),
+            has_audio: Some(true),
+            ..Default::default()
+        };
+        let media = kernel::media_from_probe(id.clone(), "a.wav", &sound, kerf_model::Rate::FPS_24)
+            .unwrap();
+        assert_eq!((media.rate, media.video), (kerf_model::Rate::FPS_24, None));
+        for refused in [
+            kerf_engine::ProbeInfo {
+                duration: None,
+                ..probe.clone()
+            },
+            kerf_engine::ProbeInfo {
+                duration: Some(0.0),
+                ..probe.clone()
+            },
+            kerf_engine::ProbeInfo {
+                duration: Some(2.0),
+                has_audio: Some(false),
+                ..Default::default()
+            },
+        ] {
+            let error =
+                kernel::media_from_probe(id.clone(), "a.mov", &refused, kerf_model::Rate::FPS_24)
+                    .unwrap_err();
+            assert_eq!(error.code, "MEDIA_UNREADABLE", "{refused:?}");
+        }
     }
 
     #[test]
@@ -2874,6 +3336,16 @@ mod tests {
                 "actor":"ui",
                 "idempotencyKey":"",
                 "baseRevision":0,
+                "path":"/definitely/not-a-file"
+            }),
+            json!({
+                "protocolVersion":1,
+                "id":"replace-empty",
+                "operation":"replace_media",
+                "actor":"ui",
+                "idempotencyKey":"",
+                "baseRevision":0,
+                "media":"m1",
                 "path":"/definitely/not-a-file"
             }),
             json!({

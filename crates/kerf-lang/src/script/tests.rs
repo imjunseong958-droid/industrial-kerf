@@ -621,3 +621,77 @@ fn a_look_s_time_can_name_a_marker_it_lands_on() {
     let error = fails(&base(), "fx c1 add look.shake@1 hit=nowhere\n");
     assert_eq!(error.code, "marker.read", "{error:?}");
 }
+
+#[test]
+fn media_replace_prints_every_field_and_replays() {
+    let project = base();
+    let script = r#"media replace m1 path="media/take 2-0123abcd.mov" rate=23.976 tc=14:22:31:05 dur=00:12:00:00 video=3840x2160 alpha=true audio=6ch@96000 reel="B002""#;
+    let applied = run(&project, script);
+    let media = applied.project.media("m1").unwrap();
+    assert_eq!(media.path, "media/take 2-0123abcd.mov");
+    assert_eq!(media.rate, Rate::FPS_23_976);
+    assert_eq!(
+        (media.start, media.drop_frame),
+        parse_timecode("14:22:31:05", Rate::FPS_23_976).unwrap()
+    );
+    assert_eq!(media.duration, Rate::FPS_23_976.time_of(12 * 60 * 24));
+    assert_eq!(
+        media.video.map(|v| (v.width, v.height, v.alpha)),
+        Some((3840, 2160, true))
+    );
+    assert_eq!(
+        media.audio.map(|a| (a.channels, a.sample_rate)),
+        Some((6, 96_000))
+    );
+    assert_eq!(media.reel.as_deref(), Some("B002"));
+    // The clips keep their timing.
+    assert_eq!(applied.project.sequences, project.sequences);
+
+    let printed = print_ops(&project, Catalog::builtin(), &applied.ops);
+    assert_eq!(printed, format!("{script}\n"));
+    assert_eq!(run(&project, &printed).project, applied.project);
+
+    // Drop-frame timecode, a length off the frame grid, no reel, and no
+    // sound (nothing here plays m1's sound but A1, so drop that first).
+    let silent = run(&project, "delete a1 a2").project;
+    let op = Op::ReplaceMedia(Media {
+        id: Id::new("m1").unwrap(),
+        path: "b.mov".into(),
+        rate: Rate::FPS_29_97,
+        drop_frame: true,
+        start: parse_timecode("01:00:00;00", Rate::FPS_29_97).unwrap().0,
+        duration: Time::from_flicks(Rate::FPS_29_97.time_of(1800 * 2).flicks() + 1),
+        video: Some(kerf_model::VideoInfo {
+            width: 1280,
+            height: 720,
+            alpha: false,
+        }),
+        audio: None,
+        reel: None,
+    });
+    let printed = print_op(&silent, Catalog::builtin(), &op);
+    assert!(printed.contains("tc=01:00:00;00"), "{printed}");
+    assert!(printed.ends_with("fl video=1280x720"), "{printed}");
+    assert_eq!(run(&silent, &printed).ops, vec![op]);
+}
+
+#[test]
+fn media_replace_names_the_clips_a_shorter_file_cannot_hold() {
+    // c2 and a2 play 00:01:00:00–00:01:03:00 of m1.
+    let error = fails(
+        &base(),
+        r#"media replace m1 path="short.mov" rate=24 dur=00:00:30:00 video=1920x1080 audio=2ch@48000"#,
+    );
+    assert_eq!(
+        (error.code, error.span.map(|span| span.line)),
+        ("clip.source_range", Some(1))
+    );
+    assert!(
+        error.message.contains("`a2`") || error.message.contains("`c2`"),
+        "{error:?}"
+    );
+    let error = fails(&base(), r#"media replace m1 path="a.mov" rate=24"#);
+    assert!(error.message.contains("missing `dur=`"), "{error:?}");
+    let error = fails(&base(), "media swap m1");
+    assert!(error.message.contains("replace"), "{error:?}");
+}
