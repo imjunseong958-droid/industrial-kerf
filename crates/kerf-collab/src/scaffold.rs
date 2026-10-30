@@ -14,6 +14,11 @@ pub const MEDIA_DIR: &str = "media";
 /// The project's preset library, shared with the project.
 pub const PRESETS_DIR: &str = "presets";
 
+/// Settings that belong to one machine and may hold credentials or name
+/// programs to run, relative to the project. They are never staged, and a
+/// branch that tracks them is never checked out.
+pub const LOCAL_SETTINGS: [&str; 3] = [".kerf/config.json", ".kerf/mcp.json", ".kerf/vision.json"];
+
 /// Runtime state, caches, renders, and machine-local settings stay out of
 /// the repository.
 pub const GITIGNORE: &str = "\
@@ -21,6 +26,7 @@ pub const GITIGNORE: &str = "\
 .kerf-runtime.*
 .kerfd.sock
 .kerf-render-*
+project.kerf.tmp
 .kerf/cache/
 .kerf/runtime/
 .kerf/docs/generated/
