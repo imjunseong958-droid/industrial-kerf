@@ -17,13 +17,16 @@ target/qt/kerf-qt /path/to/project /path/to/kerfd
 ```
 
 The positional arguments may also be supplied as `KERF_PROJECT_DIR` and
-`KERFD_BIN`. For a quick visual smoke run, add
-`--screenshot /tmp/kerf.png --quit-after-ms 900`.
+`KERFD_BIN`. Without a project, Kerf opens the project launcher instead
+(`KERFD_BIN=/path/to/kerfd target/qt/kerf-qt`). For a quick visual smoke
+run, add `--screenshot /tmp/kerf.png --quit-after-ms 900`; without a project
+it captures the launcher.
 
 Sources live in the `kerf` namespace, one class per header/source pair:
 `main_window` (the window, which builds and connects the panels),
-`workspace` (the docked panels and workspaces), `project_panel` (the bin),
-`source_monitor_panel`, `effect_controls_panel`,
+`project_launcher` (the Choose a Project window), `workspace` (the docked
+panels and workspaces), `project_panel` (the bin), `presets_panel` (the
+project's preset library), `source_monitor_panel`, `effect_controls_panel`,
 `timeline_widget`, `viewer_widget` (the viewer, its mask drawing, and the
 focus-region picker),
 `command_registry` (the editor's side of the command registry), and
@@ -116,6 +119,59 @@ timeline starts without tracks. Hover over the
 empty row in the left track header to reveal a plus; click it to add a video
 or audio track. Double-click a clip to open its media in the Source monitor
 at the clip's in point.
+
+## Projects
+
+A project is a folder: `project.kerf`, a `media/` folder, and a `presets/`
+library. Started without one, Kerf opens the launcher, like an edit suite's
+Choose a Project window. New Project offers Empty 16:9, Vertical 9:16, and
+Square 1:1 templates; Details sets the name, location, frame rate, and
+sharing: Share with Git makes the folder a repository, and Create a private
+GitHub repository (offered once the GitHub CLI is signed in, naming the
+account) or a remote URL publishes it. Recent lists the projects opened
+lately with their branch and last edit. From Preset starts a project from a
+shared preset: pick one from your projects' `presets/` folders or any
+`.kerfpreset`, then choose a file for each media slot; each slot says what
+it needs, and Choose waits until every file fits. Clone from GitHub copies a
+shared project by its Git address. Open an Existing Project… opens any
+folder. Choose explains in the footer why it is unavailable, shows progress
+while the folder is made or cloned, and reports what went wrong.
+
+File → New Project… (⌘N) opens the launcher, Open Project… (⌘⇧O) a folder,
+and Open Recent a recent project; each opens in a new window and closes the
+current one. Import Media keeps ⌘O.
+
+## Collaborating
+
+Collaborate syncs a project shared through Git with collaborators, using
+Git and GitHub as they are: Sync Now commits your edits, pulls and merges
+the upstream branch, and pushes. `project.kerf` merges by clips and tracks;
+where both sides changed the same thing, your version is kept and the sync
+says so. Live Sync syncs every few seconds and shortly after each edit; it
+is remembered per project. Commit…, New Branch…, Switch Branch, Open Pull
+Request…, Publish to GitHub…, and Consolidate Media (which copies media
+from outside the project into `media/` so collaborators get it) complete
+the menu; each unavailable item says why.
+
+The status bar shows the branch and how far it is ahead of and behind its
+upstream (`⎇ main ↑2 ↓1`), what a running sync is doing, live sync, an
+unfinished merge, or a failed sync; click it to sync now. After a sync,
+each incoming commit (`jun · Trimmed c3`) and each change that kept yours
+is listed in the activity log and the chip's tooltip; errors use the error
+banner. When `project.kerf` changes outside Kerf (a `git pull` in a
+terminal, a text editor), a banner offers Load from Disk or Keep Editor
+Version.
+
+The Presets panel (Window → Presets, behind the Project bin) lists the
+project's preset library, which travels with the repository: each preset's
+slots, author, and last change. Apply chooses this project's media for its
+slots and stages it as a proposal; Save Current as Preset… (also in File)
+adds the program sequence to `presets/`. The list refreshes after each save
+and sync. Right-click media in the Project bin to Replace Media… (swap the
+file behind the media for everyone; its clips keep their timing), Reveal in
+Finder, or Consolidate Media. Bin items show OFFLINE when the file is
+missing, NOT DOWNLOADED for a Git LFS file a sync has not fetched, and
+EXTERNAL when it lives outside the project folder.
 
 ## Effects
 
@@ -220,6 +276,9 @@ ctest --test-dir target/qt --output-on-failure
 ```
 
 The tests cover disconnected controls, reconnection state, error deduplication,
-long timeline fit, scrolling through many tracks, and complete proposal review.
+long timeline fit, scrolling through many tracks, complete proposal review,
+the sync chip and Collaborate requests, the diverged banner, the Presets
+panel, media badges, and the launcher's validation (test builds never start
+launcher tasks).
 The macOS CI job also runs the real bridge/media workflow in
 `scripts/test-kerf-qt-bridge.py`.
