@@ -1,10 +1,31 @@
 #include "editor_style.h"
 #include "main_window.h"
+#include "project_launcher.h"
 
 #include <QApplication>
 #include <QDir>
 #include <QFontDatabase>
+#include <QPointer>
 #include <QTimer>
+
+namespace {
+
+// An editor window for `project`. It lives on the heap and is deleted when
+// closed; opening another project from it opens a new window first, so the
+// application keeps running.
+kerf::MainWindow *openEditor(const QString &project, const QString &kerfd) {
+    kerf::ProjectLauncher::rememberProject(project);
+    auto *window = new kerf::MainWindow(project, kerfd);
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    QObject::connect(window, &kerf::MainWindow::projectOpenRequested, window, [window, kerfd](const QString &path) {
+        openEditor(path, kerfd);
+        window->close();
+    });
+    window->show();
+    return window;
+}
+
+} // namespace
 
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
@@ -43,21 +64,40 @@ int main(int argc, char **argv) {
     }
     project = positional.value(0, qEnvironmentVariable("KERF_PROJECT_DIR"));
     if (project.isEmpty()) project = qEnvironmentVariable("KERF_PROJECT_DIRECTORY");
-    if (project.isEmpty()) project = QDir::currentPath();
     kerfd = positional.value(1, qEnvironmentVariable("KERFD_BIN"));
     if (kerfd.isEmpty()) kerfd = qEnvironmentVariable("KERFD_BINARY");
     if (kerfd.isEmpty()) kerfd = QStringLiteral("kerfd");
-    kerf::MainWindow window(project, kerfd);
-    window.show();
-    if (renderPreview) {
-        QTimer::singleShot(1500, &window, [&window] {
-            QMetaObject::invokeMethod(&window, "renderPreview", Qt::DirectConnection);
-        });
+    const bool smoke = !screenshotPath.isEmpty() || quitAfterMs > 0;
+
+    // Without a project, choose one first. A smoke run shows the launcher
+    // and captures it instead of waiting for a choice.
+    QPointer<QWidget> shown;
+    if (project.isEmpty() && smoke) {
+        auto *launcher = new kerf::ProjectLauncher(kerfd);
+        launcher->setAttribute(Qt::WA_DeleteOnClose);
+        launcher->show();
+        shown = launcher;
+    } else if (project.isEmpty()) {
+        kerf::ProjectLauncher launcher(kerfd);
+        // Closing the launcher is not the last window closing.
+        app.setQuitOnLastWindowClosed(false);
+        if (launcher.exec() != QDialog::Accepted) return 0;
+        app.setQuitOnLastWindowClosed(true);
+        project = launcher.chosenPath();
     }
-    if (!screenshotPath.isEmpty() || quitAfterMs > 0) {
+    if (!shown) {
+        QPointer<kerf::MainWindow> window = openEditor(QDir(project).absolutePath(), kerfd);
+        shown = window.data();
+        if (renderPreview) {
+            QTimer::singleShot(1500, window.data(), [window] {
+                QMetaObject::invokeMethod(window.data(), "renderPreview", Qt::DirectConnection);
+            });
+        }
+    }
+    if (smoke) {
         const int delay = quitAfterMs > 0 ? quitAfterMs : 500;
-        QTimer::singleShot(delay, &app, [&window, &app, screenshotPath] {
-            if (!screenshotPath.isEmpty()) window.grab().save(screenshotPath);
+        QTimer::singleShot(delay, &app, [shown, &app, screenshotPath] {
+            if (shown && !screenshotPath.isEmpty()) shown->grab().save(screenshotPath);
             app.quit();
         });
     }

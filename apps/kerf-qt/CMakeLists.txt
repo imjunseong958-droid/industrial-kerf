@@ -51,6 +51,10 @@ set(KERF_QT_SOURCES
     main_window.h
     media_artwork.cpp
     media_artwork.h
+    presets_panel.cpp
+    presets_panel.h
+    project_launcher.cpp
+    project_launcher.h
     project_panel.cpp
     project_panel.h
     source_monitor_panel.cpp

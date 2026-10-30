@@ -12,7 +12,7 @@ namespace kerf {
 namespace {
 
 // Bump when the panels change so stale layouts are not restored.
-constexpr int kLayoutVersion = 3;
+constexpr int kLayoutVersion = 4;
 
 QString layoutKey(const QString &group, const QString &name) {
     return QStringLiteral("workspace/%1/%2").arg(group, name);
@@ -45,7 +45,8 @@ ads::CDockWidget *Workspace::addPanel(const QString &id, const QString &title, Q
 
 void Workspace::arrangeEditing() {
     // The edit-suite arrangement: Source (with Effect Controls behind it)
-    // beside the Program monitor, over the Project bin and the Timeline.
+    // beside the Program monitor, over the Project bin (with Effects and
+    // Presets behind it) and the Timeline.
     const auto panel = [this](const char *id) { return m_panels.value(QString::fromLatin1(id)); };
     auto *source = m_manager->addDockWidget(ads::LeftDockWidgetArea, panel("source"));
     m_manager->addDockWidget(ads::CenterDockWidgetArea, panel("effectControls"), source);
@@ -54,6 +55,7 @@ void Workspace::arrangeEditing() {
     m_manager->addDockWidget(ads::RightDockWidgetArea, panel("program"), source);
     auto *project = m_manager->addDockWidget(ads::BottomDockWidgetArea, panel("project"));
     m_manager->addDockWidget(ads::CenterDockWidgetArea, panel("effects"), project);
+    m_manager->addDockWidget(ads::CenterDockWidgetArea, panel("presets"), project);
     project->setCurrentDockWidget(panel("project"));
     m_manager->addDockWidget(ads::RightDockWidgetArea, panel("timeline"), project);
     m_manager->setSplitterSizes(source, {640, 860});

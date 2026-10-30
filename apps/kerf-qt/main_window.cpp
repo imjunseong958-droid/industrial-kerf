@@ -4,6 +4,8 @@
 #include "command_registry.h"
 #include "effect_controls_panel.h"
 #include "effects_panel.h"
+#include "presets_panel.h"
+#include "project_launcher.h"
 #include "project_panel.h"
 #include "source_monitor_panel.h"
 #include "workspace.h"
@@ -18,7 +20,9 @@
 #include <QButtonGroup>
 #include <QClipboard>
 #include <QColorDialog>
+#include <QCursor>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -52,6 +56,7 @@
 #include <QStatusBar>
 #include <QTextFrame>
 #include <QToolBar>
+#include <QUrl>
 #include <QVBoxLayout>
 
 #include <DockManager.h>
@@ -59,6 +64,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <utility>
 
 namespace kerf {
 
@@ -1263,6 +1269,28 @@ void MainWindow::buildUi() {
     m_errorBanner->hide();
     root->addWidget(m_errorBanner);
 
+    // A git pull in a terminal or a text editor changed project.kerf; kerfd
+    // keeps the editor's version until one of them is chosen.
+    m_divergedBanner = new QFrame;
+    m_divergedBanner->setObjectName(QStringLiteral("divergedBanner"));
+    auto *divergedLayout = new QHBoxLayout(m_divergedBanner);
+    divergedLayout->setContentsMargins(10, 4, 8, 4);
+    auto *divergedText = new QLabel(QStringLiteral("<b>project.kerf changed on disk.</b> Load it to bring in edits made outside Kerf "
+                                                   "(a git pull, a text editor), or keep the editor's version and write it over the file."));
+    divergedText->setObjectName(QStringLiteral("divergedMessage"));
+    divergedText->setWordWrap(true);
+    divergedLayout->addWidget(divergedText, 1);
+    m_loadFromDisk = new QPushButton(QStringLiteral("Load from Disk"));
+    m_loadFromDisk->setObjectName(QStringLiteral("loadFromDisk"));
+    connect(m_loadFromDisk, &QPushButton::clicked, this, [this] { execute(QStringLiteral("projection.import")); });
+    divergedLayout->addWidget(m_loadFromDisk);
+    m_keepEditorVersion = new QPushButton(QStringLiteral("Keep Editor Version"));
+    m_keepEditorVersion->setObjectName(QStringLiteral("keepEditorVersion"));
+    connect(m_keepEditorVersion, &QPushButton::clicked, this, [this] { execute(QStringLiteral("projection.repair")); });
+    divergedLayout->addWidget(m_keepEditorVersion);
+    m_divergedBanner->hide();
+    root->addWidget(m_divergedBanner);
+
     m_workspace = new Workspace(central);
     root->addWidget(m_workspace->manager(), 1);
 
@@ -1331,6 +1359,13 @@ void MainWindow::buildUi() {
 
     m_projectPanel = new ProjectPanel(m_artwork);
     connect(m_projectPanel, &ProjectPanel::openRequested, this, &MainWindow::openSource);
+    connect(m_projectPanel, &ProjectPanel::menuRequested, this, [this](const QString &media, const QPoint &at) {
+        QMenu *menu = binMenu(media);
+        menu->exec(at);
+        menu->deleteLater();
+    });
+    m_presets = new PresetsPanel;
+    connect(m_presets, &PresetsPanel::applyRequested, this, &MainWindow::applyLibraryPreset);
     m_sourceMonitor = new SourceMonitorPanel;
     connect(m_sourceMonitor, &SourceMonitorPanel::changed, this, &MainWindow::updateCommandStates);
 
@@ -1852,6 +1887,7 @@ void MainWindow::buildUi() {
     m_workspace->addPanel(QStringLiteral("effectControls"), QStringLiteral("Effect Controls"), m_effectControls);
     m_workspace->addPanel(QStringLiteral("effects"), QStringLiteral("Effects"), m_effects);
     m_workspace->addPanel(QStringLiteral("project"), QStringLiteral("Project"), m_projectPanel);
+    m_workspace->addPanel(QStringLiteral("presets"), QStringLiteral("Presets"), m_presets);
     m_workspace->addPanel(QStringLiteral("source"), QStringLiteral("Source"), m_sourceMonitor);
     m_workspace->addPanel(QStringLiteral("assistant"), QStringLiteral("Kerf Assistant"), right);
     setCentralWidget(central);
@@ -1937,6 +1973,15 @@ void MainWindow::setupActions() {
     m_commands = new CommandRegistry(QSettings().value(QStringLiteral("commands/keymap")).toString(),
                                      {{QStringLiteral("timeline"), m_timeline}, {QStringLiteral("source"), m_sourceMonitor}}, this);
     m_commandHandlers = {
+        {QStringLiteral("file.newProject"), [this] { newProject(); }},
+        {QStringLiteral("file.openProject"), [this] { openProjectFolder(); }},
+        {QStringLiteral("preset.save"), [this] { savePreset(); }},
+        {QStringLiteral("collab.sync"), [this] { if (execute(QStringLiteral("collab.sync"))) m_syncRequested = true; }},
+        {QStringLiteral("collab.commit"), [this] { commitChanges(); }},
+        {QStringLiteral("collab.newBranch"), [this] { newBranch(); }},
+        {QStringLiteral("collab.switchBranch"), [this] { m_branchMenu->popup(QCursor::pos()); }},
+        {QStringLiteral("collab.pullRequest"), [this] { openPullRequest(); }},
+        {QStringLiteral("collab.publish"), [this] { publishProject(); }},
         {QStringLiteral("file.import"), [this] { importMedia(); }},
         {QStringLiteral("file.export"), [this] { exportProject(); }},
         {QStringLiteral("file.exportPreset"), [this] { exportEditingPreset(); }},
@@ -1985,6 +2030,7 @@ void MainWindow::setupActions() {
         {QStringLiteral("window.timeline"), QStringLiteral("timeline")},
         {QStringLiteral("window.effectControls"), QStringLiteral("effectControls")},
         {QStringLiteral("window.effects"), QStringLiteral("effects")},
+        {QStringLiteral("window.presets"), QStringLiteral("presets")},
         {QStringLiteral("window.assistant"), QStringLiteral("assistant")},
     };
     // Tools are one exclusive choice; snapping is a switch.
@@ -1998,7 +2044,22 @@ void MainWindow::setupActions() {
             if (panel->isClosed() == checked) panel->toggleView(checked);
         if (tools.contains(id) && checked) m_timeline->setTool(tools.value(id));
         if (id == QStringLiteral("sequence.snap")) m_timeline->setSnapping(checked);
+        if (id == QStringLiteral("collab.live")) {
+            // Remembered per project, and asked for again on each connection.
+            rememberLiveSync(checked);
+            execute(id, QJsonObject{{QStringLiteral("enabled"), checked}});
+        }
     });
+    {
+        QAction *live = m_commands->action(QStringLiteral("collab.live"));
+        const QSignalBlocker blocker(live);
+        live->setChecked(liveSyncRemembered());
+    }
+    m_branchMenu = new QMenu(QStringLiteral("Switch Branch"), this);
+    m_branchMenu->setObjectName(QStringLiteral("switchBranchMenu"));
+    connect(m_branchMenu, &QMenu::aboutToShow, this, [this] { buildBranchMenu(m_branchMenu); });
+    m_commands->action(QStringLiteral("collab.switchBranch"))->setMenu(m_branchMenu);
+    m_presets->setActions(m_commands->action(QStringLiteral("preset.save")), m_commands->action(QStringLiteral("preset.library")));
     auto *toolGroup = new QActionGroup(this);
     toolGroup->setExclusive(true);
     for (const QString &id : {QStringLiteral("tool.selection"), QStringLiteral("tool.razor"), QStringLiteral("tool.ripple"),
@@ -2053,6 +2114,15 @@ void MainWindow::setupActions() {
 
     menuBar()->setNativeMenuBar(true);
     const QHash<QString, QMenu *> menus = m_commands->buildMenus(menuBar());
+    if (QMenu *file = menus.value(QStringLiteral("File"))) {
+        m_recentMenu = new QMenu(QStringLiteral("Open Recent"), file);
+        m_recentMenu->setObjectName(QStringLiteral("openRecentMenu"));
+        const QList<QAction *> actions = file->actions();
+        const qsizetype open = actions.indexOf(m_commands->action(QStringLiteral("file.openProject")));
+        file->insertMenu(actions.value(open + 1), m_recentMenu);
+        connect(m_recentMenu, &QMenu::aboutToShow, this, [this] { buildRecentMenu(m_recentMenu); });
+        buildRecentMenu(m_recentMenu);
+    }
     if (QMenu *edit = menus.value(QStringLiteral("Edit"))) {
         edit->addSeparator();
         auto *keymapMenu = edit->addMenu(QStringLiteral("Keyboard Shortcuts"));
@@ -2209,6 +2279,463 @@ void MainWindow::closeEvent(QCloseEvent *event) {
     QMainWindow::closeEvent(event);
 }
 
+void MainWindow::newProject() {
+    ProjectLauncher launcher(m_kerfdBinary, this);
+    if (launcher.exec() == QDialog::Accepted) openProject(launcher.chosenPath());
+}
+
+void MainWindow::openProjectFolder() {
+    const QString start = m_projectDirectory.isEmpty() ? QDir::homePath() : QFileInfo(m_projectDirectory).absolutePath();
+    const QString path = QFileDialog::getExistingDirectory(this, QStringLiteral("Open Project"), start);
+    if (path.isEmpty()) return;
+    if (!QFileInfo::exists(QDir(path).filePath(QStringLiteral("project.kerf"))) &&
+        QMessageBox::question(this, QStringLiteral("Open Project"),
+                              QStringLiteral("“%1” has no project.kerf. Start a new project in it?").arg(QFileInfo(path).fileName())) !=
+            QMessageBox::Yes)
+        return;
+    openProject(path);
+}
+
+void MainWindow::openProject(const QString &path) {
+    if (path.isEmpty()) return;
+    const QString clean = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+    if (!m_projectDirectory.isEmpty() && clean == QDir::cleanPath(QFileInfo(m_projectDirectory).absoluteFilePath())) {
+        raise();
+        activateWindow();
+        return;
+    }
+    emit projectOpenRequested(clean);
+}
+
+void MainWindow::buildRecentMenu(QMenu *menu) {
+    menu->clear();
+    const QString current = m_projectDirectory.isEmpty() ? QString() : QDir::cleanPath(QFileInfo(m_projectDirectory).absoluteFilePath());
+    const QStringList recent = ProjectLauncher::recentProjects();
+    for (const QString &path : recent) {
+        QAction *open = menu->addAction(QFileInfo(path).fileName());
+        open->setToolTip(path);
+        open->setCheckable(path == current);
+        open->setChecked(path == current);
+        open->setEnabled(QFileInfo(path).isDir());
+        connect(open, &QAction::triggered, this, [this, path] { openProject(path); });
+    }
+    if (recent.isEmpty()) menu->addAction(QStringLiteral("No Recent Projects"))->setEnabled(false);
+    menu->addSeparator();
+    QAction *clear = menu->addAction(QStringLiteral("Clear Menu"));
+    clear->setEnabled(!recent.isEmpty());
+    connect(clear, &QAction::triggered, this, [] { ProjectLauncher::clearRecentProjects(); });
+}
+
+void MainWindow::startSession() {
+    execute(QStringLiteral("collab.status"));
+    execute(QStringLiteral("preset.library"));
+    if (liveSyncRemembered()) execute(QStringLiteral("collab.live"), QJsonObject{{QStringLiteral("enabled"), true}});
+}
+
+bool MainWindow::liveSyncRemembered() const {
+    return !m_projectDirectory.isEmpty() && QSettings()
+                                                .value(QStringLiteral("collab/liveProjects"))
+                                                .toStringList()
+                                                .contains(QDir::cleanPath(QFileInfo(m_projectDirectory).absoluteFilePath()));
+}
+
+void MainWindow::rememberLiveSync(bool enabled) {
+    if (m_projectDirectory.isEmpty()) return;
+    QSettings settings;
+    QStringList projects = settings.value(QStringLiteral("collab/liveProjects")).toStringList();
+    const QString path = QDir::cleanPath(QFileInfo(m_projectDirectory).absoluteFilePath());
+    projects.removeAll(path);
+    if (enabled) projects.append(path);
+    settings.setValue(QStringLiteral("collab/liveProjects"), projects);
+}
+
+QJsonObject MainWindow::collabContext() const {
+    // Typed field by field: the registry reads a context it cannot parse
+    // as an offline one.
+    const auto text = [this](const char *key) {
+        const QJsonValue value = m_collabStatus.value(QLatin1String(key));
+        return value.isString() && !value.toString().isEmpty() ? value : QJsonValue();
+    };
+    QJsonArray branches;
+    for (const QJsonValue &branch : m_collabStatus.value(QStringLiteral("branches")).toArray())
+        if (branch.isString()) branches.append(branch);
+    const QJsonValue gh = m_collabStatus.value(QStringLiteral("gh"));
+    return QJsonObject{
+        {QStringLiteral("repository"), m_collabStatus.value(QStringLiteral("repository")).toBool()},
+        {QStringLiteral("branch"), text("branch")},
+        {QStringLiteral("upstream"), text("upstream")},
+        {QStringLiteral("remote"), text("remote")},
+        {QStringLiteral("ahead"), std::max(0, m_collabStatus.value(QStringLiteral("ahead")).toInt())},
+        {QStringLiteral("behind"), std::max(0, m_collabStatus.value(QStringLiteral("behind")).toInt())},
+        {QStringLiteral("changed"), m_collabStatus.value(QStringLiteral("changed")).toBool()},
+        {QStringLiteral("conflicted"), m_collabStatus.value(QStringLiteral("conflicted")).toBool()},
+        {QStringLiteral("branches"), branches},
+        // A signed-in account may be reported by name.
+        {QStringLiteral("gh"), gh.isBool() ? gh.toBool() : gh.isString() ? !gh.toString().isEmpty() : gh.isObject()},
+        {QStringLiteral("live"), m_collabStatus.value(QStringLiteral("live")).toBool()},
+        {QStringLiteral("busy"), m_collabStatus.value(QStringLiteral("busy")).toBool() || !m_syncStage.isEmpty()},
+        {QStringLiteral("externalMedia"), m_mediaStatus.value(QStringLiteral("external")).toArray().size()},
+    };
+}
+
+void MainWindow::handleCollabEvent(const QJsonObject &event) {
+    const QString type = event.value(QStringLiteral("type")).toString();
+    if (type == QStringLiteral("collab")) {
+        m_collabStatus = event.value(QStringLiteral("status")).toObject();
+        QAction *live = m_commands->action(QStringLiteral("collab.live"));
+        const QSignalBlocker blocker(live);
+        live->setChecked(m_collabStatus.value(QStringLiteral("live")).toBool());
+    } else if (type == QStringLiteral("collab_sync")) {
+        const QString stage = event.value(QStringLiteral("stage")).toString();
+        if (stage == QStringLiteral("done")) {
+            m_syncStage.clear();
+            m_syncFailure.clear();
+            const QJsonObject report = event.value(QStringLiteral("report")).toObject();
+            const QJsonArray incoming = report.value(QStringLiteral("incoming")).toArray();
+            const QJsonArray conflicts = report.value(QStringLiteral("conflicts")).toArray();
+            QStringList lines;
+            for (const QJsonValue &value : incoming) {
+                const QJsonObject commit = value.toObject();
+                lines << QStringLiteral("%1 · %2").arg(commit.value(QStringLiteral("author")).toString(),
+                                                        commit.value(QStringLiteral("subject")).toString());
+            }
+            for (const QJsonValue &value : conflicts)
+                lines << QStringLiteral("Kept yours · %1").arg(value.toObject().value(QStringLiteral("what")).toString());
+            for (const QJsonValue &value : report.value(QStringLiteral("renamed")).toArray()) {
+                const QJsonArray pair = value.toArray();
+                lines << QStringLiteral("Renumbered · %1 → %2").arg(pair.at(0).toString(), pair.at(1).toString());
+            }
+            for (const QString &line : std::as_const(lines)) addActivity(QStringLiteral("sync"), line);
+            // A quiet live-sync cycle keeps the last sync's news in the tooltip.
+            if (!lines.isEmpty()) m_syncLines = lines;
+            QStringList summary;
+            if (!incoming.isEmpty())
+                summary << (incoming.size() == 1 ? QStringLiteral("1 commit in") : QStringLiteral("%1 commits in").arg(incoming.size()));
+            if (report.value(QStringLiteral("pushed")).toBool()) summary << QStringLiteral("pushed");
+            if (!conflicts.isEmpty())
+                summary << (conflicts.size() == 1 ? QStringLiteral("1 change kept yours")
+                                                  : QStringLiteral("%1 changes kept yours").arg(conflicts.size()));
+            if (!summary.isEmpty() || m_syncRequested)
+                statusBar()->showMessage(summary.isEmpty() ? QStringLiteral("Synced: up to date")
+                                                           : QStringLiteral("Synced: ") + summary.join(QStringLiteral(", ")),
+                                         8000);
+            // Collaborators' presets come with the pull.
+            if (!incoming.isEmpty() || m_syncRequested) execute(QStringLiteral("preset.library"));
+            m_syncRequested = false;
+        } else if (stage == QStringLiteral("failed")) {
+            m_syncRequested = false;
+            m_syncStage.clear();
+            m_syncFailure = event.value(QStringLiteral("message")).toString(QStringLiteral("The sync did not finish."));
+            showError(QStringLiteral("Sync failed: %1").arg(m_syncFailure));
+            addActivity(QStringLiteral("sync"), m_syncFailure);
+        } else {
+            m_syncStage = stage.isEmpty() ? QStringLiteral("syncing") : stage;
+            m_syncFailure.clear();
+        }
+    } else if (type == QStringLiteral("collab_pull_request")) {
+        const QString url = event.value(QStringLiteral("url")).toString();
+        const bool created = event.value(QStringLiteral("created")).toBool();
+        statusBar()->showMessage(created ? QStringLiteral("Opened a pull request: %1").arg(url)
+                                         : QStringLiteral("This branch already has a pull request: %1").arg(url),
+                                 8000);
+        addActivity(QStringLiteral("sync"), url);
+#ifndef KERF_QT_TESTING
+        if (!url.isEmpty()) QDesktopServices::openUrl(QUrl(url));
+#endif
+    }
+    updateSyncChip();
+    updateCommandStates();
+}
+
+void MainWindow::updateSyncChip() {
+    if (!m_syncChip) return;
+    if (m_collabStatus.isEmpty()) {
+        m_syncChip->hide();
+        return;
+    }
+    const auto field = [this](const char *key) { return m_collabStatus.value(QLatin1String(key)); };
+    QString text;
+    QString state;
+    QStringList tips;
+    if (!field("repository").toBool()) {
+        text = QStringLiteral("⎇ Not shared");
+        state = QStringLiteral("local");
+        tips << QStringLiteral("This project is not a Git repository yet.")
+             << QStringLiteral("Click, or choose Collaborate → Publish to GitHub…, to share it.");
+    } else {
+        const QString branch = field("branch").toString();
+        const int ahead = field("ahead").toInt();
+        const int behind = field("behind").toInt();
+        text = QStringLiteral("⎇ %1").arg(branch.isEmpty() ? QStringLiteral("detached") : branch);
+        if (ahead > 0) text += QStringLiteral(" ↑%1").arg(ahead);
+        if (behind > 0) text += QStringLiteral(" ↓%1").arg(behind);
+        const QString remote = field("remote").toString();
+        const QString upstream = field("upstream").toString();
+        tips << (remote.isEmpty() ? QStringLiteral("No remote yet: Publish to GitHub… shares the project.")
+                 : upstream.isEmpty() ? QStringLiteral("%1, not pushed yet").arg(remote)
+                                      : QStringLiteral("Syncs with %1").arg(upstream));
+        if (ahead > 0) tips << (ahead == 1 ? QStringLiteral("1 commit to push") : QStringLiteral("%1 commits to push").arg(ahead));
+        if (behind > 0) tips << (behind == 1 ? QStringLiteral("1 commit to pull") : QStringLiteral("%1 commits to pull").arg(behind));
+        if (field("changed").toBool()) tips << QStringLiteral("Edits not committed yet");
+        static const QHash<QString, QString> stages{
+            {QStringLiteral("committing"), QStringLiteral("Committing")}, {QStringLiteral("fetching"), QStringLiteral("Pulling")},
+            {QStringLiteral("merging"), QStringLiteral("Merging")}, {QStringLiteral("pushing"), QStringLiteral("Pushing")},
+            {QStringLiteral("downloading"), QStringLiteral("Downloading media")}};
+        if (!m_syncStage.isEmpty() || field("busy").toBool()) {
+            text = QStringLiteral("⟳ %1…").arg(stages.value(m_syncStage, QStringLiteral("Syncing")));
+            state = QStringLiteral("syncing");
+        } else if (field("conflicted").toBool()) {
+            text += QStringLiteral(" · merge unfinished");
+            state = QStringLiteral("conflict");
+            tips.prepend(QStringLiteral("A merge is in progress with unresolved files; finish it with git."));
+        } else if (!m_syncFailure.isEmpty()) {
+            text += QStringLiteral(" · sync failed");
+            state = QStringLiteral("failed");
+            tips.prepend(QStringLiteral("Sync failed: %1").arg(m_syncFailure));
+        } else if (field("live").toBool()) {
+            text += QStringLiteral(" · live");
+            state = QStringLiteral("live");
+            tips << QStringLiteral("Live sync is on");
+        } else {
+            state = QStringLiteral("idle");
+        }
+        if (!m_syncLines.isEmpty()) tips << QString() << QStringLiteral("Last sync:") << m_syncLines;
+        tips << QString() << QStringLiteral("Click to sync now");
+    }
+    m_syncChip->setText(text);
+    m_syncChip->setToolTip(tips.join(QLatin1Char('\n')));
+    m_syncChip->setAccessibleName(text);
+    m_syncChip->setProperty("state", state);
+    m_syncChip->style()->unpolish(m_syncChip);
+    m_syncChip->style()->polish(m_syncChip);
+    m_syncChip->show();
+}
+
+void MainWindow::buildBranchMenu(QMenu *menu) {
+    menu->clear();
+    const QString current = m_collabStatus.value(QStringLiteral("branch")).toString();
+    for (const QJsonValue &value : m_collabStatus.value(QStringLiteral("branches")).toArray()) {
+        const QString branch = value.toString();
+        if (branch.isEmpty() || branch == current) continue;
+        QAction *choice = menu->addAction(branch);
+        choice->setObjectName(QStringLiteral("branch.%1").arg(branch));
+        connect(choice, &QAction::triggered, this, [this, branch] {
+            execute(QStringLiteral("collab.switchBranch"), QJsonObject{{QStringLiteral("name"), branch}});
+        });
+    }
+    if (menu->isEmpty()) menu->addAction(QStringLiteral("No Other Branches"))->setEnabled(false);
+}
+
+void MainWindow::commitChanges() {
+    bool ok = false;
+    const QString message = QInputDialog::getText(this, QStringLiteral("Commit"), QStringLiteral("Describe the change"),
+                                                  QLineEdit::Normal, QString(), &ok);
+    if (ok && !message.trimmed().isEmpty())
+        execute(QStringLiteral("collab.commit"), QJsonObject{{QStringLiteral("message"), message}});
+}
+
+void MainWindow::newBranch() {
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, QStringLiteral("New Branch"),
+                                               QStringLiteral("Commits your edits, then starts a branch from them.\nName"),
+                                               QLineEdit::Normal, QString(), &ok);
+    if (ok && !name.trimmed().isEmpty())
+        execute(QStringLiteral("collab.newBranch"), QJsonObject{{QStringLiteral("name"), name}});
+}
+
+void MainWindow::openPullRequest() {
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("pullRequestDialog"));
+    dialog.setWindowTitle(QStringLiteral("Open Pull Request"));
+    dialog.resize(480, 320);
+    auto *layout = new QVBoxLayout(&dialog);
+    const QString branch = m_collabStatus.value(QStringLiteral("branch")).toString();
+    auto *intro = new QLabel(QStringLiteral("Pushes %1 and opens a pull request on GitHub. Reviewers read the change as Kerf code.")
+                                 .arg(branch.isEmpty() ? QStringLiteral("this branch") : branch));
+    intro->setWordWrap(true);
+    layout->addWidget(intro);
+    auto *form = new QFormLayout;
+    QString suggested = branch;
+    suggested.replace(QLatin1Char('-'), QLatin1Char(' ')).replace(QLatin1Char('_'), QLatin1Char(' '));
+    if (!suggested.isEmpty()) suggested[0] = suggested[0].toUpper();
+    auto *title = new QLineEdit(suggested);
+    title->setObjectName(QStringLiteral("pullRequestTitle"));
+    form->addRow(QStringLiteral("Title"), title);
+    auto *body = new QPlainTextEdit;
+    body->setObjectName(QStringLiteral("pullRequestBody"));
+    body->setPlaceholderText(QStringLiteral("Leave empty to list this branch's commits"));
+    form->addRow(QStringLiteral("Description"), body);
+    layout->addLayout(form, 1);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Open Pull Request"));
+    connect(title, &QLineEdit::textChanged, buttons, [buttons](const QString &text) {
+        buttons->button(QDialogButtonBox::Ok)->setEnabled(!text.trimmed().isEmpty());
+    });
+    buttons->button(QDialogButtonBox::Ok)->setEnabled(!suggested.trimmed().isEmpty());
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    if (dialog.exec() != QDialog::Accepted) return;
+    QJsonObject params{{QStringLiteral("title"), title->text()}};
+    if (!body->toPlainText().trimmed().isEmpty()) params.insert(QStringLiteral("body"), body->toPlainText());
+    execute(QStringLiteral("collab.pullRequest"), params);
+}
+
+void MainWindow::publishProject() {
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("publishDialog"));
+    dialog.setWindowTitle(QStringLiteral("Publish to GitHub"));
+    dialog.resize(500, 300);
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *intro = new QLabel(QStringLiteral("Makes the project a Git repository if it is not one yet, then pushes it so "
+                                            "collaborators can clone it, sync, and open pull requests."));
+    intro->setWordWrap(true);
+    layout->addWidget(intro);
+    const QJsonObject collab = collabContext();
+    auto *github = new QRadioButton(QStringLiteral("Create a GitHub repository"));
+    github->setObjectName(QStringLiteral("publishGitHub"));
+    github->setEnabled(collab.value(QStringLiteral("gh")).toBool());
+    if (!github->isEnabled()) github->setToolTip(QStringLiteral("Install the GitHub CLI and sign in with `gh auth login`"));
+    auto *name = new QLineEdit(QFileInfo(m_projectDirectory).fileName().replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9._-]+")), QStringLiteral("-")));
+    name->setObjectName(QStringLiteral("publishName"));
+    auto *priv = new QCheckBox(QStringLiteral("Private"));
+    priv->setObjectName(QStringLiteral("publishPrivate"));
+    priv->setChecked(true);
+    auto *githubRow = new QHBoxLayout;
+    githubRow->setContentsMargins(22, 0, 0, 0);
+    githubRow->addWidget(name, 1);
+    githubRow->addWidget(priv);
+    auto *remoteChoice = new QRadioButton(QStringLiteral("Push to a remote I already have"));
+    remoteChoice->setObjectName(QStringLiteral("publishRemoteChoice"));
+    auto *remote = new QLineEdit;
+    remote->setObjectName(QStringLiteral("publishRemote"));
+    remote->setPlaceholderText(QStringLiteral("git@github.com:you/film.git"));
+    auto *remoteRow = new QHBoxLayout;
+    remoteRow->setContentsMargins(22, 0, 0, 0);
+    remoteRow->addWidget(remote);
+    auto *local = new QRadioButton(QStringLiteral("Only make it a repository on this computer"));
+    local->setObjectName(QStringLiteral("publishLocal"));
+    local->setEnabled(!collab.value(QStringLiteral("repository")).toBool());
+    (github->isEnabled() ? github : remoteChoice)->setChecked(true);
+    layout->addWidget(github);
+    layout->addLayout(githubRow);
+    layout->addWidget(remoteChoice);
+    layout->addLayout(remoteRow);
+    layout->addWidget(local);
+    if (!m_collabStatus.value(QStringLiteral("enclosing")).toString().isEmpty()) {
+        auto *nested = new QLabel(QStringLiteral("This folder is inside another repository (%1); the project gets a repository of its own.")
+                                      .arg(m_collabStatus.value(QStringLiteral("enclosing")).toString()));
+        nested->setObjectName(QStringLiteral("muted"));
+        nested->setWordWrap(true);
+        layout->addWidget(nested);
+    }
+    layout->addStretch(1);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Publish"));
+    const auto update = [=] {
+        name->setEnabled(github->isChecked());
+        priv->setEnabled(github->isChecked());
+        remote->setEnabled(remoteChoice->isChecked());
+        buttons->button(QDialogButtonBox::Ok)->setEnabled(!remoteChoice->isChecked() || !remote->text().trimmed().isEmpty());
+    };
+    for (QRadioButton *choice : {github, remoteChoice, local}) connect(choice, &QRadioButton::toggled, &dialog, update);
+    connect(remote, &QLineEdit::textChanged, &dialog, update);
+    update();
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    if (dialog.exec() != QDialog::Accepted) return;
+    QJsonObject params;
+    if (github->isChecked()) {
+        QJsonObject repository{{QStringLiteral("private"), priv->isChecked()}};
+        if (!name->text().trimmed().isEmpty()) repository.insert(QStringLiteral("name"), name->text().trimmed());
+        params.insert(QStringLiteral("github"), repository);
+    } else if (remoteChoice->isChecked()) {
+        params.insert(QStringLiteral("remote"), remote->text().trimmed());
+    }
+    if (params.isEmpty()) execute(QStringLiteral("collab.publish"));
+    else execute(QStringLiteral("collab.publish"), params);
+}
+
+void MainWindow::savePreset() {
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, QStringLiteral("Save Current as Preset"),
+                                               QStringLiteral("Saves the program sequence in presets/, shared with the project.\nName"),
+                                               QLineEdit::Normal, QString(), &ok)
+                             .trimmed();
+    if (!ok || name.isEmpty()) return;
+    bool replace = false;
+    if (QFileInfo::exists(QDir(m_projectDirectory).filePath(QStringLiteral("presets/%1.kerfpreset").arg(name)))) {
+        if (QMessageBox::question(this, QStringLiteral("Save Current as Preset"),
+                                  QStringLiteral("presets/%1.kerfpreset already exists. Replace it?").arg(name)) != QMessageBox::Yes)
+            return;
+        replace = true;
+    }
+    execute(QStringLiteral("preset.save"), QJsonObject{{QStringLiteral("name"), name}, {QStringLiteral("replace"), replace}});
+}
+
+void MainWindow::applyLibraryPreset(const QString &path) {
+    // The preset's slots and the media able to fill them come back as
+    // preset_inspect, which opens the bindings dialog.
+    sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("preset_inspect")}, {QStringLiteral("path"), path}});
+}
+
+QString MainWindow::mediaPath(const QString &mediaId) const {
+    for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray()) {
+        const QJsonObject source = value.toObject();
+        if (source.value(QStringLiteral("id")).toString() == mediaId)
+            return QDir(m_projectDirectory).absoluteFilePath(source.value(QStringLiteral("path")).toString());
+    }
+    return {};
+}
+
+void MainWindow::replaceMedia(const QString &mediaId, const QString &path) {
+    QString file = path;
+    if (file.isEmpty()) {
+        file = QFileDialog::getOpenFileName(this, QStringLiteral("Replace %1").arg(mediaId), QFileInfo(mediaPath(mediaId)).absolutePath(),
+                                            QStringLiteral("Media files (*.mov *.mp4 *.m4v *.mkv *.webm *.wav *.mp3);;All files (*)"));
+        if (file.isEmpty()) return;
+    }
+    if (execute(QStringLiteral("media.replace"), QJsonObject{{QStringLiteral("media"), mediaId}, {QStringLiteral("path"), file}}))
+        addActivity(QStringLiteral("import"), QStringLiteral("Replacing %1 with %2").arg(mediaId, QFileInfo(file).fileName()));
+}
+
+void MainWindow::revealMedia(const QString &mediaId) {
+    const QString path = mediaPath(mediaId);
+    if (path.isEmpty()) return;
+#if defined(Q_OS_MACOS)
+    QProcess::startDetached(QStringLiteral("open"), {QStringLiteral("-R"), path});
+#else
+    QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
+#endif
+}
+
+QMenu *MainWindow::binMenu(const QString &mediaId) {
+    auto *menu = new QMenu(this);
+    menu->setObjectName(QStringLiteral("binMenu"));
+    menu->setToolTipsVisible(true);
+    if (!mediaId.isEmpty()) {
+        QAction *open = menu->addAction(QStringLiteral("Open in Source Monitor"));
+        open->setObjectName(QStringLiteral("binOpen"));
+        connect(open, &QAction::triggered, this, [this, mediaId] { openSource(mediaId); });
+        menu->addSeparator();
+        QAction *replace = menu->addAction(QStringLiteral("Replace Media…"));
+        replace->setObjectName(QStringLiteral("binReplace"));
+        replace->setEnabled(m_commands->isEnabled(QStringLiteral("media.replace")));
+        replace->setToolTip(replace->isEnabled() ? QStringLiteral("Swap the file behind %1 for everyone; its clips keep their timing").arg(mediaId)
+                                                 : m_commands->reason(QStringLiteral("media.replace")));
+        connect(replace, &QAction::triggered, this, [this, mediaId] { replaceMedia(mediaId); });
+        QAction *reveal = menu->addAction(QStringLiteral("Reveal in Finder"));
+        reveal->setObjectName(QStringLiteral("binReveal"));
+        reveal->setEnabled(QFileInfo::exists(mediaPath(mediaId)));
+        connect(reveal, &QAction::triggered, this, [this, mediaId] { revealMedia(mediaId); });
+        menu->addSeparator();
+    }
+    menu->addAction(m_commands->action(QStringLiteral("file.import")));
+    menu->addAction(m_commands->action(QStringLiteral("collab.consolidate")));
+    return menu;
+}
+
 void MainWindow::triggerCommand(const QString &id) {
     if (!m_commands->isEnabled(id)) return;
     const auto handler = m_commandHandlers.constFind(id);
@@ -2246,6 +2773,9 @@ QJsonObject MainWindow::commandContext() const {
                         {QStringLiteral("sourceTargets"), QJsonArray::fromStringList(sourceTargets())},
                         {QStringLiteral("agentBusy"), m_agentBusy},
                         {QStringLiteral("aiAccess"), m_cloudRadio ? aiAccess() : QStringLiteral("ready")}};
+    const QJsonValue projection = m_snapshot.value(QStringLiteral("projectionStatus"));
+    if (projection.isString()) context.insert(QStringLiteral("projectionStatus"), projection);
+    if (!m_collabStatus.isEmpty()) context.insert(QStringLiteral("collab"), collabContext());
     if (!m_proposalId.isEmpty()) {
         QJsonObject proposal{{QStringLiteral("id"), m_proposalId}};
         if (m_proposalBlocked) proposal.insert(QStringLiteral("blocked"), QStringLiteral("stale"));
@@ -2344,6 +2874,16 @@ void MainWindow::stepFrames(int frames) {
 
 void MainWindow::setupStatusBar() {
     statusBar()->setSizeGripEnabled(false);
+    m_syncChip = new QToolButton;
+    m_syncChip->setObjectName(QStringLiteral("syncChip"));
+    m_syncChip->setCursor(Qt::PointingHandCursor);
+    m_syncChip->hide();
+    connect(m_syncChip, &QToolButton::clicked, this, [this] {
+        if (m_commands->isEnabled(QStringLiteral("collab.sync"))) triggerCommand(QStringLiteral("collab.sync"));
+        else if (!m_collabStatus.value(QStringLiteral("repository")).toBool()) triggerCommand(QStringLiteral("collab.publish"));
+        else statusBar()->showMessage(m_commands->reason(QStringLiteral("collab.sync")), 4000);
+    });
+    statusBar()->addPermanentWidget(m_syncChip);
     m_statusRevision = new QLabel;
     m_statusRevision->setObjectName(QStringLiteral("statusRevision"));
     m_statusRevision->hide();
@@ -2433,6 +2973,20 @@ void MainWindow::handleEvent(QJsonObject event) {
         showPresetBindings(event.value(QStringLiteral("path")).toString(), event.value(QStringLiteral("preset")).toObject());
     } else if (type == QStringLiteral("preset_applied")) {
         statusBar()->showMessage(QStringLiteral("Preset proposal ready for review"), 6000);
+    } else if (type == QStringLiteral("preset_library")) {
+        m_presets->setLibrary(event, m_projectDirectory);
+    } else if (type == QStringLiteral("preset_saved")) {
+        const QString path = event.value(QStringLiteral("path")).toString();
+        statusBar()->showMessage(QStringLiteral("Saved preset %1").arg(path), 6000);
+        addActivity(QStringLiteral("preset"), path);
+        execute(QStringLiteral("preset.library"));
+    } else if (type == QStringLiteral("collab") || type == QStringLiteral("collab_sync") ||
+               type == QStringLiteral("collab_pull_request")) {
+        handleCollabEvent(event);
+    } else if (type == QStringLiteral("media_status")) {
+        m_mediaStatus = event;
+        m_projectPanel->setMediaStatus(event);
+        updateCommandStates();
     } else if (type == QStringLiteral("agent")) {
         const QString kind = event.value(QStringLiteral("kind")).toString(QStringLiteral("agent"));
         const QString text = event.value(QStringLiteral("text")).toString();
@@ -2630,6 +3184,7 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     }
     updateProposal(snapshot.value(QStringLiteral("pendingProposal")));
     m_timeline->setProposal(m_proposalId.isEmpty() ? QJsonObject{} : snapshot.value(QStringLiteral("proposalTimeline")).toObject());
+    m_divergedBanner->setVisible(snapshot.value(QStringLiteral("projectionStatus")).toString() == QStringLiteral("diverged"));
     updateInspector();
     updateCommandStates();
 }
@@ -2875,7 +3430,9 @@ void MainWindow::setConnection(const QString &status, const QString &message) {
     updateInspector();
     updateProposal(m_snapshot.value(QStringLiteral("pendingProposal")));
     updateChatControls();
+    if (m_presets) m_presets->setConnected(m_connected);
     updateCommandStates();
+    if (m_connected && !wasConnected) startSession();
     QTimer::singleShot(0, this, [this] {
         if (m_timelineScroll && m_timeline && m_timelineScroll->viewport()->width() > 0) {
             m_timeline->fitToWidth(m_timelineScroll->viewport()->width());

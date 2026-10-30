@@ -6,6 +6,9 @@
 #include "editor_style.h"
 #include "main_window.h"
 #include "media_artwork.h"
+#include "presets_panel.h"
+#include "project_launcher.h"
+#include "project_panel.h"
 #include "source_monitor_panel.h"
 #include "timeline_widget.h"
 #include "viewer_widget.h"
@@ -25,7 +28,10 @@
 #include <QGroupBox>
 #include <QCheckBox>
 #include <QImage>
+#include <QInputDialog>
 #include <QListWidget>
+#include <QMenu>
+#include <QProgressBar>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -550,8 +556,15 @@ private slots:
         MainWindow window{QString(), QString()};
         QStringList menus;
         for (const QAction *menu : window.menuBar()->actions()) menus.append(menu->text());
-        QCOMPARE(menus, (QStringList{"File", "Edit", "Clip", "Sequence", "Markers", "Playback", "View", "Window"}));
+        QCOMPARE(menus, (QStringList{"File", "Edit", "Clip", "Sequence", "Markers", "Playback", "View", "Collaborate", "Window"}));
         QVERIFY(window.findChild<QAction *>(QStringLiteral("keymap.premiere")));
+        // Projects open from File; Import Media keeps Ctrl+O.
+        QVERIFY(window.findChild<QMenu *>(QStringLiteral("openRecentMenu")));
+        QCOMPARE(window.m_commands->action(QStringLiteral("file.openProject"))->shortcut(),
+                 QKeySequence::fromString(QStringLiteral("Ctrl+Shift+O"), QKeySequence::PortableText));
+        QCOMPARE(window.m_commands->action(QStringLiteral("file.import"))->shortcut(),
+                 QKeySequence::fromString(QStringLiteral("Ctrl+O"), QKeySequence::PortableText));
+        QVERIFY(window.m_commands->action(QStringLiteral("collab.switchBranch"))->menu());
 
         QAction *split = window.m_commands->action(QStringLiteral("clip.split"));
         QAction *undo = window.m_commands->action(QStringLiteral("edit.undo"));
@@ -1813,6 +1826,434 @@ private slots:
         window.updateProposal(proposal);
         QVERIFY(!window.m_acceptButton->isEnabled());
         QVERIFY(window.m_proposalDiff->toPlainText().contains(QStringLiteral("out of date")));
+    }
+
+    // A `collab` status for a shared project on main.
+    static QJsonObject sharedStatus() {
+        return QJsonObject{{"repository", true}, {"branch", "main"}, {"upstream", "origin/main"},
+                           {"remote", "git@github.com:jun/film.git"}, {"ahead", 2}, {"behind", 1}, {"changed", false},
+                           {"conflicted", false}, {"branches", QJsonArray{"main", "color"}}, {"lfs", true},
+                           {"gh", true}, {"live", false}, {"busy", false}};
+    }
+
+    // Answer the next modal QInputDialog with `text`.
+    static void answerInput(QWidget *parent, const QString &text) {
+        QTimer::singleShot(0, parent, [parent, text] {
+            auto *dialog = parent->findChild<QInputDialog *>();
+            if (!dialog) {
+                if (QWidget *modal = QApplication::activeModalWidget()) modal->close();
+                QFAIL("no input dialog");
+            }
+            dialog->setTextValue(text);
+            dialog->accept();
+        });
+    }
+
+    void syncChipFollowsTheCollabStatus() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        QVERIFY(window.m_syncChip->isHidden());
+        QCOMPARE(window.m_commands->reason(QStringLiteral("collab.sync")), QStringLiteral("Reading the project's Git status"));
+        const QJsonObject status = sharedStatus();
+        window.handleEvent(QJsonObject{{"type", "collab"}, {"status", status}});
+        QVERIFY(!window.m_syncChip->isHidden());
+        QCOMPARE(window.m_syncChip->text(), QStringLiteral("⎇ main ↑2 ↓1"));
+        QCOMPARE(window.m_syncChip->property("state").toString(), QStringLiteral("idle"));
+        QVERIFY(window.m_syncChip->toolTip().contains(QStringLiteral("Syncs with origin/main")));
+        QVERIFY(window.m_commands->isEnabled(QStringLiteral("collab.sync")));
+        QCOMPARE(window.m_commands->reason(QStringLiteral("collab.commit")), QStringLiteral("Nothing to commit"));
+        QCOMPARE(window.m_commands->reason(QStringLiteral("collab.publish")), QStringLiteral("The project is already published"));
+        QVERIFY(window.m_commands->isEnabled(QStringLiteral("collab.pullRequest")));
+
+        // A click on the chip syncs now.
+        window.m_lastCommand = {};
+        window.m_syncChip->click();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "collab_sync"}}));
+
+        // Switch Branch lists the other branches.
+        window.buildBranchMenu(window.m_branchMenu);
+        QCOMPARE(window.m_branchMenu->actions().size(), 1);
+        window.m_branchMenu->actions().first()->trigger();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "collab_branch"}, {"name", "color"}, {"create", false}}));
+
+        // While a sync runs the chip says what it is doing, and Sync Now waits.
+        window.handleEvent(QJsonObject{{"type", "collab_sync"}, {"stage", "fetching"}});
+        QCOMPARE(window.m_syncChip->text(), QStringLiteral("⟳ Pulling…"));
+        QCOMPARE(window.m_syncChip->property("state").toString(), QStringLiteral("syncing"));
+        QCOMPARE(window.m_commands->reason(QStringLiteral("collab.sync")), QStringLiteral("A sync is running"));
+
+        // A finished sync lists what came in and what kept yours, then
+        // reads the preset library again.
+        window.handleEvent(QJsonObject{{"type", "collab_sync"}, {"stage", "done"}, {"report", QJsonObject{
+            {"incoming", QJsonArray{QJsonObject{{"commit", "a1b2c3d"}, {"author", "jun"}, {"subject", "Trimmed c3"}}}},
+            {"fastForward", false}, {"pushed", true},
+            {"conflicts", QJsonArray{QJsonObject{{"path", "project.kerf"}, {"what", "c3 duration"}, {"kept", "ours"}}}},
+            {"renamed", QJsonArray{}}, {"summary", QJsonArray{"Trimmed c3"}}}}});
+        QCOMPARE(window.m_syncChip->property("state").toString(), QStringLiteral("idle"));
+        const int count = window.m_activityList->count();
+        QVERIFY(window.m_activityList->item(count - 2)->text().endsWith(QStringLiteral("jun · Trimmed c3")));
+        QVERIFY(window.m_activityList->item(count - 1)->text().endsWith(QStringLiteral("Kept yours · c3 duration")));
+        QVERIFY(window.m_syncChip->toolTip().contains(QStringLiteral("jun · Trimmed c3")));
+        QCOMPARE(window.statusBar()->currentMessage(), QStringLiteral("Synced: 1 commit in, pushed, 1 change kept yours"));
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("preset_library"));
+
+        // A failure goes to the error banner.
+        window.handleEvent(QJsonObject{{"type", "collab_sync"}, {"stage", "failed"}, {"message", "the remote rejected the push"}});
+        QCOMPARE(window.m_syncChip->property("state").toString(), QStringLiteral("failed"));
+        QVERIFY(window.m_syncChip->text().endsWith(QStringLiteral("sync failed")));
+        QVERIFY(!window.m_errorBanner->isHidden());
+        QCOMPARE(window.m_errorMessage->text(), QStringLiteral("Sync failed: the remote rejected the push"));
+
+        QJsonObject conflicted = status;
+        conflicted.insert("conflicted", true);
+        window.handleEvent(QJsonObject{{"type", "collab"}, {"status", conflicted}});
+        QCOMPARE(window.m_syncChip->property("state").toString(), QStringLiteral("conflict"));
+        QCOMPARE(window.m_commands->reason(QStringLiteral("collab.sync")), QStringLiteral("Finish the merge in progress with git first"));
+
+        const QJsonObject local{{"repository", false}, {"branches", QJsonArray{}}, {"gh", false}, {"live", false}, {"busy", false}};
+        window.handleEvent(QJsonObject{{"type", "collab"}, {"status", local}});
+        QCOMPARE(window.m_syncChip->text(), QStringLiteral("⎇ Not shared"));
+        QCOMPARE(window.m_syncChip->property("state").toString(), QStringLiteral("local"));
+        QVERIFY(window.m_commands->reason(QStringLiteral("collab.sync")).startsWith(QStringLiteral("Share the project with Git first")));
+        QVERIFY(window.m_commands->isEnabled(QStringLiteral("collab.publish")));
+        QCOMPARE(window.m_commands->reason(QStringLiteral("collab.pullRequest")), window.m_commands->reason(QStringLiteral("collab.sync")));
+    }
+
+    void liveSyncAndCommitsAreCollabRequests() {
+        QSettings().remove(QStringLiteral("collab/liveProjects"));
+        QTemporaryDir project;
+        const QString path = QDir::cleanPath(QFileInfo(project.path()).absoluteFilePath());
+        QJsonObject status = sharedStatus();
+        status.insert("changed", true);
+        {
+            MainWindow window{project.path(), QString()};
+            window.setConnection(QStringLiteral("ready"));
+            // Without live sync remembered, connecting asks for the status and the library.
+            QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "preset_library"}}));
+            window.handleEvent(QJsonObject{{"type", "collab"}, {"status", status}});
+            QAction *live = window.m_commands->action(QStringLiteral("collab.live"));
+            QVERIFY(live->isCheckable() && live->isEnabled() && !live->isChecked());
+            live->trigger();
+            QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "collab_live"}, {"enabled", true}}));
+            QVERIFY(QSettings().value(QStringLiteral("collab/liveProjects")).toStringList().contains(path));
+            status.insert("live", true);
+            window.handleEvent(QJsonObject{{"type", "collab"}, {"status", status}});
+            QCOMPARE(window.m_syncChip->property("state").toString(), QStringLiteral("live"));
+            QVERIFY(window.m_syncChip->text().endsWith(QStringLiteral("· live")));
+
+            window.m_commands->action(QStringLiteral("collab.sync"))->trigger();
+            QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "collab_sync"}}));
+            answerInput(&window, QStringLiteral("Tighten the intro"));
+            window.m_commands->action(QStringLiteral("collab.commit"))->trigger();
+            QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "collab_commit"}, {"message", "Tighten the intro"}}));
+            answerInput(&window, QStringLiteral("color-pass"));
+            window.m_commands->action(QStringLiteral("collab.newBranch"))->trigger();
+            QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "collab_branch"}, {"name", "color-pass"}, {"create", true}}));
+        }
+        {
+            // The next window for the project turns live sync on as it connects.
+            MainWindow window{project.path(), QString()};
+            QAction *live = window.m_commands->action(QStringLiteral("collab.live"));
+            QVERIFY(live->isChecked());
+            window.setConnection(QStringLiteral("ready"));
+            QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "collab_live"}, {"enabled", true}}));
+            window.handleEvent(QJsonObject{{"type", "collab"}, {"status", status}});
+            live->trigger();
+            QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "collab_live"}, {"enabled", false}}));
+            QVERIFY(!QSettings().value(QStringLiteral("collab/liveProjects")).toStringList().contains(path));
+        }
+        QSettings().remove(QStringLiteral("collab/liveProjects"));
+    }
+
+    void divergedProjectionIsLoadedOrKept() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.handleEvent(QJsonObject{{"type", "collab"}, {"status", sharedStatus()}});
+        const QJsonObject timeline{{"fps", 24}, {"tracks", QJsonArray{}}};
+        window.applySnapshot(QJsonObject{{"revision", 4}, {"duration", 0}, {"projectionStatus", "diverged"}, {"timeline", timeline}});
+        QVERIFY(!window.m_divergedBanner->isHidden());
+        QVERIFY(window.findChild<QLabel *>(QStringLiteral("divergedMessage"))->text().contains(QStringLiteral("project.kerf changed on disk")));
+        // kerfd refuses to sync until one side is chosen.
+        QCOMPARE(window.m_commands->reason(QStringLiteral("collab.sync")),
+                 QStringLiteral("project.kerf changed on disk: load it or keep the editor's version first"));
+        window.m_loadFromDisk->click();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "projection_import"}}));
+        window.m_keepEditorVersion->click();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "projection_repair"}}));
+        window.applySnapshot(QJsonObject{{"revision", 5}, {"duration", 0}, {"projectionStatus", "clean"}, {"timeline", timeline}});
+        QVERIFY(window.m_divergedBanner->isHidden());
+        QCOMPARE(window.m_commands->reason(QStringLiteral("projection.import")), QStringLiteral("project.kerf matches the editor"));
+        QVERIFY(window.m_commands->isEnabled(QStringLiteral("collab.sync")));
+    }
+
+    void presetsPanelListsAppliesAndSavesTheLibrary() {
+        QSettings().remove(QStringLiteral("workspace"));
+        QTemporaryDir project;
+        MainWindow window{project.path(), QString()};
+        // The Editing layout keeps Presets behind the Project bin.
+        QVERIFY(window.m_commands->action(QStringLiteral("window.presets"))->isChecked());
+        QVERIFY(!window.m_workspace->panel(QStringLiteral("presets"))->isClosed());
+        PresetsPanel *panel = window.m_presets;
+        QVERIFY(!panel->m_apply->isEnabled());
+        window.setConnection(QStringLiteral("ready"));
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "preset_library"}}));
+        window.handleEvent(QJsonObject{{"type", "preset_library"}, {"directory", "presets"}, {"presets", QJsonArray{
+            QJsonObject{{"path", "presets/intro.kerfpreset"}, {"name", "Intro"}, {"author", "jun"}, {"updated", "2026-10-30T09:00:00Z"},
+                        {"slots", QJsonArray{
+                            QJsonObject{{"id", "slot1"}, {"seconds", 4}, {"video", true}, {"audio", true}, {"clips", 2}},
+                            QJsonObject{{"id", "slot2"}, {"seconds", 2}, {"video", true}, {"audio", false}, {"clips", 1}}}},
+                        {"texts", QJsonObject{{"c4", "Title"}}}},
+            QJsonObject{{"path", "presets/broken.kerfpreset"}, {"name", "broken"}, {"error", "line 3: unknown statement"}}}}});
+        QCOMPARE(panel->m_list->count(), 2);
+        QVERIFY(panel->m_list->item(0)->text().startsWith(QStringLiteral("Intro\n2 slots · 1 text · jun · ")));
+        QVERIFY(panel->m_list->item(0)->toolTip().contains(QStringLiteral("slot1 · 4.00 s · picture and sound · 2 clips")));
+        QVERIFY(panel->m_list->item(1)->text().contains(QStringLiteral("line 3: unknown statement")));
+        panel->m_list->setCurrentRow(1);
+        QVERIFY(!panel->m_apply->isEnabled());
+        panel->m_list->setCurrentRow(0);
+        QVERIFY(panel->m_apply->isEnabled());
+        // Apply asks Kerf which media fits each slot, as Import Editing Preset does.
+        panel->m_apply->click();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "preset_inspect"},
+                                                    {"path", QDir(project.path()).absoluteFilePath("presets/intro.kerfpreset")}}));
+        answerInput(&window, QStringLiteral("Teaser"));
+        panel->m_save->click();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "preset_save"}, {"name", "Teaser"}, {"replace", false}}));
+        window.handleEvent(QJsonObject{{"type", "preset_saved"}, {"path", "presets/Teaser.kerfpreset"}});
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "preset_library"}}));
+        window.handleEvent(QJsonObject{{"type", "preset_library"}, {"directory", "presets"}, {"presets", QJsonArray{}}});
+        QVERIFY(panel->m_list->isHidden());
+        QVERIFY(!panel->m_empty->isHidden());
+        QSettings().remove(QStringLiteral("workspace"));
+    }
+
+    void projectBinShowsMediaStatusAndReplacesMedia() {
+        QTemporaryDir project;
+        QVERIFY(QDir(project.path()).mkpath(QStringLiteral("media")));
+        QFile file(QDir(project.path()).filePath(QStringLiteral("media/a.mov")));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("frames");
+        file.close();
+        MainWindow window{project.path(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(QJsonObject{{"revision", 2}, {"duration", 4}, {"timeline", QJsonObject{
+            {"fps", 24}, {"tracks", QJsonArray{}}, {"sources", QJsonArray{
+                QJsonObject{{"id", "m1"}, {"path", "media/a.mov"}, {"width", 320}, {"duration", 4}},
+                QJsonObject{{"id", "m2"}, {"path", "/Volumes/Shoot/b.mov"}, {"width", 320}, {"duration", 4}},
+                QJsonObject{{"id", "m3"}, {"path", "media/c.mov"}, {"width", 320}, {"duration", 4}}}}}}});
+        window.handleEvent(QJsonObject{{"type", "media_status"}, {"missing", QJsonArray{"m3"}},
+                                       {"pointers", QJsonArray{"m1"}}, {"external", QJsonArray{"m2"}}});
+        ProjectPanel *bin = window.m_projectPanel;
+        QCOMPARE(bin->badge(QStringLiteral("m1")), QStringLiteral("NOT DOWNLOADED"));
+        QCOMPARE(bin->badge(QStringLiteral("m2")), QStringLiteral("EXTERNAL"));
+        QCOMPARE(bin->badge(QStringLiteral("m3")), QStringLiteral("OFFLINE"));
+        QVERIFY(bin->m_list->item(1)->toolTip().contains(QStringLiteral("Consolidate Media")));
+        // Consolidating waits for the Git status, then for media outside the project.
+        QCOMPARE(window.m_commands->reason(QStringLiteral("collab.consolidate")), QStringLiteral("Reading the project's Git status"));
+        window.handleEvent(QJsonObject{{"type", "collab"}, {"status", sharedStatus()}});
+        QVERIFY(window.m_commands->isEnabled(QStringLiteral("collab.consolidate")));
+
+        QMenu *menu = window.binMenu(QStringLiteral("m1"));
+        QStringList labels;
+        for (const QAction *action : menu->actions())
+            if (!action->isSeparator()) labels << action->text();
+        QCOMPARE(labels, (QStringList{"Open in Source Monitor", "Replace Media…", "Reveal in Finder", "Import Media…", "Consolidate Media"}));
+        QVERIFY(menu->findChild<QAction *>(QStringLiteral("binReplace"))->isEnabled());
+        QVERIFY(menu->findChild<QAction *>(QStringLiteral("binReveal"))->isEnabled());
+        delete menu;
+        menu = window.binMenu(QStringLiteral("m3"));
+        QVERIFY(!menu->findChild<QAction *>(QStringLiteral("binReveal"))->isEnabled());
+        delete menu;
+
+        window.replaceMedia(QStringLiteral("m2"), QStringLiteral("/Volumes/Shoot/b-take2.mov"));
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_replace"}, {"media", "m2"}, {"path", "/Volumes/Shoot/b-take2.mov"}}));
+        window.m_commands->action(QStringLiteral("collab.consolidate"))->trigger();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "collab_consolidate"}}));
+        window.handleEvent(QJsonObject{{"type", "media_status"}, {"missing", QJsonArray{}}, {"pointers", QJsonArray{}}, {"external", QJsonArray{}}});
+        QCOMPARE(bin->badge(QStringLiteral("m2")), QString());
+        QCOMPARE(window.m_commands->reason(QStringLiteral("collab.consolidate")), QStringLiteral("All media is inside the project folder"));
+    }
+
+    void projectLauncherValidatesWithoutStartingTasks() {
+        QSettings().remove(QStringLiteral("launcher"));
+        QSettings().remove(QStringLiteral("projects"));
+        QTemporaryDir root;
+        const QString location = QDir(root.path()).filePath(QStringLiteral("Projects"));
+        const QString taken = QDir(location).filePath(QStringLiteral("Taken"));
+        const QString old = QDir(root.path()).filePath(QStringLiteral("Old Cut"));
+        QVERIFY(QDir().mkpath(QDir(taken).filePath(QStringLiteral("media"))));
+        QVERIFY(QDir().mkpath(old));
+
+        // Recent projects: most recent first, without repeats, at most twelve.
+        for (int i = 0; i < 20; ++i) ProjectLauncher::rememberProject(QDir(root.path()).filePath(QStringLiteral("p%1").arg(i)));
+        QCOMPARE(ProjectLauncher::recentProjects().size(), ProjectLauncher::kRecentLimit);
+        QCOMPARE(ProjectLauncher::recentProjects().first(), QDir(root.path()).filePath(QStringLiteral("p19")));
+        ProjectLauncher::clearRecentProjects();
+        ProjectLauncher::rememberProject(old);
+        ProjectLauncher::rememberProject(taken);
+        ProjectLauncher::rememberProject(old);
+        QCOMPARE(ProjectLauncher::recentProjects(), (QStringList{old, taken}));
+
+        ProjectLauncher launcher(QStringLiteral("/opt/kerf/bin/kerfd"));
+        // It asks for the tools; a test build starts no kerf_task_* task.
+        QCOMPARE(launcher.m_requests, (QList<QJsonObject>{QJsonObject{{"type", "tools"}}}));
+        QVERIFY(launcher.m_tasks.isEmpty());
+        // Without an inspection the folder name stands in.
+        QVERIFY(launcher.m_recent->item(0)->text().startsWith(QStringLiteral("Old Cut\n")));
+        QCOMPARE(launcher.m_sidebar->count(), 4);
+
+        launcher.showPage(ProjectLauncher::NewProject);
+        QCOMPARE(launcher.m_heading->text(), QStringLiteral("Choose a template"));
+        QVERIFY(!launcher.m_details->isHidden());
+        QCOMPARE(launcher.m_templates->count(), 3);
+        launcher.m_templates->setCurrentRow(1);
+        launcher.m_location->setText(location);
+        launcher.m_name->setText(QString());
+        QVERIFY(!launcher.m_choose->isEnabled());
+        QCOMPARE(launcher.m_problem->text(), QStringLiteral("Name the project"));
+        launcher.m_name->setText(QStringLiteral("Taken"));
+        QVERIFY(!launcher.m_choose->isEnabled());
+        QVERIFY(launcher.m_problem->text().contains(QStringLiteral("already in that location")));
+        launcher.m_name->setText(QStringLiteral("My Film"));
+        QVERIFY(launcher.m_choose->isEnabled());
+        QVERIFY(launcher.m_destination->text().endsWith(QStringLiteral("Projects/My Film")));
+        launcher.m_remote->setText(QStringLiteral("not an address"));
+        QCOMPARE(launcher.m_problem->text(), QStringLiteral("The remote must be a Git address"));
+        QVERIFY(launcher.m_git->isChecked());
+        launcher.m_remote->clear();
+        launcher.m_rate->setCurrentIndex(launcher.m_rate->findData(QStringLiteral("24")));
+
+        // A private GitHub repository needs a signed-in GitHub CLI.
+        QVERIFY(!launcher.m_github->isEnabled());
+        launcher.setTools(QJsonObject{{"git", true}, {"gitLfs", true}, {"gh", true}, {"ghUser", "jun"}});
+        QVERIFY(launcher.m_github->isEnabled());
+        QVERIFY(launcher.m_gitHint->text().contains(QStringLiteral("@jun")));
+        launcher.m_github->setChecked(true);
+        QVERIFY(launcher.m_git->isChecked());
+        QVERIFY(!launcher.m_remote->isEnabled());
+        launcher.m_choose->click();
+        QCOMPARE(launcher.m_requests.last(), (QJsonObject{{"type", "create"}, {"name", "My Film"}, {"location", location},
+                                                          {"template", "vertical"}, {"rate", "24"}, {"git", true},
+                                                          {"github", QJsonObject{{"private", true}}},
+                                                          {"kerfd", "/opt/kerf/bin/kerfd"}}));
+        QVERIFY(launcher.m_busy);
+        QVERIFY(!launcher.m_choose->isEnabled());
+        QVERIFY(!launcher.m_progress->isHidden());
+        // The bridge answers a failed task; the launcher says why and lets one try again.
+        launcher.handleTaskStatus(QJsonObject{{"status", "failed"}, {"error", "not implemented yet"}});
+        QVERIFY(!launcher.m_busy);
+        QVERIFY(launcher.m_choose->isEnabled());
+        QCOMPARE(launcher.m_problem->text(), QStringLiteral("not implemented yet"));
+        QCOMPARE(launcher.m_problem->property("state").toString(), QStringLiteral("error"));
+        launcher.handleTaskStatus(QJsonObject{{"status", "done"}, {"path", QDir(location).filePath("My Film")},
+                                              {"warnings", QJsonArray{"Git LFS is not installed"}}});
+        QCOMPARE(launcher.result(), int(QDialog::Accepted));
+        QCOMPARE(launcher.chosenPath(), QDir(location).filePath(QStringLiteral("My Film")));
+
+        // Recent projects, with what kerf_project_inspect says of them.
+        ProjectLauncher recent;
+        recent.m_inspectProject = [old](const QJsonObject &request) {
+            const QString path = request.value("path").toString();
+            if (path == old) return QJsonObject{{"path", path}, {"exists", false}};
+            return QJsonObject{{"path", path}, {"exists", true}, {"project", true}, {"name", "Taken Film"},
+                               {"branch", "main"}, {"presets", 2}};
+        };
+        recent.reloadRecent();
+        recent.showPage(ProjectLauncher::Recent);
+        QVERIFY(recent.m_details->isHidden());
+        QCOMPARE(recent.m_recent->count(), 2);
+        QVERIFY(recent.m_recent->item(1)->text().startsWith(QStringLiteral("Taken Film\n")));
+        QVERIFY(recent.m_recent->item(1)->text().contains(QStringLiteral("⎇ main")));
+        QVERIFY(recent.m_recent->item(1)->text().contains(QStringLiteral("2 presets")));
+        recent.m_recent->setCurrentRow(0);
+        QVERIFY(!recent.m_choose->isEnabled());
+        QCOMPARE(recent.m_problem->text(), QStringLiteral("That project folder is no longer there"));
+        recent.m_recent->setCurrentRow(1);
+        recent.m_choose->click();
+        QCOMPARE(recent.result(), int(QDialog::Accepted));
+        QCOMPARE(recent.chosenPath(), taken);
+        QCOMPARE(recent.m_requests.size(), 1);
+
+        // Clone from a Git address into a free folder.
+        ProjectLauncher clone;
+        clone.showPage(ProjectLauncher::Clone);
+        clone.m_cloneLocation->setText(location);
+        clone.m_cloneUrl->setText(QStringLiteral("film"));
+        QVERIFY(!clone.m_choose->isEnabled());
+        QCOMPARE(clone.m_problem->text(), QStringLiteral("Enter a Git address such as https://github.com/you/film.git"));
+        clone.m_cloneUrl->setText(QStringLiteral("git@github.com:jun/Taken.git"));
+        QVERIFY(clone.m_problem->text().contains(QStringLiteral("already in that location")));
+        clone.m_cloneUrl->setText(QStringLiteral("https://github.com/jun/film.git"));
+        QVERIFY(clone.m_choose->isEnabled());
+        QVERIFY(clone.m_cloneDestination->text().endsWith(QStringLiteral("Projects/film")));
+        clone.m_choose->click();
+        QCOMPARE(clone.m_requests.last(), (QJsonObject{{"type", "clone"}, {"url", "https://github.com/jun/film.git"}, {"location", location}}));
+
+        // From a preset: each slot needs a file that fits it.
+        ProjectLauncher fromPreset;
+        fromPreset.m_inspectPreset = [](const QJsonObject &request) {
+            if (!request.contains("files"))
+                return QJsonObject{{"name", "Intro"}, {"texts", QJsonObject{{"c4", "Title"}}}, {"slots", QJsonArray{
+                    QJsonObject{{"id", "slot1"}, {"seconds", 4}, {"video", true}, {"audio", true}, {"clips", 2}},
+                    QJsonObject{{"id", "slot2"}, {"seconds", 1}, {"video", true}, {"audio", false}, {"clips", 1}}}}};
+            QJsonArray files;
+            for (const QJsonValue &file : request.value("files").toArray()) {
+                const bool longer = file.toString().endsWith(QStringLiteral("long.mov"));
+                files.append(QJsonObject{{"path", file}, {"seconds", longer ? 10 : 2}, {"video", true}, {"audio", true},
+                                         {"fits", longer ? QJsonArray{"slot1", "slot2"} : QJsonArray{"slot2"}}});
+            }
+            return QJsonObject{{"files", files}};
+        };
+        fromPreset.showPage(ProjectLauncher::FromPreset);
+        QCOMPARE(fromPreset.m_problem->text(), QStringLiteral("Choose a preset"));
+        fromPreset.m_name->setText(QStringLiteral("Teaser"));
+        fromPreset.m_location->setText(location);
+        fromPreset.loadPreset(QStringLiteral("/library/intro.kerfpreset"));
+        QVERIFY(fromPreset.findChild<QPushButton *>(QStringLiteral("presetSlotFile_slot1")));
+        QCOMPARE(fromPreset.m_problem->text(), QStringLiteral("Choose a file for each media slot"));
+        fromPreset.setSlotFile(QStringLiteral("slot1"), QStringLiteral("/clips/short.mov"));
+        fromPreset.setSlotFile(QStringLiteral("slot2"), QStringLiteral("/clips/short.mov"));
+        QCOMPARE(fromPreset.m_problem->text(), QStringLiteral("short.mov cannot fill slot1"));
+        auto *status = fromPreset.findChild<QLabel *>(QStringLiteral("presetSlotStatus_slot1"));
+        QVERIFY(status->text().contains(QStringLiteral("is shorter than 4.00 s")));
+        QCOMPARE(status->property("fit").toString(), QStringLiteral("no"));
+        auto *start = fromPreset.findChild<QDoubleSpinBox *>(QStringLiteral("presetSlotFrom_slot1"));
+        QVERIFY(!start->isEnabled());
+        fromPreset.setSlotFile(QStringLiteral("slot1"), QStringLiteral("/clips/long.mov"));
+        QVERIFY(status->text().startsWith(QStringLiteral("✓ long.mov")));
+        QVERIFY(fromPreset.m_choose->isEnabled());
+        // The slot can start later in a longer file.
+        QVERIFY(start->isEnabled());
+        QCOMPARE(start->maximum(), 6.0);
+        start->setValue(1.5);
+        auto *title = fromPreset.findChild<QLineEdit *>(QStringLiteral("presetText_c4"));
+        title->setText(QStringLiteral("New title"));
+        title->setModified(true);
+        fromPreset.m_choose->click();
+        const QJsonObject request = fromPreset.m_requests.last();
+        QCOMPARE(request.value("type").toString(), QStringLiteral("create"));
+        QCOMPARE(request.value("name").toString(), QStringLiteral("Teaser"));
+        QCOMPARE(request.value("preset").toObject(), (QJsonObject{
+            {"path", "/library/intro.kerfpreset"},
+            {"bindings", QJsonObject{{"slot1", QJsonObject{{"file", "/clips/long.mov"}, {"from", "1.50s"}}},
+                                     {"slot2", QJsonObject{{"file", "/clips/short.mov"}}}}},
+            {"texts", QJsonObject{{"c4", "New title"}}}}));
+
+        // File ▸ Open Recent opens a project in a new window.
+        MainWindow window{taken, QString()};
+        window.buildRecentMenu(window.m_recentMenu);
+        QAction *openOld = nullptr;
+        for (QAction *action : window.m_recentMenu->actions())
+            if (action->text() == QStringLiteral("Old Cut")) openOld = action;
+        QVERIFY(openOld);
+        QSignalSpy opened(&window, &MainWindow::projectOpenRequested);
+        openOld->trigger();
+        QCOMPARE(opened.count(), 1);
+        QCOMPARE(opened.first().first().toString(), old);
+
+        ProjectLauncher::clearRecentProjects();
+        QSettings().remove(QStringLiteral("launcher"));
+        QSettings().remove(QStringLiteral("projects"));
     }
 };
 

@@ -39,6 +39,7 @@ class AskPrompt;
 class CommandRegistry;
 class EffectControlsPanel;
 class EffectsPanel;
+class PresetsPanel;
 class ProjectPanel;
 class SourceMonitorPanel;
 class Workspace;
@@ -52,6 +53,11 @@ class MainWindow final : public QMainWindow {
 public:
     MainWindow(const QString &projectDirectory, const QString &kerfdBinary, QWidget *parent = nullptr);
     ~MainWindow() override;
+
+signals:
+    // File ▸ New Project, Open Project, and Open Recent: open `path` in a
+    // window of its own and close this one.
+    void projectOpenRequested(const QString &path);
 
 private slots:
     void pollBridge();
@@ -181,6 +187,38 @@ private:
     void addActivity(const QString &kind, const QString &text);
     void showError(const QString &message);
     void setConnection(const QString &status, const QString &message = QString());
+    // Requests a fresh connection needs: Git status, the preset library,
+    // and live sync when it was on for this project.
+    void startSession();
+
+    // Projects: the launcher, a folder, or a recent one.
+    void newProject();
+    void openProjectFolder();
+    void openProject(const QString &path);
+    void buildRecentMenu(QMenu *menu);
+
+    // Collaboration over Git. The bridge runs every Git operation; the
+    // window shows where the project stands and what a sync brought in.
+    void handleCollabEvent(const QJsonObject &event);
+    QJsonObject collabContext() const;
+    void updateSyncChip();
+    void buildBranchMenu(QMenu *menu);
+    void commitChanges();
+    void newBranch();
+    void openPullRequest();
+    void publishProject();
+    bool liveSyncRemembered() const;
+    void rememberLiveSync(bool enabled);
+
+    // Presets in the project's library, and the media behind its slots.
+    void savePreset();
+    void applyLibraryPreset(const QString &path);
+    // Swap the file behind `mediaId`; asks for the file when `path` is empty.
+    void replaceMedia(const QString &mediaId, const QString &path = QString());
+    void revealMedia(const QString &mediaId);
+    QString mediaPath(const QString &mediaId) const;
+    // The bin's context menu for `mediaId` (empty for the bin itself).
+    QMenu *binMenu(const QString &mediaId);
 
     MediaArtwork *m_artwork = nullptr;
     QLabel *m_projectTitle = nullptr;
@@ -220,6 +258,25 @@ private:
     QJsonObject m_lastFocus;
     QString m_lastFocusLabel;
     ProjectPanel *m_projectPanel = nullptr;
+    PresetsPanel *m_presets = nullptr;
+    // project.kerf changed outside Kerf: load it or keep the editor's version.
+    QFrame *m_divergedBanner = nullptr;
+    QPushButton *m_loadFromDisk = nullptr;
+    QPushButton *m_keepEditorVersion = nullptr;
+    // The branch and how far it is from its upstream; a click syncs.
+    QToolButton *m_syncChip = nullptr;
+    QMenu *m_recentMenu = nullptr;
+    QMenu *m_branchMenu = nullptr;
+    // The bridge's last `collab` status, empty until one arrives.
+    QJsonObject m_collabStatus;
+    // The running sync's stage, empty when none runs.
+    QString m_syncStage;
+    // Sync Now was asked for; live sync's own cycles report only news.
+    bool m_syncRequested = false;
+    QString m_syncFailure;
+    // What the last sync brought in, one line each.
+    QStringList m_syncLines;
+    QJsonObject m_mediaStatus;
     SourceMonitorPanel *m_sourceMonitor = nullptr;
     QToolBar *m_toolPalette = nullptr;
     AskPrompt *m_askPrompt = nullptr;
