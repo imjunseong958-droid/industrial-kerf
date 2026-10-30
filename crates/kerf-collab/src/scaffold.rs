@@ -42,7 +42,8 @@ project.kerf.tmp
 /// `project.kerf` merges structurally; media goes through Git LFS when it
 /// was available when the project was made.
 pub fn gitattributes(lfs: bool) -> String {
-    let mut text = String::from("*.kerf merge=kerf\n*.kerflook text eol=lf\n*.kerfpreset text eol=lf\n");
+    let mut text =
+        String::from("*.kerf merge=kerf\n*.kerflook text eol=lf\n*.kerfpreset text eol=lf\n");
     if lfs {
         text.push_str("media/** filter=lfs diff=lfs merge=lfs -text\n");
     }
@@ -117,7 +118,13 @@ pub fn folder_name(name: &str) -> Result<String> {
     let cleaned: String = name
         .trim()
         .chars()
-        .map(|c| if matches!(c, '/' | '\\' | ':' | '\0') { '-' } else { c })
+        .map(|c| {
+            if matches!(c, '/' | '\\' | ':' | '\0') {
+                '-'
+            } else {
+                c
+            }
+        })
         .collect();
     let cleaned = cleaned.trim_matches('.').trim().to_owned();
     if cleaned.is_empty() {
@@ -205,14 +212,20 @@ pub fn create(new: &NewProject, catalog: &Catalog) -> Result<Created> {
             Some(name) if !name.trim().is_empty() => name.trim().to_owned(),
             _ => repository_slug(&new.name),
         };
-        created.remote = Some(git::create_github_repository(&directory, &name, github.private)?);
+        created.remote = Some(git::create_github_repository(
+            &directory,
+            &name,
+            github.private,
+        )?);
     } else if let Some(remote) = new.remote.as_deref().filter(|r| !r.trim().is_empty()) {
         git::set_remote(&directory, remote.trim())?;
         created.remote = Some(remote.trim().to_owned());
         if let Err(error) = git::push(&directory) {
-            created
-                .warnings
-                .push(format!("The project was not pushed to {}: {}", remote.trim(), error.message));
+            created.warnings.push(format!(
+                "The project was not pushed to {}: {}",
+                remote.trim(),
+                error.message
+            ));
         }
     }
     Ok(created)

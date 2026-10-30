@@ -9,8 +9,15 @@ by what it holds, clip by clip, so two people editing at the same time both
 keep their work.
 
 Kerf uses your own `git`, and `gh` when it is installed, with your
-configuration and credentials. It never prompts: set up access to the
-remote first (`gh auth login` then `gh auth setup-git`, or an SSH key).
+configuration and credentials. The editor never prompts: set up access to
+the remote first (`gh auth login` then `gh auth setup-git`, or an SSH key in
+your agent or Keychain, such as `ssh-add --apple-use-keychain`, with the
+host known from one connection in a terminal, `ssh -T git@github.com`).
+Without that, a sync reports an error instead of waiting: ssh runs in batch
+mode with a 20-second connection timeout, and a transfer slower than
+1000 bytes a second for a minute gives up. Your own `GIT_SSH_COMMAND`,
+`core.sshCommand`, and `http.lowSpeedLimit`/`http.lowSpeedTime` are used as
+they are, and `kerf sync` in a terminal can still prompt.
 
 | Tool | Needed for |
 |---|---|
@@ -81,12 +88,22 @@ Git LFS (`media/** filter=lfs diff=lfs merge=lfs -text`).
 What is per machine stays out of the repository: kerfd's state and journal
 (`.kerf-runtime.*`, `.kerfd.sock`, `.kerf/runtime/`), caches, proxies, and
 generated docs (`.kerf/cache/`, `.kerf/docs/generated/`), settings that may
-hold credentials (`.kerf/config.json`, `.kerf/mcp.json`,
-`.kerf/vision.json`), and renders, which land beside `project.kerf` as
-`*.mp4`; so an `.mp4` beside `project.kerf` is never shared, and media
-belongs in `media/`. Kerf also lists these in the repository's own
-`.git/info/exclude` before it stages anything, so a repository whose
-`.gitignore` lacks them does not commit them either.
+hold credentials or start programs (`.kerf/config.json`, `.kerf/mcp.json`,
+`.kerf/vision.json`), kerfd's temporary `project.kerf.tmp`, and renders,
+which land beside `project.kerf` as `*.mp4`; so an `.mp4` beside
+`project.kerf` is never shared, and media belongs in `media/`. Kerf also
+lists these in the repository's own `.git/info/exclude` before it stages
+anything, so a repository whose `.gitignore` lacks them does not commit them
+either.
+
+The three settings files are never committed, even when a shared
+`.gitignore` lets them in. A branch, upstream, or repository that tracks one
+of them, or tracks `.kerf` itself as a file or link, is refused when you
+sync, switch to it, or clone it (a refused clone is removed), because
+checking it out would replace this machine's settings with a
+collaborator's. Remove it from the repository in a terminal (`git rm
+--cached .kerf/mcp.json`, commit, push). Kerf chat also ignores a project
+`.kerf/mcp.json` that Git tracks, and says so.
 
 A project is shared through the repository whose top folder it is. A
 project inside some other repository, such as a folder in a source
@@ -116,8 +133,9 @@ One sync:
 
 1. Stages everything in the project folder, as `git add -A` does. Hashing
    new media is the slow part, so it runs beside the editor, which stays
-   responsive. A file of 100 MB or more that Git LFS does not store is
-   refused by name, and nothing is left staged.
+   responsive. A file that Git would store at 100 MB or more is refused by
+   name, and nothing is left staged; that includes media in a project made
+   with Git LFS, opened on a machine without it.
 2. Fetches the remote.
 3. Commits your edits. The message describes them, such as "Added marker
    intro", or "Changed clip c3: start, duration (+2 more)" followed by each
@@ -176,6 +194,8 @@ They still arrive as commits: there is no shared cursor or playhead.
   sync merges their commits and pushes.
 - **A file is too large** for GitHub. Install Git LFS (see below), or keep
   the file out of the project.
+- **A branch tracks machine-local settings,** such as `.kerf/mcp.json` (see
+  Project layout). Nothing is merged until it is removed from the branch.
 
 ## How `project.kerf` merges
 
@@ -192,8 +212,9 @@ the remote.
 - **Changed on one side:** that side's version, including a removal.
 - **Changed on both sides, in different fields:** both changes. You trim
   `c3` and they add a blur to it; the merged clip is trimmed and blurred.
-  The fields are a media's path, rate, timecode, duration, streams, and
-  reel; a sequence's name, rate, size, sample rate, and start; a track's
+  The fields are a media's file (its path, rate, timecode, duration, and
+  streams, taken together) and its reel, so a relink on one side and a
+  replacement on the other is one field changed on both sides; a sequence's name, rate, size, sample rate, and start; a track's
   name, enabled, locked, and muted state; a clip's track, start, duration,
   what it plays from where, enabled state, name, link, each property (such
   as `scale` or `opacity`), each mask by name, and its effect stack as a
@@ -206,12 +227,16 @@ the remote.
   changed and they removed stays; a clip you removed and they changed stays
   removed. Both are reported.
 - **Removed, but still used:** a track the other side put a clip on, media
-  one of its clips plays, or a marker one of its looks lands on comes back
-  from the side that kept it, reported as restored.
+  one of its clips plays, a marker one of its looks lands on, a sequence one
+  of its clips nests, or a track one of its effects reads (a track matte, an
+  audio spectrum) comes back from the side that kept it, reported as
+  restored. A nested sequence or a track an effect reads comes back whole,
+  with its clips, and what it uses comes back with it.
 - **The same id added on both sides for different things:** theirs gets a
   fresh id, and everything of theirs that named it follows. The sync
   reports the rename, such as `c7` to `c9`. The same thing added on both
-  sides under one id is kept once.
+  sides under one id is kept once, and a link group both sides added under
+  one id that shares a clip is one group, holding both sides' clips.
 - **Clips that overlap:** when both sides put a clip in the same place on a
   track, theirs moves to the nearest free track of the same kind (above for
   picture, below for sound), and Kerf adds a track when none is free:
@@ -236,9 +261,11 @@ whose version was kept.
   project differs.
 - **Collaborate → Open Pull Request…** opens a pull request for the current
   branch with `gh`, with your title; an empty description becomes the list
-  of the branch's commit subjects. Without `gh`, it opens GitHub's page for
-  starting one. The default branch is refused: make a branch for the change
-  first. Sync first, so GitHub has the branch.
+  of the branch's commit subjects. Without `gh` signed in, or when `gh`
+  cannot create it, it opens GitHub's page for starting one; the item is
+  available whenever the project has a remote. The default branch is
+  refused: make a branch for the change first. Sync first, so GitHub has the
+  branch.
 
 A pull request's diff reads as the edit, because `project.kerf` is
 canonical text with one line per clip:
@@ -274,8 +301,10 @@ repository.
 sync. **Window → Presets** lists the presets in `presets/`, then
 `.kerf/presets` and the project folder, each with its slots and who changed
 it last and when (from its last commit). **Save Current as Preset…** saves
-the program sequence as `presets/<name>.kerfpreset`; a preset of that name
-is replaced only when you choose to. **Apply** opens the usual binding dialog,
+the program sequence as `presets/<name>.kerfpreset`, with the name cleaned
+up as project folders are (`Intro/Outro` becomes
+`presets/Intro-Outro.kerfpreset`); when that file exists, Kerf asks before
+replacing it. **Apply** opens the usual binding dialog,
 where each slot is given project media, and stages the result as a
 proposal.
 
@@ -292,14 +321,20 @@ a file from outside the project copies it into `media/` first, named `<stem>-<th
 path, so the two additions do not conflict; different files never share a
 name. Paths are stored relative to the project with `/`, so they resolve on
 every machine. A file already inside the project folder is used where it
-is.
+is, unless Git ignores it there (like a render beside `project.kerf`), and
+then it is copied into `media/` too. A copy is written under
+`.kerf/cache/incoming/` until it is whole, and Live Sync waits for it, so a
+half-copied file is never shared. A file that does not read as media is
+refused before anything is copied. `kerf <media>` from a terminal copies,
+and downloads, into `media/` the same way.
 
 The Project bin marks media that is not ready: **OFFLINE** when the file is
 missing, **NOT DOWNLOADED** when it is a Git LFS file not yet downloaded,
-and **EXTERNAL** when it is outside the project folder and so is not
-shared. **Consolidate Media** (Collaborate menu, or the bin's context menu)
-copies every external file into `media/` and relinks it, as one edit that
-can be undone; missing files are skipped and listed.
+and **EXTERNAL** when it is outside the project folder, or ignored by Git
+there, and so is not shared. **Consolidate Media** (Collaborate menu, or the
+bin's context menu) copies every external file into `media/` and relinks
+it, as one edit that can be undone; missing files, and files that do not
+read as media, are skipped and listed.
 
 ### Replace Media
 
@@ -360,10 +395,11 @@ A shared project is an ordinary repository, and every Git tool works on it.
   merge in the repository: `merge.kerf.driver` in `.git/config` runs
   `kerfd merge-driver %O %A %B %P`, and `.git/info/attributes` routes
   `project.kerf` to it. Neither file is committed; each clone on each
-  machine has its own. Once a project has been opened in Kerf, `git merge`
-  and `git pull` in a terminal merge `project.kerf` structurally too, and
-  print the conflicts they settle. Without it, Git
-  merges `project.kerf` line by line. To set it up by hand:
+  machine has its own; Kerf finds kerfd beside itself, on `PATH`, or where
+  it was told. Once a project has been opened in Kerf, `git merge` and
+  `git pull` in a terminal merge `project.kerf` structurally too, and print
+  the conflicts they settle. Without it, Git merges `project.kerf` line by
+  line. To set it up by hand:
 
   ```bash
   git config merge.kerf.name "Kerf structural merge"
@@ -411,5 +447,5 @@ pushed to origin/main
 - Media outside the project folder is not shared until it is consolidated.
   Fonts that titles use must be installed on each machine.
 - A project inside another repository is not shared through it.
-- Kerf never prompts for credentials; Git and `gh` must already have
+- The editor never prompts for credentials; Git and `gh` must already have
   access to the remote.

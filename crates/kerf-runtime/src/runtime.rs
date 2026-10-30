@@ -1492,12 +1492,19 @@ impl Runtime {
                 actor,
                 idempotency_key,
                 message,
-            } => self.collab(&actor, &idempotency_key, "integrate", message, |directory, message| {
-                let integration = kerf_collab::git::integrate(directory, &merge_driver()?, message)
-                    .map_err(collab_error)?;
-                let undo = integration.previous.clone().map(Undo::Merge);
-                Ok((serde_json::to_value(integration).unwrap_or_default(), undo))
-            }),
+            } => self.collab(
+                &actor,
+                &idempotency_key,
+                "integrate",
+                message,
+                |directory, message| {
+                    let integration =
+                        kerf_collab::git::integrate(directory, &merge_driver()?, message)
+                            .map_err(collab_error)?;
+                    let undo = integration.previous.clone().map(Undo::Merge);
+                    Ok((serde_json::to_value(integration).unwrap_or_default(), undo))
+                },
+            ),
             RuntimeRequest::CollabSwitch {
                 actor,
                 idempotency_key,
@@ -1819,8 +1826,12 @@ impl Runtime {
             Err(error) => {
                 if let Some(undo) = undo {
                     let undone = match undo {
-                        Undo::Merge(previous) => kerf_collab::git::undo_merge(&directory, &previous),
-                        Undo::Switch(previous) => kerf_collab::git::undo_switch(&directory, &previous),
+                        Undo::Merge(previous) => {
+                            kerf_collab::git::undo_merge(&directory, &previous)
+                        }
+                        Undo::Switch(previous) => {
+                            kerf_collab::git::undo_switch(&directory, &previous)
+                        }
                     };
                     let _ = kerf_model::look::refresh_project_looks(&directory);
                     if undone.is_ok() {
@@ -1843,7 +1854,8 @@ impl Runtime {
                 report,
             });
         }
-        report["summary"] = serde_json::json!(kerf_collab::summarize(&self.state.project, &project));
+        report["summary"] =
+            serde_json::json!(kerf_collab::summarize(&self.state.project, &project));
         let mut candidate = self.state.clone();
         candidate.project = project;
         candidate.revision = self.state.revision + 1;
@@ -1867,7 +1879,8 @@ impl Runtime {
         )?;
         // A checkpoint now keeps a later start from replaying documents that
         // use looks a branch switch has since taken away.
-        if self.projection_status == ProjectionStatus::Current && self.persist_checkpoint().is_ok() {
+        if self.projection_status == ProjectionStatus::Current && self.persist_checkpoint().is_ok()
+        {
             let _ = truncate_journal(&self.journal_path);
             self.journal_records_since_checkpoint = 0;
         }

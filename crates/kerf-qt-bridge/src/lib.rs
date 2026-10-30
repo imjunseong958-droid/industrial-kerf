@@ -435,8 +435,8 @@ fn runtime_worker(
             // A shared project copies the file into media/ on another
             // thread, then imports the copy.
             Command::Import { path } if media::needs_copy(&directory, Path::new(&path)) => {
-                media::copy_then(&shared, &path, &commands, &tx, |path| Command::Import {
-                    path,
+                media::copy_then(&shared, &path, &commands, &tx, media::probe, |path| {
+                    Command::Import { path }
                 });
                 continue;
             }
@@ -448,7 +448,7 @@ fn runtime_worker(
             Command::MediaReplace { media, path }
                 if media::needs_copy(&directory, Path::new(&path)) =>
             {
-                media::copy_then(&shared, &path, &commands, &tx, move |path| {
+                media::copy_then(&shared, &path, &commands, &tx, media::probe, move |path| {
                     Command::MediaReplace { media, path }
                 });
                 continue;

@@ -22,7 +22,10 @@ pub fn run_merge_driver(args: &[String]) -> i32 {
         eprintln!("usage: merge-driver <base> <ours> <theirs> [path]");
         return 2;
     };
-    let path = rest.first().cloned().unwrap_or_else(|| "project.kerf".into());
+    let path = rest
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "project.kerf".into());
     if let Err(message) = install_looks(&path) {
         eprintln!("kerf: {path}: the project's looks are not loaded: {message}");
     }
@@ -38,7 +41,8 @@ pub fn run_merge_driver(args: &[String]) -> i32 {
             if let Some(target) = std::env::var_os(MERGE_REPORT_ENV) {
                 let report = DriverReport { path, ..report };
                 if let Ok(line) = serde_json::to_string(&report) {
-                    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(target) {
+                    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(target)
+                    {
                         let _ = writeln!(file, "{line}");
                     }
                 }
@@ -85,7 +89,12 @@ fn incoming_looks(folder: &Path) -> Vec<Look> {
             .filter(|out| out.status.success())
             .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
     };
-    let Some(names) = git(&["ls-tree", "-z", "--name-only", &format!("MERGE_HEAD:{folder}")]) else {
+    let Some(names) = git(&[
+        "ls-tree",
+        "-z",
+        "--name-only",
+        &format!("MERGE_HEAD:{folder}"),
+    ]) else {
         return Vec::new();
     };
     names
@@ -109,10 +118,15 @@ fn merge_files(
         fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))
     };
     let merged = merge_documents(&read(base)?, &read(ours)?, &read(theirs)?, catalog)?;
-    fs::write(ours, merged.text.as_bytes()).map_err(|error| format!("{}: {error}", ours.display()))?;
+    fs::write(ours, merged.text.as_bytes())
+        .map_err(|error| format!("{}: {error}", ours.display()))?;
     Ok(DriverReport {
         path: String::new(),
-        conflicts: merged.conflicts.iter().map(ReportedConflict::from).collect(),
+        conflicts: merged
+            .conflicts
+            .iter()
+            .map(ReportedConflict::from)
+            .collect(),
         renamed: merged
             .renamed
             .iter()

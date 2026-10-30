@@ -55,7 +55,7 @@ QIcon tile(const QImage &frame, bool audio, const QString &badge) {
 QString badgeTip(const QString &badge) {
     if (badge == kOffline) return QStringLiteral("Offline: the file is missing. Replace Media… points this slot at another file.");
     if (badge == kNotDownloaded) return QStringLiteral("Not downloaded: a Git LFS file that a sync downloads.");
-    if (badge == kExternal) return QStringLiteral("Outside the project folder, so collaborators do not have it. Consolidate Media copies it into media/.");
+    if (badge == kExternal) return QStringLiteral("Outside the project folder, or ignored by Git there, so collaborators do not have it. Consolidate Media copies it into media/.");
     return {};
 }
 

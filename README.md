@@ -131,7 +131,9 @@ target/release/kerf --terminal --dir ./my-project --mcp-tools -p "use the connec
 ```
 
 In editor mode, `kerf` imports a local media path or an HTTP(S) URL before
-opening the native window. The terminal workflow, `kerf preset`, `kerf sync`,
+opening the native window; in a project with a `media/` folder, or a shared
+one, the file is copied (or downloaded) into `media/` first, as the editor's
+import does. The terminal workflow, `kerf preset`, `kerf sync`,
 and a media import use the current directory unless `--dir` or
 `KERF_PROJECT_DIR` names a project. The editor's Kerf Assistant panel uses the same provider
 configuration as the terminal agent. `--kerfd PATH` selects an explicit

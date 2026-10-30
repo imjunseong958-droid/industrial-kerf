@@ -39,7 +39,12 @@ fn root(label: &str) -> PathBuf {
 }
 
 fn sh(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git").arg("-C").arg(dir).args(args).output().unwrap();
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
     assert!(
         out.status.success(),
         "git {args:?}: {}",
@@ -126,9 +131,20 @@ fn edits_made_at_the_same_time_on_two_machines_both_survive_a_sync() {
     assert_eq!(report["incoming"].as_array().unwrap().len(), 1, "{report}");
     assert_eq!(report["fastForward"], false);
     let state = bob.get_state().unwrap();
-    assert!(state.document.contains("marker intro "), "{}", state.document);
-    assert!(state.document.contains("marker outro "), "{}", state.document);
-    assert!(!state.can_undo, "a sync that changed the project clears history");
+    assert!(
+        state.document.contains("marker intro "),
+        "{}",
+        state.document
+    );
+    assert!(
+        state.document.contains("marker outro "),
+        "{}",
+        state.document
+    );
+    assert!(
+        !state.can_undo,
+        "a sync that changed the project clears history"
+    );
     assert_eq!(state.projection_status, "current");
     assert!(!git::status(&team.bob).unwrap().changed);
 
@@ -169,9 +185,13 @@ fn a_hand_edited_project_file_is_not_synced_until_it_is_settled() {
     let error = alice.collab_integrate("ui", "hand-1", None).unwrap_err();
     assert_eq!(error.code, "PROJECTION_DIVERGED");
     let revision = alice.get_state().unwrap().revision;
-    let state = alice.import_projection_request("ui", "hand-load", revision).unwrap();
+    let state = alice
+        .import_projection_request("ui", "hand-load", revision)
+        .unwrap();
     assert!(state.document.contains("name=\"Hand\""));
-    alice.collab_integrate("ui", "hand-2", Some("Rename")).unwrap();
+    alice
+        .collab_integrate("ui", "hand-2", Some("Rename"))
+        .unwrap();
     assert_eq!(sh(&team.alice, &["log", "-1", "--format=%s"]), "Rename");
 }
 
@@ -202,10 +222,15 @@ fn branches_hold_their_own_edits() {
 fn kerfd_merges_project_documents_as_git_asks() {
     hermetic();
     let root = root("driver");
-    let base = "kerf 1\nproject name=\"P\"\n\nsequence s1 name=\"P\" rate=24 size=1920x1080 audio=48000\n";
+    let base =
+        "kerf 1\nproject name=\"P\"\n\nsequence s1 name=\"P\" rate=24 size=1920x1080 audio=48000\n";
     let ours = format!("{base}  marker m1 at=00:00:00:00\n");
     let theirs = format!("{base}  marker m2 at=00:00:01:00\n");
-    for (name, text) in [("base", base), ("ours", ours.as_str()), ("theirs", theirs.as_str())] {
+    for (name, text) in [
+        ("base", base),
+        ("ours", ours.as_str()),
+        ("theirs", theirs.as_str()),
+    ] {
         fs::write(root.join(name), text).unwrap();
     }
     let status = Command::new(env!("CARGO_BIN_EXE_kerfd"))

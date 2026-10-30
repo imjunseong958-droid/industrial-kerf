@@ -169,6 +169,9 @@ pub(crate) fn probe(path: &Path) -> Result<Media, String> {
     probed_media(path, &info)
 }
 
+/// The codecs ffprobe gives text it draws as a picture.
+const TEXT_PICTURE_CODECS: [&str; 4] = ["ansi", "bintext", "xbin", "idf"];
+
 /// Media as a probe describes it, read the way kerfd reads an import:
 /// whole frames, stereo sound at 48 kHz, and no guesses at a length.
 pub(crate) fn probed_media(path: &Path, info: &ProbeInfo) -> Result<Media, String> {
@@ -200,6 +203,16 @@ pub(crate) fn probed_media(path: &Path, info: &ProbeInfo) -> Result<Media, Strin
     });
     if video.is_none() && audio.is_none() {
         return Err(unreadable("has neither picture nor sound"));
+    }
+    // ffprobe reads text files (notes, armoured keys) as ANSI art: a
+    // picture with a length, which is not media.
+    if info
+        .video_codec
+        .as_deref()
+        .is_some_and(|codec| TEXT_PICTURE_CODECS.contains(&codec))
+        && audio.is_none()
+    {
+        return Err(unreadable("is text, not media"));
     }
     Ok(Media {
         id: Id::new("file").expect("valid id"),

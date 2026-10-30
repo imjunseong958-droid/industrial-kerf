@@ -498,6 +498,8 @@ fn preset_request(action: &PresetAction) -> Result<(&'static str, Value)> {
 }
 
 fn run_new(new: &NewArgs) -> Result<()> {
+    // A terminal can answer git's prompts (an ssh passphrase, say).
+    env::set_var(git::INTERACTIVE_ENV, "1");
     let created = create_project(new)?;
     println!("created {}", created.path.display());
     if let Some(remote) = &created.remote {
@@ -517,6 +519,7 @@ fn create_project(new: &NewArgs) -> Result<Created> {
 /// editor's Sync Now does: staging and the network run here, and kerfd,
 /// which owns `project.kerf`, commits and merges.
 fn run_sync(directory: &Path, kerfd: Option<&Path>, message: Option<&str>) -> Result<()> {
+    env::set_var(git::INTERACTIVE_ENV, "1");
     if !git::is_repository(directory) {
         if let Some(top) = git::enclosing_repository(directory) {
             bail!(
@@ -670,7 +673,10 @@ fn run_gui(args: &Args, directory: Option<&Path>) -> Result<()> {
 /// kerfd path is never read as one and the editor shows its launcher.
 fn editor_command(qt: &Path, project: Option<&Path>, kerfd: &Path) -> std::process::Command {
     let mut command = std::process::Command::new(qt);
-    command.env("KERFD_BIN", kerfd);
+    // The editor has no terminal for git to prompt in.
+    command
+        .env("KERFD_BIN", kerfd)
+        .env_remove(git::INTERACTIVE_ENV);
     match project {
         Some(project) => {
             command.arg(project);

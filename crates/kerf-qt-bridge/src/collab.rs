@@ -199,7 +199,8 @@ pub(crate) fn run(
     shared: Arc<Shared>,
 ) {
     let mut collab = Collab::new(directory, &binary, runtime, tx, shared);
-    collab.gh = git::local_tools().gh;
+    let tools = git::local_tools();
+    collab.gh = tools.gh && tools.gh_signed_in;
     if git::is_repository(&collab.directory) {
         collab.ensure_driver();
     }
@@ -618,7 +619,7 @@ impl Collab {
         if !tools.git {
             return Err("git is not installed".into());
         }
-        if github.is_some() && !tools.gh {
+        if github.is_some() && !tools.gh_signed_in {
             return Err(
                 "Publishing to GitHub needs the GitHub CLI (brew install gh, then gh auth login)"
                     .into(),
@@ -684,9 +685,7 @@ impl Collab {
             .map_err(|error| self.lost(error))?;
         let project = kerf_runtime::parse_document(&document).map_err(|error| error.message)?;
         let result = media::consolidate(&project, &self.directory, |file| {
-            tasks::probe(file)
-                .map(drop)
-                .map_err(|_| format!("{} does not read as media", file.display()))
+            tasks::probe(file).map(drop)
         });
         let mut report = empty_report();
         report["summary"] = json!(result.summary());

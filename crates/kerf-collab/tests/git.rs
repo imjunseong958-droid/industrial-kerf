@@ -61,7 +61,12 @@ fn sparse_file(path: &Path, len: u64) {
 }
 
 fn sh(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git").arg("-C").arg(dir).args(args).output().unwrap();
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
     assert!(
         out.status.success(),
         "git {args:?} failed: {}",
@@ -110,7 +115,10 @@ fn team() -> Team {
 fn a_new_shared_project_is_published_with_its_document_and_ignore_rules() {
     let team = team();
     let document = fs::read_to_string(team.alice.join("project.kerf")).unwrap();
-    assert!(document.contains("project name=\"Short Film\""), "{document}");
+    assert!(
+        document.contains("project name=\"Short Film\""),
+        "{document}"
+    );
     assert!(document.contains("size=1080x1920"), "{document}");
     assert!(document.contains("rate=24"), "{document}");
     assert!(team.alice.join("media").is_dir());
@@ -129,13 +137,21 @@ fn a_new_shared_project_is_published_with_its_document_and_ignore_rules() {
         fs::read_to_string(team.bob.join("project.kerf")).unwrap(),
         document
     );
-    assert_eq!(sh(&team.remote, &["log", "--format=%s", "-1"]), "Create Short Film");
+    assert_eq!(
+        sh(&team.remote, &["log", "--format=%s", "-1"]),
+        "Create Short Film"
+    );
 }
 
 #[test]
 fn runtime_files_are_never_committed() {
     let team = team();
-    for name in [".kerf-runtime.journal", ".kerfd.sock", "0123-1.mp4", "project.kerf.tmp"] {
+    for name in [
+        ".kerf-runtime.journal",
+        ".kerfd.sock",
+        "0123-1.mp4",
+        "project.kerf.tmp",
+    ] {
         fs::write(team.alice.join(name), "local").unwrap();
     }
     fs::create_dir_all(team.alice.join(".kerf/cache/derived")).unwrap();
@@ -149,7 +165,10 @@ fn local_settings_stay_out_even_when_a_shared_ignore_file_lets_them_in() {
     let team = team();
     let mut ignore = fs::read_to_string(team.alice.join(".gitignore")).unwrap();
     for setting in scaffold::LOCAL_SETTINGS {
-        assert!(scaffold::GITIGNORE.lines().any(|line| line == setting), "{setting}");
+        assert!(
+            scaffold::GITIGNORE.lines().any(|line| line == setting),
+            "{setting}"
+        );
         ignore.push_str(&format!("!{setting}\n"));
     }
     fs::write(team.alice.join(".gitignore"), ignore).unwrap();
@@ -205,7 +224,11 @@ fn diverged_branches_merge_files_each_side_changed() {
 #[test]
 fn a_merge_git_cannot_finish_is_aborted_and_reported() {
     let team = team();
-    fs::write(team.alice.join("presets/same.kerfpreset"), "kerf 1\n# alice\n").unwrap();
+    fs::write(
+        team.alice.join("presets/same.kerfpreset"),
+        "kerf 1\n# alice\n",
+    )
+    .unwrap();
     git::integrate(&team.alice, Path::new("kerfd"), "alice").unwrap();
     git::push(&team.alice).unwrap();
 
@@ -214,7 +237,11 @@ fn a_merge_git_cannot_finish_is_aborted_and_reported() {
     git::fetch(&team.bob).unwrap();
     let error = git::integrate(&team.bob, Path::new("kerfd"), "bob").unwrap_err();
     assert_eq!(error.code, "MERGE_FAILED");
-    assert!(error.message.contains("presets/same.kerfpreset"), "{}", error.message);
+    assert!(
+        error.message.contains("presets/same.kerfpreset"),
+        "{}",
+        error.message
+    );
     let status = git::status(&team.bob).unwrap();
     assert!(!status.conflicted);
     assert!(!status.changed);
@@ -269,8 +296,15 @@ fn an_upstream_branch_that_tracks_local_settings_is_not_merged_or_cloned() {
     git::fetch(&team.bob).unwrap();
     let error = git::integrate(&team.bob, Path::new("kerfd"), "").unwrap_err();
     assert_eq!(error.code, "LOCAL_SETTINGS_TRACKED", "{}", error.message);
-    assert!(error.message.contains(".kerf/mcp.json"), "{}", error.message);
-    assert_eq!(fs::read_to_string(team.bob.join(".kerf/mcp.json")).unwrap(), "bob's own");
+    assert!(
+        error.message.contains(".kerf/mcp.json"),
+        "{}",
+        error.message
+    );
+    assert_eq!(
+        fs::read_to_string(team.bob.join(".kerf/mcp.json")).unwrap(),
+        "bob's own"
+    );
     assert_eq!(git::status(&team.bob).unwrap().behind, 1);
 
     let location = team.remote.parent().unwrap().join("carol");
@@ -296,9 +330,16 @@ fn a_branch_that_tracks_local_settings_is_not_switched_to() {
     git::fetch(&team.bob).unwrap();
     let error = git::switch(&team.bob, "alice/settings", false, "").unwrap_err();
     assert_eq!(error.code, "LOCAL_SETTINGS_TRACKED");
-    assert!(error.message.contains(".KERF/MCP.json"), "{}", error.message);
+    assert!(
+        error.message.contains(".KERF/MCP.json"),
+        "{}",
+        error.message
+    );
     assert_eq!(git::branch(&team.bob).as_deref(), Some("main"));
-    assert_eq!(fs::read_to_string(team.bob.join(".kerf/mcp.json")).unwrap(), "bob's own");
+    assert_eq!(
+        fs::read_to_string(team.bob.join(".kerf/mcp.json")).unwrap(),
+        "bob's own"
+    );
 }
 
 /// Point `dir`'s remote at an SSH URL, which the stand-in ssh answers.
@@ -339,9 +380,16 @@ fn network_git_runs_ssh_without_prompts() {
 fn a_configured_ssh_command_is_left_alone() {
     let team = team();
     ssh_remote(&team.bob);
-    sh(&team.bob, &["config", "core.sshCommand", "ssh -o KerfOwnOption=yes"]);
+    sh(
+        &team.bob,
+        &["config", "core.sshCommand", "ssh -o KerfOwnOption=yes"],
+    );
     let error = git::fetch(&team.bob).unwrap_err();
-    assert!(error.message.contains("KerfOwnOption=yes"), "{}", error.message);
+    assert!(
+        error.message.contains("KerfOwnOption=yes"),
+        "{}",
+        error.message
+    );
     assert!(!error.message.contains("BatchMode"), "{}", error.message);
 }
 
@@ -377,7 +425,11 @@ fn files_too_large_for_github_are_refused_unless_lfs_stores_them() {
 #[test]
 fn large_media_counts_as_lfs_only_when_git_lfs_stored_it() {
     let team = team();
-    fs::write(team.alice.join(".gitattributes"), scaffold::gitattributes(true)).unwrap();
+    fs::write(
+        team.alice.join(".gitattributes"),
+        scaffold::gitattributes(true),
+    )
+    .unwrap();
     // A collaborator without Git LFS: the attribute says lfs, no filter runs.
     let _ = Command::new("git")
         .arg("-C")
@@ -387,7 +439,11 @@ fn large_media_counts_as_lfs_only_when_git_lfs_stored_it() {
     sparse_file(&team.alice.join("media/huge.mov"), git::LARGE_FILE_BYTES);
     let error = git::commit(&team.alice, "huge").unwrap_err();
     assert_eq!(error.code, "LARGE_FILE");
-    assert!(error.message.contains("media/huge.mov"), "{}", error.message);
+    assert!(
+        error.message.contains("media/huge.mov"),
+        "{}",
+        error.message
+    );
     assert!(sh(&team.alice, &["diff", "--cached", "--name-only"]).is_empty());
 
     // A filter that stores a pointer instead, as Git LFS does.
@@ -400,7 +456,9 @@ fn large_media_counts_as_lfs_only_when_git_lfs_stored_it() {
         ],
     );
     assert!(git::commit(&team.alice, "huge").unwrap().is_some());
-    let stored: u64 = sh(&team.alice, &["cat-file", "-s", "HEAD:media/huge.mov"]).parse().unwrap();
+    let stored: u64 = sh(&team.alice, &["cat-file", "-s", "HEAD:media/huge.mov"])
+        .parse()
+        .unwrap();
     assert!(stored < 1024, "{stored}");
 }
 

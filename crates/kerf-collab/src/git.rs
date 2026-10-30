@@ -49,6 +49,8 @@ pub struct Tools {
     pub git: bool,
     pub git_lfs: bool,
     pub gh: bool,
+    /// `gh` has an account signed in, read locally without asking GitHub.
+    pub gh_signed_in: bool,
     /// The GitHub account `gh` is signed in to.
     pub gh_user: Option<String>,
 }
@@ -191,7 +193,8 @@ const NETWORK_CONFIG: &str = r"^(core\.sshcommand|http\..*lowspeed(limit|time))$
 /// [`INTERACTIVE_ENV`] asks for prompts. The person's own ssh command and
 /// stall limits win.
 fn non_interactive(command: &mut Command, dir: &Path) {
-    let configured = || git_text(dir, &["config", "--get-regexp", NETWORK_CONFIG]).unwrap_or_default();
+    let configured =
+        || git_text(dir, &["config", "--get-regexp", NETWORK_CONFIG]).unwrap_or_default();
     for (key, value) in non_interactive_env(|name| std::env::var_os(name), configured) {
         command.env(key, value);
     }
@@ -252,7 +255,10 @@ fn failure(out: &Output) -> String {
     } else {
         stderr.trim()
     };
-    let lines: Vec<&str> = text.lines().filter(|line| !line.trim().is_empty()).collect();
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
     let tail = lines[lines.len().saturating_sub(6)..].join("\n");
     if tail.is_empty() {
         format!("git exited with {}", out.status)
@@ -274,7 +280,9 @@ fn git_ok(dir: &Path, args: &[&str]) -> bool {
 fn git_text(dir: &Path, args: &[&str]) -> Option<String> {
     let mut command = git(dir);
     command.args(args);
-    run(command, "GIT_FAILED").ok().filter(|text| !text.is_empty())
+    run(command, "GIT_FAILED")
+        .ok()
+        .filter(|text| !text.is_empty())
 }
 
 fn git_run(dir: &Path, args: &[&str], code: &'static str) -> Result<String> {
@@ -290,12 +298,25 @@ pub fn local_tools() -> Tools {
         command.args(args);
         succeeds(command)
     };
+    let gh = version("gh", &["--version"]);
     Tools {
         git: version("git", &["--version"]),
         git_lfs: version("git", &["lfs", "version"]),
-        gh: version("gh", &["--version"]),
+        gh,
+        gh_signed_in: gh && gh_signed_in(),
         gh_user: None,
     }
+}
+
+/// Whether `gh` holds a token, without printing it or asking GitHub.
+fn gh_signed_in() -> bool {
+    let mut command = Command::new("gh");
+    command
+        .args(["auth", "token"])
+        .env("GH_PROMPT_DISABLED", "1")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    command.status().is_ok_and(|status| status.success())
 }
 
 /// Which tools are installed, and the account `gh` is signed in to.
@@ -306,7 +327,9 @@ pub fn tools() -> Tools {
         command
             .args(["api", "user", "--jq", ".login"])
             .env("GH_PROMPT_DISABLED", "1");
-        tools.gh_user = run(command, "GH_FAILED").ok().filter(|login| !login.is_empty());
+        tools.gh_user = run(command, "GH_FAILED")
+            .ok()
+            .filter(|login| !login.is_empty());
     }
     tools
 }
@@ -388,7 +411,9 @@ pub fn status(dir: &Path) -> Result<Status> {
     let git_text = |dir: &Path, args: &[&str]| {
         let mut command = git(dir);
         command.env("GIT_OPTIONAL_LOCKS", "0").args(args);
-        run(command, "GIT_FAILED").ok().filter(|text| !text.is_empty())
+        run(command, "GIT_FAILED")
+            .ok()
+            .filter(|text| !text.is_empty())
     };
     let branch = branch(dir);
     let upstream = upstream(dir);
@@ -462,7 +487,12 @@ pub fn ensure_merge_driver(dir: &Path, driver: &Path) -> Result<()> {
     {
         git_run(
             dir,
-            &["config", "--local", "merge.kerf.name", "Kerf structural merge"],
+            &[
+                "config",
+                "--local",
+                "merge.kerf.name",
+                "Kerf structural merge",
+            ],
             "GIT_CONFIG_FAILED",
         )?;
         git_run(
@@ -473,7 +503,9 @@ pub fn ensure_merge_driver(dir: &Path, driver: &Path) -> Result<()> {
     }
     let attributes = git_text(dir, &["rev-parse", "--git-path", "info/attributes"])
         .map(|path| absolute_in(dir, &path))
-        .ok_or_else(|| CollabError::new("GIT_FAILED", "cannot find the repository's info directory"))?;
+        .ok_or_else(|| {
+            CollabError::new("GIT_FAILED", "cannot find the repository's info directory")
+        })?;
     let line = "project.kerf merge=kerf";
     let existing = fs::read_to_string(&attributes).unwrap_or_default();
     if !existing.lines().any(|existing| existing.trim() == line) {
@@ -510,7 +542,11 @@ fn io(error: std::io::Error) -> CollabError {
 /// names them.
 fn project_paths() -> Vec<String> {
     std::iter::once(".".to_owned())
-        .chain(LOCAL_SETTINGS.iter().map(|path| format!(":(exclude,icase){path}")))
+        .chain(
+            LOCAL_SETTINGS
+                .iter()
+                .map(|path| format!(":(exclude,icase){path}")),
+        )
         .collect()
 }
 
@@ -519,8 +555,15 @@ fn project_paths() -> Vec<String> {
 /// exclusion pathspec on `git add` cannot keep them out: git reports the
 /// path it names as ignored and fails.
 fn unstage_local_settings(dir: &Path) -> Result<()> {
-    let staged = git_text(dir, &["diff", "--cached", "--name-only", "--no-renames", "-z"]).unwrap_or_default();
-    let settings: Vec<&str> = staged.split('\0').filter(|path| is_local_setting(path)).collect();
+    let staged = git_text(
+        dir,
+        &["diff", "--cached", "--name-only", "--no-renames", "-z"],
+    )
+    .unwrap_or_default();
+    let settings: Vec<&str> = staged
+        .split('\0')
+        .filter(|path| is_local_setting(path))
+        .collect();
     if settings.is_empty() {
         return Ok(());
     }
@@ -539,7 +582,10 @@ fn unstage_local_settings(dir: &Path) -> Result<()> {
 /// Git LFS does not store are refused, and nothing is left staged.
 pub fn stage(dir: &Path) -> Result<bool> {
     if !is_repository(dir) {
-        return Err(CollabError::new("NOT_A_REPOSITORY", "the project is not a Git repository"));
+        return Err(CollabError::new(
+            "NOT_A_REPOSITORY",
+            "the project is not a Git repository",
+        ));
     }
     exclude_runtime_files(dir)?;
     git_run(dir, &["add", "-A", "--", "."], "GIT_ADD_FAILED")?;
@@ -577,7 +623,9 @@ pub fn commit(dir: &Path, message: &str) -> Result<Option<String>> {
 fn exclude_runtime_files(dir: &Path) -> Result<()> {
     let exclude = git_text(dir, &["rev-parse", "--git-path", "info/exclude"])
         .map(|path| absolute_in(dir, &path))
-        .ok_or_else(|| CollabError::new("GIT_FAILED", "cannot find the repository's info directory"))?;
+        .ok_or_else(|| {
+            CollabError::new("GIT_FAILED", "cannot find the repository's info directory")
+        })?;
     let existing = fs::read_to_string(&exclude).unwrap_or_default();
     let missing: Vec<&str> = crate::scaffold::GITIGNORE
         .lines()
@@ -629,7 +677,14 @@ fn refuse_large_files(dir: &Path) -> Result<()> {
     let top = PathBuf::from(top);
     let staged = git_text(
         dir,
-        &["diff", "--cached", "--name-only", "--no-renames", "--diff-filter=AMT", "-z"],
+        &[
+            "diff",
+            "--cached",
+            "--name-only",
+            "--no-renames",
+            "--diff-filter=AMT",
+            "-z",
+        ],
     )
     .unwrap_or_default();
     let mut refused = Vec::new();
@@ -663,7 +718,11 @@ pub fn fetch(dir: &Path) -> Result<bool> {
     let Some(remote) = remote_name(dir) else {
         return Ok(false);
     };
-    network_run(dir, &["fetch", "--quiet", "--prune", &remote], "GIT_FETCH_FAILED")?;
+    network_run(
+        dir,
+        &["fetch", "--quiet", "--prune", &remote],
+        "GIT_FETCH_FAILED",
+    )?;
     Ok(true)
 }
 
@@ -692,7 +751,12 @@ fn commits(dir: &Path, range: &str) -> Vec<CommitSummary> {
 fn project_blob(dir: &Path, revision: &str) -> Option<String> {
     git_text(
         dir,
-        &["rev-parse", "-q", "--verify", &format!("{revision}:{}", project_spec(dir))],
+        &[
+            "rev-parse",
+            "-q",
+            "--verify",
+            &format!("{revision}:{}", project_spec(dir)),
+        ],
     )
 }
 
@@ -702,8 +766,12 @@ fn project_blob(dir: &Path, revision: &str) -> Option<String> {
 /// from. `.kerf` tracked as a file or link is refused too, and names are
 /// compared as a case-insensitive file system compares them.
 fn refuse_local_settings(dir: &Path, revision: &str, what: &str) -> Result<()> {
-    let tracked = git_text(dir, &["ls-tree", "-r", "-z", "--name-only", revision]).unwrap_or_default();
-    let found: Vec<&str> = tracked.split('\0').filter(|path| is_local_setting(path)).collect();
+    let tracked =
+        git_text(dir, &["ls-tree", "-r", "-z", "--name-only", revision]).unwrap_or_default();
+    let found: Vec<&str> = tracked
+        .split('\0')
+        .filter(|path| is_local_setting(path))
+        .collect();
     if found.is_empty() {
         return Ok(());
     }
@@ -717,7 +785,14 @@ fn refuse_local_settings(dir: &Path, revision: &str, what: &str) -> Result<()> {
 }
 
 fn is_local_setting(path: &str) -> bool {
-    let path = path.to_lowercase();
+    // Folding through upper case first catches the letters a file system's
+    // case folding maps onto ASCII but plain lowercasing leaves alone (the
+    // long s, the Kelvin sign), so `.kerf/mcp.j\u{17f}on` is refused too.
+    let path: String = path
+        .chars()
+        .flat_map(char::to_uppercase)
+        .flat_map(char::to_lowercase)
+        .collect();
     path == ".kerf"
         || LOCAL_SETTINGS
             .iter()
@@ -732,7 +807,10 @@ fn is_local_setting(path: &str) -> bool {
 /// branch as it was after the commit.
 pub fn integrate(dir: &Path, driver: &Path, message: &str) -> Result<Integration> {
     if !is_repository(dir) {
-        return Err(CollabError::new("NOT_A_REPOSITORY", "the project is not a Git repository"));
+        return Err(CollabError::new(
+            "NOT_A_REPOSITORY",
+            "the project is not a Git repository",
+        ));
     }
     if git_text(dir, &["diff", "--name-only", "--diff-filter=U"]).is_some() {
         return Err(CollabError::new(
@@ -747,15 +825,22 @@ pub fn integrate(dir: &Path, driver: &Path, message: &str) -> Result<Integration
     if upstream(dir).is_none() || !has_head(dir) {
         return Ok(integration);
     }
-    integration.incoming = commits(dir, "HEAD..@{upstream}");
+    // The commit checked is the commit merged, even if a fetch lands meanwhile.
+    let Some(incoming) = git_text(
+        dir,
+        &["rev-parse", "-q", "--verify", "@{upstream}^{commit}"],
+    ) else {
+        return Ok(integration);
+    };
+    integration.incoming = commits(dir, &format!("HEAD..{incoming}"));
     if integration.incoming.is_empty() {
         return Ok(integration);
     }
-    refuse_local_settings(dir, "@{upstream}", "the upstream branch")?;
+    refuse_local_settings(dir, &incoming, "the upstream branch")?;
     ensure_merge_driver(dir, driver)?;
     integration.previous = git_text(dir, &["rev-parse", "HEAD"]);
     let before = project_blob(dir, "HEAD");
-    let ahead = !commits(dir, "@{upstream}..HEAD").is_empty();
+    let ahead = !commits(dir, &format!("{incoming}..HEAD")).is_empty();
     let report = std::env::temp_dir().join(format!(
         "kerf-merge-{}-{}.jsonl",
         std::process::id(),
@@ -769,9 +854,13 @@ pub fn integrate(dir: &Path, driver: &Path, message: &str) -> Result<Integration
         for (key, value) in fallback_identity(dir) {
             command.arg("-c").arg(format!("{key}={value}"));
         }
-        command.args(["merge", "--no-edit", "--no-verify", "-q", "@{upstream}"]);
+        let upstream = upstream(dir).unwrap_or_else(|| "upstream".into());
+        command
+            .args(["merge", "--no-edit", "--no-verify", "-q", "-m"])
+            .arg(format!("Merge {upstream}"))
+            .arg(&incoming);
     } else {
-        command.args(["merge", "--ff-only", "-q", "@{upstream}"]);
+        command.args(["merge", "--ff-only", "-q", &incoming]);
     }
     let out = output(command, "git merge")?;
     let reports = read_reports(&report);
@@ -783,10 +872,15 @@ pub fn integrate(dir: &Path, driver: &Path, message: &str) -> Result<Integration
             .map(str::to_owned)
             .collect::<Vec<_>>();
         let _ = git_run(dir, &["merge", "--abort"], "GIT_FAILED");
+        // The driver says why it could not merge project.kerf; keep that.
         let detail = if unresolved.is_empty() {
             failure(&out)
         } else {
-            format!("both sides changed {}", unresolved.join(", "))
+            format!(
+                "both sides changed {}: {}",
+                unresolved.join(", "),
+                failure(&out)
+            )
         };
         return Err(CollabError::new(
             "MERGE_FAILED",
@@ -876,7 +970,13 @@ pub fn push(dir: &Path) -> Result<Pushed> {
         };
         network_run(
             dir,
-            &["push", "--quiet", "-u", &remote, &format!("HEAD:refs/heads/{branch}")],
+            &[
+                "push",
+                "--quiet",
+                "-u",
+                &remote,
+                &format!("HEAD:refs/heads/{branch}"),
+            ],
             "GIT_PUSH_FAILED",
         )?;
         return Ok(Pushed {
@@ -910,7 +1010,9 @@ pub fn switch(dir: &Path, branch_name: &str, create: bool, message: &str) -> Res
     let previous = branch(dir);
     let before = project_blob(dir, "HEAD");
     let mut command = git(dir);
-    command.env("GIT_LFS_SKIP_SMUDGE", "1").args(["switch", "-q"]);
+    command
+        .env("GIT_LFS_SKIP_SMUDGE", "1")
+        .args(["switch", "-q"]);
     if create {
         command.arg("-c");
     }
@@ -927,12 +1029,19 @@ pub fn switch(dir: &Path, branch_name: &str, create: bool, message: &str) -> Res
 /// The commits `git switch <name>` may check out: the local branch, else
 /// the remote branches of that name it would start tracking.
 fn switch_targets(dir: &Path, name: &str) -> Vec<String> {
-    if let Some(commit) = git_text(dir, &["rev-parse", "--verify", "-q", &format!("refs/heads/{name}")]) {
+    if let Some(commit) = git_text(
+        dir,
+        &["rev-parse", "--verify", "-q", &format!("refs/heads/{name}")],
+    ) {
         return vec![commit];
     }
     git_text(
         dir,
-        &["for-each-ref", "--format=%(objectname) %(refname:lstrip=3)", "refs/remotes"],
+        &[
+            "for-each-ref",
+            "--format=%(objectname) %(refname:lstrip=3)",
+            "refs/remotes",
+        ],
     )
     .unwrap_or_default()
     .lines()
@@ -983,12 +1092,15 @@ pub fn pull_request(dir: &Path, title: &str, body: &str) -> Result<PullRequest> 
             format!("`{branch}` is the main branch; make a branch for this change first"),
         ));
     }
-    if local_tools().gh {
+    let mut gh_failure = None;
+    if local_tools().gh_signed_in {
         let mut command = Command::new("gh");
         command
             .current_dir(dir)
             .env("GH_PROMPT_DISABLED", "1")
-            .args(["pr", "create", "--head", &branch, "--title", title, "--body", body]);
+            .args([
+                "pr", "create", "--head", &branch, "--title", title, "--body", body,
+            ]);
         non_interactive(&mut command, dir);
         let out = output(command, "gh")?;
         let text = format!(
@@ -1003,13 +1115,21 @@ pub fn pull_request(dir: &Path, title: &str, body: &str) -> Result<PullRequest> 
             });
         }
         if !out.status.success() {
-            return Err(CollabError::new("GH_FAILED", failure(&out)));
+            gh_failure = Some(failure(&out));
         }
     }
     let remote = remote_name(dir)
         .and_then(|name| git_text(dir, &["remote", "get-url", &name]))
-        .ok_or_else(|| CollabError::new("NO_REMOTE", "the project has no remote to open a pull request on"))?;
+        .ok_or_else(|| {
+            CollabError::new(
+                "NO_REMOTE",
+                "the project has no remote to open a pull request on",
+            )
+        })?;
     let web = github_web_url(&remote).ok_or_else(|| {
+        if let Some(failure) = &gh_failure {
+            return CollabError::new("GH_FAILED", failure.clone());
+        }
         CollabError::new(
             "NOT_GITHUB",
             format!("{remote} is not a GitHub repository; install gh or open the pull request on its site"),
@@ -1033,13 +1153,28 @@ pub fn default_branch(dir: &Path) -> Option<String> {
     let remote = remote_name(dir)?;
     git_text(
         dir,
-        &["symbolic-ref", "--short", "-q", &format!("refs/remotes/{remote}/HEAD")],
+        &[
+            "symbolic-ref",
+            "--short",
+            "-q",
+            &format!("refs/remotes/{remote}/HEAD"),
+        ],
     )
     .and_then(|name| name.split_once('/').map(|(_, branch)| branch.to_owned()))
     .or_else(|| {
         ["main", "master"]
             .into_iter()
-            .find(|name| git_ok(dir, &["rev-parse", "--verify", "-q", &format!("refs/remotes/{remote}/{name}")]))
+            .find(|name| {
+                git_ok(
+                    dir,
+                    &[
+                        "rev-parse",
+                        "--verify",
+                        "-q",
+                        &format!("refs/remotes/{remote}/{name}"),
+                    ],
+                )
+            })
             .map(str::to_owned)
     })
 }
@@ -1109,11 +1244,16 @@ pub fn create_github_repository(dir: &Path, name: &str, private: bool) -> Result
 /// repository. Returns the project directory. A repository that tracks
 /// machine-local settings is refused, and the clone removed.
 pub fn clone(url: &str, location: &Path) -> Result<PathBuf> {
-    let name = repository_name(url)
-        .ok_or_else(|| CollabError::new("INVALID_URL", format!("cannot name a folder for {url}")))?;
+    let name = repository_name(url).ok_or_else(|| {
+        CollabError::new("INVALID_URL", format!("cannot name a folder for {url}"))
+    })?;
     let target = location.join(&name);
     let existed = target.exists();
-    if existed && fs::read_dir(&target).map(|mut d| d.next().is_some()).unwrap_or(true) {
+    if existed
+        && fs::read_dir(&target)
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(true)
+    {
         return Err(CollabError::new(
             "ALREADY_EXISTS",
             format!("{} already exists", target.display()),
@@ -1180,14 +1320,21 @@ mod tests {
     }
 
     fn value<'a>(vars: &[(&str, &'a str)], key: &str) -> Option<&'a str> {
-        vars.iter().find(|(name, _)| *name == key).map(|(_, value)| *value)
+        vars.iter()
+            .find(|(name, _)| *name == key)
+            .map(|(_, value)| *value)
     }
 
     #[test]
     fn network_git_fails_instead_of_prompting_or_stalling() {
         let vars = non_interactive_env(env_with(&[]), String::new);
         let ssh = value(&vars, "GIT_SSH_COMMAND").unwrap();
-        for option in ["BatchMode=yes", "ConnectTimeout=", "ServerAliveInterval=", "ServerAliveCountMax="] {
+        for option in [
+            "BatchMode=yes",
+            "ConnectTimeout=",
+            "ServerAliveInterval=",
+            "ServerAliveCountMax=",
+        ] {
             assert!(ssh.contains(option), "{ssh}");
         }
         assert_eq!(value(&vars, "SSH_ASKPASS_REQUIRE"), Some("never"));
@@ -1197,7 +1344,10 @@ mod tests {
 
     #[test]
     fn the_persons_own_ssh_command_and_stall_limits_win() {
-        for env in [[("GIT_SSH_COMMAND", "ssh -i key")], [("GIT_SSH", "/usr/bin/plink")]] {
+        for env in [
+            [("GIT_SSH_COMMAND", "ssh -i key")],
+            [("GIT_SSH", "/usr/bin/plink")],
+        ] {
             let vars = non_interactive_env(env_with(&env), String::new);
             assert_eq!(value(&vars, "GIT_SSH_COMMAND"), None, "{env:?}");
             assert_eq!(value(&vars, "SSH_ASKPASS_REQUIRE"), Some("never"));
@@ -1208,7 +1358,8 @@ mod tests {
         assert_eq!(value(&vars, "GIT_SSH_COMMAND"), None);
         assert_eq!(value(&vars, "GIT_HTTP_LOW_SPEED_TIME"), None);
         assert_eq!(value(&vars, "GIT_HTTP_LOW_SPEED_LIMIT"), Some("1000"));
-        let vars = non_interactive_env(env_with(&[("GIT_HTTP_LOW_SPEED_LIMIT", "10")]), String::new);
+        let vars =
+            non_interactive_env(env_with(&[("GIT_HTTP_LOW_SPEED_LIMIT", "10")]), String::new);
         assert_eq!(value(&vars, "GIT_HTTP_LOW_SPEED_LIMIT"), None);
     }
 
@@ -1232,6 +1383,9 @@ mod tests {
             ".kerf/mcp.json/inner",
             ".kerf",
             ".Kerf",
+            ".kerf/mcp.j\u{17f}on",
+            ".\u{212a}erf/config.json",
+            ".kerf/vi\u{17f}ion.json",
         ] {
             assert!(is_local_setting(path), "{path}");
         }

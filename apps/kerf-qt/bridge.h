@@ -26,8 +26,9 @@ void kerf_bridge_free(void *bridge);
 // projection_repair writes the editor's project over it.
 // Presets: preset_library lists the project's preset library (presets/,
 // then .kerf/presets and the project folder); preset_save {name, replace?}
-// saves the program sequence as presets/<name>.kerfpreset, refusing an
-// existing file unless replace.
+// saves the program sequence as presets/<name>.kerfpreset (the name cleaned
+// up as project folders are: '/', '\\' and ':' become '-', surrounding dots
+// and spaces trimmed), refusing an existing file, by path, unless replace.
 // Collaboration over Git, all asynchronous and answered by collab events:
 // collab_status; collab_sync {message?} commits local edits, pulls and
 // merges the upstream branch, and pushes; collab_live {enabled, interval?}
@@ -36,7 +37,9 @@ void kerf_bridge_free(void *bridge);
 // create} commits local edits, then switches (or creates and switches);
 // collab_pull_request {title, body?}; collab_publish {remote?, github?:
 // {name?, private}} makes the project a repository if it is not one, adds
-// the remote or creates the GitHub repository with gh, then pushes;
+// the remote or creates the GitHub repository with gh, then pushes (with
+// neither, it only makes the project a repository on this computer, and an
+// existing repository without a remote is refused);
 // collab_consolidate copies media from outside the project into media/ and
 // relinks it.
 // false means the bounded queue is full; show an error, never silently drop edits.
@@ -48,13 +51,15 @@ bool kerf_bridge_send(void *bridge, const char *json);
 // viewer_reset, preview {status,progress,message}, export {status,path,progress},
 // effect_preview {clip,fx,width,height,rgba (base64)},
 // media_status {missing: [mediaId], pointers: [mediaId] (Git LFS files not
-// downloaded), external: [mediaId] (outside the project folder)},
+// downloaded), external: [mediaId] (outside the project folder, or ignored
+// by Git there)},
 // preset_library {directory, presets: [{path (relative to the project),
 // name, slots: [{id, seconds, video, audio, clips}], texts: {clipId: text},
 // author?, updated? (ISO 8601, from the last commit that touched it),
 // error?}]}, preset_saved {path},
 // collab {status: {repository, enclosing?, branch, upstream, remote, ahead,
-// behind, changed, conflicted, branches, lfs, gh, live, busy}},
+// behind, changed, conflicted, branches, lfs, gh (installed and signed in),
+// live, busy}},
 // collab_sync {stage: committing|fetching|merging|pushing|downloading|done|
 // failed, message?, report?: {committed?, incoming: [{commit, author,
 // subject}], fastForward, pushed, conflicts: [{path, what, kept}], renamed:

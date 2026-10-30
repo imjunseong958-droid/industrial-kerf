@@ -19,19 +19,27 @@ use std::thread;
 
 /// Copy the file at `path` into the project's `media/` folder on its own
 /// thread, then hand the runtime worker `then(copy)`, which names the copy
-/// by its project-relative path. A copy that fails is reported. Live sync
-/// waits while copies run.
+/// by its project-relative path. A file `probe` refuses is reported and
+/// never copied, so what is not media never lands in `media/`, where the
+/// next sync would share it; so is a copy that fails. Live sync waits while
+/// copies run.
 pub(crate) fn copy_then(
     shared: &Arc<Shared>,
     path: &str,
     commands: &SyncSender<Command>,
     tx: &SyncSender<Value>,
+    probe: impl FnOnce(&Path) -> Result<(), String> + Send + 'static,
     then: impl FnOnce(String) -> Command + Send + 'static,
 ) {
     let source = absolute(&shared.directory, Path::new(path));
     let copying = Copying::start(shared);
     let (commands, tx) = (commands.clone(), tx.clone());
     thread::spawn(move || {
+        if let Err(error) = probe(&source) {
+            drop(copying);
+            crate::error(&tx, format!("cannot import: {error}"));
+            return;
+        }
         let copied = copy_into_media(&copying.0.directory, &source);
         drop(copying);
         match copied {
@@ -44,6 +52,11 @@ pub(crate) fn copy_then(
             ),
         }
     });
+}
+
+/// Whether `file` reads as media, as an import reads it.
+pub(crate) fn probe(file: &Path) -> Result<(), String> {
+    crate::tasks::probe(file).map(drop)
 }
 
 /// A copy into `media/` that is running, counted in `Shared::copies` until
@@ -291,13 +304,43 @@ mod tests {
         fs::write(&source, b"picture").unwrap();
         let (commands, copied) = mpsc::sync_channel(1);
         let (tx, _events) = mpsc::sync_channel(4);
-        copy_then(&shared, &source.to_string_lossy(), &commands, &tx, |path| {
-            Command::Import { path }
-        });
+        copy_then(
+            &shared,
+            &source.to_string_lossy(),
+            &commands,
+            &tx,
+            |_| Ok(()),
+            |path| Command::Import { path },
+        );
         let Ok(Command::Import { path }) = copied.recv_timeout(Duration::from_secs(10)) else {
             panic!("expected the copy's import");
         };
         assert!(path.starts_with("media/clip-"), "{path}");
+        assert_eq!(shared.copies.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_file_that_is_not_media_is_never_copied_into_media() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("Film");
+        fs::create_dir_all(project.join("media")).unwrap();
+        let shared = Arc::new(shared(&project));
+        let source = root.path().join("notes.txt");
+        fs::write(&source, b"my secret notes").unwrap();
+        let (commands, imports) = mpsc::sync_channel(1);
+        let (tx, events) = mpsc::sync_channel(4);
+        copy_then(
+            &shared,
+            &source.to_string_lossy(),
+            &commands,
+            &tx,
+            |file| Err(format!("{} is text, not media", file.display())),
+            |path| Command::Import { path },
+        );
+        let event = events.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!(event["type"], "error", "{event}");
+        assert!(imports.try_recv().is_err());
+        assert_eq!(fs::read_dir(project.join("media")).unwrap().count(), 0);
         assert_eq!(shared.copies.load(Ordering::SeqCst), 0);
     }
 
@@ -452,5 +495,25 @@ mod tests {
         assert!(copied[0].starts_with("clip-"), "{copied:?}");
         // What the editor passes in reads a file the way an import does.
         assert!(crate::tasks::probe(&secret).is_err());
+    }
+
+    #[test]
+    fn text_that_ffprobe_draws_as_a_picture_is_not_media() {
+        let root = tempfile::tempdir().unwrap();
+        for (name, text) in [
+            ("secret-key.asc", "-----BEGIN PGP PRIVATE KEY BLOCK-----\n"),
+            ("passwords.txt", "my secret notes\n"),
+        ] {
+            let path = root.path().join(name);
+            fs::write(&path, text.repeat(64)).unwrap();
+            let Ok(info) = kerf_engine::info(&path.to_string_lossy()) else {
+                // Without ffprobe nothing reads as media anyway.
+                continue;
+            };
+            assert!(
+                crate::tasks::probed_media(&path, &info).is_err(),
+                "{name} read as media: {info:?}"
+            );
+        }
     }
 }
