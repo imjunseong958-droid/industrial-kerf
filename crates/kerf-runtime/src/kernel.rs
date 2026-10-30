@@ -7,7 +7,8 @@
 use crate::RuntimeError;
 use kerf_engine::ProbeInfo;
 use kerf_lang::{
-    apply_script_with, parse_document, print_document, print_ops, Facts, PrintOptions, Speech,
+    apply_script_with, parse_document, print_document, print_ops, Breaks, Facts, PrintOptions,
+    Speech,
 };
 use kerf_model::{
     apply, AudioInfo, Catalog, ClipChange, Content, Diagnostic, Edge, Effect, FxDef, Id,
@@ -130,6 +131,18 @@ impl Facts for CachedFacts {
                 })
                 .collect(),
         }
+    }
+
+    /// Where the media index made on import found pauses and cuts. Nothing
+    /// is indexed here.
+    fn breaks(&self, media: &Media) -> Option<Breaks> {
+        let path = self.directory.join(&media.path);
+        let cache = kerf_engine::derivatives::DerivativeCache::new(&self.directory);
+        let index = kerf_engine::cached_media_index(&path, &cache)?;
+        Some(Breaks {
+            pauses: index.pauses,
+            cuts: index.cuts,
+        })
     }
 }
 

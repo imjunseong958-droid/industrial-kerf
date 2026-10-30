@@ -11,8 +11,7 @@ use base64::Engine;
 use kerf_engine::derivatives::{DerivativeCache, SourceIdentity};
 use kerf_engine::render::{render_program, RenderOptions};
 use kerf_lang::{
-    apply_script, apply_script_with, parse_document, print_document, reference, Clock, Facts,
-    PrintOptions,
+    apply_script, apply_script_with, parse_document, print_document, reference, Clock, PrintOptions,
 };
 use kerf_model::{Catalog, Content, Media, Project, Sequence, Time};
 use kerf_runtime::{
@@ -91,8 +90,9 @@ A script's `captions` line needs a transcript of the clip's media made \
 earlier with `look`; the proposal's script shows the caption lines it became.
 
 Check findings include what an editor would catch: black frames, picture that \
-leaves the frame's edges black, flash frames, and sound cut inside a word \
-(known once a transcript of that media has been made).
+leaves the frame's edges black, flash frames, a frame or two of another shot at \
+a clip's edge (from the media's index), and sound cut inside a word (known once \
+a transcript of that media has been made).
 
 Work like an editor. Look at the footage before choosing ranges, and look at \
 the proposal before saying it is done: its preview, its findings, and with \
@@ -1603,15 +1603,7 @@ fn check(project: &Project, dir: &Path) -> Value {
             "message": warning.message,
         }));
     }
-    let facts = CachedFacts::new(dir);
-    findings.extend(crate::lint::findings(project, |media| {
-        facts
-            .speech(media)
-            .words
-            .into_iter()
-            .map(|word| (word.start, word.end, word.text))
-            .collect()
-    }));
+    findings.extend(crate::lint::findings(project, &CachedFacts::new(dir)));
     let valid = !findings
         .iter()
         .any(|finding| finding["severity"] == "error");

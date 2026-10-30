@@ -18,13 +18,14 @@ line, applied in order and atomically. Later lines see what earlier lines did.
 - Positions are sequence timecode (`01:00:04:12`, drop-frame `01:00:04;12`)
   or offsets from the sequence start (`96f`, `4.5s`), or anchors: `end` (the
   end of the sequence), `c3.start`, `c3.end`, a marker's id (`beat1`, or
-  `beat1.end` past its duration), or `c3@<source position>`, where clip c3
+  `beat1.end` past its duration), or `c3@<media timecode>`, where clip c3
   plays that media position. Each takes an optional amount, such as
   `at=c3.end`, `to=c3.start-6f`, `at=beat1+2f`, or `at=c3@00:12:04:10`.
   Prefer anchors to computing timecode: a time seen in a clip's media is
   `c3@` that time.
 - Source positions (`src=`, `out=`) are media timecode or offsets from the
-  media's first frame.
+  media's first frame, or a quoted phrase a transcript heard (`src="so we
+  closed"`): an in point where it starts, an out point where it ends.
 - Durations: `00:00:02:12`, `60f`, or `2.5s`. Amounts: `+12f`, `-6f`, `-0.5s`.
   Seconds round to the nearest frame.
 - Keyframes use clip-relative times: `opacity={0f:0 12f:1:ease}`.
@@ -76,6 +77,10 @@ media add <id> path="…" rate=<fps> dur=<dur> [tc=<tc>] [video=WxH [alpha=true]
 media relink <id> path="…"  ·  media remove <id>
 sequence add <id> rate=<fps> size=WxH [name="…"] [start=<tc>]  ·  sequence set|remove <id> …
 ```
+
+`snap=pause|cut [within=<amount>]` on trim, split, insert, and overwrite
+moves the edge into the nearest pause of the media's sound, or onto a cut of
+its picture, by its index; within half a second unless given.
 
 Masks combine in order by `mode` (add, subtract, intersect, lighten,
 darken, difference); `mode=none` cuts nothing and leaves a path that

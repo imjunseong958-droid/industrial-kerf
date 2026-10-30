@@ -1,5 +1,6 @@
 use super::*;
 use crate::doc::{parse_document, print_document, PrintOptions};
+use crate::{Breaks, Speech, Word};
 use kerf_model::Value;
 
 const BASE: &str = r#"kerf 1
@@ -374,6 +375,179 @@ marker add at=c2@00:01:01:00+2f as=mk1",
         "{outside:?}"
     );
     assert!(fails(&project, "split c1 at=c9@00:00:11:00")
+        .message
+        .contains("no clip `c9`"));
+}
+
+/// What analysis knows of m1: a few words, a pause, and a cut.
+struct Known;
+
+impl Facts for Known {
+    fn speech(&self, _: &Media) -> Speech {
+        let word = |start: f64, end: f64, text: &str| Word {
+            start,
+            end,
+            text: text.into(),
+        };
+        Speech {
+            words: vec![
+                word(10.5, 11.0, " So"),
+                word(11.0, 11.4, " we"),
+                word(11.4, 12.0, " closed,"),
+                word(12.6, 13.0, " the"),
+                word(13.0, 13.5, " deal."),
+                word(20.0, 20.5, " So"),
+            ],
+            covered: vec![(0.0, 600.0)],
+        }
+    }
+
+    fn breaks(&self, _: &Media) -> Option<Breaks> {
+        Some(Breaks {
+            pauses: vec![(12.0, 12.6)],
+            cuts: vec![11.5],
+        })
+    }
+}
+
+fn known(project: &Project, script: &str) -> Result<Applied, Diagnostic> {
+    apply_script_with(project, Catalog::builtin(), &Known, script).map_err(|mut e| e.remove(0))
+}
+
+fn source(applied: &Applied, clip: &str) -> (i64, i64) {
+    let (from, to) = applied.project.clip(clip).unwrap().source_range().unwrap();
+    (frames(from), frames(to))
+}
+
+#[test]
+fn src_and_out_can_quote_what_was_said() {
+    let project = base();
+    // From the frame "So we" starts to the end of the frame "the deal" ends.
+    let placed = known(
+        &project,
+        r#"insert media=m1 src="so we" out="The deal." at=end on=V1,A1 as=c3,a3"#,
+    )
+    .unwrap();
+    assert_eq!(source(&placed, "c3"), (252, 324));
+    // A trim takes a phrase's start for an in point and its end for an out.
+    let trimmed = known(
+        &project,
+        "trim c1 out src=\"closed\"\ntrim c1 in src=\"we\"",
+    )
+    .unwrap();
+    assert_eq!(source(&trimmed, "c1"), (264, 288));
+
+    let twice = known(&project, r#"trim c1 in src="so""#).unwrap_err();
+    assert!(
+        twice
+            .message
+            .contains("is said 2 times in `m1`, at 00:00:10:12, 00:00:20:00"),
+        "{twice:?}"
+    );
+    let unheard = known(&project, r#"trim c1 in src="nowhere""#).unwrap_err();
+    assert!(unheard.message.contains("heard \"nowhere\""), "{unheard:?}");
+    // Without transcripts there is nothing to quote.
+    assert!(fails(&project, r#"trim c1 in src="so we""#)
+        .message
+        .contains("no transcript of `m1`"));
+}
+
+#[test]
+fn edges_snap_into_pauses_and_onto_cuts() {
+    let project = base();
+    // c1 plays m1 from 10s at the sequence's start. 1s 21f plays 11.875s,
+    // just before the pause that starts at 12s: the out point moves into it.
+    let trimmed = known(&project, "trim c1 out to=01:00:01:21 snap=pause").unwrap();
+    assert_eq!(frames(trimmed.project.clip("c1").unwrap().duration), 49);
+    // 1s 10f plays 11.42s; the picture cuts at 11.5s.
+    let split = known(&project, "split c1 at=01:00:01:10 snap=cut as=c1b").unwrap();
+    assert_eq!(frames(split.project.clip("c1b").unwrap().start), 36);
+    // A placed source's in and out points move into the pause too.
+    let placed = known(
+        &project,
+        "insert media=m1 src=00:00:11:20 out=00:00:13:00 snap=pause at=end on=V1 as=c3",
+    )
+    .unwrap();
+    assert_eq!(source(&placed, "c3"), (289, 301));
+
+    let far = known(&project, "split c1 at=01:00:00:12 snap=cut within=2f").unwrap_err();
+    assert!(far.message.contains("no cut of `m1` within"), "{far:?}");
+    assert!(fails(&project, "split c1 at=01:00:01:10 snap=cut")
+        .message
+        .contains("not indexed yet"));
+    assert!(fails(&project, "split c1 at=01:00:01:10 within=2f")
+        .message
+        .contains("within= goes with snap="));
+    assert!(fails(&project, "split c1 at=01:00:01:10 snap=beat")
+        .message
+        .contains("use pause or cut"));
+}
+
+/// Facts that know only where m1's picture cuts, as an index records them.
+struct Cuts(Vec<f64>);
+
+impl Facts for Cuts {
+    fn speech(&self, _: &Media) -> Speech {
+        Speech::default()
+    }
+
+    fn breaks(&self, _: &Media) -> Option<Breaks> {
+        Some(Breaks {
+            pauses: Vec::new(),
+            cuts: self.0.clone(),
+        })
+    }
+}
+
+#[test]
+fn snapping_lands_on_the_cut_and_inside_the_clip() {
+    let project = base();
+    let cut = |cuts: &[f64], script: &str| {
+        apply_script_with(&project, Catalog::builtin(), &Cuts(cuts.to_vec()), script)
+            .map_err(|mut e| e.remove(0))
+    };
+    // An index keeps microseconds: frame 290 of m1 at 24 fps, 12.0833…s, is
+    // 12.083333, a hair before the frame. The edge still lands on it.
+    let split = cut(&[12.083333], "split c1 at=01:00:02:00 snap=cut as=c1b").unwrap();
+    assert_eq!(frames(split.project.clip("c1b").unwrap().start), 50);
+    let placed = cut(
+        &[11.5, 12.041667],
+        "insert media=m1 src=00:00:11:12 out=00:00:12:00 snap=cut at=end on=V1 as=c3",
+    )
+    .unwrap();
+    assert_eq!(source(&placed, "c3"), (276, 289));
+    // A nearer cut before c1's in point does not count for a split inside it.
+    let inside = cut(&[9.9, 10.3], "split c1 at=01:00:00:02 snap=cut as=c1b").unwrap();
+    assert_eq!(frames(inside.project.clip("c1b").unwrap().start), 7);
+    assert!(cut(&[9.9], "split c1 at=01:00:00:02 snap=cut")
+        .unwrap_err()
+        .message
+        .contains("would do here"));
+}
+
+#[test]
+fn snapping_moves_only_the_edges_a_line_gives() {
+    let project = base();
+    // Only out= is given, so only the out point moves; it is already in
+    // the pause.
+    let placed = known(
+        &project,
+        "insert media=m1 out=00:00:12:05 snap=pause at=end on=V1 as=c3",
+    )
+    .unwrap();
+    assert_eq!(source(&placed, "c3"), (0, 293));
+    assert!(
+        known(&project, "insert media=m1 dur=2s snap=pause at=end on=V1")
+            .unwrap_err()
+            .message
+            .contains("give one")
+    );
+    // Keyed and positional arguments mix as in any line.
+    let trimmed = known(&project, r#"trim c1 src="closed" out"#).unwrap();
+    assert_eq!(source(&trimmed, "c1"), (240, 288));
+    // A line without media reads its fields as it always has.
+    assert!(known(&project, r#"trim c9 in src="so we""#)
+        .unwrap_err()
         .message
         .contains("no clip `c9`"));
 }

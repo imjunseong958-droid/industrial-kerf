@@ -587,6 +587,58 @@ fn scripts_anchor_to_clips_and_caption_only_what_was_heard() {
 }
 
 #[test]
+fn edits_snap_to_what_the_index_found() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    // The footage cuts from red to blue at 2s and falls silent after 3s;
+    // looking at it makes its index.
+    ok(&router, "look", json!({"media": "m1"}));
+    let split = ok(
+        &router,
+        "edit",
+        json!({"script": "split c1 at=00:00:01:25 snap=cut as=c1b"}),
+    );
+    let script = split["script"].as_str().unwrap();
+    assert!(script.contains("split c1 at=00:00:02:00"), "{script}");
+    router
+        .runtime()
+        .reject_proposal(split["proposal"].as_str().unwrap())
+        .unwrap();
+    let trimmed = ok(
+        &router,
+        "edit",
+        json!({"script": "trim c1 out to=00:00:02:15 snap=pause within=1s"}),
+    );
+    // Asked for 2s 15f, the out point lands just inside the pause after 3s.
+    let script = trimmed["script"].as_str().unwrap();
+    let shortened: i64 = script
+        .split_once("trim c1 out -")
+        .and_then(|(_, rest)| rest.split_once('f'))
+        .and_then(|(frames, _)| frames.parse().ok())
+        .unwrap_or_else(|| panic!("{script}"));
+    assert!((26..=30).contains(&shortened), "{script}");
+    router
+        .runtime()
+        .reject_proposal(trimmed["proposal"].as_str().unwrap())
+        .unwrap();
+
+    // Starting a frame before the cut shows a sliver of the red shot.
+    let sliver = ok(
+        &router,
+        "edit",
+        json!({"script": "trim c1 in to=00:00:01:29"}),
+    );
+    let findings = sliver["check"]["findings"].as_array().unwrap();
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding["code"] == "cut.near_scene_cut"),
+        "{sliver}"
+    );
+}
+
+#[test]
 fn edits_are_checked_like_an_editor_would() {
     let Some((_directory, router)) = router() else {
         return;
