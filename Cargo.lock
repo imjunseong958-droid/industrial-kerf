@@ -1314,6 +1314,7 @@ name = "kerf-runtime"
 version = "0.1.0"
 dependencies = [
  "fs2",
+ "kerf-collab",
  "kerf-engine",
  "kerf-lang",
  "kerf-model",

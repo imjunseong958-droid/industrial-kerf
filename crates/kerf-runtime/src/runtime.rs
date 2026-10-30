@@ -1419,6 +1419,34 @@ impl Runtime {
                 &idempotency_key,
                 base_revision,
             )?)),
+            RuntimeRequest::CollabIntegrate {
+                actor,
+                idempotency_key,
+                message,
+            } => self.collab(&actor, &idempotency_key, "integrate", message, |directory, message| {
+                let integration = kerf_collab::git::integrate(directory, &merge_driver()?, message)
+                    .map_err(collab_error)?;
+                let undo = integration.previous.clone().map(Undo::Merge);
+                Ok((serde_json::to_value(integration).unwrap_or_default(), undo))
+            }),
+            RuntimeRequest::CollabSwitch {
+                actor,
+                idempotency_key,
+                branch,
+                create,
+                message,
+            } => self.collab(
+                &actor,
+                &idempotency_key,
+                &format!("switch:{branch}:{create}"),
+                message,
+                |directory, message| {
+                    let switched = kerf_collab::git::switch(directory, &branch, create, message)
+                        .map_err(collab_error)?;
+                    let undo = switched.previous.clone().map(Undo::Switch);
+                    Ok((serde_json::to_value(switched).unwrap_or_default(), undo))
+                },
+            ),
             RuntimeRequest::AcceptProposal {
                 proposal_id,
                 actor,
@@ -1675,6 +1703,128 @@ impl Runtime {
         )
     }
 
+    /// Run a git operation on the project's repository and load the
+    /// project it leaves, as one revision that clears history when it
+    /// changed. `operation` runs with the commit message and returns its
+    /// report and how to undo it; the report comes back with the state, with
+    /// `summary` lines describing what changed in the project. A project
+    /// the operation leaves that does not read is undone and reported.
+    fn collab(
+        &mut self,
+        actor: &str,
+        key: &str,
+        kind: &str,
+        message: Option<String>,
+        operation: impl FnOnce(&Path, &str) -> Result<(serde_json::Value, Option<Undo>), RuntimeError>,
+    ) -> Result<RuntimeResponse, RuntimeError> {
+        validate_request_identity(actor, key)?;
+        let receipt = format!("{actor}:{key}");
+        let fingerprint = format!("{actor}:collab:{kind}");
+        if let Some(replayed) = self.replayed(&receipt, &fingerprint) {
+            return replayed.map(|state| RuntimeResponse::Collab {
+                state,
+                report: serde_json::json!({"replayed": true}),
+            });
+        }
+        if self.projection_status == ProjectionStatus::Diverged {
+            return Err(RuntimeError::new(
+                "PROJECTION_DIVERGED",
+                "project.kerf was changed outside Kerf; load it or keep the editor's version before syncing",
+            ));
+        }
+        let directory = self
+            .project_path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf();
+        let message = match message.filter(|message| !message.trim().is_empty()) {
+            Some(message) => message,
+            None => kerf_collab::git::commit_message(&self.uncommitted_changes(&directory)),
+        };
+        let (mut report, undo) = operation(&directory, &message)?;
+        // What git left decides, not what git reports: after a crash between
+        // a merge and its journal record, a retry merges nothing while this
+        // runtime is still behind.
+        let project = match self.read_projection(&directory) {
+            Ok(project) => project,
+            Err(error) => {
+                if let Some(undo) = undo {
+                    let undone = match undo {
+                        Undo::Merge(previous) => kerf_collab::git::undo_merge(&directory, &previous),
+                        Undo::Switch(previous) => kerf_collab::git::undo_switch(&directory, &previous),
+                    };
+                    let _ = kerf_model::look::refresh_project_looks(&directory);
+                    if undone.is_ok() {
+                        self.refresh_projection_status();
+                    }
+                }
+                return Err(RuntimeError::new(
+                    "COLLAB_UNREADABLE_PROJECT",
+                    format!(
+                        "the project the other branch has cannot be read here, so it was not merged: {}",
+                        error.message
+                    ),
+                ));
+            }
+        };
+        if project == self.state.project {
+            self.refresh_projection_status();
+            return Ok(RuntimeResponse::Collab {
+                state: self.snapshot(),
+                report,
+            });
+        }
+        report["summary"] = serde_json::json!(kerf_collab::summarize(&self.state.project, &project));
+        let mut candidate = self.state.clone();
+        candidate.project = project;
+        candidate.revision = self.state.revision + 1;
+        candidate.past.clear();
+        candidate.future.clear();
+        candidate.proposal = None;
+        let mut snapshot = self.snapshot_of(&candidate);
+        snapshot.projection_status = ProjectionStatus::Current.as_str().into();
+        let operation = candidate.record_operation(receipt, fingerprint, snapshot);
+        let change = Change {
+            script: None,
+            document: Some(kernel::print(&candidate.project)),
+            digest: digest(&candidate.project),
+        };
+        self.commit_projection_import(
+            candidate,
+            JournalEvent::ProjectionImport {
+                change,
+                operation: Some(operation),
+            },
+        )?;
+        // A checkpoint now keeps a later start from replaying documents that
+        // use looks a branch switch has since taken away.
+        if self.projection_status == ProjectionStatus::Current && self.persist_checkpoint().is_ok() {
+            let _ = truncate_journal(&self.journal_path);
+            self.journal_records_since_checkpoint = 0;
+        }
+        Ok(RuntimeResponse::Collab {
+            state: self.snapshot(),
+            report,
+        })
+    }
+
+    /// `project.kerf` as it is on disk, read with the looks now beside it.
+    fn read_projection(&self, directory: &Path) -> Result<Project, RuntimeError> {
+        let _ = kerf_model::look::refresh_project_looks(directory);
+        let text = fs::read_to_string(&self.project_path).map_err(io_error)?;
+        kernel::parse(&text)
+    }
+
+    /// How the project differs from its last commit, for a commit message.
+    fn uncommitted_changes(&self, directory: &Path) -> Vec<String> {
+        match kerf_collab::git::committed_document(directory)
+            .and_then(|text| kernel::parse(&text).ok())
+        {
+            Some(committed) => kerf_collab::summarize(&committed, &self.state.project),
+            None => vec![format!("Create {}", self.state.project.name)],
+        }
+    }
+
     fn repair_projection(&mut self) -> Result<StateSnapshot, RuntimeError> {
         self.materialize_project()?;
         self.projection_status = ProjectionStatus::Current;
@@ -1743,6 +1893,26 @@ fn verify_change(change: &Change, project: &Project, sequence: u64) -> Result<()
             format!("journal record {sequence} did not reproduce its project"),
         ))
     }
+}
+
+/// How to go back when a git operation leaves a project that does not
+/// read: the commit a merge started from, or the branch a switch left.
+enum Undo {
+    Merge(String),
+    Switch(String),
+}
+
+/// The program git runs to merge `project.kerf`: this kerfd, unless
+/// `KERF_MERGE_DRIVER` names another (tests run inside a harness binary).
+fn merge_driver() -> Result<PathBuf, RuntimeError> {
+    match std::env::var_os("KERF_MERGE_DRIVER") {
+        Some(path) => Ok(PathBuf::from(path)),
+        None => std::env::current_exe().map_err(io_error),
+    }
+}
+
+fn collab_error(error: kerf_collab::git::CollabError) -> RuntimeError {
+    RuntimeError::new(error.code, error.message)
 }
 
 fn validate_request_identity(actor: &str, key: &str) -> Result<(), RuntimeError> {

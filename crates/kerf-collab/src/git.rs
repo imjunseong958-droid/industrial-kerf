@@ -112,6 +112,8 @@ impl From<&Conflict> for ReportedConflict {
 pub struct Integration {
     /// The commit made of local edits first, if there were any.
     pub committed: Option<String>,
+    /// Where the branch was before the merge, to go back to.
+    pub previous: Option<String>,
     pub incoming: Vec<CommitSummary>,
     pub fast_forward: bool,
     pub conflicts: Vec<ReportedConflict>,
@@ -126,6 +128,8 @@ pub struct Integration {
 pub struct Switched {
     pub committed: Option<String>,
     pub branch: String,
+    /// The branch switched from, to go back to.
+    pub previous: Option<String>,
     pub project_changed: bool,
 }
 
@@ -242,8 +246,24 @@ pub fn tools() -> Tools {
     tools
 }
 
+/// Whether `dir` is the top of a Git work tree. A project inside some other
+/// repository (a folder in a source checkout, say) is not shared through it.
 pub fn is_repository(dir: &Path) -> bool {
-    git_text(dir, &["rev-parse", "--is-inside-work-tree"]).as_deref() == Some("true")
+    let Some(top) = git_text(dir, &["rev-parse", "--show-toplevel"]) else {
+        return false;
+    };
+    match (fs::canonicalize(&top), fs::canonicalize(dir)) {
+        (Ok(top), Ok(dir)) => top == dir,
+        _ => false,
+    }
+}
+
+/// The repository `dir` sits inside without being its top, if any.
+pub fn enclosing_repository(dir: &Path) -> Option<PathBuf> {
+    if is_repository(dir) {
+        return None;
+    }
+    git_text(dir, &["rev-parse", "--show-toplevel"]).map(PathBuf::from)
 }
 
 /// The project directory relative to the top of its repository, `""` at
@@ -299,6 +319,12 @@ pub fn status(dir: &Path) -> Result<Status> {
     if !is_repository(dir) {
         return Ok(Status::default());
     }
+    // A status poll must not take the index lock a commit or merge needs.
+    let git_text = |dir: &Path, args: &[&str]| {
+        let mut command = git(dir);
+        command.env("GIT_OPTIONAL_LOCKS", "0").args(args);
+        run(command, "GIT_FAILED").ok().filter(|text| !text.is_empty())
+    };
     let branch = branch(dir);
     let upstream = upstream(dir);
     let remote = remote_name(dir).and_then(|name| git_text(dir, &["remote", "get-url", &name]));
@@ -415,6 +441,10 @@ fn io(error: std::io::Error) -> CollabError {
 /// there was nothing to commit. Files too large for GitHub that Git LFS
 /// does not store are refused, and nothing is left staged.
 pub fn commit(dir: &Path, message: &str) -> Result<Option<String>> {
+    if !is_repository(dir) {
+        return Err(CollabError::new("NOT_A_REPOSITORY", "the project is not a Git repository"));
+    }
+    exclude_runtime_files(dir)?;
     git_run(dir, &["add", "-A", "--", "."], "GIT_ADD_FAILED")?;
     if let Err(error) = refuse_large_files(dir) {
         let _ = git_run(dir, &["reset", "-q", "--", "."], "GIT_FAILED");
@@ -435,6 +465,37 @@ pub fn commit(dir: &Path, message: &str) -> Result<Option<String>> {
     command.args(["commit", "-q", "--no-verify", "-m", message]);
     run(command, "GIT_COMMIT_FAILED")?;
     Ok(git_text(dir, &["rev-parse", "--short", "HEAD"]))
+}
+
+/// Keep kerfd's state, caches, and renders out of commits in repositories
+/// whose `.gitignore` does not, through the repository's own
+/// `info/exclude`.
+fn exclude_runtime_files(dir: &Path) -> Result<()> {
+    let exclude = git_text(dir, &["rev-parse", "--git-path", "info/exclude"])
+        .map(|path| absolute_in(dir, &path))
+        .ok_or_else(|| CollabError::new("GIT_FAILED", "cannot find the repository's info directory"))?;
+    let existing = fs::read_to_string(&exclude).unwrap_or_default();
+    let missing: Vec<&str> = crate::scaffold::GITIGNORE
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter(|line| !existing.lines().any(|existing| existing.trim() == *line))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    if let Some(parent) = exclude.parent() {
+        fs::create_dir_all(parent).map_err(io)?;
+    }
+    let mut text = existing;
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str("# Kerf runtime state\n");
+    for line in missing {
+        text.push_str(line);
+        text.push('\n');
+    }
+    fs::write(&exclude, text).map_err(io)
 }
 
 /// An identity for commits when git has none configured, so a first-time
@@ -547,6 +608,7 @@ pub fn integrate(dir: &Path, driver: &Path, message: &str) -> Result<Integration
         return Ok(integration);
     }
     ensure_merge_driver(dir, driver)?;
+    integration.previous = git_text(dir, &["rev-parse", "HEAD"]);
     let before = project_blob(dir, "HEAD");
     let ahead = !commits(dir, "@{upstream}..HEAD").is_empty();
     let report = std::env::temp_dir().join(format!(
@@ -555,7 +617,9 @@ pub fn integrate(dir: &Path, driver: &Path, message: &str) -> Result<Integration
         unique()
     ));
     let mut command = git(dir);
-    command.env(MERGE_REPORT_ENV, &report);
+    command
+        .env(MERGE_REPORT_ENV, &report)
+        .env("GIT_LFS_SKIP_SMUDGE", "1");
     if ahead {
         for (key, value) in fallback_identity(dir) {
             command.arg("-c").arg(format!("{key}={value}"));
@@ -608,6 +672,50 @@ fn unique() -> u128 {
         .unwrap_or_default()
 }
 
+/// Download the Git LFS files a merge or switch left as pointers; merges
+/// and switches skip them so they never wait on the network. `false` when
+/// the repository does not use Git LFS or it is not installed.
+pub fn lfs_pull(dir: &Path) -> Result<bool> {
+    if !git_ok(dir, &["lfs", "version"]) {
+        return Ok(false);
+    }
+    let tracked = git_text(dir, &["lfs", "ls-files", "--name-only"]).is_some();
+    if !tracked {
+        return Ok(false);
+    }
+    git_run(dir, &["lfs", "pull"], "GIT_LFS_FAILED")?;
+    Ok(true)
+}
+
+/// `project.kerf` as the last commit holds it.
+pub fn committed_document(dir: &Path) -> Option<String> {
+    let mut command = git(dir);
+    command.args(["show", &format!("HEAD:{}", project_spec(dir))]);
+    let out = output(command, "git show").ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// A commit message for edits described by `changes` (as
+/// [`crate::summarize`] writes them): the first change and how many more,
+/// then every change on its own line.
+pub fn commit_message(changes: &[String]) -> String {
+    match changes {
+        [] => "Edit in Kerf".into(),
+        [only] => only.clone(),
+        [first, rest @ ..] => {
+            let mut message = format!("{first} (+{} more)\n\n", rest.len());
+            for change in changes {
+                message.push_str("- ");
+                message.push_str(change);
+                message.push('\n');
+            }
+            message
+        }
+    }
+}
+
 /// Publish the branch, or push what it is ahead by. A branch without an
 /// upstream is published to the remote and tracks it.
 pub fn push(dir: &Path) -> Result<Pushed> {
@@ -646,17 +754,41 @@ pub fn push(dir: &Path) -> Result<Pushed> {
 pub fn switch(dir: &Path, branch_name: &str, create: bool, message: &str) -> Result<Switched> {
     validate_branch(dir, branch_name)?;
     let committed = commit(dir, message)?;
+    let previous = branch(dir);
     let before = project_blob(dir, "HEAD");
+    let mut command = git(dir);
+    command.env("GIT_LFS_SKIP_SMUDGE", "1").args(["switch", "-q"]);
     if create {
-        git_run(dir, &["switch", "-q", "-c", branch_name], "GIT_SWITCH_FAILED")?;
-    } else {
-        git_run(dir, &["switch", "-q", branch_name], "GIT_SWITCH_FAILED")?;
+        command.arg("-c");
     }
+    command.arg(branch_name);
+    run(command, "GIT_SWITCH_FAILED")?;
     Ok(Switched {
         committed,
         branch: branch_name.to_owned(),
+        previous,
         project_changed: project_blob(dir, "HEAD") != before,
     })
+}
+
+/// Put the branch back where a merge found it, when what the merge made
+/// cannot be loaded. The tree was clean before the merge, as everything was
+/// committed first.
+pub fn undo_merge(dir: &Path, previous: &str) -> Result<()> {
+    let mut command = git(dir);
+    command
+        .env("GIT_LFS_SKIP_SMUDGE", "1")
+        .args(["reset", "-q", "--hard", previous]);
+    run(command, "GIT_RESET_FAILED").map(|_| ())
+}
+
+/// Switch back to `previous` after a switch whose project cannot be loaded.
+pub fn undo_switch(dir: &Path, previous: &str) -> Result<()> {
+    let mut command = git(dir);
+    command
+        .env("GIT_LFS_SKIP_SMUDGE", "1")
+        .args(["switch", "-q", previous]);
+    run(command, "GIT_SWITCH_FAILED").map(|_| ())
 }
 
 fn validate_branch(dir: &Path, name: &str) -> Result<()> {

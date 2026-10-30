@@ -340,6 +340,29 @@ pub enum RuntimeRequest {
         #[serde(rename = "baseRevision")]
         base_revision: u64,
     },
+    /// Commit local edits with git, merge the upstream branch fetched
+    /// beforehand (`project.kerf` through the structural merge driver), and
+    /// load what the merge made as one revision that clears history. The
+    /// message describes the edits when absent.
+    CollabIntegrate {
+        actor: String,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
+    /// Commit local edits, switch to `branch` (creating it from here when
+    /// `create`), and load its project.
+    CollabSwitch {
+        actor: String,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        branch: String,
+        #[serde(default)]
+        create: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
     AcceptProposal {
         #[serde(rename = "proposalId")]
         proposal_id: String,
@@ -478,6 +501,12 @@ pub enum RuntimeResponse {
         output: PathBuf,
     },
     RenderJob(RenderJob),
+    /// A git operation and the state after it: what was committed, merged,
+    /// or switched, as `kerf_collab` reports it.
+    Collab {
+        state: StateSnapshot,
+        report: Value,
+    },
     Empty,
 }
 
