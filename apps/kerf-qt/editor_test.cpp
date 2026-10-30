@@ -1427,6 +1427,29 @@ private slots:
         QTest::qWait(QApplication::doubleClickInterval() + 50);
     }
 
+    void timelineDrawsSequenceMarkersOnTheRuler() {
+        TimelineWidget timeline;
+        timeline.resize(700, 240);
+        const QJsonArray markers{
+            QJsonObject{{"id", "beat1"}, {"time", 2.0}, {"duration", 0.0}, {"color", "red"}},
+            QJsonObject{{"id", "chorus"}, {"time", 4.0}, {"duration", 1.0}}};
+        timeline.setProject(QJsonObject{{"tracks", QJsonArray{}}, {"markers", markers}}, 8, 24);
+        // A marker on the playhead is drawn over its tab.
+        timeline.setPlayhead(2.0);
+        timeline.show();
+        const QRect beat = timeline.markerBounds(QStringLiteral("beat1"));
+        const QRect chorus = timeline.markerBounds(QStringLiteral("chorus"));
+        QVERIFY(!beat.isEmpty());
+        QVERIFY(timeline.markerBounds(QStringLiteral("nowhere")).isEmpty());
+        QVERIFY(beat.bottom() < kRulerHeight);
+        // A marker with a duration spans it; one without is a tab.
+        QVERIFY(chorus.width() > beat.width() + 10);
+        QVERIFY(beat.right() < chorus.left());
+        const QImage image = timeline.grab().toImage();
+        QCOMPARE(image.pixelColor(beat.center().x(), beat.top() + 2), QColor("#e5534b"));
+        QCOMPARE(image.pixelColor(chorus.left() + 4, chorus.top() + 2), QColor("#5fb85f"));
+    }
+
     void timelineRevealsAddLaneFromTheHeader() {
         TimelineWidget timeline;
         timeline.resize(700, 240);

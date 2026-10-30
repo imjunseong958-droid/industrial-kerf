@@ -557,6 +557,17 @@ pub static COMMANDS: &[Command] = &[
         &["Ctrl+Shift+X"],
     ),
     keys(
+        timeline(params(
+            menu(
+                command("marker.add", "Add Marker", connected),
+                Menu::Markers,
+                1,
+            ),
+            r#"{"at": frame, "name": string}"#,
+        )),
+        &["M"],
+    ),
+    keys(
         source(frontend(command(
             "source.previousFrame",
             "Previous Frame",
@@ -954,6 +965,15 @@ pub fn run(id: &str, context: &Context, params: &Value) -> Result<Request, Strin
             at: params.int("at")?.unwrap_or(context.playhead_frame),
             tail: None,
         }),
+        "marker.add" => edit(EditOp::AddMarker {
+            at: params.int("at")?.unwrap_or(context.playhead_frame),
+            frames: 0,
+            id: None,
+            name: params.string("name"),
+            color: None,
+            note: None,
+            sequence: None,
+        }),
         "sequence.renderPreview" => Request::Preview,
         "sequence.addVideoTrack" => track("video", "Video", context.video_tracks),
         "sequence.addAudioTrack" => track("audio", "Audio", context.audio_tracks),
@@ -1248,6 +1268,29 @@ mod tests {
             run("clip.split", &context, &Value::Null).unwrap_err(),
             "Move the playhead inside the selected clip"
         );
+    }
+
+    #[test]
+    fn add_marker_marks_the_playhead() {
+        let marker = ops(run("marker.add", &ready(), &Value::Null).unwrap());
+        assert_eq!(
+            marker,
+            [EditOp::AddMarker {
+                at: 48,
+                frames: 0,
+                id: None,
+                name: None,
+                color: None,
+                note: None,
+                sequence: None,
+            }]
+        );
+        let named = ops(run("marker.add", &ready(), &json!({"at": 12, "name": "beat"})).unwrap());
+        assert!(matches!(
+            &named[..],
+            [EditOp::AddMarker { at: 12, name: Some(name), .. }] if name == "beat"
+        ));
+        assert_eq!(find("marker.add").unwrap().keys, ["M"]);
     }
 
     #[test]

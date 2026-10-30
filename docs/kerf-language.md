@@ -122,9 +122,15 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
 - Anywhere a time is read, `96f` and `4.5s` also work as offsets from the
   start. Seconds round to the nearest frame.
 - A position in a script may also be an **anchor**: `end` (the end of the
-  sequence), `c3.start`, or `c3.end`, each with an optional amount, as in
-  `at=end`, `at=c3.end`, or `to=c3.start-6f`. Anchors read the project as
-  the line runs, so they follow earlier lines' edits.
+  sequence), `c3.start` or `c3.end`, a marker's id (`beat1`, or `beat1.end`
+  where a marker with a duration ends), or `c3@<source position>`, where
+  clip `c3` plays that position of its media (or nested sequence), on the
+  nearest frame, with speed and reverse taken into account. Each takes an
+  optional amount, as in `at=end`, `to=c3.start-6f`, `at=beat1+2f`, or
+  `split c3 at=c3@14:24:05:02`. Anchors read the project as the line runs,
+  so they follow earlier lines' edits; they are written into history as the
+  timecode they found. `end` always means the end of the sequence, and a
+  marker id that holds `-` is read as the id, not as an amount.
 - Keyframe times are relative to the clip: `{0f:0 12f:1:ease}`.
 
 Internally every time is an exact integer of flicks (1/705,600,000 s), so
