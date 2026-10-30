@@ -66,25 +66,12 @@ QString sourceName(const QJsonObject &source);
 
 QSize resolvedCanvasSize(const QJsonObject &project, const QJsonArray &sources);
 
-QColor trackAccent(const QJsonObject &track, int row);
-
 // Model colors are #rrggbb, with a trailing alpha byte when not opaque.
 QColor modelColor(const QString &hex);
 
 QString modelColorName(const QColor &color);
 
 bool isAudioTrack(const QJsonObject &track);
-
-// Clip surfaces derive from the track hue: a mid-tone name bar over a dark
-// body, so picture, filmstrip, and waveform carry the brightness instead.
-struct ClipColors {
-    QColor band;
-    QColor body;
-    QColor wave;
-    QColor highlight;
-};
-
-ClipColors clipColors(const QColor &accent, bool selected, bool hovered);
 
 // Pixel-exact border drawn inside the rectangle, independent of pen geometry.
 void frameInside(QPainter &p, const QRectF &rect, qreal thickness, const QColor &color);

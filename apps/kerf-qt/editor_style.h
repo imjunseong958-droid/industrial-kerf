@@ -471,6 +471,8 @@ QComboBox:focus {
     border-color: @focusRing;
     background: @field;
 }
+/* No dotted focus frame on the current item: the selection shows it, as in macOS. */
+QListWidget { outline: 0; }
 QListWidget::item { padding: 4px; border: 0; border-radius: 4px; }
 QListWidget::item:hover { background: @hover; }
 QListWidget::item:selected { background: @selectionInactive; color: @selectionInactiveText; }
@@ -583,7 +585,7 @@ QFrame#errorBanner { background: @errorSurface; border: 1px solid @errorBorder; 
 QToolBar#toolPalette { background: @chrome; border: 0; border-right: 1px solid @divider; spacing: 2px; padding: 4px 2px; }
 QToolBar#toolPalette QToolButton { color: @textSecondary; font-size: 15px; min-width: 24px; min-height: 24px; border-radius: 3px; }
 QToolBar#toolPalette QToolButton:hover { background: @hover; color: @textStrong; }
-QToolBar#toolPalette QToolButton:checked { background: @accentTint; color: @accentText; }
+QToolBar#toolPalette QToolButton:checked { background: @accent; color: @onAccent; }
 QListWidget#projectBin { background: @well; border: 0; }
 QListWidget#projectBin::item { color: @text; border-radius: 3px; padding: 4px; }
 QListWidget#projectBin::item:selected { background: @selectionInactive; color: @selectionInactiveText; }
@@ -667,7 +669,13 @@ QDialog#publishDialog QCheckBox::indicator:disabled { background: @fieldDisabled
 // Docked panels, layered over the dock manager's own style sheet: title
 // strips with the panel names as tabs and an accent line under the focused
 // one.
+//
+// The dock manager's sheet draws a black close button, and a white one on
+// the focused tab (which it fills with the highlight); here no tab is filled,
+// so every tab takes the icons for the appearance, from the dock manager's
+// own resources.
 inline QString dockStyleSheet(const EditorTheme &theme) {
+    const QString icons = theme.dark ? QStringLiteral("_dark") : QString();
     return themedStyleSheet(QStringLiteral(R"QSS(
 ads--CDockContainerWidget { background: @window; }
 ads--CDockContainerWidget > QSplitter { padding: 0; }
@@ -680,12 +688,22 @@ ads--CDockWidgetTab { background: @panelTitle; border: 0; border-right: 1px soli
 ads--CDockWidgetTab QLabel { color: @textSecondary; font-size: 11px; font-weight: 600; }
 ads--CDockWidgetTab[activeTab="true"] { background: @panelTitleActive; }
 ads--CDockWidgetTab[activeTab="true"] QLabel { color: @text; }
-ads--CDockWidgetTab[focused="true"] { border-bottom: 2px solid @accent; }
+ads--CDockWidgetTab[focused="true"] { border-right: 1px solid @divider; border-bottom: 2px solid @accent; }
+ads--CDockWidgetTab > #tabCloseButton,
+ads--CDockWidgetTab[focused="true"] > #tabCloseButton {
+    qproperty-icon: url(:/ads/images/close-button$icons.svg), url(:/ads/images/close-button-disabled$icons.svg) disabled;
+    border-radius: 3px;
+}
+ads--CDockWidgetTab > #tabCloseButton:hover,
+ads--CDockWidgetTab[focused="true"] > #tabCloseButton:hover { background: @hover; }
+ads--CDockWidgetTab > #tabCloseButton:pressed,
+ads--CDockWidgetTab[focused="true"] > #tabCloseButton:pressed { background: @pressed; }
+#tabsMenuButton { qproperty-icon: url(:/ads/images/tabs-menu-button$icons.svg); }
 ads--CDockWidget { background: @panel; border: 0; }
 ads--CTitleBarButton { color: @textSecondary; font-size: 10px; padding: 0 6px; }
 ads--CTitleBarButton:disabled { color: @textSecondary; }
 ads--CFloatingDockContainer { background: @panel; }
-)QSS"), theme);
+)QSS").replace(QStringLiteral("$icons"), icons), theme);
 }
 
 } // namespace kerf

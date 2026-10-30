@@ -2458,6 +2458,15 @@ private slots:
                 if (isAmber(image.pixelColor(x, y))) ++count;
         return count;
     }
+    // The most contrast any pixel of `area` in `image` has with `background`.
+    static qreal highestContrast(const QImage &image, const QRect &area, const QColor &background) {
+        qreal best = 1.0;
+        const QRect inside = area.intersected(image.rect());
+        for (int y = inside.top(); y <= inside.bottom(); ++y)
+            for (int x = inside.left(); x <= inside.right(); ++x)
+                best = std::max(best, contrastRatio(image.pixelColor(x, y), background));
+        return best;
+    }
     // The colour most of `image` is.
     static QRgb dominantColor(const QImage &image) {
         QHash<QRgb, int> counts;
@@ -2644,6 +2653,22 @@ private slots:
             const QImage aiBar = window.m_aiBar->grab().toImage();
             QCOMPARE(dominantColor(aiBar), theme.assistantSurface.rgb());
             QCOMPARE(amberPixels(aiBar), 0);
+            // Each panel's close button reads on its tab, on the focused
+            // panel's tab as on the others.
+            int closeButtons = 0;
+            for (const QWidget *close : window.findChildren<QWidget *>(QStringLiteral("tabCloseButton"))) {
+                if (!close->isVisible()) continue;
+                ++closeButtons;
+                const qreal ratio = image.devicePixelRatio();
+                const QRect area(close->mapTo(&window, QPoint()) * ratio, close->size() * ratio);
+                QVERIFY2(highestContrast(image, area, theme.panelTitleActive) >= 4.5, qPrintable(close->parentWidget()->objectName()));
+            }
+            QVERIFY(closeButtons >= 3);
+            // The chosen tool is the accent, with its symbol on it.
+            const QImage tool = window.m_toolPalette->widgetForAction(window.m_commands->action(QStringLiteral("tool.selection")))->grab().toImage();
+            const QColor toolFill = tool.pixelColor(qRound(3 * tool.devicePixelRatio()), tool.height() / 2);
+            QCOMPARE(toolFill.rgb(), theme.accent.rgb());
+            QVERIFY(highestContrast(tool, tool.rect(), toolFill) >= 3.0);
             save(image, QStringLiteral("editor-%1").arg(name));
 
             // Settings.
@@ -2788,6 +2813,13 @@ private slots:
             QCOMPARE(view.pixelColor(QPoint(2, 2) * ratio), theme.viewerSurround);
             const QPointF corner = viewer.pictureToWidget().map(QPointF(0.2, 0.15));
             QCOMPARE(view.pixelColor((corner * ratio).toPoint()), theme.maskHandleFill);
+            // The selected mask's name is white over the (blue) picture.
+            const QRect nameArea = QRectF(corner + QPointF(3, -16), QSizeF(16, 13)).toAlignedRect();
+            int lightest = 0;
+            for (int y = nameArea.top(); y <= nameArea.bottom(); ++y)
+                for (int x = nameArea.left(); x <= nameArea.right(); ++x)
+                    lightest = std::max(lightest, view.pixelColor(QPoint(x, y) * ratio).lightness());
+            QVERIFY2(lightest > 240, qPrintable(QString::number(lightest)));
             QCOMPARE(amberPixels(view), 0);
             save(view, QStringLiteral("viewer-%1").arg(name));
             viewer.clearFrame();

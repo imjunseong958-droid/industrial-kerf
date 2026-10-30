@@ -184,22 +184,6 @@ QSize resolvedCanvasSize(const QJsonObject &project, const QJsonArray &sources) 
     return largest.isValid() ? largest : QSize(1920, 1080);
 }
 
-QColor trackAccent(const QJsonObject &track, int row) {
-    const QString type = track.value(QStringLiteral("type")).toString().toLower();
-    const QString name = track.value(QStringLiteral("name")).toString().toLower();
-    const bool music = type.contains(QStringLiteral("music")) || type.contains(QStringLiteral("score")) ||
-                       name.contains(QStringLiteral("music")) || name.contains(QStringLiteral("score"));
-    if (music) return QColor("#63c96b");
-    if (type.contains(QStringLiteral("audio")) || type.contains(QStringLiteral("sound"))) {
-        return QColor("#29b6a6");
-    }
-    if (type.contains(QStringLiteral("title")) || type.contains(QStringLiteral("graphic")) ||
-        type.contains(QStringLiteral("overlay"))) {
-        return QColor("#a879e8");
-    }
-    return row == 0 ? QColor("#4d9df4") : QColor("#3978c5");
-}
-
 QColor modelColor(const QString &hex) {
     QColor color(hex.left(7));
     if (hex.size() == 9) color.setAlpha(hex.mid(7).toInt(nullptr, 16));
@@ -215,16 +199,6 @@ QString modelColorName(const QColor &color) {
 bool isAudioTrack(const QJsonObject &track) {
     const QString type = track.value(QStringLiteral("type")).toString().toLower();
     return type.contains(QStringLiteral("audio")) || type.contains(QStringLiteral("sound"));
-}
-
-ClipColors clipColors(const QColor &accent, bool selected, bool hovered) {
-    const int hue = accent.hsvHue();
-    const int saturation = accent.hsvSaturation();
-    const int lift = selected ? 22 : hovered ? 12 : 0;
-    return {QColor::fromHsv(hue, saturation * 62 / 100, 142 + lift),
-            QColor::fromHsv(hue, saturation * 70 / 100, 70 + lift),
-            QColor::fromHsv(hue, saturation * 42 / 100, 232),
-            QColor::fromHsv(hue, saturation * 45 / 100, 196, 150)};
 }
 
 void frameInside(QPainter &p, const QRectF &rect, qreal thickness, const QColor &color) {

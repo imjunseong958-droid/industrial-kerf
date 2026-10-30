@@ -295,6 +295,10 @@ appearances; with `KERF_SCREENSHOT_DIR` set, `launcherRendersBothAppearances`
 saves each page as `<page>-<light|dark>.png`, and
 `editorRendersBothAppearances` saves the editor (`editor-`), Settings
 (`settings-`), the preset bindings dialog (`dialog-`), and the diverged banner
-with an agent proposal and conversation (`states-`), each `<light|dark>.png`.
+with an agent proposal and conversation (`states-`), each `<light|dark>.png`;
+`timelineFollowsTheAppearance` saves the timeline (`timeline-`,
+`timeline-drag-`) and `paintedPanelsFollowTheAppearance` the Program monitor
+(`viewer-`, `viewer-empty-`), the region picker (`region-`), the Source
+monitor (`source-`), the bin (`bin-`) and the Effects panel (`effects-`).
 The macOS CI job also runs the real bridge/media workflow in
 `scripts/test-kerf-qt-bridge.py`.

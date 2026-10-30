@@ -510,6 +510,7 @@ void ViewerWidget::paintMasks(QPainter &p) {
     };
     QFont font = p.font();
     font.setPointSizeF(std::max(7.0, font.pointSizeF() - 2.0));
+    font.setWeight(QFont::DemiBold);
     p.setFont(font);
     for (const QJsonValue &value : m_masks) {
         const QJsonObject mask = value.toObject();
@@ -517,14 +518,16 @@ void ViewerWidget::paintMasks(QPainter &p) {
         const bool selected = name == m_selectedMask;
         const QPainterPath path = toWidget.map(maskPath(mask));
         outline(path, selected, mask.value(QStringLiteral("mode")).toString() == QStringLiteral("none"));
-        // The name gets the outlines' dark rule too, so it reads on a picture
-        // in the accent's own hue.
+        // The name is white on the outlines' dark rule, so it reads on a
+        // picture in the accent's own hue; dimmer when not selected.
         QPainterPath text;
         text.addText(path.boundingRect().topLeft() + QPointF(4.0, -5.0), font, name);
-        p.setPen(QPen(editorTheme().maskShadow, 2.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setPen(QPen(editorTheme().maskShadow, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         p.drawPath(text);
         p.setPen(Qt::NoPen);
-        p.setBrush(maskColor(selected));
+        QColor label = editorTheme().maskText;
+        if (!selected) label.setAlpha(190);
+        p.setBrush(label);
         p.drawPath(text);
         p.setBrush(Qt::NoBrush);
         if (!selected) continue;

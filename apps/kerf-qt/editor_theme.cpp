@@ -551,6 +551,7 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
     t.viewerCaption = rgba(15, 15, 15, 225);
     t.viewerCaptionBorder = QColor("#676767");
     t.viewerCaptionText = QColor("#eeeeee");
+    t.maskText = QColor("#ffffff");
     t.maskHandleFill = QColor("#141414");
     t.maskShadow = rgba(0, 0, 0, 140);
     return t;
