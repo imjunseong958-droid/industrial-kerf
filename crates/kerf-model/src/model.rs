@@ -271,6 +271,25 @@ impl Clip {
         }
     }
 
+    /// Where on its sequence this clip plays `source`, a time on its media or
+    /// nested sequence: past either edge, where it would play it. `None` for
+    /// generators and captions.
+    pub fn played_at(&self, source: Time) -> Option<Time> {
+        let (low, high) = self.source_range()?;
+        let speed = self.speed();
+        let offset = if speed.is_reverse() {
+            high - source
+        } else {
+            source - low
+        };
+        let span = if offset.is_negative() {
+            -speed.timeline_span(-offset)
+        } else {
+            speed.timeline_span(offset)
+        };
+        Some(self.start + span)
+    }
+
     fn source_in_mut(&mut self) -> Option<&mut Time> {
         match &mut self.content {
             Content::Media { source_in, .. } | Content::Sequence { source_in, .. } => {
@@ -712,6 +731,20 @@ mod tests {
             frames(10),
             frames(48),
         )
+    }
+
+    #[test]
+    fn a_clip_plays_its_source_at_its_speed_and_direction() {
+        // c1 plays source frames 100..148 from sequence frame 10.
+        let forward = media_clip("1");
+        assert_eq!(forward.played_at(frames(112)), Some(frames(22)));
+        assert_eq!(forward.played_at(frames(90)), Some(frames(0)), "before it");
+        let fast = media_clip("2");
+        assert_eq!(fast.played_at(frames(124)), Some(frames(22)));
+        // In reverse it starts on its source out.
+        let reverse = media_clip("-1");
+        assert_eq!(reverse.played_at(frames(148)), Some(frames(10)));
+        assert_eq!(reverse.played_at(frames(136)), Some(frames(22)));
     }
 
     #[test]

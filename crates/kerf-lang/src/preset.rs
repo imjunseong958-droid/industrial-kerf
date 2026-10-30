@@ -623,7 +623,11 @@ fn place_on_beats(sequence: &mut Sequence, beats: &BTreeMap<Id, &[Time]>) {
         };
         let nearest = onsets
             .iter()
-            .filter_map(|onset| played_at(clip, *onset))
+            .filter(|onset| {
+                clip.source_range()
+                    .is_some_and(|(low, high)| (low..high).contains(*onset))
+            })
+            .filter_map(|onset| clip.played_at(*onset))
             .map(|time| rate.round(time))
             .filter(|time| clip.start <= *time && *time < clip.end())
             .filter(|time| last.is_none_or(|last| *time > last))
@@ -638,21 +642,6 @@ fn place_on_beats(sequence: &mut Sequence, beats: &BTreeMap<Id, &[Time]>) {
     for (index, placed) in moved {
         sequence.markers[index].at = placed;
     }
-}
-
-/// When `clip` plays `source` of its media, in sequence time.
-fn played_at(clip: &Clip, source: Time) -> Option<Time> {
-    let (low, high) = clip.source_range()?;
-    if source < low || source >= high {
-        return None;
-    }
-    let speed = clip.speed();
-    let offset = if speed.is_reverse() {
-        high - source
-    } else {
-        source - low
-    };
-    Some(clip.start + speed.timeline_span(offset))
 }
 
 fn append_sequence(sequence: &Sequence, ops: &mut Vec<Op>) {

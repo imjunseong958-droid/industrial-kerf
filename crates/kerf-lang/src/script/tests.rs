@@ -288,10 +288,94 @@ marker add at=c4.start+6f as=mk1",
 
     assert!(fails(&project, "split c1 at=c9.end")
         .message
-        .contains("no clip `c9`"));
+        .contains("no clip or marker `c9`"));
     assert!(fails(&project, "split c1 at=c1.end6f")
         .message
         .contains("amount"));
+}
+
+#[test]
+fn positions_can_name_markers() {
+    let project = run(
+        &base(),
+        "marker add as=beat1 at=01:00:01:00
+marker add as=chorus at=01:00:05:00 dur=12f
+marker add as=end-credits at=01:00:06:00
+marker add as=end at=01:00:02:00",
+    )
+    .project;
+    let applied = run(
+        &project,
+        "split c1 at=beat1 as=c1b
+split c2 at=chorus.end as=c2b
+split c2b at=end-credits as=c2c
+marker add at=beat1+2f as=mk1
+marker add at=end-1f as=mk2",
+    );
+    let sequence = &applied.project.sequences[0];
+    let start = |id: &str| frames(sequence.tracks[0].clip(id).unwrap().start);
+    assert_eq!(start("c1b"), 24);
+    assert_eq!(start("c2b"), 132, "where the marker's duration ends");
+    assert_eq!(start("c2c"), 144, "`-` is part of the id, not an amount");
+    let at = |id: &str| frames(sequence.marker(id).unwrap().at);
+    assert_eq!(at("mk1"), 26);
+    assert_eq!(
+        at("mk2"),
+        167,
+        "`end` is the sequence's end, not the marker"
+    );
+
+    // A marker named like the start of a longer id does not take its anchors.
+    let prefixed = run(
+        &project,
+        "marker add as=verse at=01:00:00:12
+marker add as=verse-2 at=01:00:01:12 dur=6f
+split c1 at=c1.start+2s as=intro-b
+marker add as=intro at=01:00:00:06
+split intro-b at=intro-b.end-12f as=c1c
+marker add at=verse-2.end as=mk3",
+    );
+    let sequence = &prefixed.project.sequences[0];
+    assert_eq!(frames(sequence.tracks[0].clip("c1c").unwrap().start), 84);
+    assert_eq!(frames(sequence.marker("mk3").unwrap().at), 42);
+
+    assert!(fails(&project, "split c1 at=nowhere")
+        .message
+        .contains("not a time"));
+    assert!(fails(&project, "split c1 at=nowhere.end")
+        .message
+        .contains("no clip or marker `nowhere`"));
+}
+
+#[test]
+fn positions_can_name_where_a_clip_plays_a_source_position() {
+    let project = base();
+    // c1 plays m1 from 00:00:10:00 at the start; c2 plays 00:01:00:00 at 4s.
+    let applied = run(
+        &project,
+        "split c1 at=c1@00:00:11:12 as=c1b
+marker add at=c2@00:01:01:00+2f as=mk1",
+    );
+    let sequence = &applied.project.sequences[0];
+    assert_eq!(frames(sequence.tracks[0].clip("c1b").unwrap().start), 36);
+    assert_eq!(frames(sequence.marker("mk1").unwrap().at), 122);
+    // At double speed two seconds of source pass in one; in reverse the
+    // clip starts on its source out.
+    let fast = run(&project, "speed c1 2\nsplit c1 at=c1@00:00:12:00 as=c1b");
+    assert_eq!(frames(fast.project.clip("c1b").unwrap().start), 24);
+    let reverse = run(&project, "speed c1 -1\nsplit c1 at=c1@00:00:13:00 as=c1b");
+    assert_eq!(frames(reverse.project.clip("c1b").unwrap().start), 24);
+
+    let outside = fails(&project, "split c1 at=c1@00:00:20:00");
+    assert!(
+        outside
+            .message
+            .contains("plays 00:00:10:00 to 00:00:14:00, not `00:00:20:00`"),
+        "{outside:?}"
+    );
+    assert!(fails(&project, "split c1 at=c9@00:00:11:00")
+        .message
+        .contains("no clip `c9`"));
 }
 
 #[test]

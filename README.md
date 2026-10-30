@@ -160,7 +160,9 @@ about the selection (⌘J): the request carries the clip or range it is about,
 and the proposal shows on the timeline to accept or reject in place.
 
 Edit scripts can place by anchor instead of timecode (`at=end`,
-`at=c3.end`, `to=c3.start-6f`), trim to a source position
+`at=c3.end`, `to=c3.start-6f`, a marker's id such as `at=beat1+2f`, or
+`at=c3@00:00:07:29` for where `c3` plays that time of its media), trim to
+a source position
 (`trim c1 out src=00:00:07:29`, such as a word's time), and caption what a
 clip says with `captions c1 on=S1 [words=<n>]`, which uses a transcript of
 its media made earlier and stages the caption lines it becomes.

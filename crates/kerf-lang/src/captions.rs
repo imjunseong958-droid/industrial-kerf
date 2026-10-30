@@ -48,8 +48,8 @@ pub fn caption_script(
             sequence.id
         ));
     }
-    let (from, to) = found.source_range().unwrap_or_default();
-    let (from, to) = (from.seconds(), to.seconds());
+    let (low, high) = found.source_range().unwrap_or_default();
+    let (from, to) = (low.seconds(), high.seconds());
     let mut spoken: Vec<&Word> = words
         .iter()
         // A word the clip cuts belongs to whichever side has most of it.
@@ -91,9 +91,8 @@ pub fn caption_script(
     let clock = Clock::of_sequence(sequence);
     // Where the clip plays `seconds` of its media, on the nearest frame.
     let place = |seconds: f64| {
-        let span =
-            Time::from_seconds((seconds.clamp(from, to) - from).max(0.0)).unwrap_or(Time::ZERO);
-        rate.round(found.start + speed.timeline_span(span))
+        let source = Time::from_seconds(seconds).map_or(low, |time| time.clamp(low, high));
+        rate.round(found.played_at(source).unwrap_or(found.start))
     };
     let mut lines = Vec::new();
     if project.sequences.len() > 1 {

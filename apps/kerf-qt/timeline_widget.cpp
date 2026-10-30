@@ -14,6 +14,27 @@
 
 namespace kerf {
 
+namespace {
+
+// The document's marker colors; a marker without one is green, as in
+// other edit suites.
+QColor markerColor(const QString &name) {
+    static const QHash<QString, QColor> colors{
+        {QStringLiteral("red"), QColor("#e5534b")},
+        {QStringLiteral("orange"), QColor("#e8913a")},
+        {QStringLiteral("yellow"), QColor("#e6c84a")},
+        {QStringLiteral("green"), QColor("#5fb85f")},
+        {QStringLiteral("cyan"), QColor("#4ec4d0")},
+        {QStringLiteral("blue"), QColor("#4f8de0")},
+        {QStringLiteral("purple"), QColor("#a275e0")},
+        {QStringLiteral("pink"), QColor("#e078b4")},
+        {QStringLiteral("white"), QColor("#e8e8e8")},
+    };
+    return colors.value(name, colors.value(QStringLiteral("green")));
+}
+
+} // namespace
+
 TimelineWidget::TimelineWidget(QWidget *parent) : QWidget(parent) {
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_OpaquePaintEvent);
@@ -625,6 +646,15 @@ QRect TimelineWidget::clipBounds(const QString &id) const {
     return {};
 }
 
+QRect TimelineWidget::markerBounds(const QString &id) const {
+    for (const QJsonValue &value : m_project.value(QStringLiteral("markers")).toArray()) {
+        const QJsonObject marker = value.toObject();
+        if (marker.value(QStringLiteral("id")).toString() == id)
+            return markerRect(marker, stickyOrigin().y()).toAlignedRect();
+    }
+    return {};
+}
+
 void TimelineWidget::setProposal(const QJsonObject &timeline) {
     if (timeline == m_proposal) return;
     m_proposal = timeline;
@@ -719,6 +749,11 @@ double TimelineWidget::snapped(double time, double length) const {
             const double start = clip.value(QStringLiteral("timelineStart")).toDouble();
             points << start << start + clip.value(QStringLiteral("duration")).toDouble();
         }
+    }
+    for (const QJsonValue &value : m_project.value(QStringLiteral("markers")).toArray()) {
+        const QJsonObject marker = value.toObject();
+        const double at = marker.value(QStringLiteral("time")).toDouble();
+        points << at << at + marker.value(QStringLiteral("duration")).toDouble();
     }
     const double reach = 8.0 / pixelsPerSecond();
     double best = time;
@@ -895,6 +930,44 @@ void TimelineWidget::paintRuler(QPainter &p, const QRect &dirty, int top) {
     }
 }
 
+QRectF TimelineWidget::markerRect(const QJsonObject &marker, int top) const {
+    const double at = marker.value(QStringLiteral("time")).toDouble();
+    const qreal x = std::floor(timeToX(at)) + 0.5;
+    const qreal end = std::floor(timeToX(at + marker.value(QStringLiteral("duration")).toDouble())) + 0.5;
+    return QRectF(x - 4.5, top + kRulerHeight - 13.0, std::max<qreal>(end - x, 0.0) + 9.0, 10.0);
+}
+
+void TimelineWidget::paintMarkers(QPainter &p, const QRect &dirty, int top) {
+    const QJsonArray markers = m_project.value(QStringLiteral("markers")).toArray();
+    if (markers.isEmpty()) return;
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(Qt::NoPen);
+    for (const QJsonValue &value : markers) {
+        const QJsonObject marker = value.toObject();
+        const QRectF rect = markerRect(marker, top);
+        if (!rect.toAlignedRect().intersects(dirty)) continue;
+        const QColor color = markerColor(marker.value(QStringLiteral("color")).toString());
+        const qreal x = rect.left() + 4.5;
+        if (rect.width() > 9.0) {
+            QColor band = color;
+            band.setAlpha(110);
+            p.setBrush(band);
+            p.drawRect(QRectF(x, rect.top() + 2.0, rect.width() - 9.0, rect.height() - 4.0));
+        }
+        // A tab that points down at the marker's frame.
+        QPainterPath tab;
+        tab.moveTo(x - 4.5, rect.top());
+        tab.lineTo(x + 4.5, rect.top());
+        tab.lineTo(x + 4.5, rect.top() + 5.5);
+        tab.lineTo(x, rect.bottom());
+        tab.lineTo(x - 4.5, rect.top() + 5.5);
+        tab.closeSubpath();
+        p.setBrush(color);
+        p.drawPath(tab);
+    }
+    p.setRenderHint(QPainter::Antialiasing, false);
+}
+
 void TimelineWidget::paintOverlay(QPainter &p, const QRect &dirty) {
     const QPoint origin = stickyOrigin();
     const bool skimming = m_hasSkimmer && !m_dragging && !m_scrubbing;
@@ -926,6 +999,8 @@ void TimelineWidget::paintOverlay(QPainter &p, const QRect &dirty) {
     head.closeSubpath();
     p.drawPath(head);
     p.setRenderHint(QPainter::Antialiasing, false);
+    // Over the playhead tab, so a marker added at the playhead shows at once.
+    paintMarkers(p, dirty, origin.y());
 
     paintHeaders(p, dirty);
     if (m_addLaneVisible) {

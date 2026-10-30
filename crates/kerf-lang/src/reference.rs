@@ -17,9 +17,12 @@ line, applied in order and atomically. Later lines see what earlier lines did.
 ## Times
 - Positions are sequence timecode (`01:00:04:12`, drop-frame `01:00:04;12`)
   or offsets from the sequence start (`96f`, `4.5s`), or anchors: `end` (the
-  end of the sequence), `c3.start`, or `c3.end`, each with an optional
-  amount, such as `at=end`, `at=c3.end`, or `to=c3.start-6f`. Prefer anchors
-  to computing timecode.
+  end of the sequence), `c3.start`, `c3.end`, a marker's id (`beat1`, or
+  `beat1.end` past its duration), or `c3@<source position>`, where clip c3
+  plays that media position. Each takes an optional amount, such as
+  `at=c3.end`, `to=c3.start-6f`, `at=beat1+2f`, or `at=c3@00:12:04:10`.
+  Prefer anchors to computing timecode: a time seen in a clip's media is
+  `c3@` that time.
 - Source positions (`src=`, `out=`) are media timecode or offsets from the
   media's first frame.
 - Durations: `00:00:02:12`, `60f`, or `2.5s`. Amounts: `+12f`, `-6f`, `-0.5s`.

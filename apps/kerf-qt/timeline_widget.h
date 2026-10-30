@@ -36,13 +36,16 @@ public:
     void clearSkimmer();
     void setTool(TimelineTool tool);
     TimelineTool tool() const { return m_tool; }
-    // Dragged edges snap to clip edges, the playhead, and the start.
+    // Dragged edges snap to clip edges, markers, the playhead, and the start.
     void setSnapping(bool snapping) { m_snapping = snapping; }
     bool snapping() const { return m_snapping; }
     // The track header toggles: picture output or sound mute, and lock.
     QRect headerToggleRect(int row, int index) const;
     // A clip's rectangle in widget coordinates; empty when it is not shown.
     QRect clipBounds(const QString &id) const;
+    // A sequence marker on the ruler, with the span of its duration, in
+    // widget coordinates; empty when there is no such marker.
+    QRect markerBounds(const QString &id) const;
     // The timeline a pending proposal would make, drawn over this one:
     // new and changed clips as outlines where they would land, removed
     // clips struck through. An empty object clears it.
@@ -137,6 +140,10 @@ private:
     void paintClip(QPainter &p, const QRect &visible, int row, const QJsonObject &clip, const QColor &accent, bool audio);
     void paintProposal(QPainter &p, int row, const QJsonObject &track);
     void paintRuler(QPainter &p, const QRect &dirty, int top);
+    // Sequence markers sit on the ruler: a tab on their frame and a band
+    // over their duration.
+    void paintMarkers(QPainter &p, const QRect &dirty, int top);
+    QRectF markerRect(const QJsonObject &marker, int top) const;
 
     // Painted every frame on top of the lane cache, in stacking order: lane
     // lines, pinned ruler with its playhead tab, pinned headers, corner, and
