@@ -47,6 +47,7 @@ set(KERF_QT_SOURCES
     effect_controls_panel.h
     effects_panel.cpp
     effects_panel.h
+    launcher_style.h
     main_window.cpp
     main_window.h
     media_artwork.cpp

@@ -480,46 +480,7 @@ QListWidget#presetList::item { padding: 6px; border-radius: 4px; }
 QListWidget#presetList::item:selected { background: #2f2f2f; color: #f0f0f0; }
 QToolButton#presetsRefresh { background: transparent; border: 0; padding: 0 5px; }
 
-QDialog#projectLauncher { background: #181818; }
-QListWidget#launcherSidebar {
-    background: #121212;
-    border: 0;
-    border-right: 1px solid #0a0a0a;
-    border-radius: 0;
-    padding: 16px 8px;
-}
-QListWidget#launcherSidebar::item { color: #c4c4c4; padding: 7px 8px; margin: 1px 0; border-radius: 5px; }
-QListWidget#launcherSidebar::item:hover { background: #202020; }
-QListWidget#launcherSidebar::item:selected { background: #2a2414; color: #f3d58a; }
-QWidget#launcherContent { background: #181818; }
-QLabel#launcherHeading { color: #f0f0f0; font-size: 18px; font-weight: 600; }
-QLabel#launcherHint { color: #8e8e8e; font-size: 11px; }
-QLabel#launcherEyebrow { color: #9a9a9a; font-size: 10px; font-weight: 600; }
-QListWidget#templateTiles,
-QListWidget#recentProjects,
-QListWidget#presetChoices { background: transparent; border: 0; padding: 0; }
-QListWidget#templateTiles::item { color: #cfcfcf; border: 1px solid transparent; border-radius: 10px; padding: 6px; }
-QListWidget#templateTiles::item:hover { background: #1f1f1f; }
-QListWidget#templateTiles::item:selected { background: #2a2414; border-color: #f0b429; color: #f5f5f5; }
-QListWidget#recentProjects::item { color: #d7d7d7; padding: 8px; border-radius: 6px; }
-QListWidget#presetChoices::item { color: #d7d7d7; padding: 6px 8px; border-radius: 6px; }
-QListWidget#recentProjects::item:selected,
-QListWidget#presetChoices::item:selected { background: #2a2414; color: #f5f5f5; }
-QToolButton#launcherDetailsToggle { background: transparent; border: 0; color: #d0d0d0; font-weight: 600; padding: 2px 0; }
-QToolButton#launcherDetailsToggle:hover { background: transparent; color: #f2f2f2; }
-QWidget#launcherDetailsBody { background: #1f1f1f; border: 1px solid #2c2c2c; border-radius: 8px; }
-QFrame#launcherFooter { background: #1c1c1c; border: 0; border-top: 1px solid #0a0a0a; }
-QLabel#launcherProblem { color: #9a9a9a; font-size: 11px; }
-QLabel#launcherProblem[state="error"] { color: #efb3b8; }
-QLabel#launcherProblem[state="busy"] { color: #e6c98a; }
-QPushButton#launcherChoose { background: #f0b429; border-color: #f0b429; color: #141414; font-weight: 600; padding: 4px 16px; }
-QPushButton#launcherChoose:hover { background: #f5c24a; border-color: #f5c24a; }
-QPushButton#launcherChoose:disabled { color: #777777; background: #2a2a2a; border-color: #303030; }
-QFrame#presetSlot { background: #1f1f1f; border: 1px solid #2c2c2c; border-radius: 6px; }
-QLabel#presetSlotName { color: #eeeeee; font-weight: 600; }
-QDialog#projectLauncher QCheckBox,
 QDialog#publishDialog QCheckBox { spacing: 7px; }
-QDialog#projectLauncher QCheckBox::indicator,
 QDialog#publishDialog QCheckBox::indicator {
     width: 12px;
     height: 12px;
@@ -527,14 +488,8 @@ QDialog#publishDialog QCheckBox::indicator {
     border: 1px solid #5a5a5a;
     border-radius: 3px;
 }
-QDialog#projectLauncher QCheckBox::indicator:checked,
 QDialog#publishDialog QCheckBox::indicator:checked { background: #f0b429; border-color: #f0b429; }
-QDialog#projectLauncher QCheckBox::indicator:disabled,
 QDialog#publishDialog QCheckBox::indicator:disabled { background: #202020; border-color: #333333; }
-QDialog#projectLauncher QCheckBox:disabled { color: #6f6f6f; }
-QLabel[fit="none"] { color: #8e8e8e; }
-QLabel[fit="yes"] { color: #b9d7a6; }
-QLabel[fit="no"] { color: #efb3b8; }
 )QSS");
 }
 

@@ -1,9 +1,13 @@
 #pragma once
 
+#include "launcher_style.h"
+
 #include <QDialog>
+#include <QFocusFrame>
 #include <QHash>
 #include <QJsonObject>
 #include <QList>
+#include <QPointer>
 #include <QStringList>
 
 #include <functional>
@@ -34,6 +38,9 @@ class ProjectLauncher final : public QDialog {
 
 public:
     enum Page { NewProject, Recent, FromPreset, Clone };
+    // System follows macOS's appearance as it changes; KERF_COLOR_SCHEME=light
+    // or dark picks one for the whole run.
+    enum class ColorScheme { System, Light, Dark };
 
     // `kerfdBinary` makes the first edit of a project made from a preset.
     explicit ProjectLauncher(const QString &kerfdBinary = QString(), QWidget *parent = nullptr);
@@ -41,6 +48,9 @@ public:
 
     QString chosenPath() const { return m_chosen; }
     void showPage(Page page);
+    void setColorScheme(ColorScheme scheme);
+    ColorScheme colorScheme() const { return m_scheme; }
+    const LauncherTheme &theme() const { return m_theme; }
 
     // Recent projects (QSettings `projects/recent`), most recent first.
     static QStringList recentProjects();
@@ -48,7 +58,17 @@ public:
     static void clearRecentProjects();
     static constexpr int kRecentLimit = 12;
 
+protected:
+    void changeEvent(QEvent *event) override;
+
 private:
+    // Restyle for the current appearance and accent; does nothing when
+    // neither changed unless `force`.
+    void applyTheme(bool force = false);
+    void setDetailsOpen(bool open);
+    // Ring the focused field the way macOS does.
+    void trackFocus(QWidget *now);
+
     QWidget *buildTemplates();
     QWidget *buildRecent();
     QWidget *buildPresetPage();
@@ -91,6 +111,11 @@ private:
 
     QString m_kerfd;
     QString m_chosen;
+    ColorScheme m_scheme = ColorScheme::System;
+    LauncherTheme m_theme;
+    bool m_themed = false;
+    bool m_theming = false;
+    QPointer<QFocusFrame> m_focusRing;
     QJsonObject m_tools;
     bool m_busy = false;
     // Every task asked for, in order; tests read it.
@@ -123,6 +148,7 @@ private:
     QLineEdit *m_cloneLocation = nullptr;
     QLabel *m_cloneDestination = nullptr;
     QWidget *m_details = nullptr;
+    QWidget *m_detailsRow = nullptr;
     QToolButton *m_detailsToggle = nullptr;
     QLabel *m_detailsSummary = nullptr;
     QWidget *m_detailsBody = nullptr;

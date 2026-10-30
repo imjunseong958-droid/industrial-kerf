@@ -2255,6 +2255,117 @@ private slots:
         QSettings().remove(QStringLiteral("launcher"));
         QSettings().remove(QStringLiteral("projects"));
     }
+
+    // The launcher follows the system appearance with its own style sheet,
+    // whatever the editor's: every page in light and in dark. With
+    // KERF_SCREENSHOT_DIR set, each is saved as <page>-<scheme>.png.
+    void launcherRendersBothAppearances() {
+        QSettings().remove(QStringLiteral("launcher"));
+        QSettings().remove(QStringLiteral("projects"));
+        QTemporaryDir root;
+        QVERIFY(root.isValid());
+        QStringList projects;
+        for (const char *name : {"Harbor Teaser", "Night Market", "Studio Session"}) {
+            projects << QDir(root.path()).filePath(QString::fromLatin1(name));
+            QVERIFY(QDir().mkpath(QDir(projects.last()).filePath(QStringLiteral("presets"))));
+        }
+        QFile presetFile(QDir(projects.first()).filePath(QStringLiteral("presets/Intro Titles.kerfpreset")));
+        QVERIFY(presetFile.open(QIODevice::WriteOnly));
+        presetFile.write("kerf 1\n");
+        presetFile.close();
+        ProjectLauncher::clearRecentProjects();
+        for (auto it = projects.crbegin(); it != projects.crend(); ++it) ProjectLauncher::rememberProject(*it);
+        const auto inspectProject = [projects](const QJsonObject &request) {
+            const QString path = request.value("path").toString();
+            const int index = std::max(0, int(projects.indexOf(path)));
+            static const char *const branches[] = {"main", "color-pass", "main"};
+            static const char *const edited[] = {"2026-10-30T18:42:00Z", "2026-10-27T09:15:00Z", "2026-10-21T21:03:00Z"};
+            return QJsonObject{{"path", path}, {"exists", true}, {"project", true}, {"name", QFileInfo(path).fileName()},
+                               {"branch", branches[index]}, {"modified", edited[index]}, {"presets", index == 0 ? 1 : 0}};
+        };
+        const auto inspectPreset = [](const QJsonObject &request) {
+            if (!request.contains("files"))
+                return QJsonObject{{"name", "Intro Titles"}, {"texts", QJsonObject{{"c4", "Harbor Teaser"}}}, {"slots", QJsonArray{
+                    QJsonObject{{"id", "Opening"}, {"seconds", 2}, {"video", true}, {"audio", true}, {"clips", 2}},
+                    QJsonObject{{"id", "Logo"}, {"seconds", 1.5}, {"video", true}, {"audio", false}, {"clips", 1}}}}};
+            QJsonArray files;
+            for (const QJsonValue &file : request.value("files").toArray())
+                files.append(QJsonObject{{"path", file}, {"seconds", 6}, {"video", true}, {"audio", true},
+                                         {"fits", QJsonArray{"Opening", "Logo"}}});
+            return QJsonObject{{"files", files}};
+        };
+        const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
+        const auto save = [&shots](const QImage &image, const QString &name) {
+            if (!shots.isEmpty()) QVERIFY(image.save(QDir(shots).filePath(name + QStringLiteral(".png"))));
+        };
+        // Nothing amber or gold is left from the editor's palette.
+        const auto amberPixels = [](const QImage &image) {
+            int count = 0;
+            for (int y = 0; y < image.height(); y += 2)
+                for (int x = 0; x < image.width(); x += 2) {
+                    const QColor color = image.pixelColor(x, y);
+                    if (color.hue() >= 30 && color.hue() <= 52 && color.saturation() > 140 && color.value() > 150) ++count;
+                }
+            return count;
+        };
+        const char *const pageNames[] = {"new", "recent", "preset", "clone"};
+        for (const auto scheme : {ProjectLauncher::ColorScheme::Light, ProjectLauncher::ColorScheme::Dark}) {
+            const bool dark = scheme == ProjectLauncher::ColorScheme::Dark;
+            const QString schemeName = dark ? QStringLiteral("dark") : QStringLiteral("light");
+            for (int page = ProjectLauncher::NewProject; page <= ProjectLauncher::Clone; ++page) {
+                QSettings().remove(QStringLiteral("launcher"));
+                ProjectLauncher launcher;
+                launcher.setColorScheme(scheme);
+                QCOMPARE(launcher.theme().dark, dark);
+                launcher.m_inspectProject = inspectProject;
+                launcher.m_inspectPreset = inspectPreset;
+                launcher.reloadRecent();
+                launcher.reloadPresetChoices();
+                launcher.setTools(QJsonObject{{"git", true}, {"gitLfs", true}, {"gh", true}, {"ghUser", "jun"}});
+                QCOMPARE(launcher.m_recent->count(), 3);
+                launcher.showPage(static_cast<ProjectLauncher::Page>(page));
+                if (page == ProjectLauncher::FromPreset) {
+                    launcher.m_presetChoices->setCurrentRow(0);
+                    QCOMPARE(launcher.m_slotOrder, (QStringList{"Opening", "Logo"}));
+                    launcher.setSlotFile(QStringLiteral("Opening"), QStringLiteral("/Volumes/Shoot/harbor-wide.mov"));
+                } else if (page == ProjectLauncher::Clone) {
+                    launcher.m_cloneUrl->setText(QStringLiteral("https://github.com/jun/harbor-teaser.git"));
+                }
+                launcher.resize(1040, 650);
+                launcher.show();
+                QVERIFY(QTest::qWaitForWindowExposed(&launcher));
+                QImage image = launcher.grab().toImage();
+                const qreal ratio = image.devicePixelRatio();
+                const auto at = [&image, ratio](int x, int y) { return image.pixelColor(QPoint(x, y) * ratio).rgb(); };
+                QCOMPARE(at(launcher.width() - 6, 6), launcher.theme().content.rgb());
+                QCOMPARE(at(100, launcher.height() - 10), launcher.theme().sidebar.rgb());
+                QVERIFY(dark ? launcher.theme().content.lightness() < 60 : launcher.theme().content.lightness() > 240);
+                if (launcher.m_choose->isEnabled()) {
+                    const QImage choose = launcher.m_choose->grab().toImage();
+                    QCOMPARE(choose.pixelColor(QPoint(6, launcher.m_choose->height() / 2) * choose.devicePixelRatio()).rgb(),
+                             launcher.theme().accent.rgb());
+                }
+                QCOMPARE(amberPixels(image), 0);
+                save(image, QStringLiteral("%1-%2").arg(QString::fromLatin1(pageNames[page]), schemeName));
+                if (page == ProjectLauncher::NewProject) {
+                    // Details are folded away until opened, as in macOS.
+                    QVERIFY(launcher.m_detailsBody->isHidden());
+                    launcher.m_detailsToggle->click();
+                    QVERIFY(!launcher.m_detailsBody->isHidden());
+                    launcher.m_git->setChecked(true);
+                    launcher.m_name->setFocus();
+                    QCoreApplication::processEvents();
+                    image = launcher.grab().toImage();
+                    QCOMPARE(amberPixels(image), 0);
+                    save(image, QStringLiteral("new-details-%1").arg(schemeName));
+                }
+                launcher.close();
+            }
+        }
+        ProjectLauncher::clearRecentProjects();
+        QSettings().remove(QStringLiteral("launcher"));
+        QSettings().remove(QStringLiteral("projects"));
+    }
 };
 
 } // namespace kerf

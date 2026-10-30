@@ -124,11 +124,13 @@ at the clip's in point.
 
 A project is a folder: `project.kerf`, a `media/` folder, and a `presets/`
 library. Started without one, Kerf opens the launcher, like an edit suite's
-Choose a Project window. New Project offers Empty 16:9, Vertical 9:16, and
-Square 1:1 templates; Details sets the name, location, frame rate, and
-sharing: Share with Git makes the folder a repository, and Create a private
-GitHub repository (offered once the GitHub CLI is signed in, naming the
-account) or a remote URL publishes it. Recent lists the projects opened
+Choose a Project window. Unlike the editor, it follows the system's light or
+dark appearance and accent colour, and switches when they change
+(`KERF_COLOR_SCHEME=light` or `dark` picks one). New Project offers Empty
+16:9, Vertical 9:16, and Square 1:1 templates; Details sets the name,
+location, frame rate, and sharing: Share with Git makes the folder a
+repository, and Create a private GitHub repository (offered once the GitHub
+CLI is signed in, naming the account) or a remote URL publishes it. Recent lists the projects opened
 lately with their branch and last edit. From Preset starts a project from a
 shared preset: pick one from your projects' `presets/` folders or any
 `.kerfpreset`, then choose a file for each media slot; each slot says what
@@ -279,6 +281,8 @@ The tests cover disconnected controls, reconnection state, error deduplication,
 long timeline fit, scrolling through many tracks, complete proposal review,
 the sync chip and Collaborate requests, the diverged banner, the Presets
 panel, media badges, and the launcher's validation (test builds never start
-launcher tasks).
+launcher tasks) and its look in both appearances; with `KERF_SCREENSHOT_DIR`
+set, `launcherRendersBothAppearances` saves each page as
+`<page>-<light|dark>.png`.
 The macOS CI job also runs the real bridge/media workflow in
 `scripts/test-kerf-qt-bridge.py`.
