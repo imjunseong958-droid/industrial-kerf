@@ -1477,6 +1477,62 @@ pub unsafe extern "C" fn kerf_bridge_string_free(value: *mut c_char) {
 
 // ---- command registry ----------------------------------------------------------
 
+// ---- project launcher ------------------------------------------------------------
+
+/// What the launcher shows of a project folder.
+/// # Safety
+/// `request` must be null or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn kerf_project_inspect(request: *const c_char) -> *mut c_char {
+    // SAFETY: forwarded from the caller's contract.
+    let request = unsafe { json_argument(request) };
+    owned_json(json!({"path": request["path"], "error": "not implemented yet"}))
+}
+
+/// A preset file's slots and how files would fill them.
+/// # Safety
+/// `request` must be null or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn kerf_preset_inspect(request: *const c_char) -> *mut c_char {
+    // SAFETY: forwarded from the caller's contract.
+    let _ = unsafe { json_argument(request) };
+    owned_json(json!({"error": "not implemented yet"}))
+}
+
+/// Start a project task; poll it with `kerf_task_poll`.
+/// # Safety
+/// `request` must be null or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn kerf_task_start(request: *const c_char) -> *mut c_void {
+    // SAFETY: forwarded from the caller's contract.
+    let _ = unsafe { json_argument(request) };
+    Box::into_raw(Box::new(json!({"status": "failed", "error": "not implemented yet"}))).cast()
+}
+
+/// The task's latest status as an owned string.
+/// # Safety
+/// `task` must be null or a live pointer from `kerf_task_start`.
+#[no_mangle]
+pub unsafe extern "C" fn kerf_task_poll(task: *mut c_void) -> *mut c_char {
+    if task.is_null() {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: a live task from kerf_task_start.
+    let status = unsafe { &*task.cast::<Value>() };
+    owned_json(status.clone())
+}
+
+/// Release a task.
+/// # Safety
+/// `task` must be null or a live pointer from `kerf_task_start`, freed once.
+#[no_mangle]
+pub unsafe extern "C" fn kerf_task_free(task: *mut c_void) {
+    if !task.is_null() {
+        // SAFETY: ownership returns exactly once.
+        drop(unsafe { Box::from_raw(task.cast::<Value>()) });
+    }
+}
+
 /// Read a UTF-8 JSON argument; a null pointer or invalid text reads as null.
 ///
 /// # Safety
