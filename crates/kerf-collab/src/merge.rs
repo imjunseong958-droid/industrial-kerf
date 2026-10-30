@@ -332,16 +332,49 @@ fn params_of<'a>(catalog: &'a Catalog, fx: &Id) -> &'a [ParamDef] {
         .map_or(&[], |def| def.params.as_slice())
 }
 
-/// The markers an effect's times land on.
-fn landings<'a>(catalog: &'a Catalog, effect: &'a Effect) -> impl Iterator<Item = Id> + 'a {
-    let defs = params_of(catalog, &effect.fx);
-    effect.params.iter().filter_map(move |(name, param)| {
+/// The ids that parameters of the types `names` picks hold.
+fn named<'a>(
+    defs: &'a [ParamDef],
+    params: &'a Params,
+    names: fn(&ParamType) -> bool,
+) -> impl Iterator<Item = Id> + 'a {
+    params.iter().filter_map(move |(name, param)| {
         match (defs.iter().find(|def| def.name == *name), param) {
-            (Some(def), Param::Static(Value::Text(marker))) if def.ty == ParamType::Time => {
-                Id::new(marker.as_str()).ok()
+            (Some(def), Param::Static(Value::Text(text))) if names(&def.ty) => {
+                Id::new(text.as_str()).ok()
             }
             _ => None,
         }
+    })
+}
+
+/// The markers an effect's times land on.
+fn landings<'a>(catalog: &'a Catalog, effect: &'a Effect) -> impl Iterator<Item = Id> + 'a {
+    let defs = params_of(catalog, &effect.fx);
+    named(defs, &effect.params, |ty| *ty == ParamType::Time)
+}
+
+/// The tracks of its sequence that a clip's effects and generator read.
+fn clip_reads<'a>(catalog: &'a Catalog, clip: &'a Clip) -> impl Iterator<Item = Id> + 'a {
+    let generator = match &clip.content {
+        Content::Generator { fx, params, .. } => Some((fx, params)),
+        _ => None,
+    };
+    clip.effects
+        .iter()
+        .map(|effect| (&effect.fx, &effect.params))
+        .chain(generator)
+        .flat_map(|(fx, params)| track_reads(catalog, fx, params))
+}
+
+/// The tracks an effect, generator, or transition reads.
+fn track_reads<'a>(
+    catalog: &'a Catalog,
+    fx: &Id,
+    params: &'a Params,
+) -> impl Iterator<Item = Id> + 'a {
+    named(params_of(catalog, fx), params, |ty| {
+        matches!(ty, ParamType::Track | ParamType::Sound)
     })
 }
 
@@ -474,29 +507,17 @@ fn merge_list<K: Ord + Clone, T: Clone + PartialEq>(
     out
 }
 
+/// The file merges as one unit, path and what it holds together: a relink
+/// on one side and a replacement on the other must not make one record of
+/// both. The reel is a label and merges on its own.
 fn merge_media(base: &Media, ours: &Media, theirs: &Media, clashes: &mut Vec<String>) -> Media {
+    let file = |media: &Media| Media {
+        reel: None,
+        ..media.clone()
+    };
     Media {
-        id: ours.id.clone(),
-        path: pick("path", &base.path, &ours.path, &theirs.path, clashes),
-        rate: pick("rate", &base.rate, &ours.rate, &theirs.rate, clashes),
-        drop_frame: pick(
-            "drop frame",
-            &base.drop_frame,
-            &ours.drop_frame,
-            &theirs.drop_frame,
-            clashes,
-        ),
-        start: pick("timecode", &base.start, &ours.start, &theirs.start, clashes),
-        duration: pick(
-            "duration",
-            &base.duration,
-            &ours.duration,
-            &theirs.duration,
-            clashes,
-        ),
-        video: pick("video", &base.video, &ours.video, &theirs.video, clashes),
-        audio: pick("audio", &base.audio, &ours.audio, &theirs.audio, clashes),
         reel: pick("reel", &base.reel, &ours.reel, &theirs.reel, clashes),
+        ..pick("file", &file(base), &file(ours), &file(theirs), clashes)
     }
 }
 
@@ -647,6 +668,16 @@ impl Thing<'_> {
             Self::Marker(..) => 2,
             Self::Clip(_) => 3,
             Self::Transition(_) | Self::Link(_) => 4,
+        }
+    }
+
+    /// Whether both sides added the same thing under one id. Link groups
+    /// that share a clip are one group that each side linked its own clips
+    /// to: renaming theirs would pull the shared clip apart.
+    fn same(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Link(mine), Self::Link(theirs)) => !mine.is_disjoint(theirs),
+            _ => self == other,
         }
     }
 }
@@ -820,7 +851,7 @@ fn rename_collisions(
                     continue;
                 }
                 let collides = match ours_things.get(id) {
-                    Some(other) => *other != thing,
+                    Some(other) => !other.same(&thing),
                     None => ours.retired.contains(id),
                 };
                 if collides {
@@ -879,7 +910,9 @@ fn track_collisions(
 
 /// Put back what one side removed while the merged project still uses it:
 /// a sequence or track the other side put clips on, media its clips play,
-/// markers its looks land on. It comes from the side that kept it.
+/// markers its looks land on, and, whole with what is in them, a sequence
+/// its clips nest and a track its effects read. It comes from the side that
+/// kept it.
 fn restore(
     flat: &mut Flat,
     ours: &Flat,
@@ -887,6 +920,68 @@ fn restore(
     catalog: &Catalog,
     conflicts: &mut Vec<Conflict>,
 ) {
+    let merged = (
+        flat.sequences.iter().map(|(id, _)| id.clone()).collect(),
+        flat.tracks.iter().map(|(key, _)| key.clone()).collect(),
+    );
+    // What comes back can use more, as a nested sequence's clips can.
+    while restore_used(flat, &merged, [ours, theirs], catalog, conflicts) {}
+}
+
+/// One pass of `restore`, given the sequences and tracks the merge kept.
+/// Whether anything came back.
+fn restore_used(
+    flat: &mut Flat,
+    (merged_sequences, merged_tracks): &(HashSet<Id>, HashSet<(Id, Id)>),
+    [ours, theirs]: [&Flat; 2],
+    catalog: &Catalog,
+    conflicts: &mut Vec<Conflict>,
+) -> bool {
+    let mut restored = false;
+    let nested: BTreeSet<Id> = flat
+        .clips
+        .iter()
+        .filter_map(|(_, placed)| match &placed.item.content {
+            Content::Sequence { sequence, .. } => Some(sequence.clone()),
+            _ => None,
+        })
+        .filter(|id| !merged_sequences.contains(id))
+        .collect();
+    for id in nested {
+        let path = || format!("sequence {id}");
+        restored |= bring_back(
+            &mut flat.sequences,
+            [&ours.sequences, &theirs.sequences],
+            &id,
+            path,
+            conflicts,
+        );
+        restored |= put_back_contents(flat, [ours, theirs], &id, None);
+    }
+    let read: BTreeSet<(Id, Id)> = flat
+        .clips
+        .iter()
+        .flat_map(|(_, placed)| {
+            clip_reads(catalog, &placed.item).map(move |track| (placed.sequence.clone(), track))
+        })
+        .chain(flat.transitions.iter().flat_map(|(_, placed)| {
+            let transition = &placed.item;
+            track_reads(catalog, &transition.fx, &transition.params)
+                .map(move |track| (placed.sequence.clone(), track))
+        }))
+        .filter(|key| !merged_tracks.contains(key))
+        .collect();
+    for key in read {
+        let path = || format!("{}/{}", key.0, key.1);
+        restored |= bring_back(
+            &mut flat.tracks,
+            [&ours.tracks, &theirs.tracks],
+            &key,
+            path,
+            conflicts,
+        );
+        restored |= put_back_contents(flat, [ours, theirs], &key.0, Some(&key.1));
+    }
     let sequences: BTreeSet<Id> = flat
         .tracks
         .iter()
@@ -898,7 +993,7 @@ fn restore(
         .collect();
     for id in sequences {
         let path = || format!("sequence {id}");
-        bring_back(
+        restored |= bring_back(
             &mut flat.sequences,
             [&ours.sequences, &theirs.sequences],
             &id,
@@ -918,7 +1013,7 @@ fn restore(
         .collect();
     for key in tracks {
         let path = || format!("{}/{}", key.0, key.1);
-        bring_back(
+        restored |= bring_back(
             &mut flat.tracks,
             [&ours.tracks, &theirs.tracks],
             &key,
@@ -936,7 +1031,7 @@ fn restore(
         .collect();
     for id in media {
         let path = || format!("media {id}");
-        bring_back(
+        restored |= bring_back(
             &mut flat.media,
             [&ours.media, &theirs.media],
             &id,
@@ -958,7 +1053,7 @@ fn restore(
         .collect();
     for key in markers {
         let path = || format!("{}/marker {}", key.0, key.1);
-        bring_back(
+        restored |= bring_back(
             &mut flat.markers,
             [&ours.markers, &theirs.markers],
             &key,
@@ -966,27 +1061,51 @@ fn restore(
             conflicts,
         );
     }
+    restored
+}
+
+fn has<K: PartialEq, T>(list: &[(K, T)], key: &K) -> bool {
+    list.iter().any(|(found, _)| found == key)
 }
 
 /// Put `key` back in `list` from ours or theirs, after the element before
-/// it on that side, unless the list has it.
+/// it on that side, unless the list has it, and report it. Whether it did.
 fn bring_back<K: Clone + PartialEq, T: Clone>(
     list: &mut Vec<(K, T)>,
     [ours, theirs]: [&[(K, T)]; 2],
     key: &K,
     path: impl FnOnce() -> String,
     conflicts: &mut Vec<Conflict>,
-) {
-    let position = |side: &[(K, T)], key: &K| side.iter().position(|(found, _)| found == key);
-    if position(list, key).is_some() {
-        return;
-    }
-    let (side, what, kept) = match position(ours, key) {
-        Some(_) => (ours, "removed there, used here; restored", "ours"),
-        None => (theirs, "removed here, used there; restored", "theirs"),
+) -> bool {
+    let (side, what, kept) = if has(ours, key) {
+        (ours, "removed there, used here; restored", "ours")
+    } else {
+        (theirs, "removed here, used there; restored", "theirs")
     };
+    if !put_back(list, side, key) {
+        return false;
+    }
+    conflicts.push(Conflict {
+        path: path(),
+        what: what.to_owned(),
+        kept,
+    });
+    true
+}
+
+/// Put `key` back in `list` from `side`, after the element before it
+/// there, unless the list has it or the side does not. Whether it did.
+fn put_back<K: Clone + PartialEq, T: Clone>(
+    list: &mut Vec<(K, T)>,
+    side: &[(K, T)],
+    key: &K,
+) -> bool {
+    let position = |side: &[(K, T)], key: &K| side.iter().position(|(found, _)| found == key);
+    if has(list, key) {
+        return false;
+    }
     let Some(at) = position(side, key) else {
-        return;
+        return false;
     };
     let index = side[..at]
         .iter()
@@ -994,11 +1113,49 @@ fn bring_back<K: Clone + PartialEq, T: Clone>(
         .find_map(|(before, _)| position(list, before))
         .map_or(0, |index| index + 1);
     list.insert(index, side[at].clone());
-    conflicts.push(Conflict {
-        path: path(),
-        what: what.to_owned(),
-        kept,
-    });
+    true
+}
+
+/// Put back what is in a sequence, or in one of its tracks, from the side
+/// that kept it: tracks, clips, transitions, and, for a whole sequence,
+/// markers. The merged project keeps its own version of anything it has.
+/// Whether anything came back.
+fn put_back_contents(
+    flat: &mut Flat,
+    [ours, theirs]: [&Flat; 2],
+    sequence: &Id,
+    track: Option<&Id>,
+) -> bool {
+    let ours_kept = match track {
+        None => has(&ours.sequences, sequence),
+        Some(track) => has(&ours.tracks, &(sequence.clone(), track.clone())),
+    };
+    let side = if ours_kept { ours } else { theirs };
+    let within = |s: &Id, t: &Id| s == sequence && track.is_none_or(|track| t == track);
+    let mut restored = false;
+    for (key, _) in side.tracks.iter().filter(|((s, t), _)| within(s, t)) {
+        restored |= put_back(&mut flat.tracks, &side.tracks, key);
+    }
+    for (id, _) in side
+        .clips
+        .iter()
+        .filter(|(_, p)| within(&p.sequence, &p.track))
+    {
+        restored |= put_back(&mut flat.clips, &side.clips, id);
+    }
+    for (id, _) in side
+        .transitions
+        .iter()
+        .filter(|(_, p)| within(&p.sequence, &p.track))
+    {
+        restored |= put_back(&mut flat.transitions, &side.transitions, id);
+    }
+    if track.is_none() {
+        for (key, _) in side.markers.iter().filter(|((s, _), _)| s == sequence) {
+            restored |= put_back(&mut flat.markers, &side.markers, key);
+        }
+    }
+    restored
 }
 
 /// Move clips that overlap on a track after merging, each side having put
@@ -1691,6 +1848,46 @@ sequence s1 name="Main" rate=24 size=1920x1080 audio=48000 start=01:00:00:00
     }
 
     #[test]
+    fn a_media_file_changed_on_both_sides_keeps_ours_whole() {
+        // Ours relinks m1 to a consolidated copy; theirs replaces it.
+        let ours = edit(BASE, &[("path=\"a.mov\"", "path=\"media/a-1a2b3c4d.mov\"")]);
+        let theirs = edit(
+            BASE,
+            &[(
+                "m1 path=\"a.mov\" rate=24 dur=00:10:00:00 video=1920x1080",
+                "m1 path=\"media/new-9f8e7d6c.mov\" rate=25 dur=00:20:00:00 video=3840x2160",
+            )],
+        );
+        let merged = merge(BASE, &ours, &theirs);
+        assert_eq!(merged.text, ours);
+        assert_eq!(
+            merged.conflicts,
+            vec![conflict("media m1", "file changed on both sides", "ours")]
+        );
+        // A clip theirs slipped past the end of ours' file stops the merge.
+        let slipped = edit(
+            &theirs,
+            &[(
+                C1,
+                "clip c1 media=m1 src=00:15:00:00 at=01:00:00:00 dur=00:00:04:00",
+            )],
+        );
+        let error = merge_documents(BASE, &ours, &slipped, Catalog::builtin()).unwrap_err();
+        assert!(
+            error.contains("clip.source_range") && error.contains("c1"),
+            "{error}"
+        );
+        // The reel is not the file: it merges on its own.
+        let reel = (
+            "audio=2ch@48000\nmedia m2",
+            "audio=2ch@48000 reel=\"A001\"\nmedia m2",
+        );
+        let merged = merge(BASE, &ours, &edit(BASE, &[reel]));
+        assert_eq!(merged.text, edit(&ours, &[reel]));
+        assert_eq!(merged.conflicts, vec![]);
+    }
+
+    #[test]
     fn removed_against_changed_keeps_ours_either_way() {
         let retire = ("project name=\"Film\"", "project name=\"Film\" retired=c2");
         let removed = edit(BASE, &[retire, (C2, "")]);
@@ -1973,6 +2170,134 @@ sequence s1 name="Main" rate=24 size=1920x1080 audio=48000 start=01:00:00:00
                 "theirs"
             )]
         );
+    }
+
+    #[test]
+    fn a_sequence_one_side_removed_comes_back_whole_for_a_clip_the_other_nests_it_in() {
+        // s2 nests s3, which comes back too once s2's clips do.
+        let reel = |id: &str, clip: &str| {
+            format!(
+                "\nsequence {id} name=\"Reel\" rate=24 size=1920x1080 audio=48000 start=00:00:00:00\n  \
+                 track V1 video\n    \
+                 clip {clip} src=00:00:00:00 at=00:00:00:00 dur=00:00:05:00\n"
+            )
+        };
+        let base = format!(
+            "{BASE}{}{}",
+            reel("s2", "c7 seq=s3"),
+            reel("s3", "c9 media=m2")
+        );
+        let theirs = edit(
+            &base,
+            &[(
+                C2_END,
+                "dur=00:00:03:00\n    clip c8 seq=s2 src=00:00:01:00 at=01:00:07:00 dur=00:00:02:00\n",
+            )],
+        );
+        let restored = |what: &str, kept| {
+            ["sequence s2", "sequence s3"]
+                .map(|path| conflict(path, what, kept))
+                .to_vec()
+        };
+        let merged = merge(&base, BASE, &theirs);
+        assert_eq!(merged.text, theirs);
+        assert_eq!(
+            merged.conflicts,
+            restored("removed here, used there; restored", "theirs")
+        );
+        // From the other side, ours' clip brings them back from ours.
+        let merged = merge(&base, &theirs, BASE);
+        assert_eq!(merged.text, theirs);
+        assert_eq!(
+            merged.conflicts,
+            restored("removed there, used here; restored", "ours")
+        );
+    }
+
+    #[test]
+    fn a_track_one_side_removed_comes_back_whole_for_an_effect_the_other_reads_it_with() {
+        let base = edit(
+            BASE,
+            &[(
+                "  track A1 audio\n",
+                "  track V2 video\n    \
+                 clip c3 gen=solid@1 at=01:00:00:00 dur=00:00:04:00\n  track A1 audio\n",
+            )],
+        );
+        let matte = (
+            "link=L1\n    clip c2",
+            "link=L1\n      fx key.trackmatte@1 matte=V2\n    clip c2",
+        );
+        let theirs = edit(&base, &[matte]);
+        let merged = merge(&base, BASE, &theirs);
+        assert_eq!(merged.text, theirs);
+        assert_eq!(
+            merged.conflicts,
+            vec![conflict(
+                "s1/V2",
+                "removed here, used there; restored",
+                "theirs"
+            )]
+        );
+        // A sound track an audio spectrum draws comes back the same way.
+        let base = edit(
+            BASE,
+            &[(
+                A1_END,
+                "link=L1\n  track A2 audio\n    \
+                 clip a2 media=m2 src=00:00:00:00 at=01:00:00:00 dur=00:00:04:00\n  marker",
+            )],
+        );
+        let spectrum = (
+            "link=L1\n    clip c2",
+            "link=L1\n      fx generate.audiospectrum@1 audioLayer=A2\n    clip c2",
+        );
+        let theirs = edit(&base, &[spectrum]);
+        let merged = merge(&base, BASE, &theirs);
+        assert_eq!(merged.text, theirs);
+        assert_eq!(
+            merged.conflicts,
+            vec![conflict(
+                "s1/A2",
+                "removed here, used there; restored",
+                "theirs"
+            )]
+        );
+    }
+
+    #[test]
+    fn a_clip_both_sides_added_alike_keeps_its_link_group() {
+        let a2 = "    clip a2 media=m1 src=00:00:20:00 at=01:00:07:00 dur=00:00:02:00 link=L2\n";
+        let added = |audio: &str| {
+            edit(
+                BASE,
+                &[
+                    (
+                        C2_END,
+                        "dur=00:00:03:00\n    \
+                         clip c3 media=m1 src=00:00:20:00 at=01:00:07:00 dur=00:00:02:00 link=L2\n",
+                    ),
+                    (A1_END, &format!("link=L1\n{audio}  marker")),
+                ],
+            )
+        };
+        let ours = added(a2);
+        let theirs = added(&format!("{a2}      set gain=-3\n"));
+        let merged = merge(BASE, &ours, &theirs);
+        let a3 = a2.replace("a2", "a3");
+        assert_eq!(
+            merged.text,
+            added(&format!("{a2}  track A2 audio\n{a3}      set gain=-3\n"))
+        );
+        assert_eq!(
+            merged.conflicts,
+            vec![conflict(
+                "s1/A1/a3",
+                "overlapped a2 on A1; moved to A2",
+                "theirs"
+            )]
+        );
+        assert_eq!(merged.renamed, renames(&[("a2", "a3")]));
     }
 
     #[test]
