@@ -2298,16 +2298,33 @@ private slots:
         const auto save = [&shots](const QImage &image, const QString &name) {
             if (!shots.isEmpty()) QVERIFY(image.save(QDir(shots).filePath(name + QStringLiteral(".png"))));
         };
-        // Nothing amber or gold is left from the editor's palette.
-        const auto amberPixels = [](const QImage &image) {
+        // Nothing amber or gold is left from the editor's palette: no amber
+        // area, that is. Text drawn with subpixel antialiasing (as on Linux)
+        // has coloured fringes a pixel wide, which are not counted.
+        const auto isAmber = [](const QColor &color) {
+            return color.hue() >= 30 && color.hue() <= 52 && color.saturation() > 140 && color.value() > 150;
+        };
+        QPoint firstAmber;
+        const auto amberPixels = [&isAmber, &firstAmber](const QImage &image) {
             int count = 0;
-            for (int y = 0; y < image.height(); y += 2)
-                for (int x = 0; x < image.width(); x += 2) {
-                    const QColor color = image.pixelColor(x, y);
-                    if (color.hue() >= 30 && color.hue() <= 52 && color.saturation() > 140 && color.value() > 150) ++count;
+            for (int y = 1; y + 1 < image.height(); y += 2)
+                for (int x = 1; x + 1 < image.width(); x += 2) {
+                    bool area = true;
+                    for (int dy = -1; dy <= 1 && area; ++dy)
+                        for (int dx = -1; dx <= 1 && area; ++dx) area = isAmber(image.pixelColor(x + dx, y + dy));
+                    if (area && count++ == 0) firstAmber = QPoint(x, y);
                 }
             return count;
         };
+        {
+            QImage probe(40, 40, QImage::Format_RGB32);
+            probe.fill(Qt::white);
+            QPainter painter(&probe);
+            painter.fillRect(QRect(0, 0, 1, 40), QColor(0xf0, 0xb4, 0x29));
+            QCOMPARE(amberPixels(probe), 0);
+            painter.fillRect(QRect(10, 10, 20, 20), QColor(0xf0, 0xb4, 0x29));
+            QVERIFY(amberPixels(probe) > 0);
+        }
         const char *const pageNames[] = {"new", "recent", "preset", "clone"};
         for (const auto scheme : {ProjectLauncher::ColorScheme::Light, ProjectLauncher::ColorScheme::Dark}) {
             const bool dark = scheme == ProjectLauncher::ColorScheme::Dark;
@@ -2351,7 +2368,11 @@ private slots:
                     QVERIFY2(std::abs(fill.hue() - accent.hue()) <= 4 && std::abs(fill.value() - accent.value()) <= 24,
                              qPrintable(fill.name()));
                 }
-                QCOMPARE(amberPixels(image), 0);
+                QVERIFY2(amberPixels(image) == 0,
+                         qPrintable(QStringLiteral("amber area in %1-%2 at %3,%4")
+                                        .arg(QString::fromLatin1(pageNames[page]), schemeName)
+                                        .arg(firstAmber.x())
+                                        .arg(firstAmber.y())));
 #if defined(Q_OS_MACOS) && QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
                 // The sidebar runs up under a transparent title bar; the content titles itself.
                 QVERIFY(launcher.windowFlags().testFlag(Qt::ExpandedClientAreaHint));
@@ -2368,7 +2389,11 @@ private slots:
                     launcher.m_name->setFocus();
                     QCoreApplication::processEvents();
                     image = launcher.grab().toImage();
-                    QCOMPARE(amberPixels(image), 0);
+                    QVERIFY2(amberPixels(image) == 0,
+                             qPrintable(QStringLiteral("amber area in new-details-%1 at %2,%3")
+                                            .arg(schemeName)
+                                            .arg(firstAmber.x())
+                                            .arg(firstAmber.y())));
                     save(image, QStringLiteral("new-details-%1").arg(schemeName));
                 }
                 launcher.close();
