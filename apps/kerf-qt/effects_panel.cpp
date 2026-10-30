@@ -1,4 +1,5 @@
 #include "effects_panel.h"
+#include "editor_theme.h"
 
 #include <QComboBox>
 #include <QHBoxLayout>
@@ -22,12 +23,17 @@ namespace {
 constexpr QSize kCard{160, 90};
 // Previews asked for at once; the rest wait until the cards narrow.
 constexpr int kPreviewLimit = 48;
+// Whether a card shows its preview rather than the placeholder.
+constexpr int kHasPreview = Qt::UserRole + 3;
 
 QPixmap placeholder(const QString &category) {
     QPixmap pixmap(kCard);
-    pixmap.fill(QColor(0x2a, 0x2a, 0x2e));
+    pixmap.fill(editorTheme().cardPlaceholder);
     QPainter painter(&pixmap);
-    painter.setPen(QColor(0x8a, 0x8a, 0x92));
+    // An edge, so the card reads on the list's field in both appearances.
+    painter.setPen(editorTheme().border);
+    painter.drawRect(pixmap.rect().adjusted(0, 0, -1, -1));
+    painter.setPen(editorTheme().cardPlaceholderText);
     painter.drawText(pixmap.rect(), Qt::AlignCenter, category);
     return pixmap;
 }
@@ -71,6 +77,11 @@ EffectsPanel::EffectsPanel(QWidget *parent) : QWidget(parent) {
     connect(m_category, &QComboBox::currentIndexChanged, this, &EffectsPanel::refilter);
     connect(m_search, &QLineEdit::textChanged, this, &EffectsPanel::refilter);
     connect(m_cards, &QListWidget::itemActivated, this, &EffectsPanel::add);
+    // Placeholders are drawn in the theme's colours; previews are pictures.
+    connect(EditorAppearance::instance(), &EditorAppearance::changed, this, [this] {
+        for (QListWidgetItem *item : std::as_const(m_items))
+            if (!item->data(kHasPreview).toBool()) item->setIcon(placeholder(item->data(Qt::UserRole + 1).toString()));
+    });
     setClip(QString(), false);
 }
 
@@ -105,8 +116,10 @@ void EffectsPanel::setClip(const QString &clip, bool picture) {
     if (clip == m_clip && picture == m_picture) return;
     m_clip = clip;
     m_picture = picture;
-    for (QListWidgetItem *item : std::as_const(m_items))
+    for (QListWidgetItem *item : std::as_const(m_items)) {
         item->setIcon(placeholder(item->data(Qt::UserRole + 1).toString()));
+        item->setData(kHasPreview, false);
+    }
     m_hint->setText(clip.isEmpty() ? QStringLiteral("Select a clip to see effects on it, then double-click one to add it.")
                     : picture      ? QStringLiteral("Double-click an effect to add it to the clip.")
                                    : QStringLiteral("Double-click an effect to add it to the clip. Cards show media clips."));
@@ -115,8 +128,10 @@ void EffectsPanel::setClip(const QString &clip, bool picture) {
 
 void EffectsPanel::setPreview(const QString &clip, const QString &fx, const QImage &image) {
     if (clip != m_clip || image.isNull()) return;
-    if (QListWidgetItem *item = m_items.value(fx))
+    if (QListWidgetItem *item = m_items.value(fx)) {
         item->setIcon(QPixmap::fromImage(image.scaled(kCard, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+        item->setData(kHasPreview, true);
+    }
 }
 
 void EffectsPanel::refilter() {

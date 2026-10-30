@@ -2660,6 +2660,136 @@ private slots:
         QCOMPARE(changed.count(), before + 1);
     }
 
+    // The viewers, the Source monitor's scrub bar, bin tiles and effect
+    // cards draw in the theme in force, and the cached ones redraw when it
+    // changes. The viewers keep the same dark field in both appearances.
+    void paintedPanelsFollowTheAppearance() {
+        const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
+        const auto save = [&shots](const QImage &image, const QString &name) {
+            if (!shots.isEmpty()) QVERIFY(image.save(QDir(shots).filePath(name + QStringLiteral(".png"))));
+        };
+        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
+        // A blue picture, on which outlines in the (blue) accent must still read.
+        QImage picture(1920, 1080, QImage::Format_RGB32);
+        {
+            QPainter painter(&picture);
+            QLinearGradient sky(0, 0, 0, 1080);
+            sky.setColorAt(0, QColor("#9cc3ea"));
+            sky.setColorAt(0.6, QColor("#3d78c2"));
+            sky.setColorAt(1, QColor("#1b3350"));
+            painter.fillRect(picture.rect(), sky);
+        }
+        // Made in the tests' dark appearance, so the loop below sees them redraw.
+        MediaArtwork artwork;
+        artwork.frames.insert(QStringLiteral("m1"), picture.scaled(160, 90));
+        artwork.frames.insert(QStringLiteral("m2"), picture.scaled(160, 90));
+        ProjectPanel bin(&artwork);
+        bin.setSources(QJsonArray{
+            QJsonObject{{"id", "m1"}, {"path", "media/a.mov"}, {"width", 1920}, {"height", 1080}, {"duration", 4}},
+            QJsonObject{{"id", "m2"}, {"path", "media/b.mov"}, {"width", 1920}, {"height", 1080}, {"duration", 4}},
+            QJsonObject{{"id", "m3"}, {"path", "media/c.mov"}, {"width", 1920}, {"height", 1080}, {"duration", 4}},
+            QJsonObject{{"id", "m4"}, {"path", "media/d.wav"}, {"duration", 4}}});
+        bin.setMediaStatus(QJsonObject{{"missing", QJsonArray{"m3"}}, {"pointers", QJsonArray{"m2"}}, {"external", QJsonArray{"m1"}}});
+        bin.resize(560, 150);
+        EffectsPanel effects;
+        effects.setCatalog(QJsonArray{
+            QJsonObject{{"kind", "effect"}, {"id", "light.edgeglow"}, {"name", "Edge Glow"}, {"category", "light"}},
+            QJsonObject{{"kind", "effect"}, {"id", "blur.gaussian"}, {"name", "Gaussian Blur"}, {"category", "blur"}}});
+        effects.setClip(QStringLiteral("c1"), true);
+        QImage red(16, 9, QImage::Format_RGB32);
+        red.fill(Qt::red);
+        effects.setPreview(QStringLiteral("c1"), QStringLiteral("light.edgeglow"), red);
+        effects.resize(420, 200);
+        const auto tilePixel = [&bin](int row, const QPoint &at) {
+            return bin.m_list->item(row)->icon().pixmap(QSize(112, 63)).toImage().pixelColor(at);
+        };
+        const auto cardPixel = [&effects](const char *id) {
+            const QImage card = effects.m_items.value(QString::fromLatin1(id))->icon().pixmap(QSize(160, 90)).toImage();
+            return card.pixelColor(card.width() / 2, 4);
+        };
+
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            const EditorTheme &theme = editorTheme();
+            const QString name = theme.dark ? QStringLiteral("dark") : QStringLiteral("light");
+
+            // Program monitor: a picture, a caption, and two masks, one selected.
+            ViewerWidget viewer;
+            viewer.resize(640, 380);
+            viewer.setProjectInfo(1920, 1080);
+            viewer.setFrame(picture, 0.0);
+            viewer.setCaption(QStringLiteral("We open on the harbor at dawn."));
+            viewer.setMasks(QStringLiteral("c1"), QJsonArray{
+                QJsonObject{{"name", "k1"}, {"rect", QJsonArray{0.2, 0.15, 0.55, 0.6}}, {"mode", "add"}},
+                QJsonObject{{"name", "k2"}, {"ellipse", QJsonArray{0.75, 0.4, 0.12, 0.2}}, {"mode", "none"}}},
+                QTransform::fromScale(1920, 1080));
+            viewer.selectMask(QStringLiteral("k1"));
+            const QImage view = viewer.grab().toImage();
+            const qreal ratio = view.devicePixelRatio();
+            QCOMPARE(view.pixelColor(QPoint(2, 2) * ratio), theme.viewerSurround);
+            const QPointF corner = viewer.pictureToWidget().map(QPointF(0.2, 0.15));
+            QCOMPARE(view.pixelColor((corner * ratio).toPoint()), theme.maskHandleFill);
+            QCOMPARE(amberPixels(view), 0);
+            save(view, QStringLiteral("viewer-%1").arg(name));
+            viewer.clearFrame();
+            viewer.setMasks(QString(), {}, {});
+            viewer.setCaption(QString());
+            const QImage empty = viewer.grab().toImage();
+            QCOMPARE(empty.pixelColor((viewer.videoRect().topLeft() + QPointF(6, 6)).toPoint() * ratio), theme.viewerCanvas);
+            save(empty, QStringLiteral("viewer-empty-%1").arg(name));
+
+            // The focus region picker.
+            RegionPicker picker(picture.scaled(480, 270), QRectF(0.3, 0.2, 0.4, 0.5));
+            picker.resize(520, 290);
+            const QImage region = picker.grab().toImage();
+            QCOMPARE(region.pixelColor(QPoint(2, 2) * region.devicePixelRatio()), theme.viewerSurround);
+            QCOMPARE(amberPixels(region), 0);
+            save(region, QStringLiteral("region-%1").arg(name));
+
+            // Source monitor: the marked range and the position on the scrub bar.
+            SourceMonitorPanel monitor;
+            monitor.resize(480, 300);
+            monitor.open(QJsonObject{{"id", "m4"}, {"path", "media/d.wav"}, {"duration", 4.0}, {"rate", "24"}}, QString());
+            monitor.seek(1.0);
+            monitor.markIn();
+            monitor.seek(3.0);
+            monitor.markOut();
+            monitor.seek(2.0);
+            monitor.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&monitor));
+            QWidget *scrub = monitor.layout()->itemAt(1)->widget();
+            QVERIFY(scrub && scrub->height() == 18);
+            const QImage bar = scrub->grab().toImage();
+            const qreal barRatio = bar.devicePixelRatio();
+            const auto barX = [scrub](double seconds) { return static_cast<int>(8 + seconds / 4.0 * (scrub->width() - 16)); };
+            QCOMPARE(bar.pixelColor(QPoint(barX(0.5), 9) * barRatio).rgb(), theme.scrubTrack.rgb());
+            QCOMPARE(bar.pixelColor(QPoint(barX(1.5), 9) * barRatio).rgb(), theme.inOutRange.rgb());
+            QCOMPARE(bar.pixelColor(QPoint(barX(2.0), 3) * barRatio).rgb(), theme.playhead.rgb());
+            const QImage source = monitor.grab().toImage();
+            QCOMPARE(source.pixelColor(QPoint(2, 2) * source.devicePixelRatio()), theme.viewerSurround);
+            QCOMPARE(amberPixels(source), 0);
+            save(source, QStringLiteral("source-%1").arg(name));
+            monitor.close();
+
+            // Bin tiles and their badges, redrawn for the new appearance.
+            QCOMPARE(tilePixel(3, QPoint(2, 60)), theme.thumbnail);
+            QCOMPARE(tilePixel(2, QPoint(5, 10)), theme.badgeError);
+            QCOMPARE(tilePixel(1, QPoint(5, 10)).rgb(), theme.badgeInfo.rgb());
+            bin.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&bin));
+            const QImage tiles = bin.grab().toImage();
+            QCOMPARE(amberPixels(tiles), 0);
+            save(tiles, QStringLiteral("bin-%1").arg(name));
+
+            // Effect cards: placeholders follow the theme, a preview stays.
+            QCOMPARE(cardPixel("blur.gaussian"), theme.cardPlaceholder);
+            QCOMPARE(cardPixel("light.edgeglow"), QColor(Qt::red));
+            effects.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&effects));
+            save(effects.grab().toImage(), QStringLiteral("effects-%1").arg(name));
+        }
+    }
+
     // Answer the next modal question with `button`, checking that it asks `text`.
     static void answerQuestion(QWidget *parent, QDialogButtonBox::StandardButton button, const QString &text) {
         QTimer::singleShot(0, parent, [button, text] {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QHash>
+#include <QIcon>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QWidget>
@@ -32,6 +33,9 @@ signals:
 
 private:
     void refresh();
+    // Redraw every tile, for a change of appearance.
+    void refreshTiles();
+    QIcon tileFor(const QJsonObject &source) const;
 
     MediaArtwork *m_artwork = nullptr;
     QJsonArray m_sources;
