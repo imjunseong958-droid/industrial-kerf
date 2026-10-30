@@ -212,6 +212,9 @@ private:
 
     // Presets in the project's library, and the media behind its slots.
     void savePreset();
+    // The bridge refused the save in progress because `path` exists: ask,
+    // then save again over it.
+    void replaceSavedPreset(const QString &path);
     void applyLibraryPreset(const QString &path);
     // Swap the file behind `mediaId`; asks for the file when `path` is empty.
     void replaceMedia(const QString &mediaId, const QString &path = QString());
@@ -259,6 +262,8 @@ private:
     QString m_lastFocusLabel;
     ProjectPanel *m_projectPanel = nullptr;
     PresetsPanel *m_presets = nullptr;
+    // The name of the preset being saved, until the bridge answers.
+    QString m_savingPreset;
     // project.kerf changed outside Kerf: load it or keep the editor's version.
     QFrame *m_divergedBanner = nullptr;
     QPushButton *m_loadFromDisk = nullptr;

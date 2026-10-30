@@ -2399,8 +2399,17 @@ void MainWindow::handleCollabEvent(const QJsonObject &event) {
                 lines << QStringLiteral("%1 · %2").arg(commit.value(QStringLiteral("author")).toString(),
                                                         commit.value(QStringLiteral("subject")).toString());
             }
-            for (const QJsonValue &value : conflicts)
-                lines << QStringLiteral("Kept yours · %1").arg(value.toObject().value(QStringLiteral("what")).toString());
+            int keptTheirs = 0;
+            for (const QJsonValue &value : conflicts) {
+                const QJsonObject conflict = value.toObject();
+                const bool theirs = conflict.value(QStringLiteral("kept")).toString() == QStringLiteral("theirs");
+                if (theirs) ++keptTheirs;
+                const QString path = conflict.value(QStringLiteral("path")).toString();
+                const QString what = conflict.value(QStringLiteral("what")).toString();
+                lines << QStringLiteral("%1 · %2").arg(theirs ? QStringLiteral("Kept theirs") : QStringLiteral("Kept yours"),
+                                                        path.isEmpty() ? what : QStringLiteral("%1: %2").arg(path, what));
+            }
+            const int keptYours = conflicts.size() - keptTheirs;
             for (const QJsonValue &value : report.value(QStringLiteral("renamed")).toArray()) {
                 const QJsonArray pair = value.toArray();
                 lines << QStringLiteral("Renumbered · %1 → %2").arg(pair.at(0).toString(), pair.at(1).toString());
@@ -2412,15 +2421,17 @@ void MainWindow::handleCollabEvent(const QJsonObject &event) {
             if (!incoming.isEmpty())
                 summary << (incoming.size() == 1 ? QStringLiteral("1 commit in") : QStringLiteral("%1 commits in").arg(incoming.size()));
             if (report.value(QStringLiteral("pushed")).toBool()) summary << QStringLiteral("pushed");
-            if (!conflicts.isEmpty())
-                summary << (conflicts.size() == 1 ? QStringLiteral("1 change kept yours")
-                                                  : QStringLiteral("%1 changes kept yours").arg(conflicts.size()));
+            if (keptYours > 0)
+                summary << (keptYours == 1 ? QStringLiteral("1 change kept yours") : QStringLiteral("%1 changes kept yours").arg(keptYours));
+            if (keptTheirs > 0)
+                summary << (keptTheirs == 1 ? QStringLiteral("1 change kept theirs") : QStringLiteral("%1 changes kept theirs").arg(keptTheirs));
             if (!summary.isEmpty() || m_syncRequested)
                 statusBar()->showMessage(summary.isEmpty() ? QStringLiteral("Synced: up to date")
                                                            : QStringLiteral("Synced: ") + summary.join(QStringLiteral(", ")),
                                          8000);
-            // Collaborators' presets come with the pull.
-            if (!incoming.isEmpty() || m_syncRequested) execute(QStringLiteral("preset.library"));
+            // A pull or branch switch changes presets/, and a commit who
+            // last changed each preset.
+            execute(QStringLiteral("preset.library"));
             m_syncRequested = false;
         } else if (stage == QStringLiteral("failed")) {
             m_syncRequested = false;
@@ -2435,8 +2446,11 @@ void MainWindow::handleCollabEvent(const QJsonObject &event) {
     } else if (type == QStringLiteral("collab_pull_request")) {
         const QString url = event.value(QStringLiteral("url")).toString();
         const bool created = event.value(QStringLiteral("created")).toBool();
+        // Without gh, the bridge gives GitHub's page for starting one.
+        const bool compare = QUrl(url).path().section(QLatin1Char('/'), 3, 3) == QStringLiteral("compare");
         statusBar()->showMessage(created ? QStringLiteral("Opened a pull request: %1").arg(url)
-                                         : QStringLiteral("This branch already has a pull request: %1").arg(url),
+                                 : compare ? QStringLiteral("Opened GitHub's page for a new pull request: %1").arg(url)
+                                           : QStringLiteral("This branch already has a pull request: %1").arg(url),
                                  8000);
         addActivity(QStringLiteral("sync"), url);
 #ifndef KERF_QT_TESTING
@@ -2664,14 +2678,17 @@ void MainWindow::savePreset() {
                                                QLineEdit::Normal, QString(), &ok)
                              .trimmed();
     if (!ok || name.isEmpty()) return;
-    bool replace = false;
-    if (QFileInfo::exists(QDir(m_projectDirectory).filePath(QStringLiteral("presets/%1.kerfpreset").arg(name)))) {
-        if (QMessageBox::question(this, QStringLiteral("Save Current as Preset"),
-                                  QStringLiteral("presets/%1.kerfpreset already exists. Replace it?").arg(name)) != QMessageBox::Yes)
-            return;
-        replace = true;
-    }
-    execute(QStringLiteral("preset.save"), QJsonObject{{QStringLiteral("name"), name}, {QStringLiteral("replace"), replace}});
+    // The bridge names the file, cleaning the name up, and refuses one that
+    // exists; replacing it is asked then.
+    m_savingPreset = name;
+    execute(QStringLiteral("preset.save"), QJsonObject{{QStringLiteral("name"), name}, {QStringLiteral("replace"), false}});
+}
+
+void MainWindow::replaceSavedPreset(const QString &path) {
+    const QString name = std::exchange(m_savingPreset, QString());
+    if (QMessageBox::question(this, QStringLiteral("Save Current as Preset"),
+                              QStringLiteral("%1 already exists. Replace it?").arg(path)) == QMessageBox::Yes)
+        execute(QStringLiteral("preset.save"), QJsonObject{{QStringLiteral("name"), name}, {QStringLiteral("replace"), true}});
 }
 
 void MainWindow::applyLibraryPreset(const QString &path) {
@@ -2956,9 +2973,16 @@ void MainWindow::handleEvent(QJsonObject event) {
         m_viewer->setCaption(QString());
         m_hasShownFrame = false;
     } else if (type == QStringLiteral("error")) {
-        showError(event.value(QStringLiteral("message")).toString(QStringLiteral("Runtime error")));
-        // A refused mask edit puts the outline back.
-        updateViewerMasks();
+        const QString message = event.value(QStringLiteral("message")).toString(QStringLiteral("Runtime error"));
+        // How preset_save refuses a file that exists, after its path.
+        static const QString presetExists = QStringLiteral(" already exists; choose another name or replace it");
+        if (!m_savingPreset.isEmpty() && message.endsWith(presetExists)) {
+            replaceSavedPreset(message.chopped(presetExists.size()));
+        } else {
+            showError(message);
+            // A refused mask edit puts the outline back.
+            updateViewerMasks();
+        }
     } else if (type == QStringLiteral("preset_export")) {
         const QString path = event.value(QStringLiteral("path")).toString();
         const QByteArray document = event.value(QStringLiteral("document")).toString().toUtf8();
@@ -2976,6 +3000,7 @@ void MainWindow::handleEvent(QJsonObject event) {
     } else if (type == QStringLiteral("preset_library")) {
         m_presets->setLibrary(event, m_projectDirectory);
     } else if (type == QStringLiteral("preset_saved")) {
+        m_savingPreset.clear();
         const QString path = event.value(QStringLiteral("path")).toString();
         statusBar()->showMessage(QStringLiteral("Saved preset %1").arg(path), 6000);
         addActivity(QStringLiteral("preset"), path);
@@ -3131,6 +3156,12 @@ void MainWindow::handleEvent(QJsonObject event) {
 }
 
 void MainWindow::applySnapshot(const QJsonObject &snapshot) {
+    const auto diverged = [](const QJsonObject &state) {
+        return state.value(QStringLiteral("projectionStatus")).toString() == QStringLiteral("diverged");
+    };
+    // project.kerf changing outside Kerf (a pull in a terminal), or being
+    // loaded, can come with other presets.
+    const bool presetsMayDiffer = m_connected && diverged(m_snapshot) != diverged(snapshot);
     m_snapshot = snapshot;
     m_revision = static_cast<quint64>(snapshot.value(QStringLiteral("revision")).toDouble());
     m_duration = std::max(0.0, snapshot.value(QStringLiteral("duration")).toDouble());
@@ -3184,9 +3215,10 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     }
     updateProposal(snapshot.value(QStringLiteral("pendingProposal")));
     m_timeline->setProposal(m_proposalId.isEmpty() ? QJsonObject{} : snapshot.value(QStringLiteral("proposalTimeline")).toObject());
-    m_divergedBanner->setVisible(snapshot.value(QStringLiteral("projectionStatus")).toString() == QStringLiteral("diverged"));
+    m_divergedBanner->setVisible(diverged(snapshot));
     updateInspector();
     updateCommandStates();
+    if (presetsMayDiffer) execute(QStringLiteral("preset.library"));
 }
 
 QString MainWindow::selectedTrackType() const {

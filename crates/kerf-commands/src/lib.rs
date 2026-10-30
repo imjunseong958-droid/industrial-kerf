@@ -117,8 +117,6 @@ pub struct CollabState {
     /// A merge is in progress with unresolved paths.
     pub conflicted: bool,
     pub branches: Vec<String>,
-    /// The GitHub CLI is signed in.
-    pub gh: bool,
     /// Live sync is on.
     pub live: bool,
     /// A sync, commit, branch switch, or publish is running.
@@ -507,14 +505,13 @@ fn can_switch(context: &Context) -> Result<(), &'static str> {
     }
 }
 
+/// The bridge pushes the branch, then opens the pull request with `gh`, or
+/// GitHub's page for starting one when `gh` is not installed.
 fn can_open_pull_request(context: &Context) -> Result<(), &'static str> {
-    let collab = idle(context)?;
-    if collab.remote.is_none() {
-        Err("Publish the project to GitHub first")
-    } else if !collab.gh {
-        Err("Sign in to GitHub with `gh auth login`")
-    } else {
+    if idle(context)?.remote.is_some() {
         Ok(())
+    } else {
+        Err("Publish the project to GitHub first")
     }
 }
 
@@ -1920,7 +1917,6 @@ mod tests {
                 remote: Some("git@github.com:jun/film.git".into()),
                 changed: true,
                 branches: vec!["main".into(), "color".into()],
-                gh: true,
                 ..CollabState::default()
             }),
             ..ready()
@@ -1997,14 +1993,9 @@ mod tests {
         let collab = context.collab.as_mut().unwrap();
         collab.busy = false;
         collab.changed = false;
-        collab.gh = false;
         collab.branches = vec!["main".into()];
         let quiet = states(&context);
         assert_eq!(quiet["collab.commit"], "Nothing to commit");
-        assert_eq!(
-            quiet["collab.pullRequest"],
-            "Sign in to GitHub with `gh auth login`"
-        );
         assert_eq!(quiet["collab.switchBranch"], "There are no other branches");
         assert_eq!(quiet["collab.consolidate"], Value::Null);
 
@@ -2023,6 +2014,29 @@ mod tests {
         assert_eq!(local["collab.sync"], NOT_SHARED);
         assert_eq!(local["collab.live"], NOT_SHARED);
         assert_eq!(local["collab.publish"], Value::Null);
+    }
+
+    #[test]
+    fn a_pull_request_needs_a_remote_but_not_gh() {
+        // The editor's context, from a status where gh is not installed: the
+        // bridge opens GitHub's compare page instead.
+        let mut context: Context = serde_json::from_value(json!({
+            "connected": true,
+            "collab": {
+                "repository": true,
+                "branch": "color",
+                "remote": "git@github.com:jun/film.git",
+                "branches": ["main", "color"],
+                "gh": false,
+            },
+        }))
+        .unwrap();
+        assert_eq!(states(&context)["collab.pullRequest"], Value::Null);
+        context.collab.as_mut().unwrap().remote = None;
+        assert_eq!(
+            states(&context)["collab.pullRequest"],
+            "Publish the project to GitHub first"
+        );
     }
 
     #[test]
