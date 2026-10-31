@@ -11,6 +11,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPainter>
 #include <QPixmap>
 #include <QPushButton>
 #include <QScrollArea>
@@ -23,6 +24,35 @@
 #include <cmath>
 
 namespace kerf {
+
+namespace {
+
+// Every row's label takes one column, so the fields of the clip's timing,
+// its properties, masks and effects all start at one edge; a long label
+// wraps in it.
+constexpr int kLabelColumn = 96;
+// A number field is as wide as a value needs, as in Final Cut's inspector,
+// not the panel's width.
+constexpr int kNumberWidth = 96;
+
+// A form in the inspector's column: number fields, pop-ups and wells keep
+// their size, and only text fields grow.
+QFormLayout *inspectorForm(QWidget *parent = nullptr) {
+    auto *form = new QFormLayout(parent);
+    form->setHorizontalSpacing(8);
+    form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+    form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    return form;
+}
+
+void addRow(QFormLayout *form, const QString &label, QWidget *field) {
+    auto *name = new QLabel(label);
+    name->setFixedWidth(kLabelColumn);
+    name->setWordWrap(true);
+    form->addRow(name, field);
+}
+
+} // namespace
 
 EffectControlsPanel::EffectControlsPanel(QWidget *parent) : QWidget(parent) {
     setObjectName(QStringLiteral("effectControls"));
@@ -40,9 +70,9 @@ EffectControlsPanel::EffectControlsPanel(QWidget *parent) : QWidget(parent) {
     layout->setContentsMargins(10, 8, 10, 8);
     layout->setSpacing(6);
     auto *timing = new QWidget;
-    auto *form = new QFormLayout(timing);
+    auto *form = inspectorForm(timing);
     form->setContentsMargins(0, 0, 0, 0);
-    form->setSpacing(6);
+    form->setVerticalSpacing(6);
     m_clipName = new QLabel(QStringLiteral("Select a clip"));
     m_clipName->setObjectName(QStringLiteral("inspectorClip"));
     form->addRow(m_clipName);
@@ -51,16 +81,16 @@ EffectControlsPanel::EffectControlsPanel(QWidget *parent) : QWidget(parent) {
     m_in = timingSpin(0.0, 86400.0, 0.01, QStringLiteral("in"));
     m_out = timingSpin(0.01, 86400.0, 0.01, QStringLiteral("out"));
     m_speed = timingSpin(0.01, 20.0, 0.01, QStringLiteral("speed"));
-    form->addRow(QStringLiteral("Position"), m_position);
-    form->addRow(QStringLiteral("Duration"), m_duration);
-    form->addRow(QStringLiteral("Source in"), m_in);
-    form->addRow(QStringLiteral("Source out"), m_out);
-    form->addRow(QStringLiteral("Speed"), m_speed);
+    addRow(form, QStringLiteral("Position"), m_position);
+    addRow(form, QStringLiteral("Duration"), m_duration);
+    addRow(form, QStringLiteral("Source in"), m_in);
+    addRow(form, QStringLiteral("Source out"), m_out);
+    addRow(form, QStringLiteral("Speed"), m_speed);
     layout->addWidget(timing);
     auto *properties = new QWidget;
-    m_propertyForm = new QFormLayout(properties);
+    m_propertyForm = inspectorForm(properties);
     m_propertyForm->setContentsMargins(0, 0, 0, 0);
-    m_propertyForm->setSpacing(6);
+    m_propertyForm->setVerticalSpacing(6);
     layout->addWidget(properties);
     // Masks: the tools that draw one on the Program monitor, then each mask
     // with its mode, inversion, and properties.
@@ -93,6 +123,7 @@ EffectControlsPanel::EffectControlsPanel(QWidget *parent) : QWidget(parent) {
 
 QDoubleSpinBox *EffectControlsPanel::timingSpin(double minimum, double maximum, double step, const QString &field) {
     auto *spin = new StepperSpinBox;
+    spin->setMaximumWidth(kNumberWidth);
     spin->setRange(minimum, maximum);
     spin->setSingleStep(step);
     spin->setDecimals(2);
@@ -128,7 +159,7 @@ void EffectControlsPanel::setClip(const QString &id, const QJsonObject &clip, co
             QWidget *editor = propertyEditor(def.toObject());
             const QString name = def.toObject().value(QStringLiteral("name")).toString();
             m_propertyEditors.insert(name, editor);
-            m_propertyForm->addRow(name, editor);
+            addRow(m_propertyForm, name, editor);
         }
     }
     const QJsonObject props = clip.value(QStringLiteral("props")).toObject();
@@ -240,8 +271,8 @@ void EffectControlsPanel::showMasks() {
             header->addStretch(1);
             header->addWidget(remove);
             boxLayout->addLayout(header);
-            auto *form = new QFormLayout;
-            form->setSpacing(4);
+            auto *form = inspectorForm();
+            form->setVerticalSpacing(4);
             auto *mode = new QComboBox;
             mode->setObjectName(QStringLiteral("maskMode"));
             mode->addItems(m_maskModes);
@@ -249,13 +280,13 @@ void EffectControlsPanel::showMasks() {
             connect(mode, &QComboBox::activated, this, [this, name, mode] {
                 maskEdited(name, QJsonObject{{QStringLiteral("mode"), mode->currentText()}});
             });
-            form->addRow(tr("Mode"), mode);
+            addRow(form, tr("Mode"), mode);
             auto *inverted = new QCheckBox;
             inverted->setObjectName(QStringLiteral("maskInverted"));
             connect(inverted, &QCheckBox::clicked, this, [this, name](bool on) {
                 maskEdited(name, QJsonObject{{QStringLiteral("inverted"), on}});
             });
-            form->addRow(tr("Inverted"), inverted);
+            addRow(form, tr("Inverted"), inverted);
             for (const QJsonValue &defValue : m_maskDefs) {
                 const QJsonObject def = defValue.toObject();
                 const QString param = def.value(QStringLiteral("name")).toString();
@@ -268,7 +299,7 @@ void EffectControlsPanel::showMasks() {
                                                   QJsonObject{{param, isDefault ? QJsonValue() : value}}}});
                 });
                 editor->setObjectName(QStringLiteral("maskParam_") + param);
-                form->addRow(param, editor);
+                addRow(form, param, editor);
             }
             boxLayout->addLayout(form);
             m_masksLayout->addWidget(box);
@@ -378,8 +409,8 @@ void EffectControlsPanel::showEffects() {
         header->addWidget(enabled, 1);
         header->addWidget(remove);
         boxLayout->addLayout(header);
-        auto *form = new QFormLayout;
-        form->setSpacing(4);
+        auto *form = inspectorForm();
+        form->setVerticalSpacing(4);
         const QJsonObject params = effect.value(QStringLiteral("params")).toObject();
         for (const QJsonValue &paramValue : def.value(QStringLiteral("params")).toArray()) {
             const QJsonObject param = paramValue.toObject();
@@ -401,7 +432,7 @@ void EffectControlsPanel::showEffects() {
             editor->setEnabled(!value.isArray());
             QString label = param.value(QStringLiteral("doc")).toString(name);
             if (label.isEmpty()) label = name;
-            form->addRow(label, editor);
+            addRow(form, label, editor);
         }
         boxLayout->addLayout(form);
         m_effectsLayout->addWidget(box);
@@ -472,6 +503,7 @@ QWidget *EffectControlsPanel::valueEditor(const QJsonObject &def, const QString 
     QWidget *editor = nullptr;
     if (type == QStringLiteral("number")) {
         auto *spin = new StepperSpinBox;
+        spin->setMaximumWidth(kNumberWidth);
         const double minimum = def.value(QStringLiteral("min")).toDouble(-1e6);
         const double maximum = def.value(QStringLiteral("max")).toDouble(1e6);
         spin->setRange(minimum, maximum);
@@ -489,9 +521,14 @@ QWidget *EffectControlsPanel::valueEditor(const QJsonObject &def, const QString 
         connect(check, &QCheckBox::clicked, this, [edited](bool checked) { edited(checked); });
         editor = check;
     } else if (type == QStringLiteral("color")) {
+        // A colour well, as macOS draws one: the colour in a small bezel,
+        // with no code beside it. Its value is the modelColor property.
         auto *button = new QPushButton;
+        button->setProperty("colorWell", true);
+        button->setFixedSize(44, 22);
+        button->setIconSize(QSize(32, 12));
         connect(button, &QPushButton::clicked, this, [this, button, title, edited] {
-            const QColor color = QColorDialog::getColor(modelColor(button->text()), this, title,
+            const QColor color = QColorDialog::getColor(modelColor(button->property("modelColor").toString()), this, title,
                                                         QColorDialog::ShowAlphaChannel);
             if (color.isValid()) edited(modelColorName(color));
         });
@@ -539,10 +576,20 @@ void EffectControlsPanel::setPropertyValue(QWidget *editor, const QJsonValue &va
     else if (auto *combo = qobject_cast<QComboBox *>(editor)) combo->setCurrentText(value.toString());
     else if (auto *check = qobject_cast<QCheckBox *>(editor)) check->setChecked(value.toBool());
     else if (auto *button = qobject_cast<QPushButton *>(editor)) {
-        QPixmap swatch(12, 12);
-        swatch.fill(modelColor(value.toString()));
+        // The swatch fills the well, with a hairline so white reads on the
+        // light bezel and black on the dark one's.
+        QPixmap swatch(button->iconSize() * 2);
+        swatch.setDevicePixelRatio(2);
+        swatch.fill(Qt::transparent);
+        QPainter painter(&swatch);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(QColor(0, 0, 0, 70), 1));
+        painter.setBrush(modelColor(value.toString()));
+        painter.drawRoundedRect(QRectF(QPointF(0.5, 0.5), QSizeF(button->iconSize()) - QSizeF(1, 1)), 2.5, 2.5);
+        painter.end();
         button->setIcon(swatch);
-        button->setText(value.toString());
+        button->setProperty("modelColor", value.toString());
+        button->setAccessibleDescription(value.toString());
     }
     else if (auto *line = qobject_cast<QLineEdit *>(editor)) line->setText(value.toString());
 }

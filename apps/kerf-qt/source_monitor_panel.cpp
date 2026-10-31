@@ -68,8 +68,12 @@ protected:
         const auto x = [&](double seconds) { return track.left() + seconds / duration * track.width(); };
         painter.fillRect(QRectF(x(m_panel->m_in), track.top(), x(m_panel->m_out) - x(m_panel->m_in), track.height()),
                          theme.inOutRange);
+        // The position is cut out of the track with a pixel of the panel on
+        // each side, so it reads over the marked range, an accent wash too.
+        const qreal at = x(m_panel->m_position);
+        painter.fillRect(QRectF(at - 2, 2, 4, height() - 4), theme.panel);
         painter.setPen(QPen(theme.playhead, 2));
-        painter.drawLine(QPointF(x(m_panel->m_position), 2), QPointF(x(m_panel->m_position), height() - 2));
+        painter.drawLine(QPointF(at, 2), QPointF(at, height() - 2));
     }
     void mousePressEvent(QMouseEvent *event) override { seekTo(event->position().x()); }
     void mouseMoveEvent(QMouseEvent *event) override {

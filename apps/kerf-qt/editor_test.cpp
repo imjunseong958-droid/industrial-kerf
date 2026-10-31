@@ -1064,7 +1064,9 @@ private slots:
         auto *color = qobject_cast<QPushButton *>(window.m_effectControls->m_propertyEditors.value("color"));
         QVERIFY(text && color && window.m_effectControls->m_propertyEditors.contains("opacity"));
         QCOMPARE(text->text(), QStringLiteral("Day One"));
-        QCOMPARE(color->text(), QStringLiteral("#ffffff"));
+        // A colour well: the swatch, with the value behind it rather than beside it.
+        QCOMPARE(color->property("modelColor").toString(), QStringLiteral("#ffffff"));
+        QVERIFY(color->text().isEmpty());
         QVERIFY(!color->icon().isNull());
         QCOMPARE(modelColor(QStringLiteral("#ff000080")).alpha(), 0x80);
         QCOMPARE(modelColorName(QColor(255, 0, 0, 0x80)), QStringLiteral("#ff000080"));
@@ -2587,6 +2589,30 @@ private slots:
         emit artwork->changed();
     }
 
+    // The accent as text (the transports' timecodes, the timeline's corner
+    // time, the sync chip) reads at 4.5:1 on each surface it is drawn on,
+    // whichever accent System Settings has, in both appearances.
+    void accentTextReadsOnEverySurfaceItIsDrawnOn() {
+        // macOS's accents in light and dark: blue, purple, pink, red, orange,
+        // yellow, green, and graphite.
+        const char *const accents[] = {"#007aff", "#0a84ff", "#953d96", "#bf5af2", "#f74f9e", "#ff375f", "#e0383e",
+                                       "#ff453a", "#f7821b", "#ff9f0a", "#ffc600", "#ffd60a", "#62ba46", "#32d74b",
+                                       "#8c8c8c", "#98989d"};
+        for (const bool dark : {false, true})
+            for (const char *accent : accents) {
+                const EditorTheme theme = makeEditorTheme(dark, QColor(accent));
+                for (const QColor &surface : {theme.panel, theme.rulerCorner, theme.statusBar}) {
+                    const qreal ratio = contrastRatio(theme.accentText, surface);
+                    QVERIFY2(ratio >= 4.5, qPrintable(QStringLiteral("%1 on %2 in %3: %4")
+                                                          .arg(theme.accentText.name(), surface.name(),
+                                                               dark ? QStringLiteral("dark") : QStringLiteral("light"))
+                                                          .arg(ratio, 0, 'f', 2)));
+                }
+            }
+        // The dark default reads on the timeline's corner with room to spare.
+        QVERIFY(contrastRatio(makeEditorTheme(true, QColor("#0a84ff")).accentText, QColor("#232325")) >= 5.0);
+    }
+
     void editorRendersBothAppearances() {
         QSettings().remove(QStringLiteral("workspace"));
         const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
@@ -2654,7 +2680,21 @@ private slots:
             QVERIFY(contrastRatio(theme.badgeErrorText, theme.badgeError) >= 4.5);
             // In dark, the current tab is lighter than the strip, as in light.
             QVERIFY(theme.panelTitleActive.lightness() > theme.panelTitle.lightness());
-            QVERIFY(contrastRatio(theme.accentText, theme.panel) >= 4.5);
+            // The accent as text reads on each surface it is drawn on; see
+            // accentTextReadsOnEverySurfaceItIsDrawnOn for every accent.
+            for (const QColor &surface : {theme.panel, theme.rulerCorner, theme.statusBar})
+                QVERIFY2(contrastRatio(theme.accentText, surface) >= 4.5, qPrintable(surface.name()));
+            // A track's mute and lock letters read on their toggles.
+            QVERIFY(contrastRatio(theme.trackToggleGlyph, theme.trackToggle) >= 4.5);
+            // An unchecked check box's edge reads (3:1) on the panels and
+            // dialogs it sits on, and on a dialog's grouped boxes.
+            const auto over = [](const QColor &under, QColor top) {
+                const qreal alpha = top.alphaF();
+                top.setAlpha(255);
+                return mixColor(under, top, alpha);
+            };
+            for (const QColor &surface : {theme.panel, theme.dialog, over(theme.dialog, theme.group)})
+                QVERIFY2(contrastRatio(theme.checkBorder, surface) >= 3.0, qPrintable(surface.name()));
             QVERIFY(contrastRatio(theme.assistantText, theme.chrome) >= 4.5);
             QVERIFY(contrastRatio(theme.tabInactiveText, theme.panelTitle) >= 4.5);
             QVERIFY(contrastRatio(theme.trackHeaderDetail, theme.trackHeader) >= 4.5);
@@ -2697,6 +2737,29 @@ private slots:
             QVERIFY(toolbar);
             QCOMPARE(dominantColor(toolbar->grab().toImage()), theme.chrome.rgb());
             QCOMPARE(dominantColor(window.statusBar()->grab().toImage()), theme.statusBar.rgb());
+            // The window is titled with the project, so the Window menu,
+            // Mission Control and the Dock name it, and the toolbar shows the same.
+            QCOMPARE(window.windowTitle(), QStringLiteral("Harbor Teaser"));
+            QCOMPARE(window.m_projectTitle->text(), window.windowTitle());
+#if defined(Q_OS_MACOS) && QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
+            // The toolbar is the title bar: the window runs up under a
+            // transparent one, and its commands start past the window buttons.
+            QVERIFY(window.windowFlags().testFlag(Qt::ExpandedClientAreaHint));
+            QVERIFY(window.windowFlags().testFlag(Qt::NoTitleBarBackgroundHint));
+            QCOMPARE(toolbar->geometry().top(), 0);
+            QVERIFY(window.m_windowButtons->isVisible());
+            QVERIFY(toolbar->mapTo(&window, window.m_windowButtons->geometry().topRight()).x() >= 72);
+            for (QAction *action : toolbar->actions())
+                if (QWidget *item = toolbar->widgetForAction(action); item && item->isVisible() && item != window.m_windowButtons)
+                    QVERIFY(item->x() > window.m_windowButtons->geometry().right());
+#endif
+            // Timecodes in the accent sit on the panel accentText is made to read on.
+            const auto times = window.findChildren<QLabel *>(QStringLiteral("transportTime"));
+            QCOMPARE(times.size(), 2);
+            for (QLabel *time : times) {
+                QCOMPARE(time->palette().color(QPalette::WindowText).rgb(), theme.accentText.rgb());
+                QCOMPARE(dominantColor(time->parentWidget()->grab().toImage()), theme.panel.rgb());
+            }
             // The launcher's chrome: #f5f5f5 in light, #2c2c2e in dark.
             QVERIFY(dark ? qGray(dominantColor(toolbar->grab().toImage())) < 60 : qGray(dominantColor(toolbar->grab().toImage())) > 220);
             // The agent's bar is the window's chrome with a purple stripe, not amber.
@@ -2798,7 +2861,17 @@ private slots:
                 const QImage createImage = create->grab().toImage();
                 const QColor createFill = createImage.pixelColor(QPoint(6, create->height() / 2) * createImage.devicePixelRatio());
                 QVERIFY2(std::abs(createFill.hue() - theme.accent.hue()) <= 4, qPrintable(createFill.name()));
+                // Sized to its slots, as macOS dialogs are, with no empty
+                // window under them; Details grows it, and closing shrinks it back.
+                QVERIFY2(dialog->height() < 400, qPrintable(QString::number(dialog->height())));
                 save(bindings, QStringLiteral("dialog-%1").arg(name));
+                auto *details = dialog->findChild<QToolButton *>(QStringLiteral("disclosure"));
+                QVERIFY(details);
+                const int closedHeight = dialog->height();
+                details->click();
+                QVERIFY(dialog->height() > closedHeight);
+                details->click();
+                QCOMPARE(dialog->height(), closedHeight);
                 dialog->reject();
             });
             window.showPresetBindings(QStringLiteral("presets/harbor-intro.kerfpreset"), preset);
@@ -2863,7 +2936,65 @@ private slots:
             for (QWidget *part : window.m_divergedBanner->findChildren<QWidget *>(Qt::FindDirectChildrenOnly))
                 if (part != window.m_divergedGlyph) QCOMPARE(amberPixels(part->grab().toImage()), 0);
             QCOMPARE(dominantColor(window.m_divergedBanner->grab().toImage()), theme.warningSurface.rgb());
+            // The banner is its own bar, not a second row of the toolbar: in
+            // dark a step lighter than it, in light a warm tint.
+            QVERIFY(theme.warningSurface.rgb() != theme.chrome.rgb());
+            if (dark) QVERIFY(theme.warningSurface.lightness() > theme.chrome.lightness());
+            // The assistant's view, scrolled, has an edge under its header.
+            QVERIFY(window.m_chatScroll->verticalScrollBar()->value() > 0);
+            auto *scrollEdge = window.findChild<QFrame *>(QStringLiteral("scrollEdge"));
+            QVERIFY(scrollEdge && scrollEdge->isVisible());
+            QCOMPARE(scrollEdge->grab().toImage().pixelColor(4, 0).rgb(), theme.divider.rgb());
             save(states, QStringLiteral("states-%1").arg(name));
+
+            // Where the timeline's scroll bars meet is the panel, not a framed
+            // square. Both bars are shown here, whatever the fonts' heights.
+            {
+                QScrollArea *scroll = window.m_timelineScroll;
+                const Qt::ScrollBarPolicy verticalPolicy = scroll->verticalScrollBarPolicy();
+                const Qt::ScrollBarPolicy horizontalPolicy = scroll->horizontalScrollBarPolicy();
+                scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
+                scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
+                QCoreApplication::processEvents();
+                const QScrollBar *vertical = scroll->verticalScrollBar();
+                const QScrollBar *horizontal = scroll->horizontalScrollBar();
+                QVERIFY(vertical->isVisible() && horizontal->isVisible());
+                const QRect corner(QPoint(vertical->mapTo(&window, QPoint()).x(), horizontal->mapTo(&window, QPoint()).y()),
+                                   QSize(vertical->width(), horizontal->height()));
+                const QImage cornerImage = window.grab(corner).toImage();
+                for (int y = 0; y < cornerImage.height(); ++y)
+                    for (int x = 0; x < cornerImage.width(); ++x) QCOMPARE(cornerImage.pixelColor(x, y).rgb(), theme.panel.rgb());
+                scroll->setVerticalScrollBarPolicy(verticalPolicy);
+                scroll->setHorizontalScrollBarPolicy(horizontalPolicy);
+            }
+
+            // The inspector: every field starts at one edge, the clip's
+            // timing and an effect's parameters alike; number fields are as
+            // wide as their values need; a colour is a well.
+            window.applySnapshot(QJsonObject{{"revision", 14}, {"duration", 4}, {"timeline", QJsonObject{{"fps", 24}, {"tracks", QJsonArray{
+                QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+                    QJsonObject{{"id", "c1"}, {"kind", "media"}, {"sourceId", "wide"}, {"timelineStart", 0.0}, {"duration", 2.0},
+                                {"effects", QJsonArray{QJsonObject{{"fx", "light.edgeglow"}, {"enabled", false}, {"params", QJsonObject{}}}}}}}}}}}}}});
+            window.selectClip(QStringLiteral("c1"));
+            window.m_workspace->panel(QStringLiteral("effectControls"))->toggleView(true);
+            window.m_workspace->panel(QStringLiteral("effectControls"))->setAsCurrentTab();
+            QCoreApplication::processEvents();
+            EffectControlsPanel *inspector = window.m_effectControls;
+            QVERIFY(inspector->isVisible());
+            const int fieldEdge = inspector->m_position->mapTo(inspector, QPoint()).x();
+            QList<QWidget *> fields{inspector->m_duration, inspector->m_in, inspector->m_out, inspector->m_speed};
+            for (QWidget *field : inspector->findChildren<QWidget *>())
+                if (field->objectName().startsWith(QStringLiteral("effectParam_"))) fields << field;
+            QVERIFY(fields.size() > 6);
+            for (QWidget *field : fields) {
+                QCOMPARE(field->mapTo(inspector, QPoint()).x(), fieldEdge);
+                if (qobject_cast<QDoubleSpinBox *>(field)) QVERIFY(field->width() <= 96);
+                if (auto *well = qobject_cast<QPushButton *>(field)) {
+                    QCOMPARE(well->size(), QSize(44, 22));
+                    QVERIFY(well->text().isEmpty());
+                }
+            }
+            save(window.m_workspace->panel(QStringLiteral("effectControls"))->grab().toImage(), QStringLiteral("inspector-%1").arg(name));
             window.close();
         }
         QVERIFY(changed.count() >= 2);
@@ -2999,6 +3130,9 @@ private slots:
             QCOMPARE(bar.pixelColor(QPoint(barX(0.5), 9) * barRatio).rgb(), theme.scrubTrack.rgb());
             QCOMPARE(bar.pixelColor(QPoint(barX(1.5), 9) * barRatio).rgb(), theme.inOutRange.rgb());
             QCOMPARE(bar.pixelColor(QPoint(barX(2.0), 3) * barRatio).rgb(), theme.playhead.rgb());
+            // The position is cut out of the marked range, a pixel of the panel each side.
+            QCOMPARE(bar.pixelColor(QPoint(barX(2.0) - 2, 9) * barRatio).rgb(), theme.panel.rgb());
+            QCOMPARE(bar.pixelColor(QPoint(barX(2.0) + 1, 9) * barRatio).rgb(), theme.panel.rgb());
             const QImage source = monitor.grab().toImage();
             QCOMPARE(source.pixelColor(QPoint(2, 2) * source.devicePixelRatio()), theme.viewerSurround);
             QCOMPARE(amberPixels(source), 0);

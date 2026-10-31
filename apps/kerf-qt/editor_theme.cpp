@@ -210,6 +210,8 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.field = QColor("#2c2c2e");
         t.fieldBorder = QColor("#48484a");
         t.fieldDisabled = QColor("#252527");
+        t.checkFill = QColor("#3a3a3c");
+        t.checkBorder = QColor("#7c7c80");
 
         // The launcher's bezels.
         t.button = QColor("#58585b");
@@ -253,9 +255,10 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.errorSurface = QColor("#3a2426");
         t.errorBorder = QColor("#7d4045");
         t.errorText = QColor("#ffb4ae");
-        // Changed on disk: a neutral bar; only its triangle is orange.
+        // Changed on disk: a neutral bar a step lighter than the toolbar it
+        // hangs from; only its triangle is orange.
         t.warning = QColor("#ff9f5a");
-        t.warningSurface = QColor("#2c2c2e");
+        t.warningSurface = QColor("#353537");
         t.warningBorder = QColor("#3a3a3c");
         t.warningText = rgba(235, 235, 245, 204);
         t.warningTitle = QColor("#f5f5f7");
@@ -296,7 +299,7 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.trackBadge = QColor("#3a3a3c");
         t.trackBadgeText = QColor("#ececec");
         t.trackToggle = QColor("#3a3a3c");
-        t.trackToggleGlyph = QColor("#a1a1a6");
+        t.trackToggleGlyph = QColor("#aeaeb2");
         t.trackLane = QColor("#232325");
         t.trackLaneAlt = QColor("#262628");
         t.trackLaneLocked = rgba(255, 255, 255, 14);
@@ -345,6 +348,7 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
 
         t.proposalRemove = QColor("#e86060");
         t.proposalRemoveHatch = rgba(232, 96, 96, 150);
+        t.proposalUnderlay = rgba(0, 0, 0, 140);
 
         t.thumbnail = QColor("#161618");
         t.tileEmpty = QColor("#2a2a2e");
@@ -389,6 +393,9 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.field = QColor("#ffffff");
         t.fieldBorder = QColor("#c9c9ce");
         t.fieldDisabled = QColor("#f5f5f7");
+        t.checkFill = QColor("#ffffff");
+        // 3:1 on the grey dialog and its grouped boxes, not only on white.
+        t.checkBorder = QColor("#808085");
 
         t.button = QColor("#ffffff");
         t.buttonEdge = rgba(0, 0, 0, 36);
@@ -523,6 +530,7 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
 
         t.proposalRemove = QColor("#d70015");
         t.proposalRemoveHatch = rgba(215, 0, 21, 110);
+        t.proposalUnderlay = rgba(255, 255, 255, 200);
 
         t.thumbnail = QColor("#e3e3e6");
         t.tileEmpty = QColor("#e3e3e6");
@@ -534,8 +542,12 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.badgeNeutralText = QColor("#ffffff");
     }
 
-    // Derived from the accent and the surfaces above.
-    t.accentText = readableOn(accent, t.panel, 4.5);
+    // Derived from the accent and the surfaces above. The accent as text
+    // reads on each surface it is drawn on: the transports' timecodes on
+    // the panel, the timeline's corner time, and the status bar's sync chip.
+    // They are all dark or all light, so reading on one never costs another.
+    t.accentText = accent;
+    for (const QColor &surface : {t.panel, t.rulerCorner, t.statusBar}) t.accentText = readableOn(t.accentText, surface, 4.5);
     t.accentTint = mixColor(t.panel, accent, dark ? 0.26 : 0.16);
     t.textSelection = mixColor(t.field, accent, dark ? 0.45 : 0.28);
     t.inOutRange = mixColor(t.scrubTrack, accent, dark ? 0.45 : 0.35);

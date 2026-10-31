@@ -57,6 +57,8 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
         {QStringLiteral("fieldBorder"), &EditorTheme::fieldBorder},
         {QStringLiteral("fieldDisabled"), &EditorTheme::fieldDisabled},
         {QStringLiteral("focusRing"), &EditorTheme::focusRing},
+        {QStringLiteral("checkFill"), &EditorTheme::checkFill},
+        {QStringLiteral("checkBorder"), &EditorTheme::checkBorder},
         {QStringLiteral("button"), &EditorTheme::button},
         {QStringLiteral("buttonEdge"), &EditorTheme::buttonEdge},
         {QStringLiteral("buttonTop"), &EditorTheme::buttonTop},
@@ -203,17 +205,14 @@ QMenu::separator { height: 1px; background: @menuSeparator; margin: 3px 6px; }
 QMenu::item:selected { background: @menuSelection; color: @menuSelectionText; }
 QMenu::item:disabled { color: @textDisabled; background: transparent; }
 
+/* The toolbar groups its commands with space, not separators, as macOS
+   toolbars do. */
 QToolBar {
     background: @chrome;
     border: 0;
     border-bottom: 1px solid @divider;
     spacing: 2px;
     padding: 0px 6px;
-}
-QToolBar::separator {
-    background: @border;
-    width: 1px;
-    margin: 2px 3px;
 }
 
 QWidget#panel,
@@ -259,6 +258,8 @@ QPushButton {
 QToolButton#maskTool,
 QToolButton#maskRemove,
 QToolButton#effectRemove { padding: 2px 5px; }
+/* A colour well: its swatch fills a small bezel. */
+QPushButton[colorWell="true"] { padding: 2px 0; }
 QToolBar QToolButton {
     background: transparent;
     border-color: transparent;
@@ -446,6 +447,8 @@ QLabel#timecode { color: @text; font-family: Menlo, Monaco, monospace; font-size
 QLabel#inspectorClip { color: @textStrong; font-weight: 600; padding: 5px 0; }
 QLabel#projectTitle { color: @text; font-weight: 600; padding: 0 20px; }
 QWidget#assistantPanel { background: @well; border-left: 1px solid @divider; }
+QFrame#scrollEdge { background: transparent; border: 0; }
+QFrame#scrollEdge[scrolled="true"] { background: @divider; }
 QWidget#assistantPanel QLabel#statusPill {
     color: @assistantText;
     background: @assistantSurface;
@@ -661,6 +664,8 @@ QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
 QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover { background: @scrollHandleHover; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; border: 0; background: transparent; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+/* Where two scroll bars meet: nothing, not a framed square. */
+QAbstractScrollArea::corner { background: transparent; border: 0; }
 QStatusBar { background: @statusBar; color: @statusText; border-top: 1px solid @divider; font-size: 10px; min-height: 20px; max-height: 20px; }
 QStatusBar::item { border: 0; }
 QStatusBar QLabel { color: @statusText; font-size: 10px; padding: 0 8px; border-left: 1px solid @statusDivider; }
@@ -753,8 +758,8 @@ QCheckBox::indicator,
 QRadioButton::indicator {
     width: 12px;
     height: 12px;
-    background: @field;
-    border: 1px solid @borderStrong;
+    background: @checkFill;
+    border: 1px solid @checkBorder;
 }
 QCheckBox::indicator { border-radius: 3px; }
 QRadioButton::indicator { border-radius: 7px; }
@@ -777,8 +782,8 @@ QDialog#publishDialog QCheckBox { spacing: 7px; }
 QDialog#publishDialog QCheckBox::indicator {
     width: 12px;
     height: 12px;
-    background: @field;
-    border: 1px solid @borderStrong;
+    background: @checkFill;
+    border: 1px solid @checkBorder;
     border-radius: 3px;
 }
 QDialog#publishDialog QCheckBox::indicator:checked { background: @accent; border-color: @accent; }

@@ -141,9 +141,16 @@ private slots:
 protected:
     bool eventFilter(QObject *object, QEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
+    void showEvent(QShowEvent *event) override;
+    void changeEvent(QEvent *event) override;
 
 private:
     void buildUi();
+    // On macOS, where the toolbar is the title bar: fill the title bar's
+    // height and start past the window buttons (none in full screen).
+    void fitTitleBar();
+    // The project's name as the window's title and the toolbar's.
+    void setProjectTitle(const QString &name);
     // Rebuild what caches the theme's colours: symbols drawn in code and the
     // conversation's messages.
     void applyAppearance();
@@ -233,6 +240,9 @@ private:
     QMenu *binMenu(const QString &mediaId);
 
     MediaArtwork *m_artwork = nullptr;
+    QToolBar *m_toolbar = nullptr;
+    // The room at the toolbar's leading end for the window buttons (macOS).
+    QWidget *m_windowButtons = nullptr;
     QLabel *m_projectTitle = nullptr;
     QString m_projectDirectory;
     QString m_kerfdBinary;

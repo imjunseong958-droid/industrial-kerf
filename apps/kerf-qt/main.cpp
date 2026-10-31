@@ -30,6 +30,9 @@ kerf::MainWindow *openEditor(const QString &project, const QString &kerfd) {
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("Industrial Kerf"));
+    // Windows and Linux add it after the project's name in window titles;
+    // macOS titles a window with its document alone.
+    QApplication::setApplicationDisplayName(QStringLiteral("Industrial Kerf"));
     QApplication::setOrganizationName(QStringLiteral("Industrial Kerf"));
     // The system's interface font (SF Pro on macOS), as the launcher uses.
     QFont interfaceFont = QFontDatabase::systemFont(QFontDatabase::GeneralFont);

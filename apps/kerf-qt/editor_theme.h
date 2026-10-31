@@ -70,7 +70,9 @@ struct EditorTheme {
     QColor accent;
     QColor accentTop;         // Top of an accent bezel's gradient.
     QColor accentPressed;     // An accent button held down.
-    QColor accentText;        // The accent as text or a thin line on `panel`, 4.5:1.
+    QColor accentText;        // The accent as text or a thin line, 4.5:1 on every surface it is drawn on:
+                              // `panel` (the transports' timecodes), `rulerCorner` (the timeline's
+                              // corner time), and `statusBar` (the sync chip).
     QColor accentTint;        // A quiet accent wash on `panel`: a checked tool, an info badge.
     QColor onAccent;          // Text and glyphs on `accent`.
     QColor onAccentSecondary; // Secondary text on `accent`.
@@ -92,8 +94,8 @@ struct EditorTheme {
     QColor dockSeparatorHover; // A splitter handle under the pointer.
     QColor divider;            // The hairline between bars and panels (toolbar foot, title strip foot).
     QColor borderSubtle;       // Quiet edges: menus, menu separators.
-    QColor border;             // Ordinary edges: pills, toolbar separators, group boxes.
-    QColor borderStrong;       // Edges that must read: hovered controls, checkbox frames.
+    QColor border;             // Ordinary edges: pills, group boxes.
+    QColor borderStrong;       // Edges that must read: hovered controls.
 
     // Text.
     QColor text;          // Body text and labels.
@@ -117,6 +119,11 @@ struct EditorTheme {
     QColor fieldBorder;
     QColor fieldDisabled;
     QColor focusRing; // The border of the field being typed in (the accent).
+
+    // An unchecked check box or radio button: a fill and an edge that reads
+    // at 3:1 on the panels and dialogs it sits on.
+    QColor checkFill;
+    QColor checkBorder;
 
     // Push buttons: a fill with a lighter top edge and a darker bottom one,
     // as macOS draws its bezels (the launcher's buttons).
@@ -282,6 +289,9 @@ struct EditorTheme {
     QColor proposalChangeFill;
     QColor proposalRemove;
     QColor proposalRemoveHatch;
+    // The solid rule under an added or changed clip's dashes, so they read on
+    // any picture, its own purples and pinks included.
+    QColor proposalUnderlay;
 
     // Viewers (Program and Source monitors, the region picker). The same in
     // both appearances: pictures are judged against a neutral dark field.
@@ -311,11 +321,11 @@ struct EditorTheme {
     QColor thumbnail;           // The letterbox bars behind a picture that does not fill its tile.
     QColor tileEmpty;           // A picture tile with no picture yet (or offline)...
     QColor tileEmptyBorder;
-    QColor tileEmptyText;       // ...and "Media" on it.
+    QColor tileEmptyText;       // ...and its film or waveform symbol.
     QColor audioTile;           // A sound-only media tile...
     QColor audioTileGlyph;      // ...and its note.
     QColor cardPlaceholder;     // An effect card before its preview arrives...
-    QColor cardPlaceholderText;
+    QColor cardPlaceholderText; // ...and the effect symbol on it.
     QColor badgeError;          // Offline...
     QColor badgeErrorText;
     QColor badgeInfo;           // Not downloaded...

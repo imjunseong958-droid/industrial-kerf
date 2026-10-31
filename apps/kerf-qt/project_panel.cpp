@@ -54,11 +54,31 @@ QIcon tile(const QImage &frame, const QImage &wave, bool audio, const QString &b
         pixmap.fill(theme.tileEmpty);
         painter.setPen(theme.tileEmptyBorder);
         painter.drawRect(pixmap.rect().adjusted(0, 0, -1, -1));
-        QFont font = painter.font();
-        font.setPixelSize(11);
-        painter.setFont(font);
-        painter.setPen(theme.tileEmptyText);
-        painter.drawText(pixmap.rect(), Qt::AlignCenter, audio ? QStringLiteral("Audio") : QStringLiteral("Media"));
+        // What the media is, as an 18-point symbol: SF Symbols' film, or a
+        // waveform for sound. The badge and the name under the tile say the rest.
+        painter.save();
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.translate(kThumbnail.width() / 2.0 - 9, kThumbnail.height() / 2.0 - 9);
+        painter.setPen(QPen(theme.tileEmptyText, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        QPainterPath symbol;
+        if (audio) {
+            const qreal heights[] = {4, 10, 16, 8, 12, 5};
+            for (int bar = 0; bar < 6; ++bar) {
+                const qreal x = 2 + bar * 2.8;
+                symbol.moveTo(x, 9 - heights[bar] / 2);
+                symbol.lineTo(x, 9 + heights[bar] / 2);
+            }
+        } else {
+            symbol.addRoundedRect(QRectF(1.5, 3, 15, 12), 2, 2);
+            symbol.moveTo(5, 3); symbol.lineTo(5, 15);
+            symbol.moveTo(13, 3); symbol.lineTo(13, 15);
+            for (const qreal y : {7.0, 11.0}) {
+                symbol.moveTo(1.5, y); symbol.lineTo(5, y);
+                symbol.moveTo(13, y); symbol.lineTo(16.5, y);
+            }
+        }
+        painter.drawPath(symbol);
+        painter.restore();
     }
     if (!badge.isEmpty()) {
         // Sentence case at 11 points, as macOS labels.

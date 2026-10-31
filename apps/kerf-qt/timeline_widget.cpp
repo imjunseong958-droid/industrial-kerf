@@ -731,17 +731,23 @@ void TimelineWidget::paintProposal(QPainter &p, int row, const QJsonObject &trac
         }
         current.remove(clipId);
         // Clips the proposal adds, and clips it changes. A change marks the
-        // body under the clip's name bar, inside the selection ring, so the
-        // name and the ring both stay readable.
+        // body under the clip's name bar, clear of the 3px selection ring by
+        // a pixel or two, so the name and the ring both stay readable.
         const QRectF extent = clipRect(row, clip.value(QStringLiteral("timelineStart")).toDouble(),
                                        clip.value(QStringLiteral("duration")).toDouble());
         const bool body = !added && clipHeaderHeight(extent) < extent.height();
-        const QRectF rect = added ? extent.adjusted(1, 1, -1, -1)
-                            : body ? extent.adjusted(3, clipHeaderHeight(extent), -3, -3)
-                                   : extent.adjusted(3, 3, -3, -3);
+        QRectF rect = added ? extent.adjusted(1, 1, -1, -1)
+                      : body ? extent.adjusted(5, clipHeaderHeight(extent) + 2, -5, -5)
+                             : extent.adjusted(5, 5, -5, -5);
+        // A clip too small for that inset is marked along its edge.
+        if (rect.isEmpty()) rect = extent.adjusted(1, 1, -1, -1);
         p.fillRect(rect, added ? theme.proposalAddFill : theme.proposalChangeFill);
-        p.setPen(QPen(added ? theme.proposalAdd : theme.proposalChange, 1.5, Qt::DashLine));
+        // The dashes in two tones: purple over a solid rule, so they read on
+        // any picture, purple ones too.
         p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(theme.proposalUnderlay, 3.0));
+        p.drawRect(rect);
+        p.setPen(QPen(added ? theme.proposalAdd : theme.proposalChange, 1.5, Qt::DashLine));
         p.drawRect(rect);
     }
     // Clips the proposal leaves out.

@@ -28,7 +28,10 @@ or `dark` picks one for the run. Both draw macOS's window families (dark is
 #1e1e1e content under #2c2c2e chrome), with the accent for focus and each
 default action. Agent work (the AI bar's stripe, proposals, Ask Kerf) is
 marked with the system purple; the viewers keep a neutral dark surround in
-both appearances.
+both appearances. On macOS the editor's toolbar is its title bar, as the
+launcher's sidebar and title are: the window runs up under a transparent
+title bar, the window buttons sit at the toolbar's leading end, and the
+project's name is the window's title.
 
 Sources live in the `kerf` namespace, one class per header/source pair:
 `main_window` (the window, which builds and connects the panels),
@@ -296,8 +299,9 @@ launcher tasks), and the launcher's and the editor's looks in both
 appearances; with `KERF_SCREENSHOT_DIR` set, `launcherRendersBothAppearances`
 saves each page as `<page>-<light|dark>.png`, and
 `editorRendersBothAppearances` saves the editor (`editor-`), Settings
-(`settings-`), the preset bindings dialog (`dialog-`), and the diverged banner
-with an agent proposal and conversation (`states-`), each `<light|dark>.png`;
+(`settings-`), the preset bindings dialog (`dialog-`), the diverged banner
+with an agent proposal and conversation (`states-`), and Effect Controls
+with an effect's parameters (`inspector-`), each `<light|dark>.png`;
 `timelineFollowsTheAppearance` saves the timeline (`timeline-`,
 `timeline-drag-`) and `paintedPanelsFollowTheAppearance` the Program monitor
 (`viewer-`, `viewer-empty-`), the region picker (`region-`), the Source

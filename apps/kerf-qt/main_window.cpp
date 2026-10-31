@@ -14,6 +14,9 @@
 #include "media_artwork.h"
 #include "timeline_widget.h"
 #include "viewer_widget.h"
+#ifdef Q_OS_MACOS
+#include "macos_window.h"
+#endif
 
 #include <QAbstractTextDocumentLayout>
 #include <QActionGroup>
@@ -41,6 +44,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -55,6 +59,7 @@
 #include <QSettings>
 #include <QScreen>
 #include <QShortcut>
+#include <QShowEvent>
 #include <QSignalBlocker>
 #include <QStatusBar>
 #include <QTextBlock>
@@ -63,6 +68,7 @@
 #include <QToolBar>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QWindow>
 
 #include <DockManager.h>
 #include <DockWidget.h>
@@ -75,6 +81,31 @@
 namespace kerf {
 
 namespace {
+
+// On macOS the toolbar is the window's title bar, as in Logic and Final
+// Cut: the window runs up under a transparent title bar, the window buttons
+// sit at the toolbar's leading end, and the project's name is the title.
+// Elsewhere the native title bar stays.
+#if defined(Q_OS_MACOS) && QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
+#define KERF_EDITOR_OWN_TITLE_BAR 1
+// The room the window buttons take at the toolbar's leading end (after its
+// 6 points of padding) where the platform does not report them.
+constexpr int kWindowButtonsSpace = 72;
+#else
+#define KERF_EDITOR_OWN_TITLE_BAR 0
+#endif
+constexpr int kToolbarHeight = 30;
+
+// SF Symbols' scissors on a 20-point grid, in the painter's pen: the
+// toolbar's Split and the tool palette's Razor.
+void drawScissors(QPainter &painter) {
+    painter.drawEllipse(QPointF(5, 5), 2.5, 2.5);
+    painter.drawEllipse(QPointF(5, 15), 2.5, 2.5);
+    QPainterPath blades;
+    blades.moveTo(7, 6.5); blades.lineTo(16, 16);
+    blades.moveTo(7, 13.5); blades.lineTo(16, 4);
+    painter.drawPath(blades);
+}
 
 // Toolbar symbols drawn on a shared grid so their weight and optical size
 // match; an unavailable command's symbol is dimmed in both appearances.
@@ -92,10 +123,16 @@ QIcon toolbarIcon(const QString &glyph) {
             path.moveTo(4, 7.5); path.lineTo(11, 7.5);
             path.cubicTo(17, 7.5, 17, 15.5, 11, 15.5);
         } else if (glyph == QStringLiteral("✂")) {
-            painter.drawEllipse(QPointF(5, 5), 2.5, 2.5);
-            painter.drawEllipse(QPointF(5, 15), 2.5, 2.5);
-            path.moveTo(7, 6.5); path.lineTo(16, 16);
-            path.moveTo(7, 13.5); path.lineTo(16, 4);
+            drawScissors(painter);
+        } else if (glyph == QStringLiteral("trash")) {
+            // SF Symbols' trash: a lid with its handle over a can.
+            path.moveTo(4, 5); path.lineTo(16, 5);
+            path.moveTo(8, 5); path.lineTo(8, 3); path.lineTo(12, 3); path.lineTo(12, 5);
+            path.moveTo(5.5, 6); path.lineTo(5.5, 14.5);
+            path.quadTo(5.5, 16, 7, 16); path.lineTo(13, 16);
+            path.quadTo(14.5, 16, 14.5, 14.5); path.lineTo(14.5, 6);
+            path.moveTo(8.5, 8.5); path.lineTo(8.5, 13.5);
+            path.moveTo(11.5, 8.5); path.lineTo(11.5, 13.5);
         } else {
             path.moveTo(5, 5); path.lineTo(15, 15);
             path.moveTo(15, 5); path.lineTo(5, 15);
@@ -105,7 +142,8 @@ QIcon toolbarIcon(const QString &glyph) {
 }
 
 // A tool palette symbol on an 18-point grid, in `color`: the pointer for
-// Selection (SF Symbols' cursorarrow), the edit suites' marks for the rest.
+// Selection (SF Symbols' cursorarrow), the edit suites' marks for the rest,
+// drawn with the toolbar's pen so they share its weight.
 QPixmap toolGlyph(const QString &id, const QColor &color) {
     QPixmap pixmap(36, 36);
     pixmap.setDevicePixelRatio(2);
@@ -119,15 +157,39 @@ QPixmap toolGlyph(const QString &id, const QColor &color) {
         painter.drawPolygon(arrow);
         return pixmap;
     }
-    static const QHash<QString, QString> marks{
-        {QStringLiteral("tool.razor"), QStringLiteral("✂")}, {QStringLiteral("tool.ripple"), QStringLiteral("⇤")},
-        {QStringLiteral("tool.roll"), QStringLiteral("⇹")}, {QStringLiteral("tool.slip"), QStringLiteral("↔")},
-        {QStringLiteral("tool.slide"), QStringLiteral("⇆")}};
-    QFont font = QApplication::font();
-    font.setPixelSize(15);
-    painter.setFont(font);
-    painter.setPen(color);
-    painter.drawText(QRectF(0, 0, 18, 18), Qt::AlignCenter, marks.value(id));
+    painter.setPen(QPen(color, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    if (id == QStringLiteral("tool.razor")) {
+        // The toolbar's scissors, brought onto this grid.
+        painter.scale(0.9, 0.9);
+        drawScissors(painter);
+        return pixmap;
+    }
+    // An arrow along y from x0 to x1, its head at x1.
+    const auto arrow = [](QPainterPath &path, qreal y, qreal x0, qreal x1) {
+        const qreal back = x1 > x0 ? -2.5 : 2.5;
+        path.moveTo(x0, y); path.lineTo(x1, y);
+        path.moveTo(x1 + back, y - 2.5); path.lineTo(x1, y); path.lineTo(x1 + back, y + 2.5);
+    };
+    QPainterPath path;
+    if (id == QStringLiteral("tool.ripple")) {
+        // An edit point, and the cut closing up on it.
+        path.moveTo(4, 3.5); path.lineTo(4, 14.5);
+        arrow(path, 9, 15, 7);
+    } else if (id == QStringLiteral("tool.roll")) {
+        // An edit point, moving either way.
+        path.moveTo(9, 3.5); path.lineTo(9, 14.5);
+        path.moveTo(5.5, 6.5); path.lineTo(3, 9); path.lineTo(5.5, 11.5);
+        path.moveTo(12.5, 6.5); path.lineTo(15, 9); path.lineTo(12.5, 11.5);
+    } else if (id == QStringLiteral("tool.slip")) {
+        // The clip's content, slid either way inside it.
+        arrow(path, 9, 9, 3);
+        arrow(path, 9, 9, 15);
+    } else if (id == QStringLiteral("tool.slide")) {
+        // The clip, and its neighbours giving way.
+        arrow(path, 6, 3.5, 14.5);
+        arrow(path, 12, 14.5, 3.5);
+    }
+    painter.drawPath(path);
     return pixmap;
 }
 
@@ -177,12 +239,20 @@ QColor messageRoleColor(MessageKind kind) {
 
 MainWindow::MainWindow(const QString &projectDirectory, const QString &kerfdBinary, QWidget *parent)
     : QMainWindow(parent), m_projectDirectory(projectDirectory), m_kerfdBinary(kerfdBinary) {
-    setWindowTitle(QStringLiteral("Industrial Kerf — Editor"));
     resize(1500, 940);
     setMinimumSize(1080, 700);
+#if KERF_EDITOR_OWN_TITLE_BAR
+    setWindowFlag(Qt::ExpandedClientAreaHint);
+    setWindowFlag(Qt::NoTitleBarBackgroundHint);
+    // The toolbar fills the window to its top edge; fitTitleBar keeps its
+    // commands clear of the window buttons.
+    setAttribute(Qt::WA_ContentsMarginsRespectsSafeArea, false);
+#endif
     buildUi();
     setupActions();
     setupStatusBar();
+    // The folder's name until the first snapshot names the project.
+    setProjectTitle(m_projectDirectory.isEmpty() ? QStringLiteral("Industrial Kerf") : QFileInfo(m_projectDirectory).fileName());
     connect(EditorAppearance::instance(), &EditorAppearance::changed, this, &MainWindow::applyAppearance);
     m_exactSeekTimer.setSingleShot(true);
     connect(&m_exactSeekTimer, &QTimer::timeout, this, &MainWindow::settlePointerSeek);
@@ -270,7 +340,7 @@ void MainWindow::showPresetBindings(const QString &path, const QJsonObject &pres
     QDialog dialog(this);
     dialog.setObjectName(QStringLiteral("presetBindingsDialog"));
     dialog.setWindowTitle(QStringLiteral("Apply preset — %1").arg(preset.value(QStringLiteral("name")).toString()));
-    dialog.resize(640, 520);
+    dialog.setMinimumWidth(560);
     auto *layout = new QVBoxLayout(&dialog);
     layout->setContentsMargins(20, 20, 20, 20);
     layout->setSpacing(12);
@@ -386,9 +456,18 @@ void MainWindow::showPresetBindings(const QString &path, const QJsonObject &pres
     code->setMaximumHeight(150);
     code->hide();
     layout->addWidget(code);
-    connect(details, &QToolButton::toggled, code, [details, code](bool open) {
+    // As tall as what it shows, as macOS dialogs are: the slots up to most
+    // of the screen (they scroll past that), and the source when Details
+    // is open.
+    const auto fit = [&dialog, layout] {
+        layout->activate();
+        dialog.resize(dialog.width(), layout->hasHeightForWidth() ? layout->totalHeightForWidth(dialog.width())
+                                                                  : layout->totalSizeHint().height());
+    };
+    connect(details, &QToolButton::toggled, code, [details, code, fit](bool open) {
         code->setVisible(open);
         details->setIcon(disclosureIcon(open, editorTheme().textTertiary));
+        fit();
     });
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
     buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Create Proposal"));
@@ -403,6 +482,14 @@ void MainWindow::showPresetBindings(const QString &path, const QJsonObject &pres
     connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
+    dialog.ensurePolished();
+    dialog.resize(600, dialog.height());
+    const QMargins margins = layout->contentsMargins();
+    const int inner = dialog.width() - margins.left() - margins.right();
+    const int formHeight = form->hasHeightForWidth() ? form->totalHeightForWidth(inner) : form->totalSizeHint().height();
+    const QScreen *screen = dialog.screen();
+    scroll->setFixedHeight(std::min(formHeight, screen ? screen->availableGeometry().height() * 6 / 10 : 520));
+    fit();
     const QJsonValue revision = revisionValue();
     if (dialog.exec() != QDialog::Accepted) return;
     if (revision != revisionValue()) {
@@ -1334,6 +1421,22 @@ void MainWindow::rejectProposal() {
 
 bool MainWindow::eventFilter(QObject *object, QEvent *event) {
     if (object == m_preferences && event->type() == QEvent::Show) fitPreferences();
+#if KERF_EDITOR_OWN_TITLE_BAR
+    // Dragging the toolbar's empty stretches (or its title, which takes no
+    // clicks) moves the window, and a double click zooms it, as a title
+    // bar's do. The press is kept so the moves after it come here.
+    if (object == m_toolbar && windowHandle()) {
+        if (event->type() == QEvent::MouseButtonPress) return static_cast<QMouseEvent *>(event)->button() == Qt::LeftButton;
+        if (event->type() == QEvent::MouseMove && (static_cast<QMouseEvent *>(event)->buttons() & Qt::LeftButton)) {
+            windowHandle()->startSystemMove();
+            return true;
+        }
+        if (event->type() == QEvent::MouseButtonDblClick) {
+            titleBarDoubleClicked(this);
+            return true;
+        }
+    }
+#endif
     if (object == m_chatInput && (event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut))
         updateChatControls();
     if (object == m_chatInput && event->type() == QEvent::KeyPress) {
@@ -1540,13 +1643,29 @@ void MainWindow::buildUi() {
     connect(chatScroll->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) {
         m_followConversation = value >= m_chatScroll->verticalScrollBar()->maximum() - 4;
     });
+    // A hairline under the header row while the view is scrolled, as macOS
+    // draws a scroll edge, so a line cut off at the top reads as scrolled
+    // content and not as a glitch.
+    auto *scrollEdge = new QFrame;
+    scrollEdge->setObjectName(QStringLiteral("scrollEdge"));
+    scrollEdge->setFixedHeight(1);
+    connect(chatScroll->verticalScrollBar(), &QScrollBar::valueChanged, scrollEdge, [scrollEdge](int value) {
+        if (scrollEdge->property("scrolled").toBool() == (value > 0)) return;
+        scrollEdge->setProperty("scrolled", value > 0);
+        scrollEdge->style()->unpolish(scrollEdge);
+        scrollEdge->style()->polish(scrollEdge);
+    });
     auto *chatContent = new QWidget;
     auto *chatLayout = new QVBoxLayout(chatContent);
     chatLayout->setContentsMargins(0, 0, 0, 0);
     chatLayout->setSizeConstraint(QLayout::SetMinimumSize);
     chatLayout->setSpacing(6);
     chatScroll->setWidget(chatContent);
-    chatTabLayout->addWidget(chatScroll, 1);
+    auto *scrollColumn = new QVBoxLayout;
+    scrollColumn->setSpacing(0);
+    scrollColumn->addWidget(scrollEdge);
+    scrollColumn->addWidget(chatScroll, 1);
+    chatTabLayout->addLayout(scrollColumn, 1);
     m_conversation = new QTextEdit;
     m_conversation->setReadOnly(true);
     m_conversation->setObjectName(QStringLiteral("conversation"));
@@ -2327,9 +2446,18 @@ void MainWindow::setupActions() {
     }
 
     auto *toolbar = addToolBar(QStringLiteral("Main"));
+    m_toolbar = toolbar;
     toolbar->setMovable(false);
     toolbar->setIconSize(QSize(15, 15));
-    toolbar->setFixedHeight(30);
+    toolbar->setFixedHeight(kToolbarHeight);
+#if KERF_EDITOR_OWN_TITLE_BAR
+    m_windowButtons = new QWidget;
+    m_windowButtons->setObjectName(QStringLiteral("windowButtonsSpace"));
+    m_windowButtons->setFixedWidth(kWindowButtonsSpace);
+    toolbar->addWidget(m_windowButtons);
+    // Its empty stretches move and zoom the window, as a title bar's do.
+    toolbar->installEventFilter(this);
+#endif
     if (!menuBar()->isNativeMenuBar()) {
         // Keep menus accessible without dedicating a full row to them.
         auto *menuButton = new QToolButton(toolbar);
@@ -2361,19 +2489,24 @@ void MainWindow::setupActions() {
         toolbar->addAction(action);
         return qobject_cast<QToolButton *>(toolbar->widgetForAction(action));
     };
+    // Groups are set apart by space, as in macOS toolbars, not by rules.
+    const auto groupSpace = [toolbar] {
+        auto *space = new QWidget;
+        space->setFixedWidth(10);
+        toolbar->addWidget(space);
+    };
     toolbarCommand(QStringLiteral("file.import"), QStringLiteral("Import"), QStringLiteral("↓"));
-    toolbar->addSeparator();
+    groupSpace();
     toolbarCommand(QStringLiteral("edit.undo"), QStringLiteral("Undo"), QStringLiteral("↶"));
     toolbarCommand(QStringLiteral("edit.redo"), QStringLiteral("Redo"), QStringLiteral("↷"));
-    toolbar->addSeparator();
+    groupSpace();
     toolbarCommand(QStringLiteral("clip.split"), QStringLiteral("Split"), QStringLiteral("✂"));
-    toolbarCommand(QStringLiteral("clip.delete"), QStringLiteral("Delete"), QStringLiteral("×"));
-    toolbar->addSeparator();
+    toolbarCommand(QStringLiteral("clip.delete"), QStringLiteral("Delete"), QStringLiteral("trash"));
     auto *spacer = new QWidget;
     spacer->setStyleSheet(QStringLiteral("background: transparent"));
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     toolbar->addWidget(spacer);
-    auto *projectTitle = new QLabel(QStringLiteral("KERF  /  %1").arg(QFileInfo(m_projectDirectory).fileName()));
+    auto *projectTitle = new QLabel;
     m_projectTitle = projectTitle;
     projectTitle->setObjectName(QStringLiteral("projectTitle"));
     toolbar->addWidget(projectTitle);
@@ -2421,6 +2554,44 @@ void MainWindow::buildWorkspaceMenu(QMenu *menu) {
 void MainWindow::closeEvent(QCloseEvent *event) {
     m_workspace->persist();
     QMainWindow::closeEvent(event);
+}
+
+void MainWindow::showEvent(QShowEvent *event) {
+    QMainWindow::showEvent(event);
+#if KERF_EDITOR_OWN_TITLE_BAR
+    hideNativeWindowTitle(this);
+    if (QWindow *handle = windowHandle()) {
+        disconnect(handle, &QWindow::safeAreaMarginsChanged, this, nullptr);
+        connect(handle, &QWindow::safeAreaMarginsChanged, this, [this] { fitTitleBar(); });
+    }
+    fitTitleBar();
+#endif
+}
+
+void MainWindow::changeEvent(QEvent *event) {
+    QMainWindow::changeEvent(event);
+    if (event->type() == QEvent::WindowStateChange) fitTitleBar();
+}
+
+void MainWindow::fitTitleBar() {
+#if KERF_EDITOR_OWN_TITLE_BAR
+    if (!m_toolbar) return;
+    // The safe area's top is the title bar the window buttons sit in. Its
+    // commands start 12 points past the zoom button; in full screen there
+    // are no buttons beside them.
+    const QWindow *handle = windowHandle();
+    m_toolbar->setFixedHeight(std::max(kToolbarHeight, handle ? handle->safeAreaMargins().top() : 0));
+    const int buttons = windowButtonsWidth(this);
+    m_windowButtons->setFixedWidth(buttons > 0 ? buttons + 12 - 6 : kWindowButtonsSpace);
+    m_windowButtons->setVisible(!isFullScreen());
+#endif
+}
+
+void MainWindow::setProjectTitle(const QString &name) {
+    m_projectTitle->setText(name);
+    // The Window menu, Mission Control and the Dock list the project.
+    setWindowTitle(name);
+    if (!m_projectDirectory.isEmpty()) setWindowFilePath(QDir(m_projectDirectory).absoluteFilePath(QStringLiteral("project.kerf")));
 }
 
 void MainWindow::newProject() {
@@ -3328,7 +3499,7 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     }
     m_project.insert("tracks", displayTracks);
     m_fps = m_project.value(QStringLiteral("fps")).toDouble(24.0);
-    m_projectTitle->setText(m_project.value(QStringLiteral("name")).toString(QStringLiteral("Untitled project")));
+    setProjectTitle(m_project.value(QStringLiteral("name")).toString(QStringLiteral("Untitled project")));
     const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
     m_trackCount = tracks.size();
     if (!m_selectedClip.isEmpty() && selectedClipObject().isEmpty()) m_selectedClip.clear();

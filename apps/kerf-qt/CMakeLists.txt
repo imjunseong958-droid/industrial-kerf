@@ -69,7 +69,8 @@ set(KERF_QT_SOURCES
     workspace.cpp
     workspace.h)
 if(APPLE)
-    # The launcher hides the title AppKit draws over its own.
+    # The launcher and the editor draw their own titles under AppKit's
+    # transparent title bar, beside its window buttons.
     enable_language(OBJCXX)
     list(APPEND KERF_QT_SOURCES macos_window.h macos_window.mm)
     set(KERF_QT_PLATFORM_LIBRARIES "-framework AppKit")
