@@ -112,6 +112,17 @@ qreal contrastRatio(const QColor &a, const QColor &b) {
     return (std::max(la, lb) + 0.05) / (std::min(la, lb) + 0.05);
 }
 
+QColor readableAlphaOn(const QColor &color, const QColor &background, qreal ratio) {
+    QColor result = color;
+    const auto laid = [&background](QColor top) {
+        const qreal alpha = top.alphaF();
+        top.setAlpha(255);
+        return mixColor(background, top, alpha);
+    };
+    while (result.alpha() < 255 && contrastRatio(laid(result), background) < ratio) result.setAlpha(result.alpha() + 1);
+    return result;
+}
+
 ClipKind clipKind(const QJsonObject &track, const QJsonObject &clip) {
     const QString kind = clip.value(QStringLiteral("kind")).toString();
     const QString type = track.value(QStringLiteral("type")).toString().toLower();
@@ -160,10 +171,11 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
     t.accentTop = accent.lighter(112);
     t.accentPressed = accent.darker(dark ? 120 : 115);
     t.onAccent = QColor("#ffffff");
-    t.onAccentSecondary = rgba(255, 255, 255, 204);
     // White text needs a deeper blue than the accent's own, as in macOS's
     // selected rows.
     t.selection = mixColor(accent, Qt::black, dark ? 0.16 : 0.12);
+    // Secondary text on the selection is white held back, as far as it reads.
+    t.onAccentSecondary = readableAlphaOn(rgba(255, 255, 255, 204), t.selection, 4.5);
     t.selectionText = QColor("#ffffff");
     t.focusRing = accent;
     t.focusHalo = accent;
@@ -200,7 +212,6 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.text = QColor("#dcdcdf");
         t.textStrong = QColor("#f5f5f7");
         t.textSecondary = QColor("#a5a5a8");
-        t.textTertiary = QColor("#7c7c80");
         t.placeholderText = QColor("#98989d");
         t.textDisabled = QColor("#6e6e73");
         t.tabInactiveText = QColor("#a5a5a8");
@@ -237,8 +248,8 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.tooltipBorder = QColor("#48484a");
         t.tooltipText = QColor("#f5f5f7");
 
-        t.scrollHandle = rgba(255, 255, 255, 77);
-        t.scrollHandleHover = rgba(255, 255, 255, 115);
+        t.scrollHandle = rgba(255, 255, 255, 115);
+        t.scrollHandleHover = rgba(255, 255, 255, 160);
 
         t.tabText = QColor("#a5a5a8");
         t.tabSelected = QColor("#3a3a3c");
@@ -384,7 +395,6 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.textStrong = QColor("#000000");
         // #636366 keeps 4.5:1 on the grey window and group fills, not only on white.
         t.textSecondary = QColor("#636366");
-        t.textTertiary = QColor("#8e8e93");
         t.placeholderText = QColor("#6e6e73");
         t.textDisabled = QColor("#a5a5aa");
         t.tabInactiveText = QColor("#5f5f64");
@@ -421,8 +431,8 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.tooltipBorder = QColor("#c9c9ce");
         t.tooltipText = QColor("#1d1d1f");
 
-        t.scrollHandle = rgba(0, 0, 0, 77);
-        t.scrollHandleHover = rgba(0, 0, 0, 115);
+        t.scrollHandle = rgba(0, 0, 0, 115);
+        t.scrollHandleHover = rgba(0, 0, 0, 160);
 
         t.tabText = QColor("#6e6e73");
         t.tabSelected = QColor("#ffffff");
@@ -462,7 +472,7 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.messageAgent = QColor("#ffffff");
         t.messageAgentBorder = QColor("#e3e3e6");
         t.messageText = QColor("#1d1d1f");
-        t.messageUserRole = QColor("#6e6e73");
+        t.messageUserRole = QColor("#636366");
 
         t.glyph = QColor("#3a3a3c");
         t.glyphDisabled = QColor("#a5a5aa");
@@ -514,7 +524,7 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.filmstripSeam = rgba(0, 0, 0, 90);
         t.waveCenter = rgba(0, 0, 0, 40);
         t.playheadHalo = rgba(255, 255, 255, 170);
-        t.playheadIdle = QColor("#aeaeb2");
+        t.playheadIdle = QColor("#8e8e93");
         t.skimmer = rgba(29, 29, 31, 190);
         t.skimmerText = QColor("#1d1d1f");
         t.scrubTrack = QColor("#e3e3e6");
@@ -524,7 +534,6 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.readoutText = QColor("#1d1d1f");
 
         t.markerRed = QColor("#e0443a");
-        // Every marker reads at 3:1 on the light ruler.
         t.markerOrange = QColor("#dc6510");
         t.markerYellow = QColor("#9c8400");
         t.markerGreen = QColor("#2ea043");
@@ -571,6 +580,14 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
     t.proposalChange = dark ? t.assistant.lighter(115) : t.assistant.darker(115);
     t.proposalChangeFill = t.proposalChange;
     t.proposalChangeFill.setAlpha(dark ? 36 : 30);
+    // The playhead while skimming, and every marker, read at 3:1 wherever
+    // they are drawn: the ruler from its top to its foot, and (the playhead's
+    // line) the lanes and the background below the last.
+    for (const QColor &surface : {t.ruler, t.rulerBottom, t.trackLane, t.timelineBackground})
+        t.playheadIdle = readableOn(t.playheadIdle, surface, 3.0);
+    for (QColor *marker : {&t.markerRed, &t.markerOrange, &t.markerYellow, &t.markerGreen, &t.markerCyan, &t.markerBlue,
+                           &t.markerPurple, &t.markerPink, &t.markerWhite})
+        for (const QColor &surface : {t.ruler, t.rulerBottom}) *marker = readableOn(*marker, surface, 3.0);
     t.audioTile = t.clipAudio.fill;
     t.audioTileGlyph = t.clipAudio.wave;
     t.dragShadow = rgba(0, 0, 0, 89);

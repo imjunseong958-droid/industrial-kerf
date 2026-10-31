@@ -744,6 +744,11 @@ void TimelineWidget::paintProposal(QPainter &p, int row, const QJsonObject &trac
                              : extent.adjusted(5, 5, -5, -5);
         // A clip too small for that inset is marked along its edge.
         if (rect.isEmpty()) rect = extent.adjusted(1, 1, -1, -1);
+        // A clip it adds is named on a band of bare lane under its wash, so
+        // the name reads the same over a clip already there as over none.
+        const bool named = added && rect.width() > 22.0;
+        if (named) p.fillRect(QRectF(rect.left(), rect.top(), rect.width(), std::min(rect.height(), clipHeaderHeight(extent) - 1)),
+                              theme.trackLane);
         p.fillRect(rect, added ? theme.proposalAddFill : theme.proposalChangeFill);
         // The dashes in two tones: purple over a solid rule, so they read on
         // any picture, purple ones too.
@@ -753,7 +758,7 @@ void TimelineWidget::paintProposal(QPainter &p, int row, const QJsonObject &trac
         p.setPen(QPen(added ? theme.proposalAdd : theme.proposalChange, 1.5, Qt::DashLine));
         p.drawRect(rect);
         // A clip it adds is named, in the agent's purple, as clips are.
-        if (added && rect.width() > 22.0) {
+        if (named) {
             QFont nameFont = font();
             nameFont.setPixelSize(10);
             nameFont.setWeight(QFont::DemiBold);

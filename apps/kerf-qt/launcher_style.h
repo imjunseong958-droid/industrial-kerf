@@ -1,5 +1,7 @@
 #pragma once
 
+#include "editor_theme.h"
+
 #include <QColor>
 #include <QString>
 
@@ -17,6 +19,8 @@ struct LauncherTheme {
     QColor accentTop;
     QColor accentPressed;
     QColor onAccent;
+    // Secondary text on `selection`: white held back only as far as it still
+    // reads at 4.5:1 (all white where even white does not).
     QColor onAccentSecondary;
     QColor content;
     QColor titleText;
@@ -24,8 +28,8 @@ struct LauncherTheme {
     QColor sidebar;
     QColor sidebarDivider;
     QColor text;
+    // Secondary text, and the Details disclosure's chevron.
     QColor secondary;
-    QColor tertiary;
     QColor disabledText;
     QColor separator;
     QColor field;
@@ -61,7 +65,10 @@ struct LauncherTheme {
     QColor knobEdge;
     QColor error;
     QColor success;
+    // A scroll bar's handle reads at 3:1 on the content, groups and sidebar
+    // it sits on; under the pointer or held, more.
     QColor scrollHandle;
+    QColor scrollHandleHover;
     QColor tooltip;
 };
 
@@ -79,10 +86,10 @@ inline LauncherTheme launcherTheme(bool dark, const QColor &accent) {
     t.accentTop = accent.lighter(112);
     t.accentPressed = accent.darker(dark ? 120 : 115);
     t.onAccent = QColor("#ffffff");
-    t.onAccentSecondary = QColor(255, 255, 255, 204);
     // White text needs a deeper blue than the accent's own, as in macOS's
     // selected rows.
     t.selection = launcherMix(accent, Qt::black, dark ? 0.16 : 0.12);
+    t.onAccentSecondary = readableAlphaOn(QColor(255, 255, 255, 204), t.selection, 4.5);
     t.focusRing = accent;
     t.focusRing.setAlphaF(0.35);
     if (dark) {
@@ -93,7 +100,6 @@ inline LauncherTheme launcherTheme(bool dark, const QColor &accent) {
         t.sidebarDivider = QColor("#3a3a3c");
         t.text = QColor("#f5f5f7");
         t.secondary = QColor("#98989d");
-        t.tertiary = QColor("#636366");
         t.disabledText = QColor("#6e6e73");
         t.separator = QColor("#38383a");
         t.field = QColor("#2c2c2e");
@@ -120,7 +126,8 @@ inline LauncherTheme launcherTheme(bool dark, const QColor &accent) {
         t.knobEdge = QColor(0, 0, 0, 60);
         t.error = QColor("#ff6961");
         t.success = QColor("#30d158");
-        t.scrollHandle = QColor(255, 255, 255, 64);
+        t.scrollHandle = QColor(255, 255, 255, 115);
+        t.scrollHandleHover = QColor(255, 255, 255, 160);
         t.tooltip = QColor("#2c2c2e");
     } else {
         t.content = QColor("#ffffff");
@@ -130,7 +137,6 @@ inline LauncherTheme launcherTheme(bool dark, const QColor &accent) {
         t.sidebarDivider = QColor("#e1e1e1");
         t.text = QColor("#1d1d1f");
         t.secondary = QColor("#6e6e73");
-        t.tertiary = QColor("#b0b0b5");
         t.disabledText = QColor("#a5a5aa");
         t.separator = QColor("#e3e3e6");
         t.field = QColor("#ffffff");
@@ -157,7 +163,8 @@ inline LauncherTheme launcherTheme(bool dark, const QColor &accent) {
         t.knobEdge = QColor(0, 0, 0, 38);
         t.error = QColor("#d70015");
         t.success = QColor("#1e7b34");
-        t.scrollHandle = QColor(0, 0, 0, 64);
+        t.scrollHandle = QColor(0, 0, 0, 115);
+        t.scrollHandleHover = QColor(0, 0, 0, 160);
         t.tooltip = QColor("#f5f5f7");
     }
     t.tileGlyph = QColor("#ffffff");
@@ -281,6 +288,10 @@ QScrollBar:vertical { width: 10px; }
 QScrollBar:horizontal { height: 10px; }
 QScrollBar::handle:vertical,
 QScrollBar::handle:horizontal { background: @scrollHandle; border: 0; border-radius: 3px; min-height: 28px; min-width: 28px; }
+QScrollBar::handle:vertical:hover,
+QScrollBar::handle:horizontal:hover,
+QScrollBar::handle:vertical:pressed,
+QScrollBar::handle:horizontal:pressed { background: @scrollHandleHover; }
 QScrollBar::add-line,
 QScrollBar::sub-line { width: 0; height: 0; border: 0; background: transparent; }
 QScrollBar::add-page,
@@ -416,7 +427,7 @@ QMenu::separator { height: 1px; background: @separator; margin: 4px 6px; }
         {"@buttonDisabledEdge", t.buttonDisabledEdge}, {"@buttonDisabledText", t.buttonDisabledText},
         {"@buttonDisabled", t.buttonDisabled}, {"@button", t.button},
         {"@groupBorder", t.groupBorder}, {"@group", t.group}, {"@error", t.error}, {"@success", t.success},
-        {"@scrollHandle", t.scrollHandle}, {"@tooltip", t.tooltip},
+        {"@scrollHandleHover", t.scrollHandleHover}, {"@scrollHandle", t.scrollHandle}, {"@tooltip", t.tooltip},
     };
     for (const auto &[token, color] : tokens) sheet.replace(QLatin1String(token), c(color));
     return sheet;

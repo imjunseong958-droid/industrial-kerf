@@ -439,7 +439,7 @@ public:
         const qreal height = nameMetrics.height() + 2 + detailMetrics.height();
         const qreal top = rect.center().y() - height / 2;
         painter->setFont(nameFont);
-        painter->setPen(focused ? t.onAccent : exists && enabled ? t.text : t.secondary);
+        painter->setPen(focused ? t.onAccent : exists && enabled ? t.text : selected ? t.secondaryOnSelection : t.secondary);
         painter->drawText(QRectF(left, top, right - left, nameMetrics.height()), Qt::AlignLeft | Qt::AlignVCenter,
                           nameMetrics.elidedText(name, Qt::ElideRight, right - left));
 
@@ -844,7 +844,7 @@ void ProjectLauncher::applyTheme(bool force) {
     m_theme = launcherTheme(dark, accent);
     m_themed = true;
     setStyleSheet(launcherStyleSheet(m_theme));
-    m_detailsToggle->setIcon(disclosureIcon(m_detailsToggle->isChecked(), m_theme.tertiary));
+    m_detailsToggle->setIcon(disclosureIcon(m_detailsToggle->isChecked(), m_theme.secondary));
     for (QListWidget *list : {m_sidebar, m_templates, m_recent, m_presetChoices}) list->viewport()->update();
     update();
     m_theming = false;
@@ -1164,7 +1164,7 @@ QWidget *ProjectLauncher::buildDetails() {
 
 void ProjectLauncher::setDetailsOpen(bool open) {
     m_detailsBody->setVisible(open);
-    m_detailsToggle->setIcon(disclosureIcon(open, m_theme.tertiary));
+    m_detailsToggle->setIcon(disclosureIcon(open, m_theme.secondary));
 }
 
 QWidget *ProjectLauncher::buildFooter() {

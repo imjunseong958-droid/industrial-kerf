@@ -31,6 +31,9 @@ bool schemeIsDark(ColorScheme scheme);
 QColor mixColor(const QColor &under, const QColor &over, qreal amount);
 // WCAG contrast ratio of two opaque colours (1 to 21).
 qreal contrastRatio(const QColor &a, const QColor &b);
+// `color` made only as much more opaque as it takes to read at `ratio` when
+// laid on the opaque `background` (opaque at most).
+QColor readableAlphaOn(const QColor &color, const QColor &background, qreal ratio);
 
 // How one kind of clip is drawn on the timeline. Labels on `header` meet
 // 4.5:1 in both appearances.
@@ -73,9 +76,11 @@ struct EditorTheme {
     QColor accentText;        // The accent as text or a thin line, 4.5:1 on every surface it is drawn on:
                               // `panel` (the transports' timecodes), `rulerCorner` (the timeline's
                               // corner time), and `statusBar` (the sync chip).
-    QColor accentTint;        // A quiet accent wash on `panel`: a checked tool, an info badge.
+    QColor accentTint;        // A quiet accent wash on `panel`: a checked tool, an info badge, the chosen
+                              // mask tool and the selected mask. `accentText` reads on it at 3:1.
     QColor onAccent;          // Text and glyphs on `accent`.
-    QColor onAccentSecondary; // Secondary text on `accent`.
+    QColor onAccentSecondary; // Secondary text on `selection`: white held back only as far as it still
+                              // reads at 4.5:1 (all white where even white does not).
 
     // Surfaces, from the back of the window forwards.
     QColor window;           // Behind everything: the main window, the dock container.
@@ -100,8 +105,7 @@ struct EditorTheme {
     // Text.
     QColor text;          // Body text and labels.
     QColor textStrong;    // Titles, the selected tab, emphasised values.
-    QColor textSecondary; // Captions, hints, inactive tabs.
-    QColor textTertiary;  // Disclosure glyphs. Under 4.5:1, so never text.
+    QColor textSecondary; // Captions, hints, inactive tabs, and disclosure chevrons.
     QColor placeholderText; // A field's placeholder, which carries guidance: 4.5:1 on `field`.
     QColor textDisabled;  // Disabled controls.
     QColor tabInactiveText; // A dock's tabs that are not current, 4.5:1 on `panelTitle`.
@@ -152,7 +156,9 @@ struct EditorTheme {
     QColor tooltipBorder;
     QColor tooltipText;
 
-    // Scroll bars: a thin handle on no track, as macOS's overlay scrollers.
+    // Scroll bars: a thin handle on no track, as macOS's overlay scrollers. At
+    // rest it reads at 3:1 on the panels, wells, fields and dialogs it sits
+    // on; under the pointer or held, more.
     QColor scrollHandle;
     QColor scrollHandleHover;
 
@@ -202,7 +208,7 @@ struct EditorTheme {
     QColor messageAgent;
     QColor messageAgentBorder;
     QColor messageText;     // Message body text.
-    QColor messageUserRole; // "YOU" over the user's messages.
+    QColor messageUserRole; // "You" over the user's messages, 4.5:1 on `messageUser`.
 
     // Icons drawn in code: toolbar and transport symbols, pop-up arrows.
     QColor glyph;
@@ -261,7 +267,8 @@ struct EditorTheme {
     QColor waveCenter;       // The centre line of an audio clip's body.
     QColor playhead;         // The playhead and its corner time (the accent).
     QColor playheadHalo;     // The 3px halo that keeps the playhead readable over pictures.
-    QColor playheadIdle;     // The playhead while the skimmer leads.
+    QColor playheadIdle;     // The playhead while the skimmer leads: a grey, quieter than the playhead,
+                             // that reads at 3:1 on the ruler, the lanes and the background below them.
     QColor skimmer;          // The skimmer line.
     QColor skimmerText;      // The corner time while skimming.
     QColor scrubTrack;       // A scrub bar's track (Source monitor).
@@ -272,7 +279,8 @@ struct EditorTheme {
     QColor readoutText;
     QColor dragShadow;       // Under the clip being dragged.
 
-    // Marker colours, by the document's names; marker() looks one up.
+    // Marker colours, by the document's names; marker() looks one up. Each
+    // reads at 3:1 on the whole ruler, top to foot.
     QColor markerRed;
     QColor markerOrange;
     QColor markerYellow;

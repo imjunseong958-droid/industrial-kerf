@@ -44,7 +44,6 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
         {QStringLiteral("text"), &EditorTheme::text},
         {QStringLiteral("textStrong"), &EditorTheme::textStrong},
         {QStringLiteral("textSecondary"), &EditorTheme::textSecondary},
-        {QStringLiteral("textTertiary"), &EditorTheme::textTertiary},
         {QStringLiteral("textDisabled"), &EditorTheme::textDisabled},
         {QStringLiteral("tabInactiveText"), &EditorTheme::tabInactiveText},
         {QStringLiteral("selection"), &EditorTheme::selection},
@@ -303,6 +302,11 @@ QPushButton {
 QToolButton#maskTool,
 QToolButton#maskRemove,
 QToolButton#effectRemove { padding: 2px 5px; }
+/* The chosen mask tool and the selected mask: an accent wash edged in the
+   accent, under the pointer and held too. The tool's symbol is the accent,
+   which reads on the wash at 3:1. */
+QToolButton#maskTool:checked:enabled,
+QToolButton#maskName:checked:enabled { background: @accentTint; border-color: @accentText; }
 /* A colour well: its swatch fills a small bezel. */
 QPushButton[colorWell="true"] { padding: 2px 0; }
 QToolBar QToolButton {
@@ -659,8 +663,11 @@ QComboBox#agentModel {
     min-height: 22px;
     max-height: 22px;
     font-size: 11px;
-    color: @textSecondary;
+    /* Its field draws in this colour whether or not the pointer is over it,
+       so it must read on the hover wash too. */
+    color: @text;
 }
+QComboBox#agentModel:disabled { color: @textSecondary; }
 QComboBox#agentModel:hover { background: @hover; }
 QComboBox#agentModel QLineEdit { background: transparent; border: 0; padding: 0; }
 QFrame#chatComposer {
@@ -733,7 +740,8 @@ QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
     min-height: 24px;
     min-width: 24px;
 }
-QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover { background: @scrollHandleHover; }
+QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover,
+QScrollBar::handle:vertical:pressed, QScrollBar::handle:horizontal:pressed { background: @scrollHandleHover; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; border: 0; background: transparent; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 /* Where two scroll bars meet: nothing, not a framed square. */

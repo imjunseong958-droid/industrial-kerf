@@ -459,7 +459,7 @@ void MainWindow::showPresetBindings(const QString &path, const QJsonObject &pres
     details->setAutoRaise(true);
     details->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     details->setIconSize(QSize(11, 11));
-    details->setIcon(disclosureIcon(false, editorTheme().textTertiary));
+    details->setIcon(disclosureIcon(false, editorTheme().textSecondary));
     layout->addWidget(details, 0, Qt::AlignLeft);
     auto *code = new QPlainTextEdit(preset.value(QStringLiteral("document")).toString());
     code->setObjectName(QStringLiteral("presetCode"));
@@ -478,7 +478,7 @@ void MainWindow::showPresetBindings(const QString &path, const QJsonObject &pres
     };
     connect(details, &QToolButton::toggled, code, [details, code, fit](bool open) {
         code->setVisible(open);
-        details->setIcon(disclosureIcon(open, editorTheme().textTertiary));
+        details->setIcon(disclosureIcon(open, editorTheme().textSecondary));
         fit();
     });
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
@@ -1795,7 +1795,7 @@ void MainWindow::buildUi() {
     activityTitle->setCheckable(true);
     activityTitle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     activityTitle->setIconSize(QSize(11, 11));
-    activityTitle->setIcon(disclosureIcon(false, editorTheme().textTertiary));
+    activityTitle->setIcon(disclosureIcon(false, editorTheme().textSecondary));
     m_disclosures.append(activityTitle);
     chatLayout->addWidget(activityTitle);
     m_activityList = new QListWidget;
@@ -1805,7 +1805,7 @@ void MainWindow::buildUi() {
     m_activityList->hide();
     connect(activityTitle, &QToolButton::toggled, this, [this, activityTitle](bool visible) {
         m_activityList->setVisible(visible);
-        activityTitle->setIcon(disclosureIcon(visible, editorTheme().textTertiary));
+        activityTitle->setIcon(disclosureIcon(visible, editorTheme().textSecondary));
     });
 
     m_exportProgress = new QProgressBar;
@@ -1996,7 +1996,7 @@ void MainWindow::buildUi() {
     advancedToggle->setCheckable(true);
     advancedToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     advancedToggle->setIconSize(QSize(11, 11));
-    advancedToggle->setIcon(disclosureIcon(false, editorTheme().textTertiary));
+    advancedToggle->setIcon(disclosureIcon(false, editorTheme().textSecondary));
     m_disclosures.append(advancedToggle);
     settingsLayout->addWidget(advancedToggle);
     m_advancedSettings = new QWidget;
@@ -2008,7 +2008,7 @@ void MainWindow::buildUi() {
     m_advancedSettings->hide();
     connect(advancedToggle, &QToolButton::toggled, this, [this, advancedToggle](bool show) {
         m_advancedSettings->setVisible(show);
-        advancedToggle->setIcon(disclosureIcon(show, editorTheme().textTertiary));
+        advancedToggle->setIcon(disclosureIcon(show, editorTheme().textSecondary));
         fitPreferences();
     });
     auto *settingsIntro = new QLabel(QStringLiteral("Two protocol slots. One active connection for chat. Gemini, Groq, and OpenRouter use the OpenAI-compatible slot with that vendor's compatible base URL."));
@@ -3817,7 +3817,7 @@ void MainWindow::applyAppearance() {
     for (QAction *action : std::as_const(m_toolGlyphs)) action->setIcon(toolIcon(action->objectName()));
     if (m_divergedGlyph) m_divergedGlyph->setPixmap(warningTriangle(editorTheme().warningGlyph));
     for (QToolButton *disclosure : std::as_const(m_disclosures))
-        disclosure->setIcon(disclosureIcon(disclosure->isChecked(), editorTheme().textTertiary));
+        disclosure->setIcon(disclosureIcon(disclosure->isChecked(), editorTheme().textSecondary));
     for (QToolButton *button : std::as_const(m_transportButtons)) {
         const auto glyph = static_cast<TransportGlyph>(button->property("glyph").toInt());
         button->setIcon(transportIcon(button == m_transportPlay && m_transportShowsPause ? TransportGlyph::Pause : glyph));

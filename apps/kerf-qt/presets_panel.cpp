@@ -87,6 +87,12 @@ PresetsPanel::PresetsPanel(QWidget *parent) : QWidget(parent) {
     connect(m_apply, &QPushButton::clicked, this, apply);
     connect(m_list, &QListWidget::itemActivated, this, apply);
     connect(m_list, &QListWidget::currentItemChanged, this, &PresetsPanel::updateButtons);
+    // An unreadable preset's red is the appearance's own.
+    connect(EditorAppearance::instance(), &EditorAppearance::changed, this, [this] {
+        for (int row = 0; row < m_list->count(); ++row)
+            if (QListWidgetItem *item = m_list->item(row); !item->data(kReadableRole).toBool())
+                item->setForeground(editorTheme().error);
+    });
     updateButtons();
 }
 
