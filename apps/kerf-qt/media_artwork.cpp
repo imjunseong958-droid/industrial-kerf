@@ -1,4 +1,5 @@
 #include "media_artwork.h"
+#include "editor_common.h"
 #include "editor_theme.h"
 
 #include <QDir>
@@ -68,8 +69,7 @@ QIcon MediaArtwork::icon(const QString &id) const {
         painter.setOpacity(0.65);
         painter.drawImage(QRect(0, 10, 96, 34), wave);
     } else {
-        painter.setPen(editorTheme().audioTileGlyph);
-        painter.drawText(tile.rect(), Qt::AlignCenter, QStringLiteral("♪"));
+        drawWaveformSymbol(painter, QRectF(tile.rect()).center(), 24, editorTheme().audioTileGlyph);
     }
     return tile;
 }

@@ -1,3 +1,4 @@
+#include "editor_common.h"
 #include "editor_theme.h"
 #include "main_window.h"
 #include "project_launcher.h"
@@ -39,7 +40,8 @@ int main(int argc, char **argv) {
     interfaceFont.setPixelSize(13);
     interfaceFont.setWeight(QFont::Normal);
     app.setFont(interfaceFont);
-    app.setStyle(QStringLiteral("Fusion"));
+    // Fusion, with macOS's focus, pop-up buttons and menus.
+    kerf::useEditorStyle();
     // KERF_COLOR_SCHEME=light or dark picks one appearance for the run;
     // otherwise the editor follows the system's light or dark appearance and
     // its accent, live: on a change of colour scheme, and on a new

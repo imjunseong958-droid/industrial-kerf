@@ -151,6 +151,8 @@ private:
     void fitTitleBar();
     // The project's name as the window's title and the toolbar's.
     void setProjectTitle(const QString &name);
+    // Centre the title on the toolbar, clear of the groups either side.
+    void layoutProjectTitle();
     // Rebuild what caches the theme's colours: symbols drawn in code and the
     // conversation's messages.
     void applyAppearance();
@@ -244,6 +246,8 @@ private:
     // The room at the toolbar's leading end for the window buttons (macOS).
     QWidget *m_windowButtons = nullptr;
     QLabel *m_projectTitle = nullptr;
+    QString m_projectName;
+    QToolButton *m_toolbarLeftEnd = nullptr; // The last command before the title.
     QString m_projectDirectory;
     QString m_kerfdBinary;
     void *m_bridge = nullptr;

@@ -166,6 +166,8 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
     t.selection = mixColor(accent, Qt::black, dark ? 0.16 : 0.12);
     t.selectionText = QColor("#ffffff");
     t.focusRing = accent;
+    t.focusHalo = accent;
+    t.focusHalo.setAlphaF(0.35);
     t.menuSelection = accent;
     t.menuSelectionText = QColor("#ffffff");
     t.trackToggleOn = accent;
@@ -199,6 +201,7 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.textStrong = QColor("#f5f5f7");
         t.textSecondary = QColor("#a5a5a8");
         t.textTertiary = QColor("#7c7c80");
+        t.placeholderText = QColor("#98989d");
         t.textDisabled = QColor("#6e6e73");
         t.tabInactiveText = QColor("#a5a5a8");
 
@@ -382,6 +385,7 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         // #636366 keeps 4.5:1 on the grey window and group fills, not only on white.
         t.textSecondary = QColor("#636366");
         t.textTertiary = QColor("#8e8e93");
+        t.placeholderText = QColor("#6e6e73");
         t.textDisabled = QColor("#a5a5aa");
         t.tabInactiveText = QColor("#5f5f64");
 
@@ -431,7 +435,8 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.sliderHandleBorder = QColor("#b4b4b9");
 
         t.statusBar = QColor("#f5f5f5");
-        t.statusText = QColor("#6e6e73");
+        // The window's smallest text, so it keeps a margin over 4.5:1.
+        t.statusText = QColor("#636366");
         t.statusDivider = QColor("#e0e0e3");
 
         t.error = QColor("#d70015");
@@ -443,7 +448,8 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.warningBorder = QColor("#f2d9ab");
         t.warningText = QColor("#1d1d1f");
         t.warningTitle = QColor("#1d1d1f");
-        t.warningGlyph = QColor("#ff9500");
+        // macOS's high-contrast orange, which reads (4.5:1) on the cream bar.
+        t.warningGlyph = QColor("#c93400");
         t.success = QColor("#1e7b34");
 
         t.assistant = QColor("#af52de");
@@ -550,7 +556,8 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
     for (const QColor &surface : {t.panel, t.rulerCorner, t.statusBar}) t.accentText = readableOn(t.accentText, surface, 4.5);
     t.accentTint = mixColor(t.panel, accent, dark ? 0.26 : 0.16);
     t.textSelection = mixColor(t.field, accent, dark ? 0.45 : 0.28);
-    t.inOutRange = mixColor(t.scrubTrack, accent, dark ? 0.45 : 0.35);
+    // The marked range is information: 3:1 on the panel around the bar.
+    t.inOutRange = readableOn(mixColor(t.scrubTrack, accent, 0.75), t.panel, 3.0);
     // Media badges are solid with white text in both appearances: a deepened
     // accent for Not downloaded, red for Offline, at 4.5:1.
     t.badgeInfo = readableOn(accent, Qt::white, 4.5);
@@ -604,7 +611,7 @@ QPalette editorPalette(const EditorTheme &t) {
         palette.setColor(group, QPalette::BrightText, t.textStrong);
         palette.setColor(group, QPalette::ToolTipBase, t.tooltip);
         palette.setColor(group, QPalette::ToolTipText, t.tooltipText);
-        palette.setColor(group, QPalette::PlaceholderText, t.textTertiary);
+        palette.setColor(group, QPalette::PlaceholderText, t.placeholderText);
         palette.setColor(group, QPalette::Link, t.accentText);
         palette.setColor(group, QPalette::Light, t.dark ? t.borderStrong : QColor("#ffffff"));
         palette.setColor(group, QPalette::Midlight, t.border);

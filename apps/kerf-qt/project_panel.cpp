@@ -23,8 +23,9 @@ const QString kExternal = QStringLiteral("External");
 
 // A thumbnail letterboxed onto a fixed tile, so the bin keeps a grid, with
 // the media's badge in its corner. Sound is a teal tile with its waveform
-// (or a note until one arrives); a picture not yet drawn, or offline, is a
-// quiet tile with an edge, so it never reads as a gap in the grid.
+// (or a waveform symbol until one arrives); a picture not yet drawn, or
+// offline, is a quiet tile with an edge, so it never reads as a gap in the
+// grid.
 QIcon tile(const QImage &frame, const QImage &wave, bool audio, const QString &badge) {
     const EditorTheme &theme = editorTheme();
     QPixmap pixmap(kThumbnail);
@@ -44,11 +45,7 @@ QIcon tile(const QImage &frame, const QImage &wave, bool audio, const QString &b
             tint.end();
             painter.drawImage(QRect(0, 14, kThumbnail.width(), kThumbnail.height() - 28), ink);
         } else {
-            QFont font = painter.font();
-            font.setPixelSize(24);
-            painter.setFont(font);
-            painter.setPen(theme.audioTileGlyph);
-            painter.drawText(pixmap.rect(), Qt::AlignCenter, QStringLiteral("♪"));
+            drawWaveformSymbol(painter, QRectF(pixmap.rect()).center(), 24, theme.audioTileGlyph);
         }
     } else {
         pixmap.fill(theme.tileEmpty);
@@ -56,19 +53,14 @@ QIcon tile(const QImage &frame, const QImage &wave, bool audio, const QString &b
         painter.drawRect(pixmap.rect().adjusted(0, 0, -1, -1));
         // What the media is, as an 18-point symbol: SF Symbols' film, or a
         // waveform for sound. The badge and the name under the tile say the rest.
-        painter.save();
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.translate(kThumbnail.width() / 2.0 - 9, kThumbnail.height() / 2.0 - 9);
-        painter.setPen(QPen(theme.tileEmptyText, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        QPainterPath symbol;
         if (audio) {
-            const qreal heights[] = {4, 10, 16, 8, 12, 5};
-            for (int bar = 0; bar < 6; ++bar) {
-                const qreal x = 2 + bar * 2.8;
-                symbol.moveTo(x, 9 - heights[bar] / 2);
-                symbol.lineTo(x, 9 + heights[bar] / 2);
-            }
+            drawWaveformSymbol(painter, QRectF(pixmap.rect()).center(), 18, theme.tileEmptyText);
         } else {
+            painter.save();
+            painter.setRenderHint(QPainter::Antialiasing);
+            painter.translate(kThumbnail.width() / 2.0 - 9, kThumbnail.height() / 2.0 - 9);
+            painter.setPen(QPen(theme.tileEmptyText, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            QPainterPath symbol;
             symbol.addRoundedRect(QRectF(1.5, 3, 15, 12), 2, 2);
             symbol.moveTo(5, 3); symbol.lineTo(5, 15);
             symbol.moveTo(13, 3); symbol.lineTo(13, 15);
@@ -76,9 +68,9 @@ QIcon tile(const QImage &frame, const QImage &wave, bool audio, const QString &b
                 symbol.moveTo(1.5, y); symbol.lineTo(5, y);
                 symbol.moveTo(13, y); symbol.lineTo(16.5, y);
             }
+            painter.drawPath(symbol);
+            painter.restore();
         }
-        painter.drawPath(symbol);
-        painter.restore();
     }
     if (!badge.isEmpty()) {
         // Sentence case at 11 points, as macOS labels.

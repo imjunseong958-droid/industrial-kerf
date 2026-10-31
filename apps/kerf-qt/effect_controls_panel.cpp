@@ -36,7 +36,8 @@ constexpr int kLabelColumn = 96;
 constexpr int kNumberWidth = 96;
 
 // A form in the inspector's column: number fields, pop-ups and wells keep
-// their size, and only text fields grow.
+// their size, and only text fields grow. Every form's rows are 6 points
+// apart, so the clip's timing and its effects read at one density.
 QFormLayout *inspectorForm(QWidget *parent = nullptr) {
     auto *form = new QFormLayout(parent);
     form->setHorizontalSpacing(8);
@@ -75,6 +76,8 @@ EffectControlsPanel::EffectControlsPanel(QWidget *parent) : QWidget(parent) {
     form->setVerticalSpacing(6);
     m_clipName = new QLabel(QStringLiteral("Select a clip"));
     m_clipName->setObjectName(QStringLiteral("inspectorClip"));
+    // No automatic indent: the name starts on the labels' edge.
+    m_clipName->setIndent(0);
     form->addRow(m_clipName);
     m_position = timingSpin(0.0, 86400.0, 0.01, QStringLiteral("timelineStart"));
     m_duration = timingSpin(0.01, 86400.0, 0.01, QStringLiteral("duration"));
@@ -246,7 +249,7 @@ void EffectControlsPanel::showMasks() {
             box->setObjectName(QStringLiteral("maskBox"));
             auto *boxLayout = new QVBoxLayout(box);
             boxLayout->setContentsMargins(0, 0, 0, 0);
-            boxLayout->setSpacing(4);
+            boxLayout->setSpacing(6);
             auto *header = new QHBoxLayout;
             auto *select = new QToolButton;
             select->setObjectName(QStringLiteral("maskName"));
@@ -272,7 +275,7 @@ void EffectControlsPanel::showMasks() {
             header->addWidget(remove);
             boxLayout->addLayout(header);
             auto *form = inspectorForm();
-            form->setVerticalSpacing(4);
+            form->setVerticalSpacing(6);
             auto *mode = new QComboBox;
             mode->setObjectName(QStringLiteral("maskMode"));
             mode->addItems(m_maskModes);
@@ -386,7 +389,7 @@ void EffectControlsPanel::showEffects() {
         box->setObjectName(QStringLiteral("effectBox"));
         auto *boxLayout = new QVBoxLayout(box);
         boxLayout->setContentsMargins(0, 0, 0, 0);
-        boxLayout->setSpacing(4);
+        boxLayout->setSpacing(6);
         auto *header = new QHBoxLayout;
         auto *enabled = new QCheckBox(def.value(QStringLiteral("name")).toString(fx));
         enabled->setObjectName(QStringLiteral("effectEnabled"));
@@ -410,7 +413,7 @@ void EffectControlsPanel::showEffects() {
         header->addWidget(remove);
         boxLayout->addLayout(header);
         auto *form = inspectorForm();
-        form->setVerticalSpacing(4);
+        form->setVerticalSpacing(6);
         const QJsonObject params = effect.value(QStringLiteral("params")).toObject();
         for (const QJsonValue &paramValue : def.value(QStringLiteral("params")).toArray()) {
             const QJsonObject param = paramValue.toObject();

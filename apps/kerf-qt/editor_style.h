@@ -174,13 +174,18 @@ QToolTip {
     border: 1px solid @tooltipBorder;
     padding: 5px 8px;
 }
+/* A pop-up button's menu: rounded as macOS's, its rows drawn by
+   PopupItemDelegate (a check by the current choice, the accent under the
+   pointer). Its window is translucent, so the corners are clipped. */
 QComboBox QAbstractItemView {
     background: @menu;
     color: @menuText;
     border: 1px solid @menuBorder;
-    selection-background-color: @menuSelection;
-    selection-color: @menuSelectionText;
+    border-radius: 6px;
+    padding: 4px;
+    outline: 0;
 }
+QComboBox QAbstractItemView::item { min-height: 22px; padding: 0; border: 0; }
 
 QMenuBar {
     background: @chrome;
@@ -192,16 +197,24 @@ QMenuBar::item {
     border-radius: 3px;
 }
 QMenuBar::item:selected { background: @pressed; }
+/* Menus Qt draws (context menus, and every menu off macOS) take macOS's
+   shape: 6px corners, clipped by a translucent window, and rounded rows
+   with room for a check. */
 QMenu {
     background: @menu;
     border: 1px solid @menuBorder;
-    padding: 3px;
+    border-radius: 6px;
+    padding: 4px;
 }
 QMenu::item {
-    padding: 4px 24px 4px 10px;
-    border-radius: 3px;
+    padding: 3px 18px 3px 22px;
+    border-radius: 4px;
 }
-QMenu::separator { height: 1px; background: @menuSeparator; margin: 3px 6px; }
+/* A check sits in the rows' first 22px; Qt starts their text past it, so
+   a menu with checks pads its rows by less (useEditorStyle marks it). */
+QMenu::indicator { width: 14px; height: 14px; }
+QMenu[checkColumn="true"]::item { padding-left: 8px; }
+QMenu::separator { height: 1px; background: @menuSeparator; margin: 4px 6px; }
 QMenu::item:selected { background: @menuSelection; color: @menuSelectionText; }
 QMenu::item:disabled { color: @textDisabled; background: transparent; }
 
@@ -241,7 +254,8 @@ QSplitter::handle:horizontal { width: 2px; }
 QSplitter::handle:vertical { height: 2px; }
 
 /* Push buttons are 22px with a 5px radius, as the launcher's and macOS's
-   regular controls. */
+   regular controls. They take focus from Tab alone, and show it as a soft
+   ring outside the bezel (see useEditorStyle), not Fusion's inner frame. */
 QToolButton,
 QPushButton {
     color: @buttonText;
@@ -253,6 +267,7 @@ QPushButton {
     padding: 2px 12px;
     min-height: 16px;
     max-height: 16px;
+    outline: 0;
 }
 /* Symbol-only buttons keep a narrow bezel. */
 QToolButton#maskTool,
@@ -279,10 +294,6 @@ QToolButton:pressed,
 QPushButton:pressed {
     background: @buttonPressed;
     border-color: @borderStrong;
-}
-QToolButton:focus,
-QPushButton:focus {
-    border-color: @focusRing;
 }
 QToolBar QToolButton:disabled,
 QToolButton:disabled,
@@ -397,23 +408,24 @@ QToolBar QToolButton#toolbarPrimary:disabled {
     background: @buttonDisabled;
     border-color: @buttonDisabledEdge;
 }
+/* Render: a push button's bezel, as tall as the pop-ups beside it. */
 QToolBar QToolButton#toolbarQuiet {
-    background: transparent;
-    border: 1px solid transparent;
-    color: @text;
-    padding: 0px 6px;
+    background: @button;
+    border: 1px solid @buttonEdge;
+    border-top-color: @buttonTop;
+    border-bottom-color: @buttonBottom;
+    border-radius: 5px;
+    color: @buttonText;
+    padding: 0px 8px;
     min-height: 18px;
     max-height: 18px;
 }
-QToolBar QToolButton#toolbarQuiet:hover {
-    background: @hover;
-    border-color: @border;
-    color: @textStrong;
-}
+QToolBar QToolButton#toolbarQuiet:hover { background: @buttonHover; }
+QToolBar QToolButton#toolbarQuiet:pressed { background: @buttonPressed; }
 QToolBar QToolButton#toolbarQuiet:disabled {
-    color: @textDisabled;
-    background: transparent;
-    border-color: transparent;
+    color: @buttonDisabledText;
+    background: @buttonDisabled;
+    border-color: @buttonDisabledEdge;
 }
 QToolButton#mediaToggle {
     background: transparent;
@@ -444,8 +456,9 @@ QLabel#statusPill {
     letter-spacing: 0px;
 }
 QLabel#timecode { color: @text; font-family: Menlo, Monaco, monospace; font-size: 11px; }
-QLabel#inspectorClip { color: @textStrong; font-weight: 600; padding: 5px 0; }
-QLabel#projectTitle { color: @text; font-weight: 600; padding: 0 20px; }
+QLabel#inspectorClip { color: @textStrong; font-weight: 600; padding: 5px 0 5px 0; margin: 0; }
+/* The window's title, 13px semibold as macOS's and the launcher's. */
+QLabel#projectTitle { color: @text; font-size: 13px; font-weight: 600; padding: 0; }
 QWidget#assistantPanel { background: @well; border-left: 1px solid @divider; }
 QFrame#scrollEdge { background: transparent; border: 0; }
 QFrame#scrollEdge[scrolled="true"] { background: @divider; }
@@ -513,8 +526,9 @@ QLineEdit:hover,
 QDoubleSpinBox:hover,
 QComboBox:hover { border-color: @borderStrong; }
 /* Pop-up buttons and steppers: macOS's chevrons on the field, with no
-   bevelled arrow cells. */
-QComboBox { padding: 2px 24px 2px 8px; combobox-popup: 1; }
+   bevelled arrow cells. A pop-up button's height is its content's, with no
+   padding above or below: Qt reads that padding as its menu's margin. */
+QComboBox { padding: 0 24px 0 8px; min-height: 20px; max-height: 20px; combobox-popup: 1; }
 QComboBox::drop-down {
     subcontrol-origin: padding;
     subcontrol-position: center right;
@@ -524,7 +538,6 @@ QComboBox::drop-down {
 }
 QComboBox::down-arrow { image: @popUpChevrons; width: 10px; height: 14px; border: 0; }
 QComboBox::down-arrow:disabled { image: @popUpChevronsDisabled; }
-QComboBox QAbstractItemView::item { min-height: 22px; }
 /* The stepper's halves are transparent hit areas; StepperSpinBox draws one
    centred pair of chevrons over them, as the launcher does. */
 QDoubleSpinBox { padding: 2px 18px 2px 7px; }
@@ -585,7 +598,9 @@ QComboBox:disabled {
 QComboBox#agentModel {
     background: transparent;
     border: 0;
-    padding: 3px 22px 3px 2px;
+    padding: 0 22px 0 2px;
+    min-height: 22px;
+    max-height: 22px;
     font-size: 11px;
     color: @textSecondary;
 }
@@ -723,7 +738,6 @@ QPushButton#nextStep {
 }
 QPushButton#nextStep:hover,
 QPushButton#nextStep:pressed { background: @assistantHover; border-color: @assistantBorder; }
-QPushButton#nextStep:focus { border-color: @assistant; }
 QFrame#aiBar QToolButton:disabled { color: @buttonDisabledText; background: @buttonDisabled; border-color: @buttonDisabledEdge; }
 
 QFrame#divergedBanner { background: @warningSurface; border: 0; border-bottom: 1px solid @warningBorder; border-radius: 0; }

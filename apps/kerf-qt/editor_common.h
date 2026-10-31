@@ -7,10 +7,13 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QStyledItemDelegate>
 #include <QTransform>
 #include <QWidget>
 
 #include <functional>
+
+class QComboBox;
 
 namespace kerf {
 
@@ -100,6 +103,43 @@ protected:
     // The chevrons' colour: the editor's secondary text, or its disabled text.
     virtual QColor stepperColor() const;
 };
+
+// The rows of a pop-up button's menu, as macOS draws them: 22 points tall,
+// a check by the current choice, and the row under the pointer filled with
+// the accent under white text (the editor's pop-ups, and the launcher's).
+class PopupItemDelegate : public QStyledItemDelegate {
+public:
+    explicit PopupItemDelegate(QComboBox *combo);
+
+    QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override;
+    void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override;
+
+protected:
+    struct Colors {
+        QColor selection;     // The row under the pointer...
+        QColor selectionText; // ...and its text.
+        QColor text;          // Every other row's text.
+    };
+    // The editor's menu colours.
+    virtual Colors colors() const;
+
+private:
+    QComboBox *m_combo;
+};
+
+// Draw the application in the editor's style: Fusion, with push buttons
+// that take focus from Tab alone, as macOS's do, so a click leaves none
+// behind. Every pop-up button gets PopupItemDelegate's rows (unless it
+// brings its own), pop-up lists and menus are clipped to their rounded
+// corners, and a button focused from the keyboard shows macOS's soft accent
+// ring outside its bezel (its `bezelRadius` property, 5 points unless set).
+// Called once, before any widget is made.
+void useEditorStyle();
+
+// SF Symbols' waveform: six round-capped bars on an 18-point grid scaled to
+// `size` points, centred on `center`, in a 1.5-point pen (sound with no
+// waveform yet, or offline).
+void drawWaveformSymbol(QPainter &painter, const QPointF &center, qreal size, const QColor &color);
 
 // A symbol `draw`n in the editor's glyph colour on a `points`-sized grid,
 // with a Disabled twin drawn in its disabled glyph colour. Qt's own

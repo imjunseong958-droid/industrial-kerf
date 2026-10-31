@@ -95,6 +95,10 @@ constexpr int kWindowButtonsSpace = 72;
 #define KERF_EDITOR_OWN_TITLE_BAR 0
 #endif
 constexpr int kToolbarHeight = 30;
+// The style sheet's QToolBar spacing, between every pair of its items.
+constexpr int kToolbarSpacing = 2;
+// How far the title keeps from the toolbar's groups; nearer, it gives way.
+constexpr int kTitleClearance = 20;
 
 // SF Symbols' scissors on a 20-point grid, in the painter's pen: the
 // toolbar's Split and the tool palette's Razor.
@@ -1239,6 +1243,8 @@ void MainWindow::showNextSteps(const QJsonArray &steps) {
             const QString request = step.value(QStringLiteral("request")).toString();
             auto *button = new QPushButton(step.value(QStringLiteral("label")).toString());
             button->setObjectName(QStringLiteral("nextStep"));
+            // A pill: its focus ring follows its round ends.
+            button->setProperty("bezelRadius", 11);
             button->setToolTip(request);
             button->setCursor(Qt::PointingHandCursor);
             connect(button, &QPushButton::clicked, this, [this, request] {
@@ -1421,6 +1427,10 @@ void MainWindow::rejectProposal() {
 
 bool MainWindow::eventFilter(QObject *object, QEvent *event) {
     if (object == m_preferences && event->type() == QEvent::Show) fitPreferences();
+    // The title stays centred as the toolbar, or a group beside it, changes.
+    if ((object == m_toolbar || object == m_toolbarLeftEnd || object == m_quality) &&
+        (event->type() == QEvent::Resize || event->type() == QEvent::Move))
+        layoutProjectTitle();
 #if KERF_EDITOR_OWN_TITLE_BAR
     // Dragging the toolbar's empty stretches (or its title, which takes no
     // clicks) moves the window, and a double click zooms it, as a title
@@ -1726,6 +1736,7 @@ void MainWindow::buildUi() {
     composerLayout->addLayout(agentPicker);
     auto *sendButton = new QPushButton(QStringLiteral("↑"));
     sendButton->setObjectName(QStringLiteral("chatSendButton"));
+    sendButton->setProperty("bezelRadius", 8);
     m_sendButton = sendButton;
     sendButton->setAccessibleName(QStringLiteral("Send message"));
     sendButton->setFixedSize(32, 32);
@@ -2455,9 +2466,10 @@ void MainWindow::setupActions() {
     m_windowButtons->setObjectName(QStringLiteral("windowButtonsSpace"));
     m_windowButtons->setFixedWidth(kWindowButtonsSpace);
     toolbar->addWidget(m_windowButtons);
-    // Its empty stretches move and zoom the window, as a title bar's do.
-    toolbar->installEventFilter(this);
 #endif
+    // Its empty stretches move and zoom the window (on macOS, where it is
+    // the title bar), and its size places the title.
+    toolbar->installEventFilter(this);
     if (!menuBar()->isNativeMenuBar()) {
         // Keep menus accessible without dedicating a full row to them.
         auto *menuButton = new QToolButton(toolbar);
@@ -2489,31 +2501,27 @@ void MainWindow::setupActions() {
         toolbar->addAction(action);
         return qobject_cast<QToolButton *>(toolbar->widgetForAction(action));
     };
-    // Groups are set apart by space, as in macOS toolbars, not by rules.
-    const auto groupSpace = [toolbar] {
-        auto *space = new QWidget;
-        space->setFixedWidth(10);
-        toolbar->addWidget(space);
+    // Groups are set apart by space, as in macOS toolbars, not by rules, and
+    // separate controls by 8 points, as macOS toolbars and the launcher's
+    // footer space them; the toolbar's own spacing comes on either side.
+    const auto space = [toolbar](int width) {
+        auto *gap = new QWidget;
+        gap->setFixedWidth(width);
+        toolbar->addWidget(gap);
     };
+    const auto groupSpace = [&space] { space(10); };
+    const auto controlSpace = [&space] { space(8 - 2 * kToolbarSpacing); };
     toolbarCommand(QStringLiteral("file.import"), QStringLiteral("Import"), QStringLiteral("↓"));
     groupSpace();
     toolbarCommand(QStringLiteral("edit.undo"), QStringLiteral("Undo"), QStringLiteral("↶"));
     toolbarCommand(QStringLiteral("edit.redo"), QStringLiteral("Redo"), QStringLiteral("↷"));
     groupSpace();
     toolbarCommand(QStringLiteral("clip.split"), QStringLiteral("Split"), QStringLiteral("✂"));
-    toolbarCommand(QStringLiteral("clip.delete"), QStringLiteral("Delete"), QStringLiteral("trash"));
+    m_toolbarLeftEnd = toolbarCommand(QStringLiteral("clip.delete"), QStringLiteral("Delete"), QStringLiteral("trash"));
     auto *spacer = new QWidget;
     spacer->setStyleSheet(QStringLiteral("background: transparent"));
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     toolbar->addWidget(spacer);
-    auto *projectTitle = new QLabel;
-    m_projectTitle = projectTitle;
-    projectTitle->setObjectName(QStringLiteral("projectTitle"));
-    toolbar->addWidget(projectTitle);
-    auto *spacerRight = new QWidget;
-    spacerRight->setStyleSheet(QStringLiteral("background: transparent"));
-    spacerRight->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    toolbar->addWidget(spacerRight);
     m_quality = new QComboBox;
     m_quality->setObjectName(QStringLiteral("qualityPicker"));
     m_quality->setSizeAdjustPolicy(QComboBox::AdjustToContents);
@@ -2521,6 +2529,7 @@ void MainWindow::setupActions() {
     m_quality->addItem(QStringLiteral("Preview"), QStringLiteral("preview"));
     m_quality->addItem(QStringLiteral("Full"), QStringLiteral("full"));
     toolbar->addWidget(m_quality);
+    controlSpace();
     m_canvasPreset = new QComboBox;
     m_canvasPreset->setObjectName(QStringLiteral("canvasPicker"));
     m_canvasPreset->setSizeAdjustPolicy(QComboBox::AdjustToContents);
@@ -2530,10 +2539,20 @@ void MainWindow::setupActions() {
     connect(m_canvasPreset, qOverload<int>(&QComboBox::currentIndexChanged),
             this, &MainWindow::canvasPresetChanged);
     toolbar->addWidget(m_canvasPreset);
+    controlSpace();
     if (auto *exportButton = toolbarCommand(QStringLiteral("file.export"), QStringLiteral("Export")))
         exportButton->setObjectName(QStringLiteral("toolbarPrimary"));
+    controlSpace();
     if (auto *renderButton = toolbarCommand(QStringLiteral("sequence.renderPreview"), QStringLiteral("Render")))
         renderButton->setObjectName(QStringLiteral("toolbarQuiet"));
+    // The title is centred on the window, as macOS centres it, not between
+    // the groups, so it sits over the toolbar outside its layout;
+    // layoutProjectTitle() places it as the toolbar and its groups move.
+    m_projectTitle = new QLabel(toolbar);
+    m_projectTitle->setObjectName(QStringLiteral("projectTitle"));
+    m_projectTitle->setAlignment(Qt::AlignCenter);
+    for (QWidget *edge : {static_cast<QWidget *>(m_toolbarLeftEnd), static_cast<QWidget *>(m_quality)})
+        if (edge) edge->installEventFilter(this);
     updateCommandStates();
 }
 
@@ -2587,8 +2606,29 @@ void MainWindow::fitTitleBar() {
 #endif
 }
 
+void MainWindow::layoutProjectTitle() {
+    if (!m_projectTitle || !m_toolbar || !m_toolbarLeftEnd || !m_quality) return;
+    m_projectTitle->ensurePolished();
+    const QFontMetrics metrics(m_projectTitle->font());
+    // The room between the groups, and the title's own width.
+    const int left = m_toolbarLeftEnd->geometry().right() + 1 + kTitleClearance;
+    const int right = m_quality->geometry().left() - kTitleClearance;
+    const int natural = metrics.horizontalAdvance(m_projectName) + 2;
+    const int width = std::min(natural, std::max(0, right - left));
+    // Centred on the window (the toolbar spans it); moved aside when a group
+    // is in the way, and shortened when there is no room for all of it.
+    const int x = std::clamp((m_toolbar->width() - width) / 2, left, std::max(left, right - width));
+    const QString shown = width < natural ? metrics.elidedText(m_projectName, Qt::ElideRight, width) : m_projectName;
+    m_projectTitle->setText(shown);
+    m_projectTitle->setToolTip(shown == m_projectName ? QString() : m_projectName);
+    // On the line the toolbar's controls sit on, centred as their text is.
+    m_projectTitle->setGeometry(x, m_quality->y(), width, m_quality->height());
+    m_projectTitle->raise();
+}
+
 void MainWindow::setProjectTitle(const QString &name) {
-    m_projectTitle->setText(name);
+    m_projectName = name;
+    layoutProjectTitle();
     // The Window menu, Mission Control and the Dock list the project.
     setWindowTitle(name);
     if (!m_projectDirectory.isEmpty()) setWindowFilePath(QDir(m_projectDirectory).absoluteFilePath(QStringLiteral("project.kerf")));

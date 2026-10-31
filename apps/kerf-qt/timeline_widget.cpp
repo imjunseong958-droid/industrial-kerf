@@ -18,8 +18,11 @@ namespace kerf {
 namespace {
 
 // A clip's name bar, where its name and FX badge sit (the whole clip on
-// short rows).
-constexpr qreal kClipHeaderHeight = 13.0;
+// short rows). Tall enough that a selected clip's name keeps a pixel of the
+// bar between its ascenders and the 3px ring.
+constexpr qreal kClipHeaderHeight = 15.0;
+// The selected clip's ring, 1px dark and 2px light, inside its edge.
+constexpr qreal kSelectionRing = 3.0;
 qreal clipHeaderHeight(const QRectF &clip) { return clip.height() >= 26.0 ? kClipHeaderHeight : clip.height(); }
 
 // The selected clip's ring: a 2px light line inside a 1px dark one, which
@@ -749,6 +752,17 @@ void TimelineWidget::paintProposal(QPainter &p, int row, const QJsonObject &trac
         p.drawRect(rect);
         p.setPen(QPen(added ? theme.proposalAdd : theme.proposalChange, 1.5, Qt::DashLine));
         p.drawRect(rect);
+        // A clip it adds is named, in the agent's purple, as clips are.
+        if (added && rect.width() > 22.0) {
+            QFont nameFont = font();
+            nameFont.setPixelSize(10);
+            nameFont.setWeight(QFont::DemiBold);
+            p.setFont(nameFont);
+            p.setPen(theme.assistantText);
+            const QRectF band(rect.left() + 6, rect.top() + 1, rect.width() - 12, clipHeaderHeight(extent) - 2);
+            p.drawText(band, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
+                       QFontMetrics(nameFont).elidedText(clipName(clip), Qt::ElideRight, std::max(1, int(band.width()))));
+        }
     }
     // Clips the proposal leaves out.
     for (auto it = current.cbegin(); it != current.cend(); ++it) {
@@ -901,6 +915,10 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
     }
 
     if (rect.width() > 22.0) {
+        // A selected clip's name and badge sit below its ring (and above it
+        // too, on a row that is all name bar).
+        const qreal ring = selected ? kSelectionRing : 0.0;
+        const QRectF labelBand = band.adjusted(0, ring, 0, body.height() > 0.0 ? 0.0 : -ring);
         qreal textRight = rect.right() - 5;
         const bool effected = !clip.value(QStringLiteral("effects")).toArray().isEmpty() ||
                               !clip.value(QStringLiteral("props")).toObject().isEmpty();
@@ -908,7 +926,7 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
             QFont badgeFont = font();
             badgeFont.setPixelSize(8);
             badgeFont.setWeight(QFont::Bold);
-            const QRectF fx(textRight - 16, band.center().y() - 5.0, 16, 10);
+            const QRectF fx(textRight - 16, labelBand.center().y() - 5.0, 16, 10);
             p.fillRect(fx, theme.clipFxBadge);
             p.setFont(badgeFont);
             p.setPen(theme.clipFxBadgeText);
@@ -924,7 +942,7 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
         if (std::abs(speed - 1.0) > 0.0005) label += QStringLiteral("  [%1%]").arg(std::lround(speed * 100.0));
         const qreal textLeft = rect.left() + 6;
         p.setPen(style.label);
-        p.drawText(QRectF(textLeft, band.top(), std::max(1.0, textRight - textLeft), bandHeight),
+        p.drawText(QRectF(textLeft, labelBand.top(), std::max(1.0, textRight - textLeft), labelBand.height()),
                    Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
                    QFontMetrics(nameFont).elidedText(label, Qt::ElideRight, std::max(1, int(textRight - textLeft))));
     }
@@ -958,12 +976,10 @@ void TimelineWidget::paintDraggedClip(QPainter &p, const QRect &visible, int row
     else if (m_dragTrailing) duration = std::max(1.0 / m_fps, m_previewTime - m_dragStart);
     else if (m_tool != TimelineTool::Slip) start = m_previewTime;
     const QRectF rect = clipRect(row, start, duration);
-    // A shadow under it, as a lifted clip.
+    // A shadow under it, as a lifted clip. It is opaque, so the names of
+    // the clips it covers do not ghost through its own.
     p.fillRect(rect.translated(0, 2), theme.dragShadow);
-    const qreal opacity = p.opacity();
-    p.setOpacity(opacity * 0.9);
     paintClip(p, visible, row, clip, track, audio);
-    p.setOpacity(opacity);
     // Where it will overwrite its neighbours, a dashed edge.
     const QString id = clip.value(QStringLiteral("id")).toString();
     p.save();

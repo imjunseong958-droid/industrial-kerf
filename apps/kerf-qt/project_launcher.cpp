@@ -540,50 +540,24 @@ private:
     const LauncherTheme *m_theme;
 };
 
-// Rows of a pop-up button's menu: a check by the current choice, and the
-// accent under the pointer.
-class PopupItemDelegate final : public QStyledItemDelegate {
+// A pop-up button's rows (a check by the current choice, the accent under
+// the pointer) in the launcher's colours.
+class LauncherPopupRows final : public PopupItemDelegate {
 public:
-    PopupItemDelegate(const LauncherTheme *theme, QComboBox *combo) : QStyledItemDelegate(combo), m_theme(theme), m_combo(combo) {}
+    LauncherPopupRows(const LauncherTheme *theme, QComboBox *combo) : PopupItemDelegate(combo), m_theme(theme) {}
 
-    QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override {
-        return {kTextLeft + option.fontMetrics.horizontalAdvance(index.data(Qt::DisplayRole).toString()) + 16, 22};
-    }
-
-    void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override {
-        const LauncherTheme &t = *m_theme;
-        const bool selected = option.state & QStyle::State_Selected;
-        const QRectF row(option.rect);
-        painter->save();
-        painter->setRenderHint(QPainter::Antialiasing);
-        if (selected) {
-            painter->setPen(Qt::NoPen);
-            painter->setBrush(t.accent);
-            painter->drawRoundedRect(row, 4, 4);
-        }
-        const QColor color = selected ? t.onAccent : t.text;
-        if (index.row() == m_combo->currentIndex()) {
-            painter->setPen(linePen(color, 1.6));
-            const QPointF at(row.left() + 7, row.center().y());
-            painter->drawPolyline(QPolygonF{at + QPointF(0, 0.5), at + QPointF(3, 3.5), at + QPointF(8, -3.5)});
-        }
-        painter->setFont(option.font);
-        painter->setPen(color);
-        painter->drawText(row.adjusted(kTextLeft, 0, -8, 0), Qt::AlignLeft | Qt::AlignVCenter, index.data(Qt::DisplayRole).toString());
-        painter->restore();
-    }
+protected:
+    Colors colors() const override { return {m_theme->accent, m_theme->onAccent, m_theme->text}; }
 
 private:
-    static constexpr int kTextLeft = 22;
     const LauncherTheme *m_theme;
-    QComboBox *m_combo;
 };
 
 // A pop-up button: a push button's bezel with macOS's up and down chevrons.
 // Its menu opens over the current choice.
 class LauncherPopup final : public QComboBox {
 public:
-    explicit LauncherPopup(const LauncherTheme *theme) : m_theme(theme) { setItemDelegate(new PopupItemDelegate(theme, this)); }
+    explicit LauncherPopup(const LauncherTheme *theme) : m_theme(theme) { setItemDelegate(new LauncherPopupRows(theme, this)); }
 
 protected:
     void paintEvent(QPaintEvent *event) override {

@@ -1,14 +1,23 @@
 #include "editor_common.h"
 #include "editor_theme.h"
 
+#include <QAbstractItemView>
+#include <QApplication>
+#include <QComboBox>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QFocusEvent>
 #include <QHash>
 #include <QImage>
 #include <QJsonDocument>
+#include <QMenu>
+#include <QPointer>
 #include <QPolygonF>
+#include <QProxyStyle>
+#include <QPushButton>
 #include <QTemporaryDir>
+#include <QToolButton>
 
 #include <algorithm>
 #include <array>
@@ -16,6 +25,13 @@
 #include <limits>
 
 namespace kerf {
+
+namespace {
+
+// Where a pop-up row's text starts, past the current choice's check.
+constexpr int kPopupTextLeft = 22;
+
+} // namespace
 
 bool nearerScrubFrame(double shownTime, bool hasShown, double frameTime, double target, double fps) {
     if (!hasShown) return true;
@@ -253,6 +269,239 @@ void StepperSpinBox::paintEvent(QPaintEvent *event) {
 
 QColor StepperSpinBox::stepperColor() const {
     return isEnabled() ? editorTheme().textSecondary : editorTheme().textDisabled;
+}
+
+PopupItemDelegate::PopupItemDelegate(QComboBox *combo) : QStyledItemDelegate(combo), m_combo(combo) {}
+
+QSize PopupItemDelegate::sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const {
+    return {kPopupTextLeft + option.fontMetrics.horizontalAdvance(index.data(Qt::DisplayRole).toString()) + 16, 22};
+}
+
+void PopupItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const {
+    const Colors c = colors();
+    const bool selected = option.state & QStyle::State_Selected;
+    const QRectF row(option.rect);
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing);
+    if (selected) {
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(c.selection);
+        painter->drawRoundedRect(row, 4, 4);
+    }
+    const QColor color = selected ? c.selectionText : c.text;
+    if (index.row() == m_combo->currentIndex()) {
+        painter->setPen(QPen(color, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        const QPointF at(row.left() + 7, row.center().y());
+        painter->drawPolyline(QPolygonF{at + QPointF(0, 0.5), at + QPointF(3, 3.5), at + QPointF(8, -3.5)});
+    }
+    painter->setFont(option.font);
+    painter->setPen(color);
+    painter->drawText(row.adjusted(kPopupTextLeft, 0, -8, 0), Qt::AlignLeft | Qt::AlignVCenter, index.data(Qt::DisplayRole).toString());
+    painter->restore();
+}
+
+PopupItemDelegate::Colors PopupItemDelegate::colors() const {
+    const EditorTheme &t = editorTheme();
+    return {t.menuSelection, t.menuSelectionText, t.menuText};
+}
+
+namespace {
+
+// Fusion, whose push buttons (and check boxes) take focus from Tab alone,
+// and whose pop-up buttons' menu windows paint no panel of their own.
+class EditorStyle final : public QProxyStyle {
+public:
+    EditorStyle() : QProxyStyle(QStringLiteral("Fusion")) {}
+
+    int styleHint(StyleHint hint, const QStyleOption *option, const QWidget *widget, QStyleHintReturn *data) const override {
+        if (hint == SH_Button_FocusPolicy) return Qt::TabFocus;
+        return QProxyStyle::styleHint(hint, option, widget, data);
+    }
+
+    void drawPrimitive(PrimitiveElement element, const QStyleOption *option, QPainter *painter, const QWidget *widget) const override {
+        // A pop-up button's menu window paints nothing of its own (the style
+        // sheet cannot reach it): the list in it, rounded by the style sheet,
+        // is the whole menu.
+        if (element == PE_PanelMenu && widget && widget->isWindow() && qobject_cast<const QComboBox *>(widget->parentWidget()))
+            return;
+        QProxyStyle::drawPrimitive(element, option, painter, widget);
+    }
+};
+
+// The ring around a button focused from the keyboard: 3 points of the
+// accent at 35% outside its bezel, as the launcher rings its fields. It
+// sits in the button's parent, under the button, and follows it.
+class FocusHalo final : public QWidget {
+public:
+    explicit FocusHalo(QWidget *control) : QWidget(control->parentWidget()), m_control(control) {
+        setObjectName(QStringLiteral("focusHalo"));
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setFocusPolicy(Qt::NoFocus);
+        control->installEventFilter(this);
+        place();
+    }
+    ~FocusHalo() override {
+        if (m_control) m_control->removeEventFilter(this);
+    }
+    QWidget *control() const { return m_control; }
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override {
+        if (watched == m_control) {
+            switch (event->type()) {
+            case QEvent::Move:
+            case QEvent::Resize:
+            case QEvent::Show:
+            case QEvent::Hide: place(); break;
+            default: break;
+            }
+        }
+        return QWidget::eventFilter(watched, event);
+    }
+
+    void paintEvent(QPaintEvent *) override {
+        if (!m_control) return;
+        bool set = false;
+        const qreal radius = m_control->property("bezelRadius").toReal(&set);
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(editorTheme().focusHalo, kWidth));
+        painter.setBrush(Qt::NoBrush);
+        // The pen's middle runs half its width outside the bezel.
+        const qreal middle = kWidth / 2.0;
+        const qreal round = (set ? radius : 5.0) + middle;
+        painter.drawRoundedRect(QRectF(rect()).adjusted(middle, middle, -middle, -middle), round, round);
+    }
+
+private:
+    static constexpr int kWidth = 3;
+
+    void place() {
+        if (!m_control) return;
+        setGeometry(m_control->geometry().adjusted(-kWidth, -kWidth, kWidth, kWidth));
+        stackUnder(m_control);
+        setVisible(m_control->isVisible());
+    }
+
+    QPointer<QWidget> m_control;
+};
+
+// Gives pop-up buttons their rows, pop-up windows their round corners, and
+// buttons focused from the keyboard their ring, for the whole application.
+class EditorControls final : public QObject {
+public:
+    using QObject::QObject;
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override {
+        switch (event->type()) {
+        case QEvent::Polish:
+            if (auto *combo = qobject_cast<QComboBox *>(watched)) {
+                // Qt's own rows (a menu item's or a list's) give way; a pop-up
+                // that brings its own keeps them.
+                const QAbstractItemDelegate *rows = combo->itemDelegate();
+                if (!rows || rows->inherits("QComboMenuDelegate") || rows->inherits("QComboBoxDelegate"))
+                    combo->setItemDelegate(new PopupItemDelegate(combo));
+                roundCorners(combo->view()->window());
+            } else if (auto *menu = qobject_cast<QMenu *>(watched)) {
+                roundCorners(menu);
+                markCheckColumn(menu);
+            }
+            break;
+        case QEvent::ActionAdded:
+        case QEvent::ActionChanged:
+        case QEvent::ActionRemoved:
+            if (auto *menu = qobject_cast<QMenu *>(watched)) markCheckColumn(menu);
+            break;
+        case QEvent::FocusIn:
+            if (qobject_cast<QPushButton *>(watched) || qobject_cast<QToolButton *>(watched)) {
+                auto *control = static_cast<QWidget *>(watched);
+                const Qt::FocusReason reason = static_cast<QFocusEvent *>(event)->reason();
+                // Tab (or a shortcut) rings a button, but not the focus a
+                // window hands its first control as it opens; the ring comes
+                // back with its window, or as a menu closes.
+                const bool keyboard = control->window()->testAttribute(Qt::WA_KeyboardFocusChange);
+                const bool returning = control == m_keyboardFocus &&
+                                       (reason == Qt::ActiveWindowFocusReason || reason == Qt::PopupFocusReason);
+                if ((keyboard || returning) && control->parentWidget()) {
+                    m_keyboardFocus = control;
+                    delete m_halo;
+                    m_halo = new FocusHalo(control);
+                }
+            }
+            break;
+        case QEvent::FocusOut:
+            if (m_halo && watched == m_halo->control()) {
+                const Qt::FocusReason reason = static_cast<QFocusEvent *>(event)->reason();
+                if (reason != Qt::ActiveWindowFocusReason && reason != Qt::PopupFocusReason) m_keyboardFocus = nullptr;
+                m_halo->hide();
+                m_halo->deleteLater();
+            }
+            break;
+        default:
+            break;
+        }
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    // The style sheet rounds pop-up lists and menus; a translucent window
+    // shows what is behind their corners, not squares of the window colour.
+    // Set before the window is first shown, while it can still take it.
+    static void roundCorners(QWidget *popup) {
+        if (popup->testAttribute(Qt::WA_TranslucentBackground)) return;
+#ifdef Q_OS_WIN
+        // Windows gives only a frameless window an alpha channel.
+        popup->setWindowFlag(Qt::FramelessWindowHint);
+#endif
+        popup->setAttribute(Qt::WA_TranslucentBackground);
+    }
+
+    // Whether `menu` shows checks, which Qt sets its rows' text past: the
+    // style sheet then indents those rows less, so text starts 22px in
+    // whether a menu has checks or not, as in macOS.
+    static void markCheckColumn(QMenu *menu) {
+        bool checks = false;
+        for (const QAction *action : menu->actions())
+            checks = checks || (action->isCheckable() && action->isVisible() && !action->isSeparator());
+        if (menu->property("checkColumn").toBool() == checks) return;
+        menu->setProperty("checkColumn", checks);
+        // The style sheet reads the property as it polishes.
+        if (menu->testAttribute(Qt::WA_WState_Polished)) {
+            menu->style()->unpolish(menu);
+            menu->style()->polish(menu);
+        }
+    }
+
+    QPointer<QWidget> m_keyboardFocus;
+    QPointer<FocusHalo> m_halo;
+};
+
+} // namespace
+
+void useEditorStyle() {
+    static EditorControls *controls = nullptr;
+    QApplication::setStyle(new EditorStyle);
+    if (controls || !qApp) return;
+    controls = new EditorControls(qApp);
+    qApp->installEventFilter(controls);
+}
+
+void drawWaveformSymbol(QPainter &painter, const QPointF &center, qreal size, const QColor &color) {
+    const qreal scale = size / 18.0;
+    const qreal heights[] = {4, 10, 16, 8, 12, 5};
+    QPainterPath bars;
+    for (int bar = 0; bar < 6; ++bar) {
+        const QPointF at = center + QPointF((2 + bar * 2.8 - 9) * scale, 0);
+        bars.moveTo(at - QPointF(0, heights[bar] / 2 * scale));
+        bars.lineTo(at + QPointF(0, heights[bar] / 2 * scale));
+    }
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(color, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPath(bars);
+    painter.restore();
 }
 
 QPixmap glyphPixmap(const QSize &points, const std::function<void(QPainter &, const QColor &)> &draw, const QColor &color) {

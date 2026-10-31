@@ -101,7 +101,8 @@ struct EditorTheme {
     QColor text;          // Body text and labels.
     QColor textStrong;    // Titles, the selected tab, emphasised values.
     QColor textSecondary; // Captions, hints, inactive tabs.
-    QColor textTertiary;  // Least important: durations, counts, placeholders.
+    QColor textTertiary;  // Least important: durations, counts.
+    QColor placeholderText; // A field's placeholder, which carries guidance: 4.5:1 on `field`.
     QColor textDisabled;  // Disabled controls.
     QColor tabInactiveText; // A dock's tabs that are not current, 4.5:1 on `panelTitle`.
 
@@ -119,6 +120,7 @@ struct EditorTheme {
     QColor fieldBorder;
     QColor fieldDisabled;
     QColor focusRing; // The border of the field being typed in (the accent).
+    QColor focusHalo; // The soft ring outside a button focused from the keyboard (the accent at 35%).
 
     // An unchecked check box or radio button: a fill and an edge that reads
     // at 3:1 on the panels and dialogs it sits on.
@@ -323,7 +325,7 @@ struct EditorTheme {
     QColor tileEmptyBorder;
     QColor tileEmptyText;       // ...and its film or waveform symbol.
     QColor audioTile;           // A sound-only media tile...
-    QColor audioTileGlyph;      // ...and its note.
+    QColor audioTileGlyph;      // ...and its waveform.
     QColor cardPlaceholder;     // An effect card before its preview arrives...
     QColor cardPlaceholderText; // ...and the effect symbol on it.
     QColor badgeError;          // Offline...

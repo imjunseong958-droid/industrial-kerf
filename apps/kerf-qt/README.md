@@ -31,7 +31,10 @@ marked with the system purple; the viewers keep a neutral dark surround in
 both appearances. On macOS the editor's toolbar is its title bar, as the
 launcher's sidebar and title are: the window runs up under a transparent
 title bar, the window buttons sit at the toolbar's leading end, and the
-project's name is the window's title.
+project's name is the window's title, centred on the window. Pop-up buttons
+and menus open as macOS's do (rounded, a check by the current choice, the
+accent under the pointer), and buttons take focus from Tab alone, shown as a
+soft accent ring.
 
 Sources live in the `kerf` namespace, one class per header/source pair:
 `main_window` (the window, which builds and connects the panels),
@@ -42,7 +45,9 @@ project's preset library), `source_monitor_panel`, `effect_controls_panel`,
 focus-region picker),
 `command_registry` (the editor's side of the command registry), and
 `media_artwork` (background thumbnails and waveforms). `editor_common`
-holds shared constants and helpers, `editor_theme` the appearance (the
+holds shared constants and helpers (among them `useEditorStyle()`, the
+application style: Fusion with macOS's focus, pop-up rows and menu shapes),
+`editor_theme` the appearance (the
 `EditorTheme` colour roles every widget draws with, light and dark, and the
 system appearance and accent detection the launcher shares),
 `editor_style.h` the stylesheet generated from those roles, and

@@ -14,19 +14,23 @@
 #include "viewer_widget.h"
 #include "workspace.h"
 
+#include <QAbstractItemView>
 #include <QAction>
 #include <QApplication>
 #include <QClipboard>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDialog>
 #include <QDir>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QFile>
 #include <QFileInfo>
+#include <QFormLayout>
 #include <QFrame>
 #include <QGuiApplication>
 #include <QGroupBox>
+#include <QHBoxLayout>
 #include <QCheckBox>
 #include <QImage>
 #include <QInputDialog>
@@ -151,7 +155,7 @@ private slots:
     }
 
     void initTestCase() {
-        QApplication::setStyle(QStringLiteral("Fusion"));
+        useEditorStyle();
         // Tests draw in the dark appearance unless they pick one: offscreen
         // reports a light system, and painted colours are checked in dark.
         setEditorColorScheme(ColorScheme::Dark);
@@ -2457,6 +2461,8 @@ private slots:
                                             .arg(firstAmber.x())
                                             .arg(firstAmber.y())));
                     save(image, QStringLiteral("new-details-%1").arg(schemeName));
+                    // Its frame-rate pop-up opens with every choice showing.
+                    QVERIFY(popupShowsEveryRow(launcher.m_rate));
                 }
                 launcher.close();
             }
@@ -2464,6 +2470,19 @@ private slots:
         ProjectLauncher::clearRecentProjects();
         QSettings().remove(QStringLiteral("launcher"));
         QSettings().remove(QStringLiteral("projects"));
+    }
+
+    // Whether `combo`'s menu, opened, shows every choice whole: no scroll
+    // arrows and nothing to scroll.
+    static bool popupShowsEveryRow(QComboBox *combo) {
+        combo->showPopup();
+        QAbstractItemView *list = combo->view();
+        bool scrollers = false;
+        for (const QWidget *child : list->window()->findChildren<QWidget *>(Qt::FindDirectChildrenOnly))
+            scrollers = scrollers || (child->inherits("QComboBoxPrivateScroller") && child->isVisible());
+        const bool fits = !scrollers && list->verticalScrollBar()->maximum() == 0;
+        combo->hidePopup();
+        return fits;
     }
 
     // Saturated amber or gold, as the editor's old accent was.
@@ -2608,6 +2627,8 @@ private slots:
                                                                dark ? QStringLiteral("dark") : QStringLiteral("light"))
                                                           .arg(ratio, 0, 'f', 2)));
                 }
+                // So does the Source monitor's marked range, at 3:1 on its panel.
+                QVERIFY2(contrastRatio(theme.inOutRange, theme.panel) >= 3.0, accent);
             }
         // The dark default reads on the timeline's corner with room to spare.
         QVERIFY(contrastRatio(makeEditorTheme(true, QColor("#0a84ff")).accentText, QColor("#232325")) >= 5.0);
@@ -2704,6 +2725,19 @@ private slots:
             QVERIFY(contrastRatio(theme.viewerTextDim, theme.viewerSurround) >= 4.5);
             QVERIFY(contrastRatio(theme.textSecondary, theme.panel) >= 4.5);
             QVERIFY(contrastRatio(theme.statusText, theme.statusBar) >= 4.5);
+            // Placeholders carry guidance (example searches, what to ask), so
+            // they read as text.
+            QVERIFY(contrastRatio(theme.placeholderText, theme.field) >= 4.5);
+            QCOMPARE(QGuiApplication::palette().color(QPalette::Active, QPalette::PlaceholderText), theme.placeholderText);
+            // The Source monitor's marked range is information: 3:1 on its panel.
+            QVERIFY(contrastRatio(theme.inOutRange, theme.panel) >= 3.0);
+            // The changed-on-disk triangle reads on its bar.
+            QVERIFY(contrastRatio(theme.warningGlyph, theme.warningSurface) >= 3.0);
+            // A clip the agent adds is named in its purple, on its wash over the lane.
+            QVERIFY(contrastRatio(theme.assistantText, over(theme.trackLane, theme.proposalAddFill)) >= 4.5);
+            // A button focused from the keyboard is ringed in the accent at 35%.
+            QCOMPARE(theme.focusHalo.rgb(), theme.accent.rgb());
+            QCOMPARE(theme.focusHalo.alpha(), 89);
             QCOMPARE(theme.viewerSurround, QColor("#1c1c1c"));
 
             MainWindow window{QString(), QString()};
@@ -2741,6 +2775,25 @@ private slots:
             // Mission Control and the Dock name it, and the toolbar shows the same.
             QCOMPARE(window.windowTitle(), QStringLiteral("Harbor Teaser"));
             QCOMPARE(window.m_projectTitle->text(), window.windowTitle());
+            // The title is 13px semibold, as the launcher's and macOS's, and
+            // centred on the window (the toolbar spans it), clear of the
+            // groups either side.
+            QLabel *title = window.m_projectTitle;
+            QCOMPARE(title->font().pixelSize(), 13);
+            QVERIFY2(std::abs(title->geometry().center().x() - toolbar->width() / 2) <= 1,
+                     qPrintable(QStringLiteral("%1 of %2").arg(title->geometry().center().x()).arg(toolbar->width())));
+            QVERIFY(title->geometry().left() > window.m_toolbarLeftEnd->geometry().right());
+            QVERIFY(title->geometry().right() < window.m_quality->geometry().left());
+            // The controls at the right stand 8px apart, bezel to bezel, and
+            // Render has the pop-ups' bezel, not bare text.
+            auto *exportButton = toolbar->findChild<QToolButton *>(QStringLiteral("toolbarPrimary"));
+            auto *render = toolbar->findChild<QToolButton *>(QStringLiteral("toolbarQuiet"));
+            QVERIFY(exportButton && render);
+            const QList<QWidget *> controls{window.m_quality, window.m_canvasPreset, exportButton, render};
+            for (int i = 1; i < controls.size(); ++i)
+                QCOMPARE(controls.at(i)->x() - controls.at(i - 1)->geometry().right() - 1, 8);
+            QCOMPARE(render->height(), window.m_quality->height());
+            QCOMPARE(dominantColor(render->grab().toImage()), (render->isEnabled() ? theme.button : theme.buttonDisabled).rgb());
 #if defined(Q_OS_MACOS) && QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
             // The toolbar is the title bar: the window runs up under a
             // transparent one, and its commands start past the window buttons.
@@ -2753,6 +2806,9 @@ private slots:
                 if (QWidget *item = toolbar->widgetForAction(action); item && item->isVisible() && item != window.m_windowButtons)
                     QVERIFY(item->x() > window.m_windowButtons->geometry().right());
 #endif
+            // Nothing is ringed: the window handed its first control focus as
+            // it opened, which is no keyboard navigation.
+            QVERIFY(!window.findChild<QWidget *>(QStringLiteral("focusHalo")));
             // Timecodes in the accent sit on the panel accentText is made to read on.
             const auto times = window.findChildren<QLabel *>(QStringLiteral("transportTime"));
             QCOMPARE(times.size(), 2);
@@ -2816,6 +2872,77 @@ private slots:
                 if (control->isVisible()) QCOMPARE(control->height(), 22);
             save(image, QStringLiteral("editor-%1").arg(name));
 
+            // The toolbar's pop-up opens as macOS's menu: rounded, clipped to
+            // its corners, a 22px row per choice, and the row under the
+            // pointer (here the current choice) filled with the accent.
+            QVERIFY(dynamic_cast<PopupItemDelegate *>(window.m_quality->itemDelegate()));
+            window.m_quality->showPopup();
+            QWidget *list = window.m_quality->view()->window();
+            QVERIFY(QTest::qWaitForWindowExposed(list));
+            QVERIFY(list->testAttribute(Qt::WA_TranslucentBackground));
+            {
+                const QImage popup = list->grab().toImage();
+                save(popup, QStringLiteral("popup-%1").arg(name));
+                const qreal ratio = popup.devicePixelRatio();
+                QCOMPARE(popup.pixelColor(0, 0).alpha(), 0);
+                const QRect row = window.m_quality->view()->visualRect(window.m_quality->model()->index(0, 0));
+                QCOMPARE(row.height(), 22);
+                const QPoint inside = window.m_quality->view()->viewport()->mapTo(list, QPoint(row.left() + 2, row.center().y()));
+                QCOMPARE(popup.pixelColor(inside * ratio).rgb(), theme.menuSelection.rgb());
+                QCOMPARE(amberPixels(popup), 0);
+            }
+            window.m_quality->hidePopup();
+            for (QComboBox *picker : {window.m_quality, window.m_canvasPreset}) QVERIFY(popupShowsEveryRow(picker));
+            // So does a clip's context menu: rounded and clipped to its
+            // corners, the row under the pointer a rounded accent fill.
+            {
+                QImage shape;
+                QRect row;
+                bool translucent = false;
+                // Captured while it is open, and closed whatever happens.
+                QTimer::singleShot(0, &window, [&] {
+                    auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+                    if (!menu) return;
+                    const auto close = qScopeGuard([menu] { menu->close(); });
+                    for (QAction *action : menu->actions())
+                        if (action->isEnabled() && !action->isSeparator()) {
+                            menu->setActiveAction(action);
+                            row = menu->actionGeometry(action);
+                            break;
+                        }
+                    translucent = menu->testAttribute(Qt::WA_TranslucentBackground);
+                    shape = menu->grab().toImage();
+                });
+                QTimer::singleShot(2000, &window, [] {
+                    if (QWidget *popup = QApplication::activePopupWidget()) popup->close();
+                });
+                emit window.m_timeline->clipMenuRequested(QStringLiteral("v1b"), window.mapToGlobal(QPoint(400, 300)));
+                QVERIFY(!shape.isNull() && row.isValid());
+                save(shape, QStringLiteral("menu-%1").arg(name));
+                QVERIFY(translucent);
+                QCOMPARE(shape.pixelColor(0, 0).alpha(), 0);
+                QCOMPARE(shape.pixelColor(QPoint(row.left() + 2, row.center().y()) * shape.devicePixelRatio()).rgb(),
+                         theme.menuSelection.rgb());
+                QCOMPARE(amberPixels(shape), 0);
+            }
+            // A menu with checks (the Window menu's panels) pads its rows by
+            // less, so its text starts where a menu's without checks does.
+            {
+                QMenu *panels = nullptr;
+                for (QAction *action : window.menuBar()->actions())
+                    if (action->text() == QStringLiteral("Window")) panels = action->menu();
+                QVERIFY(panels);
+                panels->popup(window.mapToGlobal(QPoint(400, 300)));
+                QVERIFY(QTest::qWaitForWindowExposed(panels));
+                QVERIFY(panels->property("checkColumn").toBool());
+                const QImage shape = panels->grab().toImage();
+                save(shape, QStringLiteral("menu-checks-%1").arg(name));
+                QCOMPARE(shape.pixelColor(0, 0).alpha(), 0);
+                QCOMPARE(amberPixels(shape), 0);
+                panels->close();
+                QVERIFY(!window.binMenu(QString())->property("checkColumn").toBool());
+            }
+
             // Settings.
             window.m_preferences->show();
             QVERIFY(QTest::qWaitForWindowExposed(window.m_preferences));
@@ -2857,6 +2984,7 @@ private slots:
                 QCOMPARE(from->height(), 22);
                 QCOMPARE(create->height(), 22);
                 QCOMPARE(from->geometry().center().y(), choice->geometry().center().y());
+                QVERIFY(popupShowsEveryRow(choice));
                 QVERIFY(create->isEnabled() && create->isDefault());
                 const QImage createImage = create->grab().toImage();
                 const QColor createFill = createImage.pixelColor(QPoint(6, create->height() / 2) * createImage.devicePixelRatio());
@@ -2994,6 +3122,16 @@ private slots:
                     QVERIFY(well->text().isEmpty());
                 }
             }
+            // The clip's name starts on the labels' edge, and every form keeps
+            // one rhythm, 6px between rows.
+            auto *timing = qobject_cast<QFormLayout *>(inspector->m_position->parentWidget()->layout());
+            QVERIFY(timing);
+            auto *positionLabel = qobject_cast<QLabel *>(timing->labelForField(inspector->m_position));
+            QVERIFY(positionLabel);
+            QCOMPARE(inspector->m_clipName->indent(), 0);
+            QCOMPARE(inspector->m_clipName->mapTo(inspector, inspector->m_clipName->contentsRect().topLeft()).x(),
+                     positionLabel->mapTo(inspector, positionLabel->contentsRect().topLeft()).x());
+            for (const QFormLayout *form : inspector->findChildren<QFormLayout *>()) QCOMPARE(form->verticalSpacing(), 6);
             save(window.m_workspace->panel(QStringLiteral("effectControls"))->grab().toImage(), QStringLiteral("inspector-%1").arg(name));
             window.close();
         }
@@ -3016,6 +3154,61 @@ private slots:
         // Re-applying the same appearance changes nothing.
         applyEditorAppearance();
         QCOMPARE(changed.count(), before + 1);
+    }
+
+    // Push buttons take focus from Tab alone, as macOS's do, so a click
+    // leaves no accent behind. Tab rings the button in the accent at 35%,
+    // 3px outside its bezel, and the ring moves with the focus.
+    void buttonsShowFocusFromTheKeyboardOnly() {
+        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            const EditorTheme &theme = editorTheme();
+            QDialog dialog;
+            auto *layout = new QHBoxLayout(&dialog);
+            layout->setContentsMargins(12, 12, 12, 12);
+            auto *field = new QLineEdit;
+            auto *reject = new QPushButton(QStringLiteral("Reject"));
+            auto *details = new QPushButton(QStringLiteral("Details"));
+            layout->addWidget(reject);
+            layout->addWidget(field);
+            layout->addWidget(details);
+            dialog.show();
+            QVERIFY(QTest::qWaitForWindowActive(&dialog));
+            QCOMPARE(reject->focusPolicy(), Qt::TabFocus);
+            // The focus a window gives its first control as it opens is no
+            // keyboard navigation, so that button is not ringed.
+            QCOMPARE(QApplication::focusWidget(), reject);
+            QVERIFY(!dialog.findChild<QWidget *>(QStringLiteral("focusHalo")));
+            field->setFocus();
+            QTest::mouseClick(reject, Qt::LeftButton);
+            QVERIFY(!reject->hasFocus());
+            QVERIFY(!dialog.findChild<QWidget *>(QStringLiteral("focusHalo")));
+            const auto ringAround = [&](QPushButton *button) {
+                QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+                const auto halos = dialog.findChildren<QWidget *>(QStringLiteral("focusHalo"));
+                QCOMPARE(halos.size(), 1);
+                QVERIFY(halos.constFirst()->isVisible());
+                QCOMPARE(halos.constFirst()->geometry(), button->geometry().adjusted(-3, -3, 3, 3));
+                // The ring's middle, beside the bezel, is the accent at 35% on the dialog.
+                const QImage image = dialog.grab().toImage();
+                const QColor ring = image.pixelColor(QPoint(button->x() - 2, button->geometry().center().y()) * image.devicePixelRatio());
+                const QColor expected = mixColor(theme.dialog, theme.accent, theme.focusHalo.alphaF());
+                QVERIFY2(std::abs(ring.red() - expected.red()) <= 3 && std::abs(ring.green() - expected.green()) <= 3 &&
+                             std::abs(ring.blue() - expected.blue()) <= 3,
+                         qPrintable(ring.name() + QStringLiteral(" for ") + expected.name()));
+            };
+            QTest::keyClick(field, Qt::Key_Tab);
+            QVERIFY(details->hasFocus());
+            ringAround(details);
+            QTest::keyClick(details, Qt::Key_Tab);
+            QVERIFY(reject->hasFocus());
+            ringAround(reject);
+            // Back to the field: no button is ringed.
+            field->setFocus();
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            QVERIFY(!dialog.findChild<QWidget *>(QStringLiteral("focusHalo")));
+        }
     }
 
     // The viewers, the Source monitor's scrub bar, bin tiles and effect
