@@ -170,11 +170,13 @@ private:
 class RailButton final : public QAbstractButton {
     Q_OBJECT
 public:
-    // The chat, the phone a portrait picture shows in, and safe zones.
-    enum class Glyph { Chat, Phone, SafeZones };
+    // The chat, the phone a portrait picture shows in, the laptop a wide
+    // one shows in, and safe zones.
+    enum class Glyph { Chat, Phone, Laptop, SafeZones };
     static constexpr int kDisc = 44;
     explicit RailButton(Glyph glyph, QWidget *parent = nullptr);
     Glyph glyph() const { return m_glyph; }
+    void setGlyph(Glyph glyph);
     void setLabel(const QString &label);
     QString label() const { return m_label; }
     // The disc, in the button's coordinates.
@@ -192,8 +194,9 @@ private:
 };
 
 // The rail's buttons, stacked at its foot, level with the picture's bottom
-// edge, as Shorts stacks its actions: the phone and safe zones (for a
-// portrait picture only), then the chat.
+// edge, as Shorts stacks its actions: the device (a phone for a portrait
+// picture, a laptop for a wide one) and safe zones (portrait only), then
+// the chat.
 class StageRail final : public QWidget {
     Q_OBJECT
 public:
@@ -212,9 +215,12 @@ private:
 // Kerf's conversation as a video's comments panel: a rounded card with its
 // own surface, the same height as the picture beside it. Its header is the
 // title and the number of messages, an overflow button and a close button;
-// a pending proposal is pinned under it; the conversation scrolls as
-// comment rows; next steps are chips over the composer, which is the
-// panel's footer.
+// the conversation scrolls as comment rows, cut cleanly at the edge under
+// the header, with a hairline there while it is scrolled away from its top;
+// a pending proposal is pinned at the top of the list and scrolls away with
+// it, a compact bar under the header keeping its Accept and Reject in reach
+// while its own are out of view; next steps are chips over the composer,
+// which is the panel's footer.
 class ChatPanel final : public QWidget {
     Q_OBJECT
     friend class EditorTest;
@@ -234,16 +240,11 @@ public:
     static constexpr int kProposalChangeLines = 3;
     // The most lines the proposal's script and diff show before they scroll.
     static constexpr int kProposalDiffLines = 10;
-    // The fade under the cover over the top of the conversation's view (see
-    // listCover()): short, as it starts where a line does.
-    static constexpr int kScrollFadeHeight = 8;
     // The fade at either end of the chips' row while it has more that way,
     // and the round buttons over it that page the row.
     static constexpr int kChipFadeWidth = 48;
     static constexpr int kChipPager = 28;
     static constexpr int kChipPage = 160;
-    // The least the conversation's view keeps under an open proposal.
-    static constexpr int kMinListHeight = 72;
     // The blank room under the latest comment, which the view keeps exactly
     // when it is scrolled to the latest.
     static constexpr int kListBottom = 16;
@@ -261,8 +262,10 @@ public:
     bool followsLatest() const { return m_follow; }
     void refreshTimes();
 
-    // The pinned proposal: shown while one is pending.
+    // The pinned proposal: shown while one is pending, heading the list.
     void setProposalShown(bool shown);
+    // Its summary, in the pinned comment and on the compact bar.
+    void setProposalSummary(const QString &summary);
     // What it changes, one line each: the first few listed under its summary.
     void setProposalChanges(const QStringList &changes);
     QWidget *proposalChanges() const { return m_proposalChanges; }
@@ -302,12 +305,16 @@ public:
     QTextEdit *proposalDiff() const { return m_proposalDiff; }
     QPushButton *acceptButton() const { return m_accept; }
     QPushButton *rejectButton() const { return m_reject; }
+    // The compact bar under the header, shown while the pinned proposal's
+    // pills are scrolled out of view, and its own summary and pills.
+    QFrame *proposalBar() const { return m_proposalBar; }
+    QLabel *proposalBarSummary() const { return m_proposalBarSummary; }
+    QPushButton *barAcceptButton() const { return m_barAccept; }
+    QPushButton *barRejectButton() const { return m_barReject; }
+    // The hairline under the header (or the bar), drawn while the list is
+    // scrolled away from its top.
+    QFrame *listEdge() const { return m_scrollEdge; }
     QWidget *resizeHandle() const { return m_resizeHandle; }
-    // How far down the view's top the panel's surface covers a comment the
-    // top edge cuts: to the end of the cut line (or of the avatar and name
-    // line, with the first line beside them), so no line shows sliced. 0
-    // while the top edge cuts nothing.
-    int listCover() const;
 
 signals:
     // A drag on the panel's leading edge asks for this width, and its end
@@ -327,6 +334,7 @@ protected:
 private:
     QWidget *buildHeader();
     QFrame *buildProposal();
+    QFrame *buildProposalBar();
     QWidget *buildWelcome();
     QFrame *buildComposer();
     void updateCount();
@@ -335,12 +343,10 @@ private:
     // Keep the chips' row's scroll in range and its end fades and pagers in place.
     void updateChipRow();
     void pageChips(int direction);
-    // The comment the view's top edge `y` (in the content) cuts, if any;
-    // where in the content the cover over it ends; and the cover itself,
-    // shown only while a comment is cut.
-    QWidget *itemAcross(int y) const;
-    int coverEnd(int y) const;
-    void updateScrollFade();
+    // The hairline under the header and the compact proposal bar, as the
+    // list's scroll and the proposal's pills stand.
+    void updateListEdge();
+    void refitListSoon();
     // The scroll bar shows only while the pointer is over the panel.
     void setHovered(bool hovered);
 
@@ -349,7 +355,10 @@ private:
     ChatIconButton *m_more = nullptr;
     ChatIconButton *m_close = nullptr;
     QFrame *m_scrollEdge = nullptr;
-    QWidget *m_scrollFade = nullptr;
+    QFrame *m_proposalBar = nullptr;
+    QLabel *m_proposalBarSummary = nullptr;
+    QPushButton *m_barAccept = nullptr;
+    QPushButton *m_barReject = nullptr;
     QScrollArea *m_scroll = nullptr;
     QWidget *m_content = nullptr;
     QVBoxLayout *m_list = nullptr;

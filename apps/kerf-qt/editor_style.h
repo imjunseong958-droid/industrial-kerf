@@ -729,6 +729,7 @@ QLabel#chatChange { color: @chatSecondary; font-size: 13px; }
 QLabel#chatErrorTag { color: @errorText; font-size: 12px; font-weight: 600; }
 QLabel#chatBody,
 QLabel#proposalSummary { color: @chatText; font-size: 14px; }
+QLabel#proposalBarSummary { color: @chatText; font-size: 13px; font-weight: 600; }
 QLabel#chatReplyText { color: @chatText; font-size: 13px; }
 QScrollArea#chatScroll, QWidget#chatContent { background: transparent; border: 0; }
 /* The list's scroll bar shows only while the pointer is over the panel
@@ -740,7 +741,8 @@ QScrollArea#chatScroll[hovered="true"] QScrollBar::handle:vertical:hover,
 QScrollArea#chatScroll[hovered="true"] QScrollBar::handle:vertical:pressed { background: @chatScrollHandleHover; }
 QFrame#scrollEdge { background: transparent; border: 0; }
 QFrame#scrollEdge[scrolled="true"] { background: @divider; }
-QFrame#proposalBox { background: transparent; border: 0; }
+QFrame#proposalBox,
+QFrame#proposalBar { background: transparent; border: 0; }
 /* The proposal's script and diff, in fixed-width type so its columns line up. */
 QTextEdit#proposalDiff { background: transparent; border: 0; font-family: Menlo, Monaco, monospace; font-size: 11px; color: @chatSecondary; }
 /* The footer: a hairline over it, then the reader's avatar and a one-line
@@ -797,6 +799,9 @@ QPushButton#chatPillText:pressed { background: @chatChip; }
 /* The pinned proposal's Accept and Reject, a size up: 36px, round ends. */
 QFrame#proposalBox QPushButton#chatPillFilled,
 QFrame#proposalBox QPushButton#chatPillTonal { border-radius: 18px; min-height: 36px; max-height: 36px; padding: 0 18px; }
+/* The compact bar's, a little tighter, so its summary keeps room beside them. */
+QFrame#proposalBar QPushButton#chatPillFilled,
+QFrame#proposalBar QPushButton#chatPillTonal { padding: 0 12px; }
 QPushButton#chatPillFilled:disabled,
 QPushButton#chatSendButton:disabled,
 QPushButton#chatPillTonal:disabled,

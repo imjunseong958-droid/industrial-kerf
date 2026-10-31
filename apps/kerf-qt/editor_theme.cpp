@@ -410,6 +410,8 @@ EditorTheme makeEditorTheme(bool dark) {
     t.deviceEdge = hex("#3a383c");
     t.deviceShadow = hex("#0000002e");
     t.deviceScreen = hex("#000000");
+    t.deviceDeck = hex("#2b2a2d");
+    t.deviceHinge = hex("#0e0d0f");
     t.deviceInk = hex("#ffffff");
     t.safeZoneFill = hex("#ffffff1f");
     t.safeZoneLine = hex("#ffffffa6");

@@ -168,14 +168,16 @@ captions do. Nothing sits under the picture. The Editing
 workspace reads as a Short does on YouTube's desktop page: the Program
 monitor takes the top row past the browsers, and in its stage the picture
 card (12-point corners), an action rail and the Kerf Assistant (the chat)
-form one group centred in the stage, the chat panel level with the card and
-as tall (never shorter than 480 points where the stage has the room; a wide
-card is centred on its height), as a Short's comments open beside it. A 9:16
-or 1:1 card fills the stage's height; a 16:9 one takes the width the rail and
-chat leave it. With the chat closed the card is centred alone, the rail
-hanging on its right. In a narrow stage the chat narrows first, so the
-picture keeps four fifths of its width, then the card shrinks, and past that
-the chat lies over the stage's right side.
+form one group centred in the stage, the chat panel level with the card (or
+the phone or laptop it shows in) and exactly as tall, as a Short's comments
+open beside it: where the stage has the room the card is made tall enough
+for a chat of 352 points (its header, a couple of comments, the chips and
+the composer), the chat narrowing for it. A 9:16 or 1:1 card fills the
+stage's height; a 16:9 one takes the height, or the width the rail and chat
+leave it. With the chat closed the card is centred alone, the rail hanging
+on its right. In a narrow stage the chat narrows first, so the picture keeps
+four fifths of its width, then the card shrinks, and past that the chat lies
+over the stage's right side.
 
 A portrait (9:16) picture shows in a phone, as a simulator shows an app: a
 generic phone drawn in code, graphite in either appearance, its screen
@@ -189,8 +191,24 @@ column of actions, a caption band); while they show, the player's controls
 (all but the bar) wait for the pointer to come over the picture. Both are
 preferences of this Mac. While the picture is portrait, the row over the
 timeline is 60 points taller (never leaving the timeline under 280), so the
-phone is big enough to judge; saved workspaces keep their own sizes. The
-Source monitor is a tab behind the Program monitor; double-clicking media
+phone is big enough to judge; saved workspaces keep their own sizes.
+
+A wide (16:9) picture shows in a laptop, the phone's companion: a generic
+laptop drawn in code in the same graphite, its lid's screen 16:10 inside a
+thin even bezel (a little thicker over it, with a camera dot) so the picture
+sits across it with thin black bars above and below, a hinge line, and a
+wider, thin base with a lighter top face and a shallow thumb-cut. The
+player's controls lie inside the screen. The laptop's body (lid top to base
+bottom) takes the card's place in the group, the chat level with it and as
+tall; at 1440 × 900 the picture keeps at least 90% of the plain card's width
+(the bezel and base come out of the chat's width). The rail's Laptop button
+and Window ▸ Viewer choose Laptop (the default) or Off; it is a preference of
+this Mac. A square picture stays on the plain card: in a phone it would be
+under half as wide. The phone's and the laptop's frames are drawn once for
+their size, appearance and pixel ratio and then only blitted, so playback
+costs no more for them.
+
+The Source monitor is a tab behind the Program monitor; double-clicking media
 brings it forward. The chat stays with the Program monitor: while the
 Source monitor covers it, it counts as closed, so the bar over the timeline
 stands in for it and ⇧⌘J brings it back into sight. Left of them,
@@ -321,12 +339,15 @@ messages, ⋯ (Agent Settings…, Activity) and a close button; every turn is a
 comment row (an avatar, the name and time, the text, and quiet Copy and Ask
 again actions), with no bubbles; the steps Kerf's tools took fold under its
 comment behind "▸ 2 steps", as replies do; and while Kerf works three dots
-and its latest step follow the latest comment. A pending proposal is pinned
-under the header ("Pinned by Kerf") with Reject and Accept pills (⌘Return;
-Escape with the timeline focused rejects) and its script and diff behind
-"Script" (as tall as their lines, up to ten, and folded in a panel too short
-for them); until the script is opened, its first three changes are listed
-under the summary. The up to three next steps Kerf ends each turn with
+and its latest step follow the latest comment. The comments scroll under the
+header as a comments panel's do: cut cleanly at its edge, with a hairline
+under it while the list is scrolled away from its top. A pending proposal is
+pinned at the top of the list ("Pinned by Kerf") and scrolls away with it,
+with Reject and Accept pills (⌘Return; Escape with the timeline focused
+rejects) and its script and diff behind "Script" (as tall as their lines, up
+to ten); until the script is opened, its first three changes are listed
+under the summary. While its pills are scrolled out of view, a compact bar
+under the header keeps its summary, Reject and Accept in reach. The up to three next steps Kerf ends each turn with
 ("Stronger glow", "Wipe to the next shot") are one row of chips over the
 composer, scrolling sideways rather than wrapping, so the conversation
 keeps its height; pressing one asks for it about the same selection.
@@ -396,11 +417,15 @@ saves each page as `<page>-<light|dark>.png`, and
 with an agent proposal and conversation (`states-`), and Effect Controls
 with an effect's parameters (`inspector-`), each `<light|dark>.png`;
 `editorShowsEveryFormatBesideItsConversation` saves the whole editor with
-the chat open beside a 16:9, a 9:16 and a 1:1 picture
-(`editor-16x9-`, `editor-9x16-`, `editor-1x1-`) and the 9:16 one with the
-chat closed (`editor-9x16-closed-`); `conversationRendersItsStates` saves the
-chat's welcome, a long streaming conversation and a pinned proposal
-(`editor-9x16-welcome-`, `-streaming-`, `-proposal-`);
+the chat open beside a 16:9 (in its laptop), a 9:16 (in its phone) and a 1:1
+picture (`editor-16x9-`, `editor-9x16-`, `editor-1x1-`), the 16:9 one with
+the laptop off (`editor-16x9-off-`), the 9:16 one in the other phone, with
+safe zones and on the plain card (`editor-9x16-punchhole-`, `-safezones-`,
+`-card-`), and both with the chat closed (`editor-16x9-closed-`,
+`editor-9x16-closed-`); `conversationRendersItsStates` saves the chat's
+welcome, a long streaming conversation, a pinned proposal and, scrolled away
+under a longer conversation, its compact bar (`editor-9x16-welcome-`,
+`-streaming-`, `-proposal-`, `-proposal-scrolled-`);
 `timelineFollowsTheAppearance` saves the timeline (`timeline-`,
 `timeline-drag-`) and `paintedPanelsFollowTheAppearance` the Program monitor
 (`viewer-`, `viewer-empty-`), the region picker (`region-`), the Source

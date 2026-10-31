@@ -348,12 +348,15 @@ struct EditorTheme {
     QColor viewerCaption;       // The caption box over the picture...
     QColor viewerCaptionBorder; // ...its edge (the box itself: no line around it)...
     QColor viewerCaptionText;
-    // The phone a portrait picture is shown in: a deep graphite in both
-    // appearances, its 1px lighter edge, and its soft shadow on the stage.
+    // The phone a portrait picture is shown in, and the laptop a wide one
+    // is: a deep graphite in both appearances, its 1px lighter edge, and its
+    // soft shadow on the stage.
     QColor deviceFrame;
     QColor deviceEdge;
     QColor deviceShadow;
     QColor deviceScreen;        // The screen's black above and below the picture.
+    QColor deviceDeck;          // A laptop's base: its top face, a little lighter than the frame...
+    QColor deviceHinge;         // ...its thumb-cut, and the hinge line under the lid.
     QColor deviceInk;           // The status bar's time, signal and battery.
     QColor safeZoneFill;        // Where a vertical-video app's interface usually covers the picture...
     QColor safeZoneLine;        // ...its outline...

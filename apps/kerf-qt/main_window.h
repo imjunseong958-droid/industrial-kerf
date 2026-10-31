@@ -185,9 +185,11 @@ private:
     // show the playhead's time, the length, and what can be pressed.
     void setupPlayerOverlay();
     void updateTransport();
-    // The phone a portrait picture shows in, and its safe zones: from the
-    // stage's rail and Window ▸ Viewer, remembered on this Mac.
+    // The phone a portrait picture shows in and its safe zones, and the
+    // laptop a wide one shows in: from the stage's rail and Window ▸ Viewer,
+    // remembered on this Mac.
     void setDevicePreview(DevicePreview preview);
+    void setLaptopPreview(LaptopPreview preview);
     void setSafeZones(bool shown);
     void showDeviceMenu();
     void updateViewerRail();
@@ -302,8 +304,10 @@ private:
     QList<QAction *> m_toolGlyphs;
     // Disclosure buttons (Settings' Advanced), whose chevrons are too.
     QList<QToolButton *> m_disclosures;
-    // Window ▸ Viewer: the phone (Island, Punch-Hole, Off) and safe zones.
+    // Window ▸ Viewer: the phone (Island, Punch-Hole, Off), the laptop
+    // (Laptop, Off) and safe zones.
     QList<QAction *> m_deviceActions;
+    QList<QAction *> m_laptopActions;
     QAction *m_safeZonesAction = nullptr;
     // Panel details shown in the panels' title strips.
     QAction *m_viewerDetail = nullptr;

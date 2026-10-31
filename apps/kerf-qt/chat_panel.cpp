@@ -59,60 +59,6 @@ QString bodyMarkup(const QString &text) {
         .arg(wrappable(text).toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>")));
 }
 
-// Over the top of a scrolled view: the panel's surface, solid down to where
-// the line the view's top edge cuts ends (see ChatPanel::listCover), then
-// fading to clear over a few points, so a comment cut off by the view's top
-// edge reads as scrolled out of sight and never shows a sliced line. It is
-// the scroll area's child, not its viewport's, so it stays put while the
-// content scrolls, and is shown only while the view's top edge cuts a
-// comment (see ChatPanel::updateScrollFade). Clicks pass through it.
-class ScrollTopFade final : public QWidget {
-public:
-    explicit ScrollTopFade(QScrollArea *area) : QWidget(area), m_area(area) {
-        setObjectName(QStringLiteral("scrollFade"));
-        setAttribute(Qt::WA_TransparentForMouseEvents);
-        area->installEventFilter(this);
-        connect(EditorAppearance::instance(), &EditorAppearance::changed, this, qOverload<>(&QWidget::update));
-        hide();
-        follow();
-    }
-    void setSolid(int solid) {
-        solid = std::max(0, solid);
-        if (solid == m_solid) return;
-        m_solid = solid;
-        follow();
-        update();
-    }
-    int solid() const { return m_solid; }
-
-protected:
-    bool eventFilter(QObject *watched, QEvent *event) override {
-        if (watched == m_area && (event->type() == QEvent::Resize || event->type() == QEvent::LayoutRequest)) follow();
-        return QWidget::eventFilter(watched, event);
-    }
-    void paintEvent(QPaintEvent *) override {
-        const QColor surface = editorTheme().chatSurface;
-        QColor clear = surface;
-        clear.setAlpha(0);
-        QPainter painter(this);
-        painter.fillRect(QRect(0, 0, width(), m_solid), surface);
-        QLinearGradient fade(0, m_solid, 0, height());
-        fade.setColorAt(0, surface);
-        fade.setColorAt(1, clear);
-        painter.fillRect(QRect(0, m_solid, width(), height() - m_solid), fade);
-    }
-
-private:
-    void follow() {
-        const QRect viewport = m_area->viewport()->geometry();
-        setGeometry(viewport.left(), viewport.top(), viewport.width(),
-                    std::min(viewport.height(), m_solid + ChatPanel::kScrollFadeHeight));
-        raise();
-    }
-    QScrollArea *m_area;
-    int m_solid = 0;
-};
-
 // The end of the chips' row fading into the panel's surface, while the row
 // has more chips that way: clear, then the surface over kChipFadeWidth,
 // then solid under the round button that pages the row. Clicks pass
@@ -191,6 +137,30 @@ protected:
 };
 
 // A pin, drawn in code: the "Pinned by Kerf" line's symbol.
+// One line of text that ends in an ellipsis where its width cuts it, as
+// the compact proposal bar's summary does beside its pills.
+class ElidedLabel final : public QLabel {
+public:
+    explicit ElidedLabel(QWidget *parent = nullptr) : QLabel(parent) { setTextFormat(Qt::PlainText); }
+    void setFullText(const QString &text) {
+        m_full = text;
+        elide();
+    }
+
+protected:
+    void resizeEvent(QResizeEvent *event) override {
+        QLabel::resizeEvent(event);
+        elide();
+    }
+
+private:
+    void elide() {
+        const QString shown = fontMetrics().elidedText(m_full, Qt::ElideRight, std::max(0, contentsRect().width()));
+        if (shown != text()) setText(shown);
+    }
+    QString m_full;
+};
+
 class PinGlyph final : public QWidget {
 public:
     explicit PinGlyph(QWidget *parent = nullptr) : QWidget(parent) {
@@ -479,7 +449,13 @@ CommentRow::CommentRow(Kind kind, const QString &text, const QDateTime &time, QW
     m_nameLabel = label(name(), "chatName");
     m_timeLabel = label(QString(), "chatTime");
     line->addWidget(m_nameLabel);
-    if (kind == Kind::Error) line->addWidget(label(QStringLiteral("· couldn’t complete the edit"), "chatErrorTag"));
+    if (kind == Kind::Error) {
+        // Short, and able to give way, so the name line fits the panel at
+        // its narrowest.
+        QLabel *tag = label(QStringLiteral("· couldn’t edit"), "chatErrorTag");
+        tag->setMinimumWidth(1);
+        line->addWidget(tag);
+    }
     line->addWidget(m_timeLabel);
     line->addStretch(1);
     column->addLayout(line);
@@ -587,6 +563,12 @@ RailButton::RailButton(Glyph glyph, QWidget *parent) : QAbstractButton(parent), 
     setFont(small);
 }
 
+void RailButton::setGlyph(Glyph glyph) {
+    if (glyph == m_glyph) return;
+    m_glyph = glyph;
+    update();
+}
+
 void RailButton::setLabel(const QString &label) {
     if (label == m_label) return;
     m_label = label;
@@ -630,6 +612,11 @@ void RailButton::paintEvent(QPaintEvent *) {
         // A phone's outline and its camera.
         painter.drawRoundedRect(QRectF(7, 3, 10, 18), 2.5, 2.5);
         painter.drawLine(QPointF(10.8, 5.8), QPointF(13.2, 5.8));
+        break;
+    case Glyph::Laptop:
+        // A laptop's lid, and its wider base under it.
+        painter.drawRoundedRect(QRectF(5, 5.5, 14, 10), 1.5, 1.5);
+        painter.drawLine(QPointF(3, 18.5), QPointF(21, 18.5));
         break;
     case Glyph::SafeZones: {
         // A frame's corners, and the dashed line inside them.
@@ -690,11 +677,14 @@ ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
     outer->addWidget(buildHeader());
-    m_proposal = buildProposal();
-    outer->addWidget(m_proposal);
+    // While the pinned proposal's pills are scrolled out of view: a compact
+    // bar under the header with its summary, Reject and Accept.
+    m_proposalBar = buildProposalBar();
+    outer->addWidget(m_proposalBar);
 
-    // A hairline under the header while the view is scrolled, so a line
-    // cut off at the top reads as scrolled content and not as a glitch.
+    // A hairline under the header (or the bar) while the view is scrolled
+    // away from its top, as a comments panel's header shows: the comments
+    // are cut cleanly at the view's edge under it.
     m_scrollEdge = new QFrame;
     m_scrollEdge->setObjectName(QStringLiteral("scrollEdge"));
     m_scrollEdge->setFixedHeight(1);
@@ -715,6 +705,10 @@ ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
     // The first comment 16 points under the header, as a comments panel's.
     m_list->setContentsMargins(kSidePadding, 16, kSidePadding, kListBottom);
     m_list->setSpacing(16);
+    // The pinned proposal heads the list and scrolls away with it, as a
+    // pinned comment does.
+    m_proposal = buildProposal();
+    m_list->addWidget(m_proposal);
     m_welcome = buildWelcome();
     m_list->addWidget(m_welcome);
     // While Kerf works: three dots in the avatars' column, its state and
@@ -735,19 +729,18 @@ ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
     m_list->addWidget(m_statusRow);
     m_list->addStretch(1);
     m_scroll->setWidget(m_content);
+    m_content->installEventFilter(this);
     outer->addWidget(m_scroll, 1);
-    m_scrollFade = new ScrollTopFade(m_scroll);
     // New output keeps the latest in view, unless the reader scrolled away.
     QScrollBar *bar = m_scroll->verticalScrollBar();
     connect(bar, &QScrollBar::rangeChanged, this, [this](int, int maximum) {
         if (m_follow) m_scroll->verticalScrollBar()->setValue(maximum);
-        QTimer::singleShot(0, this, &ChatPanel::updateScrollFade);
+        QTimer::singleShot(0, this, &ChatPanel::updateListEdge);
     });
-    // A pinned proposal that grows or folds changes the view's height.
     m_scroll->viewport()->installEventFilter(this);
     connect(bar, &QScrollBar::valueChanged, this, [this](int value) {
         m_follow = value >= m_scroll->verticalScrollBar()->maximum() - 4;
-        updateScrollFade();
+        updateListEdge();
     });
 
     // Next steps: one row of chips over the composer that scrolls sideways
@@ -823,8 +816,8 @@ QFrame *ChatPanel::buildProposal() {
     box->setObjectName(QStringLiteral("proposalBox"));
     auto *layout = new QVBoxLayout(box);
     // No rule under it: the list's own 16 points under it part them, as
-    // threads are parted.
-    layout->setContentsMargins(kSidePadding, 4, kSidePadding, 0);
+    // threads are parted; the list gives it its side padding.
+    layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(6);
     // "Pinned by Kerf" over the comment, its pin in the avatars' column.
     auto *pinned = new QHBoxLayout;
@@ -893,6 +886,9 @@ QFrame *ChatPanel::buildProposal() {
     buttons->addStretch(1);
     m_reject = pill(QStringLiteral("Reject"), "chatPillTonal", kPillHeight);
     m_accept = pill(QStringLiteral("Accept"), "chatPillFilled", kPillHeight);
+    // The compact bar's pills follow these ones' state.
+    m_accept->installEventFilter(this);
+    m_reject->installEventFilter(this);
     buttons->addWidget(m_reject);
     buttons->addWidget(m_accept);
     column->addLayout(buttons);
@@ -900,6 +896,35 @@ QFrame *ChatPanel::buildProposal() {
     row->addLayout(column, 1);
     layout->addLayout(row);
     return box;
+}
+
+QFrame *ChatPanel::buildProposalBar() {
+    auto *bar = new QFrame;
+    bar->setObjectName(QStringLiteral("proposalBar"));
+    auto *layout = new QHBoxLayout(bar);
+    layout->setContentsMargins(kSidePadding, 8, kSidePadding, 8);
+    layout->setSpacing(8);
+    // The pin, the summary (cut with an ellipsis in a narrow panel), then
+    // the pills.
+    layout->addWidget(new PinGlyph, 0, Qt::AlignVCenter);
+    m_proposalBarSummary = new ElidedLabel;
+    m_proposalBarSummary->setObjectName(QStringLiteral("proposalBarSummary"));
+    m_proposalBarSummary->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    layout->addWidget(m_proposalBarSummary, 1);
+    m_barReject = pill(QStringLiteral("Reject"), "chatPillTonal", kComposerPillHeight);
+    m_barAccept = pill(QStringLiteral("Accept"), "chatPillFilled", kComposerPillHeight);
+    for (QPushButton *button : {m_barReject, m_barAccept}) layout->addWidget(button);
+    // They are the pinned proposal's own: a click is theirs.
+    connect(m_barReject, &QPushButton::clicked, this, [this] { m_reject->click(); });
+    connect(m_barAccept, &QPushButton::clicked, this, [this] { m_accept->click(); });
+    bar->hide();
+    return bar;
+}
+
+void ChatPanel::setProposalSummary(const QString &summary) {
+    m_proposalSummary->setText(summary);
+    static_cast<ElidedLabel *>(m_proposalBarSummary)->setFullText(summary);
+    m_proposalBarSummary->setToolTip(summary);
 }
 
 QWidget *ChatPanel::buildWelcome() {
@@ -1062,7 +1087,7 @@ void ChatPanel::updateCount() {
 void ChatPanel::setProposalShown(bool shown) {
     m_proposal->setVisible(shown);
     if (!shown) m_proposalExpander->setChecked(false);
-    updateScrollFade();
+    updateListEdge();
 }
 
 void ChatPanel::setProposalChanges(const QStringList &changes) {
@@ -1117,165 +1142,55 @@ void ChatPanel::resizeEvent(QResizeEvent *) {
 }
 
 void ChatPanel::fitProposalDiff() {
-    // As tall as its lines, up to ten (then it scrolls), and never so tall
-    // that the conversation under the pinned proposal has less than its least.
-    // Its frame is in its contents margins (a QFrame keeps it there).
+    // As tall as its lines, up to ten (then it scrolls); it scrolls with the
+    // list it heads. Its frame is in its contents margins (a QFrame keeps it
+    // there). The changes are listed until the script and diff, which hold
+    // them all, are opened.
     const QMargins frame = m_proposalDiff->contentsMargins();
     const int chrome = frame.top() + frame.bottom();
     const int margins = static_cast<int>(std::ceil(2 * m_proposalDiff->document()->documentMargin()));
     const int lines = m_proposalDiff->fontMetrics().lineSpacing();
     const int least = 2 * lines + margins + chrome;
-    int most = kProposalDiffLines * lines + margins + chrome;
-    bool fits = true;
-    // The changes are listed until the script and diff, which hold them all, are opened.
-    const bool listsChanges = m_proposalChanges->property("count").toInt() > 0 && !m_proposalExpander->isChecked();
-    if (height() > 0) {
-        const auto tall = [this](const QWidget *part) {
-            return part->hasHeightForWidth() ? part->heightForWidth(width()) : part->sizeHint().height();
-        };
-        const int shown = m_proposalDiff->isVisibleTo(m_proposal) ? m_proposalDiff->height() + 2 : 0;
-        // The changes' height in the comment's text column.
-        const int column = std::max(1, width() - 2 * kSidePadding - kAvatar - 12);
-        const int changesHeight = m_proposalChanges->layout()->hasHeightForWidth() ? m_proposalChanges->layout()->totalHeightForWidth(column)
-                                                                                     : m_proposalChanges->sizeHint().height();
-        const int listed = m_proposalChanges->isVisibleTo(m_proposal) ? changesHeight + 4 : 0;
-        const int base = kHeaderHeight + (tall(m_proposal) - shown - listed) + m_scrollEdge->height() + tall(m_composer) +
-                         (m_chips->isVisibleTo(this) ? m_chips->height() : 0) + kMinListHeight;
-        // The changes stay listed unless the conversation would fall under its least.
-        const int changes = listsChanges ? changesHeight + 4 : 0;
-        const bool changesFit = height() - base - changes >= 0;
-        m_proposalChanges->setVisible(listsChanges && changesFit);
-        const int others = base + (changesFit ? changes : 0);
-        // In a panel too short for even two lines of it, it stays folded.
-        fits = height() - others >= least;
-        most = std::min(most, std::max(least, height() - others));
-    }
-    if (height() <= 0) m_proposalChanges->setVisible(listsChanges);
+    const int most = kProposalDiffLines * lines + margins + chrome;
+    const bool expanded = m_proposalExpander->isChecked();
+    m_proposalChanges->setVisible(m_proposalChanges->property("count").toInt() > 0 && !expanded);
     const int content = static_cast<int>(std::ceil(m_proposalDiff->document()->size().height())) + chrome;
     m_proposalDiff->setFixedHeight(std::clamp(content, least, most));
-    m_proposalDiff->setVisible(m_proposalExpander->isChecked() && fits);
+    m_proposalDiff->setVisible(expanded);
 }
 
-QWidget *ChatPanel::itemAcross(int y) const {
-    for (int index = 0; index < m_list->count(); ++index) {
-        QWidget *item = m_list->itemAt(index)->widget();
-        if (!item || !item->isVisible()) continue;
-        const QRect area = item->geometry();
-        if (area.top() < y && area.bottom() >= y) return item;
-    }
-    return nullptr;
-}
-
-namespace {
-
-// A band a comment's part takes down the content, and whether it is text
-// (a name, a line) or a control (an avatar, a button).
-struct Band {
-    int top;
-    int bottom;
-    bool text;
-    int label = -1; // The wrapped text it is a line of, if any.
-};
-
-// The bands a comment's parts take down the content: each leaf widget (an
-// avatar, a name, a button) whole, and a wrapped text one line at a time,
-// each line down to where the next starts.
-void collectBands(const QWidget *widget, const QWidget *content, QList<Band> &bands) {
-    bool parent = false;
-    for (const QWidget *child : widget->findChildren<QWidget *>(Qt::FindDirectChildrenOnly)) {
-        if (!child->isVisibleTo(content)) continue;
-        parent = true;
-        collectBands(child, content, bands);
-    }
-    if (parent) return;
-    const int top = widget->mapTo(content, QPoint()).y();
-    const auto *text = qobject_cast<const QLabel *>(widget);
-    if (!text || !text->wordWrap() || text->text().isEmpty()) {
-        bands.append({top, top + widget->height(), text != nullptr});
-        return;
-    }
-    // The label's own lines: its text laid out again at its width, in its
-    // font, as it lays it out.
-    QTextDocument document;
-    document.setDefaultFont(text->font());
-    document.setDocumentMargin(0);
-    if (text->textFormat() == Qt::RichText || (text->textFormat() == Qt::AutoText && Qt::mightBeRichText(text->text())))
-        document.setHtml(text->text());
-    else
-        document.setPlainText(text->text());
-    const QRect contents = text->contentsRect();
-    document.setTextWidth(std::max(1, contents.width()));
-    const double height = document.size().height();
-    const double offset = top + contents.top() + ((text->alignment() & Qt::AlignVCenter) ? std::max(0.0, (contents.height() - height) / 2.0) : 0.0);
-    QList<double> tops;
-    for (QTextBlock block = document.begin(); block.isValid(); block = block.next()) {
-        const QRectF area = document.documentLayout()->blockBoundingRect(block);
-        const QTextLayout *layout = block.layout();
-        for (int line = 0; layout && line < layout->lineCount(); ++line) tops.append(area.top() + layout->lineAt(line).y());
-    }
-    if (tops.isEmpty()) {
-        bands.append({top, top + widget->height(), true});
-        return;
-    }
-    tops.append(std::max(height, tops.constLast() + 1.0));
-    const int label = int(bands.size());
-    for (qsizetype line = 0; line + 1 < tops.size(); ++line)
-        bands.append({qRound(offset + tops.at(line)), qRound(offset + tops.at(line + 1)), true, label});
-}
-
-} // namespace
-
-int ChatPanel::coverEnd(int y) const {
-    const QWidget *item = itemAcross(y);
-    if (!item) return y;
-    QList<Band> bands;
-    collectBands(item, m_content, bands);
-    // Down past every part the edge cuts, and every part that cuts where
-    // that ends (the first line beside an avatar), until nothing is cut.
-    int end = y;
-    for (bool moved = true; moved;) {
-        moved = false;
-        for (const Band &band : std::as_const(bands)) {
-            if (band.top < end && band.bottom > end) {
-                end = band.bottom;
-                moved = true;
-            }
-        }
-    }
-    // A paragraph's last line alone reads as a fragment: it goes with the
-    // lines over it.
-    for (const Band &cut : std::as_const(bands)) {
-        if (cut.label < 0 || cut.bottom != end) continue;
-        QList<const Band *> rest;
-        for (const Band &band : std::as_const(bands))
-            if (band.label == cut.label && band.top >= end) rest.append(&band);
-        if (rest.size() == 1) end = rest.constFirst()->bottom;
-        break;
-    }
-    // A comment's foot alone (its actions, its expander) is no comment:
-    // with no text of it left in view, the cover takes the rest of it.
-    const bool text = std::any_of(bands.cbegin(), bands.cend(), [end](const Band &band) { return band.text && band.top >= end; });
-    return text ? end : std::max(end, item->geometry().bottom() + 1);
-}
-
-int ChatPanel::listCover() const {
+void ChatPanel::updateListEdge() {
     const int value = m_scroll->verticalScrollBar()->value();
-    if (value <= 0 || !itemAcross(value)) return 0;
-    return std::min(coverEnd(value) - value, m_scroll->viewport()->height());
-}
-
-void ChatPanel::updateScrollFade() {
-    auto *fade = static_cast<ScrollTopFade *>(m_scrollFade);
-    const int value = m_scroll->verticalScrollBar()->value();
-    const bool cut = value > 0 && itemAcross(value);
-    fade->setSolid(cut ? listCover() : 0);
-    fade->setVisible(cut);
-    // A hairline under the header while the view is scrolled; none under a
-    // pinned proposal, which the list's own room parts from it.
-    const bool scrolled = value > 0 && m_proposal->isHidden();
+    // The compact bar while the pinned proposal's pills are out of the view.
+    bool sticky = false;
+    if (m_proposal->isVisibleTo(m_content)) {
+        const QRect pills(m_accept->mapTo(m_content, QPoint()), m_accept->size());
+        sticky = pills.top() < value || pills.bottom() >= value + m_scroll->viewport()->height();
+    }
+    if (m_proposalBar->isVisibleTo(this) != sticky) {
+        m_proposalBar->setVisible(sticky);
+        // The view's height changes with it.
+        refitListSoon();
+    }
+    m_barAccept->setEnabled(m_accept->isEnabled());
+    m_barReject->setEnabled(m_reject->isEnabled());
+    // A hairline under the header (or the bar) while the view is scrolled
+    // away from its top.
+    const bool scrolled = value > 0;
     if (m_scrollEdge->property("scrolled").toBool() == scrolled) return;
     m_scrollEdge->setProperty("scrolled", scrolled);
     repolish(m_scrollEdge);
+}
+
+void ChatPanel::refitListSoon() {
+    // Once the panel and the list are laid out again, the view measures its
+    // content and its range afresh: a scroll area hears of its viewport's
+    // resize, not of its content's new size hint (as when the pinned
+    // proposal shows, opens or folds), and its range would lag a step.
+    QTimer::singleShot(0, m_scroll, [this] {
+        QEvent request(QEvent::LayoutRequest);
+        QCoreApplication::sendEvent(m_scroll, &request);
+    });
 }
 
 void ChatPanel::setHovered(bool hovered) {
@@ -1344,7 +1259,9 @@ bool ChatPanel::eventFilter(QObject *watched, QEvent *event) {
         }
     }
     if (watched == m_scroll->viewport() && event->type() == QEvent::Resize)
-        QTimer::singleShot(0, this, &ChatPanel::updateScrollFade);
+        QTimer::singleShot(0, this, &ChatPanel::updateListEdge);
+    if (watched == m_content && event->type() == QEvent::LayoutRequest) refitListSoon();
+    if ((watched == m_accept || watched == m_reject) && event->type() == QEvent::EnabledChange) updateListEdge();
     if (watched == m_resizeHandle) {
         switch (event->type()) {
         case QEvent::MouseButtonPress: {

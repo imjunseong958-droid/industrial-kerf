@@ -1700,6 +1700,7 @@ void MainWindow::buildUi() {
         m_viewer->setChatWidth(width);
         m_viewer->setChatOpen(settings.value(QStringLiteral("viewer/chatOpen"), true).toBool());
         m_viewer->setDevicePreview(devicePreviewFromKey(settings.value(QStringLiteral("viewer/devicePreview")).toString()));
+        m_viewer->setLaptopPreview(laptopPreviewFromKey(settings.value(QStringLiteral("viewer/laptopPreview")).toString()));
         m_viewer->setSafeZones(settings.value(QStringLiteral("viewer/safeZones"), false).toBool());
     }
     {
@@ -1712,6 +1713,16 @@ void MainWindow::buildUi() {
             action->setToolTip(QStringLiteral("Show a portrait picture in a phone, or on a plain card"));
             connect(action, &QAction::triggered, this, [this, preview] { setDevicePreview(preview); });
             m_deviceActions.append(action);
+        }
+        auto *laptops = new QActionGroup(this);
+        for (const LaptopPreview preview : {LaptopPreview::Laptop, LaptopPreview::Off}) {
+            auto *action = new QAction(preview == LaptopPreview::Off ? QStringLiteral("Laptop · Off") : laptopPreviewLabel(preview), laptops);
+            action->setObjectName(QStringLiteral("viewer.laptop.%1").arg(laptopPreviewKey(preview)));
+            action->setCheckable(true);
+            action->setData(static_cast<int>(preview));
+            action->setToolTip(QStringLiteral("Show a wide picture in a laptop, or on a plain card"));
+            connect(action, &QAction::triggered, this, [this, preview] { setLaptopPreview(preview); });
+            m_laptopActions.append(action);
         }
         m_safeZonesAction = new QAction(QStringLiteral("Safe Zones"), this);
         m_safeZonesAction->setObjectName(QStringLiteral("viewer.safeZones"));
@@ -2370,13 +2381,16 @@ void MainWindow::setupActions() {
         window->insertSeparator(window->actions().value(1));
         connect(workspaces, &QMenu::aboutToShow, this, [this, workspaces] { buildWorkspaceMenu(workspaces); });
         buildWorkspaceMenu(workspaces);
-        // The viewer's options: the phone a portrait picture shows in, and
-        // its safe zones (the stage's rail has both too).
+        // The viewer's options: the phone a portrait picture shows in, its
+        // safe zones, and the laptop a wide one shows in (the stage's rail
+        // has them too).
         auto *viewer = new QMenu(QStringLiteral("Viewer"), window);
         viewer->setObjectName(QStringLiteral("viewerMenu"));
         viewer->addActions(m_deviceActions);
         viewer->addSeparator();
         viewer->addAction(m_safeZonesAction);
+        viewer->addSeparator();
+        viewer->addActions(m_laptopActions);
         window->insertMenu(window->actions().value(1), viewer);
     }
     m_workspace->start();
@@ -3603,7 +3617,7 @@ void MainWindow::updateProposal(const QJsonValue &value) {
     m_chat->setProposalShown(pending);
     if (!pending) {
         m_chat->setProposalChanges({});
-        m_proposalSummary->setText(QStringLiteral("No pending changes"));
+        m_chat->setProposalSummary(QStringLiteral("No pending changes"));
         m_proposalText.clear();
         m_proposalDiff->clear();
         updateAiBar();
@@ -3619,7 +3633,7 @@ void MainWindow::updateProposal(const QJsonValue &value) {
             (line.startsWith(QLatin1Char('-')) && !line.startsWith(QStringLiteral("---"))))
             ++changed;
     }
-    m_proposalSummary->setText(QStringLiteral("%1 changed line%2%3")
+    m_chat->setProposalSummary(QStringLiteral("%1 changed line%2%3")
                                    .arg(changed)
                                    .arg(changed == 1 ? QString() : QStringLiteral("s"))
                                    .arg(stale ? QStringLiteral("  •  stale") : QString()));
@@ -3747,6 +3761,12 @@ void MainWindow::setDevicePreview(DevicePreview preview) {
     updateViewerRail();
 }
 
+void MainWindow::setLaptopPreview(LaptopPreview preview) {
+    m_viewer->setLaptopPreview(preview);
+    QSettings().setValue(QStringLiteral("viewer/laptopPreview"), laptopPreviewKey(preview));
+    updateViewerRail();
+}
+
 void MainWindow::setSafeZones(bool shown) {
     m_viewer->setSafeZones(shown);
     QSettings().setValue(QStringLiteral("viewer/safeZones"), shown);
@@ -3754,28 +3774,42 @@ void MainWindow::setSafeZones(bool shown) {
 }
 
 void MainWindow::showDeviceMenu() {
+    // The phone's choices for a portrait picture, the laptop's for a wide one.
     RailButton *button = m_rail->deviceButton();
     QMenu menu(this);
-    menu.addActions(m_deviceActions);
+    if (m_viewer->landscape()) {
+        menu.addAction(m_laptopActions.at(0));
+        // In the rail's own menu, the plain card is plainly "Off".
+        QAction *off = menu.addAction(laptopPreviewLabel(LaptopPreview::Off));
+        off->setCheckable(true);
+        off->setChecked(m_viewer->laptopPreview() == LaptopPreview::Off);
+        connect(off, &QAction::triggered, this, [this] { setLaptopPreview(LaptopPreview::Off); });
+    } else {
+        menu.addActions(m_deviceActions);
+    }
     menu.exec(button->mapToGlobal(QPoint(button->width() + 4, 0)));
     updateViewerRail();
 }
 
 void MainWindow::updateViewerRail() {
-    // The phone and safe zones are a portrait picture's: the rail offers
-    // them only for one.
+    // The phone and safe zones are a portrait picture's, the laptop a wide
+    // one's: the rail offers each only for its own.
     const bool portrait = m_viewer->portrait();
+    const bool landscape = m_viewer->landscape();
     const DevicePreview preview = m_viewer->devicePreview();
+    const LaptopPreview laptop = m_viewer->laptopPreview();
     RailButton *device = m_rail->deviceButton();
     RailButton *safe = m_rail->safeZonesButton();
-    device->setVisible(portrait);
+    device->setVisible(portrait || landscape);
     safe->setVisible(portrait);
+    const bool shown = landscape ? laptop != LaptopPreview::Off : preview != DevicePreview::Off;
     {
         const QSignalBlocker blocker(device);
-        device->setChecked(preview != DevicePreview::Off);
+        device->setChecked(shown);
     }
-    device->setLabel(preview == DevicePreview::Off ? QStringLiteral("Card") : QStringLiteral("Phone"));
-    device->setToolTip(QStringLiteral("Device preview: %1").arg(devicePreviewLabel(preview)));
+    device->setGlyph(landscape ? RailButton::Glyph::Laptop : RailButton::Glyph::Phone);
+    device->setLabel(!shown ? QStringLiteral("Card") : landscape ? QStringLiteral("Laptop") : QStringLiteral("Phone"));
+    device->setToolTip(QStringLiteral("Device preview: %1").arg(landscape ? laptopPreviewLabel(laptop) : devicePreviewLabel(preview)));
     device->setAccessibleName(device->toolTip());
     {
         const QSignalBlocker blocker(safe);
@@ -3786,6 +3820,10 @@ void MainWindow::updateViewerRail() {
     for (QAction *action : std::as_const(m_deviceActions)) {
         const QSignalBlocker blocker(action);
         action->setChecked(static_cast<DevicePreview>(action->data().toInt()) == preview);
+    }
+    for (QAction *action : std::as_const(m_laptopActions)) {
+        const QSignalBlocker blocker(action);
+        action->setChecked(static_cast<LaptopPreview>(action->data().toInt()) == laptop);
     }
     if (m_safeZonesAction) {
         const QSignalBlocker blocker(m_safeZonesAction);

@@ -168,6 +168,167 @@ void paintDeviceChrome(QPainter &p, const DeviceGeometry &device, DevicePreview 
     p.restore();
 }
 
+QString laptopPreviewKey(LaptopPreview preview) {
+    return preview == LaptopPreview::Off ? QStringLiteral("off") : QStringLiteral("laptop");
+}
+
+LaptopPreview laptopPreviewFromKey(const QString &key) {
+    return key == QLatin1String("off") ? LaptopPreview::Off : LaptopPreview::Laptop;
+}
+
+QString laptopPreviewLabel(LaptopPreview preview) {
+    return preview == LaptopPreview::Off ? QStringLiteral("Off") : QStringLiteral("Laptop");
+}
+
+namespace {
+
+// The lid's height over its width: the bezel over the screen, the screen,
+// and the bezel under it.
+double lidAspect() { return kLaptopTopBezel + (1.0 - 2.0 * kLaptopBezel) / kLaptopScreenAspect + kLaptopBezel; }
+
+} // namespace
+
+double laptopBodyAspect() { return kLaptopBaseWidth / (lidAspect() * (1.0 + kLaptopBaseHeight)); }
+
+double laptopPictureShare() { return (1.0 - 2.0 * kLaptopBezel) / kLaptopBaseWidth; }
+
+LaptopGeometry laptopGeometry(const QRectF &body, double pictureAspect) {
+    LaptopGeometry out;
+    out.body = body;
+    const double lidWidth = body.width() / kLaptopBaseWidth;
+    const double lidHeight = lidWidth * lidAspect();
+    out.lid = QRectF(body.center().x() - lidWidth / 2.0, body.top(), lidWidth, lidHeight);
+    out.base = QRectF(body.left(), out.lid.bottom(), body.width(), body.bottom() - out.lid.bottom());
+    out.bezel = kLaptopBezel * lidWidth;
+    out.topBezel = kLaptopTopBezel * lidWidth;
+    out.lidRadius = kLaptopLidRadius * lidWidth;
+    out.screen = QRectF(out.lid.left() + out.bezel, out.lid.top() + out.topBezel, lidWidth - 2.0 * out.bezel,
+                        (lidWidth - 2.0 * out.bezel) / kLaptopScreenAspect);
+    out.screenRadius = std::max(1.5, 0.006 * lidWidth);
+    // Across the screen's width, centred on its height; a picture taller
+    // than the screen fits its height instead.
+    QSizeF picture(out.screen.width(), out.screen.width() / std::max(0.01, pictureAspect));
+    if (picture.height() > out.screen.height())
+        picture = QSizeF(out.screen.height() * pictureAspect, out.screen.height());
+    out.picture = QRectF(out.screen.center() - QPointF(picture.width() / 2.0, picture.height() / 2.0), picture);
+    return out;
+}
+
+QRectF laptopCamera(const LaptopGeometry &laptop) {
+    const double d = std::max(3.0, 0.3 * laptop.topBezel);
+    const QPointF centre(laptop.lid.center().x(), laptop.lid.top() + laptop.topBezel / 2.0);
+    return QRectF(centre - QPointF(d / 2.0, d / 2.0), QSizeF(d, d));
+}
+
+namespace {
+
+// A rectangle whose top corners are rounded by `top` and bottom ones by `bottom`.
+QPainterPath roundedTop(const QRectF &r, double top, double bottom) {
+    top = std::min({top, r.width() / 2.0, r.height() / 2.0});
+    bottom = std::min({bottom, r.width() / 2.0, r.height() / 2.0});
+    QPainterPath path;
+    path.moveTo(r.left() + top, r.top());
+    path.lineTo(r.right() - top, r.top());
+    path.quadTo(r.right(), r.top(), r.right(), r.top() + top);
+    path.lineTo(r.right(), r.bottom() - bottom);
+    path.quadTo(r.right(), r.bottom(), r.right() - bottom, r.bottom());
+    path.lineTo(r.left() + bottom, r.bottom());
+    path.quadTo(r.left(), r.bottom(), r.left(), r.bottom() - bottom);
+    path.lineTo(r.left(), r.top() + top);
+    path.quadTo(r.left(), r.top(), r.left() + top, r.top());
+    path.closeSubpath();
+    return path;
+}
+
+} // namespace
+
+void paintLaptopBody(QPainter &p, const LaptopGeometry &laptop, const EditorTheme &theme) {
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(Qt::NoPen);
+    const QRectF lid = laptop.lid;
+    const QRectF base = laptop.base;
+    // The base's front corners are rounded by most of its height, as a thin
+    // slab's are seen from the front; its back ones hardly at all.
+    const double baseRadius = 0.8 * base.height();
+    const QPainterPath lidPath = roundedTop(lid, laptop.lidRadius, 1.5);
+    const QPainterPath basePath = roundedTop(base, 1.0, baseRadius);
+    // The same soft shadow as the phone's, even all round.
+    constexpr int kLayers = 6;
+    for (int layer = 0; layer < kLayers; ++layer) {
+        const double spread = kDeviceShadowBlur * (1.0 - double(layer) / kLayers) / 2.0;
+        QColor shade = theme.deviceShadow;
+        shade.setAlphaF(theme.deviceShadow.alphaF() / kLayers * 1.6);
+        p.setBrush(shade);
+        QPainterPath shadow = roundedTop(lid.adjusted(-spread, -spread, spread, spread), laptop.lidRadius + spread, 1.5 + spread);
+        shadow.addPath(roundedTop(base.adjusted(-spread, -spread, spread, spread), 1.0 + spread, baseRadius + spread));
+        shadow.setFillRule(Qt::WindingFill);
+        p.drawPath(shadow);
+    }
+    // The lid: graphite, its 1px lighter edge, the black screen, and the
+    // camera dot in the bezel over it.
+    p.setBrush(theme.deviceFrame);
+    p.drawPath(lidPath);
+    p.setPen(QPen(theme.deviceEdge, 1.0));
+    p.setBrush(Qt::NoBrush);
+    p.drawPath(roundedTop(lid.adjusted(0.5, 0.5, -0.5, -0.5), laptop.lidRadius - 0.5, 1.0));
+    p.setPen(Qt::NoPen);
+    p.setBrush(theme.deviceScreen);
+    p.drawPath(roundedTop(laptop.screen, laptop.screenRadius, 0.0));
+    const QRectF camera = laptopCamera(laptop);
+    p.setBrush(theme.deviceScreen);
+    p.drawEllipse(camera);
+    p.setBrush(theme.deviceEdge);
+    p.drawEllipse(camera.center(), camera.width() * 0.18, camera.width() * 0.18);
+    // The base: graphite, a lighter top face, its edge, and the thumb-cut in
+    // the middle of its front, a shallow scoop in the top face.
+    p.setBrush(theme.deviceFrame);
+    p.drawPath(basePath);
+    const double face = std::max(1.0, std::round(0.38 * base.height()));
+    p.setBrush(theme.deviceDeck);
+    p.drawRect(QRectF(base.left() + 1.0, base.top(), base.width() - 2.0, face));
+    p.setPen(QPen(theme.deviceEdge, 1.0));
+    p.setBrush(Qt::NoBrush);
+    p.drawPath(roundedTop(base.adjusted(0.5, 0.5, -0.5, -0.5), 0.5, baseRadius - 0.5));
+    p.setPen(Qt::NoPen);
+    const double cutWidth = 0.13 * lid.width();
+    const double cutDepth = std::max(1.5, 0.5 * base.height());
+    p.setBrush(theme.deviceHinge);
+    p.drawPath(roundedTop(QRectF(base.center().x() - cutWidth / 2.0, base.top(), cutWidth, cutDepth), 0.0, cutDepth));
+    // The hinge: a dark line where the lid meets the base, across the lid.
+    const double hinge = std::max(1.5, 0.004 * lid.width());
+    p.drawRect(QRectF(lid.left() + laptop.lidRadius, lid.bottom() - hinge / 2.0, lid.width() - 2.0 * laptop.lidRadius, hinge));
+    p.restore();
+}
+
+void DeviceFrameCache::paint(QPainter &painter, Kind kind, const QRectF &body, const EditorTheme &theme, qreal ratio) {
+    // The pixmap starts on a whole point; the body keeps its offset within it.
+    const QPointF origin(std::floor(body.left()) - kMargin, std::floor(body.top()) - kMargin);
+    const QRectF local = body.translated(-origin);
+    const bool same = !m_pixmap.isNull() && kind == m_kind && local == m_local && theme.dark == m_dark &&
+                      theme.deviceFrame.rgba() == m_frame && theme.deviceScreen.rgba() == m_screen && ratio == m_ratio;
+    if (!same) {
+        const QSize size(int(std::ceil(local.right())) + kMargin, int(std::ceil(local.bottom())) + kMargin);
+        m_pixmap = QPixmap(QSize(int(std::ceil(size.width() * ratio)), int(std::ceil(size.height() * ratio))));
+        m_pixmap.setDevicePixelRatio(ratio);
+        m_pixmap.fill(Qt::transparent);
+        QPainter frame(&m_pixmap);
+        if (kind == Kind::Laptop)
+            paintLaptopBody(frame, laptopGeometry(local, 16.0 / 9.0), theme);
+        else
+            paintDeviceBody(frame, deviceGeometry(local, 9.0 / 16.0), theme);
+        frame.end();
+        m_kind = kind;
+        m_local = local;
+        m_dark = theme.dark;
+        m_frame = theme.deviceFrame.rgba();
+        m_screen = theme.deviceScreen.rgba();
+        m_ratio = ratio;
+        ++m_renders;
+    }
+    painter.drawPixmap(origin, m_pixmap);
+}
+
 SafeZones safeZones(const QRectF &picture) {
     const double w = picture.width();
     const double h = picture.height();

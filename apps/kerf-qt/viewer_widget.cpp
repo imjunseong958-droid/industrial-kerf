@@ -205,17 +205,24 @@ int ViewerWidget::stageGap() const {
     return width() - 2 * kStageMargin < kNarrowStage ? kNarrowStageGap : kStageGap;
 }
 
-ViewerWidget::StageLayout ViewerWidget::stageLayout() const {
+ViewerWidget::Device ViewerWidget::device() const {
+    if (portrait() && m_device != DevicePreview::Off) return Device::Phone;
+    if (landscape() && m_laptop != LaptopPreview::Off) return Device::Laptop;
+    return Device::None;
+}
+
+ViewerWidget::StageLayout ViewerWidget::stageLayout(Device device) const {
     StageLayout out;
     const double aspect = this->aspect();
-    // A portrait picture shows in a phone, laid out by its body.
-    out.device = aspect < 1.0 && m_device != DevicePreview::Off;
-    const double frameAspect = out.device ? deviceBodyAspect() : aspect;
-    const int top = out.device ? kDeviceMarginTop : kStageMargin;
-    const int bottom = out.device ? kDeviceMarginBottom : kStageMargin;
+    out.kind = device;
+    out.device = device != Device::None;
+    // A device is laid out by its body.
+    const double frameAspect = device == Device::Phone ? deviceBodyAspect() : device == Device::Laptop ? laptopBodyAspect() : aspect;
+    const int top = device == Device::Laptop ? kLaptopMarginTop : out.device ? kDeviceMarginTop : kStageMargin;
+    const int bottom = device == Device::Laptop ? kLaptopMarginBottom : out.device ? kDeviceMarginBottom : kStageMargin;
     const QRectF room = QRectF(rect()).adjusted(kStageMargin, top, -kStageMargin, -bottom);
     const int gap = stageGap();
-    // The largest card (or phone) of the picture's shape in `width` by `height`.
+    // The largest card (or device) of the picture's shape in `width` by `height`.
     const auto fit = [frameAspect](double width, double height) {
         QSizeF size(std::max(1.0, width), std::max(1.0, width) / frameAspect);
         if (size.height() > height) size = QSizeF(std::max(1.0, height) * frameAspect, std::max(1.0, height));
@@ -224,16 +231,20 @@ ViewerWidget::StageLayout ViewerWidget::stageLayout() const {
     const auto centred = [&room](const QSizeF &size) {
         return QRectF(QPointF(std::round(room.center().x() - size.width() / 2.0), std::round(room.center().y() - size.height() / 2.0)), size);
     };
-    // The picture in the phone's body, or the card that is the body.
+    // The picture in the device's body, or the card that is the body.
     const auto place = [&out, aspect](const QRectF &body) {
         out.body = body;
-        if (!out.device) {
+        if (out.kind == Device::Phone) {
+            const DeviceGeometry phone = deviceGeometry(body, aspect);
+            out.screen = phone.screen;
+            out.card = phone.picture;
+        } else if (out.kind == Device::Laptop) {
+            const LaptopGeometry laptop = laptopGeometry(body, aspect);
+            out.screen = laptop.screen;
+            out.card = laptop.picture;
+        } else {
             out.card = body;
-            return;
         }
-        const DeviceGeometry device = deviceGeometry(body, aspect);
-        out.screen = device.screen;
-        out.card = device.picture;
     };
     const int rail = m_rail ? kRailWidth : 0;
     const auto hangRail = [&out, rail, gap] {
@@ -251,14 +262,21 @@ ViewerWidget::StageLayout ViewerWidget::stageLayout() const {
         return out;
     }
     const int fixed = 2 * gap + rail;
-    // The picture first: the conversation narrows, to its narrowest, before
-    // the card falls under four fifths of its width with it closed.
+    // The body's least width: four fifths of its width with the
+    // conversation closed; tall enough for the conversation's least height,
+    // so the two can be level and as tall; and in a laptop, a picture of
+    // kLaptopKeeps of the plain card's. Never more than the room's height
+    // allows.
     const double closedWidth = fit(room.width() - 2.0 * (gap + rail), room.height()).width();
+    double least = std::max(kCardKeeps * closedWidth, std::min(room.height(), double(kMinChatHeight)) * frameAspect);
+    if (device == Device::Laptop) least = std::max(least, kLaptopKeeps * stageLayout(Device::None).card.width() / laptopPictureShare());
+    least = std::min(least, fit(room.width(), room.height()).width());
+    // The picture first: the conversation narrows, to its narrowest, before
+    // the body falls under its least.
     int panelWidth = std::clamp(m_chatWidth, kMinChatWidth, kMaxChatWidth);
     double cardRoom = room.width() - fixed - panelWidth;
-    const double keeps = kCardKeeps * closedWidth;
-    if (fit(cardRoom, room.height()).width() < keeps) {
-        panelWidth = std::clamp(int(std::floor(room.width() - fixed - keeps)), kMinChatWidth, panelWidth);
+    if (fit(cardRoom, room.height()).width() < least - 0.5) {
+        panelWidth = std::clamp(int(std::floor(room.width() - fixed - least)), kMinChatWidth, panelWidth);
         cardRoom = room.width() - fixed - panelWidth;
     }
     if (cardRoom < kMinCardWidth) {
@@ -275,11 +293,11 @@ ViewerWidget::StageLayout ViewerWidget::stageLayout() const {
         return out;
     }
     const QSizeF size = fit(cardRoom, room.height());
-    const double panelHeight = std::max(size.height(), std::min(room.height(), double(kMinChatHeight)));
+    const double panelHeight = std::max(size.height(), std::min(room.height(), double(kLeastChatHeight)));
     const double group = size.width() + fixed + panelWidth;
     const QPointF origin(std::round(room.left() + (room.width() - group) / 2.0), std::round(room.top() + (room.height() - panelHeight) / 2.0));
-    // A card as tall as the conversation shares its top edge, as a Short and
-    // its comments do; a wide one is centred on the conversation's height.
+    // The card (or device) shares the conversation's top edge and height;
+    // only in a stage too short for that is it centred on the conversation's.
     place(QRectF(QPointF(origin.x(), std::round(origin.y() + (panelHeight - size.height()) / 2.0)), size));
     hangRail();
     if (!rail) out.rail = QRect();
@@ -317,6 +335,14 @@ void ViewerWidget::setChatWidth(int width) {
 void ViewerWidget::setDevicePreview(DevicePreview preview) {
     if (preview == m_device) return;
     m_device = preview;
+    m_scaled = QImage();
+    layoutStage();
+    update();
+}
+
+void ViewerWidget::setLaptopPreview(LaptopPreview preview) {
+    if (preview == m_laptop) return;
+    m_laptop = preview;
     m_scaled = QImage();
     layoutStage();
     update();
@@ -768,15 +794,22 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
     m_overlay->setRect(canvas, portrait());
     DeviceGeometry device;
     QPainterPath canvasPath;
-    if (layout.device) {
+    // A device's frame is drawn once for its size and blitted after.
+    const qreal ratio = std::max(1.0, devicePixelRatioF());
+    if (layout.kind == Device::Phone) {
         // The phone, its black screen, and the picture across it.
         device = deviceGeometry(layout.body, aspect());
-        paintDeviceBody(p, device, theme);
+        m_frameCache.paint(p, DeviceFrameCache::Kind::Phone, layout.body, theme, ratio);
         QPainterPath screen;
         screen.addRoundedRect(device.screen, device.screenRadius, device.screenRadius);
         QPainterPath picture;
         picture.addRect(canvas);
         canvasPath = screen.intersected(picture);
+    } else if (layout.kind == Device::Laptop) {
+        // The laptop, its black screen, and the picture across it, which
+        // stays clear of the screen's rounded top corners.
+        m_frameCache.paint(p, DeviceFrameCache::Kind::Laptop, layout.body, theme, ratio);
+        canvasPath.addRect(canvas);
     } else {
         canvasPath.addRoundedRect(canvas, kCardRadius, kCardRadius);
         p.setPen(Qt::NoPen);
@@ -824,7 +857,7 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
         p.drawText(caption.adjusted(10, 4, -10, -4), Qt::AlignCenter | Qt::TextWordWrap, m_caption);
     }
     paintMasks(p);
-    if (layout.device) paintDeviceChrome(p, device, m_device, theme);
+    if (layout.kind == Device::Phone) paintDeviceChrome(p, device, m_device, theme);
     // Over the picture and its bar: they are what a platform's interface
     // would cover. The rest of the controls keep off them (see layoutStage).
     if (m_safeZones && portrait()) paintSafeZones(p, canvas, theme);
