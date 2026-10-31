@@ -150,9 +150,10 @@ private:
 // and menus are clipped to their rounded corners, and a field being typed
 // in, or a button or pop-up focused from the keyboard, shows macOS's soft
 // accent ring outside its bezel (its `bezelRadius` property, 5 points
-// unless set). A window whose `ringsOwnFields` property is true (the
-// launcher) rings its fields and pop-ups itself. Called once, before any
-// widget is made.
+// unless set; 3 for a multi-line field). A window or frame whose
+// `ringsOwnFields` property is true (the launcher, the Assistant's
+// composer) shows its fields' and pop-ups' focus itself. Called once,
+// before any widget is made.
 void useEditorStyle();
 
 // SF Symbols' waveform: six round-capped bars on an 18-point grid scaled to

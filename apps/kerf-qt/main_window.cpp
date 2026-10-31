@@ -1525,14 +1525,15 @@ void MainWindow::buildUi() {
     divergedText->setObjectName(QStringLiteral("divergedMessage"));
     divergedText->setWordWrap(true);
     divergedLayout->addWidget(divergedText, 1);
-    m_loadFromDisk = new QPushButton(QStringLiteral("Load from Disk"));
-    m_loadFromDisk->setObjectName(QStringLiteral("loadFromDisk"));
-    connect(m_loadFromDisk, &QPushButton::clicked, this, [this] { execute(QStringLiteral("projection.import")); });
-    divergedLayout->addWidget(m_loadFromDisk);
+    // The default action trails, as macOS orders a row of buttons.
     m_keepEditorVersion = new QPushButton(QStringLiteral("Keep Editor Version"));
     m_keepEditorVersion->setObjectName(QStringLiteral("keepEditorVersion"));
     connect(m_keepEditorVersion, &QPushButton::clicked, this, [this] { execute(QStringLiteral("projection.repair")); });
     divergedLayout->addWidget(m_keepEditorVersion);
+    m_loadFromDisk = new QPushButton(QStringLiteral("Load from Disk"));
+    m_loadFromDisk->setObjectName(QStringLiteral("loadFromDisk"));
+    connect(m_loadFromDisk, &QPushButton::clicked, this, [this] { execute(QStringLiteral("projection.import")); });
+    divergedLayout->addWidget(m_loadFromDisk);
     m_divergedBanner->hide();
     root->addWidget(m_divergedBanner);
 
@@ -1585,7 +1586,7 @@ void MainWindow::buildUi() {
     m_aiBar->setObjectName(QStringLiteral("aiBar"));
     auto *aiLayout = new QHBoxLayout(m_aiBar);
     aiLayout->setContentsMargins(10, 3, 8, 3);
-    aiLayout->setSpacing(6);
+    aiLayout->setSpacing(8);
     m_aiBarText = new QLabel;
     m_aiBarText->setObjectName(QStringLiteral("aiBarText"));
     aiLayout->addWidget(m_aiBarText, 1);
@@ -1702,6 +1703,9 @@ void MainWindow::buildUi() {
     auto *composer = new QFrame;
     m_chatComposer = composer;
     composer->setObjectName(QStringLiteral("chatComposer"));
+    // Its edge turns the accent while the message field has focus, in place
+    // of a ring around the field.
+    composer->setProperty("ringsOwnFields", true);
     auto *composerLayout = new QVBoxLayout(composer);
     composerLayout->setContentsMargins(10, 6, 8, 6);
     composerLayout->setSpacing(4);
@@ -2384,12 +2388,6 @@ void MainWindow::setupActions() {
     m_commands->action(QStringLiteral("proposal.accept"))->setIconText(QStringLiteral("Accept"));
     m_commands->action(QStringLiteral("proposal.reject"))->setIconText(QStringLiteral("Reject"));
     m_commands->action(QStringLiteral("ai.stop"))->setIconText(QStringLiteral("Stop"));
-    for (const QString &id : {QStringLiteral("proposal.accept"), QStringLiteral("proposal.reject"), QStringLiteral("ai.stop")}) {
-        auto *button = new QToolButton;
-        button->setObjectName(id == QStringLiteral("proposal.accept") ? QStringLiteral("aiAccept") : QStringLiteral("aiButton"));
-        button->setDefaultAction(m_commands->action(id));
-        m_aiBar->layout()->addWidget(button);
-    }
     auto *details = new QToolButton;
     details->setObjectName(QStringLiteral("aiButton"));
     details->setText(QStringLiteral("Details"));
@@ -2400,6 +2398,14 @@ void MainWindow::setupActions() {
         panel->setAsCurrentTab();
     });
     m_aiBar->layout()->addWidget(details);
+    // Accept trails, as it does on the Assistant's card and in macOS's rows
+    // of buttons; Stop shows only while Kerf works, when the proposal's don't.
+    for (const QString &id : {QStringLiteral("ai.stop"), QStringLiteral("proposal.reject"), QStringLiteral("proposal.accept")}) {
+        auto *button = new QToolButton;
+        button->setObjectName(id == QStringLiteral("proposal.accept") ? QStringLiteral("aiAccept") : QStringLiteral("aiButton"));
+        button->setDefaultAction(m_commands->action(id));
+        m_aiBar->layout()->addWidget(button);
+    }
     m_sourceMonitor->setActions({m_commands->action(QStringLiteral("source.markIn")), m_commands->action(QStringLiteral("source.markOut")),
                                  m_commands->action(QStringLiteral("source.insert")), m_commands->action(QStringLiteral("source.overwrite"))});
     for (auto it = panelCommands.cbegin(); it != panelCommands.cend(); ++it) {

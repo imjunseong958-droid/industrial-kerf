@@ -13,11 +13,13 @@
 #include <QJsonDocument>
 #include <QLineEdit>
 #include <QMenu>
+#include <QPlainTextEdit>
 #include <QPointer>
 #include <QPolygonF>
 #include <QProxyStyle>
 #include <QPushButton>
 #include <QTemporaryDir>
+#include <QTextEdit>
 #include <QToolButton>
 
 #include <algorithm>
@@ -453,6 +455,10 @@ protected:
                 roundCorners(combo->view()->window());
                 // A pop-up button takes focus from Tab alone, as macOS's do.
                 if (!combo->isEditable() && !ringsOwnFields(combo)) combo->setFocusPolicy(Qt::TabFocus);
+            } else if (qobject_cast<QTextEdit *>(watched) || qobject_cast<QPlainTextEdit *>(watched)) {
+                // The style sheet rounds a multi-line field's bezel by 3
+                // points, and its ring follows (unless the field says otherwise).
+                if (!watched->property("bezelRadius").isValid()) watched->setProperty("bezelRadius", 3);
             } else if (auto *menu = qobject_cast<QMenu *>(watched)) {
                 roundCorners(menu);
                 markColumns(menu);
@@ -536,19 +542,23 @@ private:
     }
 
     // The field `widget` types into, which is ringed while it has focus: a
-    // line edit, or a spin box (for its own line edit too). A pop-up's line
-    // edit is no field of its own.
+    // line edit, a spin box (for its own line edit too), or a multi-line
+    // field that is not read-only. A pop-up's line edit is no field of its own.
     static QWidget *typingField(QWidget *widget) {
         if (qobject_cast<QAbstractSpinBox *>(widget)) return widget;
+        if (const auto *text = qobject_cast<QTextEdit *>(widget)) return text->isReadOnly() ? nullptr : widget;
+        if (const auto *text = qobject_cast<QPlainTextEdit *>(widget)) return text->isReadOnly() ? nullptr : widget;
         if (!qobject_cast<QLineEdit *>(widget)) return nullptr;
         if (qobject_cast<QAbstractSpinBox *>(widget->parentWidget())) return widget->parentWidget();
         return qobject_cast<QComboBox *>(widget->parentWidget()) ? nullptr : widget;
     }
 
-    // Whether `control` sits in a window that rings its fields and pop-ups
-    // itself (the launcher).
+    // Whether `control` sits in a window or frame that shows its fields' and
+    // pop-ups' focus itself (the launcher, the Assistant's composer).
     static bool ringsOwnFields(const QWidget *control) {
-        return control->window()->property("ringsOwnFields").toBool();
+        for (const QWidget *frame = control; frame; frame = frame->parentWidget())
+            if (frame->property("ringsOwnFields").toBool()) return true;
+        return false;
     }
 
     QPointer<QWidget> m_keyboardFocus;

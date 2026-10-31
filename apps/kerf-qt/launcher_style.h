@@ -340,12 +340,14 @@ QDoubleSpinBox {
     max-height: 16px;
     selection-background-color: @textSelection;
     selection-color: @text;
-    placeholder-text-color: @disabledText;
+    /* Placeholders carry guidance, so they read at 4.5:1 as the editor's
+       do; a disabled field's stay dimmed with the field. */
+    placeholder-text-color: @secondary;
 }
 QLineEdit:focus,
 QDoubleSpinBox:focus { border-color: @accent; }
 QLineEdit:disabled,
-QDoubleSpinBox:disabled { color: @disabledText; background: @fieldDisabled; border-color: @separator; }
+QDoubleSpinBox:disabled { color: @disabledText; background: @fieldDisabled; border-color: @separator; placeholder-text-color: @disabledText; }
 QDoubleSpinBox { padding-right: 2px; }
 QAbstractSpinBox::up-button,
 QAbstractSpinBox::down-button {

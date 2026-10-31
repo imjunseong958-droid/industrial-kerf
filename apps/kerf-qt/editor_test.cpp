@@ -450,6 +450,10 @@ private slots:
         window.activateWindow();
         window.m_chatInput->setFocus();
         QTRY_COMPARE(window.m_chatComposer->property("state").toString(), QStringLiteral("focused"));
+        // The composer's accent edge shows the focus, with no second ring
+        // around the message field.
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QVERIFY(!window.findChild<QWidget *>(QStringLiteral("focusHalo")));
         window.m_chatInput->setPlainText(QStringLiteral("Keep my draft"));
         window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
         QCOMPARE(window.m_chatComposer->property("state").toString(), QStringLiteral("sending"));
@@ -1086,13 +1090,21 @@ private slots:
         QVERIFY(window.m_effectControls->m_propertyEditors.value("gain")->toolTip().contains("dB"));
         window.m_effectControls->propertyEdited("gain", -6.0);
         QCOMPARE(set().value("props").toObject().value("gain").toDouble(), -6.0);
-        // A file parameter is a line of text with a button that chooses the file.
+        // A file parameter is a field with a Choose… button 8px after it, as
+        // the launcher's Location row, not a full-colour folder in the field.
         QWidget *file = window.m_effectControls->valueEditor(
             QJsonObject{{"name", "lut"}, {"type", "file"}, {"extensions", QJsonArray{"cube"}}, {"default", ""}},
             QStringLiteral("LUT"), [](const QJsonValue &) {});
-        auto *fileLine = qobject_cast<QLineEdit *>(file);
-        QVERIFY(fileLine);
-        QCOMPARE(fileLine->actions().size(), 1);
+        auto *fileLine = file->findChild<QLineEdit *>();
+        auto *fileChoose = file->findChild<QPushButton *>();
+        QVERIFY(fileLine && fileChoose);
+        QVERIFY(fileLine->actions().isEmpty());
+        QCOMPARE(fileChoose->text(), QStringLiteral("Choose…"));
+        QVERIFY(fileChoose->icon().isNull());
+        file->resize(240, 22);
+        file->layout()->activate();
+        QCOMPARE(fileChoose->x() - fileLine->geometry().right() - 1, 8);
+        QCOMPARE(fileChoose->geometry().right(), file->width() - 1);
         window.m_effectControls->setPropertyValue(file, QStringLiteral("looks/warm.cube"));
         QCOMPARE(fileLine->text(), QStringLiteral("looks/warm.cube"));
         delete file;
@@ -1380,6 +1392,20 @@ private slots:
         window.updateCommandStates();
         window.m_commands->action(QStringLiteral("ai.ask"))->trigger();
         QTRY_VERIFY(window.m_askPrompt->isVisible());
+        // Its field shows its focus as every field does: the ring around
+        // its 5px bezel, and its edge in the accent.
+        {
+            QTextEdit *input = window.m_askPrompt->m_input;
+            QTRY_VERIFY(input->hasFocus());
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            const auto halos = window.m_askPrompt->findChildren<QWidget *>(QStringLiteral("focusHalo"));
+            QCOMPARE(halos.size(), 1);
+            QCOMPARE(halos.constFirst()->geometry(), input->geometry().adjusted(-3, -3, 3, 3));
+            QCOMPARE(input->property("bezelRadius").toInt(), 5);
+            const QImage prompt = window.m_askPrompt->grab().toImage();
+            QCOMPARE(prompt.pixelColor(QPoint(input->x(), input->geometry().center().y()) * prompt.devicePixelRatio()).rgb(),
+                     editorTheme().focusRing.rgb());
+        }
         QVERIFY(window.m_askPrompt->m_title->text().contains(QStringLiteral("Opening")));
         QCOMPARE(window.m_askPrompt->scope(), QStringLiteral("clip"));
         window.m_askPrompt->m_input->setPlainText(QStringLiteral("Tighten the start"));
@@ -2488,6 +2514,18 @@ private slots:
                                             .arg(firstAmber.x())
                                             .arg(firstAmber.y())));
                     save(image, QStringLiteral("new-details-%1").arg(schemeName));
+                    // The remote field's placeholder reads at 4.5:1 in the
+                    // editor's placeholder colour, and dims when the field is off.
+                    const LauncherTheme &look = launcher.theme();
+                    launcher.m_remote->ensurePolished();
+                    QVERIFY(launcher.m_remote->isEnabled() && launcher.m_remote->text().isEmpty());
+                    for (const QPalette::ColorGroup group : {QPalette::Active, QPalette::Inactive})
+                        QCOMPARE(launcher.m_remote->palette().color(group, QPalette::PlaceholderText).rgb(),
+                                 makeEditorTheme(dark, look.accent).placeholderText.rgb());
+                    QVERIFY(contrastRatio(launcher.m_remote->palette().color(QPalette::Active, QPalette::PlaceholderText),
+                                          look.field) >= 4.5);
+                    QCOMPARE(launcher.m_remote->palette().color(QPalette::Disabled, QPalette::PlaceholderText).rgb(),
+                             look.disabledText.rgb());
                     // Its frame-rate pop-up opens with every choice showing.
                     QVERIFY(popupShowsEveryRow(launcher.m_rate));
                 }
@@ -3137,6 +3175,19 @@ private slots:
             // Reject, then the default Accept, at the right.
             QVERIFY(window.m_rejectButton->geometry().right() < window.m_acceptButton->geometry().left());
             QCOMPARE(window.m_acceptButton->height(), 22);
+            // So does every other row of buttons, as macOS orders them: the
+            // timeline's bar ends in Accept and the banner in Load from Disk,
+            // each 8px past the button before it.
+            {
+                QList<QWidget *> bar;
+                for (QToolButton *button : window.m_aiBar->findChildren<QToolButton *>())
+                    if (button->isVisible()) bar.append(button);
+                std::sort(bar.begin(), bar.end(), [](const QWidget *a, const QWidget *b) { return a->x() < b->x(); });
+                QCOMPARE(bar.size(), 3);
+                QCOMPARE(bar.constLast()->objectName(), QStringLiteral("aiAccept"));
+                for (int i = 1; i < bar.size(); ++i) QCOMPARE(bar.at(i)->x() - bar.at(i - 1)->geometry().right() - 1, 8);
+                QCOMPARE(window.m_loadFromDisk->x() - window.m_keepEditorVersion->geometry().right() - 1, 8);
+            }
             // Kerf's suggestions are purple pills sized to their labels.
             for (QWidget *row : {window.m_nextSteps, window.m_chatNextSteps}) {
                 const auto chips = row->findChildren<QPushButton *>(QStringLiteral("nextStep"));
@@ -3185,11 +3236,18 @@ private slots:
 
             // The inspector: every field starts at one edge, the clip's
             // timing and an effect's parameters alike; number fields are as
-            // wide as their values need; a colour is a well.
+            // wide as their values need; a colour is a well; a file is a
+            // field and a Choose… button (a look, as FilmCraft's LUT
+            // parameters, stands in for one).
+            window.m_effectControls->m_effectDefs.insert(QStringLiteral("test.look"), QJsonObject{
+                {"id", "test.look"}, {"name", "Look"}, {"params", QJsonArray{QJsonObject{
+                    {"name", "look_lut"}, {"type", "file"}, {"doc", "Look LUT"}, {"extensions", QJsonArray{"cube", "3dl"}}, {"default", ""}}}}});
             window.applySnapshot(QJsonObject{{"revision", 14}, {"duration", 4}, {"timeline", QJsonObject{{"fps", 24}, {"tracks", QJsonArray{
                 QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
                     QJsonObject{{"id", "c1"}, {"kind", "media"}, {"sourceId", "wide"}, {"timelineStart", 0.0}, {"duration", 2.0},
-                                {"effects", QJsonArray{QJsonObject{{"fx", "light.edgeglow"}, {"enabled", false}, {"params", QJsonObject{}}}}}}}}}}}}}});
+                                {"effects", QJsonArray{QJsonObject{{"fx", "light.edgeglow"}, {"enabled", false}, {"params", QJsonObject{}}},
+                                                       QJsonObject{{"fx", "test.look"}, {"enabled", true},
+                                                                   {"params", QJsonObject{{"look_lut", "looks/harbor-dusk.cube"}}}}}}}}}}}}}}});
             window.selectClip(QStringLiteral("c1"));
             window.m_workspace->panel(QStringLiteral("effectControls"))->toggleView(true);
             window.m_workspace->panel(QStringLiteral("effectControls"))->setAsCurrentTab();
@@ -3201,6 +3259,12 @@ private slots:
             for (QWidget *field : inspector->findChildren<QWidget *>())
                 if (field->objectName().startsWith(QStringLiteral("effectParam_"))) fields << field;
             QVERIFY(fields.size() > 6);
+            // The file's row is a field's height, with its Choose… button
+            // in the push buttons' bezel.
+            auto *lookFile = inspector->findChild<QWidget *>(QStringLiteral("effectParam_look_lut"));
+            QVERIFY(lookFile && lookFile->findChild<QPushButton *>());
+            QCOMPARE(lookFile->height(), 22);
+            QCOMPARE(lookFile->findChild<QLineEdit *>()->text(), QStringLiteral("looks/harbor-dusk.cube"));
             for (QWidget *field : fields) {
                 QCOMPARE(field->mapTo(inspector, QPoint()).x(), fieldEdge);
                 if (qobject_cast<QDoubleSpinBox *>(field)) QVERIFY(field->width() <= 96);
@@ -3336,6 +3400,24 @@ private slots:
             // Back to the field: the ring moves to it.
             field->setFocus();
             ringAround(field);
+            // A multi-line field is ringed as it is typed in too, around its
+            // 3px bezel; a read-only one, which takes no typing, is not.
+            auto *notes = new QPlainTextEdit;
+            auto *transcript = new QTextEdit;
+            transcript->setReadOnly(true);
+            layout->addWidget(notes);
+            layout->addWidget(transcript);
+            notes->show();
+            transcript->show();
+            QCoreApplication::processEvents();
+            QTest::mouseClick(notes->viewport(), Qt::LeftButton);
+            QVERIFY(notes->hasFocus());
+            ringAround(notes);
+            QCOMPARE(notes->property("bezelRadius").toInt(), 3);
+            QTest::mouseClick(transcript->viewport(), Qt::LeftButton);
+            QVERIFY(transcript->hasFocus());
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            QVERIFY(!dialog.findChild<QWidget *>(QStringLiteral("focusHalo")));
         }
     }
 

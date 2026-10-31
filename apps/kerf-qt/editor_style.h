@@ -742,6 +742,7 @@ QWidget#sourceMonitor { background: @panel; }
 QFrame#askPrompt { background: @raised; border: 1px solid @assistant; border-radius: 8px; }
 QLabel#askTitle { color: @assistantText; font-size: 12px; font-weight: 600; }
 QTextEdit#askInput { background: @field; border: 1px solid @fieldBorder; border-radius: 5px; padding: 4px; color: @text; }
+QTextEdit#askInput:focus { border-color: @focusRing; }
 /* The agent's bar is the window's chrome; a purple stripe at its start and
    its label say whose it is. Accept is the accent's default action. */
 QFrame#aiBar { background: @chrome; border: 0; border-left: 3px solid @assistant; border-bottom: 1px solid @divider; }

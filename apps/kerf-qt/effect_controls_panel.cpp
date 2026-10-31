@@ -16,7 +16,6 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
-#include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -551,21 +550,28 @@ QWidget *EffectControlsPanel::valueEditor(const QJsonObject &def, const QString 
         editor = combo;
     } else if (type == QStringLiteral("file")) {
         // A path, typed or chosen; relative paths are relative to the project.
+        // The field and a Choose… button, as the launcher's Location row.
+        auto *row = new QWidget;
+        auto *rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+        rowLayout->setSpacing(8);
         auto *line = new QLineEdit;
+        rowLayout->addWidget(line, 1);
         QStringList patterns;
         for (const QJsonValue &extension : def.value(QStringLiteral("extensions")).toArray())
             patterns << QStringLiteral("*.%1").arg(extension.toString());
         const QString filter = QStringLiteral("%1 (%2)").arg(title, patterns.join(QLatin1Char(' ')));
-        QAction *choose = line->addAction(style()->standardIcon(QStyle::SP_DirOpenIcon), QLineEdit::TrailingPosition);
+        auto *choose = new QPushButton(tr("Choose…"));
         choose->setToolTip(tr("Choose a file"));
-        connect(choose, &QAction::triggered, this, [this, line, title, filter, edited] {
+        connect(choose, &QPushButton::clicked, this, [this, line, title, filter, edited] {
             const QString path = QFileDialog::getOpenFileName(this, title, line->text(), filter);
             if (path.isEmpty()) return;
             line->setText(path);
             edited(path);
         });
+        rowLayout->addWidget(choose);
         connect(line, &QLineEdit::editingFinished, this, [line, edited] { edited(line->text()); });
-        editor = line;
+        editor = row;
     } else {
         auto *line = new QLineEdit;
         connect(line, &QLineEdit::editingFinished, this, [line, edited] { edited(line->text()); });
@@ -599,6 +605,11 @@ void EffectControlsPanel::setPropertyValue(QWidget *editor, const QJsonValue &va
         button->setAccessibleDescription(value.toString());
     }
     else if (auto *line = qobject_cast<QLineEdit *>(editor)) line->setText(value.toString());
+    else if (auto *path = editor->findChild<QLineEdit *>()) {
+        // A file parameter's row: its field holds the path.
+        const QSignalBlocker pathBlocker(path);
+        path->setText(value.toString());
+    }
 }
 
 } // namespace kerf
