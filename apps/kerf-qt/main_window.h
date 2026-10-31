@@ -41,6 +41,7 @@ namespace kerf {
 
 class AskPrompt;
 class ChatPanel;
+struct ProposalChange;
 class CommentRow;
 class StageRail;
 class CommandRegistry;
@@ -52,6 +53,7 @@ class SourceMonitorPanel;
 class Workspace;
 class MediaArtwork;
 class TimelineWidget;
+class TimelineZoomControl;
 class ViewerWidget;
 
 class MainWindow final : public QMainWindow {
@@ -88,6 +90,9 @@ private slots:
     void selectClip(const QString &id);
     // A clip clicked on the timeline: selected, and the Inspector brought
     // forward in its column (see Workspace::raiseInspector).
+    // ⌘-click or ⇧-click on a clip in the timeline.
+    void extendClipSelection(const QString &id, bool toggle);
+    void updateSelectionStatus();
     void clickSelectClip(const QString &id);
     // Open the conversation with `subject` ("@clip") in the composer.
     void askAboutInChat(const QString &subject);
@@ -170,6 +175,8 @@ private:
     void setProjectTitle(const QString &name);
     // Centre the title on the toolbar, clear of the groups either side.
     void layoutProjectTitle();
+    // "Edited · 9:16 · 24 fps": the line under the title.
+    QString projectSubtitle() const;
     // Rebuild what caches the theme's colours: symbols drawn in code and the
     // conversation's messages.
     void applyAppearance();
@@ -227,6 +234,8 @@ private:
     void updateProposal(const QJsonValue &value);
     // Show m_proposalText in m_proposalDiff, its lines coloured by kind.
     void showProposalText();
+    // A proposal's script line as the change its pinned comment lists.
+    ProposalChange describeScriptLine(const QString &line) const;
     void appendConversation(const QString &speaker, const QString &text);
     void appendConversationNote(const QString &kind, const QString &text);
     // The number of messages under the rail's chat button.
@@ -280,6 +289,7 @@ private:
     // The room at the toolbar's leading end for the window buttons (macOS).
     QWidget *m_windowButtons = nullptr;
     QLabel *m_projectTitle = nullptr;
+    QLabel *m_projectSubtitle = nullptr;
     QString m_projectName;
     QToolButton *m_toolbarLeftEnd = nullptr; // The last command before the title.
     // The toolbar's last control: opens and closes Kerf's conversation.
@@ -316,7 +326,8 @@ private:
     QAction *m_safeZonesAction = nullptr;
     // Panel details shown in the panels' title strips.
     QAction *m_viewerDetail = nullptr;
-    QAction *m_timelineDetail = nullptr;
+    QLabel *m_timelineDetail = nullptr;
+    TimelineZoomControl *m_timelineZoom = nullptr;
     Workspace *m_workspace = nullptr;
     InspectorPanel *m_inspector = nullptr;
     // Add effect in the Inspector raised the Effects browser: adding one
@@ -403,6 +414,9 @@ private:
     QString m_agentRunState = QStringLiteral("idle");
     QString m_agentText;
     QString m_selectedClip;
+    // Every selected clip, m_selectedClip (the primary one) among them.
+    QStringList m_selectedClips;
+    QLabel *m_selectionStatus = nullptr;
     QString m_proposalId;
     QStringList m_activityLog;
     QSize m_canvasSize{1920, 1080};

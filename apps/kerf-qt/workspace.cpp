@@ -2,6 +2,7 @@
 #include "editor_style.h"
 
 #include <DockAreaWidget.h>
+#include <DockAreaTabBar.h>
 #include <DockAreaTitleBar.h>
 #include <DockManager.h>
 #include <DockSplitter.h>
@@ -11,7 +12,9 @@
 #include <QAbstractButton>
 #include <QApplication>
 #include <QEvent>
+#include <QLayout>
 #include <QSettings>
+#include <QToolButton>
 #include <QTimer>
 
 #include <algorithm>
@@ -24,29 +27,29 @@ namespace {
 // are not restored. 6: Kerf's conversation moved into the Program monitor's
 // stage, beside the picture; the viewer takes the row past the browsers.
 // 7: Effect Controls became the Inspector (its id `effectControls` became
-// `inspector`, renamed in older layouts as they are restored).
-constexpr int kLayoutVersion = 7;
+// `inspector`, renamed in older layouts as they are restored). 8: the
+// browsers' column narrowed to 300 and the stage row grew to 575 over a
+// 290 timeline, for every picture shape.
+constexpr int kLayoutVersion = 8;
 // The oldest version the Editing workspace's own changes are restored
-// from: 6 differs only in the Inspector's id.
-constexpr int kOldestEditingLayoutVersion = 6;
+// from: older ones give way to the new proportions.
+constexpr int kOldestEditingLayoutVersion = 8;
 // The oldest version a workspace of one's own is still restored from: 4
 // and 5 had a docked conversation as well, which restoring leaves out (an
 // area left empty goes); the Editing workspace's own layout gives way to
 // its new arrangement.
 constexpr int kOldestCustomLayoutVersion = 4;
 // The Editing arrangement's columns and rows, before the window has a size;
-// the viewer takes or gives whatever the window has beyond them. The
-// browsers' column is at least this wide.
-constexpr int kBrowserWidth = 340;
-constexpr int kArrangedWidth = 1500;
-constexpr int kTopRowHeight = 500;
-constexpr int kTimelineHeight = 400;
-// While the picture is portrait, the top row takes this much more from the
-// timeline (560 over 340 as arranged), so the phone it shows in is big
-// enough to judge framing and captions; never leaving the timeline less
-// than kMinTimelineHeight.
-constexpr int kPortraitGain = 60;
-constexpr int kMinTimelineHeight = 280;
+// the viewer takes or gives whatever the window has beyond them. As the
+// structure the owner chose: a column of about 300 for the bin's two
+// columns of tiles, and the stage row taking the height (575) over a
+// timeline of 290, which holds eight tracks at their default heights; the
+// same for a phone, a laptop or a plain card, so the timeline never jumps
+// when the format changes.
+constexpr int kBrowserWidth = 300;
+constexpr int kArrangedWidth = 1440;
+constexpr int kTopRowHeight = 575;
+constexpr int kTimelineHeight = 290;
 
 QString layoutKey(const QString &group, const QString &name) {
     return QStringLiteral("workspace/%1/%2").arg(group, name);
@@ -93,6 +96,17 @@ ads::CDockWidget *Workspace::addPanel(const QString &id, const QString &title, Q
     dock->setWidget(content, ads::CDockWidget::ForceNoScrollArea);
     dock->setFeature(ads::CDockWidget::DockWidgetDeleteOnClose, false);
     dock->tabWidget()->installEventFilter(this);
+    // A text tab: its name and nothing round it (the dock manager's own
+    // room before, between and after the name and the close button goes;
+    // the sheet spaces the tabs), underlined when chosen.
+    ads::CDockWidgetTab *tab = dock->tabWidget();
+    tab->setProperty("textTab", true);
+    if (QLayout *layout = tab->layout()) {
+        layout->setContentsMargins(0, 0, 0, 0);
+        for (int index = 0; index < layout->count(); ++index)
+            if (QSpacerItem *spacer = layout->itemAt(index)->spacerItem()) spacer->changeSize(0, 0);
+        layout->invalidate();
+    }
     m_panels.insert(id, dock);
     // Brought forward by hand (its tab, ⌘4): it stays when the selection clears.
     if (id == QLatin1String("inspector"))
@@ -102,11 +116,59 @@ ads::CDockWidget *Workspace::addPanel(const QString &id, const QString &title, Q
     return dock;
 }
 
+void Workspace::setTitleWidgets(const QString &id, QWidget *leading, QWidget *trailing) {
+    m_titleWidgets.insert(id, TitleWidgets{leading, trailing});
+    for (QWidget *widget : {leading, trailing})
+        if (widget) {
+            widget->setParent(m_manager);
+            widget->hide();
+        }
+    if (ads::CDockWidget *dock = m_panels.value(id))
+        connect(dock, &ads::CDockWidget::visibilityChanged, this, [this] { QTimer::singleShot(0, this, &Workspace::placeTitleWidgets); });
+    placeTitleWidgets();
+}
+
+void Workspace::parkTitleWidgets() {
+    for (const TitleWidgets &widgets : std::as_const(m_titleWidgets))
+        for (QWidget *widget : {widgets.leading.data(), widgets.trailing.data()})
+            if (widget) {
+                widget->hide();
+                widget->setParent(m_manager);
+            }
+}
+
+void Workspace::placeTitleWidgets() {
+    for (auto it = m_titleWidgets.cbegin(); it != m_titleWidgets.cend(); ++it) {
+        ads::CDockWidget *dock = m_panels.value(it.key());
+        ads::CDockAreaWidget *area = dock && !dock->isClosed() ? dock->dockAreaWidget() : nullptr;
+        ads::CDockAreaTitleBar *bar = area ? area->titleBar() : nullptr;
+        QWidget *leading = it->leading;
+        QWidget *trailing = it->trailing;
+        if (!bar) {
+            for (QWidget *widget : {leading, trailing})
+                if (widget) {
+                    widget->hide();
+                    widget->setParent(m_manager);
+                }
+            continue;
+        }
+        connect(area, &ads::CDockAreaWidget::currentChanged, this, &Workspace::placeTitleWidgets, Qt::UniqueConnection);
+        if (leading && leading->parentWidget() != bar) bar->insertWidget(bar->indexOf(bar->tabBar()) + 1, leading);
+        if (trailing && trailing->parentWidget() != bar) {
+            // Before the panel's own buttons, or the tabs' menu.
+            int index = bar->indexOf(bar->button(ads::TitleBarButtonTabsMenu));
+            const QList<QAction *> actions = dock->titleBarActions();
+            for (QToolButton *button : bar->findChildren<QToolButton *>(QString(), Qt::FindDirectChildrenOnly))
+                if (actions.contains(button->defaultAction()) && bar->indexOf(button) >= 0) index = std::min(index, bar->indexOf(button));
+            bar->insertWidget(std::max(0, index), trailing);
+        }
+        const bool current = area->currentDockWidget() == dock;
+        for (QWidget *widget : {leading, trailing})
+            if (widget) widget->setVisible(current);
+    }
+}
+
 bool Workspace::eventFilter(QObject *watched, QEvent *event) {
-    if (watched == m_watchedRows && event->type() == QEvent::Resize && m_shapePending)
-        QTimer::singleShot(0, this, [this] {
-            if (m_shapePending) fitPictureShape(m_portrait);
-        });
     auto *tab = qobject_cast<ads::CDockWidgetTab *>(watched);
     switch (tab ? event->type() : QEvent::None) {
     case QEvent::Enter:
@@ -149,7 +211,7 @@ void Workspace::arrangeEditing() {
     // Wide enough for the bin's two columns of tiles and for its four tabs'
     // names, unshortened.
     browser->titleBar()->ensurePolished();
-    const int browserWidth = std::max(kBrowserWidth, browser->titleBar()->sizeHint().width());
+    const int browserWidth = std::max(kBrowserWidth, browser->titleBar()->tabBar()->sizeHint().width());
     auto *timeline = m_manager->addDockWidget(ads::BottomDockWidgetArea, panel("timeline"));
     letViewerStretch();
     // Lay the rows and columns out at a window's size now, before there is
@@ -160,64 +222,12 @@ void Workspace::arrangeEditing() {
     m_manager->setSplitterSizes(timeline, {kTopRowHeight, kTimelineHeight});
     const int handles = viewer->parentSplitter()->handleWidth();
     m_manager->setSplitterSizes(viewer, {browserWidth, kArrangedWidth - handles - browserWidth});
-}
-
-ads::CDockSplitter *Workspace::rowsSplitter() const {
-    // The Editing arrangement's rows: the browsers and viewer over the timeline.
-    ads::CDockWidget *timeline = m_panels.value(QStringLiteral("timeline"));
-    ads::CDockAreaWidget *area = timeline && !timeline->isClosed() ? timeline->dockAreaWidget() : nullptr;
-    ads::CDockSplitter *rows = area ? area->parentSplitter() : nullptr;
-    if (!rows || rows->orientation() != Qt::Vertical || rows->count() != 2 || rows->widget(1) != area) return nullptr;
-    return rows;
-}
-
-void Workspace::shiftRows(int delta) {
-    ads::CDockSplitter *rows = rowsSplitter();
-    if (!rows || delta == 0) return;
-    QList<int> sizes = rows->sizes();
-    sizes[0] += delta;
-    sizes[1] -= delta;
-    rows->setSizes(sizes);
-}
-
-void Workspace::fitPictureShape(bool portrait) {
-    m_portrait = portrait;
-    ads::CDockSplitter *rows = rowsSplitter();
-    if (!rows) {
-        m_shapeGain = 0;
-        m_shapePending = false;
-        return;
-    }
-    const QList<int> sizes = rows->sizes();
-    if (!rows->isVisible() || sizes.at(0) + sizes.at(1) <= 0) {
-        // Not laid out yet (a window not shown): once it is.
-        if (m_watchedRows != rows) {
-            rows->installEventFilter(this);
-            m_watchedRows = rows;
-        }
-        m_shapePending = true;
-        return;
-    }
-    m_shapePending = false;
-    const int gain = portrait ? std::clamp(sizes.at(1) + m_shapeGain - kMinTimelineHeight, 0, kPortraitGain) : 0;
-    if (gain == m_shapeGain) return;
-    shiftRows(gain - m_shapeGain);
-    m_shapeGain = gain;
-}
-
-QByteArray Workspace::saveUnshifted() {
-    // Layouts are kept as arranged for any picture: the portrait gain is
-    // taken back while saving, and given again.
-    shiftRows(-m_shapeGain);
-    const QByteArray state = m_manager->saveState(kLayoutVersion);
-    shiftRows(m_shapeGain);
-    return state;
+    placeTitleWidgets();
 }
 
 void Workspace::afterRestore() {
     letViewerStretch();
-    m_shapeGain = 0;
-    fitPictureShape(m_portrait);
+    placeTitleWidgets();
 }
 
 void Workspace::letViewerStretch() {
@@ -258,9 +268,11 @@ bool Workspace::restore(const QByteArray &layout, const QString &name) {
     const bool own = name != QLatin1String(kEditing);
     bool restored = false;
     const QByteArray state = migrated(layout);
+    parkTitleWidgets();
     for (int version = kLayoutVersion; !restored && version >= (own ? kOldestCustomLayoutVersion : kOldestEditingLayoutVersion); --version)
         restored = m_manager->restoreState(state, version);
     if (restored) afterRestore();
+    else placeTitleWidgets();
     return restored;
 }
 
@@ -277,7 +289,7 @@ void Workspace::activate(const QString &name) {
 
 void Workspace::saveCurrent() {
     QSettings settings;
-    settings.setValue(layoutKey(QStringLiteral("saved"), m_current), saveUnshifted());
+    settings.setValue(layoutKey(QStringLiteral("saved"), m_current), m_manager->saveState(kLayoutVersion));
     settings.remove(layoutKey(QStringLiteral("changes"), m_current));
 }
 
@@ -303,7 +315,7 @@ void Workspace::resetCurrent() {
 void Workspace::persist() {
     QSettings settings;
     settings.setValue(QStringLiteral("workspace/current"), m_current);
-    settings.setValue(layoutKey(QStringLiteral("changes"), m_current), saveUnshifted());
+    settings.setValue(layoutKey(QStringLiteral("changes"), m_current), m_manager->saveState(kLayoutVersion));
 }
 
 bool Workspace::inspectorFollowsSelection() {

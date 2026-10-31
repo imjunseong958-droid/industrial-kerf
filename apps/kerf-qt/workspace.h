@@ -34,6 +34,12 @@ public:
     // A panel whose `id` names it in saved layouts.
     ads::CDockWidget *addPanel(const QString &id, const QString &title, QWidget *content);
     ads::CDockWidget *panel(const QString &id) const { return m_panels.value(id); }
+    // A panel's own widgets in its area's text-tab row, shown while it is
+    // the area's current panel: `leading` right after the tabs (the
+    // timeline's "9 tracks · 00:00:18:00"), `trailing` on the right before
+    // its title bar actions (its zoom control). They follow the panel to
+    // whatever area holds it, and outlive restored layouts.
+    void setTitleWidgets(const QString &id, QWidget *leading, QWidget *trailing);
 
     // Arrange the panels as the Editing workspace, then open the workspace
     // in use when the editor last closed, with its changes.
@@ -48,11 +54,6 @@ public:
     void resetCurrent();
     // Keep the current arrangement for the next launch.
     void persist();
-    // While the picture is portrait, the row over the timeline is taller (by
-    // up to 60 points, never leaving the timeline under 280), and back when
-    // it is not. Saved layouts never keep it.
-    void fitPictureShape(bool portrait);
-    int pictureShapeGain() const { return m_shapeGain; }
 
     // The Inspector follows the selection: a clip clicked brings it to the
     // front of its column (remembering the tab it came from); a clip
@@ -79,7 +80,13 @@ protected:
     // Shows a tab's close button while the pointer is over the tab.
     bool eventFilter(QObject *watched, QEvent *event) override;
 
+private slots:
+    void placeTitleWidgets();
+
 private:
+    // Take the title widgets out of the areas before a layout is restored
+    // (which deletes the areas and their title bars).
+    void parkTitleWidgets();
     void showCloseButton(ads::CDockWidgetTab *tab, bool shown);
     void arrangeEditing();
     QByteArray savedLayout(const QString &name) const;
@@ -91,11 +98,6 @@ private:
     // closed column beside it, or a wider window. A restored layout has new
     // areas, so this follows every restore.
     void letViewerStretch();
-    // The rows of the Editing arrangement (the timeline under the rest), or
-    // null when the panels are arranged otherwise.
-    ads::CDockSplitter *rowsSplitter() const;
-    void shiftRows(int delta);
-    QByteArray saveUnshifted();
     void afterRestore();
 
     ads::CDockManager *m_manager = nullptr;
@@ -103,17 +105,17 @@ private:
     QHash<QString, ads::CDockWidget *> m_panels;
     QByteArray m_editing;
     QString m_current;
-    bool m_portrait = false;
-    int m_shapeGain = 0;
-    // Waiting for the rows to be laid out before taking the portrait gain.
-    bool m_shapePending = false;
-    QPointer<QWidget> m_watchedRows;
     // The tab the Inspector was raised over, whether it came up by itself,
     // and the clip that raised it.
     QPointer<ads::CDockWidget> m_beforeInspector;
     bool m_inspectorAuto = false;
     bool m_raisingInspector = false;
     QString m_inspectorClip;
+    struct TitleWidgets {
+        QPointer<QWidget> leading;
+        QPointer<QWidget> trailing;
+    };
+    QHash<QString, TitleWidgets> m_titleWidgets;
 };
 
 } // namespace kerf

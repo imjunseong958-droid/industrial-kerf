@@ -223,6 +223,21 @@ bool isAudioTrack(const QJsonObject &track) {
     return type.contains(QStringLiteral("audio")) || type.contains(QStringLiteral("sound"));
 }
 
+TrackBadge trackBadge(const QJsonObject &project, const QString &trackId) {
+    int picture = 0;
+    int sound = 0;
+    for (const QJsonValue &value : project.value(QStringLiteral("tracks")).toArray()) {
+        const QJsonObject track = value.toObject();
+        const bool audio = isAudioTrack(track);
+        const int number = audio ? ++sound : ++picture;
+        if (track.value(QStringLiteral("id")).toString() != trackId) continue;
+        QString name = track.value(QStringLiteral("name")).toString().trimmed();
+        if (name.isEmpty()) name = (audio ? QStringLiteral("Audio %1") : QStringLiteral("Video %1")).arg(number);
+        return TrackBadge{(audio ? QStringLiteral("A") : QStringLiteral("V")) + QString::number(number), name};
+    }
+    return TrackBadge{trackId, QString()};
+}
+
 void frameInside(QPainter &p, const QRectF &rect, qreal thickness, const QColor &color) {
     p.fillRect(QRectF(rect.left(), rect.top(), rect.width(), thickness), color);
     p.fillRect(QRectF(rect.left(), rect.bottom() - thickness, rect.width(), thickness), color);

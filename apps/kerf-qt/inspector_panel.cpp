@@ -12,6 +12,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFontDatabase>
+#include <QFontInfo>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QInputDialog>
@@ -47,8 +48,10 @@ namespace kerf {
 namespace {
 
 constexpr int kSide = 16;          // the column's side padding
-constexpr int kSingleField = 108;  // a field alone on its row
-constexpr int kPairedField = 64;   // a field beside a slider or pop-up
+// Every value field is the same width (InspectorRow::kValueField), alone on
+// its row or beside a slider or pop-up, so the column's fields line up.
+constexpr int kSingleField = InspectorRow::kValueField;
+constexpr int kPairedField = InspectorRow::kValueField;
 // Effects show this many parameters before "N more".
 constexpr int kEffectRowsShown = 5;
 const char *kFxMime = "application/x-kerf-fx";
@@ -90,6 +93,17 @@ QString ratioText(double ratio) {
     while (text.endsWith(QLatin1Char('0'))) text.chop(1);
     if (text.endsWith(QLatin1Char('.'))) text.chop(1);
     return text;
+}
+
+// A generic family ("sans-serif") as the family it resolves to here
+// ("Helvetica", "Inter"): what a reader recognises. Apple's private system
+// family reads as "System".
+QString resolvedFamily(const QString &generic) {
+    QFont font(generic);
+    font.setStyleHint(generic == QStringLiteral("serif") ? QFont::Serif : generic == QStringLiteral("monospace") ? QFont::Monospace
+                                                                                                               : QFont::SansSerif);
+    const QString family = QFontInfo(font).family();
+    return family.isEmpty() || family.startsWith(QLatin1Char('.')) ? QStringLiteral("System") : family;
 }
 
 // The installed families, fetched only when the pop-up opens.
@@ -162,6 +176,9 @@ InspectorPanel::InspectorPanel(QWidget *parent) : QWidget(parent) {
     outer->addWidget(m_scrollEdge);
     m_scroll = new QScrollArea;
     m_scroll->setObjectName(QStringLiteral("inspectorScroll"));
+    // A click in the Inspector leaves the keys where they were (the
+    // timeline's transport); only its fields take them, to be typed in.
+    m_scroll->setFocusPolicy(Qt::NoFocus);
     m_scroll->setFrameShape(QFrame::NoFrame);
     m_scroll->setWidgetResizable(true);
     m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -174,6 +191,8 @@ InspectorPanel::InspectorPanel(QWidget *parent) : QWidget(parent) {
     m_contentLayout->setSpacing(0);
     m_contentLayout->addStretch(1);
     m_content->installEventFilter(this);
+    // The scroll bar's showing and hiding moves the body's right padding.
+    m_scroll->verticalScrollBar()->installEventFilter(this);
     m_dropLine = new QFrame(m_content);
     m_dropLine->setObjectName(QStringLiteral("inspectorDropLine"));
     m_dropLine->setFixedHeight(2);
@@ -372,6 +391,22 @@ QString InspectorPanel::kindName(const Clip &clip) const {
     return titleCase(clip.clip.value(QStringLiteral("fx")).toString(QStringLiteral("Generator")));
 }
 
+QString InspectorPanel::displayName(const Clip &clip) const {
+    // Its own name; else its media's file name; else what generates it
+    // ("Title", "Solid"); else where it is ("Clip on V1"). Never a stand-in
+    // such as "Untitled media".
+    const QString name = clip.clip.value(QStringLiteral("name")).toString().trimmed();
+    if (!name.isEmpty() && name != QStringLiteral("Untitled media")) return name;
+    const QString path = clip.source.value(QStringLiteral("path")).toString();
+    if (!path.isEmpty()) return QFileInfo(path).fileName();
+    if (clip.clip.value(QStringLiteral("kind")).toString() == QStringLiteral("generator")) {
+        const QString fx = clip.clip.value(QStringLiteral("fx")).toString();
+        const QString generator = m_effectDefs.value(fx).value(QStringLiteral("name")).toString();
+        return generator.isEmpty() ? kindName(clip) : generator;
+    }
+    return QStringLiteral("Clip on %1").arg(trackBadge(m_project, clip.track.value(QStringLiteral("id")).toString()).badge);
+}
+
 double InspectorPanel::clipTime(const Clip &clip) const {
     return std::clamp(m_playhead - clip.clip.value(QStringLiteral("timelineStart")).toDouble(), 0.0,
                       clip.clip.value(QStringLiteral("duration")).toDouble());
@@ -505,7 +540,14 @@ void InspectorPanel::buildHeader() {
             emitOps(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("set")}, {QStringLiteral("clip"), m_clips.first().id},
                                            {QStringLiteral("name"), name}}});
         });
-        identity->addWidget(m_name);
+        // The name with ⋯ at its end; under them the kind line, which runs
+        // to the column's edge (under ⋯ too), so "Video · V1 Video 1 ·
+        // linked A1" fits the 300 column.
+        auto *nameRow = new QHBoxLayout;
+        nameRow->setContentsMargins(0, 0, 0, 0);
+        nameRow->setSpacing(4);
+        nameRow->addWidget(m_name, 1);
+        identity->addLayout(nameRow);
         auto *kindRow = new QHBoxLayout;
         kindRow->setSpacing(6);
         m_kindSquare = new KindSquare;
@@ -528,7 +570,7 @@ void InspectorPanel::buildHeader() {
         connect(m_more, &QAbstractButton::clicked, this, [this] {
             m_moreMenu->popup(m_more->mapToGlobal(QPoint(0, m_more->height())));
         });
-        top->addWidget(m_more, 0, Qt::AlignTop);
+        nameRow->addWidget(m_more, 0, Qt::AlignVCenter);
         layout->addLayout(top);
         m_timing = new QWidget;
         m_timing->setObjectName(QStringLiteral("inspectorTiming"));
@@ -576,7 +618,7 @@ void InspectorPanel::buildTiming(QHBoxLayout *row) {
             value->setFixedHeight(ScrubField::kHeight);
             layout->addWidget(value);
         } else {
-            auto *field = new ScrubField;
+            auto *field = newScrubField();
             field->setObjectName(QStringLiteral("timing_%1").arg(QString::fromLatin1(column.field)));
             NumberFormat format;
             format.kind = NumberFormat::Kind::Timecode;
@@ -638,6 +680,22 @@ QImage InspectorPanel::thumbnailOf(const Clip &clip) const {
         painter.drawRoundedRect(box, 4, 4);
         painter.setPen(theme.viewerCaptionText);
         painter.drawText(box, Qt::AlignCenter, painter.fontMetrics().elidedText(words, Qt::ElideRight, 104));
+    } else if (kind == QStringLiteral("adjustment")) {
+        // What it changes: the picture under it (the Program frame), dimmed,
+        // with the effect mark over it at 14 points.
+        painter.fillRect(all, theme.viewerCanvas);
+        if (!m_programFrame.isNull()) {
+            const QSizeF scaled = QSizeF(m_programFrame.size()).scaled(all.size(), Qt::KeepAspectRatioByExpanding);
+            painter.drawImage(QRectF(all.center() - QPointF(scaled.width(), scaled.height()) / 2.0, scaled), m_programFrame);
+            painter.fillRect(all, QColor(0, 0, 0, 120));
+        }
+        QFont font = painter.font();
+        font.setPixelSize(28); // 14 points in the 64 by 36 thumbnail
+        font.setWeight(QFont::DemiBold);
+        font.setItalic(true);
+        painter.setFont(font);
+        painter.setPen(QColor(0xf4, 0xec, 0xde));
+        painter.drawText(all, Qt::AlignCenter, QStringLiteral("fx"));
     } else {
         // Titles and other generators: the text (or the effect symbol) on the letterbox.
         painter.fillRect(all, theme.viewerCanvas);
@@ -677,10 +735,12 @@ void InspectorPanel::refreshHeader() {
     const auto secondary = [&theme](const QString &text) {
         return QStringLiteral("<span style=\"color:%1\">%2</span>").arg(theme.textSecondary.name(), text.toHtmlEscaped());
     };
-    const auto trackLabel = [](const QJsonObject &track) {
-        const QString id = track.value(QStringLiteral("id")).toString();
-        const QString name = track.value(QStringLiteral("name")).toString();
-        return name.isEmpty() || name == id ? id : QStringLiteral("%1 %2").arg(id, name);
+    // As the timeline's header names the track: "V3 Captions", "V1 Video 1".
+    const auto trackLabel = [this](const QJsonObject &track) {
+        return trackBadge(m_project, track.value(QStringLiteral("id")).toString()).label();
+    };
+    const auto trackBadgeOf = [this](const QJsonObject &track) {
+        return trackBadge(m_project, track.value(QStringLiteral("id")).toString()).badge;
     };
     const double fps = m_project.value(QStringLiteral("fps")).toDouble(24.0);
     const bool drop = m_project.value(QStringLiteral("dropFrame")).toBool();
@@ -720,9 +780,9 @@ void InspectorPanel::refreshHeader() {
     const Clip &first = m_clips.first();
     m_kindSquare->setColor(theme.clip(clipKind(first.track, first.clip)).header);
     if (m_mode == Mode::Clip) {
-        m_name->setName(clipName(first.clip));
+        m_name->setName(displayName(first));
         QString detail = QStringLiteral(" · ") + trackLabel(first.track);
-        if (!first.linked.isEmpty()) detail += QStringLiteral(" · linked ") + first.linkedTrack.value(QStringLiteral("id")).toString();
+        if (!first.linked.isEmpty()) detail += QStringLiteral(" · linked ") + trackBadgeOf(first.linkedTrack);
         if (!first.clip.value(QStringLiteral("enabled")).toBool(true)) detail += QStringLiteral(" · Off");
         m_kind->setText(kindName(first).toHtmlEscaped() + secondary(detail));
         const QString kind = kindKey(first);
@@ -730,7 +790,7 @@ void InspectorPanel::refreshHeader() {
             m_note->setText(QStringLiteral("Applies its effects to every layer beneath it."));
             m_note->show();
         }
-        m_moreMenu->addAction(QStringLiteral("Ask Kerf about This Clip"), this, [this] { askAbout(QLatin1Char('@') + clipName(m_clips.first().clip)); })
+        m_moreMenu->addAction(QStringLiteral("Ask Kerf about This Clip"), this, [this] { askAbout(QLatin1Char('@') + displayName(m_clips.first())); })
             ->setObjectName(QStringLiteral("inspectorAsk"));
         m_moreMenu->addAction(QStringLiteral("Rename"), m_name, &NameLabel::beginEditing)->setObjectName(QStringLiteral("inspectorRename"));
         if (!first.source.isEmpty())
@@ -743,7 +803,7 @@ void InspectorPanel::refreshHeader() {
         QSet<QString> trackIds;
         for (const Clip &clip : m_clips) {
             kinds[kindName(clip)] += 1;
-            trackIds.insert(clip.track.value(QStringLiteral("id")).toString());
+            trackIds.insert(trackBadgeOf(clip.track));
         }
         if (kinds.size() == 1) {
             m_kind->setText(kinds.firstKey().toHtmlEscaped() +
@@ -761,7 +821,7 @@ void InspectorPanel::refreshHeader() {
         }
         m_moreMenu->addAction(QStringLiteral("Ask Kerf about These Clips"), this, [this] {
             QStringList names;
-            for (const Clip &clip : std::as_const(m_clips)) names << QLatin1Char('@') + clipName(clip.clip);
+            for (const Clip &clip : std::as_const(m_clips)) names << QLatin1Char('@') + displayName(clip);
             askAbout(names.join(QLatin1Char(' ')));
         })->setObjectName(QStringLiteral("inspectorAsk"));
     }
@@ -1062,17 +1122,15 @@ int InspectorPanel::addRow(QVBoxLayout *into, const QString &label, int section)
 
 ScrubField *InspectorPanel::bindNumber(int rowIndex, QHBoxLayout *into, const Target &target, const QJsonObject &def,
                                        bool withSlider, bool primaryField) {
-    auto *field = new ScrubField;
+    auto *field = newScrubField();
     InspectorSlider *slider = nullptr;
     if (withSlider) {
         slider = new InspectorSlider;
         slider->setObjectName(QStringLiteral("slider_") + target.name);
         into->addWidget(slider, 1);
-        // Room for a long unit ("+0.40 stops") beside the slider.
-        const QString unit = def.value(QStringLiteral("unit")).toString();
-        const bool longUnit = unit.size() > 2 && unit != QStringLiteral("degrees") && unit != QStringLiteral("fraction") &&
-                              !unit.contains(QStringLiteral("frame")) && !unit.contains(QStringLiteral("picture"));
-        field->setFixedWidth(longUnit ? kPairedField + 24 : kPairedField);
+        // The field is the column's one width, whatever its unit, so the
+        // sliders' ends line up.
+        field->setFixedWidth(kPairedField);
         into->addWidget(field);
     } else {
         into->addWidget(field, 1);
@@ -1141,7 +1199,10 @@ ScrubField *InspectorPanel::bindNumber(int rowIndex, QHBoxLayout *into, const Ta
             if (formatNumber(f, display) == formatNumber(f, def.value(QStringLiteral("default")).toDouble() * f.scale)) return QString();
             const QString prefix = field->property("prefix").toString();
             const QString name = !prefix.isEmpty() ? prefix : !f.prefix.isEmpty() ? f.prefix : label;
-            return QStringLiteral("%1 %2").arg(name, formatWithUnit(f, display));
+            // A folded summary reads in whole pixels ("Y 538 px").
+            NumberFormat shown = f;
+            if (shown.unit == QStringLiteral("px")) shown.decimals = 0;
+            return QStringLiteral("%1 %2").arg(name, formatWithUnit(shown, display));
         }
         return QString();
     };
@@ -1245,10 +1306,14 @@ QWidget *InspectorPanel::bindValue(int rowIndex, QHBoxLayout *into, const Target
         for (const QJsonValue &extension : def.value(QStringLiteral("extensions")).toArray())
             patterns << QStringLiteral("*.%1").arg(extension.toString());
         const QString filter = QStringLiteral("%1 (%2)").arg(label, patterns.join(QLatin1Char(' ')));
-        auto *choose = new QPushButton(QStringLiteral("Choose…"));
+        // A folder glyph inside the field's right end opens the file dialog:
+        // no push button beside it.
+        QAction *choose = line->addAction(glyphIcon(QSize(16, 16), [](QPainter &p, const QColor &color) {
+            drawInspectorGlyph(p, GlyphButton::Glyph::Folder, QRectF(0, 0, 16, 16), color);
+        }), QLineEdit::TrailingPosition);
+        choose->setObjectName(QStringLiteral("chooseFile"));
         choose->setToolTip(QStringLiteral("Choose a file"));
-        holderLayout->addWidget(choose);
-        connect(choose, &QPushButton::clicked, this, [this, line, label, filter, target, def] {
+        connect(choose, &QAction::triggered, this, [this, line, label, filter, target, def] {
             const QString path = QFileDialog::getOpenFileName(this, label, line->text(), filter);
             if (!path.isEmpty()) commitValue(target, def, path);
         });
@@ -1349,7 +1414,7 @@ void InspectorPanel::buildTransformRows(QVBoxLayout *into, int section, bool fit
         ScrubField *scale = bindNumber(r, row(r)->controls(), Target{Target::Kind::Prop, QStringLiteral("scale")}, scaleDef);
         scale->setObjectName(QStringLiteral("prop_scale"));
         if (fitFill) {
-            scale->setFixedWidth(78);
+            scale->setFixedWidth(kPairedField);
             auto *fit = new SegmentedField({{QStringLiteral("Fit"), SegmentedField::Glyph::None, QStringLiteral("The whole picture in the frame")},
                                             {QStringLiteral("Fill"), SegmentedField::Glyph::None, QStringLiteral("The frame filled, edges cropped")}});
             fit->setObjectName(QStringLiteral("fitFill"));
@@ -1396,7 +1461,7 @@ void InspectorPanel::buildTransformRows(QVBoxLayout *into, int section, bool fit
         const int r = addRow(into, QStringLiteral("Rotation"), section);
         ScrubField *rotation = bindNumber(r, row(r)->controls(), Target{Target::Kind::Prop, QStringLiteral("rotation")}, rotationDef);
         rotation->setObjectName(QStringLiteral("prop_rotation"));
-        rotation->setFixedWidth(78);
+        rotation->setFixedWidth(kSingleField);
         auto *dial = new RotationDial;
         row(r)->controls()->addWidget(dial);
         row(r)->controls()->addStretch(1);
@@ -1428,9 +1493,9 @@ void InspectorPanel::buildCompositingRows(QVBoxLayout *into, int section) {
 void InspectorPanel::buildSpeedRow(QVBoxLayout *into) {
     if (m_clips.isEmpty() || !std::all_of(m_clips.cbegin(), m_clips.cend(), [](const Clip &c) { return c.clip.contains(QStringLiteral("speed")); })) return;
     const int r = addRow(into, QStringLiteral("Speed"));
-    auto *field = new ScrubField;
+    auto *field = newScrubField();
     field->setObjectName(QStringLiteral("speed"));
-    field->setFixedWidth(78);
+    field->setFixedWidth(kSingleField);
     NumberFormat format;
     format.kind = NumberFormat::Kind::Speed;
     format.unit = QStringLiteral("%");
@@ -1448,14 +1513,19 @@ void InspectorPanel::buildSpeedRow(QVBoxLayout *into) {
     reverse->setObjectName(QStringLiteral("speedReverse"));
     reverse->setCheckable(true);
     reverse->setToolTip(QStringLiteral("Play backwards"));
-    auto *presets = new GlyphButton(GlyphButton::Glyph::Menu);
+    // The presets are the field's own ⌄, a 16pt lane inside its right end;
+    // Reverse follows the field.
+    auto *presets = new GlyphButton(GlyphButton::Glyph::Menu, field);
     presets->setObjectName(QStringLiteral("speedPresets"));
     presets->setToolTip(QStringLiteral("Speed presets"));
+    presets->setFixedSize(16, ScrubField::kHeight);
+    presets->move(kSingleField - 18, 0);
+    presets->setCursor(Qt::PointingHandCursor);
+    field->setTrailingInset(14);
     auto *menu = new QMenu(presets);
     menu->setObjectName(QStringLiteral("speedPresetsMenu"));
     row(r)->controls()->addWidget(field);
     row(r)->controls()->addWidget(reverse);
-    row(r)->controls()->addWidget(presets);
     row(r)->controls()->addStretch(1);
     const auto display = [](const Clip &clip) {
         const double speed = clip.clip.value(QStringLiteral("speed")).toDouble(1.0) * 100.0;
@@ -1605,7 +1675,7 @@ void InspectorPanel::buildAnchorSection(QVBoxLayout *into) {
         };
         m_rows[flipRow].values.append(flip);
         // Stretch shows the size; edits keep the sign.
-        auto *field = new ScrubField;
+        auto *field = newScrubField();
         field->setObjectName(QStringLiteral("stretch_") + letter);
         row(stretchRow)->controls()->addWidget(field, 1);
         if (letter == QStringLiteral("H")) row(stretchRow)->label()->setField(field);
@@ -1659,7 +1729,7 @@ void InspectorPanel::buildLinkedAudioSection(QVBoxLayout *into) {
     }
     if (gain.isEmpty() && pan.isEmpty()) return;
     const int section = addSection(into, QStringLiteral("linkedAudio"),
-                                   QStringLiteral("Audio · ") + first.linkedTrack.value(QStringLiteral("id")).toString());
+                                   QStringLiteral("Audio · ") + trackBadge(m_project, first.linkedTrack.value(QStringLiteral("id")).toString()).badge);
     if (!gain.isEmpty()) {
         const int r = addRow(sectionBody(section), QStringLiteral("Volume"), section);
         bindNumber(r, row(r)->controls(), Target{Target::Kind::Linked, QStringLiteral("gain")}, gain, true)->setObjectName(QStringLiteral("linked_gain"));
@@ -1707,7 +1777,7 @@ void InspectorPanel::buildSourceSection(QVBoxLayout *into) {
         tc.bigStep = 10.0;
         tc.smallStep = 1.0;
         for (const char *edge : {"in", "out"}) {
-            auto *field = new ScrubField;
+            auto *field = newScrubField();
             field->setObjectName(QStringLiteral("source_%1").arg(QString::fromLatin1(edge)));
             field->setFormat(tc);
             row(r)->controls()->addWidget(field, 1);
@@ -1833,12 +1903,18 @@ void InspectorPanel::buildTitle(QVBoxLayout *into) {
             combo->setMinimumContentsLength(4);
             combo->setMinimumWidth(64);
             combo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-            for (const QString &family : {QStringLiteral("sans-serif"), QStringLiteral("serif"), QStringLiteral("monospace")}) combo->addItem(family, family);
+            // The generic families by the names they resolve to; the model
+            // keeps the generic name.
+            for (const QString &family : {QStringLiteral("sans-serif"), QStringLiteral("serif"), QStringLiteral("monospace")}) {
+                combo->addItem(resolvedFamily(family), family);
+                combo->setItemData(combo->count() - 1, family, Qt::ToolTipRole);
+            }
             combo->addItem(QStringLiteral("Other…"), QString());
             row(r)->controls()->addWidget(combo, 1);
             const Target target{Target::Kind::Prop, QStringLiteral("font")};
             connect(combo, &QComboBox::activated, this, [this, combo, target, font](int index) {
-                QString family = combo->itemText(index);
+                QString family = combo->itemData(index).toString();
+                if (family.isEmpty()) family = combo->itemText(index);
                 if (combo->itemData(index).toString().isEmpty() && family == QStringLiteral("Other…")) {
                     bool ok = false;
                     family = QInputDialog::getText(this, QStringLiteral("Font"), QStringLiteral("Family"), QLineEdit::Normal,
@@ -1854,17 +1930,25 @@ void InspectorPanel::buildTitle(QVBoxLayout *into) {
             binding.refresh = [this, combo, target, font] {
                 const QString family = valueOf(m_clips.first(), target, font).toString();
                 const QSignalBlocker blocker(combo);
-                if (combo->findText(family) < 0) combo->insertItem(0, family, family);
-                combo->setCurrentText(family);
+                int index = combo->findData(family);
+                if (index < 0) index = combo->findText(family);
+                if (index < 0) {
+                    combo->insertItem(0, family, family);
+                    index = 0;
+                }
+                combo->setCurrentIndex(index);
             };
             binding.changed = [this, target, font] { return !sameJson(valueOf(m_clips.first(), target, font), font.value(QStringLiteral("default"))); };
             binding.resetOps = [this, target, font] { return resetOpsFor(target, font); };
             m_rows[r].values.append(binding);
         }
         if (!size.isEmpty()) {
-            ScrubField *field = bindNumber(r, row(r)->controls(), Target{Target::Kind::Prop, QStringLiteral("size")}, size, false, font.isEmpty());
+            // On a row of its own: the family needs the pop-up's whole width.
+            const int sizeRow = font.isEmpty() ? r : addRow(into, QStringLiteral("Size"));
+            ScrubField *field = bindNumber(sizeRow, row(sizeRow)->controls(), Target{Target::Kind::Prop, QStringLiteral("size")}, size);
             field->setObjectName(QStringLiteral("titleSize"));
             field->setFixedWidth(kPairedField);
+            row(sizeRow)->controls()->addStretch(1);
         }
     }
     if (!color.isEmpty()) {
@@ -1892,7 +1976,9 @@ void InspectorPanel::buildTitle(QVBoxLayout *into) {
     if (!y.isEmpty()) {
         // Where the line sits: y of -0.30, 0, or +0.28 frame heights.
         const int r = addRow(into, QStringLiteral("Place"));
-        auto *field = new SegmentedField({{QStringLiteral("Top")}, {QStringLiteral("Middle")}, {QStringLiteral("Lower ⅓")}});
+        auto *field = new SegmentedField({{QStringLiteral("Top"), SegmentedField::Glyph::None, QStringLiteral("At the top")},
+                                          {QStringLiteral("Middle"), SegmentedField::Glyph::None, QStringLiteral("In the middle")},
+                                          {QStringLiteral("Lower"), SegmentedField::Glyph::None, QStringLiteral("On the lower third")}});
         field->setObjectName(QStringLiteral("titlePlace"));
         row(r)->controls()->addWidget(field, 1);
         const QList<double> places{-0.30, 0.0, 0.28};
@@ -1960,10 +2046,17 @@ void InspectorPanel::buildCaption(QVBoxLayout *into) {
     auto *column = new QVBoxLayout;
     column->setSpacing(4);
     column->addWidget(text);
-    auto *hint = quietLabel(QStringLiteral("Ask Kerf to change caption text"));
+    // Until captions take typed text: a link that asks Kerf, in the body's
+    // ink, underlined under the pointer.
+    auto *hint = new QPushButton(QStringLiteral("Ask Kerf to change it"));
+    hint->setToolTip(QStringLiteral("Ask Kerf to change the caption's text"));
     hint->setObjectName(QStringLiteral("captionHint"));
-    hint->setWordWrap(true);
-    column->addWidget(hint);
+    hint->setFlat(true);
+    hint->setProperty("inspectorLink", true);
+    hint->setProperty("underlineOnHover", true);
+    hint->setCursor(Qt::PointingHandCursor);
+    connect(hint, &QPushButton::clicked, this, [this] { askAbout(QLatin1Char('@') + displayName(m_clips.first()) + QStringLiteral(" caption text:")); });
+    column->addWidget(hint, 0, Qt::AlignLeft);
     textRow->controls()->addLayout(column, 1);
     m_refreshers.append([this, text] { text->setText(m_clips.first().clip.value(QStringLiteral("text")).toString()); });
 }
@@ -2074,11 +2167,12 @@ void InspectorPanel::buildSequence(QVBoxLayout *into) {
         auto *square = new KindSquare;
         square->setColor(theme.clip(clipKind(track)).header);
         layout->addWidget(square);
-        auto *id = new QLabel(track.value(QStringLiteral("id")).toString());
+        const TrackBadge badge = trackBadge(m_project, track.value(QStringLiteral("id")).toString());
+        auto *id = new QLabel(badge.badge);
         id->setFont(sizedFont(id->font(), 12, QFont::DemiBold));
         id->setFixedWidth(28);
         layout->addWidget(id);
-        auto *name = plain(track.value(QStringLiteral("name")).toString(), QStringLiteral("sequenceTrackName"));
+        auto *name = plain(badge.name, QStringLiteral("sequenceTrackName"));
         layout->addWidget(name, 1);
         const int count = int(track.value(QStringLiteral("clips")).toArray().size());
         auto *clips = quietLabel(count == 1 ? QStringLiteral("1 clip") : QStringLiteral("%1 clips").arg(count));
@@ -2205,7 +2299,7 @@ void InspectorPanel::buildMask(QVBoxLayout *into, const QString &name) {
     more->setObjectName(QStringLiteral("maskMore"));
     auto *menu = new QMenu(box);
     menu->addAction(QStringLiteral("Ask Kerf about This Mask"), this, [this, name] {
-        askAbout(QStringLiteral("@%1 mask %2").arg(clipName(m_clips.first().clip), name));
+        askAbout(QStringLiteral("@%1 mask %2").arg(displayName(m_clips.first()), name));
     })->setObjectName(QStringLiteral("maskAsk"));
     menu->addSeparator();
     menu->addAction(QStringLiteral("Remove"), this, [this, name] {
@@ -2279,12 +2373,19 @@ void InspectorPanel::buildEffectsSection(QVBoxLayout *into, bool openByDefault) 
     const int section = addSection(into, QStringLiteral("effects"), QStringLiteral("Effects"), openByDefault);
     InspectorSection *effects = m_sections.at(section).section;
     effects->setObjectName(QStringLiteral("inspectorEffects"));
+    // The catalog's effects are all picture effects for now: a sound clip
+    // is offered none to add (its list still shows what it carries).
     const bool sound = kindKey(m_clips.first()) == QStringLiteral("audio");
-    auto *add = new GlyphButton(GlyphButton::Glyph::Plus);
-    add->setObjectName(QStringLiteral("effectsAdd"));
-    add->setToolTip(QStringLiteral("Add an effect"));
-    connect(add, &QAbstractButton::clicked, this, [this, sound] { emit addEffectRequested(sound); });
-    effects->addTrailing(add);
+    const bool offered = !sound || std::any_of(m_effectDefs.cbegin(), m_effectDefs.cend(), [](const QJsonObject &def) {
+        return def.value(QStringLiteral("domain")).toString() == QStringLiteral("audio");
+    });
+    if (offered) {
+        auto *add = new GlyphButton(GlyphButton::Glyph::Plus);
+        add->setObjectName(QStringLiteral("effectsAdd"));
+        add->setToolTip(QStringLiteral("Add an effect"));
+        connect(add, &QAbstractButton::clicked, this, [this, sound] { emit addEffectRequested(sound); });
+        effects->addTrailing(add);
+    }
     if (m_clips.size() > 1) {
         // Several clips: which effects they carry, read-only.
         m_sections[section].summary = [this] {
@@ -2299,22 +2400,27 @@ void InspectorPanel::buildEffectsSection(QVBoxLayout *into, bool openByDefault) 
                 names << m_effectDefs.value(fx).value(QStringLiteral("name")).toString(fx);
             }
             if (names.isEmpty()) continue;
-            auto *line = quietLabel(QStringLiteral("%1: %2").arg(clipName(clip.clip), names.join(QStringLiteral(", "))));
+            auto *line = quietLabel(QStringLiteral("%1: %2").arg(displayName(clip), names.join(QStringLiteral(", "))));
             line->setWordWrap(true);
             line->setContentsMargins(0, 4, 0, 4);
             sectionBody(section)->addWidget(line);
         }
-        auto *addAll = new QPushButton(QStringLiteral("Add effect to all"));
-        addAll->setObjectName(QStringLiteral("addEffect"));
-        addAll->setFlat(true);
-        addAll->setProperty("inspectorLink", true);
-        connect(addAll, &QPushButton::clicked, this, [this, sound] { emit addEffectRequested(sound); });
-        sectionBody(section)->addWidget(addAll, 0, Qt::AlignLeft);
+        if (offered) {
+            auto *addAll = new QPushButton(QStringLiteral("Add effect to all"));
+            addAll->setObjectName(QStringLiteral("addEffect"));
+            addAll->setFlat(true);
+            addAll->setProperty("inspectorLink", true);
+            connect(addAll, &QPushButton::clicked, this, [this, sound] { emit addEffectRequested(sound); });
+            sectionBody(section)->addWidget(addAll, 0, Qt::AlignLeft);
+        }
         return;
     }
     const QJsonArray list = m_clips.first().clip.value(QStringLiteral("effects")).toArray();
     effects->setCount(int(list.size()));
     for (int index = 0; index < list.size(); ++index) buildEffect(sectionBody(section), index);
+    if (!offered) {
+        if (list.isEmpty()) sectionBody(section)->addWidget(quietLabel(QStringLiteral("No sound effects in this version of Kerf.")));
+    } else {
     auto *addEffect = new QPushButton(QStringLiteral("Add effect"));
     addEffect->setObjectName(QStringLiteral("addEffect"));
     addEffect->setFlat(true);
@@ -2326,14 +2432,17 @@ void InspectorPanel::buildEffectsSection(QVBoxLayout *into, bool openByDefault) 
     connect(addEffect, &QPushButton::clicked, this, [this, sound] { emit addEffectRequested(sound); });
     sectionBody(section)->addSpacing(4);
     sectionBody(section)->addWidget(addEffect, 0, Qt::AlignLeft);
+    }
+    // Every effect, so the count and the names agree; one switched off
+    // says so.
     m_sections[section].summary = [this] {
         QStringList names;
         for (const QJsonValue &effect : m_clips.first().clip.value(QStringLiteral("effects")).toArray()) {
             const QJsonObject e = effect.toObject();
             const QString fx = e.value(QStringLiteral("fx")).toString();
-            if (!e.value(QStringLiteral("enabled")).toBool(true)) continue;
             QString name = m_effectDefs.value(fx).value(QStringLiteral("name")).toString();
             if (name.isEmpty()) name = e.value(QStringLiteral("doc")).toString(fx).section(QStringLiteral(": "), 0, 0).remove(QLatin1Char('.'));
+            if (!e.value(QStringLiteral("enabled")).toBool(true)) name += QStringLiteral(" (off)");
             names << name;
         }
         return names.join(QStringLiteral(", "));
@@ -2510,7 +2619,7 @@ void InspectorPanel::buildEffect(QVBoxLayout *into, int index) {
                                        {QStringLiteral("index"), index}, {QStringLiteral("params"), cleared}}});
     })->setObjectName(QStringLiteral("effectReset"));
     menu->addAction(QStringLiteral("Ask Kerf about This Effect"), this, [this, name] {
-        askAbout(QStringLiteral("@%1 %2").arg(clipName(m_clips.first().clip), name));
+        askAbout(QStringLiteral("@%1 %2").arg(displayName(m_clips.first()), name));
     })->setObjectName(QStringLiteral("effectAsk"));
     menu->addSeparator();
     menu->addAction(QStringLiteral("Remove"), this, [this, index] {
@@ -2530,6 +2639,9 @@ void InspectorPanel::buildEffect(QVBoxLayout *into, int index) {
             title->style()->unpolish(title);
             title->style()->polish(title);
         }
+        // Switched off: its name and second line in the secondary ink, its
+        // values in the disabled one; they still edit.
+        for (ScrubField *field : params->findChildren<ScrubField *>()) field->setDimmed(!on);
         QStringList pieces;
         for (const int r : rows)
             for (const Binding &binding : m_rows.at(r).values)
@@ -2602,7 +2714,36 @@ void InspectorPanel::showEvent(QShowEvent *event) {
     QWidget::showEvent(event);
 }
 
+ScrubField *InspectorPanel::newScrubField() {
+    auto *field = new ScrubField;
+    connect(field, &ScrubField::doneEditing, this, &InspectorPanel::focusReturnRequested);
+    return field;
+}
+
+void InspectorPanel::keyPressEvent(QKeyEvent *event) {
+    // Esc that nothing in the Inspector took (no field being typed in)
+    // hands the keys back to the timeline, so the transport works again.
+    if (event->key() == Qt::Key_Escape && event->modifiers() == Qt::NoModifier) {
+        emit focusReturnRequested();
+        event->accept();
+        return;
+    }
+    QWidget::keyPressEvent(event);
+}
+
+void InspectorPanel::fitScrollBar() {
+    // While the body scrolls, its scroll bar sits in the right padding, so
+    // its rows keep the header's right edge.
+    QScrollBar *bar = m_scroll->verticalScrollBar();
+    const bool takesRoom = bar->isVisibleTo(m_scroll) && !bar->style()->styleHint(QStyle::SH_ScrollBar_Transient, nullptr, bar);
+    const int right = takesRoom ? std::max(0, kSide - bar->sizeHint().width()) : kSide;
+    if (m_contentLayout->contentsMargins().right() == right) return;
+    m_contentLayout->setContentsMargins(kSide, 0, right, 0);
+    m_contentLayout->activate();
+}
+
 bool InspectorPanel::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == m_scroll->verticalScrollBar() && (event->type() == QEvent::Show || event->type() == QEvent::Hide)) fitScrollBar();
     auto *widget = qobject_cast<QWidget *>(watched);
     if (widget && widget->objectName() == QStringLiteral("effectHeader") && event->type() == QEvent::KeyPress) {
         const int code = static_cast<QKeyEvent *>(event)->key();
@@ -2632,6 +2773,7 @@ bool InspectorPanel::eventFilter(QObject *watched, QEvent *event) {
             if (key->key() == Qt::Key_Escape) {
                 refreshValues();
                 edit->clearFocus();
+                emit focusReturnRequested();
                 return true;
             }
         }

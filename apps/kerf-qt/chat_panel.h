@@ -54,6 +54,59 @@ private:
     int m_scroll = 0;
 };
 
+// One change a pending proposal makes, as its pinned comment lists it: a
+// glyph for what it does, a plain description, and a short detail (how
+// much, or where).
+struct ProposalChange {
+    enum class Glyph { Trim, Remove, Add, Title, Move, Split, Level, Effect, Other };
+    Glyph glyph = Glyph::Other;
+    QString description; // "Trim fisher-close.mov's end"
+    QString detail;      // "−1.5 s"
+};
+
+// A proposal's change as a row of the pinned comment: a 16px glyph in
+// secondary ink at the text column, the description (13px) and, right-
+// aligned, the detail (12px, secondary). 28 points tall; a description too
+// long for the row ends in an ellipsis and says the rest in its tooltip.
+class ProposalChangeRow final : public QWidget {
+    Q_OBJECT
+public:
+    static constexpr int kHeight = 28;
+    explicit ProposalChangeRow(const ProposalChange &change, QWidget *parent = nullptr);
+    ProposalChange change() const { return m_change; }
+    QSize sizeHint() const override { return QSize(160, kHeight); }
+    // The glyph's square, the description's and the detail's rectangles.
+    QRect glyphRect() const;
+    QRect detailRect() const;
+    QRect descriptionRect() const;
+
+protected:
+    void paintEvent(QPaintEvent *) override;
+
+private:
+    ProposalChange m_change;
+};
+
+// A request to try under the welcome: a 16px arrow in secondary ink, then
+// the words (13px) wrapping to two lines, no border, a wash under the
+// pointer. A click writes it in the composer.
+class SuggestionButton final : public QAbstractButton {
+    Q_OBJECT
+public:
+    explicit SuggestionButton(const QString &text, QWidget *parent = nullptr);
+    bool hasHeightForWidth() const override { return true; }
+    int heightForWidth(int width) const override;
+    QSize sizeHint() const override { return QSize(200, heightForWidth(200)); }
+    QSize minimumSizeHint() const override { return QSize(80, heightForWidth(80)); }
+    // Where its words go.
+    QRect textRect() const;
+
+protected:
+    void paintEvent(QPaintEvent *) override;
+    void enterEvent(QEnterEvent *) override { update(); }
+    void leaveEvent(QEvent *) override { update(); }
+};
+
 // A round avatar: Kerf's monogram on its purple, or the reader's initial
 // on a neutral disc, as a comment row starts with its author's picture.
 class ChatAvatar final : public QWidget {
@@ -262,12 +315,19 @@ public:
     bool followsLatest() const { return m_follow; }
     void refreshTimes();
 
-    // The pinned proposal: shown while one is pending, heading the list.
-    void setProposalShown(bool shown);
-    // Its summary, in the pinned comment and on the compact bar.
-    void setProposalSummary(const QString &summary);
-    // What it changes, one line each: the first few listed under its summary.
-    void setProposalChanges(const QStringList &changes);
+    // The pinned proposal: shown while one is pending, heading the list. A
+    // new one (another `id`) scrolls the list to its top, so the proposal
+    // is read from its head, and the list stops following the latest
+    // comment until the reader scrolls or sends.
+    void setProposalShown(bool shown, const QString &id = QString());
+    // Its summary in the pinned comment ("Trim, remove, add a title ·
+    // 3 changes"), and the compact bar's shorter one ("3 changes").
+    void setProposalSummary(const QString &summary, const QString &compact = QString());
+    // What it changes, one row each: the first few listed under its summary.
+    void setProposalChanges(const QList<ProposalChange> &changes);
+    QList<ProposalChangeRow *> proposalChangeRows() const;
+    // The hairline closing the pinned comment.
+    QFrame *proposalRule() const { return m_proposalRule; }
     QWidget *proposalChanges() const { return m_proposalChanges; }
     bool proposalExpanded() const;
     void setProposalExpanded(bool expanded);
@@ -282,7 +342,7 @@ public:
     ChatIconButton *closeButton() const { return m_close; }
     QScrollArea *scroll() const { return m_scroll; }
     QWidget *welcome() const { return m_welcome; }
-    QList<QPushButton *> examples() const { return m_examples; }
+    QList<QAbstractButton *> examples() const { return m_examples; }
     QWidget *statusRow() const { return m_statusRow; }
     QLabel *statusLabel() const { return m_status; }
     QLabel *activityLabel() const { return m_activity; }
@@ -306,7 +366,8 @@ public:
     QPushButton *acceptButton() const { return m_accept; }
     QPushButton *rejectButton() const { return m_reject; }
     // The compact bar under the header, shown while the pinned proposal's
-    // pills are scrolled out of view, and its own summary and pills.
+    // head ("Pinned by Kerf") or its pills are scrolled out of view, and
+    // its own summary and pills.
     QFrame *proposalBar() const { return m_proposalBar; }
     QLabel *proposalBarSummary() const { return m_proposalBarSummary; }
     QPushButton *barAcceptButton() const { return m_barAccept; }
@@ -363,7 +424,7 @@ private:
     QWidget *m_content = nullptr;
     QVBoxLayout *m_list = nullptr;
     QWidget *m_welcome = nullptr;
-    QList<QPushButton *> m_examples;
+    QList<QAbstractButton *> m_examples;
     QWidget *m_statusRow = nullptr;
     QWidget *m_typing = nullptr;
     QLabel *m_status = nullptr;
@@ -382,6 +443,9 @@ private:
     QPushButton *m_send = nullptr;
     QPushButton *m_stop = nullptr;
     QFrame *m_proposal = nullptr;
+    QFrame *m_proposalRule = nullptr;
+    QWidget *m_proposalPinLine = nullptr;
+    QString m_proposalId;
     QLabel *m_proposalName = nullptr;
     QLabel *m_proposalTime = nullptr;
     QLabel *m_proposalSummary = nullptr;

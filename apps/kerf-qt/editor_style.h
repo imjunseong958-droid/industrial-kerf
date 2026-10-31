@@ -309,8 +309,13 @@ QPushButton {
     max-height: 16px;
     outline: 0;
 }
-/* Symbol-only buttons keep a narrow bezel. */
-QToolButton#maskTool { padding: 2px 5px; }
+/* The Inspector's mask tools are bare 24px symbols, as its + and ⋯ are: no
+   bezel, a wash under the pointer. */
+QToolButton#maskTool,
+QToolButton#maskTool:disabled { background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 0; min-width: 22px; max-width: 22px; min-height: 22px; max-height: 22px; }
+QToolButton#maskTool:hover { background: @hover; border-color: transparent; }
+QToolButton#maskTool:pressed { background: @pressed; border-color: transparent; }
+QToolButton#maskTool:checked:enabled:hover { background: @accentTint; border-color: transparent; }
 /* The chosen mask tool and the selected mask: a quiet accent wash with no
    outline, under the pointer too, darkening while held as every bezel does.
    The tool's symbol is the accent, which reads on either wash at 3:1. */
@@ -498,12 +503,16 @@ QPushButton[inspectorLink="true"] {
     max-height: 24px;
     text-align: left;
 }
+/* A link in the Inspector (the caption's Ask Kerf): underlined under the pointer. */
+QPushButton[underlineOnHover="true"] { font-size: 13px; font-weight: 400; }
+QPushButton[underlineOnHover="true"]:hover { text-decoration: underline; background: transparent; border: 0; }
 QPushButton[inspectorLink="true"][quiet="true"] { color: @textSecondary; font-weight: 400; }
 QPushButton[inspectorLink="true"]:hover { color: @textStrong; background: transparent; }
 /* A mask's name: words, washed in the accent tint while selected. */
 QToolButton#maskName { background: transparent; border-color: transparent; padding: 2px 6px; font-weight: 600; }
 /* The window's title, 13px semibold as macOS's and the launcher's. */
 QLabel#projectTitle { color: @text; font-size: 13px; font-weight: 600; padding: 0; }
+QLabel#projectSubtitle { color: @textSecondary; font-size: 11px; padding: 0; }
 QToolButton#eyebrow { text-align: left; background: transparent; border: 0; color: @textSecondary; padding: 2px 0; }
 QToolButton#eyebrow:hover { color: @text; background: transparent; }
 /* A disclosure: a chevron and a label, no bezel, as macOS's Details rows. */
@@ -629,7 +638,6 @@ QListWidget::item { padding: 4px; border: 0; border-radius: 4px; }
 QListWidget::item:hover { background: @hover; }
 QListWidget::item:selected { background: @selectionInactive; color: @selectionInactiveText; }
 QListWidget::item:selected:focus,
-QListWidget#projectBin::item:selected:focus,
 QListWidget#presetList::item:selected:focus { background: @selection; color: @selectionText; }
 QListWidget#mediaList,
 QListWidget#effectsCards,
@@ -724,9 +732,14 @@ QToolBar#toolPalette QToolButton {
 QToolBar#toolPalette QToolButton:hover { background: @hover; }
 /* The chosen tool: a quiet rounded chip; its symbol is the accent. */
 QToolBar#toolPalette QToolButton:checked { background: @toolSelected; }
-QListWidget#projectBin { background: @well; border: 0; }
-QListWidget#projectBin::item { color: @text; border-radius: 3px; padding: 4px; }
-QListWidget#projectBin::item:selected { background: @selectionInactive; color: @selectionInactiveText; }
+/* The bin's tiles draw themselves (a ring round the chosen thumbnail). */
+QListWidget#projectBin { background: transparent; border: 0; padding: 0; }
+QListWidget#projectBin::item,
+QListWidget#projectBin::item:hover,
+QListWidget#projectBin::item:selected,
+QListWidget#projectBin::item:selected:focus { background: transparent; border: 0; padding: 0; }
+QLineEdit#binSearch { background: @inspectorField; border: 0; border-radius: 6px; min-height: 28px; max-height: 28px; padding: 0 6px; color: @text; }
+QLineEdit#binSearch:focus { background: @inspectorField; border: 0; }
 QWidget#sourceMonitor { background: @panel; }
 /* Ask Kerf is a popover: a paper card with a quiet edge, not a purple callout. */
 QFrame#askPrompt { background: @raised; border: 1px solid @menuBorder; border-radius: 8px; }
@@ -768,7 +781,6 @@ QLabel#chatStatus,
 QLabel#chatActivity,
 QLabel#chatChangeMore { color: @chatSecondary; font-size: 12px; }
 QLabel#chatSection { color: @chatSecondary; font-size: 12px; font-weight: 600; }
-QLabel#chatChange { color: @chatSecondary; font-size: 13px; }
 QLabel#chatErrorTag { color: @errorText; font-size: 12px; font-weight: 600; }
 QLabel#chatBody,
 QLabel#proposalSummary { color: @chatText; font-size: 14px; }
@@ -786,6 +798,7 @@ QFrame#scrollEdge { background: transparent; border: 0; }
 QFrame#scrollEdge[scrolled="true"] { background: @divider; }
 QFrame#proposalBox,
 QFrame#proposalBar { background: transparent; border: 0; }
+QFrame#proposalRule { background: @divider; border: 0; }
 /* The proposal's script and diff, in fixed-width type so its columns line up. */
 QTextEdit#proposalDiff { background: transparent; border: 0; font-family: Menlo, Monaco, monospace; font-size: 11px; color: @chatSecondary; }
 /* The footer: a hairline over it, then the reader's avatar and a one-line
@@ -864,8 +877,7 @@ QPushButton#chatAction {
 QPushButton#chatAction:hover,
 QPushButton#chatAction:pressed { color: @chatText; background: @chatChip; }
 /* Kerf's next steps and the welcome's examples: tonal chips, no outline. */
-QPushButton#nextStep,
-QPushButton#chatExample {
+QPushButton#nextStep {
     color: @chatChipText;
     background: @chatChip;
     border: 0;
@@ -877,9 +889,7 @@ QPushButton#chatExample {
     font-weight: 500;
 }
 QPushButton#nextStep:hover,
-QPushButton#nextStep:pressed,
-QPushButton#chatExample:hover,
-QPushButton#chatExample:pressed { background: @chatChipHover; }
+QPushButton#nextStep:pressed { background: @chatChipHover; }
 /* On the timeline's bar, the same chips at its controls' height. */
 QFrame#aiBar QPushButton#nextStep { min-height: 22px; max-height: 22px; border-radius: 6px; padding: 0 10px; font-size: 12px; }
 QFrame#activityPopup { background: @menu; border: 1px solid @menuBorder; border-radius: 6px; }
@@ -967,19 +977,20 @@ ads--CDockContainerWidget > QSplitter { padding: 0; }
 ads--CDockContainerWidget ads--CDockSplitter::handle { background: @dockSeparator; }
 ads--CDockContainerWidget ads--CDockSplitter::handle:hover { background: @dockSeparatorHover; }
 ads--CDockAreaWidget { background: @panel; border: 0; }
-ads--CDockAreaTitleBar { background: @panelTitle; border-bottom: 1px solid @divider; min-height: 26px; max-height: 26px; }
-ads--CDockAreaWidget[focused="true"] ads--CDockAreaTitleBar { background: @panelTitle; border-bottom: 1px solid @divider; }
-ads--CDockAreaTabBar { background: @panelTitle; }
-ads--CDockWidgetTab { background: @panelTitle; border: 0; border-right: 1px solid @divider; padding: 0 8px; }
-ads--CDockWidgetTab QLabel { color: @tabInactiveText; font-size: 11px; font-weight: 600; }
-ads--CDockWidgetTab[activeTab="true"] { background: @panelTitleActive; }
-ads--CDockWidgetTab[activeTab="true"] QLabel { color: @text; }
-ads--CDockWidgetTab[focused="true"] { background: @panelTitleActive; border-right: 1px solid @divider; border-bottom: 1px solid @accent; }
-ads--CDockWidgetTab[focused="true"] QLabel { color: @textStrong; }
-/* A panel whose body is a white well (the bin, the assistant) has a white
-   current tab, so the tab still merges into it. */
-ads--CDockWidgetTab[well="true"][activeTab="true"],
-ads--CDockWidgetTab[well="true"][focused="true"] { background: @well; }
+/* Text tabs, as the structure the owner chose: no strip and no boxes, the
+   panel's own surface under a row of 13px names, the chosen one in the
+   strongest ink over a 2px underline of it, a hairline under the row. */
+ads--CDockAreaTitleBar { background: @panel; border: 0; border-bottom: 1px solid @divider; min-height: 31px; max-height: 31px; padding-left: 8px; }
+ads--CDockAreaWidget[focused="true"] ads--CDockAreaTitleBar { background: @panel; border-bottom: 1px solid @divider; }
+ads--CDockAreaTabBar { background: transparent; }
+ads--CDockWidgetTab { background: transparent; border: 0; border-bottom: 2px solid transparent; margin: 0 6px; padding: 2px 2px 0 2px; }
+ads--CDockWidgetTab QLabel { color: @tabInactiveText; font-size: 13px; font-weight: 500; }
+/* The dock manager's focus mark is not drawn (a stale one would read as a
+   second chosen tab): only the current tab is underlined. */
+ads--CDockWidgetTab[focused="true"] { background: transparent; border: 0; border-bottom: 2px solid transparent; }
+ads--CDockWidgetTab[focused="true"] QLabel { color: @tabInactiveText; }
+ads--CDockWidgetTab[activeTab="true"] { background: transparent; border: 0; border-bottom: 2px solid @textStrong; }
+ads--CDockWidgetTab[activeTab="true"] QLabel { color: @textStrong; }
 ads--CDockWidgetTab > #tabCloseButton,
 ads--CDockWidgetTab[focused="true"] > #tabCloseButton {
     qproperty-icon: @closeMark, @closeMarkDisabled disabled;
@@ -1031,6 +1042,12 @@ ads--CTitleBarButton#trackHeightMini:checked:enabled:pressed,
 ads--CTitleBarButton#trackHeightMedium:checked:enabled:pressed,
 ads--CTitleBarButton#trackHeightLarge:checked:enabled:pressed { background: @accentTintPressed; }
 ads--CFloatingDockContainer { background: @panel; }
+/* The timeline's tab row: its details after its name, then (on the right)
+   its zoom's − slider +. */
+QLabel#timelineDetail { color: @textSecondary; font-size: 12px; padding: 2px 0 0 10px; }
+QWidget#timelineZoom QToolButton { background: transparent; border: 0; border-radius: 4px; padding: 0; min-height: 20px; max-height: 20px; }
+QWidget#timelineZoom QToolButton:hover { background: @hover; }
+QWidget#timelineZoom QToolButton:pressed { background: @pressed; }
 )QSS"), theme);
 }
 

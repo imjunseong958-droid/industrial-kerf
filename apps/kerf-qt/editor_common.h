@@ -17,7 +17,9 @@ class QComboBox;
 
 namespace kerf {
 
-constexpr int kTimelineLabelWidth = 196;
+// The track headers' column: badge, eye, mute and lock on one line, then
+// the name, as the structure the owner chose.
+constexpr int kTimelineLabelWidth = 220;
 // Where time zero sits: past the track headers by more than half the
 // playhead's head, so the head shows whole at the start.
 constexpr int kTimelineOrigin = kTimelineLabelWidth + 6;
@@ -25,9 +27,10 @@ constexpr int kTimelineTail = 30;
 constexpr int kRulerHeight = 26;
 // Track heights start dense, as an edit with many layers wants: a sound
 // track keeps a waveform under its clips' names, and a picture track a
-// filmstrip.
-constexpr int kTrackHeight = 32;
-constexpr int kVideoTrackHeight = 36;
+// filmstrip; eight tracks fit the 290 timeline at 1440x900, six at
+// 1280x800.
+constexpr int kTrackHeight = 22;
+constexpr int kVideoTrackHeight = 28;
 // The add-track row under the last track.
 constexpr int kAddLaneHeight = 32;
 // Mini: one line per track (badge, toggles, name, and clip names).
@@ -91,6 +94,16 @@ QColor modelColor(const QString &hex);
 QString modelColorName(const QColor &color);
 
 bool isAudioTrack(const QJsonObject &track);
+// A track as the timeline's header names it: its badge by position (picture
+// tracks count V1, V2… in the project's order, a subtitle track among them;
+// sound tracks A1, A2…) and its name, "Video 2" or "Audio 1" without one.
+// The Inspector says the same, so the two never disagree.
+struct TrackBadge {
+    QString badge;
+    QString name;
+    QString label() const { return badge.isEmpty() ? name : badge + QLatin1Char(' ') + name; }
+};
+TrackBadge trackBadge(const QJsonObject &project, const QString &trackId);
 
 // Pixel-exact border drawn inside the rectangle, independent of pen geometry.
 void frameInside(QPainter &p, const QRectF &rect, qreal thickness, const QColor &color);

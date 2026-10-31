@@ -60,7 +60,7 @@ DeviceGeometry deviceGeometry(const QRectF &body, double pictureAspect) {
 
 QRectF deviceStatusBar(const DeviceGeometry &device) {
     const double s = device.screen.width();
-    return QRectF(device.screen.left(), device.screen.top(), s, 0.144 * s);
+    return QRectF(device.screen.left(), device.screen.top(), s, 0.132 * s);
 }
 
 QRectF deviceCamera(const DeviceGeometry &device, DevicePreview preview) {
@@ -188,17 +188,18 @@ double lidAspect() { return kLaptopTopBezel + (1.0 - 2.0 * kLaptopBezel) / kLapt
 
 } // namespace
 
-double laptopBodyAspect() { return kLaptopBaseWidth / (lidAspect() * (1.0 + kLaptopBaseHeight)); }
+double laptopBodyAspect() { return kLaptopBodyWidth / (lidAspect() * (1.0 + kLaptopBaseHeight)); }
 
-double laptopPictureShare() { return (1.0 - 2.0 * kLaptopBezel) / kLaptopBaseWidth; }
+double laptopPictureShare() { return (1.0 - 2.0 * kLaptopBezel) / kLaptopBodyWidth; }
 
 LaptopGeometry laptopGeometry(const QRectF &body, double pictureAspect) {
     LaptopGeometry out;
     out.body = body;
-    const double lidWidth = body.width() / kLaptopBaseWidth;
+    const double lidWidth = body.width() / kLaptopBodyWidth;
     const double lidHeight = lidWidth * lidAspect();
     out.lid = QRectF(body.center().x() - lidWidth / 2.0, body.top(), lidWidth, lidHeight);
-    out.base = QRectF(body.left(), out.lid.bottom(), body.width(), body.bottom() - out.lid.bottom());
+    const double baseWidth = lidWidth * kLaptopBaseWidth;
+    out.base = QRectF(body.center().x() - baseWidth / 2.0, out.lid.bottom(), baseWidth, body.bottom() - out.lid.bottom());
     out.bezel = kLaptopBezel * lidWidth;
     out.topBezel = kLaptopTopBezel * lidWidth;
     out.lidRadius = kLaptopLidRadius * lidWidth;
@@ -291,13 +292,36 @@ void paintLaptopBody(QPainter &p, const LaptopGeometry &laptop, const EditorThem
     p.setBrush(Qt::NoBrush);
     p.drawPath(roundedTop(base.adjusted(0.5, 0.5, -0.5, -0.5), 0.5, baseRadius - 0.5));
     p.setPen(Qt::NoPen);
+    // The thumb-cut: a shallow scoop in the middle of the front, the base's
+    // own graphite under a lighter 1px lip along its curve, so it reads as
+    // a notch in the slab, not a dark slot.
     const double cutWidth = 0.13 * lid.width();
     const double cutDepth = std::max(1.5, 0.5 * base.height());
-    p.setBrush(theme.deviceHinge);
-    p.drawPath(roundedTop(QRectF(base.center().x() - cutWidth / 2.0, base.top(), cutWidth, cutDepth), 0.0, cutDepth));
-    // The hinge: a dark line where the lid meets the base, across the lid.
+    const QRectF cut(base.center().x() - cutWidth / 2.0, base.top(), cutWidth, cutDepth);
+    p.setBrush(theme.deviceFrame);
+    p.drawPath(roundedTop(cut, 0.0, cutDepth));
+    QPainterPath lip;
+    lip.moveTo(cut.left(), cut.top() + 0.5);
+    lip.lineTo(cut.left() + 0.5, cut.bottom() - cutDepth * 0.5);
+    lip.quadTo(cut.left() + 0.5, cut.bottom() - 0.5, cut.left() + cutDepth, cut.bottom() - 0.5);
+    lip.lineTo(cut.right() - cutDepth, cut.bottom() - 0.5);
+    lip.quadTo(cut.right() - 0.5, cut.bottom() - 0.5, cut.right() - 0.5, cut.bottom() - cutDepth * 0.5);
+    lip.lineTo(cut.right(), cut.top() + 0.5);
+    p.setPen(QPen(theme.deviceEdge, 1.0));
+    p.setBrush(Qt::NoBrush);
+    p.drawPath(lip);
+    p.setPen(Qt::NoPen);
+    // The hinge: a dark line where the lid meets the base, across the lid,
+    // on the lid, so the base keeps its lit top edge whole.
     const double hinge = std::max(1.5, 0.004 * lid.width());
-    p.drawRect(QRectF(lid.left() + laptop.lidRadius, lid.bottom() - hinge / 2.0, lid.width() - 2.0 * laptop.lidRadius, hinge));
+    p.setBrush(theme.deviceHinge);
+    p.drawRect(QRectF(lid.left() + laptop.lidRadius, lid.bottom() - hinge, lid.width() - 2.0 * laptop.lidRadius, hinge));
+    // The base's top edge lit along its whole width, as the phone's rim is,
+    // so the deck holds its shape on a dark stage.
+    p.setPen(QPen(theme.deviceEdge, 1.0));
+    p.drawLine(QPointF(base.left() + 1.0, base.top() + 0.5), QPointF(cut.left(), base.top() + 0.5));
+    p.drawLine(QPointF(cut.right(), base.top() + 0.5), QPointF(base.right() - 1.0, base.top() + 0.5));
+    p.setPen(Qt::NoPen);
     p.restore();
 }
 

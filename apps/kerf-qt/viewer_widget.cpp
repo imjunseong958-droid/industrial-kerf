@@ -40,8 +40,10 @@ void strokeOverPicture(QPainter &p, const QPainterPath &path, bool selected, boo
     p.drawPath(path);
 }
 
-// A mask's name on a tag just above `anchor` (the top left of its outline).
-void paintMaskTag(QPainter &p, const QPointF &anchor, const QString &name, bool selected) {
+// A mask's name on a tag just above `anchor` (the top left of its outline),
+// kept inside `bounds` (the picture): 8 points under its top edge and 4 in
+// from its sides, never on a letterbox bar or a bezel.
+void paintMaskTag(QPainter &p, const QPointF &anchor, const QString &name, bool selected, const QRectF &bounds) {
     const EditorTheme &theme = editorTheme();
     QFont font = p.font();
     font.setPixelSize(11);
@@ -49,7 +51,11 @@ void paintMaskTag(QPainter &p, const QPointF &anchor, const QString &name, bool 
     const QFontMetricsF metrics(font);
     const QSizeF size(metrics.horizontalAdvance(name) + 10.0, metrics.height() + 4.0);
     // Clear of the top-left handle, by 4 points.
-    const QRectF tag(QPointF(anchor.x() - kHandleSize / 2.0, anchor.y() - kHandleSize / 2.0 - 4.0 - size.height()), size);
+    QRectF tag(QPointF(anchor.x() - kHandleSize / 2.0, anchor.y() - kHandleSize / 2.0 - 4.0 - size.height()), size);
+    if (bounds.isValid()) {
+        tag.moveLeft(std::clamp(tag.left(), bounds.left() + 4.0, std::max(bounds.left() + 4.0, bounds.right() - 4.0 - size.width())));
+        tag.moveTop(std::clamp(tag.top(), bounds.top() + 8.0, std::max(bounds.top() + 8.0, bounds.bottom() - 4.0 - size.height())));
+    }
     p.setPen(Qt::NoPen);
     p.setBrush(selected ? theme.maskTagSelected : theme.maskTag);
     p.drawRoundedRect(tag, 4, 4);
@@ -218,8 +224,8 @@ ViewerWidget::StageLayout ViewerWidget::stageLayout(Device device) const {
     out.device = device != Device::None;
     // A device is laid out by its body.
     const double frameAspect = device == Device::Phone ? deviceBodyAspect() : device == Device::Laptop ? laptopBodyAspect() : aspect;
-    const int top = device == Device::Laptop ? kLaptopMarginTop : out.device ? kDeviceMarginTop : kStageMargin;
-    const int bottom = device == Device::Laptop ? kLaptopMarginBottom : out.device ? kDeviceMarginBottom : kStageMargin;
+    const int top = out.device ? kDeviceMarginTop : kStageMargin;
+    const int bottom = out.device ? kDeviceMarginBottom : kStageMargin;
     const QRectF room = QRectF(rect()).adjusted(kStageMargin, top, -kStageMargin, -bottom);
     const int gap = stageGap();
     // The largest card (or device) of the picture's shape in `width` by `height`.
@@ -737,8 +743,22 @@ void ViewerWidget::paintMasks(QPainter &p) {
     p.setBrush(Qt::NoBrush);
     // Outlines are white over a dark rule, never the accent, so they read
     // on a picture in the accent's own hue; a path only (mode none) is dashed.
-    const auto outline = [&p](const QPainterPath &path, bool selected, bool pathOnly) {
+    // While the player's controls show, outlines keep out of their band at
+    // the picture's foot (the controls' row and the bar), so a line never
+    // strikes through the time; the handles stay, to be grabbed.
+    const QRectF picture = stageLayout().card;
+    QPainterPath clear;
+    clear.addRect(QRectF(rect()));
+    if (m_overlay->opacity() > 0.01 && m_overlay->controlsShown()) {
+        QPainterPath band;
+        band.addRect(QRectF(picture.left(), m_overlay->footTop() - 4.0, picture.width(), picture.bottom() - m_overlay->footTop() + 4.0));
+        clear = clear.subtracted(band);
+    }
+    const auto outline = [&p, &clear](const QPainterPath &path, bool selected, bool pathOnly) {
+        p.save();
+        p.setClipPath(clear, Qt::IntersectClip);
         strokeOverPicture(p, path, selected, pathOnly);
+        p.restore();
     };
     // Handles are the accent with a white edge; the pen's first point turns
     // white when a click there would close the outline.
@@ -757,7 +777,7 @@ void ViewerWidget::paintMasks(QPainter &p) {
         outline(path, selected, mask.value(QStringLiteral("mode")).toString() == QStringLiteral("none"));
         // The name on a tag over the outline's top left; the selected
         // mask's tag is the accent.
-        if (!name.isEmpty()) paintMaskTag(p, path.boundingRect().topLeft(), name, selected);
+        if (!name.isEmpty()) paintMaskTag(p, path.boundingRect().topLeft(), name, selected, picture);
         if (!selected) continue;
         for (const QPointF &point : handlesOf(mask)) handle(toWidget.map(point), false);
     }

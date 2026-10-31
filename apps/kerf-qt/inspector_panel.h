@@ -110,6 +110,9 @@ signals:
     void addEffectRequested(bool sound);
     // ⋯ ▸ Reveal in Project.
     void revealRequested(const QString &sourceId);
+    // Typing ended (Return or Esc), or Esc pressed with nothing being typed:
+    // the keys go back to the timeline.
+    void focusReturnRequested();
 
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
@@ -117,6 +120,7 @@ protected:
     void dragLeaveEvent(QDragLeaveEvent *event) override;
     void dropEvent(QDropEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
     void showEvent(QShowEvent *event) override;
 
 private:
@@ -207,9 +211,15 @@ private:
     void askAbout(const QString &subject);
     int effectIndexAt(int y) const;
     void showDropLine(int index);
+    // The body's right padding, less the scroll bar's width while it shows.
+    void fitScrollBar();
+    // A field whose Return or Esc hands the keys back.
+    ScrubField *newScrubField();
 
     QString kindKey(const Clip &clip) const;
     QString kindName(const Clip &clip) const;
+    // The name the header shows (see the definition for the fallbacks).
+    QString displayName(const Clip &clip) const;
     double clipTime(const Clip &clip) const;
 
     // State.

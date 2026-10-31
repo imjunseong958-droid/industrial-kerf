@@ -58,13 +58,11 @@ public:
         Device kind = Device::None;
     };
     static constexpr int kStageMargin = 16;
-    // Above and below a device: room for it to breathe and for its shadow,
-    // a little more under it than over it.
-    static constexpr int kDeviceMarginTop = 12;
-    static constexpr int kDeviceMarginBottom = 16;
-    // A laptop, wide and short, keeps less: its height is what bounds it.
-    static constexpr int kLaptopMarginTop = 8;
-    static constexpr int kLaptopMarginBottom = 12;
+    // Above and below a device (a phone or a laptop): room for it to
+    // breathe and for its shadow, a little more under it than over it. Its
+    // height is what bounds it, so it keeps less than the plain card.
+    static constexpr int kDeviceMarginTop = 8;
+    static constexpr int kDeviceMarginBottom = 12;
     static constexpr int kStageGap = 12;
     // Between card, rail and conversation in a narrow stage.
     static constexpr int kNarrowStageGap = 8;

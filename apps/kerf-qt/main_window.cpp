@@ -78,6 +78,7 @@
 #include <DockWidgetTab.h>
 
 #include <algorithm>
+#include <numeric>
 #include <limits>
 #include <utility>
 
@@ -108,6 +109,79 @@ constexpr int kToolbarPadding = 6;
 constexpr int kTrailingInset = 8;
 // How far the title keeps from the toolbar's groups; nearer, it gives way.
 constexpr int kTitleClearance = 20;
+
+// A script line's words, a quoted phrase ("A lower third") one word.
+QStringList scriptWords(const QString &line) {
+    QStringList words;
+    QString word;
+    bool quoted = false;
+    for (const QChar c : line) {
+        if (c == QLatin1Char('"')) quoted = !quoted;
+        if (c.isSpace() && !quoted) {
+            if (!word.isEmpty()) words << std::exchange(word, QString());
+            continue;
+        }
+        word += c;
+    }
+    if (!word.isEmpty()) words << word;
+    return words;
+}
+
+// Seconds in a script's amount or position ("-36f", "+1.5s", "96f",
+// "00:00:12:00"), or NaN when it is something else (an anchor).
+double scriptSeconds(QString text, double fps) {
+    text = text.trimmed();
+    double sign = 1.0;
+    if (text.startsWith(QLatin1Char('-')) || text.startsWith(QLatin1Char('+'))) {
+        sign = text.startsWith(QLatin1Char('-')) ? -1.0 : 1.0;
+        text = text.mid(1);
+    }
+    bool ok = false;
+    double value = 0.0;
+    if (text.endsWith(QLatin1Char('f'))) value = text.chopped(1).toDouble(&ok) / std::max(1.0, fps);
+    else if (text.endsWith(QLatin1Char('s'))) value = text.chopped(1).toDouble(&ok);
+    else {
+        const QStringList parts = text.split(QRegularExpression(QStringLiteral("[:;]")));
+        if (parts.size() == 4) {
+            ok = true;
+            double fields[4];
+            for (int index = 0; index < 4; ++index) {
+                bool part = false;
+                fields[index] = parts.at(index).toDouble(&part);
+                ok = ok && part;
+            }
+            value = fields[0] * 3600 + fields[1] * 60 + fields[2] + fields[3] / std::max(1.0, fps);
+        }
+    }
+    return ok ? sign * value : std::numeric_limits<double>::quiet_NaN();
+}
+
+// "0:12", "1:04:30": a position as a reader says it.
+QString clockTime(double seconds) {
+    const qint64 whole = std::llround(std::max(0.0, seconds));
+    const qint64 hours = whole / 3600;
+    const QString rest = QStringLiteral("%1:%2").arg((whole / 60) % 60).arg(whole % 60, 2, 10, QLatin1Char('0'));
+    return hours ? QStringLiteral("%1:%2").arg(hours).arg(rest.rightJustified(5, QLatin1Char('0'))) : rest;
+}
+
+// "−1.5 s", "+12 s": an amount, its sign always shown (a true minus).
+QString signedSeconds(double seconds) {
+    const QString magnitude = QString::number(std::abs(seconds), 'f', std::abs(seconds) < 10 ? 1 : 0);
+    const QString trimmed = magnitude.endsWith(QStringLiteral(".0")) ? magnitude.chopped(2) : magnitude;
+    return QStringLiteral("%1%2 s").arg(seconds < 0 ? QStringLiteral("−") : QStringLiteral("+"), trimmed);
+}
+
+// The value of `key=` among a line's words, unquoted.
+QString scriptValue(const QStringList &words, const QString &key) {
+    const QString prefix = key + QLatin1Char('=');
+    for (const QString &word : words)
+        if (word.startsWith(prefix)) {
+            QString value = word.mid(prefix.size());
+            if (value.size() >= 2 && value.startsWith(QLatin1Char('"')) && value.endsWith(QLatin1Char('"'))) value = value.mid(1, value.size() - 2);
+            return value;
+        }
+    return {};
+}
 
 // SF Symbols' scissors on a 20-point grid, in the painter's pen: the
 // toolbar's Split and the tool palette's Razor.
@@ -646,10 +720,56 @@ bool MainWindow::scrubFromShownFrame(double time) const {
 
 void MainWindow::selectClip(const QString &id) {
     m_selectedClip = id;
+    m_selectedClips = id.isEmpty() ? QStringList{} : QStringList{id};
     m_timeline->setSelectedClip(id);
     updateInspector();
     updateCommandStates();
     updateChatControls();
+    updateSelectionStatus();
+}
+
+void MainWindow::extendClipSelection(const QString &id, bool toggle) {
+    // ⌘-click toggles a clip in the selection, ⇧-click adds it; the clip
+    // clicked is the primary one (the one single-clip commands act on).
+    QStringList clips = m_selectedClips;
+    if (clips.isEmpty() && !m_selectedClip.isEmpty()) clips << m_selectedClip;
+    if (!clips.contains(id)) clips << id;
+    else if (toggle) clips.removeAll(id);
+    else clips.move(clips.indexOf(id), clips.size() - 1);
+    if (clips.isEmpty()) {
+        clickSelectClip(QString());
+        return;
+    }
+    m_selectedClip = clips.constLast();
+    m_selectedClips = clips;
+    m_timeline->setSelectedClips(clips);
+    updateInspector();
+    updateCommandStates();
+    updateChatControls();
+    updateSelectionStatus();
+    m_workspace->raiseInspector(Workspace::InspectorOrigin::Click, false, m_selectedClip);
+}
+
+void MainWindow::updateSelectionStatus() {
+    // "3 clips selected · 00:00:04:18": how many, and the span from the
+    // first one's start to the last one's end.
+    if (!m_selectionStatus) return;
+    double start = 0.0;
+    double end = 0.0;
+    int count = 0;
+    for (const QString &id : std::as_const(m_selectedClips)) {
+        const QJsonObject clip = clipObject(id);
+        if (clip.isEmpty()) continue;
+        const double from = clip.value(QStringLiteral("timelineStart")).toDouble();
+        const double to = from + clip.value(QStringLiteral("duration")).toDouble();
+        start = count ? std::min(start, from) : from;
+        end = count ? std::max(end, to) : to;
+        ++count;
+    }
+    m_selectionStatus->setText(count == 0 ? QString()
+                                          : QStringLiteral("%1 selected  ·  %2")
+                                                .arg(count == 1 ? QStringLiteral("1 clip") : QStringLiteral("%1 clips").arg(count),
+                                                     timelineTimecode(end - start, m_fps)));
 }
 
 void MainWindow::clickSelectClip(const QString &id) {
@@ -1778,6 +1898,8 @@ void MainWindow::buildUi() {
     m_inspector = new InspectorPanel;
     m_inspector->setArtwork(m_artwork);
     connect(m_inspector, &InspectorPanel::editRequested, this, &MainWindow::sendEdit);
+    // Done typing in the Inspector (or Esc there): the timeline's keys again.
+    connect(m_inspector, &InspectorPanel::focusReturnRequested, this, [this] { m_timeline->setFocus(Qt::OtherFocusReason); });
     connect(m_inspector, &InspectorPanel::askRequested, this, &MainWindow::askAboutInChat);
     connect(m_inspector, &InspectorPanel::revealRequested, this, [this](const QString &) {
         if (ads::CDockWidget *project = m_workspace->panel(QStringLiteral("project"))) {
@@ -2140,18 +2262,28 @@ void MainWindow::buildUi() {
     m_viewerDetail->setVisible(false);
     m_workspace->addPanel(QStringLiteral("program"), QStringLiteral("Program"), viewerFrame)
         ->setTitleBarActions(QList<QAction *>(m_maskTools) << m_viewerDetail);
-    m_timelineDetail = new QAction(this);
+    // The timeline's tab row: after its name, how many tracks and how long
+    // ("9 tracks · 00:00:18:00"); on the right, its zoom (− slider +) and
+    // its track heights.
+    m_timelineDetail = new QLabel;
     m_timelineDetail->setObjectName(QStringLiteral("timelineDetail"));
-    m_timelineDetail->setEnabled(false);
-    m_timelineDetail->setVisible(false);
-    // The timeline's title strip: its track heights, then its details.
+    m_timelineZoom = new TimelineZoomControl(m_timeline);
     m_workspace->addPanel(QStringLiteral("timeline"), QStringLiteral("Timeline"), timelinePanel)
-        ->setTitleBarActions(m_timeline->trackHeightActions() << m_timelineDetail);
-    m_workspace->addPanel(QStringLiteral("inspector"), QStringLiteral("Inspector"), m_inspector);
+        ->setTitleBarActions(m_timeline->trackHeightActions());
+    m_workspace->setTitleWidgets(QStringLiteral("timeline"), m_timelineDetail, m_timelineZoom);
+    // A click in the Inspector does not take the keys from the timeline
+    // (its dock would, for the focus highlight): Space and J/K/L keep
+    // working while values are nudged.
+    m_workspace->addPanel(QStringLiteral("inspector"), QStringLiteral("Inspector"), m_inspector)->setFocusPolicy(Qt::NoFocus);
     m_workspace->addPanel(QStringLiteral("effects"), QStringLiteral("Effects"), m_effects);
     m_workspace->addPanel(QStringLiteral("project"), QStringLiteral("Project"), m_projectPanel);
     m_workspace->addPanel(QStringLiteral("presets"), QStringLiteral("Presets"), m_presets);
     m_workspace->addPanel(QStringLiteral("source"), QStringLiteral("Source"), m_sourceMonitor);
+    // Leaving Effects without adding: a later add made there stays there.
+    if (ads::CDockWidget *effects = m_workspace->panel(QStringLiteral("effects")))
+        connect(effects, &ads::CDockWidget::visibilityChanged, this, [this](bool visible) {
+            if (!visible) m_effectsFromInspector = false;
+        });
     // The timeline's AI bar stands in for the conversation while the
     // Program monitor, which holds it, is closed.
     // The conversation is in sight only while the Program monitor is open
@@ -2164,8 +2296,6 @@ void MainWindow::buildUi() {
         QTimer::singleShot(0, this, &MainWindow::fitPanelDetails);
     });
     connect(m_workspace, &Workspace::changed, this, &MainWindow::syncChatSwitches);
-    // The bin is a well; its current tab is too, so it merges into it.
-    m_workspace->panel(QStringLiteral("project"))->tabWidget()->setProperty("well", true);
     setCentralWidget(central);
 
     connect(m_timeline, &TimelineWidget::seekRequested, this, &MainWindow::queueSeek);
@@ -2183,6 +2313,7 @@ void MainWindow::buildUi() {
         endHoverSeek();
     });
     connect(m_timeline, &TimelineWidget::clipSelected, this, &MainWindow::clickSelectClip);
+    connect(m_timeline, &TimelineWidget::clipSelectionExtended, this, &MainWindow::extendClipSelection);
     connect(m_timeline, &TimelineWidget::deselectRequested, this, [this] { clickSelectClip(QString()); });
     connect(m_timeline, &TimelineWidget::moveRequested, this, &MainWindow::moveClip);
     connect(m_timeline, &TimelineWidget::trimRequested, this, &MainWindow::trimClip);
@@ -2220,8 +2351,7 @@ void MainWindow::buildUi() {
 void MainWindow::syncCanvasPreset(const QSize &size) {
     if (!m_canvasPreset || !size.isValid()) return;
     m_canvasSize = size;
-    // A portrait picture's phone gets a taller row over the timeline.
-    if (m_workspace) m_workspace->fitPictureShape(size.width() < size.height());
+    layoutProjectTitle();
     const QSignalBlocker blocker(m_canvasPreset);
     m_updatingCanvasPreset = true;
     const QString key = QStringLiteral("%1x%2").arg(size.width()).arg(size.height());
@@ -2572,6 +2702,11 @@ void MainWindow::setupActions() {
     m_projectTitle = new QLabel(toolbar);
     m_projectTitle->setObjectName(QStringLiteral("projectTitle"));
     m_projectTitle->setAlignment(Qt::AlignCenter);
+    // Under it, quietly, the project's state: saved or edited, its shape
+    // and its frame rate ("Edited · 9:16 · 24 fps").
+    m_projectSubtitle = new QLabel(toolbar);
+    m_projectSubtitle->setObjectName(QStringLiteral("projectSubtitle"));
+    m_projectSubtitle->setAlignment(Qt::AlignCenter);
     for (QWidget *edge : {static_cast<QWidget *>(m_toolbarLeftEnd), static_cast<QWidget *>(m_quality)})
         if (edge) edge->installEventFilter(this);
     updateCommandStates();
@@ -2630,21 +2765,48 @@ void MainWindow::fitTitleBar() {
 void MainWindow::layoutProjectTitle() {
     if (!m_projectTitle || !m_toolbar || !m_toolbarLeftEnd || !m_quality) return;
     m_projectTitle->ensurePolished();
+    m_projectSubtitle->ensurePolished();
     const QFontMetrics metrics(m_projectTitle->font());
+    const QFontMetrics subMetrics(m_projectSubtitle->font());
+    const QString subtitle = projectSubtitle();
     // The room between the groups, and the title's own width.
     const int left = m_toolbarLeftEnd->geometry().right() + 1 + kTitleClearance;
     const int right = m_quality->geometry().left() - kTitleClearance;
-    const int natural = metrics.horizontalAdvance(m_projectName) + 2;
+    const int natural = std::max(metrics.horizontalAdvance(m_projectName), subMetrics.horizontalAdvance(subtitle)) + 2;
     const int width = std::min(natural, std::max(0, right - left));
     // Centred on the window (the toolbar spans it); moved aside when a group
     // is in the way, and shortened when there is no room for all of it.
     const int x = std::clamp((m_toolbar->width() - width) / 2, left, std::max(left, right - width));
-    const QString shown = width < natural ? metrics.elidedText(m_projectName, Qt::ElideRight, width) : m_projectName;
+    const QString shown = metrics.horizontalAdvance(m_projectName) + 2 > width ? metrics.elidedText(m_projectName, Qt::ElideRight, width) : m_projectName;
     m_projectTitle->setText(shown);
     m_projectTitle->setToolTip(shown == m_projectName ? QString() : m_projectName);
-    // On the line the toolbar's controls sit on, centred as their text is.
-    m_projectTitle->setGeometry(x, m_quality->y(), width, m_quality->height());
+    m_projectSubtitle->setText(subMetrics.elidedText(subtitle, Qt::ElideRight, width));
+    // Two lines centred on the toolbar's height, as macOS stacks a document's
+    // title over its subtitle.
+    const int titleHeight = metrics.height();
+    const int subHeight = subMetrics.height();
+    const int top = std::max(0, (m_toolbar->height() - titleHeight - subHeight) / 2);
+    m_projectTitle->setGeometry(x, top, width, titleHeight);
+    m_projectSubtitle->setGeometry(x, top + titleHeight, width, subHeight);
     m_projectTitle->raise();
+    m_projectSubtitle->raise();
+}
+
+QString MainWindow::projectSubtitle() const {
+    // Saved, or edited since the project's last version (Git's own say);
+    // its shape as the format picker names it; its frame rate.
+    const bool edited = m_collabStatus.value(QStringLiteral("changed")).toBool();
+    QStringList parts{edited ? QStringLiteral("Edited") : QStringLiteral("Saved")};
+    if (m_canvasSize.isValid()) {
+        const int w = m_canvasSize.width();
+        const int h = m_canvasSize.height();
+        const int common = std::gcd(w, h);
+        const QSize ratio(w / std::max(1, common), h / std::max(1, common));
+        parts << (ratio.width() <= 32 && ratio.height() <= 32 ? QStringLiteral("%1:%2").arg(ratio.width()).arg(ratio.height())
+                                                               : QStringLiteral("%1 × %2").arg(w).arg(h));
+    }
+    parts << QStringLiteral("%1 fps").arg(QString::number(m_fps, 'g', 5));
+    return parts.join(QStringLiteral(" · "));
 }
 
 void MainWindow::setProjectTitle(const QString &name) {
@@ -2758,6 +2920,7 @@ void MainWindow::handleCollabEvent(const QJsonObject &event) {
     const QString type = event.value(QStringLiteral("type")).toString();
     if (type == QStringLiteral("collab")) {
         m_collabStatus = event.value(QStringLiteral("status")).toObject();
+        layoutProjectTitle();
         QAction *live = m_commands->action(QStringLiteral("collab.live"));
         const QSignalBlocker blocker(live);
         live->setChecked(m_collabStatus.value(QStringLiteral("live")).toBool());
@@ -3257,6 +3420,10 @@ void MainWindow::stepFrames(int frames) {
 
 void MainWindow::setupStatusBar() {
     statusBar()->setSizeGripEnabled(false);
+    // On the left, the selection ("3 clips selected · 00:00:04:18"), or nothing.
+    m_selectionStatus = new QLabel;
+    m_selectionStatus->setObjectName(QStringLiteral("statusSelection"));
+    statusBar()->addWidget(m_selectionStatus, 1);
     statusBar()->addPermanentWidget(m_exportProgress);
     m_syncChip = new QToolButton;
     m_syncChip->setObjectName(QStringLiteral("syncChip"));
@@ -3542,7 +3709,10 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
         auto track = value.toObject(); QJsonArray displayClips;
         for (const auto &clipValue : track.value("clips").toArray()) {
             auto clip = clipValue.toObject(); const auto source = sourceById.value(clip.value("sourceId").toString());
-            if (!clip.contains("name")) clip.insert("name", sourceName(source));
+            // Named after its media's file; a clip of media with no path
+            // keeps no stand-in name (the Inspector and the timeline fall
+            // back on their own).
+            if (!clip.contains("name") && !source.value("path").toString().isEmpty()) clip.insert("name", sourceName(source));
             displayClips.append(clip);
         }
         track.insert("clips", displayClips); displayTracks.append(track);
@@ -3553,20 +3723,26 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
     m_trackCount = tracks.size();
     if (!m_selectedClip.isEmpty() && selectedClipObject().isEmpty()) m_selectedClip.clear();
+    m_selectedClips.erase(std::remove_if(m_selectedClips.begin(), m_selectedClips.end(),
+                                         [this](const QString &id) { return clipObject(id).isEmpty(); }),
+                          m_selectedClips.end());
+    if (m_selectedClip.isEmpty()) m_selectedClips.clear();
+    else if (!m_selectedClips.contains(m_selectedClip)) m_selectedClips = {m_selectedClip};
     m_timeline->setProject(m_project, m_duration, m_fps);
-    m_timeline->setSelectedClip(m_selectedClip);
+    m_timeline->setSelectedClips(m_selectedClips);
+    updateSelectionStatus();
     const QJsonArray sources = m_project.value(QStringLiteral("sources")).toArray();
     const QSize canvasSize = resolvedCanvasSize(m_project, sources);
     m_viewer->setProjectInfo(canvasSize.width(), canvasSize.height());
     updateViewerRail();
     syncCanvasPreset(canvasSize);
-    m_viewerDetail->setText(QStringLiteral("%1 × %2  ·  %3 fps")
+    // The picture is always fitted to the stage: the row says so.
+    m_viewerDetail->setText(QStringLiteral("%1 × %2  ·  %3 fps  ·  Fit")
                                 .arg(canvasSize.width()).arg(canvasSize.height()).arg(QString::number(m_fps, 'g', 5)));
     m_timelineDetail->setText(QStringLiteral("%1  ·  %2")
                                   .arg(m_trackCount == 1 ? QStringLiteral("1 track") : QStringLiteral("%1 tracks").arg(m_trackCount),
                                        timelineTimecode(m_duration, m_fps)));
     m_viewerDetail->setVisible(true);
-    m_timelineDetail->setVisible(true);
     fitPanelDetails();
     if (m_statusRevision) {
         m_statusRevision->setText(QStringLiteral("Revision %1").arg(m_revision));
@@ -3680,7 +3856,7 @@ void MainWindow::updateInspector() {
     for (const QJsonValue &mode : m_project.value(QStringLiteral("maskModes")).toArray()) maskModes << mode.toString();
     m_inspector->setMaskCatalog(m_project.value(QStringLiteral("maskProperties")).toArray(), maskModes);
     m_inspector->selectMask(m_viewer->selectedMask());
-    m_inspector->setState(m_project, {m_selectedClip});
+    m_inspector->setState(m_project, m_selectedClips.size() > 1 ? m_selectedClips : QStringList{m_selectedClip});
 }
 
 void MainWindow::updateProposal(const QJsonValue &value) {
@@ -3689,7 +3865,7 @@ void MainWindow::updateProposal(const QJsonValue &value) {
     bool pending = value.isObject() && value.toObject().value(QStringLiteral("status")).toString() == QStringLiteral("pending");
     m_acceptButton->setEnabled(m_connected && pending);
     m_rejectButton->setEnabled(m_connected && pending);
-    m_chat->setProposalShown(pending);
+    m_chat->setProposalShown(pending, pending ? value.toObject().value(QStringLiteral("proposalId")).toString() : QString());
     if (!pending) {
         m_chat->setProposalChanges({});
         m_chat->setProposalSummary(QStringLiteral("No pending changes"));
@@ -3702,22 +3878,25 @@ void MainWindow::updateProposal(const QJsonValue &value) {
     m_proposalId = proposal.value(QStringLiteral("proposalId")).toString();
     const bool stale = proposal.value(QStringLiteral("freshness")).toString() == QStringLiteral("stale");
     const QString diff = proposal.value(QStringLiteral("documentDiff")).toString();
-    int changed = 0;
-    for (const QString &line : diff.split(QLatin1Char('\n'))) {
-        if ((line.startsWith(QLatin1Char('+')) && !line.startsWith(QStringLiteral("+++"))) ||
-            (line.startsWith(QLatin1Char('-')) && !line.startsWith(QStringLiteral("---"))))
-            ++changed;
-    }
-    m_chat->setProposalSummary(QStringLiteral("%1 changed line%2%3")
-                                   .arg(changed)
-                                   .arg(changed == 1 ? QString() : QStringLiteral("s"))
-                                   .arg(stale ? QStringLiteral("  •  stale") : QString()));
-    // What it changes, one line each, from its script.
-    QStringList changes;
+    // What it changes, one row each, from its script; the summary counts
+    // those rows ("Trim, remove, add a title · 3 changes"), the compact
+    // bar only the count.
+    QList<ProposalChange> changes;
+    QStringList verbs;
     for (const QString &line : proposal.value(QStringLiteral("script")).toString().split(QLatin1Char('\n'))) {
-        const QString change = line.trimmed();
-        if (!change.isEmpty() && !change.startsWith(QLatin1Char('#'))) changes.append(change);
+        const QString text = line.trimmed();
+        if (text.isEmpty() || text.startsWith(QLatin1Char('#'))) continue;
+        const ProposalChange change = describeScriptLine(text);
+        changes.append(change);
+        const QString verb = change.description.section(QLatin1Char(' '), 0, 0).toLower();
+        const QString phrase = change.glyph == ProposalChange::Glyph::Title && verb == QStringLiteral("add") ? QStringLiteral("add a title") : verb;
+        if (!verbs.contains(phrase)) verbs << phrase;
     }
+    const QString count = changes.size() == 1 ? QStringLiteral("1 change") : QStringLiteral("%1 changes").arg(changes.size());
+    QString sentence = verbs.size() <= 3 ? verbs.join(QStringLiteral(", ")) : QString();
+    if (!sentence.isEmpty()) sentence = sentence.left(1).toUpper() + sentence.mid(1) + QStringLiteral(" · ");
+    const QString stalePart = stale ? QStringLiteral(" · stale") : QString();
+    m_chat->setProposalSummary(sentence + count + stalePart, count + stalePart);
     m_chat->setProposalChanges(changes);
     QString text;
     if (stale) text += QStringLiteral("This proposal is out of date. Ask Kerf to prepare it again before accepting.\n\n");
@@ -3728,6 +3907,118 @@ void MainWindow::updateProposal(const QJsonValue &value) {
     m_acceptButton->setEnabled(m_connected && !stale);
     m_proposalBlocked = stale;
     updateAiBar();
+}
+
+ProposalChange MainWindow::describeScriptLine(const QString &line) const {
+    // A script line as a change a reader follows: what it does, to which
+    // clip (by its name), and how much or where. Anything not known here
+    // reads as the line itself.
+    const QStringList words = scriptWords(line);
+    ProposalChange change;
+    change.description = line.left(1).toUpper() + line.mid(1);
+    if (words.isEmpty()) return change;
+    const QString verb = words.at(0);
+    const auto clipName = [this](const QString &id) {
+        const QJsonObject clip = clipObject(id);
+        const QString name = clip.value(QStringLiteral("name")).toString();
+        return name.isEmpty() ? id : name;
+    };
+    const auto clipSpan = [this](const QString &id) {
+        const QJsonObject clip = clipObject(id);
+        if (clip.isEmpty()) return QString();
+        const double start = clip.value(QStringLiteral("timelineStart")).toDouble();
+        return QStringLiteral("%1\u2009\u2013\u2009%2").arg(clockTime(start), clockTime(start + clip.value(QStringLiteral("duration")).toDouble()));
+    };
+    const auto at = [this, &words](const QString &key, int position = -1) {
+        QString value = scriptValue(words, key);
+        if (value.isEmpty() && position >= 0 && position < words.size()) value = words.at(position);
+        const double seconds = scriptSeconds(value, m_fps);
+        return std::isnan(seconds) ? value : clockTime(seconds);
+    };
+    const QString subject = words.value(1);
+    if (verb == QStringLiteral("trim") && words.size() >= 3) {
+        const bool end = words.at(2) == QStringLiteral("out");
+        change.glyph = ProposalChange::Glyph::Trim;
+        change.description = QStringLiteral("Trim %1").arg(clipName(subject));
+        // Which edge, and by how much: "end −1.5 s", "start to 0:04".
+        const QString edge = end ? QStringLiteral("end") : QStringLiteral("start");
+        const double amount = scriptSeconds(words.value(3), m_fps);
+        if (!std::isnan(amount)) change.detail = QStringLiteral("%1 %2").arg(edge, signedSeconds(amount));
+        else if (!scriptValue(words, QStringLiteral("to")).isEmpty()) change.detail = QStringLiteral("%1 to %2").arg(edge, at(QStringLiteral("to")));
+        else change.detail = edge;
+    } else if (verb == QStringLiteral("remove") || verb == QStringLiteral("delete") || verb == QStringLiteral("ripple-delete") ||
+               verb == QStringLiteral("extract")) {
+        change.glyph = ProposalChange::Glyph::Remove;
+        change.description = QStringLiteral("Remove %1").arg(clipName(subject));
+        change.detail = clipSpan(subject);
+    } else if (verb == QStringLiteral("add") && words.size() >= 2) {
+        const QString kind = words.at(1);
+        QString text = scriptValue(words, QStringLiteral("text"));
+        // Without its words in the line, the name the proposal gives it.
+        for (const QJsonValue &track : m_snapshot.value(QStringLiteral("proposalTimeline")).toObject().value(QStringLiteral("tracks")).toArray())
+            for (const QJsonValue &clip : track.toObject().value(QStringLiteral("clips")).toArray())
+                if (text.isEmpty() && clip.toObject().value(QStringLiteral("id")).toString() == words.value(2))
+                    text = clip.toObject().value(QStringLiteral("name")).toString();
+        change.glyph = kind == QStringLiteral("title") ? ProposalChange::Glyph::Title : ProposalChange::Glyph::Add;
+        change.description = !text.isEmpty() ? QStringLiteral("Add %1 “%2”").arg(kind, text) : QStringLiteral("Add a %1").arg(kind);
+        const int atWord = int(words.indexOf(QStringLiteral("at")));
+        const QString where = atWord >= 0 ? at(QString(), atWord + 1) : at(QStringLiteral("at"));
+        if (!where.isEmpty()) change.detail = QStringLiteral("at %1").arg(where);
+    } else if (verb == QStringLiteral("insert") || verb == QStringLiteral("overwrite")) {
+        change.glyph = ProposalChange::Glyph::Add;
+        const QString media = scriptValue(words, QStringLiteral("media"));
+        QString name = media;
+        for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray())
+            if (value.toObject().value(QStringLiteral("id")).toString() == media) name = sourceName(value.toObject());
+        change.description = QStringLiteral("%1 %2").arg(verb == QStringLiteral("insert") ? QStringLiteral("Insert") : QStringLiteral("Overwrite with"), name);
+        if (!scriptValue(words, QStringLiteral("at")).isEmpty()) change.detail = QStringLiteral("at %1").arg(at(QStringLiteral("at")));
+    } else if ((verb == QStringLiteral("move") || verb == QStringLiteral("roll") || verb == QStringLiteral("slide") ||
+                verb == QStringLiteral("slip")) && words.size() >= 2) {
+        change.glyph = ProposalChange::Glyph::Move;
+        change.description = QStringLiteral("%1 %2").arg(verb.left(1).toUpper() + verb.mid(1), clipName(subject));
+        const double amount = scriptSeconds(words.value(2), m_fps);
+        if (!std::isnan(amount)) change.detail = signedSeconds(amount);
+        else if (!scriptValue(words, QStringLiteral("at")).isEmpty()) change.detail = QStringLiteral("to %1").arg(at(QStringLiteral("at")));
+        else if (!scriptValue(words, QStringLiteral("to")).isEmpty()) change.detail = QStringLiteral("to %1").arg(at(QStringLiteral("to")));
+    } else if (verb == QStringLiteral("split") && words.size() >= 2) {
+        change.glyph = ProposalChange::Glyph::Split;
+        change.description = QStringLiteral("Split %1").arg(clipName(subject));
+        if (!scriptValue(words, QStringLiteral("at")).isEmpty()) change.detail = QStringLiteral("at %1").arg(at(QStringLiteral("at")));
+    } else if (verb == QStringLiteral("set") && words.size() >= 3) {
+        QStringList keys;
+        for (const QString &word : words.mid(2)) keys << word.section(QLatin1Char('='), 0, 0);
+        const QString gain = scriptValue(words, QStringLiteral("gain"));
+        if (!gain.isEmpty() || keys.contains(QStringLiteral("volume"))) {
+            change.glyph = ProposalChange::Glyph::Level;
+            change.description = QStringLiteral("Change %1’s level").arg(clipName(subject));
+            bool ok = false;
+            const double db = gain.toDouble(&ok);
+            if (ok) change.detail = QStringLiteral("%1%2 dB").arg(db < 0 ? QStringLiteral("\u2212") : QString(), QString::number(std::abs(db), 'g', 3));
+        } else {
+            change.glyph = ProposalChange::Glyph::Other;
+            change.description = QStringLiteral("Change %1’s %2").arg(clipName(subject), keys.join(QStringLiteral(", ")));
+        }
+    } else if (verb == QStringLiteral("fx") && words.size() >= 3) {
+        change.glyph = ProposalChange::Glyph::Effect;
+        const QString effect = words.value(3).section(QLatin1Char('.'), -1);
+        change.description = words.at(2) == QStringLiteral("add") ? QStringLiteral("Add %1 to %2").arg(effect, clipName(subject))
+                           : words.at(2) == QStringLiteral("remove") ? QStringLiteral("Remove an effect from %1").arg(clipName(subject))
+                                                                       : QStringLiteral("Change the effects on %1").arg(clipName(subject));
+    } else if (verb == QStringLiteral("mask") && words.size() >= 3) {
+        change.glyph = ProposalChange::Glyph::Effect;
+        change.description = words.at(2) == QStringLiteral("add") ? QStringLiteral("Add a mask to %1").arg(clipName(subject))
+                                                                   : QStringLiteral("Change the masks on %1").arg(clipName(subject));
+    } else if (verb == QStringLiteral("transition")) {
+        change.glyph = ProposalChange::Glyph::Add;
+        const QString kind = scriptValue(words, QStringLiteral("fx"));
+        change.description = QStringLiteral("Add a %1").arg(kind.isEmpty() ? QStringLiteral("transition") : kind.section(QLatin1Char('.'), -1));
+        const double length = scriptSeconds(scriptValue(words, QStringLiteral("dur")), m_fps);
+        if (!std::isnan(length)) change.detail = signedSeconds(length).mid(1);
+    } else if (verb == QStringLiteral("captions") && words.size() >= 2) {
+        change.glyph = ProposalChange::Glyph::Title;
+        change.description = QStringLiteral("Caption %1").arg(clipName(subject));
+    }
+    return change;
 }
 
 void MainWindow::showProposalText() {
@@ -3822,11 +4113,9 @@ void MainWindow::fitPanelDetails() {
     // A title strip's details keep the width of their text when it changes
     // after the strip was laid out (as the first snapshot's does), rather
     // than shrinking to an ellipsis; the tabs beside them give way first.
-    for (const QAction *action : {m_viewerDetail, m_timelineDetail}) {
-        for (QToolButton *button : findChildren<QToolButton *>(action->objectName())) {
-            button->setMinimumWidth(button->sizeHint().width());
-            button->updateGeometry();
-        }
+    for (QToolButton *button : findChildren<QToolButton *>(m_viewerDetail->objectName())) {
+        button->setMinimumWidth(button->sizeHint().width());
+        button->updateGeometry();
     }
 }
 
@@ -3883,7 +4172,8 @@ void MainWindow::updateViewerRail() {
         device->setChecked(shown);
     }
     device->setGlyph(landscape ? RailButton::Glyph::Laptop : RailButton::Glyph::Phone);
-    device->setLabel(!shown ? QStringLiteral("Card") : landscape ? QStringLiteral("Laptop") : QStringLiteral("Phone"));
+    // Its name either way; off, its glyph is slashed (see RailButton).
+    device->setLabel(landscape ? QStringLiteral("Laptop") : QStringLiteral("Phone"));
     device->setToolTip(QStringLiteral("Device preview: %1").arg(landscape ? laptopPreviewLabel(laptop) : devicePreviewLabel(preview)));
     device->setAccessibleName(device->toolTip());
     {

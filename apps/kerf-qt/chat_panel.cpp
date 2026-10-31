@@ -17,8 +17,6 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QStyle>
-#include <QStyleOptionButton>
-#include <QStylePainter>
 #include <QTextBlock>
 #include <QTextLayout>
 #include <QTextDocument>
@@ -92,23 +90,6 @@ protected:
 
 private:
     bool m_leading;
-};
-
-// A welcome's example: a chip that, narrower than its words, ends them in
-// an ellipsis instead of clipping them, as a chip in a narrow column does.
-class ExampleChip final : public QPushButton {
-public:
-    using QPushButton::QPushButton;
-
-protected:
-    void paintEvent(QPaintEvent *) override {
-        QStylePainter painter(this);
-        QStyleOptionButton option;
-        initStyleOption(&option);
-        const QRect contents = style()->subElementRect(QStyle::SE_PushButtonContents, &option, this);
-        option.text = fontMetrics().elidedText(text(), Qt::ElideRight, std::max(0, contents.width() + 1));
-        painter.drawControl(QStyle::CE_PushButton, option);
-    }
 };
 
 // The composer's underline: a hairline at rest, two points of the accent
@@ -234,6 +215,197 @@ QString relativeTime(const QDateTime &then, const QDateTime &now) {
     if (seconds < 3600) return QStringLiteral("%1 min ago").arg(seconds / 60);
     if (seconds < 86400) return QStringLiteral("%1 h ago").arg(seconds / 3600);
     return then.date().toString(QStringLiteral("d MMM"));
+}
+
+// ---- ProposalChangeRow ----------------------------------------------------
+
+namespace {
+
+// A change's 16px glyph, drawn in code with a 1.5px pen in `ink`: scissors
+// for a trim, a minus in a circle for a removal, a plus for an addition, a
+// T for a title, arrows for a move, a cut line for a split, a speaker for
+// a level, a dial for an effect, a dot for anything else.
+void drawChangeGlyph(QPainter &p, const QRectF &box, ProposalChange::Glyph glyph, const QColor &ink) {
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing);
+    p.translate(box.topLeft());
+    p.scale(box.width() / 16.0, box.height() / 16.0);
+    p.setPen(QPen(ink, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    p.setBrush(Qt::NoBrush);
+    switch (glyph) {
+    case ProposalChange::Glyph::Trim:
+        p.drawEllipse(QPointF(4.5, 11.5), 2.2, 2.2);
+        p.drawEllipse(QPointF(11.5, 11.5), 2.2, 2.2);
+        p.drawLine(QPointF(5.8, 9.8), QPointF(11.5, 2.5));
+        p.drawLine(QPointF(10.2, 9.8), QPointF(4.5, 2.5));
+        break;
+    case ProposalChange::Glyph::Remove:
+        p.drawEllipse(QPointF(8, 8), 6, 6);
+        p.drawLine(QPointF(5, 8), QPointF(11, 8));
+        break;
+    case ProposalChange::Glyph::Add:
+        p.drawEllipse(QPointF(8, 8), 6, 6);
+        p.drawLine(QPointF(5, 8), QPointF(11, 8));
+        p.drawLine(QPointF(8, 5), QPointF(8, 11));
+        break;
+    case ProposalChange::Glyph::Title:
+        p.drawLine(QPointF(3, 3.5), QPointF(13, 3.5));
+        p.drawLine(QPointF(8, 3.5), QPointF(8, 13));
+        break;
+    case ProposalChange::Glyph::Move:
+        p.drawLine(QPointF(2.5, 8), QPointF(13.5, 8));
+        p.drawPolyline(QPolygonF{QPointF(5, 5.5), QPointF(2.5, 8), QPointF(5, 10.5)});
+        p.drawPolyline(QPolygonF{QPointF(11, 5.5), QPointF(13.5, 8), QPointF(11, 10.5)});
+        break;
+    case ProposalChange::Glyph::Split:
+        p.drawRoundedRect(QRectF(2, 4.5, 12, 7), 1.5, 1.5);
+        p.drawLine(QPointF(8, 2), QPointF(8, 14));
+        break;
+    case ProposalChange::Glyph::Level:
+        p.drawPolygon(QPolygonF{QPointF(2.5, 6), QPointF(5, 6), QPointF(8.5, 3), QPointF(8.5, 13), QPointF(5, 10), QPointF(2.5, 10)});
+        p.drawArc(QRectF(7, 5, 6, 6), -60 * 16, 120 * 16);
+        break;
+    case ProposalChange::Glyph::Effect:
+        p.drawEllipse(QPointF(8, 8), 5.5, 5.5);
+        p.drawLine(QPointF(8, 8), QPointF(11, 5));
+        break;
+    case ProposalChange::Glyph::Other:
+        p.setPen(Qt::NoPen);
+        p.setBrush(ink);
+        p.drawEllipse(QPointF(8, 8), 2, 2);
+        break;
+    }
+    p.restore();
+}
+
+} // namespace
+
+ProposalChangeRow::ProposalChangeRow(const ProposalChange &change, QWidget *parent) : QWidget(parent), m_change(change) {
+    setObjectName(QStringLiteral("proposalChange"));
+    setFixedHeight(kHeight);
+    setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    setAccessibleName(change.detail.isEmpty() ? change.description : change.description + QStringLiteral(", ") + change.detail);
+}
+
+QRect ProposalChangeRow::glyphRect() const { return QRect(0, (height() - 16) / 2, 16, 16); }
+
+QRect ProposalChangeRow::detailRect() const {
+    if (m_change.detail.isEmpty()) return QRect(width(), 0, 0, height());
+    QFont font = this->font();
+    font.setPixelSize(12);
+    font.setFeature(QFont::Tag("tnum"), 1);
+    const int wide = std::min(QFontMetrics(font).horizontalAdvance(m_change.detail) + 1, width() / 2);
+    return QRect(width() - wide, 0, wide, height());
+}
+
+QRect ProposalChangeRow::descriptionRect() const {
+    const int left = 16 + 6;
+    return QRect(left, 0, std::max(0, detailRect().left() - 8 - left), height());
+}
+
+void ProposalChangeRow::paintEvent(QPaintEvent *) {
+    const EditorTheme &theme = editorTheme();
+    QPainter painter(this);
+    drawChangeGlyph(painter, glyphRect(), m_change.glyph, theme.chatSecondary);
+    QFont description = font();
+    description.setPixelSize(13);
+    painter.setFont(description);
+    painter.setPen(theme.chatText);
+    const QRect text = descriptionRect();
+    const QString shown = QFontMetrics(description).elidedText(m_change.description, Qt::ElideRight, text.width());
+    painter.drawText(text, Qt::AlignLeft | Qt::AlignVCenter, shown);
+    setToolTip(shown == m_change.description ? QString() : m_change.description);
+    if (m_change.detail.isEmpty()) return;
+    QFont detail = font();
+    detail.setPixelSize(12);
+    detail.setFeature(QFont::Tag("tnum"), 1);
+    painter.setFont(detail);
+    painter.setPen(theme.chatSecondary);
+    const QRect at = detailRect();
+    painter.drawText(at, Qt::AlignRight | Qt::AlignVCenter, QFontMetrics(detail).elidedText(m_change.detail, Qt::ElideRight, at.width()));
+}
+
+// ---- SuggestionButton -----------------------------------------------------
+
+namespace {
+
+constexpr int kSuggestionGlyph = 16;
+constexpr int kSuggestionGap = 8;
+constexpr int kSuggestionPadding = 6;
+
+QFont suggestionFont(const QFont &base) {
+    QFont font = base;
+    font.setPixelSize(13);
+    return font;
+}
+
+} // namespace
+
+SuggestionButton::SuggestionButton(const QString &text, QWidget *parent) : QAbstractButton(parent) {
+    setText(text);
+    setCursor(Qt::PointingHandCursor);
+    setFocusPolicy(Qt::TabFocus);
+    setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    QSizePolicy policy = sizePolicy();
+    policy.setHeightForWidth(true);
+    setSizePolicy(policy);
+}
+
+QRect SuggestionButton::textRect() const {
+    const int left = 8 + kSuggestionGlyph + kSuggestionGap;
+    return QRect(left, kSuggestionPadding, std::max(1, width() - left - 8), std::max(1, height() - 2 * kSuggestionPadding));
+}
+
+int SuggestionButton::heightForWidth(int width) const {
+    // Its words on at most two lines, and never under 32 points.
+    const QFontMetrics metrics(suggestionFont(font()));
+    const int room = std::max(1, width - (8 + kSuggestionGlyph + kSuggestionGap) - 8);
+    const int lines = std::min(2, std::max(1, metrics.boundingRect(QRect(0, 0, room, 10000), Qt::TextWordWrap, text()).height() /
+                                                  std::max(1, metrics.lineSpacing())));
+    return std::max(32, lines * metrics.lineSpacing() + 2 * kSuggestionPadding);
+}
+
+void SuggestionButton::paintEvent(QPaintEvent *) {
+    const EditorTheme &theme = editorTheme();
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    if (underMouse() || isDown()) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(isDown() ? theme.chatChipHover : theme.chatChip);
+        painter.drawRoundedRect(QRectF(rect()), 8, 8);
+    }
+    // An arrow pointing on, in secondary ink, level with the first line.
+    const QFont font = suggestionFont(this->font());
+    const QFontMetrics metrics(font);
+    const QRect words = textRect();
+    const qreal mid = words.top() + metrics.lineSpacing() / 2.0;
+    painter.setPen(QPen(theme.chatSecondary, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    const qreal x = 8;
+    painter.drawLine(QPointF(x + 3, mid), QPointF(x + 13, mid));
+    painter.drawPolyline(QPolygonF{QPointF(x + 9, mid - 4), QPointF(x + 13, mid), QPointF(x + 9, mid + 4)});
+    // The words, two lines at most, the second ending in an ellipsis if
+    // they run on.
+    painter.setFont(font);
+    painter.setPen(theme.chatText);
+    QTextLayout layout(text(), font);
+    QTextOption option;
+    option.setWrapMode(QTextOption::WordWrap);
+    layout.setTextOption(option);
+    layout.beginLayout();
+    QStringList lines;
+    for (int line = 0; line < 2; ++line) {
+        QTextLine textLine = layout.createLine();
+        if (!textLine.isValid()) break;
+        textLine.setLineWidth(words.width());
+        lines << text().mid(textLine.textStart(), line == 1 ? -1 : textLine.textLength());
+    }
+    layout.endLayout();
+    for (int line = 0; line < lines.size(); ++line) {
+        const QString shown = line == lines.size() - 1 ? metrics.elidedText(lines.at(line).trimmed(), Qt::ElideRight, words.width())
+                                                        : lines.at(line).trimmed();
+        painter.drawText(QRect(words.left(), words.top() + line * metrics.lineSpacing(), words.width(), metrics.lineSpacing()),
+                         Qt::AlignLeft | Qt::AlignVCenter, shown);
+    }
 }
 
 // ---- FlowLayout -----------------------------------------------------------
@@ -587,7 +759,12 @@ void RailButton::paintEvent(QPaintEvent *) {
     const QRectF disc = discRect();
     painter.setBrush(isDown() || underMouse() ? theme.railButtonHover : isChecked() ? theme.railButtonActive : theme.railButton);
     painter.drawEllipse(disc);
-    const QColor ink = isChecked() ? theme.railGlyphActive : theme.railGlyph;
+    // A device switched off (the plain card) keeps its name and its
+    // glyph, in secondary ink with a slash through it, as the menu says
+    // "Laptop · Off".
+    const bool device = m_glyph == Glyph::Phone || m_glyph == Glyph::Laptop;
+    const bool off = device && isCheckable() && !isChecked();
+    const QColor ink = isChecked() ? theme.railGlyphActive : off ? theme.textSecondary : theme.railGlyph;
     painter.save();
     painter.translate(disc.center() - QPointF(12, 12));
     painter.setPen(QPen(ink, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
@@ -633,6 +810,13 @@ void RailButton::paintEvent(QPaintEvent *) {
         painter.drawRect(QRectF(8, 8, 8, 8));
         break;
     }
+    }
+    if (off) {
+        // The slash, over a gap of the disc's colour so it reads across the glyph.
+        painter.setPen(QPen(isDown() || underMouse() ? theme.railButtonHover : theme.railButton, 3.5, Qt::SolidLine, Qt::RoundCap));
+        painter.drawLine(QPointF(4.5, 19.5), QPointF(19.5, 4.5));
+        painter.setPen(QPen(ink, 1.5, Qt::SolidLine, Qt::RoundCap));
+        painter.drawLine(QPointF(4.5, 19.5), QPointF(19.5, 4.5));
     }
     painter.restore();
     if (!m_label.isEmpty()) {
@@ -820,13 +1004,15 @@ QFrame *ChatPanel::buildProposal() {
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(6);
     // "Pinned by Kerf" over the comment, its pin in the avatars' column.
-    auto *pinned = new QHBoxLayout;
+    m_proposalPinLine = new QWidget;
+    m_proposalPinLine->setObjectName(QStringLiteral("proposalPinLine"));
+    auto *pinned = new QHBoxLayout(m_proposalPinLine);
     pinned->setContentsMargins(kAvatar - 12, 0, 0, 0);
     pinned->setSpacing(12);
     pinned->addWidget(new PinGlyph, 0, Qt::AlignVCenter);
     pinned->addWidget(label(QStringLiteral("Pinned by Kerf"), "chatPinned"));
     pinned->addStretch(1);
-    layout->addLayout(pinned);
+    layout->addWidget(m_proposalPinLine);
     auto *row = new QHBoxLayout;
     row->setContentsMargins(0, 0, 0, 0);
     row->setSpacing(12);
@@ -857,12 +1043,12 @@ QFrame *ChatPanel::buildProposal() {
     m_proposalExpander->setToolTip(QStringLiteral("Show the script and the document diff"));
     line->addWidget(m_proposalExpander, 0, Qt::AlignVCenter);
     column->addLayout(line);
-    // The first few changes, listed under it as replies are.
+    // The first few changes, one row each: glyph, description, detail.
     m_proposalChanges = new QWidget;
     m_proposalChanges->setObjectName(QStringLiteral("proposalChanges"));
     auto *changes = new QVBoxLayout(m_proposalChanges);
-    changes->setContentsMargins(0, 0, 0, 2);
-    changes->setSpacing(2);
+    changes->setContentsMargins(0, 2, 0, 4);
+    changes->setSpacing(0);
     m_proposalChanges->hide();
     column->addWidget(m_proposalChanges);
     m_proposalDiff = new QTextEdit;
@@ -895,6 +1081,13 @@ QFrame *ChatPanel::buildProposal() {
     column->addWidget(m_proposalDiff);
     row->addLayout(column, 1);
     layout->addLayout(row);
+    // A hairline closes the pinned comment, 16 points under its pills, as
+    // a pinned comment is parted from the thread under it.
+    layout->addSpacing(16 - layout->spacing());
+    m_proposalRule = new QFrame;
+    m_proposalRule->setObjectName(QStringLiteral("proposalRule"));
+    m_proposalRule->setFixedHeight(1);
+    layout->addWidget(m_proposalRule);
     return box;
 }
 
@@ -921,9 +1114,10 @@ QFrame *ChatPanel::buildProposalBar() {
     return bar;
 }
 
-void ChatPanel::setProposalSummary(const QString &summary) {
+void ChatPanel::setProposalSummary(const QString &summary, const QString &compact) {
     m_proposalSummary->setText(summary);
-    static_cast<ElidedLabel *>(m_proposalBarSummary)->setFullText(summary);
+    const QString bar = compact.isEmpty() ? summary : compact;
+    static_cast<ElidedLabel *>(m_proposalBarSummary)->setFullText(bar);
     m_proposalBarSummary->setToolTip(summary);
 }
 
@@ -956,23 +1150,27 @@ QWidget *ChatPanel::buildWelcome() {
     column->addSpacing(10);
     column->addWidget(label(QStringLiteral("Try asking"), "chatSection"));
     column->addSpacing(4);
+    // Each as a row of plain words after an arrow, wrapping to two lines,
+    // as a list of suggestions: no box, a wash under the pointer.
     auto *examples = new QWidget;
-    auto *flow = new FlowLayout(examples, 8);
+    examples->setObjectName(QStringLiteral("chatExamples"));
+    auto *list = new QVBoxLayout(examples);
+    list->setContentsMargins(0, 0, 0, 0);
+    list->setSpacing(0);
     for (const QString &example : {QStringLiteral("Trim the opening to three seconds."),
                                    QStringLiteral("Lower the music under the dialogue.")}) {
-        auto *chip = new ExampleChip(QStringLiteral("“%1”").arg(example));
-        chip->setObjectName(QStringLiteral("chatExample"));
-        chip->setCursor(Qt::PointingHandCursor);
-        chip->setProperty("bezelRadius", 8);
-        chip->setToolTip(QStringLiteral("Write this in the composer"));
-        connect(chip, &QPushButton::clicked, this, [this, example] {
+        auto *suggestion = new SuggestionButton(example);
+        suggestion->setObjectName(QStringLiteral("chatExample"));
+        suggestion->setToolTip(QStringLiteral("Write this in the composer"));
+        suggestion->setAccessibleName(example);
+        connect(suggestion, &QAbstractButton::clicked, this, [this, example] {
             if (!m_input->isEnabled()) return;
             m_input->setPlainText(example);
             m_input->setFocus(Qt::OtherFocusReason);
             m_input->moveCursor(QTextCursor::End);
         });
-        flow->addWidget(chip);
-        m_examples.append(chip);
+        list->addWidget(suggestion);
+        m_examples.append(suggestion);
     }
     column->addWidget(examples);
     row->addLayout(column, 1);
@@ -1058,7 +1256,8 @@ void ChatPanel::fitInput() {
 }
 
 CommentRow *ChatPanel::addComment(CommentRow::Kind kind, const QString &text) {
-    if (m_rows.isEmpty()) m_follow = true;
+    // Sending follows the conversation to the latest again.
+    if (m_rows.isEmpty() || kind == CommentRow::Kind::User) m_follow = true;
     m_welcome->hide();
     auto *row = new CommentRow(kind, text, QDateTime::currentDateTime());
     connect(row, &CommentRow::askAgain, this, &ChatPanel::askAgain);
@@ -1084,25 +1283,37 @@ void ChatPanel::updateCount() {
     m_count->setText(m_rows.isEmpty() ? QString() : QString::number(m_rows.size()));
 }
 
-void ChatPanel::setProposalShown(bool shown) {
+void ChatPanel::setProposalShown(bool shown, const QString &id) {
     m_proposal->setVisible(shown);
-    if (!shown) m_proposalExpander->setChecked(false);
+    if (!shown) {
+        m_proposalExpander->setChecked(false);
+        m_proposalId.clear();
+    } else if (!id.isEmpty() && id != m_proposalId) {
+        // A new proposal is read from its head: the list scrolls to its top
+        // (the proposal 16 points under the header) and stops following the
+        // latest comment until the reader scrolls or sends.
+        m_proposalId = id;
+        m_follow = false;
+        m_scroll->verticalScrollBar()->setValue(0);
+        QTimer::singleShot(0, this, [this] {
+            if (!m_follow) m_scroll->verticalScrollBar()->setValue(0);
+        });
+    }
     updateListEdge();
 }
 
-void ChatPanel::setProposalChanges(const QStringList &changes) {
+QList<ProposalChangeRow *> ChatPanel::proposalChangeRows() const {
+    return m_proposalChanges->findChildren<ProposalChangeRow *>(QString(), Qt::FindDirectChildrenOnly);
+}
+
+void ChatPanel::setProposalChanges(const QList<ProposalChange> &changes) {
     QLayout *layout = m_proposalChanges->layout();
     while (QLayoutItem *item = layout->takeAt(0)) {
         delete item->widget();
         delete item;
     }
     const qsizetype shown = std::min<qsizetype>(changes.size(), kProposalChangeLines);
-    for (qsizetype index = 0; index < shown; ++index) {
-        QLabel *change = label(wrappable(changes.at(index)), "chatChange");
-        change->setWordWrap(true);
-        change->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-        layout->addWidget(change);
-    }
+    for (qsizetype index = 0; index < shown; ++index) layout->addWidget(new ProposalChangeRow(changes.at(index), m_proposalChanges));
     if (changes.size() > shown)
         layout->addWidget(label(QStringLiteral("%1 more in the script").arg(changes.size() - shown), "chatChangeMore"));
     m_proposalChanges->setProperty("count", int(changes.size()));
@@ -1161,11 +1372,13 @@ void ChatPanel::fitProposalDiff() {
 
 void ChatPanel::updateListEdge() {
     const int value = m_scroll->verticalScrollBar()->value();
-    // The compact bar while the pinned proposal's pills are out of the view.
+    // The compact bar while the pinned proposal's head ("Pinned by Kerf",
+    // which says what the pills decide) or its pills are out of the view.
     bool sticky = false;
     if (m_proposal->isVisibleTo(m_content)) {
         const QRect pills(m_accept->mapTo(m_content, QPoint()), m_accept->size());
-        sticky = pills.top() < value || pills.bottom() >= value + m_scroll->viewport()->height();
+        const int head = m_proposalPinLine->mapTo(m_content, QPoint()).y() + m_proposalPinLine->height();
+        sticky = head < value || pills.top() < value || pills.bottom() >= value + m_scroll->viewport()->height();
     }
     if (m_proposalBar->isVisibleTo(this) != sticky) {
         m_proposalBar->setVisible(sticky);

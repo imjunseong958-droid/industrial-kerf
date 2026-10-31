@@ -104,8 +104,13 @@ eye turns a picture track's output on and off (M mutes a sound track), and
 the padlock locks the track against edits. While a clip
 moves or trims, a readout shows the new edge timecode and its offset.
 
-Tracks start dense (36 pt picture tracks, 32 pt sound tracks), for edits with
-many layers. The Timeline panel's title strip sets every track's height at
+Tracks start dense (28 pt picture tracks, 22 pt sound tracks), for edits with
+many layers: eight fit the timeline at 1440×900, six at 1280×800. The
+Timeline's tab row says how many tracks and how long ("9 tracks ·
+00:00:18:00") after its name, and on the right has a zoom (− slider +) and
+the track heights; ⌘-click (or ⇧-click) a clip to add it to the selection,
+which the status bar's left end counts ("2 clips selected · 00:00:11:00").
+The track heights set every track's height at
 once: Mini (one 18 pt line per track: its number, toggles, name, and clip
 names), Medium (the defaults), and Large; Fit shares the panel height across
 every track. Option-Up and Option-Down (with the timeline focused), or
@@ -179,7 +184,7 @@ over the stage's right side.
 
 A portrait (9:16) picture shows in a phone, as a simulator shows an app: a
 generic phone drawn in code, graphite in either appearance, its screen
-taller than the picture (9:19.5) with the picture across it and black above
+taller than the picture (9:18.5) with the picture across it and black above
 and below, a status bar, and a camera island or punch-hole. The phone's body
 takes the card's place in the group, the chat level with it. The rail's
 Phone button and Window ▸ Viewer choose Phone · Island (the default), Phone ·
@@ -211,8 +216,12 @@ brings it forward. The chat stays with the Program monitor: while the
 Source monitor covers it, it counts as closed, so the bar over the timeline
 stands in for it and ⇧⌘J brings it back into sight. Left of them,
 the Project bin, the Inspector, Effects, and Presets share a column of
-tabs. The Timeline runs the window's full width under both, for its many
-tracks.
+about 300 points. The Timeline runs the window's full width under both, for
+its many tracks; the stage row takes the height (575 over a 290 timeline as
+arranged, for every picture shape). Panels have text tabs (the chosen one
+underlined), no title strips; the window's title has the project's state
+under it ("Edited · 9:16 · 24 fps"). The Project bin is "Search media" over
+two columns of tiles, each with its name, duration and shape.
 
 The chat opens and closes like the comments button beside a Short: the
 rail's speech bubble (with the number of messages under it), the bubble at
@@ -311,7 +320,12 @@ Effects, and Source (its file and format, and Source In and Out, which slip
 the clip). Values read in px, %, °, dB and timecode; a value at its default
 is drawn quieter than a changed one, and a fill means it can be changed.
 Drag a value or its label to scrub it (⇧ ×10, ⌥ ÷10; one edit on release),
-click to type (`+10`, `*2`, `50%`, `-3dB`, `7:00`, `+12`), or step with ↑↓;
+click to type (`+10`, `*2`, `50%`, `-3dB`, `7:00`, `+12`), or step with ↑↓
+(a held key or a quick run of presses is one edit). A click or a drag in the
+Inspector takes no keyboard focus, and Return or Esc after typing (or Esc
+anywhere in it) hands the keys back to the timeline, so Space and J/K/L keep
+working while you nudge values. Every row shares one grid (84 pt labels, 72 pt
+value fields, controls ending at one edge);
 ↺ on hover, or a double-click on the label, resets a row, and a section's ↺
 resets it all. Each effect has a switch, its name, a second line listing what
 changed while folded, five parameters before "N more" (grouped under quiet
@@ -378,12 +392,16 @@ comment behind "▸ 2 steps", as replies do; and while Kerf works three dots
 and its latest step follow the latest comment. The comments scroll under the
 header as a comments panel's do: cut cleanly at its edge, with a hairline
 under it while the list is scrolled away from its top. A pending proposal is
-pinned at the top of the list ("Pinned by Kerf") and scrolls away with it,
-with Reject and Accept pills (⌘Return; Escape with the timeline focused
-rejects) and its script and diff behind "Script" (as tall as their lines, up
-to ten); until the script is opened, its first three changes are listed
-under the summary. While its pills are scrolled out of view, a compact bar
-under the header keeps its summary, Reject and Accept in reach. The up to three next steps Kerf ends each turn with
+pinned at the top of the list ("Pinned by Kerf") and scrolls away with it;
+when one arrives the list shows it from its head (following the latest again
+once you scroll or send). It lists its changes in words, a row each with a
+glyph and a detail ("Trim fisher-close.mov — end −1.5 s", "Remove
+drone-pass.mov — 0:11–0:18"), up to three, under a summary that counts them
+("Trim, remove, add a title · 3 changes"), then Reject and Accept pills
+(⌘Return; Escape with the timeline focused rejects) and a hairline; its
+script and diff are behind "Script" (as tall as their lines, up to ten).
+While its head or its pills are scrolled out of view, a compact bar under the
+header keeps its count, Reject and Accept in reach. The up to three next steps Kerf ends each turn with
 ("Stronger glow", "Wipe to the next shot") are one row of chips over the
 composer, scrolling sideways rather than wrapping, so the conversation
 keeps its height; pressing one asks for it about the same selection.
@@ -391,7 +409,8 @@ The composer is the panel's footer: your avatar and one line over an
 underline that turns Kerf's purple in focus, growing with the draft, with the
 model, Cancel and Send (Stop while Kerf works) shown while it is in use.
 Return sends and Shift+Return inserts a new line. Before the first message
-Kerf's welcome offers two requests to try, which fill the composer. While
+Kerf's welcome offers two requests to try (plain rows after an arrow, wrapping
+to two lines), which fill the composer. While
 the chat is closed,
 a bar over the timeline stands in for it, as a Short's comment count does:
 it says what Kerf is working on, offers Stop, Accept, Reject and the next

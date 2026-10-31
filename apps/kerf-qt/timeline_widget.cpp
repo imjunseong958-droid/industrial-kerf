@@ -9,6 +9,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QFontMetrics>
+#include <QHBoxLayout>
 #include <QJsonArray>
 #include <QKeyEvent>
 #include <QLinearGradient>
@@ -16,6 +17,9 @@
 #include <QPainterPath>
 #include <QScrollBar>
 #include <QSettings>
+#include <QSignalBlocker>
+#include <QSlider>
+#include <QToolButton>
 #include <QToolTip>
 #include <QUrl>
 #include <QWheelEvent>
@@ -190,11 +194,22 @@ void TimelineWidget::setProject(const QJsonObject &project, double duration, dou
 }
 
 void TimelineWidget::setSelectedClip(const QString &id) {
-    if (m_selectedClip == id) return;
-    const QRect before = clipBounds(m_selectedClip);
+    if (m_selectedClip == id && m_selectedClips.size() <= 1) return;
+    QStringList before = m_selectedClips;
+    before << m_selectedClip;
     m_selectedClip = id;
-    refreshLanes(before);
+    m_selectedClips = id.isEmpty() ? QStringList{} : QStringList{id};
+    for (const QString &clip : std::as_const(before)) refreshLanes(clipBounds(clip));
     refreshLanes(clipBounds(id));
+}
+
+void TimelineWidget::setSelectedClips(const QStringList &ids) {
+    QStringList before = m_selectedClips;
+    before << m_selectedClip;
+    m_selectedClips = ids;
+    if (!ids.contains(m_selectedClip)) m_selectedClip = ids.isEmpty() ? QString() : ids.constLast();
+    for (const QString &clip : std::as_const(before)) refreshLanes(clipBounds(clip));
+    for (const QString &clip : ids) refreshLanes(clipBounds(clip));
 }
 
 void TimelineWidget::setPlayhead(double time) {
@@ -221,18 +236,22 @@ void TimelineWidget::showSkimmer(double time) {
 }
 
 void TimelineWidget::setZoom(double zoom) {
-    m_zoom = std::clamp(zoom, 0.35, 3.5);
+    m_zoom = std::clamp(zoom, kMinScale / 72.0, kMaxScale / 72.0);
     m_fitWidth = 0;
     invalidateLanes();
     updateContentSize();
     update();
+    emit scaleChanged(pixelsPerSecond());
 }
+
+void TimelineWidget::setScale(double pixelsPerSecond) { setZoom(pixelsPerSecond / 72.0); }
 
 void TimelineWidget::fitToWidth(int width) {
     m_fitWidth = std::max(kTimelineLabelWidth + 32, width);
     invalidateLanes();
     updateContentSize();
     update();
+    emit scaleChanged(pixelsPerSecond());
 }
 
 void TimelineWidget::setArtwork(MediaArtwork *artwork) {
@@ -515,6 +534,11 @@ void TimelineWidget::mousePressEvent(QMouseEvent *event) {
     }
     if (m_tool == TimelineTool::Razor) {
         emit razorRequested(hit.id, static_cast<double>(std::llround(timeAt(event->position().x()) * m_fps)));
+        return;
+    }
+    // ⌘-click toggles a clip in the selection, ⇧-click adds it; neither drags.
+    if (event->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier)) {
+        emit clipSelectionExtended(hit.id, event->modifiers() & Qt::ControlModifier);
         return;
     }
     const bool onEdge = pos.x() - hit.rect.left() < kTrimHandle || hit.rect.right() - pos.x() < kTrimHandle;
@@ -991,7 +1015,7 @@ void TimelineWidget::paintLane(QPainter &p, const QRect &visible, int row, const
     for (const QJsonValue &value : clips) {
         const QJsonObject clip = value.toObject();
         const QString id = clip.value(QStringLiteral("id")).toString();
-        if (id != m_selectedClip || (m_dragging && id == m_dragClipId)) continue;
+        if (!isSelected(id) || (m_dragging && id == m_dragClipId)) continue;
         const QRectF rect = clipRect(row, clip.value(QStringLiteral("timelineStart")).toDouble(),
                                      clip.value(QStringLiteral("duration")).toDouble());
         if (rect.intersects(visible)) paintSelectionRing(p, rect);
@@ -1328,7 +1352,7 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
     }
     const QRectF rect = clipRect(row, start, duration);
     if (!rect.intersects(visible)) return;
-    const bool selected = id == m_selectedClip;
+    const bool selected = isSelected(id);
     const bool hovered = id == m_hoverClipId;
     const EditorTheme &theme = editorTheme();
     const ClipStyle &style = theme.clip(clipKind(track, clip));
@@ -1453,7 +1477,7 @@ void TimelineWidget::paintDraggedClip(QPainter &p, const QRect &visible, int row
     // selection ring: white dashes on a dark line, which read on any
     // picture in either appearance.
     const QString id = clip.value(QStringLiteral("id")).toString();
-    const qreal ring = id == m_selectedClip ? kSelectionRing : 0.0;
+    const qreal ring = isSelected(id) ? kSelectionRing : 0.0;
     p.save();
     p.setRenderHint(QPainter::Antialiasing, false);
     p.setBrush(Qt::NoBrush);
@@ -1840,6 +1864,83 @@ TimelineWidget::ClipHit TimelineWidget::clipAt(const QPoint &point) const {
         if (rect.contains(point)) return {clip.value(QStringLiteral("id")).toString(), row, start, duration, rect};
     }
     return {};
+}
+
+// ---- TimelineZoomControl -------------------------------------------------
+
+namespace {
+
+// A − or + drawn in code (no SVG on Linux), in secondary ink.
+QIcon zoomGlyph(bool plus) {
+    const qreal ratio = 2.0;
+    QPixmap pixmap(QSize(16, 16) * ratio);
+    pixmap.setDevicePixelRatio(ratio);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(editorTheme().textSecondary, 1.5, Qt::SolidLine, Qt::RoundCap));
+    painter.drawLine(QPointF(4, 8), QPointF(12, 8));
+    if (plus) painter.drawLine(QPointF(8, 4), QPointF(8, 12));
+    return QIcon(pixmap);
+}
+
+} // namespace
+
+TimelineZoomControl::TimelineZoomControl(TimelineWidget *timeline, QWidget *parent) : QWidget(parent), m_timeline(timeline) {
+    setObjectName(QStringLiteral("timelineZoom"));
+    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    auto *layout = new QHBoxLayout(this);
+    layout->setContentsMargins(0, 0, 8, 0);
+    layout->setSpacing(2);
+    const auto glyphButton = [this](bool plus) {
+        auto *button = new QToolButton(this);
+        button->setObjectName(plus ? QStringLiteral("timelineZoomIn") : QStringLiteral("timelineZoomOut"));
+        button->setAutoRaise(true);
+        button->setIcon(zoomGlyph(plus));
+        button->setIconSize(QSize(16, 16));
+        button->setFixedSize(20, 20);
+        button->setToolTip(plus ? QStringLiteral("Zoom in") : QStringLiteral("Zoom out"));
+        button->setAccessibleName(button->toolTip());
+        button->setAutoRepeat(true);
+        return button;
+    };
+    m_out = glyphButton(false);
+    m_slider = new QSlider(Qt::Horizontal, this);
+    m_slider->setObjectName(QStringLiteral("timelineZoomSlider"));
+    m_slider->setRange(0, kSteps);
+    m_slider->setFixedWidth(88);
+    m_slider->setToolTip(QStringLiteral("Timeline zoom"));
+    m_slider->setAccessibleName(QStringLiteral("Timeline zoom"));
+    m_slider->setFocusPolicy(Qt::NoFocus);
+    m_in = glyphButton(true);
+    layout->addWidget(m_out);
+    layout->addWidget(m_slider);
+    layout->addWidget(m_in);
+    m_slider->setValue(position(timeline->scale()));
+    connect(m_slider, &QSlider::valueChanged, this, [this](int value) {
+        if (position(m_timeline->scale()) != value) m_timeline->setScale(scaleAt(value));
+    });
+    connect(m_out, &QToolButton::clicked, this, [this] { m_slider->setValue(m_slider->value() - 10); });
+    connect(m_in, &QToolButton::clicked, this, [this] { m_slider->setValue(m_slider->value() + 10); });
+    connect(timeline, &TimelineWidget::scaleChanged, this, [this](double scale) {
+        const QSignalBlocker blocker(m_slider);
+        m_slider->setValue(position(scale));
+    });
+    connect(EditorAppearance::instance(), &EditorAppearance::changed, this, [this] {
+        m_out->setIcon(zoomGlyph(false));
+        m_in->setIcon(zoomGlyph(true));
+    });
+}
+
+int TimelineZoomControl::position(double pixelsPerSecond) {
+    const double span = std::log(TimelineWidget::kMaxScale / TimelineWidget::kMinScale);
+    const double at = std::log(std::clamp(pixelsPerSecond, TimelineWidget::kMinScale, TimelineWidget::kMaxScale) / TimelineWidget::kMinScale);
+    return int(std::lround(kSteps * at / span));
+}
+
+double TimelineZoomControl::scaleAt(int position) {
+    const double span = std::log(TimelineWidget::kMaxScale / TimelineWidget::kMinScale);
+    return TimelineWidget::kMinScale * std::exp(span * std::clamp(position, 0, kSteps) / double(kSteps));
 }
 
 } // namespace kerf

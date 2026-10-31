@@ -299,8 +299,14 @@ NumberFormat presentationFor(const QJsonObject &def, const PresentationContext &
         } else if (unit.isEmpty() && bounded && modelMin == -1.0 && modelMax == 1.0) {
             format.scale = 100.0;
             format.showPlus = true;
+        } else if (unit.isEmpty() && (name.contains(QStringLiteral("radius"), Qt::CaseInsensitive) ||
+                                      name.contains(QStringLiteral("width"), Qt::CaseInsensitive))) {
+            // A radius or a width with no unit in the catalog is a distance
+            // in pixels of the picture.
+            format.unit = QStringLiteral("px");
         } else {
-            format.unit = unit;
+            // Exposure's stops read as EV, short enough for the field.
+            format.unit = unit == QStringLiteral("stops") ? QStringLiteral("EV") : unit;
             format.showPlus = unit == QStringLiteral("stops") || unit == QStringLiteral("K") ||
                               (bounded && modelMin < 0.0 && modelMax > 0.0);
         }

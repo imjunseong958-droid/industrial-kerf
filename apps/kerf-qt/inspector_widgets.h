@@ -24,7 +24,12 @@ namespace kerf {
 // in tabular figures with its unit after it. Drag across it (or its row's
 // label) to scrub, one step per 2 points (⇧ ×10, ⌥ ÷10); click to type;
 // ↑↓ step while focused. A gesture is one edit: the value follows the
-// pointer and `committed` fires once, on release.
+// pointer and `committed` fires once, on release; a run of ↑↓ presses (a
+// held key, or presses under 400 ms apart) is one edit too, committed
+// 400 ms after the last or when the field loses focus. A click or a drag
+// takes no keyboard focus (only Tab and typing do), so the transport keys
+// keep working; Return or Esc after typing hands the keys back
+// (`doneEditing`).
 class ScrubField final : public QWidget {
     Q_OBJECT
     friend class EditorTest;
@@ -32,6 +37,9 @@ public:
     static constexpr int kHeight = 24;
 
     explicit ScrubField(QWidget *parent = nullptr);
+    // Room kept clear at the right end, for a glyph inside the field (the
+    // speed presets' ⌄).
+    void setTrailingInset(int inset);
 
     void setFormat(const NumberFormat &format);
     const NumberFormat &format() const { return m_format; }
@@ -44,6 +52,9 @@ public:
     // Several clips disagree: "Mixed", and scrubbing moves each by the same amount.
     void setMixed(bool mixed);
     bool isMixed() const { return m_mixed; }
+    // Its effect is switched off: the value in the disabled ink (it still edits).
+    void setDimmed(bool dimmed);
+    bool isDimmed() const { return m_dimmed; }
     // Read-only: an animated value, shown at the playhead.
     void setReadOnly(bool readOnly);
     bool isReadOnly() const { return m_readOnly; }
@@ -60,8 +71,14 @@ public:
     QLineEdit *editor() const { return m_editor; }
     // Commit typed text as if Return were pressed.
     void commitText(const QString &text);
+    // Commit a run of ↑↓ steps now rather than 400 ms after the last.
+    void flushSteps();
+    bool isStepping() const { return m_stepping; }
+    static constexpr int kStepRunMs = 400;
 
 signals:
+    // Return or Esc ended typing: the keys go back where they came from.
+    void doneEditing();
     // One per gesture: the new value, and how far it moved from where the
     // gesture started (for several clips moved alike). `relative` is false
     // when a value was typed outright.
@@ -93,6 +110,7 @@ private:
     double m_default = 0.0;
     bool m_hasDefault = false;
     bool m_mixed = false;
+    bool m_dimmed = false;
     bool m_readOnly = false;
     bool m_hovered = false;
     // Dragging: where it began, and the value then.
@@ -103,6 +121,11 @@ private:
     double m_startValue = 0.0;
     QLineEdit *m_editor = nullptr;
     QTimer *m_flash = nullptr;
+    int m_trailingInset = 0;
+    // A run of ↑↓ steps: the value it started from, and the pause that ends it.
+    bool m_stepping = false;
+    double m_stepStart = 0.0;
+    QTimer *m_stepRun = nullptr;
 };
 
 // A slider paired with a ScrubField (the field is the source of truth): a
@@ -228,7 +251,7 @@ private:
 class GlyphButton final : public QAbstractButton {
     Q_OBJECT
 public:
-    enum class Glyph { Reset, More, Plus, Chevron, Reverse, Menu, Diamond, Rectangle, Ellipse, Pen };
+    enum class Glyph { Reset, More, Plus, Chevron, Reverse, Menu, Diamond, Rectangle, Ellipse, Pen, Folder };
     explicit GlyphButton(Glyph glyph, QWidget *parent = nullptr);
     Glyph glyph() const { return m_glyph; }
     void setOpen(bool open);
@@ -247,7 +270,8 @@ private:
 void drawInspectorGlyph(QPainter &painter, GlyphButton::Glyph glyph, const QRectF &rect, const QColor &color, bool open = false);
 
 // A row's label: drag across it to scrub the row's field, double-click it
-// to reset the row.
+// to reset the row. One too long for the label column wraps onto a second
+// line at 11 points (the whole of it in its tooltip).
 class RowLabel final : public QLabel {
     Q_OBJECT
 public:
@@ -271,14 +295,18 @@ private:
     bool m_pressed = false;
 };
 
-// One 32pt row: a 76pt label column, the controls, and a 16pt reset lane
-// whose ↺ shows on hover only while the value differs from its default.
+// One 32pt row on the column's one grid: an 84pt label column, 8 points,
+// the controls, then a 20pt reset lane 4 points after them, whose ↺ shows
+// on hover only while the value differs from its default. Every row's
+// controls end at the same edge (the lane's), every value field is 72
+// points wide, and a slider fills what its field leaves.
 class InspectorRow final : public QWidget {
     Q_OBJECT
 public:
     static constexpr int kHeight = 32;
-    static constexpr int kLabelWidth = 76;
-    static constexpr int kResetLane = 16;
+    static constexpr int kLabelWidth = 84;
+    static constexpr int kResetLane = 20;
+    static constexpr int kValueField = 72;
 
     explicit InspectorRow(const QString &label, QWidget *parent = nullptr);
     RowLabel *label() const { return m_label; }

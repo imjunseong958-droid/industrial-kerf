@@ -13,6 +13,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QScreen>
+#include <QTextLayout>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -65,7 +66,9 @@ void ringFocus(QPainter &painter, const QRectF &rect) {
 
 ScrubField::ScrubField(QWidget *parent) : QWidget(parent) {
     setObjectName(QStringLiteral("scrubField"));
-    setFocusPolicy(Qt::StrongFocus);
+    // Tab reaches it; a click or a drag does not take the keys from the
+    // timeline (typing gives them to its editor).
+    setFocusPolicy(Qt::TabFocus);
     setAttribute(Qt::WA_Hover);
     setCursor(Qt::SizeHorCursor);
     setFixedHeight(kHeight);
@@ -74,6 +77,24 @@ ScrubField::ScrubField(QWidget *parent) : QWidget(parent) {
     m_flash->setSingleShot(true);
     m_flash->setInterval(600);
     connect(m_flash, &QTimer::timeout, this, qOverload<>(&QWidget::update));
+    m_stepRun = new QTimer(this);
+    m_stepRun->setSingleShot(true);
+    m_stepRun->setInterval(kStepRunMs);
+    connect(m_stepRun, &QTimer::timeout, this, &ScrubField::flushSteps);
+}
+
+void ScrubField::flushSteps() {
+    m_stepRun->stop();
+    if (!m_stepping) return;
+    m_stepping = false;
+    if (m_mixed || formatNumber(m_format, m_value) != formatNumber(m_format, m_stepStart))
+        emit committed(m_value, m_value - m_stepStart, true);
+}
+
+void ScrubField::setTrailingInset(int inset) {
+    m_trailingInset = inset;
+    if (m_editor) m_editor->setGeometry(rect().adjusted(0, 0, -m_trailingInset, 0));
+    update();
 }
 
 void ScrubField::setFormat(const NumberFormat &format) {
@@ -82,7 +103,8 @@ void ScrubField::setFormat(const NumberFormat &format) {
 }
 
 void ScrubField::setValue(double display) {
-    if (m_dragging) return;
+    // A snapshot arriving mid-gesture never pulls the value back.
+    if (m_dragging || m_stepping) return;
     m_value = display;
     update();
 }
@@ -97,6 +119,12 @@ bool ScrubField::isDefault() const {
     return m_hasDefault && !m_mixed && formatNumber(m_format, m_value) == formatNumber(m_format, m_default);
 }
 
+void ScrubField::setDimmed(bool dimmed) {
+    if (m_dimmed == dimmed) return;
+    m_dimmed = dimmed;
+    update();
+}
+
 void ScrubField::setMixed(bool mixed) {
     m_mixed = mixed;
     update();
@@ -105,7 +133,7 @@ void ScrubField::setMixed(bool mixed) {
 void ScrubField::setReadOnly(bool readOnly) {
     m_readOnly = readOnly;
     setCursor(readOnly ? Qt::ArrowCursor : Qt::SizeHorCursor);
-    setFocusPolicy(readOnly ? Qt::NoFocus : Qt::StrongFocus);
+    setFocusPolicy(readOnly ? Qt::NoFocus : Qt::TabFocus);
     update();
 }
 
@@ -141,7 +169,10 @@ void ScrubField::paintEvent(QPaintEvent *) {
     painter.setRenderHint(QPainter::Antialiasing);
     const QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
     if (!m_readOnly) fillField(painter, box, m_hovered && isEnabled(), m_dragging);
-    const QRectF inner = QRectF(rect()).adjusted(m_readOnly ? 0 : 8, 0, m_readOnly ? 0 : -8, 0);
+    // A timecode keeps 4 points of padding (its eleven figures fill a
+    // third of the column); everything else 6.
+    const double pad = m_readOnly ? 0.0 : m_format.kind == NumberFormat::Kind::Timecode ? 4.0 : 6.0;
+    const QRectF inner = QRectF(rect()).adjusted(pad, 0, -pad - m_trailingInset, 0);
     const QFont valueFont = sized(font(), 12, QFont::Normal, true);
     const QFont unitFont = sized(font(), 11);
     const bool quiet = m_mixed || isDefault() || !isEnabled() || m_flash->isActive();
@@ -160,7 +191,7 @@ void ScrubField::paintEvent(QPaintEvent *) {
         right -= width + ((m_format.tightUnit || m_format.kind == NumberFormat::Kind::Speed) ? 1.0 : 3.0);
     }
     painter.setFont(valueFont);
-    painter.setPen(quiet ? theme.textSecondary : theme.text);
+    painter.setPen(m_dimmed ? theme.textDisabled : quiet ? theme.textSecondary : theme.text);
     double left = inner.left();
     if (!m_format.prefix.isEmpty()) {
         painter.save();
@@ -254,7 +285,7 @@ void ScrubField::beginTyping() {
             if (isTyping()) endTyping(true);
         });
     }
-    m_editor->setGeometry(rect());
+    m_editor->setGeometry(rect().adjusted(0, 0, -m_trailingInset, 0));
     m_editor->setText(m_mixed ? QString() : formatNumber(m_format, m_value));
     m_editor->show();
     m_editor->setFocus(Qt::MouseFocusReason);
@@ -300,11 +331,13 @@ bool ScrubField::eventFilter(QObject *watched, QEvent *event) {
         if (key->key() == Qt::Key_Escape) {
             endTyping(false);
             setFocus(Qt::OtherFocusReason);
+            emit doneEditing();
             return true;
         }
         if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) {
             endTyping(true);
             setFocus(Qt::OtherFocusReason);
+            emit doneEditing();
             return true;
         }
         if (key->key() == Qt::Key_Tab || key->key() == Qt::Key_Backtab) {
@@ -323,15 +356,20 @@ void ScrubField::keyPressEvent(QKeyEvent *event) {
     switch (event->key()) {
     case Qt::Key_Up:
     case Qt::Key_Down: {
+        // One edit per run of presses: the value follows each, and the run
+        // commits once it pauses (or the field loses focus).
         const double step = stepFor(event->modifiers()) * (event->key() == Qt::Key_Up ? 1.0 : -1.0);
-        const double before = m_value;
+        if (!m_stepping) {
+            m_stepping = true;
+            m_stepStart = m_value;
+        }
         bool wasClamped = false;
-        const double value = clamped(before + step, &wasClamped);
+        const double value = clamped(m_value + step, &wasClamped);
         if (wasClamped) flash();
-        if (formatNumber(m_format, value) == formatNumber(m_format, before) && !m_mixed) return;
         m_value = value;
         update();
-        emit committed(value, value - before, true);
+        emit previewed(value);
+        m_stepRun->start();
         return;
     }
     case Qt::Key_Return:
@@ -359,6 +397,7 @@ void ScrubField::focusInEvent(QFocusEvent *event) {
 
 void ScrubField::focusOutEvent(QFocusEvent *event) {
     QWidget::focusOutEvent(event);
+    flushSteps();
     update();
 }
 
@@ -375,7 +414,7 @@ void ScrubField::leaveEvent(QEvent *event) {
 }
 
 void ScrubField::resizeEvent(QResizeEvent *event) {
-    if (m_editor) m_editor->setGeometry(rect());
+    if (m_editor) m_editor->setGeometry(rect().adjusted(0, 0, -m_trailingInset, 0));
     QWidget::resizeEvent(event);
 }
 
@@ -518,6 +557,12 @@ void InspectorSwitch::paintEvent(QPaintEvent *) {
     const double knobRadius = radius - 2.0;
     const QPointF centre(isChecked() ? plate.right() - radius : plate.left() + radius, plate.center().y());
     painter.setPen(Qt::NoPen);
+    if (isChecked()) {
+        // A 1px shadow under the knob, so on reads as raised, not greyed.
+        QColor shadow(0, 0, 0, theme.dark ? 110 : 60);
+        painter.setBrush(shadow);
+        painter.drawEllipse(centre + QPointF(0, 1.0), knobRadius, knobRadius);
+    }
     painter.setBrush(isChecked() ? theme.switchOnKnob : theme.knob);
     painter.drawEllipse(centre, knobRadius, knobRadius);
     if (!isChecked()) {
@@ -565,6 +610,13 @@ void SegmentedField::paintEvent(QPaintEvent *) {
     track.addRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 6.0, 6.0);
     painter.fillPath(track, theme.inspectorField);
     painter.setFont(sized(font(), 12));
+    // With none chosen, a hairline at half height parts the choices, so they
+    // never read as one field holding two words.
+    if (m_current < 0)
+        for (int index = 1; index < m_segments.size(); ++index) {
+            const QRect segment = segmentRect(index);
+            painter.fillRect(QRectF(segment.left() - 0.5, height() * 0.25, 1.0, height() * 0.5), theme.divider);
+        }
     for (int index = 0; index < m_segments.size(); ++index) {
         const QRectF segment = QRectF(segmentRect(index));
         if (index == m_current) {
@@ -704,6 +756,19 @@ void drawInspectorGlyph(QPainter &painter, GlyphButton::Glyph glyph, const QRect
         painter.drawLine(c - QPointF(5.0, 0.0), c + QPointF(5.0, 0.0));
         painter.drawLine(c - QPointF(0.0, 5.0), c + QPointF(0.0, 5.0));
         break;
+    case Glyph::Folder: {
+        // A folder: its tab at the top left, its body under it.
+        QPainterPath folder;
+        folder.moveTo(c + QPointF(-6.0, 4.5));
+        folder.lineTo(c + QPointF(-6.0, -4.0));
+        folder.lineTo(c + QPointF(-2.0, -4.0));
+        folder.lineTo(c + QPointF(-0.5, -2.5));
+        folder.lineTo(c + QPointF(6.0, -2.5));
+        folder.lineTo(c + QPointF(6.0, 4.5));
+        folder.closeSubpath();
+        painter.drawPath(folder);
+        break;
+    }
     case Glyph::Chevron:
         if (open) {
             painter.drawLine(c + QPointF(-3.5, -1.5), c + QPointF(0.0, 2.0));
@@ -780,7 +845,7 @@ void GlyphButton::paintEvent(QPaintEvent *) {
     const bool hovered = underMouse() && isEnabled() && m_glyph != Glyph::Chevron && m_glyph != Glyph::Diamond;
     if (isDown() || hovered || (isCheckable() && isChecked())) {
         painter.setPen(Qt::NoPen);
-        painter.setBrush(isDown() ? theme.pressed : isChecked() ? theme.toolSelected : theme.hover);
+        painter.setBrush(isDown() ? theme.pressed : isChecked() ? theme.accentTint : theme.hover);
         painter.drawEllipse(QRectF(rect()).adjusted(1, 1, -1, -1));
     }
     const QColor ink = !isEnabled() ? theme.textDisabled
@@ -804,8 +869,38 @@ RowLabel::RowLabel(const QString &text, QWidget *parent) : QLabel(text, parent),
 }
 
 void RowLabel::resizeEvent(QResizeEvent *event) {
-    // Elided with the whole label in its tooltip.
-    const QString shown = fontMetrics().elidedText(m_full, Qt::ElideRight, std::max(0, width()));
+    // One line at 12 points where it fits; otherwise two at 11, the second
+    // ended with an ellipsis if even that is short. The tooltip has it whole.
+    const int room = std::max(0, width());
+    const QFont regular = sized(font(), 12);
+    QString shown = m_full;
+    bool wrap = false;
+    if (QFontMetrics(regular).horizontalAdvance(m_full) > room) {
+        const QFont small = sized(font(), 11);
+        const QFontMetrics metrics(small);
+        QTextLayout layout(m_full, small);
+        QTextOption option;
+        option.setWrapMode(QTextOption::WordWrap);
+        layout.setTextOption(option);
+        layout.beginLayout();
+        QTextLine first = layout.createLine();
+        first.setLineWidth(room);
+        QTextLine second = layout.createLine();
+        if (second.isValid()) second.setLineWidth(room);
+        layout.endLayout();
+        if (second.isValid()) {
+            const QString head = m_full.left(first.textLength()).trimmed();
+            const QString tail = metrics.elidedText(m_full.mid(first.textLength()).trimmed(), Qt::ElideRight, room);
+            shown = head + QLatin1Char('\n') + tail;
+            wrap = true;
+        } else {
+            shown = metrics.elidedText(m_full, Qt::ElideRight, room);
+        }
+        if (font().pixelSize() != 11) setFont(small);
+    } else if (font().pixelSize() != 12) {
+        setFont(regular);
+    }
+    setWordWrap(wrap);
     if (shown != text()) setText(shown);
     QLabel::resizeEvent(event);
 }
@@ -864,6 +959,7 @@ InspectorRow::InspectorRow(const QString &label, QWidget *parent) : QWidget(pare
     layout->addSpacing(4);
     auto *lane = new QWidget;
     lane->setFixedWidth(kResetLane);
+    // The ↺ at the lane's right end, level with the section headers' ends.
     auto *laneLayout = new QHBoxLayout(lane);
     laneLayout->setContentsMargins(0, 0, 0, 0);
     m_reset = new GlyphButton(GlyphButton::Glyph::Reset);
@@ -1016,8 +1112,10 @@ void InspectorSection::setResetHandler(std::function<void()> reset) {
 
 void InspectorSection::updateHeader() {
     m_chevron->setOpen(m_open);
-    // A folded section says what changed in it; an open one shows it.
-    const QString shown = m_summaryLabel->fontMetrics().elidedText(m_summary, Qt::ElideLeft, std::max(0, m_summaryLabel->width()));
+    // A folded section says what changed in it; an open one shows it. Cut
+    // short, it keeps its start ("Primary color correction, Gaus…"), the
+    // whole in its tooltip.
+    const QString shown = m_summaryLabel->fontMetrics().elidedText(m_summary, Qt::ElideRight, std::max(0, m_summaryLabel->width()));
     m_summaryLabel->setText(m_open ? QString() : (m_summaryLabel->width() > 0 ? shown : m_summary));
     m_summaryLabel->setToolTip(m_summary);
     m_reset->setVisible(m_changed && m_hovered && m_resetHandler);
@@ -1125,6 +1223,13 @@ void KindSquare::paintEvent(QPaintEvent *) {
     painter.setPen(Qt::NoPen);
     painter.setBrush(m_color);
     painter.drawRoundedRect(QRectF(rect()), 2.0, 2.0);
+    // A 1px inner edge of the secondary ink at 40%, so a dark clip colour
+    // still reads against the dark panel (3:1 for the shape).
+    QColor edge = editorTheme().textSecondary;
+    edge.setAlphaF(0.4);
+    painter.setPen(QPen(edge, 1.0));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 1.5, 1.5);
 }
 
 // ------------------------------------------------------------------ NameLabel
