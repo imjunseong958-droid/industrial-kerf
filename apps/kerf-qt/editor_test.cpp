@@ -2374,24 +2374,8 @@ private slots:
         const auto save = [&shots](const QImage &image, const QString &name) {
             if (!shots.isEmpty()) QVERIFY(image.save(QDir(shots).filePath(name + QStringLiteral(".png"))));
         };
-        // Nothing amber or gold is left from the editor's palette: no amber
-        // area, that is. Text drawn with subpixel antialiasing (as on Linux)
-        // has coloured fringes a pixel wide, which are not counted.
-        const auto isAmber = [](const QColor &color) {
-            return color.hue() >= 30 && color.hue() <= 52 && color.saturation() > 140 && color.value() > 150;
-        };
+        // Nothing amber or gold is left from the editor's palette.
         QPoint firstAmber;
-        const auto amberPixels = [&isAmber, &firstAmber](const QImage &image) {
-            int count = 0;
-            for (int y = 1; y + 1 < image.height(); y += 2)
-                for (int x = 1; x + 1 < image.width(); x += 2) {
-                    bool area = true;
-                    for (int dy = -1; dy <= 1 && area; ++dy)
-                        for (int dx = -1; dx <= 1 && area; ++dx) area = isAmber(image.pixelColor(x + dx, y + dy));
-                    if (area && count++ == 0) firstAmber = QPoint(x, y);
-                }
-            return count;
-        };
         {
             QImage probe(40, 40, QImage::Format_RGB32);
             probe.fill(Qt::white);
@@ -2444,7 +2428,7 @@ private slots:
                     QVERIFY2(std::abs(fill.hue() - accent.hue()) <= 4 && std::abs(fill.value() - accent.value()) <= 24,
                              qPrintable(fill.name()));
                 }
-                QVERIFY2(amberPixels(image) == 0,
+                QVERIFY2(amberPixels(image, &firstAmber) == 0,
                          qPrintable(QStringLiteral("amber area in %1-%2 at %3,%4")
                                         .arg(QString::fromLatin1(pageNames[page]), schemeName)
                                         .arg(firstAmber.x())
@@ -2465,7 +2449,7 @@ private slots:
                     launcher.m_name->setFocus();
                     QCoreApplication::processEvents();
                     image = launcher.grab().toImage();
-                    QVERIFY2(amberPixels(image) == 0,
+                    QVERIFY2(amberPixels(image, &firstAmber) == 0,
                              qPrintable(QStringLiteral("amber area in new-details-%1 at %2,%3")
                                             .arg(schemeName)
                                             .arg(firstAmber.x())
@@ -2484,11 +2468,18 @@ private slots:
     static bool isAmber(const QColor &color) {
         return color.hue() >= 30 && color.hue() <= 52 && color.saturation() > 140 && color.value() > 150;
     }
-    static int amberPixels(const QImage &image) {
+    // How many amber areas `image` has, and where the first is. A pixel
+    // counts only when its eight neighbours are amber too, so the coloured
+    // fringes of subpixel-antialiased text (as on Linux) are not counted.
+    static int amberPixels(const QImage &image, QPoint *first = nullptr) {
         int count = 0;
-        for (int y = 0; y < image.height(); y += 2)
-            for (int x = 0; x < image.width(); x += 2)
-                if (isAmber(image.pixelColor(x, y))) ++count;
+        for (int y = 1; y + 1 < image.height(); y += 2)
+            for (int x = 1; x + 1 < image.width(); x += 2) {
+                bool area = true;
+                for (int dy = -1; dy <= 1 && area; ++dy)
+                    for (int dx = -1; dx <= 1 && area; ++dx) area = isAmber(image.pixelColor(x + dx, y + dy));
+                if (area && count++ == 0 && first) *first = QPoint(x, y);
+            }
         return count;
     }
     // The most contrast any pixel of `area` in `image` has with `background`.
