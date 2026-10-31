@@ -111,6 +111,8 @@ private:
     // The tab the Inspector was raised over, whether it came up by itself,
     // and the clip that raised it.
     QPointer<ads::CDockWidget> m_beforeInspector;
+    // Whether that tab was chosen by hand (not a browser Add effect raised).
+    bool m_beforeByHand = true;
     bool m_inspectorAuto = false;
     bool m_raisingInspector = false;
     QString m_inspectorClip;

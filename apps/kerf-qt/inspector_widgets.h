@@ -166,13 +166,17 @@ public:
     QSize sizeHint() const override { return {92, ScrubField::kHeight}; }
     // The knob's centre, for tests.
     QPointF knobCenter() const;
-    // The fill from the origin to the value. A change too small for the
-    // fill to clear the knob still shows: the fill runs kFillPast points
-    // past the knob's centre, so 4.5 show beyond its edge. Empty at the
-    // origin.
+    // The fill from the origin to the knob's centre; empty at the origin.
     static constexpr double kKnobRadius = 6.5;
-    static constexpr double kFillPast = 11.0;
     QRectF fillRect() const;
+    // The 1pt mark at the default. When the default lies under the knob it
+    // reaches kTickBeyondKnob past the knob's top and bottom, so its ends
+    // show; nothing is drawn on the knob.
+    static constexpr int kTickBeyondKnob = 3;
+    QRect detentTick() const;
+    // The knob's edge: `sliderHandleChanged` away from the default (a small
+    // change shows there), `sliderHandleBorder` at it.
+    QColor knobEdge() const;
     double valueAt(double x) const;
 
 signals:
@@ -389,8 +393,24 @@ public:
     void setOpen(bool open);
     bool isOpen() const { return m_open; }
     void setCount(int count);
+    // What changed, as whole items: as many as fit, joined by ", ", then
+    // " +N" for the rest, then `suffix` (" · 1 off"); when not even the
+    // first fits, `compact` ("1 on · 1 off"); else nothing. Never cut
+    // mid-word. `full` is the tooltip and summary().
+    struct Summary {
+        QStringList items;
+        QString suffix;
+        QString compact;
+        QString full;
+    };
+    void setSummary(const Summary &summary);
+    // One item, shown whole or not at all.
     void setSummary(const QString &summary);
-    QString summary() const { return m_summary; }
+    QString summary() const { return m_summary.full; }
+    // What the folded header shows now.
+    QString shownSummary() const;
+    // The longest form that fits `room` points in `metrics`.
+    static QString fitSummary(const Summary &summary, const QFontMetrics &metrics, int room);
     void addTrailing(QWidget *widget);
     void setChanged(bool changed);
     void setResetHandler(std::function<void()> reset);
@@ -417,7 +437,7 @@ private:
     GlyphButton *m_reset = nullptr;
     QWidget *m_bodyWidget = nullptr;
     QVBoxLayout *m_body = nullptr;
-    QString m_summary;
+    Summary m_summary;
     std::function<void()> m_resetHandler;
     bool m_open = false;
     bool m_changed = false;

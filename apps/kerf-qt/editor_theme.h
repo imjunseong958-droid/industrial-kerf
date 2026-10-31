@@ -193,6 +193,7 @@ struct EditorTheme {
     QColor switchOffStroke;  // ...its edge...
     QColor knob;             // ...and its knob.
     QColor inspectorDetent;  // The tick at a slider's default.
+    QColor sliderHandleChanged; // A slider knob's edge away from its default: `text` (light), `borderStrong` (dark, where `text` is the knob's own colour).
 
     QColor statusBar;
     QColor statusText;

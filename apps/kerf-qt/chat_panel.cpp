@@ -1577,7 +1577,7 @@ void ChatPanel::updateListEdge() {
 
 QList<QRect> ChatPanel::edgeCoverStrips() const { return m_edgeCover->strips(); }
 
-QList<QRect> labelTextLines(const QLabel *label) {
+QList<TextLine> labelTextLines(const QLabel *label) {
     // Laid out as the label lays it out: its font, its width when it
     // wraps, its rich text's own line heights; placed as its alignment
     // places the text in its contents.
@@ -1592,15 +1592,21 @@ QList<QRect> labelTextLines(const QLabel *label) {
     const double height = document.size().height();
     const Qt::Alignment align = label->alignment();
     const double offset = (align & Qt::AlignTop) ? 0.0 : (align & Qt::AlignBottom) ? inner.height() - height : (inner.height() - height) / 2.0;
-    QList<QRect> lines;
+    // Capitals stand this far under a line's ascent; a larger span (a
+    // bigger ascent) has taller capitals, in proportion.
+    const QFontMetricsF metrics(label->font());
+    const double capShare = metrics.ascent() > 0 ? metrics.capHeight() / metrics.ascent() : 0.7;
+    QList<TextLine> lines;
     for (QTextBlock block = document.begin(); block.isValid(); block = block.next()) {
         const QRectF bounds = document.documentLayout()->blockBoundingRect(block);
         const QTextLayout *layout = block.layout();
         for (int index = 0; layout && index < layout->lineCount(); ++index) {
             const QTextLine line = layout->lineAt(index);
             const QRectF at(bounds.left() + line.x(), bounds.top() + line.y() + offset, std::max(1.0, line.naturalTextWidth()), line.height());
-            lines << QRect(inner.left() + int(std::floor(at.left())), inner.top() + int(std::floor(at.top())), int(std::ceil(at.width())),
-                           int(std::round(at.height())));
+            const QRect rect(inner.left() + int(std::floor(at.left())), inner.top() + int(std::floor(at.top())), int(std::ceil(at.width())),
+                             int(std::round(at.height())));
+            const int capTop = inner.top() + int(std::floor(at.top() + line.ascent() * (1.0 - capShare)));
+            lines << TextLine{rect, std::clamp(capTop, rect.top(), rect.bottom())};
         }
     }
     return lines;
@@ -1614,9 +1620,9 @@ void ChatPanel::updateEdgeCover() {
     const int bottom = viewport->height();
     QList<QRect> strips;
     // `box` (in the view) cut by an edge: covered where less than `least`
-    // of it would show.
-    const auto cut = [&](const QRect &box, double least) {
-        if (box.top() < top && box.bottom() >= top && box.bottom() + 1 - top < least)
+    // of it would show (`leastTop` under the top edge, when given).
+    const auto cut = [&](const QRect &box, double least, double leastTop = -1.0) {
+        if (box.top() < top && box.bottom() >= top && box.bottom() + 1 - top < (leastTop >= 0.0 ? leastTop : least))
             strips << QRect(box.left(), top, box.width(), box.bottom() + 1 - top);
         if (box.top() < bottom && box.bottom() >= bottom && bottom - box.top() < least)
             strips << QRect(box.left(), box.top(), box.width(), bottom - box.top());
@@ -1626,9 +1632,12 @@ void ChatPanel::updateEdgeCover() {
         const QRect box(child->mapTo(viewport, QPoint()), child->size());
         if (box.bottom() < top || box.top() >= bottom) continue;
         if (box.top() >= top && box.bottom() < bottom) continue;
-        // Text: each line by itself, by its line's height.
+        // Text: each line by itself, by its line's height; under the top
+        // edge, by its capitals: a line shows only with their tops.
         if (auto *label = qobject_cast<QLabel *>(child); label && !label->text().isEmpty()) {
-            for (const QRect &line : labelTextLines(label)) cut(line.translated(box.topLeft()), kSliverLine * line.height());
+            for (const TextLine &line : labelTextLines(label))
+                cut(line.rect.translated(box.topLeft()), kSliverLine * line.rect.height(),
+                    std::max(kSliverLine * line.rect.height(), double(line.rect.bottom() + 1 - line.capTop)));
             continue;
         }
         // A button's words, centred in it.

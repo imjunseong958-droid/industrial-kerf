@@ -144,6 +144,8 @@ private:
         InspectorSection *section = nullptr;
         QList<int> rows;
         std::function<QString()> summary;
+        // Sets a summary of whole items (the effects); wins over `summary`.
+        std::function<void(InspectorSection *)> items;
     };
     enum class Mode { Sequence, Clip, Several, MixedKinds };
 

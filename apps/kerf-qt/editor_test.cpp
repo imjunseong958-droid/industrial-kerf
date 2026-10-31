@@ -2282,9 +2282,8 @@ private slots:
         mouse(&slider, QEvent::MouseButtonRelease, QPointF(at - 20, 12));
         QVERIFY(std::abs(slider.knobCenter().x() - (at - 20.0)) < 0.5);
         QCOMPARE(released.size(), 2);
-        // A change small against the range (Exposure +0.40 of −3…3) still
-        // shows its fill: past the knob's edge on the value's side; at the
-        // origin there is none.
+        // The fill runs from the origin to the knob's centre, never past it;
+        // at the origin there is none.
         InspectorSlider wide;
         wide.resize(84, ScrubField::kHeight);
         wide.setRange(-3.0, 3.0);
@@ -2292,16 +2291,62 @@ private slots:
         wide.setDetent(0.0);
         wide.setValue(0.0);
         QVERIFY(wide.fillRect().isEmpty());
-        for (const double value : {0.1, 0.4, -0.2}) {
+        for (const double value : {0.1, 0.4, -0.2, 2.0}) {
             wide.setValue(value);
             const QRectF fill = wide.fillRect();
             const double knob = wide.knobCenter().x();
-            if (value > 0) QVERIFY2(fill.right() >= knob + InspectorSlider::kKnobRadius + 2.0, qPrintable(QString::number(value)));
-            else QVERIFY2(fill.left() <= knob - InspectorSlider::kKnobRadius - 2.0, qPrintable(QString::number(value)));
+            if (value > 0) QVERIFY2(std::abs(fill.right() - knob) < 0.5, qPrintable(QString::number(value)));
+            else QVERIFY2(std::abs(fill.left() - knob) < 0.5, qPrintable(QString::number(value)));
         }
-        // A large change fills from the origin to the knob, no further.
-        wide.setValue(2.0);
-        QVERIFY(std::abs(wide.fillRect().right() - wide.knobCenter().x()) < 0.5);
+    }
+
+    // A slider's default stays in sight in both appearances without
+    // anything drawn on the knob: under the knob the 1pt tick's ends show
+    // above and below it, crisp, in the detent ink; the knob's inside is
+    // its own colour only. A changed value draws the knob's edge in full
+    // ink, the default in grey.
+    void inspectorSliderDefaultShowsAroundTheKnob() {
+        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); applyEditorAppearance(); });
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            applyEditorAppearance();
+            const EditorTheme &theme = editorTheme();
+            QVERIFY(theme.sliderHandleChanged != theme.sliderHandleBorder);
+            QVERIFY(contrastRatio(theme.sliderHandleChanged, theme.sliderHandle) > contrastRatio(theme.sliderHandleBorder, theme.sliderHandle));
+            QVERIFY(contrastRatio(theme.sliderHandleChanged, theme.sliderHandle) >= 3.0);
+            InspectorSlider slider;
+            slider.resize(92, ScrubField::kHeight);
+            slider.setRange(-3.0, 3.0);
+            slider.setOrigin(0.0);
+            slider.setDetent(0.0);
+            for (const double value : {0.0, 0.1}) {
+                slider.setValue(value);
+                const QString what = QStringLiteral("%1 %2").arg(theme.dark ? "dark" : "light").arg(value);
+                QCOMPARE(slider.knobEdge(), value == 0.0 ? theme.sliderHandleBorder : theme.sliderHandleChanged);
+                const QRect tick = slider.detentTick();
+                const QPointF knob = slider.knobCenter();
+                QCOMPARE(tick.width(), 1);
+                QVERIFY2(tick.top() <= knob.y() - InspectorSlider::kKnobRadius - 3.0, qPrintable(what));
+                QVERIFY2(tick.bottom() + 1 >= knob.y() + InspectorSlider::kKnobRadius + 3.0, qPrintable(what));
+                QImage image(slider.size(), QImage::Format_ARGB32_Premultiplied);
+                image.fill(theme.panel);
+                slider.render(&image);
+                // The tick's ends: the detent ink, solid, above and below.
+                for (const int y : {tick.top(), tick.top() + 2, tick.bottom() - 2, tick.bottom()})
+                    QVERIFY2(image.pixelColor(tick.left(), y) == theme.inspectorDetent, qPrintable(what + QStringLiteral(" y %1").arg(y)));
+                // Inside the knob (clear of its 1pt edge): the knob's colour only.
+                for (int y = 0; y < image.height(); ++y)
+                    for (int x = 0; x < image.width(); ++x) {
+                        const QPointF centre(x + 0.5, y + 0.5);
+                        if (QLineF(centre, knob).length() > InspectorSlider::kKnobRadius - 1.5) continue;
+                        QVERIFY2(image.pixelColor(x, y) == theme.sliderHandle,
+                                 qPrintable(what + QStringLiteral(" at %1,%2").arg(x).arg(y)));
+                    }
+            }
+            // Away from the knob, the plain 1x10 mark.
+            slider.setValue(2.0);
+            QCOMPARE(slider.detentTick().height(), 10);
+        }
     }
 
     // A switched-off effect's values stay editable and readable: numbers,
@@ -2369,6 +2414,21 @@ private slots:
         // off marked so.
         QVERIFY(!effects->isOpen());
         QCOMPARE(effects->summary(), QStringLiteral("Edge Glow, Invert (off)"));
+        // Shown in whole names only: the ones on, then the count switched
+        // off; short of room, "1 on · 1 off"; shorter still, nothing.
+        {
+            QFont font;
+            font.setPixelSize(12);
+            const QFontMetrics metrics(font);
+            InspectorSection::Summary summary{{QStringLiteral("Primary Colour Correction"), QStringLiteral("Gaussian Blur")},
+                                              QStringLiteral(" · 1 off"), QStringLiteral("2 on · 1 off"), QString()};
+            const auto fit = [&](const QString &text) { return InspectorSection::fitSummary(summary, metrics, metrics.horizontalAdvance(text)); };
+            QCOMPARE(fit(QStringLiteral("Primary Colour Correction, Gaussian Blur · 1 off")), QStringLiteral("Primary Colour Correction, Gaussian Blur · 1 off"));
+            QCOMPARE(fit(QStringLiteral("Primary Colour Correction +1 · 1 off")), QStringLiteral("Primary Colour Correction +1 · 1 off"));
+            QCOMPARE(fit(QStringLiteral("Primary Colour Correction")), QStringLiteral("2 on · 1 off"));
+            QCOMPARE(InspectorSection::fitSummary(summary, metrics, 8), QString());
+            QCOMPARE(effects->shownSummary().contains(QChar(0x2026)), false);
+        }
         const auto boxes = inspector->findChildren<QWidget *>(QStringLiteral("effectBox"));
         QCOMPARE(boxes.size(), 2);
         auto *glow = boxes.at(0)->findChild<InspectorSwitch *>(QStringLiteral("effectEnabled"));
@@ -2439,17 +2499,19 @@ private slots:
         QCOMPARE(presentationEffectName(QStringLiteral("Edge Glow")), QStringLiteral("Edge Glow"));
         QCOMPARE(sentenceCase(QStringLiteral("Look LUT")), QStringLiteral("Look LUT"));
         QCOMPARE(sentenceCase(QStringLiteral("Glow Color")), QStringLiteral("Glow colour"));
-        // Edge Glow has six parameters: five, then "1 more ⌄", in words as
-        // Add effect is, at the column's start.
-        auto *more = boxes.at(0)->findChild<QPushButton *>(QStringLiteral("effectMoreToggle"));
-        QVERIFY(more);
-        QCOMPARE(more->text(), QStringLiteral("1 more"));
-        QCOMPARE(more->font().pixelSize(), 12);
-        QCOMPARE(more->mapTo(boxes.at(0), QPoint()).x(), 0);
-        QVERIFY(boxes.at(0)->findChild<QWidget *>(QStringLiteral("effectMoreRows"))->isHidden());
-        more->click();
-        QVERIFY(!boxes.at(0)->findChild<QWidget *>(QStringLiteral("effectMoreRows"))->isHidden());
-        QVERIFY(QSettings().value(QStringLiteral("editor/inspector/fx/light.edgeglow/more")).toBool());
+        // Edge Glow has six parameters: folding one would save nothing, so
+        // all six show and there is no "1 more".
+        {
+            QVERIFY(!boxes.at(0)->findChild<QPushButton *>(QStringLiteral("effectMoreToggle")));
+            QWidget *moreRows = boxes.at(0)->findChild<QWidget *>(QStringLiteral("effectMoreRows"));
+            int params = 0;
+            for (QWidget *child : boxes.at(0)->findChildren<QWidget *>())
+                if (child->objectName().startsWith(QStringLiteral("effectParam_"))) {
+                    ++params;
+                    QVERIFY2(!moreRows || !moreRows->isAncestorOf(child), qPrintable(child->objectName()));
+                }
+            QCOMPARE(params, 6);
+        }
         auto op = [&window] { return takeOps(window).first().toObject(); };
         glow->click();
         QJsonObject edit = op();
@@ -2505,6 +2567,33 @@ private slots:
         auto *tintRow = qobject_cast<InspectorRow *>(grouped->findChild<ScrubField *>(QStringLiteral("effectParam_tint"))->parentWidget());
         QVERIFY(tintRow);
         QCOMPARE(tintRow->label()->toolTip(), QStringLiteral("Basic Correction: Tint"));
+
+        // Seven parameters: five, then "2 more ⌄", in words as Add effect
+        // is, at the column's start; open stays open per effect.
+        QJsonArray seven;
+        for (int index = 0; index < 7; ++index)
+            seven.append(QJsonObject{{"name", QStringLiteral("p%1").arg(index)}, {"type", "number"}, {"default", 0}, {"min", 0}, {"max", 100},
+                                     {"doc", QStringLiteral("Amount %1").arg(index)}});
+        inspector->m_effectDefs.insert(QStringLiteral("test.seven"), QJsonObject{{"id", "test.seven"}, {"name", "Seven"}, {"params", seven}});
+        inspector->m_shape.clear();
+        window.applySnapshot(QJsonObject{{"revision", 5}, {"duration", 4}, {"timeline", QJsonObject{{"fps", 24}, {"tracks", QJsonArray{
+            QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+                QJsonObject{{"id", "c1"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 0.0}, {"duration", 2.0},
+                            {"effects", QJsonArray{QJsonObject{{"fx", "test.seven"}, {"enabled", true}, {"params", QJsonObject{}}}}}}}}}}}}}});
+        QWidget *long7 = inspector->findChildren<QWidget *>(QStringLiteral("effectBox")).value(0);
+        QVERIFY(long7);
+        auto *more = long7->findChild<QPushButton *>(QStringLiteral("effectMoreToggle"));
+        QVERIFY(more);
+        QCOMPARE(more->text(), QStringLiteral("2 more"));
+        QCOMPARE(more->font().pixelSize(), 12);
+        QCOMPARE(more->mapTo(long7, QPoint()).x(), 0);
+        QWidget *moreRows = long7->findChild<QWidget *>(QStringLiteral("effectMoreRows"));
+        QVERIFY(moreRows->isHidden());
+        QVERIFY(moreRows->isAncestorOf(long7->findChild<ScrubField *>(QStringLiteral("effectParam_p5"))));
+        QVERIFY(!moreRows->isAncestorOf(long7->findChild<ScrubField *>(QStringLiteral("effectParam_p4"))));
+        more->click();
+        QVERIFY(!moreRows->isHidden());
+        QVERIFY(QSettings().value(QStringLiteral("editor/inspector/fx/test.seven/more")).toBool());
     }
 
     // Add effect raises the Effects browser with its search ready; adding
@@ -4036,6 +4125,43 @@ private slots:
         emit window.m_timeline->clipSelected(QStringLiteral("v1b"));
         QCoreApplication::processEvents();
         QVERIFY(inspector->isCurrentTab());
+        // Add effect, an effect added (the Inspector comes back), then a
+        // deselect: back to Project, not Effects; the next click raises
+        // the Inspector again.
+        emit window.m_timeline->deselectRequested();
+        QCoreApplication::processEvents();
+        QVERIFY(project->isCurrentTab());
+        emit window.m_timeline->clipSelected(QStringLiteral("v1a"));
+        QCoreApplication::processEvents();
+        QVERIFY(inspector->isCurrentTab());
+        emit window.m_inspector->addEffectRequested(false);
+        QCoreApplication::processEvents();
+        QVERIFY(effects->isCurrentTab());
+        emit window.m_effects->addRequested(QStringLiteral("blur.gaussian"));
+        QCoreApplication::processEvents();
+        QVERIFY(inspector->isCurrentTab());
+        emit window.m_timeline->deselectRequested();
+        QCoreApplication::processEvents();
+        QVERIFY(project->isCurrentTab());
+        emit window.m_timeline->clipSelected(QStringLiteral("v1b"));
+        QCoreApplication::processEvents();
+        QVERIFY(inspector->isCurrentTab());
+        // Effects chosen by hand stays through a deselect and the next
+        // click; Project then gives the click back to the Inspector.
+        effects->setAsCurrentTab();
+        QCoreApplication::processEvents();
+        emit window.m_timeline->clipSelected(QStringLiteral("v1a"));
+        QVERIFY(effects->isCurrentTab());
+        emit window.m_timeline->deselectRequested();
+        QCoreApplication::processEvents();
+        QVERIFY(effects->isCurrentTab());
+        emit window.m_timeline->clipSelected(QStringLiteral("v1b"));
+        QCoreApplication::processEvents();
+        QVERIFY(effects->isCurrentTab());
+        project->setAsCurrentTab();
+        emit window.m_timeline->clipSelected(QStringLiteral("v1a"));
+        QCoreApplication::processEvents();
+        QVERIFY(inspector->isCurrentTab());
         // ⌘4 still shows it over a browser chosen by hand.
         effects->setAsCurrentTab();
         QCoreApplication::processEvents();
@@ -4404,6 +4530,19 @@ private slots:
                     QEvent leave(QEvent::Leave);
                     QCoreApplication::sendEvent(scaleRow, &leave);
                     QCoreApplication::sendEvent(inspector->findChild<ScrubField *>(QStringLiteral("prop_scale")), &leave);
+                }
+                // Folded, the Effects header in the 300pt column names what
+                // is on in whole words, never cut ("…"), and counts the rest.
+                {
+                    InspectorSection *fx = inspector->section(QStringLiteral("effects"));
+                    QVERIFY(!fx->isOpen());
+                    QCoreApplication::processEvents();
+                    auto *label = fx->findChild<QLabel *>(QStringLiteral("sectionSummary"));
+                    const QString shown = fx->shownSummary();
+                    QVERIFY2(!shown.isEmpty() && !shown.contains(QChar(0x2026)), qPrintable(shown));
+                    QVERIFY2(label->fontMetrics().horizontalAdvance(shown) <= label->contentsRect().width(), qPrintable(shown));
+                    QVERIFY(fx->summary().startsWith(QStringLiteral("Primary Colour Correction")));
+                    QCOMPARE(label->toolTip(), fx->summary());
                 }
                 // Its effects: Color open with "6 more", the blur folded with its line.
                 inspector->section(QStringLiteral("effects"))->setOpen(true);
@@ -6900,13 +7039,26 @@ private slots:
             for (const QRect &strip : strips) cover += strip;
             for (QLabel *label : chat.scroll()->widget()->findChildren<QLabel *>()) {
                 if (!label->isVisibleTo(chat.scroll()->widget()) || label->text().isEmpty()) continue;
-                const QList<QRect> lines = labelTextLines(label);
+                const QList<TextLine> lines = labelTextLines(label);
                 QVERIFY(!lines.isEmpty());
-                // The lines lie inside the label.
-                QVERIFY2(label->rect().adjusted(0, -1, 0, 1).contains(lines.constFirst()) && label->rect().adjusted(0, -1, 0, 1).contains(lines.constLast()),
+                // The lines lie inside the label, their capitals' tops in them.
+                QVERIFY2(label->rect().adjusted(0, -1, 0, 1).contains(lines.constFirst().rect) &&
+                             label->rect().adjusted(0, -1, 0, 1).contains(lines.constLast().rect),
                          qPrintable(label->text().left(30)));
-                for (const QRect &at : lines) {
-                    const QRect line = at.translated(label->mapTo(viewport, QPoint()));
+                for (const TextLine &text : lines) {
+                    QVERIFY(text.capTop > text.rect.top() && text.capTop < text.rect.top() + text.rect.height() / 2);
+                    const QRect line = text.rect.translated(label->mapTo(viewport, QPoint()));
+                    const int capTop = text.capTop + label->mapTo(viewport, QPoint()).y();
+                    // Under the top edge: a line whose baseline shows shows
+                    // its capitals' tops too, or none of it.
+                    if (line.top() < 0 && line.bottom() >= 0) {
+                        const QRegion shownPart = QRegion(QRect(line.left(), 0, line.width(), line.bottom() + 1)).subtracted(cover);
+                        if (capTop < 0)
+                            QVERIFY2(shownPart.isEmpty(), qPrintable(QStringLiteral("at %1: a line of “%2” cut through its capitals").arg(value).arg(label->text().left(20))));
+                        else
+                            QVERIFY2(shownPart == QRegion(QRect(line.left(), 0, line.width(), line.bottom() + 1)),
+                                     qPrintable(QStringLiteral("at %1: a line of “%2” with its capitals covered").arg(value).arg(label->text().left(20))));
+                    }
                     const int shown = viewport->height() - line.top();
                     if (shown > 0 && shown < ChatPanel::kSliverLine * line.height())
                         QVERIFY2(QRegion(QRect(line.left(), line.top(), line.width(), shown)).subtracted(cover).isEmpty(),
@@ -6928,8 +7080,12 @@ private slots:
                 if (shown > 0 && box.bottom() >= viewport->height() && shown < least)
                     QVERIFY2(QRegion(QRect(box.left(), box.top(), box.width(), shown)).subtracted(cover).isEmpty(), qPrintable(QString::number(value)));
             }
-            // A line half in view or more is never covered.
-            for (const QRect &strip : strips) QVERIFY(strip.height() <= std::max(ChatPanel::kSliverAvatar * ChatPanel::kAvatar, 0.5 * 24));
+            // A line half in view or more over the bottom edge is never
+            // covered; under the top edge, no strip is taller than a line.
+            for (const QRect &strip : strips) {
+                if (strip.top() > 0) QVERIFY(strip.height() <= std::max(ChatPanel::kSliverAvatar * ChatPanel::kAvatar, 0.5 * 24));
+                else QVERIFY(strip.height() < 24);
+            }
             if (!strips.isEmpty() && covered < 3) {
                 // The cover is the panel's own surface, solid.
                 ++covered;

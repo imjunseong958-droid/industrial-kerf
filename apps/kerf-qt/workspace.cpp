@@ -355,8 +355,14 @@ void Workspace::raiseInspector(InspectorOrigin origin, bool force, const QString
     // Chose another tab with this clip still selected: only a new click raises.
     if (!force && !clip.isEmpty() && clip == m_inspectorClip) return;
     m_inspectorClip = clip;
+    // Back from a browser it raised itself (Add effect, then an effect
+    // added): the tab from before the Inspector first came up (Project)
+    // stays the one a deselect goes back to.
+    if (current != m_browserForInspector || !m_beforeInspector) {
+        m_beforeByHand = !current || current != m_browserForInspector;
+        m_beforeInspector = current;
+    }
     m_browserForInspector = nullptr;
-    m_beforeInspector = area->currentDockWidget();
     QWidget *focus = QApplication::focusWidget();
     m_raisingInspector = true;
     inspector->setAsCurrentTab();
@@ -384,8 +390,12 @@ void Workspace::inspectorDeselected() {
     ads::CDockAreaWidget *area = inspector->dockAreaWidget();
     if (!area || area->currentDockWidget() != inspector) return;
     if (m_beforeInspector && !m_beforeInspector->isClosed() && m_beforeInspector->dockAreaWidget() == area) {
+        // A browser comes back as it was: chosen by hand (it keeps the
+        // front on the next click) or raised for the Inspector (it does not).
         m_raisingInspector = true;
+        m_raisingBrowser = !m_beforeByHand;
         m_beforeInspector->setAsCurrentTab();
+        m_raisingBrowser = false;
         m_raisingInspector = false;
     }
 }
@@ -400,11 +410,16 @@ void Workspace::toggleInspector() {
     if (!wasClosed && area && area->currentDockWidget() == inspector && m_beforeInspector && !m_beforeInspector->isClosed() &&
         m_beforeInspector->dockAreaWidget() == area) {
         m_raisingInspector = true;
+        m_raisingBrowser = !m_beforeByHand;
         m_beforeInspector->setAsCurrentTab();
+        m_raisingBrowser = false;
         m_raisingInspector = false;
         return;
     }
-    if (area && area->currentDockWidget() != inspector) m_beforeInspector = area->currentDockWidget();
+    if (area && area->currentDockWidget() != inspector) {
+        m_beforeInspector = area->currentDockWidget();
+        m_beforeByHand = m_beforeInspector != m_browserForInspector;
+    }
     m_raisingInspector = true;
     inspector->setAsCurrentTab();
     m_raisingInspector = false;

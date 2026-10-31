@@ -53,7 +53,7 @@ constexpr int kSide = 16;          // the column's side padding
 // its row or beside a slider or pop-up, so the column's fields line up.
 constexpr int kSingleField = InspectorRow::kValueField;
 constexpr int kPairedField = InspectorRow::kValueField;
-// Effects show this many parameters before "N more".
+// Effects show this many parameters before "N more" (N is 2 or more).
 constexpr int kEffectRowsShown = 5;
 const char *kFxMime = "application/x-kerf-fx";
 
@@ -1513,7 +1513,8 @@ void InspectorPanel::refreshValues() {
             }
             changed |= m_rows.at(rowIndex).row->isChanged();
         }
-        entry.section->setSummary(entry.summary ? entry.summary() : pieces.join(QStringLiteral(" · ")));
+        if (entry.items) entry.items(entry.section);
+        else entry.section->setSummary(entry.summary ? entry.summary() : pieces.join(QStringLiteral(" · ")));
         entry.section->setChanged(changed);
     }
 }
@@ -2566,20 +2567,37 @@ void InspectorPanel::buildEffectsSection(QVBoxLayout *into, bool openByDefault) 
     sectionBody(section)->addSpacing(4);
     sectionBody(section)->addWidget(addEffect, 0, Qt::AlignLeft);
     }
-    // Every effect, so the count and the names agree; one switched off
-    // says so.
-    m_sections[section].summary = [this] {
-        QStringList names;
+    // The effects that are on, by name, as many whole names as fit, the
+    // ones switched off counted ("Primary Colour Correction · 1 off");
+    // short of room, "1 on · 1 off". The tooltip names every one.
+    m_sections[section].items = [this](InspectorSection *into) {
+        QStringList on;
+        QStringList all;
+        int off = 0;
         for (const QJsonValue &effect : m_clips.first().clip.value(QStringLiteral("effects")).toArray()) {
             const QJsonObject e = effect.toObject();
             const QString fx = e.value(QStringLiteral("fx")).toString();
             QString name = m_effectDefs.value(fx).value(QStringLiteral("name")).toString();
             if (name.isEmpty()) name = e.value(QStringLiteral("doc")).toString(fx).section(QStringLiteral(": "), 0, 0).remove(QLatin1Char('.'));
             name = presentationEffectName(name);
-            if (!e.value(QStringLiteral("enabled")).toBool(true)) name += QStringLiteral(" (off)");
-            names << name;
+            if (e.value(QStringLiteral("enabled")).toBool(true)) {
+                on << name;
+                all << name;
+            } else {
+                ++off;
+                all << name + QStringLiteral(" (off)");
+            }
         }
-        return names.join(QStringLiteral(", "));
+        InspectorSection::Summary summary;
+        summary.items = on;
+        summary.full = all.join(QStringLiteral(", "));
+        if (off > 0) {
+            summary.suffix = on.isEmpty() ? QStringLiteral("%1 off").arg(off) : QStringLiteral(" · %1 off").arg(off);
+            summary.compact = on.isEmpty() ? summary.suffix : QStringLiteral("%1 on · %2 off").arg(on.size()).arg(off);
+        } else if (!on.isEmpty()) {
+            summary.compact = QStringLiteral("%1 on").arg(on.size());
+        }
+        into->setSummary(summary);
     };
 }
 
@@ -2667,6 +2685,9 @@ void InspectorPanel::buildEffect(QVBoxLayout *into, int index) {
     for (qsizetype index = 0; index < shortLabels.size(); ++index)
         if (shortLabels.count(shortLabels.at(index)) > 1 || (labels.contains(shortLabels.at(index)) && shortLabels.at(index) != labels.at(index)))
             shortLabels[index] = labels.at(index);
+    // Folding saves a click only when it hides two rows or more: with one
+    // to spare, every row shows.
+    const int rowsShown = defs.size() - kEffectRowsShown >= 2 ? kEffectRowsShown : int(defs.size());
     int shownRows = 0;
     int hidden = 0;
     QString lastGroup;
@@ -2675,7 +2696,7 @@ void InspectorPanel::buildEffect(QVBoxLayout *into, int index) {
         const QJsonObject param = value.toObject();
         ++paramIndex;
         const QString group = presentationGroup(param);
-        const bool inMore = groups.isEmpty() ? shownRows >= kEffectRowsShown : (!groups.isEmpty() && group != groups.first());
+        const bool inMore = groups.isEmpty() ? shownRows >= rowsShown : (!groups.isEmpty() && group != groups.first());
         QVBoxLayout *target = inMore ? moreLayout : paramsLayout;
         if (!group.isEmpty() && group != lastGroup) {
             auto *sub = quietLabel(group, 11);

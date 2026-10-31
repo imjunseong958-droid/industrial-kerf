@@ -564,6 +564,23 @@ double InspectorSlider::valueAt(double x) const {
     return fromTravel((x - track.left()) / track.width());
 }
 
+QRect InspectorSlider::detentTick() const {
+    const QRectF track = groove();
+    const double detentX = track.left() + travelOf(m_detent) * track.width();
+    const int x = int(std::floor(detentX));
+    const int middle = int(std::lround(track.center().y()));
+    // Under the knob, it runs past the knob's top and bottom so its ends
+    // show; elsewhere a 1x10 mark.
+    const bool under = !m_mixed && std::abs(detentX - knobCenter().x()) < kKnobRadius + 1.0;
+    const int half = under ? int(std::ceil(kKnobRadius)) + kTickBeyondKnob : 5;
+    return {x, middle - half, 1, 2 * half};
+}
+
+QColor InspectorSlider::knobEdge() const {
+    const EditorTheme &theme = editorTheme();
+    return std::abs(m_value - m_detent) > 1e-12 ? theme.sliderHandleChanged : theme.sliderHandleBorder;
+}
+
 void InspectorSlider::paintEvent(QPaintEvent *) {
     const EditorTheme &theme = editorTheme();
     QPainter painter(this);
@@ -572,20 +589,21 @@ void InspectorSlider::paintEvent(QPaintEvent *) {
     painter.setPen(Qt::NoPen);
     painter.setBrush(theme.sliderGroove);
     painter.drawRoundedRect(track, 2.0, 2.0);
-    const double detentX = track.left() + travelOf(m_detent) * track.width();
-    const QRectF tick(std::round(detentX) - 0.5, track.center().y() - 5.0, 1.0, 10.0);
-    painter.fillRect(tick, theme.inspectorDetent);
+    if (!m_mixed)
+        if (const QRectF fill = fillRect(); !fill.isEmpty()) {
+            painter.setBrush(fillInk());
+            painter.drawRoundedRect(fill, 2.0, 2.0);
+        }
+    // The default: a crisp one-pixel mark, drawn before the knob so
+    // nothing ever lies on the knob.
+    painter.setRenderHint(QPainter::Antialiasing, false);
+    painter.fillRect(detentTick(), theme.inspectorDetent);
+    painter.setRenderHint(QPainter::Antialiasing, true);
     if (m_mixed) return;
-    const QPointF knob = knobCenter();
-    if (const QRectF fill = fillRect(); !fill.isEmpty()) {
-        painter.setBrush(fillInk());
-        painter.drawRoundedRect(fill, 2.0, 2.0);
-    }
-    painter.setPen(QPen(theme.sliderHandleBorder, 1.0));
+    // Changed: the knob's edge in full ink; at its default, grey.
+    painter.setPen(QPen(knobEdge(), 1.0));
     painter.setBrush(theme.sliderHandle);
-    painter.drawEllipse(knob, kKnobRadius, kKnobRadius);
-    // The default under the knob stays in sight, a tick across it.
-    if (std::abs(detentX - knob.x()) < kKnobRadius) painter.fillRect(tick, theme.text);
+    painter.drawEllipse(knobCenter(), kKnobRadius, kKnobRadius);
 }
 
 QRectF InspectorSlider::fillRect() const {
@@ -593,13 +611,7 @@ QRectF InspectorSlider::fillRect() const {
     if (m_mixed || std::abs(m_value - m_origin) < 1e-12) return {};
     const double originX = track.left() + travelOf(m_origin) * track.width();
     const double knob = knobCenter().x();
-    double end = knob;
-    // A change too small to clear the knob: the fill runs past it.
-    if (std::abs(knob - originX) < kFillPast) {
-        const double side = m_value > m_origin ? 1.0 : -1.0;
-        end = std::clamp(knob + side * kFillPast, track.left(), track.right());
-    }
-    return QRectF(QPointF(std::min(originX, end), track.top()), QPointF(std::max(originX, end), track.bottom()));
+    return QRectF(QPointF(std::min(originX, knob), track.top()), QPointF(std::max(originX, knob), track.bottom()));
 }
 
 void InspectorSlider::mousePressEvent(QMouseEvent *event) {
@@ -1196,9 +1208,30 @@ void InspectorSection::setCount(int count) {
     m_countLabel->setVisible(count > 0);
 }
 
-void InspectorSection::setSummary(const QString &summary) {
+void InspectorSection::setSummary(const Summary &summary) {
     m_summary = summary;
     updateHeader();
+}
+
+void InspectorSection::setSummary(const QString &summary) {
+    setSummary(Summary{summary.isEmpty() ? QStringList{} : QStringList{summary}, {}, {}, summary});
+}
+
+QString InspectorSection::shownSummary() const {
+    return m_summaryLabel->text();
+}
+
+QString InspectorSection::fitSummary(const Summary &summary, const QFontMetrics &metrics, int room) {
+    const auto fits = [&](const QString &text) { return metrics.horizontalAdvance(text) <= room; };
+    const qsizetype count = summary.items.size();
+    for (qsizetype shown = count; shown >= 1; --shown) {
+        QString text = summary.items.mid(0, shown).join(QStringLiteral(", "));
+        if (shown < count) text += QStringLiteral(" +%1").arg(count - shown);
+        text += summary.suffix;
+        if (fits(text)) return text;
+    }
+    if (!summary.compact.isEmpty() && fits(summary.compact)) return summary.compact;
+    return {};
 }
 
 void InspectorSection::addTrailing(QWidget *widget) {
@@ -1216,12 +1249,12 @@ void InspectorSection::setResetHandler(std::function<void()> reset) {
 
 void InspectorSection::updateHeader() {
     m_chevron->setOpen(m_open);
-    // A folded section says what changed in it; an open one shows it. Cut
-    // short, it keeps its start ("Primary color correction, Gaus…"), the
-    // whole in its tooltip.
-    const QString shown = m_summaryLabel->fontMetrics().elidedText(m_summary, Qt::ElideRight, std::max(0, m_summaryLabel->width()));
-    m_summaryLabel->setText(m_open ? QString() : (m_summaryLabel->width() > 0 ? shown : m_summary));
-    m_summaryLabel->setToolTip(m_summary);
+    // A folded section says what changed in it, in whole words; an open
+    // one shows it. The whole in its tooltip.
+    const int room = m_summaryLabel->contentsRect().width();
+    const QString shown = room > 0 ? fitSummary(m_summary, m_summaryLabel->fontMetrics(), room) : m_summary.full;
+    m_summaryLabel->setText(m_open ? QString() : shown);
+    m_summaryLabel->setToolTip(m_summary.full);
     m_reset->setVisible(m_changed && m_hovered && m_resetHandler);
 }
 

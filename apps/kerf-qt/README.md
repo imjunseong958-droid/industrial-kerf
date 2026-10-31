@@ -306,7 +306,8 @@ raises nothing, and a closed Inspector is never reopened by a click. While
 you have Effects or Presets in front, a click on another clip leaves the
 browser there (it follows the selection), so a look can be applied clip by
 clip; only the Inspector's own Add effect brings Effects up for the next
-click to replace. Window ▸
+click to replace, and after an effect is added there a deselect still goes
+back to the tab from before the Inspector came up (Project). Window ▸
 Inspector Follows Selection (⌥⌘4) turns this off. Raising never moves
 keyboard focus. These are preferences of this Mac (QSettings
 `editor/inspectorFollowsSelection`, `editor/inspector/…`); layouts saved with
@@ -321,7 +322,9 @@ it are the handful of things you change, with no header — Scale (with Fit /
 Fill), Position, Rotation, Opacity, Blend and Speed for a picture; Volume, Pan
 and Speed for sound; Text, Font and size, Colour, Align and Place for a title
 — then sections folded by default whose headers say what changed in them
-("Bottom 60 px"): Crop, Anchor & flip, the linked clip's Audio, Masks,
+("Bottom 60 px"), in whole words or not at all — the folded Effects header
+names the effects that are on as far as they fit, then " +N" and " · 1 off",
+or just "1 on · 1 off": Crop, Anchor & flip, the linked clip's Audio, Masks,
 Effects, and Source (its file and format, and Source In and Out, which slip
 the clip). Values read in px, %, °, dB and timecode; a value at its default
 is drawn quieter than a changed one, and a fill means it can be changed.
@@ -334,12 +337,16 @@ anywhere in it) hands the keys back to the timeline, so Space and J/K/L keep
 working while you nudge values. Every row shares one grid (76 pt labels, 72 pt
 value fields, 84 pt sliders at the 300-point column, controls ending at one
 edge); a click on a slider's groove away from its knob changes nothing, and a
-drag from there moves the knob by as much as the pointer moves. A switched-off
+drag from there moves the knob by as much as the pointer moves. A slider's
+default is a 1-point tick; under the knob its ends show above and below it, and
+nothing is drawn on the knob, whose edge is in full ink once the value differs
+from its default (grey at it). A switched-off
 effect's values stay in the secondary ink, readable and editable;
 ↺ on hover, or a double-click on the label, resets a row, and a section's ↺
 resets it all. Each effect has a switch, its name, a second line listing what
-changed while folded, five parameters before "N more" (grouped under quiet
-sub-headers when the catalog groups them), and ⋯ for Reset Parameters, Ask
+changed while folded, five parameters before "N more" when that hides two or
+more (six show whole; grouped under quiet sub-headers when the catalog groups
+them), and ⋯ for Reset Parameters, Ask
 Kerf and Remove. Effect names read in Title Case and row labels in sentence
 case, on one 12-point line: a first word the effect's name already says goes
 ("Threshold" under Edge Glow), and a label still too long ends in an ellipsis,
@@ -410,7 +417,9 @@ again actions), with no bubbles; the steps Kerf's tools took fold under its
 comment behind "▸ 2 steps", as replies do; and while Kerf works three dots
 and its latest step follow the latest comment. The comments scroll under the
 header as a comments panel's do: cut cleanly at its edge, with a hairline
-under it while the list is scrolled away from its top. A pending proposal is
+under it while the list is scrolled away from its top. A sliver is never left
+at either edge, and under the top one a line of text shows only with its
+capitals' tops (a name cut through them would read as another word). A pending proposal is
 pinned at the top of the list ("Pinned by Kerf") and scrolls away with it;
 when one arrives the list shows it from its head (following the latest again
 once you scroll or send). It lists its changes in words, a row each with a

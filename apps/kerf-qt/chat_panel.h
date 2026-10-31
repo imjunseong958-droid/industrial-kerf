@@ -21,8 +21,13 @@ namespace kerf {
 
 class EdgeCover;
 
-// The lines of a label's text as it lays them out, in its own coordinates.
-QList<QRect> labelTextLines(const QLabel *label);
+// The lines of a label's text as it lays them out, in its own coordinates:
+// each line's box and the y of its capitals' tops.
+struct TextLine {
+    QRect rect;
+    int capTop = 0;
+};
+QList<TextLine> labelTextLines(const QLabel *label);
 
 // Chips that wrap onto as many lines as their column needs, left to right,
 // as tags do in a narrow sidebar: the welcome's examples. On a single line
@@ -352,7 +357,9 @@ public:
     // A row cut at the view's edge that would show less than this of a
     // symbol (an avatar, a glyph, the typing dots), or less than
     // kSliverSymbol of its height, shows none of it; a line of text, less
-    // than kSliverLine of its line's height.
+    // than kSliverLine of its line's height over the bottom edge, or its
+    // capitals' tops under the top edge (a name cut through its capitals
+    // reads as another word: "Kerr now").
     static constexpr int kSliver = 4;
     static constexpr qreal kSliverSymbol = 0.3;
     static constexpr qreal kSliverAvatar = 0.5;
