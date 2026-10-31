@@ -454,6 +454,27 @@ private slots:
         // around the message field.
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         QVERIFY(!window.findChild<QWidget *>(QStringLiteral("focusHalo")));
+        // So it does as the model's field is typed in (with keys of one's
+        // own), and it goes back as the focus leaves the composer.
+        {
+            const QSignalBlocker ownBlock(window.m_ownKeyRadio);
+            window.m_ownKeyRadio->setChecked(true);
+        }
+        window.updateAgentModelChoices();
+        QVERIFY(window.m_modelSelect->isEnabled());
+        QTest::mouseClick(window.m_modelSelect->lineEdit(), Qt::LeftButton);
+        QVERIFY(window.m_chatComposer->isAncestorOf(QApplication::focusWidget()));
+        QCOMPARE(window.m_chatComposer->property("state").toString(), QStringLiteral("focused"));
+        {
+            const QImage composer = window.m_chatComposer->grab().toImage();
+            QCOMPARE(composer.pixelColor(QPoint(0, window.m_chatComposer->height() / 2) * composer.devicePixelRatio()).rgb(),
+                     editorTheme().focusRing.rgb());
+        }
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QVERIFY(!window.findChild<QWidget *>(QStringLiteral("focusHalo")));
+        window.m_conversation->setFocus();
+        QVERIFY(!window.m_chatComposer->isAncestorOf(QApplication::focusWidget()));
+        QCOMPARE(window.m_chatComposer->property("state").toString(), QStringLiteral("ready"));
         window.m_chatInput->setPlainText(QStringLiteral("Keep my draft"));
         window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
         QCOMPARE(window.m_chatComposer->property("state").toString(), QStringLiteral("sending"));
@@ -1049,6 +1070,7 @@ private slots:
         QVERIFY(window.m_effectControls->m_propertyEditors.isEmpty());
         window.selectClip(QStringLiteral("v"));
         QCOMPARE(window.m_effectControls->m_propertyEditors.size(), 3);
+        QVERIFY(!window.m_effectControls->m_propertyForm->parentWidget()->isHidden());
         auto *opacity = qobject_cast<QDoubleSpinBox *>(window.m_effectControls->m_propertyEditors.value("opacity"));
         auto *x = qobject_cast<QDoubleSpinBox *>(window.m_effectControls->m_propertyEditors.value("x"));
         auto *blend = qobject_cast<QComboBox *>(window.m_effectControls->m_propertyEditors.value("blend"));
@@ -2550,6 +2572,17 @@ private slots:
         return fits;
     }
 
+    // Whether `combo`, in `shot` of its window, is drawn as macOS draws a
+    // pop-up button: a push button's bezel, filled with `button` and lit from
+    // above (its bottom edge darker than its top), not a field's even edge.
+    static bool popUpHasButtonBezel(const QImage &shot, const QComboBox *combo, const QColor &button) {
+        const qreal ratio = shot.devicePixelRatio();
+        const QRect bezel(combo->mapTo(combo->window(), QPoint()), combo->size());
+        const auto at = [&](int x, int y) { return shot.pixelColor(QPoint(x, y) * ratio); };
+        return at(bezel.left() + 4, bezel.center().y()).rgb() == button.rgb() &&
+               at(bezel.center().x(), bezel.bottom()).lightness() + 16 < at(bezel.center().x(), bezel.top()).lightness();
+    }
+
     // Saturated amber or gold, as the editor's old accent was.
     static bool isAmber(const QColor &color) {
         return color.hue() >= 30 && color.hue() <= 52 && color.saturation() > 140 && color.value() > 150;
@@ -3110,6 +3143,9 @@ private slots:
                 QCOMPARE(create->height(), 22);
                 QCOMPARE(from->geometry().center().y(), choice->geometry().center().y());
                 QVERIFY(popupShowsEveryRow(choice));
+                // Its pop-ups are buttons' bezels, as the launcher's Frame
+                // Rate and the toolbar's pickers, not fields like Text 1.
+                QVERIFY(popUpHasButtonBezel(bindings, choice, theme.button));
                 QVERIFY(create->isEnabled() && create->isDefault());
                 const QImage createImage = create->grab().toImage();
                 const QColor createFill = createImage.pixelColor(QPoint(6, create->height() / 2) * createImage.devicePixelRatio());
@@ -3187,6 +3223,12 @@ private slots:
                 QCOMPARE(bar.constLast()->objectName(), QStringLiteral("aiAccept"));
                 for (int i = 1; i < bar.size(); ++i) QCOMPARE(bar.at(i)->x() - bar.at(i - 1)->geometry().right() - 1, 8);
                 QCOMPARE(window.m_loadFromDisk->x() - window.m_keepEditorVersion->geometry().right() - 1, 8);
+                // Their trailing buttons line up with the toolbar's Render,
+                // 8px in from the window's edge.
+                auto *render = window.findChild<QToolButton *>(QStringLiteral("toolbarQuiet"));
+                QVERIFY(render);
+                for (QWidget *trailing : std::initializer_list<QWidget *>{render, window.m_loadFromDisk, bar.constLast()})
+                    QCOMPARE(trailing->mapTo(&window, QPoint(trailing->width(), 0)).x(), window.width() - 8);
             }
             // Kerf's suggestions are purple pills sized to their labels.
             for (QWidget *row : {window.m_nextSteps, window.m_chatNextSteps}) {
@@ -3292,6 +3334,25 @@ private slots:
                     ++checkRows;
                 }
             QCOMPARE(checkRows, 1);
+            // Each effect is headed by its name in semibold, 18px below the
+            // row before it, the second as the first; a hairline 8px under
+            // the first effect's last row sets the second apart. A clip with
+            // no properties shows no empty form above them.
+            QVERIFY(inspector->m_propertyForm->parentWidget()->isHidden());
+            {
+                const auto effectBoxes = inspector->findChildren<QWidget *>(QStringLiteral("effectBox"));
+                QCOMPARE(effectBoxes.size(), 2);
+                const auto top = [inspector](const QWidget *widget) { return widget->mapTo(inspector, QPoint()).y(); };
+                const auto bottom = [&top](const QWidget *widget) { return top(widget) + widget->height(); };
+                const auto header = [&top](const QWidget *box) {
+                    return top(box->findChild<QToolButton *>(QStringLiteral("effectRemove")));
+                };
+                for (const QWidget *box : effectBoxes)
+                    QCOMPARE(box->findChild<QCheckBox *>(QStringLiteral("effectEnabled"))->font().weight(), QFont::DemiBold);
+                QCOMPARE(header(effectBoxes.at(0)) - bottom(inspector->m_speed), 18);
+                QCOMPARE(header(effectBoxes.at(1)) - bottom(effectBoxes.at(0)), 18);
+                QCOMPARE(top(effectBoxes.at(1)) - bottom(effectBoxes.at(0)), 8);
+            }
             // The picture shows the whole form: the window grows until the
             // panel needs no scrolling.
             QScrollBar *inspectorScroll = nullptr;
@@ -3301,7 +3362,18 @@ private slots:
                 window.resize(window.width(), window.height() + 20);
                 QCoreApplication::processEvents();
             }
-            save(window.m_workspace->panel(QStringLiteral("effectControls"))->grab().toImage(), QStringLiteral("inspector-%1").arg(name));
+            const QImage inspectorImage = window.m_workspace->panel(QStringLiteral("effectControls"))->grab().toImage();
+            // The hairline runs across the column, on the panel.
+            {
+                const QWidget *second = inspector->findChildren<QWidget *>(QStringLiteral("effectBox")).at(1);
+                const QPoint rule = second->mapTo(window.m_workspace->panel(QStringLiteral("effectControls")),
+                                                  QPoint(second->width() / 2, 0));
+                const qreal ratio = inspectorImage.devicePixelRatio();
+                QCOMPARE(inspectorImage.pixelColor(rule * ratio).rgb(), theme.divider.rgb());
+                QCOMPARE(inspectorImage.pixelColor((rule - QPoint(0, 1)) * ratio).rgb(), theme.panel.rgb());
+                QCOMPARE(inspectorImage.pixelColor((rule + QPoint(0, 1)) * ratio).rgb(), theme.panel.rgb());
+            }
+            save(inspectorImage, QStringLiteral("inspector-%1").arg(name));
             window.close();
         }
         QVERIFY(changed.count() >= 2);
@@ -3378,15 +3450,18 @@ private slots:
             QTest::mouseClick(reject, Qt::LeftButton);
             QVERIFY(!reject->hasFocus());
             ringAround(field);
+            // A pop-up is a button's bezel, not a field's.
+            const QImage unfocused = dialog.grab().toImage();
+            QVERIFY(popUpHasButtonBezel(unfocused, choice, theme.button));
             // Tab rings the pop-up, the stepper's field, then the buttons.
             QTest::keyClick(field, Qt::Key_Tab);
             QVERIFY(choice->hasFocus());
             ringAround(choice);
-            // The ring alone shows a pop-up's focus: its edge stays the field's.
+            // The ring alone shows a pop-up's focus: its edge stays as it was.
             {
                 const QImage image = dialog.grab().toImage();
-                QCOMPARE(image.pixelColor(QPoint(choice->x(), choice->geometry().center().y()) * image.devicePixelRatio()).rgb(),
-                         theme.fieldBorder.rgb());
+                const QPoint edge = QPoint(choice->x(), choice->geometry().center().y()) * image.devicePixelRatio();
+                QCOMPARE(image.pixelColor(edge).rgb(), unfocused.pixelColor(edge).rgb());
             }
             QTest::keyClick(choice, Qt::Key_Tab);
             QVERIFY(seconds->hasFocus());
@@ -3418,6 +3493,14 @@ private slots:
             QVERIFY(transcript->hasFocus());
             QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
             QVERIFY(!dialog.findChild<QWidget *>(QStringLiteral("focusHalo")));
+            // A combo box that takes typing stays a field.
+            auto *typed = new QComboBox;
+            typed->setEditable(true);
+            typed->addItem(QStringLiteral("Kerf Cloud"));
+            layout->addWidget(typed);
+            typed->show();
+            QCoreApplication::processEvents();
+            QVERIFY(!popUpHasButtonBezel(dialog.grab().toImage(), typed, theme.button));
         }
     }
 
@@ -3560,7 +3643,10 @@ private slots:
             QCOMPARE(cardPixel("light.edgeglow"), QColor(Qt::red));
             effects.show();
             QVERIFY(QTest::qWaitForWindowExposed(&effects));
-            save(effects.grab().toImage(), QStringLiteral("effects-%1").arg(name));
+            const QImage browser = effects.grab().toImage();
+            // The category pop-up is a button's bezel, as every pop-up is.
+            QVERIFY(popUpHasButtonBezel(browser, effects.m_category, theme.button));
+            save(browser, QStringLiteral("effects-%1").arg(name));
         }
     }
 

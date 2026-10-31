@@ -95,8 +95,14 @@ constexpr int kWindowButtonsSpace = 72;
 #define KERF_EDITOR_OWN_TITLE_BAR 0
 #endif
 constexpr int kToolbarHeight = 30;
-// The style sheet's QToolBar spacing, between every pair of its items.
+// The style sheet's QToolBar spacing, between every pair of its items,
+// and its padding, at either end.
 constexpr int kToolbarSpacing = 2;
+constexpr int kToolbarPadding = 6;
+// The rows of the window's chrome (the toolbar, the banners under it and
+// the agent's bar) end their last control this far in from the window's
+// edge, so their trailing buttons line up.
+constexpr int kTrailingInset = 8;
 // How far the title keeps from the toolbar's groups; nearer, it gives way.
 constexpr int kTitleClearance = 20;
 
@@ -273,6 +279,8 @@ MainWindow::MainWindow(const QString &projectDirectory, const QString &kerfdBina
 }
 
 MainWindow::~MainWindow() {
+    // The composer follows the focus no more: its widgets go before the window.
+    disconnect(qApp, &QApplication::focusChanged, this, nullptr);
     if (m_bridge) kerf_bridge_free(m_bridge);
 }
 
@@ -1265,9 +1273,13 @@ void MainWindow::updateChatControls() {
     m_abortButton->setEnabled(m_agentBusy);
     m_abortButton->setVisible(m_agentBusy);
     m_sendButton->setVisible(!m_agentBusy);
+    // The composer's edge shows the focus of any field in it (the message,
+    // the model), in place of a ring; a button in it rings itself.
+    const QWidget *focus = QApplication::focusWidget();
+    const bool focused = focus && m_chatComposer->isAncestorOf(focus) && !qobject_cast<const QAbstractButton *>(focus);
     const QString state = !m_connected ? QStringLiteral("offline")
                           : m_agentBusy ? QStringLiteral("sending")
-                          : m_chatInput->hasFocus() ? QStringLiteral("focused") : QStringLiteral("ready");
+                          : focused ? QStringLiteral("focused") : QStringLiteral("ready");
     if (m_chatComposer->property("state").toString() != state) {
         m_chatComposer->setProperty("state", state);
         m_chatComposer->style()->unpolish(m_chatComposer);
@@ -1447,8 +1459,6 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
         }
     }
 #endif
-    if (object == m_chatInput && (event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut))
-        updateChatControls();
     if (object == m_chatInput && event->type() == QEvent::KeyPress) {
         auto *key = static_cast<QKeyEvent *>(event);
         if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) &&
@@ -1476,6 +1486,7 @@ void MainWindow::buildUi() {
     m_connectionBanner = new QFrame;
     m_connectionBanner->setObjectName(QStringLiteral("connectionBanner"));
     auto *connectionLayout = new QHBoxLayout(m_connectionBanner);
+    connectionLayout->setContentsMargins(12, 5, kTrailingInset, 5);
     m_connectionMessage = new QLabel;
     m_connectionMessage->setWordWrap(true);
     connectionLayout->addWidget(m_connectionMessage, 1);
@@ -1495,6 +1506,7 @@ void MainWindow::buildUi() {
     m_errorBanner = new QFrame;
     m_errorBanner->setObjectName(QStringLiteral("errorBanner"));
     auto *errorLayout = new QHBoxLayout(m_errorBanner);
+    errorLayout->setContentsMargins(12, 5, kTrailingInset, 5);
     m_errorMessage = new QLabel;
     m_errorMessage->setWordWrap(true);
     errorLayout->addWidget(m_errorMessage, 1);
@@ -1509,7 +1521,7 @@ void MainWindow::buildUi() {
     m_divergedBanner = new QFrame;
     m_divergedBanner->setObjectName(QStringLiteral("divergedBanner"));
     auto *divergedLayout = new QHBoxLayout(m_divergedBanner);
-    divergedLayout->setContentsMargins(12, 5, 10, 5);
+    divergedLayout->setContentsMargins(12, 5, kTrailingInset, 5);
     divergedLayout->setSpacing(8);
     // The colour is in the triangle only; the bar and its text stay neutral.
     m_divergedGlyph = new QLabel;
@@ -1585,7 +1597,7 @@ void MainWindow::buildUi() {
     m_aiBar = new QFrame;
     m_aiBar->setObjectName(QStringLiteral("aiBar"));
     auto *aiLayout = new QHBoxLayout(m_aiBar);
-    aiLayout->setContentsMargins(10, 3, 8, 3);
+    aiLayout->setContentsMargins(10, 3, kTrailingInset, 3);
     aiLayout->setSpacing(8);
     m_aiBarText = new QLabel;
     m_aiBarText->setObjectName(QStringLiteral("aiBarText"));
@@ -1703,8 +1715,8 @@ void MainWindow::buildUi() {
     auto *composer = new QFrame;
     m_chatComposer = composer;
     composer->setObjectName(QStringLiteral("chatComposer"));
-    // Its edge turns the accent while the message field has focus, in place
-    // of a ring around the field.
+    // Its edge turns the accent while a field in it (the message, the
+    // model) has focus, in place of a ring around the field.
     composer->setProperty("ringsOwnFields", true);
     auto *composerLayout = new QVBoxLayout(composer);
     composerLayout->setContentsMargins(10, 6, 8, 6);
@@ -1766,6 +1778,10 @@ void MainWindow::buildUi() {
     });
     chatRow->addWidget(abortButton);
     composerLayout->addLayout(chatRow);
+    // Its edge follows the focus into and out of it (see updateChatControls).
+    connect(qApp, &QApplication::focusChanged, this, [this](QWidget *from, QWidget *to) {
+        if ((from && m_chatComposer->isAncestorOf(from)) || (to && m_chatComposer->isAncestorOf(to))) updateChatControls();
+    });
     m_chatActivity = new QLabel;
     m_chatActivity->setObjectName(QStringLiteral("chatActivity"));
     m_chatActivity->setTextFormat(Qt::PlainText);
@@ -2550,6 +2566,8 @@ void MainWindow::setupActions() {
     controlSpace();
     if (auto *renderButton = toolbarCommand(QStringLiteral("sequence.renderPreview"), QStringLiteral("Render")))
         renderButton->setObjectName(QStringLiteral("toolbarQuiet"));
+    // Render ends where the banners' and the agent's bar's buttons do.
+    space(kTrailingInset - kToolbarPadding - kToolbarSpacing);
     // The title is centred on the window, as macOS centres it, not between
     // the groups, so it sits over the toolbar outside its layout;
     // layoutProjectTitle() places it as the toolbar and its groups move.
@@ -2606,7 +2624,7 @@ void MainWindow::fitTitleBar() {
     const QWindow *handle = windowHandle();
     m_toolbar->setFixedHeight(std::max(kToolbarHeight, handle ? handle->safeAreaMargins().top() : 0));
     const int buttons = windowButtonsWidth(this);
-    m_windowButtons->setFixedWidth(buttons > 0 ? buttons + 12 - 6 : kWindowButtonsSpace);
+    m_windowButtons->setFixedWidth(buttons > 0 ? buttons + 12 - kToolbarPadding : kWindowButtonsSpace);
     m_windowButtons->setVisible(!isFullScreen());
 #endif
 }

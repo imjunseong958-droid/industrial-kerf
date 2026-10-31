@@ -33,6 +33,12 @@ constexpr int kLabelColumn = 96;
 // A number field is as wide as a value needs, as in Final Cut's inspector,
 // not the panel's width.
 constexpr int kNumberWidth = 96;
+// The inspector's sections (the masks, and each effect) start 18 points
+// below the row before them, three times the rows' gap, so a new effect
+// does not read as one more parameter of the one above. The hairline
+// between two effects sits 8 points under the upper one's last row.
+constexpr int kSectionLead = 18;
+constexpr int kEffectRuleGap = 8;
 
 // A form in the inspector's column: number fields, pop-ups and wells keep
 // their size, and only text fields grow. Every form's rows are 6 points
@@ -99,7 +105,7 @@ EffectControlsPanel::EffectControlsPanel(QWidget *parent) : QWidget(parent) {
     m_masksSection = new QWidget;
     m_masksSection->setObjectName(QStringLiteral("inspectorMasks"));
     auto *masksLayout = new QVBoxLayout(m_masksSection);
-    masksLayout->setContentsMargins(0, 6, 0, 0);
+    masksLayout->setContentsMargins(0, kSectionLead - layout->spacing(), 0, 0);
     masksLayout->setSpacing(6);
     m_maskHeader = new QHBoxLayout;
     m_maskHeader->setSpacing(2);
@@ -116,8 +122,8 @@ EffectControlsPanel::EffectControlsPanel(QWidget *parent) : QWidget(parent) {
     auto *effects = new QWidget;
     effects->setObjectName(QStringLiteral("inspectorEffects"));
     m_effectsLayout = new QVBoxLayout(effects);
-    m_effectsLayout->setContentsMargins(0, 6, 0, 0);
-    m_effectsLayout->setSpacing(8);
+    m_effectsLayout->setContentsMargins(0, kSectionLead - layout->spacing(), 0, 0);
+    m_effectsLayout->setSpacing(kEffectRuleGap);
     layout->addWidget(effects);
     layout->addStretch(1);
     setClip(QString(), QJsonObject{}, QJsonArray{}, m_fps);
@@ -164,6 +170,9 @@ void EffectControlsPanel::setClip(const QString &id, const QJsonObject &clip, co
             addRow(m_propertyForm, name, editor);
         }
     }
+    // A clip with no properties shows no empty form, which would add a
+    // row's gap above the next section.
+    m_propertyForm->parentWidget()->setVisible(m_propertyForm->rowCount() > 0);
     const QJsonObject props = clip.value(QStringLiteral("props")).toObject();
     for (const QJsonValue &def : defs) {
         const QString name = def.toObject().value(QStringLiteral("name")).toString();
@@ -388,8 +397,11 @@ void EffectControlsPanel::showEffects() {
         const QJsonObject def = m_effectDefs.value(fx);
         auto *box = new QWidget;
         box->setObjectName(QStringLiteral("effectBox"));
+        // The effects after the first are set apart by a hairline (the
+        // style sheet's), and their names keep the first one's lead.
+        box->setProperty("following", index > 0);
         auto *boxLayout = new QVBoxLayout(box);
-        boxLayout->setContentsMargins(0, 0, 0, 0);
+        boxLayout->setContentsMargins(0, index > 0 ? kSectionLead - kEffectRuleGap : 0, 0, 0);
         boxLayout->setSpacing(6);
         auto *header = new QHBoxLayout;
         auto *enabled = new QCheckBox(def.value(QStringLiteral("name")).toString(fx));

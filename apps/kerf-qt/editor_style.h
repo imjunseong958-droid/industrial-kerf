@@ -487,6 +487,10 @@ QLabel#statusPill {
 }
 QLabel#timecode { color: @text; font-family: Menlo, Monaco, monospace; font-size: 11px; }
 QLabel#inspectorClip { color: @textStrong; font-weight: 600; padding: 5px 0 5px 0; margin: 0; }
+/* Each effect is headed by its name in semibold, as the clip's is; a
+   hairline sets it apart from the effect above. */
+QCheckBox#effectEnabled { font-weight: 600; }
+QWidget#effectBox[following="true"] { border-top: 1px solid @divider; }
 /* The window's title, 13px semibold as macOS's and the launcher's. */
 QLabel#projectTitle { color: @text; font-size: 13px; font-weight: 600; padding: 0; }
 QWidget#assistantPanel { background: @well; border-left: 1px solid @divider; }
@@ -536,7 +540,7 @@ QPlainTextEdit {
     selection-color: @text;
 }
 /* Single-line fields and pop-ups are 22px with a 5px radius, as the
-   launcher's. */
+   launcher's (a pop-up takes a button's bezel below). */
 QLineEdit,
 QDoubleSpinBox,
 QComboBox {
@@ -568,6 +572,27 @@ QComboBox::drop-down {
 }
 QComboBox::down-arrow { image: @popUpChevrons; width: 10px; height: 14px; border: 0; }
 QComboBox::down-arrow:disabled { image: @popUpChevronsDisabled; }
+/* A pop-up button is a push button's bezel with chevrons, as macOS draws
+   one and the launcher its Frame Rate; a combo box that takes typing (the
+   Assistant's Model) stays a field. */
+QComboBox:!editable {
+    color: @buttonText;
+    background: @button;
+    border-color: @buttonEdge;
+    border-top-color: @buttonTop;
+    border-bottom-color: @buttonBottom;
+}
+QComboBox:!editable:hover {
+    background: @buttonHover;
+    border-color: @buttonEdge;
+    border-top-color: @buttonTop;
+    border-bottom-color: @buttonBottom;
+}
+QComboBox:!editable:disabled {
+    color: @buttonDisabledText;
+    background: @buttonDisabled;
+    border-color: @buttonDisabledEdge;
+}
 /* The stepper's halves are transparent hit areas; StepperSpinBox draws one
    centred pair of chevrons over them, as the launcher does. */
 QDoubleSpinBox { padding: 2px 18px 2px 7px; }
