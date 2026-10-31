@@ -42,6 +42,8 @@ set(KERF_QT_SOURCES
     chat_panel.h
     command_registry.cpp
     command_registry.h
+    device_frame.cpp
+    device_frame.h
     editor_common.cpp
     editor_common.h
     editor_style.h
@@ -56,6 +58,8 @@ set(KERF_QT_SOURCES
     main_window.h
     media_artwork.cpp
     media_artwork.h
+    player_overlay.cpp
+    player_overlay.h
     presets_panel.cpp
     presets_panel.h
     project_launcher.cpp

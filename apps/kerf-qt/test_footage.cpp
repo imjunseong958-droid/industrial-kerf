@@ -198,7 +198,10 @@ QImage fisherClose(const QSize &size) {
         }
         // In front: weathered planks running away from us towards a point
         // above the frame, their grain along them, dark seams between.
-        const double edge = smoothstep(deck - pixel, deck + pixel, y);
+        // The deck's far edge lies a degree and a half off level, and melts
+        // into the out-of-focus background over about 8% of the frame.
+        const double horizon = deck + std::tan(1.5 * 3.14159265358979 / 180.0) * (x - 0.5 * aspect);
+        const double edge = smoothstep(horizon - 0.04 - pixel, horizon + 0.04 + pixel, y);
         if (edge > 0.0) {
             const double vx = 0.5 * aspect, vy = deck - 0.9;
             const double along = 1.0 / (y - vy);
@@ -211,6 +214,11 @@ QImage fisherClose(const QSize &size) {
             Rgb boards = wood * (0.7 + 0.45 * grain) * (0.88 + 0.24 * fibres);
             const double seam = smoothstep(0.93, 0.985, within) + (1.0 - smoothstep(0.0, 0.03, within)) * 0.7;
             boards = mix(boards, Rgb{0.09, 0.07, 0.05}, clamp01(seam));
+            // The farthest planks are out of focus: their grain and seams
+            // soften into the wood's own tone, then into the haze behind.
+            const double far = 1.0 - smoothstep(horizon, horizon + 0.16, y);
+            boards = mix(boards, wood * 0.8, far * 0.75);
+            boards = mix(boards, c, far * 0.35);
             // A coil of rope lying on the boards, with its shadow, and its
             // tail running off the frame.
             const double rx = (x - coilX) / coilRx, ry = (y - coilY) / coilRy;

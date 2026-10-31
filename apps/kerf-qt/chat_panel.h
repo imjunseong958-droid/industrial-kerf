@@ -19,10 +19,18 @@ class QVBoxLayout;
 namespace kerf {
 
 // Chips that wrap onto as many lines as their column needs, left to right,
-// as tags do in a narrow sidebar: Kerf's next steps over the composer.
+// as tags do in a narrow sidebar: the welcome's examples. On a single line
+// they never wrap and scroll sideways instead, as a chip bar does: Kerf's
+// next steps over the composer.
 class FlowLayout final : public QLayout {
 public:
     FlowLayout(QWidget *parent, int spacing);
+    void setSingleLine(bool single) { m_singleLine = single; invalidate(); }
+    bool singleLine() const { return m_singleLine; }
+    // How far a single line is scrolled, and how wide its chips are.
+    void setScroll(int scroll);
+    int scroll() const { return m_scroll; }
+    int contentWidth() const;
     ~FlowLayout() override;
     void addItem(QLayoutItem *item) override { m_items.append(item); }
     int count() const override { return int(m_items.size()); }
@@ -42,6 +50,8 @@ private:
 
     QList<QLayoutItem *> m_items;
     int m_spacing;
+    bool m_singleLine = false;
+    int m_scroll = 0;
 };
 
 // A round avatar: Kerf's monogram on its purple, or the reader's initial
@@ -155,9 +165,11 @@ private:
 class RailButton final : public QAbstractButton {
     Q_OBJECT
 public:
-    enum class Glyph { Chat };
+    // The chat, the phone a portrait picture shows in, and safe zones.
+    enum class Glyph { Chat, Phone, SafeZones };
     static constexpr int kDisc = 44;
     explicit RailButton(Glyph glyph, QWidget *parent = nullptr);
+    Glyph glyph() const { return m_glyph; }
     void setLabel(const QString &label);
     QString label() const { return m_label; }
     // The disc, in the button's coordinates.
@@ -175,15 +187,20 @@ private:
 };
 
 // The rail's buttons, stacked at its foot, level with the picture's bottom
-// edge, as Shorts stacks its actions.
+// edge, as Shorts stacks its actions: the phone and safe zones (for a
+// portrait picture only), then the chat.
 class StageRail final : public QWidget {
     Q_OBJECT
 public:
     static constexpr int kWidth = 48;
     explicit StageRail(QWidget *parent = nullptr);
     RailButton *chatButton() const { return m_chat; }
+    RailButton *deviceButton() const { return m_device; }
+    RailButton *safeZonesButton() const { return m_safeZones; }
 
 private:
+    RailButton *m_device = nullptr;
+    RailButton *m_safeZones = nullptr;
     RailButton *m_chat = nullptr;
 };
 
@@ -202,14 +219,27 @@ public:
     static constexpr int kSidePadding = 16;
     static constexpr int kAvatar = 28;
     static constexpr int kComposerAvatar = 28;
-    static constexpr int kPillHeight = 32;
+    // Accept and Reject on the pinned proposal; the composer's pills.
+    static constexpr int kPillHeight = 36;
+    static constexpr int kComposerPillHeight = 32;
     static constexpr int kChipHeight = 28;
+    // The next steps' row: one line of chips that scrolls sideways.
+    static constexpr int kChipRowHeight = kChipHeight + 12;
+    // The most of the proposal's changes listed under its summary.
+    static constexpr int kProposalChangeLines = 3;
     // The most lines the proposal's script and diff show before they scroll.
     static constexpr int kProposalDiffLines = 10;
     // The fade over the top of the conversation's view while it is scrolled.
-    static constexpr int kScrollFadeHeight = 14;
+    static constexpr int kScrollFadeHeight = 20;
+    // The fade at either end of the chips' row while it has more that way.
+    static constexpr int kChipFadeWidth = 16;
     // The least the conversation's view keeps under an open proposal.
     static constexpr int kMinListHeight = 72;
+    // The most of a comment's foot the view's top edge leaves alone before
+    // the room under the latest scrolls it away (an action row and a line).
+    static constexpr int kOrphanReach = 64;
+    // The blank room under the latest comment.
+    static constexpr int kListBottom = 16;
 
     explicit ChatPanel(QWidget *parent = nullptr);
 
@@ -226,6 +256,9 @@ public:
 
     // The pinned proposal: shown while one is pending.
     void setProposalShown(bool shown);
+    // What it changes, one line each: the first few listed under its summary.
+    void setProposalChanges(const QStringList &changes);
+    QWidget *proposalChanges() const { return m_proposalChanges; }
     bool proposalExpanded() const;
     void setProposalExpanded(bool expanded);
     // The composer: expanded (its second row of model, Cancel and Send
@@ -279,12 +312,23 @@ private:
     void updateCount();
     void fitInput();
     void fitProposalDiff();
+    // Keep the chips' row's scroll in range and its end fades in place.
+    void updateChipRow();
+    // Scrolled to the latest, the view's top edge never leaves a comment's
+    // last few points (its actions, a line's tail) alone under the header:
+    // a little room under the latest scrolls them out of sight.
+    void settleListEnd();
+    // The comment the view's top edge `y` (in the content) cuts, if any,
+    // and the fade over the view's top, shown only while one is cut.
+    QWidget *itemAcross(int y) const;
+    void updateScrollFade();
 
     QLabel *m_title = nullptr;
     QLabel *m_count = nullptr;
     ChatIconButton *m_more = nullptr;
     ChatIconButton *m_close = nullptr;
     QFrame *m_scrollEdge = nullptr;
+    QWidget *m_scrollFade = nullptr;
     QScrollArea *m_scroll = nullptr;
     QWidget *m_content = nullptr;
     QVBoxLayout *m_list = nullptr;
@@ -295,6 +339,9 @@ private:
     QLabel *m_status = nullptr;
     QLabel *m_activity = nullptr;
     QWidget *m_chips = nullptr;
+    QWidget *m_chipFadeLeft = nullptr;
+    QWidget *m_chipFadeRight = nullptr;
+    QWidget *m_proposalChanges = nullptr;
     QFrame *m_composer = nullptr;
     QTextEdit *m_input = nullptr;
     QWidget *m_composerActions = nullptr;
@@ -312,6 +359,7 @@ private:
     QList<CommentRow *> m_rows;
     QTimer *m_clock = nullptr;
     bool m_follow = true;
+    int m_listPad = 0;
     bool m_busy = false;
     int m_dragFromX = 0;
     int m_dragFromWidth = 0;

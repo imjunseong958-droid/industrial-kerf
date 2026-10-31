@@ -1,5 +1,6 @@
 #pragma once
 
+#include "device_frame.h"
 #include "editor_common.h"
 
 #include <QAction>
@@ -146,6 +147,8 @@ private slots:
     // closed. Remembered on this Mac, never in the project.
     bool chatOpen() const;
     void setChatOpen(bool open);
+    // Bring the switches that open it in line with chatOpen().
+    void syncChatSwitches();
 
 protected:
     bool eventFilter(QObject *object, QEvent *event) override;
@@ -177,10 +180,18 @@ private:
     QJsonObject commandContext() const;
     void updateCommandStates();
 
-    // Transport under the viewer: playhead timecode, the usual buttons, and
-    // the program length.
-    QWidget *buildTransport();
+    // The transport, as the player's controls on the Program monitor's
+    // picture (see PlayerOverlay): what they ask for runs here, and they
+    // show the playhead's time, the length, and what can be pressed.
+    void setupPlayerOverlay();
     void updateTransport();
+    // The phone a portrait picture shows in, and its safe zones: from the
+    // stage's rail and Window ▸ Viewer, remembered on this Mac.
+    void setDevicePreview(DevicePreview preview);
+    void setSafeZones(bool shown);
+    void showDeviceMenu();
+    void updateViewerRail();
+    void fitPanelDetails();
     void seekToStart() { queueSeek(0.0); }
     void seekToEnd() { queueSeek(m_duration); }
     // Step from the frame on screen so each press moves exactly one frame.
@@ -284,7 +295,6 @@ private:
     QScrollArea *m_timelineScroll = nullptr;
     CommandRegistry *m_commands = nullptr;
     QHash<QString, std::function<void()>> m_commandHandlers;
-    QList<QToolButton *> m_transportButtons;
     // Toolbar actions and the symbols drawn for them.
     QList<QPair<QAction *, QString>> m_toolbarGlyphs;
     QList<QPair<QAction *, TransportGlyph>> m_sourceGlyphs; // The Source monitor's marks and edits.
@@ -292,9 +302,9 @@ private:
     QList<QAction *> m_toolGlyphs;
     // Disclosure buttons (Settings' Advanced), whose chevrons are too.
     QList<QToolButton *> m_disclosures;
-    QToolButton *m_transportPlay = nullptr;
-    QLabel *m_transportTime = nullptr;
-    QLabel *m_transportDuration = nullptr;
+    // Window ▸ Viewer: the phone (Island, Punch-Hole, Off) and safe zones.
+    QList<QAction *> m_deviceActions;
+    QAction *m_safeZonesAction = nullptr;
     // Panel details shown in the panels' title strips.
     QAction *m_viewerDetail = nullptr;
     QAction *m_timelineDetail = nullptr;
@@ -356,7 +366,6 @@ private:
     QDialog *m_preferences = nullptr;
     QLabel *m_statusConnection = nullptr;
     QLabel *m_statusRevision = nullptr;
-    bool m_transportShowsPause = false;
     quint64 m_revision = 0;
     int m_trackCount = 0;
     double m_duration = 0.0;

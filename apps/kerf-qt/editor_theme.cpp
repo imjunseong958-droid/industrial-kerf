@@ -349,7 +349,9 @@ EditorTheme makeEditorTheme(bool dark) {
     // Clips: muted inks from an old atlas (slate, verdigris, olive, ochre,
     // umber), each label on its header at 5.5:1 or more. The selected ring is
     // cream over ink, not a second loud hue.
-    t.clipVideo = dark ? clipStyle("#2a2b2f","#435269","#252d3a","#f4ecde","#989ba1") : clipStyle("#c7c6c2","#475a72","#334152","#fbf6ec","#354456");
+    // Picture clips are a greyed heather: Kerf's purple family, far duller
+    // than its accent, and well away from blue.
+    t.clipVideo = dark ? clipStyle("#2c2830","#4e4459","#2f2937","#f4ecde","#a39aa8") : clipStyle("#c9c3c6","#5c5068","#43394d","#fbf6ec","#463c50");
     t.clipAudio = dark ? clipStyle("#252e27","#325b50","#1c322c","#f4ecde","#8ea094") : clipStyle("#c4cabd","#3b6a5d","#2a4c43","#fbf6ec","#2c5046");
     t.clipMusic = dark ? clipStyle("#2d2c1b","#4b5728","#293016","#f4ecde","#9c9e7e") : clipStyle("#cac8b0","#566428","#3e481d","#fbf6ec","#404b1e");
     t.clipGenerator = dark ? clipStyle("#3b2b1a","#7a5222","#432d13","#f4ecde","#b69b7a") : clipStyle("#d6c6ad","#875a1d","#614115","#fbf6ec","#654416");
@@ -406,6 +408,24 @@ EditorTheme makeEditorTheme(bool dark) {
     t.viewerCaption = hex("#0e0b09e1");
     t.viewerCaptionBorder = t.viewerCaption; // No box line around the caption.
     t.viewerCaptionText = hex("#f4ecde");
+    t.deviceFrame = hex("#1e1d1f");
+    t.deviceEdge = hex("#3a383c");
+    t.deviceShadow = hex("#00000040");
+    t.deviceScreen = hex("#000000");
+    t.deviceInk = hex("#ffffff");
+    t.safeZoneFill = hex("#ffffff1f");
+    t.safeZoneLine = hex("#ffffffa6");
+    t.safeZoneText = hex("#ffffff");
+    t.playerInk = hex("#ffffffe6");
+    t.playerInkDisabled = hex("#ffffff66");
+    t.playerShade = hex("#00000099");
+    t.playerTopShade = hex("#00000080");
+    t.playerHover = hex("#ffffff1f");
+    t.playerTrack = hex("#ffffff4d");
+    // The bar always lies on the picture's dark gradient, so it takes the
+    // accent the dark appearance uses, in either.
+    t.playerPlayed = kerfAccent(true);
+    t.playerTipFill = hex("#000000b3");
     t.maskOutline = hex("#fffbf3");
     t.maskOutlineIdle = hex("#fffbf3b3");
     t.maskShadow = hex("#0000008c");

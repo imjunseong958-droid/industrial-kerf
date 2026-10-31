@@ -14,6 +14,7 @@
 #include "editor_theme.h"
 #include "media_artwork.h"
 #include "timeline_widget.h"
+#include "player_overlay.h"
 #include "viewer_widget.h"
 #ifdef Q_OS_MACOS
 #include "macos_window.h"
@@ -1554,7 +1555,7 @@ void MainWindow::buildUi() {
     viewerLayout->setSpacing(0);
     m_viewer = new ViewerWidget;
     viewerLayout->addWidget(m_viewer, 1);
-    viewerLayout->addWidget(buildTransport());
+    setupPlayerOverlay();
 
     auto *timelinePanel = new QWidget;
     timelinePanel->setObjectName(QStringLiteral("timelinePanel"));
@@ -1611,7 +1612,9 @@ void MainWindow::buildUi() {
     timelinePanelLayout->addLayout(timelineRow, 1);
     m_askPrompt = new AskPrompt(this);
     connect(m_askPrompt, &AskPrompt::submitted, this, &MainWindow::askSubmitted);
-    timelinePanel->setMinimumHeight(220);
+    // Dragging the split up for a larger picture never squeezes the
+    // timeline under a few tracks and its ruler.
+    timelinePanel->setMinimumHeight(280);
 
     m_projectPanel = new ProjectPanel(m_artwork);
     connect(m_projectPanel, &ProjectPanel::openRequested, this, &MainWindow::openSource);
@@ -1696,6 +1699,28 @@ void MainWindow::buildUi() {
                               .toInt();
         m_viewer->setChatWidth(width);
         m_viewer->setChatOpen(settings.value(QStringLiteral("viewer/chatOpen"), true).toBool());
+        m_viewer->setDevicePreview(devicePreviewFromKey(settings.value(QStringLiteral("viewer/devicePreview")).toString()));
+        m_viewer->setSafeZones(settings.value(QStringLiteral("viewer/safeZones"), false).toBool());
+    }
+    {
+        auto *devices = new QActionGroup(this);
+        for (const DevicePreview preview : {DevicePreview::Island, DevicePreview::PunchHole, DevicePreview::Off}) {
+            auto *action = new QAction(devicePreviewLabel(preview), devices);
+            action->setObjectName(QStringLiteral("viewer.device.%1").arg(devicePreviewKey(preview)));
+            action->setCheckable(true);
+            action->setData(static_cast<int>(preview));
+            action->setToolTip(QStringLiteral("Show a portrait picture in a phone, or on a plain card"));
+            connect(action, &QAction::triggered, this, [this, preview] { setDevicePreview(preview); });
+            m_deviceActions.append(action);
+        }
+        m_safeZonesAction = new QAction(QStringLiteral("Safe Zones"), this);
+        m_safeZonesAction->setObjectName(QStringLiteral("viewer.safeZones"));
+        m_safeZonesAction->setCheckable(true);
+        m_safeZonesAction->setToolTip(QStringLiteral("Outline where a vertical-video app's buttons and captions cover the picture"));
+        connect(m_safeZonesAction, &QAction::toggled, this, &MainWindow::setSafeZones);
+        connect(m_rail->deviceButton(), &QAbstractButton::clicked, this, &MainWindow::showDeviceMenu);
+        connect(m_rail->safeZonesButton(), &QAbstractButton::toggled, this, &MainWindow::setSafeZones);
+        updateViewerRail();
     }
     connect(m_chat, &ChatPanel::widthDragged, m_viewer, &ViewerWidget::setChatWidth);
     connect(m_chat, &ChatPanel::widthDragFinished, this,
@@ -2064,8 +2089,16 @@ void MainWindow::buildUi() {
     m_workspace->addPanel(QStringLiteral("source"), QStringLiteral("Source"), m_sourceMonitor);
     // The timeline's AI bar stands in for the conversation while the
     // Program monitor, which holds it, is closed.
-    connect(m_workspace->panel(QStringLiteral("program")), &ads::CDockWidget::viewToggled, this, &MainWindow::updateAiBar);
-    connect(m_workspace, &Workspace::changed, this, &MainWindow::updateAiBar);
+    // The conversation is in sight only while the Program monitor is open
+    // and in front; its switches and the timeline's bar follow.
+    connect(m_workspace->panel(QStringLiteral("program")), &ads::CDockWidget::viewToggled, this, &MainWindow::syncChatSwitches);
+    // (Once the tab switch has settled: it hides the panel before it changes
+    // which tab is current.)
+    connect(m_workspace->panel(QStringLiteral("program")), &ads::CDockWidget::visibilityChanged, this, [this] {
+        QTimer::singleShot(0, this, &MainWindow::syncChatSwitches);
+        QTimer::singleShot(0, this, &MainWindow::fitPanelDetails);
+    });
+    connect(m_workspace, &Workspace::changed, this, &MainWindow::syncChatSwitches);
     // The bin is a well; its current tab is too, so it merges into it.
     m_workspace->panel(QStringLiteral("project"))->tabWidget()->setProperty("well", true);
     setCentralWidget(central);
@@ -2339,6 +2372,14 @@ void MainWindow::setupActions() {
         window->insertSeparator(window->actions().value(1));
         connect(workspaces, &QMenu::aboutToShow, this, [this, workspaces] { buildWorkspaceMenu(workspaces); });
         buildWorkspaceMenu(workspaces);
+        // The viewer's options: the phone a portrait picture shows in, and
+        // its safe zones (the stage's rail has both too).
+        auto *viewer = new QMenu(QStringLiteral("Viewer"), window);
+        viewer->setObjectName(QStringLiteral("viewerMenu"));
+        viewer->addActions(m_deviceActions);
+        viewer->addSeparator();
+        viewer->addAction(m_safeZonesAction);
+        window->insertMenu(window->actions().value(1), viewer);
     }
     m_workspace->start();
     updateAiBar();
@@ -3076,68 +3117,49 @@ QJsonObject MainWindow::commandContext() const {
 void MainWindow::updateCommandStates() {
     if (!m_commands) return;
     m_commands->update(commandContext());
-    for (auto *button : m_transportButtons)
-        button->setEnabled(m_commands->isEnabled(button->property("command").toString()));
+    PlayerOverlay *overlay = m_viewer->overlay();
+    overlay->setControlEnabled(PlayerOverlay::Control::Play, m_commands->isEnabled(QStringLiteral("playback.toggle")));
+    overlay->setControlEnabled(PlayerOverlay::Control::StepBack, m_commands->isEnabled(QStringLiteral("playback.previousFrame")));
+    overlay->setControlEnabled(PlayerOverlay::Control::StepForward, m_commands->isEnabled(QStringLiteral("playback.nextFrame")));
 }
 
-QWidget *MainWindow::buildTransport() {
-    auto *transport = new QWidget;
-    transport->setObjectName(QStringLiteral("transport"));
-    transport->setAttribute(Qt::WA_StyledBackground);
-    transport->setFixedHeight(28);
-    auto *layout = new QHBoxLayout(transport);
-    layout->setContentsMargins(10, 0, 10, 0);
-    layout->setSpacing(1);
-    m_transportTime = new QLabel(timelineTimecode(0.0, m_fps));
-    m_transportTime->setObjectName(QStringLiteral("transportTime"));
-    m_transportTime->setMinimumWidth(120);
-    layout->addWidget(m_transportTime);
-    layout->addStretch(1);
-    // Each button runs a playback command; updateTransport labels it with
-    // the command's shortcut.
-    const auto button = [&](TransportGlyph glyph, const QString &command) {
-        auto *control = new QToolButton;
-        control->setObjectName(QStringLiteral("transportButton"));
-        control->setProperty("command", command);
-        control->setProperty("glyph", static_cast<int>(glyph));
-        control->setIcon(transportIcon(glyph));
-        control->setIconSize(QSize(14, 14));
-        connect(control, &QToolButton::clicked, this, [this, command] { triggerCommand(command); });
-        layout->addWidget(control);
-        m_transportButtons.append(control);
-        return control;
-    };
-    button(TransportGlyph::Start, QStringLiteral("playback.goToStart"));
-    button(TransportGlyph::PreviousFrame, QStringLiteral("playback.previousFrame"));
-    m_transportPlay = button(TransportGlyph::Play, QStringLiteral("playback.toggle"));
-    button(TransportGlyph::NextFrame, QStringLiteral("playback.nextFrame"));
-    button(TransportGlyph::End, QStringLiteral("playback.goToEnd"));
-    layout->addStretch(1);
-    m_transportDuration = new QLabel(timelineTimecode(0.0, m_fps));
-    m_transportDuration->setObjectName(QStringLiteral("transportDuration"));
-    m_transportDuration->setMinimumWidth(120);
-    m_transportDuration->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    m_transportDuration->setToolTip(QStringLiteral("Program length"));
-    layout->addWidget(m_transportDuration);
-    return transport;
+namespace {
+
+QString overlayCommand(PlayerOverlay::Control control) {
+    switch (control) {
+    case PlayerOverlay::Control::StepBack: return QStringLiteral("playback.previousFrame");
+    case PlayerOverlay::Control::StepForward: return QStringLiteral("playback.nextFrame");
+    case PlayerOverlay::Control::Play: break;
+    }
+    return QStringLiteral("playback.toggle");
+}
+
+} // namespace
+
+void MainWindow::setupPlayerOverlay() {
+    // Each control runs a playback command, as the keys do; updateTransport
+    // names it with the command's shortcut.
+    PlayerOverlay *overlay = m_viewer->overlay();
+    connect(overlay, &PlayerOverlay::controlTriggered, this,
+            [this](PlayerOverlay::Control control) { triggerCommand(overlayCommand(control)); });
+    connect(overlay, &PlayerOverlay::seekRequested, this, [this](double fraction) {
+        if (m_duration <= 0.0) return;
+        queueSeek(fraction * m_duration);
+    });
 }
 
 void MainWindow::updateTransport() {
-    if (!m_transportTime) return;
-    m_transportTime->setText(timelineTimecode(m_playhead, m_fps));
-    m_transportDuration->setText(timelineTimecode(m_duration, m_fps));
-    if (m_transportShowsPause != m_playing) {
-        m_transportShowsPause = m_playing;
-        m_transportPlay->setIcon(transportIcon(m_playing ? TransportGlyph::Pause : TransportGlyph::Play));
-    }
+    PlayerOverlay *overlay = m_viewer ? m_viewer->overlay() : nullptr;
+    if (!overlay) return;
+    overlay->setTime(m_playhead, m_duration, m_fps);
+    overlay->setPlaying(m_playing);
     if (!m_commands) return;
-    for (auto *button : m_transportButtons) {
-        const QString command = button->property("command").toString();
-        const QString tip = button == m_transportPlay
-            ? m_commands->labelWithShortcut(command, m_playing ? QStringLiteral("Pause") : QStringLiteral("Play"))
-            : m_commands->labelWithShortcut(command);
-        button->setToolTip(tip);
-        button->setAccessibleName(tip);
+    for (const PlayerOverlay::Control control :
+         {PlayerOverlay::Control::Play, PlayerOverlay::Control::StepBack, PlayerOverlay::Control::StepForward}) {
+        const QString command = overlayCommand(control);
+        overlay->setControlTip(control, control == PlayerOverlay::Control::Play
+                                            ? m_commands->labelWithShortcut(command, m_playing ? QStringLiteral("Pause") : QStringLiteral("Play"))
+                                            : m_commands->labelWithShortcut(command));
     }
 }
 
@@ -3447,6 +3469,7 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     const QJsonArray sources = m_project.value(QStringLiteral("sources")).toArray();
     const QSize canvasSize = resolvedCanvasSize(m_project, sources);
     m_viewer->setProjectInfo(canvasSize.width(), canvasSize.height());
+    updateViewerRail();
     syncCanvasPreset(canvasSize);
     m_viewerDetail->setText(QStringLiteral("%1 × %2  ·  %3 fps")
                                 .arg(canvasSize.width()).arg(canvasSize.height()).arg(QString::number(m_fps, 'g', 5)));
@@ -3455,6 +3478,7 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
                                        timelineTimecode(m_duration, m_fps)));
     m_viewerDetail->setVisible(true);
     m_timelineDetail->setVisible(true);
+    fitPanelDetails();
     if (m_statusRevision) {
         m_statusRevision->setText(QStringLiteral("Revision %1").arg(m_revision));
         m_statusRevision->show();
@@ -3580,6 +3604,7 @@ void MainWindow::updateProposal(const QJsonValue &value) {
     m_rejectButton->setEnabled(m_connected && pending);
     m_chat->setProposalShown(pending);
     if (!pending) {
+        m_chat->setProposalChanges({});
         m_proposalSummary->setText(QStringLiteral("No pending changes"));
         m_proposalText.clear();
         m_proposalDiff->clear();
@@ -3600,6 +3625,13 @@ void MainWindow::updateProposal(const QJsonValue &value) {
                                    .arg(changed)
                                    .arg(changed == 1 ? QString() : QStringLiteral("s"))
                                    .arg(stale ? QStringLiteral("  •  stale") : QString()));
+    // What it changes, one line each, from its script.
+    QStringList changes;
+    for (const QString &line : proposal.value(QStringLiteral("script")).toString().split(QLatin1Char('\n'))) {
+        const QString change = line.trimmed();
+        if (!change.isEmpty() && !change.startsWith(QLatin1Char('#'))) changes.append(change);
+    }
+    m_chat->setProposalChanges(changes);
     QString text;
     if (stale) text += QStringLiteral("This proposal is out of date. Ask Kerf to prepare it again before accepting.\n\n");
     text += proposal.value(QStringLiteral("script")).toString();
@@ -3664,8 +3696,11 @@ void MainWindow::updateChatTips() {
 }
 
 bool MainWindow::chatOpen() const {
+    // Open and in sight: with the Source monitor in front of the Program
+    // monitor, the conversation in its stage is out of sight, so the
+    // timeline's bar stands in for it and its switches read as closed.
     const ads::CDockWidget *program = m_workspace ? m_workspace->panel(QStringLiteral("program")) : nullptr;
-    return m_viewer && m_viewer->chatOpen() && program && !program->isClosed();
+    return m_viewer && m_viewer->chatOpen() && program && !program->isClosed() && program->isCurrentTab();
 }
 
 void MainWindow::setChatOpen(bool open) {
@@ -3676,14 +3711,88 @@ void MainWindow::setChatOpen(bool open) {
         if (program->isClosed()) program->toggleView(true);
         program->setAsCurrentTab();
     }
+    syncChatSwitches();
+}
+
+void MainWindow::syncChatSwitches() {
+    // The toolbar's bubble, Window ▸ Kerf Assistant and the rail's button
+    // read open only while the conversation is open and in sight.
+    const bool open = chatOpen();
     if (m_commands) {
         QAction *chat = m_commands->action(QStringLiteral("window.assistant"));
         const QSignalBlocker blocker(chat);
         chat->setChecked(open);
     }
-    m_rail->chatButton()->setChecked(open);
+    {
+        const QSignalBlocker blocker(m_rail->chatButton());
+        m_rail->chatButton()->setChecked(m_viewer->chatOpen());
+    }
     updateChatTips();
     updateAiBar();
+}
+
+void MainWindow::fitPanelDetails() {
+    // A title strip's details keep the width of their text when it changes
+    // after the strip was laid out (as the first snapshot's does), rather
+    // than shrinking to an ellipsis; the tabs beside them give way first.
+    for (const QAction *action : {m_viewerDetail, m_timelineDetail}) {
+        for (QToolButton *button : findChildren<QToolButton *>(action->objectName())) {
+            button->setMinimumWidth(button->sizeHint().width());
+            button->updateGeometry();
+        }
+    }
+}
+
+void MainWindow::setDevicePreview(DevicePreview preview) {
+    m_viewer->setDevicePreview(preview);
+    QSettings().setValue(QStringLiteral("viewer/devicePreview"), devicePreviewKey(preview));
+    updateViewerRail();
+}
+
+void MainWindow::setSafeZones(bool shown) {
+    m_viewer->setSafeZones(shown);
+    QSettings().setValue(QStringLiteral("viewer/safeZones"), shown);
+    updateViewerRail();
+}
+
+void MainWindow::showDeviceMenu() {
+    RailButton *button = m_rail->deviceButton();
+    QMenu menu(this);
+    menu.addActions(m_deviceActions);
+    menu.exec(button->mapToGlobal(QPoint(button->width() + 4, 0)));
+    updateViewerRail();
+}
+
+void MainWindow::updateViewerRail() {
+    // The phone and safe zones are a portrait picture's: the rail offers
+    // them only for one.
+    const bool portrait = m_viewer->portrait();
+    const DevicePreview preview = m_viewer->devicePreview();
+    RailButton *device = m_rail->deviceButton();
+    RailButton *safe = m_rail->safeZonesButton();
+    device->setVisible(portrait);
+    safe->setVisible(portrait);
+    {
+        const QSignalBlocker blocker(device);
+        device->setChecked(preview != DevicePreview::Off);
+    }
+    device->setLabel(preview == DevicePreview::Off ? QStringLiteral("Card") : QStringLiteral("Phone"));
+    device->setToolTip(QStringLiteral("Device preview: %1").arg(devicePreviewLabel(preview)));
+    device->setAccessibleName(device->toolTip());
+    {
+        const QSignalBlocker blocker(safe);
+        safe->setChecked(m_viewer->safeZonesShown());
+    }
+    safe->setToolTip(m_viewer->safeZonesShown() ? QStringLiteral("Hide Safe Zones") : QStringLiteral("Show Safe Zones"));
+    safe->setAccessibleName(safe->toolTip());
+    for (QAction *action : std::as_const(m_deviceActions)) {
+        const QSignalBlocker blocker(action);
+        action->setChecked(static_cast<DevicePreview>(action->data().toInt()) == preview);
+    }
+    if (m_safeZonesAction) {
+        const QSignalBlocker blocker(m_safeZonesAction);
+        m_safeZonesAction->setChecked(m_viewer->safeZonesShown());
+    }
 }
 
 void MainWindow::showActivity() {
@@ -3723,10 +3832,6 @@ void MainWindow::applyAppearance() {
     if (m_divergedGlyph) m_divergedGlyph->setPixmap(warningTriangle(editorTheme().warningGlyph));
     for (QToolButton *disclosure : std::as_const(m_disclosures))
         disclosure->setIcon(disclosureIcon(disclosure->isChecked(), editorTheme().textSecondary));
-    for (QToolButton *button : std::as_const(m_transportButtons)) {
-        const auto glyph = static_cast<TransportGlyph>(button->property("glyph").toInt());
-        button->setIcon(transportIcon(button == m_transportPlay && m_transportShowsPause ? TransportGlyph::Pause : glyph));
-    }
     for (QAction *action : std::as_const(m_maskTools)) action->setIcon(maskToolIcon(static_cast<MaskTool>(action->data().toInt())));
     for (const auto &[action, glyph] : std::as_const(m_sourceGlyphs)) action->setIcon(transportIcon(glyph));
     if (!m_proposalText.isEmpty()) showProposalText();

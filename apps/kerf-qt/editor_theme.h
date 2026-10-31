@@ -351,6 +351,26 @@ struct EditorTheme {
     QColor viewerCaption;       // The caption box over the picture...
     QColor viewerCaptionBorder; // ...its edge (the box itself: no line around it)...
     QColor viewerCaptionText;
+    // The phone a portrait picture is shown in: a deep graphite in both
+    // appearances, its 1px lighter edge, and its soft shadow on the stage.
+    QColor deviceFrame;
+    QColor deviceEdge;
+    QColor deviceShadow;
+    QColor deviceScreen;        // The screen's black above and below the picture.
+    QColor deviceInk;           // The status bar's time, signal and battery.
+    QColor safeZoneFill;        // Where a vertical-video app's interface usually covers the picture...
+    QColor safeZoneLine;        // ...its outline...
+    QColor safeZoneText;        // ...and its label.
+    // The player's controls on the picture: white glyphs and time on a
+    // gradient to black, the played part of the bar in the accent.
+    QColor playerInk;           // Glyphs and the time, white at 90%.
+    QColor playerInkDisabled;
+    QColor playerShade;         // The gradient's darkest, under the controls.
+    QColor playerTopShade;      // The top-left cluster's shade on a portrait card.
+    QColor playerHover;         // A round wash under the pointer.
+    QColor playerTrack;         // The bar's unplayed part...
+    QColor playerPlayed;        // ...its played part (the accent)...
+    QColor playerTipFill;       // ...and the time over the bar under the pointer.
     // Masks and regions over the picture: cream over a dark rule, never the
     // accent, whose hue can be the picture's own.
     QColor maskOutline;         // A selected mask's outline...

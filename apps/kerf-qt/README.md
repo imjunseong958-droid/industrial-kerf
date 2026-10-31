@@ -61,7 +61,7 @@ accent, and the system appearance detection the launcher shares),
 `main.cpp` only `main()`. `editor_test.cpp` (with `test_footage.cpp`) builds into `kerf-qt-tests`
 instead of `main.cpp`.
 
-Menus, shortcuts, the toolbar, the transport buttons, and timeline gestures
+Menus, shortcuts, the toolbar, the player's controls, and timeline gestures
 run commands from the registry in `crates/kerf-commands`. Each
 command is one `QAction` whose label, shortcuts, and enabled state come
 from the registry; an unavailable command says why in its tooltip and the
@@ -150,20 +150,42 @@ Import media from File. Moving the pointer across the timeline
 scrubs the viewer and shows the time beside the pointer. Play and pause are
 Space; with the timeline focused, Home and End jump to the start and end,
 Left and Right step one frame, S splits the selected clip at the playhead,
-and Delete and Shift+Delete delete or ripple-delete it (Kerf keymap). The transport under the viewer has the same
-controls between the playhead timecode and the program length. The Editing
+and Delete and Shift+Delete delete or ripple-delete it (Kerf keymap). The
+Program monitor's transport lies on the picture, as a video player's
+controls do: a gradient along the picture's foot, a progress bar across it
+(thicker under the pointer, its played part in Kerf's purple, the time under
+the pointer shown over it; click or drag it to seek), and a row with play or
+pause, a frame back, a frame on, and the time over the program length. On a
+portrait picture they take a short-video player's arrangement: the bar along
+the foot, the buttons at the top left, the time small over the bar. They
+show while paused and while the pointer is over the picture, and fade out
+2.5 seconds after it stops while playing; the keys never depend on them.
+Nothing sits under the picture. The Editing
 workspace reads as a Short does on YouTube's desktop page: the Program
 monitor takes the top row past the browsers, and in its stage the picture
 card (12-point corners), an action rail and the Kerf Assistant (the chat)
 form one group centred in the stage, the chat panel level with the card and
-as tall (never shorter than 320 points where the stage has the room), as a
-Short's comments open beside it. A 9:16 or 1:1 card fills the stage's
-height; a 16:9 one takes the width the rail and chat leave it. With the chat
-closed the card is centred alone, the rail hanging on its right. In a stage
-too narrow for the group the card shrinks first, then the chat to its
-narrowest, and past that the chat lies over the stage's right side. The
+as tall (never shorter than 480 points where the stage has the room; a wide
+card is centred on its height), as a Short's comments open beside it. A 9:16
+or 1:1 card fills the stage's height; a 16:9 one takes the width the rail and
+chat leave it. With the chat closed the card is centred alone, the rail
+hanging on its right. In a narrow stage the chat narrows first, so the
+picture keeps four fifths of its width, then the card shrinks, and past that
+the chat lies over the stage's right side.
+
+A portrait (9:16) picture shows in a phone, as a simulator shows an app: a
+generic phone drawn in code, graphite in either appearance, its screen
+taller than the picture (9:19.5) with the picture across it and black above
+and below, a status bar, and a camera island or punch-hole. The phone's body
+takes the card's place in the group, the chat level with it. The rail's
+Phone button and Window ▸ Viewer choose Phone · Island (the default), Phone ·
+Punch-Hole or Off (the plain card); its Safe button outlines where a
+vertical-video app's interface usually covers the picture (a top bar, a
+column of actions, a caption band). Both are preferences of this Mac. The
 Source monitor is a tab behind the Program monitor; double-clicking media
-brings it forward (the chat stays with the Program monitor). Left of them,
+brings it forward. The chat stays with the Program monitor: while the
+Source monitor covers it, it counts as closed, so the bar over the timeline
+stands in for it and ⇧⌘J brings it back into sight. Left of them,
 the Project bin, Effect Controls, Effects, and Presets share a column of
 tabs. The Timeline runs the window's full width under both, for its many
 tracks.
@@ -295,9 +317,11 @@ and its latest step follow the latest comment. A pending proposal is pinned
 under the header ("Pinned by Kerf") with Reject and Accept pills (⌘Return;
 Escape with the timeline focused rejects) and its script and diff behind
 "Script" (as tall as their lines, up to ten, and folded in a panel too short
-for them). The up to three next steps Kerf ends each turn with ("Stronger
-glow", "Wipe to the next shot") are chips over the composer, wrapping rather
-than widening the panel; pressing one asks for it about the same selection.
+for them); until the script is opened, its first three changes are listed
+under the summary. The up to three next steps Kerf ends each turn with
+("Stronger glow", "Wipe to the next shot") are one row of chips over the
+composer, scrolling sideways rather than wrapping, so the conversation
+keeps its height; pressing one asks for it about the same selection.
 The composer is the panel's footer: your avatar and one line over an
 underline that turns Kerf's purple in focus, growing with the draft, with the
 model, Cancel and Send (Stop while Kerf works) shown while it is in use.

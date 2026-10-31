@@ -1,5 +1,6 @@
 #pragma once
 
+#include "device_frame.h"
 #include "editor_common.h"
 
 #include <QImage>
@@ -13,6 +14,8 @@
 #include <QWidget>
 
 namespace kerf {
+
+class PlayerOverlay;
 
 // The Program monitor. It also draws the selected picture clip's masks over
 // the picture and edits them: a mask tool draws a new one, a handle drag
@@ -31,20 +34,31 @@ public:
     void setProjectInfo(double width, double height);
     // The stage, as a Short's page lays out its player: the picture card,
     // the action rail on its right, and Kerf's conversation on the rail's
-    // right, one group centred in the viewer, the conversation as tall as
-    // the card and level with it. With the conversation closed the card is
-    // centred alone and the rail hangs on its right. Where the viewer is
-    // too narrow for all three, the card shrinks first, then the
-    // conversation to its narrowest; past that it lies over the stage's
-    // right side instead.
+    // right, one group centred in the viewer. A portrait picture shows in a
+    // phone (see DevicePreview), whose body takes the card's place in the
+    // group. The conversation is level with the card (or phone) and as tall,
+    // and never shorter than kMinChatHeight where the stage has the room; a
+    // wide card is centred on its height. With the conversation closed the
+    // card is centred alone and the rail hangs on its right. Where the
+    // viewer is too narrow for all three, the conversation narrows first,
+    // so the picture keeps four fifths of its width; past that the card
+    // shrinks, then the conversation lies over the stage's right side.
     struct StageLayout {
-        QRectF card;
-        QRect rail;  // Empty when there is no room for it.
-        QRect panel; // Empty while the conversation is closed.
+        QRectF card;   // The picture.
+        QRectF body;   // The phone it shows in; the card itself without one.
+        QRectF screen; // The phone's screen; empty without one.
+        QRect rail;    // Empty when there is no room for it.
+        QRect panel;   // Empty while the conversation is closed.
         bool overlay = false;
+        bool device = false;
     };
     static constexpr int kStageMargin = 16;
+    // Above and below a phone: its bezel stands in for the rest of the margin.
+    static constexpr int kDeviceMargin = 4;
     static constexpr int kStageGap = 12;
+    // Between card, rail and conversation in a narrow stage.
+    static constexpr int kNarrowStageGap = 8;
+    static constexpr int kNarrowStage = 1000;
     static constexpr int kCardRadius = 12;
     static constexpr int kRailWidth = 48;
     // The conversation's width: kept between these (a per-user preference).
@@ -52,19 +66,32 @@ public:
     static constexpr int kMaxChatWidth = 420;
     static constexpr int kDefaultChatWidth = 360;
     // The conversation is never shorter than this where the stage has the
-    // room, so its header, a comment and its composer fit.
-    static constexpr int kMinChatHeight = 320;
+    // room, so its header, a few comments and its composer fit.
+    static constexpr int kMinChatHeight = 480;
     // The card's narrowest before the conversation narrows, then lies over it.
     static constexpr int kMinCardWidth = 160;
+    // The share of its width with the conversation closed that the card
+    // keeps before the conversation gives up any of its own.
+    static constexpr double kCardKeeps = 0.8;
     // The rail and conversation, laid out in the stage as children.
     void setStage(QWidget *rail, QWidget *panel);
     void setChatOpen(bool open);
     bool chatOpen() const { return m_chatOpen; }
     void setChatWidth(int width);
     int chatWidth() const { return m_chatWidth; }
+    // The phone a portrait picture shows in, or Off for the plain card, and
+    // the outlines of where a vertical-video app covers the picture.
+    void setDevicePreview(DevicePreview preview);
+    DevicePreview devicePreview() const { return m_device; }
+    void setSafeZones(bool shown);
+    bool safeZonesShown() const { return m_safeZones; }
+    // Whether the picture is taller than wide.
+    bool portrait() const { return aspect() < 1.0; }
+    int stageGap() const;
     StageLayout stageLayout() const;
     QRectF videoRect() const;
     QRectF captionRect() const;
+    PlayerOverlay *overlay() const { return m_overlay; }
 
     // The masks of picture clip `clip` as its snapshot carries them, and
     // where its picture lands on the canvas (picturePlacement). An empty
@@ -100,6 +127,7 @@ protected:
 private:
     // Place the rail and the conversation where stageLayout() puts them.
     void layoutStage();
+    double aspect() const;
     double fractionAt(int x) const;
     // While a tool is out or the clip has masks, the pointer edits masks
     // instead of scrubbing or seeking.
@@ -130,6 +158,9 @@ private:
     QPointer<QWidget> m_panel;
     bool m_chatOpen = false;
     int m_chatWidth = kDefaultChatWidth;
+    DevicePreview m_device = DevicePreview::Island;
+    bool m_safeZones = false;
+    PlayerOverlay *m_overlay = nullptr;
     double m_skimFraction = -1.0;
     bool m_skimming = false;
     bool m_liveScrub = false;

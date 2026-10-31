@@ -21,6 +21,7 @@
 #include <QTextEdit>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -57,15 +58,15 @@ QString bodyMarkup(const QString &text) {
 // Over the top of a scrolled view, its background fading to clear, so a
 // comment cut off by the view's top edge reads as scrolled out of sight and
 // not as clipped. It is the scroll area's child, not its viewport's, so it
-// stays put while the content scrolls, and is shown only while the view is
-// scrolled. Clicks pass through it.
+// stays put while the content scrolls, and is shown only while the view's
+// top edge cuts a comment (see ChatPanel::updateScrollFade). Clicks pass
+// through it.
 class ScrollTopFade final : public QWidget {
 public:
     explicit ScrollTopFade(QScrollArea *area) : QWidget(area), m_area(area) {
         setObjectName(QStringLiteral("scrollFade"));
         setAttribute(Qt::WA_TransparentForMouseEvents);
         area->installEventFilter(this);
-        connect(area->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) { setVisible(value > 0); });
         connect(EditorAppearance::instance(), &EditorAppearance::changed, this, qOverload<>(&QWidget::update));
         hide();
         follow();
@@ -83,7 +84,7 @@ protected:
         clear.setAlpha(0);
         QLinearGradient fade(0, 0, 0, height());
         fade.setColorAt(0, surface);
-        fade.setColorAt(0.25, surface);
+        fade.setColorAt(0.4, surface);
         fade.setColorAt(1, clear);
         QPainter(this).fillRect(rect(), fade);
     }
@@ -95,6 +96,31 @@ private:
         raise();
     }
     QScrollArea *m_area;
+};
+
+// The end of the chips' row fading into the panel's surface, while the row
+// has more chips that way. Clicks pass through it.
+class ChipFade final : public QWidget {
+public:
+    ChipFade(bool leading, QWidget *parent) : QWidget(parent), m_leading(leading) {
+        setObjectName(leading ? QStringLiteral("chipFadeLeading") : QStringLiteral("chipFadeTrailing"));
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        hide();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        const QColor surface = editorTheme().chatSurface;
+        QColor clear = surface;
+        clear.setAlpha(0);
+        QLinearGradient fade(0, 0, width(), 0);
+        fade.setColorAt(0, m_leading ? surface : clear);
+        fade.setColorAt(1, m_leading ? clear : surface);
+        QPainter(this).fillRect(rect(), fade);
+    }
+
+private:
+    bool m_leading;
 };
 
 // The composer's underline: a hairline at rest, two points of the accent
@@ -213,7 +239,28 @@ void FlowLayout::setGeometry(const QRect &rect) {
     arrange(rect, true);
 }
 
+void FlowLayout::setScroll(int scroll) {
+    scroll = std::max(0, scroll);
+    if (scroll == m_scroll) return;
+    m_scroll = scroll;
+    if (!geometry().isNull()) arrange(geometry(), true);
+}
+
+int FlowLayout::contentWidth() const {
+    int width = 0;
+    for (const QLayoutItem *item : m_items)
+        if (!item->isEmpty()) width += (width ? m_spacing : 0) + item->sizeHint().width();
+    return width;
+}
+
 QSize FlowLayout::minimumSize() const {
+    if (m_singleLine) {
+        // As tall as its tallest chip, and as narrow as anything.
+        int height = 0;
+        for (const QLayoutItem *item : m_items)
+            if (!item->isEmpty()) height = std::max(height, item->sizeHint().height());
+        return QSize(0, height).grownBy(contentsMargins());
+    }
     QSize size;
     for (const QLayoutItem *item : m_items)
         if (!item->isEmpty()) size = size.expandedTo(item->sizeHint());
@@ -222,6 +269,18 @@ QSize FlowLayout::minimumSize() const {
 
 int FlowLayout::arrange(const QRect &rect, bool apply) const {
     const QRect area = rect.marginsRemoved(contentsMargins());
+    if (m_singleLine) {
+        int x = area.x() - m_scroll;
+        int line = 0;
+        for (QLayoutItem *item : m_items) {
+            if (item->isEmpty()) continue;
+            const QSize hint = item->sizeHint();
+            if (apply) item->setGeometry(QRect(QPoint(x, area.y()), hint));
+            x += hint.width() + m_spacing;
+            line = std::max(line, hint.height());
+        }
+        return area.y() + line - rect.y() + contentsMargins().bottom();
+    }
     int x = area.x();
     int y = area.y();
     int line = 0;
@@ -494,21 +553,47 @@ void RailButton::paintEvent(QPaintEvent *) {
     painter.setBrush(isDown() || underMouse() ? theme.railButtonHover : isChecked() ? theme.railButtonActive : theme.railButton);
     painter.drawEllipse(disc);
     const QColor ink = isChecked() ? theme.railGlyphActive : theme.railGlyph;
-    // The speech bubble on a 24-point grid: a rounded bubble, its tail at
-    // the lower left; filled while the chat is open.
     painter.save();
     painter.translate(disc.center() - QPointF(12, 12));
-    QPainterPath path;
-    path.moveTo(7.5, 4.5); path.lineTo(16.5, 4.5);
-    path.quadTo(20.5, 4.5, 20.5, 8.5); path.lineTo(20.5, 12.5);
-    path.quadTo(20.5, 16.5, 16.5, 16.5); path.lineTo(11.5, 16.5);
-    path.lineTo(6.5, 20); path.lineTo(7.3, 16.5);
-    path.quadTo(3.5, 16.3, 3.5, 12.5); path.lineTo(3.5, 8.5);
-    path.quadTo(3.5, 4.5, 7.5, 4.5);
-    path.closeSubpath();
     painter.setPen(QPen(ink, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    painter.setBrush(isChecked() ? QBrush(ink) : QBrush(Qt::NoBrush));
-    painter.drawPath(path);
+    painter.setBrush(Qt::NoBrush);
+    switch (m_glyph) {
+    case Glyph::Chat: {
+        // The speech bubble on a 24-point grid: a rounded bubble, its tail
+        // at the lower left; filled while the chat is open.
+        QPainterPath path;
+        path.moveTo(7.5, 4.5); path.lineTo(16.5, 4.5);
+        path.quadTo(20.5, 4.5, 20.5, 8.5); path.lineTo(20.5, 12.5);
+        path.quadTo(20.5, 16.5, 16.5, 16.5); path.lineTo(11.5, 16.5);
+        path.lineTo(6.5, 20); path.lineTo(7.3, 16.5);
+        path.quadTo(3.5, 16.3, 3.5, 12.5); path.lineTo(3.5, 8.5);
+        path.quadTo(3.5, 4.5, 7.5, 4.5);
+        path.closeSubpath();
+        painter.setBrush(isChecked() ? QBrush(ink) : QBrush(Qt::NoBrush));
+        painter.drawPath(path);
+        break;
+    }
+    case Glyph::Phone:
+        // A phone's outline and its camera.
+        painter.drawRoundedRect(QRectF(7, 3, 10, 18), 2.5, 2.5);
+        painter.drawLine(QPointF(10.8, 5.8), QPointF(13.2, 5.8));
+        break;
+    case Glyph::SafeZones: {
+        // A frame's corners, and the dashed line inside them.
+        const auto corner = [&painter](QPointF at, double dx, double dy) {
+            painter.drawPolyline(QPolygonF{at + QPointF(0, 4 * dy), at, at + QPointF(4 * dx, 0)});
+        };
+        corner({4, 4}, 1, 1);
+        corner({20, 4}, -1, 1);
+        corner({4, 20}, 1, -1);
+        corner({20, 20}, -1, -1);
+        QPen dashed(ink, 1.4, Qt::CustomDashLine, Qt::FlatCap);
+        dashed.setDashPattern({2.0, 2.0});
+        painter.setPen(dashed);
+        painter.drawRect(QRectF(8, 8, 8, 8));
+        break;
+    }
+    }
     painter.restore();
     if (!m_label.isEmpty()) {
         painter.setPen(theme.railLabel);
@@ -525,10 +610,20 @@ StageRail::StageRail(QWidget *parent) : QWidget(parent) {
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(12);
     layout->addStretch(1);
+    m_device = new RailButton(RailButton::Glyph::Phone);
+    m_device->setObjectName(QStringLiteral("railDevice"));
+    m_device->setCheckable(true);
+    m_device->setLabel(QStringLiteral("Phone"));
+    m_safeZones = new RailButton(RailButton::Glyph::SafeZones);
+    m_safeZones->setObjectName(QStringLiteral("railSafeZones"));
+    m_safeZones->setCheckable(true);
+    m_safeZones->setLabel(QStringLiteral("Safe"));
     m_chat = new RailButton(RailButton::Glyph::Chat);
     m_chat->setCheckable(true);
-    m_chat->setFixedSize(m_chat->sizeHint());
-    layout->addWidget(m_chat, 0, Qt::AlignHCenter);
+    for (RailButton *button : {m_device, m_safeZones, m_chat}) {
+        button->setFixedSize(button->sizeHint());
+        layout->addWidget(button, 0, Qt::AlignHCenter);
+    }
 }
 
 // ---- ChatPanel ------------------------------------------------------------
@@ -564,7 +659,8 @@ ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
     m_content = new QWidget;
     m_content->setObjectName(QStringLiteral("chatContent"));
     m_list = new QVBoxLayout(m_content);
-    m_list->setContentsMargins(kSidePadding, 12, kSidePadding, 12);
+    // The first comment 16 points under the header, as a comments panel's.
+    m_list->setContentsMargins(kSidePadding, 16, kSidePadding, kListBottom);
     m_list->setSpacing(16);
     m_welcome = buildWelcome();
     m_list->addWidget(m_welcome);
@@ -587,24 +683,34 @@ ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
     m_list->addStretch(1);
     m_scroll->setWidget(m_content);
     outer->addWidget(m_scroll, 1);
-    new ScrollTopFade(m_scroll);
+    m_scrollFade = new ScrollTopFade(m_scroll);
     // New output keeps the latest in view, unless the reader scrolled away.
     QScrollBar *bar = m_scroll->verticalScrollBar();
     connect(bar, &QScrollBar::rangeChanged, this, [this](int, int maximum) {
-        if (m_follow) m_scroll->verticalScrollBar()->setValue(maximum);
+        if (!m_follow) return;
+        m_scroll->verticalScrollBar()->setValue(maximum);
+        QTimer::singleShot(0, this, &ChatPanel::settleListEnd);
     });
     connect(bar, &QScrollBar::valueChanged, this, [this](int value) {
         m_follow = value >= m_scroll->verticalScrollBar()->maximum() - 4;
+        updateScrollFade();
         if (m_scrollEdge->property("scrolled").toBool() == (value > 0)) return;
         m_scrollEdge->setProperty("scrolled", value > 0);
         repolish(m_scrollEdge);
     });
 
-    // Next steps: chips over the composer that wrap rather than widen it.
+    // Next steps: one row of chips over the composer that scrolls sideways
+    // rather than wrap, as a chip bar does, so the conversation keeps the
+    // panel's height.
     m_chips = new QWidget;
     m_chips->setObjectName(QStringLiteral("nextSteps"));
     auto *chips = new FlowLayout(m_chips, 8);
+    chips->setSingleLine(true);
     chips->setContentsMargins(kSidePadding, 8, kSidePadding, 4);
+    m_chips->setFixedHeight(kChipRowHeight);
+    m_chipFadeLeft = new ChipFade(true, m_chips);
+    m_chipFadeRight = new ChipFade(false, m_chips);
+    m_chips->installEventFilter(this);
     m_chips->hide();
     outer->addWidget(m_chips);
     m_composer = buildComposer();
@@ -684,6 +790,14 @@ QFrame *ChatPanel::buildProposal() {
     m_proposalExpander->setToolTip(QStringLiteral("Show the script and the document diff"));
     line->addWidget(m_proposalExpander, 0, Qt::AlignVCenter);
     column->addLayout(line);
+    // The first few changes, listed under it as replies are.
+    m_proposalChanges = new QWidget;
+    m_proposalChanges->setObjectName(QStringLiteral("proposalChanges"));
+    auto *changes = new QVBoxLayout(m_proposalChanges);
+    changes->setContentsMargins(0, 0, 0, 2);
+    changes->setSpacing(2);
+    m_proposalChanges->hide();
+    column->addWidget(m_proposalChanges);
     m_proposalDiff = new QTextEdit;
     m_proposalDiff->setReadOnly(true);
     m_proposalDiff->setObjectName(QStringLiteral("proposalDiff"));
@@ -726,10 +840,17 @@ QWidget *ChatPanel::buildWelcome() {
     auto *column = new QVBoxLayout;
     column->setContentsMargins(0, 0, 0, 0);
     column->setSpacing(2);
-    column->addWidget(label(QStringLiteral("Kerf"), "chatName"));
-    QLabel *title = label(QStringLiteral("Make your next cut."), "chatWelcomeTitle");
-    column->addWidget(title);
-    QLabel *intro = label(QStringLiteral("Describe the change. Kerf uses this timeline."), "chatBody");
+    // The name line every comment has: the author, then the time.
+    auto *line = new QHBoxLayout;
+    line->setContentsMargins(0, 0, 0, 0);
+    line->setSpacing(4);
+    line->addWidget(label(QStringLiteral("Kerf"), "chatName"));
+    line->addWidget(label(QStringLiteral("now"), "chatTime"));
+    line->addStretch(1);
+    column->addLayout(line);
+    QLabel *intro = label(QString(), "chatBody");
+    intro->setTextFormat(Qt::RichText);
+    intro->setText(bodyMarkup(QStringLiteral("Describe the change you want. I’ll propose it, and you review it before it touches the cut.")));
     intro->setWordWrap(true);
     intro->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     column->addWidget(intro);
@@ -752,11 +873,6 @@ QWidget *ChatPanel::buildWelcome() {
         m_examples.append(chip);
     }
     column->addWidget(examples);
-    column->addSpacing(10);
-    QLabel *note = label(QStringLiteral("Review a proposal before it changes the cut."), "chatNote");
-    note->setWordWrap(true);
-    note->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    column->addWidget(note);
     row->addLayout(column, 1);
     return welcome;
 }
@@ -808,7 +924,7 @@ QFrame *ChatPanel::buildComposer() {
     m_model->setMinimumWidth(64);
     actions->addWidget(m_model, 0);
     actions->addStretch(1);
-    m_cancel = pill(QStringLiteral("Cancel"), "chatPillText", kPillHeight);
+    m_cancel = pill(QStringLiteral("Cancel"), "chatPillText", kComposerPillHeight);
     m_cancel->setToolTip(QStringLiteral("Clear the draft"));
     connect(m_cancel, &QPushButton::clicked, this, [this] {
         m_input->clear();
@@ -816,11 +932,11 @@ QFrame *ChatPanel::buildComposer() {
         updateComposer(m_busy);
     });
     actions->addWidget(m_cancel);
-    m_stop = pill(QStringLiteral("Stop"), "chatPillTonal", kPillHeight);
+    m_stop = pill(QStringLiteral("Stop"), "chatPillTonal", kComposerPillHeight);
     m_stop->setObjectName(QStringLiteral("abortButton"));
     m_stop->setToolTip(QStringLiteral("Stop the current agent request"));
     actions->addWidget(m_stop);
-    m_send = pill(QStringLiteral("Send"), "chatPillFilled", kPillHeight);
+    m_send = pill(QStringLiteral("Send"), "chatPillFilled", kComposerPillHeight);
     m_send->setObjectName(QStringLiteral("chatSendButton"));
     m_send->setAccessibleName(QStringLiteral("Send message"));
     m_send->setToolTip(QStringLiteral("Send message (Return)"));
@@ -871,6 +987,25 @@ void ChatPanel::setProposalShown(bool shown) {
     if (!shown) m_proposalExpander->setChecked(false);
 }
 
+void ChatPanel::setProposalChanges(const QStringList &changes) {
+    QLayout *layout = m_proposalChanges->layout();
+    while (QLayoutItem *item = layout->takeAt(0)) {
+        delete item->widget();
+        delete item;
+    }
+    const qsizetype shown = std::min<qsizetype>(changes.size(), kProposalChangeLines);
+    for (qsizetype index = 0; index < shown; ++index) {
+        QLabel *change = label(wrappable(changes.at(index)), "chatChange");
+        change->setWordWrap(true);
+        change->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        layout->addWidget(change);
+    }
+    if (changes.size() > shown)
+        layout->addWidget(label(QStringLiteral("%1 more in the script").arg(changes.size() - shown), "chatChangeMore"));
+    m_proposalChanges->setProperty("count", int(changes.size()));
+    fitProposalDiff();
+}
+
 bool ChatPanel::proposalExpanded() const { return m_proposalExpander->isChecked(); }
 
 void ChatPanel::setProposalExpanded(bool expanded) { m_proposalExpander->setChecked(expanded); }
@@ -906,30 +1041,125 @@ void ChatPanel::resizeEvent(QResizeEvent *) {
 void ChatPanel::fitProposalDiff() {
     // As tall as its lines, up to ten (then it scrolls), and never so tall
     // that the conversation under the pinned proposal has less than its least.
+    // Its frame is in its contents margins (a QFrame keeps it there).
     const QMargins frame = m_proposalDiff->contentsMargins();
-    const int chrome = 2 * m_proposalDiff->frameWidth() + frame.top() + frame.bottom();
+    const int chrome = frame.top() + frame.bottom();
     const int margins = static_cast<int>(std::ceil(2 * m_proposalDiff->document()->documentMargin()));
     const int lines = m_proposalDiff->fontMetrics().lineSpacing();
     const int least = 2 * lines + margins + chrome;
     int most = kProposalDiffLines * lines + margins + chrome;
     bool fits = true;
+    // The changes are listed until the script and diff, which hold them all, are opened.
+    const bool listsChanges = m_proposalChanges->property("count").toInt() > 0 && !m_proposalExpander->isChecked();
     if (height() > 0) {
-        const int shown = m_proposalDiff->isVisibleTo(m_proposal) ? m_proposalDiff->height() + 2 : 0;
         const auto tall = [this](const QWidget *part) {
             return part->hasHeightForWidth() ? part->heightForWidth(width()) : part->sizeHint().height();
         };
-        const int others = kHeaderHeight + (tall(m_proposal) - shown) + m_scrollEdge->height() + tall(m_composer) +
-                           (m_chips->isVisibleTo(this) ? tall(m_chips) : 0) + kMinListHeight;
+        const int shown = m_proposalDiff->isVisibleTo(m_proposal) ? m_proposalDiff->height() + 2 : 0;
+        // The changes' height in the comment's text column.
+        const int column = std::max(1, width() - 2 * kSidePadding - kAvatar - 12);
+        const int changesHeight = m_proposalChanges->layout()->hasHeightForWidth() ? m_proposalChanges->layout()->totalHeightForWidth(column)
+                                                                                     : m_proposalChanges->sizeHint().height();
+        const int listed = m_proposalChanges->isVisibleTo(m_proposal) ? changesHeight + 4 : 0;
+        const int base = kHeaderHeight + (tall(m_proposal) - shown - listed) + m_scrollEdge->height() + tall(m_composer) +
+                         (m_chips->isVisibleTo(this) ? m_chips->height() : 0) + kMinListHeight;
+        // The changes stay listed unless the conversation would fall under its least.
+        const int changes = listsChanges ? changesHeight + 4 : 0;
+        const bool changesFit = height() - base - changes >= 0;
+        m_proposalChanges->setVisible(listsChanges && changesFit);
+        const int others = base + (changesFit ? changes : 0);
         // In a panel too short for even two lines of it, it stays folded.
         fits = height() - others >= least;
         most = std::min(most, std::max(least, height() - others));
     }
+    if (height() <= 0) m_proposalChanges->setVisible(listsChanges);
     const int content = static_cast<int>(std::ceil(m_proposalDiff->document()->size().height())) + chrome;
     m_proposalDiff->setFixedHeight(std::clamp(content, least, most));
     m_proposalDiff->setVisible(m_proposalExpander->isChecked() && fits);
 }
 
+QWidget *ChatPanel::itemAcross(int y) const {
+    for (int index = 0; index < m_list->count(); ++index) {
+        QWidget *item = m_list->itemAt(index)->widget();
+        if (!item || !item->isVisible()) continue;
+        const QRect area = item->geometry();
+        if (area.top() < y && area.bottom() >= y) return item;
+    }
+    return nullptr;
+}
+
+void ChatPanel::updateScrollFade() {
+    const int value = m_scroll->verticalScrollBar()->value();
+    m_scrollFade->setVisible(value > 0 && itemAcross(value));
+}
+
+void ChatPanel::settleListEnd() {
+    if (!m_follow) return;
+    // Where the view's top would fall with no room under the latest: from
+    // the last comment's foot, which the room under it does not move.
+    int last = 0;
+    for (int index = 0; index < m_list->count(); ++index)
+        if (const QWidget *item = m_list->itemAt(index)->widget(); item && item->isVisible()) last = std::max(last, item->geometry().bottom() + 1);
+    const int top = last + kListBottom - m_scroll->viewport()->height();
+    int pad = 0;
+    if (top > 0) {
+        if (const QWidget *item = itemAcross(top)) {
+            const QRect area = item->geometry();
+            const int head = top - area.top();
+            const int foot = area.bottom() + 1 - top;
+            // Only its first few points are hidden: show it from its top,
+            // out of the blank room under the latest. Only its foot shows:
+            // scroll it away, into the gap after it.
+            if (head <= kListBottom) pad = -head;
+            else if (foot <= kOrphanReach) pad = foot + 4;
+        }
+    }
+    if (pad != m_listPad) {
+        m_listPad = pad;
+        m_list->setContentsMargins(kSidePadding, 16, kSidePadding, kListBottom + pad);
+    }
+    updateScrollFade();
+}
+
+void ChatPanel::updateChipRow() {
+    auto *flow = static_cast<FlowLayout *>(m_chips->layout());
+    const int room = std::max(0, m_chips->width() - 2 * kSidePadding);
+    const int most = std::max(0, flow->contentWidth() - room);
+    flow->setScroll(std::clamp(flow->scroll(), 0, most));
+    const int fadeTop = 8;
+    const int fadeHeight = kChipHeight;
+    m_chipFadeLeft->setGeometry(0, fadeTop, kSidePadding + kChipFadeWidth / 2, fadeHeight);
+    m_chipFadeRight->setGeometry(m_chips->width() - kSidePadding - kChipFadeWidth / 2, fadeTop, kSidePadding + kChipFadeWidth / 2, fadeHeight);
+    m_chipFadeLeft->setVisible(flow->scroll() > 0);
+    m_chipFadeRight->setVisible(flow->scroll() < most);
+    m_chipFadeLeft->raise();
+    m_chipFadeRight->raise();
+}
+
 bool ChatPanel::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == m_chips) {
+        switch (event->type()) {
+        case QEvent::Wheel: {
+            // A wheel or a trackpad scrolls the row sideways, either way it turns.
+            auto *wheel = static_cast<QWheelEvent *>(event);
+            const QPoint pixels = wheel->pixelDelta();
+            const QPoint angle = wheel->angleDelta() / 4;
+            const int delta = !pixels.isNull() ? (pixels.x() ? pixels.x() : pixels.y()) : (angle.x() ? angle.x() : angle.y());
+            auto *flow = static_cast<FlowLayout *>(m_chips->layout());
+            flow->setScroll(flow->scroll() - delta);
+            updateChipRow();
+            return true;
+        }
+        case QEvent::Resize:
+        case QEvent::LayoutRequest:
+        case QEvent::ChildAdded:
+        case QEvent::Show:
+            QTimer::singleShot(0, this, &ChatPanel::updateChipRow);
+            break;
+        default:
+            break;
+        }
+    }
     if (watched == m_resizeHandle) {
         switch (event->type()) {
         case QEvent::MouseButtonPress: {

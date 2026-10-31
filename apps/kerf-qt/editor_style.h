@@ -688,21 +688,28 @@ QFrame#askPrompt { background: @raised; border: 1px solid @menuBorder; border-ra
 QLabel#askTitle { color: @assistantText; font-size: 12px; font-weight: 600; }
 QTextEdit#askInput { background: @field; border: 1px solid @fieldBorder; border-radius: 5px; padding: 4px; color: @text; }
 QTextEdit#askInput:focus { border-color: @focusRing; }
-/* The agent's bar is the window's chrome; a purple stripe at its start and
-   its label say whose it is. Accept is the accent's default action. */
-QFrame#aiBar { background: @chrome; border: 0; border-left: 3px solid @assistant; border-bottom: 1px solid @divider; }
-QLabel#aiBarText { color: @assistantText; font-size: 11px; font-weight: 600; }
-QFrame#aiBar QToolButton { color: @buttonText; padding: 2px 10px; border-radius: 5px; }
-QFrame#aiBar QToolButton#aiAccept {
-    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 @accentTop, stop: 1 @accent);
-    border-color: @accent;
-    border-top-color: @accentTop;
-    color: @onAccent;
-    font-weight: 600;
+/* The agent's bar is the window's chrome, no stripe and no callout: a quiet
+   label, tonal chips for Details, Stop and Reject, and Accept, the
+   accent's default action. */
+QFrame#aiBar { background: @chrome; border: 0; border-bottom: 1px solid @divider; }
+QLabel#aiBarText { color: @textSecondary; font-size: 12px; font-weight: 600; }
+QFrame#aiBar QToolButton {
+    color: @chatChipText;
+    background: @chatChip;
+    border: 0;
+    border-radius: 8px;
+    padding: 0 10px;
+    min-height: 22px;
+    max-height: 22px;
+    font-size: 12px;
+    font-weight: 500;
 }
+QFrame#aiBar QToolButton:hover,
+QFrame#aiBar QToolButton:pressed { background: @chatChipHover; }
+QFrame#aiBar QToolButton#aiAccept { background: @accent; color: @onAccent; font-weight: 600; }
 QFrame#aiBar QToolButton#aiAccept:hover { background: @accentTop; }
 QFrame#aiBar QToolButton#aiAccept:pressed { background: @accentPressed; border-color: @accentPressed; }
-QFrame#aiBar QToolButton:disabled { color: @buttonDisabledText; background: @buttonDisabled; border-color: @buttonDisabledEdge; }
+QFrame#aiBar QToolButton:disabled { color: @textDisabled; background: @chatChip; }
 
 /* Kerf's conversation, as a video's comments panel: ChatPanel paints its
    rounded surface, and on it nothing is boxed. Every turn is a comment
@@ -714,12 +721,12 @@ QLabel#chatTime,
 QLabel#chatPinned,
 QLabel#chatStatus,
 QLabel#chatActivity,
-QLabel#chatNote { color: @chatSecondary; font-size: 12px; }
+QLabel#chatChangeMore { color: @chatSecondary; font-size: 12px; }
 QLabel#chatSection { color: @chatSecondary; font-size: 12px; font-weight: 600; }
+QLabel#chatChange { color: @chatSecondary; font-size: 13px; }
 QLabel#chatErrorTag { color: @errorText; font-size: 12px; font-weight: 600; }
 QLabel#chatBody,
 QLabel#proposalSummary { color: @chatText; font-size: 14px; }
-QLabel#chatWelcomeTitle { color: @chatText; font-size: 14px; font-weight: 600; }
 QLabel#chatReplyText { color: @chatText; font-size: 13px; }
 QScrollArea#chatScroll, QWidget#chatContent { background: transparent; border: 0; }
 QFrame#scrollEdge { background: transparent; border: 0; }
@@ -778,6 +785,9 @@ QPushButton#abortButton:pressed { background: @chatChipHover; }
 QPushButton#chatPillText { color: @chatText; background: transparent; padding: 0 12px; }
 QPushButton#chatPillText:hover,
 QPushButton#chatPillText:pressed { background: @chatChip; }
+/* The pinned proposal's Accept and Reject, a size up: 36px, round ends. */
+QFrame#proposalBox QPushButton#chatPillFilled,
+QFrame#proposalBox QPushButton#chatPillTonal { border-radius: 18px; min-height: 36px; max-height: 36px; padding: 0 18px; }
 QPushButton#chatPillFilled:disabled,
 QPushButton#chatSendButton:disabled,
 QPushButton#chatPillTonal:disabled,
