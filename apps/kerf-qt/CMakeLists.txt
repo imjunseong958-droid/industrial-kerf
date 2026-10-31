@@ -49,10 +49,14 @@ set(KERF_QT_SOURCES
     editor_style.h
     editor_theme.cpp
     editor_theme.h
-    effect_controls_panel.cpp
-    effect_controls_panel.h
     effects_panel.cpp
     effects_panel.h
+    inspector_panel.cpp
+    inspector_panel.h
+    inspector_presentation.cpp
+    inspector_presentation.h
+    inspector_widgets.cpp
+    inspector_widgets.h
     launcher_style.h
     main_window.cpp
     main_window.h

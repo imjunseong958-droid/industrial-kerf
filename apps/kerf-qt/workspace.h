@@ -54,6 +54,24 @@ public:
     void fitPictureShape(bool portrait);
     int pictureShapeGain() const { return m_shapeGain; }
 
+    // The Inspector follows the selection: a clip clicked brings it to the
+    // front of its column (remembering the tab it came from); a clip
+    // selected by an edit does not. It never opens a closed column, and
+    // raising leaves keyboard focus where it was.
+    enum class InspectorOrigin { Click, Edit };
+    static bool inspectorFollowsSelection();
+    static void setInspectorFollowsSelection(bool follows);
+    // `clip`: the clip clicked, so clicking it again after choosing another
+    // tab leaves that tab. `force` raises even when following is off (an
+    // effect just added from the Inspector).
+    void raiseInspector(InspectorOrigin origin, bool force = false, const QString &clip = QString());
+    // The selection was cleared: back to the tab the Inspector came from,
+    // if it came up by itself.
+    void inspectorDeselected();
+    // ⌘4: show the Inspector, or, when it is already in front, the tab before it.
+    void toggleInspector();
+    bool inspectorRaisedBySelection() const { return m_inspectorAuto; }
+
 signals:
     void changed();
 
@@ -90,6 +108,12 @@ private:
     // Waiting for the rows to be laid out before taking the portrait gain.
     bool m_shapePending = false;
     QPointer<QWidget> m_watchedRows;
+    // The tab the Inspector was raised over, whether it came up by itself,
+    // and the clip that raised it.
+    QPointer<ads::CDockWidget> m_beforeInspector;
+    bool m_inspectorAuto = false;
+    bool m_raisingInspector = false;
+    QString m_inspectorClip;
 };
 
 } // namespace kerf

@@ -487,6 +487,14 @@ EditorTheme makeEditorTheme(bool dark) {
     // ...and every clip's name reads on its header at 4.5:1.
     for (ClipStyle *style : {&t.clipVideo, &t.clipAudio, &t.clipMusic, &t.clipGenerator, &t.clipCaption})
         style->label = readableOn(style->label, style->header, 4.5);
+    // The Inspector's controls: aliases (the launcher's switch and knob).
+    t.inspectorField = dark ? t.field : t.group;
+    t.switchOn = t.trackToggleOn;
+    t.switchOnKnob = tone(dark, "#fffcf6", "#21161f");
+    t.switchOff = tone(dark, "#e2d9c8", "#3a3029");
+    t.switchOffStroke = tone(dark, "#8b7e6d", "#85776a");
+    t.knob = tone(dark, "#fffcf6", "#efe6d6");
+    t.inspectorDetent = t.rulerTickHalf;
     return t;
 }
 

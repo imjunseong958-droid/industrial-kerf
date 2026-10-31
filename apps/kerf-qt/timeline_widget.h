@@ -113,6 +113,8 @@ signals:
     void hoverSeekRequested(double time);
     void hoverSeekEnded();
     void clipSelected(const QString &clipId);
+    // A click on an empty lane, or Escape, with a clip selected.
+    void deselectRequested();
     // A body drag, with the Selection, Slip, or Slide tool.
     void moveRequested(const QString &clipId, double timelineStart);
     // An edge drag, with the Selection, Ripple, or Roll tool.

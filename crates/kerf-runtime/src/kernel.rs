@@ -518,10 +518,14 @@ pub enum EditOp {
         clips: Vec<String>,
     },
     /// Static property or generator parameter values; `null` restores the
-    /// default.
+    /// default. `name` renames the clip; an empty one gives it back the
+    /// name of what it shows.
     Set {
         clip: String,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         props: BTreeMap<String, Json>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
     },
     Speed {
         clip: String,
@@ -848,7 +852,7 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
         EditOp::RippleDelete { clips } => Op::RippleDelete {
             clips: edit_ids(clips)?,
         },
-        EditOp::Set { clip, props } => {
+        EditOp::Set { clip, props, name } => {
             let at = project
                 .locate(clip)
                 .ok_or_else(|| invalid(format!("no clip `{clip}`")))?;
@@ -874,6 +878,12 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
                     )?)),
                 };
                 changes.push(ClipChange::Param(name.clone(), param));
+            }
+            if let Some(name) = name {
+                let name = name.trim();
+                changes.push(ClipChange::Name(
+                    (!name.is_empty()).then(|| name.to_owned()),
+                ));
             }
             Op::Set {
                 clip: edit_id(clip)?,

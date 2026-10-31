@@ -44,7 +44,7 @@ class ChatPanel;
 class CommentRow;
 class StageRail;
 class CommandRegistry;
-class EffectControlsPanel;
+class InspectorPanel;
 class EffectsPanel;
 class PresetsPanel;
 class ProjectPanel;
@@ -86,6 +86,11 @@ private slots:
     void settlePointerSeek();
     bool scrubFromShownFrame(double time) const;
     void selectClip(const QString &id);
+    // A clip clicked on the timeline: selected, and the Inspector brought
+    // forward in its column (see Workspace::raiseInspector).
+    void clickSelectClip(const QString &id);
+    // Open the conversation with `subject` ("@clip") in the composer.
+    void askAboutInChat(const QString &subject);
 
     // Edits go to kerfd as typed operations on the model. Amounts and
     // positions count frames of the sequence.
@@ -313,7 +318,10 @@ private:
     QAction *m_viewerDetail = nullptr;
     QAction *m_timelineDetail = nullptr;
     Workspace *m_workspace = nullptr;
-    EffectControlsPanel *m_effectControls = nullptr;
+    InspectorPanel *m_inspector = nullptr;
+    // Add effect in the Inspector raised the Effects browser: adding one
+    // brings the Inspector back.
+    bool m_effectsFromInspector = false;
     // Rectangle, Ellipse, and Pen: the mask tools.
     QList<QAction *> m_maskTools;
     EffectsPanel *m_effects = nullptr;

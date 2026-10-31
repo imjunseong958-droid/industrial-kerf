@@ -58,6 +58,7 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
         {QStringLiteral("fieldBorder"), &EditorTheme::fieldBorder},
         {QStringLiteral("fieldDisabled"), &EditorTheme::fieldDisabled},
         {QStringLiteral("focusRing"), &EditorTheme::focusRing},
+        {QStringLiteral("inspectorField"), &EditorTheme::inspectorField},
         {QStringLiteral("placeholderText"), &EditorTheme::placeholderText},
         {QStringLiteral("checkFill"), &EditorTheme::checkFill},
         {QStringLiteral("checkBorder"), &EditorTheme::checkBorder},
@@ -309,9 +310,7 @@ QPushButton {
     outline: 0;
 }
 /* Symbol-only buttons keep a narrow bezel. */
-QToolButton#maskTool,
-QToolButton#maskRemove,
-QToolButton#effectRemove { padding: 2px 5px; }
+QToolButton#maskTool { padding: 2px 5px; }
 /* The chosen mask tool and the selected mask: a quiet accent wash with no
    outline, under the pointer too, darkening while held as every bezel does.
    The tool's symbol is the accent, which reads on either wash at 3:1. */
@@ -468,11 +467,41 @@ QToolButton#abortButton {
 QLabel#eyebrow { color: @textSecondary; font-size: 12px; font-weight: 500; letter-spacing: 0px; }
 QLabel#muted { color: @textSecondary; font-size: 11px; }
 QLabel#chatHint { color: @textSecondary; font-size: 11px; padding: 6px 2px 2px; }
-QLabel#inspectorClip { color: @textStrong; font-weight: 600; padding: 5px 0 5px 0; margin: 0; }
-/* Each section, effect and mask is headed by its name in semibold, as the
-   clip's is; a hairline sets an effect or mask apart from the one above. */
-QCheckBox#effectEnabled, QLabel#inspectorSection, QToolButton#maskName { font-weight: 600; }
-QWidget#effectBox[following="true"], QWidget#maskBox[following="true"] { border-top: 1px solid @divider; }
+/* The Inspector. A fill means a value can be changed; plain text cannot.
+   Labels, units, counts and summaries are secondary; values and titles are
+   the body ink; the only purple is the focus ring. */
+QLabel#inspectorLabel, QLabel#inspectorQuiet, QLabel#inspectorNote, QLabel#sectionCount,
+QLabel#sectionSummary, QLabel#effectSummary, QLabel#effectGroup, QLabel#effectMissing,
+QLabel#captionHint, QLabel#masksHint { color: @textSecondary; }
+QLabel#sectionTitle, QLabel#effectName { color: @text; }
+QLabel#effectName[off="true"] { color: @textSecondary; }
+QFrame#inspectorRule, QFrame#inspectorScrollEdge { background: @divider; border: 0; }
+QFrame#inspectorDropLine { background: @textStrong; border: 0; }
+QLineEdit[inspector="true"], QPlainTextEdit[inspector="true"],
+QLineEdit#scrubEditor, QLineEdit#inspectorNameEditor {
+    background: @inspectorField;
+    border: 1px solid @inspectorField;
+    border-radius: 5px;
+}
+QLineEdit[inspector="true"]:focus, QPlainTextEdit[inspector="true"]:focus,
+QLineEdit#scrubEditor, QLineEdit#inspectorNameEditor { border-color: @focusRing; }
+QLineEdit#scrubEditor { padding: 0px 7px; min-height: 22px; max-height: 22px; }
+/* Add effect, Reveal in Project, "6 more": words, no bezel. */
+QPushButton[inspectorLink="true"] {
+    background: transparent;
+    border: 0;
+    color: @text;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 0px;
+    min-height: 24px;
+    max-height: 24px;
+    text-align: left;
+}
+QPushButton[inspectorLink="true"][quiet="true"] { color: @textSecondary; font-weight: 400; }
+QPushButton[inspectorLink="true"]:hover { color: @textStrong; background: transparent; }
+/* A mask's name: words, washed in the accent tint while selected. */
+QToolButton#maskName { background: transparent; border-color: transparent; padding: 2px 6px; font-weight: 600; }
 /* The window's title, 13px semibold as macOS's and the launcher's. */
 QLabel#projectTitle { color: @text; font-size: 13px; font-weight: 600; padding: 0; }
 QToolButton#eyebrow { text-align: left; background: transparent; border: 0; color: @textSecondary; padding: 2px 0; }
@@ -554,6 +583,20 @@ QComboBox:!editable:disabled {
     background: @buttonDisabled;
     border-color: @buttonDisabledEdge;
 }
+/* The Inspector's pop-ups: its field fill, no bezel, 24px as its fields. */
+QComboBox[inspector="true"],
+QComboBox[inspector="true"]:!editable,
+QComboBox[inspector="true"]:!editable:hover {
+    color: @text;
+    background: @inspectorField;
+    border: 1px solid @inspectorField;
+    border-radius: 5px;
+    min-height: 22px;
+    max-height: 22px;
+}
+QComboBox[inspector="true"]:focus,
+QComboBox[inspector="true"]:!editable:focus { border-color: @focusRing; }
+QComboBox[inspector="true"]:!editable:disabled { color: @textDisabled; background: @inspectorField; border-color: @inspectorField; }
 /* The stepper's halves are transparent hit areas; StepperSpinBox draws one
    centred pair of chevrons over them, as the launcher does. */
 QDoubleSpinBox { padding: 2px 18px 2px 7px; }

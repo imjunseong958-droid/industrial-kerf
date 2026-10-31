@@ -16,7 +16,9 @@
 //! clip's masks in order: each one's outline as the language writes it
 //! (`rect`, `ellipse`, or `points` and `closed`), its mode and inversion, and
 //! the properties it sets, which `maskProperties` defines; `maskModes` lists
-//! the modes.
+//! the modes. The sequence's `dropFrame` and `sampleRate`, and each
+//! source's `channels` and `sampleRate`, describe the formats an inspector
+//! shows.
 
 use kerf_model::{
     Catalog, Clip, Content, Domain, FxKind, Mask, MaskMode, MaskShape, Param, ParamDef, ParamType,
@@ -39,6 +41,10 @@ pub(crate) fn timeline_json(project: &Project) -> Json {
             if let Some(video) = media.video {
                 source["width"] = json!(video.width);
                 source["height"] = json!(video.height);
+            }
+            if let Some(audio) = media.audio {
+                source["channels"] = json!(audio.channels);
+                source["sampleRate"] = json!(audio.sample_rate);
             }
             source
         }).collect::<Vec<_>>(),
@@ -65,6 +71,8 @@ pub(crate) fn timeline_json(project: &Project) -> Json {
     value["sequence"] = json!(sequence.id.as_str());
     value["fps"] = json!(rate.fps());
     value["rate"] = json!(rate.to_string());
+    value["dropFrame"] = json!(sequence.drop_frame);
+    value["sampleRate"] = json!(sequence.sample_rate);
     value["width"] = json!(sequence.width);
     value["height"] = json!(sequence.height);
     value["start"] = json!(sequence.start.seconds());
@@ -372,7 +380,11 @@ mod tests {
         .project;
         let value = timeline_json(&project);
         assert_eq!(value["fps"], 24.0);
+        assert_eq!(value["dropFrame"], false);
+        assert_eq!(value["sampleRate"], 48000);
         assert_eq!(value["sources"][0]["fps"], 24.0);
+        assert_eq!(value["sources"][0]["channels"], 2);
+        assert_eq!(value["sources"][0]["sampleRate"], 48000);
         assert_eq!(value["duration"], 3.0);
         let v1 = &value["tracks"][0];
         assert_eq!(v1["clips"][0]["duration"], 2.0);

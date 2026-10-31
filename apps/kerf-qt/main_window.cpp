@@ -3,7 +3,7 @@
 #include "bridge.h"
 #include "chat_panel.h"
 #include "command_registry.h"
-#include "effect_controls_panel.h"
+#include "inspector_panel.h"
 #include "effects_panel.h"
 #include "presets_panel.h"
 #include "project_launcher.h"
@@ -298,7 +298,10 @@ void MainWindow::pollBridge() {
                          static_cast<int>(frame.width * 4), QImage::Format_RGBA8888);
             m_shownFrameTime = frame.time;
             m_hasShownFrame = true;
-            m_viewer->setFrame(image.copy(), frame.time);
+            const QImage shown = image.copy();
+            m_viewer->setFrame(shown, frame.time);
+            // The sequence's thumbnail in the Inspector, with nothing selected.
+            if (m_selectedClip.isEmpty()) m_inspector->setProgramFrame(shown);
         }
     }
 }
@@ -646,6 +649,26 @@ void MainWindow::selectClip(const QString &id) {
     m_timeline->setSelectedClip(id);
     updateInspector();
     updateCommandStates();
+    updateChatControls();
+}
+
+void MainWindow::clickSelectClip(const QString &id) {
+    selectClip(id);
+    if (id.isEmpty()) m_workspace->inspectorDeselected();
+    else m_workspace->raiseInspector(Workspace::InspectorOrigin::Click, false, id);
+}
+
+void MainWindow::askAboutInChat(const QString &subject) {
+    // The conversation, open, with the subject in the composer.
+    if (!chatOpen()) setChatOpen(true);
+    QString text = m_chatInput->toPlainText().trimmed();
+    if (!text.startsWith(subject)) text = subject + QLatin1Char(' ') + text;
+    else text += QLatin1Char(' ');
+    m_chatInput->setPlainText(text.endsWith(QLatin1Char(' ')) ? text : text + QLatin1Char(' '));
+    QTextCursor cursor = m_chatInput->textCursor();
+    cursor.movePosition(QTextCursor::End);
+    m_chatInput->setTextCursor(cursor);
+    m_chatInput->setFocus(Qt::OtherFocusReason);
 }
 
 bool MainWindow::sendEdit(const QJsonArray &ops) {
@@ -1283,9 +1306,13 @@ void MainWindow::updateChatControls() {
     m_chatInput->setToolTip(!m_connected ? QStringLiteral("Connect to start editing")
                             : m_agentBusy ? QStringLiteral("Kerf is working…")
                                           : QStringLiteral("Return sends · Shift-Return starts a new line"));
+    // With a clip selected the request goes with it (the bridge sends the
+    // selection), so the composer says so.
+    const QJsonObject selected = selectedClipObject();
     m_chatInput->setPlaceholderText(!m_connected ? QStringLiteral("Your next edit starts here…")
                                    : m_agentBusy ? QStringLiteral("Working on your edit…")
-                                                 : QStringLiteral("Describe your next edit…"));
+                                   : !selected.isEmpty() ? QStringLiteral("Ask Kerf about %1…").arg(clipName(selected))
+                                                         : QStringLiteral("Describe your next edit…"));
     m_chat->updateComposer(m_agentBusy);
     updateChatStatus();
 }
@@ -1748,8 +1775,26 @@ void MainWindow::buildUi() {
     m_exportProgress->setFixedWidth(120);
     m_exportProgress->setToolTip(QStringLiteral("Export and preview progress"));
     m_exportProgress->hide();
-    m_effectControls = new EffectControlsPanel;
-    connect(m_effectControls, &EffectControlsPanel::editRequested, this, &MainWindow::sendEdit);
+    m_inspector = new InspectorPanel;
+    m_inspector->setArtwork(m_artwork);
+    connect(m_inspector, &InspectorPanel::editRequested, this, &MainWindow::sendEdit);
+    connect(m_inspector, &InspectorPanel::askRequested, this, &MainWindow::askAboutInChat);
+    connect(m_inspector, &InspectorPanel::revealRequested, this, [this](const QString &) {
+        if (ads::CDockWidget *project = m_workspace->panel(QStringLiteral("project"))) {
+            if (project->isClosed()) project->toggleView(true);
+            project->setAsCurrentTab();
+        }
+    });
+    connect(m_inspector, &InspectorPanel::addEffectRequested, this, [this](bool) {
+        // The Effects browser, its search ready; adding brings the
+        // Inspector back with the new effect open.
+        if (ads::CDockWidget *effects = m_workspace->panel(QStringLiteral("effects"))) {
+            if (effects->isClosed()) effects->toggleView(true);
+            effects->setAsCurrentTab();
+        }
+        m_effects->focusSearch();
+        m_effectsFromInspector = true;
+    });
     // Mask tools draw a new mask on the selected picture clip over the
     // Program monitor; the Program panel's title bar and Effect Controls
     // both carry them.
@@ -1777,13 +1822,13 @@ void MainWindow::buildUi() {
         });
         m_maskTools.append(action);
     }
-    m_effectControls->setMaskTools(m_maskTools);
+    m_inspector->setMaskTools(m_maskTools);
     connect(m_viewer, &ViewerWidget::maskToolChanged, this, [this](MaskTool tool) {
         for (QAction *action : m_maskTools) action->setChecked(action->data().toInt() == static_cast<int>(tool));
     });
     connect(m_viewer, &ViewerWidget::editRequested, this, &MainWindow::sendEdit);
-    connect(m_viewer, &ViewerWidget::maskSelected, m_effectControls, &EffectControlsPanel::selectMask);
-    connect(m_effectControls, &EffectControlsPanel::maskSelected, m_viewer, &ViewerWidget::selectMask);
+    connect(m_viewer, &ViewerWidget::maskSelected, m_inspector, &InspectorPanel::selectMask);
+    connect(m_inspector, &InspectorPanel::maskSelected, m_viewer, &ViewerWidget::selectMask);
     // The effects offered: cards on the selected clip, and the parameters
     // the inspector edits.
     m_effects = new EffectsPanel;
@@ -1791,13 +1836,22 @@ void MainWindow::buildUi() {
         const QJsonArray effects = QJsonDocument::fromJson(QByteArray(catalog)).array();
         kerf_bridge_string_free(catalog);
         m_effects->setCatalog(effects);
-        m_effectControls->setEffectCatalog(effects);
+        m_inspector->setEffectCatalog(effects);
     }
     connect(m_effects, &EffectsPanel::addRequested, this, [this](const QString &fx) {
-        if (m_selectedClip.isEmpty()) return;
-        sendEdit(QJsonArray{QJsonObject{{QStringLiteral("op"), QStringLiteral("fx-add")},
-                                        {QStringLiteral("clip"), m_selectedClip},
-                                        {QStringLiteral("fx"), fx}}});
+        const QStringList clips = m_inspector->selection();
+        if (clips.isEmpty()) return;
+        QJsonArray ops;
+        for (const QString &clip : clips)
+            ops.append(QJsonObject{{QStringLiteral("op"), QStringLiteral("fx-add")}, {QStringLiteral("clip"), clip}, {QStringLiteral("fx"), fx}});
+        sendEdit(ops);
+        // Adding selects nothing new: back to the Inspector, the new effect
+        // open and in view.
+        if (m_effectsFromInspector && clips.size() == 1) {
+            m_effectsFromInspector = false;
+            m_inspector->revealEffect(int(selectedClipObject().value(QStringLiteral("effects")).toArray().size()));
+            m_workspace->raiseInspector(Workspace::InspectorOrigin::Edit, true);
+        }
     });
     connect(m_effects, &EffectsPanel::previewsWanted, this, [this](const QString &clip, const QStringList &effects) {
         sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("effect_previews")},
@@ -2093,7 +2147,7 @@ void MainWindow::buildUi() {
     // The timeline's title strip: its track heights, then its details.
     m_workspace->addPanel(QStringLiteral("timeline"), QStringLiteral("Timeline"), timelinePanel)
         ->setTitleBarActions(m_timeline->trackHeightActions() << m_timelineDetail);
-    m_workspace->addPanel(QStringLiteral("effectControls"), QStringLiteral("Effect Controls"), m_effectControls);
+    m_workspace->addPanel(QStringLiteral("inspector"), QStringLiteral("Inspector"), m_inspector);
     m_workspace->addPanel(QStringLiteral("effects"), QStringLiteral("Effects"), m_effects);
     m_workspace->addPanel(QStringLiteral("project"), QStringLiteral("Project"), m_projectPanel);
     m_workspace->addPanel(QStringLiteral("presets"), QStringLiteral("Presets"), m_presets);
@@ -2128,7 +2182,8 @@ void MainWindow::buildUi() {
         m_timeline->clearSkimmer();
         endHoverSeek();
     });
-    connect(m_timeline, &TimelineWidget::clipSelected, this, &MainWindow::selectClip);
+    connect(m_timeline, &TimelineWidget::clipSelected, this, &MainWindow::clickSelectClip);
+    connect(m_timeline, &TimelineWidget::deselectRequested, this, [this] { clickSelectClip(QString()); });
     connect(m_timeline, &TimelineWidget::moveRequested, this, &MainWindow::moveClip);
     connect(m_timeline, &TimelineWidget::trimRequested, this, &MainWindow::trimClip);
     connect(m_timeline, &TimelineWidget::clipActivated, this, [this](const QString &id) {
@@ -2248,7 +2303,7 @@ void MainWindow::setupActions() {
         {QStringLiteral("window.source"), QStringLiteral("source")},
         {QStringLiteral("window.program"), QStringLiteral("program")},
         {QStringLiteral("window.timeline"), QStringLiteral("timeline")},
-        {QStringLiteral("window.effectControls"), QStringLiteral("effectControls")},
+        {QStringLiteral("window.inspector"), QStringLiteral("inspector")},
         {QStringLiteral("window.effects"), QStringLiteral("effects")},
         {QStringLiteral("window.presets"), QStringLiteral("presets")},
     };
@@ -2260,7 +2315,16 @@ void MainWindow::setupActions() {
     };
     connect(m_commands, &CommandRegistry::toggled, this, [this, panelCommands, tools](const QString &id, bool checked) {
         if (id == QStringLiteral("window.assistant")) setChatOpen(checked);
-        else if (ads::CDockWidget *panel = m_workspace->panel(panelCommands.value(id)))
+        else if (id == QStringLiteral("window.inspector")) {
+            // ⌘4 shows the Inspector, or goes back to the tab before it; it
+            // never closes it (its tab's close button does).
+            m_workspace->toggleInspector();
+            QAction *action = m_commands->action(id);
+            const QSignalBlocker blocker(action);
+            action->setChecked(true);
+        } else if (id == QStringLiteral("window.inspectorFollows")) {
+            Workspace::setInspectorFollowsSelection(checked);
+        } else if (ads::CDockWidget *panel = m_workspace->panel(panelCommands.value(id)))
             if (panel->isClosed() == checked) panel->toggleView(checked);
         if (tools.contains(id) && checked) m_timeline->setTool(tools.value(id));
         if (id == QStringLiteral("sequence.snap")) m_timeline->setSnapping(checked);
@@ -2274,6 +2338,11 @@ void MainWindow::setupActions() {
         QAction *live = m_commands->action(QStringLiteral("collab.live"));
         const QSignalBlocker blocker(live);
         live->setChecked(liveSyncRemembered());
+    }
+    {
+        QAction *follows = m_commands->action(QStringLiteral("window.inspectorFollows"));
+        const QSignalBlocker blocker(follows);
+        follows->setChecked(Workspace::inspectorFollowsSelection());
     }
     m_branchMenu = new QMenu(QStringLiteral("Switch Branch"), this);
     m_branchMenu->setObjectName(QStringLiteral("switchBranchMenu"));
@@ -3062,8 +3131,14 @@ QMenu *MainWindow::binMenu(const QString &mediaId) {
     return menu;
 }
 
-void MainWindow::triggerCommand(const QString &id) {
+void MainWindow::triggerCommand(const QString &requested) {
+    const QString id = CommandRegistry::resolve(requested);
     if (!m_commands->isEnabled(id)) return;
+    // A checkable command toggles its action, which carries it out.
+    if (QAction *action = m_commands->action(id); action && action->isCheckable()) {
+        action->toggle();
+        return;
+    }
     const auto handler = m_commandHandlers.constFind(id);
     if (handler != m_commandHandlers.cend()) (*handler)();
     else execute(id);
@@ -3359,8 +3434,10 @@ void MainWindow::handleEvent(QJsonObject event) {
         }
         updateTransport();
         updateCommandStates();
-        // An animated clip's picture moves with the playhead, and its masks with it.
+        // An animated clip's picture moves with the playhead, and its masks
+        // with it; so do the Inspector's animated values.
         if (!m_selectedClip.isEmpty()) updateViewerMasks();
+        m_inspector->setPlayhead(m_playhead);
     } else if (type == QStringLiteral("playback")) {
         m_playing = m_connected && event.value(QStringLiteral("playing")).toBool();
         updateTransport();
@@ -3572,9 +3649,11 @@ void MainWindow::updateViewerMasks() {
 void MainWindow::updateInspector() {
     const QJsonObject clip = selectedClipObject();
     updateViewerMasks();
+    m_inspector->setPlayhead(m_playhead);
     if (!m_connected || clip.isEmpty()) {
-        m_effectControls->setClip(QString(), QJsonObject{}, QJsonArray{}, m_fps);
         m_effects->setClip(QString(), false);
+        m_inspector->setMaskable(false);
+        m_inspector->setState(m_connected ? m_project : QJsonObject{}, {});
         return;
     }
     m_effects->setClip(m_selectedClip, selectedTrackType() == QStringLiteral("video") &&
@@ -3593,19 +3672,15 @@ void MainWindow::updateInspector() {
         if (track.value(QStringLiteral("type")).toString() == QStringLiteral("audio"))
             soundTracks << track.value(QStringLiteral("id")).toString();
     }
-    m_effectControls->setPictureTracks(pictureTracks);
-    m_effectControls->setSoundTracks(soundTracks);
-    // A generator's parameters, then the properties of the clip's track type.
-    QJsonArray defs = m_project.value(QStringLiteral("generators")).toObject().value(clip.value(QStringLiteral("fx")).toString()).toArray();
-    for (const QJsonValue &def : m_project.value(QStringLiteral("properties")).toObject().value(selectedTrackType()).toArray())
-        defs.append(def);
+    m_inspector->setPictureTracks(pictureTracks);
+    m_inspector->setSoundTracks(soundTracks);
     bool fit = false;
-    m_effectControls->setMaskable(!selectedPictureSize(&fit).isEmpty());
+    m_inspector->setMaskable(!selectedPictureSize(&fit).isEmpty());
     QStringList maskModes;
     for (const QJsonValue &mode : m_project.value(QStringLiteral("maskModes")).toArray()) maskModes << mode.toString();
-    m_effectControls->setMaskCatalog(m_project.value(QStringLiteral("maskProperties")).toArray(), maskModes);
-    m_effectControls->setClip(m_selectedClip, clip, defs, m_fps);
-    m_effectControls->selectMask(m_viewer->selectedMask());
+    m_inspector->setMaskCatalog(m_project.value(QStringLiteral("maskProperties")).toArray(), maskModes);
+    m_inspector->selectMask(m_viewer->selectedMask());
+    m_inspector->setState(m_project, {m_selectedClip});
 }
 
 void MainWindow::updateProposal(const QJsonValue &value) {

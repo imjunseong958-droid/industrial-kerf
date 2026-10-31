@@ -180,6 +180,16 @@ struct EditorTheme {
     QColor sliderHandle;
     QColor sliderHandleBorder;
 
+    // The Inspector's controls. No colours of their own: aliases of the
+    // palette's. A fill means a value can be changed (plain text cannot).
+    QColor inspectorField;   // Fields, pop-ups, wells and segmented tracks: `group` in light, `field` in dark.
+    QColor switchOn;         // A switch that is on: the neutral ink of the timeline's toggles, not the accent...
+    QColor switchOnKnob;     // ...and its knob.
+    QColor switchOff;        // A switch that is off, as the launcher's...
+    QColor switchOffStroke;  // ...its edge...
+    QColor knob;             // ...and its knob.
+    QColor inspectorDetent;  // The tick at a slider's default.
+
     QColor statusBar;
     QColor statusText;
     QColor statusDivider; // Between status bar items.

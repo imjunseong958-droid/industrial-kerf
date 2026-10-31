@@ -1070,11 +1070,30 @@ pub static COMMANDS: &[Command] = &[
         Menu::Window,
         1,
     ))),
-    checkable(frontend(menu(
-        command("window.effectControls", "Effect Controls", always),
-        Menu::Window,
-        1,
-    ))),
+    // The selected clip's controls, or the sequence's when nothing is
+    // selected; Ctrl+4 as in Final Cut Pro. (Formerly
+    // `window.effectControls`, which the editor still resolves.)
+    checkable(keys(
+        frontend(menu(
+            command("window.inspector", "Inspector", always),
+            Menu::Window,
+            1,
+        )),
+        &["Ctrl+4"],
+    )),
+    // Whether clicking a clip brings the Inspector to the front of its column.
+    checkable(keys(
+        frontend(menu(
+            command(
+                "window.inspectorFollows",
+                "Inspector Follows Selection",
+                always,
+            ),
+            Menu::Window,
+            1,
+        )),
+        &["Ctrl+Alt+4"],
+    )),
     checkable(frontend(menu(
         command("window.effects", "Effects", always),
         Menu::Window,

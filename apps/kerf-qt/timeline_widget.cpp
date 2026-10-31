@@ -509,6 +509,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent *event) {
     }
     const auto hit = clipAt(pos);
     if (hit.id.isEmpty()) {
+        if (!m_selectedClip.isEmpty()) emit deselectRequested();
         beginScrub(event->position());
         return;
     }
@@ -746,6 +747,10 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *event) {
 }
 
 void TimelineWidget::keyPressEvent(QKeyEvent *event) {
+    if (event->key() == Qt::Key_Escape && event->modifiers() == Qt::NoModifier && !m_selectedClip.isEmpty()) {
+        emit deselectRequested();
+        return;
+    }
     // Option-Up and Option-Down: every track a step taller or shorter.
     const Qt::KeyboardModifiers modifiers = event->modifiers() & ~Qt::KeypadModifier;
     if (modifiers == Qt::AltModifier && (event->key() == Qt::Key_Up || event->key() == Qt::Key_Down)) {

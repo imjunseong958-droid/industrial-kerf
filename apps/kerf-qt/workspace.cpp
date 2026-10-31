@@ -9,6 +9,7 @@
 #include <DockWidgetTab.h>
 
 #include <QAbstractButton>
+#include <QApplication>
 #include <QEvent>
 #include <QSettings>
 #include <QTimer>
@@ -22,7 +23,12 @@ namespace {
 // Bump when the panels or the Editing arrangement change, so stale layouts
 // are not restored. 6: Kerf's conversation moved into the Program monitor's
 // stage, beside the picture; the viewer takes the row past the browsers.
-constexpr int kLayoutVersion = 6;
+// 7: Effect Controls became the Inspector (its id `effectControls` became
+// `inspector`, renamed in older layouts as they are restored).
+constexpr int kLayoutVersion = 7;
+// The oldest version the Editing workspace's own changes are restored
+// from: 6 differs only in the Inspector's id.
+constexpr int kOldestEditingLayoutVersion = 6;
 // The oldest version a workspace of one's own is still restored from: 4
 // and 5 had a docked conversation as well, which restoring leaves out (an
 // area left empty goes); the Editing workspace's own layout gives way to
@@ -44,6 +50,14 @@ constexpr int kMinTimelineHeight = 280;
 
 QString layoutKey(const QString &group, const QString &name) {
     return QStringLiteral("workspace/%1/%2").arg(group, name);
+}
+
+// A saved layout with Effect Controls' old id given the Inspector's.
+QByteArray migrated(const QByteArray &layout) {
+    QByteArray xml = layout.startsWith("<?xml") ? layout : qUncompress(layout);
+    if (xml.isEmpty()) return layout;
+    xml.replace("Name=\"effectControls\"", "Name=\"inspector\"");
+    return xml;
 }
 
 } // namespace
@@ -80,6 +94,11 @@ ads::CDockWidget *Workspace::addPanel(const QString &id, const QString &title, Q
     dock->setFeature(ads::CDockWidget::DockWidgetDeleteOnClose, false);
     dock->tabWidget()->installEventFilter(this);
     m_panels.insert(id, dock);
+    // Brought forward by hand (its tab, ⌘4): it stays when the selection clears.
+    if (id == QLatin1String("inspector"))
+        connect(dock, &ads::CDockWidget::visibilityChanged, this, [this](bool visible) {
+            if (visible && !m_raisingInspector) m_inspectorAuto = false;
+        });
     return dock;
 }
 
@@ -116,15 +135,15 @@ void Workspace::arrangeEditing() {
     // page, as large as its row allows, and Kerf's conversation lives in its
     // stage beside the picture (see ViewerWidget::stageLayout), not in a
     // dock of its own. The Source monitor is a tab behind the Program
-    // monitor, not a second viewer. Left of it are the browsers (Project,
-    // Effects, Presets) and Effect Controls, where Premiere keeps them. The
+    // monitor, not a second viewer. Left of it are Project, the Inspector
+    // (which comes forward when a clip is clicked), Effects and Presets. The
     // Timeline runs the window's full width under both, for its many tracks.
     const auto panel = [this](const char *id) { return m_panels.value(QString::fromLatin1(id)); };
     auto *viewer = m_manager->addDockWidget(ads::LeftDockWidgetArea, panel("program"));
     m_manager->addDockWidget(ads::CenterDockWidgetArea, panel("source"), viewer);
     viewer->setCurrentDockWidget(panel("program"));
     auto *browser = m_manager->addDockWidget(ads::LeftDockWidgetArea, panel("project"), viewer);
-    for (const char *id : {"effectControls", "effects", "presets"})
+    for (const char *id : {"inspector", "effects", "presets"})
         m_manager->addDockWidget(ads::CenterDockWidgetArea, panel(id), browser);
     browser->setCurrentDockWidget(panel("project"));
     // Wide enough for the bin's two columns of tiles and for its four tabs'
@@ -238,8 +257,9 @@ bool Workspace::restore(const QByteArray &layout, const QString &name) {
     if (layout.isEmpty()) return false;
     const bool own = name != QLatin1String(kEditing);
     bool restored = false;
-    for (int version = kLayoutVersion; !restored && version >= (own ? kOldestCustomLayoutVersion : kLayoutVersion); --version)
-        restored = m_manager->restoreState(layout, version);
+    const QByteArray state = migrated(layout);
+    for (int version = kLayoutVersion; !restored && version >= (own ? kOldestCustomLayoutVersion : kOldestEditingLayoutVersion); --version)
+        restored = m_manager->restoreState(state, version);
     if (restored) afterRestore();
     return restored;
 }
@@ -284,6 +304,72 @@ void Workspace::persist() {
     QSettings settings;
     settings.setValue(QStringLiteral("workspace/current"), m_current);
     settings.setValue(layoutKey(QStringLiteral("changes"), m_current), saveUnshifted());
+}
+
+bool Workspace::inspectorFollowsSelection() {
+    return QSettings().value(QStringLiteral("editor/inspectorFollowsSelection"), true).toBool();
+}
+
+void Workspace::setInspectorFollowsSelection(bool follows) {
+    QSettings().setValue(QStringLiteral("editor/inspectorFollowsSelection"), follows);
+}
+
+void Workspace::raiseInspector(InspectorOrigin origin, bool force, const QString &clip) {
+    ads::CDockWidget *inspector = m_panels.value(QStringLiteral("inspector"));
+    if (!inspector || inspector->isClosed() || inspector->isFloating()) return;
+    if (origin == InspectorOrigin::Edit && !force) return;
+    if (!force && !inspectorFollowsSelection()) return;
+    ads::CDockAreaWidget *area = inspector->dockAreaWidget();
+    if (!area) return;
+    if (area->currentDockWidget() == inspector) {
+        m_inspectorClip = clip;
+        return;
+    }
+    // Chose another tab with this clip still selected: only a new click raises.
+    if (!force && !clip.isEmpty() && clip == m_inspectorClip) return;
+    m_inspectorClip = clip;
+    m_beforeInspector = area->currentDockWidget();
+    QWidget *focus = QApplication::focusWidget();
+    m_raisingInspector = true;
+    inspector->setAsCurrentTab();
+    m_raisingInspector = false;
+    m_inspectorAuto = true;
+    // Raising is visual only: the keys stay where they were.
+    if (focus && QApplication::focusWidget() != focus) focus->setFocus(Qt::OtherFocusReason);
+}
+
+void Workspace::inspectorDeselected() {
+    m_inspectorClip.clear();
+    ads::CDockWidget *inspector = m_panels.value(QStringLiteral("inspector"));
+    if (!inspector || !m_inspectorAuto || inspector->isClosed()) return;
+    m_inspectorAuto = false;
+    ads::CDockAreaWidget *area = inspector->dockAreaWidget();
+    if (!area || area->currentDockWidget() != inspector) return;
+    if (m_beforeInspector && !m_beforeInspector->isClosed() && m_beforeInspector->dockAreaWidget() == area) {
+        m_raisingInspector = true;
+        m_beforeInspector->setAsCurrentTab();
+        m_raisingInspector = false;
+    }
+}
+
+void Workspace::toggleInspector() {
+    ads::CDockWidget *inspector = m_panels.value(QStringLiteral("inspector"));
+    if (!inspector) return;
+    const bool wasClosed = inspector->isClosed();
+    if (wasClosed) inspector->toggleView(true);
+    ads::CDockAreaWidget *area = inspector->dockAreaWidget();
+    m_inspectorAuto = false;
+    if (!wasClosed && area && area->currentDockWidget() == inspector && m_beforeInspector && !m_beforeInspector->isClosed() &&
+        m_beforeInspector->dockAreaWidget() == area) {
+        m_raisingInspector = true;
+        m_beforeInspector->setAsCurrentTab();
+        m_raisingInspector = false;
+        return;
+    }
+    if (area && area->currentDockWidget() != inspector) m_beforeInspector = area->currentDockWidget();
+    m_raisingInspector = true;
+    inspector->setAsCurrentTab();
+    m_raisingInspector = false;
 }
 
 } // namespace kerf

@@ -3,7 +3,7 @@
 This is the native Qt6 desktop shell for Kerf. It keeps the project state in
 `kerfd` through the small C ABI in `bridge.h`; the window does not maintain a
 second editable copy of the timeline. Its docked panels — Project,
-Source, Program, Timeline, and Effect Controls — and the Kerf Assistant (the
+Source, Program, Timeline, and the Inspector — and the Kerf Assistant (the
 chat, in the Program monitor's stage) are all backed by the bridge event
 stream.
 
@@ -75,7 +75,7 @@ The project directory is created by the runtime when it does not already
 exist. Importing media, timeline edits, undo/redo, proposal approval, preview
 seeking, and export are sent as bounded asynchronous bridge commands. The
 timeline draws the `timeline` view of the model that each snapshot carries,
-and timeline and Effect Controls edits go to `kerfd` as typed operations counted in
+and timeline and Inspector edits go to `kerfd` as typed operations counted in
 frames of the sequence.
 
 The timeline supports click-to-seek, clip selection, drag-to-move, edge
@@ -94,10 +94,8 @@ step with Left and Right, and mark the range with I and O (Clear In and Out
 is Ctrl+Shift+X). Insert (,) and Overwrite (.) place the marked range at
 the playhead on the first unlocked picture and sound tracks the media needs;
 a picture and its sound are placed as linked clips, and Insert ripples the
-rest of the sequence. Effect Controls edits a clip's timing,
-the catalog properties of its track type, and a generator's parameters, from
-the definitions each snapshot carries; animated properties are read-only
-there. Its values commit on focus loss.
+rest of the sequence. The Inspector (see below) shows and edits the
+selected clip.
 Tracks follow the classic edit-suite order: picture tracks stack upward from
 V1, because a later picture track plays over the ones below it, and sound
 tracks run downward from A1. The ruler and track headers stay pinned while the
@@ -212,7 +210,7 @@ The Source monitor is a tab behind the Program monitor; double-clicking media
 brings it forward. The chat stays with the Program monitor: while the
 Source monitor covers it, it counts as closed, so the bar over the timeline
 stands in for it and ⇧⌘J brings it back into sight. Left of them,
-the Project bin, Effect Controls, Effects, and Presets share a column of
+the Project bin, the Inspector, Effects, and Presets share a column of
 tabs. The Timeline runs the window's full width under both, for its many
 tracks.
 
@@ -285,21 +283,59 @@ Finder, or Consolidate Media. Bin items show Offline when the file is
 missing, Not downloaded for a Git LFS file a sync has not fetched, and
 External when it lives outside the project folder.
 
+## Inspector
+
+Click a clip and the column beside the picture turns into that clip: the
+Inspector comes to the front of the Project / Inspector / Effects / Presets
+column (Window ▸ Inspector, ⌘4) and the chat beside the picture is never
+touched. It remembers the tab it came from and goes back when the selection
+clears (Esc, or a click on an empty lane), unless you chose the Inspector
+yourself; a clip selected by an edit (an insert, a drop, a proposal, undo)
+raises nothing, and a closed Inspector is never reopened by a click. Window ▸
+Inspector Follows Selection (⌥⌘4) turns this off. Raising never moves
+keyboard focus. These are preferences of this Mac (QSettings
+`editor/inspectorFollowsSelection`, `editor/inspector/…`); layouts saved with
+Effect Controls (layout version 6) restore with the Inspector in its place, and
+`window.effectControls` still names the command.
+
+Its header says what the clip is: a thumbnail, its name (double-click to
+rename it, `set {name}`), its kind in the clip's timeline colour (Video,
+Sequence, Audio, Title, Solid, Adjustment, Caption) with its track, and Start,
+End and Duration as timecode fields (drop-frame where the sequence is). Under
+it are the handful of things you change, with no header — Scale (with Fit /
+Fill), Position, Rotation, Opacity, Blend and Speed for a picture; Volume, Pan
+and Speed for sound; Text, Font and size, Colour, Align and Place for a title
+— then sections folded by default whose headers say what changed in them
+("Bottom 60 px"): Crop, Anchor & flip, the linked clip's Audio, Masks,
+Effects, and Source (its file and format, and Source In and Out, which slip
+the clip). Values read in px, %, °, dB and timecode; a value at its default
+is drawn quieter than a changed one, and a fill means it can be changed.
+Drag a value or its label to scrub it (⇧ ×10, ⌥ ÷10; one edit on release),
+click to type (`+10`, `*2`, `50%`, `-3dB`, `7:00`, `+12`), or step with ↑↓;
+↺ on hover, or a double-click on the label, resets a row, and a section's ↺
+resets it all. Each effect has a switch, its name, a second line listing what
+changed while folded, five parameters before "N more" (grouped under quiet
+sub-headers when the catalog groups them), and ⋯ for Reset Parameters, Ask
+Kerf and Remove. Animated values show their value at the playhead, read-only.
+With several clips it shows what they share ("Mixed" where they differ; a drag
+moves each alike, in one edit); with nothing selected, the sequence's format,
+tracks and markers, with only its frame size to change. ⋯ ▸ Ask Kerf opens the
+chat about the clip, and the composer names the selected clip.
+
 ## Effects
 
 The Effects panel (Window → Effects) shows the catalog's picture effects as
 cards, narrowed by category and by words ("glow", "zoom", "retro"), each
 card the selected media clip's picture at the playhead through that effect.
 Double-click a card, or press Return, to add the effect to the selected clip;
-the edit is an ordinary one, undone like any other. Effect Controls lists the
-clip's effects in order: the checkbox turns one off, ✕ removes it, and its
-parameters edit like the clip's properties, resetting to the default when
-set back to it.
+the edit is an ordinary one, undone like any other. Dragging a card onto the
+Inspector inserts the effect where it lands. The Inspector lists the clip's
+effects in order (see below).
 
 ## Masks
 
 The Rectangle, Ellipse, and Pen mask tools sit in the Program panel's title
-bar and beside Masks in Effect Controls; they draw on the selected picture
+bar and in the Inspector's Masks header; they draw on the selected picture
 clip. Drag out a rectangle or an ellipse on the Program monitor; with the
 pen, click each corner and click the first one again to close the outline,
 or press Return to leave it open as a path (Escape drops it). A new mask is
@@ -308,7 +344,7 @@ holds its picture: drag a handle to move a corner or point, drag inside a
 mask to move it, and press Delete to remove the selected one. Masks are
 drawn where the clip's picture lands, after its crop, scale, rotation, and
 position; a mask with mode `none` is dashed, a path that effects such as
-Stroke and Reshape read. Effect Controls lists the masks with their mode,
+Stroke and Reshape read. The Inspector lists the masks with their mode,
 inversion, feather, opacity, and expansion, and an effect's mask parameters
 pick from them. Each change is one edit (`mask-add`, `mask-set`, or
 `mask-remove`), undone like any other; a masked clip previews through the
@@ -414,8 +450,14 @@ appearances; with `KERF_SCREENSHOT_DIR` set, `launcherRendersBothAppearances`
 saves each page as `<page>-<light|dark>.png`, and
 `editorRendersBothAppearances` saves the editor (`editor-`), Settings
 (`settings-`), the preset bindings dialog (`dialog-`), the diverged banner
-with an agent proposal and conversation (`states-`), and Effect Controls
+with an agent proposal and conversation (`states-`), and the Inspector
 with an effect's parameters (`inspector-`), each `<light|dark>.png`;
+`inspectorRendersEveryState` saves the Inspector for a video clip (its Scale
+row under the pointer), its effects, an audio clip, a title, an adjustment
+clip, a caption, nothing selected and three clips (`inspector-video-`,
+`-video-effects-`, `-audio-`, `-title-`, `-adjustment-`, `-caption-`,
+`-nothing-`, `-multi-`), and the whole editor with a clip clicked
+(`editor-9x16-inspector-`, `editor-16x9-inspector-`);
 `editorShowsEveryFormatBesideItsConversation` saves the whole editor with
 the chat open beside a 16:9 (in its laptop), a 9:16 (in its phone) and a 1:1
 picture (`editor-16x9-`, `editor-9x16-`, `editor-1x1-`), the 16:9 one with
