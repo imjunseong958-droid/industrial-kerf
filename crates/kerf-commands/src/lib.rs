@@ -1085,11 +1085,16 @@ pub static COMMANDS: &[Command] = &[
         Menu::Window,
         1,
     ))),
-    checkable(frontend(menu(
-        command("window.assistant", "Kerf Assistant", always),
-        Menu::Window,
-        1,
-    ))),
+    // Shows and hides Kerf's conversation beside the Program monitor, as
+    // the comments button does beside a Short; Ask Kerf is Ctrl+J.
+    checkable(keys(
+        frontend(menu(
+            command("window.assistant", "Kerf Assistant", always),
+            Menu::Window,
+            1,
+        )),
+        &["Ctrl+Shift+J"],
+    )),
 ];
 
 /// A keyboard layout: the Kerf keys, with the commands it binds differently.
@@ -1621,6 +1626,15 @@ mod tests {
             if let Some(menu) = command.menu {
                 assert!(MENUS.contains(&menu));
             }
+        }
+    }
+
+    #[test]
+    fn the_assistant_toggles_from_the_keyboard_in_every_keymap() {
+        let assistant = find("window.assistant").unwrap();
+        assert!(assistant.checkable);
+        for keymap in KEYMAPS {
+            assert_eq!(keymap.keys(assistant), ["Ctrl+Shift+J"], "{}", keymap.id);
         }
     }
 

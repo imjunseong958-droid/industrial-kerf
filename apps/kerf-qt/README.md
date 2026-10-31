@@ -143,9 +143,26 @@ Space; with the timeline focused, Home and End jump to the start and end,
 Left and Right step one frame, S splits the selected clip at the playhead,
 and Delete and Shift+Delete delete or ripple-delete it (Kerf keymap). The transport under the viewer has the same
 controls between the playhead timecode and the program length. The Editing
-workspace puts the Source monitor (with Effect Controls behind it) beside
-the Program monitor, over the Project bin (with Effects behind it) and the
-Timeline. An empty
+workspace reads as a video does on YouTube or TikTok on the desktop: the
+Program monitor in the middle of the top row, as large as the row allows,
+with the Kerf Assistant (the chat) in a column of its own on its right, the
+row's full height and about as wide as YouTube's comments beside a video
+(360 points at first). The Source monitor is a tab behind the Program
+monitor; double-clicking media brings it forward. Left of them, the Project
+bin, Effect Controls, Effects, and Presets share a column of tabs (Effect
+Controls stays left of the Program monitor, where Premiere keeps it, so the
+chat's column holds only the chat). The Timeline runs the window's full
+width under all three, for its many tracks. A wider window widens the
+viewer; the columns beside it keep their widths.
+
+The chat opens and closes like the comments button beside a Short: the
+speech bubble at the end of the toolbar, Window ▸ Kerf Assistant, ⇧⌘J, or
+the close button in the chat's header. Closing it gives its width to the
+viewer; opening it brings it back at the width it had, even after a
+relaunch. That width is a preference of this Mac (QSettings), never part of
+`project.kerf`. Layouts saved before this arrangement (layout version 4)
+give way to it for the Editing workspace; workspaces of your own saved then
+keep their arrangement. An empty
 timeline starts without tracks. Hover over the
 empty row in the left track header to reveal a plus; click it to add a video
 or audio track. Double-click a clip to open its media in the Source monitor
@@ -258,11 +275,12 @@ changes: clips it adds or changes are outlined where they would land, and
 clips it removes are struck through. The bar offers Accept (⌘Return),
 Reject (Escape with the timeline focused), and Details, which opens the
 Kerf Assistant panel with the conversation and the proposed script. The Kerf
-Assistant panel starts closed; open it from Window to keep chatting there,
+Assistant starts open beside the Program monitor; keep chatting there,
 where Return sends and Shift+Return inserts a new line. Kerf ends each turn
 with up to three next steps, shown as buttons on the bar and over the
-composer ("Stronger glow", "Wipe to the next shot"); pressing one asks for it
-about the same selection.
+composer ("Stronger glow", "Wipe to the next shot"), where they wrap onto
+more lines rather than widen the chat's narrow column; pressing one asks for
+it about the same selection.
 
 Use the project-format picker in the toolbar to switch between standard
 1920×1080 (16:9) and vertical 1080×1920 (9:16). The viewer fits either canvas
@@ -319,6 +337,10 @@ saves each page as `<page>-<light|dark>.png`, and
 (`settings-`), the preset bindings dialog (`dialog-`), the diverged banner
 with an agent proposal and conversation (`states-`), and Effect Controls
 with an effect's parameters (`inspector-`), each `<light|dark>.png`;
+`editorShowsEveryFormatBesideItsConversation` saves the whole editor with
+the chat open beside a 16:9, a 9:16 and a 1:1 picture
+(`editor-16x9-`, `editor-9x16-`, `editor-1x1-`) and the 9:16 one with the
+chat closed (`editor-9x16-closed-`);
 `timelineFollowsTheAppearance` saves the timeline (`timeline-`,
 `timeline-drag-`) and `paintedPanelsFollowTheAppearance` the Program monitor
 (`viewer-`, `viewer-empty-`), the region picker (`region-`), the Source

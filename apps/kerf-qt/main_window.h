@@ -248,6 +248,10 @@ private:
     QLabel *m_projectTitle = nullptr;
     QString m_projectName;
     QToolButton *m_toolbarLeftEnd = nullptr; // The last command before the title.
+    // The toolbar's last control: opens and closes Kerf's conversation.
+    QToolButton *m_chatToggle = nullptr;
+    // The close button in the conversation's header.
+    QAction *m_assistantClose = nullptr;
     QString m_projectDirectory;
     QString m_kerfdBinary;
     void *m_bridge = nullptr;

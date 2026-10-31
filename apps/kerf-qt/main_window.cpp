@@ -41,6 +41,7 @@
 #include <QImage>
 #include <QJsonDocument>
 #include <QKeySequence>
+#include <QLayout>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -118,12 +119,24 @@ void drawScissors(QPainter &painter) {
 }
 
 // Toolbar symbols drawn on a shared grid so their weight and optical size
-// match; an unavailable command's symbol is dimmed in both appearances.
+// match; an unavailable command's symbol is dimmed in both appearances, and
+// a switch that is on (the conversation's column) has its symbol in the
+// accent, as a chosen mode in a title strip does.
 QIcon toolbarIcon(const QString &glyph) {
-    return glyphIcon(QSize(20, 20), [glyph](QPainter &painter, const QColor &color) {
+    const auto draw = [glyph](QPainter &painter, const QColor &color) {
         painter.setPen(QPen(color, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         QPainterPath path;
-        if (glyph == QStringLiteral("↓")) {
+        if (glyph == QStringLiteral("bubble")) {
+            // SF Symbols' bubble.left: a rounded speech bubble, its tail at
+            // the lower left, as the comments button beside a Short.
+            path.moveTo(6.5, 3.5); path.lineTo(13.5, 3.5);
+            path.quadTo(17, 3.5, 17, 7); path.lineTo(17, 10);
+            path.quadTo(17, 13.5, 13.5, 13.5); path.lineTo(9.5, 13.5);
+            path.lineTo(5.5, 16.5); path.lineTo(6.2, 13.5);
+            path.quadTo(3, 13.3, 3, 10); path.lineTo(3, 7);
+            path.quadTo(3, 3.5, 6.5, 3.5);
+            path.closeSubpath();
+        } else if (glyph == QStringLiteral("↓")) {
             path.moveTo(10, 3); path.lineTo(10, 12);
             path.moveTo(6.5, 8.5); path.lineTo(10, 12); path.lineTo(13.5, 8.5);
             path.moveTo(4, 12); path.lineTo(4, 16); path.lineTo(16, 16); path.lineTo(16, 12);
@@ -148,8 +161,77 @@ QIcon toolbarIcon(const QString &glyph) {
             path.moveTo(15, 5); path.lineTo(5, 15);
         }
         painter.drawPath(path);
+    };
+    QIcon icon = glyphIcon(QSize(20, 20), draw);
+    const QPixmap chosen = glyphPixmap(QSize(20, 20), draw, editorTheme().accentText);
+    icon.addPixmap(chosen, QIcon::Normal, QIcon::On);
+    icon.addPixmap(chosen, QIcon::Active, QIcon::On);
+    return icon;
+}
+
+// A panel header's close button: an x on the transport icons' grid.
+QIcon closeIcon() {
+    return glyphIcon(QSize(16, 16), [](QPainter &painter, const QColor &color) {
+        painter.setPen(QPen(color, 1.4, Qt::SolidLine, Qt::RoundCap));
+        painter.drawLine(QPointF(4.5, 4.5), QPointF(11.5, 11.5));
+        painter.drawLine(QPointF(11.5, 4.5), QPointF(4.5, 11.5));
     });
 }
+
+// Chips that wrap onto as many lines as their column needs, left to right,
+// as tags do in a narrow sidebar: Kerf's next steps over the composer.
+class FlowLayout final : public QLayout {
+public:
+    FlowLayout(QWidget *parent, int spacing) : QLayout(parent), m_spacing(spacing) { setContentsMargins(0, 0, 0, 0); }
+    ~FlowLayout() override {
+        while (QLayoutItem *item = FlowLayout::takeAt(0)) delete item;
+    }
+    void addItem(QLayoutItem *item) override { m_items.append(item); }
+    int count() const override { return int(m_items.size()); }
+    QLayoutItem *itemAt(int index) const override { return m_items.value(index); }
+    QLayoutItem *takeAt(int index) override { return index >= 0 && index < m_items.size() ? m_items.takeAt(index) : nullptr; }
+    Qt::Orientations expandingDirections() const override { return {}; }
+    bool hasHeightForWidth() const override { return true; }
+    int heightForWidth(int width) const override { return arrange(QRect(0, 0, width, 0), false); }
+    void setGeometry(const QRect &rect) override {
+        QLayout::setGeometry(rect);
+        arrange(rect, true);
+    }
+    QSize sizeHint() const override { return minimumSize(); }
+    // As narrow as its widest chip.
+    QSize minimumSize() const override {
+        QSize size;
+        for (const QLayoutItem *item : m_items)
+            if (!item->isEmpty()) size = size.expandedTo(item->sizeHint());
+        const QMargins margins = contentsMargins();
+        return size.grownBy(margins);
+    }
+
+private:
+    // Lays the chips out in `rect` (or only measures) and returns the height they take.
+    int arrange(const QRect &rect, bool apply) const {
+        const QRect area = rect.marginsRemoved(contentsMargins());
+        int x = area.x();
+        int y = area.y();
+        int line = 0;
+        for (QLayoutItem *item : m_items) {
+            if (item->isEmpty()) continue;
+            const QSize hint = item->sizeHint();
+            if (x > area.x() && x + hint.width() > area.x() + area.width()) {
+                x = area.x();
+                y += line + m_spacing;
+                line = 0;
+            }
+            if (apply) item->setGeometry(QRect(QPoint(x, y), hint));
+            x += hint.width() + m_spacing;
+            line = std::max(line, hint.height());
+        }
+        return y + line - rect.y() + contentsMargins().bottom();
+    }
+
+    QList<QLayoutItem *> m_items;
+    int m_spacing;
+};
 
 // A tool palette symbol on an 18-point grid, in `color`: the pointer for
 // Selection (SF Symbols' cursorarrow), the edit suites' marks for the rest,
@@ -1261,8 +1343,6 @@ void MainWindow::showNextSteps(const QJsonArray &steps) {
             row->layout()->addWidget(button);
         }
     }
-    // In the assistant the chips keep their own width, from the left.
-    static_cast<QHBoxLayout *>(m_chatNextSteps->layout())->addStretch(1);
     m_chatNextSteps->setVisible(!steps.isEmpty());
     updateAiBar();
 }
@@ -1850,9 +1930,8 @@ void MainWindow::buildUi() {
     chatLayout->addWidget(proposalBox);
     m_chatNextSteps = new QWidget;
     m_chatNextSteps->setObjectName(QStringLiteral("nextSteps"));
-    auto *chatNextLayout = new QHBoxLayout(m_chatNextSteps);
-    chatNextLayout->setContentsMargins(0, 0, 0, 0);
-    chatNextLayout->setSpacing(6);
+    // In the conversation's narrow column the chips wrap rather than widen it.
+    new FlowLayout(m_chatNextSteps, 6);
     m_chatNextSteps->hide();
     chatTabLayout->addWidget(m_chatNextSteps);
     chatTabLayout->addWidget(composer);
@@ -2206,7 +2285,9 @@ void MainWindow::buildUi() {
     m_workspace->addPanel(QStringLiteral("project"), QStringLiteral("Project"), m_projectPanel);
     m_workspace->addPanel(QStringLiteral("presets"), QStringLiteral("Presets"), m_presets);
     m_workspace->addPanel(QStringLiteral("source"), QStringLiteral("Source"), m_sourceMonitor);
-    m_workspace->addPanel(QStringLiteral("assistant"), QStringLiteral("Kerf Assistant"), right);
+    // Its column narrows no further than its composer and proposal fit.
+    m_workspace->addPanel(QStringLiteral("assistant"), QStringLiteral("Kerf Assistant"), right)
+        ->setMinimumSizeHintMode(ads::CDockWidget::MinimumSizeHintFromContentMinimumSize);
     // The bin and the assistant are white wells in light; their current tab
     // is white too, so it merges into them.
     for (const char *id : {"project", "assistant"})
@@ -2361,7 +2442,8 @@ void MainWindow::setupActions() {
         {QStringLiteral("tool.slip"), TimelineTool::Slip}, {QStringLiteral("tool.slide"), TimelineTool::Slide},
     };
     connect(m_commands, &CommandRegistry::toggled, this, [this, panelCommands, tools](const QString &id, bool checked) {
-        if (ads::CDockWidget *panel = m_workspace->panel(panelCommands.value(id)))
+        if (id == QStringLiteral("window.assistant")) m_workspace->setAssistantOpen(checked);
+        else if (ads::CDockWidget *panel = m_workspace->panel(panelCommands.value(id)))
             if (panel->isClosed() == checked) panel->toggleView(checked);
         if (tools.contains(id) && checked) m_timeline->setTool(tools.value(id));
         if (id == QStringLiteral("sequence.snap")) m_timeline->setSnapping(checked);
@@ -2411,11 +2493,7 @@ void MainWindow::setupActions() {
     details->setObjectName(QStringLiteral("aiButton"));
     details->setText(QStringLiteral("Details"));
     details->setToolTip(QStringLiteral("Show the conversation and the proposed script"));
-    connect(details, &QToolButton::clicked, this, [this] {
-        ads::CDockWidget *panel = m_workspace->panel(QStringLiteral("assistant"));
-        panel->toggleView(true);
-        panel->setAsCurrentTab();
-    });
+    connect(details, &QToolButton::clicked, this, [this] { m_workspace->setAssistantOpen(true); });
     m_aiBar->layout()->addWidget(details);
     // Accept trails, as it does on the Assistant's card and in macOS's rows
     // of buttons; Stop shows only while Kerf works, when the proposal's don't.
@@ -2436,6 +2514,17 @@ void MainWindow::setupActions() {
         });
     }
     connect(m_commands, &CommandRegistry::shortcutsChanged, this, &MainWindow::updateTransport);
+    // The conversation's header is its title and a close button that stays,
+    // as YouTube heads its comments beside a video.
+    m_assistantClose = new QAction(closeIcon(), QStringLiteral("Close"), this);
+    m_assistantClose->setObjectName(QStringLiteral("assistantClose"));
+    const auto closeTip = [this] {
+        m_assistantClose->setToolTip(m_commands->labelWithShortcut(QStringLiteral("window.assistant"), QStringLiteral("Close Kerf Assistant")));
+    };
+    closeTip();
+    connect(m_commands, &CommandRegistry::shortcutsChanged, m_assistantClose, closeTip);
+    connect(m_assistantClose, &QAction::triggered, this, [this] { m_workspace->setAssistantOpen(false); });
+    m_workspace->panel(QStringLiteral("assistant"))->setTitleBarActions({m_assistantClose});
 
     menuBar()->setNativeMenuBar(true);
     const QHash<QString, QMenu *> menus = m_commands->buildMenus(menuBar());
@@ -2569,7 +2658,13 @@ void MainWindow::setupActions() {
     controlSpace();
     if (auto *renderButton = toolbarCommand(QStringLiteral("sequence.renderPreview"), QStringLiteral("Render")))
         renderButton->setObjectName(QStringLiteral("toolbarQuiet"));
-    // Render ends where the banners' and the agent's bar's buttons do.
+    // Last, over the column it opens, as the comments button beside a Short
+    // and the inspector switch at the end of a macOS toolbar: Kerf's
+    // conversation. It ends where the banners' and the agent's bar's
+    // buttons do.
+    groupSpace();
+    m_chatToggle = toolbarCommand(QStringLiteral("window.assistant"), QStringLiteral("Kerf Assistant"), QStringLiteral("bubble"));
+    m_chatToggle->setObjectName(QStringLiteral("chatToggle"));
     space(kTrailingInset - kToolbarPadding - kToolbarSpacing);
     // The title is centred on the window, as macOS centres it, not between
     // the groups, so it sits over the toolbar outside its layout;
@@ -3827,6 +3922,7 @@ void MainWindow::applyAppearance() {
     }
     for (QAction *action : std::as_const(m_maskTools)) action->setIcon(maskToolIcon(static_cast<MaskTool>(action->data().toInt())));
     for (const auto &[action, glyph] : std::as_const(m_sourceGlyphs)) action->setIcon(transportIcon(glyph));
+    if (m_assistantClose) m_assistantClose->setIcon(closeIcon());
     if (!m_proposalText.isEmpty()) showProposalText();
     if (m_conversationEmpty) {
         m_conversation->setHtml(conversationIntro(editorTheme()));

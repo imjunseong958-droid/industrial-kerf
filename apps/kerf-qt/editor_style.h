@@ -341,6 +341,13 @@ QPushButton:disabled {
 }
 /* A toolbar's unavailable commands are dimmed, not boxed, as in macOS. */
 QToolBar QToolButton:disabled { background: transparent; border-color: transparent; }
+/* The conversation's switch: as tall as the pop-ups and buttons before it,
+   and while its column is open it looks as a chosen mode in a title strip
+   does: an accent wash edged in the accent, its symbol the accent, under
+   the pointer too, darkening while held. */
+QToolBar QToolButton#chatToggle { padding: 0px 6px; min-height: 18px; max-height: 18px; }
+QToolBar QToolButton#chatToggle:checked:enabled { background: @accentTint; border-color: @accentText; }
+QToolBar QToolButton#chatToggle:checked:enabled:pressed { background: @accentTintPressed; }
 QPushButton#primaryButton,
 QPushButton#chatSendButton {
     background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 @accentTop, stop: 1 @accent);
