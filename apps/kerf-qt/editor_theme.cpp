@@ -5,6 +5,7 @@
 #include <QEvent>
 #include <QGuiApplication>
 #include <QHash>
+#include <QJsonArray>
 #include <QPointer>
 #include <QStyleHints>
 #include <QWidget>
@@ -134,6 +135,11 @@ ClipKind clipKind(const QJsonObject &track, const QJsonObject &clip) {
     if (music) return ClipKind::Music;
     if (type.contains(QStringLiteral("audio")) || type.contains(QStringLiteral("sound"))) return ClipKind::Audio;
     return ClipKind::Video;
+}
+
+ClipKind trackKind(const QJsonObject &track) {
+    const QJsonArray clips = track.value(QStringLiteral("clips")).toArray();
+    return clipKind(track, clips.isEmpty() ? QJsonObject() : clips.first().toObject());
 }
 
 const ClipStyle &EditorTheme::clip(ClipKind kind) const {

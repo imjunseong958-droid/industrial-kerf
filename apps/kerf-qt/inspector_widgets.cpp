@@ -125,6 +125,16 @@ void ScrubField::setDimmed(bool dimmed) {
     update();
 }
 
+QColor ScrubField::valueInk() const {
+    // A default, mixed or flashing value is quieter; so is one whose effect
+    // is switched off, in the secondary ink, which still reads at 4.5:1 on
+    // the field (it still edits; the switch and the effect's name say it is
+    // off).
+    const EditorTheme &theme = editorTheme();
+    const bool quiet = m_mixed || isDefault() || !isEnabled() || m_flash->isActive();
+    return m_dimmed || quiet ? theme.textSecondary : theme.text;
+}
+
 void ScrubField::setMixed(bool mixed) {
     m_mixed = mixed;
     update();
@@ -162,6 +172,22 @@ void ScrubField::flash() {
     update();
 }
 
+bool ScrubField::showsWhole() const {
+    // As paintEvent lays it out: the value, its unit and its prefix inside
+    // the padding.
+    const double pad = m_readOnly ? 0.0 : m_format.kind == NumberFormat::Kind::Timecode ? 4.0 : 6.0;
+    const QFontMetricsF value(sized(font(), 12, QFont::Normal, true));
+    const QFontMetricsF small(sized(font(), 11));
+    const QString unit = m_mixed ? QString() :
+        (m_format.kind == NumberFormat::Kind::Pan || m_format.kind == NumberFormat::Kind::Timecode) ? QString()
+        : (m_format.kind == NumberFormat::Kind::Gain && m_value <= m_format.min + 1e-6) ? QString()
+        : m_format.kind == NumberFormat::Kind::Speed ? QStringLiteral("%") : m_format.unit;
+    double needed = value.horizontalAdvance(text());
+    if (!unit.isEmpty()) needed += small.horizontalAdvance(unit) + ((m_format.tightUnit || m_format.kind == NumberFormat::Kind::Speed) ? 1.0 : 3.0);
+    if (!m_format.prefix.isEmpty()) needed += small.horizontalAdvance(m_format.prefix) + 4.0;
+    return needed <= width() - 2.0 * pad - m_trailingInset;
+}
+
 void ScrubField::paintEvent(QPaintEvent *) {
     if (isTyping()) return;
     const EditorTheme &theme = editorTheme();
@@ -175,7 +201,6 @@ void ScrubField::paintEvent(QPaintEvent *) {
     const QRectF inner = QRectF(rect()).adjusted(pad, 0, -pad - m_trailingInset, 0);
     const QFont valueFont = sized(font(), 12, QFont::Normal, true);
     const QFont unitFont = sized(font(), 11);
-    const bool quiet = m_mixed || isDefault() || !isEnabled() || m_flash->isActive();
     double right = inner.right();
     // The unit, after the value (% and ° sit against it).
     const QString unit = m_mixed ? QString() :
@@ -191,7 +216,7 @@ void ScrubField::paintEvent(QPaintEvent *) {
         right -= width + ((m_format.tightUnit || m_format.kind == NumberFormat::Kind::Speed) ? 1.0 : 3.0);
     }
     painter.setFont(valueFont);
-    painter.setPen(m_dimmed ? theme.textDisabled : quiet ? theme.textSecondary : theme.text);
+    painter.setPen(valueInk());
     double left = inner.left();
     if (!m_format.prefix.isEmpty()) {
         painter.save();
@@ -321,13 +346,50 @@ void ScrubField::endTyping(bool commit) {
     if (!m_editor) return;
     const QString text = m_editor->text();
     m_editor->hide();
-    if (commit) commitText(text);
+    if (commit) {
+        // A run of ↑↓ steps first, as its one edit; the text then says the
+        // value the run reached, so committing it changes nothing more
+        // unless something else was typed after the steps.
+        flushSteps();
+        commitText(text);
+    } else if (m_stepping) {
+        // Esc takes back a run that has not been sent yet.
+        m_stepRun->stop();
+        m_stepping = false;
+        m_value = m_stepStart;
+        emit previewed(m_value);
+    }
     update();
+}
+
+void ScrubField::stepEditor(Qt::KeyboardModifiers modifiers, bool up) {
+    // From what the field says (a typed value counts), one step, clamped;
+    // the text follows, selected, so the next key replaces or steps it.
+    const double base = parseNumber(m_format, m_editor->text(), m_value).value_or(m_value);
+    bool wasClamped = false;
+    const double value = clamped(base + stepFor(modifiers) * (up ? 1.0 : -1.0), &wasClamped);
+    if (wasClamped) flash();
+    if (!m_stepping) {
+        m_stepping = true;
+        m_stepStart = m_value;
+    }
+    m_value = value;
+    m_editor->setText(formatNumber(m_format, value));
+    m_editor->selectAll();
+    update();
+    emit previewed(value);
+    m_stepRun->start();
 }
 
 bool ScrubField::eventFilter(QObject *watched, QEvent *event) {
     if (watched == m_editor && event->type() == QEvent::KeyPress) {
         auto *key = static_cast<QKeyEvent *>(event);
+        // ↑↓ step the value being typed in (a line edit would only move its
+        // caret): this is where the keys are after a click on the field.
+        if (key->key() == Qt::Key_Up || key->key() == Qt::Key_Down) {
+            stepEditor(key->modifiers(), key->key() == Qt::Key_Up);
+            return true;
+        }
         if (key->key() == Qt::Key_Escape) {
             endTyping(false);
             setFocus(Qt::OtherFocusReason);
@@ -460,6 +522,17 @@ void InspectorSlider::setMixed(bool mixed) {
     update();
 }
 
+QColor InspectorSlider::fillInk() const {
+    const EditorTheme &theme = editorTheme();
+    return !isEnabled() ? theme.textDisabled : m_dimmed ? theme.textSecondary : theme.switchOn;
+}
+
+void InspectorSlider::setDimmed(bool dimmed) {
+    if (m_dimmed == dimmed) return;
+    m_dimmed = dimmed;
+    update();
+}
+
 double InspectorSlider::travelOf(double value) const {
     if (m_gain) return gainToTravel(value);
     return (std::clamp(value, m_min, m_max) - m_min) / (m_max - m_min);
@@ -499,7 +572,7 @@ void InspectorSlider::paintEvent(QPaintEvent *) {
     painter.fillRect(QRectF(std::round(detentX) - 0.5, track.center().y() - 5.0, 1.0, 10.0), theme.inspectorDetent);
     if (m_mixed) return;
     const QPointF knob = knobCenter();
-    painter.setBrush(isEnabled() ? theme.switchOn : theme.textDisabled);
+    painter.setBrush(fillInk());
     painter.drawRoundedRect(QRectF(QPointF(std::min(originX, knob.x()), track.top()), QPointF(std::max(originX, knob.x()), track.bottom())), 2.0, 2.0);
     painter.setPen(QPen(theme.sliderHandleBorder, 1.0));
     painter.setBrush(theme.sliderHandle);
@@ -510,24 +583,30 @@ void InspectorSlider::mousePressEvent(QMouseEvent *event) {
     if (event->button() != Qt::LeftButton || !isEnabled()) return;
     m_dragging = true;
     m_start = m_value;
-    m_value = valueAt(event->position().x());
-    update();
-    emit moved(m_value);
+    // On the knob: it follows the pointer. Elsewhere: nothing moves until
+    // the pointer does, then the knob moves by as much.
+    const double x = event->position().x();
+    m_relative = std::abs(x - knobCenter().x()) > kGrab;
+    m_pressX = x;
+    m_pressKnob = knobCenter().x();
 }
 
 void InspectorSlider::mouseMoveEvent(QMouseEvent *event) {
     if (!m_dragging) return;
-    m_value = valueAt(event->position().x());
+    const double x = event->position().x();
+    m_value = valueAt(m_relative ? m_pressKnob + (x - m_pressX) : x);
     update();
     emit moved(m_value);
 }
 
 void InspectorSlider::mouseReleaseEvent(QMouseEvent *event) {
     if (!m_dragging) return;
-    m_value = valueAt(event->position().x());
+    const double x = event->position().x();
     m_dragging = false;
+    // A click that did not move changes nothing.
+    if (std::abs(x - m_pressX) >= 1.0) m_value = valueAt(m_relative ? m_pressKnob + (x - m_pressX) : x);
     update();
-    emit released(m_value, m_start);
+    if (std::abs(m_value - m_start) > 1e-12) emit released(m_value, m_start);
 }
 
 // ----------------------------------------------------------- InspectorSwitch
@@ -783,11 +862,25 @@ void drawInspectorGlyph(QPainter &painter, GlyphButton::Glyph glyph, const QRect
         painter.drawLine(c + QPointF(0.0, 2.0), c + QPointF(3.0, -1.0));
         break;
     case Glyph::Reverse: {
-        // Two arrows, one each way.
-        painter.drawLine(c + QPointF(-5.0, -2.5), c + QPointF(5.0, -2.5));
-        painter.drawLine(c + QPointF(5.0, -2.5), c + QPointF(2.5, -5.0));
-        painter.drawLine(c + QPointF(-5.0, 2.5), c + QPointF(5.0, 2.5));
-        painter.drawLine(c + QPointF(-5.0, 2.5), c + QPointF(-2.5, 5.0));
+        // Play backwards: the play triangle turned to point left, as a
+        // transport's reverse-play button draws it. Not a curved arrow,
+        // which reads as undo; not two arrows, which read as swap.
+        painter.setPen(QPen(color, 1.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.setBrush(color);
+        painter.drawPolygon(QPolygonF{c + QPointF(-4.5, 0.0), c + QPointF(3.5, -5.0), c + QPointF(3.5, 5.0)});
+        break;
+    }
+    case Glyph::Bubble: {
+        // A speech bubble: a rounded body with a tail at its lower left.
+        const double w = rect.width(), h = rect.height();
+        const QRectF body(rect.left() + 0.12 * w, rect.top() + 0.14 * h, 0.76 * w, 0.56 * h);
+        QPainterPath bubble;
+        bubble.addRoundedRect(body, 0.2 * h, 0.2 * h);
+        QPainterPath tip;
+        tip.moveTo(body.left() + 0.18 * w, body.bottom() - 0.5);
+        tip.lineTo(body.left() + 0.14 * w, rect.top() + 0.9 * h);
+        tip.lineTo(body.left() + 0.42 * w, body.bottom() - 0.5);
+        painter.drawPath(bubble.united(tip));
         break;
     }
     case Glyph::Diamond: {

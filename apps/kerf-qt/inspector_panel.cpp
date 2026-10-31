@@ -664,8 +664,31 @@ QImage InspectorPanel::thumbnailOf(const Clip &clip) const {
             painter.drawRect(QRectF(44, 22, 40, 28));
         }
     } else if (kind == QStringLiteral("audio")) {
+        // Its real waveform, as the bin's tile draws it, over the part of the
+        // source the clip plays (its in to its out).
         painter.fillRect(all, theme.audioTile);
-        drawWaveformSymbol(painter, all.center(), 40, theme.audioTileGlyph);
+        const QString sourceId = clip.clip.value(QStringLiteral("sourceId")).toString();
+        const QImage wave = m_artwork ? m_artwork->waves.value(sourceId) : QImage();
+        if (!wave.isNull()) {
+            const double length = clip.source.value(QStringLiteral("duration")).toDouble();
+            double from = 0.0, to = 1.0;
+            if (length > 0.0 && clip.clip.contains(QStringLiteral("in"))) {
+                from = std::clamp(clip.clip.value(QStringLiteral("in")).toDouble() / length, 0.0, 1.0);
+                to = std::clamp(clip.clip.value(QStringLiteral("out")).toDouble(length) / length, from, 1.0);
+            }
+            const int left = int(std::floor(from * wave.width()));
+            const int right = std::max(left + 1, int(std::ceil(to * wave.width())));
+            QImage ink = wave.copy(left, 0, right - left, wave.height()).convertToFormat(QImage::Format_ARGB32_Premultiplied);
+            // FFmpeg draws the wave in white: ink it in the tile's glyph colour.
+            QPainter tint(&ink);
+            tint.setCompositionMode(QPainter::CompositionMode_SourceIn);
+            tint.fillRect(ink.rect(), theme.audioTileGlyph);
+            tint.end();
+            painter.setRenderHint(QPainter::SmoothPixmapTransform);
+            painter.drawImage(QRectF(0, 14, 128, 44), ink);
+        } else {
+            drawWaveformSymbol(painter, all.center(), 40, theme.audioTileGlyph);
+        }
     } else if (kind == QStringLiteral("solid")) {
         painter.fillRect(all, modelColor(clip.clip.value(QStringLiteral("props")).toObject().value(QStringLiteral("color")).toString(QStringLiteral("#000000"))));
     } else if (kind == QStringLiteral("caption")) {
@@ -1314,13 +1337,25 @@ QWidget *InspectorPanel::bindValue(int rowIndex, QHBoxLayout *into, const Target
         choose->setObjectName(QStringLiteral("chooseFile"));
         choose->setToolTip(QStringLiteral("Choose a file"));
         connect(choose, &QAction::triggered, this, [this, line, label, filter, target, def] {
-            const QString path = QFileDialog::getOpenFileName(this, label, line->text(), filter);
+            const QString path = QFileDialog::getOpenFileName(this, label, line->property("path").toString(), filter);
             if (!path.isEmpty()) commitValue(target, def, path);
         });
-        connect(line, &QLineEdit::editingFinished, this, [this, line, target, def] { commitValue(target, def, line->text()); });
+        // The file's name only ("harbor-dusk.cube"), its whole path in the
+        // tooltip; typing a new path replaces it, the name left as shown
+        // keeps it.
+        connect(line, &QLineEdit::editingFinished, this, [this, line, target, def] {
+            if (line->text() == line->property("shown").toString()) return;
+            commitValue(target, def, line->text());
+        });
         show = [line](const QJsonValue &value) {
             const QSignalBlocker blocker(line);
-            line->setText(value.toString());
+            const QString path = value.toString();
+            const QString name = QFileInfo(path).fileName().isEmpty() ? path : QFileInfo(path).fileName();
+            line->setProperty("path", path);
+            line->setProperty("shown", name);
+            line->setText(name);
+            line->setCursorPosition(0);
+            line->setToolTip(path);
         };
         editor = holder;
         into->addWidget(holder, 1);
@@ -1363,7 +1398,10 @@ QWidget *InspectorPanel::bindValue(int rowIndex, QHBoxLayout *into, const Target
             const QJsonValue value = valueOf(clip, target, def);
             if (sameJson(value, def.value(QStringLiteral("default")))) return QString();
             if (value.isBool()) return value.toBool() ? label : QString();
-            const QString text = def.value(QStringLiteral("type")).toString() == QStringLiteral("enum") ? titleCase(value.toString()) : value.toString();
+            const QString type = def.value(QStringLiteral("type")).toString();
+            const QString text = type == QStringLiteral("enum") ? titleCase(value.toString())
+                                 : type == QStringLiteral("file") && !QFileInfo(value.toString()).fileName().isEmpty() ? QFileInfo(value.toString()).fileName()
+                                                                                                                         : value.toString();
             return def.value(QStringLiteral("type")).toString() == QStringLiteral("enum") && label == QStringLiteral("Blend") ? text
                                                                                                                              : QStringLiteral("%1 %2").arg(label, text);
         }
@@ -1512,7 +1550,8 @@ void InspectorPanel::buildSpeedRow(QVBoxLayout *into) {
     auto *reverse = new GlyphButton(GlyphButton::Glyph::Reverse);
     reverse->setObjectName(QStringLiteral("speedReverse"));
     reverse->setCheckable(true);
-    reverse->setToolTip(QStringLiteral("Play backwards"));
+    reverse->setToolTip(QStringLiteral("Play backwards (\u2212100%)"));
+    reverse->setAccessibleName(QStringLiteral("Play backwards"));
     // The presets are the field's own ⌄, a 16pt lane inside its right end;
     // Reverse follows the field.
     auto *presets = new GlyphButton(GlyphButton::Glyph::Menu, field);
@@ -2044,16 +2083,23 @@ void InspectorPanel::buildCaption(QVBoxLayout *into) {
     text->setContentsMargins(0, 7, 0, 0);
     text->setTextInteractionFlags(Qt::TextSelectableByMouse);
     auto *column = new QVBoxLayout;
-    column->setSpacing(4);
+    column->setSpacing(8);
     column->addWidget(text);
-    // Until captions take typed text: a link that asks Kerf, in the body's
-    // ink, underlined under the pointer.
+    // Until captions take typed text: a link that asks Kerf, on its own line
+    // 8 points under the text, 12 points in the secondary ink after a
+    // speech bubble (as Add effect has its +), underlined under the
+    // pointer, so it never reads as the caption's next line.
     auto *hint = new QPushButton(QStringLiteral("Ask Kerf to change it"));
     hint->setToolTip(QStringLiteral("Ask Kerf to change the caption's text"));
     hint->setObjectName(QStringLiteral("captionHint"));
     hint->setFlat(true);
     hint->setProperty("inspectorLink", true);
+    hint->setProperty("quiet", true);
     hint->setProperty("underlineOnHover", true);
+    hint->setIcon(glyphIcon(QSize(12, 12), [](QPainter &p, const QColor &) {
+        drawInspectorGlyph(p, GlyphButton::Glyph::Bubble, QRectF(0, 0, 12, 12), editorTheme().textSecondary);
+    }));
+    hint->setIconSize(QSize(12, 12));
     hint->setCursor(Qt::PointingHandCursor);
     connect(hint, &QPushButton::clicked, this, [this] { askAbout(QLatin1Char('@') + displayName(m_clips.first()) + QStringLiteral(" caption text:")); });
     column->addWidget(hint, 0, Qt::AlignLeft);
@@ -2108,12 +2154,13 @@ void InspectorPanel::buildSequence(QVBoxLayout *into) {
         } presets[] = {{"16:9", 1920, 1080}, {"9:16", 1080, 1920}, {"1:1", 1080, 1080}, {"4:5", 1080, 1350}};
         int current = -1;
         for (const auto &preset : presets) {
-            size->addItem(QStringLiteral("%1 · %2 × %3").arg(QString::fromLatin1(preset.ratio)).arg(preset.w).arg(preset.h),
+            // No spaces round the ×, so the whole value fits the pop-up at 300.
+            size->addItem(QStringLiteral("%1 · %2×%3").arg(QString::fromLatin1(preset.ratio)).arg(preset.w).arg(preset.h),
                           QStringLiteral("%1x%2").arg(preset.w).arg(preset.h));
             if (canvas == QSize(preset.w, preset.h)) current = size->count() - 1;
         }
         if (current < 0) {
-            size->addItem(QStringLiteral("Custom · %1 × %2").arg(canvas.width()).arg(canvas.height()), QStringLiteral("%1x%2").arg(canvas.width()).arg(canvas.height()));
+            size->addItem(QStringLiteral("Custom · %1×%2").arg(canvas.width()).arg(canvas.height()), QStringLiteral("%1x%2").arg(canvas.width()).arg(canvas.height()));
             current = size->count() - 1;
         }
         size->addItem(QStringLiteral("Custom…"), QString());
@@ -2165,7 +2212,8 @@ void InspectorPanel::buildSequence(QVBoxLayout *into) {
         layout->setContentsMargins(0, 0, 0, 0);
         layout->setSpacing(8);
         auto *square = new KindSquare;
-        square->setColor(theme.clip(clipKind(track)).header);
+        // The timeline header's colour: a picture track of titles is ochre.
+        square->setColor(theme.clip(trackKind(track)).header);
         layout->addWidget(square);
         const TrackBadge badge = trackBadge(m_project, track.value(QStringLiteral("id")).toString());
         auto *id = new QLabel(badge.badge);
@@ -2370,15 +2418,21 @@ void InspectorPanel::buildMask(QVBoxLayout *into, const QString &name) {
 
 void InspectorPanel::buildEffectsSection(QVBoxLayout *into, bool openByDefault) {
     if (m_clips.isEmpty()) return;
-    const int section = addSection(into, QStringLiteral("effects"), QStringLiteral("Effects"), openByDefault);
-    InspectorSection *effects = m_sections.at(section).section;
-    effects->setObjectName(QStringLiteral("inspectorEffects"));
     // The catalog's effects are all picture effects for now: a sound clip
-    // is offered none to add (its list still shows what it carries).
+    // is offered none to add (its list still shows what it carries), and
+    // one that carries none gets no Effects section at all, rather than a
+    // row with nothing in it.
     const bool sound = kindKey(m_clips.first()) == QStringLiteral("audio");
     const bool offered = !sound || std::any_of(m_effectDefs.cbegin(), m_effectDefs.cend(), [](const QJsonObject &def) {
         return def.value(QStringLiteral("domain")).toString() == QStringLiteral("audio");
     });
+    const bool carried = std::any_of(m_clips.cbegin(), m_clips.cend(), [](const Clip &clip) {
+        return !clip.clip.value(QStringLiteral("effects")).toArray().isEmpty();
+    });
+    if (!offered && !carried) return;
+    const int section = addSection(into, QStringLiteral("effects"), QStringLiteral("Effects"), openByDefault);
+    InspectorSection *effects = m_sections.at(section).section;
+    effects->setObjectName(QStringLiteral("inspectorEffects"));
     if (offered) {
         auto *add = new GlyphButton(GlyphButton::Glyph::Plus);
         add->setObjectName(QStringLiteral("effectsAdd"));
@@ -2418,9 +2472,7 @@ void InspectorPanel::buildEffectsSection(QVBoxLayout *into, bool openByDefault) 
     const QJsonArray list = m_clips.first().clip.value(QStringLiteral("effects")).toArray();
     effects->setCount(int(list.size()));
     for (int index = 0; index < list.size(); ++index) buildEffect(sectionBody(section), index);
-    if (!offered) {
-        if (list.isEmpty()) sectionBody(section)->addWidget(quietLabel(QStringLiteral("No sound effects in this version of Kerf.")));
-    } else {
+    if (offered) {
     auto *addEffect = new QPushButton(QStringLiteral("Add effect"));
     addEffect->setObjectName(QStringLiteral("addEffect"));
     addEffect->setFlat(true);
@@ -2639,9 +2691,19 @@ void InspectorPanel::buildEffect(QVBoxLayout *into, int index) {
             title->style()->unpolish(title);
             title->style()->polish(title);
         }
-        // Switched off: its name and second line in the secondary ink, its
-        // values in the disabled one; they still edit.
+        // Switched off: its name, second line and values (numbers, slider
+        // fills, colour hex, file names) in the secondary ink, which still
+        // reads; they still edit.
         for (ScrubField *field : params->findChildren<ScrubField *>()) field->setDimmed(!on);
+        for (InspectorSlider *slider : params->findChildren<InspectorSlider *>()) slider->setDimmed(!on);
+        for (QWidget *value : params->findChildren<QWidget *>()) {
+            if (value->objectName() != QStringLiteral("colorHex") && !(qobject_cast<QLineEdit *>(value) && value->property("inspector").toBool()))
+                continue;
+            if (value->property("off").toBool() == !on) continue;
+            value->setProperty("off", !on);
+            value->style()->unpolish(value);
+            value->style()->polish(value);
+        }
         QStringList pieces;
         for (const int r : rows)
             for (const Binding &binding : m_rows.at(r).values)

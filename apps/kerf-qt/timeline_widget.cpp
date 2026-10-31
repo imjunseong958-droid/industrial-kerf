@@ -109,13 +109,6 @@ void paintSelectionRing(QPainter &p, const QRectF &rect) {
     frameInside(p, rect.adjusted(1, 1, -1, -1), 2, theme.clipSelectedRing);
 }
 
-// The kind a track's header stands for: its first clip's, so a picture
-// track of titles reads as titles, else the track's own.
-ClipKind trackKind(const QJsonObject &track) {
-    const QJsonArray clips = track.value(QStringLiteral("clips")).toArray();
-    return clipKind(track, clips.isEmpty() ? QJsonObject() : clips.first().toObject());
-}
-
 } // namespace
 
 TimelineScrollArea::TimelineScrollArea(QWidget *parent) : QScrollArea(parent) {

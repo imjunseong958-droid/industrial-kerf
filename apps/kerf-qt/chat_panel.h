@@ -8,6 +8,7 @@
 
 class QComboBox;
 class QFrame;
+class QHBoxLayout;
 class QLabel;
 class QPushButton;
 class QScrollArea;
@@ -66,12 +67,20 @@ struct ProposalChange {
 
 // A proposal's change as a row of the pinned comment: a 16px glyph in
 // secondary ink at the text column, the description (13px) and, right-
-// aligned, the detail (12px, secondary). 28 points tall; a description too
-// long for the row ends in an ellipsis and says the rest in its tooltip.
+// aligned, the detail (12px, secondary). 28 points tall. In a narrow row
+// the detail gives way first (down to kMinDetail, ending in an ellipsis) so
+// the description stays whole; where that is not enough, the detail stays
+// whole and the description is cut instead, never both. What is cut is
+// said whole in the tooltip.
 class ProposalChangeRow final : public QWidget {
     Q_OBJECT
 public:
     static constexpr int kHeight = 28;
+    static constexpr int kMinDetail = 56;
+    // Where the description starts (the 16-point glyph, then 5), and the
+    // room between it and the detail.
+    static constexpr int kTextLeft = 16 + 5;
+    static constexpr int kDetailGap = 4;
     explicit ProposalChangeRow(const ProposalChange &change, QWidget *parent = nullptr);
     ProposalChange change() const { return m_change; }
     QSize sizeHint() const override { return QSize(160, kHeight); }
@@ -157,11 +166,23 @@ class ChatExpander final : public QAbstractButton {
 public:
     explicit ChatExpander(QWidget *parent = nullptr);
     QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
+    // A text button (12px/500, no leading pad, so its chevron starts the
+    // text column), as on the pinned proposal's pills' row in a narrow
+    // panel; with too little room it keeps only its chevron (the tooltip
+    // still says what it opens).
+    void setCompact(bool compact);
+    bool isCompact() const { return m_compact; }
+    // Whether its label shows (in a compact one squeezed, only the chevron).
+    bool labelShown() const;
 
 protected:
     void paintEvent(QPaintEvent *) override;
     void enterEvent(QEnterEvent *) override { update(); }
     void leaveEvent(QEvent *) override { update(); }
+
+private:
+    bool m_compact = false;
 };
 
 // One turn of the conversation as a comment row: the author's avatar, then
@@ -298,9 +319,15 @@ public:
     static constexpr int kChipFadeWidth = 48;
     static constexpr int kChipPager = 28;
     static constexpr int kChipPage = 160;
-    // The blank room under the latest comment, which the view keeps exactly
-    // when it is scrolled to the latest.
+    // The blank room between the list's view and the chips or composer
+    // under it: rows are cut there at every scroll position.
     static constexpr int kListBottom = 16;
+    // Under this width the pinned proposal's Script expander leaves the
+    // summary's line for the pills' row, so the summary keeps one line.
+    static constexpr int kNarrowProposal = 360;
+    // The compact bar shows the summary's verbs while it has this much room
+    // for them, only the count under it.
+    static constexpr int kBarSummaryRoom = 120;
 
     explicit ChatPanel(QWidget *parent = nullptr);
 
@@ -321,8 +348,9 @@ public:
     // comment until the reader scrolls or sends.
     void setProposalShown(bool shown, const QString &id = QString());
     // Its summary in the pinned comment ("Trim, remove, add a title ·
-    // 3 changes"), and the compact bar's shorter one ("3 changes").
-    void setProposalSummary(const QString &summary, const QString &compact = QString());
+    // 3 changes"); the compact bar's, without the count ("Trim, remove, add
+    // a title"); and the count the bar falls back to when it is narrow.
+    void setProposalSummary(const QString &summary, const QString &compact = QString(), const QString &count = QString());
     // What it changes, one row each: the first few listed under its summary.
     void setProposalChanges(const QList<ProposalChange> &changes);
     QList<ProposalChangeRow *> proposalChangeRows() const;
@@ -408,6 +436,9 @@ private:
     // list's scroll and the proposal's pills stand.
     void updateListEdge();
     void refitListSoon();
+    // The Script expander on the summary's line, or on the pills' row in a
+    // narrow panel.
+    void placeProposalExpander();
     // The scroll bar shows only while the pointer is over the panel.
     void setHovered(bool hovered);
 
@@ -450,6 +481,12 @@ private:
     QLabel *m_proposalTime = nullptr;
     QLabel *m_proposalSummary = nullptr;
     ChatExpander *m_proposalExpander = nullptr;
+    QHBoxLayout *m_proposalLine = nullptr;
+    QHBoxLayout *m_proposalButtons = nullptr;
+    // The summary whole ("Trim, remove, add a title · 3 changes") and
+    // without its count, as a narrow panel shows it (its rows count it).
+    QString m_summaryFull;
+    QString m_summaryShort;
     QTextEdit *m_proposalDiff = nullptr;
     QPushButton *m_accept = nullptr;
     QPushButton *m_reject = nullptr;

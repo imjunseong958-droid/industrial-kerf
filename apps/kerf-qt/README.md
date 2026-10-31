@@ -192,22 +192,24 @@ Punch-Hole or Off (the plain card); its Safe button outlines where a
 vertical-video app's interface usually covers the picture (a top bar, a
 column of actions, a caption band); while they show, the player's controls
 (all but the bar) wait for the pointer to come over the picture. Both are
-preferences of this Mac. While the picture is portrait, the row over the
-timeline is 60 points taller (never leaving the timeline under 280), so the
-phone is big enough to judge; saved workspaces keep their own sizes.
+preferences of this Mac. Every format shares one layout: at 1440 × 900 the
+stage row is about 575 points over a 290-point timeline, so the timeline does
+not move when the format changes.
 
 A wide (16:9) picture shows in a laptop, the phone's companion: a generic
 laptop drawn in code in the same graphite, its lid's screen 16:10 inside a
 thin even bezel (a little thicker over it, with a camera dot) so the picture
 sits across it with thin black bars above and below, a hinge line, and a
-wider, thin base with a lighter top face and a shallow thumb-cut. The
-player's controls lie inside the screen. The laptop's body (lid top to base
-bottom) takes the card's place in the group, the chat level with it and as
-tall; at 1440 × 900 the picture keeps at least 90% of the plain card's width
+wider, thin base (108% of the lid) with a lighter top face and a shallow
+thumb-cut. The player's controls lie inside the screen. The laptop's body (lid
+top to base bottom, as wide as the base, so the stage's margin and the gap
+before the rail are measured from its widest part) takes the card's place in
+the group, the chat level with it and as tall; at 1440 × 900 the picture keeps at least 90% of the plain card's width
 (the bezel and base come out of the chat's width). The rail's Laptop button
 and Window ▸ Viewer choose Laptop (the default) or Off; it is a preference of
 this Mac. A square picture stays on the plain card: in a phone it would be
-under half as wide. The phone's and the laptop's frames are drawn once for
+under half as wide (measured at 1440 × 900: 499 points wide on the card, 242
+across the phone's screen). The phone's and the laptop's frames are drawn once for
 their size, appearance and pixel ratio and then only blitted, so playback
 costs no more for them.
 
@@ -320,12 +322,16 @@ Effects, and Source (its file and format, and Source In and Out, which slip
 the clip). Values read in px, %, °, dB and timecode; a value at its default
 is drawn quieter than a changed one, and a fill means it can be changed.
 Drag a value or its label to scrub it (⇧ ×10, ⌥ ÷10; one edit on release),
-click to type (`+10`, `*2`, `50%`, `-3dB`, `7:00`, `+12`), or step with ↑↓
-(a held key or a quick run of presses is one edit). A click or a drag in the
+click to type (`+10`, `*2`, `50%`, `-3dB`, `7:00`, `+12`), and step with ↑↓
+while typing (a held key or a quick run of presses is one edit; Esc takes back
+a run not yet sent). A click or a drag in the
 Inspector takes no keyboard focus, and Return or Esc after typing (or Esc
 anywhere in it) hands the keys back to the timeline, so Space and J/K/L keep
-working while you nudge values. Every row shares one grid (84 pt labels, 72 pt
-value fields, controls ending at one edge);
+working while you nudge values. Every row shares one grid (76 pt labels, 72 pt
+value fields, 84 pt sliders at the 300-point column, controls ending at one
+edge); a click on a slider's groove away from its knob changes nothing, and a
+drag from there moves the knob by as much as the pointer moves. A switched-off
+effect's values stay in the secondary ink, readable and editable;
 ↺ on hover, or a double-click on the label, resets a row, and a section's ↺
 resets it all. Each effect has a switch, its name, a second line listing what
 changed while folded, five parameters before "N more" (grouped under quiet
@@ -334,7 +340,12 @@ Kerf and Remove. Animated values show their value at the playhead, read-only.
 With several clips it shows what they share ("Mixed" where they differ; a drag
 moves each alike, in one edit); with nothing selected, the sequence's format,
 tracks and markers, with only its frame size to change. ⋯ ▸ Ask Kerf opens the
-chat about the clip, and the composer names the selected clip.
+chat about the clip, and the composer names the selected clip. Selecting
+another clip of the same shape (kind, effect stack, masks) only sets values:
+the rows are not rebuilt, and open sections and the scroll position stay. From
+the click to the painted values takes 7.9 ms (median, a clip with ten effects
+open, measured unoptimized and offscreen on an M-series Mac; the test prints
+it and allows twice that on CI's shared runners).
 
 ## Effects
 

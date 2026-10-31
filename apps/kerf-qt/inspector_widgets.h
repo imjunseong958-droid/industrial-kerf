@@ -23,7 +23,7 @@ namespace kerf {
 // The one control behind every number and timecode: the value right-aligned
 // in tabular figures with its unit after it. Drag across it (or its row's
 // label) to scrub, one step per 2 points (⇧ ×10, ⌥ ÷10); click to type;
-// ↑↓ step while focused. A gesture is one edit: the value follows the
+// ↑↓ step while focused or typing. A gesture is one edit: the value follows the
 // pointer and `committed` fires once, on release; a run of ↑↓ presses (a
 // held key, or presses under 400 ms apart) is one edit too, committed
 // 400 ms after the last or when the field loses focus. A click or a drag
@@ -52,13 +52,17 @@ public:
     // Several clips disagree: "Mixed", and scrubbing moves each by the same amount.
     void setMixed(bool mixed);
     bool isMixed() const { return m_mixed; }
-    // Its effect is switched off: the value in the disabled ink (it still edits).
+    // Its effect is switched off: the value in the secondary ink (it still edits).
     void setDimmed(bool dimmed);
     bool isDimmed() const { return m_dimmed; }
+    // The ink its value is drawn in.
+    QColor valueInk() const;
     // Read-only: an animated value, shown at the playhead.
     void setReadOnly(bool readOnly);
     bool isReadOnly() const { return m_readOnly; }
     QString text() const;
+    // Whether its value, unit and prefix fit it whole (no ellipsis).
+    bool showsWhole() const;
     QSize sizeHint() const override;
 
     // A drag that began on the row's label.
@@ -103,6 +107,8 @@ private:
     double clamped(double display, bool *clamped = nullptr) const;
     double stepFor(Qt::KeyboardModifiers modifiers) const;
     void endTyping(bool commit);
+    // ↑↓ while typing: step from the typed value, as one run of steps.
+    void stepEditor(Qt::KeyboardModifiers modifiers, bool up);
     void flash();
 
     NumberFormat m_format;
@@ -132,11 +138,15 @@ private:
 // 4pt groove filled in the neutral ink from its origin (the default, or the
 // centre of a bipolar range) to the knob, with a detent tick at the
 // default the knob snaps to within 4 points. A gain fader maps its travel
-// so 0 dB sits at 75%.
+// so 0 dB sits at 75%. A press on the knob (within kGrab of it) takes it;
+// a press elsewhere on the groove does not jump the value, but a drag from
+// there moves it by as much as the pointer moves, so a stray click never
+// changes anything.
 class InspectorSlider final : public QWidget {
     Q_OBJECT
     friend class EditorTest;
 public:
+    static constexpr double kGrab = 6.0;
     explicit InspectorSlider(QWidget *parent = nullptr);
     void setRange(double minimum, double maximum);
     void setOrigin(double origin);
@@ -146,6 +156,11 @@ public:
     double value() const { return m_value; }
     // Several clips disagree: the knob hides.
     void setMixed(bool mixed);
+    // Its effect is switched off: the fill in the secondary ink (it still edits).
+    void setDimmed(bool dimmed);
+    bool isDimmed() const { return m_dimmed; }
+    // The ink its fill is drawn in.
+    QColor fillInk() const;
     QSize sizeHint() const override { return {92, ScrubField::kHeight}; }
     // The knob's centre, for tests.
     QPointF knobCenter() const;
@@ -174,7 +189,13 @@ private:
     double m_value = 0.0;
     double m_start = 0.0;
     bool m_mixed = false;
+    bool m_dimmed = false;
     bool m_dragging = false;
+    // Where the press began and the knob was then, and whether it began
+    // away from the knob (the knob then moves by the pointer's travel).
+    double m_pressX = 0.0;
+    double m_pressKnob = 0.0;
+    bool m_relative = false;
 };
 
 // An on/off switch, 26 by 16: the neutral ink with its knob when on, the
@@ -251,7 +272,7 @@ private:
 class GlyphButton final : public QAbstractButton {
     Q_OBJECT
 public:
-    enum class Glyph { Reset, More, Plus, Chevron, Reverse, Menu, Diamond, Rectangle, Ellipse, Pen, Folder };
+    enum class Glyph { Reset, More, Plus, Chevron, Reverse, Menu, Diamond, Rectangle, Ellipse, Pen, Folder, Bubble };
     explicit GlyphButton(Glyph glyph, QWidget *parent = nullptr);
     Glyph glyph() const { return m_glyph; }
     void setOpen(bool open);
@@ -295,17 +316,19 @@ private:
     bool m_pressed = false;
 };
 
-// One 32pt row on the column's one grid: an 84pt label column, 8 points,
-// the controls, then a 20pt reset lane 4 points after them, whose ↺ shows
+// One 32pt row on the column's one grid: a 76pt label column, 8 points,
+// the controls, then a 16pt reset lane 4 points after them, whose ↺ shows
 // on hover only while the value differs from its default. Every row's
 // controls end at the same edge (the lane's), every value field is 72
-// points wide, and a slider fills what its field leaves.
+// points wide (room for "+0.40 EV" and "−8.0 dB" whole), and a slider fills
+// what its field leaves (84 points at a 300-point column, so it is a
+// control, not a decoration).
 class InspectorRow final : public QWidget {
     Q_OBJECT
 public:
     static constexpr int kHeight = 32;
-    static constexpr int kLabelWidth = 84;
-    static constexpr int kResetLane = 20;
+    static constexpr int kLabelWidth = 76;
+    static constexpr int kResetLane = 16;
     static constexpr int kValueField = 72;
 
     explicit InspectorRow(const QString &label, QWidget *parent = nullptr);

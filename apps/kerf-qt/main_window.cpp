@@ -1366,7 +1366,8 @@ void MainWindow::updateAiBar() {
         m_aiBarText->setText(m_agentFocusLabel.isEmpty() ? QStringLiteral("Kerf is working…")
                                                          : QStringLiteral("Kerf is working on %1…").arg(m_agentFocusLabel));
     } else if (pending) {
-        m_aiBarText->setText(QStringLiteral("Proposal  ·  %1").arg(m_proposalSummary->text()));
+        // The whole summary (a narrow chat panel shows it without its count).
+        m_aiBarText->setText(QStringLiteral("Proposal  ·  %1").arg(m_chat->proposalBarSummary()->toolTip()));
     } else if (next) {
         m_aiBarText->setText(QStringLiteral("Next with Kerf"));
     }
@@ -3879,8 +3880,9 @@ void MainWindow::updateProposal(const QJsonValue &value) {
     const bool stale = proposal.value(QStringLiteral("freshness")).toString() == QStringLiteral("stale");
     const QString diff = proposal.value(QStringLiteral("documentDiff")).toString();
     // What it changes, one row each, from its script; the summary counts
-    // those rows ("Trim, remove, add a title · 3 changes"), the compact
-    // bar only the count.
+    // those rows ("Trim, remove, add a title · 3 changes"); the compact
+    // bar keeps the verbs ("Trim, remove, add a title"), and only the count
+    // where it is too narrow for them.
     QList<ProposalChange> changes;
     QStringList verbs;
     for (const QString &line : proposal.value(QStringLiteral("script")).toString().split(QLatin1Char('\n'))) {
@@ -3893,10 +3895,12 @@ void MainWindow::updateProposal(const QJsonValue &value) {
         if (!verbs.contains(phrase)) verbs << phrase;
     }
     const QString count = changes.size() == 1 ? QStringLiteral("1 change") : QStringLiteral("%1 changes").arg(changes.size());
-    QString sentence = verbs.size() <= 3 ? verbs.join(QStringLiteral(", ")) : QString();
-    if (!sentence.isEmpty()) sentence = sentence.left(1).toUpper() + sentence.mid(1) + QStringLiteral(" · ");
+    QString verbsLine = verbs.size() <= 3 ? verbs.join(QStringLiteral(", ")) : QString();
+    if (!verbsLine.isEmpty()) verbsLine = verbsLine.left(1).toUpper() + verbsLine.mid(1);
+    const QString sentence = verbsLine.isEmpty() ? QString() : verbsLine + QStringLiteral(" · ");
     const QString stalePart = stale ? QStringLiteral(" · stale") : QString();
-    m_chat->setProposalSummary(sentence + count + stalePart, count + stalePart);
+    m_chat->setProposalSummary(sentence + count + stalePart, verbsLine.isEmpty() ? count + stalePart : verbsLine + stalePart,
+                               count + stalePart);
     m_chat->setProposalChanges(changes);
     QString text;
     if (stale) text += QStringLiteral("This proposal is out of date. Ask Kerf to prepare it again before accepting.\n\n");

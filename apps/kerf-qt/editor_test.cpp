@@ -468,8 +468,12 @@ private slots:
         const LaptopGeometry laptop = laptopGeometry(stage.body, 16.0 / 9.0);
         QCOMPARE(laptop.screen, stage.screen);
         // The lid: an even bezel of 2% of its width, a little more over the
-        // screen; the screen 16:10; the base 110% of the lid wide and thin.
+        // screen; the screen 16:10; the base 108% of the lid wide and thin,
+        // and the body the stage lays out exactly as wide as the base.
         QVERIFY(std::abs(laptop.bezel - kLaptopBezel * laptop.lid.width()) < 0.01);
+        QVERIFY(kLaptopBaseWidth >= 1.08 && kLaptopBaseWidth <= 1.14);
+        QVERIFY(std::abs(laptop.base.left() - laptop.body.left()) < 0.01 && std::abs(laptop.base.right() - laptop.body.right()) < 0.01);
+        QVERIFY(laptop.body.adjusted(-0.01, -0.01, 0.01, 0.01).contains(laptop.base));
         QVERIFY(laptop.topBezel > laptop.bezel);
         QVERIFY(std::abs((laptop.screen.left() - laptop.lid.left()) - laptop.bezel) < 0.01);
         QVERIFY(std::abs((laptop.lid.right() - laptop.screen.right()) - laptop.bezel) < 0.01);
@@ -660,6 +664,16 @@ private slots:
             const int rightSpace = viewer->width() - stage.panel.right() - 1;
             QVERIFY2(std::abs(leftSpace - rightSpace) <= 2, qPrintable(QStringLiteral("%1 | %2").arg(leftSpace).arg(rightSpace)));
             QCOMPARE(stage.rail.left() - qRound(stage.body.right()), viewer->stageGap());
+            // Measured from the laptop's widest part, its base: the stage's
+            // margin on the left, the stage's gap before the rail.
+            const auto clearOfEdges = [viewer](const ViewerWidget::StageLayout &layout) {
+                const QRectF base = laptopGeometry(layout.body, 16.0 / 9.0).base;
+                QVERIFY(layout.body.adjusted(-0.01, -0.01, 0.01, 0.01).contains(base));
+                QVERIFY2(base.left() >= ViewerWidget::kStageMargin - 0.5, qPrintable(QString::number(base.left())));
+                QVERIFY2(layout.rail.left() - base.right() >= viewer->stageGap() - 1.0,
+                         qPrintable(QStringLiteral("%1 to %2").arg(base.right()).arg(layout.rail.left())));
+            };
+            clearOfEdges(stage);
             // The picture keeps 90% of the plain card's width in this stage.
             const ViewerWidget::StageLayout plain = viewer->stageLayout(ViewerWidget::Device::None);
             QVERIFY2(stage.card.width() >= 0.9 * plain.card.width(),
@@ -691,6 +705,7 @@ private slots:
             const QRectF alone = viewer->stageLayout().body;
             QVERIFY(std::abs(alone.center().x() - viewer->width() / 2.0) <= 1);
             QVERIFY(alone.width() >= stage.body.width() - 0.5);
+            clearOfEdges(viewer->stageLayout());
             window.m_chatToggle->click();
             window.m_laptopActions.at(1)->trigger();
             // Nothing of it reaches the project.
@@ -1863,6 +1878,24 @@ private slots:
             QVERIFY(trailing && leading);
             QTRY_VERIFY(trailing->isVisible());
             QVERIFY(!leading->isVisible());
+            // Only chips that fit whole show: the trailing cover starts at the
+            // first that does not, opaque (the panel's surface), so no sliver
+            // of a cut chip shows beside the pager.
+            {
+                const int cover = trailing->x();
+                QVERIFY(cover <= column->chipsForward()->x() - 8);
+                bool hidden = false;
+                for (QPushButton *chip : chips) {
+                    QVERIFY2(chip->geometry().right() < cover || chip->x() >= cover,
+                             qPrintable(QStringLiteral("%1 at %2..%3, cover at %4").arg(chip->text()).arg(chip->x()).arg(chip->geometry().right()).arg(cover)));
+                    hidden = hidden || chip->x() >= cover;
+                }
+                QVERIFY(hidden);
+                QVERIFY(chips.constFirst()->geometry().right() < cover);
+                const QImage row = window.m_chatNextSteps->grab().toImage();
+                const QPoint inCover(cover + 2, trailing->y() + trailing->height() / 2);
+                QCOMPARE(row.pixelColor(inCover * row.devicePixelRatio()).rgb(), editorTheme().chatSurface.rgb());
+            }
             // A wheel turned over the row scrolls it to its last chip, whole.
             for (int turn = 0; turn < 10; ++turn) {
                 QWheelEvent wheel(QPointF(40, 20), window.m_chatNextSteps->mapToGlobal(QPointF(40, 20)), QPoint(), QPoint(0, -120),
@@ -1871,6 +1904,7 @@ private slots:
             }
             QCOMPARE(last->geometry().right(), window.m_chatNextSteps->width() - ChatPanel::kSidePadding - 1);
             QTRY_VERIFY(!trailing->isVisible() && leading->isVisible());
+            for (QPushButton *chip : chips) QVERIFY(chip->geometry().right() < leading->width() || chip->x() >= leading->width());
             for (int turn = 0; turn < 10; ++turn) {
                 QWheelEvent wheel(QPointF(40, 20), window.m_chatNextSteps->mapToGlobal(QPointF(40, 20)), QPoint(), QPoint(0, 120),
                                   Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
@@ -2053,12 +2087,19 @@ private slots:
             verifyListEnd(chat);
             QVERIFY(sticky->isVisible());
             QCOMPARE(sticky->y(), ChatPanel::kHeaderHeight);
-            // The summary whole where it fits, else cut with an ellipsis (its
-            // tip has it whole).
+            // What it does, without the count, whole where it fits, else cut
+            // with an ellipsis (its tip has the summary and the count); only
+            // the count where the bar has no room for the verbs.
             QCOMPARE(chat->proposalBarSummary()->toolTip(), window.m_proposalSummary->text());
             QCOMPARE(chat->proposalBarSummary()->toolTip(), QStringLiteral("Trim, remove · 2 changes"));
-            QVERIFY(chat->proposalBarSummary()->text() == QStringLiteral("2 changes") ||
-                    chat->proposalBarSummary()->text().endsWith(QChar(0x2026)));
+            if (chat->proposalBarSummary()->contentsRect().width() >= ChatPanel::kBarSummaryRoom)
+                QVERIFY2(chat->proposalBarSummary()->text() == QStringLiteral("Trim, remove") ||
+                             chat->proposalBarSummary()->text().endsWith(QChar(0x2026)),
+                         qPrintable(chat->proposalBarSummary()->text()));
+            else
+                QCOMPARE(chat->proposalBarSummary()->text(), QStringLiteral("2 changes"));
+            QCOMPARE(chat->width(), ViewerWidget::kDefaultChatWidth);
+            QCOMPARE(chat->proposalBarSummary()->text(), QStringLiteral("Trim, remove"));
             QVERIFY(QFontMetrics(chat->proposalBarSummary()->font()).horizontalAdvance(chat->proposalBarSummary()->text()) <=
                     chat->proposalBarSummary()->contentsRect().width());
             for (QPushButton *pill : {chat->barRejectButton(), chat->barAcceptButton()}) {
@@ -2201,6 +2242,79 @@ private slots:
         const QJsonObject command = window.m_lastCommand;
         window.m_lastCommand = {};
         return command.value("type").toString() == QStringLiteral("edit") ? command.value("ops").toArray() : QJsonArray{};
+    }
+
+    // A slider never jumps on a stray click: a press away from its knob
+    // changes nothing until the pointer moves, then moves the knob by as
+    // much; a press on the knob takes it.
+    void inspectorSliderIgnoresStrayClicks() {
+        InspectorSlider slider;
+        slider.resize(92, ScrubField::kHeight);
+        slider.setRange(0.0, 100.0);
+        slider.setOrigin(0.0);
+        slider.setDetent(0.0);
+        slider.setValue(50.0);
+        QSignalSpy released(&slider, &InspectorSlider::released);
+        const double knob = slider.knobCenter().x();
+        // A click on the groove far from the knob: nothing.
+        mouse(&slider, QEvent::MouseButtonPress, QPointF(10, 12));
+        mouse(&slider, QEvent::MouseButtonRelease, QPointF(10, 12));
+        QCOMPARE(slider.value(), 50.0);
+        QCOMPARE(released.size(), 0);
+        // A drag from there: the knob moves by the pointer's travel.
+        mouse(&slider, QEvent::MouseButtonPress, QPointF(10, 12));
+        mouse(&slider, QEvent::MouseMove, QPointF(20, 12));
+        mouse(&slider, QEvent::MouseButtonRelease, QPointF(20, 12));
+        QCOMPARE(released.size(), 1);
+        QVERIFY(std::abs(slider.knobCenter().x() - (knob + 10.0)) < 0.5);
+        QCOMPARE(released.constLast().at(1).toDouble(), 50.0);
+        // A press on the knob takes it: it follows the pointer.
+        const double at = slider.knobCenter().x();
+        mouse(&slider, QEvent::MouseButtonPress, QPointF(at + 2, 12));
+        mouse(&slider, QEvent::MouseMove, QPointF(at - 20, 12));
+        mouse(&slider, QEvent::MouseButtonRelease, QPointF(at - 20, 12));
+        QVERIFY(std::abs(slider.knobCenter().x() - (at - 20.0)) < 0.5);
+        QCOMPARE(released.size(), 2);
+    }
+
+    // A switched-off effect's values stay editable and readable: numbers,
+    // slider fills and the colour's hex in the secondary ink (4.5:1 on the
+    // field), never the disabled one.
+    void switchedOffEffectValuesStayReadable() {
+        QSettings().remove(QStringLiteral("editor/inspector"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("editor/inspector")); });
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(QJsonObject{{"revision", 3}, {"duration", 4}, {"timeline", QJsonObject{
+            {"fps", 24},
+            {"tracks", QJsonArray{
+                QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+                    QJsonObject{{"id", "c1"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 0.0},
+                                {"duration", 2.0}, {"effects", QJsonArray{
+                                    QJsonObject{{"fx", "light.edgeglow"}, {"enabled", false}, {"params", QJsonObject{{"radius", 40}, {"intensity", 200}}}}}}}}}}}}}}});
+        window.selectClip(QStringLiteral("c1"));
+        InspectorPanel *inspector = window.m_inspector;
+        QWidget *box = inspector->findChild<QWidget *>(QStringLiteral("effectBox"));
+        QVERIFY(box);
+        QVERIFY(!box->findChild<InspectorSwitch *>(QStringLiteral("effectEnabled"))->isChecked());
+        const EditorTheme &theme = editorTheme();
+        QVERIFY(contrastRatio(theme.textSecondary, theme.inspectorField) >= 4.5);
+        const auto fields = box->findChildren<ScrubField *>();
+        QVERIFY(!fields.isEmpty());
+        for (ScrubField *field : fields) {
+            QVERIFY(field->isDimmed());
+            QCOMPARE(field->valueInk(), theme.textSecondary);
+        }
+        const auto sliders = box->findChildren<InspectorSlider *>();
+        QVERIFY(!sliders.isEmpty());
+        for (InspectorSlider *slider : sliders) {
+            QVERIFY(slider->isDimmed() && slider->isEnabled());
+            QCOMPARE(slider->fillInk(), theme.textSecondary);
+        }
+        for (QLabel *hex : box->findChildren<QLabel *>(QStringLiteral("colorHex"))) {
+            QVERIFY(hex->property("off").toBool());
+            QCOMPARE(hex->palette().color(QPalette::WindowText), theme.textSecondary);
+        }
     }
 
     // Each effect is a header with a switch, its name and ⋯ (Reset, Ask
@@ -2961,35 +3075,70 @@ private slots:
         key(x->editor(), Qt::Key_Escape);
         QVERIFY(!x->isTyping());
         QVERIFY(takeOps(window).isEmpty());
-        // ↑ steps 1 px, ⇧↑ 10, ⌥↑ 0.1; a run of steps is one edit, sent
-        // once it pauses.
-        keyWith(x, Qt::Key_Up, Qt::NoModifier);
+        // ↑ steps 1 px, ⇧↑ 10, ⌥↑ 0.1, where the keys are after a click on
+        // the field (its line edit, which would only move its caret): the
+        // text follows each step, selected, and the run with its Return is
+        // one edit.
+        const auto clickOpen = [&] {
+            mouse(x, QEvent::MouseButtonPress, QPointF(30, 12));
+            mouse(x, QEvent::MouseButtonRelease, QPointF(30, 12));
+            QVERIFY(x->isTyping());
+        };
+        clickOpen();
+        keyWith(x->editor(), Qt::Key_Up, Qt::NoModifier);
         QVERIFY(x->isStepping());
+        QCOMPARE(x->editor()->text(), QStringLiteral("1"));
+        QCOMPARE(x->editor()->selectedText(), QStringLiteral("1"));
         QVERIFY(takeOps(window).isEmpty());
-        x->flushSteps();
-        QVERIFY(std::abs(takeOps(window).first().toObject().value("props").toObject().value("x").toDouble() - 1.0 / 1080.0) < 1e-9);
+        key(x->editor(), Qt::Key_Return);
+        QVERIFY(!x->isTyping() && !x->isStepping());
+        ops = takeOps(window);
+        QCOMPARE(ops.size(), 1);
+        QVERIFY(std::abs(ops.first().toObject().value("props").toObject().value("x").toDouble() - 1.0 / 1080.0) < 1e-9);
+        QVERIFY(takeOps(window).isEmpty());
         snapshot(4, QJsonObject{{"x", 1.0 / 1080.0}});
-        keyWith(x, Qt::Key_Up, Qt::ShiftModifier);
-        x->flushSteps();
+        clickOpen();
+        keyWith(x->editor(), Qt::Key_Up, Qt::ShiftModifier);
+        key(x->editor(), Qt::Key_Return);
         QVERIFY(std::abs(takeOps(window).first().toObject().value("props").toObject().value("x").toDouble() - 11.0 / 1080.0) < 1e-9);
         snapshot(5, QJsonObject{{"x", 11.0 / 1080.0}});
-        keyWith(x, Qt::Key_Up, Qt::AltModifier);
-        x->flushSteps();
+        clickOpen();
+        keyWith(x->editor(), Qt::Key_Up, Qt::AltModifier);
+        key(x->editor(), Qt::Key_Return);
         QVERIFY(std::abs(takeOps(window).first().toObject().value("props").toObject().value("x").toDouble() - 11.1 / 1080.0) < 1e-9);
-        // Held: thirty repeats are one edit (one undo step), and a snapshot
-        // arriving mid-run does not pull the value back.
+        // ↓ from a typed value; Esc takes back a run not yet sent.
         snapshot(6, QJsonObject{{"x", 0.0}});
+        clickOpen();
+        x->editor()->setText(QStringLiteral("20"));
+        keyWith(x->editor(), Qt::Key_Down, Qt::NoModifier);
+        QCOMPARE(x->editor()->text(), QStringLiteral("19"));
+        key(x->editor(), Qt::Key_Escape);
+        QVERIFY(!x->isStepping());
+        QCOMPARE(x->text(), QStringLiteral("0"));
+        QVERIFY(takeOps(window).isEmpty());
+        // Held: thirty repeats are one edit (one undo step), sent once the
+        // run pauses, and a snapshot arriving mid-run does not pull the value
+        // back; Return then sends nothing more.
+        clickOpen();
         for (int repeat = 0; repeat < 30; ++repeat) {
             QKeyEvent press(QEvent::KeyPress, Qt::Key_Up, Qt::NoModifier, QString(), repeat > 0);
-            QCoreApplication::sendEvent(x, &press);
+            QCoreApplication::sendEvent(x->editor(), &press);
             if (repeat == 10) x->setValue(0.0);
         }
-        QCOMPARE(x->text(), QStringLiteral("30"));
+        QCOMPARE(x->editor()->text(), QStringLiteral("30"));
         QVERIFY(takeOps(window).isEmpty());
         QTRY_VERIFY_WITH_TIMEOUT(!x->isStepping(), ScrubField::kStepRunMs * 4);
         ops = takeOps(window);
         QCOMPARE(ops.size(), 1);
         QVERIFY(std::abs(ops.first().toObject().value("props").toObject().value("x").toDouble() - 30.0 / 1080.0) < 1e-9);
+        key(x->editor(), Qt::Key_Return);
+        QVERIFY(takeOps(window).isEmpty());
+        // Focused without typing (Return closed the editor and the keys have
+        // not gone back yet), ↑ steps the field itself as well.
+        snapshot(7, QJsonObject{{"x", 30.0 / 1080.0}});
+        keyWith(x, Qt::Key_Up, Qt::NoModifier);
+        x->flushSteps();
+        QVERIFY(std::abs(takeOps(window).first().toObject().value("props").toObject().value("x").toDouble() - 31.0 / 1080.0) < 1e-9);
         // Typed: 50% is 0.5; +5 is relative; out of range clamps, and the
         // field flashes.
         opacity->commitText(QStringLiteral("50%"));
@@ -3382,6 +3531,18 @@ private slots:
         // The music's folded volume reads in dB.
         window.selectClip(QStringLiteral("music"));
         QCOMPARE(inspector->findChild<ScrubField *>(QStringLiteral("prop_gain"))->text(), QString(QChar(0x2212)) + QStringLiteral("8.0"));
+        // Its thumbnail is its real waveform, as the bin's tile: the glyph
+        // ink in the band the wave fills, the tile's colour above it.
+        {
+            const QImage wave = inspector->m_thumbnail->images().first();
+            QCOMPARE(wave.pixelColor(64, 4).rgb(), theme.audioTile.rgb());
+            int inked = 0;
+            for (int x = 0; x < wave.width(); ++x) inked += wave.pixelColor(x, 36).rgb() == theme.audioTileGlyph.rgb() ? 1 : 0;
+            QVERIFY2(inked > wave.width() / 2, qPrintable(QString::number(inked)));
+        }
+        // A sound clip carrying no effects has no Effects section: no effect
+        // in this version of Kerf applies to sound.
+        QVERIFY(!inspector->section(QStringLiteral("effects")));
     }
 
     // The name edits in place: Return renames the clip (set {name}), Esc
@@ -3455,6 +3616,20 @@ private slots:
         QVERIFY(format->isOpen() && tracks->isOpen() && !markers->isOpen());
         const int trackCount = int(snapshot.value("timeline").toObject().value("tracks").toArray().size());
         QCOMPARE(inspector->findChildren<QWidget *>(QStringLiteral("sequenceTrack")).size(), trackCount);
+        // Each track's square in its timeline header's colour: a picture
+        // track of titles is a titles track, as the timeline draws it.
+        {
+            const QJsonArray trackList = snapshot.value("timeline").toObject().value("tracks").toArray();
+            const auto lines = inspector->findChildren<QWidget *>(QStringLiteral("sequenceTrack"));
+            bool titles = false;
+            for (int index = 0; index < trackList.size(); ++index) {
+                const QJsonObject track = trackList.at(index).toObject();
+                const ClipKind kind = trackKind(track);
+                QCOMPARE(lines.at(index)->findChild<KindSquare *>()->color(), editorTheme().clip(kind).header);
+                titles = titles || (kind == ClipKind::Generator && !track.value("type").toString().contains(QStringLiteral("title"), Qt::CaseInsensitive));
+            }
+            QVERIFY2(titles, "a picture track holding titles");
+        }
         QCOMPARE(tracks->findChild<QLabel *>(QStringLiteral("sectionCount"))->text(), QString::number(trackCount));
         QCOMPARE(inspector->findChildren<QWidget *>(QStringLiteral("sequenceMarker")).size(), 2);
         QCOMPARE(markers->findChild<QLabel *>(QStringLiteral("sectionCount"))->text(), QStringLiteral("2"));
@@ -3465,7 +3640,7 @@ private slots:
         QCOMPARE(popups.size(), 1);
         QComboBox *size = popups.first();
         QCOMPARE(size->objectName(), QStringLiteral("frameSize"));
-        QCOMPARE(size->currentText(), QStringLiteral("9:16 · 1080 × 1920"));
+        QCOMPARE(size->currentText(), QStringLiteral("9:16 · 1080×1920"));
         QVERIFY(inspector->findChildren<QLineEdit *>().size() <= 1); // the name's editor, hidden
         QVERIFY(inspector->findChildren<QPlainTextEdit *>().isEmpty());
         QVERIFY(inspector->findChildren<InspectorSwitch *>().isEmpty());
@@ -3577,17 +3752,35 @@ private slots:
         QScrollBar *scroll = inspector->scrollArea()->verticalScrollBar();
         QVERIFY(scroll->maximum() > 60);
         scroll->setValue(60);
-        QElapsedTimer timer;
-        timer.start();
-        window.clickSelectClip(QStringLiteral("c2"));
-        const qint64 elapsed = timer.elapsed();
+        // From the click to the painted values (the panel repainted at once,
+        // not when the event loop gets to it).
+        const auto timedSwitch = [&](const char *id) {
+            QElapsedTimer timer;
+            timer.start();
+            window.clickSelectClip(QString::fromLatin1(id));
+            inspector->repaint();
+            return timer.nsecsElapsed() / 1.0e6;
+        };
+        const double elapsed = timedSwitch("c2");
         QCOMPARE(inspector->findChild<ScrubField *>(QStringLiteral("prop_opacity")), opacity);
         QCOMPARE(opacity->text(), QStringLiteral("25"));
         QVERIFY(inspector->section(QStringLiteral("effects"))->isOpen() && inspector->section(QStringLiteral("crop"))->isOpen());
         QCoreApplication::processEvents();
         QCOMPARE(scroll->value(), 60);
-        // Values only: far under a frame, even with ten effects.
-        QVERIFY2(elapsed < 40, qPrintable(QString::number(elapsed)));
+        // Values only: well under a frame, even with ten effects. The median
+        // of a run of switches back and forth, so one slow scheduling slice
+        // on a shared CI machine does not decide it. The target is 8 ms; the
+        // check allows twice that, as CI builds the tests unoptimized on
+        // shared runners (7.9 ms measured unoptimized on an M-series Mac,
+        // offscreen; see the README).
+        QList<double> times{elapsed};
+        for (int index = 0; index < 8; ++index) times << timedSwitch(index % 2 ? "c2" : "c1");
+        std::sort(times.begin(), times.end());
+        const double median = times.at(times.size() / 2);
+        qInfo("Inspector: same-shape clip switch, click to painted values: median %.2f ms, fastest %.2f ms (10 effects)", median,
+              times.first());
+        QVERIFY2(median < 16.0, qPrintable(QStringLiteral("%1 ms").arg(median)));
+        QCOMPARE(scroll->value(), 60);
         // The header's hairline shows while the body is scrolled under it.
         QVERIFY(inspector->m_scrollEdge->isVisible());
         scroll->setValue(0);
@@ -3788,6 +3981,10 @@ private slots:
                     QVERIFY2(child->geometry().right() < row->width() && child->x() >= 0,
                              qPrintable(QStringLiteral("%1: %2 in %3").arg(what, child->objectName(), row->label()->text())));
                 }
+                // Every value whole: "+0.40 EV", "−8.0 dB", "−48 px".
+                for (ScrubField *field : row->findChildren<ScrubField *>())
+                    if (field->isVisibleTo(row))
+                        QVERIFY2(field->showsWhole(), qPrintable(QStringLiteral("%1: %2 %3").arg(what, row->label()->text(), field->text())));
                 QVERIFY2(row->geometry().right() < row->parentWidget()->width(), qPrintable(row->label()->text()));
             }
         };
@@ -3838,8 +4035,17 @@ private slots:
                 if (child != row->label() && child->isVisibleTo(row) && child->width() > InspectorRow::kResetLane &&
                     child->sizePolicy().horizontalPolicy() != QSizePolicy::Fixed)
                     right = std::max(right, child->geometry().right());
+            // One value field is the column's one width; two (X and Y, L and
+            // R) share the row equally, 78 + 8 + 78 at a 300-point column.
+            QList<ScrubField *> fields;
             for (ScrubField *field : row->findChildren<ScrubField *>(QString(), Qt::FindDirectChildrenOnly))
-                if (field->isVisibleTo(row)) QCOMPARE(field->width(), InspectorRow::kValueField);
+                if (field->isVisibleTo(row)) fields << field;
+            if (fields.size() == 2) {
+                QCOMPARE(fields.at(0)->width(), fields.at(1)->width());
+                QVERIFY(fields.at(0)->width() >= InspectorRow::kValueField);
+            } else {
+                for (ScrubField *field : fields) QCOMPARE(field->width(), InspectorRow::kValueField);
+            }
             if (right < 0) continue;
             if (controlsRight < 0) controlsRight = right;
             QVERIFY2(right <= controlsRight, qPrintable(row->label()->text()));
@@ -3872,6 +4078,16 @@ private slots:
             }
         };
         check(QStringLiteral("300"));
+        // Nothing selected: the frame size reads whole in its pop-up, clear
+        // of its ⌃⌄.
+        alone->setState(timeline, {});
+        QCoreApplication::processEvents();
+        {
+            auto *size = alone->findChild<QComboBox *>(QStringLiteral("frameSize"));
+            QVERIFY(size && size->isVisible());
+            QVERIFY2(QFontMetrics(size->font()).horizontalAdvance(size->currentText()) + 28 <= size->width(),
+                     qPrintable(QStringLiteral("%1 in %2").arg(size->currentText()).arg(size->width())));
+        }
         for (const char *id : {"t", "music", "adj"}) {
             alone->setState(timeline, {QString::fromLatin1(id)});
             for (InspectorSection *section : alone->findChildren<InspectorSection *>()) section->setOpen(true);
@@ -3972,7 +4188,11 @@ private slots:
                 window.show();
                 QVERIFY(QTest::qWaitForWindowExposed(&window));
                 window.m_errorBanner->hide();
+                // The playhead in the close-up, where the frame shown is: the
+                // time on the picture and the timeline's playhead agree with it.
+                window.handleEvent(QJsonObject{{"type", "clock"}, {"position", 6.0}, {"duration", 18.0}});
                 window.m_viewer->setFrame(testing::footageFrame(testing::Shot::FisherClose, canvas / 4), 6.0);
+                QCOMPARE(window.m_timeline->m_playhead, 6.0);
                 window.m_inspector->setProgramFrame(testing::footageFrame(testing::Shot::HarborWide, QSize(160, 90)));
                 window.appendConversation(QStringLiteral("You"), QStringLiteral("Warm up the close-up a little."));
                 window.appendConversation(QStringLiteral("Kerf"), QStringLiteral("I raised the exposure and the temperature on fisher-close.mov."));
@@ -4030,6 +4250,9 @@ private slots:
                 QCOMPARE(boxes.at(0)->findChild<QPushButton *>(QStringLiteral("effectMoreToggle"))->text(), QStringLiteral("6 more"));
                 QCOMPARE(boxes.at(1)->findChild<QLabel *>(QStringLiteral("effectSummary"))->text(), QStringLiteral("Radius 8 px"));
                 QCOMPARE(inspector->findChild<ScrubField *>(QStringLiteral("effectParam_exposure"))->text(), QStringLiteral("+0.40"));
+                QCoreApplication::processEvents();
+                for (ScrubField *field : boxes.at(0)->findChildren<ScrubField *>())
+                    if (field->isVisible()) QVERIFY2(field->showsWhole(), qPrintable(field->objectName()));
                 QCOMPARE(inspector->findChild<ScrubField *>(QStringLiteral("effectParam_contrast"))->text(), QStringLiteral("110"));
                 QCoreApplication::processEvents();
                 inspector->scrollArea()->ensureWidgetVisible(boxes.at(0), 0, 0);
@@ -5742,8 +5965,11 @@ private slots:
         const auto text = window.m_proposalDiff->toPlainText();
         QVERIFY(text.contains(QStringLiteral("trim c1 out -24f")));
         QVERIFY(text.contains(QStringLiteral("+    clip c1 dur=00:00:03:00")));
-        // Counted from its script's changes, as its rows list them.
-        QCOMPARE(window.m_proposalSummary->text(), QStringLiteral("Trim · 1 change"));
+        // Counted from its script's changes, as its rows list them (a narrow
+        // panel leaves the count to the rows; the whole summary is its tip).
+        QCOMPARE(window.m_chat->proposalBarSummary()->toolTip(), QStringLiteral("Trim · 1 change"));
+        QVERIFY(window.m_proposalSummary->text() == QStringLiteral("Trim · 1 change") ||
+                (window.m_chat->width() < ChatPanel::kNarrowProposal && window.m_proposalSummary->text() == QStringLiteral("Trim")));
         QCOMPARE(window.m_chat->proposalChangeRows().size(), 1);
         QCOMPARE(window.m_chat->proposalChangeRows().constFirst()->change().description, QStringLiteral("Trim c1"));
         QCOMPARE(window.m_chat->proposalChangeRows().constFirst()->change().detail, QStringLiteral("end \u22121 s"));
@@ -6497,10 +6723,15 @@ private slots:
         const int top = bar->value();
         const int bottom = top + scroll->viewport()->height();
         if (bar->maximum() > 0)
-            QVERIFY2(std::abs(last + ChatPanel::kListBottom - bottom) <= 2,
-                     qPrintable(QStringLiteral("%1 px under the latest").arg(bottom - last)));
+            QVERIFY2(std::abs(last - bottom) <= 2, qPrintable(QStringLiteral("%1 px under the latest").arg(bottom - last)));
         else
-            QVERIFY(last + ChatPanel::kListBottom <= bottom);
+            QVERIFY(last <= bottom);
+        // The view itself stops 16 points over the chips (or the composer),
+        // so the rows are cut there at every scroll position, not only at
+        // the list's end.
+        QWidget *under = chat->chips()->isVisible() ? chat->chips() : static_cast<QWidget *>(chat->composer());
+        QCOMPARE(under->mapTo(chat, QPoint()).y() - (scroll->viewport()->mapTo(chat, QPoint()).y() + scroll->viewport()->height()),
+                 ChatPanel::kListBottom);
         // Nothing over the view's top: the rows run right up to its edge.
         for (QWidget *over : scroll->findChildren<QWidget *>(Qt::FindDirectChildrenOnly))
             QVERIFY2(over == scroll->viewport() || over->objectName().startsWith(QStringLiteral("qt_scrollarea")) || !over->isVisible(),
@@ -7810,7 +8041,20 @@ private slots:
             // The file's row: its field, the folder inside it.
             auto *lookFile = inspector->findChild<QWidget *>(QStringLiteral("effectParam_look_lut"));
             QVERIFY(lookFile && lookFile->findChild<QAction *>(QStringLiteral("chooseFile")));
-            QCOMPARE(lookFile->findChild<QLineEdit *>()->text(), QStringLiteral("looks/harbor-dusk.cube"));
+            // The file's name, its whole path in the tooltip; the name left as
+            // shown keeps the path, a typed path replaces it.
+            QLineEdit *lookLine = lookFile->findChild<QLineEdit *>();
+            QCOMPARE(lookLine->text(), QStringLiteral("harbor-dusk.cube"));
+            QCOMPARE(lookLine->toolTip(), QStringLiteral("looks/harbor-dusk.cube"));
+            window.m_lastCommand = {};
+            emit lookLine->editingFinished();
+            QVERIFY(takeOps(window).isEmpty());
+            lookLine->setText(QStringLiteral("looks/harbor-night.cube"));
+            emit lookLine->editingFinished();
+            QCOMPARE(takeOps(window).first().toObject().value("params").toObject().value("look_lut").toString(), QStringLiteral("looks/harbor-night.cube"));
+            // (No snapshot answers the edit here: the field shows its value again.)
+            window.m_inspector->refreshValues();
+            QCOMPARE(lookLine->text(), QStringLiteral("harbor-dusk.cube"));
             // A colour is a well, its hex beside it.
             auto *well = inspector->findChild<QPushButton *>(QStringLiteral("effectParam_color"));
             QVERIFY(well);
@@ -8102,6 +8346,16 @@ private slots:
                 // square one on the plain card (in a phone it would be under
                 // half the card's width here).
                 QCOMPARE(stage.kind, tall ? ViewerWidget::Device::Phone : wide ? ViewerWidget::Device::Laptop : ViewerWidget::Device::None);
+                if (!tall && !wide) {
+                    // Measured, as R10 asks before putting 1:1 in the phone:
+                    // the square picture on the card against the same picture
+                    // across a phone's screen, in this stage.
+                    const ViewerWidget::StageLayout inPhone = window.m_viewer->stageLayout(ViewerWidget::Device::Phone);
+                    qInfo("1:1 at 1440x900: card picture %.0f px wide, in the phone %.0f px (%.0f%%)", stage.card.width(),
+                          inPhone.card.width(), 100.0 * inPhone.card.width() / stage.card.width());
+                    QVERIFY(inPhone.screen.adjusted(-0.5, -0.5, 0.5, 0.5).contains(inPhone.card));
+                    QVERIFY2(inPhone.card.width() < 0.5 * stage.card.width(), "a square picture loses over half its width in the phone");
+                }
                 const QRectF video = stage.card;
                 const QRectF body = stage.body;
                 QCOMPARE(window.m_viewer->videoRect(), video);
@@ -8501,6 +8755,58 @@ private slots:
                 window.m_chat->proposalExpander()->click();
                 QCoreApplication::processEvents();
                 QVERIFY(changes->isVisible());
+                // Wide, "Script" ends the summary's line; in a narrow panel (as
+                // beside a laptop) it starts the pills' row instead, so the
+                // summary keeps one line, and each change keeps its words
+                // whole, its detail giving way first.
+                {
+                    ChatExpander *script = window.m_chat->proposalExpander();
+                    const auto middle = [&](QWidget *widget) { return widget->mapTo(window.m_chat, QPoint(0, widget->height() / 2)).y(); };
+                    QVERIFY(window.m_chat->width() >= ChatPanel::kNarrowProposal);
+                    QVERIFY(std::abs(middle(script) - middle(window.m_proposalSummary)) <= window.m_proposalSummary->height() / 2);
+                    window.m_viewer->setChatWidth(ViewerWidget::kMinChatWidth);
+                    QCoreApplication::processEvents();
+                    QCOMPARE(window.m_chat->width(), ViewerWidget::kMinChatWidth);
+                    QVERIFY(std::abs(middle(script) - middle(window.m_acceptButton)) <= 1);
+                    QCOMPARE(script->mapTo(window.m_chat, QPoint()).x(), window.m_proposalSummary->mapTo(window.m_chat, QPoint()).x());
+                    QVERIFY(script->mapTo(window.m_chat, QPoint(script->width(), 0)).x() < window.m_rejectButton->mapTo(window.m_chat, QPoint()).x());
+                    QCOMPARE(window.m_proposalSummary->height(), window.m_proposalSummary->heightForWidth(window.m_proposalSummary->width()));
+                    QVERIFY2(window.m_proposalSummary->heightForWidth(window.m_proposalSummary->width()) < 2 * window.m_proposalSummary->fontMetrics().lineSpacing(),
+                             "the summary wraps beside a narrow panel");
+                    // Its count is left to the rows under it (and the tooltip).
+                    QCOMPARE(window.m_proposalSummary->text(), QStringLiteral("Trim, remove, add a title"));
+                    QCOMPARE(window.m_proposalSummary->toolTip(), QStringLiteral("Trim, remove, add a title · 3 changes"));
+                    // "Script" whole on the row; the pills unclipped, the row
+                    // inside the column.
+                    QVERIFY(script->isCompact() && script->labelShown());
+                    QVERIFY(window.m_acceptButton->mapTo(window.m_chat, QPoint(window.m_acceptButton->width(), 0)).x() <=
+                            window.m_chatScroll->viewport()->mapTo(window.m_chat, QPoint(window.m_chatScroll->viewport()->width(), 0)).x() - ChatPanel::kSidePadding);
+                    QCOMPARE(window.m_chatScroll->widget()->width(), window.m_chatScroll->viewport()->width());
+                    for (ProposalChangeRow *row : window.m_chat->proposalChangeRows()) {
+                        QFont words = row->font();
+                        words.setPixelSize(13);
+                        QFont detail = row->font();
+                        detail.setPixelSize(12);
+                        detail.setFeature(QFont::Tag("tnum"), 1);
+                        const int wordsWide = QFontMetrics(words).horizontalAdvance(row->change().description);
+                        const int detailWide = QFontMetrics(detail).horizontalAdvance(row->change().detail);
+                        const bool wordsWhole = row->descriptionRect().width() >= wordsWide;
+                        const bool detailWhole = row->detailRect().width() >= detailWide;
+                        // The detail gives way first, down to its least, so the
+                        // words stay whole; never are both cut.
+                        QVERIFY2(wordsWhole || detailWhole, qPrintable(row->change().description));
+                        QVERIFY(row->detailRect().width() >= std::min(ProposalChangeRow::kMinDetail, detailWide));
+                        if (!wordsWhole)
+                            QVERIFY2(wordsWide + std::min(ProposalChangeRow::kMinDetail, detailWide) > row->width() - ProposalChangeRow::kTextLeft - ProposalChangeRow::kDetailGap,
+                                     qPrintable(row->change().description));
+                        QCOMPARE(row->detailRect().right(), row->width() - 1);
+                    }
+                    window.m_viewer->setChatWidth(ViewerWidget::kDefaultChatWidth);
+                    QCoreApplication::processEvents();
+                    QVERIFY(std::abs(middle(script) - middle(window.m_proposalSummary)) <= window.m_proposalSummary->height() / 2);
+                    QVERIFY(!script->isCompact());
+                    QCOMPARE(window.m_proposalSummary->text(), QStringLiteral("Trim, remove, add a title · 3 changes"));
+                }
                 // Shown from its head: 16 points under the header, no hairline
                 // and no compact bar.
                 QCOMPARE(window.m_chatScroll->verticalScrollBar()->value(), 0);
@@ -8571,7 +8877,13 @@ private slots:
                 QVERIFY(pin->mapTo(window.m_chat, QPoint()).y() >= viewportTop);
                 QVERIFY(window.m_chat->proposalSummary()->visibleRegion().boundingRect().height() > 0);
                 QVERIFY(!window.m_chat->proposalBar()->isVisible());
-                // The compact bar's summary fits the narrowest panel whole.
+                // The compact bar says what the proposal does where it has the
+                // room, and only the count, whole, in the narrowest panel.
+                bar->setValue(bar->maximum());
+                QCoreApplication::processEvents();
+                QTRY_VERIFY(window.m_chat->proposalBar()->isVisible());
+                if (window.m_chat->proposalBarSummary()->contentsRect().width() >= ChatPanel::kBarSummaryRoom)
+                    QVERIFY(window.m_chat->proposalBarSummary()->text().startsWith(QStringLiteral("Trim")));
                 window.m_viewer->setChatWidth(ViewerWidget::kMinChatWidth);
                 bar->setValue(bar->maximum());
                 QCoreApplication::processEvents();

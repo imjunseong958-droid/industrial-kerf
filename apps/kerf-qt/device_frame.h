@@ -73,7 +73,7 @@ LaptopPreview laptopPreviewFromKey(const QString &key);
 QString laptopPreviewLabel(LaptopPreview preview);
 
 struct LaptopGeometry {
-    QRectF body;    // Lid top to base bottom; the base overhangs it a little at each side.
+    QRectF body;    // Lid top to base bottom, as wide as the base.
     QRectF lid;     // The lid, its bezel included.
     QRectF screen;  // Inside the bezel, 16:10.
     QRectF picture; // The picture, across the screen's width, centred on it.
@@ -86,16 +86,16 @@ struct LaptopGeometry {
 
 // The laptop's proportions, as shares of the lid's width: an even bezel of
 // 2% (2.6% over the screen), the screen 16:10, the lid's top corners
-// rounded by 2.4%; the base 110% of the lid's width and 3% of its height.
-// The body the stage lays out is 106% of the lid wide: the base's ends
-// overhang it by 2% of the lid, into the stage's margin and the gap before
-// the rail, so the picture keeps its share of the plain card's width.
+// rounded by 2.4%; the base 108% of the lid's width and 3% of its height.
+// The body the stage lays out is the base's full width, the lid centred in
+// it (4% of the lid to spare at each side), so the stage's margins and the
+// gap before the rail are measured from the laptop's widest part.
 constexpr double kLaptopBezel = 0.02;
 constexpr double kLaptopTopBezel = 0.026;
 constexpr double kLaptopScreenAspect = 16.0 / 10.0;
 constexpr double kLaptopLidRadius = 0.024;
-constexpr double kLaptopBaseWidth = 1.10;
-constexpr double kLaptopBodyWidth = 1.06;
+constexpr double kLaptopBaseWidth = 1.08;
+constexpr double kLaptopBodyWidth = kLaptopBaseWidth;
 constexpr double kLaptopBaseHeight = 0.03;
 // The body's width over its height.
 double laptopBodyAspect();
@@ -117,8 +117,7 @@ void paintLaptopBody(QPainter &painter, const LaptopGeometry &laptop, const Edit
 class DeviceFrameCache {
 public:
     enum class Kind { Phone, Laptop };
-    // Room round the body for the shadow, the phone's side buttons and the
-    // laptop base's overhang.
+    // Room round the body for the shadow and the phone's side buttons.
     static constexpr int kMargin = 24;
     // Draws the frame of `kind` whose body is `body`, rendering it first
     // only when the kind, the body's size (or its offset within a pixel),

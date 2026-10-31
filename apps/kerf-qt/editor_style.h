@@ -479,7 +479,9 @@ QLabel#inspectorLabel, QLabel#inspectorQuiet, QLabel#inspectorNote, QLabel#secti
 QLabel#sectionSummary, QLabel#effectSummary, QLabel#effectGroup, QLabel#effectMissing,
 QLabel#captionHint, QLabel#masksHint { color: @textSecondary; }
 QLabel#sectionTitle, QLabel#effectName { color: @text; }
-QLabel#effectName[off="true"] { color: @textSecondary; }
+QLabel#effectName[off="true"],
+QLabel#colorHex[off="true"],
+QLineEdit[inspector="true"][off="true"] { color: @textSecondary; }
 QFrame#inspectorRule, QFrame#inspectorScrollEdge { background: @divider; border: 0; }
 QFrame#inspectorDropLine { background: @textStrong; border: 0; }
 QLineEdit[inspector="true"], QPlainTextEdit[inspector="true"],
@@ -504,9 +506,9 @@ QPushButton[inspectorLink="true"] {
     text-align: left;
 }
 /* A link in the Inspector (the caption's Ask Kerf): underlined under the pointer. */
-QPushButton[underlineOnHover="true"] { font-size: 13px; font-weight: 400; }
-QPushButton[underlineOnHover="true"]:hover { text-decoration: underline; background: transparent; border: 0; }
 QPushButton[inspectorLink="true"][quiet="true"] { color: @textSecondary; font-weight: 400; }
+QPushButton[underlineOnHover="true"] { font-size: 12px; font-weight: 500; }
+QPushButton[underlineOnHover="true"]:hover { text-decoration: underline; background: transparent; border: 0; }
 QPushButton[inspectorLink="true"]:hover { color: @textStrong; background: transparent; }
 /* A mask's name: words, washed in the accent tint while selected. */
 QToolButton#maskName { background: transparent; border-color: transparent; padding: 2px 6px; font-weight: 600; }
@@ -855,6 +857,9 @@ QPushButton#chatPillText:pressed { background: @chatChip; }
 /* The pinned proposal's Accept and Reject, a size up: 36px, round ends. */
 QFrame#proposalBox QPushButton#chatPillFilled,
 QFrame#proposalBox QPushButton#chatPillTonal { border-radius: 18px; min-height: 36px; max-height: 36px; padding: 0 18px; }
+/* In a narrow panel they share their row with Script, a little tighter. */
+QFrame#proposalBox[narrow="true"] QPushButton#chatPillFilled,
+QFrame#proposalBox[narrow="true"] QPushButton#chatPillTonal { padding: 0 14px; }
 /* The compact bar's, a little tighter, so its summary keeps room beside them. */
 QFrame#proposalBar QPushButton#chatPillFilled,
 QFrame#proposalBar QPushButton#chatPillTonal { padding: 0 12px; }

@@ -68,13 +68,25 @@ public:
         setAttribute(Qt::WA_TransparentForMouseEvents);
         hide();
     }
+    // How far its ramp runs in from its open edge; 0 covers it all, so a
+    // chip that does not fit whole is hidden rather than half shown.
+    void setRamp(int ramp) {
+        if (ramp == m_ramp) return;
+        m_ramp = ramp;
+        update();
+    }
+    int ramp() const { return m_ramp; }
 
 protected:
     void paintEvent(QPaintEvent *) override {
         const QColor surface = editorTheme().chatSurface;
         QColor clear = surface;
         clear.setAlpha(0);
-        const double ramp = std::clamp(double(ChatPanel::kChipFadeWidth) / std::max(1, width()), 0.0, 1.0);
+        if (m_ramp <= 0) {
+            QPainter(this).fillRect(rect(), surface);
+            return;
+        }
+        const double ramp = std::clamp(double(m_ramp) / std::max(1, width()), 0.0, 1.0);
         QLinearGradient fade(0, 0, width(), 0);
         if (m_leading) {
             fade.setColorAt(0, surface);
@@ -90,6 +102,7 @@ protected:
 
 private:
     bool m_leading;
+    int m_ramp = ChatPanel::kChipFadeWidth;
 };
 
 // The composer's underline: a hairline at rest, two points of the accent
@@ -123,8 +136,11 @@ protected:
 class ElidedLabel final : public QLabel {
 public:
     explicit ElidedLabel(QWidget *parent = nullptr) : QLabel(parent) { setTextFormat(Qt::PlainText); }
-    void setFullText(const QString &text) {
+    // `fallback` (shorter) replaces the text while the label has less than
+    // ChatPanel::kBarSummaryRoom for it.
+    void setFullText(const QString &text, const QString &fallback = QString()) {
         m_full = text;
+        m_fallback = fallback;
         elide();
     }
 
@@ -136,10 +152,13 @@ protected:
 
 private:
     void elide() {
-        const QString shown = fontMetrics().elidedText(m_full, Qt::ElideRight, std::max(0, contentsRect().width()));
+        const int room = std::max(0, contentsRect().width());
+        const QString full = !m_fallback.isEmpty() && room < ChatPanel::kBarSummaryRoom ? m_fallback : m_full;
+        const QString shown = fontMetrics().elidedText(full, Qt::ElideRight, room);
         if (shown != text()) setText(shown);
     }
     QString m_full;
+    QString m_fallback;
 };
 
 class PinGlyph final : public QWidget {
@@ -294,13 +313,23 @@ QRect ProposalChangeRow::detailRect() const {
     QFont font = this->font();
     font.setPixelSize(12);
     font.setFeature(QFont::Tag("tnum"), 1);
-    const int wide = std::min(QFontMetrics(font).horizontalAdvance(m_change.detail) + 1, width() / 2);
+    QFont description = this->font();
+    description.setPixelSize(13);
+    // The description first: the detail takes what it leaves, down to
+    // kMinDetail (ending in an ellipsis). Where even that would not keep the
+    // description whole, the detail stays whole and the description is cut,
+    // so a row never has both cut.
+    const int natural = QFontMetrics(font).horizontalAdvance(m_change.detail) + 1;
+    const int words = QFontMetrics(description).horizontalAdvance(m_change.description) + 1;
+    const int room = std::max(0, width() - kTextLeft - kDetailGap);
+    const int least = std::min(natural, kMinDetail);
+    const int wide = words + least <= room ? std::min(natural, room - words) : std::min(natural, std::max(least, room / 2));
     return QRect(width() - wide, 0, wide, height());
 }
 
 QRect ProposalChangeRow::descriptionRect() const {
-    const int left = 16 + 6;
-    return QRect(left, 0, std::max(0, detailRect().left() - 8 - left), height());
+    const int left = kTextLeft;
+    return QRect(left, 0, std::max(0, detailRect().left() - kDetailGap - left), height());
 }
 
 void ProposalChangeRow::paintEvent(QPaintEvent *) {
@@ -314,15 +343,19 @@ void ProposalChangeRow::paintEvent(QPaintEvent *) {
     const QRect text = descriptionRect();
     const QString shown = QFontMetrics(description).elidedText(m_change.description, Qt::ElideRight, text.width());
     painter.drawText(text, Qt::AlignLeft | Qt::AlignVCenter, shown);
-    setToolTip(shown == m_change.description ? QString() : m_change.description);
-    if (m_change.detail.isEmpty()) return;
-    QFont detail = font();
-    detail.setPixelSize(12);
-    detail.setFeature(QFont::Tag("tnum"), 1);
-    painter.setFont(detail);
-    painter.setPen(theme.chatSecondary);
-    const QRect at = detailRect();
-    painter.drawText(at, Qt::AlignRight | Qt::AlignVCenter, QFontMetrics(detail).elidedText(m_change.detail, Qt::ElideRight, at.width()));
+    QString detailShown;
+    if (!m_change.detail.isEmpty()) {
+        QFont detail = font();
+        detail.setPixelSize(12);
+        detail.setFeature(QFont::Tag("tnum"), 1);
+        painter.setFont(detail);
+        painter.setPen(theme.chatSecondary);
+        const QRect at = detailRect();
+        detailShown = QFontMetrics(detail).elidedText(m_change.detail, Qt::ElideRight, at.width());
+        painter.drawText(at, Qt::AlignRight | Qt::AlignVCenter, detailShown);
+    }
+    const bool cut = shown != m_change.description || detailShown != m_change.detail;
+    setToolTip(!cut ? QString() : m_change.detail.isEmpty() ? m_change.description : m_change.description + QStringLiteral(" · ") + m_change.detail);
 }
 
 // ---- SuggestionButton -----------------------------------------------------
@@ -576,9 +609,27 @@ ChatExpander::ChatExpander(QWidget *parent) : QAbstractButton(parent) {
 }
 
 QSize ChatExpander::sizeHint() const {
-    // A chevron, 6 points, then the label, in a 28-point pill.
+    // A chevron, 6 points, then the label, in a 28-point pill; compact, the
+    // chevron at its leading edge, 4 points, the label, 4 points.
+    if (m_compact) return {12 + 4 + fontMetrics().horizontalAdvance(text()) + 4, 28};
     return {10 + 12 + 6 + fontMetrics().horizontalAdvance(text()) + 12, 28};
 }
+
+QSize ChatExpander::minimumSizeHint() const { return m_compact ? QSize(20, 28) : sizeHint(); }
+
+void ChatExpander::setCompact(bool compact) {
+    if (m_compact == compact) return;
+    m_compact = compact;
+    QFont face = font();
+    face.setPixelSize(compact ? 12 : 13);
+    face.setWeight(compact ? QFont::Medium : QFont::DemiBold);
+    setFont(face);
+    setSizePolicy(compact ? QSizePolicy::Preferred : QSizePolicy::Minimum, QSizePolicy::Fixed);
+    updateGeometry();
+    update();
+}
+
+bool ChatExpander::labelShown() const { return !m_compact || width() >= sizeHint().width(); }
 
 void ChatExpander::paintEvent(QPaintEvent *) {
     const EditorTheme &theme = editorTheme();
@@ -591,12 +642,15 @@ void ChatExpander::paintEvent(QPaintEvent *) {
     }
     const QColor ink = theme.chatExpander;
     // The chevron points down while folded and up while open.
-    const QPointF c(10 + 6, height() / 2.0);
+    const double lead = m_compact ? 0.0 : 10.0;
+    const QPointF c(lead + 6, height() / 2.0);
     const qreal turn = isChecked() ? -1.0 : 1.0;
     painter.setPen(QPen(ink, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
     painter.drawPolyline(QPolygonF{c + QPointF(-4.5, -2.25 * turn), c + QPointF(0, 2.25 * turn), c + QPointF(4.5, -2.25 * turn)});
+    if (!labelShown()) return;
     painter.setFont(font());
-    painter.drawText(QRectF(10 + 12 + 6, 0, width() - 28, height()), Qt::AlignLeft | Qt::AlignVCenter, text());
+    const double textLeft = lead + 12 + (m_compact ? 4 : 6);
+    painter.drawText(QRectF(textLeft, 0, width() - textLeft, height()), Qt::AlignLeft | Qt::AlignVCenter, text());
 }
 
 // ---- CommentRow -----------------------------------------------------------
@@ -887,7 +941,9 @@ ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
     m_content->setObjectName(QStringLiteral("chatContent"));
     m_list = new QVBoxLayout(m_content);
     // The first comment 16 points under the header, as a comments panel's.
-    m_list->setContentsMargins(kSidePadding, 16, kSidePadding, kListBottom);
+    // Its foot is the view's: the view stops kListBottom over the chips or
+    // the composer, so rows are cut there at every scroll position.
+    m_list->setContentsMargins(kSidePadding, 16, kSidePadding, 0);
     m_list->setSpacing(16);
     // The pinned proposal heads the list and scrolls away with it, as a
     // pinned comment does.
@@ -915,6 +971,7 @@ ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
     m_scroll->setWidget(m_content);
     m_content->installEventFilter(this);
     outer->addWidget(m_scroll, 1);
+    outer->addSpacing(kListBottom);
     // New output keeps the latest in view, unless the reader scrolled away.
     QScrollBar *bar = m_scroll->verticalScrollBar();
     connect(bar, &QScrollBar::rangeChanged, this, [this](int, int maximum) {
@@ -1042,6 +1099,7 @@ QFrame *ChatPanel::buildProposal() {
     m_proposalExpander->setText(QStringLiteral("Script"));
     m_proposalExpander->setToolTip(QStringLiteral("Show the script and the document diff"));
     line->addWidget(m_proposalExpander, 0, Qt::AlignVCenter);
+    m_proposalLine = line;
     column->addLayout(line);
     // The first few changes, one row each: glyph, description, detail.
     m_proposalChanges = new QWidget;
@@ -1070,6 +1128,7 @@ QFrame *ChatPanel::buildProposal() {
     buttons->setContentsMargins(0, 0, 0, 0);
     buttons->setSpacing(8);
     buttons->addStretch(1);
+    m_proposalButtons = buttons;
     m_reject = pill(QStringLiteral("Reject"), "chatPillTonal", kPillHeight);
     m_accept = pill(QStringLiteral("Accept"), "chatPillFilled", kPillHeight);
     // The compact bar's pills follow these ones' state.
@@ -1114,10 +1173,13 @@ QFrame *ChatPanel::buildProposalBar() {
     return bar;
 }
 
-void ChatPanel::setProposalSummary(const QString &summary, const QString &compact) {
+void ChatPanel::setProposalSummary(const QString &summary, const QString &compact, const QString &count) {
+    m_summaryFull = summary;
+    m_summaryShort = compact;
     m_proposalSummary->setText(summary);
+    placeProposalExpander();
     const QString bar = compact.isEmpty() ? summary : compact;
-    static_cast<ElidedLabel *>(m_proposalBarSummary)->setFullText(bar);
+    static_cast<ElidedLabel *>(m_proposalBarSummary)->setFullText(bar, count);
     m_proposalBarSummary->setToolTip(summary);
 }
 
@@ -1349,7 +1411,45 @@ void ChatPanel::paintEvent(QPaintEvent *) {
 void ChatPanel::resizeEvent(QResizeEvent *) {
     m_resizeHandle->setGeometry(0, kRadius, 6, std::max(0, height() - 2 * kRadius));
     m_resizeHandle->raise();
+    placeProposalExpander();
     fitProposalDiff();
+}
+
+void ChatPanel::placeProposalExpander() {
+    // In a narrow panel (beside a laptop) "Script" would take the end of the
+    // summary's line and wrap it: it moves to the start of the pills' row,
+    // a text button level with Reject and Accept (which tighten a little),
+    // and the summary gets the whole column, without its count (the rows
+    // under it count the changes), so it keeps one line.
+    // Only once the stage has placed it (an unplaced panel's width means nothing).
+    const bool narrow = testAttribute(Qt::WA_Resized) && width() < kNarrowProposal;
+    const QString summary = narrow && !m_summaryShort.isEmpty() ? m_summaryShort : m_summaryFull;
+    if (m_proposalSummary->text() != summary) m_proposalSummary->setText(summary);
+    m_proposalSummary->setToolTip(summary == m_summaryFull ? QString() : m_summaryFull);
+    if (m_proposal->property("narrow").toBool() != narrow) {
+        m_proposal->setProperty("narrow", narrow);
+        for (QPushButton *pill : {m_accept, m_reject}) {
+            repolish(pill);
+            // Their padding changed: they measure themselves afresh.
+            QEvent change(QEvent::StyleChange);
+            QCoreApplication::sendEvent(pill, &change);
+            pill->updateGeometry();
+        }
+    }
+    const bool inRow = m_proposalButtons->indexOf(m_proposalExpander) >= 0;
+    if (inRow == narrow) return;
+    if (narrow) {
+        // [Script, taking the slack, aligned left][Reject][Accept].
+        m_proposalLine->removeWidget(m_proposalExpander);
+        delete m_proposalButtons->takeAt(0); // the stretch before the pills
+        m_proposalExpander->setCompact(true);
+        m_proposalButtons->insertWidget(0, m_proposalExpander, 1, Qt::AlignLeft | Qt::AlignVCenter);
+    } else {
+        m_proposalButtons->removeWidget(m_proposalExpander);
+        m_proposalButtons->insertStretch(0, 1);
+        m_proposalExpander->setCompact(false);
+        m_proposalLine->addWidget(m_proposalExpander, 0, Qt::AlignVCenter);
+    }
 }
 
 void ChatPanel::fitProposalDiff() {
@@ -1428,8 +1528,43 @@ void ChatPanel::updateChipRow() {
     // runs kChipFadeWidth in from it.
     const int inset = kSidePadding - 8;
     const int fadeWidth = inset + kChipPager + kChipFadeWidth;
-    m_chipFadeLeft->setGeometry(0, top, fadeWidth, kChipHeight);
-    m_chipFadeRight->setGeometry(m_chips->width() - fadeWidth, top, fadeWidth, kChipHeight);
+    // Only chips that fit whole show between the pagers: each end's cover
+    // starts at the first chip that does not (8 points clear of the pager),
+    // opaque, so no part of a chip shows through it. A chip too wide to fit
+    // whole even alone keeps the gradient instead.
+    int leftCover = fadeWidth;
+    int rightCover = m_chips->width() - fadeWidth;
+    int leftRamp = kChipFadeWidth;
+    int rightRamp = kChipFadeWidth;
+    {
+        const int openLeft = back ? inset + kChipPager + 8 : 0;
+        const int openRight = forward ? m_chips->width() - inset - kChipPager - 8 : m_chips->width();
+        QList<QRect> placed;
+        for (int index = 0; index < flow->count(); ++index)
+            if (QWidget *chip = flow->itemAt(index)->widget(); chip && !chip->isHidden()) placed << chip->geometry();
+        bool whole = false;
+        for (const QRect &chip : std::as_const(placed)) whole = whole || (chip.left() >= openLeft && chip.right() < openRight);
+        if (whole) {
+            if (forward)
+                for (const QRect &chip : std::as_const(placed))
+                    if (chip.right() >= openRight && chip.left() < m_chips->width()) {
+                        rightCover = std::clamp(chip.left(), openLeft, openRight);
+                        rightRamp = 0;
+                        break;
+                    }
+            if (back)
+                for (auto it = placed.crbegin(); it != placed.crend(); ++it)
+                    if (it->left() < openLeft && it->right() >= 0) {
+                        leftCover = std::clamp(it->right() + 1, openLeft, openRight);
+                        leftRamp = 0;
+                        break;
+                    }
+        }
+    }
+    static_cast<ChipFade *>(m_chipFadeLeft)->setRamp(leftRamp);
+    static_cast<ChipFade *>(m_chipFadeRight)->setRamp(rightRamp);
+    m_chipFadeLeft->setGeometry(0, top, leftCover, kChipHeight);
+    m_chipFadeRight->setGeometry(rightCover, top, m_chips->width() - rightCover, kChipHeight);
     m_chipBack->move(inset, top + (kChipHeight - kChipPager) / 2);
     m_chipForward->move(m_chips->width() - inset - kChipPager, top + (kChipHeight - kChipPager) / 2);
     m_chipFadeLeft->setVisible(back);

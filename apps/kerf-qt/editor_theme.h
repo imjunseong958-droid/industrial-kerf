@@ -58,6 +58,10 @@ enum class ClipKind { Video, Audio, Music, Generator, Caption };
 // The kind of `clip` on `track`, as the snapshot describes them (track
 // `type` and `name`, clip `kind`). An empty clip classifies the track.
 ClipKind clipKind(const QJsonObject &track, const QJsonObject &clip = {});
+// The kind a track's header stands for: its first clip's, so a picture
+// track of titles reads as titles, else the track's own. The timeline's
+// header bar and the Inspector's track list both use it.
+ClipKind trackKind(const QJsonObject &track);
 
 // Every colour the editor draws, by role. The application style sheet is
 // generated from these, and painted widgets read them at paint time from
