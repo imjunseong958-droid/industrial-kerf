@@ -620,15 +620,13 @@ void InspectorSlider::mousePressEvent(QMouseEvent *event) {
     if (event->button() != Qt::LeftButton || !isEnabled()) return;
     m_dragging = true;
     m_start = m_value;
-    // On the knob: it follows the pointer. Elsewhere: nothing moves until
-    // the pointer does, then the knob moves by as much.
-    const double x = event->position().x();
-    m_relative = std::abs(x - knobCenter().x()) > kGrab;
-    m_pressX = x;
+    // Nothing moves until the pointer does, then the knob moves by as much,
+    // wherever the press began: grabbing the knob off its centre does not
+    // jump the value by the offset.
+    m_pressX = event->position().x();
     m_pressKnob = knobCenter().x();
-    // With ⌥ held from the start, fine travel from where the knob is.
+    // With ⌥ held from the start, fine travel.
     m_fine = event->modifiers().testFlag(Qt::AltModifier);
-    if (m_fine) m_relative = true;
 }
 
 double InspectorSlider::dragValue(double x, Qt::KeyboardModifiers modifiers) {
@@ -637,12 +635,11 @@ double InspectorSlider::dragValue(double x, Qt::KeyboardModifiers modifiers) {
         // ⌥ pressed or let go mid-drag: on from where the knob is, at the
         // new rate.
         m_fine = fine;
-        m_relative = true;
         m_pressX = x;
         m_pressKnob = knobCenter().x();
     }
     const double scale = m_fine ? 1.0 / kFine : 1.0;
-    return valueAt(m_relative ? m_pressKnob + (x - m_pressX) * scale : x, scale);
+    return valueAt(m_pressKnob + (x - m_pressX) * scale, scale);
 }
 
 void InspectorSlider::mouseMoveEvent(QMouseEvent *event) {

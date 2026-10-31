@@ -2288,12 +2288,17 @@ private slots:
         QCOMPARE(released.size(), 1);
         QVERIFY(std::abs(slider.knobCenter().x() - (knob + 10.0)) < 0.5);
         QCOMPARE(released.constLast().at(1).toDouble(), 50.0);
-        // A press on the knob takes it: it follows the pointer.
+        // A press on the knob off its centre: the first move does not jump
+        // the value by the offset; the knob moves by the pointer's travel.
         const double at = slider.knobCenter().x();
-        mouse(&slider, QEvent::MouseButtonPress, QPointF(at + 2, 12));
+        const double grabbed = slider.value();
+        mouse(&slider, QEvent::MouseButtonPress, QPointF(at + 5, 12));
+        mouse(&slider, QEvent::MouseMove, QPointF(at + 4, 12));
+        QVERIFY2(std::abs(slider.knobCenter().x() - (at - 1.0)) < 0.5, qPrintable(QString::number(slider.knobCenter().x() - at)));
+        QVERIFY(slider.value() < grabbed);
         mouse(&slider, QEvent::MouseMove, QPointF(at - 20, 12));
         mouse(&slider, QEvent::MouseButtonRelease, QPointF(at - 20, 12));
-        QVERIFY(std::abs(slider.knobCenter().x() - (at - 20.0)) < 0.5);
+        QVERIFY(std::abs(slider.knobCenter().x() - (at - 25.0)) < 0.5);
         QCOMPARE(released.size(), 2);
         // The fill runs from the origin to the knob's centre, never past it;
         // at the origin there is none.
@@ -7180,6 +7185,20 @@ private slots:
                      qPrintable(QStringLiteral("at %1: %2").arg(width).arg(shown.join(QStringLiteral(" | ")))));
         }
         QVERIFY2(cases > 0, "no width breaks the name as written");
+        // Selected and copied with ⌘C, the text lands on the clipboard as
+        // written, without the invisible break hints.
+        QApplication::clipboard()->clear();
+        QTextDocument shown;
+        shown.setHtml(body->text());
+        body->setSelection(0, int(shown.characterCount()) - 1);
+        QVERIFY(body->hasSelectedText());
+        QVERIFY(body->selectedText().contains(QChar(0x2060)));
+        QKeyEvent override(QEvent::ShortcutOverride, Qt::Key_C, Qt::ControlModifier);
+        QCoreApplication::sendEvent(body, &override);
+        QVERIFY(override.isAccepted());
+        QKeyEvent copy(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier);
+        QCoreApplication::sendEvent(body, &copy);
+        QCOMPARE(QApplication::clipboard()->text(), text);
     }
 
     void chatEdgesLeaveNoSlivers() {

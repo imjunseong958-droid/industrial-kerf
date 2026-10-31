@@ -139,11 +139,10 @@ private:
 // A slider paired with a ScrubField (the field is the source of truth): a
 // 4pt groove filled in the neutral ink from its origin (the default, or the
 // centre of a bipolar range) to the knob, with a detent tick at the
-// default the knob snaps to within 4 points. A gain fader maps its travel
-// so 0 dB sits at 75%. A press on the knob (within kGrab of it) takes it;
-// a press elsewhere on the groove does not jump the value, but a drag from
-// there moves it by as much as the pointer moves, so a stray click never
-// changes anything.
+// default the knob catches on exactly one pointer pixel. A gain fader maps
+// its travel so 0 dB sits at 75%. A press never jumps the value, on the
+// knob or anywhere on the groove: a drag moves the knob by as much as the
+// pointer moves, so a stray click or an off-centre grab changes nothing.
 class InspectorSlider final : public QWidget {
     Q_OBJECT
     friend class EditorTest;
@@ -217,11 +216,10 @@ private:
     bool m_mixed = false;
     bool m_dimmed = false;
     bool m_dragging = false;
-    // Where the press began and the knob was then, and whether it began
-    // away from the knob (the knob then moves by the pointer's travel).
+    // Where the press began and the knob was then; the knob moves by the
+    // pointer's travel from there.
     double m_pressX = 0.0;
     double m_pressKnob = 0.0;
-    bool m_relative = false;
     // ⌥ held: the knob moves by a tenth of the pointer's travel.
     bool m_fine = false;
 };

@@ -339,8 +339,8 @@ Inspector takes no keyboard focus, and Return or Esc after typing (or Esc
 anywhere in it) hands the keys back to the timeline, so Space and J/K/L keep
 working while you nudge values. Every row shares one grid (76 pt labels, 72 pt
 value fields, 84 pt sliders at the 300-point column, controls ending at one
-edge); a click on a slider's groove away from its knob changes nothing, and a
-drag from there moves the knob by as much as the pointer moves (⌥ ÷10). The
+edge); a click on a slider changes nothing, and a drag moves the knob by as
+much as the pointer moves, wherever it was grabbed (⌥ ÷10). The
 default catches the knob only on the one pixel nearest it, so every value next
 to it can still be dragged to; a double-click on the knob resets it. A slider's
 default is a 1-point tick; under the knob its ends show above and below it, and
@@ -426,8 +426,8 @@ under it while the list is scrolled away from its top. A sliver is never left
 at either edge, and under the top one a line of text, or a text button's
 words (Copy, Ask again, "2 steps"), shows only with its capitals' tops (a name
 cut through them would read as another word). A file name in a comment wraps
-as one word, never at its hyphen. A pending proposal is
-pinned at the top of the list ("Pinned by Kerf") and scrolls away with it;
+as one word, never at its hyphen, and selected text copies as written. A
+pending proposal is pinned at the top of the list ("Pinned by Kerf") and scrolls away with it;
 when one arrives the list shows it from its head (following the latest again
 once you scroll or send). It lists its changes in words, a row each with a
 glyph and a detail ("Trim fisher-close.mov — end −1.5 s", "Remove

@@ -5,11 +5,14 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QComboBox>
+#include <QContextMenuEvent>
 #include <QEnterEvent>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLinearGradient>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -69,6 +72,68 @@ QString keepNamesWhole(const QString &text) {
     }
     out += text.mid(from);
     return out;
+}
+
+// The text without the invisible breaks wrappable() and keepNamesWhole()
+// put in, as it should land on the clipboard.
+QString withoutBreakHints(QString text) {
+    text.remove(QChar(0x200B));
+    text.remove(QChar(0x2060));
+    return text;
+}
+
+// Selected comment text copies as it was written: ⌘C and the context menu's
+// Copy take the selection without the break hints, so a file name pasted
+// into Search media, Finder or a terminal still matches.
+class CleanCopy final : public QObject {
+public:
+    using QObject::QObject;
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override {
+        auto *body = qobject_cast<QLabel *>(watched);
+        if (!body) return false;
+        if (event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress) {
+            if (!static_cast<QKeyEvent *>(event)->matches(QKeySequence::Copy)) return false;
+            if (event->type() == QEvent::ShortcutOverride) {
+                event->accept();
+                return true;
+            }
+            copy(body);
+            return true;
+        }
+        if (event->type() == QEvent::ContextMenu) {
+            QMenu menu(body);
+            QAction *copyAction = menu.addAction(QObject::tr("Copy"));
+            copyAction->setEnabled(body->hasSelectedText());
+            QAction *all = menu.addAction(QObject::tr("Select All"));
+            QAction *chosen = menu.exec(static_cast<QContextMenuEvent *>(event)->globalPos());
+            if (chosen == copyAction) copy(body);
+            else if (chosen == all) selectAll(body);
+            return true;
+        }
+        return false;
+    }
+
+public:
+    // The whole text selected; rich text counts its shown characters, not
+    // its markup.
+    static void selectAll(QLabel *body) {
+        QTextDocument shown;
+        if (body->textFormat() == Qt::RichText) shown.setHtml(body->text());
+        else shown.setPlainText(body->text());
+        body->setSelection(0, int(shown.characterCount()) - 1);
+    }
+
+private:
+    static void copy(const QLabel *body) {
+        if (body->hasSelectedText()) QApplication::clipboard()->setText(withoutBreakHints(body->selectedText()));
+    }
+};
+
+void copiesCleanly(QLabel *body) {
+    body->setContextMenuPolicy(Qt::DefaultContextMenu);
+    body->installEventFilter(new CleanCopy(body));
 }
 
 // A comment's text as the row shows it: wrappable, file names kept whole, on
@@ -790,6 +855,7 @@ CommentRow::CommentRow(Kind kind, const QString &text, const QDateTime &time, QW
     m_body->setText(bodyMarkup(text));
     m_body->setWordWrap(true);
     m_body->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    copiesCleanly(m_body);
     m_body->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_body->setVisible(!text.isEmpty());
     column->addWidget(m_body);
@@ -856,6 +922,7 @@ void CommentRow::addReply(const QString &text) {
     QLabel *body = label(wrappable(text.simplified()), "chatReplyText");
     body->setWordWrap(true);
     body->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    copiesCleanly(body);
     body->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     layout->addWidget(body, 1);
     m_replyLayout->addWidget(reply);
