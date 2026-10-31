@@ -1077,7 +1077,7 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
             p.drawRect(QRectF(c.x() - 4, c.y() - 2, 8, 6));
         } else if (field == QStringLiteral("muted")) {
             QFont mute = font();
-            mute.setPixelSize(10);
+            mute.setPixelSize(11);
             mute.setWeight(QFont::DemiBold);
             p.setFont(mute);
             p.drawText(box, Qt::AlignCenter, QStringLiteral("M"));
@@ -1105,7 +1105,7 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     if (!detailed) return;
 
     QFont metaFont = nameFont;
-    metaFont.setPixelSize(10);
+    metaFont.setPixelSize(11);
     metaFont.setWeight(QFont::Normal);
     p.setFont(metaFont);
     const QString count = clips.size() == 1 ? QStringLiteral("1 clip") : QStringLiteral("%1 clips").arg(clips.size());
@@ -1203,7 +1203,7 @@ void TimelineWidget::paintProposal(QPainter &p, int row, const QJsonObject &trac
         // A clip it adds is named, in the agent's purple, as clips are.
         if (named) {
             QFont nameFont = font();
-            nameFont.setPixelSize(10);
+            nameFont.setPixelSize(11);
             nameFont.setWeight(QFont::DemiBold);
             p.setFont(nameFont);
             p.setPen(theme.assistantText);
@@ -1239,7 +1239,7 @@ int TimelineWidget::headerControlSize(int rowHeight) {
 
 QFont TimelineWidget::badgeFont() const {
     QFont badge = font();
-    badge.setPixelSize(10);
+    badge.setPixelSize(11);
     badge.setWeight(QFont::DemiBold);
     return badge;
 }
@@ -1379,9 +1379,9 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
                               !clip.value(QStringLiteral("props")).toObject().isEmpty();
         if (effected && rect.width() > 64.0) {
             QFont fxFont = font();
-            fxFont.setPixelSize(8);
-            fxFont.setWeight(QFont::Bold);
-            const QRectF fx(textRight - 16, labelBand.center().y() - 5.0, 16, 10);
+            fxFont.setPixelSize(11);
+            fxFont.setWeight(QFont::DemiBold);
+            const QRectF fx(textRight - 20, labelBand.center().y() - 6.0, 20, 12);
             p.fillRect(fx, theme.clipFxBadge);
             p.setFont(fxFont);
             p.setPen(theme.clipFxBadgeText);
@@ -1389,7 +1389,7 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
             textRight = fx.left() - 4;
         }
         QFont nameFont = font();
-        nameFont.setPixelSize(10);
+        nameFont.setPixelSize(11);
         nameFont.setWeight(QFont::DemiBold);
         p.setFont(nameFont);
         QString label = clipName(clip);
@@ -1472,7 +1472,7 @@ void TimelineWidget::paintRuler(QPainter &p, const QRect &dirty, int top) {
     p.fillRect(QRect(band.left(), top + kRulerHeight - 1, band.width(), 1), theme.divider);
 
     QFont font(QStringLiteral("Menlo"));
-    font.setPixelSize(9);
+    font.setPixelSize(11);
     font.setStyleHint(QFont::Monospace);
     p.setFont(font);
     const double pps = pixelsPerSecond();
@@ -1615,7 +1615,7 @@ void TimelineWidget::paintDragReadout(QPainter &p) {
              timelineTimecode(std::abs(delta), m_fps));
     QFont font(QStringLiteral("Menlo"));
     font.setStyleHint(QFont::Monospace);
-    font.setPixelSize(10);
+    font.setPixelSize(11);
     const QFontMetrics metrics(font);
     const qreal x = timeToX(m_previewTime);
     QRectF box(0, 0, metrics.horizontalAdvance(text) + 14, 18);

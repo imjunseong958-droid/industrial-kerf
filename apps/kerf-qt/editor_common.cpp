@@ -275,6 +275,13 @@ QString popUpChevronsImagePath(const QColor &color) {
                           [&color](QPainter &painter) { drawUpDownChevrons(painter, QPointF(5, 7), color, 3); });
 }
 
+QString checkMarkImagePath(const QColor &color) {
+    return glyphImagePath(colorKey("check", color), QSize(14, 14), [&color](QPainter &painter) {
+        painter.setPen(QPen(color, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.drawPolyline(QPolygonF{{3.6, 7.3}, {6.0, 9.7}, {10.6, 4.6}});
+    });
+}
+
 QString closeMarkImagePath(const QColor &color) {
     return glyphImagePath(colorKey("close", color), QSize(12, 12), [&color](QPainter &painter) {
         // Through pixel centres, so the strokes are solid even at 1x.

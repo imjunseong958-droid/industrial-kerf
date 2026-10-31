@@ -4,13 +4,8 @@
 #include <QApplication>
 #include <QEvent>
 #include <QGuiApplication>
-#include <QDir>
 #include <QHash>
-#include <QImage>
-#include <QPainter>
-#include <QPolygonF>
 #include <QPointer>
-#include <QTemporaryDir>
 #include <QStyleHints>
 #include <QWidget>
 
@@ -21,17 +16,9 @@ namespace kerf {
 
 namespace {
 
-QColor rgba(int r, int g, int b, int a) { return QColor(r, g, b, a); }
-
-// `color` moved towards white (on a dark `background`) or black (on a light
-// one) until it reads at `ratio`.
-QColor readableOn(const QColor &color, const QColor &background, qreal ratio, int steps = 20) {
-    const QColor target = background.lightness() < 128 ? QColor(Qt::white) : QColor(Qt::black);
-    QColor result = color;
-    for (int step = 1; step <= steps && contrastRatio(result, background) < ratio; ++step)
-        result = mixColor(color, target, qreal(step) / steps);
-    return result;
-}
+// The light or dark value of a token.
+QColor tone(bool dark, const char *light, const char *darkValue) { return cssColor(dark ? darkValue : light); }
+QColor hex(const char *css) { return cssColor(css); }
 
 // The same in 1% steps, for a colour that should move no further than it must.
 QColor justReadableOn(const QColor &color, const QColor &background, qreal ratio) {
@@ -55,8 +42,8 @@ AppearanceState &state() {
     return s;
 }
 
-// Re-applies on palette changes, which is how an accent change arrives
-// (and an appearance change where Qt has no colour scheme to report).
+// Re-applies on palette changes, which is how an appearance change arrives
+// where Qt has no colour scheme to report.
 class PaletteWatcher final : public QObject {
 public:
     using QObject::QObject;
@@ -78,17 +65,6 @@ bool systemIsDark() {
     return QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
 }
 
-QColor systemAccent(bool dark) {
-#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
-    const QString platform = QGuiApplication::platformName();
-    if (platform != QStringLiteral("offscreen") && platform != QStringLiteral("minimal")) {
-        const QColor accent = QGuiApplication::palette().color(QPalette::Accent);
-        if (accent.isValid() && accent.alpha() == 255) return accent;
-    }
-#endif
-    return dark ? QColor("#0a84ff") : QColor("#007aff");
-}
-
 ColorScheme environmentColorScheme() {
     const QByteArray forced = qgetenv("KERF_COLOR_SCHEME").trimmed().toLower();
     if (forced == "light") return ColorScheme::Light;
@@ -98,6 +74,22 @@ ColorScheme environmentColorScheme() {
 
 bool schemeIsDark(ColorScheme scheme) {
     return scheme == ColorScheme::Dark || (scheme == ColorScheme::System && systemIsDark());
+}
+
+QColor readableOn(const QColor &color, const QColor &background, qreal ratio, int steps) {
+    const QColor target = background.lightness() < 128 ? QColor(Qt::white) : QColor(Qt::black);
+    QColor result = color;
+    for (int step = 1; step <= steps && contrastRatio(result, background) < ratio; ++step)
+        result = mixColor(color, target, qreal(step) / steps);
+    return result;
+}
+
+QColor cssColor(const char *css) {
+    const QString name = QString::fromLatin1(css);
+    if (name.size() != 9) return QColor(name);
+    QColor color(name.left(7));
+    color.setAlpha(name.mid(7, 2).toInt(nullptr, 16));
+    return color;
 }
 
 QColor mixColor(const QColor &under, const QColor &over, qreal amount) {
@@ -168,463 +160,312 @@ QColor EditorTheme::marker(const QString &name) const {
     return markerGreen;
 }
 
-EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
+QColor kerfAccent(bool dark) { return dark ? QColor("#c39acb") : QColor("#6a3471"); }
+
+EditorTheme makeEditorTheme(bool dark) {
     EditorTheme t;
     t.dark = dark;
-    const QColor accent = systemAccentColor.isValid() ? systemAccentColor : systemAccent(dark);
-    t.accent = accent;
-    t.accentTop = accent.lighter(112);
-    t.accentPressed = accent.darker(dark ? 120 : 115);
-    t.onAccent = QColor("#ffffff");
-    // White text needs a deeper blue than the accent's own, as in macOS's
-    // selected rows.
-    t.selection = mixColor(accent, Qt::black, dark ? 0.16 : 0.12);
-    // Secondary text on the selection is white held back, as far as it reads.
-    t.onAccentSecondary = readableAlphaOn(rgba(255, 255, 255, 204), t.selection, 4.5);
-    t.selectionText = QColor("#ffffff");
-    t.focusRing = accent;
-    t.focusHalo = accent;
-    t.focusHalo.setAlphaF(0.35);
-    t.menuSelection = accent;
-    t.menuSelectionText = QColor("#ffffff");
-    t.trackToggleOn = accent;
-    t.trackToggleOnGlyph = QColor("#ffffff");
-    t.playhead = accent;
 
-    if (dark) {
-        // The launcher's dark family: #1e1e1e content, #2c2c2e chrome, and
-        // #3a3a3c hairlines.
-        t.window = QColor("#1c1c1e");
-        t.chrome = QColor("#2c2c2e");
-        t.panel = QColor("#1e1e1e");
-        // Inactive tabs sit back on a deeper strip; the current tab is the
-        // lighter one and merges into its panel's body, as in light.
-        t.panelTitle = QColor("#161618");
-        t.panelTitleActive = QColor("#1e1e1e");
-        t.raised = QColor("#2c2c2e");
-        t.group = QColor("#262628");
-        t.groupBorder = QColor("#3a3a3c");
-        t.well = QColor("#1e1e1e");
-        t.dialog = QColor("#1e1e1e");
+    // Kerf's own accent: an aubergine ink on cream, its mauve by lamplight.
+    // The mauve is light, so it carries dark ink, as dark-mode pills do.
+    t.accent = tone(dark, "#6a3471", "#c39acb");
+    t.accentTop = tone(dark, "#7a4381", "#cfa9d6");
+    t.accentPressed = tone(dark, "#562a5c", "#a882b1");
+    t.accentText = t.accent;
+    t.accentTint = tone(dark, "#e2d6d3", "#382d32");
+    t.accentTintPressed = tone(dark, "#d2c7c4", "#2a2226");
+    t.onAccent = tone(dark, "#fbf6ec", "#21161f");
+    t.onAccentSecondary = tone(dark, "#fbf6eca5", "#f4ecdea6");
 
-        t.dockSeparator = QColor("#3a3a3c");
-        t.dockSeparatorHover = QColor("#5e5e62");
-        t.divider = QColor("#3a3a3c");
-        t.borderSubtle = QColor("#333335");
-        t.border = QColor("#48484a");
-        t.borderStrong = QColor("#5e5e62");
+    // Surfaces: book paper in light (the desk a step deeper than the page),
+    // espresso in dark, never pure white or black.
+    t.window = tone(dark, "#e6dece", "#15110e");
+    t.chrome = tone(dark, "#eee7d8", "#241e19");
+    t.panel = tone(dark, "#f4eee2", "#1c1713");
+    t.panelTitle = tone(dark, "#e9e1d1", "#17130f");
+    t.panelTitleActive = t.panel;
+    t.raised = tone(dark, "#faf6ee", "#2a231d");
+    t.group = tone(dark, "#ede6d7", "#231d18");
+    t.groupBorder = tone(dark, "#ddd3c0", "#3a3029");
+    t.well = tone(dark, "#f8f4ea", "#19140f");
+    t.dialog = tone(dark, "#f0e9db", "#1f1a15");
 
-        t.text = QColor("#dcdcdf");
-        t.textStrong = QColor("#f5f5f7");
-        t.textSecondary = QColor("#a5a5a8");
-        t.placeholderText = QColor("#98989d");
-        t.textDisabled = QColor("#6e6e73");
-        t.tabInactiveText = QColor("#a5a5a8");
+    // Lines: warm and low-contrast.
+    t.dockSeparator = tone(dark, "#d6ccb9", "#3a3029");
+    t.dockSeparatorHover = tone(dark, "#ab9f8b", "#5f5246");
+    t.divider = tone(dark, "#dcd2bf", "#342b24");
+    t.borderSubtle = tone(dark, "#e4dbcb", "#2e2620");
+    t.border = tone(dark, "#d2c7b3", "#463b32");
+    t.borderStrong = tone(dark, "#a99c87", "#66594c");
 
-        t.selectionInactive = QColor("#464649");
-        t.selectionInactiveText = QColor("#f5f5f7");
-        t.hover = rgba(255, 255, 255, 20);
-        t.pressed = rgba(255, 255, 255, 34);
+    // Text: warm near-black on cream, cream on espresso.
+    t.text = tone(dark, "#2a231d", "#e6dccb");
+    t.textStrong = tone(dark, "#1b1612", "#f4ecde");
+    t.textSecondary = tone(dark, "#675b4f", "#a89a8a");
+    t.placeholderText = tone(dark, "#6c6054", "#a09282");
+    t.textDisabled = tone(dark, "#a89c8c", "#6d6156");
+    t.tabInactiveText = tone(dark, "#62564a", "#a3958a");
 
-        t.field = QColor("#2c2c2e");
-        t.fieldBorder = QColor("#48484a");
-        t.fieldDisabled = QColor("#252527");
-        t.checkFill = QColor("#3a3a3c");
-        t.checkBorder = QColor("#7c7c80");
+    // Selection. In dark it is a quiet deep plum, so dense lists do not glow.
+    t.selection = tone(dark, "#6a3471", "#583863");
+    t.selectionText = tone(dark, "#fbf6ec", "#f4ecde");
+    t.selectionInactive = tone(dark, "#e0d6c3", "#3a3029");
+    t.selectionInactiveText = tone(dark, "#2a231d", "#f4ecde");
+    t.textSelection = tone(dark, "#d8c9d2", "#675363");
+    t.hover = tone(dark, "#4a341e0f", "#ffecd212");
+    t.pressed = tone(dark, "#4a341e1c", "#ffecd220");
 
-        // The launcher's bezels.
-        t.button = QColor("#58585b");
-        t.buttonEdge = QColor("#58585b");
-        t.buttonTop = QColor("#6c6c70");
-        t.buttonBottom = QColor("#4e4e51");
-        t.buttonHover = QColor("#626266");
-        t.buttonPressed = QColor("#6c6c70");
-        t.buttonText = QColor("#f5f5f7");
-        t.buttonDisabled = QColor("#3b3b3d");
-        t.buttonDisabledEdge = QColor("#444447");
-        t.buttonDisabledText = QColor("#8a8a8e");
+    t.field = tone(dark, "#fbf8f1", "#2a231d");
+    t.fieldBorder = tone(dark, "#8b7e6d", "#7a6c5e");
+    t.fieldDisabled = tone(dark, "#f1ebdf", "#221c17");
+    t.focusRing = t.accent;
+    t.focusHalo = t.accent;
+    t.focusHalo.setAlpha(89); // 35%
+    t.checkFill = tone(dark, "#fbf8f1", "#2a231d");
+    t.checkBorder = tone(dark, "#8c7f6e", "#85776a");
 
-        t.menu = QColor("#2c2c2e");
-        t.menuBorder = QColor("#48484a");
-        t.menuText = QColor("#f5f5f7");
-        t.menuSeparator = QColor("#3a3a3c");
+    t.button = tone(dark, "#fbf8f1", "#3a3029");
+    t.buttonEdge = tone(dark, "#3c28142e", "#3a3029");
+    t.buttonTop = tone(dark, "#3c28141a", "#4a3f36");
+    t.buttonBottom = tone(dark, "#3c28144c", "#2e2620");
+    t.buttonHover = tone(dark, "#fdfbf6", "#43382f");
+    t.buttonPressed = tone(dark, "#ebe3d4", "#4a3f36");
+    t.buttonText = tone(dark, "#2a231d", "#f4ecde");
+    t.buttonDisabled = tone(dark, "#f5f0e6", "#2a231d");
+    t.buttonDisabledEdge = tone(dark, "#3c28141e", "#322a23");
+    t.buttonDisabledText = tone(dark, "#a89c8c", "#7d7064");
 
-        t.tooltip = QColor("#2c2c2e");
-        t.tooltipBorder = QColor("#48484a");
-        t.tooltipText = QColor("#f5f5f7");
+    t.menu = tone(dark, "#faf6ee", "#2a231d");
+    t.menuBorder = tone(dark, "#cdc1ac", "#463b32");
+    t.menuText = tone(dark, "#2a231d", "#f4ecde");
+    t.menuSelection = t.selection;
+    t.menuSelectionText = t.selectionText;
+    t.menuSeparator = tone(dark, "#e4dbcb", "#3a3029");
+    t.tooltip = hex("#2f2721");
+    t.tooltipBorder = tone(dark, "#2f2721", "#463b32");
+    t.tooltipText = tone(dark, "#f3ebdd", "#f4ecde");
+    t.scrollHandle = tone(dark, "#3c2a1a8e", "#ffecd26e");
+    t.scrollHandleHover = tone(dark, "#3c2a1abe", "#ffecd2a0");
 
-        t.scrollHandle = rgba(255, 255, 255, 115);
-        t.scrollHandleHover = rgba(255, 255, 255, 160);
+    t.tabText = tone(dark, "#62564a", "#a3958a");
+    t.tabSelected = tone(dark, "#faf6ee", "#3a3029");
+    t.tabSelectedBorder = tone(dark, "#d2c7b3", "#463b32");
+    t.tabSelectedText = tone(dark, "#1b1612", "#f4ecde");
+    t.sliderGroove = tone(dark, "#e2d9c8", "#3a3029");
+    t.sliderGrooveBorder = tone(dark, "#d2c7b3", "#463b32");
+    t.sliderHandle = tone(dark, "#fbf8f1", "#e6dccb");
+    t.sliderHandleBorder = tone(dark, "#8c7f6e", "#8e8072");
+    t.statusBar = tone(dark, "#eee7d8", "#241e19");
+    t.statusText = tone(dark, "#62564a", "#a3958a");
+    t.statusDivider = tone(dark, "#dcd2bf", "#3a3029");
 
-        t.tabText = QColor("#a5a5a8");
-        t.tabSelected = QColor("#3a3a3c");
-        t.tabSelectedBorder = QColor("#48484a");
-        t.tabSelectedText = QColor("#f5f5f7");
+    // Status: oxblood, sienna and moss, inks rather than signal lights.
+    t.error = tone(dark, "#a3302b", "#e8877b");
+    t.errorSurface = tone(dark, "#f5e2d9", "#3a221d");
+    t.errorBorder = tone(dark, "#e2b8aa", "#6c3a31");
+    t.errorText = tone(dark, "#86241f", "#f4bbb0");
+    t.warning = tone(dark, "#9a4a0e", "#e2a062");
+    t.warningSurface = tone(dark, "#f4e6c9", "#2e2620");
+    t.warningBorder = tone(dark, "#e2cc9c", "#3e342c");
+    t.warningText = tone(dark, "#2a231d", "#f4ecded2");
+    t.warningTitle = tone(dark, "#1b1612", "#f4ecde");
+    t.warningGlyph = tone(dark, "#9a4a0e", "#e59a4a");
+    t.success = tone(dark, "#3d6a2e", "#93bf78");
 
-        t.sliderGroove = QColor("#3a3a3c");
-        t.sliderGrooveBorder = QColor("#48484a");
-        t.sliderHandle = QColor("#e8e8ed");
-        t.sliderHandleBorder = QColor("#8e8e93");
+    // Kerf's own surfaces: the chat is a page laid on the desk; its rows have
+    // no boxes (their fills and edges are the page), its marks are the accent.
+    t.assistant = t.accent;
+    t.assistantSurface = tone(dark, "#e9dfd9", "#302729");
+    t.assistantBorder = tone(dark, "#cbb6c0", "#584655");
+    t.assistantText = tone(dark, "#5e2c65", "#d6b6dc");
+    t.assistantHover = tone(dark, "#dacacd", "#42353c");
+    t.chatSurface = tone(dark, "#faf6ee", "#231d18");
+    t.chatText = t.text;
+    t.chatSecondary = t.textSecondary;
+    t.chatChip = tone(dark, "#4a341e12", "#ffecd216");
+    t.chatChipHover = tone(dark, "#4a341e1e", "#ffecd224");
+    t.chatChipText = t.text;
+    t.chatAvatarUser = tone(dark, "#e0d6c3", "#4a3f36");
+    t.chatAvatarUserText = tone(dark, "#3d342c", "#efe6d6");
+    t.chatAvatarKerf = t.accent;
+    t.chatAvatarKerfText = t.onAccent;
+    t.chatExpander = t.accentText;
+    t.chatComposerRule = tone(dark, "#cdc1ac", "#4a3f36");
+    t.chatComposerRuleFocus = t.accent;
+    t.messageUser = t.chatSurface;
+    t.messageUserBorder = t.messageUser;
+    t.messageAgent = t.chatSurface;
+    t.messageAgentBorder = t.messageAgent;
+    t.messageText = t.chatText;
+    t.messageUserRole = t.chatText;
+    t.railButton = tone(dark, "#4a341e14", "#ffecd218");
+    t.railButtonHover = tone(dark, "#4a341e22", "#ffecd226");
+    t.railButtonActive = t.railButton;
+    t.railGlyph = tone(dark, "#2a231d", "#efe6d6");
+    t.railGlyphActive = t.accentText;
+    t.railLabel = tone(dark, "#3d342c", "#ddd2c1");
+    t.pillTonal = tone(dark, "#4a341e14", "#ffecd218");
+    t.pillTonalText = t.text;
 
-        t.statusBar = QColor("#2c2c2e");
-        t.statusText = QColor("#98989d");
-        t.statusDivider = QColor("#3a3a3c");
+    t.glyph = tone(dark, "#3d342c", "#ddd2c1");
+    t.glyphDisabled = tone(dark, "#b3a796", "#64584d");
+    t.toolSelected = tone(dark, "#e2d9c8", "#3a3029");
 
-        t.error = QColor("#ff6961");
-        t.errorSurface = QColor("#3a2426");
-        t.errorBorder = QColor("#7d4045");
-        t.errorText = QColor("#ffb4ae");
-        // Changed on disk: a neutral bar a step lighter than the toolbar it
-        // hangs from; only its triangle is orange.
-        t.warning = QColor("#ff9f5a");
-        t.warningSurface = QColor("#353537");
-        t.warningBorder = QColor("#3a3a3c");
-        t.warningText = rgba(235, 235, 245, 204);
-        t.warningTitle = QColor("#f5f5f7");
-        t.warningGlyph = QColor("#ff9f0a");
-        t.success = QColor("#30d158");
+    // Timeline. Track toggles that are on are a neutral ink plate, not the
+    // accent, so purple stays on Kerf, the playhead, focus and the default action.
+    t.timelineBackground = tone(dark, "#e6dece", "#15110e");
+    t.ruler = tone(dark, "#f8f3ea", "#27211b");
+    t.rulerBottom = tone(dark, "#efe8db", "#231d18");
+    t.rulerTick = tone(dark, "#8a7d6c", "#75685b");
+    t.rulerTickHalf = tone(dark, "#aa9e8c", "#5f5347");
+    t.rulerTickMinor = tone(dark, "#c8bdab", "#4a3f36");
+    t.rulerText = tone(dark, "#62564a", "#ab9e8e");
+    t.rulerCorner = tone(dark, "#f4eee2", "#201a16");
+    t.trackHeader = tone(dark, "#f1eadd", "#251f1a");
+    t.trackHeaderEdge = tone(dark, "#faf6ee", "#2e2620");
+    t.trackHeaderColumn = tone(dark, "#ebe3d4", "#1f1a15");
+    t.trackHeaderText = tone(dark, "#2a231d", "#e6dccb");
+    t.trackHeaderTextDisabled = tone(dark, "#a89c8c", "#75685b");
+    t.trackHeaderDetail = tone(dark, "#62564a", "#a3958a");
+    t.trackResizeGrip = tone(dark, "#8a7d6c", "#8e8072");
+    t.trackBadge = tone(dark, "#e2d9c8", "#3a3029");
+    t.trackBadgeText = tone(dark, "#2a231d", "#efe6d6");
+    t.trackToggle = tone(dark, "#e2d9c8", "#3a3029");
+    t.trackToggleGlyph = tone(dark, "#5a4e43", "#b5a796");
+    t.trackToggleOn = tone(dark, "#5a4e43", "#b5a796");
+    t.trackToggleOnGlyph = tone(dark, "#fbf6ec", "#1f1a15");
+    t.trackLane = tone(dark, "#efe8db", "#201a16");
+    t.trackLaneAlt = tone(dark, "#ebe4d6", "#231d18");
+    t.trackLaneLocked = tone(dark, "#4a341e16", "#ffecd20e");
+    t.trackDivider = tone(dark, "#ddd3c1", "#14100d");
+    t.trackBankDivider = tone(dark, "#b9ad98", "#0c0907");
+    t.headerPreview = tone(dark, "#e2d9c8", "#2a231d");
+    t.headerPreviewBorder = tone(dark, "#c8bdab", "#14100d");
+    t.addLane = tone(dark, "#ebe4d6", "#201a16");
+    t.addLaneButton = tone(dark, "#fbf8f1", "#3a3029");
+    t.addLaneButtonBorder = tone(dark, "#c8bdab", "#463b32");
+    t.addLaneText = tone(dark, "#2a231d", "#f4ecde");
 
-        t.assistant = QColor("#bf5af2");
-        t.assistantSurface = QColor("#34243d");
-        t.assistantBorder = QColor("#64377b");
-        t.assistantText = QColor("#dfacf8");
+    // Clips: muted inks from an old atlas (slate, verdigris, olive, ochre,
+    // umber), each label on its header at 5.5:1 or more. The selected ring is
+    // cream over ink, not a second loud hue.
+    t.clipVideo = dark ? clipStyle("#2a2b2f","#435269","#252d3a","#f4ecde","#989ba1") : clipStyle("#c7c6c2","#475a72","#334152","#fbf6ec","#354456");
+    t.clipAudio = dark ? clipStyle("#252e27","#325b50","#1c322c","#f4ecde","#8ea094") : clipStyle("#c4cabd","#3b6a5d","#2a4c43","#fbf6ec","#2c5046");
+    t.clipMusic = dark ? clipStyle("#2d2c1b","#4b5728","#293016","#f4ecde","#9c9e7e") : clipStyle("#cac8b0","#566428","#3e481d","#fbf6ec","#404b1e");
+    t.clipGenerator = dark ? clipStyle("#3b2b1a","#7a5222","#432d13","#f4ecde","#b69b7a") : clipStyle("#d6c6ad","#875a1d","#614115","#fbf6ec","#654416");
+    t.clipCaption = dark ? clipStyle("#322b25","#5c5248","#332d28","#f4ecde","#a59b8f") : clipStyle("#cec7ba","#675d53","#4a433c","#fbf6ec","#4d463e");
+    t.clipSelectedRing = tone(dark, "#fffbf3", "#fbf4e8");
+    t.clipSelectedRingOuter = tone(dark, "#1b1612", "#0c0907");
+    t.clipTrim = tone(dark, "#1b1612", "#fbf4e8");
+    t.clipHighlight = tone(dark, "#fffaf046", "#fff0dc22");
+    t.clipFxBadge = tone(dark, "#140c0660", "#0000006e");
+    t.clipFxBadgeText = tone(dark, "#fbf6ec", "#f4ecde");
+    t.filmstripSeam = tone(dark, "#140c065a", "#00000078");
+    t.waveCenter = tone(dark, "#140c0628", "#00000046");
+    t.playhead = t.accent;
+    t.playheadHalo = tone(dark, "#fbf8f1", "#0c0907");
+    t.playheadIdle = tone(dark, "#8a7d6c", "#766a5d");
+    t.skimmer = tone(dark, "#2a231dbe", "#f4ecded7");
+    t.skimmerText = tone(dark, "#2a231d", "#f4ecde");
+    t.scrubTrack = tone(dark, "#e2d9c8", "#3a3029");
+    t.inOutRange = tone(dark, "#885d87", "#a180a2");
+    t.snapLine = tone(dark, "#1b1612be", "#fff6e8dc");
+    t.readout = tone(dark, "#faf6eef5", "#241e19f2");
+    t.readoutBorder = tone(dark, "#cdc1ac", "#463b32");
+    t.readoutText = tone(dark, "#2a231d", "#f4ecde");
+    t.dragShadow = hex("#140c0659");
 
-        t.messageUser = QColor("#3a3a3c");
-        t.messageUserBorder = QColor("#48484a");
-        t.messageAgent = QColor("#2c2c2e");
-        t.messageAgentBorder = QColor("#3a3a3c");
-        t.messageText = QColor("#e5e5ea");
-        t.messageUserRole = QColor("#bfbfc4");
+    t.markerRed = tone(dark, "#b23a2e", "#e0675a");
+    t.markerOrange = tone(dark, "#b4561a", "#e0904a");
+    t.markerYellow = tone(dark, "#8a6d0c", "#d8bb58");
+    t.markerGreen = tone(dark, "#4b7a34", "#86b06a");
+    t.markerCyan = tone(dark, "#2f7a7c", "#6db3ad");
+    t.markerBlue = tone(dark, "#3e5f8f", "#7f9cc6");
+    t.markerPurple = tone(dark, "#7a3f86", "#b98bc4");
+    t.markerPink = tone(dark, "#a8406e", "#d986a8");
+    t.markerWhite = tone(dark, "#7f7365", "#e6dccb");
 
-        t.glyph = QColor("#dcdcdf");
-        t.glyphDisabled = QColor("#6e6e73");
-        t.toolSelected = QColor("#3a3a3c");
+    // Proposals are drawn in Kerf's ink.
+    t.proposalAdd = t.accent;
+    t.proposalAddFill = tone(dark, "#6a347126", "#c39acb2e");
+    t.proposalChange = tone(dark, "#5a2c60", "#ceadd5");
+    t.proposalChangeFill = tone(dark, "#5a2c601e", "#ceadd524");
+    t.proposalRemove = tone(dark, "#a3302b", "#e8877b");
+    t.proposalRemoveHatch = tone(dark, "#a3302b6e", "#e8877b96");
+    t.proposalUnderlay = tone(dark, "#fbf8f1d2", "#0c090796");
 
-        t.timelineBackground = QColor("#1c1c1e");
-        t.ruler = QColor("#2c2c2e");
-        t.rulerBottom = QColor("#29292b");
-        t.rulerTick = QColor("#6e6e73");
-        t.rulerTickHalf = QColor("#5e5e62");
-        t.rulerTickMinor = QColor("#48484a");
-        t.rulerText = QColor("#b0b0b5");
-        t.rulerCorner = QColor("#232325");
-        t.trackHeader = QColor("#2a2a2c");
-        t.trackHeaderEdge = QColor("#333335");
-        t.trackHeaderColumn = QColor("#232325");
-        t.trackHeaderText = QColor("#e5e5ea");
-        t.trackHeaderTextDisabled = QColor("#7c7c80");
-        t.trackHeaderDetail = QColor("#9a9a9a");
-        t.trackResizeGrip = QColor("#8e8e93");
-        t.trackBadge = QColor("#3a3a3c");
-        t.trackBadgeText = QColor("#ececec");
-        t.trackToggle = QColor("#3a3a3c");
-        t.trackToggleGlyph = QColor("#aeaeb2");
-        t.trackLane = QColor("#232325");
-        t.trackLaneAlt = QColor("#262628");
-        t.trackLaneLocked = rgba(255, 255, 255, 14);
-        t.trackDivider = QColor("#161618");
-        t.trackBankDivider = QColor("#0e0e10");
-        t.headerPreview = QColor("#2c2c2e");
-        t.headerPreviewBorder = QColor("#161618");
-        t.addLane = QColor("#232325");
-        t.addLaneButton = QColor("#3a3a3c");
-        t.addLaneButtonBorder = QColor("#48484a");
-        t.addLaneText = QColor("#f5f5f7");
+    // Viewers: the stage follows the appearance, as a video site's page does;
+    // the picture card is warm black in both.
+    t.viewerSurround = tone(dark, "#e6dece", "#120e0b");
+    t.viewerCanvas = hex("#0a0807");
+    t.viewerText = hex("#ab9e8e");
+    t.viewerTextDim = hex("#958877");
+    t.viewerGlyph = hex("#b8ab9a");
+    t.viewerGlyphRing = hex("#5f5347");
+    t.viewerGlyphFill = hex("#1a1511");
+    t.viewerCaption = hex("#0e0b09e1");
+    t.viewerCaptionBorder = t.viewerCaption; // No box line around the caption.
+    t.viewerCaptionText = hex("#f4ecde");
+    t.maskOutline = hex("#fffbf3");
+    t.maskOutlineIdle = hex("#fffbf3b3");
+    t.maskShadow = hex("#0000008c");
+    t.maskFill = hex("#fffbf31e");
+    t.maskHandleFill = t.accent;
+    t.maskHandleBorder = hex("#fffbf3");
+    t.maskTag = hex("#00000099");
+    t.maskTagSelected = t.selection;
+    t.maskText = hex("#fffbf3");
 
-        t.clipVideo = clipStyle("#1b2a3c", "#325985", "#0b1622", "#f5f5f7", "#95bae4");
-        t.clipAudio = clipStyle("#17362f", "#246b5d", "#0a1f1b", "#f5f5f7", "#79d8c5");
-        t.clipMusic = clipStyle("#1a321d", "#2f6a37", "#0c1d0e", "#f5f5f7", "#81cf8c");
-        t.clipGenerator = clipStyle("#391d2c", "#863761", "#210d18", "#f5f5f7", "#e9a5c9");
-        // Captions are a neutral role, not gold.
-        t.clipCaption = clipStyle("#2e2e30", "#636366", "#1c1c1e", "#f5f5f7", "#d1d1d6");
-        t.clipSelectedRing = QColor("#ffffff");
-        t.clipSelectedRingOuter = QColor("#000000");
-        t.clipTrim = QColor("#ffffff");
-        t.clipHighlight = rgba(255, 255, 255, 40);
-        t.clipFxBadge = rgba(0, 0, 0, 110);
-        t.clipFxBadgeText = QColor("#ededed");
-        t.filmstripSeam = rgba(0, 0, 0, 120);
-        t.waveCenter = rgba(0, 0, 0, 70);
-        t.playheadHalo = QColor("#000000");
-        t.playheadIdle = QColor("#6e6e73");
-        t.skimmer = rgba(240, 240, 240, 215);
-        t.skimmerText = QColor("#f5f5f7");
-        t.scrubTrack = QColor("#3a3a3c");
-        t.snapLine = rgba(255, 255, 255, 220);
-        t.readout = rgba(28, 28, 30, 240);
-        t.readoutBorder = QColor("#48484a");
-        t.readoutText = QColor("#f5f5f7");
+    t.thumbnail = tone(dark, "#2a231d", "#0e0b09");
+    t.tileEmpty = tone(dark, "#e2d9c8", "#2a231d");
+    t.tileEmptyBorder = tone(dark, "#e2d9c8", "#3a3029");
+    t.tileEmptyText = tone(dark, "#5a4e43", "#a89a8a");
+    t.audioTile = t.clipAudio.fill;
+    t.audioTileGlyph = t.clipAudio.wave;
+    t.cardPlaceholder = tone(dark, "#ebe4d6", "#2a231d");
+    t.cardPlaceholderText = tone(dark, "#5a4e43", "#a89a8a");
+    t.badgeError = hex("#a3302b");
+    t.badgeErrorText = hex("#fbf6ec");
+    t.badgeInfo = hex("#6a3471");
+    t.badgeInfoText = hex("#fbf6ec");
+    t.badgeNeutral = tone(dark, "#140c06a0", "#000000a0");
+    t.badgeNeutralText = tone(dark, "#fbf6ec", "#f4ecde");
 
-        t.markerRed = QColor("#e5534b");
-        t.markerOrange = QColor("#e8913a");
-        t.markerYellow = QColor("#e6c84a");
-        t.markerGreen = QColor("#5fb85f");
-        t.markerCyan = QColor("#4ec4d0");
-        t.markerBlue = QColor("#4f8de0");
-        t.markerPurple = QColor("#a275e0");
-        t.markerPink = QColor("#e078b4");
-        t.markerWhite = QColor("#e8e8e8");
-
-        t.proposalRemove = QColor("#e86060");
-        t.proposalRemoveHatch = rgba(232, 96, 96, 150);
-        t.proposalUnderlay = rgba(0, 0, 0, 140);
-
-        t.thumbnail = QColor("#161618");
-        t.tileEmpty = QColor("#2a2a2e");
-        t.tileEmptyBorder = QColor("#3a3a3e");
-        t.tileEmptyText = QColor("#a1a1a6");
-        t.cardPlaceholder = QColor("#2a2a2e");
-        t.cardPlaceholderText = QColor("#a1a1a6");
-        t.badgeNeutral = rgba(0, 0, 0, 150);
-        t.badgeNeutralText = QColor("#ffffff");
-    } else {
-        t.window = QColor("#ececec");
-        t.chrome = QColor("#f5f5f5");
-        t.panel = QColor("#f6f6f6");
-        t.panelTitle = QColor("#e8e8ea");
-        t.panelTitleActive = QColor("#f6f6f6");
-        t.raised = QColor("#ffffff");
-        t.group = rgba(0, 0, 0, 8);
-        t.groupBorder = rgba(0, 0, 0, 20);
-        t.well = QColor("#ffffff");
-        t.dialog = QColor("#ececec");
-
-        t.dockSeparator = QColor("#d5d5d8");
-        t.dockSeparatorHover = QColor("#aeaeb2");
-        t.divider = QColor("#d5d5d8");
-        t.borderSubtle = QColor("#e3e3e6");
-        t.border = QColor("#d5d5d8");
-        t.borderStrong = QColor("#b4b4b9");
-
-        t.text = QColor("#1d1d1f");
-        t.textStrong = QColor("#000000");
-        // #636366 keeps 4.5:1 on the grey window and group fills, not only on white.
-        t.textSecondary = QColor("#636366");
-        t.placeholderText = QColor("#6e6e73");
-        t.textDisabled = QColor("#a5a5aa");
-        t.tabInactiveText = QColor("#5f5f64");
-
-        t.selectionInactive = QColor("#dcdcdf");
-        t.selectionInactiveText = QColor("#1d1d1f");
-        t.hover = rgba(0, 0, 0, 13);
-        t.pressed = rgba(0, 0, 0, 26);
-
-        t.field = QColor("#ffffff");
-        t.fieldBorder = QColor("#c9c9ce");
-        t.fieldDisabled = QColor("#f5f5f7");
-        t.checkFill = QColor("#ffffff");
-        // 3:1 on the grey dialog and its grouped boxes, not only on white.
-        t.checkBorder = QColor("#808085");
-
-        t.button = QColor("#ffffff");
-        t.buttonEdge = rgba(0, 0, 0, 36);
-        t.buttonTop = rgba(0, 0, 0, 28);
-        t.buttonBottom = rgba(0, 0, 0, 72);
-        t.buttonHover = QColor("#fafafa");
-        t.buttonPressed = QColor("#ebebed");
-        t.buttonText = QColor("#1d1d1f");
-        t.buttonDisabled = QColor("#fafafa");
-        t.buttonDisabledEdge = rgba(0, 0, 0, 24);
-        t.buttonDisabledText = QColor("#a5a5aa");
-
-        t.menu = QColor("#ffffff");
-        t.menuBorder = QColor("#c9c9ce");
-        t.menuText = QColor("#1d1d1f");
-        t.menuSeparator = QColor("#e3e3e6");
-
-        t.tooltip = QColor("#f5f5f7");
-        t.tooltipBorder = QColor("#c9c9ce");
-        t.tooltipText = QColor("#1d1d1f");
-
-        t.scrollHandle = rgba(0, 0, 0, 115);
-        t.scrollHandleHover = rgba(0, 0, 0, 160);
-
-        t.tabText = QColor("#6e6e73");
-        t.tabSelected = QColor("#ffffff");
-        t.tabSelectedBorder = QColor("#d1d1d6");
-        t.tabSelectedText = QColor("#1d1d1f");
-
-        t.sliderGroove = QColor("#e3e3e6");
-        t.sliderGrooveBorder = QColor("#d1d1d6");
-        t.sliderHandle = QColor("#ffffff");
-        t.sliderHandleBorder = QColor("#b4b4b9");
-
-        t.statusBar = QColor("#f5f5f5");
-        // The window's smallest text, so it keeps a margin over 4.5:1.
-        t.statusText = QColor("#636366");
-        t.statusDivider = QColor("#e0e0e3");
-
-        t.error = QColor("#d70015");
-        t.errorSurface = QColor("#fdecee");
-        t.errorBorder = QColor("#f3b7bd");
-        t.errorText = QColor("#a1000f");
-        t.warning = QColor("#c93400");
-        t.warningSurface = QColor("#fff6e5");
-        t.warningBorder = QColor("#f2d9ab");
-        t.warningText = QColor("#1d1d1f");
-        t.warningTitle = QColor("#1d1d1f");
-        // macOS's high-contrast orange, which reads (4.5:1) on the cream bar.
-        t.warningGlyph = QColor("#c93400");
-        t.success = QColor("#1e7b34");
-
-        t.assistant = QColor("#af52de");
-        t.assistantSurface = QColor("#f7eefc");
-        t.assistantBorder = QColor("#ddb6f1");
-        t.assistantText = QColor("#7a399b");
-
-        t.messageUser = QColor("#ececee");
-        t.messageUserBorder = QColor("#dcdcdf");
-        t.messageAgent = QColor("#ffffff");
-        t.messageAgentBorder = QColor("#e3e3e6");
-        t.messageText = QColor("#1d1d1f");
-        t.messageUserRole = QColor("#636366");
-
-        t.glyph = QColor("#3a3a3c");
-        t.glyphDisabled = QColor("#a5a5aa");
-        t.toolSelected = QColor("#e5e5ea");
-
-        t.timelineBackground = QColor("#e6e6e8");
-        t.ruler = QColor("#fbfbfb");
-        t.rulerBottom = QColor("#efeff1");
-        t.rulerTick = QColor("#8e8e93");
-        t.rulerTickHalf = QColor("#aeaeb2");
-        t.rulerTickMinor = QColor("#c7c7cc");
-        t.rulerText = QColor("#6e6e73");
-        t.rulerCorner = QColor("#f6f6f6");
-        t.trackHeader = QColor("#f6f6f6");
-        t.trackHeaderEdge = QColor("#ffffff");
-        t.trackHeaderColumn = QColor("#efeff1");
-        t.trackHeaderText = QColor("#1d1d1f");
-        t.trackHeaderTextDisabled = QColor("#a5a5aa");
-        t.trackHeaderDetail = QColor("#6e6e73");
-        t.trackResizeGrip = QColor("#8e8e93");
-        t.trackBadge = QColor("#e3e3e6");
-        t.trackBadgeText = QColor("#1d1d1f");
-        t.trackToggle = QColor("#e3e3e6");
-        t.trackToggleGlyph = QColor("#636366");
-        t.trackLane = QColor("#f4f4f6");
-        t.trackLaneAlt = QColor("#efeff1");
-        t.trackLaneLocked = rgba(0, 0, 0, 20);
-        t.trackDivider = QColor("#dcdcdf");
-        t.trackBankDivider = QColor("#c2c2c7");
-        t.headerPreview = QColor("#e3e3e6");
-        t.headerPreviewBorder = QColor("#c9c9ce");
-        t.addLane = QColor("#efeff1");
-        t.addLaneButton = QColor("#ffffff");
-        t.addLaneButtonBorder = QColor("#c9c9ce");
-        t.addLaneText = QColor("#1d1d1f");
-
-        t.clipVideo = clipStyle("#cbdff6", "#2b6cb6", "#1f4e84", "#ffffff", "#235895");
-        t.clipAudio = clipStyle("#c5ede5", "#1c7865", "#145749", "#ffffff", "#186d5c");
-        t.clipMusic = clipStyle("#c9e9cd", "#2d7637", "#205527", "#ffffff", "#246b2d");
-        t.clipGenerator = clipStyle("#f5d1e4", "#ae2970", "#841f55", "#ffffff", "#992462");
-        // A body that stands off the #f4f4f6 lane, as dark's does.
-        t.clipCaption = clipStyle("#dedee3", "#aeaeb2", "#8e8e93", "#1d1d1f", "#636366");
-        t.clipSelectedRing = QColor("#ffffff");
-        t.clipSelectedRingOuter = QColor("#1d1d1f");
-        t.clipTrim = QColor("#1d1d1f");
-        t.clipHighlight = rgba(255, 255, 255, 90);
-        t.clipFxBadge = rgba(0, 0, 0, 90);
-        t.clipFxBadgeText = QColor("#ffffff");
-        t.filmstripSeam = rgba(0, 0, 0, 90);
-        t.waveCenter = rgba(0, 0, 0, 40);
-        t.playheadHalo = QColor("#ffffff");
-        t.playheadIdle = QColor("#8e8e93");
-        t.skimmer = rgba(29, 29, 31, 190);
-        t.skimmerText = QColor("#1d1d1f");
-        t.scrubTrack = QColor("#e3e3e6");
-        t.snapLine = rgba(0, 0, 0, 190);
-        t.readout = rgba(255, 255, 255, 240);
-        t.readoutBorder = QColor("#c9c9ce");
-        t.readoutText = QColor("#1d1d1f");
-
-        t.markerRed = QColor("#e0443a");
-        t.markerOrange = QColor("#dc6510");
-        t.markerYellow = QColor("#9c8400");
-        t.markerGreen = QColor("#2ea043");
-        t.markerCyan = QColor("#1593a7");
-        t.markerBlue = QColor("#2f76d9");
-        t.markerPurple = QColor("#9b51e0");
-        t.markerPink = QColor("#e0408a");
-        t.markerWhite = QColor("#7c7c80");
-
-        t.proposalRemove = QColor("#d70015");
-        t.proposalRemoveHatch = rgba(215, 0, 21, 110);
-        t.proposalUnderlay = rgba(255, 255, 255, 200);
-
-        t.thumbnail = QColor("#e3e3e6");
-        t.tileEmpty = QColor("#e3e3e6");
-        t.tileEmptyBorder = QColor("#e3e3e6");
-        t.tileEmptyText = QColor("#5c5c61");
-        t.cardPlaceholder = QColor("#ececee");
-        t.cardPlaceholderText = QColor("#5c5c61");
-        t.badgeNeutral = rgba(0, 0, 0, 150);
-        t.badgeNeutralText = QColor("#ffffff");
-    }
-
-    // Derived from the accent and the surfaces above. The accent as text
-    // reads on each surface it is drawn on: the transports' timecodes on
-    // the panel, the timeline's corner time, and the status bar's sync chip.
-    // They are all dark or all light, so reading on one never costs another.
-    t.accentText = accent;
-    for (const QColor &surface : {t.panel, t.rulerCorner, t.statusBar}) t.accentText = readableOn(t.accentText, surface, 4.5);
-    t.accentTint = mixColor(t.panel, accent, dark ? 0.26 : 0.16);
-    t.accentTintPressed = mixColor(t.accentTint, Qt::black, dark ? 0.3 : 0.1);
-    t.textSelection = mixColor(t.field, accent, dark ? 0.45 : 0.28);
-    // The marked range is information: 3:1 on the panel around the bar.
-    t.inOutRange = readableOn(mixColor(t.scrubTrack, accent, 0.75), t.panel, 3.0);
-    // Media badges are solid with white text in both appearances: a deepened
-    // accent for Not downloaded, red for Offline, at 4.5:1.
-    t.badgeInfo = readableOn(accent, Qt::white, 4.5);
-    t.badgeInfoText = QColor("#ffffff");
-    t.badgeError = QColor("#c41e2d");
-    t.badgeErrorText = QColor("#ffffff");
-    t.assistantHover = mixColor(t.assistantSurface, t.assistant, 0.12);
-    t.proposalAdd = t.assistant;
-    t.proposalAddFill = t.assistant;
-    t.proposalAddFill.setAlpha(dark ? 46 : 38);
-    t.proposalChange = dark ? t.assistant.lighter(115) : t.assistant.darker(115);
-    t.proposalChangeFill = t.proposalChange;
-    t.proposalChangeFill.setAlpha(dark ? 36 : 30);
-    // The playhead's line always has its halo either side, so the line is
-    // read against the halo wherever it crosses (a picture, a clip, a bare
-    // lane), and its head against the ruler from top to foot. The skimmed
-    // playhead reads at 3:1 on each, no more than it must; the playhead
-    // reads clearly more on each, so it stays the louder of the two for
-    // every accent (yellow, green and graphite on the light ruler included).
+    // Guards on the palette above: each holds already, and keeps holding if a
+    // value is retuned. Text and glyphs on the filled accent read at 4.5:1
+    // (no exemption)...
+    t.onAccent = readableOn(t.onAccent, t.accent, 4.5);
+    t.onAccentSecondary = readableAlphaOn(t.onAccentSecondary, t.selection, 4.5);
+    t.selectionText = readableOn(t.selectionText, t.selection, 4.5);
+    t.menuSelectionText = readableOn(t.menuSelectionText, t.menuSelection, 4.5);
+    t.trackToggleOnGlyph = readableOn(t.trackToggleOnGlyph, t.trackToggleOn, 4.5);
+    // ...the accent as text reads on every surface it is drawn on (the
+    // transports' timecodes, the timeline's corner time, the sync chip,
+    // cards, fields and dialogs), all light or all dark, so reading on one
+    // never costs another...
+    for (const QColor &surface : {t.panel, t.rulerCorner, t.statusBar, t.raised, t.window, t.chrome, t.well, t.field,
+                                  t.dialog, t.group})
+        t.accentText = readableOn(t.accentText, surface, 4.5);
+    t.railGlyphActive = t.accentText;
+    t.chatExpander = t.accentText;
+    // ...the marked range is information, 3:1 on the panel around the bar...
+    t.inOutRange = readableOn(t.inOutRange, t.panel, 3.0);
+    // ...the playhead's line always has its halo either side, so it is read
+    // against the halo wherever it crosses (a picture, a clip, a bare lane),
+    // and its head against the ruler from top to foot. The skimmed playhead
+    // reads at 3:1 on each, no more than it must; the playhead clearly more,
+    // so it stays the louder of the two...
     for (const QColor &surface : {t.ruler, t.rulerBottom, t.playheadHalo})
         t.playheadIdle = justReadableOn(t.playheadIdle, surface, 3.0);
     for (const QColor &surface : {t.ruler, t.rulerBottom, t.playheadHalo})
         t.playhead = justReadableOn(t.playhead, surface, std::max(3.0, contrastRatio(t.playheadIdle, surface) + 0.4));
-    // Every marker reads at 3:1 on the whole ruler.
+    // ...every marker reads at 3:1 on the whole ruler...
     for (QColor *marker : {&t.markerRed, &t.markerOrange, &t.markerYellow, &t.markerGreen, &t.markerCyan, &t.markerBlue,
                            &t.markerPurple, &t.markerPink, &t.markerWhite})
         for (const QColor &surface : {t.ruler, t.rulerBottom}) *marker = readableOn(*marker, surface, 3.0);
-    t.audioTile = t.clipAudio.fill;
-    t.audioTileGlyph = t.clipAudio.wave;
-    t.dragShadow = rgba(0, 0, 0, 89);
-
-    // The viewer's field is the same in both appearances.
-    t.viewerSurround = QColor("#1c1c1c");
-    t.viewerCanvas = QColor("#050505");
-    t.viewerText = QColor("#a0a0a0");
-    t.viewerTextDim = QColor("#8a8a8a");
-    t.viewerGlyph = QColor("#b1b1b1");
-    t.viewerGlyphRing = QColor("#626262");
-    t.viewerGlyphFill = QColor("#181818");
-    t.viewerCaption = rgba(15, 15, 15, 225);
-    t.viewerCaptionBorder = QColor("#676767");
-    t.viewerCaptionText = QColor("#eeeeee");
-    // Masks: white over a dark rule reads on any picture, blue ones included.
-    t.maskOutline = QColor("#ffffff");
-    t.maskOutlineIdle = rgba(255, 255, 255, 179);
-    t.maskShadow = rgba(0, 0, 0, 140);
-    t.maskFill = rgba(255, 255, 255, 30);
-    t.maskHandleFill = accent;
-    t.maskHandleBorder = QColor("#ffffff");
-    t.maskTag = rgba(0, 0, 0, 153);
-    t.maskTagSelected = t.selection;
-    t.maskText = QColor("#ffffff");
+    // ...and every clip's name reads on its header at 4.5:1.
+    for (ClipStyle *style : {&t.clipVideo, &t.clipAudio, &t.clipMusic, &t.clipGenerator, &t.clipCaption})
+        style->label = readableOn(style->label, style->header, 4.5);
     return t;
 }
 
@@ -660,28 +501,6 @@ QPalette editorPalette(const EditorTheme &t) {
     return palette;
 }
 
-QString checkMarkImagePath() {
-    static QTemporaryDir directory;
-    static QString path;
-    if (!path.isEmpty() || !directory.isValid()) return path;
-    // check.png and check@2x.png: the style sheet names the first, and Qt
-    // picks the second on Retina screens.
-    for (const int scale : {1, 2}) {
-        QImage image(14 * scale, 14 * scale, QImage::Format_ARGB32_Premultiplied);
-        image.fill(Qt::transparent);
-        QPainter painter(&image);
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.scale(scale, scale);
-        painter.setPen(QPen(Qt::white, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        painter.drawPolyline(QPolygonF{{3.6, 7.3}, {6.0, 9.7}, {10.6, 4.6}});
-        painter.end();
-        const QString file = directory.filePath(scale == 1 ? QStringLiteral("check.png") : QStringLiteral("check@2x.png"));
-        if (!image.save(file)) return path;
-    }
-    path = QDir::fromNativeSeparators(directory.filePath(QStringLiteral("check.png")));
-    return path;
-}
-
 ColorScheme editorColorScheme() { return state().scheme; }
 
 void setEditorColorScheme(ColorScheme scheme) {
@@ -704,7 +523,7 @@ const EditorTheme &editorTheme() {
     AppearanceState &s = state();
     if (!s.computed) {
         const bool dark = schemeIsDark(s.scheme);
-        s.theme = makeEditorTheme(dark, systemAccent(dark));
+        s.theme = makeEditorTheme(dark);
         s.computed = true;
     }
     return s.theme;
@@ -714,10 +533,9 @@ void applyEditorAppearance() {
     AppearanceState &s = state();
     if (s.applying || !qApp) return;
     const bool dark = schemeIsDark(s.scheme);
-    const QColor accent = systemAccent(dark);
-    if (s.applied && s.computed && s.theme.dark == dark && s.theme.accent == accent) return;
+    if (s.applied && s.computed && s.theme.dark == dark) return;
     s.applying = true;
-    s.theme = makeEditorTheme(dark, accent);
+    s.theme = makeEditorTheme(dark);
     s.computed = true;
     s.applied = true;
     QApplication::setPalette(editorPalette(s.theme));

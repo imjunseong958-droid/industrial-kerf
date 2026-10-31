@@ -23,12 +23,17 @@ run, add `--screenshot /tmp/kerf.png --quit-after-ms 900`; without a project
 it captures the launcher.
 
 The editor and the launcher follow the system's light or dark appearance and
-accent colour, and switch live when either changes; `KERF_COLOR_SCHEME=light`
-or `dark` picks one for the run. Both draw macOS's window families (dark is
-#1e1e1e content under #2c2c2e chrome), with the accent for focus and each
-default action. Agent work (the AI bar's stripe, proposals, Ask Kerf) is
-marked with the system purple; the viewers keep a neutral dark surround in
-both appearances. On macOS the editor's toolbar is its title bar, as the
+switch live when it changes; `KERF_COLOR_SCHEME=light` or `dark` picks one
+for the run. Both draw one palette: antique cream paper in light (#f4eee2
+panels on a #e6dece desk) and warm espresso in dark (#1c1713 panels), with
+warm near-black or cream text, never pure black or white. Kerf has its own
+accent and does not follow the system's: an aubergine ink (#6a3471) on cream
+and its mauve (#c39acb, carrying dark ink) on espresso, for focus, the
+playhead, each default action and Kerf's own work (proposals, Ask Kerf).
+Chosen tools and modes are a quiet wash with no outline, groups and cards
+sit on their panel without frames, and the type follows one scale (11, 12,
+13, 14, 16 and 20px). The viewers' stage follows the appearance; the
+picture card is warm black in both. On macOS the editor's toolbar is its title bar, as the
 launcher's sidebar and title are: the window runs up under a transparent
 title bar, the window buttons sit at the toolbar's leading end, and the
 project's name is the window's title, centred on the window. Pop-up buttons
@@ -49,10 +54,10 @@ focus-region picker),
 holds shared constants and helpers (among them `useEditorStyle()`, the
 application style: Fusion with macOS's focus, pop-up rows and menu shapes),
 `editor_theme` the appearance (the
-`EditorTheme` colour roles every widget draws with, light and dark, and the
-system appearance and accent detection the launcher shares),
+`EditorTheme` colour roles every widget draws with, light and dark, Kerf's
+accent, and the system appearance detection the launcher shares),
 `editor_style.h` the stylesheet generated from those roles, and
-`main.cpp` only `main()`. `editor_test.cpp` builds into `kerf-qt-tests`
+`main.cpp` only `main()`. `editor_test.cpp` (with `test_footage.cpp`) builds into `kerf-qt-tests`
 instead of `main.cpp`.
 
 Menus, shortcuts, the toolbar, the transport buttons, and timeline gestures
@@ -178,7 +183,7 @@ at the clip's in point.
 A project is a folder: `project.kerf`, a `media/` folder, and a `presets/`
 library. Started without one, Kerf opens the launcher, like an edit suite's
 Choose a Project window. Like the editor, it follows the system's light or
-dark appearance and accent colour, and switches when they change
+dark appearance in the editor's palette and accent, and switches when it changes
 (`KERF_COLOR_SCHEME=light` or `dark` picks one). New Project offers Empty
 16:9, Vertical 9:16, and Square 1:1 templates; Details sets the name,
 location, frame rate, and sharing: Share with Git makes the folder a
@@ -351,5 +356,8 @@ chat closed (`editor-9x16-closed-`);
 `timeline-drag-`) and `paintedPanelsFollowTheAppearance` the Program monitor
 (`viewer-`, `viewer-empty-`), the region picker (`region-`), the Source
 monitor (`source-`), the bin (`bin-`) and the Effects panel (`effects-`).
+The pictures in them are the tests' procedural footage (`test_footage.h`:
+a harbor at dawn, a close-up on a dock and a drone pass over the coast,
+drawn in code with texture and grain), so no media files are needed.
 The macOS CI job also runs the real bridge/media workflow in
 `scripts/test-kerf-qt-bridge.py`.

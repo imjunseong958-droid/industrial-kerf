@@ -12,7 +12,7 @@
 namespace kerf {
 
 // Replace each @token in `sheet` with the colour of the theme field it
-// names, @checkMark with the check box's tick, @popUpChevrons (and its
+// names, @checkMark with the check box's tick (in `onAccent`), @popUpChevrons (and its
 // Disabled twin) with a pop-up button's chevrons, and the other images
 // below with their symbols. (Steppers draw their own: see StepperSpinBox.)
 // An unknown token is left in place, which the tests catch.
@@ -124,6 +124,7 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
         // glyph colours.
         using ImagePath = QString (*)(const QColor &);
         static const QHash<QString, std::pair<ImagePath, QColor EditorTheme::*>> images{
+            {QStringLiteral("checkMark"), {checkMarkImagePath, &EditorTheme::onAccent}},
             {QStringLiteral("popUpChevrons"), {popUpChevronsImagePath, &EditorTheme::text}},
             {QStringLiteral("popUpChevronsDisabled"), {popUpChevronsImagePath, &EditorTheme::textDisabled}},
             {QStringLiteral("menuCheck"), {menuCheckImagePath, &EditorTheme::menuText}},
@@ -141,9 +142,7 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
         };
         QString value;
         const QString name = match.captured(1);
-        if (name == QStringLiteral("checkMark")) {
-            value = image(checkMarkImagePath());
-        } else if (const auto drawn = images.constFind(name); drawn != images.cend()) {
+        if (const auto drawn = images.constFind(name); drawn != images.cend()) {
             value = image(drawn->first(t.*(drawn->second)));
         } else {
             const auto field = fields.constFind(name);
@@ -159,11 +158,12 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
     return out;
 }
 
-// The editor's application style sheet: macOS's light and dark window
-// families, as the project launcher draws them, with the system accent for
-// focus and the default action and the system purple marking agent work.
-// Density follows desktop edit suites: 12px type, docked panels with title
-// strips, and a status bar.
+// The editor's application style sheet: the project launcher's cream and
+// espresso, with Kerf's purple for focus, the default action and Kerf's own
+// work. Density follows desktop edit suites: docked panels with title
+// strips and a status bar, on one type scale (11, 12, 13, 14, 16 and 20px)
+// and a 4px grid. Nothing is boxed twice: a chosen tool or mode is a tonal
+// wash with no outline, and cards sit on their panel without a frame.
 inline QString editorStyleSheet(const EditorTheme &theme) {
     return themedStyleSheet(QStringLiteral(R"QSS(
 * {
@@ -303,11 +303,11 @@ QPushButton {
 QToolButton#maskTool,
 QToolButton#maskRemove,
 QToolButton#effectRemove { padding: 2px 5px; }
-/* The chosen mask tool and the selected mask: an accent wash edged in the
-   accent, under the pointer too, darkening while held as every bezel does.
+/* The chosen mask tool and the selected mask: a quiet accent wash with no
+   outline, under the pointer too, darkening while held as every bezel does.
    The tool's symbol is the accent, which reads on either wash at 3:1. */
 QToolButton#maskTool:checked:enabled,
-QToolButton#maskName:checked:enabled { background: @accentTint; border-color: @accentText; }
+QToolButton#maskName:checked:enabled { background: @accentTint; border-color: transparent; }
 QToolButton#maskTool:checked:enabled:pressed,
 QToolButton#maskName:checked:enabled:pressed { background: @accentTintPressed; }
 /* A colour well: its swatch fills a small bezel. */
@@ -343,10 +343,10 @@ QPushButton:disabled {
 QToolBar QToolButton:disabled { background: transparent; border-color: transparent; }
 /* The conversation's switch: as tall as the pop-ups and buttons before it,
    and while its column is open it looks as a chosen mode in a title strip
-   does: an accent wash edged in the accent, its symbol the accent, under
+   does: a quiet accent wash with no outline, its symbol the accent, under
    the pointer too, darkening while held. */
 QToolBar QToolButton#chatToggle { padding: 0px 6px; min-height: 18px; max-height: 18px; }
-QToolBar QToolButton#chatToggle:checked:enabled { background: @accentTint; border-color: @accentText; }
+QToolBar QToolButton#chatToggle:checked:enabled { background: @accentTint; border-color: transparent; }
 QToolBar QToolButton#chatToggle:checked:enabled:pressed { background: @accentTintPressed; }
 QPushButton#primaryButton,
 QPushButton#chatSendButton {
@@ -382,46 +382,29 @@ QDialogButtonBox QPushButton:default:disabled {
 }
 QPushButton#dangerButton { background: @button; border-color: @borderStrong; }
 QPushButton#dangerButton:hover { background: @buttonHover; }
-QPushButton#secondaryButton { background: @raised; }
-QToolButton#squareButton {
-    background: transparent;
-    border-color: transparent;
-    padding: 2px 9px;
-    font-size: 18px;
-    color: @glyph;
-}
-QToolButton#squareButton:hover { background: @hover; border-color: @border; }
-QToolButton#playButton {
-    background: @button;
-    border-color: @buttonEdge;
-    border-top-color: @buttonTop;
-    border-bottom-color: @buttonBottom;
-    border-radius: 4px;
-    color: @textStrong;
-    font-size: 15px;
-    padding: 4px 14px;
-}
-QToolButton#playButton:hover { background: @buttonHover; }
-QToolButton#playButton:disabled { background: @buttonDisabled; color: @buttonDisabledText; border-color: @buttonDisabledEdge; }
+/* Transport controls are symbols on the panel: a round wash under the
+   pointer, no outline. */
 QToolButton#transportButton,
 QPushButton#transportButton {
     background: transparent;
     border: 1px solid transparent;
     border-radius: 4px;
     color: @text;
-    padding: 1px 5px;
-    min-height: 18px;
-    max-height: 18px;
-    min-width: 18px;
+    padding: 2px 4px;
+    min-height: 16px;
+    max-height: 16px;
+    min-width: 16px;
     font-size: 11px;
 }
 QToolButton#transportButton:disabled { background: transparent; border-color: transparent; }
 QToolButton#transportButton:hover,
 QPushButton#transportButton:hover {
     background: @hover;
-    border-color: @border;
+    border-color: transparent;
     color: @textStrong;
 }
+QToolButton#transportButton:pressed,
+QPushButton#transportButton:pressed { background: @pressed; border-color: transparent; }
 QToolBar QComboBox#qualityPicker,
 QToolBar QComboBox#canvasPicker {
     background: @button;
@@ -471,13 +454,6 @@ QToolBar QToolButton#toolbarQuiet:disabled {
     background: @buttonDisabled;
     border-color: @buttonDisabledEdge;
 }
-QToolButton#mediaToggle {
-    background: transparent;
-    border: 0;
-    color: @textSecondary;
-    padding: 1px 5px;
-}
-QToolButton#mediaToggle:hover { color: @text; background: @hover; }
 QToolButton#abortButton {
     color: @text;
     background: transparent;
@@ -499,7 +475,6 @@ QLabel#statusPill {
     font-weight: 600;
     letter-spacing: 0px;
 }
-QLabel#timecode { color: @text; font-family: Menlo, Monaco, monospace; font-size: 11px; }
 QLabel#inspectorClip { color: @textStrong; font-weight: 600; padding: 5px 0 5px 0; margin: 0; }
 /* Each section, effect and mask is headed by its name in semibold, as the
    clip's is; a hairline sets an effect or mask apart from the one above. */
@@ -643,6 +618,7 @@ QListWidget#projectBin::item:selected:focus,
 QListWidget#presetList::item:selected:focus { background: @selection; color: @selectionText; }
 QListWidget#mediaList,
 QListWidget#activityList,
+QListWidget#effectsCards,
 QScrollArea#mediaList { background: transparent; border: 0; padding: 0; }
 QWidget#mediaGrid { background: transparent; }
 QTextEdit#conversation { background: transparent; border: 0; padding: 4px 0; color: @messageText; }
@@ -700,9 +676,10 @@ QPushButton#chatSendButton {
 }
 QToolButton#abortButton { border: 1px solid @assistantBorder; border-radius: 7px; padding: 2px 9px; }
 
+/* A group is a paper card a step lighter than the dialog, with no frame. */
 QGroupBox {
-    background: @group;
-    border: 1px solid @groupBorder;
+    background: @raised;
+    border: 0;
     border-radius: 8px;
     margin-top: 22px;
     padding: 8px 8px 8px;
@@ -714,7 +691,7 @@ QGroupBox::title {
     top: 2px;
     padding: 0;
     color: @textSecondary;
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 600;
 }
 QProgressBar { background: @borderSubtle; border: 0; border-radius: 2px; height: 4px; max-height: 4px; }
@@ -733,7 +710,7 @@ QTabBar::tab:hover { color: @text; background: @hover; }
 QTabBar::tab:selected {
     color: @tabSelectedText;
     background: @tabSelected;
-    border-color: @tabSelectedBorder;
+    border-color: transparent;
 }
 
 QSlider::groove:horizontal { background: @sliderGroove; border: 1px solid @sliderGrooveBorder; height: 5px; border-radius: 3px; }
@@ -756,9 +733,9 @@ QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; border: 0; bac
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 /* Where two scroll bars meet: nothing, not a framed square. */
 QAbstractScrollArea::corner { background: transparent; border: 0; }
-QStatusBar { background: @statusBar; color: @statusText; border-top: 1px solid @divider; font-size: 10px; min-height: 20px; max-height: 20px; }
+QStatusBar { background: @statusBar; color: @statusText; border-top: 1px solid @divider; font-size: 11px; min-height: 20px; max-height: 20px; }
 QStatusBar::item { border: 0; }
-QStatusBar QLabel { color: @statusText; font-size: 10px; padding: 0 8px; border-left: 1px solid @statusDivider; }
+QStatusBar QLabel { color: @statusText; font-size: 11px; padding: 0 8px; border-left: 1px solid @statusDivider; }
 QStatusBar QLabel#statusConnection[state="ready"] { color: @success; }
 QStatusBar QLabel#statusConnection[state="connecting"] { color: @warning; }
 QStatusBar QLabel#statusConnection[state="disconnected"] { color: @error; }
@@ -782,7 +759,8 @@ QListWidget#projectBin { background: @well; border: 0; }
 QListWidget#projectBin::item { color: @text; border-radius: 3px; padding: 4px; }
 QListWidget#projectBin::item:selected { background: @selectionInactive; color: @selectionInactiveText; }
 QWidget#sourceMonitor { background: @panel; }
-QFrame#askPrompt { background: @raised; border: 1px solid @assistant; border-radius: 8px; }
+/* Ask Kerf is a popover: a paper card with a quiet edge, not a purple callout. */
+QFrame#askPrompt { background: @raised; border: 1px solid @menuBorder; border-radius: 8px; }
 QLabel#askTitle { color: @assistantText; font-size: 12px; font-weight: 600; }
 QTextEdit#askInput { background: @field; border: 1px solid @fieldBorder; border-radius: 5px; padding: 4px; color: @text; }
 QTextEdit#askInput:focus { border-color: @focusRing; }
@@ -827,7 +805,7 @@ QStatusBar QToolButton#syncChip {
     border-left: 1px solid @statusDivider;
     border-radius: 0;
     color: @statusText;
-    font-size: 10px;
+    font-size: 11px;
     padding: 0 8px;
     min-height: 0;
 }
@@ -836,7 +814,8 @@ QStatusBar QToolButton#syncChip[state="syncing"] { color: @accentText; }
 QStatusBar QToolButton#syncChip[state="live"] { color: @success; }
 QStatusBar QToolButton#syncChip[state="conflict"],
 QStatusBar QToolButton#syncChip[state="failed"] { color: @error; }
-QWidget#presetsPanel { background: @panel; }
+QWidget#presetsPanel,
+QWidget#effectsPanel { background: @panel; }
 QLabel#presetsTitle { color: @textSecondary; font-size: 11px; font-weight: 600; }
 QListWidget#presetList { background: @well; border: 0; padding: 2px; }
 QListWidget#presetList::item { padding: 6px; border-radius: 4px; }
@@ -946,14 +925,14 @@ ads--CTitleBarButton:checked { background: @pressed; border-color: transparent; 
 ads--CTitleBarButton:disabled { color: @textSecondary; background: transparent; border-color: transparent; }
 /* A chosen mode in a title strip (the Program panel's mask tools, the
    Timeline's track height) looks as the chosen mask tool does in Effect
-   Controls: an accent wash edged in the accent, its symbol the accent,
+   Controls: a quiet accent wash with no outline, its symbol the accent,
    darkening while held. */
 ads--CTitleBarButton#maskRectangle:checked:enabled,
 ads--CTitleBarButton#maskEllipse:checked:enabled,
 ads--CTitleBarButton#maskPen:checked:enabled,
 ads--CTitleBarButton#trackHeightMini:checked:enabled,
 ads--CTitleBarButton#trackHeightMedium:checked:enabled,
-ads--CTitleBarButton#trackHeightLarge:checked:enabled { background: @accentTint; border-color: @accentText; }
+ads--CTitleBarButton#trackHeightLarge:checked:enabled { background: @accentTint; border-color: transparent; }
 ads--CTitleBarButton#maskRectangle:checked:enabled:pressed,
 ads--CTitleBarButton#maskEllipse:checked:enabled:pressed,
 ads--CTitleBarButton#maskPen:checked:enabled:pressed,

@@ -10,6 +10,7 @@
 #include "project_launcher.h"
 #include "project_panel.h"
 #include "source_monitor_panel.h"
+#include "test_footage.h"
 #include "timeline_widget.h"
 #include "viewer_widget.h"
 #include "workspace.h"
@@ -43,7 +44,6 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
-#include <QLinearGradient>
 #include <QMenuBar>
 #include <QPaintDevice>
 #include <QPaintEngine>
@@ -1213,9 +1213,11 @@ private slots:
             // Scrolled so a message of the reader's is cut by the view's top.
             QTextDocument *document = window.m_conversation->document();
             QTextFrame *message = nullptr;
+            // (Found by its kind: the reader's and Kerf's rows share the chat's surface.)
             for (QTextFrame *frame : document->rootFrame()->childFrames())
-                if (frame->frameFormat().background().color() == theme.messageUser) message = frame;
+                if (frame->frameFormat().intProperty(QTextFormat::UserProperty + 1) == 1) message = frame;
             QVERIFY(message);
+            QCOMPARE(message->frameFormat().background().color(), theme.messageUser);
             const QRectF bounds = document->documentLayout()->frameBoundingRect(message);
             const int into = window.m_conversation->viewport()->mapTo(scroll->widget(), QPoint(0, int(bounds.top()) + 10)).y();
             scroll->verticalScrollBar()->setValue(into);
@@ -2032,8 +2034,8 @@ private slots:
         QVERIFY(chorus.width() > beat.width() + 10);
         QVERIFY(beat.right() < chorus.left());
         const QImage image = timeline.grab().toImage();
-        QCOMPARE(image.pixelColor(beat.center().x(), beat.top() + 2), QColor("#e5534b"));
-        QCOMPARE(image.pixelColor(chorus.left() + 4, chorus.top() + 2), QColor("#5fb85f"));
+        QCOMPARE(image.pixelColor(beat.center().x(), beat.top() + 2), editorTheme().marker(QStringLiteral("red")));
+        QCOMPARE(image.pixelColor(chorus.left() + 4, chorus.top() + 2), editorTheme().marker(QString()));
     }
 
     // The timeline paints from the theme, in light and in dark, and repaints
@@ -3868,7 +3870,7 @@ private slots:
                 launcher.resize(1040, 650);
                 launcher.show();
                 QVERIFY(QTest::qWaitForWindowExposed(&launcher));
-                // A chosen recent project is blue while its list has focus.
+                // A chosen recent project is the selection while its list has focus.
                 if (page == ProjectLauncher::Recent) launcher.m_recent->setFocus();
                 QCoreApplication::processEvents();
                 QImage image = launcher.grab().toImage();
@@ -3876,7 +3878,10 @@ private slots:
                 const auto at = [&image, ratio](int x, int y) { return image.pixelColor(QPoint(x, y) * ratio).rgb(); };
                 QCOMPARE(at(launcher.width() - 6, 6), launcher.theme().content.rgb());
                 QCOMPARE(at(100, launcher.height() - 10), launcher.theme().sidebar.rgb());
-                QVERIFY(dark ? launcher.theme().content.lightness() < 60 : launcher.theme().content.lightness() > 240);
+                // Antique cream in light, warm espresso in dark: never pure
+                // white or black, and warm (red above blue).
+                QVERIFY(isWarmPaper(launcher.theme().content, dark));
+                QVERIFY(isWarmPaper(launcher.theme().sidebar, dark));
                 if (launcher.m_choose->isEnabled()) {
                     // The default button is the accent, lightening towards its top.
                     const QImage choose = launcher.m_choose->grab().toImage();
@@ -3917,13 +3922,13 @@ private slots:
                                             .arg(firstAmber.y())));
                     save(image, QStringLiteral("new-details-%1").arg(schemeName));
                     // The remote field's placeholder reads at 4.5:1 in the
-                    // editor's placeholder colour, and dims when the field is off.
+                    // launcher's secondary text colour, and dims when the field is off.
                     const LauncherTheme &look = launcher.theme();
                     launcher.m_remote->ensurePolished();
                     QVERIFY(launcher.m_remote->isEnabled() && launcher.m_remote->text().isEmpty());
                     for (const QPalette::ColorGroup group : {QPalette::Active, QPalette::Inactive})
                         QCOMPARE(launcher.m_remote->palette().color(group, QPalette::PlaceholderText).rgb(),
-                                 makeEditorTheme(dark, look.accent).placeholderText.rgb());
+                                 look.secondary.rgb());
                     QVERIFY(contrastRatio(launcher.m_remote->palette().color(QPalette::Active, QPalette::PlaceholderText),
                                           look.field) >= 4.5);
                     QCOMPARE(launcher.m_remote->palette().color(QPalette::Disabled, QPalette::PlaceholderText).rgb(),
@@ -3941,7 +3946,7 @@ private slots:
 
     // A chosen recent project's text reads on its selection (4.5:1), in
     // both appearances: a missing project's name on the grey of a list
-    // without focus, and the details on the focused list's blue. The colours
+    // without focus, and the details on the focused list's selection. The colours
     // are read from the pens the rows are painted with.
     void launcherRowsReadWhenChosen() {
         const auto clean = qScopeGuard([] {
@@ -4028,6 +4033,14 @@ private slots:
                at(bezel.center().x(), bezel.bottom()).lightness() + 16 < at(bezel.center().x(), bezel.top()).lightness();
     }
 
+    // Whether `color` is one of the palette's paper surfaces: antique cream
+    // in light (light, but not white) and espresso in dark (dark, but not
+    // black), warm in both (red above blue).
+    static bool isWarmPaper(const QColor &color, bool dark) {
+        const bool warm = color.red() >= color.blue() + (dark ? 4 : 10);
+        return warm && (dark ? color.lightness() < 45 && color.rgb() != QColor(Qt::black).rgb()
+                             : color.lightness() > 200 && color.rgb() != QColor(Qt::white).rgb());
+    }
     // Saturated amber or gold, as the editor's old accent was.
     static bool isAmber(const QColor &color) {
         return color.hue() >= 30 && color.hue() <= 52 && color.saturation() > 140 && color.value() > 150;
@@ -4081,14 +4094,6 @@ private slots:
                 if (image.pixelColor(x, y).alpha() > best.alpha()) best = image.pixelColor(x, y);
         return best.rgb();
     }
-    // macOS's accents in light and dark: blue, purple, pink, red, orange,
-    // yellow, green, and graphite.
-    static QList<QColor> macAccents() {
-        return {QColor("#007aff"), QColor("#0a84ff"), QColor("#953d96"), QColor("#bf5af2"), QColor("#f74f9e"), QColor("#ff375f"),
-                QColor("#e0383e"), QColor("#ff453a"), QColor("#f7821b"), QColor("#ff9f0a"), QColor("#ffc600"), QColor("#ffd60a"),
-                QColor("#62ba46"), QColor("#32d74b"), QColor("#8c8c8c"), QColor("#98989d")};
-    }
-
     // A cut with every kind of clip: two picture tracks (one of titles), a
     // caption track, dialogue and music, a marker, and a pending proposal
     // that trims one clip, drops another, and adds a title.
@@ -4139,25 +4144,15 @@ private slots:
     }
 
     // Stand-in thumbnails and waveforms, so filmstrips and waves draw
-    // without FFmpeg.
+    // without FFmpeg: frames of the tests' procedural footage (see
+    // test_footage.h), one shot per source, made once per run.
     static void fakeArtwork(MediaArtwork *artwork) {
-        const auto frame = [](const QColor &sky, const QColor &ground) {
-            QImage image(160, 90, QImage::Format_RGB32);
-            QPainter painter(&image);
-            QLinearGradient gradient(0, 0, 0, 90);
-            gradient.setColorAt(0, sky.lighter(130));
-            gradient.setColorAt(0.55, sky);
-            gradient.setColorAt(0.56, ground);
-            gradient.setColorAt(1, ground.darker(160));
-            painter.fillRect(image.rect(), gradient);
-            painter.setBrush(QColor(255, 240, 220));
-            painter.setPen(Qt::NoPen);
-            painter.drawEllipse(QPointF(118, 30), 9, 9);
-            return image;
-        };
-        artwork->frames.insert(QStringLiteral("wide"), frame(QColor("#6f8fb5"), QColor("#2c4a5e")));
-        artwork->frames.insert(QStringLiteral("close"), frame(QColor("#b58a6f"), QColor("#4e3b2c")));
-        artwork->frames.insert(QStringLiteral("drone"), frame(QColor("#8fb5a8"), QColor("#2e5e4a")));
+        static const QImage wide = testing::footageFrame(testing::Shot::HarborWide, QSize(160, 90));
+        static const QImage close = testing::footageFrame(testing::Shot::FisherClose, QSize(160, 90));
+        static const QImage drone = testing::footageFrame(testing::Shot::DronePass, QSize(160, 90));
+        artwork->frames.insert(QStringLiteral("wide"), wide);
+        artwork->frames.insert(QStringLiteral("close"), close);
+        artwork->frames.insert(QStringLiteral("drone"), drone);
         for (const char *id : {"wide", "close", "score"}) {
             QImage wave(2048, 48, QImage::Format_ARGB32);
             wave.fill(Qt::transparent);
@@ -4173,31 +4168,114 @@ private slots:
         emit artwork->changed();
     }
 
+    // Kerf has its own accent, a purple in each appearance, and does not
+    // follow the system's: the editor and the launcher keep it when the
+    // platform reports another accent, and switch only with light and dark.
+    void kerfDrawsItsOwnPurpleAccent() {
+        const auto restore = qScopeGuard([] {
+            QGuiApplication::setPalette(QPalette());
+            setEditorColorScheme(ColorScheme::Dark);
+        });
+        for (const bool dark : {false, true}) {
+            const EditorTheme t = makeEditorTheme(dark);
+            const LauncherTheme l = launcherTheme(dark);
+            QCOMPARE(t.accent.rgb(), kerfAccent(dark).rgb());
+            QCOMPARE(l.accent.rgb(), t.accent.rgb());
+            // Purple: between blue and red, and clearly coloured.
+            QVERIFY2(t.accent.hslHue() >= 270 && t.accent.hslHue() <= 320, qPrintable(t.accent.name()));
+            QVERIFY2(t.accent.hslSaturation() >= 40, qPrintable(t.accent.name()));
+            // Kerf's own marks are the accent: the playhead, focus, the
+            // agent's proposals and its avatar.
+            for (const QColor &mark : {t.playhead, t.focusRing, t.assistant, t.proposalAdd, t.chatAvatarKerf, t.maskHandleFill})
+                QCOMPARE(mark.rgb(), t.accent.rgb());
+            // Track toggles that are on are a neutral ink, not the accent.
+            QVERIFY(t.trackToggleOn.rgb() != t.accent.rgb() && t.trackToggleOn.hsvSaturation() < 90);
+            QVERIFY(contrastRatio(t.trackToggleOn, t.trackToggle) >= 3.0);
+            // In dark the mauve carries dark ink, so the launcher's chosen
+            // rows (a deep plum) and its switch knob have their own tokens.
+            QVERIFY(contrastRatio(l.selectionText, l.selection) >= 4.5);
+            if (dark) QVERIFY(l.selectionText.rgb() != l.onAccent.rgb());
+            // Fewer boxes: the caption on the picture has no line round it,
+            // the open chat's toggle is a tonal disc with Kerf's ink, and the
+            // launcher's format tiles are paper cards lighter than the page.
+            QCOMPARE(t.viewerCaptionBorder.rgba(), t.viewerCaption.rgba());
+            QCOMPARE(t.railButtonActive.rgba(), t.railButton.rgba());
+            QCOMPARE(t.railGlyphActive.rgb(), t.accentText.rgb());
+            QVERIFY(l.tile.lightness() > l.content.lightness());
+        }
+        // The light and dark accents differ: ink on cream, mauve on espresso.
+        QVERIFY(kerfAccent(true).lightness() > kerfAccent(false).lightness() + 60);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
+        // A system accent of any colour leaves Kerf's in place.
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            QPalette blue = QGuiApplication::palette();
+            blue.setColor(QPalette::Accent, QColor("#007aff"));
+            QGuiApplication::setPalette(blue);
+            applyEditorAppearance();
+            const bool dark = scheme == ColorScheme::Dark;
+            QCOMPARE(editorTheme().accent.rgb(), kerfAccent(dark).rgb());
+            ProjectLauncher launcher;
+            launcher.setColorScheme(dark ? ProjectLauncher::ColorScheme::Dark : ProjectLauncher::ColorScheme::Light);
+            QCOMPARE(launcher.theme().accent.rgb(), kerfAccent(dark).rgb());
+            QGuiApplication::setPalette(QPalette());
+        }
+#endif
+    }
+
     // The accent as text (the transports' timecodes, the timeline's corner
-    // time, the sync chip) reads at 4.5:1 on each surface it is drawn on,
-    // whichever accent System Settings has, in both appearances.
+    // time, the sync chip) reads at 4.5:1 on each surface it is drawn on, in
+    // both appearances; text on the filled accent reads at 4.5:1 too, with
+    // no exemption.
     void accentTextReadsOnEverySurfaceItIsDrawnOn() {
-        for (const bool dark : {false, true})
-            for (const QColor &accent : macAccents()) {
-                const EditorTheme theme = makeEditorTheme(dark, accent);
-                for (const QColor &surface : {theme.panel, theme.rulerCorner, theme.statusBar}) {
-                    const qreal ratio = contrastRatio(theme.accentText, surface);
-                    QVERIFY2(ratio >= 4.5, qPrintable(QStringLiteral("%1 on %2 in %3: %4")
-                                                          .arg(theme.accentText.name(), surface.name(),
-                                                               dark ? QStringLiteral("dark") : QStringLiteral("light"))
-                                                          .arg(ratio, 0, 'f', 2)));
-                }
-                // So does the Source monitor's marked range, at 3:1 on its panel.
-                QVERIFY2(contrastRatio(theme.inOutRange, theme.panel) >= 3.0, qPrintable(accent.name()));
+        for (const bool dark : {false, true}) {
+            const EditorTheme theme = makeEditorTheme(dark);
+            for (const QColor &surface : {theme.panel, theme.rulerCorner, theme.statusBar, theme.raised, theme.window,
+                                          theme.chrome, theme.well, theme.field, theme.dialog, theme.group, theme.chatSurface}) {
+                const qreal ratio = contrastRatio(theme.accentText, surface);
+                QVERIFY2(ratio >= 4.5, qPrintable(QStringLiteral("%1 on %2 in %3: %4")
+                                                      .arg(theme.accentText.name(), surface.name(),
+                                                           dark ? QStringLiteral("dark") : QStringLiteral("light"))
+                                                      .arg(ratio, 0, 'f', 2)));
             }
-        // The dark default reads on the timeline's corner with room to spare.
-        QVERIFY(contrastRatio(makeEditorTheme(true, QColor("#0a84ff")).accentText, QColor("#232325")) >= 5.0);
+            // So does the Source monitor's marked range, at 3:1 on its panel.
+            QVERIFY(contrastRatio(theme.inOutRange, theme.panel) >= 3.0);
+            // Text on the accent's fill, at rest, lit and held.
+            for (const QColor &fill : {theme.accent, theme.accentTop, theme.accentPressed})
+                QVERIFY2(contrastRatio(theme.onAccent, fill) >= 4.5, qPrintable(fill.name()));
+        }
+    }
+
+    // The chrome keeps one type scale: every size the editor's, the docks'
+    // and the launcher's style sheets set, and every size the timeline
+    // paints in, is 11, 12, 13, 14, 16 or 20px. (The chat's composer is
+    // rebuilt separately and keeps its own for now.)
+    void chromeKeepsOneTypeScale() {
+        const QSet<int> scale{11, 12, 13, 14, 16, 20};
+        static const QRegularExpression rule(QStringLiteral("([^{}]+)\\{([^{}]*)\\}"));
+        static const QRegularExpression size(QStringLiteral("font-size:\\s*(\\d+)px"));
+        for (const bool dark : {false, true}) {
+            const EditorTheme t = makeEditorTheme(dark);
+            for (const QString &sheet : {editorStyleSheet(t), dockStyleSheet(t), launcherStyleSheet(launcherTheme(dark))}) {
+                for (auto it = rule.globalMatch(sheet); it.hasNext();) {
+                    const QRegularExpressionMatch match = it.next();
+                    const QString selector = match.captured(1).trimmed();
+                    if (selector.contains(QStringLiteral("composerStatus")) || selector.contains(QStringLiteral("chatSendButton")))
+                        continue;
+                    for (auto sizes = size.globalMatch(match.captured(2)); sizes.hasNext();) {
+                        const int pixels = sizes.next().captured(1).toInt();
+                        QVERIFY2(scale.contains(pixels), qPrintable(QStringLiteral("%1px in %2").arg(pixels).arg(selector)));
+                    }
+                }
+            }
+        }
+        TimelineWidget timeline;
+        QVERIFY(scale.contains(timeline.badgeFont().pixelSize()));
     }
 
     // Colours drawn one on another, each with the ratio it must reach there
     // (4.5:1 for text, 3:1 for symbols, edges and handles), in both
     // appearances; a translucent one is laid on what is under it first.
-    // Pairs that come from the accent are checked with each of macOS's.
     void themeColorsReadWhereTheyAreDrawn_data() {
         QTest::addColumn<QColor>("foreground");
         QTest::addColumn<QColor>("background");
@@ -4208,67 +4286,84 @@ private slots:
             QColor background;
             qreal ratio;
         };
-        for (const bool dark : {false, true})
-            for (const QColor &accent : macAccents()) {
-                const EditorTheme t = makeEditorTheme(dark, accent);
-                const LauncherTheme l = launcherTheme(dark, accent);
-                // Secondary text on a selected row reads as text wherever
-                // white does (whether white does on every accent is the
-                // accent's question, not this token's).
-                std::vector<Pair> pairs{
-                    {"chosen mask tool's symbol on its wash", t.accentText, t.accentTint, 3.0},
-                    {"chosen mask tool's symbol on its wash, held", t.accentText, t.accentTintPressed, 3.0},
-                    {"selected mask's name on its wash", t.buttonText, t.accentTint, 4.5},
-                    {"selected mask's name on its wash, held", t.buttonText, t.accentTintPressed, 4.5},
-                    {"selected mask's edge on the panel", t.accentText, t.panel, 3.0},
-                    {"chosen mode's edge on a title strip", t.accentText, t.panelTitle, 3.0},
-                    {"open conversation switch's edge on the toolbar", t.accentText, t.chrome, 3.0},
-                    {"playhead's head on the ruler's top", t.playhead, t.ruler, 3.0},
-                    {"playhead's head on the ruler's foot", t.playhead, t.rulerBottom, 3.0},
-                    {"playhead's line on its halo", t.playhead, t.playheadHalo, 3.0},
-                    {"secondary text on a selected row", t.onAccentSecondary, t.selection,
-                     std::min(4.5, contrastRatio(Qt::white, t.selection))},
-                    {"launcher: secondary text on a selected row", l.onAccentSecondary, l.selection,
-                     std::min(4.5, contrastRatio(Qt::white, l.selection))},
-                };
-                if (accent == systemAccent(dark)) {
-                    pairs.insert(pairs.end(), {
-                        {"Model field under the pointer", t.text, laidOn(t.field, t.hover), 4.5},
-                        {"Model field under the pointer while sending", t.text, laidOn(t.assistantSurface, t.hover), 4.5},
-                        {"disclosure chevron on a dialog", t.textSecondary, t.dialog, 3.0},
-                        {"disclosure chevron on a dialog's group", t.textSecondary, laidOn(t.dialog, t.group), 3.0},
-                        {"disclosure chevron on a panel", t.textSecondary, t.panel, 3.0},
-                        {"disclosure chevron on a well", t.textSecondary, t.well, 3.0},
-                        {"scroll bar handle on a panel", t.scrollHandle, t.panel, 3.0},
-                        {"scroll bar handle on a well", t.scrollHandle, t.well, 3.0},
-                        {"scroll bar handle on a field", t.scrollHandle, t.field, 3.0},
-                        {"scroll bar handle on a dialog", t.scrollHandle, t.dialog, 3.0},
-                        {"added clip's name on its band", t.assistantText, laidOn(t.trackLane, t.proposalAddFill), 4.5},
-                        {"added clip's name on its band over a locked lane's hatch", t.assistantText,
-                         laidOn(laidOn(t.trackLane, t.trackLaneLocked), t.proposalAddFill), 4.5},
-                        {"skimmed playhead's head on the ruler's top", t.playheadIdle, t.ruler, 3.0},
-                        {"skimmed playhead's head on the ruler's foot", t.playheadIdle, t.rulerBottom, 3.0},
-                        {"skimmed playhead's line on its halo", t.playheadIdle, t.playheadHalo, 3.0},
-                        {"You on the user's message", t.messageUserRole, t.messageUser, 4.5},
-                        {"unreadable preset on the preset list", t.error, t.well, 4.5},
-                        {"launcher: Details chevron on the content", l.secondary, l.content, 3.0},
-                        {"launcher: scroll bar handle on the content", l.scrollHandle, l.content, 3.0},
-                        {"launcher: scroll bar handle on a group", l.scrollHandle, l.group, 3.0},
-                        {"launcher: scroll bar handle on the sidebar", l.scrollHandle, l.sidebar, 3.0},
-                        {"launcher: missing project on an inactive selection", l.secondaryOnSelection, l.selectionInactive, 4.5},
-                    });
-                    for (const QByteArray marker : {"red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink", "white", ""}) {
-                        const QColor color = t.marker(QString::fromLatin1(marker));
-                        const QByteArray name = marker.isEmpty() ? QByteArray("uncoloured") : marker;
-                        pairs.push_back({name + " marker on the ruler's top", color, t.ruler, 3.0});
-                        pairs.push_back({name + " marker on the ruler's foot", color, t.rulerBottom, 3.0});
-                    }
-                }
-                for (const Pair &pair : pairs)
-                    QTest::addRow("%s (%s), %s, %s", pair.what.constData(), qPrintable(pair.foreground.name(QColor::HexArgb)),
-                                  dark ? "dark" : "light", qPrintable(accent.name()))
-                        << pair.foreground << pair.background << pair.ratio;
+        for (const bool dark : {false, true}) {
+            const EditorTheme t = makeEditorTheme(dark);
+            const LauncherTheme l = launcherTheme(dark);
+            std::vector<Pair> pairs{
+                {"chosen mask tool's symbol on its wash", t.accentText, t.accentTint, 3.0},
+                {"chosen mask tool's symbol on its wash, held", t.accentText, t.accentTintPressed, 3.0},
+                {"selected mask's name on its wash", t.buttonText, t.accentTint, 4.5},
+                {"selected mask's name on its wash, held", t.buttonText, t.accentTintPressed, 4.5},
+                {"playhead's head on the ruler's top", t.playhead, t.ruler, 3.0},
+                {"playhead's head on the ruler's foot", t.playhead, t.rulerBottom, 3.0},
+                {"playhead's line on its halo", t.playhead, t.playheadHalo, 3.0},
+                {"text on a selected row", t.selectionText, t.selection, 4.5},
+                {"secondary text on a selected row", t.onAccentSecondary, t.selection, 4.5},
+                {"chosen menu item", t.menuSelectionText, t.menuSelection, 4.5},
+                {"default button's label", t.onAccent, t.accent, 4.5},
+                {"check box's tick", t.onAccent, t.accent, 3.0},
+                {"track toggle's symbol, on", t.trackToggleOnGlyph, t.trackToggleOn, 4.5},
+                {"track toggle's symbol, off", t.trackToggleGlyph, t.trackToggle, 3.0},
+                {"track toggle on beside one off", t.trackToggleOn, t.trackToggle, 3.0},
+                {"picture clip's name", t.clipVideo.label, t.clipVideo.header, 4.5},
+                {"sound clip's name", t.clipAudio.label, t.clipAudio.header, 4.5},
+                {"music clip's name", t.clipMusic.label, t.clipMusic.header, 4.5},
+                {"title clip's name", t.clipGenerator.label, t.clipGenerator.header, 4.5},
+                {"caption clip's name", t.clipCaption.label, t.clipCaption.header, 4.5},
+                {"selected clip's ring on its outer line", t.clipSelectedRing, t.clipSelectedRingOuter, 4.5},
+                {"Model field under the pointer", t.text, laidOn(t.field, t.hover), 4.5},
+                {"Model field under the pointer while sending", t.text, laidOn(t.assistantSurface, t.hover), 4.5},
+                {"disclosure chevron on a dialog", t.textSecondary, t.dialog, 3.0},
+                {"disclosure chevron on a dialog's group", t.textSecondary, laidOn(t.dialog, t.raised), 3.0},
+                {"disclosure chevron on a panel", t.textSecondary, t.panel, 3.0},
+                {"disclosure chevron on a well", t.textSecondary, t.well, 3.0},
+                {"scroll bar handle on a panel", t.scrollHandle, t.panel, 3.0},
+                {"scroll bar handle on a well", t.scrollHandle, t.well, 3.0},
+                {"scroll bar handle on a field", t.scrollHandle, t.field, 3.0},
+                {"scroll bar handle on a dialog", t.scrollHandle, t.dialog, 3.0},
+                {"added clip's name on its band", t.assistantText, laidOn(t.trackLane, t.proposalAddFill), 4.5},
+                {"added clip's name on its band over a locked lane's hatch", t.assistantText,
+                 laidOn(laidOn(t.trackLane, t.trackLaneLocked), t.proposalAddFill), 4.5},
+                {"skimmed playhead's head on the ruler's top", t.playheadIdle, t.ruler, 3.0},
+                {"skimmed playhead's head on the ruler's foot", t.playheadIdle, t.rulerBottom, 3.0},
+                {"skimmed playhead's line on its halo", t.playheadIdle, t.playheadHalo, 3.0},
+                {"You on the user's message", t.messageUserRole, t.messageUser, 4.5},
+                {"unreadable preset on the preset list", t.error, t.well, 4.5},
+                {"Source monitor's message on the stage", t.textSecondary, t.viewerSurround, 4.5},
+                {"chat's secondary text", t.chatSecondary, t.chatSurface, 4.5},
+                {"chat's reply expander", t.chatExpander, t.chatSurface, 4.5},
+                {"Kerf's monogram on its avatar", t.chatAvatarKerfText, t.chatAvatarKerf, 4.5},
+                {"the user's initials on their avatar", t.chatAvatarUserText, t.chatAvatarUser, 4.5},
+                {"chip's label on its wash", t.chatChipText, laidOn(t.chatSurface, t.chatChip), 4.5},
+                {"open chat toggle's symbol on its disc", t.railGlyphActive, laidOn(t.viewerSurround, t.railButtonActive), 3.0},
+                {"rail symbol on its disc", t.railGlyph, laidOn(t.viewerSurround, t.railButton), 3.0},
+                {"rail label on the stage", t.railLabel, t.viewerSurround, 4.5},
+                {"launcher: Details chevron on the content", l.secondary, l.content, 3.0},
+                {"launcher: scroll bar handle on the content", l.scrollHandle, l.content, 3.0},
+                {"launcher: scroll bar handle on a group", l.scrollHandle, l.group, 3.0},
+                {"launcher: scroll bar handle on the sidebar", l.scrollHandle, l.sidebar, 3.0},
+                {"launcher: missing project on an inactive selection", l.secondaryOnSelection, l.selectionInactive, 4.5},
+                {"launcher: text on a selected row", l.selectionText, l.selection, 4.5},
+                {"launcher: secondary text on a selected row", l.onAccentSecondary, l.selection, 4.5},
+                {"launcher: Choose's label", l.onAccent, l.accent, 4.5},
+                {"launcher: Choose's label, lit", l.onAccent, l.accentTop, 4.5},
+                {"launcher: sidebar symbol", l.accent, l.sidebar, 3.0},
+                {"launcher: format tile's frame", l.tileGlyph, l.tile, 3.0},
+                {"launcher: format tile's plus", l.tileGlyph, l.badge, 3.0},
+                {"launcher: switch's knob on the accent", l.knobOn, l.accent, 3.0},
+                {"launcher: tooltip", l.tooltipText, l.tooltip, 4.5},
+            };
+            for (const QByteArray marker : {"red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink", "white", ""}) {
+                const QColor color = t.marker(QString::fromLatin1(marker));
+                const QByteArray name = marker.isEmpty() ? QByteArray("uncoloured") : marker;
+                pairs.push_back({name + " marker on the ruler's top", color, t.ruler, 3.0});
+                pairs.push_back({name + " marker on the ruler's foot", color, t.rulerBottom, 3.0});
             }
+            for (const Pair &pair : pairs)
+                QTest::addRow("%s (%s), %s", pair.what.constData(), qPrintable(pair.foreground.name(QColor::HexArgb)),
+                              dark ? "dark" : "light")
+                    << pair.foreground << pair.background << pair.ratio;
+        }
     }
     void themeColorsReadWhereTheyAreDrawn() {
         QFETCH(QColor, foreground);
@@ -4284,24 +4379,19 @@ private slots:
 
     // States meant to differ still do: the skimmed playhead is a grey that
     // reads clearly less than the playhead itself wherever either is drawn
-    // (the ruler for their heads, their solid halo for their lines), for
-    // every accent; and a scroll bar's handle under the pointer or held
-    // reads more than at rest.
+    // (the ruler for their heads, their solid halo for their lines); and a
+    // scroll bar's handle under the pointer or held reads more than at rest.
     void quietAndActiveStatesStayApart() {
         for (const bool dark : {false, true}) {
-            for (const QColor &accent : macAccents()) {
-                const EditorTheme t = makeEditorTheme(dark, accent);
-                QVERIFY(t.playheadIdle.hsvSaturation() < 20);
-                QCOMPARE(t.playheadHalo.alpha(), 255);
-                for (const QColor &surface : {t.ruler, t.rulerBottom, t.playheadHalo})
-                    QVERIFY2(contrastRatio(t.playheadIdle, surface) + 0.35 <= contrastRatio(t.playhead, surface),
-                             qPrintable(QStringLiteral("%1 and %2 on %3, %4").arg(t.playheadIdle.name(), t.playhead.name(),
-                                                                              surface.name(), accent.name())));
-            }
-            const EditorTheme t = makeEditorTheme(dark, systemAccent(dark));
-            // The system's own blue stays the playhead's, as it is.
-            QCOMPARE(t.playhead.rgb(), systemAccent(dark).rgb());
-            const LauncherTheme l = launcherTheme(dark, systemAccent(dark));
+            const EditorTheme t = makeEditorTheme(dark);
+            QVERIFY(t.playheadIdle.hsvSaturation() < 70);
+            QCOMPARE(t.playheadHalo.alpha(), 255);
+            for (const QColor &surface : {t.ruler, t.rulerBottom, t.playheadHalo})
+                QVERIFY2(contrastRatio(t.playheadIdle, surface) + 0.35 <= contrastRatio(t.playhead, surface),
+                         qPrintable(QStringLiteral("%1 and %2 on %3").arg(t.playheadIdle.name(), t.playhead.name(), surface.name())));
+            // The playhead is Kerf's accent, as it is.
+            QCOMPARE(t.playhead.rgb(), kerfAccent(dark).rgb());
+            const LauncherTheme l = launcherTheme(dark);
             const auto stronger = [](const QColor &rest, const QColor &active, const QColor &surface) {
                 return contrastRatio(laidOn(surface, active), surface) > contrastRatio(laidOn(surface, rest), surface) + 1.0;
             };
@@ -4312,7 +4402,7 @@ private slots:
         }
         // Both sheets give the stronger handle to a held one as well as a hovered one.
         QVERIFY(editorStyleSheet(editorTheme()).contains(QStringLiteral("QScrollBar::handle:vertical:pressed")));
-        QVERIFY(launcherStyleSheet(launcherTheme(true, systemAccent(true))).contains(QStringLiteral("QScrollBar::handle:vertical:pressed")));
+        QVERIFY(launcherStyleSheet(launcherTheme(true)).contains(QStringLiteral("QScrollBar::handle:vertical:pressed")));
     }
 
     // The chosen mask tool and the selected mask stand out from the others,
@@ -4367,8 +4457,9 @@ private slots:
                 return color;
             };
 
-            // The chosen tool is an accent wash, its symbol the accent, which
-            // reads on the wash; the others keep the plain bezel and glyph.
+            // The chosen tool is a quiet accent wash with no outline, its
+            // symbol the accent, which reads on the wash; the others keep the
+            // plain bezel and glyph.
             auto *rectangle = window.findChild<QAction *>(QStringLiteral("maskRectangle"));
             QVERIFY(rectangle && rectangle->isEnabled());
             rectangle->trigger();
@@ -4383,6 +4474,11 @@ private slots:
             QCOMPARE(held(other), theme.buttonPressed.rgb());
             for (const QRgb wash : {fill(chosen), hovered(chosen)}) QCOMPARE(wash, theme.accentTint.rgb());
             QCOMPARE(held(chosen), theme.accentTintPressed.rgb());
+            // Its edge is the wash (or the panel behind it), never a line in the accent.
+            const QImage chosenShot = chosen->grab().toImage();
+            for (const int x : {0, 1})
+                QVERIFY(contrastRatio(chosenShot.pixelColor(QPoint(x, chosen->height() / 2) * chosenShot.devicePixelRatio()),
+                                      theme.accentText) >= 2.0);
             QVERIFY(qGray(theme.accentTintPressed.rgb()) < qGray(theme.accentTint.rgb()));
             QCOMPARE(ink(chosen->icon(), QIcon::Normal, QIcon::On), theme.accentText.rgb());
             QCOMPARE(ink(other->icon()), theme.glyph.rgb());
@@ -4432,7 +4528,7 @@ private slots:
         well.setIconSize(QSize(32, 12));
         for (const bool dark : {false, true}) {
             const QColor value = dark ? QColor(Qt::black) : QColor(Qt::white);
-            const QColor bezel = makeEditorTheme(dark, systemAccent(dark)).button;
+            const QColor bezel = makeEditorTheme(dark).button;
             EffectControlsPanel::setPropertyValue(&well, value.name());
             const QImage swatch = well.icon().pixmap(well.iconSize(), 2.0).toImage();
             QCOMPARE(swatch.size(), well.iconSize() * 2);
@@ -4442,8 +4538,10 @@ private slots:
             QVERIFY2(contrastRatio(ring, value) >= 3.0, qPrintable(ring.name()));
             // It shows on the light bezel, and on the dark one keeps to the
             // bezel's own grey rather than ringing the swatch in light.
+            // (The dark bezel is a deep espresso, so a ring that reads on
+            // black stays a step above it, never a light halo.)
             if (!dark) QVERIFY2(contrastRatio(ring, bezel) >= 3.0, qPrintable(ring.name()));
-            else QVERIFY2(contrastRatio(ring, bezel) < 1.3 && ring.lightness() < bezel.lightness() + 12, qPrintable(ring.name()));
+            else QVERIFY2(contrastRatio(ring, bezel) < 2.0 && ring.lightness() < bezel.lightness() + 50, qPrintable(ring.name()));
         }
     }
 
@@ -4567,8 +4665,13 @@ private slots:
             QCOMPARE(editorColorScheme(), scheme);
             const EditorTheme &theme = editorTheme();
             QCOMPARE(theme.dark, dark);
-            QVERIFY(dark ? theme.window.lightness() < 40 : theme.window.lightness() > 220);
+            for (const QColor &surface : {theme.window, theme.panel, theme.chrome, theme.well, theme.field, theme.dialog,
+                                          theme.chatSurface, theme.viewerSurround})
+                QVERIFY2(isWarmPaper(surface, dark), qPrintable(surface.name()));
             QVERIFY(dark ? theme.text.lightness() > 180 : theme.text.lightness() < 60);
+            // Text is warm near-black or cream, never pure black or white.
+            QVERIFY(theme.text.rgb() != QColor(Qt::black).rgb() && theme.text.rgb() != QColor(Qt::white).rgb());
+            QVERIFY(theme.textStrong.rgb() != QColor(Qt::black).rgb() && theme.textStrong.rgb() != QColor(Qt::white).rgb());
             // Every token is filled in, and nothing amber or gold is left.
             const QString sheet = qApp->styleSheet() + dockStyleSheet(theme);
             QVERIFY(!sheet.contains(QLatin1Char('@')));
@@ -4623,7 +4726,11 @@ private slots:
             QVERIFY(contrastRatio(theme.tileEmptyText, theme.tileEmpty) >= 4.5);
             QVERIFY(contrastRatio(theme.cardPlaceholderText, theme.cardPlaceholder) >= 4.5);
             QVERIFY(contrastRatio(theme.badgeInfoText, theme.badgeInfo) >= 4.5);
-            QVERIFY(contrastRatio(theme.viewerTextDim, theme.viewerSurround) >= 4.5);
+            // The empty viewer's hint is on the black card; the Source
+            // monitor's message is on the stage, which follows the appearance.
+            QVERIFY(contrastRatio(theme.viewerTextDim, theme.viewerCanvas) >= 4.5);
+            QVERIFY(contrastRatio(theme.viewerText, theme.viewerCanvas) >= 4.5);
+            QVERIFY(contrastRatio(theme.textSecondary, theme.viewerSurround) >= 4.5);
             QVERIFY(contrastRatio(theme.textSecondary, theme.panel) >= 4.5);
             QVERIFY(contrastRatio(theme.statusText, theme.statusBar) >= 4.5);
             // Placeholders carry guidance (example searches, what to ask), so
@@ -4639,7 +4746,11 @@ private slots:
             // A button focused from the keyboard is ringed in the accent at 35%.
             QCOMPARE(theme.focusHalo.rgb(), theme.accent.rgb());
             QCOMPARE(theme.focusHalo.alpha(), 89);
-            QCOMPARE(theme.viewerSurround, QColor("#1c1c1c"));
+            // The viewer's stage follows the appearance (cream or espresso,
+            // a step deeper than the panels), and the picture card is the
+            // same warm black in both.
+            QCOMPARE(theme.viewerSurround.rgb(), (dark ? QColor("#120e0b") : QColor("#e6dece")).rgb());
+            QCOMPARE(theme.viewerCanvas.rgb(), QColor("#0a0807").rgb());
 
             MainWindow window{QString(), QString()};
             window.setConnection(QStringLiteral("ready"));
@@ -4699,8 +4810,8 @@ private slots:
             QCOMPARE(render->height(), window.m_quality->height());
             QCOMPARE(dominantColor(render->grab().toImage()), (render->isEnabled() ? theme.button : theme.buttonDisabled).rgb());
             // Kerf's conversation is open, so its switch at the toolbar's end,
-            // a group of its own, is chosen: the accent wash and edge, its
-            // bubble the accent, as a chosen mode in a title strip.
+            // a group of its own, is chosen: a quiet accent wash with no
+            // outline, its bubble the accent, as a chosen mode in a title strip.
             QToolButton *chat = window.m_chatToggle;
             QVERIFY(chat->isVisible() && chat->isChecked());
             QVERIFY(chat->x() - render->geometry().right() - 1 > 8);
@@ -5268,21 +5379,9 @@ private slots:
             setEditorColorScheme(ColorScheme::Dark);
             QSettings().remove(QStringLiteral("workspace"));
         });
-        // A harbor at dawn in the project's shape: a sky over a sea of one colour.
-        const QColor sea("#24465a");
-        const auto picture = [&sea](const QSize &size) {
-            QImage image(size, QImage::Format_RGB32);
-            QPainter painter(&image);
-            QLinearGradient sky(0, 0, 0, size.height() * 0.55);
-            sky.setColorAt(0, QColor("#f2c79b"));
-            sky.setColorAt(1, QColor("#8fb1d3"));
-            painter.fillRect(QRect(0, 0, size.width(), size.height() * 55 / 100), sky);
-            painter.fillRect(QRect(0, size.height() * 55 / 100, size.width(), size.height()), sea);
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(QColor("#fff1dc"));
-            painter.drawEllipse(QPointF(size.width() * 0.7, size.height() * 0.3), size.width() * 0.06, size.width() * 0.06);
-            return image;
-        };
+        // A harbor at dawn in the project's shape (the tests' procedural
+        // footage): sky over the water, whose lower part is a dark blue-grey.
+        const auto picture = [](const QSize &size) { return testing::footageFrame(testing::Shot::HarborWide, size); };
         struct Format {
             const char *name;
             QSize canvas;
@@ -5345,16 +5444,32 @@ private slots:
                 const auto at = [&](const QPointF &viewerPoint) {
                     return image.pixelColor((QPointF(window.m_viewer->mapTo(&window, QPoint())) + viewerPoint).toPoint() * ratio).rgb();
                 };
-                // The sea, in the picture. A picture narrower than the viewer
+                // Whether the 7 by 7 area at `viewerPoint` is the water: its
+                // average a dark blue-grey (blue above red), as no stage,
+                // card or panel is. Averaged, so the footage's grain and
+                // ripples do not matter.
+                const auto water = [&](const QPointF &viewerPoint) {
+                    double red = 0, green = 0, blue = 0;
+                    const QPoint centre = (QPointF(window.m_viewer->mapTo(&window, QPoint())) + viewerPoint).toPoint();
+                    for (int dy = -3; dy <= 3; ++dy)
+                        for (int dx = -3; dx <= 3; ++dx) {
+                            const QColor c = image.pixelColor((centre + QPoint(dx, dy)) * ratio);
+                            red += c.red(); green += c.green(); blue += c.blue();
+                        }
+                    red /= 49; green /= 49; blue /= 49;
+                    return blue > red + 12 && (red + green + blue) / 3 < 110;
+                };
+                // The water, in the picture. A picture narrower than the viewer
                 // sits against the conversation, as a Short against its
                 // comments, the viewer's surround on its other side.
-                QCOMPARE(at(QPointF(video.center().x(), video.top() + video.height() * 0.85)), sea.rgb());
+                QVERIFY2(water(QPointF(video.center().x(), video.top() + video.height() * 0.85)), qPrintable(label));
+                QVERIFY(!water(QPointF(video.left() - 4, video.center().y())));
                 const bool pillarboxed = video.width() < room.width() - 1;
                 QCOMPARE(pillarboxed, format.canvas.width() <= format.canvas.height());
                 if (pillarboxed) {
                     const int pictureRight = window.m_viewer->mapTo(&window, QPoint()).x() + int(std::ceil(video.right()));
                     QVERIFY2(chatRect.left() - pictureRight <= 16, qPrintable(QStringLiteral("%1: %2 px").arg(label).arg(chatRect.left() - pictureRight)));
-                    QCOMPARE(at(QPointF(video.right() - 4, video.top() + video.height() * 0.85)), sea.rgb());
+                    QVERIFY2(water(QPointF(video.right() - 6, video.top() + video.height() * 0.85)), qPrintable(label));
                     QCOMPARE(at(QPointF(video.left() - 4, video.center().y())), theme.viewerSurround.rgb());
                 }
                 // The conversation's column: the well, under its header with
@@ -5510,16 +5625,9 @@ private slots:
             if (!shots.isEmpty()) QVERIFY(image.save(QDir(shots).filePath(name + QStringLiteral(".png"))));
         };
         const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
-        // A blue picture, on which outlines in the (blue) accent must still read.
-        QImage picture(1920, 1080, QImage::Format_RGB32);
-        {
-            QPainter painter(&picture);
-            QLinearGradient sky(0, 0, 0, 1080);
-            sky.setColorAt(0, QColor("#9cc3ea"));
-            sky.setColorAt(0.6, QColor("#3d78c2"));
-            sky.setColorAt(1, QColor("#1b3350"));
-            painter.fillRect(picture.rect(), sky);
-        }
+        // Footage (the harbor at dawn: sky, hills and water), on which the
+        // masks' outlines and names must read.
+        const QImage picture = testing::footageFrame(testing::Shot::HarborWide, QSize(960, 540));
         // Made in the tests' dark appearance, so the loop below sees them redraw.
         MediaArtwork artwork;
         artwork.frames.insert(QStringLiteral("m1"), picture.scaled(160, 90));
@@ -5570,7 +5678,7 @@ private slots:
             QCOMPARE(view.pixelColor(QPoint(2, 2) * ratio), theme.viewerSurround);
             const QPointF corner = viewer.pictureToWidget().map(QPointF(0.2, 0.15));
             QCOMPARE(view.pixelColor((corner * ratio).toPoint()), theme.maskHandleFill);
-            // The selected mask's name is white over the (blue) picture.
+            // The selected mask's name is light over the picture.
             const QRect nameArea = QRectF(corner + QPointF(3, -16), QSizeF(16, 13)).toAlignedRect();
             int lightest = 0;
             for (int y = nameArea.top(); y <= nameArea.bottom(); ++y)
@@ -5640,6 +5748,9 @@ private slots:
             QCOMPARE(cardPixel("light.edgeglow"), QColor(Qt::red));
             effects.show();
             QVERIFY(QTest::qWaitForWindowExposed(&effects));
+            // Nothing under the pointer.
+            QTest::mouseMove(&effects, QPoint(effects.width() - 2, effects.height() - 2));
+            effects.m_category->setAttribute(Qt::WA_UnderMouse, false);
             const QImage browser = effects.grab().toImage();
             // The category pop-up is a button's bezel, as every pop-up is.
             QVERIFY(popUpHasButtonBezel(browser, effects.m_category, theme.button));

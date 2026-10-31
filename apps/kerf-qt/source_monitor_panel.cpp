@@ -38,7 +38,8 @@ protected:
         QPainter painter(this);
         painter.fillRect(rect(), editorTheme().viewerSurround);
         if (frame.isNull()) {
-            painter.setPen(editorTheme().viewerTextDim);
+            // On the stage, which follows the appearance.
+            painter.setPen(editorTheme().textSecondary);
             painter.drawText(rect().adjusted(16, 0, -16, 0), Qt::AlignCenter | Qt::TextWordWrap, message);
             return;
         }

@@ -18,19 +18,24 @@ enum class ColorScheme { System, Light, Dark };
 // the platform reports one (Qt 6.5 and later), else the lightness of the
 // system palette's window colour.
 bool systemIsDark();
-// The accent chosen in System Settings (Qt 6.6 and later), or macOS's blue
-// for `dark` or light where the platform has none to give (offscreen test
-// runs among them).
-QColor systemAccent(bool dark);
+// Kerf's own accent, one per appearance: an aubergine ink on cream and its
+// mauve on the warm dark. Kerf does not follow the system accent.
+QColor kerfAccent(bool dark);
 // KERF_COLOR_SCHEME: Light or Dark when it names one, else System.
 ColorScheme environmentColorScheme();
 // Whether `scheme` draws dark: Dark, or System on a dark platform.
 bool schemeIsDark(ColorScheme scheme);
 
+// A colour written as CSS writes it: #rrggbb, or #rrggbbaa with the alpha
+// last (QColor reads eight digits as #aarrggbb).
+QColor cssColor(const char *css);
 // `over` laid on `under` at `amount` (0 to 1), alpha included.
 QColor mixColor(const QColor &under, const QColor &over, qreal amount);
 // WCAG contrast ratio of two opaque colours (1 to 21).
 qreal contrastRatio(const QColor &a, const QColor &b);
+// `color` moved towards white (on a dark `background`) or black (on a light
+// one), in `steps` steps, until it reads at `ratio`; unchanged if it does.
+QColor readableOn(const QColor &color, const QColor &background, qreal ratio, int steps = 20);
 // `color` made only as much more opaque as it takes to read at `ratio` when
 // laid on the opaque `background` (opaque at most).
 QColor readableAlphaOn(const QColor &color, const QColor &background, qreal ratio);
@@ -59,17 +64,16 @@ ClipKind clipKind(const QJsonObject &track, const QJsonObject &clip = {});
 // editorTheme(); a widget that caches colours or pixmaps rebuilds them on
 // EditorAppearance::changed().
 //
-// Both are macOS's window families, as the project launcher draws them:
-// light, and dark with #1e1e1e content under #2c2c2e chrome and #3a3a3c
-// hairlines, so opening a project from the launcher keeps the same look.
-// The system accent marks focus and the default action. The viewer's
-// surround is the same neutral dark grey in both, so pictures are judged
-// against the same field.
+// Both share the project launcher's palette, so opening a project keeps the
+// same look: antique cream paper in light, warm espresso in dark, never
+// pure white or black. Kerf's own purple marks Kerf, focus, the playhead
+// and the default action. The viewer's stage follows the appearance; the
+// picture card is warm black in both.
 struct EditorTheme {
     bool dark = true;
 
-    // Accent: the system accent (focus, the default button, the playhead,
-    // checked tools, progress).
+    // Accent: Kerf's own (focus, the default button, the playhead, checked
+    // tools, progress). It does not follow the system accent.
     QColor accent;
     QColor accentTop;         // Top of an accent bezel's gradient.
     QColor accentPressed;     // An accent button held down.
@@ -80,12 +84,10 @@ struct EditorTheme {
                               // mask tool and the selected mask. `accentText` reads on it at 3:1.
     QColor accentTintPressed; // `accentTint` darkened while held, as a bezel darkens; `accentText`
                               // still reads on it at 3:1.
-    QColor onAccent;          // Text and glyphs on `accent`. White on the exact system accent, as macOS
-                              // draws default buttons and highlighted menu rows (4.0:1 on #007aff,
-                              // 3.65:1 on #0a84ff): a deliberate choice, so the editor's blue matches
-                              // the system's. `menuSelection` and `trackToggleOn` follow it.
-    QColor onAccentSecondary; // Secondary text on `selection`: white held back only as far as it still
-                              // reads at 4.5:1 (all white where even white does not).
+    QColor onAccent;          // Text and glyphs on `accent`, 4.5:1: cream on the aubergine, dark ink on
+                              // the light mauve of the dark appearance.
+    QColor onAccentSecondary; // Secondary text on `selection`: `selectionText` held back only as far as
+                              // it still reads at 4.5:1.
 
     // Surfaces, from the back of the window forwards.
     QColor window;           // Behind everything: the main window, the dock container.
@@ -198,16 +200,16 @@ struct EditorTheme {
     QColor success;
 
     // Agent work (the AI bar, proposals, Ask Kerf, the agent's messages):
-    // the system purple, so it never reads as the user's own selection. It
-    // marks, and never fills a button: accepting is the accent's default
-    // action, as everywhere else.
+    // Kerf's purple is the accent itself. It marks, and never fills a
+    // button other than the default action.
     QColor assistant;        // Thin marks: proposal outlines, the AI bar's stripe, the Ask prompt's ring.
     QColor assistantSurface; // A bar or note's fill.
     QColor assistantBorder;  // A bar or note's edge, and its buttons' outlines.
     QColor assistantText;    // Text on `assistantSurface`, and the agent's name in the conversation.
     QColor assistantHover;   // A suggestion chip (an `assistantSurface` pill) under the pointer.
 
-    // Conversation bubbles in the assistant panel.
+    // Conversation rows in the chat: they have no boxes, so their fills and
+    // edges are the chat's own surface.
     QColor messageUser;
     QColor messageUserBorder;
     QColor messageAgent;
@@ -215,10 +217,37 @@ struct EditorTheme {
     QColor messageText;     // Message body text.
     QColor messageUserRole; // "You" over the user's messages, 4.5:1 on `messageUser`.
 
+    // The chat panel laid out beside the picture, as a video site's comments
+    // sit beside its player: a page lighter than the stage, rows with an
+    // avatar disc, tonal chips, and an underlined composer.
+    QColor chatSurface;
+    QColor chatText;
+    QColor chatSecondary;         // Times, counts, the placeholder: 4.5:1 on `chatSurface`.
+    QColor chatChip;              // A suggestion chip: a tonal fill, no outline...
+    QColor chatChipHover;         // ...under the pointer...
+    QColor chatChipText;          // ...and its label.
+    QColor chatAvatarUser;        // The user's avatar disc and its initials.
+    QColor chatAvatarUserText;
+    QColor chatAvatarKerf;        // Kerf's avatar disc (the accent) and its monogram.
+    QColor chatAvatarKerfText;
+    QColor chatExpander;          // "2 changes" under Kerf's row, in the accent as text.
+    QColor chatComposerRule;      // The composer's underline, and in focus.
+    QColor chatComposerRuleFocus;
+    // The round buttons between the picture and the chat.
+    QColor railButton;
+    QColor railButtonHover;
+    QColor railButtonActive;      // The chat's toggle while it is open: tonal, not filled...
+    QColor railGlyph;
+    QColor railGlyphActive;       // ...its symbol in Kerf's ink.
+    QColor railLabel;             // The count or label under a button.
+    // A tonal pill (Reject, a secondary action): a fill and no outline.
+    QColor pillTonal;
+    QColor pillTonalText;
+
     // Icons drawn in code: toolbar and transport symbols, pop-up arrows.
     QColor glyph;
     QColor glyphDisabled;
-    QColor toolSelected; // Behind the chosen tool in the tool palette (its symbol is the accent).
+    QColor toolSelected; // Behind a chosen tool or mode: a tonal fill, no outline (its symbol is the accent).
 
     // Timeline.
     QColor timelineBackground;      // Below the last track, so spare height never reads as a track.
@@ -240,7 +269,7 @@ struct EditorTheme {
     QColor trackBadgeText;
     QColor trackToggle;       // Output, mute, and lock toggles when off...
     QColor trackToggleGlyph;
-    QColor trackToggleOn;     // ...and on (the accent).
+    QColor trackToggleOn;     // ...and on: a neutral ink plate, not the accent.
     QColor trackToggleOnGlyph;
     QColor trackLane;         // A track's lane.
     QColor trackLaneAlt;      // Every other lane, where alternation is wanted.
@@ -262,8 +291,7 @@ struct EditorTheme {
     ClipStyle clipCaption;
     QColor clipSelectedRing;      // The selected clip's 2px inner ring...
     QColor clipSelectedRingOuter; // ...and the 1px line outside it, so it reads on every clip hue
-                                  // and lane. Not the accent: the accent is usually blue, the
-                                  // picture clips' own hue.
+                                  // and lane: cream over ink, not a second loud hue.
     QColor clipTrim;         // The trim bracket on the edge under the pointer or being trimmed.
     QColor clipHighlight;    // The 1px highlight inside a clip's top edge.
     QColor clipFxBadge;      // The FX badge on an effected clip's header...
@@ -310,9 +338,10 @@ struct EditorTheme {
     // any picture, its own purples and pinks included.
     QColor proposalUnderlay;
 
-    // Viewers (Program and Source monitors, the region picker). The same in
-    // both appearances: pictures are judged against a neutral dark field.
-    QColor viewerSurround;      // Around the picture.
+    // Viewers (Program and Source monitors, the region picker). The stage
+    // follows the appearance; the picture card and what is drawn on it are
+    // the same warm black in both.
+    QColor viewerSurround;      // The stage around the picture card.
     QColor viewerCanvas;        // The canvas behind a picture that does not fill it, and when empty.
     QColor viewerText;          // The empty viewer's title...
     QColor viewerTextDim;       // ...and its hint; the Source monitor's message.
@@ -320,10 +349,10 @@ struct EditorTheme {
     QColor viewerGlyphRing;     // ...its ring...
     QColor viewerGlyphFill;     // ...and the ring's fill.
     QColor viewerCaption;       // The caption box over the picture...
-    QColor viewerCaptionBorder;
+    QColor viewerCaptionBorder; // ...its edge (the box itself: no line around it)...
     QColor viewerCaptionText;
-    // Masks and regions over the picture: white over a dark rule, never the
-    // accent, whose hue can be the picture's own (blue sky, blue water).
+    // Masks and regions over the picture: cream over a dark rule, never the
+    // accent, whose hue can be the picture's own.
     QColor maskOutline;         // A selected mask's outline...
     QColor maskOutlineIdle;     // ...one that is not selected...
     QColor maskShadow;          // ...and the dark rule under both.
@@ -356,8 +385,8 @@ struct EditorTheme {
     QColor marker(const QString &name) const;
 };
 
-// The theme for an appearance and accent.
-EditorTheme makeEditorTheme(bool dark, const QColor &accent);
+// The theme for an appearance.
+EditorTheme makeEditorTheme(bool dark);
 
 // The scheme the editor draws in: KERF_COLOR_SCHEME's, else System, until
 // setEditorColorScheme() picks another.
@@ -365,13 +394,13 @@ ColorScheme editorColorScheme();
 // Draw the editor (and launchers made after this) in `scheme`, now.
 void setEditorColorScheme(ColorScheme scheme);
 // The theme in force. Before the first applyEditorAppearance() it is the
-// one the current scheme and accent call for.
+// one the current scheme calls for.
 const EditorTheme &editorTheme();
-// Compute the theme for the current scheme and system accent and, when it
+// Compute the theme for the current scheme and, when it
 // changed (or was never applied), set the application's palette and style
 // sheet, repaint every widget, and emit EditorAppearance::changed().
 void applyEditorAppearance();
-// Re-apply as the platform's appearance or accent changes: on
+// Re-apply as the platform's appearance changes: on
 // QStyleHints::colorSchemeChanged and on application palette changes.
 void followSystemAppearance();
 
@@ -389,14 +418,10 @@ private:
     EditorAppearance() = default;
 };
 
-// A white tick for a checked check box on the accent, as an image file the
-// style sheet can name (written once per run); empty if it cannot be written.
-QString checkMarkImagePath();
-
 // The application palette for `theme`: the roles Fusion paints controls the
 // style sheet leaves to it with (check boxes, radio buttons, plain text
-// edits). It leaves Window and Accent to the platform, so systemIsDark()'s
-// palette fallback and systemAccent() keep reading the system's.
+// edits). It leaves Window to the platform, so systemIsDark()'s palette
+// fallback keeps reading the system's.
 QPalette editorPalette(const EditorTheme &theme);
 
 } // namespace kerf

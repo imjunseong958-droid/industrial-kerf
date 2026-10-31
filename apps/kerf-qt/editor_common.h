@@ -103,6 +103,8 @@ void drawUpDownChevrons(QPainter &painter, const QPointF &mid, const QColor &col
 // can name (with an @2x twin for Retina screens), written once per colour
 // per run; empty if it cannot be written.
 QString popUpChevronsImagePath(const QColor &color);
+// The same for a checked check box's tick, drawn in `color` (`onAccent`).
+QString checkMarkImagePath(const QColor &color);
 // The same for a dock tab's close symbol (an ×) and its area's tabs menu
 // (a ⌄). The dock manager's own symbols are SVG files, which a Qt without
 // its SVG plugin (as Linux distributions split it out) leaves blank.
