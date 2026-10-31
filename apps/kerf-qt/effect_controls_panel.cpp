@@ -109,14 +109,16 @@ EffectControlsPanel::EffectControlsPanel(QWidget *parent) : QWidget(parent) {
     masksLayout->setSpacing(6);
     m_maskHeader = new QHBoxLayout;
     m_maskHeader->setSpacing(2);
-    m_maskHeader->addWidget(new QLabel(tr("Masks")), 1);
+    auto *masksTitle = new QLabel(tr("Masks"));
+    masksTitle->setObjectName(QStringLiteral("inspectorSection"));
+    m_maskHeader->addWidget(masksTitle, 1);
     masksLayout->addLayout(m_maskHeader);
     m_masksHint = new QLabel(tr("Choose a mask tool, then draw on the Program monitor."));
     m_masksHint->setObjectName(QStringLiteral("muted"));
     m_masksHint->setWordWrap(true);
     masksLayout->addWidget(m_masksHint);
     m_masksLayout = new QVBoxLayout;
-    m_masksLayout->setSpacing(8);
+    m_masksLayout->setSpacing(kEffectRuleGap);
     masksLayout->addLayout(m_masksLayout);
     layout->addWidget(m_masksSection);
     auto *effects = new QWidget;
@@ -252,11 +254,14 @@ void EffectControlsPanel::showMasks() {
             delete item->widget();
             delete item;
         }
-        for (const QString &name : names) {
+        for (int index = 0; index < names.size(); ++index) {
+            const QString &name = names.at(index);
             auto *box = new QWidget;
             box->setObjectName(QStringLiteral("maskBox"));
+            // Set apart as the effects are.
+            box->setProperty("following", index > 0);
             auto *boxLayout = new QVBoxLayout(box);
-            boxLayout->setContentsMargins(0, 0, 0, 0);
+            boxLayout->setContentsMargins(0, index > 0 ? kSectionLead - kEffectRuleGap : 0, 0, 0);
             boxLayout->setSpacing(6);
             auto *header = new QHBoxLayout;
             auto *select = new QToolButton;

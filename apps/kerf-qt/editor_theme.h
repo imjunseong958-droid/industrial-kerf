@@ -101,7 +101,7 @@ struct EditorTheme {
     QColor text;          // Body text and labels.
     QColor textStrong;    // Titles, the selected tab, emphasised values.
     QColor textSecondary; // Captions, hints, inactive tabs.
-    QColor textTertiary;  // Least important: durations, counts.
+    QColor textTertiary;  // Disclosure glyphs. Under 4.5:1, so never text.
     QColor placeholderText; // A field's placeholder, which carries guidance: 4.5:1 on `field`.
     QColor textDisabled;  // Disabled controls.
     QColor tabInactiveText; // A dock's tabs that are not current, 4.5:1 on `panelTitle`.

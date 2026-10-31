@@ -221,11 +221,11 @@ QString conversationIntro(const EditorTheme &t) {
         "<p style='margin-top:2px; color:%1; font-size:11px; font-weight:600;'>Your editing partner</p>"
         "<p style='margin-top:2px; color:%2; font-size:14px; font-weight:600;'>Make your next cut.</p>"
         "<p style='margin-top:4px; color:%3;'>Describe the change. Kerf uses this timeline.</p>"
-        "<p style='margin-top:10px; color:%4; font-size:11px; font-weight:600;'>Try asking</p>"
-        "<p style='margin-top:2px; color:%5;'>“Trim the opening to three seconds.”</p>"
-        "<p style='margin-top:2px; color:%5;'>“Lower the music under the dialogue.”</p>"
+        "<p style='margin-top:10px; color:%3; font-size:11px; font-weight:600;'>Try asking</p>"
+        "<p style='margin-top:2px; color:%4;'>“Trim the opening to three seconds.”</p>"
+        "<p style='margin-top:2px; color:%4;'>“Lower the music under the dialogue.”</p>"
         "<p style='margin-top:10px; color:%3; font-size:11px;'>Review a proposal before it changes the cut.</p>")
-        .arg(t.assistantText.name(), t.textStrong.name(), t.textSecondary.name(), t.textTertiary.name(), t.text.name());
+        .arg(t.assistantText.name(), t.textStrong.name(), t.textSecondary.name(), t.text.name());
 }
 
 // Conversation messages carry their kind, so a change of appearance can

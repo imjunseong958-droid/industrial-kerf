@@ -54,6 +54,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QScopeGuard>
+#include <QSet>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSignalSpy>
@@ -398,6 +399,24 @@ private slots:
         window.show();
         showAssistant(window);
         QVERIFY(window.m_conversation->toPlainText().contains(QStringLiteral("Make your next cut.")));
+        // Every colour the welcome is written in reads at 4.5:1 on the
+        // panel's well, in both appearances.
+        {
+            const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
+            for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+                setEditorColorScheme(scheme);
+                const QString html = window.m_conversation->toHtml();
+                QVERIFY(html.contains(QStringLiteral("Try asking")));
+                int colours = 0;
+                for (const QRegularExpressionMatch &match : QRegularExpression(QStringLiteral("color:(#[0-9a-fA-F]{6})")).globalMatch(html)) {
+                    const QColor ink(match.captured(1));
+                    const qreal ratio = contrastRatio(ink, editorTheme().well);
+                    QVERIFY2(ratio >= 4.5, qPrintable(QStringLiteral("%1 on %2: %3").arg(ink.name(), editorTheme().well.name()).arg(ratio, 0, 'f', 2)));
+                    ++colours;
+                }
+                QVERIFY(colours >= 4);
+            }
+        }
         const QString emptyState = window.m_conversation->toPlainText();
         window.appendConversationNote(QStringLiteral("Tool"), QStringLiteral("Inspecting timeline"));
         QCOMPARE(window.m_conversation->toPlainText(), emptyState);
@@ -1027,6 +1046,25 @@ private slots:
         QCOMPARE(viewer->maskTool(), MaskTool::None);
         QVERIFY(!pen->isChecked());
         QVERIFY(op().isEmpty());
+        // A second mask is set apart as a second effect is: a hairline over
+        // it and the same 18px lead. The section's title and the masks'
+        // names are semibold, as the effects' names are.
+        {
+            QJsonObject k2 = k1;
+            k2.insert("name", "k2");
+            snapshot(9, QJsonArray{k1, k2});
+            const auto pair = inspector->findChildren<QWidget *>(QStringLiteral("maskBox"));
+            QCOMPARE(pair.size(), 2);
+            inspector->ensurePolished();
+            QVERIFY(!pair.at(0)->property("following").toBool());
+            QVERIFY(pair.at(1)->property("following").toBool());
+            QCOMPARE(inspector->m_masksLayout->spacing() + pair.at(1)->layout()->contentsMargins().top(), 18);
+            const QImage second = pair.at(1)->grab().toImage();
+            QCOMPARE(second.pixelColor(second.width() / 2, 0), editorTheme().divider);
+            QCOMPARE(inspector->findChild<QLabel *>(QStringLiteral("inspectorSection"))->font().weight(), QFont::DemiBold);
+            for (const QWidget *box : pair)
+                QCOMPARE(box->findChild<QToolButton *>(QStringLiteral("maskName"))->font().weight(), QFont::DemiBold);
+        }
         // Deselecting the clip hides its masks and stops a tool.
         rectangle->trigger();
         window.selectClip(QString());
@@ -2074,6 +2112,35 @@ private slots:
         QVERIFY(window.m_commands->reason(QStringLiteral("collab.sync")).startsWith(QStringLiteral("Share the project with Git first")));
         QVERIFY(window.m_commands->isEnabled(QStringLiteral("collab.publish")));
         QCOMPARE(window.m_commands->reason(QStringLiteral("collab.pullRequest")), window.m_commands->reason(QStringLiteral("collab.sync")));
+
+        // Every state's words read at 4.5:1 on the status bar, in both
+        // appearances; "Not shared" is the only sign a project is not.
+        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
+        QJsonObject live = status;
+        live.insert("live", true);
+        const QList<QJsonObject> events{
+            QJsonObject{{"type", "collab"}, {"status", status}},
+            QJsonObject{{"type", "collab_sync"}, {"stage", "fetching"}},
+            QJsonObject{{"type", "collab_sync"}, {"stage", "done"}, {"report", QJsonObject{{"incoming", QJsonArray{}}, {"pushed", false}}}},
+            QJsonObject{{"type", "collab"}, {"status", live}},
+            QJsonObject{{"type", "collab_sync"}, {"stage", "failed"}, {"message", "offline"}},
+            QJsonObject{{"type", "collab"}, {"status", conflicted}},
+            QJsonObject{{"type", "collab"}, {"status", local}}};
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            QSet<QString> states;
+            for (const QJsonObject &event : events) {
+                window.handleEvent(event);
+                const QString state = window.m_syncChip->property("state").toString();
+                states.insert(state);
+                const QColor ink = window.m_syncChip->palette().color(QPalette::ButtonText);
+                const qreal ratio = contrastRatio(ink, editorTheme().statusBar);
+                QVERIFY2(ratio >= 4.5, qPrintable(QStringLiteral("%1: %2 on %3: %4")
+                                                      .arg(state, ink.name(), editorTheme().statusBar.name())
+                                                      .arg(ratio, 0, 'f', 2)));
+            }
+            QCOMPARE(states, (QSet<QString>{"idle", "syncing", "live", "failed", "conflict", "local"}));
+        }
     }
 
     void liveSyncAndCommitsAreCollabRequests() {

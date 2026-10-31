@@ -487,10 +487,10 @@ QLabel#statusPill {
 }
 QLabel#timecode { color: @text; font-family: Menlo, Monaco, monospace; font-size: 11px; }
 QLabel#inspectorClip { color: @textStrong; font-weight: 600; padding: 5px 0 5px 0; margin: 0; }
-/* Each effect is headed by its name in semibold, as the clip's is; a
-   hairline sets it apart from the effect above. */
-QCheckBox#effectEnabled { font-weight: 600; }
-QWidget#effectBox[following="true"] { border-top: 1px solid @divider; }
+/* Each section, effect and mask is headed by its name in semibold, as the
+   clip's is; a hairline sets an effect or mask apart from the one above. */
+QCheckBox#effectEnabled, QLabel#inspectorSection, QToolButton#maskName { font-weight: 600; }
+QWidget#effectBox[following="true"], QWidget#maskBox[following="true"] { border-top: 1px solid @divider; }
 /* The window's title, 13px semibold as macOS's and the launcher's. */
 QLabel#projectTitle { color: @text; font-size: 13px; font-weight: 600; padding: 0; }
 QWidget#assistantPanel { background: @well; border-left: 1px solid @divider; }
@@ -814,7 +814,6 @@ QStatusBar QToolButton#syncChip {
     min-height: 0;
 }
 QStatusBar QToolButton#syncChip:hover { color: @textStrong; background: @hover; }
-QStatusBar QToolButton#syncChip[state="local"] { color: @textTertiary; }
 QStatusBar QToolButton#syncChip[state="syncing"] { color: @accentText; }
 QStatusBar QToolButton#syncChip[state="live"] { color: @success; }
 QStatusBar QToolButton#syncChip[state="conflict"],
