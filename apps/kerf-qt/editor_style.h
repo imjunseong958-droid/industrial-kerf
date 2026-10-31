@@ -7,6 +7,7 @@
 #include <QHash>
 #include <QRegularExpression>
 #include <QString>
+#include <utility>
 
 namespace kerf {
 
@@ -115,10 +116,15 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
     qsizetype last = 0;
     for (auto it = token.globalMatch(sheet); it.hasNext();) {
         const QRegularExpressionMatch match = it.next();
-        // Images: the tick, and pop-up chevrons in the text colours.
-        static const QHash<QString, QColor EditorTheme::*> chevrons{
-            {QStringLiteral("popUpChevrons"), &EditorTheme::text},
-            {QStringLiteral("popUpChevronsDisabled"), &EditorTheme::textDisabled},
+        // Images: the tick, pop-up chevrons in the text colours, and the
+        // dock tabs' symbols in the glyph colours.
+        using ImagePath = QString (*)(const QColor &);
+        static const QHash<QString, std::pair<ImagePath, QColor EditorTheme::*>> images{
+            {QStringLiteral("popUpChevrons"), {popUpChevronsImagePath, &EditorTheme::text}},
+            {QStringLiteral("popUpChevronsDisabled"), {popUpChevronsImagePath, &EditorTheme::textDisabled}},
+            {QStringLiteral("closeMark"), {closeMarkImagePath, &EditorTheme::glyph}},
+            {QStringLiteral("closeMarkDisabled"), {closeMarkImagePath, &EditorTheme::glyphDisabled}},
+            {QStringLiteral("tabsMenuMark"), {tabsMenuImagePath, &EditorTheme::glyph}},
         };
         const auto image = [](const QString &path) {
             return path.isEmpty() ? QStringLiteral("none") : QStringLiteral("url(%1)").arg(path);
@@ -127,8 +133,8 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
         const QString name = match.captured(1);
         if (name == QStringLiteral("checkMark")) {
             value = image(checkMarkImagePath());
-        } else if (const auto chevron = chevrons.constFind(name); chevron != chevrons.cend()) {
-            value = image(popUpChevronsImagePath(t.*(chevron.value())));
+        } else if (const auto drawn = images.constFind(name); drawn != images.cend()) {
+            value = image(drawn->first(t.*(drawn->second)));
         } else {
             const auto field = fields.constFind(name);
             if (field == fields.cend()) continue;
@@ -794,10 +800,8 @@ QDialog#publishDialog QCheckBox::indicator:disabled { background: @fieldDisabled
 // Tabs show their close button only under the pointer (Workspace shows and
 // hides it). The dock manager's sheet draws a black close button, and a
 // white one on the focused tab (which it fills with the highlight); here no
-// tab is filled, so every tab takes the icons for the appearance, from the
-// dock manager's own resources.
+// tab is filled, so every tab takes the editor's symbol in the glyph colour.
 inline QString dockStyleSheet(const EditorTheme &theme) {
-    const QString icons = theme.dark ? QStringLiteral("_dark") : QString();
     return themedStyleSheet(QStringLiteral(R"QSS(
 ads--CDockContainerWidget { background: @window; }
 ads--CDockContainerWidget > QSplitter { padding: 0; }
@@ -819,7 +823,7 @@ ads--CDockWidgetTab[well="true"][activeTab="true"],
 ads--CDockWidgetTab[well="true"][focused="true"] { background: @well; }
 ads--CDockWidgetTab > #tabCloseButton,
 ads--CDockWidgetTab[focused="true"] > #tabCloseButton {
-    qproperty-icon: url(:/ads/images/close-button$icons.svg), url(:/ads/images/close-button-disabled$icons.svg) disabled;
+    qproperty-icon: @closeMark, @closeMarkDisabled disabled;
     qproperty-iconSize: 12px 12px;
     background: transparent;
     border: 0;
@@ -830,7 +834,7 @@ ads--CDockWidgetTab > #tabCloseButton:hover,
 ads--CDockWidgetTab[focused="true"] > #tabCloseButton:hover { background: @hover; }
 ads--CDockWidgetTab > #tabCloseButton:pressed,
 ads--CDockWidgetTab[focused="true"] > #tabCloseButton:pressed { background: @pressed; }
-#tabsMenuButton { qproperty-icon: url(:/ads/images/tabs-menu-button$icons.svg); }
+#tabsMenuButton { qproperty-icon: @tabsMenuMark; qproperty-iconSize: 12px 12px; }
 ads--CDockWidget { background: @panel; border: 0; }
 /* A title strip's actions are borderless symbols and plain secondary text,
    20px tall with 3px clear above and below, as Logic and Final Cut draw
@@ -852,7 +856,7 @@ ads--CTitleBarButton:pressed,
 ads--CTitleBarButton:checked { background: @pressed; border-color: transparent; }
 ads--CTitleBarButton:disabled { color: @textSecondary; background: transparent; border-color: transparent; }
 ads--CFloatingDockContainer { background: @panel; }
-)QSS").replace(QStringLiteral("$icons"), icons), theme);
+)QSS"), theme);
 }
 
 } // namespace kerf
