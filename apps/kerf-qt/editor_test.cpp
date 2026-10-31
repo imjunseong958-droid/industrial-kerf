@@ -369,11 +369,25 @@ private slots:
         ViewerWidget::StageLayout stage = viewer.stageLayout();
         QVERIFY(stage.device);
         QCOMPARE(viewer.videoRect(), stage.card);
-        // The phone fills the stage's height, inside its own margins.
-        QVERIFY(std::abs(stage.body.height() - (viewer.height() - ViewerWidget::kDeviceMarginTop - ViewerWidget::kDeviceMarginBottom)) < 1);
-        QVERIFY(std::abs(stage.body.top() - ViewerWidget::kDeviceMarginTop) < 1);
+        // The phone fills the stage's height, inside the stage's inset (in
+        // this short stage, the least: its screen is under 240 points even so).
+        const int inset = viewer.stageInset(ViewerWidget::Device::Phone);
+        QCOMPARE(inset, ViewerWidget::kLeastStageInset);
+        QVERIFY(std::abs(stage.body.height() - (viewer.height() - 2 * inset)) < 1);
+        QVERIFY(std::abs(stage.body.top() - inset) < 1);
         // As much room under it as over it.
         QVERIFY(std::abs((viewer.height() - stage.body.bottom()) - stage.body.top()) <= 1);
+        // Where the stage is tall enough, the card's 16 over and under it.
+        {
+            viewer.resize(900, 620);
+            QCOMPARE(viewer.stageInset(ViewerWidget::Device::Phone), ViewerWidget::kStageMargin);
+            const ViewerWidget::StageLayout tall = viewer.stageLayout();
+            QVERIFY(std::abs(tall.body.top() - ViewerWidget::kStageMargin) < 1);
+            QVERIFY(std::abs((viewer.height() - tall.body.bottom()) - ViewerWidget::kStageMargin) <= 1);
+            QCOMPARE(viewer.stageInset(ViewerWidget::Device::Laptop), ViewerWidget::kStageMargin);
+            QCOMPARE(viewer.stageInset(ViewerWidget::Device::None), ViewerWidget::kStageMargin);
+            viewer.resize(900, 460);
+        }
         QVERIFY(std::abs(stage.body.width() / stage.body.height() - deviceBodyAspect()) < 0.01);
         const DeviceGeometry device = deviceGeometry(stage.body, 9.0 / 16.0);
         QCOMPARE(device.screen, stage.screen);
@@ -706,13 +720,12 @@ private slots:
             QCoreApplication::processEvents();
             const QRectF alone = viewer->stageLayout().body;
             QVERIFY(std::abs(alone.center().x() - viewer->width() / 2.0) <= 1);
-            // As much room over it as under it: centred in the stage, as a
-            // card is (a device keeps kDeviceMarginTop either side).
+            // As much room over it as under it, the card's 16: centred in
+            // the stage, as a card is.
             {
                 const double over = alone.top(), under = viewer->height() - alone.bottom();
                 QVERIFY2(std::abs(over - under) <= 1, qPrintable(QStringLiteral("%1 over, %2 under").arg(over).arg(under)));
-                QVERIFY(over >= ViewerWidget::kDeviceMarginTop - 0.5);
-                QCOMPARE(ViewerWidget::kDeviceMarginTop, ViewerWidget::kDeviceMarginBottom);
+                QVERIFY2(std::abs(over - ViewerWidget::kStageMargin) <= 1, qPrintable(QStringLiteral("%1 over").arg(over)));
             }
             QVERIFY(alone.width() >= stage.body.width() - 0.5);
             clearOfEdges(viewer->stageLayout());
@@ -2300,20 +2313,113 @@ private slots:
         }
     }
 
+    // The default catches the knob on one pixel only: dragged slowly past
+    // it on the Inspector's 84-point slider, every pixel gives a value of
+    // its own, one step from the last, and exactly one gives the default.
+    // ⌥ moves it a tenth as far; a double-click on the knob resets it.
+    void inspectorSliderReachesValuesNearTheDefault() {
+        const auto drag = [](InspectorSlider &slider, QEvent::Type type, double x, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+            const QPointF at(x, ScrubField::kHeight / 2.0);
+            const Qt::MouseButton button = type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton;
+            const Qt::MouseButtons buttons = type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::MouseButtons(Qt::LeftButton);
+            QMouseEvent event(type, at, slider.mapToGlobal(at), button, buttons, modifiers);
+            QCoreApplication::sendEvent(&slider, &event);
+        };
+        struct Case {
+            const char *what;
+            double minimum, maximum, detent;
+            bool gain;
+        };
+        // Saturation (0-400%, default 100%), Exposure (±3), Volume (0 dB).
+        for (const Case &c : {Case{"saturation", 0.0, 4.0, 1.0, false}, Case{"exposure", -3.0, 3.0, 0.0, false},
+                              Case{"volume", -96.0, 24.0, 0.0, true}}) {
+            InspectorSlider slider;
+            slider.resize(84, ScrubField::kHeight);
+            slider.setRange(c.minimum, c.maximum);
+            slider.setGainTravel(c.gain);
+            slider.setOrigin(c.detent);
+            slider.setDetent(c.detent);
+            slider.setValue(c.detent);
+            const double knob = slider.knobCenter().x();
+            const int from = int(std::floor(knob)) - 8;
+            const int to = int(std::floor(knob)) + 8;
+            drag(slider, QEvent::MouseButtonPress, std::floor(knob));
+            QList<double> values;
+            for (int x = from; x <= to; ++x) {
+                drag(slider, QEvent::MouseMove, x);
+                values << slider.value();
+            }
+            drag(slider, QEvent::MouseButtonRelease, to);
+            int atDefault = 0;
+            for (int i = 0; i < values.size(); ++i) {
+                if (values.at(i) == c.detent) ++atDefault;
+                if (i == 0) continue;
+                // Each pixel its own value, in order: none hidden behind the default.
+                QVERIFY2(values.at(i) > values.at(i - 1), qPrintable(QStringLiteral("%1 at %2: %3 after %4").arg(c.what).arg(from + i)
+                                                                        .arg(values.at(i)).arg(values.at(i - 1))));
+                // No jump: the travel between two pixels is at most a pixel
+                // and a half's (the caught pixel is at most half a pixel off).
+                const double step = slider.travelOf(values.at(i)) - slider.travelOf(values.at(i - 1));
+                const double pixel = 1.0 / slider.groove().width();
+                QVERIFY2(step <= 1.5 * pixel + 1e-9, qPrintable(QStringLiteral("%1 at %2: %3 px").arg(c.what).arg(from + i).arg(step / pixel)));
+            }
+            QVERIFY2(atDefault == 1, qPrintable(QStringLiteral("%1: %2 pixels give the default").arg(c.what).arg(atDefault)));
+        }
+        InspectorSlider slider;
+        slider.resize(84, ScrubField::kHeight);
+        slider.setRange(0.0, 4.0);
+        slider.setOrigin(0.0);
+        slider.setDetent(1.0);
+        slider.setValue(1.0);
+        QSignalSpy released(&slider, &InspectorSlider::released);
+        const double knob = slider.knobCenter().x();
+        const double pixel = 4.0 / slider.groove().width();
+        // 3 points left of the default: about 0.83, not the default.
+        drag(slider, QEvent::MouseButtonPress, knob);
+        drag(slider, QEvent::MouseMove, knob - 3.0);
+        drag(slider, QEvent::MouseButtonRelease, knob - 3.0);
+        QVERIFY2(std::abs(slider.value() - (1.0 - 3.0 * pixel)) < 1e-9, qPrintable(QString::number(slider.value())));
+        QCOMPARE(released.size(), 1);
+        // With ⌥ held, 20 points of travel move it 2.
+        slider.setValue(1.0);
+        drag(slider, QEvent::MouseButtonPress, knob, Qt::AltModifier);
+        drag(slider, QEvent::MouseMove, knob - 20.0, Qt::AltModifier);
+        drag(slider, QEvent::MouseButtonRelease, knob - 20.0, Qt::AltModifier);
+        QVERIFY2(std::abs(slider.value() - (1.0 - 2.0 * pixel)) < 1e-9, qPrintable(QString::number(slider.value())));
+        // A double-click on the knob: back to the default, one edit.
+        const int before = int(released.size());
+        const double changed = slider.value();
+        drag(slider, QEvent::MouseButtonPress, slider.knobCenter().x());
+        drag(slider, QEvent::MouseButtonRelease, slider.knobCenter().x());
+        drag(slider, QEvent::MouseButtonDblClick, slider.knobCenter().x());
+        drag(slider, QEvent::MouseButtonRelease, slider.knobCenter().x());
+        QCOMPARE(slider.value(), 1.0);
+        QCOMPARE(int(released.size()), before + 1);
+        QCOMPARE(released.constLast().at(0).toDouble(), 1.0);
+        QCOMPARE(released.constLast().at(1).toDouble(), changed);
+    }
+
     // A slider's default stays in sight in both appearances without
     // anything drawn on the knob: under the knob the 1pt tick's ends show
     // above and below it, crisp, in the detent ink; the knob's inside is
-    // its own colour only. A changed value draws the knob's edge in full
-    // ink, the default in grey.
+    // its own colour only. A changed value's knob edge stands out against
+    // the groove and panel; at the default it is quieter.
     void inspectorSliderDefaultShowsAroundTheKnob() {
         const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); applyEditorAppearance(); });
         for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
             setEditorColorScheme(scheme);
             applyEditorAppearance();
             const EditorTheme &theme = editorTheme();
-            QVERIFY(theme.sliderHandleChanged != theme.sliderHandleBorder);
-            QVERIFY(contrastRatio(theme.sliderHandleChanged, theme.sliderHandle) > contrastRatio(theme.sliderHandleBorder, theme.sliderHandle));
-            QVERIFY(contrastRatio(theme.sliderHandleChanged, theme.sliderHandle) >= 3.0);
+            // The knob's edge is read against what lies round it: a changed
+            // knob's is the more visible one against both the groove and
+            // the panel, at least 3:1 on the groove, in both appearances.
+            const QString look = theme.dark ? QStringLiteral("dark") : QStringLiteral("light");
+            QVERIFY(theme.sliderHandleChanged != theme.sliderHandleAtDefault);
+            for (const QColor &around : {theme.sliderGroove, theme.panel})
+                QVERIFY2(contrastRatio(theme.sliderHandleChanged, around) > contrastRatio(theme.sliderHandleAtDefault, around),
+                         qPrintable(look + QStringLiteral(" on ") + around.name()));
+            QVERIFY2(contrastRatio(theme.sliderHandleChanged, theme.sliderGroove) >= 3.0, qPrintable(look));
+            QVERIFY2(contrastRatio(theme.sliderHandleChanged, theme.panel) >= 3.0, qPrintable(look));
             InspectorSlider slider;
             slider.resize(92, ScrubField::kHeight);
             slider.setRange(-3.0, 3.0);
@@ -2322,7 +2428,7 @@ private slots:
             for (const double value : {0.0, 0.1}) {
                 slider.setValue(value);
                 const QString what = QStringLiteral("%1 %2").arg(theme.dark ? "dark" : "light").arg(value);
-                QCOMPARE(slider.knobEdge(), value == 0.0 ? theme.sliderHandleBorder : theme.sliderHandleChanged);
+                QCOMPARE(slider.knobEdge(), value == 0.0 ? theme.sliderHandleAtDefault : theme.sliderHandleChanged);
                 const QRect tick = slider.detentTick();
                 const QPointF knob = slider.knobCenter();
                 QCOMPARE(tick.width(), 1);
@@ -4138,6 +4244,17 @@ private slots:
         QCoreApplication::processEvents();
         QVERIFY(effects->isCurrentTab());
         emit window.m_effects->addRequested(QStringLiteral("blur.gaussian"));
+        QCoreApplication::processEvents();
+        QVERIFY(inspector->isCurrentTab());
+        // It still knows the clip it shows: Project chosen by hand stays
+        // when that same clip is clicked again (to drag or trim it); a new
+        // clip brings the Inspector back.
+        project->setAsCurrentTab();
+        QCoreApplication::processEvents();
+        emit window.m_timeline->clipSelected(QStringLiteral("v1a"));
+        QCoreApplication::processEvents();
+        QVERIFY(project->isCurrentTab());
+        emit window.m_timeline->clipSelected(QStringLiteral("v1b"));
         QCoreApplication::processEvents();
         QVERIFY(inspector->isCurrentTab());
         emit window.m_timeline->deselectRequested();
@@ -7019,6 +7136,52 @@ private slots:
     // would leave only a sliver of a line (its ascenders over the bottom
     // edge, its descenders under the top) or of a symbol, the panel's
     // surface covers it.
+    // A file name in a comment wraps as one word: never "fisher-" at the
+    // end of a line and "close.mov." on the next.
+    void chatBodyKeepsFileNamesWhole() {
+        const QString text = QStringLiteral("I raised the exposure and the temperature on fisher-close.mov.");
+        ChatPanel chat;
+        CommentRow *row = chat.addComment(CommentRow::Kind::Kerf, text);
+        chat.resize(ViewerWidget::kDefaultChatWidth, 520);
+        chat.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&chat));
+        QLabel *body = row->body();
+        body->ensurePolished();
+        // What the row copies is the text as written.
+        QCOMPARE(row->text(), text);
+        const auto linesAt = [body](const QString &html, int width) {
+            QTextDocument document;
+            document.setDocumentMargin(0);
+            document.setDefaultFont(body->font());
+            document.setHtml(html);
+            document.setTextWidth(width);
+            document.size(); // laid out
+            QStringList lines;
+            for (QTextBlock block = document.begin(); block.isValid(); block = block.next())
+                for (int index = 0; index < block.layout()->lineCount(); ++index) {
+                    const QTextLine line = block.layout()->lineAt(index);
+                    lines << block.text().mid(line.textStart(), line.textLength()).trimmed();
+                }
+            return lines;
+        };
+        int cases = 0;
+        // From the narrowest width the name fits on a line by itself to the
+        // row's own.
+        const int name = int(std::ceil(QFontMetricsF(body->font()).horizontalAdvance(QStringLiteral("fisher-close.mov.")))) + 2;
+        for (int width = name; width <= body->contentsRect().width(); ++width) {
+            // Only the widths where the text as written would break at the hyphen.
+            const QStringList plain = linesAt(text.toHtmlEscaped(), width);
+            if (std::none_of(plain.begin(), plain.end(), [](const QString &line) { return line.endsWith(QLatin1Char('-')); })) continue;
+            ++cases;
+            const QStringList shown = linesAt(body->text(), width);
+            for (const QString &line : shown)
+                QVERIFY2(!line.endsWith(QLatin1Char('-')), qPrintable(QStringLiteral("at %1: “%2”").arg(width).arg(line)));
+            QVERIFY2(std::any_of(shown.begin(), shown.end(), [](const QString &line) { return line.contains(QStringLiteral("close.mov")) && line.contains(QStringLiteral("fisher")); }),
+                     qPrintable(QStringLiteral("at %1: %2").arg(width).arg(shown.join(QStringLiteral(" | ")))));
+        }
+        QVERIFY2(cases > 0, "no width breaks the name as written");
+    }
+
     void chatEdgesLeaveNoSlivers() {
         ChatPanel chat;
         for (int index = 0; index < 14; ++index)
@@ -7069,6 +7232,30 @@ private slots:
                                  qPrintable(QStringLiteral("at %1: %2 px of a line's foot left").arg(value).arg(over)));
                 }
             }
+            // A text button's words ("Copy", "Ask again", "2 steps") by the
+            // same rule as a label's line: under the top edge, shown with
+            // their capitals' tops or not at all.
+            int buttons = 0;
+            for (QAbstractButton *button : chat.scroll()->widget()->findChildren<QAbstractButton *>()) {
+                if (!button->isVisibleTo(chat.scroll()->widget()) || button->text().isEmpty() || !button->findChildren<QWidget *>().isEmpty())
+                    continue;
+                ++buttons;
+                const TextLine text = buttonTextLine(button);
+                QVERIFY2(button->rect().adjusted(0, -1, 0, 1).contains(text.rect), qPrintable(button->text()));
+                QVERIFY(text.capTop > text.rect.top() && text.capTop < text.rect.top() + text.rect.height() / 2);
+                const QPoint origin = button->mapTo(viewport, QPoint());
+                const QRect line = text.rect.translated(origin);
+                const int capTop = text.capTop + origin.y();
+                if (line.top() < 0 && line.bottom() >= 0) {
+                    const QRect inView(line.left(), 0, line.width(), line.bottom() + 1);
+                    const QRegion shownPart = QRegion(inView).subtracted(cover);
+                    if (capTop < 0)
+                        QVERIFY2(shownPart.isEmpty(), qPrintable(QStringLiteral("at %1: “%2” cut through its capitals").arg(value).arg(button->text())));
+                    else
+                        QVERIFY2(shownPart == QRegion(inView), qPrintable(QStringLiteral("at %1: “%2” with its capitals covered").arg(value).arg(button->text())));
+                }
+            }
+            QVERIFY(buttons > 0);
             // An avatar's arc under the top edge or over the bottom one.
             for (ChatAvatar *avatar : chat.scroll()->widget()->findChildren<ChatAvatar *>()) {
                 if (!avatar->isVisibleTo(chat.scroll()->widget())) continue;
@@ -8559,6 +8746,31 @@ private slots:
         edited.insert(QStringLiteral("changed"), true);
         window.handleEvent(QJsonObject{{"type", "collab"}, {"status", edited}});
         QCOMPARE(window.m_projectSubtitle->text(), QStringLiteral("Edited · 16:9 · 24 fps"));
+        // The toolbar's format pop-up names the format as the subtitle and
+        // the Inspector's Frame size do: "1:1 · 1080 × 1080", one separator,
+        // never "Custom" for a preset, never two spaces in a row.
+        {
+            const QString times = QStringLiteral("\u2009×\u2009");
+            QCOMPARE(window.m_canvasPreset->currentText(), QStringLiteral("16:9 · 1920") + times + QStringLiteral("1080"));
+            const struct {
+                QSize size;
+                QString ratio;
+                QString text;
+            } formats[] = {{QSize(1080, 1080), QStringLiteral("1:1"), QStringLiteral("1:1 · 1080") + times + QStringLiteral("1080")},
+                           {QSize(1080, 1350), QStringLiteral("4:5"), QStringLiteral("4:5 · 1080") + times + QStringLiteral("1350")},
+                           {QSize(1080, 1920), QStringLiteral("9:16"), QStringLiteral("9:16 · 1080") + times + QStringLiteral("1920")},
+                           {QSize(1280, 720), QStringLiteral("16:9"), QStringLiteral("Custom · 1280") + times + QStringLiteral("720")}};
+            for (const auto &format : formats) {
+                window.syncCanvasPreset(format.size);
+                QCOMPARE(window.m_canvasPreset->currentText(), format.text);
+                QCOMPARE(window.m_projectSubtitle->text(), QStringLiteral("Edited · %1 · 24 fps").arg(format.ratio));
+                QCOMPARE(canvasSizeLabel(format.size), format.text);
+                for (int index = 0; index < window.m_canvasPreset->count(); ++index)
+                    QVERIFY2(!window.m_canvasPreset->itemText(index).contains(QStringLiteral("  ")), qPrintable(window.m_canvasPreset->itemText(index)));
+            }
+            window.syncCanvasPreset(QSize(1920, 1080));
+            QCOMPARE(window.m_canvasPreset->currentText(), QStringLiteral("16:9 · 1920") + times + QStringLiteral("1080"));
+        }
 
         // Text tabs: 13pt names on the panel's own surface, the chosen one in
         // the strongest ink over a 2pt underline of it, the others quieter,
@@ -8751,10 +8963,10 @@ private slots:
                 QCOMPARE(window.m_viewer->videoRect(), video);
                 QVERIFY2(std::abs(video.width() / video.height() - double(format.canvas.width()) / format.canvas.height()) < 0.01,
                          qPrintable(label));
-                const int top = tall || wide ? ViewerWidget::kDeviceMarginTop : ViewerWidget::kStageMargin;
-                const int bottom = tall || wide ? ViewerWidget::kDeviceMarginBottom : ViewerWidget::kStageMargin;
-                const QRectF room = QRectF(window.m_viewer->rect()).adjusted(ViewerWidget::kStageMargin, top,
-                                                                             -ViewerWidget::kStageMargin, -bottom);
+                const int inset = window.m_viewer->stageInset(stage.kind);
+                if (!tall) QCOMPARE(inset, ViewerWidget::kStageMargin);
+                const QRectF room = QRectF(window.m_viewer->rect()).adjusted(ViewerWidget::kStageMargin, inset,
+                                                                             -ViewerWidget::kStageMargin, -inset);
                 const QRect panel = window.m_chat->geometry();
                 QCOMPARE(panel, stage.panel);
                 QCOMPARE(window.m_rail->geometry(), stage.rail);
@@ -8923,6 +9135,24 @@ private slots:
                     const QRectF alone = window.m_viewer->stageLayout().body;
                     QVERIFY(std::abs(alone.center().x() - window.m_viewer->width() / 2.0) <= 1);
                     QVERIFY(std::abs(alone.height() - room.height()) < 1);
+                    // The same inset over it as under it, the card's 16 for
+                    // the laptop; the phone's only as much less as its
+                    // 240-point screen needs here.
+                    {
+                        const double over = alone.top(), under = window.m_viewer->height() - alone.bottom();
+                        QVERIFY2(std::abs(over - under) <= 1, qPrintable(QStringLiteral("%1: %2 over, %3 under").arg(label).arg(over).arg(under)));
+                        QVERIFY2(std::abs(over - inset) <= 1, qPrintable(QStringLiteral("%1: %2 over for %3").arg(label).arg(over).arg(inset)));
+                        if (tall) {
+                            QVERIFY(inset >= ViewerWidget::kLeastStageInset && inset <= ViewerWidget::kStageMargin);
+                            QVERIFY(window.m_viewer->stageLayout().screen.width() >= ViewerWidget::kLeastPhoneScreen);
+                            if (inset < ViewerWidget::kStageMargin) {
+                                // One more point over and under and the screen
+                                // would fall under 240.
+                                const double body = window.m_viewer->height() - 2.0 * (inset + 1);
+                                QVERIFY(body * deviceBodyAspect() * (1.0 - 2.0 * kDeviceBezel) < ViewerWidget::kLeastPhoneScreen);
+                            }
+                        }
+                    }
                     QVERIFY(window.m_rail->isVisible());
                     QCOMPARE(window.m_rail->x() - qRound(alone.right()), window.m_viewer->stageGap());
                     const QImage closed = window.grab().toImage();

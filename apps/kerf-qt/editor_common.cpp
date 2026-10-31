@@ -176,6 +176,17 @@ QString sourceName(const QJsonObject &source) {
     return path.isEmpty() ? QStringLiteral("Untitled media") : QFileInfo(path).fileName();
 }
 
+QList<CanvasPreset> canvasPresets() {
+    return {{"16:9", 1920, 1080}, {"9:16", 1080, 1920}, {"1:1", 1080, 1080}, {"4:5", 1080, 1350}};
+}
+
+QString canvasSizeLabel(const QSize &size) {
+    QString name = QStringLiteral("Custom");
+    for (const CanvasPreset &preset : canvasPresets())
+        if (size == QSize(preset.width, preset.height)) name = QString::fromLatin1(preset.ratio);
+    return QStringLiteral("%1 · %2\u2009×\u2009%3").arg(name).arg(size.width()).arg(size.height());
+}
+
 QSize resolvedCanvasSize(const QJsonObject &project, const QJsonArray &sources) {
     const auto validDimension = [](const QJsonValue &value) {
         const double number = value.toDouble();

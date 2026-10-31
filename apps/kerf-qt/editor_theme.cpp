@@ -501,7 +501,8 @@ EditorTheme makeEditorTheme(bool dark) {
     t.switchOffStroke = tone(dark, "#8b7e6d", "#85776a");
     t.knob = tone(dark, "#fffcf6", "#efe6d6");
     t.inspectorDetent = t.rulerTickHalf;
-    t.sliderHandleChanged = dark ? t.borderStrong : t.text;
+    t.sliderHandleChanged = dark ? t.textSecondary : t.text;
+    t.sliderHandleAtDefault = dark ? t.borderStrong : t.sliderHandleBorder;
     return t;
 }
 

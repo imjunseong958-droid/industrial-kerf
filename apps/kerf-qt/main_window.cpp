@@ -1970,7 +1970,9 @@ void MainWindow::buildUi() {
         if (m_effectsFromInspector && clips.size() == 1) {
             m_effectsFromInspector = false;
             m_inspector->revealEffect(int(selectedClipObject().value(QStringLiteral("effects")).toArray().size()));
-            m_workspace->raiseInspector(Workspace::InspectorOrigin::Edit, true);
+            // The clip it shows, so a later click on the same clip after
+            // choosing Project by hand leaves Project in front.
+            m_workspace->raiseInspector(Workspace::InspectorOrigin::Edit, true, clips.constFirst());
         }
     });
     connect(m_effects, &EffectsPanel::previewsWanted, this, [this](const QString &clip, const QStringList &effects) {
@@ -2356,7 +2358,7 @@ void MainWindow::syncCanvasPreset(const QSize &size) {
     int index = m_canvasPreset->findData(key);
     if (index < 0) {
         index = m_canvasPreset->findData(QStringLiteral("custom"));
-        const QString label = QStringLiteral("Custom  %1 × %2").arg(size.width()).arg(size.height());
+        const QString label = canvasSizeLabel(size);
         if (index < 0) {
             m_canvasPreset->addItem(label, QStringLiteral("custom"));
             index = m_canvasPreset->count() - 1;
@@ -2674,8 +2676,11 @@ void MainWindow::setupActions() {
     m_canvasPreset = new QComboBox;
     m_canvasPreset->setObjectName(QStringLiteral("canvasPicker"));
     m_canvasPreset->setSizeAdjustPolicy(QComboBox::AdjustToContents);
-    m_canvasPreset->addItem(QStringLiteral("16:9"), QStringLiteral("1920x1080"));
-    m_canvasPreset->addItem(QStringLiteral("9:16"), QStringLiteral("1080x1920"));
+    // The presets named as the window's subtitle and the Inspector's Frame
+    // size name them: "1:1 · 1080 × 1080".
+    for (const CanvasPreset &preset : canvasPresets())
+        m_canvasPreset->addItem(canvasSizeLabel(QSize(preset.width, preset.height)),
+                                QStringLiteral("%1x%2").arg(preset.width).arg(preset.height));
     m_canvasPreset->setToolTip(QStringLiteral("Project format"));
     connect(m_canvasPreset, qOverload<int>(&QComboBox::currentIndexChanged),
             this, &MainWindow::canvasPresetChanged);

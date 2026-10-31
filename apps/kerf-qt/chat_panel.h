@@ -28,6 +28,9 @@ struct TextLine {
     int capTop = 0;
 };
 QList<TextLine> labelTextLines(const QLabel *label);
+// The line of a text button's words, centred in it as it draws them (a
+// push button's label, an expander's "2 steps"), in its own coordinates.
+TextLine buttonTextLine(const QAbstractButton *button);
 
 // Chips that wrap onto as many lines as their column needs, left to right,
 // as tags do in a narrow sidebar: the welcome's examples. On a single line

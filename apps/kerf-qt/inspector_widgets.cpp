@@ -557,10 +557,12 @@ QPointF InspectorSlider::knobCenter() const {
     return {track.left() + travelOf(m_value) * track.width(), track.center().y()};
 }
 
-double InspectorSlider::valueAt(double x) const {
+double InspectorSlider::valueAt(double x, double scale) const {
     const QRectF track = groove();
     const double detentX = track.left() + travelOf(m_detent) * track.width();
-    if (std::abs(x - detentX) <= 4.0) return m_detent;
+    // Half-open, so of the pointer's whole pixels exactly one lands on it.
+    const double catchWidth = kSnap * scale;
+    if (x >= detentX - catchWidth && x < detentX + catchWidth) return m_detent;
     return fromTravel((x - track.left()) / track.width());
 }
 
@@ -578,7 +580,7 @@ QRect InspectorSlider::detentTick() const {
 
 QColor InspectorSlider::knobEdge() const {
     const EditorTheme &theme = editorTheme();
-    return std::abs(m_value - m_detent) > 1e-12 ? theme.sliderHandleChanged : theme.sliderHandleBorder;
+    return std::abs(m_value - m_detent) > 1e-12 ? theme.sliderHandleChanged : theme.sliderHandleAtDefault;
 }
 
 void InspectorSlider::paintEvent(QPaintEvent *) {
@@ -624,12 +626,28 @@ void InspectorSlider::mousePressEvent(QMouseEvent *event) {
     m_relative = std::abs(x - knobCenter().x()) > kGrab;
     m_pressX = x;
     m_pressKnob = knobCenter().x();
+    // With ⌥ held from the start, fine travel from where the knob is.
+    m_fine = event->modifiers().testFlag(Qt::AltModifier);
+    if (m_fine) m_relative = true;
+}
+
+double InspectorSlider::dragValue(double x, Qt::KeyboardModifiers modifiers) {
+    const bool fine = modifiers.testFlag(Qt::AltModifier);
+    if (fine != m_fine) {
+        // ⌥ pressed or let go mid-drag: on from where the knob is, at the
+        // new rate.
+        m_fine = fine;
+        m_relative = true;
+        m_pressX = x;
+        m_pressKnob = knobCenter().x();
+    }
+    const double scale = m_fine ? 1.0 / kFine : 1.0;
+    return valueAt(m_relative ? m_pressKnob + (x - m_pressX) * scale : x, scale);
 }
 
 void InspectorSlider::mouseMoveEvent(QMouseEvent *event) {
     if (!m_dragging) return;
-    const double x = event->position().x();
-    m_value = valueAt(m_relative ? m_pressKnob + (x - m_pressX) : x);
+    m_value = dragValue(event->position().x(), event->modifiers());
     update();
     emit moved(m_value);
 }
@@ -637,11 +655,25 @@ void InspectorSlider::mouseMoveEvent(QMouseEvent *event) {
 void InspectorSlider::mouseReleaseEvent(QMouseEvent *event) {
     if (!m_dragging) return;
     const double x = event->position().x();
-    m_dragging = false;
     // A click that did not move changes nothing.
-    if (std::abs(x - m_pressX) >= 1.0) m_value = valueAt(m_relative ? m_pressKnob + (x - m_pressX) : x);
+    if (std::abs(x - m_pressX) >= 1.0) m_value = dragValue(x, event->modifiers());
+    m_dragging = false;
     update();
     if (std::abs(m_value - m_start) > 1e-12) emit released(m_value, m_start);
+}
+
+void InspectorSlider::mouseDoubleClickEvent(QMouseEvent *event) {
+    // On the knob: back to the default, as a double-click on the label.
+    if (event->button() != Qt::LeftButton || !isEnabled() || m_mixed ||
+        std::abs(event->position().x() - knobCenter().x()) > kGrab) {
+        mousePressEvent(event);
+        return;
+    }
+    m_dragging = false;
+    const double start = m_value;
+    m_value = std::clamp(m_detent, m_min, m_max);
+    update();
+    if (std::abs(m_value - start) > 1e-12) emit released(m_value, start);
 }
 
 // ----------------------------------------------------------- InspectorSwitch

@@ -88,6 +88,18 @@ QString sourceName(const QJsonObject &source);
 
 QSize resolvedCanvasSize(const QJsonObject &project, const QJsonArray &sources);
 
+// The frame sizes offered as presets, and how every format picker (the
+// toolbar's, the Inspector's Frame size) names a size: "1:1 · 1080 × 1080"
+// (its shape as the window's subtitle names it, thin spaces round the ×),
+// "Custom · 1280 × 720" for any size that is not a preset.
+struct CanvasPreset {
+    const char *ratio;
+    int width;
+    int height;
+};
+QList<CanvasPreset> canvasPresets();
+QString canvasSizeLabel(const QSize &size);
+
 // Model colors are #rrggbb, with a trailing alpha byte when not opaque.
 QColor modelColor(const QString &hex);
 

@@ -57,13 +57,15 @@ public:
         bool device = false; // In a phone or a laptop.
         Device kind = Device::None;
     };
+    // Round the card or the device: the same at the sides, over and under
+    // it, for a card, a laptop and a phone alike (a device's shadow lies in
+    // its frame's own pixmap, inside this).
     static constexpr int kStageMargin = 16;
-    // Above and below a device (a phone or a laptop): room for its shadow,
-    // the same over it as under it, so it sits centred in the stage. Its
-    // height is what bounds it, so it keeps less than the plain card's 16
-    // (at 16 the phone's screen at 1440x900 would fall under 240 points).
-    static constexpr int kDeviceMarginTop = 10;
-    static constexpr int kDeviceMarginBottom = 10;
+    // Only a phone in a stage too short for its screen to be kLeastPhoneScreen
+    // wide at kStageMargin over and under it takes less, as little as it
+    // needs, never under kLeastStageInset, and still as much over as under.
+    static constexpr int kLeastStageInset = 10;
+    static constexpr double kLeastPhoneScreen = 240.0;
     static constexpr int kStageGap = 12;
     // Between card, rail and conversation in a narrow stage.
     static constexpr int kNarrowStageGap = 8;
@@ -115,6 +117,8 @@ public:
     // its cache (see DeviceFrameCache).
     int deviceFrameRenders() const { return m_frameCache.renders(); }
     int stageGap() const;
+    // The room over (and as much under) the card or the device.
+    int stageInset(Device device) const;
     StageLayout stageLayout() const { return stageLayout(device()); }
     // The stage as it would be with the picture in `device`.
     StageLayout stageLayout(Device device) const;

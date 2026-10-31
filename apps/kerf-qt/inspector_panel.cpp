@@ -2228,21 +2228,16 @@ void InspectorPanel::buildSequence(QVBoxLayout *into) {
         const int r = addRow(sectionBody(format), QStringLiteral("Frame size"), format);
         auto *size = popup(QStringLiteral("frameSize"));
         const QSize canvas = resolvedCanvasSize(m_project, m_project.value(QStringLiteral("sources")).toArray());
-        const struct {
-            const char *ratio;
-            int w;
-            int h;
-        } presets[] = {{"16:9", 1920, 1080}, {"9:16", 1080, 1920}, {"1:1", 1080, 1080}, {"4:5", 1080, 1350}};
         int current = -1;
-        for (const auto &preset : presets) {
-            // Written as everywhere else ("1080 × 1920"), with thin spaces
-            // round the × so the whole value fits the pop-up at 300.
-            size->addItem(QStringLiteral("%1 · %2\u2009×\u2009%3").arg(QString::fromLatin1(preset.ratio)).arg(preset.w).arg(preset.h),
-                          QStringLiteral("%1x%2").arg(preset.w).arg(preset.h));
-            if (canvas == QSize(preset.w, preset.h)) current = size->count() - 1;
+        for (const CanvasPreset &preset : canvasPresets()) {
+            // Named as the toolbar names it ("9:16 · 1080 × 1920"), with thin
+            // spaces round the × so the whole value fits the pop-up at 300.
+            const QSize presetSize(preset.width, preset.height);
+            size->addItem(canvasSizeLabel(presetSize), QStringLiteral("%1x%2").arg(preset.width).arg(preset.height));
+            if (canvas == presetSize) current = size->count() - 1;
         }
         if (current < 0) {
-            size->addItem(QStringLiteral("Custom · %1\u2009×\u2009%2").arg(canvas.width()).arg(canvas.height()), QStringLiteral("%1x%2").arg(canvas.width()).arg(canvas.height()));
+            size->addItem(canvasSizeLabel(canvas), QStringLiteral("%1x%2").arg(canvas.width()).arg(canvas.height()));
             current = size->count() - 1;
         }
         size->addItem(QStringLiteral("Custom…"), QString());

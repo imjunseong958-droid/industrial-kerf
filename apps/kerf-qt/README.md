@@ -209,7 +209,10 @@ the group, the chat level with it and as tall; at 1440 × 900 the picture keeps 
 and Window ▸ Viewer choose Laptop (the default) or Off; it is a preference of
 this Mac. A square picture stays on the plain card: in a phone it would be
 under half as wide (measured at 1440 × 900: 499 points wide on the card, 242
-across the phone's screen). The phone's and the laptop's frames are drawn once for
+across the phone's screen). A card, a laptop and a phone all keep the same room
+over them as under them, 16 points; only a phone in a stage too short for a
+240-point screen at 16 takes as little less as it needs (12 at 1440 × 900).
+The phone's and the laptop's frames are drawn once for
 their size, appearance and pixel ratio and then only blitted, so playback
 costs no more for them.
 
@@ -337,10 +340,12 @@ anywhere in it) hands the keys back to the timeline, so Space and J/K/L keep
 working while you nudge values. Every row shares one grid (76 pt labels, 72 pt
 value fields, 84 pt sliders at the 300-point column, controls ending at one
 edge); a click on a slider's groove away from its knob changes nothing, and a
-drag from there moves the knob by as much as the pointer moves. A slider's
+drag from there moves the knob by as much as the pointer moves (⌥ ÷10). The
+default catches the knob only on the one pixel nearest it, so every value next
+to it can still be dragged to; a double-click on the knob resets it. A slider's
 default is a 1-point tick; under the knob its ends show above and below it, and
-nothing is drawn on the knob, whose edge is in full ink once the value differs
-from its default (grey at it). A switched-off
+nothing is drawn on the knob, whose edge stands out against the groove and
+panel once the value differs from its default (quieter at it). A switched-off
 effect's values stay in the secondary ink, readable and editable;
 ↺ on hover, or a double-click on the label, resets a row, and a section's ↺
 resets it all. Each effect has a switch, its name, a second line listing what
@@ -418,8 +423,10 @@ comment behind "▸ 2 steps", as replies do; and while Kerf works three dots
 and its latest step follow the latest comment. The comments scroll under the
 header as a comments panel's do: cut cleanly at its edge, with a hairline
 under it while the list is scrolled away from its top. A sliver is never left
-at either edge, and under the top one a line of text shows only with its
-capitals' tops (a name cut through them would read as another word). A pending proposal is
+at either edge, and under the top one a line of text, or a text button's
+words (Copy, Ask again, "2 steps"), shows only with its capitals' tops (a name
+cut through them would read as another word). A file name in a comment wraps
+as one word, never at its hyphen. A pending proposal is
 pinned at the top of the list ("Pinned by Kerf") and scrolls away with it;
 when one arrives the list shows it from its head (following the latest again
 once you scroll or send). It lists its changes in words, a row each with a
@@ -448,8 +455,10 @@ a bar over the timeline stands in for it, as a Short's comment count does:
 it says what Kerf is working on, offers Stop, Accept, Reject and the next
 steps, and Details opens the chat again.
 
-Use the project-format picker in the toolbar to switch between standard
-1920×1080 (16:9) and vertical 1080×1920 (9:16). The viewer fits either canvas
+Use the project-format picker in the toolbar to switch between 16:9
+(1920 × 1080), 9:16 (1080 × 1920), 1:1 (1080 × 1080) and 4:5 (1080 × 1350). It
+names the format as the window's subtitle and the Inspector's Frame size do
+("1:1 · 1080 × 1080"), and any other size as "Custom · 1280 × 720". The viewer fits either canvas
 inside the available panel without cropping and keeps preview captions inside
 the video safe area.
 

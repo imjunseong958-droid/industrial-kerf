@@ -175,9 +175,18 @@ public:
     static constexpr int kTickBeyondKnob = 3;
     QRect detentTick() const;
     // The knob's edge: `sliderHandleChanged` away from the default (a small
-    // change shows there), `sliderHandleBorder` at it.
+    // change shows there, the edge standing out against groove and panel),
+    // the quieter `sliderHandleAtDefault` at it.
     QColor knobEdge() const;
-    double valueAt(double x) const;
+    // The default catches the pointer only on the one pixel nearest it
+    // (half a pixel of pointer travel either side), so the default is easy
+    // to land on and every other pixel still gives its own value.
+    static constexpr double kSnap = 0.5;
+    // With ⌥ held the knob moves a tenth of the pointer's travel.
+    static constexpr double kFine = 10.0;
+    // The value at `x` along the groove; `scale` is how far the knob moves
+    // per pixel of pointer travel (1, or 1/kFine), which the catch follows.
+    double valueAt(double x, double scale = 1.0) const;
 
 signals:
     void moved(double value);
@@ -188,9 +197,13 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
 
 private:
     double travelOf(double value) const;
+    // Where the knob goes for the pointer at `x` (with `modifiers`) during
+    // a drag, and the value there.
+    double dragValue(double x, Qt::KeyboardModifiers modifiers);
     double fromTravel(double travel) const;
     QRectF groove() const;
 
@@ -209,6 +222,8 @@ private:
     double m_pressX = 0.0;
     double m_pressKnob = 0.0;
     bool m_relative = false;
+    // ⌥ held: the knob moves by a tenth of the pointer's travel.
+    bool m_fine = false;
 };
 
 // An on/off switch, 26 by 16: the neutral ink with its knob when on, the

@@ -211,6 +211,15 @@ int ViewerWidget::stageGap() const {
     return width() - 2 * kStageMargin < kNarrowStage ? kNarrowStageGap : kStageGap;
 }
 
+int ViewerWidget::stageInset(Device device) const {
+    if (device != Device::Phone) return kStageMargin;
+    // The body height whose screen is kLeastPhoneScreen wide (the screen is
+    // the body's width less two bezels).
+    const double least = kLeastPhoneScreen / ((1.0 - 2.0 * kDeviceBezel) * deviceBodyAspect());
+    const int room = int(std::floor((height() - least) / 2.0));
+    return std::clamp(room, kLeastStageInset, kStageMargin);
+}
+
 ViewerWidget::Device ViewerWidget::device() const {
     if (portrait() && m_device != DevicePreview::Off) return Device::Phone;
     if (landscape() && m_laptop != LaptopPreview::Off) return Device::Laptop;
@@ -224,9 +233,8 @@ ViewerWidget::StageLayout ViewerWidget::stageLayout(Device device) const {
     out.device = device != Device::None;
     // A device is laid out by its body.
     const double frameAspect = device == Device::Phone ? deviceBodyAspect() : device == Device::Laptop ? laptopBodyAspect() : aspect;
-    const int top = out.device ? kDeviceMarginTop : kStageMargin;
-    const int bottom = out.device ? kDeviceMarginBottom : kStageMargin;
-    const QRectF room = QRectF(rect()).adjusted(kStageMargin, top, -kStageMargin, -bottom);
+    const int inset = stageInset(device);
+    const QRectF room = QRectF(rect()).adjusted(kStageMargin, inset, -kStageMargin, -inset);
     const int gap = stageGap();
     // The largest card (or device) of the picture's shape in `width` by `height`.
     const auto fit = [frameAspect](double width, double height) {

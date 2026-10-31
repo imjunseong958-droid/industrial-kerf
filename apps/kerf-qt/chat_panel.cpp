@@ -14,6 +14,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QStyle>
@@ -50,11 +51,31 @@ QString wrappable(const QString &text) {
     return out;
 }
 
-// A comment's text as the row shows it: wrappable, on 20-point lines for
-// 14-point type, as a comments panel sets its text.
+// A file name ("fisher-close.mov") read as one word: a word joiner after
+// each of its hyphens, so a line never breaks there ("fisher-" / "close.mov"
+// reads as two words). The hyphen itself stays the same glyph.
+QString keepNamesWhole(const QString &text) {
+    static const QRegularExpression name(
+        QStringLiteral("[\\w.\\-]*\\w-[\\w.\\-]*\\.(?:mov|mp4|m4v|mxf|mkv|avi|webm|wav|aif|aiff|mp3|m4a|flac|png|jpe?g|tiff?|exr|cube|srt|vtt)\\b"),
+        QRegularExpression::CaseInsensitiveOption | QRegularExpression::UseUnicodePropertiesOption);
+    QString out;
+    out.reserve(text.size() + 4);
+    qsizetype from = 0;
+    for (QRegularExpressionMatchIterator it = name.globalMatch(text); it.hasNext();) {
+        const QRegularExpressionMatch match = it.next();
+        out += text.mid(from, match.capturedStart() - from);
+        out += match.captured().replace(QLatin1Char('-'), QStringLiteral("-\u2060"));
+        from = match.capturedEnd();
+    }
+    out += text.mid(from);
+    return out;
+}
+
+// A comment's text as the row shows it: wrappable, file names kept whole, on
+// 20-point lines for 14-point type, as a comments panel sets its text.
 QString bodyMarkup(const QString &text) {
     return QStringLiteral("<div style=\"line-height:120%\">%1</div>")
-        .arg(wrappable(text).toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>")));
+        .arg(wrappable(keepNamesWhole(text)).toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>")));
 }
 
 // The end of the chips' row fading into the panel's surface, while the row
@@ -1612,6 +1633,18 @@ QList<TextLine> labelTextLines(const QLabel *label) {
     return lines;
 }
 
+TextLine buttonTextLine(const QAbstractButton *button) {
+    const QFontMetricsF metrics(button->font());
+    const double line = metrics.lineSpacing();
+    const double middle = button->height() / 2.0;
+    const QRect rect(0, int(std::round(middle - line / 2.0)), button->width(), int(std::round(line)));
+    // The words' box (ascent over descent) is centred; the capitals stand
+    // capHeight over its baseline.
+    const double textTop = middle - metrics.height() / 2.0;
+    const int capTop = int(std::floor(textTop + metrics.ascent() - metrics.capHeight()));
+    return {rect, std::clamp(capTop, rect.top(), rect.bottom())};
+}
+
 void ChatPanel::updateEdgeCover() {
     QWidget *viewport = m_scroll->viewport();
     m_edgeCover->setGeometry(viewport->rect());
@@ -1640,10 +1673,17 @@ void ChatPanel::updateEdgeCover() {
                     std::max(kSliverLine * line.rect.height(), double(line.rect.bottom() + 1 - line.capTop)));
             continue;
         }
-        // A button's words, centred in it.
+        // A button's words, centred in it: as a label's line, by its
+        // capitals under the top edge.
         if (auto *button = qobject_cast<QAbstractButton *>(child); button && !button->text().isEmpty() && button->findChildren<QWidget *>().isEmpty()) {
-            const int line = button->fontMetrics().lineSpacing();
-            cut(QRect(box.left(), box.center().y() - line / 2, box.width(), line), kSliverLine * line);
+            // Under the top edge the cover runs on to the button's foot, so
+            // no descender of the words it hides is left under it (the style
+            // may set them a point lower than their centred line).
+            const TextLine line = buttonTextLine(button);
+            const QRect words = line.rect.translated(box.topLeft());
+            const int foot = std::max(0, box.bottom() - words.bottom());
+            cut(words.adjusted(0, 0, 0, foot), kSliverLine * words.height(),
+                std::max(kSliverLine * words.height(), double(line.rect.bottom() + 1 - line.capTop)) + foot);
             cut(box, kSliver);
             continue;
         }
