@@ -652,12 +652,13 @@ QPixmap warningTriangle(const QColor &color, int size) {
     return pixmap;
 }
 
-void blitLaneCache(QPainter &painter, const QPixmap &cache, const QRegion &clip) {
+void blitLaneCache(QPainter &painter, const QPixmap &cache, const QRegion &clip, const QPoint &origin) {
     const qreal dpr = std::max<qreal>(1, cache.devicePixelRatio());
     painter.save();
     painter.setClipRegion(clip, Qt::IntersectClip);
     for (const QRect &logical : clip) {
-        const QRectF source(logical.x() * dpr, logical.y() * dpr, logical.width() * dpr, logical.height() * dpr);
+        const QRectF source((logical.x() - origin.x()) * dpr, (logical.y() - origin.y()) * dpr, logical.width() * dpr,
+                            logical.height() * dpr);
         painter.drawPixmap(QRectF(logical), cache, source);
     }
     painter.restore();

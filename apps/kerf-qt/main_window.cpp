@@ -1574,7 +1574,9 @@ void MainWindow::buildUi() {
     timelineLayout->setContentsMargins(0, 0, 0, 0);
     m_timeline = new TimelineWidget;
     m_timeline->setArtwork(m_artwork);
-    auto *timelineScroll = new QScrollArea;
+    // Track heights are remembered per project, on this Mac only.
+    m_timeline->setHeightsKey(m_projectDirectory);
+    auto *timelineScroll = new TimelineScrollArea;
     m_timelineScroll = timelineScroll;
     timelineScroll->setWidgetResizable(true);
     timelineScroll->setFrameShape(QFrame::NoFrame);
@@ -2196,8 +2198,9 @@ void MainWindow::buildUi() {
     m_timelineDetail->setObjectName(QStringLiteral("timelineDetail"));
     m_timelineDetail->setEnabled(false);
     m_timelineDetail->setVisible(false);
+    // The timeline's title strip: its track heights, then its details.
     m_workspace->addPanel(QStringLiteral("timeline"), QStringLiteral("Timeline"), timelinePanel)
-        ->setTitleBarActions({m_timelineDetail});
+        ->setTitleBarActions(m_timeline->trackHeightActions() << m_timelineDetail);
     m_workspace->addPanel(QStringLiteral("effectControls"), QStringLiteral("Effect Controls"), m_effectControls);
     m_workspace->addPanel(QStringLiteral("effects"), QStringLiteral("Effects"), m_effects);
     m_workspace->addPanel(QStringLiteral("project"), QStringLiteral("Project"), m_projectPanel);

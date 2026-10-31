@@ -23,27 +23,37 @@ constexpr int kTimelineLabelWidth = 196;
 constexpr int kTimelineOrigin = kTimelineLabelWidth + 6;
 constexpr int kTimelineTail = 30;
 constexpr int kRulerHeight = 26;
-// Medium: the sound-track default and the add-track row.
-constexpr int kTrackHeight = 44;
-// Large: picture tracks start taller so the filmstrip reads.
-constexpr int kVideoTrackHeight = 60;
-constexpr int kMinTrackHeight = 24;
+// Track heights start dense, as an edit with many layers wants: a sound
+// track keeps a waveform under its clips' names, and a picture track a
+// filmstrip.
+constexpr int kTrackHeight = 32;
+constexpr int kVideoTrackHeight = 36;
+// The add-track row under the last track.
+constexpr int kAddLaneHeight = 32;
+// Mini: one line per track (badge, toggles, name, and clip names).
+constexpr int kMinTrackHeight = 18;
 constexpr int kMaxTrackHeight = 160;
+// How far from the line between two headers a drag still resizes the
+// upper track: a sixth of the shorter track, at least 2px and at most this.
 constexpr int kResizeGrip = 4;
 constexpr int kClipInset = 2;
 constexpr int kTrimHandle = 8;
 // Track header preview slot, right-aligned beside the track name.
 constexpr int kHeaderPreviewWidth = 48;
 constexpr int kHeaderPreviewHeight = 27;
+// Below this a header is one line: no clip count under the name, and no preview.
+constexpr int kDetailedTrackHeight = 40;
 
 struct TrackHeightPreset {
     const char *name;
-    int height;
+    int height; // 0: each track's default (kVideoTrackHeight or kTrackHeight).
 };
 
 // Track height steps, named the way Pro Tools names them.
 constexpr TrackHeightPreset kTrackHeightPresets[] = {
-    {"Mini", kMinTrackHeight}, {"Small", 34}, {"Medium", kTrackHeight}, {"Large", kVideoTrackHeight}, {"Jumbo", 96}};
+    {"Mini", kMinTrackHeight}, {"Small", 26}, {"Medium", 0}, {"Large", 60}, {"Jumbo", 96}};
+// The heights Option-scroll and Option-Up/Down step every track through.
+constexpr int kTrackHeightSteps[] = {18, 22, 26, 30, 36, 44, 52, 60, 72, 86, 104, 128, 160};
 // One pixel stays under a frame, so the pointer time cannot step in multi-second jumps.
 constexpr double kMinPixelsPerSecond = 80.0;
 
@@ -178,8 +188,9 @@ QIcon disclosureIcon(bool open, const QColor &color);
 // triangle in `color` with the mark cut out of it.
 QPixmap warningTriangle(const QColor &color, int size = 14);
 
-// Cache source coordinates use device pixels while the paint target uses logical pixels.
-void blitLaneCache(QPainter &painter, const QPixmap &cache, const QRegion &clip);
+// Cache source coordinates use device pixels while the paint target uses
+// logical pixels. The cache's top left sits at `origin`.
+void blitLaneCache(QPainter &painter, const QPixmap &cache, const QRegion &clip, const QPoint &origin = QPoint());
 
 enum class TransportGlyph { Start, PreviousFrame, Play, Pause, NextFrame, End, MarkIn, MarkOut, Insert, Overwrite };
 

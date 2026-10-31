@@ -100,11 +100,22 @@ eye turns a picture track's output on and off (M mutes a sound track), and
 the padlock locks the track against edits. While a clip
 moves or trims, a readout shows the new edge timecode and its offset.
 
-Drag the bottom edge of a track header to resize that track. Right-click a
-header for the Mini, Small, Medium, Large, and Jumbo heights, for one track or
-all of them. View → Fit tracks to panel shares the panel height across every
-track; View → Reset track heights restores the defaults. Heights are a view
-setting and are not saved in the project.
+Tracks start dense (36 pt picture tracks, 32 pt sound tracks), for edits with
+many layers. The Timeline panel's title strip sets every track's height at
+once: Mini (one 18 pt line per track: its number, toggles, name, and clip
+names), Medium (the defaults), and Large; Fit shares the panel height across
+every track. Option-Up and Option-Down (with the timeline focused), or
+Option-scroll over the track headers, step every track taller or shorter and
+keep the track you are looking at in place. Drag the line under a track header
+(the pointer turns into a resize cursor over it) to resize that track;
+Option-drag it to resize every picture track, or every sound track, at once.
+Right-click a header for the Mini, Small, Medium, Large, and Jumbo heights,
+for one track or all of them; View → Fit tracks to panel and View → Reset
+track heights match Fit and Medium. Below 40 pt a header is one line; clips
+drop their waveform below 30 pt and their filmstrip below 34 pt, and keep
+their names at every height. Heights are remembered per project in the
+editor's settings on this Mac: they are a view setting, never saved in
+`project.kerf`, which collaborators share.
 Choose Edit → Focus region to draw a crop box on the selected video clip and
 apply it to a time range. Reopen it on the focused segment to adjust the box.
 The picker loads the exact source frame at the playhead. A fixed box ends at a

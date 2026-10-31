@@ -25,12 +25,17 @@ QColor rgba(int r, int g, int b, int a) { return QColor(r, g, b, a); }
 
 // `color` moved towards white (on a dark `background`) or black (on a light
 // one) until it reads at `ratio`.
-QColor readableOn(const QColor &color, const QColor &background, qreal ratio) {
+QColor readableOn(const QColor &color, const QColor &background, qreal ratio, int steps = 20) {
     const QColor target = background.lightness() < 128 ? QColor(Qt::white) : QColor(Qt::black);
     QColor result = color;
-    for (int step = 1; step <= 20 && contrastRatio(result, background) < ratio; ++step)
-        result = mixColor(color, target, step * 0.05);
+    for (int step = 1; step <= steps && contrastRatio(result, background) < ratio; ++step)
+        result = mixColor(color, target, qreal(step) / steps);
     return result;
+}
+
+// The same in 1% steps, for a colour that should move no further than it must.
+QColor justReadableOn(const QColor &color, const QColor &background, qreal ratio) {
+    return readableOn(color, background, ratio, 100);
 }
 
 ClipStyle clipStyle(const char *fill, const char *header, const char *border, const char *label, const char *wave) {
@@ -340,7 +345,7 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.clipFxBadgeText = QColor("#ededed");
         t.filmstripSeam = rgba(0, 0, 0, 120);
         t.waveCenter = rgba(0, 0, 0, 70);
-        t.playheadHalo = rgba(0, 0, 0, 110);
+        t.playheadHalo = QColor("#000000");
         t.playheadIdle = QColor("#6e6e73");
         t.skimmer = rgba(240, 240, 240, 215);
         t.skimmerText = QColor("#f5f5f7");
@@ -523,7 +528,7 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.clipFxBadgeText = QColor("#ffffff");
         t.filmstripSeam = rgba(0, 0, 0, 90);
         t.waveCenter = rgba(0, 0, 0, 40);
-        t.playheadHalo = rgba(255, 255, 255, 170);
+        t.playheadHalo = QColor("#ffffff");
         t.playheadIdle = QColor("#8e8e93");
         t.skimmer = rgba(29, 29, 31, 190);
         t.skimmerText = QColor("#1d1d1f");
@@ -564,6 +569,7 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
     t.accentText = accent;
     for (const QColor &surface : {t.panel, t.rulerCorner, t.statusBar}) t.accentText = readableOn(t.accentText, surface, 4.5);
     t.accentTint = mixColor(t.panel, accent, dark ? 0.26 : 0.16);
+    t.accentTintPressed = mixColor(t.accentTint, Qt::black, dark ? 0.3 : 0.1);
     t.textSelection = mixColor(t.field, accent, dark ? 0.45 : 0.28);
     // The marked range is information: 3:1 on the panel around the bar.
     t.inOutRange = readableOn(mixColor(t.scrubTrack, accent, 0.75), t.panel, 3.0);
@@ -580,11 +586,17 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
     t.proposalChange = dark ? t.assistant.lighter(115) : t.assistant.darker(115);
     t.proposalChangeFill = t.proposalChange;
     t.proposalChangeFill.setAlpha(dark ? 36 : 30);
-    // The playhead while skimming, and every marker, read at 3:1 wherever
-    // they are drawn: the ruler from its top to its foot, and (the playhead's
-    // line) the lanes and the background below the last.
-    for (const QColor &surface : {t.ruler, t.rulerBottom, t.trackLane, t.timelineBackground})
-        t.playheadIdle = readableOn(t.playheadIdle, surface, 3.0);
+    // The playhead's line always has its halo either side, so the line is
+    // read against the halo wherever it crosses (a picture, a clip, a bare
+    // lane), and its head against the ruler from top to foot. The skimmed
+    // playhead reads at 3:1 on each, no more than it must; the playhead
+    // reads clearly more on each, so it stays the louder of the two for
+    // every accent (yellow, green and graphite on the light ruler included).
+    for (const QColor &surface : {t.ruler, t.rulerBottom, t.playheadHalo})
+        t.playheadIdle = justReadableOn(t.playheadIdle, surface, 3.0);
+    for (const QColor &surface : {t.ruler, t.rulerBottom, t.playheadHalo})
+        t.playhead = justReadableOn(t.playhead, surface, std::max(3.0, contrastRatio(t.playheadIdle, surface) + 0.4));
+    // Every marker reads at 3:1 on the whole ruler.
     for (QColor *marker : {&t.markerRed, &t.markerOrange, &t.markerYellow, &t.markerGreen, &t.markerCyan, &t.markerBlue,
                            &t.markerPurple, &t.markerPink, &t.markerWhite})
         for (const QColor &surface : {t.ruler, t.rulerBottom}) *marker = readableOn(*marker, surface, 3.0);

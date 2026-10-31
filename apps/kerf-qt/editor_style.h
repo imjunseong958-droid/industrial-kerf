@@ -24,6 +24,7 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
         {QStringLiteral("accentPressed"), &EditorTheme::accentPressed},
         {QStringLiteral("accentText"), &EditorTheme::accentText},
         {QStringLiteral("accentTint"), &EditorTheme::accentTint},
+        {QStringLiteral("accentTintPressed"), &EditorTheme::accentTintPressed},
         {QStringLiteral("onAccent"), &EditorTheme::onAccent},
         {QStringLiteral("window"), &EditorTheme::window},
         {QStringLiteral("chrome"), &EditorTheme::chrome},
@@ -303,10 +304,12 @@ QToolButton#maskTool,
 QToolButton#maskRemove,
 QToolButton#effectRemove { padding: 2px 5px; }
 /* The chosen mask tool and the selected mask: an accent wash edged in the
-   accent, under the pointer and held too. The tool's symbol is the accent,
-   which reads on the wash at 3:1. */
+   accent, under the pointer too, darkening while held as every bezel does.
+   The tool's symbol is the accent, which reads on either wash at 3:1. */
 QToolButton#maskTool:checked:enabled,
 QToolButton#maskName:checked:enabled { background: @accentTint; border-color: @accentText; }
+QToolButton#maskTool:checked:enabled:pressed,
+QToolButton#maskName:checked:enabled:pressed { background: @accentTintPressed; }
 /* A colour well: its swatch fills a small bezel. */
 QPushButton[colorWell="true"] { padding: 2px 0; }
 QToolBar QToolButton {
@@ -934,6 +937,22 @@ ads--CTitleBarButton:hover { background: @hover; border-color: transparent; }
 ads--CTitleBarButton:pressed,
 ads--CTitleBarButton:checked { background: @pressed; border-color: transparent; }
 ads--CTitleBarButton:disabled { color: @textSecondary; background: transparent; border-color: transparent; }
+/* A chosen mode in a title strip (the Program panel's mask tools, the
+   Timeline's track height) looks as the chosen mask tool does in Effect
+   Controls: an accent wash edged in the accent, its symbol the accent,
+   darkening while held. */
+ads--CTitleBarButton#maskRectangle:checked:enabled,
+ads--CTitleBarButton#maskEllipse:checked:enabled,
+ads--CTitleBarButton#maskPen:checked:enabled,
+ads--CTitleBarButton#trackHeightMini:checked:enabled,
+ads--CTitleBarButton#trackHeightMedium:checked:enabled,
+ads--CTitleBarButton#trackHeightLarge:checked:enabled { background: @accentTint; border-color: @accentText; }
+ads--CTitleBarButton#maskRectangle:checked:enabled:pressed,
+ads--CTitleBarButton#maskEllipse:checked:enabled:pressed,
+ads--CTitleBarButton#maskPen:checked:enabled:pressed,
+ads--CTitleBarButton#trackHeightMini:checked:enabled:pressed,
+ads--CTitleBarButton#trackHeightMedium:checked:enabled:pressed,
+ads--CTitleBarButton#trackHeightLarge:checked:enabled:pressed { background: @accentTintPressed; }
 ads--CFloatingDockContainer { background: @panel; }
 )QSS"), theme);
 }

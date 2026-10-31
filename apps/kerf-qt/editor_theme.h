@@ -78,6 +78,8 @@ struct EditorTheme {
                               // corner time), and `statusBar` (the sync chip).
     QColor accentTint;        // A quiet accent wash on `panel`: a checked tool, an info badge, the chosen
                               // mask tool and the selected mask. `accentText` reads on it at 3:1.
+    QColor accentTintPressed; // `accentTint` darkened while held, as a bezel darkens; `accentText`
+                              // still reads on it at 3:1.
     QColor onAccent;          // Text and glyphs on `accent`. White on the exact system accent, as macOS
                               // draws default buttons and highlighted menu rows (4.0:1 on #007aff,
                               // 3.65:1 on #0a84ff): a deliberate choice, so the editor's blue matches
@@ -268,10 +270,12 @@ struct EditorTheme {
     QColor clipFxBadgeText;  // ...and its text.
     QColor filmstripSeam;    // Between filmstrip tiles.
     QColor waveCenter;       // The centre line of an audio clip's body.
-    QColor playhead;         // The playhead and its corner time (the accent).
-    QColor playheadHalo;     // The 3px halo that keeps the playhead readable over pictures.
-    QColor playheadIdle;     // The playhead while the skimmer leads: a grey, quieter than the playhead,
-                             // that reads at 3:1 on the ruler, the lanes and the background below them.
+    QColor playhead;         // The playhead: the accent, deepened where it would not read on the ruler
+                             // and on its halo clearly more than `playheadIdle` does.
+    QColor playheadHalo;     // The solid 1px line either side of the playhead's line, skimmed or not, so
+                             // the line reads the same over pictures, clips and bare lanes.
+    QColor playheadIdle;     // The playhead while the skimmer leads: a grey that reads at 3:1 on the
+                             // ruler (its head) and on its halo (its line), and less than `playhead`.
     QColor skimmer;          // The skimmer line.
     QColor skimmerText;      // The corner time while skimming.
     QColor scrubTrack;       // A scrub bar's track (Source monitor).

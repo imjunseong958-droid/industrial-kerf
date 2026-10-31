@@ -24,6 +24,7 @@
 #include <QDir>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QFormLayout>
@@ -76,8 +77,12 @@
 #include <QTextFrame>
 #include <QToolBar>
 #include <QToolButton>
+#include <QToolTip>
+#include <QScreen>
+#include <QWheelEvent>
 #include <QWidget>
 
+#include <DockAreaWidget.h>
 #include <DockManager.h>
 #include <DockWidget.h>
 #include <DockWidgetTab.h>
@@ -85,6 +90,7 @@
 #include <algorithm>
 #include <climits>
 #include <cmath>
+#include <functional>
 #include <vector>
 
 namespace kerf {
@@ -1742,7 +1748,7 @@ private slots:
         timeline.setProject(QJsonObject{{"tracks", QJsonArray{QJsonObject{{"type", "audio"}, {"clips", QJsonArray{}}}}}}, 8, 24);
         QTest::mouseMove(&timeline, timeline.addLaneButtonCenter());
         QVERIFY(timeline.addLaneVisible());
-        QCOMPARE(timeline.addLaneButtonCenter().y(), kRulerHeight + kTrackHeight + (kTrackHeight - 1) / 2);
+        QCOMPARE(timeline.addLaneButtonCenter().y(), kRulerHeight + kTrackHeight + (kAddLaneHeight - 1) / 2);
     }
 
     void timelineHeaderShowsVideoPreview() {
@@ -1754,13 +1760,21 @@ private slots:
         const QJsonObject track{{"type", "video"}, {"clips", QJsonArray{clip}}};
         timeline.setProject(QJsonObject{{"tracks", QJsonArray{track}}}, 4, 24);
         timeline.show();
-        const QPoint thumbnail(kTimelineLabelWidth - 9 - kHeaderPreviewWidth / 2, kRulerHeight + kTrackHeight / 2);
+        // A preview needs a header of two lines.
+        timeline.setAllTrackHeights(kDetailedTrackHeight);
+        const QPoint thumbnail(kTimelineLabelWidth - 9 - kHeaderPreviewWidth / 2, kRulerHeight + kDetailedTrackHeight / 2);
         QCOMPARE(timeline.grab().toImage().pixelColor(thumbnail), editorTheme().trackHeader);
         QImage frame(160, 90, QImage::Format_RGB32);
         frame.fill(QColor("#e87342"));
         artwork.frames.insert(QStringLiteral("sample"), frame);
         emit artwork.changed();
         QCOMPARE(timeline.grab().toImage().pixelColor(thumbnail), QColor("#e87342"));
+        // A one-line header, at the default height or any below two lines,
+        // has no room for it.
+        for (const int height : {kDetailedTrackHeight - 1, kVideoTrackHeight, kMinTrackHeight}) {
+            timeline.setAllTrackHeights(height);
+            QCOMPARE(timeline.grab().toImage().pixelColor(thumbnail.x(), kRulerHeight + height / 2), editorTheme().trackHeader);
+        }
     }
 
     void timelineStacksPictureTracksUpwardFromV1() {
@@ -1794,7 +1808,7 @@ private slots:
         auto *timeline = new TimelineWidget;
         scroll.setWidget(timeline);
         QJsonArray tracks;
-        for (int i = 0; i < 8; ++i)
+        for (int i = 0; i < 12; ++i)
             tracks.append(QJsonObject{{"id", QString::number(i)}, {"type", "video"}, {"clips", QJsonArray{}}});
         timeline->setProject(QJsonObject{{"tracks", tracks}}, 120, 24);
         scroll.show();
@@ -1852,6 +1866,575 @@ private slots:
         timeline.resetTrackHeights();
         QCOMPARE(timeline.trackHeaderRect(0).height(), kVideoTrackHeight);
         QCOMPARE(timeline.trackHeaderRect(1).height(), kTrackHeight);
+    }
+
+    // Every track's height, top to bottom.
+    static QList<int> trackHeights(const TimelineWidget &timeline) {
+        QList<int> heights;
+        for (int row = 0; row < timeline.trackRowCount(); ++row) heights << timeline.trackHeaderRect(row).height();
+        return heights;
+    }
+    static QJsonObject trackList(const QStringList &kinds) {
+        QJsonArray tracks;
+        for (int index = 0; index < kinds.size(); ++index)
+            tracks.append(QJsonObject{{"id", QStringLiteral("T%1").arg(index)}, {"type", kinds.at(index)}, {"clips", QJsonArray{}}});
+        return QJsonObject{{"fps", 24}, {"tracks", tracks}};
+    }
+
+    // The skimmed playhead keeps the playhead's halo, so its line reads at
+    // 3:1 where it crosses clips and pictures, not only on bare lanes.
+    void skimmedPlayheadKeepsItsHaloOverClips() {
+        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
+        TimelineWidget timeline;
+        timeline.resize(800, 200);
+        timeline.setProject(QJsonObject{{"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+            QJsonObject{{"id", "c"}, {"kind", "media"}, {"timelineStart", 0.0}, {"duration", 6.0}}}}}}}}, 8, 24);
+        timeline.setPlayhead(2.0);
+        timeline.show();
+        const int playX = kTimelineOrigin + 144;
+        const QRect clip = timeline.clipBounds(QStringLiteral("c"));
+        QVERIFY(clip.left() < playX - 1 && clip.right() > playX + 1);
+        // In the clip's body, under its name bar.
+        const int y = clip.bottom() - 4;
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            const EditorTheme &theme = editorTheme();
+            QTest::mouseMove(&timeline, QPoint(kTimelineOrigin + (scheme == ColorScheme::Dark ? 420 : 400), clip.center().y()));
+            QVERIFY(!timeline.skimLabel().isEmpty());
+            const QImage skimmed = timeline.grab().toImage();
+            QCOMPARE(skimmed.pixel(playX, y), theme.playheadIdle.rgb());
+            QCOMPARE(skimmed.pixel(playX - 1, y), theme.playheadHalo.rgb());
+            QCOMPARE(skimmed.pixel(playX + 1, y), theme.playheadHalo.rgb());
+            QVERIFY(contrastRatio(theme.playheadIdle, theme.playheadHalo) >= 3.0);
+            // Not skimming, the playhead has the same halo.
+            timeline.clearSkimmer();
+            const QImage playing = timeline.grab().toImage();
+            QCOMPARE(playing.pixel(playX, y), theme.playhead.rgb());
+            QCOMPARE(playing.pixel(playX - 1, y), theme.playheadHalo.rgb());
+            QCOMPARE(playing.pixel(playX + 1, y), theme.playheadHalo.rgb());
+        }
+    }
+
+    // The header bar sets every track's height at once (Mini, the default
+    // Medium, Large, and Fit) and shows which is in force; in the editor it
+    // is in the Timeline panel's title strip, before the track count.
+    void timelineHeaderBarSetsEveryTrackHeight() {
+        TimelineWidget timeline;
+        timeline.resize(900, 520);
+        timeline.setProject(trackList({"video", "video", "audio", "audio"}), 8, 24);
+        timeline.show();
+        const QList<QAction *> actions = timeline.trackHeightActions();
+        QStringList names;
+        for (const QAction *action : actions) names << action->objectName();
+        QCOMPARE(names, (QStringList{"trackHeightMini", "trackHeightMedium", "trackHeightLarge", "trackHeightFit"}));
+        QAction *mini = actions.at(0);
+        QAction *medium = actions.at(1);
+        QAction *large = actions.at(2);
+        QAction *fit = actions.at(3);
+        for (QAction *action : actions) QVERIFY(action->toolTip().contains(QStringLiteral("Option-scroll")));
+        // Tracks start dense: one-line headers, a filmstrip on a picture
+        // track (a 14px body) and a waveform on a sound track (a 10px one);
+        // Mini is one line of 18px.
+        QVERIFY(kVideoTrackHeight < kDetailedTrackHeight && kVideoTrackHeight >= 34);
+        QVERIFY(kTrackHeight <= kVideoTrackHeight && kTrackHeight >= 30);
+        QCOMPARE(kMinTrackHeight, 18);
+        QCOMPARE(trackHeights(timeline), (QList<int>{kVideoTrackHeight, kVideoTrackHeight, kTrackHeight, kTrackHeight}));
+        QVERIFY(medium->isChecked() && !mini->isChecked() && !large->isChecked() && !fit->isCheckable());
+        mini->trigger();
+        QCOMPARE(trackHeights(timeline), QList<int>(4, kMinTrackHeight));
+        QVERIFY(mini->isChecked() && !medium->isChecked());
+        large->trigger();
+        QCOMPARE(trackHeights(timeline), QList<int>(4, 60));
+        QVERIFY(large->isChecked() && !mini->isChecked());
+        // One track dragged apart: no height is every track's.
+        const int edge = timeline.trackHeaderRect(0).bottom() + 1;
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(140, edge));
+        QTest::mouseMove(&timeline, QPoint(140, edge + 10));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(140, edge + 10));
+        QCOMPARE(trackHeights(timeline), (QList<int>{70, 60, 60, 60}));
+        QVERIFY(!mini->isChecked() && !medium->isChecked() && !large->isChecked());
+        medium->trigger();
+        QCOMPARE(trackHeights(timeline), (QList<int>{kVideoTrackHeight, kVideoTrackHeight, kTrackHeight, kTrackHeight}));
+        QVERIFY(medium->isChecked());
+        fit->trigger();
+        const int each = (timeline.height() - kRulerHeight - kAddLaneHeight - 8) / 4;
+        QCOMPARE(trackHeights(timeline), QList<int>(4, std::clamp(each, kMinTrackHeight, kMaxTrackHeight)));
+        // Their symbols are the glyph colour, and the accent when chosen.
+        QCOMPARE(ink(mini->icon()), editorTheme().glyph.rgb());
+        QCOMPARE(ink(mini->icon(), QIcon::Normal, QIcon::On), editorTheme().accentText.rgb());
+
+        QSettings().remove(QStringLiteral("workspace"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        QJsonObject project = trackList({"video", "video", "audio"});
+        project.insert("width", 1920);
+        project.insert("height", 1080);
+        window.applySnapshot(QJsonObject{{"revision", 1}, {"duration", 4}, {"timeline", project}});
+        window.resize(1440, 900);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        ads::CDockWidget *dock = window.m_workspace->panel(QStringLiteral("timeline"));
+        QCOMPARE(dock->titleBarActions().mid(0, 4), window.m_timeline->trackHeightActions());
+        QCOMPARE(dock->titleBarActions().constLast()->objectName(), QStringLiteral("timelineDetail"));
+        auto *button = dock->dockAreaWidget()->findChild<QToolButton *>(QStringLiteral("trackHeightMini"));
+        QVERIFY(button && button->isVisible());
+        QTest::mouseClick(button, Qt::LeftButton);
+        QCOMPARE(trackHeights(*window.m_timeline), QList<int>(3, kMinTrackHeight));
+        QVERIFY(button->isChecked());
+        // Chosen, it looks as a chosen mask tool does: the accent's wash.
+        const QImage chosen = button->grab().toImage();
+        QCOMPARE(chosen.pixelColor(QPoint(3, button->height() / 2) * chosen.devicePixelRatio()).rgb(), editorTheme().accentTint.rgb());
+    }
+
+    // Option-Up and Option-Down, and Option-scroll over the headers, step
+    // every track through the heights, keeping in place the track at the
+    // top of the view or under the pointer; plain keys and the wheel
+    // elsewhere leave heights alone.
+    void timelineStepsEveryTrackWithOptionKeysAndScroll() {
+        TimelineScrollArea scroll;
+        scroll.resize(900, 400);
+        scroll.setWidgetResizable(true);
+        auto *timeline = new TimelineWidget;
+        scroll.setWidget(timeline);
+        QStringList kinds;
+        for (int index = 0; index < 40; ++index) kinds << (index % 4 == 3 ? "audio" : "video");
+        timeline->setProject(trackList(kinds), 8, 24);
+        scroll.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&scroll));
+        timeline->setFocus();
+        QTest::keyClick(timeline, Qt::Key_Up, Qt::AltModifier);
+        QCOMPARE(trackHeights(*timeline), QList<int>(40, 44));
+        QTest::keyClick(timeline, Qt::Key_Down, Qt::AltModifier);
+        QTest::keyClick(timeline, Qt::Key_Down, Qt::AltModifier);
+        QCOMPARE(trackHeights(*timeline), QList<int>(40, 30));
+        QTest::keyClick(timeline, Qt::Key_Down);
+        QCOMPARE(trackHeights(*timeline), QList<int>(40, 30));
+
+        const auto wheel = [timeline](const QPoint &at, int delta, Qt::KeyboardModifiers modifiers) {
+            QWheelEvent event(at, timeline->mapToGlobal(at), QPoint(), QPoint(0, delta), Qt::NoButton, modifiers,
+                              Qt::NoScrollPhase, false);
+            QApplication::sendEvent(timeline, &event);
+            return event.isAccepted();
+        };
+        const auto inView = [timeline, &scroll](const QPoint &point) { return timeline->mapFrom(scroll.viewport(), point); };
+        QVERIFY(wheel(inView(QPoint(120, 200)), 120, Qt::AltModifier));
+        QCOMPARE(trackHeights(*timeline), QList<int>(40, 36));
+        // A trackpad's small deltas add up to a notch.
+        for (int part = 0; part < 3; ++part) wheel(inView(QPoint(120, 200)), -40, Qt::AltModifier);
+        QCOMPARE(trackHeights(*timeline), QList<int>(40, 30));
+        // Without Option, or over the lanes, the wheel is the scroll area's.
+        QVERIFY(!wheel(inView(QPoint(120, 200)), 120, Qt::NoModifier));
+        QVERIFY(!wheel(inView(QPoint(500, 200)), 120, Qt::AltModifier));
+        QCOMPARE(trackHeights(*timeline), QList<int>(40, 30));
+
+        // The track under the pointer stays where it is in the view.
+        scroll.verticalScrollBar()->setValue(300);
+        QCoreApplication::processEvents();
+        const QPoint over = inView(QPoint(120, 250));
+        const int row = timeline->trackRowAt(over.y());
+        QVERIFY(row > 5);
+        const auto top = [timeline](int at) { return timeline->trackHeaderRect(at).top() + timeline->pos().y(); };
+        const int before = top(row);
+        wheel(over, -120, Qt::AltModifier);
+        QCOMPARE(trackHeights(*timeline), QList<int>(40, 26));
+        QCOMPARE(top(row), before);
+        wheel(inView(QPoint(120, 250)), 240, Qt::AltModifier);
+        QCOMPARE(trackHeights(*timeline), QList<int>(40, 36));
+        QCOMPARE(top(row), before);
+        // The keys keep the track at the top of the view in place.
+        const int first = timeline->trackRowAt(-timeline->pos().y() + kRulerHeight);
+        const int firstTop = top(first);
+        QTest::keyClick(timeline, Qt::Key_Up, Qt::AltModifier);
+        QCOMPARE(trackHeights(*timeline), QList<int>(40, 44));
+        QCOMPARE(top(first), firstTop);
+    }
+
+    // At every height down to Mini the line between two headers shows the
+    // resize cursor and says what dragging it does; dragging it resizes the
+    // track above, Option-dragging every track of that kind; and a header's
+    // toggles keep their clicks, however close to the line.
+    void timelineHeaderEdgesResizeAtEveryHeight() {
+        TimelineWidget timeline;
+        timeline.resize(800, 400);
+        timeline.setProject(trackList({"video", "video", "video", "audio", "audio"}), 8, 24);
+        timeline.setAllTrackHeights(kMinTrackHeight);
+        timeline.show();
+        QSignalSpy toggles(&timeline, &TimelineWidget::trackToggleRequested);
+        // Rows, top down: V3, V2, V1, A1, A2. This line parts V2 from V1.
+        const int edge = timeline.trackHeaderRect(1).bottom() + 1;
+        for (const int dy : {-2, 0, 2}) {
+            QTest::mouseMove(&timeline, QPoint(140, edge + dy));
+            QCOMPARE(timeline.cursor().shape(), Qt::SplitVCursor);
+        }
+        QHelpEvent help(QEvent::ToolTip, QPoint(140, edge), timeline.mapToGlobal(QPoint(140, edge)));
+        QApplication::sendEvent(&timeline, &help);
+        QVERIFY2(QToolTip::text().contains(QStringLiteral("Option-drag")), qPrintable(QToolTip::text()));
+        QToolTip::hideText();
+
+        const QRect lock = timeline.headerToggleRect(2, 1);
+        QVERIFY(lock.top() > edge && lock.top() - edge <= 3);
+        QTest::mouseMove(&timeline, lock.center());
+        QVERIFY(timeline.cursor().shape() != Qt::SplitVCursor);
+        for (const QPoint &at : {lock.center(), QPoint(lock.center().x(), lock.top())}) {
+            QTest::mouseClick(&timeline, Qt::LeftButton, Qt::NoModifier, at);
+            QCOMPARE(toggles.constLast().at(1).toString(), QStringLiteral("locked"));
+        }
+        QCOMPARE(toggles.count(), 2);
+        QCOMPARE(trackHeights(timeline), QList<int>(5, kMinTrackHeight));
+
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(140, edge - 1));
+        QTest::mouseMove(&timeline, QPoint(140, edge + 19));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(140, edge + 19));
+        QCOMPARE(trackHeights(timeline), (QList<int>{18, 38, 18, 18, 18}));
+        // Option: every sound track...
+        const int soundEdge = timeline.trackHeaderRect(3).bottom() + 1;
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(140, soundEdge));
+        QTest::mouseMove(&timeline, QPoint(140, soundEdge + 12));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(140, soundEdge + 12));
+        QCOMPARE(trackHeights(timeline), (QList<int>{18, 38, 18, 30, 30}));
+        // ...or every picture track.
+        const int pictureEdge = timeline.trackHeaderRect(0).bottom() + 1;
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(140, pictureEdge));
+        QTest::mouseMove(&timeline, QPoint(140, pictureEdge + 6));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(140, pictureEdge + 6));
+        QCOMPARE(trackHeights(timeline), (QList<int>{24, 24, 24, 30, 30}));
+        QCOMPARE(toggles.count(), 2);
+    }
+
+    // Track heights are remembered per project in the editor's settings
+    // (never in project.kerf, which collaborators share), restored when the
+    // project opens again; a track added later takes the height every
+    // track was last set to.
+    void timelineRemembersTrackHeightsPerProject() {
+        QSettings().remove(QStringLiteral("timelineTrackHeights"));
+        const auto forget = qScopeGuard([] { QSettings().remove(QStringLiteral("timelineTrackHeights")); });
+        QTemporaryDir first;
+        QTemporaryDir second;
+        const QJsonObject project = trackList({"video", "audio"});
+        {
+            TimelineWidget timeline;
+            timeline.resize(700, 400);
+            timeline.setHeightsKey(first.path());
+            timeline.setProject(project, 8, 24);
+            timeline.show();
+            timeline.setAllTrackHeights(26);
+            const int edge = timeline.trackHeaderRect(0).bottom() + 1;
+            QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(140, edge));
+            QTest::mouseMove(&timeline, QPoint(140, edge + 24));
+            QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(140, edge + 24));
+            QCOMPARE(trackHeights(timeline), (QList<int>{50, 26}));
+        }
+        {
+            TimelineWidget timeline;
+            timeline.setHeightsKey(first.path());
+            timeline.setProject(project, 8, 24);
+            QCOMPARE(trackHeights(timeline), (QList<int>{50, 26}));
+            QCOMPARE(timeline.allTrackHeight(), 26);
+            QJsonObject grown = project;
+            QJsonArray tracks = grown.value("tracks").toArray();
+            tracks.append(QJsonObject{{"id", "added"}, {"type", "audio"}, {"clips", QJsonArray{}}});
+            grown.insert("tracks", tracks);
+            timeline.setProject(grown, 8, 24);
+            QCOMPARE(trackHeights(timeline), (QList<int>{50, 26, 26}));
+        }
+        {
+            // Whether the snapshot comes first or not.
+            TimelineWidget timeline;
+            timeline.setProject(project, 8, 24);
+            timeline.setHeightsKey(first.path());
+            QCOMPARE(trackHeights(timeline), (QList<int>{50, 26}));
+        }
+        {
+            TimelineWidget timeline;
+            timeline.setHeightsKey(second.path());
+            timeline.setProject(project, 8, 24);
+            QCOMPARE(trackHeights(timeline), (QList<int>{kVideoTrackHeight, kTrackHeight}));
+        }
+        QSettings settings;
+        settings.beginGroup(QStringLiteral("timelineTrackHeights"));
+        QStringList paths;
+        for (const QString &group : settings.childGroups()) paths << settings.value(group + QStringLiteral("/path")).toString();
+        settings.endGroup();
+        const QString remembered = QDir::cleanPath(QFileInfo(first.path()).absoluteFilePath());
+        QCOMPARE(paths, QStringList{remembered});
+        // The editor remembers them for the project it opens, and Medium
+        // (the defaults) forgets them.
+        MainWindow window{first.path(), QString()};
+        QCOMPARE(window.m_timeline->m_heightsPath, remembered);
+        window.m_timeline->setProject(project, 8, 24);
+        QCOMPARE(trackHeights(*window.m_timeline), (QList<int>{50, 26}));
+        window.m_timeline->resetTrackHeights();
+        TimelineWidget reopened;
+        reopened.setHeightsKey(first.path());
+        reopened.setProject(project, 8, 24);
+        QCOMPARE(trackHeights(reopened), (QList<int>{kVideoTrackHeight, kTrackHeight}));
+    }
+
+    // From Mini to the tallest, a header's badge and toggles sit inside its
+    // row, clear of its top edge and its divider; it is one line (no clip
+    // count, no preview) below two lines' height; clips keep their names at
+    // every height, show a waveform from a 10px body (rows of 30px) and a
+    // filmstrip from a 14px one (rows of 34px).
+    void timelineTracksStayLegibleAtEveryHeight() {
+        MediaArtwork artwork;
+        QImage picture(160, 90, QImage::Format_RGB32);
+        picture.fill(QColor("#e87342"));
+        artwork.frames.insert(QStringLiteral("pic"), picture);
+        QImage sound(2048, 48, QImage::Format_ARGB32);
+        sound.fill(Qt::white);
+        artwork.waves.insert(QStringLiteral("snd"), sound);
+        TimelineWidget timeline;
+        timeline.setArtwork(&artwork);
+        timeline.setProject(QJsonObject{{"fps", 24},
+            {"sources", QJsonArray{QJsonObject{{"id", "pic"}, {"duration", 4}}, QJsonObject{{"id", "snd"}, {"duration", 4}}}},
+            {"tracks", QJsonArray{
+                QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{QJsonObject{
+                    {"id", "v"}, {"kind", "media"}, {"sourceId", "pic"}, {"name", "Opening shot"}, {"timelineStart", 0.0},
+                    {"duration", 4.0}, {"in", 0.0}, {"out", 4.0}}}}},
+                QJsonObject{{"id", "A1"}, {"type", "audio"}, {"clips", QJsonArray{QJsonObject{
+                    {"id", "a"}, {"kind", "media"}, {"sourceId", "snd"}, {"name", "Dialogue"}, {"timelineStart", 0.0},
+                    {"duration", 4.0}, {"in", 0.0}, {"out", 4.0}}}}}}}}, 6, 24);
+        timeline.resize(900, kRulerHeight + 2 * kMaxTrackHeight + kAddLaneHeight + 8);
+        timeline.show();
+        const EditorTheme &theme = editorTheme();
+        // Whether any pixel across a clip's body, near its foot, is `color`.
+        const auto bodyShows = [](const QImage &image, const QRect &clip, const QColor &color) {
+            for (int x = clip.center().x() - 20; x <= clip.center().x() + 20; ++x)
+                if (image.pixelColor(x, clip.bottom() - 3) == color) return true;
+            return false;
+        };
+        for (const int height : {18, 19, 20, 21, 22, 24, 26, 28, 29, 30, 32, 33, 34, 36, 39, 40, 44, 60, 96, 160}) {
+            timeline.setAllTrackHeights(height);
+            QCOMPARE(trackHeights(timeline), QList<int>(2, height));
+            const QImage image = timeline.grab().toImage();
+            for (int row = 0; row < 2; ++row) {
+                const QRect header = timeline.trackHeaderRect(row);
+                const QRect badge = timeline.headerBadgeRect(row);
+                const QRect output = timeline.headerToggleRect(row, 0);
+                const QRect lock = timeline.headerToggleRect(row, 1);
+                for (const QRect &control : {badge, output, lock}) {
+                    QVERIFY2(control.top() > header.top() && control.bottom() < header.bottom(),
+                             qPrintable(QStringLiteral("row %1 at %2px").arg(row).arg(height)));
+                    QVERIFY(control.height() >= 12);
+                }
+                QVERIFY(badge.right() < output.left() && output.right() < lock.left());
+                // The divider under the row is whole, past the name.
+                QCOMPARE(image.pixelColor(170, header.bottom()), theme.trackDivider);
+            }
+            const QRect picture = timeline.clipBounds(QStringLiteral("v"));
+            const QRect wave = timeline.clipBounds(QStringLiteral("a"));
+            QCOMPARE(bodyShows(image, picture, QColor("#e87342")), height >= 34);
+            QCOMPARE(bodyShows(image, wave, theme.clipAudio.wave), height >= 30);
+            // Names: the clips', the tracks', the badges'; the clip count
+            // only on two-line headers.
+            TextRecorder recorder;
+            QPainter painter(&recorder);
+            timeline.paintLanes(painter, timeline.rect());
+            timeline.paintHeaders(painter, timeline.rect());
+            painter.end();
+            for (const char *name : {"Opening shot", "Dialogue", "Video 1", "Audio 1", "V1", "A1"})
+                QVERIFY2(recorder.colorOf(QString::fromLatin1(name)).isValid(), name);
+            QCOMPARE(recorder.colorOf(QStringLiteral("1 clip")).isValid(), height >= kDetailedTrackHeight);
+        }
+    }
+
+    // A big edit's track numbers (V100 and up) fit their badges whole, and
+    // the toggles after the badges line up down the column.
+    void timelineBadgesFitEveryTrackNumber() {
+        QStringList kinds;
+        for (int index = 0; index < 160; ++index) kinds << (index < 120 ? "video" : "audio");
+        TimelineWidget timeline;
+        timeline.setProject(trackList(kinds), 8, 24);
+        timeline.setAllTrackHeights(kMinTrackHeight);
+        timeline.resize(800, 600);
+        TextRecorder recorder;
+        QPainter painter(&recorder);
+        timeline.paintHeaders(painter, timeline.rect());
+        painter.end();
+        QStringList badges;
+        for (const auto &run : recorder.runs)
+            if (run.text.size() <= 5 && (run.text.startsWith(QLatin1Char('V')) || run.text.startsWith(QLatin1Char('A')))) badges << run.text;
+        QVERIFY2(badges.contains(QStringLiteral("V120")) && badges.contains(QStringLiteral("V100")), qPrintable(badges.join(' ')));
+        for (const QString &badge : badges) QVERIFY2(!badge.contains(QChar(0x2026)), qPrintable(badge));
+        QFont font = timeline.font();
+        font.setPixelSize(10);
+        font.setWeight(QFont::DemiBold);
+        QVERIFY(timeline.headerBadgeRect(0).width() >= QFontMetrics(font).horizontalAdvance(QStringLiteral("V120")) + 4);
+        for (int row = 0; row < timeline.trackRowCount(); row += 37) {
+            QCOMPARE(timeline.headerToggleRect(row, 0).left(), timeline.headerToggleRect(0, 0).left());
+            QVERIFY(timeline.headerToggleRect(row, 0).left() > timeline.headerBadgeRect(row).right());
+        }
+    }
+
+    // A full repaint of a 300-track timeline paints the lanes in view, not
+    // all of them; and the pointer crossing from clip to clip repaints the
+    // clips it leaves and enters, not the view.
+    void timelinePaintsOnlyTheTracksInView() {
+        MediaArtwork artwork;
+        fakeArtwork(&artwork);
+        TimelineScrollArea scroll;
+        scroll.resize(900, 500);
+        scroll.setWidgetResizable(true);
+        auto *timeline = new TimelineWidget;
+        timeline->setArtwork(&artwork);
+        scroll.setWidget(timeline);
+        timeline->setProject(denseTimeline(300, 10.0), 10.0, 24.0);
+        timeline->setAllTrackHeights(kMinTrackHeight);
+        scroll.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&scroll));
+        // Small enough that the whole timeline could be cached at once.
+        QVERIFY(qint64(timeline->width()) * timeline->height() < 6000000);
+        scroll.verticalScrollBar()->setValue(2000);
+        QCoreApplication::processEvents();
+        timeline->invalidateLanes();
+        timeline->m_lanesPainted = 0;
+        scroll.viewport()->repaint();
+        const int inView = scroll.viewport()->height() / kMinTrackHeight + 2;
+        QVERIFY2(timeline->m_lanesPainted > 0 && timeline->m_lanesPainted <= inView,
+                 qPrintable(QStringLiteral("%1 lanes painted for %2 in view").arg(timeline->m_lanesPainted).arg(inView)));
+        // Across three clips of one track: each change of the clip (or the
+        // clip's edge) under the pointer repaints the one it leaves and the
+        // one it enters, a lane's worth each, never the lanes in view.
+        const int y = timeline->mapFrom(scroll.viewport(), QPoint(0, 200)).y();
+        QVERIFY(timeline->trackRowAt(y) >= 0);
+        QStringList crossed;
+        int changes = 0;
+        timeline->m_lanesPainted = 0;
+        for (int x = kTimelineOrigin + 10; x < kTimelineOrigin + 3 * 216; x += 9) {
+            const auto before = std::make_pair(timeline->m_hoverClipId, timeline->m_hoverEdge);
+            QTest::mouseMove(timeline, QPoint(x, y));
+            QCoreApplication::processEvents();
+            changes += before != std::make_pair(timeline->m_hoverClipId, timeline->m_hoverEdge) ? 1 : 0;
+            if (!timeline->m_hoverClipId.isEmpty() && !crossed.contains(timeline->m_hoverClipId)) crossed << timeline->m_hoverClipId;
+        }
+        QVERIFY2(crossed.size() >= 3, qPrintable(crossed.join(QLatin1Char(' '))));
+        QVERIFY2(timeline->m_lanesPainted <= 2 * changes && 2 * changes < changes * inView,
+                 qPrintable(QStringLiteral("%1 lanes for %2 changes").arg(timeline->m_lanesPainted).arg(changes)));
+    }
+
+    // Scrolling moves what is on screen and paints only what scrolls in
+    // and the pinned ruler and headers, and what is on screen afterwards is
+    // exactly what a full repaint draws: the headers stay in step with
+    // their lanes, and the ruler and corner stay pinned.
+    void timelineScrollsByMovingWhatIsOnScreen() {
+        MediaArtwork artwork;
+        fakeArtwork(&artwork);
+        TimelineScrollArea scroll;
+        scroll.resize(900, 500);
+        scroll.setWidgetResizable(true);
+        auto *timeline = new TimelineWidget;
+        timeline->setArtwork(&artwork);
+        scroll.setWidget(timeline);
+        timeline->setProject(denseTimeline(60, 30.0), 30.0, 24.0);
+        timeline->setPlayhead(9.5);
+        scroll.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&scroll));
+        QCoreApplication::processEvents();
+        struct PaintMeter final : QObject {
+            qint64 pixels = 0;
+            bool eventFilter(QObject *, QEvent *event) override {
+                if (event->type() == QEvent::Paint)
+                    for (const QRect &rect : static_cast<QPaintEvent *>(event)->region()) pixels += qint64(rect.width()) * rect.height();
+                return false;
+            }
+        } meter;
+        timeline->installEventFilter(&meter);
+        QScrollBar *vertical = scroll.verticalScrollBar();
+        QScrollBar *horizontal = scroll.horizontalScrollBar();
+        QVERIFY(vertical->maximum() > 400 && horizontal->maximum() > 400);
+        const QSize view = scroll.viewport()->size();
+        const auto onScreen = [&scroll] { return scroll.screen()->grabWindow(scroll.winId()).toImage(); };
+        struct Step {
+            int dx;
+            int dy;
+        };
+        for (const Step step : {Step{0, 40}, Step{0, 7}, Step{0, -23}, Step{0, 200}, Step{60, 0}, Step{-15, 0}, Step{3, 0},
+                                Step{30, 30}, Step{-41, -9}}) {
+            meter.pixels = 0;
+            horizontal->setValue(horizontal->value() + step.dx);
+            vertical->setValue(vertical->value() + step.dy);
+            QCoreApplication::processEvents();
+            const qint64 painted = meter.pixels;
+            if (step.dx == 0)
+                QVERIFY2(painted <= qint64(std::abs(step.dy) + 2 * kRulerHeight + 4) * view.width(),
+                         qPrintable(QStringLiteral("%1 px for %2 down").arg(painted).arg(step.dy)));
+            if (step.dy == 0)
+                QVERIFY2(painted <= qint64(std::abs(step.dx) + 2 * kTimelineLabelWidth + 4) * view.height(),
+                         qPrintable(QStringLiteral("%1 px for %2 across").arg(painted).arg(step.dx)));
+            const QImage scrolled = onScreen();
+            scroll.viewport()->repaint();
+            QVERIFY2(scrolled == onScreen(), qPrintable(QStringLiteral("after %1, %2").arg(step.dx).arg(step.dy)));
+        }
+        timeline->removeEventFilter(&meter);
+    }
+
+    // Rows are found by a binary search: correct at every edge, and a
+    // hundred times the tracks costs nowhere near a hundred times the time.
+    void timelineFindsRowsWithoutWalkingThemAll() {
+        const auto timed = [](int count) {
+            QStringList kinds;
+            for (int index = 0; index < count; ++index) kinds << (index % 3 == 2 ? "audio" : "video");
+            TimelineWidget timeline;
+            timeline.setProject(trackList(kinds), 8, 24);
+            for (int row = 0; row < count; ++row) {
+                const QRect header = timeline.trackHeaderRect(row);
+                if (timeline.trackRowAt(header.top()) != row || timeline.trackRowAt(header.bottom()) != row) return -1.0;
+            }
+            if (timeline.trackRowAt(kRulerHeight - 1) != -1 || timeline.trackRowAt(timeline.trackHeaderRect(count - 1).bottom() + 1) != -1)
+                return -1.0;
+            const int span = timeline.trackHeaderRect(count - 1).bottom();
+            double best = 1e9;
+            qint64 sum = 0;
+            for (int run = 0; run < 3; ++run) {
+                QElapsedTimer timer;
+                timer.start();
+                for (int lookup = 0; lookup < 200000; ++lookup) sum += timeline.trackRowAt(kRulerHeight + int((lookup * 7919LL) % span));
+                best = std::min(best, timer.nsecsElapsed() / 1e6);
+            }
+            return sum > 0 ? best : -1.0;
+        };
+        const double few = timed(30);
+        const double many = timed(3000);
+        QVERIFY(few >= 0.0 && many >= 0.0);
+        // A walk would be some 90 times slower; a search is a few times.
+        QVERIFY2(many < 20.0 * std::max(few, 0.2), qPrintable(QStringLiteral("%1 ms for 30 tracks, %2 ms for 3000").arg(few).arg(many)));
+    }
+
+    // A dense edit: 48 tracks at Mini, one line each, in both appearances.
+    void denseTimelineFollowsTheAppearance() {
+        const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
+        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
+        MediaArtwork artwork;
+        fakeArtwork(&artwork);
+        TimelineWidget timeline;
+        timeline.setArtwork(&artwork);
+        timeline.setProject(denseTimeline(48, 24.0), 24.0, 24.0);
+        timeline.setSelectedClip(QStringLiteral("c20_2"));
+        timeline.setPlayhead(7.5);
+        timeline.trackHeightActions().at(0)->trigger();
+        timeline.resize(1440, kRulerHeight + 48 * kMinTrackHeight + kAddLaneHeight + 8);
+        timeline.show();
+        QCOMPARE(trackHeights(timeline), QList<int>(48, kMinTrackHeight));
+        const int playX = kTimelineOrigin + int(std::floor(7.5 * 72.0));
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            const EditorTheme &theme = editorTheme();
+            const QImage image = timeline.grab().toImage();
+            if (!shots.isEmpty())
+                QVERIFY(image.save(QDir(shots).filePath(QStringLiteral("timeline-dense-%1.png").arg(theme.dark ? "dark" : "light"))));
+            for (int row = 0; row < 48; ++row) {
+                const QRect header = timeline.trackHeaderRect(row);
+                QVERIFY(header.bottom() < image.height());
+                // Its stripe is its clips' colour; its line of controls fits it.
+                const bool sound = timeline.trackRowLabel(row).startsWith(QLatin1Char('A'));
+                QCOMPARE(image.pixelColor(1, header.center().y()), (sound ? theme.clipAudio : theme.clipVideo).header);
+                QCOMPARE(image.pixelColor(170, header.bottom()), theme.trackDivider);
+                // The playhead's line runs through every row.
+                QCOMPARE(image.pixelColor(playX, header.center().y()), theme.playhead);
+            }
+            QCOMPARE(amberPixels(image), 0);
+        }
     }
 
     void timelineScrubsFromThePointer() {
@@ -2070,6 +2653,173 @@ private slots:
         timeline->setZoom(1.0);
         QTest::qWait(20);
         QVERIFY(scroll.horizontalScrollBar()->maximum() > 0);
+    }
+
+    // A big edit: `count` tracks, two thirds picture and a third sound, each
+    // with a clip every three seconds over `seconds`, cut from the fake
+    // artwork's sources so filmstrips and waveforms draw.
+    static QJsonObject denseTimeline(int count, double seconds) {
+        const char *pictures[] = {"wide", "close", "drone"};
+        const char *sounds[] = {"wide", "close", "score"};
+        QJsonArray sources{
+            QJsonObject{{"id", "wide"}, {"path", "media/harbor-wide.mov"}, {"duration", 20}, {"hasAudio", true}},
+            QJsonObject{{"id", "close"}, {"path", "media/fisher-close.mov"}, {"duration", 20}, {"hasAudio", true}},
+            QJsonObject{{"id", "drone"}, {"path", "media/drone-pass.mov"}, {"duration", 20}},
+            QJsonObject{{"id", "score"}, {"path", "media/harbor-score.wav"}, {"duration", 40}, {"hasAudio", true}}};
+        QJsonArray tracks;
+        for (int index = 0; index < count; ++index) {
+            const bool audio = index % 3 == 2;
+            QJsonArray clips;
+            for (int n = 0; n * 3.0 < seconds; ++n) {
+                // Gaps and lengths vary by track, so the cut reads as an edit.
+                const double start = n * 3.0 + (index % 4) * 0.25;
+                const double length = 2.0 + ((index + n) % 3) * 0.4;
+                QJsonObject clip{{"id", QStringLiteral("c%1_%2").arg(index).arg(n)}, {"kind", "media"},
+                                 {"sourceId", audio ? sounds[(index + n) % 3] : pictures[(index + n) % 3]},
+                                 {"name", QStringLiteral("Shot %1-%2").arg(index + 1).arg(n + 1)},
+                                 {"timelineStart", start}, {"duration", std::min(length, seconds - start)}, {"in", 1.0},
+                                 {"out", 1.0 + length}};
+                if ((index + n) % 5 == 0)
+                    clip.insert("effects", QJsonArray{QJsonObject{{"fx", "color.grade"}, {"version", 1}, {"enabled", true}}});
+                clips.append(clip);
+            }
+            tracks.append(QJsonObject{{"id", QStringLiteral("T%1").arg(index)}, {"type", audio ? "audio" : "video"},
+                                      {"name", audio ? QStringLiteral("Sound %1").arg(index / 3 + 1)
+                                                     : QStringLiteral("Layer %1").arg(index - index / 3 + 1)},
+                                      {"clips", clips}});
+        }
+        return QJsonObject{{"fps", 24}, {"sources", sources}, {"tracks", tracks}};
+    }
+
+    // What a 300-track edit costs: applying a snapshot, painting the panel,
+    // scrolling it, skimming across clips, and playing. Prints timings; run
+    // with KERF_TIMELINE_BENCH=1 (or the number of tracks).
+    void timelineBenchmark() {
+        if (qEnvironmentVariableIsEmpty("KERF_TIMELINE_BENCH")) QSKIP("Set KERF_TIMELINE_BENCH=1 to time the timeline.");
+        MediaArtwork artwork;
+        fakeArtwork(&artwork);
+        const int count = qEnvironmentVariableIntValue("KERF_TIMELINE_BENCH") > 1 ? qEnvironmentVariableIntValue("KERF_TIMELINE_BENCH") : 300;
+        const QJsonObject project = denseTimeline(count, 60.0);
+        TimelineScrollArea scroll;
+        scroll.resize(1440, 800);
+        scroll.setWidgetResizable(true);
+        auto *timeline = new TimelineWidget;
+        timeline->setArtwork(&artwork);
+        scroll.setWidget(timeline);
+        scroll.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&scroll));
+        // Painted area per paint event, to tell a full repaint from a strip.
+        struct PaintMeter final : QObject {
+            qint64 pixels = 0;
+            int events = 0;
+            bool eventFilter(QObject *, QEvent *event) override {
+                if (event->type() == QEvent::Paint) {
+                    ++events;
+                    for (const QRect &rect : static_cast<QPaintEvent *>(event)->region()) pixels += qint64(rect.width()) * rect.height();
+                }
+                return false;
+            }
+        } meter;
+        timeline->installEventFilter(&meter);
+        const auto median = [](QList<double> samples) {
+            std::sort(samples.begin(), samples.end());
+            return samples.at(samples.size() / 2);
+        };
+        const auto time = [](const std::function<void()> &work) {
+            QElapsedTimer timer;
+            timer.start();
+            work();
+            return timer.nsecsElapsed() / 1e6;
+        };
+        QList<double> samples;
+        for (int run = 0; run < 7; ++run)
+            samples << time([&] {
+                timeline->setProject(project, 60.0, 24.0);
+                QCoreApplication::sendPostedEvents();
+                QCoreApplication::processEvents();
+            });
+        const double apply = median(samples);
+        const auto report = [&](const char *what, double ms, qint64 pixels, int events) {
+            qInfo("%-28s %8.3f ms  %9lld px painted in %d paint events", what, ms, pixels, events);
+        };
+        report(qPrintable(QStringLiteral("apply snapshot (%1 tracks)").arg(count)), apply, 0, 0);
+        // KERF_TIMELINE_BENCH_HEIGHT puts every track at one height.
+        if (const int height = qEnvironmentVariableIntValue("KERF_TIMELINE_BENCH_HEIGHT"); height > 0) {
+            timeline->setAllTrackHeights(height);
+            QCoreApplication::processEvents();
+        }
+        samples.clear();
+        for (int run = 0; run < 21; ++run)
+            samples << time([&] {
+                timeline->stepAllTrackHeights(run % 2 ? -1 : 1);
+                QCoreApplication::processEvents();
+            });
+        report("step every track's height", median(samples), 0, 0);
+        if (const int height = qEnvironmentVariableIntValue("KERF_TIMELINE_BENCH_HEIGHT"); height > 0) timeline->setAllTrackHeights(height);
+        else timeline->resetTrackHeights();
+        QCoreApplication::processEvents();
+        samples.clear();
+        for (int run = 0; run < 21; ++run) samples << time([&] { scroll.viewport()->repaint(); });
+        report("repaint the panel", median(samples), 0, 0);
+
+        QScrollBar *vertical = scroll.verticalScrollBar();
+        QVERIFY(vertical->maximum() > 0);
+        samples.clear();
+        meter.pixels = 0;
+        meter.events = 0;
+        for (int step = 1; step <= 60; ++step)
+            samples << time([&] {
+                vertical->setValue(step * 40);
+                QCoreApplication::processEvents();
+            });
+        report("scroll down 40px", median(samples), meter.pixels / 60, meter.events);
+
+        QScrollBar *horizontal = scroll.horizontalScrollBar();
+        samples.clear();
+        meter.pixels = 0;
+        meter.events = 0;
+        for (int step = 1; step <= 60; ++step)
+            samples << time([&] {
+                horizontal->setValue(step * 40);
+                QCoreApplication::processEvents();
+            });
+        report("scroll right 40px", median(samples), meter.pixels / 60, meter.events);
+        horizontal->setValue(0);
+        vertical->setValue(vertical->maximum() / 2);
+        QCoreApplication::processEvents();
+
+        // Skimming across clips: each step crosses into the next clip or gap.
+        const QPoint origin = timeline->mapFrom(scroll.viewport(), QPoint(0, 0));
+        samples.clear();
+        meter.pixels = 0;
+        meter.events = 0;
+        for (int step = 0; step < 60; ++step)
+            samples << time([&] {
+                QTest::mouseMove(timeline, origin + QPoint(kTimelineOrigin + 20 + step * 37, 300 + (step % 7) * 11));
+                QCoreApplication::processEvents();
+            });
+        report("skim across clips", median(samples), meter.pixels / 60, meter.events);
+
+        QTest::mouseMove(timeline, origin + QPoint(40, 300));
+        QCoreApplication::processEvents();
+        samples.clear();
+        for (int step = 0; step < 60; ++step)
+            samples << time([&] {
+                QTest::mouseMove(timeline, origin + QPoint(40 + step % 3, 120 + step * 9));
+                QCoreApplication::processEvents();
+            });
+        report("pointer over the headers", median(samples), 0, 0);
+
+        samples.clear();
+        meter.pixels = 0;
+        meter.events = 0;
+        for (int frame = 0; frame < 60; ++frame)
+            samples << time([&] {
+                timeline->setPlayhead(frame / 24.0);
+                QCoreApplication::processEvents();
+            });
+        report("play a frame", median(samples), meter.pixels / 60, meter.events);
+        timeline->removeEventFilter(&meter);
     }
 
     void proposalShowsTheScriptAndDocumentDiff() {
@@ -2975,8 +3725,14 @@ private slots:
                 // accent's question, not this token's).
                 std::vector<Pair> pairs{
                     {"chosen mask tool's symbol on its wash", t.accentText, t.accentTint, 3.0},
+                    {"chosen mask tool's symbol on its wash, held", t.accentText, t.accentTintPressed, 3.0},
                     {"selected mask's name on its wash", t.buttonText, t.accentTint, 4.5},
+                    {"selected mask's name on its wash, held", t.buttonText, t.accentTintPressed, 4.5},
                     {"selected mask's edge on the panel", t.accentText, t.panel, 3.0},
+                    {"chosen mode's edge on a title strip", t.accentText, t.panelTitle, 3.0},
+                    {"playhead's head on the ruler's top", t.playhead, t.ruler, 3.0},
+                    {"playhead's head on the ruler's foot", t.playhead, t.rulerBottom, 3.0},
+                    {"playhead's line on its halo", t.playhead, t.playheadHalo, 3.0},
                     {"secondary text on a selected row", t.onAccentSecondary, t.selection,
                      std::min(4.5, contrastRatio(Qt::white, t.selection))},
                     {"launcher: secondary text on a selected row", l.onAccentSecondary, l.selection,
@@ -2995,10 +3751,11 @@ private slots:
                         {"scroll bar handle on a field", t.scrollHandle, t.field, 3.0},
                         {"scroll bar handle on a dialog", t.scrollHandle, t.dialog, 3.0},
                         {"added clip's name on its band", t.assistantText, laidOn(t.trackLane, t.proposalAddFill), 4.5},
-                        {"skimmed playhead on the ruler's top", t.playheadIdle, t.ruler, 3.0},
-                        {"skimmed playhead on the ruler's foot", t.playheadIdle, t.rulerBottom, 3.0},
-                        {"skimmed playhead on a lane", t.playheadIdle, t.trackLane, 3.0},
-                        {"skimmed playhead below the last lane", t.playheadIdle, t.timelineBackground, 3.0},
+                        {"added clip's name on its band over a locked lane's hatch", t.assistantText,
+                         laidOn(laidOn(t.trackLane, t.trackLaneLocked), t.proposalAddFill), 4.5},
+                        {"skimmed playhead's head on the ruler's top", t.playheadIdle, t.ruler, 3.0},
+                        {"skimmed playhead's head on the ruler's foot", t.playheadIdle, t.rulerBottom, 3.0},
+                        {"skimmed playhead's line on its halo", t.playheadIdle, t.playheadHalo, 3.0},
                         {"You on the user's message", t.messageUserRole, t.messageUser, 4.5},
                         {"unreadable preset on the preset list", t.error, t.well, 4.5},
                         {"launcher: Details chevron on the content", l.secondary, l.content, 3.0},
@@ -3033,14 +3790,24 @@ private slots:
     }
 
     // States meant to differ still do: the skimmed playhead is a grey that
-    // reads less than the playhead itself, and a scroll bar's handle under
-    // the pointer or held reads more than at rest.
+    // reads clearly less than the playhead itself wherever either is drawn
+    // (the ruler for their heads, their solid halo for their lines), for
+    // every accent; and a scroll bar's handle under the pointer or held
+    // reads more than at rest.
     void quietAndActiveStatesStayApart() {
         for (const bool dark : {false, true}) {
+            for (const QColor &accent : macAccents()) {
+                const EditorTheme t = makeEditorTheme(dark, accent);
+                QVERIFY(t.playheadIdle.hsvSaturation() < 20);
+                QCOMPARE(t.playheadHalo.alpha(), 255);
+                for (const QColor &surface : {t.ruler, t.rulerBottom, t.playheadHalo})
+                    QVERIFY2(contrastRatio(t.playheadIdle, surface) + 0.35 <= contrastRatio(t.playhead, surface),
+                             qPrintable(QStringLiteral("%1 and %2 on %3, %4").arg(t.playheadIdle.name(), t.playhead.name(),
+                                                                              surface.name(), accent.name())));
+            }
             const EditorTheme t = makeEditorTheme(dark, systemAccent(dark));
-            QVERIFY(t.playheadIdle.hsvSaturation() < 20);
-            for (const QColor &surface : {t.ruler, t.rulerBottom, t.trackLane, t.timelineBackground})
-                QVERIFY2(contrastRatio(t.playheadIdle, surface) < contrastRatio(t.playhead, surface), qPrintable(surface.name()));
+            // The system's own blue stays the playhead's, as it is.
+            QCOMPARE(t.playhead.rgb(), systemAccent(dark).rgb());
             const LauncherTheme l = launcherTheme(dark, systemAccent(dark));
             const auto stronger = [](const QColor &rest, const QColor &active, const QColor &surface) {
                 return contrastRatio(laidOn(surface, active), surface) > contrastRatio(laidOn(surface, rest), surface) + 1.0;
@@ -3056,8 +3823,10 @@ private slots:
     }
 
     // The chosen mask tool and the selected mask stand out from the others,
-    // at rest, under the pointer and held, and the Assistant's Model field
-    // reads on its hover wash, in both appearances.
+    // at rest, under the pointer and held (darkening while held, as every
+    // bezel does), in Effect Controls and in the Program panel's title
+    // strip alike; and the Assistant's Model field reads on its hover wash,
+    // in both appearances.
     void chosenMasksAndToolsStandOut() {
         const auto restore = qScopeGuard([] {
             setEditorColorScheme(ColorScheme::Dark);
@@ -3119,10 +3888,22 @@ private slots:
             QCOMPARE(fill(other), theme.button.rgb());
             QCOMPARE(hovered(other), theme.buttonHover.rgb());
             QCOMPARE(held(other), theme.buttonPressed.rgb());
-            for (const QRgb wash : {fill(chosen), hovered(chosen), held(chosen)}) QCOMPARE(wash, theme.accentTint.rgb());
+            for (const QRgb wash : {fill(chosen), hovered(chosen)}) QCOMPARE(wash, theme.accentTint.rgb());
+            QCOMPARE(held(chosen), theme.accentTintPressed.rgb());
+            QVERIFY(qGray(theme.accentTintPressed.rgb()) < qGray(theme.accentTint.rgb()));
             QCOMPARE(ink(chosen->icon(), QIcon::Normal, QIcon::On), theme.accentText.rgb());
             QCOMPARE(ink(other->icon()), theme.glyph.rgb());
             QVERIFY(contrastRatio(theme.accentText, theme.accentTint) >= 3.0);
+            // The Program panel's title strip carries the same tools, and
+            // shows the chosen one the same way.
+            QToolButton *strip = nullptr;
+            for (QToolButton *button : window.m_workspace->panel(QStringLiteral("program"))
+                                           ->dockAreaWidget()->findChildren<QToolButton *>(QStringLiteral("maskRectangle")))
+                if (button->defaultAction() == rectangle) strip = button;
+            QVERIFY(strip && strip->isVisible() && strip->isChecked());
+            for (const QRgb wash : {fill(strip), hovered(strip)}) QCOMPARE(wash, theme.accentTint.rgb());
+            QCOMPARE(held(strip), theme.accentTintPressed.rgb());
+            QCOMPARE(ink(strip->icon(), QIcon::Normal, QIcon::On), theme.accentText.rgb());
             rectangle->trigger();
             QVERIFY(!rectangle->isChecked());
             QCOMPARE(fill(chosen), theme.button.rgb());
@@ -3133,7 +3914,8 @@ private slots:
             for (QToolButton *name : window.m_effectControls->findChildren<QToolButton *>(QStringLiteral("maskName")))
                 (name->text() == QStringLiteral("k1") ? selected : unselected) = name;
             QVERIFY(selected && unselected && selected->isVisible() && selected->isChecked() && !unselected->isChecked());
-            for (const QRgb wash : {fill(selected), hovered(selected), held(selected)}) QCOMPARE(wash, theme.accentTint.rgb());
+            for (const QRgb wash : {fill(selected), hovered(selected)}) QCOMPARE(wash, theme.accentTint.rgb());
+            QCOMPARE(held(selected), theme.accentTintPressed.rgb());
             QCOMPARE(fill(unselected), theme.button.rgb());
             QVERIFY(theme.accentTint.rgb() != theme.button.rgb());
 
@@ -3151,7 +3933,7 @@ private slots:
 
     // A colour well's swatch is ringed in a grey that reads at 3:1 against
     // white and black alike, so a white swatch shows on the light bezel and
-    // a black one on the dark.
+    // a black one on the dark, without a light halo on the dark bezel.
     void colorWellsRingWhiteAndBlackSwatches() {
         QPushButton well;
         well.setIconSize(QSize(32, 12));
@@ -3165,7 +3947,10 @@ private slots:
             // The ring's outer half, solid at twice the size, as it shows on the bezel.
             const QColor ring = laidOn(bezel, swatch.pixelColor(0, swatch.height() / 2));
             QVERIFY2(contrastRatio(ring, value) >= 3.0, qPrintable(ring.name()));
+            // It shows on the light bezel, and on the dark one keeps to the
+            // bezel's own grey rather than ringing the swatch in light.
             if (!dark) QVERIFY2(contrastRatio(ring, bezel) >= 3.0, qPrintable(ring.name()));
+            else QVERIFY2(contrastRatio(ring, bezel) < 1.3 && ring.lightness() < bezel.lightness() + 12, qPrintable(ring.name()));
         }
     }
 
@@ -3219,6 +4004,41 @@ private slots:
                          std::abs(drawn.blue() - expected.blue()) <= 2,
                      qPrintable(QStringLiteral("%1, not %2").arg(drawn.name(), expected.name())));
             QVERIFY(contrastRatio(theme.assistantText, drawn) >= 4.5);
+        }
+
+        // On a locked track the band keeps the lane's hatch, so the lock
+        // shows under the name too, and the name still reads on it.
+        QJsonObject locked = timeline(QJsonArray{wide});
+        QJsonObject lockedProposal = timeline(QJsonArray{wide, inserted});
+        for (QJsonObject *object : {&locked, &lockedProposal}) {
+            QJsonArray tracks = object->value("tracks").toArray();
+            QJsonObject track = tracks.at(0).toObject();
+            track.insert("locked", true);
+            tracks.replace(0, track);
+            object->insert("tracks", tracks);
+        }
+        widget.setProject(locked, 10, 24);
+        widget.setProposal(lockedProposal);
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            const EditorTheme &theme = editorTheme();
+            const QImage image = widget.grab().toImage();
+            const auto near = [](const QColor &a, const QColor &b) {
+                return std::abs(a.red() - b.red()) <= 2 && std::abs(a.green() - b.green()) <= 2 && std::abs(a.blue() - b.blue()) <= 2;
+            };
+            const QColor bare = laidOn(theme.trackLane, theme.proposalAddFill);
+            const QColor hatch = laidOn(laidOn(theme.trackLane, theme.trackLaneLocked), theme.proposalAddFill);
+            QVERIFY(!near(bare, hatch));
+            // Along the band, clear of the name: the hatch's lines cross it.
+            int lines = 0;
+            int plain = 0;
+            for (int x = band.x() - 16; x <= band.x() + 16; ++x) {
+                const QColor drawn = image.pixelColor(QPoint(x, band.y()) * image.devicePixelRatio());
+                lines += near(drawn, hatch) ? 1 : 0;
+                plain += near(drawn, bare) ? 1 : 0;
+            }
+            QVERIFY2(lines >= 3 && plain >= 3, qPrintable(QStringLiteral("%1 hatch, %2 plain").arg(lines).arg(plain)));
+            QVERIFY(contrastRatio(theme.assistantText, hatch) >= 4.5);
         }
     }
 
