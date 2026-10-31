@@ -78,7 +78,10 @@ struct EditorTheme {
                               // corner time), and `statusBar` (the sync chip).
     QColor accentTint;        // A quiet accent wash on `panel`: a checked tool, an info badge, the chosen
                               // mask tool and the selected mask. `accentText` reads on it at 3:1.
-    QColor onAccent;          // Text and glyphs on `accent`.
+    QColor onAccent;          // Text and glyphs on `accent`. White on the exact system accent, as macOS
+                              // draws default buttons and highlighted menu rows (4.0:1 on #007aff,
+                              // 3.65:1 on #0a84ff): a deliberate choice, so the editor's blue matches
+                              // the system's. `menuSelection` and `trackToggleOn` follow it.
     QColor onAccentSecondary; // Secondary text on `selection`: white held back only as far as it still
                               // reads at 4.5:1 (all white where even white does not).
 
