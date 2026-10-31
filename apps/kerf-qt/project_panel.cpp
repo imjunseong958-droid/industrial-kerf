@@ -93,7 +93,8 @@ ProjectPanel::ProjectPanel(MediaArtwork *artwork, QWidget *parent) : QWidget(par
     setObjectName(QStringLiteral("projectPanel"));
     setAttribute(Qt::WA_StyledBackground);
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(4, 4, 4, 4);
+    // The browser's white well runs edge to edge, as Finder's and Logic's library.
+    layout->setContentsMargins(0, 0, 0, 0);
     m_list = new QListWidget;
     m_list->setObjectName(QStringLiteral("projectBin"));
     m_list->setViewMode(QListView::IconMode);

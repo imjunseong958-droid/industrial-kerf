@@ -144,6 +144,8 @@ void SourceMonitorPanel::setActions(const QList<QAction *> &actions) {
         auto *button = new QToolButton;
         button->setObjectName(QStringLiteral("transportButton"));
         button->setDefaultAction(action);
+        // The Program monitor's transport metrics: 14-point symbols in 18px buttons.
+        button->setIconSize(QSize(14, 14));
         button->setFocusPolicy(Qt::NoFocus);
         m_buttons->layout()->addWidget(button);
     }

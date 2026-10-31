@@ -66,6 +66,7 @@
 
 #include <DockManager.h>
 #include <DockWidget.h>
+#include <DockWidgetTab.h>
 
 #include <algorithm>
 #include <limits>
@@ -75,35 +76,32 @@ namespace kerf {
 
 namespace {
 
-// Toolbar symbols drawn on a shared grid so their weight and optical size match.
+// Toolbar symbols drawn on a shared grid so their weight and optical size
+// match; an unavailable command's symbol is dimmed in both appearances.
 QIcon toolbarIcon(const QString &glyph) {
-    QPixmap pixmap(40, 40);
-    pixmap.setDevicePixelRatio(2);
-    pixmap.fill(Qt::transparent);
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(QPen(editorTheme().glyph, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    QPainterPath path;
-    if (glyph == QStringLiteral("↓")) {
-        path.moveTo(10, 3); path.lineTo(10, 12);
-        path.moveTo(6.5, 8.5); path.lineTo(10, 12); path.lineTo(13.5, 8.5);
-        path.moveTo(4, 12); path.lineTo(4, 16); path.lineTo(16, 16); path.lineTo(16, 12);
-    } else if (glyph == QStringLiteral("↶") || glyph == QStringLiteral("↷")) {
-        if (glyph == QStringLiteral("↷")) { painter.translate(20, 0); painter.scale(-1, 1); }
-        path.moveTo(7, 4); path.lineTo(3.5, 7.5); path.lineTo(7, 11);
-        path.moveTo(4, 7.5); path.lineTo(11, 7.5);
-        path.cubicTo(17, 7.5, 17, 15.5, 11, 15.5);
-    } else if (glyph == QStringLiteral("✂")) {
-        painter.drawEllipse(QPointF(5, 5), 2.5, 2.5);
-        painter.drawEllipse(QPointF(5, 15), 2.5, 2.5);
-        path.moveTo(7, 6.5); path.lineTo(16, 16);
-        path.moveTo(7, 13.5); path.lineTo(16, 4);
-    } else {
-        path.moveTo(5, 5); path.lineTo(15, 15);
-        path.moveTo(15, 5); path.lineTo(5, 15);
-    }
-    painter.drawPath(path);
-    return QIcon(pixmap);
+    return glyphIcon(QSize(20, 20), [glyph](QPainter &painter, const QColor &color) {
+        painter.setPen(QPen(color, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        QPainterPath path;
+        if (glyph == QStringLiteral("↓")) {
+            path.moveTo(10, 3); path.lineTo(10, 12);
+            path.moveTo(6.5, 8.5); path.lineTo(10, 12); path.lineTo(13.5, 8.5);
+            path.moveTo(4, 12); path.lineTo(4, 16); path.lineTo(16, 16); path.lineTo(16, 12);
+        } else if (glyph == QStringLiteral("↶") || glyph == QStringLiteral("↷")) {
+            if (glyph == QStringLiteral("↷")) { painter.translate(20, 0); painter.scale(-1, 1); }
+            path.moveTo(7, 4); path.lineTo(3.5, 7.5); path.lineTo(7, 11);
+            path.moveTo(4, 7.5); path.lineTo(11, 7.5);
+            path.cubicTo(17, 7.5, 17, 15.5, 11, 15.5);
+        } else if (glyph == QStringLiteral("✂")) {
+            painter.drawEllipse(QPointF(5, 5), 2.5, 2.5);
+            painter.drawEllipse(QPointF(5, 15), 2.5, 2.5);
+            path.moveTo(7, 6.5); path.lineTo(16, 16);
+            path.moveTo(7, 13.5); path.lineTo(16, 4);
+        } else {
+            path.moveTo(5, 5); path.lineTo(15, 15);
+            path.moveTo(15, 5); path.lineTo(5, 15);
+        }
+        painter.drawPath(path);
+    });
 }
 
 // A tool palette symbol on an 18-point grid, in `color`: the pointer for
@@ -317,7 +315,7 @@ void MainWindow::showPresetBindings(const QString &path, const QJsonObject &pres
             choice->setItemData(choice->count() - 1, source.value(QStringLiteral("fps")).toDouble(), fpsRole);
         }
         if (choice->count() == 1) choice->setItemText(0, QStringLiteral("Import matching media first"));
-        auto *from = new QDoubleSpinBox;
+        auto *from = new StepperSpinBox;
         from->setObjectName(QStringLiteral("presetFrom_%1").arg(id));
         // One width for every slot, so the steppers line up down the column.
         from->setFixedWidth(106);
@@ -895,8 +893,8 @@ void MainWindow::focusRegion() {
     auto *picker = new RegionPicker(frame, current, &dialog);
     layout->addWidget(picker);
     auto *form = new QFormLayout;
-    auto *start = new QDoubleSpinBox(&dialog);
-    auto *end = new QDoubleSpinBox(&dialog);
+    auto *start = new StepperSpinBox(&dialog);
+    auto *end = new StepperSpinBox(&dialog);
     for (QDoubleSpinBox *spin : {start, end}) {
         spin->setDecimals(3);
         spin->setSingleStep(1.0 / m_fps);
@@ -1162,6 +1160,8 @@ void MainWindow::showNextSteps(const QJsonArray &steps) {
             row->layout()->addWidget(button);
         }
     }
+    // In the assistant the chips keep their own width, from the left.
+    static_cast<QHBoxLayout *>(m_chatNextSteps->layout())->addStretch(1);
     m_chatNextSteps->setVisible(!steps.isEmpty());
     updateAiBar();
 }
@@ -1678,16 +1678,20 @@ void MainWindow::buildUi() {
     m_proposalDiff->setReadOnly(true);
     m_proposalDiff->setMinimumHeight(80);
     m_proposalDiff->setMaximumHeight(240);
-    m_proposalDiff->setObjectName(QStringLiteral("muted"));
+    m_proposalDiff->setObjectName(QStringLiteral("proposalDiff"));
+    // Sized to their labels and right-aligned, the default action rightmost,
+    // as macOS orders a dialog's buttons.
     auto *proposalButtons = new QHBoxLayout;
     m_acceptButton = new QPushButton(QStringLiteral("Accept"));
     m_acceptButton->setObjectName(QStringLiteral("primaryButton"));
     m_rejectButton = new QPushButton(QStringLiteral("Reject"));
     m_rejectButton->setObjectName(QStringLiteral("dangerButton"));
+    for (QPushButton *button : {m_rejectButton, m_acceptButton}) button->setMinimumWidth(72);
     connect(m_acceptButton, &QPushButton::clicked, this, &MainWindow::acceptProposal);
     connect(m_rejectButton, &QPushButton::clicked, this, &MainWindow::rejectProposal);
-    proposalButtons->addWidget(m_acceptButton);
+    proposalButtons->addStretch(1);
     proposalButtons->addWidget(m_rejectButton);
+    proposalButtons->addWidget(m_acceptButton);
     proposalLayout->addWidget(m_proposalSummary);
     proposalLayout->addWidget(m_proposalDiff);
     proposalLayout->addLayout(proposalButtons);
@@ -2050,6 +2054,10 @@ void MainWindow::buildUi() {
     m_workspace->addPanel(QStringLiteral("presets"), QStringLiteral("Presets"), m_presets);
     m_workspace->addPanel(QStringLiteral("source"), QStringLiteral("Source"), m_sourceMonitor);
     m_workspace->addPanel(QStringLiteral("assistant"), QStringLiteral("Kerf Assistant"), right);
+    // The bin and the assistant are white wells in light; their current tab
+    // is white too, so it merges into them.
+    for (const char *id : {"project", "assistant"})
+        m_workspace->panel(QString::fromLatin1(id))->tabWidget()->setProperty("well", true);
     setCentralWidget(central);
 
     connect(m_timeline, &TimelineWidget::seekRequested, this, &MainWindow::queueSeek);
@@ -2233,11 +2241,17 @@ void MainWindow::setupActions() {
     }
     m_commands->action(QStringLiteral("tool.selection"))->setChecked(true);
     m_commands->action(QStringLiteral("sequence.snap"))->setChecked(m_timeline->snapping());
-    for (const auto &[id, text] : {std::pair{QStringLiteral("source.markIn"), QStringLiteral("{")},
-                                   std::pair{QStringLiteral("source.markOut"), QStringLiteral("}")},
-                                   std::pair{QStringLiteral("source.insert"), QStringLiteral("Insert")},
-                                   std::pair{QStringLiteral("source.overwrite"), QStringLiteral("Overwrite")}})
-        m_commands->action(id)->setIconText(text);
+    // The Source monitor's marks and edits are drawn symbols, as the Program
+    // monitor's transport; their tooltips name them with their shortcuts.
+    for (const auto &[id, glyph] : {std::pair{QStringLiteral("source.markIn"), TransportGlyph::MarkIn},
+                                    std::pair{QStringLiteral("source.markOut"), TransportGlyph::MarkOut},
+                                    std::pair{QStringLiteral("source.insert"), TransportGlyph::Insert},
+                                    std::pair{QStringLiteral("source.overwrite"), TransportGlyph::Overwrite}}) {
+        QAction *action = m_commands->action(id);
+        action->setIcon(transportIcon(glyph));
+        action->setIconVisibleInMenu(false);
+        m_sourceGlyphs.append({action, glyph});
+    }
     m_commands->action(QStringLiteral("proposal.accept"))->setIconText(QStringLiteral("Accept"));
     m_commands->action(QStringLiteral("proposal.reject"))->setIconText(QStringLiteral("Reject"));
     m_commands->action(QStringLiteral("ai.stop"))->setIconText(QStringLiteral("Stop"));
@@ -3457,6 +3471,7 @@ void MainWindow::updateProposal(const QJsonValue &value) {
     m_proposalBox->setVisible(pending);
     if (!pending) {
         m_proposalSummary->setText(QStringLiteral("No pending changes"));
+        m_proposalText.clear();
         m_proposalDiff->clear();
         updateAiBar();
         return;
@@ -3479,10 +3494,31 @@ void MainWindow::updateProposal(const QJsonValue &value) {
     if (stale) text += QStringLiteral("This proposal is out of date. Ask Kerf to prepare it again before accepting.\n\n");
     text += proposal.value(QStringLiteral("script")).toString();
     text += QStringLiteral("\n") + diff;
-    m_proposalDiff->setPlainText(text);
+    m_proposalText = text;
+    showProposalText();
     m_acceptButton->setEnabled(m_connected && !stale);
     m_proposalBlocked = stale;
     updateAiBar();
+}
+
+void MainWindow::showProposalText() {
+    // Added lines in the success green, removed ones in the error red, and
+    // the script and diff headers in secondary text.
+    const EditorTheme &theme = editorTheme();
+    m_proposalDiff->clear();
+    QTextCursor cursor(m_proposalDiff->document());
+    const QStringList lines = m_proposalText.split(QLatin1Char('\n'));
+    for (qsizetype index = 0; index < lines.size(); ++index) {
+        const QString &line = lines.at(index);
+        const bool header = line.startsWith(QStringLiteral("+++")) || line.startsWith(QStringLiteral("---"));
+        QTextCharFormat format;
+        format.setForeground(!header && line.startsWith(QLatin1Char('+')) ? theme.success
+                             : !header && line.startsWith(QLatin1Char('-')) ? theme.error
+                                                                             : theme.textSecondary);
+        if (index > 0) cursor.insertBlock();
+        cursor.insertText(line, format);
+    }
+    m_proposalDiff->moveCursor(QTextCursor::Start);
 }
 
 void MainWindow::appendConversation(const QString &speaker, const QString &text) {
@@ -3553,6 +3589,8 @@ void MainWindow::applyAppearance() {
         button->setIcon(transportIcon(button == m_transportPlay && m_transportShowsPause ? TransportGlyph::Pause : glyph));
     }
     for (QAction *action : std::as_const(m_maskTools)) action->setIcon(maskToolIcon(static_cast<MaskTool>(action->data().toInt())));
+    for (const auto &[action, glyph] : std::as_const(m_sourceGlyphs)) action->setIcon(transportIcon(glyph));
+    if (!m_proposalText.isEmpty()) showProposalText();
     if (m_conversationEmpty) {
         m_conversation->setHtml(conversationIntro(editorTheme()));
         return;

@@ -31,9 +31,8 @@ int main(int argc, char **argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("Industrial Kerf"));
     QApplication::setOrganizationName(QStringLiteral("Industrial Kerf"));
+    // The system's interface font (SF Pro on macOS), as the launcher uses.
     QFont interfaceFont = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
-    if (QFontDatabase::families().contains(QStringLiteral("Avenir Next")))
-        interfaceFont.setFamily(QStringLiteral("Avenir Next"));
     interfaceFont.setPixelSize(13);
     interfaceFont.setWeight(QFont::Normal);
     app.setFont(interfaceFont);

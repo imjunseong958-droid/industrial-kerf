@@ -1056,7 +1056,8 @@ void TimelineWidget::paintMarkers(QPainter &p, const QRect &dirty, int top) {
         tag.lineTo(x, rect.top() + 7.0);
         tag.lineTo(x - 4.5, rect.top() + 4.5);
         tag.closeSubpath();
-        p.setPen(QPen(theme.dark ? QColor(0, 0, 0, 153) : QColor(Qt::white), 1.0));
+        // A dark edge in both appearances: a white one vanishes into the light ruler.
+        p.setPen(QPen(theme.dark ? QColor(0, 0, 0, 153) : QColor(0, 0, 0, 90), 1.0));
         p.setBrush(color);
         p.drawPath(tag);
     }

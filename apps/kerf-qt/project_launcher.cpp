@@ -597,19 +597,13 @@ private:
     const LauncherTheme *m_theme;
 };
 
-// A seconds field with a small stepper at its right edge.
-class LauncherSpinBox final : public QDoubleSpinBox {
+// A seconds field with the editor's stepper, in the launcher's colours.
+class LauncherSpinBox final : public StepperSpinBox {
 public:
     explicit LauncherSpinBox(const LauncherTheme *theme) : m_theme(theme) {}
 
 protected:
-    void paintEvent(QPaintEvent *event) override {
-        QDoubleSpinBox::paintEvent(event);
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing);
-        drawUpDownChevrons(painter, QPointF(width() - 9.5, height() / 2.0),
-                           isEnabled() ? m_theme->secondary : m_theme->fieldBorder, 2.5);
-    }
+    QColor stepperColor() const override { return isEnabled() ? m_theme->secondary : m_theme->fieldBorder; }
 
 private:
     const LauncherTheme *m_theme;

@@ -185,6 +185,7 @@ struct EditorTheme {
     QColor assistantSurface; // A bar or note's fill.
     QColor assistantBorder;  // A bar or note's edge, and its buttons' outlines.
     QColor assistantText;    // Text on `assistantSurface`, and the agent's name in the conversation.
+    QColor assistantHover;   // A suggestion chip (an `assistantSurface` pill) under the pointer.
 
     // Conversation bubbles in the assistant panel.
     QColor messageUser;
@@ -271,7 +272,7 @@ struct EditorTheme {
     QColor markerBlue;
     QColor markerPurple;
     QColor markerPink;
-    QColor markerWhite; // A light grey on the light ruler, where white would vanish.
+    QColor markerWhite; // A mid grey on the light ruler, where white would vanish.
 
     // A pending proposal drawn on the timeline: clips it adds, clips it
     // changes, and clips it removes.

@@ -11,10 +11,10 @@
 namespace kerf {
 
 // Replace each @token in `sheet` with the colour of the theme field it
-// names, @checkMark with the check box's tick, and @popUpChevrons,
-// @stepUp and @stepDown (each with a Disabled twin) with the chevrons of
-// pop-up buttons and steppers. An unknown token is left in place, which the
-// tests catch.
+// names, @checkMark with the check box's tick, and @popUpChevrons (and its
+// Disabled twin) with a pop-up button's chevrons. (Steppers draw their own:
+// see StepperSpinBox.) An unknown token is left in place, which the tests
+// catch.
 inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
     using Field = QColor EditorTheme::*;
     static const QHash<QString, Field> fields{
@@ -103,6 +103,7 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
         {QStringLiteral("assistantSurface"), &EditorTheme::assistantSurface},
         {QStringLiteral("assistantBorder"), &EditorTheme::assistantBorder},
         {QStringLiteral("assistantText"), &EditorTheme::assistantText},
+        {QStringLiteral("assistantHover"), &EditorTheme::assistantHover},
         {QStringLiteral("messageText"), &EditorTheme::messageText},
         {QStringLiteral("glyph"), &EditorTheme::glyph},
         {QStringLiteral("toolSelected"), &EditorTheme::toolSelected},
@@ -114,18 +115,10 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
     qsizetype last = 0;
     for (auto it = token.globalMatch(sheet); it.hasNext();) {
         const QRegularExpressionMatch match = it.next();
-        // Images: the tick, and pop-up and stepper chevrons in the text colours.
-        struct Chevron {
-            ChevronImage kind;
-            QColor EditorTheme::*color;
-        };
-        static const QHash<QString, Chevron> chevrons{
-            {QStringLiteral("popUpChevrons"), {ChevronImage::PopUp, &EditorTheme::text}},
-            {QStringLiteral("popUpChevronsDisabled"), {ChevronImage::PopUp, &EditorTheme::textDisabled}},
-            {QStringLiteral("stepUp"), {ChevronImage::StepUp, &EditorTheme::textSecondary}},
-            {QStringLiteral("stepUpDisabled"), {ChevronImage::StepUp, &EditorTheme::textDisabled}},
-            {QStringLiteral("stepDown"), {ChevronImage::StepDown, &EditorTheme::textSecondary}},
-            {QStringLiteral("stepDownDisabled"), {ChevronImage::StepDown, &EditorTheme::textDisabled}},
+        // Images: the tick, and pop-up chevrons in the text colours.
+        static const QHash<QString, QColor EditorTheme::*> chevrons{
+            {QStringLiteral("popUpChevrons"), &EditorTheme::text},
+            {QStringLiteral("popUpChevronsDisabled"), &EditorTheme::textDisabled},
         };
         const auto image = [](const QString &path) {
             return path.isEmpty() ? QStringLiteral("none") : QStringLiteral("url(%1)").arg(path);
@@ -135,7 +128,7 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
         if (name == QStringLiteral("checkMark")) {
             value = image(checkMarkImagePath());
         } else if (const auto chevron = chevrons.constFind(name); chevron != chevrons.cend()) {
-            value = image(chevronImagePath(chevron->kind, t.*(chevron->color)));
+            value = image(popUpChevronsImagePath(t.*(chevron.value())));
         } else {
             const auto field = fields.constFind(name);
             if (field == fields.cend()) continue;
@@ -248,6 +241,8 @@ QSplitter::handle:hover { background: @dockSeparatorHover; }
 QSplitter::handle:horizontal { width: 2px; }
 QSplitter::handle:vertical { height: 2px; }
 
+/* Push buttons are 22px with a 5px radius, as the launcher's and macOS's
+   regular controls. */
 QToolButton,
 QPushButton {
     color: @buttonText;
@@ -255,15 +250,21 @@ QPushButton {
     border: 1px solid @buttonEdge;
     border-top-color: @buttonTop;
     border-bottom-color: @buttonBottom;
-    border-radius: 3px;
-    padding: 3px 8px;
-    min-height: 18px;
+    border-radius: 5px;
+    padding: 2px 12px;
+    min-height: 16px;
+    max-height: 16px;
 }
+/* Symbol-only buttons keep a narrow bezel. */
+QToolButton#maskTool,
+QToolButton#maskRemove,
+QToolButton#effectRemove { padding: 2px 5px; }
 QToolBar QToolButton {
     background: transparent;
     border-color: transparent;
     min-width: 20px;
     min-height: 16px;
+    max-height: 16px;
     padding: 0px 5px;
 }
 QToolBar QToolButton:hover,
@@ -350,10 +351,11 @@ QToolButton#transportButton,
 QPushButton#transportButton {
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 3px;
+    border-radius: 4px;
     color: @text;
     padding: 1px 5px;
     min-height: 18px;
+    max-height: 18px;
     min-width: 18px;
     font-size: 11px;
 }
@@ -373,16 +375,20 @@ QToolBar QComboBox#canvasPicker {
     border-radius: 5px;
     padding: 0px 22px 0px 8px;
     min-height: 18px;
+    max-height: 18px;
 }
 QToolBar QComboBox#qualityPicker:hover,
 QToolBar QComboBox#canvasPicker:hover { background: @buttonHover; }
 QToolBar QToolButton#toolbarPrimary {
     background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 @accentTop, stop: 1 @accent);
     border: 1px solid @accent;
-    border-radius: 4px;
+    border-radius: 5px;
     color: @onAccent;
     font-weight: 600;
     padding: 0px 8px;
+    /* As tall as the pop-ups beside it. */
+    min-height: 18px;
+    max-height: 18px;
 }
 QToolBar QToolButton#toolbarPrimary:hover { background: @accentTop; }
 QToolBar QToolButton#toolbarPrimary:disabled {
@@ -395,6 +401,8 @@ QToolBar QToolButton#toolbarQuiet {
     border: 1px solid transparent;
     color: @text;
     padding: 0px 6px;
+    min-height: 18px;
+    max-height: 18px;
 }
 QToolBar QToolButton#toolbarQuiet:hover {
     background: @hover;
@@ -417,7 +425,6 @@ QToolButton#abortButton {
     color: @text;
     background: transparent;
     border-color: transparent;
-    padding: 5px 7px;
 }
 QToolButton#abortButton:hover { background: @hover; border-color: @borderStrong; }
 QToolButton#abortButton:disabled { color: @textDisabled; background: transparent; border-color: transparent; }
@@ -474,14 +481,25 @@ QToolButton#disclosure:pressed { background: transparent; border: 0; }
 
 QListWidget,
 QTextEdit,
-QPlainTextEdit,
+QPlainTextEdit {
+    background: @field;
+    border: 1px solid @fieldBorder;
+    border-radius: 3px;
+    padding: 4px;
+    selection-background-color: @textSelection;
+    selection-color: @text;
+}
+/* Single-line fields and pop-ups are 22px with a 5px radius, as the
+   launcher's. */
 QLineEdit,
 QDoubleSpinBox,
 QComboBox {
     background: @field;
     border: 1px solid @fieldBorder;
-    border-radius: 3px;
-    padding: 4px;
+    border-radius: 5px;
+    padding: 2px 7px;
+    min-height: 16px;
+    max-height: 16px;
     selection-background-color: @textSelection;
     selection-color: @text;
 }
@@ -493,7 +511,7 @@ QDoubleSpinBox:hover,
 QComboBox:hover { border-color: @borderStrong; }
 /* Pop-up buttons and steppers: macOS's chevrons on the field, with no
    bevelled arrow cells. */
-QComboBox { padding-left: 8px; padding-right: 24px; combobox-popup: 1; }
+QComboBox { padding: 2px 24px 2px 8px; combobox-popup: 1; }
 QComboBox::drop-down {
     subcontrol-origin: padding;
     subcontrol-position: center right;
@@ -504,7 +522,9 @@ QComboBox::drop-down {
 QComboBox::down-arrow { image: @popUpChevrons; width: 10px; height: 14px; border: 0; }
 QComboBox::down-arrow:disabled { image: @popUpChevronsDisabled; }
 QComboBox QAbstractItemView::item { min-height: 22px; }
-QDoubleSpinBox { padding-right: 18px; }
+/* The stepper's halves are transparent hit areas; StepperSpinBox draws one
+   centred pair of chevrons over them, as the launcher does. */
+QDoubleSpinBox { padding: 2px 18px 2px 7px; }
 QAbstractSpinBox::up-button,
 QAbstractSpinBox::down-button {
     subcontrol-origin: border;
@@ -515,12 +535,8 @@ QAbstractSpinBox::down-button {
 }
 QAbstractSpinBox::up-button { subcontrol-position: top right; }
 QAbstractSpinBox::down-button { subcontrol-position: bottom right; }
-QAbstractSpinBox::up-arrow { image: @stepUp; width: 10px; height: 11px; border: 0; }
-QAbstractSpinBox::down-arrow { image: @stepDown; width: 10px; height: 11px; border: 0; }
-QAbstractSpinBox::up-arrow:disabled,
-QAbstractSpinBox::up-arrow:off { image: @stepUpDisabled; }
-QAbstractSpinBox::down-arrow:disabled,
-QAbstractSpinBox::down-arrow:off { image: @stepDownDisabled; }
+QAbstractSpinBox::up-arrow,
+QAbstractSpinBox::down-arrow { image: none; width: 0; height: 0; border: 0; }
 QListWidget:focus,
 QTextEdit:focus,
 QPlainTextEdit:focus,
@@ -543,6 +559,8 @@ QListWidget#activityList,
 QScrollArea#mediaList { background: transparent; border: 0; padding: 0; }
 QWidget#mediaGrid { background: transparent; }
 QTextEdit#conversation { background: transparent; border: 0; padding: 4px 0; color: @messageText; }
+/* The proposal's script and diff, in fixed-width type so its columns line up. */
+QTextEdit#proposalDiff { font-family: Menlo, Monaco, monospace; font-size: 11px; color: @textSecondary; }
 QTextEdit#chatInput {
     background: transparent;
     border: 0;
@@ -579,8 +597,16 @@ QFrame#chatComposer[state="focused"] { border-color: @focusRing; background: @fi
 QFrame#chatComposer[state="sending"] { border-color: @assistantBorder; background: @assistantSurface; }
 QFrame#chatComposer[state="offline"] { border-color: @borderSubtle; background: @fieldDisabled; }
 QTextEdit#chatInput:disabled { background: transparent; color: @textDisabled; border: 0; }
-QPushButton#chatSendButton { border-radius: 8px; padding: 0; font-size: 19px; }
-QToolButton#abortButton { border: 1px solid @assistantBorder; border-radius: 7px; padding: 4px 9px; }
+QPushButton#chatSendButton {
+    border-radius: 8px;
+    padding: 0;
+    font-size: 19px;
+    min-width: 30px;
+    max-width: 30px;
+    min-height: 30px;
+    max-height: 30px;
+}
+QToolButton#abortButton { border: 1px solid @assistantBorder; border-radius: 7px; padding: 2px 9px; }
 
 QGroupBox {
     background: @group;
@@ -651,6 +677,7 @@ QToolBar#toolPalette QToolButton {
     border-radius: 6px;
     min-width: 28px;
     min-height: 24px;
+    max-height: 24px;
     padding: 2px;
 }
 QToolBar#toolPalette QToolButton:hover { background: @hover; }
@@ -677,17 +704,21 @@ QFrame#aiBar QToolButton#aiAccept {
 }
 QFrame#aiBar QToolButton#aiAccept:hover { background: @accentTop; }
 QFrame#aiBar QToolButton#aiAccept:pressed { background: @accentPressed; border-color: @accentPressed; }
+/* Kerf's suggestions: purple pills sized to their labels, in the agent's
+   colours rather than a push button's bezel. */
 QPushButton#nextStep {
     color: @assistantText;
-    background: @button;
-    border: 1px solid @buttonEdge;
-    border-top-color: @buttonTop;
-    border-bottom-color: @buttonBottom;
+    background: @assistantSurface;
+    border: 1px solid @assistantBorder;
     border-radius: 11px;
-    padding: 3px 10px;
+    padding: 2px 10px;
+    min-height: 16px;
+    max-height: 16px;
     font-size: 11px;
 }
-QPushButton#nextStep:hover { background: @buttonHover; }
+QPushButton#nextStep:hover,
+QPushButton#nextStep:pressed { background: @assistantHover; border-color: @assistantBorder; }
+QPushButton#nextStep:focus { border-color: @assistant; }
 QFrame#aiBar QToolButton:disabled { color: @buttonDisabledText; background: @buttonDisabled; border-color: @buttonDisabledEdge; }
 
 QFrame#divergedBanner { background: @warningSurface; border: 0; border-bottom: 1px solid @warningBorder; border-radius: 0; }
@@ -782,6 +813,10 @@ ads--CDockWidgetTab[activeTab="true"] { background: @panelTitleActive; }
 ads--CDockWidgetTab[activeTab="true"] QLabel { color: @text; }
 ads--CDockWidgetTab[focused="true"] { background: @panelTitleActive; border-right: 1px solid @divider; border-bottom: 1px solid @accent; }
 ads--CDockWidgetTab[focused="true"] QLabel { color: @textStrong; }
+/* A panel whose body is a white well (the bin, the assistant) has a white
+   current tab, so the tab still merges into it. */
+ads--CDockWidgetTab[well="true"][activeTab="true"],
+ads--CDockWidgetTab[well="true"][focused="true"] { background: @well; }
 ads--CDockWidgetTab > #tabCloseButton,
 ads--CDockWidgetTab[focused="true"] > #tabCloseButton {
     qproperty-icon: url(:/ads/images/close-button$icons.svg), url(:/ads/images/close-button-disabled$icons.svg) disabled;
@@ -797,8 +832,25 @@ ads--CDockWidgetTab > #tabCloseButton:pressed,
 ads--CDockWidgetTab[focused="true"] > #tabCloseButton:pressed { background: @pressed; }
 #tabsMenuButton { qproperty-icon: url(:/ads/images/tabs-menu-button$icons.svg); }
 ads--CDockWidget { background: @panel; border: 0; }
-ads--CTitleBarButton { color: @textSecondary; font-size: 10px; padding: 0 6px; }
-ads--CTitleBarButton:disabled { color: @textSecondary; }
+/* A title strip's actions are borderless symbols and plain secondary text,
+   20px tall with 3px clear above and below, as Logic and Final Cut draw
+   panel headers. The details (frame size, track count) are disabled
+   actions, so they read as text, not as dead buttons. */
+ads--CTitleBarButton {
+    color: @textSecondary;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    padding: 0 5px;
+    margin: 3px 1px;
+    min-height: 18px;
+    max-height: 18px;
+    font-size: 11px;
+}
+ads--CTitleBarButton:hover { background: @hover; border-color: transparent; }
+ads--CTitleBarButton:pressed,
+ads--CTitleBarButton:checked { background: @pressed; border-color: transparent; }
+ads--CTitleBarButton:disabled { color: @textSecondary; background: transparent; border-color: transparent; }
 ads--CFloatingDockContainer { background: @panel; }
 )QSS").replace(QStringLiteral("$icons"), icons), theme);
 }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "editor_common.h"
+
 #include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
@@ -187,6 +189,8 @@ private:
     // A proposal is the script the agent wants to run and the diff of the
     // document it would produce.
     void updateProposal(const QJsonValue &value);
+    // Show m_proposalText in m_proposalDiff, its lines coloured by kind.
+    void showProposalText();
     void appendConversation(const QString &speaker, const QString &text);
     void appendConversationNote(const QString &kind, const QString &text);
     void addActivity(const QString &kind, const QString &text);
@@ -251,6 +255,7 @@ private:
     QList<QToolButton *> m_transportButtons;
     // Toolbar actions and the symbols drawn for them.
     QList<QPair<QAction *, QString>> m_toolbarGlyphs;
+    QList<QPair<QAction *, TransportGlyph>> m_sourceGlyphs; // The Source monitor's marks and edits.
     // Tool palette actions, whose icons are redrawn when the appearance changes.
     QList<QAction *> m_toolGlyphs;
     // Disclosure buttons (Activity, Settings' Advanced), whose chevrons are too.
@@ -381,6 +386,7 @@ private:
     QLabel *m_agentStatus = nullptr;
     QLabel *m_proposalSummary = nullptr;
     QTextEdit *m_proposalDiff = nullptr;
+    QString m_proposalText; // The pending proposal's script and diff, as m_proposalDiff shows them.
     QPushButton *m_acceptButton = nullptr;
     QPushButton *m_rejectButton = nullptr;
     QGroupBox *m_proposalBox = nullptr;

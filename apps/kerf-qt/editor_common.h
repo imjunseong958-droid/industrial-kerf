@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QDoubleSpinBox>
 #include <QIcon>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -8,6 +9,8 @@
 #include <QPixmap>
 #include <QTransform>
 #include <QWidget>
+
+#include <functional>
 
 namespace kerf {
 
@@ -80,13 +83,31 @@ void frameInside(QPainter &p, const QRectF &rect, qreal thickness, const QColor 
 // centred on `mid`, each reaching `reach` points from its base.
 void drawUpDownChevrons(QPainter &painter, const QPointF &mid, const QColor &color, qreal reach);
 
-// The chevrons the style sheet draws on pop-up buttons and steppers.
-enum class ChevronImage { PopUp, StepUp, StepDown };
+// A pop-up button's chevrons in `color` as an image file the style sheet
+// can name (with an @2x twin for Retina screens), written once per colour
+// per run; empty if it cannot be written.
+QString popUpChevronsImagePath(const QColor &color);
 
-// `kind` in `color` as an image file the style sheet can name (with an @2x
-// twin for Retina screens), written once per colour per run; empty if it
-// cannot be written.
-QString chevronImagePath(ChevronImage kind, const QColor &color);
+// A seconds field with macOS's stepper: one pair of chevrons centred at its
+// right edge, over the style sheet's two transparent halves that step it
+// (the launcher's and the editor's spin boxes).
+class StepperSpinBox : public QDoubleSpinBox {
+public:
+    using QDoubleSpinBox::QDoubleSpinBox;
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+    // The chevrons' colour: the editor's secondary text, or its disabled text.
+    virtual QColor stepperColor() const;
+};
+
+// A symbol `draw`n in the editor's glyph colour on a `points`-sized grid,
+// with a Disabled twin drawn in its disabled glyph colour. Qt's own
+// disabled pixmap lightens on a dark palette, which would make an
+// unavailable command look brighter than an available one.
+QIcon glyphIcon(const QSize &points, const std::function<void(QPainter &, const QColor &)> &draw);
+// One such symbol in `color`, at twice its size for Retina screens.
+QPixmap glyphPixmap(const QSize &points, const std::function<void(QPainter &, const QColor &)> &draw, const QColor &color);
 
 // A disclosure chevron: › closed, ⌄ open, at the icon's left edge so it
 // lines up with the content's margin (the launcher's Details row, the
@@ -100,16 +121,18 @@ QPixmap warningTriangle(const QColor &color, int size = 14);
 // Cache source coordinates use device pixels while the paint target uses logical pixels.
 void blitLaneCache(QPainter &painter, const QPixmap &cache, const QRegion &clip);
 
-enum class TransportGlyph { Start, PreviousFrame, Play, Pause, NextFrame, End };
+enum class TransportGlyph { Start, PreviousFrame, Play, Pause, NextFrame, End, MarkIn, MarkOut, Insert, Overwrite };
 
-// Transport symbols drawn on a 16-point grid so they share weight and size.
+// Transport symbols drawn on a 16-point grid so they share weight and size:
+// the Program monitor's playback, and the Source monitor's marks and edits.
 QIcon transportIcon(TransportGlyph glyph);
 
 // What a drag or click on the Program monitor draws: nothing, or a new mask
 // on the selected picture clip.
 enum class MaskTool { None, Rectangle, Ellipse, Pen };
 
-// Mask tool symbols on the transport icons' grid.
+// Mask tool symbols on the transport icons' grid; a chosen (checked) tool's
+// symbol is the accent, as in the tool palette.
 QIcon maskToolIcon(MaskTool tool);
 
 // A clip property at `clipTime` seconds into the clip: its static value,

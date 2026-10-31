@@ -58,6 +58,7 @@
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QTabWidget>
+#include <QTextBlock>
 #include <QTemporaryDir>
 #include <QTemporaryDir>
 #include <QTest>
@@ -2617,9 +2618,26 @@ private slots:
             QVERIFY(!QGuiApplication::palette().isBrushSet(QPalette::Active, QPalette::Accent));
             QVERIFY(!QGuiApplication::palette().isBrushSet(QPalette::Active, QPalette::Window));
             QCOMPARE(QGuiApplication::palette().color(QPalette::Active, QPalette::Base), theme.field);
-            // Clip labels read on their headers.
-            for (const ClipKind kind : {ClipKind::Video, ClipKind::Audio, ClipKind::Music, ClipKind::Generator, ClipKind::Caption})
+            // Clip labels read on their headers, at the base of the name bar
+            // and at its lightened top, where the label sits.
+            for (const ClipKind kind : {ClipKind::Video, ClipKind::Audio, ClipKind::Music, ClipKind::Generator, ClipKind::Caption}) {
                 QVERIFY(contrastRatio(theme.clip(kind).label, theme.clip(kind).header) >= 4.5);
+                QVERIFY(contrastRatio(theme.clip(kind).label, theme.clip(kind).header.lighter(108)) >= 4.5);
+            }
+            // A caption clip's body stands off its lane.
+            QVERIFY(contrastRatio(theme.clipCaption.fill, theme.trackLane) >= 1.12);
+            // Every marker reads as a mark on the ruler.
+            for (const char *marker : {"red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink", "white"})
+                QVERIFY2(contrastRatio(theme.marker(QString::fromLatin1(marker)), theme.ruler) >= 3.0, marker);
+            // Secondary text reads on the grey window and dialogs too, and
+            // Kerf's suggestion chips on their purple surface.
+            QVERIFY(contrastRatio(theme.textSecondary, theme.dialog) >= 4.5);
+            QVERIFY(contrastRatio(theme.textSecondary, theme.panelTitle) >= 4.5);
+            QVERIFY(contrastRatio(theme.assistantText, theme.assistantSurface) >= 4.5);
+            QVERIFY(contrastRatio(theme.assistantText, theme.assistantHover) >= 4.5);
+            QVERIFY(contrastRatio(theme.badgeErrorText, theme.badgeError) >= 4.5);
+            // In dark, the current tab is lighter than the strip, as in light.
+            QVERIFY(theme.panelTitleActive.lightness() > theme.panelTitle.lightness());
             QVERIFY(contrastRatio(theme.accentText, theme.panel) >= 4.5);
             QVERIFY(contrastRatio(theme.assistantText, theme.chrome) >= 4.5);
             QVERIFY(contrastRatio(theme.tabInactiveText, theme.panelTitle) >= 4.5);
@@ -2696,6 +2714,27 @@ private slots:
             const QColor toolFill = tool.pixelColor(qRound(3 * tool.devicePixelRatio()), tool.height() / 2);
             QCOMPARE(toolFill.rgb(), theme.toolSelected.rgb());
             QVERIFY(highestContrast(tool, tool.rect(), toolFill) >= 3.0);
+            // An unavailable command's symbol is dimmed in both appearances,
+            // never brightened, as Qt's own disabled pixmap does on dark.
+            for (const char *id : {"edit.undo", "edit.redo"}) {
+                QAction *action = window.m_commands->action(QString::fromLatin1(id));
+                QVERIFY(!action->isEnabled());
+                const QImage dim = action->icon().pixmap(QSize(20, 20), 2.0, QIcon::Disabled).toImage();
+                QColor ink(0, 0, 0, 0);
+                for (int y = 0; y < dim.height(); ++y)
+                    for (int x = 0; x < dim.width(); ++x)
+                        if (dim.pixelColor(x, y).alpha() > ink.alpha()) ink = dim.pixelColor(x, y);
+                QCOMPARE(ink.rgb(), theme.glyphDisabled.rgb());
+            }
+            // A title strip's details are plain text on the strip, not a dead button.
+            for (const char *id : {"viewerDetail", "timelineDetail"}) {
+                auto *detail = window.findChild<QToolButton *>(QString::fromLatin1(id));
+                QVERIFY(detail && detail->isVisible() && !detail->isEnabled());
+                QCOMPARE(dominantColor(detail->parentWidget()->grab(detail->geometry()).toImage()), theme.panelTitle.rgb());
+            }
+            // The AI bar's buttons are the launcher's 22px.
+            for (QWidget *control : window.m_aiBar->findChildren<QToolButton *>())
+                if (control->isVisible()) QCOMPARE(control->height(), 22);
             save(image, QStringLiteral("editor-%1").arg(name));
 
             // Settings.
@@ -2731,6 +2770,14 @@ private slots:
                 // The default button is the accent, as in macOS dialogs.
                 QPushButton *create = dialog->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok);
                 QCOMPARE(create->text(), QStringLiteral("Create Proposal"));
+                // Its row of pop-up and seconds field is one 22px line, as in the launcher.
+                auto *choice = dialog->findChild<QComboBox *>(QStringLiteral("presetMedia_Opening"));
+                auto *from = dialog->findChild<QDoubleSpinBox *>(QStringLiteral("presetFrom_Opening"));
+                QVERIFY(choice && from);
+                QCOMPARE(choice->height(), 22);
+                QCOMPARE(from->height(), 22);
+                QCOMPARE(create->height(), 22);
+                QCOMPARE(from->geometry().center().y(), choice->geometry().center().y());
                 QVERIFY(create->isEnabled() && create->isDefault());
                 const QImage createImage = create->grab().toImage();
                 const QColor createFill = createImage.pixelColor(QPoint(6, create->height() / 2) * createImage.devicePixelRatio());
@@ -2765,6 +2812,37 @@ private slots:
             QVERIFY2(std::abs(fill.hue() - theme.accent.hue()) <= 4 && std::abs(fill.value() - theme.accent.value()) <= 24,
                      qPrintable(fill.name()));
             const QImage states = window.grab().toImage();
+            // The proposal's diff: additions green, removals red, the rest secondary.
+            int added = 0;
+            int removed = 0;
+            for (QTextBlock block = window.m_proposalDiff->document()->begin(); block.isValid(); block = block.next()) {
+                const QString line = block.text();
+                if (line.isEmpty()) continue;
+                const bool header = line.startsWith(QStringLiteral("+++")) || line.startsWith(QStringLiteral("---"));
+                QColor expected = theme.textSecondary;
+                if (!header && line.startsWith(QLatin1Char('+'))) {
+                    expected = theme.success;
+                    ++added;
+                } else if (!header && line.startsWith(QLatin1Char('-'))) {
+                    expected = theme.error;
+                    ++removed;
+                }
+                QCOMPARE(block.begin().fragment().charFormat().foreground().color(), expected);
+            }
+            QVERIFY(added > 0 && removed > 0);
+            // Reject, then the default Accept, at the right.
+            QVERIFY(window.m_rejectButton->geometry().right() < window.m_acceptButton->geometry().left());
+            QCOMPARE(window.m_acceptButton->height(), 22);
+            // Kerf's suggestions are purple pills sized to their labels.
+            for (QWidget *row : {window.m_nextSteps, window.m_chatNextSteps}) {
+                const auto chips = row->findChildren<QPushButton *>(QStringLiteral("nextStep"));
+                QVERIFY(!chips.isEmpty());
+                for (QPushButton *chip : chips) {
+                    QCOMPARE(chip->height(), 22);
+                    QCOMPARE(dominantColor(chip->grab().toImage()), theme.assistantSurface.rgb());
+                    QVERIFY(chip->width() < 160);
+                }
+            }
             // The bar and its text are neutral; only the 14-point triangle is orange.
             for (QWidget *part : window.m_divergedBanner->findChildren<QWidget *>(Qt::FindDirectChildrenOnly))
                 if (part != window.m_divergedGlyph) QCOMPARE(amberPixels(part->grab().toImage()), 0);

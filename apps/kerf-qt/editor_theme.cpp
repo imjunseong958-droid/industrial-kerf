@@ -178,8 +178,9 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.window = QColor("#1c1c1e");
         t.chrome = QColor("#2c2c2e");
         t.panel = QColor("#1e1e1e");
-        t.panelTitle = QColor("#252527");
-        // The current tab merges into its panel's body, as in light.
+        // Inactive tabs sit back on a deeper strip; the current tab is the
+        // lighter one and merges into its panel's body, as in light.
+        t.panelTitle = QColor("#161618");
         t.panelTitleActive = QColor("#1e1e1e");
         t.raised = QColor("#2c2c2e");
         t.group = QColor("#262628");
@@ -313,7 +314,7 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.clipMusic = clipStyle("#1a321d", "#2f6a37", "#0c1d0e", "#f5f5f7", "#81cf8c");
         t.clipGenerator = clipStyle("#391d2c", "#863761", "#210d18", "#f5f5f7", "#e9a5c9");
         // Captions are a neutral role, not gold.
-        t.clipCaption = clipStyle("#2e2e30", "#6e6e73", "#1c1c1e", "#f5f5f7", "#d1d1d6");
+        t.clipCaption = clipStyle("#2e2e30", "#636366", "#1c1c1e", "#f5f5f7", "#d1d1d6");
         t.clipSelectedRing = QColor("#ffffff");
         t.clipSelectedRingOuter = QColor("#000000");
         t.clipTrim = QColor("#ffffff");
@@ -351,8 +352,6 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.tileEmptyText = QColor("#a1a1a6");
         t.cardPlaceholder = QColor("#2a2a2e");
         t.cardPlaceholderText = QColor("#a1a1a6");
-        t.badgeError = QColor("#5a262c");
-        t.badgeErrorText = QColor("#f3b9be");
         t.badgeNeutral = rgba(0, 0, 0, 150);
         t.badgeNeutralText = QColor("#ffffff");
     } else {
@@ -376,7 +375,8 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
 
         t.text = QColor("#1d1d1f");
         t.textStrong = QColor("#000000");
-        t.textSecondary = QColor("#6e6e73");
+        // #636366 keeps 4.5:1 on the grey window and group fills, not only on white.
+        t.textSecondary = QColor("#636366");
         t.textTertiary = QColor("#8e8e93");
         t.textDisabled = QColor("#a5a5aa");
         t.tabInactiveText = QColor("#5f5f64");
@@ -490,7 +490,8 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.clipAudio = clipStyle("#c5ede5", "#1c7865", "#145749", "#ffffff", "#186d5c");
         t.clipMusic = clipStyle("#c9e9cd", "#2d7637", "#205527", "#ffffff", "#246b2d");
         t.clipGenerator = clipStyle("#f5d1e4", "#ae2970", "#841f55", "#ffffff", "#992462");
-        t.clipCaption = clipStyle("#f2f2f4", "#aeaeb2", "#8e8e93", "#1d1d1f", "#636366");
+        // A body that stands off the #f4f4f6 lane, as dark's does.
+        t.clipCaption = clipStyle("#dedee3", "#aeaeb2", "#8e8e93", "#1d1d1f", "#636366");
         t.clipSelectedRing = QColor("#ffffff");
         t.clipSelectedRingOuter = QColor("#1d1d1f");
         t.clipTrim = QColor("#1d1d1f");
@@ -510,14 +511,15 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.readoutText = QColor("#1d1d1f");
 
         t.markerRed = QColor("#e0443a");
-        t.markerOrange = QColor("#ea6f1a");
-        t.markerYellow = QColor("#d4bf00");
+        // Every marker reads at 3:1 on the light ruler.
+        t.markerOrange = QColor("#dc6510");
+        t.markerYellow = QColor("#9c8400");
         t.markerGreen = QColor("#2ea043");
-        t.markerCyan = QColor("#1aa3b8");
+        t.markerCyan = QColor("#1593a7");
         t.markerBlue = QColor("#2f76d9");
         t.markerPurple = QColor("#9b51e0");
         t.markerPink = QColor("#e0408a");
-        t.markerWhite = QColor("#aeaeb2");
+        t.markerWhite = QColor("#7c7c80");
 
         t.proposalRemove = QColor("#d70015");
         t.proposalRemoveHatch = rgba(215, 0, 21, 110);
@@ -528,8 +530,6 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.tileEmptyText = QColor("#5c5c61");
         t.cardPlaceholder = QColor("#ececee");
         t.cardPlaceholderText = QColor("#5c5c61");
-        t.badgeError = QColor("#d70015");
-        t.badgeErrorText = QColor("#ffffff");
         t.badgeNeutral = rgba(0, 0, 0, 150);
         t.badgeNeutralText = QColor("#ffffff");
     }
@@ -539,9 +539,13 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
     t.accentTint = mixColor(t.panel, accent, dark ? 0.26 : 0.16);
     t.textSelection = mixColor(t.field, accent, dark ? 0.45 : 0.28);
     t.inOutRange = mixColor(t.scrubTrack, accent, dark ? 0.45 : 0.35);
-    // White on the badge at 4.5:1: a deepened accent in light.
-    t.badgeInfo = dark ? mixColor(QColor("#141414"), accent, 0.4) : readableOn(accent, Qt::white, 4.5);
-    t.badgeInfoText = dark ? readableOn(accent.lighter(130), t.badgeInfo, 4.5) : QColor("#ffffff");
+    // Media badges are solid with white text in both appearances: a deepened
+    // accent for Not downloaded, red for Offline, at 4.5:1.
+    t.badgeInfo = readableOn(accent, Qt::white, 4.5);
+    t.badgeInfoText = QColor("#ffffff");
+    t.badgeError = QColor("#c41e2d");
+    t.badgeErrorText = QColor("#ffffff");
+    t.assistantHover = mixColor(t.assistantSurface, t.assistant, 0.12);
     t.proposalAdd = t.assistant;
     t.proposalAddFill = t.assistant;
     t.proposalAddFill.setAlpha(dark ? 46 : 38);

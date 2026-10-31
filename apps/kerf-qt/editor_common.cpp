@@ -220,29 +220,21 @@ void drawUpDownChevrons(QPainter &painter, const QPointF &mid, const QColor &col
     painter.restore();
 }
 
-QString chevronImagePath(ChevronImage kind, const QColor &color) {
+QString popUpChevronsImagePath(const QColor &color) {
     static QTemporaryDir directory;
     static QHash<QString, QString> written;
     if (!directory.isValid()) return {};
-    const char *name = kind == ChevronImage::PopUp ? "popup" : kind == ChevronImage::StepUp ? "step-up" : "step-down";
-    const QString key = QStringLiteral("%1-%2").arg(QLatin1String(name), color.name(QColor::HexArgb).mid(1));
+    const QString key = QStringLiteral("popup-%1").arg(color.name(QColor::HexArgb).mid(1));
     if (const auto found = written.constFind(key); found != written.cend()) return found.value();
-    // A pop-up's pair is centred in its image. A stepper's buttons are its
-    // top and bottom halves, so each chevron sits at its button's inner
-    // edge and the pair meets at the field's middle, as the launcher's do.
-    const QSize size = kind == ChevronImage::PopUp ? QSize(10, 14) : QSize(10, 11);
+    // The pair, centred in its image.
+    const QSize size(10, 14);
     for (const int scale : {1, 2}) {
         QImage image(size * scale, QImage::Format_ARGB32_Premultiplied);
         image.fill(Qt::transparent);
         QPainter painter(&image);
         painter.setRenderHint(QPainter::Antialiasing);
         painter.scale(scale, scale);
-        painter.setPen(QPen(color, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        switch (kind) {
-        case ChevronImage::PopUp: drawUpDownChevrons(painter, QPointF(5, 7), color, 3); break;
-        case ChevronImage::StepUp: painter.drawPolyline(QPolygonF{{2, 9.5}, {5, 7}, {8, 9.5}}); break;
-        case ChevronImage::StepDown: painter.drawPolyline(QPolygonF{{2, 1.5}, {5, 4}, {8, 1.5}}); break;
-        }
+        drawUpDownChevrons(painter, QPointF(5, 7), color, 3);
         painter.end();
         const QString file = directory.filePath(key + (scale == 1 ? QStringLiteral(".png") : QStringLiteral("@2x.png")));
         if (!image.save(file)) return {};
@@ -250,6 +242,34 @@ QString chevronImagePath(ChevronImage kind, const QColor &color) {
     const QString path = QDir::fromNativeSeparators(directory.filePath(key + QStringLiteral(".png")));
     written.insert(key, path);
     return path;
+}
+
+void StepperSpinBox::paintEvent(QPaintEvent *event) {
+    QDoubleSpinBox::paintEvent(event);
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    drawUpDownChevrons(painter, QPointF(width() - 9.5, height() / 2.0), stepperColor(), 2.5);
+}
+
+QColor StepperSpinBox::stepperColor() const {
+    return isEnabled() ? editorTheme().textSecondary : editorTheme().textDisabled;
+}
+
+QPixmap glyphPixmap(const QSize &points, const std::function<void(QPainter &, const QColor &)> &draw, const QColor &color) {
+    QPixmap image(points * 2);
+    image.setDevicePixelRatio(2);
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::Antialiasing);
+    draw(painter, color);
+    painter.end();
+    return image;
+}
+
+QIcon glyphIcon(const QSize &points, const std::function<void(QPainter &, const QColor &)> &draw) {
+    QIcon icon(glyphPixmap(points, draw, editorTheme().glyph));
+    icon.addPixmap(glyphPixmap(points, draw, editorTheme().glyphDisabled), QIcon::Disabled);
+    return icon;
 }
 
 QIcon disclosureIcon(bool open, const QColor &color) {
@@ -302,49 +322,84 @@ void blitLaneCache(QPainter &painter, const QPixmap &cache, const QRegion &clip)
 }
 
 QIcon transportIcon(TransportGlyph glyph) {
-    QPixmap pixmap(32, 32);
-    pixmap.setDevicePixelRatio(2);
-    pixmap.fill(Qt::transparent);
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(editorTheme().glyph);
-    const auto triangle = [&painter](qreal base, qreal tip) {
-        painter.drawPolygon(QPolygonF{{base, 3.5}, {tip, 8.0}, {base, 12.5}});
-    };
-    switch (glyph) {
-    case TransportGlyph::Start: painter.drawRect(QRectF(3.0, 3.5, 1.6, 9.0)); triangle(13.0, 5.5); break;
-    case TransportGlyph::PreviousFrame: triangle(10.5, 3.5); painter.drawRect(QRectF(11.5, 3.5, 1.6, 9.0)); break;
-    case TransportGlyph::Play: triangle(4.5, 12.5); break;
-    case TransportGlyph::Pause: painter.drawRect(QRectF(4.5, 3.5, 2.4, 9.0)); painter.drawRect(QRectF(9.1, 3.5, 2.4, 9.0)); break;
-    case TransportGlyph::NextFrame: painter.drawRect(QRectF(2.9, 3.5, 1.6, 9.0)); triangle(5.5, 12.5); break;
-    case TransportGlyph::End: triangle(3.0, 10.5); painter.drawRect(QRectF(11.4, 3.5, 1.6, 9.0)); break;
-    }
-    return QIcon(pixmap);
+    return glyphIcon(QSize(16, 16), [glyph](QPainter &painter, const QColor &color) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(color);
+        const auto triangle = [&painter](qreal base, qreal tip) {
+            painter.drawPolygon(QPolygonF{{base, 3.5}, {tip, 8.0}, {base, 12.5}});
+        };
+        // A bracket opening towards `open` (+1 right, -1 left) with its spine at `x`.
+        const auto bracket = [&painter, &color](qreal x, qreal open) {
+            painter.save();
+            painter.setPen(QPen(color, 1.6, Qt::SolidLine, Qt::FlatCap, Qt::MiterJoin));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawPolyline(QPolygonF{{x + 3.6 * open, 2.8}, {x, 2.8}, {x, 13.2}, {x + 3.6 * open, 13.2}});
+            painter.restore();
+        };
+        // An arrow coming down onto the track at `y`, from above.
+        const auto arrow = [&painter, &color](qreal y) {
+            painter.save();
+            painter.setPen(QPen(color, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawLine(QPointF(8.0, 1.8), QPointF(8.0, y - 1.2));
+            painter.drawPolyline(QPolygonF{{5.2, y - 4.0}, {8.0, y - 1.2}, {10.8, y - 4.0}});
+            painter.restore();
+        };
+        switch (glyph) {
+        case TransportGlyph::Start: painter.drawRect(QRectF(3.0, 3.5, 1.6, 9.0)); triangle(13.0, 5.5); break;
+        case TransportGlyph::PreviousFrame: triangle(10.5, 3.5); painter.drawRect(QRectF(11.5, 3.5, 1.6, 9.0)); break;
+        case TransportGlyph::Play: triangle(4.5, 12.5); break;
+        case TransportGlyph::Pause: painter.drawRect(QRectF(4.5, 3.5, 2.4, 9.0)); painter.drawRect(QRectF(9.1, 3.5, 2.4, 9.0)); break;
+        case TransportGlyph::NextFrame: painter.drawRect(QRectF(2.9, 3.5, 1.6, 9.0)); triangle(5.5, 12.5); break;
+        case TransportGlyph::End: triangle(3.0, 10.5); painter.drawRect(QRectF(11.4, 3.5, 1.6, 9.0)); break;
+        // Marks: a bracket with a small tag pointing into the marked range.
+        case TransportGlyph::MarkIn:
+            bracket(4.3, 1);
+            painter.drawPolygon(QPolygonF{{8.0, 5.0}, {12.0, 8.0}, {8.0, 11.0}});
+            break;
+        case TransportGlyph::MarkOut:
+            bracket(11.7, -1);
+            painter.drawPolygon(QPolygonF{{8.0, 5.0}, {4.0, 8.0}, {8.0, 11.0}});
+            break;
+        // Edits: the source comes down between two clips, pushing them
+        // apart, or onto one clip, covering it.
+        case TransportGlyph::Insert:
+            arrow(10.5);
+            painter.drawRoundedRect(QRectF(0.8, 11.0, 5.4, 3.6), 0.8, 0.8);
+            painter.drawRoundedRect(QRectF(9.8, 11.0, 5.4, 3.6), 0.8, 0.8);
+            break;
+        case TransportGlyph::Overwrite:
+            arrow(10.5);
+            painter.drawRoundedRect(QRectF(0.8, 11.0, 14.4, 3.6), 0.8, 0.8);
+            break;
+        }
+    });
 }
 
 QIcon maskToolIcon(MaskTool tool) {
-    QPixmap pixmap(32, 32);
-    pixmap.setDevicePixelRatio(2);
-    pixmap.fill(Qt::transparent);
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(QPen(editorTheme().glyph, 1.4));
-    painter.setBrush(Qt::NoBrush);
-    switch (tool) {
-    case MaskTool::None: break;
-    case MaskTool::Rectangle: painter.drawRect(QRectF(2.5, 3.5, 11.0, 9.0)); break;
-    case MaskTool::Ellipse: painter.drawEllipse(QRectF(2.0, 3.0, 12.0, 10.0)); break;
-    case MaskTool::Pen: {
-        const QPolygonF corners{{2.5, 12.5}, {5.5, 3.0}, {13.0, 6.0}, {10.0, 13.0}};
-        painter.drawPolygon(corners);
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(editorTheme().glyph);
-        for (const QPointF &corner : corners) painter.drawRect(QRectF(corner - QPointF(1.5, 1.5), QSizeF(3.0, 3.0)));
-        break;
-    }
-    }
-    return QIcon(pixmap);
+    const auto draw = [tool](QPainter &painter, const QColor &color) {
+        painter.setPen(QPen(color, 1.4));
+        painter.setBrush(Qt::NoBrush);
+        switch (tool) {
+        case MaskTool::None: break;
+        case MaskTool::Rectangle: painter.drawRect(QRectF(2.5, 3.5, 11.0, 9.0)); break;
+        case MaskTool::Ellipse: painter.drawEllipse(QRectF(2.0, 3.0, 12.0, 10.0)); break;
+        case MaskTool::Pen: {
+            const QPolygonF corners{{2.5, 12.5}, {5.5, 3.0}, {13.0, 6.0}, {10.0, 13.0}};
+            painter.drawPolygon(corners);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(color);
+            for (const QPointF &corner : corners) painter.drawRect(QRectF(corner - QPointF(1.5, 1.5), QSizeF(3.0, 3.0)));
+            break;
+        }
+        }
+    };
+    QIcon icon = glyphIcon(QSize(16, 16), draw);
+    const QPixmap chosen = glyphPixmap(QSize(16, 16), draw, editorTheme().accentText);
+    icon.addPixmap(chosen, QIcon::Normal, QIcon::On);
+    icon.addPixmap(chosen, QIcon::Active, QIcon::On);
+    icon.addPixmap(glyphPixmap(QSize(16, 16), draw, editorTheme().glyphDisabled), QIcon::Disabled, QIcon::On);
+    return icon;
 }
 
 double propertyAt(const QJsonObject &props, const QString &name, double clipTime, double fallback) {

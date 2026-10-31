@@ -286,12 +286,14 @@ QScrollBar::sub-line { width: 0; height: 0; border: 0; background: transparent; 
 QScrollBar::add-page,
 QScrollBar::sub-page { background: transparent; }
 
+/* Its own height, not the editor's 22px button metrics. */
 QToolButton#launcherDetailsToggle {
     background: transparent;
     border: 0;
     border-radius: 0;
     padding: 0;
-    min-height: 0;
+    min-height: 19px;
+    max-height: 19px;
     color: @text;
     font-size: 13px;
 }

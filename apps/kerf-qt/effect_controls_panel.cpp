@@ -92,7 +92,7 @@ EffectControlsPanel::EffectControlsPanel(QWidget *parent) : QWidget(parent) {
 }
 
 QDoubleSpinBox *EffectControlsPanel::timingSpin(double minimum, double maximum, double step, const QString &field) {
-    auto *spin = new QDoubleSpinBox;
+    auto *spin = new StepperSpinBox;
     spin->setRange(minimum, maximum);
     spin->setSingleStep(step);
     spin->setDecimals(2);
@@ -471,7 +471,7 @@ QWidget *EffectControlsPanel::valueEditor(const QJsonObject &def, const QString 
     const QString type = def.value(QStringLiteral("type")).toString();
     QWidget *editor = nullptr;
     if (type == QStringLiteral("number")) {
-        auto *spin = new QDoubleSpinBox;
+        auto *spin = new StepperSpinBox;
         const double minimum = def.value(QStringLiteral("min")).toDouble(-1e6);
         const double maximum = def.value(QStringLiteral("max")).toDouble(1e6);
         spin->setRange(minimum, maximum);
