@@ -193,6 +193,9 @@ void TimelineWidget::setProject(const QJsonObject &project, double duration, dou
     layoutRows();
     invalidateLanes();
     updateContentSize();
+    // Remembered heights may have come before any track (setHeightsKey),
+    // and a snapshot can add or remove the one track sized apart.
+    updateHeightActions();
     update();
 }
 
@@ -288,9 +291,23 @@ void TimelineWidget::setAllTrackHeightsKeeping(int height, int row) {
 }
 
 void TimelineWidget::stepAllTrackHeights(int steps) {
-    if (steps == 0) return;
-    // From the height tracks without one of their own have.
-    setAllTrackHeights(steppedHeight(defaultTrackHeight(false), steps));
+    stepAllTrackHeightsKeeping(steps, firstVisibleRow());
+}
+
+void TimelineWidget::stepAllTrackHeightsKeeping(int steps, int row) {
+    if (steps == 0 || m_rows.isEmpty()) return;
+    // Each track from its own height; tracks added later from the height
+    // tracks without one of their own have. Only the tracks that end up
+    // apart from that keep a height of their own.
+    m_allHeight = steppedHeight(defaultTrackHeight(false), steps);
+    QHash<QString, int> heights;
+    for (int index = 0; index < m_rows.size(); ++index) {
+        const int height = steppedHeight(m_rows.at(index).height, steps);
+        if (height != m_allHeight) heights.insert(rowKey(index), height);
+    }
+    m_trackHeights = heights;
+    relayoutKeeping(row);
+    saveHeights();
 }
 
 QList<QAction *> TimelineWidget::trackHeightActions() const {
@@ -750,15 +767,18 @@ void TimelineWidget::wheelEvent(QWheelEvent *event) {
     // Option-scroll over the headers steps every track, a step a notch (a
     // trackpad's small deltas add up to one), keeping the track under the
     // pointer in place. Some platforms turn Option-scroll sideways.
+    // A trackpad's momentum after the fingers lift would carry on stepping
+    // well past the height aimed for.
+    event->accept();
+    if (event->phase() == Qt::ScrollBegin || event->phase() == Qt::ScrollEnd) m_wheelSteps = 0;
+    if (event->phase() == Qt::ScrollMomentum) return;
     const QPoint angle = event->angleDelta();
     m_wheelSteps += angle.y() != 0 ? angle.y() : angle.x();
     const int steps = m_wheelSteps / 120;
-    event->accept();
     if (steps == 0) return;
     m_wheelSteps -= steps * 120;
     const int row = rowAt(pos.y());
-    setAllTrackHeightsKeeping(steppedHeight(defaultTrackHeight(false), steps),
-                              row >= 0 ? row : static_cast<int>(m_rows.size()) - 1);
+    stepAllTrackHeightsKeeping(steps, row >= 0 ? row : static_cast<int>(m_rows.size()) - 1);
 }
 
 void TimelineWidget::leaveEvent(QEvent *) {

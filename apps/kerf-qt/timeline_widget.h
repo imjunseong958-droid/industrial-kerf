@@ -82,9 +82,11 @@ public:
     // start at their defaults.
     int allTrackHeight() const { return m_allHeight; }
     // Every track `steps` steps of kTrackHeightSteps taller (or shorter, when
-    // negative) than tracks without a height of their own are: Option-Up
-    // and Option-Down, and (keeping the track under the pointer in place)
-    // Option-scroll over the headers.
+    // negative) than it is now, so tracks sized apart (tall picture, short
+    // sound, one tall hero layer) keep their order and none shrinks on a
+    // step taller; tracks added later take the step from the all-tracks
+    // height. Option-Up and Option-Down, and (keeping the track under the
+    // pointer in place) Option-scroll over the headers.
     void stepAllTrackHeights(int steps);
     // The header bar's track height controls: Mini, Medium (the defaults)
     // and Large, checked when every track is at that height, and Fit.
@@ -174,6 +176,8 @@ private:
     int firstVisibleRow() const;
     // setAllTrackHeights(), keeping `row` in place.
     void setAllTrackHeightsKeeping(int height, int row);
+    // stepAllTrackHeights(), keeping `row` in place.
+    void stepAllTrackHeightsKeeping(int steps, int row);
     void setTrackHeight(int row, int height);
     // A track's height when it has none of its own.
     int defaultTrackHeight(bool audio) const;

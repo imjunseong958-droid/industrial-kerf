@@ -53,6 +53,10 @@ class MainWindow final : public QMainWindow {
     Q_OBJECT
     friend class EditorTest;
 public:
+    // The most lines the proposal card's script and diff show before they scroll.
+    static constexpr int kProposalDiffLines = 10;
+    // The fade over the top of the conversation's view while it is scrolled.
+    static constexpr int kScrollFadeHeight = 14;
     MainWindow(const QString &projectDirectory, const QString &kerfdBinary, QWidget *parent = nullptr);
     ~MainWindow() override;
 

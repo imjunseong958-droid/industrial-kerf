@@ -1135,6 +1135,11 @@ private slots:
         const auto chips = window.m_nextSteps->findChildren<QPushButton *>(QStringLiteral("nextStep"));
         QCOMPARE(chips.size(), 2);
         QCOMPARE(chips.at(0)->text(), QStringLiteral("Stronger glow"));
+        // The conversation, open beside the picture, shows them; the
+        // timeline's bar shows them only while it is closed.
+        QVERIFY(window.m_workspace->assistantOpen());
+        QVERIFY(window.m_aiBar->isHidden());
+        window.m_workspace->setAssistantOpen(false);
         QVERIFY(!window.m_aiBar->isHidden());
         QCOMPARE(window.m_aiBarText->text(), QStringLiteral("Next with Kerf"));
         QCOMPARE(window.m_chatNextSteps->findChildren<QPushButton *>(QStringLiteral("nextStep")).size(), 2);
@@ -1143,6 +1148,91 @@ private slots:
         QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("agent"));
         QCOMPARE(window.m_lastCommand.value("text").toString(), QStringLiteral("Use a linear wipe into the next shot."));
         QCOMPARE(window.m_lastCommand.value("focus").toObject(), focus);
+    }
+
+    // Kerf's conversation, in its column beside the picture: scrolled, the
+    // top of its view fades from the well, so a message cut off there reads
+    // as scrolled and not clipped; the proposal's script and diff are as
+    // tall as their lines, up to ten, so what was asked stays in view.
+    void conversationColumnFadesAndFitsItsProposal() {
+        QSettings().remove(QStringLiteral("workspace"));
+        const auto restore = qScopeGuard([] {
+            setEditorColorScheme(ColorScheme::Dark);
+            QSettings().remove(QStringLiteral("workspace"));
+        });
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            const EditorTheme &theme = editorTheme();
+            QVERIFY(theme.messageUser.rgb() != theme.well.rgb());
+            MainWindow window{QString(), QString()};
+            window.setConnection(QStringLiteral("ready"));
+            QJsonObject proposal{{"status", "pending"}, {"proposalId", "p1"}, {"script", "trim v1b out -36f\nremove v1c\n"},
+                                 {"documentDiff", "-    clip v1b dur=5s\n+    clip v1b dur=3.5s\n-    clip v1c\n"}};
+            QJsonObject snapshot = showcaseSnapshot(3, QStringLiteral("clean"));
+            snapshot.insert(QStringLiteral("pendingProposal"), proposal);
+            window.applySnapshot(snapshot);
+            window.resize(1440, 900);
+            window.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&window));
+            window.m_errorBanner->hide();
+            for (int turn = 0; turn < 4; ++turn) {
+                window.appendConversation(QStringLiteral("You"), QStringLiteral("Tighten the fisher close-up and drop the drone pass, please."));
+                window.appendConversation(QStringLiteral("Kerf"), QStringLiteral("I trimmed the close-up by 1.5 seconds and removed the drone pass."));
+            }
+            QCoreApplication::processEvents();
+
+            // The diff: no room left under its last line, and no scroll bar.
+            QTextEdit *diff = window.m_proposalDiff;
+            QVERIFY(diff->isVisible());
+            const int line = diff->fontMetrics().lineSpacing();
+            const qreal content = diff->document()->size().height();
+            QVERIFY2(diff->viewport()->height() - content < line,
+                     qPrintable(QStringLiteral("%1 px for %2 px of lines").arg(diff->viewport()->height()).arg(content)));
+            QVERIFY(diff->viewport()->height() >= content - 1);
+            QCOMPARE(diff->verticalScrollBar()->maximum(), 0);
+            // A long one stops at ten lines and scrolls.
+            QString longScript;
+            for (int index = 0; index < 40; ++index) longScript += QStringLiteral("trim v%1 out -12f\n").arg(index);
+            proposal.insert(QStringLiteral("script"), longScript);
+            snapshot.insert(QStringLiteral("pendingProposal"), proposal);
+            snapshot.insert(QStringLiteral("revision"), 4);
+            window.applySnapshot(snapshot);
+            QCoreApplication::processEvents();
+            QVERIFY(diff->viewport()->height() <= MainWindow::kProposalDiffLines * line + 2 * diff->document()->documentMargin() + 1);
+            QVERIFY(diff->viewport()->height() >= (MainWindow::kProposalDiffLines - 1) * line);
+            QVERIFY(diff->verticalScrollBar()->maximum() > 0);
+
+            // Scrolled to the top, no fade.
+            QScrollArea *scroll = window.m_chatScroll;
+            auto *fade = scroll->findChild<QWidget *>(QStringLiteral("scrollFade"), Qt::FindDirectChildrenOnly);
+            QVERIFY(fade);
+            QVERIFY(scroll->verticalScrollBar()->maximum() > 0);
+            scroll->verticalScrollBar()->setValue(0);
+            QCoreApplication::processEvents();
+            QVERIFY(!fade->isVisible());
+            // Scrolled so a message of the reader's is cut by the view's top.
+            QTextDocument *document = window.m_conversation->document();
+            QTextFrame *message = nullptr;
+            for (QTextFrame *frame : document->rootFrame()->childFrames())
+                if (frame->frameFormat().background().color() == theme.messageUser) message = frame;
+            QVERIFY(message);
+            const QRectF bounds = document->documentLayout()->frameBoundingRect(message);
+            const int into = window.m_conversation->viewport()->mapTo(scroll->widget(), QPoint(0, int(bounds.top()) + 10)).y();
+            scroll->verticalScrollBar()->setValue(into);
+            QCoreApplication::processEvents();
+            QCOMPARE(scroll->verticalScrollBar()->value(), into);
+            QVERIFY(fade->isVisible());
+            QCOMPARE(fade->geometry().top(), scroll->viewport()->geometry().top());
+            QCOMPARE(fade->width(), scroll->viewport()->width());
+            const QImage image = window.grab().toImage();
+            const qreal ratio = image.devicePixelRatio();
+            // Inside the message's padding, clear of its text and border.
+            const QPoint column = window.m_conversation->viewport()->mapTo(&window, QPoint(int(bounds.right()) - 8, 0));
+            const QPoint top(column.x(), fade->mapTo(&window, QPoint()).y());
+            QCOMPARE(image.pixelColor(top * ratio).rgb(), theme.well.rgb());
+            // Under the fade, the message as it is.
+            QCOMPARE(image.pixelColor((top + QPoint(0, MainWindow::kScrollFadeHeight + 1)) * ratio).rgb(), theme.messageUser.rgb());
+        }
     }
 
     void inspectorShowsAndEditsTheEffectStack() {
@@ -1849,7 +1939,9 @@ private slots:
         QCOMPARE(focus.value("clip").toString(), QStringLiteral("c1"));
         QCOMPARE(focus.value("fromFrame").toInt(), 24);
         QCOMPARE(focus.value("toFrame").toInt(), 72);
-        // While Kerf works, the timeline says so and offers Stop.
+        // While Kerf works with its conversation closed, the timeline says
+        // so and offers Stop.
+        window.m_workspace->setAssistantOpen(false);
         window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
         QVERIFY(window.m_aiBar->isVisible());
         QVERIFY(window.m_aiBarText->text().contains(QStringLiteral("Opening")));
@@ -1870,6 +1962,10 @@ private slots:
         window.applySnapshot(QJsonObject{{"revision", 4}, {"duration", 2}, {"timeline", current},
                                          {"pendingProposal", proposal}, {"proposalTimeline", proposed}});
         QVERIFY(window.m_timeline->hasProposal());
+        // Reviewed in the conversation while it is open, on the timeline's
+        // bar while it is closed.
+        QVERIFY(!window.m_aiBar->isVisible());
+        window.m_workspace->setAssistantOpen(false);
         QVERIFY(window.m_aiBar->isVisible());
         if (const QString shot = qEnvironmentVariable("KERF_QT_UI_SCREENSHOT"); !shot.isEmpty()) {
             window.resize(1500, 940);
@@ -2284,9 +2380,9 @@ private slots:
     }
 
     // Option-Up and Option-Down, and Option-scroll over the headers, step
-    // every track through the heights, keeping in place the track at the
-    // top of the view or under the pointer; plain keys and the wheel
-    // elsewhere leave heights alone.
+    // each track through the heights from its own, keeping in place the
+    // track at the top of the view or under the pointer; plain keys and the
+    // wheel elsewhere leave heights alone.
     void timelineStepsEveryTrackWithOptionKeysAndScroll() {
         TimelineScrollArea scroll;
         scroll.resize(900, 400);
@@ -2298,31 +2394,52 @@ private slots:
         timeline->setProject(trackList(kinds), 8, 24);
         scroll.show();
         QVERIFY(QTest::qWaitForWindowExposed(&scroll));
+        // Rows run V30 … V1, then A1 … A10.
+        const auto heights = [](int picture, int sound) {
+            QList<int> expected(30, picture);
+            expected.append(QList<int>(10, sound));
+            return expected;
+        };
+        QCOMPARE(trackHeights(*timeline), heights(kVideoTrackHeight, kTrackHeight));
         timeline->setFocus();
         QTest::keyClick(timeline, Qt::Key_Up, Qt::AltModifier);
-        QCOMPARE(trackHeights(*timeline), QList<int>(40, 44));
+        QCOMPARE(trackHeights(*timeline), heights(44, 36));
         QTest::keyClick(timeline, Qt::Key_Down, Qt::AltModifier);
         QTest::keyClick(timeline, Qt::Key_Down, Qt::AltModifier);
-        QCOMPARE(trackHeights(*timeline), QList<int>(40, 30));
+        QCOMPARE(trackHeights(*timeline), heights(30, 26));
         QTest::keyClick(timeline, Qt::Key_Down);
-        QCOMPARE(trackHeights(*timeline), QList<int>(40, 30));
+        QCOMPARE(trackHeights(*timeline), heights(30, 26));
 
-        const auto wheel = [timeline](const QPoint &at, int delta, Qt::KeyboardModifiers modifiers) {
-            QWheelEvent event(at, timeline->mapToGlobal(at), QPoint(), QPoint(0, delta), Qt::NoButton, modifiers,
-                              Qt::NoScrollPhase, false);
+        const auto wheel = [timeline](const QPoint &at, int delta, Qt::KeyboardModifiers modifiers,
+                                      Qt::ScrollPhase phase = Qt::NoScrollPhase) {
+            QWheelEvent event(at, timeline->mapToGlobal(at), QPoint(), QPoint(0, delta), Qt::NoButton, modifiers, phase, false);
             QApplication::sendEvent(timeline, &event);
             return event.isAccepted();
         };
         const auto inView = [timeline, &scroll](const QPoint &point) { return timeline->mapFrom(scroll.viewport(), point); };
         QVERIFY(wheel(inView(QPoint(120, 200)), 120, Qt::AltModifier));
-        QCOMPARE(trackHeights(*timeline), QList<int>(40, 36));
+        QCOMPARE(trackHeights(*timeline), heights(36, 30));
         // A trackpad's small deltas add up to a notch.
         for (int part = 0; part < 3; ++part) wheel(inView(QPoint(120, 200)), -40, Qt::AltModifier);
-        QCOMPARE(trackHeights(*timeline), QList<int>(40, 30));
+        QCOMPARE(trackHeights(*timeline), heights(30, 26));
         // Without Option, or over the lanes, the wheel is the scroll area's.
         QVERIFY(!wheel(inView(QPoint(120, 200)), 120, Qt::NoModifier));
         QVERIFY(!wheel(inView(QPoint(500, 200)), 120, Qt::AltModifier));
-        QCOMPARE(trackHeights(*timeline), QList<int>(40, 30));
+        QCOMPARE(trackHeights(*timeline), heights(30, 26));
+        // The momentum after a flick steps nothing, and a new gesture starts
+        // its notch afresh.
+        QVERIFY(wheel(inView(QPoint(120, 200)), 80, Qt::AltModifier, Qt::ScrollBegin));
+        QVERIFY(wheel(inView(QPoint(120, 200)), 80, Qt::AltModifier, Qt::ScrollUpdate));
+        QCOMPARE(trackHeights(*timeline), heights(36, 30));
+        for (int event = 0; event < 6; ++event) QVERIFY(wheel(inView(QPoint(120, 200)), 120, Qt::AltModifier, Qt::ScrollMomentum));
+        QCOMPARE(trackHeights(*timeline), heights(36, 30));
+        wheel(inView(QPoint(120, 200)), -80, Qt::AltModifier, Qt::ScrollUpdate);
+        wheel(inView(QPoint(120, 200)), 0, Qt::AltModifier, Qt::ScrollEnd);
+        wheel(inView(QPoint(120, 200)), 0, Qt::AltModifier, Qt::ScrollBegin);
+        wheel(inView(QPoint(120, 200)), -80, Qt::AltModifier, Qt::ScrollUpdate);
+        QCOMPARE(trackHeights(*timeline), heights(36, 30));
+        wheel(inView(QPoint(120, 200)), -40, Qt::AltModifier, Qt::ScrollUpdate);
+        QCOMPARE(trackHeights(*timeline), heights(30, 26));
 
         // The track under the pointer stays where it is in the view.
         scroll.verticalScrollBar()->setValue(300);
@@ -2333,17 +2450,62 @@ private slots:
         const auto top = [timeline](int at) { return timeline->trackHeaderRect(at).top() + timeline->pos().y(); };
         const int before = top(row);
         wheel(over, -120, Qt::AltModifier);
-        QCOMPARE(trackHeights(*timeline), QList<int>(40, 26));
+        QCOMPARE(trackHeights(*timeline), heights(26, 22));
         QCOMPARE(top(row), before);
         wheel(inView(QPoint(120, 250)), 240, Qt::AltModifier);
-        QCOMPARE(trackHeights(*timeline), QList<int>(40, 36));
+        QCOMPARE(trackHeights(*timeline), heights(36, 30));
         QCOMPARE(top(row), before);
         // The keys keep the track at the top of the view in place.
         const int first = timeline->trackRowAt(-timeline->pos().y() + kRulerHeight);
         const int firstTop = top(first);
         QTest::keyClick(timeline, Qt::Key_Up, Qt::AltModifier);
-        QCOMPARE(trackHeights(*timeline), QList<int>(40, 44));
+        QCOMPARE(trackHeights(*timeline), heights(44, 36));
         QCOMPARE(top(first), firstTop);
+    }
+
+    // A step taller never makes a track shorter: picture tracks dragged tall
+    // and one hero layer taller still each step from their own heights, the
+    // sound tracks from theirs, and a track added later from the height
+    // every track was stepped to.
+    void timelineStepsKeepTracksSizedApart() {
+        TimelineWidget timeline;
+        timeline.resize(900, 900);
+        QJsonObject project = trackList({"video", "video", "video", "audio", "audio"});
+        timeline.setProject(project, 8, 24);
+        timeline.show();
+        // Rows, top down: V3, V2, V1, A1, A2. Option-drag picture to 100.
+        const int pictureEdge = timeline.trackHeaderRect(2).bottom() + 1;
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(140, pictureEdge));
+        QTest::mouseMove(&timeline, QPoint(140, pictureEdge + 100 - kVideoTrackHeight));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(140, pictureEdge + 100 - kVideoTrackHeight));
+        QCOMPARE(trackHeights(timeline), (QList<int>{100, 100, 100, kTrackHeight, kTrackHeight}));
+        // V3, the hero layer, taller still.
+        const int heroEdge = timeline.trackHeaderRect(0).bottom() + 1;
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(140, heroEdge));
+        QTest::mouseMove(&timeline, QPoint(140, heroEdge + 20));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(140, heroEdge + 20));
+        QCOMPARE(trackHeights(timeline), (QList<int>{120, 100, 100, kTrackHeight, kTrackHeight}));
+        timeline.stepAllTrackHeights(1);
+        const QList<int> taller = trackHeights(timeline);
+        QCOMPARE(taller, (QList<int>{128, 104, 104, 36, 36}));
+        timeline.stepAllTrackHeights(-1);
+        QCOMPARE(trackHeights(timeline), (QList<int>{104, 86, 86, 30, 30}));
+        // The tallest stays the tallest; Option-scroll steps the same way.
+        QWheelEvent wheel(QPointF(120, timeline.trackHeaderRect(3).center().y()), timeline.mapToGlobal(QPointF(120, 0)), QPoint(),
+                          QPoint(0, 120), Qt::NoButton, Qt::AltModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(&timeline, &wheel);
+        QCOMPARE(trackHeights(timeline), (QList<int>{128, 104, 104, 36, 36}));
+        // A new track takes the step every track without a height of its
+        // own was taken to: one step from the picture default.
+        QJsonArray tracks = project.value("tracks").toArray();
+        tracks.append(QJsonObject{{"id", "added"}, {"type", "audio"}, {"clips", QJsonArray{}}});
+        project.insert("tracks", tracks);
+        timeline.setProject(project, 8, 24);
+        QCOMPARE(timeline.allTrackHeight(), 44);
+        QCOMPARE(trackHeights(timeline).constLast(), 44);
+        // Presets still set every track alike.
+        timeline.trackHeightActions().at(0)->trigger();
+        QCOMPARE(trackHeights(timeline), QList<int>(6, kMinTrackHeight));
     }
 
     // At every height down to Mini the line between two headers shows the
@@ -2465,6 +2627,40 @@ private slots:
         reopened.setHeightsKey(first.path());
         reopened.setProject(project, 8, 24);
         QCOMPARE(trackHeights(reopened), (QList<int>{kVideoTrackHeight, kTrackHeight}));
+        // Left at Mini, it reopens at Mini with Mini checked in the title
+        // bar, the remembered heights arriving before any track does.
+        const auto checkedHeight = [](const TimelineWidget &timeline) {
+            QStringList checked;
+            for (const QAction *action : timeline.trackHeightActions())
+                if (action->isChecked()) checked << action->objectName();
+            return checked;
+        };
+        reopened.trackHeightActions().at(0)->trigger();
+        {
+            TimelineWidget atMini;
+            atMini.setHeightsKey(first.path());
+            atMini.setProject(project, 8, 24);
+            QCOMPARE(trackHeights(atMini), QList<int>(2, kMinTrackHeight));
+            QCOMPARE(checkedHeight(atMini), QStringList{QStringLiteral("trackHeightMini")});
+        }
+        {
+            MainWindow atMini{first.path(), QString()};
+            atMini.setConnection(QStringLiteral("ready"));
+            atMini.applySnapshot(QJsonObject{{"revision", 1}, {"duration", 8}, {"timeline", project}});
+            QCOMPARE(trackHeights(*atMini.m_timeline), QList<int>(2, kMinTrackHeight));
+            QCOMPARE(checkedHeight(*atMini.m_timeline), QStringList{QStringLiteral("trackHeightMini")});
+        }
+        // A snapshot that removes the one track sized apart leaves every
+        // track at one height, and its button checked.
+        reopened.trackHeightActions().at(2)->trigger();
+        reopened.setTrackHeight(1, 40);
+        QVERIFY(checkedHeight(reopened).isEmpty());
+        QJsonObject shrunk = project;
+        QJsonArray tracks = shrunk.value("tracks").toArray();
+        tracks.removeLast();
+        shrunk.insert("tracks", tracks);
+        reopened.setProject(shrunk, 8, 24);
+        QCOMPARE(checkedHeight(reopened), QStringList{QStringLiteral("trackHeightLarge")});
     }
 
     // From Mini to the tallest, a header's badge and toggles sit inside its
@@ -4468,7 +4664,10 @@ private slots:
             // Nothing under the pointer.
             QTest::mouseMove(window.statusBar(), QPoint(window.statusBar()->width() / 2, 4));
             QVERIFY(window.m_timeline->hasProposal());
-            QVERIFY(window.m_aiBar->isVisible());
+            // The conversation is open beside the picture, so it, not the
+            // timeline's bar, carries the proposal.
+            QVERIFY(window.m_workspace->assistantOpen());
+            QVERIFY(!window.m_aiBar->isVisible());
             QCoreApplication::processEvents();
             const QImage image = window.grab().toImage();
             // The bars are the theme's: toolbar, status bar, and dock title strips.
@@ -4559,11 +4758,6 @@ private slots:
             }
             // The launcher's chrome: #f5f5f5 in light, #2c2c2e in dark.
             QVERIFY(dark ? qGray(dominantColor(toolbar->grab().toImage())) < 60 : qGray(dominantColor(toolbar->grab().toImage())) > 220);
-            // The agent's bar is the window's chrome with a purple stripe, not amber.
-            const QImage aiBar = window.m_aiBar->grab().toImage();
-            QCOMPARE(dominantColor(aiBar), theme.chrome.rgb());
-            QCOMPARE(aiBar.pixelColor(QPoint(1, aiBar.height() / 2) * aiBar.devicePixelRatio()), theme.assistant);
-            QCOMPARE(amberPixels(aiBar), 0);
             // Tabs show no close button until the pointer is over them; then
             // it reads on the tab.
             const auto closeButtons = window.findChildren<QWidget *>(QStringLiteral("tabCloseButton"));
@@ -4608,10 +4802,24 @@ private slots:
                 QVERIFY(detail && detail->isVisible() && !detail->isEnabled());
                 QCOMPARE(dominantColor(detail->parentWidget()->grab(detail->geometry()).toImage()), theme.panelTitle.rgb());
             }
-            // The AI bar's buttons are the launcher's 22px.
-            for (QWidget *control : window.m_aiBar->findChildren<QToolButton *>())
-                if (control->isVisible()) QCOMPARE(control->height(), 22);
             save(image, QStringLiteral("editor-%1").arg(name));
+            // With the conversation closed, the timeline's bar stands in for
+            // it: the window's chrome with a purple stripe, not amber, and
+            // the launcher's 22px buttons.
+            window.m_workspace->setAssistantOpen(false);
+            QCoreApplication::processEvents();
+            QVERIFY(window.m_aiBar->isVisible());
+            {
+                const QImage aiBar = window.m_aiBar->grab().toImage();
+                QCOMPARE(dominantColor(aiBar), theme.chrome.rgb());
+                QCOMPARE(aiBar.pixelColor(QPoint(1, aiBar.height() / 2) * aiBar.devicePixelRatio()), theme.assistant);
+                QCOMPARE(amberPixels(aiBar), 0);
+                for (QWidget *control : window.m_aiBar->findChildren<QToolButton *>())
+                    if (control->isVisible()) QCOMPARE(control->height(), 22);
+            }
+            window.m_workspace->setAssistantOpen(true);
+            QCoreApplication::processEvents();
+            QVERIFY(!window.m_aiBar->isVisible());
 
             // The toolbar's pop-up opens as macOS's menu: rounded, clipped to
             // its corners, a 22px row per choice, and the row under the
@@ -4821,7 +5029,7 @@ private slots:
             window.m_errorBanner->hide();
             QCoreApplication::processEvents();
             QVERIFY(!window.m_divergedBanner->isHidden());
-            QVERIFY(window.m_aiBar->isVisible());
+            QVERIFY(!window.m_aiBar->isVisible());
             // The proposal's default button, Accept, is the accent.
             QPushButton *primary = window.m_acceptButton;
             QVERIFY(primary->isVisible() && primary->isEnabled());
@@ -4853,8 +5061,11 @@ private slots:
             QVERIFY(window.m_rejectButton->geometry().right() < window.m_acceptButton->geometry().left());
             QCOMPARE(window.m_acceptButton->height(), 22);
             // So does every other row of buttons, as macOS orders them: the
-            // timeline's bar ends in Accept and the banner in Load from Disk,
-            // each 8px past the button before it.
+            // timeline's bar (shown with the conversation closed) ends in
+            // Accept and the banner in Load from Disk, each 8px past the
+            // button before it.
+            window.m_workspace->setAssistantOpen(false);
+            QCoreApplication::processEvents();
             {
                 QList<QWidget *> bar;
                 for (QToolButton *button : window.m_aiBar->findChildren<QToolButton *>())
@@ -4880,6 +5091,8 @@ private slots:
                     QVERIFY(chip->width() < 160);
                 }
             }
+            window.m_workspace->setAssistantOpen(true);
+            QCoreApplication::processEvents();
             // The bar and its text are neutral; only the 14-point triangle is orange.
             for (QWidget *part : window.m_divergedBanner->findChildren<QWidget *>(Qt::FindDirectChildrenOnly))
                 if (part != window.m_divergedGlyph) QCOMPARE(amberPixels(part->grab().toImage()), 0);
@@ -5132,10 +5345,18 @@ private slots:
                 const auto at = [&](const QPointF &viewerPoint) {
                     return image.pixelColor((QPointF(window.m_viewer->mapTo(&window, QPoint())) + viewerPoint).toPoint() * ratio).rgb();
                 };
-                // The sea, in the picture, and the viewer's surround beside a
-                // picture narrower than the viewer.
+                // The sea, in the picture. A picture narrower than the viewer
+                // sits against the conversation, as a Short against its
+                // comments, the viewer's surround on its other side.
                 QCOMPARE(at(QPointF(video.center().x(), video.top() + video.height() * 0.85)), sea.rgb());
-                if (video.width() < room.width() - 1) QCOMPARE(at(QPointF(video.right() + 4, video.center().y())), theme.viewerSurround.rgb());
+                const bool pillarboxed = video.width() < room.width() - 1;
+                QCOMPARE(pillarboxed, format.canvas.width() <= format.canvas.height());
+                if (pillarboxed) {
+                    const int pictureRight = window.m_viewer->mapTo(&window, QPoint()).x() + int(std::ceil(video.right()));
+                    QVERIFY2(chatRect.left() - pictureRight <= 16, qPrintable(QStringLiteral("%1: %2 px").arg(label).arg(chatRect.left() - pictureRight)));
+                    QCOMPARE(at(QPointF(video.right() - 4, video.top() + video.height() * 0.85)), sea.rgb());
+                    QCOMPARE(at(QPointF(video.left() - 4, video.center().y())), theme.viewerSurround.rgb());
+                }
                 // The conversation's column: the well, under its header with
                 // its close button, and nothing in it wider than it.
                 QWidget *column = window.findChild<QWidget *>(QStringLiteral("assistantPanel"));
@@ -5144,6 +5365,8 @@ private slots:
                 QVERIFY(close && close->isVisible());
                 QVERIFY(window.m_chatScroll->widget()->minimumSizeHint().width() <= window.m_chatScroll->viewport()->width());
                 QVERIFY(window.m_chatToggle->isChecked());
+                // Its next steps show once, in it, not again over the timeline.
+                QVERIFY(window.m_chatNextSteps->isVisible() && !window.m_aiBar->isVisible());
                 QCOMPARE(amberPixels(image), 0);
                 const QString scheme = theme.dark ? QStringLiteral("dark") : QStringLiteral("light");
                 if (!shots.isEmpty()) QVERIFY(image.save(QDir(shots).filePath(QStringLiteral("editor-%1-%2.png").arg(label, scheme))));
@@ -5153,11 +5376,18 @@ private slots:
                     window.m_chatToggle->click();
                     QCoreApplication::processEvents();
                     QVERIFY(!chatArea->isVisible() && !window.m_chatToggle->isChecked());
+                    // Closed, the timeline's bar stands in for it with the next steps.
+                    QVERIFY(window.m_aiBar->isVisible());
                     QCOMPARE(viewerArea->mapTo(&window, QPoint(viewerArea->width(), 0)).x(), window.width());
-                    QVERIFY(window.m_viewer->videoRect().center().x() > video.center().x());
+                    QVERIFY(std::abs(window.m_viewer->videoRect().center().x() - window.m_viewer->width() / 2.0) < 1);
                     const QImage closed = window.grab().toImage();
                     QCOMPARE(amberPixels(closed), 0);
                     if (!shots.isEmpty()) QVERIFY(closed.save(QDir(shots).filePath(QStringLiteral("editor-%1-closed-%2.png").arg(label, scheme))));
+                    // Opened again, the picture is back against it.
+                    window.m_chatToggle->click();
+                    QCoreApplication::processEvents();
+                    QVERIFY(chatArea->isVisible());
+                    QCOMPARE(window.m_viewer->videoRect(), video);
                 }
                 window.close();
             }

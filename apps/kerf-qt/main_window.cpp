@@ -233,6 +233,50 @@ private:
     int m_spacing;
 };
 
+// Over the top of a scrolled view, its background fading to clear, so a
+// message cut off by the view's top edge reads as scrolled out of sight and
+// not as clipped. It is the scroll area's child, not its viewport's, so it
+// stays put while the content scrolls, and is shown only while the view is
+// scrolled. Clicks pass through it.
+class ScrollTopFade final : public QWidget {
+public:
+    static constexpr int kHeight = MainWindow::kScrollFadeHeight;
+    explicit ScrollTopFade(QScrollArea *area) : QWidget(area), m_area(area) {
+        setObjectName(QStringLiteral("scrollFade"));
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        area->installEventFilter(this);
+        connect(area->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) { setVisible(value > 0); });
+        connect(EditorAppearance::instance(), &EditorAppearance::changed, this, qOverload<>(&QWidget::update));
+        hide();
+        follow();
+    }
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override {
+        if (watched == m_area && (event->type() == QEvent::Resize || event->type() == QEvent::LayoutRequest)) follow();
+        return QWidget::eventFilter(watched, event);
+    }
+    void paintEvent(QPaintEvent *) override {
+        // Solid for its first few pixels, the well the conversation sits in.
+        const QColor well = editorTheme().well;
+        QColor clear = well;
+        clear.setAlpha(0);
+        QLinearGradient fade(0, 0, 0, height());
+        fade.setColorAt(0, well);
+        fade.setColorAt(0.25, well);
+        fade.setColorAt(1, clear);
+        QPainter(this).fillRect(rect(), fade);
+    }
+
+private:
+    void follow() {
+        const QRect viewport = m_area->viewport()->geometry();
+        setGeometry(viewport.left(), viewport.top(), viewport.width(), kHeight);
+        raise();
+    }
+    QScrollArea *m_area;
+};
+
 // A tool palette symbol on an 18-point grid, in `color`: the pointer for
 // Selection (SF Symbols' cursorarrow), the edit suites' marks for the rest,
 // drawn with the toolbar's pen so they share its weight.
@@ -1304,7 +1348,12 @@ void MainWindow::updateAiBar() {
     if (!m_aiBar) return;
     const bool pending = !m_proposalId.isEmpty();
     const bool next = !m_steps.isEmpty() && !m_agentBusy;
-    m_aiBar->setVisible(m_connected && (m_agentBusy || pending || next));
+    // The bar stands in for Kerf's conversation while it is closed, as a
+    // Short's comment count does: open beside the picture, the conversation
+    // already shows the work, the proposal and the next steps, and the
+    // timeline keeps the row.
+    const bool chatOpen = m_workspace && m_workspace->assistantOpen();
+    m_aiBar->setVisible(m_connected && !chatOpen && (m_agentBusy || pending || next));
     m_nextSteps->setVisible(next);
     if (m_agentBusy) {
         m_aiBarText->setText(m_agentFocusLabel.isEmpty() ? QStringLiteral("Kerf is working…")
@@ -1760,6 +1809,7 @@ void MainWindow::buildUi() {
         scrollEdge->style()->unpolish(scrollEdge);
         scrollEdge->style()->polish(scrollEdge);
     });
+    new ScrollTopFade(chatScroll);
     auto *chatContent = new QWidget;
     auto *chatLayout = new QVBoxLayout(chatContent);
     chatLayout->setContentsMargins(0, 0, 0, 0);
@@ -1908,9 +1958,20 @@ void MainWindow::buildUi() {
     m_proposalSummary->setObjectName(QStringLiteral("proposalSummary"));
     m_proposalDiff = new QTextEdit;
     m_proposalDiff->setReadOnly(true);
-    m_proposalDiff->setMinimumHeight(80);
-    m_proposalDiff->setMaximumHeight(240);
     m_proposalDiff->setObjectName(QStringLiteral("proposalDiff"));
+    // As tall as its lines, up to ten (then it scrolls), so in the
+    // conversation's narrow column the request and reply above the card
+    // stay in view instead of an empty box.
+    m_proposalDiff->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_proposalDiff->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    connect(m_proposalDiff->document()->documentLayout(), &QAbstractTextDocumentLayout::documentSizeChanged, this,
+            [this](const QSizeF &size) {
+                const int chrome = m_proposalDiff->height() - m_proposalDiff->viewport()->height();
+                const int margins = static_cast<int>(std::ceil(2 * m_proposalDiff->document()->documentMargin()));
+                const int lines = m_proposalDiff->fontMetrics().lineSpacing();
+                const int most = kProposalDiffLines * lines + margins + chrome;
+                m_proposalDiff->setFixedHeight(std::clamp(static_cast<int>(std::ceil(size.height())) + chrome, 2 * lines + margins + chrome, most));
+            });
     // Sized to their labels and right-aligned, the default action rightmost,
     // as macOS orders a dialog's buttons.
     auto *proposalButtons = new QHBoxLayout;
@@ -2288,6 +2349,12 @@ void MainWindow::buildUi() {
     // Its column narrows no further than its composer and proposal fit.
     m_workspace->addPanel(QStringLiteral("assistant"), QStringLiteral("Kerf Assistant"), right)
         ->setMinimumSizeHintMode(ads::CDockWidget::MinimumSizeHintFromContentMinimumSize);
+    // The timeline's AI bar shows only while the conversation is closed.
+    connect(m_workspace->panel(QStringLiteral("assistant")), &ads::CDockWidget::viewToggled, this, &MainWindow::updateAiBar);
+    connect(m_workspace, &Workspace::changed, this, &MainWindow::updateAiBar);
+    // A portrait or square picture sits against the conversation's column
+    // when that is open directly on the viewer's right.
+    m_viewer->setTrailingNeighbour(m_workspace->panel(QStringLiteral("assistant")));
     // The bin and the assistant are white wells in light; their current tab
     // is white too, so it merges into them.
     for (const char *id : {"project", "assistant"})
@@ -2564,6 +2631,7 @@ void MainWindow::setupActions() {
         buildWorkspaceMenu(workspaces);
     }
     m_workspace->start();
+    updateAiBar();
     for (auto it = panelCommands.cbegin(); it != panelCommands.cend(); ++it) {
         const QSignalBlocker blocker(m_commands->action(it.key()));
         m_commands->action(it.key())->setChecked(!m_workspace->panel(it.value())->isClosed());

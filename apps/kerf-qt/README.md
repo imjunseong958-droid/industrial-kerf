@@ -105,8 +105,11 @@ many layers. The Timeline panel's title strip sets every track's height at
 once: Mini (one 18 pt line per track: its number, toggles, name, and clip
 names), Medium (the defaults), and Large; Fit shares the panel height across
 every track. Option-Up and Option-Down (with the timeline focused), or
-Option-scroll over the track headers, step every track taller or shorter and
-keep the track you are looking at in place. Drag the line under a track header
+Option-scroll over the track headers, step every track taller or shorter from
+its own height, so tracks sized apart (tall picture over short sound, one tall
+hero layer) keep their proportions and a step taller never shrinks one, and
+keep the track you are looking at in place; a trackpad's momentum after the
+fingers lift steps nothing. Drag the line under a track header
 (the pointer turns into a resize cursor over it) to resize that track;
 Option-drag it to resize every picture track, or every sound track, at once.
 Right-click a header for the Mini, Small, Medium, Large, and Jumbo heights,
@@ -153,7 +156,9 @@ bin, Effect Controls, Effects, and Presets share a column of tabs (Effect
 Controls stays left of the Program monitor, where Premiere keeps it, so the
 chat's column holds only the chat). The Timeline runs the window's full
 width under all three, for its many tracks. A wider window widens the
-viewer; the columns beside it keep their widths.
+viewer; the columns beside it keep their widths. A picture narrower than the
+viewer (a 9:16 or 1:1 project) sits against the chat, as a Short sits against
+its comments, and is centred again while the chat is closed or elsewhere.
 
 The chat opens and closes like the comments button beside a Short: the
 speech bubble at the end of the toolbar, Window ▸ Kerf Assistant, ⇧⌘J, or
@@ -269,18 +274,19 @@ changes only that clip, and the clips around it follow by ripple) or Whole
 sequence (centred on the clip). The request reaches the agent with that
 focus, in frames of the sequence.
 
-While Kerf works, a bar over the timeline says what it is working on and
-offers Stop. Its proposal then shows on the timeline before anything
-changes: clips it adds or changes are outlined where they would land, and
-clips it removes are struck through. The bar offers Accept (⌘Return),
-Reject (Escape with the timeline focused), and Details, which opens the
-Kerf Assistant panel with the conversation and the proposed script. The Kerf
-Assistant starts open beside the Program monitor; keep chatting there,
-where Return sends and Shift+Return inserts a new line. Kerf ends each turn
-with up to three next steps, shown as buttons on the bar and over the
-composer ("Stronger glow", "Wipe to the next shot"), where they wrap onto
-more lines rather than widen the chat's narrow column; pressing one asks for
-it about the same selection.
+Kerf's proposal shows on the timeline before anything changes: clips it adds
+or changes are outlined where they would land, and clips it removes are
+struck through. The Kerf Assistant starts open beside the Program monitor;
+keep chatting there, where Return sends and Shift+Return inserts a new line.
+It shows what Kerf is working on (with Stop), the proposal's script and diff
+(as tall as their lines, up to ten) with Reject and Accept (⌘Return; Escape
+with the timeline focused rejects), and the up to three next steps Kerf ends
+each turn with ("Stronger glow", "Wipe to the next shot"), over the composer,
+where they wrap onto more lines rather than widen the chat's narrow column;
+pressing one asks for it about the same selection. While the chat is closed,
+a bar over the timeline stands in for it, as a Short's comment count does:
+it says what Kerf is working on, offers Stop, Accept, Reject and the next
+steps, and Details opens the chat again.
 
 Use the project-format picker in the toolbar to switch between standard
 1920×1080 (16:9) and vertical 1080×1920 (9:16). The viewer fits either canvas
