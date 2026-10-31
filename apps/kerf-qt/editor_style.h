@@ -805,11 +805,12 @@ inline QString dockStyleSheet(const EditorTheme &theme) {
     return themedStyleSheet(QStringLiteral(R"QSS(
 ads--CDockContainerWidget { background: @window; }
 ads--CDockContainerWidget > QSplitter { padding: 0; }
-ads--CDockSplitter::handle { background: @dockSeparator; }
-ads--CDockSplitter::handle:hover { background: @dockSeparatorHover; }
+/* As specific as the dock manager's Linux sheet, which names the container. */
+ads--CDockContainerWidget ads--CDockSplitter::handle { background: @dockSeparator; }
+ads--CDockContainerWidget ads--CDockSplitter::handle:hover { background: @dockSeparatorHover; }
 ads--CDockAreaWidget { background: @panel; border: 0; }
 ads--CDockAreaTitleBar { background: @panelTitle; border-bottom: 1px solid @divider; min-height: 26px; max-height: 26px; }
-ads--CDockAreaWidget[focused="true"] ads--CDockAreaTitleBar { border-bottom: 1px solid @divider; }
+ads--CDockAreaWidget[focused="true"] ads--CDockAreaTitleBar { background: @panelTitle; border-bottom: 1px solid @divider; }
 ads--CDockAreaTabBar { background: @panelTitle; }
 ads--CDockWidgetTab { background: @panelTitle; border: 0; border-right: 1px solid @divider; padding: 0 8px; }
 ads--CDockWidgetTab QLabel { color: @tabInactiveText; font-size: 11px; font-weight: 600; }
