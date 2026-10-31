@@ -33,8 +33,9 @@ launcher's sidebar and title are: the window runs up under a transparent
 title bar, the window buttons sit at the toolbar's leading end, and the
 project's name is the window's title, centred on the window. Pop-up buttons
 and menus open as macOS's do (rounded, a check by the current choice, the
-accent under the pointer), and buttons take focus from Tab alone, shown as a
-soft accent ring.
+accent under the pointer, no command symbols), buttons and pop-up buttons
+take focus from Tab alone, shown as a soft accent ring, and a field being
+typed in always shows that ring.
 
 Sources live in the `kerf` namespace, one class per header/source pair:
 `main_window` (the window, which builds and connects the panels),

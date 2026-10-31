@@ -771,8 +771,8 @@ void TimelineWidget::paintProposal(QPainter &p, int row, const QJsonObject &trac
         // Under the name bar only, so the clip's name stays readable.
         const QRectF body = rect.adjusted(0, clipHeaderHeight(rect), 0, 0);
         if (body.height() > 0.0) p.fillRect(body, QBrush(theme.proposalRemoveHatch, Qt::BDiagPattern));
-        p.setPen(QPen(theme.proposalRemove, 1.5));
-        p.drawRect(rect.adjusted(1, 1, -1, -1));
+        // Square at every corner, over the clip's own edge.
+        frameInside(p, rect, 2, theme.proposalRemove);
     }
     p.restore();
 }
@@ -980,18 +980,26 @@ void TimelineWidget::paintDraggedClip(QPainter &p, const QRect &visible, int row
     // the clips it covers do not ghost through its own.
     p.fillRect(rect.translated(0, 2), theme.dragShadow);
     paintClip(p, visible, row, clip, track, audio);
-    // Where it will overwrite its neighbours, a dashed edge.
+    // Where it will overwrite its neighbours, a dashed edge inside its
+    // selection ring: white dashes on a dark line, which read on any
+    // picture in either appearance.
     const QString id = clip.value(QStringLiteral("id")).toString();
+    const qreal ring = id == m_selectedClip ? kSelectionRing : 0.0;
     p.save();
     p.setRenderHint(QPainter::Antialiasing, false);
-    p.setPen(QPen(theme.trackHeaderText, 1, Qt::DashLine));
     p.setBrush(Qt::NoBrush);
     for (const QJsonValue &value : track.value(QStringLiteral("clips")).toArray()) {
         const QJsonObject other = value.toObject();
         if (other.value(QStringLiteral("id")).toString() == id) continue;
         const QRectF overlap = rect.intersected(clipRect(row, other.value(QStringLiteral("timelineStart")).toDouble(),
                                                          other.value(QStringLiteral("duration")).toDouble()));
-        if (overlap.width() >= 1.0) p.drawRect(overlap.adjusted(0.5, 0.5, -1.5, -1.5));
+        if (overlap.width() < 1.0 + 2 * ring) continue;
+        // On the first pixels inside the ring (a 1px pen on the half pixel).
+        const QRectF edge = overlap.adjusted(ring + 0.5, ring + 0.5, -ring - 0.5, -ring - 0.5);
+        p.setPen(QPen(QColor(0, 0, 0, 150), 1));
+        p.drawRect(edge);
+        p.setPen(QPen(QColor(255, 255, 255), 1, Qt::DashLine));
+        p.drawRect(edge);
     }
     p.restore();
 }
@@ -1015,8 +1023,8 @@ void TimelineWidget::paintRuler(QPainter &p, const QRect &dirty, int top) {
     const RulerScale scale = rulerScale(pps, m_fps);
     const double major = std::max(scale.majorSeconds, 1e-6);
     const double minor = major / scale.divisions;
-    const double startTime = (dirty.left() - kTimelineLabelWidth) / pps;
-    const double endTime = (dirty.right() - kTimelineLabelWidth) / pps;
+    const double startTime = (dirty.left() - kTimelineOrigin) / pps;
+    const double endTime = (dirty.right() - kTimelineOrigin) / pps;
     int first = std::max(0, static_cast<int>(std::floor(startTime / major)) - 1);
     const int limit = static_cast<int>(std::ceil(std::max(m_duration, 0.0) / major)) + 1;
     const int last = std::min(limit, static_cast<int>(std::ceil(endTime / major)) + 1);
@@ -1025,8 +1033,10 @@ void TimelineWidget::paintRuler(QPainter &p, const QRect &dirty, int top) {
         const int x = static_cast<int>(std::floor(timeToX(time)));
         p.fillRect(QRect(x, top + 3, 1, kRulerHeight - 4), theme.rulerTick);
         if (time <= m_duration + 0.0001) {
+            // Clear of the playhead's head when it stands on the tick, as
+            // it does at 00:00:00 when a project opens.
             p.setPen(theme.rulerText);
-            p.drawText(QRectF(x + 4, top + 1, std::max(12.0, major * pps - 8.0), 12),
+            p.drawText(QRectF(x + 7, top + 1, std::max(12.0, major * pps - 11.0), 12),
                        Qt::AlignLeft | Qt::AlignVCenter,
                        timelineRulerLabel(std::min(time, m_duration), m_fps, m_duration));
         }
@@ -1221,7 +1231,7 @@ bool TimelineWidget::lanesAreCacheable() const {
 }
 
 qreal TimelineWidget::timeToX(double time) const {
-    return kTimelineLabelWidth + time * pixelsPerSecond();
+    return kTimelineOrigin + time * pixelsPerSecond();
 }
 
 QRectF TimelineWidget::clipRect(int row, double start, double duration) const {
@@ -1261,7 +1271,7 @@ QRect TimelineWidget::pointerBand(qreal x) const {
 }
 
 void TimelineWidget::updateContentSize() {
-    const double contentWidth = kTimelineLabelWidth + m_duration * pixelsPerSecond() + kTimelineTail;
+    const double contentWidth = kTimelineOrigin + m_duration * pixelsPerSecond() + kTimelineTail;
     const int contentHeight = std::max(tracksBottom() + kTrackHeight, kRulerHeight + 3 * kTrackHeight) + 8;
     setMinimumSize(static_cast<int>(std::min(contentWidth, 16777215.0)), contentHeight);
     updateGeometry();
@@ -1269,12 +1279,12 @@ void TimelineWidget::updateContentSize() {
 
 double TimelineWidget::pixelsPerSecond() const {
     if (m_fitWidth <= 0) return 72.0 * m_zoom;
-    const double fitted = (m_fitWidth - kTimelineLabelWidth - kTimelineTail) / std::max(m_duration, 0.001);
+    const double fitted = (m_fitWidth - kTimelineOrigin - kTimelineTail) / std::max(m_duration, 0.001);
     return std::max(fitted, kMinPixelsPerSecond);
 }
 
 double TimelineWidget::timeAt(qreal x) const {
-    return std::clamp((x - kTimelineLabelWidth) / pixelsPerSecond(), 0.0, m_duration);
+    return std::clamp((x - kTimelineOrigin) / pixelsPerSecond(), 0.0, m_duration);
 }
 
 double TimelineWidget::scrubTime(qreal x) const {

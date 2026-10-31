@@ -18,6 +18,9 @@ class QComboBox;
 namespace kerf {
 
 constexpr int kTimelineLabelWidth = 196;
+// Where time zero sits: past the track headers by more than half the
+// playhead's head, so the head shows whole at the start.
+constexpr int kTimelineOrigin = kTimelineLabelWidth + 6;
 constexpr int kTimelineTail = 30;
 constexpr int kRulerHeight = 26;
 // Medium: the sound-track default and the add-track row.
@@ -95,6 +98,14 @@ QString popUpChevronsImagePath(const QColor &color);
 // its SVG plugin (as Linux distributions split it out) leaves blank.
 QString closeMarkImagePath(const QColor &color);
 QString tabsMenuImagePath(const QColor &color);
+// And for a menu's check (in its 18-point check column) and a submenu's
+// chevron, so the menus Qt draws mark choices as the pop-ups do.
+QString menuCheckImagePath(const QColor &color);
+QString menuChevronImagePath(const QColor &color);
+
+// macOS's menu check, starting at `at` on the row's middle (a pop-up's
+// rows, and the menus' check column).
+void drawMenuCheck(QPainter &painter, const QPointF &at, const QColor &color);
 
 // A seconds field with macOS's stepper: one pair of chevrons centred at its
 // right edge, over the style sheet's two transparent halves that step it
@@ -133,12 +144,15 @@ private:
 };
 
 // Draw the application in the editor's style: Fusion, with push buttons
-// that take focus from Tab alone, as macOS's do, so a click leaves none
-// behind. Every pop-up button gets PopupItemDelegate's rows (unless it
-// brings its own), pop-up lists and menus are clipped to their rounded
-// corners, and a button focused from the keyboard shows macOS's soft accent
-// ring outside its bezel (its `bezelRadius` property, 5 points unless set).
-// Called once, before any widget is made.
+// and pop-up buttons that take focus from Tab alone, as macOS's do, so a
+// click leaves none behind, and menus without symbols. Every pop-up button
+// gets PopupItemDelegate's rows (unless it brings its own), pop-up lists
+// and menus are clipped to their rounded corners, and a field being typed
+// in, or a button or pop-up focused from the keyboard, shows macOS's soft
+// accent ring outside its bezel (its `bezelRadius` property, 5 points
+// unless set). A window whose `ringsOwnFields` property is true (the
+// launcher) rings its fields and pop-ups itself. Called once, before any
+// widget is made.
 void useEditorStyle();
 
 // SF Symbols' waveform: six round-capped bars on an 18-point grid scaled to

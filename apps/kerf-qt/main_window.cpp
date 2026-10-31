@@ -2379,7 +2379,6 @@ void MainWindow::setupActions() {
                                     std::pair{QStringLiteral("source.overwrite"), TransportGlyph::Overwrite}}) {
         QAction *action = m_commands->action(id);
         action->setIcon(transportIcon(glyph));
-        action->setIconVisibleInMenu(false);
         m_sourceGlyphs.append({action, glyph});
     }
     m_commands->action(QStringLiteral("proposal.accept"))->setIconText(QStringLiteral("Accept"));

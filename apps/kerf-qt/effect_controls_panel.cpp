@@ -286,6 +286,8 @@ void EffectControlsPanel::showMasks() {
             addRow(form, tr("Mode"), mode);
             auto *inverted = new QCheckBox;
             inverted->setObjectName(QStringLiteral("maskInverted"));
+            // As tall as the fields, so the form keeps its 28px rhythm.
+            inverted->setMinimumHeight(22);
             connect(inverted, &QCheckBox::clicked, this, [this, name](bool on) {
                 maskEdited(name, QJsonObject{{QStringLiteral("inverted"), on}});
             });
@@ -521,6 +523,8 @@ QWidget *EffectControlsPanel::valueEditor(const QJsonObject &def, const QString 
         editor = combo;
     } else if (type == QStringLiteral("bool")) {
         auto *check = new QCheckBox;
+        // As tall as the fields, so the form keeps its 28px rhythm.
+        check->setMinimumHeight(22);
         connect(check, &QCheckBox::clicked, this, [edited](bool checked) { edited(checked); });
         editor = check;
     } else if (type == QStringLiteral("color")) {

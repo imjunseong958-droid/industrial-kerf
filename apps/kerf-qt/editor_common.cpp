@@ -11,6 +11,7 @@
 #include <QHash>
 #include <QImage>
 #include <QJsonDocument>
+#include <QLineEdit>
 #include <QMenu>
 #include <QPointer>
 #include <QPolygonF>
@@ -288,6 +289,28 @@ QString tabsMenuImagePath(const QColor &color) {
     });
 }
 
+void drawMenuCheck(QPainter &painter, const QPointF &at, const QColor &color) {
+    painter.save();
+    painter.setPen(QPen(color, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPolyline(QPolygonF{at + QPointF(0, 0.5), at + QPointF(3, 3.5), at + QPointF(8, -3.5)});
+    painter.restore();
+}
+
+QString menuCheckImagePath(const QColor &color) {
+    // The menu's 18-point check column, centred on the row: the check sits
+    // 7 points in, where a pop-up's rows draw theirs.
+    return glyphImagePath(colorKey("menu-check", color), QSize(18, 14),
+                          [&color](QPainter &painter) { drawMenuCheck(painter, QPointF(7, 7), color); });
+}
+
+QString menuChevronImagePath(const QColor &color) {
+    return glyphImagePath(colorKey("menu-chevron", color), QSize(6, 10), [&color](QPainter &painter) {
+        painter.setPen(QPen(color, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.drawPolyline(QPolygonF{{1.0, 1.0}, {5.0, 5.0}, {1.0, 9.0}});
+    });
+}
+
 void StepperSpinBox::paintEvent(QPaintEvent *event) {
     QDoubleSpinBox::paintEvent(event);
     QPainter painter(this);
@@ -317,11 +340,7 @@ void PopupItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opt
         painter->drawRoundedRect(row, 4, 4);
     }
     const QColor color = selected ? c.selectionText : c.text;
-    if (index.row() == m_combo->currentIndex()) {
-        painter->setPen(QPen(color, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        const QPointF at(row.left() + 7, row.center().y());
-        painter->drawPolyline(QPolygonF{at + QPointF(0, 0.5), at + QPointF(3, 3.5), at + QPointF(8, -3.5)});
-    }
+    if (index.row() == m_combo->currentIndex()) drawMenuCheck(*painter, QPointF(row.left() + 7, row.center().y()), color);
     painter->setFont(option.font);
     painter->setPen(color);
     painter->drawText(row.adjusted(kPopupTextLeft, 0, -8, 0), Qt::AlignLeft | Qt::AlignVCenter, index.data(Qt::DisplayRole).toString());
@@ -356,9 +375,10 @@ public:
     }
 };
 
-// The ring around a button focused from the keyboard: 3 points of the
-// accent at 35% outside its bezel, as the launcher rings its fields. It
-// sits in the button's parent, under the button, and follows it.
+// The ring around a focused field, or a button or pop-up focused from the
+// keyboard: 3 points of the accent at 35% outside its bezel, as the
+// launcher rings its fields. It sits in the control's parent, under the
+// control, and follows it.
 class FocusHalo final : public QWidget {
 public:
     explicit FocusHalo(QWidget *control) : QWidget(control->parentWidget()), m_control(control) {
@@ -415,7 +435,7 @@ private:
 };
 
 // Gives pop-up buttons their rows, pop-up windows their round corners, and
-// buttons focused from the keyboard their ring, for the whole application.
+// focused controls their ring, for the whole application.
 class EditorControls final : public QObject {
 public:
     using QObject::QObject;
@@ -431,33 +451,41 @@ protected:
                 if (!rows || rows->inherits("QComboMenuDelegate") || rows->inherits("QComboBoxDelegate"))
                     combo->setItemDelegate(new PopupItemDelegate(combo));
                 roundCorners(combo->view()->window());
+                // A pop-up button takes focus from Tab alone, as macOS's do.
+                if (!combo->isEditable() && !ringsOwnFields(combo)) combo->setFocusPolicy(Qt::TabFocus);
             } else if (auto *menu = qobject_cast<QMenu *>(watched)) {
                 roundCorners(menu);
-                markCheckColumn(menu);
+                markColumns(menu);
             }
             break;
         case QEvent::ActionAdded:
         case QEvent::ActionChanged:
         case QEvent::ActionRemoved:
-            if (auto *menu = qobject_cast<QMenu *>(watched)) markCheckColumn(menu);
+            if (auto *menu = qobject_cast<QMenu *>(watched)) markColumns(menu);
             break;
-        case QEvent::FocusIn:
-            if (qobject_cast<QPushButton *>(watched) || qobject_cast<QToolButton *>(watched)) {
-                auto *control = static_cast<QWidget *>(watched);
-                const Qt::FocusReason reason = static_cast<QFocusEvent *>(event)->reason();
-                // Tab (or a shortcut) rings a button, but not the focus a
-                // window hands its first control as it opens; the ring comes
-                // back with its window, or as a menu closes.
-                const bool keyboard = control->window()->testAttribute(Qt::WA_KeyboardFocusChange);
-                const bool returning = control == m_keyboardFocus &&
-                                       (reason == Qt::ActiveWindowFocusReason || reason == Qt::PopupFocusReason);
-                if ((keyboard || returning) && control->parentWidget()) {
-                    m_keyboardFocus = control;
-                    delete m_halo;
-                    m_halo = new FocusHalo(control);
-                }
+        case QEvent::FocusIn: {
+            auto *widget = qobject_cast<QWidget *>(watched);
+            QWidget *field = widget ? typingField(widget) : nullptr;
+            const auto *combo = qobject_cast<QComboBox *>(watched);
+            const bool button = qobject_cast<QPushButton *>(watched) || qobject_cast<QToolButton *>(watched);
+            if (!field && !button && !(combo && !combo->isEditable())) break;
+            QWidget *control = field ? field : widget;
+            if (!button && ringsOwnFields(control)) break;
+            const Qt::FocusReason reason = static_cast<QFocusEvent *>(event)->reason();
+            // A field being typed in is always ringed, as macOS rings it.
+            // Tab (or a shortcut) rings a button or a pop-up, but not the
+            // focus a window hands its first control as it opens; the ring
+            // comes back with its window, or as a menu closes.
+            const bool keyboard = control->window()->testAttribute(Qt::WA_KeyboardFocusChange);
+            const bool returning = control == m_keyboardFocus &&
+                                   (reason == Qt::ActiveWindowFocusReason || reason == Qt::PopupFocusReason);
+            if ((field || keyboard || returning) && control->parentWidget()) {
+                m_keyboardFocus = control;
+                delete m_halo;
+                m_halo = new FocusHalo(control);
             }
             break;
+        }
         case QEvent::FocusOut:
             if (m_halo && watched == m_halo->control()) {
                 const Qt::FocusReason reason = static_cast<QFocusEvent *>(event)->reason();
@@ -485,20 +513,42 @@ private:
         popup->setAttribute(Qt::WA_TranslucentBackground);
     }
 
-    // Whether `menu` shows checks, which Qt sets its rows' text past: the
-    // style sheet then indents those rows less, so text starts 22px in
-    // whether a menu has checks or not, as in macOS.
-    static void markCheckColumn(QMenu *menu) {
+    // Whether `menu` shows checks, and whether any of its commands has a
+    // symbol: Qt sets the rows' text past both, though menus show no
+    // symbols. The style sheet then indents those rows less, so text starts
+    // 22px in whatever a menu holds, as in macOS.
+    static void markColumns(QMenu *menu) {
         bool checks = false;
-        for (const QAction *action : menu->actions())
-            checks = checks || (action->isCheckable() && action->isVisible() && !action->isSeparator());
-        if (menu->property("checkColumn").toBool() == checks) return;
+        bool icons = false;
+        for (const QAction *action : menu->actions()) {
+            if (!action->isVisible() || action->isSeparator()) continue;
+            checks = checks || action->isCheckable();
+            icons = icons || !action->icon().isNull();
+        }
+        if (menu->property("checkColumn").toBool() == checks && menu->property("iconColumn").toBool() == icons) return;
         menu->setProperty("checkColumn", checks);
-        // The style sheet reads the property as it polishes.
+        menu->setProperty("iconColumn", icons);
+        // The style sheet reads the properties as it polishes.
         if (menu->testAttribute(Qt::WA_WState_Polished)) {
             menu->style()->unpolish(menu);
             menu->style()->polish(menu);
         }
+    }
+
+    // The field `widget` types into, which is ringed while it has focus: a
+    // line edit, or a spin box (for its own line edit too). A pop-up's line
+    // edit is no field of its own.
+    static QWidget *typingField(QWidget *widget) {
+        if (qobject_cast<QAbstractSpinBox *>(widget)) return widget;
+        if (!qobject_cast<QLineEdit *>(widget)) return nullptr;
+        if (qobject_cast<QAbstractSpinBox *>(widget->parentWidget())) return widget->parentWidget();
+        return qobject_cast<QComboBox *>(widget->parentWidget()) ? nullptr : widget;
+    }
+
+    // Whether `control` sits in a window that rings its fields and pop-ups
+    // itself (the launcher).
+    static bool ringsOwnFields(const QWidget *control) {
+        return control->window()->property("ringsOwnFields").toBool();
     }
 
     QPointer<QWidget> m_keyboardFocus;
@@ -510,6 +560,11 @@ private:
 void useEditorStyle() {
     static EditorControls *controls = nullptr;
     QApplication::setStyle(new EditorStyle);
+    // Menus show no symbols, as macOS's: a command's symbol belongs to the
+    // toolbar. Qt's cocoa theme would put it, grey, before each row of the
+    // context menus and the menu bar's menus, and leave it dark on the
+    // highlighted row.
+    QCoreApplication::setAttribute(Qt::AA_DontShowIconsInMenus);
     if (controls || !qApp) return;
     controls = new EditorControls(qApp);
     qApp->installEventFilter(controls);

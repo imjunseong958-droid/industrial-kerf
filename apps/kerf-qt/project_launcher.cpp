@@ -705,6 +705,9 @@ ProjectLauncher::ProjectLauncher(const QString &kerfdBinary, QWidget *parent) : 
     setObjectName(QStringLiteral("projectLauncher"));
     setWindowTitle(QStringLiteral("Choose a Project"));
     setAttribute(Qt::WA_StyledBackground);
+    // Its FocusRing rings its fields and pop-up, so the editor's style
+    // leaves them alone (see useEditorStyle).
+    setProperty("ringsOwnFields", true);
     // The system's interface font, not the editor's.
     QFont interfaceFont = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
     interfaceFont.setPixelSize(13);

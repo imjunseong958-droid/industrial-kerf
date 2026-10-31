@@ -1130,17 +1130,17 @@ private slots:
         QSignalSpy selections(&timeline, &TimelineWidget::clipSelected);
         QSignalSpy moves(&timeline, &TimelineWidget::moveRequested);
         QSignalSpy trims(&timeline, &TimelineWidget::trimRequested);
-        QTest::mouseClick(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(kTimelineLabelWidth + 36, kTrackHeight / 2));
+        QTest::mouseClick(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(kTimelineOrigin + 36, kTrackHeight / 2));
         QCOMPARE(seeks.constLast()[0].toDouble(), 0.5);
         const int y = kRulerHeight + kTrackHeight / 2;
-        QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(kTimelineLabelWidth + 144, y));
-        QTest::mouseMove(&timeline, QPoint(kTimelineLabelWidth + 216, y));
-        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(kTimelineLabelWidth + 216, y));
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(kTimelineOrigin + 144, y));
+        QTest::mouseMove(&timeline, QPoint(kTimelineOrigin + 216, y));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(kTimelineOrigin + 216, y));
         QCOMPARE(selections.constLast()[0].toString(), QStringLiteral("clip"));
         QCOMPARE(moves.count(), 1);
         QCOMPARE(moves[0][1].toDouble(), 2.0);
         for (const bool leading : {true, false}) {
-            const int edge = kTimelineLabelWidth + (leading ? 75 : 357);
+            const int edge = kTimelineOrigin + (leading ? 75 : 357);
             QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(edge, y));
             QTest::mouseMove(&timeline, QPoint(edge + 72, y));
             QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(edge + 72, y));
@@ -1255,7 +1255,7 @@ private slots:
         QSignalSpy toggles(&timeline, &TimelineWidget::trackToggleRequested);
         const int y = kRulerHeight + kTrackHeight / 2;
         const auto x = [&timeline](double seconds) {
-            return kTimelineLabelWidth + int(std::lround(seconds * (timeline.width() - kTimelineLabelWidth) / 8.0));
+            return kTimelineOrigin + int(std::lround(seconds * (timeline.width() - kTimelineOrigin) / 8.0));
         };
         timeline.setTool(TimelineTool::Razor);
         QTest::mouseClick(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(x(1.0), y));
@@ -1502,7 +1502,7 @@ private slots:
         timeline.setPlayhead(7.5);
         timeline.resize(timeline.minimumWidth(), 360);
         timeline.show();
-        const auto x = [](double seconds) { return kTimelineLabelWidth + int(std::lround(seconds * 72.0)); };
+        const auto x = [](double seconds) { return kTimelineOrigin + int(std::lround(seconds * 72.0)); };
         // Rows, top down: V3 captions, V2 titles, V1, A1 dialogue, A2 music.
         const int captions = kRulerHeight + kVideoTrackHeight / 2;
         const int titles = captions + kVideoTrackHeight;
@@ -1525,6 +1525,10 @@ private slots:
             QCOMPARE(image.pixelColor(selected.right(), selected.center().y()), theme.clipSelectedRingOuter);
             QCOMPARE(image.pixelColor(selected.right() - 1, selected.center().y()), theme.clipSelectedRing);
             QCOMPARE(image.pixelColor(unselected.left(), unselected.center().y()), theme.clipVideo.border);
+            // The clip the proposal removes is outlined in red to its corners.
+            const QRect removed = timeline.clipBounds(QStringLiteral("v1c"));
+            for (const QPoint &corner : {removed.topLeft(), removed.topRight(), removed.bottomLeft(), removed.bottomRight()})
+                QCOMPARE(image.pixelColor(corner), theme.proposalRemove);
             // A header's stripe is its clips' colour.
             QCOMPARE(image.pixelColor(1, captions), theme.clipCaption.header);
             QCOMPARE(image.pixelColor(1, titles), theme.clipGenerator.header);
@@ -1541,8 +1545,31 @@ private slots:
             QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, drop);
             QVERIFY(std::abs(qGray(dragging.pixel(x(13.0), captions)) - qGray(theme.trackLane.rgb())) > 100);
             QCOMPARE(amberPixels(dragging), 0);
+            // Where it will overwrite v1c (11 s to its new end at 13 s), a
+            // dashed edge inside its selection ring, which stays whole:
+            // white dashes on a dark line, in either appearance.
+            {
+                const int top = selected.top();
+                const int bottom = selected.bottom();
+                int dashes = 0;
+                for (int px = x(11.0) + 4; px <= x(13.0) - 5; ++px) {
+                    QCOMPARE(dragging.pixelColor(px, top), theme.clipSelectedRingOuter);
+                    QCOMPARE(dragging.pixelColor(px, top + 1), theme.clipSelectedRing);
+                    QCOMPARE(dragging.pixelColor(px, bottom - 1), theme.clipSelectedRing);
+                    QCOMPARE(dragging.pixelColor(px, bottom), theme.clipSelectedRingOuter);
+                    dashes += dragging.pixel(px, top + 3) == qRgb(255, 255, 255) ? 1 : 0;
+                }
+                QVERIFY(dashes > 8);
+            }
             QCOMPARE(timeline.grab().toImage().pixelColor(x(13.0), captions), theme.trackLane);
         }
+        // At 00:00:00, where every project opens, the playhead's head shows
+        // whole, clear of the track headers.
+        timeline.setPlayhead(0.0);
+        const QImage start = timeline.grab().toImage();
+        for (int y = 6; y <= 14; ++y)
+            for (int px = kTimelineOrigin - 4; px <= kTimelineOrigin + 4; ++px)
+                QCOMPARE(start.pixelColor(px, y), editorTheme().playhead);
     }
 
     void timelineRevealsAddLaneFromTheHeader() {
@@ -1602,7 +1629,7 @@ private slots:
         // Playback draws the later picture track on top, so it is the upper row.
         QSignalSpy selections(&timeline, &TimelineWidget::clipSelected);
         QTest::mouseClick(&timeline, Qt::LeftButton, Qt::NoModifier,
-                          QPoint(kTimelineLabelWidth + 100, timeline.trackHeaderRect(0).center().y()));
+                          QPoint(kTimelineOrigin + 100, timeline.trackHeaderRect(0).center().y()));
         QCOMPARE(selections.count(), 1);
         QCOMPARE(selections.constLast()[0].toString(), QStringLiteral("title"));
     }
@@ -1635,7 +1662,7 @@ private slots:
         QTest::mouseMove(timeline, timeline->mapFrom(scroll.viewport(), QPoint(60, 60)));
         QVERIFY(timeline->skimLabel().isEmpty());
         QTest::mouseClick(timeline, Qt::LeftButton, Qt::NoModifier,
-                          timeline->mapFrom(scroll.viewport(), QPoint(kTimelineLabelWidth + 72, 10)));
+                          timeline->mapFrom(scroll.viewport(), QPoint(kTimelineOrigin + 72, 10)));
         QVERIFY(!seeks.isEmpty());
         QVERIFY(std::abs(seeks.constLast()[0].toDouble() - 2072.0 / 72.0) < 0.05);
     }
@@ -1682,11 +1709,11 @@ private slots:
         }}}}}}, 8, 24);
         timeline.show();
         QSignalSpy hovers(&timeline, &TimelineWidget::hoverSeekRequested);
-        QTest::mouseMove(&timeline, QPoint(kTimelineLabelWidth + 144, kTrackHeight / 2));
+        QTest::mouseMove(&timeline, QPoint(kTimelineOrigin + 144, kTrackHeight / 2));
         QVERIFY(!hovers.isEmpty());
         QCOMPARE(hovers.constLast()[0].toDouble(), 2.0);
         QCOMPARE(timeline.skimLabel(), QStringLiteral("00:02.00"));
-        QTest::mouseMove(&timeline, QPoint(kTimelineLabelWidth + 36, kTrackHeight / 2));
+        QTest::mouseMove(&timeline, QPoint(kTimelineOrigin + 36, kTrackHeight / 2));
         QCOMPARE(timeline.skimLabel(), QStringLiteral("00:00.50"));
         QCOMPARE(hovers.constLast()[0].toDouble(), 0.5);
         QTest::mouseMove(&timeline, QPoint(20, kTrackHeight / 2));
@@ -1741,9 +1768,9 @@ private slots:
             return clock.value(0).toDouble() * 60.0 + sec.value(0).toDouble() + sec.value(1).toDouble() / 100.0;
         };
         const int y = kRulerHeight + kTrackHeight / 2;
-        QTest::mouseMove(&timeline, QPoint(kTimelineLabelWidth + 160, y));
+        QTest::mouseMove(&timeline, QPoint(kTimelineOrigin + 160, y));
         const double start = seconds(timeline.skimLabel());
-        QTest::mouseMove(&timeline, QPoint(kTimelineLabelWidth + 168, y));
+        QTest::mouseMove(&timeline, QPoint(kTimelineOrigin + 168, y));
         const double next = seconds(timeline.skimLabel());
         QVERIFY(std::abs((next - start) - 0.1) < 0.02);
         const QString screenshot = qEnvironmentVariable("KERF_QT_UI_SCREENSHOT");
@@ -2809,6 +2836,14 @@ private slots:
             // Nothing is ringed: the window handed its first control focus as
             // it opened, which is no keyboard navigation.
             QVERIFY(!window.findChild<QWidget *>(QStringLiteral("focusHalo")));
+            // Fields draw their placeholders in the palette's colour, which
+            // reads at 4.5:1, not in their text colour at half strength (as
+            // Qt's style sheets draw them unless told).
+            for (QWidget *field : std::initializer_list<QWidget *>{window.m_effects->m_search, window.m_chatInput, window.m_cloudToken}) {
+                field->ensurePolished();
+                for (const QPalette::ColorGroup group : {QPalette::Active, QPalette::Inactive})
+                    QCOMPARE(field->palette().color(group, QPalette::PlaceholderText), theme.placeholderText);
+            }
             // Timecodes in the accent sit on the panel accentText is made to read on.
             const auto times = window.findChildren<QLabel *>(QStringLiteral("transportTime"));
             QCOMPARE(times.size(), 2);
@@ -2898,32 +2933,60 @@ private slots:
             {
                 QImage shape;
                 QRect row;
+                QList<QRect> others;
                 bool translucent = false;
+                bool symbols = false;
+                bool iconColumn = false;
                 // Captured while it is open, and closed whatever happens.
                 QTimer::singleShot(0, &window, [&] {
                     auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
                     if (!menu) return;
                     const auto close = qScopeGuard([menu] { menu->close(); });
-                    for (QAction *action : menu->actions())
-                        if (action->isEnabled() && !action->isSeparator()) {
-                            menu->setActiveAction(action);
-                            row = menu->actionGeometry(action);
-                            break;
+                    for (QAction *action : menu->actions()) {
+                        symbols = symbols || !action->icon().isNull();
+                        if (!action->isEnabled() || action->isSeparator()) continue;
+                        if (row.isValid()) {
+                            others << menu->actionGeometry(action);
+                            continue;
                         }
+                        menu->setActiveAction(action);
+                        row = menu->actionGeometry(action);
+                    }
                     translucent = menu->testAttribute(Qt::WA_TranslucentBackground);
+                    iconColumn = menu->property("iconColumn").toBool();
                     shape = menu->grab().toImage();
                 });
                 QTimer::singleShot(2000, &window, [] {
                     if (QWidget *popup = QApplication::activePopupWidget()) popup->close();
                 });
                 emit window.m_timeline->clipMenuRequested(QStringLiteral("v1b"), window.mapToGlobal(QPoint(400, 300)));
-                QVERIFY(!shape.isNull() && row.isValid());
+                QVERIFY(!shape.isNull() && row.isValid() && !others.isEmpty());
                 save(shape, QStringLiteral("menu-%1").arg(name));
                 QVERIFY(translucent);
+                const qreal ratio = shape.devicePixelRatio();
                 QCOMPARE(shape.pixelColor(0, 0).alpha(), 0);
-                QCOMPARE(shape.pixelColor(QPoint(row.left() + 2, row.center().y()) * shape.devicePixelRatio()).rgb(),
-                         theme.menuSelection.rgb());
+                QCOMPARE(shape.pixelColor(QPoint(row.left() + 2, row.center().y()) * ratio).rgb(), theme.menuSelection.rgb());
                 QCOMPARE(amberPixels(shape), 0);
+                // Menus show no symbols, as macOS's, though Split and Delete
+                // have them for the toolbar: each row's first 20px are its
+                // fill, the highlighted row's too, and its text starts 22px
+                // in, as in a menu of commands without symbols.
+                QVERIFY(QCoreApplication::testAttribute(Qt::AA_DontShowIconsInMenus));
+                QVERIFY(symbols && iconColumn);
+                others.prepend(row);
+                for (const QRect &item : std::as_const(others)) {
+                    const QColor fill = item == row ? theme.menuSelection : theme.menu;
+                    for (int y = item.center().y() - 4; y <= item.center().y() + 4; ++y)
+                        for (int x = item.left() + 1; x <= item.left() + 20; ++x)
+                            QCOMPARE(shape.pixelColor(QPoint(x, y) * ratio).rgb(), fill.rgb());
+                    if (item != row)
+                        QVERIFY(highestContrast(shape, QRect(QPoint(item.left() + 21, item.top()) * ratio, QSize(5, item.height()) * ratio),
+                                                fill) >= 3.0);
+                }
+                // Nor do the menu bar's menus, native on macOS.
+                for (QAction *menuAction : window.menuBar()->actions())
+                    if (QMenu *menu = menuAction->menu())
+                        for (QAction *action : menu->actions()) QVERIFY2(!action->isIconVisibleInMenu(), qPrintable(action->text()));
             }
             // A menu with checks (the Window menu's panels) pads its rows by
             // less, so its text starts where a menu's without checks does.
@@ -2937,8 +3000,32 @@ private slots:
                 QVERIFY(panels->property("checkColumn").toBool());
                 const QImage shape = panels->grab().toImage();
                 save(shape, QStringLiteral("menu-checks-%1").arg(name));
+                const qreal ratio = shape.devicePixelRatio();
                 QCOMPARE(shape.pixelColor(0, 0).alpha(), 0);
                 QCOMPARE(amberPixels(shape), 0);
+                // Its checks are the pop-ups' thin check, 7px into the row,
+                // not Fusion's tick at the row's start.
+                QAction *checked = nullptr;
+                QAction *submenu = nullptr;
+                for (QAction *action : panels->actions()) {
+                    if (!checked && action->isChecked()) checked = action;
+                    if (!submenu && action->menu()) submenu = action;
+                }
+                QVERIFY(checked && submenu);
+                const QRect check = panels->actionGeometry(checked);
+                for (int y = check.center().y() - 4; y <= check.center().y() + 4; ++y)
+                    for (int x = check.left(); x <= check.left() + 4; ++x)
+                        QCOMPARE(shape.pixelColor(QPoint(x, y) * ratio).rgb(), theme.menu.rgb());
+                QVERIFY(highestContrast(shape, QRect(QPoint(check.left() + 6, check.center().y() - 5) * ratio, QSize(11, 11) * ratio),
+                                        theme.menu) >= 3.0);
+                // A submenu's chevron is thin and open, not Fusion's filled
+                // triangle: inside its mouth is the row's fill.
+                const QRect arrow = panels->actionGeometry(submenu);
+                for (int y = arrow.center().y() - 1; y <= arrow.center().y() + 1; ++y)
+                    for (int x = arrow.right() - 13; x <= arrow.right() - 12; ++x)
+                        QCOMPARE(shape.pixelColor(QPoint(x, y) * ratio).rgb(), theme.menu.rgb());
+                QVERIFY(highestContrast(shape, QRect(QPoint(arrow.right() - 14, arrow.center().y() - 5) * ratio, QSize(7, 11) * ratio),
+                                        theme.menu) >= 3.0);
                 panels->close();
                 QVERIFY(!window.binMenu(QString())->property("checkColumn").toBool());
             }
@@ -3132,6 +3219,24 @@ private slots:
             QCOMPARE(inspector->m_clipName->mapTo(inspector, inspector->m_clipName->contentsRect().topLeft()).x(),
                      positionLabel->mapTo(inspector, positionLabel->contentsRect().topLeft()).x());
             for (const QFormLayout *form : inspector->findChildren<QFormLayout *>()) QCOMPARE(form->verticalSpacing(), 6);
+            // A check box row is as tall as a field's, so the rows keep a
+            // 28px pitch to the last.
+            int checkRows = 0;
+            for (QCheckBox *check : inspector->findChildren<QCheckBox *>())
+                if (check->objectName().startsWith(QStringLiteral("effectParam_"))) {
+                    QCOMPARE(check->height(), 22);
+                    ++checkRows;
+                }
+            QCOMPARE(checkRows, 1);
+            // The picture shows the whole form: the window grows until the
+            // panel needs no scrolling.
+            QScrollBar *inspectorScroll = nullptr;
+            for (QScrollArea *area : inspector->findChildren<QScrollArea *>())
+                if (area->isVisible()) inspectorScroll = area->verticalScrollBar();
+            for (int grow = 0; inspectorScroll && inspectorScroll->maximum() > 0 && grow < 10; ++grow) {
+                window.resize(window.width(), window.height() + 20);
+                QCoreApplication::processEvents();
+            }
             save(window.m_workspace->panel(QStringLiteral("effectControls"))->grab().toImage(), QStringLiteral("inspector-%1").arg(name));
             window.close();
         }
@@ -3156,10 +3261,11 @@ private slots:
         QCOMPARE(changed.count(), before + 1);
     }
 
-    // Push buttons take focus from Tab alone, as macOS's do, so a click
-    // leaves no accent behind. Tab rings the button in the accent at 35%,
-    // 3px outside its bezel, and the ring moves with the focus.
-    void buttonsShowFocusFromTheKeyboardOnly() {
+    // Push buttons and pop-up buttons take focus from Tab alone, as macOS's
+    // do, so a click leaves no accent behind. Tab rings the control in the
+    // accent at 35%, 3px outside its bezel, and the ring moves with the
+    // focus. A field being typed in is ringed however it got focus.
+    void focusRingsFollowTheKeyboardAndTyping() {
         const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
         for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
             setEditorColorScheme(scheme);
@@ -3169,45 +3275,67 @@ private slots:
             layout->setContentsMargins(12, 12, 12, 12);
             auto *field = new QLineEdit;
             auto *reject = new QPushButton(QStringLiteral("Reject"));
+            auto *choice = new QComboBox;
+            choice->addItems({QStringLiteral("Preview"), QStringLiteral("Full")});
+            auto *seconds = new StepperSpinBox;
             auto *details = new QPushButton(QStringLiteral("Details"));
             layout->addWidget(reject);
             layout->addWidget(field);
+            layout->addWidget(choice);
+            layout->addWidget(seconds);
             layout->addWidget(details);
             dialog.show();
             QVERIFY(QTest::qWaitForWindowActive(&dialog));
             QCOMPARE(reject->focusPolicy(), Qt::TabFocus);
+            QCOMPARE(choice->focusPolicy(), Qt::TabFocus);
             // The focus a window gives its first control as it opens is no
             // keyboard navigation, so that button is not ringed.
             QCOMPARE(QApplication::focusWidget(), reject);
             QVERIFY(!dialog.findChild<QWidget *>(QStringLiteral("focusHalo")));
-            field->setFocus();
-            QTest::mouseClick(reject, Qt::LeftButton);
-            QVERIFY(!reject->hasFocus());
-            QVERIFY(!dialog.findChild<QWidget *>(QStringLiteral("focusHalo")));
-            const auto ringAround = [&](QPushButton *button) {
+            const auto ringAround = [&](QWidget *control) {
                 QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
                 const auto halos = dialog.findChildren<QWidget *>(QStringLiteral("focusHalo"));
                 QCOMPARE(halos.size(), 1);
                 QVERIFY(halos.constFirst()->isVisible());
-                QCOMPARE(halos.constFirst()->geometry(), button->geometry().adjusted(-3, -3, 3, 3));
+                QCOMPARE(halos.constFirst()->geometry(), control->geometry().adjusted(-3, -3, 3, 3));
                 // The ring's middle, beside the bezel, is the accent at 35% on the dialog.
                 const QImage image = dialog.grab().toImage();
-                const QColor ring = image.pixelColor(QPoint(button->x() - 2, button->geometry().center().y()) * image.devicePixelRatio());
+                const QColor ring = image.pixelColor(QPoint(control->x() - 2, control->geometry().center().y()) * image.devicePixelRatio());
                 const QColor expected = mixColor(theme.dialog, theme.accent, theme.focusHalo.alphaF());
                 QVERIFY2(std::abs(ring.red() - expected.red()) <= 3 && std::abs(ring.green() - expected.green()) <= 3 &&
                              std::abs(ring.blue() - expected.blue()) <= 3,
                          qPrintable(ring.name() + QStringLiteral(" for ") + expected.name()));
             };
+            // A click puts the caret in the field, which is ringed.
+            QTest::mouseClick(field, Qt::LeftButton);
+            QVERIFY(field->hasFocus());
+            ringAround(field);
+            // A click on a button takes no focus, so the field keeps it.
+            QTest::mouseClick(reject, Qt::LeftButton);
+            QVERIFY(!reject->hasFocus());
+            ringAround(field);
+            // Tab rings the pop-up, the stepper's field, then the buttons.
             QTest::keyClick(field, Qt::Key_Tab);
+            QVERIFY(choice->hasFocus());
+            ringAround(choice);
+            // The ring alone shows a pop-up's focus: its edge stays the field's.
+            {
+                const QImage image = dialog.grab().toImage();
+                QCOMPARE(image.pixelColor(QPoint(choice->x(), choice->geometry().center().y()) * image.devicePixelRatio()).rgb(),
+                         theme.fieldBorder.rgb());
+            }
+            QTest::keyClick(choice, Qt::Key_Tab);
+            QVERIFY(seconds->hasFocus());
+            ringAround(seconds);
+            QTest::keyClick(seconds, Qt::Key_Tab);
             QVERIFY(details->hasFocus());
             ringAround(details);
             QTest::keyClick(details, Qt::Key_Tab);
             QVERIFY(reject->hasFocus());
             ringAround(reject);
-            // Back to the field: no button is ringed.
+            // Back to the field: the ring moves to it.
             field->setFocus();
-            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-            QVERIFY(!dialog.findChild<QWidget *>(QStringLiteral("focusHalo")));
+            ringAround(field);
         }
     }
 

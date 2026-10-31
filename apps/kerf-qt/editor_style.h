@@ -12,10 +12,10 @@
 namespace kerf {
 
 // Replace each @token in `sheet` with the colour of the theme field it
-// names, @checkMark with the check box's tick, and @popUpChevrons (and its
-// Disabled twin) with a pop-up button's chevrons. (Steppers draw their own:
-// see StepperSpinBox.) An unknown token is left in place, which the tests
-// catch.
+// names, @checkMark with the check box's tick, @popUpChevrons (and its
+// Disabled twin) with a pop-up button's chevrons, and the other images
+// below with their symbols. (Steppers draw their own: see StepperSpinBox.)
+// An unknown token is left in place, which the tests catch.
 inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
     using Field = QColor EditorTheme::*;
     static const QHash<QString, Field> fields{
@@ -58,6 +58,7 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
         {QStringLiteral("fieldBorder"), &EditorTheme::fieldBorder},
         {QStringLiteral("fieldDisabled"), &EditorTheme::fieldDisabled},
         {QStringLiteral("focusRing"), &EditorTheme::focusRing},
+        {QStringLiteral("placeholderText"), &EditorTheme::placeholderText},
         {QStringLiteral("checkFill"), &EditorTheme::checkFill},
         {QStringLiteral("checkBorder"), &EditorTheme::checkBorder},
         {QStringLiteral("button"), &EditorTheme::button},
@@ -118,12 +119,19 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
     qsizetype last = 0;
     for (auto it = token.globalMatch(sheet); it.hasNext();) {
         const QRegularExpressionMatch match = it.next();
-        // Images: the tick, pop-up chevrons in the text colours, and the
-        // dock tabs' symbols in the glyph colours.
+        // Images: the tick, pop-up chevrons, menu checks and submenu
+        // chevrons in the text colours, and the dock tabs' symbols in the
+        // glyph colours.
         using ImagePath = QString (*)(const QColor &);
         static const QHash<QString, std::pair<ImagePath, QColor EditorTheme::*>> images{
             {QStringLiteral("popUpChevrons"), {popUpChevronsImagePath, &EditorTheme::text}},
             {QStringLiteral("popUpChevronsDisabled"), {popUpChevronsImagePath, &EditorTheme::textDisabled}},
+            {QStringLiteral("menuCheck"), {menuCheckImagePath, &EditorTheme::menuText}},
+            {QStringLiteral("menuCheckSelected"), {menuCheckImagePath, &EditorTheme::menuSelectionText}},
+            {QStringLiteral("menuCheckDisabled"), {menuCheckImagePath, &EditorTheme::textDisabled}},
+            {QStringLiteral("menuChevron"), {menuChevronImagePath, &EditorTheme::menuText}},
+            {QStringLiteral("menuChevronSelected"), {menuChevronImagePath, &EditorTheme::menuSelectionText}},
+            {QStringLiteral("menuChevronDisabled"), {menuChevronImagePath, &EditorTheme::textDisabled}},
             {QStringLiteral("closeMark"), {closeMarkImagePath, &EditorTheme::glyph}},
             {QStringLiteral("closeMarkDisabled"), {closeMarkImagePath, &EditorTheme::glyphDisabled}},
             {QStringLiteral("tabsMenuMark"), {tabsMenuImagePath, &EditorTheme::glyph}},
@@ -160,6 +168,9 @@ inline QString editorStyleSheet(const EditorTheme &theme) {
     return themedStyleSheet(QStringLiteral(R"QSS(
 * {
     color: @text;
+    /* Placeholders carry guidance, so they read as text. Without this, Qt
+       draws them in each widget's text colour at half strength. */
+    placeholder-text-color: @placeholderText;
     font-size: 12px;
 }
 
@@ -205,21 +216,34 @@ QMenuBar::item {
 QMenuBar::item:selected { background: @pressed; }
 /* Menus Qt draws (context menus, and every menu off macOS) take macOS's
    shape: 6px corners, clipped by a translucent window, and rounded rows
-   with room for a check. */
+   with room for a check. They show no symbols (see useEditorStyle). */
 QMenu {
     background: @menu;
     border: 1px solid @menuBorder;
     border-radius: 6px;
     padding: 4px;
+    /* Qt still sets a menu's text past its commands' symbols, by their
+       size and 4px more; this leaves the 4px. */
+    icon-size: 0px;
 }
 QMenu::item {
     padding: 3px 18px 3px 22px;
     border-radius: 4px;
 }
-/* A check sits in the rows' first 22px; Qt starts their text past it, so
-   a menu with checks pads its rows by less (useEditorStyle marks it). */
-QMenu::indicator { width: 14px; height: 14px; }
-QMenu[checkColumn="true"]::item { padding-left: 8px; }
+/* Qt starts a row's text past the check column, in a menu with checks, or
+   past the 4px above, in one whose commands have symbols; such menus pad
+   their rows by less (useEditorStyle marks them), so text starts 22px in
+   either way. A check sits where a pop-up's rows draw theirs. */
+QMenu[iconColumn="true"]::item { padding-left: 18px; }
+QMenu[checkColumn="true"]::item { padding-left: 4px; }
+QMenu::indicator { width: 18px; height: 14px; }
+QMenu::indicator:checked { image: @menuCheck; }
+QMenu::indicator:checked:selected { image: @menuCheckSelected; }
+QMenu::indicator:checked:disabled { image: @menuCheckDisabled; }
+/* A submenu's chevron, thin as macOS's, 8px in from the row's end. */
+QMenu::right-arrow { image: @menuChevron; width: 6px; height: 10px; right: 8px; }
+QMenu::right-arrow:selected { image: @menuChevronSelected; }
+QMenu::right-arrow:disabled { image: @menuChevronDisabled; }
 QMenu::separator { height: 1px; background: @menuSeparator; margin: 4px 6px; }
 QMenu::item:selected { background: @menuSelection; color: @menuSelectionText; }
 QMenu::item:disabled { color: @textDisabled; background: transparent; }
@@ -559,12 +583,14 @@ QAbstractSpinBox::up-button { subcontrol-position: top right; }
 QAbstractSpinBox::down-button { subcontrol-position: bottom right; }
 QAbstractSpinBox::up-arrow,
 QAbstractSpinBox::down-arrow { image: none; width: 0; height: 0; border: 0; }
+/* A focused field's edge is the accent, inside the ring useEditorStyle
+   draws around it. A pop-up button takes focus from Tab alone, and shows
+   it by that ring only, as macOS's. */
 QListWidget:focus,
 QTextEdit:focus,
 QPlainTextEdit:focus,
 QLineEdit:focus,
-QDoubleSpinBox:focus,
-QComboBox:focus {
+QDoubleSpinBox:focus {
     border-color: @focusRing;
     background: @field;
 }
