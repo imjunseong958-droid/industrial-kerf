@@ -75,6 +75,16 @@ public:
     QString timecodeText() const;
     // Every control, the bar and the time: what must stay on the picture.
     QRectF controlsBounds() const;
+    // The top of what it shows along the picture's foot (the bar, the time,
+    // and the control row where it is there), with the bar at its hovered
+    // height, so a caption can keep clear of it.
+    double footTop() const;
+    // While suppressed (safe zones are shown), only the bar shows until the
+    // pointer comes over the picture.
+    void setControlsSuppressed(bool suppressed);
+    bool controlsSuppressed() const { return m_suppressed; }
+    // Whether the controls and the time show now, not only the bar.
+    bool controlsShown() const { return !m_suppressed || m_inside; }
 
     void paint(QPainter &painter) const;
     // The viewer's pointer, in its coordinates; true when this took it.
@@ -108,6 +118,7 @@ private:
     std::array<QString, 3> m_tips;
     // Where the pointer is over the picture, and whether it drags the bar.
     bool m_inside = false;
+    bool m_suppressed = false;
     bool m_overBar = false;
     bool m_scrubbing = false;
     bool m_pressedControl = false;

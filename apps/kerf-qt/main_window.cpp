@@ -2117,10 +2117,6 @@ void MainWindow::buildUi() {
         m_timeline->clearSkimmer();
         endHoverSeek();
     });
-    connect(m_viewer, &ViewerWidget::seekRequested, this, [this](double fraction) {
-        if (m_duration <= 0.0) return;
-        queueSeek(fraction * m_duration);
-    });
     connect(m_timeline, &TimelineWidget::clipSelected, this, &MainWindow::selectClip);
     connect(m_timeline, &TimelineWidget::moveRequested, this, &MainWindow::moveClip);
     connect(m_timeline, &TimelineWidget::trimRequested, this, &MainWindow::trimClip);
@@ -2158,6 +2154,8 @@ void MainWindow::buildUi() {
 void MainWindow::syncCanvasPreset(const QSize &size) {
     if (!m_canvasPreset || !size.isValid()) return;
     m_canvasSize = size;
+    // A portrait picture's phone gets a taller row over the timeline.
+    if (m_workspace) m_workspace->fitPictureShape(size.width() < size.height());
     const QSignalBlocker blocker(m_canvasPreset);
     m_updatingCanvasPreset = true;
     const QString key = QStringLiteral("%1x%2").arg(size.width()).arg(size.height());

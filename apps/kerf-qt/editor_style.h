@@ -115,6 +115,8 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
         {QStringLiteral("chatChip"), &EditorTheme::chatChip},
         {QStringLiteral("chatChipHover"), &EditorTheme::chatChipHover},
         {QStringLiteral("chatChipText"), &EditorTheme::chatChipText},
+        {QStringLiteral("chatScrollHandle"), &EditorTheme::chatScrollHandle},
+        {QStringLiteral("chatScrollHandleHover"), &EditorTheme::chatScrollHandleHover},
         {QStringLiteral("pillTonal"), &EditorTheme::pillTonal},
         {QStringLiteral("pillTonalText"), &EditorTheme::pillTonalText},
         {QStringLiteral("glyph"), &EditorTheme::glyph},
@@ -729,6 +731,13 @@ QLabel#chatBody,
 QLabel#proposalSummary { color: @chatText; font-size: 14px; }
 QLabel#chatReplyText { color: @chatText; font-size: 13px; }
 QScrollArea#chatScroll, QWidget#chatContent { background: transparent; border: 0; }
+/* The list's scroll bar shows only while the pointer is over the panel
+   (ChatPanel sets "hovered"), as a comments panel's: a 4px pill. */
+QScrollArea#chatScroll QScrollBar:vertical { width: 8px; background: transparent; margin: 4px 2px; }
+QScrollArea#chatScroll QScrollBar::handle:vertical { background: transparent; border-radius: 2px; margin: 0; min-height: 24px; }
+QScrollArea#chatScroll[hovered="true"] QScrollBar::handle:vertical { background: @chatScrollHandle; }
+QScrollArea#chatScroll[hovered="true"] QScrollBar::handle:vertical:hover,
+QScrollArea#chatScroll[hovered="true"] QScrollBar::handle:vertical:pressed { background: @chatScrollHandleHover; }
 QFrame#scrollEdge { background: transparent; border: 0; }
 QFrame#scrollEdge[scrolled="true"] { background: @divider; }
 QFrame#proposalBox { background: transparent; border: 0; }

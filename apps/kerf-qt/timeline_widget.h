@@ -302,6 +302,8 @@ private:
     int m_dragRow = 0;
     int m_hoverEdge = 0;
     int m_hoverGrip = -1;
+    // The header toggle under the pointer (its row × 2 + its index), or -1.
+    int m_hoverToggle = -1;
     int m_resizeRow = -1;
     int m_resizeAnchor = 0;
     int m_resizeStartHeight = 0;

@@ -158,6 +158,23 @@ QRectF PlayerOverlay::controlsBounds() const {
     return bounds;
 }
 
+double PlayerOverlay::footTop() const {
+    // The bar at its hovered height, so the top holds still under the pointer.
+    double top = m_compact ? m_rect.bottom() - kBarHoverHeight : m_rect.bottom() - kRowHeight - 2.0 - kBarHoverHeight / 2.0;
+    if (controlsShown()) {
+        top = std::min(top, timecodeRect().top());
+        if (!m_compact)
+            for (Control control : kControls) top = std::min(top, controlRect(control).top());
+    }
+    return top;
+}
+
+void PlayerOverlay::setControlsSuppressed(bool suppressed) {
+    if (suppressed == m_suppressed) return;
+    m_suppressed = suppressed;
+    if (m_host) m_host->update();
+}
+
 double PlayerOverlay::fractionAt(double x) const {
     const QRectF bar = barRect();
     return std::clamp((x - bar.left()) / std::max(1.0, bar.width()), 0.0, 1.0);
@@ -205,7 +222,7 @@ void PlayerOverlay::paint(QPainter &p) const {
     foot.setColorAt(std::clamp(1.0 - hold / footHeight, 0.0, 1.0), t.playerShade);
     foot.setColorAt(1, t.playerShade);
     p.fillRect(QRectF(m_rect.left(), m_rect.bottom() - footHeight, m_rect.width(), footHeight), foot);
-    if (m_compact) {
+    if (m_compact && controlsShown()) {
         // A shade at the top for the cluster.
         const double topHeight = kCompactHitSize + 32.0;
         QLinearGradient top(0, m_rect.top(), 0, m_rect.top() + topHeight);
@@ -241,6 +258,10 @@ void PlayerOverlay::paint(QPainter &p) const {
         p.drawText(box, Qt::AlignCenter, tip);
     }
 
+    if (!controlsShown()) {
+        p.restore();
+        return;
+    }
     // The controls, a round wash under the pointer.
     for (Control control : kControls) {
         const QRectF area = controlRect(control);
@@ -274,7 +295,7 @@ bool PlayerOverlay::mousePress(const QPointF &position) {
         return true;
     }
     for (Control control : kControls) {
-        if (!controlRect(control).contains(position)) continue;
+        if (!controlsShown() || !controlRect(control).contains(position)) continue;
         if (controlEnabled(control)) emit controlTriggered(control);
         return true;
     }

@@ -160,7 +160,11 @@ portrait picture they take a short-video player's arrangement: the bar along
 the foot, the buttons at the top left, the time small over the bar. They
 show while paused and while the pointer is over the picture, and fade out
 2.5 seconds after it stops while playing; the keys never depend on them.
-Nothing sits under the picture. The Editing
+As on a video player, a click on the picture plays or pauses (the bar
+seeks), and moving the pointer across the picture skims it from start to
+end, as the bar maps it; the stage around the picture does neither. The
+caption preview rises over the controls while they show, as a player's
+captions do. Nothing sits under the picture. The Editing
 workspace reads as a Short does on YouTube's desktop page: the Program
 monitor takes the top row past the browsers, and in its stage the picture
 card (12-point corners), an action rail and the Kerf Assistant (the chat)
@@ -181,7 +185,11 @@ takes the card's place in the group, the chat level with it. The rail's
 Phone button and Window ▸ Viewer choose Phone · Island (the default), Phone ·
 Punch-Hole or Off (the plain card); its Safe button outlines where a
 vertical-video app's interface usually covers the picture (a top bar, a
-column of actions, a caption band). Both are preferences of this Mac. The
+column of actions, a caption band); while they show, the player's controls
+(all but the bar) wait for the pointer to come over the picture. Both are
+preferences of this Mac. While the picture is portrait, the row over the
+timeline is 60 points taller (never leaving the timeline under 280), so the
+phone is big enough to judge; saved workspaces keep their own sizes. The
 Source monitor is a tab behind the Program monitor; double-clicking media
 brings it forward. The chat stays with the Program monitor: while the
 Source monitor covers it, it counts as closed, so the bar over the timeline

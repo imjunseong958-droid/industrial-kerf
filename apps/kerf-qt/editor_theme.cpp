@@ -187,7 +187,7 @@ EditorTheme makeEditorTheme(bool dark) {
     t.raised = tone(dark, "#faf6ee", "#2a231d");
     t.group = tone(dark, "#ede6d7", "#231d18");
     t.groupBorder = tone(dark, "#ddd3c0", "#3a3029");
-    t.well = tone(dark, "#f8f4ea", "#19140f");
+    t.well = tone(dark, "#f4eee2", "#19140f");
     t.dialog = tone(dark, "#f0e9db", "#1f1a15");
 
     // Lines: warm and low-contrast.
@@ -279,7 +279,7 @@ EditorTheme makeEditorTheme(bool dark) {
     t.assistantBorder = tone(dark, "#cbb6c0", "#584655");
     t.assistantText = tone(dark, "#5e2c65", "#d6b6dc");
     t.assistantHover = tone(dark, "#dacacd", "#42353c");
-    t.chatSurface = tone(dark, "#faf6ee", "#231d18");
+    t.chatSurface = tone(dark, "#f6f1e6", "#231d18");
     t.chatText = t.text;
     t.chatSecondary = t.textSecondary;
     t.chatChip = tone(dark, "#4a341e12", "#ffecd216");
@@ -292,6 +292,9 @@ EditorTheme makeEditorTheme(bool dark) {
     t.chatExpander = t.accentText;
     t.chatComposerRule = tone(dark, "#cdc1ac", "#4a3f36");
     t.chatComposerRuleFocus = t.accent;
+    // The secondary ink at 35%, and 60% under the pointer.
+    t.chatScrollHandle = tone(dark, "#675b4f59", "#a89a8a59");
+    t.chatScrollHandleHover = tone(dark, "#675b4f99", "#a89a8a99");
     t.messageUser = t.chatSurface;
     t.messageUserBorder = t.messageUser;
     t.messageAgent = t.chatSurface;
@@ -328,12 +331,10 @@ EditorTheme makeEditorTheme(bool dark) {
     t.trackHeaderTextDisabled = tone(dark, "#a89c8c", "#75685b");
     t.trackHeaderDetail = tone(dark, "#62564a", "#a3958a");
     t.trackResizeGrip = tone(dark, "#8a7d6c", "#8e8072");
-    t.trackBadge = tone(dark, "#e2d9c8", "#3a3029");
-    t.trackBadgeText = tone(dark, "#2a231d", "#efe6d6");
-    t.trackToggle = tone(dark, "#e2d9c8", "#3a3029");
-    t.trackToggleGlyph = tone(dark, "#5a4e43", "#b5a796");
-    t.trackToggleOn = tone(dark, "#5a4e43", "#b5a796");
-    t.trackToggleOnGlyph = tone(dark, "#fbf6ec", "#1f1a15");
+    t.trackBadgeText = tone(dark, "#675b4f", "#a89a8a");
+    t.trackToggleOn = tone(dark, "#675b4f", "#a89a8a");
+    t.trackToggle = tone(dark, "#675b4f66", "#a89a8a66"); // The same ink at 40%.
+    t.trackToggleHover = tone(dark, "#4a341e17", "#ffecd21c");
     t.trackLane = tone(dark, "#efe8db", "#201a16");
     t.trackLaneAlt = tone(dark, "#ebe4d6", "#231d18");
     t.trackLaneLocked = tone(dark, "#4a341e16", "#ffecd20e");
@@ -402,20 +403,18 @@ EditorTheme makeEditorTheme(bool dark) {
     t.viewerCanvas = hex("#0a0807");
     t.viewerText = hex("#ab9e8e");
     t.viewerTextDim = hex("#958877");
-    t.viewerGlyph = hex("#b8ab9a");
-    t.viewerGlyphRing = hex("#5f5347");
-    t.viewerGlyphFill = hex("#1a1511");
     t.viewerCaption = hex("#0e0b09e1");
     t.viewerCaptionBorder = t.viewerCaption; // No box line around the caption.
     t.viewerCaptionText = hex("#f4ecde");
     t.deviceFrame = hex("#1e1d1f");
     t.deviceEdge = hex("#3a383c");
-    t.deviceShadow = hex("#00000040");
+    t.deviceShadow = hex("#0000002e");
     t.deviceScreen = hex("#000000");
     t.deviceInk = hex("#ffffff");
     t.safeZoneFill = hex("#ffffff1f");
     t.safeZoneLine = hex("#ffffffa6");
     t.safeZoneText = hex("#ffffff");
+    t.safeZoneLabel = hex("#000000a0");
     t.playerInk = hex("#ffffffe6");
     t.playerInkDisabled = hex("#ffffff66");
     t.playerShade = hex("#00000099");
@@ -458,7 +457,7 @@ EditorTheme makeEditorTheme(bool dark) {
     t.onAccentSecondary = readableAlphaOn(t.onAccentSecondary, t.selection, 4.5);
     t.selectionText = readableOn(t.selectionText, t.selection, 4.5);
     t.menuSelectionText = readableOn(t.menuSelectionText, t.menuSelection, 4.5);
-    t.trackToggleOnGlyph = readableOn(t.trackToggleOnGlyph, t.trackToggleOn, 4.5);
+    t.trackBadgeText = readableOn(t.trackBadgeText, t.trackHeader, 4.5);
     // ...the accent as text reads on every surface it is drawn on (the
     // transports' timecodes, the timeline's corner time, the sync chip,
     // cards, fields and dialogs), all light or all dark, so reading on one

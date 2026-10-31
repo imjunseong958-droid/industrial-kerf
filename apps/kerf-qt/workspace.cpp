@@ -35,6 +35,12 @@ constexpr int kBrowserWidth = 340;
 constexpr int kArrangedWidth = 1500;
 constexpr int kTopRowHeight = 500;
 constexpr int kTimelineHeight = 400;
+// While the picture is portrait, the top row takes this much more from the
+// timeline (560 over 340 as arranged), so the phone it shows in is big
+// enough to judge framing and captions; never leaving the timeline less
+// than kMinTimelineHeight.
+constexpr int kPortraitGain = 60;
+constexpr int kMinTimelineHeight = 280;
 
 QString layoutKey(const QString &group, const QString &name) {
     return QStringLiteral("workspace/%1/%2").arg(group, name);
@@ -78,6 +84,10 @@ ads::CDockWidget *Workspace::addPanel(const QString &id, const QString &title, Q
 }
 
 bool Workspace::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == m_watchedRows && event->type() == QEvent::Resize && m_shapePending)
+        QTimer::singleShot(0, this, [this] {
+            if (m_shapePending) fitPictureShape(m_portrait);
+        });
     auto *tab = qobject_cast<ads::CDockWidgetTab *>(watched);
     switch (tab ? event->type() : QEvent::None) {
     case QEvent::Enter:
@@ -133,6 +143,64 @@ void Workspace::arrangeEditing() {
     m_manager->setSplitterSizes(viewer, {browserWidth, kArrangedWidth - handles - browserWidth});
 }
 
+ads::CDockSplitter *Workspace::rowsSplitter() const {
+    // The Editing arrangement's rows: the browsers and viewer over the timeline.
+    ads::CDockWidget *timeline = m_panels.value(QStringLiteral("timeline"));
+    ads::CDockAreaWidget *area = timeline && !timeline->isClosed() ? timeline->dockAreaWidget() : nullptr;
+    ads::CDockSplitter *rows = area ? area->parentSplitter() : nullptr;
+    if (!rows || rows->orientation() != Qt::Vertical || rows->count() != 2 || rows->widget(1) != area) return nullptr;
+    return rows;
+}
+
+void Workspace::shiftRows(int delta) {
+    ads::CDockSplitter *rows = rowsSplitter();
+    if (!rows || delta == 0) return;
+    QList<int> sizes = rows->sizes();
+    sizes[0] += delta;
+    sizes[1] -= delta;
+    rows->setSizes(sizes);
+}
+
+void Workspace::fitPictureShape(bool portrait) {
+    m_portrait = portrait;
+    ads::CDockSplitter *rows = rowsSplitter();
+    if (!rows) {
+        m_shapeGain = 0;
+        m_shapePending = false;
+        return;
+    }
+    const QList<int> sizes = rows->sizes();
+    if (!rows->isVisible() || sizes.at(0) + sizes.at(1) <= 0) {
+        // Not laid out yet (a window not shown): once it is.
+        if (m_watchedRows != rows) {
+            rows->installEventFilter(this);
+            m_watchedRows = rows;
+        }
+        m_shapePending = true;
+        return;
+    }
+    m_shapePending = false;
+    const int gain = portrait ? std::clamp(sizes.at(1) + m_shapeGain - kMinTimelineHeight, 0, kPortraitGain) : 0;
+    if (gain == m_shapeGain) return;
+    shiftRows(gain - m_shapeGain);
+    m_shapeGain = gain;
+}
+
+QByteArray Workspace::saveUnshifted() {
+    // Layouts are kept as arranged for any picture: the portrait gain is
+    // taken back while saving, and given again.
+    shiftRows(-m_shapeGain);
+    const QByteArray state = m_manager->saveState(kLayoutVersion);
+    shiftRows(m_shapeGain);
+    return state;
+}
+
+void Workspace::afterRestore() {
+    letViewerStretch();
+    m_shapeGain = 0;
+    fitPictureShape(m_portrait);
+}
+
 void Workspace::letViewerStretch() {
     ads::CDockWidget *program = m_panels.value(QStringLiteral("program"));
     ads::CDockAreaWidget *area = program ? program->dockAreaWidget() : nullptr;
@@ -172,7 +240,7 @@ bool Workspace::restore(const QByteArray &layout, const QString &name) {
     bool restored = false;
     for (int version = kLayoutVersion; !restored && version >= (own ? kOldestCustomLayoutVersion : kLayoutVersion); --version)
         restored = m_manager->restoreState(layout, version);
-    if (restored) letViewerStretch();
+    if (restored) afterRestore();
     return restored;
 }
 
@@ -189,7 +257,7 @@ void Workspace::activate(const QString &name) {
 
 void Workspace::saveCurrent() {
     QSettings settings;
-    settings.setValue(layoutKey(QStringLiteral("saved"), m_current), m_manager->saveState(kLayoutVersion));
+    settings.setValue(layoutKey(QStringLiteral("saved"), m_current), saveUnshifted());
     settings.remove(layoutKey(QStringLiteral("changes"), m_current));
 }
 
@@ -215,7 +283,7 @@ void Workspace::resetCurrent() {
 void Workspace::persist() {
     QSettings settings;
     settings.setValue(QStringLiteral("workspace/current"), m_current);
-    settings.setValue(layoutKey(QStringLiteral("changes"), m_current), m_manager->saveState(kLayoutVersion));
+    settings.setValue(layoutKey(QStringLiteral("changes"), m_current), saveUnshifted());
 }
 
 } // namespace kerf

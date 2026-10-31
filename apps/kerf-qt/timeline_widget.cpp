@@ -105,16 +105,6 @@ void paintSelectionRing(QPainter &p, const QRectF &rect) {
     frameInside(p, rect.adjusted(1, 1, -1, -1), 2, theme.clipSelectedRing);
 }
 
-// A small rounded fill, for a track header's badge and toggles.
-void fillRounded(QPainter &p, const QRectF &rect, const QColor &color) {
-    p.save();
-    p.setRenderHint(QPainter::Antialiasing, true);
-    p.setPen(Qt::NoPen);
-    p.setBrush(color);
-    p.drawRoundedRect(rect, 4, 4);
-    p.restore();
-}
-
 // The kind a track's header stands for: its first clip's, so a picture
 // track of titles reads as titles, else the track's own.
 ClipKind trackKind(const QJsonObject &track) {
@@ -597,6 +587,15 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent *event) {
             m_hoverGrip = grip;
             update(headerColumnRect());
         }
+        int toggleRow = -1;
+        QString toggleField;
+        const int toggle = grip < 0 && toggleAt(pos, &toggleRow, &toggleField)
+                               ? toggleRow * 2 + (toggleField == QStringLiteral("locked") ? 1 : 0)
+                               : -1;
+        if (toggle != m_hoverToggle) {
+            m_hoverToggle = toggle;
+            update(headerColumnRect());
+        }
         if (grip >= 0) {
             if (m_addLaneVisible) {
                 m_addLaneVisible = false;
@@ -785,6 +784,10 @@ void TimelineWidget::leaveEvent(QEvent *) {
     if (m_scrubbing || m_dragging || m_resizeRow >= 0) return;
     clearHoverClip();
     m_hoverGrip = -1;
+    if (m_hoverToggle >= 0) {
+        m_hoverToggle = -1;
+        update(headerColumnRect());
+    }
     m_addLaneVisible = false;
     m_hoverFrame = -1.0;
     if (m_hasSkimmer) {
@@ -1035,10 +1038,8 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     // the badge and toggles shrinking on rows too short for 16px.
     const bool detailed = layout.height >= kDetailedTrackHeight;
     const int blockTop = headerControlTop(row);
-    // The track number on a rounded fill, in the interface font, as
-    // Logic's track header buttons.
+    // The track number as plain secondary text, no fill under it.
     const QRect badge(left + 10, blockTop, m_badgeWidth, headerControlSize(layout.height));
-    fillRounded(p, badge, theme.trackBadge);
     p.setPen(enabled ? theme.trackBadgeText : theme.trackHeaderTextDisabled);
     drawName(p, badge, badgeFont(), trackRowLabel(row), true);
 
@@ -1063,14 +1064,21 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     nameFont.setPixelSize(11);
     nameFont.setWeight(QFont::Medium);
     p.setFont(nameFont);
-    // Output (or mute) and lock toggles sit after the track number.
+    // Output (or mute) and lock toggles sit after the track number: bare
+    // symbols, the secondary ink when on and faint when off, on a round
+    // wash only under the pointer.
     const auto drawToggle = [&](int index, bool on, const QString &field) {
         const QRect box = headerToggleRect(row, index).translated(left - stickyOrigin().x(), 0);
         p.save();
-        fillRounded(p, box, on ? theme.trackToggleOn : theme.trackToggle);
-        p.setPen(QPen(on ? theme.trackToggleOnGlyph : theme.trackToggleGlyph, 1.2));
-        p.setBrush(Qt::NoBrush);
         p.setRenderHint(QPainter::Antialiasing, true);
+        if (m_hoverToggle == row * 2 + index) {
+            p.setPen(Qt::NoPen);
+            p.setBrush(theme.trackToggleHover);
+            const double radius = std::max(box.width(), box.height()) / 2.0 + 2.0;
+            p.drawEllipse(QRectF(box).center(), radius, radius);
+        }
+        p.setPen(QPen(on ? theme.trackToggleOn : theme.trackToggle, 1.3));
+        p.setBrush(Qt::NoBrush);
         const QPointF c = QRectF(box).center();
         if (field == QStringLiteral("locked")) {
             p.drawArc(QRectF(c.x() - 3, c.y() - 6, 6, 7), 0, 180 * 16);

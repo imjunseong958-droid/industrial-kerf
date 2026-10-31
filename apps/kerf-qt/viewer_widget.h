@@ -53,8 +53,10 @@ public:
         bool device = false;
     };
     static constexpr int kStageMargin = 16;
-    // Above and below a phone: its bezel stands in for the rest of the margin.
-    static constexpr int kDeviceMargin = 4;
+    // Above and below a phone: room for it to breathe and for its shadow,
+    // a little more under it than over it.
+    static constexpr int kDeviceMarginTop = 12;
+    static constexpr int kDeviceMarginBottom = 16;
     static constexpr int kStageGap = 12;
     // Between card, rail and conversation in a narrow stage.
     static constexpr int kNarrowStageGap = 8;
@@ -63,8 +65,8 @@ public:
     static constexpr int kRailWidth = 48;
     // The conversation's width: kept between these (a per-user preference).
     static constexpr int kMinChatWidth = 300;
-    static constexpr int kMaxChatWidth = 420;
-    static constexpr int kDefaultChatWidth = 360;
+    static constexpr int kMaxChatWidth = 480;
+    static constexpr int kDefaultChatWidth = 432;
     // The conversation is never shorter than this where the stage has the
     // room, so its header, a few comments and its composer fit.
     static constexpr int kMinChatHeight = 480;
@@ -90,6 +92,9 @@ public:
     int stageGap() const;
     StageLayout stageLayout() const;
     QRectF videoRect() const;
+    // Where the caption preview sits: near the picture's foot, lifted over
+    // the player's controls while they show, as a video site lifts its
+    // captions, gliding with the controls' fade.
     QRectF captionRect() const;
     PlayerOverlay *overlay() const { return m_overlay; }
 
@@ -105,7 +110,6 @@ public:
 signals:
     void scrubbed(double fraction);
     void scrubEnded();
-    void seekRequested(double fraction);
     void editRequested(const QJsonArray &ops);
     // The conversation's width changed (a drag on its edge).
     void chatWidthChanged(int width);
@@ -128,7 +132,8 @@ private:
     // Place the rail and the conversation where stageLayout() puts them.
     void layoutStage();
     double aspect() const;
-    double fractionAt(int x) const;
+    // Across the picture, as the player's bar is.
+    double fractionAt(double x) const;
     // While a tool is out or the clip has masks, the pointer edits masks
     // instead of scrubbing or seeking.
     bool editsMasks() const;

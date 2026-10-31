@@ -233,6 +233,8 @@ struct EditorTheme {
     QColor chatExpander;          // "2 changes" under Kerf's row, in the accent as text.
     QColor chatComposerRule;      // The composer's underline, and in focus.
     QColor chatComposerRuleFocus;
+    QColor chatScrollHandle;      // The list's scroll bar, shown only while the pointer is over the panel...
+    QColor chatScrollHandleHover; // ...and under the pointer.
     // The round buttons between the picture and the chat.
     QColor railButton;
     QColor railButtonHover;
@@ -265,12 +267,10 @@ struct EditorTheme {
     QColor trackHeaderTextDisabled; // The name of a disabled track.
     QColor trackHeaderDetail;       // The clip count under the name.
     QColor trackResizeGrip;         // The bar shown while a header's lower edge is dragged.
-    QColor trackBadge;              // The V1/A1 badge: a rounded fill, no edge.
-    QColor trackBadgeText;
-    QColor trackToggle;       // Output, mute, and lock toggles when off...
-    QColor trackToggleGlyph;
-    QColor trackToggleOn;     // ...and on: a neutral ink plate, not the accent.
-    QColor trackToggleOnGlyph;
+    QColor trackBadgeText;    // The V1/A1 number: plain secondary text, no fill.
+    QColor trackToggle;       // Output, mute and lock: bare symbols, faint when off...
+    QColor trackToggleOn;     // ...and a neutral ink when on, not the accent...
+    QColor trackToggleHover;  // ...on a round wash only under the pointer.
     QColor trackLane;         // A track's lane.
     QColor trackLaneAlt;      // Every other lane, where alternation is wanted.
     QColor trackLaneLocked;   // The hatch over a locked lane.
@@ -345,9 +345,6 @@ struct EditorTheme {
     QColor viewerCanvas;        // The canvas behind a picture that does not fill it, and when empty.
     QColor viewerText;          // The empty viewer's title...
     QColor viewerTextDim;       // ...and its hint; the Source monitor's message.
-    QColor viewerGlyph;         // The empty viewer's play symbol...
-    QColor viewerGlyphRing;     // ...its ring...
-    QColor viewerGlyphFill;     // ...and the ring's fill.
     QColor viewerCaption;       // The caption box over the picture...
     QColor viewerCaptionBorder; // ...its edge (the box itself: no line around it)...
     QColor viewerCaptionText;
@@ -360,7 +357,8 @@ struct EditorTheme {
     QColor deviceInk;           // The status bar's time, signal and battery.
     QColor safeZoneFill;        // Where a vertical-video app's interface usually covers the picture...
     QColor safeZoneLine;        // ...its outline...
-    QColor safeZoneText;        // ...and its label.
+    QColor safeZoneText;        // ...and its label...
+    QColor safeZoneLabel;       // ...on a small dark chip.
     // The player's controls on the picture: white glyphs and time on a
     // gradient to black, the played part of the bar in the accent.
     QColor playerInk;           // Glyphs and the time, white at 90%.

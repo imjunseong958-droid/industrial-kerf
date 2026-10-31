@@ -82,17 +82,15 @@ void paintDeviceBody(QPainter &p, const DeviceGeometry &device, const EditorThem
     p.save();
     p.setRenderHint(QPainter::Antialiasing);
     p.setPen(Qt::NoPen);
-    // A soft shadow under the phone: layers that grow and fade, 6 points
-    // down, as a 16-point blur would leave.
-    constexpr int kLayers = 8;
-    constexpr double kBlur = 16.0;
-    const QRectF dropped = device.body.translated(0, 6);
+    // A soft shadow round the phone: layers that grow and fade, centred on
+    // it, as a 10-point blur would leave; it stays inside the stage's margin.
+    constexpr int kLayers = 6;
     for (int layer = 0; layer < kLayers; ++layer) {
-        const double spread = kBlur * (1.0 - double(layer) / kLayers) / 2.0;
+        const double spread = kDeviceShadowBlur * (1.0 - double(layer) / kLayers) / 2.0;
         QColor shade = theme.deviceShadow;
         shade.setAlphaF(theme.deviceShadow.alphaF() / kLayers * 1.6);
         p.setBrush(shade);
-        p.drawRoundedRect(dropped.adjusted(-spread, -spread, spread, spread), device.bodyRadius + spread, device.bodyRadius + spread);
+        p.drawRoundedRect(device.body.adjusted(-spread, -spread, spread, spread), device.bodyRadius + spread, device.bodyRadius + spread);
     }
     // The side buttons, a little proud of the body: volume on the left,
     // power on the right.
@@ -197,16 +195,28 @@ void paintSafeZones(QPainter &p, const QRectF &picture, const EditorTheme &theme
         p.setPen(line);
         p.setBrush(Qt::NoBrush);
         p.drawRoundedRect(area.adjusted(0.5, 0.5, -0.5, -0.5), 4, 4);
-        p.setPen(theme.safeZoneText);
-        if (!vertical) {
-            p.drawText(area.adjusted(6, 3, -6, -3), alignment, label);
-            return;
-        }
-        // Up the column, as a narrow one has no room across.
+        // The label on a small dark chip, so it reads over the picture and
+        // the player's bar alike.
+        const QFontMetricsF metrics(font);
+        const QSizeF chip(metrics.horizontalAdvance(label) + 8.0, metrics.height() + 2.0);
         p.save();
-        p.translate(area.center());
-        p.rotate(-90);
-        p.drawText(QRectF(-area.height() / 2.0, -area.width() / 2.0, area.height(), area.width()), Qt::AlignCenter, label);
+        QRectF box;
+        if (vertical) {
+            // Up the column, as a narrow one has no room across.
+            p.translate(area.center());
+            p.rotate(-90);
+            box = QRectF(QPointF(-chip.width() / 2.0, -chip.height() / 2.0), chip);
+        } else {
+            const QRectF inner = area.adjusted(4, 4, -4, -4);
+            const double x = (alignment & Qt::AlignRight) ? inner.right() - chip.width() : inner.left();
+            const double y = (alignment & Qt::AlignTop) ? inner.top() : inner.center().y() - chip.height() / 2.0;
+            box = QRectF(QPointF(x, y), chip);
+        }
+        p.setPen(Qt::NoPen);
+        p.setBrush(theme.safeZoneLabel);
+        p.drawRoundedRect(box, 4, 4);
+        p.setPen(theme.safeZoneText);
+        p.drawText(box, Qt::AlignCenter, label);
         p.restore();
     };
     // Each label clear of the player's controls: the top bar's at its right,

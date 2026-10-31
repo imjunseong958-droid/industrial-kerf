@@ -41,7 +41,7 @@ public:
     int heightForWidth(int width) const override { return arrange(QRect(0, 0, width, 0), false); }
     void setGeometry(const QRect &rect) override;
     QSize sizeHint() const override { return minimumSize(); }
-    // As narrow as its widest chip.
+    // As narrow as anything: chips narrow to the column, never widen it.
     QSize minimumSize() const override;
 
 private:
@@ -77,9 +77,13 @@ private:
 class ChatIconButton final : public QAbstractButton {
     Q_OBJECT
 public:
-    enum class Glyph { Close, More };
+    // Close, the overflow's dots, and the chevrons that page a row of chips.
+    enum class Glyph { Close, More, Back, Forward };
     ChatIconButton(Glyph glyph, int diameter, QWidget *parent = nullptr);
     Glyph glyph() const { return m_glyph; }
+    // A disc of the panel's surface under the symbol at rest, as a chip
+    // bar's paging buttons have, so it reads over the chips it pages.
+    void setFilled(bool filled) { m_filled = filled; update(); }
     QSize sizeHint() const override;
 
 protected:
@@ -90,6 +94,7 @@ protected:
 private:
     Glyph m_glyph;
     int m_diameter;
+    bool m_filled = false;
 };
 
 // "▸ 2 steps": the reply expander under a comment, in Kerf's ink, with a
@@ -229,16 +234,18 @@ public:
     static constexpr int kProposalChangeLines = 3;
     // The most lines the proposal's script and diff show before they scroll.
     static constexpr int kProposalDiffLines = 10;
-    // The fade over the top of the conversation's view while it is scrolled.
-    static constexpr int kScrollFadeHeight = 20;
-    // The fade at either end of the chips' row while it has more that way.
-    static constexpr int kChipFadeWidth = 16;
+    // The fade under the cover over the top of the conversation's view (see
+    // listCover()): short, as it starts where a line does.
+    static constexpr int kScrollFadeHeight = 8;
+    // The fade at either end of the chips' row while it has more that way,
+    // and the round buttons over it that page the row.
+    static constexpr int kChipFadeWidth = 48;
+    static constexpr int kChipPager = 28;
+    static constexpr int kChipPage = 160;
     // The least the conversation's view keeps under an open proposal.
     static constexpr int kMinListHeight = 72;
-    // The most of a comment's foot the view's top edge leaves alone before
-    // the room under the latest scrolls it away (an action row and a line).
-    static constexpr int kOrphanReach = 64;
-    // The blank room under the latest comment.
+    // The blank room under the latest comment, which the view keeps exactly
+    // when it is scrolled to the latest.
     static constexpr int kListBottom = 16;
 
     explicit ChatPanel(QWidget *parent = nullptr);
@@ -277,6 +284,9 @@ public:
     QLabel *statusLabel() const { return m_status; }
     QLabel *activityLabel() const { return m_activity; }
     QWidget *chips() const { return m_chips; }
+    // The round buttons at the chips' row's ends, shown while it has more that way.
+    ChatIconButton *chipsBack() const { return m_chipBack; }
+    ChatIconButton *chipsForward() const { return m_chipForward; }
     QFrame *composer() const { return m_composer; }
     QTextEdit *input() const { return m_input; }
     QComboBox *modelSelect() const { return m_model; }
@@ -284,12 +294,20 @@ public:
     QPushButton *sendButton() const { return m_send; }
     QPushButton *stopButton() const { return m_stop; }
     QFrame *proposal() const { return m_proposal; }
+    // The pinned comment's name line: "Kerf", then the time.
+    QLabel *proposalName() const { return m_proposalName; }
+    QLabel *proposalTime() const { return m_proposalTime; }
     QLabel *proposalSummary() const { return m_proposalSummary; }
     ChatExpander *proposalExpander() const { return m_proposalExpander; }
     QTextEdit *proposalDiff() const { return m_proposalDiff; }
     QPushButton *acceptButton() const { return m_accept; }
     QPushButton *rejectButton() const { return m_reject; }
     QWidget *resizeHandle() const { return m_resizeHandle; }
+    // How far down the view's top the panel's surface covers a comment the
+    // top edge cuts: to the end of the cut line (or of the avatar and name
+    // line, with the first line beside them), so no line shows sliced. 0
+    // while the top edge cuts nothing.
+    int listCover() const;
 
 signals:
     // A drag on the panel's leading edge asks for this width, and its end
@@ -303,6 +321,8 @@ protected:
     void paintEvent(QPaintEvent *) override;
     void resizeEvent(QResizeEvent *) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
+    void enterEvent(QEnterEvent *) override;
+    void leaveEvent(QEvent *) override;
 
 private:
     QWidget *buildHeader();
@@ -312,16 +332,17 @@ private:
     void updateCount();
     void fitInput();
     void fitProposalDiff();
-    // Keep the chips' row's scroll in range and its end fades in place.
+    // Keep the chips' row's scroll in range and its end fades and pagers in place.
     void updateChipRow();
-    // Scrolled to the latest, the view's top edge never leaves a comment's
-    // last few points (its actions, a line's tail) alone under the header:
-    // a little room under the latest scrolls them out of sight.
-    void settleListEnd();
-    // The comment the view's top edge `y` (in the content) cuts, if any,
-    // and the fade over the view's top, shown only while one is cut.
+    void pageChips(int direction);
+    // The comment the view's top edge `y` (in the content) cuts, if any;
+    // where in the content the cover over it ends; and the cover itself,
+    // shown only while a comment is cut.
     QWidget *itemAcross(int y) const;
+    int coverEnd(int y) const;
     void updateScrollFade();
+    // The scroll bar shows only while the pointer is over the panel.
+    void setHovered(bool hovered);
 
     QLabel *m_title = nullptr;
     QLabel *m_count = nullptr;
@@ -341,6 +362,8 @@ private:
     QWidget *m_chips = nullptr;
     QWidget *m_chipFadeLeft = nullptr;
     QWidget *m_chipFadeRight = nullptr;
+    ChatIconButton *m_chipBack = nullptr;
+    ChatIconButton *m_chipForward = nullptr;
     QWidget *m_proposalChanges = nullptr;
     QFrame *m_composer = nullptr;
     QTextEdit *m_input = nullptr;
@@ -350,6 +373,8 @@ private:
     QPushButton *m_send = nullptr;
     QPushButton *m_stop = nullptr;
     QFrame *m_proposal = nullptr;
+    QLabel *m_proposalName = nullptr;
+    QLabel *m_proposalTime = nullptr;
     QLabel *m_proposalSummary = nullptr;
     ChatExpander *m_proposalExpander = nullptr;
     QTextEdit *m_proposalDiff = nullptr;
@@ -359,7 +384,6 @@ private:
     QList<CommentRow *> m_rows;
     QTimer *m_clock = nullptr;
     bool m_follow = true;
-    int m_listPad = 0;
     bool m_busy = false;
     int m_dragFromX = 0;
     int m_dragFromWidth = 0;

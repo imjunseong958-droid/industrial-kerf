@@ -211,8 +211,9 @@ ViewerWidget::StageLayout ViewerWidget::stageLayout() const {
     // A portrait picture shows in a phone, laid out by its body.
     out.device = aspect < 1.0 && m_device != DevicePreview::Off;
     const double frameAspect = out.device ? deviceBodyAspect() : aspect;
-    const int vertical = out.device ? kDeviceMargin : kStageMargin;
-    const QRectF room = QRectF(rect()).adjusted(kStageMargin, vertical, -kStageMargin, -vertical);
+    const int top = out.device ? kDeviceMarginTop : kStageMargin;
+    const int bottom = out.device ? kDeviceMarginBottom : kStageMargin;
+    const QRectF room = QRectF(rect()).adjusted(kStageMargin, top, -kStageMargin, -bottom);
     const int gap = stageGap();
     // The largest card (or phone) of the picture's shape in `width` by `height`.
     const auto fit = [frameAspect](double width, double height) {
@@ -324,12 +325,16 @@ void ViewerWidget::setDevicePreview(DevicePreview preview) {
 void ViewerWidget::setSafeZones(bool shown) {
     if (shown == m_safeZones) return;
     m_safeZones = shown;
+    layoutStage();
     update();
 }
 
 void ViewerWidget::layoutStage() {
     const StageLayout layout = stageLayout();
     m_overlay->setRect(layout.card, portrait());
+    // Safe zones are outlines to read: the controls (all but the bar) keep
+    // off them until the pointer comes over the picture.
+    m_overlay->setControlsSuppressed(m_safeZones && portrait());
     if (m_rail) {
         m_rail->setVisible(!layout.rail.isEmpty());
         if (!layout.rail.isEmpty()) m_rail->setGeometry(layout.rail);
@@ -348,8 +353,12 @@ QRectF ViewerWidget::captionRect() const {
     const double horizontalMargin = std::max(12.0, canvas.width() * 0.08);
     const double bottomMargin = std::max(12.0, canvas.height() * 0.08);
     const double captionHeight = std::clamp(canvas.height() * 0.12, 34.0, 64.0);
-    return QRectF(canvas.left() + horizontalMargin,
-                  canvas.bottom() - bottomMargin - captionHeight,
+    // At rest near the foot; 8 points over the controls while they show,
+    // moving with their fade.
+    const double rest = canvas.bottom() - bottomMargin;
+    const double lifted = std::min(rest, m_overlay->footTop() - 8.0);
+    const double bottom = std::max(canvas.top() + captionHeight, rest + (lifted - rest) * m_overlay->opacity());
+    return QRectF(canvas.left() + horizontalMargin, bottom - captionHeight,
                   std::max(1.0, canvas.width() - horizontalMargin * 2.0), captionHeight);
 }
 
@@ -554,10 +563,16 @@ void ViewerWidget::keyPressEvent(QKeyEvent *event) {
 void ViewerWidget::mousePressEvent(QMouseEvent *event) {
     if (event->button() != Qt::LeftButton) return;
     const QPointF position = event->position();
-    // The player's controls and bar take the pointer first.
-    if (m_maskTool == MaskTool::None && m_dragHandle == -1 && m_overlay->mousePress(position)) return;
+    // The player's controls and bar take the pointer first, unless it is on
+    // a mask's handle, which would be out of reach under them.
+    if (m_maskTool == MaskTool::None && m_dragHandle == -1 && (!editsMasks() || handleAt(position) < 0) &&
+        m_overlay->mousePress(position))
+        return;
     if (!editsMasks()) {
-        emit seekRequested(fractionAt(position.x()));
+        // A click on the picture plays or pauses, as on a video site; the
+        // bar seeks. Elsewhere on the stage, a click does nothing.
+        if (stageLayout().card.contains(position) && m_overlay->controlEnabled(PlayerOverlay::Control::Play))
+            emit m_overlay->controlTriggered(PlayerOverlay::Control::Play);
         return;
     }
     setFocus(Qt::MouseFocusReason);
@@ -627,6 +642,15 @@ void ViewerWidget::mouseMoveEvent(QMouseEvent *event) {
             update();
         }
         updateCursor(position);
+        return;
+    }
+    // Skimming is over the picture only; off it, the picture holds the
+    // playhead's frame again.
+    if (!stageLayout().card.contains(position)) {
+        if (m_skimming) {
+            m_skimming = false;
+            emit scrubEnded();
+        }
         return;
     }
     const double fraction = fractionAt(position.x());
@@ -776,23 +800,18 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
         p.drawImage(topLeft, m_scaled);
         p.restore();
     } else {
-        const QPointF center = canvas.center() - QPointF(0, 22);
-        p.setPen(Qt::NoPen);
-        p.setBrush(theme.viewerGlyphFill);
-        p.drawEllipse(center, 20, 20);
-        p.setPen(theme.viewerGlyphRing);
-        p.setBrush(Qt::NoBrush);
-        p.drawEllipse(center, 20, 20);
-        p.setPen(Qt::NoPen);
-        p.setBrush(theme.viewerGlyph);
-        p.drawPolygon(QPolygonF{center + QPointF(-5, -8), center + QPointF(9, 0), center + QPointF(-5, 8)});
+        // Two quiet lines; the player's own play button is the only one.
+        const QPointF center = canvas.center();
         p.setPen(theme.viewerText);
-        p.drawText(QRectF(canvas.left(), center.y() + 32, canvas.width(), 20), Qt::AlignCenter,
-                   QStringLiteral("Your viewer"));
+        p.drawText(QRectF(canvas.left(), center.y() - 20, canvas.width(), 20), Qt::AlignCenter, QStringLiteral("Your viewer"));
         p.setPen(theme.viewerTextDim);
-        p.drawText(QRectF(canvas.left(), center.y() + 52, canvas.width(), 20), Qt::AlignCenter,
+        p.drawText(QRectF(canvas.left(), center.y(), canvas.width(), 20), Qt::AlignCenter,
                    QStringLiteral("The playhead frame shows here."));
     }
+    // The player's shade and controls under what is edited on the picture:
+    // the caption (lifted over the controls while they show) and the masks'
+    // outlines and handles stay on top, unshaded.
+    m_overlay->paint(p);
     if (!m_caption.isEmpty()) {
         const QRectF caption = captionRect();
         p.setPen(Qt::NoPen);
@@ -806,20 +825,16 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
     }
     paintMasks(p);
     if (layout.device) paintDeviceChrome(p, device, m_device, theme);
-    m_overlay->paint(p);
-    // Over everything on the picture, the controls included: they are what
-    // a platform's interface would cover too.
+    // Over the picture and its bar: they are what a platform's interface
+    // would cover. The rest of the controls keep off them (see layoutStage).
     if (m_safeZones && portrait()) paintSafeZones(p, canvas, theme);
 }
 
-double ViewerWidget::fractionAt(int x) const {
-    // Across the stage left of the rail: the conversation's side is not the picture's.
-    int span = width();
-    if (m_chatOpen && m_panel) {
-        const StageLayout layout = stageLayout();
-        if (!layout.overlay && !layout.rail.isEmpty()) span = layout.rail.left();
-    }
-    return std::clamp(static_cast<double>(x) / std::max(1, span), 0.0, 1.0);
+double ViewerWidget::fractionAt(double x) const {
+    // Across the picture, as the player's bar maps it, so the frame skimmed
+    // is the one the bar's tip names.
+    const QRectF card = stageLayout().card;
+    return std::clamp((x - card.left()) / std::max(1.0, card.width()), 0.0, 1.0);
 }
 
 RegionPicker::RegionPicker(const QImage &frame, const QRectF &region, QWidget *parent)

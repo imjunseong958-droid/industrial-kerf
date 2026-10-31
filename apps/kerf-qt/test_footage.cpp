@@ -172,12 +172,13 @@ QImage fisherClose(const QSize &size) {
     const double pixel = 1.0 / size.height();
     const double deck = 0.46;
     const double coilX = 0.58 * aspect, coilY = 0.74, coilRx = std::min(0.2, 0.36 * aspect), coilRy = 0.095;
-    // Out-of-focus lights on the water behind: soft discs, warm and cool.
-    struct Bokeh { double x, y, r; Rgb color; };
+    // Out-of-focus lights on the water behind: soft discs, warm and cool, of
+    // varied sizes (0.6 to 1.4 times the usual) and brightness.
+    struct Bokeh { double x, y, r, strength; Rgb color; };
     std::vector<Bokeh> lights;
-    for (int i = 0; i < 16; ++i)
-        lights.push_back({hash(i, 1, 41) * aspect, 0.04 + hash(i, 2, 41) * 0.4, 0.02 + hash(i, 3, 41) * 0.045,
-                          hash(i, 4, 41) < 0.65 ? Rgb{0.95, 0.78, 0.55} : Rgb{0.55, 0.72, 0.76}});
+    for (int i = 0; i < 18; ++i)
+        lights.push_back({hash(i, 1, 41) * aspect, 0.04 + hash(i, 2, 41) * 0.4, 0.042 * (0.6 + 0.8 * hash(i, 3, 41)),
+                          0.12 + 0.12 * hash(i, 5, 41), hash(i, 4, 41) < 0.65 ? Rgb{0.95, 0.78, 0.55} : Rgb{0.55, 0.72, 0.76}});
     // The rope's tail, leaving the coil for the bottom right corner.
     const auto tail = [&](double x) { return coilY + 0.05 + 0.5 * std::pow(std::max(0.0, x - coilX) / std::max(aspect - coilX, 0.01), 1.6); };
     // A rope's cross-section shading at `across` (0 to 1 over its width),
@@ -193,15 +194,20 @@ QImage fisherClose(const QSize &size) {
         Rgb c = mix(Rgb{0.48, 0.40, 0.32}, Rgb{0.17, 0.25, 0.27}, smoothstep(0.0, deck, y));
         c = c * (0.85 + 0.3 * fbm(x * 1.5, y * 1.5, 43, 3));
         for (const Bokeh &light : lights) {
+            // Full inside, falling off to nothing over the last 35% of its
+            // radius, a little brighter at the rim, as a lens renders it.
             const double d = std::hypot(x - light.x, y - light.y) / light.r;
-            c = c + light.color * (0.2 * (1.0 - smoothstep(0.8, 1.0, d)) * (0.7 + 0.3 * d));
+            if (d >= 1.0) continue;
+            c = c + light.color * (light.strength * (1.0 - smoothstep(0.65, 1.0, d)) * (0.75 + 0.25 * d));
         }
         // In front: weathered planks running away from us towards a point
         // above the frame, their grain along them, dark seams between.
-        // The deck's far edge lies a degree and a half off level, and melts
-        // into the out-of-focus background over about 8% of the frame.
-        const double horizon = deck + std::tan(1.5 * 3.14159265358979 / 180.0) * (x - 0.5 * aspect);
-        const double edge = smoothstep(horizon - 0.04 - pixel, horizon + 0.04 + pixel, y);
+        // The deck's far edge lies a degree and a half off level, wavers a
+        // little, and melts into the out-of-focus background over 12% of
+        // the frame's height, at any shape of frame.
+        const double horizon = deck + std::tan(1.5 * 3.14159265358979 / 180.0) * (x - 0.5 * aspect) +
+                               0.025 * (fbm(x * 3.0, 7.0, 49, 3) - 0.5);
+        const double edge = smoothstep(horizon - 0.06 - pixel, horizon + 0.06 + pixel, y);
         if (edge > 0.0) {
             const double vx = 0.5 * aspect, vy = deck - 0.9;
             const double along = 1.0 / (y - vy);
@@ -223,9 +229,15 @@ QImage fisherClose(const QSize &size) {
             // tail running off the frame.
             const double rx = (x - coilX) / coilRx, ry = (y - coilY) / coilRy;
             const double angle = std::atan2(ry, rx);
-            const double rho = std::hypot(rx, ry) + (fbm(angle * 2.0 + 4.0, 1.0, 63, 3) - 0.5) * 0.08;
+            // The coil's turns lie unevenly: noise along the spiral pushes
+            // each in and out, so its outline and rings are not a lathe's.
+            const double rho = std::hypot(rx, ry) + (fbm(angle * 2.0 + 4.0, 1.0, 63, 3) - 0.5) * 0.12 +
+                               (noise(angle * 5.0, std::hypot(rx, ry) * 6.0, 65) - 0.5) * 0.05;
+            // Outside it, a soft shadow and a contact shadow where it meets
+            // the boards; inside its middle, only the shade of its turns.
             const double shadow = std::hypot(rx - 0.1, (y - coilY - 0.025) / coilRy);
-            boards = boards * (0.5 + 0.5 * smoothstep(0.8, 1.2, shadow));
+            const double outside = smoothstep(0.9, 0.97, rho);
+            boards = boards * (1.0 - outside * (1.0 - (0.5 + 0.5 * smoothstep(0.8, 1.25, shadow)) * (0.75 + 0.25 * smoothstep(0.92, 1.06, rho))));
             const double tailDistance = std::abs(y - tail(x)) / 0.022;
             if (x > coilX + coilRx * 0.6 && tailDistance < 1.0) {
                 boards = boards * 0.6;
@@ -233,12 +245,18 @@ QImage fisherClose(const QSize &size) {
                              smoothstep(1.0, 0.85, tailDistance));
             }
             if (rho < 1.0 && rho > 0.24) {
+                // The strands' twist wanders along the rope, and each turn is lit a little differently.
                 const double ring = (rho - 0.24) / 0.76 * 4.5;
-                boards = mix(boards, rope(ring - std::floor(ring), angle * 22.0 + ring * 3.0, x, y) *
-                                         (1.05 - 0.25 * ry - 0.1 * rx),
-                             smoothstep(1.0, 0.97, rho));
-            } else if (rho <= 0.24) {
-                boards = boards * 0.4;
+                const int turn = int(std::floor(ring));
+                const double twist = angle * 22.0 + ring * 3.0 + (noise(angle * 3.0, turn * 2.3, 67) - 0.5) * 2.5;
+                const double lit = 0.9 + 0.2 * hash(turn, 0, 69);
+                boards = mix(boards, rope(ring - turn, twist, x, y) * (1.05 - 0.25 * ry - 0.1 * rx) * lit,
+                             smoothstep(1.0, 0.97, rho) * smoothstep(0.24, 0.28, rho));
+            }
+            if (rho <= 0.28) {
+                // The boards in the middle, in the coil's shade, darkest
+                // where they meet its inner turn.
+                boards = boards * (0.85 - 0.3 * smoothstep(0.1, 0.27, rho));
             }
             c = mix(c, boards, edge);
         }

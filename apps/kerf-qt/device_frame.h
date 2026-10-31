@@ -31,10 +31,13 @@ struct DeviceGeometry {
     qreal bezel = 0;
 };
 
-// The phone's proportions: body radius 13% and bezel 3% of the body's
+// The phone's proportions: body radius 13% and bezel 2.5% of the body's
 // width, screen radius the body's less the bezel, the screen 9:19.5.
 constexpr double kDeviceBodyRadius = 0.13;
-constexpr double kDeviceBezel = 0.03;
+constexpr double kDeviceBezel = 0.025;
+// Its shadow on the stage: even all round (no offset), so the stage's edge
+// never cuts it.
+constexpr double kDeviceShadowBlur = 10.0;
 constexpr double kDeviceScreenAspect = 9.0 / 19.5;
 // The side buttons stand this far proud of the body.
 constexpr double kDeviceButtonProud = 2.0;

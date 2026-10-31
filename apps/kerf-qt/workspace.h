@@ -3,6 +3,7 @@
 #include <QByteArray>
 #include <QHash>
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 
@@ -11,6 +12,7 @@ class QWidget;
 namespace ads {
 class CDockManager;
 class CDockWidget;
+class CDockSplitter;
 class CDockWidgetTab;
 } // namespace ads
 
@@ -46,6 +48,11 @@ public:
     void resetCurrent();
     // Keep the current arrangement for the next launch.
     void persist();
+    // While the picture is portrait, the row over the timeline is taller (by
+    // up to 60 points, never leaving the timeline under 280), and back when
+    // it is not. Saved layouts never keep it.
+    void fitPictureShape(bool portrait);
+    int pictureShapeGain() const { return m_shapeGain; }
 
 signals:
     void changed();
@@ -66,12 +73,23 @@ private:
     // closed column beside it, or a wider window. A restored layout has new
     // areas, so this follows every restore.
     void letViewerStretch();
+    // The rows of the Editing arrangement (the timeline under the rest), or
+    // null when the panels are arranged otherwise.
+    ads::CDockSplitter *rowsSplitter() const;
+    void shiftRows(int delta);
+    QByteArray saveUnshifted();
+    void afterRestore();
 
     ads::CDockManager *m_manager = nullptr;
     QString m_baseStyleSheet;
     QHash<QString, ads::CDockWidget *> m_panels;
     QByteArray m_editing;
     QString m_current;
+    bool m_portrait = false;
+    int m_shapeGain = 0;
+    // Waiting for the rows to be laid out before taking the portrait gain.
+    bool m_shapePending = false;
+    QPointer<QWidget> m_watchedRows;
 };
 
 } // namespace kerf
