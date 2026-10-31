@@ -236,21 +236,22 @@ void drawUpDownChevrons(QPainter &painter, const QPointF &mid, const QColor &col
     painter.restore();
 }
 
-QString popUpChevronsImagePath(const QColor &color) {
+namespace {
+// A symbol `draw`n on a `size`-point grid as an image file the style sheet
+// can name (with an @2x twin for Retina screens), written once per `key`
+// per run; empty if it cannot be written.
+QString glyphImagePath(const QString &key, const QSize &size, const std::function<void(QPainter &)> &draw) {
     static QTemporaryDir directory;
     static QHash<QString, QString> written;
     if (!directory.isValid()) return {};
-    const QString key = QStringLiteral("popup-%1").arg(color.name(QColor::HexArgb).mid(1));
     if (const auto found = written.constFind(key); found != written.cend()) return found.value();
-    // The pair, centred in its image.
-    const QSize size(10, 14);
     for (const int scale : {1, 2}) {
         QImage image(size * scale, QImage::Format_ARGB32_Premultiplied);
         image.fill(Qt::transparent);
         QPainter painter(&image);
         painter.setRenderHint(QPainter::Antialiasing);
         painter.scale(scale, scale);
-        drawUpDownChevrons(painter, QPointF(5, 7), color, 3);
+        draw(painter);
         painter.end();
         const QString file = directory.filePath(key + (scale == 1 ? QStringLiteral(".png") : QStringLiteral("@2x.png")));
         if (!image.save(file)) return {};
@@ -258,6 +259,33 @@ QString popUpChevronsImagePath(const QColor &color) {
     const QString path = QDir::fromNativeSeparators(directory.filePath(key + QStringLiteral(".png")));
     written.insert(key, path);
     return path;
+}
+
+QString colorKey(const char *name, const QColor &color) {
+    return QStringLiteral("%1-%2").arg(QLatin1String(name), color.name(QColor::HexArgb).mid(1));
+}
+} // namespace
+
+QString popUpChevronsImagePath(const QColor &color) {
+    // The pair, centred in its image.
+    return glyphImagePath(colorKey("popup", color), QSize(10, 14),
+                          [&color](QPainter &painter) { drawUpDownChevrons(painter, QPointF(5, 7), color, 3); });
+}
+
+QString closeMarkImagePath(const QColor &color) {
+    return glyphImagePath(colorKey("close", color), QSize(12, 12), [&color](QPainter &painter) {
+        // Through pixel centres, so the strokes are solid even at 1x.
+        painter.setPen(QPen(color, 1.4, Qt::SolidLine, Qt::RoundCap));
+        painter.drawLine(QPointF(3.5, 3.5), QPointF(8.5, 8.5));
+        painter.drawLine(QPointF(8.5, 3.5), QPointF(3.5, 8.5));
+    });
+}
+
+QString tabsMenuImagePath(const QColor &color) {
+    return glyphImagePath(colorKey("tabs-menu", color), QSize(12, 12), [&color](QPainter &painter) {
+        painter.setPen(QPen(color, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.drawPolyline(QPolygonF{{3.0, 4.75}, {6.0, 7.75}, {9.0, 4.75}});
+    });
 }
 
 void StepperSpinBox::paintEvent(QPaintEvent *event) {
