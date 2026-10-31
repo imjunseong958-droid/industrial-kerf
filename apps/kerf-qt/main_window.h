@@ -145,6 +145,8 @@ private:
     // Rebuild what caches the theme's colours: symbols drawn in code and the
     // conversation's messages.
     void applyAppearance();
+    // Size Settings to what it shows, up to the screen's height; it scrolls past that.
+    void fitPreferences();
     // Window ▸ Workspaces: the workspaces, and saving or resetting the current one.
     void buildWorkspaceMenu(QMenu *menu);
     void syncCanvasPreset(const QSize &size);
@@ -249,6 +251,10 @@ private:
     QList<QToolButton *> m_transportButtons;
     // Toolbar actions and the symbols drawn for them.
     QList<QPair<QAction *, QString>> m_toolbarGlyphs;
+    // Tool palette actions, whose icons are redrawn when the appearance changes.
+    QList<QAction *> m_toolGlyphs;
+    // Disclosure buttons (Activity, Settings' Advanced), whose chevrons are too.
+    QList<QToolButton *> m_disclosures;
     QToolButton *m_transportPlay = nullptr;
     QLabel *m_transportTime = nullptr;
     QLabel *m_transportDuration = nullptr;
@@ -271,6 +277,7 @@ private:
     QString m_savingPreset;
     // project.kerf changed outside Kerf: load it or keep the editor's version.
     QFrame *m_divergedBanner = nullptr;
+    QLabel *m_divergedGlyph = nullptr;
     QPushButton *m_loadFromDisk = nullptr;
     QPushButton *m_keepEditorVersion = nullptr;
     // The branch and how far it is from its upstream; a click syncs.
@@ -301,6 +308,7 @@ private:
     QPushButton *m_cloudSignIn = nullptr;
     QPushButton *m_cloudSignOut = nullptr;
     QWidget *m_advancedSettings = nullptr;
+    QWidget *m_preferencesContent = nullptr;
     QLabel *m_statusAccount = nullptr;
     // Where the live preview draws: the GPU adapter, or the CPU.
     QLabel *m_statusDevice = nullptr;
@@ -345,6 +353,9 @@ private:
     ViewerWidget *m_viewer = nullptr;
     TimelineWidget *m_timeline = nullptr;
     QTextEdit *m_conversation = nullptr;
+    // The assistant's one scrolling view, and whether it keeps to the latest output.
+    QScrollArea *m_chatScroll = nullptr;
+    bool m_followConversation = true;
     QTextCursor m_agentCursor;
     QLabel *m_chatActivity = nullptr;
     QFrame *m_chatComposer = nullptr;

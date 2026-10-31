@@ -23,7 +23,7 @@ public:
     void setSources(const QJsonArray &sources);
     // A `media_status` event: {missing, pointers, external} media ids.
     void setMediaStatus(const QJsonObject &status);
-    // OFFLINE, NOT DOWNLOADED, EXTERNAL, or empty.
+    // Offline, Not downloaded, External, or empty.
     QString badge(const QString &mediaId) const { return m_badges.value(mediaId); }
 
 signals:

@@ -47,7 +47,7 @@ PresetsPanel::PresetsPanel(QWidget *parent) : QWidget(parent) {
     layout->setSpacing(6);
     auto *header = new QHBoxLayout;
     header->setContentsMargins(2, 0, 0, 0);
-    auto *title = new QLabel(QStringLiteral("SHARED IN presets/"));
+    auto *title = new QLabel(QStringLiteral("Shared in presets/"));
     title->setObjectName(QStringLiteral("presetsTitle"));
     title->setToolTip(QStringLiteral("Presets in the project's presets/ folder travel with its repository"));
     header->addWidget(title);

@@ -171,148 +171,151 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
     t.trackToggleOn = accent;
     t.trackToggleOnGlyph = QColor("#ffffff");
     t.playhead = accent;
-    t.maskOutline = accent.lighter(dark ? 115 : 125);
-    t.maskOutlineIdle = t.maskOutline;
-    t.maskOutlineIdle.setAlpha(170);
-    t.maskFill = t.maskOutline;
-    t.maskFill.setAlpha(35);
-    t.onAssistant = QColor("#ffffff");
 
     if (dark) {
-        t.window = QColor("#0e0e0e");
-        t.chrome = QColor("#141414");
-        t.panel = QColor("#1a1a1a");
-        t.panelTitle = QColor("#1f1f1f");
-        t.panelTitleActive = QColor("#262626");
-        t.raised = QColor("#2a2a2a");
-        t.well = QColor("#161616");
-        t.dialog = QColor("#1c1c1c");
+        // The launcher's dark family: #1e1e1e content, #2c2c2e chrome, and
+        // #3a3a3c hairlines.
+        t.window = QColor("#1c1c1e");
+        t.chrome = QColor("#2c2c2e");
+        t.panel = QColor("#1e1e1e");
+        t.panelTitle = QColor("#252527");
+        // The current tab merges into its panel's body, as in light.
+        t.panelTitleActive = QColor("#1e1e1e");
+        t.raised = QColor("#2c2c2e");
+        t.group = QColor("#262628");
+        t.groupBorder = QColor("#3a3a3c");
+        t.well = QColor("#1e1e1e");
+        t.dialog = QColor("#1e1e1e");
 
-        t.dockSeparator = QColor("#0a0a0a");
-        t.dockSeparatorHover = QColor("#4e4e4e");
-        t.divider = QColor("#0a0a0a");
-        t.borderSubtle = QColor("#2e2e2e");
-        t.border = QColor("#404040");
-        t.borderStrong = QColor("#5a5a5a");
+        t.dockSeparator = QColor("#3a3a3c");
+        t.dockSeparatorHover = QColor("#5e5e62");
+        t.divider = QColor("#3a3a3c");
+        t.borderSubtle = QColor("#333335");
+        t.border = QColor("#48484a");
+        t.borderStrong = QColor("#5e5e62");
 
-        t.text = QColor("#d7d7d7");
-        t.textStrong = QColor("#f2f2f2");
-        t.textSecondary = QColor("#a5a5a5");
-        t.textTertiary = QColor("#7c7c7c");
-        t.textDisabled = QColor("#727272");
+        t.text = QColor("#dcdcdf");
+        t.textStrong = QColor("#f5f5f7");
+        t.textSecondary = QColor("#a5a5a8");
+        t.textTertiary = QColor("#7c7c80");
+        t.textDisabled = QColor("#6e6e73");
+        t.tabInactiveText = QColor("#a5a5a8");
 
-        t.selectionInactive = QColor("#464646");
-        t.selectionInactiveText = QColor("#f2f2f2");
+        t.selectionInactive = QColor("#464649");
+        t.selectionInactiveText = QColor("#f5f5f7");
         t.hover = rgba(255, 255, 255, 20);
         t.pressed = rgba(255, 255, 255, 34);
 
-        t.field = QColor("#2a2a2a");
-        t.fieldBorder = QColor("#444444");
-        t.fieldDisabled = QColor("#232323");
+        t.field = QColor("#2c2c2e");
+        t.fieldBorder = QColor("#48484a");
+        t.fieldDisabled = QColor("#252527");
 
-        t.button = QColor("#3d3d40");
-        t.buttonEdge = QColor("#48484b");
-        t.buttonTop = QColor("#545457");
-        t.buttonBottom = QColor("#333336");
-        t.buttonHover = QColor("#47474a");
-        t.buttonPressed = QColor("#535356");
-        t.buttonText = QColor("#e6e6e6");
-        t.buttonDisabled = QColor("#262628");
-        t.buttonDisabledEdge = QColor("#2e2e30");
-        t.buttonDisabledText = QColor("#6e6e73");
+        // The launcher's bezels.
+        t.button = QColor("#58585b");
+        t.buttonEdge = QColor("#58585b");
+        t.buttonTop = QColor("#6c6c70");
+        t.buttonBottom = QColor("#4e4e51");
+        t.buttonHover = QColor("#626266");
+        t.buttonPressed = QColor("#6c6c70");
+        t.buttonText = QColor("#f5f5f7");
+        t.buttonDisabled = QColor("#3b3b3d");
+        t.buttonDisabledEdge = QColor("#444447");
+        t.buttonDisabledText = QColor("#8a8a8e");
 
-        t.menu = QColor("#242426");
-        t.menuBorder = QColor("#3a3a3c");
-        t.menuText = QColor("#e6e6e6");
+        t.menu = QColor("#2c2c2e");
+        t.menuBorder = QColor("#48484a");
+        t.menuText = QColor("#f5f5f7");
         t.menuSeparator = QColor("#3a3a3c");
 
-        t.tooltip = QColor("#363636");
-        t.tooltipBorder = QColor("#4d4d4d");
-        t.tooltipText = QColor("#e6e6e6");
+        t.tooltip = QColor("#2c2c2e");
+        t.tooltipBorder = QColor("#48484a");
+        t.tooltipText = QColor("#f5f5f7");
 
-        t.scrollTrack = QColor("#101010");
-        t.scrollHandle = QColor("#4f4f4f");
-        t.scrollHandleHover = QColor("#6d6d6d");
+        t.scrollHandle = rgba(255, 255, 255, 77);
+        t.scrollHandleHover = rgba(255, 255, 255, 115);
 
-        t.tabText = QColor("#999999");
-        t.tabSelected = QColor("#2d2d2d");
-        t.tabSelectedBorder = QColor("#424242");
-        t.tabSelectedText = QColor("#f1f1f1");
+        t.tabText = QColor("#a5a5a8");
+        t.tabSelected = QColor("#3a3a3c");
+        t.tabSelectedBorder = QColor("#48484a");
+        t.tabSelectedText = QColor("#f5f5f7");
 
-        t.sliderGroove = QColor("#101010");
-        t.sliderGrooveBorder = QColor("#2c2c2c");
-        t.sliderHandle = QColor("#b3b3b3");
-        t.sliderHandleBorder = QColor("#d6d6d6");
+        t.sliderGroove = QColor("#3a3a3c");
+        t.sliderGrooveBorder = QColor("#48484a");
+        t.sliderHandle = QColor("#e8e8ed");
+        t.sliderHandleBorder = QColor("#8e8e93");
 
-        t.statusBar = QColor("#141414");
-        t.statusText = QColor("#8e8e8e");
-        t.statusDivider = QColor("#262626");
+        t.statusBar = QColor("#2c2c2e");
+        t.statusText = QColor("#98989d");
+        t.statusDivider = QColor("#3a3a3c");
 
         t.error = QColor("#ff6961");
         t.errorSurface = QColor("#3a2426");
         t.errorBorder = QColor("#7d4045");
         t.errorText = QColor("#ffb4ae");
+        // Changed on disk: a neutral bar; only its triangle is orange.
         t.warning = QColor("#ff9f5a");
-        t.warningSurface = QColor("#3a2d23");
-        t.warningBorder = QColor("#7a5235");
-        t.warningText = QColor("#ffc59c");
+        t.warningSurface = QColor("#2c2c2e");
+        t.warningBorder = QColor("#3a3a3c");
+        t.warningText = rgba(235, 235, 245, 204);
+        t.warningTitle = QColor("#f5f5f7");
+        t.warningGlyph = QColor("#ff9f0a");
         t.success = QColor("#30d158");
 
         t.assistant = QColor("#bf5af2");
-        t.assistantStrong = QColor("#9b40d1");
         t.assistantSurface = QColor("#34243d");
         t.assistantBorder = QColor("#64377b");
         t.assistantText = QColor("#dfacf8");
 
-        t.messageUser = QColor("#333333");
-        t.messageUserBorder = QColor("#494949");
-        t.messageAgent = QColor("#262626");
-        t.messageAgentBorder = QColor("#353535");
-        t.messageText = QColor("#e4e4e4");
-        t.messageUserRole = QColor("#bfbfbf");
+        t.messageUser = QColor("#3a3a3c");
+        t.messageUserBorder = QColor("#48484a");
+        t.messageAgent = QColor("#2c2c2e");
+        t.messageAgentBorder = QColor("#3a3a3c");
+        t.messageText = QColor("#e5e5ea");
+        t.messageUserRole = QColor("#bfbfc4");
 
-        t.glyph = QColor("#d7d7d7");
-        t.glyphDisabled = QColor("#727272");
+        t.glyph = QColor("#dcdcdf");
+        t.glyphDisabled = QColor("#6e6e73");
+        t.toolSelected = QColor("#3a3a3c");
 
-        t.timelineBackground = QColor("#121212");
-        t.ruler = QColor("#2a2a2a");
-        t.rulerBottom = QColor("#202020");
-        t.rulerTick = QColor("#666666");
-        t.rulerTickHalf = QColor("#5a5a5a");
-        t.rulerTickMinor = QColor("#474747");
-        t.rulerText = QColor("#b0b0b0");
-        t.rulerCorner = QColor("#1a1a1a");
-        t.trackHeader = QColor("#1f1f1f");
-        t.trackHeaderEdge = QColor("#282828");
-        t.trackHeaderColumn = QColor("#171717");
-        t.trackHeaderText = QColor("#d8d8d8");
-        t.trackHeaderTextDisabled = QColor("#808080");
-        t.trackHeaderDetail = QColor("#7c7c7c");
-        t.trackResizeGrip = QColor("#8a8a8a");
-        t.trackBadge = QColor("#2a2a2a");
-        t.trackBadgeBorder = QColor("#454545");
+        t.timelineBackground = QColor("#1c1c1e");
+        t.ruler = QColor("#2c2c2e");
+        t.rulerBottom = QColor("#29292b");
+        t.rulerTick = QColor("#6e6e73");
+        t.rulerTickHalf = QColor("#5e5e62");
+        t.rulerTickMinor = QColor("#48484a");
+        t.rulerText = QColor("#b0b0b5");
+        t.rulerCorner = QColor("#232325");
+        t.trackHeader = QColor("#2a2a2c");
+        t.trackHeaderEdge = QColor("#333335");
+        t.trackHeaderColumn = QColor("#232325");
+        t.trackHeaderText = QColor("#e5e5ea");
+        t.trackHeaderTextDisabled = QColor("#7c7c80");
+        t.trackHeaderDetail = QColor("#9a9a9a");
+        t.trackResizeGrip = QColor("#8e8e93");
+        t.trackBadge = QColor("#3a3a3c");
         t.trackBadgeText = QColor("#ececec");
-        t.trackToggle = QColor("#2a2a2a");
-        t.trackToggleBorder = QColor("#454545");
-        t.trackToggleGlyph = QColor("#9a9a9a");
-        t.trackLane = QColor("#1c1c1c");
-        t.trackLaneAlt = QColor("#1f1f1f");
+        t.trackToggle = QColor("#3a3a3c");
+        t.trackToggleGlyph = QColor("#a1a1a6");
+        t.trackLane = QColor("#232325");
+        t.trackLaneAlt = QColor("#262628");
         t.trackLaneLocked = rgba(255, 255, 255, 14);
-        t.trackDivider = QColor("#0c0c0c");
-        t.trackBankDivider = QColor("#050505");
-        t.headerPreview = QColor("#0e0e0e");
-        t.headerPreviewBorder = QColor("#0a0a0a");
-        t.addLane = QColor("#1d1d1d");
-        t.addLaneButton = QColor("#2a2a2a");
-        t.addLaneButtonBorder = QColor("#555555");
-        t.addLaneText = QColor("#ededed");
+        t.trackDivider = QColor("#161618");
+        t.trackBankDivider = QColor("#0e0e10");
+        t.headerPreview = QColor("#2c2c2e");
+        t.headerPreviewBorder = QColor("#161618");
+        t.addLane = QColor("#232325");
+        t.addLaneButton = QColor("#3a3a3c");
+        t.addLaneButtonBorder = QColor("#48484a");
+        t.addLaneText = QColor("#f5f5f7");
 
         t.clipVideo = clipStyle("#1b2a3c", "#325985", "#0b1622", "#f5f5f7", "#95bae4");
         t.clipAudio = clipStyle("#17362f", "#246b5d", "#0a1f1b", "#f5f5f7", "#79d8c5");
         t.clipMusic = clipStyle("#1a321d", "#2f6a37", "#0c1d0e", "#f5f5f7", "#81cf8c");
         t.clipGenerator = clipStyle("#391d2c", "#863761", "#210d18", "#f5f5f7", "#e9a5c9");
-        t.clipCaption = clipStyle("#2f2d18", "#69632b", "#1d1b0c", "#f5f5f7", "#e0d785");
+        // Captions are a neutral role, not gold.
+        t.clipCaption = clipStyle("#2e2e30", "#6e6e73", "#1c1c1e", "#f5f5f7", "#d1d1d6");
         t.clipSelectedRing = QColor("#ffffff");
+        t.clipSelectedRingOuter = QColor("#000000");
         t.clipTrim = QColor("#ffffff");
         t.clipHighlight = rgba(255, 255, 255, 40);
         t.clipFxBadge = rgba(0, 0, 0, 110);
@@ -320,14 +323,14 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.filmstripSeam = rgba(0, 0, 0, 120);
         t.waveCenter = rgba(0, 0, 0, 70);
         t.playheadHalo = rgba(0, 0, 0, 110);
-        t.playheadIdle = QColor("#6a6a6a");
+        t.playheadIdle = QColor("#6e6e73");
         t.skimmer = rgba(240, 240, 240, 215);
-        t.skimmerText = QColor("#f4f4f4");
-        t.scrubTrack = QColor("#262626");
+        t.skimmerText = QColor("#f5f5f7");
+        t.scrubTrack = QColor("#3a3a3c");
         t.snapLine = rgba(255, 255, 255, 220);
-        t.readout = rgba(10, 10, 10, 235);
-        t.readoutBorder = QColor("#4a4a4a");
-        t.readoutText = QColor("#f2f2f2");
+        t.readout = rgba(28, 28, 30, 240);
+        t.readoutBorder = QColor("#48484a");
+        t.readoutText = QColor("#f5f5f7");
 
         t.markerRed = QColor("#e5534b");
         t.markerOrange = QColor("#e8913a");
@@ -342,14 +345,16 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.proposalRemove = QColor("#e86060");
         t.proposalRemoveHatch = rgba(232, 96, 96, 150);
 
-        t.thumbnail = QColor("#0e0e0e");
-        t.thumbnailText = QColor("#6f6f6f");
+        t.thumbnail = QColor("#161618");
+        t.tileEmpty = QColor("#2a2a2e");
+        t.tileEmptyBorder = QColor("#3a3a3e");
+        t.tileEmptyText = QColor("#a1a1a6");
         t.cardPlaceholder = QColor("#2a2a2e");
-        t.cardPlaceholderText = QColor("#8a8a92");
+        t.cardPlaceholderText = QColor("#a1a1a6");
         t.badgeError = QColor("#5a262c");
         t.badgeErrorText = QColor("#f3b9be");
-        t.badgeNeutral = QColor("#2e2e2e");
-        t.badgeNeutralText = QColor("#cfcfcf");
+        t.badgeNeutral = rgba(0, 0, 0, 150);
+        t.badgeNeutralText = QColor("#ffffff");
     } else {
         t.window = QColor("#ececec");
         t.chrome = QColor("#f5f5f5");
@@ -357,6 +362,8 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.panelTitle = QColor("#e8e8ea");
         t.panelTitleActive = QColor("#f6f6f6");
         t.raised = QColor("#ffffff");
+        t.group = rgba(0, 0, 0, 8);
+        t.groupBorder = rgba(0, 0, 0, 20);
         t.well = QColor("#ffffff");
         t.dialog = QColor("#ececec");
 
@@ -372,6 +379,7 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.textSecondary = QColor("#6e6e73");
         t.textTertiary = QColor("#8e8e93");
         t.textDisabled = QColor("#a5a5aa");
+        t.tabInactiveText = QColor("#5f5f64");
 
         t.selectionInactive = QColor("#dcdcdf");
         t.selectionInactiveText = QColor("#1d1d1f");
@@ -402,9 +410,8 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.tooltipBorder = QColor("#c9c9ce");
         t.tooltipText = QColor("#1d1d1f");
 
-        t.scrollTrack = QColor("#f0f0f2");
-        t.scrollHandle = QColor("#c1c1c5");
-        t.scrollHandleHover = QColor("#a1a1a6");
+        t.scrollHandle = rgba(0, 0, 0, 77);
+        t.scrollHandleHover = rgba(0, 0, 0, 115);
 
         t.tabText = QColor("#6e6e73");
         t.tabSelected = QColor("#ffffff");
@@ -425,13 +432,14 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.errorBorder = QColor("#f3b7bd");
         t.errorText = QColor("#a1000f");
         t.warning = QColor("#c93400");
-        t.warningSurface = QColor("#faede8");
-        t.warningBorder = QColor("#eab29e");
-        t.warningText = QColor("#b52f00");
+        t.warningSurface = QColor("#fff6e5");
+        t.warningBorder = QColor("#f2d9ab");
+        t.warningText = QColor("#1d1d1f");
+        t.warningTitle = QColor("#1d1d1f");
+        t.warningGlyph = QColor("#ff9500");
         t.success = QColor("#1e7b34");
 
         t.assistant = QColor("#af52de");
-        t.assistantStrong = QColor("#9440c2");
         t.assistantSurface = QColor("#f7eefc");
         t.assistantBorder = QColor("#ddb6f1");
         t.assistantText = QColor("#7a399b");
@@ -445,6 +453,7 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
 
         t.glyph = QColor("#3a3a3c");
         t.glyphDisabled = QColor("#a5a5aa");
+        t.toolSelected = QColor("#e5e5ea");
 
         t.timelineBackground = QColor("#e6e6e8");
         t.ruler = QColor("#fbfbfb");
@@ -459,14 +468,12 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.trackHeaderColumn = QColor("#efeff1");
         t.trackHeaderText = QColor("#1d1d1f");
         t.trackHeaderTextDisabled = QColor("#a5a5aa");
-        t.trackHeaderDetail = QColor("#8e8e93");
+        t.trackHeaderDetail = QColor("#6e6e73");
         t.trackResizeGrip = QColor("#8e8e93");
-        t.trackBadge = QColor("#ffffff");
-        t.trackBadgeBorder = QColor("#c9c9ce");
+        t.trackBadge = QColor("#e3e3e6");
         t.trackBadgeText = QColor("#1d1d1f");
-        t.trackToggle = QColor("#ffffff");
-        t.trackToggleBorder = QColor("#c9c9ce");
-        t.trackToggleGlyph = QColor("#6e6e73");
+        t.trackToggle = QColor("#e3e3e6");
+        t.trackToggleGlyph = QColor("#636366");
         t.trackLane = QColor("#f4f4f6");
         t.trackLaneAlt = QColor("#efeff1");
         t.trackLaneLocked = rgba(0, 0, 0, 20);
@@ -483,8 +490,9 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.clipAudio = clipStyle("#c5ede5", "#1c7865", "#145749", "#ffffff", "#186d5c");
         t.clipMusic = clipStyle("#c9e9cd", "#2d7637", "#205527", "#ffffff", "#246b2d");
         t.clipGenerator = clipStyle("#f5d1e4", "#ae2970", "#841f55", "#ffffff", "#992462");
-        t.clipCaption = clipStyle("#f8f3c8", "#e6d63f", "#a3961d", "#1d1d1f", "#807509");
-        t.clipSelectedRing = QColor("#1d1d1f");
+        t.clipCaption = clipStyle("#f2f2f4", "#aeaeb2", "#8e8e93", "#1d1d1f", "#636366");
+        t.clipSelectedRing = QColor("#ffffff");
+        t.clipSelectedRingOuter = QColor("#1d1d1f");
         t.clipTrim = QColor("#1d1d1f");
         t.clipHighlight = rgba(255, 255, 255, 90);
         t.clipFxBadge = rgba(0, 0, 0, 90);
@@ -515,9 +523,11 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
         t.proposalRemoveHatch = rgba(215, 0, 21, 110);
 
         t.thumbnail = QColor("#e3e3e6");
-        t.thumbnailText = QColor("#8e8e93");
+        t.tileEmpty = QColor("#e3e3e6");
+        t.tileEmptyBorder = QColor("#e3e3e6");
+        t.tileEmptyText = QColor("#5c5c61");
         t.cardPlaceholder = QColor("#ececee");
-        t.cardPlaceholderText = QColor("#8e8e93");
+        t.cardPlaceholderText = QColor("#5c5c61");
         t.badgeError = QColor("#d70015");
         t.badgeErrorText = QColor("#ffffff");
         t.badgeNeutral = rgba(0, 0, 0, 150);
@@ -529,7 +539,8 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
     t.accentTint = mixColor(t.panel, accent, dark ? 0.26 : 0.16);
     t.textSelection = mixColor(t.field, accent, dark ? 0.45 : 0.28);
     t.inOutRange = mixColor(t.scrubTrack, accent, dark ? 0.45 : 0.35);
-    t.badgeInfo = dark ? mixColor(QColor("#141414"), accent, 0.4) : accent;
+    // White on the badge at 4.5:1: a deepened accent in light.
+    t.badgeInfo = dark ? mixColor(QColor("#141414"), accent, 0.4) : readableOn(accent, Qt::white, 4.5);
     t.badgeInfoText = dark ? readableOn(accent.lighter(130), t.badgeInfo, 4.5) : QColor("#ffffff");
     t.proposalAdd = t.assistant;
     t.proposalAddFill = t.assistant;
@@ -539,21 +550,29 @@ EditorTheme makeEditorTheme(bool dark, const QColor &systemAccentColor) {
     t.proposalChangeFill.setAlpha(dark ? 36 : 30);
     t.audioTile = t.clipAudio.fill;
     t.audioTileGlyph = t.clipAudio.wave;
+    t.dragShadow = rgba(0, 0, 0, 89);
 
     // The viewer's field is the same in both appearances.
     t.viewerSurround = QColor("#1c1c1c");
     t.viewerCanvas = QColor("#050505");
     t.viewerText = QColor("#a0a0a0");
-    t.viewerTextDim = QColor("#747474");
+    t.viewerTextDim = QColor("#8a8a8a");
     t.viewerGlyph = QColor("#b1b1b1");
     t.viewerGlyphRing = QColor("#626262");
     t.viewerGlyphFill = QColor("#181818");
     t.viewerCaption = rgba(15, 15, 15, 225);
     t.viewerCaptionBorder = QColor("#676767");
     t.viewerCaptionText = QColor("#eeeeee");
-    t.maskText = QColor("#ffffff");
-    t.maskHandleFill = QColor("#141414");
+    // Masks: white over a dark rule reads on any picture, blue ones included.
+    t.maskOutline = QColor("#ffffff");
+    t.maskOutlineIdle = rgba(255, 255, 255, 179);
     t.maskShadow = rgba(0, 0, 0, 140);
+    t.maskFill = rgba(255, 255, 255, 30);
+    t.maskHandleFill = accent;
+    t.maskHandleBorder = QColor("#ffffff");
+    t.maskTag = rgba(0, 0, 0, 153);
+    t.maskTagSelected = t.selection;
+    t.maskText = QColor("#ffffff");
     return t;
 }
 

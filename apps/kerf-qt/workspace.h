@@ -11,6 +11,7 @@ class QWidget;
 namespace ads {
 class CDockManager;
 class CDockWidget;
+class CDockWidgetTab;
 } // namespace ads
 
 namespace kerf {
@@ -49,7 +50,12 @@ public:
 signals:
     void changed();
 
+protected:
+    // Shows a tab's close button while the pointer is over the tab.
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private:
+    void showCloseButton(ads::CDockWidgetTab *tab, bool shown);
     void arrangeEditing();
     QByteArray savedLayout(const QString &name) const;
     bool restore(const QByteArray &layout);

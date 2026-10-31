@@ -17,6 +17,29 @@ namespace kerf {
 
 namespace {
 
+// A clip's name bar, where its name and FX badge sit (the whole clip on
+// short rows).
+constexpr qreal kClipHeaderHeight = 13.0;
+qreal clipHeaderHeight(const QRectF &clip) { return clip.height() >= 26.0 ? kClipHeaderHeight : clip.height(); }
+
+// The selected clip's ring: a 2px light line inside a 1px dark one, which
+// reads on every clip hue and on both lane colours.
+void paintSelectionRing(QPainter &p, const QRectF &rect) {
+    const EditorTheme &theme = editorTheme();
+    frameInside(p, rect, 1, theme.clipSelectedRingOuter);
+    frameInside(p, rect.adjusted(1, 1, -1, -1), 2, theme.clipSelectedRing);
+}
+
+// A small rounded fill, for a track header's badge and toggles.
+void fillRounded(QPainter &p, const QRectF &rect, const QColor &color) {
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(Qt::NoPen);
+    p.setBrush(color);
+    p.drawRoundedRect(rect, 4, 4);
+    p.restore();
+}
+
 // The kind a track's header stands for: its first clip's, so a picture
 // track of titles reads as titles, else the track's own.
 ClipKind trackKind(const QJsonObject &track) {
@@ -503,9 +526,26 @@ void TimelineWidget::paintLane(QPainter &p, const QRect &visible, int row, const
     p.save();
     p.setClipRect(lane.adjusted(0, 0, 0, 1).intersected(visible));
     if (!track.value(QStringLiteral("enabled")).toBool(true)) p.setOpacity(0.4);
-    for (const QJsonValue &value : track.value(QStringLiteral("clips")).toArray())
-        paintClip(p, visible, row, value.toObject(), track, layout.audio);
+    // The clip being dragged goes over its neighbours, after them.
+    const QJsonArray clips = track.value(QStringLiteral("clips")).toArray();
+    QJsonObject dragged;
+    for (const QJsonValue &value : clips) {
+        const QJsonObject clip = value.toObject();
+        if (m_dragging && clip.value(QStringLiteral("id")).toString() == m_dragClipId) dragged = clip;
+        else paintClip(p, visible, row, clip, track, layout.audio);
+    }
     if (!m_proposal.isEmpty()) paintProposal(p, row, track);
+    // The selection ring goes over the proposal's marks, so one selected
+    // clip never reads as two.
+    for (const QJsonValue &value : clips) {
+        const QJsonObject clip = value.toObject();
+        const QString id = clip.value(QStringLiteral("id")).toString();
+        if (id != m_selectedClip || (m_dragging && id == m_dragClipId)) continue;
+        const QRectF rect = clipRect(row, clip.value(QStringLiteral("timelineStart")).toDouble(),
+                                     clip.value(QStringLiteral("duration")).toDouble());
+        if (rect.intersects(visible)) paintSelectionRing(p, rect);
+    }
+    if (!dragged.isEmpty()) paintDraggedClip(p, visible, row, dragged, track, layout.audio);
     p.restore();
 
     p.fillRect(lane.left(), layout.bottom() - 1, lane.width(), 1, theme.trackDivider);
@@ -554,14 +594,14 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     const bool detailed = layout.height >= 40;
     const int blockTop = detailed ? layout.top + (header.height() - 31) / 2
                                   : layout.top + (header.height() - 16) / 2;
-    QFont codeFont(QStringLiteral("Menlo"));
-    codeFont.setStyleHint(QFont::Monospace);
-    codeFont.setPixelSize(10);
-    codeFont.setWeight(QFont::Bold);
+    // The track number on a rounded fill, in the interface font, as
+    // Logic's track header buttons.
+    QFont badgeFont = font();
+    badgeFont.setPixelSize(10);
+    badgeFont.setWeight(QFont::DemiBold);
     const QRect badge(left + 10, blockTop, 22, 16);
-    p.fillRect(badge, theme.trackBadge);
-    frameInside(p, badge, 1, theme.trackBadgeBorder);
-    p.setFont(codeFont);
+    fillRounded(p, badge, theme.trackBadge);
+    p.setFont(badgeFont);
     p.setPen(enabled ? theme.trackBadgeText : theme.trackHeaderTextDisabled);
     p.drawText(badge, Qt::AlignCenter, trackRowLabel(row));
 
@@ -590,8 +630,7 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     const auto drawToggle = [&](int index, bool on, const QString &field) {
         const QRect box = headerToggleRect(row, index).translated(left - stickyOrigin().x(), 0);
         p.save();
-        p.fillRect(box, on ? theme.trackToggleOn : theme.trackToggle);
-        frameInside(p, box, 1, on ? theme.trackToggleOn : theme.trackToggleBorder);
+        fillRounded(p, box, on ? theme.trackToggleOn : theme.trackToggle);
         p.setPen(QPen(on ? theme.trackToggleOnGlyph : theme.trackToggleGlyph, 1.2));
         p.setBrush(Qt::NoBrush);
         p.setRenderHint(QPainter::Antialiasing, true);
@@ -600,9 +639,9 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
             p.drawArc(QRectF(c.x() - 3, c.y() - 6, 6, 7), 0, 180 * 16);
             p.drawRect(QRectF(c.x() - 4, c.y() - 2, 8, 6));
         } else if (field == QStringLiteral("muted")) {
-            QFont mute(QStringLiteral("Menlo"));
-            mute.setPixelSize(9);
-            mute.setWeight(QFont::Bold);
+            QFont mute = font();
+            mute.setPixelSize(10);
+            mute.setWeight(QFont::DemiBold);
             p.setFont(mute);
             p.drawText(box, Qt::AlignCenter, QStringLiteral("M"));
         } else {
@@ -691,9 +730,15 @@ void TimelineWidget::paintProposal(QPainter &p, int row, const QJsonObject &trac
             continue;
         }
         current.remove(clipId);
-        // Clips the proposal adds, and clips it changes.
-        const QRectF rect = clipRect(row, clip.value(QStringLiteral("timelineStart")).toDouble(),
-                                     clip.value(QStringLiteral("duration")).toDouble()).adjusted(1, 1, -1, -1);
+        // Clips the proposal adds, and clips it changes. A change marks the
+        // body under the clip's name bar, inside the selection ring, so the
+        // name and the ring both stay readable.
+        const QRectF extent = clipRect(row, clip.value(QStringLiteral("timelineStart")).toDouble(),
+                                       clip.value(QStringLiteral("duration")).toDouble());
+        const bool body = !added && clipHeaderHeight(extent) < extent.height();
+        const QRectF rect = added ? extent.adjusted(1, 1, -1, -1)
+                            : body ? extent.adjusted(3, clipHeaderHeight(extent), -3, -3)
+                                   : extent.adjusted(3, 3, -3, -3);
         p.fillRect(rect, added ? theme.proposalAddFill : theme.proposalChangeFill);
         p.setPen(QPen(added ? theme.proposalAdd : theme.proposalChange, 1.5, Qt::DashLine));
         p.setBrush(Qt::NoBrush);
@@ -703,7 +748,9 @@ void TimelineWidget::paintProposal(QPainter &p, int row, const QJsonObject &trac
     for (auto it = current.cbegin(); it != current.cend(); ++it) {
         const QRectF rect = clipRect(row, it.value().value(QStringLiteral("timelineStart")).toDouble(),
                                      it.value().value(QStringLiteral("duration")).toDouble());
-        p.fillRect(rect, QBrush(theme.proposalRemoveHatch, Qt::BDiagPattern));
+        // Under the name bar only, so the clip's name stays readable.
+        const QRectF body = rect.adjusted(0, clipHeaderHeight(rect), 0, 0);
+        if (body.height() > 0.0) p.fillRect(body, QBrush(theme.proposalRemoveHatch, Qt::BDiagPattern));
         p.setPen(QPen(theme.proposalRemove, 1.5));
         p.drawRect(rect.adjusted(1, 1, -1, -1));
     }
@@ -800,7 +847,7 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
     // the name bar itself stays put, so its label keeps its contrast.
     const QColor fill = mixColor(style.fill, style.header, selected ? 0.18 : hovered ? 0.1 : 0.0);
     // Short rows show only the name bar, as a mini track does.
-    const qreal bandHeight = rect.height() >= 26.0 ? 13.0 : rect.height();
+    const qreal bandHeight = clipHeaderHeight(rect);
     const QRectF band(rect.left(), rect.top(), rect.width(), bandHeight);
     const QRectF body(rect.left(), band.bottom(), rect.width(), rect.height() - bandHeight);
 
@@ -852,8 +899,7 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
         const bool effected = !clip.value(QStringLiteral("effects")).toArray().isEmpty() ||
                               !clip.value(QStringLiteral("props")).toObject().isEmpty();
         if (effected && rect.width() > 64.0) {
-            QFont badgeFont(QStringLiteral("Menlo"));
-            badgeFont.setStyleHint(QFont::Monospace);
+            QFont badgeFont = font();
             badgeFont.setPixelSize(8);
             badgeFont.setWeight(QFont::Bold);
             const QRectF fx(textRight - 16, band.center().y() - 5.0, 16, 10);
@@ -879,11 +925,9 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
     p.restore();
 
     p.fillRect(QRectF(rect.left() + 1, rect.top() + 1, rect.width() - 2, 1), theme.clipHighlight);
-    if (selected) {
-        frameInside(p, rect, 2, theme.clipSelectedRing);
-    } else {
-        frameInside(p, rect, 1, style.border);
-    }
+    // The lane draws the selected clip's ring last, over any proposal.
+    if (selected) paintSelectionRing(p, rect);
+    else frameInside(p, rect, 1, style.border);
 
     // Trim bracket on the edge under the pointer, or the edge being trimmed.
     int edge = 0;
@@ -897,6 +941,37 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
         p.fillRect(QRectF(serif, rect.top(), 8, 2), bracket);
         p.fillRect(QRectF(serif, rect.bottom() - 2, 8, 2), bracket);
     }
+}
+
+void TimelineWidget::paintDraggedClip(QPainter &p, const QRect &visible, int row, const QJsonObject &clip,
+                                      const QJsonObject &track, bool audio) {
+    const EditorTheme &theme = editorTheme();
+    double start = clip.value(QStringLiteral("timelineStart")).toDouble();
+    double duration = clip.value(QStringLiteral("duration")).toDouble();
+    if (m_dragLeading) { duration = std::max(1.0 / m_fps, m_dragStart + m_dragDuration - m_previewTime); start = m_previewTime; }
+    else if (m_dragTrailing) duration = std::max(1.0 / m_fps, m_previewTime - m_dragStart);
+    else if (m_tool != TimelineTool::Slip) start = m_previewTime;
+    const QRectF rect = clipRect(row, start, duration);
+    // A shadow under it, as a lifted clip.
+    p.fillRect(rect.translated(0, 2), theme.dragShadow);
+    const qreal opacity = p.opacity();
+    p.setOpacity(opacity * 0.9);
+    paintClip(p, visible, row, clip, track, audio);
+    p.setOpacity(opacity);
+    // Where it will overwrite its neighbours, a dashed edge.
+    const QString id = clip.value(QStringLiteral("id")).toString();
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, false);
+    p.setPen(QPen(theme.trackHeaderText, 1, Qt::DashLine));
+    p.setBrush(Qt::NoBrush);
+    for (const QJsonValue &value : track.value(QStringLiteral("clips")).toArray()) {
+        const QJsonObject other = value.toObject();
+        if (other.value(QStringLiteral("id")).toString() == id) continue;
+        const QRectF overlap = rect.intersected(clipRect(row, other.value(QStringLiteral("timelineStart")).toDouble(),
+                                                         other.value(QStringLiteral("duration")).toDouble()));
+        if (overlap.width() >= 1.0) p.drawRect(overlap.adjusted(0.5, 0.5, -1.5, -1.5));
+    }
+    p.restore();
 }
 
 void TimelineWidget::paintRuler(QPainter &p, const QRect &dirty, int top) {
@@ -945,10 +1020,11 @@ void TimelineWidget::paintRuler(QPainter &p, const QRect &dirty, int top) {
 }
 
 QRectF TimelineWidget::markerRect(const QJsonObject &marker, int top) const {
+    // The tag at the top left; a range runs along the bottom to its end.
     const double at = marker.value(QStringLiteral("time")).toDouble();
     const qreal x = std::floor(timeToX(at)) + 0.5;
     const qreal end = std::floor(timeToX(at + marker.value(QStringLiteral("duration")).toDouble())) + 0.5;
-    return QRectF(x - 4.5, top + kRulerHeight - 13.0, std::max<qreal>(end - x, 0.0) + 9.0, 10.0);
+    return QRectF(x - 4.5, top + kRulerHeight - 12.0, std::max<qreal>(end - x, 0.0) + 9.0, 11.0);
 }
 
 void TimelineWidget::paintMarkers(QPainter &p, const QRect &dirty, int top) {
@@ -964,22 +1040,25 @@ void TimelineWidget::paintMarkers(QPainter &p, const QRect &dirty, int top) {
         // A marker without a colour is green, as in other edit suites.
         const QColor color = theme.marker(marker.value(QStringLiteral("color")).toString());
         const qreal x = rect.left() + 4.5;
+        // A range is a solid bar along the ruler's foot, never a wash that
+        // could read as the in-to-out range.
         if (rect.width() > 9.0) {
-            QColor band = color;
-            band.setAlpha(110);
-            p.setBrush(band);
-            p.drawRect(QRectF(x, rect.top() + 2.0, rect.width() - 9.0, rect.height() - 4.0));
+            p.setPen(Qt::NoPen);
+            p.setBrush(color);
+            p.drawRect(QRectF(x, rect.bottom() - 3.0, rect.width() - 9.0, 3.0));
         }
-        // A tab that points down at the marker's frame.
-        QPainterPath tab;
-        tab.moveTo(x - 4.5, rect.top());
-        tab.lineTo(x + 4.5, rect.top());
-        tab.lineTo(x + 4.5, rect.top() + 5.5);
-        tab.lineTo(x, rect.bottom());
-        tab.lineTo(x - 4.5, rect.top() + 5.5);
-        tab.closeSubpath();
+        // A small tag pointing down at the marker's frame, outlined so it
+        // stays apart from the playhead's larger head.
+        QPainterPath tag;
+        tag.moveTo(x - 4.5, rect.top());
+        tag.lineTo(x + 4.5, rect.top());
+        tag.lineTo(x + 4.5, rect.top() + 4.5);
+        tag.lineTo(x, rect.top() + 7.0);
+        tag.lineTo(x - 4.5, rect.top() + 4.5);
+        tag.closeSubpath();
+        p.setPen(QPen(theme.dark ? QColor(0, 0, 0, 153) : QColor(Qt::white), 1.0));
         p.setBrush(color);
-        p.drawPath(tab);
+        p.drawPath(tag);
     }
     p.setRenderHint(QPainter::Antialiasing, false);
 }

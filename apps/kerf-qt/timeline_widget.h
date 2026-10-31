@@ -138,6 +138,9 @@ private:
     void paintHeaders(QPainter &p, const QRect &dirty);
     void paintTrackHeader(QPainter &p, int row, const QJsonObject &track, int left);
     void paintClip(QPainter &p, const QRect &visible, int row, const QJsonObject &clip, const QJsonObject &track, bool audio);
+    // The clip being dragged, at its preview position over its neighbours.
+    void paintDraggedClip(QPainter &p, const QRect &visible, int row, const QJsonObject &clip, const QJsonObject &track,
+                          bool audio);
     void paintProposal(QPainter &p, int row, const QJsonObject &track);
     void paintRuler(QPainter &p, const QRect &dirty, int top);
     // Sequence markers sit on the ruler: a tab on their frame and a band

@@ -4,8 +4,11 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QHash>
+#include <QImage>
 #include <QJsonDocument>
 #include <QPolygonF>
+#include <QTemporaryDir>
 
 #include <algorithm>
 #include <array>
@@ -206,6 +209,85 @@ void frameInside(QPainter &p, const QRectF &rect, qreal thickness, const QColor 
     p.fillRect(QRectF(rect.left(), rect.bottom() - thickness, rect.width(), thickness), color);
     p.fillRect(QRectF(rect.left(), rect.top() + thickness, thickness, rect.height() - 2 * thickness), color);
     p.fillRect(QRectF(rect.right() - thickness, rect.top() + thickness, thickness, rect.height() - 2 * thickness), color);
+}
+
+void drawUpDownChevrons(QPainter &painter, const QPointF &mid, const QColor &color, qreal reach) {
+    painter.save();
+    painter.setPen(QPen(color, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPolyline(QPolygonF{mid + QPointF(-3, -1.5), mid + QPointF(0, -1.5 - reach), mid + QPointF(3, -1.5)});
+    painter.drawPolyline(QPolygonF{mid + QPointF(-3, 1.5), mid + QPointF(0, 1.5 + reach), mid + QPointF(3, 1.5)});
+    painter.restore();
+}
+
+QString chevronImagePath(ChevronImage kind, const QColor &color) {
+    static QTemporaryDir directory;
+    static QHash<QString, QString> written;
+    if (!directory.isValid()) return {};
+    const char *name = kind == ChevronImage::PopUp ? "popup" : kind == ChevronImage::StepUp ? "step-up" : "step-down";
+    const QString key = QStringLiteral("%1-%2").arg(QLatin1String(name), color.name(QColor::HexArgb).mid(1));
+    if (const auto found = written.constFind(key); found != written.cend()) return found.value();
+    // A pop-up's pair is centred in its image. A stepper's buttons are its
+    // top and bottom halves, so each chevron sits at its button's inner
+    // edge and the pair meets at the field's middle, as the launcher's do.
+    const QSize size = kind == ChevronImage::PopUp ? QSize(10, 14) : QSize(10, 11);
+    for (const int scale : {1, 2}) {
+        QImage image(size * scale, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.scale(scale, scale);
+        painter.setPen(QPen(color, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        switch (kind) {
+        case ChevronImage::PopUp: drawUpDownChevrons(painter, QPointF(5, 7), color, 3); break;
+        case ChevronImage::StepUp: painter.drawPolyline(QPolygonF{{2, 9.5}, {5, 7}, {8, 9.5}}); break;
+        case ChevronImage::StepDown: painter.drawPolyline(QPolygonF{{2, 1.5}, {5, 4}, {8, 1.5}}); break;
+        }
+        painter.end();
+        const QString file = directory.filePath(key + (scale == 1 ? QStringLiteral(".png") : QStringLiteral("@2x.png")));
+        if (!image.save(file)) return {};
+    }
+    const QString path = QDir::fromNativeSeparators(directory.filePath(key + QStringLiteral(".png")));
+    written.insert(key, path);
+    return path;
+}
+
+QIcon disclosureIcon(bool open, const QColor &color) {
+    QPixmap pixmap(QSize(12, 12) * 2);
+    pixmap.setDevicePixelRatio(2);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(color, 1.3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    if (open) painter.drawPolyline(QPolygonF{{0.75, 4.25}, {4.75, 8.25}, {8.75, 4.25}});
+    else painter.drawPolyline(QPolygonF{{1.5, 2}, {5.5, 6}, {1.5, 10}});
+    painter.end();
+    QIcon icon(pixmap);
+    icon.addPixmap(pixmap, QIcon::Disabled);
+    return icon;
+}
+
+QPixmap warningTriangle(const QColor &color, int size) {
+    QPixmap pixmap(QSize(size, size) * 2);
+    pixmap.setDevicePixelRatio(2);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.scale(size / 14.0, size / 14.0);
+    // The triangle, its corners rounded by a round-joined stroke of its own colour.
+    const QPolygonF triangle{{7.0, 1.6}, {12.9, 12.0}, {1.1, 12.0}};
+    painter.setPen(QPen(color, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(color);
+    painter.drawPolygon(triangle);
+    // The mark, cut out so whatever is behind shows through it.
+    painter.setCompositionMode(QPainter::CompositionMode_Clear);
+    painter.setPen(QPen(Qt::black, 1.6, Qt::SolidLine, Qt::RoundCap));
+    painter.drawLine(QPointF(7.0, 5.0), QPointF(7.0, 8.0));
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(Qt::black);
+    painter.drawEllipse(QPointF(7.0, 10.1), 0.95, 0.95);
+    painter.end();
+    return pixmap;
 }
 
 void blitLaneCache(QPainter &painter, const QPixmap &cache, const QRegion &clip) {

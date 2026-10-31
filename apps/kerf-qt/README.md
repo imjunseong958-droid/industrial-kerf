@@ -24,9 +24,11 @@ it captures the launcher.
 
 The editor and the launcher follow the system's light or dark appearance and
 accent colour, and switch live when either changes; `KERF_COLOR_SCHEME=light`
-or `dark` picks one for the run. Agent work (the AI bar, proposals, Ask
-Kerf) is tinted with the system purple; the viewers keep a neutral dark
-surround in both appearances.
+or `dark` picks one for the run. Both draw macOS's window families (dark is
+#1e1e1e content under #2c2c2e chrome), with the accent for focus and each
+default action. Agent work (the AI bar's stripe, proposals, Ask Kerf) is
+marked with the system purple; the viewers keep a neutral dark surround in
+both appearances.
 
 Sources live in the `kerf` namespace, one class per header/source pair:
 `main_window` (the window, which builds and connects the panels),
@@ -180,9 +182,9 @@ slots and stages it as a proposal; Save Current as Preset… (also in File)
 adds the program sequence to `presets/`. The list refreshes after each save
 and sync. Right-click media in the Project bin to Replace Media… (swap the
 file behind the media for everyone; its clips keep their timing), Reveal in
-Finder, or Consolidate Media. Bin items show OFFLINE when the file is
-missing, NOT DOWNLOADED for a Git LFS file a sync has not fetched, and
-EXTERNAL when it lives outside the project folder.
+Finder, or Consolidate Media. Bin items show Offline when the file is
+missing, Not downloaded for a Git LFS file a sync has not fetched, and
+External when it lives outside the project folder.
 
 ## Effects
 

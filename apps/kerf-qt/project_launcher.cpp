@@ -1,5 +1,6 @@
 #include "project_launcher.h"
 #include "bridge.h"
+#include "editor_common.h"
 #ifdef Q_OS_MACOS
 #include "macos_window.h"
 #endif
@@ -242,23 +243,6 @@ void drawBranchSymbol(QPainter &painter, const QPointF &origin, const QColor &co
     fork.cubicTo(7.6, 6.2, 4.2, 5.6, 2.5, 6.9);
     painter.drawPath(fork);
     painter.restore();
-}
-
-// The Details row's disclosure chevron: › closed, ⌄ open, at the icon's
-// left edge so it lines up with the content's margin.
-QIcon chevronIcon(bool open, const QColor &color) {
-    QPixmap pixmap(QSize(12, 12) * 2);
-    pixmap.setDevicePixelRatio(2);
-    pixmap.fill(Qt::transparent);
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(linePen(color, 1.3));
-    if (open) painter.drawPolyline(QPolygonF{{0.75, 4.25}, {4.75, 8.25}, {8.75, 4.25}});
-    else painter.drawPolyline(QPolygonF{{1.5, 2}, {5.5, 6}, {1.5, 10}});
-    painter.end();
-    QIcon icon(pixmap);
-    icon.addPixmap(pixmap, QIcon::Disabled);
-    return icon;
 }
 
 // Rows of the sidebar: an accent symbol and a label, on a rounded wash when
@@ -555,14 +539,6 @@ private:
     static constexpr int kGap = 8;
     const LauncherTheme *m_theme;
 };
-
-// macOS's up and down chevrons, centred on `mid`.
-void drawUpDownChevrons(QPainter &painter, const QPointF &mid, const QColor &color, qreal reach) {
-    painter.setPen(linePen(color, 1.4));
-    painter.setBrush(Qt::NoBrush);
-    painter.drawPolyline(QPolygonF{mid + QPointF(-3, -1.5), mid + QPointF(0, -1.5 - reach), mid + QPointF(3, -1.5)});
-    painter.drawPolyline(QPolygonF{mid + QPointF(-3, 1.5), mid + QPointF(0, 1.5 + reach), mid + QPointF(3, 1.5)});
-}
 
 // Rows of a pop-up button's menu: a check by the current choice, and the
 // accent under the pointer.
@@ -897,7 +873,7 @@ void ProjectLauncher::applyTheme(bool force) {
     m_theme = launcherTheme(dark, accent);
     m_themed = true;
     setStyleSheet(launcherStyleSheet(m_theme));
-    m_detailsToggle->setIcon(chevronIcon(m_detailsToggle->isChecked(), m_theme.tertiary));
+    m_detailsToggle->setIcon(disclosureIcon(m_detailsToggle->isChecked(), m_theme.tertiary));
     for (QListWidget *list : {m_sidebar, m_templates, m_recent, m_presetChoices}) list->viewport()->update();
     update();
     m_theming = false;
@@ -1217,7 +1193,7 @@ QWidget *ProjectLauncher::buildDetails() {
 
 void ProjectLauncher::setDetailsOpen(bool open) {
     m_detailsBody->setVisible(open);
-    m_detailsToggle->setIcon(chevronIcon(open, m_theme.tertiary));
+    m_detailsToggle->setIcon(disclosureIcon(open, m_theme.tertiary));
 }
 
 QWidget *ProjectLauncher::buildFooter() {

@@ -15,6 +15,7 @@
 #include "timeline_widget.h"
 #include "viewer_widget.h"
 
+#include <QAbstractTextDocumentLayout>
 #include <QActionGroup>
 #include <QApplication>
 #include <QButtonGroup>
@@ -52,6 +53,8 @@
 #include <QSaveFile>
 #include <QScrollBar>
 #include <QSettings>
+#include <QScreen>
+#include <QShortcut>
 #include <QSignalBlocker>
 #include <QStatusBar>
 #include <QTextBlock>
@@ -71,25 +74,6 @@
 namespace kerf {
 
 namespace {
-
-class QualityComboBox final : public QComboBox {
-public:
-    using QComboBox::QComboBox;
-
-protected:
-    void paintEvent(QPaintEvent *event) override {
-        QComboBox::paintEvent(event);
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(isEnabled() ? editorTheme().glyph : editorTheme().glyphDisabled);
-        const qreal centerX = width() - 15.0;
-        const qreal centerY = height() / 2.0;
-        painter.drawPolygon(QPolygonF{{centerX - 4.5, centerY - 2.5},
-                                      {centerX + 4.5, centerY - 2.5},
-                                      {centerX, centerY + 2.5}});
-    }
-};
 
 // Toolbar symbols drawn on a shared grid so their weight and optical size match.
 QIcon toolbarIcon(const QString &glyph) {
@@ -122,13 +106,52 @@ QIcon toolbarIcon(const QString &glyph) {
     return QIcon(pixmap);
 }
 
+// A tool palette symbol on an 18-point grid, in `color`: the pointer for
+// Selection (SF Symbols' cursorarrow), the edit suites' marks for the rest.
+QPixmap toolGlyph(const QString &id, const QColor &color) {
+    QPixmap pixmap(36, 36);
+    pixmap.setDevicePixelRatio(2);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    if (id == QStringLiteral("tool.selection")) {
+        const QPolygonF arrow{{5.5, 2.0}, {5.5, 15.0}, {8.6, 12.0}, {10.7, 16.6}, {12.7, 15.7}, {10.6, 11.2}, {14.8, 11.2}};
+        painter.setPen(QPen(color, 1.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.setBrush(color);
+        painter.drawPolygon(arrow);
+        return pixmap;
+    }
+    static const QHash<QString, QString> marks{
+        {QStringLiteral("tool.razor"), QStringLiteral("✂")}, {QStringLiteral("tool.ripple"), QStringLiteral("⇤")},
+        {QStringLiteral("tool.roll"), QStringLiteral("⇹")}, {QStringLiteral("tool.slip"), QStringLiteral("↔")},
+        {QStringLiteral("tool.slide"), QStringLiteral("⇆")}};
+    QFont font = QApplication::font();
+    font.setPixelSize(15);
+    painter.setFont(font);
+    painter.setPen(color);
+    painter.drawText(QRectF(0, 0, 18, 18), Qt::AlignCenter, marks.value(id));
+    return pixmap;
+}
+
+// A tool's icon: secondary text when not chosen, the accent when chosen.
+QIcon toolIcon(const QString &id) {
+    const EditorTheme &theme = editorTheme();
+    QIcon icon;
+    icon.addPixmap(toolGlyph(id, theme.textSecondary), QIcon::Normal, QIcon::Off);
+    icon.addPixmap(toolGlyph(id, theme.textStrong), QIcon::Active, QIcon::Off);
+    icon.addPixmap(toolGlyph(id, theme.accent), QIcon::Normal, QIcon::On);
+    icon.addPixmap(toolGlyph(id, theme.accent), QIcon::Active, QIcon::On);
+    icon.addPixmap(toolGlyph(id, theme.glyphDisabled), QIcon::Disabled, QIcon::Off);
+    return icon;
+}
+
 // The assistant's welcome, shown until the first message.
 QString conversationIntro(const EditorTheme &t) {
     return QStringLiteral(
-        "<p style='margin-top:2px; color:%1; font-size:10px;'>YOUR EDITING PARTNER</p>"
+        "<p style='margin-top:2px; color:%1; font-size:11px; font-weight:600;'>Your editing partner</p>"
         "<p style='margin-top:2px; color:%2; font-size:14px; font-weight:600;'>Make your next cut.</p>"
         "<p style='margin-top:4px; color:%3;'>Describe the change. Kerf uses this timeline.</p>"
-        "<p style='margin-top:10px; color:%4; font-size:10px;'>TRY ASKING</p>"
+        "<p style='margin-top:10px; color:%4; font-size:11px; font-weight:600;'>Try asking</p>"
         "<p style='margin-top:2px; color:%5;'>“Trim the opening to three seconds.”</p>"
         "<p style='margin-top:2px; color:%5;'>“Lower the music under the dialogue.”</p>"
         "<p style='margin-top:10px; color:%3; font-size:11px;'>Review a proposal before it changes the cut.</p>")
@@ -249,16 +272,23 @@ void MainWindow::showPresetBindings(const QString &path, const QJsonObject &pres
     QDialog dialog(this);
     dialog.setObjectName(QStringLiteral("presetBindingsDialog"));
     dialog.setWindowTitle(QStringLiteral("Apply preset — %1").arg(preset.value(QStringLiteral("name")).toString()));
-    dialog.resize(640, 620);
+    dialog.resize(640, 520);
     auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(20, 20, 20, 20);
+    layout->setSpacing(12);
     auto *intro = new QLabel(QStringLiteral("Choose media for each slot. Kerf keeps the preset's timing, effects and animation. "
         "Applying replaces this sequence as a proposal for you to review."));
     intro->setWordWrap(true);
     layout->addWidget(intro);
     auto *scroll = new QScrollArea;
     scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
     auto *contents = new QWidget;
     auto *form = new QFormLayout(contents);
+    form->setContentsMargins(0, 0, 0, 0);
+    form->setVerticalSpacing(8);
+    form->setHorizontalSpacing(12);
+    form->setLabelAlignment(Qt::AlignRight | Qt::AlignTop);
     QHash<QString, QComboBox *> media;
     QHash<QString, QDoubleSpinBox *> starts;
     QHash<QString, QLineEdit *> texts;
@@ -289,6 +319,8 @@ void MainWindow::showPresetBindings(const QString &path, const QJsonObject &pres
         if (choice->count() == 1) choice->setItemText(0, QStringLiteral("Import matching media first"));
         auto *from = new QDoubleSpinBox;
         from->setObjectName(QStringLiteral("presetFrom_%1").arg(id));
+        // One width for every slot, so the steppers line up down the column.
+        from->setFixedWidth(106);
         from->setDecimals(3);
         from->setSuffix(QStringLiteral(" s"));
         from->setRange(0, 0);
@@ -315,31 +347,54 @@ void MainWindow::showPresetBindings(const QString &path, const QJsonObject &pres
         auto *row = new QWidget;
         auto *rowLayout = new QGridLayout(row);
         rowLayout->setContentsMargins(0, 0, 0, 0);
+        rowLayout->setHorizontalSpacing(8);
+        rowLayout->setVerticalSpacing(4);
         rowLayout->addWidget(choice, 0, 0);
         rowLayout->addWidget(from, 0, 1);
         rowLayout->addWidget(usedBy, 1, 0, 1, 2);
         rowLayout->setColumnStretch(0, 1);
+        rowLayout->setColumnStretch(1, 0);
         form->addRow(QStringLiteral("%1 · %2 s").arg(id).arg(slot.value(QStringLiteral("seconds")).toDouble(), 0, 'f', 3), row);
         media.insert(id, choice);
         starts.insert(id, from);
     }
+    // Text slots by number, as the launcher shows them; their clip ids are
+    // the document's names, in the tooltip.
     const QJsonObject textSlots = preset.value(QStringLiteral("textSlots")).toObject();
+    int textNumber = 0;
     for (auto it = textSlots.begin(); it != textSlots.end(); ++it) {
         auto *text = new QLineEdit(it.value().toString());
         text->setObjectName(QStringLiteral("presetText_%1").arg(it.key()));
-        form->addRow(it.key(), text);
+        text->setToolTip(it.key());
+        form->addRow(QStringLiteral("Text %1").arg(++textNumber), text);
         texts.insert(it.key(), text);
     }
     scroll->setWidget(contents);
     layout->addWidget(scroll, 1);
+    // The preset's source, for those who want it, behind a disclosure.
+    auto *details = new QToolButton;
+    details->setObjectName(QStringLiteral("disclosure"));
+    details->setText(QStringLiteral("Details"));
+    details->setCheckable(true);
+    details->setAutoRaise(true);
+    details->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    details->setIconSize(QSize(11, 11));
+    details->setIcon(disclosureIcon(false, editorTheme().textTertiary));
+    layout->addWidget(details, 0, Qt::AlignLeft);
     auto *code = new QPlainTextEdit(preset.value(QStringLiteral("document")).toString());
     code->setObjectName(QStringLiteral("presetCode"));
     code->setReadOnly(true);
     code->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     code->setMaximumHeight(150);
+    code->hide();
     layout->addWidget(code);
+    connect(details, &QToolButton::toggled, code, [details, code](bool open) {
+        code->setVisible(open);
+        details->setIcon(disclosureIcon(open, editorTheme().textTertiary));
+    });
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Create proposal"));
+    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Create Proposal"));
+    buttons->button(QDialogButtonBox::Ok)->setDefault(true);
     const auto updateReady = [buttons, media] {
         bool ready = true;
         for (auto *choice : media) ready = ready && !choice->currentData().toString().isEmpty();
@@ -862,6 +917,7 @@ void MainWindow::focusRegion() {
         start->setEnabled(!enabled);
     });
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    buttons->button(QDialogButtonBox::Ok)->setDefault(true);
     connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
@@ -962,7 +1018,7 @@ bool MainWindow::sendAgent(const QString &text, const QJsonObject &focus, const 
     showNextSteps(QJsonArray{});
     m_agentBusy = true;
     m_agentText.clear();
-    m_agentStatus->setText(QStringLiteral("WORKING"));
+    m_agentStatus->setText(QStringLiteral("Working"));
     m_chatInput->setEnabled(false);
     m_abortButton->setEnabled(true);
     updateChatControls();
@@ -1277,6 +1333,7 @@ void MainWindow::rejectProposal() {
 }
 
 bool MainWindow::eventFilter(QObject *object, QEvent *event) {
+    if (object == m_preferences && event->type() == QEvent::Show) fitPreferences();
     if (object == m_chatInput && (event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut))
         updateChatControls();
     if (object == m_chatInput && event->type() == QEvent::KeyPress) {
@@ -1297,9 +1354,10 @@ void MainWindow::buildUi() {
     auto *central = new QWidget(this);
     central->setObjectName(QStringLiteral("workspaceRoot"));
     auto *root = new QVBoxLayout(central);
-    // Narrow gutters give the editing surfaces a little breathing room.
-    root->setContentsMargins(2, 2, 2, 2);
-    root->setSpacing(2);
+    // Banners and panels run edge to edge under the toolbar, as in macOS
+    // pro apps; hairlines and the dock splitters separate them.
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
     m_artwork = new MediaArtwork(this);
 
     m_connectionBanner = new QFrame;
@@ -1338,9 +1396,19 @@ void MainWindow::buildUi() {
     m_divergedBanner = new QFrame;
     m_divergedBanner->setObjectName(QStringLiteral("divergedBanner"));
     auto *divergedLayout = new QHBoxLayout(m_divergedBanner);
-    divergedLayout->setContentsMargins(10, 4, 8, 4);
-    auto *divergedText = new QLabel(QStringLiteral("<b>project.kerf changed on disk.</b> Load it to bring in edits made outside Kerf "
-                                                   "(a git pull, a text editor), or keep the editor's version and write it over the file."));
+    divergedLayout->setContentsMargins(12, 5, 10, 5);
+    divergedLayout->setSpacing(8);
+    // The colour is in the triangle only; the bar and its text stay neutral.
+    m_divergedGlyph = new QLabel;
+    m_divergedGlyph->setObjectName(QStringLiteral("divergedGlyph"));
+    m_divergedGlyph->setPixmap(warningTriangle(editorTheme().warningGlyph));
+    m_divergedGlyph->setFixedSize(14, 14);
+    divergedLayout->addWidget(m_divergedGlyph);
+    auto *divergedTitle = new QLabel(QStringLiteral("project.kerf changed on disk."));
+    divergedTitle->setObjectName(QStringLiteral("divergedTitle"));
+    divergedLayout->addWidget(divergedTitle);
+    auto *divergedText = new QLabel(QStringLiteral("Load it to bring in edits made outside Kerf (a git pull, a text editor), "
+                                                   "or keep the editor's version and write it over the file."));
     divergedText->setObjectName(QStringLiteral("divergedMessage"));
     divergedText->setWordWrap(true);
     divergedLayout->addWidget(divergedText, 1);
@@ -1395,7 +1463,8 @@ void MainWindow::buildUi() {
     m_toolPalette = new QToolBar(QStringLiteral("Tools"));
     m_toolPalette->setObjectName(QStringLiteral("toolPalette"));
     m_toolPalette->setOrientation(Qt::Vertical);
-    m_toolPalette->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_toolPalette->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    m_toolPalette->setIconSize(QSize(18, 18));
     timelineRow->addWidget(m_toolPalette);
     timelineRow->addWidget(timelineFrame, 1);
     // What Kerf is doing, and the proposal to review, where the edit happens.
@@ -1453,15 +1522,24 @@ void MainWindow::buildUi() {
     connect(preferencesLink, &QToolButton::clicked, this, [this] { triggerCommand(QStringLiteral("app.preferences")); });
     statusRow->addWidget(preferencesLink);
     statusRow->addStretch(1);
-    m_agentStatus = new QLabel(QStringLiteral("READY"));
+    m_agentStatus = new QLabel(QStringLiteral("Ready"));
     m_agentStatus->setObjectName(QStringLiteral("statusPill"));
     statusRow->addWidget(m_agentStatus);
     chatTabLayout->addLayout(statusRow);
-    // Review and activity can overflow on short windows; the composer stays fixed.
+    // One view scrolls: the conversation, at its full height, then activity
+    // and the proposal under review. The composer stays fixed below.
     auto *chatScroll = new QScrollArea;
+    m_chatScroll = chatScroll;
     chatScroll->setFrameShape(QFrame::NoFrame);
     chatScroll->setWidgetResizable(true);
     chatScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    // New output keeps the latest in view, unless the reader scrolled away.
+    connect(chatScroll->verticalScrollBar(), &QScrollBar::rangeChanged, this, [this](int, int maximum) {
+        if (m_followConversation) m_chatScroll->verticalScrollBar()->setValue(maximum);
+    });
+    connect(chatScroll->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) {
+        m_followConversation = value >= m_chatScroll->verticalScrollBar()->maximum() - 4;
+    });
     auto *chatContent = new QWidget;
     auto *chatLayout = new QVBoxLayout(chatContent);
     chatLayout->setContentsMargins(0, 0, 0, 0);
@@ -1477,10 +1555,21 @@ void MainWindow::buildUi() {
     m_conversation->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
     m_conversation->setAccessibleName(QStringLiteral("Conversation with Kerf"));
     m_conversation->setMinimumHeight(80);
+    // It never scrolls itself: it is as tall as its messages, inside the
+    // view that scrolls.
+    m_conversation->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_conversation->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    connect(m_conversation->document()->documentLayout(), &QAbstractTextDocumentLayout::documentSizeChanged, this,
+            [this](const QSizeF &size) {
+                const int chrome = m_conversation->height() - m_conversation->viewport()->height();
+                m_conversation->setFixedHeight(std::max(80, static_cast<int>(std::ceil(size.height())) + chrome));
+            });
     m_conversation->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_conversation->document()->setDocumentMargin(2);
     m_conversation->setHtml(conversationIntro(editorTheme()));
-    chatLayout->addWidget(m_conversation, 1);
+    chatLayout->addWidget(m_conversation);
+    // Review sits at the foot of a short conversation.
+    chatLayout->addStretch(1);
     auto *composer = new QFrame;
     m_chatComposer = composer;
     composer->setObjectName(QStringLiteral("chatComposer"));
@@ -1538,7 +1627,7 @@ void MainWindow::buildUi() {
     connect(abortButton, &QToolButton::clicked, this, [this] {
         if (!execute(QStringLiteral("ai.stop"))) return;
         m_abortButton->setEnabled(false);
-        m_agentStatus->setText(QStringLiteral("STOPPING"));
+        m_agentStatus->setText(QStringLiteral("Stopping"));
         appendConversationNote(QStringLiteral("Progress"), QStringLiteral("Stopping request…"));
     });
     chatRow->addWidget(abortButton);
@@ -1551,18 +1640,22 @@ void MainWindow::buildUi() {
     m_chatActivity->hide();
     chatLayout->addWidget(m_chatActivity);
     auto *activityTitle = new QToolButton;
-    activityTitle->setText(QStringLiteral("▸ Activity"));
+    activityTitle->setText(QStringLiteral("Activity"));
     activityTitle->setObjectName(QStringLiteral("eyebrow"));
+    activityTitle->setCheckable(true);
+    activityTitle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    activityTitle->setIconSize(QSize(11, 11));
+    activityTitle->setIcon(disclosureIcon(false, editorTheme().textTertiary));
+    m_disclosures.append(activityTitle);
     chatLayout->addWidget(activityTitle);
     m_activityList = new QListWidget;
     m_activityList->setObjectName(QStringLiteral("activityList"));
     m_activityList->setMaximumHeight(60);
     chatLayout->addWidget(m_activityList);
     m_activityList->hide();
-    connect(activityTitle, &QToolButton::clicked, this, [this, activityTitle] {
-        const bool visible = !m_activityList->isVisible();
+    connect(activityTitle, &QToolButton::toggled, this, [this, activityTitle](bool visible) {
         m_activityList->setVisible(visible);
-        activityTitle->setText(visible ? QStringLiteral("▾ Activity") : QStringLiteral("▸ Activity"));
+        activityTitle->setIcon(disclosureIcon(visible, editorTheme().textTertiary));
     });
 
     m_exportProgress = new QProgressBar;
@@ -1573,7 +1666,7 @@ void MainWindow::buildUi() {
     chatLayout->addWidget(m_exportProgress);
     m_exportProgress->hide();
 
-    auto *proposalBox = new QGroupBox(QStringLiteral("PROPOSAL"));
+    auto *proposalBox = new QGroupBox(QStringLiteral("Proposal"));
     m_proposalBox = proposalBox;
     proposalBox->setObjectName(QStringLiteral("proposalBox"));
     auto *proposalLayout = new QVBoxLayout(proposalBox);
@@ -1670,9 +1763,12 @@ void MainWindow::buildUi() {
     m_preferences = new QDialog(this);
     m_preferences->setObjectName(QStringLiteral("preferencesDialog"));
     m_preferences->setWindowTitle(QStringLiteral("Settings"));
-    m_preferences->resize(520, 680);
+    // A macOS Settings window: sized to what it shows, closed with its
+    // close button or Command-W, with no Close button of its own.
+    auto *closeShortcut = new QShortcut(QKeySequence::Close, m_preferences);
+    connect(closeShortcut, &QShortcut::activated, m_preferences, &QDialog::hide);
     auto *settingsTabLayout = new QVBoxLayout(m_preferences);
-    settingsTabLayout->setContentsMargins(12, 12, 12, 12);
+    settingsTabLayout->setContentsMargins(20, 12, 20, 20);
     auto *settingsScroll = new QScrollArea;
     settingsScroll->setWidgetResizable(true);
     settingsScroll->setFrameShape(QFrame::NoFrame);
@@ -1685,7 +1781,7 @@ void MainWindow::buildUi() {
     auto *connectionGroup = new QGroupBox(QStringLiteral("AI"));
     connectionGroup->setObjectName(QStringLiteral("aiConnection"));
     auto *cloudLayout = new QVBoxLayout(connectionGroup);
-    cloudLayout->setContentsMargins(10, 12, 10, 10);
+    cloudLayout->setContentsMargins(10, 10, 10, 10);
     cloudLayout->setSpacing(6);
     m_cloudRadio = new QRadioButton(QStringLiteral("Kerf Cloud"));
     m_cloudRadio->setObjectName(QStringLiteral("agentConnectionCloud"));
@@ -1737,9 +1833,17 @@ void MainWindow::buildUi() {
     connect(m_cloudRadio, &QRadioButton::toggled, this, onConnectionChanged);
     connect(m_ownKeyRadio, &QRadioButton::toggled, this, onConnectionChanged);
 
+    // A borderless disclosure, as the launcher's Details row.
     auto *advancedToggle = new QToolButton;
-    advancedToggle->setObjectName(QStringLiteral("advancedToggle"));
-    advancedToggle->setText(QStringLiteral("▸ Advanced"));
+    advancedToggle->setObjectName(QStringLiteral("disclosure"));
+    advancedToggle->setAccessibleName(QStringLiteral("Advanced"));
+    advancedToggle->setText(QStringLiteral("Advanced"));
+    advancedToggle->setAutoRaise(true);
+    advancedToggle->setCheckable(true);
+    advancedToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    advancedToggle->setIconSize(QSize(11, 11));
+    advancedToggle->setIcon(disclosureIcon(false, editorTheme().textTertiary));
+    m_disclosures.append(advancedToggle);
     settingsLayout->addWidget(advancedToggle);
     m_advancedSettings = new QWidget;
     m_advancedSettings->setObjectName(QStringLiteral("advancedSettings"));
@@ -1748,10 +1852,10 @@ void MainWindow::buildUi() {
     advancedLayout->setSpacing(10);
     settingsLayout->addWidget(m_advancedSettings);
     m_advancedSettings->hide();
-    connect(advancedToggle, &QToolButton::clicked, this, [this, advancedToggle] {
-        const bool show = m_advancedSettings->isHidden();
+    connect(advancedToggle, &QToolButton::toggled, this, [this, advancedToggle](bool show) {
         m_advancedSettings->setVisible(show);
-        advancedToggle->setText(show ? QStringLiteral("▾ Advanced") : QStringLiteral("▸ Advanced"));
+        advancedToggle->setIcon(disclosureIcon(show, editorTheme().textTertiary));
+        fitPreferences();
     });
     auto *settingsIntro = new QLabel(QStringLiteral("Two protocol slots. One active connection for chat. Gemini, Groq, and OpenRouter use the OpenAI-compatible slot with that vendor's compatible base URL."));
     settingsIntro->setObjectName(QStringLiteral("chatHint"));
@@ -1759,7 +1863,7 @@ void MainWindow::buildUi() {
     advancedLayout->addWidget(settingsIntro);
     auto *activeConnection = new QGroupBox(QStringLiteral("Active connection"));
     auto *activeLayout = new QVBoxLayout(activeConnection);
-    activeLayout->setContentsMargins(10, 12, 10, 10);
+    activeLayout->setContentsMargins(10, 10, 10, 10);
     activeLayout->setSpacing(6);
     m_anthropicActiveRadio = new QRadioButton(QStringLiteral("Anthropic Messages"));
     m_anthropicActiveRadio->setObjectName(QStringLiteral("agentActiveAnthropic"));
@@ -1772,7 +1876,7 @@ void MainWindow::buildUi() {
     auto *anthropicGroup = new QGroupBox(QStringLiteral("Anthropic Messages"));
     anthropicGroup->setObjectName(QStringLiteral("providerBox"));
     auto *anthropicForm = new QFormLayout(anthropicGroup);
-    anthropicForm->setContentsMargins(10, 12, 10, 10);
+    anthropicForm->setContentsMargins(10, 10, 10, 10);
     anthropicForm->setSpacing(7);
     m_anthropicKey = new QLineEdit;
     m_anthropicKey->setEchoMode(QLineEdit::Password);
@@ -1789,7 +1893,7 @@ void MainWindow::buildUi() {
     auto *openaiGroup = new QGroupBox(QStringLiteral("OpenAI-compatible"));
     openaiGroup->setObjectName(QStringLiteral("providerBox"));
     auto *openaiForm = new QFormLayout(openaiGroup);
-    openaiForm->setContentsMargins(10, 12, 10, 10);
+    openaiForm->setContentsMargins(10, 10, 10, 10);
     openaiForm->setSpacing(7);
     m_openaiKey = new QLineEdit;
     m_openaiKey->setEchoMode(QLineEdit::Password);
@@ -1907,10 +2011,9 @@ void MainWindow::buildUi() {
     advancedLayout->addWidget(mcpSection);
     settingsLayout->addStretch(1);
     settingsScroll->setWidget(settingsContent);
+    m_preferencesContent = settingsContent;
     settingsTabLayout->addWidget(settingsScroll);
-    auto *closeSettings = new QDialogButtonBox(QDialogButtonBox::Close);
-    connect(closeSettings, &QDialogButtonBox::rejected, m_preferences, &QDialog::hide);
-    settingsTabLayout->addWidget(closeSettings);
+    m_preferences->installEventFilter(this);
 
     loadAgentSettings();
     const auto onActiveConnectionChanged = [this](bool checked) {
@@ -2123,12 +2226,9 @@ void MainWindow::setupActions() {
                               QStringLiteral("tool.roll"), QStringLiteral("tool.slip"), QStringLiteral("tool.slide")}) {
         QAction *action = m_commands->action(id);
         toolGroup->addAction(action);
-        // Tool letters, the way edit suites label their palettes.
-        static const QHash<QString, QString> glyphs{
-            {QStringLiteral("tool.selection"), QStringLiteral("▸")}, {QStringLiteral("tool.razor"), QStringLiteral("✂")},
-            {QStringLiteral("tool.ripple"), QStringLiteral("⇤")}, {QStringLiteral("tool.roll"), QStringLiteral("⇹")},
-            {QStringLiteral("tool.slip"), QStringLiteral("↔")}, {QStringLiteral("tool.slide"), QStringLiteral("⇆")}};
-        action->setIconText(glyphs.value(id));
+        // Tool symbols, the way edit suites label their palettes.
+        action->setIcon(toolIcon(id));
+        m_toolGlyphs.append(action);
         m_toolPalette->addAction(action);
     }
     m_commands->action(QStringLiteral("tool.selection"))->setChecked(true);
@@ -2267,14 +2367,14 @@ void MainWindow::setupActions() {
     spacerRight->setStyleSheet(QStringLiteral("background: transparent"));
     spacerRight->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     toolbar->addWidget(spacerRight);
-    m_quality = new QualityComboBox;
+    m_quality = new QComboBox;
     m_quality->setObjectName(QStringLiteral("qualityPicker"));
     m_quality->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     m_quality->setToolTip(QStringLiteral("Export quality"));
     m_quality->addItem(QStringLiteral("Preview"), QStringLiteral("preview"));
     m_quality->addItem(QStringLiteral("Full"), QStringLiteral("full"));
     toolbar->addWidget(m_quality);
-    m_canvasPreset = new QualityComboBox;
+    m_canvasPreset = new QComboBox;
     m_canvasPreset->setObjectName(QStringLiteral("canvasPicker"));
     m_canvasPreset->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     m_canvasPreset->addItem(QStringLiteral("16:9"), QStringLiteral("1920x1080"));
@@ -2612,6 +2712,7 @@ void MainWindow::openPullRequest() {
     layout->addLayout(form, 1);
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
     buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Open Pull Request"));
+    buttons->button(QDialogButtonBox::Ok)->setDefault(true);
     connect(title, &QLineEdit::textChanged, buttons, [buttons](const QString &text) {
         buttons->button(QDialogButtonBox::Ok)->setEnabled(!text.trimmed().isEmpty());
     });
@@ -2676,6 +2777,7 @@ void MainWindow::publishProject() {
     layout->addStretch(1);
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
     buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Publish"));
+    buttons->button(QDialogButtonBox::Ok)->setDefault(true);
     const auto update = [=] {
         name->setEnabled(github->isChecked());
         priv->setEnabled(github->isChecked());
@@ -3049,9 +3151,7 @@ void MainWindow::handleEvent(QJsonObject event) {
         if (kind == QStringLiteral("delta")) {
             if (m_agentText.isEmpty()) appendConversation(QStringLiteral("Kerf"), text);
             else {
-                const bool follow = m_conversation->verticalScrollBar()->value() >= m_conversation->verticalScrollBar()->maximum() - 4;
                 m_agentCursor.insertText(text);
-                if (follow) m_conversation->verticalScrollBar()->setValue(m_conversation->verticalScrollBar()->maximum());
             }
             m_agentText += text;
         } else if (kind == QStringLiteral("done")) {
@@ -3071,12 +3171,12 @@ void MainWindow::handleEvent(QJsonObject event) {
     } else if (type == QStringLiteral("agent_busy")) {
         const bool busy = event.value(QStringLiteral("busy")).toBool();
         m_agentBusy = busy;
-        if (!m_connected) m_agentStatus->setText(QStringLiteral("OFFLINE"));
-        else if (busy) m_agentStatus->setText(QStringLiteral("THINKING"));
-        else if (m_agentRunState == QStringLiteral("failed")) m_agentStatus->setText(QStringLiteral("FAILED"));
-        else if (m_agentRunState == QStringLiteral("aborted")) m_agentStatus->setText(QStringLiteral("STOPPED"));
-        else if (m_agentRunState == QStringLiteral("awaiting_review")) m_agentStatus->setText(QStringLiteral("REVIEW"));
-        else m_agentStatus->setText(QStringLiteral("READY"));
+        if (!m_connected) m_agentStatus->setText(QStringLiteral("Offline"));
+        else if (busy) m_agentStatus->setText(QStringLiteral("Thinking"));
+        else if (m_agentRunState == QStringLiteral("failed")) m_agentStatus->setText(QStringLiteral("Failed"));
+        else if (m_agentRunState == QStringLiteral("aborted")) m_agentStatus->setText(QStringLiteral("Stopped"));
+        else if (m_agentRunState == QStringLiteral("awaiting_review")) m_agentStatus->setText(QStringLiteral("Review"));
+        else m_agentStatus->setText(QStringLiteral("Ready"));
         m_chatInput->setEnabled(m_connected && !busy);
         updateChatControls();
         updateAiBar();
@@ -3084,12 +3184,12 @@ void MainWindow::handleEvent(QJsonObject event) {
     } else if (type == QStringLiteral("agent_state")) {
         const QString state = event.value(QStringLiteral("state")).toString();
         m_agentRunState = state;
-        const QString label = state == QStringLiteral("running") ? QStringLiteral("THINKING")
-                              : state == QStringLiteral("awaiting_review") ? QStringLiteral("REVIEW")
-                              : state == QStringLiteral("failed") ? QStringLiteral("FAILED")
-                              : state == QStringLiteral("aborted") ? QStringLiteral("STOPPED")
-                              : QStringLiteral("READY");
-        m_agentStatus->setText(m_connected ? label : QStringLiteral("OFFLINE"));
+        const QString label = state == QStringLiteral("running") ? QStringLiteral("Thinking")
+                              : state == QStringLiteral("awaiting_review") ? QStringLiteral("Review")
+                              : state == QStringLiteral("failed") ? QStringLiteral("Failed")
+                              : state == QStringLiteral("aborted") ? QStringLiteral("Stopped")
+                              : QStringLiteral("Ready");
+        m_agentStatus->setText(m_connected ? label : QStringLiteral("Offline"));
         if (state == QStringLiteral("failed")) {
             appendConversationNote(QStringLiteral("Agent error"), event.value(QStringLiteral("message")).toString());
         }
@@ -3387,7 +3487,7 @@ void MainWindow::updateProposal(const QJsonValue &value) {
 
 void MainWindow::appendConversation(const QString &speaker, const QString &text) {
     if (text.isEmpty()) return;
-    const bool follow = m_conversationEmpty || m_conversation->verticalScrollBar()->value() >= m_conversation->verticalScrollBar()->maximum() - 4;
+    if (m_conversationEmpty) m_followConversation = true;
     if (m_conversationEmpty) {
         m_conversation->clear();
         m_conversationEmpty = false;
@@ -3413,11 +3513,12 @@ void MainWindow::appendConversation(const QString &speaker, const QString &text)
     block.setBottomMargin(7);
     cursor.setBlockFormat(block);
     QTextCharFormat role;
+    // Sentence case at 11 points, as macOS labels.
     role.setFontWeight(QFont::DemiBold);
-    role.setFontPointSize(9);
+    role.setProperty(QTextFormat::FontPixelSize, 11);
     role.setProperty(kMessageKind, static_cast<int>(kind));
     role.setForeground(messageRoleColor(kind));
-    cursor.insertText(user ? QStringLiteral("YOU") : error ? QStringLiteral("COULDN’T COMPLETE EDIT") : QStringLiteral("KERF"), role);
+    cursor.insertText(user ? QStringLiteral("You") : error ? QStringLiteral("Couldn’t complete edit") : QStringLiteral("Kerf"), role);
     QTextBlockFormat body;
     body.setLineHeight(145, QTextBlockFormat::ProportionalHeight);
     // The body takes the conversation's own text colour, which follows the appearance.
@@ -3425,11 +3526,28 @@ void MainWindow::appendConversation(const QString &speaker, const QString &text)
     cursor.insertBlock(body, bodyText);
     cursor.insertText(text);
     if (speaker == QStringLiteral("Kerf")) m_agentCursor = cursor;
-    if (follow) m_conversation->verticalScrollBar()->setValue(m_conversation->verticalScrollBar()->maximum());
+}
+
+void MainWindow::fitPreferences() {
+    if (!m_preferences || !m_preferencesContent) return;
+    m_preferences->ensurePolished();
+    constexpr int width = 520;
+    const QMargins margins = m_preferences->layout()->contentsMargins();
+    QLayout *content = m_preferencesContent->layout();
+    content->activate();
+    const int inner = width - margins.left() - margins.right();
+    const int height = content->hasHeightForWidth() ? content->totalHeightForWidth(inner) : content->totalSizeHint().height();
+    const QScreen *screen = m_preferences->screen();
+    const int limit = std::min(720, screen ? screen->availableGeometry().height() * 9 / 10 : 720);
+    m_preferences->resize(width, std::min(limit, height + margins.top() + margins.bottom()));
 }
 
 void MainWindow::applyAppearance() {
     for (const auto &[action, glyph] : std::as_const(m_toolbarGlyphs)) action->setIcon(toolbarIcon(glyph));
+    for (QAction *action : std::as_const(m_toolGlyphs)) action->setIcon(toolIcon(action->objectName()));
+    if (m_divergedGlyph) m_divergedGlyph->setPixmap(warningTriangle(editorTheme().warningGlyph));
+    for (QToolButton *disclosure : std::as_const(m_disclosures))
+        disclosure->setIcon(disclosureIcon(disclosure->isChecked(), editorTheme().textTertiary));
     for (QToolButton *button : std::as_const(m_transportButtons)) {
         const auto glyph = static_cast<TransportGlyph>(button->property("glyph").toInt());
         button->setIcon(transportIcon(button == m_transportPlay && m_transportShowsPause ? TransportGlyph::Pause : glyph));
@@ -3506,8 +3624,8 @@ void MainWindow::setConnection(const QString &status, const QString &message) {
     m_reconnectButton->setEnabled(status == QStringLiteral("disconnected"));
     m_connectionMessage->setText(status == QStringLiteral("connecting") ? QStringLiteral("Connecting to project…")
         : QStringLiteral("Project disconnected. %1").arg(message));
-    m_agentStatus->setText(m_connected ? (m_agentBusy ? QStringLiteral("THINKING") : QStringLiteral("READY"))
-        : status == QStringLiteral("connecting") ? QStringLiteral("CONNECTING") : QStringLiteral("OFFLINE"));
+    m_agentStatus->setText(m_connected ? (m_agentBusy ? QStringLiteral("Thinking") : QStringLiteral("Ready"))
+        : status == QStringLiteral("connecting") ? QStringLiteral("Connecting") : QStringLiteral("Offline"));
     m_timeline->setEnabled(m_connected);
     if (m_canvasPreset) m_canvasPreset->setEnabled(m_connected);
     m_chatInput->setEnabled(m_connected && !m_agentBusy);

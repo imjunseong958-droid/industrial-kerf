@@ -71,6 +71,7 @@
 
 #include <DockManager.h>
 #include <DockWidget.h>
+#include <DockWidgetTab.h>
 
 #include <algorithm>
 #include <cmath>
@@ -422,10 +423,15 @@ private slots:
         for (int i = 0; i < 12; ++i)
             window.appendConversation(QStringLiteral("You"), QStringLiteral("A longer edit request.\nKeep this line readable."));
         QCoreApplication::processEvents();
-        auto *scroll = window.m_conversation->verticalScrollBar();
+        // One view scrolls: the conversation is as tall as its messages.
+        QCOMPARE(window.m_conversation->verticalScrollBar()->maximum(), 0);
+        auto *scroll = window.m_chatScroll->verticalScrollBar();
         QVERIFY(scroll->maximum() > 0);
+        // It followed the output to the latest.
+        QCOMPARE(scroll->value(), scroll->maximum());
         scroll->setValue(0);
         window.appendConversation(QStringLiteral("Kerf"), QStringLiteral("New response."));
+        QCoreApplication::processEvents();
         QCOMPARE(scroll->value(), 0);
     }
 
@@ -1509,7 +1515,8 @@ private slots:
             QCOMPARE(image.pixelColor(4, 4), theme.rulerCorner);
             QCOMPARE(image.pixelColor(x(9.0), titles), theme.trackLane);
             QCOMPARE(image.pixelColor(x(7.5), titles), theme.playhead);
-            QCOMPARE(image.pixelColor(selected.right(), selected.center().y()), theme.clipSelectedRing);
+            QCOMPARE(image.pixelColor(selected.right(), selected.center().y()), theme.clipSelectedRingOuter);
+            QCOMPARE(image.pixelColor(selected.right() - 1, selected.center().y()), theme.clipSelectedRing);
             QCOMPARE(image.pixelColor(unselected.left(), unselected.center().y()), theme.clipVideo.border);
             // A header's stripe is its clips' colour.
             QCOMPARE(image.pixelColor(1, captions), theme.clipCaption.header);
@@ -1561,7 +1568,7 @@ private slots:
         timeline.setProject(QJsonObject{{"tracks", QJsonArray{track}}}, 4, 24);
         timeline.show();
         const QPoint thumbnail(kTimelineLabelWidth - 9 - kHeaderPreviewWidth / 2, kRulerHeight + kTrackHeight / 2);
-        QCOMPARE(timeline.grab().toImage().pixelColor(thumbnail), QColor("#1f1f1f"));
+        QCOMPARE(timeline.grab().toImage().pixelColor(thumbnail), editorTheme().trackHeader);
         QImage frame(160, 90, QImage::Format_RGB32);
         frame.fill(QColor("#e87342"));
         artwork.frames.insert(QStringLiteral("sample"), frame);
@@ -1611,9 +1618,9 @@ private slots:
         QCOMPARE(scroll.horizontalScrollBar()->value(), 2000);
         QCOMPARE(scroll.verticalScrollBar()->value(), 150);
         const QImage view = scroll.viewport()->grab().toImage();
-        QCOMPARE(view.pixelColor(4, 4), QColor("#1a1a1a"));
-        QCOMPARE(view.pixelColor(6, 60), QColor("#1f1f1f"));
-        QCOMPARE(view.pixelColor(kTimelineLabelWidth + 50, kRulerHeight - 1), QColor("#0a0a0a"));
+        QCOMPARE(view.pixelColor(4, 4), editorTheme().rulerCorner);
+        QCOMPARE(view.pixelColor(6, 60), editorTheme().trackHeader);
+        QCOMPARE(view.pixelColor(kTimelineLabelWidth + 50, kRulerHeight - 1), editorTheme().divider);
 
         QSignalSpy seeks(timeline, &TimelineWidget::seekRequested);
         QTest::mouseClick(timeline, Qt::LeftButton, Qt::NoModifier, timeline->mapFrom(scroll.viewport(), QPoint(60, 60)));
@@ -1827,16 +1834,16 @@ private slots:
 
     void disconnectedControlsAndRecovery() {
         MainWindow window{QString(), QString()};
-        QCOMPARE(window.m_agentStatus->text(), QStringLiteral("CONNECTING"));
+        QCOMPARE(window.m_agentStatus->text(), QStringLiteral("Connecting"));
         QVERIFY(!window.m_sendButton->isEnabled());
         window.handleEvent(QJsonObject{{"type", "connection"}, {"status", "disconnected"}, {"message", "Daemon unavailable"}});
-        QCOMPARE(window.m_agentStatus->text(), QStringLiteral("OFFLINE"));
+        QCOMPARE(window.m_agentStatus->text(), QStringLiteral("Offline"));
         QVERIFY(window.m_reconnectButton->isEnabled());
         QVERIFY(!window.m_timeline->isEnabled());
         QVERIFY(!window.m_connectionBanner->isHidden());
         QVERIFY(window.m_connectionMessage->text().contains(QStringLiteral("Daemon unavailable")));
         window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", false}});
-        QCOMPARE(window.m_agentStatus->text(), QStringLiteral("OFFLINE"));
+        QCOMPARE(window.m_agentStatus->text(), QStringLiteral("Offline"));
         window.handleEvent(QJsonObject{{"type", "connection"}, {"status", "ready"}});
         QVERIFY(window.m_connectionBanner->isHidden());
         QVERIFY(window.m_timeline->isEnabled());
@@ -2040,7 +2047,7 @@ private slots:
         const QJsonObject timeline{{"fps", 24}, {"tracks", QJsonArray{}}};
         window.applySnapshot(QJsonObject{{"revision", 4}, {"duration", 0}, {"projectionStatus", "diverged"}, {"timeline", timeline}});
         QVERIFY(!window.m_divergedBanner->isHidden());
-        QVERIFY(window.findChild<QLabel *>(QStringLiteral("divergedMessage"))->text().contains(QStringLiteral("project.kerf changed on disk")));
+        QVERIFY(window.findChild<QLabel *>(QStringLiteral("divergedTitle"))->text().contains(QStringLiteral("project.kerf changed on disk")));
         // kerfd refuses to sync until one side is chosen.
         QCOMPARE(window.m_commands->reason(QStringLiteral("collab.sync")),
                  QStringLiteral("project.kerf changed on disk: load it or keep the editor's version first"));
@@ -2112,9 +2119,9 @@ private slots:
         window.handleEvent(QJsonObject{{"type", "media_status"}, {"missing", QJsonArray{"m3"}},
                                        {"pointers", QJsonArray{"m1"}}, {"external", QJsonArray{"m2"}}});
         ProjectPanel *bin = window.m_projectPanel;
-        QCOMPARE(bin->badge(QStringLiteral("m1")), QStringLiteral("NOT DOWNLOADED"));
-        QCOMPARE(bin->badge(QStringLiteral("m2")), QStringLiteral("EXTERNAL"));
-        QCOMPARE(bin->badge(QStringLiteral("m3")), QStringLiteral("OFFLINE"));
+        QCOMPARE(bin->badge(QStringLiteral("m1")), QStringLiteral("Not downloaded"));
+        QCOMPARE(bin->badge(QStringLiteral("m2")), QStringLiteral("External"));
+        QCOMPARE(bin->badge(QStringLiteral("m3")), QStringLiteral("Offline"));
         QVERIFY(bin->m_list->item(1)->toolTip().contains(QStringLiteral("Consolidate Media")));
         // Consolidating waits for the Git status, then for media outside the project.
         QCOMPARE(window.m_commands->reason(QStringLiteral("collab.consolidate")), QStringLiteral("Reading the project's Git status"));
@@ -2614,7 +2621,15 @@ private slots:
             for (const ClipKind kind : {ClipKind::Video, ClipKind::Audio, ClipKind::Music, ClipKind::Generator, ClipKind::Caption})
                 QVERIFY(contrastRatio(theme.clip(kind).label, theme.clip(kind).header) >= 4.5);
             QVERIFY(contrastRatio(theme.accentText, theme.panel) >= 4.5);
-            QVERIFY(contrastRatio(theme.onAssistant, theme.assistantStrong) >= 4.5);
+            QVERIFY(contrastRatio(theme.assistantText, theme.chrome) >= 4.5);
+            QVERIFY(contrastRatio(theme.tabInactiveText, theme.panelTitle) >= 4.5);
+            QVERIFY(contrastRatio(theme.trackHeaderDetail, theme.trackHeader) >= 4.5);
+            QVERIFY(contrastRatio(theme.tileEmptyText, theme.tileEmpty) >= 4.5);
+            QVERIFY(contrastRatio(theme.cardPlaceholderText, theme.cardPlaceholder) >= 4.5);
+            QVERIFY(contrastRatio(theme.badgeInfoText, theme.badgeInfo) >= 4.5);
+            QVERIFY(contrastRatio(theme.viewerTextDim, theme.viewerSurround) >= 4.5);
+            QVERIFY(contrastRatio(theme.textSecondary, theme.panel) >= 4.5);
+            QVERIFY(contrastRatio(theme.statusText, theme.statusBar) >= 4.5);
             QCOMPARE(theme.viewerSurround, QColor("#1c1c1c"));
 
             MainWindow window{QString(), QString()};
@@ -2648,26 +2663,38 @@ private slots:
             QVERIFY(toolbar);
             QCOMPARE(dominantColor(toolbar->grab().toImage()), theme.chrome.rgb());
             QCOMPARE(dominantColor(window.statusBar()->grab().toImage()), theme.statusBar.rgb());
-            QVERIFY(dark ? qGray(dominantColor(toolbar->grab().toImage())) < 40 : qGray(dominantColor(toolbar->grab().toImage())) > 220);
-            // The agent's bar is the assistant's purple, not amber.
+            // The launcher's chrome: #f5f5f5 in light, #2c2c2e in dark.
+            QVERIFY(dark ? qGray(dominantColor(toolbar->grab().toImage())) < 60 : qGray(dominantColor(toolbar->grab().toImage())) > 220);
+            // The agent's bar is the window's chrome with a purple stripe, not amber.
             const QImage aiBar = window.m_aiBar->grab().toImage();
-            QCOMPARE(dominantColor(aiBar), theme.assistantSurface.rgb());
+            QCOMPARE(dominantColor(aiBar), theme.chrome.rgb());
+            QCOMPARE(aiBar.pixelColor(QPoint(1, aiBar.height() / 2) * aiBar.devicePixelRatio()), theme.assistant);
             QCOMPARE(amberPixels(aiBar), 0);
-            // Each panel's close button reads on its tab, on the focused
-            // panel's tab as on the others.
-            int closeButtons = 0;
-            for (const QWidget *close : window.findChildren<QWidget *>(QStringLiteral("tabCloseButton"))) {
-                if (!close->isVisible()) continue;
-                ++closeButtons;
-                const qreal ratio = image.devicePixelRatio();
-                const QRect area(close->mapTo(&window, QPoint()) * ratio, close->size() * ratio);
-                QVERIFY2(highestContrast(image, area, theme.panelTitleActive) >= 4.5, qPrintable(close->parentWidget()->objectName()));
+            // Tabs show no close button until the pointer is over them; then
+            // it reads on the tab.
+            const auto closeButtons = window.findChildren<QWidget *>(QStringLiteral("tabCloseButton"));
+            QVERIFY(closeButtons.size() >= 3);
+            for (const QWidget *close : closeButtons) QVERIFY(!close->isVisible());
+            QWidget *programClose = nullptr;
+            for (QWidget *close : closeButtons)
+                if (close->parentWidget() == window.m_workspace->panel(QStringLiteral("program"))->tabWidget()) programClose = close;
+            QVERIFY(programClose);
+            QEvent enter(QEvent::Enter);
+            QCoreApplication::sendEvent(programClose->parentWidget(), &enter);
+            QVERIFY(programClose->isVisible());
+            {
+                const QImage tab = programClose->parentWidget()->grab().toImage();
+                const qreal ratio = tab.devicePixelRatio();
+                const QRect area(programClose->geometry().topLeft() * ratio, programClose->size() * ratio);
+                QVERIFY(highestContrast(tab, area, theme.panelTitleActive) >= 4.5);
             }
-            QVERIFY(closeButtons >= 3);
-            // The chosen tool is the accent, with its symbol on it.
+            QEvent leave(QEvent::Leave);
+            QCoreApplication::sendEvent(programClose->parentWidget(), &leave);
+            QVERIFY(!programClose->isVisible());
+            // The chosen tool is a quiet chip with its symbol in the accent.
             const QImage tool = window.m_toolPalette->widgetForAction(window.m_commands->action(QStringLiteral("tool.selection")))->grab().toImage();
             const QColor toolFill = tool.pixelColor(qRound(3 * tool.devicePixelRatio()), tool.height() / 2);
-            QCOMPARE(toolFill.rgb(), theme.accent.rgb());
+            QCOMPARE(toolFill.rgb(), theme.toolSelected.rgb());
             QVERIFY(highestContrast(tool, tool.rect(), toolFill) >= 3.0);
             save(image, QStringLiteral("editor-%1").arg(name));
 
@@ -2676,8 +2703,19 @@ private slots:
             QVERIFY(QTest::qWaitForWindowExposed(window.m_preferences));
             QCoreApplication::processEvents();
             const QImage settings = window.m_preferences->grab().toImage();
-            QCOMPARE(dominantColor(settings), theme.dialog.rgb());
+            QCOMPARE(settings.pixelColor(QPoint(4, settings.height() - 4)).rgb(), theme.dialog.rgb());
+            // Sized to what it shows, with no Close button under empty space.
+            QVERIFY(window.m_preferences->height() < 400);
+            QVERIFY(!window.m_preferences->findChild<QDialogButtonBox *>());
             save(settings, QStringLiteral("settings-%1").arg(name));
+            // Advanced opens below, and the window grows to show it.
+            auto *advanced = window.m_preferences->findChild<QToolButton *>(QStringLiteral("disclosure"));
+            QVERIFY(advanced);
+            const int closedHeight = window.m_preferences->height();
+            advanced->click();
+            QVERIFY(window.m_advancedSettings->isVisible());
+            QVERIFY(window.m_preferences->height() > closedHeight);
+            advanced->click();
             window.m_preferences->hide();
 
             // A representative dialog: the preset's media bindings.
@@ -2685,10 +2723,18 @@ private slots:
                 auto *dialog = window.findChild<QDialog *>(QStringLiteral("presetBindingsDialog"));
                 QVERIFY(dialog);
                 QTimer::singleShot(2000, dialog, &QDialog::reject);
-                if (auto *choice = dialog->findChild<QComboBox *>(QStringLiteral("presetMedia_Opening"))) choice->setCurrentIndex(1);
+                for (const char *slot : {"presetMedia_Opening", "presetMedia_Logo"})
+                    if (auto *choice = dialog->findChild<QComboBox *>(QString::fromLatin1(slot))) choice->setCurrentIndex(1);
                 QCoreApplication::processEvents();
                 const QImage bindings = dialog->grab().toImage();
                 QCOMPARE(dominantColor(bindings), theme.dialog.rgb());
+                // The default button is the accent, as in macOS dialogs.
+                QPushButton *create = dialog->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok);
+                QCOMPARE(create->text(), QStringLiteral("Create Proposal"));
+                QVERIFY(create->isEnabled() && create->isDefault());
+                const QImage createImage = create->grab().toImage();
+                const QColor createFill = createImage.pixelColor(QPoint(6, create->height() / 2) * createImage.devicePixelRatio());
+                QVERIFY2(std::abs(createFill.hue() - theme.accent.hue()) <= 4, qPrintable(createFill.name()));
                 save(bindings, QStringLiteral("dialog-%1").arg(name));
                 dialog->reject();
             });
@@ -2719,7 +2765,10 @@ private slots:
             QVERIFY2(std::abs(fill.hue() - theme.accent.hue()) <= 4 && std::abs(fill.value() - theme.accent.value()) <= 24,
                      qPrintable(fill.name()));
             const QImage states = window.grab().toImage();
-            QCOMPARE(amberPixels(window.m_divergedBanner->grab().toImage()), 0);
+            // The bar and its text are neutral; only the 14-point triangle is orange.
+            for (QWidget *part : window.m_divergedBanner->findChildren<QWidget *>(Qt::FindDirectChildrenOnly))
+                if (part != window.m_divergedGlyph) QCOMPARE(amberPixels(part->grab().toImage()), 0);
+            QCOMPARE(dominantColor(window.m_divergedBanner->grab().toImage()), theme.warningSurface.rgb());
             save(states, QStringLiteral("states-%1").arg(name));
             window.close();
         }
@@ -2863,7 +2912,10 @@ private slots:
             monitor.close();
 
             // Bin tiles and their badges, redrawn for the new appearance.
-            QCOMPARE(tilePixel(3, QPoint(2, 60)), theme.thumbnail);
+            // Sound is the teal tile; a picture tile with no picture has an edge.
+            QCOMPARE(tilePixel(3, QPoint(2, 60)), theme.audioTile);
+            QCOMPARE(tilePixel(2, QPoint(56, 60)), theme.tileEmpty);
+            QCOMPARE(tilePixel(2, QPoint(0, 40)), theme.tileEmptyBorder);
             QCOMPARE(tilePixel(2, QPoint(5, 10)), theme.badgeError);
             QCOMPARE(tilePixel(1, QPoint(5, 10)).rgb(), theme.badgeInfo.rgb());
             bin.show();

@@ -76,6 +76,27 @@ bool isAudioTrack(const QJsonObject &track);
 // Pixel-exact border drawn inside the rectangle, independent of pen geometry.
 void frameInside(QPainter &p, const QRectF &rect, qreal thickness, const QColor &color);
 
+// macOS's up and down chevrons (a pop-up button's, or a stepper's),
+// centred on `mid`, each reaching `reach` points from its base.
+void drawUpDownChevrons(QPainter &painter, const QPointF &mid, const QColor &color, qreal reach);
+
+// The chevrons the style sheet draws on pop-up buttons and steppers.
+enum class ChevronImage { PopUp, StepUp, StepDown };
+
+// `kind` in `color` as an image file the style sheet can name (with an @2x
+// twin for Retina screens), written once per colour per run; empty if it
+// cannot be written.
+QString chevronImagePath(ChevronImage kind, const QColor &color);
+
+// A disclosure chevron: › closed, ⌄ open, at the icon's left edge so it
+// lines up with the content's margin (the launcher's Details row, the
+// editor's Advanced and Details).
+QIcon disclosureIcon(bool open, const QColor &color);
+
+// SF Symbols' exclamationmark.triangle.fill at `size` points: a rounded
+// triangle in `color` with the mark cut out of it.
+QPixmap warningTriangle(const QColor &color, int size = 14);
+
 // Cache source coordinates use device pixels while the paint target uses logical pixels.
 void blitLaneCache(QPainter &painter, const QPixmap &cache, const QRegion &clip);
 

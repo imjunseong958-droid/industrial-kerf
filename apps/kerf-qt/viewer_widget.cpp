@@ -3,6 +3,7 @@
 #include "editor_theme.h"
 
 #include <QCursor>
+#include <QFontMetricsF>
 #include <QKeyEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -23,6 +24,37 @@ constexpr double kHandleSize = 7.0;
 constexpr double kHandleReach = 6.0;
 
 QColor maskColor(bool selected) { return selected ? editorTheme().maskOutline : editorTheme().maskOutlineIdle; }
+
+// An outline over the picture: a dark rule, then a white line on it, which
+// reads on any picture; `dashed` for a path only.
+void strokeOverPicture(QPainter &p, const QPainterPath &path, bool selected, bool dashed) {
+    const EditorTheme &theme = editorTheme();
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(theme.maskShadow, 3.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    p.drawPath(path);
+    QPen pen(maskColor(selected), 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+    if (dashed) pen.setStyle(Qt::DashLine);
+    p.setPen(pen);
+    p.drawPath(path);
+}
+
+// A mask's name on a tag just above `anchor` (the top left of its outline).
+void paintMaskTag(QPainter &p, const QPointF &anchor, const QString &name, bool selected) {
+    const EditorTheme &theme = editorTheme();
+    QFont font = p.font();
+    font.setPixelSize(11);
+    font.setWeight(QFont::DemiBold);
+    const QFontMetricsF metrics(font);
+    const QSizeF size(metrics.horizontalAdvance(name) + 10.0, metrics.height() + 4.0);
+    // Clear of the top-left handle, by 4 points.
+    const QRectF tag(QPointF(anchor.x() - kHandleSize / 2.0, anchor.y() - kHandleSize / 2.0 - 4.0 - size.height()), size);
+    p.setPen(Qt::NoPen);
+    p.setBrush(selected ? theme.maskTagSelected : theme.maskTag);
+    p.drawRoundedRect(tag, 4, 4);
+    p.setFont(font);
+    p.setPen(theme.maskText);
+    p.drawText(tag, Qt::AlignCenter, name);
+}
 
 // Fractions of the picture are kept to four places, under half a pixel of
 // a 4K picture, so the document stays readable.
@@ -492,44 +524,29 @@ void ViewerWidget::paintMasks(QPainter &p) {
     p.save();
     p.setRenderHint(QPainter::Antialiasing);
     p.setBrush(Qt::NoBrush);
-    // A dark rule under each outline keeps it visible on any picture; a
-    // path only (mode none) is dashed.
+    // Outlines are white over a dark rule, never the accent, so they read
+    // on a picture in the accent's own hue; a path only (mode none) is dashed.
     const auto outline = [&p](const QPainterPath &path, bool selected, bool pathOnly) {
-        p.setPen(QPen(editorTheme().maskShadow, selected ? 3.6 : 3.0));
-        p.drawPath(path);
-        QPen pen(maskColor(selected), selected ? 1.6 : 1.1);
-        if (pathOnly) pen.setStyle(Qt::DashLine);
-        p.setPen(pen);
-        p.drawPath(path);
+        strokeOverPicture(p, path, selected, pathOnly);
     };
-    const auto handle = [&p](const QPointF &center, bool filled) {
-        p.setPen(QPen(maskColor(true), 1.2));
-        p.setBrush(filled ? maskColor(true) : editorTheme().maskHandleFill);
+    // Handles are the accent with a white edge; the pen's first point turns
+    // white when a click there would close the outline.
+    const auto handle = [&p](const QPointF &center, bool closes) {
+        const EditorTheme &theme = editorTheme();
+        p.setPen(QPen(closes ? theme.maskHandleFill : theme.maskHandleBorder, 1.0));
+        p.setBrush(closes ? theme.maskHandleBorder : theme.maskHandleFill);
         p.drawRect(QRectF(center - QPointF(kHandleSize / 2.0, kHandleSize / 2.0), QSizeF(kHandleSize, kHandleSize)));
         p.setBrush(Qt::NoBrush);
     };
-    QFont font = p.font();
-    font.setPointSizeF(std::max(7.0, font.pointSizeF() - 2.0));
-    font.setWeight(QFont::DemiBold);
-    p.setFont(font);
     for (const QJsonValue &value : m_masks) {
         const QJsonObject mask = value.toObject();
         const QString name = mask.value(QStringLiteral("name")).toString();
         const bool selected = name == m_selectedMask;
         const QPainterPath path = toWidget.map(maskPath(mask));
         outline(path, selected, mask.value(QStringLiteral("mode")).toString() == QStringLiteral("none"));
-        // The name is white on the outlines' dark rule, so it reads on a
-        // picture in the accent's own hue; dimmer when not selected.
-        QPainterPath text;
-        text.addText(path.boundingRect().topLeft() + QPointF(4.0, -5.0), font, name);
-        p.setPen(QPen(editorTheme().maskShadow, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        p.drawPath(text);
-        p.setPen(Qt::NoPen);
-        QColor label = editorTheme().maskText;
-        if (!selected) label.setAlpha(190);
-        p.setBrush(label);
-        p.drawPath(text);
-        p.setBrush(Qt::NoBrush);
+        // The name on a tag over the outline's top left; the selected
+        // mask's tag is the accent.
+        if (!name.isEmpty()) paintMaskTag(p, path.boundingRect().topLeft(), name, selected);
         if (!selected) continue;
         for (const QPointF &point : handlesOf(mask)) handle(toWidget.map(point), false);
     }
@@ -544,9 +561,9 @@ void ViewerWidget::paintMasks(QPainter &p) {
         QPainterPath path(toWidget.map(m_penPoints.first()));
         for (int index = 1; index < m_penPoints.size(); ++index) path.lineTo(toWidget.map(m_penPoints.at(index)));
         outline(path, true, false);
-        QPen rubber(maskColor(false), 1.0, Qt::DashLine);
-        p.setPen(rubber);
-        p.drawLine(toWidget.map(m_penPoints.last()), m_pointer);
+        QPainterPath rubber(toWidget.map(m_penPoints.last()));
+        rubber.lineTo(m_pointer);
+        strokeOverPicture(p, rubber, false, true);
         const QPointF first = toWidget.map(m_penPoints.first());
         const QPointF reach = first - m_pointer;
         // The first point fills when a click there would close the outline.
@@ -635,14 +652,13 @@ void RegionPicker::paintEvent(QPaintEvent *) {
     const QRectF selected(image.x() + m_region.x() * image.width(),
                           image.y() + m_region.y() * image.height(),
                           m_region.width() * image.width(), m_region.height() * image.height());
-    // A dark rule under the outline keeps it readable on any picture, as
-    // the masks' does.
-    painter.setPen(QPen(theme.maskShadow, 3.6));
-    painter.setBrush(theme.maskFill);
-    painter.drawRect(selected);
-    painter.setPen(QPen(theme.maskOutline, 2));
-    painter.setBrush(Qt::NoBrush);
-    painter.drawRect(selected);
+    // White over a dark rule, as the masks' outlines, so it reads on any
+    // picture.
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.fillRect(selected, theme.maskFill);
+    QPainterPath frame;
+    frame.addRect(selected);
+    strokeOverPicture(painter, frame, true, false);
 }
 
 void RegionPicker::mousePressEvent(QMouseEvent *event) {

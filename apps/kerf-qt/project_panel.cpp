@@ -3,7 +3,7 @@
 #include "editor_theme.h"
 #include "media_artwork.h"
 
-#include <QFontMetrics>
+#include <QFontMetricsF>
 #include <QJsonObject>
 #include <QListWidget>
 #include <QPainter>
@@ -17,37 +17,63 @@ namespace {
 
 constexpr QSize kThumbnail{112, 63};
 
-const QString kOffline = QStringLiteral("OFFLINE");
-const QString kNotDownloaded = QStringLiteral("NOT DOWNLOADED");
-const QString kExternal = QStringLiteral("EXTERNAL");
+const QString kOffline = QStringLiteral("Offline");
+const QString kNotDownloaded = QStringLiteral("Not downloaded");
+const QString kExternal = QStringLiteral("External");
 
 // A thumbnail letterboxed onto a fixed tile, so the bin keeps a grid, with
-// the media's badge in its corner.
-QIcon tile(const QImage &frame, bool audio, const QString &badge) {
+// the media's badge in its corner. Sound is a teal tile with its waveform
+// (or a note until one arrives); a picture not yet drawn, or offline, is a
+// quiet tile with an edge, so it never reads as a gap in the grid.
+QIcon tile(const QImage &frame, const QImage &wave, bool audio, const QString &badge) {
     const EditorTheme &theme = editorTheme();
     QPixmap pixmap(kThumbnail);
-    pixmap.fill(theme.thumbnail);
     QPainter painter(&pixmap);
     if (!frame.isNull() && badge != kOffline) {
+        pixmap.fill(theme.thumbnail);
         const QImage scaled = frame.scaled(kThumbnail, Qt::KeepAspectRatio, Qt::SmoothTransformation);
         painter.drawImage((kThumbnail.width() - scaled.width()) / 2, (kThumbnail.height() - scaled.height()) / 2, scaled);
+    } else if (audio && badge != kOffline) {
+        pixmap.fill(theme.audioTile);
+        if (!wave.isNull()) {
+            // FFmpeg draws the wave in white: ink it in the tile's glyph colour.
+            QImage ink = wave.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+            QPainter tint(&ink);
+            tint.setCompositionMode(QPainter::CompositionMode_SourceIn);
+            tint.fillRect(ink.rect(), theme.audioTileGlyph);
+            tint.end();
+            painter.drawImage(QRect(0, 14, kThumbnail.width(), kThumbnail.height() - 28), ink);
+        } else {
+            QFont font = painter.font();
+            font.setPixelSize(24);
+            painter.setFont(font);
+            painter.setPen(theme.audioTileGlyph);
+            painter.drawText(pixmap.rect(), Qt::AlignCenter, QStringLiteral("♪"));
+        }
     } else {
-        painter.setPen(theme.thumbnailText);
-        painter.drawText(pixmap.rect(), Qt::AlignCenter, audio ? QStringLiteral("AUDIO") : QStringLiteral("MEDIA"));
+        pixmap.fill(theme.tileEmpty);
+        painter.setPen(theme.tileEmptyBorder);
+        painter.drawRect(pixmap.rect().adjusted(0, 0, -1, -1));
+        QFont font = painter.font();
+        font.setPixelSize(11);
+        painter.setFont(font);
+        painter.setPen(theme.tileEmptyText);
+        painter.drawText(pixmap.rect(), Qt::AlignCenter, audio ? QStringLiteral("Audio") : QStringLiteral("Media"));
     }
     if (!badge.isEmpty()) {
+        // Sentence case at 11 points, as macOS labels.
         QFont font = painter.font();
-        font.setPixelSize(8);
-        font.setBold(true);
+        font.setPixelSize(11);
+        font.setWeight(QFont::DemiBold);
         painter.setFont(font);
-        const QRect text = QFontMetrics(font).boundingRect(badge);
-        const QRectF box(4, 4, text.width() + 8, 13);
+        const QSizeF text = QFontMetricsF(font).size(Qt::TextSingleLine, badge);
+        const QRectF box(4, 4, text.width() + 12, text.height() + 4);
         const QColor fill = badge == kOffline ? theme.badgeError : badge == kNotDownloaded ? theme.badgeInfo : theme.badgeNeutral;
         const QColor ink = badge == kOffline ? theme.badgeErrorText : badge == kNotDownloaded ? theme.badgeInfoText : theme.badgeNeutralText;
         painter.setRenderHint(QPainter::Antialiasing);
         painter.setPen(Qt::NoPen);
         painter.setBrush(fill);
-        painter.drawRoundedRect(box, 3, 3);
+        painter.drawRoundedRect(box, 4, 4);
         painter.setPen(ink);
         painter.drawText(box, Qt::AlignCenter, badge);
     }
@@ -114,7 +140,8 @@ void ProjectPanel::setMediaStatus(const QJsonObject &status) {
 
 QIcon ProjectPanel::tileFor(const QJsonObject &source) const {
     const QString id = source.value(QStringLiteral("id")).toString();
-    return tile(m_artwork ? m_artwork->frames.value(id) : QImage(), !source.contains(QStringLiteral("width")), m_badges.value(id));
+    return tile(m_artwork ? m_artwork->frames.value(id) : QImage(), m_artwork ? m_artwork->waves.value(id) : QImage(),
+                !source.contains(QStringLiteral("width")), m_badges.value(id));
 }
 
 void ProjectPanel::refreshTiles() {

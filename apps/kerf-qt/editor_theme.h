@@ -56,10 +56,12 @@ ClipKind clipKind(const QJsonObject &track, const QJsonObject &clip = {});
 // editorTheme(); a widget that caches colours or pixmaps rebuilds them on
 // EditorAppearance::changed().
 //
-// Dark keeps the finishing-room look (near-black wells, brightness steps
-// instead of extra hues) with the system accent in place of amber; light is
-// macOS's light window family. The viewer's surround is the same neutral
-// dark grey in both, so pictures are judged against the same field.
+// Both are macOS's window families, as the project launcher draws them:
+// light, and dark with #1e1e1e content under #2c2c2e chrome and #3a3a3c
+// hairlines, so opening a project from the launcher keeps the same look.
+// The system accent marks focus and the default action. The viewer's
+// surround is the same neutral dark grey in both, so pictures are judged
+// against the same field.
 struct EditorTheme {
     bool dark = true;
 
@@ -79,7 +81,9 @@ struct EditorTheme {
     QColor panel;            // A docked panel's body: monitors' frames, timeline, inspector, transport.
     QColor panelTitle;       // A dock's title strip, and its inactive tabs.
     QColor panelTitleActive; // The current tab in a title strip.
-    QColor raised;           // Group boxes and cards inside a panel or dialog.
+    QColor raised;           // Cards inside a panel or dialog.
+    QColor group;            // A grouped box's fill (Settings, the proposal), as macOS groups rows.
+    QColor groupBorder;      // ...and its edge.
     QColor well;             // The deepest content area: lists, the project bin, preset list.
     QColor dialog;           // Dialog and settings window background.
 
@@ -97,6 +101,7 @@ struct EditorTheme {
     QColor textSecondary; // Captions, hints, inactive tabs.
     QColor textTertiary;  // Least important: durations, counts, placeholders.
     QColor textDisabled;  // Disabled controls.
+    QColor tabInactiveText; // A dock's tabs that are not current, 4.5:1 on `panelTitle`.
 
     // Selection and pointer feedback.
     QColor selection;             // A chosen row in a list that has focus.
@@ -138,7 +143,7 @@ struct EditorTheme {
     QColor tooltipBorder;
     QColor tooltipText;
 
-    QColor scrollTrack;
+    // Scroll bars: a thin handle on no track, as macOS's overlay scrollers.
     QColor scrollHandle;
     QColor scrollHandleHover;
 
@@ -167,14 +172,16 @@ struct EditorTheme {
     QColor warning;
     QColor warningSurface;
     QColor warningBorder;
-    QColor warningText;
+    QColor warningText;  // The banner's body text...
+    QColor warningTitle; // ...its bold first sentence...
+    QColor warningGlyph; // ...and the triangle at its start: the only orange in it.
     QColor success;
 
     // Agent work (the AI bar, proposals, Ask Kerf, the agent's messages):
-    // the system purple, so it never reads as the user's own selection.
-    QColor assistant;        // Thin marks: proposal outlines, the Ask prompt's ring.
-    QColor assistantStrong;  // A filled button (Accept); `onAssistant` reads on it at 4.5:1.
-    QColor onAssistant;
+    // the system purple, so it never reads as the user's own selection. It
+    // marks, and never fills a button: accepting is the accent's default
+    // action, as everywhere else.
+    QColor assistant;        // Thin marks: proposal outlines, the AI bar's stripe, the Ask prompt's ring.
     QColor assistantSurface; // A bar or note's fill.
     QColor assistantBorder;  // A bar or note's edge, and its buttons' outlines.
     QColor assistantText;    // Text on `assistantSurface`, and the agent's name in the conversation.
@@ -190,6 +197,7 @@ struct EditorTheme {
     // Icons drawn in code: toolbar and transport symbols, pop-up arrows.
     QColor glyph;
     QColor glyphDisabled;
+    QColor toolSelected; // Behind the chosen tool in the tool palette (its symbol is the accent).
 
     // Timeline.
     QColor timelineBackground;      // Below the last track, so spare height never reads as a track.
@@ -207,11 +215,9 @@ struct EditorTheme {
     QColor trackHeaderTextDisabled; // The name of a disabled track.
     QColor trackHeaderDetail;       // The clip count under the name.
     QColor trackResizeGrip;         // The bar shown while a header's lower edge is dragged.
-    QColor trackBadge;              // The V1/A1 badge.
-    QColor trackBadgeBorder;
+    QColor trackBadge;              // The V1/A1 badge: a rounded fill, no edge.
     QColor trackBadgeText;
     QColor trackToggle;       // Output, mute, and lock toggles when off...
-    QColor trackToggleBorder;
     QColor trackToggleGlyph;
     QColor trackToggleOn;     // ...and on (the accent).
     QColor trackToggleOnGlyph;
@@ -233,8 +239,10 @@ struct EditorTheme {
     ClipStyle clipMusic;
     ClipStyle clipGenerator;
     ClipStyle clipCaption;
-    QColor clipSelectedRing; // The 2px ring round the selected clip. Not the accent: the accent
-                             // is usually blue, the picture clips' own hue.
+    QColor clipSelectedRing;      // The selected clip's 2px inner ring...
+    QColor clipSelectedRingOuter; // ...and the 1px line outside it, so it reads on every clip hue
+                                  // and lane. Not the accent: the accent is usually blue, the
+                                  // picture clips' own hue.
     QColor clipTrim;         // The trim bracket on the edge under the pointer or being trimmed.
     QColor clipHighlight;    // The 1px highlight inside a clip's top edge.
     QColor clipFxBadge;      // The FX badge on an effected clip's header...
@@ -252,6 +260,7 @@ struct EditorTheme {
     QColor readout;          // The drag readout box...
     QColor readoutBorder;
     QColor readoutText;
+    QColor dragShadow;       // Under the clip being dragged.
 
     // Marker colours, by the document's names; marker() looks one up.
     QColor markerRed;
@@ -285,25 +294,32 @@ struct EditorTheme {
     QColor viewerCaption;       // The caption box over the picture...
     QColor viewerCaptionBorder;
     QColor viewerCaptionText;
-    QColor maskOutline;         // Mask outlines and handles over the picture...
-    QColor maskOutlineIdle;     // ...on a mask that is not selected...
-    QColor maskText;            // ...a mask's name (white: the accent's hue can be the picture's)...
-    QColor maskFill;            // ...a region's wash...
-    QColor maskHandleFill;      // ...the inside of a handle that is not filled...
-    QColor maskShadow;          // ...and the shadow that keeps outlines readable.
+    // Masks and regions over the picture: white over a dark rule, never the
+    // accent, whose hue can be the picture's own (blue sky, blue water).
+    QColor maskOutline;         // A selected mask's outline...
+    QColor maskOutlineIdle;     // ...one that is not selected...
+    QColor maskShadow;          // ...and the dark rule under both.
+    QColor maskFill;            // A region's wash.
+    QColor maskHandleFill;      // A handle's fill (the accent)...
+    QColor maskHandleBorder;    // ...and its edge.
+    QColor maskTag;             // A mask's name tag...
+    QColor maskTagSelected;     // ...the selected mask's...
+    QColor maskText;            // ...and the name on either.
 
     // The project bin, the Effects panel, and media badges.
-    QColor thumbnail;           // Behind a letterboxed thumbnail.
-    QColor thumbnailText;       // "MEDIA" or "AUDIO" on a tile with no picture.
+    QColor thumbnail;           // The letterbox bars behind a picture that does not fill its tile.
+    QColor tileEmpty;           // A picture tile with no picture yet (or offline)...
+    QColor tileEmptyBorder;
+    QColor tileEmptyText;       // ...and "Media" on it.
     QColor audioTile;           // A sound-only media tile...
     QColor audioTileGlyph;      // ...and its note.
     QColor cardPlaceholder;     // An effect card before its preview arrives...
     QColor cardPlaceholderText;
-    QColor badgeError;          // OFFLINE...
+    QColor badgeError;          // Offline...
     QColor badgeErrorText;
-    QColor badgeInfo;           // NOT DOWNLOADED...
+    QColor badgeInfo;           // Not downloaded...
     QColor badgeInfoText;
-    QColor badgeNeutral;        // EXTERNAL.
+    QColor badgeNeutral;        // External.
     QColor badgeNeutralText;
 
     // The style of a clip of `kind`.
