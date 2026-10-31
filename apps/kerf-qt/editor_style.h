@@ -791,6 +791,13 @@ QLabel#chatReplyText { color: @chatText; font-size: 13px; }
 QScrollArea#chatScroll, QWidget#chatContent { background: transparent; border: 0; }
 /* The list's scroll bar shows only while the pointer is over the panel
    (ChatPanel sets "hovered"), as a comments panel's: a 4px pill. */
+/* The Inspector's body: a 6px overlay-style scroller, no groove, shown only
+   while the pointer is over the Inspector or the body scrolls. */
+QScrollArea#inspectorScroll QScrollBar:vertical { width: 6px; background: transparent; margin: 0; }
+QScrollArea#inspectorScroll QScrollBar::handle:vertical { background: transparent; border-radius: 3px; margin: 0; min-height: 24px; }
+QScrollArea#inspectorScroll[active="true"] QScrollBar::handle:vertical { background: @borderSubtle; }
+QScrollArea#inspectorScroll[active="true"] QScrollBar::handle:vertical:hover,
+QScrollArea#inspectorScroll[active="true"] QScrollBar::handle:vertical:pressed { background: @textSecondary; }
 QScrollArea#chatScroll QScrollBar:vertical { width: 8px; background: transparent; margin: 4px 2px; }
 QScrollArea#chatScroll QScrollBar::handle:vertical { background: transparent; border-radius: 2px; margin: 0; min-height: 24px; }
 QScrollArea#chatScroll[hovered="true"] QScrollBar::handle:vertical { background: @chatScrollHandle; }

@@ -19,6 +19,7 @@ class QLabel;
 class QMenu;
 class QPushButton;
 class QScrollArea;
+class QTimer;
 class QVBoxLayout;
 
 namespace kerf {
@@ -122,6 +123,8 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void showEvent(QShowEvent *event) override;
+    void enterEvent(QEnterEvent *event) override;
+    void leaveEvent(QEvent *event) override;
 
 private:
     // One value a row shows: how to show it again, whether it differs from
@@ -213,6 +216,10 @@ private:
     void showDropLine(int index);
     // The body's right padding, less the scroll bar's width while it shows.
     void fitScrollBar();
+    // The body's scroll bar shows only while the pointer is over the
+    // Inspector or the body is scrolling, as an overlay scroller does.
+    void showScrollBar(bool shown);
+    QTimer *m_scrollBarTimer = nullptr;
     // A field whose Return or Esc hands the keys back.
     ScrubField *newScrubField();
 

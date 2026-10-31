@@ -741,25 +741,36 @@ QIcon transportIcon(TransportGlyph glyph) {
     });
 }
 
+void drawPenNib(QPainter &painter, const QPointF &center, const QColor &color) {
+    // A pen's nib: a 10-point diagonal shaft ending in a 3-point solid tip
+    // at the lower left.
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(color, 1.25, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawLine(center + QPointF(-2.4, 2.4), center + QPointF(4.6, -4.6));
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(color);
+    painter.drawPolygon(QPolygonF{center + QPointF(-5.0, 5.0), center + QPointF(-3.7, 1.4), center + QPointF(-1.4, 3.7)});
+    painter.restore();
+}
+
 QIcon maskToolIcon(MaskTool tool) {
     const auto draw = [tool](QPainter &painter, const QColor &color) {
-        painter.setPen(QPen(color, 1.4));
+        painter.setPen(QPen(color, 1.25));
         painter.setBrush(Qt::NoBrush);
         switch (tool) {
         case MaskTool::None: break;
         case MaskTool::Rectangle: painter.drawRect(QRectF(2.5, 3.5, 11.0, 9.0)); break;
         case MaskTool::Ellipse: painter.drawEllipse(QRectF(2.0, 3.0, 12.0, 10.0)); break;
-        case MaskTool::Pen: {
-            const QPolygonF corners{{2.5, 12.5}, {5.5, 3.0}, {13.0, 6.0}, {10.0, 13.0}};
-            painter.drawPolygon(corners);
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(color);
-            for (const QPointF &corner : corners) painter.drawRect(QRectF(corner - QPointF(1.5, 1.5), QSizeF(3.0, 3.0)));
-            break;
-        }
+        case MaskTool::Pen: drawPenNib(painter, QPointF(8.0, 8.0), color); break;
         }
     };
-    QIcon icon = glyphIcon(QSize(16, 16), draw);
+    // Quiet at rest (secondary ink, as the headers they sit in), full ink
+    // under the pointer, and the accent while chosen.
+    QIcon icon(glyphPixmap(QSize(16, 16), draw, editorTheme().textSecondary));
+    icon.addPixmap(glyphPixmap(QSize(16, 16), draw, editorTheme().text), QIcon::Active, QIcon::Off);
+    icon.addPixmap(glyphPixmap(QSize(16, 16), draw, editorTheme().glyphDisabled), QIcon::Disabled, QIcon::Off);
     const QPixmap chosen = glyphPixmap(QSize(16, 16), draw, editorTheme().accentText);
     icon.addPixmap(chosen, QIcon::Normal, QIcon::On);
     icon.addPixmap(chosen, QIcon::Active, QIcon::On);

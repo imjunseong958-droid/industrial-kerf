@@ -1911,10 +1911,7 @@ void MainWindow::buildUi() {
     connect(m_inspector, &InspectorPanel::addEffectRequested, this, [this](bool) {
         // The Effects browser, its search ready; adding brings the
         // Inspector back with the new effect open.
-        if (ads::CDockWidget *effects = m_workspace->panel(QStringLiteral("effects"))) {
-            if (effects->isClosed()) effects->toggleView(true);
-            effects->setAsCurrentTab();
-        }
+        m_workspace->showBrowserForInspector(QStringLiteral("effects"));
         m_effects->focusSearch();
         m_effectsFromInspector = true;
     });
@@ -3922,10 +3919,13 @@ ProposalChange MainWindow::describeScriptLine(const QString &line) const {
     change.description = line.left(1).toUpper() + line.mid(1);
     if (words.isEmpty()) return change;
     const QString verb = words.at(0);
-    const auto clipName = [this](const QString &id) {
+    // The names said, so the short description can drop their extensions.
+    QStringList names;
+    const auto clipName = [this, &names](const QString &id) {
         const QJsonObject clip = clipObject(id);
         const QString name = clip.value(QStringLiteral("name")).toString();
-        return name.isEmpty() ? id : name;
+        names << (name.isEmpty() ? id : name);
+        return names.constLast();
     };
     const auto clipSpan = [this](const QString &id) {
         const QJsonObject clip = clipObject(id);
@@ -3974,6 +3974,7 @@ ProposalChange MainWindow::describeScriptLine(const QString &line) const {
         QString name = media;
         for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray())
             if (value.toObject().value(QStringLiteral("id")).toString() == media) name = sourceName(value.toObject());
+        names << name;
         change.description = QStringLiteral("%1 %2").arg(verb == QStringLiteral("insert") ? QStringLiteral("Insert") : QStringLiteral("Overwrite with"), name);
         if (!scriptValue(words, QStringLiteral("at")).isEmpty()) change.detail = QStringLiteral("at %1").arg(at(QStringLiteral("at")));
     } else if ((verb == QStringLiteral("move") || verb == QStringLiteral("roll") || verb == QStringLiteral("slide") ||
@@ -4021,6 +4022,16 @@ ProposalChange MainWindow::describeScriptLine(const QString &line) const {
     } else if (verb == QStringLiteral("captions") && words.size() >= 2) {
         change.glyph = ProposalChange::Glyph::Title;
         change.description = QStringLiteral("Caption %1").arg(clipName(subject));
+    }
+    // For a narrow row: "Trim fisher-close" (the tooltip keeps the full name).
+    change.shortDescription = change.description;
+    for (const QString &name : std::as_const(names)) {
+        const QFileInfo file(name);
+        const QString base = file.completeBaseName();
+        const QString suffix = file.suffix();
+        if (base.isEmpty() || suffix.isEmpty() || suffix.size() > 5 || !std::all_of(suffix.begin(), suffix.end(), [](QChar c) { return c.isLetterOrNumber(); }))
+            continue;
+        change.shortDescription.replace(name, base);
     }
     return change;
 }

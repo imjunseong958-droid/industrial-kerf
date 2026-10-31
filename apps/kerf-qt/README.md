@@ -302,7 +302,11 @@ column (Window ▸ Inspector, ⌘4) and the chat beside the picture is never
 touched. It remembers the tab it came from and goes back when the selection
 clears (Esc, or a click on an empty lane), unless you chose the Inspector
 yourself; a clip selected by an edit (an insert, a drop, a proposal, undo)
-raises nothing, and a closed Inspector is never reopened by a click. Window ▸
+raises nothing, and a closed Inspector is never reopened by a click. While
+you have Effects or Presets in front, a click on another clip leaves the
+browser there (it follows the selection), so a look can be applied clip by
+clip; only the Inspector's own Add effect brings Effects up for the next
+click to replace. Window ▸
 Inspector Follows Selection (⌥⌘4) turns this off. Raising never moves
 keyboard focus. These are preferences of this Mac (QSettings
 `editor/inspectorFollowsSelection`, `editor/inspector/…`); layouts saved with
@@ -336,9 +340,13 @@ effect's values stay in the secondary ink, readable and editable;
 resets it all. Each effect has a switch, its name, a second line listing what
 changed while folded, five parameters before "N more" (grouped under quiet
 sub-headers when the catalog groups them), and ⋯ for Reset Parameters, Ask
-Kerf and Remove. Animated values show their value at the playhead, read-only.
+Kerf and Remove. Effect names read in Title Case and row labels in sentence
+case, on one 12-point line: a first word the effect's name already says goes
+("Threshold" under Edge Glow), and a label still too long ends in an ellipsis,
+whole in its tooltip. Animated values show their value at the playhead, read-only.
 With several clips it shows what they share ("Mixed" where they differ; a drag
-moves each alike, in one edit); with nothing selected, the sequence's format,
+moves each alike, in one edit; End is the span's end, and a new End trims only
+the clip ending there, so no gaps open inside the span); with nothing selected, the sequence's format,
 tracks and markers, with only its frame size to change. ⋯ ▸ Ask Kerf opens the
 chat about the clip, and the composer names the selected clip. Selecting
 another clip of the same shape (kind, effect stack, masks) only sets values:
@@ -408,11 +416,15 @@ when one arrives the list shows it from its head (following the latest again
 once you scroll or send). It lists its changes in words, a row each with a
 glyph and a detail ("Trim fisher-close.mov — end −1.5 s", "Remove
 drone-pass.mov — 0:11–0:18"), up to three, under a summary that counts them
-("Trim, remove, add a title · 3 changes"), then Reject and Accept pills
+("Trim, remove, add a title · 3 changes"). The amount or time is never cut:
+in a narrow panel (as beside the laptop) a row first drops the clip's file
+extension ("Trim fisher-close"), then puts the detail on a second line under
+it, with the full wording in its tooltip. Then come Reject and Accept pills
 (⌘Return; Escape with the timeline focused rejects) and a hairline; its
 script and diff are behind "Script" (as tall as their lines, up to ten).
 While its head or its pills are scrolled out of view, a compact bar under the
-header keeps its count, Reject and Accept in reach. The up to three next steps Kerf ends each turn with
+header keeps its verbs (or only "3 changes" where they would not fit
+whole), Reject and Accept in reach. The up to three next steps Kerf ends each turn with
 ("Stronger glow", "Wipe to the next shot") are one row of chips over the
 composer, scrolling sideways rather than wrapping, so the conversation
 keeps its height; pressing one asks for it about the same selection.

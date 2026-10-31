@@ -113,6 +113,12 @@ ads::CDockWidget *Workspace::addPanel(const QString &id, const QString &title, Q
         connect(dock, &ads::CDockWidget::visibilityChanged, this, [this](bool visible) {
             if (visible && !m_raisingInspector) m_inspectorAuto = false;
         });
+    // A browser brought forward by hand is in use: a click on a clip leaves
+    // it in front. One the Inspector's Add effect brought up is not.
+    if (id == QLatin1String("effects") || id == QLatin1String("presets"))
+        connect(dock, &ads::CDockWidget::visibilityChanged, this, [this, dock](bool visible) {
+            if (visible) m_browserForInspector = m_raisingBrowser ? dock : nullptr;
+        });
     return dock;
 }
 
@@ -337,9 +343,19 @@ void Workspace::raiseInspector(InspectorOrigin origin, bool force, const QString
         m_inspectorClip = clip;
         return;
     }
+    // Effects or Presets chosen by hand: the person is applying looks clip
+    // by clip, so the browser stays under the pointer (it follows the
+    // selection itself); the Inspector comes forward only from Project.
+    ads::CDockWidget *current = area->currentDockWidget();
+    const bool browsing = current && (current->objectName() == QLatin1String("effects") || current->objectName() == QLatin1String("presets"));
+    if (!force && browsing && current != m_browserForInspector) {
+        m_inspectorClip = clip;
+        return;
+    }
     // Chose another tab with this clip still selected: only a new click raises.
     if (!force && !clip.isEmpty() && clip == m_inspectorClip) return;
     m_inspectorClip = clip;
+    m_browserForInspector = nullptr;
     m_beforeInspector = area->currentDockWidget();
     QWidget *focus = QApplication::focusWidget();
     m_raisingInspector = true;
@@ -348,6 +364,16 @@ void Workspace::raiseInspector(InspectorOrigin origin, bool force, const QString
     m_inspectorAuto = true;
     // Raising is visual only: the keys stay where they were.
     if (focus && QApplication::focusWidget() != focus) focus->setFocus(Qt::OtherFocusReason);
+}
+
+void Workspace::showBrowserForInspector(const QString &id) {
+    ads::CDockWidget *browser = m_panels.value(id);
+    if (!browser) return;
+    m_raisingBrowser = true;
+    if (browser->isClosed()) browser->toggleView(true);
+    browser->setAsCurrentTab();
+    m_raisingBrowser = false;
+    m_browserForInspector = browser;
 }
 
 void Workspace::inspectorDeselected() {

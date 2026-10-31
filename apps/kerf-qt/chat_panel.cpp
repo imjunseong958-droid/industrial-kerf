@@ -136,8 +136,8 @@ protected:
 class ElidedLabel final : public QLabel {
 public:
     explicit ElidedLabel(QWidget *parent = nullptr) : QLabel(parent) { setTextFormat(Qt::PlainText); }
-    // `fallback` (shorter) replaces the text while the label has less than
-    // ChatPanel::kBarSummaryRoom for it.
+    // `fallback` (shorter, "3 changes") replaces the text whole wherever the
+    // text does not fit whole, so a list is never cut mid-way.
     void setFullText(const QString &text, const QString &fallback = QString()) {
         m_full = text;
         m_fallback = fallback;
@@ -153,7 +153,8 @@ protected:
 private:
     void elide() {
         const int room = std::max(0, contentsRect().width());
-        const QString full = !m_fallback.isEmpty() && room < ChatPanel::kBarSummaryRoom ? m_fallback : m_full;
+        const bool fits = fontMetrics().horizontalAdvance(m_full) <= room;
+        const QString full = !m_fallback.isEmpty() && !fits ? m_fallback : m_full;
         const QString shown = fontMetrics().elidedText(full, Qt::ElideRight, room);
         if (shown != text()) setText(shown);
     }
@@ -228,6 +229,35 @@ void repolish(QWidget *widget) {
 
 } // namespace
 
+// Over the list's view, passing the pointer through: strips of the
+// panel's surface where a row's cut would leave only a sliver of it.
+class EdgeCover final : public QWidget {
+public:
+    explicit EdgeCover(QWidget *parent) : QWidget(parent) {
+        setObjectName(QStringLiteral("chatEdgeCover"));
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_NoSystemBackground);
+        setFocusPolicy(Qt::NoFocus);
+    }
+    void setStrips(const QList<QRect> &strips) {
+        if (strips == m_strips) return;
+        m_strips = strips;
+        update();
+    }
+    QList<QRect> strips() const { return m_strips; }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        if (m_strips.isEmpty()) return;
+        QPainter painter(this);
+        for (const QRect &strip : std::as_const(m_strips)) painter.fillRect(strip, editorTheme().chatSurface);
+    }
+
+private:
+    QList<QRect> m_strips;
+};
+
+
 QString relativeTime(const QDateTime &then, const QDateTime &now) {
     const qint64 seconds = std::max<qint64>(0, then.secsTo(now));
     if (seconds < 60) return QStringLiteral("now");
@@ -301,61 +331,109 @@ void drawChangeGlyph(QPainter &p, const QRectF &box, ProposalChange::Glyph glyph
 
 ProposalChangeRow::ProposalChangeRow(const ProposalChange &change, QWidget *parent) : QWidget(parent), m_change(change) {
     setObjectName(QStringLiteral("proposalChange"));
+    if (m_change.shortDescription.isEmpty()) m_change.shortDescription = m_change.description;
     setFixedHeight(kHeight);
     setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     setAccessibleName(change.detail.isEmpty() ? change.description : change.description + QStringLiteral(", ") + change.detail);
 }
 
-QRect ProposalChangeRow::glyphRect() const { return QRect(0, (height() - 16) / 2, 16, 16); }
+QFont ProposalChangeRow::descriptionFont() const {
+    QFont font = this->font();
+    font.setPixelSize(13);
+    return font;
+}
 
-QRect ProposalChangeRow::detailRect() const {
-    if (m_change.detail.isEmpty()) return QRect(width(), 0, 0, height());
+QFont ProposalChangeRow::detailFont() const {
     QFont font = this->font();
     font.setPixelSize(12);
     font.setFeature(QFont::Tag("tnum"), 1);
-    QFont description = this->font();
-    description.setPixelSize(13);
-    // The description first: the detail takes what it leaves, down to
-    // kMinDetail (ending in an ellipsis). Where even that would not keep the
-    // description whole, the detail stays whole and the description is cut,
-    // so a row never has both cut.
-    const int natural = QFontMetrics(font).horizontalAdvance(m_change.detail) + 1;
-    const int words = QFontMetrics(description).horizontalAdvance(m_change.description) + 1;
-    const int room = std::max(0, width() - kTextLeft - kDetailGap);
-    const int least = std::min(natural, kMinDetail);
-    const int wide = words + least <= room ? std::min(natural, room - words) : std::min(natural, std::max(least, room / 2));
-    return QRect(width() - wide, 0, wide, height());
+    return font;
+}
+
+ProposalChangeRow::Fit ProposalChangeRow::fit(int width) const {
+    // The detail (an amount, a time) is never cut. The description beside
+    // it, whole; else with its clips' extensions dropped; else the detail
+    // takes a line of its own, and the description has the whole width.
+    const QFontMetrics words(descriptionFont());
+    const QFontMetrics detail(detailFont());
+    const int room = std::max(0, width - kTextLeft);
+    const auto wide = [&](const QString &text) { return words.horizontalAdvance(text) + 1; };
+    Fit out;
+    const QString &full = m_change.description;
+    const QString &brief = m_change.shortDescription;
+    const auto alone = [&] { return wide(full) <= room ? full : wide(brief) <= room ? brief : words.elidedText(brief, Qt::ElideRight, room); };
+    if (m_change.detail.isEmpty()) {
+        out.description = alone();
+        return out;
+    }
+    out.detailWidth = detail.horizontalAdvance(m_change.detail) + 1;
+    if (wide(full) + kDetailGap + out.detailWidth <= room) {
+        out.description = full;
+    } else if (wide(brief) + kDetailGap + out.detailWidth <= room) {
+        out.description = brief;
+    } else {
+        out.twoLines = true;
+        out.description = alone();
+    }
+    // Cut only where the detail alone is wider than the whole row.
+    out.detail = out.detailWidth <= room ? m_change.detail : detail.elidedText(m_change.detail, Qt::ElideRight, room);
+    out.detailWidth = std::min(out.detailWidth, room);
+    return out;
+}
+
+void ProposalChangeRow::updateLines() {
+    const Fit shown = fit(width());
+    setFixedHeight(shown.twoLines ? kTwoLineHeight : kHeight);
+    const bool cut = shown.description != m_change.description || shown.detail != m_change.detail;
+    setToolTip(!cut ? QString() : m_change.detail.isEmpty() ? m_change.description : m_change.description + QStringLiteral(" · ") + m_change.detail);
+}
+
+void ProposalChangeRow::resizeEvent(QResizeEvent *event) {
+    QWidget::resizeEvent(event);
+    updateLines();
+}
+
+void ProposalChangeRow::changeEvent(QEvent *event) {
+    QWidget::changeEvent(event);
+    if (event->type() == QEvent::FontChange) updateLines();
+}
+
+QRect ProposalChangeRow::glyphRect() const {
+    // On two lines the glyph stands beside the description's line.
+    const int top = twoLines() ? (kTwoLineHeight - kDescriptionLine - kDetailLine) / 2 : (height() - kDescriptionLine) / 2;
+    return QRect(0, top + (kDescriptionLine - 16) / 2, 16, 16);
+}
+
+QRect ProposalChangeRow::detailRect() const {
+    const Fit shown = fit(width());
+    if (m_change.detail.isEmpty()) return QRect(width(), 0, 0, height());
+    if (shown.twoLines) {
+        const int top = (kTwoLineHeight - kDescriptionLine - kDetailLine) / 2 + kDescriptionLine;
+        return QRect(kTextLeft, top, std::max(0, width() - kTextLeft), kDetailLine);
+    }
+    return QRect(width() - shown.detailWidth, 0, shown.detailWidth, height());
 }
 
 QRect ProposalChangeRow::descriptionRect() const {
     const int left = kTextLeft;
+    if (twoLines())
+        return QRect(left, (kTwoLineHeight - kDescriptionLine - kDetailLine) / 2, std::max(0, width() - left), kDescriptionLine);
     return QRect(left, 0, std::max(0, detailRect().left() - kDetailGap - left), height());
 }
 
 void ProposalChangeRow::paintEvent(QPaintEvent *) {
     const EditorTheme &theme = editorTheme();
     QPainter painter(this);
+    const Fit shown = fit(width());
     drawChangeGlyph(painter, glyphRect(), m_change.glyph, theme.chatSecondary);
-    QFont description = font();
-    description.setPixelSize(13);
-    painter.setFont(description);
+    painter.setFont(descriptionFont());
     painter.setPen(theme.chatText);
-    const QRect text = descriptionRect();
-    const QString shown = QFontMetrics(description).elidedText(m_change.description, Qt::ElideRight, text.width());
-    painter.drawText(text, Qt::AlignLeft | Qt::AlignVCenter, shown);
-    QString detailShown;
+    painter.drawText(descriptionRect(), Qt::AlignLeft | Qt::AlignVCenter, shown.description);
     if (!m_change.detail.isEmpty()) {
-        QFont detail = font();
-        detail.setPixelSize(12);
-        detail.setFeature(QFont::Tag("tnum"), 1);
-        painter.setFont(detail);
+        painter.setFont(detailFont());
         painter.setPen(theme.chatSecondary);
-        const QRect at = detailRect();
-        detailShown = QFontMetrics(detail).elidedText(m_change.detail, Qt::ElideRight, at.width());
-        painter.drawText(at, Qt::AlignRight | Qt::AlignVCenter, detailShown);
+        painter.drawText(detailRect(), (shown.twoLines ? Qt::AlignLeft : Qt::AlignRight) | Qt::AlignVCenter, shown.detail);
     }
-    const bool cut = shown != m_change.description || detailShown != m_change.detail;
-    setToolTip(!cut ? QString() : m_change.detail.isEmpty() ? m_change.description : m_change.description + QStringLiteral(" · ") + m_change.detail);
 }
 
 // ---- SuggestionButton -----------------------------------------------------
@@ -983,6 +1061,7 @@ ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
         m_follow = value >= m_scroll->verticalScrollBar()->maximum() - 4;
         updateListEdge();
     });
+    m_edgeCover = new EdgeCover(m_scroll->viewport());
 
     // Next steps: one row of chips over the composer that scrolls sideways
     // rather than wrap, as a chip bar does, so the conversation keeps the
@@ -1487,12 +1566,89 @@ void ChatPanel::updateListEdge() {
     }
     m_barAccept->setEnabled(m_accept->isEnabled());
     m_barReject->setEnabled(m_reject->isEnabled());
+    updateEdgeCover();
     // A hairline under the header (or the bar) while the view is scrolled
     // away from its top.
     const bool scrolled = value > 0;
     if (m_scrollEdge->property("scrolled").toBool() == scrolled) return;
     m_scrollEdge->setProperty("scrolled", scrolled);
     repolish(m_scrollEdge);
+}
+
+QList<QRect> ChatPanel::edgeCoverStrips() const { return m_edgeCover->strips(); }
+
+QList<QRect> labelTextLines(const QLabel *label) {
+    // Laid out as the label lays it out: its font, its width when it
+    // wraps, its rich text's own line heights; placed as its alignment
+    // places the text in its contents.
+    const QRect inner = label->contentsRect();
+    QTextDocument document;
+    document.setDocumentMargin(0);
+    document.setDefaultFont(label->font());
+    const bool rich = label->textFormat() == Qt::RichText || (label->textFormat() == Qt::AutoText && Qt::mightBeRichText(label->text()));
+    if (rich) document.setHtml(label->text());
+    else document.setPlainText(label->text());
+    document.setTextWidth(label->wordWrap() ? inner.width() : -1);
+    const double height = document.size().height();
+    const Qt::Alignment align = label->alignment();
+    const double offset = (align & Qt::AlignTop) ? 0.0 : (align & Qt::AlignBottom) ? inner.height() - height : (inner.height() - height) / 2.0;
+    QList<QRect> lines;
+    for (QTextBlock block = document.begin(); block.isValid(); block = block.next()) {
+        const QRectF bounds = document.documentLayout()->blockBoundingRect(block);
+        const QTextLayout *layout = block.layout();
+        for (int index = 0; layout && index < layout->lineCount(); ++index) {
+            const QTextLine line = layout->lineAt(index);
+            const QRectF at(bounds.left() + line.x(), bounds.top() + line.y() + offset, std::max(1.0, line.naturalTextWidth()), line.height());
+            lines << QRect(inner.left() + int(std::floor(at.left())), inner.top() + int(std::floor(at.top())), int(std::ceil(at.width())),
+                           int(std::round(at.height())));
+        }
+    }
+    return lines;
+}
+
+void ChatPanel::updateEdgeCover() {
+    QWidget *viewport = m_scroll->viewport();
+    m_edgeCover->setGeometry(viewport->rect());
+    m_edgeCover->raise();
+    const int top = 0;
+    const int bottom = viewport->height();
+    QList<QRect> strips;
+    // `box` (in the view) cut by an edge: covered where less than `least`
+    // of it would show.
+    const auto cut = [&](const QRect &box, double least) {
+        if (box.top() < top && box.bottom() >= top && box.bottom() + 1 - top < least)
+            strips << QRect(box.left(), top, box.width(), box.bottom() + 1 - top);
+        if (box.top() < bottom && box.bottom() >= bottom && bottom - box.top() < least)
+            strips << QRect(box.left(), box.top(), box.width(), bottom - box.top());
+    };
+    for (QWidget *child : m_content->findChildren<QWidget *>()) {
+        if (!child->isVisibleTo(m_content) || child == m_edgeCover) continue;
+        const QRect box(child->mapTo(viewport, QPoint()), child->size());
+        if (box.bottom() < top || box.top() >= bottom) continue;
+        if (box.top() >= top && box.bottom() < bottom) continue;
+        // Text: each line by itself, by its line's height.
+        if (auto *label = qobject_cast<QLabel *>(child); label && !label->text().isEmpty()) {
+            for (const QRect &line : labelTextLines(label)) cut(line.translated(box.topLeft()), kSliverLine * line.height());
+            continue;
+        }
+        // A button's words, centred in it.
+        if (auto *button = qobject_cast<QAbstractButton *>(child); button && !button->text().isEmpty() && button->findChildren<QWidget *>().isEmpty()) {
+            const int line = button->fontMetrics().lineSpacing();
+            cut(QRect(box.left(), box.center().y() - line / 2, box.width(), line), kSliverLine * line);
+            cut(box, kSliver);
+            continue;
+        }
+        // Symbols and painted rows: only leaves (a container's own parts
+        // are judged one by one).
+        bool leaf = true;
+        for (QWidget *grand : child->findChildren<QWidget *>(Qt::FindDirectChildrenOnly))
+            if (grand->isVisibleTo(child)) leaf = false;
+        // An avatar shows only while half of it does: under that, the name
+        // line beside it has gone and its arc would stand alone.
+        const double share = qobject_cast<ChatAvatar *>(child) ? kSliverAvatar : kSliverSymbol;
+        if (leaf) cut(box, std::max<double>(kSliver, share * box.height()));
+    }
+    m_edgeCover->setStrips(strips);
 }
 
 void ChatPanel::refitListSoon() {
@@ -1609,6 +1765,8 @@ bool ChatPanel::eventFilter(QObject *watched, QEvent *event) {
     if (watched == m_scroll->viewport() && event->type() == QEvent::Resize)
         QTimer::singleShot(0, this, &ChatPanel::updateListEdge);
     if (watched == m_content && event->type() == QEvent::LayoutRequest) refitListSoon();
+    if (watched == m_content && (event->type() == QEvent::LayoutRequest || event->type() == QEvent::Resize))
+        QTimer::singleShot(0, this, &ChatPanel::updateEdgeCover);
     if ((watched == m_accept || watched == m_reject) && event->type() == QEvent::EnabledChange) updateListEdge();
     if (watched == m_resizeHandle) {
         switch (event->type()) {

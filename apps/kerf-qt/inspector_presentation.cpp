@@ -355,11 +355,78 @@ QString presentationLabel(const QJsonObject &def) {
     if (table.contains(name) && !def.contains(QStringLiteral("group"))) return table.value(name);
     QString doc = def.value(QStringLiteral("doc")).toString().trimmed();
     if (const QString group = presentationGroup(def); !group.isEmpty()) doc = doc.mid(group.size() + 2).trimmed();
-    if (!doc.isEmpty() && !doc.endsWith(QLatin1Char('.')) && doc.size() <= 28) return doc;
+    if (!doc.isEmpty() && !doc.endsWith(QLatin1Char('.')) && doc.size() <= 28) return sentenceCase(doc);
     QString label = name;
     label.replace(QLatin1Char('_'), QLatin1Char(' '));
-    if (!label.isEmpty()) label[0] = label.at(0).toUpper();
-    return label;
+    return sentenceCase(label);
+}
+
+QString britishSpelling(const QString &text) {
+    // The rest of the UI writes "colour"; the catalog writes "color".
+    static const QRegularExpression word(QStringLiteral("\\b([Cc])olor"));
+    QString out = text;
+    out.replace(word, QStringLiteral("\\1olour"));
+    return out;
+}
+
+namespace {
+
+bool isAcronym(const QString &word) {
+    int upper = 0;
+    for (const QChar c : word) {
+        if (c.isLower()) return false;
+        if (c.isUpper()) ++upper;
+    }
+    return upper >= 2;
+}
+
+} // namespace
+
+QString sentenceCase(const QString &text) {
+    // "Edge Threshold" → "Edge threshold"; acronyms (LUT, RGB) and the
+    // first word keep their capitals.
+    QStringList words = text.split(QLatin1Char(' '));
+    for (qsizetype index = 0; index < words.size(); ++index) {
+        QString &word = words[index];
+        if (word.isEmpty()) continue;
+        if (index == 0) word[0] = word.at(0).toUpper();
+        else if (!isAcronym(word)) word[0] = word.at(0).toLower();
+    }
+    return britishSpelling(words.join(QLatin1Char(' ')));
+}
+
+QString presentationEffectName(const QString &name) {
+    // Title Case, as the Effects browser lists them ("Primary Color
+    // Correction" for "Primary color correction."), small words lower.
+    static const QStringList small{QStringLiteral("a"),  QStringLiteral("an"),  QStringLiteral("and"), QStringLiteral("the"),
+                                   QStringLiteral("of"), QStringLiteral("to"),  QStringLiteral("in"),  QStringLiteral("on"),
+                                   QStringLiteral("or"), QStringLiteral("for"), QStringLiteral("with"), QStringLiteral("by")};
+    QString trimmed = name.trimmed();
+    if (trimmed.endsWith(QLatin1Char('.'))) trimmed.chop(1);
+    QStringList words = trimmed.split(QLatin1Char(' '));
+    for (qsizetype index = 0; index < words.size(); ++index) {
+        QString &word = words[index];
+        if (word.isEmpty() || isAcronym(word)) continue;
+        if (index > 0 && small.contains(word.toLower())) word = word.toLower();
+        else word[0] = word.at(0).toUpper();
+    }
+    return britishSpelling(words.join(QLatin1Char(' ')));
+}
+
+QString withoutSharedWord(const QString &label, const QString &effectName) {
+    // Under "Edge Glow", "Edge threshold" reads as "Threshold": the
+    // effect's header already says "Edge".
+    const qsizetype space = label.indexOf(QLatin1Char(' '));
+    if (space <= 0 || space + 1 >= label.size()) return label;
+    const QString first = label.left(space);
+    const QStringList names = effectName.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    const bool shared = std::any_of(names.begin(), names.end(), [&](const QString &word) { return word.compare(first, Qt::CaseInsensitive) == 0; });
+    if (!shared) return label;
+    QString rest = label.mid(space + 1).trimmed();
+    // "Glow only" stays: "Only" alone says nothing.
+    if (rest.isEmpty() || rest.compare(QStringLiteral("only"), Qt::CaseInsensitive) == 0) return label;
+    rest[0] = rest.at(0).toUpper();
+    return rest;
 }
 
 double gainToTravel(double db) {

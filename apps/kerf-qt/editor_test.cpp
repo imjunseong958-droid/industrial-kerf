@@ -372,6 +372,8 @@ private slots:
         // The phone fills the stage's height, inside its own margins.
         QVERIFY(std::abs(stage.body.height() - (viewer.height() - ViewerWidget::kDeviceMarginTop - ViewerWidget::kDeviceMarginBottom)) < 1);
         QVERIFY(std::abs(stage.body.top() - ViewerWidget::kDeviceMarginTop) < 1);
+        // As much room under it as over it.
+        QVERIFY(std::abs((viewer.height() - stage.body.bottom()) - stage.body.top()) <= 1);
         QVERIFY(std::abs(stage.body.width() / stage.body.height() - deviceBodyAspect()) < 0.01);
         const DeviceGeometry device = deviceGeometry(stage.body, 9.0 / 16.0);
         QCOMPARE(device.screen, stage.screen);
@@ -704,6 +706,14 @@ private slots:
             QCoreApplication::processEvents();
             const QRectF alone = viewer->stageLayout().body;
             QVERIFY(std::abs(alone.center().x() - viewer->width() / 2.0) <= 1);
+            // As much room over it as under it: centred in the stage, as a
+            // card is (a device keeps kDeviceMarginTop either side).
+            {
+                const double over = alone.top(), under = viewer->height() - alone.bottom();
+                QVERIFY2(std::abs(over - under) <= 1, qPrintable(QStringLiteral("%1 over, %2 under").arg(over).arg(under)));
+                QVERIFY(over >= ViewerWidget::kDeviceMarginTop - 0.5);
+                QCOMPARE(ViewerWidget::kDeviceMarginTop, ViewerWidget::kDeviceMarginBottom);
+            }
             QVERIFY(alone.width() >= stage.body.width() - 0.5);
             clearOfEdges(viewer->stageLayout());
             window.m_chatToggle->click();
@@ -2087,17 +2097,14 @@ private slots:
             verifyListEnd(chat);
             QVERIFY(sticky->isVisible());
             QCOMPARE(sticky->y(), ChatPanel::kHeaderHeight);
-            // What it does, without the count, whole where it fits, else cut
-            // with an ellipsis (its tip has the summary and the count); only
-            // the count where the bar has no room for the verbs.
+            // What it does, without the count, where it fits whole; else only
+            // the count, whole: never a list cut mid-way (its tip has the
+            // summary and the count).
             QCOMPARE(chat->proposalBarSummary()->toolTip(), window.m_proposalSummary->text());
             QCOMPARE(chat->proposalBarSummary()->toolTip(), QStringLiteral("Trim, remove · 2 changes"));
-            if (chat->proposalBarSummary()->contentsRect().width() >= ChatPanel::kBarSummaryRoom)
-                QVERIFY2(chat->proposalBarSummary()->text() == QStringLiteral("Trim, remove") ||
-                             chat->proposalBarSummary()->text().endsWith(QChar(0x2026)),
-                         qPrintable(chat->proposalBarSummary()->text()));
-            else
-                QCOMPARE(chat->proposalBarSummary()->text(), QStringLiteral("2 changes"));
+            QVERIFY2(chat->proposalBarSummary()->text() == QStringLiteral("Trim, remove") ||
+                         chat->proposalBarSummary()->text() == QStringLiteral("2 changes"),
+                     qPrintable(chat->proposalBarSummary()->text()));
             QCOMPARE(chat->width(), ViewerWidget::kDefaultChatWidth);
             QCOMPARE(chat->proposalBarSummary()->text(), QStringLiteral("Trim, remove"));
             QVERIFY(QFontMetrics(chat->proposalBarSummary()->font()).horizontalAdvance(chat->proposalBarSummary()->text()) <=
@@ -2275,6 +2282,26 @@ private slots:
         mouse(&slider, QEvent::MouseButtonRelease, QPointF(at - 20, 12));
         QVERIFY(std::abs(slider.knobCenter().x() - (at - 20.0)) < 0.5);
         QCOMPARE(released.size(), 2);
+        // A change small against the range (Exposure +0.40 of −3…3) still
+        // shows its fill: past the knob's edge on the value's side; at the
+        // origin there is none.
+        InspectorSlider wide;
+        wide.resize(84, ScrubField::kHeight);
+        wide.setRange(-3.0, 3.0);
+        wide.setOrigin(0.0);
+        wide.setDetent(0.0);
+        wide.setValue(0.0);
+        QVERIFY(wide.fillRect().isEmpty());
+        for (const double value : {0.1, 0.4, -0.2}) {
+            wide.setValue(value);
+            const QRectF fill = wide.fillRect();
+            const double knob = wide.knobCenter().x();
+            if (value > 0) QVERIFY2(fill.right() >= knob + InspectorSlider::kKnobRadius + 2.0, qPrintable(QString::number(value)));
+            else QVERIFY2(fill.left() <= knob - InspectorSlider::kKnobRadius - 2.0, qPrintable(QString::number(value)));
+        }
+        // A large change fills from the origin to the knob, no further.
+        wide.setValue(2.0);
+        QVERIFY(std::abs(wide.fillRect().right() - wide.knobCenter().x()) < 0.5);
     }
 
     // A switched-off effect's values stay editable and readable: numbers,
@@ -2359,7 +2386,7 @@ private slots:
         QVERIFY(boxes.at(1)->findChild<QLabel *>(QStringLiteral("effectName"))->property("off").toBool());
         // Folded, the second line lists the values that differ.
         auto *summary = boxes.at(0)->findChild<QLabel *>(QStringLiteral("effectSummary"));
-        QCOMPARE(summary->text(), QStringLiteral("Glow Radius 40 px · Intensity 200%"));
+        QCOMPARE(summary->text(), QStringLiteral("Glow radius 40 px · Intensity 200%"));
         QVERIFY(!summary->isHidden());
         QVERIFY(boxes.at(0)->findChild<QWidget *>(QStringLiteral("effectParams"))->isHidden());
         // No ✕ anywhere.
@@ -2372,10 +2399,53 @@ private slots:
         QVERIFY(!boxes.at(0)->findChild<QWidget *>(QStringLiteral("effectParams"))->isHidden());
         QVERIFY(summary->isHidden());
         QVERIFY(QSettings().value(QStringLiteral("editor/inspector/fx/light.edgeglow/open")).toBool());
-        // Edge Glow has six parameters: five, then "1 more".
+        // Row labels keep one 12-point line: a first word the effect's name
+        // says goes ("Edge Threshold" under Edge Glow reads "Threshold"),
+        // the catalog's label whole in the tooltip; "Glow only" keeps its
+        // first word, since "Only" alone says nothing.
+        {
+            const auto labelOf = [&](const char *param) -> RowLabel * {
+                for (QWidget *at = boxes.at(0)->findChild<QWidget *>(QStringLiteral("effectParam_%1").arg(QLatin1String(param))); at; at = at->parentWidget())
+                    if (auto *row = qobject_cast<InspectorRow *>(at)) return row->label();
+                return nullptr;
+            };
+            RowLabel *threshold = labelOf("threshold");
+            QVERIFY(threshold);
+            QCOMPARE(threshold->text(), QStringLiteral("Threshold"));
+            QCOMPARE(threshold->toolTip(), QStringLiteral("Edge Threshold"));
+            QCOMPARE(labelOf("width")->text(), QStringLiteral("Width"));
+            QCOMPARE(labelOf("radius")->text(), QStringLiteral("Radius"));
+            QCOMPARE(labelOf("color")->text(), QStringLiteral("Colour"));
+            QCOMPARE(labelOf("color")->toolTip(), QStringLiteral("Glow Colour"));
+            QCOMPARE(labelOf("only")->text(), QStringLiteral("Glow only"));
+            for (RowLabel *label : boxes.at(0)->findChildren<RowLabel *>()) {
+                QCOMPARE(label->font().pixelSize(), 12);
+                QVERIFY(!label->wordWrap() && !label->text().contains(QLatin1Char('\n')));
+                QVERIFY2(label->sizeHint().height() <= QFontMetrics(label->font()).lineSpacing() + 2, qPrintable(label->text()));
+            }
+            // Too long for the column even so: one line, ended in an ellipsis.
+            RowLabel lengthy(QStringLiteral("Highlight threshold of the brightest spots"));
+            lengthy.resize(InspectorRow::kLabelWidth, 20);
+            lengthy.show();
+            QCoreApplication::processEvents();
+            QVERIFY(lengthy.text().endsWith(QChar(0x2026)) && !lengthy.text().contains(QLatin1Char('\n')));
+            QCOMPARE(lengthy.toolTip(), QStringLiteral("Highlight threshold of the brightest spots"));
+            QCOMPARE(lengthy.font().pixelSize(), 12);
+        }
+        // Names and labels read as the rest of the UI: effects in Title
+        // Case, labels in sentence case, "colour" spelt as elsewhere.
+        QCOMPARE(presentationEffectName(QStringLiteral("Primary color correction.")), QStringLiteral("Primary Colour Correction"));
+        QCOMPARE(presentationEffectName(QStringLiteral("Gaussian blur.")), QStringLiteral("Gaussian Blur"));
+        QCOMPARE(presentationEffectName(QStringLiteral("Edge Glow")), QStringLiteral("Edge Glow"));
+        QCOMPARE(sentenceCase(QStringLiteral("Look LUT")), QStringLiteral("Look LUT"));
+        QCOMPARE(sentenceCase(QStringLiteral("Glow Color")), QStringLiteral("Glow colour"));
+        // Edge Glow has six parameters: five, then "1 more ⌄", in words as
+        // Add effect is, at the column's start.
         auto *more = boxes.at(0)->findChild<QPushButton *>(QStringLiteral("effectMoreToggle"));
         QVERIFY(more);
         QCOMPARE(more->text(), QStringLiteral("1 more"));
+        QCOMPARE(more->font().pixelSize(), 12);
+        QCOMPARE(more->mapTo(boxes.at(0), QPoint()).x(), 0);
         QVERIFY(boxes.at(0)->findChild<QWidget *>(QStringLiteral("effectMoreRows"))->isHidden());
         more->click();
         QVERIFY(!boxes.at(0)->findChild<QWidget *>(QStringLiteral("effectMoreRows"))->isHidden());
@@ -3296,6 +3366,10 @@ private slots:
         auto *reverse = inspector->findChild<GlyphButton *>(QStringLiteral("speedReverse"));
         QVERIFY(speed && reverse);
         QCOMPARE(speed->text(), QStringLiteral("100"));
+        // Off, Reverse is a quiet outline in the secondary ink, no disc.
+        QVERIFY(!reverse->isChecked());
+        QCOMPARE(reverse->inkColor(), editorTheme().textSecondary);
+        QVERIFY(!reverse->discColor().isValid());
         speed->commitText(QStringLiteral("200"));
         QJsonObject op = takeOps(window).first().toObject();
         QCOMPARE(op.value("op").toString(), QStringLiteral("speed"));
@@ -3306,6 +3380,10 @@ private slots:
         snapshot(5, {}, 2.0, true);
         QCOMPARE(speed->text(), QString(QChar(0x2212)) + QStringLiteral("200"));
         QVERIFY(reverse->isChecked());
+        // On: full ink on the neutral pressed disc, no purple wash.
+        QCOMPARE(reverse->inkColor(), editorTheme().text);
+        QCOMPARE(reverse->discColor(), editorTheme().pressed);
+        QVERIFY(reverse->discColor() != editorTheme().accentTint);
         inspector->findChild<QAction *>(QStringLiteral("speed50"))->trigger();
         QCOMPARE(takeOps(window).first().toObject().value("speed").toString(), QStringLiteral("-0.5"));
         // A title's Place: Top is y −0.30.
@@ -3609,6 +3687,16 @@ private slots:
         QCOMPARE(inspector->findChild<QLabel *>(QStringLiteral("timing_start"))->text(), QStringLiteral("00:00:00:00"));
         QCOMPARE(inspector->findChild<QLabel *>(QStringLiteral("timing_duration"))->text(), QStringLiteral("00:00:18:00"));
         QCOMPARE(inspector->m_note->text(), QStringLiteral("Select a clip to adjust it."));
+        // The hint is its own line: 8 points under the timing row.
+        {
+            QLayout *header = inspector->m_header->layout();
+            const int tall = header->heightForWidth(300) > 0 ? header->heightForWidth(300) : header->sizeHint().height();
+            header->setGeometry(QRect(0, 0, 300, tall));
+            const int below = inspector->m_note->geometry().top() + inspector->m_note->contentsMargins().top() - inspector->m_timing->geometry().bottom() - 1;
+            QVERIFY2(below >= 8, qPrintable(QString::number(below)));
+            const int above = tall - inspector->m_note->geometry().bottom() - 1 + inspector->m_note->contentsMargins().bottom();
+            QVERIFY2(above >= 8, qPrintable(QString::number(above)));
+        }
         InspectorSection *format = inspector->section(QStringLiteral("format"));
         InspectorSection *tracks = inspector->section(QStringLiteral("tracks"));
         InspectorSection *markers = inspector->section(QStringLiteral("markers"));
@@ -3640,7 +3728,8 @@ private slots:
         QCOMPARE(popups.size(), 1);
         QComboBox *size = popups.first();
         QCOMPARE(size->objectName(), QStringLiteral("frameSize"));
-        QCOMPARE(size->currentText(), QStringLiteral("9:16 · 1080×1920"));
+        // Written as the header writes it (thin spaces round the ×).
+        QCOMPARE(size->currentText(), QStringLiteral("9:16 · 1080\u2009×\u20091920"));
         QVERIFY(inspector->findChildren<QLineEdit *>().size() <= 1); // the name's editor, hidden
         QVERIFY(inspector->findChildren<QPlainTextEdit *>().isEmpty());
         QVERIFY(inspector->findChildren<InspectorSwitch *>().isEmpty());
@@ -3712,6 +3801,24 @@ private slots:
             QCOMPARE(op.toObject().value("op").toString(), QStringLiteral("move"));
             QCOMPARE(op.toObject().value("frames").toInt(), 12);
         }
+        // End is the span's end: a new End moves it by trimming only the
+        // clip that ends there (v3), so no gap opens after v1 or v2.
+        ScrubField *spanEnd = inspector->findChild<ScrubField *>(QStringLiteral("timing_end"));
+        QCOMPARE(spanEnd->value(), 144.0);
+        spanEnd->commitText(QStringLiteral("00:00:05:00"));
+        ops = takeOps(window);
+        QCOMPARE(ops.size(), 1);
+        QCOMPARE(ops.at(0).toObject().value("op").toString(), QStringLiteral("trim"));
+        QCOMPARE(ops.at(0).toObject().value("edge").toString(), QStringLiteral("out"));
+        QCOMPARE(ops.at(0).toObject().value("clip").toString(), QStringLiteral("v3"));
+        QCOMPARE(ops.at(0).toObject().value("frames").toInt(), -24);
+        spanEnd->commitText(QStringLiteral("+12"));
+        ops = takeOps(window);
+        QCOMPARE(ops.size(), 1);
+        QCOMPARE(ops.at(0).toObject().value("clip").toString(), QStringLiteral("v3"));
+        QCOMPARE(ops.at(0).toObject().value("frames").toInt(), 12);
+        // The timing row keeps one alignment, timecode and "Mixed" alike.
+        for (ScrubField *field : std::as_const(inspector->m_timingFields)) QCOMPARE(field->valueAlignment(), Qt::Alignment(Qt::AlignLeft));
         // Different kinds: the timing only, and why.
         inspector->setSelection({QStringLiteral("v1"), QStringLiteral("a1")});
         QCOMPARE(plainText(inspector->kindText()), QStringLiteral("1 Audio, 1 Video"));
@@ -3750,6 +3857,18 @@ private slots:
         inspector->section(QStringLiteral("crop"))->setOpen(true);
         QCoreApplication::processEvents();
         QScrollBar *scroll = inspector->scrollArea()->verticalScrollBar();
+        // An overlay-style scroller: 6 points, no groove, its handle shown
+        // only while the pointer is over the Inspector (or it is wheeled).
+        {
+            QCOMPARE(scroll->sizeHint().width(), 6);
+            QVERIFY(!inspector->scrollArea()->property("active").toBool());
+            QEnterEvent enter(QPointF(10, 10), QPointF(10, 10), QPointF(10, 10));
+            QCoreApplication::sendEvent(inspector, &enter);
+            QVERIFY(inspector->scrollArea()->property("active").toBool());
+            QEvent leave(QEvent::Leave);
+            QCoreApplication::sendEvent(inspector, &leave);
+            QVERIFY(!inspector->scrollArea()->property("active").toBool());
+        }
         QVERIFY(scroll->maximum() > 60);
         scroll->setValue(60);
         // From the click to the painted values (the panel repainted at once,
@@ -3876,6 +3995,52 @@ private slots:
         // ⌘4 opens it again.
         show->trigger();
         QVERIFY(!inspector->isClosed() && inspector->isCurrentTab());
+        // Effects or Presets chosen by hand stay in front when another clip
+        // is clicked (looks applied clip by clip), and the browser adds to
+        // the clip just clicked.
+        ads::CDockWidget *effects = workspace->panel(QStringLiteral("effects"));
+        ads::CDockWidget *presets = workspace->panel(QStringLiteral("presets"));
+        QVERIFY(effects && presets);
+        QCOMPARE(effects->dockAreaWidget(), inspector->dockAreaWidget());
+        emit window.m_timeline->clipSelected(QStringLiteral("v1b"));
+        QVERIFY(inspector->isCurrentTab());
+        effects->setAsCurrentTab();
+        QCoreApplication::processEvents();
+        emit window.m_timeline->clipSelected(QStringLiteral("v1a"));
+        QCoreApplication::processEvents();
+        QVERIFY(effects->isCurrentTab());
+        QCOMPARE(window.m_inspector->selection(), QStringList{QStringLiteral("v1a")});
+        takeOps(window);
+        emit window.m_effects->addRequested(QStringLiteral("blur.gaussian"));
+        {
+            const QJsonArray added = takeOps(window);
+            QCOMPARE(added.size(), 1);
+            QCOMPARE(added.at(0).toObject().value("op").toString(), QStringLiteral("fx-add"));
+            QCOMPARE(added.at(0).toObject().value("clip").toString(), QStringLiteral("v1a"));
+        }
+        QVERIFY(effects->isCurrentTab());
+        presets->setAsCurrentTab();
+        QCoreApplication::processEvents();
+        emit window.m_timeline->clipSelected(QStringLiteral("v1b"));
+        QVERIFY(presets->isCurrentTab());
+        // From Project a click still raises it; the Inspector's own Add
+        // effect brings Effects up for it, and the next click brings the
+        // Inspector back.
+        project->setAsCurrentTab();
+        QCoreApplication::processEvents();
+        emit window.m_timeline->clipSelected(QStringLiteral("v1a"));
+        QVERIFY(inspector->isCurrentTab());
+        emit window.m_inspector->addEffectRequested(false);
+        QCoreApplication::processEvents();
+        QVERIFY(effects->isCurrentTab());
+        emit window.m_timeline->clipSelected(QStringLiteral("v1b"));
+        QCoreApplication::processEvents();
+        QVERIFY(inspector->isCurrentTab());
+        // ⌘4 still shows it over a browser chosen by hand.
+        effects->setAsCurrentTab();
+        QCoreApplication::processEvents();
+        show->trigger();
+        QVERIFY(inspector->isCurrentTab());
         // The conversation never moved.
         QVERIFY(window.m_chat->isVisible());
         QCOMPARE(window.m_chat->geometry(), chat);
@@ -6711,6 +6876,72 @@ private slots:
     // under the header (or the compact proposal bar) and its hairline, with
     // no cover, fade or blank band; the hairline shows while the list is
     // scrolled away from its top.
+    // The list scrolls freely and its edges cut rows cleanly: where a cut
+    // would leave only a sliver of a line (its ascenders over the bottom
+    // edge, its descenders under the top) or of a symbol, the panel's
+    // surface covers it.
+    void chatEdgesLeaveNoSlivers() {
+        ChatPanel chat;
+        for (int index = 0; index < 14; ++index)
+            chat.addComment(index % 2 ? CommentRow::Kind::Kerf : CommentRow::Kind::User,
+                            QStringLiteral("Comment %1: tighten the cut after the drone pass and warm the dusk shots a little.").arg(index));
+        chat.resize(300, 520);
+        chat.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&chat));
+        QScrollBar *bar = chat.scroll()->verticalScrollBar();
+        QTRY_VERIFY(bar->maximum() > 200);
+        QWidget *viewport = chat.scroll()->viewport();
+        int covered = 0;
+        for (int value = 0; value <= bar->maximum(); value += 3) {
+            bar->setValue(value);
+            QCoreApplication::processEvents();
+            const QList<QRect> strips = chat.edgeCoverStrips();
+            QRegion cover;
+            for (const QRect &strip : strips) cover += strip;
+            for (QLabel *label : chat.scroll()->widget()->findChildren<QLabel *>()) {
+                if (!label->isVisibleTo(chat.scroll()->widget()) || label->text().isEmpty()) continue;
+                const QList<QRect> lines = labelTextLines(label);
+                QVERIFY(!lines.isEmpty());
+                // The lines lie inside the label.
+                QVERIFY2(label->rect().adjusted(0, -1, 0, 1).contains(lines.constFirst()) && label->rect().adjusted(0, -1, 0, 1).contains(lines.constLast()),
+                         qPrintable(label->text().left(30)));
+                for (const QRect &at : lines) {
+                    const QRect line = at.translated(label->mapTo(viewport, QPoint()));
+                    const int shown = viewport->height() - line.top();
+                    if (shown > 0 && shown < ChatPanel::kSliverLine * line.height())
+                        QVERIFY2(QRegion(QRect(line.left(), line.top(), line.width(), shown)).subtracted(cover).isEmpty(),
+                                 qPrintable(QStringLiteral("at %1: %2 px of a line of “%3” left").arg(value).arg(shown).arg(label->text().left(20))));
+                    const int over = line.bottom() + 1;
+                    if (line.top() < 0 && over > 0 && over < ChatPanel::kSliverLine * line.height())
+                        QVERIFY2(QRegion(QRect(line.left(), 0, line.width(), over)).subtracted(cover).isEmpty(),
+                                 qPrintable(QStringLiteral("at %1: %2 px of a line's foot left").arg(value).arg(over)));
+                }
+            }
+            // An avatar's arc under the top edge or over the bottom one.
+            for (ChatAvatar *avatar : chat.scroll()->widget()->findChildren<ChatAvatar *>()) {
+                if (!avatar->isVisibleTo(chat.scroll()->widget())) continue;
+                const QRect box(avatar->mapTo(viewport, QPoint()), avatar->size());
+                const double least = std::max<double>(ChatPanel::kSliver, ChatPanel::kSliverAvatar * box.height());
+                if (box.top() < 0 && box.bottom() >= 0 && box.bottom() + 1 < least)
+                    QVERIFY2(QRegion(QRect(box.left(), 0, box.width(), box.bottom() + 1)).subtracted(cover).isEmpty(), qPrintable(QString::number(value)));
+                const int shown = viewport->height() - box.top();
+                if (shown > 0 && box.bottom() >= viewport->height() && shown < least)
+                    QVERIFY2(QRegion(QRect(box.left(), box.top(), box.width(), shown)).subtracted(cover).isEmpty(), qPrintable(QString::number(value)));
+            }
+            // A line half in view or more is never covered.
+            for (const QRect &strip : strips) QVERIFY(strip.height() <= std::max(ChatPanel::kSliverAvatar * ChatPanel::kAvatar, 0.5 * 24));
+            if (!strips.isEmpty() && covered < 3) {
+                // The cover is the panel's own surface, solid.
+                ++covered;
+                const QImage image = chat.grab().toImage();
+                const QRect strip = strips.first().translated(viewport->mapTo(&chat, QPoint()));
+                if (strip.width() > 4 && strip.height() >= 2)
+                    QCOMPARE(image.pixelColor(QPoint(strip.center().x(), strip.top()) * image.devicePixelRatio()).rgb(), editorTheme().chatSurface.rgb());
+            }
+        }
+        QVERIFY2(covered > 0, "some scroll position cuts a line to a sliver");
+    }
+
     static void verifyListEnd(ChatPanel *chat) {
         QScrollArea *scroll = chat->scroll();
         QScrollBar *bar = scroll->verticalScrollBar();
@@ -7207,7 +7438,10 @@ private slots:
                                       theme.accentText) >= 2.0);
             QVERIFY(qGray(theme.accentTintPressed.rgb()) < qGray(theme.accentTint.rgb()));
             QCOMPARE(ink(chosen->icon(), QIcon::Normal, QIcon::On), theme.accentText.rgb());
-            QCOMPARE(ink(other->icon()), theme.glyph.rgb());
+            // At rest the others are quiet (the secondary ink, as the headers
+        // they sit in); full ink under the pointer.
+        QCOMPARE(ink(other->icon()), theme.textSecondary.rgb());
+        QCOMPARE(ink(other->icon(), QIcon::Active, QIcon::Off), theme.text.rgb());
             QVERIFY(contrastRatio(theme.accentText, theme.accentTint) >= 3.0);
             // The Program panel's title strip carries the same tools, and
             // shows the chosen one the same way.
@@ -8782,24 +9016,54 @@ private slots:
                     QVERIFY(window.m_acceptButton->mapTo(window.m_chat, QPoint(window.m_acceptButton->width(), 0)).x() <=
                             window.m_chatScroll->viewport()->mapTo(window.m_chat, QPoint(window.m_chatScroll->viewport()->width(), 0)).x() - ChatPanel::kSidePadding);
                     QCOMPARE(window.m_chatScroll->widget()->width(), window.m_chatScroll->viewport()->width());
-                    for (ProposalChangeRow *row : window.m_chat->proposalChangeRows()) {
-                        QFont words = row->font();
-                        words.setPixelSize(13);
+                    // The detail (an amount, a time) is never cut: the words
+                    // drop the clip's extension first, then the detail takes a
+                    // second line under them. Only the words could be elided,
+                    // and here none is; the tooltip says it whole.
+                    const QList<ProposalChangeRow *> narrow = window.m_chat->proposalChangeRows();
+                    const QStringList shortWords{QStringLiteral("Trim fisher-close"), QStringLiteral("Remove drone-pass"), QStringLiteral("Add title “Lower third”")};
+                    for (int index = 0; index < narrow.size(); ++index) {
+                        ProposalChangeRow *row = narrow.at(index);
                         QFont detail = row->font();
                         detail.setPixelSize(12);
                         detail.setFeature(QFont::Tag("tnum"), 1);
-                        const int wordsWide = QFontMetrics(words).horizontalAdvance(row->change().description);
                         const int detailWide = QFontMetrics(detail).horizontalAdvance(row->change().detail);
-                        const bool wordsWhole = row->descriptionRect().width() >= wordsWide;
-                        const bool detailWhole = row->detailRect().width() >= detailWide;
-                        // The detail gives way first, down to its least, so the
-                        // words stay whole; never are both cut.
-                        QVERIFY2(wordsWhole || detailWhole, qPrintable(row->change().description));
-                        QVERIFY(row->detailRect().width() >= std::min(ProposalChangeRow::kMinDetail, detailWide));
-                        if (!wordsWhole)
-                            QVERIFY2(wordsWide + std::min(ProposalChangeRow::kMinDetail, detailWide) > row->width() - ProposalChangeRow::kTextLeft - ProposalChangeRow::kDetailGap,
-                                     qPrintable(row->change().description));
+                        QCOMPARE(row->change().shortDescription, shortWords.at(index));
+                        QCOMPARE(row->shownDetail(), row->change().detail);
+                        QVERIFY2(row->detailRect().width() >= detailWide, qPrintable(row->change().detail));
+                        QVERIFY2(!row->shownDescription().endsWith(QChar(0x2026)), qPrintable(row->shownDescription()));
+                        QVERIFY(row->shownDescription() == row->change().description || row->shownDescription() == row->change().shortDescription);
+                        if (row->shownDescription() != row->change().description)
+                            QCOMPARE(row->toolTip(), row->change().description + QStringLiteral(" · ") + row->change().detail);
                         QCOMPARE(row->detailRect().right(), row->width() - 1);
+                        QVERIFY(row->descriptionRect().left() == ProposalChangeRow::kTextLeft);
+                        if (row->twoLines()) {
+                            // The detail under the words, at their x; the row
+                            // grows to hold both lines.
+                            QCOMPARE(row->height(), ProposalChangeRow::kTwoLineHeight);
+                            QCOMPARE(row->detailRect().left(), ProposalChangeRow::kTextLeft);
+                            QVERIFY(row->detailRect().top() >= row->descriptionRect().bottom());
+                            QVERIFY(row->detailRect().bottom() < row->height());
+                        } else {
+                            QCOMPARE(row->height(), ProposalChangeRow::kHeight);
+                            QVERIFY(row->descriptionRect().right() < row->detailRect().left());
+                        }
+                        if (index) QCOMPARE(row->y(), narrow.at(index - 1)->y() + narrow.at(index - 1)->height());
+                    }
+                    // A row narrower still keeps its detail whole on its own line.
+                    {
+                        ProposalChange change = narrow.at(1)->change();
+                        ProposalChangeRow tight(change);
+                        tight.resize(170, ProposalChangeRow::kHeight);
+                        tight.show();
+                        QCoreApplication::processEvents();
+                        QCOMPARE(tight.width(), 170);
+                        QVERIFY(tight.twoLines());
+                        QCOMPARE(tight.height(), ProposalChangeRow::kTwoLineHeight);
+                        QCOMPARE(tight.shownDetail(), change.detail);
+                        QVERIFY(tight.shownDescription() == change.description || tight.shownDescription() == change.shortDescription);
+                        if (tight.shownDescription() != change.description)
+                            QCOMPARE(tight.toolTip(), change.description + QStringLiteral(" · ") + change.detail);
                     }
                     window.m_viewer->setChatWidth(ViewerWidget::kDefaultChatWidth);
                     QCoreApplication::processEvents();
@@ -8877,13 +9141,23 @@ private slots:
                 QVERIFY(pin->mapTo(window.m_chat, QPoint()).y() >= viewportTop);
                 QVERIFY(window.m_chat->proposalSummary()->visibleRegion().boundingRect().height() > 0);
                 QVERIFY(!window.m_chat->proposalBar()->isVisible());
-                // The compact bar says what the proposal does where it has the
-                // room, and only the count, whole, in the narrowest panel.
+                // The compact bar says what the proposal does where that fits
+                // whole, and only the count, whole, where it does not: at
+                // every width, never a summary that ends in an ellipsis.
                 bar->setValue(bar->maximum());
                 QCoreApplication::processEvents();
                 QTRY_VERIFY(window.m_chat->proposalBar()->isVisible());
-                if (window.m_chat->proposalBarSummary()->contentsRect().width() >= ChatPanel::kBarSummaryRoom)
-                    QVERIFY(window.m_chat->proposalBarSummary()->text().startsWith(QStringLiteral("Trim")));
+                for (const int panel : {ViewerWidget::kMinChatWidth, 331, ViewerWidget::kDefaultChatWidth}) {
+                    window.m_viewer->setChatWidth(panel);
+                    bar->setValue(bar->maximum());
+                    QCoreApplication::processEvents();
+                    QTRY_VERIFY(window.m_chat->proposalBar()->isVisible());
+                    QLabel *summary = window.m_chat->proposalBarSummary();
+                    QVERIFY2(!summary->text().endsWith(QChar(0x2026)), qPrintable(QStringLiteral("%1: %2").arg(panel).arg(summary->text())));
+                    QVERIFY2(summary->text() == QStringLiteral("Trim, remove, add a title") || summary->text() == QStringLiteral("3 changes"),
+                             qPrintable(summary->text()));
+                    QVERIFY(QFontMetrics(summary->font()).horizontalAdvance(summary->text()) <= summary->contentsRect().width());
+                }
                 window.m_viewer->setChatWidth(ViewerWidget::kMinChatWidth);
                 bar->setValue(bar->maximum());
                 QCoreApplication::processEvents();

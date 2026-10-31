@@ -220,6 +220,8 @@ enum class MaskTool { None, Rectangle, Ellipse, Pen };
 // Mask tool symbols on the transport icons' grid; a chosen (checked) tool's
 // symbol is the accent, as in the tool palette.
 QIcon maskToolIcon(MaskTool tool);
+// The pen mask tool's symbol, a nib, centred on `center` in a 16pt box.
+void drawPenNib(QPainter &painter, const QPointF &center, const QColor &color);
 
 // A clip property at `clipTime` seconds into the clip: its static value,
 // its keyframes' value there (linear between keys), or `fallback`.

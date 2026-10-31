@@ -67,6 +67,17 @@ NumberFormat presentationFor(const QJsonObject &def, const PresentationContext &
 // A row's label: the presentation table's, else the catalog's own doc
 // (after its "Group: " prefix) or its name, capitalised.
 QString presentationLabel(const QJsonObject &def);
+// "Edge Threshold" → "Edge threshold" (acronyms and the first word keep
+// their capitals), with "color" written "colour" as in the rest of the UI.
+QString sentenceCase(const QString &text);
+// "color" → "colour" (and "Color" → "Colour") in a string shown to people.
+QString britishSpelling(const QString &text);
+// An effect's name as the Inspector shows it: Title Case without a final
+// full stop, "Colour" spelt as elsewhere ("Primary Colour Correction").
+QString presentationEffectName(const QString &name);
+// A parameter's label without a first word its effect's name already says
+// ("Edge threshold" under "Edge Glow" → "Threshold"); unchanged otherwise.
+QString withoutSharedWord(const QString &label, const QString &effectName);
 // The "Group" of a "Group: Name" doc, else empty.
 QString presentationGroup(const QJsonObject &def);
 

@@ -9,6 +9,7 @@
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDragEnterEvent>
+#include <QEnterEvent>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFontDatabase>
@@ -55,6 +56,64 @@ constexpr int kPairedField = InspectorRow::kValueField;
 // Effects show this many parameters before "N more".
 constexpr int kEffectRowsShown = 5;
 const char *kFxMime = "application/x-kerf-fx";
+
+// An open effect's "6 more ⌄": the words in 12pt/500 `text` (as Add
+// effect), then a 10pt chevron that turns up once the rows are shown; a
+// `hover` disc behind the chevron under the pointer. No bezel.
+class MoreToggle final : public QPushButton {
+public:
+    static constexpr int kChevron = 10;
+    static constexpr int kGap = 4;
+    explicit MoreToggle(QWidget *parent = nullptr) : QPushButton(parent) {
+        setAttribute(Qt::WA_Hover);
+        setFlat(true);
+        setCursor(Qt::PointingHandCursor);
+        setFocusPolicy(Qt::TabFocus);
+        QFont font = this->font();
+        font.setPixelSize(12);
+        font.setWeight(QFont::Medium);
+        setFont(font);
+        setFixedHeight(24);
+    }
+    void setOpen(bool open) {
+        m_open = open;
+        updateGeometry();
+        update();
+    }
+    bool isOpen() const { return m_open; }
+    QSize sizeHint() const override { return {fontMetrics().horizontalAdvance(text()) + kGap + kChevron + 4, 24}; }
+    QSize minimumSizeHint() const override { return sizeHint(); }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        const EditorTheme &theme = editorTheme();
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        const bool hovered = underMouse() && isEnabled();
+        const int words = fontMetrics().horizontalAdvance(text());
+        const QRectF chevron(words + kGap, (height() - kChevron) / 2.0, kChevron, kChevron);
+        if (hovered || isDown()) {
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(isDown() ? theme.pressed : theme.hover);
+            painter.drawEllipse(chevron.center(), 8.0, 8.0);
+        }
+        const QColor ink = hovered ? theme.textStrong : theme.text;
+        painter.setPen(ink);
+        painter.drawText(QRect(0, 0, words + 1, height()), Qt::AlignLeft | Qt::AlignVCenter, text());
+        painter.setPen(QPen(ink, 1.25, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        const double tip = m_open ? 3.0 : 7.0, base = m_open ? 6.5 : 3.5;
+        painter.drawPolyline(QPolygonF{chevron.topLeft() + QPointF(1.5, base), chevron.topLeft() + QPointF(5.0, tip),
+                                       chevron.topLeft() + QPointF(8.5, base)});
+        if (hasFocus()) {
+            painter.setPen(QPen(theme.focusRing, 1.0));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 4, 4);
+        }
+    }
+
+private:
+    bool m_open = false;
+};
 
 QString key(const char *text) {
     return QString::fromLatin1(text);
@@ -197,6 +256,12 @@ InspectorPanel::InspectorPanel(QWidget *parent) : QWidget(parent) {
     m_dropLine->setObjectName(QStringLiteral("inspectorDropLine"));
     m_dropLine->setFixedHeight(2);
     m_dropLine->hide();
+    m_scrollBarTimer = new QTimer(this);
+    m_scrollBarTimer->setSingleShot(true);
+    m_scrollBarTimer->setInterval(900);
+    connect(m_scrollBarTimer, &QTimer::timeout, this, [this] { showScrollBar(underMouse()); });
+    // A wheel or trackpad scroll shows the scroll bar for a moment.
+    m_scroll->viewport()->installEventFilter(this);
     connect(m_scroll->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) {
         m_scrollEdge->setVisible(value > 0);
         if (!m_kindForSections.isEmpty()) m_scrollByKind.insert(m_kindForSections, value);
@@ -581,6 +646,10 @@ void InspectorPanel::buildHeader() {
         m_note = quietLabel(QString());
         m_note->setObjectName(QStringLiteral("inspectorNote"));
         m_note->setWordWrap(true);
+        // Its own line on the 8pt rhythm: 8 under the timing row (the
+        // layout's 6 and 2 more) and 8 over the hairline (4 and the
+        // header's 4).
+        m_note->setContentsMargins(0, 2, 0, 4);
         m_note->hide();
         layout->addWidget(m_note);
         return;
@@ -876,9 +945,20 @@ void InspectorPanel::timingCommitted(const QString &field, double value, double 
     const double fps = m_project.value(QStringLiteral("fps")).toDouble(24.0);
     QJsonArray ops;
     const bool several = m_clips.size() > 1;
+    const auto startOf = [fps](const Clip &clip) {
+        return qint64(clip.clip.value(QStringLiteral("startFrame")).toDouble(std::round(clip.clip.value(QStringLiteral("timelineStart")).toDouble() * fps)));
+    };
+    const auto durationOf = [fps](const Clip &clip) {
+        return qint64(clip.clip.value(QStringLiteral("durationFrames")).toDouble(std::round(clip.clip.value(QStringLiteral("duration")).toDouble() * fps)));
+    };
+    // Several clips' End is their span's end: moving it trims only the
+    // clip (or clips) ending there, so the cuts inside the span stay shut.
+    qint64 spanEnd = 0;
+    for (const Clip &clip : std::as_const(m_clips)) spanEnd = std::max(spanEnd, startOf(clip) + durationOf(clip));
     for (const Clip &clip : std::as_const(m_clips)) {
-        const qint64 start = qint64(clip.clip.value(QStringLiteral("startFrame")).toDouble(std::round(clip.clip.value(QStringLiteral("timelineStart")).toDouble() * fps)));
-        const qint64 duration = qint64(clip.clip.value(QStringLiteral("durationFrames")).toDouble(std::round(clip.clip.value(QStringLiteral("duration")).toDouble() * fps)));
+        const qint64 start = startOf(clip);
+        const qint64 duration = durationOf(clip);
+        if (several && field == QStringLiteral("end") && start + duration != spanEnd) continue;
         qint64 frames = 0;
         QString op;
         QString edge;
@@ -2154,13 +2234,14 @@ void InspectorPanel::buildSequence(QVBoxLayout *into) {
         } presets[] = {{"16:9", 1920, 1080}, {"9:16", 1080, 1920}, {"1:1", 1080, 1080}, {"4:5", 1080, 1350}};
         int current = -1;
         for (const auto &preset : presets) {
-            // No spaces round the ×, so the whole value fits the pop-up at 300.
-            size->addItem(QStringLiteral("%1 · %2×%3").arg(QString::fromLatin1(preset.ratio)).arg(preset.w).arg(preset.h),
+            // Written as everywhere else ("1080 × 1920"), with thin spaces
+            // round the × so the whole value fits the pop-up at 300.
+            size->addItem(QStringLiteral("%1 · %2\u2009×\u2009%3").arg(QString::fromLatin1(preset.ratio)).arg(preset.w).arg(preset.h),
                           QStringLiteral("%1x%2").arg(preset.w).arg(preset.h));
             if (canvas == QSize(preset.w, preset.h)) current = size->count() - 1;
         }
         if (current < 0) {
-            size->addItem(QStringLiteral("Custom · %1×%2").arg(canvas.width()).arg(canvas.height()), QStringLiteral("%1x%2").arg(canvas.width()).arg(canvas.height()));
+            size->addItem(QStringLiteral("Custom · %1\u2009×\u2009%2").arg(canvas.width()).arg(canvas.height()), QStringLiteral("%1x%2").arg(canvas.width()).arg(canvas.height()));
             current = size->count() - 1;
         }
         size->addItem(QStringLiteral("Custom…"), QString());
@@ -2494,6 +2575,7 @@ void InspectorPanel::buildEffectsSection(QVBoxLayout *into, bool openByDefault) 
             const QString fx = e.value(QStringLiteral("fx")).toString();
             QString name = m_effectDefs.value(fx).value(QStringLiteral("name")).toString();
             if (name.isEmpty()) name = e.value(QStringLiteral("doc")).toString(fx).section(QStringLiteral(": "), 0, 0).remove(QLatin1Char('.'));
+            name = presentationEffectName(name);
             if (!e.value(QStringLiteral("enabled")).toBool(true)) name += QStringLiteral(" (off)");
             names << name;
         }
@@ -2509,6 +2591,7 @@ void InspectorPanel::buildEffect(QVBoxLayout *into, int index) {
     QString name = def.value(QStringLiteral("name")).toString();
     if (name.isEmpty() && !doc.isEmpty()) name = doc.section(QStringLiteral(": "), 0, 0).remove(QLatin1Char('.'));
     if (name.isEmpty()) name = fx;
+    else name = presentationEffectName(name);
     auto *box = new QWidget;
     box->setObjectName(QStringLiteral("effectBox"));
     box->setProperty("fx", fx);
@@ -2574,11 +2657,23 @@ void InspectorPanel::buildEffect(QVBoxLayout *into, int index) {
         const QString group = presentationGroup(value.toObject());
         if (!group.isEmpty() && !groups.contains(group)) groups << group;
     }
+    // Labels on one 12pt line: a first word the effect's name already says
+    // goes ("Threshold" under Edge Glow), unless that would leave two rows
+    // reading alike; the tooltip keeps the catalog's whole label.
+    QStringList labels;
+    for (const QJsonValue &value : defs) labels << presentationLabel(value.toObject());
+    QStringList shortLabels;
+    for (const QString &label : std::as_const(labels)) shortLabels << withoutSharedWord(label, name);
+    for (qsizetype index = 0; index < shortLabels.size(); ++index)
+        if (shortLabels.count(shortLabels.at(index)) > 1 || (labels.contains(shortLabels.at(index)) && shortLabels.at(index) != labels.at(index)))
+            shortLabels[index] = labels.at(index);
     int shownRows = 0;
     int hidden = 0;
     QString lastGroup;
+    int paramIndex = -1;
     for (const QJsonValue &value : defs) {
         const QJsonObject param = value.toObject();
+        ++paramIndex;
         const QString group = presentationGroup(param);
         const bool inMore = groups.isEmpty() ? shownRows >= kEffectRowsShown : (!groups.isEmpty() && group != groups.first());
         QVBoxLayout *target = inMore ? moreLayout : paramsLayout;
@@ -2593,7 +2688,7 @@ void InspectorPanel::buildEffect(QVBoxLayout *into, int index) {
         if (inMore && groups.isEmpty()) ++hidden;
         else if (!inMore) ++shownRows;
         const QString paramName = param.value(QStringLiteral("name")).toString();
-        const int r = addRow(target, presentationLabel(param));
+        const int r = addRow(target, shortLabels.at(paramIndex));
         const Target t{Target::Kind::Effect, paramName, index};
         const QString type = param.value(QStringLiteral("type")).toString();
         if (type == QStringLiteral("number")) {
@@ -2607,19 +2702,17 @@ void InspectorPanel::buildEffect(QVBoxLayout *into, int index) {
         } else {
             bindValue(r, this->row(r)->controls(), t, param)->setObjectName(QStringLiteral("effectParam_") + paramName);
         }
-        this->row(r)->label()->setToolTip(param.value(QStringLiteral("doc")).toString(paramName));
+        this->row(r)->label()->setToolTip(britishSpelling(param.value(QStringLiteral("doc")).toString(paramName)));
         rows << r;
     }
     paramsLayout->addWidget(moreRows);
     const QString moreKey = QStringLiteral("editor/inspector/fx/%1/more").arg(fx);
     if (hidden > 0) {
-        auto *toggle = new QPushButton;
+        auto *toggle = new MoreToggle;
         toggle->setObjectName(QStringLiteral("effectMoreToggle"));
-        toggle->setFlat(true);
-        toggle->setProperty("inspectorLink", true);
-        toggle->setProperty("quiet", true);
         const auto label = [toggle, hidden](bool open) {
             toggle->setText(open ? QStringLiteral("Fewer") : QStringLiteral("%1 more").arg(hidden));
+            toggle->setOpen(open);
         };
         const bool open = QSettings().value(moreKey, false).toBool();
         moreRows->setVisible(open);
@@ -2631,7 +2724,7 @@ void InspectorPanel::buildEffect(QVBoxLayout *into, int index) {
             QSettings().setValue(moreKey, now);
         });
         auto *toggleRow = new QHBoxLayout;
-        toggleRow->setContentsMargins(InspectorRow::kLabelWidth + 8, 0, 0, 0);
+        toggleRow->setContentsMargins(0, 4, 0, 0);
         toggleRow->addWidget(toggle);
         toggleRow->addStretch(1);
         paramsLayout->addLayout(toggleRow);
@@ -2793,6 +2886,25 @@ void InspectorPanel::keyPressEvent(QKeyEvent *event) {
     QWidget::keyPressEvent(event);
 }
 
+void InspectorPanel::showScrollBar(bool shown) {
+    if (m_scroll->property("active").toBool() == shown) return;
+    m_scroll->setProperty("active", shown);
+    QScrollBar *bar = m_scroll->verticalScrollBar();
+    bar->style()->unpolish(bar);
+    bar->style()->polish(bar);
+    bar->update();
+}
+
+void InspectorPanel::enterEvent(QEnterEvent *event) {
+    QWidget::enterEvent(event);
+    showScrollBar(true);
+}
+
+void InspectorPanel::leaveEvent(QEvent *event) {
+    QWidget::leaveEvent(event);
+    if (!m_scrollBarTimer->isActive()) showScrollBar(false);
+}
+
 void InspectorPanel::fitScrollBar() {
     // While the body scrolls, its scroll bar sits in the right padding, so
     // its rows keep the header's right edge.
@@ -2806,6 +2918,10 @@ void InspectorPanel::fitScrollBar() {
 
 bool InspectorPanel::eventFilter(QObject *watched, QEvent *event) {
     if (watched == m_scroll->verticalScrollBar() && (event->type() == QEvent::Show || event->type() == QEvent::Hide)) fitScrollBar();
+    if (watched == m_scroll->viewport() && event->type() == QEvent::Wheel) {
+        showScrollBar(true);
+        m_scrollBarTimer->start();
+    }
     auto *widget = qobject_cast<QWidget *>(watched);
     if (widget && widget->objectName() == QStringLiteral("effectHeader") && event->type() == QEvent::KeyPress) {
         const int code = static_cast<QKeyEvent *>(event)->key();

@@ -71,6 +71,9 @@ public:
     void inspectorDeselected();
     // ⌘4: show the Inspector, or, when it is already in front, the tab before it.
     void toggleInspector();
+    // The Inspector's Add effect: the browser `id` in front for it. Unlike
+    // one chosen by hand, the next clip clicked brings the Inspector back.
+    void showBrowserForInspector(const QString &id);
     bool inspectorRaisedBySelection() const { return m_inspectorAuto; }
 
 signals:
@@ -111,6 +114,10 @@ private:
     bool m_inspectorAuto = false;
     bool m_raisingInspector = false;
     QString m_inspectorClip;
+    // The browser (Effects) Add effect brought forward, until a tab is
+    // chosen by hand; a browser chosen by hand keeps the front on a click.
+    QPointer<ads::CDockWidget> m_browserForInspector;
+    bool m_raisingBrowser = false;
     struct TitleWidgets {
         QPointer<QWidget> leading;
         QPointer<QWidget> trailing;

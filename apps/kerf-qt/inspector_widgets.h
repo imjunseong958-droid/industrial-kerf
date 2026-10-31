@@ -55,8 +55,10 @@ public:
     // Its effect is switched off: the value in the secondary ink (it still edits).
     void setDimmed(bool dimmed);
     bool isDimmed() const { return m_dimmed; }
-    // The ink its value is drawn in.
+    // The ink its value is drawn in, and which side it keeps to (left for
+    // timecode, as the timing row reads, right for everything else).
     QColor valueInk() const;
+    Qt::Alignment valueAlignment() const;
     // Read-only: an animated value, shown at the playhead.
     void setReadOnly(bool readOnly);
     bool isReadOnly() const { return m_readOnly; }
@@ -164,6 +166,13 @@ public:
     QSize sizeHint() const override { return {92, ScrubField::kHeight}; }
     // The knob's centre, for tests.
     QPointF knobCenter() const;
+    // The fill from the origin to the value. A change too small for the
+    // fill to clear the knob still shows: the fill runs kFillPast points
+    // past the knob's centre, so 4.5 show beyond its edge. Empty at the
+    // origin.
+    static constexpr double kKnobRadius = 6.5;
+    static constexpr double kFillPast = 11.0;
+    QRectF fillRect() const;
     double valueAt(double x) const;
 
 signals:
@@ -278,6 +287,11 @@ public:
     void setOpen(bool open);
     bool isOpen() const { return m_open; }
     QSize sizeHint() const override;
+    // The disc behind the glyph (invalid when none) and the glyph's ink: a
+    // toggle off is a quiet secondary glyph with no disc; on, full ink on
+    // the neutral pressed disc, never an accent wash.
+    QColor discColor() const;
+    QColor inkColor() const;
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -291,8 +305,8 @@ private:
 void drawInspectorGlyph(QPainter &painter, GlyphButton::Glyph glyph, const QRectF &rect, const QColor &color, bool open = false);
 
 // A row's label: drag across it to scrub the row's field, double-click it
-// to reset the row. One too long for the label column wraps onto a second
-// line at 11 points (the whole of it in its tooltip).
+// to reset the row. Always one line at 12 points: one too long for the
+// label column ends in an ellipsis (the whole of it in its tooltip).
 class RowLabel final : public QLabel {
     Q_OBJECT
 public:

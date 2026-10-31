@@ -13,7 +13,6 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QScreen>
-#include <QTextLayout>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -172,6 +171,12 @@ void ScrubField::flash() {
     update();
 }
 
+Qt::Alignment ScrubField::valueAlignment() const {
+    // A timing row reads from the left, under its labels, timecode and
+    // "Mixed" alike; every other value is right-aligned, its unit after it.
+    return m_format.kind == NumberFormat::Kind::Timecode ? Qt::AlignLeft : Qt::AlignRight;
+}
+
 bool ScrubField::showsWhole() const {
     // As paintEvent lays it out: the value, its unit and its prefix inside
     // the padding.
@@ -228,7 +233,7 @@ void ScrubField::paintEvent(QPaintEvent *) {
     }
     const QRectF valueRect(left, inner.top(), std::max(0.0, right - left), inner.height());
     const QString shown = QFontMetricsF(valueFont).elidedText(text(), Qt::ElideLeft, valueRect.width());
-    painter.drawText(valueRect, (m_readOnly && m_format.kind == NumberFormat::Kind::Timecode ? Qt::AlignLeft : Qt::AlignRight) | Qt::AlignVCenter, shown);
+    painter.drawText(valueRect, valueAlignment() | Qt::AlignVCenter, shown);
     if (hasFocus() && !m_readOnly) ringFocus(painter, box);
 }
 
@@ -567,16 +572,34 @@ void InspectorSlider::paintEvent(QPaintEvent *) {
     painter.setPen(Qt::NoPen);
     painter.setBrush(theme.sliderGroove);
     painter.drawRoundedRect(track, 2.0, 2.0);
-    const double originX = track.left() + travelOf(m_origin) * track.width();
     const double detentX = track.left() + travelOf(m_detent) * track.width();
-    painter.fillRect(QRectF(std::round(detentX) - 0.5, track.center().y() - 5.0, 1.0, 10.0), theme.inspectorDetent);
+    const QRectF tick(std::round(detentX) - 0.5, track.center().y() - 5.0, 1.0, 10.0);
+    painter.fillRect(tick, theme.inspectorDetent);
     if (m_mixed) return;
     const QPointF knob = knobCenter();
-    painter.setBrush(fillInk());
-    painter.drawRoundedRect(QRectF(QPointF(std::min(originX, knob.x()), track.top()), QPointF(std::max(originX, knob.x()), track.bottom())), 2.0, 2.0);
+    if (const QRectF fill = fillRect(); !fill.isEmpty()) {
+        painter.setBrush(fillInk());
+        painter.drawRoundedRect(fill, 2.0, 2.0);
+    }
     painter.setPen(QPen(theme.sliderHandleBorder, 1.0));
     painter.setBrush(theme.sliderHandle);
-    painter.drawEllipse(knob, 6.5, 6.5);
+    painter.drawEllipse(knob, kKnobRadius, kKnobRadius);
+    // The default under the knob stays in sight, a tick across it.
+    if (std::abs(detentX - knob.x()) < kKnobRadius) painter.fillRect(tick, theme.text);
+}
+
+QRectF InspectorSlider::fillRect() const {
+    const QRectF track = groove();
+    if (m_mixed || std::abs(m_value - m_origin) < 1e-12) return {};
+    const double originX = track.left() + travelOf(m_origin) * track.width();
+    const double knob = knobCenter().x();
+    double end = knob;
+    // A change too small to clear the knob: the fill runs past it.
+    if (std::abs(knob - originX) < kFillPast) {
+        const double side = m_value > m_origin ? 1.0 : -1.0;
+        end = std::clamp(knob + side * kFillPast, track.left(), track.right());
+    }
+    return QRectF(QPointF(std::min(originX, end), track.top()), QPointF(std::max(originX, end), track.bottom()));
 }
 
 void InspectorSlider::mousePressEvent(QMouseEvent *event) {
@@ -864,9 +887,10 @@ void drawInspectorGlyph(QPainter &painter, GlyphButton::Glyph glyph, const QRect
     case Glyph::Reverse: {
         // Play backwards: the play triangle turned to point left, as a
         // transport's reverse-play button draws it. Not a curved arrow,
-        // which reads as undo; not two arrows, which read as swap.
-        painter.setPen(QPen(color, 1.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        painter.setBrush(color);
+        // which reads as undo; not two arrows, which read as swap. Off it
+        // is only an outline (`open` false); on, solid.
+        painter.setPen(QPen(color, 1.25, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.setBrush(open ? QBrush(color) : QBrush(Qt::NoBrush));
         painter.drawPolygon(QPolygonF{c + QPointF(-4.5, 0.0), c + QPointF(3.5, -5.0), c + QPointF(3.5, 5.0)});
         break;
     }
@@ -896,11 +920,9 @@ void drawInspectorGlyph(QPainter &painter, GlyphButton::Glyph glyph, const QRect
     case Glyph::Ellipse:
         painter.drawEllipse(c, 5.0, 4.0);
         break;
-    case Glyph::Pen: {
-        QPolygonF outline{c + QPointF(-5, 4), c + QPointF(-3, -4), c + QPointF(4, -3), c + QPointF(5, 3)};
-        painter.drawPolygon(outline);
+    case Glyph::Pen:
+        drawPenNib(painter, c, color);
         break;
-    }
     }
     painter.restore();
 }
@@ -931,20 +953,37 @@ void GlyphButton::setOpen(bool open) {
     update();
 }
 
+QColor GlyphButton::discColor() const {
+    // A toggle on sits on the neutral pressed disc (no accent wash: purple
+    // is the focus ring's alone here).
+    const EditorTheme &theme = editorTheme();
+    const bool hovered = underMouse() && isEnabled() && m_glyph != Glyph::Chevron && m_glyph != Glyph::Diamond;
+    const bool checked = isCheckable() && isChecked();
+    if (isDown() || checked) return theme.pressed;
+    if (hovered) return theme.hover;
+    return {};
+}
+
+QColor GlyphButton::inkColor() const {
+    const EditorTheme &theme = editorTheme();
+    if (!isEnabled()) return theme.textDisabled;
+    const bool hovered = underMouse() && m_glyph != Glyph::Chevron && m_glyph != Glyph::Diamond;
+    // Off, a toggle is a quiet secondary glyph (full ink under the pointer).
+    const bool quiet = m_glyph == Glyph::Reset || m_glyph == Glyph::Chevron || m_glyph == Glyph::Diamond ||
+                       (isCheckable() && !isChecked() && !hovered);
+    return quiet ? theme.textSecondary : theme.text;
+}
+
 void GlyphButton::paintEvent(QPaintEvent *) {
     const EditorTheme &theme = editorTheme();
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
-    const bool hovered = underMouse() && isEnabled() && m_glyph != Glyph::Chevron && m_glyph != Glyph::Diamond;
-    if (isDown() || hovered || (isCheckable() && isChecked())) {
+    if (const QColor disc = discColor(); disc.isValid()) {
         painter.setPen(Qt::NoPen);
-        painter.setBrush(isDown() ? theme.pressed : isChecked() ? theme.accentTint : theme.hover);
+        painter.setBrush(disc);
         painter.drawEllipse(QRectF(rect()).adjusted(1, 1, -1, -1));
     }
-    const QColor ink = !isEnabled() ? theme.textDisabled
-                       : m_glyph == Glyph::Reset || m_glyph == Glyph::Chevron || m_glyph == Glyph::Diamond ? theme.textSecondary
-                                                                                                          : theme.text;
-    drawInspectorGlyph(painter, m_glyph, QRectF(rect()), ink, m_open);
+    drawInspectorGlyph(painter, m_glyph, QRectF(rect()), inkColor(), isCheckable() ? isChecked() : m_open);
     if (hasFocus()) {
         painter.setPen(QPen(theme.focusRing, 1.0));
         painter.setBrush(Qt::NoBrush);
@@ -962,38 +1001,10 @@ RowLabel::RowLabel(const QString &text, QWidget *parent) : QLabel(text, parent),
 }
 
 void RowLabel::resizeEvent(QResizeEvent *event) {
-    // One line at 12 points where it fits; otherwise two at 11, the second
-    // ended with an ellipsis if even that is short. The tooltip has it whole.
-    const int room = std::max(0, width());
-    const QFont regular = sized(font(), 12);
-    QString shown = m_full;
-    bool wrap = false;
-    if (QFontMetrics(regular).horizontalAdvance(m_full) > room) {
-        const QFont small = sized(font(), 11);
-        const QFontMetrics metrics(small);
-        QTextLayout layout(m_full, small);
-        QTextOption option;
-        option.setWrapMode(QTextOption::WordWrap);
-        layout.setTextOption(option);
-        layout.beginLayout();
-        QTextLine first = layout.createLine();
-        first.setLineWidth(room);
-        QTextLine second = layout.createLine();
-        if (second.isValid()) second.setLineWidth(room);
-        layout.endLayout();
-        if (second.isValid()) {
-            const QString head = m_full.left(first.textLength()).trimmed();
-            const QString tail = metrics.elidedText(m_full.mid(first.textLength()).trimmed(), Qt::ElideRight, room);
-            shown = head + QLatin1Char('\n') + tail;
-            wrap = true;
-        } else {
-            shown = metrics.elidedText(m_full, Qt::ElideRight, room);
-        }
-        if (font().pixelSize() != 11) setFont(small);
-    } else if (font().pixelSize() != 12) {
-        setFont(regular);
-    }
-    setWordWrap(wrap);
+    // One line at 12 points, ended with an ellipsis where the label column
+    // cuts it; the tooltip has it whole.
+    if (font().pixelSize() != 12) setFont(sized(font(), 12));
+    const QString shown = fontMetrics().elidedText(m_full, Qt::ElideRight, std::max(0, width()));
     if (shown != text()) setText(shown);
     QLabel::resizeEvent(event);
 }

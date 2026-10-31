@@ -19,6 +19,11 @@ class QVBoxLayout;
 
 namespace kerf {
 
+class EdgeCover;
+
+// The lines of a label's text as it lays them out, in its own coordinates.
+QList<QRect> labelTextLines(const QLabel *label);
+
 // Chips that wrap onto as many lines as their column needs, left to right,
 // as tags do in a narrow sidebar: the welcome's examples. On a single line
 // they never wrap and scroll sideways instead, as a chip bar does: Kerf's
@@ -61,38 +66,60 @@ private:
 struct ProposalChange {
     enum class Glyph { Trim, Remove, Add, Title, Move, Split, Level, Effect, Other };
     Glyph glyph = Glyph::Other;
-    QString description; // "Trim fisher-close.mov's end"
-    QString detail;      // "−1.5 s"
+    QString description;      // "Trim fisher-close.mov"
+    QString detail;           // "end −1.5 s"
+    QString shortDescription; // "Trim fisher-close": its clip names without their file extension
 };
 
 // A proposal's change as a row of the pinned comment: a 16px glyph in
 // secondary ink at the text column, the description (13px) and, right-
-// aligned, the detail (12px, secondary). 28 points tall. In a narrow row
-// the detail gives way first (down to kMinDetail, ending in an ellipsis) so
-// the description stays whole; where that is not enough, the detail stays
-// whole and the description is cut instead, never both. What is cut is
-// said whole in the tooltip.
+// aligned, the detail (12px, secondary). 28 points tall. The detail is a
+// number or a time and is never cut: in a narrow row the description first
+// drops its clips' file extensions ("Trim fisher-close"), and where it
+// still does not fit beside the detail, the detail moves to a second line
+// under the description (kTwoLineHeight tall). Only the description is
+// ever elided, and only when it alone is wider than the row. Whatever is
+// shortened is said whole in the tooltip.
 class ProposalChangeRow final : public QWidget {
     Q_OBJECT
 public:
     static constexpr int kHeight = 28;
-    static constexpr int kMinDetail = 56;
+    // Two lines: the description's 18-point line, then the detail's 16.
+    static constexpr int kTwoLineHeight = 40;
+    static constexpr int kDescriptionLine = 18;
+    static constexpr int kDetailLine = 16;
     // Where the description starts (the 16-point glyph, then 5), and the
     // room between it and the detail.
     static constexpr int kTextLeft = 16 + 5;
     static constexpr int kDetailGap = 4;
     explicit ProposalChangeRow(const ProposalChange &change, QWidget *parent = nullptr);
     ProposalChange change() const { return m_change; }
-    QSize sizeHint() const override { return QSize(160, kHeight); }
+    QSize sizeHint() const override { return QSize(160, height()); }
     // The glyph's square, the description's and the detail's rectangles.
     QRect glyphRect() const;
     QRect detailRect() const;
     QRect descriptionRect() const;
+    // What the row shows at its width: on one line or two, and the words.
+    bool twoLines() const { return fit(width()).twoLines; }
+    QString shownDescription() const { return fit(width()).description; }
+    QString shownDetail() const { return fit(width()).detail; }
 
 protected:
     void paintEvent(QPaintEvent *) override;
+    void resizeEvent(QResizeEvent *event) override;
+    void changeEvent(QEvent *event) override;
 
 private:
+    struct Fit {
+        bool twoLines = false;
+        QString description;
+        QString detail;
+        int detailWidth = 0;
+    };
+    Fit fit(int width) const;
+    QFont descriptionFont() const;
+    QFont detailFont() const;
+    void updateLines();
     ProposalChange m_change;
 };
 
@@ -322,12 +349,17 @@ public:
     // The blank room between the list's view and the chips or composer
     // under it: rows are cut there at every scroll position.
     static constexpr int kListBottom = 16;
+    // A row cut at the view's edge that would show less than this of a
+    // symbol (an avatar, a glyph, the typing dots), or less than
+    // kSliverSymbol of its height, shows none of it; a line of text, less
+    // than kSliverLine of its line's height.
+    static constexpr int kSliver = 4;
+    static constexpr qreal kSliverSymbol = 0.3;
+    static constexpr qreal kSliverAvatar = 0.5;
+    static constexpr qreal kSliverLine = 0.45;
     // Under this width the pinned proposal's Script expander leaves the
     // summary's line for the pills' row, so the summary keeps one line.
     static constexpr int kNarrowProposal = 360;
-    // The compact bar shows the summary's verbs while it has this much room
-    // for them, only the count under it.
-    static constexpr int kBarSummaryRoom = 120;
 
     explicit ChatPanel(QWidget *parent = nullptr);
 
@@ -338,6 +370,8 @@ public:
     // Every row's name and text, in order, as plain text; replies are not
     // included (they stay folded until opened).
     QString transcript() const;
+    // The strips (in the list's view) covering slivers of rows its edges cut.
+    QList<QRect> edgeCoverStrips() const;
     // The view keeps to the latest output unless the reader scrolled away.
     bool followsLatest() const { return m_follow; }
     void refreshTimes();
@@ -436,6 +470,10 @@ private:
     // list's scroll and the proposal's pills stand.
     void updateListEdge();
     void refitListSoon();
+    // Where a row is cut at the view's top or bottom edge leaving only a
+    // sliver of it (a line's ascenders, an avatar's arc), that sliver is
+    // covered in the panel's surface, so the edge is clean, never dirty.
+    void updateEdgeCover();
     // The Script expander on the summary's line, or on the pills' row in a
     // narrow panel.
     void placeProposalExpander();
@@ -447,6 +485,7 @@ private:
     ChatIconButton *m_more = nullptr;
     ChatIconButton *m_close = nullptr;
     QFrame *m_scrollEdge = nullptr;
+    EdgeCover *m_edgeCover = nullptr;
     QFrame *m_proposalBar = nullptr;
     QLabel *m_proposalBarSummary = nullptr;
     QPushButton *m_barAccept = nullptr;
