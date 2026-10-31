@@ -29,11 +29,40 @@ public:
     void setLiveScrub(bool live);
     void setCaption(const QString &caption);
     void setProjectInfo(double width, double height);
-    // A panel that, while it is open directly on the viewer's right (Kerf's
-    // conversation), draws a picture narrower than the viewer against it,
-    // so the two read as one, as a Short sits against its comments. With it
-    // closed or elsewhere, the picture is centred.
-    void setTrailingNeighbour(QWidget *neighbour);
+    // The stage, as a Short's page lays out its player: the picture card,
+    // the action rail on its right, and Kerf's conversation on the rail's
+    // right, one group centred in the viewer, the conversation as tall as
+    // the card and level with it. With the conversation closed the card is
+    // centred alone and the rail hangs on its right. Where the viewer is
+    // too narrow for all three, the card shrinks first, then the
+    // conversation to its narrowest; past that it lies over the stage's
+    // right side instead.
+    struct StageLayout {
+        QRectF card;
+        QRect rail;  // Empty when there is no room for it.
+        QRect panel; // Empty while the conversation is closed.
+        bool overlay = false;
+    };
+    static constexpr int kStageMargin = 16;
+    static constexpr int kStageGap = 12;
+    static constexpr int kCardRadius = 12;
+    static constexpr int kRailWidth = 48;
+    // The conversation's width: kept between these (a per-user preference).
+    static constexpr int kMinChatWidth = 300;
+    static constexpr int kMaxChatWidth = 420;
+    static constexpr int kDefaultChatWidth = 360;
+    // The conversation is never shorter than this where the stage has the
+    // room, so its header, a comment and its composer fit.
+    static constexpr int kMinChatHeight = 320;
+    // The card's narrowest before the conversation narrows, then lies over it.
+    static constexpr int kMinCardWidth = 160;
+    // The rail and conversation, laid out in the stage as children.
+    void setStage(QWidget *rail, QWidget *panel);
+    void setChatOpen(bool open);
+    bool chatOpen() const { return m_chatOpen; }
+    void setChatWidth(int width);
+    int chatWidth() const { return m_chatWidth; }
+    StageLayout stageLayout() const;
     QRectF videoRect() const;
     QRectF captionRect() const;
 
@@ -51,6 +80,8 @@ signals:
     void scrubEnded();
     void seekRequested(double fraction);
     void editRequested(const QJsonArray &ops);
+    // The conversation's width changed (a drag on its edge).
+    void chatWidthChanged(int width);
     // A mask was drawn or the tool was put down.
     void maskToolChanged(MaskTool tool);
     // A click chose a mask, or none.
@@ -64,11 +95,11 @@ protected:
     void keyPressEvent(QKeyEvent *event) override;
     void leaveEvent(QEvent *) override;
     void paintEvent(QPaintEvent *) override;
+    void resizeEvent(QResizeEvent *) override;
 
 private:
-    // m_trailingNeighbour is shown in this window, starting just past the
-    // viewer's right edge and level with its middle.
-    bool neighbourOnTrailingEdge() const;
+    // Place the rail and the conversation where stageLayout() puts them.
+    void layoutStage();
     double fractionAt(int x) const;
     // While a tool is out or the clip has masks, the pointer edits masks
     // instead of scrubbing or seeking.
@@ -95,7 +126,10 @@ private:
     double m_time = 0.0;
     double m_width = 0.0;
     double m_height = 0.0;
-    QPointer<QWidget> m_trailingNeighbour;
+    QPointer<QWidget> m_rail;
+    QPointer<QWidget> m_panel;
+    bool m_chatOpen = false;
+    int m_chatWidth = kDefaultChatWidth;
     double m_skimFraction = -1.0;
     bool m_skimming = false;
     bool m_liveScrub = false;

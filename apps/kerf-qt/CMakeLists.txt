@@ -38,6 +38,8 @@ set(KERF_QT_SOURCES
     ask_prompt.cpp
     ask_prompt.h
     bridge.h
+    chat_panel.cpp
+    chat_panel.h
     command_registry.cpp
     command_registry.h
     editor_common.cpp

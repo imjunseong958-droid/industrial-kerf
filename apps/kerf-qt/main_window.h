@@ -19,6 +19,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMainWindow>
+#include <QPointer>
 #include <QMenu>
 #include <QProgressBar>
 #include <QPushButton>
@@ -38,6 +39,9 @@
 namespace kerf {
 
 class AskPrompt;
+class ChatPanel;
+class CommentRow;
+class StageRail;
 class CommandRegistry;
 class EffectControlsPanel;
 class EffectsPanel;
@@ -53,10 +57,6 @@ class MainWindow final : public QMainWindow {
     Q_OBJECT
     friend class EditorTest;
 public:
-    // The most lines the proposal card's script and diff show before they scroll.
-    static constexpr int kProposalDiffLines = 10;
-    // The fade over the top of the conversation's view while it is scrolled.
-    static constexpr int kScrollFadeHeight = 14;
     MainWindow(const QString &projectDirectory, const QString &kerfdBinary, QWidget *parent = nullptr);
     ~MainWindow() override;
 
@@ -141,6 +141,11 @@ private slots:
     void saveAgentSettings();
     void acceptProposal();
     void rejectProposal();
+    // Kerf's conversation, in the Program monitor's stage beside the
+    // picture: open there (and the Program monitor with it, in front), or
+    // closed. Remembered on this Mac, never in the project.
+    bool chatOpen() const;
+    void setChatOpen(bool open);
 
 protected:
     bool eventFilter(QObject *object, QEvent *event) override;
@@ -206,6 +211,13 @@ private:
     void showProposalText();
     void appendConversation(const QString &speaker, const QString &text);
     void appendConversationNote(const QString &kind, const QString &text);
+    // The number of messages under the rail's chat button.
+    void updateChatCount();
+    void updateChatTips();
+    // The quiet status line after the latest comment.
+    void updateChatStatus();
+    // The activity log, from the conversation's ⋯ menu.
+    void showActivity();
     void addActivity(const QString &kind, const QString &text);
     void showError(const QString &message);
     void setConnection(const QString &status, const QString &message = QString());
@@ -254,8 +266,6 @@ private:
     QToolButton *m_toolbarLeftEnd = nullptr; // The last command before the title.
     // The toolbar's last control: opens and closes Kerf's conversation.
     QToolButton *m_chatToggle = nullptr;
-    // The close button in the conversation's header.
-    QAction *m_assistantClose = nullptr;
     QString m_projectDirectory;
     QString m_kerfdBinary;
     void *m_bridge = nullptr;
@@ -280,7 +290,7 @@ private:
     QList<QPair<QAction *, TransportGlyph>> m_sourceGlyphs; // The Source monitor's marks and edits.
     // Tool palette actions, whose icons are redrawn when the appearance changes.
     QList<QAction *> m_toolGlyphs;
-    // Disclosure buttons (Activity, Settings' Advanced), whose chevrons are too.
+    // Disclosure buttons (Settings' Advanced), whose chevrons are too.
     QList<QToolButton *> m_disclosures;
     QToolButton *m_transportPlay = nullptr;
     QLabel *m_transportTime = nullptr;
@@ -368,7 +378,6 @@ private:
     bool m_pointerOwnsPlayhead = false;
     bool m_hasShownFrame = false;
     bool m_updatingCanvasPreset = false;
-    bool m_conversationEmpty = true;
     bool m_agentBusy = false;
     QString m_agentRunState = QStringLiteral("idle");
     QString m_agentText;
@@ -379,14 +388,18 @@ private:
 
     ViewerWidget *m_viewer = nullptr;
     TimelineWidget *m_timeline = nullptr;
-    QTextEdit *m_conversation = nullptr;
-    // The assistant's one scrolling view, and whether it keeps to the latest output.
+    // The conversation and the rail beside the picture.
+    ChatPanel *m_chat = nullptr;
+    StageRail *m_rail = nullptr;
+    // Kerf's comment for this turn, which streamed text and steps go to, and
+    // steps that came before it.
+    QPointer<CommentRow> m_agentRow;
+    QStringList m_pendingReplies;
+    QFrame *m_activityPopup = nullptr;
+    // Parts of m_chat, by role.
     QScrollArea *m_chatScroll = nullptr;
-    bool m_followConversation = true;
-    QTextCursor m_agentCursor;
     QLabel *m_chatActivity = nullptr;
     QFrame *m_chatComposer = nullptr;
-    QLabel *m_composerStatus = nullptr;
     QTextEdit *m_chatInput = nullptr;
     QRadioButton *m_anthropicActiveRadio = nullptr;
     QRadioButton *m_openaiActiveRadio = nullptr;
@@ -403,7 +416,7 @@ private:
     QLabel *m_inboundMcpStatus = nullptr;
     quint64 m_mcpConfigVersion = 0;
     QPushButton *m_sendButton = nullptr;
-    QToolButton *m_abortButton = nullptr;
+    QPushButton *m_abortButton = nullptr;
     QListWidget *m_activityList = nullptr;
     QLabel *m_agentStatus = nullptr;
     QLabel *m_proposalSummary = nullptr;
@@ -411,7 +424,7 @@ private:
     QString m_proposalText; // The pending proposal's script and diff, as m_proposalDiff shows them.
     QPushButton *m_acceptButton = nullptr;
     QPushButton *m_rejectButton = nullptr;
-    QGroupBox *m_proposalBox = nullptr;
+    QFrame *m_proposalBox = nullptr;
     QComboBox *m_quality = nullptr;
     QComboBox *m_canvasPreset = nullptr;
     QProgressBar *m_exportProgress = nullptr;

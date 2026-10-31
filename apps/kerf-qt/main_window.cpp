@@ -1,6 +1,7 @@
 #include "main_window.h"
 #include "ask_prompt.h"
 #include "bridge.h"
+#include "chat_panel.h"
 #include "command_registry.h"
 #include "effect_controls_panel.h"
 #include "effects_panel.h"
@@ -169,114 +170,6 @@ QIcon toolbarIcon(const QString &glyph) {
     return icon;
 }
 
-// A panel header's close button: an x on the transport icons' grid.
-QIcon closeIcon() {
-    return glyphIcon(QSize(16, 16), [](QPainter &painter, const QColor &color) {
-        painter.setPen(QPen(color, 1.4, Qt::SolidLine, Qt::RoundCap));
-        painter.drawLine(QPointF(4.5, 4.5), QPointF(11.5, 11.5));
-        painter.drawLine(QPointF(11.5, 4.5), QPointF(4.5, 11.5));
-    });
-}
-
-// Chips that wrap onto as many lines as their column needs, left to right,
-// as tags do in a narrow sidebar: Kerf's next steps over the composer.
-class FlowLayout final : public QLayout {
-public:
-    FlowLayout(QWidget *parent, int spacing) : QLayout(parent), m_spacing(spacing) { setContentsMargins(0, 0, 0, 0); }
-    ~FlowLayout() override {
-        while (QLayoutItem *item = FlowLayout::takeAt(0)) delete item;
-    }
-    void addItem(QLayoutItem *item) override { m_items.append(item); }
-    int count() const override { return int(m_items.size()); }
-    QLayoutItem *itemAt(int index) const override { return m_items.value(index); }
-    QLayoutItem *takeAt(int index) override { return index >= 0 && index < m_items.size() ? m_items.takeAt(index) : nullptr; }
-    Qt::Orientations expandingDirections() const override { return {}; }
-    bool hasHeightForWidth() const override { return true; }
-    int heightForWidth(int width) const override { return arrange(QRect(0, 0, width, 0), false); }
-    void setGeometry(const QRect &rect) override {
-        QLayout::setGeometry(rect);
-        arrange(rect, true);
-    }
-    QSize sizeHint() const override { return minimumSize(); }
-    // As narrow as its widest chip.
-    QSize minimumSize() const override {
-        QSize size;
-        for (const QLayoutItem *item : m_items)
-            if (!item->isEmpty()) size = size.expandedTo(item->sizeHint());
-        const QMargins margins = contentsMargins();
-        return size.grownBy(margins);
-    }
-
-private:
-    // Lays the chips out in `rect` (or only measures) and returns the height they take.
-    int arrange(const QRect &rect, bool apply) const {
-        const QRect area = rect.marginsRemoved(contentsMargins());
-        int x = area.x();
-        int y = area.y();
-        int line = 0;
-        for (QLayoutItem *item : m_items) {
-            if (item->isEmpty()) continue;
-            const QSize hint = item->sizeHint();
-            if (x > area.x() && x + hint.width() > area.x() + area.width()) {
-                x = area.x();
-                y += line + m_spacing;
-                line = 0;
-            }
-            if (apply) item->setGeometry(QRect(QPoint(x, y), hint));
-            x += hint.width() + m_spacing;
-            line = std::max(line, hint.height());
-        }
-        return y + line - rect.y() + contentsMargins().bottom();
-    }
-
-    QList<QLayoutItem *> m_items;
-    int m_spacing;
-};
-
-// Over the top of a scrolled view, its background fading to clear, so a
-// message cut off by the view's top edge reads as scrolled out of sight and
-// not as clipped. It is the scroll area's child, not its viewport's, so it
-// stays put while the content scrolls, and is shown only while the view is
-// scrolled. Clicks pass through it.
-class ScrollTopFade final : public QWidget {
-public:
-    static constexpr int kHeight = MainWindow::kScrollFadeHeight;
-    explicit ScrollTopFade(QScrollArea *area) : QWidget(area), m_area(area) {
-        setObjectName(QStringLiteral("scrollFade"));
-        setAttribute(Qt::WA_TransparentForMouseEvents);
-        area->installEventFilter(this);
-        connect(area->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) { setVisible(value > 0); });
-        connect(EditorAppearance::instance(), &EditorAppearance::changed, this, qOverload<>(&QWidget::update));
-        hide();
-        follow();
-    }
-
-protected:
-    bool eventFilter(QObject *watched, QEvent *event) override {
-        if (watched == m_area && (event->type() == QEvent::Resize || event->type() == QEvent::LayoutRequest)) follow();
-        return QWidget::eventFilter(watched, event);
-    }
-    void paintEvent(QPaintEvent *) override {
-        // Solid for its first few pixels, the well the conversation sits in.
-        const QColor well = editorTheme().well;
-        QColor clear = well;
-        clear.setAlpha(0);
-        QLinearGradient fade(0, 0, 0, height());
-        fade.setColorAt(0, well);
-        fade.setColorAt(0.25, well);
-        fade.setColorAt(1, clear);
-        QPainter(this).fillRect(rect(), fade);
-    }
-
-private:
-    void follow() {
-        const QRect viewport = m_area->viewport()->geometry();
-        setGeometry(viewport.left(), viewport.top(), viewport.width(), kHeight);
-        raise();
-    }
-    QScrollArea *m_area;
-};
-
 // A tool palette symbol on an 18-point grid, in `color`: the pointer for
 // Selection (SF Symbols' cursorarrow), the edit suites' marks for the rest,
 // drawn with the toolbar's pen so they share its weight.
@@ -339,36 +232,6 @@ QIcon toolIcon(const QString &id) {
     icon.addPixmap(toolGlyph(id, theme.accent), QIcon::Active, QIcon::On);
     icon.addPixmap(toolGlyph(id, theme.glyphDisabled), QIcon::Disabled, QIcon::Off);
     return icon;
-}
-
-// The assistant's welcome, shown until the first message.
-QString conversationIntro(const EditorTheme &t) {
-    return QStringLiteral(
-        "<p style='margin-top:2px; color:%1; font-size:11px; font-weight:600;'>Your editing partner</p>"
-        "<p style='margin-top:2px; color:%2; font-size:14px; font-weight:600;'>Make your next cut.</p>"
-        "<p style='margin-top:4px; color:%3;'>Describe the change. Kerf uses this timeline.</p>"
-        "<p style='margin-top:10px; color:%3; font-size:11px; font-weight:600;'>Try asking</p>"
-        "<p style='margin-top:2px; color:%4;'>“Trim the opening to three seconds.”</p>"
-        "<p style='margin-top:2px; color:%4;'>“Lower the music under the dialogue.”</p>"
-        "<p style='margin-top:10px; color:%3; font-size:11px;'>Review a proposal before it changes the cut.</p>")
-        .arg(t.assistantText.name(), t.textStrong.name(), t.textSecondary.name(), t.text.name());
-}
-
-// Conversation messages carry their kind, so a change of appearance can
-// recolour the ones already shown.
-enum class MessageKind { User = 1, Agent, Error };
-constexpr int kMessageKind = QTextFormat::UserProperty + 1;
-
-void styleMessage(QTextFrameFormat &frame, MessageKind kind) {
-    const EditorTheme &t = editorTheme();
-    frame.setBackground(kind == MessageKind::User ? t.messageUser : kind == MessageKind::Error ? t.errorSurface : t.messageAgent);
-    frame.setBorderBrush(kind == MessageKind::User ? t.messageUserBorder : kind == MessageKind::Error ? t.errorBorder
-                                                                                                 : t.messageAgentBorder);
-}
-
-QColor messageRoleColor(MessageKind kind) {
-    const EditorTheme &t = editorTheme();
-    return kind == MessageKind::User ? t.messageUserRole : kind == MessageKind::Error ? t.errorText : t.assistantText;
 }
 
 } // namespace
@@ -1352,7 +1215,7 @@ void MainWindow::updateAiBar() {
     // Short's comment count does: open beside the picture, the conversation
     // already shows the work, the proposal and the next steps, and the
     // timeline keeps the row.
-    const bool chatOpen = m_workspace && m_workspace->assistantOpen();
+    const bool chatOpen = this->chatOpen();
     m_aiBar->setVisible(m_connected && !chatOpen && (m_agentBusy || pending || next));
     m_nextSteps->setVisible(next);
     if (m_agentBusy) {
@@ -1402,8 +1265,8 @@ void MainWindow::updateChatControls() {
     m_abortButton->setEnabled(m_agentBusy);
     m_abortButton->setVisible(m_agentBusy);
     m_sendButton->setVisible(!m_agentBusy);
-    // The composer's edge shows the focus of any field in it (the message,
-    // the model), in place of a ring; a button in it rings itself.
+    // The composer's underline shows the focus of any field in it (the
+    // message, the model), in place of a ring; a button in it rings itself.
     const QWidget *focus = QApplication::focusWidget();
     const bool focused = focus && m_chatComposer->isAncestorOf(focus) && !qobject_cast<const QAbstractButton *>(focus);
     const QString state = !m_connected ? QStringLiteral("offline")
@@ -1413,14 +1276,17 @@ void MainWindow::updateChatControls() {
         m_chatComposer->setProperty("state", state);
         m_chatComposer->style()->unpolish(m_chatComposer);
         m_chatComposer->style()->polish(m_chatComposer);
+        for (QWidget *part : m_chatComposer->findChildren<QWidget *>()) part->update();
         m_chatComposer->update();
     }
-    m_composerStatus->setText(!m_connected ? QStringLiteral("Connect to start editing")
-                             : m_agentBusy ? QStringLiteral("Kerf is working…")
-                                            : QStringLiteral("↵ Send  ·  ⇧↵ New line"));
+    m_chatInput->setToolTip(!m_connected ? QStringLiteral("Connect to start editing")
+                            : m_agentBusy ? QStringLiteral("Kerf is working…")
+                                          : QStringLiteral("Return sends · Shift-Return starts a new line"));
     m_chatInput->setPlaceholderText(!m_connected ? QStringLiteral("Your next edit starts here…")
                                    : m_agentBusy ? QStringLiteral("Working on your edit…")
                                                  : QStringLiteral("Describe your next edit…"));
+    m_chat->updateComposer(m_agentBusy);
+    updateChatStatus();
 }
 
 QString MainWindow::activeProviderId() const {
@@ -1759,243 +1625,93 @@ void MainWindow::buildUi() {
     m_sourceMonitor = new SourceMonitorPanel;
     connect(m_sourceMonitor, &SourceMonitorPanel::changed, this, &MainWindow::updateCommandStates);
 
-    auto *right = new QWidget;
-    right->setObjectName(QStringLiteral("assistantPanel"));
-    right->setAttribute(Qt::WA_StyledBackground);
-    right->setMinimumWidth(248);
-    auto *rightLayout = new QVBoxLayout(right);
-    rightLayout->setContentsMargins(8, 2, 8, 8);
-    auto *chatTab = new QWidget;
-    rightLayout->addWidget(chatTab);
-    auto *chatTabLayout = new QVBoxLayout(chatTab);
-    chatTabLayout->setContentsMargins(0, 6, 0, 0);
-    chatTabLayout->setSpacing(6);
-    auto *statusRow = new QHBoxLayout;
-    statusRow->setContentsMargins(0, 0, 0, 0);
-    auto *preferencesLink = new QToolButton;
-    preferencesLink->setObjectName(QStringLiteral("assistantSettings"));
-    preferencesLink->setText(QStringLiteral("Agent settings…"));
-    preferencesLink->setToolTip(QStringLiteral("Provider, model, and MCP settings"));
-    connect(preferencesLink, &QToolButton::clicked, this, [this] { triggerCommand(QStringLiteral("app.preferences")); });
-    statusRow->addWidget(preferencesLink);
-    statusRow->addStretch(1);
-    m_agentStatus = new QLabel(QStringLiteral("Ready"));
-    m_agentStatus->setObjectName(QStringLiteral("statusPill"));
-    statusRow->addWidget(m_agentStatus);
-    chatTabLayout->addLayout(statusRow);
-    // One view scrolls: the conversation, at its full height, then activity
-    // and the proposal under review. The composer stays fixed below.
-    auto *chatScroll = new QScrollArea;
-    m_chatScroll = chatScroll;
-    chatScroll->setFrameShape(QFrame::NoFrame);
-    chatScroll->setWidgetResizable(true);
-    chatScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    // New output keeps the latest in view, unless the reader scrolled away.
-    connect(chatScroll->verticalScrollBar(), &QScrollBar::rangeChanged, this, [this](int, int maximum) {
-        if (m_followConversation) m_chatScroll->verticalScrollBar()->setValue(maximum);
-    });
-    connect(chatScroll->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) {
-        m_followConversation = value >= m_chatScroll->verticalScrollBar()->maximum() - 4;
-    });
-    // A hairline under the header row while the view is scrolled, as macOS
-    // draws a scroll edge, so a line cut off at the top reads as scrolled
-    // content and not as a glitch.
-    auto *scrollEdge = new QFrame;
-    scrollEdge->setObjectName(QStringLiteral("scrollEdge"));
-    scrollEdge->setFixedHeight(1);
-    connect(chatScroll->verticalScrollBar(), &QScrollBar::valueChanged, scrollEdge, [scrollEdge](int value) {
-        if (scrollEdge->property("scrolled").toBool() == (value > 0)) return;
-        scrollEdge->setProperty("scrolled", value > 0);
-        scrollEdge->style()->unpolish(scrollEdge);
-        scrollEdge->style()->polish(scrollEdge);
-    });
-    new ScrollTopFade(chatScroll);
-    auto *chatContent = new QWidget;
-    auto *chatLayout = new QVBoxLayout(chatContent);
-    chatLayout->setContentsMargins(0, 0, 0, 0);
-    chatLayout->setSizeConstraint(QLayout::SetMinimumSize);
-    chatLayout->setSpacing(6);
-    chatScroll->setWidget(chatContent);
-    auto *scrollColumn = new QVBoxLayout;
-    scrollColumn->setSpacing(0);
-    scrollColumn->addWidget(scrollEdge);
-    scrollColumn->addWidget(chatScroll, 1);
-    chatTabLayout->addLayout(scrollColumn, 1);
-    m_conversation = new QTextEdit;
-    m_conversation->setReadOnly(true);
-    m_conversation->setObjectName(QStringLiteral("conversation"));
-    m_conversation->setAcceptRichText(false);
-    m_conversation->setUndoRedoEnabled(false);
-    m_conversation->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
-    m_conversation->setAccessibleName(QStringLiteral("Conversation with Kerf"));
-    m_conversation->setMinimumHeight(80);
-    // It never scrolls itself: it is as tall as its messages, inside the
-    // view that scrolls.
-    m_conversation->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_conversation->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    connect(m_conversation->document()->documentLayout(), &QAbstractTextDocumentLayout::documentSizeChanged, this,
-            [this](const QSizeF &size) {
-                const int chrome = m_conversation->height() - m_conversation->viewport()->height();
-                m_conversation->setFixedHeight(std::max(80, static_cast<int>(std::ceil(size.height())) + chrome));
-            });
-    m_conversation->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_conversation->document()->setDocumentMargin(2);
-    m_conversation->setHtml(conversationIntro(editorTheme()));
-    chatLayout->addWidget(m_conversation);
-    // Review sits at the foot of a short conversation.
-    chatLayout->addStretch(1);
-    auto *composer = new QFrame;
-    m_chatComposer = composer;
-    composer->setObjectName(QStringLiteral("chatComposer"));
-    // Its edge turns the accent while a field in it (the message, the
-    // model) has focus, in place of a ring around the field.
-    composer->setProperty("ringsOwnFields", true);
-    auto *composerLayout = new QVBoxLayout(composer);
-    composerLayout->setContentsMargins(10, 6, 8, 6);
-    composerLayout->setSpacing(4);
-    auto *agentPicker = new QHBoxLayout;
-    agentPicker->setSpacing(5);
-    auto *modelLabel = new QLabel(QStringLiteral("Model"));
-    modelLabel->setObjectName(QStringLiteral("muted"));
-    m_modelSelect = new QComboBox;
-    m_modelSelect->setEditable(true);
-    m_modelSelect->setInsertPolicy(QComboBox::NoInsert);
-    m_modelSelect->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    m_modelSelect->setMinimumContentsLength(12);
-    m_modelSelect->setObjectName(QStringLiteral("agentModel"));
+    // Kerf's conversation lives in the Program monitor's stage beside the
+    // picture, as a Short's comments open beside it: the rail's chat button
+    // between them, and the panel as tall as the picture (see
+    // ViewerWidget::stageLayout).
+    m_chat = new ChatPanel;
+    m_rail = new StageRail;
+    m_chatScroll = m_chat->scroll();
+    m_chatActivity = m_chat->activityLabel();
+    m_agentStatus = m_chat->statusLabel();
+    m_chatComposer = m_chat->composer();
+    m_chatInput = m_chat->input();
+    m_modelSelect = m_chat->modelSelect();
+    m_sendButton = m_chat->sendButton();
+    m_abortButton = m_chat->stopButton();
+    m_proposalBox = m_chat->proposal();
+    m_proposalSummary = m_chat->proposalSummary();
+    m_proposalDiff = m_chat->proposalDiff();
+    m_acceptButton = m_chat->acceptButton();
+    m_rejectButton = m_chat->rejectButton();
+    m_chatNextSteps = m_chat->chips();
     m_modelSelect->setToolTip(QStringLiteral("Model ID sent with each chat request. Suggestions follow the active connection in Settings."));
-    agentPicker->addWidget(modelLabel);
-    agentPicker->addWidget(m_modelSelect, 2);
-    auto *chatRow = new QHBoxLayout;
-    chatRow->setContentsMargins(0, 0, 0, 0);
-    chatRow->setSpacing(6);
-    m_chatInput = new QTextEdit;
-    m_chatInput->setObjectName(QStringLiteral("chatInput"));
-    m_chatInput->setPlaceholderText(QStringLiteral("Ask Kerf to edit…"));
-    m_chatInput->setAccessibleName(QStringLiteral("Message Kerf"));
-    m_chatInput->setAcceptRichText(false);
-    m_chatInput->setFixedHeight(32);
-    m_chatInput->document()->setDocumentMargin(2);
-    m_chatInput->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_chatInput->setTabChangesFocus(true);
     m_chatInput->installEventFilter(this);
     connect(m_chatInput, &QTextEdit::textChanged, this, &MainWindow::updateChatControls);
-    composerLayout->addWidget(m_chatInput);
-    composerLayout->addLayout(agentPicker);
-    auto *sendButton = new QPushButton(QStringLiteral("↑"));
-    sendButton->setObjectName(QStringLiteral("chatSendButton"));
-    sendButton->setProperty("bezelRadius", 8);
-    m_sendButton = sendButton;
-    sendButton->setAccessibleName(QStringLiteral("Send message"));
-    sendButton->setFixedSize(32, 32);
-    sendButton->setToolTip(QStringLiteral("Send message (Return)"));
-    connect(sendButton, &QPushButton::clicked, this, &MainWindow::sendChat);
-    m_composerStatus = new QLabel;
-    m_composerStatus->setObjectName(QStringLiteral("composerStatus"));
-    m_composerStatus->setWordWrap(true);
-    chatRow->addWidget(m_composerStatus, 1);
-    chatRow->addStretch();
-    chatRow->addWidget(sendButton);
-    auto *abortButton = new QToolButton;
-    abortButton->setObjectName(QStringLiteral("abortButton"));
-    abortButton->setText(QStringLiteral("Stop"));
-    abortButton->setToolTip(QStringLiteral("Stop the current agent request"));
-    m_abortButton = abortButton;
-    abortButton->setEnabled(false);
-    connect(abortButton, &QToolButton::clicked, this, [this] {
+    connect(m_sendButton, &QPushButton::clicked, this, &MainWindow::sendChat);
+    m_abortButton->setEnabled(false);
+    connect(m_abortButton, &QPushButton::clicked, this, [this] {
         if (!execute(QStringLiteral("ai.stop"))) return;
         m_abortButton->setEnabled(false);
         m_agentStatus->setText(QStringLiteral("Stopping"));
         appendConversationNote(QStringLiteral("Progress"), QStringLiteral("Stopping request…"));
     });
-    chatRow->addWidget(abortButton);
-    composerLayout->addLayout(chatRow);
-    // Its edge follows the focus into and out of it (see updateChatControls).
+    // The composer follows the focus into and out of it (see updateChatControls).
     connect(qApp, &QApplication::focusChanged, this, [this](QWidget *from, QWidget *to) {
         if ((from && m_chatComposer->isAncestorOf(from)) || (to && m_chatComposer->isAncestorOf(to))) updateChatControls();
     });
-    m_chatActivity = new QLabel;
-    m_chatActivity->setObjectName(QStringLiteral("chatActivity"));
-    m_chatActivity->setTextFormat(Qt::PlainText);
-    m_chatActivity->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-    m_chatActivity->setFixedHeight(28);
-    m_chatActivity->hide();
-    chatLayout->addWidget(m_chatActivity);
-    auto *activityTitle = new QToolButton;
-    activityTitle->setText(QStringLiteral("Activity"));
-    activityTitle->setObjectName(QStringLiteral("eyebrow"));
-    activityTitle->setCheckable(true);
-    activityTitle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    activityTitle->setIconSize(QSize(11, 11));
-    activityTitle->setIcon(disclosureIcon(false, editorTheme().textSecondary));
-    m_disclosures.append(activityTitle);
-    chatLayout->addWidget(activityTitle);
-    m_activityList = new QListWidget;
-    m_activityList->setObjectName(QStringLiteral("activityList"));
-    m_activityList->setMaximumHeight(60);
-    chatLayout->addWidget(m_activityList);
-    m_activityList->hide();
-    connect(activityTitle, &QToolButton::toggled, this, [this, activityTitle](bool visible) {
-        m_activityList->setVisible(visible);
-        activityTitle->setIcon(disclosureIcon(visible, editorTheme().textSecondary));
+    connect(m_chat, &ChatPanel::askAgain, this, [this](const QString &text) {
+        if (!m_agentBusy && m_connected) sendAgent(text, QJsonObject{}, QString());
     });
+    m_chat->moreButton()->setToolTip(QStringLiteral("Agent settings and activity"));
+    connect(m_chat->moreButton(), &QAbstractButton::clicked, this, [this] {
+        QMenu menu(this);
+        menu.addAction(QStringLiteral("Agent Settings…"), this, [this] { triggerCommand(QStringLiteral("app.preferences")); });
+        menu.addAction(QStringLiteral("Activity"), this, [this] { showActivity(); });
+        QWidget *more = m_chat->moreButton();
+        menu.exec(more->mapToGlobal(QPoint(more->width() - menu.sizeHint().width(), more->height() + 4)));
+    });
+    connect(m_chat->closeButton(), &QAbstractButton::clicked, this, [this] { setChatOpen(false); });
+    // What the agent and the project did, one line each, from the ⋯ menu.
+    m_activityPopup = new QFrame(this, Qt::Popup);
+    m_activityPopup->setObjectName(QStringLiteral("activityPopup"));
+    {
+        auto *layout = new QVBoxLayout(m_activityPopup);
+        layout->setContentsMargins(12, 10, 12, 10);
+        layout->setSpacing(6);
+        auto *title = new QLabel(QStringLiteral("Activity"));
+        title->setObjectName(QStringLiteral("eyebrow"));
+        layout->addWidget(title);
+        m_activityList = new QListWidget;
+        m_activityList->setObjectName(QStringLiteral("activityList"));
+        m_activityList->setMinimumSize(320, 160);
+        layout->addWidget(m_activityList);
+    }
+    m_viewer->setStage(m_rail, m_chat);
+    {
+        const QSettings settings;
+        // The first time, the width this Mac's conversation had as a docked column.
+        const int width = settings.value(QStringLiteral("viewer/chatWidth"),
+                                         settings.value(QStringLiteral("workspace/assistantWidth"), ViewerWidget::kDefaultChatWidth))
+                              .toInt();
+        m_viewer->setChatWidth(width);
+        m_viewer->setChatOpen(settings.value(QStringLiteral("viewer/chatOpen"), true).toBool());
+    }
+    connect(m_chat, &ChatPanel::widthDragged, m_viewer, &ViewerWidget::setChatWidth);
+    connect(m_chat, &ChatPanel::widthDragFinished, this,
+            [this] { QSettings().setValue(QStringLiteral("viewer/chatWidth"), m_viewer->chatWidth()); });
+    connect(m_acceptButton, &QPushButton::clicked, this, &MainWindow::acceptProposal);
+    connect(m_rejectButton, &QPushButton::clicked, this, &MainWindow::rejectProposal);
 
+    // Export and preview progress, in the status bar (see setupStatusBar).
     m_exportProgress = new QProgressBar;
+    m_exportProgress->setObjectName(QStringLiteral("exportProgress"));
     m_exportProgress->setRange(0, 100);
     m_exportProgress->setValue(0);
     m_exportProgress->setTextVisible(false);
+    m_exportProgress->setFixedWidth(120);
     m_exportProgress->setToolTip(QStringLiteral("Export and preview progress"));
-    chatLayout->addWidget(m_exportProgress);
     m_exportProgress->hide();
-
-    auto *proposalBox = new QGroupBox(QStringLiteral("Proposal"));
-    m_proposalBox = proposalBox;
-    proposalBox->setObjectName(QStringLiteral("proposalBox"));
-    auto *proposalLayout = new QVBoxLayout(proposalBox);
-    proposalLayout->setSizeConstraint(QLayout::SetMinimumSize);
-    m_proposalSummary = new QLabel(QStringLiteral("No pending changes"));
-    m_proposalSummary->setWordWrap(true);
-    m_proposalSummary->setObjectName(QStringLiteral("proposalSummary"));
-    m_proposalDiff = new QTextEdit;
-    m_proposalDiff->setReadOnly(true);
-    m_proposalDiff->setObjectName(QStringLiteral("proposalDiff"));
-    // As tall as its lines, up to ten (then it scrolls), so in the
-    // conversation's narrow column the request and reply above the card
-    // stay in view instead of an empty box.
-    m_proposalDiff->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_proposalDiff->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    connect(m_proposalDiff->document()->documentLayout(), &QAbstractTextDocumentLayout::documentSizeChanged, this,
-            [this](const QSizeF &size) {
-                const int chrome = m_proposalDiff->height() - m_proposalDiff->viewport()->height();
-                const int margins = static_cast<int>(std::ceil(2 * m_proposalDiff->document()->documentMargin()));
-                const int lines = m_proposalDiff->fontMetrics().lineSpacing();
-                const int most = kProposalDiffLines * lines + margins + chrome;
-                m_proposalDiff->setFixedHeight(std::clamp(static_cast<int>(std::ceil(size.height())) + chrome, 2 * lines + margins + chrome, most));
-            });
-    // Sized to their labels and right-aligned, the default action rightmost,
-    // as macOS orders a dialog's buttons.
-    auto *proposalButtons = new QHBoxLayout;
-    m_acceptButton = new QPushButton(QStringLiteral("Accept"));
-    m_acceptButton->setObjectName(QStringLiteral("primaryButton"));
-    m_rejectButton = new QPushButton(QStringLiteral("Reject"));
-    m_rejectButton->setObjectName(QStringLiteral("dangerButton"));
-    for (QPushButton *button : {m_rejectButton, m_acceptButton}) button->setMinimumWidth(72);
-    connect(m_acceptButton, &QPushButton::clicked, this, &MainWindow::acceptProposal);
-    connect(m_rejectButton, &QPushButton::clicked, this, &MainWindow::rejectProposal);
-    proposalButtons->addStretch(1);
-    proposalButtons->addWidget(m_rejectButton);
-    proposalButtons->addWidget(m_acceptButton);
-    proposalLayout->addWidget(m_proposalSummary);
-    proposalLayout->addWidget(m_proposalDiff);
-    proposalLayout->addLayout(proposalButtons);
-    chatLayout->addWidget(proposalBox);
-    m_chatNextSteps = new QWidget;
-    m_chatNextSteps->setObjectName(QStringLiteral("nextSteps"));
-    // In the conversation's narrow column the chips wrap rather than widen it.
-    new FlowLayout(m_chatNextSteps, 6);
-    m_chatNextSteps->hide();
-    chatTabLayout->addWidget(m_chatNextSteps);
-    chatTabLayout->addWidget(composer);
     m_effectControls = new EffectControlsPanel;
     connect(m_effectControls, &EffectControlsPanel::editRequested, this, &MainWindow::sendEdit);
     // Mask tools draw a new mask on the selected picture clip over the
@@ -2346,19 +2062,12 @@ void MainWindow::buildUi() {
     m_workspace->addPanel(QStringLiteral("project"), QStringLiteral("Project"), m_projectPanel);
     m_workspace->addPanel(QStringLiteral("presets"), QStringLiteral("Presets"), m_presets);
     m_workspace->addPanel(QStringLiteral("source"), QStringLiteral("Source"), m_sourceMonitor);
-    // Its column narrows no further than its composer and proposal fit.
-    m_workspace->addPanel(QStringLiteral("assistant"), QStringLiteral("Kerf Assistant"), right)
-        ->setMinimumSizeHintMode(ads::CDockWidget::MinimumSizeHintFromContentMinimumSize);
-    // The timeline's AI bar shows only while the conversation is closed.
-    connect(m_workspace->panel(QStringLiteral("assistant")), &ads::CDockWidget::viewToggled, this, &MainWindow::updateAiBar);
+    // The timeline's AI bar stands in for the conversation while the
+    // Program monitor, which holds it, is closed.
+    connect(m_workspace->panel(QStringLiteral("program")), &ads::CDockWidget::viewToggled, this, &MainWindow::updateAiBar);
     connect(m_workspace, &Workspace::changed, this, &MainWindow::updateAiBar);
-    // A portrait or square picture sits against the conversation's column
-    // when that is open directly on the viewer's right.
-    m_viewer->setTrailingNeighbour(m_workspace->panel(QStringLiteral("assistant")));
-    // The bin and the assistant are white wells in light; their current tab
-    // is white too, so it merges into them.
-    for (const char *id : {"project", "assistant"})
-        m_workspace->panel(QString::fromLatin1(id))->tabWidget()->setProperty("well", true);
+    // The bin is a well; its current tab is too, so it merges into it.
+    m_workspace->panel(QStringLiteral("project"))->tabWidget()->setProperty("well", true);
     setCentralWidget(central);
 
     connect(m_timeline, &TimelineWidget::seekRequested, this, &MainWindow::queueSeek);
@@ -2500,7 +2209,6 @@ void MainWindow::setupActions() {
         {QStringLiteral("window.effectControls"), QStringLiteral("effectControls")},
         {QStringLiteral("window.effects"), QStringLiteral("effects")},
         {QStringLiteral("window.presets"), QStringLiteral("presets")},
-        {QStringLiteral("window.assistant"), QStringLiteral("assistant")},
     };
     // Tools are one exclusive choice; snapping is a switch.
     const QHash<QString, TimelineTool> tools{
@@ -2509,7 +2217,7 @@ void MainWindow::setupActions() {
         {QStringLiteral("tool.slip"), TimelineTool::Slip}, {QStringLiteral("tool.slide"), TimelineTool::Slide},
     };
     connect(m_commands, &CommandRegistry::toggled, this, [this, panelCommands, tools](const QString &id, bool checked) {
-        if (id == QStringLiteral("window.assistant")) m_workspace->setAssistantOpen(checked);
+        if (id == QStringLiteral("window.assistant")) setChatOpen(checked);
         else if (ads::CDockWidget *panel = m_workspace->panel(panelCommands.value(id)))
             if (panel->isClosed() == checked) panel->toggleView(checked);
         if (tools.contains(id) && checked) m_timeline->setTool(tools.value(id));
@@ -2560,7 +2268,7 @@ void MainWindow::setupActions() {
     details->setObjectName(QStringLiteral("aiButton"));
     details->setText(QStringLiteral("Details"));
     details->setToolTip(QStringLiteral("Show the conversation and the proposed script"));
-    connect(details, &QToolButton::clicked, this, [this] { m_workspace->setAssistantOpen(true); });
+    connect(details, &QToolButton::clicked, this, [this] { setChatOpen(true); });
     m_aiBar->layout()->addWidget(details);
     // Accept trails, as it does on the Assistant's card and in macOS's rows
     // of buttons; Stop shows only while Kerf works, when the proposal's don't.
@@ -2581,17 +2289,19 @@ void MainWindow::setupActions() {
         });
     }
     connect(m_commands, &CommandRegistry::shortcutsChanged, this, &MainWindow::updateTransport);
-    // The conversation's header is its title and a close button that stays,
-    // as YouTube heads its comments beside a video.
-    m_assistantClose = new QAction(closeIcon(), QStringLiteral("Close"), this);
-    m_assistantClose->setObjectName(QStringLiteral("assistantClose"));
-    const auto closeTip = [this] {
-        m_assistantClose->setToolTip(m_commands->labelWithShortcut(QStringLiteral("window.assistant"), QStringLiteral("Close Kerf Assistant")));
-    };
-    closeTip();
-    connect(m_commands, &CommandRegistry::shortcutsChanged, m_assistantClose, closeTip);
-    connect(m_assistantClose, &QAction::triggered, this, [this] { m_workspace->setAssistantOpen(false); });
-    m_workspace->panel(QStringLiteral("assistant"))->setTitleBarActions({m_assistantClose});
+    // The conversation opens and closes from the toolbar, Window, ⇧⌘J, the
+    // rail's chat button beside the picture, and its header's close button.
+    {
+        QAction *chat = m_commands->action(QStringLiteral("window.assistant"));
+        const QSignalBlocker blocker(chat);
+        chat->setChecked(m_viewer->chatOpen());
+        RailButton *rail = m_rail->chatButton();
+        rail->setChecked(chat->isChecked());
+        connect(rail, &QAbstractButton::clicked, chat, [chat] { chat->trigger(); });
+        connect(m_commands, &CommandRegistry::shortcutsChanged, this, &MainWindow::updateChatTips);
+        updateChatTips();
+        updateChatCount();
+    }
 
     menuBar()->setNativeMenuBar(true);
     const QHash<QString, QMenu *> menus = m_commands->buildMenus(menuBar());
@@ -3438,6 +3148,7 @@ void MainWindow::stepFrames(int frames) {
 
 void MainWindow::setupStatusBar() {
     statusBar()->setSizeGripEnabled(false);
+    statusBar()->addPermanentWidget(m_exportProgress);
     m_syncChip = new QToolButton;
     m_syncChip->setObjectName(QStringLiteral("syncChip"));
     m_syncChip->setCursor(Qt::PointingHandCursor);
@@ -3563,10 +3274,8 @@ void MainWindow::handleEvent(QJsonObject event) {
         const QString kind = event.value(QStringLiteral("kind")).toString(QStringLiteral("agent"));
         const QString text = event.value(QStringLiteral("text")).toString();
         if (kind == QStringLiteral("delta")) {
-            if (m_agentText.isEmpty()) appendConversation(QStringLiteral("Kerf"), text);
-            else {
-                m_agentCursor.insertText(text);
-            }
+            if (m_agentText.isEmpty() || !m_agentRow) appendConversation(QStringLiteral("Kerf"), text);
+            else m_agentRow->appendText(text);
             m_agentText += text;
         } else if (kind == QStringLiteral("done")) {
             if (m_agentText.isEmpty()) appendConversation(QStringLiteral("Kerf"), text);
@@ -3604,6 +3313,7 @@ void MainWindow::handleEvent(QJsonObject event) {
                               : state == QStringLiteral("aborted") ? QStringLiteral("Stopped")
                               : QStringLiteral("Ready");
         m_agentStatus->setText(m_connected ? label : QStringLiteral("Offline"));
+        updateChatStatus();
         if (state == QStringLiteral("failed")) {
             appendConversationNote(QStringLiteral("Agent error"), event.value(QStringLiteral("message")).toString());
         }
@@ -3868,7 +3578,7 @@ void MainWindow::updateProposal(const QJsonValue &value) {
     bool pending = value.isObject() && value.toObject().value(QStringLiteral("status")).toString() == QStringLiteral("pending");
     m_acceptButton->setEnabled(m_connected && pending);
     m_rejectButton->setEnabled(m_connected && pending);
-    m_proposalBox->setVisible(pending);
+    m_chat->setProposalShown(pending);
     if (!pending) {
         m_proposalSummary->setText(QStringLiteral("No pending changes"));
         m_proposalText.clear();
@@ -3923,45 +3633,74 @@ void MainWindow::showProposalText() {
 
 void MainWindow::appendConversation(const QString &speaker, const QString &text) {
     if (text.isEmpty()) return;
-    if (m_conversationEmpty) m_followConversation = true;
-    if (m_conversationEmpty) {
-        m_conversation->clear();
-        m_conversationEmpty = false;
-    }
     const bool user = speaker == QStringLiteral("You");
     const bool error = speaker == QStringLiteral("Error");
-    // Native text frames provide actual padding and separate message regions.
-    // Keep the streaming cursor in its frame even when another event arrives.
-    QTextCursor cursor = m_conversation->document()->rootFrame()->lastCursorPosition();
-    QTextFrameFormat frame;
-    frame.setPadding(12);
-    frame.setTopMargin(6);
-    frame.setBottomMargin(10);
-    frame.setLeftMargin(user ? 32 : 0);
-    frame.setRightMargin(user ? 0 : 16);
-    const MessageKind kind = user ? MessageKind::User : error ? MessageKind::Error : MessageKind::Agent;
-    frame.setProperty(kMessageKind, static_cast<int>(kind));
-    styleMessage(frame, kind);
-    frame.setBorder(1);
-    frame.setBorderStyle(QTextFrameFormat::BorderStyle_Solid);
-    cursor = cursor.insertFrame(frame)->firstCursorPosition();
-    QTextBlockFormat block;
-    block.setBottomMargin(7);
-    cursor.setBlockFormat(block);
-    QTextCharFormat role;
-    // Sentence case at 11 points, as macOS labels.
-    role.setFontWeight(QFont::DemiBold);
-    role.setProperty(QTextFormat::FontPixelSize, 11);
-    role.setProperty(kMessageKind, static_cast<int>(kind));
-    role.setForeground(messageRoleColor(kind));
-    cursor.insertText(user ? QStringLiteral("You") : error ? QStringLiteral("Couldn’t complete edit") : QStringLiteral("Kerf"), role);
-    QTextBlockFormat body;
-    body.setLineHeight(145, QTextBlockFormat::ProportionalHeight);
-    // The body takes the conversation's own text colour, which follows the appearance.
-    QTextCharFormat bodyText;
-    cursor.insertBlock(body, bodyText);
-    cursor.insertText(text);
-    if (speaker == QStringLiteral("Kerf")) m_agentCursor = cursor;
+    CommentRow *row = m_chat->addComment(user ? CommentRow::Kind::User : error ? CommentRow::Kind::Error : CommentRow::Kind::Kerf, text);
+    if (user) {
+        // A new turn: Kerf's steps from now on belong to its next reply.
+        m_agentRow = nullptr;
+        m_pendingReplies.clear();
+    } else if (speaker == QStringLiteral("Kerf")) {
+        m_agentRow = row;
+        for (const QString &reply : std::as_const(m_pendingReplies)) row->addReply(reply);
+        m_pendingReplies.clear();
+    }
+    updateChatCount();
+}
+
+void MainWindow::updateChatCount() {
+    const qsizetype count = m_chat->rows().size();
+    m_rail->chatButton()->setLabel(count ? QString::number(count) : QStringLiteral("Chat"));
+}
+
+void MainWindow::updateChatTips() {
+    if (!m_commands) return;
+    const QString close = m_commands->labelWithShortcut(QStringLiteral("window.assistant"), QStringLiteral("Close Kerf Assistant"));
+    m_chat->closeButton()->setToolTip(close);
+    RailButton *rail = m_rail->chatButton();
+    rail->setToolTip(rail->isChecked() ? close
+                                       : m_commands->labelWithShortcut(QStringLiteral("window.assistant"), QStringLiteral("Open Kerf Assistant")));
+    rail->setAccessibleName(rail->isChecked() ? QStringLiteral("Close Kerf Assistant") : QStringLiteral("Open Kerf Assistant"));
+}
+
+bool MainWindow::chatOpen() const {
+    const ads::CDockWidget *program = m_workspace ? m_workspace->panel(QStringLiteral("program")) : nullptr;
+    return m_viewer && m_viewer->chatOpen() && program && !program->isClosed();
+}
+
+void MainWindow::setChatOpen(bool open) {
+    m_viewer->setChatOpen(open);
+    QSettings().setValue(QStringLiteral("viewer/chatOpen"), open);
+    // It lives in the Program monitor's stage, so that comes forward with it.
+    if (ads::CDockWidget *program = open && m_workspace ? m_workspace->panel(QStringLiteral("program")) : nullptr) {
+        if (program->isClosed()) program->toggleView(true);
+        program->setAsCurrentTab();
+    }
+    if (m_commands) {
+        QAction *chat = m_commands->action(QStringLiteral("window.assistant"));
+        const QSignalBlocker blocker(chat);
+        chat->setChecked(open);
+    }
+    m_rail->chatButton()->setChecked(open);
+    updateChatTips();
+    updateAiBar();
+}
+
+void MainWindow::showActivity() {
+    QWidget *more = m_chat->moreButton();
+    m_activityPopup->adjustSize();
+    m_activityPopup->move(more->mapToGlobal(QPoint(more->width() - m_activityPopup->width(), more->height() + 4)));
+    m_activityPopup->show();
+}
+
+void MainWindow::updateChatStatus() {
+    // A quiet line after the latest comment while there is something to
+    // say: Kerf at work (its three dots and its latest step), connecting,
+    // offline, stopped or failed. Ready and in review say nothing; the
+    // pinned proposal speaks for review.
+    const QString state = m_agentStatus->text();
+    m_chat->statusRow()->setVisible(state != QStringLiteral("Ready") && state != QStringLiteral("Review"));
+    m_chatActivity->setVisible(m_agentBusy && !m_chatActivity->text().isEmpty());
 }
 
 void MainWindow::fitPreferences() {
@@ -3990,42 +3729,7 @@ void MainWindow::applyAppearance() {
     }
     for (QAction *action : std::as_const(m_maskTools)) action->setIcon(maskToolIcon(static_cast<MaskTool>(action->data().toInt())));
     for (const auto &[action, glyph] : std::as_const(m_sourceGlyphs)) action->setIcon(transportIcon(glyph));
-    if (m_assistantClose) m_assistantClose->setIcon(closeIcon());
     if (!m_proposalText.isEmpty()) showProposalText();
-    if (m_conversationEmpty) {
-        m_conversation->setHtml(conversationIntro(editorTheme()));
-        return;
-    }
-    // Recolour the messages already shown: their frames and the speaker
-    // names over them; bodies take the conversation's text colour.
-    QTextDocument *document = m_conversation->document();
-    QList<QPair<QTextFrame *, MessageKind>> frames;
-    for (QTextFrame *frame : document->rootFrame()->childFrames()) {
-        const int kind = frame->frameFormat().intProperty(kMessageKind);
-        if (kind) frames.append({frame, static_cast<MessageKind>(kind)});
-    }
-    for (const auto &[frame, kind] : std::as_const(frames)) {
-        QTextFrameFormat format = frame->frameFormat();
-        styleMessage(format, kind);
-        frame->setFrameFormat(format);
-    }
-    struct Run { int start; int end; MessageKind kind; };
-    QList<Run> runs;
-    for (QTextBlock block = document->begin(); block.isValid(); block = block.next()) {
-        for (auto it = block.begin(); !it.atEnd(); ++it) {
-            const QTextFragment fragment = it.fragment();
-            if (const int kind = fragment.charFormat().intProperty(kMessageKind))
-                runs.append({fragment.position(), fragment.position() + fragment.length(), static_cast<MessageKind>(kind)});
-        }
-    }
-    for (const Run &run : std::as_const(runs)) {
-        QTextCursor cursor(document);
-        cursor.setPosition(run.start);
-        cursor.setPosition(run.end, QTextCursor::KeepAnchor);
-        QTextCharFormat color;
-        color.setForeground(messageRoleColor(run.kind));
-        cursor.mergeCharFormat(color);
-    }
 }
 
 void MainWindow::appendConversationNote(const QString &kind, const QString &text) {
@@ -4034,10 +3738,16 @@ void MainWindow::appendConversationNote(const QString &kind, const QString &text
         appendConversation(QStringLiteral("Error"), text);
         return;
     }
-    const QString activity = QStringLiteral("%1 · %2").arg(kind, text.simplified());
-    m_chatActivity->setText(activity);
-    m_chatActivity->setToolTip(activity);
-    m_chatActivity->show();
+    const QString detail = text.simplified();
+    // A tool's work is a reply under Kerf's comment for this turn, folded
+    // behind "▸ 2 steps"; until Kerf writes, it waits for that comment.
+    if (kind == QStringLiteral("Tool")) {
+        if (m_agentRow) m_agentRow->addReply(detail);
+        else m_pendingReplies.append(detail);
+    }
+    m_chatActivity->setText(detail);
+    m_chatActivity->setToolTip(QStringLiteral("%1 · %2").arg(kind, detail));
+    updateChatStatus();
 }
 
 void MainWindow::addActivity(const QString &kind, const QString &text) {

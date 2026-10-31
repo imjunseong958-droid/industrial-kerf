@@ -109,6 +109,14 @@ inline QString themedStyleSheet(QString sheet, const EditorTheme &t) {
         {QStringLiteral("assistantText"), &EditorTheme::assistantText},
         {QStringLiteral("assistantHover"), &EditorTheme::assistantHover},
         {QStringLiteral("messageText"), &EditorTheme::messageText},
+        {QStringLiteral("chatSurface"), &EditorTheme::chatSurface},
+        {QStringLiteral("chatText"), &EditorTheme::chatText},
+        {QStringLiteral("chatSecondary"), &EditorTheme::chatSecondary},
+        {QStringLiteral("chatChip"), &EditorTheme::chatChip},
+        {QStringLiteral("chatChipHover"), &EditorTheme::chatChipHover},
+        {QStringLiteral("chatChipText"), &EditorTheme::chatChipText},
+        {QStringLiteral("pillTonal"), &EditorTheme::pillTonal},
+        {QStringLiteral("pillTonalText"), &EditorTheme::pillTonalText},
         {QStringLiteral("glyph"), &EditorTheme::glyph},
         {QStringLiteral("toolSelected"), &EditorTheme::toolSelected},
         {QStringLiteral("scrubTrack"), &EditorTheme::scrubTrack},
@@ -259,7 +267,6 @@ QToolBar {
 }
 
 QWidget#panel,
-QWidget#assistantPanel,
 QFrame#viewerFrame,
 QWidget#timelinePanel {
     background: @panel;
@@ -348,20 +355,16 @@ QToolBar QToolButton:disabled { background: transparent; border-color: transpare
 QToolBar QToolButton#chatToggle { padding: 0px 6px; min-height: 18px; max-height: 18px; }
 QToolBar QToolButton#chatToggle:checked:enabled { background: @accentTint; border-color: transparent; }
 QToolBar QToolButton#chatToggle:checked:enabled:pressed { background: @accentTintPressed; }
-QPushButton#primaryButton,
-QPushButton#chatSendButton {
+QPushButton#primaryButton {
     background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 @accentTop, stop: 1 @accent);
     border-color: @accent;
     border-top-color: @accentTop;
     color: @onAccent;
     font-weight: 600;
 }
-QPushButton#primaryButton:hover,
-QPushButton#chatSendButton:hover { background: @accentTop; }
-QPushButton#primaryButton:pressed,
-QPushButton#chatSendButton:pressed { background: @accentPressed; border-color: @accentPressed; }
-QPushButton#primaryButton:disabled,
-QPushButton#chatSendButton:disabled {
+QPushButton#primaryButton:hover { background: @accentTop; }
+QPushButton#primaryButton:pressed { background: @accentPressed; border-color: @accentPressed; }
+QPushButton#primaryButton:disabled {
     color: @buttonDisabledText;
     background: @buttonDisabled;
     border-color: @buttonDisabledEdge;
@@ -459,22 +462,10 @@ QToolButton#abortButton {
     background: transparent;
     border-color: transparent;
 }
-QToolButton#abortButton:hover { background: @hover; border-color: @borderStrong; }
-QToolButton#abortButton:disabled { color: @textDisabled; background: transparent; border-color: transparent; }
 
 QLabel#eyebrow { color: @textSecondary; font-size: 12px; font-weight: 500; letter-spacing: 0px; }
 QLabel#muted { color: @textSecondary; font-size: 11px; }
 QLabel#chatHint { color: @textSecondary; font-size: 11px; padding: 6px 2px 2px; }
-QLabel#statusPill {
-    color: @textSecondary;
-    background: @raised;
-    border: 1px solid @border;
-    border-radius: 4px;
-    padding: 1px 6px;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0px;
-}
 QLabel#inspectorClip { color: @textStrong; font-weight: 600; padding: 5px 0 5px 0; margin: 0; }
 /* Each section, effect and mask is headed by its name in semibold, as the
    clip's is; a hairline sets an effect or mask apart from the one above. */
@@ -482,27 +473,6 @@ QCheckBox#effectEnabled, QLabel#inspectorSection, QToolButton#maskName { font-we
 QWidget#effectBox[following="true"], QWidget#maskBox[following="true"] { border-top: 1px solid @divider; }
 /* The window's title, 13px semibold as macOS's and the launcher's. */
 QLabel#projectTitle { color: @text; font-size: 13px; font-weight: 600; padding: 0; }
-QWidget#assistantPanel { background: @well; border-left: 1px solid @divider; }
-QFrame#scrollEdge { background: transparent; border: 0; }
-QFrame#scrollEdge[scrolled="true"] { background: @divider; }
-QWidget#assistantPanel QLabel#statusPill {
-    color: @assistantText;
-    background: @assistantSurface;
-    border-color: @assistantBorder;
-    border-radius: 4px;
-    padding: 1px 6px;
-    font-size: 11px;
-    font-weight: 600;
-}
-QLabel#composerStatus { color: @textSecondary; font-size: 10px; }
-QLabel#chatActivity {
-    color: @assistantText;
-    background: @assistantSurface;
-    border-left: 2px solid @assistant;
-    padding: 0 8px;
-    font-size: 11px;
-}
-QLabel#proposalSummary { color: @text; }
 QToolButton#eyebrow { text-align: left; background: transparent; border: 0; color: @textSecondary; padding: 2px 0; }
 QToolButton#eyebrow:hover { color: @text; background: transparent; }
 /* A disclosure: a chevron and a label, no bezel, as macOS's Details rows. */
@@ -617,21 +587,9 @@ QListWidget::item:selected:focus,
 QListWidget#projectBin::item:selected:focus,
 QListWidget#presetList::item:selected:focus { background: @selection; color: @selectionText; }
 QListWidget#mediaList,
-QListWidget#activityList,
 QListWidget#effectsCards,
 QScrollArea#mediaList { background: transparent; border: 0; padding: 0; }
 QWidget#mediaGrid { background: transparent; }
-QTextEdit#conversation { background: transparent; border: 0; padding: 4px 0; color: @messageText; }
-/* The proposal's script and diff, in fixed-width type so its columns line up. */
-QTextEdit#proposalDiff { font-family: Menlo, Monaco, monospace; font-size: 11px; color: @textSecondary; }
-QTextEdit#chatInput {
-    background: transparent;
-    border: 0;
-    padding: 0;
-    color: @text;
-    font-size: 13px;
-}
-QTextEdit#chatInput:focus { background: transparent; border: 0; }
 QListWidget:disabled,
 QTextEdit:disabled,
 QPlainTextEdit:disabled,
@@ -642,40 +600,6 @@ QComboBox:disabled {
     background: @fieldDisabled;
     border-color: @borderSubtle;
 }
-QComboBox#agentModel {
-    background: transparent;
-    border: 0;
-    padding: 0 22px 0 2px;
-    min-height: 22px;
-    max-height: 22px;
-    font-size: 11px;
-    /* Its field draws in this colour whether or not the pointer is over it,
-       so it must read on the hover wash too. */
-    color: @text;
-}
-QComboBox#agentModel:disabled { color: @textSecondary; }
-QComboBox#agentModel:hover { background: @hover; }
-QComboBox#agentModel QLineEdit { background: transparent; border: 0; padding: 0; }
-QFrame#chatComposer {
-    background: @field;
-    border: 1px solid @fieldBorder;
-    border-radius: 12px;
-}
-QFrame#chatComposer[state="focused"] { border-color: @focusRing; background: @field; }
-QFrame#chatComposer[state="sending"] { border-color: @assistantBorder; background: @assistantSurface; }
-QFrame#chatComposer[state="offline"] { border-color: @borderSubtle; background: @fieldDisabled; }
-QTextEdit#chatInput:disabled { background: transparent; color: @textDisabled; border: 0; }
-QPushButton#chatSendButton {
-    border-radius: 8px;
-    padding: 0;
-    font-size: 19px;
-    min-width: 30px;
-    max-width: 30px;
-    min-height: 30px;
-    max-height: 30px;
-}
-QToolButton#abortButton { border: 1px solid @assistantBorder; border-radius: 7px; padding: 2px 9px; }
-
 /* A group is a paper card a step lighter than the dialog, with no frame. */
 QGroupBox {
     background: @raised;
@@ -778,21 +702,121 @@ QFrame#aiBar QToolButton#aiAccept {
 }
 QFrame#aiBar QToolButton#aiAccept:hover { background: @accentTop; }
 QFrame#aiBar QToolButton#aiAccept:pressed { background: @accentPressed; border-color: @accentPressed; }
-/* Kerf's suggestions: purple pills sized to their labels, in the agent's
-   colours rather than a push button's bezel. */
-QPushButton#nextStep {
-    color: @assistantText;
-    background: @assistantSurface;
-    border: 1px solid @assistantBorder;
-    border-radius: 11px;
-    padding: 2px 10px;
-    min-height: 16px;
-    max-height: 16px;
-    font-size: 11px;
+QFrame#aiBar QToolButton:disabled { color: @buttonDisabledText; background: @buttonDisabled; border-color: @buttonDisabledEdge; }
+
+/* Kerf's conversation, as a video's comments panel: ChatPanel paints its
+   rounded surface, and on it nothing is boxed. Every turn is a comment
+   row, Kerf's purple marks only its avatar, its expanders and Send. */
+QLabel#chatTitle { color: @chatText; font-size: 16px; font-weight: 700; }
+QLabel#chatCount { color: @chatSecondary; font-size: 14px; }
+QLabel#chatName { color: @chatText; font-size: 12px; font-weight: 600; }
+QLabel#chatTime,
+QLabel#chatPinned,
+QLabel#chatStatus,
+QLabel#chatActivity,
+QLabel#chatNote { color: @chatSecondary; font-size: 12px; }
+QLabel#chatSection { color: @chatSecondary; font-size: 12px; font-weight: 600; }
+QLabel#chatErrorTag { color: @errorText; font-size: 12px; font-weight: 600; }
+QLabel#chatBody,
+QLabel#proposalSummary { color: @chatText; font-size: 14px; }
+QLabel#chatWelcomeTitle { color: @chatText; font-size: 14px; font-weight: 600; }
+QLabel#chatReplyText { color: @chatText; font-size: 13px; }
+QScrollArea#chatScroll, QWidget#chatContent { background: transparent; border: 0; }
+QFrame#scrollEdge { background: transparent; border: 0; }
+QFrame#scrollEdge[scrolled="true"] { background: @divider; }
+QFrame#proposalBox { background: transparent; border: 0; }
+/* The proposal's script and diff, in fixed-width type so its columns line up. */
+QTextEdit#proposalDiff { background: transparent; border: 0; font-family: Menlo, Monaco, monospace; font-size: 11px; color: @chatSecondary; }
+/* The footer: a hairline over it, then the reader's avatar and a one-line
+   field over its underline (ChatPanel draws that, in the accent in focus). */
+QFrame#chatComposer { background: transparent; border: 0; border-top: 1px solid @divider; border-radius: 0; }
+QTextEdit#chatInput { background: transparent; border: 0; padding: 0; color: @chatText; font-size: 14px; }
+QTextEdit#chatInput:focus { background: transparent; border: 0; }
+QTextEdit#chatInput:disabled { background: transparent; color: @textDisabled; border: 0; }
+/* The model: a small text pop-up. Its field draws in one colour whether or
+   not the pointer is over it, so that colour reads on the hover wash too. */
+QComboBox#agentModel {
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    padding: 0 18px 0 4px;
+    min-height: 24px;
+    max-height: 24px;
+    font-size: 12px;
+    color: @chatText;
+}
+QComboBox#agentModel:hover { background: @chatChipHover; }
+QComboBox#agentModel:disabled { color: @chatSecondary; background: transparent; }
+QComboBox#agentModel QLineEdit { background: transparent; border: 0; padding: 0; color: @chatText; }
+/* Pills, 32px with round ends: Send and Accept filled with the accent,
+   Reject and Stop tonal, Cancel bare text; none has an outline. */
+QPushButton#chatPillFilled,
+QPushButton#chatSendButton,
+QPushButton#chatPillTonal,
+QPushButton#abortButton,
+QPushButton#chatPillText {
+    border: 0;
+    border-radius: 16px;
+    padding: 0 16px;
+    min-height: 32px;
+    max-height: 32px;
+    font-size: 13px;
+    font-weight: 600;
+}
+QPushButton#chatPillFilled,
+QPushButton#chatSendButton { color: @onAccent; background: @accent; }
+QPushButton#chatPillFilled:hover,
+QPushButton#chatSendButton:hover { background: @accentTop; }
+QPushButton#chatPillFilled:pressed,
+QPushButton#chatSendButton:pressed { background: @accentPressed; }
+QPushButton#chatPillTonal,
+QPushButton#abortButton { color: @pillTonalText; background: @pillTonal; }
+QPushButton#chatPillTonal:hover,
+QPushButton#abortButton:hover,
+QPushButton#chatPillTonal:pressed,
+QPushButton#abortButton:pressed { background: @chatChipHover; }
+QPushButton#chatPillText { color: @chatText; background: transparent; padding: 0 12px; }
+QPushButton#chatPillText:hover,
+QPushButton#chatPillText:pressed { background: @chatChip; }
+QPushButton#chatPillFilled:disabled,
+QPushButton#chatSendButton:disabled,
+QPushButton#chatPillTonal:disabled,
+QPushButton#abortButton:disabled { color: @textDisabled; background: @pillTonal; }
+/* A comment's quiet actions: text that takes a round wash under the pointer. */
+QPushButton#chatAction {
+    color: @chatSecondary;
+    background: transparent;
+    border: 0;
+    border-radius: 12px;
+    padding: 0 10px;
+    min-height: 24px;
+    max-height: 24px;
+    font-size: 12px;
+    font-weight: 500;
+}
+QPushButton#chatAction:hover,
+QPushButton#chatAction:pressed { color: @chatText; background: @chatChip; }
+/* Kerf's next steps and the welcome's examples: tonal chips, no outline. */
+QPushButton#nextStep,
+QPushButton#chatExample {
+    color: @chatChipText;
+    background: @chatChip;
+    border: 0;
+    border-radius: 8px;
+    padding: 0 12px;
+    min-height: 28px;
+    max-height: 28px;
+    font-size: 13px;
+    font-weight: 500;
 }
 QPushButton#nextStep:hover,
-QPushButton#nextStep:pressed { background: @assistantHover; border-color: @assistantBorder; }
-QFrame#aiBar QToolButton:disabled { color: @buttonDisabledText; background: @buttonDisabled; border-color: @buttonDisabledEdge; }
+QPushButton#nextStep:pressed,
+QPushButton#chatExample:hover,
+QPushButton#chatExample:pressed { background: @chatChipHover; }
+/* On the timeline's bar, the same chips at its controls' height. */
+QFrame#aiBar QPushButton#nextStep { min-height: 22px; max-height: 22px; border-radius: 6px; padding: 0 10px; font-size: 12px; }
+QFrame#activityPopup { background: @menu; border: 1px solid @menuBorder; border-radius: 6px; }
+QListWidget#activityList { background: transparent; border: 0; padding: 0; }
 
 QFrame#divergedBanner { background: @warningSurface; border: 0; border-bottom: 1px solid @warningBorder; border-radius: 0; }
 QLabel#divergedTitle { color: @warningTitle; font-size: 12px; font-weight: 600; }

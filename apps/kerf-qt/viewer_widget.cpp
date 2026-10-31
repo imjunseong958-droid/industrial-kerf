@@ -191,33 +191,105 @@ void ViewerWidget::setProjectInfo(double width, double height) {
     update();
 }
 
-QRectF ViewerWidget::videoRect() const {
-    const QRectF target = QRectF(rect()).adjusted(8, 8, -8, -8);
+ViewerWidget::StageLayout ViewerWidget::stageLayout() const {
+    StageLayout out;
     double aspect = 16.0 / 9.0;
     if (m_width > 0 && m_height > 0) aspect = m_width / m_height;
     else if (!m_frame.isNull()) aspect = static_cast<double>(m_frame.width()) / m_frame.height();
-    QSizeF canvasSize(target.width(), target.width() / aspect);
-    if (canvasSize.height() > target.height())
-        canvasSize = QSizeF(target.height() * aspect, target.height());
-    QRectF canvas(target.center() - QPointF(canvasSize.width() / 2, canvasSize.height() / 2), canvasSize);
-    if (canvasSize.width() < target.width() - 1 && neighbourOnTrailingEdge()) canvas.moveRight(target.right());
-    return canvas;
+    const QRectF room = QRectF(rect()).adjusted(kStageMargin, kStageMargin, -kStageMargin, -kStageMargin);
+    // The largest card of the picture's shape in `width` by `height`.
+    const auto fit = [aspect](double width, double height) {
+        QSizeF size(std::max(1.0, width), std::max(1.0, width) / aspect);
+        if (size.height() > height) size = QSizeF(std::max(1.0, height) * aspect, std::max(1.0, height));
+        return size;
+    };
+    const auto centred = [&room](const QSizeF &size) {
+        return QRectF(QPointF(std::round(room.center().x() - size.width() / 2.0), std::round(room.center().y() - size.height() / 2.0)), size);
+    };
+    const int rail = m_rail ? kRailWidth : 0;
+    const auto hangRail = [&out, rail] {
+        out.rail = QRect(int(std::round(out.card.right())) + kStageGap, int(out.card.top()), rail, int(std::round(out.card.height())));
+    };
+    if (!m_chatOpen || !m_panel) {
+        // Alone, centred, as a Short with its comments closed; the rail
+        // hangs on its right where the stage has the room.
+        const double side = rail ? kStageGap + rail : 0.0;
+        QSizeF size = fit(room.width() - 2.0 * side, room.height());
+        const bool railFits = rail && size.width() >= kMinCardWidth;
+        if (!railFits) size = fit(room.width(), room.height());
+        out.card = centred(size);
+        if (railFits) hangRail();
+        return out;
+    }
+    const int fixed = 2 * kStageGap + rail;
+    int panelWidth = std::clamp(m_chatWidth, kMinChatWidth, kMaxChatWidth);
+    double cardRoom = room.width() - fixed - panelWidth;
+    if (cardRoom < kMinCardWidth) {
+        panelWidth = std::max(kMinChatWidth, int(room.width()) - fixed - kMinCardWidth);
+        cardRoom = room.width() - fixed - panelWidth;
+    }
+    if (cardRoom < kMinCardWidth) {
+        // Too narrow for the group: the conversation lies over the stage's
+        // right side, and the card stays centred under it.
+        out.overlay = true;
+        out.card = centred(fit(room.width(), room.height()));
+        const int width = std::min(std::clamp(m_chatWidth, kMinChatWidth, kMaxChatWidth), int(room.width()));
+        out.panel = QRect(int(room.right()) - width, int(room.top()), width, int(room.height()));
+        return out;
+    }
+    const QSizeF size = fit(cardRoom, room.height());
+    const double panelHeight = std::max(size.height(), std::min(room.height(), double(kMinChatHeight)));
+    const double group = size.width() + fixed + panelWidth;
+    const QPointF origin(std::round(room.left() + (room.width() - group) / 2.0), std::round(room.top() + (room.height() - panelHeight) / 2.0));
+    // The card and the conversation share a top edge, as a Short and its comments do.
+    out.card = QRectF(origin, size);
+    hangRail();
+    if (!rail) out.rail = QRect();
+    out.panel = QRect(int(std::round(out.card.right())) + kStageGap + rail + (rail ? kStageGap : 0), int(origin.y()), panelWidth,
+                      int(std::round(panelHeight)));
+    return out;
 }
 
-void ViewerWidget::setTrailingNeighbour(QWidget *neighbour) {
-    m_trailingNeighbour = neighbour;
+QRectF ViewerWidget::videoRect() const { return stageLayout().card; }
+
+void ViewerWidget::setStage(QWidget *rail, QWidget *panel) {
+    m_rail = rail;
+    m_panel = panel;
+    for (QWidget *child : {rail, panel})
+        if (child) child->setParent(this);
+    layoutStage();
     update();
 }
 
-bool ViewerWidget::neighbourOnTrailingEdge() const {
-    const QWidget *neighbour = m_trailingNeighbour.data();
-    if (!neighbour || !neighbour->isVisible() || !isVisible() || neighbour->window() != window()) return false;
-    const QRect beside(mapFromGlobal(neighbour->mapToGlobal(QPoint())), neighbour->size());
-    // Past the edge by no more than the viewer's frame and a splitter.
-    constexpr int kGap = 16;
-    const int middle = height() / 2;
-    return beside.left() >= width() - 1 && beside.left() <= width() + kGap && beside.top() <= middle && beside.bottom() >= middle;
+void ViewerWidget::setChatOpen(bool open) {
+    m_chatOpen = open;
+    layoutStage();
+    update();
 }
+
+void ViewerWidget::setChatWidth(int width) {
+    width = std::clamp(width, kMinChatWidth, kMaxChatWidth);
+    if (width == m_chatWidth) return;
+    m_chatWidth = width;
+    layoutStage();
+    update();
+    emit chatWidthChanged(width);
+}
+
+void ViewerWidget::layoutStage() {
+    const StageLayout layout = stageLayout();
+    if (m_rail) {
+        m_rail->setVisible(!layout.rail.isEmpty());
+        if (!layout.rail.isEmpty()) m_rail->setGeometry(layout.rail);
+    }
+    if (m_panel) {
+        if (!layout.panel.isEmpty()) m_panel->setGeometry(layout.panel);
+        m_panel->setVisible(!layout.panel.isEmpty());
+        if (layout.overlay) m_panel->raise();
+    }
+}
+
+void ViewerWidget::resizeEvent(QResizeEvent *) { layoutStage(); }
 
 QRectF ViewerWidget::captionRect() const {
     const QRectF canvas = videoRect();
@@ -597,8 +669,8 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
     p.fillRect(rect(), theme.viewerSurround);
     const QRectF canvas = videoRect();
     QPainterPath canvasPath;
-    canvasPath.addRoundedRect(canvas.adjusted(0.5, 0.5, -0.5, -0.5), 2, 2);
-    p.setPen(QPen(theme.viewerCanvas, 1));
+    canvasPath.addRoundedRect(canvas, kCardRadius, kCardRadius);
+    p.setPen(Qt::NoPen);
     p.setBrush(theme.viewerCanvas);
     p.drawPath(canvasPath);
     if (!m_frame.isNull()) {
@@ -650,7 +722,13 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
 }
 
 double ViewerWidget::fractionAt(int x) const {
-    return std::clamp(static_cast<double>(x) / std::max(1, width()), 0.0, 1.0);
+    // Across the stage left of the rail: the conversation's side is not the picture's.
+    int span = width();
+    if (m_chatOpen && m_panel) {
+        const StageLayout layout = stageLayout();
+        if (!layout.overlay && !layout.rail.isEmpty()) span = layout.rail.left();
+    }
+    return std::clamp(static_cast<double>(x) / std::max(1, span), 0.0, 1.0);
 }
 
 RegionPicker::RegionPicker(const QImage &frame, const QRectF &region, QWidget *parent)

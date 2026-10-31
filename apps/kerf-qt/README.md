@@ -3,8 +3,9 @@
 This is the native Qt6 desktop shell for Kerf. It keeps the project state in
 `kerfd` through the small C ABI in `bridge.h`; the window does not maintain a
 second editable copy of the timeline. Its docked panels — Project,
-Source, Program, Timeline, Effect Controls, and Kerf Assistant — are all
-backed by the bridge event stream.
+Source, Program, Timeline, and Effect Controls — and the Kerf Assistant (the
+chat, in the Program monitor's stage) are all backed by the bridge event
+stream.
 
 Build the Rust bridge first, then configure and build the app from the
 repository root:
@@ -151,28 +152,31 @@ Space; with the timeline focused, Home and End jump to the start and end,
 Left and Right step one frame, S splits the selected clip at the playhead,
 and Delete and Shift+Delete delete or ripple-delete it (Kerf keymap). The transport under the viewer has the same
 controls between the playhead timecode and the program length. The Editing
-workspace reads as a video does on YouTube or TikTok on the desktop: the
-Program monitor in the middle of the top row, as large as the row allows,
-with the Kerf Assistant (the chat) in a column of its own on its right, the
-row's full height and about as wide as YouTube's comments beside a video
-(360 points at first). The Source monitor is a tab behind the Program
-monitor; double-clicking media brings it forward. Left of them, the Project
-bin, Effect Controls, Effects, and Presets share a column of tabs (Effect
-Controls stays left of the Program monitor, where Premiere keeps it, so the
-chat's column holds only the chat). The Timeline runs the window's full
-width under all three, for its many tracks. A wider window widens the
-viewer; the columns beside it keep their widths. A picture narrower than the
-viewer (a 9:16 or 1:1 project) sits against the chat, as a Short sits against
-its comments, and is centred again while the chat is closed or elsewhere.
+workspace reads as a Short does on YouTube's desktop page: the Program
+monitor takes the top row past the browsers, and in its stage the picture
+card (12-point corners), an action rail and the Kerf Assistant (the chat)
+form one group centred in the stage, the chat panel level with the card and
+as tall (never shorter than 320 points where the stage has the room), as a
+Short's comments open beside it. A 9:16 or 1:1 card fills the stage's
+height; a 16:9 one takes the width the rail and chat leave it. With the chat
+closed the card is centred alone, the rail hanging on its right. In a stage
+too narrow for the group the card shrinks first, then the chat to its
+narrowest, and past that the chat lies over the stage's right side. The
+Source monitor is a tab behind the Program monitor; double-clicking media
+brings it forward (the chat stays with the Program monitor). Left of them,
+the Project bin, Effect Controls, Effects, and Presets share a column of
+tabs. The Timeline runs the window's full width under both, for its many
+tracks.
 
 The chat opens and closes like the comments button beside a Short: the
-speech bubble at the end of the toolbar, Window ▸ Kerf Assistant, ⇧⌘J, or
-the close button in the chat's header. Closing it gives its width to the
-viewer; opening it brings it back at the width it had, even after a
-relaunch. That width is a preference of this Mac (QSettings), never part of
-`project.kerf`. Layouts saved before this arrangement (layout version 4)
-give way to it for the Editing workspace; workspaces of your own saved then
-keep their arrangement. An empty
+rail's speech bubble (with the number of messages under it), the bubble at
+the end of the toolbar, Window ▸ Kerf Assistant, ⇧⌘J, or the close button in
+the chat's header; opening it brings the Program monitor forward. Drag the
+chat's leading edge to resize it (300 to 420 points; 360 at first). Its width
+and whether it is open are preferences of this Mac (QSettings), never part of
+`project.kerf`. Layouts saved before this arrangement (layout versions 4 and
+5) give way to it for the Editing workspace; workspaces of your own saved
+then keep their arrangement, without the old Assistant dock. An empty
 timeline starts without tracks. Hover over the
 empty row in the left track header to reveal a plus; click it to add a video
 or audio track. Double-click a clip to open its media in the Source monitor
@@ -281,14 +285,25 @@ focus, in frames of the sequence.
 
 Kerf's proposal shows on the timeline before anything changes: clips it adds
 or changes are outlined where they would land, and clips it removes are
-struck through. The Kerf Assistant starts open beside the Program monitor;
-keep chatting there, where Return sends and Shift+Return inserts a new line.
-It shows what Kerf is working on (with Stop), the proposal's script and diff
-(as tall as their lines, up to ten) with Reject and Accept (⌘Return; Escape
-with the timeline focused rejects), and the up to three next steps Kerf ends
-each turn with ("Stronger glow", "Wipe to the next shot"), over the composer,
-where they wrap onto more lines rather than widen the chat's narrow column;
-pressing one asks for it about the same selection. While the chat is closed,
+struck through. The Kerf Assistant starts open beside the picture and is laid
+out as a video's comments panel: a header with its title, the number of
+messages, ⋯ (Agent Settings…, Activity) and a close button; every turn is a
+comment row (an avatar, the name and time, the text, and quiet Copy and Ask
+again actions), with no bubbles; the steps Kerf's tools took fold under its
+comment behind "▸ 2 steps", as replies do; and while Kerf works three dots
+and its latest step follow the latest comment. A pending proposal is pinned
+under the header ("Pinned by Kerf") with Reject and Accept pills (⌘Return;
+Escape with the timeline focused rejects) and its script and diff behind
+"Script" (as tall as their lines, up to ten, and folded in a panel too short
+for them). The up to three next steps Kerf ends each turn with ("Stronger
+glow", "Wipe to the next shot") are chips over the composer, wrapping rather
+than widening the panel; pressing one asks for it about the same selection.
+The composer is the panel's footer: your avatar and one line over an
+underline that turns Kerf's purple in focus, growing with the draft, with the
+model, Cancel and Send (Stop while Kerf works) shown while it is in use.
+Return sends and Shift+Return inserts a new line. Before the first message
+Kerf's welcome offers two requests to try, which fill the composer. While
+the chat is closed,
 a bar over the timeline stands in for it, as a Short's comment count does:
 it says what Kerf is working on, offers Stop, Accept, Reject and the next
 steps, and Details opens the chat again.
@@ -310,7 +325,7 @@ whose field diff was truncated cannot be accepted; ask the agent to restage
 or split them into smaller changes.
 
 Agent settings are in Settings (Edit → Settings…, ⌘, ; on macOS in the
-application menu), also reachable from the Kerf Assistant panel. Settings → AI
+application menu), also reachable from the chat's ⋯ menu. Settings → AI
 chooses Kerf Cloud, the hosted model (the default unless a key of your own
 is already saved; see
 [docs/cloud.md](../../docs/cloud.md)), or My own API key. Kerf Cloud shows the
@@ -351,7 +366,9 @@ with an effect's parameters (`inspector-`), each `<light|dark>.png`;
 `editorShowsEveryFormatBesideItsConversation` saves the whole editor with
 the chat open beside a 16:9, a 9:16 and a 1:1 picture
 (`editor-16x9-`, `editor-9x16-`, `editor-1x1-`) and the 9:16 one with the
-chat closed (`editor-9x16-closed-`);
+chat closed (`editor-9x16-closed-`); `conversationRendersItsStates` saves the
+chat's welcome, a long streaming conversation and a pinned proposal
+(`editor-9x16-welcome-`, `-streaming-`, `-proposal-`);
 `timelineFollowsTheAppearance` saves the timeline (`timeline-`,
 `timeline-drag-`) and `paintedPanelsFollowTheAppearance` the Program monitor
 (`viewer-`, `viewer-empty-`), the region picker (`region-`), the Source

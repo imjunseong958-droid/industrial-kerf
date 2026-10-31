@@ -24,10 +24,6 @@ class Workspace final : public QObject {
     Q_OBJECT
 public:
     static constexpr const char *kEditing = "Editing";
-    static constexpr const char *kAssistant = "assistant";
-    // The width Kerf's conversation opens at the first time, about that of
-    // YouTube's comments and live chat beside a video.
-    static constexpr int kAssistantWidth = 360;
 
     // The dock manager is a child of `host`; add `manager()` to its layout.
     explicit Workspace(QWidget *host);
@@ -51,14 +47,6 @@ public:
     // Keep the current arrangement for the next launch.
     void persist();
 
-    // Kerf's conversation is a column of its own on the Program monitor's
-    // right, as YouTube opens a Short's comments beside it. Closing it gives
-    // its width to the viewer; opening it brings it forward at the width it
-    // had when it closed.
-    bool assistantOpen() const;
-    void setAssistantOpen(bool open);
-    int assistantWidth() const { return m_assistantWidth; }
-
 signals:
     void changed();
 
@@ -78,19 +66,12 @@ private:
     // closed column beside it, or a wider window. A restored layout has new
     // areas, so this follows every restore.
     void letViewerStretch();
-    // When the conversation's column closes, the width it had; when it
-    // opens alone in a row, that width again, taken from the viewer.
-    void rememberAssistantWidth();
-    void restoreAssistantWidth();
 
     ads::CDockManager *m_manager = nullptr;
     QString m_baseStyleSheet;
     QHash<QString, ads::CDockWidget *> m_panels;
     QByteArray m_editing;
     QString m_current;
-    int m_assistantWidth = kAssistantWidth;
-    // Arranging or restoring: panels open and close without the reader asking.
-    bool m_arranging = false;
 };
 
 } // namespace kerf
