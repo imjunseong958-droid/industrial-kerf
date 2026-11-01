@@ -1,10 +1,12 @@
-//! Real-process proof for the project-scoped kerfd boundary.
+//! Real-process proof for the project-scoped kerfd boundary: a Unix socket,
+//! or a named pipe on Windows.
 
-#![cfg(unix)]
+#![cfg(any(unix, windows))]
 
 use kerf_runtime::{EndpointAddress, RuntimeClient, StateSnapshot, MAX_REQUEST_BYTES};
 use std::fs;
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -44,6 +46,26 @@ fn wait_until_ready(client: &RuntimeClient) {
 
 fn has_marker(state: &StateSnapshot, id: &str) -> bool {
     state.document.contains(&format!("marker {id} "))
+}
+
+/// A raw connection to the daemon, past `RuntimeClient`.
+#[cfg(unix)]
+fn raw_connection(endpoint: &EndpointAddress) -> std::io::Result<UnixStream> {
+    match endpoint {
+        EndpointAddress::Unix { path } => UnixStream::connect(path),
+        EndpointAddress::WindowsNamedPipe { .. } => panic!("a named pipe on Unix"),
+    }
+}
+
+/// A raw connection to the daemon, past `RuntimeClient`.
+#[cfg(windows)]
+fn raw_connection(endpoint: &EndpointAddress) -> std::io::Result<fs::File> {
+    match endpoint {
+        EndpointAddress::WindowsNamedPipe { name } => {
+            fs::OpenOptions::new().read(true).write(true).open(name)
+        }
+        EndpointAddress::Unix { .. } => panic!("a Unix socket on Windows"),
+    }
 }
 
 fn stop_daemon(mut daemon: Child) {
@@ -140,13 +162,10 @@ fn real_daemon_rejects_an_oversized_request_before_reducer_execution() {
     let daemon = start_daemon(&directory);
     let client = RuntimeClient::new(&directory).unwrap();
     wait_until_ready(&client);
-    let endpoint = match client.endpoint() {
-        EndpointAddress::Unix { path } => path,
-        EndpointAddress::WindowsNamedPipe { .. } => panic!("Unix integration test on Windows"),
-    };
-    let mut socket = UnixStream::connect(endpoint).unwrap();
+    let mut socket = raw_connection(client.endpoint()).unwrap();
     let oversized = vec![b'x'; MAX_REQUEST_BYTES + 1];
     socket.write_all(&oversized).unwrap();
+    #[cfg(unix)]
     let _ = socket.shutdown(std::net::Shutdown::Write);
     let mut response = String::new();
     socket.read_to_string(&mut response).unwrap();
@@ -342,6 +361,7 @@ fn daemon_exits_once_its_project_directory_is_deleted() {
     panic!("kerfd kept running after its project directory was deleted");
 }
 
+#[cfg(unix)]
 #[test]
 fn endpoint_flag_prints_the_socket_even_when_a_long_path_moves_it() {
     let base = project_directory("endpoint");
@@ -366,4 +386,76 @@ fn endpoint_flag_prints_the_socket_even_when_a_long_path_moves_it() {
         stop_daemon(daemon);
     }
     fs::remove_dir_all(&base).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn endpoint_flag_prints_the_pipe_the_daemon_listens_on() {
+    let base = project_directory("endpoint");
+    let long = base.join("a".repeat(120));
+    for directory in [&base, &long] {
+        let output = Command::new(env!("CARGO_BIN_EXE_kerfd"))
+            .arg("--dir")
+            .arg(directory)
+            .arg("--endpoint")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let printed = String::from_utf8(output.stdout).unwrap().trim().to_owned();
+        let client = RuntimeClient::new(directory).unwrap();
+        assert_eq!(
+            client.endpoint(),
+            &EndpointAddress::WindowsNamedPipe {
+                name: printed.clone()
+            }
+        );
+        assert!(printed.starts_with(r"\\.\pipe\kerfd-"), "{printed}");
+        let daemon = start_daemon(directory);
+        wait_until_ready(&client);
+        assert!(raw_connection(client.endpoint()).is_ok());
+        stop_daemon(daemon);
+    }
+    fs::remove_dir_all(&base).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn a_second_daemon_for_a_project_refuses_to_start() {
+    let directory = project_directory("second");
+    fs::create_dir_all(&directory).unwrap();
+    let daemon = start_daemon(&directory);
+    wait_until_ready(&RuntimeClient::new(&directory).unwrap());
+    let second = Command::new(env!("CARGO_BIN_EXE_kerfd"))
+        .arg("--dir")
+        .arg(&directory)
+        .output()
+        .unwrap();
+    assert!(!second.status.success());
+    let error = String::from_utf8_lossy(&second.stderr);
+    assert!(error.contains("RUNTIME_ALREADY_RUNNING"), "{error}");
+    stop_daemon(daemon);
+    let _ = fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn a_client_starts_the_daemon_it_cannot_reach() {
+    let directory = project_directory("spawn");
+    fs::create_dir_all(&directory).unwrap();
+    let client =
+        RuntimeClient::connect_or_spawn(&directory, Some(Path::new(env!("CARGO_BIN_EXE_kerfd"))))
+            .unwrap();
+    let state = client.get_state().unwrap();
+    assert_eq!(state.revision, 0);
+    // Removing the project ends the daemon the client started. Ask through
+    // a client made beforehand that starts nothing: making a client, or
+    // starting kerfd, makes the folder again.
+    let observer = RuntimeClient::new(&directory).unwrap();
+    fs::remove_dir_all(&directory).unwrap();
+    for _ in 0..250 {
+        if observer.get_state().is_err() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    panic!("the started kerfd kept running after its project was deleted");
 }

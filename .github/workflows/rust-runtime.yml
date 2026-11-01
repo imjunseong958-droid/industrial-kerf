@@ -117,7 +117,7 @@ jobs:
     needs: linux
     if: github.event_name != 'push'
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -141,13 +141,36 @@ jobs:
           $llvm = 'C:\Program Files\LLVM\bin'
           if (-not (Test-Path "$llvm\libclang.dll")) { throw "libclang.dll not found in $llvm" }
           "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
+      # Qt for MSVC, with its bin folder on PATH so the editor and its
+      # tests find Qt's DLLs and plugins.
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.10.*"
+          arch: win64_msvc2022_64
+          cache: true
       - uses: Swatinem/rust-cache@v2
       # The kernel and the durable runtime against Windows paths, line
-      # endings, and processes.
+      # endings, and processes. The runtime's integration tests start real
+      # kerfd daemons and reach them over the named pipe.
       - name: Test kernel and interchange
         run: cargo test -p kerf-model -p kerf-lang -p kerf-interchange
       - name: Test durable runtime
         run: cargo test -p kerf-runtime --all-targets
+      # Sidecars run in job objects, which end them with kerfd.
+      - name: Test sidecar supervision
+        run: cargo test -p kerf-engine --lib sidecar::
+      - name: Build native bridge and daemon
+        run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
+      # The editor's C ABI starts kerfd and edits through the pipe beside
+      # another client.
+      - name: Test editor connection to kerfd
+        run: cargo test -p kerf-qt-bridge --test connection
+      - name: Build Qt editor and UI tests
+        run: |
+          cmake -S apps/kerf-qt -B target/qt -DKERF_QT_BUILD_TESTS=ON
+          cmake --build target/qt --config Release --parallel 4
+      - name: Test Qt UI
+        run: ctest --test-dir target/qt -C Release --output-on-failure
 
   macos-editor:
     needs: linux
