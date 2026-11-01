@@ -424,23 +424,31 @@ QToolButton#abortButton {
 QLabel#eyebrow { color: @textSecondary; font-size: 12px; font-weight: 500; letter-spacing: 0px; }
 QLabel#muted { color: @textSecondary; font-size: 11px; }
 QLabel#chatHint { color: @textSecondary; font-size: 11px; padding: 6px 2px 2px; }
-/* The Inspector. A fill means a value can be changed; plain text cannot.
-   Labels, units, counts and summaries are secondary; values and titles are
-   the body ink; the only purple is the focus ring. */
+/* The Inspector. A value that can be changed sits in a recessed well (the
+   row presses it under its clear pop-ups and fields); plain text cannot be
+   changed. Labels, units, counts and summaries are secondary; values the
+   body ink, or the accent once moved from their defaults; the module
+   titles are engraved (painted). */
 QLabel#inspectorLabel, QLabel#inspectorQuiet, QLabel#inspectorNote, QLabel#sectionCount,
 QLabel#sectionSummary, QLabel#effectSummary, QLabel#effectGroup, QLabel#effectMissing,
 QLabel#captionHint, QLabel#masksHint { color: @textSecondary; }
 QLabel#sectionTitle, QLabel#effectName { color: @text; }
+/* Before the switched-off rule, which wins over it. */
+QLineEdit[inspector="true"][changed="true"] { color: @accentText; }
 QLabel#effectName[off="true"],
 QLabel#colorHex[off="true"],
 QLineEdit[inspector="true"][off="true"] { color: @textSecondary; }
 QFrame#inspectorRule, QFrame#inspectorScrollEdge { background: @divider; border: 0; }
 QFrame#inspectorDropLine { background: @textStrong; border: 0; }
-QLineEdit[inspector="true"], QPlainTextEdit[inspector="true"],
-QLineEdit#scrubEditor, QLineEdit#inspectorNameEditor {
+QLineEdit#inspectorNameEditor {
     background: @inspectorField;
     border: 1px solid @inspectorField;
     border-radius: 5px;
+}
+QLineEdit[inspector="true"], QPlainTextEdit[inspector="true"], QLineEdit#scrubEditor {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
 }
 QLineEdit[inspector="true"]:focus, QPlainTextEdit[inspector="true"]:focus,
 QLineEdit#scrubEditor, QLineEdit#inspectorNameEditor { border-color: @focusRing; }
@@ -546,20 +554,24 @@ QComboBox:!editable:disabled {
     background: @buttonDisabled;
     border-color: @buttonDisabledEdge;
 }
-/* The Inspector's pop-ups: its field fill, no bezel, 24px as its fields. */
+/* The Inspector's pop-ups: clear over the well their row presses under
+   them, no bezel, 24px as its fields; a choice moved from its default in
+   the accent. */
 QComboBox[inspector="true"],
 QComboBox[inspector="true"]:!editable,
 QComboBox[inspector="true"]:!editable:hover {
     color: @text;
-    background: @inspectorField;
-    border: 1px solid @inspectorField;
-    border-radius: 5px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
     min-height: 22px;
     max-height: 22px;
 }
+QComboBox[inspector="true"][changed="true"],
+QComboBox[inspector="true"][changed="true"]:!editable { color: @accentText; }
 QComboBox[inspector="true"]:focus,
 QComboBox[inspector="true"]:!editable:focus { border-color: @focusRing; }
-QComboBox[inspector="true"]:!editable:disabled { color: @textDisabled; background: @inspectorField; border-color: @inspectorField; }
+QComboBox[inspector="true"]:!editable:disabled { color: @textDisabled; background: transparent; border-color: transparent; }
 /* The stepper's halves are transparent hit areas; StepperSpinBox draws one
    centred pair of chevrons over them, as the launcher does. */
 QDoubleSpinBox { padding: 2px 18px 2px 7px; }
