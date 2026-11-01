@@ -222,8 +222,11 @@ private:
     void paintTrackHeader(QPainter &p, int row, const QJsonObject &track, int left);
     // A header's badge and toggles: 16px, smaller on rows too short for that.
     static int headerControlSize(int rowHeight);
-    // The track number badge's font.
+    // The track number's font: bold 10px, as an engraved channel plate's.
     QFont badgeFont() const;
+    // The track number's ink on its channel plate: the colour of the
+    // track's clips, deepened or lightened until it reads in the plate's well.
+    static QColor badgeInk(const QJsonObject &track);
     // The top of a header's line of controls.
     int headerControlTop(int row) const;
     void paintClip(QPainter &p, const QRect &visible, int row, const QJsonObject &clip, const QJsonObject &track, bool audio);
@@ -245,6 +248,9 @@ private:
     // While a clip moves or trims, show where the edge lands and how far it went.
     void paintDragReadout(QPainter &p);
     void paintCornerTime(QPainter &p, const QPoint &origin, double time, const QColor &color) const;
+    // The corner time's display glass, sized to `text` in the glass's figures.
+    QRect cornerGlassRect(const QPoint &origin, const QString &text) const;
+    static QFont cornerFont();
     void repaintAt(qreal x);
     // Lanes are cached for the part of the timeline in view, so a repaint
     // that only moves the playhead or the skimmer blits them.
@@ -326,6 +332,10 @@ private:
     QAction *m_mediumTracks = nullptr;
     QAction *m_largeTracks = nullptr;
     QAction *m_fitTracks = nullptr;
+    // Paints the dock title strip's buttons for the height actions as one
+    // bank of keys.
+    class HeightKeys;
+    HeightKeys *m_heightKeys = nullptr;
     // Option-drag of a header's edge: every track of the grabbed one's kind.
     bool m_resizeKind = false;
     // Every badge is as wide as the widest track number needs (V100 and up
@@ -394,10 +404,10 @@ private:
     int m_lanesPainted = 0;
 };
 
-// The timeline header's zoom: − slider +, as the structure the owner chose
-// puts it beside the track heights. The slider runs over the timeline's
-// scale on a log scale; the buttons step it; it follows the timeline's own
-// changes (a fit to the width).
+// The timeline header's zoom: an engraved ZOOM, then − fader +, as the
+// structure the owner chose puts it beside the track heights. The fader
+// runs over the timeline's scale on a log scale; the keys step it; it
+// follows the timeline's own changes (a fit to the width).
 class TimelineZoomControl final : public QWidget {
     Q_OBJECT
 public:
@@ -409,9 +419,18 @@ public:
     // A scale's place on the slider, and back.
     static int position(double pixelsPerSecond);
     static double scaleAt(int position);
+    // Where the engraved label sits, left of the keys.
+    QRect labelRect() const;
+    QString label() const { return m_label; }
+    // The fader's cap, in the slider's coordinates.
+    static QRectF faderCap(const QSlider *slider);
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
 
 private:
     TimelineWidget *m_timeline;
+    QString m_label;
     QSlider *m_slider = nullptr;
     QToolButton *m_out = nullptr;
     QToolButton *m_in = nullptr;

@@ -1038,29 +1038,37 @@ ads--CTitleBarButton:hover { background: @hover; border-color: transparent; }
 ads--CTitleBarButton:pressed,
 ads--CTitleBarButton:checked { background: @pressed; border-color: transparent; }
 ads--CTitleBarButton:disabled { color: @textSecondary; background: transparent; border-color: transparent; }
-/* A chosen mode in a title strip (the Program panel's mask tools, the
-   Timeline's track height) looks as the chosen mask tool does in Effect
-   Controls: a quiet accent wash with no outline, its symbol the accent,
-   darkening while held. */
+/* A chosen mask tool in the Program panel's title strip looks as the
+   chosen mask tool does in Effect Controls: a quiet accent wash with no
+   outline, its symbol the accent, darkening while held. */
 ads--CTitleBarButton#maskRectangle:checked:enabled,
 ads--CTitleBarButton#maskEllipse:checked:enabled,
-ads--CTitleBarButton#maskPen:checked:enabled,
-ads--CTitleBarButton#trackHeightMini:checked:enabled,
-ads--CTitleBarButton#trackHeightMedium:checked:enabled,
-ads--CTitleBarButton#trackHeightLarge:checked:enabled { background: @accentTint; border-color: transparent; }
+ads--CTitleBarButton#maskPen:checked:enabled { background: @accentTint; border-color: transparent; }
 ads--CTitleBarButton#maskRectangle:checked:enabled:pressed,
 ads--CTitleBarButton#maskEllipse:checked:enabled:pressed,
-ads--CTitleBarButton#maskPen:checked:enabled:pressed,
-ads--CTitleBarButton#trackHeightMini:checked:enabled:pressed,
-ads--CTitleBarButton#trackHeightMedium:checked:enabled:pressed,
-ads--CTitleBarButton#trackHeightLarge:checked:enabled:pressed { background: @accentTintPressed; }
+ads--CTitleBarButton#maskPen:checked:enabled:pressed { background: @accentTintPressed; }
+/* The Timeline's track heights are one bank of latching keys (S, M, L and
+   Fit) the timeline paints: 20x24 each, edge to edge, so the bank's well
+   runs unbroken under them. */
+ads--CTitleBarButton#trackHeightMini,
+ads--CTitleBarButton#trackHeightMedium,
+ads--CTitleBarButton#trackHeightLarge,
+ads--CTitleBarButton#trackHeightFit {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    min-width: 20px;
+    max-width: 20px;
+    min-height: 24px;
+    max-height: 24px;
+}
 ads--CFloatingDockContainer { background: @panel; }
 /* The timeline's tab row: its details after its name, then (on the right)
-   its zoom's − slider +. */
+   its zoom's engraved label and − fader +, which it paints as keys and a
+   fader. */
 QLabel#timelineDetail { color: @textSecondary; font-size: 12px; padding: 2px 0 0 10px; }
-QWidget#timelineZoom QToolButton { background: transparent; border: 0; border-radius: 4px; padding: 0; min-height: 20px; max-height: 20px; }
-QWidget#timelineZoom QToolButton:hover { background: @hover; }
-QWidget#timelineZoom QToolButton:pressed { background: @pressed; }
+QWidget#timelineZoom QToolButton { background: transparent; border: 0; padding: 0; min-height: 20px; max-height: 20px; }
 )QSS"), theme);
 }
 

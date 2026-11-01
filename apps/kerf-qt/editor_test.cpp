@@ -5730,9 +5730,86 @@ private slots:
         QTest::mouseClick(button, Qt::LeftButton);
         QCOMPARE(trackHeights(*window.m_timeline), QList<int>(3, kMinTrackHeight));
         QVERIFY(button->isChecked());
-        // Chosen, it looks as a chosen mask tool does: the accent's wash.
+        // The heights are one bank of keys, edge to edge, the chosen one
+        // held in: the bank's well at its ends, the key's face inside.
+        QCOMPARE(button->size(), QSize(20, 24));
+        auto *fitButton = dock->dockAreaWidget()->findChild<QToolButton *>(QStringLiteral("trackHeightFit"));
+        QVERIFY(fitButton && fitButton->isVisible());
+        QCOMPARE(fitButton->geometry().left(), button->geometry().left() + 3 * 20);
+        QTest::mouseMove(&window, QPoint(4, window.height() - 4));
+        QTRY_VERIFY(!button->underMouse());
         const QImage chosen = button->grab().toImage();
-        QCOMPARE(chosen.pixelColor(QPoint(3, button->height() / 2) * chosen.devicePixelRatio()).rgb(), editorTheme().accentTint.rgb());
+        const qreal ratio = chosen.devicePixelRatio();
+        QCOMPARE(chosen.pixelColor(QPoint(1, 12) * ratio).rgb(), editorTheme().bankWell.rgb());
+        QCOMPARE(chosen.pixelColor(QPoint(15, 15) * ratio).rgb(), editorTheme().keyLatched.rgb());
+        // Its legend is engraved; the action keeps its name and tip.
+        QCOMPARE(button->defaultAction(), window.m_timeline->trackHeightActions().at(0));
+        QCOMPARE(button->toolTip(), window.m_timeline->trackHeightActions().at(0)->toolTip());
+    }
+
+    // The header bar's track heights as the dock's title strip makes them:
+    // a button for each action, which the timeline paints as one bank of
+    // latching keys (S, M, L, Fit) in its well, in either appearance.
+    void timelineTrackHeightsAreABankOfKeys() {
+        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
+        TimelineWidget timeline;
+        timeline.setProject(trackList({"video", "audio"}), 8, 24);
+        QWidget strip;
+        auto *layout = new QHBoxLayout(&strip);
+        layout->setContentsMargins(10, 0, 10, 0);
+        layout->setSpacing(0);
+        QList<QToolButton *> buttons;
+        for (QAction *action : timeline.trackHeightActions()) {
+            auto *button = new QToolButton(&strip);
+            button->setDefaultAction(action);
+            button->setAutoRaise(true);
+            button->setFixedSize(20, 24);
+            layout->addWidget(button);
+            buttons << button;
+        }
+        strip.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&strip));
+        // The timeline takes them over when its heights next change.
+        timeline.updateHeightActions();
+        QVERIFY(buttons.at(1)->isChecked());
+        // A row of a key's face below its legend, clear of its rounded
+        // corners at x = 15: the well stands 2px inside a button, the keys
+        // 2px inside the well above its 1px lip, and the face's corners round
+        // its last rows.
+        const int faceRow = buttons.at(0)->height() - 9;
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            const EditorTheme &theme = editorTheme();
+            const QImage image = strip.grab().toImage();
+            const qreal ratio = image.devicePixelRatio();
+            const auto at = [&](int button, int x, int y) {
+                return image.pixelColor((buttons.at(button)->pos() + QPoint(x, y)) * ratio).rgb();
+            };
+            // Outside the bank, the strip; at its ends and between its keys, its well.
+            QCOMPARE(image.pixelColor(QPoint(5, 12) * ratio).rgb(), strip.palette().window().color().rgb());
+            QCOMPARE(at(0, 1, 12), theme.bankWell.rgb());
+            QCOMPARE(at(3, 18, 12), theme.bankWell.rgb());
+            for (int button = 1; button < 4; ++button) QCOMPARE(at(button, 0, 12), theme.bankWell.rgb());
+            // Medium, the default, is held in; the others stand raised, a
+            // face between the key's two tones (clear of the legends).
+            QCOMPARE(at(1, 15, faceRow), theme.keyLatched.rgb());
+            for (const int raised : {0, 2, 3}) {
+                const QColor face = QColor::fromRgb(at(raised, 15, faceRow));
+                const auto between = [&](int (QColor::*channel)() const) {
+                    const int a = (theme.keyTop.*channel)();
+                    const int b = (theme.keyBottom.*channel)();
+                    return (face.*channel)() >= std::min(a, b) - 1 && (face.*channel)() <= std::max(a, b) + 1;
+                };
+                QVERIFY2(between(&QColor::red) && between(&QColor::green) && between(&QColor::blue),
+                         qPrintable(face.name()));
+            }
+        }
+        // A choice made elsewhere latches its key.
+        timeline.trackHeightActions().at(0)->trigger();
+        const QImage mini = strip.grab().toImage();
+        const qreal ratio = mini.devicePixelRatio();
+        QCOMPARE(mini.pixelColor((buttons.at(0)->pos() + QPoint(15, faceRow)) * ratio).rgb(), editorTheme().keyLatched.rgb());
+        QVERIFY(mini.pixelColor((buttons.at(1)->pos() + QPoint(15, faceRow)) * ratio).rgb() != editorTheme().keyLatched.rgb());
     }
 
     // Option-Up and Option-Down, and Option-scroll over the headers, step
@@ -6073,12 +6150,17 @@ private slots:
                     QVERIFY(control.height() >= 12);
                 }
                 QVERIFY(badge.right() < output.left() && output.right() < lock.left());
-                // No plates: the number is bare text and the toggles bare
-                // symbols on the header (a wash only under the pointer).
-                // (Inside where a plate's rounded corner was, clear of the symbols.)
-                if (output.height() >= 16)
-                    for (const QRect &control : {output, lock})
-                        QCOMPARE(image.pixelColor(control.left() + 2, control.top() + 1), theme.trackHeader);
+                // The number on its channel plate's well; V1's output key
+                // held in (it plays), A1's mute key and both locks raised,
+                // each on the header (sampled clear of the symbols).
+                QCOMPARE(image.pixelColor(badge.left() + 2, badge.center().y()), theme.wellFill);
+                QCOMPARE(image.pixelColor(badge.left() - 1, badge.center().y()), theme.trackHeader);
+                QCOMPARE(image.pixelColor(output.center().x(), output.bottom() - 2) == theme.keyLatched, row == 0);
+                for (const QRect &raised : row == 0 ? QList<QRect>{lock} : QList<QRect>{output, lock}) {
+                    QVERIFY(image.pixelColor(raised.center().x(), raised.bottom() - 2) != theme.keyLatched);
+                    QVERIFY(image.pixelColor(raised.center().x(), raised.bottom() - 2) != theme.trackHeader);
+                }
+                QCOMPARE(image.pixelColor(lock.right() + 2, lock.center().y()), theme.trackHeader);
                 // The divider under the row is whole, past the name.
                 QCOMPARE(image.pixelColor(170, header.bottom()), theme.trackDivider);
             }
@@ -6095,7 +6177,9 @@ private slots:
             painter.end();
             for (const char *name : {"Opening shot", "Dialogue", "Video 1", "Audio 1", "V1", "A1"})
                 QVERIFY2(recorder.colorOf(QString::fromLatin1(name)).isValid(), name);
-            QCOMPARE(recorder.colorOf(QStringLiteral("V1")), theme.trackBadgeText);
+            // Each number in its clips' colour, made to read in the well.
+            QCOMPARE(recorder.colorOf(QStringLiteral("V1")), readableOn(theme.clipVideo.header, theme.wellFill, 4.5));
+            QCOMPARE(recorder.colorOf(QStringLiteral("A1")), readableOn(theme.clipAudio.header, theme.wellFill, 4.5));
             QCOMPARE(recorder.colorOf(QStringLiteral("1 clip")).isValid(), height >= kDetailedTrackHeight);
         }
     }
@@ -6118,13 +6202,248 @@ private slots:
             if (run.text.size() <= 5 && (run.text.startsWith(QLatin1Char('V')) || run.text.startsWith(QLatin1Char('A')))) badges << run.text;
         QVERIFY2(badges.contains(QStringLiteral("V120")) && badges.contains(QStringLiteral("V100")), qPrintable(badges.join(' ')));
         for (const QString &badge : badges) QVERIFY2(!badge.contains(QChar(0x2026)), qPrintable(badge));
-        QFont font = timeline.font();
-        font.setPixelSize(10);
-        font.setWeight(QFont::DemiBold);
-        QVERIFY(timeline.headerBadgeRect(0).width() >= QFontMetrics(font).horizontalAdvance(QStringLiteral("V120")) + 4);
+        QVERIFY(timeline.headerBadgeRect(0).width() >=
+                QFontMetrics(timeline.badgeFont()).horizontalAdvance(QStringLiteral("V120")) + 4);
         for (int row = 0; row < timeline.trackRowCount(); row += 37) {
             QCOMPARE(timeline.headerToggleRect(row, 0).left(), timeline.headerToggleRect(0, 0).left());
             QVERIFY(timeline.headerToggleRect(row, 0).left() > timeline.headerBadgeRect(row).right());
+        }
+    }
+
+    // The header toggles are small latching keys: raised when off, held in
+    // when on, brighter under the pointer, their symbols engraved; and the
+    // track numbers' inks read in their plates, in either appearance.
+    void timelineHeaderTogglesAreLatchingKeys() {
+        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
+        TimelineWidget timeline;
+        timeline.resize(800, 300);
+        timeline.setProject(QJsonObject{{"fps", 24}, {"tracks", QJsonArray{
+            QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{}}},
+            QJsonObject{{"id", "V2"}, {"type", "video"}, {"enabled", false}, {"locked", true}, {"clips", QJsonArray{}}},
+            QJsonObject{{"id", "A1"}, {"type", "audio"}, {"muted", true}, {"clips", QJsonArray{}}},
+            QJsonObject{{"id", "A2"}, {"type", "audio"}, {"name", "Music"}, {"clips", QJsonArray{}}}}}}, 8, 24);
+        timeline.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&timeline));
+        // Rows, top down: V2 (hidden, locked), V1, A1 (muted), A2.
+        // A key's face, under its symbol.
+        const auto face = [&timeline](const QImage &image, int row, int index) {
+            const QRect key = timeline.headerToggleRect(row, index);
+            return image.pixelColor(key.center().x(), key.bottom() - 2);
+        };
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            const EditorTheme &theme = editorTheme();
+            const QImage image = timeline.grab().toImage();
+            QCOMPARE(face(image, 0, 0) == theme.keyLatched, false); // Hidden: its output key is out.
+            QCOMPARE(face(image, 0, 1), theme.keyLatched);          // Locked.
+            QCOMPARE(face(image, 1, 0), theme.keyLatched);          // Plays.
+            QCOMPARE(face(image, 1, 1) == theme.keyLatched, false);
+            QCOMPARE(face(image, 2, 0), theme.keyLatched);          // Muted.
+            QCOMPARE(face(image, 3, 0) == theme.keyLatched, false);
+            // Symbols engraved, readable on a key raised or held in.
+            TextRecorder recorder;
+            QPainter painter(&recorder);
+            timeline.paintHeaders(painter, timeline.rect());
+            painter.end();
+            QCOMPARE(recorder.colorOf(QStringLiteral("M")), theme.engravedInk);
+            for (const QColor &key : {theme.keyTop, theme.keyBottom, theme.keyLatched})
+                QVERIFY2(contrastRatio(theme.engravedInk, key) >= 4.5, qPrintable(key.name()));
+            // Each track's number reads on its plate at 4.5:1.
+            for (const ClipStyle *style : {&theme.clipVideo, &theme.clipAudio, &theme.clipMusic, &theme.clipGenerator,
+                                           &theme.clipCaption})
+                QVERIFY(contrastRatio(readableOn(style->header, theme.wellFill, 4.5), theme.wellFill) >= 4.5);
+            QCOMPARE(recorder.colorOf(QStringLiteral("A2")), readableOn(theme.clipMusic.header, theme.wellFill, 4.5));
+            // A hidden track's number is faint, as its name is.
+            QCOMPARE(recorder.colorOf(QStringLiteral("V2")), theme.trackHeaderTextDisabled);
+        }
+        // Under the pointer a key brightens, and only that key.
+        const QImage before = timeline.grab().toImage();
+        QTest::mouseMove(&timeline, timeline.headerToggleRect(1, 1).center());
+        const QImage hovered = timeline.grab().toImage();
+        QVERIFY(face(hovered, 1, 1) != face(before, 1, 1));
+        QCOMPARE(face(hovered, 1, 0), face(before, 1, 0));
+        QCOMPARE(face(hovered, 2, 1), face(before, 2, 1));
+        QTest::mouseMove(&timeline, QPoint(400, 200));
+        QCOMPARE(face(timeline.grab().toImage(), 1, 1), face(before, 1, 1));
+    }
+
+    // The corner time sits on a display glass sized to its figures, cream
+    // for the playhead and the glass's dimmer label ink while skimming.
+    void timelineCornerTimeSitsOnDisplayGlass() {
+        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
+        TimelineWidget timeline;
+        timeline.resize(800, 200);
+        timeline.setProject(trackList({"video", "audio"}), 8, 24);
+        timeline.setPlayhead(7.5);
+        timeline.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&timeline));
+        const QString playing = timelineTimecode(7.5, 24);
+        const QRect glass = timeline.cornerGlassRect(QPoint(), playing);
+        // Its figures and 7px either side, inside the corner over the headers.
+        QVERIFY(glass.width() >= QFontMetrics(TimelineWidget::cornerFont()).horizontalAdvance(playing) + 14);
+        QVERIFY(glass.width() <= QFontMetrics(TimelineWidget::cornerFont()).horizontalAdvance(playing) + 22);
+        QVERIFY(glass.left() > 4 && glass.top() > 0 && glass.bottom() < kRulerHeight - 1);
+        QVERIFY(glass.right() < kTimelineLabelWidth - 20);
+        // Figures of one width: the glass keeps its size as the time runs.
+        QCOMPARE(timeline.cornerGlassRect(QPoint(), timelineTimecode(3599.0, 24)).size(), glass.size());
+        QCOMPARE(TimelineWidget::cornerFont().family(), monoFont(12).family());
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            const EditorTheme &theme = editorTheme();
+            const QImage image = timeline.grab().toImage();
+            QCOMPARE(image.pixelColor(4, 4), theme.rulerCorner);
+            QCOMPARE(image.pixelColor(glass.right() + 3, glass.center().y()), theme.rulerCorner);
+            // Dark glass, between its two tones, clear of the figures.
+            const QColor inside = image.pixelColor(glass.left() + 3, glass.bottom() - 4);
+            QVERIFY2(inside.lightness() <= std::max(theme.glassTop.lightness(), theme.glassBottom.lightness()) + 2,
+                     qPrintable(inside.name()));
+            TextRecorder recorder;
+            QPainter painter(&recorder);
+            timeline.paintCornerTime(painter, QPoint(), 7.5, theme.glassText);
+            painter.end();
+            QCOMPARE(recorder.colorOf(playing), theme.glassText);
+        }
+        // The overlay picks the ink: cream for the playhead, the label ink
+        // for the skimmer.
+        const auto cornerInk = [&timeline](const QString &time) {
+            TextRecorder recorder;
+            QPainter painter(&recorder);
+            timeline.paintOverlay(painter, timeline.rect());
+            painter.end();
+            return recorder.colorOf(time);
+        };
+        QCOMPARE(cornerInk(playing), editorTheme().glassText);
+        timeline.showSkimmer(3.0);
+        QCOMPARE(cornerInk(timelineTimecode(3.0, 24)), editorTheme().glassLabel);
+    }
+
+    // The timeline header's zoom: an engraved ZOOM, then − and + keys either
+    // side of a short fader whose bakelite cap stands where the slider's
+    // handle is, so a press on the cap drags it; tips and names as before.
+    void timelineZoomIsAFaderBetweenKeys() {
+        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
+        TimelineWidget timeline;
+        timeline.setProject(trackList({"video"}), 60, 24);
+        TimelineZoomControl zoom(&timeline);
+        zoom.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&zoom));
+        QSlider *fader = zoom.slider();
+        QCOMPARE(zoom.label(), QStringLiteral("Zoom"));
+        QCOMPARE(zoom.zoomOutButton()->accessibleName(), QStringLiteral("Zoom out"));
+        QCOMPARE(zoom.zoomInButton()->accessibleName(), QStringLiteral("Zoom in"));
+        QCOMPARE(fader->accessibleName(), QStringLiteral("Timeline zoom"));
+        QCOMPARE(fader->toolTip(), QStringLiteral("Timeline zoom"));
+        QVERIFY(zoom.zoomInButton()->autoRepeat() && zoom.zoomOutButton()->autoRepeat());
+        // The label, then −, the fader, +, left to right.
+        QVERIFY(zoom.labelRect().right() < zoom.zoomOutButton()->x());
+        QVERIFY(zoom.zoomOutButton()->geometry().right() < fader->x() && fader->geometry().right() < zoom.zoomInButton()->x());
+        QCOMPARE(fader->width(), 72);
+        // The cap stands on the handle, at either end of the travel at
+        // either end of the range, as wide as a key's legend.
+        fader->setValue(0);
+        const QRectF low = TimelineZoomControl::faderCap(fader);
+        QCOMPARE(low.width(), 10.0);
+        QVERIFY(low.left() >= 0 && low.left() < 8);
+        fader->setValue(TimelineZoomControl::kSteps);
+        const QRectF high = TimelineZoomControl::faderCap(fader);
+        QVERIFY(high.right() <= fader->width() && high.right() > fader->width() - 8);
+        QCOMPARE(low.left(), fader->width() - high.right());
+        fader->setValue(20);
+        const QPoint grip = TimelineZoomControl::faderCap(fader).center().toPoint();
+        QTest::mousePress(fader, Qt::LeftButton, Qt::NoModifier, grip);
+        QTest::mouseMove(fader, grip + QPoint(20, 0));
+        QTest::mouseRelease(fader, Qt::LeftButton, Qt::NoModifier, grip + QPoint(20, 0));
+        QVERIFY2(fader->value() > 40, qPrintable(QString::number(fader->value())));
+        QCOMPARE(timeline.scale(), TimelineZoomControl::scaleAt(fader->value()));
+        // Painted from the theme in either appearance: a cream index line
+        // down the dark cap, the groove's well beside it, the keys raised.
+        fader->setValue(50);
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            const EditorTheme &theme = editorTheme();
+            const QImage image = zoom.grab().toImage();
+            const qreal ratio = image.devicePixelRatio();
+            const QRectF cap = TimelineZoomControl::faderCap(fader).translated(fader->pos());
+            const auto at = [&](const QPointF &point) { return image.pixelColor((point * ratio).toPoint()); };
+            QCOMPARE(at(QPointF(cap.center().x(), cap.center().y())).rgb(), theme.knobPointer.rgb());
+            QVERIFY(at(QPointF(cap.left() + 2.5, cap.center().y())).lightness() < 80);
+            QCOMPARE(at(QPointF(fader->x() + 14.5, cap.center().y() + 0.5)).rgb(), theme.wellFill.rgb());
+            const QRect out = zoom.zoomOutButton()->geometry();
+            QCOMPARE(at(QPointF(out.left() + 4.5, out.bottom() - 4.5)) == theme.keyLatched, false);
+            QVERIFY(at(QPointF(out.left() + 4.5, out.bottom() - 4.5)).rgb() != image.pixelColor(0, 0).rgb());
+        }
+    }
+
+    // Pictures of the track headers, the corner time and the header bar's
+    // zoom and track heights, to look at: run with
+    // KERF_TIMELINE_HEADER_GALLERY set to a folder (and QT_SCALE_FACTOR=2
+    // for 2x), in either appearance.
+    void timelineHeaderGallery() {
+        const QString folder = qEnvironmentVariable("KERF_TIMELINE_HEADER_GALLERY");
+        if (folder.isEmpty()) QSKIP("Set KERF_TIMELINE_HEADER_GALLERY to draw the track headers and header bar.");
+        QDir().mkpath(folder);
+        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
+        const QJsonObject clip{{"id", "c"}, {"timelineStart", 0.0}, {"duration", 4.0}};
+        TimelineWidget timeline;
+        timeline.setProject(QJsonObject{{"fps", 24}, {"tracks", QJsonArray{
+            QJsonObject{{"id", "V3"}, {"type", "video"}, {"name", "Captions"}, {"clips", QJsonArray{QJsonObject{
+                {"id", "cap"}, {"kind", "caption"}, {"timelineStart", 0.0}, {"duration", 4.0}}}}},
+            QJsonObject{{"id", "V2"}, {"type", "video"}, {"enabled", false}, {"locked", true}, {"clips", QJsonArray{}}},
+            QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{clip}}},
+            QJsonObject{{"id", "A1"}, {"type", "audio"}, {"muted", true}, {"clips", QJsonArray{}}},
+            QJsonObject{{"id", "A2"}, {"type", "audio"}, {"name", "Music"}, {"clips", QJsonArray{}}}}}}, 8, 24);
+        timeline.setPlayhead(7.5);
+        timeline.resize(520, 260);
+        timeline.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&timeline));
+        QTest::mouseMove(&timeline, timeline.headerToggleRect(2, 1).center());
+        QWidget strip;
+        auto *layout = new QHBoxLayout(&strip);
+        layout->setContentsMargins(10, 4, 10, 4);
+        layout->setSpacing(8);
+        layout->addWidget(new TimelineZoomControl(&timeline, &strip));
+        auto *bank = new QWidget(&strip);
+        auto *keys = new QHBoxLayout(bank);
+        keys->setContentsMargins(0, 0, 0, 0);
+        keys->setSpacing(0);
+        for (QAction *action : timeline.trackHeightActions()) {
+            auto *button = new QToolButton(bank);
+            button->setDefaultAction(action);
+            button->setFixedSize(20, 24);
+            keys->addWidget(button);
+        }
+        layout->addWidget(bank);
+        strip.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&strip));
+        timeline.updateHeightActions();
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            QCoreApplication::processEvents();
+            const QString look = scheme == ColorScheme::Dark ? QStringLiteral("dark") : QStringLiteral("light");
+            for (const int height : {0, kMinTrackHeight, 60}) {
+                if (height > 0) timeline.setAllTrackHeights(height);
+                else timeline.resetTrackHeights();
+                QCoreApplication::processEvents();
+                QVERIFY(timeline.grab().save(QDir(folder).filePath(QStringLiteral("%1-headers-%2.png").arg(look).arg(height))));
+            }
+            timeline.resetTrackHeights();
+            QVERIFY(strip.grab().save(QDir(folder).filePath(QStringLiteral("%1-header-bar.png").arg(look))));
+        }
+        // And the Timeline panel's own title strip, in the window.
+        QSettings().remove(QStringLiteral("workspace"));
+        const auto forget = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(QJsonObject{{"revision", 1}, {"duration", 4}, {"timeline", trackList({"video", "audio"})}});
+        window.resize(1440, 900);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            QCoreApplication::processEvents();
+            const QString look = scheme == ColorScheme::Dark ? QStringLiteral("dark") : QStringLiteral("light");
+            QWidget *bar = window.m_workspace->panel(QStringLiteral("timeline"))->dockAreaWidget()->titleBar();
+            QVERIFY(bar->grab().save(QDir(folder).filePath(QStringLiteral("%1-timeline-title.png").arg(look))));
         }
     }
 
@@ -8333,8 +8652,11 @@ private slots:
                 }
             }
         }
+        // The track number is engraved on its channel plate, at the
+        // hardware labels' size.
         TimelineWidget timeline;
-        QVERIFY(scale.contains(timeline.badgeFont().pixelSize()));
+        QCOMPARE(timeline.badgeFont().pixelSize(), engravedFont(timeline.font(), QStringLiteral("V1")).pixelSize());
+        QCOMPARE(timeline.badgeFont().weight(), QFont::Bold);
     }
 
     // Colours drawn one on another, each with the ratio it must reach there
