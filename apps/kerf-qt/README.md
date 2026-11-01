@@ -147,7 +147,11 @@ for this edit.
 Panels dock with the Qt Advanced Docking System (LGPL-2.1, fetched at a
 pinned release when configuring and linked as a shared library). Drag a
 panel's tab to dock it elsewhere, tab it with another panel, or float it;
-drag the dividers to resize. Window lists the panels to show or hide and
+drag the dividers to resize. A divider stops at its panels' least size, so
+a panel is never cut off, and a column of tabbed panels keeps one least
+width whichever tab is chosen; the timeline's divider, dragged all the way
+up, closes the row over it altogether (drag it down again to bring the row
+back), and the timeline itself never closes. Window lists the panels to show or hide and
 the workspaces: Editing is built in, and Save as New Workspace adds your
 own. A workspace keeps the changes made to it, across launches, until
 Reset to Saved Layout (Alt+Shift+0) returns it to its saved layout; Save
