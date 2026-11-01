@@ -256,6 +256,106 @@ private slots:
         QVERIFY(editorTheme().dark);
     }
 
+    // Media is named as it was imported: the content hash media.rs gives the
+    // copy, and the extension, stay out of the bin, timeline and Inspector.
+    void mediaIsNamedWithoutItsContentHash() {
+        const auto named = [](const char *path) { return sourceName(QJsonObject{{"path", QString::fromUtf8(path)}}); };
+        QCOMPARE(named("media/Beach Day-1a2b3c4d.mov"), QStringLiteral("Beach Day"));
+        QCOMPARE(named("media/vertical_clip-7e0b5b62.mp4"), QStringLiteral("vertical_clip"));
+        QCOMPARE(named("media/clip.v2-0f0f0f0f.mp4"), QStringLiteral("clip.v2"));
+        QCOMPARE(named("media/새벽 능선-a1b2c3d4.mov"), QStringLiteral("새벽 능선"));
+        // Not a content hash: too short, upper case, or all there is.
+        QCOMPARE(named("media/take-12.mov"), QStringLiteral("take-12"));
+        QCOMPARE(named("media/take-ABCDEF12.mov"), QStringLiteral("take-ABCDEF12"));
+        QCOMPARE(named("media/-1a2b3c4d.mov"), QStringLiteral("-1a2b3c4d"));
+        QCOMPARE(named(""), QStringLiteral("Untitled media"));
+        QCOMPARE(sourceFileName(QJsonObject{{"path", "media/Beach Day-1a2b3c4d.mov"}}), QStringLiteral("Beach Day.mov"));
+        QCOMPARE(sourceFileName(QJsonObject{{"path", "media/notes-1a2b3c4d"}}), QStringLiteral("notes"));
+        // Media that would read alike is told apart: by extension first,
+        // then by the copy's own name.
+        const QHash<QString, QString> names = sourceNames(QJsonArray{
+            QJsonObject{{"id", "a"}, {"path", "media/Beach Day-1a2b3c4d.mov"}},
+            QJsonObject{{"id", "b"}, {"path", "media/Beach Day-5e6f7a8b.wav"}},
+            QJsonObject{{"id", "c"}, {"path", "media/Interview-aaaa1111.mov"}},
+            QJsonObject{{"id", "d"}, {"path", "media/Interview-bbbb2222.mov"}},
+            QJsonObject{{"id", "e"}, {"path", "media/harbor-0000ffff.mov"}}});
+        QCOMPARE(names.value("a"), QStringLiteral("Beach Day.mov"));
+        QCOMPARE(names.value("b"), QStringLiteral("Beach Day.wav"));
+        QCOMPARE(names.value("c"), QStringLiteral("Interview-aaaa1111.mov"));
+        QCOMPARE(names.value("d"), QStringLiteral("Interview-bbbb2222.mov"));
+        QCOMPARE(names.value("e"), QStringLiteral("harbor"));
+        // Hundredths carry into the seconds and minutes.
+        QCOMPARE(prettyTime(59.996), QStringLiteral("01:00.00"));
+        QCOMPARE(prettyTime(8.0), QStringLiteral("00:08.00"));
+        QCOMPARE(prettyTime(61.25), QStringLiteral("01:01.25"));
+    }
+
+    // The finish pass's small fixes, each as the owner met it: Export makes
+    // the finished file unless asked for a draft; the rail's device button
+    // keeps showing the preview as it is while its menu is open; a pinned
+    // proposal's time ages; the viewer's empty lines stay on the phone's
+    // screen.
+    void finishPassFixes() {
+        MainWindow window{QString(), QString()};
+        window.resize(1366, 737);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QCOMPARE(window.m_quality->currentText(), QStringLiteral("Master"));
+        QCOMPARE(window.m_quality->currentData().toString(), QStringLiteral("full"));
+        QCOMPARE(window.m_quality->itemText(1), QStringLiteral("Draft"));
+        QCOMPARE(window.m_quality->itemData(1).toString(), QStringLiteral("preview"));
+
+        QJsonObject snapshot = showcaseSnapshot(3, QStringLiteral("clean"));
+        QJsonObject timeline = snapshot.value(QStringLiteral("timeline")).toObject();
+        timeline.insert(QStringLiteral("width"), 1080);
+        timeline.insert(QStringLiteral("height"), 1920);
+        snapshot.insert(QStringLiteral("timeline"), timeline);
+        window.applySnapshot(snapshot);
+        QCoreApplication::processEvents();
+        RailButton *device = window.m_rail->deviceButton();
+        QVERIFY(device->isChecked());
+        bool checkedWhileOpen = false;
+        bool menuShown = false;
+        QTimer::singleShot(50, &window, [&] {
+            QWidget *popup = QApplication::activePopupWidget();
+            menuShown = qobject_cast<QMenu *>(popup);
+            checkedWhileOpen = device->isChecked();
+            if (popup) popup->close();
+        });
+        QTest::mouseClick(device, Qt::LeftButton, {}, device->discRect().center());
+        QVERIFY(menuShown);
+        QVERIFY(checkedWhileOpen);
+        QVERIFY(device->isChecked());
+
+        window.m_chat->setProposalShown(true, QStringLiteral("p1"));
+        QCOMPARE(window.m_chat->proposalTime()->text(), QStringLiteral("now"));
+        window.m_chat->m_proposalSince = QDateTime::currentDateTime().addSecs(-5 * 60);
+        window.m_chat->m_welcomeSince = QDateTime::currentDateTime().addSecs(-5 * 60);
+        window.m_chat->refreshTimes();
+        const QString aged = relativeTime(QDateTime::currentDateTime().addSecs(-5 * 60), QDateTime::currentDateTime());
+        QCOMPARE(window.m_chat->proposalTime()->text(), aged);
+        QCOMPARE(window.m_chat->m_welcomeTime->text(), aged);
+        window.m_chat->setProposalShown(false, QString());
+
+        // An empty phone: the two lines wrap inside its screen, no ink in
+        // the screen's outer 12 points on either side.
+        ViewerWidget viewer;
+        viewer.resize(560, 460);
+        viewer.setProjectInfo(1080, 1920);
+        viewer.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&viewer));
+        const QImage shot = viewer.grab().toImage();
+        const qreal ratio = shot.devicePixelRatio();
+        const QRectF card = viewer.stageLayout().card;
+        const int middle = qRound(card.center().y() * ratio);
+        for (const qreal x : {card.left() + 2, card.left() + 10, card.right() - 10, card.right() - 2}) {
+            // The bare screen, well above the lines.
+            const QRgb screen = shot.pixelColor(qRound(x * ratio), middle - qRound(80 * ratio)).rgb();
+            for (int y = middle - qRound(30 * ratio); y <= middle + qRound(30 * ratio); ++y)
+                QCOMPARE(shot.pixelColor(qRound(x * ratio), y).rgb(), screen);
+        }
+    }
+
     void inboundMcpConfigValidatesStdioShape() {
         QVERIFY(!validateInboundMcpConfig("[]").isEmpty());
         QVERIFY(!validateInboundMcpConfig("{}").isEmpty());
@@ -4125,8 +4225,11 @@ private slots:
               times.first());
         QVERIFY2(median < 16.0, qPrintable(QStringLiteral("%1 ms").arg(median)));
         QCOMPARE(scroll->value(), 60);
-        // The header's hairline shows while the body is scrolled under it.
+        // The header's hairline shows while the body is scrolled under it,
+        // laid over the body's top edge, so the body does not move for it.
         QVERIFY(inspector->m_scrollEdge->isVisible());
+        QCOMPARE(inspector->m_scrollEdge->parentWidget(), inspector->m_scroll);
+        QCOMPARE(inspector->m_scrollEdge->geometry(), QRect(0, 0, inspector->m_scroll->width(), 1));
         scroll->setValue(0);
         QVERIFY(!inspector->m_scrollEdge->isVisible());
     }
@@ -4163,7 +4266,7 @@ private slots:
         emit window.m_timeline->clipSelected(QStringLiteral("v1b"));
         QCoreApplication::processEvents();
         QVERIFY(inspector->isCurrentTab());
-        QCOMPARE(window.m_inspector->nameText(), QStringLiteral("fisher-close.mov"));
+        QCOMPARE(window.m_inspector->nameText(), QStringLiteral("fisher-close"));
         QCOMPARE(QApplication::focusWidget(), focus);
         // Another clip: only the values change.
         emit window.m_timeline->clipSelected(QStringLiteral("v1a"));
@@ -4770,7 +4873,7 @@ private slots:
                 // The chat is untouched beside the picture.
                 QVERIFY(window.m_chat->isVisible());
                 QCOMPARE(window.m_chat->geometry(), window.m_viewer->stageLayout().panel);
-                QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Ask Kerf about fisher-close.mov…"));
+                QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Ask Kerf about fisher-close…"));
                 const QImage editor = window.grab().toImage();
                 QCOMPARE(amberPixels(editor), 0);
                 save(editor, QStringLiteral("editor-%1-inspector-%2").arg(tall ? QStringLiteral("9x16") : QStringLiteral("16x9"), name));
@@ -5613,7 +5716,7 @@ private slots:
         };
         QCOMPARE(trackHeights(*timeline), heights(kVideoTrackHeight, kTrackHeight));
         timeline->setFocus();
-        QTest::keyClick(timeline, Qt::Key_Up, Qt::AltModifier);
+        QTest::keyClick(timeline, Qt::Key_Down, Qt::AltModifier);
         QCOMPARE(trackHeights(*timeline), heights(30, 26));
         QTest::keyClick(timeline, Qt::Key_Down, Qt::AltModifier);
         QTest::keyClick(timeline, Qt::Key_Down, Qt::AltModifier);
@@ -5699,22 +5802,22 @@ private slots:
         QCOMPARE(trackHeights(timeline), (QList<int>{120, 100, 100, kTrackHeight, kTrackHeight}));
         timeline.stepAllTrackHeights(1);
         const QList<int> taller = trackHeights(timeline);
-        QCOMPARE(taller, (QList<int>{128, 104, 104, 26, 26}));
+        QCOMPARE(taller, (QList<int>{128, 104, 104, 36, 36}));
         timeline.stepAllTrackHeights(-1);
-        QCOMPARE(trackHeights(timeline), (QList<int>{104, 86, 86, 22, 22}));
+        QCOMPARE(trackHeights(timeline), (QList<int>{104, 86, 86, 30, 30}));
         // The tallest stays the tallest; Option-scroll steps the same way.
         QWheelEvent wheel(QPointF(120, timeline.trackHeaderRect(3).center().y()), timeline.mapToGlobal(QPointF(120, 0)), QPoint(),
                           QPoint(0, 120), Qt::NoButton, Qt::AltModifier, Qt::NoScrollPhase, false);
         QApplication::sendEvent(&timeline, &wheel);
-        QCOMPARE(trackHeights(timeline), (QList<int>{128, 104, 104, 26, 26}));
+        QCOMPARE(trackHeights(timeline), (QList<int>{128, 104, 104, 36, 36}));
         // A new track takes the step every track without a height of its
         // own was taken to: one step from the picture default.
         QJsonArray tracks = project.value("tracks").toArray();
         tracks.append(QJsonObject{{"id", "added"}, {"type", "audio"}, {"clips", QJsonArray{}}});
         project.insert("tracks", tracks);
         timeline.setProject(project, 8, 24);
-        QCOMPARE(timeline.allTrackHeight(), 30);
-        QCOMPARE(trackHeights(timeline).constLast(), 30);
+        QCOMPARE(timeline.allTrackHeight(), 36);
+        QCOMPARE(trackHeights(timeline).constLast(), 36);
         // Presets still set every track alike.
         timeline.trackHeightActions().at(0)->trigger();
         QCOMPARE(trackHeights(timeline), QList<int>(6, kMinTrackHeight));
@@ -5878,16 +5981,15 @@ private slots:
     // From Mini to the tallest, a header's badge and toggles sit inside its
     // row, clear of its top edge and its divider; it is one line (no clip
     // count, no preview) below two lines' height; clips keep their names at
-    // every height, show a waveform from a 10px body (rows of 30px) and a
-    // filmstrip from a 14px one (rows of 34px).
+    // every height, and show their filmstrip or waveform from a 20px clip
+    // (rows of 23px, and 25px up, where the inset grows to 2px), the name
+    // on a chip over it until the clip has room for a name bar too.
     void timelineTracksStayLegibleAtEveryHeight() {
         MediaArtwork artwork;
         QImage picture(160, 90, QImage::Format_RGB32);
         picture.fill(QColor("#e87342"));
         artwork.frames.insert(QStringLiteral("pic"), picture);
-        QImage sound(2048, 48, QImage::Format_ARGB32);
-        sound.fill(Qt::white);
-        artwork.waves.insert(QStringLiteral("snd"), sound);
+        artwork.peaks.insert(QStringLiteral("snd"), fullScalePeaks(4.0));
         TimelineWidget timeline;
         timeline.setArtwork(&artwork);
         timeline.setProject(QJsonObject{{"fps", 24},
@@ -5908,7 +6010,7 @@ private slots:
                 if (image.pixelColor(x, clip.bottom() - 3) == color) return true;
             return false;
         };
-        for (const int height : {18, 19, 20, 21, 22, 24, 26, 28, 29, 30, 32, 33, 34, 36, 39, 40, 44, 60, 96, 160}) {
+        for (const int height : {18, 19, 20, 21, 22, 23, 24, 25, 26, 28, 29, 30, 32, 33, 34, 36, 39, 40, 44, 48, 49, 60, 96, 160}) {
             timeline.setAllTrackHeights(height);
             QCOMPARE(trackHeights(timeline), QList<int>(2, height));
             const QImage image = timeline.grab().toImage();
@@ -5934,8 +6036,8 @@ private slots:
             }
             const QRect picture = timeline.clipBounds(QStringLiteral("v"));
             const QRect wave = timeline.clipBounds(QStringLiteral("a"));
-            QCOMPARE(bodyShows(image, picture, QColor("#e87342")), height >= 34);
-            QCOMPARE(bodyShows(image, wave, theme.clipAudio.wave), height >= 30);
+            QCOMPARE(bodyShows(image, picture, QColor("#e87342")), height >= 22);
+            QCOMPARE(bodyShows(image, wave, theme.clipAudio.wave), height >= 22);
             // Names: the clips', the tracks', the badges'; the clip count
             // only on two-line headers.
             TextRecorder recorder;
@@ -6280,6 +6382,258 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(artwork.waves.contains(QStringLiteral("tone")), 5000);
         QVERIFY(!artwork.waves.value(QStringLiteral("tone")).isNull());
         QVERIFY(!artwork.frames.contains(QStringLiteral("tone")));
+        // The sound as peaks: 0.2 s of FFmpeg's sine, at its 1/8 amplitude.
+        const AudioPeaks peaks = artwork.peaks.value(QStringLiteral("tone"));
+        QVERIFY(std::abs(peaks.duration() - 0.2) < 0.02);
+        QVERIFY(std::abs(peaks.range(0.05, 0.15).max - 0.125f) < 0.01f);
+    }
+
+    // A vertical clip's poster, filmstrip and peaks, from FFmpeg: the poster
+    // and every strip frame at the picture's own 9:16 shape, no bars baked
+    // in; the poster covers the bin's tile at 2x, the strip is its height.
+    void artworkKeepsEveryPictureAtItsShape() {
+        if (QStandardPaths::findExecutable(QStringLiteral("ffmpeg")).isEmpty()) QSKIP("FFmpeg unavailable");
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("vertical.mov"));
+        QCOMPARE(QProcess::execute(QStringLiteral("ffmpeg"), {"-v", "error", "-f", "lavfi", "-i", "testsrc2=size=540x960:rate=25:duration=2",
+                                                              "-f", "lavfi", "-i", "sine=frequency=220:duration=2", "-c:v", "mpeg4",
+                                                              "-q:v", "4", "-c:a", "pcm_s16le", "-shortest", path}), 0);
+        MediaArtwork artwork;
+        artwork.request(QJsonArray{QJsonObject{{"id", "v"}, {"path", path}, {"width", 540}, {"height", 960}, {"duration", 2.0},
+                                               {"hasAudio", true}}}, directory.path());
+        // Strips come last, after every poster and sound.
+        QTRY_VERIFY_WITH_TIMEOUT(artwork.strips.contains(QStringLiteral("v")), 20000);
+        QVERIFY(artwork.frames.contains(QStringLiteral("v")) && artwork.peaks.contains(QStringLiteral("v")));
+        const QImage poster = artwork.frames.value(QStringLiteral("v"));
+        QVERIFY2(std::abs(double(poster.width()) / poster.height() - 9.0 / 16.0) < 0.02,
+                 qPrintable(QStringLiteral("%1x%2").arg(poster.width()).arg(poster.height())));
+        QVERIFY(poster.width() >= MediaArtwork::kPosterSize.width() && poster.height() >= MediaArtwork::kPosterSize.height());
+        const Filmstrip strip = artwork.strips.value(QStringLiteral("v"));
+        QVERIFY2(strip.frames.size() >= 12 && strip.frames.size() <= MediaArtwork::stripFrameCount(2.0),
+                 qPrintable(QString::number(strip.frames.size())));
+        QCOMPARE(strip.frames.first().height(), MediaArtwork::kStripHeight);
+        QVERIFY(std::abs(strip.aspect() - 9.0 / 16.0) < 0.03);
+        QVERIFY(std::abs(strip.interval - 2.0 / MediaArtwork::stripFrameCount(2.0)) < 1e-9);
+        // testsrc2 moves: the strip's frames are not one picture repeated.
+        QVERIFY(strip.frames.first() != strip.frames.last());
+        QVERIFY(artwork.peaks.value(QStringLiteral("v")).range(0.5, 1.5).max > 0.1f);
+    }
+
+    // A long source's strip is sought a frame at a time; an id that comes
+    // back to a file it named before (an undone relink) has that file's
+    // artwork again, not the other's; media taken out lets go of its own.
+    void artworkFollowsRelinksAndRemovals() {
+        if (QStandardPaths::findExecutable(QStringLiteral("ffmpeg")).isEmpty()) QSKIP("FFmpeg unavailable");
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString longPath = directory.filePath(QStringLiteral("long.mov"));
+        const QString shortPath = directory.filePath(QStringLiteral("short.mov"));
+        QCOMPARE(QProcess::execute(QStringLiteral("ffmpeg"), {"-v", "error", "-f", "lavfi", "-i", "testsrc2=size=160x284:rate=10:duration=17",
+                                                              "-c:v", "mpeg4", "-q:v", "6", longPath}), 0);
+        QCOMPARE(QProcess::execute(QStringLiteral("ffmpeg"), {"-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25:duration=2",
+                                                              "-c:v", "mpeg4", "-q:v", "6", shortPath}), 0);
+        const auto source = [](const QString &path, double duration) {
+            return QJsonArray{QJsonObject{{"id", "v"}, {"path", path}, {"width", 160}, {"height", 284}, {"duration", duration}}};
+        };
+        MediaArtwork artwork;
+        artwork.request(source(longPath, 17.0), directory.path());
+        QTRY_VERIFY_WITH_TIMEOUT(artwork.strips.contains(QStringLiteral("v")), 60000);
+        Filmstrip strip = artwork.strips.value(QStringLiteral("v"));
+        QCOMPARE(strip.frames.size(), MediaArtwork::kStripFrames);
+        QVERIFY(std::abs(strip.interval - 17.0 / MediaArtwork::kStripFrames) < 1e-9);
+        QVERIFY(std::abs(strip.aspect() - 160.0 / 284.0) < 0.03);
+        QVERIFY(strip.frames.first() != strip.frames.last());
+        // Relinked to a short, wide file: its own strip.
+        artwork.request(source(shortPath, 2.0), directory.path());
+        QVERIFY(!artwork.strips.contains(QStringLiteral("v")));
+        QTRY_VERIFY_WITH_TIMEOUT(artwork.strips.contains(QStringLiteral("v")), 20000);
+        QVERIFY(artwork.strips.value(QStringLiteral("v")).aspect() > 1.5);
+        // Back to the long file: asked for again, so its strip is its own.
+        artwork.request(source(longPath, 17.0), directory.path());
+        QVERIFY(!artwork.strips.contains(QStringLiteral("v")));
+        QTRY_VERIFY_WITH_TIMEOUT(artwork.strips.contains(QStringLiteral("v")), 60000);
+        QVERIFY(artwork.strips.value(QStringLiteral("v")).aspect() < 1.0);
+        // Taken out of the project: nothing kept for it.
+        artwork.request(QJsonArray{}, directory.path());
+        QVERIFY(!artwork.strips.contains(QStringLiteral("v")) && !artwork.frames.contains(QStringLiteral("v")));
+    }
+
+    // Sound reduces, as it streams in, to 5 ms buckets of its extremes and
+    // RMS; each coarser level merges four; a span reads the coarsest level
+    // that still fits it, and a span inside one bucket is interpolated.
+    void audioPeaksReduceAndMergeSound() {
+        // One second of a 440 Hz sine at half scale, in uneven chunks.
+        QVector<float> sine(16000);
+        for (int index = 0; index < sine.size(); ++index) sine[index] = 0.5f * float(std::sin(2.0 * 3.14159265358979 * 440.0 * index / 16000.0));
+        PeakReducer reducer(16000);
+        for (int at = 0; at < sine.size(); at += 333) reducer.add(sine.constData() + at, std::min<qsizetype>(333, sine.size() - at));
+        const AudioPeaks peaks = reducer.finish();
+        QCOMPARE(peaks.levels.first().size(), qsizetype(AudioPeaks::kBucketsPerSecond));
+        QCOMPARE(peaks.duration(), 1.0);
+        for (const AudioPeaks::Bucket &bucket : peaks.levels.first()) {
+            QVERIFY(std::abs(bucket.max - 0.5f) < 0.005f && std::abs(bucket.min + 0.5f) < 0.005f);
+            QVERIFY(std::abs(bucket.rms - 0.3536f) < 0.03f);
+        }
+        // 200, 50, 13, 4, 1.
+        QList<qsizetype> sizes;
+        for (const auto &level : peaks.levels) sizes << level.size();
+        QCOMPARE(sizes, (QList<qsizetype>{200, 50, 13, 4, 1}));
+        const AudioPeaks::Bucket whole = peaks.range(0.0, 1.0);
+        QVERIFY(std::abs(whole.max - 0.5f) < 0.005f && std::abs(whole.rms - 0.3536f) < 0.01f);
+        // Past the end is silence.
+        QCOMPARE(peaks.range(2.0, 3.0).max, 0.0f);
+
+        // Merging: the extremes of the four, and the RMS of their RMS.
+        const AudioPeaks::Bucket four[] = {{-0.2f, 0.4f, 0.3f}, {-0.6f, 0.1f, 0.1f}, {-0.1f, 0.2f, 0.1f}, {-0.3f, 0.7f, 0.5f}};
+        const AudioPeaks::Bucket merged = AudioPeaks::merge(four, 4);
+        QCOMPARE(merged.min, -0.6f);
+        QCOMPARE(merged.max, 0.7f);
+        QVERIFY(std::abs(merged.rms - float(std::sqrt((0.09 + 0.01 + 0.01 + 0.25) / 4.0))) < 1e-6f);
+
+        // A ramp: bucket i peaks at i/100.
+        AudioPeaks ramp;
+        ramp.levels.append(QVector<AudioPeaks::Bucket>(200));
+        for (int index = 0; index < 200; ++index) ramp.levels[0][index] = {0.0f, index / 100.0f, index / 200.0f};
+        ramp.buildLevels();
+        QCOMPARE(ramp.levels.at(1).at(0).max, 0.03f);
+        // Exactly one level-1 bucket's span reads that bucket.
+        QCOMPARE(ramp.range(0.0, AudioPeaks::bucketSeconds(1)).max, 0.03f);
+        // A minute-long span reads a few top-level buckets, not 12,000.
+        QCOMPARE(ramp.range(0.0, 60.0).max, 1.99f);
+        // Inside one bucket: between the buckets either side of its middle
+        // (bucket centres sit half a bucket in).
+        const AudioPeaks::Bucket between = ramp.range(0.10255, 0.10256);
+        QVERIFY2(std::abs(between.max - 0.2001f) < 0.0005f, qPrintable(QString::number(between.max)));
+    }
+
+    // A filmstrip tile shows the frame nearest the source time under its
+    // left edge, the clip's in point first; speed and reversal map the
+    // clip's time to its source's.
+    void filmstripPicksTheFrameUnderEachTile() {
+        Filmstrip strip;
+        QCOMPARE(strip.frameAt(1.0), -1);
+        strip.interval = 0.5;
+        for (int index = 0; index < 10; ++index) strip.frames << QImage(54, 96, QImage::Format_RGB32);
+        QCOMPARE(strip.frameAt(0.0), 0);
+        QCOMPARE(strip.frameAt(0.24), 0);
+        QCOMPARE(strip.frameAt(0.26), 1);
+        QCOMPARE(strip.frameAt(2.0), 4);
+        QCOMPARE(strip.frameAt(-3.0), 0);
+        QCOMPARE(strip.frameAt(100.0), 9);
+        QCOMPARE(strip.aspect(), 54.0 / 96.0);
+        const auto at = [](const QJsonObject &clip, double offset) { return TimelineWidget::clipSourceTime(clip, offset); };
+        QCOMPARE(at(QJsonObject{{"in", 2.0}, {"out", 6.0}, {"duration", 2.0}, {"speed", 2.0}}, 1.0), 4.0);
+        QCOMPARE(at(QJsonObject{{"in", 1.0}, {"duration", 2.0}}, 0.5), 1.5);
+        QCOMPARE(at(QJsonObject{{"in", 1.0}, {"out", 3.0}, {"duration", 2.0}, {"speed", -1.0}}, 0.0), 3.0);
+        QCOMPARE(at(QJsonObject{{"in", 1.0}, {"out", 3.0}, {"duration", 2.0}, {"speed", -1.0}}, 2.0), 1.0);
+        // As the bridge sends a reversed clip: the speed's size and "reverse".
+        QCOMPARE(at(QJsonObject{{"in", 1.0}, {"out", 3.0}, {"duration", 2.0}, {"speed", 1.0}, {"reverse", true}}, 0.0), 3.0);
+        QCOMPARE(at(QJsonObject{{"in", 1.0}, {"out", 3.0}, {"duration", 2.0}, {"speed", 1.0}, {"reverse", true}}, 0.5), 2.5);
+        QCOMPARE(at(QJsonObject{{"in", 0.0}, {"out", 4.0}, {"duration", 2.0}, {"speed", 2.0}, {"reverse", true}}, 1.0), 2.0);
+    }
+
+    // At the default heights a picture clip is all filmstrip and a sound
+    // clip all waveform, each name on a chip over the corner; a separate
+    // name bar comes back from the Large preset up. The filmstrip's tiles
+    // are the picture's own shape (a vertical clip's tall and narrow, no
+    // bars), each the frame under its left edge.
+    void timelineDrawsArtworkAtDefaultHeights() {
+        const QRectF video(0, 0, 200, kVideoTrackHeight - 5);
+        const QRectF sound(0, 0, 200, kTrackHeight - 5);
+        for (const QRectF &clip : {video, sound}) {
+            const auto layout = TimelineWidget::clipLayout(clip, true);
+            QVERIFY(layout.chip);
+            QCOMPARE(layout.body, clip);
+            QCOMPARE(layout.band.height(), 15.0);
+            // Without artwork, a name bar over a plain body, as before.
+            QVERIFY(!TimelineWidget::clipLayout(clip, false).chip);
+        }
+        const QRectF large(0, 0, 200, kTrackHeightPresets[3].height - 5);
+        QVERIFY(!TimelineWidget::clipLayout(large, true).chip);
+        QCOMPARE(TimelineWidget::clipLayout(large, true).body.height(), large.height() - 15.0);
+        QCOMPARE(TimelineWidget::clipLayout(QRectF(0, 0, 200, kMinTrackHeight - 3), true).body.height(), 0.0);
+
+        // Ten frames a second apart, each its own colour.
+        const QList<QColor> colors{"#d64545", "#e3a33b", "#d8d23a", "#5fbf4a", "#3fb6a8",
+                                   "#3d7fd1", "#6a4fd1", "#b84fd1", "#d14f8e", "#8a8a8a"};
+        MediaArtwork artwork;
+        Filmstrip strip;
+        strip.interval = 1.0;
+        for (const QColor &color : colors) {
+            QImage frame(54, 96, QImage::Format_RGB32);
+            frame.fill(color);
+            strip.frames << frame;
+        }
+        artwork.strips.insert(QStringLiteral("tall"), strip);
+        artwork.peaks.insert(QStringLiteral("snd"), fullScalePeaks(10.0));
+        TimelineWidget timeline;
+        timeline.setArtwork(&artwork);
+        timeline.setProject(QJsonObject{{"fps", 24}, {"tracks", QJsonArray{
+            QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{QJsonObject{
+                {"id", "v"}, {"kind", "media"}, {"sourceId", "tall"}, {"name", "Vertical"}, {"timelineStart", 0.0},
+                {"duration", 5.0}, {"in", 3.0}, {"out", 8.0}}}}},
+            QJsonObject{{"id", "A1"}, {"type", "audio"}, {"clips", QJsonArray{QJsonObject{
+                {"id", "a"}, {"kind", "media"}, {"sourceId", "snd"}, {"name", "Dialogue"}, {"timelineStart", 0.0},
+                {"duration", 5.0}, {"in", 0.0}, {"out", 5.0}}}}}}}}, 6, 24);
+        timeline.resize(900, 200);
+        timeline.show();
+        QCOMPARE(trackHeights(timeline), (QList<int>{kVideoTrackHeight, kTrackHeight}));
+        const QImage image = timeline.grab().toImage();
+        const QRect picture = timeline.clipBounds(QStringLiteral("v"));
+        const int tileWidth = int(std::lround(picture.height() * 54.0 / 96.0));
+        const int y = picture.bottom() - 3;
+        // Past the name chip, every tile is the frame under its left edge,
+        // all the way across: no bars, so no pixel is black.
+        for (int x = picture.left() + 80; x < picture.right() - 4; ++x) {
+            const QColor pixel = image.pixelColor(x, y);
+            const int tileLeft = picture.left() + (x - picture.left()) / tileWidth * tileWidth;
+            if (x == tileLeft + tileWidth - 1) continue; // The seam.
+            const double seconds = 3.0 + (tileLeft - picture.left()) / timeline.scale();
+            QVERIFY2(pixel == colors.at(strip.frameAt(seconds)),
+                     qPrintable(QStringLiteral("x %1: %2").arg(x).arg(pixel.name())));
+        }
+        // The sound clip: its RMS reaches the foot of the clip.
+        const QRect wave = timeline.clipBounds(QStringLiteral("a"));
+        QCOMPARE(image.pixelColor(wave.center().x(), wave.bottom() - 3), editorTheme().clipAudio.wave);
+        QCOMPARE(image.pixelColor(wave.center().x(), wave.top() + 3), editorTheme().clipAudio.wave);
+        // Clip gain scales it: at -12 dB the top of the clip is clear.
+        QJsonObject project = timeline.m_project;
+        QJsonArray tracks = project.value("tracks").toArray();
+        QJsonObject track = tracks.at(1).toObject();
+        QJsonObject quiet = track.value("clips").toArray().at(0).toObject();
+        quiet.insert("props", QJsonObject{{"gain", -12.0}});
+        track.insert("clips", QJsonArray{quiet});
+        tracks.replace(1, track);
+        project.insert("tracks", tracks);
+        timeline.setProject(project, 6, 24);
+        const QImage quieter = timeline.grab().toImage();
+        QVERIFY(quieter.pixelColor(wave.center().x(), wave.top() + 3) != editorTheme().clipAudio.wave);
+        QCOMPARE(quieter.pixelColor(wave.center().x(), wave.center().y()), editorTheme().clipAudio.wave);
+    }
+
+    // Bin tiles fit a poster at its own shape, the bars in the tile's colour
+    // (not black from the picture), and draw a sound's waveform from its peaks.
+    void binTilesFitPostersAtTheirShape() {
+        MediaArtwork artwork;
+        QImage vertical(79, 140, QImage::Format_RGB32);
+        vertical.fill(QColor("#e87342"));
+        artwork.frames.insert(QStringLiteral("tall"), vertical);
+        artwork.peaks.insert(QStringLiteral("snd"), fullScalePeaks(4.0));
+        ProjectPanel bin(&artwork);
+        bin.setSources(QJsonArray{
+            QJsonObject{{"id", "tall"}, {"path", "media/tall.mov"}, {"width", 1080}, {"height", 1920}, {"duration", 4}},
+            QJsonObject{{"id", "snd"}, {"path", "media/voice.wav"}, {"duration", 4}, {"hasAudio", true}}});
+        const QImage tall = bin.m_list->item(0)->icon().pixmap(ProjectPanel::kThumbnail).toImage();
+        const QPoint centre(ProjectPanel::kThumbnail.width() / 2, ProjectPanel::kThumbnail.height() / 2);
+        QCOMPARE(tall.pixelColor(centre), QColor("#e87342"));
+        // 9:16 in a 70px tall tile is 39px wide: bars either side.
+        QCOMPARE(tall.pixelColor(centre.x() - 22, centre.y()), editorTheme().thumbnail);
+        QCOMPARE(tall.pixelColor(centre.x() + 22, centre.y()), editorTheme().thumbnail);
+        QCOMPARE(tall.pixelColor(centre.x() - 18, centre.y()), QColor("#e87342"));
+        const QImage sound = bin.m_list->item(1)->icon().pixmap(ProjectPanel::kThumbnail).toImage();
+        QCOMPARE(sound.pixelColor(centre.x(), centre.y() + 10), editorTheme().audioTileGlyph);
+        QCOMPARE(sound.pixelColor(2, centre.y()), editorTheme().audioTile);
     }
 
     void selectedBoxTracksMotionAndStopsAtSceneCut() {
@@ -7607,9 +7961,10 @@ private slots:
                            {"timeline", timeline(false)}, {"pendingProposal", proposal}, {"proposalTimeline", timeline(true)}};
     }
 
-    // Stand-in thumbnails and waveforms, so filmstrips and waves draw
+    // Stand-in posters, filmstrips and peaks, so filmstrips and waves draw
     // without FFmpeg: frames of the tests' procedural footage (see
-    // test_footage.h), one shot per source, made once per run.
+    // test_footage.h), one shot per source, made once per run. A strip
+    // pans across its shot, so its frames differ along the clip.
     static void fakeArtwork(MediaArtwork *artwork) {
         static const QImage wide = testing::footageFrame(testing::Shot::HarborWide, QSize(160, 90));
         static const QImage close = testing::footageFrame(testing::Shot::FisherClose, QSize(160, 90));
@@ -7617,19 +7972,43 @@ private slots:
         artwork->frames.insert(QStringLiteral("wide"), wide);
         artwork->frames.insert(QStringLiteral("close"), close);
         artwork->frames.insert(QStringLiteral("drone"), drone);
+        const auto pan = [](testing::Shot shot) {
+            const QImage across = testing::footageFrame(shot, QSize(171 + 15 * 20, MediaArtwork::kStripHeight));
+            Filmstrip strip;
+            strip.interval = 20.0 / 16.0;
+            for (int index = 0; index < 16; ++index) strip.frames << across.copy(index * 20, 0, 171, MediaArtwork::kStripHeight);
+            return strip;
+        };
+        static const Filmstrip wideStrip = pan(testing::Shot::HarborWide);
+        static const Filmstrip closeStrip = pan(testing::Shot::FisherClose);
+        static const Filmstrip droneStrip = pan(testing::Shot::DronePass);
+        artwork->strips.insert(QStringLiteral("wide"), wideStrip);
+        artwork->strips.insert(QStringLiteral("close"), closeStrip);
+        artwork->strips.insert(QStringLiteral("drone"), droneStrip);
         for (const char *id : {"wide", "close", "score"}) {
-            QImage wave(2048, 48, QImage::Format_ARGB32);
-            wave.fill(Qt::transparent);
-            QPainter painter(&wave);
+            AudioPeaks peaks;
+            peaks.levels.append(QVector<AudioPeaks::Bucket>(40 * AudioPeaks::kBucketsPerSecond));
             const double seed = qHash(QByteArray(id)) % 97;
-            for (int x = 0; x < wave.width(); x += 2) {
-                const double level = 0.25 + 0.7 * std::abs(std::sin(x * 0.013 + seed) * std::sin(x * 0.0021 + seed * 0.5));
-                const int half = static_cast<int>(level * 23);
-                painter.fillRect(QRect(x, 24 - half, 2, half * 2), Qt::white);
+            for (int index = 0; index < peaks.levels[0].size(); ++index) {
+                const double x = index * 0.256;
+                const double level = 0.06 + 0.5 * std::pow(std::abs(std::sin(x * 0.013 + seed) * std::sin(x * 0.0021 + seed * 0.5)), 2.0);
+                const double grain = 0.7 + 0.3 * std::abs(std::sin(index * 1.7 + seed));
+                peaks.levels[0][index] = {float(-level * grain), float(level * grain * 0.95), float(level * grain * 0.45)};
             }
-            artwork->waves.insert(QString::fromLatin1(id), wave);
+            peaks.buildLevels();
+            artwork->waves.insert(QString::fromLatin1(id), MediaArtwork::waveImage(peaks));
+            artwork->peaks.insert(QString::fromLatin1(id), peaks);
         }
         emit artwork->changed();
+    }
+
+    // Sound at full scale throughout, `seconds` long: its waveform fills
+    // the body, RMS and all.
+    static AudioPeaks fullScalePeaks(double seconds) {
+        AudioPeaks peaks;
+        peaks.levels.append(QVector<AudioPeaks::Bucket>(qsizetype(seconds * AudioPeaks::kBucketsPerSecond), {-1.0f, 1.0f, 1.0f}));
+        peaks.buildLevels();
+        return peaks;
     }
 
     // Kerf has its own accent, a purple in each appearance, and does not
@@ -8371,27 +8750,30 @@ private slots:
             }
             // The launcher's chrome: #f5f5f5 in light, #2c2c2e in dark.
             QVERIFY(dark ? qGray(dominantColor(toolbar->grab().toImage())) < 60 : qGray(dominantColor(toolbar->grab().toImage())) > 220);
-            // Tabs show no close button until the pointer is over them; then
-            // it reads on the tab.
+            // Tabs never show a close button, under the pointer or not, so
+            // hovering one changes no tab's width and no name is shortened.
             const auto closeButtons = window.findChildren<QWidget *>(QStringLiteral("tabCloseButton"));
             QVERIFY(closeButtons.size() >= 3);
             for (const QWidget *close : closeButtons) QVERIFY(!close->isVisible());
-            QWidget *programClose = nullptr;
-            for (QWidget *close : closeButtons)
-                if (close->parentWidget() == window.m_workspace->panel(QStringLiteral("program"))->tabWidget()) programClose = close;
-            QVERIFY(programClose);
-            QEvent enter(QEvent::Enter);
-            QCoreApplication::sendEvent(programClose->parentWidget(), &enter);
-            QVERIFY(programClose->isVisible());
             {
-                const QImage tab = programClose->parentWidget()->grab().toImage();
-                const qreal ratio = tab.devicePixelRatio();
-                const QRect area(programClose->geometry().topLeft() * ratio, programClose->size() * ratio);
-                QVERIFY(highestContrast(tab, area, theme.panelTitleActive) >= 4.5);
+                ads::CDockWidgetTab *inspectorTab = window.m_workspace->panel(QStringLiteral("inspector"))->tabWidget();
+                QWidget *strip = inspectorTab->parentWidget();
+                QList<QRect> before;
+                for (auto *tab : strip->findChildren<ads::CDockWidgetTab *>()) before.append(tab->geometry());
+                QEvent enter(QEvent::Enter);
+                QCoreApplication::sendEvent(inspectorTab, &enter);
+                QCoreApplication::processEvents();
+                QList<QRect> after;
+                for (auto *tab : strip->findChildren<ads::CDockWidgetTab *>()) {
+                    after.append(tab->geometry());
+                    QVERIFY(!tab->findChild<QWidget *>(QStringLiteral("tabCloseButton"))->isVisible());
+                    const QString name = tab->dockWidget()->windowTitle();
+                    QVERIFY2(tab->sizeHint().width() <= tab->width(), qPrintable(name + QStringLiteral(" is shortened")));
+                }
+                QCOMPARE(after, before);
+                QEvent leave(QEvent::Leave);
+                QCoreApplication::sendEvent(inspectorTab, &leave);
             }
-            QEvent leave(QEvent::Leave);
-            QCoreApplication::sendEvent(programClose->parentWidget(), &leave);
-            QVERIFY(!programClose->isVisible());
             // The chosen tool is a quiet chip with its symbol in the accent.
             const QImage tool = window.m_toolPalette->widgetForAction(window.m_commands->action(QStringLiteral("tool.selection")))->grab().toImage();
             const QColor toolFill = tool.pixelColor(qRound(3 * tool.devicePixelRatio()), tool.height() / 2);
@@ -9029,7 +9411,8 @@ private slots:
         QVERIFY(window.m_timelineZoom->x() > header->width() / 2);
         auto *heights = header->findChild<QToolButton *>(QStringLiteral("trackHeightMini"));
         QVERIFY(heights && window.m_timelineZoom->geometry().right() < heights->x());
-        // Eight tracks at their default heights fit at 1440x900.
+        // At their default heights, filmstrips and waveforms in view, six
+        // tracks fit at 1440x900; at Small, one line each, eight.
         const auto tracksShown = [&window] {
             QCoreApplication::processEvents();
             const int bottom = window.m_timelineScroll->viewport()->height() - window.m_timeline->pos().y();
@@ -9038,7 +9421,10 @@ private slots:
                 if (window.m_timeline->trackHeaderRect(row).bottom() < bottom) ++fit;
             return fit;
         };
+        QVERIFY2(tracksShown() >= 6, qPrintable(QString::number(tracksShown())));
+        window.m_timeline->setAllTrackHeights(kTrackHeightPresets[1].height);
         QVERIFY2(tracksShown() >= 8, qPrintable(QString::number(tracksShown())));
+        window.m_timeline->resetTrackHeights();
         // The zoom sets the timeline's scale, and follows it.
         const double before = window.m_timeline->scale();
         window.m_timelineZoom->zoomInButton()->click();
@@ -9554,8 +9940,8 @@ private slots:
                 const QList<ProposalChangeRow *> rows = window.m_chat->proposalChangeRows();
                 QCOMPARE(rows.size(), 3);
                 QTRY_VERIFY(changes->height() >= 3 * ProposalChangeRow::kHeight);
-                const QList<QPair<QString, QString>> expected{{QStringLiteral("Trim fisher-close.mov"), QStringLiteral("end \u22121.5 s")},
-                                                              {QStringLiteral("Remove drone-pass.mov"), QStringLiteral("0:11\u2009\u2013\u20090:18")},
+                const QList<QPair<QString, QString>> expected{{QStringLiteral("Trim fisher-close"), QStringLiteral("end \u22121.5 s")},
+                                                              {QStringLiteral("Remove drone-pass"), QStringLiteral("0:11\u2009\u2013\u20090:18")},
                                                               {QStringLiteral("Add title “Lower third”"), QStringLiteral("at 0:12")}};
                 const QList<ProposalChange::Glyph> glyphs{ProposalChange::Glyph::Trim, ProposalChange::Glyph::Remove, ProposalChange::Glyph::Title};
                 for (int index = 0; index < rows.size(); ++index) {

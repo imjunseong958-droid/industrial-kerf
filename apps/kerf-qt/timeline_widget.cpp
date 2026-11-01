@@ -36,13 +36,21 @@ namespace {
 // short rows). Tall enough that a selected clip's name keeps a pixel of the
 // bar between its ascenders and the 3px ring.
 constexpr qreal kClipHeaderHeight = 15.0;
-// A clip has a body under its name bar from this height, with room for a
-// waveform...
+// A clip with nothing to show has a body under its name bar from this height.
 constexpr qreal kClipBodyFrom = kClipHeaderHeight + 10.0;
-// ...and a filmstrip from this tall a body, where its pictures still read.
-constexpr qreal kFilmstripFrom = 14.0;
+// A clip with a picture or sound to show is all filmstrip or waveform from
+// this height, its name on a chip over the corner, as the default tracks
+// draw them...
+constexpr qreal kClipArtworkFrom = 19.0;
+// ...until it is tall enough to give the name a bar of its own and still
+// keep 29px for the artwork under it (from the Large preset up).
+constexpr qreal kClipBandFrom = kClipHeaderHeight + 29.0;
 // The selected clip's ring, 1px dark and 2px light, inside its edge.
 constexpr qreal kSelectionRing = 3.0;
+// The bytes of scaled filmstrip tiles kept before the cache starts again:
+// a tall track's tiles at twice the pixels run to half a megabyte each, so
+// a count alone could hold gigabytes.
+constexpr qsizetype kFilmstripTileBudget = 64 * 1024 * 1024;
 qreal clipHeaderHeight(const QRectF &clip) { return clip.height() >= kClipBodyFrom ? kClipHeaderHeight : clip.height(); }
 // Between a lane's edges and its clips: 2px, and 1px on rows too short to spare it.
 int clipInset(int rowHeight) { return rowHeight >= 24 ? kClipInset : 1; }
@@ -160,10 +168,9 @@ TimelineWidget::TimelineWidget(QWidget *parent) : QWidget(parent) {
     connect(m_largeTracks, &QAction::triggered, this, [this] { setAllTrackHeights(kTrackHeightPresets[3].height); });
     connect(m_fitTracks, &QAction::triggered, this, &TimelineWidget::fitTracksToView);
     updateHeightActions();
-    // The lanes, tinted waveforms, filmstrip tiles and symbols are drawn in
+    // The lanes, waveforms, filmstrip tiles and symbols are drawn in
     // the old theme's colours.
     connect(EditorAppearance::instance(), &EditorAppearance::changed, this, [this] {
-        m_waveTints.clear();
         m_filmstripTiles.clear();
         m_names.clear();
         for (QAction *action : trackHeightActions())
@@ -250,7 +257,6 @@ void TimelineWidget::fitToWidth(int width) {
 void TimelineWidget::setArtwork(MediaArtwork *artwork) {
     m_artwork = artwork;
     connect(artwork, &MediaArtwork::changed, this, [this] {
-        m_waveTints.clear();
         m_filmstripTiles.clear();
         invalidateLanes();
         update();
@@ -956,22 +962,27 @@ void TimelineWidget::refreshLanes(const QRect &rect) {
     update(area);
 }
 
-void TimelineWidget::drawName(QPainter &p, const QRectF &rect, const QFont &font, const QString &text, bool centred) {
-    const int width = std::max(1, int(rect.width()));
+QStaticText TimelineWidget::laidName(const QFont &font, const QString &text, qreal width) {
+    const int whole = std::max(1, int(width));
     const QString key = QString::number(font.pixelSize()) + QLatin1Char('/') + QString::number(font.weight()) +
-                        QLatin1Char('/') + QString::number(width) + QLatin1Char('|') + text;
+                        QLatin1Char('/') + QString::number(whole) + QLatin1Char('|') + text;
     auto laid = m_names.constFind(key);
     if (laid == m_names.cend()) {
         if (m_names.size() > 8192) m_names.clear();
-        QStaticText name(QFontMetrics(font).elidedText(text, Qt::ElideRight, width));
+        QStaticText name(QFontMetrics(font).elidedText(text, Qt::ElideRight, whole));
         name.setTextFormat(Qt::PlainText);
         name.setPerformanceHint(QStaticText::AggressiveCaching);
         name.prepare(QTransform(), font);
         laid = m_names.insert(key, name);
     }
+    return laid.value();
+}
+
+void TimelineWidget::drawName(QPainter &p, const QRectF &rect, const QFont &font, const QString &text, bool centred) {
+    const QStaticText laid = laidName(font, text, rect.width());
     p.setFont(font);
-    const qreal left = centred ? rect.left() + (rect.width() - laid->size().width()) / 2.0 : rect.left();
-    p.drawStaticText(QPointF(left, rect.top() + (rect.height() - QFontMetricsF(font).height()) / 2.0), laid.value());
+    const qreal left = centred ? rect.left() + (rect.width() - laid.size().width()) / 2.0 : rect.left();
+    p.drawStaticText(QPointF(left, rect.top() + (rect.height() - QFontMetricsF(font).height()) / 2.0), laid);
 }
 
 void TimelineWidget::paintLanes(QPainter &p, const QRect &visible) {
@@ -1075,20 +1086,29 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     drawName(p, badge, badgeFont(), trackRowLabel(row), true);
 
     const QJsonArray clips = track.value(QStringLiteral("clips")).toArray();
-    QImage preview;
+    const QRect slot = headerPreviewRect(row, left);
+    bool previewed = false;
     if (detailed && m_artwork && !clips.isEmpty()) {
         const QString sourceId = clips.first().toObject().value(QStringLiteral("sourceId")).toString();
-        if (layout.audio && m_artwork->waves.contains(sourceId)) {
-            preview = tintedWave(sourceId, style.wave);
-        } else if (!layout.audio) {
-            preview = m_artwork->frames.value(sourceId);
+        const QRectF inside = QRectF(slot).adjusted(1, 1, -1, -1);
+        const auto peaks = m_artwork->peaks.constFind(sourceId);
+        const auto poster = m_artwork->frames.constFind(sourceId);
+        const bool sound = layout.audio && peaks != m_artwork->peaks.cend();
+        const bool picture = !layout.audio && poster != m_artwork->frames.cend() && !poster->isNull();
+        previewed = sound || picture;
+        if (previewed) p.fillRect(slot, theme.headerPreview);
+        if (sound) {
+            drawWaveform(p, inside.adjusted(0, 2, 0, -2), peaks.value(), 0.0, peaks->duration(),
+                         mixColor(theme.headerPreview, style.wave, 0.55), style.wave);
+        } else if (picture) {
+            // At its own shape, on the slot's colour: a vertical picture is
+            // not stretched to the slot.
+            const QSizeF fitted = QSizeF(poster->size()).scaled(inside.size(), Qt::KeepAspectRatio);
+            const QSize size(std::max(1, int(std::round(fitted.width()))), std::max(1, int(std::round(fitted.height()))));
+            const QPointF at(std::round(inside.center().x() - size.width() / 2.0), std::round(inside.center().y() - size.height() / 2.0));
+            p.drawImage(at, filmstripTile(sourceId, -1, size, p.device()->devicePixelRatioF()));
         }
-    }
-    const QRect slot = headerPreviewRect(row, left);
-    if (!preview.isNull()) {
-        p.fillRect(slot, theme.headerPreview);
-        p.drawImage(slot.adjusted(1, 1, -1, -1), preview);
-        frameInside(p, slot, 1, theme.headerPreviewBorder);
+        if (previewed) frameInside(p, slot, 1, theme.headerPreviewBorder);
     }
 
     QFont nameFont = font();
@@ -1131,7 +1151,7 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     else drawToggle(0, enabled, QStringLiteral("enabled"));
     drawToggle(1, track.value(QStringLiteral("locked")).toBool(), QStringLiteral("locked"));
     const int nameLeft = headerToggleRect(row, 1).translated(left - stickyOrigin().x(), 0).right() + 7;
-    const int nameRight = preview.isNull() ? header.right() - 8 : slot.left() - 8;
+    const int nameRight = previewed ? slot.left() - 8 : header.right() - 8;
     QString name = track.value(QStringLiteral("name")).toString().trimmed();
     if (name.isEmpty()) name = (layout.audio ? QStringLiteral("Audio %1") : QStringLiteral("Video %1")).arg(layout.number);
     p.setPen(enabled ? theme.trackHeaderText : theme.trackHeaderTextDisabled);
@@ -1361,19 +1381,35 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
     // A hovered or selected clip's body leans towards its name bar's colour;
     // the name bar itself stays put, so its label keeps its contrast.
     const QColor fill = mixColor(style.fill, style.header, selected ? 0.18 : hovered ? 0.1 : 0.0);
-    // Short rows show only the name bar, as a mini track does.
-    const qreal bandHeight = clipHeaderHeight(rect);
-    const QRectF band(rect.left(), rect.top(), rect.width(), bandHeight);
-    const QRectF body(rect.left(), band.bottom(), rect.width(), rect.height() - bandHeight);
+    // What the clip has to show: its sound's peaks, or frames along its
+    // picture (its poster alone until they arrive).
+    const QString sourceId = clip.value(QStringLiteral("sourceId")).toString();
+    const AudioPeaks *peaks = nullptr;
+    const Filmstrip *strip = nullptr;
+    const QImage *poster = nullptr;
+    if (m_artwork && !sourceId.isEmpty()) {
+        if (audio) {
+            const auto found = m_artwork->peaks.constFind(sourceId);
+            if (found != m_artwork->peaks.cend() && !found->isEmpty()) peaks = &found.value();
+        } else {
+            const auto found = m_artwork->strips.constFind(sourceId);
+            if (found != m_artwork->strips.cend() && !found->isEmpty()) strip = &found.value();
+            const auto frame = m_artwork->frames.constFind(sourceId);
+            if (frame != m_artwork->frames.cend() && !frame->isNull()) poster = &frame.value();
+        }
+    }
+    const ClipLayout layout = clipLayout(rect, peaks || strip || poster);
+    const QRectF band = layout.band;
+    const QRectF body = layout.body;
 
     p.save();
     p.setClipRect(rect, Qt::IntersectClip);
-    QLinearGradient bandFill(0, band.top(), 0, band.bottom());
-    bandFill.setColorAt(0, style.header.lighter(108));
-    bandFill.setColorAt(1, style.header);
-    p.fillRect(band, bandFill);
-
-    const QString sourceId = clip.value(QStringLiteral("sourceId")).toString();
+    if (!layout.chip) {
+        QLinearGradient bandFill(0, band.top(), 0, band.bottom());
+        bandFill.setColorAt(0, style.header.lighter(108));
+        bandFill.setColorAt(1, style.header);
+        p.fillRect(band, bandFill);
+    }
     if (body.height() > 0.0) {
         QLinearGradient bodyFill(0, body.top(), 0, body.bottom());
         // lighter() would bleach a light fill to white.
@@ -1381,29 +1417,31 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
         bodyFill.setColorAt(1, fill);
         p.fillRect(body, bodyFill);
     }
+    // The source seconds under the clip's left edge and its right: a leading
+    // trim being dragged moves its in point with its start.
+    const double headShift = dragged && m_dragLeading ? start - m_dragStart : 0.0;
+    const auto sourceAt = [&clip, headShift](double offset) { return clipSourceTime(clip, offset + headShift); };
     if (body.height() > 0.0 && audio) {
         p.fillRect(QRectF(body.left(), std::floor(body.center().y()), body.width(), 1), theme.waveCenter);
-        if (m_artwork && m_artwork->waves.contains(sourceId)) {
-            const QImage wave = tintedWave(sourceId, style.wave);
-            double sourceDuration = 1;
-            for (const auto &source : m_project.value(QStringLiteral("sources")).toArray())
-                if (source.toObject().value(QStringLiteral("id")).toString() == sourceId)
-                    sourceDuration = std::max(0.01, source.toObject().value(QStringLiteral("duration")).toDouble(1));
-            const double in = clip.value(QStringLiteral("in")).toDouble();
-            const double out = clip.value(QStringLiteral("out")).toDouble(sourceDuration);
-            p.drawImage(body.adjusted(0, 1, 0, -1), wave,
-                        QRectF(in / sourceDuration * wave.width(), 0,
-                               (out - in) / sourceDuration * wave.width(), wave.height()));
+        if (peaks) {
+            // Clip gain is in decibels; the waveform shows what plays.
+            const QJsonValue gain = clip.value(QStringLiteral("props")).toObject().value(QStringLiteral("gain"));
+            drawWaveform(p, body.adjusted(0, 1, 0, -1), *peaks, sourceAt(0.0), sourceAt(duration),
+                         mixColor(fill, style.wave, 0.55), style.wave, std::pow(10.0, gain.toDouble(0.0) / 20.0), visible);
         }
-    } else if (body.height() >= kFilmstripFrom && m_artwork && m_artwork->frames.contains(sourceId)) {
-        // A filmstrip of tiles scaled once per size, not on every repaint.
-        const double tileHeight = std::max(1.0, body.height());
-        const double tileWidth = std::max(1.0, std::round(tileHeight * 16.0 / 9.0));
-        const QImage tile = filmstripTile(sourceId, QSize(int(tileWidth), int(tileHeight)), p.device()->devicePixelRatioF());
+    } else if (body.height() > 0.0 && (strip || poster)) {
+        // Tiles at the picture's own shape, each the frame under its left
+        // edge (the first one the clip's in point), scaled once per size.
+        const double aspect = strip ? strip->aspect() : double(poster->width()) / std::max(1, poster->height());
+        const double tileHeight = body.height();
+        const double tileWidth = std::max(6.0, std::round(tileHeight * aspect));
+        const qreal ratio = p.device()->devicePixelRatioF();
+        const double pps = pixelsPerSecond();
         const double firstTile = body.left() + std::max(0.0, std::floor((visible.left() - body.left()) / tileWidth)) * tileWidth;
         const double stop = std::min(body.right(), double(visible.right()) + 1.0);
         for (double x = firstTile; x < stop; x += tileWidth) {
-            p.drawImage(QPointF(x, body.top()), tile);
+            const int frame = strip ? strip->frameAt(sourceAt((x - rect.left()) / pps)) : -1;
+            p.drawImage(QPointF(x, body.top()), filmstripTile(sourceId, frame, QSize(int(tileWidth), int(tileHeight)), ratio));
             p.fillRect(QRectF(x + tileWidth - 1, body.top(), 1, tileHeight), theme.filmstripSeam);
         }
     }
@@ -1435,6 +1473,14 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
         const double speed = clip.value(QStringLiteral("speed")).toDouble(1.0);
         if (std::abs(speed - 1.0) > 0.0005) label += QStringLiteral("  [%1%]").arg(std::lround(speed * 100.0));
         const qreal textLeft = rect.left() + 6;
+        if (layout.chip) {
+            // Over the artwork, on a chip of the clip's own colour only as
+            // wide as the name, so the rest of the picture or sound shows.
+            const qreal named = laidName(nameFont, label, std::max(1.0, textRight - textLeft)).size().width();
+            QColor chip = style.header;
+            chip.setAlphaF(0.88f);
+            p.fillRect(QRectF(rect.left(), labelBand.top(), std::ceil(named) + 12.0, labelBand.height()), chip);
+        }
         p.setPen(style.label);
         // Centred in the band even where a short row's band (inside a
         // selected clip's ring) is shorter than the text: the clip clips it,
@@ -1510,10 +1556,7 @@ void TimelineWidget::paintRuler(QPainter &p, const QRect &dirty, int top) {
     p.fillRect(band.adjusted(0, 0, 0, -1), fill);
     p.fillRect(QRect(band.left(), top + kRulerHeight - 1, band.width(), 1), theme.divider);
 
-    QFont font(QStringLiteral("Menlo"));
-    font.setPixelSize(11);
-    font.setStyleHint(QFont::Monospace);
-    p.setFont(font);
+    p.setFont(monoFont(11));
     const double pps = pixelsPerSecond();
     const RulerScale scale = rulerScale(pps, m_fps);
     const double major = std::max(scale.majorSeconds, 1e-6);
@@ -1652,9 +1695,7 @@ void TimelineWidget::paintDragReadout(QPainter &p) {
     const QString text = QStringLiteral("%1  %2%3")
         .arg(timelineTimecode(m_previewTime, m_fps), delta < 0 ? QStringLiteral("-") : QStringLiteral("+"),
              timelineTimecode(std::abs(delta), m_fps));
-    QFont font(QStringLiteral("Menlo"));
-    font.setStyleHint(QFont::Monospace);
-    font.setPixelSize(11);
+    const QFont font = monoFont(11);
     const QFontMetrics metrics(font);
     const qreal x = timeToX(m_previewTime);
     QRectF box(0, 0, metrics.horizontalAdvance(text) + 14, 18);
@@ -1677,11 +1718,7 @@ void TimelineWidget::paintCornerTime(QPainter &p, const QPoint &origin, double t
     p.fillRect(corner, theme.rulerCorner);
     p.fillRect(QRect(corner.right() + 1, origin.y(), 1, kRulerHeight), theme.divider);
     p.fillRect(QRect(origin.x(), corner.bottom() + 1, kTimelineLabelWidth, 1), theme.divider);
-    QFont font(QStringLiteral("Menlo"));
-    font.setPixelSize(13);
-    font.setStyleHint(QFont::Monospace);
-    font.setWeight(QFont::DemiBold);
-    p.setFont(font);
+    p.setFont(monoFont(13, QFont::DemiBold));
     p.setPen(color);
     p.drawText(corner.adjusted(10, 0, -6, 0), Qt::AlignLeft | Qt::AlignVCenter, timelineTimecode(time, m_fps));
 }
@@ -1719,15 +1756,47 @@ QPixmap TimelineWidget::renderLanes(const QRect &area) {
     return pixmap;
 }
 
-QImage TimelineWidget::filmstripTile(const QString &sourceId, const QSize &size, qreal dpr) {
-    const QString key = QStringLiteral("%1/%2x%3@%4").arg(sourceId).arg(size.width()).arg(size.height()).arg(dpr);
+QImage TimelineWidget::filmstripTile(const QString &sourceId, int frame, const QSize &size, qreal dpr) {
+    const FilmstripTileKey key{sourceId, frame, size, int(std::lround(dpr * 100.0))};
     const auto cached = m_filmstripTiles.constFind(key);
     if (cached != m_filmstripTiles.cend()) return cached.value();
-    // Pixel for pixel on the screen it is drawn on.
-    QImage tile = m_artwork->frames.value(sourceId).scaled(size * dpr, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    QImage source;
+    if (frame >= 0) source = m_artwork->strips.value(sourceId).frames.value(frame);
+    if (source.isNull()) source = m_artwork->frames.value(sourceId);
+    if (source.isNull()) return {};
+    // Pixel for pixel on the screen it is drawn on, averaged down from the
+    // larger frame rather than sampled, so fine detail does not shimmer.
+    QImage tile = source.scaled(size * dpr, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
     tile.setDevicePixelRatio(dpr);
+    if (m_filmstripTileBytes + tile.sizeInBytes() > kFilmstripTileBudget) {
+        m_filmstripTiles.clear();
+        m_filmstripTileBytes = 0;
+    }
     m_filmstripTiles.insert(key, tile);
+    m_filmstripTileBytes += tile.sizeInBytes();
     return tile;
+}
+
+TimelineWidget::ClipLayout TimelineWidget::clipLayout(const QRectF &clip, bool artwork) {
+    if (artwork && clip.height() >= kClipArtworkFrom && clip.height() < kClipBandFrom)
+        return {QRectF(clip.left(), clip.top(), clip.width(), kClipHeaderHeight), clip, true};
+    // Short rows show only the name bar, as a mini track does.
+    const qreal band = clipHeaderHeight(clip);
+    return {QRectF(clip.left(), clip.top(), clip.width(), band), clip.adjusted(0, band, 0, 0), false};
+}
+
+double TimelineWidget::clipSourceTime(const QJsonObject &clip, double offset) {
+    const double duration = clip.value(QStringLiteral("duration")).toDouble();
+    const double speed = clip.value(QStringLiteral("speed")).toDouble(1.0);
+    const double in = clip.value(QStringLiteral("in")).toDouble();
+    const double out = clip.value(QStringLiteral("out")).toDouble(in + duration * std::abs(speed));
+    // From its in point towards its out, which already allow for its speed;
+    // backwards from the out point when it plays in reverse (the bridge
+    // sends the speed's size and a separate "reverse"; a negative speed is
+    // read as reverse too).
+    const bool reverse = clip.value(QStringLiteral("reverse")).toBool() || speed < 0.0;
+    const double rate = duration > 0.0 ? (out - in) / duration : std::abs(speed);
+    return reverse ? out - offset * rate : in + offset * rate;
 }
 
 qreal TimelineWidget::timeToX(double time) const {
@@ -1751,19 +1820,6 @@ QRect TimelineWidget::headerPreviewRect(int row, int left) const {
     return QRect(left + kTimelineLabelWidth - 9 - kHeaderPreviewWidth,
                  track.top + (track.height - 1 - kHeaderPreviewHeight) / 2,
                  kHeaderPreviewWidth, kHeaderPreviewHeight);
-}
-
-QImage TimelineWidget::tintedWave(const QString &sourceId, const QColor &color) {
-    const QString key = sourceId + QLatin1Char('/') + color.name(QColor::HexArgb);
-    const auto cached = m_waveTints.constFind(key);
-    if (cached != m_waveTints.constEnd()) return cached.value();
-    QImage tinted = m_artwork->waves.value(sourceId).convertToFormat(QImage::Format_ARGB32_Premultiplied);
-    QPainter painter(&tinted);
-    painter.setCompositionMode(QPainter::CompositionMode_SourceIn);
-    painter.fillRect(tinted.rect(), color);
-    painter.end();
-    m_waveTints.insert(key, tinted);
-    return tinted;
 }
 
 QRect TimelineWidget::pointerBand(qreal x) const {

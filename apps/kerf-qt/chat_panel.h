@@ -291,15 +291,23 @@ public:
     // The disc, in the button's coordinates.
     QRect discRect() const;
     QSize sizeHint() const override;
+    // A button whose on or off comes from its owner, not from a click: the
+    // device button opens a menu, and showing the opposite state while the
+    // menu is open said the preview had already changed.
+    void setCheckedByOwner(bool owned) { m_checkedByOwner = owned; }
 
 protected:
     void paintEvent(QPaintEvent *) override;
     void enterEvent(QEnterEvent *) override { update(); }
     void leaveEvent(QEvent *) override { update(); }
+    void nextCheckState() override {
+        if (!m_checkedByOwner) QAbstractButton::nextCheckState();
+    }
 
 private:
     Glyph m_glyph;
     QString m_label;
+    bool m_checkedByOwner = false;
 };
 
 // The rail's buttons, stacked at its foot, level with the picture's bottom
@@ -528,6 +536,9 @@ private:
     QString m_proposalId;
     QLabel *m_proposalName = nullptr;
     QLabel *m_proposalTime = nullptr;
+    QDateTime m_proposalSince;
+    QLabel *m_welcomeTime = nullptr;
+    QDateTime m_welcomeSince;
     QLabel *m_proposalSummary = nullptr;
     ChatExpander *m_proposalExpander = nullptr;
     QHBoxLayout *m_proposalLine = nullptr;

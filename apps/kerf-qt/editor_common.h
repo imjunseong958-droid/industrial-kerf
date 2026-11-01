@@ -25,12 +25,14 @@ constexpr int kTimelineLabelWidth = 220;
 constexpr int kTimelineOrigin = kTimelineLabelWidth + 6;
 constexpr int kTimelineTail = 30;
 constexpr int kRulerHeight = 26;
-// Track heights start dense, as an edit with many layers wants: a sound
-// track keeps a waveform under its clips' names, and a picture track a
-// filmstrip; eight tracks fit the 290 timeline at 1440x900, six at
-// 1280x800.
-constexpr int kTrackHeight = 22;
-constexpr int kVideoTrackHeight = 28;
+// Track heights start as tall as a dense edit allows with its pictures and
+// sound in view: a picture clip is a 29px filmstrip and a sound clip a 25px
+// waveform, each with its name on a chip over the corner (a name bar of its
+// own only from the Large preset up). Both stay one-line headers, under
+// kDetailedTrackHeight. Six tracks fit the timeline at 1280x800, 1366x768
+// and 1440x900, and eight at Small.
+constexpr int kTrackHeight = 30;
+constexpr int kVideoTrackHeight = 34;
 // The add-track row under the last track.
 constexpr int kAddLaneHeight = 32;
 // Mini: one line per track (badge, toggles, name, and clip names).
@@ -84,7 +86,21 @@ RulerScale rulerScale(double pixelsPerSecond, double fps);
 
 QString clipName(const QJsonObject &clip);
 
+// Imported media as people know it: the name of the file they imported,
+// without its extension and without the content hash the copy in media/
+// carries ("Beach Day-1a2b3c4d.mov" is "Beach Day"; see content_name in
+// kerf-collab's media.rs). sourceFileName keeps the extension.
 QString sourceName(const QJsonObject &source);
+QString sourceFileName(const QJsonObject &source);
+// Every source's name by id, told apart where they would read the same:
+// two media named "Beach Day" are "Beach Day.mov" and "Beach Day.wav", and
+// two "Interview.mov" keep their copies' names, hash and all, so the bin,
+// the timeline and an @mention never name two media alike.
+QHash<QString, QString> sourceNames(const QJsonArray &sources);
+
+// The editor's one monospaced face (the system's: SF Mono on macOS), for
+// timecode and other figures that must not shift as they change.
+QFont monoFont(int pixelSize, QFont::Weight weight = QFont::Normal);
 
 QSize resolvedCanvasSize(const QJsonObject &project, const QJsonArray &sources);
 

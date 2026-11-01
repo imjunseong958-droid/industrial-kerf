@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QFocusEvent>
+#include <QFontDatabase>
 #include <QHash>
 #include <QImage>
 #include <QJsonDocument>
@@ -18,6 +19,7 @@
 #include <QPolygonF>
 #include <QProxyStyle>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QTextEdit>
 #include <QToolButton>
@@ -106,14 +108,13 @@ QString mcpExecutable(const QString &projectDirectory) {
 }
 
 QString prettyTime(double seconds) {
-    seconds = std::max(0.0, seconds);
-    const int minutes = static_cast<int>(seconds) / 60;
-    const double remainder = seconds - minutes * 60.0;
+    // Rounded to hundredths first, so 59.996 carries to 01:00.00 rather
+    // than showing 00:59.100.
+    const long long hundredths = std::llround(std::max(0.0, seconds) * 100.0);
     return QStringLiteral("%1:%2.%3")
-        .arg(minutes, 2, 10, QLatin1Char('0'))
-        .arg(static_cast<int>(remainder), 2, 10, QLatin1Char('0'))
-        .arg(static_cast<int>(std::round((remainder - std::floor(remainder)) * 100.0)), 2, 10,
-             QLatin1Char('0'));
+        .arg(hundredths / 6000, 2, 10, QLatin1Char('0'))
+        .arg(hundredths / 100 % 60, 2, 10, QLatin1Char('0'))
+        .arg(hundredths % 100, 2, 10, QLatin1Char('0'));
 }
 
 QString timelineTimecode(double seconds, double fps) {
@@ -171,9 +172,55 @@ QString clipName(const QJsonObject &clip) {
     return id.isEmpty() ? QStringLiteral("Untitled clip") : id.left(18);
 }
 
+namespace {
+
+// A copy's stem without the "-<hash>" media.rs appends (the first eight hex
+// digits of the content's SHA-256), as long as something is left.
+QString withoutContentHash(const QString &stem) {
+    static const QRegularExpression hash(QStringLiteral("^(.*\\S)\\s*-[0-9a-f]{8}$"));
+    const QRegularExpressionMatch match = hash.match(stem);
+    return match.hasMatch() ? match.captured(1) : stem;
+}
+
+} // namespace
+
 QString sourceName(const QJsonObject &source) {
     const QString path = source.value(QStringLiteral("path")).toString();
-    return path.isEmpty() ? QStringLiteral("Untitled media") : QFileInfo(path).fileName();
+    return path.isEmpty() ? QStringLiteral("Untitled media") : withoutContentHash(QFileInfo(path).completeBaseName());
+}
+
+QString sourceFileName(const QJsonObject &source) {
+    const QString path = source.value(QStringLiteral("path")).toString();
+    if (path.isEmpty()) return QStringLiteral("Untitled media");
+    const QFileInfo info(path);
+    const QString stem = withoutContentHash(info.completeBaseName());
+    return info.suffix().isEmpty() ? stem : stem + QLatin1Char('.') + info.suffix();
+}
+
+QHash<QString, QString> sourceNames(const QJsonArray &sources) {
+    const auto unique = [&sources](const std::function<QString(const QJsonObject &)> &name) {
+        QHash<QString, int> uses;
+        for (const QJsonValue &value : sources) ++uses[name(value.toObject())];
+        return uses;
+    };
+    const QHash<QString, int> stems = unique(sourceName);
+    const QHash<QString, int> files = unique(sourceFileName);
+    QHash<QString, QString> names;
+    for (const QJsonValue &value : sources) {
+        const QJsonObject source = value.toObject();
+        QString name = sourceName(source);
+        if (stems.value(name) > 1) name = sourceFileName(source);
+        if (files.value(name) > 1) name = QFileInfo(source.value(QStringLiteral("path")).toString()).fileName();
+        names.insert(source.value(QStringLiteral("id")).toString(), name);
+    }
+    return names;
+}
+
+QFont monoFont(int pixelSize, QFont::Weight weight) {
+    QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    font.setPixelSize(pixelSize);
+    font.setWeight(weight);
+    return font;
 }
 
 QList<CanvasPreset> canvasPresets() {

@@ -13,7 +13,6 @@ namespace ads {
 class CDockManager;
 class CDockWidget;
 class CDockSplitter;
-class CDockWidgetTab;
 } // namespace ads
 
 namespace kerf {
@@ -79,10 +78,6 @@ public:
 signals:
     void changed();
 
-protected:
-    // Shows a tab's close button while the pointer is over the tab.
-    bool eventFilter(QObject *watched, QEvent *event) override;
-
 private slots:
     void placeTitleWidgets();
 
@@ -90,7 +85,6 @@ private:
     // Take the title widgets out of the areas before a layout is restored
     // (which deletes the areas and their title bars).
     void parkTitleWidgets();
-    void showCloseButton(ads::CDockWidgetTab *tab, bool shown);
     void arrangeEditing();
     QByteArray savedLayout(const QString &name) const;
     // Restore a layout saved for workspace `name`: the Editing workspace's

@@ -862,12 +862,30 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
         p.restore();
     } else {
         // Two quiet lines; the player's own play button is the only one.
-        const QPointF center = canvas.center();
+        // They wrap inside the screen, clear of its rounded corners, as a
+        // phone's narrow screen cannot hold the second on one line.
+        p.save();
+        p.setClipRect(canvas);
+        const QRectF area = canvas.adjusted(18, 0, -18, 0);
+        QFont title = font();
+        title.setPixelSize(13);
+        title.setWeight(QFont::DemiBold);
+        QFont detail = font();
+        detail.setPixelSize(11);
+        const QString titleText = QStringLiteral("Your viewer");
+        const QString detailText = QStringLiteral("The playhead frame shows here.");
+        const int flags = Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap;
+        const QRectF titleBox = QFontMetricsF(title).boundingRect(area, flags, titleText);
+        const QRectF detailBox = QFontMetricsF(detail).boundingRect(area, flags, detailText);
+        const qreal gap = 4;
+        const qreal top = canvas.center().y() - (titleBox.height() + gap + detailBox.height()) / 2.0;
+        p.setFont(title);
         p.setPen(theme.viewerText);
-        p.drawText(QRectF(canvas.left(), center.y() - 20, canvas.width(), 20), Qt::AlignCenter, QStringLiteral("Your viewer"));
+        p.drawText(QRectF(area.left(), top, area.width(), titleBox.height()), flags, titleText);
+        p.setFont(detail);
         p.setPen(theme.viewerTextDim);
-        p.drawText(QRectF(canvas.left(), center.y(), canvas.width(), 20), Qt::AlignCenter,
-                   QStringLiteral("The playhead frame shows here."));
+        p.drawText(QRectF(area.left(), top + titleBox.height() + gap, area.width(), detailBox.height()), flags, detailText);
+        p.restore();
     }
     // The player's shade and controls under what is edited on the picture:
     // the caption (lifted over the controls while they show) and the masks'

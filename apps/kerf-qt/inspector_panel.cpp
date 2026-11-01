@@ -228,12 +228,6 @@ InspectorPanel::InspectorPanel(QWidget *parent) : QWidget(parent) {
     m_header = new QWidget;
     m_header->setObjectName(QStringLiteral("inspectorHeader"));
     outer->addWidget(m_header);
-    // A hairline under the header once the body has scrolled under it.
-    m_scrollEdge = new QFrame;
-    m_scrollEdge->setObjectName(QStringLiteral("inspectorScrollEdge"));
-    m_scrollEdge->setFixedHeight(1);
-    m_scrollEdge->hide();
-    outer->addWidget(m_scrollEdge);
     m_scroll = new QScrollArea;
     m_scroll->setObjectName(QStringLiteral("inspectorScroll"));
     // A click in the Inspector leaves the keys where they were (the
@@ -243,6 +237,14 @@ InspectorPanel::InspectorPanel(QWidget *parent) : QWidget(parent) {
     m_scroll->setWidgetResizable(true);
     m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     outer->addWidget(m_scroll, 1);
+    // A hairline under the header once the body has scrolled under it,
+    // laid over the body's top edge rather than in the layout, so showing
+    // it does not push the body down a pixel as the scroll begins.
+    m_scrollEdge = new QFrame(m_scroll);
+    m_scrollEdge->setObjectName(QStringLiteral("inspectorScrollEdge"));
+    m_scrollEdge->setFixedHeight(1);
+    m_scrollEdge->hide();
+    m_scroll->installEventFilter(this);
     m_content = new QWidget;
     m_content->setObjectName(QStringLiteral("inspectorContent"));
     m_scroll->setWidget(m_content);
@@ -265,6 +267,7 @@ InspectorPanel::InspectorPanel(QWidget *parent) : QWidget(parent) {
     m_scroll->viewport()->installEventFilter(this);
     connect(m_scroll->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) {
         m_scrollEdge->setVisible(value > 0);
+        m_scrollEdge->raise();
         if (!m_kindForSections.isEmpty()) m_scrollByKind.insert(m_kindForSections, value);
     });
     // ⌥⌘R resets the selected clip's properties.
@@ -1865,7 +1868,9 @@ void InspectorPanel::buildAnchorSection(QVBoxLayout *into) {
         Binding stretch;
         stretch.refresh = [this, field, target, def = def, letter = letter] {
             NumberFormat format = formatFor(m_clips.first(), def);
-            format.prefix = letter == QStringLiteral("H") ? QStringLiteral("W") : QStringLiteral("H");
+            // X and Y, as Position's fields: "H" is already Flip's
+            // horizontal in the row above, and cannot mean height here.
+            format.prefix = letter == QStringLiteral("H") ? QStringLiteral("X") : QStringLiteral("Y");
             format.min = 0.0;
             field->setFormat(format);
             field->setDefaultValue(100.0);
@@ -1942,7 +1947,7 @@ void InspectorPanel::buildSourceSection(QVBoxLayout *into) {
         plain->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
         row(r)->controls()->addWidget(plain, 1);
     };
-    text(QStringLiteral("File"), sourceName(source), QStringLiteral("sourceFile"));
+    text(QStringLiteral("File"), sourceFileName(source), QStringLiteral("sourceFile"));
     if (!format.isEmpty()) text(QStringLiteral("Format"), format, QStringLiteral("sourceFormat"));
     if (source.value(QStringLiteral("channels")).toInt() > 0)
         text(QStringLiteral("Audio"), QStringLiteral("%1 ch · %2 kHz").arg(source.value(QStringLiteral("channels")).toInt())
@@ -2996,6 +3001,7 @@ void InspectorPanel::fitScrollBar() {
 }
 
 bool InspectorPanel::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == m_scroll && event->type() == QEvent::Resize) m_scrollEdge->setGeometry(0, 0, m_scroll->width(), 1);
     if (watched == m_scroll->verticalScrollBar() && (event->type() == QEvent::Show || event->type() == QEvent::Hide)) fitScrollBar();
     if (watched == m_scroll->viewport() && event->type() == QEvent::Wheel) {
         showScrollBar(true);
