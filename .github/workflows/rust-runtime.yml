@@ -169,8 +169,20 @@ jobs:
         run: |
           cmake -S apps/kerf-qt -B target/qt -DKERF_QT_BUILD_TESTS=ON
           cmake --build target/qt --config Release --parallel 4
+      # Qt logs to the debugger on Windows unless told otherwise.
       - name: Test Qt UI
+        env:
+          QT_FORCE_STDERR_LOGGING: "1"
         run: ctest --test-dir target/qt -C Release --output-on-failure
+      # Again outside ctest, with each test function named as it runs and the
+      # exit code, which says how the run ended when it prints nothing.
+      - name: Show Qt UI test run
+        if: failure()
+        env:
+          QT_FORCE_STDERR_LOGGING: "1"
+        run: |
+          & target/qt/Release/kerf-qt-tests.exe -platform offscreen -v1 2>&1 | Select-Object -Last 200
+          "exit code $LASTEXITCODE (0x{0:X8})" -f $LASTEXITCODE
 
   macos-editor:
     needs: linux
