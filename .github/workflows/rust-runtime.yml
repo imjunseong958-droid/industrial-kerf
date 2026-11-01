@@ -195,28 +195,47 @@ jobs:
       # The editor's C ABI starts kerfd and edits through the pipe beside
       # another client.
       - name: Test editor connection to kerfd
+        id: connection
         if: github.event_name != 'pull_request' || steps.changes.outputs.editor == 'true'
         run: cargo test -p kerf-qt-bridge --test connection
+      # Built and tested even when the connection test failed, so one run
+      # shows both.
       - name: Build Qt editor and UI tests
-        if: github.event_name != 'pull_request' || steps.changes.outputs.editor == 'true'
+        id: qt-build
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || steps.changes.outputs.editor == 'true') }}
         run: |
           cmake -S apps/kerf-qt -B target/qt -DKERF_QT_BUILD_TESTS=ON
           cmake --build target/qt --config Release --parallel 4
       # Qt logs to the debugger on Windows unless told otherwise.
       - name: Test Qt UI
-        if: github.event_name != 'pull_request' || steps.changes.outputs.editor == 'true'
+        id: qt-ui
+        if: ${{ !cancelled() && steps.qt-build.outcome == 'success' }}
         env:
           QT_FORCE_STDERR_LOGGING: "1"
         run: ctest --test-dir target/qt -C Release --output-on-failure
       # Again outside ctest, with each test function named as it runs and the
       # exit code, which says how the run ended when it prints nothing.
       - name: Show Qt UI test run
-        if: failure()
+        if: ${{ failure() && steps.qt-ui.outcome == 'failure' }}
         env:
           QT_FORCE_STDERR_LOGGING: "1"
         run: |
-          & target/qt/Release/kerf-qt-tests.exe -platform offscreen -v1 2>&1 | Select-Object -Last 200
+          $tests = Get-ChildItem target/qt -Recurse -Filter kerf-qt-tests.exe | Select-Object -First 1
+          & $tests.FullName -platform offscreen -v1 2>&1 | Select-Object -Last 200
           "exit code $LASTEXITCODE (0x{0:X8})" -f $LASTEXITCODE
+      # A crash in the connection test, run under the debugger until it
+      # crashes again, with the faulting stack and every thread's.
+      - name: Show editor connection crash
+        if: ${{ failure() && steps.connection.outcome == 'failure' }}
+        run: |
+          $cdb = "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe"
+          if (-not (Test-Path $cdb)) { "no debugger at $cdb"; exit 0 }
+          $test = Get-ChildItem target\debug\deps\connection-*.exe | Sort-Object LastWriteTime | Select-Object -Last 1
+          for ($run = 1; $run -le 10; $run++) {
+            $out = & $cdb -g -G -lines -c ".echo STOPPED; .lastevent; .ecxr; kp 40; ~*k 30; q" $test.FullName --nocapture 2>&1
+            if ($out -match 'STOPPED') { "stopped on run $run"; $out | Select-Object -Last 600; break }
+            "run $run finished without stopping"
+          }
 
   macos-editor:
     needs: linux

@@ -41,6 +41,7 @@ pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 /// bytes and macOS permits fewer bytes on some SDKs, so leave room for the
 /// terminating NUL and use the same threshold on both platforms.
 pub const UNIX_SOCKET_PATH_LIMIT: usize = 100;
+#[cfg(unix)]
 const SOCKET_FILE: &str = ".kerfd.sock";
 const CLIENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const SERVER_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
