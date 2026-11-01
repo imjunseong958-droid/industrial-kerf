@@ -10,6 +10,7 @@
 #include <QKeyEvent>
 #include <QLinearGradient>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 
@@ -369,7 +370,11 @@ ExportButton::ExportButton(QAction *exportAction, QAction *renderAction, QWidget
         m_menu->addSeparator();
         m_menu->addAction(renderAction);
     }
-    connect(m_menu, &QMenu::aboutToShow, this, &ExportButton::menuAboutToShow);
+    connect(m_menu, &QMenu::aboutToShow, this, [this] {
+        m_menu->setAttribute(Qt::WA_NoMouseReplay, false);
+        emit menuAboutToShow();
+    });
+    m_menu->installEventFilter(this);
     connect(m_menu, &QMenu::aboutToHide, this, [this] {
         m_menuOpen = false;
         update();
@@ -469,6 +474,17 @@ void ExportButton::showMenu() {
     m_menuOpen = true;
     update();
     m_menu->popup(mapToGlobal(QPoint(0, height() + 2)));
+}
+
+bool ExportButton::eventFilter(QObject *watched, QEvent *event) {
+    // A press on the arrow while its menu is open closes the menu, and
+    // only that: Windows and Linux replay a press outside a pop-up to what
+    // is under it, which would open the menu again at once.
+    if (watched == m_menu && event->type() == QEvent::MouseButtonPress) {
+        const QPoint at = static_cast<QMouseEvent *>(event)->globalPosition().toPoint();
+        if (QRect(m_arrow->mapToGlobal(QPoint()), m_arrow->size()).contains(at)) m_menu->setAttribute(Qt::WA_NoMouseReplay);
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void ExportButton::paintEvent(QPaintEvent *) {

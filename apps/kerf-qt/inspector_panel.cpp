@@ -307,9 +307,15 @@ InspectorPanel::~InspectorPanel() {
 // ------------------------------------------------------------------ state
 
 void InspectorPanel::setState(const QJsonObject &timeline, const QStringList &clips) {
+    QStringList selection = clips;
+    selection.removeAll(QString());
+    // A run of wheel steps on the knob edits the clips it was turned for:
+    // it is sent before others take their place, not when its pause ends.
+    if (selection != m_selection)
+        for (RotationKnob *knob : findChildren<RotationKnob *>())
+            if (knob->isWheeling()) knob->flushWheel();
     m_project = timeline;
-    m_selection = clips;
-    m_selection.removeAll(QString());
+    m_selection = selection;
     refresh();
 }
 
@@ -1251,9 +1257,7 @@ QJsonArray InspectorPanel::resetOpsFor(const Target &target, const QJsonObject &
 int InspectorPanel::addSection(QVBoxLayout *into, const QString &id, const QString &title, bool openByDefault) {
     auto *widget = new InspectorSection(id, title);
     into->addWidget(widget);
-    const QVariant saved = QSettings().value(QStringLiteral("editor/inspector/sections/%1").arg(m_kindForSections));
-    const bool open = saved.isValid() ? saved.toStringList().contains(id) : openByDefault;
-    widget->setOpen(open);
+    widget->setOpen(savedOpen(id, openByDefault));
     connect(widget, &InspectorSection::toggled, this, [this, id](bool open, Qt::KeyboardModifiers modifiers) {
         setOpenSections(id, open, modifiers);
     });
@@ -1287,11 +1291,42 @@ void InspectorPanel::setOpenSections(const QString &id, bool open, Qt::KeyboardM
     saveSections();
 }
 
+namespace {
+// Each module's fold as last left, by id, per kind of clip: a module not
+// yet seen in a kind is missing, and opens or folds as it does by default.
+QString foldsKey(const QString &kind) {
+    return QStringLiteral("editor/inspector/folds/%1").arg(kind);
+}
+// Before, only the list of the modules left open, so a missing id meant
+// folded, whether it was folded by hand or added since.
+QString legacySectionsKey(const QString &kind) {
+    return QStringLiteral("editor/inspector/sections/%1").arg(kind);
+}
+} // namespace
+
+bool InspectorPanel::savedOpen(const QString &id, bool openByDefault) const {
+    QSettings settings;
+    const QVariantMap folds = settings.value(foldsKey(m_kindForSections)).toMap();
+    if (const auto found = folds.constFind(id); found != folds.cend()) return found->toBool();
+    const QVariant legacy = settings.value(legacySectionsKey(m_kindForSections));
+    if (!legacy.isValid()) return openByDefault;
+    // From the old list: what was left open stays open, and a module open
+    // by default that is missing from it was folded by hand. The modules
+    // that came open by default with the hardware finish were folded
+    // before it, or not there at all, so they take their new default.
+    static const QStringList kNewlyOpen{QStringLiteral("transform"), QStringLiteral("compositing"), QStringLiteral("mix"),
+                                        QStringLiteral("text"), QStringLiteral("caption"), QStringLiteral("generator")};
+    if (legacy.toStringList().contains(id)) return true;
+    return openByDefault && kNewlyOpen.contains(id);
+}
+
 void InspectorPanel::saveSections() {
-    QStringList open;
-    for (const SectionEntry &entry : std::as_const(m_sections))
-        if (entry.section->isOpen()) open << entry.section->id();
-    QSettings().setValue(QStringLiteral("editor/inspector/sections/%1").arg(m_kindForSections), open);
+    // Merged into what is saved, so the modules of this kind's other
+    // shapes keep theirs.
+    QSettings settings;
+    QVariantMap folds = settings.value(foldsKey(m_kindForSections)).toMap();
+    for (const SectionEntry &entry : std::as_const(m_sections)) folds.insert(entry.section->id(), entry.section->isOpen());
+    settings.setValue(foldsKey(m_kindForSections), folds);
 }
 
 int InspectorPanel::addRow(QVBoxLayout *into, const QString &label, int section) {
@@ -1680,18 +1715,23 @@ void InspectorPanel::buildTransformRows(QVBoxLayout *into, int section, bool fit
         rotation->setObjectName(QStringLiteral("prop_rotation"));
         rotation->setFixedWidth(kSingleField);
         // The knob beside the field: the field follows it while it turns,
-        // and its release (or a run of wheel steps) is one edit.
+        // and its release (or a run of wheel steps) is one edit; its
+        // double-click resets every clip, as the row's ↺ does.
         auto *knob = new RotationKnob;
         row(r)->controls()->addWidget(knob);
         row(r)->controls()->addStretch(1);
         m_refreshers.append([this, knob, rotationDef] {
             const Target target{Target::Kind::Prop, QStringLiteral("rotation")};
+            knob->setDecimals(formatFor(m_clips.first(), rotationDef).decimals);
             knob->setAngle(valueOf(m_clips.first(), target, rotationDef).toDouble());
             knob->setEnabled(!isAnimated(m_clips.first(), target));
         });
         connect(knob, &RotationKnob::turned, rotation, &ScrubField::setValue);
         connect(knob, &RotationKnob::released, this, [this, rotationDef](double angle, double start) {
             commitNumber(Target{Target::Kind::Prop, QStringLiteral("rotation")}, rotationDef, angle, angle - start, m_clips.size() > 1);
+        });
+        connect(knob, &RotationKnob::resetRequested, this, [this, rotationDef] {
+            emitOps(resetOpsFor(Target{Target::Kind::Prop, QStringLiteral("rotation")}, rotationDef));
         });
     }
 }

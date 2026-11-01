@@ -44,6 +44,8 @@ double programPeak(const QJsonObject &timeline, const MediaArtwork *artwork, dou
         if (track.value(QStringLiteral("muted")).toBool() || !track.value(QStringLiteral("enabled")).toBool(true)) continue;
         for (const QJsonValue &clipValue : track.value(QStringLiteral("clips")).toArray()) {
             const QJsonObject clip = clipValue.toObject();
+            // A clip switched off sounds nothing, as a track switched off does.
+            if (!clip.value(QStringLiteral("enabled")).toBool(true)) continue;
             const double start = clip.value(QStringLiteral("timelineStart")).toDouble();
             const double duration = clip.value(QStringLiteral("duration")).toDouble();
             if (seconds < start || seconds >= start + duration) continue;

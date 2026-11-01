@@ -369,13 +369,18 @@ public:
     explicit RotationKnob(QWidget *parent = nullptr);
     void setAngle(double degrees);
     double angle() const { return m_angle; }
+    // Its field's precision: an angle turned to is rounded to it.
+    void setDecimals(int decimals) { m_decimals = decimals; }
     QSize sizeHint() const override { return {kSize, kSize}; }
     // A run of wheel steps sent now rather than after its pause.
     void flushWheel();
+    bool isWheeling() const { return m_wheeling; }
 
 signals:
     void turned(double degrees);
     void released(double degrees, double start);
+    // A double-click: every clip back to 0°, not only the one it shows.
+    void resetRequested();
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -387,9 +392,12 @@ protected:
 
 private:
     double dragAngle(double y, Qt::KeyboardModifiers modifiers) const;
+    double rounded(double degrees) const;
     double m_angle = 0.0;
     double m_start = 0.0;
     double m_pressY = 0.0;
+    int m_decimals = 1;
+    bool m_pressed = false;
     bool m_dragging = false;
     bool m_wheeling = false;
     int m_wheelRest = 0; // Wheel travel short of a whole step.

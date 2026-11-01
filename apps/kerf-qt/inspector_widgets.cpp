@@ -1062,23 +1062,34 @@ void RotationKnob::paintEvent(QPaintEvent *) {
     paintKnob(painter, QRectF(rect()), m_angle);
 }
 
+double RotationKnob::rounded(double degrees) const {
+    const double unit = std::pow(10.0, m_decimals);
+    return std::round(degrees * unit) / unit;
+}
+
 double RotationKnob::dragAngle(double y, Qt::KeyboardModifiers modifiers) const {
     const double rate = modifiers.testFlag(Qt::AltModifier) ? 0.1 : 1.0;
     double degrees = m_start + (m_pressY - y) * rate;
     if (modifiers.testFlag(Qt::ShiftModifier)) degrees = std::round(degrees / 15.0) * 15.0;
-    return degrees;
+    return rounded(degrees);
 }
 
 void RotationKnob::mousePressEvent(QMouseEvent *event) {
     if (event->button() != Qt::LeftButton || !isEnabled()) return;
     flushWheel();
-    m_dragging = true;
-    m_start = m_angle;
+    m_pressed = true;
+    m_dragging = false;
     m_pressY = event->position().y();
 }
 
 void RotationKnob::mouseMoveEvent(QMouseEvent *event) {
-    if (!m_dragging) return;
+    if (!m_pressed) return;
+    // A press that wanders less than the slop is a click, and turns nothing.
+    if (!m_dragging) {
+        if (std::abs(event->position().y() - m_pressY) < kClickSlop) return;
+        m_dragging = true;
+        m_start = m_angle;
+    }
     const double degrees = dragAngle(event->position().y(), event->modifiers());
     if (std::abs(degrees - m_angle) < 1e-9) return;
     m_angle = degrees;
@@ -1087,6 +1098,8 @@ void RotationKnob::mouseMoveEvent(QMouseEvent *event) {
 }
 
 void RotationKnob::mouseReleaseEvent(QMouseEvent *event) {
+    if (!m_pressed) return;
+    m_pressed = false;
     if (!m_dragging) return;
     m_dragging = false;
     m_angle = dragAngle(event->position().y(), event->modifiers());
@@ -1097,13 +1110,13 @@ void RotationKnob::mouseReleaseEvent(QMouseEvent *event) {
 void RotationKnob::mouseDoubleClickEvent(QMouseEvent *event) {
     if (event->button() != Qt::LeftButton || !isEnabled()) return;
     flushWheel();
+    m_pressed = false;
     m_dragging = false;
-    const double start = m_angle;
     m_angle = 0.0;
     update();
-    if (std::abs(start) < 1e-6) return;
     emit turned(m_angle);
-    emit released(m_angle, start);
+    // Even at 0° itself: the other clips selected may not be.
+    emit resetRequested();
 }
 
 void RotationKnob::wheelEvent(QWheelEvent *event) {
@@ -1124,7 +1137,7 @@ void RotationKnob::wheelEvent(QWheelEvent *event) {
         const double mark = steps > 0 ? std::floor(m_angle / 15.0 + 1e-9) : std::ceil(m_angle / 15.0 - 1e-9);
         m_angle = (mark + steps) * 15.0;
     } else {
-        m_angle += steps;
+        m_angle = rounded(m_angle + steps);
     }
     update();
     emit turned(m_angle);
@@ -1529,6 +1542,9 @@ InspectorSection::InspectorSection(const QString &id, const QString &title, QWid
     m_header->setAttribute(Qt::WA_StyledBackground);
     m_header->setFixedHeight(kHeaderHeight);
     m_header->setCursor(Qt::PointingHandCursor);
+    // Tab reaches the header, and Space or Return folds or opens it, so the
+    // rows of a folded module are never out of the keyboard's reach.
+    m_header->setFocusPolicy(Qt::TabFocus);
     m_header->installEventFilter(this);
     auto *row = new QHBoxLayout(m_header);
     row->setContentsMargins(0, 0, 0, 0);
@@ -1603,6 +1619,12 @@ void InspectorSection::paintEvent(QPaintEvent *) {
         painter.fillRect(QRect(0, 0, plate.width(), 1), theme.moduleEdge);
         painter.fillRect(QRect(1, 1, plate.width() - 2, 1), theme.moduleHighlight);
     }
+    // The focused header ringed as a focused field is, just inside it, so
+    // the plate's edge (and the one above in a rack) does not cut it.
+    if (m_header->hasFocus()) {
+        painter.setRenderHint(QPainter::Antialiasing);
+        ringFocus(painter, QRectF(m_header->geometry()).adjusted(2, 2, -2, -2));
+    }
 }
 
 QSize InspectorSection::headerSizeHint() const {
@@ -1671,6 +1693,8 @@ void InspectorSection::updateHeader() {
     m_summaryLabel->setToolTip(m_summary.full);
     m_reset->setVisible(m_changed && m_hovered && m_resetHandler);
     m_lamp->setState(m_changed ? LampState::Changed : LampState::Off);
+    // Read out with its fold, as a disclosure is.
+    m_header->setAccessibleName(QStringLiteral("%1, %2").arg(m_title, m_open ? QStringLiteral("expanded") : QStringLiteral("collapsed")));
 }
 
 bool InspectorSection::eventFilter(QObject *watched, QEvent *event) {
@@ -1689,6 +1713,25 @@ bool InspectorSection::eventFilter(QObject *watched, QEvent *event) {
         case QEvent::Resize:
             QTimer::singleShot(0, this, &InspectorSection::updateHeader);
             break;
+        case QEvent::FocusIn:
+        case QEvent::FocusOut:
+            update();
+            break;
+        case QEvent::ShortcutOverride: {
+            // Space is play everywhere else; on a focused header it folds.
+            const int key = static_cast<QKeyEvent *>(event)->key();
+            if (key == Qt::Key_Space || key == Qt::Key_Return || key == Qt::Key_Enter) event->accept();
+            break;
+        }
+        case QEvent::KeyPress: {
+            auto *key = static_cast<QKeyEvent *>(event);
+            if (key->key() != Qt::Key_Space && key->key() != Qt::Key_Return && key->key() != Qt::Key_Enter) break;
+            // ⌥ and ⌘ as with a click: all alike, or only this one.
+            const Qt::KeyboardModifiers modifiers = key->modifiers() & ~Qt::KeypadModifier;
+            setOpen(!m_open);
+            emit toggled(m_open, modifiers);
+            return true;
+        }
         case QEvent::MouseButtonRelease: {
             auto *mouse = static_cast<QMouseEvent *>(event);
             if (mouse->button() != Qt::LeftButton) break;

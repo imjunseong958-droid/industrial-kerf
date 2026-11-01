@@ -227,6 +227,8 @@ private:
     QJsonArray resetOpsFor(const Target &target, const QJsonObject &def) const;
     void emitOps(const QJsonArray &ops);
     void setOpenSections(const QString &id, bool open, Qt::KeyboardModifiers modifiers);
+    // Whether module `id` opens, as it was left in this kind of clip.
+    bool savedOpen(const QString &id, bool openByDefault) const;
     void saveSections();
     void timingCommitted(const QString &field, double value, double delta, bool relative);
     void resetAll();

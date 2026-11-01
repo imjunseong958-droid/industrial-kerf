@@ -555,6 +555,31 @@ private slots:
         button->showMenu();
         QVERIFY(QTest::qWaitForWindowExposed(button->menu()));
         QCOMPARE(button->masterAction()->text(), QStringLiteral("Master\t1080 × 1920 · %1 fps").arg(window.m_fps));
+        // A press on the arrow while the menu is open closes it, and only
+        // that: the menu asks Windows and Linux not to replay the press to
+        // the arrow under it, which would open it again at once. (Offscreen
+        // grabs no pointer, so replays nothing; the attribute is what asks.)
+        {
+            const auto pressAt = [&window, button](const QPoint &global) {
+                QWindow *popup = button->menu()->windowHandle();
+                QVERIFY(popup);
+                QTest::mousePress(popup, Qt::LeftButton, Qt::NoModifier, popup->mapFromGlobal(global));
+                QTest::mouseRelease(window.windowHandle(), Qt::LeftButton, Qt::NoModifier, window.windowHandle()->mapFromGlobal(global));
+                QCoreApplication::processEvents();
+            };
+            pressAt(button->menuPart()->mapToGlobal(button->menuPart()->rect().center()));
+            QVERIFY(!button->menu()->isVisible());
+            QVERIFY(button->menu()->testAttribute(Qt::WA_NoMouseReplay));
+            // Opened again, a press anywhere else still reaches what it lands on.
+            button->showMenu();
+            QVERIFY(QTest::qWaitForWindowExposed(button->menu()));
+            QVERIFY(!button->menu()->testAttribute(Qt::WA_NoMouseReplay));
+            pressAt(button->mainPart()->mapToGlobal(button->mainPart()->rect().center()));
+            QVERIFY(!button->menu()->isVisible());
+            QVERIFY(!button->menu()->testAttribute(Qt::WA_NoMouseReplay));
+            button->showMenu();
+            QVERIFY(QTest::qWaitForWindowExposed(button->menu()));
+        }
         button->menu()->hide();
         // The main part follows file.export's enablement and its reason.
         QCOMPARE(button->mainPart()->isEnabled(), exportAction->isEnabled());
@@ -1246,7 +1271,7 @@ private slots:
         }
     }
 
-    // The program's level is the loudest peak of the sound clips under the
+    // The program's level is the loudest peak of the sound clips switched on under the
     // playhead on enabled, unmuted sound tracks, each with its gain, read at
     // its own source time; the VU scale puts -18 dBFS at 0 VU, three
     // quarters of the way across, -20 VU at the left stop and +3 VU at the
@@ -1284,6 +1309,10 @@ private slots:
         QCOMPARE(programPeak(timelineOf({track("audio", {clip("a", 2.0, 0.0)}, {{"muted", true}})}), &artwork, 2.5), 0.0);
         QCOMPARE(programPeak(timelineOf({track("audio", {clip("a", 2.0, 0.0)}, {{"enabled", false}})}), &artwork, 2.5), 0.0);
         QCOMPARE(programPeak(timelineOf({track("video", {clip("a", 2.0, 0.0)})}), &artwork, 2.5), 0.0);
+        // So does a clip switched off on its own.
+        QJsonObject off = clip("a", 2.0, 0.0);
+        off.insert("enabled", false);
+        QCOMPARE(programPeak(timelineOf({track("audio", {off})}), &artwork, 2.5), 0.0);
         // Two tracks: the louder.
         const QJsonObject both = timelineOf({track("audio", {clip("a", 2.0, 0.0, {{"gain", -12.0}})}),
                                              track("audio", {clip("b", 2.0, 0.0)})});
@@ -4194,7 +4223,7 @@ private slots:
         // A section opens and closes, and stays so for this kind of clip.
         crop->setOpen(true);
         emit crop->toggled(true, Qt::NoModifier);
-        QVERIFY(QSettings().value(QStringLiteral("editor/inspector/sections/video")).toStringList().contains(QStringLiteral("crop")));
+        QVERIFY(QSettings().value(QStringLiteral("editor/inspector/folds/video")).toMap().value(QStringLiteral("crop")).toBool());
         // ⌥-click opens or closes every section; ⌘-click opens only this one.
         InspectorSection *anchor = inspector->section(QStringLiteral("anchor"));
         crop->setOpen(false);
@@ -4205,6 +4234,60 @@ private slots:
         QVERIFY(crop->isOpen() && inspector->section(QStringLiteral("source"))->isOpen());
         emit anchor->toggled(true, Qt::ControlModifier);
         QVERIFY(anchor->isOpen() && !crop->isOpen() && !inspector->section(QStringLiteral("source"))->isOpen());
+    }
+
+    // Each module's fold is kept by id, so one added since (or newly open
+    // by default) opens or folds as it does by default; the old list of
+    // open modules carries over: what was open stays open, and a module
+    // open by default missing from it stays folded.
+    void inspectorSectionFoldsKeepNewModulesDefaults() {
+        QSettings().remove(QStringLiteral("editor/inspector"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("editor/inspector")); });
+        const QJsonObject timeline = everyKindSnapshot(1).value("timeline").toObject();
+        const auto build = [&timeline](const QStringList &selection) {
+            auto inspector = std::make_unique<InspectorPanel>();
+            inspector->setEffectCatalog(QJsonArray{});
+            inspector->setState(timeline, selection);
+            return inspector;
+        };
+        const auto opened = [](const InspectorPanel &inspector) {
+            QStringList ids;
+            for (const auto &entry : std::as_const(inspector.m_sections))
+                if (entry.section->isOpen()) ids << entry.section->id();
+            return ids;
+        };
+        // Left with only Crop open before Transform and Composite came open
+        // by default: they open now, Crop stays open, and Anchor folded.
+        QSettings().setValue(QStringLiteral("editor/inspector/sections/video"), QStringList{QStringLiteral("crop")});
+        {
+            const auto inspector = build({QStringLiteral("v")});
+            QCOMPARE(opened(*inspector), (QStringList{"transform", "compositing", "crop"}));
+        }
+        // Tracks, open by default and missing from the sequence's list, was
+        // folded by hand, and stays so.
+        QSettings().setValue(QStringLiteral("editor/inspector/sections/sequence"), QStringList{QStringLiteral("markers")});
+        {
+            const auto inspector = build({});
+            QVERIFY(!inspector->section(QStringLiteral("tracks"))->isOpen());
+            QVERIFY(inspector->section(QStringLiteral("markers"))->isOpen());
+        }
+        // A fold is kept by id; a module never seen opens as it does by
+        // default, though others of its kind were folded by hand.
+        QSettings().remove(QStringLiteral("editor/inspector"));
+        QSettings().setValue(QStringLiteral("editor/inspector/folds/video"),
+                             QVariantMap{{QStringLiteral("crop"), true}, {QStringLiteral("compositing"), false}});
+        {
+            const auto inspector = build({QStringLiteral("v")});
+            QCOMPARE(opened(*inspector), (QStringList{"transform", "crop"}));
+            InspectorSection *transform = inspector->section(QStringLiteral("transform"));
+            transform->setOpen(false);
+            emit transform->toggled(false, Qt::NoModifier);
+        }
+        const QVariantMap folds = QSettings().value(QStringLiteral("editor/inspector/folds/video")).toMap();
+        QCOMPARE(folds.value(QStringLiteral("transform")), QVariant(false));
+        QCOMPARE(folds.value(QStringLiteral("crop")), QVariant(true));
+        QVERIFY(!QSettings().contains(QStringLiteral("editor/inspector/sections/video")));
+        QCOMPARE(opened(*build({QStringLiteral("v")})), (QStringList{"crop"}));
     }
 
     // Fit and Fill write the scale that fits or fills the frame, centred;
@@ -5624,6 +5707,39 @@ private slots:
         QCOMPARE(transform->titleLabel()->accessibleName(), QStringLiteral("Transform"));
         QCOMPARE(compositing->title(), QStringLiteral("Composite"));
         QCOMPARE(transform->header()->height(), InspectorSection::kHeaderHeight);
+        // A header takes focus from Tab, named with its fold; Space or
+        // Return folds or opens it (Space no longer play there), and it is
+        // ringed as a focused field is.
+        {
+            QWidget *header = time->header();
+            QCOMPARE(header->focusPolicy(), Qt::TabFocus);
+            QCOMPARE(header->accessibleName(), QStringLiteral("Time, collapsed"));
+            inspector.activateWindow();
+            QVERIFY(QTest::qWaitForWindowActive(&inspector));
+            const QPoint ringAt(header->x() + 2, header->y() + header->height() / 2);
+            const auto ringPixel = [time, ringAt] {
+                const QImage image = time->grab().toImage();
+                return image.pixelColor(ringAt * image.devicePixelRatio());
+            };
+            QVERIFY(!nearColor(ringPixel().rgb(), editorTheme().focusRing.rgb(), 8));
+            header->setFocus(Qt::TabFocusReason);
+            QVERIFY(header->hasFocus());
+            QVERIFY2(nearColor(ringPixel().rgb(), editorTheme().focusRing.rgb(), 8), qPrintable(ringPixel().name()));
+            QKeyEvent override(QEvent::ShortcutOverride, Qt::Key_Space, Qt::NoModifier, QStringLiteral(" "));
+            override.ignore();
+            QCoreApplication::sendEvent(header, &override);
+            QVERIFY(override.isAccepted());
+            QSignalSpy toggled(time, &InspectorSection::toggled);
+            QTest::keyClick(header, Qt::Key_Space);
+            QVERIFY(time->isOpen());
+            QCOMPARE(toggled.size(), 1);
+            QCOMPARE(header->accessibleName(), QStringLiteral("Time, expanded"));
+            QTest::keyClick(header, Qt::Key_Return);
+            QVERIFY(!time->isOpen());
+            QCOMPARE(toggled.size(), 2);
+            QCOMPARE(header->accessibleName(), QStringLiteral("Time, collapsed"));
+            header->clearFocus();
+        }
 
         // Lamps: dark at the defaults; a moved value lights its module's and
         // rests in its row's lane until the pointer brings ↺.
@@ -5763,6 +5879,92 @@ private slots:
         power = inspector.findChild<PowerKey *>(QStringLiteral("effectEnabled"));
         QVERIFY(power->isChecked());
         QCOMPARE(power->lampState(), LampState::Ok);
+    }
+
+    // The knob beside Rotation: a click turns nothing, a drag lands on the
+    // field's tenths, a double-click puts every clip selected back at 0°,
+    // and a run of wheel steps edits the clips it was turned for, though
+    // the selection changes before its pause ends.
+    void inspectorRotationKnobEditsTheSelection() {
+        QSettings().remove(QStringLiteral("editor/inspector"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("editor/inspector")); });
+        const auto clip = [](const char *id, double start, double rotation) {
+            return QJsonObject{{"id", id}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", start}, {"duration", 2.0},
+                               {"props", QJsonObject{{"rotation", rotation}}}};
+        };
+        const QJsonObject timeline{
+            {"fps", 24}, {"width", 1080}, {"height", 1920}, {"properties", catalogProperties()},
+            {"sources", QJsonArray{QJsonObject{{"id", "m1"}, {"path", "a.mov"}, {"width", 1920}, {"height", 1080}, {"duration", 20}}}},
+            {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{clip("v1", 0.0, 30.0), clip("v2", 2.0, 10.0)}}}}}};
+        InspectorPanel inspector;
+        inspector.setEffectCatalog(QJsonArray{});
+        QList<QJsonArray> sent;
+        connect(&inspector, &InspectorPanel::editRequested, &inspector, [&sent](const QJsonArray &ops) { sent << ops; });
+        inspector.setState(timeline, {QStringLiteral("v1")});
+        inspector.resize(300, 900);
+        inspector.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&inspector));
+        const auto shownKnob = [&inspector]() -> RotationKnob * {
+            for (RotationKnob *knob : inspector.findChildren<RotationKnob *>())
+                if (knob->isVisible()) return knob;
+            return nullptr;
+        };
+        RotationKnob *knob = shownKnob();
+        QVERIFY(knob);
+        const QPointF middle = QRectF(knob->rect()).center();
+        const auto mouse = [knob](QEvent::Type type, const QPointF &at) {
+            QMouseEvent event(type, at, knob->mapToGlobal(at), Qt::LeftButton,
+                              type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(knob, &event);
+        };
+
+        // A click that wanders a point or two turns nothing.
+        mouse(QEvent::MouseButtonPress, middle);
+        mouse(QEvent::MouseMove, middle - QPointF(0, 2));
+        mouse(QEvent::MouseButtonRelease, middle - QPointF(0, 2));
+        QVERIFY(sent.isEmpty());
+        QCOMPARE(knob->angle(), 30.0);
+        // A drag of 12.46 points lands on the field's tenth of a degree.
+        mouse(QEvent::MouseButtonPress, middle);
+        mouse(QEvent::MouseMove, middle - QPointF(0, 12.46));
+        mouse(QEvent::MouseButtonRelease, middle - QPointF(0, 12.46));
+        QCOMPARE(sent.size(), 1);
+        QCOMPARE(sent.last().first().toObject().value("props").toObject().value("rotation").toDouble(), 42.5);
+
+        // A double-click on two clips at 30° and 10°: both at 0°, not the
+        // second shifted by the first's turn.
+        sent.clear();
+        inspector.setState(timeline, {QStringLiteral("v1"), QStringLiteral("v2")});
+        knob = shownKnob();
+        QVERIFY(knob);
+        QTest::mouseDClick(knob, Qt::LeftButton, Qt::NoModifier, knob->rect().center());
+        QCOMPARE(sent.size(), 1);
+        QStringList reset;
+        for (const QJsonValue &op : sent.last()) {
+            QVERIFY(op.toObject().value("props").toObject().value("rotation").isNull());
+            reset << op.toObject().value("clip").toString();
+        }
+        QCOMPARE(reset, (QStringList{"v1", "v2"}));
+
+        // Two wheel steps on the first clip, then the second selected
+        // before the pause ends: the edit goes to the first, then and once.
+        sent.clear();
+        inspector.setState(timeline, {QStringLiteral("v1")});
+        knob = shownKnob();
+        QVERIFY(knob);
+        for (int notch = 0; notch < 2; ++notch) {
+            QWheelEvent wheel(middle, knob->mapToGlobal(middle), QPoint(), QPoint(0, QWheelEvent::DefaultDeltasPerStep),
+                              Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+            QCoreApplication::sendEvent(knob, &wheel);
+        }
+        QVERIFY(sent.isEmpty());
+        inspector.setState(timeline, {QStringLiteral("v2")});
+        QCOMPARE(sent.size(), 1);
+        const QJsonObject op = sent.last().first().toObject();
+        QCOMPARE(op.value("clip").toString(), QStringLiteral("v1"));
+        QCOMPARE(op.value("props").toObject().value("rotation").toDouble(), 32.0);
+        QTest::qWait(RotationKnob::kWheelRunMs + 100);
+        QCOMPARE(sent.size(), 1);
     }
 
     // The parts are painted from the hardware tokens in both appearances,
