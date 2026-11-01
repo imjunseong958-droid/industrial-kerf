@@ -5388,8 +5388,10 @@ private slots:
             QCOMPARE(image.pixelColor(4, 4), theme.rulerCorner);
             QCOMPARE(image.pixelColor(x(9.0), titles), theme.trackLane);
             QCOMPARE(image.pixelColor(x(7.5), titles), theme.playhead);
-            QCOMPARE(image.pixelColor(selected.right(), selected.center().y()), theme.clipSelectedRingOuter);
-            QCOMPARE(image.pixelColor(selected.right() - 1, selected.center().y()), theme.clipSelectedRing);
+            // A pixel of lane after each clip, so clips that meet read as two.
+            QCOMPARE(image.pixelColor(selected.right(), selected.center().y()), theme.trackLane);
+            QCOMPARE(image.pixelColor(selected.right() - 1, selected.center().y()), theme.clipSelectedRingOuter);
+            QCOMPARE(image.pixelColor(selected.right() - 2, selected.center().y()), theme.clipSelectedRing);
             QCOMPARE(image.pixelColor(unselected.left(), unselected.center().y()), theme.clipVideo.border);
             // The clip the proposal removes is outlined in red to its corners.
             const QRect removed = timeline.clipBounds(QStringLiteral("v1c"));
@@ -5418,7 +5420,8 @@ private slots:
                 const int top = selected.top();
                 const int bottom = selected.bottom();
                 int dashes = 0;
-                for (int px = x(11.0) + 4; px <= x(13.0) - 5; ++px) {
+                // (Clear of its rounded corners and the pixel of lane after it.)
+                for (int px = x(11.0) + 6; px <= x(13.0) - 7; ++px) {
                     QCOMPARE(dragging.pixelColor(px, top), theme.clipSelectedRingOuter);
                     QCOMPARE(dragging.pixelColor(px, top + 1), theme.clipSelectedRing);
                     QCOMPARE(dragging.pixelColor(px, bottom - 1), theme.clipSelectedRing);
@@ -6005,9 +6008,12 @@ private slots:
         timeline.show();
         const EditorTheme &theme = editorTheme();
         // Whether any pixel across a clip's body, near its foot, is `color`.
+        // A picture's frames fill the clip to its foot; a sound's waveform
+        // is around its middle, under the name chip.
         const auto bodyShows = [](const QImage &image, const QRect &clip, const QColor &color) {
+            const int y = color == QColor("#e87342") ? clip.bottom() - 3 : clip.center().y() + 2;
             for (int x = clip.center().x() - 20; x <= clip.center().x() + 20; ++x)
-                if (image.pixelColor(x, clip.bottom() - 3) == color) return true;
+                if (image.pixelColor(x, y) == color) return true;
             return false;
         };
         for (const int height : {18, 19, 20, 21, 22, 23, 24, 25, 26, 28, 29, 30, 32, 33, 34, 36, 39, 40, 44, 48, 49, 60, 96, 160}) {
@@ -6471,6 +6477,38 @@ private slots:
         const AudioPeaks peaks = reducer.finish();
         QCOMPARE(peaks.levels.first().size(), qsizetype(AudioPeaks::kBucketsPerSecond));
         QCOMPARE(peaks.duration(), 1.0);
+        // A waveform is raised until the loudest peak nearly fills its clip,
+        // a quiet recording by at most 12 dB, silence not at all.
+        QVERIFY(std::abs(peaks.displayGain() - 0.95 / 0.5) < 0.01);
+        QVector<float> whisper(sine);
+        for (float &sample : whisper) sample *= 0.02f;
+        PeakReducer quiet(16000);
+        quiet.add(whisper.constData(), whisper.size());
+        QCOMPARE(quiet.finish().displayGain(), 4.0);
+        PeakReducer hush(16000);
+        const QVector<float> silence(16000, 0.0f);
+        hush.add(silence.constData(), silence.size());
+        QCOMPARE(hush.finish().displayGain(), 1.0);
+        // A quiet take with its gain raised fills its clip without being cut
+        // flat at the top, as only sound over full scale is.
+        QVector<float> soft(sine);
+        for (float &sample : soft) sample *= 0.4f;
+        PeakReducer softer(16000);
+        softer.add(soft.constData(), soft.size());
+        const AudioPeaks raised = softer.finish();
+        const auto topRowInk = [&raised](double gain) {
+            QImage image(200, 40, QImage::Format_ARGB32_Premultiplied);
+            image.fill(Qt::transparent);
+            QPainter painter(&image);
+            drawWaveform(painter, QRectF(image.rect()), raised, 0.0, 1.0, Qt::black, Qt::black, gain, QRectF());
+            painter.end();
+            int ink = 0;
+            for (int x = 0; x < image.width(); ++x) ink = std::max(ink, qAlpha(image.pixel(x, 0)));
+            return ink;
+        };
+        QVERIFY2(topRowInk(2.0) < 128, qPrintable(QString::number(topRowInk(2.0))));
+        // Truly over full scale (0.2 at +18 dB), it is cut flat.
+        QCOMPARE(topRowInk(8.0), 255);
         for (const AudioPeaks::Bucket &bucket : peaks.levels.first()) {
             QVERIFY(std::abs(bucket.max - 0.5f) < 0.005f && std::abs(bucket.min + 0.5f) < 0.005f);
             QVERIFY(std::abs(bucket.rms - 0.3536f) < 0.03f);
@@ -6538,6 +6576,49 @@ private slots:
     // name bar comes back from the Large preset up. The filmstrip's tiles
     // are the picture's own shape (a vertical clip's tall and narrow, no
     // bars), each the frame under its left edge.
+    // Pictures of a real clip's filmstrip and waveform at the default and
+    // taller heights, to look at: run with KERF_TIMELINE_GALLERY set to a
+    // folder and KERF_GALLERY_MEDIA to a clip with picture and sound
+    // (QT_SCALE_FACTOR=2 for a Retina screen's pixels).
+    void timelineGallery() {
+        const QString folder = qEnvironmentVariable("KERF_TIMELINE_GALLERY");
+        const QString media = qEnvironmentVariable("KERF_GALLERY_MEDIA");
+        if (folder.isEmpty() || media.isEmpty()) QSKIP("Set KERF_TIMELINE_GALLERY and KERF_GALLERY_MEDIA to draw the gallery.");
+        const QFileInfo file(media);
+        const double duration = 12.0;
+        MediaArtwork artwork;
+        artwork.request(QJsonArray{QJsonObject{{"id", "m"}, {"path", file.fileName()}, {"width", 1080}, {"height", 1920},
+                                               {"duration", duration}, {"hasAudio", true}}}, file.absolutePath());
+        QTRY_VERIFY_WITH_TIMEOUT(artwork.strips.contains(QStringLiteral("m")) && artwork.peaks.contains(QStringLiteral("m")), 120000);
+        const auto clip = [](const char *id, double start, double length, double in) {
+            return QJsonObject{{"id", id}, {"kind", "media"}, {"sourceId", "m"}, {"name", "voice_take"},
+                               {"timelineStart", start}, {"duration", length}, {"in", in}, {"out", in + length}};
+        };
+        TimelineWidget timeline;
+        timeline.setArtwork(&artwork);
+        timeline.setProject(QJsonObject{{"fps", 30}, {"tracks", QJsonArray{
+            QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{clip("v1", 0.0, 5.0, 0.0), clip("v2", 5.0, 7.0, 5.0)}}},
+            QJsonObject{{"id", "A1"}, {"type", "audio"}, {"clips", QJsonArray{clip("a1", 0.0, 5.0, 0.0), clip("a2", 5.0, 7.0, 5.0)}}}}}},
+            duration, 30);
+        timeline.resize(1200, 260);
+        timeline.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&timeline));
+        QDir().mkpath(folder);
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            const QString look = scheme == ColorScheme::Dark ? QStringLiteral("dark") : QStringLiteral("light");
+            timeline.resetTrackHeights();
+            QCoreApplication::processEvents();
+            QVERIFY(timeline.grab().save(QDir(folder).filePath(QStringLiteral("%1-default.png").arg(look))));
+            for (const int height : {60, 96}) {
+                timeline.setAllTrackHeights(height);
+                QCoreApplication::processEvents();
+                QVERIFY(timeline.grab().save(QDir(folder).filePath(QStringLiteral("%1-tracks-%2.png").arg(look).arg(height))));
+            }
+        }
+        setEditorColorScheme(ColorScheme::System);
+    }
+
     void timelineDrawsArtworkAtDefaultHeights() {
         const QRectF video(0, 0, 200, kVideoTrackHeight - 5);
         const QRectF sound(0, 0, 200, kTrackHeight - 5);
@@ -6581,14 +6662,15 @@ private slots:
         QCOMPARE(trackHeights(timeline), (QList<int>{kVideoTrackHeight, kTrackHeight}));
         const QImage image = timeline.grab().toImage();
         const QRect picture = timeline.clipBounds(QStringLiteral("v"));
-        const int tileWidth = int(std::lround(picture.height() * 54.0 / 96.0));
+        // A tall picture's tiles are square, its middle cut out.
+        const int tileWidth = picture.height();
         const int y = picture.bottom() - 3;
         // Past the name chip, every tile is the frame under its left edge,
-        // all the way across: no bars, so no pixel is black.
+        // all the way across, meeting without a seam: no bars, so no pixel
+        // is black.
         for (int x = picture.left() + 80; x < picture.right() - 4; ++x) {
             const QColor pixel = image.pixelColor(x, y);
             const int tileLeft = picture.left() + (x - picture.left()) / tileWidth * tileWidth;
-            if (x == tileLeft + tileWidth - 1) continue; // The seam.
             const double seconds = 3.0 + (tileLeft - picture.left()) / timeline.scale();
             QVERIFY2(pixel == colors.at(strip.frameAt(seconds)),
                      qPrintable(QStringLiteral("x %1: %2").arg(x).arg(pixel.name())));

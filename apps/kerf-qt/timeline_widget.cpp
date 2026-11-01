@@ -109,12 +109,33 @@ int steppedHeight(int height, int steps) {
     return std::clamp(height, kMinTrackHeight, kMaxTrackHeight);
 }
 
+// A clip as drawn: a pixel short of its right edge, so clips that meet
+// read as two with the lane between them, as Logic's regions and Final
+// Cut's clips do, with its corners rounded.
+QRectF clipShape(const QRectF &rect) { return rect.width() > 6.0 ? rect.adjusted(0, 0, -1, 0) : rect; }
+qreal clipRadius(const QRectF &rect) { return rect.height() >= 18.0 && rect.width() >= 12.0 ? 4.0 : 2.0; }
+
+// A rounded line `thickness` wide inside `rect`, antialiased, so it also
+// smooths the corners of what was drawn under the shape's (unsmoothed) clip.
+void strokeRoundedInside(QPainter &p, const QRectF &rect, qreal thickness, const QColor &color, qreal radius) {
+    const qreal half = thickness / 2.0;
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(color, thickness));
+    const qreal inner = std::max<qreal>(0.0, radius - half);
+    p.drawRoundedRect(rect.adjusted(half, half, -half, -half), inner, inner);
+    p.restore();
+}
+
 // The selected clip's ring: a 2px light line inside a 1px dark one, which
 // reads on every clip hue and on both lane colours.
 void paintSelectionRing(QPainter &p, const QRectF &rect) {
     const EditorTheme &theme = editorTheme();
-    frameInside(p, rect, 1, theme.clipSelectedRingOuter);
-    frameInside(p, rect.adjusted(1, 1, -1, -1), 2, theme.clipSelectedRing);
+    const QRectF shape = clipShape(rect);
+    const qreal radius = clipRadius(rect);
+    strokeRoundedInside(p, shape, 1, theme.clipSelectedRingOuter, radius);
+    strokeRoundedInside(p, shape.adjusted(1, 1, -1, -1), 2, theme.clipSelectedRing, std::max<qreal>(0.0, radius - 1.0));
 }
 
 } // namespace
@@ -1402,8 +1423,12 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
     const QRectF band = layout.band;
     const QRectF body = layout.body;
 
+    const QRectF shape = clipShape(rect);
+    const qreal radius = clipRadius(rect);
+    QPainterPath outline;
+    outline.addRoundedRect(shape, radius, radius);
     p.save();
-    p.setClipRect(rect, Qt::IntersectClip);
+    p.setClipPath(outline, Qt::IntersectClip);
     if (!layout.chip) {
         QLinearGradient bandFill(0, band.top(), 0, band.bottom());
         bandFill.setColorAt(0, style.header.lighter(108));
@@ -1430,19 +1455,21 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
                          mixColor(fill, style.wave, 0.55), style.wave, std::pow(10.0, gain.toDouble(0.0) / 20.0), visible);
         }
     } else if (body.height() > 0.0 && (strip || poster)) {
-        // Tiles at the picture's own shape, each the frame under its left
-        // edge (the first one the clip's in point), scaled once per size.
+        // Tiles each the frame under its left edge (the first one the
+        // clip's in point), scaled once per size. A tall picture's tile is
+        // square, its middle cut out: at its own shape a 9:16 frame was a
+        // sliver a few pixels wide, a stripe of the same picture repeated.
         const double aspect = strip ? strip->aspect() : double(poster->width()) / std::max(1, poster->height());
         const double tileHeight = body.height();
-        const double tileWidth = std::max(6.0, std::round(tileHeight * aspect));
+        const double tileWidth = std::max(6.0, std::round(tileHeight * std::max(1.0, aspect)));
         const qreal ratio = p.device()->devicePixelRatioF();
         const double pps = pixelsPerSecond();
         const double firstTile = body.left() + std::max(0.0, std::floor((visible.left() - body.left()) / tileWidth)) * tileWidth;
         const double stop = std::min(body.right(), double(visible.right()) + 1.0);
         for (double x = firstTile; x < stop; x += tileWidth) {
             const int frame = strip ? strip->frameAt(sourceAt((x - rect.left()) / pps)) : -1;
+            // Frames meet without a seam, as a strip of film does on screen.
             p.drawImage(QPointF(x, body.top()), filmstripTile(sourceId, frame, QSize(int(tileWidth), int(tileHeight)), ratio));
-            p.fillRect(QRectF(x + tileWidth - 1, body.top(), 1, tileHeight), theme.filmstripSeam);
         }
     }
 
@@ -1476,10 +1503,22 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
         if (layout.chip) {
             // Over the artwork, on a chip of the clip's own colour only as
             // wide as the name, so the rest of the picture or sound shows.
+            // Its outer corner rounded, as a tab on the clip's edge.
             const qreal named = laidName(nameFont, label, std::max(1.0, textRight - textLeft)).size().width();
             QColor chip = style.header;
-            chip.setAlphaF(0.88f);
-            p.fillRect(QRectF(rect.left(), labelBand.top(), std::ceil(named) + 12.0, labelBand.height()), chip);
+            chip.setAlphaF(0.9f);
+            const QRectF tab(rect.left(), labelBand.top(), std::ceil(named) + 12.0, labelBand.height());
+            QPainterPath corner;
+            corner.moveTo(tab.topLeft());
+            corner.lineTo(tab.topRight());
+            corner.lineTo(tab.right(), tab.bottom() - 4.0);
+            corner.quadTo(tab.bottomRight(), QPointF(tab.right() - 4.0, tab.bottom()));
+            corner.lineTo(tab.bottomLeft());
+            corner.closeSubpath();
+            p.save();
+            p.setRenderHint(QPainter::Antialiasing, true);
+            p.fillPath(corner, chip);
+            p.restore();
         }
         p.setPen(style.label);
         // Centred in the band even where a short row's band (inside a
@@ -1489,22 +1528,29 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
     }
     p.restore();
 
-    p.fillRect(QRectF(rect.left() + 1, rect.top() + 1, rect.width() - 2, 1), theme.clipHighlight);
-    // The lane draws the selected clip's ring last, over any proposal.
-    if (selected) paintSelectionRing(p, rect);
-    else frameInside(p, rect, 1, style.border);
+    p.fillRect(QRectF(shape.left() + radius, shape.top() + 1, std::max<qreal>(0.0, shape.width() - 2 * radius), 1), theme.clipHighlight);
+    // The lane draws a selected clip's ring last, over any proposal (here
+    // only for the clip being dragged, which the lane leaves out): drawn
+    // twice, its smoothed corners would darken.
+    if (selected && dragged) paintSelectionRing(p, rect);
+    else if (!selected) strokeRoundedInside(p, shape, 1, style.border, radius);
 
     // Trim bracket on the edge under the pointer, or the edge being trimmed.
     int edge = 0;
     if (dragged) edge = m_dragLeading ? -1 : m_dragTrailing ? 1 : 0;
     else if (hovered && !m_dragging) edge = m_hoverEdge;
     if (edge != 0) {
+        // On the clip as drawn: inside its rounded corners, and clear of the
+        // pixel of lane after it, so the bracket says whose edge it is.
         const QColor bracket = theme.clipTrim;
-        const qreal x = edge < 0 ? rect.left() : rect.right() - 3;
-        p.fillRect(QRectF(x, rect.top(), 3, rect.height()), bracket);
-        const qreal serif = edge < 0 ? rect.left() : rect.right() - 8;
-        p.fillRect(QRectF(serif, rect.top(), 8, 2), bracket);
-        p.fillRect(QRectF(serif, rect.bottom() - 2, 8, 2), bracket);
+        p.save();
+        p.setClipPath(outline, Qt::IntersectClip);
+        const qreal x = edge < 0 ? shape.left() : shape.right() - 3;
+        p.fillRect(QRectF(x, shape.top(), 3, shape.height()), bracket);
+        const qreal serif = edge < 0 ? shape.left() : shape.right() - 8;
+        p.fillRect(QRectF(serif, shape.top(), 8, 2), bracket);
+        p.fillRect(QRectF(serif, shape.bottom() - 2, 8, 2), bracket);
+        p.restore();
     }
 }
 
@@ -1519,7 +1565,15 @@ void TimelineWidget::paintDraggedClip(QPainter &p, const QRect &visible, int row
     const QRectF rect = clipRect(row, start, duration);
     // A shadow under it, as a lifted clip. It is opaque, so the names of
     // the clips it covers do not ghost through its own.
-    p.fillRect(rect.translated(0, 2), theme.dragShadow);
+    {
+        const qreal radius = clipRadius(rect);
+        QPainterPath shadow;
+        shadow.addRoundedRect(clipShape(rect).translated(0, 2), radius, radius);
+        p.save();
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.fillPath(shadow, theme.dragShadow);
+        p.restore();
+    }
     paintClip(p, visible, row, clip, track, audio);
     // Where it will overwrite its neighbours, a dashed edge inside its
     // selection ring: white dashes on a dark line, which read on any
@@ -1532,8 +1586,9 @@ void TimelineWidget::paintDraggedClip(QPainter &p, const QRect &visible, int row
     for (const QJsonValue &value : track.value(QStringLiteral("clips")).toArray()) {
         const QJsonObject other = value.toObject();
         if (other.value(QStringLiteral("id")).toString() == id) continue;
-        const QRectF overlap = rect.intersected(clipRect(row, other.value(QStringLiteral("timelineStart")).toDouble(),
-                                                         other.value(QStringLiteral("duration")).toDouble()));
+        // Against the clip as drawn, whose ring stops a pixel short of its edge.
+        const QRectF overlap = clipShape(rect).intersected(clipRect(row, other.value(QStringLiteral("timelineStart")).toDouble(),
+                                                                    other.value(QStringLiteral("duration")).toDouble()));
         if (overlap.width() < 1.0 + 2 * ring) continue;
         // On the first pixels inside the ring (a 1px pen on the half pixel).
         const QRectF edge = overlap.adjusted(ring + 0.5, ring + 0.5, -ring - 0.5, -ring - 0.5);
@@ -1766,7 +1821,14 @@ QImage TimelineWidget::filmstripTile(const QString &sourceId, int frame, const Q
     if (source.isNull()) return {};
     // Pixel for pixel on the screen it is drawn on, averaged down from the
     // larger frame rather than sampled, so fine detail does not shimmer.
-    QImage tile = source.scaled(size * dpr, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    // Filled, not stretched: a picture taller than its tile gives up its
+    // top and bottom, keeping its middle.
+    // Rounded up, so at a fractional scale (125%) a tile reaches the next
+    // rather than leaving a column of the body showing between them.
+    const QSize target(int(std::ceil(size.width() * dpr)), int(std::ceil(size.height() * dpr)));
+    QImage tile = source.scaled(target, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+    if (tile.size() != target)
+        tile = tile.copy((tile.width() - target.width()) / 2, (tile.height() - target.height()) / 2, target.width(), target.height());
     tile.setDevicePixelRatio(dpr);
     if (m_filmstripTileBytes + tile.sizeInBytes() > kFilmstripTileBudget) {
         m_filmstripTiles.clear();
