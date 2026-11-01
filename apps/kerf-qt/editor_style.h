@@ -864,9 +864,10 @@ QPushButton#chatPillText:pressed { background: @chatChip; }
 /* The pinned proposal's Accept and Reject, a size up: 36px, round ends. */
 QFrame#proposalBox QPushButton#chatPillFilled,
 QFrame#proposalBox QPushButton#chatPillTonal { border-radius: 18px; min-height: 36px; max-height: 36px; padding: 0 18px; }
-/* In a narrow panel they share their row with Script, a little tighter. */
+/* In a narrow panel they share their row with Script, as tight as the
+   compact bar's, so Script stays whole in wider faces (DejaVu Sans Bold). */
 QFrame#proposalBox[narrow="true"] QPushButton#chatPillFilled,
-QFrame#proposalBox[narrow="true"] QPushButton#chatPillTonal { padding: 0 14px; }
+QFrame#proposalBox[narrow="true"] QPushButton#chatPillTonal { padding: 0 12px; }
 /* The compact bar's, a little tighter, so its summary keeps room beside them. */
 QFrame#proposalBar QPushButton#chatPillFilled,
 QFrame#proposalBar QPushButton#chatPillTonal { padding: 0 12px; }
