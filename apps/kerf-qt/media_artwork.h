@@ -132,7 +132,14 @@ private:
         QString key;
         Kind kind = Poster;
         double duration = 0.0;
+        // A sought strip's frame, from the first.
+        int sample = 0;
     };
+    // Sources longer than this have their strip sought a frame at a time;
+    // shorter ones are decoded once.
+    static constexpr double kDecodedStripSeconds = 16.0;
+    static bool seeksStrip(double duration);
+    void stripFrameFinished(const Job &job, const QImage &frame, bool current);
     void next();
     void jobFinished(bool succeeded);
     void readSamples();
@@ -145,7 +152,8 @@ private:
     double m_interval = 0.0;
     std::optional<PeakReducer> m_reducer;
     QByteArray m_partialSample;
-    QSet<QString> m_requested;
+    // A sought strip's frames so far, by id.
+    QHash<QString, QVector<QImage>> m_stripFrames;
     // The key (id, path and modification time) each id was last asked for
     // under, so a result for a file since replaced is dropped.
     QHash<QString, QString> m_keys;

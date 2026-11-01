@@ -234,15 +234,19 @@ MediaArtwork::~MediaArtwork() {
 }
 
 void MediaArtwork::request(const QJsonArray &sources, const QString &directory) {
+    QSet<QString> present;
     for (const auto &value : sources) {
         const auto source = value.toObject();
         const QString id = source.value("id").toString();
+        present.insert(id);
         const QString path = QDir(directory).absoluteFilePath(source.value("path").toString());
         const QString key = id + path + QString::number(QFileInfo(path).lastModified().toMSecsSinceEpoch());
-        if (m_requested.contains(key)) continue;
-        m_requested.insert(key);
+        // Asked again only when the id now names another file, or this one
+        // changed; going back to a file asked for before (an undone relink)
+        // asks again too, as the id's artwork is the other file's by then.
+        if (m_keys.value(id) == key) continue;
         m_keys.insert(id, key);
-        frames.remove(id); waves.remove(id); peaks.remove(id); strips.remove(id);
+        frames.remove(id); waves.remove(id); peaks.remove(id); strips.remove(id); m_stripFrames.remove(id);
         const double duration = source.value("duration").toDouble();
         const bool audio = source.value("hasAudio").toBool();
         // A source that says it is sound alone has no picture to look for.
@@ -251,6 +255,17 @@ void MediaArtwork::request(const QJsonArray &sources, const QString &directory) 
             m_queues[Strip].enqueue({id, path, key, Strip, duration});
         }
         if (audio) m_queues[Peaks].enqueue({id, path, key, Peaks, duration});
+    }
+    // Media taken out of the project lets go of its artwork; its jobs still
+    // queued are skipped, as its id has no key now.
+    for (auto it = m_keys.begin(); it != m_keys.end();) {
+        if (present.contains(it.key())) {
+            ++it;
+            continue;
+        }
+        frames.remove(it.key()); waves.remove(it.key()); peaks.remove(it.key()); strips.remove(it.key());
+        m_stripFrames.remove(it.key());
+        it = m_keys.erase(it);
     }
     if (!m_busy) next();
 }
@@ -290,6 +305,8 @@ void MediaArtwork::jobFinished(bool succeeded) {
                 frames.insert(job.id, poster);
                 emit changed();
             }
+        } else if (job.kind == Strip && seeksStrip(job.duration)) {
+            stripFrameFinished(job, succeeded && current ? QImage::fromData(output) : QImage(), current);
         } else if (succeeded && current && job.kind == Strip) {
             Filmstrip strip{splitPngStream(output), m_interval};
             if (!strip.isEmpty()) {
@@ -299,6 +316,41 @@ void MediaArtwork::jobFinished(bool succeeded) {
         }
     }
     next();
+}
+
+bool MediaArtwork::seeksStrip(double duration) { return duration > kDecodedStripSeconds; }
+
+void MediaArtwork::stripFrameFinished(const Job &job, const QImage &frame, bool current) {
+    if (!current) {
+        m_stripFrames.remove(job.id);
+        return;
+    }
+    QVector<QImage> &taken = m_stripFrames[job.id];
+    taken.append(frame);
+    const int count = stripFrameCount(job.duration);
+    if (job.sample + 1 < count) {
+        // The next frame waits at the head of the strips, behind any poster
+        // or sound asked for meanwhile.
+        Job more = job;
+        ++more.sample;
+        m_queues[Strip].prepend(std::move(more));
+        return;
+    }
+    // A frame that could not be had (a seek past the last keyframe, a read
+    // error) is the nearest one that could, so the spacing holds.
+    QVector<QImage> frames = m_stripFrames.take(job.id);
+    QImage last;
+    for (QImage &image : frames) {
+        if (image.isNull()) image = last;
+        else last = image;
+    }
+    for (int index = frames.size() - 1; index >= 0; --index) {
+        if (frames[index].isNull()) frames[index] = last;
+        else last = frames[index];
+    }
+    if (frames.isEmpty() || frames.first().isNull()) return;
+    strips.insert(job.id, Filmstrip{std::move(frames), job.duration / count});
+    emit changed();
 }
 
 void MediaArtwork::next() {
@@ -326,17 +378,24 @@ void MediaArtwork::next() {
              << QStringLiteral("%1,scale=%2:%3:force_original_aspect_ratio=increase:flags=lanczos,thumbnail")
                     .arg(square).arg(kPosterSize.width()).arg(kPosterSize.height())
              << "-frames:v" << "1" << "-f" << "image2pipe" << "-vcodec" << "png" << "pipe:1";
+    } else if (m_current.kind == Strip && seeksStrip(duration)) {
+        // A long source's strip is one frame a run, sought to: a decode of
+        // the whole source would hold the queue for minutes (all of an
+        // intra-frame codec's frames are keyframes, so skipping to them
+        // saves nothing), and between runs a new poster or sound goes first.
+        const int count = stripFrameCount(duration);
+        m_interval = duration / count;
+        args << "-ss" << QString::number(m_current.sample * m_interval, 'f', 3) << "-i" << m_current.path << "-an" << "-sn"
+             << "-vf" << QStringLiteral("%1,scale=-2:%2:flags=lanczos").arg(square).arg(kStripHeight)
+             << "-frames:v" << "1" << "-f" << "image2pipe" << "-vcodec" << "png" << "pipe:1";
     } else if (m_current.kind == Strip) {
+        // A short source is decoded once, its frames picked out evenly.
         const int count = stripFrameCount(duration);
         m_interval = duration > 0.0 ? duration / count : 1.0;
-        // Frames further apart than a second come from keyframes alone: a
-        // long source then takes seconds, not a decode of every frame, and
-        // the nearest keyframe stands in well at that spacing.
-        if (m_interval > 1.0) args << "-skip_frame" << "nokey";
         args << "-i" << m_current.path << "-an" << "-sn" << "-vf"
              << QStringLiteral("fps=%1,%2,scale=-2:%3:flags=lanczos").arg(1.0 / m_interval, 0, 'g', 10).arg(square).arg(kStripHeight)
              << "-frames:v" << QString::number(count) << "-f" << "image2pipe" << "-vcodec" << "png" << "pipe:1";
-        seconds += duration * (m_interval > 1.0 ? 0.25 : 1.0);
+        seconds += duration;
     } else {
         // Raw samples through the pipe, reduced as they arrive.
         m_reducer.emplace(kPeakSampleRate);

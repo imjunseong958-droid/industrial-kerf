@@ -290,12 +290,13 @@ void ProjectPanel::refreshTiles() {
 void ProjectPanel::refresh() {
     const QString current = m_list->currentItem() ? m_list->currentItem()->data(Qt::UserRole).toString() : QString();
     m_list->clear();
+    const QHash<QString, QString> names = sourceNames(m_sources);
     for (const QJsonValue &value : m_sources) {
         const QJsonObject source = value.toObject();
         const QString id = source.value(QStringLiteral("id")).toString();
         const QString badge = m_badges.value(id);
         auto *item = new QListWidgetItem(tileFor(source),
-                                         QStringLiteral("%1\n%2").arg(sourceName(source),
+                                         QStringLiteral("%1\n%2").arg(names.value(id),
                                                                       prettyTime(source.value(QStringLiteral("duration")).toDouble())));
         item->setData(Qt::UserRole, id);
         item->setData(kShapeRole, shapeOf(source));

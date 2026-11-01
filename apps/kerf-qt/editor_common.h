@@ -92,6 +92,11 @@ QString clipName(const QJsonObject &clip);
 // kerf-collab's media.rs). sourceFileName keeps the extension.
 QString sourceName(const QJsonObject &source);
 QString sourceFileName(const QJsonObject &source);
+// Every source's name by id, told apart where they would read the same:
+// two media named "Beach Day" are "Beach Day.mov" and "Beach Day.wav", and
+// two "Interview.mov" keep their copies' names, hash and all, so the bin,
+// the timeline and an @mention never name two media alike.
+QHash<QString, QString> sourceNames(const QJsonArray &sources);
 
 // The editor's one monospaced face (the system's: SF Mono on macOS), for
 // timecode and other figures that must not shift as they change.

@@ -271,6 +271,19 @@ private slots:
         QCOMPARE(named(""), QStringLiteral("Untitled media"));
         QCOMPARE(sourceFileName(QJsonObject{{"path", "media/Beach Day-1a2b3c4d.mov"}}), QStringLiteral("Beach Day.mov"));
         QCOMPARE(sourceFileName(QJsonObject{{"path", "media/notes-1a2b3c4d"}}), QStringLiteral("notes"));
+        // Media that would read alike is told apart: by extension first,
+        // then by the copy's own name.
+        const QHash<QString, QString> names = sourceNames(QJsonArray{
+            QJsonObject{{"id", "a"}, {"path", "media/Beach Day-1a2b3c4d.mov"}},
+            QJsonObject{{"id", "b"}, {"path", "media/Beach Day-5e6f7a8b.wav"}},
+            QJsonObject{{"id", "c"}, {"path", "media/Interview-aaaa1111.mov"}},
+            QJsonObject{{"id", "d"}, {"path", "media/Interview-bbbb2222.mov"}},
+            QJsonObject{{"id", "e"}, {"path", "media/harbor-0000ffff.mov"}}});
+        QCOMPARE(names.value("a"), QStringLiteral("Beach Day.mov"));
+        QCOMPARE(names.value("b"), QStringLiteral("Beach Day.wav"));
+        QCOMPARE(names.value("c"), QStringLiteral("Interview-aaaa1111.mov"));
+        QCOMPARE(names.value("d"), QStringLiteral("Interview-bbbb2222.mov"));
+        QCOMPARE(names.value("e"), QStringLiteral("harbor"));
         // Hundredths carry into the seconds and minutes.
         QCOMPARE(prettyTime(59.996), QStringLiteral("01:00.00"));
         QCOMPARE(prettyTime(8.0), QStringLiteral("00:08.00"));
@@ -6023,8 +6036,8 @@ private slots:
             }
             const QRect picture = timeline.clipBounds(QStringLiteral("v"));
             const QRect wave = timeline.clipBounds(QStringLiteral("a"));
-            QCOMPARE(bodyShows(image, picture, QColor("#e87342")), height == 23 || height >= 25);
-            QCOMPARE(bodyShows(image, wave, theme.clipAudio.wave), height == 23 || height >= 25);
+            QCOMPARE(bodyShows(image, picture, QColor("#e87342")), height >= 22);
+            QCOMPARE(bodyShows(image, wave, theme.clipAudio.wave), height >= 22);
             // Names: the clips', the tracks', the badges'; the clip count
             // only on two-line headers.
             TextRecorder recorder;
@@ -6407,6 +6420,45 @@ private slots:
         QVERIFY(artwork.peaks.value(QStringLiteral("v")).range(0.5, 1.5).max > 0.1f);
     }
 
+    // A long source's strip is sought a frame at a time; an id that comes
+    // back to a file it named before (an undone relink) has that file's
+    // artwork again, not the other's; media taken out lets go of its own.
+    void artworkFollowsRelinksAndRemovals() {
+        if (QStandardPaths::findExecutable(QStringLiteral("ffmpeg")).isEmpty()) QSKIP("FFmpeg unavailable");
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString longPath = directory.filePath(QStringLiteral("long.mov"));
+        const QString shortPath = directory.filePath(QStringLiteral("short.mov"));
+        QCOMPARE(QProcess::execute(QStringLiteral("ffmpeg"), {"-v", "error", "-f", "lavfi", "-i", "testsrc2=size=160x284:rate=10:duration=17",
+                                                              "-c:v", "mpeg4", "-q:v", "6", longPath}), 0);
+        QCOMPARE(QProcess::execute(QStringLiteral("ffmpeg"), {"-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25:duration=2",
+                                                              "-c:v", "mpeg4", "-q:v", "6", shortPath}), 0);
+        const auto source = [](const QString &path, double duration) {
+            return QJsonArray{QJsonObject{{"id", "v"}, {"path", path}, {"width", 160}, {"height", 284}, {"duration", duration}}};
+        };
+        MediaArtwork artwork;
+        artwork.request(source(longPath, 17.0), directory.path());
+        QTRY_VERIFY_WITH_TIMEOUT(artwork.strips.contains(QStringLiteral("v")), 60000);
+        Filmstrip strip = artwork.strips.value(QStringLiteral("v"));
+        QCOMPARE(strip.frames.size(), MediaArtwork::kStripFrames);
+        QVERIFY(std::abs(strip.interval - 17.0 / MediaArtwork::kStripFrames) < 1e-9);
+        QVERIFY(std::abs(strip.aspect() - 160.0 / 284.0) < 0.03);
+        QVERIFY(strip.frames.first() != strip.frames.last());
+        // Relinked to a short, wide file: its own strip.
+        artwork.request(source(shortPath, 2.0), directory.path());
+        QVERIFY(!artwork.strips.contains(QStringLiteral("v")));
+        QTRY_VERIFY_WITH_TIMEOUT(artwork.strips.contains(QStringLiteral("v")), 20000);
+        QVERIFY(artwork.strips.value(QStringLiteral("v")).aspect() > 1.5);
+        // Back to the long file: asked for again, so its strip is its own.
+        artwork.request(source(longPath, 17.0), directory.path());
+        QVERIFY(!artwork.strips.contains(QStringLiteral("v")));
+        QTRY_VERIFY_WITH_TIMEOUT(artwork.strips.contains(QStringLiteral("v")), 60000);
+        QVERIFY(artwork.strips.value(QStringLiteral("v")).aspect() < 1.0);
+        // Taken out of the project: nothing kept for it.
+        artwork.request(QJsonArray{}, directory.path());
+        QVERIFY(!artwork.strips.contains(QStringLiteral("v")) && !artwork.frames.contains(QStringLiteral("v")));
+    }
+
     // Sound reduces, as it streams in, to 5 ms buckets of its extremes and
     // RMS; each coarser level merges four; a span reads the coarsest level
     // that still fits it, and a span inside one bucket is interpolated.
@@ -6475,6 +6527,10 @@ private slots:
         QCOMPARE(at(QJsonObject{{"in", 1.0}, {"duration", 2.0}}, 0.5), 1.5);
         QCOMPARE(at(QJsonObject{{"in", 1.0}, {"out", 3.0}, {"duration", 2.0}, {"speed", -1.0}}, 0.0), 3.0);
         QCOMPARE(at(QJsonObject{{"in", 1.0}, {"out", 3.0}, {"duration", 2.0}, {"speed", -1.0}}, 2.0), 1.0);
+        // As the bridge sends a reversed clip: the speed's size and "reverse".
+        QCOMPARE(at(QJsonObject{{"in", 1.0}, {"out", 3.0}, {"duration", 2.0}, {"speed", 1.0}, {"reverse", true}}, 0.0), 3.0);
+        QCOMPARE(at(QJsonObject{{"in", 1.0}, {"out", 3.0}, {"duration", 2.0}, {"speed", 1.0}, {"reverse", true}}, 0.5), 2.5);
+        QCOMPARE(at(QJsonObject{{"in", 0.0}, {"out", 4.0}, {"duration", 2.0}, {"speed", 2.0}, {"reverse", true}}, 1.0), 2.0);
     }
 
     // At the default heights a picture clip is all filmstrip and a sound

@@ -197,6 +197,25 @@ QString sourceFileName(const QJsonObject &source) {
     return info.suffix().isEmpty() ? stem : stem + QLatin1Char('.') + info.suffix();
 }
 
+QHash<QString, QString> sourceNames(const QJsonArray &sources) {
+    const auto unique = [&sources](const std::function<QString(const QJsonObject &)> &name) {
+        QHash<QString, int> uses;
+        for (const QJsonValue &value : sources) ++uses[name(value.toObject())];
+        return uses;
+    };
+    const QHash<QString, int> stems = unique(sourceName);
+    const QHash<QString, int> files = unique(sourceFileName);
+    QHash<QString, QString> names;
+    for (const QJsonValue &value : sources) {
+        const QJsonObject source = value.toObject();
+        QString name = sourceName(source);
+        if (stems.value(name) > 1) name = sourceFileName(source);
+        if (files.value(name) > 1) name = QFileInfo(source.value(QStringLiteral("path")).toString()).fileName();
+        names.insert(source.value(QStringLiteral("id")).toString(), name);
+    }
+    return names;
+}
+
 QFont monoFont(int pixelSize, QFont::Weight weight) {
     QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
     font.setPixelSize(pixelSize);

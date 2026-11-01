@@ -382,6 +382,7 @@ private:
         }
     };
     QHash<FilmstripTileKey, QImage> m_filmstripTiles;
+    qsizetype m_filmstripTileBytes = 0;
     QHash<QString, QStaticText> m_names;
     // Every clip edge, marker and the playhead, sorted, while a clip is
     // dragged: what it snaps to.

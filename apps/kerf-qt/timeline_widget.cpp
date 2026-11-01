@@ -41,14 +41,16 @@ constexpr qreal kClipBodyFrom = kClipHeaderHeight + 10.0;
 // A clip with a picture or sound to show is all filmstrip or waveform from
 // this height, its name on a chip over the corner, as the default tracks
 // draw them...
-constexpr qreal kClipArtworkFrom = 20.0;
+constexpr qreal kClipArtworkFrom = 19.0;
 // ...until it is tall enough to give the name a bar of its own and still
 // keep 29px for the artwork under it (from the Large preset up).
 constexpr qreal kClipBandFrom = kClipHeaderHeight + 29.0;
 // The selected clip's ring, 1px dark and 2px light, inside its edge.
 constexpr qreal kSelectionRing = 3.0;
-// Scaled filmstrip tiles kept before the cache starts again.
-constexpr int kFilmstripTileCache = 4096;
+// The bytes of scaled filmstrip tiles kept before the cache starts again:
+// a tall track's tiles at twice the pixels run to half a megabyte each, so
+// a count alone could hold gigabytes.
+constexpr qsizetype kFilmstripTileBudget = 64 * 1024 * 1024;
 qreal clipHeaderHeight(const QRectF &clip) { return clip.height() >= kClipBodyFrom ? kClipHeaderHeight : clip.height(); }
 // Between a lane's edges and its clips: 2px, and 1px on rows too short to spare it.
 int clipInset(int rowHeight) { return rowHeight >= 24 ? kClipInset : 1; }
@@ -1766,8 +1768,12 @@ QImage TimelineWidget::filmstripTile(const QString &sourceId, int frame, const Q
     // larger frame rather than sampled, so fine detail does not shimmer.
     QImage tile = source.scaled(size * dpr, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
     tile.setDevicePixelRatio(dpr);
-    if (m_filmstripTiles.size() >= kFilmstripTileCache) m_filmstripTiles.clear();
+    if (m_filmstripTileBytes + tile.sizeInBytes() > kFilmstripTileBudget) {
+        m_filmstripTiles.clear();
+        m_filmstripTileBytes = 0;
+    }
     m_filmstripTiles.insert(key, tile);
+    m_filmstripTileBytes += tile.sizeInBytes();
     return tile;
 }
 
@@ -1785,9 +1791,12 @@ double TimelineWidget::clipSourceTime(const QJsonObject &clip, double offset) {
     const double in = clip.value(QStringLiteral("in")).toDouble();
     const double out = clip.value(QStringLiteral("out")).toDouble(in + duration * std::abs(speed));
     // From its in point towards its out, which already allow for its speed;
-    // backwards from the out point when the speed is negative.
+    // backwards from the out point when it plays in reverse (the bridge
+    // sends the speed's size and a separate "reverse"; a negative speed is
+    // read as reverse too).
+    const bool reverse = clip.value(QStringLiteral("reverse")).toBool() || speed < 0.0;
     const double rate = duration > 0.0 ? (out - in) / duration : std::abs(speed);
-    return speed < 0.0 ? out - offset * rate : in + offset * rate;
+    return reverse ? out - offset * rate : in + offset * rate;
 }
 
 qreal TimelineWidget::timeToX(double time) const {

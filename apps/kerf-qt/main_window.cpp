@@ -3726,6 +3726,7 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     // Derive presentation fields once per snapshot, not on every repaint.
     QHash<QString, QJsonObject> sourceById;
     for (const auto &value : m_project.value("sources").toArray()) { const auto source = value.toObject(); sourceById.insert(source.value("id").toString(), source); }
+    const QHash<QString, QString> names = sourceNames(m_project.value("sources").toArray());
     QJsonArray displayTracks;
     for (const auto &value : m_project.value("tracks").toArray()) {
         auto track = value.toObject(); QJsonArray displayClips;
@@ -3734,7 +3735,7 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
             // Named after its media's file; a clip of media with no path
             // keeps no stand-in name (the Inspector and the timeline fall
             // back on their own).
-            if (!clip.contains("name") && !source.value("path").toString().isEmpty()) clip.insert("name", sourceName(source));
+            if (!clip.contains("name") && !source.value("path").toString().isEmpty()) clip.insert("name", names.value(source.value("id").toString()));
             displayClips.append(clip);
         }
         track.insert("clips", displayClips); displayTracks.append(track);
@@ -4049,12 +4050,17 @@ ProposalChange MainWindow::describeScriptLine(const QString &line) const {
     }
     // For a narrow row: "Trim fisher-close" (the tooltip keeps the full name).
     change.shortDescription = change.description;
+    // Only a media file's own extension goes: names from media come without
+    // one already (see sourceName), and "clip.v2" keeps its ".v2".
+    static const QStringList mediaSuffixes{
+        QStringLiteral("mov"), QStringLiteral("mp4"), QStringLiteral("m4v"), QStringLiteral("mkv"), QStringLiteral("webm"),
+        QStringLiteral("avi"), QStringLiteral("mxf"), QStringLiteral("wav"), QStringLiteral("mp3"), QStringLiteral("m4a"),
+        QStringLiteral("aac"), QStringLiteral("aif"), QStringLiteral("aiff"), QStringLiteral("flac"), QStringLiteral("png"),
+        QStringLiteral("jpg"), QStringLiteral("jpeg"), QStringLiteral("gif"), QStringLiteral("tif"), QStringLiteral("tiff")};
     for (const QString &name : std::as_const(names)) {
         const QFileInfo file(name);
         const QString base = file.completeBaseName();
-        const QString suffix = file.suffix();
-        if (base.isEmpty() || suffix.isEmpty() || suffix.size() > 5 || !std::all_of(suffix.begin(), suffix.end(), [](QChar c) { return c.isLetterOrNumber(); }))
-            continue;
+        if (base.isEmpty() || !mediaSuffixes.contains(file.suffix(), Qt::CaseInsensitive)) continue;
         change.shortDescription.replace(name, base);
     }
     return change;
