@@ -87,6 +87,18 @@ if(APPLE)
 endif()
 
 add_executable(kerf-qt main.cpp ${KERF_QT_SOURCES})
+if(APPLE)
+    # A macOS application bundle (target/qt/kerf-qt.app), so the system
+    # treats the editor as an app of its own: its name in the menu bar and
+    # the Dock, and an identifier other apps and tools can address it by.
+    set_target_properties(kerf-qt PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_LIST_DIR}/Info.plist.in"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.industrial-kerf.editor"
+        MACOSX_BUNDLE_BUNDLE_NAME "Industrial Kerf"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}")
+endif()
 target_include_directories(kerf-qt PRIVATE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(kerf-qt PRIVATE Qt6::Widgets ads::qtadvanceddocking-qt6 "${KERF_BRIDGE_LIBRARY}" ${KERF_QT_PLATFORM_LIBRARIES})
 

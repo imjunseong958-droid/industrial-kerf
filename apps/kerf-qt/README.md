@@ -17,6 +17,11 @@ cmake --build target/qt
 target/qt/kerf-qt /path/to/project /path/to/kerfd
 ```
 
+On macOS the build is an application bundle, `target/qt/kerf-qt.app`
+(identifier `com.industrial-kerf.editor`); run
+`target/qt/kerf-qt.app/Contents/MacOS/kerf-qt` where these examples run
+`target/qt/kerf-qt`.
+
 The positional arguments may also be supplied as `KERF_PROJECT_DIR` and
 `KERFD_BIN`. Without a project, Kerf opens the project launcher instead
 (`KERFD_BIN=/path/to/kerfd target/qt/kerf-qt`). For a quick visual smoke
