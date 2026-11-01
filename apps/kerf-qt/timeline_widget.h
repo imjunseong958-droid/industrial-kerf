@@ -267,6 +267,8 @@ private:
     // A filmstrip tile: frame `frame` of `sourceId`'s strip (its poster when
     // -1, or until the strip arrives) scaled once to the tile's size.
     QImage filmstripTile(const QString &sourceId, int frame, const QSize &size, qreal dpr);
+    // A sound clip's body, or the sound band under a picture clip.
+    void paintSoundGlass(QPainter &p, const QRectF &area, const QColor &fill) const;
     // Where a clip's name goes and where its filmstrip or waveform does.
     // With artwork to show and too short for both one over the other, the
     // body is the whole clip and the name sits on a chip over it.
@@ -308,6 +310,7 @@ private:
 
     MediaArtwork *m_artwork = nullptr;
     QJsonObject m_project;
+    QHash<QString, QJsonObject> m_linkedSound;
     QJsonObject m_proposal;
     QVector<TrackRow> m_rows;
     // Track heights are a view preference keyed by track id, so they survive

@@ -44,6 +44,12 @@ struct AudioPeaks {
     Bucket range(double from, double to) const;
     // Fills in every coarser level from levels[0].
     void buildLevels();
+    // How far a waveform of this sound is raised to fill its clip, as
+    // Logic's and Final Cut's are: its loudest peak reaches 95% of the
+    // height, a quiet recording raised by at most 12 dB.
+    double displayGain() const;
+    // The largest sample's size, in the whole sound.
+    double loudest() const;
     static Bucket merge(const Bucket *buckets, qsizetype count);
 };
 

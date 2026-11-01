@@ -43,6 +43,19 @@ void AudioPeaks::buildLevels() {
     }
 }
 
+double AudioPeaks::loudest() const {
+    if (isEmpty()) return 0.0;
+    // The coarsest level is the whole sound in a bucket or a few.
+    const QVector<Bucket> &whole = levels.last();
+    const Bucket all = merge(whole.constData(), whole.size());
+    return std::max(std::abs(double(all.min)), std::abs(double(all.max)));
+}
+
+double AudioPeaks::displayGain() const {
+    const double peak = loudest();
+    return peak > 1e-4 ? std::min(4.0, 0.95 / peak) : 1.0;
+}
+
 AudioPeaks::Bucket AudioPeaks::range(double from, double to) const {
     if (isEmpty()) return {};
     if (to < from) std::swap(from, to);
@@ -130,11 +143,20 @@ void drawWaveform(QPainter &painter, const QRectF &rect, const AudioPeaks &peaks
     const double perX = (to - from) / rect.width();
     const qreal centre = rect.center().y();
     const qreal half = rect.height() / 2.0;
-    // On a square-root scale, as the previous pictures were and as editors
-    // show sound: quiet speech still reads beside a loud cue.
-    const auto shape = [gain](float value) {
-        const double level = std::clamp(double(value) * gain, -1.0, 1.0);
-        return std::copysign(std::sqrt(std::abs(level)), level);
+    // Raised so the loudest peak nearly fills the clip (see displayGain),
+    // on a gentle curve between linear and the square root: the square root
+    // swelled every syllable into one block, and linear left speech small
+    // beside a drum hit; this keeps the attacks and the gaps between words
+    // an editor cuts on, and speech still reads.
+    // Clip gain scales it, but the raise never pushes a peak past the top
+    // that does not truly go over full scale: a quiet take at +6 dB is
+    // drawn to fill the clip, not cut flat as if it clipped.
+    double raise = gain * peaks.displayGain();
+    const double loudest = peaks.loudest();
+    if (loudest > 1e-4 && loudest * raise > 0.95) raise = std::max(gain, 0.95 / loudest);
+    const auto shape = [raise](float value) {
+        const double level = std::clamp(double(value) * raise, -1.0, 1.0);
+        return std::copysign(std::pow(std::abs(level), 0.75), level);
     };
     const int columns = int(std::ceil((right - left) * ratio));
     QPolygonF envelope(2 * columns + 4);

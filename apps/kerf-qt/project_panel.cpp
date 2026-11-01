@@ -68,10 +68,8 @@ QIcon tile(const QImage &frame, const AudioPeaks &peaks, bool audio, const QStri
         pixmap.fill(theme.audioTile);
         if (!peaks.isEmpty()) {
             const QRectF wave(6, 12, kThumbnail.width() - 12, kThumbnail.height() - 24);
-            painter.fillRect(QRectF(wave.left(), std::floor(wave.center().y()), wave.width(), 1),
-                             mixColor(theme.audioTile, theme.audioTileGlyph, 0.3));
-            drawWaveform(painter, wave, peaks, 0.0, peaks.duration(), mixColor(theme.audioTile, theme.audioTileGlyph, 0.55),
-                         theme.audioTileGlyph);
+            painter.fillRect(QRectF(wave.left(), std::floor(wave.center().y()), wave.width(), 1), theme.waveCenter);
+            drawWaveform(painter, wave, peaks, 0.0, peaks.duration(), theme.waveformPeak, theme.waveformBody);
         } else {
             drawWaveformSymbol(painter, QRectF(QPointF(), QSizeF(kThumbnail)).center(), 24, theme.audioTileGlyph);
         }

@@ -292,6 +292,8 @@ struct EditorTheme {
     QColor trackToggleOn;     // ...and a neutral ink when on, not the accent...
     QColor trackToggleHover;  // ...on a round wash only under the pointer.
     QColor trackLane;         // A track's lane.
+    QColor laneGrid;          // Faint lines down the lanes at the ruler's major ticks, which show
+                              // through a sound clip's translucent body.
     QColor trackLaneAlt;      // Every other lane, where alternation is wanted.
     QColor trackLaneLocked;   // The hatch over a locked lane.
     QColor trackDivider;      // The line under each lane and header.
@@ -318,6 +320,8 @@ struct EditorTheme {
     QColor clipFxBadgeText;  // ...and its text.
     QColor filmstripSeam;    // Between filmstrip tiles.
     QColor waveCenter;       // The centre line of an audio clip's body.
+    QColor waveformPeak;     // A waveform's peaks, and its RMS body over them: white on the clip's
+    QColor waveformBody;     // own colour, the same in either appearance, as Logic and Final Cut ink it.
     QColor playhead;         // The playhead: the accent, deepened where it would not read on the ruler
                              // and on its halo clearly more than `playheadIdle` does.
     QColor playheadHalo;     // The solid 1px line either side of the playhead's line, skimmed or not, so
