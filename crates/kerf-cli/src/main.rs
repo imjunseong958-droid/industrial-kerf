@@ -330,6 +330,8 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
+    // The agent holds kerfd for the whole session.
+    let router = router.held();
     let mut tools = router.agent_tools();
     inbound::add_agent_tools(&mut tools, &directory, args.mcp_tools, |line| {
         eprintln!("{line}")

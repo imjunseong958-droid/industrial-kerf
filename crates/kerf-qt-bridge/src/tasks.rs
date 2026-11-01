@@ -484,6 +484,8 @@ fn start_from_preset(
         .collect::<Result<Vec<_>, _>>()?;
     progress("Starting kerfd…");
     let client = RuntimeClient::connect_or_spawn(directory, Some(kerfd)).map_err(message)?;
+    // Imports are minutes apart when the media is large.
+    let _lease = client.hold();
     progress("Importing media…");
     let mut imported = Vec::new();
     for copy in &copies {

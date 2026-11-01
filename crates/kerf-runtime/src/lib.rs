@@ -23,8 +23,8 @@ mod store;
 mod timeline;
 
 pub use ipc::{
-    response_value, run_ipc, run_stdio, EndpointAddress, RuntimeClient, MAX_REQUEST_BYTES,
-    UNIX_SOCKET_PATH_LIMIT,
+    response_value, run_ipc, run_ipc_with, run_stdio, EndpointAddress, IpcOptions, RuntimeClient,
+    RuntimeLease, MAX_REQUEST_BYTES, UNIX_SOCKET_PATH_LIMIT,
 };
 pub use kernel::{resolve_media_paths, use_proxies, CachedFacts, EditOp, MaskOutline, TrimSide};
 pub use render::{render_cancel_path, run_render_job};

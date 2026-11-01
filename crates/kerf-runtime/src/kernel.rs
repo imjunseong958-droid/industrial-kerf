@@ -18,6 +18,9 @@ use kerf_model::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::time::Instant;
 
 pub(crate) fn catalog() -> &'static Catalog {
     Catalog::builtin()
@@ -149,14 +152,71 @@ impl Facts for CachedFacts {
 /// Index `path` and make its proxy, in the background, so agents and
 /// drafts find them ready. Failures leave nothing behind; the work is
 /// done again when it is asked for.
-pub(crate) fn prepare_media(path: String, directory: std::path::PathBuf) {
+pub(crate) fn prepare_media(path: String, directory: PathBuf) {
+    // Counted before the request that asked for it answers, so an idle
+    // kerfd never sees a moment with neither.
+    let work = BackgroundWork::start(&directory);
     std::thread::spawn(move || {
+        let _work = work;
         let cache = kerf_engine::derivatives::DerivativeCache::new(&directory);
         let cancellation = kerf_engine::CancellationToken::new();
         let path = std::path::Path::new(&path);
         let _ = kerf_engine::media_index(path, &cache, &cancellation);
         let _ = kerf_engine::make_proxy(path, &cache, &cancellation);
     });
+}
+
+/// Work kerfd does for each project folder after the request that started
+/// it has answered, so the daemon does not exit under it.
+static BACKGROUND_WORK: Mutex<BTreeMap<PathBuf, BackgroundState>> = Mutex::new(BTreeMap::new());
+
+#[derive(Default)]
+struct BackgroundState {
+    running: usize,
+    finished: Option<Instant>,
+}
+
+fn background_state() -> MutexGuard<'static, BTreeMap<PathBuf, BackgroundState>> {
+    // The map is consistent between statements, so a panic elsewhere
+    // leaves nothing half-done in it.
+    BACKGROUND_WORK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+
+/// One piece of background work for a project folder. It ends when
+/// dropped, by a panic too.
+pub(crate) struct BackgroundWork {
+    directory: PathBuf,
+}
+
+impl BackgroundWork {
+    pub(crate) fn start(directory: &Path) -> Self {
+        background_state()
+            .entry(directory.to_path_buf())
+            .or_default()
+            .running += 1;
+        Self {
+            directory: directory.to_path_buf(),
+        }
+    }
+}
+
+impl Drop for BackgroundWork {
+    fn drop(&mut self) {
+        if let Some(state) = background_state().get_mut(&self.directory) {
+            state.running = state.running.saturating_sub(1);
+            state.finished = Some(Instant::now());
+        }
+    }
+}
+
+/// Whether background work runs for `directory`, and when the last piece
+/// finished.
+pub(crate) fn background_work(directory: &Path) -> (bool, Option<Instant>) {
+    background_state()
+        .get(directory)
+        .map_or((false, None), |state| (state.running > 0, state.finished))
 }
 
 /// The document of `project` with media paths resolved, for a renderer.

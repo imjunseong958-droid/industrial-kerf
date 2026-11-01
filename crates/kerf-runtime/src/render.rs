@@ -29,6 +29,9 @@ pub fn run_render_job(
     draft: bool,
     on_progress: impl FnMut(f64),
 ) -> Result<(), RuntimeError> {
+    // kerfd marks a job it finds running when it starts as abandoned, so
+    // it must not go idle while this one renders.
+    let _lease = client.hold();
     let cancel_file = render_cancel_path(client.directory(), &job.job_id);
     let _ = client.update_job(&job.job_id, "running", None, None);
     let result = render(
