@@ -1057,6 +1057,7 @@ StageRail::StageRail(QWidget *parent) : QWidget(parent) {
     m_device = new RailButton(RailButton::Glyph::Phone);
     m_device->setObjectName(QStringLiteral("railDevice"));
     m_device->setCheckable(true);
+    m_device->setCheckedByOwner(true);
     m_device->setLabel(QStringLiteral("Phone"));
     m_safeZones = new RailButton(RailButton::Glyph::SafeZones);
     m_safeZones->setObjectName(QStringLiteral("railSafeZones"));
@@ -1367,7 +1368,10 @@ QWidget *ChatPanel::buildWelcome() {
     line->setContentsMargins(0, 0, 0, 0);
     line->setSpacing(4);
     line->addWidget(label(QStringLiteral("Kerf"), "chatName"));
-    line->addWidget(label(QStringLiteral("now"), "chatTime"));
+    // It ages as comments do, from when the conversation opened.
+    m_welcomeSince = QDateTime::currentDateTime();
+    m_welcomeTime = label(relativeTime(m_welcomeSince, m_welcomeSince), "chatTime");
+    line->addWidget(m_welcomeTime);
     line->addStretch(1);
     column->addLayout(line);
     QLabel *intro = label(QString(), "chatBody");
@@ -1505,6 +1509,8 @@ QString ChatPanel::transcript() const {
 void ChatPanel::refreshTimes() {
     const QDateTime now = QDateTime::currentDateTime();
     for (CommentRow *row : std::as_const(m_rows)) row->refreshTime(now);
+    if (m_welcomeTime) m_welcomeTime->setText(relativeTime(m_welcomeSince, now));
+    if (m_proposalSince.isValid()) m_proposalTime->setText(relativeTime(m_proposalSince, now));
 }
 
 void ChatPanel::updateCount() {
@@ -1517,11 +1523,15 @@ void ChatPanel::setProposalShown(bool shown, const QString &id) {
     if (!shown) {
         m_proposalExpander->setChecked(false);
         m_proposalId.clear();
+        m_proposalSince = QDateTime();
     } else if (!id.isEmpty() && id != m_proposalId) {
         // A new proposal is read from its head: the list scrolls to its top
         // (the proposal 16 points under the header) and stops following the
         // latest comment until the reader scrolls or sends.
         m_proposalId = id;
+        // Its time ages from when it came, as a comment's does.
+        m_proposalSince = QDateTime::currentDateTime();
+        m_proposalTime->setText(relativeTime(m_proposalSince, m_proposalSince));
         m_follow = false;
         m_scroll->verticalScrollBar()->setValue(0);
         QTimer::singleShot(0, this, [this] {

@@ -10,9 +10,7 @@
 #include <DockWidget.h>
 #include <DockWidgetTab.h>
 
-#include <QAbstractButton>
 #include <QApplication>
-#include <QEvent>
 #include <QLayout>
 #include <QSettings>
 #include <QToolButton>
@@ -92,11 +90,13 @@ Workspace::Workspace(QWidget *host) : QObject(host) {
     Manager::setConfigFlag(Manager::AlwaysShowTabs, true);
     // The focused panel shows in its tab's label (see dockStyleSheet()).
     Manager::setConfigFlag(Manager::FocusHighlighting, true);
-    // Tabs show a close button only under the pointer. Keeping its room on
-    // every tab would elide the names of a narrow area's tabs, so the
-    // hovered tab widens instead.
+    // Tabs never show a close button, as Premiere's and Resolve's panel
+    // tabs do not: one shown under the pointer widened the hovered tab, and
+    // the browsers' column then shortened all four names to "Proj…". A
+    // panel closes from its tab's menu, the Window menu, or a middle click.
     Manager::setConfigFlag(Manager::ActiveTabHasCloseButton, false);
     Manager::setConfigFlag(Manager::AllTabsHaveCloseButton, false);
+    Manager::setConfigFlag(Manager::MiddleMouseButtonClosesTab, true);
     Manager::setConfigFlag(Manager::DockAreaHasUndockButton, false);
     Manager::setConfigFlag(Manager::DockAreaHasCloseButton, false);
     Manager::setConfigFlag(Manager::DockAreaDynamicTabsMenuButtonVisibility, true);
@@ -120,7 +120,6 @@ ads::CDockWidget *Workspace::addPanel(const QString &id, const QString &title, Q
     // it off, and the area keeps one least width whichever tab is chosen.
     dock->setMinimumSizeHintMode(ads::CDockWidget::MinimumSizeHintFromContent);
     dock->setFeature(ads::CDockWidget::DockWidgetDeleteOnClose, false);
-    dock->tabWidget()->installEventFilter(this);
     // A text tab: its name and nothing round it (the dock manager's own
     // room before, between and after the name and the close button goes;
     // the sheet spaces the tabs), underlined when chosen.
@@ -197,30 +196,6 @@ void Workspace::placeTitleWidgets() {
         for (QWidget *widget : {leading, trailing})
             if (widget) widget->setVisible(current);
     }
-}
-
-bool Workspace::eventFilter(QObject *watched, QEvent *event) {
-    auto *tab = qobject_cast<ads::CDockWidgetTab *>(watched);
-    switch (tab ? event->type() : QEvent::None) {
-    case QEvent::Enter:
-    case QEvent::Leave:
-        showCloseButton(tab, event->type() == QEvent::Enter);
-        break;
-    case QEvent::MouseButtonRelease:
-        // A click makes the tab current, and the dock manager hides the
-        // button again; show it once that is done.
-        QTimer::singleShot(0, tab, [this, tab] { showCloseButton(tab, tab->underMouse()); });
-        break;
-    default:
-        break;
-    }
-    return QObject::eventFilter(watched, event);
-}
-
-void Workspace::showCloseButton(ads::CDockWidgetTab *tab, bool shown) {
-    auto *close = tab->findChild<QAbstractButton *>(QStringLiteral("tabCloseButton"), Qt::FindDirectChildrenOnly);
-    const ads::CDockWidget *dock = tab->dockWidget();
-    if (close && dock) close->setVisible(shown && dock->features().testFlag(ads::CDockWidget::DockWidgetClosable));
 }
 
 void Workspace::arrangeEditing() {

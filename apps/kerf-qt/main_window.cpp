@@ -99,6 +99,8 @@ constexpr int kWindowButtonsSpace = 72;
 #define KERF_EDITOR_OWN_TITLE_BAR 0
 #endif
 constexpr int kToolbarHeight = 30;
+// The toolbar's symbols, in points; toolbarIcon() draws them at this size.
+constexpr int kToolbarIconSize = 15;
 // The style sheet's QToolBar spacing, between every pair of its items,
 // and its padding, at either end.
 constexpr int kToolbarSpacing = 2;
@@ -238,8 +240,16 @@ QIcon toolbarIcon(const QString &glyph) {
         }
         painter.drawPath(path);
     };
-    QIcon icon = glyphIcon(QSize(20, 20), draw);
-    const QPixmap chosen = glyphPixmap(QSize(20, 20), draw, editorTheme().accentText);
+    // Drawn at the size the toolbar shows them (kToolbarIconSize), the
+    // 20-point grid scaled down as vectors: a 20-point picture shrunk to 15
+    // by the icon engine blurred every stroke.
+    const auto shown = [draw](QPainter &painter, const QColor &color) {
+        painter.scale(kToolbarIconSize / 20.0, kToolbarIconSize / 20.0);
+        draw(painter, color);
+    };
+    const QSize size(kToolbarIconSize, kToolbarIconSize);
+    QIcon icon = glyphIcon(size, shown);
+    const QPixmap chosen = glyphPixmap(size, shown, editorTheme().accentText);
     icon.addPixmap(chosen, QIcon::Normal, QIcon::On);
     icon.addPixmap(chosen, QIcon::Active, QIcon::On);
     return icon;
@@ -2606,7 +2616,7 @@ void MainWindow::setupActions() {
     auto *toolbar = addToolBar(QStringLiteral("Main"));
     m_toolbar = toolbar;
     toolbar->setMovable(false);
-    toolbar->setIconSize(QSize(15, 15));
+    toolbar->setIconSize(QSize(kToolbarIconSize, kToolbarIconSize));
     toolbar->setFixedHeight(kToolbarHeight);
 #if KERF_EDITOR_OWN_TITLE_BAR
     m_windowButtons = new QWidget;
@@ -2673,8 +2683,13 @@ void MainWindow::setupActions() {
     m_quality->setObjectName(QStringLiteral("qualityPicker"));
     m_quality->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     m_quality->setToolTip(QStringLiteral("Export quality"));
-    m_quality->addItem(QStringLiteral("Preview"), QStringLiteral("preview"));
-    m_quality->addItem(QStringLiteral("Full"), QStringLiteral("full"));
+    // The finished file first and by default: Export once made a 360p,
+    // 15 fps draft unless this was changed, under a name ("Preview") that
+    // read as a view, not as what the file would be.
+    m_quality->addItem(QStringLiteral("Master"), QStringLiteral("full"));
+    m_quality->setItemData(0, QStringLiteral("The project's own size and frame rate"), Qt::ToolTipRole);
+    m_quality->addItem(QStringLiteral("Draft"), QStringLiteral("preview"));
+    m_quality->setItemData(1, QStringLiteral("360p at 15 fps, quick to make and share for review"), Qt::ToolTipRole);
     toolbar->addWidget(m_quality);
     controlSpace();
     m_canvasPreset = new QComboBox;

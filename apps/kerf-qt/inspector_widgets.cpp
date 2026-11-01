@@ -1429,7 +1429,9 @@ void NameLabel::paintEvent(QPaintEvent *) {
     QPainter painter(this);
     painter.setFont(font());
     painter.setPen(editorTheme().textStrong);
-    painter.drawText(rect(), Qt::AlignLeft | Qt::AlignVCenter, fontMetrics().elidedText(m_name, Qt::ElideRight, width()));
+    // Shortened in the middle, so a long name keeps both its start and the
+    // end that tells takes apart ("Interview – …take 3").
+    painter.drawText(rect(), Qt::AlignLeft | Qt::AlignVCenter, fontMetrics().elidedText(m_name, Qt::ElideMiddle, width()));
     if (hasFocus()) {
         painter.setPen(QPen(editorTheme().focusRing, 1.0));
         painter.drawLine(QPointF(0, height() - 0.5), QPointF(std::min<double>(width(), fontMetrics().horizontalAdvance(m_name)), height() - 0.5));

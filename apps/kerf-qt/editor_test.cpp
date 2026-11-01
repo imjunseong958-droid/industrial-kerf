@@ -277,6 +277,72 @@ private slots:
         QCOMPARE(prettyTime(61.25), QStringLiteral("01:01.25"));
     }
 
+    // The finish pass's small fixes, each as the owner met it: Export makes
+    // the finished file unless asked for a draft; the rail's device button
+    // keeps showing the preview as it is while its menu is open; a pinned
+    // proposal's time ages; the viewer's empty lines stay on the phone's
+    // screen.
+    void finishPassFixes() {
+        MainWindow window{QString(), QString()};
+        window.resize(1366, 737);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QCOMPARE(window.m_quality->currentText(), QStringLiteral("Master"));
+        QCOMPARE(window.m_quality->currentData().toString(), QStringLiteral("full"));
+        QCOMPARE(window.m_quality->itemText(1), QStringLiteral("Draft"));
+        QCOMPARE(window.m_quality->itemData(1).toString(), QStringLiteral("preview"));
+
+        QJsonObject snapshot = showcaseSnapshot(3, QStringLiteral("clean"));
+        QJsonObject timeline = snapshot.value(QStringLiteral("timeline")).toObject();
+        timeline.insert(QStringLiteral("width"), 1080);
+        timeline.insert(QStringLiteral("height"), 1920);
+        snapshot.insert(QStringLiteral("timeline"), timeline);
+        window.applySnapshot(snapshot);
+        QCoreApplication::processEvents();
+        RailButton *device = window.m_rail->deviceButton();
+        QVERIFY(device->isChecked());
+        bool checkedWhileOpen = false;
+        bool menuShown = false;
+        QTimer::singleShot(50, &window, [&] {
+            QWidget *popup = QApplication::activePopupWidget();
+            menuShown = qobject_cast<QMenu *>(popup);
+            checkedWhileOpen = device->isChecked();
+            if (popup) popup->close();
+        });
+        QTest::mouseClick(device, Qt::LeftButton, {}, device->discRect().center());
+        QVERIFY(menuShown);
+        QVERIFY(checkedWhileOpen);
+        QVERIFY(device->isChecked());
+
+        window.m_chat->setProposalShown(true, QStringLiteral("p1"));
+        QCOMPARE(window.m_chat->proposalTime()->text(), QStringLiteral("now"));
+        window.m_chat->m_proposalSince = QDateTime::currentDateTime().addSecs(-5 * 60);
+        window.m_chat->m_welcomeSince = QDateTime::currentDateTime().addSecs(-5 * 60);
+        window.m_chat->refreshTimes();
+        const QString aged = relativeTime(QDateTime::currentDateTime().addSecs(-5 * 60), QDateTime::currentDateTime());
+        QCOMPARE(window.m_chat->proposalTime()->text(), aged);
+        QCOMPARE(window.m_chat->m_welcomeTime->text(), aged);
+        window.m_chat->setProposalShown(false, QString());
+
+        // An empty phone: the two lines wrap inside its screen, no ink in
+        // the screen's outer 12 points on either side.
+        ViewerWidget viewer;
+        viewer.resize(560, 460);
+        viewer.setProjectInfo(1080, 1920);
+        viewer.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&viewer));
+        const QImage shot = viewer.grab().toImage();
+        const qreal ratio = shot.devicePixelRatio();
+        const QRectF card = viewer.stageLayout().card;
+        const int middle = qRound(card.center().y() * ratio);
+        for (const qreal x : {card.left() + 2, card.left() + 10, card.right() - 10, card.right() - 2}) {
+            // The bare screen, well above the lines.
+            const QRgb screen = shot.pixelColor(qRound(x * ratio), middle - qRound(80 * ratio)).rgb();
+            for (int y = middle - qRound(30 * ratio); y <= middle + qRound(30 * ratio); ++y)
+                QCOMPARE(shot.pixelColor(qRound(x * ratio), y).rgb(), screen);
+        }
+    }
+
     void inboundMcpConfigValidatesStdioShape() {
         QVERIFY(!validateInboundMcpConfig("[]").isEmpty());
         QVERIFY(!validateInboundMcpConfig("{}").isEmpty());
@@ -4146,8 +4212,11 @@ private slots:
               times.first());
         QVERIFY2(median < 16.0, qPrintable(QStringLiteral("%1 ms").arg(median)));
         QCOMPARE(scroll->value(), 60);
-        // The header's hairline shows while the body is scrolled under it.
+        // The header's hairline shows while the body is scrolled under it,
+        // laid over the body's top edge, so the body does not move for it.
         QVERIFY(inspector->m_scrollEdge->isVisible());
+        QCOMPARE(inspector->m_scrollEdge->parentWidget(), inspector->m_scroll);
+        QCOMPARE(inspector->m_scrollEdge->geometry(), QRect(0, 0, inspector->m_scroll->width(), 1));
         scroll->setValue(0);
         QVERIFY(!inspector->m_scrollEdge->isVisible());
     }
@@ -8392,27 +8461,30 @@ private slots:
             }
             // The launcher's chrome: #f5f5f5 in light, #2c2c2e in dark.
             QVERIFY(dark ? qGray(dominantColor(toolbar->grab().toImage())) < 60 : qGray(dominantColor(toolbar->grab().toImage())) > 220);
-            // Tabs show no close button until the pointer is over them; then
-            // it reads on the tab.
+            // Tabs never show a close button, under the pointer or not, so
+            // hovering one changes no tab's width and no name is shortened.
             const auto closeButtons = window.findChildren<QWidget *>(QStringLiteral("tabCloseButton"));
             QVERIFY(closeButtons.size() >= 3);
             for (const QWidget *close : closeButtons) QVERIFY(!close->isVisible());
-            QWidget *programClose = nullptr;
-            for (QWidget *close : closeButtons)
-                if (close->parentWidget() == window.m_workspace->panel(QStringLiteral("program"))->tabWidget()) programClose = close;
-            QVERIFY(programClose);
-            QEvent enter(QEvent::Enter);
-            QCoreApplication::sendEvent(programClose->parentWidget(), &enter);
-            QVERIFY(programClose->isVisible());
             {
-                const QImage tab = programClose->parentWidget()->grab().toImage();
-                const qreal ratio = tab.devicePixelRatio();
-                const QRect area(programClose->geometry().topLeft() * ratio, programClose->size() * ratio);
-                QVERIFY(highestContrast(tab, area, theme.panelTitleActive) >= 4.5);
+                ads::CDockWidgetTab *inspectorTab = window.m_workspace->panel(QStringLiteral("inspector"))->tabWidget();
+                QWidget *strip = inspectorTab->parentWidget();
+                QList<QRect> before;
+                for (auto *tab : strip->findChildren<ads::CDockWidgetTab *>()) before.append(tab->geometry());
+                QEvent enter(QEvent::Enter);
+                QCoreApplication::sendEvent(inspectorTab, &enter);
+                QCoreApplication::processEvents();
+                QList<QRect> after;
+                for (auto *tab : strip->findChildren<ads::CDockWidgetTab *>()) {
+                    after.append(tab->geometry());
+                    QVERIFY(!tab->findChild<QWidget *>(QStringLiteral("tabCloseButton"))->isVisible());
+                    const QString name = tab->dockWidget()->windowTitle();
+                    QVERIFY2(tab->sizeHint().width() <= tab->width(), qPrintable(name + QStringLiteral(" is shortened")));
+                }
+                QCOMPARE(after, before);
+                QEvent leave(QEvent::Leave);
+                QCoreApplication::sendEvent(inspectorTab, &leave);
             }
-            QEvent leave(QEvent::Leave);
-            QCoreApplication::sendEvent(programClose->parentWidget(), &leave);
-            QVERIFY(!programClose->isVisible());
             // The chosen tool is a quiet chip with its symbol in the accent.
             const QImage tool = window.m_toolPalette->widgetForAction(window.m_commands->action(QStringLiteral("tool.selection")))->grab().toImage();
             const QColor toolFill = tool.pixelColor(qRound(3 * tool.devicePixelRatio()), tool.height() / 2);
