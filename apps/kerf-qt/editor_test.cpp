@@ -241,6 +241,14 @@ private slots:
     }
 
     void initTestCase() {
+        // Preferences go to a file of this run's own, apart from the
+        // editor's. Windows' registry keeps nothing for an application with
+        // no organization, so the tests name one.
+        static QTemporaryDir settings;
+        QVERIFY(settings.isValid());
+        QSettings::setDefaultFormat(QSettings::IniFormat);
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settings.path());
+        QCoreApplication::setOrganizationName(QStringLiteral("Industrial Kerf Tests"));
         useEditorStyle();
         // Tests draw in the dark appearance unless they pick one: offscreen
         // reports a light system, and painted colours are checked in dark.

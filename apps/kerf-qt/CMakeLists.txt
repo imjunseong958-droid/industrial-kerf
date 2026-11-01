@@ -146,4 +146,10 @@ if(KERF_QT_BUILD_TESTS)
     target_link_libraries(kerf-qt-tests PRIVATE kerf-qt-shared Qt6::Test)
     kerf_copy_runtime_dlls(kerf-qt-tests)
     add_test(NAME kerf-qt-ui COMMAND kerf-qt-tests -platform offscreen)
+    if(WIN32)
+        # Offscreen on Windows reads fonts from a folder and Qt ships none:
+        # give it the system's.
+        file(TO_CMAKE_PATH "$ENV{WINDIR}/Fonts" KERF_WINDOWS_FONTS)
+        set_tests_properties(kerf-qt-ui PROPERTIES ENVIRONMENT "QT_QPA_FONTDIR=${KERF_WINDOWS_FONTS}")
+    endif()
 endif()

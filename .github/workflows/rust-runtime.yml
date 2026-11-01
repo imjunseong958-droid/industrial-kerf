@@ -199,17 +199,30 @@ jobs:
         if: github.event_name != 'pull_request' || steps.changes.outputs.editor == 'true'
         continue-on-error: true
         run: cargo test -p kerf-qt-bridge --test connection
-      - name: Build Qt editor and UI tests
+      # Until the crash above is found: the same test under the debugger,
+      # several times, printing every thread's stack if one crashes. The
+      # debugger quits when the test exits, and the step is time-limited.
+      - name: Catch editor connection crash
         if: github.event_name != 'pull_request' || steps.changes.outputs.editor == 'true'
+        timeout-minutes: 15
+        run: |
+          $cdb = "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe"
+          if (-not (Test-Path $cdb)) { "no debugger at $cdb"; exit 0 }
+          $test = Get-ChildItem target\debug\deps\connection-*.exe | Sort-Object LastWriteTime | Select-Object -Last 1
+          $commands = 'sxd -c2 ".echo CRASHED; .lastevent; .ecxr; kp 60; ~*kp 40; q" av; sxe -c "q" epr; g'
+          for ($run = 1; $run -le 12; $run++) {
+            $out = $null | & $cdb -lines -c $commands $test.FullName --nocapture 2>&1
+            if ($out -match 'CRASHED') { "crashed on run $run"; $out | Select-Object -Last 800; exit 1 }
+            "run ${run}: no crash"
+          }
+      - name: Build Qt editor and UI tests
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || steps.changes.outputs.editor == 'true') }}
         run: |
           cmake -S apps/kerf-qt -B target/qt -DKERF_QT_BUILD_TESTS=ON
           cmake --build target/qt --config Release --parallel 4
-      # Qt logs to the debugger on Windows unless told otherwise. Some UI
-      # tests still expect macOS metrics and settings, so they report
-      # without failing the job until they hold on Windows too.
+      # Qt logs to the debugger on Windows unless told otherwise.
       - name: Test Qt UI
-        if: github.event_name != 'pull_request' || steps.changes.outputs.editor == 'true'
-        continue-on-error: true
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || steps.changes.outputs.editor == 'true') }}
         env:
           QT_FORCE_STDERR_LOGGING: "1"
         run: ctest --test-dir target/qt -C Release --output-on-failure
