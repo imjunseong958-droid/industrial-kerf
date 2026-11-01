@@ -1760,9 +1760,11 @@ void MainWindow::buildUi() {
     timelinePanelLayout->addLayout(timelineRow, 1);
     m_askPrompt = new AskPrompt(this);
     connect(m_askPrompt, &AskPrompt::submitted, this, &MainWindow::askSubmitted);
-    // Dragging the split up for a larger picture never squeezes the
-    // timeline under a few tracks and its ruler.
-    timelinePanel->setMinimumHeight(280);
+    // Dragging the split down for a larger picture never squeezes the
+    // timeline under a few tracks and its ruler (its dock area takes this
+    // and its tab strip as its least height, which the Editing
+    // arrangement's 290 points hold).
+    timelinePanel->setMinimumHeight(240);
 
     m_projectPanel = new ProjectPanel(m_artwork);
     connect(m_projectPanel, &ProjectPanel::openRequested, this, &MainWindow::openSource);
@@ -2268,8 +2270,10 @@ void MainWindow::buildUi() {
     m_timelineDetail = new QLabel;
     m_timelineDetail->setObjectName(QStringLiteral("timelineDetail"));
     m_timelineZoom = new TimelineZoomControl(m_timeline);
-    m_workspace->addPanel(QStringLiteral("timeline"), QStringLiteral("Timeline"), timelinePanel)
-        ->setTitleBarActions(m_timeline->trackHeightActions());
+    ads::CDockWidget *timelineDock = m_workspace->addPanel(QStringLiteral("timeline"), QStringLiteral("Timeline"), timelinePanel);
+    timelineDock->setTitleBarActions(m_timeline->trackHeightActions());
+    // Its least height is the one set on the panel, not its layout's.
+    timelineDock->setMinimumSizeHintMode(ads::CDockWidget::MinimumSizeHintFromContentMinimumSize);
     m_workspace->setTitleWidgets(QStringLiteral("timeline"), m_timelineDetail, m_timelineZoom);
     // A click in the Inspector does not take the keys from the timeline
     // (its dock would, for the focus highlight): Space and J/K/L keep

@@ -64,6 +64,7 @@ public:
     };
 
     explicit InspectorPanel(QWidget *parent = nullptr);
+    ~InspectorPanel() override;
 
     // The snapshot's timeline (as the editor holds it) and the selected
     // clips; an empty list shows the sequence.
@@ -155,6 +156,16 @@ private:
     void rebuild();
     void refreshValues();
     void clearBody();
+    // The body in the column, scrolled back to where it was for its kind.
+    void showBody();
+    // A body built for one shape is parked while another shows, and shown
+    // again when a clip of its shape is chosen, instead of being built anew
+    // (a click between a video and a title clip, say, costs no rebuild).
+    void parkBody();
+    bool unparkBody(const QString &shape);
+    // What the bodies show changed (a catalog, the tracks, the appearance):
+    // the next refresh builds the body again, and nothing parked is shown.
+    void forgetBodies();
 
     // The header.
     void buildHeader();
@@ -278,6 +289,25 @@ private:
     QList<SectionEntry> m_sections;
     QList<std::function<void()>> m_refreshers;
     QList<QWidget *> m_effectBoxes;
+    struct ParkedBody {
+        QWidget *widget = nullptr;
+        QString kind; // m_kindForSections
+        QList<RowEntry> rows;
+        QList<SectionEntry> sections;
+        QList<std::function<void()>> refreshers;
+        QList<QWidget *> effectBoxes;
+    };
+    // The few most recent shapes' bodies, kept in a hidden widget outside
+    // the panel's own, so nothing that searches the panel finds them.
+    static constexpr int kParkedBodies = 6;
+    // Moving a body back costs about as much as building a plain one
+    // (restyling it), so only a body that took longer than this to build
+    // is parked.
+    static constexpr qint64 kParkedBodyCost = 12;
+    qint64 m_bodyCost = 0; // Milliseconds the body showing took to build.
+    QWidget *m_parking = nullptr;
+    QHash<QString, ParkedBody> m_parked;
+    QStringList m_parkedOrder;
 };
 
 } // namespace kerf

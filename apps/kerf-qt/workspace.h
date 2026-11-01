@@ -101,6 +101,8 @@ private:
     // closed column beside it, or a wider window. A restored layout has new
     // areas, so this follows every restore.
     void letViewerStretch();
+    // The rows over the timeline close when its split is dragged to the top.
+    void letTopRowCollapse();
     void afterRestore();
 
     ads::CDockManager *m_manager = nullptr;
