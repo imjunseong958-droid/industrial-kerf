@@ -158,7 +158,7 @@ jobs:
         run: cargo test -p kerf-runtime --all-targets
       # Sidecars run in job objects, which end them with kerfd.
       - name: Test sidecar supervision
-        run: cargo test -p kerf-engine --lib sidecar::
+        run: cargo test -p kerf-engine --lib "sidecar::"
       - name: Build native bridge and daemon
         run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
       # The editor's C ABI starts kerfd and edits through the pipe beside
