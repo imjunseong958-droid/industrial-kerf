@@ -80,6 +80,8 @@ set(KERF_QT_SOURCES
     inspector_presentation.h
     inspector_widgets.cpp
     inspector_widgets.h
+    toolbar_widgets.cpp
+    toolbar_widgets.h
     launcher_style.h
     main_window.cpp
     main_window.h

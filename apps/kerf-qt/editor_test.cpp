@@ -16,6 +16,7 @@
 #include "source_monitor_panel.h"
 #include "test_footage.h"
 #include "timeline_widget.h"
+#include "toolbar_widgets.h"
 #include "viewer_widget.h"
 #include "workspace.h"
 
@@ -67,6 +68,8 @@
 #include <QSignalBlocker>
 #include <QSignalSpy>
 #include <QSignalSpy>
+#include <QAccessible>
+#include <QActionGroup>
 #include <QStandardPaths>
 #include <QStandardPaths>
 #include <QStatusBar>
@@ -328,10 +331,10 @@ private slots:
         window.resize(1366, 737);
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
-        QCOMPARE(window.m_quality->currentText(), QStringLiteral("Master"));
-        QCOMPARE(window.m_quality->currentData().toString(), QStringLiteral("full"));
-        QCOMPARE(window.m_quality->itemText(1), QStringLiteral("Draft"));
-        QCOMPARE(window.m_quality->itemData(1).toString(), QStringLiteral("preview"));
+        QCOMPARE(window.m_exportButton->qualityName(), QStringLiteral("Master"));
+        QCOMPARE(window.m_exportButton->quality(), QStringLiteral("full"));
+        QVERIFY(window.m_exportButton->masterAction()->isChecked());
+        QCOMPARE(window.m_exportButton->draftAction()->data().toString(), QStringLiteral("preview"));
 
         QJsonObject snapshot = showcaseSnapshot(3, QStringLiteral("clean"));
         QJsonObject timeline = snapshot.value(QStringLiteral("timeline")).toObject();
@@ -381,6 +384,272 @@ private slots:
             const QRgb screen = shot.pixelColor(qRound(x * ratio), middle - qRound(80 * ratio)).rgb();
             for (int y = middle - qRound(30 * ratio); y <= middle + qRound(30 * ratio); ++y)
                 QCOMPARE(shot.pixelColor(qRound(x * ratio), y).rgb(), screen);
+        }
+    }
+
+    // The toolbar's format bank: a latching key per preset, the shape of
+    // each drawn on it, named for assistive technology; ←→ walk the bank
+    // and Space or Return chooses; a custom size latches none.
+    void toolbarFormatBankLatchesThePreset() {
+        FormatBank bank;
+        const QList<CanvasPreset> presets = canvasPresets();
+        QCOMPARE(bank.count(), int(presets.size()));
+        const QString times = QStringLiteral(" × ");
+        QCOMPARE(bank.key(1)->accessibleName(), QStringLiteral("Format 9:16 · 1080") + times + QStringLiteral("1920"));
+        for (int i = 0; i < bank.count(); ++i) {
+            FormatKey *key = bank.key(i);
+            const QSize size(presets.at(i).width, presets.at(i).height);
+            QCOMPARE(key->format(), size);
+            QCOMPARE(key->accessibleName(), QStringLiteral("Format %1").arg(canvasSizeLabel(size)));
+            QCOMPARE(key->toolTip(), canvasSizeLabel(size));
+            QVERIFY(key->text().isEmpty());
+            QCOMPARE(key->focusPolicy(), Qt::TabFocus);
+            QCOMPARE(key->size(), QSize(FormatKey::kWidth, FormatKey::kHeight));
+            // Each shape is the format's own, inside its key.
+            const QRectF shape = key->shapeRect();
+            QVERIFY(QRectF(key->rect()).contains(shape));
+            const qreal aspect = qreal(size.width()) / size.height();
+            QVERIFY2(std::abs(shape.width() / shape.height() - aspect) < 0.2, qPrintable(QString::number(shape.width() / shape.height())));
+            QAccessibleInterface *access = QAccessible::queryAccessibleInterface(key);
+            QVERIFY(access);
+            QCOMPARE(access->role(), QAccessible::RadioButton);
+        }
+        // Latched: the preset's key alone; a custom size, none, and the
+        // bank's tooltip names it.
+        QCOMPARE(bank.currentIndex(), 0);
+        bank.setCanvasSize(QSize(1080, 1920));
+        QCOMPARE(bank.currentIndex(), 1);
+        QVERIFY(QAccessible::queryAccessibleInterface(bank.key(1))->state().checked);
+        QVERIFY(!bank.key(0)->isChecked());
+        bank.setCanvasSize(QSize(1280, 720));
+        QCOMPARE(bank.currentIndex(), -1);
+        for (int i = 0; i < bank.count(); ++i) QVERIFY(!bank.key(i)->isChecked());
+        QCOMPARE(bank.toolTip(), QStringLiteral("Custom · 1280") + times + QStringLiteral("720"));
+        bank.setCanvasSize(QSize(1920, 1080));
+        QCOMPARE(bank.currentIndex(), 0);
+
+        // The keys sit in the bank's well, after the engraved label, 2px
+        // apart and 2px in.
+        bank.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&bank));
+        bank.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&bank));
+        const QRectF well = bank.bankRect();
+        QVERIFY(well.left() > 20);
+        QCOMPARE(int(well.height()), FormatBank::kHeight);
+        for (int i = 0; i < bank.count(); ++i) {
+            QVERIFY(well.contains(QRectF(bank.key(i)->geometry())));
+            QCOMPARE(bank.key(i)->y(), 2);
+            if (i > 0) QCOMPARE(bank.key(i)->x() - bank.key(i - 1)->geometry().right() - 1, 2);
+        }
+        QCOMPARE(bank.key(0)->x() - int(well.left()), 2);
+
+        // A click latches the key and asks once; the latched key asks nothing.
+        QSignalSpy chosen(&bank, &FormatBank::formatChosen);
+        QTest::mouseClick(bank.key(2), Qt::LeftButton);
+        QCOMPARE(chosen.size(), 1);
+        QCOMPARE(chosen.at(0).at(0).toSize(), QSize(1080, 1080));
+        QCOMPARE(bank.currentIndex(), 2);
+        // A click takes no keyboard focus.
+        QVERIFY(!bank.key(2)->hasFocus());
+        QTest::mouseClick(bank.key(2), Qt::LeftButton);
+        QCOMPARE(chosen.size(), 1);
+        // Tab rings a key; → moves along the bank, ringed, choosing nothing;
+        // Return and Space choose.
+        // (The window handed its first key focus as it opened, unringed.)
+        QVERIFY(!bank.key(0)->showsFocusRing());
+        bank.key(0)->clearFocus();
+        bank.key(0)->setFocus(Qt::TabFocusReason);
+        QVERIFY(bank.key(0)->showsFocusRing());
+        QTest::keyClick(bank.key(0), Qt::Key_Right);
+        QVERIFY(bank.key(1)->hasFocus());
+        QVERIFY(bank.key(1)->showsFocusRing());
+        QCOMPARE(chosen.size(), 1);
+        QTest::keyClick(bank.key(1), Qt::Key_Return);
+        QCOMPARE(chosen.size(), 2);
+        QCOMPARE(chosen.at(1).at(0).toSize(), QSize(1080, 1920));
+        QCOMPARE(bank.currentIndex(), 1);
+        QTest::keyClick(bank.key(1), Qt::Key_Left);
+        QVERIFY(bank.key(0)->hasFocus());
+        QTest::keyClick(bank.key(0), Qt::Key_Left);
+        QVERIFY(bank.key(0)->hasFocus());
+        QTest::keyClick(bank.key(0), Qt::Key_Space);
+        QCOMPARE(chosen.size(), 3);
+        QCOMPARE(bank.currentIndex(), 0);
+    }
+
+    // The keys and their bank in both appearances: the latched key is held
+    // in with its amber LED lit, the others raised, the shapes in the
+    // engraved ink.
+    void toolbarFormatBankPaintsTheHardware() {
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            const EditorTheme &theme = editorTheme();
+            FormatBank bank;
+            bank.setCanvasSize(QSize(1080, 1920));
+            bank.resize(bank.sizeHint());
+            const QImage image = bank.grab().toImage();
+            const qreal ratio = image.devicePixelRatio();
+            const auto at = [&](const QWidget *key, QPointF point) {
+                return image.pixelColor((QPointF(key->pos()) + point).toPoint() * ratio).rgb();
+            };
+            FormatKey *lit = bank.key(1);
+            FormatKey *raised = bank.key(0);
+            // The LED: a 10 × 2 bar at the top of the latched key's face.
+            const QRgb led = at(lit, QPointF(lit->width() / 2.0, 3.5));
+            QVERIFY2(nearColor(led, theme.keyLed.rgb(), 24), qPrintable(QColor(led).name()));
+            QVERIFY(!nearColor(at(raised, QPointF(raised->width() / 2.0, 3.5)), theme.keyLed.rgb(), 40));
+            // Held in: the latched face; raised: between the bevel's stops.
+            const QPointF corner(3.5, lit->height() - 4.5);
+            QVERIFY2(nearColor(at(lit, corner), theme.keyLatched.rgb(), 6), qPrintable(QColor(at(lit, corner)).name()));
+            const QColor face = at(raised, corner);
+            const auto between = [](int value, int a, int b) { return value >= std::min(a, b) - 3 && value <= std::max(a, b) + 3; };
+            QVERIFY2(between(face.red(), theme.keyTop.red(), theme.keyBottom.red()) &&
+                         between(face.green(), theme.keyTop.green(), theme.keyBottom.green()),
+                     qPrintable(face.name()));
+            // The shape's outline is the engraved ink.
+            const QRectF shape = raised->shapeRect();
+            QVERIFY2(nearColor(at(raised, QPointF(shape.left() + 0.25, shape.center().y())), theme.engravedInk.rgb(), 30),
+                     qPrintable(QColor(at(raised, QPointF(shape.left() + 0.25, shape.center().y()))).name()));
+            // The bank's well shows between the keys.
+            const QRgb gap = at(raised, QPointF(raised->width() + 1, raised->height() - 3));
+            QVERIFY2(nearColor(gap, theme.bankWell.rgb(), 6), qPrintable(QColor(gap).name()));
+        }
+        setEditorColorScheme(ColorScheme::Dark);
+    }
+
+    // Export is one key in the accent: Export, a chip naming the quality,
+    // and an arrow whose menu picks Master or Draft and holds Render
+    // Preview; Export makes what the chip names.
+    void toolbarExportSplitButton() {
+        MainWindow window{QString(), QString()};
+        window.resize(1366, 768);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        ExportButton *button = window.m_exportButton;
+        QAction *exportAction = window.m_commands->action(QStringLiteral("file.export"));
+        QAction *render = window.m_commands->action(QStringLiteral("sequence.renderPreview"));
+        QCOMPARE(button->height(), ExportButton::kHeight);
+        QCOMPARE(button->mainPart()->accessibleName(), QStringLiteral("Export"));
+        QCOMPARE(button->menuPart()->accessibleName(), QStringLiteral("Export options"));
+        QVERIFY(button->mainPart()->accessibleDescription().startsWith(QStringLiteral("Master")));
+        QCOMPARE(button->mainPart()->focusPolicy(), Qt::TabFocus);
+        QCOMPARE(button->menuPart()->geometry().right(), button->width() - 1);
+        QCOMPARE(button->menuPart()->width(), ExportButton::kArrowWidth);
+        QVERIFY(QRectF(button->mainPart()->geometry()).contains(button->chipRect()));
+        // The menu: Master and Draft, an exclusive checked pair, Master
+        // first and chosen; then Render Preview, the command's own action.
+        const QList<QAction *> items = button->menu()->actions();
+        QCOMPARE(items.size(), 4);
+        QCOMPARE(items.at(0), button->masterAction());
+        QCOMPARE(items.at(1), button->draftAction());
+        QVERIFY(items.at(2)->isSeparator());
+        QCOMPARE(items.at(3), render);
+        QVERIFY(button->masterAction()->isCheckable() && button->draftAction()->isCheckable());
+        QVERIFY(button->masterAction()->actionGroup() && button->masterAction()->actionGroup()->isExclusive());
+        QCOMPARE(button->masterAction()->actionGroup(), button->draftAction()->actionGroup());
+        QVERIFY(button->draftAction()->text().contains(QStringLiteral("360p · 15 fps")));
+        // Opening it names the size and rate Master makes.
+        window.syncCanvasPreset(QSize(1080, 1920));
+        button->showMenu();
+        QVERIFY(QTest::qWaitForWindowExposed(button->menu()));
+        QCOMPARE(button->masterAction()->text(), QStringLiteral("Master\t1080 × 1920 · %1 fps").arg(window.m_fps));
+        button->menu()->hide();
+        // The main part follows file.export's enablement and its reason.
+        QCOMPARE(button->mainPart()->isEnabled(), exportAction->isEnabled());
+        QVERIFY(button->mainPart()->toolTip().startsWith(exportAction->toolTip()));
+        exportAction->setEnabled(!exportAction->isEnabled());
+        QCOMPARE(button->mainPart()->isEnabled(), exportAction->isEnabled());
+
+        // Draft, chosen from the menu, is what the chip names and what
+        // Export asks for.
+        QSignalSpy changed(button, &ExportButton::qualityChanged);
+        button->draftAction()->trigger();
+        QCOMPARE(changed.size(), 1);
+        QCOMPARE(button->quality(), QStringLiteral("preview"));
+        QCOMPARE(button->qualityName(), QStringLiteral("Draft"));
+        QVERIFY(button->mainPart()->accessibleDescription().startsWith(QStringLiteral("Draft")));
+        window.setConnection(QStringLiteral("ready"));
+        window.exportProject();
+        QCOMPARE(window.m_lastCommand.value(QStringLiteral("quality")).toString(), QStringLiteral("preview"));
+        button->masterAction()->trigger();
+        window.exportProject();
+        QCOMPARE(window.m_lastCommand.value(QStringLiteral("quality")).toString(), QStringLiteral("full"));
+
+        // Its colours, in both appearances: the accent lit from above, the
+        // chip and label in the ink on it; a disabled export a disabled bezel.
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            const EditorTheme &theme = editorTheme();
+            exportAction->setEnabled(true);
+            QImage image = button->grab().toImage();
+            qreal ratio = image.devicePixelRatio();
+            const QColor body = image.pixelColor(QPoint(4, button->height() / 2) * ratio);
+            QVERIFY2(std::abs(body.hslHue() - theme.accent.hslHue()) <= 6, qPrintable(body.name()));
+            QVERIFY(contrastRatio(theme.onAccent, theme.accentTop) >= 4.5);
+            // The chip's edge is the ink, part-strength, on the accent.
+            const QRectF chip = button->chipRect();
+            const QColor edge = image.pixelColor(QPointF(chip.left() + 0.25, chip.center().y()).toPoint() * ratio);
+            QVERIFY2(contrastRatio(edge, body) > 1.5, qPrintable(edge.name()));
+            exportAction->setEnabled(false);
+            image = button->grab().toImage();
+            ratio = image.devicePixelRatio();
+            QVERIFY(nearColor(image.pixelColor(QPoint(4, button->height() / 2) * ratio).rgb(), theme.buttonDisabled.rgb(), 3));
+        }
+        setEditorColorScheme(ColorScheme::Dark);
+    }
+
+    // The title still centres between the toolbar's groups, and at
+    // 1366 × 768 every control shows, none folded into the toolbar's »
+    // extension.
+    void toolbarFitsASmallWindow() {
+        MainWindow window{QString(), QString()};
+        window.applySnapshot(showcaseSnapshot(3, QStringLiteral("clean")));
+        window.setProjectTitle(QStringLiteral("Harbor Teaser, the long cut for review"));
+        window.resize(1366, 768);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QCoreApplication::processEvents();
+        QToolBar *toolbar = window.m_toolbar;
+        for (QAction *action : toolbar->actions()) {
+            QWidget *item = toolbar->widgetForAction(action);
+            if (!item || !action->isVisible()) continue;
+            QVERIFY2(item->isVisible(), qPrintable(item->objectName()));
+            QVERIFY2(QRect(QPoint(), toolbar->size()).contains(item->geometry()), qPrintable(item->objectName()));
+        }
+        if (auto *more = toolbar->findChild<QToolButton *>(QStringLiteral("qt_toolbar_ext_button"))) QVERIFY(!more->isVisible());
+        QVERIFY(window.m_formatBank->isVisible() && window.m_exportButton->isVisible() && window.m_chatToggle->isVisible());
+        QCOMPARE(window.m_chatToggle->mapTo(&window, QPoint(window.m_chatToggle->width(), 0)).x(), window.width() - 8);
+        // The title keeps clear of the bank, the right-hand group's first control.
+        QLabel *title = window.m_projectTitle;
+        QVERIFY(!title->text().isEmpty());
+        QVERIFY(title->geometry().left() > window.m_toolbarLeftEnd->geometry().right());
+        QVERIFY2(title->geometry().right() < window.m_formatBank->geometry().left(),
+                 qPrintable(QStringLiteral("%1 vs %2").arg(title->geometry().right()).arg(window.m_formatBank->geometry().left())));
+        // Wide enough, it centres on the window.
+        window.resize(1600, 900);
+        QCoreApplication::processEvents();
+        QVERIFY(std::abs(title->geometry().center().x() - toolbar->width() / 2) <= 1);
+
+        // Renders for the eye: KERF_TOOLBAR_GALLERY=folder, both appearances.
+        if (const QString folder = qEnvironmentVariable("KERF_TOOLBAR_GALLERY"); !folder.isEmpty()) {
+            window.resize(1366, 768);
+            window.setConnection(QStringLiteral("ready"));
+            window.m_commands->action(QStringLiteral("file.export"))->setEnabled(true);
+            for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+                setEditorColorScheme(scheme);
+                QCoreApplication::processEvents();
+                const QString name = scheme == ColorScheme::Light ? QStringLiteral("light") : QStringLiteral("dark");
+                toolbar->grab().save(QDir(folder).filePath(QStringLiteral("toolbar-%1.png").arg(name)));
+                window.m_exportButton->showMenu();
+                QVERIFY(QTest::qWaitForWindowExposed(window.m_exportButton->menu()));
+                window.m_exportButton->menu()->grab().save(QDir(folder).filePath(QStringLiteral("export-menu-%1.png").arg(name)));
+                window.m_exportButton->menu()->hide();
+                window.syncCanvasPreset(QSize(1280, 720));
+                toolbar->grab().save(QDir(folder).filePath(QStringLiteral("toolbar-custom-%1.png").arg(name)));
+                window.syncCanvasPreset(QSize(1920, 1080));
+            }
+            setEditorColorScheme(ColorScheme::Dark);
         }
     }
 
@@ -8873,10 +9142,18 @@ private slots:
             QVERIFY(!window.m_aiBar->isVisible());
             QCoreApplication::processEvents();
             const QImage image = window.grab().toImage();
-            // The bars are the theme's: toolbar, status bar, and dock title strips.
+            // The bars are the theme's: the toolbar's faceplate, status bar,
+            // and dock title strips.
             auto *toolbar = window.findChild<QToolBar *>();
-            QVERIFY(toolbar);
-            QCOMPARE(dominantColor(toolbar->grab().toImage()), theme.chrome.rgb());
+            QVERIFY(qobject_cast<FaceplateToolBar *>(toolbar));
+            {
+                const QImage plate = toolbar->grab().toImage();
+                const qreal ratio = plate.devicePixelRatio();
+                // Its 1px edge along the foot, and the plate above it.
+                QCOMPARE(plate.pixelColor(QPoint(1, toolbar->height() - 1) * ratio).rgb(), theme.faceplateEdge.rgb());
+                const QColor middle = plate.pixelColor(QPoint(1, toolbar->height() / 2) * ratio);
+                QVERIFY2(nearColor(middle.rgb(), mixColor(theme.faceplateTop, theme.faceplateBottom, 0.5).rgb()), qPrintable(middle.name()));
+            }
             QCOMPARE(dominantColor(window.statusBar()->grab().toImage()), theme.statusBar.rgb());
             // The window is titled with the project, so the Window menu,
             // Mission Control and the Dock name it, and the toolbar shows the same.
@@ -8890,24 +9167,19 @@ private slots:
             QVERIFY2(std::abs(title->geometry().center().x() - toolbar->width() / 2) <= 1,
                      qPrintable(QStringLiteral("%1 of %2").arg(title->geometry().center().x()).arg(toolbar->width())));
             QVERIFY(title->geometry().left() > window.m_toolbarLeftEnd->geometry().right());
-            QVERIFY(title->geometry().right() < window.m_quality->geometry().left());
-            // The controls at the right stand 8px apart, bezel to bezel, and
-            // Render has the pop-ups' bezel, not bare text.
-            auto *exportButton = toolbar->findChild<QToolButton *>(QStringLiteral("toolbarPrimary"));
-            auto *render = toolbar->findChild<QToolButton *>(QStringLiteral("toolbarQuiet"));
-            QVERIFY(exportButton && render);
-            const QList<QWidget *> controls{window.m_quality, window.m_canvasPreset, exportButton, render};
-            for (int i = 1; i < controls.size(); ++i)
-                QCOMPARE(controls.at(i)->x() - controls.at(i - 1)->geometry().right() - 1, 8);
-            QCOMPARE(render->height(), window.m_quality->height());
-            QCOMPARE(dominantColor(render->grab().toImage()), (render->isEnabled() ? theme.button : theme.buttonDisabled).rgb());
+            QVERIFY(title->geometry().right() < window.m_formatBank->geometry().left());
+            // The format bank and Export stand 8px apart, and Export is as
+            // tall as the bank's keys.
+            ExportButton *exportButton = window.m_exportButton;
+            QCOMPARE(exportButton->x() - window.m_formatBank->geometry().right() - 1, 8);
+            QCOMPARE(exportButton->height(), window.m_formatBank->key(0)->height());
             // Kerf's conversation is open, so its switch at the toolbar's end,
             // a group of its own, is chosen: a quiet accent wash with no
             // outline, its bubble the accent, as a chosen mode in a title strip.
             QToolButton *chat = window.m_chatToggle;
             QVERIFY(chat->isVisible() && chat->isChecked());
-            QVERIFY(chat->x() - render->geometry().right() - 1 > 8);
-            QCOMPARE(chat->height(), render->height());
+            QVERIFY(chat->x() - exportButton->geometry().right() - 1 > 8);
+            QCOMPARE(chat->height(), exportButton->height());
             {
                 // The bezel's fill, clear of its edge and its symbol: at rest,
                 // under the pointer, and held.
@@ -9037,27 +9309,20 @@ private slots:
             QCoreApplication::processEvents();
             QVERIFY(!window.m_aiBar->isVisible());
 
-            // The toolbar's pop-up opens as macOS's menu: rounded, clipped to
-            // its corners, a 22px row per choice, and the row under the
-            // pointer (here the current choice) filled with the accent.
-            QVERIFY(dynamic_cast<PopupItemDelegate *>(window.m_quality->itemDelegate()));
-            window.m_quality->showPopup();
-            QWidget *list = window.m_quality->view()->window();
-            QVERIFY(QTest::qWaitForWindowExposed(list));
-            QVERIFY(list->testAttribute(Qt::WA_TranslucentBackground));
+            // Export's menu opens as macOS's menu: rounded and clipped to its
+            // corners, under the button.
+            window.m_exportButton->showMenu();
+            QMenu *exportMenu = window.m_exportButton->menu();
+            QVERIFY(QTest::qWaitForWindowExposed(exportMenu));
+            QVERIFY(exportMenu->testAttribute(Qt::WA_TranslucentBackground));
             {
-                const QImage popup = list->grab().toImage();
+                const QImage popup = exportMenu->grab().toImage();
                 save(popup, QStringLiteral("popup-%1").arg(name));
-                const qreal ratio = popup.devicePixelRatio();
                 QCOMPARE(popup.pixelColor(0, 0).alpha(), 0);
-                const QRect row = window.m_quality->view()->visualRect(window.m_quality->model()->index(0, 0));
-                QCOMPARE(row.height(), 22);
-                const QPoint inside = window.m_quality->view()->viewport()->mapTo(list, QPoint(row.left() + 2, row.center().y()));
-                QCOMPARE(popup.pixelColor(inside * ratio).rgb(), theme.menuSelection.rgb());
                 QCOMPARE(amberPixels(popup), 0);
+                QVERIFY(exportMenu->geometry().top() > window.m_exportButton->mapToGlobal(QPoint()).y());
             }
-            window.m_quality->hidePopup();
-            for (QComboBox *picker : {window.m_quality, window.m_canvasPreset}) QVERIFY(popupShowsEveryRow(picker));
+            exportMenu->hide();
             // So does a clip's context menu: rounded and clipped to its
             // corners, the row under the pointer a rounded accent fill.
             {
@@ -9537,12 +9802,13 @@ private slots:
         edited.insert(QStringLiteral("changed"), true);
         window.handleEvent(QJsonObject{{"type", "collab"}, {"status", edited}});
         QCOMPARE(window.m_projectSubtitle->text(), QStringLiteral("Edited · 16:9 · 24 fps"));
-        // The toolbar's format pop-up names the format as the subtitle and
+        // The toolbar's format bank names the format as the subtitle and
         // the Inspector's Frame size do: "1:1 · 1080 × 1080", one separator,
-        // never "Custom" for a preset, never two spaces in a row.
+        // never "Custom" for a preset, never two spaces in a row; a custom
+        // size latches no key.
         {
             const QString times = QStringLiteral("\u2009×\u2009");
-            QCOMPARE(window.m_canvasPreset->currentText(), QStringLiteral("16:9 · 1920") + times + QStringLiteral("1080"));
+            QCOMPARE(window.m_formatBank->toolTip(), QStringLiteral("16:9 · 1920") + times + QStringLiteral("1080"));
             const struct {
                 QSize size;
                 QString ratio;
@@ -9553,14 +9819,17 @@ private slots:
                            {QSize(1280, 720), QStringLiteral("16:9"), QStringLiteral("Custom · 1280") + times + QStringLiteral("720")}};
             for (const auto &format : formats) {
                 window.syncCanvasPreset(format.size);
-                QCOMPARE(window.m_canvasPreset->currentText(), format.text);
+                QCOMPARE(window.m_formatBank->toolTip(), format.text);
                 QCOMPARE(window.m_projectSubtitle->text(), QStringLiteral("Edited · %1 · 24 fps").arg(format.ratio));
                 QCOMPARE(canvasSizeLabel(format.size), format.text);
-                for (int index = 0; index < window.m_canvasPreset->count(); ++index)
-                    QVERIFY2(!window.m_canvasPreset->itemText(index).contains(QStringLiteral("  ")), qPrintable(window.m_canvasPreset->itemText(index)));
+                const bool custom = format.text.startsWith(QStringLiteral("Custom"));
+                QCOMPARE(window.m_formatBank->currentIndex() < 0, custom);
+                for (int index = 0; index < window.m_formatBank->count(); ++index)
+                    QVERIFY2(!window.m_formatBank->key(index)->toolTip().contains(QStringLiteral("  ")), qPrintable(window.m_formatBank->key(index)->toolTip()));
             }
             window.syncCanvasPreset(QSize(1920, 1080));
-            QCOMPARE(window.m_canvasPreset->currentText(), QStringLiteral("16:9 · 1920") + times + QStringLiteral("1080"));
+            QCOMPARE(window.m_formatBank->toolTip(), QStringLiteral("16:9 · 1920") + times + QStringLiteral("1080"));
+            QCOMPARE(window.m_formatBank->currentIndex(), 0);
         }
 
         // Text tabs: 13pt names on the panel's own surface, the chosen one in

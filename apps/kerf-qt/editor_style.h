@@ -260,7 +260,8 @@ QMenu::item:selected { background: @menuSelection; color: @menuSelectionText; }
 QMenu::item:disabled { color: @textDisabled; background: transparent; }
 
 /* The toolbar groups its commands with space, not separators, as macOS
-   toolbars do. */
+   toolbars do. The main toolbar paints its own faceplate over this (see
+   FaceplateToolBar); the border keeps room for the plate's edge. */
 QToolBar {
     background: @chrome;
     border: 0;
@@ -414,55 +415,6 @@ QPushButton#transportButton:hover {
 }
 QToolButton#transportButton:pressed,
 QPushButton#transportButton:pressed { background: @pressed; border-color: transparent; }
-QToolBar QComboBox#qualityPicker,
-QToolBar QComboBox#canvasPicker {
-    background: @button;
-    border: 1px solid @buttonEdge;
-    border-top-color: @buttonTop;
-    border-bottom-color: @buttonBottom;
-    border-radius: 5px;
-    padding: 0px 22px 0px 8px;
-    min-height: 18px;
-    max-height: 18px;
-}
-QToolBar QComboBox#qualityPicker:hover,
-QToolBar QComboBox#canvasPicker:hover { background: @buttonHover; }
-QToolBar QToolButton#toolbarPrimary {
-    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 @accentTop, stop: 1 @accent);
-    border: 1px solid @accent;
-    border-radius: 5px;
-    color: @onAccent;
-    font-weight: 600;
-    padding: 0px 8px;
-    /* As tall as the pop-ups beside it. */
-    min-height: 18px;
-    max-height: 18px;
-}
-QToolBar QToolButton#toolbarPrimary:hover { background: @accentTop; }
-QToolBar QToolButton#toolbarPrimary:disabled {
-    color: @buttonDisabledText;
-    background: @buttonDisabled;
-    border-color: @buttonDisabledEdge;
-}
-/* Render: a push button's bezel, as tall as the pop-ups beside it. */
-QToolBar QToolButton#toolbarQuiet {
-    background: @button;
-    border: 1px solid @buttonEdge;
-    border-top-color: @buttonTop;
-    border-bottom-color: @buttonBottom;
-    border-radius: 5px;
-    color: @buttonText;
-    padding: 0px 8px;
-    min-height: 18px;
-    max-height: 18px;
-}
-QToolBar QToolButton#toolbarQuiet:hover { background: @buttonHover; }
-QToolBar QToolButton#toolbarQuiet:pressed { background: @buttonPressed; }
-QToolBar QToolButton#toolbarQuiet:disabled {
-    color: @buttonDisabledText;
-    background: @buttonDisabled;
-    border-color: @buttonDisabledEdge;
-}
 QToolButton#abortButton {
     color: @text;
     background: transparent;

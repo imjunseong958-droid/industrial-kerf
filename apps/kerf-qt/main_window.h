@@ -45,6 +45,8 @@ struct ProposalChange;
 class CommentRow;
 class StageRail;
 class CommandRegistry;
+class ExportButton;
+class FormatBank;
 class InspectorPanel;
 class EffectsPanel;
 class PresetsPanel;
@@ -76,7 +78,8 @@ private slots:
     void importEditingPreset();
     void showPresetBindings(const QString &path, const QJsonObject &preset);
     void renderPreview();
-    void canvasPresetChanged(int index);
+    // A key of the toolbar's format bank was chosen.
+    void canvasPresetChanged(const QSize &size);
     void addTrack();
     // Run a command from a menu, shortcut, or control: its handler when the
     // window carries it out, otherwise the request it resolves to.
@@ -460,8 +463,10 @@ private:
     QPushButton *m_acceptButton = nullptr;
     QPushButton *m_rejectButton = nullptr;
     QFrame *m_proposalBox = nullptr;
-    QComboBox *m_quality = nullptr;
-    QComboBox *m_canvasPreset = nullptr;
+    // The toolbar's right-hand group: the format bank, then Export (its
+    // menu holds the quality and Render Preview).
+    FormatBank *m_formatBank = nullptr;
+    ExportButton *m_exportButton = nullptr;
     QProgressBar *m_exportProgress = nullptr;
 };
 
