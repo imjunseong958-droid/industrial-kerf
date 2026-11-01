@@ -20,9 +20,10 @@ namespace kerf {
 // across it (thin, thicker under the pointer, its played part in the
 // accent, a round scrubber and the time under the pointer while hovered),
 // and one row of white controls: play or pause, a frame back, a frame on,
-// and the time over the length. On a portrait card it takes a short-video
-// player's arrangement instead: the bar along the very foot, the controls
-// in a compact cluster at the top left, the time small over the bar.
+// and the time over the length. On a portrait card, or one too narrow for
+// that row, it takes a short-video player's arrangement instead: the bar
+// along the very foot, the controls in a compact cluster at the top left,
+// the time small over the bar.
 //
 // Shown while paused, while the pointer is over the picture, and for a
 // moment after its last move while playing; then it fades. The keyboard

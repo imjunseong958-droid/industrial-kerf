@@ -92,7 +92,11 @@ relink_qt_linux() {
 
 install_qt() {
     mkdir -p "$lib_dir"
-    place "$kerf_root/target/qt/kerf-qt" "$dest/kerf-qt"
+    case "$(uname -s)" in
+        # The executable out of the application bundle the build makes.
+        Darwin) place "$kerf_root/target/qt/kerf-qt.app/Contents/MacOS/kerf-qt" "$dest/kerf-qt" ;;
+        *) place "$kerf_root/target/qt/kerf-qt" "$dest/kerf-qt" ;;
+    esac
     case "$(uname -s)" in
         Darwin) relink_qt_macos ;;
         Linux) relink_qt_linux ;;

@@ -20,8 +20,13 @@ cmake --build target/qt --parallel
 # kerfd goes through the environment, so without a project it is never read
 # as one.
 export KERFD_BIN="${KERFD_BIN:-$kerf_root/target/debug/kerfd}"
+# On macOS the editor is built as an application bundle.
+editor="$kerf_root/target/qt/kerf-qt"
+if [ "$(uname -s)" = Darwin ]; then
+    editor="$kerf_root/target/qt/kerf-qt.app/Contents/MacOS/kerf-qt"
+fi
 if [ -n "$project" ]; then
-    exec "$kerf_root/target/qt/kerf-qt" "$project"
+    exec "$editor" "$project"
 fi
 unset KERF_PROJECT_DIR
-exec "$kerf_root/target/qt/kerf-qt"
+exec "$editor"

@@ -464,11 +464,12 @@ private slots:
     }
 
     // A wide picture shows in a laptop, the phone's companion: a generic
-    // laptop drawn in code, its lid's screen 16:10 inside a thin even bezel
-    // (a little thicker over it, with the camera), the 16:9 picture across
-    // the screen with thin black bars above and below, the player's controls
-    // inside the screen, and a wider, thin base under the lid. Off is the
-    // plain card. The conversation is level with the laptop's body and as
+    // laptop of today drawn in code in a warm stone metal, its lid black
+    // glass in a thin rim, its screen 16:10 inside a thin even bezel (a
+    // little thicker over it), the 16:9 picture across the screen with thin
+    // black bars above and below, the camera's notch in the bar over it,
+    // the player's controls inside the screen, and a wider, thin base under
+    // the lid. Off is the plain card. The conversation is level with the laptop's body and as
     // tall, and the picture keeps at least 90% of the plain card's width.
     void widePictureShowsInALaptop() {
         QSettings().remove(QStringLiteral("workspace"));
@@ -484,8 +485,8 @@ private slots:
         QVERIFY(std::abs(stage.body.width() / stage.body.height() - laptopBodyAspect()) < 0.01);
         const LaptopGeometry laptop = laptopGeometry(stage.body, 16.0 / 9.0);
         QCOMPARE(laptop.screen, stage.screen);
-        // The lid: an even bezel of 2% of its width, a little more over the
-        // screen; the screen 16:10; the base 108% of the lid wide and thin,
+        // The lid: an even bezel of 1.8% of its width, a little more over
+        // the screen; the screen 16:10; the base 108% of the lid wide and thin,
         // and the body the stage lays out exactly as wide as the base.
         QVERIFY(std::abs(laptop.bezel - kLaptopBezel * laptop.lid.width()) < 0.01);
         QVERIFY(kLaptopBaseWidth >= 1.08 && kLaptopBaseWidth <= 1.14);
@@ -507,34 +508,49 @@ private slots:
         QVERIFY(std::abs(stage.card.width() - stage.screen.width()) < 0.01);
         QVERIFY(std::abs(stage.card.center().y() - stage.screen.center().y()) < 0.5);
         QVERIFY(stage.card.top() > stage.screen.top() && stage.card.bottom() < stage.screen.bottom());
-        // The camera in the bezel over the screen, centred: no notch.
+        // The notch hangs from the bezel into the bar over the picture,
+        // centred, never over the picture, the camera in it.
+        QCOMPARE(laptop.notch.top(), laptop.screen.top());
+        QVERIFY(laptop.notch.bottom() < stage.card.top());
+        QVERIFY(std::abs(laptop.notch.center().x() - laptop.lid.center().x()) < 0.01);
         const QRectF camera = laptopCamera(laptop);
-        QVERIFY(laptop.lid.contains(camera) && camera.bottom() < laptop.screen.top());
-        QVERIFY(std::abs(camera.center().x() - laptop.lid.center().x()) < 0.01);
+        QVERIFY(laptop.notch.contains(camera));
         // The player's controls, in a video player's arrangement, inside the screen.
         QVERIFY(!viewer.overlay()->compact());
         QCOMPARE(viewer.overlay()->rect(), stage.card);
         QVERIFY(stage.screen.contains(viewer.overlay()->controlsBounds()));
-        // Drawn: graphite lid and base, the screen's black in the bars, the
-        // base's lighter top face, and the stage past the lid's corner.
+        // Drawn: the lid's metal rim round its black glass, the screen's
+        // black in the bars, the notch, the base's lit top face, and the
+        // stage past the lid's corner.
         viewer.setFrame(testing::footageFrame(testing::Shot::HarborWide, QSize(480, 270)), 0.0);
         const QImage image = viewer.grab().toImage();
         const qreal ratio = image.devicePixelRatio();
         const auto at = [&](const QPointF &point) { return image.pixelColor((point * ratio).toPoint()).rgb(); };
-        QCOMPARE(at(QPointF(laptop.lid.left() + laptop.bezel / 2.0 + 0.5, laptop.lid.center().y())), editorTheme().deviceFrame.rgb());
+        QCOMPARE(at(QPointF(std::ceil(laptop.lid.left()) + 0.25, laptop.lid.center().y())), editorTheme().laptopShell.rgb());
+        QCOMPARE(at(QPointF((laptop.lid.left() + laptop.rim + laptop.screen.left()) / 2.0, laptop.lid.center().y())), editorTheme().laptopBezel.rgb());
         QCOMPARE(at(QPointF(stage.screen.left() + 20, (stage.screen.top() + stage.card.top()) / 2.0)), editorTheme().deviceScreen.rgb());
+        QCOMPARE(at(QPointF(laptop.notch.left() + 2.0, laptop.notch.top() + 1.0)), editorTheme().laptopBezel.rgb());
         QCOMPARE(at(QPointF(stage.screen.left() + 20, (stage.screen.bottom() + stage.card.bottom()) / 2.0)), editorTheme().deviceScreen.rgb());
-        QCOMPARE(at(QPointF(laptop.base.left() + laptop.base.width() * 0.25, laptop.base.top() + 3.0)), editorTheme().deviceDeck.rgb());
-        // The lid's corners are round: no graphite at the very corner.
-        QVERIFY(at(laptop.lid.topLeft() + QPointF(1, 1)) != editorTheme().deviceFrame.rgb());
+        QCOMPARE(at(QPointF(laptop.base.left() + laptop.base.width() * 0.25, laptop.base.top() + 3.0)), editorTheme().laptopDeck.rgb());
+        // The lid's corners are round: no metal at the very corner.
+        QVERIFY(at(laptop.lid.topLeft() + QPointF(1, 1)) != editorTheme().laptopShell.rgb());
         // Off: the plain card.
         viewer.setLaptopPreview(LaptopPreview::Off);
         stage = viewer.stageLayout();
         QVERIFY(!stage.device && stage.screen.isEmpty());
         QCOMPARE(stage.body, stage.card);
         QVERIFY(std::abs(stage.card.width() / stage.card.height() - 16.0 / 9.0) < 0.001);
-        // A portrait picture keeps its phone whatever the laptop's choice.
+        // Too narrow for the row of controls and the time over the length:
+        // the player's compact arrangement, as on a portrait card.
         viewer.setLaptopPreview(LaptopPreview::Laptop);
+        viewer.resize(400, 200);
+        (void)viewer.grab();
+        QVERIFY(viewer.stageLayout().card.width() < ViewerWidget::kCompactPlayerWidth);
+        QVERIFY(viewer.overlay()->compact());
+        viewer.resize(900, 460);
+        (void)viewer.grab();
+        QVERIFY(!viewer.overlay()->compact());
+        // A portrait picture keeps its phone whatever the laptop's choice.
         viewer.setProjectInfo(1080, 1920);
         QCOMPARE(viewer.stageLayout().kind, ViewerWidget::Device::Phone);
     }
@@ -4369,6 +4385,133 @@ private slots:
     // At 1440x900 the Inspector fits its column: no row wider than the
     // column, and a video clip's identity, its primary rows and every
     // folded section header in view without scrolling.
+    // Dragged all the way up, the timeline's split closes the row over it
+    // altogether instead of stopping at a band of cut-off panels, and comes
+    // back when dragged down; the timeline itself never closes. Short of
+    // that, each dock area stops at its panels' least size, so nothing in
+    // it is cut off, and the column of Project, Inspector, Effects and
+    // Presets keeps one least width (no shorter than its tabs' names)
+    // whichever is chosen.
+    void timelineSplitClosesTheRowOverIt() {
+        QSettings().remove(QStringLiteral("workspace"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(everyKindSnapshot(1));
+        window.resize(1440, 900);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QCoreApplication::processEvents();
+        Workspace *workspace = window.m_workspace;
+        ads::CDockAreaWidget *timeline = workspace->panel(QStringLiteral("timeline"))->dockAreaWidget();
+        ads::CDockAreaWidget *browser = workspace->panel(QStringLiteral("project"))->dockAreaWidget();
+        ads::CDockAreaWidget *viewer = workspace->panel(QStringLiteral("program"))->dockAreaWidget();
+        auto *rows = qobject_cast<QSplitter *>(timeline->parentWidget());
+        QVERIFY(rows && rows->orientation() == Qt::Vertical && rows->count() == 2);
+        const int timelineIndex = rows->indexOf(timeline);
+        const int topIndex = 1 - timelineIndex;
+        QVERIFY(rows->isCollapsible(topIndex) && !rows->isCollapsible(timelineIndex));
+        // Each area's least size is its panels' largest.
+        for (const char *id : {"project", "inspector", "effects", "presets", "program", "source"}) {
+            ads::CDockWidget *dock = workspace->panel(QString::fromLatin1(id));
+            const QSize least = dock->dockAreaWidget()->minimumSizeHint();
+            QVERIFY2(least.width() >= dock->widget()->minimumSizeHint().width() && least.height() >= dock->widget()->minimumSizeHint().height(),
+                     id);
+        }
+        QVERIFY(browser->minimumSizeHint().width() >= browser->titleBar()->tabBar()->sizeHint().width());
+        QVERIFY(timeline->minimumSizeHint().height() >= workspace->panel(QStringLiteral("timeline"))->widget()->minimumHeight());
+        // The Editing arrangement holds the timeline's least height.
+        QVERIFY(timeline->height() >= timeline->minimumSizeHint().height());
+        // Choosing another tab leaves the column's width alone.
+        const int browserWidth = browser->width();
+        for (const char *id : {"inspector", "effects", "presets", "project"}) {
+            workspace->panel(QString::fromLatin1(id))->setAsCurrentTab();
+            QCoreApplication::processEvents();
+            QCOMPARE(browser->width(), browserWidth);
+        }
+        // Part way up: the row stops at its least height, its panels whole.
+        const QList<int> arranged = rows->sizes();
+        const int total = arranged.at(0) + arranged.at(1);
+        QList<int> partWay(2);
+        partWay[topIndex] = 120;
+        partWay[timelineIndex] = total - 120;
+        rows->setSizes(partWay);
+        QCoreApplication::processEvents();
+        QVERIFY(viewer->height() >= viewer->minimumSizeHint().height());
+        // All the way up, as a drag of its handle to the top: closed, the
+        // timeline as tall as the rows.
+        rows->setSizes(arranged);
+        QCoreApplication::processEvents();
+        QSplitterHandle *handle = rows->handle(1);
+        const QPoint grip(handle->width() / 2, handle->height() / 2);
+        QTest::mousePress(handle, Qt::LeftButton, Qt::NoModifier, grip);
+        QTest::mouseMove(handle, grip - QPoint(0, handle->mapTo(rows, QPoint()).y() + 40));
+        QTest::mouseRelease(handle, Qt::LeftButton, Qt::NoModifier, grip - QPoint(0, handle->mapTo(rows, QPoint()).y() + 40));
+        QCoreApplication::processEvents();
+        QCOMPARE(rows->sizes().at(topIndex), 0);
+        QCOMPARE(rows->sizes().at(timelineIndex), total);
+        // Dragged down again, the row comes back.
+        rows->setSizes(arranged);
+        QCoreApplication::processEvents();
+        QVERIFY(viewer->height() > 0 && viewer->isVisible());
+        // As it does from a restored layout.
+        workspace->resetCurrent();
+        QCoreApplication::processEvents();
+        rows = qobject_cast<QSplitter *>(workspace->panel(QStringLiteral("timeline"))->dockAreaWidget()->parentWidget());
+        QVERIFY(rows && rows->childrenCollapsible());
+        QVERIFY(!rows->isCollapsible(rows->indexOf(workspace->panel(QStringLiteral("timeline"))->dockAreaWidget())));
+    }
+
+    // A clip of a shape seen a moment ago shows the same rows again, with
+    // its own values: going back and forth between a title and a video
+    // clip leaves one body in the column, never a stale one.
+    void inspectorShowsAShapeAgainWithItsValues() {
+        QSettings().remove(QStringLiteral("workspace"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(everyKindSnapshot(1));
+        fakeArtwork(window.m_artwork);
+        window.resize(1440, 900);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        InspectorPanel *inspector = window.m_inspector;
+        const auto visibleRows = [inspector] {
+            QStringList labels;
+            for (InspectorRow *row : inspector->findChildren<InspectorRow *>())
+                if (row->isVisibleTo(inspector)) labels << row->label()->text();
+            return labels;
+        };
+        window.clickSelectClip(QStringLiteral("t"));
+        QCoreApplication::processEvents();
+        const QStringList titleRows = visibleRows();
+        const QString titleName = inspector->nameText();
+        QVERIFY(!titleRows.isEmpty());
+        window.clickSelectClip(QStringLiteral("v"));
+        QCoreApplication::processEvents();
+        const QStringList videoRows = visibleRows();
+        QVERIFY(videoRows != titleRows);
+        for (int round = 0; round < 2; ++round) {
+            window.clickSelectClip(QStringLiteral("t"));
+            QCoreApplication::processEvents();
+            QCOMPARE(visibleRows(), titleRows);
+            QCOMPARE(inspector->nameText(), titleName);
+            QCOMPARE(inspector->findChildren<QWidget *>(QStringLiteral("inspectorBody")).size(), 1);
+            window.clickSelectClip(QStringLiteral("v"));
+            QCoreApplication::processEvents();
+            QCOMPARE(visibleRows(), videoRows);
+            QCOMPARE(inspector->findChildren<QWidget *>(QStringLiteral("inspectorBody")).size(), 1);
+        }
+        // A new appearance builds every body again.
+        const ColorScheme was = editorColorScheme();
+        const auto back = qScopeGuard([was] { setEditorColorScheme(was); });
+        setEditorColorScheme(was == ColorScheme::Dark ? ColorScheme::Light : ColorScheme::Dark);
+        window.clickSelectClip(QStringLiteral("t"));
+        QCoreApplication::processEvents();
+        QCOMPARE(visibleRows(), titleRows);
+        QCOMPARE(inspector->findChildren<QWidget *>(QStringLiteral("inspectorBody")).size(), 1);
+    }
+
     void inspectorFitsItsColumn() {
         QSettings().remove(QStringLiteral("workspace"));
         QSettings().remove(QStringLiteral("editor/inspector"));
@@ -9115,12 +9258,14 @@ private slots:
                     QCOMPARE(at(QPointF(stage.screen.left() + 3, (stage.screen.top() + video.top()) / 2.0 + 6)), theme.deviceScreen.rgb());
                 }
                 if (wide) {
-                    // The laptop's graphite lid in either appearance, the
-                    // screen's black bar over the picture, and its base.
+                    // The laptop's stone rim and black glass in either
+                    // appearance, the screen's black bar over the picture,
+                    // and its base.
                     const LaptopGeometry laptop = laptopGeometry(body, 16.0 / 9.0);
-                    QCOMPARE(at(QPointF(laptop.lid.left() + laptop.bezel / 2.0 + 0.5, laptop.lid.center().y())), theme.deviceFrame.rgb());
+                    QCOMPARE(at(QPointF(std::ceil(laptop.lid.left()) + 0.25, laptop.lid.center().y())), theme.laptopShell.rgb());
+                    QCOMPARE(at(QPointF((laptop.lid.left() + laptop.rim + laptop.screen.left()) / 2.0, laptop.lid.center().y())), theme.laptopBezel.rgb());
                     QCOMPARE(at(QPointF(stage.screen.left() + 20, (stage.screen.top() + video.top()) / 2.0)), theme.deviceScreen.rgb());
-                    QCOMPARE(at(QPointF(laptop.base.left() + laptop.base.width() * 0.25, laptop.base.top() + 2.0)), theme.deviceDeck.rgb());
+                    QCOMPARE(at(QPointF(laptop.base.left() + laptop.base.width() * 0.25, laptop.base.top() + 2.0)), theme.laptopDeck.rgb());
                 }
                 QCOMPARE(at(QPointF(panel.left() + 1, panel.top() + 1)), theme.viewerSurround.rgb());
                 // The panel is its own surface, under its header.

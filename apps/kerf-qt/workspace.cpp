@@ -2,6 +2,7 @@
 #include "editor_style.h"
 
 #include <DockAreaWidget.h>
+#include <DockComponentsFactory.h>
 #include <DockAreaTabBar.h>
 #include <DockAreaTitleBar.h>
 #include <DockManager.h>
@@ -63,10 +64,30 @@ QByteArray migrated(const QByteArray &layout) {
     return xml;
 }
 
+// A dock area's tab strip whose least height is its height. The dock
+// manager makes an area's least height its panels' and the strip's least
+// height hint, which leaves out the height the sheet gives the strip (see
+// dockStyleSheet()), so a panel at its least would run that much under the
+// area's foot.
+class AreaTitleBar final : public ads::CDockAreaTitleBar {
+public:
+    using ads::CDockAreaTitleBar::CDockAreaTitleBar;
+    QSize minimumSizeHint() const override {
+        const QSize least = ads::CDockAreaTitleBar::minimumSizeHint();
+        return {least.width(), std::max({least.height(), sizeHint().height(), minimumHeight()})};
+    }
+};
+
+class DockComponents final : public ads::CDockComponentsFactory {
+public:
+    ads::CDockAreaTitleBar *createDockAreaTitleBar(ads::CDockAreaWidget *area) const override { return new AreaTitleBar(area); }
+};
+
 } // namespace
 
 Workspace::Workspace(QWidget *host) : QObject(host) {
     using Manager = ads::CDockManager;
+    ads::CDockComponentsFactory::setFactory(new DockComponents);
     Manager::setConfigFlags(Manager::DefaultOpaqueConfig);
     Manager::setConfigFlag(Manager::AlwaysShowTabs, true);
     // The focused panel shows in its tab's label (see dockStyleSheet()).
@@ -94,6 +115,10 @@ ads::CDockWidget *Workspace::addPanel(const QString &id, const QString &title, Q
     auto *dock = new ads::CDockWidget(m_manager, title);
     dock->setObjectName(id);
     dock->setWidget(content, ads::CDockWidget::ForceNoScrollArea);
+    // Its least size is its content's, and a dock area's the largest of its
+    // panels': a split is never dragged into the middle of a panel, cutting
+    // it off, and the area keeps one least width whichever tab is chosen.
+    dock->setMinimumSizeHintMode(ads::CDockWidget::MinimumSizeHintFromContent);
     dock->setFeature(ads::CDockWidget::DockWidgetDeleteOnClose, false);
     dock->tabWidget()->installEventFilter(this);
     // A text tab: its name and nothing round it (the dock manager's own
@@ -228,12 +253,32 @@ void Workspace::arrangeEditing() {
     m_manager->setSplitterSizes(timeline, {kTopRowHeight, kTimelineHeight});
     const int handles = viewer->parentSplitter()->handleWidth();
     m_manager->setSplitterSizes(viewer, {browserWidth, kArrangedWidth - handles - browserWidth});
+    letTopRowCollapse();
     placeTitleWidgets();
 }
 
 void Workspace::afterRestore() {
     letViewerStretch();
+    letTopRowCollapse();
     placeTitleWidgets();
+}
+
+void Workspace::letTopRowCollapse() {
+    ads::CDockWidget *timeline = m_panels.value(QStringLiteral("timeline"));
+    QWidget *row = timeline ? timeline->dockAreaWidget() : nullptr;
+    if (!row) return;
+    // The rows the timeline is one of: dragged all the way up, the split
+    // closes what is over the timeline altogether, as far as the timeline
+    // goes up, rather than stopping at a band of cut-off panels. The
+    // timeline itself never closes.
+    auto *rows = qobject_cast<QSplitter *>(row->parentWidget());
+    while (rows && rows->orientation() != Qt::Vertical) {
+        row = rows;
+        rows = qobject_cast<QSplitter *>(rows->parentWidget());
+    }
+    if (!rows) return;
+    rows->setChildrenCollapsible(true);
+    for (int index = 0; index < rows->count(); ++index) rows->setCollapsible(index, rows->widget(index) != row);
 }
 
 void Workspace::letViewerStretch() {

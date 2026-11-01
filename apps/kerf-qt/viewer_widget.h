@@ -110,6 +110,10 @@ public:
     LaptopPreview laptopPreview() const { return m_laptop; }
     // Whether the picture is taller than wide, or wider than tall.
     bool portrait() const { return aspect() < 1.0; }
+    // The player's compact arrangement: on a portrait card, and on a wide
+    // one too narrow for the row of controls and the time over the length.
+    static constexpr double kCompactPlayerWidth = 360.0;
+    bool compactPlayer(const QRectF &card) const { return portrait() || card.width() < kCompactPlayerWidth; }
     bool landscape() const { return aspect() > 1.0; }
     // The device the picture shows in, as the previews and its shape choose.
     Device device() const;

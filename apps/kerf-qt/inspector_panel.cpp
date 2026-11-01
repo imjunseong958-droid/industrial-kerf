@@ -9,6 +9,7 @@
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDragEnterEvent>
+#include <QElapsedTimer>
 #include <QEnterEvent>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -275,10 +276,14 @@ InspectorPanel::InspectorPanel(QWidget *parent) : QWidget(parent) {
     addAction(resetAllAction);
     buildHeader();
     connect(EditorAppearance::instance(), &EditorAppearance::changed, this, [this] {
-        m_shape.clear();
+        forgetBodies();
         refresh();
     });
     refresh();
+}
+
+InspectorPanel::~InspectorPanel() {
+    delete m_parking;
 }
 
 // ------------------------------------------------------------------ state
@@ -321,37 +326,35 @@ void InspectorPanel::setEffectCatalog(const QJsonArray &catalog) {
         const QJsonObject fx = value.toObject();
         m_effectDefs.insert(fx.value(QStringLiteral("id")).toString(), fx);
     }
-    m_shape.clear();
+    forgetBodies();
 }
 
+// The tracks are part of the shape (the picture tracks are the ones the
+// selected clip is not on, so they change from clip to clip): a body is
+// built, and parked, for each.
 void InspectorPanel::setPictureTracks(const QStringList &tracks) {
-    if (tracks == m_pictureTracks) return;
     m_pictureTracks = tracks;
-    m_shape.clear();
 }
 
 void InspectorPanel::setSoundTracks(const QStringList &tracks) {
-    if (tracks == m_soundTracks) return;
     m_soundTracks = tracks;
-    m_shape.clear();
 }
 
 void InspectorPanel::setMaskTools(const QList<QAction *> &tools) {
     m_maskTools = tools;
-    m_shape.clear();
+    forgetBodies();
 }
 
 void InspectorPanel::setMaskCatalog(const QJsonArray &defs, const QStringList &modes) {
     if (defs == m_maskDefs && modes == m_maskModes) return;
     m_maskDefs = defs;
     m_maskModes = modes;
-    m_shape.clear();
+    forgetBodies();
 }
 
 void InspectorPanel::setMaskable(bool maskable) {
-    if (maskable == m_maskable) return;
+    // Part of the shape: a body for each is built (and parked) apart.
     m_maskable = maskable;
-    m_shape.clear();
 }
 
 void InspectorPanel::selectMask(const QString &name) {
@@ -478,7 +481,8 @@ double InspectorPanel::clipTime(const Clip &clip) const {
 }
 
 QString InspectorPanel::shapeKey() const {
-    QStringList parts{QString::number(int(m_mode)), QString::number(m_clips.size()), m_maskable ? key("m") : key("-")};
+    QStringList parts{QString::number(int(m_mode)), QString::number(m_clips.size()), m_maskable ? key("m") : key("-"),
+                      m_pictureTracks.join(QLatin1Char(',')), m_soundTracks.join(QLatin1Char(','))};
     if (m_mode == Mode::Sequence) {
         parts << QString::number(m_project.value(QStringLiteral("tracks")).toArray().size())
               << QString::number(m_project.value(QStringLiteral("markers")).toArray().size());
@@ -507,8 +511,9 @@ void InspectorPanel::refresh() {
     gatherClips();
     const QString shape = shapeKey();
     if (shape != m_shape) {
+        parkBody();
         m_shape = shape;
-        rebuild();
+        if (!unparkBody(shape)) rebuild();
     }
     refreshHeader();
     refreshValues();
@@ -542,6 +547,8 @@ void InspectorPanel::clearBody() {
 }
 
 void InspectorPanel::rebuild() {
+    QElapsedTimer cost;
+    cost.start();
     clearBody();
     m_bodyWidget = new QWidget;
     m_bodyWidget->setObjectName(QStringLiteral("inspectorBody"));
@@ -575,13 +582,69 @@ void InspectorPanel::rebuild() {
     }
     // A section's header brings its own hairline: no second one over it.
     if (QLayoutItem *next = body->itemAt(1); next && qobject_cast<InspectorSection *>(next->widget())) rule->hide();
+    m_bodyCost = cost.elapsed();
+    showBody();
+}
+
+void InspectorPanel::showBody() {
     m_contentLayout->insertWidget(0, m_bodyWidget);
     m_bodyWidget->show();
-    // Back where the body was for this kind.
+    // Back where the body was for this kind, once it is laid out; until
+    // then the column is not repainted, so it never shows a frame scrolled
+    // to the top first.
     const int offset = m_scrollByKind.value(m_kindForSections);
+    m_scroll->viewport()->setUpdatesEnabled(false);
     QTimer::singleShot(0, this, [this, offset, shape = m_shape] {
         if (shape == m_shape) m_scroll->verticalScrollBar()->setValue(offset);
+        m_scroll->viewport()->setUpdatesEnabled(true);
     });
+}
+
+void InspectorPanel::parkBody() {
+    if (!m_bodyWidget) return;
+    // A body whose shape was forgotten is out of date, and one quicker to
+    // build than to move back into the column is built again: it goes.
+    if (m_shape.isEmpty() || m_bodyCost < kParkedBodyCost) {
+        clearBody();
+        return;
+    }
+    if (!m_parking) m_parking = new QWidget;
+    m_contentLayout->removeWidget(m_bodyWidget);
+    m_bodyWidget->hide();
+    m_bodyWidget->setParent(m_parking);
+    m_parked.insert(m_shape, ParkedBody{m_bodyWidget, m_kindForSections, m_rows, m_sections, m_refreshers, m_effectBoxes});
+    m_parkedOrder.removeAll(m_shape);
+    m_parkedOrder.append(m_shape);
+    while (m_parkedOrder.size() > kParkedBodies) delete m_parked.take(m_parkedOrder.takeFirst()).widget;
+    m_bodyWidget = nullptr;
+    clearBody();
+}
+
+bool InspectorPanel::unparkBody(const QString &shape) {
+    const auto found = m_parked.constFind(shape);
+    if (found == m_parked.constEnd()) return false;
+    const ParkedBody parked = found.value();
+    m_parked.erase(found);
+    m_parkedOrder.removeAll(shape);
+    clearBody();
+    m_bodyWidget = parked.widget;
+    m_kindForSections = parked.kind;
+    m_rows = parked.rows;
+    m_sections = parked.sections;
+    m_refreshers = parked.refreshers;
+    m_effectBoxes = parked.effectBoxes;
+    // It was worth parking once, so it is again.
+    m_bodyCost = kParkedBodyCost;
+    buildHeader();
+    showBody();
+    return true;
+}
+
+void InspectorPanel::forgetBodies() {
+    m_shape.clear();
+    for (const ParkedBody &parked : std::as_const(m_parked)) delete parked.widget;
+    m_parked.clear();
+    m_parkedOrder.clear();
 }
 
 // ---------------------------------------------------------------- header

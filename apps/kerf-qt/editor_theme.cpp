@@ -416,9 +416,14 @@ EditorTheme makeEditorTheme(bool dark) {
     t.deviceEdge = hex("#3a383c");
     t.deviceShadow = hex("#0000002e");
     t.deviceScreen = hex("#000000");
-    t.deviceDeck = hex("#2b2a2d");
-    t.deviceHinge = hex("#0e0d0f");
     t.deviceInk = hex("#ffffff");
+    t.laptopShell = hex("#9a8e81");
+    t.laptopShellShade = hex("#6e645a");
+    t.laptopDeck = hex("#bdb1a3");
+    t.laptopHighlight = hex("#d8cdbf");
+    t.laptopBezel = hex("#0c0b0a");
+    t.laptopCamera = hex("#24262b");
+    t.laptopHinge = hex("#3a332d");
     t.safeZoneFill = hex("#ffffff1f");
     t.safeZoneLine = hex("#ffffffa6");
     t.safeZoneText = hex("#ffffff");

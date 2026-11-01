@@ -371,7 +371,7 @@ void ViewerWidget::setSafeZones(bool shown) {
 
 void ViewerWidget::layoutStage() {
     const StageLayout layout = stageLayout();
-    m_overlay->setRect(layout.card, portrait());
+    m_overlay->setRect(layout.card, compactPlayer(layout.card));
     // Safe zones are outlines to read: the controls (all but the bar) keep
     // off them until the pointer comes over the picture.
     m_overlay->setControlsSuppressed(m_safeZones && portrait());
@@ -819,7 +819,7 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
     p.fillRect(rect(), theme.viewerSurround);
     const StageLayout layout = stageLayout();
     const QRectF canvas = layout.card;
-    m_overlay->setRect(canvas, portrait());
+    m_overlay->setRect(canvas, compactPlayer(canvas));
     DeviceGeometry device;
     QPainterPath canvasPath;
     // A device's frame is drawn once for its size and blitted after.
