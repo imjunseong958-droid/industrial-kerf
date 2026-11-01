@@ -250,6 +250,9 @@ private:
     // that only moves the playhead or the skimmer blits them.
     void ensureLaneCache(const QRect &view);
     bool laneCacheFits(const QRect &view) const;
+    // The lanes in `area` drawn into a pixmap, as the cache is, or null
+    // when it is too large to hold.
+    QPixmap renderLanes(const QRect &area);
     void invalidateLanes() { m_laneCache = QPixmap(); }
     // Repaint the lanes in `rect` alone, in the cache too: a clip the
     // pointer enters or leaves, or one selected.
