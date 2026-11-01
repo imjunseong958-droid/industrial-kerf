@@ -15,6 +15,7 @@
 #include "media_artwork.h"
 #include "timeline_widget.h"
 #include "player_overlay.h"
+#include "program_level.h"
 #include "viewer_widget.h"
 #ifdef Q_OS_MACOS
 #include "macos_window.h"
@@ -3420,7 +3421,17 @@ void MainWindow::setupPlayerOverlay() {
     });
 }
 
+void MainWindow::updateProgramLevel() {
+    VuMeter *meter = m_rail ? m_rail->meter() : nullptr;
+    if (!meter) return;
+    // Paused, nothing sounds, whatever lies under the playhead.
+    meter->setPlaying(m_playing);
+    meter->setTarget(m_playing ? vuNeedle(programPeak(m_project, m_artwork, m_playhead)) : 0.0);
+}
+
 void MainWindow::updateTransport() {
+    // Every clock tick, play and pause, seek and new snapshot comes here.
+    updateProgramLevel();
     PlayerOverlay *overlay = m_viewer ? m_viewer->overlay() : nullptr;
     if (!overlay) return;
     overlay->setTime(m_playhead, m_duration, m_fps);

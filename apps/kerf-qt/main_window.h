@@ -197,6 +197,9 @@ private:
     // show the playhead's time, the length, and what can be pressed.
     void setupPlayerOverlay();
     void updateTransport();
+    // The rail's VU meter: the program's sound at the playhead while it
+    // plays, from the sound clips' peaks; at rest, its needle falls back.
+    void updateProgramLevel();
     // The phone a portrait picture shows in and its safe zones, and the
     // laptop a wide one shows in: from the stage's rail and Window ▸ Viewer,
     // remembered on this Mac.
