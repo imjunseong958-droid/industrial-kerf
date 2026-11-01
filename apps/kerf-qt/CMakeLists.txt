@@ -38,22 +38,32 @@ set(KERF_QT_SOURCES
     ask_prompt.cpp
     ask_prompt.h
     bridge.h
+    chat_panel.cpp
+    chat_panel.h
     command_registry.cpp
     command_registry.h
+    device_frame.cpp
+    device_frame.h
     editor_common.cpp
     editor_common.h
     editor_style.h
     editor_theme.cpp
     editor_theme.h
-    effect_controls_panel.cpp
-    effect_controls_panel.h
     effects_panel.cpp
     effects_panel.h
+    inspector_panel.cpp
+    inspector_panel.h
+    inspector_presentation.cpp
+    inspector_presentation.h
+    inspector_widgets.cpp
+    inspector_widgets.h
     launcher_style.h
     main_window.cpp
     main_window.h
     media_artwork.cpp
     media_artwork.h
+    player_overlay.cpp
+    player_overlay.h
     presets_panel.cpp
     presets_panel.h
     project_launcher.cpp

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "device_frame.h"
 #include "editor_common.h"
 
 #include <QAction>
@@ -19,6 +20,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMainWindow>
+#include <QPointer>
 #include <QMenu>
 #include <QProgressBar>
 #include <QPushButton>
@@ -38,8 +40,12 @@
 namespace kerf {
 
 class AskPrompt;
+class ChatPanel;
+struct ProposalChange;
+class CommentRow;
+class StageRail;
 class CommandRegistry;
-class EffectControlsPanel;
+class InspectorPanel;
 class EffectsPanel;
 class PresetsPanel;
 class ProjectPanel;
@@ -47,16 +53,13 @@ class SourceMonitorPanel;
 class Workspace;
 class MediaArtwork;
 class TimelineWidget;
+class TimelineZoomControl;
 class ViewerWidget;
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
     friend class EditorTest;
 public:
-    // The most lines the proposal card's script and diff show before they scroll.
-    static constexpr int kProposalDiffLines = 10;
-    // The fade over the top of the conversation's view while it is scrolled.
-    static constexpr int kScrollFadeHeight = 14;
     MainWindow(const QString &projectDirectory, const QString &kerfdBinary, QWidget *parent = nullptr);
     ~MainWindow() override;
 
@@ -85,6 +88,14 @@ private slots:
     void settlePointerSeek();
     bool scrubFromShownFrame(double time) const;
     void selectClip(const QString &id);
+    // A clip clicked on the timeline: selected, and the Inspector brought
+    // forward in its column (see Workspace::raiseInspector).
+    // ⌘-click or ⇧-click on a clip in the timeline.
+    void extendClipSelection(const QString &id, bool toggle);
+    void updateSelectionStatus();
+    void clickSelectClip(const QString &id);
+    // Open the conversation with `subject` ("@clip") in the composer.
+    void askAboutInChat(const QString &subject);
 
     // Edits go to kerfd as typed operations on the model. Amounts and
     // positions count frames of the sequence.
@@ -141,6 +152,13 @@ private slots:
     void saveAgentSettings();
     void acceptProposal();
     void rejectProposal();
+    // Kerf's conversation, in the Program monitor's stage beside the
+    // picture: open there (and the Program monitor with it, in front), or
+    // closed. Remembered on this Mac, never in the project.
+    bool chatOpen() const;
+    void setChatOpen(bool open);
+    // Bring the switches that open it in line with chatOpen().
+    void syncChatSwitches();
 
 protected:
     bool eventFilter(QObject *object, QEvent *event) override;
@@ -157,6 +175,8 @@ private:
     void setProjectTitle(const QString &name);
     // Centre the title on the toolbar, clear of the groups either side.
     void layoutProjectTitle();
+    // "Edited · 9:16 · 24 fps": the line under the title.
+    QString projectSubtitle() const;
     // Rebuild what caches the theme's colours: symbols drawn in code and the
     // conversation's messages.
     void applyAppearance();
@@ -172,10 +192,20 @@ private:
     QJsonObject commandContext() const;
     void updateCommandStates();
 
-    // Transport under the viewer: playhead timecode, the usual buttons, and
-    // the program length.
-    QWidget *buildTransport();
+    // The transport, as the player's controls on the Program monitor's
+    // picture (see PlayerOverlay): what they ask for runs here, and they
+    // show the playhead's time, the length, and what can be pressed.
+    void setupPlayerOverlay();
     void updateTransport();
+    // The phone a portrait picture shows in and its safe zones, and the
+    // laptop a wide one shows in: from the stage's rail and Window ▸ Viewer,
+    // remembered on this Mac.
+    void setDevicePreview(DevicePreview preview);
+    void setLaptopPreview(LaptopPreview preview);
+    void setSafeZones(bool shown);
+    void showDeviceMenu();
+    void updateViewerRail();
+    void fitPanelDetails();
     void seekToStart() { queueSeek(0.0); }
     void seekToEnd() { queueSeek(m_duration); }
     // Step from the frame on screen so each press moves exactly one frame.
@@ -204,8 +234,17 @@ private:
     void updateProposal(const QJsonValue &value);
     // Show m_proposalText in m_proposalDiff, its lines coloured by kind.
     void showProposalText();
+    // A proposal's script line as the change its pinned comment lists.
+    ProposalChange describeScriptLine(const QString &line) const;
     void appendConversation(const QString &speaker, const QString &text);
     void appendConversationNote(const QString &kind, const QString &text);
+    // The number of messages under the rail's chat button.
+    void updateChatCount();
+    void updateChatTips();
+    // The quiet status line after the latest comment.
+    void updateChatStatus();
+    // The activity log, from the conversation's ⋯ menu.
+    void showActivity();
     void addActivity(const QString &kind, const QString &text);
     void showError(const QString &message);
     void setConnection(const QString &status, const QString &message = QString());
@@ -250,12 +289,11 @@ private:
     // The room at the toolbar's leading end for the window buttons (macOS).
     QWidget *m_windowButtons = nullptr;
     QLabel *m_projectTitle = nullptr;
+    QLabel *m_projectSubtitle = nullptr;
     QString m_projectName;
     QToolButton *m_toolbarLeftEnd = nullptr; // The last command before the title.
     // The toolbar's last control: opens and closes Kerf's conversation.
     QToolButton *m_chatToggle = nullptr;
-    // The close button in the conversation's header.
-    QAction *m_assistantClose = nullptr;
     QString m_projectDirectory;
     QString m_kerfdBinary;
     void *m_bridge = nullptr;
@@ -274,22 +312,27 @@ private:
     QScrollArea *m_timelineScroll = nullptr;
     CommandRegistry *m_commands = nullptr;
     QHash<QString, std::function<void()>> m_commandHandlers;
-    QList<QToolButton *> m_transportButtons;
     // Toolbar actions and the symbols drawn for them.
     QList<QPair<QAction *, QString>> m_toolbarGlyphs;
     QList<QPair<QAction *, TransportGlyph>> m_sourceGlyphs; // The Source monitor's marks and edits.
     // Tool palette actions, whose icons are redrawn when the appearance changes.
     QList<QAction *> m_toolGlyphs;
-    // Disclosure buttons (Activity, Settings' Advanced), whose chevrons are too.
+    // Disclosure buttons (Settings' Advanced), whose chevrons are too.
     QList<QToolButton *> m_disclosures;
-    QToolButton *m_transportPlay = nullptr;
-    QLabel *m_transportTime = nullptr;
-    QLabel *m_transportDuration = nullptr;
+    // Window ▸ Viewer: the phone (Island, Punch-Hole, Off), the laptop
+    // (Laptop, Off) and safe zones.
+    QList<QAction *> m_deviceActions;
+    QList<QAction *> m_laptopActions;
+    QAction *m_safeZonesAction = nullptr;
     // Panel details shown in the panels' title strips.
     QAction *m_viewerDetail = nullptr;
-    QAction *m_timelineDetail = nullptr;
+    QLabel *m_timelineDetail = nullptr;
+    TimelineZoomControl *m_timelineZoom = nullptr;
     Workspace *m_workspace = nullptr;
-    EffectControlsPanel *m_effectControls = nullptr;
+    InspectorPanel *m_inspector = nullptr;
+    // Add effect in the Inspector raised the Effects browser: adding one
+    // brings the Inspector back.
+    bool m_effectsFromInspector = false;
     // Rectangle, Ellipse, and Pen: the mask tools.
     QList<QAction *> m_maskTools;
     EffectsPanel *m_effects = nullptr;
@@ -346,7 +389,6 @@ private:
     QDialog *m_preferences = nullptr;
     QLabel *m_statusConnection = nullptr;
     QLabel *m_statusRevision = nullptr;
-    bool m_transportShowsPause = false;
     quint64 m_revision = 0;
     int m_trackCount = 0;
     double m_duration = 0.0;
@@ -368,25 +410,31 @@ private:
     bool m_pointerOwnsPlayhead = false;
     bool m_hasShownFrame = false;
     bool m_updatingCanvasPreset = false;
-    bool m_conversationEmpty = true;
     bool m_agentBusy = false;
     QString m_agentRunState = QStringLiteral("idle");
     QString m_agentText;
     QString m_selectedClip;
+    // Every selected clip, m_selectedClip (the primary one) among them.
+    QStringList m_selectedClips;
+    QLabel *m_selectionStatus = nullptr;
     QString m_proposalId;
     QStringList m_activityLog;
     QSize m_canvasSize{1920, 1080};
 
     ViewerWidget *m_viewer = nullptr;
     TimelineWidget *m_timeline = nullptr;
-    QTextEdit *m_conversation = nullptr;
-    // The assistant's one scrolling view, and whether it keeps to the latest output.
+    // The conversation and the rail beside the picture.
+    ChatPanel *m_chat = nullptr;
+    StageRail *m_rail = nullptr;
+    // Kerf's comment for this turn, which streamed text and steps go to, and
+    // steps that came before it.
+    QPointer<CommentRow> m_agentRow;
+    QStringList m_pendingReplies;
+    QFrame *m_activityPopup = nullptr;
+    // Parts of m_chat, by role.
     QScrollArea *m_chatScroll = nullptr;
-    bool m_followConversation = true;
-    QTextCursor m_agentCursor;
     QLabel *m_chatActivity = nullptr;
     QFrame *m_chatComposer = nullptr;
-    QLabel *m_composerStatus = nullptr;
     QTextEdit *m_chatInput = nullptr;
     QRadioButton *m_anthropicActiveRadio = nullptr;
     QRadioButton *m_openaiActiveRadio = nullptr;
@@ -403,7 +451,7 @@ private:
     QLabel *m_inboundMcpStatus = nullptr;
     quint64 m_mcpConfigVersion = 0;
     QPushButton *m_sendButton = nullptr;
-    QToolButton *m_abortButton = nullptr;
+    QPushButton *m_abortButton = nullptr;
     QListWidget *m_activityList = nullptr;
     QLabel *m_agentStatus = nullptr;
     QLabel *m_proposalSummary = nullptr;
@@ -411,7 +459,7 @@ private:
     QString m_proposalText; // The pending proposal's script and diff, as m_proposalDiff shows them.
     QPushButton *m_acceptButton = nullptr;
     QPushButton *m_rejectButton = nullptr;
-    QGroupBox *m_proposalBox = nullptr;
+    QFrame *m_proposalBox = nullptr;
     QComboBox *m_quality = nullptr;
     QComboBox *m_canvasPreset = nullptr;
     QProgressBar *m_exportProgress = nullptr;

@@ -3,19 +3,32 @@
 #include "editor_theme.h"
 #include "media_artwork.h"
 
+#include <QAction>
 #include <QFontMetricsF>
 #include <QJsonObject>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QPainter>
+#include <QPainterPath>
+#include <QStyledItemDelegate>
 #include <QVBoxLayout>
 
+#include <numeric>
 #include <utility>
 
 namespace kerf {
 
 namespace {
 
-constexpr QSize kThumbnail{112, 63};
+constexpr QSize kThumbnail = ProjectPanel::kThumbnail;
+constexpr int kTileRadius = 6;
+// Under the thumbnail: the name (12/16), then the duration and the shape
+// (11/14).
+constexpr int kNameTop = 6;
+constexpr int kNameHeight = 16;
+constexpr int kFactsHeight = 14;
+// Where the bin keeps a media's shape ("16:9", or "Audio") for its tile.
+constexpr int kShapeRole = Qt::UserRole + 1;
 
 const QString kOffline = QStringLiteral("Offline");
 const QString kNotDownloaded = QStringLiteral("Not downloaded");
@@ -99,26 +112,114 @@ QString badgeTip(const QString &badge) {
     return {};
 }
 
+// "16:9", "9:16", "1:1", "4:5", or the reduced ratio; "Audio" for sound.
+QString shapeOf(const QJsonObject &source) {
+    const int width = source.value(QStringLiteral("width")).toInt();
+    const int height = source.value(QStringLiteral("height")).toInt();
+    if (width <= 0) return QStringLiteral("Audio");
+    if (height <= 0) return QString();
+    const double ratio = double(width) / height;
+    for (const auto &[w, h] : {std::pair{16, 9}, std::pair{9, 16}, std::pair{1, 1}, std::pair{4, 5}, std::pair{4, 3}, std::pair{21, 9}})
+        if (std::abs(ratio - double(w) / h) < 0.01) return QStringLiteral("%1:%2").arg(w).arg(h);
+    const int common = std::gcd(width, height);
+    return QStringLiteral("%1:%2").arg(width / common).arg(height / common);
+}
+
+// One tile of the bin's grid, as the structure the owner chose draws it:
+// the thumbnail with rounded corners, its name under it, then its duration
+// on the left and its shape on the right in secondary ink. The chosen tile
+// has a 2px accent ring round its thumbnail; no wash, no box.
+class BinTileDelegate final : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    QSize sizeHint(const QStyleOptionViewItem &, const QModelIndex &) const override {
+        return QSize(kThumbnail.width(), kThumbnail.height() + kNameTop + kNameHeight + kFactsHeight);
+    }
+
+    void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override {
+        const EditorTheme &theme = editorTheme();
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing);
+        const QRect cell = option.rect;
+        const QRectF thumb(cell.left() + (cell.width() - kThumbnail.width()) / 2.0, cell.top() + ProjectPanel::kTileInset,
+                           kThumbnail.width(), kThumbnail.height());
+        QPainterPath round;
+        round.addRoundedRect(thumb, kTileRadius, kTileRadius);
+        painter->save();
+        painter->setClipPath(round);
+        const QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
+        painter->drawPixmap(thumb.toRect(), icon.pixmap(kThumbnail));
+        if (option.state & QStyle::State_MouseOver) painter->fillRect(thumb, theme.hover);
+        painter->restore();
+        if (option.state & QStyle::State_Selected) {
+            painter->setPen(QPen(theme.accent, 2));
+            painter->setBrush(Qt::NoBrush);
+            painter->drawRoundedRect(thumb.adjusted(-1, -1, 1, 1), kTileRadius + 1, kTileRadius + 1);
+        }
+        const QStringList lines = index.data(Qt::DisplayRole).toString().split(QLatin1Char('\n'));
+        QFont name = option.font;
+        name.setPixelSize(12);
+        painter->setFont(name);
+        painter->setPen(theme.text);
+        const QRectF nameRect(thumb.left(), thumb.bottom() + kNameTop, thumb.width(), kNameHeight);
+        painter->drawText(nameRect, Qt::AlignLeft | Qt::AlignVCenter,
+                          QFontMetrics(name).elidedText(lines.value(0), Qt::ElideMiddle, int(nameRect.width())));
+        QFont facts = option.font;
+        facts.setPixelSize(11);
+        facts.setFeature(QFont::Tag("tnum"), 1);
+        painter->setFont(facts);
+        painter->setPen(theme.textSecondary);
+        const QRectF factsRect(thumb.left(), nameRect.bottom(), thumb.width(), kFactsHeight);
+        painter->drawText(factsRect, Qt::AlignLeft | Qt::AlignVCenter, lines.value(1));
+        painter->drawText(factsRect, Qt::AlignRight | Qt::AlignVCenter, index.data(kShapeRole).toString());
+        painter->restore();
+    }
+};
+
 } // namespace
 
 ProjectPanel::ProjectPanel(MediaArtwork *artwork, QWidget *parent) : QWidget(parent), m_artwork(artwork) {
     setObjectName(QStringLiteral("projectPanel"));
     setAttribute(Qt::WA_StyledBackground);
     auto *layout = new QVBoxLayout(this);
-    // The browser's white well runs edge to edge, as Finder's and Logic's library.
-    layout->setContentsMargins(0, 0, 0, 0);
+    // "Search media" over a grid of two columns of tiles, on the panel's
+    // own surface, as the structure the owner chose.
+    layout->setContentsMargins(0, 12, 0, 0);
+    layout->setSpacing(8);
+    m_search = new QLineEdit;
+    m_search->setObjectName(QStringLiteral("binSearch"));
+    m_search->setPlaceholderText(QStringLiteral("Search media"));
+    m_search->setAccessibleName(QStringLiteral("Search media"));
+    m_search->setClearButtonEnabled(true);
+    m_search->addAction(searchGlyph(), QLineEdit::LeadingPosition);
+    auto *searchRow = new QHBoxLayout;
+    searchRow->setContentsMargins(kSidePadding, 0, kSidePadding, 0);
+    searchRow->addWidget(m_search);
+    layout->addLayout(searchRow);
+    connect(m_search, &QLineEdit::textChanged, this, &ProjectPanel::applyFilter);
+    connect(EditorAppearance::instance(), &EditorAppearance::changed, this, [this] {
+        const QList<QAction *> actions = m_search->actions();
+        if (!actions.isEmpty()) actions.constFirst()->setIcon(searchGlyph());
+    });
     m_list = new QListWidget;
     m_list->setObjectName(QStringLiteral("projectBin"));
     m_list->setViewMode(QListView::IconMode);
     m_list->setIconSize(kThumbnail);
-    m_list->setGridSize(QSize(kThumbnail.width() + 16, kThumbnail.height() + 46));
-    m_list->setTextElideMode(Qt::ElideMiddle);
+    m_list->setItemDelegate(new BinTileDelegate(m_list));
+    m_list->setSpacing(0);
+    m_list->setGridSize(QSize(kThumbnail.width() + kTileGap, kThumbnail.height() + kNameTop + kNameHeight + kFactsHeight + 12));
     m_list->setResizeMode(QListView::Adjust);
     m_list->setMovement(QListView::Static);
-    m_list->setWordWrap(true);
     m_list->setFrameShape(QFrame::NoFrame);
+    m_list->setMouseTracking(true);
     m_list->setContextMenuPolicy(Qt::CustomContextMenu);
-    layout->addWidget(m_list);
+    // The first column's thumbnails at the side padding: a grid cell is
+    // kTileGap wider than its tile, which is centred in it.
+    auto *grid = new QHBoxLayout;
+    grid->setContentsMargins(kSidePadding - kTileGap / 2, 0, 0, 0);
+    grid->addWidget(m_list);
+    layout->addLayout(grid, 1);
     connect(m_list, &QListWidget::itemActivated, this, [this](QListWidgetItem *item) {
         emit openRequested(item->data(Qt::UserRole).toString());
     });
@@ -177,12 +278,37 @@ void ProjectPanel::refresh() {
                                          QStringLiteral("%1\n%2").arg(sourceName(source),
                                                                       prettyTime(source.value(QStringLiteral("duration")).toDouble())));
         item->setData(Qt::UserRole, id);
+        item->setData(kShapeRole, shapeOf(source));
         QString tip = QStringLiteral("%1\nDouble-click to open in the Source monitor").arg(source.value(QStringLiteral("path")).toString());
         if (!badge.isEmpty()) tip += QStringLiteral("\n") + badgeTip(badge);
         item->setToolTip(tip);
         m_list->addItem(item);
         if (id == current) m_list->setCurrentItem(item);
     }
+    applyFilter(m_search->text());
+}
+
+void ProjectPanel::applyFilter(const QString &text) {
+    // By name, as typed, ignoring case.
+    const QString wanted = text.trimmed();
+    for (int row = 0; row < m_list->count(); ++row) {
+        QListWidgetItem *item = m_list->item(row);
+        item->setHidden(!wanted.isEmpty() && !item->text().section(QLatin1Char('\n'), 0, 0).contains(wanted, Qt::CaseInsensitive));
+    }
+}
+
+QIcon ProjectPanel::searchGlyph() {
+    // A magnifier, drawn in code (no SVG on Linux), in secondary ink.
+    const qreal ratio = 2.0;
+    QPixmap pixmap(QSize(16, 16) * ratio);
+    pixmap.setDevicePixelRatio(ratio);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(editorTheme().textSecondary, 1.5, Qt::SolidLine, Qt::RoundCap));
+    painter.drawEllipse(QPointF(7, 7), 4.25, 4.25);
+    painter.drawLine(QPointF(10.2, 10.2), QPointF(13.5, 13.5));
+    return QIcon(pixmap);
 }
 
 } // namespace kerf

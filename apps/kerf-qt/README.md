@@ -3,8 +3,9 @@
 This is the native Qt6 desktop shell for Kerf. It keeps the project state in
 `kerfd` through the small C ABI in `bridge.h`; the window does not maintain a
 second editable copy of the timeline. Its docked panels — Project,
-Source, Program, Timeline, Effect Controls, and Kerf Assistant — are all
-backed by the bridge event stream.
+Source, Program, Timeline, and the Inspector — and the Kerf Assistant (the
+chat, in the Program monitor's stage) are all backed by the bridge event
+stream.
 
 Build the Rust bridge first, then configure and build the app from the
 repository root:
@@ -60,7 +61,7 @@ accent, and the system appearance detection the launcher shares),
 `main.cpp` only `main()`. `editor_test.cpp` (with `test_footage.cpp`) builds into `kerf-qt-tests`
 instead of `main.cpp`.
 
-Menus, shortcuts, the toolbar, the transport buttons, and timeline gestures
+Menus, shortcuts, the toolbar, the player's controls, and timeline gestures
 run commands from the registry in `crates/kerf-commands`. Each
 command is one `QAction` whose label, shortcuts, and enabled state come
 from the registry; an unavailable command says why in its tooltip and the
@@ -74,7 +75,7 @@ The project directory is created by the runtime when it does not already
 exist. Importing media, timeline edits, undo/redo, proposal approval, preview
 seeking, and export are sent as bounded asynchronous bridge commands. The
 timeline draws the `timeline` view of the model that each snapshot carries,
-and timeline and Effect Controls edits go to `kerfd` as typed operations counted in
+and timeline and Inspector edits go to `kerfd` as typed operations counted in
 frames of the sequence.
 
 The timeline supports click-to-seek, clip selection, drag-to-move, edge
@@ -93,10 +94,8 @@ step with Left and Right, and mark the range with I and O (Clear In and Out
 is Ctrl+Shift+X). Insert (,) and Overwrite (.) place the marked range at
 the playhead on the first unlocked picture and sound tracks the media needs;
 a picture and its sound are placed as linked clips, and Insert ripples the
-rest of the sequence. Effect Controls edits a clip's timing,
-the catalog properties of its track type, and a generator's parameters, from
-the definitions each snapshot carries; animated properties are read-only
-there. Its values commit on focus loss.
+rest of the sequence. The Inspector (see below) shows and edits the
+selected clip.
 Tracks follow the classic edit-suite order: picture tracks stack upward from
 V1, because a later picture track plays over the ones below it, and sound
 tracks run downward from A1. The ruler and track headers stay pinned while the
@@ -105,8 +104,13 @@ eye turns a picture track's output on and off (M mutes a sound track), and
 the padlock locks the track against edits. While a clip
 moves or trims, a readout shows the new edge timecode and its offset.
 
-Tracks start dense (36 pt picture tracks, 32 pt sound tracks), for edits with
-many layers. The Timeline panel's title strip sets every track's height at
+Tracks start dense (28 pt picture tracks, 22 pt sound tracks), for edits with
+many layers: eight fit the timeline at 1440×900, six at 1280×800. The
+Timeline's tab row says how many tracks and how long ("9 tracks ·
+00:00:18:00") after its name, and on the right has a zoom (− slider +) and
+the track heights; ⌘-click (or ⇧-click) a clip to add it to the selection,
+which the status bar's left end counts ("2 clips selected · 00:00:11:00").
+The track heights set every track's height at
 once: Mini (one 18 pt line per track: its number, toggles, name, and clip
 names), Medium (the defaults), and Large; Fit shares the panel height across
 every track. Option-Up and Option-Down (with the timeline focused), or
@@ -149,30 +153,90 @@ Import media from File. Moving the pointer across the timeline
 scrubs the viewer and shows the time beside the pointer. Play and pause are
 Space; with the timeline focused, Home and End jump to the start and end,
 Left and Right step one frame, S splits the selected clip at the playhead,
-and Delete and Shift+Delete delete or ripple-delete it (Kerf keymap). The transport under the viewer has the same
-controls between the playhead timecode and the program length. The Editing
-workspace reads as a video does on YouTube or TikTok on the desktop: the
-Program monitor in the middle of the top row, as large as the row allows,
-with the Kerf Assistant (the chat) in a column of its own on its right, the
-row's full height and about as wide as YouTube's comments beside a video
-(360 points at first). The Source monitor is a tab behind the Program
-monitor; double-clicking media brings it forward. Left of them, the Project
-bin, Effect Controls, Effects, and Presets share a column of tabs (Effect
-Controls stays left of the Program monitor, where Premiere keeps it, so the
-chat's column holds only the chat). The Timeline runs the window's full
-width under all three, for its many tracks. A wider window widens the
-viewer; the columns beside it keep their widths. A picture narrower than the
-viewer (a 9:16 or 1:1 project) sits against the chat, as a Short sits against
-its comments, and is centred again while the chat is closed or elsewhere.
+and Delete and Shift+Delete delete or ripple-delete it (Kerf keymap). The
+Program monitor's transport lies on the picture, as a video player's
+controls do: a gradient along the picture's foot, a progress bar across it
+(thicker under the pointer, its played part in Kerf's purple, the time under
+the pointer shown over it; click or drag it to seek), and a row with play or
+pause, a frame back, a frame on, and the time over the program length. On a
+portrait picture they take a short-video player's arrangement: the bar along
+the foot, the buttons at the top left, the time small over the bar. They
+show while paused and while the pointer is over the picture, and fade out
+2.5 seconds after it stops while playing; the keys never depend on them.
+As on a video player, a click on the picture plays or pauses (the bar
+seeks), and moving the pointer across the picture skims it from start to
+end, as the bar maps it; the stage around the picture does neither. The
+caption preview rises over the controls while they show, as a player's
+captions do. Nothing sits under the picture. The Editing
+workspace reads as a Short does on YouTube's desktop page: the Program
+monitor takes the top row past the browsers, and in its stage the picture
+card (12-point corners), an action rail and the Kerf Assistant (the chat)
+form one group centred in the stage, the chat panel level with the card (or
+the phone or laptop it shows in) and exactly as tall, as a Short's comments
+open beside it: where the stage has the room the card is made tall enough
+for a chat of 352 points (its header, a couple of comments, the chips and
+the composer), the chat narrowing for it. A 9:16 or 1:1 card fills the
+stage's height; a 16:9 one takes the height, or the width the rail and chat
+leave it. With the chat closed the card is centred alone, the rail hanging
+on its right. In a narrow stage the chat narrows first, so the picture keeps
+four fifths of its width, then the card shrinks, and past that the chat lies
+over the stage's right side.
+
+A portrait (9:16) picture shows in a phone, as a simulator shows an app: a
+generic phone drawn in code, graphite in either appearance, its screen
+taller than the picture (9:18.5) with the picture across it and black above
+and below, a status bar, and a camera island or punch-hole. The phone's body
+takes the card's place in the group, the chat level with it. The rail's
+Phone button and Window ▸ Viewer choose Phone · Island (the default), Phone ·
+Punch-Hole or Off (the plain card); its Safe button outlines where a
+vertical-video app's interface usually covers the picture (a top bar, a
+column of actions, a caption band); while they show, the player's controls
+(all but the bar) wait for the pointer to come over the picture. Both are
+preferences of this Mac. Every format shares one layout: at 1440 × 900 the
+stage row is about 575 points over a 290-point timeline, so the timeline does
+not move when the format changes.
+
+A wide (16:9) picture shows in a laptop, the phone's companion: a generic
+laptop drawn in code in the same graphite, its lid's screen 16:10 inside a
+thin even bezel (a little thicker over it, with a camera dot) so the picture
+sits across it with thin black bars above and below, a hinge line, and a
+wider, thin base (108% of the lid) with a lighter top face and a shallow
+thumb-cut. The player's controls lie inside the screen. The laptop's body (lid
+top to base bottom, as wide as the base, so the stage's margin and the gap
+before the rail are measured from its widest part) takes the card's place in
+the group, the chat level with it and as tall; at 1440 × 900 the picture keeps at least 90% of the plain card's width
+(the bezel and base come out of the chat's width). The rail's Laptop button
+and Window ▸ Viewer choose Laptop (the default) or Off; it is a preference of
+this Mac. A square picture stays on the plain card: in a phone it would be
+under half as wide (measured at 1440 × 900: 499 points wide on the card, 242
+across the phone's screen). A card, a laptop and a phone all keep the same room
+over them as under them, 16 points; only a phone in a stage too short for a
+240-point screen at 16 takes as little less as it needs (12 at 1440 × 900).
+The phone's and the laptop's frames are drawn once for
+their size, appearance and pixel ratio and then only blitted, so playback
+costs no more for them.
+
+The Source monitor is a tab behind the Program monitor; double-clicking media
+brings it forward. The chat stays with the Program monitor: while the
+Source monitor covers it, it counts as closed, so the bar over the timeline
+stands in for it and ⇧⌘J brings it back into sight. Left of them,
+the Project bin, the Inspector, Effects, and Presets share a column of
+about 300 points. The Timeline runs the window's full width under both, for
+its many tracks; the stage row takes the height (575 over a 290 timeline as
+arranged, for every picture shape). Panels have text tabs (the chosen one
+underlined), no title strips; the window's title has the project's state
+under it ("Edited · 9:16 · 24 fps"). The Project bin is "Search media" over
+two columns of tiles, each with its name, duration and shape.
 
 The chat opens and closes like the comments button beside a Short: the
-speech bubble at the end of the toolbar, Window ▸ Kerf Assistant, ⇧⌘J, or
-the close button in the chat's header. Closing it gives its width to the
-viewer; opening it brings it back at the width it had, even after a
-relaunch. That width is a preference of this Mac (QSettings), never part of
-`project.kerf`. Layouts saved before this arrangement (layout version 4)
-give way to it for the Editing workspace; workspaces of your own saved then
-keep their arrangement. An empty
+rail's speech bubble (with the number of messages under it), the bubble at
+the end of the toolbar, Window ▸ Kerf Assistant, ⇧⌘J, or the close button in
+the chat's header; opening it brings the Program monitor forward. Drag the
+chat's leading edge to resize it (300 to 420 points; 360 at first). Its width
+and whether it is open are preferences of this Mac (QSettings), never part of
+`project.kerf`. Layouts saved before this arrangement (layout versions 4 and
+5) give way to it for the Editing workspace; workspaces of your own saved
+then keep their arrangement, without the old Assistant dock. An empty
 timeline starts without tracks. Hover over the
 empty row in the left track header to reveal a plus; click it to add a video
 or audio track. Double-click a clip to open its media in the Source monitor
@@ -233,21 +297,90 @@ Finder, or Consolidate Media. Bin items show Offline when the file is
 missing, Not downloaded for a Git LFS file a sync has not fetched, and
 External when it lives outside the project folder.
 
+## Inspector
+
+Click a clip and the column beside the picture turns into that clip: the
+Inspector comes to the front of the Project / Inspector / Effects / Presets
+column (Window ▸ Inspector, ⌘4) and the chat beside the picture is never
+touched. It remembers the tab it came from and goes back when the selection
+clears (Esc, or a click on an empty lane), unless you chose the Inspector
+yourself; a clip selected by an edit (an insert, a drop, a proposal, undo)
+raises nothing, and a closed Inspector is never reopened by a click. While
+you have Effects or Presets in front, a click on another clip leaves the
+browser there (it follows the selection), so a look can be applied clip by
+clip; only the Inspector's own Add effect brings Effects up for the next
+click to replace, and after an effect is added there a deselect still goes
+back to the tab from before the Inspector came up (Project). Window ▸
+Inspector Follows Selection (⌥⌘4) turns this off. Raising never moves
+keyboard focus. These are preferences of this Mac (QSettings
+`editor/inspectorFollowsSelection`, `editor/inspector/…`); layouts saved with
+Effect Controls (layout version 6) restore with the Inspector in its place, and
+`window.effectControls` still names the command.
+
+Its header says what the clip is: a thumbnail, its name (double-click to
+rename it, `set {name}`), its kind in the clip's timeline colour (Video,
+Sequence, Audio, Title, Solid, Adjustment, Caption) with its track, and Start,
+End and Duration as timecode fields (drop-frame where the sequence is). Under
+it are the handful of things you change, with no header — Scale (with Fit /
+Fill), Position, Rotation, Opacity, Blend and Speed for a picture; Volume, Pan
+and Speed for sound; Text, Font and size, Colour, Align and Place for a title
+— then sections folded by default whose headers say what changed in them
+("Bottom 60 px"), in whole words or not at all — the folded Effects header
+names the effects that are on as far as they fit, then " +N" and " · 1 off",
+or just "1 on · 1 off": Crop, Anchor & flip, the linked clip's Audio, Masks,
+Effects, and Source (its file and format, and Source In and Out, which slip
+the clip). Values read in px, %, °, dB and timecode; a value at its default
+is drawn quieter than a changed one, and a fill means it can be changed.
+Drag a value or its label to scrub it (⇧ ×10, ⌥ ÷10; one edit on release),
+click to type (`+10`, `*2`, `50%`, `-3dB`, `7:00`, `+12`), and step with ↑↓
+while typing (a held key or a quick run of presses is one edit; Esc takes back
+a run not yet sent). A click or a drag in the
+Inspector takes no keyboard focus, and Return or Esc after typing (or Esc
+anywhere in it) hands the keys back to the timeline, so Space and J/K/L keep
+working while you nudge values. Every row shares one grid (76 pt labels, 72 pt
+value fields, 84 pt sliders at the 300-point column, controls ending at one
+edge); a click on a slider changes nothing, and a drag moves the knob by as
+much as the pointer moves, wherever it was grabbed (⌥ ÷10). The
+default catches the knob only on the one pixel nearest it, so every value next
+to it can still be dragged to; a double-click on the knob resets it. A slider's
+default is a 1-point tick; under the knob its ends show above and below it, and
+nothing is drawn on the knob, whose edge stands out against the groove and
+panel once the value differs from its default (quieter at it). A switched-off
+effect's values stay in the secondary ink, readable and editable;
+↺ on hover, or a double-click on the label, resets a row, and a section's ↺
+resets it all. Each effect has a switch, its name, a second line listing what
+changed while folded, five parameters before "N more" when that hides two or
+more (six show whole; grouped under quiet sub-headers when the catalog groups
+them), and ⋯ for Reset Parameters, Ask
+Kerf and Remove. Effect names read in Title Case and row labels in sentence
+case, on one 12-point line: a first word the effect's name already says goes
+("Threshold" under Edge Glow), and a label still too long ends in an ellipsis,
+whole in its tooltip. Animated values show their value at the playhead, read-only.
+With several clips it shows what they share ("Mixed" where they differ; a drag
+moves each alike, in one edit; End is the span's end, and a new End trims only
+the clip ending there, so no gaps open inside the span); with nothing selected, the sequence's format,
+tracks and markers, with only its frame size to change. ⋯ ▸ Ask Kerf opens the
+chat about the clip, and the composer names the selected clip. Selecting
+another clip of the same shape (kind, effect stack, masks) only sets values:
+the rows are not rebuilt, and open sections and the scroll position stay. From
+the click to the painted values takes 7.9 ms (median, a clip with ten effects
+open, measured unoptimized and offscreen on an M-series Mac; the test prints
+it and allows twice that on CI's shared runners).
+
 ## Effects
 
 The Effects panel (Window → Effects) shows the catalog's picture effects as
 cards, narrowed by category and by words ("glow", "zoom", "retro"), each
 card the selected media clip's picture at the playhead through that effect.
 Double-click a card, or press Return, to add the effect to the selected clip;
-the edit is an ordinary one, undone like any other. Effect Controls lists the
-clip's effects in order: the checkbox turns one off, ✕ removes it, and its
-parameters edit like the clip's properties, resetting to the default when
-set back to it.
+the edit is an ordinary one, undone like any other. Dragging a card onto the
+Inspector inserts the effect where it lands. The Inspector lists the clip's
+effects in order (see below).
 
 ## Masks
 
 The Rectangle, Ellipse, and Pen mask tools sit in the Program panel's title
-bar and beside Masks in Effect Controls; they draw on the selected picture
+bar and in the Inspector's Masks header; they draw on the selected picture
 clip. Drag out a rectangle or an ellipse on the Program monitor; with the
 pen, click each corner and click the first one again to close the outline,
 or press Return to leave it open as a path (Escape drops it). A new mask is
@@ -256,7 +389,7 @@ holds its picture: drag a handle to move a corner or point, drag inside a
 mask to move it, and press Delete to remove the selected one. Masks are
 drawn where the clip's picture lands, after its crop, scale, rotation, and
 position; a mask with mode `none` is dashed, a path that effects such as
-Stroke and Reshape read. Effect Controls lists the masks with their mode,
+Stroke and Reshape read. The Inspector lists the masks with their mode,
 inversion, feather, opacity, and expansion, and an effect's mask parameters
 pick from them. Each change is one edit (`mask-add`, `mask-set`, or
 `mask-remove`), undone like any other; a masked clip previews through the
@@ -281,20 +414,51 @@ focus, in frames of the sequence.
 
 Kerf's proposal shows on the timeline before anything changes: clips it adds
 or changes are outlined where they would land, and clips it removes are
-struck through. The Kerf Assistant starts open beside the Program monitor;
-keep chatting there, where Return sends and Shift+Return inserts a new line.
-It shows what Kerf is working on (with Stop), the proposal's script and diff
-(as tall as their lines, up to ten) with Reject and Accept (⌘Return; Escape
-with the timeline focused rejects), and the up to three next steps Kerf ends
-each turn with ("Stronger glow", "Wipe to the next shot"), over the composer,
-where they wrap onto more lines rather than widen the chat's narrow column;
-pressing one asks for it about the same selection. While the chat is closed,
+struck through. The Kerf Assistant starts open beside the picture and is laid
+out as a video's comments panel: a header with its title, the number of
+messages, ⋯ (Agent Settings…, Activity) and a close button; every turn is a
+comment row (an avatar, the name and time, the text, and quiet Copy and Ask
+again actions), with no bubbles; the steps Kerf's tools took fold under its
+comment behind "▸ 2 steps", as replies do; and while Kerf works three dots
+and its latest step follow the latest comment. The comments scroll under the
+header as a comments panel's do: cut cleanly at its edge, with a hairline
+under it while the list is scrolled away from its top. A sliver is never left
+at either edge, and under the top one a line of text, or a text button's
+words (Copy, Ask again, "2 steps"), shows only with its capitals' tops (a name
+cut through them would read as another word). A file name in a comment wraps
+as one word, never at its hyphen, and selected text copies as written. A
+pending proposal is pinned at the top of the list ("Pinned by Kerf") and scrolls away with it;
+when one arrives the list shows it from its head (following the latest again
+once you scroll or send). It lists its changes in words, a row each with a
+glyph and a detail ("Trim fisher-close.mov — end −1.5 s", "Remove
+drone-pass.mov — 0:11–0:18"), up to three, under a summary that counts them
+("Trim, remove, add a title · 3 changes"). The amount or time is never cut:
+in a narrow panel (as beside the laptop) a row first drops the clip's file
+extension ("Trim fisher-close"), then puts the detail on a second line under
+it, with the full wording in its tooltip. Then come Reject and Accept pills
+(⌘Return; Escape with the timeline focused rejects) and a hairline; its
+script and diff are behind "Script" (as tall as their lines, up to ten).
+While its head or its pills are scrolled out of view, a compact bar under the
+header keeps its verbs (or only "3 changes" where they would not fit
+whole), Reject and Accept in reach. The up to three next steps Kerf ends each turn with
+("Stronger glow", "Wipe to the next shot") are one row of chips over the
+composer, scrolling sideways rather than wrapping, so the conversation
+keeps its height; pressing one asks for it about the same selection.
+The composer is the panel's footer: your avatar and one line over an
+underline that turns Kerf's purple in focus, growing with the draft, with the
+model, Cancel and Send (Stop while Kerf works) shown while it is in use.
+Return sends and Shift+Return inserts a new line. Before the first message
+Kerf's welcome offers two requests to try (plain rows after an arrow, wrapping
+to two lines), which fill the composer. While
+the chat is closed,
 a bar over the timeline stands in for it, as a Short's comment count does:
 it says what Kerf is working on, offers Stop, Accept, Reject and the next
 steps, and Details opens the chat again.
 
-Use the project-format picker in the toolbar to switch between standard
-1920×1080 (16:9) and vertical 1080×1920 (9:16). The viewer fits either canvas
+Use the project-format picker in the toolbar to switch between 16:9
+(1920 × 1080), 9:16 (1080 × 1920), 1:1 (1080 × 1080) and 4:5 (1080 × 1350). It
+names the format as the window's subtitle and the Inspector's Frame size do
+("1:1 · 1080 × 1080"), and any other size as "Custom · 1280 × 720". The viewer fits either canvas
 inside the available panel without cropping and keeps preview captions inside
 the video safe area.
 
@@ -310,7 +474,7 @@ whose field diff was truncated cannot be accepted; ask the agent to restage
 or split them into smaller changes.
 
 Agent settings are in Settings (Edit → Settings…, ⌘, ; on macOS in the
-application menu), also reachable from the Kerf Assistant panel. Settings → AI
+application menu), also reachable from the chat's ⋯ menu. Settings → AI
 chooses Kerf Cloud, the hosted model (the default unless a key of your own
 is already saved; see
 [docs/cloud.md](../../docs/cloud.md)), or My own API key. Kerf Cloud shows the
@@ -346,12 +510,24 @@ appearances; with `KERF_SCREENSHOT_DIR` set, `launcherRendersBothAppearances`
 saves each page as `<page>-<light|dark>.png`, and
 `editorRendersBothAppearances` saves the editor (`editor-`), Settings
 (`settings-`), the preset bindings dialog (`dialog-`), the diverged banner
-with an agent proposal and conversation (`states-`), and Effect Controls
+with an agent proposal and conversation (`states-`), and the Inspector
 with an effect's parameters (`inspector-`), each `<light|dark>.png`;
+`inspectorRendersEveryState` saves the Inspector for a video clip (its Scale
+row under the pointer), its effects, an audio clip, a title, an adjustment
+clip, a caption, nothing selected and three clips (`inspector-video-`,
+`-video-effects-`, `-audio-`, `-title-`, `-adjustment-`, `-caption-`,
+`-nothing-`, `-multi-`), and the whole editor with a clip clicked
+(`editor-9x16-inspector-`, `editor-16x9-inspector-`);
 `editorShowsEveryFormatBesideItsConversation` saves the whole editor with
-the chat open beside a 16:9, a 9:16 and a 1:1 picture
-(`editor-16x9-`, `editor-9x16-`, `editor-1x1-`) and the 9:16 one with the
-chat closed (`editor-9x16-closed-`);
+the chat open beside a 16:9 (in its laptop), a 9:16 (in its phone) and a 1:1
+picture (`editor-16x9-`, `editor-9x16-`, `editor-1x1-`), the 16:9 one with
+the laptop off (`editor-16x9-off-`), the 9:16 one in the other phone, with
+safe zones and on the plain card (`editor-9x16-punchhole-`, `-safezones-`,
+`-card-`), and both with the chat closed (`editor-16x9-closed-`,
+`editor-9x16-closed-`); `conversationRendersItsStates` saves the chat's
+welcome, a long streaming conversation, a pinned proposal and, scrolled away
+under a longer conversation, its compact bar (`editor-9x16-welcome-`,
+`-streaming-`, `-proposal-`, `-proposal-scrolled-`);
 `timelineFollowsTheAppearance` saves the timeline (`timeline-`,
 `timeline-drag-`) and `paintedPanelsFollowTheAppearance` the Program monitor
 (`viewer-`, `viewer-empty-`), the region picker (`region-`), the Source

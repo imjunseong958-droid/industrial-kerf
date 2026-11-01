@@ -10,6 +10,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMimeData>
 #include <QPainter>
 #include <QPixmap>
 #include <QSignalBlocker>
@@ -52,6 +53,23 @@ QIcon searchIcon() {
     }, editorTheme().textSecondary));
 }
 
+// The cards drag as their effect's id, which the Inspector drops into
+// the clip's stack where it lands.
+class EffectCards final : public QListWidget {
+public:
+    using QListWidget::QListWidget;
+
+protected:
+    QStringList mimeTypes() const override { return {QStringLiteral("application/x-kerf-fx")}; }
+    QMimeData *mimeData(const QList<QListWidgetItem *> &items) const override {
+        if (items.isEmpty()) return nullptr;
+        auto *data = new QMimeData;
+        data->setData(QStringLiteral("application/x-kerf-fx"), items.first()->data(Qt::UserRole).toString().toUtf8());
+        data->setText(items.first()->text());
+        return data;
+    }
+};
+
 } // namespace
 
 EffectsPanel::EffectsPanel(QWidget *parent) : QWidget(parent) {
@@ -75,7 +93,9 @@ EffectsPanel::EffectsPanel(QWidget *parent) : QWidget(parent) {
     m_hint->setObjectName(QStringLiteral("muted"));
     m_hint->setWordWrap(true);
     layout->addWidget(m_hint);
-    m_cards = new QListWidget;
+    m_cards = new EffectCards;
+    m_cards->setDragEnabled(true);
+    m_cards->setDragDropMode(QAbstractItemView::DragOnly);
     m_cards->setObjectName(QStringLiteral("effectsCards"));
     m_cards->setViewMode(QListView::IconMode);
     m_cards->setIconSize(kCard);
@@ -176,6 +196,11 @@ void EffectsPanel::requestPreviews() {
 
 void EffectsPanel::add(QListWidgetItem *item) {
     if (item && !m_clip.isEmpty()) emit addRequested(item->data(Qt::UserRole).toString());
+}
+
+void EffectsPanel::focusSearch() {
+    m_search->setFocus(Qt::OtherFocusReason);
+    m_search->selectAll();
 }
 
 } // namespace kerf

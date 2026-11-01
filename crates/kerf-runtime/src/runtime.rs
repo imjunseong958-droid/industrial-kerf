@@ -3831,6 +3831,36 @@ mod tests {
     }
 
     #[test]
+    fn set_renames_a_clip_and_an_empty_name_restores_its_own() {
+        let (mut runtime, directory) = kernel_runtime("rename");
+        let rename: Vec<EditOp> = serde_json::from_value(json!([
+            {"op": "set", "clip": "c1", "name": "Opening wide"}
+        ]))
+        .unwrap();
+        runtime
+            .apply_ops_request("ui", "rename-1", rename, 0)
+            .unwrap();
+        assert!(runtime.document(false).contains("name=\"Opening wide\""));
+        assert_eq!(
+            runtime.snapshot().timeline["tracks"][0]["clips"][0]["name"],
+            "Opening wide"
+        );
+        // Props and a name together are one change; an empty name clears it.
+        let clear: Vec<EditOp> = serde_json::from_value(json!([
+            {"op": "set", "clip": "c1", "name": " ", "props": {"opacity": 0.5}}
+        ]))
+        .unwrap();
+        runtime
+            .apply_ops_request("ui", "rename-2", clear, 1)
+            .unwrap();
+        let document = runtime.document(false);
+        assert!(!document.contains("Opening wide"), "{document}");
+        assert!(document.contains("set opacity=0.5"), "{document}");
+        drop(runtime);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
     fn editor_ops_add_named_tracks_and_resize_the_sequence() {
         let (mut runtime, directory) = kernel_runtime("editor-ops");
         let ops: Vec<EditOp> = serde_json::from_value(json!([

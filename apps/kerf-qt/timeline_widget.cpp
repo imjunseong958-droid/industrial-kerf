@@ -9,6 +9,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QFontMetrics>
+#include <QHBoxLayout>
 #include <QJsonArray>
 #include <QKeyEvent>
 #include <QLinearGradient>
@@ -16,6 +17,9 @@
 #include <QPainterPath>
 #include <QScrollBar>
 #include <QSettings>
+#include <QSignalBlocker>
+#include <QSlider>
+#include <QToolButton>
 #include <QToolTip>
 #include <QUrl>
 #include <QWheelEvent>
@@ -105,23 +109,6 @@ void paintSelectionRing(QPainter &p, const QRectF &rect) {
     frameInside(p, rect.adjusted(1, 1, -1, -1), 2, theme.clipSelectedRing);
 }
 
-// A small rounded fill, for a track header's badge and toggles.
-void fillRounded(QPainter &p, const QRectF &rect, const QColor &color) {
-    p.save();
-    p.setRenderHint(QPainter::Antialiasing, true);
-    p.setPen(Qt::NoPen);
-    p.setBrush(color);
-    p.drawRoundedRect(rect, 4, 4);
-    p.restore();
-}
-
-// The kind a track's header stands for: its first clip's, so a picture
-// track of titles reads as titles, else the track's own.
-ClipKind trackKind(const QJsonObject &track) {
-    const QJsonArray clips = track.value(QStringLiteral("clips")).toArray();
-    return clipKind(track, clips.isEmpty() ? QJsonObject() : clips.first().toObject());
-}
-
 } // namespace
 
 TimelineScrollArea::TimelineScrollArea(QWidget *parent) : QScrollArea(parent) {
@@ -200,11 +187,22 @@ void TimelineWidget::setProject(const QJsonObject &project, double duration, dou
 }
 
 void TimelineWidget::setSelectedClip(const QString &id) {
-    if (m_selectedClip == id) return;
-    const QRect before = clipBounds(m_selectedClip);
+    if (m_selectedClip == id && m_selectedClips.size() <= 1) return;
+    QStringList before = m_selectedClips;
+    before << m_selectedClip;
     m_selectedClip = id;
-    refreshLanes(before);
+    m_selectedClips = id.isEmpty() ? QStringList{} : QStringList{id};
+    for (const QString &clip : std::as_const(before)) refreshLanes(clipBounds(clip));
     refreshLanes(clipBounds(id));
+}
+
+void TimelineWidget::setSelectedClips(const QStringList &ids) {
+    QStringList before = m_selectedClips;
+    before << m_selectedClip;
+    m_selectedClips = ids;
+    if (!ids.contains(m_selectedClip)) m_selectedClip = ids.isEmpty() ? QString() : ids.constLast();
+    for (const QString &clip : std::as_const(before)) refreshLanes(clipBounds(clip));
+    for (const QString &clip : ids) refreshLanes(clipBounds(clip));
 }
 
 void TimelineWidget::setPlayhead(double time) {
@@ -231,18 +229,22 @@ void TimelineWidget::showSkimmer(double time) {
 }
 
 void TimelineWidget::setZoom(double zoom) {
-    m_zoom = std::clamp(zoom, 0.35, 3.5);
+    m_zoom = std::clamp(zoom, kMinScale / 72.0, kMaxScale / 72.0);
     m_fitWidth = 0;
     invalidateLanes();
     updateContentSize();
     update();
+    emit scaleChanged(pixelsPerSecond());
 }
+
+void TimelineWidget::setScale(double pixelsPerSecond) { setZoom(pixelsPerSecond / 72.0); }
 
 void TimelineWidget::fitToWidth(int width) {
     m_fitWidth = std::max(kTimelineLabelWidth + 32, width);
     invalidateLanes();
     updateContentSize();
     update();
+    emit scaleChanged(pixelsPerSecond());
 }
 
 void TimelineWidget::setArtwork(MediaArtwork *artwork) {
@@ -528,11 +530,17 @@ void TimelineWidget::mousePressEvent(QMouseEvent *event) {
     }
     const auto hit = clipAt(pos);
     if (hit.id.isEmpty()) {
+        if (!m_selectedClip.isEmpty()) emit deselectRequested();
         beginScrub(event->position());
         return;
     }
     if (m_tool == TimelineTool::Razor) {
         emit razorRequested(hit.id, static_cast<double>(std::llround(timeAt(event->position().x()) * m_fps)));
+        return;
+    }
+    // ⌘-click toggles a clip in the selection, ⇧-click adds it; neither drags.
+    if (event->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier)) {
+        emit clipSelectionExtended(hit.id, event->modifiers() & Qt::ControlModifier);
         return;
     }
     const bool onEdge = pos.x() - hit.rect.left() < kTrimHandle || hit.rect.right() - pos.x() < kTrimHandle;
@@ -604,6 +612,15 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent *event) {
         const int grip = resizeRowAt(pos);
         if (grip != m_hoverGrip) {
             m_hoverGrip = grip;
+            update(headerColumnRect());
+        }
+        int toggleRow = -1;
+        QString toggleField;
+        const int toggle = grip < 0 && toggleAt(pos, &toggleRow, &toggleField)
+                               ? toggleRow * 2 + (toggleField == QStringLiteral("locked") ? 1 : 0)
+                               : -1;
+        if (toggle != m_hoverToggle) {
+            m_hoverToggle = toggle;
             update(headerColumnRect());
         }
         if (grip >= 0) {
@@ -756,6 +773,10 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *event) {
 }
 
 void TimelineWidget::keyPressEvent(QKeyEvent *event) {
+    if (event->key() == Qt::Key_Escape && event->modifiers() == Qt::NoModifier && !m_selectedClip.isEmpty()) {
+        emit deselectRequested();
+        return;
+    }
     // Option-Up and Option-Down: every track a step taller or shorter.
     const Qt::KeyboardModifiers modifiers = event->modifiers() & ~Qt::KeypadModifier;
     if (modifiers == Qt::AltModifier && (event->key() == Qt::Key_Up || event->key() == Qt::Key_Down)) {
@@ -794,6 +815,10 @@ void TimelineWidget::leaveEvent(QEvent *) {
     if (m_scrubbing || m_dragging || m_resizeRow >= 0) return;
     clearHoverClip();
     m_hoverGrip = -1;
+    if (m_hoverToggle >= 0) {
+        m_hoverToggle = -1;
+        update(headerColumnRect());
+    }
     m_addLaneVisible = false;
     m_hoverFrame = -1.0;
     if (m_hasSkimmer) {
@@ -992,7 +1017,7 @@ void TimelineWidget::paintLane(QPainter &p, const QRect &visible, int row, const
     for (const QJsonValue &value : clips) {
         const QJsonObject clip = value.toObject();
         const QString id = clip.value(QStringLiteral("id")).toString();
-        if (id != m_selectedClip || (m_dragging && id == m_dragClipId)) continue;
+        if (!isSelected(id) || (m_dragging && id == m_dragClipId)) continue;
         const QRectF rect = clipRect(row, clip.value(QStringLiteral("timelineStart")).toDouble(),
                                      clip.value(QStringLiteral("duration")).toDouble());
         if (rect.intersects(visible)) paintSelectionRing(p, rect);
@@ -1044,10 +1069,8 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     // the badge and toggles shrinking on rows too short for 16px.
     const bool detailed = layout.height >= kDetailedTrackHeight;
     const int blockTop = headerControlTop(row);
-    // The track number on a rounded fill, in the interface font, as
-    // Logic's track header buttons.
+    // The track number as plain secondary text, no fill under it.
     const QRect badge(left + 10, blockTop, m_badgeWidth, headerControlSize(layout.height));
-    fillRounded(p, badge, theme.trackBadge);
     p.setPen(enabled ? theme.trackBadgeText : theme.trackHeaderTextDisabled);
     drawName(p, badge, badgeFont(), trackRowLabel(row), true);
 
@@ -1072,14 +1095,21 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     nameFont.setPixelSize(11);
     nameFont.setWeight(QFont::Medium);
     p.setFont(nameFont);
-    // Output (or mute) and lock toggles sit after the track number.
+    // Output (or mute) and lock toggles sit after the track number: bare
+    // symbols, the secondary ink when on and faint when off, on a round
+    // wash only under the pointer.
     const auto drawToggle = [&](int index, bool on, const QString &field) {
         const QRect box = headerToggleRect(row, index).translated(left - stickyOrigin().x(), 0);
         p.save();
-        fillRounded(p, box, on ? theme.trackToggleOn : theme.trackToggle);
-        p.setPen(QPen(on ? theme.trackToggleOnGlyph : theme.trackToggleGlyph, 1.2));
-        p.setBrush(Qt::NoBrush);
         p.setRenderHint(QPainter::Antialiasing, true);
+        if (m_hoverToggle == row * 2 + index) {
+            p.setPen(Qt::NoPen);
+            p.setBrush(theme.trackToggleHover);
+            const double radius = std::max(box.width(), box.height()) / 2.0 + 2.0;
+            p.drawEllipse(QRectF(box).center(), radius, radius);
+        }
+        p.setPen(QPen(on ? theme.trackToggleOn : theme.trackToggle, 1.3));
+        p.setBrush(Qt::NoBrush);
         const QPointF c = QRectF(box).center();
         if (field == QStringLiteral("locked")) {
             p.drawArc(QRectF(c.x() - 3, c.y() - 6, 6, 7), 0, 180 * 16);
@@ -1324,7 +1354,7 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
     }
     const QRectF rect = clipRect(row, start, duration);
     if (!rect.intersects(visible)) return;
-    const bool selected = id == m_selectedClip;
+    const bool selected = isSelected(id);
     const bool hovered = id == m_hoverClipId;
     const EditorTheme &theme = editorTheme();
     const ClipStyle &style = theme.clip(clipKind(track, clip));
@@ -1449,7 +1479,7 @@ void TimelineWidget::paintDraggedClip(QPainter &p, const QRect &visible, int row
     // selection ring: white dashes on a dark line, which read on any
     // picture in either appearance.
     const QString id = clip.value(QStringLiteral("id")).toString();
-    const qreal ring = id == m_selectedClip ? kSelectionRing : 0.0;
+    const qreal ring = isSelected(id) ? kSelectionRing : 0.0;
     p.save();
     p.setRenderHint(QPainter::Antialiasing, false);
     p.setBrush(Qt::NoBrush);
@@ -1838,6 +1868,83 @@ TimelineWidget::ClipHit TimelineWidget::clipAt(const QPoint &point) const {
         if (rect.contains(point)) return {clip.value(QStringLiteral("id")).toString(), row, start, duration, rect};
     }
     return {};
+}
+
+// ---- TimelineZoomControl -------------------------------------------------
+
+namespace {
+
+// A − or + drawn in code (no SVG on Linux), in secondary ink.
+QIcon zoomGlyph(bool plus) {
+    const qreal ratio = 2.0;
+    QPixmap pixmap(QSize(16, 16) * ratio);
+    pixmap.setDevicePixelRatio(ratio);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(editorTheme().textSecondary, 1.5, Qt::SolidLine, Qt::RoundCap));
+    painter.drawLine(QPointF(4, 8), QPointF(12, 8));
+    if (plus) painter.drawLine(QPointF(8, 4), QPointF(8, 12));
+    return QIcon(pixmap);
+}
+
+} // namespace
+
+TimelineZoomControl::TimelineZoomControl(TimelineWidget *timeline, QWidget *parent) : QWidget(parent), m_timeline(timeline) {
+    setObjectName(QStringLiteral("timelineZoom"));
+    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    auto *layout = new QHBoxLayout(this);
+    layout->setContentsMargins(0, 0, 8, 0);
+    layout->setSpacing(2);
+    const auto glyphButton = [this](bool plus) {
+        auto *button = new QToolButton(this);
+        button->setObjectName(plus ? QStringLiteral("timelineZoomIn") : QStringLiteral("timelineZoomOut"));
+        button->setAutoRaise(true);
+        button->setIcon(zoomGlyph(plus));
+        button->setIconSize(QSize(16, 16));
+        button->setFixedSize(20, 20);
+        button->setToolTip(plus ? QStringLiteral("Zoom in") : QStringLiteral("Zoom out"));
+        button->setAccessibleName(button->toolTip());
+        button->setAutoRepeat(true);
+        return button;
+    };
+    m_out = glyphButton(false);
+    m_slider = new QSlider(Qt::Horizontal, this);
+    m_slider->setObjectName(QStringLiteral("timelineZoomSlider"));
+    m_slider->setRange(0, kSteps);
+    m_slider->setFixedWidth(88);
+    m_slider->setToolTip(QStringLiteral("Timeline zoom"));
+    m_slider->setAccessibleName(QStringLiteral("Timeline zoom"));
+    m_slider->setFocusPolicy(Qt::NoFocus);
+    m_in = glyphButton(true);
+    layout->addWidget(m_out);
+    layout->addWidget(m_slider);
+    layout->addWidget(m_in);
+    m_slider->setValue(position(timeline->scale()));
+    connect(m_slider, &QSlider::valueChanged, this, [this](int value) {
+        if (position(m_timeline->scale()) != value) m_timeline->setScale(scaleAt(value));
+    });
+    connect(m_out, &QToolButton::clicked, this, [this] { m_slider->setValue(m_slider->value() - 10); });
+    connect(m_in, &QToolButton::clicked, this, [this] { m_slider->setValue(m_slider->value() + 10); });
+    connect(timeline, &TimelineWidget::scaleChanged, this, [this](double scale) {
+        const QSignalBlocker blocker(m_slider);
+        m_slider->setValue(position(scale));
+    });
+    connect(EditorAppearance::instance(), &EditorAppearance::changed, this, [this] {
+        m_out->setIcon(zoomGlyph(false));
+        m_in->setIcon(zoomGlyph(true));
+    });
+}
+
+int TimelineZoomControl::position(double pixelsPerSecond) {
+    const double span = std::log(TimelineWidget::kMaxScale / TimelineWidget::kMinScale);
+    const double at = std::log(std::clamp(pixelsPerSecond, TimelineWidget::kMinScale, TimelineWidget::kMaxScale) / TimelineWidget::kMinScale);
+    return int(std::lround(kSteps * at / span));
+}
+
+double TimelineZoomControl::scaleAt(int position) {
+    const double span = std::log(TimelineWidget::kMaxScale / TimelineWidget::kMinScale);
+    return TimelineWidget::kMinScale * std::exp(span * std::clamp(position, 0, kSteps) / double(kSteps));
 }
 
 } // namespace kerf

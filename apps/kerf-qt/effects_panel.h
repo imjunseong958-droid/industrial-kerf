@@ -27,6 +27,8 @@ public:
     void setCatalog(const QJsonArray &catalog);
     // The clip effects go to; `picture` says whether cards can show it.
     void setClip(const QString &clip, bool picture);
+    // Put the cursor in the search field (Add effect in the Inspector).
+    void focusSearch();
     // How `fx` looks on `clip`.
     void setPreview(const QString &clip, const QString &fx, const QImage &image);
 

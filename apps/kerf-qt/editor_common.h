@@ -17,7 +17,9 @@ class QComboBox;
 
 namespace kerf {
 
-constexpr int kTimelineLabelWidth = 196;
+// The track headers' column: badge, eye, mute and lock on one line, then
+// the name, as the structure the owner chose.
+constexpr int kTimelineLabelWidth = 220;
 // Where time zero sits: past the track headers by more than half the
 // playhead's head, so the head shows whole at the start.
 constexpr int kTimelineOrigin = kTimelineLabelWidth + 6;
@@ -25,9 +27,10 @@ constexpr int kTimelineTail = 30;
 constexpr int kRulerHeight = 26;
 // Track heights start dense, as an edit with many layers wants: a sound
 // track keeps a waveform under its clips' names, and a picture track a
-// filmstrip.
-constexpr int kTrackHeight = 32;
-constexpr int kVideoTrackHeight = 36;
+// filmstrip; eight tracks fit the 290 timeline at 1440x900, six at
+// 1280x800.
+constexpr int kTrackHeight = 22;
+constexpr int kVideoTrackHeight = 28;
 // The add-track row under the last track.
 constexpr int kAddLaneHeight = 32;
 // Mini: one line per track (badge, toggles, name, and clip names).
@@ -85,12 +88,34 @@ QString sourceName(const QJsonObject &source);
 
 QSize resolvedCanvasSize(const QJsonObject &project, const QJsonArray &sources);
 
+// The frame sizes offered as presets, and how every format picker (the
+// toolbar's, the Inspector's Frame size) names a size: "1:1 · 1080 × 1080"
+// (its shape as the window's subtitle names it, thin spaces round the ×),
+// "Custom · 1280 × 720" for any size that is not a preset.
+struct CanvasPreset {
+    const char *ratio;
+    int width;
+    int height;
+};
+QList<CanvasPreset> canvasPresets();
+QString canvasSizeLabel(const QSize &size);
+
 // Model colors are #rrggbb, with a trailing alpha byte when not opaque.
 QColor modelColor(const QString &hex);
 
 QString modelColorName(const QColor &color);
 
 bool isAudioTrack(const QJsonObject &track);
+// A track as the timeline's header names it: its badge by position (picture
+// tracks count V1, V2… in the project's order, a subtitle track among them;
+// sound tracks A1, A2…) and its name, "Video 2" or "Audio 1" without one.
+// The Inspector says the same, so the two never disagree.
+struct TrackBadge {
+    QString badge;
+    QString name;
+    QString label() const { return badge.isEmpty() ? name : badge + QLatin1Char(' ') + name; }
+};
+TrackBadge trackBadge(const QJsonObject &project, const QString &trackId);
 
 // Pixel-exact border drawn inside the rectangle, independent of pen geometry.
 void frameInside(QPainter &p, const QRectF &rect, qreal thickness, const QColor &color);
@@ -207,6 +232,8 @@ enum class MaskTool { None, Rectangle, Ellipse, Pen };
 // Mask tool symbols on the transport icons' grid; a chosen (checked) tool's
 // symbol is the accent, as in the tool palette.
 QIcon maskToolIcon(MaskTool tool);
+// The pen mask tool's symbol, a nib, centred on `center` in a 16pt box.
+void drawPenNib(QPainter &painter, const QPointF &center, const QColor &color);
 
 // A clip property at `clipTime` seconds into the clip: its static value,
 // its keyframes' value there (linear between keys), or `fallback`.

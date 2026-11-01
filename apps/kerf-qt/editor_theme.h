@@ -58,6 +58,10 @@ enum class ClipKind { Video, Audio, Music, Generator, Caption };
 // The kind of `clip` on `track`, as the snapshot describes them (track
 // `type` and `name`, clip `kind`). An empty clip classifies the track.
 ClipKind clipKind(const QJsonObject &track, const QJsonObject &clip = {});
+// The kind a track's header stands for: its first clip's, so a picture
+// track of titles reads as titles, else the track's own. The timeline's
+// header bar and the Inspector's track list both use it.
+ClipKind trackKind(const QJsonObject &track);
 
 // Every colour the editor draws, by role. The application style sheet is
 // generated from these, and painted widgets read them at paint time from
@@ -180,6 +184,22 @@ struct EditorTheme {
     QColor sliderHandle;
     QColor sliderHandleBorder;
 
+    // The Inspector's controls. No colours of their own: aliases of the
+    // palette's. A fill means a value can be changed (plain text cannot).
+    QColor inspectorField;   // Fields, pop-ups, wells and segmented tracks: `group` in light, `field` in dark.
+    QColor switchOn;         // A switch that is on: the neutral ink of the timeline's toggles, not the accent...
+    QColor switchOnKnob;     // ...and its knob.
+    QColor switchOff;        // A switch that is off, as the launcher's...
+    QColor switchOffStroke;  // ...its edge...
+    QColor knob;             // ...and its knob.
+    QColor inspectorDetent;  // The tick at a slider's default.
+    // A slider knob's edge, read against the groove and panel round it: away
+    // from its default the more visible one (`text` in light, `textSecondary`
+    // in dark, where `text` is the knob's own colour), at it the quieter one
+    // (`sliderHandleBorder` in light, `borderStrong` in dark).
+    QColor sliderHandleChanged;
+    QColor sliderHandleAtDefault;
+
     QColor statusBar;
     QColor statusText;
     QColor statusDivider; // Between status bar items.
@@ -233,6 +253,8 @@ struct EditorTheme {
     QColor chatExpander;          // "2 changes" under Kerf's row, in the accent as text.
     QColor chatComposerRule;      // The composer's underline, and in focus.
     QColor chatComposerRuleFocus;
+    QColor chatScrollHandle;      // The list's scroll bar, shown only while the pointer is over the panel...
+    QColor chatScrollHandleHover; // ...and under the pointer.
     // The round buttons between the picture and the chat.
     QColor railButton;
     QColor railButtonHover;
@@ -265,12 +287,10 @@ struct EditorTheme {
     QColor trackHeaderTextDisabled; // The name of a disabled track.
     QColor trackHeaderDetail;       // The clip count under the name.
     QColor trackResizeGrip;         // The bar shown while a header's lower edge is dragged.
-    QColor trackBadge;              // The V1/A1 badge: a rounded fill, no edge.
-    QColor trackBadgeText;
-    QColor trackToggle;       // Output, mute, and lock toggles when off...
-    QColor trackToggleGlyph;
-    QColor trackToggleOn;     // ...and on: a neutral ink plate, not the accent.
-    QColor trackToggleOnGlyph;
+    QColor trackBadgeText;    // The V1/A1 number: plain secondary text, no fill.
+    QColor trackToggle;       // Output, mute and lock: bare symbols, faint when off...
+    QColor trackToggleOn;     // ...and a neutral ink when on, not the accent...
+    QColor trackToggleHover;  // ...on a round wash only under the pointer.
     QColor trackLane;         // A track's lane.
     QColor trackLaneAlt;      // Every other lane, where alternation is wanted.
     QColor trackLaneLocked;   // The hatch over a locked lane.
@@ -345,12 +365,33 @@ struct EditorTheme {
     QColor viewerCanvas;        // The canvas behind a picture that does not fill it, and when empty.
     QColor viewerText;          // The empty viewer's title...
     QColor viewerTextDim;       // ...and its hint; the Source monitor's message.
-    QColor viewerGlyph;         // The empty viewer's play symbol...
-    QColor viewerGlyphRing;     // ...its ring...
-    QColor viewerGlyphFill;     // ...and the ring's fill.
     QColor viewerCaption;       // The caption box over the picture...
     QColor viewerCaptionBorder; // ...its edge (the box itself: no line around it)...
     QColor viewerCaptionText;
+    // The phone a portrait picture is shown in, and the laptop a wide one
+    // is: a deep graphite in both appearances, its 1px lighter edge, and its
+    // soft shadow on the stage.
+    QColor deviceFrame;
+    QColor deviceEdge;
+    QColor deviceShadow;
+    QColor deviceScreen;        // The screen's black above and below the picture.
+    QColor deviceDeck;          // A laptop's base: its top face, a little lighter than the frame...
+    QColor deviceHinge;         // ...its thumb-cut, and the hinge line under the lid.
+    QColor deviceInk;           // The status bar's time, signal and battery.
+    QColor safeZoneFill;        // Where a vertical-video app's interface usually covers the picture...
+    QColor safeZoneLine;        // ...its outline...
+    QColor safeZoneText;        // ...and its label...
+    QColor safeZoneLabel;       // ...on a small dark chip.
+    // The player's controls on the picture: white glyphs and time on a
+    // gradient to black, the played part of the bar in the accent.
+    QColor playerInk;           // Glyphs and the time, white at 90%.
+    QColor playerInkDisabled;
+    QColor playerShade;         // The gradient's darkest, under the controls.
+    QColor playerTopShade;      // The top-left cluster's shade on a portrait card.
+    QColor playerHover;         // A round wash under the pointer.
+    QColor playerTrack;         // The bar's unplayed part...
+    QColor playerPlayed;        // ...its played part (the accent)...
+    QColor playerTipFill;       // ...and the time over the bar under the pointer.
     // Masks and regions over the picture: cream over a dark rule, never the
     // accent, whose hue can be the picture's own.
     QColor maskOutline;         // A selected mask's outline...

@@ -18,6 +18,8 @@
 #include <utility>
 
 class QAction;
+class QSlider;
+class QToolButton;
 
 namespace kerf {
 
@@ -44,11 +46,21 @@ public:
     explicit TimelineWidget(QWidget *parent = nullptr);
     void setProject(const QJsonObject &project, double duration, double fps);
     void setSelectedClip(const QString &id);
+    // Every selected clip (⌘-click or ⇧-click adds), the primary one among them.
+    void setSelectedClips(const QStringList &ids);
+    QStringList selectedClips() const { return m_selectedClips; }
     void setPlayhead(double time);
     void showSkimmer(double time);
     double skimmerTime() const { return m_skimmerTime; }
     void setZoom(double zoom);
     void fitToWidth(int width);
+    // The scale, in points per second of the sequence: the header's zoom
+    // control sets it between these, and hears of every change (a fit to
+    // the width included).
+    static constexpr double kMinScale = 20.0;
+    static constexpr double kMaxScale = 480.0;
+    void setScale(double pixelsPerSecond);
+    double scale() const { return pixelsPerSecond(); }
     bool isFitToWidth() const { return m_fitWidth > 0; }
     void setArtwork(MediaArtwork *artwork);
     void clearSkimmer();
@@ -109,10 +121,16 @@ public:
     QRect headerBadgeRect(int row) const;
 
 signals:
+    void scaleChanged(double pixelsPerSecond);
     void seekRequested(double time);
     void hoverSeekRequested(double time);
     void hoverSeekEnded();
     void clipSelected(const QString &clipId);
+    // ⌘-click (`toggle`) or ⇧-click on a clip: add it to the selection, or
+    // with ⌘ take it out again.
+    void clipSelectionExtended(const QString &clipId, bool toggle);
+    // A click on an empty lane, or Escape, with a clip selected.
+    void deselectRequested();
     // A body drag, with the Selection, Slip, or Slide tool.
     void moveRequested(const QString &clipId, double timelineStart);
     // An edge drag, with the Selection, Ripple, or Roll tool.
@@ -299,12 +317,16 @@ private:
     int m_badgeWidth = 22;
     int m_wheelSteps = 0;
     QString m_selectedClip;
+    QStringList m_selectedClips;
+    bool isSelected(const QString &id) const { return id == m_selectedClip || m_selectedClips.contains(id); }
     QString m_hoverClipId;
     QRect m_hoverRect;
     QString m_dragClipId;
     int m_dragRow = 0;
     int m_hoverEdge = 0;
     int m_hoverGrip = -1;
+    // The header toggle under the pointer (its row × 2 + its index), or -1.
+    int m_hoverToggle = -1;
     int m_resizeRow = -1;
     int m_resizeAnchor = 0;
     int m_resizeStartHeight = 0;
@@ -342,6 +364,29 @@ private:
     QVector<double> m_snapPoints;
     // Lanes painted since the counter was last cleared (the tests read it).
     int m_lanesPainted = 0;
+};
+
+// The timeline header's zoom: − slider +, as the structure the owner chose
+// puts it beside the track heights. The slider runs over the timeline's
+// scale on a log scale; the buttons step it; it follows the timeline's own
+// changes (a fit to the width).
+class TimelineZoomControl final : public QWidget {
+    Q_OBJECT
+public:
+    static constexpr int kSteps = 100;
+    explicit TimelineZoomControl(TimelineWidget *timeline, QWidget *parent = nullptr);
+    QSlider *slider() const { return m_slider; }
+    QToolButton *zoomOutButton() const { return m_out; }
+    QToolButton *zoomInButton() const { return m_in; }
+    // A scale's place on the slider, and back.
+    static int position(double pixelsPerSecond);
+    static double scaleAt(int position);
+
+private:
+    TimelineWidget *m_timeline;
+    QSlider *m_slider = nullptr;
+    QToolButton *m_out = nullptr;
+    QToolButton *m_in = nullptr;
 };
 
 } // namespace kerf

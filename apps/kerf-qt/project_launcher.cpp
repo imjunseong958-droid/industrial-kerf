@@ -282,13 +282,13 @@ private:
 };
 
 // Template tiles: a paper card lighter than the page with the canvas's frame
-// in ink and a + badge, the name under it, and the chosen one ringed in the
-// accent with its name on the selection.
+// in ink and a + badge, the name under it, and the chosen one's name on the
+// selection, as Finder marks a chosen icon (once, not with a ring as well).
 class TileDelegate final : public QStyledItemDelegate {
 public:
     static constexpr int kWidth = 150;
     static constexpr int kHeight = 100;
-    // Room for the selection ring around the tile.
+    // Room for the tile's shadow and the focus ring around it.
     static constexpr int kInset = 3;
     static constexpr int kGap = 46;
     static QSize cell() { return {kInset + kWidth + kGap, kInset + kHeight + 58}; }
@@ -314,11 +314,6 @@ public:
         painter->drawRoundedRect(tile.translated(0, 1), 6, 6);
         painter->setBrush(t.tile);
         painter->drawRoundedRect(tile, 6, 6);
-        if (selected) {
-            painter->setPen(QPen(t.accent, 2.5));
-            painter->setBrush(Qt::NoBrush);
-            painter->drawRoundedRect(tile.adjusted(-1.25, -1.25, 1.25, 1.25), 7.25, 7.25);
-        }
 
         // The canvas at its aspect, with a play mark in it.
         const QSize canvas = index.data(kSizeRole).toSize();

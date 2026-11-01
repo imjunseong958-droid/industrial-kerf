@@ -5,6 +5,7 @@
 #include <QEvent>
 #include <QGuiApplication>
 #include <QHash>
+#include <QJsonArray>
 #include <QPointer>
 #include <QStyleHints>
 #include <QWidget>
@@ -136,6 +137,11 @@ ClipKind clipKind(const QJsonObject &track, const QJsonObject &clip) {
     return ClipKind::Video;
 }
 
+ClipKind trackKind(const QJsonObject &track) {
+    const QJsonArray clips = track.value(QStringLiteral("clips")).toArray();
+    return clipKind(track, clips.isEmpty() ? QJsonObject() : clips.first().toObject());
+}
+
 const ClipStyle &EditorTheme::clip(ClipKind kind) const {
     switch (kind) {
     case ClipKind::Audio: return clipAudio;
@@ -187,7 +193,7 @@ EditorTheme makeEditorTheme(bool dark) {
     t.raised = tone(dark, "#faf6ee", "#2a231d");
     t.group = tone(dark, "#ede6d7", "#231d18");
     t.groupBorder = tone(dark, "#ddd3c0", "#3a3029");
-    t.well = tone(dark, "#f8f4ea", "#19140f");
+    t.well = tone(dark, "#f4eee2", "#19140f");
     t.dialog = tone(dark, "#f0e9db", "#1f1a15");
 
     // Lines: warm and low-contrast.
@@ -279,7 +285,7 @@ EditorTheme makeEditorTheme(bool dark) {
     t.assistantBorder = tone(dark, "#cbb6c0", "#584655");
     t.assistantText = tone(dark, "#5e2c65", "#d6b6dc");
     t.assistantHover = tone(dark, "#dacacd", "#42353c");
-    t.chatSurface = tone(dark, "#faf6ee", "#231d18");
+    t.chatSurface = tone(dark, "#f6f1e6", "#231d18");
     t.chatText = t.text;
     t.chatSecondary = t.textSecondary;
     t.chatChip = tone(dark, "#4a341e12", "#ffecd216");
@@ -292,6 +298,9 @@ EditorTheme makeEditorTheme(bool dark) {
     t.chatExpander = t.accentText;
     t.chatComposerRule = tone(dark, "#cdc1ac", "#4a3f36");
     t.chatComposerRuleFocus = t.accent;
+    // The secondary ink at 35%, and 60% under the pointer.
+    t.chatScrollHandle = tone(dark, "#675b4f59", "#a89a8a59");
+    t.chatScrollHandleHover = tone(dark, "#675b4f99", "#a89a8a99");
     t.messageUser = t.chatSurface;
     t.messageUserBorder = t.messageUser;
     t.messageAgent = t.chatSurface;
@@ -328,12 +337,10 @@ EditorTheme makeEditorTheme(bool dark) {
     t.trackHeaderTextDisabled = tone(dark, "#a89c8c", "#75685b");
     t.trackHeaderDetail = tone(dark, "#62564a", "#a3958a");
     t.trackResizeGrip = tone(dark, "#8a7d6c", "#8e8072");
-    t.trackBadge = tone(dark, "#e2d9c8", "#3a3029");
-    t.trackBadgeText = tone(dark, "#2a231d", "#efe6d6");
-    t.trackToggle = tone(dark, "#e2d9c8", "#3a3029");
-    t.trackToggleGlyph = tone(dark, "#5a4e43", "#b5a796");
-    t.trackToggleOn = tone(dark, "#5a4e43", "#b5a796");
-    t.trackToggleOnGlyph = tone(dark, "#fbf6ec", "#1f1a15");
+    t.trackBadgeText = tone(dark, "#675b4f", "#a89a8a");
+    t.trackToggleOn = tone(dark, "#675b4f", "#a89a8a");
+    t.trackToggle = tone(dark, "#675b4f66", "#a89a8a66"); // The same ink at 40%.
+    t.trackToggleHover = tone(dark, "#4a341e17", "#ffecd21c");
     t.trackLane = tone(dark, "#efe8db", "#201a16");
     t.trackLaneAlt = tone(dark, "#ebe4d6", "#231d18");
     t.trackLaneLocked = tone(dark, "#4a341e16", "#ffecd20e");
@@ -349,7 +356,9 @@ EditorTheme makeEditorTheme(bool dark) {
     // Clips: muted inks from an old atlas (slate, verdigris, olive, ochre,
     // umber), each label on its header at 5.5:1 or more. The selected ring is
     // cream over ink, not a second loud hue.
-    t.clipVideo = dark ? clipStyle("#2a2b2f","#435269","#252d3a","#f4ecde","#989ba1") : clipStyle("#c7c6c2","#475a72","#334152","#fbf6ec","#354456");
+    // Picture clips are a greyed heather: Kerf's purple family, far duller
+    // than its accent, and well away from blue.
+    t.clipVideo = dark ? clipStyle("#2c2830","#4e4459","#2f2937","#f4ecde","#a39aa8") : clipStyle("#c9c3c6","#5c5068","#43394d","#fbf6ec","#463c50");
     t.clipAudio = dark ? clipStyle("#252e27","#325b50","#1c322c","#f4ecde","#8ea094") : clipStyle("#c4cabd","#3b6a5d","#2a4c43","#fbf6ec","#2c5046");
     t.clipMusic = dark ? clipStyle("#2d2c1b","#4b5728","#293016","#f4ecde","#9c9e7e") : clipStyle("#cac8b0","#566428","#3e481d","#fbf6ec","#404b1e");
     t.clipGenerator = dark ? clipStyle("#3b2b1a","#7a5222","#432d13","#f4ecde","#b69b7a") : clipStyle("#d6c6ad","#875a1d","#614115","#fbf6ec","#654416");
@@ -400,12 +409,30 @@ EditorTheme makeEditorTheme(bool dark) {
     t.viewerCanvas = hex("#0a0807");
     t.viewerText = hex("#ab9e8e");
     t.viewerTextDim = hex("#958877");
-    t.viewerGlyph = hex("#b8ab9a");
-    t.viewerGlyphRing = hex("#5f5347");
-    t.viewerGlyphFill = hex("#1a1511");
     t.viewerCaption = hex("#0e0b09e1");
     t.viewerCaptionBorder = t.viewerCaption; // No box line around the caption.
     t.viewerCaptionText = hex("#f4ecde");
+    t.deviceFrame = hex("#1e1d1f");
+    t.deviceEdge = hex("#3a383c");
+    t.deviceShadow = hex("#0000002e");
+    t.deviceScreen = hex("#000000");
+    t.deviceDeck = hex("#2b2a2d");
+    t.deviceHinge = hex("#0e0d0f");
+    t.deviceInk = hex("#ffffff");
+    t.safeZoneFill = hex("#ffffff1f");
+    t.safeZoneLine = hex("#ffffffa6");
+    t.safeZoneText = hex("#ffffff");
+    t.safeZoneLabel = hex("#000000a0");
+    t.playerInk = hex("#ffffffe6");
+    t.playerInkDisabled = hex("#ffffff66");
+    t.playerShade = hex("#00000099");
+    t.playerTopShade = hex("#00000080");
+    t.playerHover = hex("#ffffff1f");
+    t.playerTrack = hex("#ffffff4d");
+    // The bar always lies on the picture's dark gradient, so it takes the
+    // accent the dark appearance uses, in either.
+    t.playerPlayed = kerfAccent(true);
+    t.playerTipFill = hex("#000000b3");
     t.maskOutline = hex("#fffbf3");
     t.maskOutlineIdle = hex("#fffbf3b3");
     t.maskShadow = hex("#0000008c");
@@ -438,7 +465,7 @@ EditorTheme makeEditorTheme(bool dark) {
     t.onAccentSecondary = readableAlphaOn(t.onAccentSecondary, t.selection, 4.5);
     t.selectionText = readableOn(t.selectionText, t.selection, 4.5);
     t.menuSelectionText = readableOn(t.menuSelectionText, t.menuSelection, 4.5);
-    t.trackToggleOnGlyph = readableOn(t.trackToggleOnGlyph, t.trackToggleOn, 4.5);
+    t.trackBadgeText = readableOn(t.trackBadgeText, t.trackHeader, 4.5);
     // ...the accent as text reads on every surface it is drawn on (the
     // transports' timecodes, the timeline's corner time, the sync chip,
     // cards, fields and dialogs), all light or all dark, so reading on one
@@ -466,6 +493,16 @@ EditorTheme makeEditorTheme(bool dark) {
     // ...and every clip's name reads on its header at 4.5:1.
     for (ClipStyle *style : {&t.clipVideo, &t.clipAudio, &t.clipMusic, &t.clipGenerator, &t.clipCaption})
         style->label = readableOn(style->label, style->header, 4.5);
+    // The Inspector's controls: aliases (the launcher's switch and knob).
+    t.inspectorField = dark ? t.field : t.group;
+    t.switchOn = t.trackToggleOn;
+    t.switchOnKnob = tone(dark, "#fffcf6", "#21161f");
+    t.switchOff = tone(dark, "#e2d9c8", "#3a3029");
+    t.switchOffStroke = tone(dark, "#8b7e6d", "#85776a");
+    t.knob = tone(dark, "#fffcf6", "#efe6d6");
+    t.inspectorDetent = t.rulerTickHalf;
+    t.sliderHandleChanged = dark ? t.textSecondary : t.text;
+    t.sliderHandleAtDefault = dark ? t.borderStrong : t.sliderHandleBorder;
     return t;
 }
 

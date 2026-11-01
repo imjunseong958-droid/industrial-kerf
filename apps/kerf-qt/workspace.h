@@ -3,6 +3,7 @@
 #include <QByteArray>
 #include <QHash>
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 
@@ -11,6 +12,7 @@ class QWidget;
 namespace ads {
 class CDockManager;
 class CDockWidget;
+class CDockSplitter;
 class CDockWidgetTab;
 } // namespace ads
 
@@ -24,10 +26,6 @@ class Workspace final : public QObject {
     Q_OBJECT
 public:
     static constexpr const char *kEditing = "Editing";
-    static constexpr const char *kAssistant = "assistant";
-    // The width Kerf's conversation opens at the first time, about that of
-    // YouTube's comments and live chat beside a video.
-    static constexpr int kAssistantWidth = 360;
 
     // The dock manager is a child of `host`; add `manager()` to its layout.
     explicit Workspace(QWidget *host);
@@ -36,6 +34,12 @@ public:
     // A panel whose `id` names it in saved layouts.
     ads::CDockWidget *addPanel(const QString &id, const QString &title, QWidget *content);
     ads::CDockWidget *panel(const QString &id) const { return m_panels.value(id); }
+    // A panel's own widgets in its area's text-tab row, shown while it is
+    // the area's current panel: `leading` right after the tabs (the
+    // timeline's "9 tracks · 00:00:18:00"), `trailing` on the right before
+    // its title bar actions (its zoom control). They follow the panel to
+    // whatever area holds it, and outlive restored layouts.
+    void setTitleWidgets(const QString &id, QWidget *leading, QWidget *trailing);
 
     // Arrange the panels as the Editing workspace, then open the workspace
     // in use when the editor last closed, with its changes.
@@ -51,13 +55,26 @@ public:
     // Keep the current arrangement for the next launch.
     void persist();
 
-    // Kerf's conversation is a column of its own on the Program monitor's
-    // right, as YouTube opens a Short's comments beside it. Closing it gives
-    // its width to the viewer; opening it brings it forward at the width it
-    // had when it closed.
-    bool assistantOpen() const;
-    void setAssistantOpen(bool open);
-    int assistantWidth() const { return m_assistantWidth; }
+    // The Inspector follows the selection: a clip clicked brings it to the
+    // front of its column (remembering the tab it came from); a clip
+    // selected by an edit does not. It never opens a closed column, and
+    // raising leaves keyboard focus where it was.
+    enum class InspectorOrigin { Click, Edit };
+    static bool inspectorFollowsSelection();
+    static void setInspectorFollowsSelection(bool follows);
+    // `clip`: the clip clicked, so clicking it again after choosing another
+    // tab leaves that tab. `force` raises even when following is off (an
+    // effect just added from the Inspector).
+    void raiseInspector(InspectorOrigin origin, bool force = false, const QString &clip = QString());
+    // The selection was cleared: back to the tab the Inspector came from,
+    // if it came up by itself.
+    void inspectorDeselected();
+    // ⌘4: show the Inspector, or, when it is already in front, the tab before it.
+    void toggleInspector();
+    // The Inspector's Add effect: the browser `id` in front for it. Unlike
+    // one chosen by hand, the next clip clicked brings the Inspector back.
+    void showBrowserForInspector(const QString &id);
+    bool inspectorRaisedBySelection() const { return m_inspectorAuto; }
 
 signals:
     void changed();
@@ -66,7 +83,13 @@ protected:
     // Shows a tab's close button while the pointer is over the tab.
     bool eventFilter(QObject *watched, QEvent *event) override;
 
+private slots:
+    void placeTitleWidgets();
+
 private:
+    // Take the title widgets out of the areas before a layout is restored
+    // (which deletes the areas and their title bars).
+    void parkTitleWidgets();
     void showCloseButton(ads::CDockWidgetTab *tab, bool shown);
     void arrangeEditing();
     QByteArray savedLayout(const QString &name) const;
@@ -78,19 +101,30 @@ private:
     // closed column beside it, or a wider window. A restored layout has new
     // areas, so this follows every restore.
     void letViewerStretch();
-    // When the conversation's column closes, the width it had; when it
-    // opens alone in a row, that width again, taken from the viewer.
-    void rememberAssistantWidth();
-    void restoreAssistantWidth();
+    void afterRestore();
 
     ads::CDockManager *m_manager = nullptr;
     QString m_baseStyleSheet;
     QHash<QString, ads::CDockWidget *> m_panels;
     QByteArray m_editing;
     QString m_current;
-    int m_assistantWidth = kAssistantWidth;
-    // Arranging or restoring: panels open and close without the reader asking.
-    bool m_arranging = false;
+    // The tab the Inspector was raised over, whether it came up by itself,
+    // and the clip that raised it.
+    QPointer<ads::CDockWidget> m_beforeInspector;
+    // Whether that tab was chosen by hand (not a browser Add effect raised).
+    bool m_beforeByHand = true;
+    bool m_inspectorAuto = false;
+    bool m_raisingInspector = false;
+    QString m_inspectorClip;
+    // The browser (Effects) Add effect brought forward, until a tab is
+    // chosen by hand; a browser chosen by hand keeps the front on a click.
+    QPointer<ads::CDockWidget> m_browserForInspector;
+    bool m_raisingBrowser = false;
+    struct TitleWidgets {
+        QPointer<QWidget> leading;
+        QPointer<QWidget> trailing;
+    };
+    QHash<QString, TitleWidgets> m_titleWidgets;
 };
 
 } // namespace kerf

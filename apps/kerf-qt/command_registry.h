@@ -24,7 +24,10 @@ public:
     // panel's widget and apply while it has focus.
     CommandRegistry(const QString &keymap, const QHash<QString, QWidget *> &scopes, QObject *parent = nullptr);
 
-    QAction *action(const QString &id) const { return m_actions.value(id); }
+    // A command's current id: renamed ones answer to their old ids too
+    // (`window.effectControls` is `window.inspector`).
+    static QString resolve(const QString &id);
+    QAction *action(const QString &id) const { return m_actions.value(resolve(id)); }
     // The registry's menus in menu-bar order, with a separator between groups.
     QHash<QString, QMenu *> buildMenus(QMenuBar *bar);
     QStringList menuNames() const;
@@ -39,7 +42,7 @@ public:
     // the reason in their tooltip and status tip.
     void update(const QJsonObject &context);
     QString reason(const QString &id) const { return m_reasons.value(id); }
-    bool isEnabled(const QString &id) const { return m_actions.contains(id) && m_reasons.value(id).isEmpty(); }
+    bool isEnabled(const QString &id) const { return m_actions.contains(resolve(id)) && m_reasons.value(resolve(id)).isEmpty(); }
 
     // {request} for an engine command, or {error}.
     static QJsonObject run(const QString &id, const QJsonObject &params, const QJsonObject &context);
