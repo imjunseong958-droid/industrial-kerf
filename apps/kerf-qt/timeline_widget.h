@@ -261,16 +261,29 @@ private:
     // (and its width when `centred`). Names are laid out once and kept: a
     // dense timeline repaints hundreds.
     void drawName(QPainter &p, const QRectF &rect, const QFont &font, const QString &text, bool centred = false);
+    // That name laid out, elided to `width`.
+    QStaticText laidName(const QFont &font, const QString &text, qreal width);
     qreal timeToX(double time) const;
-    // A filmstrip tile: `sourceId`'s frame scaled once to the tile's size.
-    QImage filmstripTile(const QString &sourceId, const QSize &size, qreal dpr);
+    // A filmstrip tile: frame `frame` of `sourceId`'s strip (its poster when
+    // -1, or until the strip arrives) scaled once to the tile's size.
+    QImage filmstripTile(const QString &sourceId, int frame, const QSize &size, qreal dpr);
+    // Where a clip's name goes and where its filmstrip or waveform does.
+    // With artwork to show and too short for both one over the other, the
+    // body is the whole clip and the name sits on a chip over it.
+    struct ClipLayout {
+        QRectF band;
+        QRectF body;
+        bool chip = false;
+    };
+    static ClipLayout clipLayout(const QRectF &clip, bool artwork);
+    // The source seconds `offset` seconds into `clip`.
+    static double clipSourceTime(const QJsonObject &clip, double offset);
 
     // Clips sit on whole pixels at their exact edit points, so adjacent clips
     // butt together the way the cut plays.
     QRectF clipRect(int row, double start, double duration) const;
     double dragOrigin() const;
     QRect headerPreviewRect(int row, int left) const;
-    QImage tintedWave(const QString &sourceId, const QColor &color);
     QRect pointerBand(qreal x) const;
     void updateContentSize();
     double pixelsPerSecond() const;
@@ -356,8 +369,19 @@ private:
     QPixmap m_laneCache;
     // The part of the timeline the lane cache holds, in widget coordinates.
     QRect m_laneCacheRect;
-    QHash<QString, QImage> m_waveTints;
-    QHash<QString, QImage> m_filmstripTiles;
+    struct FilmstripTileKey {
+        QString source;
+        int frame = -1;
+        QSize size;
+        int ratio = 100; // The device pixel ratio, in hundredths.
+        bool operator==(const FilmstripTileKey &other) const {
+            return frame == other.frame && ratio == other.ratio && size == other.size && source == other.source;
+        }
+        friend size_t qHash(const FilmstripTileKey &key, size_t seed = 0) {
+            return qHashMulti(seed, key.source, key.frame, key.size.width(), key.size.height(), key.ratio);
+        }
+    };
+    QHash<FilmstripTileKey, QImage> m_filmstripTiles;
     QHash<QString, QStaticText> m_names;
     // Every clip edge, marker and the playhead, sorted, while a clip is
     // dragged: what it snaps to.
