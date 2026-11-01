@@ -25,6 +25,7 @@
 #include <QWheelEvent>
 
 #include <algorithm>
+#include <optional>
 #include <climits>
 #include <cmath>
 
@@ -45,6 +46,9 @@ constexpr qreal kClipArtworkFrom = 19.0;
 // ...until it is tall enough to give the name a bar of its own and still
 // keep 29px for the artwork under it (from the Large preset up).
 constexpr qreal kClipBandFrom = kClipHeaderHeight + 29.0;
+// A picture clip with sound shows it in a band under its frames from this
+// body height (the Large preset up): a 24px filmstrip over a 16px waveform.
+constexpr qreal kSoundUnderPictureFrom = 40.0;
 // The selected clip's ring, 1px dark and 2px light, inside its edge.
 constexpr qreal kSelectionRing = 3.0;
 // The bytes of scaled filmstrip tiles kept before the cache starts again:
@@ -107,6 +111,21 @@ int steppedHeight(int height, int steps) {
         height = *(at - 1);
     }
     return std::clamp(height, kMinTrackHeight, kMaxTrackHeight);
+}
+
+// A sound clip's body is a pane of tinted glass, the same in either
+// appearance: the tint (its colour, lightened) at this opacity over a fixed
+// warm graphite, with the lanes' grid lines carried through it.
+constexpr qreal kSoundTint = 0.6;
+const QColor kSoundGlass(0x4d, 0x4a, 0x45);
+const QColor kSoundGrid(255, 255, 255, 30);
+
+// A clip's body fill: its colour, a shade lighter at the top.
+QLinearGradient bodyGradient(const QRectF &body, const QColor &top, const QColor &foot) {
+    QLinearGradient gradient(0, body.top(), 0, body.bottom());
+    gradient.setColorAt(0, top);
+    gradient.setColorAt(1, foot);
+    return gradient;
 }
 
 // A clip as drawn: a pixel short of its right edge, so clips that meet
@@ -203,6 +222,16 @@ TimelineWidget::TimelineWidget(QWidget *parent) : QWidget(parent) {
 
 void TimelineWidget::setProject(const QJsonObject &project, double duration, double fps) {
     m_project = project;
+    // Each linked sound clip by its link, for the gain of the sound drawn
+    // under its picture clip.
+    m_linkedSound.clear();
+    for (const QJsonValue &track : project.value(QStringLiteral("tracks")).toArray()) {
+        if (track.toObject().value(QStringLiteral("type")).toString() != QStringLiteral("audio")) continue;
+        for (const QJsonValue &value : track.toObject().value(QStringLiteral("clips")).toArray()) {
+            const QString link = value.toObject().value(QStringLiteral("link")).toString();
+            if (!link.isEmpty()) m_linkedSound.insert(link, value.toObject());
+        }
+    }
     m_duration = std::max(duration, 1.0);
     m_fps = fps > 0.0 ? fps : 24.0;
     layoutRows();
@@ -1029,6 +1058,16 @@ void TimelineWidget::paintLane(QPainter &p, const QRect &visible, int row, const
     const TrackRow &layout = m_rows.at(row);
     const QRect lane(kTimelineLabelWidth, layout.top, std::max(0, width() - kTimelineLabelWidth), layout.height - 1);
     p.fillRect(lane, theme.trackLane);
+    // The ruler's major ticks carried faintly down the lane, as Logic's bar
+    // lines are: they place a cut by eye, and show through a sound clip.
+    {
+        const double pps = pixelsPerSecond();
+        const double step = rulerScale(pps, m_fps).majorSeconds;
+        const QRect span = lane.intersected(visible);
+        double time = std::max(0.0, std::floor(((span.left() - kTimelineOrigin) / pps) / step) * step);
+        for (qreal x = std::round(timeToX(time)); x <= span.right(); time += step, x = std::round(timeToX(time)))
+            if (x >= span.left() && time > 0.0) p.fillRect(QRectF(x, lane.top(), 1, lane.height()), theme.laneGrid);
+    }
     if (track.value(QStringLiteral("locked")).toBool())
         p.fillRect(lane, QBrush(theme.trackLaneLocked, Qt::BDiagPattern));
 
@@ -1117,10 +1156,11 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
         const bool sound = layout.audio && peaks != m_artwork->peaks.cend();
         const bool picture = !layout.audio && poster != m_artwork->frames.cend() && !poster->isNull();
         previewed = sound || picture;
-        if (previewed) p.fillRect(slot, theme.headerPreview);
+        if (previewed) p.fillRect(slot, sound ? style.fill : theme.headerPreview);
         if (sound) {
-            drawWaveform(p, inside.adjusted(0, 2, 0, -2), peaks.value(), 0.0, peaks->duration(),
-                         mixColor(theme.headerPreview, style.wave, 0.55), style.wave);
+            // White on the sound's colour, as its clips are.
+            drawWaveform(p, inside.adjusted(0, 2, 0, -2), peaks.value(), 0.0, peaks->duration(), theme.waveformPeak,
+                         theme.waveformBody);
         } else if (picture) {
             // At its own shape, on the slot's colour: a vertical picture is
             // not stretched to the slot.
@@ -1419,6 +1459,21 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
             if (frame != m_artwork->frames.cend() && !frame->isNull()) poster = &frame.value();
         }
     }
+    // A picture clip whose sound plays in a linked sound clip shows that
+    // sound under its frames once it is tall enough, as a Final Cut clip
+    // does (see kSoundUnderPictureFrom); once unlinked, or with the sound
+    // clip gone, it shows none.
+    struct SoundUnder {
+        const AudioPeaks *peaks = nullptr;
+        QJsonObject linked;
+    };
+    std::optional<SoundUnder> soundUnder;
+    const QString link = clip.value(QStringLiteral("link")).toString();
+    if (!audio && m_artwork && !link.isEmpty() && m_linkedSound.contains(link)) {
+        const QJsonObject linked = m_linkedSound.value(link);
+        const auto found = m_artwork->peaks.constFind(linked.value(QStringLiteral("sourceId")).toString());
+        if (found != m_artwork->peaks.cend() && !found->isEmpty()) soundUnder = SoundUnder{&found.value(), linked};
+    }
     const ClipLayout layout = clipLayout(rect, peaks || strip || poster);
     const QRectF band = layout.band;
     const QRectF body = layout.body;
@@ -1436,11 +1491,12 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
         p.fillRect(band, bandFill);
     }
     if (body.height() > 0.0) {
-        QLinearGradient bodyFill(0, body.top(), 0, body.bottom());
-        // lighter() would bleach a light fill to white.
-        bodyFill.setColorAt(0, theme.dark ? fill.lighter(125) : mixColor(fill, Qt::white, 0.3));
-        bodyFill.setColorAt(1, fill);
-        p.fillRect(body, bodyFill);
+        // The clip's colour, a shade lighter at the top. A sound's is a
+        // pane of tinted glass, as a Logic region or a Final Cut clip reads:
+        // a tint behind its waveform, not a solid box (see paintSoundGlass);
+        // its name bar stays solid.
+        if (audio) paintSoundGlass(p, body, fill);
+        else p.fillRect(body, bodyGradient(body, fill.lighter(112), fill));
     }
     // The source seconds under the clip's left edge and its right: a leading
     // trim being dragged moves its in point with its start.
@@ -1452,24 +1508,39 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
             // Clip gain is in decibels; the waveform shows what plays.
             const QJsonValue gain = clip.value(QStringLiteral("props")).toObject().value(QStringLiteral("gain"));
             drawWaveform(p, body.adjusted(0, 1, 0, -1), *peaks, sourceAt(0.0), sourceAt(duration),
-                         mixColor(fill, style.wave, 0.55), style.wave, std::pow(10.0, gain.toDouble(0.0) / 20.0), visible);
+                         theme.waveformPeak, theme.waveformBody, std::pow(10.0, gain.toDouble(0.0) / 20.0), visible);
         }
     } else if (body.height() > 0.0 && (strip || poster)) {
+        // Its sound in a band under the frames, in the sound's colour and
+        // white, with the linked sound clip's gain: picture and sound read
+        // as one clip, the way Final Cut draws them.
+        QRectF picture = body;
+        if (soundUnder && !layout.chip && body.height() >= kSoundUnderPictureFrom) {
+            const qreal soundHeight = std::max<qreal>(16.0, std::round(body.height() * 0.38));
+            picture.setBottom(body.bottom() - soundHeight);
+            const QRectF sound(body.left(), picture.bottom(), body.width(), soundHeight);
+            // The same glass as the sound clip on its own track.
+            paintSoundGlass(p, sound, theme.clipAudio.fill);
+            p.fillRect(QRectF(sound.left(), std::floor(sound.center().y()), sound.width(), 1), theme.waveCenter);
+            const double gain = soundUnder->linked.value(QStringLiteral("props")).toObject().value(QStringLiteral("gain")).toDouble(0.0);
+            drawWaveform(p, sound.adjusted(0, 1, 0, -1), *soundUnder->peaks, sourceAt(0.0), sourceAt(duration), theme.waveformPeak,
+                         theme.waveformBody, std::pow(10.0, gain / 20.0), visible);
+        }
         // Tiles each the frame under its left edge (the first one the
         // clip's in point), scaled once per size. A tall picture's tile is
         // square, its middle cut out: at its own shape a 9:16 frame was a
         // sliver a few pixels wide, a stripe of the same picture repeated.
         const double aspect = strip ? strip->aspect() : double(poster->width()) / std::max(1, poster->height());
-        const double tileHeight = body.height();
+        const double tileHeight = picture.height();
         const double tileWidth = std::max(6.0, std::round(tileHeight * std::max(1.0, aspect)));
         const qreal ratio = p.device()->devicePixelRatioF();
         const double pps = pixelsPerSecond();
-        const double firstTile = body.left() + std::max(0.0, std::floor((visible.left() - body.left()) / tileWidth)) * tileWidth;
-        const double stop = std::min(body.right(), double(visible.right()) + 1.0);
+        const double firstTile = picture.left() + std::max(0.0, std::floor((visible.left() - picture.left()) / tileWidth)) * tileWidth;
+        const double stop = std::min(picture.right(), double(visible.right()) + 1.0);
         for (double x = firstTile; x < stop; x += tileWidth) {
             const int frame = strip ? strip->frameAt(sourceAt((x - rect.left()) / pps)) : -1;
             // Frames meet without a seam, as a strip of film does on screen.
-            p.drawImage(QPointF(x, body.top()), filmstripTile(sourceId, frame, QSize(int(tileWidth), int(tileHeight)), ratio));
+            p.drawImage(QPointF(x, picture.top()), filmstripTile(sourceId, frame, QSize(int(tileWidth), int(tileHeight)), ratio));
         }
     }
 
@@ -1532,8 +1603,10 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
     // The lane draws a selected clip's ring last, over any proposal (here
     // only for the clip being dragged, which the lane leaves out): drawn
     // twice, its smoothed corners would darken.
+    // A sound clip's rim is its name bar's colour, solid round its
+    // translucent body, so it reads as a pane of its colour.
     if (selected && dragged) paintSelectionRing(p, rect);
-    else if (!selected) strokeRoundedInside(p, shape, 1, style.border, radius);
+    else if (!selected) strokeRoundedInside(p, shape, 1, audio && peaks ? style.header : style.border, radius);
 
     // Trim bracket on the edge under the pointer, or the edge being trimmed.
     int edge = 0;
@@ -1809,6 +1882,23 @@ QPixmap TimelineWidget::renderLanes(const QRect &area) {
     paintLanes(painter, area);
     painter.end();
     return pixmap;
+}
+
+void TimelineWidget::paintSoundGlass(QPainter &p, const QRectF &area, const QColor &fill) const {
+    // The graphite behind the glass, fixed, so the pane is one colour in
+    // either appearance and nothing under the clip shows through.
+    p.fillRect(area, kSoundGlass);
+    // The lanes' grid lines, carried on through the pane.
+    const double pps = pixelsPerSecond();
+    const double step = rulerScale(pps, m_fps).majorSeconds;
+    double time = std::max(0.0, std::floor(((area.left() - kTimelineOrigin) / pps) / step) * step);
+    for (qreal x = std::round(timeToX(time)); x <= area.right(); time += step, x = std::round(timeToX(time)))
+        if (x >= area.left() && time > 0.0) p.fillRect(QRectF(x, area.top(), 1, area.height()), kSoundGrid);
+    QColor top = fill.lighter(130);
+    QColor foot = fill.lighter(116);
+    top.setAlphaF(kSoundTint);
+    foot.setAlphaF(kSoundTint);
+    p.fillRect(area, bodyGradient(area, top, foot));
 }
 
 QImage TimelineWidget::filmstripTile(const QString &sourceId, int frame, const QSize &size, qreal dpr) {

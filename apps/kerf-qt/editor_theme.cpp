@@ -342,6 +342,7 @@ EditorTheme makeEditorTheme(bool dark) {
     t.trackToggle = tone(dark, "#675b4f66", "#a89a8a66"); // The same ink at 40%.
     t.trackToggleHover = tone(dark, "#4a341e17", "#ffecd21c");
     t.trackLane = tone(dark, "#efe8db", "#201a16");
+    t.laneGrid = tone(dark, "#3c281416", "#fff0dc12");
     t.trackLaneAlt = tone(dark, "#ebe4d6", "#231d18");
     t.trackLaneLocked = tone(dark, "#4a341e16", "#ffecd20e");
     t.trackDivider = tone(dark, "#ddd3c1", "#14100d");
@@ -358,9 +359,13 @@ EditorTheme makeEditorTheme(bool dark) {
     // cream over ink, not a second loud hue.
     // Picture clips are a greyed heather: Kerf's purple family, far duller
     // than its accent, and well away from blue.
-    t.clipVideo = dark ? clipStyle("#2c2830","#4e4459","#2f2937","#f4ecde","#a39aa8") : clipStyle("#c9c3c6","#5c5068","#43394d","#fbf6ec","#463c50");
-    t.clipAudio = dark ? clipStyle("#252e27","#325b50","#1c322c","#f4ecde","#8ea094") : clipStyle("#c4cabd","#3b6a5d","#2a4c43","#fbf6ec","#2c5046");
-    t.clipMusic = dark ? clipStyle("#2d2c1b","#4b5728","#293016","#f4ecde","#9c9e7e") : clipStyle("#cac8b0","#566428","#3e481d","#fbf6ec","#404b1e");
+    // Picture, sound and music clips are the same in either appearance, as
+    // a Logic region or a Final Cut clip is: a clip is its colour, and its
+    // waveform white on it (waveformPeak, waveformBody), never a deeper ink
+    // of the clip's own hue.
+    t.clipVideo = clipStyle("#4a4055", "#584c64", "#3d3348", "#fbf6ec", "#ffffff");
+    t.clipAudio = clipStyle("#3e7468", "#2f5c52", "#22463e", "#fbf6ec", "#ffffff");
+    t.clipMusic = clipStyle("#66712f", "#4f5924", "#3a421a", "#fbf6ec", "#ffffff");
     t.clipGenerator = dark ? clipStyle("#3b2b1a","#7a5222","#432d13","#f4ecde","#b69b7a") : clipStyle("#d6c6ad","#875a1d","#614115","#fbf6ec","#654416");
     t.clipCaption = dark ? clipStyle("#322b25","#5c5248","#332d28","#f4ecde","#a59b8f") : clipStyle("#cec7ba","#675d53","#4a433c","#fbf6ec","#4d463e");
     t.clipSelectedRing = tone(dark, "#fffbf3", "#fbf4e8");
@@ -370,7 +375,9 @@ EditorTheme makeEditorTheme(bool dark) {
     t.clipFxBadge = tone(dark, "#140c0660", "#0000006e");
     t.clipFxBadgeText = tone(dark, "#fbf6ec", "#f4ecde");
     t.filmstripSeam = tone(dark, "#140c065a", "#00000078");
-    t.waveCenter = tone(dark, "#140c0628", "#00000046");
+    t.waveCenter = hex("#ffffff2e");
+    t.waveformPeak = hex("#ffffff70");
+    t.waveformBody = hex("#ffffffe6");
     t.playhead = t.accent;
     t.playheadHalo = tone(dark, "#fbf8f1", "#0c0907");
     t.playheadIdle = tone(dark, "#8a7d6c", "#766a5d");
