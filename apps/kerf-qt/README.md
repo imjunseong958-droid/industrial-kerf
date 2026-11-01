@@ -202,11 +202,12 @@ stage row is about 575 points over a 290-point timeline, so the timeline does
 not move when the format changes.
 
 A wide (16:9) picture shows in a laptop, the phone's companion: a generic
-laptop drawn in code in the same graphite, its lid's screen 16:10 inside a
-thin even bezel (a little thicker over it, with a camera dot) so the picture
-sits across it with thin black bars above and below, a hinge line, and a
-wider, thin base (108% of the lid) with a lighter top face and a shallow
-thumb-cut. The player's controls lie inside the screen. The laptop's body (lid
+laptop of today drawn in code in a warm stone metal (never a silver), its lid
+black glass in a thin metal rim, its screen 16:10 with rounded top corners
+inside a thin even bezel (a little thicker over it) so the picture sits
+across it with thin black bars above and below, a small camera notch in the
+bar over the picture, a hinge band, and a wider, thin base (108% of the lid)
+with a lit top face, a shallow thumb-cut and two feet. The player's controls lie inside the screen. The laptop's body (lid
 top to base bottom, as wide as the base, so the stage's margin and the gap
 before the rail are measured from its widest part) takes the card's place in
 the group, the chat level with it and as tall; at 1440 × 900 the picture keeps at least 90% of the plain card's width

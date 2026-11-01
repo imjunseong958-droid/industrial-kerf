@@ -200,25 +200,27 @@ LaptopGeometry laptopGeometry(const QRectF &body, double pictureAspect) {
     out.lid = QRectF(body.center().x() - lidWidth / 2.0, body.top(), lidWidth, lidHeight);
     const double baseWidth = lidWidth * kLaptopBaseWidth;
     out.base = QRectF(body.center().x() - baseWidth / 2.0, out.lid.bottom(), baseWidth, body.bottom() - out.lid.bottom());
+    out.rim = std::max(2.0, kLaptopRim * lidWidth);
     out.bezel = kLaptopBezel * lidWidth;
     out.topBezel = kLaptopTopBezel * lidWidth;
     out.lidRadius = kLaptopLidRadius * lidWidth;
     out.screen = QRectF(out.lid.left() + out.bezel, out.lid.top() + out.topBezel, lidWidth - 2.0 * out.bezel,
                         (lidWidth - 2.0 * out.bezel) / kLaptopScreenAspect);
-    out.screenRadius = std::max(1.5, 0.006 * lidWidth);
+    out.screenRadius = std::max(2.0, kLaptopScreenRadius * lidWidth);
     // Across the screen's width, centred on its height; a picture taller
     // than the screen fits its height instead.
     QSizeF picture(out.screen.width(), out.screen.width() / std::max(0.01, pictureAspect));
     if (picture.height() > out.screen.height())
         picture = QSizeF(out.screen.height() * pictureAspect, out.screen.height());
     out.picture = QRectF(out.screen.center() - QPointF(picture.width() / 2.0, picture.height() / 2.0), picture);
+    const QSizeF notch(kLaptopNotchWidth * lidWidth, kLaptopNotchDepth * lidWidth);
+    out.notch = QRectF(QPointF(out.screen.center().x() - notch.width() / 2.0, out.screen.top()), notch);
     return out;
 }
 
 QRectF laptopCamera(const LaptopGeometry &laptop) {
-    const double d = std::max(3.0, 0.3 * laptop.topBezel);
-    const QPointF centre(laptop.lid.center().x(), laptop.lid.top() + laptop.topBezel / 2.0);
-    return QRectF(centre - QPointF(d / 2.0, d / 2.0), QSizeF(d, d));
+    const double d = std::max(2.5, 0.28 * laptop.notch.height());
+    return QRectF(laptop.notch.center() - QPointF(d / 2.0, d / 2.0), QSizeF(d, d));
 }
 
 namespace {
@@ -250,9 +252,12 @@ void paintLaptopBody(QPainter &p, const LaptopGeometry &laptop, const EditorThem
     const QRectF lid = laptop.lid;
     const QRectF base = laptop.base;
     // The base's front corners are rounded by most of its height, as a thin
-    // slab's are seen from the front; its back ones hardly at all.
+    // slab's are seen from the front; its back ones hardly at all. The
+    // lid's foot is hidden by the hinge, so its corners there are nearly
+    // square.
     const double baseRadius = 0.8 * base.height();
-    const QPainterPath lidPath = roundedTop(lid, laptop.lidRadius, 1.5);
+    const double lidFoot = 1.5;
+    const QPainterPath lidPath = roundedTop(lid, laptop.lidRadius, lidFoot);
     const QPainterPath basePath = roundedTop(base, 1.0, baseRadius);
     // The same soft shadow as the phone's, even all round.
     constexpr int kLayers = 6;
@@ -261,67 +266,59 @@ void paintLaptopBody(QPainter &p, const LaptopGeometry &laptop, const EditorThem
         QColor shade = theme.deviceShadow;
         shade.setAlphaF(theme.deviceShadow.alphaF() / kLayers * 1.6);
         p.setBrush(shade);
-        QPainterPath shadow = roundedTop(lid.adjusted(-spread, -spread, spread, spread), laptop.lidRadius + spread, 1.5 + spread);
+        QPainterPath shadow = roundedTop(lid.adjusted(-spread, -spread, spread, spread), laptop.lidRadius + spread, lidFoot + spread);
         shadow.addPath(roundedTop(base.adjusted(-spread, -spread, spread, spread), 1.0 + spread, baseRadius + spread));
         shadow.setFillRule(Qt::WindingFill);
         p.drawPath(shadow);
     }
-    // The lid: graphite, its 1px lighter edge, the black screen, and the
-    // camera dot in the bezel over it.
-    p.setBrush(theme.deviceFrame);
+    // The lid: its thin metal rim round black glass, the black screen with
+    // rounded top corners, and the notch with the camera in it, hanging
+    // into the bar over the picture.
+    p.setBrush(theme.laptopShell);
     p.drawPath(lidPath);
-    p.setPen(QPen(theme.deviceEdge, 1.0));
-    p.setBrush(Qt::NoBrush);
-    p.drawPath(roundedTop(lid.adjusted(0.5, 0.5, -0.5, -0.5), laptop.lidRadius - 0.5, 1.0));
-    p.setPen(Qt::NoPen);
+    const double rim = laptop.rim;
+    p.setBrush(theme.laptopBezel);
+    p.drawPath(roundedTop(lid.adjusted(rim, rim, -rim, -rim), std::max(0.0, laptop.lidRadius - rim), std::max(0.0, lidFoot - rim)));
     p.setBrush(theme.deviceScreen);
     p.drawPath(roundedTop(laptop.screen, laptop.screenRadius, 0.0));
+    const QRectF notch = laptop.notch;
+    p.setBrush(theme.laptopBezel);
+    p.drawPath(roundedTop(notch, 0.0, 0.45 * notch.height()));
     const QRectF camera = laptopCamera(laptop);
-    p.setBrush(theme.deviceScreen);
+    p.setBrush(theme.laptopCamera);
     p.drawEllipse(camera);
-    p.setBrush(theme.deviceEdge);
-    p.drawEllipse(camera.center(), camera.width() * 0.18, camera.width() * 0.18);
-    // The base: graphite, a lighter top face, its edge, and the thumb-cut in
-    // the middle of its front, a shallow scoop in the top face.
-    p.setBrush(theme.deviceFrame);
+    // The hinge: a dark band along the lid's foot, between its rounded
+    // corners, where it meets the base.
+    const double hinge = std::max(1.5, 0.005 * lid.width());
+    p.setBrush(theme.laptopHinge);
+    p.drawRect(QRectF(lid.left() + 2.0 * rim, lid.bottom() - hinge, lid.width() - 4.0 * rim, hinge));
+    // The base: the metal's front face, darker toward the foot, under its
+    // lit top face, with a highlight along the very top.
+    QLinearGradient front(base.topLeft(), base.bottomLeft());
+    front.setColorAt(0.0, theme.laptopShell);
+    front.setColorAt(1.0, theme.laptopShellShade);
+    p.setBrush(front);
     p.drawPath(basePath);
     const double face = std::max(1.0, std::round(0.38 * base.height()));
-    p.setBrush(theme.deviceDeck);
+    p.setBrush(theme.laptopDeck);
     p.drawRect(QRectF(base.left() + 1.0, base.top(), base.width() - 2.0, face));
-    p.setPen(QPen(theme.deviceEdge, 1.0));
-    p.setBrush(Qt::NoBrush);
-    p.drawPath(roundedTop(base.adjusted(0.5, 0.5, -0.5, -0.5), 0.5, baseRadius - 0.5));
-    p.setPen(Qt::NoPen);
-    // The thumb-cut: a shallow scoop in the middle of the front, the base's
-    // own graphite under a lighter 1px lip along its curve, so it reads as
-    // a notch in the slab, not a dark slot.
-    const double cutWidth = 0.13 * lid.width();
-    const double cutDepth = std::max(1.5, 0.5 * base.height());
+    // The thumb-cut: a shallow scoop in the middle of the top face, in the
+    // front face's shade.
+    const double cutWidth = 0.12 * lid.width();
+    const double cutDepth = std::max(1.5, 0.45 * base.height());
     const QRectF cut(base.center().x() - cutWidth / 2.0, base.top(), cutWidth, cutDepth);
-    p.setBrush(theme.deviceFrame);
+    p.setBrush(theme.laptopShellShade);
     p.drawPath(roundedTop(cut, 0.0, cutDepth));
-    QPainterPath lip;
-    lip.moveTo(cut.left(), cut.top() + 0.5);
-    lip.lineTo(cut.left() + 0.5, cut.bottom() - cutDepth * 0.5);
-    lip.quadTo(cut.left() + 0.5, cut.bottom() - 0.5, cut.left() + cutDepth, cut.bottom() - 0.5);
-    lip.lineTo(cut.right() - cutDepth, cut.bottom() - 0.5);
-    lip.quadTo(cut.right() - 0.5, cut.bottom() - 0.5, cut.right() - 0.5, cut.bottom() - cutDepth * 0.5);
-    lip.lineTo(cut.right(), cut.top() + 0.5);
-    p.setPen(QPen(theme.deviceEdge, 1.0));
-    p.setBrush(Qt::NoBrush);
-    p.drawPath(lip);
-    p.setPen(Qt::NoPen);
-    // The hinge: a dark line where the lid meets the base, across the lid,
-    // on the lid, so the base keeps its lit top edge whole.
-    const double hinge = std::max(1.5, 0.004 * lid.width());
-    p.setBrush(theme.deviceHinge);
-    p.drawRect(QRectF(lid.left() + laptop.lidRadius, lid.bottom() - hinge, lid.width() - 2.0 * laptop.lidRadius, hinge));
-    // The base's top edge lit along its whole width, as the phone's rim is,
-    // so the deck holds its shape on a dark stage.
-    p.setPen(QPen(theme.deviceEdge, 1.0));
+    p.setPen(QPen(theme.laptopHighlight, 1.0));
     p.drawLine(QPointF(base.left() + 1.0, base.top() + 0.5), QPointF(cut.left(), base.top() + 0.5));
     p.drawLine(QPointF(cut.right(), base.top() + 0.5), QPointF(base.right() - 1.0, base.top() + 0.5));
     p.setPen(Qt::NoPen);
+    // Its two feet, just showing under the front corners.
+    const double footWidth = 0.05 * lid.width();
+    const double footHeight = std::max(1.0, 0.18 * base.height());
+    p.setBrush(theme.laptopHinge);
+    for (const double x : {base.left() + 0.07 * base.width(), base.right() - 0.07 * base.width() - footWidth})
+        p.drawRoundedRect(QRectF(x, base.bottom() - 0.5, footWidth, footHeight + 0.5), footHeight / 2.0, footHeight / 2.0);
     p.restore();
 }
 

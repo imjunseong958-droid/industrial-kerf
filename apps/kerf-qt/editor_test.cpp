@@ -464,11 +464,12 @@ private slots:
     }
 
     // A wide picture shows in a laptop, the phone's companion: a generic
-    // laptop drawn in code, its lid's screen 16:10 inside a thin even bezel
-    // (a little thicker over it, with the camera), the 16:9 picture across
-    // the screen with thin black bars above and below, the player's controls
-    // inside the screen, and a wider, thin base under the lid. Off is the
-    // plain card. The conversation is level with the laptop's body and as
+    // laptop of today drawn in code in a warm stone metal, its lid black
+    // glass in a thin rim, its screen 16:10 inside a thin even bezel (a
+    // little thicker over it), the 16:9 picture across the screen with thin
+    // black bars above and below, the camera's notch in the bar over it,
+    // the player's controls inside the screen, and a wider, thin base under
+    // the lid. Off is the plain card. The conversation is level with the laptop's body and as
     // tall, and the picture keeps at least 90% of the plain card's width.
     void widePictureShowsInALaptop() {
         QSettings().remove(QStringLiteral("workspace"));
@@ -484,8 +485,8 @@ private slots:
         QVERIFY(std::abs(stage.body.width() / stage.body.height() - laptopBodyAspect()) < 0.01);
         const LaptopGeometry laptop = laptopGeometry(stage.body, 16.0 / 9.0);
         QCOMPARE(laptop.screen, stage.screen);
-        // The lid: an even bezel of 2% of its width, a little more over the
-        // screen; the screen 16:10; the base 108% of the lid wide and thin,
+        // The lid: an even bezel of 1.8% of its width, a little more over
+        // the screen; the screen 16:10; the base 108% of the lid wide and thin,
         // and the body the stage lays out exactly as wide as the base.
         QVERIFY(std::abs(laptop.bezel - kLaptopBezel * laptop.lid.width()) < 0.01);
         QVERIFY(kLaptopBaseWidth >= 1.08 && kLaptopBaseWidth <= 1.14);
@@ -507,26 +508,32 @@ private slots:
         QVERIFY(std::abs(stage.card.width() - stage.screen.width()) < 0.01);
         QVERIFY(std::abs(stage.card.center().y() - stage.screen.center().y()) < 0.5);
         QVERIFY(stage.card.top() > stage.screen.top() && stage.card.bottom() < stage.screen.bottom());
-        // The camera in the bezel over the screen, centred: no notch.
+        // The notch hangs from the bezel into the bar over the picture,
+        // centred, never over the picture, the camera in it.
+        QCOMPARE(laptop.notch.top(), laptop.screen.top());
+        QVERIFY(laptop.notch.bottom() < stage.card.top());
+        QVERIFY(std::abs(laptop.notch.center().x() - laptop.lid.center().x()) < 0.01);
         const QRectF camera = laptopCamera(laptop);
-        QVERIFY(laptop.lid.contains(camera) && camera.bottom() < laptop.screen.top());
-        QVERIFY(std::abs(camera.center().x() - laptop.lid.center().x()) < 0.01);
+        QVERIFY(laptop.notch.contains(camera));
         // The player's controls, in a video player's arrangement, inside the screen.
         QVERIFY(!viewer.overlay()->compact());
         QCOMPARE(viewer.overlay()->rect(), stage.card);
         QVERIFY(stage.screen.contains(viewer.overlay()->controlsBounds()));
-        // Drawn: graphite lid and base, the screen's black in the bars, the
-        // base's lighter top face, and the stage past the lid's corner.
+        // Drawn: the lid's metal rim round its black glass, the screen's
+        // black in the bars, the notch, the base's lit top face, and the
+        // stage past the lid's corner.
         viewer.setFrame(testing::footageFrame(testing::Shot::HarborWide, QSize(480, 270)), 0.0);
         const QImage image = viewer.grab().toImage();
         const qreal ratio = image.devicePixelRatio();
         const auto at = [&](const QPointF &point) { return image.pixelColor((point * ratio).toPoint()).rgb(); };
-        QCOMPARE(at(QPointF(laptop.lid.left() + laptop.bezel / 2.0 + 0.5, laptop.lid.center().y())), editorTheme().deviceFrame.rgb());
+        QCOMPARE(at(QPointF(std::ceil(laptop.lid.left()) + 0.25, laptop.lid.center().y())), editorTheme().laptopShell.rgb());
+        QCOMPARE(at(QPointF((laptop.lid.left() + laptop.rim + laptop.screen.left()) / 2.0, laptop.lid.center().y())), editorTheme().laptopBezel.rgb());
         QCOMPARE(at(QPointF(stage.screen.left() + 20, (stage.screen.top() + stage.card.top()) / 2.0)), editorTheme().deviceScreen.rgb());
+        QCOMPARE(at(QPointF(laptop.notch.left() + 2.0, laptop.notch.top() + 1.0)), editorTheme().laptopBezel.rgb());
         QCOMPARE(at(QPointF(stage.screen.left() + 20, (stage.screen.bottom() + stage.card.bottom()) / 2.0)), editorTheme().deviceScreen.rgb());
-        QCOMPARE(at(QPointF(laptop.base.left() + laptop.base.width() * 0.25, laptop.base.top() + 3.0)), editorTheme().deviceDeck.rgb());
-        // The lid's corners are round: no graphite at the very corner.
-        QVERIFY(at(laptop.lid.topLeft() + QPointF(1, 1)) != editorTheme().deviceFrame.rgb());
+        QCOMPARE(at(QPointF(laptop.base.left() + laptop.base.width() * 0.25, laptop.base.top() + 3.0)), editorTheme().laptopDeck.rgb());
+        // The lid's corners are round: no metal at the very corner.
+        QVERIFY(at(laptop.lid.topLeft() + QPointF(1, 1)) != editorTheme().laptopShell.rgb());
         // Off: the plain card.
         viewer.setLaptopPreview(LaptopPreview::Off);
         stage = viewer.stageLayout();
@@ -9115,12 +9122,14 @@ private slots:
                     QCOMPARE(at(QPointF(stage.screen.left() + 3, (stage.screen.top() + video.top()) / 2.0 + 6)), theme.deviceScreen.rgb());
                 }
                 if (wide) {
-                    // The laptop's graphite lid in either appearance, the
-                    // screen's black bar over the picture, and its base.
+                    // The laptop's stone rim and black glass in either
+                    // appearance, the screen's black bar over the picture,
+                    // and its base.
                     const LaptopGeometry laptop = laptopGeometry(body, 16.0 / 9.0);
-                    QCOMPARE(at(QPointF(laptop.lid.left() + laptop.bezel / 2.0 + 0.5, laptop.lid.center().y())), theme.deviceFrame.rgb());
+                    QCOMPARE(at(QPointF(std::ceil(laptop.lid.left()) + 0.25, laptop.lid.center().y())), theme.laptopShell.rgb());
+                    QCOMPARE(at(QPointF((laptop.lid.left() + laptop.rim + laptop.screen.left()) / 2.0, laptop.lid.center().y())), theme.laptopBezel.rgb());
                     QCOMPARE(at(QPointF(stage.screen.left() + 20, (stage.screen.top() + video.top()) / 2.0)), theme.deviceScreen.rgb());
-                    QCOMPARE(at(QPointF(laptop.base.left() + laptop.base.width() * 0.25, laptop.base.top() + 2.0)), theme.deviceDeck.rgb());
+                    QCOMPARE(at(QPointF(laptop.base.left() + laptop.base.width() * 0.25, laptop.base.top() + 2.0)), theme.laptopDeck.rgb());
                 }
                 QCOMPARE(at(QPointF(panel.left() + 1, panel.top() + 1)), theme.viewerSurround.rgb());
                 // The panel is its own surface, under its header.
