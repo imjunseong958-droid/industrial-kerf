@@ -80,6 +80,7 @@
 #include <QTextCursor>
 #include <QTextEdit>
 #include <QTextFrame>
+#include <QTextLayout>
 #include <QToolBar>
 #include <QToolButton>
 #include <QToolTip>
@@ -9264,10 +9265,22 @@ private slots:
                     auto *suggestion = static_cast<SuggestionButton *>(example);
                     QFont font = example->font();
                     font.setPixelSize(13);
-                    const QFontMetrics metrics(font);
-                    QVERIFY2(metrics.boundingRect(QRect(0, 0, suggestion->textRect().width(), 1000), Qt::TextWordWrap, example->text()).height() <=
-                                 2 * metrics.lineSpacing(),
-                             qPrintable(example->text()));
+                    // Lines counted as the button lays them out: a wrapped
+                    // block's pixel height rounds up past twice a rounded
+                    // line spacing where the font's line height is fractional
+                    // (DejaVu Sans on Linux).
+                    QTextLayout layout(example->text(), font);
+                    QTextOption option;
+                    option.setWrapMode(QTextOption::WordWrap);
+                    layout.setTextOption(option);
+                    layout.beginLayout();
+                    int lines = 0;
+                    for (QTextLine line = layout.createLine(); line.isValid(); line = layout.createLine()) {
+                        line.setLineWidth(suggestion->textRect().width());
+                        ++lines;
+                    }
+                    layout.endLayout();
+                    QVERIFY2(lines <= 2, qPrintable(QStringLiteral("%1: %2 lines").arg(example->text()).arg(lines)));
                 }
                 QVERIFY(window.m_chatScroll->widget()->width() <= window.m_chatScroll->viewport()->width());
                 window.m_viewer->setChatWidth(ViewerWidget::kDefaultChatWidth);
