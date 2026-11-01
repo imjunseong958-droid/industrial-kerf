@@ -2225,15 +2225,15 @@ constexpr qreal kFaderCapHeight = 16;
 
 // The slider's handle, as the style lays it out from what the slider would
 // give it.
-QRect sliderHandle(const QSlider *slider) {
+QRect sliderHandle(const QSlider *slider, std::optional<int> at = std::nullopt) {
     QStyleOptionSlider option;
     option.initFrom(slider);
     option.subControls = QStyle::SC_SliderGroove | QStyle::SC_SliderHandle;
     option.orientation = slider->orientation();
     option.minimum = slider->minimum();
     option.maximum = slider->maximum();
-    option.sliderPosition = slider->sliderPosition();
-    option.sliderValue = slider->value();
+    option.sliderPosition = at.value_or(slider->sliderPosition());
+    option.sliderValue = at.value_or(slider->value());
     option.singleStep = slider->singleStep();
     option.pageStep = slider->pageStep();
     option.upsideDown = slider->invertedAppearance() != (option.direction == Qt::RightToLeft);
@@ -2369,11 +2369,18 @@ void TimelineZoomControl::paintEvent(QPaintEvent *) {
 }
 
 QRectF TimelineZoomControl::faderCap(const QSlider *slider) {
-    const QRect handle = sliderHandle(slider);
-    const QPointF centre(handle.x() + handle.width() / 2.0, std::round(slider->height() / 2.0));
-    // On whole pixels, so its edges and its 2px index line are crisp.
-    return QRectF(std::round(centre.x() - kFaderCapWidth / 2), centre.y() - kFaderCapHeight / 2, kFaderCapWidth,
-                  kFaderCapHeight);
+    // Its travel is the style's handle travel, made symmetric: from where
+    // the cap stands at the minimum to the same inset from the far end. A
+    // style whose handle is an odd width (Fusion, on Linux) otherwise put
+    // the cap a pixel nearer one end than the other. On whole pixels, so its
+    // edges and its 2px index line are crisp.
+    const QRect first = sliderHandle(slider, slider->minimum());
+    const double inset = std::max(0.0, std::round(first.x() + first.width() / 2.0 - kFaderCapWidth / 2));
+    const double travel = std::max(0.0, slider->width() - 2 * inset - kFaderCapWidth);
+    const int span = slider->maximum() - slider->minimum();
+    const double along = span > 0 ? double(slider->sliderPosition() - slider->minimum()) / span : 0.0;
+    const double top = std::round(slider->height() / 2.0) - kFaderCapHeight / 2;
+    return QRectF(std::round(inset + along * travel), top, kFaderCapWidth, kFaderCapHeight);
 }
 
 int TimelineZoomControl::position(double pixelsPerSecond) {
