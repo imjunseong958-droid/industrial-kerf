@@ -20,6 +20,8 @@
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QToolButton>
+#include <QStyleOptionSlider>
+#include <QTimer>
 #include <QToolTip>
 #include <QUrl>
 #include <QWheelEvent>
@@ -176,6 +178,100 @@ void TimelineScrollArea::scrollContentsBy(int dx, int dy) {
     QScrollArea::scrollContentsBy(dx, dy);
 }
 
+// ---- The track height keys -------------------------------------------------
+
+namespace {
+
+// The height buttons' well stands this far inside their 24px.
+constexpr int kHeightBankInset = 2;
+
+// One key of the track height bank in its `button`: the button's share of
+// the bank's well (`bank`, in the button's coordinates, may reach past it
+// to either side), then its key, 2px inside the well and 2px from its
+// neighbours, and its engraved legend: S, M, L, or Fit's lanes between
+// arrows.
+void paintHeightKey(QPainter &painter, const QRect &button, const QRect &bank, int index, bool latched, bool hovered) {
+    const EditorTheme &theme = editorTheme();
+    painter.save();
+    painter.setClipRect(button);
+    const QRectF well = QRectF(bank).adjusted(0, kHeightBankInset, 0, -kHeightBankInset);
+    paintKeyBank(painter, well);
+    // 2px in from the bank's ends and 1px from a join with the next button;
+    // 2px under the well's top and over its foot, which ends above its lip.
+    const qreal left = button.left() <= bank.left() ? 2 : 1;
+    const qreal right = button.right() >= bank.right() ? 2 : 1;
+    const QRectF key(QPointF(button.left() + left, well.top() + 2), QPointF(button.right() + 1 - right, well.bottom() - 3));
+    paintRaisedKey(painter, key, latched, hovered, false);
+    // A raised key's face stands above its 1px drop.
+    const QRectF face = latched ? key : key.adjusted(0, 0, 0, -1);
+    if (index < 3) {
+        static const char *const legends[] = {QT_TRANSLATE_NOOP("kerf::TimelineWidget", "S"),
+                                              QT_TRANSLATE_NOOP("kerf::TimelineWidget", "M"),
+                                              QT_TRANSLATE_NOOP("kerf::TimelineWidget", "L")};
+        const QString legend = QCoreApplication::translate("kerf::TimelineWidget", legends[index]);
+        // Tracking follows every letter, a lone one's too: set it half the
+        // tracking right, so the letter itself is centred.
+        const qreal tracking = engravedFont(painter.font(), legend).letterSpacing();
+        drawEngraved(painter, face.translated(tracking / 2, 0), Qt::AlignCenter, legend);
+    } else {
+        // Fit's symbol from the header bar's, on a 12px square.
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.translate(face.center() - QPointF(6, 6));
+        painter.scale(0.75, 0.75);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(theme.engravedInk);
+        for (int lane = 0; lane < 3; ++lane) painter.drawRoundedRect(QRectF(7.0, 4.0 + lane * 3.0, 7.0, 2.0), 0.8, 0.8);
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(theme.engravedInk, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.drawLine(QPointF(3.5, 2.5), QPointF(3.5, 13.5));
+        painter.drawPolyline(QPolygonF{{1.5, 4.5}, {3.5, 2.5}, {5.5, 4.5}});
+        painter.drawPolyline(QPolygonF{{1.5, 11.5}, {3.5, 13.5}, {5.5, 11.5}});
+    }
+    painter.restore();
+}
+
+} // namespace
+
+// The dock's title strip makes a button for each height action, and makes
+// them again whenever its tab changes; the timeline paints them as one bank
+// of latching keys, the chosen height held in.
+class TimelineWidget::HeightKeys final : public QObject {
+public:
+    HeightKeys(const QList<QAction *> &actions, QObject *parent) : QObject(parent), m_actions(actions) {}
+
+    // Takes over the painting of each button for the actions it does not
+    // paint yet.
+    void adorn() {
+        for (QAction *action : std::as_const(m_actions))
+            for (QObject *object : action->associatedObjects()) {
+                auto *button = qobject_cast<QToolButton *>(object);
+                if (!button || button->defaultAction() != action || button->property(kAdorned).toBool()) continue;
+                button->setProperty(kAdorned, true);
+                button->installEventFilter(this);
+                button->update();
+            }
+    }
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override {
+        auto *button = event->type() == QEvent::Paint ? qobject_cast<QToolButton *>(watched) : nullptr;
+        const int index = button ? int(m_actions.indexOf(button->defaultAction())) : -1;
+        if (index < 0 || !button->parentWidget()) return QObject::eventFilter(watched, event);
+        // The bank runs under every height button beside this one.
+        QRect bank;
+        for (const QToolButton *other : button->parentWidget()->findChildren<QToolButton *>(Qt::FindDirectChildrenOnly))
+            if (other->isVisible() && m_actions.contains(other->defaultAction())) bank |= other->geometry();
+        QPainter painter(button);
+        paintHeightKey(painter, button->rect(), bank.translated(-button->pos()), index,
+                       button->isChecked() || button->isDown(), button->underMouse());
+        return true;
+    }
+
+private:
+    static constexpr const char *kAdorned = "kerfHeightKey";
+    QList<QAction *> m_actions;
+};
+
 TimelineWidget::TimelineWidget(QWidget *parent) : QWidget(parent) {
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_OpaquePaintEvent);
@@ -207,6 +303,7 @@ TimelineWidget::TimelineWidget(QWidget *parent) : QWidget(parent) {
     connect(m_mediumTracks, &QAction::triggered, this, &TimelineWidget::resetTrackHeights);
     connect(m_largeTracks, &QAction::triggered, this, [this] { setAllTrackHeights(kTrackHeightPresets[3].height); });
     connect(m_fitTracks, &QAction::triggered, this, &TimelineWidget::fitTracksToView);
+    m_heightKeys = new HeightKeys(trackHeightActions(), this);
     updateHeightActions();
     // The lanes, waveforms, filmstrip tiles and symbols are drawn in
     // the old theme's colours.
@@ -379,6 +476,7 @@ int TimelineWidget::defaultTrackHeight(bool audio) const {
 
 void TimelineWidget::updateHeightActions() {
     if (!m_miniTracks) return;
+    if (m_heightKeys) m_heightKeys->adorn();
     const auto everyTrackAt = [this](int height) {
         return !m_rows.isEmpty() && std::all_of(m_rows.cbegin(), m_rows.cend(), [height](const TrackRow &row) {
             return row.height == height;
@@ -461,6 +559,10 @@ QRect TimelineWidget::headerBadgeRect(int row) const {
 }
 
 bool TimelineWidget::event(QEvent *event) {
+    // Shown, the timeline's dock has made its title strip's height buttons
+    // (or makes them in this pass of the event loop) for it to paint.
+    if (event->type() == QEvent::Show)
+        QTimer::singleShot(0, this, [this] { m_heightKeys->adorn(); });
     // The line between two headers says what dragging it does.
     if (event->type() == QEvent::ToolTip) {
         const auto *help = static_cast<QHelpEvent *>(event);
@@ -1140,10 +1242,13 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     // the badge and toggles shrinking on rows too short for 16px.
     const bool detailed = layout.height >= kDetailedTrackHeight;
     const int blockTop = headerControlTop(row);
-    // The track number as plain secondary text, no fill under it.
+    // The track number on its channel plate, a small well pressed into the
+    // header, in the ink of the track's clips.
     const QRect badge(left + 10, blockTop, m_badgeWidth, headerControlSize(layout.height));
-    p.setPen(enabled ? theme.trackBadgeText : theme.trackHeaderTextDisabled);
-    drawName(p, badge, badgeFont(), trackRowLabel(row), true);
+    paintWell(p, badge, 3);
+    p.setPen(enabled ? badgeInk(track) : theme.trackHeaderTextDisabled);
+    // Centred over the well, clear of its lip of light.
+    drawName(p, QRectF(badge).adjusted(0, 0, 0, -1), badgeFont(), trackRowLabel(row), true);
 
     const QJsonArray clips = track.value(QStringLiteral("clips")).toArray();
     const QRect slot = headerPreviewRect(row, left);
@@ -1176,35 +1281,35 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     nameFont.setPixelSize(11);
     nameFont.setWeight(QFont::Medium);
     p.setFont(nameFont);
-    // Output (or mute) and lock toggles sit after the track number: bare
-    // symbols, the secondary ink when on and faint when off, on a round
-    // wash only under the pointer.
+    // Output (or mute) and lock toggles sit after the track number as small
+    // latching keys: raised when off, held in when on, brightening under
+    // the pointer, their symbols engraved.
     const auto drawToggle = [&](int index, bool on, const QString &field) {
         const QRect box = headerToggleRect(row, index).translated(left - stickyOrigin().x(), 0);
+        paintRaisedKey(p, box, on, m_hoverToggle == row * 2 + index, false);
         p.save();
         p.setRenderHint(QPainter::Antialiasing, true);
-        if (m_hoverToggle == row * 2 + index) {
-            p.setPen(Qt::NoPen);
-            p.setBrush(theme.trackToggleHover);
-            const double radius = std::max(box.width(), box.height()) / 2.0 + 2.0;
-            p.drawEllipse(QRectF(box).center(), radius, radius);
-        }
-        p.setPen(QPen(on ? theme.trackToggleOn : theme.trackToggle, 1.3));
+        // A raised key's face stands above its 1px drop. The symbols are
+        // drawn for a 16px key and shrink with keys on shorter rows.
+        const QRectF face = on ? QRectF(box) : QRectF(box).adjusted(0, 0, 0, -1);
+        p.translate(face.center());
+        const qreal scale = box.height() / 16.0;
+        p.scale(scale, scale);
+        p.setPen(QPen(theme.engravedInk, 1.3));
         p.setBrush(Qt::NoBrush);
-        const QPointF c = QRectF(box).center();
         if (field == QStringLiteral("locked")) {
-            p.drawArc(QRectF(c.x() - 3, c.y() - 6, 6, 7), 0, 180 * 16);
-            p.drawRect(QRectF(c.x() - 4, c.y() - 2, 8, 6));
+            p.drawArc(QRectF(-2.5, -5, 5, 6), 0, 180 * 16);
+            p.drawRect(QRectF(-3.5, -2, 7, 5.5));
         } else if (field == QStringLiteral("muted")) {
             QFont mute = font();
             mute.setPixelSize(11);
-            mute.setWeight(QFont::DemiBold);
+            mute.setWeight(QFont::Bold);
             p.setFont(mute);
-            p.drawText(box, Qt::AlignCenter, QStringLiteral("M"));
+            p.drawText(QRectF(-8, -8, 16, 16), Qt::AlignCenter, QStringLiteral("M"));
         } else {
-            p.drawEllipse(c, 5.0, 3.0);
-            p.drawEllipse(c, 1.2, 1.2);
-            if (!on) p.drawLine(QPointF(c.x() - 5, c.y() + 4), QPointF(c.x() + 5, c.y() - 4));
+            p.drawEllipse(QPointF(), 4.5, 2.75);
+            p.drawEllipse(QPointF(), 1.1, 1.1);
+            if (!on) p.drawLine(QPointF(-4.5, 3.5), QPointF(4.5, -3.5));
         }
         p.restore();
     };
@@ -1359,9 +1464,14 @@ int TimelineWidget::headerControlSize(int rowHeight) {
 
 QFont TimelineWidget::badgeFont() const {
     QFont badge = font();
-    badge.setPixelSize(11);
-    badge.setWeight(QFont::DemiBold);
+    badge.setPixelSize(10);
+    badge.setWeight(QFont::Bold);
     return badge;
+}
+
+QColor TimelineWidget::badgeInk(const QJsonObject &track) {
+    const EditorTheme &theme = editorTheme();
+    return readableOn(theme.clip(trackKind(track)).header, theme.wellFill, 4.5);
 }
 
 int TimelineWidget::headerControlTop(int row) const {
@@ -1813,8 +1923,9 @@ void TimelineWidget::paintOverlay(QPainter &p, const QRect &dirty) {
         p.setFont(addFont);
         p.drawText(button, Qt::AlignCenter, QStringLiteral("+  Track"));
     }
-    // The playhead's time in the accent, deepened where needed to read on the corner.
-    paintCornerTime(p, origin, skimming ? m_skimmerTime : m_playhead, skimming ? theme.skimmerText : theme.accentText);
+    // The playhead's time in the glass's cream figures; the skimmer's in its
+    // dimmer label ink, so a glance tells the two apart.
+    paintCornerTime(p, origin, skimming ? m_skimmerTime : m_playhead, skimming ? theme.glassLabel : theme.glassText);
     if (m_dragging && m_dragMoved) paintDragReadout(p);
 }
 
@@ -1846,9 +1957,34 @@ void TimelineWidget::paintCornerTime(QPainter &p, const QPoint &origin, double t
     p.fillRect(corner, theme.rulerCorner);
     p.fillRect(QRect(corner.right() + 1, origin.y(), 1, kRulerHeight), theme.divider);
     p.fillRect(QRect(origin.x(), corner.bottom() + 1, kTimelineLabelWidth, 1), theme.divider);
-    p.setFont(monoFont(13, QFont::DemiBold));
+    // On a display glass sized to its figures, as a deck's counter window.
+    const QString text = timelineTimecode(time, m_fps);
+    const QRect glass = cornerGlassRect(origin, text);
+    paintGlass(p, glass, 4);
+    p.setFont(cornerFont());
     p.setPen(color);
-    p.drawText(corner.adjusted(10, 0, -6, 0), Qt::AlignLeft | Qt::AlignVCenter, timelineTimecode(time, m_fps));
+    // Centred over the glass, clear of its lip of light.
+    p.drawText(QRectF(glass).adjusted(0, 0, 0, -1), Qt::AlignCenter, text);
+}
+
+QFont TimelineWidget::cornerFont() {
+    return monoFont(12, QFont::DemiBold);
+}
+
+QRect TimelineWidget::cornerGlassRect(const QPoint &origin, const QString &text) const {
+    // 7px of glass either side of the figures, 18px tall in the corner's 25.
+    // As wide as the widest figures could make the time, so the glass keeps
+    // its size as the time runs, whatever face the figures come in.
+    const QFontMetrics metrics(cornerFont());
+    QChar widest = QLatin1Char('0');
+    for (char digit = '1'; digit <= '9'; ++digit)
+        if (metrics.horizontalAdvance(QLatin1Char(digit)) > metrics.horizontalAdvance(widest)) widest = QLatin1Char(digit);
+    QString figures = text;
+    for (QChar &figure : figures)
+        if (figure.isDigit()) figure = widest;
+    const int width = metrics.horizontalAdvance(figures) + 14;
+    const int height = 18;
+    return QRect(origin.x() + 8, origin.y() + (kRulerHeight - 1 - height) / 2, width, height);
 }
 
 void TimelineWidget::repaintAt(qreal x) {
@@ -2082,49 +2218,124 @@ TimelineWidget::ClipHit TimelineWidget::clipAt(const QPoint &point) const {
 
 namespace {
 
-// A − or + drawn in code (no SVG on Linux), in secondary ink.
-QIcon zoomGlyph(bool plus) {
-    const qreal ratio = 2.0;
-    QPixmap pixmap(QSize(16, 16) * ratio);
-    pixmap.setDevicePixelRatio(ratio);
-    pixmap.fill(Qt::transparent);
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(QPen(editorTheme().textSecondary, 1.5, Qt::SolidLine, Qt::RoundCap));
-    painter.drawLine(QPointF(4, 8), QPointF(12, 8));
-    if (plus) painter.drawLine(QPointF(8, 4), QPointF(8, 12));
-    return QIcon(pixmap);
+// The fader's cap; it stands centred on the slider's handle, which the
+// style lays out and a press grabs.
+constexpr qreal kFaderCapWidth = 10;
+constexpr qreal kFaderCapHeight = 16;
+
+// The slider's handle, as the style lays it out from what the slider would
+// give it.
+QRect sliderHandle(const QSlider *slider) {
+    QStyleOptionSlider option;
+    option.initFrom(slider);
+    option.subControls = QStyle::SC_SliderGroove | QStyle::SC_SliderHandle;
+    option.orientation = slider->orientation();
+    option.minimum = slider->minimum();
+    option.maximum = slider->maximum();
+    option.sliderPosition = slider->sliderPosition();
+    option.sliderValue = slider->value();
+    option.singleStep = slider->singleStep();
+    option.pageStep = slider->pageStep();
+    option.upsideDown = slider->invertedAppearance() != (option.direction == Qt::RightToLeft);
+    return slider->style()->subControlRect(QStyle::CC_Slider, &option, QStyle::SC_SliderHandle, slider);
 }
+
+// The zoom's − and + as small raised keys, held in while pressed, their
+// symbols engraved.
+class ZoomKey final : public QToolButton {
+public:
+    ZoomKey(bool plus, QWidget *parent) : QToolButton(parent), m_plus(plus) {}
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        const bool held = isDown();
+        const QRectF key = QRectF(rect()).adjusted(1, 1, -1, -1);
+        paintRaisedKey(painter, key, held, underMouse() && isEnabled(), false);
+        // A raised key's face stands above its 1px drop.
+        const QPointF centre = (held ? key : key.adjusted(0, 0, 0, -1)).center();
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(editorTheme().engravedInk, 1.5, Qt::SolidLine, Qt::RoundCap));
+        painter.drawLine(centre - QPointF(3.5, 0), centre + QPointF(3.5, 0));
+        if (m_plus) painter.drawLine(centre - QPointF(0, 3.5), centre + QPointF(0, 3.5));
+    }
+
+private:
+    bool m_plus;
+};
+
+// The zoom's fader: a recessed groove with a tick at each quarter of its
+// travel, and a dark bakelite cap with a cream index line, standing where
+// the style puts the slider's handle, so a press on the cap takes it.
+class ZoomFader final : public QSlider {
+public:
+    explicit ZoomFader(QWidget *parent) : QSlider(Qt::Horizontal, parent) {}
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        const EditorTheme &theme = editorTheme();
+        QPainter painter(this);
+        const QRectF cap = TimelineZoomControl::faderCap(this);
+        const qreal mid = cap.center().y();
+        // The cap's centre travels from half the handle's width in to half
+        // its width short of the far end; the groove runs a little past both.
+        const qreal from = sliderHandle(this).width() / 2.0;
+        const qreal to = width() - from;
+        paintWell(painter, QRectF(from - 3, mid - 3, to - from + 6, 6), 3);
+        // Square ticks on whole pixels, above and below the groove.
+        for (int tick = 0; tick <= 4; ++tick) {
+            const qreal x = std::floor(from + (to - from) * tick / 4.0);
+            painter.fillRect(QRectF(x, mid - 8, 1, 3), theme.knobTick);
+            painter.fillRect(QRectF(x, mid + 5, 1, 3), theme.knobTick);
+        }
+        // The cap: its skirt, a face lit from above, and the index line
+        // across its middle that reads against the ticks.
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(Qt::NoPen);
+        QPainterPath skirt;
+        skirt.addRoundedRect(cap, 2.5, 2.5);
+        painter.fillPath(skirt.translated(0, 1), theme.keyDrop);
+        painter.fillPath(skirt, theme.knobRing);
+        QPainterPath face;
+        face.addRoundedRect(cap.adjusted(1, 1, -1, -1), 1.5, 1.5);
+        QLinearGradient light(cap.topLeft(), cap.bottomLeft());
+        light.setColorAt(0, theme.knobFaceLight);
+        light.setColorAt(1, theme.knobFaceDark);
+        painter.fillPath(face, light);
+        painter.fillRect(QRectF(cap.center().x() - 1, cap.top() + 3, 2, cap.height() - 6), theme.knobPointer);
+    }
+};
 
 } // namespace
 
 TimelineZoomControl::TimelineZoomControl(TimelineWidget *timeline, QWidget *parent) : QWidget(parent), m_timeline(timeline) {
     setObjectName(QStringLiteral("timelineZoom"));
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    m_label = tr("Zoom");
     auto *layout = new QHBoxLayout(this);
-    layout->setContentsMargins(0, 0, 8, 0);
+    // The engraved label stands in the left margin, 6px clear of the − key.
+    layout->setContentsMargins(labelRect().width() + 6, 0, 8, 0);
     layout->setSpacing(2);
-    const auto glyphButton = [this](bool plus) {
-        auto *button = new QToolButton(this);
+    const auto key = [this](bool plus) {
+        auto *button = new ZoomKey(plus, this);
         button->setObjectName(plus ? QStringLiteral("timelineZoomIn") : QStringLiteral("timelineZoomOut"));
-        button->setAutoRaise(true);
-        button->setIcon(zoomGlyph(plus));
-        button->setIconSize(QSize(16, 16));
         button->setFixedSize(20, 20);
         button->setToolTip(plus ? QStringLiteral("Zoom in") : QStringLiteral("Zoom out"));
         button->setAccessibleName(button->toolTip());
         button->setAutoRepeat(true);
+        // Repainted as the pointer comes and goes.
+        button->setAutoRaise(true);
         return button;
     };
-    m_out = glyphButton(false);
-    m_slider = new QSlider(Qt::Horizontal, this);
+    m_out = key(false);
+    m_slider = new ZoomFader(this);
     m_slider->setObjectName(QStringLiteral("timelineZoomSlider"));
     m_slider->setRange(0, kSteps);
-    m_slider->setFixedWidth(88);
+    m_slider->setFixedSize(72, 22);
     m_slider->setToolTip(QStringLiteral("Timeline zoom"));
     m_slider->setAccessibleName(QStringLiteral("Timeline zoom"));
     m_slider->setFocusPolicy(Qt::NoFocus);
-    m_in = glyphButton(true);
+    m_in = key(true);
     layout->addWidget(m_out);
     layout->addWidget(m_slider);
     layout->addWidget(m_in);
@@ -2138,10 +2349,31 @@ TimelineZoomControl::TimelineZoomControl(TimelineWidget *timeline, QWidget *pare
         const QSignalBlocker blocker(m_slider);
         m_slider->setValue(position(scale));
     });
+    // Painted from the theme at paint time: a repaint takes the new one.
     connect(EditorAppearance::instance(), &EditorAppearance::changed, this, [this] {
-        m_out->setIcon(zoomGlyph(false));
-        m_in->setIcon(zoomGlyph(true));
+        for (QWidget *widget : {static_cast<QWidget *>(this), static_cast<QWidget *>(m_out), static_cast<QWidget *>(m_slider),
+                                static_cast<QWidget *>(m_in)})
+            widget->update();
     });
+}
+
+QRect TimelineZoomControl::labelRect() const {
+    const QFont font = engravedFont(this->font(), m_label);
+    const QString shown = font.capitalization() == QFont::AllUppercase ? m_label.toUpper() : m_label;
+    return QRect(0, 0, int(std::ceil(QFontMetricsF(font).horizontalAdvance(shown))) + 1, height());
+}
+
+void TimelineZoomControl::paintEvent(QPaintEvent *) {
+    QPainter painter(this);
+    drawEngraved(painter, labelRect(), Qt::AlignLeft | Qt::AlignVCenter, m_label);
+}
+
+QRectF TimelineZoomControl::faderCap(const QSlider *slider) {
+    const QRect handle = sliderHandle(slider);
+    const QPointF centre(handle.x() + handle.width() / 2.0, std::round(slider->height() / 2.0));
+    // On whole pixels, so its edges and its 2px index line are crisp.
+    return QRectF(std::round(centre.x() - kFaderCapWidth / 2), centre.y() - kFaderCapHeight / 2, kFaderCapWidth,
+                  kFaderCapHeight);
 }
 
 int TimelineZoomControl::position(double pixelsPerSecond) {
