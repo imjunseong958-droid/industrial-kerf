@@ -552,6 +552,8 @@ impl CpalAudioOutput {
     fn try_new(clock: AudioClock) -> Option<Self> {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
+        #[cfg(windows)]
+        keep_com_loaded();
         let host = cpal::default_host();
         let device = host.default_output_device()?;
         let supported = device.default_output_config().ok()?;
@@ -604,6 +606,23 @@ impl CpalAudioOutput {
             _stream: stream,
         })
     }
+}
+
+/// cpal makes one device enumerator for the process, in the first thread
+/// that asks, and each audio thread ends COM for itself as it exits. When
+/// the last one did, Windows unloaded the audio DLLs under that enumerator
+/// and the next session's audio thread read freed code. Holding the
+/// multithreaded apartment open keeps COM, and those DLLs, loaded for the
+/// life of the process.
+#[cfg(all(windows, feature = "native-audio"))]
+fn keep_com_loaded() {
+    static KEPT: std::sync::Once = std::sync::Once::new();
+    KEPT.call_once(|| {
+        let mut cookie = std::ptr::null_mut();
+        // SAFETY: writes the cookie, which is never handed back, so the
+        // apartment stays open.
+        unsafe { windows_sys::Win32::System::Com::CoIncrementMTAUsage(&mut cookie) };
+    });
 }
 
 #[cfg(feature = "native-audio")]

@@ -193,13 +193,14 @@ jobs:
         if: github.event_name != 'pull_request' || steps.changes.outputs.editor == 'true'
         run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
       # The editor's C ABI starts kerfd and edits through the pipe beside
-      # another client. It crashed now and then on Windows, so it runs
-      # several times; a crash prints the faulting thread's stack.
+      # another client. On Windows it also fails on any access violation,
+      # handled or not; it runs a few times, since a crash once came and
+      # went.
       - name: Test editor connection to kerfd
         if: github.event_name != 'pull_request' || steps.changes.outputs.editor == 'true'
         timeout-minutes: 10
         run: |
-          for ($run = 1; $run -le 15; $run++) {
+          for ($run = 1; $run -le 5; $run++) {
             cargo test -q -p kerf-qt-bridge --test connection -- --nocapture
             if ($LASTEXITCODE -ne 0) { "failed on run $run"; exit 1 }
           }

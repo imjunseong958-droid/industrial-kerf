@@ -6922,7 +6922,8 @@ private slots:
         QCOMPARE(launcher.m_requests.last(), (QJsonObject{{"type", "create"}, {"name", "My Film"}, {"location", location},
                                                           {"template", "vertical"}, {"rate", "24"}, {"git", true},
                                                           {"github", QJsonObject{{"private", true}}},
-                                                          {"kerfd", "/opt/kerf/bin/kerfd"}}));
+                                                          // Windows puts the drive in front.
+                                                          {"kerfd", QFileInfo(QStringLiteral("/opt/kerf/bin/kerfd")).absoluteFilePath()}}));
         QVERIFY(launcher.m_busy);
         QVERIFY(!launcher.m_choose->isEnabled());
         QVERIFY(!launcher.m_progress->isHidden());

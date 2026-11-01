@@ -129,48 +129,44 @@ fn markers(snapshot: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-/// Print where a crash happened, on whichever thread: a Windows access
-/// violation ends the process with no word of where it was.
+/// Access violations in this process, handled or not. Each audio thread
+/// once read an audio DLL Windows had unloaded; that was only sometimes
+/// fatal, but it showed every time.
 #[cfg(windows)]
-fn report_crashes() {
+fn count_access_violations() -> &'static std::sync::atomic::AtomicUsize {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use windows_sys::Win32::Foundation::EXCEPTION_ACCESS_VIOLATION;
     use windows_sys::Win32::System::Diagnostics::Debug::{
         AddVectoredExceptionHandler, EXCEPTION_CONTINUE_SEARCH, EXCEPTION_POINTERS,
     };
 
-    static REPORTED: AtomicUsize = AtomicUsize::new(0);
+    static VIOLATIONS: AtomicUsize = AtomicUsize::new(0);
 
-    unsafe extern "system" fn report(info: *mut EXCEPTION_POINTERS) -> i32 {
+    unsafe extern "system" fn count(info: *mut EXCEPTION_POINTERS) -> i32 {
         // SAFETY: Windows passes a live exception record for this call.
         let record = unsafe { &*(*info).ExceptionRecord };
-        if record.ExceptionCode == EXCEPTION_ACCESS_VIOLATION
-            && REPORTED.fetch_add(1, Ordering::SeqCst) < 3
-        {
+        if record.ExceptionCode == EXCEPTION_ACCESS_VIOLATION {
             let [kind, address, ..] = record.ExceptionInformation;
             eprintln!(
-                "access violation at {:?} ({} {address:#x}) on thread {:?}\n{}",
+                "access violation at {:?} ({} {address:#x}) on thread {:?}",
                 record.ExceptionAddress,
-                match kind {
-                    0 => "reading",
-                    1 => "writing",
-                    _ => "executing",
-                },
+                if kind == 1 { "writing" } else { "reading" },
                 std::thread::current().name(),
-                std::backtrace::Backtrace::force_capture(),
             );
+            VIOLATIONS.fetch_add(1, Ordering::SeqCst);
         }
         EXCEPTION_CONTINUE_SEARCH
     }
 
-    // SAFETY: `report` lives for the whole process and only reads.
-    unsafe { AddVectoredExceptionHandler(1, Some(report)) };
+    // SAFETY: `count` lives for the whole process and only reads.
+    unsafe { AddVectoredExceptionHandler(1, Some(count)) };
+    &VIOLATIONS
 }
 
 #[test]
 fn the_editor_starts_kerfd_and_shares_the_project_with_another_client() {
     #[cfg(windows)]
-    report_crashes();
+    let violations = count_access_violations();
     let project = Project::new();
     // No daemon runs yet: the editor starts one and waits for it.
     let mut editor = Editor::open(&project.0);
@@ -196,4 +192,9 @@ fn the_editor_starts_kerfd_and_shares_the_project_with_another_client() {
     let seen = client.get_state().unwrap();
     assert_eq!(seen.revision, 2);
     assert!(!seen.document.contains("external"), "{}", seen.document);
+
+    // Edits replace the editor's playback session, and its audio thread
+    // with it.
+    #[cfg(windows)]
+    assert_eq!(violations.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
