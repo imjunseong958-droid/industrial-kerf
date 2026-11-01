@@ -12103,6 +12103,36 @@ private slots:
     // Pictures of every hardware part on the faceplate, to look at: run with
     // KERF_HARDWARE_GALLERY set to a folder. Each appearance is drawn at 1x,
     // 1.25x and 2x.
+    // The whole editor, a portrait project with a clip selected, in light
+    // and dark, to look at: run with KERF_EDITOR_GALLERY set to a folder
+    // (QT_SCALE_FACTOR=2 for a Retina screen's pixels).
+    void editorGallery() {
+        const QString folder = qEnvironmentVariable("KERF_EDITOR_GALLERY");
+        if (folder.isEmpty()) QSKIP("Set KERF_EDITOR_GALLERY to draw the editor.");
+        QDir().mkpath(folder);
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            MainWindow window{QString(), QString()};
+            window.resize(1366, 737);
+            window.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&window));
+            QJsonObject snapshot = showcaseSnapshot(3, QStringLiteral("clean"));
+            QJsonObject timeline = snapshot.value(QStringLiteral("timeline")).toObject();
+            timeline.insert(QStringLiteral("width"), 1080);
+            timeline.insert(QStringLiteral("height"), 1920);
+            snapshot.insert(QStringLiteral("timeline"), timeline);
+            window.applySnapshot(snapshot);
+            window.selectClip(QStringLiteral("v1a"));
+            window.m_workspace->panel(QStringLiteral("inspector"))->setAsCurrentTab();
+            QCoreApplication::processEvents();
+            QTest::qWait(50);
+            const QString look = scheme == ColorScheme::Dark ? QStringLiteral("dark") : QStringLiteral("light");
+            QVERIFY(window.grab().save(QDir(folder).filePath(QStringLiteral("editor-%1.png").arg(look))));
+        }
+        // The suite runs in the dark appearance (initTestCase).
+        setEditorColorScheme(ColorScheme::Dark);
+    }
+
     void hardwareGallery() {
         const QString folder = qEnvironmentVariable("KERF_HARDWARE_GALLERY");
         if (folder.isEmpty()) QSKIP("Set KERF_HARDWARE_GALLERY to draw the hardware parts.");
