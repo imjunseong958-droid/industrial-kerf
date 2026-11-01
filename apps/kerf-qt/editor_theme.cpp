@@ -470,6 +470,62 @@ EditorTheme makeEditorTheme(bool dark) {
     t.badgeNeutral = tone(dark, "#140c06a0", "#000000a0");
     t.badgeNeutralText = tone(dark, "#fbf6ec", "#f4ecde");
 
+    // The hardware finish. Light is the faceplate as the owner chose it:
+    // cream plates and keys, wells pressed into them, shadows the warm umber
+    // of the launcher's bezels. Dark is the same hardware in espresso, its
+    // light a faint cream rather than white, its shadows black.
+    t.faceplateTop = tone(dark, "#f4eee3", "#2c251f");
+    t.faceplateBottom = tone(dark, "#e8e0d0", "#241e19");
+    t.faceplateHighlight = tone(dark, "#ffffffcc", "#ffecd214");
+    t.faceplateEdge = tone(dark, "#d2c7b3", "#100c0a");
+    t.keyTop = tone(dark, "#fbf8f1", "#40362d");
+    t.keyBottom = tone(dark, "#efe8db", "#342b24");
+    t.keyRing = tone(dark, "#3c281429", "#0000008c");
+    t.keyDrop = tone(dark, "#3c28141f", "#00000066");
+    t.keyHighlight = tone(dark, "#ffffff", "#ffecd224");
+    t.keyLatched = tone(dark, "#d8ccb6", "#1d1814");
+    t.keyLatchedShadow = tone(dark, "#3c281459", "#000000b3");
+    t.keyLed = tone(dark, "#d4882a", "#e59a4a");
+    t.bankWell = tone(dark, "#e3d9c6", "#181310");
+    t.bankShadow = tone(dark, "#3c281438", "#00000099");
+    t.bankLip = tone(dark, "#ffffffb3", "#ffecd214");
+    t.wellFill = tone(dark, "#e8dfcc", "#1a1511");
+    t.wellShadow = tone(dark, "#3c281433", "#0000008c");
+    t.wellLip = tone(dark, "#ffffffa6", "#ffecd212");
+    t.modulePlate = tone(dark, "#f9f4eb", "#2a231d");
+    t.moduleEdge = tone(dark, "#ddd2bf", "#3a3029");
+    t.moduleHighlight = tone(dark, "#ffffff", "#ffecd214");
+    t.engravedInk = tone(dark, "#4d4237", "#b8a994");
+    t.engravedHighlight = tone(dark, "#ffffffbf", "#0000008c");
+    // Lamps: amber and green are the only colours besides Kerf's own.
+    t.lampOff = tone(dark, "#d2c7b3", "#4a3f36");
+    t.lampChanged = t.keyLed;
+    t.lampKerf = t.accent;
+    t.lampOk = tone(dark, "#5a8a3e", "#8ab56c");
+    // The display glass is dark in both appearances, a step deeper in dark
+    // so it still reads as glass set into the plate.
+    t.glassTop = tone(dark, "#1a1613", "#0d0a08");
+    t.glassBottom = tone(dark, "#26201b", "#16120e");
+    t.glassShadow = tone(dark, "#00000080", "#000000b3");
+    t.glassLip = tone(dark, "#ffffffb3", "#ffecd21a");
+    t.glassText = hex("#f1e4c8");
+    t.glassLabel = hex("#a8977e");
+    // Knobs are bakelite in both; in dark the skirt is deeper and the ticks
+    // lighter, so both still part from the espresso plate.
+    t.knobRing = tone(dark, "#24201c", "#0c0a08");
+    t.knobFaceLight = hex("#4a433c");
+    t.knobFaceDark = hex("#191613");
+    t.knobTick = tone(dark, "#8a7d6c", "#8e8072");
+    t.knobPointer = hex("#f1e4c8");
+    // The VU meter is an instrument: the same in both, its face a little
+    // dimmer by lamplight.
+    t.vuBezelTop = hex("#2a241f");
+    t.vuBezelBottom = hex("#15110e");
+    t.vuFace = tone(dark, "#efe3c6", "#e4d6b6");
+    t.vuInk = hex("#4d4237");
+    t.vuRedZone = hex("#b23a2e");
+    t.vuNeedle = hex("#1b1612");
+
     // Guards on the palette above: each holds already, and keeps holding if a
     // value is retuned. Text and glyphs on the filled accent read at 4.5:1
     // (no exemption)...
@@ -505,6 +561,16 @@ EditorTheme makeEditorTheme(bool dark) {
     // ...and every clip's name reads on its header at 4.5:1.
     for (ClipStyle *style : {&t.clipVideo, &t.clipAudio, &t.clipMusic, &t.clipGenerator, &t.clipCaption})
         style->label = readableOn(style->label, style->header, 4.5);
+    // The hardware's text reads at 4.5:1 on whatever it is printed on: an
+    // engraved label on a module or the faceplate, figures and labels on the
+    // whole glass, the scale on the VU's face.
+    for (const QColor &surface : {t.modulePlate, t.faceplateTop, t.faceplateBottom})
+        t.engravedInk = readableOn(t.engravedInk, surface, 4.5);
+    for (const QColor &surface : {t.glassTop, t.glassBottom}) {
+        t.glassText = readableOn(t.glassText, surface, 4.5);
+        t.glassLabel = readableOn(t.glassLabel, surface, 4.5);
+    }
+    t.vuInk = readableOn(t.vuInk, t.vuFace, 4.5);
     // The Inspector's controls: aliases (the launcher's switch and knob).
     t.inspectorField = dark ? t.field : t.group;
     t.switchOn = t.trackToggleOn;

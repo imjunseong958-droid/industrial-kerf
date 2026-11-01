@@ -260,7 +260,8 @@ QMenu::item:selected { background: @menuSelection; color: @menuSelectionText; }
 QMenu::item:disabled { color: @textDisabled; background: transparent; }
 
 /* The toolbar groups its commands with space, not separators, as macOS
-   toolbars do. */
+   toolbars do. The main toolbar paints its own faceplate over this (see
+   FaceplateToolBar); the border keeps room for the plate's edge. */
 QToolBar {
     background: @chrome;
     border: 0;
@@ -414,55 +415,6 @@ QPushButton#transportButton:hover {
 }
 QToolButton#transportButton:pressed,
 QPushButton#transportButton:pressed { background: @pressed; border-color: transparent; }
-QToolBar QComboBox#qualityPicker,
-QToolBar QComboBox#canvasPicker {
-    background: @button;
-    border: 1px solid @buttonEdge;
-    border-top-color: @buttonTop;
-    border-bottom-color: @buttonBottom;
-    border-radius: 5px;
-    padding: 0px 22px 0px 8px;
-    min-height: 18px;
-    max-height: 18px;
-}
-QToolBar QComboBox#qualityPicker:hover,
-QToolBar QComboBox#canvasPicker:hover { background: @buttonHover; }
-QToolBar QToolButton#toolbarPrimary {
-    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 @accentTop, stop: 1 @accent);
-    border: 1px solid @accent;
-    border-radius: 5px;
-    color: @onAccent;
-    font-weight: 600;
-    padding: 0px 8px;
-    /* As tall as the pop-ups beside it. */
-    min-height: 18px;
-    max-height: 18px;
-}
-QToolBar QToolButton#toolbarPrimary:hover { background: @accentTop; }
-QToolBar QToolButton#toolbarPrimary:disabled {
-    color: @buttonDisabledText;
-    background: @buttonDisabled;
-    border-color: @buttonDisabledEdge;
-}
-/* Render: a push button's bezel, as tall as the pop-ups beside it. */
-QToolBar QToolButton#toolbarQuiet {
-    background: @button;
-    border: 1px solid @buttonEdge;
-    border-top-color: @buttonTop;
-    border-bottom-color: @buttonBottom;
-    border-radius: 5px;
-    color: @buttonText;
-    padding: 0px 8px;
-    min-height: 18px;
-    max-height: 18px;
-}
-QToolBar QToolButton#toolbarQuiet:hover { background: @buttonHover; }
-QToolBar QToolButton#toolbarQuiet:pressed { background: @buttonPressed; }
-QToolBar QToolButton#toolbarQuiet:disabled {
-    color: @buttonDisabledText;
-    background: @buttonDisabled;
-    border-color: @buttonDisabledEdge;
-}
 QToolButton#abortButton {
     color: @text;
     background: transparent;
@@ -472,23 +424,31 @@ QToolButton#abortButton {
 QLabel#eyebrow { color: @textSecondary; font-size: 12px; font-weight: 500; letter-spacing: 0px; }
 QLabel#muted { color: @textSecondary; font-size: 11px; }
 QLabel#chatHint { color: @textSecondary; font-size: 11px; padding: 6px 2px 2px; }
-/* The Inspector. A fill means a value can be changed; plain text cannot.
-   Labels, units, counts and summaries are secondary; values and titles are
-   the body ink; the only purple is the focus ring. */
+/* The Inspector. A value that can be changed sits in a recessed well (the
+   row presses it under its clear pop-ups and fields); plain text cannot be
+   changed. Labels, units, counts and summaries are secondary; values the
+   body ink, or the accent once moved from their defaults; the module
+   titles are engraved (painted). */
 QLabel#inspectorLabel, QLabel#inspectorQuiet, QLabel#inspectorNote, QLabel#sectionCount,
 QLabel#sectionSummary, QLabel#effectSummary, QLabel#effectGroup, QLabel#effectMissing,
 QLabel#captionHint, QLabel#masksHint { color: @textSecondary; }
 QLabel#sectionTitle, QLabel#effectName { color: @text; }
+/* Before the switched-off rule, which wins over it. */
+QLineEdit[inspector="true"][changed="true"] { color: @accentText; }
 QLabel#effectName[off="true"],
 QLabel#colorHex[off="true"],
 QLineEdit[inspector="true"][off="true"] { color: @textSecondary; }
 QFrame#inspectorRule, QFrame#inspectorScrollEdge { background: @divider; border: 0; }
 QFrame#inspectorDropLine { background: @textStrong; border: 0; }
-QLineEdit[inspector="true"], QPlainTextEdit[inspector="true"],
-QLineEdit#scrubEditor, QLineEdit#inspectorNameEditor {
+QLineEdit#inspectorNameEditor {
     background: @inspectorField;
     border: 1px solid @inspectorField;
     border-radius: 5px;
+}
+QLineEdit[inspector="true"], QPlainTextEdit[inspector="true"], QLineEdit#scrubEditor {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
 }
 QLineEdit[inspector="true"]:focus, QPlainTextEdit[inspector="true"]:focus,
 QLineEdit#scrubEditor, QLineEdit#inspectorNameEditor { border-color: @focusRing; }
@@ -594,20 +554,24 @@ QComboBox:!editable:disabled {
     background: @buttonDisabled;
     border-color: @buttonDisabledEdge;
 }
-/* The Inspector's pop-ups: its field fill, no bezel, 24px as its fields. */
+/* The Inspector's pop-ups: clear over the well their row presses under
+   them, no bezel, 24px as its fields; a choice moved from its default in
+   the accent. */
 QComboBox[inspector="true"],
 QComboBox[inspector="true"]:!editable,
 QComboBox[inspector="true"]:!editable:hover {
     color: @text;
-    background: @inspectorField;
-    border: 1px solid @inspectorField;
-    border-radius: 5px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
     min-height: 22px;
     max-height: 22px;
 }
+QComboBox[inspector="true"][changed="true"],
+QComboBox[inspector="true"][changed="true"]:!editable { color: @accentText; }
 QComboBox[inspector="true"]:focus,
 QComboBox[inspector="true"]:!editable:focus { border-color: @focusRing; }
-QComboBox[inspector="true"]:!editable:disabled { color: @textDisabled; background: @inspectorField; border-color: @inspectorField; }
+QComboBox[inspector="true"]:!editable:disabled { color: @textDisabled; background: transparent; border-color: transparent; }
 /* The stepper's halves are transparent hit areas; StepperSpinBox draws one
    centred pair of chevrons over them, as the launcher does. */
 QDoubleSpinBox { padding: 2px 18px 2px 7px; }
@@ -1038,29 +1002,37 @@ ads--CTitleBarButton:hover { background: @hover; border-color: transparent; }
 ads--CTitleBarButton:pressed,
 ads--CTitleBarButton:checked { background: @pressed; border-color: transparent; }
 ads--CTitleBarButton:disabled { color: @textSecondary; background: transparent; border-color: transparent; }
-/* A chosen mode in a title strip (the Program panel's mask tools, the
-   Timeline's track height) looks as the chosen mask tool does in Effect
-   Controls: a quiet accent wash with no outline, its symbol the accent,
-   darkening while held. */
+/* A chosen mask tool in the Program panel's title strip looks as the
+   chosen mask tool does in Effect Controls: a quiet accent wash with no
+   outline, its symbol the accent, darkening while held. */
 ads--CTitleBarButton#maskRectangle:checked:enabled,
 ads--CTitleBarButton#maskEllipse:checked:enabled,
-ads--CTitleBarButton#maskPen:checked:enabled,
-ads--CTitleBarButton#trackHeightMini:checked:enabled,
-ads--CTitleBarButton#trackHeightMedium:checked:enabled,
-ads--CTitleBarButton#trackHeightLarge:checked:enabled { background: @accentTint; border-color: transparent; }
+ads--CTitleBarButton#maskPen:checked:enabled { background: @accentTint; border-color: transparent; }
 ads--CTitleBarButton#maskRectangle:checked:enabled:pressed,
 ads--CTitleBarButton#maskEllipse:checked:enabled:pressed,
-ads--CTitleBarButton#maskPen:checked:enabled:pressed,
-ads--CTitleBarButton#trackHeightMini:checked:enabled:pressed,
-ads--CTitleBarButton#trackHeightMedium:checked:enabled:pressed,
-ads--CTitleBarButton#trackHeightLarge:checked:enabled:pressed { background: @accentTintPressed; }
+ads--CTitleBarButton#maskPen:checked:enabled:pressed { background: @accentTintPressed; }
+/* The Timeline's track heights are one bank of latching keys (S, M, L and
+   Fit) the timeline paints: 20x24 each, edge to edge, so the bank's well
+   runs unbroken under them. */
+ads--CTitleBarButton#trackHeightMini,
+ads--CTitleBarButton#trackHeightMedium,
+ads--CTitleBarButton#trackHeightLarge,
+ads--CTitleBarButton#trackHeightFit {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    min-width: 20px;
+    max-width: 20px;
+    min-height: 24px;
+    max-height: 24px;
+}
 ads--CFloatingDockContainer { background: @panel; }
 /* The timeline's tab row: its details after its name, then (on the right)
-   its zoom's − slider +. */
+   its zoom's engraved label and − fader +, which it paints as keys and a
+   fader. */
 QLabel#timelineDetail { color: @textSecondary; font-size: 12px; padding: 2px 0 0 10px; }
-QWidget#timelineZoom QToolButton { background: transparent; border: 0; border-radius: 4px; padding: 0; min-height: 20px; max-height: 20px; }
-QWidget#timelineZoom QToolButton:hover { background: @hover; }
-QWidget#timelineZoom QToolButton:pressed { background: @pressed; }
+QWidget#timelineZoom QToolButton { background: transparent; border: 0; padding: 0; min-height: 20px; max-height: 20px; }
 )QSS"), theme);
 }
 

@@ -45,6 +45,8 @@ struct ProposalChange;
 class CommentRow;
 class StageRail;
 class CommandRegistry;
+class ExportButton;
+class FormatBank;
 class InspectorPanel;
 class EffectsPanel;
 class PresetsPanel;
@@ -76,7 +78,8 @@ private slots:
     void importEditingPreset();
     void showPresetBindings(const QString &path, const QJsonObject &preset);
     void renderPreview();
-    void canvasPresetChanged(int index);
+    // A key of the toolbar's format bank was chosen.
+    void canvasPresetChanged(const QSize &size);
     void addTrack();
     // Run a command from a menu, shortcut, or control: its handler when the
     // window carries it out, otherwise the request it resolves to.
@@ -197,6 +200,9 @@ private:
     // show the playhead's time, the length, and what can be pressed.
     void setupPlayerOverlay();
     void updateTransport();
+    // The rail's VU meter: the program's sound at the playhead while it
+    // plays, from the sound clips' peaks; at rest, its needle falls back.
+    void updateProgramLevel();
     // The phone a portrait picture shows in and its safe zones, and the
     // laptop a wide one shows in: from the stage's rail and Window ▸ Viewer,
     // remembered on this Mac.
@@ -460,8 +466,10 @@ private:
     QPushButton *m_acceptButton = nullptr;
     QPushButton *m_rejectButton = nullptr;
     QFrame *m_proposalBox = nullptr;
-    QComboBox *m_quality = nullptr;
-    QComboBox *m_canvasPreset = nullptr;
+    // The toolbar's right-hand group: the format bank, then Export (its
+    // menu holds the quality and Render Preview).
+    FormatBank *m_formatBank = nullptr;
+    ExportButton *m_exportButton = nullptr;
     QProgressBar *m_exportProgress = nullptr;
 };
 

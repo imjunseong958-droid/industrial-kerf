@@ -1,5 +1,7 @@
 #include "chat_panel.h"
+#include "editor_common.h"
 #include "editor_theme.h"
+#include "program_level.h"
 
 #include <QAbstractTextDocumentLayout>
 #include <QApplication>
@@ -944,6 +946,92 @@ void CommentRow::updateExpander() {
 
 // ---- RailButton -----------------------------------------------------------
 
+namespace {
+
+// A rail button's disc as the hardware finish's raised key, round: its ring
+// over a 1px drop, a face shaded from the top with a line of light inside
+// its top edge; held in, it sits down where its drop was, its face darker
+// with the rim's shadow in it. Lit, a 10x2 amber LED glows at the face's
+// top. Returns the face, and what fills it, so a glyph's gap can be cut in
+// the same colour.
+struct RailDisc {
+    QRectF face;
+    QBrush fill;
+};
+
+// `rect` with its edges on device pixels' edges, so the LED's straight
+// sides land crisp at 1.25x as the keys' do.
+QRectF snapToDevicePixels(const QPainter &painter, const QRectF &rect) {
+    const QTransform t = painter.deviceTransform();
+    bool invertible = false;
+    const QTransform back = t.inverted(&invertible);
+    if (t.type() > QTransform::TxScale || !invertible) return rect;
+    const QRectF device = t.mapRect(rect);
+    return back.mapRect(QRectF(QPointF(std::round(device.left()), std::round(device.top())),
+                               QPointF(std::round(device.right()), std::round(device.bottom()))));
+}
+
+RailDisc paintRailDisc(QPainter &painter, const QRectF &disc, bool latched, bool hovered, bool lit) {
+    const EditorTheme &t = editorTheme();
+    // One device pixel at 1x and 1.25x, two at 2x, as the keys' lines are.
+    const QTransform device = painter.deviceTransform();
+    const qreal scale = std::hypot(device.m11(), device.m12());
+    const qreal line = scale > 0 ? std::max<qreal>(1.0, std::round(scale)) / scale : 1.0;
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(Qt::NoPen);
+    // The ring is a circle a line narrower than the disc, so its drop (or,
+    // held in, the ring itself) fits under it.
+    QRectF ring(disc.left() + line / 2, disc.top(), disc.width() - line, disc.height() - line);
+    if (latched) {
+        ring.translate(0, line);
+    } else {
+        painter.setBrush(t.keyDrop);
+        painter.drawEllipse(ring.translated(0, line));
+    }
+    painter.setBrush(t.keyRing);
+    painter.drawEllipse(ring);
+    RailDisc out;
+    out.face = ring.adjusted(line, line, -line, -line);
+    QPainterPath face;
+    face.addEllipse(out.face);
+    if (latched) {
+        out.fill = t.keyLatched;
+        painter.fillPath(face, out.fill);
+        QColor clear = t.keyLatchedShadow;
+        clear.setAlpha(0);
+        QLinearGradient shade(out.face.topLeft(), out.face.topLeft() + QPointF(0, 5));
+        shade.setColorAt(0, t.keyLatchedShadow);
+        shade.setColorAt(1, clear);
+        painter.fillPath(face, shade);
+    } else {
+        QLinearGradient bevel(out.face.topLeft(), out.face.bottomLeft());
+        bevel.setColorAt(0, t.keyTop);
+        bevel.setColorAt(1, t.keyBottom);
+        out.fill = bevel;
+        painter.fillPath(face, out.fill);
+        painter.fillPath(face.subtracted(face.translated(0, line)), t.keyHighlight);
+    }
+    if (hovered) painter.fillPath(face, t.hover);
+    if (lit) {
+        const QRectF led = snapToDevicePixels(painter, QRectF(out.face.center().x() - 5, out.face.top() + 4, 10, 2));
+        QColor halo = t.keyLed;
+        halo.setAlphaF(0.45);
+        QColor gone = halo;
+        gone.setAlpha(0);
+        QRadialGradient glow(led.center(), 8);
+        glow.setColorAt(0, halo);
+        glow.setColorAt(1, gone);
+        painter.fillPath(face, glow);
+        painter.setBrush(t.keyLed);
+        painter.drawRoundedRect(led, 1, 1);
+    }
+    painter.restore();
+    return out;
+}
+
+} // namespace
+
 RailButton::RailButton(Glyph glyph, QWidget *parent) : QAbstractButton(parent), m_glyph(glyph) {
     setObjectName(QStringLiteral("railButton"));
     setCursor(Qt::PointingHandCursor);
@@ -975,18 +1063,20 @@ void RailButton::paintEvent(QPaintEvent *) {
     const EditorTheme &theme = editorTheme();
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(Qt::NoPen);
-    const QRectF disc = discRect();
-    painter.setBrush(isDown() || underMouse() ? theme.railButtonHover : isChecked() ? theme.railButtonActive : theme.railButton);
-    painter.drawEllipse(disc);
+    // On reads from across the stage: held in, with its LED lit. A press
+    // holds it in while the button is down.
+    const bool hovered = underMouse() && !isDown();
+    const RailDisc disc = paintRailDisc(painter, discRect(), isChecked() || isDown(), hovered, isChecked());
     // A device switched off (the plain card) keeps its name and its
     // glyph, in secondary ink with a slash through it, as the menu says
     // "Laptop · Off".
     const bool device = m_glyph == Glyph::Phone || m_glyph == Glyph::Laptop;
     const bool off = device && isCheckable() && !isChecked();
-    const QColor ink = isChecked() ? theme.railGlyphActive : off ? theme.textSecondary : theme.railGlyph;
+    const QColor ink = off ? theme.textSecondary : theme.railGlyph;
+    // The glyph sits on the face, so it goes down with the key.
+    const QPointF origin = disc.face.center() - QPointF(12, 12);
     painter.save();
-    painter.translate(disc.center() - QPointF(12, 12));
+    painter.translate(origin);
     painter.setPen(QPen(ink, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
     painter.setBrush(Qt::NoBrush);
     switch (m_glyph) {
@@ -1032,17 +1122,25 @@ void RailButton::paintEvent(QPaintEvent *) {
     }
     }
     if (off) {
-        // The slash, over a gap of the disc's colour so it reads across the glyph.
-        painter.setPen(QPen(isDown() || underMouse() ? theme.railButtonHover : theme.railButton, 3.5, Qt::SolidLine, Qt::RoundCap));
-        painter.drawLine(QPointF(4.5, 19.5), QPointF(19.5, 4.5));
+        // The slash, over a gap cut in the face's own shading (and its
+        // hover) so it reads across the glyph.
+        QBrush gap = disc.fill;
+        gap.setTransform(QTransform::fromTranslate(-origin.x(), -origin.y()));
+        const QLineF slash(QPointF(4.5, 19.5), QPointF(19.5, 4.5));
+        painter.setPen(QPen(gap, 3.5, Qt::SolidLine, Qt::RoundCap));
+        painter.drawLine(slash);
+        if (hovered) {
+            painter.setPen(QPen(theme.hover, 3.5, Qt::SolidLine, Qt::RoundCap));
+            painter.drawLine(slash);
+        }
         painter.setPen(QPen(ink, 1.5, Qt::SolidLine, Qt::RoundCap));
-        painter.drawLine(QPointF(4.5, 19.5), QPointF(19.5, 4.5));
+        painter.drawLine(slash);
     }
     painter.restore();
     if (!m_label.isEmpty()) {
         painter.setPen(theme.railLabel);
         painter.setFont(font());
-        painter.drawText(QRectF(0, disc.bottom() + 4, width(), 16), Qt::AlignHCenter | Qt::AlignTop, m_label);
+        painter.drawText(QRectF(0, discRect().bottom() + 4, width(), 16), Qt::AlignHCenter | Qt::AlignTop, m_label);
     }
 }
 
@@ -1053,6 +1151,9 @@ StageRail::StageRail(QWidget *parent) : QWidget(parent) {
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(12);
+    m_meter = new VuMeter;
+    m_meter->setFixedSize(kWidth, kMeterHeight);
+    layout->addWidget(m_meter, 0, Qt::AlignHCenter);
     layout->addStretch(1);
     m_device = new RailButton(RailButton::Glyph::Phone);
     m_device->setObjectName(QStringLiteral("railDevice"));
@@ -1069,6 +1170,26 @@ StageRail::StageRail(QWidget *parent) : QWidget(parent) {
         button->setFixedSize(button->sizeHint());
         layout->addWidget(button, 0, Qt::AlignHCenter);
     }
+}
+
+bool StageRail::event(QEvent *event) {
+    const bool handled = QWidget::event(event);
+    if (event->type() == QEvent::Resize || event->type() == QEvent::LayoutRequest) fitMeter();
+    return handled;
+}
+
+void StageRail::fitMeter() {
+    // The buttons shown, stacked with the layout's spacing; the meter only
+    // where it fits over them with kMeterGap to spare.
+    int buttons = 0;
+    int count = 0;
+    for (const RailButton *button : {m_device, m_safeZones, m_chat}) {
+        if (button->isHidden()) continue;
+        buttons += button->height();
+        ++count;
+    }
+    const int stack = buttons + std::max(0, count - 1) * layout()->spacing();
+    m_meter->setVisible(height() >= stack + kMeterGap + kMeterHeight);
 }
 
 // ---- ChatPanel ------------------------------------------------------------

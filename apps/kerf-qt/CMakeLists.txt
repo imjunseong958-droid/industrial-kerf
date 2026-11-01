@@ -80,6 +80,8 @@ set(KERF_QT_SOURCES
     inspector_presentation.h
     inspector_widgets.cpp
     inspector_widgets.h
+    toolbar_widgets.cpp
+    toolbar_widgets.h
     launcher_style.h
     main_window.cpp
     main_window.h
@@ -89,6 +91,8 @@ set(KERF_QT_SOURCES
     player_overlay.h
     presets_panel.cpp
     presets_panel.h
+    program_level.cpp
+    program_level.h
     project_launcher.cpp
     project_launcher.h
     project_panel.cpp

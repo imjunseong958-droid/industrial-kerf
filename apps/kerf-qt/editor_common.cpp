@@ -2,6 +2,7 @@
 #include "editor_theme.h"
 
 #include <QAbstractItemView>
+#include <QBrush>
 #include <QApplication>
 #include <QComboBox>
 #include <QCoreApplication>
@@ -22,6 +23,7 @@
 #include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QTextEdit>
+#include <QtMath>
 #include <QToolButton>
 
 #include <algorithm>
@@ -906,6 +908,335 @@ QPainterPath maskPath(const QJsonObject &mask) {
         if (mask.value(QStringLiteral("closed")).toBool(true) && points.size() > 2) path.closeSubpath();
     }
     return path;
+}
+
+namespace {
+
+// How many device pixels one logical pixel spans, along x.
+qreal deviceScale(const QPainter &painter) {
+    const QTransform t = painter.deviceTransform();
+    return std::hypot(t.m11(), t.m12());
+}
+
+// One device pixel's worth of line at 1x and 1.25x, two at 2x: a 1px line
+// as the design draws it, never blurred across two device pixels.
+qreal hairline(const QPainter &painter) {
+    const qreal scale = deviceScale(painter);
+    return scale > 0 ? std::max<qreal>(1.0, std::round(scale)) / scale : 1.0;
+}
+
+// `rect` with its edges moved to the nearest device pixel's edge, so its
+// straight sides land crisp. A rotated or sheared painter is left alone.
+QRectF snapToPixels(const QPainter &painter, const QRectF &rect) {
+    const QTransform t = painter.deviceTransform();
+    if (t.type() > QTransform::TxScale) return rect;
+    bool invertible = false;
+    const QTransform back = t.inverted(&invertible);
+    if (!invertible) return rect;
+    const QRectF device = t.mapRect(rect);
+    return back.mapRect(QRectF(QPointF(std::round(device.left()), std::round(device.top())),
+                               QPointF(std::round(device.right()), std::round(device.bottom()))));
+}
+
+// `point` moved to where a shape `size` logical pixels across, centred on
+// it, has its edges on device pixels' edges.
+QPointF snapCentre(const QPainter &painter, const QPointF &point, qreal size) {
+    const QRectF snapped = snapToPixels(painter, QRectF(point - QPointF(size, size) / 2, QSizeF(size, size)));
+    return snapped.center();
+}
+
+QPainterPath roundedPath(const QRectF &rect, qreal radius) {
+    QPainterPath path;
+    const qreal r = std::min({radius, rect.width() / 2, rect.height() / 2});
+    path.addRoundedRect(rect, r, r);
+    return path;
+}
+
+QColor clear(QColor color) {
+    color.setAlpha(0);
+    return color;
+}
+
+// A 1px line of light (or shadow) inside the top of `shape`, following its
+// rounded corners, as CSS's inset 0 1px 0 draws it.
+void innerTopLine(QPainter &painter, const QPainterPath &shape, qreal line, const QColor &color) {
+    painter.fillPath(shape.subtracted(shape.translated(0, line)), color);
+}
+
+// The soft shadow a rim throws `depth` pixels down the inside of `shape`.
+void innerTopShadow(QPainter &painter, const QPainterPath &shape, qreal depth, const QColor &color) {
+    const QRectF bounds = shape.boundingRect();
+    QLinearGradient shade(bounds.topLeft(), bounds.topLeft() + QPointF(0, depth));
+    shade.setColorAt(0, color);
+    shade.setColorAt(1, clear(color));
+    painter.fillPath(shape, shade);
+}
+
+// A recess: `lip` fills the rounded `rect`, then the recess itself (the
+// rect less its bottom line) is laid over it in `fill`, so the lip shows
+// as a 1px line of light below, inside `rect`; then the rim's shadow.
+QPainterPath paintRecess(QPainter &painter, const QRectF &rect, qreal radius, const QBrush &fill, const QColor &lip,
+                         const QColor &shadow, qreal depth) {
+    const qreal line = hairline(painter);
+    const QRectF outer = snapToPixels(painter, rect);
+    const QPainterPath body = roundedPath(outer.adjusted(0, 0, 0, -line), radius);
+    painter.fillPath(roundedPath(outer, radius), lip);
+    painter.fillPath(body, fill);
+    innerTopShadow(painter, body, depth, shadow);
+    return body;
+}
+
+// Whether `text` is Hangul, Han, kana or bopomofo anywhere: written
+// without capitals, and spoilt by tracking.
+bool isCjkText(const QString &text) {
+    for (const char32_t code : text.toUcs4()) {
+        switch (QChar::script(code)) {
+        case QChar::Script_Hangul:
+        case QChar::Script_Han:
+        case QChar::Script_Hiragana:
+        case QChar::Script_Katakana:
+        case QChar::Script_Bopomofo: return true;
+        default: break;
+        }
+    }
+    return false;
+}
+
+// Where the angle `degrees` (0 up, clockwise) puts a point `radius` from `centre`.
+QPointF onDial(const QPointF &centre, qreal radius, qreal degrees) {
+    const qreal radians = qDegreesToRadians(degrees);
+    return centre + QPointF(std::sin(radians), -std::cos(radians)) * radius;
+}
+
+} // namespace
+
+void paintRaisedKey(QPainter &painter, const QRectF &rect, bool latched, bool hovered, bool lit) {
+    const EditorTheme &t = editorTheme();
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(Qt::NoPen);
+    const qreal line = hairline(painter);
+    const qreal radius = 4;
+    const QRectF outer = snapToPixels(painter, rect);
+    // The key's ring sits above its 1px drop; held in, the key has no drop,
+    // as it no longer stands proud of the bank.
+    const QRectF ringRect = latched ? outer : outer.adjusted(0, 0, 0, -line);
+    const QPainterPath ring = roundedPath(ringRect, radius);
+    const QPainterPath face = roundedPath(ringRect.adjusted(line, line, -line, -line), radius - line);
+    if (!latched) painter.fillPath(ring.translated(0, line), t.keyDrop);
+    painter.fillPath(ring, t.keyRing);
+    if (latched) {
+        painter.fillPath(face, t.keyLatched);
+        innerTopShadow(painter, face, std::min<qreal>(4, face.boundingRect().height() / 2), t.keyLatchedShadow);
+    } else {
+        QLinearGradient bevel(face.boundingRect().topLeft(), face.boundingRect().bottomLeft());
+        bevel.setColorAt(0, t.keyTop);
+        bevel.setColorAt(1, t.keyBottom);
+        painter.fillPath(face, bevel);
+        innerTopLine(painter, face, line, t.keyHighlight);
+    }
+    if (hovered) painter.fillPath(face, t.hover);
+    if (lit) {
+        // A 10x2 bar 3px below the key's top, and its glow, kept to the face.
+        const QRectF faceRect = face.boundingRect();
+        const QRectF led = snapToPixels(painter, QRectF(faceRect.center().x() - 5, faceRect.top() + 2, 10, 2));
+        QRadialGradient glow(led.center(), 7);
+        QColor halo = t.keyLed;
+        halo.setAlphaF(0.45);
+        glow.setColorAt(0, halo);
+        glow.setColorAt(1, clear(halo));
+        painter.fillPath(face, glow);
+        painter.fillPath(roundedPath(led, 1), t.keyLed);
+    }
+    painter.restore();
+}
+
+void paintKeyBank(QPainter &painter, const QRectF &rect) {
+    const EditorTheme &t = editorTheme();
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(Qt::NoPen);
+    paintRecess(painter, rect, 6, t.bankWell, t.bankLip, t.bankShadow, 3);
+    painter.restore();
+}
+
+void paintWell(QPainter &painter, const QRectF &rect, qreal radius) {
+    const EditorTheme &t = editorTheme();
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(Qt::NoPen);
+    paintRecess(painter, rect, radius, t.wellFill, t.wellLip, t.wellShadow, 3);
+    painter.restore();
+}
+
+void paintModulePlate(QPainter &painter, const QRectF &rect) {
+    const EditorTheme &t = editorTheme();
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(Qt::NoPen);
+    const qreal line = hairline(painter);
+    const QRectF outer = snapToPixels(painter, rect);
+    const QPainterPath plate = roundedPath(outer.adjusted(line, line, -line, -line), 6 - line);
+    painter.fillPath(roundedPath(outer, 6), t.moduleEdge);
+    painter.fillPath(plate, t.modulePlate);
+    innerTopLine(painter, plate, line, t.moduleHighlight);
+    painter.restore();
+}
+
+void paintGlass(QPainter &painter, const QRectF &rect, qreal radius) {
+    const EditorTheme &t = editorTheme();
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(Qt::NoPen);
+    const QRectF outer = snapToPixels(painter, rect);
+    QLinearGradient glass(outer.topLeft(), outer.bottomLeft());
+    glass.setColorAt(0, t.glassTop);
+    glass.setColorAt(1, t.glassBottom);
+    paintRecess(painter, outer, radius, glass, t.glassLip, t.glassShadow, 4);
+    painter.restore();
+}
+
+void paintLamp(QPainter &painter, const QPointF &centre, qreal diameter, LampState state) {
+    const EditorTheme &t = editorTheme();
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(Qt::NoPen);
+    const QPointF at = snapCentre(painter, centre, diameter);
+    const qreal radius = diameter / 2;
+    QPainterPath dot;
+    dot.addEllipse(at, radius, radius);
+    if (state == LampState::Off) {
+        // A dark lamp is a lens set into the plate: its rim's shadow inside
+        // its top edge.
+        painter.fillPath(dot, t.lampOff);
+        painter.fillPath(dot.subtracted(dot.translated(0, std::max<qreal>(hairline(painter), diameter / 6))), t.wellShadow);
+    } else {
+        const QColor lit = state == LampState::Changed ? t.lampChanged : state == LampState::Kerf ? t.lampKerf : t.lampOk;
+        QColor halo = lit;
+        halo.setAlphaF(0.4);
+        QRadialGradient glow(at, diameter);
+        glow.setColorAt(0.4, halo);
+        glow.setColorAt(1, clear(halo));
+        painter.setBrush(glow);
+        painter.drawEllipse(at, diameter, diameter);
+        // The lens: brighter where the light inside it shows through.
+        QRadialGradient lens(at - QPointF(0, radius / 3), radius * 1.2);
+        lens.setColorAt(0, lit.lighter(135));
+        lens.setColorAt(1, lit);
+        painter.fillPath(dot, lens);
+    }
+    painter.restore();
+}
+
+QFont engravedFont(const QFont &base, const QString &text) {
+    QFont font = base;
+    font.setWeight(QFont::Bold);
+    if (isCjkText(text)) {
+        font.setPixelSize(11);
+        font.setLetterSpacing(QFont::AbsoluteSpacing, 0);
+        font.setCapitalization(QFont::MixedCase);
+    } else {
+        font.setPixelSize(10);
+        font.setLetterSpacing(QFont::AbsoluteSpacing, 1.3);
+        font.setCapitalization(QFont::AllUppercase);
+    }
+    return font;
+}
+
+void drawEngraved(QPainter &painter, const QRectF &rect, int flags, const QString &text) {
+    const EditorTheme &t = editorTheme();
+    painter.save();
+    painter.setFont(engravedFont(painter.font(), text));
+    const qreal line = hairline(painter);
+    // The ink keeps its catch of light inside `rect`: it is set one line up.
+    const QRectF ink = snapToPixels(painter, rect).adjusted(0, 0, 0, -line);
+    painter.setPen(t.engravedHighlight);
+    painter.drawText(ink.translated(0, line), flags, text);
+    painter.setPen(t.engravedInk);
+    painter.drawText(ink, flags, text);
+    painter.restore();
+}
+
+void paintKnob(QPainter &painter, const QRectF &box, double turn) {
+    const EditorTheme &t = editorTheme();
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(Qt::NoPen);
+    const qreal side = std::min(box.width(), box.height());
+    const qreal unit = side / 32;
+    const QPointF centre = snapCentre(painter, box.center(), side);
+    // Seven ticks from -135° to 135°, as the knob's travel runs.
+    painter.setPen(QPen(t.knobTick, std::max<qreal>(hairline(painter), unit), Qt::SolidLine, Qt::RoundCap));
+    for (int tick = 0; tick < 7; ++tick) {
+        const qreal angle = -135 + tick * 45;
+        painter.drawLine(onDial(centre, 12.5 * unit, angle), onDial(centre, 15 * unit, angle));
+    }
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(t.knobRing);
+    painter.drawEllipse(centre, 10.5 * unit, 10.5 * unit);
+    QRadialGradient face(centre, 9.5 * unit, centre + QPointF(-3, -4) * unit);
+    face.setColorAt(0, t.knobFaceLight);
+    face.setColorAt(1, t.knobFaceDark);
+    painter.setBrush(face);
+    painter.drawEllipse(centre, 9.5 * unit, 9.5 * unit);
+    painter.setPen(QPen(t.knobPointer, 1.8 * unit, Qt::SolidLine, Qt::RoundCap));
+    painter.drawLine(onDial(centre, 3 * unit, turn), onDial(centre, 8.5 * unit, turn));
+    painter.restore();
+}
+
+void paintVuMeter(QPainter &painter, const QRectF &rect, double level) {
+    const EditorTheme &t = editorTheme();
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(Qt::NoPen);
+    const QRectF outer = snapToPixels(painter, rect);
+    QLinearGradient bezel(outer.topLeft(), outer.bottomLeft());
+    bezel.setColorAt(0, t.vuBezelTop);
+    bezel.setColorAt(1, t.vuBezelBottom);
+    painter.fillPath(roundedPath(outer, 6), bezel);
+    const qreal inset = std::clamp<qreal>(std::min(outer.width(), outer.height()) / 12, 2, 5);
+    const QRectF faceRect = snapToPixels(painter, outer.adjusted(inset, inset, -inset, -inset));
+    const QPainterPath face = roundedPath(faceRect, 3);
+    painter.fillPath(face, t.vuFace);
+    // Everything printed on the face, and the needle, stays on it.
+    painter.setClipPath(face, Qt::IntersectClip);
+    // The scale sweeps 50° either side of straight up from the pivot at the
+    // face's foot; its radius fits the face either way.
+    const QPointF pivot(faceRect.center().x(), faceRect.bottom() - faceRect.height() * 0.08);
+    const qreal reach = std::min(faceRect.height() * 0.78, faceRect.width() * 0.5 / std::sin(qDegreesToRadians(50.0)));
+    const auto angleAt = [](double along) { return -50.0 + 100.0 * along; };
+    const QRectF arc(pivot - QPointF(reach, reach), QSizeF(2 * reach, 2 * reach));
+    const qreal stroke = std::max<qreal>(hairline(painter), reach / 40);
+    // Qt's arcs start at 3 o'clock and run anticlockwise, in 16ths of a degree.
+    const auto arcSpan = [&](double from, double to) {
+        return std::make_pair(int((90 - angleAt(from)) * 16), int(-(angleAt(to) - angleAt(from)) * 16));
+    };
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(t.vuInk, stroke, Qt::SolidLine, Qt::FlatCap));
+    const auto [start, span] = arcSpan(0, 0.75);
+    painter.drawArc(arc, start, span);
+    painter.setPen(QPen(t.vuRedZone, stroke * 3, Qt::SolidLine, Qt::FlatCap));
+    const auto [redStart, redSpan] = arcSpan(0.75, 1);
+    painter.drawArc(arc.adjusted(-stroke, -stroke, stroke, stroke), redStart, redSpan);
+    for (int tick = 0; tick <= 10; ++tick) {
+        const bool major = tick % 5 == 0;
+        painter.setPen(QPen(tick >= 8 ? t.vuRedZone : t.vuInk, stroke, Qt::SolidLine, Qt::FlatCap));
+        painter.drawLine(onDial(pivot, reach, angleAt(tick / 10.0)),
+                         onDial(pivot, reach + reach * (major ? 0.14 : 0.08), angleAt(tick / 10.0)));
+    }
+    QFont label = painter.font();
+    label.setWeight(QFont::Bold);
+    label.setPixelSize(std::max(7, int(std::lround(reach * 0.2))));
+    painter.setFont(label);
+    painter.setPen(t.vuInk);
+    painter.drawText(QRectF(pivot.x() - reach / 2, pivot.y() - reach * 0.55, reach, reach * 0.25), Qt::AlignCenter,
+                     QStringLiteral("VU"));
+    painter.setPen(QPen(t.vuNeedle, std::max<qreal>(hairline(painter), reach / 45), Qt::SolidLine, Qt::RoundCap));
+    painter.drawLine(pivot, onDial(pivot, reach * 1.1, angleAt(std::clamp(level, 0.0, 1.0))));
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(t.vuNeedle);
+    painter.drawEllipse(pivot, reach * 0.07 + 1, reach * 0.07 + 1);
+    painter.restore();
 }
 
 } // namespace kerf

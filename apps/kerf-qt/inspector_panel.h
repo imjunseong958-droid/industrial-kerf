@@ -24,6 +24,7 @@ class QVBoxLayout;
 
 namespace kerf {
 
+class GlassReadout;
 class GlyphButton;
 class InspectorRow;
 class InspectorSection;
@@ -35,9 +36,10 @@ class ScrubField;
 
 // The Inspector: whatever is selected, at a glance. Its identity header
 // says what the clip is (thumbnail, editable name, kind, track) with its
-// Start, End and Duration in timecode; under it the handful of things one
-// changes, in the order one changes them, with no header; everything else
-// folds into sections whose headers say what has changed in them. With
+// Start, End and Duration in timecode behind one display glass; under it
+// framed modules, the things one changes first open at the top (Transform,
+// Composite, Time) and the rest folded, each header's lamp lit while
+// anything in it differs from its default and saying what did. With
 // several clips it shows what they share ("Mixed" where they differ); with
 // nothing selected, the sequence. Edits leave as typed operations, one per
 // gesture (several clips: one array, so one undo step).
@@ -158,6 +160,8 @@ private:
     void clearBody();
     // The body in the column, scrolled back to where it was for its kind.
     void showBody();
+    // Folded modules one after another join into one rack.
+    void updateRack();
     // A body built for one shape is parked while another shows, and shown
     // again when a clip of its shape is chosen, instead of being built anew
     // (a click between a video and a title clip, say, costs no rebuild).
@@ -172,7 +176,7 @@ private:
     void refreshHeader();
     QList<QImage> thumbnails() const;
     QImage thumbnailOf(const Clip &clip) const;
-    void buildTiming(QHBoxLayout *row);
+    void buildTiming();
 
     // The body, by kind.
     void buildVideo(QVBoxLayout *into, bool generator);
@@ -191,7 +195,9 @@ private:
     void buildMasksSection(QVBoxLayout *into);
     void buildEffectsSection(QVBoxLayout *into, bool openByDefault);
     void buildSourceSection(QVBoxLayout *into);
-    void buildSpeedRow(QVBoxLayout *into);
+    // Time: the speed (and its reverse), when the clips have one.
+    void buildTimeSection(QVBoxLayout *into);
+    void buildSpeedRow(QVBoxLayout *into, int section);
     void buildEffect(QVBoxLayout *into, int index);
     void buildMask(QVBoxLayout *into, const QString &name);
 
@@ -221,6 +227,8 @@ private:
     QJsonArray resetOpsFor(const Target &target, const QJsonObject &def) const;
     void emitOps(const QJsonArray &ops);
     void setOpenSections(const QString &id, bool open, Qt::KeyboardModifiers modifiers);
+    // Whether module `id` opens, as it was left in this kind of clip.
+    bool savedOpen(const QString &id, bool openByDefault) const;
     void saveSections();
     void timingCommitted(const QString &field, double value, double delta, bool relative);
     void resetAll();
@@ -274,7 +282,7 @@ private:
     QLabel *m_kind = nullptr;
     GlyphButton *m_more = nullptr;
     QMenu *m_moreMenu = nullptr;
-    QWidget *m_timing = nullptr;
+    GlassReadout *m_timing = nullptr;
     QList<ScrubField *> m_timingFields;
     QLabel *m_note = nullptr;
     QFrame *m_scrollEdge = nullptr;

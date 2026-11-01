@@ -50,12 +50,18 @@ namespace kerf {
 namespace {
 
 constexpr int kSide = 16;          // the column's side padding
+// The modules' plates sit this far in from the column's edges, so their
+// rows (InspectorSection::kInset further in) keep the header's 16 points.
+constexpr int kPlateInset = kSide - InspectorSection::kInset;
 // Every value field is the same width (InspectorRow::kValueField), alone on
 // its row or beside a slider or pop-up, so the column's fields line up.
 constexpr int kSingleField = InspectorRow::kValueField;
 constexpr int kPairedField = InspectorRow::kValueField;
 // Effects show this many parameters before "N more" (N is 2 or more).
 constexpr int kEffectRowsShown = 5;
+// An effect's second line starts under its name: past the chevron, the
+// power key and the gaps after each.
+constexpr int kEffectTextIndent = 16 + 6 + 22 + 6;
 const char *kFxMime = "application/x-kerf-fx";
 
 // An open effect's "6 more ⌄": the words in 12pt/500 `text` (as Add
@@ -146,6 +152,15 @@ bool sameJson(const QJsonValue &a, const QJsonValue &b) {
     if (a.isDouble() && b.isDouble()) return std::abs(a.toDouble() - b.toDouble()) < 1e-9;
     if (a.isString() && b.isString()) return a.toString().compare(b.toString(), Qt::CaseInsensitive) == 0;
     return a == b;
+}
+
+// A pop-up or text field whose value moved from its default reads in the
+// accent (the style sheet's [changed] rule), as a scrub field's does.
+void markChanged(QWidget *widget, bool changed) {
+    if (!widget || widget->property("changed").toBool() == changed) return;
+    widget->setProperty("changed", changed);
+    widget->style()->unpolish(widget);
+    widget->style()->polish(widget);
 }
 
 QString ratioText(double ratio) {
@@ -249,7 +264,7 @@ InspectorPanel::InspectorPanel(QWidget *parent) : QWidget(parent) {
     m_content->setObjectName(QStringLiteral("inspectorContent"));
     m_scroll->setWidget(m_content);
     m_contentLayout = new QVBoxLayout(m_content);
-    m_contentLayout->setContentsMargins(kSide, 0, kSide, 0);
+    m_contentLayout->setContentsMargins(kPlateInset, 0, kPlateInset, 0);
     m_contentLayout->setSpacing(0);
     m_contentLayout->addStretch(1);
     m_content->installEventFilter(this);
@@ -292,9 +307,15 @@ InspectorPanel::~InspectorPanel() {
 // ------------------------------------------------------------------ state
 
 void InspectorPanel::setState(const QJsonObject &timeline, const QStringList &clips) {
+    QStringList selection = clips;
+    selection.removeAll(QString());
+    // A run of wheel steps on the knob edits the clips it was turned for:
+    // it is sent before others take their place, not when its pause ends.
+    if (selection != m_selection)
+        for (RotationKnob *knob : findChildren<RotationKnob *>())
+            if (knob->isWheeling()) knob->flushWheel();
     m_project = timeline;
-    m_selection = clips;
-    m_selection.removeAll(QString());
+    m_selection = selection;
     refresh();
 }
 
@@ -556,7 +577,9 @@ void InspectorPanel::rebuild() {
     m_bodyWidget = new QWidget;
     m_bodyWidget->setObjectName(QStringLiteral("inspectorBody"));
     auto *body = new QVBoxLayout(m_bodyWidget);
-    body->setContentsMargins(0, 0, 0, 0);
+    // The first module just clear of the glass; each keeps its own gap
+    // under it (none inside a rack of folded ones).
+    body->setContentsMargins(0, 2, 0, 0);
     body->setSpacing(0);
     // The header's closing hairline, which scrolls away with the body.
     auto *rule = new QFrame;
@@ -583,13 +606,22 @@ void InspectorPanel::rebuild() {
         else if (kind == QStringLiteral("caption")) buildCaption(body);
         else buildGenerator(body);
     }
-    // A section's header brings its own hairline: no second one over it.
+    // A module brings its own frame: no hairline over it.
     if (QLayoutItem *next = body->itemAt(1); next && qobject_cast<InspectorSection *>(next->widget())) rule->hide();
     m_bodyCost = cost.elapsed();
     showBody();
 }
 
+void InspectorPanel::updateRack() {
+    const auto folded = [this](qsizetype at) { return at >= 0 && at < m_sections.size() && !m_sections.at(at).section->isOpen(); };
+    for (qsizetype index = 0; index < m_sections.size(); ++index) {
+        InspectorSection *module = m_sections.at(index).section;
+        module->setJoined(folded(index) && folded(index - 1), folded(index) && folded(index + 1));
+    }
+}
+
 void InspectorPanel::showBody() {
+    updateRack();
     m_contentLayout->insertWidget(0, m_bodyWidget);
     m_bodyWidget->show();
     // Back where the body was for this kind, once it is laid out; until
@@ -703,11 +735,7 @@ void InspectorPanel::buildHeader() {
         });
         nameRow->addWidget(m_more, 0, Qt::AlignVCenter);
         layout->addLayout(top);
-        m_timing = new QWidget;
-        m_timing->setObjectName(QStringLiteral("inspectorTiming"));
-        auto *timing = new QHBoxLayout(m_timing);
-        timing->setContentsMargins(0, 0, 0, 0);
-        timing->setSpacing(8);
+        m_timing = new GlassReadout;
         layout->addWidget(m_timing);
         m_note = quietLabel(QString());
         m_note->setObjectName(QStringLiteral("inspectorNote"));
@@ -720,41 +748,41 @@ void InspectorPanel::buildHeader() {
         layout->addWidget(m_note);
         return;
     }
-    // The timing row's fields are made again for the mode: none for the sequence.
-    auto *timing = static_cast<QHBoxLayout *>(m_timing->layout());
-    while (QLayoutItem *item = timing->takeAt(0)) {
-        delete item->widget();
-        delete item;
-    }
+    // The timing's fields are made again for the mode: plain figures for the sequence.
+    m_timing->clearColumns();
     m_timingFields.clear();
-    buildTiming(timing);
+    buildTiming();
     m_name->setEditable(m_mode == Mode::Clip);
 }
 
-void InspectorPanel::buildTiming(QHBoxLayout *row) {
+void InspectorPanel::buildTiming() {
+    const EditorTheme &theme = editorTheme();
     const double fps = m_project.value(QStringLiteral("fps")).toDouble(24.0);
     const bool drop = m_project.value(QStringLiteral("dropFrame")).toBool();
+    // Labelled as a deck's counter: in, out and duration.
     const struct {
         const char *field;
         const char *label;
-    } columns[] = {{"start", "Start"}, {"end", "End"}, {"duration", "Duration"}};
+        const char *name;
+    } columns[] = {{"start", "In", "Start"}, {"end", "Out", "End"}, {"duration", "Dur", "Duration"}};
     for (const auto &column : columns) {
-        auto *cell = new QWidget;
-        auto *layout = new QVBoxLayout(cell);
-        layout->setContentsMargins(0, 0, 0, 0);
-        layout->setSpacing(2);
-        auto *label = quietLabel(QString::fromLatin1(column.label), 11);
-        layout->addWidget(label);
+        const QString name = QString::fromLatin1(column.name);
         if (m_mode == Mode::Sequence) {
-            // Read-only: plain text, no fill.
+            // Read-only: the figures on the glass, nothing to scrub.
             auto *value = new QLabel;
             value->setObjectName(QStringLiteral("timing_%1").arg(QString::fromLatin1(column.field)));
-            value->setFont(sizedFont(value->font(), 12));
+            value->setFont(monoFont(11));
+            value->setStyleSheet(QStringLiteral("color: %1;").arg(theme.glassText.name()));
+            value->setIndent(3);
             value->setFixedHeight(ScrubField::kHeight);
-            layout->addWidget(value);
+            value->setAccessibleName(name);
+            m_timing->addColumn(QString::fromLatin1(column.label), value);
         } else {
             auto *field = newScrubField();
             field->setObjectName(QStringLiteral("timing_%1").arg(QString::fromLatin1(column.field)));
+            field->setGlass(true);
+            field->setAccessibleName(name);
+            field->setToolTip(name);
             NumberFormat format;
             format.kind = NumberFormat::Kind::Timecode;
             format.fps = fps;
@@ -765,15 +793,13 @@ void InspectorPanel::buildTiming(QHBoxLayout *row) {
             format.bigStep = 10.0;
             format.smallStep = 1.0;
             field->setFormat(format);
-            const QString name = QString::fromLatin1(column.field);
-            connect(field, &ScrubField::committed, this, [this, name](double value, double delta, bool relative) {
-                timingCommitted(name, value, delta, relative);
+            const QString edge = QString::fromLatin1(column.field);
+            connect(field, &ScrubField::committed, this, [this, edge](double value, double delta, bool relative) {
+                timingCommitted(edge, value, delta, relative);
             });
-            label->setBuddy(field);
-            layout->addWidget(field);
+            m_timing->addColumn(QString::fromLatin1(column.label), field);
             m_timingFields << field;
         }
-        row->addWidget(cell, 1);
     }
 }
 
@@ -1231,12 +1257,11 @@ QJsonArray InspectorPanel::resetOpsFor(const Target &target, const QJsonObject &
 int InspectorPanel::addSection(QVBoxLayout *into, const QString &id, const QString &title, bool openByDefault) {
     auto *widget = new InspectorSection(id, title);
     into->addWidget(widget);
-    const QVariant saved = QSettings().value(QStringLiteral("editor/inspector/sections/%1").arg(m_kindForSections));
-    const bool open = saved.isValid() ? saved.toStringList().contains(id) : openByDefault;
-    widget->setOpen(open);
+    widget->setOpen(savedOpen(id, openByDefault));
     connect(widget, &InspectorSection::toggled, this, [this, id](bool open, Qt::KeyboardModifiers modifiers) {
         setOpenSections(id, open, modifiers);
     });
+    connect(widget, &InspectorSection::foldChanged, this, &InspectorPanel::updateRack);
     const int index = int(m_sections.size());
     widget->setResetHandler([this, index] {
         QJsonArray ops;
@@ -1266,11 +1291,42 @@ void InspectorPanel::setOpenSections(const QString &id, bool open, Qt::KeyboardM
     saveSections();
 }
 
+namespace {
+// Each module's fold as last left, by id, per kind of clip: a module not
+// yet seen in a kind is missing, and opens or folds as it does by default.
+QString foldsKey(const QString &kind) {
+    return QStringLiteral("editor/inspector/folds/%1").arg(kind);
+}
+// Before, only the list of the modules left open, so a missing id meant
+// folded, whether it was folded by hand or added since.
+QString legacySectionsKey(const QString &kind) {
+    return QStringLiteral("editor/inspector/sections/%1").arg(kind);
+}
+} // namespace
+
+bool InspectorPanel::savedOpen(const QString &id, bool openByDefault) const {
+    QSettings settings;
+    const QVariantMap folds = settings.value(foldsKey(m_kindForSections)).toMap();
+    if (const auto found = folds.constFind(id); found != folds.cend()) return found->toBool();
+    const QVariant legacy = settings.value(legacySectionsKey(m_kindForSections));
+    if (!legacy.isValid()) return openByDefault;
+    // From the old list: what was left open stays open, and a module open
+    // by default that is missing from it was folded by hand. The modules
+    // that came open by default with the hardware finish were folded
+    // before it, or not there at all, so they take their new default.
+    static const QStringList kNewlyOpen{QStringLiteral("transform"), QStringLiteral("compositing"), QStringLiteral("mix"),
+                                        QStringLiteral("text"), QStringLiteral("caption"), QStringLiteral("generator")};
+    if (legacy.toStringList().contains(id)) return true;
+    return openByDefault && kNewlyOpen.contains(id);
+}
+
 void InspectorPanel::saveSections() {
-    QStringList open;
-    for (const SectionEntry &entry : std::as_const(m_sections))
-        if (entry.section->isOpen()) open << entry.section->id();
-    QSettings().setValue(QStringLiteral("editor/inspector/sections/%1").arg(m_kindForSections), open);
+    // Merged into what is saved, so the modules of this kind's other
+    // shapes keep theirs.
+    QSettings settings;
+    QVariantMap folds = settings.value(foldsKey(m_kindForSections)).toMap();
+    for (const SectionEntry &entry : std::as_const(m_sections)) folds.insert(entry.section->id(), entry.section->isOpen());
+    settings.setValue(foldsKey(m_kindForSections), folds);
 }
 
 int InspectorPanel::addRow(QVBoxLayout *into, const QString &label, int section) {
@@ -1396,6 +1452,8 @@ QWidget *InspectorPanel::bindValue(int rowIndex, QHBoxLayout *into, const Target
     const QString type = def.value(QStringLiteral("type")).toString();
     const QString label = presentationLabel(def);
     QWidget *editor = nullptr;
+    // The pop-up or text field that shows a changed value in the accent.
+    QWidget *inked = nullptr;
     std::function<void(const QJsonValue &)> show;
     if (type == QStringLiteral("enum") || type == QStringLiteral("track") || type == QStringLiteral("sound") ||
         type == QStringLiteral("mask")) {
@@ -1421,6 +1479,7 @@ QWidget *InspectorPanel::bindValue(int rowIndex, QHBoxLayout *into, const Target
             combo->setCurrentIndex(std::max(0, index));
         };
         editor = combo;
+        inked = combo;
     } else if (type == QStringLiteral("bool")) {
         auto *toggle = new InspectorSwitch;
         connect(toggle, &QAbstractButton::clicked, this, [this, target, def](bool on) { commitValue(target, def, on); });
@@ -1504,6 +1563,7 @@ QWidget *InspectorPanel::bindValue(int rowIndex, QHBoxLayout *into, const Target
             line->setToolTip(path);
         };
         editor = holder;
+        inked = line;
         into->addWidget(holder, 1);
     } else {
         auto *line = new QLineEdit;
@@ -1515,20 +1575,25 @@ QWidget *InspectorPanel::bindValue(int rowIndex, QHBoxLayout *into, const Target
             line->setText(value.toString());
         };
         editor = line;
+        inked = line;
     }
     if (editor->parentWidget() == nullptr) into->addWidget(editor, 1);
     QString tip = def.value(QStringLiteral("doc")).toString();
     editor->setToolTip(tip.trimmed());
     InspectorRow *r = row(rowIndex);
     Binding binding;
-    binding.refresh = [this, show, target, def, editor, r] {
+    binding.refresh = [this, show, target, def, editor, inked, r] {
         bool animated = false;
+        bool changed = false;
         for (const Clip &clip : std::as_const(m_clips)) {
             if (!targets(clip, target)) continue;
-            show(valueOf(clip, target, def));
+            const QJsonValue value = valueOf(clip, target, def);
+            show(value);
             animated = isAnimated(clip, target);
+            changed = !animated && !sameJson(value, def.value(QStringLiteral("default")));
             break;
         }
+        markChanged(inked, changed);
         editor->setEnabled(!animated);
         if (animated) r->setAnimated(true, QStringLiteral("Animated. Ask Kerf or edit the script to change it."));
     };
@@ -1600,8 +1665,10 @@ void InspectorPanel::buildTransformRows(QVBoxLayout *into, int section, bool fit
         scale->setObjectName(QStringLiteral("prop_scale"));
         if (fitFill) {
             scale->setFixedWidth(kPairedField);
-            auto *fit = new SegmentedField({{QStringLiteral("Fit"), SegmentedField::Glyph::None, QStringLiteral("The whole picture in the frame")},
-                                            {QStringLiteral("Fill"), SegmentedField::Glyph::None, QStringLiteral("The frame filled, edges cropped")}});
+            // Two latching keys: the one that matches the clip is held in.
+            auto *fit = new KeyBank({{QStringLiteral("Fit"), QStringLiteral("The whole picture in the frame"), QStringLiteral("fitKey")},
+                                     {QStringLiteral("Fill"), QStringLiteral("The frame filled, edges cropped"), QStringLiteral("fillKey")}},
+                                    true);
             fit->setObjectName(QStringLiteral("fitFill"));
             row(r)->controls()->addWidget(fit, 1);
             const auto fillScale = [this](const Clip &clip) {
@@ -1625,7 +1692,7 @@ void InspectorPanel::buildTransformRows(QVBoxLayout *into, int section, bool fit
                 }
                 fit->setCurrent(choices.size() == 1 ? *choices.cbegin() : -1);
             });
-            connect(fit, &SegmentedField::activated, this, [this, fillScale](int index) {
+            connect(fit, &KeyBank::activated, this, [this, fillScale](int index) {
                 QJsonArray ops;
                 for (const Clip &clip : std::as_const(m_clips)) {
                     const double fill = std::round(fillScale(clip) * 10000.0) / 10000.0;
@@ -1647,15 +1714,24 @@ void InspectorPanel::buildTransformRows(QVBoxLayout *into, int section, bool fit
         ScrubField *rotation = bindNumber(r, row(r)->controls(), Target{Target::Kind::Prop, QStringLiteral("rotation")}, rotationDef);
         rotation->setObjectName(QStringLiteral("prop_rotation"));
         rotation->setFixedWidth(kSingleField);
-        auto *dial = new RotationDial;
-        row(r)->controls()->addWidget(dial);
+        // The knob beside the field: the field follows it while it turns,
+        // and its release (or a run of wheel steps) is one edit; its
+        // double-click resets every clip, as the row's ↺ does.
+        auto *knob = new RotationKnob;
+        row(r)->controls()->addWidget(knob);
         row(r)->controls()->addStretch(1);
-        m_refreshers.append([this, dial, rotationDef] {
-            dial->setAngle(valueOf(m_clips.first(), Target{Target::Kind::Prop, QStringLiteral("rotation")}, rotationDef).toDouble());
+        m_refreshers.append([this, knob, rotationDef] {
+            const Target target{Target::Kind::Prop, QStringLiteral("rotation")};
+            knob->setDecimals(formatFor(m_clips.first(), rotationDef).decimals);
+            knob->setAngle(valueOf(m_clips.first(), target, rotationDef).toDouble());
+            knob->setEnabled(!isAnimated(m_clips.first(), target));
         });
-        connect(dial, &RotationDial::turned, rotation, &ScrubField::setValue);
-        connect(dial, &RotationDial::released, this, [this, rotationDef](double angle, double start) {
+        connect(knob, &RotationKnob::turned, rotation, &ScrubField::setValue);
+        connect(knob, &RotationKnob::released, this, [this, rotationDef](double angle, double start) {
             commitNumber(Target{Target::Kind::Prop, QStringLiteral("rotation")}, rotationDef, angle, angle - start, m_clips.size() > 1);
+        });
+        connect(knob, &RotationKnob::resetRequested, this, [this, rotationDef] {
+            emitOps(resetOpsFor(Target{Target::Kind::Prop, QStringLiteral("rotation")}, rotationDef));
         });
     }
 }
@@ -1675,9 +1751,16 @@ void InspectorPanel::buildCompositingRows(QVBoxLayout *into, int section) {
     }
 }
 
-void InspectorPanel::buildSpeedRow(QVBoxLayout *into) {
+void InspectorPanel::buildTimeSection(QVBoxLayout *into) {
     if (m_clips.isEmpty() || !std::all_of(m_clips.cbegin(), m_clips.cend(), [](const Clip &c) { return c.clip.contains(QStringLiteral("speed")); })) return;
-    const int r = addRow(into, QStringLiteral("Speed"));
+    // Folded at first, heading the rack: its lamp and summary ("Speed
+    // 200%") say when it changed, and Transform and Composite keep the room.
+    const int section = addSection(into, QStringLiteral("time"), QStringLiteral("Time"));
+    buildSpeedRow(sectionBody(section), section);
+}
+
+void InspectorPanel::buildSpeedRow(QVBoxLayout *into, int section) {
+    const int r = addRow(into, QStringLiteral("Speed"), section);
     auto *field = newScrubField();
     field->setObjectName(QStringLiteral("speed"));
     field->setFixedWidth(kSingleField);
@@ -1821,18 +1904,22 @@ void InspectorPanel::buildAnchorSection(QVBoxLayout *into) {
         bindNumber(r, row(r)->controls(), Target{Target::Kind::Prop, QStringLiteral("anchor_y")}, ay, false, false)->setObjectName(QStringLiteral("prop_anchor_y"));
     }
     if (sx.isEmpty() || sy.isEmpty()) return;
-    // Flip: the sign of each axis's stretch; Stretch: its size.
+    // Flip: the sign of each axis's stretch, a latching key each; Stretch: its size.
     const int flipRow = addRow(sectionBody(section), QStringLiteral("Flip"), section);
     const int stretchRow = addRow(sectionBody(section), QStringLiteral("Stretch"), section);
+    auto *flips = new KeyBank({{QStringLiteral("H"), QStringLiteral("Flip horizontally"), QStringLiteral("flip_H")},
+                               {QStringLiteral("V"), QStringLiteral("Flip vertically"), QStringLiteral("flip_V")}},
+                              false);
+    flips->setObjectName(QStringLiteral("flip"));
+    flips->setFixedWidth(kSingleField);
+    row(flipRow)->controls()->addWidget(flips);
+    int keyIndex = 0;
     for (const auto &[name, def, letter] : {std::tuple{QStringLiteral("scale_x"), sx, QStringLiteral("H")},
                                             std::tuple{QStringLiteral("scale_y"), sy, QStringLiteral("V")}}) {
         const Target target{Target::Kind::Prop, name};
-        auto *toggle = new InspectorSwitch;
-        toggle->setObjectName(QStringLiteral("flip_") + letter);
-        toggle->setToolTip(letter == QStringLiteral("H") ? QStringLiteral("Flip horizontally") : QStringLiteral("Flip vertically"));
-        row(flipRow)->controls()->addWidget(toggle);
-        row(flipRow)->controls()->addWidget(quietLabel(letter));
-        connect(toggle, &QAbstractButton::clicked, this, [this, target, def = def] {
+        const int index = keyIndex++;
+        connect(flips, &KeyBank::activated, this, [this, index, target, def = def](int pressed) {
+            if (pressed != index) return;
             QJsonArray ops;
             for (const Clip &clip : std::as_const(m_clips)) {
                 if (isAnimated(clip, target)) continue;
@@ -1842,9 +1929,8 @@ void InspectorPanel::buildAnchorSection(QVBoxLayout *into) {
             emitOps(ops);
         });
         Binding flip;
-        flip.refresh = [this, toggle, target, def = def] {
-            const QSignalBlocker blocker(toggle);
-            toggle->setChecked(valueOf(m_clips.first(), target, def).toDouble() < 0);
+        flip.refresh = [this, flips, index, target, def = def] {
+            flips->setLatched(index, valueOf(m_clips.first(), target, def).toDouble() < 0);
         };
         flip.changed = [this, target, def = def] { return valueOf(m_clips.first(), target, def).toDouble() < 0; };
         flip.summary = [this, target, def = def, letter = letter] {
@@ -2001,9 +2087,13 @@ void InspectorPanel::buildSourceSection(QVBoxLayout *into) {
 
 void InspectorPanel::buildVideo(QVBoxLayout *into, bool generator) {
     const bool fit = !generator;
-    buildTransformRows(into, -1, fit);
-    buildCompositingRows(into, -1);
-    buildSpeedRow(into);
+    // What one changes first, open at the top (Transform, Composite), then
+    // the rack of folded ones, Time first.
+    const int transform = addSection(into, QStringLiteral("transform"), QStringLiteral("Transform"), true);
+    buildTransformRows(sectionBody(transform), transform, fit);
+    const int compositing = addSection(into, QStringLiteral("compositing"), QStringLiteral("Composite"), true);
+    buildCompositingRows(sectionBody(compositing), compositing);
+    buildTimeSection(into);
     buildCropSection(into);
     buildAnchorSection(into);
     buildLinkedAudioSection(into);
@@ -2016,12 +2106,15 @@ void InspectorPanel::buildAudio(QVBoxLayout *into) {
     const Clip &first = m_clips.first();
     const QJsonObject gain = defNamed(first, QStringLiteral("gain"));
     const QJsonObject pan = defNamed(first, QStringLiteral("pan"));
+    // The level and the rest of the sound clip's own properties, open.
+    const int mix = addSection(into, QStringLiteral("mix"), QStringLiteral("Mix"), true);
+    QVBoxLayout *body = sectionBody(mix);
     if (!gain.isEmpty()) {
-        const int r = addRow(into, QStringLiteral("Volume"));
+        const int r = addRow(body, QStringLiteral("Volume"), mix);
         bindNumber(r, row(r)->controls(), Target{Target::Kind::Prop, QStringLiteral("gain")}, gain, true)->setObjectName(QStringLiteral("prop_gain"));
     }
     if (!pan.isEmpty()) {
-        const int r = addRow(into, QStringLiteral("Pan"));
+        const int r = addRow(body, QStringLiteral("Pan"), mix);
         bindNumber(r, row(r)->controls(), Target{Target::Kind::Prop, QStringLiteral("pan")}, pan, true)->setObjectName(QStringLiteral("prop_pan"));
     }
     // Anything else the catalog gives a sound clip.
@@ -2029,13 +2122,13 @@ void InspectorPanel::buildAudio(QVBoxLayout *into) {
         const QJsonObject def = value.toObject();
         const QString name = def.value(QStringLiteral("name")).toString();
         if (name == QStringLiteral("gain") || name == QStringLiteral("pan")) continue;
-        const int r = addRow(into, presentationLabel(def));
+        const int r = addRow(body, presentationLabel(def), mix);
         if (def.value(QStringLiteral("type")).toString() == QStringLiteral("number"))
             bindNumber(r, row(r)->controls(), Target{Target::Kind::Prop, name}, def, def.contains(QStringLiteral("max")))->setObjectName(QStringLiteral("prop_") + name);
         else
             bindValue(r, row(r)->controls(), Target{Target::Kind::Prop, name}, def)->setObjectName(QStringLiteral("prop_") + name);
     }
-    buildSpeedRow(into);
+    buildTimeSection(into);
     buildEffectsSection(into, false);
     buildSourceSection(into);
 }
@@ -2048,8 +2141,11 @@ void InspectorPanel::buildTitle(QVBoxLayout *into) {
     const QJsonObject color = defNamed(first, QStringLiteral("color"));
     const QJsonObject align = defNamed(first, QStringLiteral("align"));
     const QJsonObject y = defNamed(first, QStringLiteral("y"));
+    // The words and how they are set, open at the top.
+    const int words = addSection(into, QStringLiteral("text"), QStringLiteral("Text"), true);
+    QVBoxLayout *body = sectionBody(words);
     if (!text.isEmpty()) {
-        const int r = addRow(into, QStringLiteral("Text"));
+        const int r = addRow(body, QStringLiteral("Text"), words);
         InspectorRow *textRow = row(r);
         textRow->setMinimumHeight(InspectorRow::kHeight);
         textRow->setMaximumHeight(QWIDGETSIZE_MAX);
@@ -2082,7 +2178,7 @@ void InspectorPanel::buildTitle(QVBoxLayout *into) {
         m_rows[r].values.append(binding);
     }
     if (!font.isEmpty() || !size.isEmpty()) {
-        const int r = addRow(into, QStringLiteral("Font"));
+        const int r = addRow(body, QStringLiteral("Font"), words);
         if (!font.isEmpty()) {
             auto *combo = new FontPopup;
             combo->setObjectName(QStringLiteral("titleFont"));
@@ -2125,6 +2221,7 @@ void InspectorPanel::buildTitle(QVBoxLayout *into) {
                     index = 0;
                 }
                 combo->setCurrentIndex(index);
+                markChanged(combo, !sameJson(valueOf(m_clips.first(), target, font), font.value(QStringLiteral("default"))));
             };
             binding.changed = [this, target, font] { return !sameJson(valueOf(m_clips.first(), target, font), font.value(QStringLiteral("default"))); };
             binding.resetOps = [this, target, font] { return resetOpsFor(target, font); };
@@ -2132,7 +2229,7 @@ void InspectorPanel::buildTitle(QVBoxLayout *into) {
         }
         if (!size.isEmpty()) {
             // On a row of its own: the family needs the pop-up's whole width.
-            const int sizeRow = font.isEmpty() ? r : addRow(into, QStringLiteral("Size"));
+            const int sizeRow = font.isEmpty() ? r : addRow(body, QStringLiteral("Size"), words);
             ScrubField *field = bindNumber(sizeRow, row(sizeRow)->controls(), Target{Target::Kind::Prop, QStringLiteral("size")}, size);
             field->setObjectName(QStringLiteral("titleSize"));
             field->setFixedWidth(kPairedField);
@@ -2140,11 +2237,11 @@ void InspectorPanel::buildTitle(QVBoxLayout *into) {
         }
     }
     if (!color.isEmpty()) {
-        const int r = addRow(into, QStringLiteral("Colour"));
+        const int r = addRow(body, QStringLiteral("Colour"), words);
         bindValue(r, row(r)->controls(), Target{Target::Kind::Prop, QStringLiteral("color")}, color)->setObjectName(QStringLiteral("titleColor"));
     }
     if (!align.isEmpty()) {
-        const int r = addRow(into, QStringLiteral("Align"));
+        const int r = addRow(body, QStringLiteral("Align"), words);
         auto *field = new SegmentedField({{QString(), SegmentedField::Glyph::AlignLeft, QStringLiteral("Left")},
                                           {QString(), SegmentedField::Glyph::AlignCenter, QStringLiteral("Centre")},
                                           {QString(), SegmentedField::Glyph::AlignRight, QStringLiteral("Right")}});
@@ -2153,6 +2250,7 @@ void InspectorPanel::buildTitle(QVBoxLayout *into) {
         row(r)->controls()->addWidget(field);
         row(r)->controls()->addStretch(1);
         const QStringList values{QStringLiteral("left"), QStringLiteral("center"), QStringLiteral("right")};
+        field->setDefaultIndex(int(values.indexOf(align.value(QStringLiteral("default")).toString())));
         const Target target{Target::Kind::Prop, QStringLiteral("align")};
         connect(field, &SegmentedField::activated, this, [this, values, target, align](int index) { commitValue(target, align, values.value(index)); });
         Binding binding;
@@ -2163,13 +2261,15 @@ void InspectorPanel::buildTitle(QVBoxLayout *into) {
     }
     if (!y.isEmpty()) {
         // Where the line sits: y of -0.30, 0, or +0.28 frame heights.
-        const int r = addRow(into, QStringLiteral("Place"));
+        const int r = addRow(body, QStringLiteral("Place"), words);
         auto *field = new SegmentedField({{QStringLiteral("Top"), SegmentedField::Glyph::None, QStringLiteral("At the top")},
                                           {QStringLiteral("Middle"), SegmentedField::Glyph::None, QStringLiteral("In the middle")},
                                           {QStringLiteral("Lower"), SegmentedField::Glyph::None, QStringLiteral("On the lower third")}});
         field->setObjectName(QStringLiteral("titlePlace"));
         row(r)->controls()->addWidget(field, 1);
         const QList<double> places{-0.30, 0.0, 0.28};
+        for (int index = 0; index < places.size(); ++index)
+            if (std::abs(places.at(index) - y.value(QStringLiteral("default")).toDouble()) < 1e-3) field->setDefaultIndex(index);
         const Target target{Target::Kind::Prop, QStringLiteral("y")};
         connect(field, &SegmentedField::activated, this, [this, places, target, y](int index) {
             commitValue(target, y, std::abs(places.value(index)) < 1e-9 ? QJsonValue(0.0) : QJsonValue(places.value(index)));
@@ -2184,7 +2284,7 @@ void InspectorPanel::buildTitle(QVBoxLayout *into) {
     }
     const int transform = addSection(into, QStringLiteral("transform"), QStringLiteral("Transform"));
     buildTransformRows(sectionBody(transform), transform, false);
-    const int compositing = addSection(into, QStringLiteral("compositing"), QStringLiteral("Compositing"));
+    const int compositing = addSection(into, QStringLiteral("compositing"), QStringLiteral("Composite"));
     buildCompositingRows(sectionBody(compositing), compositing);
     buildCropSection(into);
     buildAnchorSection(into);
@@ -2194,11 +2294,13 @@ void InspectorPanel::buildTitle(QVBoxLayout *into) {
 
 void InspectorPanel::buildSolid(QVBoxLayout *into) {
     const QJsonObject color = defNamed(m_clips.first(), QStringLiteral("color"));
+    // Its colour with how it is laid over what is under it, open.
+    const int compositing = addSection(into, QStringLiteral("compositing"), QStringLiteral("Composite"), true);
     if (!color.isEmpty()) {
-        const int r = addRow(into, QStringLiteral("Colour"));
+        const int r = addRow(sectionBody(compositing), QStringLiteral("Colour"), compositing);
         bindValue(r, row(r)->controls(), Target{Target::Kind::Prop, QStringLiteral("color")}, color)->setObjectName(QStringLiteral("solidColor"));
     }
-    buildCompositingRows(into, -1);
+    buildCompositingRows(sectionBody(compositing), compositing);
     const int transform = addSection(into, QStringLiteral("transform"), QStringLiteral("Transform"));
     buildTransformRows(sectionBody(transform), transform, false);
     buildCropSection(into);
@@ -2208,7 +2310,8 @@ void InspectorPanel::buildSolid(QVBoxLayout *into) {
 }
 
 void InspectorPanel::buildAdjustment(QVBoxLayout *into) {
-    buildCompositingRows(into, -1);
+    const int compositing = addSection(into, QStringLiteral("compositing"), QStringLiteral("Composite"), true);
+    buildCompositingRows(sectionBody(compositing), compositing);
     buildEffectsSection(into, true);
     const int transform = addSection(into, QStringLiteral("transform"), QStringLiteral("Transform"));
     buildTransformRows(sectionBody(transform), transform, false);
@@ -2219,7 +2322,8 @@ void InspectorPanel::buildAdjustment(QVBoxLayout *into) {
 void InspectorPanel::buildCaption(QVBoxLayout *into) {
     // Captions carry no properties; the text is read-only until the editor
     // can set it.
-    const int r = addRow(into, QStringLiteral("Text"));
+    const int words = addSection(into, QStringLiteral("caption"), QStringLiteral("Caption"), true);
+    const int r = addRow(sectionBody(words), QStringLiteral("Text"), words);
     InspectorRow *textRow = row(r);
     textRow->setMaximumHeight(QWIDGETSIZE_MAX);
     textRow->label()->setAlignment(Qt::AlignLeft | Qt::AlignTop);
@@ -2259,10 +2363,11 @@ void InspectorPanel::buildCaption(QVBoxLayout *into) {
 void InspectorPanel::buildGenerator(QVBoxLayout *into) {
     // A generator the table does not know: its own parameters first.
     const QJsonArray params = m_project.value(QStringLiteral("generators")).toObject().value(m_clips.first().clip.value(QStringLiteral("fx")).toString()).toArray();
+    const int own = params.isEmpty() ? -1 : addSection(into, QStringLiteral("generator"), kindName(m_clips.first()), true);
     for (const QJsonValue &value : params) {
         const QJsonObject def = value.toObject();
         const QString name = def.value(QStringLiteral("name")).toString();
-        const int r = addRow(into, presentationLabel(def));
+        const int r = addRow(sectionBody(own), presentationLabel(def), own);
         if (def.value(QStringLiteral("type")).toString() == QStringLiteral("number"))
             bindNumber(r, row(r)->controls(), Target{Target::Kind::Prop, name}, def, def.contains(QStringLiteral("max")))->setObjectName(QStringLiteral("prop_") + name);
         else
@@ -2270,7 +2375,7 @@ void InspectorPanel::buildGenerator(QVBoxLayout *into) {
     }
     const int transform = addSection(into, QStringLiteral("transform"), QStringLiteral("Transform"));
     buildTransformRows(sectionBody(transform), transform, false);
-    const int compositing = addSection(into, QStringLiteral("compositing"), QStringLiteral("Compositing"));
+    const int compositing = addSection(into, QStringLiteral("compositing"), QStringLiteral("Composite"));
     buildCompositingRows(sectionBody(compositing), compositing);
     buildCropSection(into);
     buildAnchorSection(into);
@@ -2692,7 +2797,7 @@ void InspectorPanel::buildEffect(QVBoxLayout *into, int index) {
     auto *chevron = new GlyphButton(GlyphButton::Glyph::Chevron);
     chevron->setObjectName(QStringLiteral("effectChevron"));
     row->addWidget(chevron);
-    auto *enabled = new InspectorSwitch;
+    auto *enabled = new PowerKey;
     enabled->setObjectName(QStringLiteral("effectEnabled"));
     enabled->setToolTip(def.value(QStringLiteral("doc")).toString(doc));
     connect(enabled, &QAbstractButton::clicked, this, [this, index](bool on) {
@@ -2715,7 +2820,7 @@ void InspectorPanel::buildEffect(QVBoxLayout *into, int index) {
     // Folded: the values that differ from their defaults, on a second line.
     auto *summary = quietLabel(QString());
     summary->setObjectName(QStringLiteral("effectSummary"));
-    summary->setContentsMargins(22 + 6 + 26 + 6 - 16, 0, 0, 6);
+    summary->setContentsMargins(kEffectTextIndent, 0, 0, 6);
     summary->setMinimumWidth(0);
     summary->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     layout->addWidget(summary);
@@ -2818,7 +2923,7 @@ void InspectorPanel::buildEffect(QVBoxLayout *into, int index) {
     if (def.isEmpty() && doc.isEmpty()) {
         auto *missing = quietLabel(QStringLiteral("Not in this version of Kerf"));
         missing->setObjectName(QStringLiteral("effectMissing"));
-        missing->setContentsMargins(22 + 6 + 26 + 6 - 16, 0, 0, 6);
+        missing->setContentsMargins(kEffectTextIndent, 0, 0, 6);
         layout->addWidget(missing);
     }
     layout->addWidget(params);
@@ -2994,9 +3099,9 @@ void InspectorPanel::fitScrollBar() {
     // its rows keep the header's right edge.
     QScrollBar *bar = m_scroll->verticalScrollBar();
     const bool takesRoom = bar->isVisibleTo(m_scroll) && !bar->style()->styleHint(QStyle::SH_ScrollBar_Transient, nullptr, bar);
-    const int right = takesRoom ? std::max(0, kSide - bar->sizeHint().width()) : kSide;
+    const int right = takesRoom ? std::max(0, kPlateInset - bar->sizeHint().width()) : kPlateInset;
     if (m_contentLayout->contentsMargins().right() == right) return;
-    m_contentLayout->setContentsMargins(kSide, 0, right, 0);
+    m_contentLayout->setContentsMargins(kPlateInset, 0, right, 0);
     m_contentLayout->activate();
 }
 

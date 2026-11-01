@@ -14,7 +14,9 @@
 #include "editor_theme.h"
 #include "media_artwork.h"
 #include "timeline_widget.h"
+#include "toolbar_widgets.h"
 #include "player_overlay.h"
+#include "program_level.h"
 #include "viewer_widget.h"
 #ifdef Q_OS_MACOS
 #include "macos_window.h"
@@ -399,9 +401,10 @@ void MainWindow::importMedia() {
 }
 
 void MainWindow::exportProject() {
-    const QString quality = m_quality->currentData().toString();
+    // The quality chosen in Export's menu: Master unless Draft was picked.
+    const QString quality = m_exportButton->quality();
     if (!execute(QStringLiteral("file.export"), QJsonObject{{QStringLiteral("quality"), quality}})) return;
-    addActivity(QStringLiteral("export"), QStringLiteral("Export started (%1)").arg(m_quality->currentText()));
+    addActivity(QStringLiteral("export"), QStringLiteral("Export started (%1)").arg(m_exportButton->qualityName()));
 }
 
 void MainWindow::exportEditingPreset() {
@@ -609,23 +612,16 @@ void MainWindow::renderPreview() {
     updateCommandStates();
 }
 
-void MainWindow::canvasPresetChanged(int index) {
-    if (m_updatingCanvasPreset || !m_connected || index < 0) return;
-    const QStringList dimensions = m_canvasPreset->itemData(index).toString().split(QLatin1Char('x'));
-    if (dimensions.size() != 2) {
-        syncCanvasPreset(m_canvasSize);
-        return;
-    }
-    bool widthOk = false;
-    bool heightOk = false;
-    const int width = dimensions.at(0).toInt(&widthOk);
-    const int height = dimensions.at(1).toInt(&heightOk);
-    if (!widthOk || !heightOk || width < 2 || height < 2) {
+void MainWindow::canvasPresetChanged(const QSize &size) {
+    if (m_updatingCanvasPreset) return;
+    // The bank latched the key already; anything that cannot become the
+    // project's format lets it go back to the format the project has.
+    if (!m_connected || size.width() < 2 || size.height() < 2) {
         syncCanvasPreset(m_canvasSize);
         return;
     }
     if (!execute(QStringLiteral("sequence.setFormat"),
-                 QJsonObject{{QStringLiteral("width"), width}, {QStringLiteral("height"), height}}))
+                 QJsonObject{{QStringLiteral("width"), size.width()}, {QStringLiteral("height"), size.height()}}))
         syncCanvasPreset(m_canvasSize);
 }
 
@@ -1594,7 +1590,7 @@ void MainWindow::rejectProposal() {
 bool MainWindow::eventFilter(QObject *object, QEvent *event) {
     if (object == m_preferences && event->type() == QEvent::Show) fitPreferences();
     // The title stays centred as the toolbar, or a group beside it, changes.
-    if ((object == m_toolbar || object == m_toolbarLeftEnd || object == m_quality) &&
+    if ((object == m_toolbar || object == m_toolbarLeftEnd || object == m_formatBank) &&
         (event->type() == QEvent::Resize || event->type() == QEvent::Move))
         layoutProjectTitle();
 #if KERF_EDITOR_OWN_TITLE_BAR
@@ -2363,25 +2359,13 @@ void MainWindow::buildUi() {
 }
 
 void MainWindow::syncCanvasPreset(const QSize &size) {
-    if (!m_canvasPreset || !size.isValid()) return;
+    if (!m_formatBank || !size.isValid()) return;
     m_canvasSize = size;
     layoutProjectTitle();
-    const QSignalBlocker blocker(m_canvasPreset);
+    // The bank latches the preset's key, or none for a custom size, and
+    // names the format in its tooltip; it does not ask for a change.
     m_updatingCanvasPreset = true;
-    const QString key = QStringLiteral("%1x%2").arg(size.width()).arg(size.height());
-    int index = m_canvasPreset->findData(key);
-    if (index < 0) {
-        index = m_canvasPreset->findData(QStringLiteral("custom"));
-        const QString label = canvasSizeLabel(size);
-        if (index < 0) {
-            m_canvasPreset->addItem(label, QStringLiteral("custom"));
-            index = m_canvasPreset->count() - 1;
-        } else {
-            m_canvasPreset->setItemText(index, label);
-        }
-    }
-    m_canvasPreset->setCurrentIndex(index);
-    m_canvasPreset->setToolTip(QStringLiteral("Project format: %1 × %2").arg(size.width()).arg(size.height()));
+    m_formatBank->setCanvasSize(size);
     m_updatingCanvasPreset = false;
 }
 
@@ -2613,7 +2597,9 @@ void MainWindow::setupActions() {
         m_commands->action(it.key())->setChecked(!m_workspace->panel(it.value())->isClosed());
     }
 
-    auto *toolbar = addToolBar(QStringLiteral("Main"));
+    // The faceplate: the plate the toolbar's controls are set into.
+    auto *toolbar = new FaceplateToolBar(QStringLiteral("Main"), this);
+    addToolBar(toolbar);
     m_toolbar = toolbar;
     toolbar->setMovable(false);
     toolbar->setIconSize(QSize(kToolbarIconSize, kToolbarIconSize));
@@ -2679,37 +2665,25 @@ void MainWindow::setupActions() {
     spacer->setStyleSheet(QStringLiteral("background: transparent"));
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     toolbar->addWidget(spacer);
-    m_quality = new QComboBox;
-    m_quality->setObjectName(QStringLiteral("qualityPicker"));
-    m_quality->setSizeAdjustPolicy(QComboBox::AdjustToContents);
-    m_quality->setToolTip(QStringLiteral("Export quality"));
-    // The finished file first and by default: Export once made a 360p,
-    // 15 fps draft unless this was changed, under a name ("Preview") that
-    // read as a view, not as what the file would be.
-    m_quality->addItem(QStringLiteral("Master"), QStringLiteral("full"));
-    m_quality->setItemData(0, QStringLiteral("The project's own size and frame rate"), Qt::ToolTipRole);
-    m_quality->addItem(QStringLiteral("Draft"), QStringLiteral("preview"));
-    m_quality->setItemData(1, QStringLiteral("360p at 15 fps, quick to make and share for review"), Qt::ToolTipRole);
-    toolbar->addWidget(m_quality);
+    // The project's format as a bank of latching keys, one per preset, the
+    // shape of each drawn on it; the current one is held in, its LED lit.
+    m_formatBank = new FormatBank;
+    connect(m_formatBank, &FormatBank::formatChosen, this, &MainWindow::canvasPresetChanged);
+    toolbar->addWidget(m_formatBank);
     controlSpace();
-    m_canvasPreset = new QComboBox;
-    m_canvasPreset->setObjectName(QStringLiteral("canvasPicker"));
-    m_canvasPreset->setSizeAdjustPolicy(QComboBox::AdjustToContents);
-    // The presets named as the window's subtitle and the Inspector's Frame
-    // size name them: "1:1 · 1080 × 1080".
-    for (const CanvasPreset &preset : canvasPresets())
-        m_canvasPreset->addItem(canvasSizeLabel(QSize(preset.width, preset.height)),
-                                QStringLiteral("%1x%2").arg(preset.width).arg(preset.height));
-    m_canvasPreset->setToolTip(QStringLiteral("Project format"));
-    connect(m_canvasPreset, qOverload<int>(&QComboBox::currentIndexChanged),
-            this, &MainWindow::canvasPresetChanged);
-    toolbar->addWidget(m_canvasPreset);
-    controlSpace();
-    if (auto *exportButton = toolbarCommand(QStringLiteral("file.export"), QStringLiteral("Export")))
-        exportButton->setObjectName(QStringLiteral("toolbarPrimary"));
-    controlSpace();
-    if (auto *renderButton = toolbarCommand(QStringLiteral("sequence.renderPreview"), QStringLiteral("Render")))
-        renderButton->setObjectName(QStringLiteral("toolbarQuiet"));
+    // Export, the one key in the accent. Its chip names the quality it
+    // makes; its menu picks Master (the finished file, first and by
+    // default) or Draft, and holds Render Preview, which had a button of
+    // its own beside it. The menu's Master names the size and rate it makes.
+    m_exportButton = new ExportButton(m_commands->action(QStringLiteral("file.export")),
+                                      m_commands->action(QStringLiteral("sequence.renderPreview")));
+    connect(m_exportButton, &ExportButton::menuAboutToShow, this, [this] {
+        const QString rate = QStringLiteral("%1 fps").arg(QString::number(m_fps, 'g', 5));
+        m_exportButton->setMasterDetail(m_canvasSize.isValid()
+            ? QStringLiteral("%1\u2009×\u2009%2 · %3").arg(m_canvasSize.width()).arg(m_canvasSize.height()).arg(rate)
+            : rate);
+    });
+    toolbar->addWidget(m_exportButton);
     // Last, over the column it opens, as the comments button beside a Short
     // and the inspector switch at the end of a macOS toolbar: Kerf's
     // conversation. It ends where the banners' and the agent's bar's
@@ -2729,7 +2703,7 @@ void MainWindow::setupActions() {
     m_projectSubtitle = new QLabel(toolbar);
     m_projectSubtitle->setObjectName(QStringLiteral("projectSubtitle"));
     m_projectSubtitle->setAlignment(Qt::AlignCenter);
-    for (QWidget *edge : {static_cast<QWidget *>(m_toolbarLeftEnd), static_cast<QWidget *>(m_quality)})
+    for (QWidget *edge : {static_cast<QWidget *>(m_toolbarLeftEnd), static_cast<QWidget *>(m_formatBank)})
         if (edge) edge->installEventFilter(this);
     updateCommandStates();
 }
@@ -2785,7 +2759,7 @@ void MainWindow::fitTitleBar() {
 }
 
 void MainWindow::layoutProjectTitle() {
-    if (!m_projectTitle || !m_toolbar || !m_toolbarLeftEnd || !m_quality) return;
+    if (!m_projectTitle || !m_toolbar || !m_toolbarLeftEnd || !m_formatBank) return;
     m_projectTitle->ensurePolished();
     m_projectSubtitle->ensurePolished();
     const QFontMetrics metrics(m_projectTitle->font());
@@ -2793,7 +2767,7 @@ void MainWindow::layoutProjectTitle() {
     const QString subtitle = projectSubtitle();
     // The room between the groups, and the title's own width.
     const int left = m_toolbarLeftEnd->geometry().right() + 1 + kTitleClearance;
-    const int right = m_quality->geometry().left() - kTitleClearance;
+    const int right = m_formatBank->geometry().left() - kTitleClearance;
     const int natural = std::max(metrics.horizontalAdvance(m_projectName), subMetrics.horizontalAdvance(subtitle)) + 2;
     const int width = std::min(natural, std::max(0, right - left));
     // Centred on the window (the toolbar spans it); moved aside when a group
@@ -3420,7 +3394,17 @@ void MainWindow::setupPlayerOverlay() {
     });
 }
 
+void MainWindow::updateProgramLevel() {
+    VuMeter *meter = m_rail ? m_rail->meter() : nullptr;
+    if (!meter) return;
+    // Paused, nothing sounds, whatever lies under the playhead.
+    meter->setPlaying(m_playing);
+    meter->setTarget(m_playing ? vuNeedle(programPeak(m_project, m_artwork, m_playhead)) : 0.0);
+}
+
 void MainWindow::updateTransport() {
+    // Every clock tick, play and pause, seek and new snapshot comes here.
+    updateProgramLevel();
     PlayerOverlay *overlay = m_viewer ? m_viewer->overlay() : nullptr;
     if (!overlay) return;
     overlay->setTime(m_playhead, m_duration, m_fps);
@@ -4327,7 +4311,7 @@ void MainWindow::setConnection(const QString &status, const QString &message) {
     m_agentStatus->setText(m_connected ? (m_agentBusy ? QStringLiteral("Thinking") : QStringLiteral("Ready"))
         : status == QStringLiteral("connecting") ? QStringLiteral("Connecting") : QStringLiteral("Offline"));
     m_timeline->setEnabled(m_connected);
-    if (m_canvasPreset) m_canvasPreset->setEnabled(m_connected);
+    if (m_formatBank) m_formatBank->setEnabled(m_connected);
     m_chatInput->setEnabled(m_connected && !m_agentBusy);
     if (m_statusConnection) {
         const QString state = m_connected ? QStringLiteral("ready")
