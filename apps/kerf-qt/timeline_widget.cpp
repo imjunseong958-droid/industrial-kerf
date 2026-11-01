@@ -444,7 +444,16 @@ void TimelineWidget::paintEvent(QPaintEvent *event) {
         if (!cached.isEmpty()) blitLaneCache(p, m_laneCache, cached, m_laneCacheRect.topLeft());
         direct -= cached;
     }
-    for (const QRect &visible : direct) paintLanes(p, visible);
+    // A strip outside the cache goes through a pixmap too, so it matches
+    // the cache pixel for pixel: names drawn on a window's backing store
+    // and on a pixmap can rasterise differently (FreeType on Linux).
+    for (const QRect &visible : direct) {
+        const QPixmap lanes = renderLanes(visible);
+        if (lanes.isNull())
+            paintLanes(p, visible);
+        else
+            blitLaneCache(p, lanes, visible, visible.topLeft());
+    }
     p.setClipRegion(region);
     paintOverlay(p, dirty);
 }
@@ -1659,23 +1668,25 @@ bool TimelineWidget::laneCacheFits(const QRect &view) const {
 }
 
 void TimelineWidget::ensureLaneCache(const QRect &view) {
-    m_laneCache = QPixmap();
-    m_laneCacheRect = QRect();
+    m_laneCache = renderLanes(view);
+    m_laneCacheRect = m_laneCache.isNull() ? QRect() : view;
+}
+
+QPixmap TimelineWidget::renderLanes(const QRect &area) {
     const qreal dpr = std::max<qreal>(1, devicePixelRatioF());
     // A timeline shown whole (not in a scroll area) can be far larger than
     // a screen; it paints directly.
-    if (view.isEmpty() || double(view.width()) * view.height() * dpr * dpr > 12000000.0) return;
-    QPixmap cache(std::max(1, int(std::ceil(view.width() * dpr))), std::max(1, int(std::ceil(view.height() * dpr))));
-    if (cache.isNull()) return;
-    cache.setDevicePixelRatio(dpr);
-    cache.fill(editorTheme().timelineBackground);
-    QPainter painter(&cache);
-    if (!painter.isActive()) return;
-    painter.translate(-view.topLeft());
-    paintLanes(painter, view);
+    if (area.isEmpty() || double(area.width()) * area.height() * dpr * dpr > 12000000.0) return {};
+    QPixmap pixmap(std::max(1, int(std::ceil(area.width() * dpr))), std::max(1, int(std::ceil(area.height() * dpr))));
+    if (pixmap.isNull()) return {};
+    pixmap.setDevicePixelRatio(dpr);
+    pixmap.fill(editorTheme().timelineBackground);
+    QPainter painter(&pixmap);
+    if (!painter.isActive()) return {};
+    painter.translate(-area.topLeft());
+    paintLanes(painter, area);
     painter.end();
-    m_laneCache = cache;
-    m_laneCacheRect = view;
+    return pixmap;
 }
 
 QImage TimelineWidget::filmstripTile(const QString &sourceId, const QSize &size, qreal dpr) {
