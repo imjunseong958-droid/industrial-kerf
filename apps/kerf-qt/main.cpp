@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QFontDatabase>
 #include <QPointer>
+#include <QStandardPaths>
 #include <QTimer>
 
 namespace {
@@ -75,6 +76,10 @@ int main(int argc, char **argv) {
     if (project.isEmpty()) project = qEnvironmentVariable("KERF_PROJECT_DIRECTORY");
     kerfd = positional.value(1, qEnvironmentVariable("KERFD_BIN"));
     if (kerfd.isEmpty()) kerfd = qEnvironmentVariable("KERFD_BINARY");
+    // Otherwise the kerfd beside the editor (the installed bundle carries
+    // one, and Finder and the Dock give an app no shell PATH), else the one
+    // on the PATH.
+    if (kerfd.isEmpty()) kerfd = QStandardPaths::findExecutable(QStringLiteral("kerfd"), {QCoreApplication::applicationDirPath()});
     if (kerfd.isEmpty()) kerfd = QStringLiteral("kerfd");
     const bool smoke = !screenshotPath.isEmpty() || quitAfterMs > 0;
 

@@ -23,7 +23,8 @@ On macOS the build is an application bundle, `target/qt/kerf-qt.app`
 `target/qt/kerf-qt`.
 
 The positional arguments may also be supplied as `KERF_PROJECT_DIR` and
-`KERFD_BIN`. Without a project, Kerf opens the project launcher instead
+`KERFD_BIN`; without either, the editor runs the `kerfd` beside itself (the
+installed app carries one), else the one on the `PATH`. Without a project, Kerf opens the project launcher instead
 (`KERFD_BIN=/path/to/kerfd target/qt/kerf-qt`). For a quick visual smoke
 run, add `--screenshot /tmp/kerf.png --quit-after-ms 900`; without a project
 it captures the launcher.

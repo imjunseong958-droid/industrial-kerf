@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Install Kerf's local editor/CLI binaries to ~/.local/bin, with the editor's
-# own libraries (the Qt bridge and docking) in ~/.local/lib/kerf. The install
-# does not refer back to this checkout, so cleaning or moving it is safe.
+# own libraries (the Qt bridge and docking) in ~/.local/lib/kerf; on macOS
+# the editor is installed as an app too, ~/Applications/Industrial Kerf.app.
+# The install does not refer back to this checkout, so cleaning or moving it
+# is safe.
 # System libraries (Qt, FFmpeg) still come from their package manager.
 # The bridge is built optimized: the editor's live preview and its exports
 # draw frames inside it.
@@ -11,6 +13,7 @@ kerf_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$kerf_root"
 dest="${KERF_LOCAL_BIN:-$HOME/.local/bin}"
 lib_dir="${KERF_LOCAL_LIB:-$(dirname "$dest")/lib/kerf}"
+apps_dir="${KERF_LOCAL_APPS:-$HOME/Applications}"
 bridge_dir="$kerf_root/target/release"
 mkdir -p "$dest"
 
@@ -56,7 +59,7 @@ install_cli() {
 # the build tree, then re-sign what changed (macOS refuses to run binaries
 # whose signature no longer matches).
 relink_qt_macos() {
-    local editor="$dest/kerf-qt"
+    local editor="${1:-$dest/kerf-qt}"
     local bridge_ref
     bridge_ref="$(otool -L "$editor" | awk '/libkerf_qt_bridge/ {print $1; exit}')"
     place "$bridge_dir/libkerf_qt_bridge.dylib" "$lib_dir/libkerf_qt_bridge.dylib"
@@ -90,6 +93,27 @@ relink_qt_linux() {
     fi
 }
 
+# The editor as an app, for Finder, the Dock and Spotlight: the build's
+# bundle in place of an older install's (never copied over it), its
+# executable pointed at the same libraries, and kerfd inside it, where the
+# editor looks first (an app opened from Finder has no shell PATH).
+install_qt_bundle() {
+    local app="$apps_dir/Industrial Kerf.app"
+    local kerfd="$dest/kerfd"
+    [ -x "$kerfd" ] || kerfd="$kerf_root/target/release/kerfd"
+    mkdir -p "$apps_dir"
+    rm -rf "$app"
+    cp -R "$kerf_root/target/qt/kerf-qt.app" "$app"
+    relink_qt_macos "$app/Contents/MacOS/kerf-qt"
+    if [ -x "$kerfd" ]; then
+        place "$kerfd" "$app/Contents/MacOS/kerfd"
+        codesign --force --sign - "$app/Contents/MacOS/kerfd" 2>/dev/null
+    else
+        echo "warning: kerfd is not built; the app looks for kerfd on its PATH (run '$0 all')" >&2
+    fi
+    codesign --force --sign - "$app" 2>/dev/null
+}
+
 install_qt() {
     mkdir -p "$lib_dir"
     case "$(uname -s)" in
@@ -98,7 +122,10 @@ install_qt() {
         *) place "$kerf_root/target/qt/kerf-qt" "$dest/kerf-qt" ;;
     esac
     case "$(uname -s)" in
-        Darwin) relink_qt_macos ;;
+        Darwin)
+            relink_qt_macos
+            install_qt_bundle
+            ;;
         Linux) relink_qt_linux ;;
     esac
 }
@@ -126,3 +153,6 @@ esac
 
 echo "installed to $dest (editor libraries in $lib_dir):"
 ls -la "$dest/kerf" "$dest/kerfd" "$dest/kerf-mcp" "$dest/kerf-qt"
+if [ "$(uname -s)" = Darwin ] && [ -d "$apps_dir/Industrial Kerf.app" ]; then
+    echo "app: $apps_dir/Industrial Kerf.app"
+fi

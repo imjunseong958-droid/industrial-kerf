@@ -864,6 +864,11 @@ fn discover_kerf_qt() -> Result<PathBuf> {
     {
         candidates.push(parent.join(binary_name("kerf-qt")));
     }
+    // On macOS the build is an application bundle; it goes before a plain
+    // target/qt/kerf-qt an older build may have left.
+    if cfg!(target_os = "macos") {
+        candidates.push(root.join("target/qt/kerf-qt.app/Contents/MacOS/kerf-qt"));
+    }
     candidates.push(root.join("target/qt").join(binary_name("kerf-qt")));
     candidates.push(root.join("target/debug").join(binary_name("kerf-qt")));
     candidates.push(root.join("target/release").join(binary_name("kerf-qt")));

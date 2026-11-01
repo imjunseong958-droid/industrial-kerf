@@ -90,8 +90,10 @@ cargo build --release -p kerf-mcp --bin kerf-mcp
 
 Or build and install everything to `~/.local/bin`, with the editor's own
 libraries in `~/.local/lib/kerf` (`KERF_LOCAL_BIN` and `KERF_LOCAL_LIB` move
-them). The install does not refer back to the checkout, so cleaning `target`
-is safe; Qt and FFmpeg still come from the system:
+them). On macOS the editor is installed as an app too, `~/Applications/Industrial
+Kerf.app` (`KERF_LOCAL_APPS` moves it), replacing an older install's, with
+`kerfd` inside it. The install does not refer back to the checkout, so
+cleaning `target` is safe; Qt and FFmpeg still come from the system:
 
 ```bash
 scripts/install-kerf-local.sh        # or: cli, qt
@@ -106,8 +108,9 @@ target/release/kerf
 target/release/kerf --dir ./my-project
 ```
 
-`kerf` finds `kerf-qt` beside itself or in `target/qt` (`KERF_QT_BIN`
-overrides it), and `kerfd` beside itself or in `target`.
+`kerf` finds `kerf-qt` beside itself or in `target/qt` (on macOS in its
+bundle, `target/qt/kerf-qt.app`; `KERF_QT_BIN` overrides it), and `kerfd`
+beside itself or in `target`.
 `scripts/run-kerf-qt.sh [project]` builds the debug editor and opens it the
 same way.
 
