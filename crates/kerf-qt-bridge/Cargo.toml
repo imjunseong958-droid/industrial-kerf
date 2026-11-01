@@ -16,6 +16,7 @@ kerf-runtime = { path = "../kerf-runtime" }
 kerf-playback = { path = "../kerf-playback" }
 kerf-agent = { path = "../kerf-agent" }
 kerf-cloud = { path = "../kerf-cloud" }
+kerf-collab = { path = "../kerf-collab" }
 kerf-commands = { path = "../kerf-commands" }
 kerf-mcp = { path = "../kerf-mcp" }
 kerf-engine = { path = "../kerf-engine" }
@@ -23,3 +24,6 @@ kerf-fx = { path = "../kerf-fx" }
 base64 = "0.23"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

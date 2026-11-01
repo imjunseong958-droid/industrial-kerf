@@ -1084,12 +1084,15 @@ dependencies = [
  "anyhow",
  "clap",
  "kerf-agent",
+ "kerf-collab",
  "kerf-engine",
  "kerf-fetcher",
  "kerf-mcp",
+ "kerf-model",
  "kerf-runtime",
  "kerf-skills",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -1099,6 +1102,18 @@ dependencies = [
  "serde",
  "serde_json",
  "ureq",
+]
+
+[[package]]
+name = "kerf-collab"
+version = "0.1.0"
+dependencies = [
+ "kerf-lang",
+ "kerf-model",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]
@@ -1267,6 +1282,7 @@ dependencies = [
  "base64",
  "kerf-agent",
  "kerf-cloud",
+ "kerf-collab",
  "kerf-commands",
  "kerf-core",
  "kerf-engine",
@@ -1278,6 +1294,7 @@ dependencies = [
  "kerf-runtime",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -1303,6 +1320,7 @@ name = "kerf-runtime"
 version = "0.1.0"
 dependencies = [
  "fs2",
+ "kerf-collab",
  "kerf-engine",
  "kerf-lang",
  "kerf-model",

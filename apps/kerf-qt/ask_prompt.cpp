@@ -26,6 +26,8 @@ AskPrompt::AskPrompt(QWidget *parent) : QFrame(parent, Qt::Popup) {
     layout->addWidget(m_title);
     m_input = new QTextEdit;
     m_input->setObjectName(QStringLiteral("askInput"));
+    // Its bezel is a single-line field's, rounded by 5, and so is its ring.
+    m_input->setProperty("bezelRadius", 5);
     m_input->setAcceptRichText(false);
     m_input->setPlaceholderText(QStringLiteral("Tell Kerf what to change…"));
     m_input->setFixedHeight(64);

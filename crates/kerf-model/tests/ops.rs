@@ -672,3 +672,167 @@ fn deleted_ids_are_retired_and_never_reused() {
         .iter()
         .any(|d| d.code == "id.retired"));
 }
+
+/// What `m1` would be read from another file: `frames` long at 24 fps,
+/// with picture and sound as asked.
+fn camera_take(frames: i64, video: bool, audio: bool) -> Media {
+    Media {
+        id: id("m1"),
+        path: "media/take2.mov".into(),
+        rate: Rate::FPS_24,
+        drop_frame: false,
+        start: Time::ZERO,
+        duration: f(frames),
+        video: video.then_some(VideoInfo {
+            width: 1280,
+            height: 720,
+            alpha: false,
+        }),
+        audio: audio.then_some(AudioInfo {
+            channels: 2,
+            sample_rate: 48_000,
+        }),
+        reel: None,
+    }
+}
+
+/// The codes and entities of a rejection's diagnostics, sorted. Each
+/// message names its entity.
+fn rejection(project: &Project, ops: Vec<Op>) -> Vec<(&'static str, String)> {
+    let rejected = apply(project, Catalog::builtin(), &ops).expect_err("expected a rejection");
+    let mut found: Vec<_> = rejected
+        .diagnostics
+        .iter()
+        .map(|d| {
+            let entity = d.entity.as_ref().map(Id::to_string).unwrap_or_default();
+            assert!(
+                d.message.contains(&format!("`{entity}`")),
+                "{} does not name {entity}",
+                d.message
+            );
+            (d.code, entity)
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+#[test]
+fn replacing_media_keeps_its_id_and_every_clip_s_timing() {
+    let scene = scene();
+    let replacement = Media {
+        id: id("m1"),
+        path: "media/take2-0123abcd.mov".into(),
+        rate: Rate::FPS_30,
+        drop_frame: false,
+        start: Rate::FPS_30.time_of(30 * 3600),
+        duration: Rate::FPS_30.time_of(900),
+        video: Some(VideoInfo {
+            width: 3840,
+            height: 2160,
+            alpha: true,
+        }),
+        audio: Some(AudioInfo {
+            channels: 6,
+            sample_rate: 96_000,
+        }),
+        reel: Some("B002".into()),
+    };
+    let (project, report) = apply(
+        &scene,
+        Catalog::builtin(),
+        &[Op::ReplaceMedia(replacement.clone())],
+    )
+    .unwrap();
+    assert_eq!(project.media("m1"), Some(&replacement));
+    assert_eq!(project.media[1], scene.media[1]);
+    assert_eq!(project.sequences, scene.sequences);
+    assert_eq!(report, kerf_model::Report::default());
+    assert_eq!(source_in(&project, "c2"), 240);
+}
+
+#[test]
+fn replacing_media_refuses_a_file_its_clips_no_longer_fit() {
+    let scene = scene();
+    // c2 and a2 play 240–288 of m1.
+    assert_eq!(
+        rejection(&scene, vec![Op::ReplaceMedia(camera_take(200, true, true))]),
+        vec![
+            ("clip.source_range", "a2".to_owned()),
+            ("clip.source_range", "c2".to_owned())
+        ]
+    );
+    assert_eq!(
+        rejection(
+            &scene,
+            vec![Op::ReplaceMedia(camera_take(2400, true, false))]
+        ),
+        vec![
+            ("clip.domain", "a1".to_owned()),
+            ("clip.domain", "a2".to_owned())
+        ]
+    );
+    assert_eq!(
+        rejection(
+            &scene,
+            vec![Op::ReplaceMedia(camera_take(2400, false, true))]
+        ),
+        vec![
+            ("clip.domain", "c1".to_owned()),
+            ("clip.domain", "c2".to_owned())
+        ]
+    );
+    let mut unknown = camera_take(2400, true, true);
+    unknown.id = id("m9");
+    assert_eq!(
+        rejects(&scene, vec![Op::ReplaceMedia(unknown)]),
+        "ref.missing"
+    );
+    assert_eq!(
+        rejects(&scene, vec![Op::ReplaceMedia(camera_take(0, true, true))]),
+        "media.duration"
+    );
+}
+
+#[test]
+fn replacing_media_refuses_a_file_too_short_for_a_transition_s_handles() {
+    // c1 plays 240–288 and dissolves into c2, which plays 24–72.
+    let mut scene = scene();
+    scene.sequences[0].tracks[0].clips[0] = media_clip("c1", "m1", 240, 0, 48, Some("L1"));
+    scene.sequences[0].tracks[0].clips[1] = media_clip("c2", "m1", 24, 48, 48, Some("L2"));
+    scene.sequences[0].tracks[1].clips[0] = media_clip("a1", "m1", 240, 0, 48, Some("L1"));
+    scene.sequences[0].tracks[1].clips[1] = media_clip("a2", "m1", 24, 48, 48, Some("L2"));
+    let dissolved = run(
+        &scene,
+        vec![Op::AddTransition {
+            id: Some(id("t1")),
+            from: id("c1"),
+            to: id("c2"),
+            fx: id("dissolve"),
+            version: 1,
+            duration: f(12),
+            align: Align::Center,
+            params: Params::new(),
+        }],
+    );
+    // Every clip still fits 290 frames, but the dissolve needs 6 frames
+    // after c1's last.
+    let rejected = apply(
+        &dissolved,
+        Catalog::builtin(),
+        &[Op::ReplaceMedia(camera_take(290, true, true))],
+    )
+    .unwrap_err();
+    assert_eq!(rejected.diagnostics.len(), 1);
+    let diagnostic = &rejected.diagnostics[0];
+    assert_eq!(diagnostic.code, "transition.handles");
+    assert!(
+        diagnostic.message.contains("`c1`") && diagnostic.message.contains("`c2`"),
+        "{}",
+        diagnostic.message
+    );
+    run(
+        &dissolved,
+        vec![Op::ReplaceMedia(camera_take(294, true, true))],
+    );
+}

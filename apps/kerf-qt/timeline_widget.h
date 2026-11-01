@@ -137,7 +137,10 @@ private:
     void paintLane(QPainter &p, const QRect &visible, int row, const QJsonObject &track);
     void paintHeaders(QPainter &p, const QRect &dirty);
     void paintTrackHeader(QPainter &p, int row, const QJsonObject &track, int left);
-    void paintClip(QPainter &p, const QRect &visible, int row, const QJsonObject &clip, const QColor &accent, bool audio);
+    void paintClip(QPainter &p, const QRect &visible, int row, const QJsonObject &clip, const QJsonObject &track, bool audio);
+    // The clip being dragged, at its preview position over its neighbours.
+    void paintDraggedClip(QPainter &p, const QRect &visible, int row, const QJsonObject &clip, const QJsonObject &track,
+                          bool audio);
     void paintProposal(QPainter &p, int row, const QJsonObject &track);
     void paintRuler(QPainter &p, const QRect &dirty, int top);
     // Sequence markers sit on the ruler: a tab on their frame and a band
@@ -184,7 +187,8 @@ private:
     bool dragsBodies() const { return m_tool == TimelineTool::Selection || m_tool == TimelineTool::Slip || m_tool == TimelineTool::Slide; }
     void setToolCursor(const ClipHit &hit, int edge);
     // The dragged edge or start, snapped to the nearest edit point in reach.
-    double snapped(double time, double length) const;
+    // `snapPoint`, when given, is set to that edit point, or -1 if none was in reach.
+    double snapped(double time, double length, double *snapPoint = nullptr) const;
 
     MediaArtwork *m_artwork = nullptr;
     QJsonObject m_project;
@@ -213,6 +217,8 @@ private:
     double m_dragDuration = 0.0;
     double m_pressTime = 0.0;
     double m_previewTime = 0.0;
+    // The edit point the current drag has snapped to, shown as a line; -1 when none.
+    double m_snapTime = -1.0;
     bool m_scrubbing = false;
     bool m_dragging = false;
     bool m_hasSkimmer = false;

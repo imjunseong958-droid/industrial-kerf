@@ -8,7 +8,9 @@ rendered video or translate another editor's template format.
 ## In the editor
 
 1. Edit the sequence normally, then choose **File → Export Editing Preset…**.
-2. Share the resulting `.kerfpreset` file.
+2. Share the resulting `.kerfpreset` file, or keep it in the project's
+   preset library, `presets/`, which a shared project shares with every
+   sync (see below).
 3. In another project, import the replacement footage into the Project bin.
 4. Choose **File → Import Editing Preset…** and open the shared file.
 5. Assign media to each slot, choose its source start, and optionally replace
@@ -27,6 +29,29 @@ Kerf timing, gaps, tracks, transitions, constant speeds (including reverse),
 transforms, keyframes, effect stacks, generators, captions, markers, linked
 clips, and nested sequences come from the model. There is no model request
 or editorial guess in export or application.
+
+## The project's preset library
+
+A project's `presets/` folder is its preset library. In a
+[shared project](collaboration.md) it is part of the repository, so every
+collaborator has the same presets after a sync. Kerf lists presets from
+`presets/` first, then `.kerf/presets`, then the project folder.
+
+- **Window → Presets** shows the library: each preset's name and slots and,
+  in a repository, who changed it last and when. **Apply** opens the binding
+  dialog described above.
+- **Save Current as Preset…** exports the program sequence to
+  `presets/<name>.kerfpreset`.
+- **From Preset** in the project launcher (New Project from Preset) makes a
+  new project from a preset: pick the preset, choose a file and a start for
+  each slot, and Kerf copies the preset into the new project's `presets/`
+  and the files into its `media/`, imports them, and applies the preset as
+  the project's first edit.
+
+Applying binds each slot to a media id of the project. In a shared project
+a media id names one file in the repository, so a slot plays the same file
+for every collaborator, and **Replace Media…** changes that file for
+everyone. See [shared presets and media slots](collaboration.md#shared-presets-and-media-slots).
 
 ## File contract, version 1
 
@@ -139,7 +164,8 @@ kerf --dir ./project preset apply product.kerfpreset \
   --bind slot1=m1 --bind slot2=song --beats slot2
 ```
 
-Bindings use already-imported media IDs from the target project. Optional
+Saving to `presets/product.kerfpreset` puts the preset in the project's
+library. Bindings use already-imported media IDs from the target project. Optional
 `--sequence` selects the saved/target sequence. `apply` stages a proposal;
 accept it in the native editor. CLI/assistant save writes a new file inside
 the project and never overwrites an existing file. The native export dialog
@@ -158,7 +184,7 @@ The assistant and external MCP clients keep the three-tool interface:
 `beats` is available from the CLI and the assistant; the editor's dialog
 does not offer it yet.
 
-Listing covers the project root and `.kerf/presets`. Inspect/apply can read a
+Listing covers `presets/`, then `.kerf/presets` and the project root. Inspect/apply can read a
 shared `.kerfpreset` at an explicitly supplied path. Inspecting lists the
 looks the preset carries (`looks`) and, for each
 slot, the clips that use it and the project's imported media that can fill it

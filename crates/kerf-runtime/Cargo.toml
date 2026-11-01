@@ -10,6 +10,7 @@ name = "kerf_runtime"
 path = "src/lib.rs"
 
 [dependencies]
+kerf-collab = { path = "../kerf-collab" }
 kerf-engine = { path = "../kerf-engine" }
 kerf-lang = { path = "../kerf-lang" }
 kerf-model = { path = "../kerf-model" }

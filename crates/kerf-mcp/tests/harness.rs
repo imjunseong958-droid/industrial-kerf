@@ -128,6 +128,17 @@ fn presets_share_native_edit_code_and_apply_replacement_media_as_a_proposal() {
         ok(&source, "look", json!({"presets":true}))["presets"],
         json!(["style.kerfpreset"])
     );
+    // The shared library a repository carries is listed first.
+    std::fs::create_dir_all(source_directory.path().join("presets")).unwrap();
+    ok(
+        &source,
+        "edit",
+        json!({"savePreset":"presets/team.kerfpreset", "name":"Team"}),
+    );
+    assert_eq!(
+        ok(&source, "look", json!({"presets":true}))["presets"],
+        json!(["presets/team.kerfpreset", "style.kerfpreset"])
+    );
     let overwrite = error(&source, "edit", json!({"savePreset":"style.kerfpreset"}));
     assert_eq!(overwrite["code"], "PRESET_IO");
     assert_eq!(

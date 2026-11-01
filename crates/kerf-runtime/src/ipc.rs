@@ -168,6 +168,7 @@ pub struct RuntimeClient {
     inner: Arc<RuntimeClientInner>,
 }
 
+#[derive(Clone)]
 struct RuntimeClientInner {
     directory: PathBuf,
     endpoint: EndpointAddress,
@@ -212,6 +213,22 @@ impl RuntimeClient {
                 startup_timeout: CLIENT_STARTUP_TIMEOUT,
             }),
         })
+    }
+
+    /// This client, waiting up to `timeout` for each answer instead of 10
+    /// seconds, for requests that do slow work inside kerfd, such as a git
+    /// merge.
+    pub fn with_request_timeout(self, timeout: Duration) -> Self {
+        let mut inner = Arc::unwrap_or_clone(self.inner);
+        inner.request_timeout = timeout;
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// The longest this client waits for an answer.
+    pub fn request_timeout(&self) -> Duration {
+        self.inner.request_timeout
     }
 
     /// Return the canonical project directory used by this client.
@@ -312,6 +329,59 @@ impl RuntimeClient {
         })?)
     }
 
+    /// Load a `project.kerf` changed outside kerfd as one revision.
+    pub fn import_projection_request(
+        &self,
+        actor: &str,
+        key: &str,
+        base_revision: u64,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::ImportProjection {
+            actor: actor.to_owned(),
+            idempotency_key: key.to_owned(),
+            base_revision,
+        })?)
+    }
+
+    /// Write the authoritative project over a `project.kerf` changed
+    /// outside kerfd.
+    pub fn repair_projection(&self) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::RepairProjection)?)
+    }
+
+    /// Commit local edits and merge the fetched upstream branch; the state
+    /// after it and what it did.
+    pub fn collab_integrate(
+        &self,
+        actor: &str,
+        key: &str,
+        message: Option<&str>,
+    ) -> Result<(StateSnapshot, Value), RuntimeError> {
+        expect_collab(self.request(RuntimeRequest::CollabIntegrate {
+            actor: actor.to_owned(),
+            idempotency_key: key.to_owned(),
+            message: message.map(str::to_owned),
+        })?)
+    }
+
+    /// Commit local edits and switch to `branch`, creating it when `create`.
+    pub fn collab_switch(
+        &self,
+        actor: &str,
+        key: &str,
+        branch: &str,
+        create: bool,
+        message: Option<&str>,
+    ) -> Result<(StateSnapshot, Value), RuntimeError> {
+        expect_collab(self.request(RuntimeRequest::CollabSwitch {
+            actor: actor.to_owned(),
+            idempotency_key: key.to_owned(),
+            branch: branch.to_owned(),
+            create,
+            message: message.map(str::to_owned),
+        })?)
+    }
+
     pub fn undo_request(
         &self,
         actor: &str,
@@ -358,6 +428,25 @@ impl RuntimeClient {
             } => Ok((state, media_id, clip_id)),
             _ => Err(unexpected_response("import")),
         }
+    }
+
+    /// Swap the file behind `media` for the one at `path`, keeping every
+    /// clip's timing.
+    pub fn replace_media_request(
+        &self,
+        actor: &str,
+        key: &str,
+        media: &str,
+        path: &str,
+        base_revision: u64,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::ReplaceMedia {
+            actor: actor.to_owned(),
+            idempotency_key: key.to_owned(),
+            base_revision,
+            media: media.to_owned(),
+            path: path.to_owned(),
+        })?)
     }
 
     pub fn start_render(
@@ -603,7 +692,18 @@ fn request_has_stable_idempotency_key(request: &RuntimeRequest) -> bool {
         | RuntimeRequest::Import {
             idempotency_key, ..
         }
+        | RuntimeRequest::ReplaceMedia {
+            idempotency_key, ..
+        }
         | RuntimeRequest::ImportProjection {
+            idempotency_key, ..
+        }
+        // Git converges: committing and merging again after a lost
+        // response changes nothing more.
+        | RuntimeRequest::CollabIntegrate {
+            idempotency_key, ..
+        }
+        | RuntimeRequest::CollabSwitch {
             idempotency_key, ..
         }
         | RuntimeRequest::AcceptProposal {
@@ -681,6 +781,12 @@ fn decode_response(value: &Value, expected_id: &str) -> Result<RuntimeResponse, 
     if let Some(state) = object.get("state") {
         let state = serde_json::from_value::<StateSnapshot>(state.clone())
             .map_err(|error| RuntimeError::new("RUNTIME_PROTOCOL_ERROR", error.to_string()))?;
+        if let Some(report) = object.get("collab") {
+            return Ok(RuntimeResponse::Collab {
+                state,
+                report: report.clone(),
+            });
+        }
         if let (Some(media_id), Some(clip_id)) = (
             object.get("mediaId").and_then(Value::as_str),
             object.get("clipId").and_then(Value::as_str),
@@ -790,6 +896,13 @@ pub(crate) fn expect_state(response: RuntimeResponse) -> Result<StateSnapshot, R
     }
 }
 
+fn expect_collab(response: RuntimeResponse) -> Result<(StateSnapshot, Value), RuntimeError> {
+    match response {
+        RuntimeResponse::Collab { state, report } => Ok((state, report)),
+        _ => Err(unexpected_response("collab")),
+    }
+}
+
 fn expect_job(response: RuntimeResponse) -> Result<RenderJob, RuntimeError> {
     match response {
         RuntimeResponse::RenderJob(job) => Ok(job),
@@ -855,6 +968,13 @@ pub fn response_value(id: &str, result: Result<RuntimeResponse, RuntimeError>) -
             "id": id,
             "ok": true,
             "job": job
+        }),
+        Ok(RuntimeResponse::Collab { state, report }) => json!({
+            "protocolVersion": RequestEnvelope::PROTOCOL_VERSION,
+            "id": id,
+            "ok": true,
+            "state": state,
+            "collab": report
         }),
         Ok(RuntimeResponse::Empty) => json!({
             "protocolVersion": RequestEnvelope::PROTOCOL_VERSION,

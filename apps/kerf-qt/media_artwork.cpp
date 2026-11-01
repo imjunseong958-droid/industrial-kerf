@@ -1,4 +1,6 @@
 #include "media_artwork.h"
+#include "editor_common.h"
+#include "editor_theme.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -51,15 +53,23 @@ void MediaArtwork::request(const QJsonArray &sources, const QString &directory) 
 
 QIcon MediaArtwork::icon(const QString &id) const {
     if (frames.contains(id)) return QPixmap::fromImage(frames.value(id));
+    // Drawn on each call in the theme in force, so nothing here goes stale
+    // when the appearance changes.
     QPixmap tile(96, 54);
-    tile.fill(QColor("#244c49"));
+    tile.fill(editorTheme().audioTile);
     QPainter painter(&tile);
     if (waves.contains(id)) {
+        // FFmpeg draws the wave in white, which vanishes on the light tile:
+        // ink it in the tile's glyph colour.
+        QImage wave = waves.value(id).convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        QPainter ink(&wave);
+        ink.setCompositionMode(QPainter::CompositionMode_SourceIn);
+        ink.fillRect(wave.rect(), editorTheme().audioTileGlyph);
+        ink.end();
         painter.setOpacity(0.65);
-        painter.drawImage(QRect(0, 10, 96, 34), waves.value(id));
+        painter.drawImage(QRect(0, 10, 96, 34), wave);
     } else {
-        painter.setPen(QColor("#7caaa4"));
-        painter.drawText(tile.rect(), Qt::AlignCenter, QStringLiteral("♪"));
+        drawWaveformSymbol(painter, QRectF(tile.rect()).center(), 24, editorTheme().audioTileGlyph);
     }
     return tile;
 }

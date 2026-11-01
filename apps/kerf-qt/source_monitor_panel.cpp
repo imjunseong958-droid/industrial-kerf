@@ -1,5 +1,6 @@
 #include "source_monitor_panel.h"
 #include "editor_common.h"
+#include "editor_theme.h"
 
 #include <QAction>
 #include <QHBoxLayout>
@@ -35,9 +36,9 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter painter(this);
-        painter.fillRect(rect(), QColor("#0b0b0b"));
+        painter.fillRect(rect(), editorTheme().viewerSurround);
         if (frame.isNull()) {
-            painter.setPen(QColor("#7a7a7a"));
+            painter.setPen(editorTheme().viewerTextDim);
             painter.drawText(rect().adjusted(16, 0, -16, 0), Qt::AlignCenter | Qt::TextWordWrap, message);
             return;
         }
@@ -58,16 +59,21 @@ public:
 
 protected:
     void paintEvent(QPaintEvent *) override {
+        const EditorTheme &theme = editorTheme();
         QPainter painter(this);
         const QRect track = rect().adjusted(8, 6, -8, -6);
-        painter.fillRect(track, QColor("#262626"));
+        painter.fillRect(track, theme.scrubTrack);
         const double duration = m_panel->m_duration;
         if (duration <= 0.0) return;
         const auto x = [&](double seconds) { return track.left() + seconds / duration * track.width(); };
         painter.fillRect(QRectF(x(m_panel->m_in), track.top(), x(m_panel->m_out) - x(m_panel->m_in), track.height()),
-                         QColor("#6a5a2c"));
-        painter.setPen(QPen(QColor("#f0b429"), 2));
-        painter.drawLine(QPointF(x(m_panel->m_position), 2), QPointF(x(m_panel->m_position), height() - 2));
+                         theme.inOutRange);
+        // The position is cut out of the track with a pixel of the panel on
+        // each side, so it reads over the marked range, an accent wash too.
+        const qreal at = x(m_panel->m_position);
+        painter.fillRect(QRectF(at - 2, 2, 4, height() - 4), theme.panel);
+        painter.setPen(QPen(theme.playhead, 2));
+        painter.drawLine(QPointF(at, 2), QPointF(at, height() - 2));
     }
     void mousePressEvent(QMouseEvent *event) override { seekTo(event->position().x()); }
     void mouseMoveEvent(QMouseEvent *event) override {
@@ -142,6 +148,8 @@ void SourceMonitorPanel::setActions(const QList<QAction *> &actions) {
         auto *button = new QToolButton;
         button->setObjectName(QStringLiteral("transportButton"));
         button->setDefaultAction(action);
+        // The Program monitor's transport metrics: 14-point symbols in 18px buttons.
+        button->setIconSize(QSize(14, 14));
         button->setFocusPolicy(Qt::NoFocus);
         m_buttons->layout()->addWidget(button);
     }

@@ -3,6 +3,7 @@
 #include <QByteArray>
 #include <QHash>
 #include <QObject>
+#include <QString>
 #include <QStringList>
 
 class QWidget;
@@ -10,6 +11,7 @@ class QWidget;
 namespace ads {
 class CDockManager;
 class CDockWidget;
+class CDockWidgetTab;
 } // namespace ads
 
 namespace kerf {
@@ -48,12 +50,18 @@ public:
 signals:
     void changed();
 
+protected:
+    // Shows a tab's close button while the pointer is over the tab.
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private:
+    void showCloseButton(ads::CDockWidgetTab *tab, bool shown);
     void arrangeEditing();
     QByteArray savedLayout(const QString &name) const;
     bool restore(const QByteArray &layout);
 
     ads::CDockManager *m_manager = nullptr;
+    QString m_baseStyleSheet;
     QHash<QString, ads::CDockWidget *> m_panels;
     QByteArray m_editing;
     QString m_current;

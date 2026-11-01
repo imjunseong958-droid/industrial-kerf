@@ -289,12 +289,28 @@ pub enum RuntimeRequest {
         #[serde(rename = "baseRevision")]
         base_revision: u64,
     },
+    /// Add the media file at `path` and cut all of it in at the end of the
+    /// program. A relative path is read against the project folder, and a
+    /// file inside it is kept relative to it; a Git LFS pointer is refused.
     Import {
         actor: String,
         #[serde(rename = "idempotencyKey")]
         idempotency_key: String,
         #[serde(rename = "baseRevision")]
         base_revision: u64,
+        path: String,
+    },
+    /// Swap the file behind media id `media` for the one at `path` (read as
+    /// `Import` reads it), keeping every clip's timing. A file that is not
+    /// downloaded, does not probe, or is too short or lacks a stream the
+    /// clips need is refused, naming them.
+    ReplaceMedia {
+        actor: String,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "baseRevision")]
+        base_revision: u64,
+        media: String,
         path: String,
     },
     StartRender {
@@ -339,6 +355,29 @@ pub enum RuntimeRequest {
         idempotency_key: String,
         #[serde(rename = "baseRevision")]
         base_revision: u64,
+    },
+    /// Commit local edits with git, merge the upstream branch fetched
+    /// beforehand (`project.kerf` through the structural merge driver), and
+    /// load what the merge made as one revision that clears history. The
+    /// message describes the edits when absent.
+    CollabIntegrate {
+        actor: String,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
+    /// Commit local edits, switch to `branch` (creating it from here when
+    /// `create`), and load its project.
+    CollabSwitch {
+        actor: String,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        branch: String,
+        #[serde(default)]
+        create: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
     },
     AcceptProposal {
         #[serde(rename = "proposalId")]
@@ -478,6 +517,12 @@ pub enum RuntimeResponse {
         output: PathBuf,
     },
     RenderJob(RenderJob),
+    /// A git operation and the state after it: what was committed, merged,
+    /// or switched, as `kerf_collab` reports it.
+    Collab {
+        state: StateSnapshot,
+        report: Value,
+    },
     Empty,
 }
 

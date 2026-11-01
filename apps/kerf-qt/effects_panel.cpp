@@ -1,5 +1,8 @@
 #include "effects_panel.h"
+#include "editor_common.h"
+#include "editor_theme.h"
 
+#include <QAction>
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QImage>
@@ -22,14 +25,32 @@ namespace {
 constexpr QSize kCard{160, 90};
 // Previews asked for at once; the rest wait until the cards narrow.
 constexpr int kPreviewLimit = 48;
+// Whether a card shows its preview rather than the placeholder.
+constexpr int kHasPreview = Qt::UserRole + 3;
 
-QPixmap placeholder(const QString &category) {
+// A card before its preview arrives: an empty thumbnail with an effect's
+// symbol (SF Symbols' camera.filters) in its middle. Its name is under it.
+QPixmap placeholder() {
     QPixmap pixmap(kCard);
-    pixmap.fill(QColor(0x2a, 0x2a, 0x2e));
+    pixmap.fill(editorTheme().cardPlaceholder);
     QPainter painter(&pixmap);
-    painter.setPen(QColor(0x8a, 0x8a, 0x92));
-    painter.drawText(pixmap.rect(), Qt::AlignCenter, category);
+    // An edge, so the card reads on the list's field in both appearances.
+    painter.setPen(editorTheme().border);
+    painter.drawRect(pixmap.rect().adjusted(0, 0, -1, -1));
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(editorTheme().cardPlaceholderText, 1.5));
+    const QPointF mid(kCard.width() / 2.0, kCard.height() / 2.0);
+    for (const QPointF &at : {QPointF(0, -3), QPointF(-3, 2.2), QPointF(3, 2.2)}) painter.drawEllipse(mid + at, 5.0, 5.0);
     return pixmap;
+}
+
+// SF Symbols' magnifyingglass, as a search field's leading symbol.
+QIcon searchIcon() {
+    return QIcon(glyphPixmap(QSize(16, 16), [](QPainter &painter, const QColor &color) {
+        painter.setPen(QPen(color, 1.5, Qt::SolidLine, Qt::RoundCap));
+        painter.drawEllipse(QPointF(7, 7), 4.25, 4.25);
+        painter.drawLine(QPointF(10.2, 10.2), QPointF(13.5, 13.5));
+    }, editorTheme().textSecondary));
 }
 
 } // namespace
@@ -47,6 +68,7 @@ EffectsPanel::EffectsPanel(QWidget *parent) : QWidget(parent) {
     m_search->setObjectName(QStringLiteral("effectsSearch"));
     m_search->setPlaceholderText(QStringLiteral("Find an effect: glow, zoom, retro…"));
     m_search->setClearButtonEnabled(true);
+    QAction *searchSymbol = m_search->addAction(searchIcon(), QLineEdit::LeadingPosition);
     filters->addWidget(m_category);
     filters->addWidget(m_search, 1);
     layout->addLayout(filters);
@@ -71,6 +93,13 @@ EffectsPanel::EffectsPanel(QWidget *parent) : QWidget(parent) {
     connect(m_category, &QComboBox::currentIndexChanged, this, &EffectsPanel::refilter);
     connect(m_search, &QLineEdit::textChanged, this, &EffectsPanel::refilter);
     connect(m_cards, &QListWidget::itemActivated, this, &EffectsPanel::add);
+    // Placeholders and the search symbol are drawn in the theme's colours;
+    // previews are pictures.
+    connect(EditorAppearance::instance(), &EditorAppearance::changed, this, [this, searchSymbol] {
+        searchSymbol->setIcon(searchIcon());
+        for (QListWidgetItem *item : std::as_const(m_items))
+            if (!item->data(kHasPreview).toBool()) item->setIcon(placeholder());
+    });
     setClip(QString(), false);
 }
 
@@ -83,7 +112,7 @@ void EffectsPanel::setCatalog(const QJsonArray &catalog) {
         if (fx.value(QStringLiteral("kind")).toString() != QStringLiteral("effect")) continue;
         const QString id = fx.value(QStringLiteral("id")).toString();
         const QString category = fx.value(QStringLiteral("category")).toString();
-        auto *item = new QListWidgetItem(placeholder(category), fx.value(QStringLiteral("name")).toString());
+        auto *item = new QListWidgetItem(placeholder(), fx.value(QStringLiteral("name")).toString());
         item->setData(Qt::UserRole, id);
         item->setData(Qt::UserRole + 1, category);
         item->setData(Qt::UserRole + 2,
@@ -105,8 +134,10 @@ void EffectsPanel::setClip(const QString &clip, bool picture) {
     if (clip == m_clip && picture == m_picture) return;
     m_clip = clip;
     m_picture = picture;
-    for (QListWidgetItem *item : std::as_const(m_items))
-        item->setIcon(placeholder(item->data(Qt::UserRole + 1).toString()));
+    for (QListWidgetItem *item : std::as_const(m_items)) {
+        item->setIcon(placeholder());
+        item->setData(kHasPreview, false);
+    }
     m_hint->setText(clip.isEmpty() ? QStringLiteral("Select a clip to see effects on it, then double-click one to add it.")
                     : picture      ? QStringLiteral("Double-click an effect to add it to the clip.")
                                    : QStringLiteral("Double-click an effect to add it to the clip. Cards show media clips."));
@@ -115,8 +146,10 @@ void EffectsPanel::setClip(const QString &clip, bool picture) {
 
 void EffectsPanel::setPreview(const QString &clip, const QString &fx, const QImage &image) {
     if (clip != m_clip || image.isNull()) return;
-    if (QListWidgetItem *item = m_items.value(fx))
+    if (QListWidgetItem *item = m_items.value(fx)) {
         item->setIcon(QPixmap::fromImage(image.scaled(kCard, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+        item->setData(kHasPreview, true);
+    }
 }
 
 void EffectsPanel::refilter() {

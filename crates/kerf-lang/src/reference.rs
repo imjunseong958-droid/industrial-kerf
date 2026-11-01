@@ -73,7 +73,10 @@ captions <clip> on=<subtitle track> [words=<n>]
 link <clip> <clip> … [as=<group>]  ·  unlink <clip> …
 track add <id> video|audio|subtitle [before=<track>|after=<track>] [name="…"] [locked=true]
 track set <id> [name=…] [enabled=…] [locked=…] [muted=…]  ·  track remove <id>
-media add <id> path="…" rate=<fps> dur=<dur> [tc=<tc>] [video=WxH [alpha=true]] [audio=<n>ch@<hz>]
+media add <id> path="…" rate=<fps> dur=<dur> [tc=<tc>] [video=WxH [alpha=true]] [audio=<n>ch@<hz>] [reel="…"]
+media replace <id> <same arguments as media add>
+                                        swap the file behind a media id; clips keep their timing and
+                                        must still fit (length, streams, transition handles)
 media relink <id> path="…"  ·  media remove <id>
 sequence add <id> rate=<fps> size=WxH [name="…"] [start=<tc>]  ·  sequence set|remove <id> …
 ```

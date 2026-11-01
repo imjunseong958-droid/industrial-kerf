@@ -16,6 +16,10 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 const MAX_PRESET_BYTES: u64 = 1024 * 1024;
+/// Where a project's presets live, the shared library first: `presets/`
+/// (which travels with the repository), then `.kerf/presets` and the
+/// project folder itself.
+pub const PRESET_FOLDERS: [&str; 3] = ["presets", ".kerf/presets", ""];
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -69,53 +73,25 @@ impl KerfMcpRouter {
     /// Copy the looks a preset carries that the project lacks into its
     /// looks folder, so what the preset made keeps drawing without it.
     fn keep_looks(&self, looks: &[Look]) -> Result<(), McpError> {
-        let folder = kerf_model::look::project_looks(&self.dir);
-        for look in looks {
-            if Catalog::builtin()
-                .look(look.id.as_str(), look.version)
-                .is_some()
-            {
-                continue;
-            }
-            fs::create_dir_all(&folder).map_err(io_error)?;
-            let path = folder.join(format!("{}@{}.kerflook", look.id, look.version));
-            let mut output = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-                .map_err(|error| {
-                    invalid(format!(
-                        "cannot keep `{}@{}` as {}: {error}",
-                        look.id,
-                        look.version,
-                        path.display()
-                    ))
-                })?;
-            if let Err(error) = output
-                .write_all(look.text.as_bytes())
-                .and_then(|_| output.sync_all())
-            {
-                let _ = fs::remove_file(&path);
-                return Err(io_error(error));
-            }
-        }
-        kerf_model::look::refresh_project_looks(&self.dir).map_err(invalid)?;
-        Ok(())
+        write_looks(&self.dir, looks)
     }
 
+    /// The project's preset files, the shared `presets/` library first,
+    /// each folder in name order.
     pub(super) fn list_presets(&self) -> Result<Value, McpError> {
         let mut files = Vec::new();
-        for directory in [self.dir.clone(), self.dir.join(".kerf/presets")] {
+        for directory in PRESET_FOLDERS.map(|folder| self.dir.join(folder)) {
             let entries = match fs::read_dir(directory) {
                 Ok(entries) => entries,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(io_error(error)),
             };
+            let mut found = Vec::new();
             for entry in entries {
                 let path = entry.map_err(io_error)?.path();
                 if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("kerfpreset")
                 {
-                    files.push(
+                    found.push(
                         path.strip_prefix(&self.dir)
                             .unwrap_or(&path)
                             .to_string_lossy()
@@ -123,8 +99,9 @@ impl KerfMcpRouter {
                     );
                 }
             }
+            found.sort();
+            files.extend(found);
         }
-        files.sort();
         let more = files.len() > 100;
         files.truncate(100);
         Ok(json!({"presets": files, "more": more}))
@@ -323,6 +300,48 @@ impl KerfMcpRouter {
         self.keep_looks(&preset.looks)?;
         Ok(script)
     }
+}
+
+/// Write the looks a preset carries that Kerf lacks into the looks folder
+/// of the project in `directory` (never over a file already there), so what
+/// the preset made keeps drawing without it.
+pub fn keep_looks(directory: &Path, looks: &[Look]) -> Result<(), String> {
+    write_looks(directory, looks).map_err(|error| error.message)
+}
+
+fn write_looks(directory: &Path, looks: &[Look]) -> Result<(), McpError> {
+    let folder = kerf_model::look::project_looks(directory);
+    for look in looks {
+        if Catalog::builtin()
+            .look(look.id.as_str(), look.version)
+            .is_some()
+        {
+            continue;
+        }
+        fs::create_dir_all(&folder).map_err(io_error)?;
+        let path = folder.join(format!("{}@{}.kerflook", look.id, look.version));
+        let mut output = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|error| {
+                invalid(format!(
+                    "cannot keep `{}@{}` as {}: {error}",
+                    look.id,
+                    look.version,
+                    path.display()
+                ))
+            })?;
+        if let Err(error) = output
+            .write_all(look.text.as_bytes())
+            .and_then(|_| output.sync_all())
+        {
+            let _ = fs::remove_file(&path);
+            return Err(io_error(error));
+        }
+    }
+    kerf_model::look::refresh_project_looks(directory).map_err(invalid)?;
+    Ok(())
 }
 
 /// Where a slot appears in the pattern, so a person can tell slots apart.

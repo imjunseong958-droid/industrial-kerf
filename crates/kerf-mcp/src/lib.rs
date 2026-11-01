@@ -11,6 +11,8 @@ pub mod inbound;
 mod lint;
 mod presets;
 
+pub use presets::{keep_looks, PRESET_FOLDERS};
+
 use kerf_agent::{AgentTool, ToolMap};
 use kerf_runtime::{RuntimeClient, RuntimeError};
 use kerf_skills::{load_skills_with_bundled, Skill};

@@ -4,21 +4,29 @@
 #include "command_registry.h"
 #include "effect_controls_panel.h"
 #include "effects_panel.h"
+#include "presets_panel.h"
+#include "project_launcher.h"
 #include "project_panel.h"
 #include "source_monitor_panel.h"
 #include "workspace.h"
 #include "editor_common.h"
-#include "editor_style.h"
+#include "editor_theme.h"
 #include "media_artwork.h"
 #include "timeline_widget.h"
 #include "viewer_widget.h"
+#ifdef Q_OS_MACOS
+#include "macos_window.h"
+#endif
 
+#include <QAbstractTextDocumentLayout>
 #include <QActionGroup>
 #include <QApplication>
 #include <QButtonGroup>
 #include <QClipboard>
 #include <QColorDialog>
+#include <QCursor>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -36,6 +44,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -48,51 +57,213 @@
 #include <QSaveFile>
 #include <QScrollBar>
 #include <QSettings>
+#include <QScreen>
+#include <QShortcut>
+#include <QShowEvent>
 #include <QSignalBlocker>
 #include <QStatusBar>
+#include <QTextBlock>
+#include <QTextDocument>
 #include <QTextFrame>
 #include <QToolBar>
+#include <QUrl>
 #include <QVBoxLayout>
+#include <QWindow>
 
 #include <DockManager.h>
 #include <DockWidget.h>
+#include <DockWidgetTab.h>
 
 #include <algorithm>
 #include <limits>
+#include <utility>
 
 namespace kerf {
 
 namespace {
 
-class QualityComboBox final : public QComboBox {
-public:
-    using QComboBox::QComboBox;
+// On macOS the toolbar is the window's title bar, as in Logic and Final
+// Cut: the window runs up under a transparent title bar, the window buttons
+// sit at the toolbar's leading end, and the project's name is the title.
+// Elsewhere the native title bar stays.
+#if defined(Q_OS_MACOS) && QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
+#define KERF_EDITOR_OWN_TITLE_BAR 1
+// The room the window buttons take at the toolbar's leading end (after its
+// 6 points of padding) where the platform does not report them.
+constexpr int kWindowButtonsSpace = 72;
+#else
+#define KERF_EDITOR_OWN_TITLE_BAR 0
+#endif
+constexpr int kToolbarHeight = 30;
+// The style sheet's QToolBar spacing, between every pair of its items,
+// and its padding, at either end.
+constexpr int kToolbarSpacing = 2;
+constexpr int kToolbarPadding = 6;
+// The rows of the window's chrome (the toolbar, the banners under it and
+// the agent's bar) end their last control this far in from the window's
+// edge, so their trailing buttons line up.
+constexpr int kTrailingInset = 8;
+// How far the title keeps from the toolbar's groups; nearer, it gives way.
+constexpr int kTitleClearance = 20;
 
-protected:
-    void paintEvent(QPaintEvent *event) override {
-        QComboBox::paintEvent(event);
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(isEnabled() ? QColor("#a7a7a7") : QColor("#727272"));
-        const qreal centerX = width() - 15.0;
-        const qreal centerY = height() / 2.0;
-        painter.drawPolygon(QPolygonF{{centerX - 4.5, centerY - 2.5},
-                                      {centerX + 4.5, centerY - 2.5},
-                                      {centerX, centerY + 2.5}});
+// SF Symbols' scissors on a 20-point grid, in the painter's pen: the
+// toolbar's Split and the tool palette's Razor.
+void drawScissors(QPainter &painter) {
+    painter.drawEllipse(QPointF(5, 5), 2.5, 2.5);
+    painter.drawEllipse(QPointF(5, 15), 2.5, 2.5);
+    QPainterPath blades;
+    blades.moveTo(7, 6.5); blades.lineTo(16, 16);
+    blades.moveTo(7, 13.5); blades.lineTo(16, 4);
+    painter.drawPath(blades);
+}
+
+// Toolbar symbols drawn on a shared grid so their weight and optical size
+// match; an unavailable command's symbol is dimmed in both appearances.
+QIcon toolbarIcon(const QString &glyph) {
+    return glyphIcon(QSize(20, 20), [glyph](QPainter &painter, const QColor &color) {
+        painter.setPen(QPen(color, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        QPainterPath path;
+        if (glyph == QStringLiteral("↓")) {
+            path.moveTo(10, 3); path.lineTo(10, 12);
+            path.moveTo(6.5, 8.5); path.lineTo(10, 12); path.lineTo(13.5, 8.5);
+            path.moveTo(4, 12); path.lineTo(4, 16); path.lineTo(16, 16); path.lineTo(16, 12);
+        } else if (glyph == QStringLiteral("↶") || glyph == QStringLiteral("↷")) {
+            if (glyph == QStringLiteral("↷")) { painter.translate(20, 0); painter.scale(-1, 1); }
+            path.moveTo(7, 4); path.lineTo(3.5, 7.5); path.lineTo(7, 11);
+            path.moveTo(4, 7.5); path.lineTo(11, 7.5);
+            path.cubicTo(17, 7.5, 17, 15.5, 11, 15.5);
+        } else if (glyph == QStringLiteral("✂")) {
+            drawScissors(painter);
+        } else if (glyph == QStringLiteral("trash")) {
+            // SF Symbols' trash: a lid with its handle over a can.
+            path.moveTo(4, 5); path.lineTo(16, 5);
+            path.moveTo(8, 5); path.lineTo(8, 3); path.lineTo(12, 3); path.lineTo(12, 5);
+            path.moveTo(5.5, 6); path.lineTo(5.5, 14.5);
+            path.quadTo(5.5, 16, 7, 16); path.lineTo(13, 16);
+            path.quadTo(14.5, 16, 14.5, 14.5); path.lineTo(14.5, 6);
+            path.moveTo(8.5, 8.5); path.lineTo(8.5, 13.5);
+            path.moveTo(11.5, 8.5); path.lineTo(11.5, 13.5);
+        } else {
+            path.moveTo(5, 5); path.lineTo(15, 15);
+            path.moveTo(15, 5); path.lineTo(5, 15);
+        }
+        painter.drawPath(path);
+    });
+}
+
+// A tool palette symbol on an 18-point grid, in `color`: the pointer for
+// Selection (SF Symbols' cursorarrow), the edit suites' marks for the rest,
+// drawn with the toolbar's pen so they share its weight.
+QPixmap toolGlyph(const QString &id, const QColor &color) {
+    QPixmap pixmap(36, 36);
+    pixmap.setDevicePixelRatio(2);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    if (id == QStringLiteral("tool.selection")) {
+        const QPolygonF arrow{{5.5, 2.0}, {5.5, 15.0}, {8.6, 12.0}, {10.7, 16.6}, {12.7, 15.7}, {10.6, 11.2}, {14.8, 11.2}};
+        painter.setPen(QPen(color, 1.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.setBrush(color);
+        painter.drawPolygon(arrow);
+        return pixmap;
     }
-};
+    painter.setPen(QPen(color, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    if (id == QStringLiteral("tool.razor")) {
+        // The toolbar's scissors, brought onto this grid.
+        painter.scale(0.9, 0.9);
+        drawScissors(painter);
+        return pixmap;
+    }
+    // An arrow along y from x0 to x1, its head at x1.
+    const auto arrow = [](QPainterPath &path, qreal y, qreal x0, qreal x1) {
+        const qreal back = x1 > x0 ? -2.5 : 2.5;
+        path.moveTo(x0, y); path.lineTo(x1, y);
+        path.moveTo(x1 + back, y - 2.5); path.lineTo(x1, y); path.lineTo(x1 + back, y + 2.5);
+    };
+    QPainterPath path;
+    if (id == QStringLiteral("tool.ripple")) {
+        // An edit point, and the cut closing up on it.
+        path.moveTo(4, 3.5); path.lineTo(4, 14.5);
+        arrow(path, 9, 15, 7);
+    } else if (id == QStringLiteral("tool.roll")) {
+        // An edit point, moving either way.
+        path.moveTo(9, 3.5); path.lineTo(9, 14.5);
+        path.moveTo(5.5, 6.5); path.lineTo(3, 9); path.lineTo(5.5, 11.5);
+        path.moveTo(12.5, 6.5); path.lineTo(15, 9); path.lineTo(12.5, 11.5);
+    } else if (id == QStringLiteral("tool.slip")) {
+        // The clip's content, slid either way inside it.
+        arrow(path, 9, 9, 3);
+        arrow(path, 9, 9, 15);
+    } else if (id == QStringLiteral("tool.slide")) {
+        // The clip, and its neighbours giving way.
+        arrow(path, 6, 3.5, 14.5);
+        arrow(path, 12, 14.5, 3.5);
+    }
+    painter.drawPath(path);
+    return pixmap;
+}
+
+// A tool's icon: secondary text when not chosen, the accent when chosen.
+QIcon toolIcon(const QString &id) {
+    const EditorTheme &theme = editorTheme();
+    QIcon icon;
+    icon.addPixmap(toolGlyph(id, theme.textSecondary), QIcon::Normal, QIcon::Off);
+    icon.addPixmap(toolGlyph(id, theme.textStrong), QIcon::Active, QIcon::Off);
+    icon.addPixmap(toolGlyph(id, theme.accent), QIcon::Normal, QIcon::On);
+    icon.addPixmap(toolGlyph(id, theme.accent), QIcon::Active, QIcon::On);
+    icon.addPixmap(toolGlyph(id, theme.glyphDisabled), QIcon::Disabled, QIcon::Off);
+    return icon;
+}
+
+// The assistant's welcome, shown until the first message.
+QString conversationIntro(const EditorTheme &t) {
+    return QStringLiteral(
+        "<p style='margin-top:2px; color:%1; font-size:11px; font-weight:600;'>Your editing partner</p>"
+        "<p style='margin-top:2px; color:%2; font-size:14px; font-weight:600;'>Make your next cut.</p>"
+        "<p style='margin-top:4px; color:%3;'>Describe the change. Kerf uses this timeline.</p>"
+        "<p style='margin-top:10px; color:%3; font-size:11px; font-weight:600;'>Try asking</p>"
+        "<p style='margin-top:2px; color:%4;'>“Trim the opening to three seconds.”</p>"
+        "<p style='margin-top:2px; color:%4;'>“Lower the music under the dialogue.”</p>"
+        "<p style='margin-top:10px; color:%3; font-size:11px;'>Review a proposal before it changes the cut.</p>")
+        .arg(t.assistantText.name(), t.textStrong.name(), t.textSecondary.name(), t.text.name());
+}
+
+// Conversation messages carry their kind, so a change of appearance can
+// recolour the ones already shown.
+enum class MessageKind { User = 1, Agent, Error };
+constexpr int kMessageKind = QTextFormat::UserProperty + 1;
+
+void styleMessage(QTextFrameFormat &frame, MessageKind kind) {
+    const EditorTheme &t = editorTheme();
+    frame.setBackground(kind == MessageKind::User ? t.messageUser : kind == MessageKind::Error ? t.errorSurface : t.messageAgent);
+    frame.setBorderBrush(kind == MessageKind::User ? t.messageUserBorder : kind == MessageKind::Error ? t.errorBorder
+                                                                                                 : t.messageAgentBorder);
+}
+
+QColor messageRoleColor(MessageKind kind) {
+    const EditorTheme &t = editorTheme();
+    return kind == MessageKind::User ? t.messageUserRole : kind == MessageKind::Error ? t.errorText : t.assistantText;
+}
 
 } // namespace
 
 MainWindow::MainWindow(const QString &projectDirectory, const QString &kerfdBinary, QWidget *parent)
     : QMainWindow(parent), m_projectDirectory(projectDirectory), m_kerfdBinary(kerfdBinary) {
-    setWindowTitle(QStringLiteral("Industrial Kerf — Editor"));
     resize(1500, 940);
     setMinimumSize(1080, 700);
+#if KERF_EDITOR_OWN_TITLE_BAR
+    setWindowFlag(Qt::ExpandedClientAreaHint);
+    setWindowFlag(Qt::NoTitleBarBackgroundHint);
+    // The toolbar fills the window to its top edge; fitTitleBar keeps its
+    // commands clear of the window buttons.
+    setAttribute(Qt::WA_ContentsMarginsRespectsSafeArea, false);
+#endif
     buildUi();
     setupActions();
     setupStatusBar();
+    // The folder's name until the first snapshot names the project.
+    setProjectTitle(m_projectDirectory.isEmpty() ? QStringLiteral("Industrial Kerf") : QFileInfo(m_projectDirectory).fileName());
+    connect(EditorAppearance::instance(), &EditorAppearance::changed, this, &MainWindow::applyAppearance);
     m_exactSeekTimer.setSingleShot(true);
     connect(&m_exactSeekTimer, &QTimer::timeout, this, &MainWindow::settlePointerSeek);
     setConnection(QStringLiteral("connecting"));
@@ -108,6 +279,8 @@ MainWindow::MainWindow(const QString &projectDirectory, const QString &kerfdBina
 }
 
 MainWindow::~MainWindow() {
+    // The composer follows the focus no more: its widgets go before the window.
+    disconnect(qApp, &QApplication::focusChanged, this, nullptr);
     if (m_bridge) kerf_bridge_free(m_bridge);
 }
 
@@ -179,16 +352,23 @@ void MainWindow::showPresetBindings(const QString &path, const QJsonObject &pres
     QDialog dialog(this);
     dialog.setObjectName(QStringLiteral("presetBindingsDialog"));
     dialog.setWindowTitle(QStringLiteral("Apply preset — %1").arg(preset.value(QStringLiteral("name")).toString()));
-    dialog.resize(640, 620);
+    dialog.setMinimumWidth(560);
     auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(20, 20, 20, 20);
+    layout->setSpacing(12);
     auto *intro = new QLabel(QStringLiteral("Choose media for each slot. Kerf keeps the preset's timing, effects and animation. "
         "Applying replaces this sequence as a proposal for you to review."));
     intro->setWordWrap(true);
     layout->addWidget(intro);
     auto *scroll = new QScrollArea;
     scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
     auto *contents = new QWidget;
     auto *form = new QFormLayout(contents);
+    form->setContentsMargins(0, 0, 0, 0);
+    form->setVerticalSpacing(8);
+    form->setHorizontalSpacing(12);
+    form->setLabelAlignment(Qt::AlignRight | Qt::AlignTop);
     QHash<QString, QComboBox *> media;
     QHash<QString, QDoubleSpinBox *> starts;
     QHash<QString, QLineEdit *> texts;
@@ -217,8 +397,10 @@ void MainWindow::showPresetBindings(const QString &path, const QJsonObject &pres
             choice->setItemData(choice->count() - 1, source.value(QStringLiteral("fps")).toDouble(), fpsRole);
         }
         if (choice->count() == 1) choice->setItemText(0, QStringLiteral("Import matching media first"));
-        auto *from = new QDoubleSpinBox;
+        auto *from = new StepperSpinBox;
         from->setObjectName(QStringLiteral("presetFrom_%1").arg(id));
+        // One width for every slot, so the steppers line up down the column.
+        from->setFixedWidth(106);
         from->setDecimals(3);
         from->setSuffix(QStringLiteral(" s"));
         from->setRange(0, 0);
@@ -245,31 +427,63 @@ void MainWindow::showPresetBindings(const QString &path, const QJsonObject &pres
         auto *row = new QWidget;
         auto *rowLayout = new QGridLayout(row);
         rowLayout->setContentsMargins(0, 0, 0, 0);
+        rowLayout->setHorizontalSpacing(8);
+        rowLayout->setVerticalSpacing(4);
         rowLayout->addWidget(choice, 0, 0);
         rowLayout->addWidget(from, 0, 1);
         rowLayout->addWidget(usedBy, 1, 0, 1, 2);
         rowLayout->setColumnStretch(0, 1);
+        rowLayout->setColumnStretch(1, 0);
         form->addRow(QStringLiteral("%1 · %2 s").arg(id).arg(slot.value(QStringLiteral("seconds")).toDouble(), 0, 'f', 3), row);
         media.insert(id, choice);
         starts.insert(id, from);
     }
+    // Text slots by number, as the launcher shows them; their clip ids are
+    // the document's names, in the tooltip.
     const QJsonObject textSlots = preset.value(QStringLiteral("textSlots")).toObject();
+    int textNumber = 0;
     for (auto it = textSlots.begin(); it != textSlots.end(); ++it) {
         auto *text = new QLineEdit(it.value().toString());
         text->setObjectName(QStringLiteral("presetText_%1").arg(it.key()));
-        form->addRow(it.key(), text);
+        text->setToolTip(it.key());
+        form->addRow(QStringLiteral("Text %1").arg(++textNumber), text);
         texts.insert(it.key(), text);
     }
     scroll->setWidget(contents);
     layout->addWidget(scroll, 1);
+    // The preset's source, for those who want it, behind a disclosure.
+    auto *details = new QToolButton;
+    details->setObjectName(QStringLiteral("disclosure"));
+    details->setText(QStringLiteral("Details"));
+    details->setCheckable(true);
+    details->setAutoRaise(true);
+    details->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    details->setIconSize(QSize(11, 11));
+    details->setIcon(disclosureIcon(false, editorTheme().textSecondary));
+    layout->addWidget(details, 0, Qt::AlignLeft);
     auto *code = new QPlainTextEdit(preset.value(QStringLiteral("document")).toString());
     code->setObjectName(QStringLiteral("presetCode"));
     code->setReadOnly(true);
     code->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     code->setMaximumHeight(150);
+    code->hide();
     layout->addWidget(code);
+    // As tall as what it shows, as macOS dialogs are: the slots up to most
+    // of the screen (they scroll past that), and the source when Details
+    // is open.
+    const auto fit = [&dialog, layout] {
+        layout->activate();
+        dialog.resize(dialog.width(), layout->hasHeightForWidth() ? layout->totalHeightForWidth(dialog.width())
+                                                                  : layout->totalSizeHint().height());
+    };
+    connect(details, &QToolButton::toggled, code, [details, code, fit](bool open) {
+        code->setVisible(open);
+        details->setIcon(disclosureIcon(open, editorTheme().textSecondary));
+        fit();
+    });
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Create proposal"));
+    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Create Proposal"));
+    buttons->button(QDialogButtonBox::Ok)->setDefault(true);
     const auto updateReady = [buttons, media] {
         bool ready = true;
         for (auto *choice : media) ready = ready && !choice->currentData().toString().isEmpty();
@@ -280,6 +494,14 @@ void MainWindow::showPresetBindings(const QString &path, const QJsonObject &pres
     connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
+    dialog.ensurePolished();
+    dialog.resize(600, dialog.height());
+    const QMargins margins = layout->contentsMargins();
+    const int inner = dialog.width() - margins.left() - margins.right();
+    const int formHeight = form->hasHeightForWidth() ? form->totalHeightForWidth(inner) : form->totalSizeHint().height();
+    const QScreen *screen = dialog.screen();
+    scroll->setFixedHeight(std::min(formHeight, screen ? screen->availableGeometry().height() * 6 / 10 : 520));
+    fit();
     const QJsonValue revision = revisionValue();
     if (dialog.exec() != QDialog::Accepted) return;
     if (revision != revisionValue()) {
@@ -770,8 +992,8 @@ void MainWindow::focusRegion() {
     auto *picker = new RegionPicker(frame, current, &dialog);
     layout->addWidget(picker);
     auto *form = new QFormLayout;
-    auto *start = new QDoubleSpinBox(&dialog);
-    auto *end = new QDoubleSpinBox(&dialog);
+    auto *start = new StepperSpinBox(&dialog);
+    auto *end = new StepperSpinBox(&dialog);
     for (QDoubleSpinBox *spin : {start, end}) {
         spin->setDecimals(3);
         spin->setSingleStep(1.0 / m_fps);
@@ -792,6 +1014,7 @@ void MainWindow::focusRegion() {
         start->setEnabled(!enabled);
     });
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    buttons->button(QDialogButtonBox::Ok)->setDefault(true);
     connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
@@ -892,7 +1115,7 @@ bool MainWindow::sendAgent(const QString &text, const QJsonObject &focus, const 
     showNextSteps(QJsonArray{});
     m_agentBusy = true;
     m_agentText.clear();
-    m_agentStatus->setText(QStringLiteral("WORKING"));
+    m_agentStatus->setText(QStringLiteral("Working"));
     m_chatInput->setEnabled(false);
     m_abortButton->setEnabled(true);
     updateChatControls();
@@ -1028,6 +1251,8 @@ void MainWindow::showNextSteps(const QJsonArray &steps) {
             const QString request = step.value(QStringLiteral("request")).toString();
             auto *button = new QPushButton(step.value(QStringLiteral("label")).toString());
             button->setObjectName(QStringLiteral("nextStep"));
+            // A pill: its focus ring follows its round ends.
+            button->setProperty("bezelRadius", 11);
             button->setToolTip(request);
             button->setCursor(Qt::PointingHandCursor);
             connect(button, &QPushButton::clicked, this, [this, request] {
@@ -1036,6 +1261,8 @@ void MainWindow::showNextSteps(const QJsonArray &steps) {
             row->layout()->addWidget(button);
         }
     }
+    // In the assistant the chips keep their own width, from the left.
+    static_cast<QHBoxLayout *>(m_chatNextSteps->layout())->addStretch(1);
     m_chatNextSteps->setVisible(!steps.isEmpty());
     updateAiBar();
 }
@@ -1046,9 +1273,13 @@ void MainWindow::updateChatControls() {
     m_abortButton->setEnabled(m_agentBusy);
     m_abortButton->setVisible(m_agentBusy);
     m_sendButton->setVisible(!m_agentBusy);
+    // The composer's edge shows the focus of any field in it (the message,
+    // the model), in place of a ring; a button in it rings itself.
+    const QWidget *focus = QApplication::focusWidget();
+    const bool focused = focus && m_chatComposer->isAncestorOf(focus) && !qobject_cast<const QAbstractButton *>(focus);
     const QString state = !m_connected ? QStringLiteral("offline")
                           : m_agentBusy ? QStringLiteral("sending")
-                          : m_chatInput->hasFocus() ? QStringLiteral("focused") : QStringLiteral("ready");
+                          : focused ? QStringLiteral("focused") : QStringLiteral("ready");
     if (m_chatComposer->property("state").toString() != state) {
         m_chatComposer->setProperty("state", state);
         m_chatComposer->style()->unpolish(m_chatComposer);
@@ -1207,8 +1438,27 @@ void MainWindow::rejectProposal() {
 }
 
 bool MainWindow::eventFilter(QObject *object, QEvent *event) {
-    if (object == m_chatInput && (event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut))
-        updateChatControls();
+    if (object == m_preferences && event->type() == QEvent::Show) fitPreferences();
+    // The title stays centred as the toolbar, or a group beside it, changes.
+    if ((object == m_toolbar || object == m_toolbarLeftEnd || object == m_quality) &&
+        (event->type() == QEvent::Resize || event->type() == QEvent::Move))
+        layoutProjectTitle();
+#if KERF_EDITOR_OWN_TITLE_BAR
+    // Dragging the toolbar's empty stretches (or its title, which takes no
+    // clicks) moves the window, and a double click zooms it, as a title
+    // bar's do. The press is kept so the moves after it come here.
+    if (object == m_toolbar && windowHandle()) {
+        if (event->type() == QEvent::MouseButtonPress) return static_cast<QMouseEvent *>(event)->button() == Qt::LeftButton;
+        if (event->type() == QEvent::MouseMove && (static_cast<QMouseEvent *>(event)->buttons() & Qt::LeftButton)) {
+            windowHandle()->startSystemMove();
+            return true;
+        }
+        if (event->type() == QEvent::MouseButtonDblClick) {
+            titleBarDoubleClicked(this);
+            return true;
+        }
+    }
+#endif
     if (object == m_chatInput && event->type() == QEvent::KeyPress) {
         auto *key = static_cast<QKeyEvent *>(event);
         if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) &&
@@ -1227,14 +1477,16 @@ void MainWindow::buildUi() {
     auto *central = new QWidget(this);
     central->setObjectName(QStringLiteral("workspaceRoot"));
     auto *root = new QVBoxLayout(central);
-    // Narrow gutters give the editing surfaces a little breathing room.
-    root->setContentsMargins(2, 2, 2, 2);
-    root->setSpacing(2);
+    // Banners and panels run edge to edge under the toolbar, as in macOS
+    // pro apps; hairlines and the dock splitters separate them.
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
     m_artwork = new MediaArtwork(this);
 
     m_connectionBanner = new QFrame;
     m_connectionBanner->setObjectName(QStringLiteral("connectionBanner"));
     auto *connectionLayout = new QHBoxLayout(m_connectionBanner);
+    connectionLayout->setContentsMargins(12, 5, kTrailingInset, 5);
     m_connectionMessage = new QLabel;
     m_connectionMessage->setWordWrap(true);
     connectionLayout->addWidget(m_connectionMessage, 1);
@@ -1254,6 +1506,7 @@ void MainWindow::buildUi() {
     m_errorBanner = new QFrame;
     m_errorBanner->setObjectName(QStringLiteral("errorBanner"));
     auto *errorLayout = new QHBoxLayout(m_errorBanner);
+    errorLayout->setContentsMargins(12, 5, kTrailingInset, 5);
     m_errorMessage = new QLabel;
     m_errorMessage->setWordWrap(true);
     errorLayout->addWidget(m_errorMessage, 1);
@@ -1262,6 +1515,39 @@ void MainWindow::buildUi() {
     errorLayout->addWidget(dismissError);
     m_errorBanner->hide();
     root->addWidget(m_errorBanner);
+
+    // A git pull in a terminal or a text editor changed project.kerf; kerfd
+    // keeps the editor's version until one of them is chosen.
+    m_divergedBanner = new QFrame;
+    m_divergedBanner->setObjectName(QStringLiteral("divergedBanner"));
+    auto *divergedLayout = new QHBoxLayout(m_divergedBanner);
+    divergedLayout->setContentsMargins(12, 5, kTrailingInset, 5);
+    divergedLayout->setSpacing(8);
+    // The colour is in the triangle only; the bar and its text stay neutral.
+    m_divergedGlyph = new QLabel;
+    m_divergedGlyph->setObjectName(QStringLiteral("divergedGlyph"));
+    m_divergedGlyph->setPixmap(warningTriangle(editorTheme().warningGlyph));
+    m_divergedGlyph->setFixedSize(14, 14);
+    divergedLayout->addWidget(m_divergedGlyph);
+    auto *divergedTitle = new QLabel(QStringLiteral("project.kerf changed on disk."));
+    divergedTitle->setObjectName(QStringLiteral("divergedTitle"));
+    divergedLayout->addWidget(divergedTitle);
+    auto *divergedText = new QLabel(QStringLiteral("Load it to bring in edits made outside Kerf (a git pull, a text editor), "
+                                                   "or keep the editor's version and write it over the file."));
+    divergedText->setObjectName(QStringLiteral("divergedMessage"));
+    divergedText->setWordWrap(true);
+    divergedLayout->addWidget(divergedText, 1);
+    // The default action trails, as macOS orders a row of buttons.
+    m_keepEditorVersion = new QPushButton(QStringLiteral("Keep Editor Version"));
+    m_keepEditorVersion->setObjectName(QStringLiteral("keepEditorVersion"));
+    connect(m_keepEditorVersion, &QPushButton::clicked, this, [this] { execute(QStringLiteral("projection.repair")); });
+    divergedLayout->addWidget(m_keepEditorVersion);
+    m_loadFromDisk = new QPushButton(QStringLiteral("Load from Disk"));
+    m_loadFromDisk->setObjectName(QStringLiteral("loadFromDisk"));
+    connect(m_loadFromDisk, &QPushButton::clicked, this, [this] { execute(QStringLiteral("projection.import")); });
+    divergedLayout->addWidget(m_loadFromDisk);
+    m_divergedBanner->hide();
+    root->addWidget(m_divergedBanner);
 
     m_workspace = new Workspace(central);
     root->addWidget(m_workspace->manager(), 1);
@@ -1303,15 +1589,16 @@ void MainWindow::buildUi() {
     m_toolPalette = new QToolBar(QStringLiteral("Tools"));
     m_toolPalette->setObjectName(QStringLiteral("toolPalette"));
     m_toolPalette->setOrientation(Qt::Vertical);
-    m_toolPalette->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_toolPalette->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    m_toolPalette->setIconSize(QSize(18, 18));
     timelineRow->addWidget(m_toolPalette);
     timelineRow->addWidget(timelineFrame, 1);
     // What Kerf is doing, and the proposal to review, where the edit happens.
     m_aiBar = new QFrame;
     m_aiBar->setObjectName(QStringLiteral("aiBar"));
     auto *aiLayout = new QHBoxLayout(m_aiBar);
-    aiLayout->setContentsMargins(10, 3, 8, 3);
-    aiLayout->setSpacing(6);
+    aiLayout->setContentsMargins(10, 3, kTrailingInset, 3);
+    aiLayout->setSpacing(8);
     m_aiBarText = new QLabel;
     m_aiBarText->setObjectName(QStringLiteral("aiBarText"));
     aiLayout->addWidget(m_aiBarText, 1);
@@ -1331,6 +1618,13 @@ void MainWindow::buildUi() {
 
     m_projectPanel = new ProjectPanel(m_artwork);
     connect(m_projectPanel, &ProjectPanel::openRequested, this, &MainWindow::openSource);
+    connect(m_projectPanel, &ProjectPanel::menuRequested, this, [this](const QString &media, const QPoint &at) {
+        QMenu *menu = binMenu(media);
+        menu->exec(at);
+        menu->deleteLater();
+    });
+    m_presets = new PresetsPanel;
+    connect(m_presets, &PresetsPanel::applyRequested, this, &MainWindow::applyLibraryPreset);
     m_sourceMonitor = new SourceMonitorPanel;
     connect(m_sourceMonitor, &SourceMonitorPanel::changed, this, &MainWindow::updateCommandStates);
 
@@ -1354,22 +1648,47 @@ void MainWindow::buildUi() {
     connect(preferencesLink, &QToolButton::clicked, this, [this] { triggerCommand(QStringLiteral("app.preferences")); });
     statusRow->addWidget(preferencesLink);
     statusRow->addStretch(1);
-    m_agentStatus = new QLabel(QStringLiteral("READY"));
+    m_agentStatus = new QLabel(QStringLiteral("Ready"));
     m_agentStatus->setObjectName(QStringLiteral("statusPill"));
     statusRow->addWidget(m_agentStatus);
     chatTabLayout->addLayout(statusRow);
-    // Review and activity can overflow on short windows; the composer stays fixed.
+    // One view scrolls: the conversation, at its full height, then activity
+    // and the proposal under review. The composer stays fixed below.
     auto *chatScroll = new QScrollArea;
+    m_chatScroll = chatScroll;
     chatScroll->setFrameShape(QFrame::NoFrame);
     chatScroll->setWidgetResizable(true);
     chatScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    // New output keeps the latest in view, unless the reader scrolled away.
+    connect(chatScroll->verticalScrollBar(), &QScrollBar::rangeChanged, this, [this](int, int maximum) {
+        if (m_followConversation) m_chatScroll->verticalScrollBar()->setValue(maximum);
+    });
+    connect(chatScroll->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) {
+        m_followConversation = value >= m_chatScroll->verticalScrollBar()->maximum() - 4;
+    });
+    // A hairline under the header row while the view is scrolled, as macOS
+    // draws a scroll edge, so a line cut off at the top reads as scrolled
+    // content and not as a glitch.
+    auto *scrollEdge = new QFrame;
+    scrollEdge->setObjectName(QStringLiteral("scrollEdge"));
+    scrollEdge->setFixedHeight(1);
+    connect(chatScroll->verticalScrollBar(), &QScrollBar::valueChanged, scrollEdge, [scrollEdge](int value) {
+        if (scrollEdge->property("scrolled").toBool() == (value > 0)) return;
+        scrollEdge->setProperty("scrolled", value > 0);
+        scrollEdge->style()->unpolish(scrollEdge);
+        scrollEdge->style()->polish(scrollEdge);
+    });
     auto *chatContent = new QWidget;
     auto *chatLayout = new QVBoxLayout(chatContent);
     chatLayout->setContentsMargins(0, 0, 0, 0);
     chatLayout->setSizeConstraint(QLayout::SetMinimumSize);
     chatLayout->setSpacing(6);
     chatScroll->setWidget(chatContent);
-    chatTabLayout->addWidget(chatScroll, 1);
+    auto *scrollColumn = new QVBoxLayout;
+    scrollColumn->setSpacing(0);
+    scrollColumn->addWidget(scrollEdge);
+    scrollColumn->addWidget(chatScroll, 1);
+    chatTabLayout->addLayout(scrollColumn, 1);
     m_conversation = new QTextEdit;
     m_conversation->setReadOnly(true);
     m_conversation->setObjectName(QStringLiteral("conversation"));
@@ -1378,20 +1697,27 @@ void MainWindow::buildUi() {
     m_conversation->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
     m_conversation->setAccessibleName(QStringLiteral("Conversation with Kerf"));
     m_conversation->setMinimumHeight(80);
+    // It never scrolls itself: it is as tall as its messages, inside the
+    // view that scrolls.
+    m_conversation->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_conversation->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    connect(m_conversation->document()->documentLayout(), &QAbstractTextDocumentLayout::documentSizeChanged, this,
+            [this](const QSizeF &size) {
+                const int chrome = m_conversation->height() - m_conversation->viewport()->height();
+                m_conversation->setFixedHeight(std::max(80, static_cast<int>(std::ceil(size.height())) + chrome));
+            });
     m_conversation->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_conversation->document()->setDocumentMargin(2);
-    m_conversation->setHtml(QStringLiteral(
-        "<p style='margin-top:2px; color:#c6a15a; font-size:10px;'>YOUR EDITING PARTNER</p>"
-        "<p style='margin-top:2px; color:#f0f0f0; font-size:14px; font-weight:600;'>Make your next cut.</p>"
-        "<p style='margin-top:4px; color:#b6b6b6;'>Describe the change. Kerf uses this timeline.</p>"
-        "<p style='margin-top:10px; color:#888888; font-size:10px;'>TRY ASKING</p>"
-        "<p style='margin-top:2px; color:#dddddd;'>“Trim the opening to three seconds.”</p>"
-        "<p style='margin-top:2px; color:#dddddd;'>“Lower the music under the dialogue.”</p>"
-        "<p style='margin-top:10px; color:#999999; font-size:11px;'>Review a proposal before it changes the cut.</p>"));
-    chatLayout->addWidget(m_conversation, 1);
+    m_conversation->setHtml(conversationIntro(editorTheme()));
+    chatLayout->addWidget(m_conversation);
+    // Review sits at the foot of a short conversation.
+    chatLayout->addStretch(1);
     auto *composer = new QFrame;
     m_chatComposer = composer;
     composer->setObjectName(QStringLiteral("chatComposer"));
+    // Its edge turns the accent while a field in it (the message, the
+    // model) has focus, in place of a ring around the field.
+    composer->setProperty("ringsOwnFields", true);
     auto *composerLayout = new QVBoxLayout(composer);
     composerLayout->setContentsMargins(10, 6, 8, 6);
     composerLayout->setSpacing(4);
@@ -1426,6 +1752,7 @@ void MainWindow::buildUi() {
     composerLayout->addLayout(agentPicker);
     auto *sendButton = new QPushButton(QStringLiteral("↑"));
     sendButton->setObjectName(QStringLiteral("chatSendButton"));
+    sendButton->setProperty("bezelRadius", 8);
     m_sendButton = sendButton;
     sendButton->setAccessibleName(QStringLiteral("Send message"));
     sendButton->setFixedSize(32, 32);
@@ -1446,11 +1773,15 @@ void MainWindow::buildUi() {
     connect(abortButton, &QToolButton::clicked, this, [this] {
         if (!execute(QStringLiteral("ai.stop"))) return;
         m_abortButton->setEnabled(false);
-        m_agentStatus->setText(QStringLiteral("STOPPING"));
+        m_agentStatus->setText(QStringLiteral("Stopping"));
         appendConversationNote(QStringLiteral("Progress"), QStringLiteral("Stopping request…"));
     });
     chatRow->addWidget(abortButton);
     composerLayout->addLayout(chatRow);
+    // Its edge follows the focus into and out of it (see updateChatControls).
+    connect(qApp, &QApplication::focusChanged, this, [this](QWidget *from, QWidget *to) {
+        if ((from && m_chatComposer->isAncestorOf(from)) || (to && m_chatComposer->isAncestorOf(to))) updateChatControls();
+    });
     m_chatActivity = new QLabel;
     m_chatActivity->setObjectName(QStringLiteral("chatActivity"));
     m_chatActivity->setTextFormat(Qt::PlainText);
@@ -1459,18 +1790,22 @@ void MainWindow::buildUi() {
     m_chatActivity->hide();
     chatLayout->addWidget(m_chatActivity);
     auto *activityTitle = new QToolButton;
-    activityTitle->setText(QStringLiteral("▸ Activity"));
+    activityTitle->setText(QStringLiteral("Activity"));
     activityTitle->setObjectName(QStringLiteral("eyebrow"));
+    activityTitle->setCheckable(true);
+    activityTitle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    activityTitle->setIconSize(QSize(11, 11));
+    activityTitle->setIcon(disclosureIcon(false, editorTheme().textSecondary));
+    m_disclosures.append(activityTitle);
     chatLayout->addWidget(activityTitle);
     m_activityList = new QListWidget;
     m_activityList->setObjectName(QStringLiteral("activityList"));
     m_activityList->setMaximumHeight(60);
     chatLayout->addWidget(m_activityList);
     m_activityList->hide();
-    connect(activityTitle, &QToolButton::clicked, this, [this, activityTitle] {
-        const bool visible = !m_activityList->isVisible();
+    connect(activityTitle, &QToolButton::toggled, this, [this, activityTitle](bool visible) {
         m_activityList->setVisible(visible);
-        activityTitle->setText(visible ? QStringLiteral("▾ Activity") : QStringLiteral("▸ Activity"));
+        activityTitle->setIcon(disclosureIcon(visible, editorTheme().textSecondary));
     });
 
     m_exportProgress = new QProgressBar;
@@ -1481,7 +1816,7 @@ void MainWindow::buildUi() {
     chatLayout->addWidget(m_exportProgress);
     m_exportProgress->hide();
 
-    auto *proposalBox = new QGroupBox(QStringLiteral("PROPOSAL"));
+    auto *proposalBox = new QGroupBox(QStringLiteral("Proposal"));
     m_proposalBox = proposalBox;
     proposalBox->setObjectName(QStringLiteral("proposalBox"));
     auto *proposalLayout = new QVBoxLayout(proposalBox);
@@ -1493,16 +1828,20 @@ void MainWindow::buildUi() {
     m_proposalDiff->setReadOnly(true);
     m_proposalDiff->setMinimumHeight(80);
     m_proposalDiff->setMaximumHeight(240);
-    m_proposalDiff->setObjectName(QStringLiteral("muted"));
+    m_proposalDiff->setObjectName(QStringLiteral("proposalDiff"));
+    // Sized to their labels and right-aligned, the default action rightmost,
+    // as macOS orders a dialog's buttons.
     auto *proposalButtons = new QHBoxLayout;
     m_acceptButton = new QPushButton(QStringLiteral("Accept"));
     m_acceptButton->setObjectName(QStringLiteral("primaryButton"));
     m_rejectButton = new QPushButton(QStringLiteral("Reject"));
     m_rejectButton->setObjectName(QStringLiteral("dangerButton"));
+    for (QPushButton *button : {m_rejectButton, m_acceptButton}) button->setMinimumWidth(72);
     connect(m_acceptButton, &QPushButton::clicked, this, &MainWindow::acceptProposal);
     connect(m_rejectButton, &QPushButton::clicked, this, &MainWindow::rejectProposal);
-    proposalButtons->addWidget(m_acceptButton);
+    proposalButtons->addStretch(1);
     proposalButtons->addWidget(m_rejectButton);
+    proposalButtons->addWidget(m_acceptButton);
     proposalLayout->addWidget(m_proposalSummary);
     proposalLayout->addWidget(m_proposalDiff);
     proposalLayout->addLayout(proposalButtons);
@@ -1578,9 +1917,12 @@ void MainWindow::buildUi() {
     m_preferences = new QDialog(this);
     m_preferences->setObjectName(QStringLiteral("preferencesDialog"));
     m_preferences->setWindowTitle(QStringLiteral("Settings"));
-    m_preferences->resize(520, 680);
+    // A macOS Settings window: sized to what it shows, closed with its
+    // close button or Command-W, with no Close button of its own.
+    auto *closeShortcut = new QShortcut(QKeySequence::Close, m_preferences);
+    connect(closeShortcut, &QShortcut::activated, m_preferences, &QDialog::hide);
     auto *settingsTabLayout = new QVBoxLayout(m_preferences);
-    settingsTabLayout->setContentsMargins(12, 12, 12, 12);
+    settingsTabLayout->setContentsMargins(20, 12, 20, 20);
     auto *settingsScroll = new QScrollArea;
     settingsScroll->setWidgetResizable(true);
     settingsScroll->setFrameShape(QFrame::NoFrame);
@@ -1593,7 +1935,7 @@ void MainWindow::buildUi() {
     auto *connectionGroup = new QGroupBox(QStringLiteral("AI"));
     connectionGroup->setObjectName(QStringLiteral("aiConnection"));
     auto *cloudLayout = new QVBoxLayout(connectionGroup);
-    cloudLayout->setContentsMargins(10, 12, 10, 10);
+    cloudLayout->setContentsMargins(10, 10, 10, 10);
     cloudLayout->setSpacing(6);
     m_cloudRadio = new QRadioButton(QStringLiteral("Kerf Cloud"));
     m_cloudRadio->setObjectName(QStringLiteral("agentConnectionCloud"));
@@ -1645,9 +1987,17 @@ void MainWindow::buildUi() {
     connect(m_cloudRadio, &QRadioButton::toggled, this, onConnectionChanged);
     connect(m_ownKeyRadio, &QRadioButton::toggled, this, onConnectionChanged);
 
+    // A borderless disclosure, as the launcher's Details row.
     auto *advancedToggle = new QToolButton;
-    advancedToggle->setObjectName(QStringLiteral("advancedToggle"));
-    advancedToggle->setText(QStringLiteral("▸ Advanced"));
+    advancedToggle->setObjectName(QStringLiteral("disclosure"));
+    advancedToggle->setAccessibleName(QStringLiteral("Advanced"));
+    advancedToggle->setText(QStringLiteral("Advanced"));
+    advancedToggle->setAutoRaise(true);
+    advancedToggle->setCheckable(true);
+    advancedToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    advancedToggle->setIconSize(QSize(11, 11));
+    advancedToggle->setIcon(disclosureIcon(false, editorTheme().textSecondary));
+    m_disclosures.append(advancedToggle);
     settingsLayout->addWidget(advancedToggle);
     m_advancedSettings = new QWidget;
     m_advancedSettings->setObjectName(QStringLiteral("advancedSettings"));
@@ -1656,10 +2006,10 @@ void MainWindow::buildUi() {
     advancedLayout->setSpacing(10);
     settingsLayout->addWidget(m_advancedSettings);
     m_advancedSettings->hide();
-    connect(advancedToggle, &QToolButton::clicked, this, [this, advancedToggle] {
-        const bool show = m_advancedSettings->isHidden();
+    connect(advancedToggle, &QToolButton::toggled, this, [this, advancedToggle](bool show) {
         m_advancedSettings->setVisible(show);
-        advancedToggle->setText(show ? QStringLiteral("▾ Advanced") : QStringLiteral("▸ Advanced"));
+        advancedToggle->setIcon(disclosureIcon(show, editorTheme().textSecondary));
+        fitPreferences();
     });
     auto *settingsIntro = new QLabel(QStringLiteral("Two protocol slots. One active connection for chat. Gemini, Groq, and OpenRouter use the OpenAI-compatible slot with that vendor's compatible base URL."));
     settingsIntro->setObjectName(QStringLiteral("chatHint"));
@@ -1667,7 +2017,7 @@ void MainWindow::buildUi() {
     advancedLayout->addWidget(settingsIntro);
     auto *activeConnection = new QGroupBox(QStringLiteral("Active connection"));
     auto *activeLayout = new QVBoxLayout(activeConnection);
-    activeLayout->setContentsMargins(10, 12, 10, 10);
+    activeLayout->setContentsMargins(10, 10, 10, 10);
     activeLayout->setSpacing(6);
     m_anthropicActiveRadio = new QRadioButton(QStringLiteral("Anthropic Messages"));
     m_anthropicActiveRadio->setObjectName(QStringLiteral("agentActiveAnthropic"));
@@ -1680,7 +2030,7 @@ void MainWindow::buildUi() {
     auto *anthropicGroup = new QGroupBox(QStringLiteral("Anthropic Messages"));
     anthropicGroup->setObjectName(QStringLiteral("providerBox"));
     auto *anthropicForm = new QFormLayout(anthropicGroup);
-    anthropicForm->setContentsMargins(10, 12, 10, 10);
+    anthropicForm->setContentsMargins(10, 10, 10, 10);
     anthropicForm->setSpacing(7);
     m_anthropicKey = new QLineEdit;
     m_anthropicKey->setEchoMode(QLineEdit::Password);
@@ -1697,7 +2047,7 @@ void MainWindow::buildUi() {
     auto *openaiGroup = new QGroupBox(QStringLiteral("OpenAI-compatible"));
     openaiGroup->setObjectName(QStringLiteral("providerBox"));
     auto *openaiForm = new QFormLayout(openaiGroup);
-    openaiForm->setContentsMargins(10, 12, 10, 10);
+    openaiForm->setContentsMargins(10, 10, 10, 10);
     openaiForm->setSpacing(7);
     m_openaiKey = new QLineEdit;
     m_openaiKey->setEchoMode(QLineEdit::Password);
@@ -1815,10 +2165,9 @@ void MainWindow::buildUi() {
     advancedLayout->addWidget(mcpSection);
     settingsLayout->addStretch(1);
     settingsScroll->setWidget(settingsContent);
+    m_preferencesContent = settingsContent;
     settingsTabLayout->addWidget(settingsScroll);
-    auto *closeSettings = new QDialogButtonBox(QDialogButtonBox::Close);
-    connect(closeSettings, &QDialogButtonBox::rejected, m_preferences, &QDialog::hide);
-    settingsTabLayout->addWidget(closeSettings);
+    m_preferences->installEventFilter(this);
 
     loadAgentSettings();
     const auto onActiveConnectionChanged = [this](bool checked) {
@@ -1852,8 +2201,13 @@ void MainWindow::buildUi() {
     m_workspace->addPanel(QStringLiteral("effectControls"), QStringLiteral("Effect Controls"), m_effectControls);
     m_workspace->addPanel(QStringLiteral("effects"), QStringLiteral("Effects"), m_effects);
     m_workspace->addPanel(QStringLiteral("project"), QStringLiteral("Project"), m_projectPanel);
+    m_workspace->addPanel(QStringLiteral("presets"), QStringLiteral("Presets"), m_presets);
     m_workspace->addPanel(QStringLiteral("source"), QStringLiteral("Source"), m_sourceMonitor);
     m_workspace->addPanel(QStringLiteral("assistant"), QStringLiteral("Kerf Assistant"), right);
+    // The bin and the assistant are white wells in light; their current tab
+    // is white too, so it merges into them.
+    for (const char *id : {"project", "assistant"})
+        m_workspace->panel(QString::fromLatin1(id))->tabWidget()->setProperty("well", true);
     setCentralWidget(central);
 
     connect(m_timeline, &TimelineWidget::seekRequested, this, &MainWindow::queueSeek);
@@ -1937,6 +2291,15 @@ void MainWindow::setupActions() {
     m_commands = new CommandRegistry(QSettings().value(QStringLiteral("commands/keymap")).toString(),
                                      {{QStringLiteral("timeline"), m_timeline}, {QStringLiteral("source"), m_sourceMonitor}}, this);
     m_commandHandlers = {
+        {QStringLiteral("file.newProject"), [this] { newProject(); }},
+        {QStringLiteral("file.openProject"), [this] { openProjectFolder(); }},
+        {QStringLiteral("preset.save"), [this] { savePreset(); }},
+        {QStringLiteral("collab.sync"), [this] { if (execute(QStringLiteral("collab.sync"))) m_syncRequested = true; }},
+        {QStringLiteral("collab.commit"), [this] { commitChanges(); }},
+        {QStringLiteral("collab.newBranch"), [this] { newBranch(); }},
+        {QStringLiteral("collab.switchBranch"), [this] { m_branchMenu->popup(QCursor::pos()); }},
+        {QStringLiteral("collab.pullRequest"), [this] { openPullRequest(); }},
+        {QStringLiteral("collab.publish"), [this] { publishProject(); }},
         {QStringLiteral("file.import"), [this] { importMedia(); }},
         {QStringLiteral("file.export"), [this] { exportProject(); }},
         {QStringLiteral("file.exportPreset"), [this] { exportEditingPreset(); }},
@@ -1985,6 +2348,7 @@ void MainWindow::setupActions() {
         {QStringLiteral("window.timeline"), QStringLiteral("timeline")},
         {QStringLiteral("window.effectControls"), QStringLiteral("effectControls")},
         {QStringLiteral("window.effects"), QStringLiteral("effects")},
+        {QStringLiteral("window.presets"), QStringLiteral("presets")},
         {QStringLiteral("window.assistant"), QStringLiteral("assistant")},
     };
     // Tools are one exclusive choice; snapping is a switch.
@@ -1998,37 +2362,48 @@ void MainWindow::setupActions() {
             if (panel->isClosed() == checked) panel->toggleView(checked);
         if (tools.contains(id) && checked) m_timeline->setTool(tools.value(id));
         if (id == QStringLiteral("sequence.snap")) m_timeline->setSnapping(checked);
+        if (id == QStringLiteral("collab.live")) {
+            // Remembered per project, and asked for again on each connection.
+            rememberLiveSync(checked);
+            execute(id, QJsonObject{{QStringLiteral("enabled"), checked}});
+        }
     });
+    {
+        QAction *live = m_commands->action(QStringLiteral("collab.live"));
+        const QSignalBlocker blocker(live);
+        live->setChecked(liveSyncRemembered());
+    }
+    m_branchMenu = new QMenu(QStringLiteral("Switch Branch"), this);
+    m_branchMenu->setObjectName(QStringLiteral("switchBranchMenu"));
+    connect(m_branchMenu, &QMenu::aboutToShow, this, [this] { buildBranchMenu(m_branchMenu); });
+    m_commands->action(QStringLiteral("collab.switchBranch"))->setMenu(m_branchMenu);
+    m_presets->setActions(m_commands->action(QStringLiteral("preset.save")), m_commands->action(QStringLiteral("preset.library")));
     auto *toolGroup = new QActionGroup(this);
     toolGroup->setExclusive(true);
     for (const QString &id : {QStringLiteral("tool.selection"), QStringLiteral("tool.razor"), QStringLiteral("tool.ripple"),
                               QStringLiteral("tool.roll"), QStringLiteral("tool.slip"), QStringLiteral("tool.slide")}) {
         QAction *action = m_commands->action(id);
         toolGroup->addAction(action);
-        // Tool letters, the way edit suites label their palettes.
-        static const QHash<QString, QString> glyphs{
-            {QStringLiteral("tool.selection"), QStringLiteral("▸")}, {QStringLiteral("tool.razor"), QStringLiteral("✂")},
-            {QStringLiteral("tool.ripple"), QStringLiteral("⇤")}, {QStringLiteral("tool.roll"), QStringLiteral("⇹")},
-            {QStringLiteral("tool.slip"), QStringLiteral("↔")}, {QStringLiteral("tool.slide"), QStringLiteral("⇆")}};
-        action->setIconText(glyphs.value(id));
+        // Tool symbols, the way edit suites label their palettes.
+        action->setIcon(toolIcon(id));
+        m_toolGlyphs.append(action);
         m_toolPalette->addAction(action);
     }
     m_commands->action(QStringLiteral("tool.selection"))->setChecked(true);
     m_commands->action(QStringLiteral("sequence.snap"))->setChecked(m_timeline->snapping());
-    for (const auto &[id, text] : {std::pair{QStringLiteral("source.markIn"), QStringLiteral("{")},
-                                   std::pair{QStringLiteral("source.markOut"), QStringLiteral("}")},
-                                   std::pair{QStringLiteral("source.insert"), QStringLiteral("Insert")},
-                                   std::pair{QStringLiteral("source.overwrite"), QStringLiteral("Overwrite")}})
-        m_commands->action(id)->setIconText(text);
+    // The Source monitor's marks and edits are drawn symbols, as the Program
+    // monitor's transport; their tooltips name them with their shortcuts.
+    for (const auto &[id, glyph] : {std::pair{QStringLiteral("source.markIn"), TransportGlyph::MarkIn},
+                                    std::pair{QStringLiteral("source.markOut"), TransportGlyph::MarkOut},
+                                    std::pair{QStringLiteral("source.insert"), TransportGlyph::Insert},
+                                    std::pair{QStringLiteral("source.overwrite"), TransportGlyph::Overwrite}}) {
+        QAction *action = m_commands->action(id);
+        action->setIcon(transportIcon(glyph));
+        m_sourceGlyphs.append({action, glyph});
+    }
     m_commands->action(QStringLiteral("proposal.accept"))->setIconText(QStringLiteral("Accept"));
     m_commands->action(QStringLiteral("proposal.reject"))->setIconText(QStringLiteral("Reject"));
     m_commands->action(QStringLiteral("ai.stop"))->setIconText(QStringLiteral("Stop"));
-    for (const QString &id : {QStringLiteral("proposal.accept"), QStringLiteral("proposal.reject"), QStringLiteral("ai.stop")}) {
-        auto *button = new QToolButton;
-        button->setObjectName(id == QStringLiteral("proposal.accept") ? QStringLiteral("aiAccept") : QStringLiteral("aiButton"));
-        button->setDefaultAction(m_commands->action(id));
-        m_aiBar->layout()->addWidget(button);
-    }
     auto *details = new QToolButton;
     details->setObjectName(QStringLiteral("aiButton"));
     details->setText(QStringLiteral("Details"));
@@ -2039,6 +2414,14 @@ void MainWindow::setupActions() {
         panel->setAsCurrentTab();
     });
     m_aiBar->layout()->addWidget(details);
+    // Accept trails, as it does on the Assistant's card and in macOS's rows
+    // of buttons; Stop shows only while Kerf works, when the proposal's don't.
+    for (const QString &id : {QStringLiteral("ai.stop"), QStringLiteral("proposal.reject"), QStringLiteral("proposal.accept")}) {
+        auto *button = new QToolButton;
+        button->setObjectName(id == QStringLiteral("proposal.accept") ? QStringLiteral("aiAccept") : QStringLiteral("aiButton"));
+        button->setDefaultAction(m_commands->action(id));
+        m_aiBar->layout()->addWidget(button);
+    }
     m_sourceMonitor->setActions({m_commands->action(QStringLiteral("source.markIn")), m_commands->action(QStringLiteral("source.markOut")),
                                  m_commands->action(QStringLiteral("source.insert")), m_commands->action(QStringLiteral("source.overwrite"))});
     for (auto it = panelCommands.cbegin(); it != panelCommands.cend(); ++it) {
@@ -2053,6 +2436,15 @@ void MainWindow::setupActions() {
 
     menuBar()->setNativeMenuBar(true);
     const QHash<QString, QMenu *> menus = m_commands->buildMenus(menuBar());
+    if (QMenu *file = menus.value(QStringLiteral("File"))) {
+        m_recentMenu = new QMenu(QStringLiteral("Open Recent"), file);
+        m_recentMenu->setObjectName(QStringLiteral("openRecentMenu"));
+        const QList<QAction *> actions = file->actions();
+        const qsizetype open = actions.indexOf(m_commands->action(QStringLiteral("file.openProject")));
+        file->insertMenu(actions.value(open + 1), m_recentMenu);
+        connect(m_recentMenu, &QMenu::aboutToShow, this, [this] { buildRecentMenu(m_recentMenu); });
+        buildRecentMenu(m_recentMenu);
+    }
     if (QMenu *edit = menus.value(QStringLiteral("Edit"))) {
         edit->addSeparator();
         auto *keymapMenu = edit->addMenu(QStringLiteral("Keyboard Shortcuts"));
@@ -2086,9 +2478,19 @@ void MainWindow::setupActions() {
     }
 
     auto *toolbar = addToolBar(QStringLiteral("Main"));
+    m_toolbar = toolbar;
     toolbar->setMovable(false);
     toolbar->setIconSize(QSize(15, 15));
-    toolbar->setFixedHeight(30);
+    toolbar->setFixedHeight(kToolbarHeight);
+#if KERF_EDITOR_OWN_TITLE_BAR
+    m_windowButtons = new QWidget;
+    m_windowButtons->setObjectName(QStringLiteral("windowButtonsSpace"));
+    m_windowButtons->setFixedWidth(kWindowButtonsSpace);
+    toolbar->addWidget(m_windowButtons);
+#endif
+    // Its empty stretches move and zoom the window (on macOS, where it is
+    // the title bar), and its size places the title.
+    toolbar->installEventFilter(this);
     if (!menuBar()->isNativeMenuBar()) {
         // Keep menus accessible without dedicating a full row to them.
         auto *menuButton = new QToolButton(toolbar);
@@ -2110,71 +2512,46 @@ void MainWindow::setupActions() {
         toolbar->addWidget(menuButton);
         menuBar()->hide();
     }
-    // Draw toolbar symbols on a shared grid so their weight and optical size match.
-    auto icon = [](const QString &glyph) {
-        QPixmap pixmap(40, 40);
-        pixmap.setDevicePixelRatio(2);
-        pixmap.fill(Qt::transparent);
-        QPainter painter(&pixmap);
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(QPen(QColor("#d7d7d7"), 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        QPainterPath path;
-        if (glyph == QStringLiteral("↓")) {
-            path.moveTo(10, 3); path.lineTo(10, 12);
-            path.moveTo(6.5, 8.5); path.lineTo(10, 12); path.lineTo(13.5, 8.5);
-            path.moveTo(4, 12); path.lineTo(4, 16); path.lineTo(16, 16); path.lineTo(16, 12);
-        } else if (glyph == QStringLiteral("↶") || glyph == QStringLiteral("↷")) {
-            if (glyph == QStringLiteral("↷")) { painter.translate(20, 0); painter.scale(-1, 1); }
-            path.moveTo(7, 4); path.lineTo(3.5, 7.5); path.lineTo(7, 11);
-            path.moveTo(4, 7.5); path.lineTo(11, 7.5);
-            path.cubicTo(17, 7.5, 17, 15.5, 11, 15.5);
-        } else if (glyph == QStringLiteral("✂")) {
-            painter.drawEllipse(QPointF(5, 5), 2.5, 2.5);
-            painter.drawEllipse(QPointF(5, 15), 2.5, 2.5);
-            path.moveTo(7, 6.5); path.lineTo(16, 16);
-            path.moveTo(7, 13.5); path.lineTo(16, 4);
-        } else {
-            path.moveTo(5, 5); path.lineTo(15, 15);
-            path.moveTo(15, 5); path.lineTo(5, 15);
-        }
-        painter.drawPath(path);
-        return QIcon(pixmap);
-    };
     const auto toolbarCommand = [&](const QString &id, const QString &text, const QString &glyph = QString()) {
         QAction *action = m_commands->action(id);
         action->setIconText(text);
-        if (!glyph.isEmpty()) action->setIcon(icon(glyph));
+        if (!glyph.isEmpty()) {
+            action->setIcon(toolbarIcon(glyph));
+            m_toolbarGlyphs.append({action, glyph});
+        }
         toolbar->addAction(action);
         return qobject_cast<QToolButton *>(toolbar->widgetForAction(action));
     };
+    // Groups are set apart by space, as in macOS toolbars, not by rules, and
+    // separate controls by 8 points, as macOS toolbars and the launcher's
+    // footer space them; the toolbar's own spacing comes on either side.
+    const auto space = [toolbar](int width) {
+        auto *gap = new QWidget;
+        gap->setFixedWidth(width);
+        toolbar->addWidget(gap);
+    };
+    const auto groupSpace = [&space] { space(10); };
+    const auto controlSpace = [&space] { space(8 - 2 * kToolbarSpacing); };
     toolbarCommand(QStringLiteral("file.import"), QStringLiteral("Import"), QStringLiteral("↓"));
-    toolbar->addSeparator();
+    groupSpace();
     toolbarCommand(QStringLiteral("edit.undo"), QStringLiteral("Undo"), QStringLiteral("↶"));
     toolbarCommand(QStringLiteral("edit.redo"), QStringLiteral("Redo"), QStringLiteral("↷"));
-    toolbar->addSeparator();
+    groupSpace();
     toolbarCommand(QStringLiteral("clip.split"), QStringLiteral("Split"), QStringLiteral("✂"));
-    toolbarCommand(QStringLiteral("clip.delete"), QStringLiteral("Delete"), QStringLiteral("×"));
-    toolbar->addSeparator();
+    m_toolbarLeftEnd = toolbarCommand(QStringLiteral("clip.delete"), QStringLiteral("Delete"), QStringLiteral("trash"));
     auto *spacer = new QWidget;
     spacer->setStyleSheet(QStringLiteral("background: transparent"));
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     toolbar->addWidget(spacer);
-    auto *projectTitle = new QLabel(QStringLiteral("KERF  /  %1").arg(QFileInfo(m_projectDirectory).fileName()));
-    m_projectTitle = projectTitle;
-    projectTitle->setObjectName(QStringLiteral("projectTitle"));
-    toolbar->addWidget(projectTitle);
-    auto *spacerRight = new QWidget;
-    spacerRight->setStyleSheet(QStringLiteral("background: transparent"));
-    spacerRight->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    toolbar->addWidget(spacerRight);
-    m_quality = new QualityComboBox;
+    m_quality = new QComboBox;
     m_quality->setObjectName(QStringLiteral("qualityPicker"));
     m_quality->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     m_quality->setToolTip(QStringLiteral("Export quality"));
     m_quality->addItem(QStringLiteral("Preview"), QStringLiteral("preview"));
     m_quality->addItem(QStringLiteral("Full"), QStringLiteral("full"));
     toolbar->addWidget(m_quality);
-    m_canvasPreset = new QualityComboBox;
+    controlSpace();
+    m_canvasPreset = new QComboBox;
     m_canvasPreset->setObjectName(QStringLiteral("canvasPicker"));
     m_canvasPreset->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     m_canvasPreset->addItem(QStringLiteral("16:9"), QStringLiteral("1920x1080"));
@@ -2183,10 +2560,22 @@ void MainWindow::setupActions() {
     connect(m_canvasPreset, qOverload<int>(&QComboBox::currentIndexChanged),
             this, &MainWindow::canvasPresetChanged);
     toolbar->addWidget(m_canvasPreset);
+    controlSpace();
     if (auto *exportButton = toolbarCommand(QStringLiteral("file.export"), QStringLiteral("Export")))
         exportButton->setObjectName(QStringLiteral("toolbarPrimary"));
+    controlSpace();
     if (auto *renderButton = toolbarCommand(QStringLiteral("sequence.renderPreview"), QStringLiteral("Render")))
         renderButton->setObjectName(QStringLiteral("toolbarQuiet"));
+    // Render ends where the banners' and the agent's bar's buttons do.
+    space(kTrailingInset - kToolbarPadding - kToolbarSpacing);
+    // The title is centred on the window, as macOS centres it, not between
+    // the groups, so it sits over the toolbar outside its layout;
+    // layoutProjectTitle() places it as the toolbar and its groups move.
+    m_projectTitle = new QLabel(toolbar);
+    m_projectTitle->setObjectName(QStringLiteral("projectTitle"));
+    m_projectTitle->setAlignment(Qt::AlignCenter);
+    for (QWidget *edge : {static_cast<QWidget *>(m_toolbarLeftEnd), static_cast<QWidget *>(m_quality)})
+        if (edge) edge->installEventFilter(this);
     updateCommandStates();
 }
 
@@ -2207,6 +2596,541 @@ void MainWindow::buildWorkspaceMenu(QMenu *menu) {
 void MainWindow::closeEvent(QCloseEvent *event) {
     m_workspace->persist();
     QMainWindow::closeEvent(event);
+}
+
+void MainWindow::showEvent(QShowEvent *event) {
+    QMainWindow::showEvent(event);
+#if KERF_EDITOR_OWN_TITLE_BAR
+    hideNativeWindowTitle(this);
+    if (QWindow *handle = windowHandle()) {
+        disconnect(handle, &QWindow::safeAreaMarginsChanged, this, nullptr);
+        connect(handle, &QWindow::safeAreaMarginsChanged, this, [this] { fitTitleBar(); });
+    }
+    fitTitleBar();
+#endif
+}
+
+void MainWindow::changeEvent(QEvent *event) {
+    QMainWindow::changeEvent(event);
+    if (event->type() == QEvent::WindowStateChange) fitTitleBar();
+}
+
+void MainWindow::fitTitleBar() {
+#if KERF_EDITOR_OWN_TITLE_BAR
+    if (!m_toolbar) return;
+    // The safe area's top is the title bar the window buttons sit in. Its
+    // commands start 12 points past the zoom button; in full screen there
+    // are no buttons beside them.
+    const QWindow *handle = windowHandle();
+    m_toolbar->setFixedHeight(std::max(kToolbarHeight, handle ? handle->safeAreaMargins().top() : 0));
+    const int buttons = windowButtonsWidth(this);
+    m_windowButtons->setFixedWidth(buttons > 0 ? buttons + 12 - kToolbarPadding : kWindowButtonsSpace);
+    m_windowButtons->setVisible(!isFullScreen());
+#endif
+}
+
+void MainWindow::layoutProjectTitle() {
+    if (!m_projectTitle || !m_toolbar || !m_toolbarLeftEnd || !m_quality) return;
+    m_projectTitle->ensurePolished();
+    const QFontMetrics metrics(m_projectTitle->font());
+    // The room between the groups, and the title's own width.
+    const int left = m_toolbarLeftEnd->geometry().right() + 1 + kTitleClearance;
+    const int right = m_quality->geometry().left() - kTitleClearance;
+    const int natural = metrics.horizontalAdvance(m_projectName) + 2;
+    const int width = std::min(natural, std::max(0, right - left));
+    // Centred on the window (the toolbar spans it); moved aside when a group
+    // is in the way, and shortened when there is no room for all of it.
+    const int x = std::clamp((m_toolbar->width() - width) / 2, left, std::max(left, right - width));
+    const QString shown = width < natural ? metrics.elidedText(m_projectName, Qt::ElideRight, width) : m_projectName;
+    m_projectTitle->setText(shown);
+    m_projectTitle->setToolTip(shown == m_projectName ? QString() : m_projectName);
+    // On the line the toolbar's controls sit on, centred as their text is.
+    m_projectTitle->setGeometry(x, m_quality->y(), width, m_quality->height());
+    m_projectTitle->raise();
+}
+
+void MainWindow::setProjectTitle(const QString &name) {
+    m_projectName = name;
+    layoutProjectTitle();
+    // The Window menu, Mission Control and the Dock list the project.
+    setWindowTitle(name);
+    if (!m_projectDirectory.isEmpty()) setWindowFilePath(QDir(m_projectDirectory).absoluteFilePath(QStringLiteral("project.kerf")));
+}
+
+void MainWindow::newProject() {
+    ProjectLauncher launcher(m_kerfdBinary, this);
+    if (launcher.exec() == QDialog::Accepted) openProject(launcher.chosenPath());
+}
+
+void MainWindow::openProjectFolder() {
+    const QString start = m_projectDirectory.isEmpty() ? QDir::homePath() : QFileInfo(m_projectDirectory).absolutePath();
+    const QString path = QFileDialog::getExistingDirectory(this, QStringLiteral("Open Project"), start);
+    if (path.isEmpty()) return;
+    if (!QFileInfo::exists(QDir(path).filePath(QStringLiteral("project.kerf"))) &&
+        QMessageBox::question(this, QStringLiteral("Open Project"),
+                              QStringLiteral("“%1” has no project.kerf. Start a new project in it?").arg(QFileInfo(path).fileName())) !=
+            QMessageBox::Yes)
+        return;
+    openProject(path);
+}
+
+void MainWindow::openProject(const QString &path) {
+    if (path.isEmpty()) return;
+    const QString clean = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+    if (!m_projectDirectory.isEmpty() && clean == QDir::cleanPath(QFileInfo(m_projectDirectory).absoluteFilePath())) {
+        raise();
+        activateWindow();
+        return;
+    }
+    emit projectOpenRequested(clean);
+}
+
+void MainWindow::buildRecentMenu(QMenu *menu) {
+    menu->clear();
+    const QString current = m_projectDirectory.isEmpty() ? QString() : QDir::cleanPath(QFileInfo(m_projectDirectory).absoluteFilePath());
+    const QStringList recent = ProjectLauncher::recentProjects();
+    for (const QString &path : recent) {
+        QAction *open = menu->addAction(QFileInfo(path).fileName());
+        open->setToolTip(path);
+        open->setCheckable(path == current);
+        open->setChecked(path == current);
+        open->setEnabled(QFileInfo(path).isDir());
+        connect(open, &QAction::triggered, this, [this, path] { openProject(path); });
+    }
+    if (recent.isEmpty()) menu->addAction(QStringLiteral("No Recent Projects"))->setEnabled(false);
+    menu->addSeparator();
+    QAction *clear = menu->addAction(QStringLiteral("Clear Menu"));
+    clear->setEnabled(!recent.isEmpty());
+    connect(clear, &QAction::triggered, this, [] { ProjectLauncher::clearRecentProjects(); });
+}
+
+void MainWindow::startSession() {
+    execute(QStringLiteral("collab.status"));
+    execute(QStringLiteral("preset.library"));
+    if (liveSyncRemembered()) execute(QStringLiteral("collab.live"), QJsonObject{{QStringLiteral("enabled"), true}});
+}
+
+bool MainWindow::liveSyncRemembered() const {
+    return !m_projectDirectory.isEmpty() && QSettings()
+                                                .value(QStringLiteral("collab/liveProjects"))
+                                                .toStringList()
+                                                .contains(QDir::cleanPath(QFileInfo(m_projectDirectory).absoluteFilePath()));
+}
+
+void MainWindow::rememberLiveSync(bool enabled) {
+    if (m_projectDirectory.isEmpty()) return;
+    QSettings settings;
+    QStringList projects = settings.value(QStringLiteral("collab/liveProjects")).toStringList();
+    const QString path = QDir::cleanPath(QFileInfo(m_projectDirectory).absoluteFilePath());
+    projects.removeAll(path);
+    if (enabled) projects.append(path);
+    settings.setValue(QStringLiteral("collab/liveProjects"), projects);
+}
+
+QJsonObject MainWindow::collabContext() const {
+    // Typed field by field: the registry reads a context it cannot parse
+    // as an offline one.
+    const auto text = [this](const char *key) {
+        const QJsonValue value = m_collabStatus.value(QLatin1String(key));
+        return value.isString() && !value.toString().isEmpty() ? value : QJsonValue();
+    };
+    QJsonArray branches;
+    for (const QJsonValue &branch : m_collabStatus.value(QStringLiteral("branches")).toArray())
+        if (branch.isString()) branches.append(branch);
+    const QJsonValue gh = m_collabStatus.value(QStringLiteral("gh"));
+    return QJsonObject{
+        {QStringLiteral("repository"), m_collabStatus.value(QStringLiteral("repository")).toBool()},
+        {QStringLiteral("branch"), text("branch")},
+        {QStringLiteral("upstream"), text("upstream")},
+        {QStringLiteral("remote"), text("remote")},
+        {QStringLiteral("ahead"), std::max(0, m_collabStatus.value(QStringLiteral("ahead")).toInt())},
+        {QStringLiteral("behind"), std::max(0, m_collabStatus.value(QStringLiteral("behind")).toInt())},
+        {QStringLiteral("changed"), m_collabStatus.value(QStringLiteral("changed")).toBool()},
+        {QStringLiteral("conflicted"), m_collabStatus.value(QStringLiteral("conflicted")).toBool()},
+        {QStringLiteral("branches"), branches},
+        // A signed-in account may be reported by name.
+        {QStringLiteral("gh"), gh.isBool() ? gh.toBool() : gh.isString() ? !gh.toString().isEmpty() : gh.isObject()},
+        {QStringLiteral("live"), m_collabStatus.value(QStringLiteral("live")).toBool()},
+        {QStringLiteral("busy"), m_collabStatus.value(QStringLiteral("busy")).toBool() || !m_syncStage.isEmpty()},
+        {QStringLiteral("externalMedia"), m_mediaStatus.value(QStringLiteral("external")).toArray().size()},
+    };
+}
+
+void MainWindow::handleCollabEvent(const QJsonObject &event) {
+    const QString type = event.value(QStringLiteral("type")).toString();
+    if (type == QStringLiteral("collab")) {
+        m_collabStatus = event.value(QStringLiteral("status")).toObject();
+        QAction *live = m_commands->action(QStringLiteral("collab.live"));
+        const QSignalBlocker blocker(live);
+        live->setChecked(m_collabStatus.value(QStringLiteral("live")).toBool());
+    } else if (type == QStringLiteral("collab_sync")) {
+        const QString stage = event.value(QStringLiteral("stage")).toString();
+        if (stage == QStringLiteral("done")) {
+            m_syncStage.clear();
+            m_syncFailure.clear();
+            const QJsonObject report = event.value(QStringLiteral("report")).toObject();
+            const QJsonArray incoming = report.value(QStringLiteral("incoming")).toArray();
+            const QJsonArray conflicts = report.value(QStringLiteral("conflicts")).toArray();
+            QStringList lines;
+            for (const QJsonValue &value : incoming) {
+                const QJsonObject commit = value.toObject();
+                lines << QStringLiteral("%1 · %2").arg(commit.value(QStringLiteral("author")).toString(),
+                                                        commit.value(QStringLiteral("subject")).toString());
+            }
+            int keptTheirs = 0;
+            for (const QJsonValue &value : conflicts) {
+                const QJsonObject conflict = value.toObject();
+                const bool theirs = conflict.value(QStringLiteral("kept")).toString() == QStringLiteral("theirs");
+                if (theirs) ++keptTheirs;
+                const QString path = conflict.value(QStringLiteral("path")).toString();
+                const QString what = conflict.value(QStringLiteral("what")).toString();
+                lines << QStringLiteral("%1 · %2").arg(theirs ? QStringLiteral("Kept theirs") : QStringLiteral("Kept yours"),
+                                                        path.isEmpty() ? what : QStringLiteral("%1: %2").arg(path, what));
+            }
+            const int keptYours = conflicts.size() - keptTheirs;
+            for (const QJsonValue &value : report.value(QStringLiteral("renamed")).toArray()) {
+                const QJsonArray pair = value.toArray();
+                lines << QStringLiteral("Renumbered · %1 → %2").arg(pair.at(0).toString(), pair.at(1).toString());
+            }
+            for (const QString &line : std::as_const(lines)) addActivity(QStringLiteral("sync"), line);
+            // A quiet live-sync cycle keeps the last sync's news in the tooltip.
+            if (!lines.isEmpty()) m_syncLines = lines;
+            QStringList summary;
+            if (!incoming.isEmpty())
+                summary << (incoming.size() == 1 ? QStringLiteral("1 commit in") : QStringLiteral("%1 commits in").arg(incoming.size()));
+            if (report.value(QStringLiteral("pushed")).toBool()) summary << QStringLiteral("pushed");
+            if (keptYours > 0)
+                summary << (keptYours == 1 ? QStringLiteral("1 change kept yours") : QStringLiteral("%1 changes kept yours").arg(keptYours));
+            if (keptTheirs > 0)
+                summary << (keptTheirs == 1 ? QStringLiteral("1 change kept theirs") : QStringLiteral("%1 changes kept theirs").arg(keptTheirs));
+            if (!summary.isEmpty() || m_syncRequested)
+                statusBar()->showMessage(summary.isEmpty() ? QStringLiteral("Synced: up to date")
+                                                           : QStringLiteral("Synced: ") + summary.join(QStringLiteral(", ")),
+                                         8000);
+            // A pull or branch switch changes presets/, and a commit who
+            // last changed each preset.
+            execute(QStringLiteral("preset.library"));
+            m_syncRequested = false;
+        } else if (stage == QStringLiteral("failed")) {
+            m_syncRequested = false;
+            m_syncStage.clear();
+            m_syncFailure = event.value(QStringLiteral("message")).toString(QStringLiteral("The sync did not finish."));
+            showError(QStringLiteral("Sync failed: %1").arg(m_syncFailure));
+            addActivity(QStringLiteral("sync"), m_syncFailure);
+        } else {
+            m_syncStage = stage.isEmpty() ? QStringLiteral("syncing") : stage;
+            m_syncFailure.clear();
+        }
+    } else if (type == QStringLiteral("collab_pull_request")) {
+        const QString url = event.value(QStringLiteral("url")).toString();
+        const bool created = event.value(QStringLiteral("created")).toBool();
+        // Without gh, the bridge gives GitHub's page for starting one.
+        const bool compare = QUrl(url).path().section(QLatin1Char('/'), 3, 3) == QStringLiteral("compare");
+        statusBar()->showMessage(created ? QStringLiteral("Opened a pull request: %1").arg(url)
+                                 : compare ? QStringLiteral("Opened GitHub's page for a new pull request: %1").arg(url)
+                                           : QStringLiteral("This branch already has a pull request: %1").arg(url),
+                                 8000);
+        addActivity(QStringLiteral("sync"), url);
+#ifndef KERF_QT_TESTING
+        if (!url.isEmpty()) QDesktopServices::openUrl(QUrl(url));
+#endif
+    }
+    updateSyncChip();
+    updateCommandStates();
+}
+
+void MainWindow::updateSyncChip() {
+    if (!m_syncChip) return;
+    if (m_collabStatus.isEmpty()) {
+        m_syncChip->hide();
+        return;
+    }
+    const auto field = [this](const char *key) { return m_collabStatus.value(QLatin1String(key)); };
+    QString text;
+    QString state;
+    QStringList tips;
+    if (!field("repository").toBool()) {
+        text = QStringLiteral("⎇ Not shared");
+        state = QStringLiteral("local");
+        tips << QStringLiteral("This project is not a Git repository yet.")
+             << QStringLiteral("Click, or choose Collaborate → Publish to GitHub…, to share it.");
+    } else {
+        const QString branch = field("branch").toString();
+        const int ahead = field("ahead").toInt();
+        const int behind = field("behind").toInt();
+        text = QStringLiteral("⎇ %1").arg(branch.isEmpty() ? QStringLiteral("detached") : branch);
+        if (ahead > 0) text += QStringLiteral(" ↑%1").arg(ahead);
+        if (behind > 0) text += QStringLiteral(" ↓%1").arg(behind);
+        const QString remote = field("remote").toString();
+        const QString upstream = field("upstream").toString();
+        tips << (remote.isEmpty() ? QStringLiteral("No remote yet: Publish to GitHub… shares the project.")
+                 : upstream.isEmpty() ? QStringLiteral("%1, not pushed yet").arg(remote)
+                                      : QStringLiteral("Syncs with %1").arg(upstream));
+        if (ahead > 0) tips << (ahead == 1 ? QStringLiteral("1 commit to push") : QStringLiteral("%1 commits to push").arg(ahead));
+        if (behind > 0) tips << (behind == 1 ? QStringLiteral("1 commit to pull") : QStringLiteral("%1 commits to pull").arg(behind));
+        if (field("changed").toBool()) tips << QStringLiteral("Edits not committed yet");
+        static const QHash<QString, QString> stages{
+            {QStringLiteral("committing"), QStringLiteral("Committing")}, {QStringLiteral("fetching"), QStringLiteral("Pulling")},
+            {QStringLiteral("merging"), QStringLiteral("Merging")}, {QStringLiteral("pushing"), QStringLiteral("Pushing")},
+            {QStringLiteral("downloading"), QStringLiteral("Downloading media")}};
+        if (!m_syncStage.isEmpty() || field("busy").toBool()) {
+            text = QStringLiteral("⟳ %1…").arg(stages.value(m_syncStage, QStringLiteral("Syncing")));
+            state = QStringLiteral("syncing");
+        } else if (field("conflicted").toBool()) {
+            text += QStringLiteral(" · merge unfinished");
+            state = QStringLiteral("conflict");
+            tips.prepend(QStringLiteral("A merge is in progress with unresolved files; finish it with git."));
+        } else if (!m_syncFailure.isEmpty()) {
+            text += QStringLiteral(" · sync failed");
+            state = QStringLiteral("failed");
+            tips.prepend(QStringLiteral("Sync failed: %1").arg(m_syncFailure));
+        } else if (field("live").toBool()) {
+            text += QStringLiteral(" · live");
+            state = QStringLiteral("live");
+            tips << QStringLiteral("Live sync is on");
+        } else {
+            state = QStringLiteral("idle");
+        }
+        if (!m_syncLines.isEmpty()) tips << QString() << QStringLiteral("Last sync:") << m_syncLines;
+        tips << QString() << QStringLiteral("Click to sync now");
+    }
+    m_syncChip->setText(text);
+    m_syncChip->setToolTip(tips.join(QLatin1Char('\n')));
+    m_syncChip->setAccessibleName(text);
+    m_syncChip->setProperty("state", state);
+    m_syncChip->style()->unpolish(m_syncChip);
+    m_syncChip->style()->polish(m_syncChip);
+    m_syncChip->show();
+}
+
+void MainWindow::buildBranchMenu(QMenu *menu) {
+    menu->clear();
+    const QString current = m_collabStatus.value(QStringLiteral("branch")).toString();
+    for (const QJsonValue &value : m_collabStatus.value(QStringLiteral("branches")).toArray()) {
+        const QString branch = value.toString();
+        if (branch.isEmpty() || branch == current) continue;
+        QAction *choice = menu->addAction(branch);
+        choice->setObjectName(QStringLiteral("branch.%1").arg(branch));
+        connect(choice, &QAction::triggered, this, [this, branch] {
+            execute(QStringLiteral("collab.switchBranch"), QJsonObject{{QStringLiteral("name"), branch}});
+        });
+    }
+    if (menu->isEmpty()) menu->addAction(QStringLiteral("No Other Branches"))->setEnabled(false);
+}
+
+void MainWindow::commitChanges() {
+    bool ok = false;
+    const QString message = QInputDialog::getText(this, QStringLiteral("Commit"), QStringLiteral("Describe the change"),
+                                                  QLineEdit::Normal, QString(), &ok);
+    if (ok && !message.trimmed().isEmpty())
+        execute(QStringLiteral("collab.commit"), QJsonObject{{QStringLiteral("message"), message}});
+}
+
+void MainWindow::newBranch() {
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, QStringLiteral("New Branch"),
+                                               QStringLiteral("Commits your edits, then starts a branch from them.\nName"),
+                                               QLineEdit::Normal, QString(), &ok);
+    if (ok && !name.trimmed().isEmpty())
+        execute(QStringLiteral("collab.newBranch"), QJsonObject{{QStringLiteral("name"), name}});
+}
+
+void MainWindow::openPullRequest() {
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("pullRequestDialog"));
+    dialog.setWindowTitle(QStringLiteral("Open Pull Request"));
+    dialog.resize(480, 320);
+    auto *layout = new QVBoxLayout(&dialog);
+    const QString branch = m_collabStatus.value(QStringLiteral("branch")).toString();
+    auto *intro = new QLabel(QStringLiteral("Pushes %1 and opens a pull request on GitHub. Reviewers read the change as Kerf code.")
+                                 .arg(branch.isEmpty() ? QStringLiteral("this branch") : branch));
+    intro->setWordWrap(true);
+    layout->addWidget(intro);
+    auto *form = new QFormLayout;
+    QString suggested = branch;
+    suggested.replace(QLatin1Char('-'), QLatin1Char(' ')).replace(QLatin1Char('_'), QLatin1Char(' '));
+    if (!suggested.isEmpty()) suggested[0] = suggested[0].toUpper();
+    auto *title = new QLineEdit(suggested);
+    title->setObjectName(QStringLiteral("pullRequestTitle"));
+    form->addRow(QStringLiteral("Title"), title);
+    auto *body = new QPlainTextEdit;
+    body->setObjectName(QStringLiteral("pullRequestBody"));
+    body->setPlaceholderText(QStringLiteral("Leave empty to list this branch's commits"));
+    form->addRow(QStringLiteral("Description"), body);
+    layout->addLayout(form, 1);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Open Pull Request"));
+    buttons->button(QDialogButtonBox::Ok)->setDefault(true);
+    connect(title, &QLineEdit::textChanged, buttons, [buttons](const QString &text) {
+        buttons->button(QDialogButtonBox::Ok)->setEnabled(!text.trimmed().isEmpty());
+    });
+    buttons->button(QDialogButtonBox::Ok)->setEnabled(!suggested.trimmed().isEmpty());
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    if (dialog.exec() != QDialog::Accepted) return;
+    QJsonObject params{{QStringLiteral("title"), title->text()}};
+    if (!body->toPlainText().trimmed().isEmpty()) params.insert(QStringLiteral("body"), body->toPlainText());
+    execute(QStringLiteral("collab.pullRequest"), params);
+}
+
+void MainWindow::publishProject() {
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("publishDialog"));
+    dialog.setWindowTitle(QStringLiteral("Publish to GitHub"));
+    dialog.resize(500, 300);
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *intro = new QLabel(QStringLiteral("Makes the project a Git repository if it is not one yet, then pushes it so "
+                                            "collaborators can clone it, sync, and open pull requests."));
+    intro->setWordWrap(true);
+    layout->addWidget(intro);
+    const QJsonObject collab = collabContext();
+    auto *github = new QRadioButton(QStringLiteral("Create a GitHub repository"));
+    github->setObjectName(QStringLiteral("publishGitHub"));
+    github->setEnabled(collab.value(QStringLiteral("gh")).toBool());
+    if (!github->isEnabled()) github->setToolTip(QStringLiteral("Install the GitHub CLI and sign in with `gh auth login`"));
+    auto *name = new QLineEdit(QFileInfo(m_projectDirectory).fileName().replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9._-]+")), QStringLiteral("-")));
+    name->setObjectName(QStringLiteral("publishName"));
+    auto *priv = new QCheckBox(QStringLiteral("Private"));
+    priv->setObjectName(QStringLiteral("publishPrivate"));
+    priv->setChecked(true);
+    auto *githubRow = new QHBoxLayout;
+    githubRow->setContentsMargins(22, 0, 0, 0);
+    githubRow->addWidget(name, 1);
+    githubRow->addWidget(priv);
+    auto *remoteChoice = new QRadioButton(QStringLiteral("Push to a remote I already have"));
+    remoteChoice->setObjectName(QStringLiteral("publishRemoteChoice"));
+    auto *remote = new QLineEdit;
+    remote->setObjectName(QStringLiteral("publishRemote"));
+    remote->setPlaceholderText(QStringLiteral("git@github.com:you/film.git"));
+    auto *remoteRow = new QHBoxLayout;
+    remoteRow->setContentsMargins(22, 0, 0, 0);
+    remoteRow->addWidget(remote);
+    auto *local = new QRadioButton(QStringLiteral("Only make it a repository on this computer"));
+    local->setObjectName(QStringLiteral("publishLocal"));
+    local->setEnabled(!collab.value(QStringLiteral("repository")).toBool());
+    (github->isEnabled() ? github : remoteChoice)->setChecked(true);
+    layout->addWidget(github);
+    layout->addLayout(githubRow);
+    layout->addWidget(remoteChoice);
+    layout->addLayout(remoteRow);
+    layout->addWidget(local);
+    if (!m_collabStatus.value(QStringLiteral("enclosing")).toString().isEmpty()) {
+        auto *nested = new QLabel(QStringLiteral("This folder is inside another repository (%1); the project gets a repository of its own.")
+                                      .arg(m_collabStatus.value(QStringLiteral("enclosing")).toString()));
+        nested->setObjectName(QStringLiteral("muted"));
+        nested->setWordWrap(true);
+        layout->addWidget(nested);
+    }
+    layout->addStretch(1);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Publish"));
+    buttons->button(QDialogButtonBox::Ok)->setDefault(true);
+    const auto update = [=] {
+        name->setEnabled(github->isChecked());
+        priv->setEnabled(github->isChecked());
+        remote->setEnabled(remoteChoice->isChecked());
+        buttons->button(QDialogButtonBox::Ok)->setEnabled(!remoteChoice->isChecked() || !remote->text().trimmed().isEmpty());
+    };
+    for (QRadioButton *choice : {github, remoteChoice, local}) connect(choice, &QRadioButton::toggled, &dialog, update);
+    connect(remote, &QLineEdit::textChanged, &dialog, update);
+    update();
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    if (dialog.exec() != QDialog::Accepted) return;
+    QJsonObject params;
+    if (github->isChecked()) {
+        QJsonObject repository{{QStringLiteral("private"), priv->isChecked()}};
+        if (!name->text().trimmed().isEmpty()) repository.insert(QStringLiteral("name"), name->text().trimmed());
+        params.insert(QStringLiteral("github"), repository);
+    } else if (remoteChoice->isChecked()) {
+        params.insert(QStringLiteral("remote"), remote->text().trimmed());
+    }
+    if (params.isEmpty()) execute(QStringLiteral("collab.publish"));
+    else execute(QStringLiteral("collab.publish"), params);
+}
+
+void MainWindow::savePreset() {
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, QStringLiteral("Save Current as Preset"),
+                                               QStringLiteral("Saves the program sequence in presets/, shared with the project.\nName"),
+                                               QLineEdit::Normal, QString(), &ok)
+                             .trimmed();
+    if (!ok || name.isEmpty()) return;
+    // The bridge names the file, cleaning the name up, and refuses one that
+    // exists; replacing it is asked then.
+    m_savingPreset = name;
+    execute(QStringLiteral("preset.save"), QJsonObject{{QStringLiteral("name"), name}, {QStringLiteral("replace"), false}});
+}
+
+void MainWindow::replaceSavedPreset(const QString &path) {
+    const QString name = std::exchange(m_savingPreset, QString());
+    if (QMessageBox::question(this, QStringLiteral("Save Current as Preset"),
+                              QStringLiteral("%1 already exists. Replace it?").arg(path)) == QMessageBox::Yes)
+        execute(QStringLiteral("preset.save"), QJsonObject{{QStringLiteral("name"), name}, {QStringLiteral("replace"), true}});
+}
+
+void MainWindow::applyLibraryPreset(const QString &path) {
+    // The preset's slots and the media able to fill them come back as
+    // preset_inspect, which opens the bindings dialog.
+    sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("preset_inspect")}, {QStringLiteral("path"), path}});
+}
+
+QString MainWindow::mediaPath(const QString &mediaId) const {
+    for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray()) {
+        const QJsonObject source = value.toObject();
+        if (source.value(QStringLiteral("id")).toString() == mediaId)
+            return QDir(m_projectDirectory).absoluteFilePath(source.value(QStringLiteral("path")).toString());
+    }
+    return {};
+}
+
+void MainWindow::replaceMedia(const QString &mediaId, const QString &path) {
+    QString file = path;
+    if (file.isEmpty()) {
+        file = QFileDialog::getOpenFileName(this, QStringLiteral("Replace %1").arg(mediaId), QFileInfo(mediaPath(mediaId)).absolutePath(),
+                                            QStringLiteral("Media files (*.mov *.mp4 *.m4v *.mkv *.webm *.wav *.mp3);;All files (*)"));
+        if (file.isEmpty()) return;
+    }
+    if (execute(QStringLiteral("media.replace"), QJsonObject{{QStringLiteral("media"), mediaId}, {QStringLiteral("path"), file}}))
+        addActivity(QStringLiteral("import"), QStringLiteral("Replacing %1 with %2").arg(mediaId, QFileInfo(file).fileName()));
+}
+
+void MainWindow::revealMedia(const QString &mediaId) {
+    const QString path = mediaPath(mediaId);
+    if (path.isEmpty()) return;
+#if defined(Q_OS_MACOS)
+    QProcess::startDetached(QStringLiteral("open"), {QStringLiteral("-R"), path});
+#else
+    QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
+#endif
+}
+
+QMenu *MainWindow::binMenu(const QString &mediaId) {
+    auto *menu = new QMenu(this);
+    menu->setObjectName(QStringLiteral("binMenu"));
+    menu->setToolTipsVisible(true);
+    if (!mediaId.isEmpty()) {
+        QAction *open = menu->addAction(QStringLiteral("Open in Source Monitor"));
+        open->setObjectName(QStringLiteral("binOpen"));
+        connect(open, &QAction::triggered, this, [this, mediaId] { openSource(mediaId); });
+        menu->addSeparator();
+        QAction *replace = menu->addAction(QStringLiteral("Replace Media…"));
+        replace->setObjectName(QStringLiteral("binReplace"));
+        replace->setEnabled(m_commands->isEnabled(QStringLiteral("media.replace")));
+        replace->setToolTip(replace->isEnabled() ? QStringLiteral("Swap the file behind %1 for everyone; its clips keep their timing").arg(mediaId)
+                                                 : m_commands->reason(QStringLiteral("media.replace")));
+        connect(replace, &QAction::triggered, this, [this, mediaId] { replaceMedia(mediaId); });
+        QAction *reveal = menu->addAction(QStringLiteral("Reveal in Finder"));
+        reveal->setObjectName(QStringLiteral("binReveal"));
+        reveal->setEnabled(QFileInfo::exists(mediaPath(mediaId)));
+        connect(reveal, &QAction::triggered, this, [this, mediaId] { revealMedia(mediaId); });
+        menu->addSeparator();
+    }
+    menu->addAction(m_commands->action(QStringLiteral("file.import")));
+    menu->addAction(m_commands->action(QStringLiteral("collab.consolidate")));
+    return menu;
 }
 
 void MainWindow::triggerCommand(const QString &id) {
@@ -2246,6 +3170,9 @@ QJsonObject MainWindow::commandContext() const {
                         {QStringLiteral("sourceTargets"), QJsonArray::fromStringList(sourceTargets())},
                         {QStringLiteral("agentBusy"), m_agentBusy},
                         {QStringLiteral("aiAccess"), m_cloudRadio ? aiAccess() : QStringLiteral("ready")}};
+    const QJsonValue projection = m_snapshot.value(QStringLiteral("projectionStatus"));
+    if (projection.isString()) context.insert(QStringLiteral("projectionStatus"), projection);
+    if (!m_collabStatus.isEmpty()) context.insert(QStringLiteral("collab"), collabContext());
     if (!m_proposalId.isEmpty()) {
         QJsonObject proposal{{QStringLiteral("id"), m_proposalId}};
         if (m_proposalBlocked) proposal.insert(QStringLiteral("blocked"), QStringLiteral("stale"));
@@ -2296,6 +3223,7 @@ QWidget *MainWindow::buildTransport() {
         auto *control = new QToolButton;
         control->setObjectName(QStringLiteral("transportButton"));
         control->setProperty("command", command);
+        control->setProperty("glyph", static_cast<int>(glyph));
         control->setIcon(transportIcon(glyph));
         control->setIconSize(QSize(14, 14));
         connect(control, &QToolButton::clicked, this, [this, command] { triggerCommand(command); });
@@ -2344,6 +3272,16 @@ void MainWindow::stepFrames(int frames) {
 
 void MainWindow::setupStatusBar() {
     statusBar()->setSizeGripEnabled(false);
+    m_syncChip = new QToolButton;
+    m_syncChip->setObjectName(QStringLiteral("syncChip"));
+    m_syncChip->setCursor(Qt::PointingHandCursor);
+    m_syncChip->hide();
+    connect(m_syncChip, &QToolButton::clicked, this, [this] {
+        if (m_commands->isEnabled(QStringLiteral("collab.sync"))) triggerCommand(QStringLiteral("collab.sync"));
+        else if (!m_collabStatus.value(QStringLiteral("repository")).toBool()) triggerCommand(QStringLiteral("collab.publish"));
+        else statusBar()->showMessage(m_commands->reason(QStringLiteral("collab.sync")), 4000);
+    });
+    statusBar()->addPermanentWidget(m_syncChip);
     m_statusRevision = new QLabel;
     m_statusRevision->setObjectName(QStringLiteral("statusRevision"));
     m_statusRevision->hide();
@@ -2416,9 +3354,16 @@ void MainWindow::handleEvent(QJsonObject event) {
         m_viewer->setCaption(QString());
         m_hasShownFrame = false;
     } else if (type == QStringLiteral("error")) {
-        showError(event.value(QStringLiteral("message")).toString(QStringLiteral("Runtime error")));
-        // A refused mask edit puts the outline back.
-        updateViewerMasks();
+        const QString message = event.value(QStringLiteral("message")).toString(QStringLiteral("Runtime error"));
+        // How preset_save refuses a file that exists, after its path.
+        static const QString presetExists = QStringLiteral(" already exists; choose another name or replace it");
+        if (!m_savingPreset.isEmpty() && message.endsWith(presetExists)) {
+            replaceSavedPreset(message.chopped(presetExists.size()));
+        } else {
+            showError(message);
+            // A refused mask edit puts the outline back.
+            updateViewerMasks();
+        }
     } else if (type == QStringLiteral("preset_export")) {
         const QString path = event.value(QStringLiteral("path")).toString();
         const QByteArray document = event.value(QStringLiteral("document")).toString().toUtf8();
@@ -2433,15 +3378,28 @@ void MainWindow::handleEvent(QJsonObject event) {
         showPresetBindings(event.value(QStringLiteral("path")).toString(), event.value(QStringLiteral("preset")).toObject());
     } else if (type == QStringLiteral("preset_applied")) {
         statusBar()->showMessage(QStringLiteral("Preset proposal ready for review"), 6000);
+    } else if (type == QStringLiteral("preset_library")) {
+        m_presets->setLibrary(event, m_projectDirectory);
+    } else if (type == QStringLiteral("preset_saved")) {
+        m_savingPreset.clear();
+        const QString path = event.value(QStringLiteral("path")).toString();
+        statusBar()->showMessage(QStringLiteral("Saved preset %1").arg(path), 6000);
+        addActivity(QStringLiteral("preset"), path);
+        execute(QStringLiteral("preset.library"));
+    } else if (type == QStringLiteral("collab") || type == QStringLiteral("collab_sync") ||
+               type == QStringLiteral("collab_pull_request")) {
+        handleCollabEvent(event);
+    } else if (type == QStringLiteral("media_status")) {
+        m_mediaStatus = event;
+        m_projectPanel->setMediaStatus(event);
+        updateCommandStates();
     } else if (type == QStringLiteral("agent")) {
         const QString kind = event.value(QStringLiteral("kind")).toString(QStringLiteral("agent"));
         const QString text = event.value(QStringLiteral("text")).toString();
         if (kind == QStringLiteral("delta")) {
             if (m_agentText.isEmpty()) appendConversation(QStringLiteral("Kerf"), text);
             else {
-                const bool follow = m_conversation->verticalScrollBar()->value() >= m_conversation->verticalScrollBar()->maximum() - 4;
                 m_agentCursor.insertText(text);
-                if (follow) m_conversation->verticalScrollBar()->setValue(m_conversation->verticalScrollBar()->maximum());
             }
             m_agentText += text;
         } else if (kind == QStringLiteral("done")) {
@@ -2461,12 +3419,12 @@ void MainWindow::handleEvent(QJsonObject event) {
     } else if (type == QStringLiteral("agent_busy")) {
         const bool busy = event.value(QStringLiteral("busy")).toBool();
         m_agentBusy = busy;
-        if (!m_connected) m_agentStatus->setText(QStringLiteral("OFFLINE"));
-        else if (busy) m_agentStatus->setText(QStringLiteral("THINKING"));
-        else if (m_agentRunState == QStringLiteral("failed")) m_agentStatus->setText(QStringLiteral("FAILED"));
-        else if (m_agentRunState == QStringLiteral("aborted")) m_agentStatus->setText(QStringLiteral("STOPPED"));
-        else if (m_agentRunState == QStringLiteral("awaiting_review")) m_agentStatus->setText(QStringLiteral("REVIEW"));
-        else m_agentStatus->setText(QStringLiteral("READY"));
+        if (!m_connected) m_agentStatus->setText(QStringLiteral("Offline"));
+        else if (busy) m_agentStatus->setText(QStringLiteral("Thinking"));
+        else if (m_agentRunState == QStringLiteral("failed")) m_agentStatus->setText(QStringLiteral("Failed"));
+        else if (m_agentRunState == QStringLiteral("aborted")) m_agentStatus->setText(QStringLiteral("Stopped"));
+        else if (m_agentRunState == QStringLiteral("awaiting_review")) m_agentStatus->setText(QStringLiteral("Review"));
+        else m_agentStatus->setText(QStringLiteral("Ready"));
         m_chatInput->setEnabled(m_connected && !busy);
         updateChatControls();
         updateAiBar();
@@ -2474,12 +3432,12 @@ void MainWindow::handleEvent(QJsonObject event) {
     } else if (type == QStringLiteral("agent_state")) {
         const QString state = event.value(QStringLiteral("state")).toString();
         m_agentRunState = state;
-        const QString label = state == QStringLiteral("running") ? QStringLiteral("THINKING")
-                              : state == QStringLiteral("awaiting_review") ? QStringLiteral("REVIEW")
-                              : state == QStringLiteral("failed") ? QStringLiteral("FAILED")
-                              : state == QStringLiteral("aborted") ? QStringLiteral("STOPPED")
-                              : QStringLiteral("READY");
-        m_agentStatus->setText(m_connected ? label : QStringLiteral("OFFLINE"));
+        const QString label = state == QStringLiteral("running") ? QStringLiteral("Thinking")
+                              : state == QStringLiteral("awaiting_review") ? QStringLiteral("Review")
+                              : state == QStringLiteral("failed") ? QStringLiteral("Failed")
+                              : state == QStringLiteral("aborted") ? QStringLiteral("Stopped")
+                              : QStringLiteral("Ready");
+        m_agentStatus->setText(m_connected ? label : QStringLiteral("Offline"));
         if (state == QStringLiteral("failed")) {
             appendConversationNote(QStringLiteral("Agent error"), event.value(QStringLiteral("message")).toString());
         }
@@ -2577,6 +3535,12 @@ void MainWindow::handleEvent(QJsonObject event) {
 }
 
 void MainWindow::applySnapshot(const QJsonObject &snapshot) {
+    const auto diverged = [](const QJsonObject &state) {
+        return state.value(QStringLiteral("projectionStatus")).toString() == QStringLiteral("diverged");
+    };
+    // project.kerf changing outside Kerf (a pull in a terminal), or being
+    // loaded, can come with other presets.
+    const bool presetsMayDiffer = m_connected && diverged(m_snapshot) != diverged(snapshot);
     m_snapshot = snapshot;
     m_revision = static_cast<quint64>(snapshot.value(QStringLiteral("revision")).toDouble());
     m_duration = std::max(0.0, snapshot.value(QStringLiteral("duration")).toDouble());
@@ -2598,7 +3562,7 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     }
     m_project.insert("tracks", displayTracks);
     m_fps = m_project.value(QStringLiteral("fps")).toDouble(24.0);
-    m_projectTitle->setText(m_project.value(QStringLiteral("name")).toString(QStringLiteral("Untitled project")));
+    setProjectTitle(m_project.value(QStringLiteral("name")).toString(QStringLiteral("Untitled project")));
     const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
     m_trackCount = tracks.size();
     if (!m_selectedClip.isEmpty() && selectedClipObject().isEmpty()) m_selectedClip.clear();
@@ -2630,8 +3594,10 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     }
     updateProposal(snapshot.value(QStringLiteral("pendingProposal")));
     m_timeline->setProposal(m_proposalId.isEmpty() ? QJsonObject{} : snapshot.value(QStringLiteral("proposalTimeline")).toObject());
+    m_divergedBanner->setVisible(diverged(snapshot));
     updateInspector();
     updateCommandStates();
+    if (presetsMayDiffer) execute(QStringLiteral("preset.library"));
 }
 
 QString MainWindow::selectedTrackType() const {
@@ -2739,6 +3705,7 @@ void MainWindow::updateProposal(const QJsonValue &value) {
     m_proposalBox->setVisible(pending);
     if (!pending) {
         m_proposalSummary->setText(QStringLiteral("No pending changes"));
+        m_proposalText.clear();
         m_proposalDiff->clear();
         updateAiBar();
         return;
@@ -2761,15 +3728,36 @@ void MainWindow::updateProposal(const QJsonValue &value) {
     if (stale) text += QStringLiteral("This proposal is out of date. Ask Kerf to prepare it again before accepting.\n\n");
     text += proposal.value(QStringLiteral("script")).toString();
     text += QStringLiteral("\n") + diff;
-    m_proposalDiff->setPlainText(text);
+    m_proposalText = text;
+    showProposalText();
     m_acceptButton->setEnabled(m_connected && !stale);
     m_proposalBlocked = stale;
     updateAiBar();
 }
 
+void MainWindow::showProposalText() {
+    // Added lines in the success green, removed ones in the error red, and
+    // the script and diff headers in secondary text.
+    const EditorTheme &theme = editorTheme();
+    m_proposalDiff->clear();
+    QTextCursor cursor(m_proposalDiff->document());
+    const QStringList lines = m_proposalText.split(QLatin1Char('\n'));
+    for (qsizetype index = 0; index < lines.size(); ++index) {
+        const QString &line = lines.at(index);
+        const bool header = line.startsWith(QStringLiteral("+++")) || line.startsWith(QStringLiteral("---"));
+        QTextCharFormat format;
+        format.setForeground(!header && line.startsWith(QLatin1Char('+')) ? theme.success
+                             : !header && line.startsWith(QLatin1Char('-')) ? theme.error
+                                                                             : theme.textSecondary);
+        if (index > 0) cursor.insertBlock();
+        cursor.insertText(line, format);
+    }
+    m_proposalDiff->moveCursor(QTextCursor::Start);
+}
+
 void MainWindow::appendConversation(const QString &speaker, const QString &text) {
     if (text.isEmpty()) return;
-    const bool follow = m_conversationEmpty || m_conversation->verticalScrollBar()->value() >= m_conversation->verticalScrollBar()->maximum() - 4;
+    if (m_conversationEmpty) m_followConversation = true;
     if (m_conversationEmpty) {
         m_conversation->clear();
         m_conversationEmpty = false;
@@ -2785,27 +3773,92 @@ void MainWindow::appendConversation(const QString &speaker, const QString &text)
     frame.setBottomMargin(10);
     frame.setLeftMargin(user ? 32 : 0);
     frame.setRightMargin(user ? 0 : 16);
-    frame.setBackground(QColor(user ? "#333333" : error ? "#342729" : "#262626"));
+    const MessageKind kind = user ? MessageKind::User : error ? MessageKind::Error : MessageKind::Agent;
+    frame.setProperty(kMessageKind, static_cast<int>(kind));
+    styleMessage(frame, kind);
     frame.setBorder(1);
     frame.setBorderStyle(QTextFrameFormat::BorderStyle_Solid);
-    frame.setBorderBrush(QColor(error ? "#94666b" : user ? "#494949" : "#353535"));
     cursor = cursor.insertFrame(frame)->firstCursorPosition();
     QTextBlockFormat block;
     block.setBottomMargin(7);
     cursor.setBlockFormat(block);
     QTextCharFormat role;
+    // Sentence case at 11 points, as macOS labels.
     role.setFontWeight(QFont::DemiBold);
-    role.setFontPointSize(9);
-    role.setForeground(QColor(error ? "#efb3b8" : user ? "#bfbfbf" : "#e6b450"));
-    cursor.insertText(user ? QStringLiteral("YOU") : error ? QStringLiteral("COULDN’T COMPLETE EDIT") : QStringLiteral("KERF"), role);
+    role.setProperty(QTextFormat::FontPixelSize, 11);
+    role.setProperty(kMessageKind, static_cast<int>(kind));
+    role.setForeground(messageRoleColor(kind));
+    cursor.insertText(user ? QStringLiteral("You") : error ? QStringLiteral("Couldn’t complete edit") : QStringLiteral("Kerf"), role);
     QTextBlockFormat body;
     body.setLineHeight(145, QTextBlockFormat::ProportionalHeight);
+    // The body takes the conversation's own text colour, which follows the appearance.
     QTextCharFormat bodyText;
-    bodyText.setForeground(QColor("#e4e4e4"));
     cursor.insertBlock(body, bodyText);
     cursor.insertText(text);
     if (speaker == QStringLiteral("Kerf")) m_agentCursor = cursor;
-    if (follow) m_conversation->verticalScrollBar()->setValue(m_conversation->verticalScrollBar()->maximum());
+}
+
+void MainWindow::fitPreferences() {
+    if (!m_preferences || !m_preferencesContent) return;
+    m_preferences->ensurePolished();
+    constexpr int width = 520;
+    const QMargins margins = m_preferences->layout()->contentsMargins();
+    QLayout *content = m_preferencesContent->layout();
+    content->activate();
+    const int inner = width - margins.left() - margins.right();
+    const int height = content->hasHeightForWidth() ? content->totalHeightForWidth(inner) : content->totalSizeHint().height();
+    const QScreen *screen = m_preferences->screen();
+    const int limit = std::min(720, screen ? screen->availableGeometry().height() * 9 / 10 : 720);
+    m_preferences->resize(width, std::min(limit, height + margins.top() + margins.bottom()));
+}
+
+void MainWindow::applyAppearance() {
+    for (const auto &[action, glyph] : std::as_const(m_toolbarGlyphs)) action->setIcon(toolbarIcon(glyph));
+    for (QAction *action : std::as_const(m_toolGlyphs)) action->setIcon(toolIcon(action->objectName()));
+    if (m_divergedGlyph) m_divergedGlyph->setPixmap(warningTriangle(editorTheme().warningGlyph));
+    for (QToolButton *disclosure : std::as_const(m_disclosures))
+        disclosure->setIcon(disclosureIcon(disclosure->isChecked(), editorTheme().textSecondary));
+    for (QToolButton *button : std::as_const(m_transportButtons)) {
+        const auto glyph = static_cast<TransportGlyph>(button->property("glyph").toInt());
+        button->setIcon(transportIcon(button == m_transportPlay && m_transportShowsPause ? TransportGlyph::Pause : glyph));
+    }
+    for (QAction *action : std::as_const(m_maskTools)) action->setIcon(maskToolIcon(static_cast<MaskTool>(action->data().toInt())));
+    for (const auto &[action, glyph] : std::as_const(m_sourceGlyphs)) action->setIcon(transportIcon(glyph));
+    if (!m_proposalText.isEmpty()) showProposalText();
+    if (m_conversationEmpty) {
+        m_conversation->setHtml(conversationIntro(editorTheme()));
+        return;
+    }
+    // Recolour the messages already shown: their frames and the speaker
+    // names over them; bodies take the conversation's text colour.
+    QTextDocument *document = m_conversation->document();
+    QList<QPair<QTextFrame *, MessageKind>> frames;
+    for (QTextFrame *frame : document->rootFrame()->childFrames()) {
+        const int kind = frame->frameFormat().intProperty(kMessageKind);
+        if (kind) frames.append({frame, static_cast<MessageKind>(kind)});
+    }
+    for (const auto &[frame, kind] : std::as_const(frames)) {
+        QTextFrameFormat format = frame->frameFormat();
+        styleMessage(format, kind);
+        frame->setFrameFormat(format);
+    }
+    struct Run { int start; int end; MessageKind kind; };
+    QList<Run> runs;
+    for (QTextBlock block = document->begin(); block.isValid(); block = block.next()) {
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const QTextFragment fragment = it.fragment();
+            if (const int kind = fragment.charFormat().intProperty(kMessageKind))
+                runs.append({fragment.position(), fragment.position() + fragment.length(), static_cast<MessageKind>(kind)});
+        }
+    }
+    for (const Run &run : std::as_const(runs)) {
+        QTextCursor cursor(document);
+        cursor.setPosition(run.start);
+        cursor.setPosition(run.end, QTextCursor::KeepAnchor);
+        QTextCharFormat color;
+        color.setForeground(messageRoleColor(run.kind));
+        cursor.mergeCharFormat(color);
+    }
 }
 
 void MainWindow::appendConversationNote(const QString &kind, const QString &text) {
@@ -2843,8 +3896,8 @@ void MainWindow::setConnection(const QString &status, const QString &message) {
     m_reconnectButton->setEnabled(status == QStringLiteral("disconnected"));
     m_connectionMessage->setText(status == QStringLiteral("connecting") ? QStringLiteral("Connecting to project…")
         : QStringLiteral("Project disconnected. %1").arg(message));
-    m_agentStatus->setText(m_connected ? (m_agentBusy ? QStringLiteral("THINKING") : QStringLiteral("READY"))
-        : status == QStringLiteral("connecting") ? QStringLiteral("CONNECTING") : QStringLiteral("OFFLINE"));
+    m_agentStatus->setText(m_connected ? (m_agentBusy ? QStringLiteral("Thinking") : QStringLiteral("Ready"))
+        : status == QStringLiteral("connecting") ? QStringLiteral("Connecting") : QStringLiteral("Offline"));
     m_timeline->setEnabled(m_connected);
     if (m_canvasPreset) m_canvasPreset->setEnabled(m_connected);
     m_chatInput->setEnabled(m_connected && !m_agentBusy);
@@ -2875,7 +3928,9 @@ void MainWindow::setConnection(const QString &status, const QString &message) {
     updateInspector();
     updateProposal(m_snapshot.value(QStringLiteral("pendingProposal")));
     updateChatControls();
+    if (m_presets) m_presets->setConnected(m_connected);
     updateCommandStates();
+    if (m_connected && !wasConnected) startSession();
     QTimer::singleShot(0, this, [this] {
         if (m_timelineScroll && m_timeline && m_timelineScroll->viewport()->width() > 0) {
             m_timeline->fitToWidth(m_timelineScroll->viewport()->width());

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "editor_common.h"
+
 #include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
@@ -39,6 +41,7 @@ class AskPrompt;
 class CommandRegistry;
 class EffectControlsPanel;
 class EffectsPanel;
+class PresetsPanel;
 class ProjectPanel;
 class SourceMonitorPanel;
 class Workspace;
@@ -52,6 +55,11 @@ class MainWindow final : public QMainWindow {
 public:
     MainWindow(const QString &projectDirectory, const QString &kerfdBinary, QWidget *parent = nullptr);
     ~MainWindow() override;
+
+signals:
+    // File ▸ New Project, Open Project, and Open Recent: open `path` in a
+    // window of its own and close this one.
+    void projectOpenRequested(const QString &path);
 
 private slots:
     void pollBridge();
@@ -133,9 +141,23 @@ private slots:
 protected:
     bool eventFilter(QObject *object, QEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
+    void showEvent(QShowEvent *event) override;
+    void changeEvent(QEvent *event) override;
 
 private:
     void buildUi();
+    // On macOS, where the toolbar is the title bar: fill the title bar's
+    // height and start past the window buttons (none in full screen).
+    void fitTitleBar();
+    // The project's name as the window's title and the toolbar's.
+    void setProjectTitle(const QString &name);
+    // Centre the title on the toolbar, clear of the groups either side.
+    void layoutProjectTitle();
+    // Rebuild what caches the theme's colours: symbols drawn in code and the
+    // conversation's messages.
+    void applyAppearance();
+    // Size Settings to what it shows, up to the screen's height; it scrolls past that.
+    void fitPreferences();
     // Window ▸ Workspaces: the workspaces, and saving or resetting the current one.
     void buildWorkspaceMenu(QMenu *menu);
     void syncCanvasPreset(const QSize &size);
@@ -176,14 +198,56 @@ private:
     // A proposal is the script the agent wants to run and the diff of the
     // document it would produce.
     void updateProposal(const QJsonValue &value);
+    // Show m_proposalText in m_proposalDiff, its lines coloured by kind.
+    void showProposalText();
     void appendConversation(const QString &speaker, const QString &text);
     void appendConversationNote(const QString &kind, const QString &text);
     void addActivity(const QString &kind, const QString &text);
     void showError(const QString &message);
     void setConnection(const QString &status, const QString &message = QString());
+    // Requests a fresh connection needs: Git status, the preset library,
+    // and live sync when it was on for this project.
+    void startSession();
+
+    // Projects: the launcher, a folder, or a recent one.
+    void newProject();
+    void openProjectFolder();
+    void openProject(const QString &path);
+    void buildRecentMenu(QMenu *menu);
+
+    // Collaboration over Git. The bridge runs every Git operation; the
+    // window shows where the project stands and what a sync brought in.
+    void handleCollabEvent(const QJsonObject &event);
+    QJsonObject collabContext() const;
+    void updateSyncChip();
+    void buildBranchMenu(QMenu *menu);
+    void commitChanges();
+    void newBranch();
+    void openPullRequest();
+    void publishProject();
+    bool liveSyncRemembered() const;
+    void rememberLiveSync(bool enabled);
+
+    // Presets in the project's library, and the media behind its slots.
+    void savePreset();
+    // The bridge refused the save in progress because `path` exists: ask,
+    // then save again over it.
+    void replaceSavedPreset(const QString &path);
+    void applyLibraryPreset(const QString &path);
+    // Swap the file behind `mediaId`; asks for the file when `path` is empty.
+    void replaceMedia(const QString &mediaId, const QString &path = QString());
+    void revealMedia(const QString &mediaId);
+    QString mediaPath(const QString &mediaId) const;
+    // The bin's context menu for `mediaId` (empty for the bin itself).
+    QMenu *binMenu(const QString &mediaId);
 
     MediaArtwork *m_artwork = nullptr;
+    QToolBar *m_toolbar = nullptr;
+    // The room at the toolbar's leading end for the window buttons (macOS).
+    QWidget *m_windowButtons = nullptr;
     QLabel *m_projectTitle = nullptr;
+    QString m_projectName;
+    QToolButton *m_toolbarLeftEnd = nullptr; // The last command before the title.
     QString m_projectDirectory;
     QString m_kerfdBinary;
     void *m_bridge = nullptr;
@@ -203,6 +267,13 @@ private:
     CommandRegistry *m_commands = nullptr;
     QHash<QString, std::function<void()>> m_commandHandlers;
     QList<QToolButton *> m_transportButtons;
+    // Toolbar actions and the symbols drawn for them.
+    QList<QPair<QAction *, QString>> m_toolbarGlyphs;
+    QList<QPair<QAction *, TransportGlyph>> m_sourceGlyphs; // The Source monitor's marks and edits.
+    // Tool palette actions, whose icons are redrawn when the appearance changes.
+    QList<QAction *> m_toolGlyphs;
+    // Disclosure buttons (Activity, Settings' Advanced), whose chevrons are too.
+    QList<QToolButton *> m_disclosures;
     QToolButton *m_transportPlay = nullptr;
     QLabel *m_transportTime = nullptr;
     QLabel *m_transportDuration = nullptr;
@@ -220,6 +291,28 @@ private:
     QJsonObject m_lastFocus;
     QString m_lastFocusLabel;
     ProjectPanel *m_projectPanel = nullptr;
+    PresetsPanel *m_presets = nullptr;
+    // The name of the preset being saved, until the bridge answers.
+    QString m_savingPreset;
+    // project.kerf changed outside Kerf: load it or keep the editor's version.
+    QFrame *m_divergedBanner = nullptr;
+    QLabel *m_divergedGlyph = nullptr;
+    QPushButton *m_loadFromDisk = nullptr;
+    QPushButton *m_keepEditorVersion = nullptr;
+    // The branch and how far it is from its upstream; a click syncs.
+    QToolButton *m_syncChip = nullptr;
+    QMenu *m_recentMenu = nullptr;
+    QMenu *m_branchMenu = nullptr;
+    // The bridge's last `collab` status, empty until one arrives.
+    QJsonObject m_collabStatus;
+    // The running sync's stage, empty when none runs.
+    QString m_syncStage;
+    // Sync Now was asked for; live sync's own cycles report only news.
+    bool m_syncRequested = false;
+    QString m_syncFailure;
+    // What the last sync brought in, one line each.
+    QStringList m_syncLines;
+    QJsonObject m_mediaStatus;
     SourceMonitorPanel *m_sourceMonitor = nullptr;
     QToolBar *m_toolPalette = nullptr;
     AskPrompt *m_askPrompt = nullptr;
@@ -234,6 +327,7 @@ private:
     QPushButton *m_cloudSignIn = nullptr;
     QPushButton *m_cloudSignOut = nullptr;
     QWidget *m_advancedSettings = nullptr;
+    QWidget *m_preferencesContent = nullptr;
     QLabel *m_statusAccount = nullptr;
     // Where the live preview draws: the GPU adapter, or the CPU.
     QLabel *m_statusDevice = nullptr;
@@ -278,6 +372,9 @@ private:
     ViewerWidget *m_viewer = nullptr;
     TimelineWidget *m_timeline = nullptr;
     QTextEdit *m_conversation = nullptr;
+    // The assistant's one scrolling view, and whether it keeps to the latest output.
+    QScrollArea *m_chatScroll = nullptr;
+    bool m_followConversation = true;
     QTextCursor m_agentCursor;
     QLabel *m_chatActivity = nullptr;
     QFrame *m_chatComposer = nullptr;
@@ -303,6 +400,7 @@ private:
     QLabel *m_agentStatus = nullptr;
     QLabel *m_proposalSummary = nullptr;
     QTextEdit *m_proposalDiff = nullptr;
+    QString m_proposalText; // The pending proposal's script and diff, as m_proposalDiff shows them.
     QPushButton *m_acceptButton = nullptr;
     QPushButton *m_rejectButton = nullptr;
     QGroupBox *m_proposalBox = nullptr;

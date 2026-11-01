@@ -1,7 +1,9 @@
 #include "viewer_widget.h"
 #include "editor_common.h"
+#include "editor_theme.h"
 
 #include <QCursor>
+#include <QFontMetricsF>
 #include <QKeyEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -21,7 +23,38 @@ constexpr double kHandleSize = 7.0;
 // How near the pointer must be to a handle, or a path, to take it.
 constexpr double kHandleReach = 6.0;
 
-QColor maskColor(bool selected) { return selected ? QColor("#f2bd69") : QColor(242, 189, 105, 170); }
+QColor maskColor(bool selected) { return selected ? editorTheme().maskOutline : editorTheme().maskOutlineIdle; }
+
+// An outline over the picture: a dark rule, then a white line on it, which
+// reads on any picture; `dashed` for a path only.
+void strokeOverPicture(QPainter &p, const QPainterPath &path, bool selected, bool dashed) {
+    const EditorTheme &theme = editorTheme();
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(theme.maskShadow, 3.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    p.drawPath(path);
+    QPen pen(maskColor(selected), 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+    if (dashed) pen.setStyle(Qt::DashLine);
+    p.setPen(pen);
+    p.drawPath(path);
+}
+
+// A mask's name on a tag just above `anchor` (the top left of its outline).
+void paintMaskTag(QPainter &p, const QPointF &anchor, const QString &name, bool selected) {
+    const EditorTheme &theme = editorTheme();
+    QFont font = p.font();
+    font.setPixelSize(11);
+    font.setWeight(QFont::DemiBold);
+    const QFontMetricsF metrics(font);
+    const QSizeF size(metrics.horizontalAdvance(name) + 10.0, metrics.height() + 4.0);
+    // Clear of the top-left handle, by 4 points.
+    const QRectF tag(QPointF(anchor.x() - kHandleSize / 2.0, anchor.y() - kHandleSize / 2.0 - 4.0 - size.height()), size);
+    p.setPen(Qt::NoPen);
+    p.setBrush(selected ? theme.maskTagSelected : theme.maskTag);
+    p.drawRoundedRect(tag, 4, 4);
+    p.setFont(font);
+    p.setPen(theme.maskText);
+    p.drawText(tag, Qt::AlignCenter, name);
+}
 
 // Fractions of the picture are kept to four places, under half a pixel of
 // a 4K picture, so the document stays readable.
@@ -491,33 +524,29 @@ void ViewerWidget::paintMasks(QPainter &p) {
     p.save();
     p.setRenderHint(QPainter::Antialiasing);
     p.setBrush(Qt::NoBrush);
-    // A dark rule under each outline keeps it visible on any picture; a
-    // path only (mode none) is dashed.
+    // Outlines are white over a dark rule, never the accent, so they read
+    // on a picture in the accent's own hue; a path only (mode none) is dashed.
     const auto outline = [&p](const QPainterPath &path, bool selected, bool pathOnly) {
-        p.setPen(QPen(QColor(0, 0, 0, 140), selected ? 3.6 : 3.0));
-        p.drawPath(path);
-        QPen pen(maskColor(selected), selected ? 1.6 : 1.1);
-        if (pathOnly) pen.setStyle(Qt::DashLine);
-        p.setPen(pen);
-        p.drawPath(path);
+        strokeOverPicture(p, path, selected, pathOnly);
     };
-    const auto handle = [&p](const QPointF &center, bool filled) {
-        p.setPen(QPen(maskColor(true), 1.2));
-        p.setBrush(filled ? maskColor(true) : QColor("#141414"));
+    // Handles are the accent with a white edge; the pen's first point turns
+    // white when a click there would close the outline.
+    const auto handle = [&p](const QPointF &center, bool closes) {
+        const EditorTheme &theme = editorTheme();
+        p.setPen(QPen(closes ? theme.maskHandleFill : theme.maskHandleBorder, 1.0));
+        p.setBrush(closes ? theme.maskHandleBorder : theme.maskHandleFill);
         p.drawRect(QRectF(center - QPointF(kHandleSize / 2.0, kHandleSize / 2.0), QSizeF(kHandleSize, kHandleSize)));
         p.setBrush(Qt::NoBrush);
     };
-    QFont font = p.font();
-    font.setPointSizeF(std::max(7.0, font.pointSizeF() - 2.0));
-    p.setFont(font);
     for (const QJsonValue &value : m_masks) {
         const QJsonObject mask = value.toObject();
         const QString name = mask.value(QStringLiteral("name")).toString();
         const bool selected = name == m_selectedMask;
         const QPainterPath path = toWidget.map(maskPath(mask));
         outline(path, selected, mask.value(QStringLiteral("mode")).toString() == QStringLiteral("none"));
-        p.setPen(maskColor(selected));
-        p.drawText(path.boundingRect().topLeft() + QPointF(4.0, -5.0), name);
+        // The name on a tag over the outline's top left; the selected
+        // mask's tag is the accent.
+        if (!name.isEmpty()) paintMaskTag(p, path.boundingRect().topLeft(), name, selected);
         if (!selected) continue;
         for (const QPointF &point : handlesOf(mask)) handle(toWidget.map(point), false);
     }
@@ -532,9 +561,9 @@ void ViewerWidget::paintMasks(QPainter &p) {
         QPainterPath path(toWidget.map(m_penPoints.first()));
         for (int index = 1; index < m_penPoints.size(); ++index) path.lineTo(toWidget.map(m_penPoints.at(index)));
         outline(path, true, false);
-        QPen rubber(maskColor(false), 1.0, Qt::DashLine);
-        p.setPen(rubber);
-        p.drawLine(toWidget.map(m_penPoints.last()), m_pointer);
+        QPainterPath rubber(toWidget.map(m_penPoints.last()));
+        rubber.lineTo(m_pointer);
+        strokeOverPicture(p, rubber, false, true);
         const QPointF first = toWidget.map(m_penPoints.first());
         const QPointF reach = first - m_pointer;
         // The first point fills when a click there would close the outline.
@@ -545,14 +574,15 @@ void ViewerWidget::paintMasks(QPainter &p) {
 }
 
 void ViewerWidget::paintEvent(QPaintEvent *) {
+    const EditorTheme &theme = editorTheme();
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    p.fillRect(rect(), QColor("#141414"));
+    p.fillRect(rect(), theme.viewerSurround);
     const QRectF canvas = videoRect();
     QPainterPath canvasPath;
     canvasPath.addRoundedRect(canvas.adjusted(0.5, 0.5, -0.5, -0.5), 2, 2);
-    p.setPen(QPen(QColor("#050505"), 1));
-    p.setBrush(QColor("#050505"));
+    p.setPen(QPen(theme.viewerCanvas, 1));
+    p.setBrush(theme.viewerCanvas);
     p.drawPath(canvasPath);
     if (!m_frame.isNull()) {
         p.save();
@@ -572,31 +602,31 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
         p.restore();
     } else {
         const QPointF center = canvas.center() - QPointF(0, 22);
-        p.setPen(QColor("#363636"));
-        p.setBrush(QColor("#181818"));
+        p.setPen(Qt::NoPen);
+        p.setBrush(theme.viewerGlyphFill);
         p.drawEllipse(center, 20, 20);
-        p.setPen(QColor("#626262"));
+        p.setPen(theme.viewerGlyphRing);
         p.setBrush(Qt::NoBrush);
         p.drawEllipse(center, 20, 20);
         p.setPen(Qt::NoPen);
-        p.setBrush(QColor("#b1b1b1"));
+        p.setBrush(theme.viewerGlyph);
         p.drawPolygon(QPolygonF{center + QPointF(-5, -8), center + QPointF(9, 0), center + QPointF(-5, 8)});
-        p.setPen(QColor("#a0a0a0"));
+        p.setPen(theme.viewerText);
         p.drawText(QRectF(canvas.left(), center.y() + 32, canvas.width(), 20), Qt::AlignCenter,
                    QStringLiteral("Your viewer"));
-        p.setPen(QColor("#747474"));
+        p.setPen(theme.viewerTextDim);
         p.drawText(QRectF(canvas.left(), center.y() + 52, canvas.width(), 20), Qt::AlignCenter,
                    QStringLiteral("The playhead frame shows here."));
     }
     if (!m_caption.isEmpty()) {
         const QRectF caption = captionRect();
         p.setPen(Qt::NoPen);
-        p.setBrush(QColor(15, 15, 15, 225));
+        p.setBrush(theme.viewerCaption);
         p.drawRoundedRect(caption, 4, 4);
-        p.setPen(QColor("#676767"));
+        p.setPen(theme.viewerCaptionBorder);
         p.setBrush(Qt::NoBrush);
         p.drawRoundedRect(caption, 4, 4);
-        p.setPen(QColor("#eeeeee"));
+        p.setPen(theme.viewerCaptionText);
         p.drawText(caption.adjusted(10, 4, -10, -4), Qt::AlignCenter | Qt::TextWordWrap, m_caption);
     }
     paintMasks(p);
@@ -613,17 +643,22 @@ RegionPicker::RegionPicker(const QImage &frame, const QRectF &region, QWidget *p
 }
 
 void RegionPicker::paintEvent(QPaintEvent *) {
+    const EditorTheme &theme = editorTheme();
     QPainter painter(this);
-    painter.fillRect(rect(), QColor("#141414"));
+    painter.fillRect(rect(), theme.viewerSurround);
     const QRectF image = imageRect();
     painter.drawImage(image, m_frame);
     if (m_region.isEmpty()) return;
     const QRectF selected(image.x() + m_region.x() * image.width(),
                           image.y() + m_region.y() * image.height(),
                           m_region.width() * image.width(), m_region.height() * image.height());
-    painter.setPen(QPen(QColor("#f2bd69"), 2));
-    painter.setBrush(QColor(242, 189, 105, 35));
-    painter.drawRect(selected);
+    // White over a dark rule, as the masks' outlines, so it reads on any
+    // picture.
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.fillRect(selected, theme.maskFill);
+    QPainterPath frame;
+    frame.addRect(selected);
+    strokeOverPicture(painter, frame, true, false);
 }
 
 void RegionPicker::mousePressEvent(QMouseEvent *event) {

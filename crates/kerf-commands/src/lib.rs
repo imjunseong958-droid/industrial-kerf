@@ -45,6 +45,7 @@ pub enum Menu {
     Markers,
     Playback,
     View,
+    Collaborate,
     Window,
 }
 
@@ -56,6 +57,7 @@ pub const MENUS: &[Menu] = &[
     Menu::Markers,
     Menu::Playback,
     Menu::View,
+    Menu::Collaborate,
     Menu::Window,
 ];
 
@@ -89,6 +91,38 @@ pub struct Context {
     /// key, or a Kerf Cloud access state such as `signedOut`. Absent when it
     /// can.
     pub ai_access: Option<String>,
+    /// `diverged` when project.kerf changed outside Kerf since the editor
+    /// last wrote it.
+    pub projection_status: Option<String>,
+    /// Where the project stands against its Git repository; absent until
+    /// the first status arrives.
+    pub collab: Option<CollabState>,
+}
+
+/// The project's Git standing, as the bridge's `collab` status reports it,
+/// with what the editor knows besides.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CollabState {
+    /// The project folder is the top of a Git work tree.
+    pub repository: bool,
+    pub branch: Option<String>,
+    /// The branch this one pulls from and pushes to, as `origin/main`.
+    pub upstream: Option<String>,
+    pub remote: Option<String>,
+    pub ahead: u32,
+    pub behind: u32,
+    /// Project files differ from the last commit.
+    pub changed: bool,
+    /// A merge is in progress with unresolved paths.
+    pub conflicted: bool,
+    pub branches: Vec<String>,
+    /// Live sync is on.
+    pub live: bool,
+    /// A sync, commit, branch switch, or publish is running.
+    pub busy: bool,
+    /// Media the project uses from outside its folder.
+    pub external_media: u32,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -163,6 +197,66 @@ pub enum Request {
         revision: u64,
     },
     Abort,
+    /// Load a project.kerf changed outside Kerf as one revision.
+    ProjectionImport,
+    /// Write the editor's project over a project.kerf changed outside Kerf.
+    ProjectionRepair,
+    /// Swap the file behind a media id; every clip using it keeps its timing.
+    MediaReplace {
+        media: String,
+        path: String,
+    },
+    PresetLibrary,
+    /// Save the program sequence as `presets/<name>.kerfpreset`.
+    PresetSave {
+        name: String,
+        replace: bool,
+    },
+    CollabStatus,
+    /// Commit local edits, pull and merge the upstream branch, and push.
+    CollabSync {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
+    CollabLive {
+        enabled: bool,
+        /// Seconds between syncs.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        interval: Option<u32>,
+    },
+    CollabCommit {
+        message: String,
+    },
+    /// Commit local edits, then switch to `name`, creating it first when asked.
+    CollabBranch {
+        name: String,
+        create: bool,
+    },
+    CollabPullRequest {
+        title: String,
+        /// Without one, the branch's commit subjects.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        body: Option<String>,
+    },
+    /// Make the project a repository if it is not one, add the remote or
+    /// create the GitHub repository, then push.
+    CollabPublish {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        remote: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        github: Option<GitHubRepository>,
+    },
+    /// Copy media from outside the project into `media/` and relink it.
+    CollabConsolidate,
+}
+
+/// A GitHub repository to create with `gh`; without a name it is named
+/// after the project.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct GitHubRepository {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub private: bool,
 }
 
 type Check = fn(&Context) -> Result<(), &'static str>;
@@ -339,6 +433,119 @@ fn can_play(context: &Context) -> Result<(), &'static str> {
     }
 }
 
+const NOT_SHARED: &str = "Share the project with Git first (Collaborate → Publish to GitHub…)";
+const SYNCING: &str = "A sync is running";
+const DIVERGED: &str = "project.kerf changed on disk: load it or keep the editor's version first";
+
+fn diverged(context: &Context) -> bool {
+    context.projection_status.as_deref() == Some("diverged")
+}
+
+fn collab(context: &Context) -> Result<&CollabState, &'static str> {
+    connected(context)?;
+    context
+        .collab
+        .as_ref()
+        .ok_or("Reading the project's Git status")
+}
+
+fn shared(context: &Context) -> Result<&CollabState, &'static str> {
+    let collab = collab(context)?;
+    if collab.repository {
+        Ok(collab)
+    } else {
+        Err(NOT_SHARED)
+    }
+}
+
+/// A shared project with no Git operation running or merge left open.
+fn idle(context: &Context) -> Result<&CollabState, &'static str> {
+    let collab = shared(context)?;
+    if collab.busy {
+        Err(SYNCING)
+    } else if collab.conflicted {
+        Err("Finish the merge in progress with git first")
+    } else {
+        Ok(collab)
+    }
+}
+
+fn can_sync(context: &Context) -> Result<(), &'static str> {
+    idle(context)?;
+    if diverged(context) {
+        Err(DIVERGED)
+    } else {
+        Ok(())
+    }
+}
+
+fn can_live(context: &Context) -> Result<(), &'static str> {
+    shared(context).map(|_| ())
+}
+
+fn can_commit(context: &Context) -> Result<(), &'static str> {
+    if idle(context)?.changed {
+        Ok(())
+    } else {
+        Err("Nothing to commit")
+    }
+}
+
+fn can_switch(context: &Context) -> Result<(), &'static str> {
+    can_sync(context)?;
+    let collab = shared(context)?;
+    if collab
+        .branches
+        .iter()
+        .any(|branch| Some(branch) != collab.branch.as_ref())
+    {
+        Ok(())
+    } else {
+        Err("There are no other branches")
+    }
+}
+
+/// The bridge pushes the branch, then opens the pull request with `gh`, or
+/// GitHub's page for starting one when `gh` is not installed.
+fn can_open_pull_request(context: &Context) -> Result<(), &'static str> {
+    if idle(context)?.remote.is_some() {
+        Ok(())
+    } else {
+        Err("Publish the project to GitHub first")
+    }
+}
+
+fn can_publish(context: &Context) -> Result<(), &'static str> {
+    let collab = collab(context)?;
+    if collab.busy {
+        Err(SYNCING)
+    } else if collab.remote.is_some() {
+        Err("The project is already published")
+    } else {
+        Ok(())
+    }
+}
+
+fn can_consolidate(context: &Context) -> Result<(), &'static str> {
+    let collab = collab(context)?;
+    if collab.busy {
+        Err(SYNCING)
+    } else if collab.external_media == 0 {
+        Err("All media is inside the project folder")
+    } else {
+        Ok(())
+    }
+}
+
+fn is_diverged(context: &Context) -> Result<(), &'static str> {
+    connected(context)?;
+    if diverged(context) {
+        Ok(())
+    } else {
+        Err("project.kerf matches the editor")
+    }
+}
+
 const fn command(id: &'static str, label: &'static str, enabled: Check) -> Command {
     Command {
         id,
@@ -392,12 +599,29 @@ const fn checkable(mut command: Command) -> Command {
 
 /// Every command, in menu order.
 pub static COMMANDS: &[Command] = &[
+    // The project launcher; File ▸ Open Recent follows Open Project.
+    keys(
+        frontend(menu(
+            command("file.newProject", "New Project…", always),
+            Menu::File,
+            0,
+        )),
+        &["Ctrl+N"],
+    ),
+    keys(
+        frontend(menu(
+            command("file.openProject", "Open Project…", always),
+            Menu::File,
+            0,
+        )),
+        &["Ctrl+Shift+O"],
+    ),
     keys(
         params(
             menu(
                 command("file.import", "Import Media…", connected),
                 Menu::File,
-                0,
+                1,
             ),
             r#"{"path": string}"#,
         ),
@@ -405,7 +629,7 @@ pub static COMMANDS: &[Command] = &[
     ),
     keys(
         params(
-            menu(command("file.export", "Export…", connected), Menu::File, 0),
+            menu(command("file.export", "Export…", connected), Menu::File, 1),
             r#"{"quality": "preview" | "full"}"#,
         ),
         &["Ctrl+E"],
@@ -414,7 +638,7 @@ pub static COMMANDS: &[Command] = &[
         menu(
             command("file.exportPreset", "Export Editing Preset…", connected),
             Menu::File,
-            1,
+            2,
         ),
         r#"{"path": string}"#,
     ),
@@ -422,17 +646,25 @@ pub static COMMANDS: &[Command] = &[
         menu(
             command("file.applyPreset", "Import Editing Preset…", connected),
             Menu::File,
-            1,
+            2,
         ),
         r#"{"path": string, "bindings": object, "texts": object}"#,
+    ),
+    params(
+        menu(
+            command("preset.save", "Save Current as Preset…", connected),
+            Menu::File,
+            2,
+        ),
+        r#"{"name": string, "replace": bool}"#,
     ),
     menu(
         command("file.refresh", "Refresh Project", connected),
         Menu::File,
-        1,
+        2,
     ),
     keys(
-        frontend(menu(command("app.quit", "Quit", always), Menu::File, 2)),
+        frontend(menu(command("app.quit", "Quit", always), Menu::File, 3)),
         &["Ctrl+Q"],
     ),
     keys(
@@ -636,6 +868,14 @@ pub static COMMANDS: &[Command] = &[
         command("track.set", "Set Track", connected),
         r#"{"track": string, "locked": bool, "muted": bool, "enabled": bool}"#,
     ),
+    params(
+        command("media.replace", "Replace Media…", connected),
+        r#"{"media": string, "path": string}"#,
+    ),
+    command("preset.library", "Refresh Presets", connected),
+    command("projection.import", "Load from Disk", is_diverged),
+    command("projection.repair", "Keep Editor Version", is_diverged),
+    command("collab.status", "Refresh Sync Status", connected),
     checkable(keys(
         frontend(menu(
             command("sequence.snap", "Snap", always),
@@ -722,6 +962,72 @@ pub static COMMANDS: &[Command] = &[
         Menu::View,
         1,
     )),
+    params(
+        menu(
+            command("collab.sync", "Sync Now", can_sync),
+            Menu::Collaborate,
+            0,
+        ),
+        r#"{"message": string}"#,
+    ),
+    checkable(params(
+        menu(
+            command("collab.live", "Live Sync", can_live),
+            Menu::Collaborate,
+            0,
+        ),
+        r#"{"enabled": bool, "interval": int}"#,
+    )),
+    params(
+        menu(
+            command("collab.commit", "Commit…", can_commit),
+            Menu::Collaborate,
+            1,
+        ),
+        r#"{"message": string}"#,
+    ),
+    params(
+        menu(
+            command("collab.newBranch", "New Branch…", can_sync),
+            Menu::Collaborate,
+            1,
+        ),
+        r#"{"name": string}"#,
+    ),
+    // The editor gives it a submenu of the other branches.
+    params(
+        menu(
+            command("collab.switchBranch", "Switch Branch", can_switch),
+            Menu::Collaborate,
+            1,
+        ),
+        r#"{"name": string}"#,
+    ),
+    params(
+        menu(
+            command(
+                "collab.pullRequest",
+                "Open Pull Request…",
+                can_open_pull_request,
+            ),
+            Menu::Collaborate,
+            1,
+        ),
+        r#"{"title": string, "body": string}"#,
+    ),
+    params(
+        menu(
+            command("collab.publish", "Publish to GitHub…", can_publish),
+            Menu::Collaborate,
+            2,
+        ),
+        r#"{"remote": string, "github": {"name": string, "private": bool}}"#,
+    ),
+    menu(
+        command("collab.consolidate", "Consolidate Media", can_consolidate),
+        Menu::Collaborate,
+        2,
+    ),
     frontend(menu(
         command(
             "window.saveWorkspace",
@@ -771,6 +1077,11 @@ pub static COMMANDS: &[Command] = &[
     ))),
     checkable(frontend(menu(
         command("window.effects", "Effects", always),
+        Menu::Window,
+        1,
+    ))),
+    checkable(frontend(menu(
+        command("window.presets", "Presets", always),
         Menu::Window,
         1,
     ))),
@@ -1034,6 +1345,69 @@ pub fn run(id: &str, context: &Context, params: &Value) -> Result<Request, Strin
             }
         }
         "ai.stop" => Request::Abort,
+        "media.replace" => Request::MediaReplace {
+            media: params.require_string("media")?,
+            path: params.require_string("path")?,
+        },
+        "preset.library" => Request::PresetLibrary,
+        "preset.save" => Request::PresetSave {
+            name: params.require_trimmed("name")?,
+            replace: params.bool("replace")?.unwrap_or(false),
+        },
+        "projection.import" => Request::ProjectionImport,
+        "projection.repair" => Request::ProjectionRepair,
+        "collab.status" => Request::CollabStatus,
+        "collab.sync" => Request::CollabSync {
+            message: params.trimmed("message"),
+        },
+        "collab.live" => Request::CollabLive {
+            enabled: match params.bool("enabled")? {
+                Some(enabled) => enabled,
+                None => !context.collab.as_ref().is_some_and(|collab| collab.live),
+            },
+            interval: params
+                .int("interval")?
+                .map(|seconds| {
+                    u32::try_from(seconds)
+                        .ok()
+                        .filter(|seconds| *seconds > 0)
+                        .ok_or(
+                            "parameter `interval` must be a positive number of seconds".to_string(),
+                        )
+                })
+                .transpose()?,
+        },
+        "collab.commit" => Request::CollabCommit {
+            message: params.require_trimmed("message")?,
+        },
+        "collab.newBranch" | "collab.switchBranch" => Request::CollabBranch {
+            name: branch_name(&params.require_trimmed("name")?)?,
+            create: id == "collab.newBranch",
+        },
+        "collab.pullRequest" => Request::CollabPullRequest {
+            title: params.require_trimmed("title")?,
+            body: params.trimmed("body"),
+        },
+        "collab.publish" => Request::CollabPublish {
+            remote: params.trimmed("remote"),
+            github: match params.get("github") {
+                None => None,
+                Some(Value::Object(github)) => Some(GitHubRepository {
+                    name: github
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                        .map(String::from),
+                    private: github
+                        .get("private")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(true),
+                }),
+                Some(_) => return Err("parameter `github` must be an object".into()),
+            },
+        },
+        "collab.consolidate" => Request::CollabConsolidate,
         "source.insert" | "source.overwrite" => {
             let range = context.source.clone().unwrap_or_default();
             let media = params.string("media").unwrap_or(range.media);
@@ -1075,6 +1449,25 @@ pub fn run(id: &str, context: &Context, params: &Value) -> Result<Request, Strin
     })
 }
 
+/// `name` when Git accepts it as a branch name.
+fn branch_name(name: &str) -> Result<String, String> {
+    let refused = name.starts_with(['-', '/', '.'])
+        || name.ends_with(['/', '.'])
+        || name.ends_with(".lock")
+        || name.contains("..")
+        || name.contains("//")
+        || name.contains("@{")
+        || name == "@"
+        || name
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "~^:?*[\\".contains(c));
+    if refused {
+        Err(format!("`{name}` is not a valid branch name"))
+    } else {
+        Ok(name.to_string())
+    }
+}
+
 /// A command's parameters: a JSON object, or null for none.
 struct Params<'a>(Option<&'a Map<String, Value>>);
 
@@ -1104,6 +1497,18 @@ impl<'a> Params<'a> {
     fn require_string(&self, name: &str) -> Result<String, String> {
         self.string(name)
             .filter(|value| !value.is_empty())
+            .ok_or_else(|| format!("missing string parameter `{name}`"))
+    }
+
+    /// The text without surrounding whitespace; none when that leaves nothing.
+    fn trimmed(&self, name: &str) -> Option<String> {
+        self.string(name)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    }
+
+    fn require_trimmed(&self, name: &str) -> Result<String, String> {
+        self.trimmed(name)
             .ok_or_else(|| format!("missing string parameter `{name}`"))
     }
 
@@ -1501,5 +1906,274 @@ mod tests {
         );
         assert!(run("app.quit", &context, &Value::Null).is_err());
         assert!(run("missing", &context, &Value::Null).is_err());
+    }
+
+    fn shared() -> Context {
+        Context {
+            collab: Some(CollabState {
+                repository: true,
+                branch: Some("main".into()),
+                upstream: Some("origin/main".into()),
+                remote: Some("git@github.com:jun/film.git".into()),
+                changed: true,
+                branches: vec!["main".into(), "color".into()],
+                ..CollabState::default()
+            }),
+            ..ready()
+        }
+    }
+
+    fn request(id: &str, context: &Context, params: Value) -> Value {
+        serde_json::to_value(run(id, context, &params).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn collaborate_comes_before_window_with_the_project_commands_in_file() {
+        assert_eq!(&MENUS[MENUS.len() - 2..], [Menu::Collaborate, Menu::Window]);
+        let catalog = catalog("kerf");
+        let menu_of = |id: &str| {
+            catalog["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|command| command["id"] == id)
+                .unwrap()["menu"]
+                .clone()
+        };
+        assert_eq!(menu_of("collab.sync"), "Collaborate");
+        assert_eq!(menu_of("collab.consolidate"), "Collaborate");
+        assert_eq!(menu_of("file.openProject"), "File");
+        assert_eq!(menu_of("window.presets"), "Window");
+        assert_eq!(menu_of("media.replace"), Value::Null);
+        // Ctrl+O stays Import Media; opening a project takes its own key.
+        assert_eq!(find("file.import").unwrap().keys, ["Ctrl+O"]);
+        assert_eq!(find("file.openProject").unwrap().keys, ["Ctrl+Shift+O"]);
+        assert!(find("collab.live").unwrap().checkable);
+    }
+
+    #[test]
+    fn collaboration_commands_say_why_they_are_unavailable() {
+        let unknown = states(&ready());
+        assert_eq!(unknown["collab.sync"], "Reading the project's Git status");
+        assert_eq!(states(&Context::default())["collab.sync"], OFFLINE);
+        let mut context = shared();
+        let available = states(&context);
+        for id in [
+            "collab.sync",
+            "collab.live",
+            "collab.commit",
+            "collab.newBranch",
+            "collab.switchBranch",
+            "collab.pullRequest",
+        ] {
+            assert_eq!(available[id], Value::Null, "{id}");
+        }
+        assert_eq!(
+            available["collab.publish"],
+            "The project is already published"
+        );
+        assert_eq!(
+            available["collab.consolidate"],
+            "All media is inside the project folder"
+        );
+        assert_eq!(
+            available["projection.import"],
+            "project.kerf matches the editor"
+        );
+
+        let collab = context.collab.as_mut().unwrap();
+        collab.busy = true;
+        collab.external_media = 2;
+        let busy = states(&context);
+        assert_eq!(busy["collab.sync"], SYNCING);
+        assert_eq!(busy["collab.consolidate"], SYNCING);
+        // Live sync can still be turned off while a sync runs.
+        assert_eq!(busy["collab.live"], Value::Null);
+
+        let collab = context.collab.as_mut().unwrap();
+        collab.busy = false;
+        collab.changed = false;
+        collab.branches = vec!["main".into()];
+        let quiet = states(&context);
+        assert_eq!(quiet["collab.commit"], "Nothing to commit");
+        assert_eq!(quiet["collab.switchBranch"], "There are no other branches");
+        assert_eq!(quiet["collab.consolidate"], Value::Null);
+
+        context.projection_status = Some("diverged".into());
+        let diverged = states(&context);
+        assert_eq!(diverged["collab.sync"], DIVERGED);
+        assert_eq!(diverged["collab.newBranch"], DIVERGED);
+        assert_eq!(diverged["projection.import"], Value::Null);
+        assert_eq!(diverged["projection.repair"], Value::Null);
+
+        let local = Context {
+            collab: Some(CollabState::default()),
+            ..ready()
+        };
+        let local = states(&local);
+        assert_eq!(local["collab.sync"], NOT_SHARED);
+        assert_eq!(local["collab.live"], NOT_SHARED);
+        assert_eq!(local["collab.publish"], Value::Null);
+    }
+
+    #[test]
+    fn a_pull_request_needs_a_remote_but_not_gh() {
+        // The editor's context, from a status where gh is not installed: the
+        // bridge opens GitHub's compare page instead.
+        let mut context: Context = serde_json::from_value(json!({
+            "connected": true,
+            "collab": {
+                "repository": true,
+                "branch": "color",
+                "remote": "git@github.com:jun/film.git",
+                "branches": ["main", "color"],
+                "gh": false,
+            },
+        }))
+        .unwrap();
+        assert_eq!(states(&context)["collab.pullRequest"], Value::Null);
+        context.collab.as_mut().unwrap().remote = None;
+        assert_eq!(
+            states(&context)["collab.pullRequest"],
+            "Publish the project to GitHub first"
+        );
+    }
+
+    #[test]
+    fn collaboration_requests_match_the_bridge_commands() {
+        let context = shared();
+        assert_eq!(
+            request("collab.sync", &context, Value::Null),
+            json!({"type": "collab_sync"})
+        );
+        assert_eq!(
+            request("collab.sync", &context, json!({"message": " Rough cut "})),
+            json!({"type": "collab_sync", "message": "Rough cut"})
+        );
+        assert_eq!(
+            request("collab.live", &context, Value::Null),
+            json!({"type": "collab_live", "enabled": true})
+        );
+        assert_eq!(
+            request(
+                "collab.live",
+                &context,
+                json!({"enabled": false, "interval": 30})
+            ),
+            json!({"type": "collab_live", "enabled": false, "interval": 30})
+        );
+        assert!(run("collab.live", &context, &json!({"interval": 0})).is_err());
+        assert_eq!(
+            request("collab.commit", &context, json!({"message": "Trim c3"})),
+            json!({"type": "collab_commit", "message": "Trim c3"})
+        );
+        assert!(run("collab.commit", &context, &json!({"message": "  "})).is_err());
+        assert_eq!(
+            request("collab.newBranch", &context, json!({"name": "color-pass"})),
+            json!({"type": "collab_branch", "name": "color-pass", "create": true})
+        );
+        assert_eq!(
+            request("collab.switchBranch", &context, json!({"name": "color"})),
+            json!({"type": "collab_branch", "name": "color", "create": false})
+        );
+        for refused in ["two words", "-x", "a..b", "end/", "x.lock", "a:b"] {
+            assert!(
+                run("collab.newBranch", &context, &json!({"name": refused})).is_err(),
+                "{refused}"
+            );
+        }
+        assert_eq!(
+            request(
+                "collab.pullRequest",
+                &context,
+                json!({"title": "Color pass"})
+            ),
+            json!({"type": "collab_pull_request", "title": "Color pass"})
+        );
+        assert_eq!(
+            request(
+                "collab.publish",
+                &context,
+                json!({"github": {"name": "", "private": false}})
+            ),
+            json!({"type": "collab_publish", "github": {"private": false}})
+        );
+        assert_eq!(
+            request(
+                "collab.publish",
+                &context,
+                json!({"remote": "git@example.com:film.git"})
+            ),
+            json!({"type": "collab_publish", "remote": "git@example.com:film.git"})
+        );
+        let mut external = context.clone();
+        external.collab.as_mut().unwrap().external_media = 1;
+        assert_eq!(
+            request("collab.consolidate", &external, json!({})),
+            json!({"type": "collab_consolidate"})
+        );
+        assert_eq!(
+            request("collab.status", &context, Value::Null),
+            json!({"type": "collab_status"})
+        );
+        assert_eq!(
+            request(
+                "media.replace",
+                &context,
+                json!({"media": "m1", "path": "/clips/take2.mov"})
+            ),
+            json!({"type": "media_replace", "media": "m1", "path": "/clips/take2.mov"})
+        );
+        assert_eq!(
+            request("preset.save", &context, json!({"name": "Intro"})),
+            json!({"type": "preset_save", "name": "Intro", "replace": false})
+        );
+        assert_eq!(
+            request("preset.library", &context, Value::Null),
+            json!({"type": "preset_library"})
+        );
+        let mut diverged = context.clone();
+        diverged.projection_status = Some("diverged".into());
+        assert_eq!(
+            request("projection.import", &diverged, Value::Null),
+            json!({"type": "projection_import"})
+        );
+        assert_eq!(
+            request("projection.repair", &diverged, Value::Null),
+            json!({"type": "projection_repair"})
+        );
+        assert!(run("file.openProject", &context, &Value::Null).is_err());
+    }
+
+    #[test]
+    fn every_engine_request_is_a_bridge_command() {
+        // bridge.h is the contract: each request type the registry sends is
+        // a command it documents.
+        const BRIDGE: &str = include_str!("../../../apps/kerf-qt/bridge.h");
+        let mut context = shared();
+        context.collab.as_mut().unwrap().external_media = 1;
+        let invocations = [
+            ("file.refresh", Value::Null),
+            ("media.replace", json!({"media": "m1", "path": "a.mov"})),
+            ("preset.library", Value::Null),
+            ("preset.save", json!({"name": "Intro"})),
+            ("collab.status", Value::Null),
+            ("collab.sync", Value::Null),
+            ("collab.live", json!({"enabled": true})),
+            ("collab.commit", json!({"message": "m"})),
+            ("collab.newBranch", json!({"name": "b"})),
+            ("collab.pullRequest", json!({"title": "t"})),
+            (
+                "collab.publish",
+                json!({"remote": "git@example.com:film.git"}),
+            ),
+            ("collab.consolidate", json!({})),
+        ];
+        for (id, params) in invocations {
+            let request = request(id, &context, params);
+            let kind = request["type"].as_str().unwrap();
+            assert!(BRIDGE.contains(kind), "bridge.h has no `{kind}` for {id}");
+        }
+        assert!(BRIDGE.contains("projection_import") && BRIDGE.contains("projection_repair"));
     }
 }

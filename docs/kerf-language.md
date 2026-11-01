@@ -175,6 +175,13 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
 - `trim … src=<source position>` puts the edge where the clip plays that
   position of its media, so a cut can land on a word's time from a
   transcript.
+- `media replace m1 path="media/take2.mov" rate=24 dur=00:04:30:00
+  video=3840x2160 audio=2ch@48000` swaps the file behind a media id and
+  takes the same fields as `media add` (`tc=`, `alpha=`, and `reel=` too).
+  Every clip that uses it keeps its timing; a file one no longer fits (too
+  short for its source range or a transition's handles, or without the
+  picture or sound its track needs) is refused, naming the clips.
+  `media relink` changes only the path, for the same file moved.
 - With several sequences, `use s2` selects the one later lines act on.
 - `captions c3 on=S1 [words=<n>]` captions what clip `c3` says, timed to its
   speech, from transcripts of its media made earlier; without a transcript
@@ -197,3 +204,12 @@ operations they run, the script as it was written (`source`, with its
 anchors and `captions` lines), and a diff of the document; `get_document` returns the document,
 optionally annotated. Render jobs and proposal previews hand renderers the
 document with media paths resolved against the project.
+
+Media paths are relative to the project folder. `import` and
+`replace_media` read a relative path against it, and keep a file inside it
+as a project-relative path with `/` separators (`media/a-1f2e3d4c.mov`), so
+a shared project reads the same on every machine; a file outside it is kept
+where it is. A Git LFS pointer, which stands for media not yet downloaded,
+is refused. `replace_media {media, path}` probes the new file and refuses one
+it cannot read or that has no length, rather than guessing; it runs as the
+`media replace` line it becomes, so it is undone like any edit.
