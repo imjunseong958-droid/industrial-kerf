@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Install Kerf's local editor/CLI binaries to ~/.local/bin, with the editor's
-# own libraries (the Qt bridge and docking) in ~/.local/lib/kerf. The install
-# does not refer back to this checkout, so cleaning or moving it is safe.
+# Install Kerf's command-line tools (kerf, kerfd, kerf-mcp) to ~/.local/bin,
+# and the editor: on macOS as an app, ~/Applications/Industrial Kerf.app,
+# which carries its own libraries and kerfd; elsewhere as ~/.local/bin/kerf-qt
+# with its libraries (the Qt bridge and docking) in ~/.local/lib/kerf. The
+# install does not refer back to this checkout, so cleaning or moving it is
+# safe.
 # System libraries (Qt, FFmpeg) still come from their package manager.
 # The bridge is built optimized: the editor's live preview and its exports
 # draw frames inside it.
@@ -11,6 +14,7 @@ kerf_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$kerf_root"
 dest="${KERF_LOCAL_BIN:-$HOME/.local/bin}"
 lib_dir="${KERF_LOCAL_LIB:-$(dirname "$dest")/lib/kerf}"
+apps_dir="${KERF_LOCAL_APPS:-$HOME/Applications}"
 bridge_dir="$kerf_root/target/release"
 mkdir -p "$dest"
 
@@ -52,30 +56,6 @@ install_cli() {
     done
 }
 
-# Point the installed editor at the libraries copied beside it instead of
-# the build tree, then re-sign what changed (macOS refuses to run binaries
-# whose signature no longer matches).
-relink_qt_macos() {
-    local editor="$dest/kerf-qt"
-    local bridge_ref
-    bridge_ref="$(otool -L "$editor" | awk '/libkerf_qt_bridge/ {print $1; exit}')"
-    place "$bridge_dir/libkerf_qt_bridge.dylib" "$lib_dir/libkerf_qt_bridge.dylib"
-    install_name_tool -id @rpath/libkerf_qt_bridge.dylib "$lib_dir/libkerf_qt_bridge.dylib"
-    install_name_tool -change "$bridge_ref" @rpath/libkerf_qt_bridge.dylib "$editor"
-    local ref name
-    for ref in $(otool -L "$editor" | awk '/@rpath\/libqtadvanceddocking/ {print $1}'); do
-        name="${ref#@rpath/}"
-        place "$(find "$kerf_root/target/qt" -name "$name" -print -quit)" "$lib_dir/$name"
-        codesign --force --sign - "$lib_dir/$name" 2>/dev/null
-    done
-    local rpath
-    for rpath in $(otool -l "$editor" | awk '/LC_RPATH/ {getline; getline; print $2}'); do
-        case "$rpath" in "$kerf_root"/*) install_name_tool -delete_rpath "$rpath" "$editor" ;; esac
-    done
-    install_name_tool -add_rpath "$lib_dir" "$editor"
-    codesign --force --sign - "$lib_dir/libkerf_qt_bridge.dylib" "$editor" 2>/dev/null
-}
-
 relink_qt_linux() {
     local editor="$dest/kerf-qt" library
     for library in "$bridge_dir/libkerf_qt_bridge.so" \
@@ -90,16 +70,60 @@ relink_qt_linux() {
     fi
 }
 
+# The editor as an app, for Finder, the Dock and Spotlight, and its only
+# install on macOS (kerf opens it too): the build's bundle in place of an
+# older install's (never copied over it), carrying its libraries (the Qt
+# bridge and docking) in Contents/Frameworks and kerfd beside its
+# executable, where the editor looks first (an app opened from Finder has no
+# shell PATH). It is signed again inside out, as macOS refuses to run code
+# whose signature no longer matches.
+install_qt_macos() {
+    local app="$apps_dir/Industrial Kerf.app"
+    local editor="$app/Contents/MacOS/kerf-qt"
+    local frameworks="$app/Contents/Frameworks"
+    local kerfd="$dest/kerfd"
+    [ -x "$kerfd" ] || kerfd="$kerf_root/target/release/kerfd"
+    mkdir -p "$apps_dir"
+    rm -rf "$app"
+    cp -R "$kerf_root/target/qt/kerf-qt.app" "$app"
+    mkdir -p "$frameworks"
+    local bridge_ref
+    bridge_ref="$(otool -L "$editor" | awk '/libkerf_qt_bridge/ {print $1; exit}')"
+    place "$bridge_dir/libkerf_qt_bridge.dylib" "$frameworks/libkerf_qt_bridge.dylib"
+    install_name_tool -id @rpath/libkerf_qt_bridge.dylib "$frameworks/libkerf_qt_bridge.dylib"
+    install_name_tool -change "$bridge_ref" @rpath/libkerf_qt_bridge.dylib "$editor"
+    local ref name
+    for ref in $(otool -L "$editor" | awk '/@rpath\/libqtadvanceddocking/ {print $1}'); do
+        name="${ref#@rpath/}"
+        place "$(find "$kerf_root/target/qt" -name "$name" -print -quit)" "$frameworks/$name"
+    done
+    local rpath
+    for rpath in $(otool -l "$editor" | awk '/LC_RPATH/ {getline; getline; print $2}'); do
+        case "$rpath" in "$kerf_root"/*) install_name_tool -delete_rpath "$rpath" "$editor" ;; esac
+    done
+    install_name_tool -add_rpath @executable_path/../Frameworks "$editor"
+    if [ -x "$kerfd" ]; then
+        place "$kerfd" "$app/Contents/MacOS/kerfd"
+        codesign --force --sign - "$app/Contents/MacOS/kerfd" 2>/dev/null
+    else
+        echo "warning: kerfd is not built; the app looks for kerfd on its PATH (run '$0 all')" >&2
+    fi
+    codesign --force --sign - "$frameworks"/*.dylib 2>/dev/null
+    codesign --force --sign - "$app" 2>/dev/null
+    # What an older install left in ~/.local: kerf would open that stale
+    # editor before the app.
+    rm -f "$dest/kerf-qt" "$lib_dir/libkerf_qt_bridge.dylib" "$lib_dir"/libqtadvanceddocking*.dylib
+    rmdir "$lib_dir" 2>/dev/null || true
+}
+
 install_qt() {
-    mkdir -p "$lib_dir"
     case "$(uname -s)" in
-        # The executable out of the application bundle the build makes.
-        Darwin) place "$kerf_root/target/qt/kerf-qt.app/Contents/MacOS/kerf-qt" "$dest/kerf-qt" ;;
-        *) place "$kerf_root/target/qt/kerf-qt" "$dest/kerf-qt" ;;
-    esac
-    case "$(uname -s)" in
-        Darwin) relink_qt_macos ;;
-        Linux) relink_qt_linux ;;
+        Darwin) install_qt_macos ;;
+        *)
+            mkdir -p "$lib_dir"
+            place "$kerf_root/target/qt/kerf-qt" "$dest/kerf-qt"
+            relink_qt_linux
+            ;;
     esac
 }
 
@@ -124,5 +148,10 @@ case "$mode" in
         ;;
 esac
 
-echo "installed to $dest (editor libraries in $lib_dir):"
-ls -la "$dest/kerf" "$dest/kerfd" "$dest/kerf-mcp" "$dest/kerf-qt"
+echo "installed to $dest:"
+ls -la "$dest/kerf" "$dest/kerfd" "$dest/kerf-mcp"
+if [ "$(uname -s)" = Darwin ] && [ -d "$apps_dir/Industrial Kerf.app" ]; then
+    echo "editor: $apps_dir/Industrial Kerf.app"
+elif [ -e "$dest/kerf-qt" ]; then
+    echo "editor: $dest/kerf-qt (libraries in $lib_dir)"
+fi

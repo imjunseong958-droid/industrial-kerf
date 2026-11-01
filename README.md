@@ -88,10 +88,15 @@ cargo build --release -p kerf-cli --bin kerf
 cargo build --release -p kerf-mcp --bin kerf-mcp
 ```
 
-Or build and install everything to `~/.local/bin`, with the editor's own
-libraries in `~/.local/lib/kerf` (`KERF_LOCAL_BIN` and `KERF_LOCAL_LIB` move
-them). The install does not refer back to the checkout, so cleaning `target`
-is safe; Qt and FFmpeg still come from the system:
+Or build and install everything: `kerf`, `kerfd` and `kerf-mcp` to
+`~/.local/bin` (`KERF_LOCAL_BIN` moves them), and the editor. On macOS the
+editor is an app, `~/Applications/Industrial Kerf.app` (`KERF_LOCAL_APPS`
+moves it), carrying its own libraries and `kerfd`; it replaces an older
+install's app, and the plain `~/.local/bin/kerf-qt` an older install left.
+Elsewhere it is `~/.local/bin/kerf-qt`, with its libraries in
+`~/.local/lib/kerf` (`KERF_LOCAL_LIB`). The install does not refer back to
+the checkout, so cleaning `target` is safe; Qt and FFmpeg still come from the
+system:
 
 ```bash
 scripts/install-kerf-local.sh        # or: cli, qt
@@ -106,8 +111,10 @@ target/release/kerf
 target/release/kerf --dir ./my-project
 ```
 
-`kerf` finds `kerf-qt` beside itself or in `target/qt` (`KERF_QT_BIN`
-overrides it), and `kerfd` beside itself or in `target`.
+`kerf` finds the editor beside itself, then on macOS in the installed app,
+then in `target/qt` (on macOS in its bundle, `target/qt/kerf-qt.app`); run
+from the checkout, it tries the checkout's build before the app.
+`KERF_QT_BIN` overrides it. It finds `kerfd` beside itself or in `target`.
 `scripts/run-kerf-qt.sh [project]` builds the debug editor and opens it the
 same way.
 

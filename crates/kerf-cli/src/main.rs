@@ -857,22 +857,47 @@ fn discover_kerf_qt() -> Result<PathBuf> {
         .ancestors()
         .nth(2)
         .context("could not resolve repository root")?;
-    let mut candidates = Vec::new();
-    if let Some(parent) = env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(Path::to_path_buf))
-    {
-        candidates.push(parent.join(binary_name("kerf-qt")));
-    }
-    candidates.push(root.join("target/qt").join(binary_name("kerf-qt")));
-    candidates.push(root.join("target/debug").join(binary_name("kerf-qt")));
-    candidates.push(root.join("target/release").join(binary_name("kerf-qt")));
-    candidates
+    let current = env::current_exe().ok();
+    let home = env::var_os("HOME").map(PathBuf::from);
+    editor_candidates(current.as_deref(), root, home.as_deref())
         .into_iter()
         .find(|path| path.is_file())
         .ok_or_else(|| {
             anyhow!("Qt editor not found; build it with scripts/run-kerf-qt.sh or set KERF_QT_BIN")
         })
+}
+
+/// Where the editor may be, in the order tried: beside `kerf`; on macOS the
+/// installed app (the install's only editor there); and the build in the
+/// checkout (on macOS its bundle, before a plain `target/qt/kerf-qt` an
+/// older build may have left). A `kerf` run from the checkout itself tries
+/// the checkout's build before the installed app.
+fn editor_candidates(current: Option<&Path>, root: &Path, home: Option<&Path>) -> Vec<PathBuf> {
+    let mut beside = Vec::new();
+    if let Some(parent) = current.and_then(Path::parent) {
+        beside.push(parent.join(binary_name("kerf-qt")));
+    }
+    let mut installed = Vec::new();
+    if cfg!(target_os = "macos") {
+        const APP: &str = "Industrial Kerf.app/Contents/MacOS/kerf-qt";
+        if let Some(home) = home {
+            installed.push(home.join("Applications").join(APP));
+        }
+        installed.push(Path::new("/Applications").join(APP));
+    }
+    let mut built = Vec::new();
+    if cfg!(target_os = "macos") {
+        built.push(root.join("target/qt/kerf-qt.app/Contents/MacOS/kerf-qt"));
+    }
+    built.push(root.join("target/qt").join(binary_name("kerf-qt")));
+    built.push(root.join("target/debug").join(binary_name("kerf-qt")));
+    built.push(root.join("target/release").join(binary_name("kerf-qt")));
+    let from_checkout = current.is_some_and(|path| path.starts_with(root));
+    if from_checkout {
+        beside.into_iter().chain(built).chain(installed).collect()
+    } else {
+        beside.into_iter().chain(installed).chain(built).collect()
+    }
 }
 
 fn binary_name(name: &str) -> String {
@@ -1051,8 +1076,9 @@ fn operation_key(kind: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        create_project, editor_command, editor_project, media_file, preset_request,
-        requested_project, run_sync, sync_report, uses_terminal, Args, Command, PresetAction,
+        binary_name, create_project, editor_candidates, editor_command, editor_project, media_file,
+        preset_request, requested_project, run_sync, sync_report, uses_terminal, Args, Command,
+        PresetAction,
     };
     use clap::Parser;
     use kerf_collab::git::Pushed;
@@ -1062,6 +1088,39 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::Once;
+
+    #[test]
+    fn kerf_finds_the_installed_app_or_the_checkout_build_first() {
+        let root = Path::new("/src/kerf");
+        let home = Path::new("/Users/me");
+        let app = home.join("Applications/Industrial Kerf.app/Contents/MacOS/kerf-qt");
+        let bundle = root.join("target/qt/kerf-qt.app/Contents/MacOS/kerf-qt");
+        let position = |candidates: &[PathBuf], path: &Path| {
+            candidates.iter().position(|candidate| candidate == path)
+        };
+        // An installed kerf: beside it first, then the app, then the checkout.
+        let installed = editor_candidates(
+            Some(Path::new("/Users/me/.local/bin/kerf")),
+            root,
+            Some(home),
+        );
+        assert_eq!(
+            installed[0],
+            Path::new("/Users/me/.local/bin").join(binary_name("kerf-qt"))
+        );
+        let plain = root.join("target/qt").join(binary_name("kerf-qt"));
+        if cfg!(target_os = "macos") {
+            assert!(position(&installed, &app) < position(&installed, &bundle));
+            assert!(position(&installed, &bundle) < position(&installed, &plain));
+            // The checkout's own kerf: its build before the app.
+            let checkout =
+                editor_candidates(Some(&root.join("target/release/kerf")), root, Some(home));
+            assert!(position(&checkout, &bundle) < position(&checkout, &app));
+        } else {
+            assert_eq!(position(&installed, &app), None);
+            assert!(position(&installed, &plain).is_some());
+        }
+    }
 
     #[test]
     fn kerf_opens_the_native_editor_by_default() {
