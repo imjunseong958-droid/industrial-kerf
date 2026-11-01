@@ -199,7 +199,24 @@ QRectF ViewerWidget::videoRect() const {
     QSizeF canvasSize(target.width(), target.width() / aspect);
     if (canvasSize.height() > target.height())
         canvasSize = QSizeF(target.height() * aspect, target.height());
-    return QRectF(target.center() - QPointF(canvasSize.width() / 2, canvasSize.height() / 2), canvasSize);
+    QRectF canvas(target.center() - QPointF(canvasSize.width() / 2, canvasSize.height() / 2), canvasSize);
+    if (canvasSize.width() < target.width() - 1 && neighbourOnTrailingEdge()) canvas.moveRight(target.right());
+    return canvas;
+}
+
+void ViewerWidget::setTrailingNeighbour(QWidget *neighbour) {
+    m_trailingNeighbour = neighbour;
+    update();
+}
+
+bool ViewerWidget::neighbourOnTrailingEdge() const {
+    const QWidget *neighbour = m_trailingNeighbour.data();
+    if (!neighbour || !neighbour->isVisible() || !isVisible() || neighbour->window() != window()) return false;
+    const QRect beside(mapFromGlobal(neighbour->mapToGlobal(QPoint())), neighbour->size());
+    // Past the edge by no more than the viewer's frame and a splitter.
+    constexpr int kGap = 16;
+    const int middle = height() / 2;
+    return beside.left() >= width() - 1 && beside.left() <= width() + kGap && beside.top() <= middle && beside.bottom() >= middle;
 }
 
 QRectF ViewerWidget::captionRect() const {

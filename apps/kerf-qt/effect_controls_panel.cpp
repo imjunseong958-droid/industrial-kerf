@@ -606,15 +606,17 @@ void EffectControlsPanel::setPropertyValue(QWidget *editor, const QJsonValue &va
     else if (auto *combo = qobject_cast<QComboBox *>(editor)) combo->setCurrentText(value.toString());
     else if (auto *check = qobject_cast<QCheckBox *>(editor)) check->setChecked(value.toBool());
     else if (auto *button = qobject_cast<QPushButton *>(editor)) {
-        // The swatch fills the well, with a mid-grey hairline that reads at
+        // The swatch fills the well, with a warm grey hairline that reads at
         // 3:1 against white and black alike, so a white swatch shows on the
-        // light bezel and a black one on the dark, whichever is in force.
+        // light bezel and a black one on the dark, whichever is in force. It
+        // is as dark as that allows: on the dark bezel it sits a quiet step
+        // above the bezel, where a lighter one would look like a halo.
         QPixmap swatch(button->iconSize() * 2);
         swatch.setDevicePixelRatio(2);
         swatch.fill(Qt::transparent);
         QPainter painter(&swatch);
         painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(QPen(QColor(128, 128, 128), 1));
+        painter.setPen(QPen(QColor(0x66, 0x5a, 0x4c), 1));
         painter.setBrush(modelColor(value.toString()));
         painter.drawRoundedRect(QRectF(QPointF(0.5, 0.5), QSizeF(button->iconSize()) - QSizeF(1, 1)), 2.5, 2.5);
         painter.end();

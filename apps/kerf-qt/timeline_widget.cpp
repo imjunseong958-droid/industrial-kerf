@@ -3,14 +3,25 @@
 #include "media_artwork.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFileInfo>
 #include <QFontMetrics>
 #include <QJsonArray>
+#include <QKeyEvent>
 #include <QLinearGradient>
 #include <QMenu>
 #include <QPainterPath>
+#include <QScrollBar>
+#include <QSettings>
+#include <QToolTip>
+#include <QUrl>
+#include <QWheelEvent>
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 
 namespace kerf {
@@ -21,9 +32,70 @@ namespace {
 // short rows). Tall enough that a selected clip's name keeps a pixel of the
 // bar between its ascenders and the 3px ring.
 constexpr qreal kClipHeaderHeight = 15.0;
+// A clip has a body under its name bar from this height, with room for a
+// waveform...
+constexpr qreal kClipBodyFrom = kClipHeaderHeight + 10.0;
+// ...and a filmstrip from this tall a body, where its pictures still read.
+constexpr qreal kFilmstripFrom = 14.0;
 // The selected clip's ring, 1px dark and 2px light, inside its edge.
 constexpr qreal kSelectionRing = 3.0;
-qreal clipHeaderHeight(const QRectF &clip) { return clip.height() >= 26.0 ? kClipHeaderHeight : clip.height(); }
+qreal clipHeaderHeight(const QRectF &clip) { return clip.height() >= kClipBodyFrom ? kClipHeaderHeight : clip.height(); }
+// Between a lane's edges and its clips: 2px, and 1px on rows too short to spare it.
+int clipInset(int rowHeight) { return rowHeight >= 24 ? kClipInset : 1; }
+
+// The header bar's track height symbols: lanes at the height they choose,
+// and Fit's lanes between arrows.
+enum class HeightGlyph { Mini, Medium, Large, Fit };
+
+QIcon trackHeightIcon(HeightGlyph glyph) {
+    const auto draw = [glyph](QPainter &painter, const QColor &color) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(color);
+        const auto lanes = [&painter](qreal left, int count, qreal thickness, qreal top, qreal bottom) {
+            const qreal gap = count > 1 ? (bottom - top - count * thickness) / (count - 1) : 0.0;
+            for (int lane = 0; lane < count; ++lane)
+                painter.drawRoundedRect(QRectF(left, top + lane * (thickness + gap), 14.0 - left, thickness), 0.8, 0.8);
+        };
+        switch (glyph) {
+        case HeightGlyph::Mini: lanes(2.0, 4, 1.75, 2.5, 13.5); break;
+        case HeightGlyph::Medium: lanes(2.0, 3, 2.75, 2.5, 13.5); break;
+        case HeightGlyph::Large: lanes(2.0, 2, 4.75, 2.5, 13.5); break;
+        case HeightGlyph::Fit:
+            lanes(7.0, 3, 2.0, 4.0, 12.0);
+            painter.setBrush(Qt::NoBrush);
+            painter.setPen(QPen(color, 1.3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            painter.drawLine(QPointF(3.5, 2.5), QPointF(3.5, 13.5));
+            painter.drawPolyline(QPolygonF{{1.5, 4.5}, {3.5, 2.5}, {5.5, 4.5}});
+            painter.drawPolyline(QPolygonF{{1.5, 11.5}, {3.5, 13.5}, {5.5, 11.5}});
+            break;
+        }
+    };
+    // A chosen height's symbol is the accent, as a chosen mask tool's.
+    QIcon icon = glyphIcon(QSize(16, 16), draw);
+    const QPixmap chosen = glyphPixmap(QSize(16, 16), draw, editorTheme().accentText);
+    icon.addPixmap(chosen, QIcon::Normal, QIcon::On);
+    icon.addPixmap(chosen, QIcon::Active, QIcon::On);
+    icon.addPixmap(glyphPixmap(QSize(16, 16), draw, editorTheme().glyphDisabled), QIcon::Disabled, QIcon::On);
+    return icon;
+}
+
+// `height` moved `steps` steps through kTrackHeightSteps: to the next taller
+// step for each one up, the next shorter for each one down.
+int steppedHeight(int height, int steps) {
+    const int *first = std::begin(kTrackHeightSteps);
+    const int *last = std::end(kTrackHeightSteps);
+    for (; steps > 0; --steps) {
+        const int *next = std::upper_bound(first, last, height);
+        if (next == last) break;
+        height = *next;
+    }
+    for (; steps < 0; ++steps) {
+        const int *at = std::lower_bound(first, last, height);
+        if (at == first) break;
+        height = *(at - 1);
+    }
+    return std::clamp(height, kMinTrackHeight, kMaxTrackHeight);
+}
 
 // The selected clip's ring: a 2px light line inside a 1px dark one, which
 // reads on every clip hue and on both lane colours.
@@ -52,15 +124,63 @@ ClipKind trackKind(const QJsonObject &track) {
 
 } // namespace
 
+TimelineScrollArea::TimelineScrollArea(QWidget *parent) : QScrollArea(parent) {
+    // The timeline covers the whole view, so the view can be scrolled in
+    // place: what is on screen moves, and only what scrolls in is painted.
+    viewport()->setAttribute(Qt::WA_OpaquePaintEvent);
+}
+
+void TimelineScrollArea::scrollContentsBy(int dx, int dy) {
+    QWidget *content = widget();
+    if (content && content->isVisible() && viewport()->isVisible()) {
+        // Moves the timeline with what it last painted; the timeline then
+        // repaints its pinned ruler and headers (see its moveEvent).
+        viewport()->scroll(dx, dy);
+    }
+    // Lands it exactly where the scroll bars say (a no-op after the scroll).
+    QScrollArea::scrollContentsBy(dx, dy);
+}
+
 TimelineWidget::TimelineWidget(QWidget *parent) : QWidget(parent) {
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_OpaquePaintEvent);
     setSizePolicy(QSizePolicy::Minimum, QSizePolicy::MinimumExpanding);
     updateContentSize();
     setMouseTracking(true);
-    // The lanes and tinted waveforms are cached in the old theme's colours.
+    // The header bar's track heights: every track Mini, at its default, or
+    // Large, and Fit. Option-Up/Down and Option-scroll step every track too.
+    auto *heights = new QActionGroup(this);
+    heights->setExclusionPolicy(QActionGroup::ExclusionPolicy::ExclusiveOptional);
+    const QString stepHint = tr("Option-Up and Option-Down, or Option-scroll over the track headers, step every track.");
+    const auto heightAction = [&](const char *id, const QString &tip, HeightGlyph glyph, bool checkable) {
+        auto *action = new QAction(trackHeightIcon(glyph), tip, this);
+        action->setObjectName(QString::fromLatin1(id));
+        action->setToolTip(tip + QLatin1Char('\n') + stepHint);
+        action->setData(static_cast<int>(glyph));
+        if (checkable) {
+            action->setCheckable(true);
+            heights->addAction(action);
+        }
+        return action;
+    };
+    m_miniTracks = heightAction("trackHeightMini", tr("Mini tracks: one line each"), HeightGlyph::Mini, true);
+    m_mediumTracks = heightAction("trackHeightMedium", tr("Medium tracks: the default heights"), HeightGlyph::Medium, true);
+    m_largeTracks = heightAction("trackHeightLarge", tr("Large tracks"), HeightGlyph::Large, true);
+    m_fitTracks = heightAction("trackHeightFit", tr("Fit tracks to the panel"), HeightGlyph::Fit, false);
+    // Triggered, not toggled: choosing the checked height again keeps it.
+    connect(m_miniTracks, &QAction::triggered, this, [this] { setAllTrackHeights(kMinTrackHeight); });
+    connect(m_mediumTracks, &QAction::triggered, this, &TimelineWidget::resetTrackHeights);
+    connect(m_largeTracks, &QAction::triggered, this, [this] { setAllTrackHeights(kTrackHeightPresets[3].height); });
+    connect(m_fitTracks, &QAction::triggered, this, &TimelineWidget::fitTracksToView);
+    updateHeightActions();
+    // The lanes, tinted waveforms, filmstrip tiles and symbols are drawn in
+    // the old theme's colours.
     connect(EditorAppearance::instance(), &EditorAppearance::changed, this, [this] {
         m_waveTints.clear();
+        m_filmstripTiles.clear();
+        m_names.clear();
+        for (QAction *action : trackHeightActions())
+            action->setIcon(trackHeightIcon(static_cast<HeightGlyph>(action->data().toInt())));
         invalidateLanes();
         update();
     });
@@ -73,14 +193,18 @@ void TimelineWidget::setProject(const QJsonObject &project, double duration, dou
     layoutRows();
     invalidateLanes();
     updateContentSize();
+    // Remembered heights may have come before any track (setHeightsKey),
+    // and a snapshot can add or remove the one track sized apart.
+    updateHeightActions();
     update();
 }
 
 void TimelineWidget::setSelectedClip(const QString &id) {
     if (m_selectedClip == id) return;
+    const QRect before = clipBounds(m_selectedClip);
     m_selectedClip = id;
-    invalidateLanes();
-    update();
+    refreshLanes(before);
+    refreshLanes(clipBounds(id));
 }
 
 void TimelineWidget::setPlayhead(double time) {
@@ -125,6 +249,7 @@ void TimelineWidget::setArtwork(MediaArtwork *artwork) {
     m_artwork = artwork;
     connect(artwork, &MediaArtwork::changed, this, [this] {
         m_waveTints.clear();
+        m_filmstripTiles.clear();
         invalidateLanes();
         update();
     });
@@ -142,17 +267,123 @@ void TimelineWidget::clearSkimmer() {
 
 void TimelineWidget::fitTracksToView() {
     if (m_rows.isEmpty()) return;
-    const int available = viewportRect().height() - kRulerHeight - kTrackHeight - 8;
-    const int each = std::clamp(available / static_cast<int>(m_rows.size()), kMinTrackHeight, kMaxTrackHeight);
-    const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
-    for (const TrackRow &row : m_rows)
-        m_trackHeights.insert(trackKey(tracks.at(row.track).toObject(), row.track), each);
-    relayout();
+    const int available = viewportRect().height() - kRulerHeight - kAddLaneHeight - 8;
+    setAllTrackHeights(available / static_cast<int>(m_rows.size()));
 }
 
 void TimelineWidget::resetTrackHeights() {
+    const int keep = firstVisibleRow();
     m_trackHeights.clear();
+    m_allHeight = 0;
+    relayoutKeeping(keep);
+    saveHeights();
+}
+
+void TimelineWidget::setAllTrackHeights(int height) {
+    setAllTrackHeightsKeeping(height, firstVisibleRow());
+}
+
+void TimelineWidget::setAllTrackHeightsKeeping(int height, int row) {
+    m_trackHeights.clear();
+    m_allHeight = std::clamp(height, kMinTrackHeight, kMaxTrackHeight);
+    relayoutKeeping(row);
+    saveHeights();
+}
+
+void TimelineWidget::stepAllTrackHeights(int steps) {
+    stepAllTrackHeightsKeeping(steps, firstVisibleRow());
+}
+
+void TimelineWidget::stepAllTrackHeightsKeeping(int steps, int row) {
+    if (steps == 0 || m_rows.isEmpty()) return;
+    // Each track from its own height; tracks added later from the height
+    // tracks without one of their own have. Only the tracks that end up
+    // apart from that keep a height of their own.
+    m_allHeight = steppedHeight(defaultTrackHeight(false), steps);
+    QHash<QString, int> heights;
+    for (int index = 0; index < m_rows.size(); ++index) {
+        const int height = steppedHeight(m_rows.at(index).height, steps);
+        if (height != m_allHeight) heights.insert(rowKey(index), height);
+    }
+    m_trackHeights = heights;
+    relayoutKeeping(row);
+    saveHeights();
+}
+
+QList<QAction *> TimelineWidget::trackHeightActions() const {
+    return {m_miniTracks, m_mediumTracks, m_largeTracks, m_fitTracks};
+}
+
+int TimelineWidget::defaultTrackHeight(bool audio) const {
+    if (m_allHeight > 0) return m_allHeight;
+    return audio ? kTrackHeight : kVideoTrackHeight;
+}
+
+void TimelineWidget::updateHeightActions() {
+    if (!m_miniTracks) return;
+    const auto everyTrackAt = [this](int height) {
+        return !m_rows.isEmpty() && std::all_of(m_rows.cbegin(), m_rows.cend(), [height](const TrackRow &row) {
+            return row.height == height;
+        });
+    };
+    QAction *chosen = m_trackHeights.isEmpty() && m_allHeight == 0 ? m_mediumTracks
+        : everyTrackAt(kMinTrackHeight)                            ? m_miniTracks
+        : everyTrackAt(kTrackHeightPresets[3].height)              ? m_largeTracks
+                                                                   : nullptr;
+    for (QAction *action : {m_miniTracks, m_mediumTracks, m_largeTracks}) action->setChecked(action == chosen);
+}
+
+void TimelineWidget::setHeightsKey(const QString &projectPath) {
+    m_heightsPath = projectPath.isEmpty() ? QString() : QDir::cleanPath(QFileInfo(projectPath).absoluteFilePath());
+    m_heightsKey = m_heightsPath.isEmpty()
+        ? QString()
+        : QStringLiteral("timelineTrackHeights/") +
+              QString::fromLatin1(QCryptographicHash::hash(m_heightsPath.toUtf8(), QCryptographicHash::Sha1).toHex());
+    if (m_heightsKey.isEmpty()) return;
+    QSettings settings;
+    settings.beginGroup(m_heightsKey);
+    const int all = settings.value(QStringLiteral("all")).toInt();
+    m_allHeight = all > 0 ? std::clamp(all, kMinTrackHeight, kMaxTrackHeight) : 0;
+    m_trackHeights.clear();
+    settings.beginGroup(QStringLiteral("tracks"));
+    for (const QString &key : settings.childKeys()) {
+        const int height = settings.value(key).toInt();
+        if (height > 0)
+            m_trackHeights.insert(QUrl::fromPercentEncoding(key.toUtf8()), std::clamp(height, kMinTrackHeight, kMaxTrackHeight));
+    }
     relayout();
+}
+
+void TimelineWidget::saveHeights() const {
+    if (m_heightsKey.isEmpty()) return;
+    QSettings settings;
+    settings.remove(m_heightsKey);
+    settings.beginGroup(m_heightsKey);
+    // The path itself, so the group can be told apart by a person reading it.
+    settings.setValue(QStringLiteral("path"), m_heightsPath);
+    if (m_allHeight > 0) settings.setValue(QStringLiteral("all"), m_allHeight);
+    settings.beginGroup(QStringLiteral("tracks"));
+    for (auto it = m_trackHeights.cbegin(); it != m_trackHeights.cend(); ++it)
+        settings.setValue(QString::fromLatin1(QUrl::toPercentEncoding(it.key())), it.value());
+}
+
+int TimelineWidget::firstVisibleRow() const {
+    if (m_rows.isEmpty()) return -1;
+    const int row = rowAt(viewportRect().top() + kRulerHeight);
+    return row >= 0 ? row : 0;
+}
+
+void TimelineWidget::relayoutKeeping(int row) {
+    QScrollArea *area = isWindow() || !parentWidget() ? nullptr : qobject_cast<QScrollArea *>(parentWidget()->parentWidget());
+    if (!area || area->widget() != this || row < 0 || row >= m_rows.size()) {
+        relayout();
+        return;
+    }
+    const int inView = m_rows.at(row).top + pos().y();
+    relayout();
+    // The scroll area takes the new size now, so its bars can reach the row.
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+    area->verticalScrollBar()->setValue(m_rows.value(row).top - inView);
 }
 
 QString TimelineWidget::trackRowLabel(int row) const {
@@ -165,27 +396,65 @@ QRect TimelineWidget::trackHeaderRect(int row) const {
     return QRect(stickyOrigin().x(), track.top, kTimelineLabelWidth, track.height);
 }
 
+QRect TimelineWidget::headerBadgeRect(int row) const {
+    if (row < 0 || row >= m_rows.size()) return {};
+    const int size = headerControlSize(m_rows.at(row).height);
+    return QRect(stickyOrigin().x() + 10, headerControlTop(row), m_badgeWidth, size);
+}
+
+bool TimelineWidget::event(QEvent *event) {
+    // The line between two headers says what dragging it does.
+    if (event->type() == QEvent::ToolTip) {
+        const auto *help = static_cast<QHelpEvent *>(event);
+        const int grip = resizeRowAt(help->pos());
+        if (grip < 0) {
+            QToolTip::hideText();
+            event->ignore();
+            return true;
+        }
+        QToolTip::showText(help->globalPos(),
+                           tr("Drag to resize %1. Option-drag resizes every %2 track; Option-scroll over the headers "
+                              "resizes every track.")
+                               .arg(trackRowLabel(grip), m_rows.at(grip).audio ? tr("sound") : tr("picture")),
+                           this);
+        return true;
+    }
+    return QWidget::event(event);
+}
+
 void TimelineWidget::paintEvent(QPaintEvent *event) {
     QPainter p(this);
-    const QRect dirty = event->region().boundingRect();
-    // Lanes come from a cache; the ruler, track headers, and playhead are
-    // painted on top at the scroll position so they stay pinned.
-    if (lanesAreCacheable()) {
-        const bool rebuilt = m_laneCache.isNull();
-        ensureLaneCache();
-        if (!m_laneCache.isNull()) {
-            blitLaneCache(p, m_laneCache, event->region());
-            p.setClipRegion(event->region());
-            paintOverlay(p, dirty);
-            // A resize can expose only the new edge. The rest would keep the
-            // previous scale until the pointer moved across it.
-            if (rebuilt && event->region() != QRegion(rect())) update();
-            return;
-        }
+    const QRegion region = event->region();
+    const QRect dirty = region.boundingRect();
+    // Lanes come from a cache of the part in view; the ruler, track headers,
+    // and playhead are painted on top at the scroll position so they stay
+    // pinned. The cache is rebuilt when a repaint covers most of the view
+    // (the lanes changed, or a jump scrolled them away); a strip that
+    // scrolls into view, or the band the playhead leaves, outside it is
+    // painted directly.
+    const QRect view = viewportRect();
+    if (!laneCacheFits(view)) {
+        qint64 area = 0;
+        for (const QRect &rect : region.intersected(view)) area += qint64(rect.width()) * rect.height();
+        if (area * 2 >= qint64(view.width()) * view.height()) ensureLaneCache(view);
     }
-    for (const QRect &visible : event->region())
-        paintLanes(p, visible);
-    p.setClipRegion(event->region());
+    QRegion direct = region;
+    if (!m_laneCache.isNull()) {
+        const QRegion cached = region.intersected(m_laneCacheRect);
+        if (!cached.isEmpty()) blitLaneCache(p, m_laneCache, cached, m_laneCacheRect.topLeft());
+        direct -= cached;
+    }
+    // A strip outside the cache goes through a pixmap too, so it matches
+    // the cache pixel for pixel: names drawn on a window's backing store
+    // and on a pixmap can rasterise differently (FreeType on Linux).
+    for (const QRect &visible : direct) {
+        const QPixmap lanes = renderLanes(visible);
+        if (lanes.isNull())
+            paintLanes(p, visible);
+        else
+            blitLaneCache(p, lanes, visible, visible.topLeft());
+    }
+    p.setClipRegion(region);
     paintOverlay(p, dirty);
 }
 
@@ -197,9 +466,30 @@ void TimelineWidget::resizeEvent(QResizeEvent *event) {
 
 void TimelineWidget::moveEvent(QMoveEvent *event) {
     QWidget::moveEvent(event);
-    // A scroll area scrolls by moving this widget. Repaint so the pinned
-    // ruler and headers are drawn at the new offset.
-    if (!isWindow()) update();
+    if (isWindow() || !parentWidget()) return;
+    // A scroll area scrolls by moving this widget. What it showed moves
+    // with it, so the lanes are already in place: the ruler, pinned to the
+    // view's top, and the headers, pinned to its left, are repainted where
+    // they now go and where they were left. A drag's readout is pinned too.
+    if (m_dragging || m_scrubbing || m_resizeRow >= 0) {
+        update();
+        return;
+    }
+    const QPoint before = -event->oldPos();
+    const QPoint now = -event->pos();
+    const QSize view = parentWidget()->size();
+    const int left = std::min(before.x(), now.x());
+    const int top = std::min(before.y(), now.y());
+    const int wide = view.width() + std::abs(now.x() - before.x());
+    const int tall = view.height() + std::abs(now.y() - before.y());
+    if (before.y() != now.y()) {
+        update(QRect(left, before.y(), wide, kRulerHeight));
+        update(QRect(left, now.y(), wide, kRulerHeight));
+    }
+    if (before.x() != now.x()) {
+        update(QRect(before.x(), top, kTimelineLabelWidth, tall));
+        update(QRect(now.x(), top, kTimelineLabelWidth, tall));
+    }
 }
 
 void TimelineWidget::mousePressEvent(QMouseEvent *event) {
@@ -212,6 +502,8 @@ void TimelineWidget::mousePressEvent(QMouseEvent *event) {
         m_resizeRow = grip;
         m_resizeAnchor = pos.y();
         m_resizeStartHeight = m_rows.at(grip).height;
+        // Option-drag: every track of the grabbed one's kind.
+        m_resizeKind = event->modifiers() & Qt::AltModifier;
         return;
     }
     if (addLaneHitRect().contains(pos)) {
@@ -253,6 +545,22 @@ void TimelineWidget::mousePressEvent(QMouseEvent *event) {
     m_dragMoved = false;
     m_snapTime = -1.0;
     m_dragClipId = hit.id;
+    // What the drag can snap to, gathered once rather than on every move.
+    m_snapPoints = {0.0, m_playhead};
+    for (const QJsonValue &track : m_project.value(QStringLiteral("tracks")).toArray()) {
+        for (const QJsonValue &value : track.toObject().value(QStringLiteral("clips")).toArray()) {
+            const QJsonObject clip = value.toObject();
+            if (clip.value(QStringLiteral("id")).toString() == m_dragClipId) continue;
+            const double start = clip.value(QStringLiteral("timelineStart")).toDouble();
+            m_snapPoints << start << start + clip.value(QStringLiteral("duration")).toDouble();
+        }
+    }
+    for (const QJsonValue &value : m_project.value(QStringLiteral("markers")).toArray()) {
+        const QJsonObject marker = value.toObject();
+        const double at = marker.value(QStringLiteral("time")).toDouble();
+        m_snapPoints << at << at + marker.value(QStringLiteral("duration")).toDouble();
+    }
+    std::sort(m_snapPoints.begin(), m_snapPoints.end());
     m_dragRow = hit.row;
     m_dragStart = hit.start;
     m_dragDuration = hit.duration;
@@ -267,7 +575,19 @@ void TimelineWidget::mousePressEvent(QMouseEvent *event) {
 
 void TimelineWidget::mouseMoveEvent(QMouseEvent *event) {
     if (m_resizeRow >= 0) {
-        setTrackHeight(m_resizeRow, m_resizeStartHeight + event->position().toPoint().y() - m_resizeAnchor);
+        const int height = m_resizeStartHeight + event->position().toPoint().y() - m_resizeAnchor;
+        if (!m_resizeKind) {
+            setTrackHeight(m_resizeRow, height);
+            return;
+        }
+        // Rows above the grabbed one can change too, so it is kept under the pointer.
+        const int clamped = std::clamp(height, kMinTrackHeight, kMaxTrackHeight);
+        const bool audio = m_rows.at(m_resizeRow).audio;
+        for (int row = 0; row < m_rows.size(); ++row)
+            if (m_rows.at(row).audio == audio) m_trackHeights.insert(rowKey(row), clamped);
+        const int grabbedTop = m_rows.at(m_resizeRow).top;
+        relayoutKeeping(m_resizeRow);
+        m_resizeAnchor += m_rows.at(m_resizeRow).top - grabbedTop;
         return;
     }
     if (m_scrubbing) {
@@ -314,10 +634,12 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent *event) {
             : x - hit.rect.left() < kTrimHandle ? -1
             : hit.rect.right() - x < kTrimHandle ? 1 : 0;
         if (hit.id != m_hoverClipId || edge != m_hoverEdge) {
+            const QRect before = m_hoverRect;
             m_hoverClipId = hit.id;
             m_hoverEdge = edge;
-            invalidateLanes();
-            update();
+            m_hoverRect = hit.id.isEmpty() ? QRect() : hit.rect.toAlignedRect();
+            refreshLanes(before);
+            refreshLanes(m_hoverRect);
         }
         setToolCursor(hit, edge);
         updateSkimmer(event->position());
@@ -337,6 +659,9 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent *event) {
 void TimelineWidget::mouseReleaseEvent(QMouseEvent *event) {
     if (m_resizeRow >= 0) {
         m_resizeRow = -1;
+        m_resizeKind = false;
+        saveHeights();
+        update(headerColumnRect());
         return;
     }
     if (m_scrubbing) {
@@ -387,35 +712,82 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *event) {
         return;
     }
     if (!inHeader(pos) || inRuler(pos)) return;
-    const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
     const int row = rowAt(pos.y());
     QMenu menu(this);
-    // Keys, not row indexes: a snapshot can relayout rows while the menu is open.
-    const auto addPresets = [&](QMenu *target, const QStringList &keys, int current) {
+    // Medium is a track's default height.
+    const auto presetHeight = [this](const TrackHeightPreset &preset, bool audio) {
+        return preset.height > 0 ? preset.height : defaultTrackHeight(audio);
+    };
+    if (row >= 0) {
+        // A key, not a row index: a snapshot can relayout rows while the menu is open.
+        const QString key = rowKey(row);
+        const TrackRow track = m_rows.at(row);
+        QMenu *one = menu.addMenu(QStringLiteral("Track height"));
         for (const auto &preset : kTrackHeightPresets) {
-            QAction *action = target->addAction(QString::fromLatin1(preset.name));
+            QAction *action = one->addAction(QString::fromLatin1(preset.name));
             action->setCheckable(true);
-            action->setChecked(current == preset.height);
-            connect(action, &QAction::triggered, this, [this, keys, height = preset.height] {
-                for (const QString &key : keys) m_trackHeights.insert(key, height);
+            action->setChecked(track.height == presetHeight(preset, track.audio));
+            connect(action, &QAction::triggered, this, [this, key, height = preset.height] {
+                if (height > 0) m_trackHeights.insert(key, height);
+                else m_trackHeights.remove(key);
                 relayout();
+                saveHeights();
             });
         }
-    };
-    QStringList allKeys;
-    for (const TrackRow &track : m_rows) allKeys << trackKey(tracks.at(track.track).toObject(), track.track);
-    if (row >= 0) {
-        const TrackRow track = m_rows.at(row);
-        addPresets(menu.addMenu(QStringLiteral("Track height")),
-                   {trackKey(tracks.at(track.track).toObject(), track.track)}, track.height);
     }
     if (!m_rows.isEmpty()) {
-        addPresets(menu.addMenu(QStringLiteral("All tracks")), allKeys, -1);
+        QMenu *all = menu.addMenu(QStringLiteral("All tracks"));
+        for (const auto &preset : kTrackHeightPresets) {
+            QAction *action = all->addAction(QString::fromLatin1(preset.name));
+            action->setCheckable(true);
+            action->setChecked(std::all_of(m_rows.cbegin(), m_rows.cend(), [&](const TrackRow &track) {
+                return track.height == presetHeight(preset, track.audio);
+            }));
+            connect(action, &QAction::triggered, this, [this, height = preset.height] {
+                if (height > 0) setAllTrackHeights(height);
+                else resetTrackHeights();
+            });
+        }
         menu.addSeparator();
         menu.addAction(QStringLiteral("Fit tracks to panel"), this, &TimelineWidget::fitTracksToView);
         menu.addAction(QStringLiteral("Reset track heights"), this, &TimelineWidget::resetTrackHeights);
     }
     if (!menu.isEmpty()) menu.exec(event->globalPos());
+}
+
+void TimelineWidget::keyPressEvent(QKeyEvent *event) {
+    // Option-Up and Option-Down: every track a step taller or shorter.
+    const Qt::KeyboardModifiers modifiers = event->modifiers() & ~Qt::KeypadModifier;
+    if (modifiers == Qt::AltModifier && (event->key() == Qt::Key_Up || event->key() == Qt::Key_Down)) {
+        stepAllTrackHeights(event->key() == Qt::Key_Up ? 1 : -1);
+        return;
+    }
+    QWidget::keyPressEvent(event);
+}
+
+void TimelineWidget::wheelEvent(QWheelEvent *event) {
+    const QPoint pos = event->position().toPoint();
+    if (!(event->modifiers() & Qt::AltModifier) || !inHeader(pos) || inRuler(pos) || m_rows.isEmpty()) {
+        m_wheelSteps = 0;
+        // The scroll area scrolls.
+        event->ignore();
+        return;
+    }
+    // Option-scroll over the headers steps every track, a step a notch (a
+    // trackpad's small deltas add up to one), keeping the track under the
+    // pointer in place. Some platforms turn Option-scroll sideways.
+    // A trackpad's momentum after the fingers lift would carry on stepping
+    // well past the height aimed for.
+    event->accept();
+    if (event->phase() == Qt::ScrollBegin || event->phase() == Qt::ScrollEnd) m_wheelSteps = 0;
+    if (event->phase() == Qt::ScrollMomentum) return;
+    const QPoint angle = event->angleDelta();
+    m_wheelSteps += angle.y() != 0 ? angle.y() : angle.x();
+    const int steps = m_wheelSteps / 120;
+    if (steps == 0) return;
+    m_wheelSteps -= steps * 120;
+    const int row = rowAt(pos.y());
+    stepAllTrackHeightsKeeping(steps, row >= 0 ? row : static_cast<int>(m_rows.size()) - 1);
 }
 
 void TimelineWidget::leaveEvent(QEvent *) {
@@ -437,6 +809,11 @@ QString TimelineWidget::trackKey(const QJsonObject &track, int index) {
     return id.isEmpty() ? QStringLiteral("#%1").arg(index) : id;
 }
 
+QString TimelineWidget::rowKey(int row) const {
+    const int index = m_rows.value(row).track;
+    return trackKey(m_project.value(QStringLiteral("tracks")).toArray().at(index).toObject(), index);
+}
+
 void TimelineWidget::layoutRows() {
     const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
     QVector<int> picture;
@@ -444,10 +821,10 @@ void TimelineWidget::layoutRows() {
     for (int index = 0; index < tracks.size(); ++index)
         (isAudioTrack(tracks.at(index).toObject()) ? sound : picture).append(index);
     m_rows.clear();
+    m_rows.reserve(tracks.size());
     int top = kRulerHeight;
     const auto add = [&](int index, bool audio, int number) {
-        const int height = m_trackHeights.value(trackKey(tracks.at(index).toObject(), index),
-                                                audio ? kTrackHeight : kVideoTrackHeight);
+        const int height = m_trackHeights.value(trackKey(tracks.at(index).toObject(), index), defaultTrackHeight(audio));
         m_rows.append(TrackRow{index, audio, number, top, height});
         top += height;
     };
@@ -455,29 +832,42 @@ void TimelineWidget::layoutRows() {
         add(picture.at(number - 1), false, number);
     for (int number = 1; number <= static_cast<int>(sound.size()); ++number)
         add(sound.at(number - 1), true, number);
+    const QFontMetrics metrics(badgeFont());
+    m_badgeWidth = std::max({22, metrics.horizontalAdvance(QStringLiteral("V%1").arg(picture.size())) + 8,
+                             metrics.horizontalAdvance(QStringLiteral("A%1").arg(sound.size())) + 8});
 }
 
 void TimelineWidget::relayout() {
     layoutRows();
     invalidateLanes();
     updateContentSize();
+    updateHeightActions();
     update();
 }
 
 void TimelineWidget::setTrackHeight(int row, int height) {
     if (row < 0 || row >= m_rows.size()) return;
-    const TrackRow track = m_rows.at(row);
     const int clamped = std::clamp(height, kMinTrackHeight, kMaxTrackHeight);
-    if (clamped == track.height) return;
-    const QJsonObject object = m_project.value(QStringLiteral("tracks")).toArray().at(track.track).toObject();
-    m_trackHeights.insert(trackKey(object, track.track), clamped);
+    if (clamped == m_rows.at(row).height) return;
+    m_trackHeights.insert(rowKey(row), clamped);
     relayout();
 }
 
 int TimelineWidget::rowAt(int y) const {
-    for (int row = 0; row < m_rows.size(); ++row)
-        if (y >= m_rows.at(row).top && y < m_rows.at(row).bottom()) return row;
-    return -1;
+    // Rows run down without gaps, so the row is the last one starting at or above `y`.
+    const auto after = std::upper_bound(m_rows.cbegin(), m_rows.cend(), y,
+                                        [](int value, const TrackRow &row) { return value < row.top; });
+    if (after == m_rows.cbegin()) return -1;
+    const auto row = after - 1;
+    return y < row->bottom() ? static_cast<int>(row - m_rows.cbegin()) : -1;
+}
+
+std::pair<int, int> TimelineWidget::rowsBetween(int top, int bottom) const {
+    const auto first = std::upper_bound(m_rows.cbegin(), m_rows.cend(), top,
+                                        [](int value, const TrackRow &row) { return value < row.bottom(); });
+    const auto last = std::upper_bound(first, m_rows.cend(), bottom,
+                                       [](int value, const TrackRow &row) { return value < row.top; });
+    return {static_cast<int>(first - m_rows.cbegin()), static_cast<int>(last - m_rows.cbegin())};
 }
 
 QRect TimelineWidget::viewportRect() const {
@@ -492,30 +882,89 @@ QRect TimelineWidget::headerColumnRect() const {
 }
 
 int TimelineWidget::resizeRowAt(const QPoint &point) const {
-    if (!inHeader(point) || inRuler(point)) return -1;
-    for (int row = 0; row < m_rows.size(); ++row)
-        if (std::abs(point.y() - m_rows.at(row).bottom()) <= kResizeGrip) return row;
-    return -1;
+    if (!inHeader(point) || inRuler(point) || m_rows.isEmpty()) return -1;
+    // A toggle keeps its clicks, however short its row.
+    int toggleRow = -1;
+    QString field;
+    if (toggleAt(point, &toggleRow, &field)) return -1;
+    // The line under a row, and how far from it a press still grabs it: a
+    // sixth of the shorter of the two rows it parts, so short rows keep
+    // most of their height for their own controls.
+    const auto reach = [this](int row) {
+        const int below = row + 1 < m_rows.size() ? m_rows.at(row + 1).height : m_rows.at(row).height;
+        return std::clamp(std::min(m_rows.at(row).height, below) / 6, 2, kResizeGrip);
+    };
+    int row = rowAt(point.y());
+    if (row < 0) row = point.y() >= tracksBottom() ? static_cast<int>(m_rows.size()) - 1 : -1;
+    if (row < 0) return -1;
+    int best = -1;
+    int nearest = INT_MAX;
+    for (const int candidate : {row - 1, row}) {
+        if (candidate < 0) continue;
+        const int distance = std::abs(point.y() - m_rows.at(candidate).bottom());
+        if (distance <= reach(candidate) && distance < nearest) {
+            best = candidate;
+            nearest = distance;
+        }
+    }
+    return best;
 }
 
 void TimelineWidget::clearHoverClip() {
     if (m_hoverClipId.isEmpty()) return;
     m_hoverClipId.clear();
     m_hoverEdge = 0;
-    invalidateLanes();
-    update();
+    refreshLanes(std::exchange(m_hoverRect, QRect()));
+}
+
+void TimelineWidget::refreshLanes(const QRect &rect) {
+    if (rect.isEmpty()) return;
+    // A selected clip's ring and a trim bracket stay inside the clip.
+    const QRect area = rect.adjusted(-1, -1, 1, 1);
+    const QRect cached = area.intersected(m_laneCacheRect);
+    if (!m_laneCache.isNull() && !cached.isEmpty()) {
+        QPainter painter(&m_laneCache);
+        painter.translate(-m_laneCacheRect.topLeft());
+        painter.setClipRect(cached);
+        paintLanes(painter, cached);
+    }
+    update(area);
+}
+
+void TimelineWidget::drawName(QPainter &p, const QRectF &rect, const QFont &font, const QString &text, bool centred) {
+    const int width = std::max(1, int(rect.width()));
+    const QString key = QString::number(font.pixelSize()) + QLatin1Char('/') + QString::number(font.weight()) +
+                        QLatin1Char('/') + QString::number(width) + QLatin1Char('|') + text;
+    auto laid = m_names.constFind(key);
+    if (laid == m_names.cend()) {
+        if (m_names.size() > 8192) m_names.clear();
+        QStaticText name(QFontMetrics(font).elidedText(text, Qt::ElideRight, width));
+        name.setTextFormat(Qt::PlainText);
+        name.setPerformanceHint(QStaticText::AggressiveCaching);
+        name.prepare(QTransform(), font);
+        laid = m_names.insert(key, name);
+    }
+    p.setFont(font);
+    const qreal left = centred ? rect.left() + (rect.width() - laid->size().width()) / 2.0 : rect.left();
+    p.drawStaticText(QPointF(left, rect.top() + (rect.height() - QFontMetricsF(font).height()) / 2.0), laid.value());
 }
 
 void TimelineWidget::paintLanes(QPainter &p, const QRect &visible) {
     const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
+    // Nothing outside the rect: the rest of a row may already be on screen,
+    // blitted from the cache or painted for another rect.
+    p.save();
+    p.setClipRect(visible, Qt::IntersectClip);
     p.setRenderHint(QPainter::Antialiasing, false);
     // Below the last track is an empty well, so spare height never reads as a track.
     p.fillRect(visible, editorTheme().timelineBackground);
-    for (int row = 0; row < m_rows.size(); ++row) {
-        const TrackRow &track = m_rows.at(row);
-        if (track.bottom() <= visible.top() || track.top > visible.bottom()) continue;
-        paintLane(p, visible, row, tracks.at(track.track).toObject());
+    // Only the rows the rect meets, found by binary search.
+    const auto [first, last] = rowsBetween(visible.top(), visible.bottom());
+    for (int row = first; row < last; ++row) {
+        paintLane(p, visible, row, tracks.at(m_rows.at(row).track).toObject());
+        ++m_lanesPainted;
     }
+    p.restore();
 }
 
 void TimelineWidget::paintLane(QPainter &p, const QRect &visible, int row, const QJsonObject &track) {
@@ -565,11 +1014,9 @@ void TimelineWidget::paintHeaders(QPainter &p, const QRect &dirty) {
     p.save();
     p.setClipRect(column, Qt::IntersectClip);
     p.fillRect(column, theme.trackHeaderColumn);
-    for (int row = 0; row < m_rows.size(); ++row) {
-        const TrackRow &track = m_rows.at(row);
-        if (track.bottom() <= column.top() || track.top > dirty.bottom()) continue;
-        paintTrackHeader(p, row, tracks.at(track.track).toObject(), column.left());
-    }
+    const auto [first, last] = rowsBetween(std::max(column.top(), dirty.top()), std::min(column.bottom(), dirty.bottom()));
+    for (int row = first; row < last; ++row)
+        paintTrackHeader(p, row, tracks.at(m_rows.at(row).track).toObject(), column.left());
     const int grip = m_resizeRow >= 0 ? m_resizeRow : m_hoverGrip;
     if (grip >= 0 && grip < m_rows.size())
         p.fillRect(column.left(), m_rows.at(grip).bottom() - 2, column.width() - 1, 2, theme.trackResizeGrip);
@@ -592,21 +1039,17 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     if (row > 0 && m_rows.at(row - 1).audio != layout.audio)
         p.fillRect(QRect(left, layout.top, kTimelineLabelWidth, 2), theme.trackBankDivider);
 
-    // Tall rows show a name line over a detail line; short rows keep only
-    // the track number and name, centered.
-    const bool detailed = layout.height >= 40;
-    const int blockTop = detailed ? layout.top + (header.height() - 31) / 2
-                                  : layout.top + (header.height() - 16) / 2;
+    // Tall rows show a name line over a detail line and a preview; shorter
+    // rows are one line: the track number, toggles and name, centred, with
+    // the badge and toggles shrinking on rows too short for 16px.
+    const bool detailed = layout.height >= kDetailedTrackHeight;
+    const int blockTop = headerControlTop(row);
     // The track number on a rounded fill, in the interface font, as
     // Logic's track header buttons.
-    QFont badgeFont = font();
-    badgeFont.setPixelSize(10);
-    badgeFont.setWeight(QFont::DemiBold);
-    const QRect badge(left + 10, blockTop, 22, 16);
+    const QRect badge(left + 10, blockTop, m_badgeWidth, headerControlSize(layout.height));
     fillRounded(p, badge, theme.trackBadge);
-    p.setFont(badgeFont);
     p.setPen(enabled ? theme.trackBadgeText : theme.trackHeaderTextDisabled);
-    p.drawText(badge, Qt::AlignCenter, trackRowLabel(row));
+    drawName(p, badge, badgeFont(), trackRowLabel(row), true);
 
     const QJsonArray clips = track.value(QStringLiteral("clips")).toArray();
     QImage preview;
@@ -643,7 +1086,7 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
             p.drawRect(QRectF(c.x() - 4, c.y() - 2, 8, 6));
         } else if (field == QStringLiteral("muted")) {
             QFont mute = font();
-            mute.setPixelSize(10);
+            mute.setPixelSize(11);
             mute.setWeight(QFont::DemiBold);
             p.setFont(mute);
             p.drawText(box, Qt::AlignCenter, QStringLiteral("M"));
@@ -662,13 +1105,16 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
     QString name = track.value(QStringLiteral("name")).toString().trimmed();
     if (name.isEmpty()) name = (layout.audio ? QStringLiteral("Audio %1") : QStringLiteral("Video %1")).arg(layout.number);
     p.setPen(enabled ? theme.trackHeaderText : theme.trackHeaderTextDisabled);
-    p.drawText(QRect(nameLeft, badge.top(), std::max(1, nameRight - nameLeft), badge.height()),
-               Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
-               QFontMetrics(nameFont).elidedText(name, Qt::ElideRight, std::max(1, nameRight - nameLeft)));
+    // On one line the name has the row's height, centred with the badge, so
+    // a short row clips none of it; it stays above the row's divider.
+    const QRect nameLine = detailed ? QRect(nameLeft, badge.top(), std::max(1, nameRight - nameLeft), badge.height())
+                                    : QRect(nameLeft, layout.top + 1, std::max(1, nameRight - nameLeft),
+                                            std::max(1, 2 * (badge.center().y() - layout.top) - 1));
+    drawName(p, nameLine, nameFont, name);
     if (!detailed) return;
 
     QFont metaFont = nameFont;
-    metaFont.setPixelSize(10);
+    metaFont.setPixelSize(11);
     metaFont.setWeight(QFont::Normal);
     p.setFont(metaFont);
     const QString count = clips.size() == 1 ? QStringLiteral("1 clip") : QStringLiteral("%1 clips").arg(clips.size());
@@ -721,6 +1167,7 @@ void TimelineWidget::paintProposal(QPainter &p, int row, const QJsonObject &trac
     for (const QJsonValue &value : track.value(QStringLiteral("clips")).toArray())
         current.insert(value.toObject().value(QStringLiteral("id")).toString(), essence(value.toObject()));
     const EditorTheme &theme = editorTheme();
+    const bool locked = track.value(QStringLiteral("locked")).toBool();
     p.save();
     p.setRenderHint(QPainter::Antialiasing, false);
     for (const QJsonValue &value : proposed) {
@@ -746,9 +1193,14 @@ void TimelineWidget::paintProposal(QPainter &p, int row, const QJsonObject &trac
         if (rect.isEmpty()) rect = extent.adjusted(1, 1, -1, -1);
         // A clip it adds is named on a band of bare lane under its wash, so
         // the name reads the same over a clip already there as over none.
+        // A locked lane's hatch goes back over the band, so the lock still
+        // shows under the name.
         const bool named = added && rect.width() > 22.0;
-        if (named) p.fillRect(QRectF(rect.left(), rect.top(), rect.width(), std::min(rect.height(), clipHeaderHeight(extent) - 1)),
-                              theme.trackLane);
+        if (named) {
+            const QRectF band(rect.left(), rect.top(), rect.width(), std::min(rect.height(), clipHeaderHeight(extent) - 1));
+            p.fillRect(band, theme.trackLane);
+            if (locked) p.fillRect(band, QBrush(theme.trackLaneLocked, Qt::BDiagPattern));
+        }
         p.fillRect(rect, added ? theme.proposalAddFill : theme.proposalChangeFill);
         // The dashes in two tones: purple over a solid rule, so they read on
         // any picture, purple ones too.
@@ -760,7 +1212,7 @@ void TimelineWidget::paintProposal(QPainter &p, int row, const QJsonObject &trac
         // A clip it adds is named, in the agent's purple, as clips are.
         if (named) {
             QFont nameFont = font();
-            nameFont.setPixelSize(10);
+            nameFont.setPixelSize(11);
             nameFont.setWeight(QFont::DemiBold);
             p.setFont(nameFont);
             p.setPen(theme.assistantText);
@@ -788,11 +1240,29 @@ void TimelineWidget::setTool(TimelineTool tool) {
     setCursor(Qt::ArrowCursor);
 }
 
-QRect TimelineWidget::headerToggleRect(int row, int index) const {
+int TimelineWidget::headerControlSize(int rowHeight) {
+    // 16px from a 21px row; down to 12px, which a Mini row centres with a
+    // pixel or two to spare above its divider.
+    return std::clamp(rowHeight - 5, 12, 16);
+}
+
+QFont TimelineWidget::badgeFont() const {
+    QFont badge = font();
+    badge.setPixelSize(11);
+    badge.setWeight(QFont::DemiBold);
+    return badge;
+}
+
+int TimelineWidget::headerControlTop(int row) const {
     const TrackRow &layout = m_rows.at(row);
     const int height = layout.height - 1;
-    const int top = layout.height >= 40 ? layout.top + (height - 31) / 2 : layout.top + (height - 16) / 2;
-    return QRect(stickyOrigin().x() + 36 + index * 20, top, 16, 16);
+    return layout.height >= kDetailedTrackHeight ? layout.top + (height - 31) / 2
+                                                 : layout.top + (height - headerControlSize(layout.height)) / 2;
+}
+
+QRect TimelineWidget::headerToggleRect(int row, int index) const {
+    const int size = headerControlSize(m_rows.at(row).height);
+    return QRect(stickyOrigin().x() + 14 + m_badgeWidth + index * 20, headerControlTop(row), size, size);
 }
 
 bool TimelineWidget::toggleAt(const QPoint &point, int *row, QString *field) const {
@@ -819,33 +1289,23 @@ void TimelineWidget::setToolCursor(const ClipHit &hit, int edge) {
 double TimelineWidget::snapped(double time, double length, double *snapPoint) const {
     if (snapPoint) *snapPoint = -1.0;
     if (!m_snapping) return time;
-    // Edit points: the start, the playhead, and every other clip's edges.
-    QVector<double> points{0.0, m_playhead};
-    for (const QJsonValue &track : m_project.value(QStringLiteral("tracks")).toArray()) {
-        for (const QJsonValue &value : track.toObject().value(QStringLiteral("clips")).toArray()) {
-            const QJsonObject clip = value.toObject();
-            if (clip.value(QStringLiteral("id")).toString() == m_dragClipId) continue;
-            const double start = clip.value(QStringLiteral("timelineStart")).toDouble();
-            points << start << start + clip.value(QStringLiteral("duration")).toDouble();
-        }
-    }
-    for (const QJsonValue &value : m_project.value(QStringLiteral("markers")).toArray()) {
-        const QJsonObject marker = value.toObject();
-        const double at = marker.value(QStringLiteral("time")).toDouble();
-        points << at << at + marker.value(QStringLiteral("duration")).toDouble();
-    }
+    // Edit points, gathered when the drag began: the start, the playhead,
+    // every other clip's edges, and the markers. They are sorted, so each
+    // edge looks only at its two neighbours.
     const double reach = 8.0 / pixelsPerSecond();
     double best = time;
     double distance = reach;
     // A moved clip snaps by either end; an edge by itself.
     const QVector<double> edges = length > 0.0 ? QVector<double>{0.0, length} : QVector<double>{0.0};
     for (const double edge : edges) {
-        for (const double point : points) {
-            const double gap = std::abs(time + edge - point);
+        const double at = time + edge;
+        const auto next = std::lower_bound(m_snapPoints.cbegin(), m_snapPoints.cend(), at);
+        for (auto it = next == m_snapPoints.cbegin() ? next : next - 1; it != m_snapPoints.cend() && it <= next; ++it) {
+            const double gap = std::abs(at - *it);
             if (gap < distance) {
                 distance = gap;
-                best = point - edge;
-                if (snapPoint) *snapPoint = point;
+                best = *it - edge;
+                if (snapPoint) *snapPoint = *it;
             }
         }
     }
@@ -905,17 +1365,16 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
                         QRectF(in / sourceDuration * wave.width(), 0,
                                (out - in) / sourceDuration * wave.width(), wave.height()));
         }
-    } else if (body.height() > 0.0) {
-        const QImage frame = m_artwork ? m_artwork->frames.value(sourceId) : QImage();
-        if (!frame.isNull()) {
-            const double tileHeight = std::max(1.0, body.height());
-            const double tileWidth = std::max(1.0, std::round(tileHeight * 16.0 / 9.0));
-            const double firstTile = body.left() + std::max(0.0, std::floor((visible.left() - body.left()) / tileWidth)) * tileWidth;
-            const double stop = std::min(body.right(), double(visible.right()) + 1.0);
-            for (double x = firstTile; x < stop; x += tileWidth) {
-                p.drawImage(QRectF(x, body.top(), tileWidth, tileHeight), frame);
-                p.fillRect(QRectF(x + tileWidth - 1, body.top(), 1, tileHeight), theme.filmstripSeam);
-            }
+    } else if (body.height() >= kFilmstripFrom && m_artwork && m_artwork->frames.contains(sourceId)) {
+        // A filmstrip of tiles scaled once per size, not on every repaint.
+        const double tileHeight = std::max(1.0, body.height());
+        const double tileWidth = std::max(1.0, std::round(tileHeight * 16.0 / 9.0));
+        const QImage tile = filmstripTile(sourceId, QSize(int(tileWidth), int(tileHeight)), p.device()->devicePixelRatioF());
+        const double firstTile = body.left() + std::max(0.0, std::floor((visible.left() - body.left()) / tileWidth)) * tileWidth;
+        const double stop = std::min(body.right(), double(visible.right()) + 1.0);
+        for (double x = firstTile; x < stop; x += tileWidth) {
+            p.drawImage(QPointF(x, body.top()), tile);
+            p.fillRect(QRectF(x + tileWidth - 1, body.top(), 1, tileHeight), theme.filmstripSeam);
         }
     }
 
@@ -928,18 +1387,18 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
         const bool effected = !clip.value(QStringLiteral("effects")).toArray().isEmpty() ||
                               !clip.value(QStringLiteral("props")).toObject().isEmpty();
         if (effected && rect.width() > 64.0) {
-            QFont badgeFont = font();
-            badgeFont.setPixelSize(8);
-            badgeFont.setWeight(QFont::Bold);
-            const QRectF fx(textRight - 16, labelBand.center().y() - 5.0, 16, 10);
+            QFont fxFont = font();
+            fxFont.setPixelSize(11);
+            fxFont.setWeight(QFont::DemiBold);
+            const QRectF fx(textRight - 20, labelBand.center().y() - 6.0, 20, 12);
             p.fillRect(fx, theme.clipFxBadge);
-            p.setFont(badgeFont);
+            p.setFont(fxFont);
             p.setPen(theme.clipFxBadgeText);
             p.drawText(fx, Qt::AlignCenter, QStringLiteral("FX"));
             textRight = fx.left() - 4;
         }
         QFont nameFont = font();
-        nameFont.setPixelSize(10);
+        nameFont.setPixelSize(11);
         nameFont.setWeight(QFont::DemiBold);
         p.setFont(nameFont);
         QString label = clipName(clip);
@@ -947,9 +1406,10 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
         if (std::abs(speed - 1.0) > 0.0005) label += QStringLiteral("  [%1%]").arg(std::lround(speed * 100.0));
         const qreal textLeft = rect.left() + 6;
         p.setPen(style.label);
-        p.drawText(QRectF(textLeft, labelBand.top(), std::max(1.0, textRight - textLeft), labelBand.height()),
-                   Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
-                   QFontMetrics(nameFont).elidedText(label, Qt::ElideRight, std::max(1, int(textRight - textLeft))));
+        // Centred in the band even where a short row's band (inside a
+        // selected clip's ring) is shorter than the text: the clip clips it,
+        // and the ring, drawn after, covers no more than a pixel of it.
+        drawName(p, QRectF(textLeft, labelBand.top(), std::max(1.0, textRight - textLeft), labelBand.height()), nameFont, label);
     }
     p.restore();
 
@@ -1021,7 +1481,7 @@ void TimelineWidget::paintRuler(QPainter &p, const QRect &dirty, int top) {
     p.fillRect(QRect(band.left(), top + kRulerHeight - 1, band.width(), 1), theme.divider);
 
     QFont font(QStringLiteral("Menlo"));
-    font.setPixelSize(9);
+    font.setPixelSize(11);
     font.setStyleHint(QFont::Monospace);
     p.setFont(font);
     const double pps = pixelsPerSecond();
@@ -1109,8 +1569,8 @@ void TimelineWidget::paintOverlay(QPainter &p, const QRect &dirty) {
     const int laneTop = origin.y() + kRulerHeight;
     const int playX = static_cast<int>(std::floor(timeToX(m_playhead)));
     p.setRenderHint(QPainter::Antialiasing, false);
-    // A halo keeps the line readable over bright filmstrips.
-    if (!skimming) p.fillRect(QRect(playX - 1, laneTop, 3, height() - laneTop), theme.playheadHalo);
+    // A halo keeps the line readable over pictures and clips, skimmed or not.
+    p.fillRect(QRect(playX - 1, laneTop, 3, height() - laneTop), theme.playheadHalo);
     p.fillRect(QRect(playX, laneTop, 1, height() - laneTop), playColor);
     // The edit point a drag has snapped to.
     if (m_dragging && m_dragMoved && m_snapTime >= 0.0)
@@ -1164,7 +1624,7 @@ void TimelineWidget::paintDragReadout(QPainter &p) {
              timelineTimecode(std::abs(delta), m_fps));
     QFont font(QStringLiteral("Menlo"));
     font.setStyleHint(QFont::Monospace);
-    font.setPixelSize(10);
+    font.setPixelSize(11);
     const QFontMetrics metrics(font);
     const qreal x = timeToX(m_previewTime);
     QRectF box(0, 0, metrics.horizontalAdvance(text) + 14, 18);
@@ -1202,37 +1662,42 @@ void TimelineWidget::repaintAt(qreal x) {
     update(QRect(origin.x(), origin.y(), kTimelineLabelWidth, kRulerHeight));
 }
 
-void TimelineWidget::ensureLaneCache() {
-    const qreal dpr = std::max<qreal>(1, devicePixelRatioF());
-    if (!m_laneCache.isNull()) {
-        const qreal cachedW = m_laneCache.width() / m_laneCache.devicePixelRatio();
-        const qreal cachedH = m_laneCache.height() / m_laneCache.devicePixelRatio();
-        if (qFuzzyCompare(m_laneCache.devicePixelRatio(), dpr) && qFuzzyCompare(cachedW, qreal(width())) &&
-            qFuzzyCompare(cachedH, qreal(height())))
-            return;
-    }
-    const int physicalW = std::max(1, static_cast<int>(std::ceil(width() * dpr)));
-    const int physicalH = std::max(1, static_cast<int>(std::ceil(height() * dpr)));
-    QPixmap cache(physicalW, physicalH);
-    if (cache.isNull()) {
-        m_laneCache = QPixmap();
-        return;
-    }
-    cache.setDevicePixelRatio(dpr);
-    cache.fill(editorTheme().timelineBackground);
-    QPainter painter(&cache);
-    if (!painter.isActive()) {
-        m_laneCache = QPixmap();
-        return;
-    }
-    paintLanes(painter, QRect(0, 0, width(), height()));
-    m_laneCache = cache;
+bool TimelineWidget::laneCacheFits(const QRect &view) const {
+    return !m_laneCache.isNull() && m_laneCacheRect == view &&
+           qFuzzyCompare(m_laneCache.devicePixelRatio(), std::max<qreal>(1, devicePixelRatioF()));
 }
 
-bool TimelineWidget::lanesAreCacheable() const {
-    if (width() <= 0 || height() <= 0) return false;
-    const double dpr = std::max(1.0, devicePixelRatioF());
-    return double(width()) * double(height()) * dpr * dpr <= 6000000.0;
+void TimelineWidget::ensureLaneCache(const QRect &view) {
+    m_laneCache = renderLanes(view);
+    m_laneCacheRect = m_laneCache.isNull() ? QRect() : view;
+}
+
+QPixmap TimelineWidget::renderLanes(const QRect &area) {
+    const qreal dpr = std::max<qreal>(1, devicePixelRatioF());
+    // A timeline shown whole (not in a scroll area) can be far larger than
+    // a screen; it paints directly.
+    if (area.isEmpty() || double(area.width()) * area.height() * dpr * dpr > 12000000.0) return {};
+    QPixmap pixmap(std::max(1, int(std::ceil(area.width() * dpr))), std::max(1, int(std::ceil(area.height() * dpr))));
+    if (pixmap.isNull()) return {};
+    pixmap.setDevicePixelRatio(dpr);
+    pixmap.fill(editorTheme().timelineBackground);
+    QPainter painter(&pixmap);
+    if (!painter.isActive()) return {};
+    painter.translate(-area.topLeft());
+    paintLanes(painter, area);
+    painter.end();
+    return pixmap;
+}
+
+QImage TimelineWidget::filmstripTile(const QString &sourceId, const QSize &size, qreal dpr) {
+    const QString key = QStringLiteral("%1/%2x%3@%4").arg(sourceId).arg(size.width()).arg(size.height()).arg(dpr);
+    const auto cached = m_filmstripTiles.constFind(key);
+    if (cached != m_filmstripTiles.cend()) return cached.value();
+    // Pixel for pixel on the screen it is drawn on.
+    QImage tile = m_artwork->frames.value(sourceId).scaled(size * dpr, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    tile.setDevicePixelRatio(dpr);
+    m_filmstripTiles.insert(key, tile);
+    return tile;
 }
 
 qreal TimelineWidget::timeToX(double time) const {
@@ -1243,7 +1708,8 @@ QRectF TimelineWidget::clipRect(int row, double start, double duration) const {
     const TrackRow track = m_rows.value(row);
     const double left = std::round(timeToX(start));
     const double right = std::max(left + 4.0, std::round(timeToX(start + duration)));
-    return QRectF(left, track.top + kClipInset, right - left, track.height - 1 - kClipInset * 2);
+    const int inset = clipInset(track.height);
+    return QRectF(left, track.top + inset, right - left, track.height - 1 - inset * 2);
 }
 
 double TimelineWidget::dragOrigin() const {
@@ -1277,7 +1743,7 @@ QRect TimelineWidget::pointerBand(qreal x) const {
 
 void TimelineWidget::updateContentSize() {
     const double contentWidth = kTimelineOrigin + m_duration * pixelsPerSecond() + kTimelineTail;
-    const int contentHeight = std::max(tracksBottom() + kTrackHeight, kRulerHeight + 3 * kTrackHeight) + 8;
+    const int contentHeight = std::max(tracksBottom() + kAddLaneHeight, kRulerHeight + 3 * kAddLaneHeight) + 8;
     setMinimumSize(static_cast<int>(std::min(contentWidth, 16777215.0)), contentHeight);
     updateGeometry();
 }
@@ -1342,11 +1808,11 @@ void TimelineWidget::updateSkimmer(const QPointF &point) {
 
 QRect TimelineWidget::addLaneButtonRect() const {
     return QRect(stickyOrigin().x() + (kTimelineLabelWidth - 76) / 2,
-                 tracksBottom() + (kTrackHeight - 20) / 2, 76, 20);
+                 tracksBottom() + (kAddLaneHeight - 20) / 2, 76, 20);
 }
 
 QRect TimelineWidget::addLaneHitRect() const {
-    return QRect(stickyOrigin().x(), tracksBottom(), kTimelineLabelWidth, kTrackHeight);
+    return QRect(stickyOrigin().x(), tracksBottom(), kTimelineLabelWidth, kAddLaneHeight);
 }
 
 void TimelineWidget::updateAddLane(const QPoint &point) {

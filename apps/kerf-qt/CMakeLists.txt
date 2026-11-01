@@ -84,7 +84,7 @@ option(KERF_QT_BUILD_TESTS "Build Qt behavior tests" OFF)
 if(KERF_QT_BUILD_TESTS)
     include(CTest)
     find_package(Qt6 REQUIRED COMPONENTS Test)
-    add_executable(kerf-qt-tests editor_test.cpp ${KERF_QT_SOURCES})
+    add_executable(kerf-qt-tests editor_test.cpp test_footage.cpp ${KERF_QT_SOURCES})
     target_compile_definitions(kerf-qt-tests PRIVATE KERF_QT_TESTING)
     target_include_directories(kerf-qt-tests PRIVATE ${CMAKE_CURRENT_LIST_DIR})
     target_link_libraries(kerf-qt-tests PRIVATE Qt6::Widgets Qt6::Test ads::qtadvanceddocking-qt6 "${KERF_BRIDGE_LIBRARY}"

@@ -7,6 +7,7 @@
 #include <QJsonObject>
 #include <QMouseEvent>
 #include <QPaintEvent>
+#include <QPointer>
 #include <QTransform>
 #include <QVector>
 #include <QWidget>
@@ -28,6 +29,11 @@ public:
     void setLiveScrub(bool live);
     void setCaption(const QString &caption);
     void setProjectInfo(double width, double height);
+    // A panel that, while it is open directly on the viewer's right (Kerf's
+    // conversation), draws a picture narrower than the viewer against it,
+    // so the two read as one, as a Short sits against its comments. With it
+    // closed or elsewhere, the picture is centred.
+    void setTrailingNeighbour(QWidget *neighbour);
     QRectF videoRect() const;
     QRectF captionRect() const;
 
@@ -60,6 +66,9 @@ protected:
     void paintEvent(QPaintEvent *) override;
 
 private:
+    // m_trailingNeighbour is shown in this window, starting just past the
+    // viewer's right edge and level with its middle.
+    bool neighbourOnTrailingEdge() const;
     double fractionAt(int x) const;
     // While a tool is out or the clip has masks, the pointer edits masks
     // instead of scrubbing or seeking.
@@ -86,6 +95,7 @@ private:
     double m_time = 0.0;
     double m_width = 0.0;
     double m_height = 0.0;
+    QPointer<QWidget> m_trailingNeighbour;
     double m_skimFraction = -1.0;
     bool m_skimming = false;
     bool m_liveScrub = false;

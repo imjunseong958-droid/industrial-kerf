@@ -281,8 +281,9 @@ private:
     const LauncherTheme *m_theme;
 };
 
-// Template tiles: a grey tile with the canvas's frame and a + badge, the
-// name under it, and the chosen one ringed with its name on an accent pill.
+// Template tiles: a paper card lighter than the page with the canvas's frame
+// in ink and a + badge, the name under it, and the chosen one ringed in the
+// accent with its name on the selection.
 class TileDelegate final : public QStyledItemDelegate {
 public:
     static constexpr int kWidth = 150;
@@ -351,11 +352,11 @@ public:
         const QRectF pill(tile.center().x() - labelWidth / 2 - 7, tile.bottom() + 10, labelWidth + 14, labelMetrics.height() + 3);
         if (selected) {
             painter->setPen(Qt::NoPen);
-            painter->setBrush(t.accent);
+            painter->setBrush(t.selection);
             painter->drawRoundedRect(pill, 4, 4);
         }
         painter->setFont(labelFont);
-        painter->setPen(selected ? t.onAccent : t.text);
+        painter->setPen(selected ? t.selectionText : t.text);
         painter->drawText(pill, Qt::AlignCenter, label);
 
         QFont sizeFont = option.font;
@@ -378,7 +379,7 @@ const QString kBranchMark = QStringLiteral("⎇ ");
 
 // Two-line rows for Recent and the preset library: a symbol, a bold name,
 // and its details in secondary text. The chosen row is filled with the
-// selection blue while its list has focus and grey when not. The preset
+// selection while its list has focus and a quiet wash when not. The preset
 // library is a grouped list, with hairlines between its rows.
 class RowDelegate final : public QStyledItemDelegate {
 public:
@@ -422,7 +423,7 @@ public:
             painter->drawLine(QPointF(rect.left() + 52, rect.bottom() - 0.5), QPointF(rect.right() - 12, rect.bottom() - 0.5));
         }
         const QRectF icon(rect.left() + 12, rect.center().y() - 11, 28, 22);
-        const QColor tint = focused ? t.onAccent : exists && enabled ? t.accent : t.disabledText;
+        const QColor tint = focused ? t.selectionText : exists && enabled ? t.accent : t.disabledText;
         if (m_kind == RecentRow) drawFolder(*painter, icon, tint);
         else drawPresetGlyph(*painter, icon, tint);
 
@@ -439,7 +440,7 @@ public:
         const qreal height = nameMetrics.height() + 2 + detailMetrics.height();
         const qreal top = rect.center().y() - height / 2;
         painter->setFont(nameFont);
-        painter->setPen(focused ? t.onAccent : exists && enabled ? t.text : selected ? t.secondaryOnSelection : t.secondary);
+        painter->setPen(focused ? t.selectionText : exists && enabled ? t.text : selected ? t.secondaryOnSelection : t.secondary);
         painter->drawText(QRectF(left, top, right - left, nameMetrics.height()), Qt::AlignLeft | Qt::AlignVCenter,
                           nameMetrics.elidedText(name, Qt::ElideRight, right - left));
 
@@ -524,7 +525,7 @@ protected:
         painter.setBrush(QColor(0, 0, 0, t.dark ? 80 : 50));
         painter.drawEllipse(knobRect.translated(0, 0.8));
         painter.setPen(QPen(t.knobEdge, 0.75));
-        painter.setBrush(t.knob);
+        painter.setBrush(on ? t.knobOn : t.knob);
         painter.drawEllipse(knobRect.adjusted(0.4, 0.4, -0.4, -0.4));
         painter.setOpacity(1.0);
         painter.setFont(font());
@@ -540,14 +541,14 @@ private:
     const LauncherTheme *m_theme;
 };
 
-// A pop-up button's rows (a check by the current choice, the accent under
-// the pointer) in the launcher's colours.
+// A pop-up button's rows (a check by the current choice, the selection
+// under the pointer) in the launcher's colours.
 class LauncherPopupRows final : public PopupItemDelegate {
 public:
     LauncherPopupRows(const LauncherTheme *theme, QComboBox *combo) : PopupItemDelegate(combo), m_theme(theme) {}
 
 protected:
-    Colors colors() const override { return {m_theme->accent, m_theme->onAccent, m_theme->text}; }
+    Colors colors() const override { return {m_theme->selection, m_theme->selectionText, m_theme->text}; }
 
 private:
     const LauncherTheme *m_theme;
@@ -838,10 +839,9 @@ void ProjectLauncher::setColorScheme(ColorScheme scheme) {
 void ProjectLauncher::applyTheme(bool force) {
     if (m_theming) return;
     const bool dark = schemeIsDark(m_scheme);
-    const QColor accent = systemAccent(dark);
-    if (!force && m_themed && dark == m_theme.dark && accent == m_theme.accent) return;
+    if (!force && m_themed && dark == m_theme.dark) return;
     m_theming = true;
-    m_theme = launcherTheme(dark, accent);
+    m_theme = launcherTheme(dark);
     m_themed = true;
     setStyleSheet(launcherStyleSheet(m_theme));
     m_detailsToggle->setIcon(disclosureIcon(m_detailsToggle->isChecked(), m_theme.secondary));
@@ -853,7 +853,7 @@ void ProjectLauncher::applyTheme(bool force) {
 void ProjectLauncher::changeEvent(QEvent *event) {
     QDialog::changeEvent(event);
     // Where Qt has no colour scheme to report, a new system palette is how
-    // a change of appearance or accent arrives.
+    // a change of appearance arrives.
     if (event->type() == QEvent::ApplicationPaletteChange || event->type() == QEvent::PaletteChange) applyTheme();
 }
 

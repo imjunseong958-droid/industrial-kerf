@@ -53,6 +53,10 @@ class MainWindow final : public QMainWindow {
     Q_OBJECT
     friend class EditorTest;
 public:
+    // The most lines the proposal card's script and diff show before they scroll.
+    static constexpr int kProposalDiffLines = 10;
+    // The fade over the top of the conversation's view while it is scrolled.
+    static constexpr int kScrollFadeHeight = 14;
     MainWindow(const QString &projectDirectory, const QString &kerfdBinary, QWidget *parent = nullptr);
     ~MainWindow() override;
 
@@ -248,6 +252,10 @@ private:
     QLabel *m_projectTitle = nullptr;
     QString m_projectName;
     QToolButton *m_toolbarLeftEnd = nullptr; // The last command before the title.
+    // The toolbar's last control: opens and closes Kerf's conversation.
+    QToolButton *m_chatToggle = nullptr;
+    // The close button in the conversation's header.
+    QAction *m_assistantClose = nullptr;
     QString m_projectDirectory;
     QString m_kerfdBinary;
     void *m_bridge = nullptr;

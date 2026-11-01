@@ -23,12 +23,17 @@ run, add `--screenshot /tmp/kerf.png --quit-after-ms 900`; without a project
 it captures the launcher.
 
 The editor and the launcher follow the system's light or dark appearance and
-accent colour, and switch live when either changes; `KERF_COLOR_SCHEME=light`
-or `dark` picks one for the run. Both draw macOS's window families (dark is
-#1e1e1e content under #2c2c2e chrome), with the accent for focus and each
-default action. Agent work (the AI bar's stripe, proposals, Ask Kerf) is
-marked with the system purple; the viewers keep a neutral dark surround in
-both appearances. On macOS the editor's toolbar is its title bar, as the
+switch live when it changes; `KERF_COLOR_SCHEME=light` or `dark` picks one
+for the run. Both draw one palette: antique cream paper in light (#f4eee2
+panels on a #e6dece desk) and warm espresso in dark (#1c1713 panels), with
+warm near-black or cream text, never pure black or white. Kerf has its own
+accent and does not follow the system's: an aubergine ink (#6a3471) on cream
+and its mauve (#c39acb, carrying dark ink) on espresso, for focus, the
+playhead, each default action and Kerf's own work (proposals, Ask Kerf).
+Chosen tools and modes are a quiet wash with no outline, groups and cards
+sit on their panel without frames, and the type follows one scale (11, 12,
+13, 14, 16 and 20px). The viewers' stage follows the appearance; the
+picture card is warm black in both. On macOS the editor's toolbar is its title bar, as the
 launcher's sidebar and title are: the window runs up under a transparent
 title bar, the window buttons sit at the toolbar's leading end, and the
 project's name is the window's title, centred on the window. Pop-up buttons
@@ -49,10 +54,10 @@ focus-region picker),
 holds shared constants and helpers (among them `useEditorStyle()`, the
 application style: Fusion with macOS's focus, pop-up rows and menu shapes),
 `editor_theme` the appearance (the
-`EditorTheme` colour roles every widget draws with, light and dark, and the
-system appearance and accent detection the launcher shares),
+`EditorTheme` colour roles every widget draws with, light and dark, Kerf's
+accent, and the system appearance detection the launcher shares),
 `editor_style.h` the stylesheet generated from those roles, and
-`main.cpp` only `main()`. `editor_test.cpp` builds into `kerf-qt-tests`
+`main.cpp` only `main()`. `editor_test.cpp` (with `test_footage.cpp`) builds into `kerf-qt-tests`
 instead of `main.cpp`.
 
 Menus, shortcuts, the toolbar, the transport buttons, and timeline gestures
@@ -100,11 +105,25 @@ eye turns a picture track's output on and off (M mutes a sound track), and
 the padlock locks the track against edits. While a clip
 moves or trims, a readout shows the new edge timecode and its offset.
 
-Drag the bottom edge of a track header to resize that track. Right-click a
-header for the Mini, Small, Medium, Large, and Jumbo heights, for one track or
-all of them. View → Fit tracks to panel shares the panel height across every
-track; View → Reset track heights restores the defaults. Heights are a view
-setting and are not saved in the project.
+Tracks start dense (36 pt picture tracks, 32 pt sound tracks), for edits with
+many layers. The Timeline panel's title strip sets every track's height at
+once: Mini (one 18 pt line per track: its number, toggles, name, and clip
+names), Medium (the defaults), and Large; Fit shares the panel height across
+every track. Option-Up and Option-Down (with the timeline focused), or
+Option-scroll over the track headers, step every track taller or shorter from
+its own height, so tracks sized apart (tall picture over short sound, one tall
+hero layer) keep their proportions and a step taller never shrinks one, and
+keep the track you are looking at in place; a trackpad's momentum after the
+fingers lift steps nothing. Drag the line under a track header
+(the pointer turns into a resize cursor over it) to resize that track;
+Option-drag it to resize every picture track, or every sound track, at once.
+Right-click a header for the Mini, Small, Medium, Large, and Jumbo heights,
+for one track or all of them; View → Fit tracks to panel and View → Reset
+track heights match Fit and Medium. Below 40 pt a header is one line; clips
+drop their waveform below 30 pt and their filmstrip below 34 pt, and keep
+their names at every height. Heights are remembered per project in the
+editor's settings on this Mac: they are a view setting, never saved in
+`project.kerf`, which collaborators share.
 Choose Edit → Focus region to draw a crop box on the selected video clip and
 apply it to a time range. Reopen it on the focused segment to adjust the box.
 The picker loads the exact source frame at the playhead. A fixed box ends at a
@@ -132,9 +151,28 @@ Space; with the timeline focused, Home and End jump to the start and end,
 Left and Right step one frame, S splits the selected clip at the playhead,
 and Delete and Shift+Delete delete or ripple-delete it (Kerf keymap). The transport under the viewer has the same
 controls between the playhead timecode and the program length. The Editing
-workspace puts the Source monitor (with Effect Controls behind it) beside
-the Program monitor, over the Project bin (with Effects behind it) and the
-Timeline. An empty
+workspace reads as a video does on YouTube or TikTok on the desktop: the
+Program monitor in the middle of the top row, as large as the row allows,
+with the Kerf Assistant (the chat) in a column of its own on its right, the
+row's full height and about as wide as YouTube's comments beside a video
+(360 points at first). The Source monitor is a tab behind the Program
+monitor; double-clicking media brings it forward. Left of them, the Project
+bin, Effect Controls, Effects, and Presets share a column of tabs (Effect
+Controls stays left of the Program monitor, where Premiere keeps it, so the
+chat's column holds only the chat). The Timeline runs the window's full
+width under all three, for its many tracks. A wider window widens the
+viewer; the columns beside it keep their widths. A picture narrower than the
+viewer (a 9:16 or 1:1 project) sits against the chat, as a Short sits against
+its comments, and is centred again while the chat is closed or elsewhere.
+
+The chat opens and closes like the comments button beside a Short: the
+speech bubble at the end of the toolbar, Window ▸ Kerf Assistant, ⇧⌘J, or
+the close button in the chat's header. Closing it gives its width to the
+viewer; opening it brings it back at the width it had, even after a
+relaunch. That width is a preference of this Mac (QSettings), never part of
+`project.kerf`. Layouts saved before this arrangement (layout version 4)
+give way to it for the Editing workspace; workspaces of your own saved then
+keep their arrangement. An empty
 timeline starts without tracks. Hover over the
 empty row in the left track header to reveal a plus; click it to add a video
 or audio track. Double-click a clip to open its media in the Source monitor
@@ -145,7 +183,7 @@ at the clip's in point.
 A project is a folder: `project.kerf`, a `media/` folder, and a `presets/`
 library. Started without one, Kerf opens the launcher, like an edit suite's
 Choose a Project window. Like the editor, it follows the system's light or
-dark appearance and accent colour, and switches when they change
+dark appearance in the editor's palette and accent, and switches when it changes
 (`KERF_COLOR_SCHEME=light` or `dark` picks one). New Project offers Empty
 16:9, Vertical 9:16, and Square 1:1 templates; Details sets the name,
 location, frame rate, and sharing: Share with Git makes the folder a
@@ -241,17 +279,19 @@ changes only that clip, and the clips around it follow by ripple) or Whole
 sequence (centred on the clip). The request reaches the agent with that
 focus, in frames of the sequence.
 
-While Kerf works, a bar over the timeline says what it is working on and
-offers Stop. Its proposal then shows on the timeline before anything
-changes: clips it adds or changes are outlined where they would land, and
-clips it removes are struck through. The bar offers Accept (⌘Return),
-Reject (Escape with the timeline focused), and Details, which opens the
-Kerf Assistant panel with the conversation and the proposed script. The Kerf
-Assistant panel starts closed; open it from Window to keep chatting there,
-where Return sends and Shift+Return inserts a new line. Kerf ends each turn
-with up to three next steps, shown as buttons on the bar and over the
-composer ("Stronger glow", "Wipe to the next shot"); pressing one asks for it
-about the same selection.
+Kerf's proposal shows on the timeline before anything changes: clips it adds
+or changes are outlined where they would land, and clips it removes are
+struck through. The Kerf Assistant starts open beside the Program monitor;
+keep chatting there, where Return sends and Shift+Return inserts a new line.
+It shows what Kerf is working on (with Stop), the proposal's script and diff
+(as tall as their lines, up to ten) with Reject and Accept (⌘Return; Escape
+with the timeline focused rejects), and the up to three next steps Kerf ends
+each turn with ("Stronger glow", "Wipe to the next shot"), over the composer,
+where they wrap onto more lines rather than widen the chat's narrow column;
+pressing one asks for it about the same selection. While the chat is closed,
+a bar over the timeline stands in for it, as a Short's comment count does:
+it says what Kerf is working on, offers Stop, Accept, Reject and the next
+steps, and Details opens the chat again.
 
 Use the project-format picker in the toolbar to switch between standard
 1920×1080 (16:9) and vertical 1080×1920 (9:16). The viewer fits either canvas
@@ -308,9 +348,16 @@ saves each page as `<page>-<light|dark>.png`, and
 (`settings-`), the preset bindings dialog (`dialog-`), the diverged banner
 with an agent proposal and conversation (`states-`), and Effect Controls
 with an effect's parameters (`inspector-`), each `<light|dark>.png`;
+`editorShowsEveryFormatBesideItsConversation` saves the whole editor with
+the chat open beside a 16:9, a 9:16 and a 1:1 picture
+(`editor-16x9-`, `editor-9x16-`, `editor-1x1-`) and the 9:16 one with the
+chat closed (`editor-9x16-closed-`);
 `timelineFollowsTheAppearance` saves the timeline (`timeline-`,
 `timeline-drag-`) and `paintedPanelsFollowTheAppearance` the Program monitor
 (`viewer-`, `viewer-empty-`), the region picker (`region-`), the Source
 monitor (`source-`), the bin (`bin-`) and the Effects panel (`effects-`).
+The pictures in them are the tests' procedural footage (`test_footage.h`:
+a harbor at dawn, a close-up on a dock and a drone pass over the coast,
+drawn in code with texture and grain), so no media files are needed.
 The macOS CI job also runs the real bridge/media workflow in
 `scripts/test-kerf-qt-bridge.py`.

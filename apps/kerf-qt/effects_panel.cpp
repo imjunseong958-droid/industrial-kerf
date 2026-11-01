@@ -31,12 +31,11 @@ constexpr int kHasPreview = Qt::UserRole + 3;
 // A card before its preview arrives: an empty thumbnail with an effect's
 // symbol (SF Symbols' camera.filters) in its middle. Its name is under it.
 QPixmap placeholder() {
+    // A tone a step off the panel, with no frame: the cards sit on the
+    // panel itself, not in a box of their own.
     QPixmap pixmap(kCard);
     pixmap.fill(editorTheme().cardPlaceholder);
     QPainter painter(&pixmap);
-    // An edge, so the card reads on the list's field in both appearances.
-    painter.setPen(editorTheme().border);
-    painter.drawRect(pixmap.rect().adjusted(0, 0, -1, -1));
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setPen(QPen(editorTheme().cardPlaceholderText, 1.5));
     const QPointF mid(kCard.width() / 2.0, kCard.height() / 2.0);

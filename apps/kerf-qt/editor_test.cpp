@@ -10,6 +10,7 @@
 #include "project_launcher.h"
 #include "project_panel.h"
 #include "source_monitor_panel.h"
+#include "test_footage.h"
 #include "timeline_widget.h"
 #include "viewer_widget.h"
 #include "workspace.h"
@@ -24,6 +25,7 @@
 #include <QDir>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QFormLayout>
@@ -42,7 +44,6 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
-#include <QLinearGradient>
 #include <QMenuBar>
 #include <QPaintDevice>
 #include <QPaintEngine>
@@ -76,15 +77,22 @@
 #include <QTextFrame>
 #include <QToolBar>
 #include <QToolButton>
+#include <QToolTip>
+#include <QScreen>
+#include <QWheelEvent>
 #include <QWidget>
 
+#include <DockAreaWidget.h>
 #include <DockManager.h>
+#include <DockSplitter.h>
 #include <DockWidget.h>
 #include <DockWidgetTab.h>
+#include <ElidingLabel.h>
 
 #include <algorithm>
 #include <climits>
 #include <cmath>
+#include <functional>
 #include <vector>
 
 namespace kerf {
@@ -755,8 +763,8 @@ private slots:
             QVERIFY(toggle->isChecked());
 
             QCOMPARE(workspace->names(), QStringList{QStringLiteral("Editing")});
-            // Kerf is asked from the timeline; its conversation panel starts closed.
-            QVERIFY(workspace->panel(QStringLiteral("assistant"))->isClosed());
+            // Kerf's conversation starts open, beside the Program monitor.
+            QVERIFY(!workspace->panel(QStringLiteral("assistant"))->isClosed());
             QVERIFY(workspace->saveAs(QStringLiteral("Review")));
             QVERIFY(!workspace->saveAs(QStringLiteral("review")));
             QCOMPARE(workspace->current(), QStringLiteral("Review"));
@@ -774,6 +782,300 @@ private slots:
             QVERIFY(window.m_preferences->isVisible());
         }
         QSettings().remove(QStringLiteral("workspace"));
+    }
+
+    // The Editing workspace reads as a video does on YouTube or TikTok on
+    // the desktop: the Program monitor in the middle and the widest panel of
+    // its row, Kerf's conversation in a column of its own on its right, the
+    // full height of the row, the browsers and Effect Controls on its left,
+    // the Source monitor a tab behind the Program monitor, and the Timeline
+    // the window's full width under them all.
+    void editingShowsTheVideoWithItsConversationBeside() {
+        QSettings().remove(QStringLiteral("workspace"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
+        MainWindow window{QString(), QString()};
+        window.resize(1440, 900);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QCoreApplication::processEvents();
+        Workspace *workspace = window.m_workspace;
+        const auto panel = [workspace](const char *id) { return workspace->panel(QString::fromLatin1(id)); };
+        const auto area = [&panel](const char *id) { return panel(id)->dockAreaWidget(); };
+        const auto frame = [&window](const QWidget *widget) { return QRect(widget->mapTo(&window, QPoint()), widget->size()); };
+
+        QVERIFY(workspace->assistantOpen());
+        QAction *toggle = window.m_commands->action(QStringLiteral("window.assistant"));
+        QVERIFY(toggle->isChecked());
+        QVERIFY(window.m_chatToggle && window.m_chatToggle->isChecked());
+        QCOMPARE(window.m_chatToggle->defaultAction(), toggle);
+        QCOMPARE(area("assistant")->openDockWidgetsCount(), 1);
+        QCOMPARE(area("source"), area("program"));
+        QVERIFY(panel("program")->isCurrentTab());
+        for (const char *id : {"effectControls", "effects", "presets"}) QCOMPARE(area(id), area("project"));
+        QVERIFY(panel("project")->isCurrentTab());
+        // Their column shows the four tabs' names in full.
+        for (const char *id : {"project", "effectControls", "effects", "presets"}) {
+            auto *label = panel(id)->tabWidget()->findChild<ads::CElidingLabel *>();
+            QVERIFY2(label && label->isVisible() && !label->isElided(), id);
+        }
+        // Every panel is open, and Window lists each one.
+        for (const char *id : {"project", "source", "program", "timeline", "effectControls", "effects", "presets", "assistant"}) {
+            QVERIFY2(!panel(id)->isClosed(), id);
+            QAction *item = window.m_commands->action(QStringLiteral("window.%1").arg(QString::fromLatin1(id)));
+            QVERIFY2(item && item->isCheckable() && item->isChecked(), id);
+        }
+
+        const QRect browser = frame(area("project"));
+        const QRect viewer = frame(area("program"));
+        const QRect chat = frame(area("assistant"));
+        const QRect timeline = frame(area("timeline"));
+        // One row: the browsers, the viewer, the conversation, side by side.
+        QVERIFY(browser.right() < viewer.left() && viewer.right() < chat.left());
+        QVERIFY(chat.left() - viewer.right() <= 3);
+        QCOMPARE(chat.top(), viewer.top());
+        QCOMPARE(chat.bottom(), viewer.bottom());
+        QCOMPARE(browser.top(), viewer.top());
+        QCOMPARE(chat.width(), Workspace::kAssistantWidth);
+        QVERIFY(viewer.width() > browser.width() && viewer.width() > chat.width());
+        // The Timeline spans the row under it, edge to edge.
+        QCOMPARE(timeline.left(), browser.left());
+        QCOMPARE(timeline.right(), chat.right());
+        QVERIFY(timeline.top() > viewer.bottom());
+        // The viewer has the larger share of the height.
+        QVERIFY(viewer.height() > timeline.height());
+
+        // A wider window widens the viewer; the columns beside it keep theirs.
+        window.resize(1680, 900);
+        QCoreApplication::processEvents();
+        QCOMPARE(frame(area("assistant")).width(), chat.width());
+        QCOMPARE(frame(area("project")).width(), browser.width());
+        QCOMPARE(frame(area("program")).width(), viewer.width() + 240);
+        window.resize(1440, 900);
+        QCoreApplication::processEvents();
+        QCOMPARE(frame(area("program")).width(), viewer.width());
+
+        // The toolbar's bubble closes the conversation and gives its width,
+        // and the splitter's, to the viewer; the browsers keep theirs.
+        window.m_chatToggle->click();
+        QCoreApplication::processEvents();
+        QVERIFY(panel("assistant")->isClosed());
+        QVERIFY(!toggle->isChecked() && !window.m_chatToggle->isChecked());
+        QVERIFY(!area("assistant")->isVisible());
+        QCOMPARE(frame(area("program")).left(), viewer.left());
+        QCOMPARE(frame(area("program")).right(), chat.right());
+        QCOMPARE(frame(area("project")).width(), browser.width());
+        // And opens it again at its width.
+        window.m_chatToggle->click();
+        QCoreApplication::processEvents();
+        QVERIFY(!panel("assistant")->isClosed() && toggle->isChecked());
+        QCOMPARE(frame(area("assistant")), chat);
+        QCOMPARE(frame(area("program")), viewer);
+
+        // A width of one's own comes back too: closed from its header's
+        // close button, opened from the keyboard.
+        {
+            ads::CDockSplitter *row = area("assistant")->parentSplitter();
+            QList<int> sizes = row->sizes();
+            const int column = row->indexOf(area("assistant"));
+            sizes[column - 1] -= 60;
+            sizes[column] += 60;
+            row->setSizes(sizes);
+            QCoreApplication::processEvents();
+        }
+        QCOMPARE(frame(area("assistant")).width(), chat.width() + 60);
+        QToolButton *close = area("assistant")->findChild<QToolButton *>(QStringLiteral("assistantClose"));
+        QVERIFY(close && close->isVisible());
+        QVERIFY(close->toolTip().startsWith(QStringLiteral("Close Kerf Assistant")));
+        // Its tab shows no second close button under the pointer.
+        QWidget *tab = panel("assistant")->tabWidget();
+        QEvent enter(QEvent::Enter);
+        QCoreApplication::sendEvent(tab, &enter);
+        QVERIFY(!tab->findChild<QWidget *>(QStringLiteral("tabCloseButton"))->isVisible());
+        QTest::mouseClick(close, Qt::LeftButton);
+        QCoreApplication::processEvents();
+        QVERIFY(panel("assistant")->isClosed() && !toggle->isChecked());
+        QCOMPARE(workspace->assistantWidth(), chat.width() + 60);
+        QCOMPARE(toggle->shortcut(), QKeySequence(QStringLiteral("Ctrl+Shift+J")));
+        QTest::keyClick(&window, Qt::Key_J, Qt::ControlModifier | Qt::ShiftModifier);
+        QCoreApplication::processEvents();
+        QVERIFY(!panel("assistant")->isClosed() && window.m_chatToggle->isChecked());
+        QCOMPARE(frame(area("assistant")).width(), chat.width() + 60);
+        QCOMPARE(frame(area("assistant")).right(), chat.right());
+        // Window ▸ Kerf Assistant is the same switch.
+        toggle->trigger();
+        QCoreApplication::processEvents();
+        QVERIFY(panel("assistant")->isClosed() && !window.m_chatToggle->isChecked());
+        // Dragging the browsers' edge while it is closed (which leaves the
+        // row nothing to remember for a hidden column) does not lose it.
+        {
+            ads::CDockSplitter *row = area("program")->parentSplitter();
+            QWidget *handle = row->handle(row->indexOf(area("program")));
+            QTest::mousePress(handle, Qt::LeftButton, {}, QPoint(1, 50));
+            QTest::mouseMove(handle, QPoint(-30, 50));
+            QTest::mouseRelease(handle, Qt::LeftButton, {}, QPoint(-30, 50));
+            QCoreApplication::processEvents();
+            QVERIFY(frame(area("project")).width() < browser.width());
+            toggle->trigger();
+            QCoreApplication::processEvents();
+            QCOMPARE(frame(area("assistant")).width(), chat.width() + 60);
+            QCOMPARE(frame(area("assistant")).right(), chat.right());
+            toggle->trigger();
+            QCoreApplication::processEvents();
+        }
+        // The AI bar's Details opens it, brought forward.
+        QToolButton *details = nullptr;
+        for (QToolButton *button : window.m_aiBar->findChildren<QToolButton *>())
+            if (button->text() == QStringLiteral("Details")) details = button;
+        QVERIFY(details);
+        details->click();
+        QCoreApplication::processEvents();
+        QVERIFY(panel("assistant")->isCurrentTab() && toggle->isChecked() && window.m_chatToggle->isChecked());
+        QCOMPARE(frame(area("assistant")).width(), chat.width() + 60);
+        // The width is this Mac's, kept for the next launch, not the project's.
+        window.close();
+        QCOMPARE(QSettings().value(QStringLiteral("workspace/assistantWidth")).toInt(), chat.width() + 60);
+    }
+
+    // A conversation closed when the editor last closed opens, the next
+    // time, at the width it had, however the layout restored it.
+    void conversationOpensAtItsWidthAfterARelaunch() {
+        QSettings().remove(QStringLiteral("workspace"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
+        int width = 0;
+        {
+            MainWindow window{QString(), QString()};
+            window.resize(1440, 900);
+            window.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&window));
+            ads::CDockAreaWidget *chat = window.m_workspace->panel(QStringLiteral("assistant"))->dockAreaWidget();
+            ads::CDockSplitter *row = chat->parentSplitter();
+            QList<int> sizes = row->sizes();
+            const int column = row->indexOf(chat);
+            sizes[column - 1] -= 40;
+            sizes[column] += 40;
+            row->setSizes(sizes);
+            QCoreApplication::processEvents();
+            width = chat->width();
+            QCOMPARE(width, Workspace::kAssistantWidth + 40);
+            window.m_workspace->setAssistantOpen(false);
+            QCoreApplication::processEvents();
+            // The browsers' edge moves while it is closed, so the saved
+            // layout keeps nothing of the hidden column's width.
+            ads::CDockAreaWidget *viewer = window.m_workspace->panel(QStringLiteral("program"))->dockAreaWidget();
+            QWidget *handle = row->handle(row->indexOf(viewer));
+            QTest::mousePress(handle, Qt::LeftButton, {}, QPoint(1, 50));
+            QTest::mouseMove(handle, QPoint(-20, 50));
+            QTest::mouseRelease(handle, Qt::LeftButton, {}, QPoint(-20, 50));
+            QCoreApplication::processEvents();
+            window.close();
+        }
+        MainWindow window{QString(), QString()};
+        window.resize(1440, 900);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QVERIFY(!window.m_workspace->assistantOpen());
+        QVERIFY(!window.m_chatToggle->isChecked());
+        window.m_chatToggle->click();
+        QCoreApplication::processEvents();
+        ads::CDockAreaWidget *chat = window.m_workspace->panel(QStringLiteral("assistant"))->dockAreaWidget();
+        QCOMPARE(chat->width(), width);
+        QCOMPARE(chat->mapTo(&window, QPoint(chat->width(), 0)).x(), window.width());
+    }
+
+    // The new Editing arrangement takes the place of the Editing layout
+    // saved before it, while a workspace of one's own saved then keeps its
+    // arrangement; one from before today's panels gives way to Editing's.
+    void editingLayoutReplacesOldDefaultsAndKeepsOwnWorkspaces() {
+        QSettings().remove(QStringLiteral("workspace"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
+        QByteArray before;
+        QByteArray older;
+        {
+            MainWindow window{QString(), QString()};
+            window.m_workspace->setAssistantOpen(false);
+            window.m_workspace->panel(QStringLiteral("presets"))->toggleView(false);
+            before = window.m_workspace->manager()->saveState(4);
+            older = window.m_workspace->manager()->saveState(3);
+        }
+        {
+            QSettings settings;
+            settings.setValue(QStringLiteral("workspace/names"), QStringList{QStringLiteral("Review"), QStringLiteral("Old")});
+            settings.setValue(QStringLiteral("workspace/saved/Editing"), before);
+            settings.setValue(QStringLiteral("workspace/changes/Editing"), before);
+            settings.setValue(QStringLiteral("workspace/saved/Review"), before);
+            settings.setValue(QStringLiteral("workspace/saved/Old"), older);
+            settings.setValue(QStringLiteral("workspace/current"), QStringLiteral("Editing"));
+        }
+        MainWindow window{QString(), QString()};
+        Workspace *workspace = window.m_workspace;
+        ads::CDockWidget *presets = workspace->panel(QStringLiteral("presets"));
+        QVERIFY(workspace->assistantOpen());
+        QVERIFY(!presets->isClosed());
+        workspace->activate(QStringLiteral("Review"));
+        QVERIFY(!workspace->assistantOpen());
+        QVERIFY(presets->isClosed());
+        QVERIFY(!window.m_commands->action(QStringLiteral("window.assistant"))->isChecked());
+        workspace->activate(QStringLiteral("Old"));
+        QVERIFY(workspace->assistantOpen());
+        QVERIFY(!presets->isClosed());
+    }
+
+    // In the conversation's narrow column Kerf's next steps wrap onto more
+    // lines rather than widen it, and nothing in it scrolls sideways.
+    void conversationFitsItsNarrowColumn() {
+        QSettings().remove(QStringLiteral("workspace"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
+        MainWindow window{QString(), QString()};
+        window.resize(1440, 900);
+        window.setConnection(QStringLiteral("ready"));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.showNextSteps(QJsonArray{QJsonObject{{"label", "Add captions"}, {"request", "Caption the dialogue"}},
+                                        QJsonObject{{"label", "Duck the music"}, {"request", "Lower the music"}},
+                                        QJsonObject{{"label", "Tighten the opening"}, {"request", "Trim the opening"}},
+                                        QJsonObject{{"label", "Match the colour"}, {"request", "Match the shots"}}});
+        window.updateProposal(QJsonObject{{"status", "pending"}, {"proposalId", "p1"},
+                                          {"script", "trim v1b out -36f\nremove v1c\nadd title t2 at 00:00:12:00 text=\"A lower third that runs well past the column's edge\"\n"},
+                                          {"documentDiff", "-    clip v1b dur=5s\n+    clip v1b dur=3.5s\n+    title t2 text=\"A lower third that runs well past the column's edge\"\n"}});
+        window.appendConversation(QStringLiteral("You"), QStringLiteral("Tighten the fisher close-up and drop the drone pass."));
+        QCoreApplication::processEvents();
+        QWidget *column = window.findChild<QWidget *>(QStringLiteral("assistantPanel"));
+        QVERIFY(column && column->isVisible());
+        QCOMPARE(window.m_workspace->panel(QStringLiteral("assistant"))->dockAreaWidget()->width(), Workspace::kAssistantWidth);
+        // The chips wrap: four of them take two lines, each inside the column.
+        const auto chips = window.m_chatNextSteps->findChildren<QPushButton *>(QStringLiteral("nextStep"));
+        QCOMPARE(chips.size(), 4);
+        QSet<int> lines;
+        for (QPushButton *chip : chips) {
+            lines.insert(chip->y());
+            QVERIFY(chip->geometry().right() < window.m_chatNextSteps->width());
+        }
+        QVERIFY(lines.size() >= 2);
+        QVERIFY(window.m_chatNextSteps->height() >= 2 * chips.constFirst()->height());
+        // Nothing asks for more width than the column has.
+        QVERIFY(window.m_chatScroll->widget()->minimumSizeHint().width() <= window.m_chatScroll->viewport()->width());
+        QCOMPARE(window.m_chatScroll->widget()->width(), window.m_chatScroll->viewport()->width());
+        QVERIFY(window.m_chatComposer->minimumSizeHint().width() <= window.m_chatComposer->width());
+        QVERIFY(!window.m_proposalDiff->horizontalScrollBar()->isVisible());
+        QVERIFY(!window.m_conversation->horizontalScrollBar()->isVisible());
+        // The proposal's buttons and the composer's Send button sit inside it.
+        for (QWidget *control : std::initializer_list<QWidget *>{window.m_acceptButton, window.m_rejectButton, window.m_sendButton})
+            QVERIFY(control->mapTo(column, QPoint(control->width(), 0)).x() <= column->width());
+        // Dragged narrower, the column stops where they still fit.
+        ads::CDockAreaWidget *chat = window.m_workspace->panel(QStringLiteral("assistant"))->dockAreaWidget();
+        ads::CDockSplitter *row = chat->parentSplitter();
+        QList<int> sizes = row->sizes();
+        const int index = row->indexOf(chat);
+        sizes[index - 1] += sizes.at(index) - 80;
+        sizes[index] = 80;
+        row->setSizes(sizes);
+        QCoreApplication::processEvents();
+        QVERIFY(column->minimumWidth() >= 248);
+        QCOMPARE(chat->width(), column->minimumWidth());
+        QCOMPARE(column->width(), chat->width());
+        QVERIFY(window.m_chatScroll->widget()->minimumSizeHint().width() <= window.m_chatScroll->viewport()->width());
+        for (QWidget *control : std::initializer_list<QWidget *>{window.m_acceptButton, window.m_sendButton})
+            QVERIFY(control->mapTo(column, QPoint(control->width(), 0)).x() <= column->width());
     }
 
     void effectsPanelShowsCardsAndAddsToTheSelectedClip() {
@@ -833,6 +1135,11 @@ private slots:
         const auto chips = window.m_nextSteps->findChildren<QPushButton *>(QStringLiteral("nextStep"));
         QCOMPARE(chips.size(), 2);
         QCOMPARE(chips.at(0)->text(), QStringLiteral("Stronger glow"));
+        // The conversation, open beside the picture, shows them; the
+        // timeline's bar shows them only while it is closed.
+        QVERIFY(window.m_workspace->assistantOpen());
+        QVERIFY(window.m_aiBar->isHidden());
+        window.m_workspace->setAssistantOpen(false);
         QVERIFY(!window.m_aiBar->isHidden());
         QCOMPARE(window.m_aiBarText->text(), QStringLiteral("Next with Kerf"));
         QCOMPARE(window.m_chatNextSteps->findChildren<QPushButton *>(QStringLiteral("nextStep")).size(), 2);
@@ -841,6 +1148,93 @@ private slots:
         QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("agent"));
         QCOMPARE(window.m_lastCommand.value("text").toString(), QStringLiteral("Use a linear wipe into the next shot."));
         QCOMPARE(window.m_lastCommand.value("focus").toObject(), focus);
+    }
+
+    // Kerf's conversation, in its column beside the picture: scrolled, the
+    // top of its view fades from the well, so a message cut off there reads
+    // as scrolled and not clipped; the proposal's script and diff are as
+    // tall as their lines, up to ten, so what was asked stays in view.
+    void conversationColumnFadesAndFitsItsProposal() {
+        QSettings().remove(QStringLiteral("workspace"));
+        const auto restore = qScopeGuard([] {
+            setEditorColorScheme(ColorScheme::Dark);
+            QSettings().remove(QStringLiteral("workspace"));
+        });
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            const EditorTheme &theme = editorTheme();
+            QVERIFY(theme.messageUser.rgb() != theme.well.rgb());
+            MainWindow window{QString(), QString()};
+            window.setConnection(QStringLiteral("ready"));
+            QJsonObject proposal{{"status", "pending"}, {"proposalId", "p1"}, {"script", "trim v1b out -36f\nremove v1c\n"},
+                                 {"documentDiff", "-    clip v1b dur=5s\n+    clip v1b dur=3.5s\n-    clip v1c\n"}};
+            QJsonObject snapshot = showcaseSnapshot(3, QStringLiteral("clean"));
+            snapshot.insert(QStringLiteral("pendingProposal"), proposal);
+            window.applySnapshot(snapshot);
+            window.resize(1440, 900);
+            window.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&window));
+            window.m_errorBanner->hide();
+            for (int turn = 0; turn < 4; ++turn) {
+                window.appendConversation(QStringLiteral("You"), QStringLiteral("Tighten the fisher close-up and drop the drone pass, please."));
+                window.appendConversation(QStringLiteral("Kerf"), QStringLiteral("I trimmed the close-up by 1.5 seconds and removed the drone pass."));
+            }
+            QCoreApplication::processEvents();
+
+            // The diff: no room left under its last line, and no scroll bar.
+            QTextEdit *diff = window.m_proposalDiff;
+            QVERIFY(diff->isVisible());
+            const int line = diff->fontMetrics().lineSpacing();
+            const qreal content = diff->document()->size().height();
+            QVERIFY2(diff->viewport()->height() - content < line,
+                     qPrintable(QStringLiteral("%1 px for %2 px of lines").arg(diff->viewport()->height()).arg(content)));
+            QVERIFY(diff->viewport()->height() >= content - 1);
+            QCOMPARE(diff->verticalScrollBar()->maximum(), 0);
+            // A long one stops at ten lines and scrolls.
+            QString longScript;
+            for (int index = 0; index < 40; ++index) longScript += QStringLiteral("trim v%1 out -12f\n").arg(index);
+            proposal.insert(QStringLiteral("script"), longScript);
+            snapshot.insert(QStringLiteral("pendingProposal"), proposal);
+            snapshot.insert(QStringLiteral("revision"), 4);
+            window.applySnapshot(snapshot);
+            QCoreApplication::processEvents();
+            QVERIFY(diff->viewport()->height() <= MainWindow::kProposalDiffLines * line + 2 * diff->document()->documentMargin() + 1);
+            QVERIFY(diff->viewport()->height() >= (MainWindow::kProposalDiffLines - 1) * line);
+            QVERIFY(diff->verticalScrollBar()->maximum() > 0);
+
+            // Scrolled to the top, no fade.
+            QScrollArea *scroll = window.m_chatScroll;
+            auto *fade = scroll->findChild<QWidget *>(QStringLiteral("scrollFade"), Qt::FindDirectChildrenOnly);
+            QVERIFY(fade);
+            QVERIFY(scroll->verticalScrollBar()->maximum() > 0);
+            scroll->verticalScrollBar()->setValue(0);
+            QCoreApplication::processEvents();
+            QVERIFY(!fade->isVisible());
+            // Scrolled so a message of the reader's is cut by the view's top.
+            QTextDocument *document = window.m_conversation->document();
+            QTextFrame *message = nullptr;
+            // (Found by its kind: the reader's and Kerf's rows share the chat's surface.)
+            for (QTextFrame *frame : document->rootFrame()->childFrames())
+                if (frame->frameFormat().intProperty(QTextFormat::UserProperty + 1) == 1) message = frame;
+            QVERIFY(message);
+            QCOMPARE(message->frameFormat().background().color(), theme.messageUser);
+            const QRectF bounds = document->documentLayout()->frameBoundingRect(message);
+            const int into = window.m_conversation->viewport()->mapTo(scroll->widget(), QPoint(0, int(bounds.top()) + 10)).y();
+            scroll->verticalScrollBar()->setValue(into);
+            QCoreApplication::processEvents();
+            QCOMPARE(scroll->verticalScrollBar()->value(), into);
+            QVERIFY(fade->isVisible());
+            QCOMPARE(fade->geometry().top(), scroll->viewport()->geometry().top());
+            QCOMPARE(fade->width(), scroll->viewport()->width());
+            const QImage image = window.grab().toImage();
+            const qreal ratio = image.devicePixelRatio();
+            // Inside the message's padding, clear of its text and border.
+            const QPoint column = window.m_conversation->viewport()->mapTo(&window, QPoint(int(bounds.right()) - 8, 0));
+            const QPoint top(column.x(), fade->mapTo(&window, QPoint()).y());
+            QCOMPARE(image.pixelColor(top * ratio).rgb(), theme.well.rgb());
+            // Under the fade, the message as it is.
+            QCOMPARE(image.pixelColor((top + QPoint(0, MainWindow::kScrollFadeHeight + 1)) * ratio).rgb(), theme.messageUser.rgb());
+        }
     }
 
     void inspectorShowsAndEditsTheEffectStack() {
@@ -1547,7 +1941,9 @@ private slots:
         QCOMPARE(focus.value("clip").toString(), QStringLiteral("c1"));
         QCOMPARE(focus.value("fromFrame").toInt(), 24);
         QCOMPARE(focus.value("toFrame").toInt(), 72);
-        // While Kerf works, the timeline says so and offers Stop.
+        // While Kerf works with its conversation closed, the timeline says
+        // so and offers Stop.
+        window.m_workspace->setAssistantOpen(false);
         window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
         QVERIFY(window.m_aiBar->isVisible());
         QVERIFY(window.m_aiBarText->text().contains(QStringLiteral("Opening")));
@@ -1568,6 +1964,10 @@ private slots:
         window.applySnapshot(QJsonObject{{"revision", 4}, {"duration", 2}, {"timeline", current},
                                          {"pendingProposal", proposal}, {"proposalTimeline", proposed}});
         QVERIFY(window.m_timeline->hasProposal());
+        // Reviewed in the conversation while it is open, on the timeline's
+        // bar while it is closed.
+        QVERIFY(!window.m_aiBar->isVisible());
+        window.m_workspace->setAssistantOpen(false);
         QVERIFY(window.m_aiBar->isVisible());
         if (const QString shot = qEnvironmentVariable("KERF_QT_UI_SCREENSHOT"); !shot.isEmpty()) {
             window.resize(1500, 940);
@@ -1634,8 +2034,8 @@ private slots:
         QVERIFY(chorus.width() > beat.width() + 10);
         QVERIFY(beat.right() < chorus.left());
         const QImage image = timeline.grab().toImage();
-        QCOMPARE(image.pixelColor(beat.center().x(), beat.top() + 2), QColor("#e5534b"));
-        QCOMPARE(image.pixelColor(chorus.left() + 4, chorus.top() + 2), QColor("#5fb85f"));
+        QCOMPARE(image.pixelColor(beat.center().x(), beat.top() + 2), editorTheme().marker(QStringLiteral("red")));
+        QCOMPARE(image.pixelColor(chorus.left() + 4, chorus.top() + 2), editorTheme().marker(QString()));
     }
 
     // The timeline paints from the theme, in light and in dark, and repaints
@@ -1742,7 +2142,7 @@ private slots:
         timeline.setProject(QJsonObject{{"tracks", QJsonArray{QJsonObject{{"type", "audio"}, {"clips", QJsonArray{}}}}}}, 8, 24);
         QTest::mouseMove(&timeline, timeline.addLaneButtonCenter());
         QVERIFY(timeline.addLaneVisible());
-        QCOMPARE(timeline.addLaneButtonCenter().y(), kRulerHeight + kTrackHeight + (kTrackHeight - 1) / 2);
+        QCOMPARE(timeline.addLaneButtonCenter().y(), kRulerHeight + kTrackHeight + (kAddLaneHeight - 1) / 2);
     }
 
     void timelineHeaderShowsVideoPreview() {
@@ -1754,13 +2154,21 @@ private slots:
         const QJsonObject track{{"type", "video"}, {"clips", QJsonArray{clip}}};
         timeline.setProject(QJsonObject{{"tracks", QJsonArray{track}}}, 4, 24);
         timeline.show();
-        const QPoint thumbnail(kTimelineLabelWidth - 9 - kHeaderPreviewWidth / 2, kRulerHeight + kTrackHeight / 2);
+        // A preview needs a header of two lines.
+        timeline.setAllTrackHeights(kDetailedTrackHeight);
+        const QPoint thumbnail(kTimelineLabelWidth - 9 - kHeaderPreviewWidth / 2, kRulerHeight + kDetailedTrackHeight / 2);
         QCOMPARE(timeline.grab().toImage().pixelColor(thumbnail), editorTheme().trackHeader);
         QImage frame(160, 90, QImage::Format_RGB32);
         frame.fill(QColor("#e87342"));
         artwork.frames.insert(QStringLiteral("sample"), frame);
         emit artwork.changed();
         QCOMPARE(timeline.grab().toImage().pixelColor(thumbnail), QColor("#e87342"));
+        // A one-line header, at the default height or any below two lines,
+        // has no room for it.
+        for (const int height : {kDetailedTrackHeight - 1, kVideoTrackHeight, kMinTrackHeight}) {
+            timeline.setAllTrackHeights(height);
+            QCOMPARE(timeline.grab().toImage().pixelColor(thumbnail.x(), kRulerHeight + height / 2), editorTheme().trackHeader);
+        }
     }
 
     void timelineStacksPictureTracksUpwardFromV1() {
@@ -1794,7 +2202,7 @@ private slots:
         auto *timeline = new TimelineWidget;
         scroll.setWidget(timeline);
         QJsonArray tracks;
-        for (int i = 0; i < 8; ++i)
+        for (int i = 0; i < 12; ++i)
             tracks.append(QJsonObject{{"id", QString::number(i)}, {"type", "video"}, {"clips", QJsonArray{}}});
         timeline->setProject(QJsonObject{{"tracks", tracks}}, 120, 24);
         scroll.show();
@@ -1852,6 +2260,703 @@ private slots:
         timeline.resetTrackHeights();
         QCOMPARE(timeline.trackHeaderRect(0).height(), kVideoTrackHeight);
         QCOMPARE(timeline.trackHeaderRect(1).height(), kTrackHeight);
+    }
+
+    // Every track's height, top to bottom.
+    static QList<int> trackHeights(const TimelineWidget &timeline) {
+        QList<int> heights;
+        for (int row = 0; row < timeline.trackRowCount(); ++row) heights << timeline.trackHeaderRect(row).height();
+        return heights;
+    }
+    static QJsonObject trackList(const QStringList &kinds) {
+        QJsonArray tracks;
+        for (int index = 0; index < kinds.size(); ++index)
+            tracks.append(QJsonObject{{"id", QStringLiteral("T%1").arg(index)}, {"type", kinds.at(index)}, {"clips", QJsonArray{}}});
+        return QJsonObject{{"fps", 24}, {"tracks", tracks}};
+    }
+
+    // The skimmed playhead keeps the playhead's halo, so its line reads at
+    // 3:1 where it crosses clips and pictures, not only on bare lanes.
+    void skimmedPlayheadKeepsItsHaloOverClips() {
+        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
+        TimelineWidget timeline;
+        timeline.resize(800, 200);
+        timeline.setProject(QJsonObject{{"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+            QJsonObject{{"id", "c"}, {"kind", "media"}, {"timelineStart", 0.0}, {"duration", 6.0}}}}}}}}, 8, 24);
+        timeline.setPlayhead(2.0);
+        timeline.show();
+        const int playX = kTimelineOrigin + 144;
+        const QRect clip = timeline.clipBounds(QStringLiteral("c"));
+        QVERIFY(clip.left() < playX - 1 && clip.right() > playX + 1);
+        // In the clip's body, under its name bar.
+        const int y = clip.bottom() - 4;
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            const EditorTheme &theme = editorTheme();
+            QTest::mouseMove(&timeline, QPoint(kTimelineOrigin + (scheme == ColorScheme::Dark ? 420 : 400), clip.center().y()));
+            QVERIFY(!timeline.skimLabel().isEmpty());
+            const QImage skimmed = timeline.grab().toImage();
+            QCOMPARE(skimmed.pixel(playX, y), theme.playheadIdle.rgb());
+            QCOMPARE(skimmed.pixel(playX - 1, y), theme.playheadHalo.rgb());
+            QCOMPARE(skimmed.pixel(playX + 1, y), theme.playheadHalo.rgb());
+            QVERIFY(contrastRatio(theme.playheadIdle, theme.playheadHalo) >= 3.0);
+            // Not skimming, the playhead has the same halo.
+            timeline.clearSkimmer();
+            const QImage playing = timeline.grab().toImage();
+            QCOMPARE(playing.pixel(playX, y), theme.playhead.rgb());
+            QCOMPARE(playing.pixel(playX - 1, y), theme.playheadHalo.rgb());
+            QCOMPARE(playing.pixel(playX + 1, y), theme.playheadHalo.rgb());
+        }
+    }
+
+    // The header bar sets every track's height at once (Mini, the default
+    // Medium, Large, and Fit) and shows which is in force; in the editor it
+    // is in the Timeline panel's title strip, before the track count.
+    void timelineHeaderBarSetsEveryTrackHeight() {
+        TimelineWidget timeline;
+        timeline.resize(900, 520);
+        timeline.setProject(trackList({"video", "video", "audio", "audio"}), 8, 24);
+        timeline.show();
+        const QList<QAction *> actions = timeline.trackHeightActions();
+        QStringList names;
+        for (const QAction *action : actions) names << action->objectName();
+        QCOMPARE(names, (QStringList{"trackHeightMini", "trackHeightMedium", "trackHeightLarge", "trackHeightFit"}));
+        QAction *mini = actions.at(0);
+        QAction *medium = actions.at(1);
+        QAction *large = actions.at(2);
+        QAction *fit = actions.at(3);
+        for (QAction *action : actions) QVERIFY(action->toolTip().contains(QStringLiteral("Option-scroll")));
+        // Tracks start dense: one-line headers, a filmstrip on a picture
+        // track (a 14px body) and a waveform on a sound track (a 10px one);
+        // Mini is one line of 18px.
+        QVERIFY(kVideoTrackHeight < kDetailedTrackHeight && kVideoTrackHeight >= 34);
+        QVERIFY(kTrackHeight <= kVideoTrackHeight && kTrackHeight >= 30);
+        QCOMPARE(kMinTrackHeight, 18);
+        QCOMPARE(trackHeights(timeline), (QList<int>{kVideoTrackHeight, kVideoTrackHeight, kTrackHeight, kTrackHeight}));
+        QVERIFY(medium->isChecked() && !mini->isChecked() && !large->isChecked() && !fit->isCheckable());
+        mini->trigger();
+        QCOMPARE(trackHeights(timeline), QList<int>(4, kMinTrackHeight));
+        QVERIFY(mini->isChecked() && !medium->isChecked());
+        large->trigger();
+        QCOMPARE(trackHeights(timeline), QList<int>(4, 60));
+        QVERIFY(large->isChecked() && !mini->isChecked());
+        // One track dragged apart: no height is every track's.
+        const int edge = timeline.trackHeaderRect(0).bottom() + 1;
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(140, edge));
+        QTest::mouseMove(&timeline, QPoint(140, edge + 10));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(140, edge + 10));
+        QCOMPARE(trackHeights(timeline), (QList<int>{70, 60, 60, 60}));
+        QVERIFY(!mini->isChecked() && !medium->isChecked() && !large->isChecked());
+        medium->trigger();
+        QCOMPARE(trackHeights(timeline), (QList<int>{kVideoTrackHeight, kVideoTrackHeight, kTrackHeight, kTrackHeight}));
+        QVERIFY(medium->isChecked());
+        fit->trigger();
+        const int each = (timeline.height() - kRulerHeight - kAddLaneHeight - 8) / 4;
+        QCOMPARE(trackHeights(timeline), QList<int>(4, std::clamp(each, kMinTrackHeight, kMaxTrackHeight)));
+        // Their symbols are the glyph colour, and the accent when chosen.
+        QCOMPARE(ink(mini->icon()), editorTheme().glyph.rgb());
+        QCOMPARE(ink(mini->icon(), QIcon::Normal, QIcon::On), editorTheme().accentText.rgb());
+
+        QSettings().remove(QStringLiteral("workspace"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        QJsonObject project = trackList({"video", "video", "audio"});
+        project.insert("width", 1920);
+        project.insert("height", 1080);
+        window.applySnapshot(QJsonObject{{"revision", 1}, {"duration", 4}, {"timeline", project}});
+        window.resize(1440, 900);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        ads::CDockWidget *dock = window.m_workspace->panel(QStringLiteral("timeline"));
+        QCOMPARE(dock->titleBarActions().mid(0, 4), window.m_timeline->trackHeightActions());
+        QCOMPARE(dock->titleBarActions().constLast()->objectName(), QStringLiteral("timelineDetail"));
+        auto *button = dock->dockAreaWidget()->findChild<QToolButton *>(QStringLiteral("trackHeightMini"));
+        QVERIFY(button && button->isVisible());
+        QTest::mouseClick(button, Qt::LeftButton);
+        QCOMPARE(trackHeights(*window.m_timeline), QList<int>(3, kMinTrackHeight));
+        QVERIFY(button->isChecked());
+        // Chosen, it looks as a chosen mask tool does: the accent's wash.
+        const QImage chosen = button->grab().toImage();
+        QCOMPARE(chosen.pixelColor(QPoint(3, button->height() / 2) * chosen.devicePixelRatio()).rgb(), editorTheme().accentTint.rgb());
+    }
+
+    // Option-Up and Option-Down, and Option-scroll over the headers, step
+    // each track through the heights from its own, keeping in place the
+    // track at the top of the view or under the pointer; plain keys and the
+    // wheel elsewhere leave heights alone.
+    void timelineStepsEveryTrackWithOptionKeysAndScroll() {
+        TimelineScrollArea scroll;
+        scroll.resize(900, 400);
+        scroll.setWidgetResizable(true);
+        auto *timeline = new TimelineWidget;
+        scroll.setWidget(timeline);
+        QStringList kinds;
+        for (int index = 0; index < 40; ++index) kinds << (index % 4 == 3 ? "audio" : "video");
+        timeline->setProject(trackList(kinds), 8, 24);
+        scroll.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&scroll));
+        // Rows run V30 … V1, then A1 … A10.
+        const auto heights = [](int picture, int sound) {
+            QList<int> expected(30, picture);
+            expected.append(QList<int>(10, sound));
+            return expected;
+        };
+        QCOMPARE(trackHeights(*timeline), heights(kVideoTrackHeight, kTrackHeight));
+        timeline->setFocus();
+        QTest::keyClick(timeline, Qt::Key_Up, Qt::AltModifier);
+        QCOMPARE(trackHeights(*timeline), heights(44, 36));
+        QTest::keyClick(timeline, Qt::Key_Down, Qt::AltModifier);
+        QTest::keyClick(timeline, Qt::Key_Down, Qt::AltModifier);
+        QCOMPARE(trackHeights(*timeline), heights(30, 26));
+        QTest::keyClick(timeline, Qt::Key_Down);
+        QCOMPARE(trackHeights(*timeline), heights(30, 26));
+
+        const auto wheel = [timeline](const QPoint &at, int delta, Qt::KeyboardModifiers modifiers,
+                                      Qt::ScrollPhase phase = Qt::NoScrollPhase) {
+            QWheelEvent event(at, timeline->mapToGlobal(at), QPoint(), QPoint(0, delta), Qt::NoButton, modifiers, phase, false);
+            QApplication::sendEvent(timeline, &event);
+            return event.isAccepted();
+        };
+        const auto inView = [timeline, &scroll](const QPoint &point) { return timeline->mapFrom(scroll.viewport(), point); };
+        QVERIFY(wheel(inView(QPoint(120, 200)), 120, Qt::AltModifier));
+        QCOMPARE(trackHeights(*timeline), heights(36, 30));
+        // A trackpad's small deltas add up to a notch.
+        for (int part = 0; part < 3; ++part) wheel(inView(QPoint(120, 200)), -40, Qt::AltModifier);
+        QCOMPARE(trackHeights(*timeline), heights(30, 26));
+        // Without Option, or over the lanes, the wheel is the scroll area's.
+        QVERIFY(!wheel(inView(QPoint(120, 200)), 120, Qt::NoModifier));
+        QVERIFY(!wheel(inView(QPoint(500, 200)), 120, Qt::AltModifier));
+        QCOMPARE(trackHeights(*timeline), heights(30, 26));
+        // The momentum after a flick steps nothing, and a new gesture starts
+        // its notch afresh.
+        QVERIFY(wheel(inView(QPoint(120, 200)), 80, Qt::AltModifier, Qt::ScrollBegin));
+        QVERIFY(wheel(inView(QPoint(120, 200)), 80, Qt::AltModifier, Qt::ScrollUpdate));
+        QCOMPARE(trackHeights(*timeline), heights(36, 30));
+        for (int event = 0; event < 6; ++event) QVERIFY(wheel(inView(QPoint(120, 200)), 120, Qt::AltModifier, Qt::ScrollMomentum));
+        QCOMPARE(trackHeights(*timeline), heights(36, 30));
+        wheel(inView(QPoint(120, 200)), -80, Qt::AltModifier, Qt::ScrollUpdate);
+        wheel(inView(QPoint(120, 200)), 0, Qt::AltModifier, Qt::ScrollEnd);
+        wheel(inView(QPoint(120, 200)), 0, Qt::AltModifier, Qt::ScrollBegin);
+        wheel(inView(QPoint(120, 200)), -80, Qt::AltModifier, Qt::ScrollUpdate);
+        QCOMPARE(trackHeights(*timeline), heights(36, 30));
+        wheel(inView(QPoint(120, 200)), -40, Qt::AltModifier, Qt::ScrollUpdate);
+        QCOMPARE(trackHeights(*timeline), heights(30, 26));
+
+        // The track under the pointer stays where it is in the view.
+        scroll.verticalScrollBar()->setValue(300);
+        QCoreApplication::processEvents();
+        const QPoint over = inView(QPoint(120, 250));
+        const int row = timeline->trackRowAt(over.y());
+        QVERIFY(row > 5);
+        const auto top = [timeline](int at) { return timeline->trackHeaderRect(at).top() + timeline->pos().y(); };
+        const int before = top(row);
+        wheel(over, -120, Qt::AltModifier);
+        QCOMPARE(trackHeights(*timeline), heights(26, 22));
+        QCOMPARE(top(row), before);
+        wheel(inView(QPoint(120, 250)), 240, Qt::AltModifier);
+        QCOMPARE(trackHeights(*timeline), heights(36, 30));
+        QCOMPARE(top(row), before);
+        // The keys keep the track at the top of the view in place.
+        const int first = timeline->trackRowAt(-timeline->pos().y() + kRulerHeight);
+        const int firstTop = top(first);
+        QTest::keyClick(timeline, Qt::Key_Up, Qt::AltModifier);
+        QCOMPARE(trackHeights(*timeline), heights(44, 36));
+        QCOMPARE(top(first), firstTop);
+    }
+
+    // A step taller never makes a track shorter: picture tracks dragged tall
+    // and one hero layer taller still each step from their own heights, the
+    // sound tracks from theirs, and a track added later from the height
+    // every track was stepped to.
+    void timelineStepsKeepTracksSizedApart() {
+        TimelineWidget timeline;
+        timeline.resize(900, 900);
+        QJsonObject project = trackList({"video", "video", "video", "audio", "audio"});
+        timeline.setProject(project, 8, 24);
+        timeline.show();
+        // Rows, top down: V3, V2, V1, A1, A2. Option-drag picture to 100.
+        const int pictureEdge = timeline.trackHeaderRect(2).bottom() + 1;
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(140, pictureEdge));
+        QTest::mouseMove(&timeline, QPoint(140, pictureEdge + 100 - kVideoTrackHeight));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(140, pictureEdge + 100 - kVideoTrackHeight));
+        QCOMPARE(trackHeights(timeline), (QList<int>{100, 100, 100, kTrackHeight, kTrackHeight}));
+        // V3, the hero layer, taller still.
+        const int heroEdge = timeline.trackHeaderRect(0).bottom() + 1;
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(140, heroEdge));
+        QTest::mouseMove(&timeline, QPoint(140, heroEdge + 20));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(140, heroEdge + 20));
+        QCOMPARE(trackHeights(timeline), (QList<int>{120, 100, 100, kTrackHeight, kTrackHeight}));
+        timeline.stepAllTrackHeights(1);
+        const QList<int> taller = trackHeights(timeline);
+        QCOMPARE(taller, (QList<int>{128, 104, 104, 36, 36}));
+        timeline.stepAllTrackHeights(-1);
+        QCOMPARE(trackHeights(timeline), (QList<int>{104, 86, 86, 30, 30}));
+        // The tallest stays the tallest; Option-scroll steps the same way.
+        QWheelEvent wheel(QPointF(120, timeline.trackHeaderRect(3).center().y()), timeline.mapToGlobal(QPointF(120, 0)), QPoint(),
+                          QPoint(0, 120), Qt::NoButton, Qt::AltModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(&timeline, &wheel);
+        QCOMPARE(trackHeights(timeline), (QList<int>{128, 104, 104, 36, 36}));
+        // A new track takes the step every track without a height of its
+        // own was taken to: one step from the picture default.
+        QJsonArray tracks = project.value("tracks").toArray();
+        tracks.append(QJsonObject{{"id", "added"}, {"type", "audio"}, {"clips", QJsonArray{}}});
+        project.insert("tracks", tracks);
+        timeline.setProject(project, 8, 24);
+        QCOMPARE(timeline.allTrackHeight(), 44);
+        QCOMPARE(trackHeights(timeline).constLast(), 44);
+        // Presets still set every track alike.
+        timeline.trackHeightActions().at(0)->trigger();
+        QCOMPARE(trackHeights(timeline), QList<int>(6, kMinTrackHeight));
+    }
+
+    // At every height down to Mini the line between two headers shows the
+    // resize cursor and says what dragging it does; dragging it resizes the
+    // track above, Option-dragging every track of that kind; and a header's
+    // toggles keep their clicks, however close to the line.
+    void timelineHeaderEdgesResizeAtEveryHeight() {
+        TimelineWidget timeline;
+        timeline.resize(800, 400);
+        timeline.setProject(trackList({"video", "video", "video", "audio", "audio"}), 8, 24);
+        timeline.setAllTrackHeights(kMinTrackHeight);
+        timeline.show();
+        QSignalSpy toggles(&timeline, &TimelineWidget::trackToggleRequested);
+        // Rows, top down: V3, V2, V1, A1, A2. This line parts V2 from V1.
+        const int edge = timeline.trackHeaderRect(1).bottom() + 1;
+        for (const int dy : {-2, 0, 2}) {
+            QTest::mouseMove(&timeline, QPoint(140, edge + dy));
+            QCOMPARE(timeline.cursor().shape(), Qt::SplitVCursor);
+        }
+        QHelpEvent help(QEvent::ToolTip, QPoint(140, edge), timeline.mapToGlobal(QPoint(140, edge)));
+        QApplication::sendEvent(&timeline, &help);
+        QVERIFY2(QToolTip::text().contains(QStringLiteral("Option-drag")), qPrintable(QToolTip::text()));
+        QToolTip::hideText();
+
+        const QRect lock = timeline.headerToggleRect(2, 1);
+        QVERIFY(lock.top() > edge && lock.top() - edge <= 3);
+        QTest::mouseMove(&timeline, lock.center());
+        QVERIFY(timeline.cursor().shape() != Qt::SplitVCursor);
+        for (const QPoint &at : {lock.center(), QPoint(lock.center().x(), lock.top())}) {
+            QTest::mouseClick(&timeline, Qt::LeftButton, Qt::NoModifier, at);
+            QCOMPARE(toggles.constLast().at(1).toString(), QStringLiteral("locked"));
+        }
+        QCOMPARE(toggles.count(), 2);
+        QCOMPARE(trackHeights(timeline), QList<int>(5, kMinTrackHeight));
+
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(140, edge - 1));
+        QTest::mouseMove(&timeline, QPoint(140, edge + 19));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(140, edge + 19));
+        QCOMPARE(trackHeights(timeline), (QList<int>{18, 38, 18, 18, 18}));
+        // Option: every sound track...
+        const int soundEdge = timeline.trackHeaderRect(3).bottom() + 1;
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(140, soundEdge));
+        QTest::mouseMove(&timeline, QPoint(140, soundEdge + 12));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(140, soundEdge + 12));
+        QCOMPARE(trackHeights(timeline), (QList<int>{18, 38, 18, 30, 30}));
+        // ...or every picture track.
+        const int pictureEdge = timeline.trackHeaderRect(0).bottom() + 1;
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(140, pictureEdge));
+        QTest::mouseMove(&timeline, QPoint(140, pictureEdge + 6));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(140, pictureEdge + 6));
+        QCOMPARE(trackHeights(timeline), (QList<int>{24, 24, 24, 30, 30}));
+        QCOMPARE(toggles.count(), 2);
+    }
+
+    // Track heights are remembered per project in the editor's settings
+    // (never in project.kerf, which collaborators share), restored when the
+    // project opens again; a track added later takes the height every
+    // track was last set to.
+    void timelineRemembersTrackHeightsPerProject() {
+        QSettings().remove(QStringLiteral("timelineTrackHeights"));
+        const auto forget = qScopeGuard([] { QSettings().remove(QStringLiteral("timelineTrackHeights")); });
+        QTemporaryDir first;
+        QTemporaryDir second;
+        const QJsonObject project = trackList({"video", "audio"});
+        {
+            TimelineWidget timeline;
+            timeline.resize(700, 400);
+            timeline.setHeightsKey(first.path());
+            timeline.setProject(project, 8, 24);
+            timeline.show();
+            timeline.setAllTrackHeights(26);
+            const int edge = timeline.trackHeaderRect(0).bottom() + 1;
+            QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(140, edge));
+            QTest::mouseMove(&timeline, QPoint(140, edge + 24));
+            QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(140, edge + 24));
+            QCOMPARE(trackHeights(timeline), (QList<int>{50, 26}));
+        }
+        {
+            TimelineWidget timeline;
+            timeline.setHeightsKey(first.path());
+            timeline.setProject(project, 8, 24);
+            QCOMPARE(trackHeights(timeline), (QList<int>{50, 26}));
+            QCOMPARE(timeline.allTrackHeight(), 26);
+            QJsonObject grown = project;
+            QJsonArray tracks = grown.value("tracks").toArray();
+            tracks.append(QJsonObject{{"id", "added"}, {"type", "audio"}, {"clips", QJsonArray{}}});
+            grown.insert("tracks", tracks);
+            timeline.setProject(grown, 8, 24);
+            QCOMPARE(trackHeights(timeline), (QList<int>{50, 26, 26}));
+        }
+        {
+            // Whether the snapshot comes first or not.
+            TimelineWidget timeline;
+            timeline.setProject(project, 8, 24);
+            timeline.setHeightsKey(first.path());
+            QCOMPARE(trackHeights(timeline), (QList<int>{50, 26}));
+        }
+        {
+            TimelineWidget timeline;
+            timeline.setHeightsKey(second.path());
+            timeline.setProject(project, 8, 24);
+            QCOMPARE(trackHeights(timeline), (QList<int>{kVideoTrackHeight, kTrackHeight}));
+        }
+        QSettings settings;
+        settings.beginGroup(QStringLiteral("timelineTrackHeights"));
+        QStringList paths;
+        for (const QString &group : settings.childGroups()) paths << settings.value(group + QStringLiteral("/path")).toString();
+        settings.endGroup();
+        const QString remembered = QDir::cleanPath(QFileInfo(first.path()).absoluteFilePath());
+        QCOMPARE(paths, QStringList{remembered});
+        // The editor remembers them for the project it opens, and Medium
+        // (the defaults) forgets them.
+        MainWindow window{first.path(), QString()};
+        QCOMPARE(window.m_timeline->m_heightsPath, remembered);
+        window.m_timeline->setProject(project, 8, 24);
+        QCOMPARE(trackHeights(*window.m_timeline), (QList<int>{50, 26}));
+        window.m_timeline->resetTrackHeights();
+        TimelineWidget reopened;
+        reopened.setHeightsKey(first.path());
+        reopened.setProject(project, 8, 24);
+        QCOMPARE(trackHeights(reopened), (QList<int>{kVideoTrackHeight, kTrackHeight}));
+        // Left at Mini, it reopens at Mini with Mini checked in the title
+        // bar, the remembered heights arriving before any track does.
+        const auto checkedHeight = [](const TimelineWidget &timeline) {
+            QStringList checked;
+            for (const QAction *action : timeline.trackHeightActions())
+                if (action->isChecked()) checked << action->objectName();
+            return checked;
+        };
+        reopened.trackHeightActions().at(0)->trigger();
+        {
+            TimelineWidget atMini;
+            atMini.setHeightsKey(first.path());
+            atMini.setProject(project, 8, 24);
+            QCOMPARE(trackHeights(atMini), QList<int>(2, kMinTrackHeight));
+            QCOMPARE(checkedHeight(atMini), QStringList{QStringLiteral("trackHeightMini")});
+        }
+        {
+            MainWindow atMini{first.path(), QString()};
+            atMini.setConnection(QStringLiteral("ready"));
+            atMini.applySnapshot(QJsonObject{{"revision", 1}, {"duration", 8}, {"timeline", project}});
+            QCOMPARE(trackHeights(*atMini.m_timeline), QList<int>(2, kMinTrackHeight));
+            QCOMPARE(checkedHeight(*atMini.m_timeline), QStringList{QStringLiteral("trackHeightMini")});
+        }
+        // A snapshot that removes the one track sized apart leaves every
+        // track at one height, and its button checked.
+        reopened.trackHeightActions().at(2)->trigger();
+        reopened.setTrackHeight(1, 40);
+        QVERIFY(checkedHeight(reopened).isEmpty());
+        QJsonObject shrunk = project;
+        QJsonArray tracks = shrunk.value("tracks").toArray();
+        tracks.removeLast();
+        shrunk.insert("tracks", tracks);
+        reopened.setProject(shrunk, 8, 24);
+        QCOMPARE(checkedHeight(reopened), QStringList{QStringLiteral("trackHeightLarge")});
+    }
+
+    // From Mini to the tallest, a header's badge and toggles sit inside its
+    // row, clear of its top edge and its divider; it is one line (no clip
+    // count, no preview) below two lines' height; clips keep their names at
+    // every height, show a waveform from a 10px body (rows of 30px) and a
+    // filmstrip from a 14px one (rows of 34px).
+    void timelineTracksStayLegibleAtEveryHeight() {
+        MediaArtwork artwork;
+        QImage picture(160, 90, QImage::Format_RGB32);
+        picture.fill(QColor("#e87342"));
+        artwork.frames.insert(QStringLiteral("pic"), picture);
+        QImage sound(2048, 48, QImage::Format_ARGB32);
+        sound.fill(Qt::white);
+        artwork.waves.insert(QStringLiteral("snd"), sound);
+        TimelineWidget timeline;
+        timeline.setArtwork(&artwork);
+        timeline.setProject(QJsonObject{{"fps", 24},
+            {"sources", QJsonArray{QJsonObject{{"id", "pic"}, {"duration", 4}}, QJsonObject{{"id", "snd"}, {"duration", 4}}}},
+            {"tracks", QJsonArray{
+                QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{QJsonObject{
+                    {"id", "v"}, {"kind", "media"}, {"sourceId", "pic"}, {"name", "Opening shot"}, {"timelineStart", 0.0},
+                    {"duration", 4.0}, {"in", 0.0}, {"out", 4.0}}}}},
+                QJsonObject{{"id", "A1"}, {"type", "audio"}, {"clips", QJsonArray{QJsonObject{
+                    {"id", "a"}, {"kind", "media"}, {"sourceId", "snd"}, {"name", "Dialogue"}, {"timelineStart", 0.0},
+                    {"duration", 4.0}, {"in", 0.0}, {"out", 4.0}}}}}}}}, 6, 24);
+        timeline.resize(900, kRulerHeight + 2 * kMaxTrackHeight + kAddLaneHeight + 8);
+        timeline.show();
+        const EditorTheme &theme = editorTheme();
+        // Whether any pixel across a clip's body, near its foot, is `color`.
+        const auto bodyShows = [](const QImage &image, const QRect &clip, const QColor &color) {
+            for (int x = clip.center().x() - 20; x <= clip.center().x() + 20; ++x)
+                if (image.pixelColor(x, clip.bottom() - 3) == color) return true;
+            return false;
+        };
+        for (const int height : {18, 19, 20, 21, 22, 24, 26, 28, 29, 30, 32, 33, 34, 36, 39, 40, 44, 60, 96, 160}) {
+            timeline.setAllTrackHeights(height);
+            QCOMPARE(trackHeights(timeline), QList<int>(2, height));
+            const QImage image = timeline.grab().toImage();
+            for (int row = 0; row < 2; ++row) {
+                const QRect header = timeline.trackHeaderRect(row);
+                const QRect badge = timeline.headerBadgeRect(row);
+                const QRect output = timeline.headerToggleRect(row, 0);
+                const QRect lock = timeline.headerToggleRect(row, 1);
+                for (const QRect &control : {badge, output, lock}) {
+                    QVERIFY2(control.top() > header.top() && control.bottom() < header.bottom(),
+                             qPrintable(QStringLiteral("row %1 at %2px").arg(row).arg(height)));
+                    QVERIFY(control.height() >= 12);
+                }
+                QVERIFY(badge.right() < output.left() && output.right() < lock.left());
+                // The divider under the row is whole, past the name.
+                QCOMPARE(image.pixelColor(170, header.bottom()), theme.trackDivider);
+            }
+            const QRect picture = timeline.clipBounds(QStringLiteral("v"));
+            const QRect wave = timeline.clipBounds(QStringLiteral("a"));
+            QCOMPARE(bodyShows(image, picture, QColor("#e87342")), height >= 34);
+            QCOMPARE(bodyShows(image, wave, theme.clipAudio.wave), height >= 30);
+            // Names: the clips', the tracks', the badges'; the clip count
+            // only on two-line headers.
+            TextRecorder recorder;
+            QPainter painter(&recorder);
+            timeline.paintLanes(painter, timeline.rect());
+            timeline.paintHeaders(painter, timeline.rect());
+            painter.end();
+            for (const char *name : {"Opening shot", "Dialogue", "Video 1", "Audio 1", "V1", "A1"})
+                QVERIFY2(recorder.colorOf(QString::fromLatin1(name)).isValid(), name);
+            QCOMPARE(recorder.colorOf(QStringLiteral("1 clip")).isValid(), height >= kDetailedTrackHeight);
+        }
+    }
+
+    // A big edit's track numbers (V100 and up) fit their badges whole, and
+    // the toggles after the badges line up down the column.
+    void timelineBadgesFitEveryTrackNumber() {
+        QStringList kinds;
+        for (int index = 0; index < 160; ++index) kinds << (index < 120 ? "video" : "audio");
+        TimelineWidget timeline;
+        timeline.setProject(trackList(kinds), 8, 24);
+        timeline.setAllTrackHeights(kMinTrackHeight);
+        timeline.resize(800, 600);
+        TextRecorder recorder;
+        QPainter painter(&recorder);
+        timeline.paintHeaders(painter, timeline.rect());
+        painter.end();
+        QStringList badges;
+        for (const auto &run : recorder.runs)
+            if (run.text.size() <= 5 && (run.text.startsWith(QLatin1Char('V')) || run.text.startsWith(QLatin1Char('A')))) badges << run.text;
+        QVERIFY2(badges.contains(QStringLiteral("V120")) && badges.contains(QStringLiteral("V100")), qPrintable(badges.join(' ')));
+        for (const QString &badge : badges) QVERIFY2(!badge.contains(QChar(0x2026)), qPrintable(badge));
+        QFont font = timeline.font();
+        font.setPixelSize(10);
+        font.setWeight(QFont::DemiBold);
+        QVERIFY(timeline.headerBadgeRect(0).width() >= QFontMetrics(font).horizontalAdvance(QStringLiteral("V120")) + 4);
+        for (int row = 0; row < timeline.trackRowCount(); row += 37) {
+            QCOMPARE(timeline.headerToggleRect(row, 0).left(), timeline.headerToggleRect(0, 0).left());
+            QVERIFY(timeline.headerToggleRect(row, 0).left() > timeline.headerBadgeRect(row).right());
+        }
+    }
+
+    // A full repaint of a 300-track timeline paints the lanes in view, not
+    // all of them; and the pointer crossing from clip to clip repaints the
+    // clips it leaves and enters, not the view.
+    void timelinePaintsOnlyTheTracksInView() {
+        MediaArtwork artwork;
+        fakeArtwork(&artwork);
+        TimelineScrollArea scroll;
+        scroll.resize(900, 500);
+        scroll.setWidgetResizable(true);
+        auto *timeline = new TimelineWidget;
+        timeline->setArtwork(&artwork);
+        scroll.setWidget(timeline);
+        timeline->setProject(denseTimeline(300, 10.0), 10.0, 24.0);
+        timeline->setAllTrackHeights(kMinTrackHeight);
+        scroll.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&scroll));
+        // Small enough that the whole timeline could be cached at once.
+        QVERIFY(qint64(timeline->width()) * timeline->height() < 6000000);
+        scroll.verticalScrollBar()->setValue(2000);
+        QCoreApplication::processEvents();
+        timeline->invalidateLanes();
+        timeline->m_lanesPainted = 0;
+        scroll.viewport()->repaint();
+        const int inView = scroll.viewport()->height() / kMinTrackHeight + 2;
+        QVERIFY2(timeline->m_lanesPainted > 0 && timeline->m_lanesPainted <= inView,
+                 qPrintable(QStringLiteral("%1 lanes painted for %2 in view").arg(timeline->m_lanesPainted).arg(inView)));
+        // Across three clips of one track: each change of the clip (or the
+        // clip's edge) under the pointer repaints the one it leaves and the
+        // one it enters, a lane's worth each, never the lanes in view.
+        const int y = timeline->mapFrom(scroll.viewport(), QPoint(0, 200)).y();
+        QVERIFY(timeline->trackRowAt(y) >= 0);
+        QStringList crossed;
+        int changes = 0;
+        timeline->m_lanesPainted = 0;
+        for (int x = kTimelineOrigin + 10; x < kTimelineOrigin + 3 * 216; x += 9) {
+            const auto before = std::make_pair(timeline->m_hoverClipId, timeline->m_hoverEdge);
+            QTest::mouseMove(timeline, QPoint(x, y));
+            QCoreApplication::processEvents();
+            changes += before != std::make_pair(timeline->m_hoverClipId, timeline->m_hoverEdge) ? 1 : 0;
+            if (!timeline->m_hoverClipId.isEmpty() && !crossed.contains(timeline->m_hoverClipId)) crossed << timeline->m_hoverClipId;
+        }
+        QVERIFY2(crossed.size() >= 3, qPrintable(crossed.join(QLatin1Char(' '))));
+        QVERIFY2(timeline->m_lanesPainted <= 2 * changes && 2 * changes < changes * inView,
+                 qPrintable(QStringLiteral("%1 lanes for %2 changes").arg(timeline->m_lanesPainted).arg(changes)));
+    }
+
+    // Scrolling moves what is on screen and paints only what scrolls in
+    // and the pinned ruler and headers, and what is on screen afterwards is
+    // exactly what a full repaint draws: the headers stay in step with
+    // their lanes, and the ruler and corner stay pinned.
+    void timelineScrollsByMovingWhatIsOnScreen() {
+        MediaArtwork artwork;
+        fakeArtwork(&artwork);
+        TimelineScrollArea scroll;
+        scroll.resize(900, 500);
+        scroll.setWidgetResizable(true);
+        auto *timeline = new TimelineWidget;
+        timeline->setArtwork(&artwork);
+        scroll.setWidget(timeline);
+        timeline->setProject(denseTimeline(60, 30.0), 30.0, 24.0);
+        timeline->setPlayhead(9.5);
+        scroll.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&scroll));
+        QCoreApplication::processEvents();
+        struct PaintMeter final : QObject {
+            qint64 pixels = 0;
+            bool eventFilter(QObject *, QEvent *event) override {
+                if (event->type() == QEvent::Paint)
+                    for (const QRect &rect : static_cast<QPaintEvent *>(event)->region()) pixels += qint64(rect.width()) * rect.height();
+                return false;
+            }
+        } meter;
+        timeline->installEventFilter(&meter);
+        QScrollBar *vertical = scroll.verticalScrollBar();
+        QScrollBar *horizontal = scroll.horizontalScrollBar();
+        QVERIFY(vertical->maximum() > 400 && horizontal->maximum() > 400);
+        const QSize view = scroll.viewport()->size();
+        const auto onScreen = [&scroll] { return scroll.screen()->grabWindow(scroll.winId()).toImage(); };
+        struct Step {
+            int dx;
+            int dy;
+        };
+        for (const Step step : {Step{0, 40}, Step{0, 7}, Step{0, -23}, Step{0, 200}, Step{60, 0}, Step{-15, 0}, Step{3, 0},
+                                Step{30, 30}, Step{-41, -9}}) {
+            meter.pixels = 0;
+            horizontal->setValue(horizontal->value() + step.dx);
+            vertical->setValue(vertical->value() + step.dy);
+            QCoreApplication::processEvents();
+            const qint64 painted = meter.pixels;
+            if (step.dx == 0)
+                QVERIFY2(painted <= qint64(std::abs(step.dy) + 2 * kRulerHeight + 4) * view.width(),
+                         qPrintable(QStringLiteral("%1 px for %2 down").arg(painted).arg(step.dy)));
+            if (step.dy == 0)
+                QVERIFY2(painted <= qint64(std::abs(step.dx) + 2 * kTimelineLabelWidth + 4) * view.height(),
+                         qPrintable(QStringLiteral("%1 px for %2 across").arg(painted).arg(step.dx)));
+            const QImage scrolled = onScreen();
+            // A paint still pending at the grab shows as a change here.
+            QCoreApplication::processEvents();
+            const bool settled = scrolled == onScreen();
+            scroll.viewport()->repaint();
+            const QImage repainted = onScreen();
+            // Where they differ, to tell a stale strip from a stray pixel.
+            QRect differ;
+            int count = 0;
+            if (scrolled.size() == repainted.size())
+                for (int y = 0; y < scrolled.height(); ++y)
+                    for (int x = 0; x < scrolled.width(); ++x)
+                        if (scrolled.pixel(x, y) != repainted.pixel(x, y)) {
+                            differ |= QRect(x, y, 1, 1);
+                            ++count;
+                        }
+            QVERIFY2(scrolled == repainted,
+                     qPrintable(QStringLiteral("after %1, %2: %3 px differ in %4,%5 %6x%7 (%8 px painted; viewport at %9,%10 %11x%12; %13)")
+                                    .arg(step.dx)
+                                    .arg(step.dy)
+                                    .arg(count)
+                                    .arg(differ.x())
+                                    .arg(differ.y())
+                                    .arg(differ.width())
+                                    .arg(differ.height())
+                                    .arg(painted)
+                                    .arg(scroll.viewport()->x())
+                                    .arg(scroll.viewport()->y())
+                                    .arg(view.width())
+                                    .arg(view.height())
+                                    .arg(settled ? QStringLiteral("settled") : QStringLiteral("changed on a second pass"))));
+        }
+        timeline->removeEventFilter(&meter);
+    }
+
+    // Rows are found by a binary search: correct at every edge, and a
+    // hundred times the tracks costs nowhere near a hundred times the time.
+    void timelineFindsRowsWithoutWalkingThemAll() {
+        const auto timed = [](int count) {
+            QStringList kinds;
+            for (int index = 0; index < count; ++index) kinds << (index % 3 == 2 ? "audio" : "video");
+            TimelineWidget timeline;
+            timeline.setProject(trackList(kinds), 8, 24);
+            for (int row = 0; row < count; ++row) {
+                const QRect header = timeline.trackHeaderRect(row);
+                if (timeline.trackRowAt(header.top()) != row || timeline.trackRowAt(header.bottom()) != row) return -1.0;
+            }
+            if (timeline.trackRowAt(kRulerHeight - 1) != -1 || timeline.trackRowAt(timeline.trackHeaderRect(count - 1).bottom() + 1) != -1)
+                return -1.0;
+            const int span = timeline.trackHeaderRect(count - 1).bottom();
+            double best = 1e9;
+            qint64 sum = 0;
+            for (int run = 0; run < 3; ++run) {
+                QElapsedTimer timer;
+                timer.start();
+                for (int lookup = 0; lookup < 200000; ++lookup) sum += timeline.trackRowAt(kRulerHeight + int((lookup * 7919LL) % span));
+                best = std::min(best, timer.nsecsElapsed() / 1e6);
+            }
+            return sum > 0 ? best : -1.0;
+        };
+        const double few = timed(30);
+        const double many = timed(3000);
+        QVERIFY(few >= 0.0 && many >= 0.0);
+        // A walk would be some 90 times slower; a search is a few times.
+        QVERIFY2(many < 20.0 * std::max(few, 0.2), qPrintable(QStringLiteral("%1 ms for 30 tracks, %2 ms for 3000").arg(few).arg(many)));
+    }
+
+    // A dense edit: 48 tracks at Mini, one line each, in both appearances.
+    void denseTimelineFollowsTheAppearance() {
+        const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
+        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
+        MediaArtwork artwork;
+        fakeArtwork(&artwork);
+        TimelineWidget timeline;
+        timeline.setArtwork(&artwork);
+        timeline.setProject(denseTimeline(48, 24.0), 24.0, 24.0);
+        timeline.setSelectedClip(QStringLiteral("c20_2"));
+        timeline.setPlayhead(7.5);
+        timeline.trackHeightActions().at(0)->trigger();
+        timeline.resize(1440, kRulerHeight + 48 * kMinTrackHeight + kAddLaneHeight + 8);
+        timeline.show();
+        QCOMPARE(trackHeights(timeline), QList<int>(48, kMinTrackHeight));
+        const int playX = kTimelineOrigin + int(std::floor(7.5 * 72.0));
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            const EditorTheme &theme = editorTheme();
+            const QImage image = timeline.grab().toImage();
+            if (!shots.isEmpty())
+                QVERIFY(image.save(QDir(shots).filePath(QStringLiteral("timeline-dense-%1.png").arg(theme.dark ? "dark" : "light"))));
+            for (int row = 0; row < 48; ++row) {
+                const QRect header = timeline.trackHeaderRect(row);
+                QVERIFY(header.bottom() < image.height());
+                // Its stripe is its clips' colour; its line of controls fits it.
+                const bool sound = timeline.trackRowLabel(row).startsWith(QLatin1Char('A'));
+                QCOMPARE(image.pixelColor(1, header.center().y()), (sound ? theme.clipAudio : theme.clipVideo).header);
+                QCOMPARE(image.pixelColor(170, header.bottom()), theme.trackDivider);
+                // The playhead's line runs through every row.
+                QCOMPARE(image.pixelColor(playX, header.center().y()), theme.playhead);
+            }
+            QCOMPARE(amberPixels(image), 0);
+        }
     }
 
     void timelineScrubsFromThePointer() {
@@ -2070,6 +3175,173 @@ private slots:
         timeline->setZoom(1.0);
         QTest::qWait(20);
         QVERIFY(scroll.horizontalScrollBar()->maximum() > 0);
+    }
+
+    // A big edit: `count` tracks, two thirds picture and a third sound, each
+    // with a clip every three seconds over `seconds`, cut from the fake
+    // artwork's sources so filmstrips and waveforms draw.
+    static QJsonObject denseTimeline(int count, double seconds) {
+        const char *pictures[] = {"wide", "close", "drone"};
+        const char *sounds[] = {"wide", "close", "score"};
+        QJsonArray sources{
+            QJsonObject{{"id", "wide"}, {"path", "media/harbor-wide.mov"}, {"duration", 20}, {"hasAudio", true}},
+            QJsonObject{{"id", "close"}, {"path", "media/fisher-close.mov"}, {"duration", 20}, {"hasAudio", true}},
+            QJsonObject{{"id", "drone"}, {"path", "media/drone-pass.mov"}, {"duration", 20}},
+            QJsonObject{{"id", "score"}, {"path", "media/harbor-score.wav"}, {"duration", 40}, {"hasAudio", true}}};
+        QJsonArray tracks;
+        for (int index = 0; index < count; ++index) {
+            const bool audio = index % 3 == 2;
+            QJsonArray clips;
+            for (int n = 0; n * 3.0 < seconds; ++n) {
+                // Gaps and lengths vary by track, so the cut reads as an edit.
+                const double start = n * 3.0 + (index % 4) * 0.25;
+                const double length = 2.0 + ((index + n) % 3) * 0.4;
+                QJsonObject clip{{"id", QStringLiteral("c%1_%2").arg(index).arg(n)}, {"kind", "media"},
+                                 {"sourceId", audio ? sounds[(index + n) % 3] : pictures[(index + n) % 3]},
+                                 {"name", QStringLiteral("Shot %1-%2").arg(index + 1).arg(n + 1)},
+                                 {"timelineStart", start}, {"duration", std::min(length, seconds - start)}, {"in", 1.0},
+                                 {"out", 1.0 + length}};
+                if ((index + n) % 5 == 0)
+                    clip.insert("effects", QJsonArray{QJsonObject{{"fx", "color.grade"}, {"version", 1}, {"enabled", true}}});
+                clips.append(clip);
+            }
+            tracks.append(QJsonObject{{"id", QStringLiteral("T%1").arg(index)}, {"type", audio ? "audio" : "video"},
+                                      {"name", audio ? QStringLiteral("Sound %1").arg(index / 3 + 1)
+                                                     : QStringLiteral("Layer %1").arg(index - index / 3 + 1)},
+                                      {"clips", clips}});
+        }
+        return QJsonObject{{"fps", 24}, {"sources", sources}, {"tracks", tracks}};
+    }
+
+    // What a 300-track edit costs: applying a snapshot, painting the panel,
+    // scrolling it, skimming across clips, and playing. Prints timings; run
+    // with KERF_TIMELINE_BENCH=1 (or the number of tracks).
+    void timelineBenchmark() {
+        if (qEnvironmentVariableIsEmpty("KERF_TIMELINE_BENCH")) QSKIP("Set KERF_TIMELINE_BENCH=1 to time the timeline.");
+        MediaArtwork artwork;
+        fakeArtwork(&artwork);
+        const int count = qEnvironmentVariableIntValue("KERF_TIMELINE_BENCH") > 1 ? qEnvironmentVariableIntValue("KERF_TIMELINE_BENCH") : 300;
+        const QJsonObject project = denseTimeline(count, 60.0);
+        TimelineScrollArea scroll;
+        scroll.resize(1440, 800);
+        scroll.setWidgetResizable(true);
+        auto *timeline = new TimelineWidget;
+        timeline->setArtwork(&artwork);
+        scroll.setWidget(timeline);
+        scroll.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&scroll));
+        // Painted area per paint event, to tell a full repaint from a strip.
+        struct PaintMeter final : QObject {
+            qint64 pixels = 0;
+            int events = 0;
+            bool eventFilter(QObject *, QEvent *event) override {
+                if (event->type() == QEvent::Paint) {
+                    ++events;
+                    for (const QRect &rect : static_cast<QPaintEvent *>(event)->region()) pixels += qint64(rect.width()) * rect.height();
+                }
+                return false;
+            }
+        } meter;
+        timeline->installEventFilter(&meter);
+        const auto median = [](QList<double> samples) {
+            std::sort(samples.begin(), samples.end());
+            return samples.at(samples.size() / 2);
+        };
+        const auto time = [](const std::function<void()> &work) {
+            QElapsedTimer timer;
+            timer.start();
+            work();
+            return timer.nsecsElapsed() / 1e6;
+        };
+        QList<double> samples;
+        for (int run = 0; run < 7; ++run)
+            samples << time([&] {
+                timeline->setProject(project, 60.0, 24.0);
+                QCoreApplication::sendPostedEvents();
+                QCoreApplication::processEvents();
+            });
+        const double apply = median(samples);
+        const auto report = [&](const char *what, double ms, qint64 pixels, int events) {
+            qInfo("%-28s %8.3f ms  %9lld px painted in %d paint events", what, ms, pixels, events);
+        };
+        report(qPrintable(QStringLiteral("apply snapshot (%1 tracks)").arg(count)), apply, 0, 0);
+        // KERF_TIMELINE_BENCH_HEIGHT puts every track at one height.
+        if (const int height = qEnvironmentVariableIntValue("KERF_TIMELINE_BENCH_HEIGHT"); height > 0) {
+            timeline->setAllTrackHeights(height);
+            QCoreApplication::processEvents();
+        }
+        samples.clear();
+        for (int run = 0; run < 21; ++run)
+            samples << time([&] {
+                timeline->stepAllTrackHeights(run % 2 ? -1 : 1);
+                QCoreApplication::processEvents();
+            });
+        report("step every track's height", median(samples), 0, 0);
+        if (const int height = qEnvironmentVariableIntValue("KERF_TIMELINE_BENCH_HEIGHT"); height > 0) timeline->setAllTrackHeights(height);
+        else timeline->resetTrackHeights();
+        QCoreApplication::processEvents();
+        samples.clear();
+        for (int run = 0; run < 21; ++run) samples << time([&] { scroll.viewport()->repaint(); });
+        report("repaint the panel", median(samples), 0, 0);
+
+        QScrollBar *vertical = scroll.verticalScrollBar();
+        QVERIFY(vertical->maximum() > 0);
+        samples.clear();
+        meter.pixels = 0;
+        meter.events = 0;
+        for (int step = 1; step <= 60; ++step)
+            samples << time([&] {
+                vertical->setValue(step * 40);
+                QCoreApplication::processEvents();
+            });
+        report("scroll down 40px", median(samples), meter.pixels / 60, meter.events);
+
+        QScrollBar *horizontal = scroll.horizontalScrollBar();
+        samples.clear();
+        meter.pixels = 0;
+        meter.events = 0;
+        for (int step = 1; step <= 60; ++step)
+            samples << time([&] {
+                horizontal->setValue(step * 40);
+                QCoreApplication::processEvents();
+            });
+        report("scroll right 40px", median(samples), meter.pixels / 60, meter.events);
+        horizontal->setValue(0);
+        vertical->setValue(vertical->maximum() / 2);
+        QCoreApplication::processEvents();
+
+        // Skimming across clips: each step crosses into the next clip or gap.
+        const QPoint origin = timeline->mapFrom(scroll.viewport(), QPoint(0, 0));
+        samples.clear();
+        meter.pixels = 0;
+        meter.events = 0;
+        for (int step = 0; step < 60; ++step)
+            samples << time([&] {
+                QTest::mouseMove(timeline, origin + QPoint(kTimelineOrigin + 20 + step * 37, 300 + (step % 7) * 11));
+                QCoreApplication::processEvents();
+            });
+        report("skim across clips", median(samples), meter.pixels / 60, meter.events);
+
+        QTest::mouseMove(timeline, origin + QPoint(40, 300));
+        QCoreApplication::processEvents();
+        samples.clear();
+        for (int step = 0; step < 60; ++step)
+            samples << time([&] {
+                QTest::mouseMove(timeline, origin + QPoint(40 + step % 3, 120 + step * 9));
+                QCoreApplication::processEvents();
+            });
+        report("pointer over the headers", median(samples), 0, 0);
+
+        samples.clear();
+        meter.pixels = 0;
+        meter.events = 0;
+        for (int frame = 0; frame < 60; ++frame)
+            samples << time([&] {
+                timeline->setPlayhead(frame / 24.0);
+                QCoreApplication::processEvents();
+            });
+        report("play a frame", median(samples), meter.pixels / 60, meter.events);
+        timeline->removeEventFilter(&meter);
     }
 
     void proposalShowsTheScriptAndDocumentDiff() {
@@ -2626,7 +3898,7 @@ private slots:
                 launcher.resize(1040, 650);
                 launcher.show();
                 QVERIFY(QTest::qWaitForWindowExposed(&launcher));
-                // A chosen recent project is blue while its list has focus.
+                // A chosen recent project is the selection while its list has focus.
                 if (page == ProjectLauncher::Recent) launcher.m_recent->setFocus();
                 QCoreApplication::processEvents();
                 QImage image = launcher.grab().toImage();
@@ -2634,7 +3906,10 @@ private slots:
                 const auto at = [&image, ratio](int x, int y) { return image.pixelColor(QPoint(x, y) * ratio).rgb(); };
                 QCOMPARE(at(launcher.width() - 6, 6), launcher.theme().content.rgb());
                 QCOMPARE(at(100, launcher.height() - 10), launcher.theme().sidebar.rgb());
-                QVERIFY(dark ? launcher.theme().content.lightness() < 60 : launcher.theme().content.lightness() > 240);
+                // Antique cream in light, warm espresso in dark: never pure
+                // white or black, and warm (red above blue).
+                QVERIFY(isWarmPaper(launcher.theme().content, dark));
+                QVERIFY(isWarmPaper(launcher.theme().sidebar, dark));
                 if (launcher.m_choose->isEnabled()) {
                     // The default button is the accent, lightening towards its top.
                     const QImage choose = launcher.m_choose->grab().toImage();
@@ -2675,13 +3950,13 @@ private slots:
                                             .arg(firstAmber.y())));
                     save(image, QStringLiteral("new-details-%1").arg(schemeName));
                     // The remote field's placeholder reads at 4.5:1 in the
-                    // editor's placeholder colour, and dims when the field is off.
+                    // launcher's secondary text colour, and dims when the field is off.
                     const LauncherTheme &look = launcher.theme();
                     launcher.m_remote->ensurePolished();
                     QVERIFY(launcher.m_remote->isEnabled() && launcher.m_remote->text().isEmpty());
                     for (const QPalette::ColorGroup group : {QPalette::Active, QPalette::Inactive})
                         QCOMPARE(launcher.m_remote->palette().color(group, QPalette::PlaceholderText).rgb(),
-                                 makeEditorTheme(dark, look.accent).placeholderText.rgb());
+                                 look.secondary.rgb());
                     QVERIFY(contrastRatio(launcher.m_remote->palette().color(QPalette::Active, QPalette::PlaceholderText),
                                           look.field) >= 4.5);
                     QCOMPARE(launcher.m_remote->palette().color(QPalette::Disabled, QPalette::PlaceholderText).rgb(),
@@ -2699,7 +3974,7 @@ private slots:
 
     // A chosen recent project's text reads on its selection (4.5:1), in
     // both appearances: a missing project's name on the grey of a list
-    // without focus, and the details on the focused list's blue. The colours
+    // without focus, and the details on the focused list's selection. The colours
     // are read from the pens the rows are painted with.
     void launcherRowsReadWhenChosen() {
         const auto clean = qScopeGuard([] {
@@ -2786,6 +4061,14 @@ private slots:
                at(bezel.center().x(), bezel.bottom()).lightness() + 16 < at(bezel.center().x(), bezel.top()).lightness();
     }
 
+    // Whether `color` is one of the palette's paper surfaces: antique cream
+    // in light (light, but not white) and espresso in dark (dark, but not
+    // black), warm in both (red above blue).
+    static bool isWarmPaper(const QColor &color, bool dark) {
+        const bool warm = color.red() >= color.blue() + (dark ? 4 : 10);
+        return warm && (dark ? color.lightness() < 45 && color.rgb() != QColor(Qt::black).rgb()
+                             : color.lightness() > 200 && color.rgb() != QColor(Qt::white).rgb());
+    }
     // Saturated amber or gold, as the editor's old accent was.
     static bool isAmber(const QColor &color) {
         return color.hue() >= 30 && color.hue() <= 52 && color.saturation() > 140 && color.value() > 150;
@@ -2839,14 +4122,6 @@ private slots:
                 if (image.pixelColor(x, y).alpha() > best.alpha()) best = image.pixelColor(x, y);
         return best.rgb();
     }
-    // macOS's accents in light and dark: blue, purple, pink, red, orange,
-    // yellow, green, and graphite.
-    static QList<QColor> macAccents() {
-        return {QColor("#007aff"), QColor("#0a84ff"), QColor("#953d96"), QColor("#bf5af2"), QColor("#f74f9e"), QColor("#ff375f"),
-                QColor("#e0383e"), QColor("#ff453a"), QColor("#f7821b"), QColor("#ff9f0a"), QColor("#ffc600"), QColor("#ffd60a"),
-                QColor("#62ba46"), QColor("#32d74b"), QColor("#8c8c8c"), QColor("#98989d")};
-    }
-
     // A cut with every kind of clip: two picture tracks (one of titles), a
     // caption track, dialogue and music, a marker, and a pending proposal
     // that trims one clip, drops another, and adds a title.
@@ -2897,25 +4172,15 @@ private slots:
     }
 
     // Stand-in thumbnails and waveforms, so filmstrips and waves draw
-    // without FFmpeg.
+    // without FFmpeg: frames of the tests' procedural footage (see
+    // test_footage.h), one shot per source, made once per run.
     static void fakeArtwork(MediaArtwork *artwork) {
-        const auto frame = [](const QColor &sky, const QColor &ground) {
-            QImage image(160, 90, QImage::Format_RGB32);
-            QPainter painter(&image);
-            QLinearGradient gradient(0, 0, 0, 90);
-            gradient.setColorAt(0, sky.lighter(130));
-            gradient.setColorAt(0.55, sky);
-            gradient.setColorAt(0.56, ground);
-            gradient.setColorAt(1, ground.darker(160));
-            painter.fillRect(image.rect(), gradient);
-            painter.setBrush(QColor(255, 240, 220));
-            painter.setPen(Qt::NoPen);
-            painter.drawEllipse(QPointF(118, 30), 9, 9);
-            return image;
-        };
-        artwork->frames.insert(QStringLiteral("wide"), frame(QColor("#6f8fb5"), QColor("#2c4a5e")));
-        artwork->frames.insert(QStringLiteral("close"), frame(QColor("#b58a6f"), QColor("#4e3b2c")));
-        artwork->frames.insert(QStringLiteral("drone"), frame(QColor("#8fb5a8"), QColor("#2e5e4a")));
+        static const QImage wide = testing::footageFrame(testing::Shot::HarborWide, QSize(160, 90));
+        static const QImage close = testing::footageFrame(testing::Shot::FisherClose, QSize(160, 90));
+        static const QImage drone = testing::footageFrame(testing::Shot::DronePass, QSize(160, 90));
+        artwork->frames.insert(QStringLiteral("wide"), wide);
+        artwork->frames.insert(QStringLiteral("close"), close);
+        artwork->frames.insert(QStringLiteral("drone"), drone);
         for (const char *id : {"wide", "close", "score"}) {
             QImage wave(2048, 48, QImage::Format_ARGB32);
             wave.fill(Qt::transparent);
@@ -2931,31 +4196,114 @@ private slots:
         emit artwork->changed();
     }
 
+    // Kerf has its own accent, a purple in each appearance, and does not
+    // follow the system's: the editor and the launcher keep it when the
+    // platform reports another accent, and switch only with light and dark.
+    void kerfDrawsItsOwnPurpleAccent() {
+        const auto restore = qScopeGuard([] {
+            QGuiApplication::setPalette(QPalette());
+            setEditorColorScheme(ColorScheme::Dark);
+        });
+        for (const bool dark : {false, true}) {
+            const EditorTheme t = makeEditorTheme(dark);
+            const LauncherTheme l = launcherTheme(dark);
+            QCOMPARE(t.accent.rgb(), kerfAccent(dark).rgb());
+            QCOMPARE(l.accent.rgb(), t.accent.rgb());
+            // Purple: between blue and red, and clearly coloured.
+            QVERIFY2(t.accent.hslHue() >= 270 && t.accent.hslHue() <= 320, qPrintable(t.accent.name()));
+            QVERIFY2(t.accent.hslSaturation() >= 40, qPrintable(t.accent.name()));
+            // Kerf's own marks are the accent: the playhead, focus, the
+            // agent's proposals and its avatar.
+            for (const QColor &mark : {t.playhead, t.focusRing, t.assistant, t.proposalAdd, t.chatAvatarKerf, t.maskHandleFill})
+                QCOMPARE(mark.rgb(), t.accent.rgb());
+            // Track toggles that are on are a neutral ink, not the accent.
+            QVERIFY(t.trackToggleOn.rgb() != t.accent.rgb() && t.trackToggleOn.hsvSaturation() < 90);
+            QVERIFY(contrastRatio(t.trackToggleOn, t.trackToggle) >= 3.0);
+            // In dark the mauve carries dark ink, so the launcher's chosen
+            // rows (a deep plum) and its switch knob have their own tokens.
+            QVERIFY(contrastRatio(l.selectionText, l.selection) >= 4.5);
+            if (dark) QVERIFY(l.selectionText.rgb() != l.onAccent.rgb());
+            // Fewer boxes: the caption on the picture has no line round it,
+            // the open chat's toggle is a tonal disc with Kerf's ink, and the
+            // launcher's format tiles are paper cards lighter than the page.
+            QCOMPARE(t.viewerCaptionBorder.rgba(), t.viewerCaption.rgba());
+            QCOMPARE(t.railButtonActive.rgba(), t.railButton.rgba());
+            QCOMPARE(t.railGlyphActive.rgb(), t.accentText.rgb());
+            QVERIFY(l.tile.lightness() > l.content.lightness());
+        }
+        // The light and dark accents differ: ink on cream, mauve on espresso.
+        QVERIFY(kerfAccent(true).lightness() > kerfAccent(false).lightness() + 60);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
+        // A system accent of any colour leaves Kerf's in place.
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            QPalette blue = QGuiApplication::palette();
+            blue.setColor(QPalette::Accent, QColor("#007aff"));
+            QGuiApplication::setPalette(blue);
+            applyEditorAppearance();
+            const bool dark = scheme == ColorScheme::Dark;
+            QCOMPARE(editorTheme().accent.rgb(), kerfAccent(dark).rgb());
+            ProjectLauncher launcher;
+            launcher.setColorScheme(dark ? ProjectLauncher::ColorScheme::Dark : ProjectLauncher::ColorScheme::Light);
+            QCOMPARE(launcher.theme().accent.rgb(), kerfAccent(dark).rgb());
+            QGuiApplication::setPalette(QPalette());
+        }
+#endif
+    }
+
     // The accent as text (the transports' timecodes, the timeline's corner
-    // time, the sync chip) reads at 4.5:1 on each surface it is drawn on,
-    // whichever accent System Settings has, in both appearances.
+    // time, the sync chip) reads at 4.5:1 on each surface it is drawn on, in
+    // both appearances; text on the filled accent reads at 4.5:1 too, with
+    // no exemption.
     void accentTextReadsOnEverySurfaceItIsDrawnOn() {
-        for (const bool dark : {false, true})
-            for (const QColor &accent : macAccents()) {
-                const EditorTheme theme = makeEditorTheme(dark, accent);
-                for (const QColor &surface : {theme.panel, theme.rulerCorner, theme.statusBar}) {
-                    const qreal ratio = contrastRatio(theme.accentText, surface);
-                    QVERIFY2(ratio >= 4.5, qPrintable(QStringLiteral("%1 on %2 in %3: %4")
-                                                          .arg(theme.accentText.name(), surface.name(),
-                                                               dark ? QStringLiteral("dark") : QStringLiteral("light"))
-                                                          .arg(ratio, 0, 'f', 2)));
-                }
-                // So does the Source monitor's marked range, at 3:1 on its panel.
-                QVERIFY2(contrastRatio(theme.inOutRange, theme.panel) >= 3.0, qPrintable(accent.name()));
+        for (const bool dark : {false, true}) {
+            const EditorTheme theme = makeEditorTheme(dark);
+            for (const QColor &surface : {theme.panel, theme.rulerCorner, theme.statusBar, theme.raised, theme.window,
+                                          theme.chrome, theme.well, theme.field, theme.dialog, theme.group, theme.chatSurface}) {
+                const qreal ratio = contrastRatio(theme.accentText, surface);
+                QVERIFY2(ratio >= 4.5, qPrintable(QStringLiteral("%1 on %2 in %3: %4")
+                                                      .arg(theme.accentText.name(), surface.name(),
+                                                           dark ? QStringLiteral("dark") : QStringLiteral("light"))
+                                                      .arg(ratio, 0, 'f', 2)));
             }
-        // The dark default reads on the timeline's corner with room to spare.
-        QVERIFY(contrastRatio(makeEditorTheme(true, QColor("#0a84ff")).accentText, QColor("#232325")) >= 5.0);
+            // So does the Source monitor's marked range, at 3:1 on its panel.
+            QVERIFY(contrastRatio(theme.inOutRange, theme.panel) >= 3.0);
+            // Text on the accent's fill, at rest, lit and held.
+            for (const QColor &fill : {theme.accent, theme.accentTop, theme.accentPressed})
+                QVERIFY2(contrastRatio(theme.onAccent, fill) >= 4.5, qPrintable(fill.name()));
+        }
+    }
+
+    // The chrome keeps one type scale: every size the editor's, the docks'
+    // and the launcher's style sheets set, and every size the timeline
+    // paints in, is 11, 12, 13, 14, 16 or 20px. (The chat's composer is
+    // rebuilt separately and keeps its own for now.)
+    void chromeKeepsOneTypeScale() {
+        const QSet<int> scale{11, 12, 13, 14, 16, 20};
+        static const QRegularExpression rule(QStringLiteral("([^{}]+)\\{([^{}]*)\\}"));
+        static const QRegularExpression size(QStringLiteral("font-size:\\s*(\\d+)px"));
+        for (const bool dark : {false, true}) {
+            const EditorTheme t = makeEditorTheme(dark);
+            for (const QString &sheet : {editorStyleSheet(t), dockStyleSheet(t), launcherStyleSheet(launcherTheme(dark))}) {
+                for (auto it = rule.globalMatch(sheet); it.hasNext();) {
+                    const QRegularExpressionMatch match = it.next();
+                    const QString selector = match.captured(1).trimmed();
+                    if (selector.contains(QStringLiteral("composerStatus")) || selector.contains(QStringLiteral("chatSendButton")))
+                        continue;
+                    for (auto sizes = size.globalMatch(match.captured(2)); sizes.hasNext();) {
+                        const int pixels = sizes.next().captured(1).toInt();
+                        QVERIFY2(scale.contains(pixels), qPrintable(QStringLiteral("%1px in %2").arg(pixels).arg(selector)));
+                    }
+                }
+            }
+        }
+        TimelineWidget timeline;
+        QVERIFY(scale.contains(timeline.badgeFont().pixelSize()));
     }
 
     // Colours drawn one on another, each with the ratio it must reach there
     // (4.5:1 for text, 3:1 for symbols, edges and handles), in both
     // appearances; a translucent one is laid on what is under it first.
-    // Pairs that come from the accent are checked with each of macOS's.
     void themeColorsReadWhereTheyAreDrawn_data() {
         QTest::addColumn<QColor>("foreground");
         QTest::addColumn<QColor>("background");
@@ -2966,59 +4314,84 @@ private slots:
             QColor background;
             qreal ratio;
         };
-        for (const bool dark : {false, true})
-            for (const QColor &accent : macAccents()) {
-                const EditorTheme t = makeEditorTheme(dark, accent);
-                const LauncherTheme l = launcherTheme(dark, accent);
-                // Secondary text on a selected row reads as text wherever
-                // white does (whether white does on every accent is the
-                // accent's question, not this token's).
-                std::vector<Pair> pairs{
-                    {"chosen mask tool's symbol on its wash", t.accentText, t.accentTint, 3.0},
-                    {"selected mask's name on its wash", t.buttonText, t.accentTint, 4.5},
-                    {"selected mask's edge on the panel", t.accentText, t.panel, 3.0},
-                    {"secondary text on a selected row", t.onAccentSecondary, t.selection,
-                     std::min(4.5, contrastRatio(Qt::white, t.selection))},
-                    {"launcher: secondary text on a selected row", l.onAccentSecondary, l.selection,
-                     std::min(4.5, contrastRatio(Qt::white, l.selection))},
-                };
-                if (accent == systemAccent(dark)) {
-                    pairs.insert(pairs.end(), {
-                        {"Model field under the pointer", t.text, laidOn(t.field, t.hover), 4.5},
-                        {"Model field under the pointer while sending", t.text, laidOn(t.assistantSurface, t.hover), 4.5},
-                        {"disclosure chevron on a dialog", t.textSecondary, t.dialog, 3.0},
-                        {"disclosure chevron on a dialog's group", t.textSecondary, laidOn(t.dialog, t.group), 3.0},
-                        {"disclosure chevron on a panel", t.textSecondary, t.panel, 3.0},
-                        {"disclosure chevron on a well", t.textSecondary, t.well, 3.0},
-                        {"scroll bar handle on a panel", t.scrollHandle, t.panel, 3.0},
-                        {"scroll bar handle on a well", t.scrollHandle, t.well, 3.0},
-                        {"scroll bar handle on a field", t.scrollHandle, t.field, 3.0},
-                        {"scroll bar handle on a dialog", t.scrollHandle, t.dialog, 3.0},
-                        {"added clip's name on its band", t.assistantText, laidOn(t.trackLane, t.proposalAddFill), 4.5},
-                        {"skimmed playhead on the ruler's top", t.playheadIdle, t.ruler, 3.0},
-                        {"skimmed playhead on the ruler's foot", t.playheadIdle, t.rulerBottom, 3.0},
-                        {"skimmed playhead on a lane", t.playheadIdle, t.trackLane, 3.0},
-                        {"skimmed playhead below the last lane", t.playheadIdle, t.timelineBackground, 3.0},
-                        {"You on the user's message", t.messageUserRole, t.messageUser, 4.5},
-                        {"unreadable preset on the preset list", t.error, t.well, 4.5},
-                        {"launcher: Details chevron on the content", l.secondary, l.content, 3.0},
-                        {"launcher: scroll bar handle on the content", l.scrollHandle, l.content, 3.0},
-                        {"launcher: scroll bar handle on a group", l.scrollHandle, l.group, 3.0},
-                        {"launcher: scroll bar handle on the sidebar", l.scrollHandle, l.sidebar, 3.0},
-                        {"launcher: missing project on an inactive selection", l.secondaryOnSelection, l.selectionInactive, 4.5},
-                    });
-                    for (const QByteArray marker : {"red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink", "white", ""}) {
-                        const QColor color = t.marker(QString::fromLatin1(marker));
-                        const QByteArray name = marker.isEmpty() ? QByteArray("uncoloured") : marker;
-                        pairs.push_back({name + " marker on the ruler's top", color, t.ruler, 3.0});
-                        pairs.push_back({name + " marker on the ruler's foot", color, t.rulerBottom, 3.0});
-                    }
-                }
-                for (const Pair &pair : pairs)
-                    QTest::addRow("%s (%s), %s, %s", pair.what.constData(), qPrintable(pair.foreground.name(QColor::HexArgb)),
-                                  dark ? "dark" : "light", qPrintable(accent.name()))
-                        << pair.foreground << pair.background << pair.ratio;
+        for (const bool dark : {false, true}) {
+            const EditorTheme t = makeEditorTheme(dark);
+            const LauncherTheme l = launcherTheme(dark);
+            std::vector<Pair> pairs{
+                {"chosen mask tool's symbol on its wash", t.accentText, t.accentTint, 3.0},
+                {"chosen mask tool's symbol on its wash, held", t.accentText, t.accentTintPressed, 3.0},
+                {"selected mask's name on its wash", t.buttonText, t.accentTint, 4.5},
+                {"selected mask's name on its wash, held", t.buttonText, t.accentTintPressed, 4.5},
+                {"playhead's head on the ruler's top", t.playhead, t.ruler, 3.0},
+                {"playhead's head on the ruler's foot", t.playhead, t.rulerBottom, 3.0},
+                {"playhead's line on its halo", t.playhead, t.playheadHalo, 3.0},
+                {"text on a selected row", t.selectionText, t.selection, 4.5},
+                {"secondary text on a selected row", t.onAccentSecondary, t.selection, 4.5},
+                {"chosen menu item", t.menuSelectionText, t.menuSelection, 4.5},
+                {"default button's label", t.onAccent, t.accent, 4.5},
+                {"check box's tick", t.onAccent, t.accent, 3.0},
+                {"track toggle's symbol, on", t.trackToggleOnGlyph, t.trackToggleOn, 4.5},
+                {"track toggle's symbol, off", t.trackToggleGlyph, t.trackToggle, 3.0},
+                {"track toggle on beside one off", t.trackToggleOn, t.trackToggle, 3.0},
+                {"picture clip's name", t.clipVideo.label, t.clipVideo.header, 4.5},
+                {"sound clip's name", t.clipAudio.label, t.clipAudio.header, 4.5},
+                {"music clip's name", t.clipMusic.label, t.clipMusic.header, 4.5},
+                {"title clip's name", t.clipGenerator.label, t.clipGenerator.header, 4.5},
+                {"caption clip's name", t.clipCaption.label, t.clipCaption.header, 4.5},
+                {"selected clip's ring on its outer line", t.clipSelectedRing, t.clipSelectedRingOuter, 4.5},
+                {"Model field under the pointer", t.text, laidOn(t.field, t.hover), 4.5},
+                {"Model field under the pointer while sending", t.text, laidOn(t.assistantSurface, t.hover), 4.5},
+                {"disclosure chevron on a dialog", t.textSecondary, t.dialog, 3.0},
+                {"disclosure chevron on a dialog's group", t.textSecondary, laidOn(t.dialog, t.raised), 3.0},
+                {"disclosure chevron on a panel", t.textSecondary, t.panel, 3.0},
+                {"disclosure chevron on a well", t.textSecondary, t.well, 3.0},
+                {"scroll bar handle on a panel", t.scrollHandle, t.panel, 3.0},
+                {"scroll bar handle on a well", t.scrollHandle, t.well, 3.0},
+                {"scroll bar handle on a field", t.scrollHandle, t.field, 3.0},
+                {"scroll bar handle on a dialog", t.scrollHandle, t.dialog, 3.0},
+                {"added clip's name on its band", t.assistantText, laidOn(t.trackLane, t.proposalAddFill), 4.5},
+                {"added clip's name on its band over a locked lane's hatch", t.assistantText,
+                 laidOn(laidOn(t.trackLane, t.trackLaneLocked), t.proposalAddFill), 4.5},
+                {"skimmed playhead's head on the ruler's top", t.playheadIdle, t.ruler, 3.0},
+                {"skimmed playhead's head on the ruler's foot", t.playheadIdle, t.rulerBottom, 3.0},
+                {"skimmed playhead's line on its halo", t.playheadIdle, t.playheadHalo, 3.0},
+                {"You on the user's message", t.messageUserRole, t.messageUser, 4.5},
+                {"unreadable preset on the preset list", t.error, t.well, 4.5},
+                {"Source monitor's message on the stage", t.textSecondary, t.viewerSurround, 4.5},
+                {"chat's secondary text", t.chatSecondary, t.chatSurface, 4.5},
+                {"chat's reply expander", t.chatExpander, t.chatSurface, 4.5},
+                {"Kerf's monogram on its avatar", t.chatAvatarKerfText, t.chatAvatarKerf, 4.5},
+                {"the user's initials on their avatar", t.chatAvatarUserText, t.chatAvatarUser, 4.5},
+                {"chip's label on its wash", t.chatChipText, laidOn(t.chatSurface, t.chatChip), 4.5},
+                {"open chat toggle's symbol on its disc", t.railGlyphActive, laidOn(t.viewerSurround, t.railButtonActive), 3.0},
+                {"rail symbol on its disc", t.railGlyph, laidOn(t.viewerSurround, t.railButton), 3.0},
+                {"rail label on the stage", t.railLabel, t.viewerSurround, 4.5},
+                {"launcher: Details chevron on the content", l.secondary, l.content, 3.0},
+                {"launcher: scroll bar handle on the content", l.scrollHandle, l.content, 3.0},
+                {"launcher: scroll bar handle on a group", l.scrollHandle, l.group, 3.0},
+                {"launcher: scroll bar handle on the sidebar", l.scrollHandle, l.sidebar, 3.0},
+                {"launcher: missing project on an inactive selection", l.secondaryOnSelection, l.selectionInactive, 4.5},
+                {"launcher: text on a selected row", l.selectionText, l.selection, 4.5},
+                {"launcher: secondary text on a selected row", l.onAccentSecondary, l.selection, 4.5},
+                {"launcher: Choose's label", l.onAccent, l.accent, 4.5},
+                {"launcher: Choose's label, lit", l.onAccent, l.accentTop, 4.5},
+                {"launcher: sidebar symbol", l.accent, l.sidebar, 3.0},
+                {"launcher: format tile's frame", l.tileGlyph, l.tile, 3.0},
+                {"launcher: format tile's plus", l.tileGlyph, l.badge, 3.0},
+                {"launcher: switch's knob on the accent", l.knobOn, l.accent, 3.0},
+                {"launcher: tooltip", l.tooltipText, l.tooltip, 4.5},
+            };
+            for (const QByteArray marker : {"red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink", "white", ""}) {
+                const QColor color = t.marker(QString::fromLatin1(marker));
+                const QByteArray name = marker.isEmpty() ? QByteArray("uncoloured") : marker;
+                pairs.push_back({name + " marker on the ruler's top", color, t.ruler, 3.0});
+                pairs.push_back({name + " marker on the ruler's foot", color, t.rulerBottom, 3.0});
             }
+            for (const Pair &pair : pairs)
+                QTest::addRow("%s (%s), %s", pair.what.constData(), qPrintable(pair.foreground.name(QColor::HexArgb)),
+                              dark ? "dark" : "light")
+                    << pair.foreground << pair.background << pair.ratio;
+        }
     }
     void themeColorsReadWhereTheyAreDrawn() {
         QFETCH(QColor, foreground);
@@ -3033,15 +4406,20 @@ private slots:
     }
 
     // States meant to differ still do: the skimmed playhead is a grey that
-    // reads less than the playhead itself, and a scroll bar's handle under
-    // the pointer or held reads more than at rest.
+    // reads clearly less than the playhead itself wherever either is drawn
+    // (the ruler for their heads, their solid halo for their lines); and a
+    // scroll bar's handle under the pointer or held reads more than at rest.
     void quietAndActiveStatesStayApart() {
         for (const bool dark : {false, true}) {
-            const EditorTheme t = makeEditorTheme(dark, systemAccent(dark));
-            QVERIFY(t.playheadIdle.hsvSaturation() < 20);
-            for (const QColor &surface : {t.ruler, t.rulerBottom, t.trackLane, t.timelineBackground})
-                QVERIFY2(contrastRatio(t.playheadIdle, surface) < contrastRatio(t.playhead, surface), qPrintable(surface.name()));
-            const LauncherTheme l = launcherTheme(dark, systemAccent(dark));
+            const EditorTheme t = makeEditorTheme(dark);
+            QVERIFY(t.playheadIdle.hsvSaturation() < 70);
+            QCOMPARE(t.playheadHalo.alpha(), 255);
+            for (const QColor &surface : {t.ruler, t.rulerBottom, t.playheadHalo})
+                QVERIFY2(contrastRatio(t.playheadIdle, surface) + 0.35 <= contrastRatio(t.playhead, surface),
+                         qPrintable(QStringLiteral("%1 and %2 on %3").arg(t.playheadIdle.name(), t.playhead.name(), surface.name())));
+            // The playhead is Kerf's accent, as it is.
+            QCOMPARE(t.playhead.rgb(), kerfAccent(dark).rgb());
+            const LauncherTheme l = launcherTheme(dark);
             const auto stronger = [](const QColor &rest, const QColor &active, const QColor &surface) {
                 return contrastRatio(laidOn(surface, active), surface) > contrastRatio(laidOn(surface, rest), surface) + 1.0;
             };
@@ -3052,12 +4430,14 @@ private slots:
         }
         // Both sheets give the stronger handle to a held one as well as a hovered one.
         QVERIFY(editorStyleSheet(editorTheme()).contains(QStringLiteral("QScrollBar::handle:vertical:pressed")));
-        QVERIFY(launcherStyleSheet(launcherTheme(true, systemAccent(true))).contains(QStringLiteral("QScrollBar::handle:vertical:pressed")));
+        QVERIFY(launcherStyleSheet(launcherTheme(true)).contains(QStringLiteral("QScrollBar::handle:vertical:pressed")));
     }
 
     // The chosen mask tool and the selected mask stand out from the others,
-    // at rest, under the pointer and held, and the Assistant's Model field
-    // reads on its hover wash, in both appearances.
+    // at rest, under the pointer and held (darkening while held, as every
+    // bezel does), in Effect Controls and in the Program panel's title
+    // strip alike; and the Assistant's Model field reads on its hover wash,
+    // in both appearances.
     void chosenMasksAndToolsStandOut() {
         const auto restore = qScopeGuard([] {
             setEditorColorScheme(ColorScheme::Dark);
@@ -3105,8 +4485,9 @@ private slots:
                 return color;
             };
 
-            // The chosen tool is an accent wash, its symbol the accent, which
-            // reads on the wash; the others keep the plain bezel and glyph.
+            // The chosen tool is a quiet accent wash with no outline, its
+            // symbol the accent, which reads on the wash; the others keep the
+            // plain bezel and glyph.
             auto *rectangle = window.findChild<QAction *>(QStringLiteral("maskRectangle"));
             QVERIFY(rectangle && rectangle->isEnabled());
             rectangle->trigger();
@@ -3119,10 +4500,27 @@ private slots:
             QCOMPARE(fill(other), theme.button.rgb());
             QCOMPARE(hovered(other), theme.buttonHover.rgb());
             QCOMPARE(held(other), theme.buttonPressed.rgb());
-            for (const QRgb wash : {fill(chosen), hovered(chosen), held(chosen)}) QCOMPARE(wash, theme.accentTint.rgb());
+            for (const QRgb wash : {fill(chosen), hovered(chosen)}) QCOMPARE(wash, theme.accentTint.rgb());
+            QCOMPARE(held(chosen), theme.accentTintPressed.rgb());
+            // Its edge is the wash (or the panel behind it), never a line in the accent.
+            const QImage chosenShot = chosen->grab().toImage();
+            for (const int x : {0, 1})
+                QVERIFY(contrastRatio(chosenShot.pixelColor(QPoint(x, chosen->height() / 2) * chosenShot.devicePixelRatio()),
+                                      theme.accentText) >= 2.0);
+            QVERIFY(qGray(theme.accentTintPressed.rgb()) < qGray(theme.accentTint.rgb()));
             QCOMPARE(ink(chosen->icon(), QIcon::Normal, QIcon::On), theme.accentText.rgb());
             QCOMPARE(ink(other->icon()), theme.glyph.rgb());
             QVERIFY(contrastRatio(theme.accentText, theme.accentTint) >= 3.0);
+            // The Program panel's title strip carries the same tools, and
+            // shows the chosen one the same way.
+            QToolButton *strip = nullptr;
+            for (QToolButton *button : window.m_workspace->panel(QStringLiteral("program"))
+                                           ->dockAreaWidget()->findChildren<QToolButton *>(QStringLiteral("maskRectangle")))
+                if (button->defaultAction() == rectangle) strip = button;
+            QVERIFY(strip && strip->isVisible() && strip->isChecked());
+            for (const QRgb wash : {fill(strip), hovered(strip)}) QCOMPARE(wash, theme.accentTint.rgb());
+            QCOMPARE(held(strip), theme.accentTintPressed.rgb());
+            QCOMPARE(ink(strip->icon(), QIcon::Normal, QIcon::On), theme.accentText.rgb());
             rectangle->trigger();
             QVERIFY(!rectangle->isChecked());
             QCOMPARE(fill(chosen), theme.button.rgb());
@@ -3133,7 +4531,8 @@ private slots:
             for (QToolButton *name : window.m_effectControls->findChildren<QToolButton *>(QStringLiteral("maskName")))
                 (name->text() == QStringLiteral("k1") ? selected : unselected) = name;
             QVERIFY(selected && unselected && selected->isVisible() && selected->isChecked() && !unselected->isChecked());
-            for (const QRgb wash : {fill(selected), hovered(selected), held(selected)}) QCOMPARE(wash, theme.accentTint.rgb());
+            for (const QRgb wash : {fill(selected), hovered(selected)}) QCOMPARE(wash, theme.accentTint.rgb());
+            QCOMPARE(held(selected), theme.accentTintPressed.rgb());
             QCOMPARE(fill(unselected), theme.button.rgb());
             QVERIFY(theme.accentTint.rgb() != theme.button.rgb());
 
@@ -3151,13 +4550,13 @@ private slots:
 
     // A colour well's swatch is ringed in a grey that reads at 3:1 against
     // white and black alike, so a white swatch shows on the light bezel and
-    // a black one on the dark.
+    // a black one on the dark, without a light halo on the dark bezel.
     void colorWellsRingWhiteAndBlackSwatches() {
         QPushButton well;
         well.setIconSize(QSize(32, 12));
         for (const bool dark : {false, true}) {
             const QColor value = dark ? QColor(Qt::black) : QColor(Qt::white);
-            const QColor bezel = makeEditorTheme(dark, systemAccent(dark)).button;
+            const QColor bezel = makeEditorTheme(dark).button;
             EffectControlsPanel::setPropertyValue(&well, value.name());
             const QImage swatch = well.icon().pixmap(well.iconSize(), 2.0).toImage();
             QCOMPARE(swatch.size(), well.iconSize() * 2);
@@ -3165,7 +4564,12 @@ private slots:
             // The ring's outer half, solid at twice the size, as it shows on the bezel.
             const QColor ring = laidOn(bezel, swatch.pixelColor(0, swatch.height() / 2));
             QVERIFY2(contrastRatio(ring, value) >= 3.0, qPrintable(ring.name()));
+            // It shows on the light bezel, and on the dark one keeps to the
+            // bezel's own grey rather than ringing the swatch in light.
+            // (The dark bezel is a deep espresso, so a ring that reads on
+            // black stays a step above it, never a light halo.)
             if (!dark) QVERIFY2(contrastRatio(ring, bezel) >= 3.0, qPrintable(ring.name()));
+            else QVERIFY2(contrastRatio(ring, bezel) < 2.0 && ring.lightness() < bezel.lightness() + 50, qPrintable(ring.name()));
         }
     }
 
@@ -3220,6 +4624,41 @@ private slots:
                      qPrintable(QStringLiteral("%1, not %2").arg(drawn.name(), expected.name())));
             QVERIFY(contrastRatio(theme.assistantText, drawn) >= 4.5);
         }
+
+        // On a locked track the band keeps the lane's hatch, so the lock
+        // shows under the name too, and the name still reads on it.
+        QJsonObject locked = timeline(QJsonArray{wide});
+        QJsonObject lockedProposal = timeline(QJsonArray{wide, inserted});
+        for (QJsonObject *object : {&locked, &lockedProposal}) {
+            QJsonArray tracks = object->value("tracks").toArray();
+            QJsonObject track = tracks.at(0).toObject();
+            track.insert("locked", true);
+            tracks.replace(0, track);
+            object->insert("tracks", tracks);
+        }
+        widget.setProject(locked, 10, 24);
+        widget.setProposal(lockedProposal);
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            const EditorTheme &theme = editorTheme();
+            const QImage image = widget.grab().toImage();
+            const auto near = [](const QColor &a, const QColor &b) {
+                return std::abs(a.red() - b.red()) <= 2 && std::abs(a.green() - b.green()) <= 2 && std::abs(a.blue() - b.blue()) <= 2;
+            };
+            const QColor bare = laidOn(theme.trackLane, theme.proposalAddFill);
+            const QColor hatch = laidOn(laidOn(theme.trackLane, theme.trackLaneLocked), theme.proposalAddFill);
+            QVERIFY(!near(bare, hatch));
+            // Along the band, clear of the name: the hatch's lines cross it.
+            int lines = 0;
+            int plain = 0;
+            for (int x = band.x() - 16; x <= band.x() + 16; ++x) {
+                const QColor drawn = image.pixelColor(QPoint(x, band.y()) * image.devicePixelRatio());
+                lines += near(drawn, hatch) ? 1 : 0;
+                plain += near(drawn, bare) ? 1 : 0;
+            }
+            QVERIFY2(lines >= 3 && plain >= 3, qPrintable(QStringLiteral("%1 hatch, %2 plain").arg(lines).arg(plain)));
+            QVERIFY(contrastRatio(theme.assistantText, hatch) >= 4.5);
+        }
     }
 
     void editorRendersBothAppearances() {
@@ -3254,8 +4693,13 @@ private slots:
             QCOMPARE(editorColorScheme(), scheme);
             const EditorTheme &theme = editorTheme();
             QCOMPARE(theme.dark, dark);
-            QVERIFY(dark ? theme.window.lightness() < 40 : theme.window.lightness() > 220);
+            for (const QColor &surface : {theme.window, theme.panel, theme.chrome, theme.well, theme.field, theme.dialog,
+                                          theme.chatSurface, theme.viewerSurround})
+                QVERIFY2(isWarmPaper(surface, dark), qPrintable(surface.name()));
             QVERIFY(dark ? theme.text.lightness() > 180 : theme.text.lightness() < 60);
+            // Text is warm near-black or cream, never pure black or white.
+            QVERIFY(theme.text.rgb() != QColor(Qt::black).rgb() && theme.text.rgb() != QColor(Qt::white).rgb());
+            QVERIFY(theme.textStrong.rgb() != QColor(Qt::black).rgb() && theme.textStrong.rgb() != QColor(Qt::white).rgb());
             // Every token is filled in, and nothing amber or gold is left.
             const QString sheet = qApp->styleSheet() + dockStyleSheet(theme);
             QVERIFY(!sheet.contains(QLatin1Char('@')));
@@ -3310,7 +4754,11 @@ private slots:
             QVERIFY(contrastRatio(theme.tileEmptyText, theme.tileEmpty) >= 4.5);
             QVERIFY(contrastRatio(theme.cardPlaceholderText, theme.cardPlaceholder) >= 4.5);
             QVERIFY(contrastRatio(theme.badgeInfoText, theme.badgeInfo) >= 4.5);
-            QVERIFY(contrastRatio(theme.viewerTextDim, theme.viewerSurround) >= 4.5);
+            // The empty viewer's hint is on the black card; the Source
+            // monitor's message is on the stage, which follows the appearance.
+            QVERIFY(contrastRatio(theme.viewerTextDim, theme.viewerCanvas) >= 4.5);
+            QVERIFY(contrastRatio(theme.viewerText, theme.viewerCanvas) >= 4.5);
+            QVERIFY(contrastRatio(theme.textSecondary, theme.viewerSurround) >= 4.5);
             QVERIFY(contrastRatio(theme.textSecondary, theme.panel) >= 4.5);
             QVERIFY(contrastRatio(theme.statusText, theme.statusBar) >= 4.5);
             // Placeholders carry guidance (example searches, what to ask), so
@@ -3326,7 +4774,11 @@ private slots:
             // A button focused from the keyboard is ringed in the accent at 35%.
             QCOMPARE(theme.focusHalo.rgb(), theme.accent.rgb());
             QCOMPARE(theme.focusHalo.alpha(), 89);
-            QCOMPARE(theme.viewerSurround, QColor("#1c1c1c"));
+            // The viewer's stage follows the appearance (cream or espresso,
+            // a step deeper than the panels), and the picture card is the
+            // same warm black in both.
+            QCOMPARE(theme.viewerSurround.rgb(), (dark ? QColor("#120e0b") : QColor("#e6dece")).rgb());
+            QCOMPARE(theme.viewerCanvas.rgb(), QColor("#0a0807").rgb());
 
             MainWindow window{QString(), QString()};
             window.setConnection(QStringLiteral("ready"));
@@ -3351,7 +4803,10 @@ private slots:
             // Nothing under the pointer.
             QTest::mouseMove(window.statusBar(), QPoint(window.statusBar()->width() / 2, 4));
             QVERIFY(window.m_timeline->hasProposal());
-            QVERIFY(window.m_aiBar->isVisible());
+            // The conversation is open beside the picture, so it, not the
+            // timeline's bar, carries the proposal.
+            QVERIFY(window.m_workspace->assistantOpen());
+            QVERIFY(!window.m_aiBar->isVisible());
             QCoreApplication::processEvents();
             const QImage image = window.grab().toImage();
             // The bars are the theme's: toolbar, status bar, and dock title strips.
@@ -3382,6 +4837,30 @@ private slots:
                 QCOMPARE(controls.at(i)->x() - controls.at(i - 1)->geometry().right() - 1, 8);
             QCOMPARE(render->height(), window.m_quality->height());
             QCOMPARE(dominantColor(render->grab().toImage()), (render->isEnabled() ? theme.button : theme.buttonDisabled).rgb());
+            // Kerf's conversation is open, so its switch at the toolbar's end,
+            // a group of its own, is chosen: a quiet accent wash with no
+            // outline, its bubble the accent, as a chosen mode in a title strip.
+            QToolButton *chat = window.m_chatToggle;
+            QVERIFY(chat->isVisible() && chat->isChecked());
+            QVERIFY(chat->x() - render->geometry().right() - 1 > 8);
+            QCOMPARE(chat->height(), render->height());
+            {
+                // The bezel's fill, clear of its edge and its symbol: at rest,
+                // under the pointer, and held.
+                const auto fill = [chat] {
+                    const QImage image = chat->grab().toImage();
+                    return image.pixelColor(QPoint(3, chat->height() / 2) * image.devicePixelRatio()).rgb();
+                };
+                QCOMPARE(fill(), theme.accentTint.rgb());
+                chat->setAttribute(Qt::WA_UnderMouse, true);
+                QCOMPARE(fill(), theme.accentTint.rgb());
+                chat->setAttribute(Qt::WA_UnderMouse, false);
+                chat->setDown(true);
+                QCOMPARE(fill(), theme.accentTintPressed.rgb());
+                chat->setDown(false);
+                QCOMPARE(ink(chat->icon(), QIcon::Normal, QIcon::On), theme.accentText.rgb());
+                QCOMPARE(ink(chat->icon(), QIcon::Normal, QIcon::Off), theme.glyph.rgb());
+            }
 #if defined(Q_OS_MACOS) && QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
             // The toolbar is the title bar: the window runs up under a
             // transparent one, and its commands start past the window buttons.
@@ -3405,8 +4884,12 @@ private slots:
                 for (const QPalette::ColorGroup group : {QPalette::Active, QPalette::Inactive})
                     QCOMPARE(field->palette().color(group, QPalette::PlaceholderText), theme.placeholderText);
             }
-            // Timecodes in the accent sit on the panel accentText is made to read on.
-            const auto times = window.findChildren<QLabel *>(QStringLiteral("transportTime"));
+            // Timecodes in the accent sit on the panel accentText is made to
+            // read on: the Program monitor's, and the Source monitor's, a tab
+            // behind it.
+            QList<QLabel *> times = window.findChildren<QLabel *>(QStringLiteral("transportTime"));
+            for (QLabel *time : window.m_sourceMonitor->findChildren<QLabel *>(QStringLiteral("transportTime")))
+                if (!times.contains(time)) times.append(time);
             QCOMPARE(times.size(), 2);
             for (QLabel *time : times) {
                 QCOMPARE(time->palette().color(QPalette::WindowText).rgb(), theme.accentText.rgb());
@@ -3414,11 +4897,6 @@ private slots:
             }
             // The launcher's chrome: #f5f5f5 in light, #2c2c2e in dark.
             QVERIFY(dark ? qGray(dominantColor(toolbar->grab().toImage())) < 60 : qGray(dominantColor(toolbar->grab().toImage())) > 220);
-            // The agent's bar is the window's chrome with a purple stripe, not amber.
-            const QImage aiBar = window.m_aiBar->grab().toImage();
-            QCOMPARE(dominantColor(aiBar), theme.chrome.rgb());
-            QCOMPARE(aiBar.pixelColor(QPoint(1, aiBar.height() / 2) * aiBar.devicePixelRatio()), theme.assistant);
-            QCOMPARE(amberPixels(aiBar), 0);
             // Tabs show no close button until the pointer is over them; then
             // it reads on the tab.
             const auto closeButtons = window.findChildren<QWidget *>(QStringLiteral("tabCloseButton"));
@@ -3463,10 +4941,24 @@ private slots:
                 QVERIFY(detail && detail->isVisible() && !detail->isEnabled());
                 QCOMPARE(dominantColor(detail->parentWidget()->grab(detail->geometry()).toImage()), theme.panelTitle.rgb());
             }
-            // The AI bar's buttons are the launcher's 22px.
-            for (QWidget *control : window.m_aiBar->findChildren<QToolButton *>())
-                if (control->isVisible()) QCOMPARE(control->height(), 22);
             save(image, QStringLiteral("editor-%1").arg(name));
+            // With the conversation closed, the timeline's bar stands in for
+            // it: the window's chrome with a purple stripe, not amber, and
+            // the launcher's 22px buttons.
+            window.m_workspace->setAssistantOpen(false);
+            QCoreApplication::processEvents();
+            QVERIFY(window.m_aiBar->isVisible());
+            {
+                const QImage aiBar = window.m_aiBar->grab().toImage();
+                QCOMPARE(dominantColor(aiBar), theme.chrome.rgb());
+                QCOMPARE(aiBar.pixelColor(QPoint(1, aiBar.height() / 2) * aiBar.devicePixelRatio()), theme.assistant);
+                QCOMPARE(amberPixels(aiBar), 0);
+                for (QWidget *control : window.m_aiBar->findChildren<QToolButton *>())
+                    if (control->isVisible()) QCOMPARE(control->height(), 22);
+            }
+            window.m_workspace->setAssistantOpen(true);
+            QCoreApplication::processEvents();
+            QVERIFY(!window.m_aiBar->isVisible());
 
             // The toolbar's pop-up opens as macOS's menu: rounded, clipped to
             // its corners, a 22px row per choice, and the row under the
@@ -3676,7 +5168,7 @@ private slots:
             window.m_errorBanner->hide();
             QCoreApplication::processEvents();
             QVERIFY(!window.m_divergedBanner->isHidden());
-            QVERIFY(window.m_aiBar->isVisible());
+            QVERIFY(!window.m_aiBar->isVisible());
             // The proposal's default button, Accept, is the accent.
             QPushButton *primary = window.m_acceptButton;
             QVERIFY(primary->isVisible() && primary->isEnabled());
@@ -3708,8 +5200,11 @@ private slots:
             QVERIFY(window.m_rejectButton->geometry().right() < window.m_acceptButton->geometry().left());
             QCOMPARE(window.m_acceptButton->height(), 22);
             // So does every other row of buttons, as macOS orders them: the
-            // timeline's bar ends in Accept and the banner in Load from Disk,
-            // each 8px past the button before it.
+            // timeline's bar (shown with the conversation closed) ends in
+            // Accept and the banner in Load from Disk, each 8px past the
+            // button before it.
+            window.m_workspace->setAssistantOpen(false);
+            QCoreApplication::processEvents();
             {
                 QList<QWidget *> bar;
                 for (QToolButton *button : window.m_aiBar->findChildren<QToolButton *>())
@@ -3719,11 +5214,10 @@ private slots:
                 QCOMPARE(bar.constLast()->objectName(), QStringLiteral("aiAccept"));
                 for (int i = 1; i < bar.size(); ++i) QCOMPARE(bar.at(i)->x() - bar.at(i - 1)->geometry().right() - 1, 8);
                 QCOMPARE(window.m_loadFromDisk->x() - window.m_keepEditorVersion->geometry().right() - 1, 8);
-                // Their trailing buttons line up with the toolbar's Render,
-                // 8px in from the window's edge.
-                auto *render = window.findChild<QToolButton *>(QStringLiteral("toolbarQuiet"));
-                QVERIFY(render);
-                for (QWidget *trailing : std::initializer_list<QWidget *>{render, window.m_loadFromDisk, bar.constLast()})
+                // Their trailing buttons line up with the toolbar's last
+                // control, the conversation's switch, 8px in from the
+                // window's edge.
+                for (QWidget *trailing : std::initializer_list<QWidget *>{window.m_chatToggle, window.m_loadFromDisk, bar.constLast()})
                     QCOMPARE(trailing->mapTo(&window, QPoint(trailing->width(), 0)).x(), window.width() - 8);
             }
             // Kerf's suggestions are purple pills sized to their labels.
@@ -3736,6 +5230,8 @@ private slots:
                     QVERIFY(chip->width() < 160);
                 }
             }
+            window.m_workspace->setAssistantOpen(true);
+            QCoreApplication::processEvents();
             // The bar and its text are neutral; only the 14-point triangle is orange.
             for (QWidget *part : window.m_divergedBanner->findChildren<QWidget *>(Qt::FindDirectChildrenOnly))
                 if (part != window.m_divergedGlyph) QCOMPARE(amberPixels(part->grab().toImage()), 0);
@@ -3896,6 +5392,151 @@ private slots:
         QCOMPARE(changed.count(), before + 1);
     }
 
+    // The whole editor in the Editing workspace with Kerf's conversation
+    // open beside the picture, as a Short shows with its comments open: a
+    // 16:9, a 9:16 and a 1:1 project, in both appearances. The picture is as
+    // large as the viewer allows, in the project's shape, and the
+    // conversation's column sits directly on the viewer's right, the full
+    // height of the row. With KERF_SCREENSHOT_DIR set, each is saved as
+    // editor-<format>-<scheme>.png, and the 9:16 one with the conversation
+    // closed as editor-9x16-closed-<scheme>.png.
+    void editorShowsEveryFormatBesideItsConversation() {
+        QSettings().remove(QStringLiteral("workspace"));
+        const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
+        const auto restore = qScopeGuard([] {
+            setEditorColorScheme(ColorScheme::Dark);
+            QSettings().remove(QStringLiteral("workspace"));
+        });
+        // A harbor at dawn in the project's shape (the tests' procedural
+        // footage): sky over the water, whose lower part is a dark blue-grey.
+        const auto picture = [](const QSize &size) { return testing::footageFrame(testing::Shot::HarborWide, size); };
+        struct Format {
+            const char *name;
+            QSize canvas;
+        };
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            const EditorTheme &theme = editorTheme();
+            for (const Format &format : {Format{"16x9", QSize(1920, 1080)}, Format{"9x16", QSize(1080, 1920)}, Format{"1x1", QSize(1080, 1080)}}) {
+                QSettings().remove(QStringLiteral("workspace"));
+                QJsonObject snapshot = showcaseSnapshot(12, QStringLiteral("clean"));
+                QJsonObject timeline = snapshot.value(QStringLiteral("timeline")).toObject();
+                timeline.insert(QStringLiteral("width"), format.canvas.width());
+                timeline.insert(QStringLiteral("height"), format.canvas.height());
+                snapshot.insert(QStringLiteral("timeline"), timeline);
+                snapshot.remove(QStringLiteral("pendingProposal"));
+                snapshot.remove(QStringLiteral("proposalTimeline"));
+                MainWindow window{QString(), QString()};
+                window.setConnection(QStringLiteral("ready"));
+                window.applySnapshot(snapshot);
+                window.handleEvent(QJsonObject{{"type", "collab"}, {"status", sharedStatus()}});
+                fakeArtwork(window.m_artwork);
+                window.resize(1440, 900);
+                window.show();
+                QVERIFY(QTest::qWaitForWindowExposed(&window));
+                window.m_errorBanner->hide();
+                window.m_viewer->setFrame(picture(format.canvas / 4), 0.0);
+                window.appendConversation(QStringLiteral("You"), QStringLiteral("Tighten the fisher close-up and drop the drone pass."));
+                window.appendConversation(QStringLiteral("Kerf"),
+                    QStringLiteral("I trimmed the close-up by 1.5 seconds, removed the drone pass, and added a lower third at 12 s."));
+                window.appendConversationNote(QStringLiteral("Tool"), QStringLiteral("Trimmed v1b · removed v1c"));
+                window.appendConversation(QStringLiteral("You"), QStringLiteral("Now caption the dialogue."));
+                window.showNextSteps(QJsonArray{QJsonObject{{"label", "Add captions"}, {"request", "Caption the dialogue"}},
+                                                QJsonObject{{"label", "Duck the music"}, {"request", "Lower the music under the dialogue"}},
+                                                QJsonObject{{"label", "Match the colour"}, {"request", "Match the close-up to the wide"}}});
+                QTest::mouseMove(window.statusBar(), QPoint(window.statusBar()->width() / 2, 4));
+                QCoreApplication::processEvents();
+                const QString label = QString::fromLatin1(format.name);
+                QCOMPARE(window.m_canvasSize, format.canvas);
+
+                ads::CDockAreaWidget *viewerArea = window.m_workspace->panel(QStringLiteral("program"))->dockAreaWidget();
+                ads::CDockAreaWidget *chatArea = window.m_workspace->panel(QStringLiteral("assistant"))->dockAreaWidget();
+                QVERIFY(window.m_viewer->isVisible() && chatArea->isVisible());
+                QVERIFY(!window.m_sourceMonitor->isVisible());
+                const QRect viewerRect(viewerArea->mapTo(&window, QPoint()), viewerArea->size());
+                const QRect chatRect(chatArea->mapTo(&window, QPoint()), chatArea->size());
+                QVERIFY2(chatRect.left() - viewerRect.right() <= 3, qPrintable(label));
+                QCOMPARE(chatRect.top(), viewerRect.top());
+                QCOMPARE(chatRect.bottom(), viewerRect.bottom());
+                QCOMPARE(chatRect.right(), window.width() - 1);
+                // The picture keeps the project's shape and fills the viewer
+                // one way or the other, inside its 8px margin.
+                const QRectF video = window.m_viewer->videoRect();
+                QVERIFY2(std::abs(video.width() / video.height() - double(format.canvas.width()) / format.canvas.height()) < 0.01,
+                         qPrintable(label));
+                const QRectF room = QRectF(window.m_viewer->rect()).adjusted(8, 8, -8, -8);
+                QVERIFY2(std::abs(video.height() - room.height()) < 1 || std::abs(video.width() - room.width()) < 1, qPrintable(label));
+                QVERIFY(room.contains(video.adjusted(0.5, 0.5, -0.5, -0.5)));
+                const QImage image = window.grab().toImage();
+                const qreal ratio = image.devicePixelRatio();
+                const auto at = [&](const QPointF &viewerPoint) {
+                    return image.pixelColor((QPointF(window.m_viewer->mapTo(&window, QPoint())) + viewerPoint).toPoint() * ratio).rgb();
+                };
+                // Whether the 7 by 7 area at `viewerPoint` is the water: its
+                // average a dark blue-grey (blue above red), as no stage,
+                // card or panel is. Averaged, so the footage's grain and
+                // ripples do not matter.
+                const auto water = [&](const QPointF &viewerPoint) {
+                    double red = 0, green = 0, blue = 0;
+                    const QPoint centre = (QPointF(window.m_viewer->mapTo(&window, QPoint())) + viewerPoint).toPoint();
+                    for (int dy = -3; dy <= 3; ++dy)
+                        for (int dx = -3; dx <= 3; ++dx) {
+                            const QColor c = image.pixelColor((centre + QPoint(dx, dy)) * ratio);
+                            red += c.red(); green += c.green(); blue += c.blue();
+                        }
+                    red /= 49; green /= 49; blue /= 49;
+                    return blue > red + 12 && (red + green + blue) / 3 < 110;
+                };
+                // The water, in the picture. A picture narrower than the viewer
+                // sits against the conversation, as a Short against its
+                // comments, the viewer's surround on its other side.
+                QVERIFY2(water(QPointF(video.center().x(), video.top() + video.height() * 0.85)), qPrintable(label));
+                QVERIFY(!water(QPointF(video.left() - 4, video.center().y())));
+                const bool pillarboxed = video.width() < room.width() - 1;
+                QCOMPARE(pillarboxed, format.canvas.width() <= format.canvas.height());
+                if (pillarboxed) {
+                    const int pictureRight = window.m_viewer->mapTo(&window, QPoint()).x() + int(std::ceil(video.right()));
+                    QVERIFY2(chatRect.left() - pictureRight <= 16, qPrintable(QStringLiteral("%1: %2 px").arg(label).arg(chatRect.left() - pictureRight)));
+                    QVERIFY2(water(QPointF(video.right() - 6, video.top() + video.height() * 0.85)), qPrintable(label));
+                    QCOMPARE(at(QPointF(video.left() - 4, video.center().y())), theme.viewerSurround.rgb());
+                }
+                // The conversation's column: the well, under its header with
+                // its close button, and nothing in it wider than it.
+                QWidget *column = window.findChild<QWidget *>(QStringLiteral("assistantPanel"));
+                QCOMPARE(image.pixelColor((column->mapTo(&window, QPoint(2, column->height() - 2))) * ratio).rgb(), theme.well.rgb());
+                QToolButton *close = chatArea->findChild<QToolButton *>(QStringLiteral("assistantClose"));
+                QVERIFY(close && close->isVisible());
+                QVERIFY(window.m_chatScroll->widget()->minimumSizeHint().width() <= window.m_chatScroll->viewport()->width());
+                QVERIFY(window.m_chatToggle->isChecked());
+                // Its next steps show once, in it, not again over the timeline.
+                QVERIFY(window.m_chatNextSteps->isVisible() && !window.m_aiBar->isVisible());
+                QCOMPARE(amberPixels(image), 0);
+                const QString scheme = theme.dark ? QStringLiteral("dark") : QStringLiteral("light");
+                if (!shots.isEmpty()) QVERIFY(image.save(QDir(shots).filePath(QStringLiteral("editor-%1-%2.png").arg(label, scheme))));
+                // With the conversation closed from the toolbar, the viewer
+                // runs to the window's edge and the picture recentres in it.
+                if (format.canvas.width() < format.canvas.height()) {
+                    window.m_chatToggle->click();
+                    QCoreApplication::processEvents();
+                    QVERIFY(!chatArea->isVisible() && !window.m_chatToggle->isChecked());
+                    // Closed, the timeline's bar stands in for it with the next steps.
+                    QVERIFY(window.m_aiBar->isVisible());
+                    QCOMPARE(viewerArea->mapTo(&window, QPoint(viewerArea->width(), 0)).x(), window.width());
+                    QVERIFY(std::abs(window.m_viewer->videoRect().center().x() - window.m_viewer->width() / 2.0) < 1);
+                    const QImage closed = window.grab().toImage();
+                    QCOMPARE(amberPixels(closed), 0);
+                    if (!shots.isEmpty()) QVERIFY(closed.save(QDir(shots).filePath(QStringLiteral("editor-%1-closed-%2.png").arg(label, scheme))));
+                    // Opened again, the picture is back against it.
+                    window.m_chatToggle->click();
+                    QCoreApplication::processEvents();
+                    QVERIFY(chatArea->isVisible());
+                    QCOMPARE(window.m_viewer->videoRect(), video);
+                }
+                window.close();
+            }
+        }
+    }
+
     // Push buttons and pop-up buttons take focus from Tab alone, as macOS's
     // do, so a click leaves no accent behind. Tab rings the control in the
     // accent at 35%, 3px outside its bezel, and the ring moves with the
@@ -4012,16 +5653,9 @@ private slots:
             if (!shots.isEmpty()) QVERIFY(image.save(QDir(shots).filePath(name + QStringLiteral(".png"))));
         };
         const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
-        // A blue picture, on which outlines in the (blue) accent must still read.
-        QImage picture(1920, 1080, QImage::Format_RGB32);
-        {
-            QPainter painter(&picture);
-            QLinearGradient sky(0, 0, 0, 1080);
-            sky.setColorAt(0, QColor("#9cc3ea"));
-            sky.setColorAt(0.6, QColor("#3d78c2"));
-            sky.setColorAt(1, QColor("#1b3350"));
-            painter.fillRect(picture.rect(), sky);
-        }
+        // Footage (the harbor at dawn: sky, hills and water), on which the
+        // masks' outlines and names must read.
+        const QImage picture = testing::footageFrame(testing::Shot::HarborWide, QSize(960, 540));
         // Made in the tests' dark appearance, so the loop below sees them redraw.
         MediaArtwork artwork;
         artwork.frames.insert(QStringLiteral("m1"), picture.scaled(160, 90));
@@ -4072,7 +5706,7 @@ private slots:
             QCOMPARE(view.pixelColor(QPoint(2, 2) * ratio), theme.viewerSurround);
             const QPointF corner = viewer.pictureToWidget().map(QPointF(0.2, 0.15));
             QCOMPARE(view.pixelColor((corner * ratio).toPoint()), theme.maskHandleFill);
-            // The selected mask's name is white over the (blue) picture.
+            // The selected mask's name is light over the picture.
             const QRect nameArea = QRectF(corner + QPointF(3, -16), QSizeF(16, 13)).toAlignedRect();
             int lightest = 0;
             for (int y = nameArea.top(); y <= nameArea.bottom(); ++y)
@@ -4142,6 +5776,9 @@ private slots:
             QCOMPARE(cardPixel("light.edgeglow"), QColor(Qt::red));
             effects.show();
             QVERIFY(QTest::qWaitForWindowExposed(&effects));
+            // Nothing under the pointer.
+            QTest::mouseMove(&effects, QPoint(effects.width() - 2, effects.height() - 2));
+            effects.m_category->setAttribute(Qt::WA_UnderMouse, false);
             const QImage browser = effects.grab().toImage();
             // The category pop-up is a button's bezel, as every pop-up is.
             QVERIFY(popUpHasButtonBezel(browser, effects.m_category, theme.button));
