@@ -109,7 +109,19 @@ if(APPLE)
     set(KERF_QT_PLATFORM_LIBRARIES "-framework AppKit")
 endif()
 
-add_executable(kerf-qt main.cpp ${KERF_QT_SOURCES})
+# The sources the editor and its tests share, compiled once for both. The
+# window and the launcher behave differently under KERF_QT_TESTING, so each
+# executable compiles its own; their headers go with them, since AUTOMOC
+# runs moc on a source's header in whichever target compiles the source.
+set(KERF_QT_VARIANT_SOURCES main_window.cpp main_window.h project_launcher.cpp project_launcher.h)
+set(KERF_QT_SHARED_SOURCES ${KERF_QT_SOURCES})
+list(REMOVE_ITEM KERF_QT_SHARED_SOURCES ${KERF_QT_VARIANT_SOURCES})
+add_library(kerf-qt-shared OBJECT ${KERF_QT_SHARED_SOURCES})
+target_include_directories(kerf-qt-shared PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(kerf-qt-shared PUBLIC Qt6::Widgets ads::qtadvanceddocking-qt6 "${KERF_BRIDGE_LIBRARY}"
+    ${KERF_QT_PLATFORM_LIBRARIES})
+
+add_executable(kerf-qt main.cpp ${KERF_QT_VARIANT_SOURCES})
 if(APPLE)
     # A macOS application bundle (target/qt/kerf-qt.app), so the system
     # treats the editor as an app of its own: its name in the menu bar and
@@ -122,19 +134,16 @@ if(APPLE)
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
         MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}")
 endif()
-target_include_directories(kerf-qt PRIVATE ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(kerf-qt PRIVATE Qt6::Widgets ads::qtadvanceddocking-qt6 "${KERF_BRIDGE_LIBRARY}" ${KERF_QT_PLATFORM_LIBRARIES})
+target_link_libraries(kerf-qt PRIVATE kerf-qt-shared)
 kerf_copy_runtime_dlls(kerf-qt)
 
 option(KERF_QT_BUILD_TESTS "Build Qt behavior tests" OFF)
 if(KERF_QT_BUILD_TESTS)
     include(CTest)
     find_package(Qt6 REQUIRED COMPONENTS Test)
-    add_executable(kerf-qt-tests editor_test.cpp test_footage.cpp ${KERF_QT_SOURCES})
+    add_executable(kerf-qt-tests editor_test.cpp test_footage.cpp ${KERF_QT_VARIANT_SOURCES})
     target_compile_definitions(kerf-qt-tests PRIVATE KERF_QT_TESTING)
-    target_include_directories(kerf-qt-tests PRIVATE ${CMAKE_CURRENT_LIST_DIR})
-    target_link_libraries(kerf-qt-tests PRIVATE Qt6::Widgets Qt6::Test ads::qtadvanceddocking-qt6 "${KERF_BRIDGE_LIBRARY}"
-        ${KERF_QT_PLATFORM_LIBRARIES})
+    target_link_libraries(kerf-qt-tests PRIVATE kerf-qt-shared Qt6::Test)
     kerf_copy_runtime_dlls(kerf-qt-tests)
     add_test(NAME kerf-qt-ui COMMAND kerf-qt-tests -platform offscreen)
 endif()

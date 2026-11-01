@@ -6,8 +6,14 @@ name: Rust runtime
 # only what differs on them. They run on pull requests and by hand
 # (Actions > Rust runtime > Run workflow); a merge to main reruns Linux
 # alone, as the pull request already ran them. Feature branches are not
-# built on push: their pull request runs the jobs.
+# built on push: their pull request runs the jobs. On Windows a pull
+# request builds the editor, and runs the sidecar tests, only when it
+# changes what they cover; a weekly run builds everything on all three, to
+# catch what a change elsewhere broke there.
 on:
+  schedule:
+    # Mondays, 03:00 in Seoul.
+    - cron: "0 18 * * 0"
   push:
     branches: [main]
     paths:
@@ -118,8 +124,30 @@ jobs:
     if: github.event_name != 'push'
     runs-on: windows-latest
     timeout-minutes: 75
+    permissions:
+      contents: read
+      # paths-filter lists a pull request's files through the API.
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
+      # What this pull request changes on Windows. Other runs (the weekly
+      # one, by hand) build everything.
+      - uses: dorny/paths-filter@v3
+        id: changes
+        if: github.event_name == 'pull_request'
+        with:
+          filters: |
+            editor:
+              - "apps/kerf-qt/**"
+              - "crates/kerf-qt-bridge/**"
+              - "crates/kerf-runtime/src/ipc.rs"
+              - "crates/kerf-runtime/src/named_pipe.rs"
+              - "Cargo.lock"
+              - ".github/workflows/rust-runtime.yml"
+            sidecar:
+              - "crates/kerf-engine/src/sidecar.rs"
+              - "crates/kerf-engine/src/sidecar/**"
+              - ".github/workflows/rust-runtime.yml"
       - uses: dtolnay/rust-toolchain@stable
       # kerf-runtime reaches libav through kerf-engine and kerf-compose
       # (ffmpeg-sys-next), which needs FFmpeg's headers and import libraries
@@ -144,6 +172,7 @@ jobs:
       # Qt for MSVC, with its bin folder on PATH so the editor and its
       # tests find Qt's DLLs and plugins.
       - uses: jurplel/install-qt-action@v4
+        if: github.event_name != 'pull_request' || steps.changes.outputs.editor == 'true'
         with:
           version: "6.10.*"
           arch: win64_msvc2022_64
@@ -158,19 +187,24 @@ jobs:
         run: cargo test -p kerf-runtime --all-targets
       # Sidecars run in job objects, which end them with kerfd.
       - name: Test sidecar supervision
+        if: github.event_name != 'pull_request' || steps.changes.outputs.sidecar == 'true'
         run: cargo test -p kerf-engine --lib "sidecar::"
       - name: Build native bridge and daemon
+        if: github.event_name != 'pull_request' || steps.changes.outputs.editor == 'true'
         run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
       # The editor's C ABI starts kerfd and edits through the pipe beside
       # another client.
       - name: Test editor connection to kerfd
+        if: github.event_name != 'pull_request' || steps.changes.outputs.editor == 'true'
         run: cargo test -p kerf-qt-bridge --test connection
       - name: Build Qt editor and UI tests
+        if: github.event_name != 'pull_request' || steps.changes.outputs.editor == 'true'
         run: |
           cmake -S apps/kerf-qt -B target/qt -DKERF_QT_BUILD_TESTS=ON
           cmake --build target/qt --config Release --parallel 4
       # Qt logs to the debugger on Windows unless told otherwise.
       - name: Test Qt UI
+        if: github.event_name != 'pull_request' || steps.changes.outputs.editor == 'true'
         env:
           QT_FORCE_STDERR_LOGGING: "1"
         run: ctest --test-dir target/qt -C Release --output-on-failure
