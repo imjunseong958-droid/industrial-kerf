@@ -25,6 +25,15 @@ use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 
+#[cfg(windows)]
+use crate::named_pipe::{PipeListener, PipeStream};
+
+/// A connection to the project's daemon.
+#[cfg(unix)]
+type LocalStream = UnixStream;
+#[cfg(windows)]
+type LocalStream = PipeStream;
+
 /// The largest JSONL request accepted by the local IPC boundary.
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 
@@ -32,20 +41,21 @@ pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 /// bytes and macOS permits fewer bytes on some SDKs, so leave room for the
 /// terminating NUL and use the same threshold on both platforms.
 pub const UNIX_SOCKET_PATH_LIMIT: usize = 100;
+#[cfg(unix)]
 const SOCKET_FILE: &str = ".kerfd.sock";
 const CLIENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const SERVER_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const CLIENT_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 /// How often an idle daemon checks whether it has been orphaned.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const ORPHAN_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+#[cfg(any(unix, windows))]
 static TEST_RESPONSE_DROPPED: AtomicBool = AtomicBool::new(false);
 
 /// Address for the project-scoped local runtime endpoint.
 ///
-/// Unix is the implemented transport in this unit.  The named-pipe variant
-/// is part of the public address model so callers cannot accidentally claim
-/// Windows support without implementing its transport and credential checks.
+/// A Unix socket on Unix and a named pipe on Windows, each reachable only
+/// by the user the daemon runs as.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EndpointAddress {
     Unix { path: PathBuf },
@@ -69,8 +79,7 @@ impl EndpointAddress {
         #[cfg(windows)]
         {
             // Keep the namespace stable and independent of path length.  The
-            // named pipe transport is intentionally not enabled until its
-            // server/client implementation and ACL checks land.
+            // pipe's ACL, not its name, keeps other users out.
             return Self::WindowsNamedPipe {
                 name: format!(r"\\.\pipe\kerfd-{}", project_directory_hash(directory)),
             };
@@ -92,7 +101,28 @@ impl EndpointAddress {
 
 fn canonical_project_directory(directory: &Path) -> Result<PathBuf, RuntimeError> {
     fs::create_dir_all(directory).map_err(io_error)?;
-    directory.canonicalize().map_err(io_error)
+    let directory = directory.canonicalize().map_err(io_error)?;
+    #[cfg(windows)]
+    let directory = without_verbatim_prefix(directory);
+    Ok(directory)
+}
+
+/// `C:\project` for the `\\?\C:\project` Windows canonicalizes to. A
+/// verbatim path takes `/` literally, so a project-relative `media/a.mov`
+/// joined to it names nothing. Paths too long without the prefix keep it.
+#[cfg(windows)]
+fn without_verbatim_prefix(directory: PathBuf) -> PathBuf {
+    let stripped = directory
+        .to_str()
+        .and_then(|text| text.strip_prefix(r"\\?\"))
+        .filter(|rest| {
+            let bytes = rest.as_bytes();
+            rest.len() < 248
+                && bytes.first().is_some_and(u8::is_ascii_alphabetic)
+                && bytes.get(1) == Some(&b':')
+        })
+        .map(PathBuf::from);
+    stripped.unwrap_or(directory)
 }
 
 #[cfg(unix)]
@@ -110,6 +140,7 @@ fn project_directory_hash(directory: &Path) -> String {
         .collect()
 }
 
+#[cfg(unix)]
 fn user_runtime_directory() -> PathBuf {
     let directory = std::env::var_os("KERF_RUNTIME_DIR")
         .or_else(|| std::env::var_os("XDG_RUNTIME_DIR"))
@@ -149,11 +180,6 @@ fn current_user_id() -> Option<u32> {
     // `geteuid` has no Rust wrapper on the supported Unix targets and does not
     // dereference pointers or depend on process-owned state.
     Some(unsafe { libc::geteuid() })
-}
-
-#[cfg(not(unix))]
-fn current_user_id() -> Option<u32> {
-    None
 }
 
 /// Request-scoped client for the project daemon.
@@ -565,7 +591,7 @@ impl RuntimeClient {
         })?)
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn request_once(&self, request: &RuntimeRequest) -> Result<RuntimeResponse, RuntimeError> {
         let envelope = RequestEnvelope::new(format!("request-{}", unique_id()), request.clone());
         let mut payload = serde_json::to_vec(&envelope)
@@ -592,8 +618,8 @@ impl RuntimeClient {
         decode_response(&value, &envelope.id)
     }
 
-    #[cfg(unix)]
-    fn connect_or_start(&self) -> Result<UnixStream, RuntimeError> {
+    #[cfg(any(unix, windows))]
+    fn connect_or_start(&self) -> Result<LocalStream, RuntimeError> {
         match self.connect_once() {
             Ok(stream) => return Ok(stream),
             Err(error) if error.code == "IPC_PERMISSION_DENIED" => return Err(error),
@@ -605,19 +631,26 @@ impl RuntimeClient {
                 format!("no kerfd daemon is listening at {}", self.endpoint_label()),
             )
         })?;
-        Command::new(binary)
+        let mut command = Command::new(binary);
+        command
             .arg("--dir")
             .arg(&self.inner.directory)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|error| {
-                RuntimeError::new(
-                    "RUNTIME_UNAVAILABLE",
-                    format!("failed to start kerfd at {}: {error}", binary.display()),
-                )
-            })?;
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // kerfd is a console program; started from the editor it would
+            // otherwise open a console window of its own.
+            command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+        }
+        command.spawn().map_err(|error| {
+            RuntimeError::new(
+                "RUNTIME_UNAVAILABLE",
+                format!("failed to start kerfd at {}: {error}", binary.display()),
+            )
+        })?;
         let deadline = std::time::Instant::now() + self.inner.startup_timeout;
         loop {
             match self.connect_once() {
@@ -640,11 +673,11 @@ impl RuntimeClient {
         }
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     fn request_once(&self, _request: &RuntimeRequest) -> Result<RuntimeResponse, RuntimeError> {
         Err(RuntimeError::new(
             "IPC_UNSUPPORTED",
-            "Windows named-pipe transport is defined but not implemented yet",
+            "no local transport on this platform",
         ))
     }
 
@@ -667,6 +700,24 @@ impl RuntimeClient {
         })
     }
 
+    #[cfg(windows)]
+    fn connect_once(&self) -> Result<PipeStream, RuntimeError> {
+        let EndpointAddress::WindowsNamedPipe { name } = &self.inner.endpoint else {
+            return Err(RuntimeError::new(
+                "IPC_UNSUPPORTED",
+                "endpoint is not a named pipe",
+            ));
+        };
+        crate::named_pipe::connect(name, self.inner.request_timeout).map_err(|error| {
+            let code = match error.kind() {
+                std::io::ErrorKind::PermissionDenied => "IPC_PERMISSION_DENIED",
+                _ => "IPC_CONNECT_ERROR",
+            };
+            RuntimeError::new(code, format!("cannot connect to {name}: {error}"))
+        })
+    }
+
+    #[cfg(any(unix, windows))]
     fn endpoint_label(&self) -> String {
         match &self.inner.endpoint {
             EndpointAddress::Unix { path } => path.display().to_string(),
@@ -1047,12 +1098,51 @@ pub fn run_ipc(directory: &Path) -> Result<(), RuntimeError> {
         }
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let directory = canonical_project_directory(directory)?;
+        let endpoint = EndpointAddress::for_canonical_directory(&directory);
+        let handle = RuntimeHandle::open(&directory)?;
+        let EndpointAddress::WindowsNamedPipe { name } = &endpoint else {
+            return Err(RuntimeError::new(
+                "IPC_UNSUPPORTED",
+                "Windows daemon requires a named-pipe endpoint",
+            ));
+        };
+        // The pipe goes away with this process, so there is no stale
+        // endpoint to clear, and no other process can take its name while
+        // it lives.
+        let mut listener = PipeListener::bind(name).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AddrInUse {
+                RuntimeError::new(
+                    "RUNTIME_ALREADY_RUNNING",
+                    format!("another process already listens at {name}"),
+                )
+            } else {
+                io_error(error)
+            }
+        })?;
+        loop {
+            if !directory.is_dir() {
+                return Ok(());
+            }
+            let Some(stream) = listener.accept(ORPHAN_CHECK_INTERVAL).map_err(io_error)? else {
+                continue;
+            };
+            let handle = handle.clone();
+            thread::Builder::new()
+                .name("kerfd-client".into())
+                .spawn(move || serve_pipe_connection(stream, handle))
+                .map_err(io_error)?;
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = directory;
         Err(RuntimeError::new(
             "IPC_UNSUPPORTED",
-            "Windows named-pipe transport is defined but not implemented yet",
+            "no local transport on this platform",
         ))
     }
 }
@@ -1130,21 +1220,37 @@ fn serve_unix_connection(mut stream: UnixStream, handle: RuntimeHandle) {
     }
     let _ = stream.set_read_timeout(Some(SERVER_REQUEST_TIMEOUT));
     let _ = stream.set_write_timeout(Some(SERVER_REQUEST_TIMEOUT));
-    let line = match read_bounded_line(&mut stream) {
+    serve_request(&mut stream, &handle);
+}
+
+/// Serve one client of the pipe. Only the user kerfd runs as can open it,
+/// which the pipe's ACL enforces, so there is no peer to check here.
+#[cfg(windows)]
+fn serve_pipe_connection(mut stream: PipeStream, handle: RuntimeHandle) {
+    let _ = stream.set_read_timeout(Some(SERVER_REQUEST_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(SERVER_REQUEST_TIMEOUT));
+    serve_request(&mut stream, &handle);
+    stream.wait_until_read();
+}
+
+/// Read one JSONL request from `stream` and write its response.
+#[cfg(any(unix, windows))]
+fn serve_request<S: Read + Write>(stream: &mut S, handle: &RuntimeHandle) {
+    let line = match read_bounded_line(stream) {
         Ok(line) => line,
         Err(error) => {
-            let _ = write_ipc_response(&mut stream, "", Err(error));
+            let _ = write_ipc_response(stream, "", Err(error));
             return;
         }
     };
-    let (id, result) = process_request_line(&line, &handle);
+    let (id, result) = process_request_line(&line, handle);
     if should_drop_test_response(&line) {
         return;
     }
-    let _ = write_ipc_response(&mut stream, &id, result);
+    let _ = write_ipc_response(stream, &id, result);
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn should_drop_test_response(line: &[u8]) -> bool {
     let Some(key) = std::env::var_os("KERFD_TEST_DROP_RESPONSE_KEY") else {
         return false;
@@ -1161,9 +1267,9 @@ fn should_drop_test_response(line: &[u8]) -> bool {
     matches && !TEST_RESPONSE_DROPPED.swap(true, Ordering::SeqCst)
 }
 
-#[cfg(unix)]
-fn write_ipc_response(
-    stream: &mut UnixStream,
+#[cfg(any(unix, windows))]
+fn write_ipc_response<W: Write>(
+    stream: &mut W,
     id: &str,
     result: Result<RuntimeResponse, RuntimeError>,
 ) -> Result<(), RuntimeError> {

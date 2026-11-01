@@ -15,6 +15,8 @@
 
 mod ipc;
 mod kernel;
+#[cfg(windows)]
+mod named_pipe;
 mod render;
 mod runtime;
 mod store;

@@ -3,6 +3,9 @@
 //! On Unix each sidecar runs in a process group of its own, so cancelling
 //! it ends whatever it started too. That also keeps a terminal's Ctrl-C
 //! from reaching it, which [`forward_termination_signals`] makes up for.
+//! On Windows each runs in a job object of its own, which ends it and what
+//! it started when it is cancelled, when it exits, and when the process
+//! that ran it ends.
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -12,6 +15,9 @@ use std::thread;
 use std::time::Duration;
 
 use crate::error::{EngineError, Result};
+
+#[cfg(windows)]
+mod job;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 const STDERR_QUEUE_CAPACITY: usize = 128;
@@ -135,8 +141,19 @@ fn running() -> std::sync::MutexGuard<'static, Vec<u32>> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// The job of each sidecar running now, by its process id, which cannot be
+/// reused while its `Child` holds the process open.
+#[cfg(windows)]
+static JOBS: std::sync::Mutex<Vec<(u32, job::Job)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(windows)]
+fn jobs() -> std::sync::MutexGuard<'static, Vec<(u32, job::Job)>> {
+    JOBS.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Start `command` as a sidecar: on Unix, leading a process group of its
-/// own and listed as running.
+/// own and listed as running; on Windows, in a job of its own.
 fn start(command: &mut Command) -> std::io::Result<Child> {
     #[cfg(unix)]
     {
@@ -147,12 +164,23 @@ fn start(command: &mut Command) -> std::io::Result<Child> {
         running.push(child.id());
         Ok(child)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let child = command.spawn()?;
+        // A sidecar that cannot have a job still runs; cancelling it then
+        // ends only the sidecar itself.
+        if let Ok(job) = job::Job::assign(&child) {
+            jobs().push((child.id(), job));
+        }
+        Ok(child)
+    }
+    #[cfg(not(any(unix, windows)))]
     command.spawn()
 }
 
 /// Poll the sidecar. On Unix one that has exited leaves the running list
-/// under the same lock, before its process id can be reused.
+/// under the same lock, before its process id can be reused. On Windows
+/// its job closes, ending anything it left running.
 fn try_wait(child: &mut Child) -> std::io::Result<Option<ExitStatus>> {
     #[cfg(unix)]
     {
@@ -163,18 +191,33 @@ fn try_wait(child: &mut Child) -> std::io::Result<Option<ExitStatus>> {
         }
         Ok(status)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let status = child.try_wait()?;
+        if status.is_some() {
+            jobs().retain(|(id, _)| *id != child.id());
+        }
+        Ok(status)
+    }
+    #[cfg(not(any(unix, windows)))]
     child.try_wait()
 }
 
-/// Kill the sidecar and, on Unix, everything left in its process group,
-/// then reap it.
+/// Kill the sidecar and everything left in its process group on Unix, or
+/// in its job on Windows, then reap it.
 fn kill(child: &mut Child) {
     #[cfg(unix)]
     {
         let mut running = running();
         signal_group(child.id(), libc::SIGKILL);
         running.retain(|&id| id != child.id());
+    }
+    #[cfg(windows)]
+    {
+        let mut jobs = jobs();
+        if let Some(index) = jobs.iter().position(|(id, _)| *id == child.id()) {
+            jobs.remove(index).1.terminate();
+        }
     }
     #[cfg(not(unix))]
     let _ = child.kill();
@@ -307,5 +350,89 @@ mod tests {
         assert!(!finished.status.success());
         assert!(ends_within(&sleeper, Duration::from_secs(3)));
         assert!(!running().contains(&shell));
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use std::time::Instant;
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+    };
+
+    /// Run PowerShell, which starts `ping` waiting half a minute, reports
+    /// its own process id and ping's on stderr, and waits. Returns the run
+    /// and the two ids once reported.
+    fn run_pinger(
+        cancellation: &CancellationToken,
+    ) -> (thread::JoinHandle<Result<Finished>>, u32, u32) {
+        let (sender, lines) = mpsc::channel();
+        let cancellation = cancellation.clone();
+        let runner = thread::spawn(move || {
+            let mut command = Command::new("powershell");
+            command.args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$p = Start-Process ping -ArgumentList '-n','30','127.0.0.1' -NoNewWindow -PassThru; \
+                 [Console]::Error.WriteLine(\"$PID $($p.Id)\"); $p.WaitForExit()",
+            ]);
+            run(command, &cancellation, |line| {
+                let _ = sender.send(line.to_owned());
+            })
+        });
+        let line = lines
+            .recv_timeout(Duration::from_secs(30))
+            .expect("PowerShell reports its process ids");
+        let (shell, pinger) = line.trim().split_once(' ').expect("two process ids");
+        (
+            runner,
+            shell.parse().expect("shell id"),
+            pinger.parse().expect("ping id"),
+        )
+    }
+
+    /// Whether process `pid` ends within `limit`.
+    fn ends_within(pid: u32, limit: Duration) -> bool {
+        // SAFETY: opens the process only to wait on it, and closes it.
+        unsafe {
+            let process = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+            if process.is_null() {
+                return true;
+            }
+            let ended = WaitForSingleObject(process, limit.as_millis() as u32) == WAIT_OBJECT_0;
+            CloseHandle(process);
+            ended
+        }
+    }
+
+    #[test]
+    fn cancelling_ends_what_the_sidecar_started() {
+        let token = CancellationToken::new();
+        let (runner, shell, pinger) = run_pinger(&token);
+        assert!(jobs().iter().any(|(id, _)| *id == shell));
+        let start = Instant::now();
+        token.cancel();
+        let result = runner.join().expect("runner");
+        assert!(matches!(result, Err(EngineError::Cancelled)));
+        assert!(start.elapsed() < Duration::from_secs(3));
+        assert!(ends_within(pinger, Duration::from_secs(3)));
+        assert!(!jobs().iter().any(|(id, _)| *id == shell));
+    }
+
+    #[test]
+    fn a_sidecar_ends_when_its_job_closes() {
+        // What closing kerfd's handles does to the sidecars it ran.
+        let mut child = Command::new("ping")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("ping starts");
+        let job = job::Job::assign(&child).expect("a job");
+        drop(job);
+        assert!(ends_within(child.id(), Duration::from_secs(3)));
+        let _ = child.wait();
     }
 }
