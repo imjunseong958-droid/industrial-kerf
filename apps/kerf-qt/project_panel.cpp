@@ -4,6 +4,7 @@
 #include "media_artwork.h"
 
 #include <QAction>
+#include <QEvent>
 #include <QFontMetricsF>
 #include <QJsonObject>
 #include <QLineEdit>
@@ -34,40 +35,54 @@ const QString kOffline = QStringLiteral("Offline");
 const QString kNotDownloaded = QStringLiteral("Not downloaded");
 const QString kExternal = QStringLiteral("External");
 
+// Where a picture of `size` sits fitted into a tile, centred, on whole
+// pixels of a screen at `ratio`.
+QRectF fittedRect(const QSize &size, qreal ratio) {
+    const QSizeF fitted = QSizeF(size).scaled(QSizeF(kThumbnail), Qt::KeepAspectRatio);
+    const QSizeF device(std::max(1.0, std::round(fitted.width() * ratio)), std::max(1.0, std::round(fitted.height() * ratio)));
+    const QPointF at(std::round((kThumbnail.width() * ratio - device.width()) / 2.0),
+                     std::round((kThumbnail.height() * ratio - device.height()) / 2.0));
+    return QRectF(at / ratio, device / ratio);
+}
+
 // A thumbnail letterboxed onto a fixed tile, so the bin keeps a grid, with
-// the media's badge in its corner. Sound is a teal tile with its waveform
-// (or a waveform symbol until one arrives); a picture not yet drawn, or
-// offline, is a quiet tile with an edge, so it never reads as a gap in the
-// grid.
-QIcon tile(const QImage &frame, const QImage &wave, bool audio, const QString &badge) {
+// the media's badge in its corner. Drawn at the screen's pixel ratio, from
+// a poster at its own shape: the bars are the tile's colour, not black
+// baked into the picture. Sound is a teal tile with its waveform (or a
+// waveform symbol until one arrives); a picture not yet drawn, or offline,
+// is a quiet tile with an edge, so it never reads as a gap in the grid.
+QIcon tile(const QImage &frame, const AudioPeaks &peaks, bool audio, const QString &badge, qreal ratio) {
     const EditorTheme &theme = editorTheme();
-    QPixmap pixmap(kThumbnail);
+    QPixmap pixmap(QSize(int(std::ceil(kThumbnail.width() * ratio)), int(std::ceil(kThumbnail.height() * ratio))));
+    pixmap.setDevicePixelRatio(ratio);
     QPainter painter(&pixmap);
     if (!frame.isNull() && badge != kOffline) {
         pixmap.fill(theme.thumbnail);
-        const QImage scaled = frame.scaled(kThumbnail, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        painter.drawImage((kThumbnail.width() - scaled.width()) / 2, (kThumbnail.height() - scaled.height()) / 2, scaled);
+        // Averaged down to the device pixels it covers, once, rather than
+        // sampled by the painter.
+        const QRectF target = fittedRect(frame.size(), ratio);
+        QImage scaled = frame.scaled((target.size() * ratio).toSize(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        scaled.setDevicePixelRatio(ratio);
+        painter.drawImage(target.topLeft(), scaled);
     } else if (audio && badge != kOffline) {
         pixmap.fill(theme.audioTile);
-        if (!wave.isNull()) {
-            // FFmpeg draws the wave in white: ink it in the tile's glyph colour.
-            QImage ink = wave.convertToFormat(QImage::Format_ARGB32_Premultiplied);
-            QPainter tint(&ink);
-            tint.setCompositionMode(QPainter::CompositionMode_SourceIn);
-            tint.fillRect(ink.rect(), theme.audioTileGlyph);
-            tint.end();
-            painter.drawImage(QRect(0, 14, kThumbnail.width(), kThumbnail.height() - 28), ink);
+        if (!peaks.isEmpty()) {
+            const QRectF wave(6, 12, kThumbnail.width() - 12, kThumbnail.height() - 24);
+            painter.fillRect(QRectF(wave.left(), std::floor(wave.center().y()), wave.width(), 1),
+                             mixColor(theme.audioTile, theme.audioTileGlyph, 0.3));
+            drawWaveform(painter, wave, peaks, 0.0, peaks.duration(), mixColor(theme.audioTile, theme.audioTileGlyph, 0.55),
+                         theme.audioTileGlyph);
         } else {
-            drawWaveformSymbol(painter, QRectF(pixmap.rect()).center(), 24, theme.audioTileGlyph);
+            drawWaveformSymbol(painter, QRectF(QPointF(), QSizeF(kThumbnail)).center(), 24, theme.audioTileGlyph);
         }
     } else {
         pixmap.fill(theme.tileEmpty);
         painter.setPen(theme.tileEmptyBorder);
-        painter.drawRect(pixmap.rect().adjusted(0, 0, -1, -1));
+        painter.drawRect(QRect(QPoint(), kThumbnail).adjusted(0, 0, -1, -1));
         // What the media is, as an 18-point symbol: SF Symbols' film, or a
         // waveform for sound. The badge and the name under the tile say the rest.
         if (audio) {
-            drawWaveformSymbol(painter, QRectF(pixmap.rect()).center(), 18, theme.tileEmptyText);
+            drawWaveformSymbol(painter, QRectF(QPointF(), QSizeF(kThumbnail)).center(), 18, theme.tileEmptyText);
         } else {
             painter.save();
             painter.setRenderHint(QPainter::Antialiasing);
@@ -149,7 +164,7 @@ public:
         painter->save();
         painter->setClipPath(round);
         const QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
-        painter->drawPixmap(thumb.toRect(), icon.pixmap(kThumbnail));
+        painter->drawPixmap(thumb.toRect(), icon.pixmap(kThumbnail, painter->device()->devicePixelRatioF()));
         if (option.state & QStyle::State_MouseOver) painter->fillRect(thumb, theme.hover);
         painter->restore();
         if (option.state & QStyle::State_Selected) {
@@ -254,8 +269,13 @@ void ProjectPanel::setMediaStatus(const QJsonObject &status) {
 
 QIcon ProjectPanel::tileFor(const QJsonObject &source) const {
     const QString id = source.value(QStringLiteral("id")).toString();
-    return tile(m_artwork ? m_artwork->frames.value(id) : QImage(), m_artwork ? m_artwork->waves.value(id) : QImage(),
-                !source.contains(QStringLiteral("width")), m_badges.value(id));
+    return tile(m_artwork ? m_artwork->frames.value(id) : QImage(), m_artwork ? m_artwork->peaks.value(id) : AudioPeaks(),
+                !source.contains(QStringLiteral("width")), m_badges.value(id), devicePixelRatioF());
+}
+
+bool ProjectPanel::event(QEvent *event) {
+    if (event->type() == QEvent::DevicePixelRatioChange) refreshTiles();
+    return QWidget::event(event);
 }
 
 void ProjectPanel::refreshTiles() {

@@ -40,6 +40,11 @@ signals:
     // A right-click, on an item (its media id) or on the empty bin.
     void menuRequested(const QString &mediaId, const QPoint &globalPosition);
 
+protected:
+    // Tiles are drawn at the screen's pixel ratio: moved to another screen,
+    // they are drawn again.
+    bool event(QEvent *event) override;
+
 private:
     void refresh();
     // Redraw every tile, for a change of appearance.
