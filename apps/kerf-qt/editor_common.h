@@ -84,7 +84,16 @@ RulerScale rulerScale(double pixelsPerSecond, double fps);
 
 QString clipName(const QJsonObject &clip);
 
+// Imported media as people know it: the name of the file they imported,
+// without its extension and without the content hash the copy in media/
+// carries ("Beach Day-1a2b3c4d.mov" is "Beach Day"; see content_name in
+// kerf-collab's media.rs). sourceFileName keeps the extension.
 QString sourceName(const QJsonObject &source);
+QString sourceFileName(const QJsonObject &source);
+
+// The editor's one monospaced face (the system's: SF Mono on macOS), for
+// timecode and other figures that must not shift as they change.
+QFont monoFont(int pixelSize, QFont::Weight weight = QFont::Normal);
 
 QSize resolvedCanvasSize(const QJsonObject &project, const QJsonArray &sources);
 

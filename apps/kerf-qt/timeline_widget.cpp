@@ -1510,10 +1510,7 @@ void TimelineWidget::paintRuler(QPainter &p, const QRect &dirty, int top) {
     p.fillRect(band.adjusted(0, 0, 0, -1), fill);
     p.fillRect(QRect(band.left(), top + kRulerHeight - 1, band.width(), 1), theme.divider);
 
-    QFont font(QStringLiteral("Menlo"));
-    font.setPixelSize(11);
-    font.setStyleHint(QFont::Monospace);
-    p.setFont(font);
+    p.setFont(monoFont(11));
     const double pps = pixelsPerSecond();
     const RulerScale scale = rulerScale(pps, m_fps);
     const double major = std::max(scale.majorSeconds, 1e-6);
@@ -1652,9 +1649,7 @@ void TimelineWidget::paintDragReadout(QPainter &p) {
     const QString text = QStringLiteral("%1  %2%3")
         .arg(timelineTimecode(m_previewTime, m_fps), delta < 0 ? QStringLiteral("-") : QStringLiteral("+"),
              timelineTimecode(std::abs(delta), m_fps));
-    QFont font(QStringLiteral("Menlo"));
-    font.setStyleHint(QFont::Monospace);
-    font.setPixelSize(11);
+    const QFont font = monoFont(11);
     const QFontMetrics metrics(font);
     const qreal x = timeToX(m_previewTime);
     QRectF box(0, 0, metrics.horizontalAdvance(text) + 14, 18);
@@ -1677,11 +1672,7 @@ void TimelineWidget::paintCornerTime(QPainter &p, const QPoint &origin, double t
     p.fillRect(corner, theme.rulerCorner);
     p.fillRect(QRect(corner.right() + 1, origin.y(), 1, kRulerHeight), theme.divider);
     p.fillRect(QRect(origin.x(), corner.bottom() + 1, kTimelineLabelWidth, 1), theme.divider);
-    QFont font(QStringLiteral("Menlo"));
-    font.setPixelSize(13);
-    font.setStyleHint(QFont::Monospace);
-    font.setWeight(QFont::DemiBold);
-    p.setFont(font);
+    p.setFont(monoFont(13, QFont::DemiBold));
     p.setPen(color);
     p.drawText(corner.adjusted(10, 0, -6, 0), Qt::AlignLeft | Qt::AlignVCenter, timelineTimecode(time, m_fps));
 }

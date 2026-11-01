@@ -1942,7 +1942,7 @@ void InspectorPanel::buildSourceSection(QVBoxLayout *into) {
         plain->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
         row(r)->controls()->addWidget(plain, 1);
     };
-    text(QStringLiteral("File"), sourceName(source), QStringLiteral("sourceFile"));
+    text(QStringLiteral("File"), sourceFileName(source), QStringLiteral("sourceFile"));
     if (!format.isEmpty()) text(QStringLiteral("Format"), format, QStringLiteral("sourceFormat"));
     if (source.value(QStringLiteral("channels")).toInt() > 0)
         text(QStringLiteral("Audio"), QStringLiteral("%1 ch · %2 kHz").arg(source.value(QStringLiteral("channels")).toInt())

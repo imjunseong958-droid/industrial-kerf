@@ -256,6 +256,27 @@ private slots:
         QVERIFY(editorTheme().dark);
     }
 
+    // Media is named as it was imported: the content hash media.rs gives the
+    // copy, and the extension, stay out of the bin, timeline and Inspector.
+    void mediaIsNamedWithoutItsContentHash() {
+        const auto named = [](const char *path) { return sourceName(QJsonObject{{"path", QString::fromUtf8(path)}}); };
+        QCOMPARE(named("media/Beach Day-1a2b3c4d.mov"), QStringLiteral("Beach Day"));
+        QCOMPARE(named("media/vertical_clip-7e0b5b62.mp4"), QStringLiteral("vertical_clip"));
+        QCOMPARE(named("media/clip.v2-0f0f0f0f.mp4"), QStringLiteral("clip.v2"));
+        QCOMPARE(named("media/새벽 능선-a1b2c3d4.mov"), QStringLiteral("새벽 능선"));
+        // Not a content hash: too short, upper case, or all there is.
+        QCOMPARE(named("media/take-12.mov"), QStringLiteral("take-12"));
+        QCOMPARE(named("media/take-ABCDEF12.mov"), QStringLiteral("take-ABCDEF12"));
+        QCOMPARE(named("media/-1a2b3c4d.mov"), QStringLiteral("-1a2b3c4d"));
+        QCOMPARE(named(""), QStringLiteral("Untitled media"));
+        QCOMPARE(sourceFileName(QJsonObject{{"path", "media/Beach Day-1a2b3c4d.mov"}}), QStringLiteral("Beach Day.mov"));
+        QCOMPARE(sourceFileName(QJsonObject{{"path", "media/notes-1a2b3c4d"}}), QStringLiteral("notes"));
+        // Hundredths carry into the seconds and minutes.
+        QCOMPARE(prettyTime(59.996), QStringLiteral("01:00.00"));
+        QCOMPARE(prettyTime(8.0), QStringLiteral("00:08.00"));
+        QCOMPARE(prettyTime(61.25), QStringLiteral("01:01.25"));
+    }
+
     void inboundMcpConfigValidatesStdioShape() {
         QVERIFY(!validateInboundMcpConfig("[]").isEmpty());
         QVERIFY(!validateInboundMcpConfig("{}").isEmpty());
@@ -4163,7 +4184,7 @@ private slots:
         emit window.m_timeline->clipSelected(QStringLiteral("v1b"));
         QCoreApplication::processEvents();
         QVERIFY(inspector->isCurrentTab());
-        QCOMPARE(window.m_inspector->nameText(), QStringLiteral("fisher-close.mov"));
+        QCOMPARE(window.m_inspector->nameText(), QStringLiteral("fisher-close"));
         QCOMPARE(QApplication::focusWidget(), focus);
         // Another clip: only the values change.
         emit window.m_timeline->clipSelected(QStringLiteral("v1a"));
@@ -4770,7 +4791,7 @@ private slots:
                 // The chat is untouched beside the picture.
                 QVERIFY(window.m_chat->isVisible());
                 QCOMPARE(window.m_chat->geometry(), window.m_viewer->stageLayout().panel);
-                QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Ask Kerf about fisher-close.mov…"));
+                QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Ask Kerf about fisher-close…"));
                 const QImage editor = window.grab().toImage();
                 QCOMPARE(amberPixels(editor), 0);
                 save(editor, QStringLiteral("editor-%1-inspector-%2").arg(tall ? QStringLiteral("9x16") : QStringLiteral("16x9"), name));
@@ -9554,8 +9575,8 @@ private slots:
                 const QList<ProposalChangeRow *> rows = window.m_chat->proposalChangeRows();
                 QCOMPARE(rows.size(), 3);
                 QTRY_VERIFY(changes->height() >= 3 * ProposalChangeRow::kHeight);
-                const QList<QPair<QString, QString>> expected{{QStringLiteral("Trim fisher-close.mov"), QStringLiteral("end \u22121.5 s")},
-                                                              {QStringLiteral("Remove drone-pass.mov"), QStringLiteral("0:11\u2009\u2013\u20090:18")},
+                const QList<QPair<QString, QString>> expected{{QStringLiteral("Trim fisher-close"), QStringLiteral("end \u22121.5 s")},
+                                                              {QStringLiteral("Remove drone-pass"), QStringLiteral("0:11\u2009\u2013\u20090:18")},
                                                               {QStringLiteral("Add title “Lower third”"), QStringLiteral("at 0:12")}};
                 const QList<ProposalChange::Glyph> glyphs{ProposalChange::Glyph::Trim, ProposalChange::Glyph::Remove, ProposalChange::Glyph::Title};
                 for (int index = 0; index < rows.size(); ++index) {
