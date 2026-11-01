@@ -165,6 +165,34 @@ private:
     mutable Engine m_engine;
 };
 
+// `paint` run on a clear image `logical` points in size at `ratio` device
+// pixels per point, as a widget paints on a 1x, 1.25x or Retina screen.
+QImage paintedAt(qreal ratio, const QSize &logical, const std::function<void(QPainter &)> &paint) {
+    QImage image(QSize(qCeil(logical.width() * ratio), qCeil(logical.height() * ratio)), QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(ratio);
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    paint(painter);
+    return image;
+}
+
+// Whether `image` has any paint outside the device pixels `logical` covers.
+bool paintsOutside(const QImage &image, const QRectF &logical) {
+    const qreal ratio = image.devicePixelRatio();
+    const QRect inside(QPoint(qFloor(logical.left() * ratio), qFloor(logical.top() * ratio)),
+                       QPoint(qCeil(logical.right() * ratio) - 1, qCeil(logical.bottom() * ratio) - 1));
+    for (int y = 0; y < image.height(); ++y)
+        for (int x = 0; x < image.width(); ++x)
+            if (!inside.contains(x, y) && qAlpha(image.pixel(x, y)) != 0) return true;
+    return false;
+}
+
+// The lightness of `image`'s pixel at the logical point `at`.
+int lightnessAt(const QImage &image, const QPointF &at) {
+    const qreal ratio = image.devicePixelRatio();
+    return QColor::fromRgba(image.pixel(int(at.x() * ratio), int(at.y() * ratio))).lightness();
+}
+
 } // namespace
 
 class EditorTest final : public QObject {
@@ -10706,6 +10734,283 @@ private slots:
         });
         window.handleEvent(QJsonObject{{"type", "error"}, {"message", exists}});
         QCOMPARE(window.m_errorMessage->text(), exists);
+    }
+
+    // The hardware finish's colours exist in both appearances, light's as the
+    // owner's faceplate has them, and its text reads at 4.5:1 on whatever it
+    // is printed on.
+    void hardwareTokens() {
+        const EditorTheme light = makeEditorTheme(false);
+        QCOMPARE(light.faceplateTop, QColor("#f4eee3"));
+        QCOMPARE(light.faceplateBottom, QColor("#e8e0d0"));
+        QCOMPARE(light.keyLatched, QColor("#d8ccb6"));
+        QCOMPARE(light.keyLed, QColor("#d4882a"));
+        QCOMPARE(light.wellFill, QColor("#e8dfcc"));
+        QCOMPARE(light.modulePlate, QColor("#f9f4eb"));
+        QCOMPARE(light.engravedInk, QColor("#4d4237"));
+        QCOMPARE(light.glassText, QColor("#f1e4c8"));
+        QCOMPARE(light.vuRedZone, QColor("#b23a2e"));
+        QCOMPARE(light.keyRing, cssColor("#3c281429"));
+        for (const bool dark : {false, true}) {
+            const EditorTheme t = makeEditorTheme(dark);
+            for (const QColor &color :
+                 {t.faceplateTop, t.faceplateBottom, t.faceplateHighlight, t.faceplateEdge, t.keyTop, t.keyBottom, t.keyRing,
+                  t.keyDrop, t.keyHighlight, t.keyLatched, t.keyLatchedShadow, t.keyLed, t.bankWell, t.bankShadow, t.bankLip,
+                  t.wellFill, t.wellShadow, t.wellLip, t.modulePlate, t.moduleEdge, t.moduleHighlight, t.engravedInk,
+                  t.engravedHighlight, t.lampOff, t.lampChanged, t.lampKerf, t.lampOk, t.glassTop, t.glassBottom,
+                  t.glassShadow, t.glassLip, t.glassText, t.glassLabel, t.knobRing, t.knobFaceLight, t.knobFaceDark,
+                  t.knobTick, t.knobPointer, t.vuBezelTop, t.vuBezelBottom, t.vuFace, t.vuInk, t.vuRedZone, t.vuNeedle})
+                QVERIFY(color.isValid() && color.alpha() > 0);
+            for (const QColor &glass : {t.glassTop, t.glassBottom}) {
+                QVERIFY2(contrastRatio(t.glassText, glass) >= 4.5, dark ? "dark" : "light");
+                QVERIFY2(contrastRatio(t.glassLabel, glass) >= 4.5, dark ? "dark" : "light");
+            }
+            for (const QColor &plate : {t.modulePlate, t.faceplateTop, t.faceplateBottom})
+                QVERIFY2(contrastRatio(t.engravedInk, plate) >= 4.5, dark ? "dark" : "light");
+            QVERIFY(contrastRatio(t.vuInk, t.vuFace) >= 4.5);
+            // Kerf's lamp is Kerf's ink; the other colours are the lamps' own.
+            QCOMPARE(t.lampKerf, t.accent);
+            QVERIFY(t.lampChanged != t.lampOk && t.lampChanged != t.accent);
+            // The glass is set deeper than the plate round it, a well is
+            // pressed below the faceplate, and a latched key below a raised one.
+            QVERIFY(t.glassBottom.lightness() < t.faceplateBottom.lightness());
+            QVERIFY(t.wellFill.lightness() < t.faceplateBottom.lightness());
+            QVERIFY(t.keyLatched.lightness() < t.keyBottom.lightness());
+            // A lamp that is off is still a lens set into the plate.
+            QVERIFY(t.lampOff != t.modulePlate);
+        }
+        QVERIFY(makeEditorTheme(true).faceplateTop.lightness() < light.faceplateTop.lightness());
+    }
+
+    // Every part paints inside the rectangle it is given, its drop and lip
+    // and a lamp's glow included, in both appearances and at 1x, 1.25x and
+    // 2x; and its straight edges land on whole device pixels.
+    void hardwarePartsStayInTheirBounds() {
+        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
+        const QRectF rect(10, 10, 100, 30);
+        const QRectF knobBox(10, 10, 32, 32);
+        const QList<std::pair<const char *, std::function<void(QPainter &)>>> parts = {
+            {"key", [&](QPainter &p) { paintRaisedKey(p, rect, false, false, false); }},
+            {"hovered key", [&](QPainter &p) { paintRaisedKey(p, rect, false, true, false); }},
+            {"latched lit key", [&](QPainter &p) { paintRaisedKey(p, rect, true, true, true); }},
+            {"bank", [&](QPainter &p) { paintKeyBank(p, rect); }},
+            {"well", [&](QPainter &p) { paintWell(p, rect); }},
+            {"module", [&](QPainter &p) { paintModulePlate(p, rect); }},
+            {"glass", [&](QPainter &p) { paintGlass(p, rect); }},
+            {"engraved", [&](QPainter &p) { drawEngraved(p, rect, Qt::AlignCenter, QStringLiteral("Speed")); }},
+            {"engraved hangul", [&](QPainter &p) { drawEngraved(p, rect, Qt::AlignCenter, QStringLiteral("속도")); }},
+            {"vu", [&](QPainter &p) { paintVuMeter(p, rect, 0.9); }},
+        };
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            for (const qreal ratio : {1.0, 1.25, 2.0}) {
+                const QByteArray where = QByteArray::number(ratio) + (scheme == ColorScheme::Dark ? " dark" : " light");
+                for (const auto &[name, paint] : parts) {
+                    const QImage image = paintedAt(ratio, QSize(120, 50), paint);
+                    QVERIFY2(!paintsOutside(image, rect), QByteArray(name) + " at " + where);
+                    bool painted = false;
+                    for (int y = 0; y < image.height() && !painted; ++y)
+                        for (int x = 0; x < image.width() && !painted; ++x) painted = qAlpha(image.pixel(x, y)) != 0;
+                    QVERIFY2(painted, QByteArray(name) + " at " + where);
+                }
+                for (const double turn : {-135.0, 0.0, 135.0}) {
+                    const QImage knob = paintedAt(ratio, QSize(60, 60), [&](QPainter &p) { paintKnob(p, knobBox, turn); });
+                    QVERIFY2(!paintsOutside(knob, knobBox), "knob at " + where);
+                }
+                for (const LampState state : {LampState::Off, LampState::Changed, LampState::Kerf, LampState::Ok}) {
+                    const QImage lamp = paintedAt(ratio, QSize(60, 40), [state](QPainter &p) { paintLamp(p, {30, 20}, 6, state); });
+                    QVERIFY2(!paintsOutside(lamp, QRectF(24, 14, 12, 12)), "lamp at " + where);
+                    QVERIFY2(qAlpha(lamp.pixel(int(30 * ratio), int(20 * ratio))) == 255, "lamp at " + where);
+                }
+                // A module's top and left edges are whole rows and columns of
+                // its edge colour, with nothing above or beside them.
+                const QImage plate = paintedAt(ratio, QSize(120, 50), [&](QPainter &p) { paintModulePlate(p, rect); });
+                const int edge = int(std::round(10 * ratio));
+                const int middle = int(60 * ratio);
+                const QColor edgeColor = editorTheme().moduleEdge;
+                QCOMPARE(qAlpha(plate.pixel(middle, edge - 1)), 0);
+                QCOMPARE(QColor::fromRgba(plate.pixel(middle, edge)), edgeColor);
+                QCOMPARE(qAlpha(plate.pixel(edge - 1, int(25 * ratio))), 0);
+                QCOMPARE(QColor::fromRgba(plate.pixel(edge, int(25 * ratio))), edgeColor);
+                // Its 1px lines are one device pixel at 1.25x, not a blur
+                // across two: under the edge, its line of light, then the
+                // plate itself.
+                const int line = int(std::round(ratio));
+                QCOMPARE(QColor::fromRgba(plate.pixel(middle, edge + line - 1)), edgeColor);
+                QVERIFY(plate.pixel(middle, edge + line) != plate.pixel(middle, edge + 2 * line));
+                QCOMPARE(QColor::fromRgba(plate.pixel(middle, edge + 2 * line)), editorTheme().modulePlate);
+            }
+        }
+    }
+
+    // A latched key is pressed in: darker than a raised one, with no drop
+    // below it; under the pointer a key brightens; lit, its amber bar shows
+    // at its top.
+    void hardwareKeyStates() {
+        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
+        const QRectF key(10, 10, 40, 24);
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            const EditorTheme &t = editorTheme();
+            const auto keyImage = [&](bool latched, bool hovered, bool lit) {
+                return paintedAt(2, QSize(60, 44), [&](QPainter &p) { paintRaisedKey(p, key, latched, hovered, lit); });
+            };
+            const QImage raised = keyImage(false, false, false);
+            const QImage latched = keyImage(true, false, false);
+            QVERIFY(raised != latched);
+            QVERIFY(lightnessAt(latched, {30, 24}) < lightnessAt(raised, {30, 24}));
+            // Held in, its rim's shadow falls across the top of its face.
+            QVERIFY(lightnessAt(latched, {30, 12}) < lightnessAt(latched, {30, 30}));
+            QVERIFY(keyImage(false, true, false) != raised);
+            const QImage lit = keyImage(false, false, true);
+            const QColor led = QColor::fromRgba(lit.pixel(30 * 2, 13 * 2 + 1));
+            QVERIFY2(std::abs(led.hue() - t.keyLed.hue()) < 12 && led.saturation() > 120, qPrintable(led.name()));
+            QVERIFY(lit != raised);
+            // Unlit, the same spot is the key's own face.
+            QVERIFY(QColor::fromRgba(raised.pixel(30 * 2, 13 * 2 + 1)).saturation() < 120);
+        }
+    }
+
+    // The knob's pointer turns with its angle, from straight up clockwise.
+    void hardwareKnobPointerFollowsTheTurn() {
+        const QRectF box(0, 0, 32, 32);
+        const QPointF centre = box.center();
+        const auto pointerAt = [&](double degrees) {
+            const qreal radians = qDegreesToRadians(degrees);
+            return centre + QPointF(std::sin(radians), -std::cos(radians)) * 6;
+        };
+        for (const qreal ratio : {1.0, 2.0}) {
+            for (const double turn : {0.0, 90.0, -135.0, 135.0}) {
+                const QImage knob = paintedAt(ratio, QSize(32, 32), [&](QPainter &p) { paintKnob(p, box, turn); });
+                const int pointer = lightnessAt(knob, pointerAt(turn));
+                QVERIFY2(pointer > 160, qPrintable(QStringLiteral("%1° at %2x: %3").arg(turn).arg(ratio).arg(pointer)));
+                // A quarter turn away is the knob's dark face.
+                QVERIFY(lightnessAt(knob, pointerAt(turn + 90)) < 100);
+                QVERIFY(lightnessAt(knob, pointerAt(turn + 180)) < 100);
+            }
+        }
+    }
+
+    // The VU's needle stands where its level puts it: hard left at 0, hard
+    // right at 1, and no further than either however loud.
+    void hardwareVuNeedleFollowsTheLevel() {
+        const QRectF rect(0, 0, 120, 70);
+        // The scale's geometry: the face inset 5px, the pivot near its foot,
+        // the scale 50° either side of straight up.
+        const QRectF face = rect.adjusted(5, 5, -5, -5);
+        const QPointF pivot(face.center().x(), face.bottom() - face.height() * 0.08);
+        const qreal reach = std::min(face.height() * 0.78, face.width() * 0.5 / std::sin(qDegreesToRadians(50.0)));
+        const auto darkestAlong = [&](const QImage &image, double degrees) {
+            int darkest = 255;
+            const qreal radians = qDegreesToRadians(degrees);
+            for (qreal along = 0.3; along <= 0.7; along += 0.05) {
+                const QPointF at = pivot + QPointF(std::sin(radians), -std::cos(radians)) * reach * along;
+                darkest = std::min(darkest, lightnessAt(image, at));
+            }
+            return darkest;
+        };
+        const auto meter = [&](double level) {
+            return paintedAt(2, QSize(120, 70), [&](QPainter &p) { paintVuMeter(p, rect, level); });
+        };
+        const QImage quiet = meter(0);
+        const QImage loud = meter(1);
+        QVERIFY(darkestAlong(quiet, -50) < 80);
+        QVERIFY(darkestAlong(quiet, 50) > 150);
+        QVERIFY(darkestAlong(loud, 50) < 80);
+        QVERIFY(darkestAlong(loud, -50) > 150);
+        QVERIFY(darkestAlong(meter(0.5), 0) < 80);
+        QCOMPARE(meter(2), loud);
+        QCOMPARE(meter(-1), quiet);
+    }
+
+    // Engraved labels are tracked capitals, except Hangul and other CJK
+    // text, which has no capitals and loses its shapes when spaced: it is
+    // untracked, as written, and a pixel larger. The ink is painted over its
+    // catch of light.
+    void hardwareEngravedLabels() {
+        QFont base;
+        base.setPixelSize(13);
+        const QFont latin = engravedFont(base, QStringLiteral("Speed"));
+        QCOMPARE(latin.pixelSize(), 10);
+        QCOMPARE(latin.weight(), QFont::Bold);
+        QCOMPARE(latin.letterSpacingType(), QFont::AbsoluteSpacing);
+        QVERIFY(std::abs(latin.letterSpacing() - 1.3) < 0.01); // Kept in 64ths of a pixel.
+        QCOMPARE(latin.capitalization(), QFont::AllUppercase);
+        QCOMPARE(latin.family(), base.family());
+        for (const QString &text : {QStringLiteral("속도"), QStringLiteral("速度"), QStringLiteral("スピード"),
+                                    QStringLiteral("Speed 속도")}) {
+            const QFont cjk = engravedFont(base, text);
+            QCOMPARE(cjk.pixelSize(), 11);
+            QCOMPARE(cjk.weight(), QFont::Bold);
+            QCOMPARE(cjk.letterSpacing(), 0.0);
+            QCOMPARE(cjk.capitalization(), QFont::MixedCase);
+        }
+        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            TextRecorder recorder;
+            QPainter painter(&recorder);
+            drawEngraved(painter, QRectF(0, 0, 200, 20), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("Speed"));
+            painter.end();
+            QVERIFY(recorder.runs.size() >= 2);
+            QCOMPARE(recorder.runs.first().color, editorTheme().engravedHighlight);
+            QCOMPARE(recorder.runs.last().color, editorTheme().engravedInk);
+        }
+    }
+
+    // Pictures of every hardware part on the faceplate, to look at: run with
+    // KERF_HARDWARE_GALLERY set to a folder. Each appearance is drawn at 1x,
+    // 1.25x and 2x.
+    void hardwareGallery() {
+        const QString folder = qEnvironmentVariable("KERF_HARDWARE_GALLERY");
+        if (folder.isEmpty()) QSKIP("Set KERF_HARDWARE_GALLERY to draw the hardware parts.");
+        QDir().mkpath(folder);
+        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            const EditorTheme &t = editorTheme();
+            for (const qreal ratio : {1.0, 1.25, 2.0}) {
+                const QImage image = paintedAt(ratio, QSize(560, 200), [&](QPainter &p) {
+                    QLinearGradient plate(0, 0, 0, 200);
+                    plate.setColorAt(0, t.faceplateTop);
+                    plate.setColorAt(1, t.faceplateBottom);
+                    p.fillRect(QRectF(0, 0, 560, 200), plate);
+                    p.fillRect(QRectF(0, 0, 560, 1), t.faceplateHighlight);
+                    p.fillRect(QRectF(0, 199, 560, 1), t.faceplateEdge);
+                    // A bank of three keys: raised, hovered, latched and lit.
+                    paintKeyBank(p, QRectF(12, 12, 4 + 3 * 30 + 2 * 2, 30));
+                    for (int key = 0; key < 3; ++key)
+                        paintRaisedKey(p, QRectF(14 + key * 32, 14, 30, 26), key == 2, key == 1, key == 2);
+                    paintWell(p, QRectF(130, 14, 70, 24));
+                    p.setFont(monoFont(12));
+                    p.setPen(t.accentText);
+                    p.drawText(QRectF(130, 14, 66, 23), Qt::AlignRight | Qt::AlignVCenter, QStringLiteral("1.25×"));
+                    paintGlass(p, QRectF(214, 10, 150, 32));
+                    p.setFont(monoFont(16, QFont::Medium));
+                    p.setPen(t.glassText);
+                    p.drawText(QRectF(240, 10, 120, 31), Qt::AlignRight | Qt::AlignVCenter, QStringLiteral("00:00:12:04"));
+                    QFont label = monoFont(9, QFont::Bold);
+                    label.setLetterSpacing(QFont::AbsoluteSpacing, 1.2);
+                    p.setFont(label);
+                    p.setPen(t.glassLabel);
+                    p.drawText(QRectF(222, 10, 30, 31), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("TC"));
+                    // A module with engraved labels, lamps and a knob.
+                    paintModulePlate(p, QRectF(12, 56, 260, 130));
+                    drawEngraved(p, QRectF(26, 64, 120, 18), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("Speed"));
+                    drawEngraved(p, QRectF(150, 64, 110, 18), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("속도 조절"));
+                    int lamp = 0;
+                    for (const LampState state : {LampState::Off, LampState::Changed, LampState::Kerf, LampState::Ok})
+                        paintLamp(p, QPointF(32 + 20 * lamp++, 100), 6, state);
+                    for (int knob = 0; knob < 3; ++knob)
+                        paintKnob(p, QRectF(26 + knob * 44, 120, 32, 32), -135 + knob * 135);
+                    paintKnob(p, QRectF(170, 104, 64, 64), 30);
+                    paintVuMeter(p, QRectF(290, 56, 150, 90), 0.62);
+                    paintVuMeter(p, QRectF(456, 56, 90, 54), 0.9);
+                });
+                const QString look = scheme == ColorScheme::Dark ? QStringLiteral("dark") : QStringLiteral("light");
+                QVERIFY(image.save(QDir(folder).filePath(QStringLiteral("%1-%2x.png").arg(look).arg(ratio))));
+            }
+        }
     }
 };
 
