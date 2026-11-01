@@ -129,8 +129,48 @@ fn markers(snapshot: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+/// Print where a crash happened, on whichever thread: a Windows access
+/// violation ends the process with no word of where it was.
+#[cfg(windows)]
+fn report_crashes() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use windows_sys::Win32::Foundation::EXCEPTION_ACCESS_VIOLATION;
+    use windows_sys::Win32::System::Diagnostics::Debug::{
+        AddVectoredExceptionHandler, EXCEPTION_CONTINUE_SEARCH, EXCEPTION_POINTERS,
+    };
+
+    static REPORTED: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "system" fn report(info: *mut EXCEPTION_POINTERS) -> i32 {
+        // SAFETY: Windows passes a live exception record for this call.
+        let record = unsafe { &*(*info).ExceptionRecord };
+        if record.ExceptionCode == EXCEPTION_ACCESS_VIOLATION
+            && REPORTED.fetch_add(1, Ordering::SeqCst) < 3
+        {
+            let [kind, address, ..] = record.ExceptionInformation;
+            eprintln!(
+                "access violation at {:?} ({} {address:#x}) on thread {:?}\n{}",
+                record.ExceptionAddress,
+                match kind {
+                    0 => "reading",
+                    1 => "writing",
+                    _ => "executing",
+                },
+                std::thread::current().name(),
+                std::backtrace::Backtrace::force_capture(),
+            );
+        }
+        EXCEPTION_CONTINUE_SEARCH
+    }
+
+    // SAFETY: `report` lives for the whole process and only reads.
+    unsafe { AddVectoredExceptionHandler(1, Some(report)) };
+}
+
 #[test]
 fn the_editor_starts_kerfd_and_shares_the_project_with_another_client() {
+    #[cfg(windows)]
+    report_crashes();
     let project = Project::new();
     // No daemon runs yet: the editor starts one and waits for it.
     let mut editor = Editor::open(&project.0);
