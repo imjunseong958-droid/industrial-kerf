@@ -5923,8 +5923,36 @@ private slots:
                 QVERIFY2(painted <= qint64(std::abs(step.dx) + 2 * kTimelineLabelWidth + 4) * view.height(),
                          qPrintable(QStringLiteral("%1 px for %2 across").arg(painted).arg(step.dx)));
             const QImage scrolled = onScreen();
+            // A paint still pending at the grab shows as a change here.
+            QCoreApplication::processEvents();
+            const bool settled = scrolled == onScreen();
             scroll.viewport()->repaint();
-            QVERIFY2(scrolled == onScreen(), qPrintable(QStringLiteral("after %1, %2").arg(step.dx).arg(step.dy)));
+            const QImage repainted = onScreen();
+            // Where they differ, to tell a stale strip from a stray pixel.
+            QRect differ;
+            int count = 0;
+            if (scrolled.size() == repainted.size())
+                for (int y = 0; y < scrolled.height(); ++y)
+                    for (int x = 0; x < scrolled.width(); ++x)
+                        if (scrolled.pixel(x, y) != repainted.pixel(x, y)) {
+                            differ |= QRect(x, y, 1, 1);
+                            ++count;
+                        }
+            QVERIFY2(scrolled == repainted,
+                     qPrintable(QStringLiteral("after %1, %2: %3 px differ in %4,%5 %6x%7 (%8 px painted; viewport at %9,%10 %11x%12; %13)")
+                                    .arg(step.dx)
+                                    .arg(step.dy)
+                                    .arg(count)
+                                    .arg(differ.x())
+                                    .arg(differ.y())
+                                    .arg(differ.width())
+                                    .arg(differ.height())
+                                    .arg(painted)
+                                    .arg(scroll.viewport()->x())
+                                    .arg(scroll.viewport()->y())
+                                    .arg(view.width())
+                                    .arg(view.height())
+                                    .arg(settled ? QStringLiteral("settled") : QStringLiteral("changed on a second pass"))));
         }
         timeline->removeEventFilter(&meter);
     }
