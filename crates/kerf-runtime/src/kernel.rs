@@ -156,6 +156,9 @@ impl Facts for CachedFacts {
 /// Files wait their turn: a few workers prepare them one at a time each,
 /// so importing a folder of clips does not start an FFmpeg for every one
 /// at once. A file already waiting or being prepared is not queued again.
+/// Each file is indexed first and goes back to the end of the queue for
+/// its proxy, so the last file of a folder is indexed without waiting for
+/// every proxy before it.
 pub(crate) fn prepare_media(path: String, directory: PathBuf) {
     let path = PathBuf::from(path);
     let file = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
@@ -176,6 +179,7 @@ pub(crate) fn prepare_media(path: String, directory: PathBuf) {
         file,
         path,
         cancellation,
+        indexed: false,
     });
     if queue.workers >= media_workers() {
         return;
@@ -235,7 +239,7 @@ fn media_workers() -> usize {
 /// Prepare queued files until none is left.
 fn prepare_queued_media() {
     loop {
-        let job = {
+        let mut job = {
             let mut queue = media_queue();
             let Some(job) = queue.waiting.pop_front() else {
                 queue.workers -= 1;
@@ -245,14 +249,28 @@ fn prepare_queued_media() {
         };
         // A panic in one file's work must not stop the queue, or what
         // waits behind it would keep kerfd running forever.
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let indexed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let cache = kerf_engine::derivatives::DerivativeCache::new(&job.directory);
-            let _ = kerf_engine::media_index(&job.path, &cache, &job.cancellation);
-            if !job.cancellation.is_cancelled() {
+            if job.indexed {
                 let _ = kerf_engine::make_proxy(&job.path, &cache, &job.cancellation);
+            } else {
+                let _ = kerf_engine::media_index(&job.path, &cache, &job.cancellation);
             }
-        }));
-        media_queue().forget(&job);
+        }))
+        .is_ok()
+            && !job.indexed;
+        let mut queue = media_queue();
+        // Checked under the lock: stop_media cancels under it before it
+        // drops what waits, so a job put back here is either dropped by it
+        // or was never stopped.
+        if indexed && !job.cancellation.is_cancelled() {
+            job.indexed = true;
+            queue.waiting.push_back(job);
+        } else {
+            queue.forget(&job);
+            drop(queue);
+            drop(job);
+        }
     }
 }
 
@@ -264,6 +282,8 @@ struct MediaJob {
     /// The file itself, which keeps it from being queued twice.
     file: PathBuf,
     cancellation: kerf_engine::CancellationToken,
+    /// Its index is made, and its proxy is next.
+    indexed: bool,
     _work: BackgroundWork,
 }
 

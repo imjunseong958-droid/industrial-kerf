@@ -1356,11 +1356,14 @@ pub fn run_ipc_with(directory: &Path, options: IpcOptions) -> Result<(), Runtime
 
         let directory = canonical_project_directory(directory)?;
         let endpoint = EndpointAddress::for_canonical_directory(&directory);
-        let handle = open_runtime(&directory)?;
         // However this ends, media work still running for the project is
         // stopped: its FFmpeg leads a process group of its own and would
-        // outlive kerfd.
-        let _media = StopMediaOnExit(&directory);
+        // outlive kerfd.  Declared before the handle so it drops after it:
+        // the project lock goes first, and a kerfd that replaced this one
+        // need not wait out the media work to open the project.
+        let _media: StopMediaOnExit;
+        let handle = open_runtime(&directory)?;
+        _media = StopMediaOnExit(&directory);
         let path = endpoint.as_path().ok_or_else(|| {
             RuntimeError::new("IPC_UNSUPPORTED", "Unix daemon requires a Unix endpoint")
         })?;
@@ -1438,11 +1441,14 @@ pub fn run_ipc_with(directory: &Path, options: IpcOptions) -> Result<(), Runtime
     {
         let directory = canonical_project_directory(directory)?;
         let endpoint = EndpointAddress::for_canonical_directory(&directory);
-        let handle = open_runtime(&directory)?;
         // However this ends, media work still running for the project is
         // stopped: its FFmpeg leads a process group of its own and would
-        // outlive kerfd.
-        let _media = StopMediaOnExit(&directory);
+        // outlive kerfd.  Declared before the handle so it drops after it:
+        // the project lock goes first, and a kerfd that replaced this one
+        // need not wait out the media work to open the project.
+        let _media: StopMediaOnExit;
+        let handle = open_runtime(&directory)?;
+        _media = StopMediaOnExit(&directory);
         let EndpointAddress::WindowsNamedPipe { name } = &endpoint else {
             return Err(RuntimeError::new(
                 "IPC_UNSUPPORTED",
