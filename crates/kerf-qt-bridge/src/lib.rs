@@ -229,6 +229,9 @@ struct Shared {
     /// removed yet: on Windows a playback worker still shutting down keeps
     /// its file open. The media worker tries them again.
     stale_previews: Mutex<Vec<PathBuf>>,
+    /// The preview file the media worker plays, so closing the bridge can
+    /// remove it even when the process exits before that worker stops.
+    shown_preview: Mutex<Option<PathBuf>>,
 }
 
 struct Bridge {
@@ -736,6 +739,29 @@ fn install_project(shared: &Shared, slot: &mut Option<MediaProject>, project: Me
     }
 }
 
+/// Remove the preview the media worker plays and one still waiting for it:
+/// the bridge has closed, so nothing will show either.
+fn discard_previews(shared: &Shared) {
+    let shown = shared
+        .shown_preview
+        .lock()
+        .ok()
+        .and_then(|mut shown| shown.take());
+    if let Some(file) = shown {
+        discard_preview(shared, file);
+    }
+    let waiting = shared.project.lock().ok().and_then(|mut slot| {
+        if matches!(*slot, Some(MediaProject::Rendered(..))) {
+            slot.take()
+        } else {
+            None
+        }
+    });
+    if let Some(MediaProject::Rendered(_, file)) = waiting {
+        discard_preview(shared, file);
+    }
+}
+
 /// Remove a preview render nothing shows any more, or keep it for the media
 /// worker to try again while it is still open. Only previews come here;
 /// exports are the person's.
@@ -839,8 +865,6 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
     let mut position = 0.0_f64;
     let mut playing = false;
     let mut volume = 1.0_f32;
-    // The preview file the session plays, removed once it plays another.
-    let mut shown: Option<PathBuf> = None;
     let mut swept = Instant::now();
     while !shared.closed.load(Ordering::Relaxed) {
         for command in rx.try_iter() {
@@ -870,12 +894,17 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
                 MediaProject::Native(project) => (project, None),
                 MediaProject::Rendered(project, file) => (project, Some(file)),
             };
+            let rendered = file.is_some();
             // Close the old session before the preview it played goes.
             drop(session.take());
-            if let Some(old) = std::mem::replace(&mut shown, file) {
+            let old = shared
+                .shown_preview
+                .lock()
+                .ok()
+                .and_then(|mut shown| std::mem::replace(&mut *shown, file));
+            if let Some(old) = old {
                 discard_preview(&shared, old);
             }
-            let rendered = shown.is_some();
             if let Ok(mut frame) = shared.frame.lock() {
                 *frame = None;
             }
@@ -994,14 +1023,7 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
         });
     }
     drop(session);
-    if let Some(file) = shown {
-        discard_preview(&shared, file);
-    }
-    if let Ok(mut slot) = shared.project.lock() {
-        if let Some(MediaProject::Rendered(_, file)) = slot.take() {
-            discard_preview(&shared, file);
-        }
-    }
+    discard_previews(&shared);
     // A playback worker that is shutting down may hold its file open a
     // little longer.
     for _ in 0..40 {
@@ -1508,6 +1530,7 @@ pub unsafe extern "C" fn kerf_bridge_new(
         previews: AtomicU64::new(0),
         preview_cancel: Mutex::new(None),
         stale_previews: Mutex::new(Vec::new()),
+        shown_preview: Mutex::new(None),
     });
     {
         let directory = directory.clone();
@@ -1565,8 +1588,11 @@ pub unsafe extern "C" fn kerf_bridge_free(bridge: *mut c_void) {
     // SAFETY: Ownership is transferred back exactly once by the caller.
     let bridge = unsafe { Box::from_raw(bridge.cast::<Bridge>()) };
     bridge.shared.closed.store(true, Ordering::SeqCst);
-    // Nobody would see a preview still rendering.
+    // Nobody would see a preview still rendering, or the one playing. The
+    // process may exit before the media worker stops, so the files go now;
+    // one a playback worker still holds open is left for the media worker.
     cancel_preview(&bridge.shared);
+    discard_previews(&bridge.shared);
     if let Ok(abort) = bridge.shared.abort.lock() {
         if let Some(abort) = &*abort {
             abort.store(true, Ordering::SeqCst);
@@ -1904,8 +1930,9 @@ pub unsafe extern "C" fn kerf_bridge_frame(bridge: *mut c_void, output: *mut Ker
 #[cfg(test)]
 mod tests {
     use super::{
-        cancel_preview, discard_preview, media_worker, preview_frame_size, publish, publish_force,
-        rendered_preview, sweep_previews, AgentSettings, Command, MediaProject, Shared,
+        cancel_preview, discard_preview, discard_previews, media_worker, preview_frame_size,
+        publish, publish_force, rendered_preview, sweep_previews, AgentSettings, Command,
+        MediaProject, Shared,
     };
     use kerf_runtime::{EditOp, PendingProposal, ProposalFreshness, StateSnapshot};
     use serde_json::json;
@@ -2290,6 +2317,23 @@ mod tests {
         std::fs::remove_dir(&held).unwrap();
         assert!(sweep_previews(&shared));
         assert!(shared.stale_previews.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn closing_removes_the_previews_without_waiting_for_the_media_worker() {
+        let directory = tempfile::tempdir().unwrap();
+        let shared = crate::tests_support::shared(directory.path());
+        let playing = directory.path().join("render-1.mp4");
+        let waiting = directory.path().join("render-2.mp4");
+        std::fs::write(&playing, b"preview").unwrap();
+        std::fs::write(&waiting, b"preview").unwrap();
+        *shared.shown_preview.lock().unwrap() = Some(playing.clone());
+        *shared.project.lock().unwrap() = Some(rendered(&waiting));
+
+        discard_previews(&shared);
+        assert!(!playing.exists() && !waiting.exists());
+        assert!(shared.shown_preview.lock().unwrap().is_none());
+        assert!(shared.project.lock().unwrap().is_none());
     }
 
     #[test]
