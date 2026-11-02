@@ -945,6 +945,8 @@ impl KerfMcpRouter {
             .map_err(engine_error)?;
             entry.mark_complete(&["sound.mp4"]).map_err(engine_error)?;
         }
+        // A program's sound is rendered for each revision listened to.
+        let _ = DerivativeCache::new(&self.dir).keep_newest(&entry, KEPT_PROGRAM_SOUNDS);
         let range = kerf_engine::TimeRange::new(0.0, (to - from).seconds())
             .map_err(|error| McpError::new("INVALID_ARGUMENTS", error.to_string()))?;
         let result = kerf_engine::transcribe_cached(
@@ -965,7 +967,9 @@ impl KerfMcpRouter {
     }
 
     /// A cache entry for what `sequence` of `project`, whose media paths
-    /// are resolved, renders to; refused when it cannot be rendered.
+    /// are resolved, renders to; refused when it cannot be rendered. Its
+    /// key is the whole document, so each revision makes new ones: keep a
+    /// few with [`DerivativeCache::keep_newest`].
     fn program_entry(
         &self,
         project: &Project,
@@ -1152,6 +1156,8 @@ impl KerfMcpRouter {
             }
             entry.mark_complete(&required).map_err(engine_error)?;
         }
+        // Every edit's preview captures two revisions.
+        let _ = DerivativeCache::new(&self.dir).keep_newest(&entry, KEPT_PROGRAM_FRAMES);
         Ok(Capture {
             frames: names
                 .iter()
@@ -1486,6 +1492,14 @@ impl KerfMcpRouter {
         Ok(result)
     }
 }
+
+/// How many renders of a program's sound (each up to 15 minutes, with its
+/// transcript) the cache keeps besides the one in use; older revisions'
+/// make way.
+const KEPT_PROGRAM_SOUNDS: usize = 4;
+/// How many captures of a program's frames the cache keeps besides the one
+/// in use.
+const KEPT_PROGRAM_FRAMES: usize = 32;
 
 /// A script refusal, with each line numbered as the agent wrote it.
 /// The most catalog entries `look` with `effects` returns.

@@ -429,15 +429,20 @@ pub fn make_proxy(
         .args(["-crf", "23", "-g", "30", "-pix_fmt", "yuv420p"])
         .args(["-c:a", "aac", "-b:a", "128k", "-f", "mp4"])
         .arg(&partial);
-    let finished = crate::sidecar::run(command, cancellation, |_| {})?;
-    if !finished.status.success() {
+    let made = crate::sidecar::run(command, cancellation, |_| {}).and_then(|finished| {
+        if !finished.status.success() {
+            return Err(EngineError::msg(format!(
+                "proxy failed: {}",
+                finished.stderr.trim()
+            )));
+        }
+        Ok(std::fs::rename(&partial, entry.path(PROXY_FILE))?)
+    });
+    if made.is_err() {
+        // Cancelled, failed, or not published: nothing reads the partial.
         let _ = std::fs::remove_file(&partial);
-        return Err(EngineError::msg(format!(
-            "proxy failed: {}",
-            finished.stderr.trim()
-        )));
     }
-    std::fs::rename(&partial, entry.path(PROXY_FILE))?;
+    made?;
     entry.mark_complete(&[PROXY_FILE])?;
     Ok(Some(entry.path(PROXY_FILE)))
 }
