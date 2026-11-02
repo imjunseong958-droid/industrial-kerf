@@ -17,7 +17,7 @@ use kerf_model::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
@@ -152,18 +152,157 @@ impl Facts for CachedFacts {
 /// Index `path` and make its proxy, in the background, so agents and
 /// drafts find them ready. Failures leave nothing behind; the work is
 /// done again when it is asked for.
+///
+/// Files wait their turn: a few workers prepare them one at a time each,
+/// so importing a folder of clips does not start an FFmpeg for every one
+/// at once. A file already waiting or being prepared is not queued again.
 pub(crate) fn prepare_media(path: String, directory: PathBuf) {
-    // Counted before the request that asked for it answers, so an idle
-    // kerfd never sees a moment with neither.
-    let work = BackgroundWork::start(&directory);
-    std::thread::spawn(move || {
-        let _work = work;
-        let cache = kerf_engine::derivatives::DerivativeCache::new(&directory);
-        let cancellation = kerf_engine::CancellationToken::new();
-        let path = std::path::Path::new(&path);
-        let _ = kerf_engine::media_index(path, &cache, &cancellation);
-        let _ = kerf_engine::make_proxy(path, &cache, &cancellation);
+    let path = PathBuf::from(path);
+    let file = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+    let mut queue = media_queue();
+    if !queue.pending.insert((directory.clone(), file.clone())) {
+        return;
+    }
+    let cancellation = queue
+        .cancellations
+        .entry(directory.clone())
+        .or_default()
+        .clone();
+    queue.waiting.push_back(MediaJob {
+        // Counted before the request that asked for it answers, so an
+        // idle kerfd never sees a moment with neither.
+        _work: BackgroundWork::start(&directory),
+        directory,
+        file,
+        path,
+        cancellation,
     });
+    if queue.workers >= media_workers() {
+        return;
+    }
+    queue.workers += 1;
+    let spawned = std::thread::Builder::new()
+        .name("kerf-media".into())
+        .spawn(prepare_queued_media);
+    if spawned.is_err() {
+        queue.workers -= 1;
+        if queue.workers == 0 {
+            // Nothing would ever take what waits, and it would keep kerfd
+            // running; the work is done again when it is asked for.
+            let waiting: Vec<MediaJob> = queue.waiting.drain(..).collect();
+            for job in &waiting {
+                queue.forget(job);
+            }
+            drop(queue);
+            drop(waiting);
+        }
+    }
+}
+
+/// Stop preparing media for `directory`, waiting up to `wait` for the
+/// FFmpeg running for it to be killed. kerfd calls this as it exits: its
+/// sidecars run in process groups of their own, which would otherwise
+/// outlive it. Media imported later is prepared afresh.
+pub(crate) fn stop_media(directory: &Path, wait: std::time::Duration) {
+    let dropped: VecDeque<MediaJob> = {
+        let mut queue = media_queue();
+        if let Some(cancellation) = queue.cancellations.remove(directory) {
+            cancellation.cancel();
+        }
+        let (dropped, kept) = queue
+            .waiting
+            .drain(..)
+            .partition(|job| job.directory == directory);
+        queue.waiting = kept;
+        for job in &dropped {
+            queue.forget(job);
+        }
+        dropped
+    };
+    drop(dropped);
+    let deadline = Instant::now() + wait;
+    while media_queue().preparing(directory) && Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// How many files are prepared at once. Each FFmpeg already uses several
+/// cores.
+fn media_workers() -> usize {
+    std::thread::available_parallelism().map_or(1, |cores| (cores.get() / 4).clamp(1, 2))
+}
+
+/// Prepare queued files until none is left.
+fn prepare_queued_media() {
+    loop {
+        let job = {
+            let mut queue = media_queue();
+            let Some(job) = queue.waiting.pop_front() else {
+                queue.workers -= 1;
+                return;
+            };
+            job
+        };
+        // A panic in one file's work must not stop the queue, or what
+        // waits behind it would keep kerfd running forever.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let cache = kerf_engine::derivatives::DerivativeCache::new(&job.directory);
+            let _ = kerf_engine::media_index(&job.path, &cache, &job.cancellation);
+            if !job.cancellation.is_cancelled() {
+                let _ = kerf_engine::make_proxy(&job.path, &cache, &job.cancellation);
+            }
+        }));
+        media_queue().forget(&job);
+    }
+}
+
+/// One file to prepare.
+struct MediaJob {
+    directory: PathBuf,
+    /// The file as the import named it, which is how the cache knows it.
+    path: PathBuf,
+    /// The file itself, which keeps it from being queued twice.
+    file: PathBuf,
+    cancellation: kerf_engine::CancellationToken,
+    _work: BackgroundWork,
+}
+
+/// Files waiting to be prepared, and those being prepared.
+static MEDIA_QUEUE: Mutex<MediaQueue> = Mutex::new(MediaQueue {
+    waiting: VecDeque::new(),
+    pending: BTreeSet::new(),
+    cancellations: BTreeMap::new(),
+    workers: 0,
+});
+
+struct MediaQueue {
+    waiting: VecDeque<MediaJob>,
+    /// Each project folder and file waiting or being prepared.
+    pending: BTreeSet<(PathBuf, PathBuf)>,
+    /// What stops each folder's work, while it has some.
+    cancellations: BTreeMap<PathBuf, kerf_engine::CancellationToken>,
+    workers: usize,
+}
+
+impl MediaQueue {
+    /// `job` is no longer waiting or being prepared.
+    fn forget(&mut self, job: &MediaJob) {
+        self.pending
+            .remove(&(job.directory.clone(), job.file.clone()));
+        if !self.preparing(&job.directory) {
+            self.cancellations.remove(&job.directory);
+        }
+    }
+
+    fn preparing(&self, directory: &Path) -> bool {
+        self.pending.iter().any(|(pending, _)| pending == directory)
+    }
+}
+
+fn media_queue() -> MutexGuard<'static, MediaQueue> {
+    // Every update leaves the queue consistent, and work runs outside the
+    // lock, so a panic leaves nothing half-done in it.
+    MEDIA_QUEUE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Work kerfd does for each project folder after the request that started
@@ -1242,4 +1381,63 @@ fn json_value(ty: &ParamType, value: &Json) -> Option<Value> {
         (ParamType::Color, Json::String(s)) => Value::Color(kerf_model::Rgba::parse(s)?),
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn running(directory: &Path) -> usize {
+        background_state()
+            .get(directory)
+            .map_or(0, |state| state.running)
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("kerf-media-{name}-{}", crate::unique_id()))
+    }
+
+    fn missing(directory: &Path, name: &str) -> String {
+        directory.join(name).to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn media_is_prepared_once_by_a_bounded_set_of_workers() {
+        let directory = scratch("queue");
+        prepare_media(missing(&directory, "twice.mov"), directory.clone());
+        prepare_media(missing(&directory, "twice.mov"), directory.clone());
+        // The file counts once, whether or not a worker has taken it yet.
+        assert!(running(&directory) <= 1);
+        for index in 0..8 {
+            prepare_media(
+                missing(&directory, &format!("{index}.mov")),
+                directory.clone(),
+            );
+            assert!(media_queue().workers <= media_workers());
+        }
+        stop_media(&directory, Duration::from_secs(10));
+        assert!(!media_queue().preparing(&directory));
+        assert!(!background_work(&directory).0);
+    }
+
+    #[test]
+    fn stopping_drops_what_waits_and_leaves_other_projects_alone() {
+        let stopped = scratch("stop");
+        let other = scratch("keep");
+        let work = BackgroundWork::start(&other);
+        for index in 0..8 {
+            prepare_media(missing(&stopped, &format!("{index}.mov")), stopped.clone());
+        }
+        stop_media(&stopped, Duration::from_secs(10));
+        assert!(!media_queue().preparing(&stopped));
+        assert!(!media_queue().cancellations.contains_key(&stopped));
+        assert_eq!(running(&stopped), 0);
+        assert_eq!(running(&other), 1);
+        drop(work);
+        // Media imported later is prepared afresh.
+        prepare_media(missing(&stopped, "later.mov"), stopped.clone());
+        stop_media(&stopped, Duration::from_secs(10));
+        assert_eq!(running(&stopped), 0);
+    }
 }
