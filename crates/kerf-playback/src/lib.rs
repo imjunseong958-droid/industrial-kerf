@@ -169,6 +169,9 @@ struct ControlState {
     /// Bumped on every open and seek so an in-flight GOP decode can stop
     /// before the next pointer position arrives.
     epoch: Arc<AtomicU64>,
+    /// Set once the session is closed. The worker stops on it even when
+    /// its command queue was too full to take the Shutdown.
+    shutdown: bool,
 }
 
 impl ControlState {
@@ -180,6 +183,7 @@ impl ControlState {
             visible_epoch: 0,
             latest_seek: None,
             epoch: Arc::new(AtomicU64::new(0)),
+            shutdown: false,
         }
     }
 
@@ -269,8 +273,17 @@ impl PlaybackHandle {
         self.send(WorkerCommand::SetMuted(muted))
     }
 
+    /// Stop the worker. A new epoch cancels the decode or draw under way,
+    /// and the command only wakes the worker, so a full queue cannot keep
+    /// it running.
     pub fn shutdown(&self) -> Result<(), PlaybackError> {
-        self.send(WorkerCommand::Shutdown)
+        let mut control = self.lock_control();
+        control.shutdown = true;
+        control.allocate_request_id();
+        match self.commands.try_send(WorkerCommand::Shutdown) {
+            Ok(()) | Err(TrySendError::Full(_)) => Ok(()),
+            Err(TrySendError::Disconnected(_)) => Err(PlaybackError::WorkerUnavailable),
+        }
     }
 
     fn send(&self, command: WorkerCommand) -> Result<(), PlaybackError> {
@@ -567,18 +580,22 @@ impl Worker {
     }
 
     fn next_command(&mut self, timeout: Duration) -> Option<WorkerCommand> {
+        if self.shutdown_requested() {
+            return Some(WorkerCommand::Shutdown);
+        }
         if let Some(command) = self.deferred_command.take() {
             return Some(command);
         }
+        // With every sender gone nothing can reach the worker again.
         let command = match self.commands.try_recv() {
             Ok(command) => Some(command),
-            Err(TryRecvError::Disconnected) => return None,
+            Err(TryRecvError::Disconnected) => return Some(WorkerCommand::Shutdown),
             Err(TryRecvError::Empty) => {
                 self.take_seek_request()
                     .map(WorkerCommand::Seek)
                     .or_else(|| match self.commands.recv_timeout(timeout) {
                         Ok(command) => Some(command),
-                        Err(RecvTimeoutError::Disconnected) => None,
+                        Err(RecvTimeoutError::Disconnected) => Some(WorkerCommand::Shutdown),
                         Err(RecvTimeoutError::Timeout) => None,
                     })
             }
@@ -590,6 +607,13 @@ impl Worker {
             }
         }
         Some(command)
+    }
+
+    fn shutdown_requested(&self) -> bool {
+        self.control
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .shutdown
     }
 
     fn take_seek_request(&mut self) -> Option<SeekRequest> {
@@ -1417,10 +1441,19 @@ mod tests {
     }
 
     fn worker_for_state_test() -> (Worker, Receiver<QueuedEvent>, Arc<Mutex<ControlState>>) {
-        let timeline = PlaybackTimeline::from_project(&project_with_media()).expect("timeline");
         let (commands, command_receiver) = mpsc::sync_channel(COMMAND_QUEUE_CAPACITY);
-        let (events, event_receiver) = mpsc::sync_channel(16);
         let control = Arc::new(Mutex::new(ControlState::new()));
+        let (worker, event_receiver) = worker_on(command_receiver, Arc::clone(&control));
+        drop(commands);
+        (worker, event_receiver, control)
+    }
+
+    fn worker_on(
+        command_receiver: Receiver<WorkerCommand>,
+        control: Arc<Mutex<ControlState>>,
+    ) -> (Worker, Receiver<QueuedEvent>) {
+        let timeline = PlaybackTimeline::from_project(&project_with_media()).expect("timeline");
+        let (events, event_receiver) = mpsc::sync_channel(16);
         let epoch = Arc::clone(&control.lock().expect("control").epoch);
         let audio = AudioRuntime::spawn(timeline.clone(), false).expect("audio worker");
         let worker = Worker {
@@ -1453,8 +1486,56 @@ mod tests {
             drawn_ready: BTreeMap::new(),
             drawn_shown: None,
         };
+        (worker, event_receiver)
+    }
+
+    /// Run `worker` and wait a while for it to return.
+    fn worker_exits(worker: Worker) -> bool {
+        let thread = thread::spawn(move || worker.run());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !thread.is_finished() {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        thread.join().is_ok()
+    }
+
+    #[test]
+    fn worker_stops_when_its_full_queue_cannot_take_the_shutdown() {
+        let (commands, command_receiver) = mpsc::sync_channel(COMMAND_QUEUE_CAPACITY);
+        let control = Arc::new(Mutex::new(ControlState::new()));
+        let (worker, _events) = worker_on(command_receiver, Arc::clone(&control));
+        let handle = PlaybackHandle { commands, control };
+        for _ in 0..COMMAND_QUEUE_CAPACITY {
+            handle
+                .commands
+                .try_send(WorkerCommand::SeekWake)
+                .expect("room in the queue");
+        }
+        assert!(matches!(
+            handle.commands.try_send(WorkerCommand::SeekWake),
+            Err(TrySendError::Full(_))
+        ));
+        handle.shutdown().expect("shutdown with a full queue");
+        // A clone still holds the queue open, so only the flag stops it.
+        let _kept = handle.clone();
+        assert!(worker_exits(worker));
+    }
+
+    #[test]
+    fn worker_stops_once_every_sender_is_gone() {
+        let (commands, command_receiver) = mpsc::sync_channel(COMMAND_QUEUE_CAPACITY);
+        let control = Arc::new(Mutex::new(ControlState::new()));
+        let (worker, _events) = worker_on(command_receiver, control);
+        for _ in 0..COMMAND_QUEUE_CAPACITY {
+            commands
+                .try_send(WorkerCommand::SeekWake)
+                .expect("room in the queue");
+        }
         drop(commands);
-        (worker, event_receiver, control)
+        assert!(worker_exits(worker));
     }
 
     #[test]
