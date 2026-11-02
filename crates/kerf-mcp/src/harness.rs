@@ -255,8 +255,8 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
         ),
         "render" => (
             "Render the sequence, or the range `from`–`to`, to a file — of the project, or \
-             of what a pending `proposal` would make. Returns a job; pass `job` to read its \
-             progress and output, with `cancel` to stop it.",
+             of what a pending `proposal` would make. Returns a job that renders while this \
+             session lasts; pass `job` to read its progress and output, with `cancel` to stop it.",
             json!({
                 "type": "object",
                 "properties": {
@@ -945,6 +945,8 @@ impl KerfMcpRouter {
             .map_err(engine_error)?;
             entry.mark_complete(&["sound.mp4"]).map_err(engine_error)?;
         }
+        // A program's sound is rendered for each revision listened to.
+        let _ = DerivativeCache::new(&self.dir).keep_newest(&entry, KEPT_PROGRAM_SOUNDS);
         let range = kerf_engine::TimeRange::new(0.0, (to - from).seconds())
             .map_err(|error| McpError::new("INVALID_ARGUMENTS", error.to_string()))?;
         let result = kerf_engine::transcribe_cached(
@@ -965,7 +967,9 @@ impl KerfMcpRouter {
     }
 
     /// A cache entry for what `sequence` of `project`, whose media paths
-    /// are resolved, renders to; refused when it cannot be rendered.
+    /// are resolved, renders to; refused when it cannot be rendered. Its
+    /// key is the whole document, so each revision makes new ones: keep a
+    /// few with [`DerivativeCache::keep_newest`].
     fn program_entry(
         &self,
         project: &Project,
@@ -1152,6 +1156,8 @@ impl KerfMcpRouter {
             }
             entry.mark_complete(&required).map_err(engine_error)?;
         }
+        // Every edit's preview captures two revisions.
+        let _ = DerivativeCache::new(&self.dir).keep_newest(&entry, KEPT_PROGRAM_FRAMES);
         Ok(Capture {
             frames: names
                 .iter()
@@ -1363,7 +1369,8 @@ impl KerfMcpRouter {
     }
 
     /// Start a render job of the project, or of a pending proposal, in the
-    /// background and return it queued.
+    /// background and return it queued. It runs in this process, which
+    /// waits for it or cancels it before exiting (see `finish_renders`).
     fn render_start(
         &self,
         draft: bool,
@@ -1383,7 +1390,7 @@ impl KerfMcpRouter {
         let runtime = self.runtime.clone();
         let worker_job = job.clone();
         let worker_output = output.clone();
-        thread::spawn(move || {
+        self.spawn_render(job.job_id.clone(), move || {
             let mut last_progress = -1.0_f64;
             let _ = kerf_runtime::run_render_job(
                 &runtime,
@@ -1486,6 +1493,14 @@ impl KerfMcpRouter {
         Ok(result)
     }
 }
+
+/// How many renders of a program's sound (each up to 15 minutes, with its
+/// transcript) the cache keeps besides the one in use; older revisions'
+/// make way.
+const KEPT_PROGRAM_SOUNDS: usize = 4;
+/// How many captures of a program's frames the cache keeps besides the one
+/// in use.
+const KEPT_PROGRAM_FRAMES: usize = 32;
 
 /// A script refusal, with each line numbered as the agent wrote it.
 /// The most catalog entries `look` with `effects` returns.

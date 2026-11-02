@@ -14,9 +14,10 @@ use kerf_fx::RasterStack;
 use kerf_model::{Catalog, Project};
 use rayon::prelude::*;
 use serde_json::json;
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::thread;
 
 const BAKE_FILE: &str = "frames.mkv";
 
@@ -195,9 +196,14 @@ fn bake_job(job: &BakeJob, entry: &CacheEntry, cancellation: &CancellationToken)
         Ok(encoder) => encoder,
         Err(error) => {
             let _ = decoder.kill();
+            let _ = decoder.wait();
             return Err(error.into());
         }
     };
+    // Read as they write, so neither blocks on a full stderr pipe while
+    // frames pass between them.
+    let decoder_errors = drain_stderr(&mut decoder);
+    let encoder_errors = drain_stderr(&mut encoder);
 
     let fps = job.rate.fps();
     let result = (|| -> Result<()> {
@@ -244,8 +250,8 @@ fn bake_job(job: &BakeJob, entry: &CacheEntry, cancellation: &CancellationToken)
         }
         Ok(())
     })();
-    let decoded = finish(&mut decoder, result.is_err());
-    let encoded = finish(&mut encoder, false);
+    let decoded = finish(&mut decoder, result.is_err(), decoder_errors);
+    let encoded = finish(&mut encoder, false, encoder_errors);
     let outcome = result
         .and_then(|()| {
             decoded.map_err(|error| EngineError::msg(format!("decoding {}: {error}", job.source)))
@@ -275,19 +281,67 @@ pub(crate) fn read_frame(input: &mut impl Read, frame: &mut [u8]) -> Result<bool
     Ok(true)
 }
 
+/// Read `child`'s stderr to its end on a thread of its own, keeping the
+/// last of it for [`finish`] to report.
+fn drain_stderr(child: &mut Child) -> thread::JoinHandle<String> {
+    let pipe = child.stderr.take();
+    thread::spawn(move || {
+        let mut tail = String::new();
+        let Some(pipe) = pipe else {
+            return tail;
+        };
+        for line in BufReader::new(pipe).split(b'\n') {
+            let Ok(line) = line else {
+                break;
+            };
+            crate::sidecar::append_bounded(&mut tail, &String::from_utf8_lossy(&line));
+        }
+        tail
+    })
+}
+
 /// Wait for an FFmpeg process (killing it first when `kill`), reporting
-/// its errors.
-pub(crate) fn finish(child: &mut Child, kill: bool) -> std::result::Result<(), String> {
+/// its errors from `stderr`, what [`drain_stderr`] read.
+fn finish(
+    child: &mut Child,
+    kill: bool,
+    stderr: thread::JoinHandle<String>,
+) -> std::result::Result<(), String> {
     if kill {
         let _ = child.kill();
     }
-    let mut stderr = String::new();
-    if let Some(mut pipe) = child.stderr.take() {
-        let _ = pipe.read_to_string(&mut stderr);
-    }
-    match child.wait() {
+    let status = child.wait();
+    let stderr = stderr.join().unwrap_or_default();
+    match status {
         Ok(status) if status.success() || kill => Ok(()),
         Ok(status) => Err(format!("{status}: {}", stderr.trim())),
         Err(error) => Err(error.to_string()),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_child_that_fills_its_stderr_still_finishes() {
+        // Far more than a pipe holds, before the stdout it is read for.
+        let mut child = Command::new("sh")
+            .args(["-c", "i=0; while [ $i -lt 4000 ]; do echo \"error while decoding MB $i\" >&2; i=$((i+1)); done; echo done"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let errors = drain_stderr(&mut child);
+        let mut output = String::new();
+        child
+            .stdout
+            .take()
+            .unwrap()
+            .read_to_string(&mut output)
+            .unwrap();
+        assert_eq!(output, "done\n");
+        assert_eq!(finish(&mut child, false, errors), Ok(()));
     }
 }

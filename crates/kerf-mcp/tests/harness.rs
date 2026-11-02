@@ -416,6 +416,34 @@ fn render_runs_a_range_to_a_file() {
 }
 
 #[test]
+fn renders_are_waited_for_or_cancelled_before_the_process_exits() {
+    let Some((directory, router)) = router() else {
+        return;
+    };
+    let waited = ok(&router, "render", json!({}));
+    router.finish_renders(false);
+    assert_eq!(router.running_renders(), 0);
+    let status = ok(&router, "render", json!({"job": waited["job"]}));
+    assert_eq!(status["status"], "completed", "{status}");
+
+    let stopped = ok(&router, "render", json!({"quality": "full"}));
+    router.finish_renders(true);
+    assert_eq!(router.running_renders(), 0);
+    let status = ok(&router, "render", json!({"job": stopped["job"]}));
+    assert!(
+        matches!(status["status"].as_str(), Some("cancelled" | "completed")),
+        "{status}"
+    );
+    // The job's worker ran to its end and took its cancel file with it.
+    let left = std::fs::read_dir(directory.path())
+        .unwrap()
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".cancel"))
+        .count();
+    assert_eq!(left, 0);
+}
+
+#[test]
 fn look_scans_with_sheets_and_indexes_sound() {
     let Some((_directory, router)) = router() else {
         return;

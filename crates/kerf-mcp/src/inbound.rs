@@ -83,12 +83,14 @@ struct McpProcess {
     stdout: BufReader<ChildStdout>,
     timeout: Duration,
     next_id: u64,
+    /// Killed after a call timed out, was cancelled, or broke the transport;
+    /// the next call starts the server again.
+    stopped: bool,
 }
 
 impl Drop for McpProcess {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.stop();
     }
 }
 
@@ -326,6 +328,10 @@ impl InboundMcpRegistry {
             .process
             .lock()
             .map_err(|_| "MCP process lock poisoned".to_owned())?;
+        if process.stopped {
+            // The tools stay as first discovered.
+            *process = McpProcess::start(&server.config, process.timeout)?.0;
+        }
         let response = process.request_with_cancel(
             "tools/call",
             json!({"name": tool.name, "arguments": arguments}),
@@ -344,6 +350,44 @@ impl ConnectedServer {
         config: McpServerConfig,
         timeout: Duration,
     ) -> Result<(Self, usize), String> {
+        let (process, raw_tools) = McpProcess::start(&config, timeout)?;
+        let tools = raw_tools
+            .into_iter()
+            .filter_map(|tool| {
+                let name = tool.get("name")?.as_str()?.to_owned();
+                Some(InboundTool {
+                    name,
+                    description: tool
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    input_schema: tool.get("inputSchema").cloned(),
+                })
+            })
+            .collect::<Vec<_>>();
+        let count = tools.len();
+        Ok((
+            Self {
+                config,
+                tools,
+                process: Arc::new(Mutex::new(process)),
+            },
+            count,
+        ))
+    }
+
+    fn allows(&self, tool: &str) -> bool {
+        self.config
+            .tools
+            .as_ref()
+            .is_none_or(|allowlist| allowlist.iter().any(|allowed| allowed == tool))
+    }
+}
+
+impl McpProcess {
+    /// Start `config`'s server and complete the MCP handshake; with the
+    /// tools it lists.
+    fn start(config: &McpServerConfig, timeout: Duration) -> Result<(Self, Vec<Value>), String> {
         let mut command = Command::new(&config.command);
         command
             .args(&config.args)
@@ -351,6 +395,10 @@ impl ConnectedServer {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
+        // A group of its own, so stopping it stops what a launcher (npx,
+        // uvx, docker) started too.
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
         let mut child = command
             .spawn()
             .map_err(|error| format!("failed to spawn {}: {error}", config.command))?;
@@ -370,6 +418,7 @@ impl ConnectedServer {
             stdout: BufReader::new(stdout),
             next_id: 1,
             timeout,
+            stopped: false,
         };
         let handshake = (|| {
             let started = Instant::now();
@@ -425,48 +474,31 @@ impl ConnectedServer {
             }
             Ok(all_tools)
         })();
-        let raw_tools = match handshake {
-            Ok(tools) => tools,
+        match handshake {
+            Ok(tools) => Ok((process, tools)),
             Err(error) => {
-                let _ = process.child.kill();
-                let _ = process.child.wait();
-                return Err(error);
+                process.stop();
+                Err(error)
             }
-        };
-        let tools = raw_tools
-            .into_iter()
-            .filter_map(|tool| {
-                let name = tool.get("name")?.as_str()?.to_owned();
-                Some(InboundTool {
-                    name,
-                    description: tool
-                        .get("description")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned),
-                    input_schema: tool.get("inputSchema").cloned(),
-                })
-            })
-            .collect::<Vec<_>>();
-        let count = tools.len();
-        Ok((
-            Self {
-                config,
-                tools,
-                process: Arc::new(Mutex::new(process)),
-            },
-            count,
-        ))
+        }
     }
 
-    fn allows(&self, tool: &str) -> bool {
-        self.config
-            .tools
-            .as_ref()
-            .is_none_or(|allowlist| allowlist.iter().any(|allowed| allowed == tool))
+    /// Kill the server and everything in its process group, and reap it.
+    fn stop(&mut self) {
+        if self.stopped {
+            return;
+        }
+        self.stopped = true;
+        #[cfg(unix)]
+        if let Ok(group) = libc::pid_t::try_from(self.child.id()) {
+            // SAFETY: the group is the unreaped child's own, so its id is
+            // not reused yet.
+            unsafe { libc::killpg(group, libc::SIGKILL) };
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
-}
 
-impl McpProcess {
     fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.request_with_cancel(method, params, None)
     }
@@ -495,16 +527,19 @@ impl McpProcess {
             if started.elapsed() >= self.timeout {
                 // A timed out child may still be computing and holding resources.
                 // Terminate it so the next call cannot inherit a stuck transport.
-                let _ = self.child.kill();
+                self.stop();
                 return Err("MCP request timed out".to_owned());
             }
             match self.stdout.fill_buf() {
-                Ok([]) => return Err("MCP server closed stdout".to_owned()),
+                Ok([]) => {
+                    self.stop();
+                    return Err("MCP server closed stdout".to_owned());
+                }
                 Ok(buffer) => {
                     let newline = buffer.iter().position(|byte| *byte == b'\n');
                     let count = newline.map_or(buffer.len(), |index| index + 1);
                     if line.len().saturating_add(count) > MCP_MAX_MESSAGE_BYTES {
-                        let _ = self.child.kill();
+                        self.stop();
                         return Err("MCP response exceeds size limit".into());
                     }
                     line.extend_from_slice(&buffer[..count]);
@@ -513,7 +548,7 @@ impl McpProcess {
                         let response: Value = match serde_json::from_slice(&line) {
                             Ok(response) => response,
                             Err(error) => {
-                                let _ = self.child.kill();
+                                self.stop();
                                 return Err(format!("invalid MCP JSON response: {error}"));
                             }
                         };
@@ -526,7 +561,10 @@ impl McpProcess {
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     std::thread::sleep(Duration::from_millis(5))
                 }
-                Err(error) => return Err(format!("MCP read failed: {error}")),
+                Err(error) => {
+                    self.stop();
+                    return Err(format!("MCP read failed: {error}"));
+                }
             }
         }
     }
@@ -545,7 +583,7 @@ impl McpProcess {
 
     fn check_cancelled(&mut self, cancelled: Option<&AtomicBool>) -> Result<(), String> {
         if cancelled.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
-            let _ = self.child.kill();
+            self.stop();
             return Err("MCP call cancelled. Its completion may be unknown; verify external state before retrying a mutation.".into());
         }
         Ok(())
@@ -567,18 +605,24 @@ impl McpProcess {
         while !remaining.is_empty() {
             self.check_cancelled(cancelled)?;
             if started.elapsed() >= self.timeout {
-                let _ = self.child.kill();
+                self.stop();
                 return Err("MCP request timed out while writing".to_owned());
             }
             match self.stdin.write(remaining) {
-                Ok(0) => return Err("MCP stdin closed".to_owned()),
+                Ok(0) => {
+                    self.stop();
+                    return Err("MCP stdin closed".to_owned());
+                }
                 Ok(written) => {
                     remaining = &remaining[written..];
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     std::thread::sleep(Duration::from_millis(5));
                 }
-                Err(error) => return Err(format!("MCP write failed: {error}")),
+                Err(error) => {
+                    self.stop();
+                    return Err(format!("MCP write failed: {error}"));
+                }
             }
         }
         self.stdin
@@ -901,6 +945,47 @@ for line in sys.stdin:
         interrupt.join().unwrap();
         assert!(error.contains("cancelled"));
         assert!(started.elapsed() < Duration::from_secs(2));
+        // The stopped server starts again for the next call.
+        let again = registry
+            .call(
+                "mcp_mock_lookup",
+                json!({"q": "x"}),
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+        assert_eq!(again, "ok");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stopping_a_launched_server_stops_what_its_launcher_started() {
+        let root = tempfile::tempdir().unwrap();
+        let pid_file = root.path().join("pid");
+        // A launcher (as npx is) whose real server is its child.
+        let config = McpServerConfig {
+            command: "sh".into(),
+            args: vec![
+                "-c".into(),
+                "sleep 30 & echo $! > \"$0\"; read line; sleep 30".into(),
+                pid_file.to_string_lossy().into_owned(),
+            ],
+            env: BTreeMap::new(),
+            tools: None,
+        };
+        let error = match ConnectedServer::connect_with_timeout(config, Duration::from_millis(300))
+        {
+            Ok(_) => panic!("a server that never answers connected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("timed out"), "{error}");
+        let pid = std::fs::read_to_string(&pid_file).unwrap();
+        let alive = Command::new("kill")
+            .args(["-0", pid.trim()])
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(!alive, "the launcher's child {pid} still runs");
     }
 
     #[test]

@@ -8,7 +8,7 @@
 use crate::id::Id;
 use crate::value::{Param, Rgba, Value};
 use std::collections::BTreeMap;
-use std::sync::{OnceLock, PoisonError, RwLock};
+use std::sync::{Mutex, OnceLock, PoisonError, RwLock};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ParamType {
@@ -445,7 +445,17 @@ impl Catalog {
             catalog.define_look(look)?;
         }
         // Kept for the life of the process: every reader holds `&'static`.
-        let catalog: &'static Catalog = Box::leak(Box::new(catalog));
+        // So one is made once for each set of looks, and installing a set
+        // again (a router per command does) reuses it.
+        let mut made = MADE.lock().unwrap_or_else(PoisonError::into_inner);
+        let catalog = match made.iter().find(|made| ***made == catalog) {
+            Some(made) => *made,
+            None => {
+                let catalog: &'static Catalog = Box::leak(Box::new(catalog));
+                made.push(catalog);
+                catalog
+            }
+        };
         *INSTALLED.write().unwrap_or_else(PoisonError::into_inner) = Some(catalog);
         Ok(())
     }
@@ -501,6 +511,10 @@ impl Catalog {
 
 /// The catalog [`Catalog::install_looks`] made, once it has.
 static INSTALLED: RwLock<Option<&'static Catalog>> = RwLock::new(None);
+
+/// Every catalog [`Catalog::install_looks`] has made, one for each set of
+/// looks installed.
+static MADE: Mutex<Vec<&'static Catalog>> = Mutex::new(Vec::new());
 
 /// The looks bundled with Kerf: ordinary look files.
 const BUNDLED_LOOKS: &[(&str, &str)] = &[
@@ -910,6 +924,15 @@ mod tests {
         for param in defs.chain(props) {
             param.check_value(&param.default).unwrap();
         }
+    }
+
+    #[test]
+    fn installing_the_same_looks_again_makes_no_new_catalog() {
+        Catalog::install_looks(Vec::new()).unwrap();
+        Catalog::install_looks(Vec::new()).unwrap();
+        let made = MADE.lock().unwrap();
+        let bundled = made.iter().filter(|made| ***made == *Catalog::bundled());
+        assert_eq!(bundled.count(), 1);
     }
 
     #[test]
