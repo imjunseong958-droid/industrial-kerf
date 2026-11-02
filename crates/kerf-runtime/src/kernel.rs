@@ -1414,6 +1414,17 @@ mod tests {
             .map_or(0, |state| state.running)
     }
 
+    /// How much work `directory` still counts once its workers have let go
+    /// of it. A worker forgets its file before its work stops counting, so
+    /// an idle kerfd never sees a moment with neither.
+    fn settled(directory: &Path) -> usize {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while running(directory) > 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        running(directory)
+    }
+
     fn scratch(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("kerf-media-{name}-{}", crate::unique_id()))
     }
@@ -1438,7 +1449,7 @@ mod tests {
         }
         stop_media(&directory, Duration::from_secs(10));
         assert!(!media_queue().preparing(&directory));
-        assert!(!background_work(&directory).0);
+        assert_eq!(settled(&directory), 0);
     }
 
     #[test]
@@ -1452,12 +1463,12 @@ mod tests {
         stop_media(&stopped, Duration::from_secs(10));
         assert!(!media_queue().preparing(&stopped));
         assert!(!media_queue().cancellations.contains_key(&stopped));
-        assert_eq!(running(&stopped), 0);
+        assert_eq!(settled(&stopped), 0);
         assert_eq!(running(&other), 1);
         drop(work);
         // Media imported later is prepared afresh.
         prepare_media(missing(&stopped, "later.mov"), stopped.clone());
         stop_media(&stopped, Duration::from_secs(10));
-        assert_eq!(running(&stopped), 0);
+        assert_eq!(settled(&stopped), 0);
     }
 }
