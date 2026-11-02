@@ -12,7 +12,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Where files are written before they take their place in the project.
 /// Git ignores it (`.kerf/cache/` is in the shared `.gitignore` and in every
@@ -160,11 +160,78 @@ pub fn relative_to(directory: &Path, file: &Path) -> Option<String> {
 }
 
 /// A new path in the project's [`INCOMING_DIR`], which is made when
-/// missing, ending in `suffix`.
+/// missing, ending in `suffix`. What interrupted copies and downloads left
+/// there is cleared first (see [`sweep`]).
 pub fn incoming_path(directory: &Path, suffix: &str) -> io::Result<PathBuf> {
     let folder = directory.join(INCOMING_DIR);
     fs::create_dir_all(&folder)?;
+    sweep(&folder, SystemTime::now());
     Ok(folder.join(format!("{}{suffix}", unique())))
+}
+
+/// How long an entry in [`INCOMING_DIR`] goes unwritten before it is taken
+/// for one an interrupted copy or download left.
+const STALE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Remove the entries in `folder` that another process's [`incoming_path`]
+/// made and nothing has written for [`STALE`] by `now`: an app quit mid-copy
+/// or a download stopped part way leaves them, and no one else would. A
+/// copy or download in progress keeps writing, so it is never stale.
+fn sweep(folder: &Path, now: SystemTime) {
+    let Ok(entries) = fs::read_dir(folder) else {
+        return;
+    };
+    let ours = format!("{}-", std::process::id());
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !is_unique(name) || name.starts_with(&ours) {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        let stale = last_written(&path, &metadata)
+            .and_then(|at| now.duration_since(at).ok())
+            .is_some_and(|age| age > STALE);
+        if stale {
+            let _ = if metadata.is_dir() {
+                fs::remove_dir_all(&path)
+            } else {
+                fs::remove_file(&path)
+            };
+        }
+    }
+}
+
+/// When `path` was last written: for a folder, whatever directly in it was
+/// written last, as a download writes its partial file there.
+fn last_written(path: &Path, metadata: &fs::Metadata) -> Option<SystemTime> {
+    let mut latest = metadata.modified().ok()?;
+    if metadata.is_dir() {
+        for entry in fs::read_dir(path).ok()?.flatten() {
+            if let Ok(modified) = entry.metadata().and_then(|m| m.modified()) {
+                latest = latest.max(modified);
+            }
+        }
+    }
+    Some(latest)
+}
+
+/// Whether `name` begins as [`unique`] makes it: `<pid>-<nanos>-<sequence>`.
+fn is_unique(name: &str) -> bool {
+    let number = |part: Option<&str>| {
+        part.is_some_and(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+    };
+    let mut parts = name.splitn(3, '-');
+    number(parts.next())
+        && number(parts.next())
+        && parts
+            .next()
+            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
 }
 
 fn unique() -> String {
@@ -348,6 +415,33 @@ mod tests {
         fs::read_dir(folder)
             .map(|entries| entries.map(|entry| entry.unwrap().file_name()).collect())
             .unwrap_or_default()
+    }
+
+    #[test]
+    fn what_interrupted_copies_leave_is_swept() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join(INCOMING_DIR);
+        fs::create_dir_all(&folder).unwrap();
+        // A copy another editor was making when it quit, a download stopped
+        // part way, one of ours still running, and a file Kerf did not make.
+        fs::write(folder.join("1-100-0.part"), b"half a picture").unwrap();
+        fs::create_dir_all(folder.join("2-200-0-download")).unwrap();
+        fs::write(folder.join("2-200-0-download/clip.mp4.part"), b"half").unwrap();
+        let ours = incoming_path(root.path(), ".part").unwrap();
+        fs::write(&ours, b"still copying").unwrap();
+        fs::write(folder.join("notes.txt"), b"kept").unwrap();
+
+        // Recently written, they could still be in progress.
+        sweep(&folder, SystemTime::now());
+        assert_eq!(names(&folder).len(), 4);
+
+        sweep(&folder, SystemTime::now() + STALE * 2);
+        let mut left = names(&folder);
+        left.sort();
+        assert_eq!(
+            left,
+            [ours.file_name().unwrap().to_owned(), "notes.txt".into()]
+        );
     }
 
     /// A repository with Kerf's ignore rules, nothing committed.
