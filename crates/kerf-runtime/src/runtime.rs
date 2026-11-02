@@ -33,6 +33,9 @@ const CHECKPOINT_INTERVAL: u64 = 32;
 /// command history it replaced.
 const MAX_HISTORY_ENTRIES: usize = 100;
 const MAX_RECEIPTS: usize = 1024;
+/// Finished render jobs kept for clients that ask after them; queued and
+/// running jobs are always kept.
+const MAX_FINISHED_JOBS: usize = 50;
 
 #[allow(clippy::large_enum_variant)]
 enum JournalEvent {
@@ -114,18 +117,10 @@ struct DurableState {
 }
 
 impl DurableState {
-    /// Keep `snapshot` as the receipt of `operation` and return the journal
-    /// entry that carries it.
-    fn record_operation(
-        &mut self,
-        operation: String,
-        fingerprint: String,
-        snapshot: StateSnapshot,
-    ) -> JournalOperation {
-        let record = OperationRecord {
-            fingerprint,
-            snapshot: Arc::new(snapshot),
-        };
+    /// Keep the receipt of `operation`, which leaves this state's revision,
+    /// and return the journal entry that carries it.
+    fn record_operation(&mut self, operation: String, fingerprint: String) -> JournalOperation {
+        let record = OperationRecord::new(fingerprint, self.revision);
         self.operations.insert(operation.clone(), record.clone());
         JournalOperation {
             key: operation,
@@ -209,8 +204,16 @@ impl Runtime {
                     past: checkpoint.past,
                     future: checkpoint.future,
                     jobs: checkpoint.jobs,
-                    operations: checkpoint.operations,
-                    imports: checkpoint.imports,
+                    operations: checkpoint
+                        .operations
+                        .into_iter()
+                        .map(|(key, record)| (key, record.settled()))
+                        .collect(),
+                    imports: checkpoint
+                        .imports
+                        .into_iter()
+                        .map(|(key, record)| (key, record.settled()))
+                        .collect(),
                     proposal: checkpoint.proposal,
                 },
                 import_warnings: checkpoint.import_warnings,
@@ -242,8 +245,12 @@ impl Runtime {
                 projection_digest: None,
             }
         };
-        bound_receipts(&mut runtime.state.operations, None);
-        bound_receipts(&mut runtime.state.imports, None);
+        bound_receipts(
+            &mut runtime.state.operations,
+            None,
+            OperationRecord::revision,
+        );
+        bound_receipts(&mut runtime.state.imports, None, ImportRecord::revision);
 
         let records = load_journal(&runtime.journal_path, runtime.journal_sequence)?;
         // A journal may contain several committed mutations after the last
@@ -311,7 +318,10 @@ impl Runtime {
             }
         }
 
-        if runtime.reconcile_abandoned_jobs() {
+        let reconciled = runtime.reconcile_abandoned_jobs();
+        // Older kerfds kept every job; the next checkpoint keeps fewer.
+        bound_jobs(&mut runtime.state.jobs);
+        if reconciled {
             runtime.persist_checkpoint()?;
             truncate_journal(&runtime.journal_path)?;
             runtime.journal_records_since_checkpoint = 0;
@@ -404,8 +414,16 @@ impl Runtime {
             }
             _ => None,
         };
-        bound_receipts(&mut candidate.operations, preserve_operation);
-        bound_receipts(&mut candidate.imports, preserve_import);
+        bound_receipts(
+            &mut candidate.operations,
+            preserve_operation,
+            OperationRecord::revision,
+        );
+        bound_receipts(
+            &mut candidate.imports,
+            preserve_import,
+            ImportRecord::revision,
+        );
         let project_changed = candidate.project != self.state.project;
         if project_changed {
             self.projection_status = inspect_projection(&self.project_path, &self.state.project);
@@ -458,9 +476,10 @@ impl Runtime {
         Ok(self.snapshot())
     }
 
-    /// The recorded result when `operation` already ran as the request
+    /// The state now when `operation` already ran as the request
     /// `fingerprint` describes, or a conflict when its key was used for a
-    /// different request.
+    /// different request. The state includes what the request did, and
+    /// what came after it.
     fn replayed(
         &self,
         operation: &str,
@@ -468,13 +487,26 @@ impl Runtime {
     ) -> Option<Result<StateSnapshot, RuntimeError>> {
         let record = self.state.operations.get(operation)?;
         Some(if record.fingerprint == fingerprint {
-            Ok((*record.snapshot).clone())
+            Ok(self.snapshot())
         } else {
             Err(RuntimeError::new(
                 "IDEMPOTENCY_CONFLICT",
                 "idempotency key was already used for a different request",
             ))
         })
+    }
+
+    /// The state the current proposal's acceptance or rejection left, when
+    /// `actor`'s request `key` at `base_revision` made it.
+    fn proposal_receipt(
+        &self,
+        actor: &str,
+        key: &str,
+        base_revision: u64,
+    ) -> Option<StateSnapshot> {
+        let receipt = self.state.proposal.as_ref()?.receipt.as_ref()?;
+        (receipt.actor == actor && receipt.key == key && receipt.base_revision == base_revision)
+            .then(|| (*receipt.snapshot).clone())
     }
 
     /// The state after an edit, with a history entry, and how to journal
@@ -551,20 +583,24 @@ impl Runtime {
         let (mut candidate, change) =
             self.edit_candidate(edit.run(&self.state.project, &self.facts())?);
         candidate.proposal = proposal;
-        let snapshot = self.snapshot_of(&candidate);
-        if let Some(proposal) = candidate.proposal.as_mut() {
-            if matches!(proposal.lifecycle, PendingProposal::Accepted { .. })
+        let accepting = candidate.proposal.as_ref().is_some_and(|proposal| {
+            matches!(proposal.lifecycle, PendingProposal::Accepted { .. })
                 && proposal.receipt.is_none()
-            {
+        });
+        if accepting {
+            // The one proposal's receipt keeps its state; there is never
+            // more than one.
+            let snapshot = Arc::new(self.snapshot_of(&candidate));
+            if let Some(proposal) = candidate.proposal.as_mut() {
                 proposal.receipt = Some(ProposalReceipt {
                     actor: actor.to_owned(),
                     key: key.to_owned(),
                     base_revision,
-                    snapshot: Arc::new(snapshot.clone()),
+                    snapshot,
                 });
             }
         }
-        let operation = candidate.record_operation(operation, fingerprint, snapshot);
+        let operation = candidate.record_operation(operation, fingerprint);
         let proposal = candidate.proposal.clone();
         self.commit_candidate(
             candidate,
@@ -815,7 +851,12 @@ impl Runtime {
         let operation = format!("{actor}:{key}");
         let fingerprint = format!("{actor}:{base_revision}:reject:{proposal_id}");
         if let Some(replayed) = self.replayed(&operation, &fingerprint) {
-            return replayed;
+            // While the rejected proposal is the current one, its receipt
+            // still holds the state the rejection left.
+            return replayed.map(|state| {
+                self.proposal_receipt(actor, key, base_revision)
+                    .unwrap_or(state)
+            });
         }
 
         let record = self
@@ -853,16 +894,16 @@ impl Runtime {
                 });
                 let mut candidate = self.state.clone();
                 candidate.proposal = rejected_proposal;
-                let snapshot = self.snapshot_of(&candidate);
+                let snapshot = Arc::new(self.snapshot_of(&candidate));
                 if let Some(proposal) = candidate.proposal.as_mut() {
                     proposal.receipt = Some(ProposalReceipt {
                         actor: actor.to_owned(),
                         key: key.to_owned(),
                         base_revision,
-                        snapshot: Arc::new(snapshot.clone()),
+                        snapshot,
                     });
                 }
-                let operation = candidate.record_operation(operation, fingerprint, snapshot);
+                let operation = candidate.record_operation(operation, fingerprint);
                 let proposal = candidate.proposal.clone();
                 self.commit_candidate(
                     candidate,
@@ -965,8 +1006,7 @@ impl Runtime {
             let candidate = self.candidate_state(project, self.state.revision + 1, past, future);
             (candidate, direction.action(), Some(change))
         };
-        let snapshot = self.snapshot_of(&candidate);
-        let operation = candidate.record_operation(operation, fingerprint, snapshot);
+        let operation = candidate.record_operation(operation, fingerprint);
         let proposal = candidate.proposal.clone();
         self.commit_candidate(
             candidate,
@@ -1075,6 +1115,7 @@ impl Runtime {
         };
         let mut candidate = self.state.clone();
         candidate.jobs.insert(id, job.clone());
+        bound_jobs(&mut candidate.jobs);
         self.commit_candidate(candidate, JournalEvent::Job { job: job.clone() })?;
         Ok((job, document, output))
     }
@@ -1157,7 +1198,7 @@ impl Runtime {
                 ));
             }
             return Ok((
-                (*record.snapshot).clone(),
+                self.snapshot(),
                 record.media_id.clone(),
                 record.clip_id.clone(),
             ));
@@ -1173,16 +1214,15 @@ impl Runtime {
         let (mut candidate, change) =
             self.edit_candidate(kernel::apply_ops(&self.state.project, &ops)?);
         let (media_id, clip_id) = (media_id.to_string(), clip_id.to_string());
-        let snapshot = self.snapshot_of(&candidate);
-        let record = ImportRecord {
+        let record = ImportRecord::new(
             fingerprint,
-            snapshot: Arc::new(snapshot.clone()),
-            media_id: media_id.clone(),
-            clip_id: clip_id.clone(),
-        };
+            candidate.revision,
+            media_id.clone(),
+            clip_id.clone(),
+        );
         candidate.imports.insert(operation.clone(), record.clone());
         let proposal = candidate.proposal.clone();
-        self.commit_candidate(
+        let snapshot = self.commit_candidate(
             candidate,
             JournalEvent::Mutation {
                 action: JournalAction::Apply,
@@ -1238,8 +1278,7 @@ impl Runtime {
         replacement.reel.clone_from(&existing.reel);
         let (mut candidate, change) =
             self.edit_candidate(kernel::replace_media(&self.state.project, replacement)?);
-        let snapshot = self.snapshot_of(&candidate);
-        let operation = candidate.record_operation(operation, fingerprint, snapshot);
+        let operation = candidate.record_operation(operation, fingerprint);
         let proposal = candidate.proposal.clone();
         let snapshot = self.commit_candidate(
             candidate,
@@ -1290,7 +1329,7 @@ impl Runtime {
                 format!("render job {id} is already {}", current.status),
             ));
         }
-        let mut job = current;
+        let mut job = current.clone();
         job.status = status.into();
         job.error = error;
         job.output_url = output_url;
@@ -1305,6 +1344,16 @@ impl Runtime {
         }
         if status == "completed" {
             job.progress = 1.0;
+        }
+        if job.status == current.status
+            && job.error == current.error
+            && job.output_url == current.output_url
+        {
+            // Only progress moved. A render reports it often, and a kerfd
+            // that restarts fails the job anyway, so it is kept in memory
+            // rather than journaled; the next checkpoint carries it.
+            self.state.jobs.insert(id.to_owned(), job);
+            return Ok(());
         }
         let mut candidate = self.state.clone();
         candidate.jobs.insert(id.to_owned(), job.clone());
@@ -1627,6 +1676,7 @@ impl Runtime {
                     .job
                     .ok_or_else(|| RuntimeError::new("INVALID_JOURNAL", "job record has no job"))?;
                 self.state.jobs.insert(job.job_id.clone(), job);
+                bound_jobs(&mut self.state.jobs);
             }
             JournalAction::ProjectionImport => {
                 let change = record
@@ -1651,12 +1701,14 @@ impl Runtime {
         if let Some(operation) = record.operation {
             self.state
                 .operations
-                .insert(operation.key, operation.record);
-            bound_receipts(&mut self.state.operations, None);
+                .insert(operation.key, operation.record.settled());
+            bound_receipts(&mut self.state.operations, None, OperationRecord::revision);
         }
         if let Some(import) = record.import {
-            self.state.imports.insert(import.key, import.record);
-            bound_receipts(&mut self.state.imports, None);
+            self.state
+                .imports
+                .insert(import.key, import.record.settled());
+            bound_receipts(&mut self.state.imports, None, ImportRecord::revision);
         }
         self.journal_sequence = record.sequence;
         self.journal_records_since_checkpoint += 1;
@@ -1751,9 +1803,7 @@ impl Runtime {
             candidate.future.clear();
             candidate.proposal = None;
         }
-        let mut snapshot = self.snapshot_of(&candidate);
-        snapshot.projection_status = ProjectionStatus::Current.as_str().into();
-        let operation = candidate.record_operation(operation, fingerprint, snapshot);
+        let operation = candidate.record_operation(operation, fingerprint);
         if !project_changed && self.projection_status != ProjectionStatus::Current {
             // The file already describes the authoritative project but is not
             // its canonical text (comments, spacing). An explicit import is
@@ -1862,9 +1912,7 @@ impl Runtime {
         candidate.past.clear();
         candidate.future.clear();
         candidate.proposal = None;
-        let mut snapshot = self.snapshot_of(&candidate);
-        snapshot.projection_status = ProjectionStatus::Current.as_str().into();
-        let operation = candidate.record_operation(receipt, fingerprint, snapshot);
+        let operation = candidate.record_operation(receipt, fingerprint);
         let change = Change {
             script: None,
             document: Some(kernel::print(&candidate.project)),
@@ -2026,16 +2074,46 @@ fn bound_history(entries: &mut Vec<HistoryEntry>) {
     }
 }
 
-fn bound_receipts<T>(receipts: &mut HashMap<String, T>, preserve: Option<&str>) {
+/// Drop the receipts that left the oldest revisions, never `preserve`,
+/// until at most `MAX_RECEIPTS` remain.
+fn bound_receipts<T>(
+    receipts: &mut HashMap<String, T>,
+    preserve: Option<&str>,
+    revision: impl Fn(&T) -> u64,
+) {
     while receipts.len() > MAX_RECEIPTS {
         let Some(key) = receipts
-            .keys()
-            .find(|key| preserve != Some(key.as_str()))
-            .cloned()
+            .iter()
+            .filter(|(key, _)| preserve != Some(key.as_str()))
+            .min_by_key(|(_, receipt)| revision(receipt))
+            .map(|(key, _)| key.clone())
         else {
             break;
         };
         receipts.remove(&key);
+    }
+}
+
+/// Whether a render job with `status` has ended.
+fn job_finished(status: &str) -> bool {
+    matches!(status, "completed" | "failed" | "cancelled")
+}
+
+/// Drop the oldest finished render jobs until at most `MAX_FINISHED_JOBS`
+/// remain. A job id begins with the time it was made in fixed-width hex,
+/// so ids sort oldest first. Their outputs stay where they are.
+fn bound_jobs(jobs: &mut HashMap<String, RenderJob>) {
+    let mut finished: Vec<String> = jobs
+        .iter()
+        .filter(|(_, job)| job_finished(&job.status))
+        .map(|(id, _)| id.clone())
+        .collect();
+    if finished.len() <= MAX_FINISHED_JOBS {
+        return;
+    }
+    finished.sort_unstable();
+    for id in &finished[..finished.len() - MAX_FINISHED_JOBS] {
+        jobs.remove(id);
     }
 }
 
@@ -3988,6 +4066,204 @@ mod tests {
             other => panic!("expected a document, got {other:?}"),
         }
         drop(runtime);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn receipts_keep_no_state_and_a_retry_answers_with_the_state_now() {
+        let directory =
+            std::env::temp_dir().join(format!("kerf-runtime-small-receipt-{}", unique_id()));
+        let mut runtime = Runtime::open(&directory).unwrap();
+        let first = runtime
+            .apply_script_request("ui", "first", "marker add at=0f", 0)
+            .unwrap();
+        let later = edit(&mut runtime, "marker add at=1f", 1).unwrap();
+        let retried = runtime
+            .apply_script_request("ui", "first", "marker add at=0f", 0)
+            .unwrap();
+        assert_eq!(first.revision, 1);
+        assert_eq!(retried.revision, later.revision);
+        assert_eq!(retried.document, later.document);
+        assert_eq!(runtime.state.operations["ui:first"].revision(), 1);
+        let journal = fs::read_to_string(directory.join(JOURNAL_FILE)).unwrap();
+        assert!(!journal.contains("\"snapshot\""), "{journal}");
+        runtime.persist_checkpoint().unwrap();
+        let checkpoint = fs::read_to_string(directory.join(CHECKPOINT_FILE)).unwrap();
+        assert!(!checkpoint.contains("\"snapshot\""), "{checkpoint}");
+        assert!(!checkpoint.contains('\n'), "the checkpoint is compact");
+        drop(runtime);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    /// A receipt as kerfds wrote it while receipts kept the state they
+    /// left, in a journal record of that time.
+    #[derive(serde::Serialize)]
+    struct LegacyReceipt {
+        fingerprint: String,
+        snapshot: StateSnapshot,
+    }
+
+    #[derive(serde::Serialize)]
+    struct LegacyOperation {
+        key: String,
+        record: LegacyReceipt,
+    }
+
+    #[derive(serde::Serialize)]
+    struct LegacyJournalRecord {
+        format_version: u64,
+        sequence: u64,
+        revision: u64,
+        action: JournalAction,
+        change: Option<Change>,
+        operation: Option<LegacyOperation>,
+        import: Option<JournalImport>,
+        proposal: Option<ProposalRecord>,
+        job: Option<RenderJob>,
+        checksum: String,
+    }
+
+    #[test]
+    fn receipts_written_with_their_state_still_load() {
+        let directory =
+            std::env::temp_dir().join(format!("kerf-runtime-legacy-receipt-{}", unique_id()));
+        let (before, after) = {
+            let mut runtime = Runtime::open(&directory).unwrap();
+            let before = runtime.snapshot();
+            let after = runtime
+                .apply_script_request("ui", "journaled", "marker add at=0f", 0)
+                .unwrap();
+            (before, after)
+        };
+        // The journal record as the previous format wrote it.
+        let journal_path = directory.join(JOURNAL_FILE);
+        let record = load_journal(&journal_path, 0).unwrap().remove(0);
+        let operation = record.operation.unwrap();
+        let mut legacy = LegacyJournalRecord {
+            format_version: 3,
+            sequence: record.sequence,
+            revision: record.revision,
+            action: record.action,
+            change: record.change,
+            operation: Some(LegacyOperation {
+                key: operation.key,
+                record: LegacyReceipt {
+                    fingerprint: operation.record.fingerprint,
+                    snapshot: after.clone(),
+                },
+            }),
+            import: None,
+            proposal: record.proposal,
+            job: None,
+            checksum: String::new(),
+        };
+        legacy.checksum = sha256_hex(&serde_json::to_vec(&legacy).unwrap());
+        fs::write(
+            &journal_path,
+            format!("{}\n", serde_json::to_string(&legacy).unwrap()),
+        )
+        .unwrap();
+        // And a checkpoint of format 4 with a receipt of its own.
+        let checkpoint_path = directory.join(CHECKPOINT_FILE);
+        let mut checkpoint: Value =
+            serde_json::from_str(&fs::read_to_string(&checkpoint_path).unwrap()).unwrap();
+        checkpoint["format_version"] = json!(4);
+        checkpoint["operations"]["ui:checkpointed"] =
+            json!({"fingerprint": "ui:0:old", "snapshot": before});
+        fs::write(
+            &checkpoint_path,
+            serde_json::to_vec_pretty(&checkpoint).unwrap(),
+        )
+        .unwrap();
+
+        let mut reopened = Runtime::open(&directory).unwrap();
+        assert_eq!(reopened.snapshot().revision, 1);
+        assert_eq!(reopened.state.operations["ui:journaled"].revision(), 1);
+        assert_eq!(reopened.state.operations["ui:checkpointed"].revision(), 0);
+        let retried = reopened
+            .apply_script_request("ui", "journaled", "marker add at=0f", 0)
+            .unwrap();
+        assert_eq!(retried.document, after.document);
+        let conflict = reopened
+            .apply_script_request("ui", "checkpointed", "marker add at=1f", 1)
+            .unwrap_err();
+        assert_eq!(conflict.code, "IDEMPOTENCY_CONFLICT");
+        reopened.persist_checkpoint().unwrap();
+        let rewritten = fs::read_to_string(&checkpoint_path).unwrap();
+        assert!(rewritten.contains("\"format_version\":5"), "{rewritten}");
+        assert!(!rewritten.contains("\"snapshot\""), "{rewritten}");
+        drop(reopened);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn receipts_beyond_the_bound_go_oldest_first() {
+        let mut receipts: HashMap<String, OperationRecord> = (0..=MAX_RECEIPTS as u64 + 1)
+            .map(|revision| {
+                (
+                    format!("ui:{revision}"),
+                    OperationRecord::new(String::new(), revision),
+                )
+            })
+            .collect();
+        bound_receipts(&mut receipts, Some("ui:0"), OperationRecord::revision);
+        assert_eq!(receipts.len(), MAX_RECEIPTS);
+        assert!(receipts.contains_key("ui:0"));
+        assert!(!receipts.contains_key("ui:1"));
+        assert!(!receipts.contains_key("ui:2"));
+        assert!(receipts.contains_key("ui:3"));
+    }
+
+    #[test]
+    fn render_progress_is_not_journaled_and_finished_jobs_are_bounded() {
+        let directory =
+            std::env::temp_dir().join(format!("kerf-runtime-job-bound-{}", unique_id()));
+        let journal_path = directory.join(JOURNAL_FILE);
+        let mut runtime = Runtime::open(&directory).unwrap();
+        let (running, _, _) = runtime
+            .start_render_range("preview", None, None, None)
+            .unwrap();
+        runtime
+            .update_job(&running.job_id, "running", None, None, Some(0.0))
+            .unwrap();
+        let journaled = load_journal(&journal_path, 0).unwrap().len();
+        let since_checkpoint = runtime.journal_records_since_checkpoint;
+        for step in 1..100 {
+            let progress = f64::from(step) / 100.0;
+            runtime
+                .update_job(&running.job_id, "running", None, None, Some(progress))
+                .unwrap();
+        }
+        assert_eq!(load_journal(&journal_path, 0).unwrap().len(), journaled);
+        assert_eq!(runtime.journal_records_since_checkpoint, since_checkpoint);
+        assert_eq!(runtime.render_job(&running.job_id).unwrap().progress, 0.99);
+
+        let mut finished = Vec::new();
+        for _ in 0..MAX_FINISHED_JOBS + 5 {
+            let (job, _, _) = runtime
+                .start_render_range("preview", None, None, None)
+                .unwrap();
+            runtime
+                .update_job(&job.job_id, "completed", None, None, None)
+                .unwrap();
+            finished.push(job.job_id);
+        }
+        let (queued, _, _) = runtime
+            .start_render_range("preview", None, None, None)
+            .unwrap();
+        // The running and queued jobs, and the newest finished ones.
+        assert_eq!(runtime.state.jobs.len(), MAX_FINISHED_JOBS + 2);
+        assert!(runtime.render_job(&running.job_id).is_ok());
+        assert!(runtime.render_job(&queued.job_id).is_ok());
+        assert!(runtime.render_job(&finished[4]).is_err());
+        assert!(runtime.render_job(&finished[5]).is_ok());
+        drop(runtime);
+
+        // A restart fails the running and queued jobs, which then count.
+        let reopened = Runtime::open(&directory).unwrap();
+        assert_eq!(reopened.state.jobs.len(), MAX_FINISHED_JOBS);
+        assert!(reopened.render_job(&queued.job_id).is_ok());
+        drop(reopened);
         let _ = fs::remove_dir_all(directory);
     }
 }
