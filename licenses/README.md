@@ -1,6 +1,6 @@
 # Licenses
 
-Kerf is MIT licensed (`license` in the root `Cargo.toml`). This folder holds
+Kerf is MIT licensed (`LICENSE` at the root). This folder holds
 the licenses and notices of what Kerf carries from elsewhere: code from
 ArtCraft's EffectCraft and FilmCraft, and the fonts its text engine bundles.
 `NOTICE` gathers their notices.
