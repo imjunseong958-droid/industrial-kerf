@@ -10,7 +10,7 @@ use crate::PlaybackError;
 use kerf_compose::{ComposeOptions, Compositor, Frame};
 use kerf_model::{Catalog, Project, Rate};
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -33,6 +33,9 @@ pub(crate) struct Drawn {
     still: f64,
     moving: f64,
     jobs: Option<Sender<Job>>,
+    /// Set when the pictures are no longer wanted, so the drawers leave the
+    /// jobs still queued undrawn.
+    closed: Arc<AtomicBool>,
     results: Receiver<Drawing>,
     /// Frames asked for and not back yet, with the seek they were asked
     /// for.
@@ -78,12 +81,14 @@ impl Drawn {
         let (jobs, queue) = mpsc::channel::<Job>();
         let (done, results) = mpsc::channel::<Drawing>();
         let queue = Arc::new(Mutex::new(queue));
+        let closed = Arc::new(AtomicBool::new(false));
         for drawer in 0..DRAWERS {
-            let (compositor, queue, done, epoch) = (
+            let (compositor, queue, done, epoch, closed) = (
                 Arc::clone(&compositor),
                 Arc::clone(&queue),
                 done.clone(),
                 Arc::clone(&epoch),
+                Arc::clone(&closed),
             );
             thread::Builder::new()
                 .name(format!("kerf-draw-{drawer}"))
@@ -95,6 +100,9 @@ impl Drawn {
                     let Ok(job) = job else {
                         return;
                     };
+                    if closed.load(Ordering::Acquire) {
+                        return;
+                    }
                     let started = Instant::now();
                     let frame = (job.epoch >= epoch.load(Ordering::Acquire))
                         .then(|| compositor.frame(rate.time_of(job.index), job.scale));
@@ -119,6 +127,7 @@ impl Drawn {
             still,
             moving: still.min(MOVING_EDGE / width.max(height)),
             jobs: Some(jobs),
+            closed,
             results,
             drawing: HashSet::new(),
         })
@@ -210,7 +219,9 @@ impl Drawn {
 
 impl Drop for Drawn {
     fn drop(&mut self) {
-        // Closing the queue lets the drawers finish.
+        // Closing the queue lets the drawers finish, and the flag keeps them
+        // from drawing what was still queued.
+        self.closed.store(true, Ordering::Release);
         self.jobs = None;
     }
 }
