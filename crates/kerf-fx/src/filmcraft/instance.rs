@@ -9,7 +9,6 @@ use crate::filmcraft::tick::Tick;
 use kerf_geom::Vec2;
 use kerf_model::{Effect, Param, Rgba, Time, Value};
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 /// FilmCraft ticks per Kerf flick.
 const TICKS_PER_FLICK: i64 =
@@ -341,7 +340,7 @@ pub fn library<'a>(effects: impl IntoIterator<Item = &'a Effect>) -> Result<Proj
                 name: path.clone(),
                 source_path: Some(path.clone()),
                 format,
-                text: Arc::from(text),
+                text: crate::filmcraft::luts::shared_text(text),
             });
         }
     }
@@ -558,6 +557,34 @@ mod tests {
             )],
         );
         assert!(library([&missing]).unwrap_err().contains("no.cube"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_lut_file_read_again_is_parsed_once() {
+        let dir = std::env::temp_dir().join(format!("kerf-lut-again-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("again.cube");
+        let cube =
+            kerf_color::Lut::from_cube(kerf_color::Lut3d::from_fn(3, |c| [c[1], c[0], c[2]]))
+                .to_cube();
+        std::fs::write(&path, cube).unwrap();
+        let path = path.to_str().unwrap().to_owned();
+        let graded = effect(
+            "color.lumetri",
+            &[("input_lut", Param::Static(Value::Text(path.clone())))],
+        );
+        let spec = format!("lib:{path}");
+        // each compositor reads its library again
+        let (first, second) = (library([&graded]).unwrap(), library([&graded]).unwrap());
+        assert!(std::sync::Arc::ptr_eq(
+            &first.luts[0].text,
+            &second.luts[0].text
+        ));
+        let parsed = crate::filmcraft::luts::resolve(Some(&first), &spec).unwrap();
+        drop(first);
+        let again = crate::filmcraft::luts::resolve(Some(&second), &spec).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&parsed, &again));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

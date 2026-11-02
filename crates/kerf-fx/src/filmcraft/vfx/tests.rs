@@ -1338,6 +1338,129 @@ fn warp_stabilizer_removes_camera_jitter() {
     .is_some());
 }
 
+/// A [`ClipEnv`] that counts the analysis frames it is asked for.
+struct Counted {
+    env: ClipEnv,
+    frames: std::sync::atomic::AtomicUsize,
+}
+impl FxEnv for Counted {
+    fn frame(&self, dt: f64, upto: &EffectInstance) -> Option<Image> {
+        self.env.frame(dt, upto)
+    }
+    fn source_frame(&self, dt: f64, scale: f32) -> Option<Image> {
+        self.frames
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.env.source_frame(dt, scale)
+    }
+    fn track(&self, index: usize) -> Option<Image> {
+        self.env.track(index)
+    }
+    fn layer_to_output(&self) -> Affine {
+        self.env.layer_to_output()
+    }
+    fn clip_seconds(&self) -> f64 {
+        self.env.clip_seconds()
+    }
+    fn clip_offset(&self) -> f64 {
+        self.env.clip_offset()
+    }
+    fn frame_rate(&self) -> f64 {
+        self.env.frame_rate()
+    }
+    fn media_timecode(&self) -> String {
+        self.env.media_timecode()
+    }
+    fn file_name(&self) -> String {
+        self.env.file_name()
+    }
+    fn sequence_name(&self) -> String {
+        self.env.sequence_name()
+    }
+    fn sequence_size(&self) -> (u32, u32) {
+        self.env.sequence_size()
+    }
+    fn source_size(&self) -> (u32, u32) {
+        self.env.source_size()
+    }
+    fn clip_key(&self) -> u64 {
+        self.env.clip_key()
+    }
+}
+
+#[test]
+fn warp_stabilizer_tracks_across_analysis_chunks() {
+    // the camera pans 2 px a frame, over more frames than two analysis chunks
+    fn pan(x: f64, y: f64, t: f64) -> [f32; 3] {
+        texture(x + t * 48.0, y)
+    }
+    let frames = 2 * super::temporal::CHUNK + 10;
+    let env = ClipEnv {
+        w: 96,
+        h: 64,
+        fps: 24.0,
+        secs: frames as f64 / 24.0,
+        now: 0.0,
+        key: 0x5EA_C4A1,
+        seq: (96, 64),
+        pic: pan,
+    };
+    let path = stabilizer_path(
+        &env,
+        0.0,
+        crate::filmcraft::project::TrackMethod::Position,
+        false,
+    )
+    .expect("analysed");
+    assert_eq!(path.steps.len(), frames - 1);
+    for (k, step) in path.steps.iter().enumerate() {
+        assert!(
+            close(step.e.abs() as f32, 2.0, 0.25) && close(step.f as f32, 0.0, 0.25),
+            "step {k} {step:?}"
+        );
+    }
+}
+
+#[test]
+fn warp_stabilizer_callers_share_one_analysis() {
+    let env = Counted {
+        env: ClipEnv {
+            w: 96,
+            h: 64,
+            fps: 24.0,
+            secs: 2.0,
+            now: 0.0,
+            key: 0x0_5A4E,
+            seq: (96, 64),
+            pic: shaky,
+        },
+        frames: Default::default(),
+    };
+    let start = std::sync::Barrier::new(4);
+    let paths: Vec<_> = std::thread::scope(|s| {
+        let callers: Vec<_> = (0..4)
+            .map(|_| {
+                s.spawn(|| {
+                    start.wait();
+                    stabilizer_path(
+                        &env,
+                        0.0,
+                        crate::filmcraft::project::TrackMethod::Position,
+                        false,
+                    )
+                    .expect("analysed")
+                })
+            })
+            .collect();
+        callers.into_iter().map(|c| c.join().unwrap()).collect()
+    });
+    assert_eq!(
+        env.frames.load(std::sync::atomic::Ordering::Relaxed),
+        48,
+        "every frame is decoded once"
+    );
+    assert!(paths.iter().all(|p| std::sync::Arc::ptr_eq(p, &paths[0])));
+}
+
 #[test]
 fn auto_reframe_follows_the_subject() {
     fn subject(x: f64, y: f64, _t: f64) -> [f32; 3] {
