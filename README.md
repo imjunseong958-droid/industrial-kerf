@@ -394,7 +394,7 @@ accept or reject an agent proposal.
 
 ## Licenses
 
-Kerf is MIT licensed. The code it carries from EffectCraft and FilmCraft is
-MIT OR Apache-2.0, and its text engine bundles fonts under the SIL OFL 1.1;
-[licenses/README.md](licenses/README.md) lists where each part lives and
-holds the license texts and notices.
+Kerf is MIT licensed ([LICENSE](LICENSE)). The code it carries from
+EffectCraft and FilmCraft is MIT OR Apache-2.0, and its text engine bundles
+fonts under the SIL OFL 1.1; [licenses/README.md](licenses/README.md) lists
+where each part lives and holds the license texts and notices.
