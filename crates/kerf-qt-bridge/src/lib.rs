@@ -27,7 +27,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 struct AgentSettings {
@@ -189,12 +189,12 @@ enum Command {
     CloudRefresh,
 }
 
-/// What the viewer plays: the project itself, or a rendered preview of it.
-/// Both have their media paths resolved.
+/// What the viewer plays: the project itself, or a rendered preview of it
+/// and the file that preview plays. Both have their media paths resolved.
 #[derive(Clone)]
 enum MediaProject {
     Native(Project),
-    Rendered(Project),
+    Rendered(Project, PathBuf),
 }
 
 struct PendingSeek {
@@ -222,6 +222,13 @@ struct Shared {
     media_status: Mutex<media::MediaStatus>,
     /// Copies into `media/` still running; live sync waits for them.
     copies: AtomicUsize,
+    /// The cancel marker of the preview render running, so closing the
+    /// bridge stops it.
+    preview_cancel: Mutex<Option<PathBuf>>,
+    /// Preview renders nothing shows any more whose files could not be
+    /// removed yet: on Windows a playback worker still shutting down keeps
+    /// its file open. The media worker tries them again.
+    stale_previews: Mutex<Vec<PathBuf>>,
 }
 
 struct Bridge {
@@ -309,7 +316,7 @@ fn publish_snapshot(
                 }
                 if let Ok(mut slot) = shared.project.lock() {
                     shared.revision.fetch_add(1, Ordering::SeqCst);
-                    *slot = Some(MediaProject::Native(project));
+                    install_project(shared, &mut slot, MediaProject::Native(project));
                 }
             }
             Err(err) => error(tx, err.message),
@@ -584,20 +591,28 @@ fn runtime_worker(
                 let shared = shared.clone();
                 thread::spawn(move || {
                     let revision = shared.revision.load(Ordering::SeqCst);
-                    let result = export(&client, &quality, preview, &tx);
+                    let result = export(&client, &quality, preview, &tx, &shared);
                     match result {
-                        Ok((output, document))
-                            if preview && shared.revision.load(Ordering::SeqCst) == revision =>
-                        {
+                        Ok((output, document)) if preview => {
                             let rendered = kerf_runtime::parse_document(&document)
                                 .ok()
                                 .and_then(|program| rendered_preview(&program, &output));
-                            if let (Some(rendered), Ok(mut slot)) =
-                                (rendered, shared.project.lock())
-                            {
-                                if shared.revision.load(Ordering::SeqCst) == revision {
-                                    *slot = Some(MediaProject::Rendered(rendered));
+                            let file = PathBuf::from(output);
+                            // A preview of a program edited since, or for a
+                            // closed bridge, is never shown.
+                            let shown = match (rendered, shared.project.lock()) {
+                                (Some(rendered), Ok(mut slot))
+                                    if !shared.closed.load(Ordering::SeqCst)
+                                        && shared.revision.load(Ordering::SeqCst) == revision =>
+                                {
+                                    let project = MediaProject::Rendered(rendered, file.clone());
+                                    install_project(&shared, &mut slot, project);
+                                    true
                                 }
+                                _ => false,
+                            };
+                            if !shown {
+                                discard_preview(&shared, file);
                             }
                         }
                         Ok(_) => {}
@@ -640,14 +655,27 @@ fn runtime_worker(
 }
 
 /// Render the program. Returns the output path and the document rendered.
+/// Closing the bridge cancels a preview, and a preview that fails leaves no
+/// file behind.
 fn export(
     client: &RuntimeClient,
     quality: &str,
     preview: bool,
     tx: &SyncSender<Value>,
+    shared: &Shared,
 ) -> Result<(String, String), kerf_runtime::RuntimeError> {
     let event_type = if preview { "preview" } else { "export" };
     let (job, document, output) = client.start_render(quality)?;
+    let cancel = kerf_runtime::render_cancel_path(client.directory(), &job.job_id);
+    if preview {
+        if let Ok(mut running) = shared.preview_cancel.lock() {
+            *running = Some(cancel.clone());
+        }
+        // The bridge may have closed before it could see this render.
+        if shared.closed.load(Ordering::SeqCst) {
+            cancel_preview(shared);
+        }
+    }
     emit(
         tx,
         json!({"type":event_type,"status":"running","progress":0.0}),
@@ -663,6 +691,13 @@ fn export(
             let _ = tx.try_send(json!({"type":event_type,"status":"running","progress":progress}));
         },
     );
+    if preview {
+        if let Ok(mut running) = shared.preview_cancel.lock() {
+            *running = None;
+            // A cancel that came as the render finished outlives the job.
+            let _ = std::fs::remove_file(&cancel);
+        }
+    }
     match result {
         Ok(()) => {
             let path = output.to_string_lossy().into_owned();
@@ -675,9 +710,56 @@ fn export(
             Ok((path, document))
         }
         Err(err) => {
+            if preview {
+                discard_preview(shared, output);
+            }
             emit(tx, json!({"type":event_type,"status":"failed"}));
             Err(err)
         }
+    }
+}
+
+/// Stop the preview render running, if there is one.
+fn cancel_preview(shared: &Shared) {
+    if let Ok(running) = shared.preview_cancel.lock() {
+        if let Some(marker) = &*running {
+            let _ = std::fs::write(marker, b"");
+        }
+    }
+}
+
+/// Put `project` in the media slot. A rendered preview it replaces there was
+/// never opened, so its file goes now.
+fn install_project(shared: &Shared, slot: &mut Option<MediaProject>, project: MediaProject) {
+    if let Some(MediaProject::Rendered(_, file)) = slot.replace(project) {
+        discard_preview(shared, file);
+    }
+}
+
+/// Remove a preview render nothing shows any more, or keep it for the media
+/// worker to try again while it is still open. Only previews come here;
+/// exports are the person's.
+fn discard_preview(shared: &Shared, file: PathBuf) {
+    if !remove_preview(&file) {
+        if let Ok(mut stale) = shared.stale_previews.lock() {
+            stale.push(file);
+        }
+    }
+}
+
+/// Try the previews not removed yet again; `true` once none are left.
+fn sweep_previews(shared: &Shared) -> bool {
+    shared.stale_previews.lock().map_or(true, |mut stale| {
+        stale.retain(|file| !remove_preview(file));
+        stale.is_empty()
+    })
+}
+
+/// Remove a preview file; `false` while something still holds it open.
+fn remove_preview(file: &Path) -> bool {
+    match std::fs::remove_file(file) {
+        Ok(()) => true,
+        Err(err) => err.kind() == std::io::ErrorKind::NotFound,
     }
 }
 
@@ -757,6 +839,9 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
     let mut position = 0.0_f64;
     let mut playing = false;
     let mut volume = 1.0_f32;
+    // The preview file the session plays, removed once it plays another.
+    let mut shown: Option<PathBuf> = None;
+    let mut swept = Instant::now();
     while !shared.closed.load(Ordering::Relaxed) {
         for command in rx.try_iter() {
             let handle = session.as_ref().map(PlaybackSession::handle);
@@ -781,10 +866,16 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
         }
         let project = shared.project.lock().ok().and_then(|mut slot| slot.take());
         if let Some(project) = project {
-            let (project, rendered) = match project {
-                MediaProject::Native(project) => (project, false),
-                MediaProject::Rendered(project) => (project, true),
+            let (project, file) = match project {
+                MediaProject::Native(project) => (project, None),
+                MediaProject::Rendered(project, file) => (project, Some(file)),
             };
+            // Close the old session before the preview it played goes.
+            drop(session.take());
+            if let Some(old) = std::mem::replace(&mut shown, file) {
+                discard_preview(&shared, old);
+            }
+            let rendered = shown.is_some();
             if let Ok(mut frame) = shared.frame.lock() {
                 *frame = None;
             }
@@ -892,11 +983,32 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
                 }
             }
         }
+        if swept.elapsed() >= Duration::from_millis(250) {
+            sweep_previews(&shared);
+            swept = Instant::now();
+        }
         thread::sleep(if session.is_some() {
             Duration::from_millis(1)
         } else {
             Duration::from_millis(4)
         });
+    }
+    drop(session);
+    if let Some(file) = shown {
+        discard_preview(&shared, file);
+    }
+    if let Ok(mut slot) = shared.project.lock() {
+        if let Some(MediaProject::Rendered(_, file)) = slot.take() {
+            discard_preview(&shared, file);
+        }
+    }
+    // A playback worker that is shutting down may hold its file open a
+    // little longer.
+    for _ in 0..40 {
+        if sweep_previews(&shared) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -1394,6 +1506,8 @@ pub unsafe extern "C" fn kerf_bridge_new(
         project: Mutex::new(None),
         model: Mutex::new(None),
         previews: AtomicU64::new(0),
+        preview_cancel: Mutex::new(None),
+        stale_previews: Mutex::new(Vec::new()),
     });
     {
         let directory = directory.clone();
@@ -1451,6 +1565,8 @@ pub unsafe extern "C" fn kerf_bridge_free(bridge: *mut c_void) {
     // SAFETY: Ownership is transferred back exactly once by the caller.
     let bridge = unsafe { Box::from_raw(bridge.cast::<Bridge>()) };
     bridge.shared.closed.store(true, Ordering::SeqCst);
+    // Nobody would see a preview still rendering.
+    cancel_preview(&bridge.shared);
     if let Ok(abort) = bridge.shared.abort.lock() {
         if let Some(abort) = &*abort {
             abort.store(true, Ordering::SeqCst);
@@ -1788,13 +1904,16 @@ pub unsafe extern "C" fn kerf_bridge_frame(bridge: *mut c_void, output: *mut Ker
 #[cfg(test)]
 mod tests {
     use super::{
-        preview_frame_size, publish, publish_force, rendered_preview, AgentSettings, Command,
-        Shared,
+        cancel_preview, discard_preview, media_worker, preview_frame_size, publish, publish_force,
+        rendered_preview, sweep_previews, AgentSettings, Command, MediaProject, Shared,
     };
     use kerf_runtime::{EditOp, PendingProposal, ProposalFreshness, StateSnapshot};
     use serde_json::json;
+    use std::path::Path;
+    use std::sync::atomic::Ordering;
     use std::sync::mpsc;
     use std::sync::Arc;
+    use std::time::Duration;
 
     fn shared() -> Shared {
         crate::tests_support::shared(&std::env::temp_dir())
@@ -2123,5 +2242,98 @@ mod tests {
             Some("/renders/preview.mp4")
         );
         assert_eq!(timeline.audio_at(1.0).len(), 1);
+    }
+
+    /// A rendered preview of a one-cut program, playing `file`.
+    fn rendered(file: &Path) -> MediaProject {
+        let program = kerf_runtime::parse_document(
+            "kerf 1\nproject name=\"Bridge\"\n\
+             media m1 path=\"/media/a.mov\" rate=24 dur=10s video=1920x1080\n\
+             sequence s1 rate=24 size=1920x1080 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20   clip c1 media=m1 src=0f at=0f dur=60f\n",
+        )
+        .unwrap();
+        let project = rendered_preview(&program, file.to_str().unwrap()).unwrap();
+        MediaProject::Rendered(project, file.to_owned())
+    }
+
+    #[test]
+    fn an_edit_removes_a_preview_that_never_played() {
+        let directory = tempfile::tempdir().unwrap();
+        let shared = Arc::new(crate::tests_support::shared(directory.path()));
+        let file = directory.path().join("render-1.mp4");
+        std::fs::write(&file, b"preview").unwrap();
+        *shared.project.lock().unwrap() = Some(rendered(&file));
+
+        let (tx, _rx) = mpsc::sync_channel(8);
+        publish(snapshot(DOCUMENT, None), &shared, &tx, &mut None);
+        assert!(matches!(
+            *shared.project.lock().unwrap(),
+            Some(MediaProject::Native(_))
+        ));
+        assert!(!file.exists(), "the superseded preview must be removed");
+    }
+
+    #[test]
+    fn a_preview_still_open_is_removed_later() {
+        let directory = tempfile::tempdir().unwrap();
+        let shared = crate::tests_support::shared(directory.path());
+        // A directory stands in for a file something still holds open:
+        // removing it as a file fails.
+        let held = directory.path().join("render-held.mp4");
+        std::fs::create_dir(&held).unwrap();
+        discard_preview(&shared, held.clone());
+        assert!(!sweep_previews(&shared));
+        assert_eq!(shared.stale_previews.lock().unwrap().len(), 1);
+
+        std::fs::remove_dir(&held).unwrap();
+        assert!(sweep_previews(&shared));
+        assert!(shared.stale_previews.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn closing_cancels_only_a_running_preview() {
+        let directory = tempfile::tempdir().unwrap();
+        let shared = crate::tests_support::shared(directory.path());
+        let marker = kerf_runtime::render_cancel_path(directory.path(), "job-1");
+        cancel_preview(&shared);
+        assert!(!marker.exists(), "no preview is running");
+
+        *shared.preview_cancel.lock().unwrap() = Some(marker.clone());
+        cancel_preview(&shared);
+        assert!(marker.exists());
+    }
+
+    #[test]
+    fn the_media_worker_removes_previews_it_stops_playing() {
+        let directory = tempfile::tempdir().unwrap();
+        let shared = Arc::new(crate::tests_support::shared(directory.path()));
+        let first = directory.path().join("render-1.mp4");
+        let second = directory.path().join("render-2.mp4");
+        std::fs::write(&first, b"preview").unwrap();
+        std::fs::write(&second, b"preview").unwrap();
+        *shared.project.lock().unwrap() = Some(rendered(&first));
+
+        let (_commands, rx) = mpsc::sync_channel(4);
+        let (tx, events) = mpsc::sync_channel(4);
+        drop(events);
+        let worker = {
+            let shared = shared.clone();
+            std::thread::spawn(move || media_worker(rx, tx, shared))
+        };
+        let taken = || shared.project.lock().unwrap().is_none().then_some(());
+        assert!(crate::tests_support::wait(Duration::from_secs(5), taken).is_some());
+        assert!(first.exists(), "the preview playing stays");
+
+        *shared.project.lock().unwrap() = Some(rendered(&second));
+        let removed = || (!first.exists()).then_some(());
+        assert!(crate::tests_support::wait(Duration::from_secs(5), removed).is_some());
+        assert!(crate::tests_support::wait(Duration::from_secs(5), taken).is_some());
+        assert!(second.exists());
+
+        shared.closed.store(true, Ordering::SeqCst);
+        worker.join().unwrap();
+        assert!(!second.exists(), "closing removes the preview it played");
     }
 }
