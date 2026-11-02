@@ -376,7 +376,7 @@ another clip of the same shape (kind, effect stack, masks) only sets values:
 the rows are not rebuilt, and open sections and the scroll position stay. From
 the click to the painted values takes 7.9 ms (median, a clip with ten effects
 open, measured unoptimized and offscreen on an M-series Mac; the test prints
-it and allows twice that on CI's shared runners).
+it and allows four times that, as GitHub's shared macOS runner takes 17-21 ms).
 
 ## Effects
 

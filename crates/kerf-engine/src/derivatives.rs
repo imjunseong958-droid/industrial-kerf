@@ -2,7 +2,10 @@
 //!
 //! The cache records source identity and normalized options in a small manifest
 //! so an interrupted generation cannot be mistaken for a valid result. Cache
-//! entries are never canonical project state.
+//! entries are never canonical project state, so any of them may be removed:
+//! an entry made from a source goes once that source changes, and an entry
+//! of a kind made per document revision once newer ones push it out (see
+//! [`DerivativeCache::keep_newest`]).
 
 use crate::error::{EngineError, Result};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -11,7 +14,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Relative location of regenerable media artifacts inside a project.
 pub const DERIVED_CACHE_RELATIVE_PATH: &str = ".kerf/cache/derived";
@@ -109,7 +112,36 @@ impl CacheEntry {
         let temp_path = self.path(&format!("manifest.json.tmp-{}", std::process::id()));
         fs::write(&temp_path, bytes)?;
         fs::rename(temp_path, self.path("manifest.json"))?;
+        self.remove_stale_versions();
         Ok(())
+    }
+
+    /// Remove the entries of this kind made from an earlier version of this
+    /// entry's source: one that was replaced or touched, which no request
+    /// asks for again.
+    fn remove_stale_versions(&self) {
+        let Ok(identity) = serde_json::from_value::<SourceIdentity>(self.identity.clone()) else {
+            return;
+        };
+        // An entry finished after its source changed is itself the stale
+        // one, and must not remove the entry made from the source as it is.
+        if SourceIdentity::from_path(Path::new(&identity.path))
+            .ok()
+            .as_ref()
+            != Some(&identity)
+        {
+            return;
+        }
+        let Some(root) = self.directory.parent() else {
+            return;
+        };
+        for (directory, manifest) in manifests(root, &self.kind) {
+            let stale = serde_json::from_value::<SourceIdentity>(manifest.identity)
+                .is_ok_and(|other| other.path == identity.path && other != identity);
+            if stale && directory != self.directory {
+                let _ = fs::remove_dir_all(directory);
+            }
+        }
     }
 
     /// Read a JSON artifact written by a completed generator.
@@ -198,6 +230,56 @@ impl DerivativeCache {
         Ok(entries)
     }
 
+    /// Keep `current` and, of the other entries of its kind, the `keep`
+    /// used most recently; for kinds made per document revision, which
+    /// would otherwise gather an entry for every edit. Entries made from a
+    /// file of a removed entry go with it.
+    pub fn keep_newest(&self, current: &CacheEntry, keep: usize) -> Result<()> {
+        // Marks `current` used, so another process keeps it too.
+        fs::File::options()
+            .write(true)
+            .open(current.path("manifest.json"))?
+            .set_modified(SystemTime::now())?;
+        let mut others = kind_directories(&self.root, &current.kind)
+            .into_iter()
+            .filter(|directory| *directory != current.directory)
+            .map(|directory| (last_used(&directory), directory))
+            .collect::<Vec<_>>();
+        if others.len() <= keep {
+            return Ok(());
+        }
+        others.sort_by_key(|entry| std::cmp::Reverse(entry.0));
+        for (_, directory) in others.drain(keep..) {
+            let _ = fs::remove_dir_all(directory);
+        }
+        self.remove_orphans();
+        Ok(())
+    }
+
+    /// Remove the entries made from a file of an entry that is gone, as a
+    /// transcript of a rendered program's sound.
+    fn remove_orphans(&self) {
+        let Ok(root) = self.root.canonicalize() else {
+            return;
+        };
+        let Ok(directories) = fs::read_dir(&root) else {
+            return;
+        };
+        for directory in directories.filter_map(|entry| Some(entry.ok()?.path())) {
+            let Some(manifest) = read_manifest(&directory) else {
+                continue;
+            };
+            let orphaned =
+                serde_json::from_value::<SourceIdentity>(manifest.identity).is_ok_and(|source| {
+                    let source = Path::new(&source.path);
+                    source.starts_with(&root) && !source.exists()
+                });
+            if orphaned {
+                let _ = fs::remove_dir_all(directory);
+            }
+        }
+    }
+
     fn entry(&self, kind: &str, identity: Value, options: &Value) -> Result<CacheEntry> {
         if kind.is_empty()
             || !kind
@@ -221,6 +303,52 @@ impl DerivativeCache {
             options,
         })
     }
+}
+
+/// The manifest of the entry in `directory`, when it has a readable one.
+fn read_manifest(directory: &Path) -> Option<DerivedManifest> {
+    let bytes = fs::read(directory.join("manifest.json")).ok()?;
+    serde_json::from_slice::<DerivedManifest>(&bytes)
+        .ok()
+        .filter(|manifest| manifest.schema_version == MANIFEST_VERSION)
+}
+
+/// The directory of each entry of `kind` below `root`, complete or not.
+fn kind_directories(root: &Path, kind: &str) -> Vec<PathBuf> {
+    let Ok(directories) = fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let prefix = format!("{kind}-");
+    directories
+        .filter_map(|entry| Some(entry.ok()?.path()))
+        .filter(|directory| {
+            // `<kind>-<key>`, so one kind's prefix never takes another's.
+            directory
+                .file_name()
+                .and_then(|name| name.to_str()?.strip_prefix(&prefix))
+                .is_some_and(|key| key.len() == 64 && key.chars().all(|c| c.is_ascii_hexdigit()))
+        })
+        .collect()
+}
+
+/// Each complete entry of `kind` below `root`, with its manifest.
+fn manifests(root: &Path, kind: &str) -> Vec<(PathBuf, DerivedManifest)> {
+    kind_directories(root, kind)
+        .into_iter()
+        .filter_map(|directory| {
+            let manifest = read_manifest(&directory)?;
+            (manifest.kind == kind).then_some((directory, manifest))
+        })
+        .collect()
+}
+
+/// When the entry in `directory` was last made or used: its manifest's
+/// time, else (one never completed) the directory's own.
+fn last_used(directory: &Path) -> SystemTime {
+    fs::metadata(directory.join("manifest.json"))
+        .or_else(|_| fs::metadata(directory))
+        .and_then(|metadata| metadata.modified())
+        .unwrap_or(UNIX_EPOCH)
 }
 
 /// Return the deterministic SHA-256 key used for one derivative request.
@@ -325,6 +453,111 @@ mod tests {
         let entries = cache.source_entries(&source, "frames").expect("entries");
         assert_eq!(entries.len(), 2);
         assert!(entries.iter().all(|entry| entry.is_complete(&[])));
+    }
+
+    #[test]
+    fn a_changed_source_s_entries_go_once_its_new_one_completes() {
+        let root = tempdir().expect("temp directory");
+        let source = root.path().join("source.bin");
+        fs::write(&source, b"one").expect("write source");
+        let cache = DerivativeCache::new(root.path());
+        let old = cache
+            .source_entry(&source, "proxy", &json!({}))
+            .expect("entry");
+        old.mark_complete(&[]).expect("publish");
+        let other = cache
+            .source_entry(&source, "frames", &json!({}))
+            .expect("entry");
+        other.mark_complete(&[]).expect("publish");
+        fs::write(&source, b"replacement").expect("replace source");
+        let new = cache
+            .source_entry(&source, "proxy", &json!({}))
+            .expect("entry");
+        assert!(old.directory.is_dir(), "kept until the new one is made");
+        new.mark_complete(&[]).expect("publish");
+        assert!(!old.directory.exists());
+        assert!(new.is_complete(&[]));
+        assert!(other.directory.is_dir(), "another kind is its own");
+    }
+
+    #[test]
+    fn an_entry_finished_after_its_source_changed_leaves_the_new_one() {
+        let root = tempdir().expect("temp directory");
+        let source = root.path().join("source.bin");
+        fs::write(&source, b"one").expect("write source");
+        let cache = DerivativeCache::new(root.path());
+        let late = cache
+            .source_entry(&source, "proxy", &json!({}))
+            .expect("entry");
+        fs::write(&source, b"replacement").expect("replace source");
+        let new = cache
+            .source_entry(&source, "proxy", &json!({}))
+            .expect("entry");
+        new.mark_complete(&[]).expect("publish");
+        late.mark_complete(&[]).expect("publish");
+        assert!(new.is_complete(&[]), "made from the source as it is");
+    }
+
+    #[test]
+    fn keep_newest_keeps_the_entries_used_last_and_what_was_made_from_them() {
+        let root = tempdir().expect("temp directory");
+        let cache = DerivativeCache::new(root.path());
+        let revision = |n: u64| {
+            let entry = cache
+                .project_entry(&json!({"revision": n}), &[], "program-sound", &json!({}))
+                .expect("entry");
+            fs::write(entry.path("sound.mp4"), b"sound").expect("write artifact");
+            entry.mark_complete(&["sound.mp4"]).expect("publish");
+            entry
+        };
+        let set_used = |entry: &CacheEntry, seconds: u64| {
+            fs::File::options()
+                .write(true)
+                .open(entry.path("manifest.json"))
+                .and_then(|file| {
+                    file.set_modified(UNIX_EPOCH + std::time::Duration::from_secs(seconds))
+                })
+                .expect("set time");
+        };
+        let entries: Vec<_> = (0..4).map(revision).collect();
+        for (n, entry) in entries.iter().enumerate() {
+            set_used(entry, 1_000 + n as u64);
+        }
+        // Made from the oldest revision's sound, as its transcript is.
+        let transcript = cache
+            .source_entry(&entries[0].path("sound.mp4"), "transcription", &json!({}))
+            .expect("entry");
+        transcript.mark_complete(&[]).expect("publish");
+        // Another kind sharing the prefix is not one of them.
+        let longer = cache
+            .project_entry(&json!({}), &[], "program-sound-x", &json!({}))
+            .expect("entry");
+        // The second oldest was used again.
+        set_used(&entries[1], 2_000);
+
+        cache.keep_newest(&entries[0], 2).expect("evict");
+        let kept: Vec<bool> = entries
+            .iter()
+            .map(|entry| entry.directory.is_dir())
+            .collect();
+        assert_eq!(kept, [true, true, false, true]);
+        assert!(transcript.directory.is_dir(), "its sound is kept");
+
+        cache.keep_newest(&entries[3], 1).expect("evict");
+        let kept: Vec<bool> = entries
+            .iter()
+            .map(|entry| entry.directory.is_dir())
+            .collect();
+        assert_eq!(
+            kept,
+            [true, false, false, true],
+            "the current one counts as used now"
+        );
+        cache.keep_newest(&entries[3], 0).expect("evict");
+        assert!(!entries[0].directory.exists());
+        assert!(!transcript.directory.exists(), "its sound is gone");
+        assert!(longer.directory.is_dir());
+        assert!(entries[3].is_complete(&["sound.mp4"]));
     }
 
     #[test]

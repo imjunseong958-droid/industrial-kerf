@@ -10,8 +10,8 @@
 //! Parsed LUTs are cached by content, so a library LUT is parsed once however many clips use it.
 
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use crate::filmcraft::project::{Project, MAX_LUT_TEXT_BYTES};
 use kerf_color::{ColorSpace, Lut, Lut3d, LutFormat, Range};
@@ -110,8 +110,33 @@ impl Builtin {
 /// Identity of immutable project LUT text. Pointer equality is intentional: an `Arc<str>` changes
 /// identity whenever a project edit replaces its text, while clones of an unchanged project share
 /// it. Keeping the Arc in the cache also prevents allocator-address reuse from aliasing old LUTs.
+/// LUT files read again for each compositor keep one identity through [`shared_text`].
 #[derive(Clone, Debug)]
 struct LutText(Arc<str>);
+
+/// LUT text as one `Arc` per content. Every compositor reads its LUT files again; sharing the
+/// text that is still alive (the cache holds it) lets the cache find the parsed LUT by identity
+/// instead of parsing the file again and keeping another copy.
+pub(crate) fn shared_text(text: String) -> Arc<str> {
+    static TEXTS: OnceLock<Mutex<HashMap<u64, Weak<str>>>> = OnceLock::new();
+    let mut hasher = DefaultHasher::new();
+    text.hash(&mut hasher);
+    let digest = hasher.finish();
+    let mut texts = TEXTS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    // a dead text's Weak still holds its allocation, so let go of those first
+    texts.retain(|_, t| t.strong_count() > 0);
+    if let Some(alive) = texts.get(&digest).and_then(Weak::upgrade) {
+        if *alive == *text {
+            return alive;
+        }
+    }
+    let text: Arc<str> = text.into();
+    texts.insert(digest, Arc::downgrade(&text));
+    text
+}
 
 impl PartialEq for LutText {
     fn eq(&self, other: &Self) -> bool {

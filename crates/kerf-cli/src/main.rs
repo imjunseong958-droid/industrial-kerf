@@ -350,15 +350,26 @@ fn run() -> Result<()> {
         ..AgentSessionOptions::default()
     });
 
-    if let Some(prompt) = args.prompt.as_deref() {
-        let text = run_prompt(&mut session, prompt)?;
-        if !text.is_empty() {
-            println!("\n{text}");
-        }
-        return Ok(());
-    }
+    let result = match args.prompt.as_deref() {
+        Some(prompt) => run_prompt(&mut session, prompt).map(|text| {
+            if !text.is_empty() {
+                println!("\n{text}");
+            }
+        }),
+        None => run_repl(&mut session, &directory),
+    };
+    finish_renders(&router);
+    result
+}
 
-    run_repl(&mut session, &directory)
+/// Wait for the renders the agent started: they run on this process's
+/// threads and die with it. Ctrl-C stops them with the process.
+fn finish_renders(router: &KerfMcpRouter) {
+    let running = router.running_renders();
+    if running > 0 {
+        eprintln!("waiting for {running} render job(s) to finish; Ctrl-C to stop");
+    }
+    router.finish_renders(false);
 }
 
 /// The project `--dir` names, else the one `KERF_PROJECT_DIR` (`environment`)

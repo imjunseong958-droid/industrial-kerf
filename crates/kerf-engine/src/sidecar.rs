@@ -265,7 +265,7 @@ pub fn forward_termination_signals() {
 }
 
 /// Append `line` to `tail`, keeping only the last `MAX_STDERR_TAIL_BYTES`.
-fn append_bounded(tail: &mut String, line: &str) {
+pub(crate) fn append_bounded(tail: &mut String, line: &str) {
     tail.push_str(line);
     tail.push('\n');
     if tail.len() > MAX_STDERR_TAIL_BYTES {

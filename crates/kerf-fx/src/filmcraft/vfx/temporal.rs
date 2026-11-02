@@ -9,7 +9,8 @@
 //! similarity model (no per-region warping).
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::thread::{self, ThreadId};
 
 use crate::filmcraft::project::{EffectInstance, TrackMethod};
 use rayon::prelude::*;
@@ -251,7 +252,39 @@ pub struct StabilizerPath {
     pub fps: f64,
 }
 
-type PathCache = Mutex<HashMap<u64, Arc<StabilizerPath>>>;
+/// How many frames an analysis decodes at a time. It tracks each chunk and drops its pyramids
+/// before decoding the next, so a long clip holds a chunk of pyramids rather than all of them.
+pub(super) const CHUNK: usize = 64;
+
+/// A clip's analysis, shared by every caller that asks for it while it runs.
+struct Flight {
+    /// The thread running it, which may ask for the same clip again from inside its own
+    /// analysis (while it waits for its frames, it runs other pool work), and must not wait
+    /// on itself.
+    analyst: ThreadId,
+    path: OnceLock<Option<Arc<StabilizerPath>>>,
+}
+
+/// Forget `flight` as the analysis of `key`, unless another has already replaced it.
+fn forget(key: u64, flight: &Arc<Flight>) {
+    let mut c = path_cache().lock().unwrap_or_else(PoisonError::into_inner);
+    if c.get(&key).is_some_and(|f| Arc::ptr_eq(f, flight)) {
+        c.remove(&key);
+    }
+}
+
+/// Forgets an analysis that panicked, so the next caller starts a new one rather than finding
+/// it never finished.
+struct Unwinding<'a>(u64, &'a Arc<Flight>);
+impl Drop for Unwinding<'_> {
+    fn drop(&mut self) {
+        if thread::panicking() {
+            forget(self.0, self.1);
+        }
+    }
+}
+
+type PathCache = Mutex<HashMap<u64, Arc<Flight>>>;
 fn path_cache() -> &'static PathCache {
     static C: OnceLock<PathCache> = OnceLock::new();
     C.get_or_init(Default::default)
@@ -261,11 +294,13 @@ fn path_cache() -> &'static PathCache {
 /// Forget every cached stabilizer analysis (e.g. after the media changed).
 pub fn clear_stabilizer_cache() {
     if let Ok(mut c) = path_cache().lock() {
-        c.clear();
+        // an analysis still running is left to the callers already sharing it
+        c.retain(|_, f| f.path.get().is_none());
     }
 }
 
-/// Analyse (or fetch the cached analysis of) the clip `env` describes.
+/// Analyse (or fetch the cached analysis of) the clip `env` describes. A caller that asks
+/// while the clip is being analysed waits for that analysis rather than starting another.
 pub fn stabilizer_path(
     env: &dyn FxEnv,
     now: f64,
@@ -275,56 +310,108 @@ pub fn stabilizer_path(
     let key = env.clip_key()
         ^ (method as u64).wrapping_mul(0x9E37)
         ^ (detailed as u64).wrapping_mul(0x51_7CC1);
-    if let Some(p) = path_cache().lock().ok().and_then(|c| c.get(&key).cloned()) {
-        return Some(p);
+    let me = thread::current().id();
+    let (flight, ours) = {
+        let mut c = path_cache().lock().unwrap_or_else(PoisonError::into_inner);
+        match c.get(&key) {
+            Some(f) => (f.clone(), false),
+            None => {
+                if c.len() > 64 {
+                    c.retain(|_, f| f.path.get().is_none());
+                }
+                let f = Arc::new(Flight {
+                    analyst: me,
+                    path: OnceLock::new(),
+                });
+                c.insert(key, f.clone());
+                (f, true)
+            }
+        }
+    };
+    if !ours
+        && flight.path.get().is_none()
+        && (flight.analyst == me || rayon::current_thread_index().is_some())
+    {
+        // Waiting could never end: either this is the analyst asking again from inside its own
+        // analysis, or a rayon worker, which may be running (lower on its stack, stolen while
+        // it waited in a join) one of the frames that analysis is waiting for.
+        return analyse(env, now, method, detailed).map(Arc::new);
     }
+    let unwinding = Unwinding(key, &flight);
+    let path = flight
+        .path
+        .get_or_init(|| analyse(env, now, method, detailed).map(Arc::new))
+        .clone();
+    drop(unwinding);
+    if path.is_none() {
+        // a failed analysis is not kept, so the next caller tries again
+        forget(key, &flight);
+    }
+    path
+}
+
+/// Track the clip `env` describes frame to frame, [`CHUNK`] frames at a time.
+fn analyse(
+    env: &dyn FxEnv,
+    now: f64,
+    method: TrackMethod,
+    detailed: bool,
+) -> Option<StabilizerPath> {
     let fps = env.frame_rate().max(1.0);
     let n = ((env.clip_seconds() * fps).round() as usize).clamp(1, 20_000);
     let src_w = env.source_size().0.max(1) as f32;
     let target_w = if detailed { 960.0 } else { 480.0 };
     let scale = (target_w / src_w).min(1.0);
-    let frames: Vec<Option<Prepared>> = (0..n)
-        .into_par_iter()
-        .map(|k| {
+    let mut size = None;
+    let mut steps: Vec<Affine> = Vec::with_capacity(n - 1);
+    // the previous chunk's last frame, which the next chunk's first step starts from
+    let mut last: Option<Prepared> = None;
+    for start in (0..n).step_by(CHUNK) {
+        let mut frames: Vec<Option<Prepared>> = Vec::with_capacity(CHUNK + 1);
+        if start > 0 {
+            frames.push(last.take());
+        }
+        frames.par_extend((start..(start + CHUNK).min(n)).into_par_iter().map(|k| {
             if crate::filmcraft::cancelled() {
                 return None;
             }
             env.source_frame(k as f64 / fps - now, scale)
                 .map(|f| Prepared::new(gray_of(&f)))
-        })
-        .collect();
-    if crate::filmcraft::cancelled() {
-        return None;
-    }
-    let (w, h) = frames
-        .iter()
-        .flatten()
-        .next()
-        .map(|p| (p.base().w, p.base().h))?;
-    let m = 8.0;
-    let region = [
-        Vec2::new(m, m),
-        Vec2::new(w as f64 - m, m),
-        Vec2::new(w as f64 - m, h as f64 - m),
-        Vec2::new(m, h as f64 - m),
-    ];
-    let steps: Vec<Affine> = (0..n.saturating_sub(1))
-        .into_par_iter()
-        .map(|k| match (&frames[k], &frames[k + 1]) {
-            (Some(a), Some(b)) if a.base().w == b.base().w => track_step(a, b, &region, method)
-                .map(|s| s.transform)
-                .unwrap_or(Affine::IDENTITY),
-            _ => Affine::IDENTITY,
-        })
-        .collect();
-    let path = Arc::new(StabilizerPath { w, h, steps, fps });
-    if let Ok(mut c) = path_cache().lock() {
-        if c.len() > 64 {
-            c.clear();
+        }));
+        if crate::filmcraft::cancelled() {
+            return None;
         }
-        c.insert(key, path.clone());
+        // every step before the first decoded frame is the identity, so the region can wait
+        if size.is_none() {
+            size = frames
+                .iter()
+                .flatten()
+                .next()
+                .map(|p| (p.base().w, p.base().h));
+        }
+        let region = size.map(|(w, h)| {
+            let m = 8.0;
+            [
+                Vec2::new(m, m),
+                Vec2::new(w as f64 - m, m),
+                Vec2::new(w as f64 - m, h as f64 - m),
+                Vec2::new(m, h as f64 - m),
+            ]
+        });
+        steps.par_extend(frames.par_windows(2).map(|pair| {
+            match (&pair[0], &pair[1], &region) {
+                (Some(a), Some(b), Some(region)) if a.base().w == b.base().w => {
+                    track_step(a, b, region, method)
+                        .map(|s| s.transform)
+                        .unwrap_or(Affine::IDENTITY)
+                }
+                _ => Affine::IDENTITY,
+            }
+        }));
+        last = frames.pop().flatten();
     }
-    Some(path)
+    let (w, h) = size?;
+    Some(StabilizerPath { w, h, steps, fps })
 }
 
 /// Similarity parameters (tx, ty, angle, log-scale) of an affine.

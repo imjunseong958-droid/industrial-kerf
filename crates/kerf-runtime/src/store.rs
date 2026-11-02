@@ -22,8 +22,13 @@ pub(crate) const CHECKPOINT_TEMP_FILE: &str = ".kerf-runtime.checkpoint.json.tmp
 
 /// Where state written by an older kerfd is moved, untouched, on first open.
 pub(crate) const PREVIOUS_STATE_PREFIX: &str = ".kerf-runtime.previous";
-pub(crate) const CHECKPOINT_VERSION: u64 = 4;
-pub(crate) const JOURNAL_VERSION: u64 = 3;
+/// Format 5 keeps receipts without the state they left. Format 4, which
+/// kept it, still reads.
+pub(crate) const CHECKPOINT_VERSION: u64 = 5;
+const OLDEST_CHECKPOINT_VERSION: u64 = 4;
+/// Likewise, journal records of format 3 still read.
+pub(crate) const JOURNAL_VERSION: u64 = 4;
+const OLDEST_JOURNAL_VERSION: u64 = 3;
 
 /// A project directory has exactly one canonical runtime owner.  Keeping the
 /// lock open for the lifetime of the runtime prevents two desktop windows (or
@@ -200,18 +205,86 @@ impl ProjectionStatus {
     }
 }
 
+/// The receipt of a keyed request: what it asked, and the revision it
+/// left. A retry is answered with the state as it is now, so a receipt
+/// stays small whatever the size of the project.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct OperationRecord {
     pub(crate) fingerprint: String,
-    pub(crate) snapshot: Arc<StateSnapshot>,
+    /// The whole state the request left, which receipts kept before format
+    /// 5. It is read so their journal records still verify, then dropped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    snapshot: Option<Arc<StateSnapshot>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    revision: Option<u64>,
 }
 
+impl OperationRecord {
+    pub(crate) fn new(fingerprint: String, revision: u64) -> Self {
+        Self {
+            fingerprint,
+            snapshot: None,
+            revision: Some(revision),
+        }
+    }
+
+    /// The revision the request left.
+    pub(crate) fn revision(&self) -> u64 {
+        receipt_revision(self.revision, self.snapshot.as_deref())
+    }
+
+    /// The receipt without the snapshot an older format kept.
+    pub(crate) fn settled(mut self) -> Self {
+        self.revision = Some(self.revision());
+        self.snapshot = None;
+        self
+    }
+}
+
+/// The receipt of a keyed import, with the media and clip it added.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ImportRecord {
     pub(crate) fingerprint: String,
-    pub(crate) snapshot: Arc<StateSnapshot>,
+    /// As in [`OperationRecord`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    snapshot: Option<Arc<StateSnapshot>>,
     pub(crate) media_id: String,
     pub(crate) clip_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    revision: Option<u64>,
+}
+
+impl ImportRecord {
+    pub(crate) fn new(
+        fingerprint: String,
+        revision: u64,
+        media_id: String,
+        clip_id: String,
+    ) -> Self {
+        Self {
+            fingerprint,
+            snapshot: None,
+            media_id,
+            clip_id,
+            revision: Some(revision),
+        }
+    }
+
+    pub(crate) fn revision(&self) -> u64 {
+        receipt_revision(self.revision, self.snapshot.as_deref())
+    }
+
+    pub(crate) fn settled(mut self) -> Self {
+        self.revision = Some(self.revision());
+        self.snapshot = None;
+        self
+    }
+}
+
+fn receipt_revision(revision: Option<u64>, snapshot: Option<&StateSnapshot>) -> u64 {
+    revision
+        .or_else(|| snapshot.map(|snapshot| snapshot.revision))
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -259,7 +332,7 @@ pub(crate) fn seal_journal_record(
 }
 
 fn verify_journal_record(record: &JournalRecord) -> Result<(), RuntimeError> {
-    if record.format_version != JOURNAL_VERSION {
+    if !(OLDEST_JOURNAL_VERSION..=JOURNAL_VERSION).contains(&record.format_version) {
         return Err(RuntimeError::new(
             "JOURNAL_VERSION_UNSUPPORTED",
             format!(
@@ -422,7 +495,7 @@ pub(crate) fn load_checkpoint(directory: &Path) -> Result<Loaded, RuntimeError> 
     let temporary_path = directory.join(CHECKPOINT_TEMP_FILE);
     for path in [&checkpoint_path, &temporary_path] {
         if path.is_file()
-            && checkpoint_format(path).is_some_and(|format| format < CHECKPOINT_VERSION)
+            && checkpoint_format(path).is_some_and(|format| format < OLDEST_CHECKPOINT_VERSION)
         {
             return Ok(Loaded::Previous);
         }
@@ -489,7 +562,7 @@ fn read_checkpoint(path: &Path) -> Result<PersistedCheckpoint, RuntimeError> {
                 "checkpoint format_version is required",
             )
         })?;
-    if format_version != CHECKPOINT_VERSION {
+    if !(OLDEST_CHECKPOINT_VERSION..=CHECKPOINT_VERSION).contains(&format_version) {
         return Err(RuntimeError::new(
             "CHECKPOINT_VERSION_UNSUPPORTED",
             format!("checkpoint format {format_version} is not supported"),
@@ -500,7 +573,9 @@ fn read_checkpoint(path: &Path) -> Result<PersistedCheckpoint, RuntimeError> {
 }
 
 pub(crate) fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), RuntimeError> {
-    let bytes = serde_json::to_vec_pretty(value)
+    // Compact: a checkpoint is written on the actor's thread, and nobody
+    // reads it by eye.
+    let bytes = serde_json::to_vec(value)
         .map_err(|error| RuntimeError::new("SERIALIZE_ERROR", error.to_string()))?;
     write_bytes_atomic(path, &bytes)
 }

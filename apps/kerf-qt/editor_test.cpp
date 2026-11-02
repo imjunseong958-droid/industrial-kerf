@@ -4855,16 +4855,16 @@ private slots:
         // Values only: well under a frame, even with ten effects. The median
         // of a run of switches back and forth, so one slow scheduling slice
         // on a shared CI machine does not decide it. The target is 8 ms; the
-        // check allows twice that, as CI builds the tests unoptimized on
-        // shared runners (7.9 ms measured unoptimized on an M-series Mac,
-        // offscreen; see the README).
+        // check allows four times that, as CI builds the tests unoptimized on
+        // shared runners (7.9-9.9 ms measured unoptimized on an M-series Mac,
+        // offscreen, but 17-21 ms on GitHub's macOS runner; see the README).
         QList<double> times{elapsed};
         for (int index = 0; index < 8; ++index) times << timedSwitch(index % 2 ? "c2" : "c1");
         std::sort(times.begin(), times.end());
         const double median = times.at(times.size() / 2);
         qInfo("Inspector: same-shape clip switch, click to painted values: median %.2f ms, fastest %.2f ms (10 effects)", median,
               times.first());
-        QVERIFY2(median < 16.0, qPrintable(QStringLiteral("%1 ms").arg(median)));
+        QVERIFY2(median < 32.0, qPrintable(QStringLiteral("%1 ms").arg(median)));
         QCOMPARE(scroll->value(), 60);
         // The header's hairline shows while the body is scrolled under it,
         // laid over the body's top edge, so the body does not move for it.

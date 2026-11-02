@@ -33,12 +33,16 @@ fn run() -> Result<(), String> {
     }
     let kerfd = discover_kerfd();
     let router = KerfMcpRouter::new(&options.directory, kerfd.as_deref())?.held();
-    McpServer::new(router)
+    let served = McpServer::new(router.clone())
         .serve(
             io::BufReader::new(io::stdin().lock()),
             io::BufWriter::new(io::stdout().lock()),
         )
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string());
+    // The client closed stdin: nobody is left to read a render's job, so
+    // stop the ones still running rather than orphan their ffmpeg.
+    router.finish_renders(true);
+    served
 }
 
 fn parse_args(args: &[String], mut directory: PathBuf) -> Result<Option<Options>, String> {

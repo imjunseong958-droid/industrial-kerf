@@ -1356,7 +1356,14 @@ pub fn run_ipc_with(directory: &Path, options: IpcOptions) -> Result<(), Runtime
 
         let directory = canonical_project_directory(directory)?;
         let endpoint = EndpointAddress::for_canonical_directory(&directory);
+        // However this ends, media work still running for the project is
+        // stopped: its FFmpeg leads a process group of its own and would
+        // outlive kerfd.  Declared before the handle so it drops after it:
+        // the project lock goes first, and a kerfd that replaced this one
+        // need not wait out the media work to open the project.
+        let _media: StopMediaOnExit;
         let handle = open_runtime(&directory)?;
+        _media = StopMediaOnExit(&directory);
         let path = endpoint.as_path().ok_or_else(|| {
             RuntimeError::new("IPC_UNSUPPORTED", "Unix daemon requires a Unix endpoint")
         })?;
@@ -1411,8 +1418,20 @@ pub fn run_ipc_with(directory: &Path, options: IpcOptions) -> Result<(), Runtime
                 Err(error)
                     if matches!(
                         error.kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                        std::io::ErrorKind::WouldBlock
+                            | std::io::ErrorKind::Interrupted
+                            | std::io::ErrorKind::ConnectionAborted
                     ) => {}
+                // Out of descriptors or buffers for now: the connection
+                // waits, and the next look may find room for it.
+                Err(error)
+                    if matches!(
+                        error.raw_os_error(),
+                        Some(libc::EMFILE | libc::ENFILE | libc::ENOBUFS | libc::ENOMEM)
+                    ) =>
+                {
+                    thread::sleep(ORPHAN_CHECK_INTERVAL / 10);
+                }
                 Err(error) => return Err(io_error(error)),
             }
         }
@@ -1422,7 +1441,14 @@ pub fn run_ipc_with(directory: &Path, options: IpcOptions) -> Result<(), Runtime
     {
         let directory = canonical_project_directory(directory)?;
         let endpoint = EndpointAddress::for_canonical_directory(&directory);
+        // However this ends, media work still running for the project is
+        // stopped: its FFmpeg leads a process group of its own and would
+        // outlive kerfd.  Declared before the handle so it drops after it:
+        // the project lock goes first, and a kerfd that replaced this one
+        // need not wait out the media work to open the project.
+        let _media: StopMediaOnExit;
         let handle = open_runtime(&directory)?;
+        _media = StopMediaOnExit(&directory);
         let EndpointAddress::WindowsNamedPipe { name } = &endpoint else {
             return Err(RuntimeError::new(
                 "IPC_UNSUPPORTED",
@@ -1492,6 +1518,21 @@ fn open_runtime(directory: &Path) -> Result<RuntimeHandle, RuntimeError> {
             }
             result => return result,
         }
+    }
+}
+
+/// How long an exiting kerfd waits for the media work it stops.
+#[cfg(any(unix, windows))]
+const MEDIA_STOP_WAIT: Duration = Duration::from_secs(2);
+
+/// Stops a project's media work when dropped.
+#[cfg(any(unix, windows))]
+struct StopMediaOnExit<'a>(&'a Path);
+
+#[cfg(any(unix, windows))]
+impl Drop for StopMediaOnExit<'_> {
+    fn drop(&mut self) {
+        kernel::stop_media(self.0, MEDIA_STOP_WAIT);
     }
 }
 
