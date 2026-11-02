@@ -391,6 +391,11 @@ fn runtime_worker(
 ) {
     let mut previous = None;
     let mut client = connect_runtime(&directory, &binary, &tx, &shared, &mut previous);
+    // Hold kerfd for as long as the editor is open; it exits on its own
+    // once the editor and every other client are gone.
+    let _lease = RuntimeClient::new(&directory)
+        .ok()
+        .map(|lease| lease.hold());
     while !shared.closed.load(Ordering::Relaxed) {
         let command = match rx.recv_timeout(Duration::from_millis(500)) {
             Ok(command) => command,
@@ -958,7 +963,9 @@ fn new_agent(
         .ok()
         .map(|value| ReasoningEffort::parse(&value).ok_or("Invalid OPENAI_REASONING_EFFORT"))
         .transpose()?;
-    let router = KerfMcpRouter::new(directory, Some(binary))?;
+    // The editor's own lease covers it too, but an agent session holds
+    // kerfd for as long as it lives wherever it runs.
+    let router = KerfMcpRouter::new(directory, Some(binary))?.held();
     let mut tools = router.agent_tools();
     inbound::add_agent_tools(&mut tools, directory, settings.mcp_enabled, |line| {
         // Connection errors may contain command arguments or server responses.

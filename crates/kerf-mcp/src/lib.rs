@@ -14,7 +14,7 @@ mod presets;
 pub use presets::{keep_looks, PRESET_FOLDERS};
 
 use kerf_agent::{AgentTool, ToolMap};
-use kerf_runtime::{RuntimeClient, RuntimeError};
+use kerf_runtime::{RuntimeClient, RuntimeError, RuntimeLease};
 use kerf_skills::{load_skills_with_bundled, Skill};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -22,6 +22,7 @@ use std::fmt;
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -107,6 +108,9 @@ impl From<RuntimeError> for McpError {
 pub struct KerfMcpRouter {
     dir: PathBuf,
     runtime: RuntimeClient,
+    /// Holds kerfd while any copy of a long-lived router lives; see
+    /// [`KerfMcpRouter::held`].
+    _lease: Option<Arc<RuntimeLease>>,
     skills: Vec<Skill>,
     namespace: String,
 }
@@ -136,11 +140,20 @@ impl KerfMcpRouter {
             .trim_end_matches('.')
             .to_owned();
         Ok(Self {
+            _lease: None,
             dir,
             runtime,
             skills,
             namespace,
         })
+    }
+
+    /// This router, holding kerfd open for as long as it or a copy of it
+    /// lives: for the MCP server and agent sessions. A router used for one
+    /// command holds nothing, so a run of them shares one kerfd.
+    pub fn held(mut self) -> Self {
+        self._lease = Some(Arc::new(self.runtime.hold()));
+        self
     }
 
     pub fn directory(&self) -> &Path {

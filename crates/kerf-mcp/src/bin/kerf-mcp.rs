@@ -32,7 +32,7 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     let kerfd = discover_kerfd();
-    let router = KerfMcpRouter::new(&options.directory, kerfd.as_deref())?;
+    let router = KerfMcpRouter::new(&options.directory, kerfd.as_deref())?.held();
     McpServer::new(router)
         .serve(
             io::BufReader::new(io::stdin().lock()),

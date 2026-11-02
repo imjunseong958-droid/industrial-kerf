@@ -29,6 +29,14 @@ Rust MCP server ─────────────────────�
                                                                 playback, previews
 ```
 
+Clients start `kerfd` on demand, one per project. The editor, the MCP server,
+the terminal agent, and a running render hold it open; once they are all
+gone and it has no media left to index, it exits after five seconds. A
+one-shot command such as `kerf sync` holds nothing, so `kerfd` waits ten
+minutes after the last request instead; `KERFD_IDLE_TIMEOUT`, in the
+environment `kerfd` starts with, sets that wait in seconds, and `0` turns it
+off. The next request starts it again.
+
 Renders, playback, and previews read the model. A render job and a proposal
 preview carry the `.kerf` document with media paths resolved against the
 project, and the render compiler lowers its first sequence to one FFmpeg

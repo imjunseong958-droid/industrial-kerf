@@ -3,7 +3,9 @@
 
 #![cfg(any(unix, windows))]
 
-use kerf_runtime::{EndpointAddress, RuntimeClient, StateSnapshot, MAX_REQUEST_BYTES};
+use kerf_runtime::{
+    EndpointAddress, RuntimeClient, RuntimeLease, StateSnapshot, MAX_REQUEST_BYTES,
+};
 use std::fs;
 use std::io::{Read, Write};
 #[cfg(unix)]
@@ -22,16 +24,70 @@ fn project_directory(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!("kerfd-ipc-{label}-{stamp}"))
 }
 
+/// A project folder, removed when the test ends however it ends, which
+/// also ends any daemon still serving it.
+struct Project(PathBuf);
+
+impl Project {
+    fn new(label: &str) -> Self {
+        let directory = project_directory(label);
+        fs::create_dir_all(&directory).unwrap();
+        Self(directory)
+    }
+}
+
+impl Drop for Project {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 fn start_daemon(directory: &Path) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_kerfd"))
+    daemon_command(directory).spawn().expect("spawn kerfd")
+}
+
+/// A daemon that gives up `seconds` after its last request when nothing
+/// holds it.
+fn start_daemon_idle_for(directory: &Path, seconds: u64) -> Child {
+    daemon_command(directory)
+        .env("KERFD_IDLE_TIMEOUT", seconds.to_string())
+        .spawn()
+        .expect("spawn kerfd")
+}
+
+fn daemon_command(directory: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_kerfd"));
+    command
         .arg("--dir")
         .arg(directory)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .env("KERFD_TEST_DROP_RESPONSE_KEY", "lost-response")
-        .spawn()
-        .expect("spawn kerfd")
+        .env("KERFD_TEST_DROP_RESPONSE_KEY", "lost-response");
+    command
+}
+
+/// Wait for `daemon` to exit on its own; the deadline is far past any
+/// exit that should happen.
+fn wait_for_exit(daemon: &mut Child) -> std::process::ExitStatus {
+    for _ in 0..1000 {
+        if let Some(status) = daemon.try_wait().unwrap() {
+            return status;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    let _ = daemon.kill();
+    panic!("kerfd did not exit once nothing held it");
+}
+
+fn wait_until_held(lease: &RuntimeLease) {
+    for _ in 0..1000 {
+        if lease.is_held() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    panic!("the lease never attached");
 }
 
 fn wait_until_ready(client: &RuntimeClient) {
@@ -458,4 +514,181 @@ fn a_client_starts_the_daemon_it_cannot_reach() {
         thread::sleep(Duration::from_millis(20));
     }
     panic!("the started kerfd kept running after its project was deleted");
+}
+
+#[test]
+fn an_idle_daemon_exits_and_removes_its_socket() {
+    let _project = Project::new("idle");
+    let directory = _project.0.clone();
+    let mut daemon = start_daemon_idle_for(&directory, 1);
+    let client = RuntimeClient::new(&directory).unwrap();
+    wait_until_ready(&client);
+    assert!(wait_for_exit(&mut daemon).success());
+    if let Some(path) = client.endpoint().as_path() {
+        assert!(!path.exists(), "kerfd left its socket behind");
+    }
+    assert!(client.get_state().is_err());
+    let _ = fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn an_idle_timeout_of_zero_keeps_a_daemon_nothing_holds() {
+    let _project = Project::new("no-idle");
+    let directory = _project.0.clone();
+    let mut daemon = start_daemon_idle_for(&directory, 0);
+    wait_until_ready(&RuntimeClient::new(&directory).unwrap());
+    thread::sleep(Duration::from_secs(3));
+    assert!(daemon.try_wait().unwrap().is_none(), "kerfd exited anyway");
+    stop_daemon(daemon);
+    let _ = fs::remove_dir_all(&directory);
+}
+
+/// Not a test of its own: `a_killed_client_releases_its_lease` runs this
+/// binary again to hold a lease from a process it can kill.
+#[test]
+fn lease_holder_process() {
+    let Some(directory) = std::env::var_os("KERFD_TEST_LEASE_HOLDER") else {
+        return;
+    };
+    let lease = RuntimeClient::new(Path::new(&directory)).unwrap().hold();
+    wait_until_held(&lease);
+    println!("lease-held");
+    // Until killed, or until the test that started it goes and closes its
+    // stdin, so a failed test leaves nothing behind.
+    let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
+    std::process::exit(0);
+}
+
+#[test]
+fn a_killed_client_releases_its_lease() {
+    let _project = Project::new("killed");
+    let directory = _project.0.clone();
+    // No idle timeout, so only a released lease can end it.
+    let mut daemon = start_daemon_idle_for(&directory, 0);
+    wait_until_ready(&RuntimeClient::new(&directory).unwrap());
+    let mut holder = Command::new(std::env::current_exe().unwrap())
+        .args(["lease_holder_process", "--exact", "--nocapture"])
+        .env("KERFD_TEST_LEASE_HOLDER", &directory)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let stdout = holder.stdout.take().unwrap();
+    let (held, wait) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        use std::io::BufRead;
+        let held_line = std::io::BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok)
+            .any(|line| line.contains("lease-held"));
+        let _ = held.send(held_line);
+    });
+    let attached = wait.recv_timeout(Duration::from_secs(30)).unwrap_or(false);
+    if !attached {
+        let _ = holder.kill();
+        stop_daemon(daemon);
+        panic!("the holder never leased kerfd");
+    }
+    thread::sleep(Duration::from_secs(2));
+    let survived = daemon.try_wait().unwrap().is_none();
+    holder.kill().unwrap();
+    let _ = holder.wait();
+    if !survived {
+        let _ = fs::remove_dir_all(&directory);
+        panic!("kerfd exited under a lease");
+    }
+    assert!(wait_for_exit(&mut daemon).success());
+    let _ = fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn a_client_restarts_a_daemon_that_exited_and_finds_its_project_as_it_was() {
+    let _project = Project::new("restart");
+    let directory = _project.0.clone();
+    let mut daemon = start_daemon(&directory);
+    // Ready first, so the client does not start a daemon of its own.
+    wait_until_ready(&RuntimeClient::new(&directory).unwrap());
+    let client =
+        RuntimeClient::connect_or_spawn(&directory, Some(Path::new(env!("CARGO_BIN_EXE_kerfd"))))
+            .unwrap();
+    let lease = client.hold();
+    wait_until_held(&lease);
+    let edited = client
+        .apply_script_request("ui", "before-exit", "marker add at=0f as=kept", 0)
+        .unwrap();
+    assert_eq!(edited.revision, 1);
+    drop(lease);
+    assert!(wait_for_exit(&mut daemon).success());
+
+    // The next request starts another kerfd, which reloads the project
+    // and its history.
+    let restarted = client.get_state().unwrap();
+    assert_eq!(restarted.revision, 1);
+    assert!(has_marker(&restarted, "kept"));
+    let undone = client.undo_request("ui", "after-exit", 1).unwrap();
+    assert_eq!(undone.revision, 2);
+    assert!(!has_marker(&undone, "kept"));
+    // Removing the project ends the daemon the client started.
+    fs::remove_dir_all(&directory).unwrap();
+}
+
+#[test]
+fn a_client_outwaits_a_daemon_still_letting_go_of_the_project() {
+    let _project = Project::new("handover");
+    let directory = _project.0.clone();
+    // A kerfd in stdio mode holds the project, as one on its way out does,
+    // for longer than a new kerfd waits for it.
+    let mut holder = Command::new(env!("CARGO_BIN_EXE_kerfd"))
+        .arg("--dir")
+        .arg(&directory)
+        .arg("--stdio")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut input = holder.stdin.take().unwrap();
+    let mut output = std::io::BufReader::new(holder.stdout.take().unwrap());
+    input
+        .write_all(b"{\"protocolVersion\":1,\"id\":\"held\",\"operation\":\"get_state\"}\n")
+        .unwrap();
+    let mut answer = String::new();
+    std::io::BufRead::read_line(&mut output, &mut answer).unwrap();
+    assert!(answer.contains("\"ok\":true"), "{answer}");
+    let release = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(3300));
+        drop(input);
+        let _ = holder.wait();
+    });
+    let client =
+        RuntimeClient::connect_or_spawn(&directory, Some(Path::new(env!("CARGO_BIN_EXE_kerfd"))))
+            .unwrap();
+    let state = client.get_state();
+    release.join().unwrap();
+    assert_eq!(state.unwrap().revision, 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_daemon_that_cannot_start_is_not_started_again_for_a_read() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _project = Project::new("broken");
+    let directory = _project.0.clone();
+    let starts = directory.join("starts");
+    let binary = directory.join("broken-kerfd");
+    fs::write(
+        &binary,
+        format!("#!/bin/sh\necho start >> '{}'\nexit 1\n", starts.display()),
+    )
+    .unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+    let client = RuntimeClient::connect_or_spawn(&directory, Some(&binary)).unwrap();
+    let error = client.get_state().unwrap_err();
+    assert_eq!(error.code, "RUNTIME_UNAVAILABLE", "{error:?}");
+    // One start, and one more once the first has exited; the read is not
+    // tried again on top.
+    let count = fs::read_to_string(&starts).unwrap().lines().count();
+    assert_eq!(count, 2);
 }

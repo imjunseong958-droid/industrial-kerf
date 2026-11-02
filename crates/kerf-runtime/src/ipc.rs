@@ -2,7 +2,7 @@
 //! listens on, the request-scoped client, and the JSONL server.
 
 use crate::{
-    io_error, unique_id, EditOp, RenderJob, RenderRange, RequestEnvelope, RuntimeError,
+    io_error, kernel, unique_id, EditOp, RenderJob, RenderRange, RequestEnvelope, RuntimeError,
     RuntimeHandle, RuntimeRequest, RuntimeResponse, StateSnapshot,
 };
 use serde_json::{json, Value};
@@ -12,9 +12,9 @@ use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
@@ -49,6 +49,32 @@ const CLIENT_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 /// How often an idle daemon checks whether it has been orphaned.
 #[cfg(any(unix, windows))]
 const ORPHAN_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+/// The operation a client sends to hold the daemon open. It never reaches
+/// the runtime: the connection is the lease.
+#[cfg(any(unix, windows))]
+const HOLD_OPERATION: &str = "hold";
+/// How long kerfd stays after its last lease closes, so a client that
+/// restarts straight away finds it still running.
+const LEASE_GRACE: Duration = Duration::from_secs(5);
+/// How long kerfd stays after its last request when no client leases it,
+/// so a run of one-shot commands does not start it every time.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// How long a new kerfd waits for one on its way out to let go of the
+/// project.
+#[cfg(any(unix, windows))]
+const STARTUP_LOCK_WAIT: Duration = Duration::from_secs(3);
+/// How often a lease whose daemon has gone tries to attach again.
+#[cfg(any(unix, windows))]
+const LEASE_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+/// How long a lease leaves a kerfd too old to hold before asking again.
+#[cfg(any(unix, windows))]
+const LEASE_UNSUPPORTED_RETRY: Duration = Duration::from_secs(30);
+/// How long a held lease reads before checking whether it was dropped.
+#[cfg(any(unix, windows))]
+const LEASE_POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// How long a lease waits for kerfd to answer it.
+#[cfg(any(unix, windows))]
+const LEASE_ANSWER_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(any(unix, windows))]
 static TEST_RESPONSE_DROPPED: AtomicBool = AtomicBool::new(false);
 
@@ -222,7 +248,8 @@ impl RuntimeClient {
     /// Create a client that connects first and starts `binary` only when no
     /// daemon is listening.  The spawned process is intentionally detached
     /// from the client lifetime; dropping this value never kills `kerfd`.  The
-    /// daemon exits on its own once the project directory is deleted.
+    /// daemon exits on its own once nothing holds it (see [`run_ipc`]); the
+    /// next request starts it again.
     pub fn connect_or_spawn(directory: &Path, binary: Option<&Path>) -> Result<Self, RuntimeError> {
         Self::with_binary(directory, binary)
     }
@@ -267,12 +294,48 @@ impl RuntimeClient {
         &self.inner.endpoint
     }
 
+    /// Hold the project's daemon open until the returned lease is dropped.
+    ///
+    /// The lease never starts kerfd, so it cannot make a deleted project
+    /// folder again: it attaches to a daemon a request has started, and
+    /// attaches again within a second once a later request starts another.
+    /// The OS closes its connection when this process ends, however it
+    /// ends, so a lease cannot outlive its client.
+    pub fn hold(&self) -> RuntimeLease {
+        let state = Arc::new(LeaseState::default());
+        #[cfg(any(unix, windows))]
+        let thread = {
+            let client = self.clone();
+            let state = state.clone();
+            // Without a thread the lease holds nothing, and kerfd falls
+            // back on its idle timeout.
+            thread::Builder::new()
+                .name("kerf-lease".into())
+                .spawn(move || client.keep_lease(&state))
+                .ok()
+        };
+        #[cfg(not(any(unix, windows)))]
+        let thread = None;
+        RuntimeLease { state, thread }
+    }
+
     /// Send one versioned request over a fresh connection.
     pub fn request(&self, request: RuntimeRequest) -> Result<RuntimeResponse, RuntimeError> {
         let retryable = request_has_stable_idempotency_key(&request);
-        match self.request_once(&request) {
+        match self.request_attempt(&request) {
             Ok(response) => Ok(response),
-            Err(error) if retryable && error.is_transport() => {
+            // Reading again changes nothing. A kerfd that exited as this
+            // connected has gone by now, so the retry starts another; one
+            // that could not be started is not tried twice.
+            Err(Failed {
+                connected: true,
+                error,
+            }) if request_is_read_only(&request)
+                && matches!(error.code.as_str(), "IPC_ERROR" | "RUNTIME_UNAVAILABLE") =>
+            {
+                self.request_once(&request)
+            }
+            Err(Failed { error, .. }) if retryable && error.is_transport() => {
                 // The first request may have committed before its response
                 // was lost.  Re-read authoritative state before retrying so
                 // the caller observes a current revision and the retry can
@@ -281,7 +344,7 @@ impl RuntimeClient {
                     .map_err(|_| error.clone())?;
                 self.request_once(&request)
             }
-            Err(error) => Err(error),
+            Err(Failed { error, .. }) => Err(error),
         }
     }
 
@@ -591,31 +654,51 @@ impl RuntimeClient {
         })?)
     }
 
-    #[cfg(any(unix, windows))]
     fn request_once(&self, request: &RuntimeRequest) -> Result<RuntimeResponse, RuntimeError> {
+        self.request_attempt(request).map_err(|failed| failed.error)
+    }
+
+    #[cfg(any(unix, windows))]
+    fn request_attempt(&self, request: &RuntimeRequest) -> Result<RuntimeResponse, Failed> {
         let envelope = RequestEnvelope::new(format!("request-{}", unique_id()), request.clone());
         let mut payload = serde_json::to_vec(&envelope)
-            .map_err(|error| RuntimeError::new("SERIALIZE_ERROR", error.to_string()))?;
+            .map_err(|error| RuntimeError::new("SERIALIZE_ERROR", error.to_string()))
+            .map_err(Failed::unconnected)?;
         payload.push(b'\n');
         if payload.len() > MAX_REQUEST_BYTES {
-            return Err(RuntimeError::new(
+            return Err(Failed::unconnected(RuntimeError::new(
                 "REQUEST_TOO_LARGE",
                 format!("request exceeds {MAX_REQUEST_BYTES} bytes"),
-            ));
+            )));
         }
-        let mut stream = self.connect_or_start()?;
+        let mut stream = self.connect_or_start().map_err(Failed::unconnected)?;
+        self.exchange(&mut stream, &payload, &envelope.id)
+            .map_err(|error| Failed {
+                connected: true,
+                error,
+            })
+    }
+
+    /// Send `payload` on `stream` and read the response to request `id`.
+    #[cfg(any(unix, windows))]
+    fn exchange(
+        &self,
+        stream: &mut LocalStream,
+        payload: &[u8],
+        id: &str,
+    ) -> Result<RuntimeResponse, RuntimeError> {
         stream
             .set_read_timeout(Some(self.inner.request_timeout))
             .map_err(ipc_error)?;
         stream
             .set_write_timeout(Some(self.inner.request_timeout))
             .map_err(ipc_error)?;
-        stream.write_all(&payload).map_err(ipc_error)?;
+        stream.write_all(payload).map_err(ipc_error)?;
         stream.flush().map_err(ipc_error)?;
-        let line = read_bounded_line(&mut stream)?;
+        let line = read_bounded_line(stream)?;
         let value: Value = serde_json::from_slice(&line)
             .map_err(|error| RuntimeError::new("INVALID_JSON", error.to_string()))?;
-        decode_response(&value, &envelope.id)
+        decode_response(&value, id)
     }
 
     #[cfg(any(unix, windows))]
@@ -631,6 +714,47 @@ impl RuntimeClient {
                 format!("no kerfd daemon is listening at {}", self.endpoint_label()),
             )
         })?;
+        let mut child = self.spawn_daemon(binary)?;
+        let mut respawned = false;
+        let deadline = std::time::Instant::now() + self.inner.startup_timeout;
+        let result = loop {
+            match self.connect_once() {
+                Ok(stream) => break Ok(stream),
+                Err(error) if std::time::Instant::now() < deadline => {
+                    // A competing client may have started the daemon, or the
+                    // child may still be loading its checkpoint.
+                    if error.code == "IPC_PERMISSION_DENIED" {
+                        break Err(error);
+                    }
+                    // A kerfd on its way out can hold the project longer
+                    // than the child waits for it; start one more once.
+                    if !respawned && matches!(child.try_wait(), Ok(Some(_))) {
+                        respawned = true;
+                        child = match self.spawn_daemon(binary) {
+                            Ok(next) => next,
+                            Err(error) => break Err(error),
+                        };
+                    }
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => {
+                    break Err(RuntimeError::new(
+                        "RUNTIME_UNAVAILABLE",
+                        format!("kerfd did not become ready: {}", error.message),
+                    ));
+                }
+            }
+        };
+        // kerfd exits once it is idle, while this process may live on; reap
+        // it then so it does not linger as a zombie.
+        let _ = thread::Builder::new()
+            .name("kerfd-reaper".into())
+            .spawn(move || child.wait());
+        result
+    }
+
+    #[cfg(any(unix, windows))]
+    fn spawn_daemon(&self, binary: &Path) -> Result<std::process::Child, RuntimeError> {
         let mut command = Command::new(binary);
         command
             .arg("--dir")
@@ -650,39 +774,26 @@ impl RuntimeClient {
                 "RUNTIME_UNAVAILABLE",
                 format!("failed to start kerfd at {}: {error}", binary.display()),
             )
-        })?;
-        let deadline = std::time::Instant::now() + self.inner.startup_timeout;
-        loop {
-            match self.connect_once() {
-                Ok(stream) => return Ok(stream),
-                Err(error) if std::time::Instant::now() < deadline => {
-                    // A competing client may have started the daemon, or the
-                    // child may still be loading its checkpoint.
-                    if error.code == "IPC_PERMISSION_DENIED" {
-                        return Err(error);
-                    }
-                    thread::sleep(Duration::from_millis(20));
-                }
-                Err(error) => {
-                    return Err(RuntimeError::new(
-                        "RUNTIME_UNAVAILABLE",
-                        format!("kerfd did not become ready: {}", error.message),
-                    ));
-                }
-            }
-        }
+        })
     }
 
     #[cfg(not(any(unix, windows)))]
-    fn request_once(&self, _request: &RuntimeRequest) -> Result<RuntimeResponse, RuntimeError> {
-        Err(RuntimeError::new(
+    fn request_attempt(&self, _request: &RuntimeRequest) -> Result<RuntimeResponse, Failed> {
+        Err(Failed::unconnected(RuntimeError::new(
             "IPC_UNSUPPORTED",
             "no local transport on this platform",
-        ))
+        )))
     }
 
+    #[cfg(any(unix, windows))]
+    fn connect_once(&self) -> Result<LocalStream, RuntimeError> {
+        self.connect_within(self.inner.request_timeout)
+    }
+
+    /// Connect to a running daemon, waiting up to `timeout` for a free
+    /// pipe instance on Windows.
     #[cfg(unix)]
-    fn connect_once(&self) -> Result<UnixStream, RuntimeError> {
+    fn connect_within(&self, _timeout: Duration) -> Result<UnixStream, RuntimeError> {
         let path = self
             .inner
             .endpoint
@@ -701,14 +812,14 @@ impl RuntimeClient {
     }
 
     #[cfg(windows)]
-    fn connect_once(&self) -> Result<PipeStream, RuntimeError> {
+    fn connect_within(&self, timeout: Duration) -> Result<PipeStream, RuntimeError> {
         let EndpointAddress::WindowsNamedPipe { name } = &self.inner.endpoint else {
             return Err(RuntimeError::new(
                 "IPC_UNSUPPORTED",
                 "endpoint is not a named pipe",
             ));
         };
-        crate::named_pipe::connect(name, self.inner.request_timeout).map_err(|error| {
+        crate::named_pipe::connect(name, timeout).map_err(|error| {
             let code = match error.kind() {
                 std::io::ErrorKind::PermissionDenied => "IPC_PERMISSION_DENIED",
                 _ => "IPC_CONNECT_ERROR",
@@ -724,6 +835,145 @@ impl RuntimeClient {
             EndpointAddress::WindowsNamedPipe { name } => name.clone(),
         }
     }
+
+    /// Keep a lease on whichever daemon is running until it is dropped.
+    #[cfg(any(unix, windows))]
+    fn keep_lease(&self, state: &LeaseState) {
+        let stop = &state.stop;
+        while !stop.load(Ordering::Acquire) {
+            let retry = match self.attach_lease() {
+                Ok(mut stream) => {
+                    state.held.store(true, Ordering::Release);
+                    wait_while_held(&mut stream, stop);
+                    state.held.store(false, Ordering::Release);
+                    LEASE_RETRY_INTERVAL
+                }
+                // An older kerfd lives until its folder goes, so there is
+                // nothing to hold; ask again in case a newer one replaces it.
+                Err(error) if error.code == "UNKNOWN_OPERATION" => LEASE_UNSUPPORTED_RETRY,
+                Err(_) => LEASE_RETRY_INTERVAL,
+            };
+            let deadline = Instant::now() + retry;
+            while !stop.load(Ordering::Acquire) && Instant::now() < deadline {
+                thread::sleep(LEASE_POLL_INTERVAL.min(deadline - Instant::now()));
+            }
+        }
+    }
+
+    /// Open a lease on the running daemon, never starting one.
+    #[cfg(any(unix, windows))]
+    fn attach_lease(&self) -> Result<LocalStream, RuntimeError> {
+        let id = format!("lease-{}", unique_id());
+        let mut line = serde_json::to_vec(&json!({
+            "protocolVersion": RequestEnvelope::PROTOCOL_VERSION,
+            "id": id,
+            "operation": HOLD_OPERATION,
+        }))
+        .map_err(|error| RuntimeError::new("SERIALIZE_ERROR", error.to_string()))?;
+        line.push(b'\n');
+        let mut stream = self.connect_within(LEASE_ANSWER_TIMEOUT)?;
+        stream
+            .set_read_timeout(Some(LEASE_ANSWER_TIMEOUT))
+            .map_err(ipc_error)?;
+        stream
+            .set_write_timeout(Some(LEASE_ANSWER_TIMEOUT))
+            .map_err(ipc_error)?;
+        stream.write_all(&line).map_err(ipc_error)?;
+        stream.flush().map_err(ipc_error)?;
+        let answer = read_bounded_line(&mut stream)?;
+        let value: Value = serde_json::from_slice(&answer)
+            .map_err(|error| RuntimeError::new("INVALID_JSON", error.to_string()))?;
+        decode_response(&value, &id)?;
+        // Short reads, so a dropped lease stops promptly.
+        stream
+            .set_read_timeout(Some(LEASE_POLL_INTERVAL))
+            .map_err(ipc_error)?;
+        Ok(stream)
+    }
+}
+
+/// Holds a project's daemon open while it lives; see [`RuntimeClient::hold`].
+/// Dropping it lets the daemon go once nothing else needs it.
+pub struct RuntimeLease {
+    state: Arc<LeaseState>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+#[derive(Default)]
+struct LeaseState {
+    stop: AtomicBool,
+    held: AtomicBool,
+}
+
+impl RuntimeLease {
+    /// Whether a running daemon holds this lease right now.
+    pub fn is_held(&self) -> bool {
+        self.state.held.load(Ordering::Acquire)
+    }
+}
+
+impl std::fmt::Debug for RuntimeLease {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RuntimeLease")
+            .field("held", &self.is_held())
+            .finish()
+    }
+}
+
+impl Drop for RuntimeLease {
+    fn drop(&mut self) {
+        self.state.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Wait while the daemon holds the lease open, until it goes or `stop` is
+/// set.
+#[cfg(any(unix, windows))]
+fn wait_while_held<R: Read>(stream: &mut R, stop: &AtomicBool) {
+    let mut buffer = [0_u8; 64];
+    while !stop.load(Ordering::Acquire) {
+        match stream.read(&mut buffer) {
+            Ok(0) => return,
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::Interrupted
+                ) => {}
+            Err(_) => return,
+        }
+    }
+}
+
+/// A request that failed, and whether it reached a daemon first.
+struct Failed {
+    connected: bool,
+    error: RuntimeError,
+}
+
+impl Failed {
+    fn unconnected(error: RuntimeError) -> Self {
+        Self {
+            connected: false,
+            error,
+        }
+    }
+}
+
+fn request_is_read_only(request: &RuntimeRequest) -> bool {
+    matches!(
+        request,
+        RuntimeRequest::GetState
+            | RuntimeRequest::GetDocument { .. }
+            | RuntimeRequest::GetProposalDocuments { .. }
+            | RuntimeRequest::GetRender { .. }
+    )
 }
 
 fn request_has_stable_idempotency_key(request: &RuntimeRequest) -> bool {
@@ -1041,34 +1291,86 @@ pub fn response_value(id: &str, result: Result<RuntimeResponse, RuntimeError>) -
     }
 }
 
+/// When an idle daemon exits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IpcOptions {
+    /// How long the daemon stays once its last lease has closed.
+    pub lease_grace: Duration,
+    /// How long it stays after its last request otherwise, for clients that
+    /// never lease; `None` keeps it until a lease releases it.
+    pub idle_timeout: Option<Duration>,
+}
+
+impl Default for IpcOptions {
+    fn default() -> Self {
+        Self {
+            lease_grace: LEASE_GRACE,
+            idle_timeout: Some(IDLE_TIMEOUT),
+        }
+    }
+}
+
+impl IpcOptions {
+    /// The defaults, with the idle timeout taken from `KERFD_IDLE_TIMEOUT`
+    /// in seconds, where `0` turns it off. A value that does not read as
+    /// seconds keeps the default.
+    pub fn from_env() -> Self {
+        Self::with_idle_timeout(std::env::var("KERFD_IDLE_TIMEOUT").ok().as_deref())
+    }
+
+    fn with_idle_timeout(seconds: Option<&str>) -> Self {
+        let mut options = Self::default();
+        if let Some(seconds) = seconds.and_then(|value| value.trim().parse::<u64>().ok()) {
+            options.idle_timeout = (seconds > 0).then(|| Duration::from_secs(seconds));
+        }
+        options
+    }
+}
+
 /// Run the canonical project-scoped local IPC daemon.
 ///
 /// One `RuntimeHandle` is created for the canonical project directory and is
 /// shared by short-lived connection workers.  Each worker handles one JSONL
-/// request and then closes its connection.  The daemon outlives its clients,
-/// but returns once it is orphaned: its project directory is gone, or its
-/// socket was removed or replaced, so no client can reach it again.
+/// request and then closes its connection, except a `hold`, which it keeps
+/// open as a lease until the client closes it.
+///
+/// The daemon runs while a request is in flight, a lease is open, or it
+/// prepares media in the background. With none of those it exits five
+/// seconds after the last lease closed, or, once a client that held no
+/// lease has made a request since, `KERFD_IDLE_TIMEOUT` seconds after its
+/// last request (ten minutes unless set; `0` waits for a lease to release
+/// it instead). It also returns once
+/// it is orphaned: its project directory is gone, or its socket was removed
+/// or replaced, so no client can reach it again. A later request starts it
+/// again.
 pub fn run_ipc(directory: &Path) -> Result<(), RuntimeError> {
+    run_ipc_with(directory, IpcOptions::from_env())
+}
+
+/// [`run_ipc`] with the idle times given rather than read from the
+/// environment.
+pub fn run_ipc_with(directory: &Path, options: IpcOptions) -> Result<(), RuntimeError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
 
         let directory = canonical_project_directory(directory)?;
         let endpoint = EndpointAddress::for_canonical_directory(&directory);
-        let handle = RuntimeHandle::open(&directory)?;
+        let handle = open_runtime(&directory)?;
         let path = endpoint.as_path().ok_or_else(|| {
             RuntimeError::new("IPC_UNSUPPORTED", "Unix daemon requires a Unix endpoint")
         })?;
         let listener = bind_unix_listener(path)?;
         // Poll with a timeout instead of blocking in `accept` so the daemon
-        // notices when it is orphaned.  Accepted streams would inherit
-        // non-blocking mode on BSDs, so each one is reset below.
+        // notices when it is orphaned or idle.  Accepted streams would
+        // inherit non-blocking mode on BSDs, so each one is reset below.
         listener.set_nonblocking(true).map_err(io_error)?;
         let socket = fs::symlink_metadata(path).map_err(io_error)?;
         let owns_socket = || {
             fs::symlink_metadata(path)
                 .is_ok_and(|current| current.dev() == socket.dev() && current.ino() == socket.ino())
         };
+        let activity = Arc::new(Activity::new());
         loop {
             if !directory.is_dir() || !owns_socket() {
                 if owns_socket() {
@@ -1076,17 +1378,35 @@ pub fn run_ipc(directory: &Path) -> Result<(), RuntimeError> {
                 }
                 return Ok(());
             }
-            if !wait_for_connection(&listener, ORPHAN_CHECK_INTERVAL)? {
+            let wait = match activity.idle_wait(&directory, &options) {
+                Some(wait) => wait,
+                // Idle long enough, unless a client is already waiting.
+                None if !wait_for_connection(&listener, Duration::ZERO)? => {
+                    if owns_socket() {
+                        let _ = fs::remove_file(path);
+                    }
+                    // A client may have connected just before the socket
+                    // went; serve it rather than drop it.
+                    serve_pending(&listener, &handle, &activity);
+                    // Let go of the project so a client that finds no
+                    // socket can start another kerfd at once, then wait
+                    // out any media work those requests began: ending the
+                    // process would leave its FFmpeg running.
+                    drop(handle);
+                    while kernel::background_work(&directory).0 && directory.is_dir() {
+                        thread::sleep(ORPHAN_CHECK_INTERVAL / 10);
+                    }
+                    return Ok(());
+                }
+                None => Duration::ZERO,
+            };
+            if !wait_for_connection(&listener, wait)? {
                 continue;
             }
             match listener.accept() {
                 Ok((stream, _)) => {
                     stream.set_nonblocking(false).map_err(io_error)?;
-                    let handle = handle.clone();
-                    thread::Builder::new()
-                        .name("kerfd-client".into())
-                        .spawn(move || serve_unix_connection(stream, handle))
-                        .map_err(io_error)?;
+                    spawn_unix_worker(stream, &handle, &activity, false).map_err(io_error)?;
                 }
                 Err(error)
                     if matches!(
@@ -1102,7 +1422,7 @@ pub fn run_ipc(directory: &Path) -> Result<(), RuntimeError> {
     {
         let directory = canonical_project_directory(directory)?;
         let endpoint = EndpointAddress::for_canonical_directory(&directory);
-        let handle = RuntimeHandle::open(&directory)?;
+        let handle = open_runtime(&directory)?;
         let EndpointAddress::WindowsNamedPipe { name } = &endpoint else {
             return Err(RuntimeError::new(
                 "IPC_UNSUPPORTED",
@@ -1122,28 +1442,164 @@ pub fn run_ipc(directory: &Path) -> Result<(), RuntimeError> {
                 io_error(error)
             }
         })?;
+        let activity = Arc::new(Activity::new());
         loop {
             if !directory.is_dir() {
                 return Ok(());
             }
-            let Some(stream) = listener.accept(ORPHAN_CHECK_INTERVAL).map_err(io_error)? else {
+            let wait = match activity.idle_wait(&directory, &options) {
+                Some(wait) => wait,
+                // Idle long enough, unless a client is already waiting.
+                // The pipe closes with the listener, and a client that
+                // connects after that starts a new kerfd. One that opens
+                // the pipe in the instant between is cut off; a read that
+                // fails that way is tried again (see `request`).
+                None => match listener.accept(Duration::ZERO).map_err(io_error)? {
+                    Some(stream) => {
+                        spawn_pipe_worker(stream, &handle, &activity).map_err(io_error)?;
+                        continue;
+                    }
+                    None => return Ok(()),
+                },
+            };
+            let Some(stream) = listener.accept(wait).map_err(io_error)? else {
                 continue;
             };
-            let handle = handle.clone();
-            thread::Builder::new()
-                .name("kerfd-client".into())
-                .spawn(move || serve_pipe_connection(stream, handle))
-                .map_err(io_error)?;
+            spawn_pipe_worker(stream, &handle, &activity).map_err(io_error)?;
         }
     }
 
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = directory;
+        let _ = (directory, options);
         Err(RuntimeError::new(
             "IPC_UNSUPPORTED",
             "no local transport on this platform",
         ))
+    }
+}
+
+/// Open the project's runtime, waiting briefly for a kerfd that is exiting
+/// to let go of it: a client that finds its socket gone starts this one
+/// straight away.
+#[cfg(any(unix, windows))]
+fn open_runtime(directory: &Path) -> Result<RuntimeHandle, RuntimeError> {
+    let deadline = Instant::now() + STARTUP_LOCK_WAIT;
+    loop {
+        match RuntimeHandle::open(directory) {
+            Err(error) if error.code == "RUNTIME_ALREADY_RUNNING" && Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(50));
+            }
+            result => return result,
+        }
+    }
+}
+
+/// What keeps a daemon running: its open connections, each a request in
+/// flight or a lease, and when the last one closed.
+#[cfg(any(unix, windows))]
+struct Activity {
+    state: Mutex<ActivityState>,
+}
+
+#[cfg(any(unix, windows))]
+struct ActivityState {
+    open: usize,
+    leases: usize,
+    last: Instant,
+    /// Whether a lease released the daemon, and no client that never held
+    /// one has come since.
+    lease_released: bool,
+}
+
+#[cfg(any(unix, windows))]
+impl Activity {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(ActivityState {
+                open: 0,
+                leases: 0,
+                last: Instant::now(),
+                lease_released: false,
+            }),
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, ActivityState> {
+        // Every update is one statement, so a panic cannot leave it torn.
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Count a connection from the moment it is accepted, before its
+    /// worker runs, so the daemon never looks idle in between.
+    fn open(self: &Arc<Self>) -> Connection {
+        let mut state = self.lock();
+        state.open += 1;
+        Connection {
+            activity: self.clone(),
+            lease: false,
+            // A leasing client's own requests can close after its lease
+            // when it exits; they do not make it a one-shot client.
+            under_lease: state.leases > 0,
+        }
+    }
+
+    /// How long to wait for a connection before looking again, or `None`
+    /// once the daemon has been idle long enough to exit.
+    fn idle_wait(&self, directory: &Path, options: &IpcOptions) -> Option<Duration> {
+        let state = self.lock();
+        if state.open > 0 {
+            return Some(ORPHAN_CHECK_INTERVAL);
+        }
+        // Work starts inside a request, before its connection closes, so
+        // looking after the count misses none.
+        let (working, finished) = kernel::background_work(directory);
+        if working {
+            return Some(ORPHAN_CHECK_INTERVAL);
+        }
+        let since = finished.map_or(state.last, |finished| finished.max(state.last));
+        let timeout = if state.lease_released {
+            Some(options.lease_grace)
+        } else {
+            options.idle_timeout
+        };
+        let Some(deadline) = timeout.and_then(|timeout| since.checked_add(timeout)) else {
+            return Some(ORPHAN_CHECK_INTERVAL);
+        };
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        (!remaining.is_zero()).then(|| remaining.min(ORPHAN_CHECK_INTERVAL))
+    }
+}
+
+/// One accepted connection; it stops counting when dropped.
+#[cfg(any(unix, windows))]
+struct Connection {
+    activity: Arc<Activity>,
+    lease: bool,
+    under_lease: bool,
+}
+
+#[cfg(any(unix, windows))]
+impl Connection {
+    /// Hold the daemon open until this connection closes.
+    fn hold(&mut self) {
+        self.lease = true;
+        self.activity.lock().leases += 1;
+    }
+}
+
+#[cfg(any(unix, windows))]
+impl Drop for Connection {
+    fn drop(&mut self) {
+        let mut state = self.activity.lock();
+        state.open = state.open.saturating_sub(1);
+        state.last = Instant::now();
+        if self.lease {
+            state.leases = state.leases.saturating_sub(1);
+            state.lease_released = true;
+        } else if !self.under_lease {
+            state.lease_released = false;
+        }
     }
 }
 
@@ -1212,42 +1668,155 @@ fn bind_unix_listener(path: &Path) -> Result<UnixListener, RuntimeError> {
     }
 }
 
+/// Serve `stream` on a thread of its own. `closing` says the daemon is
+/// exiting, so a lease is refused rather than held.
 #[cfg(unix)]
-fn serve_unix_connection(mut stream: UnixStream, handle: RuntimeHandle) {
+fn spawn_unix_worker(
+    stream: UnixStream,
+    handle: &RuntimeHandle,
+    activity: &Arc<Activity>,
+    closing: bool,
+) -> std::io::Result<thread::JoinHandle<()>> {
+    let connection = activity.open();
+    let handle = handle.clone();
+    thread::Builder::new()
+        .name("kerfd-client".into())
+        .spawn(move || serve_unix_connection(stream, handle, connection, closing))
+}
+
+/// Serve the clients that connected before the socket was removed, and
+/// wait for them.
+#[cfg(unix)]
+fn serve_pending(listener: &UnixListener, handle: &RuntimeHandle, activity: &Arc<Activity>) {
+    let mut workers = Vec::new();
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                if stream.set_nonblocking(false).is_err() {
+                    continue;
+                }
+                if let Ok(worker) = spawn_unix_worker(stream, handle, activity, true) {
+                    workers.push(worker);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => break,
+        }
+    }
+    for worker in workers {
+        let _ = worker.join();
+    }
+}
+
+#[cfg(unix)]
+fn serve_unix_connection(
+    mut stream: UnixStream,
+    handle: RuntimeHandle,
+    mut connection: Connection,
+    closing: bool,
+) {
     if let Err(error) = verify_unix_peer(&stream) {
         let _ = write_ipc_response(&mut stream, "", Err(error));
         return;
     }
-    let _ = stream.set_read_timeout(Some(SERVER_REQUEST_TIMEOUT));
+    // A client writes its request as soon as it connects, and an exiting
+    // daemon holds the project while it waits.
+    let read_timeout = if closing {
+        LEASE_ANSWER_TIMEOUT
+    } else {
+        SERVER_REQUEST_TIMEOUT
+    };
+    let _ = stream.set_read_timeout(Some(read_timeout));
     let _ = stream.set_write_timeout(Some(SERVER_REQUEST_TIMEOUT));
-    serve_request(&mut stream, &handle);
+    if serve_request(&mut stream, &handle, closing) {
+        connection.hold();
+        // A lease has no deadline: it ends when its client goes.
+        let _ = stream.set_read_timeout(None);
+        read_until_closed(&mut stream);
+    }
+}
+
+#[cfg(windows)]
+fn spawn_pipe_worker(
+    stream: PipeStream,
+    handle: &RuntimeHandle,
+    activity: &Arc<Activity>,
+) -> std::io::Result<thread::JoinHandle<()>> {
+    let connection = activity.open();
+    let handle = handle.clone();
+    thread::Builder::new()
+        .name("kerfd-client".into())
+        .spawn(move || serve_pipe_connection(stream, handle, connection))
 }
 
 /// Serve one client of the pipe. Only the user kerfd runs as can open it,
 /// which the pipe's ACL enforces, so there is no peer to check here.
 #[cfg(windows)]
-fn serve_pipe_connection(mut stream: PipeStream, handle: RuntimeHandle) {
+fn serve_pipe_connection(
+    mut stream: PipeStream,
+    handle: RuntimeHandle,
+    mut connection: Connection,
+) {
     let _ = stream.set_read_timeout(Some(SERVER_REQUEST_TIMEOUT));
     let _ = stream.set_write_timeout(Some(SERVER_REQUEST_TIMEOUT));
-    serve_request(&mut stream, &handle);
+    if serve_request(&mut stream, &handle, false) {
+        connection.hold();
+        // A lease has no deadline: it ends when its client goes, which
+        // breaks the pipe.
+        let _ = stream.set_read_timeout(None);
+        read_until_closed(&mut stream);
+        return;
+    }
     stream.wait_until_read();
 }
 
-/// Read one JSONL request from `stream` and write its response.
+/// Read one JSONL request from `stream` and write its response. Returns
+/// whether it was a lease the caller should now hold; one sent while
+/// `closing` gets no answer, and its client tries again later.
 #[cfg(any(unix, windows))]
-fn serve_request<S: Read + Write>(stream: &mut S, handle: &RuntimeHandle) {
+fn serve_request<S: Read + Write>(stream: &mut S, handle: &RuntimeHandle, closing: bool) -> bool {
     let line = match read_bounded_line(stream) {
         Ok(line) => line,
         Err(error) => {
             let _ = write_ipc_response(stream, "", Err(error));
-            return;
+            return false;
         }
     };
+    if let Some(id) = hold_id(&line) {
+        return !closing && write_ipc_response(stream, &id, Ok(RuntimeResponse::Empty)).is_ok();
+    }
     let (id, result) = process_request_line(&line, handle);
     if should_drop_test_response(&line) {
-        return;
+        return false;
     }
     let _ = write_ipc_response(stream, &id, result);
+    false
+}
+
+/// The id of `line` when it asks for a lease.
+#[cfg(any(unix, windows))]
+fn hold_id(line: &[u8]) -> Option<String> {
+    let value: Value = serde_json::from_slice(line).ok()?;
+    let object = value.as_object()?;
+    let holds = object.get("operation").and_then(Value::as_str) == Some(HOLD_OPERATION)
+        && object.get("protocolVersion").and_then(Value::as_u64)
+            == Some(RequestEnvelope::PROTOCOL_VERSION);
+    let id = object.get("id").and_then(Value::as_str)?;
+    (holds && !id.trim().is_empty()).then(|| id.to_owned())
+}
+
+/// Read and discard until the other end closes.
+#[cfg(any(unix, windows))]
+fn read_until_closed<R: Read>(stream: &mut R) {
+    let mut buffer = [0_u8; 64];
+    loop {
+        match stream.read(&mut buffer) {
+            Ok(0) => return,
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return,
+        }
+    }
 }
 
 #[cfg(any(unix, windows))]
@@ -1389,4 +1958,266 @@ pub fn run_stdio<R: BufRead, W: Write>(
         output.flush().map_err(io_error)?;
     }
     Ok(())
+}
+
+#[cfg(all(test, any(unix, windows)))]
+mod tests {
+    //! The idle lifetime, with kerfd running on a thread of the test and
+    //! times short enough to wait out. Deadlines are generous; what must
+    //! not happen is checked well past the time it would.
+
+    use super::*;
+    use std::time::SystemTime;
+
+    /// Long enough for any exit that should happen to have happened.
+    const EXIT_DEADLINE: Duration = Duration::from_secs(15);
+
+    struct Daemon {
+        client: RuntimeClient,
+        thread: Option<thread::JoinHandle<Result<(), RuntimeError>>>,
+    }
+
+    impl Daemon {
+        fn start(label: &str, options: IpcOptions) -> Self {
+            let stamp = SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let directory = std::env::temp_dir().join(format!("kerfd-idle-{label}-{stamp}"));
+            let client = RuntimeClient::new(&directory).unwrap();
+            let canonical = client.directory().to_path_buf();
+            let thread = Some(thread::spawn(move || run_ipc_with(&canonical, options)));
+            let mut daemon = Self { client, thread };
+            daemon.wait_until_ready();
+            daemon
+        }
+
+        fn wait_until_ready(&mut self) {
+            let deadline = Instant::now() + EXIT_DEADLINE;
+            while let Err(error) = self.client.get_state() {
+                assert!(Instant::now() < deadline, "kerfd did not start: {error:?}");
+                if !self.running() {
+                    let ended = self.thread.take().unwrap().join();
+                    panic!("kerfd stopped while starting: {ended:?}");
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+
+        fn running(&self) -> bool {
+            self.thread
+                .as_ref()
+                .is_some_and(|thread| !thread.is_finished())
+        }
+
+        /// Wait for the daemon to exit on its own, and check it exited
+        /// cleanly.
+        fn wait_for_exit(mut self) -> RuntimeClient {
+            let deadline = Instant::now() + EXIT_DEADLINE;
+            while self.running() {
+                assert!(Instant::now() < deadline, "kerfd did not exit when idle");
+                thread::sleep(Duration::from_millis(20));
+            }
+            let thread = self.thread.take().unwrap();
+            thread.join().unwrap().unwrap();
+            self.client.clone()
+        }
+    }
+
+    impl Drop for Daemon {
+        fn drop(&mut self) {
+            // Removing the folder ends a daemon a failed test left running.
+            if self.thread.is_some() {
+                let _ = fs::remove_dir_all(self.client.directory());
+            }
+        }
+    }
+
+    fn options(lease_grace: Duration, idle_timeout: Option<Duration>) -> IpcOptions {
+        IpcOptions {
+            lease_grace,
+            idle_timeout,
+        }
+    }
+
+    fn wait_until_held(lease: &RuntimeLease) {
+        let deadline = Instant::now() + EXIT_DEADLINE;
+        while !lease.is_held() {
+            assert!(Instant::now() < deadline, "the lease never attached");
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn remove_project(client: &RuntimeClient) {
+        let _ = fs::remove_dir_all(client.directory());
+    }
+
+    #[test]
+    fn it_exits_soon_after_its_last_lease_closes() {
+        // No idle timeout, so only the lease can let it go.
+        let daemon = Daemon::start("lease", options(Duration::from_millis(200), None));
+        let first = daemon.client.hold();
+        let second = daemon.client.hold();
+        wait_until_held(&first);
+        wait_until_held(&second);
+        drop(first);
+        thread::sleep(Duration::from_secs(2));
+        assert!(daemon.running(), "kerfd exited while a lease was held");
+        let released = Instant::now();
+        drop(second);
+        let client = daemon.wait_for_exit();
+        assert!(released.elapsed() >= Duration::from_millis(200));
+        #[cfg(unix)]
+        assert!(!client.endpoint().as_path().unwrap().exists());
+        remove_project(&client);
+    }
+
+    #[test]
+    fn a_held_lease_outlasts_the_idle_timeout() {
+        // The idle timeout leaves the lease ample time to attach, and the
+        // wait is well past it.
+        let daemon = Daemon::start(
+            "outlast",
+            options(Duration::from_millis(200), Some(Duration::from_secs(2))),
+        );
+        let lease = daemon.client.hold();
+        wait_until_held(&lease);
+        thread::sleep(Duration::from_secs(5));
+        assert!(daemon.running(), "kerfd exited while a lease was held");
+        assert!(lease.is_held());
+        drop(lease);
+        remove_project(&daemon.wait_for_exit());
+    }
+
+    #[test]
+    fn a_client_that_goes_without_a_word_releases_its_lease() {
+        let daemon = Daemon::start("vanish", options(Duration::from_millis(200), None));
+        // The bare connection, as a client killed mid-lease leaves it for
+        // the OS to close.
+        let stream = daemon.client.attach_lease().unwrap();
+        thread::sleep(Duration::from_secs(2));
+        assert!(daemon.running(), "kerfd exited while a lease was held");
+        drop(stream);
+        remove_project(&daemon.wait_for_exit());
+    }
+
+    #[test]
+    fn background_work_keeps_it_running_until_the_work_ends() {
+        let daemon = Daemon::start(
+            "work",
+            options(Duration::from_millis(200), Some(Duration::from_secs(2))),
+        );
+        let lease = daemon.client.hold();
+        wait_until_held(&lease);
+        let work = kernel::BackgroundWork::start(daemon.client.directory());
+        drop(lease);
+        thread::sleep(Duration::from_secs(5));
+        assert!(daemon.running(), "kerfd exited under its background work");
+        let finished = Instant::now();
+        drop(work);
+        let client = daemon.wait_for_exit();
+        assert!(finished.elapsed() >= Duration::from_millis(200));
+        remove_project(&client);
+    }
+
+    #[test]
+    fn each_request_starts_the_idle_timeout_again() {
+        let idle = Duration::from_millis(800);
+        let daemon = Daemon::start("requests", options(Duration::from_millis(100), Some(idle)));
+        let mut last = Instant::now();
+        let busy_until = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < busy_until {
+            // Taken before the request, so never after kerfd's own.
+            last = Instant::now();
+            daemon.client.get_state().unwrap();
+            thread::sleep(Duration::from_millis(200));
+        }
+        assert!(daemon.running());
+        let client = daemon.wait_for_exit();
+        assert!(last.elapsed() >= idle, "it exited before its idle timeout");
+        remove_project(&client);
+    }
+
+    #[test]
+    fn a_request_after_the_last_lease_waits_out_the_idle_timeout() {
+        let idle = Duration::from_secs(3);
+        let daemon = Daemon::start("one-shot", options(Duration::from_secs(1), Some(idle)));
+        let lease = daemon.client.hold();
+        wait_until_held(&lease);
+        drop(lease);
+        // Within the grace, but after kerfd has seen the lease close: a
+        // request it accepts while the lease is open belongs to the
+        // leasing client.
+        thread::sleep(Duration::from_millis(200));
+        let last = Instant::now();
+        daemon.client.get_state().unwrap();
+        let client = daemon.wait_for_exit();
+        assert!(
+            last.elapsed() >= idle,
+            "a one-shot request got the lease grace"
+        );
+        remove_project(&client);
+    }
+
+    #[test]
+    fn without_an_idle_timeout_only_a_lease_lets_it_go() {
+        let daemon = Daemon::start("forever", options(Duration::from_millis(100), None));
+        daemon.client.get_state().unwrap();
+        thread::sleep(Duration::from_secs(2));
+        assert!(daemon.running(), "kerfd exited with its idle timeout off");
+        let lease = daemon.client.hold();
+        wait_until_held(&lease);
+        drop(lease);
+        remove_project(&daemon.wait_for_exit());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn it_leaves_a_socket_that_replaced_its_own() {
+        let daemon = Daemon::start("replaced", options(Duration::from_millis(100), None));
+        let path = daemon.client.endpoint().as_path().unwrap().to_path_buf();
+        fs::remove_file(&path).unwrap();
+        let other = UnixListener::bind(&path).unwrap();
+        let client = daemon.wait_for_exit();
+        assert!(path.exists(), "kerfd removed a socket it does not own");
+        drop(other);
+        let _ = fs::remove_file(&path);
+        remove_project(&client);
+    }
+
+    #[test]
+    fn the_idle_timeout_reads_as_seconds_with_zero_for_never() {
+        let default = IpcOptions::default();
+        assert_eq!(IpcOptions::with_idle_timeout(None), default);
+        assert_eq!(
+            IpcOptions::with_idle_timeout(Some(" 30 ")).idle_timeout,
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(IpcOptions::with_idle_timeout(Some("0")).idle_timeout, None);
+        assert_eq!(IpcOptions::with_idle_timeout(Some("soon")), default);
+        assert_eq!(
+            IpcOptions::with_idle_timeout(Some("0")).lease_grace,
+            default.lease_grace
+        );
+    }
+
+    #[test]
+    fn a_hold_is_told_apart_from_a_request() {
+        assert_eq!(
+            hold_id(br#"{"protocolVersion":1,"id":"l1","operation":"hold"}"#).as_deref(),
+            Some("l1")
+        );
+        assert_eq!(
+            hold_id(br#"{"protocolVersion":1,"id":"","operation":"hold"}"#),
+            None
+        );
+        assert_eq!(
+            hold_id(br#"{"protocolVersion":2,"id":"l1","operation":"hold"}"#),
+            None
+        );
+        assert_eq!(
+            hold_id(br#"{"protocolVersion":1,"id":"r1","operation":"get_state"}"#),
+            None
+        );
+    }
 }
