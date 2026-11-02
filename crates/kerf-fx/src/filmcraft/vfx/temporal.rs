@@ -258,10 +258,30 @@ pub(super) const CHUNK: usize = 64;
 
 /// A clip's analysis, shared by every caller that asks for it while it runs.
 struct Flight {
-    /// The thread running it: a rayon worker inside it may pick up a frame that asks for the
-    /// same clip, and must not wait on itself.
+    /// The thread running it, which may ask for the same clip again from inside its own
+    /// analysis (while it waits for its frames, it runs other pool work), and must not wait
+    /// on itself.
     analyst: ThreadId,
     path: OnceLock<Option<Arc<StabilizerPath>>>,
+}
+
+/// Forget `flight` as the analysis of `key`, unless another has already replaced it.
+fn forget(key: u64, flight: &Arc<Flight>) {
+    let mut c = path_cache().lock().unwrap_or_else(PoisonError::into_inner);
+    if c.get(&key).is_some_and(|f| Arc::ptr_eq(f, flight)) {
+        c.remove(&key);
+    }
+}
+
+/// Forgets an analysis that panicked, so the next caller starts a new one rather than finding
+/// it never finished.
+struct Unwinding<'a>(u64, &'a Arc<Flight>);
+impl Drop for Unwinding<'_> {
+    fn drop(&mut self) {
+        if thread::panicking() {
+            forget(self.0, self.1);
+        }
+    }
 }
 
 type PathCache = Mutex<HashMap<u64, Arc<Flight>>>;
@@ -274,7 +294,8 @@ fn path_cache() -> &'static PathCache {
 /// Forget every cached stabilizer analysis (e.g. after the media changed).
 pub fn clear_stabilizer_cache() {
     if let Ok(mut c) = path_cache().lock() {
-        c.clear();
+        // an analysis still running is left to the callers already sharing it
+        c.retain(|_, f| f.path.get().is_none());
     }
 }
 
@@ -307,20 +328,24 @@ pub fn stabilizer_path(
             }
         }
     };
-    if !ours && flight.analyst == me && flight.path.get().is_none() {
-        // asked again from inside this thread's own analysis: waiting for it would never end
+    if !ours
+        && flight.path.get().is_none()
+        && (flight.analyst == me || rayon::current_thread_index().is_some())
+    {
+        // Waiting could never end: either this is the analyst asking again from inside its own
+        // analysis, or a rayon worker, which may be running (lower on its stack, stolen while
+        // it waited in a join) one of the frames that analysis is waiting for.
         return analyse(env, now, method, detailed).map(Arc::new);
     }
+    let unwinding = Unwinding(key, &flight);
     let path = flight
         .path
         .get_or_init(|| analyse(env, now, method, detailed).map(Arc::new))
         .clone();
+    drop(unwinding);
     if path.is_none() {
         // a failed analysis is not kept, so the next caller tries again
-        let mut c = path_cache().lock().unwrap_or_else(PoisonError::into_inner);
-        if c.get(&key).is_some_and(|f| Arc::ptr_eq(f, &flight)) {
-            c.remove(&key);
-        }
+        forget(key, &flight);
     }
     path
 }

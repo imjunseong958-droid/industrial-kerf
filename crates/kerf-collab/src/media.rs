@@ -213,7 +213,9 @@ fn last_written(path: &Path, metadata: &fs::Metadata) -> Option<SystemTime> {
     let mut latest = metadata.modified().ok()?;
     if metadata.is_dir() {
         for entry in fs::read_dir(path).ok()?.flatten() {
-            if let Ok(modified) = entry.metadata().and_then(|m| m.modified()) {
+            // not the listing's own metadata, which Windows may not have brought up to date
+            // for a file still open for writing
+            if let Ok(modified) = fs::symlink_metadata(entry.path()).and_then(|m| m.modified()) {
                 latest = latest.max(modified);
             }
         }

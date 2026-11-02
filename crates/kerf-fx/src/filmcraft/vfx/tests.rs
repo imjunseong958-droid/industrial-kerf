@@ -1338,10 +1338,12 @@ fn warp_stabilizer_removes_camera_jitter() {
     .is_some());
 }
 
-/// A [`ClipEnv`] that counts the analysis frames it is asked for.
+/// A [`ClipEnv`] that counts the analysis frames it is asked for, and whose source may be a
+/// nested sequence holding a stabilized clip of its own.
 struct Counted {
     env: ClipEnv,
     frames: std::sync::atomic::AtomicUsize,
+    nested: Option<ClipEnv>,
 }
 impl FxEnv for Counted {
     fn frame(&self, dt: f64, upto: &EffectInstance) -> Option<Image> {
@@ -1350,6 +1352,14 @@ impl FxEnv for Counted {
     fn source_frame(&self, dt: f64, scale: f32) -> Option<Image> {
         self.frames
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some(inner) = &self.nested {
+            stabilizer_path(
+                inner,
+                0.0,
+                crate::filmcraft::project::TrackMethod::Position,
+                false,
+            )?;
+        }
         self.env.source_frame(dt, scale)
     }
     fn track(&self, index: usize) -> Option<Image> {
@@ -1434,6 +1444,7 @@ fn warp_stabilizer_callers_share_one_analysis() {
             pic: shaky,
         },
         frames: Default::default(),
+        nested: None,
     };
     let start = std::sync::Barrier::new(4);
     let paths: Vec<_> = std::thread::scope(|s| {
@@ -1459,6 +1470,35 @@ fn warp_stabilizer_callers_share_one_analysis() {
         "every frame is decoded once"
     );
     assert!(paths.iter().all(|p| std::sync::Arc::ptr_eq(p, &paths[0])));
+}
+
+#[test]
+fn warp_stabilizer_analyses_a_stabilized_clip_inside_one() {
+    // A nested sequence's own stabilized clip is analysed from inside the outer analysis, on
+    // rayon workers that may be running the inner analysis's frames: none of them may wait.
+    let clip = |key, secs| ClipEnv {
+        w: 96,
+        h: 64,
+        fps: 24.0,
+        secs,
+        now: 0.0,
+        key,
+        seq: (96, 64),
+        pic: shaky,
+    };
+    let env = Counted {
+        env: clip(0x0E7E_0000, 1.0),
+        frames: Default::default(),
+        nested: Some(clip(0x1AAE_0000, 1.5)),
+    };
+    let path = stabilizer_path(
+        &env,
+        0.0,
+        crate::filmcraft::project::TrackMethod::Position,
+        false,
+    )
+    .expect("analysed");
+    assert_eq!(path.steps.len(), 23);
 }
 
 #[test]
