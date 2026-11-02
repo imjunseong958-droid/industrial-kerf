@@ -123,6 +123,15 @@ impl CacheEntry {
         let Ok(identity) = serde_json::from_value::<SourceIdentity>(self.identity.clone()) else {
             return;
         };
+        // An entry finished after its source changed is itself the stale
+        // one, and must not remove the entry made from the source as it is.
+        if SourceIdentity::from_path(Path::new(&identity.path))
+            .ok()
+            .as_ref()
+            != Some(&identity)
+        {
+            return;
+        }
         let Some(root) = self.directory.parent() else {
             return;
         };
@@ -239,7 +248,7 @@ impl DerivativeCache {
         if others.len() <= keep {
             return Ok(());
         }
-        others.sort_by(|a, b| b.0.cmp(&a.0));
+        others.sort_by_key(|entry| std::cmp::Reverse(entry.0));
         for (_, directory) in others.drain(keep..) {
             let _ = fs::remove_dir_all(directory);
         }
@@ -469,6 +478,24 @@ mod tests {
         assert!(!old.directory.exists());
         assert!(new.is_complete(&[]));
         assert!(other.directory.is_dir(), "another kind is its own");
+    }
+
+    #[test]
+    fn an_entry_finished_after_its_source_changed_leaves_the_new_one() {
+        let root = tempdir().expect("temp directory");
+        let source = root.path().join("source.bin");
+        fs::write(&source, b"one").expect("write source");
+        let cache = DerivativeCache::new(root.path());
+        let late = cache
+            .source_entry(&source, "proxy", &json!({}))
+            .expect("entry");
+        fs::write(&source, b"replacement").expect("replace source");
+        let new = cache
+            .source_entry(&source, "proxy", &json!({}))
+            .expect("entry");
+        new.mark_complete(&[]).expect("publish");
+        late.mark_complete(&[]).expect("publish");
+        assert!(new.is_complete(&[]), "made from the source as it is");
     }
 
     #[test]
