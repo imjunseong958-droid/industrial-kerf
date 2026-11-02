@@ -22,7 +22,8 @@ use std::fmt;
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::thread;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -113,6 +114,15 @@ pub struct KerfMcpRouter {
     _lease: Option<Arc<RuntimeLease>>,
     skills: Vec<Skill>,
     namespace: String,
+    /// The render jobs `render` started, shared by every copy; see
+    /// [`KerfMcpRouter::finish_renders`].
+    renders: Arc<Mutex<Vec<RenderWorker>>>,
+}
+
+/// A render job running on a thread of this process.
+struct RenderWorker {
+    job_id: String,
+    thread: thread::JoinHandle<()>,
 }
 
 impl fmt::Debug for KerfMcpRouter {
@@ -145,6 +155,7 @@ impl KerfMcpRouter {
             runtime,
             skills,
             namespace,
+            renders: Arc::default(),
         })
     }
 
@@ -158,6 +169,51 @@ impl KerfMcpRouter {
 
     pub fn directory(&self) -> &Path {
         &self.dir
+    }
+
+    /// Wait for the render jobs `render` started, cancelling them first
+    /// when `cancel`. They run on this process's threads, so a process
+    /// that returns from `main` with one running kills it mid-job: its job
+    /// never finishes and its ffmpeg, in a process group of its own, runs
+    /// on unwatched. Call this before exiting.
+    pub fn finish_renders(&self, cancel: bool) {
+        let workers =
+            std::mem::take(&mut *self.renders.lock().unwrap_or_else(PoisonError::into_inner));
+        if cancel {
+            for worker in workers.iter().filter(|w| !w.thread.is_finished()) {
+                // The cancel file stops the job's ffmpeg; kerfd writes it
+                // and records the job cancelled, else write it here.
+                if self.runtime.cancel_render(&worker.job_id).is_err() {
+                    let path =
+                        kerf_runtime::render_cancel_path(self.runtime.directory(), &worker.job_id);
+                    let _ = fs::write(path, b"cancelled\n");
+                }
+            }
+        }
+        for worker in workers {
+            let _ = worker.thread.join();
+        }
+    }
+
+    /// Run `job_id`'s render on a thread [`KerfMcpRouter::finish_renders`]
+    /// waits for, dropping the ones that have finished.
+    fn spawn_render(&self, job_id: String, render: impl FnOnce() + Send + 'static) {
+        let mut workers = self.renders.lock().unwrap_or_else(PoisonError::into_inner);
+        workers.retain(|worker| !worker.thread.is_finished());
+        workers.push(RenderWorker {
+            job_id,
+            thread: thread::spawn(render),
+        });
+    }
+
+    /// How many render jobs this process is still running.
+    pub fn running_renders(&self) -> usize {
+        self.renders
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|worker| !worker.thread.is_finished())
+            .count()
     }
 
     pub fn runtime(&self) -> &RuntimeClient {

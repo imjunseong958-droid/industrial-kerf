@@ -255,8 +255,8 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
         ),
         "render" => (
             "Render the sequence, or the range `from`–`to`, to a file — of the project, or \
-             of what a pending `proposal` would make. Returns a job; pass `job` to read its \
-             progress and output, with `cancel` to stop it.",
+             of what a pending `proposal` would make. Returns a job that renders while this \
+             session lasts; pass `job` to read its progress and output, with `cancel` to stop it.",
             json!({
                 "type": "object",
                 "properties": {
@@ -1369,7 +1369,8 @@ impl KerfMcpRouter {
     }
 
     /// Start a render job of the project, or of a pending proposal, in the
-    /// background and return it queued.
+    /// background and return it queued. It runs in this process, which
+    /// waits for it or cancels it before exiting (see `finish_renders`).
     fn render_start(
         &self,
         draft: bool,
@@ -1389,7 +1390,7 @@ impl KerfMcpRouter {
         let runtime = self.runtime.clone();
         let worker_job = job.clone();
         let worker_output = output.clone();
-        thread::spawn(move || {
+        self.spawn_render(job.job_id.clone(), move || {
             let mut last_progress = -1.0_f64;
             let _ = kerf_runtime::run_render_job(
                 &runtime,
