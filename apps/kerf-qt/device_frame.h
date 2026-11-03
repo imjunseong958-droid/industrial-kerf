@@ -193,8 +193,8 @@ DeviceFeed deviceFeed(const DeviceGeometry &device);
 void paintDeviceBody(QPainter &painter, const DeviceGeometry &device, const EditorTheme &theme);
 // The feed's skeleton (see DeviceFeed), on the screen's black.
 void paintDeviceFeed(QPainter &painter, const DeviceGeometry &device);
-// Draws nothing: the phone has no island, punch-hole or status bar.
-// Deprecated, removed in W3 (Q-STAGE removes the call in W2).
+// Draws nothing: the phone has no island, punch-hole or status bar. Nothing
+// calls it since W2; deprecated, removed in W3.
 void paintDeviceChrome(QPainter &painter, const DeviceGeometry &device, DevicePreview preview, const EditorTheme &theme);
 
 // ----------------------------------------------------------------------- laptop
@@ -301,15 +301,22 @@ private:
     int m_renders = 0;
 };
 
-// Where a vertical-video app's interface usually covers the picture: a band
-// along the top, a column of action buttons on the right, and a band for the
-// caption, handle and music along the bottom. Generic shapes, no platform's.
+// The broadcast safe zones over the picture (mockup-spec 3.3): action safe,
+// a 1 pt line just inside a rect 3.5% in from every edge (93% of the
+// picture), and title safe, 5% in (90%), shown by 16 pt corner ticks and a
+// 12 pt cross at the centre. They apply to every format.
+constexpr double kActionSafeInset = 0.035;
+constexpr double kTitleSafeInset = 0.05;
+constexpr double kSafeTick = 16.0;
+constexpr double kSafeCross = 12.0;
 struct SafeZones {
-    QRectF top;
-    QRectF actions;
-    QRectF caption;
+    QRectF action; // 93% of the picture
+    QRectF title;  // 90% of the picture
+    QRectF cross;  // the 12 x 12 cross at the picture's centre
 };
 SafeZones safeZones(const QRectF &picture);
+// The action-safe line (rgba(255,255,255,.22)), the title-safe ticks and
+// the cross (rgba(255,255,255,.45)). `theme` is unused.
 void paintSafeZones(QPainter &painter, const QRectF &picture, const EditorTheme &theme);
 
 } // namespace kerf

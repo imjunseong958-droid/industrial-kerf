@@ -56,8 +56,10 @@ constexpr int kSeam = tokens::layout::seam;
 
 // Panels that draw their own 28 pt strip, so their area shows no tab row.
 const QSet<QString> &ownStripPanels() {
+    // The bin draws its own 28 pt strip too (mockup-spec 6); the timeline
+    // keeps the tab row as its bar (its tools and zoom live there).
     static const QSet<QString> panels{QStringLiteral("program"), QStringLiteral("inspector"), QStringLiteral("browser"),
-                                      QStringLiteral("finish"), QStringLiteral("deliver")};
+                                      QStringLiteral("project"), QStringLiteral("finish"), QStringLiteral("deliver")};
     return panels;
 }
 

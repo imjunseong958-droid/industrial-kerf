@@ -8,6 +8,7 @@
 #include "design_tokens.h"
 
 #include <QIcon>
+#include <QJsonObject>
 #include <QString>
 #include <QtGlobal>
 
@@ -48,5 +49,16 @@ inline constexpr int kTitleClearance = 20;
 QIcon toolbarIcon(const QString &glyph);
 // A tool's icon: secondary text when not chosen, the accent when chosen.
 QIcon toolIcon(const QString &id);
+
+// The timeline proposal `id` would make: the snapshot's proposalTimelines
+// entry, else (an older kerfd) proposalTimeline when `id` is the pending one.
+inline QJsonObject proposalTimelineFor(const QJsonObject &snapshot, const QString &id) {
+    if (id.isEmpty()) return {};
+    const QJsonObject listed = snapshot.value(QStringLiteral("proposalTimelines")).toObject().value(id).toObject();
+    if (!listed.isEmpty()) return listed;
+    const QJsonObject pending = snapshot.value(QStringLiteral("pendingProposal")).toObject();
+    return pending.value(QStringLiteral("proposalId")).toString() == id ? snapshot.value(QStringLiteral("proposalTimeline")).toObject()
+                                                                       : QJsonObject{};
+}
 
 } // namespace kerf::window_parts

@@ -1,5 +1,6 @@
-// MainWindow's timeline: edits from its gestures, the AI bar, Focus Region.
-// Moved verbatim from main_window.cpp (Q-SKELETON, W1); Q-TIMELINE owns it in W2.
+// MainWindow's timeline: edits from its gestures, the AI bar, Focus Region,
+// and the panel (the timeline in its scroll area under the AI bar; its bar's
+// tools and zoom sit in the panel's title strip, see TimelineWiring).
 
 #include "main_window.h"
 #include "ask_prompt.h"
@@ -87,6 +88,8 @@
 #include <limits>
 #include <utility>
 #include "wiring/main_window_shared.h"
+#include "wiring/timeline_wiring.h"
+#include "components.h"
 #include "browser_panel.h"
 #include "deliver_tray.h"
 #include "editor_bus.h"
@@ -101,9 +104,15 @@ using namespace window_parts;
 
 void MainWindow::addTrack() {
     QMenu menu(this);
+    ui::styleMenu(&menu);
     auto *video = menu.addAction(QStringLiteral("Add video track"));
     auto *audio = menu.addAction(QStringLiteral("Add audio track"));
-    const QAction *choice = menu.exec(m_timeline->mapToGlobal(m_timeline->addLaneButtonCenter()));
+    // Under the bar's Add track when it shows, else at the row under the tracks.
+    const TimelineToolStrip *tools = m_timelineWiring ? m_timelineWiring->tools() : nullptr;
+    const QWidget *button = tools ? tools->trackButton() : nullptr;
+    const QPoint at = button && button->isVisible() ? button->mapToGlobal(QPoint(0, button->height() + 4))
+                                                    : m_timeline->mapToGlobal(m_timeline->addLaneButtonCenter());
+    const QAction *choice = menu.exec(at);
     if (choice != video && choice != audio) return;
     execute(choice == audio ? QStringLiteral("sequence.addAudioTrack") : QStringLiteral("sequence.addVideoTrack"));
 }
@@ -486,9 +495,14 @@ void MainWindow::updateAiBar() {
         const QString id = button->defaultAction() ? button->defaultAction()->objectName() : QString();
         button->setVisible(id == QStringLiteral("ai.stop") ? m_agentBusy : id.startsWith(QStringLiteral("proposal.")) ? pending && !m_agentBusy : true);
     }
+    // The bar's Ask counts the open notes while the panel is closed.
+    if (m_timelineWiring) m_timelineWiring->refreshAsk();
 }
 
-// The timeline's panel: the tool palette, the AI bar, the timeline in its scroll area.
+// The timeline's panel: the AI bar over the timeline in its scroll area.
+// Its bar (the tools, Ask, zoom and track heights) is the panel's title
+// strip: TimelineWiring places the tools after "N tracks · duration", and
+// the zoom control (addPanels) sits on its right.
 void MainWindow::buildTimeline() {
     m_timelinePanel = new QWidget;
     m_timelinePanel->setObjectName(QStringLiteral("timelinePanel"));
@@ -513,17 +527,14 @@ void MainWindow::buildTimeline() {
     timelineScroll->setWidget(m_timeline);
     timelineScroll->viewport()->installEventFilter(this);
     timelineLayout->addWidget(timelineScroll);
-    auto *timelineRow = new QHBoxLayout;
-    timelineRow->setContentsMargins(0, 0, 0, 0);
-    timelineRow->setSpacing(0);
-    // The editing tools, filled in from the command registry.
-    m_toolPalette = new QToolBar(QStringLiteral("Tools"));
+    // Deprecated, removed in W3: the tool palette. The tools are the bar's
+    // segmented control now; setupActions still fills this (hidden) bar.
+    m_toolPalette = new QToolBar(QStringLiteral("Tools"), m_timelinePanel);
     m_toolPalette->setObjectName(QStringLiteral("toolPalette"));
     m_toolPalette->setOrientation(Qt::Vertical);
     m_toolPalette->setToolButtonStyle(Qt::ToolButtonIconOnly);
     m_toolPalette->setIconSize(QSize(18, 18));
-    timelineRow->addWidget(m_toolPalette);
-    timelineRow->addWidget(timelineFrame, 1);
+    m_toolPalette->hide();
     // What Kerf is doing, and the proposal to review, where the edit happens.
     m_aiBar = new QFrame;
     m_aiBar->setObjectName(QStringLiteral("aiBar"));
@@ -542,7 +553,7 @@ void MainWindow::buildTimeline() {
     aiLayout->addWidget(m_nextSteps);
     m_aiBar->hide();
     timelinePanelLayout->addWidget(m_aiBar);
-    timelinePanelLayout->addLayout(timelineRow, 1);
+    timelinePanelLayout->addWidget(timelineFrame, 1);
     m_askPrompt = new AskPrompt(this);
     connect(m_askPrompt, &AskPrompt::submitted, this, &MainWindow::askSubmitted);
     // Dragging the split down for a larger picture never squeezes the
@@ -554,6 +565,10 @@ void MainWindow::buildTimeline() {
 
 // The timeline's gestures, and the viewer's scrubs that show on it.
 void MainWindow::wireTimeline() {
+    // The bar's tools, the review on the ruler, QC, previews, solo and gain.
+    m_timelineWiring->attach();
+    // Insert and Overwrite follow the heads' target toggles (sourceTargets).
+    m_timeline->setTargetsEditable(true);
     connect(m_timeline, &TimelineWidget::seekRequested, this, &MainWindow::queueSeek);
     connect(m_timeline, &TimelineWidget::addLaneRequested, this, &MainWindow::addTrack);
     connect(m_timeline, &TimelineWidget::hoverSeekRequested, this, &MainWindow::queueHoverSeek);

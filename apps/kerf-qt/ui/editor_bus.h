@@ -128,6 +128,11 @@ signals:
     // Open (true) or close the comments panel.
     void commentsPanelRequested(bool open);
     void currentThreadChanged(const QString &id);
+    // The comments panel's thread under the pointer (empty when none), and
+    // the comment last chosen there: the stage shows their overlap box and
+    // drawing.
+    void threadHovered(const QString &id);
+    void commentSelected(const QString &id);
 
 private:
     Sender m_sender;

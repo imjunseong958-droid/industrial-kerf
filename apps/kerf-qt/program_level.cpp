@@ -1,4 +1,5 @@
 #include "program_level.h"
+#include "design_tokens.h"
 #include "editor_common.h"
 #include "media_artwork.h"
 
@@ -10,19 +11,188 @@
 
 namespace kerf {
 
+// ================================================================ ProgramMeter
+
 namespace {
 
-// The sound a reading stands for: what played over the last 50 ms, about
-// the time between two of the playback clock's ticks, so a short transient
-// between ticks still moves the needle.
+// How often the holds age while one is up: about 30 frames a second, enough
+// for a line falling 20 dB a second to move smoothly.
+constexpr int kTickMs = 33;
+
+// A reading from the event: a number, or nothing for null or a missing key.
+bool number(const QJsonValue &value, double *out) {
+    if (!value.isDouble()) return false;
+    const double v = value.toDouble();
+    if (!std::isfinite(v)) return false;
+    *out = v;
+    return true;
+}
+
+} // namespace
+
+ProgramMeter::ProgramMeter(QObject *parent) : QObject(parent) {
+    m_tick.setInterval(kTickMs);
+    connect(&m_tick, &QTimer::timeout, this, &ProgramMeter::step);
+}
+
+bool ProgramMeter::apply(const QJsonObject &event) {
+    if (event.contains(QStringLiteral("type")) && event.value(QStringLiteral("type")).toString() != QStringLiteral("meter"))
+        return false;
+    const QJsonArray peaks = event.value(QStringLiteral("peak")).toArray();
+    const QJsonArray rms = event.value(QStringLiteral("rms")).toArray();
+    for (int c = 0; c < kChannels; ++c) {
+        Channel &channel = m_channels[size_t(c)];
+        double value = 0.0;
+        channel.hasLevel = number(rms.at(c), &value);
+        channel.level = channel.hasLevel ? std::min(0.0, value) : kFloorDb;
+        channel.hasPeak = number(peaks.at(c), &value);
+        channel.peak = channel.hasPeak ? std::min(0.0, value) : kFloorDb;
+        // A louder peak raises the hold and starts its 1.5 s again.
+        if (channel.hasPeak && channel.peak > kFloorDb && (!channel.hasHold || channel.peak >= channel.hold)) {
+            channel.hasHold = true;
+            channel.hold = channel.peak;
+            channel.holdAge = 0.0;
+        }
+    }
+    double value = 0.0;
+    m_hasMomentary = number(event.value(QStringLiteral("momentary")), &value);
+    m_momentary = m_hasMomentary ? value : 0.0;
+    m_hasShortTerm = number(event.value(QStringLiteral("shortTerm")), &value);
+    m_shortTerm = m_hasShortTerm ? value : 0.0;
+    m_at = number(event.value(QStringLiteral("at")), &value) ? value : -1.0;
+    updateTick();
+    emit changed();
+    return true;
+}
+
+void ProgramMeter::clear() {
+    m_channels = {};
+    m_hasMomentary = m_hasShortTerm = false;
+    m_momentary = m_shortTerm = 0.0;
+    m_at = -1.0;
+    updateTick();
+    emit changed();
+}
+
+void ProgramMeter::advance(double seconds) {
+    if (!(seconds > 0.0)) return;
+    bool moved = false;
+    for (Channel &channel : m_channels) {
+        if (!channel.hasHold) continue;
+        const double before = channel.holdAge;
+        channel.holdAge += seconds;
+        // Only the time past the 1.5 s hold makes it fall.
+        const double falling = channel.holdAge - std::max(kHoldSeconds, before);
+        if (falling <= 0.0) continue;
+        channel.hold -= falling * kFallDbPerSecond;
+        moved = true;
+        if (channel.hasPeak && channel.peak > kFloorDb && channel.hold <= channel.peak) {
+            // It has come down to what plays now, and holds that.
+            channel.hold = channel.peak;
+            channel.holdAge = 0.0;
+        } else if (channel.hold <= kFloorDb) {
+            channel.hasHold = false;
+            channel.hold = kFloorDb;
+            channel.holdAge = 0.0;
+        }
+    }
+    updateTick();
+    if (moved) emit changed();
+}
+
+void ProgramMeter::setAutoAdvance(bool on) {
+    m_auto = on;
+    updateTick();
+}
+
+void ProgramMeter::step() {
+    // A late tick ages the holds by the time that passed, but a stall (a
+    // modal dialog, a sleep) does not throw them off the scale at once.
+    advance(std::min(0.25, m_clock.restart() / 1000.0));
+}
+
+void ProgramMeter::updateTick() {
+    bool held = false;
+    for (const Channel &channel : m_channels) held = held || channel.hasHold;
+    const bool needed = m_auto && held;
+    if (needed && !m_tick.isActive()) {
+        m_clock.start();
+        m_tick.start();
+    } else if (!needed && m_tick.isActive()) {
+        m_tick.stop();
+    }
+}
+
+bool ProgramMeter::hasLevel(int channel) const {
+    return channel >= 0 && channel < kChannels && m_channels[size_t(channel)].hasLevel;
+}
+double ProgramMeter::level(int channel) const {
+    return hasLevel(channel) ? m_channels[size_t(channel)].level : kFloorDb;
+}
+bool ProgramMeter::hasPeak(int channel) const {
+    return channel >= 0 && channel < kChannels && m_channels[size_t(channel)].hasPeak;
+}
+double ProgramMeter::peak(int channel) const {
+    return hasPeak(channel) ? m_channels[size_t(channel)].peak : kFloorDb;
+}
+bool ProgramMeter::hasHold(int channel) const {
+    return channel >= 0 && channel < kChannels && m_channels[size_t(channel)].hasHold;
+}
+double ProgramMeter::hold(int channel) const {
+    return hasHold(channel) ? m_channels[size_t(channel)].hold : kFloorDb;
+}
+
+bool ProgramMeter::hasData() const {
+    for (const Channel &channel : m_channels)
+        if (channel.hasLevel || channel.hasPeak) return true;
+    return false;
+}
+
+QString ProgramMeter::momentaryText() const {
+    if (!m_hasMomentary) return QStringLiteral("—");
+    const double rounded = std::round(m_momentary * 10.0) / 10.0;
+    const QString digits = QString::number(std::abs(rounded), 'f', 1);
+    return rounded < 0.0 ? QStringLiteral("−") + digits : digits;
+}
+
+double ProgramMeter::y(double db, double height) {
+    const double clamped = std::clamp(db, kFloorDb, 0.0);
+    return std::round(-clamped / -kFloorDb * height);
+}
+
+QList<ProgramMeter::Segment> ProgramMeter::segments(double db, double height) {
+    // As the mockup's bar(): each run from the level (capped at the run's
+    // top) down to the run's foot, drawn only where the level reaches it.
+    const double level = std::min(db, 0.0);
+    const struct {
+        double top, bottom;
+        QRgb color;
+    } runs[] = {{std::min(level, kWarnDb), kFloorDb, tokens::track2},
+                {std::min(level, kHotDb), kWarnDb, tokens::warn},
+                {level, kHotDb, tokens::neg}};
+    QList<Segment> out;
+    for (const auto &run : runs) {
+        if (!(run.top > run.bottom)) continue;
+        Segment segment;
+        segment.top = y(run.top, height);
+        segment.bottom = y(run.bottom, height);
+        segment.color = run.color;
+        if (segment.bottom > segment.top) out << segment;
+    }
+    return out;
+}
+
+QList<int> ProgramMeter::scaleMarks() { return {0, 6, 12, 18, 24, 40, 60}; }
+
+// ================================================================ deprecated
+
+namespace {
+
+// The sound a reading stands for: what played over the last 50 ms.
 constexpr double kWindowSeconds = 0.05;
-// Closer than this to its target the needle has arrived; a step's tail
-// would otherwise keep the timer running for a change nobody could see.
-constexpr double kArrived = 0.001;
 
 // The source seconds `offset` seconds into `clip`, as the timeline reads
-// them (TimelineWidget::clipSourceTime): from its in point towards its out,
-// backwards from its out when it plays in reverse.
+// them (TimelineWidget::clipSourceTime).
 double sourceTime(const QJsonObject &clip, double offset) {
     const double duration = clip.value(QStringLiteral("duration")).toDouble();
     const double speed = clip.value(QStringLiteral("speed")).toDouble(1.0);
@@ -44,19 +214,15 @@ double programPeak(const QJsonObject &timeline, const MediaArtwork *artwork, dou
         if (track.value(QStringLiteral("muted")).toBool() || !track.value(QStringLiteral("enabled")).toBool(true)) continue;
         for (const QJsonValue &clipValue : track.value(QStringLiteral("clips")).toArray()) {
             const QJsonObject clip = clipValue.toObject();
-            // A clip switched off sounds nothing, as a track switched off does.
             if (!clip.value(QStringLiteral("enabled")).toBool(true)) continue;
             const double start = clip.value(QStringLiteral("timelineStart")).toDouble();
             const double duration = clip.value(QStringLiteral("duration")).toDouble();
             if (seconds < start || seconds >= start + duration) continue;
             const auto found = artwork->peaks.constFind(clip.value(QStringLiteral("sourceId")).toString());
             if (found == artwork->peaks.cend() || found->isEmpty()) continue;
-            // The clip's own seconds, then its source's: its in point, speed
-            // and direction decide which of its sound is playing.
             const double to = seconds - start;
             const double from = std::max(0.0, to - kWindowSeconds);
             const AudioPeaks::Bucket bucket = found->range(sourceTime(clip, from), sourceTime(clip, to));
-            // Clip gain is in decibels, as the waveform draws it.
             const double gain = std::pow(10.0, clip.value(QStringLiteral("props")).toObject().value(QStringLiteral("gain")).toDouble(0.0) / 20.0);
             loudest = std::max(loudest, std::max(std::abs(double(bucket.min)), std::abs(double(bucket.max))) * gain);
         }
@@ -66,67 +232,24 @@ double programPeak(const QJsonObject &timeline, const MediaArtwork *artwork, dou
 
 double vuNeedle(double peak) {
     if (!(peak > 0.0)) return 0.0;
-    // 0 VU is a sine 18 dB under digital full scale.
     const double vu = std::clamp(20.0 * std::log10(peak) + 18.0, -20.0, 3.0);
-    // The printed scale is linear in voltage: -20 VU is a tenth of 0 VU's,
-    // so it crowds the quiet end, as a real meter's does.
     const double volts = std::pow(10.0, vu / 20.0);
     if (volts <= 1.0) return 0.75 * (volts - 0.1) / 0.9;
     return 0.75 + 0.25 * (volts - 1.0) / (std::pow(10.0, 3.0 / 20.0) - 1.0);
 }
 
 VuMeter::VuMeter(QWidget *parent) : QWidget(parent) {
-    setObjectName(QStringLiteral("programLevel"));
-    setAccessibleName(QStringLiteral("Program level"));
-    setToolTip(QStringLiteral("Program level"));
-    // About a frame of a 60 Hz screen: the needle moves smoothly, and only
-    // while there is something to show.
-    m_tick.setInterval(16);
-    connect(&m_tick, &QTimer::timeout, this, &VuMeter::step);
+    setObjectName(QStringLiteral("programLevelVu"));
+    hide();
 }
 
 QSize VuMeter::sizeHint() const { return {48, 40}; }
 
-void VuMeter::setTarget(double needle) {
-    m_target = std::clamp(needle, 0.0, 1.0);
-    updateTick();
-}
-
-void VuMeter::setPlaying(bool playing) {
-    m_playing = playing;
-    updateTick();
-}
-
-void VuMeter::advance(double seconds) {
-    // A first-order lag that covers 99% of a step in kSettleSeconds, rising
-    // and falling alike.
-    const double tau = kSettleSeconds / std::log(100.0);
-    const double before = m_needle;
-    m_needle = m_target + (m_needle - m_target) * std::exp(-std::max(0.0, seconds) / tau);
-    if (std::abs(m_needle - m_target) < kArrived) m_needle = m_target;
-    if (m_needle != before) update();
-}
-
-void VuMeter::step() {
-    // A late tick moves the needle as far as the time that passed, but a
-    // stall (a modal dialog, a sleep) does not fling it.
-    advance(std::min(0.1, m_clock.restart() / 1000.0));
-    updateTick();
-}
-
-void VuMeter::updateTick() {
-    const bool needed = m_playing || std::abs(m_needle - m_target) >= kArrived;
-    if (needed && !m_tick.isActive()) {
-        m_clock.start();
-        m_tick.start();
-    } else if (!needed && m_tick.isActive()) {
-        m_tick.stop();
-    }
-}
+void VuMeter::setTarget(double needle) { m_target = std::clamp(needle, 0.0, 1.0); }
 
 void VuMeter::paintEvent(QPaintEvent *) {
     QPainter painter(this);
-    paintVuMeter(painter, rect(), m_needle);
+    paintVuMeter(painter, rect(), m_target);
 }
 
 } // namespace kerf

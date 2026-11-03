@@ -1,5 +1,6 @@
-// MainWindow's Inspector column.
-// Moved verbatim from main_window.cpp (Q-SKELETON, W1); Q-INSPECTOR owns it in W2.
+// MainWindow's Inspector column: the Inspector (its Video, Audio and Info
+// panes), its mask tools, the Source page and the Deliver pane. The region's
+// own state and bus traffic are in ui/wiring/inspector_wiring.
 
 #include "main_window.h"
 #include "ask_prompt.h"
@@ -94,6 +95,7 @@
 #include "inspector_column.h"
 #include "program_strip.h"
 #include "stage_rail.h"
+#include "wiring/inspector_wiring.h"
 
 namespace kerf {
 
@@ -102,7 +104,18 @@ using namespace window_parts;
 void MainWindow::updateInspector() {
     const QJsonObject clip = selectedClipObject();
     updateViewerMasks();
+    m_inspectorWiring->attachCommands();
     m_inspector->setPlayhead(m_playhead);
+    // What the open proposals would change: the snapshot's proposals and
+    // their timelines (the first open one alone from an older bridge).
+    QJsonArray proposals = m_snapshot.value(QStringLiteral("proposals")).toArray();
+    QJsonObject timelines = m_snapshot.value(QStringLiteral("proposalTimelines")).toObject();
+    if (proposals.isEmpty() && m_snapshot.value(QStringLiteral("pendingProposal")).isObject()) {
+        const QJsonObject pending = m_snapshot.value(QStringLiteral("pendingProposal")).toObject();
+        proposals.append(pending);
+        timelines.insert(pending.value(QStringLiteral("proposalId")).toString(), m_snapshot.value(QStringLiteral("proposalTimeline")).toObject());
+    }
+    m_inspector->setProposals(proposals, timelines);
     if (!m_connected || clip.isEmpty()) {
         m_effects->setClip(QString(), false);
         m_inspector->setMaskable(false);
@@ -140,6 +153,13 @@ void MainWindow::updateInspector() {
 void MainWindow::buildInspector() {
     m_inspector = new InspectorPanel;
     m_inspector->setArtwork(m_artwork);
+    // Everything the catalog offers, sound effects included (audio.eq for
+    // the Audio pane's Channel EQ); the Effects browser's picture catalog
+    // joins it later.
+    if (char *catalog = kerf_fx_catalog_all()) {
+        m_inspector->setEffectCatalog(QJsonDocument::fromJson(QByteArray(catalog)).array());
+        kerf_bridge_string_free(catalog);
+    }
     connect(m_inspector, &InspectorPanel::editRequested, this, &MainWindow::sendEdit);
     // Done typing in the Inspector (or Esc there): the timeline's keys again.
     connect(m_inspector, &InspectorPanel::focusReturnRequested, this, [this] { m_timeline->setFocus(Qt::OtherFocusReason); });
@@ -200,6 +220,7 @@ void MainWindow::buildInspector() {
         syncPanelCommands();
     });
     connect(m_inspectorColumn, &InspectorColumn::pageChanged, this, &MainWindow::syncPanelCommands);
+    m_inspectorWiring->attach();
 }
 
 } // namespace kerf

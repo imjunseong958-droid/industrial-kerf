@@ -1,5 +1,5 @@
 // MainWindow's status bar and connection state.
-// Moved verbatim from main_window.cpp (Q-SKELETON, W1); Q-TOOLBAR owns it in W2.
+// The region's state and its building live in ToolbarWiring.
 
 #include "main_window.h"
 #include "ask_prompt.h"
@@ -94,111 +94,26 @@
 #include "inspector_column.h"
 #include "program_strip.h"
 #include "stage_rail.h"
+#include "wiring/toolbar_wiring.h"
 
 namespace kerf {
 
 using namespace window_parts;
 
+// The sync chip (mockup-spec 9): the branch glyph, "branch ↑a ↓b" and the
+// sync's state; its tip "Revision N · k commits to pull"; a click opens the
+// Sync menu. ToolbarWiring::updateSyncChip words it.
 void MainWindow::updateSyncChip() {
-    if (!m_syncChip) return;
-    if (m_collabStatus.isEmpty()) {
-        m_syncChip->hide();
-        return;
-    }
-    const auto field = [this](const char *key) { return m_collabStatus.value(QLatin1String(key)); };
-    QString text;
-    QString state;
-    QStringList tips;
-    if (!field("repository").toBool()) {
-        text = QStringLiteral("⎇ Not shared");
-        state = QStringLiteral("local");
-        tips << QStringLiteral("This project is not a Git repository yet.")
-             << QStringLiteral("Click, or choose Collaborate → Publish to GitHub…, to share it.");
-    } else {
-        const QString branch = field("branch").toString();
-        const int ahead = field("ahead").toInt();
-        const int behind = field("behind").toInt();
-        text = QStringLiteral("⎇ %1").arg(branch.isEmpty() ? QStringLiteral("detached") : branch);
-        if (ahead > 0) text += QStringLiteral(" ↑%1").arg(ahead);
-        if (behind > 0) text += QStringLiteral(" ↓%1").arg(behind);
-        const QString remote = field("remote").toString();
-        const QString upstream = field("upstream").toString();
-        tips << (remote.isEmpty() ? QStringLiteral("No remote yet: Publish to GitHub… shares the project.")
-                 : upstream.isEmpty() ? QStringLiteral("%1, not pushed yet").arg(remote)
-                                      : QStringLiteral("Syncs with %1").arg(upstream));
-        if (ahead > 0) tips << (ahead == 1 ? QStringLiteral("1 commit to push") : QStringLiteral("%1 commits to push").arg(ahead));
-        if (behind > 0) tips << (behind == 1 ? QStringLiteral("1 commit to pull") : QStringLiteral("%1 commits to pull").arg(behind));
-        if (field("changed").toBool()) tips << QStringLiteral("Edits not committed yet");
-        static const QHash<QString, QString> stages{
-            {QStringLiteral("committing"), QStringLiteral("Committing")}, {QStringLiteral("fetching"), QStringLiteral("Pulling")},
-            {QStringLiteral("merging"), QStringLiteral("Merging")}, {QStringLiteral("pushing"), QStringLiteral("Pushing")},
-            {QStringLiteral("downloading"), QStringLiteral("Downloading media")}};
-        if (!m_syncStage.isEmpty() || field("busy").toBool()) {
-            text = QStringLiteral("⟳ %1…").arg(stages.value(m_syncStage, QStringLiteral("Syncing")));
-            state = QStringLiteral("syncing");
-        } else if (field("conflicted").toBool()) {
-            text += QStringLiteral(" · merge unfinished");
-            state = QStringLiteral("conflict");
-            tips.prepend(QStringLiteral("A merge is in progress with unresolved files; finish it with git."));
-        } else if (!m_syncFailure.isEmpty()) {
-            text += QStringLiteral(" · sync failed");
-            state = QStringLiteral("failed");
-            tips.prepend(QStringLiteral("Sync failed: %1").arg(m_syncFailure));
-        } else if (field("live").toBool()) {
-            text += QStringLiteral(" · live");
-            state = QStringLiteral("live");
-            tips << QStringLiteral("Live sync is on");
-        } else {
-            state = QStringLiteral("idle");
-        }
-        if (!m_syncLines.isEmpty()) tips << QString() << QStringLiteral("Last sync:") << m_syncLines;
-        tips << QString() << QStringLiteral("Click to sync now");
-    }
-    m_syncChip->setText(text);
-    m_syncChip->setToolTip(tips.join(QLatin1Char('\n')));
-    m_syncChip->setAccessibleName(text);
-    m_syncChip->setProperty("state", state);
-    m_syncChip->style()->unpolish(m_syncChip);
-    m_syncChip->style()->polish(m_syncChip);
-    m_syncChip->show();
+    if (m_toolbarWiring) m_toolbarWiring->updateSyncChip();
 }
 
+// The status bar (mockup-spec 9): the selection, the rate and dropped
+// frames, the guest, then the draft export, the keymap chip, the sync chip
+// and the agent's connection. ToolbarWiring::buildStatusBar builds it.
 void MainWindow::setupStatusBar() {
-    statusBar()->setSizeGripEnabled(false);
-    // 24 points tall (mockup-spec 0.1), whatever its items ask for.
-    statusBar()->setFixedHeight(tokens::layout::status);
-    // On the left, the selection ("3 clips selected · 00:00:04:18"), or nothing.
-    m_selectionStatus = new QLabel;
-    m_selectionStatus->setObjectName(QStringLiteral("statusSelection"));
-    statusBar()->addWidget(m_selectionStatus, 1);
-    statusBar()->addPermanentWidget(m_exportProgress);
-    m_syncChip = new QToolButton;
-    m_syncChip->setObjectName(QStringLiteral("syncChip"));
-    m_syncChip->setCursor(Qt::PointingHandCursor);
-    m_syncChip->hide();
-    connect(m_syncChip, &QToolButton::clicked, this, [this] {
-        if (m_commands->isEnabled(QStringLiteral("collab.sync"))) triggerCommand(QStringLiteral("collab.sync"));
-        else if (!m_collabStatus.value(QStringLiteral("repository")).toBool()) triggerCommand(QStringLiteral("collab.publish"));
-        else statusBar()->showMessage(m_commands->reason(QStringLiteral("collab.sync")), 4000);
-    });
-    statusBar()->addPermanentWidget(m_syncChip);
-    m_statusRevision = new QLabel;
-    m_statusRevision->setObjectName(QStringLiteral("statusRevision"));
-    m_statusRevision->hide();
-    m_statusConnection = new QLabel;
-    m_statusConnection->setObjectName(QStringLiteral("statusConnection"));
-    m_statusDevice = new QLabel;
-    m_statusDevice->setObjectName(QStringLiteral("statusDevice"));
-    m_statusDevice->setToolTip(QStringLiteral("The live preview is drawn as it plays"));
-    m_statusDevice->hide();
-    statusBar()->addPermanentWidget(m_statusDevice);
-    m_statusAccount = new QLabel;
-    m_statusAccount->setObjectName(QStringLiteral("statusAccount"));
-    m_statusAccount->setToolTip(QStringLiteral("The agent's connection (Settings)"));
-    statusBar()->addPermanentWidget(m_statusAccount);
-    statusBar()->addPermanentWidget(m_statusRevision);
-    statusBar()->addPermanentWidget(m_statusConnection);
+    m_toolbarWiring->buildStatusBar();
     updateCloudStatus();
+    updateSyncChip();
 }
 
 void MainWindow::setConnection(const QString &status, const QString &message) {
@@ -213,14 +128,14 @@ void MainWindow::setConnection(const QString &status, const QString &message) {
     m_timeline->setEnabled(m_connected);
     if (m_formatBank) m_formatBank->setEnabled(m_connected);
     m_chatInput->setEnabled(m_connected && !m_agentBusy);
-    if (m_statusConnection) {
+    if (m_toolbarWiring) {
         const QString state = m_connected ? QStringLiteral("ready")
             : status == QStringLiteral("connecting") ? QStringLiteral("connecting") : QStringLiteral("disconnected");
-        m_statusConnection->setText(state == QStringLiteral("ready") ? QStringLiteral("● Connected")
-            : state == QStringLiteral("connecting") ? QStringLiteral("● Connecting…") : QStringLiteral("● Offline"));
-        m_statusConnection->setProperty("state", state);
-        m_statusConnection->style()->unpolish(m_statusConnection);
-        m_statusConnection->style()->polish(m_statusConnection);
+        // A new connection has played nothing yet.
+        if (m_connected != wasConnected) m_toolbarWiring->m_dropped = -1;
+        m_toolbarWiring->m_connection = state;
+        m_toolbarWiring->updateAgent();
+        m_toolbarWiring->updateRate();
     }
     if (!m_connected) {
         m_playing = false;

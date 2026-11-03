@@ -17,22 +17,17 @@ class QWidget;
 
 namespace kerf {
 
-// The player's controls laid on the picture, as a video site's player lays
-// them: a gradient to black along the picture's foot, the progress bar
-// across it (thin, thicker under the pointer, its played part in the
-// accent, a round scrubber and the time under the pointer while hovered),
-// and one row of white controls: play or pause, a frame back, a frame on,
-// and the time over the length. On a portrait card, or one too narrow for
-// that row, it takes a short-video player's arrangement instead: the bar
-// along the very foot, the controls in a compact cluster at the top left,
-// the time small over the bar.
+// What the Program picture keeps of a player: skimming. The transport moved
+// off the picture into the scrub strip under it (ui/scrub_strip, mockup-spec
+// 3.4), so this draws nothing over the picture and never takes the pointer
+// from the viewer, which skims across the picture itself (see ViewerWidget).
 //
-// Shown while paused, while the pointer is over the picture, and for a
-// moment after its last move while playing; then it fades. The keyboard
-// never depends on it. It draws and takes the pointer for the viewer that
-// owns it; the transport itself (playing, stepping, seeking) stays with the
-// editor, which hears what is asked through its signals. Swapping this for
-// a strip of buttons would leave the transport as it is.
+// It still carries the transport's state for the window: the playhead's time
+// and length (timecodeText), whether it plays, and the play and step
+// commands' enabled state and tips (updateTransport keeps them, and a click
+// on the picture plays only while Play is enabled). The geometry functions
+// describe the picture's foot, where nothing is drawn any more. The drawing
+// and pointer parts are deprecated, removed in W3.
 class PlayerOverlay final : public QObject {
     Q_OBJECT
     KERF_TEST_FRIENDS
@@ -108,7 +103,6 @@ private:
     double fractionAt(double x) const;
     QFont timeFont(int pixelSize) const;
     int timeSize() const { return m_compact ? 11 : 12; }
-    void paintGlyph(QPainter &painter, Control control, const QRectF &area) const;
 
     QWidget *m_host = nullptr;
     QRectF m_rect;

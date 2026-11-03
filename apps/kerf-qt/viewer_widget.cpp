@@ -2,15 +2,18 @@
 #include "editor_common.h"
 #include "editor_theme.h"
 #include "player_overlay.h"
+#include "ui/components.h"
 
 #include <QCursor>
 #include <QFontMetricsF>
+#include <QGraphicsOpacityEffect>
+#include <QGuiApplication>
 #include <QKeyEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPainterPathStroker>
 #include <QPolygonF>
-#include <QToolTip>
+#include <QVariantAnimation>
 
 #include <algorithm>
 #include <array>
@@ -161,13 +164,106 @@ QJsonObject movedBy(const QJsonObject &mask, const QPointF &by) {
 
 } // namespace
 
+namespace {
+
+// -1 follows the platform and reduced motion, 0 never moves, 1 always does.
+int g_stageMotion = -1;
+
+QRectF lerpRect(const QRectF &from, const QRectF &to, double t) {
+    if (from.isEmpty()) return to;
+    if (to.isEmpty()) return from;
+    const auto mix = [t](double a, double b) { return a + (b - a) * t; };
+    return QRectF(mix(from.left(), to.left()), mix(from.top(), to.top()), mix(from.width(), to.width()), mix(from.height(), to.height()));
+}
+
+// How far right a closed panel stands (mockup-spec 4.1: translateX(24)).
+constexpr int kPanelSlide = 24;
+
+// The overlap box (mockup-spec 3.3) and the strokes of a drawing.
+constexpr QRgb kOverlapFill = qRgba(236, 93, 97, tokens::alpha(0.32));
+constexpr QRgb kStrokeUnder = qRgba(0, 0, 0, tokens::alpha(0.4));
+constexpr double kStrokeAlpha = 0.9;
+constexpr int kAvatar = 16;
+
+// Fractions of the frame are kept to four places, as the masks' are.
+double fourPlaces(double value) { return std::round(value * 10000.0) / 10000.0; }
+
+// `text` broken at spaces into lines no wider than `width`, a word wider
+// than that on a line of its own.
+QStringList wrapped(const QString &text, const QFontMetricsF &metrics, double width) {
+    QStringList lines;
+    QString line;
+    for (const QString &word : text.split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
+        const QString candidate = line.isEmpty() ? word : line + QLatin1Char(' ') + word;
+        if (!line.isEmpty() && metrics.horizontalAdvance(candidate) > width) {
+            lines << line;
+            line = word;
+        } else {
+            line = candidate;
+        }
+    }
+    if (!line.isEmpty()) lines << line;
+    return lines;
+}
+
+QColor strokeColor(const QJsonObject &stroke) {
+    QColor color(stroke.value(QStringLiteral("color")).toString());
+    if (!color.isValid()) color = tokens::color(tokens::ink);
+    color.setAlphaF(kStrokeAlpha);
+    return color;
+}
+
+} // namespace
+
 ViewerWidget::ViewerWidget(QWidget *parent) : QWidget(parent) {
     setObjectName(QStringLiteral("viewer"));
     setMinimumSize(320, 180);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setMouseTracking(true);
+    setAttribute(Qt::WA_OpaquePaintEvent);
     m_overlay = new PlayerOverlay(this);
+    m_mover = new QVariantAnimation(this);
+    m_mover->setStartValue(0.0);
+    m_mover->setEndValue(1.0);
+    m_mover->setDuration(kMoveDuration);
+    m_mover->setEasingCurve(tokens::easing());
+    connect(m_mover, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+        m_move = value.toDouble();
+        applyLayout(shownLayout());
+        fadePanel();
+        update();
+    });
+    connect(m_mover, &QVariantAnimation::finished, this, [this] {
+        m_move = 1.0;
+        applyLayout(stageLayout());
+        fadePanel();
+        update();
+    });
+    m_dimmer = new QVariantAnimation(this);
+    m_dimmer->setDuration(tokens::motion::move);
+    m_dimmer->setEasingCurve(tokens::easing());
+    connect(m_dimmer, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+        m_dimLevel = value.toDouble();
+        update();
+    });
+    m_overlapFade = new QVariantAnimation(this);
+    m_overlapFade->setDuration(tokens::motion::fade);
+    m_overlapFade->setEasingCurve(tokens::easing());
+    connect(m_overlapFade, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+        m_overlapLevel = value.toDouble();
+        update();
+    });
 }
+
+void ViewerWidget::setMotionOverride(int state) { g_stageMotion = state < 0 ? -1 : (state ? 1 : 0); }
+
+bool ViewerWidget::motionAllowed() const {
+    if (g_stageMotion >= 0) return g_stageMotion == 1;
+    // Only where something shows the motion: on screen, and not asked to keep still.
+    return isVisible() && QGuiApplication::platformName() != QLatin1String("offscreen") && ui::motionDuration(kMoveDuration) > 0;
+}
+
+bool ViewerWidget::moving() const { return m_mover->state() == QAbstractAnimation::Running; }
 
 void ViewerWidget::setFrame(const QImage &frame, double time) {
     m_frame = frame;
@@ -190,6 +286,7 @@ void ViewerWidget::setLiveScrub(bool live) {
 }
 
 void ViewerWidget::setCaption(const QString &caption) {
+    if (caption == m_caption) return;
     m_caption = caption;
     update();
 }
@@ -197,6 +294,7 @@ void ViewerWidget::setCaption(const QString &caption) {
 void ViewerWidget::setProjectInfo(double width, double height) {
     m_width = width;
     m_height = height;
+    m_scaled = QImage();
     layoutStage();
     update();
 }
@@ -207,120 +305,204 @@ double ViewerWidget::aspect() const {
     return 16.0 / 9.0;
 }
 
-int ViewerWidget::stageGap() const {
-    return width() - 2 * kStageMargin < kNarrowStage ? kNarrowStageGap : kStageGap;
-}
-
-int ViewerWidget::stageInset(Device device) const {
-    if (device != Device::Phone) return kStageMargin;
-    // The body height whose screen is kLeastPhoneScreen wide (the screen is
-    // the body's width less two bezels).
-    const double least = kLeastPhoneScreen / ((1.0 - 2.0 * kDeviceBezel) * deviceBodyAspect());
-    const int room = int(std::floor((height() - least) / 2.0));
-    return std::clamp(room, kLeastStageInset, kStageMargin);
-}
-
 ViewerWidget::Device ViewerWidget::device() const {
-    if (portrait() && m_device != DevicePreview::Off) return Device::Phone;
-    if (landscape() && m_laptop != LaptopPreview::Off) return Device::Laptop;
-    return Device::None;
+    if (phoneFormat()) return m_device != DevicePreview::Off ? Device::Phone : Device::None;
+    return m_laptop != LaptopPreview::Off ? Device::Laptop : Device::None;
 }
 
 ViewerWidget::StageLayout ViewerWidget::stageLayout(Device device) const {
     StageLayout out;
-    const double aspect = this->aspect();
+    const double pictureAspect = aspect();
+    // Off puts the picture where the format's own device would show it.
+    const Device frame = device != Device::None ? device : phoneFormat() ? Device::Phone : Device::Laptop;
+    const bool phone = frame == Device::Phone;
     out.kind = device;
     out.device = device != Device::None;
-    // A device is laid out by its body.
-    const double frameAspect = device == Device::Phone ? deviceBodyAspect() : device == Device::Laptop ? laptopBodyAspect() : aspect;
-    const int inset = stageInset(device);
-    const QRectF room = QRectF(rect()).adjusted(kStageMargin, inset, -kStageMargin, -inset);
-    const int gap = stageGap();
-    // The largest card (or device) of the picture's shape in `width` by `height`.
-    const auto fit = [frameAspect](double width, double height) {
-        QSizeF size(std::max(1.0, width), std::max(1.0, width) / frameAspect);
-        if (size.height() > height) size = QSizeF(std::max(1.0, height) * frameAspect, std::max(1.0, height));
+    out.phone = phoneFormat();
+    const double width = this->width();
+    const double height = this->height();
+    const double top = kStageTop;
+    // SY: the scrub strip's top, 64 over the stage's foot.
+    const double scrubTop = std::max(top + 1.0, height - kScrubHeight - kStageFoot);
+    const double boxHeight = std::max(1.0, scrubTop - (phone ? kPhoneScrubGap : kLaptopScrubGap) - top);
+    const double tall = std::max(1.0, height - kStageTop - kStageFoot);
+    const double bodyAspect = phone ? deviceBodyAspect() : laptopBodyAspect();
+    // The largest body of the device's proportions in `room` by the box's height.
+    const auto fit = [&](double room) {
+        const double w = std::max(1.0, room);
+        QSizeF size(w, w / bodyAspect);
+        if (size.height() > boxHeight) size = QSizeF(boxHeight * bodyAspect, boxHeight);
         return size;
     };
-    const auto centred = [&room](const QSizeF &size) {
-        return QRectF(QPointF(std::round(room.center().x() - size.width() / 2.0), std::round(room.center().y() - size.height() / 2.0)), size);
-    };
-    // The picture in the device's body, or the card that is the body.
-    const auto place = [&out, aspect](const QRectF &body) {
-        out.body = body;
-        if (out.kind == Device::Phone) {
-            const DeviceGeometry phone = deviceGeometry(body, aspect);
-            out.screen = phone.screen;
-            out.card = phone.picture;
-        } else if (out.kind == Device::Laptop) {
-            const LaptopGeometry laptop = laptopGeometry(body, aspect);
-            out.screen = laptop.screen;
-            out.card = laptop.picture;
+    const double gap = kStageEdge;
+    const double rail = kRailWidth;
+    const double inset = kSourceInset;
+    const int panelWidth = std::clamp(out.phone ? m_phoneChatWidth : m_chatWidth, kMinChatWidth, kMaxChatWidth);
+    const int panelX = int(width) - kStageEdge - panelWidth;
+    out.panelSlot = QRect(panelX, kStageTop, panelWidth, int(tall));
+    const bool open = m_chatOpen && m_panel;
+
+    QSizeF size;
+    double bodyX = 0.0;
+    double railX = 0.0;
+    // Whether the rail stands 12 right of the device (else at a fixed place),
+    // as it does where the group is centred.
+    bool railFollows = false;
+    bool sourceRoom = false;
+    bool placed = false;
+    if (open) {
+        if (phone) {
+            // The phone 12 left of the rail, the rail 12 left of the panel.
+            railX = panelX - gap - rail;
+            const double right = railX - gap;
+            size = fit(right - inset);
+            bodyX = right - size.width();
+            sourceRoom = true;
         } else {
-            out.card = body;
+            // The laptop and its rail, one group centred in 16 ... panel - 12.
+            const double left = inset;
+            const double right = panelX - gap;
+            size = fit(right - left - gap - rail);
+            bodyX = left + (right - left - size.width() - gap - rail) / 2.0;
+            railFollows = true;
         }
-    };
-    const int rail = m_rail ? kRailWidth : 0;
-    const auto hangRail = [&out, rail, gap] {
-        out.rail = QRect(int(std::round(out.body.right())) + gap, int(out.body.top()), rail, int(std::round(out.body.height())));
-    };
-    if (!m_chatOpen || !m_panel) {
-        // Alone, centred, as a Short with its comments closed; the rail
-        // hangs on its right where the stage has the room.
-        const double side = rail ? gap + rail : 0.0;
-        QSizeF size = fit(room.width() - 2.0 * side, room.height());
-        const bool railFits = rail && size.width() >= kMinCardWidth;
-        if (!railFits) size = fit(room.width(), room.height());
-        place(centred(size));
-        if (railFits) hangRail();
-        return out;
+        placed = size.width() >= kMinDeviceWidth;
+        if (!placed) out.overlay = true;
     }
-    const int fixed = 2 * gap + rail;
-    // The body's least width: four fifths of its width with the
-    // conversation closed; tall enough for the conversation's least height,
-    // so the two can be level and as tall; and in a laptop, a picture of
-    // kLaptopKeeps of the plain card's. Never more than the room's height
-    // allows.
-    const double closedWidth = fit(room.width() - 2.0 * (gap + rail), room.height()).width();
-    double least = std::max(kCardKeeps * closedWidth, std::min(room.height(), double(kMinChatHeight)) * frameAspect);
-    if (device == Device::Laptop) least = std::max(least, kLaptopKeeps * stageLayout(Device::None).card.width() / laptopPictureShare());
-    least = std::min(least, fit(room.width(), room.height()).width());
-    // The picture first: the conversation narrows, to its narrowest, before
-    // the body falls under its least.
-    int panelWidth = std::clamp(m_chatWidth, kMinChatWidth, kMaxChatWidth);
-    double cardRoom = room.width() - fixed - panelWidth;
-    if (fit(cardRoom, room.height()).width() < least - 0.5) {
-        panelWidth = std::clamp(int(std::floor(room.width() - fixed - least)), kMinChatWidth, panelWidth);
-        cardRoom = room.width() - fixed - panelWidth;
+    if (!placed) {
+        // Closed (or too narrow for the panel beside it): the rail ends 12
+        // from the stage's edge, the device 12 left of it.
+        railX = width - gap - rail;
+        const double right = railX - gap;
+        railFollows = false;
+        if (phone) {
+            size = fit(right - inset);
+            bodyX = right - size.width();
+            sourceRoom = !out.overlay;
+        } else {
+            // The Source column takes the left, the laptop leaving it its least.
+            size = fit(right - inset - gap - kLeastSourceWidth);
+            if (m_source && !out.overlay && size.width() >= kMinDeviceWidth) {
+                bodyX = right - size.width();
+                sourceRoom = true;
+            } else {
+                // No Source column: the laptop and its rail centred in the stage.
+                size = fit(right - inset);
+                bodyX = inset + (width - gap - inset - size.width() - gap - rail) / 2.0;
+                railFollows = true;
+            }
+        }
     }
-    if (cardRoom < kMinCardWidth) {
-        panelWidth = std::max(kMinChatWidth, int(room.width()) - fixed - kMinCardWidth);
-        cardRoom = room.width() - fixed - panelWidth;
+    // The outer rect on whole points (a centred group by its left edge, one
+    // anchored to the rail by its right, which is whole already); everything
+    // inside it in floating point.
+    const QRectF body(railFollows ? std::round(bodyX) : bodyX, top, size.width(), size.height());
+    if (railFollows) railX = body.right() + gap;
+    QRectF picture;
+    QRectF screen;
+    if (phone) {
+        const DeviceGeometry geometry = deviceGeometry(body, pictureAspect);
+        screen = geometry.screen;
+        picture = geometry.picture;
+    } else {
+        const LaptopGeometry geometry = laptopGeometry(body, pictureAspect);
+        screen = geometry.screen;
+        picture = geometry.picture;
     }
-    if (cardRoom < kMinCardWidth) {
-        // Too narrow for the group: the conversation lies over the stage's
-        // right side, and the card stays centred under it.
-        out.overlay = true;
-        place(centred(fit(room.width(), room.height())));
-        const int width = std::min(std::clamp(m_chatWidth, kMinChatWidth, kMaxChatWidth), int(room.width()));
-        out.panel = QRect(int(room.right()) - width, int(room.top()), width, int(room.height()));
-        return out;
+    out.card = picture;
+    out.body = out.device ? body : picture;
+    out.screen = out.device ? screen : QRectF();
+    out.railRect = QRectF(railX, top, rail, tall);
+    out.rail = QRect(qRound(railX), kStageTop, kRailWidth, int(tall));
+    if (open) {
+        out.panel = out.panelSlot;
+        if (out.overlay) {
+            // Over the stage's right side, as wide as it can be.
+            const int w = std::min(panelWidth, std::max(1, int(width) - 2 * kStageEdge));
+            out.panel = QRect(int(width) - kStageEdge - w, kStageTop, w, int(tall));
+        }
     }
-    const QSizeF size = fit(cardRoom, room.height());
-    const double panelHeight = std::max(size.height(), std::min(room.height(), double(kLeastChatHeight)));
-    const double group = size.width() + fixed + panelWidth;
-    const QPointF origin(std::round(room.left() + (room.width() - group) / 2.0), std::round(room.top() + (room.height() - panelHeight) / 2.0));
-    // The card (or device) shares the conversation's top edge and height;
-    // only in a stage too short for that is it centred on the conversation's.
-    place(QRectF(QPointF(origin.x(), std::round(origin.y() + (panelHeight - size.height()) / 2.0)), size));
-    hangRail();
-    if (!rail) out.rail = QRect();
-    out.panel = QRect(int(std::round(out.body.right())) + gap + rail + (rail ? gap : 0), int(origin.y()), panelWidth,
-                      int(std::round(panelHeight)));
+    // The scrub strip: the picture's width under a 16:9 picture; 360 under a
+    // phone, its right edge on the rail's.
+    if (phone) {
+        out.scrub = QRectF(railX + rail - kPhoneScrubWidth, scrubTop, kPhoneScrubWidth, kScrubHeight);
+        out.narrowScrub = true;
+    } else {
+        out.scrub = QRectF(picture.left(), scrubTop, picture.width(), kScrubHeight);
+        out.narrowScrub = picture.width() < kNarrowScrubWidth;
+    }
+    // The Source column: 16:9 with the panel closed, 12 left of the device;
+    // beside a phone always, to 32 before the scrub (400 with the panel open).
+    if (m_source && sourceRoom) {
+        double w = body.left() - gap - inset;
+        if (phone) {
+            w = std::min(w, out.scrub.left() - 2.0 * inset);
+            if (open) w = std::min(w, double(kPhoneSourceWidth));
+        }
+        if (w >= kLeastSourceWidth) out.source = QRect(kSourceInset, kStageTop, int(std::floor(w + 1e-6)), int(tall));
+    }
+    // The agent HUD: over the Source column as a 32 strip on a phone (the
+    // column moving 40 down while it shows), else a card in title safe.
+    const bool hudShown = m_hud && !m_hud->isHidden();
+    if (phone && !out.source.isEmpty()) {
+        out.hudStrip = true;
+        out.hud = QRectF(out.source.left(), kStageTop, out.source.width(), kHudStripHeight);
+        if (hudShown) out.source.setTop(out.source.top() + kHudStripHeight + 8);
+    } else {
+        const double pw = picture.width();
+        const double ph = picture.height();
+        const double tx = std::round(pw * kTitleSafeInset);
+        const double ty = std::round(ph * kTitleSafeInset);
+        const double hw = std::max(0.0, std::min(double(kHudWidth), pw - 2.0 * tx - 16.0));
+        out.hud = QRectF(picture.left() + pw - tx - 8.0 - hw, picture.top() + ty + 8.0, hw, kHudHeight);
+    }
     return out;
 }
 
-QRectF ViewerWidget::videoRect() const { return stageLayout().card; }
+ViewerWidget::StageLayout ViewerWidget::shownLayout() const {
+    const StageLayout to = stageLayout();
+    if (!moving()) return to;
+    const double t = std::clamp(m_move, 0.0, 1.0);
+    StageLayout out = to;
+    out.body = lerpRect(m_from.body, to.body, t);
+    // On whole points while it moves, so the device's frame is only blitted.
+    const QPointF snap = QPointF(std::round(out.body.left()), std::round(out.body.top())) - out.body.topLeft();
+    out.body.translate(snap);
+    const QPointF shift = out.body.topLeft() - to.body.topLeft();
+    // The picture and the screen keep their place in the device.
+    out.card = lerpRect(m_from.card, to.card, t).translated(snap);
+    if (!to.screen.isEmpty()) out.screen = to.screen.translated(shift);
+    out.railRect = lerpRect(m_from.railRect, to.railRect, t);
+    out.rail = QRect(qRound(out.railRect.left()), to.rail.top(), to.rail.width(), to.rail.height());
+    out.scrub = lerpRect(m_from.scrub, to.scrub, t);
+    out.hud = lerpRect(m_from.hud, to.hud, t);
+    // The panel slides 24 to the right as it closes, back as it opens.
+    if (!m_from.panel.isEmpty() || !to.panel.isEmpty()) {
+        const QRectF from = m_from.panel.isEmpty() ? QRectF(to.panelSlot.translated(kPanelSlide, 0)) : QRectF(m_from.panel);
+        const QRectF target = to.panel.isEmpty() ? QRectF(m_from.panel.translated(kPanelSlide, 0)) : QRectF(to.panel);
+        out.panel = lerpRect(from, target, t).toRect();
+    }
+    // The Source column keeps 12 clear of a laptop on its way.
+    if (!to.source.isEmpty() && !to.phone) {
+        const int w = std::min(to.source.width(), int(std::floor(out.body.left() - kStageEdge - kSourceInset)));
+        if (w < kLeastSourceWidth) out.source = QRect();
+        else out.source.setWidth(w);
+    }
+    return out;
+}
+
+QRectF ViewerWidget::videoRect() const { return shownLayout().card; }
+
+QRectF ViewerWidget::pictureRect() const {
+    const QRectF card = shownLayout().card;
+    const double frameWidth = m_width > 0 ? m_width : m_frame.width();
+    const double frameHeight = m_height > 0 ? m_height : m_frame.height();
+    if (m_zoom <= 0.0 || frameWidth <= 0 || frameHeight <= 0) return card;
+    // One frame pixel a device pixel at 100%.
+    const qreal ratio = std::max(1.0, devicePixelRatioF());
+    const QSizeF size(frameWidth * m_zoom / ratio, frameHeight * m_zoom / ratio);
+    return QRectF(card.center() - QPointF(size.width() / 2.0, size.height() / 2.0), size);
+}
 
 void ViewerWidget::setStage(QWidget *rail, QWidget *panel) {
     m_rail = rail;
@@ -331,19 +513,65 @@ void ViewerWidget::setStage(QWidget *rail, QWidget *panel) {
     update();
 }
 
-void ViewerWidget::setChatOpen(bool open) {
-    m_chatOpen = open;
+void ViewerWidget::setStageParts(QWidget *scrub, QWidget *hud, QWidget *source) {
+    if (m_hud) m_hud->removeEventFilter(this);
+    m_scrub = scrub;
+    m_hud = hud;
+    m_source = source;
+    if (scrub) {
+        scrub->setParent(this);
+        scrub->show();
+    }
+    if (hud) {
+        // It shows and hides itself (only while a preview renders).
+        const bool shown = !hud->isHidden() && hud->parentWidget();
+        hud->setParent(this);
+        hud->setVisible(shown);
+        hud->installEventFilter(this);
+    }
+    if (source) {
+        source->setParent(this);
+        source->hide();
+    }
     layoutStage();
     update();
 }
 
-void ViewerWidget::setChatWidth(int width) {
+bool ViewerWidget::eventFilter(QObject *watched, QEvent *event) {
+    // The HUD shown or hidden moves the Source column under it.
+    if (watched == m_hud && (event->type() == QEvent::ShowToParent || event->type() == QEvent::HideToParent)) layoutStage();
+    return QWidget::eventFilter(watched, event);
+}
+
+void ViewerWidget::setChatOpen(bool open) {
+    if (open == m_chatOpen) {
+        layoutStage();
+        return;
+    }
+    // The move starts from the stage as it is drawn before the change.
+    const StageLayout from = shownLayout();
+    m_chatOpen = open;
+    if (motionAllowed()) {
+        m_from = from;
+        m_mover->stop();
+        m_move = 0.0;
+        m_mover->start();
+    }
+    layoutStage();
+    fadePanel();
+    update();
+}
+
+void ViewerWidget::setChatWidth(int width) { setChatWidth(phoneFormat(), width); }
+
+void ViewerWidget::setChatWidth(bool phone, int width) {
     width = std::clamp(width, kMinChatWidth, kMaxChatWidth);
-    if (width == m_chatWidth) return;
-    m_chatWidth = width;
+    int &slot = phone ? m_phoneChatWidth : m_chatWidth;
+    if (width == slot) return;
+    slot = width;
     layoutStage();
     update();
-    emit chatWidthChanged(width);
+    if (phone == phoneFormat()) emit chatWidthChanged(width);
 }
 
 void ViewerWidget::setDevicePreview(DevicePreview preview) {
@@ -365,42 +593,244 @@ void ViewerWidget::setLaptopPreview(LaptopPreview preview) {
 void ViewerWidget::setSafeZones(bool shown) {
     if (shown == m_safeZones) return;
     m_safeZones = shown;
-    layoutStage();
     update();
 }
 
-void ViewerWidget::layoutStage() {
-    const StageLayout layout = stageLayout();
+void ViewerWidget::setDim(bool dim) {
+    if (dim == m_dim) return;
+    m_dim = dim;
+    m_dimmer->stop();
+    const double end = dim ? 1.0 : 0.0;
+    if (!motionAllowed()) {
+        m_dimLevel = end;
+        update();
+        return;
+    }
+    m_dimmer->setStartValue(m_dimLevel);
+    m_dimmer->setEndValue(end);
+    m_dimmer->start();
+}
+
+QColor ViewerWidget::surroundColor() const {
+    return ui::mix(tokens::color(tokens::surround), tokens::color(tokens::surroundDim), std::clamp(m_dimLevel, 0.0, 1.0));
+}
+
+void ViewerWidget::setAnnotationsShown(bool shown) {
+    if (shown == m_annotationsShown) return;
+    m_annotationsShown = shown;
+    update();
+}
+
+void ViewerWidget::setAnnotations(const QList<Annotation> &annotations) {
+    m_annotations = annotations;
+    update();
+}
+
+void ViewerWidget::setOverlap(const QRectF &rect, const QString &tag) {
+    const bool shown = !rect.isEmpty();
+    if (shown) {
+        m_overlapRect = rect;
+        m_overlapTag = tag;
+    }
+    if (shown == m_overlapShown) {
+        update();
+        return;
+    }
+    m_overlapShown = shown;
+    m_overlapFade->stop();
+    const double end = shown ? 1.0 : 0.0;
+    if (!motionAllowed()) {
+        m_overlapLevel = end;
+        update();
+        return;
+    }
+    m_overlapFade->setStartValue(m_overlapLevel);
+    m_overlapFade->setEndValue(end);
+    m_overlapFade->start();
+}
+
+QRectF ViewerWidget::overlapBox() const {
+    if (m_overlapRect.isEmpty()) return {};
+    const QRectF picture = pictureRect();
+    return QRectF(picture.left() + m_overlapRect.x() * picture.width(), picture.top() + m_overlapRect.y() * picture.height(),
+                  m_overlapRect.width() * picture.width(), m_overlapRect.height() * picture.height());
+}
+
+QRectF ViewerWidget::overlapTagRect() const {
+    const QRectF box = overlapBox();
+    if (box.isEmpty() || m_overlapTag.isEmpty()) return {};
+    const QFontMetricsF metrics(tokens::font(tokens::monoSmall));
+    const QSizeF size(ui::snapWidth(metrics, m_overlapTag) + 8.0, 16.0);
+    // Right-aligned to the caption's right, 4 over it; without a caption,
+    // to the box's.
+    const QRectF caption = m_caption.isEmpty() ? QRectF() : captionRect();
+    const QRectF anchor = caption.isEmpty() ? box : caption;
+    return QRectF(QPointF(anchor.right() - size.width(), anchor.top() - 4.0 - size.height()), size);
+}
+
+void ViewerWidget::setZoom(double zoom) {
+    zoom = std::max(0.0, zoom);
+    if (zoom == m_zoom) return;
+    m_zoom = zoom;
+    m_scaled = QImage();
+    update();
+}
+
+void ViewerWidget::beginDrawing() {
+    cancelDrawing();
+    setMaskTool(MaskTool::None);
+    m_capturing = true;
+    m_strokes.clear();
+    m_stroke.clear();
+    setCursor(Qt::CrossCursor);
+    setFocus(Qt::OtherFocusReason);
+    update();
+}
+
+QJsonArray ViewerWidget::capturedStrokes() const {
+    QJsonArray out;
+    for (const QVector<QPointF> &stroke : m_strokes) {
+        QJsonArray points;
+        for (const QPointF &point : stroke) points.append(QJsonArray{fourPlaces(point.x()), fourPlaces(point.y())});
+        out.append(QJsonObject{{QStringLiteral("tool"), QStringLiteral("pen")},
+                               {QStringLiteral("points"), points},
+                               {QStringLiteral("color"), tokens::color(tokens::ink).name()}});
+    }
+    return out;
+}
+
+void ViewerWidget::finishDrawing() {
+    if (!m_capturing) return;
+    if (m_stroke.size() >= 2) m_strokes.append(m_stroke);
+    const QJsonArray strokes = capturedStrokes();
+    m_capturing = false;
+    m_strokes.clear();
+    m_stroke.clear();
+    unsetCursor();
+    update();
+    // Nothing drawn is no drawing.
+    if (strokes.isEmpty()) emit drawingCancelled();
+    else emit drawingFinished(strokes);
+}
+
+void ViewerWidget::cancelDrawingCapture() {
+    if (!m_capturing) return;
+    m_capturing = false;
+    m_strokes.clear();
+    m_stroke.clear();
+    unsetCursor();
+    update();
+    emit drawingCancelled();
+}
+
+QPointF ViewerWidget::frameFraction(const QPointF &widget) const {
+    const QRectF picture = pictureRect();
+    return QPointF(std::clamp((widget.x() - picture.left()) / std::max(1.0, picture.width()), 0.0, 1.0),
+                   std::clamp((widget.y() - picture.top()) / std::max(1.0, picture.height()), 0.0, 1.0));
+}
+
+QPointF ViewerWidget::fromFrame(const QPointF &fraction) const {
+    const QRectF picture = pictureRect();
+    return QPointF(picture.left() + fraction.x() * picture.width(), picture.top() + fraction.y() * picture.height());
+}
+
+void ViewerWidget::layoutStage() { applyLayout(shownLayout()); }
+
+void ViewerWidget::applyLayout(const StageLayout &layout) {
     m_overlay->setRect(layout.card, compactPlayer(layout.card));
-    // Safe zones are outlines to read: the controls (all but the bar) keep
-    // off them until the pointer comes over the picture.
-    m_overlay->setControlsSuppressed(m_safeZones && portrait());
     if (m_rail) {
-        m_rail->setVisible(!layout.rail.isEmpty());
-        if (!layout.rail.isEmpty()) m_rail->setGeometry(layout.rail);
+        m_rail->setGeometry(layout.rail);
+        m_rail->setVisible(true);
     }
     if (m_panel) {
         if (!layout.panel.isEmpty()) m_panel->setGeometry(layout.panel);
         m_panel->setVisible(!layout.panel.isEmpty());
         if (layout.overlay) m_panel->raise();
     }
+    if (m_scrub) m_scrub->setGeometry(layout.scrub.toRect());
+    // Beside a phone the scrub strip runs under the rail's foot (it ends at
+    // the rail's right edge): the rail's buttons stay on top.
+    if (m_rail) m_rail->raise();
+    if (m_source) {
+        if (!layout.source.isEmpty()) m_source->setGeometry(layout.source);
+        m_source->setVisible(!layout.source.isEmpty());
+    }
+    if (m_hud) {
+        m_hud->setGeometry(layout.hud.toRect());
+        m_hud->raise();
+    }
+    emit stageLaidOut();
 }
 
-void ViewerWidget::resizeEvent(QResizeEvent *) { layoutStage(); }
-
-QRectF ViewerWidget::captionRect() const {
-    const QRectF canvas = videoRect();
-    const double horizontalMargin = std::max(12.0, canvas.width() * 0.08);
-    const double bottomMargin = std::max(12.0, canvas.height() * 0.08);
-    const double captionHeight = std::clamp(canvas.height() * 0.12, 34.0, 64.0);
-    // At rest near the foot; 8 points over the controls while they show,
-    // moving with their fade.
-    const double rest = canvas.bottom() - bottomMargin;
-    const double lifted = std::min(rest, m_overlay->footTop() - 8.0);
-    const double bottom = std::max(canvas.top() + captionHeight, rest + (lifted - rest) * m_overlay->opacity());
-    return QRectF(canvas.left() + horizontalMargin, bottom - captionHeight,
-                  std::max(1.0, canvas.width() - horizontalMargin * 2.0), captionHeight);
+void ViewerWidget::fadePanel() {
+    if (!m_panel) return;
+    const StageLayout to = stageLayout();
+    const bool opening = m_from.panel.isEmpty() && !to.panel.isEmpty();
+    const bool closing = !m_from.panel.isEmpty() && to.panel.isEmpty();
+    if (!moving() || !(opening || closing)) {
+        // Off once the move ends, so the panel paints as itself.
+        if (m_panelFade && m_panel->graphicsEffect() == m_panelFade) m_panel->setGraphicsEffect(nullptr);
+        return;
+    }
+    // Never over an effect someone else put on the panel.
+    if (m_panel->graphicsEffect() && m_panel->graphicsEffect() != m_panelFade) return;
+    if (!m_panelFade) {
+        m_panelFade = new QGraphicsOpacityEffect(m_panel);
+        m_panel->setGraphicsEffect(m_panelFade);
+    }
+    const double t = std::clamp(m_move, 0.0, 1.0);
+    m_panelFade->setOpacity(opening ? t : 1.0 - t);
 }
+
+void ViewerWidget::resizeEvent(QResizeEvent *) {
+    m_scaled = QImage();
+    layoutStage();
+}
+
+void ViewerWidget::showEvent(QShowEvent *) { layoutStage(); }
+
+QRectF ViewerWidget::captionBox(QString *text) const {
+    const QRectF picture = pictureRect();
+    const double w = picture.width();
+    const double h = picture.height();
+    const double tx = std::round(w * kTitleSafeInset);
+    const double ty = std::round(h * kTitleSafeInset);
+    const QFontMetricsF metrics(tokens::font(tokens::caption));
+    constexpr double padX = 8.0, padY = 2.0, line = 20.0;
+    QString shown = m_caption.simplified();
+    double textWidth = 0.0;
+    int lines = 1;
+    if (!phoneFormat()) {
+        // One line on 16:9, cut at title safe.
+        const double most = std::max(1.0, w - 2.0 * tx - 2.0 * padX);
+        shown = metrics.elidedText(shown, Qt::ElideRight, most);
+        textWidth = std::min(most, std::ceil(metrics.horizontalAdvance(shown)));
+    } else {
+        // Wrapped and balanced on a phone: the narrowest width that keeps
+        // the line count the widest allows.
+        const double most = std::max(1.0, w - 2.0 * tx - 16.0 - 2.0 * padX);
+        const QStringList widest = wrapped(shown, metrics, most);
+        lines = std::max<int>(1, int(widest.size()));
+        double lo = 1.0, hi = most;
+        for (int step = 0; step < 24 && hi - lo > 0.5; ++step) {
+            const double mid = (lo + hi) / 2.0;
+            if (wrapped(shown, metrics, mid).size() <= lines) hi = mid;
+            else lo = mid;
+        }
+        double widestLine = 0.0;
+        const QStringList balanced = wrapped(shown, metrics, hi);
+        for (const QString &part : balanced) widestLine = std::max(widestLine, metrics.horizontalAdvance(part));
+        textWidth = std::min(most, std::ceil(widestLine));
+        lines = std::max<int>(1, int(balanced.size()));
+        shown = balanced.join(QLatin1Char('\n'));
+    }
+    if (text) *text = shown;
+    const QSizeF size(textWidth + 2.0 * padX, lines * line + 2.0 * padY);
+    return QRectF(QPointF(picture.left() + std::round((w - size.width()) / 2.0), picture.top() + h - ty - size.height()), size);
+}
+
+QRectF ViewerWidget::captionRect() const { return m_caption.isEmpty() ? QRectF() : captionBox(nullptr); }
+
 
 void ViewerWidget::setMasks(const QString &clip, const QJsonArray &masks, const QTransform &placement) {
     // A drag in progress keeps its outline until it is let go.
@@ -445,7 +875,7 @@ bool ViewerWidget::editsMasks() const {
 }
 
 QTransform ViewerWidget::pictureToWidget() const {
-    const QRectF canvas = videoRect();
+    const QRectF canvas = pictureRect();
     const double canvasWidth = m_width > 0 ? m_width : m_frame.isNull() ? canvas.width() : m_frame.width();
     const double scale = canvas.width() / std::max(1.0, canvasWidth);
     QTransform view;
@@ -552,19 +982,12 @@ void ViewerWidget::removeSelectedMask() {
 }
 
 bool ViewerWidget::event(QEvent *event) {
-    // The player's controls name themselves, with their shortcuts.
-    if (event->type() == QEvent::ToolTip) {
-        auto *help = static_cast<QHelpEvent *>(event);
-        const QString tip = m_overlay->toolTipAt(help->pos());
-        if (tip.isEmpty()) QToolTip::hideText();
-        else QToolTip::showText(help->globalPos(), tip, this);
-        return true;
-    }
-    // Keys the masks take ahead of the editor's shortcuts.
+    // Keys the masks and a drawing take ahead of the editor's shortcuts.
     if (event->type() == QEvent::ShortcutOverride) {
         const int key = static_cast<QKeyEvent *>(event)->key();
         const bool drawing = m_drawing || !m_penPoints.isEmpty();
-        const bool takes = (key == Qt::Key_Escape && (drawing || m_maskTool != MaskTool::None)) ||
+        const bool capture = m_capturing && (key == Qt::Key_Escape || key == Qt::Key_Return || key == Qt::Key_Enter);
+        const bool takes = capture || (key == Qt::Key_Escape && (drawing || m_maskTool != MaskTool::None)) ||
                            ((key == Qt::Key_Return || key == Qt::Key_Enter) && m_penPoints.size() >= 2) ||
                            ((key == Qt::Key_Delete || key == Qt::Key_Backspace) &&
                             (drawing || maskIndex(m_selectedMask) >= 0));
@@ -577,6 +1000,14 @@ bool ViewerWidget::event(QEvent *event) {
 }
 
 void ViewerWidget::keyPressEvent(QKeyEvent *event) {
+    if (m_capturing) {
+        switch (event->key()) {
+        case Qt::Key_Escape: cancelDrawingCapture(); return;
+        case Qt::Key_Return:
+        case Qt::Key_Enter: finishDrawing(); return;
+        default: QWidget::keyPressEvent(event); return;
+        }
+    }
     switch (event->key()) {
     case Qt::Key_Escape:
         if (m_drawing || !m_penPoints.isEmpty()) cancelDrawing();
@@ -603,14 +1034,20 @@ void ViewerWidget::keyPressEvent(QKeyEvent *event) {
 void ViewerWidget::mousePressEvent(QMouseEvent *event) {
     if (event->button() != Qt::LeftButton) return;
     const QPointF position = event->position();
-    // The player's controls and bar take the pointer first, unless it is on
-    // a mask's handle, which would be out of reach under them.
+    if (m_capturing) {
+        // A stroke starts on the picture.
+        if (pictureRect().contains(position)) {
+            m_stroke = {frameFraction(position)};
+            update();
+        }
+        return;
+    }
     if (m_maskTool == MaskTool::None && m_dragHandle == -1 && (!editsMasks() || handleAt(position) < 0) &&
         m_overlay->mousePress(position))
         return;
     if (!editsMasks()) {
-        // A click on the picture plays or pauses, as on a video site; the
-        // bar seeks. Elsewhere on the stage, a click does nothing.
+        // A click on the picture plays or pauses, as on a video site.
+        // Elsewhere on the stage, a click does nothing.
         if (stageLayout().card.contains(position) && m_overlay->controlEnabled(PlayerOverlay::Control::Play))
             emit m_overlay->controlTriggered(PlayerOverlay::Control::Play);
         return;
@@ -653,8 +1090,18 @@ void ViewerWidget::mousePressEvent(QMouseEvent *event) {
 
 void ViewerWidget::mouseMoveEvent(QMouseEvent *event) {
     const QPointF position = event->position();
+    if (m_capturing) {
+        // The stroke follows the pointer, a point each point it moves.
+        if ((event->buttons() & Qt::LeftButton) && !m_stroke.isEmpty()) {
+            const QPointF at = frameFraction(position);
+            if ((fromFrame(at) - fromFrame(m_stroke.constLast())).manhattanLength() >= 1.0) {
+                m_stroke.append(at);
+                update();
+            }
+        }
+        return;
+    }
     if (!m_drawing && m_dragHandle == -1 && m_overlay->mouseMove(position, event->buttons() & Qt::LeftButton)) {
-        // Over the controls, the picture holds the playhead's frame.
         if (m_skimming) {
             m_skimming = false;
             emit scrubEnded();
@@ -702,6 +1149,16 @@ void ViewerWidget::mouseMoveEvent(QMouseEvent *event) {
 
 void ViewerWidget::mouseReleaseEvent(QMouseEvent *event) {
     if (event->button() != Qt::LeftButton) return;
+    if (m_capturing) {
+        if (!m_stroke.isEmpty()) {
+            // A click leaves a dot: the same point twice.
+            if (m_stroke.size() == 1) m_stroke.append(m_stroke.constFirst());
+            m_strokes.append(m_stroke);
+            m_stroke.clear();
+            update();
+        }
+        return;
+    }
     if (m_overlay->mouseRelease(event->position())) return;
     if (m_drawing) {
         m_drawing = false;
@@ -743,31 +1200,14 @@ void ViewerWidget::leaveEvent(QEvent *) {
     emit scrubEnded();
 }
 
+
 void ViewerWidget::paintMasks(QPainter &p) {
     if (m_maskClip.isEmpty()) return;
     const QTransform toWidget = pictureToWidget();
     p.save();
     p.setRenderHint(QPainter::Antialiasing);
     p.setBrush(Qt::NoBrush);
-    // Outlines are white over a dark rule, never the accent, so they read
-    // on a picture in the accent's own hue; a path only (mode none) is dashed.
-    // While the player's controls show, outlines keep out of their band at
-    // the picture's foot (the controls' row and the bar), so a line never
-    // strikes through the time; the handles stay, to be grabbed.
-    const QRectF picture = stageLayout().card;
-    QPainterPath clear;
-    clear.addRect(QRectF(rect()));
-    if (m_overlay->opacity() > 0.01 && m_overlay->controlsShown()) {
-        QPainterPath band;
-        band.addRect(QRectF(picture.left(), m_overlay->footTop() - 4.0, picture.width(), picture.bottom() - m_overlay->footTop() + 4.0));
-        clear = clear.subtracted(band);
-    }
-    const auto outline = [&p, &clear](const QPainterPath &path, bool selected, bool pathOnly) {
-        p.save();
-        p.setClipPath(clear, Qt::IntersectClip);
-        strokeOverPicture(p, path, selected, pathOnly);
-        p.restore();
-    };
+    const QRectF picture = pictureRect();
     // Handles are the accent with a white edge; the pen's first point turns
     // white when a click there would close the outline.
     const auto handle = [&p](const QPointF &center, bool closes) {
@@ -782,7 +1222,10 @@ void ViewerWidget::paintMasks(QPainter &p) {
         const QString name = mask.value(QStringLiteral("name")).toString();
         const bool selected = name == m_selectedMask;
         const QPainterPath path = toWidget.map(maskPath(mask));
-        outline(path, selected, mask.value(QStringLiteral("mode")).toString() == QStringLiteral("none"));
+        // Outlines are white over a dark rule, never the accent, so they
+        // read on a picture in the accent's own hue; a path only (mode none)
+        // is dashed.
+        strokeOverPicture(p, path, selected, mask.value(QStringLiteral("mode")).toString() == QStringLiteral("none"));
         // The name on a tag over the outline's top left; the selected
         // mask's tag is the accent.
         if (!name.isEmpty()) paintMaskTag(p, path.boundingRect().topLeft(), name, selected, picture);
@@ -794,12 +1237,12 @@ void ViewerWidget::paintMasks(QPainter &p) {
         QPainterPath path;
         if (m_maskTool == MaskTool::Ellipse) path.addEllipse(box);
         else path.addRect(box);
-        outline(toWidget.map(path), true, false);
+        strokeOverPicture(p, toWidget.map(path), true, false);
     }
     if (!m_penPoints.isEmpty()) {
         QPainterPath path(toWidget.map(m_penPoints.first()));
         for (int index = 1; index < m_penPoints.size(); ++index) path.lineTo(toWidget.map(m_penPoints.at(index)));
-        outline(path, true, false);
+        strokeOverPicture(p, path, true, false);
         QPainterPath rubber(toWidget.map(m_penPoints.last()));
         rubber.lineTo(m_pointer);
         strokeOverPicture(p, rubber, false, true);
@@ -812,73 +1255,181 @@ void ViewerWidget::paintMasks(QPainter &p) {
     p.restore();
 }
 
+void ViewerWidget::paintCaption(QPainter &p, bool flagged) {
+    if (m_caption.isEmpty()) return;
+    QString text;
+    const QRectF box = captionBox(&text);
+    p.save();
+    p.setPen(Qt::NoPen);
+    p.setBrush(tokens::color(tokens::overlay::captionBackground));
+    p.drawRect(box);
+    p.setFont(tokens::font(tokens::caption));
+    p.setPen(tokens::color(tokens::overlay::captionText));
+    const QStringList lines = text.split(QLatin1Char('\n'));
+    for (int index = 0; index < lines.size(); ++index)
+        p.drawText(QRectF(box.left(), box.top() + 2.0 + 20.0 * index, box.width(), 20.0), Qt::AlignCenter, lines.at(index));
+    if (flagged && m_overlapLevel > 0.0) {
+        // The QC note's outline, 2 outside the caption.
+        QColor neg = tokens::color(tokens::neg);
+        neg.setAlphaF(m_overlapLevel);
+        p.setPen(QPen(neg, 1.0));
+        p.setBrush(Qt::NoBrush);
+        p.drawRect(box.adjusted(-2.5, -2.5, 2.5, 2.5));
+    }
+    p.restore();
+}
+
+void ViewerWidget::paintOverlap(QPainter &p) {
+    if (m_overlapLevel <= 0.0) return;
+    const QRectF box = overlapBox();
+    if (box.isEmpty()) return;
+    p.save();
+    p.setOpacity(p.opacity() * m_overlapLevel);
+    p.setPen(Qt::NoPen);
+    p.setBrush(tokens::color(kOverlapFill));
+    p.drawRect(box);
+    ui::paintInsetLine(p, box, 0, tokens::color(tokens::neg));
+    const QRectF tag = overlapTagRect();
+    if (!tag.isEmpty()) {
+        p.setPen(Qt::NoPen);
+        p.setBrush(tokens::color(tokens::chrome));
+        p.drawRoundedRect(tag, tokens::radius::small, tokens::radius::small);
+        p.setFont(tokens::font(tokens::monoSmall));
+        p.setPen(tokens::color(tokens::neg));
+        p.drawText(tag, Qt::AlignCenter, m_overlapTag);
+    }
+    p.restore();
+}
+
+void ViewerWidget::paintStrokes(QPainter &p, const QJsonArray &drawing, const QString &initials) {
+    QPointF start;
+    bool hasStart = false;
+    for (const QJsonValue &value : drawing) {
+        const QJsonObject stroke = value.toObject();
+        QVector<QPointF> points;
+        for (const QJsonValue &point : stroke.value(QStringLiteral("points")).toArray()) points.append(fromFrame(pointOf(point)));
+        if (points.isEmpty()) continue;
+        const QString tool = stroke.value(QStringLiteral("tool")).toString();
+        QPainterPath path;
+        if ((tool == QLatin1String("rect") || tool == QLatin1String("ellipse")) && points.size() >= 2) {
+            const QRectF box = QRectF(points.at(0), points.at(1)).normalized();
+            if (tool == QLatin1String("rect")) path.addRect(box);
+            else path.addEllipse(box);
+        } else if (tool == QLatin1String("arrow") && points.size() >= 2) {
+            const QPointF from = points.at(0), to = points.at(1);
+            path.moveTo(from);
+            path.lineTo(to);
+            // A head of 10 at 28 degrees either side.
+            const double angle = std::atan2(to.y() - from.y(), to.x() - from.x());
+            for (const double side : {-0.4887, 0.4887}) {
+                path.moveTo(to);
+                path.lineTo(to - QPointF(std::cos(angle + side), std::sin(angle + side)) * 10.0);
+            }
+        } else {
+            path.moveTo(points.first());
+            for (int index = 1; index < points.size(); ++index) path.lineTo(points.at(index));
+        }
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(tokens::color(kStrokeUnder), 4.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.drawPath(path);
+        p.setPen(QPen(strokeColor(stroke), 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.drawPath(path);
+        if (!hasStart) {
+            start = points.first();
+            hasStart = true;
+        }
+    }
+    if (!hasStart || initials.isEmpty()) return;
+    // Who drew it, at the start of the first stroke.
+    const QRectF avatar(start - QPointF(kAvatar / 2.0, kAvatar / 2.0), QSizeF(kAvatar, kAvatar));
+    p.setPen(QPen(QColor(Qt::black), 1.0));
+    p.setBrush(tokens::color(tokens::on));
+    p.drawEllipse(avatar.adjusted(-0.5, -0.5, 0.5, 0.5));
+    p.setFont(tokens::font(tokens::metaStrong));
+    p.setPen(tokens::color(tokens::ink));
+    p.drawText(avatar, Qt::AlignCenter, initials);
+}
+
+void ViewerWidget::paintAnnotations(QPainter &p) {
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing);
+    if (m_annotationsShown)
+        for (const Annotation &annotation : std::as_const(m_annotations)) paintStrokes(p, annotation.drawing, annotation.initials);
+    if (m_capturing) {
+        // The drawing in hand, as it will be kept.
+        QJsonArray strokes = capturedStrokes();
+        if (m_stroke.size() >= 1) {
+            QJsonArray points;
+            for (const QPointF &point : m_stroke) points.append(QJsonArray{point.x(), point.y()});
+            if (m_stroke.size() == 1) points.append(points.first());
+            strokes.append(QJsonObject{{QStringLiteral("tool"), QStringLiteral("pen")}, {QStringLiteral("points"), points}});
+        }
+        paintStrokes(p, strokes, QString());
+    }
+    p.restore();
+}
+
 void ViewerWidget::paintEvent(QPaintEvent *) {
     const EditorTheme &theme = editorTheme();
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    p.fillRect(rect(), theme.viewerSurround);
-    const StageLayout layout = stageLayout();
-    const QRectF canvas = layout.card;
-    m_overlay->setRect(canvas, compactPlayer(canvas));
-    DeviceGeometry device;
-    QPainterPath canvasPath;
+    p.fillRect(rect(), surroundColor());
+    const StageLayout layout = shownLayout();
+    const QRectF card = layout.card;
+    const QRectF picture = pictureRect();
+    m_overlay->setRect(card, compactPlayer(card));
+    // Where the picture may show: the device's screen, or the plain rect.
+    QPainterPath viewport;
     // A device's frame is drawn once for its size and blitted after.
     const qreal ratio = std::max(1.0, devicePixelRatioF());
     if (layout.kind == Device::Phone) {
-        // The phone, its black screen, and the picture across it.
-        device = deviceGeometry(layout.body, aspect());
-        m_frameCache.paint(p, DeviceFrameCache::Kind::Phone, layout.body, theme, ratio);
-        QPainterPath screen;
-        screen.addRoundedRect(device.screen, device.screenRadius, device.screenRadius);
-        QPainterPath picture;
-        picture.addRect(canvas);
-        canvasPath = screen.intersected(picture);
+        m_frameCache.paint(p, DeviceFrameCache::Kind::Phone, layout.body, aspect(), ratio);
+        const DeviceGeometry phone = deviceGeometry(layout.body, aspect());
+        viewport.addRoundedRect(phone.screen, phone.screenRadius, phone.screenRadius);
     } else if (layout.kind == Device::Laptop) {
-        // The laptop, its black screen, and the picture across it, which
-        // stays clear of the screen's rounded top corners.
-        m_frameCache.paint(p, DeviceFrameCache::Kind::Laptop, layout.body, theme, ratio);
-        canvasPath.addRect(canvas);
+        m_frameCache.paint(p, DeviceFrameCache::Kind::Laptop, layout.body, aspect(), ratio);
+        // The screen: its top corners round, its bottom ones square.
+        const LaptopGeometry laptop = laptopGeometry(layout.body, aspect());
+        QPainterPath rounded;
+        rounded.addRoundedRect(laptop.screen, laptop.screenRadius, laptop.screenRadius);
+        QPainterPath square;
+        square.addRect(laptop.screen.adjusted(0, laptop.screenRadius, 0, 0));
+        viewport = rounded.united(square);
     } else {
-        canvasPath.addRoundedRect(canvas, kCardRadius, kCardRadius);
-        p.setPen(Qt::NoPen);
-        p.setBrush(theme.viewerCanvas);
-        p.drawPath(canvasPath);
+        // Off: the picture as a plain rect, where the device's would be.
+        p.fillRect(card, theme.viewerCanvas);
+        viewport.addRect(card);
     }
     if (!m_frame.isNull()) {
         p.save();
-        p.setClipPath(canvasPath);
+        p.setClipPath(viewport);
         const qreal dpr = m_liveScrub ? 1.0 : std::max(1.0, devicePixelRatioF());
-        const QSize target(std::max(1, static_cast<int>(std::round(canvas.width() * dpr))),
-                           std::max(1, static_cast<int>(std::round(canvas.height() * dpr))));
+        const QSize target(std::max(1, static_cast<int>(std::round(picture.width() * dpr))),
+                           std::max(1, static_cast<int>(std::round(picture.height() * dpr))));
         if (m_scaled.isNull() || m_scaled.size() != target || m_scaledFast != m_liveScrub) {
             m_scaled = m_frame.scaled(target, Qt::KeepAspectRatio,
                                       m_liveScrub ? Qt::FastTransformation : Qt::SmoothTransformation);
             m_scaled.setDevicePixelRatio(dpr);
             m_scaledFast = m_liveScrub;
         }
-        const QPointF topLeft(canvas.center().x() - m_scaled.width() / dpr / 2.0,
-                              canvas.center().y() - m_scaled.height() / dpr / 2.0);
+        const QPointF topLeft(picture.center().x() - m_scaled.width() / dpr / 2.0,
+                              picture.center().y() - m_scaled.height() / dpr / 2.0);
         p.drawImage(topLeft, m_scaled);
         p.restore();
     } else {
-        // Two quiet lines; the player's own play button is the only one.
-        // They wrap inside the screen, clear of its rounded corners, as a
-        // phone's narrow screen cannot hold the second on one line.
+        // Two quiet lines, wrapped inside the picture.
         p.save();
-        p.setClipRect(canvas);
-        const QRectF area = canvas.adjusted(18, 0, -18, 0);
-        QFont title = font();
-        title.setPixelSize(13);
-        title.setWeight(QFont::DemiBold);
-        QFont detail = font();
-        detail.setPixelSize(11);
+        p.setClipRect(card);
+        const QRectF area = card.adjusted(18, 0, -18, 0);
+        const QFont title = tokens::font(tokens::controlStrong);
+        const QFont detail = tokens::font(tokens::meta);
         const QString titleText = QStringLiteral("Your viewer");
         const QString detailText = QStringLiteral("The playhead frame shows here.");
         const int flags = Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap;
         const QRectF titleBox = QFontMetricsF(title).boundingRect(area, flags, titleText);
         const QRectF detailBox = QFontMetricsF(detail).boundingRect(area, flags, detailText);
         const qreal gap = 4;
-        const qreal top = canvas.center().y() - (titleBox.height() + gap + detailBox.height()) / 2.0;
+        const qreal top = card.center().y() - (titleBox.height() + gap + detailBox.height()) / 2.0;
         p.setFont(title);
         p.setPen(theme.viewerText);
         p.drawText(QRectF(area.left(), top, area.width(), titleBox.height()), flags, titleText);
@@ -887,27 +1438,18 @@ void ViewerWidget::paintEvent(QPaintEvent *) {
         p.drawText(QRectF(area.left(), top + titleBox.height() + gap, area.width(), detailBox.height()), flags, detailText);
         p.restore();
     }
-    // The player's shade and controls under what is edited on the picture:
-    // the caption (lifted over the controls while they show) and the masks'
-    // outlines and handles stay on top, unshaded.
-    m_overlay->paint(p);
-    if (!m_caption.isEmpty()) {
-        const QRectF caption = captionRect();
-        p.setPen(Qt::NoPen);
-        p.setBrush(theme.viewerCaption);
-        p.drawRoundedRect(caption, 4, 4);
-        p.setPen(theme.viewerCaptionBorder);
-        p.setBrush(Qt::NoBrush);
-        p.drawRoundedRect(caption, 4, 4);
-        p.setPen(theme.viewerCaptionText);
-        p.drawText(caption.adjusted(10, 4, -10, -4), Qt::AlignCenter | Qt::TextWordWrap, m_caption);
-    }
+    // Over the picture, inside the screen: the caption, the QC overlap box,
+    // safe zones and the comments' drawings; the masks' outlines on top.
+    p.save();
+    p.setClipPath(viewport);
+    paintCaption(p, m_overlapShown || m_overlapLevel > 0.0);
+    paintOverlap(p);
+    if (m_safeZones) paintSafeZones(p, picture, theme);
+    paintAnnotations(p);
+    p.restore();
     paintMasks(p);
-    if (layout.kind == Device::Phone) paintDeviceChrome(p, device, m_device, theme);
-    // Over the picture and its bar: they are what a platform's interface
-    // would cover. The rest of the controls keep off them (see layoutStage).
-    if (m_safeZones && portrait()) paintSafeZones(p, canvas, theme);
 }
+
 
 double ViewerWidget::fractionAt(double x) const {
     // Across the picture, as the player's bar maps it, so the frame skimmed

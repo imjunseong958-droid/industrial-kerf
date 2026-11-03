@@ -35,6 +35,9 @@
 #include "loudness_view.h"
 #include "program_strip.h"
 #include "qc_view.h"
+#include "components.h"
+#include "comment_row.h"
+#include "wiring/toolbar_wiring.h"
 
 #include <QAbstractItemView>
 #include <QAccessible>
@@ -162,7 +165,8 @@ private slots:
             if (popup) popup->close();
         });
         QTest::mouseClick(device, Qt::LeftButton, {}, device->discRect().center());
-        QVERIFY(menuShown);
+        // The kit's menu opens without blocking (ui::popupMenu).
+        QTRY_VERIFY(menuShown);
         QVERIFY(checkedWhileOpen);
         QVERIFY(device->isChecked());
 
@@ -173,7 +177,8 @@ private slots:
         window.m_chat->refreshTimes();
         const QString aged = relativeTime(QDateTime::currentDateTime().addSecs(-5 * 60), QDateTime::currentDateTime());
         QCOMPARE(window.m_chat->proposalTime()->text(), aged);
-        QCOMPARE(window.m_chat->m_welcomeTime->text(), aged);
+        // Comment rows say their age the short way (mockup .ctime: "5 min").
+        QCOMPARE(window.m_chat->m_welcomeTime->text(), review::age(QDateTime::currentDateTime().addSecs(-5 * 60), QDateTime::currentDateTime()));
         window.m_chat->setProposalShown(false, QString());
 
         // An empty phone: the two lines wrap inside its screen, no ink in
@@ -673,25 +678,24 @@ private slots:
         QCOMPARE(frame(area("browser")).right(), window.width() - 1);
         QVERIFY(viewer.height() > timeline.height());
 
-        // The stage: the picture's laptop (or card), rail, conversation, one
-        // group centred in it, the conversation level with the body and as
-        // tall.
+        // The stage ([OWNER] placement, mockup-spec 3): the conversation
+        // anchored 12 from the stage's right, 8 from its top and foot; the
+        // rail 12 right of the body; the body centred between 16 and the
+        // panel's left less 12.
         const auto checkGroup = [&window](const char *what) {
             const ViewerWidget::StageLayout stage = window.m_viewer->stageLayout();
-            const QRect body = stage.body.toAlignedRect();
             QVERIFY2(!stage.overlay, what);
             QCOMPARE(stage.kind, ViewerWidget::Device::Laptop);
             QCOMPARE(window.m_chat->geometry(), stage.panel);
             QCOMPARE(window.m_rail->geometry(), stage.rail);
             QVERIFY2(window.m_chat->isVisible() && window.m_rail->isVisible(), what);
+            QCOMPARE(stage.panel.right() + 1, window.m_viewer->width() - 12);
+            QCOMPARE(stage.panel.top(), 8);
+            QCOMPARE(stage.panel.height(), window.m_viewer->height() - 16);
             QCOMPARE(stage.rail.left() - qRound(stage.body.right()), window.m_viewer->stageGap());
-            QCOMPARE(stage.panel.left() - stage.rail.right() - 1, window.m_viewer->stageGap());
-            const int leftSpace = body.left();
-            const int rightSpace = window.m_viewer->width() - stage.panel.right() - 1;
-            QVERIFY2(std::abs(leftSpace - rightSpace) <= 2, qPrintable(QStringLiteral("%1: %2 | %3").arg(what).arg(leftSpace).arg(rightSpace)));
-            QVERIFY2(std::abs(stage.body.center().y() - QRectF(stage.panel).center().y()) <= 1, what);
-            QCOMPARE(stage.panel.top(), qRound(stage.body.top()));
-            QVERIFY2(std::abs(stage.panel.height() - stage.body.height()) <= 1, what);
+            const double leftSpace = stage.body.left() - 16;
+            const double rightSpace = (stage.panel.left() - 12) - stage.railRect.right();
+            QVERIFY2(std::abs(leftSpace - rightSpace) <= 1.0, qPrintable(QStringLiteral("%1: %2 | %3").arg(what).arg(leftSpace).arg(rightSpace)));
             QVERIFY2(stage.panel.height() >= ViewerWidget::kLeastChatHeight, what);
         };
         checkGroup("1440");
@@ -737,13 +741,14 @@ private slots:
         QCoreApplication::processEvents();
         QCOMPARE(window.m_viewer->videoRect(), card);
 
-        // The toolbar's bubble closes it; the picture is centred alone, the
-        // rail on its right, and the browsers keep their width.
+        // The (retired) toolbar switch closes it; the rail stays on the
+        // picture's right, and the browsers keep their width.
         window.m_chatToggle->click();
         QCoreApplication::processEvents();
         QVERIFY(!window.chatOpen() && !window.m_chat->isVisible());
         QVERIFY(!toggle->isChecked() && !window.m_chatToggle->isChecked() && !window.m_rail->chatButton()->isChecked());
-        QVERIFY(std::abs(window.m_viewer->videoRect().center().x() - window.m_viewer->width() / 2.0) <= 1);
+        // Closed, the rail is anchored 12 from the stage's right.
+        QCOMPARE(window.m_rail->geometry().right() + 1, window.m_viewer->width() - 12);
         QVERIFY(window.m_rail->isVisible());
         QCOMPARE(window.m_rail->x() - qRound(window.m_viewer->stageLayout().body.right()), ViewerWidget::kStageGap);
         QCOMPARE(frame(area("inspector")).width(), browser.width());
@@ -757,7 +762,8 @@ private slots:
         // The header's close button, with its shortcut in its tip.
         ChatIconButton *close = window.m_chat->closeButton();
         QVERIFY(close->isVisible());
-        QVERIFY(close->toolTip().startsWith(QStringLiteral("Close Kerf Assistant")));
+        QCOMPARE(ui::tipName(close), QStringLiteral("Close"));
+        QCOMPARE(ui::tipShortcut(close), QStringLiteral("⇧⌘J"));
         QTest::mouseClick(close, Qt::LeftButton);
         QCoreApplication::processEvents();
         QVERIFY(!window.chatOpen() && !toggle->isChecked());
@@ -1043,11 +1049,13 @@ private slots:
         QCoreApplication::processEvents();
         QVERIFY(window.m_inspector->isVisible());
         QCOMPARE(browser->page(), BrowserPanel::Page::Presets);
-        // Titles is not built yet: it says so and cannot be chosen.
-        QVERIFY(!browser->pageButton(BrowserPanel::Page::Titles)->isEnabled());
-        QVERIFY(browser->pageButton(BrowserPanel::Page::Titles)->toolTip().contains(QStringLiteral("Coming in this release")));
+        // Titles (the catalog's generators) can be chosen too, and leaves
+        // the Inspector in place.
+        QVERIFY(browser->pageButton(BrowserPanel::Page::Titles)->isEnabled());
         browser->setPage(BrowserPanel::Page::Titles);
-        QCOMPARE(browser->page(), BrowserPanel::Page::Presets);
+        QCOMPARE(browser->page(), BrowserPanel::Page::Titles);
+        QVERIFY(window.m_inspector->isVisible());
+        browser->setPage(BrowserPanel::Page::Presets);
         // Window ▸ Effects closes the browser, and opens it on that page.
         QAction *effects = window.m_commands->action(QStringLiteral("window.effects"));
         effects->trigger();
@@ -1096,20 +1104,25 @@ private slots:
         QAction *follows = window.m_commands->action(QStringLiteral("window.inspectorFollows"));
         QVERIFY(follows && follows->isCheckable());
         QCOMPARE(follows->shortcut(), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_4));
-        // The kinds: Video now; Audio and Info say they are coming.
+        // The kinds: Video, Audio and Info (⌃⌥4/5/6), one chosen at a time.
         InspectorColumn *column = window.m_inspectorColumn;
         QAction *video = window.m_commands->action(QStringLiteral("inspector.video"));
         QVERIFY(video->isChecked() && video->isEnabled());
         QCOMPARE(video->shortcut(), QKeySequence(Qt::META | Qt::ALT | Qt::Key_4));
-        for (const char *id : {"inspector.audio", "inspector.info"}) {
+        const QList<QPair<const char *, InspectorColumn::Kind>> kinds{{"inspector.audio", InspectorColumn::Kind::Audio},
+                                                                      {"inspector.info", InspectorColumn::Kind::Info}};
+        for (const auto &[id, kindOf] : kinds) {
             QAction *kind = window.m_commands->action(QString::fromLatin1(id));
-            QVERIFY2(!kind->isEnabled(), id);
-            QCOMPARE(window.m_commands->reason(QString::fromLatin1(id)), QStringLiteral("Coming in this release"));
+            QVERIFY2(kind->isEnabled(), id);
+            QVERIFY2(window.m_commands->reason(QString::fromLatin1(id)).isEmpty(), id);
+            QVERIFY(column->kindButton(kindOf)->isEnabled());
+            kind->trigger();
+            QCOMPARE(column->kind(), kindOf);
+            QVERIFY2(kind->isChecked() && !video->isChecked(), id);
         }
-        QVERIFY(!column->kindButton(InspectorColumn::Kind::Audio)->isEnabled());
-        QVERIFY(column->kindButton(InspectorColumn::Kind::Info)->toolTip().contains(QStringLiteral("Coming in this release")));
-        column->setKind(InspectorColumn::Kind::Info);
+        video->trigger();
         QCOMPARE(column->kind(), InspectorColumn::Kind::Video);
+        QVERIFY(video->isChecked());
         // Window ▸ Source Monitor shows the column's Source page, and back.
         QAction *source = window.m_commands->action(QStringLiteral("window.source"));
         source->trigger();
@@ -1254,25 +1267,40 @@ private slots:
             }
         };
         unclipped(QStringLiteral("column"));
-        // Start, End and Duration share the column in thirds, and the kind
-        // line runs to the column's edge (under ⋯), so neither is cut short
+        // Start, End and Duration share the column in thirds, and the meta
+        // line runs to the More button, so neither is cut short
         // at 300 points (text widths differ by platform; the room does not).
         QCOMPARE(inspector->m_timingFields.size(), 3);
         for (ScrubField *field : inspector->m_timingFields)
             QVERIFY2(field->width() >= (inspector->width() - 2 * 16 - 2 * 8) / 3 - 1, qPrintable(QString::number(field->width())));
-        QVERIFY(inspector->m_kind->x() + inspector->m_kind->width() >= inspector->width() - 16 - 1);
-        // Everything of the video, folded, is in view.
-        QScrollBar *scroll = inspector->scrollArea()->verticalScrollBar();
-        QVERIFY2(scroll->maximum() == 0, qPrintable(QStringLiteral("scrolls %1 in %2").arg(scroll->maximum()).arg(inspector->height())));
-        const QRect viewport(inspector->scrollArea()->viewport()->mapTo(inspector, QPoint()), inspector->scrollArea()->viewport()->size());
-        for (const char *section : {"crop", "anchor", "linkedAudio", "masks", "effects", "source"}) {
-            InspectorSection *found = inspector->section(QString::fromLatin1(section));
-            QVERIFY2(found, section);
-            const QRect header(found->header()->mapTo(inspector, QPoint()), found->header()->size());
-            QVERIFY2(viewport.contains(header), section);
+        {
+            // The clip header's meta line runs to the More button, 8 short of it.
+            const int kindRight = inspector->m_kind->mapTo(inspector, QPoint(inspector->m_kind->width(), 0)).x();
+            const int moreLeft = inspector->m_more->mapTo(inspector, QPoint()).x();
+            QCOMPARE(kindRight, moreLeft - 8);
         }
+        // The body scrolls with its bar hidden (mockup .ibody); while more
+        // is below, a 12 pt fade sits at its foot. Every group is reachable.
+        QScrollBar *scroll = inspector->scrollArea()->verticalScrollBar();
+        QCOMPARE(inspector->scrollArea()->verticalScrollBarPolicy(), Qt::ScrollBarAlwaysOff);
+        const QRect viewport(inspector->scrollArea()->viewport()->mapTo(inspector, QPoint()), inspector->scrollArea()->viewport()->size());
+        const auto reachable = [inspector, scroll, &viewport](const char *what) {
+            QCOMPARE(inspector->m_fade->isVisible(), scroll->value() < scroll->maximum());
+            for (const char *section : {"compositing", "transform", "crop", "masks", "effects"}) {
+                InspectorSection *found = inspector->section(QString::fromLatin1(section));
+                QVERIFY2(found, section);
+                inspector->scrollArea()->ensureWidgetVisible(found->header(), 0, 0);
+                QCoreApplication::processEvents();
+                const QRect header(found->header()->mapTo(inspector, QPoint()), found->header()->size());
+                QVERIFY2(viewport.contains(header), qPrintable(QStringLiteral("%1: %2").arg(QString::fromLatin1(what), QString::fromLatin1(section))));
+                QCOMPARE(inspector->m_fade->isVisible(), scroll->value() < scroll->maximum());
+            }
+            scroll->setValue(0);
+            QCoreApplication::processEvents();
+        };
+        reachable("column");
         // The same in a 16:9 project (the laptop): one stage row for every
-        // shape, so the column is as tall and nothing scrolls either.
+        // shape, so the column is as tall.
         {
             QJsonObject wide = everyKindSnapshot(2);
             QJsonObject timeline = wide.value(QStringLiteral("timeline")).toObject();
@@ -1282,10 +1310,7 @@ private slots:
             window.applySnapshot(wide);
             QCoreApplication::processEvents();
             QCOMPARE(window.m_viewer->device(), ViewerWidget::Device::Laptop);
-            QVERIFY2(scroll->maximum() == 0, qPrintable(QStringLiteral("16:9 scrolls %1 in %2").arg(scroll->maximum()).arg(inspector->height())));
-            InspectorSection *source = inspector->section(QStringLiteral("source"));
-            QVERIFY(source);
-            QVERIFY(viewport.contains(QRect(source->header()->mapTo(inspector, QPoint()), source->header()->size())));
+            reachable("16:9 column");
             unclipped(QStringLiteral("16:9 column"));
         }
         // In a 1440 × 900 window the open Transform and Composite modules
@@ -1304,36 +1329,32 @@ private slots:
             window.resize(1600, 1000);
             QCoreApplication::processEvents();
         }
-        // Every row lines its controls up after one label column, and ends
-        // at one edge: the reset lane's, 24 points inside the column's.
-        int controlsRight = -1;
+        // Every row is on the column's grid (mockup .row: pad 0 8 0 12,
+        // 84 | 1fr | 56 | 20, 8 between): the label 12 in and 84 wide (a
+        // wide row's runs on), and the keyframe column at the same place on
+        // every row, button or not, so the values end at one edge.
+        int keyframeLeft = -1;
         for (InspectorRow *row : inspector->findChildren<InspectorRow *>()) {
-            QCOMPARE(row->label()->width(), InspectorRow::kLabelWidth);
             QCOMPARE(row->height(), InspectorRow::kHeight);
             if (!row->isVisibleTo(inspector)) continue;
-            int right = -1;
-            for (QWidget *child : row->findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly))
-                if (child != row->label() && child->isVisibleTo(row) && child->width() > InspectorRow::kResetLane &&
-                    child->sizePolicy().horizontalPolicy() != QSizePolicy::Fixed)
-                    right = std::max(right, child->geometry().right());
-            // One value field is the column's one width; two (X and Y, L and
-            // R) share the row equally, 78 + 8 + 78 at a 300-point column.
-            QList<ScrubField *> fields;
-            for (ScrubField *field : row->findChildren<ScrubField *>(QString(), Qt::FindDirectChildrenOnly))
-                if (field->isVisibleTo(row)) fields << field;
-            if (fields.size() == 2) {
-                // Within a point: the 303-point column splits unevenly.
-                QVERIFY(std::abs(fields.at(0)->width() - fields.at(1)->width()) <= 1);
-                QVERIFY(fields.at(0)->width() >= InspectorRow::kValueField);
-            } else {
-                for (ScrubField *field : fields) QCOMPARE(field->width(), InspectorRow::kValueField);
+            QCOMPARE(row->label()->x(), InspectorRow::kPadLeft);
+            if (!row->isWide()) QCOMPARE(row->label()->width(), InspectorRow::kLabelWidth);
+            else QVERIFY(row->label()->width() >= InspectorRow::kLabelWidth);
+            const QRect keyframe = row->keyframeButton()->geometry();
+            QCOMPARE(keyframe.width(), InspectorRow::kKeyframe);
+            QCOMPARE(keyframe.right() + 1, row->width() - InspectorRow::kPadRight);
+            const int left = row->keyframeButton()->mapTo(inspector, QPoint()).x();
+            if (keyframeLeft < 0) keyframeLeft = left;
+            QCOMPARE(left, keyframeLeft);
+            if (row->valueSlot()->isVisibleTo(row)) {
+                QCOMPARE(row->valueSlot()->width(), InspectorRow::kValueField);
+                QCOMPARE(row->valueSlot()->geometry().right() + 1 + InspectorRow::kGap, keyframe.left());
             }
-            if (right < 0) continue;
-            if (controlsRight < 0) controlsRight = right;
-            QVERIFY2(right <= controlsRight, qPrintable(row->label()->text()));
+            for (QWidget *child : row->findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly))
+                if (child != row->keyframeButton() && child->isVisibleTo(row))
+                    QVERIFY2(child->geometry().right() < keyframe.left(), qPrintable(row->label()->text()));
         }
-        QVERIFY(controlsRight > 0);
-        QVERIFY(controlsRight <= inspector->width() - 16 - 24 + 1);
+        QVERIFY(keyframeLeft > 0);
         // At the narrower 300-point column, still nothing is cut off.
         auto *alone = new InspectorPanel;
         alone->setEffectCatalog(QJsonArray{});
@@ -1354,7 +1375,8 @@ private slots:
                     if (!child->isVisibleTo(row)) continue;
                     QVERIFY2(child->geometry().right() < row->width(), qPrintable(QStringLiteral("%1: %2").arg(what, row->label()->text())));
                 }
-                QVERIFY2(row->mapTo(alone, QPoint(row->width(), 0)).x() <= alone->width() - 16,
+                // Rows span the column and pad themselves (0 8 0 12).
+                QVERIFY2(row->mapTo(alone, QPoint(row->width(), 0)).x() <= alone->width(),
                          qPrintable(QStringLiteral("%1 %2: right %3, min %4").arg(what, row->label()->text())
                                         .arg(row->mapTo(alone, QPoint(row->width(), 0)).x()).arg(row->minimumSizeHint().width())));
             }
@@ -1481,47 +1503,47 @@ private slots:
 
         // The title, and under it the project's state, centred together.
         QCOMPARE(window.m_projectTitle->text(), QStringLiteral("Harbor Teaser"));
-        QCOMPARE(window.m_projectSubtitle->text(), QStringLiteral("Saved · 16:9 · 24 fps"));
+        // The subtitle is the engine's: "Edited 2m ago · rev N" (mockup-spec 1).
+        QCOMPARE(window.m_projectSubtitle->text(), window.m_toolbarWiring->subtitleText());
+        QVERIFY(window.m_projectSubtitle->text().endsWith(QStringLiteral("rev %1").arg(window.m_bus->revision())));
         QVERIFY(window.m_projectSubtitle->geometry().top() >= window.m_projectTitle->geometry().bottom());
         QCOMPARE(window.m_projectSubtitle->geometry().center().x(), window.m_projectTitle->geometry().center().x());
-        QJsonObject edited = sharedStatus();
-        edited.insert(QStringLiteral("changed"), true);
-        window.handleEvent(QJsonObject{{"type", "collab"}, {"status", edited}});
-        QCOMPARE(window.m_projectSubtitle->text(), QStringLiteral("Edited · 16:9 · 24 fps"));
-        // The toolbar's format bank names the format as the subtitle does.
+        // The toolbar's format bank names the format.
         {
             const QString times = QStringLiteral(" × ");
             QCOMPARE(window.m_formatBank->toolTip(), QStringLiteral("16:9 · 1920") + times + QStringLiteral("1080"));
             window.syncCanvasPreset(QSize(1080, 1920));
             QCOMPARE(window.m_formatBank->toolTip(), QStringLiteral("9:16 · 1080") + times + QStringLiteral("1920"));
-            QCOMPARE(window.m_projectSubtitle->text(), QStringLiteral("Edited · 9:16 · 24 fps"));
             window.syncCanvasPreset(QSize(1920, 1080));
             QCOMPARE(window.m_formatBank->currentIndex(), 0);
         }
         // The Program strip: its name, the mask tools and the viewer's
-        // switches as the registry's actions (the ones still to come say so).
+        // switches as the registry's actions, all of them live now.
         ProgramStrip *strip = window.m_programStrip;
         QVERIFY(strip->buttonFor(window.m_maskTools.at(0)));
         QAction *safe = window.m_commands->action(QStringLiteral("view.safeZones"));
         QVERIFY(strip->buttonFor(safe));
         QCOMPARE(safe->shortcut(), QKeySequence(Qt::Key_Apostrophe));
         QAction *dim = window.m_commands->action(QStringLiteral("view.dim"));
-        QVERIFY(strip->buttonFor(dim) && !dim->isEnabled());
-        QVERIFY(dim->toolTip().contains(QStringLiteral("Coming in this release")));
+        QVERIFY(strip->buttonFor(dim) && dim->isEnabled());
+        QVERIFY(window.m_commands->reason(QStringLiteral("view.dim")).isEmpty());
         QVERIFY(strip->buttonFor(window.m_commands->action(QStringLiteral("viewer.zoom"))));
         QVERIFY(!strip->previewShown());
         // The timeline's header: after its name, how many tracks and how
         // long; on the right, the zoom beside the track heights.
-        QCOMPARE(window.m_timelineDetail->text(), QStringLiteral("9 tracks  ·  00:00:18:00"));
+        QCOMPARE(window.m_timelineDetail->text(), QStringLiteral("9 tracks · 00:00:18:00"));
         QVERIFY(window.m_timelineDetail->isVisible() && window.m_timelineZoom->isVisible());
         ads::CDockAreaTitleBar *header = workspace->panel(QStringLiteral("timeline"))->dockAreaWidget()->titleBar();
         QCOMPARE(window.m_timelineDetail->parentWidget(), header);
         QCOMPARE(header->indexOf(window.m_timelineDetail), header->indexOf(header->tabBar()) + 1);
         QVERIFY(window.m_timelineZoom->x() > header->width() / 2);
-        // The selection on the status bar's left: a click, then ⌘-click adds.
-        QVERIFY(window.m_selectionStatus->text().isEmpty());
+        // The selection on the status bar's left (mockup-spec 14): a click,
+        // then ⌘-click adds.
+        StatusText *selection = window.m_toolbarWiring->m_selection;
+        QVERIFY(selection->fullText().isEmpty());
         window.clickSelectClip(QStringLiteral("v1a"));
-        QCOMPARE(window.m_selectionStatus->text(), QStringLiteral("1 clip selected  ·  00:00:06:00"));
+        QVERIFY2(selection->text().endsWith(QStringLiteral(" · ")), qPrintable(selection->fullText()));
+        QCOMPARE(selection->monoTail(), ToolbarWiring::selectionText(window.m_bus->timeline(), {QStringLiteral("v1a")}, 24.0).second);
         window.m_timeline->fitToWidth(window.m_timelineScroll->viewport()->width());
         QCoreApplication::processEvents();
         const QRect other = window.m_timeline->clipBounds(QStringLiteral("v1b"));
@@ -1529,12 +1551,12 @@ private slots:
         QTest::mouseClick(window.m_timeline, Qt::LeftButton, Qt::ControlModifier, other.center());
         QCOMPARE(window.m_selectedClips, (QStringList{QStringLiteral("v1a"), QStringLiteral("v1b")}));
         QCOMPARE(window.m_bus->selection(), window.m_selectedClips);
-        QCOMPARE(window.m_selectionStatus->text(), QStringLiteral("2 clips selected  ·  00:00:11:00"));
+        QCOMPARE(selection->text(), QStringLiteral("2 clips · "));
         QCOMPARE(window.m_inspector->selection(), window.m_selectedClips);
         QTest::mouseClick(window.m_timeline, Qt::LeftButton, Qt::ControlModifier, other.center());
         QCOMPARE(window.m_selectedClips, QStringList{QStringLiteral("v1a")});
         window.clickSelectClip(QString());
-        QVERIFY(window.m_selectionStatus->text().isEmpty());
+        QVERIFY(selection->fullText().isEmpty());
     }
 };
 

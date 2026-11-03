@@ -1,6 +1,8 @@
-// MainWindow's Program stage: the player overlay, the program level, the
-// transport, the device previews and safe zones, the rail and the masks.
-// Moved verbatim from main_window.cpp (Q-SKELETON, W1); Q-STAGE owns it in W2.
+// MainWindow's Program stage (Q-STAGE, W2): the viewer's stage with the
+// device, the rail, the comments panel, the scrub strip, the agent HUD and
+// the Source column (placed by ViewerWidget::stageLayout), the Program strip,
+// the device previews and safe zones, the transport's state and the masks.
+// The stage's own state and its bus traffic are StageWiring's.
 
 #include "main_window.h"
 #include "ask_prompt.h"
@@ -95,6 +97,7 @@
 #include "inspector_column.h"
 #include "program_strip.h"
 #include "stage_rail.h"
+#include "wiring/stage_wiring.h"
 
 namespace kerf {
 
@@ -126,11 +129,8 @@ void MainWindow::setupPlayerOverlay() {
 }
 
 void MainWindow::updateProgramLevel() {
-    VuMeter *meter = m_rail ? m_rail->meter() : nullptr;
-    if (!meter) return;
-    // Paused, nothing sounds, whatever lies under the playhead.
-    meter->setPlaying(m_playing);
-    meter->setTarget(m_playing ? vuNeedle(programPeak(m_project, m_artwork, m_playhead)) : 0.0);
+    // The rail's meter follows the bridge's `meter` events itself (ProgramMeter);
+    // nothing is estimated from the clips any more.
 }
 
 void MainWindow::updateTransport() {
@@ -200,53 +200,30 @@ void MainWindow::setSafeZones(bool shown) {
 }
 
 void MainWindow::showDeviceMenu() {
-    // The phone's choices for a portrait picture, the laptop's for a wide one.
-    RailButton *button = m_rail->deviceButton();
-    QMenu menu(this);
-    if (m_viewer->landscape()) {
-        menu.addAction(m_laptopActions.at(0));
-        // In the rail's own menu, the plain card is plainly "Off".
-        QAction *off = menu.addAction(laptopPreviewLabel(LaptopPreview::Off));
-        off->setCheckable(true);
-        off->setChecked(m_viewer->laptopPreview() == LaptopPreview::Off);
-        connect(off, &QAction::triggered, this, [this] { setLaptopPreview(LaptopPreview::Off); });
-    } else {
-        menu.addActions(m_deviceActions);
-    }
-    menu.exec(button->mapToGlobal(QPoint(button->width() + 4, 0)));
-    updateViewerRail();
+    // The rail's own Device menu; its choice comes back as devicePreviewRequested.
+    m_rail->showDeviceMenu();
 }
 
 void MainWindow::updateViewerRail() {
-    // The phone and safe zones are a portrait picture's, the laptop a wide
-    // one's: the rail offers each only for its own.
-    const bool portrait = m_viewer->portrait();
-    const bool landscape = m_viewer->landscape();
+    // The phone is the phone formats' (9:16, 1:1, 4:5), the laptop the wide
+    // ones': the rail offers the device the picture's shape shows in.
+    const bool phone = m_viewer->phoneFormat();
     const DevicePreview preview = m_viewer->devicePreview();
     const LaptopPreview laptop = m_viewer->laptopPreview();
+    const bool shown = phone ? preview != DevicePreview::Off : laptop != LaptopPreview::Off;
     RailButton *device = m_rail->deviceButton();
-    RailButton *safe = m_rail->safeZonesButton();
-    device->setVisible(portrait || landscape);
-    safe->setVisible(portrait);
-    const bool shown = landscape ? laptop != LaptopPreview::Off : preview != DevicePreview::Off;
     {
         const QSignalBlocker blocker(device);
         device->setChecked(shown);
     }
-    device->setGlyph(landscape ? RailButton::Glyph::Laptop : RailButton::Glyph::Phone);
-    // Its name either way; off, its glyph is slashed (see RailButton).
-    device->setLabel(landscape ? QStringLiteral("Laptop") : QStringLiteral("Phone"));
-    device->setToolTip(QStringLiteral("Device preview: %1").arg(landscape ? laptopPreviewLabel(laptop) : devicePreviewLabel(preview)));
-    device->setAccessibleName(device->toolTip());
-    {
-        const QSignalBlocker blocker(safe);
-        safe->setChecked(m_viewer->safeZonesShown());
-    }
-    safe->setToolTip(m_viewer->safeZonesShown() ? QStringLiteral("Hide Safe Zones") : QStringLiteral("Show Safe Zones"));
-    safe->setAccessibleName(safe->toolTip());
+    device->setGlyph(phone ? RailButton::Glyph::Phone : RailButton::Glyph::Laptop);
+    m_rail->setDevicePreview(m_viewer->pictureAspect(), shown);
     for (QAction *action : std::as_const(m_deviceActions)) {
         const QSignalBlocker blocker(action);
         action->setChecked(static_cast<DevicePreview>(action->data().toInt()) == preview);
+        // "Phone · Feed" for a square or 4:5 picture.
+        if (static_cast<DevicePreview>(action->data().toInt()) != DevicePreview::Off)
+            action->setText(devicePreviewLabel(DevicePreview::Phone, m_viewer->pictureAspect()));
     }
     for (QAction *action : std::as_const(m_laptopActions)) {
         const QSignalBlocker blocker(action);
@@ -261,15 +238,20 @@ void MainWindow::updateViewerRail() {
         const QList<QPair<QString, bool>> switches{{QStringLiteral("view.safeZones"), m_viewer->safeZonesShown()},
                                                    {QStringLiteral("view.devicePreview"), shown}};
         for (const auto &[id, on] : switches)
-            if (QAction *action = m_commands->action(id)) {
-                const QSignalBlocker blocker(action);
-                action->setChecked(on);
+            if (QAction *action = m_commands->action(id); action && action->isChecked() != on) {
+                {
+                    const QSignalBlocker blocker(action);
+                    action->setChecked(on);
+                }
+                // A blocked toggle tells the strip's button nothing: tell it.
+                emit action->changed();
             }
     }
 }
 
-// The Program monitor: its strip over the viewer's stage, the conversation
-// and the rail beside the picture (built by buildReview), the device previews.
+// The Program monitor: its strip over the viewer's stage; in the stage the
+// device, the rail and the comments panel (built by buildReview), the scrub
+// strip and the agent HUD (StageWiring), and later the Source column.
 void MainWindow::buildStage() {
     m_viewerFrame = new QFrame;
     m_viewerFrame->setObjectName(QStringLiteral("viewerFrame"));
@@ -284,26 +266,26 @@ void MainWindow::buildStage() {
     setupPlayerOverlay();
 
     m_viewer->setStage(m_rail, m_chat);
+    m_stageWiring->build();
     {
         const QSettings settings;
-        // The first time, the width this Mac's conversation had as a docked column.
-        const int width = settings.value(QStringLiteral("viewer/chatWidth"),
-                                         settings.value(QStringLiteral("workspace/assistantWidth"), ViewerWidget::kDefaultChatWidth))
-                              .toInt();
-        m_viewer->setChatWidth(width);
+        // The panel's width beside a 16:9 picture and beside a phone, each
+        // remembered on this Mac.
+        m_viewer->setChatWidth(false, settings.value(QStringLiteral("viewer/chatWidth"), ViewerWidget::kDefaultChatWidth).toInt());
+        m_viewer->setChatWidth(true, settings.value(QStringLiteral("viewer/chatWidthPhone"), ViewerWidget::kPhoneChatWidth).toInt());
         m_viewer->setChatOpen(settings.value(QStringLiteral("viewer/chatOpen"), true).toBool());
         m_viewer->setDevicePreview(devicePreviewFromKey(settings.value(QStringLiteral("viewer/devicePreview")).toString()));
         m_viewer->setLaptopPreview(laptopPreviewFromKey(settings.value(QStringLiteral("viewer/laptopPreview")).toString()));
-        m_viewer->setSafeZones(settings.value(QStringLiteral("viewer/safeZones"), false).toBool());
+        m_viewer->setSafeZones(settings.value(QStringLiteral("viewer/safeZones"), true).toBool());
     }
     {
         auto *devices = new QActionGroup(this);
-        for (const DevicePreview preview : {DevicePreview::Island, DevicePreview::Off}) {
+        for (const DevicePreview preview : {DevicePreview::Phone, DevicePreview::Off}) {
             auto *action = new QAction(devicePreviewLabel(preview), devices);
             action->setObjectName(QStringLiteral("viewer.device.%1").arg(devicePreviewKey(preview)));
             action->setCheckable(true);
             action->setData(static_cast<int>(preview));
-            action->setToolTip(QStringLiteral("Show a portrait picture in a phone, or on a plain card"));
+            action->setToolTip(QStringLiteral("Show a 9:16, 1:1 or 4:5 picture in a phone, or as a plain picture"));
             connect(action, &QAction::triggered, this, [this, preview] { setDevicePreview(preview); });
             m_deviceActions.append(action);
         }
@@ -313,28 +295,41 @@ void MainWindow::buildStage() {
             action->setObjectName(QStringLiteral("viewer.laptop.%1").arg(laptopPreviewKey(preview)));
             action->setCheckable(true);
             action->setData(static_cast<int>(preview));
-            action->setToolTip(QStringLiteral("Show a wide picture in a laptop, or on a plain card"));
+            action->setToolTip(QStringLiteral("Show a wide picture in a laptop, or as a plain picture"));
             connect(action, &QAction::triggered, this, [this, preview] { setLaptopPreview(preview); });
             m_laptopActions.append(action);
         }
         m_safeZonesAction = new QAction(QStringLiteral("Safe Zones"), this);
         m_safeZonesAction->setObjectName(QStringLiteral("viewer.safeZones"));
         m_safeZonesAction->setCheckable(true);
-        m_safeZonesAction->setToolTip(QStringLiteral("Outline where a vertical-video app's buttons and captions cover the picture"));
+        m_safeZonesAction->setToolTip(QStringLiteral("Action safe (93%) and title safe (90%) over the picture"));
         connect(m_safeZonesAction, &QAction::toggled, this, &MainWindow::setSafeZones);
-        connect(m_rail->deviceButton(), &QAbstractButton::clicked, this, &MainWindow::showDeviceMenu);
-        connect(m_rail->safeZonesButton(), &QAbstractButton::toggled, this, &MainWindow::setSafeZones);
+        // The rail's Device menu chose the device or the plain picture.
+        connect(m_rail, &StageRail::devicePreviewRequested, this, [this](bool on) {
+            if (m_viewer->phoneFormat()) setDevicePreview(on ? DevicePreview::Phone : DevicePreview::Off);
+            else setLaptopPreview(on ? LaptopPreview::Laptop : LaptopPreview::Off);
+        });
         updateViewerRail();
     }
-    connect(m_chat, &ChatPanel::widthDragged, m_viewer, &ViewerWidget::setChatWidth);
-    connect(m_chat, &ChatPanel::widthDragFinished, this,
-            [this] { QSettings().setValue(QStringLiteral("viewer/chatWidth"), m_viewer->chatWidth()); });
+    connect(m_chat, &ChatPanel::widthDragged, m_viewer, qOverload<int>(&ViewerWidget::setChatWidth));
+    connect(m_chat, &ChatPanel::widthDragFinished, this, [this] {
+        QSettings().setValue(m_viewer->phoneFormat() ? QStringLiteral("viewer/chatWidthPhone") : QStringLiteral("viewer/chatWidth"),
+                             m_viewer->chatWidth());
+    });
 }
 
-// The Program strip's switches: the mask tools, then annotations, safe
-// zones and dim, then the zoom; registry actions, so they show the menus'
-// state, reasons and shortcuts.
+// The Program strip's switches: the mask tools (⇧R ⇧E ⇧P), then
+// annotations, safe zones and dim, then the zoom; registry actions, so they
+// show the menus' state, reasons and shortcuts. Then the stage's wiring.
 void MainWindow::setupProgramStrip() {
+    const QList<QKeySequence> maskKeys{QKeySequence(Qt::SHIFT | Qt::Key_R), QKeySequence(Qt::SHIFT | Qt::Key_E),
+                                       QKeySequence(Qt::SHIFT | Qt::Key_P)};
+    for (int index = 0; index < m_maskTools.size() && index < maskKeys.size(); ++index) {
+        QAction *tool = m_maskTools.at(index);
+        if (tool->shortcut().isEmpty()) tool->setShortcut(maskKeys.at(index));
+        // Its key works wherever the window has the focus.
+        if (!m_programStrip->QWidget::actions().contains(tool)) m_programStrip->addAction(tool);
+    }
     QList<QAction *> actions(m_maskTools);
     actions << nullptr;
     for (const char *id : {"view.annotations", "view.safeZones", "view.dim"}) actions << m_commands->action(QString::fromLatin1(id));
@@ -344,6 +339,7 @@ void MainWindow::setupProgramStrip() {
         actions << zoom;
     }
     m_programStrip->setActions(actions);
+    m_stageWiring->attach();
 }
 
 } // namespace kerf

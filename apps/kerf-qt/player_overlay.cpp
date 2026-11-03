@@ -3,10 +3,6 @@
 #include "editor_theme.h"
 
 #include <QFontMetricsF>
-#include <QLinearGradient>
-#include <QPainter>
-#include <QPainterPath>
-#include <QPolygonF>
 #include <QVariantAnimation>
 #include <QWidget>
 
@@ -19,11 +15,6 @@ namespace {
 
 constexpr std::array<PlayerOverlay::Control, 3> kControls{PlayerOverlay::Control::Play, PlayerOverlay::Control::StepBack,
                                                           PlayerOverlay::Control::StepForward};
-
-QColor faded(QColor color, qreal amount) {
-    color.setAlphaF(color.alphaF() * amount);
-    return color;
-}
 
 } // namespace
 
@@ -180,174 +171,28 @@ double PlayerOverlay::fractionAt(double x) const {
     return std::clamp((x - bar.left()) / std::max(1.0, bar.width()), 0.0, 1.0);
 }
 
-void PlayerOverlay::paintGlyph(QPainter &p, Control control, const QRectF &area) const {
-    const double size = m_compact ? 20.0 : kGlyphSize;
-    const double unit = size / 24.0;
-    const QPointF o = area.center() - QPointF(size / 2.0, size / 2.0);
-    const auto at = [&](double x, double y) { return o + QPointF(x * unit, y * unit); };
-    p.setPen(Qt::NoPen);
-    p.setBrush(controlEnabled(control) ? editorTheme().playerInk : editorTheme().playerInkDisabled);
-    switch (control) {
-    case Control::Play:
-        if (m_playing) {
-            p.drawRoundedRect(QRectF(at(6.5, 5), at(10, 19)), unit, unit);
-            p.drawRoundedRect(QRectF(at(14, 5), at(17.5, 19)), unit, unit);
-        } else {
-            p.drawPolygon(QPolygonF{at(7.5, 4.5), at(19.5, 12), at(7.5, 19.5)});
-        }
-        break;
-    case Control::StepBack:
-        p.drawRoundedRect(QRectF(at(5.5, 6), at(8, 18)), 0.6 * unit, 0.6 * unit);
-        p.drawPolygon(QPolygonF{at(18.5, 6), at(9.5, 12), at(18.5, 18)});
-        break;
-    case Control::StepForward:
-        p.drawRoundedRect(QRectF(at(16, 6), at(18.5, 18)), 0.6 * unit, 0.6 * unit);
-        p.drawPolygon(QPolygonF{at(5.5, 6), at(14.5, 12), at(5.5, 18)});
-        break;
-    }
-}
-
-void PlayerOverlay::paint(QPainter &p) const {
-    if (m_opacity <= 0.0 || m_rect.isEmpty()) return;
-    const EditorTheme &t = editorTheme();
-    p.save();
-    p.setRenderHint(QPainter::Antialiasing);
-    p.setOpacity(p.opacity() * m_opacity);
-    // The gradient at the foot: clear, then the shade, held under the
-    // controls and the time, so they read on a white picture too.
-    const double footHeight = std::max(m_rect.height() * 0.25, double(m_compact ? 48 : kRowHeight + 24));
-    const double hold = m_compact ? 34.0 : kRowHeight + 6.0;
-    QLinearGradient foot(0, m_rect.bottom() - footHeight, 0, m_rect.bottom());
-    foot.setColorAt(0, faded(t.playerShade, 0));
-    foot.setColorAt(std::clamp(1.0 - hold / footHeight, 0.0, 1.0), t.playerShade);
-    foot.setColorAt(1, t.playerShade);
-    p.fillRect(QRectF(m_rect.left(), m_rect.bottom() - footHeight, m_rect.width(), footHeight), foot);
-    if (m_compact && controlsShown()) {
-        // A shade at the top for the cluster.
-        const double topHeight = kCompactHitSize + 32.0;
-        QLinearGradient top(0, m_rect.top(), 0, m_rect.top() + topHeight);
-        top.setColorAt(0, t.playerTopShade);
-        top.setColorAt((kCompactHitSize + 8.0) / topHeight, t.playerTopShade);
-        top.setColorAt(1, faded(t.playerTopShade, 0));
-        p.fillRect(QRectF(m_rect.left(), m_rect.top(), m_rect.width(), topHeight), top);
-    }
-
-    // The bar: unplayed, played to the playhead, the scrubber under the pointer.
-    const QRectF bar = barRect();
-    const double played = m_duration > 0 ? std::clamp(m_time / m_duration, 0.0, 1.0) : 0.0;
-    p.setPen(Qt::NoPen);
-    p.setBrush(t.playerTrack);
-    p.drawRect(bar);
-    p.setBrush(t.playerPlayed);
-    p.drawRect(QRectF(bar.left(), bar.top(), bar.width() * played, bar.height()));
-    const bool hovering = m_overBar || m_scrubbing;
-    if (hovering) {
-        const QPointF knob(bar.left() + bar.width() * played, bar.center().y());
-        p.drawEllipse(knob, kScrubber / 2.0, kScrubber / 2.0);
-        // The time under the pointer, over the bar.
-        const QString tip = timelineTimecode(fractionAt(m_pointer.x()) * m_duration, m_fps);
-        const QFont font = timeFont(11);
-        const QFontMetricsF metrics(font);
-        const QSizeF size(metrics.horizontalAdvance(tip) + 12, metrics.height() + 6);
-        double x = std::clamp(m_pointer.x() - size.width() / 2.0, m_rect.left() + 2, m_rect.right() - 2 - size.width());
-        const QRectF box(x, bar.top() - 8 - size.height(), size.width(), size.height());
-        p.setBrush(t.playerTipFill);
-        p.drawRoundedRect(box, 4, 4);
-        p.setFont(font);
-        p.setPen(t.playerInk);
-        p.drawText(box, Qt::AlignCenter, tip);
-    }
-
-    if (!controlsShown()) {
-        p.restore();
-        return;
-    }
-    // The controls, a round wash under the pointer.
-    for (Control control : kControls) {
-        const QRectF area = controlRect(control);
-        if (controlEnabled(control) && area.contains(m_pointer) && m_inside && !hovering) {
-            p.setPen(Qt::NoPen);
-            p.setBrush(t.playerHover);
-            p.drawEllipse(area.center(), area.width() / 2.0, area.height() / 2.0);
-        }
-        paintGlyph(p, control, area);
-    }
-
-    // The time, with a soft shadow under it.
-    const QRectF time = timecodeRect();
-    const QString text = timecodeText();
-    p.setFont(timeFont(timeSize()));
-    p.setPen(QColor(0, 0, 0, 128));
-    p.drawText(time.translated(0, 1), Qt::AlignLeft | Qt::AlignVCenter, text);
-    p.setPen(t.playerInk);
-    p.drawText(time, Qt::AlignLeft | Qt::AlignVCenter, text);
-    p.restore();
+void PlayerOverlay::paint(QPainter &) const {
+    // Nothing on the picture: the transport is the scrub strip's.
 }
 
 bool PlayerOverlay::mousePress(const QPointF &position) {
-    if (!m_target || !m_rect.contains(position)) return false;
     m_pointer = position;
-    if (barReach().contains(position)) {
-        m_scrubbing = true;
-        updateShown();
-        emit seekRequested(fractionAt(position.x()));
-        if (m_host) m_host->update();
-        return true;
-    }
-    for (Control control : kControls) {
-        if (!controlsShown() || !controlRect(control).contains(position)) continue;
-        if (controlEnabled(control)) emit controlTriggered(control);
-        return true;
-    }
     return false;
 }
 
-bool PlayerOverlay::mouseMove(const QPointF &position, bool leftDown) {
+bool PlayerOverlay::mouseMove(const QPointF &position, bool) {
     m_pointer = position;
-    if (m_scrubbing) {
-        if (leftDown) emit seekRequested(fractionAt(position.x()));
-        if (m_host) m_host->update();
-        return true;
-    }
-    const bool inside = m_rect.contains(position);
-    const bool overBar = inside && barReach().contains(position);
-    bool overControl = false;
-    for (Control control : kControls) overControl = overControl || (inside && controlRect(control).contains(position));
-    m_inside = inside;
-    m_overBar = overBar;
-    if (inside) {
-        // Each move over the picture shows the controls for a moment more.
-        m_idleExpired = false;
-        if (m_playing) m_idle.start();
-    }
-    updateShown();
-    if (m_host) m_host->update();
-    return overBar || overControl;
+    m_inside = m_rect.contains(position);
+    return false;
 }
 
 bool PlayerOverlay::mouseRelease(const QPointF &position) {
-    if (!m_scrubbing) return false;
-    m_scrubbing = false;
     m_pointer = position;
-    m_overBar = barReach().contains(position);
-    updateShown();
-    if (m_host) m_host->update();
-    return true;
+    return false;
 }
 
-void PlayerOverlay::leave() {
-    if (m_scrubbing) return;
-    m_inside = false;
-    m_overBar = false;
-    updateShown();
-    if (m_host) m_host->update();
-}
+void PlayerOverlay::leave() { m_inside = false; }
 
-QString PlayerOverlay::toolTipAt(const QPointF &position) const {
-    if (!m_target || !m_rect.contains(position)) return {};
-    for (Control control : kControls)
-        if (controlRect(control).contains(position)) return controlTip(control);
-    return {};
-}
+QString PlayerOverlay::toolTipAt(const QPointF &) const { return {}; }
 
 } // namespace kerf

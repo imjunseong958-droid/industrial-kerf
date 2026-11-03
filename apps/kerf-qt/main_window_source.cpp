@@ -1,5 +1,5 @@
 // MainWindow's Source monitors.
-// Moved verbatim from main_window.cpp (Q-SKELETON, W1); Q-SOURCE owns it in W2.
+// Q-SOURCE (W2): both viewers show the source wiring's one SourceState.
 
 #include "main_window.h"
 #include "ask_prompt.h"
@@ -94,6 +94,8 @@
 #include "inspector_column.h"
 #include "program_strip.h"
 #include "stage_rail.h"
+#include "source_state.h"
+#include "wiring/source_wiring.h"
 
 namespace kerf {
 
@@ -104,7 +106,13 @@ void MainWindow::openSource(const QString &mediaId) {
         const QJsonObject source = value.toObject();
         if (source.value(QStringLiteral("id")).toString() != mediaId) continue;
         m_sourceMonitor->open(source, QDir(m_projectDirectory).absoluteFilePath(source.value(QStringLiteral("path")).toString()));
-        // The Inspector column's Source page, its column opened for it.
+        // Where the stage shows its Source column (Edit, the phone
+        // formats), the media opens there; elsewhere on the Inspector
+        // column's Source page, its column opened for it.
+        if (m_stageSource && m_stageSource->isVisible()) {
+            m_stageSource->setFocus();
+            return;
+        }
         if (ads::CDockWidget *panel = m_workspace->panel(QStringLiteral("inspector")))
             if (panel->isClosed()) panel->toggleView(true);
         m_inspectorColumn->setPage(InspectorColumn::Page::Source);
@@ -114,8 +122,11 @@ void MainWindow::openSource(const QString &mediaId) {
 }
 
 QStringList MainWindow::sourceTargets() const {
-    // The first unlocked track of each kind the source media has.
+    // The timeline's targeted track of each kind the source media has (its
+    // heads' target toggles; by default the first unlocked of each kind).
+    // A kind whose target is switched off is not edited.
     const QJsonObject source = m_sourceMonitor->source();
+    const QStringList targeted = m_timeline ? m_timeline->targetTracks() : QStringList{};
     QStringList targets;
     for (const QString &kind : {QStringLiteral("video"), QStringLiteral("audio")}) {
         const bool has = kind == QStringLiteral("video") ? source.contains(QStringLiteral("width"))
@@ -123,8 +134,10 @@ QStringList MainWindow::sourceTargets() const {
         if (!has) continue;
         for (const QJsonValue &value : m_project.value(QStringLiteral("tracks")).toArray()) {
             const QJsonObject track = value.toObject();
-            if (track.value(QStringLiteral("type")).toString() == kind && !track.value(QStringLiteral("locked")).toBool()) {
-                targets.append(track.value(QStringLiteral("id")).toString());
+            const QString id = track.value(QStringLiteral("id")).toString();
+            if (track.value(QStringLiteral("type")).toString() == kind && !track.value(QStringLiteral("locked")).toBool() &&
+                targeted.contains(id)) {
+                targets.append(id);
                 break;
             }
         }
@@ -162,15 +175,18 @@ QImage MainWindow::sourceFrame(const QJsonObject &clip, double timelineTime) con
                ? QImage::fromData(process.readAllStandardOutput(), "PNG") : QImage();
 }
 
-// The Source monitors: the Inspector column's Source page, and the stage's.
+// The Source viewers: the Inspector column's compact Source pane, and the
+// stage column's (Edit and the phone formats, placed by the viewer). Both
+// show the one SourceState the region's wiring keeps.
 void MainWindow::buildSource() {
-    m_sourceMonitor = new SourceMonitorPanel;
+    SourceState *state = m_sourceWiring->state();
+    state->setArtwork(m_artwork);
+    m_sourceMonitor = new SourceMonitorPanel(state, SourceMonitorPanel::Mode::Compact);
     connect(m_sourceMonitor, &SourceMonitorPanel::changed, this, &MainWindow::updateCommandStates);
-    // The stage column's Source viewer (Edit and the phone formats), which
-    // Q-STAGE places in W2; the two will share one SourceState (Q-SOURCE).
-    m_stageSource = new SourceMonitorPanel(this);
+    m_stageSource = new SourceMonitorPanel(state, SourceMonitorPanel::Mode::Stage, this);
     m_stageSource->setObjectName(QStringLiteral("stageSource"));
     m_stageSource->hide();
+    m_sourceWiring->attach();
 }
 
 } // namespace kerf

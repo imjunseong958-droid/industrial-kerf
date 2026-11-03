@@ -1,27 +1,34 @@
 #pragma once
 
-// The browser at the right of the bottom band (mockup-spec 8): a 28-point
-// strip with the segmented Effects | Titles | Presets and Search (no
-// shortcut until a command for it exists),
-// over the page chosen: the Effects browser, the Titles page and Presets.
+// The browser at the right of the bottom band (mockup-spec 8), 304 wide: a
+// 28-point strip with the segmented Effects | Titles | Presets and Search
+// (⌘⇧F), over the page chosen:
 //
-// Shell from Q-SKELETON (W1): Effects and Presets are today's panels;
-// Titles is disabled until Q-BINBROWSER builds it from the catalog's
-// generators in W2 ("Coming in this release"). Q-BINBROWSER fills it in,
-// keeping the constructor and this API.
+//   Effects  the catalog's effects (EffectsPanel), previewed on the selected
+//            clip or the program's clip under the playhead
+//   Titles   the catalog's generators (an EffectsPanel in Titles mode),
+//            previewed alone on black
+//   Presets  the project's preset library (PresetsPanel)
+//
+// Each page has its own category row and an honest empty state (no catalog
+// or no bridge). BinWiring feeds the pages from the engine.
 
 #include <QString>
 #include <QWidget>
 
 class QAbstractButton;
 class QStackedWidget;
-class QToolButton;
 
 namespace kerf {
 
 class EditorBus;
 class EffectsPanel;
 class PresetsPanel;
+
+namespace ui {
+class IconButton;
+class SegmentedControl;
+} // namespace ui
 
 class BrowserPanel final : public QWidget {
     Q_OBJECT
@@ -32,19 +39,26 @@ public:
 
     void setEffects(EffectsPanel *effects);
     EffectsPanel *effects() const { return m_effects; }
+    void setTitles(EffectsPanel *titles);
+    EffectsPanel *titles() const { return m_titles; }
     void setPresets(PresetsPanel *presets);
     PresetsPanel *presets() const { return m_presets; }
 
     Page page() const { return m_page; }
-    // A page not available yet is refused.
+    // A page not available is refused.
     void setPage(Page page);
+    // Every page is available (Titles since W2).
     static bool pageAvailable(Page page);
     // "effects", "titles", "presets"; and back (Effects for anything else).
     static QString pageId(Page page);
     static Page pageFromId(const QString &id);
     QAbstractButton *pageButton(Page page) const;
-    QToolButton *searchButton() const { return m_search; }
+    ui::SegmentedControl *pages() const { return m_pages; }
+    QAbstractButton *searchButton() const;
     QWidget *currentPage() const;
+    // Search (⌘⇧F): the search field of the Effects page, or of Titles
+    // when it is in front.
+    void focusSearch();
 
 signals:
     void pageChanged(BrowserPanel::Page page);
@@ -57,11 +71,13 @@ private:
 
     EditorBus *m_bus = nullptr;
     EffectsPanel *m_effects = nullptr;
+    EffectsPanel *m_titles = nullptr;
     PresetsPanel *m_presets = nullptr;
     QStackedWidget *m_stack = nullptr;
-    QWidget *m_titles = nullptr;
-    QAbstractButton *m_pageButtons[3] = {};
-    QToolButton *m_search = nullptr;
+    // What a page shows before its panel is set.
+    QWidget *m_placeholder = nullptr;
+    ui::SegmentedControl *m_pages = nullptr;
+    ui::IconButton *m_search = nullptr;
     Page m_page = Page::Effects;
 };
 

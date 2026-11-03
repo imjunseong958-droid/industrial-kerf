@@ -2,6 +2,7 @@
 // focus outlines and the flat style sheet.
 
 #include "fixtures.h"
+#include "ui/components.h"
 #include "design_tokens.h"
 #include "test_registry.h"
 
@@ -18,6 +19,9 @@
 #include "media_artwork.h"
 #include "player_overlay.h"
 #include "presets_panel.h"
+#include "proposal_card.h"
+#include "comment_row.h"
+#include "program_strip.h"
 #include "program_level.h"
 #include "project_launcher.h"
 #include "project_panel.h"
@@ -492,16 +496,16 @@ private slots:
         QCOMPARE(ink(other->icon()), theme.textSecondary.rgb());
         QCOMPARE(ink(other->icon(), QIcon::Active, QIcon::Off), theme.text.rgb());
             QVERIFY(contrastRatio(theme.accentText, theme.accentTint) >= 3.0);
-            // The Program panel's title strip carries the same tools, and
-            // shows the chosen one the same way.
-            QToolButton *strip = nullptr;
-            for (QToolButton *button : window.m_workspace->panel(QStringLiteral("program"))
-                                           ->dockAreaWidget()->findChildren<QToolButton *>(QStringLiteral("maskRectangle")))
-                if (button->defaultAction() == rectangle) strip = button;
+            // The Program strip (mockup .ib) carries the same tools: the
+            // chosen one is on (the `on` fill, full ink), as every kit
+            // icon button is.
+            auto *strip = qobject_cast<ui::IconButton *>(window.m_programStrip->buttonFor(rectangle));
             QVERIFY(strip && strip->isVisible() && strip->isChecked());
-            for (const QRgb wash : {fill(strip), hovered(strip)}) QCOMPARE(wash, theme.accentTint.rgb());
-            QCOMPARE(held(strip), theme.accentTintPressed.rgb());
-            QCOMPARE(ink(strip->icon(), QIcon::Normal, QIcon::On), theme.accentText.rgb());
+            {
+                const QImage image = strip->grab().toImage();
+                QCOMPARE(image.pixelColor(QPoint(3, strip->height() / 2) * image.devicePixelRatio()).rgb(), tokens::on);
+            }
+            QCOMPARE(strip->iconColor().rgb(), tokens::ink);
             rectangle->trigger();
             QVERIFY(!rectangle->isChecked());
             QVERIFY(clear(chosen));
@@ -737,34 +741,22 @@ private slots:
                      qPrintable(QStringLiteral("%1 of %2").arg(title->geometry().center().x()).arg(toolbar->width())));
             QVERIFY(title->geometry().left() > window.m_toolbarLeftEnd->geometry().right());
             QVERIFY(title->geometry().right() < window.m_formatBank->geometry().left());
-            // The format bank and Export stand 8px apart, and Export is as
-            // tall as the bank's keys.
+            // The flat bar (mockup-spec 2): the format bank, 8, the
+            // sequence's ghost button, 12, Export as tall as the bank's
+            // keys, 8, and Settings 12 in from the window's right edge.
             ExportButton *exportButton = window.m_exportButton;
-            QCOMPARE(exportButton->x() - window.m_formatBank->geometry().right() - 1, 8);
-            QCOMPARE(exportButton->height(), window.m_formatBank->key(0)->height());
-            // Kerf's conversation is open, so its switch at the toolbar's end,
-            // a group of its own, is on: the on fill, `raised` while held.
-            QToolButton *chat = window.m_chatToggle;
-            QVERIFY(chat->isVisible() && chat->isChecked());
-            QVERIFY(chat->x() - exportButton->geometry().right() - 1 > 8);
-            QCOMPARE(chat->height(), exportButton->height());
-            {
-                // The bezel's fill, clear of its edge and its symbol: at rest,
-                // under the pointer, and held.
-                const auto fill = [chat] {
-                    const QImage image = chat->grab().toImage();
-                    return image.pixelColor(QPoint(3, chat->height() / 2) * image.devicePixelRatio()).rgb();
-                };
-                QCOMPARE(fill(), theme.accentTint.rgb());
-                chat->setAttribute(Qt::WA_UnderMouse, true);
-                QCOMPARE(fill(), theme.accentTint.rgb());
-                chat->setAttribute(Qt::WA_UnderMouse, false);
-                chat->setDown(true);
-                QCOMPARE(fill(), theme.accentTintPressed.rgb());
-                chat->setDown(false);
-                QCOMPARE(ink(chat->icon(), QIcon::Normal, QIcon::On), theme.accentText.rgb());
-                QCOMPARE(ink(chat->icon(), QIcon::Normal, QIcon::Off), theme.glyph.rgb());
-            }
+            auto *sequenceButton = toolbar->findChild<QAbstractButton *>(QStringLiteral("sequenceButton"));
+            QVERIFY(sequenceButton && sequenceButton->isVisible());
+            const auto inBar = [toolbar](const QWidget *item) { return QRect(item->mapTo(toolbar, QPoint(0, 0)), item->size()); };
+            QCOMPARE(inBar(sequenceButton).left() - inBar(window.m_formatBank).right() - 1, 8);
+            QCOMPARE(inBar(exportButton).left() - inBar(sequenceButton).right() - 1, 12);
+            QCOMPARE(exportButton->height(), window.m_formatBank->height());
+            auto *settingsButton = toolbar->findChild<QAbstractButton *>(QStringLiteral("settingsButton"));
+            QVERIFY(settingsButton && settingsButton->isVisible());
+            QCOMPARE(inBar(settingsButton).left() - inBar(exportButton).right() - 1, 8);
+            QCOMPARE(toolbar->width() - inBar(settingsButton).right() - 1, 12);
+            // The conversation's switch is the stage rail's now, not the bar's.
+            QVERIFY(!window.m_chatToggle->isVisible());
 #if defined(Q_OS_MACOS) && QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
             // The toolbar is the title bar: the window runs up under a
             // transparent one, and its commands start past the window buttons.
@@ -788,15 +780,9 @@ private slots:
                 for (const QPalette::ColorGroup group : {QPalette::Active, QPalette::Inactive})
                     QCOMPARE(field->palette().color(group, QPalette::PlaceholderText), theme.placeholderText);
             }
-            // Timecodes in the accent sit on the panel accentText is made to
-            // read on: the Source monitor's, a tab behind the Program
-            // monitor (whose time is on its picture, in the player's white).
-            QList<QLabel *> times = window.m_sourceMonitor->findChildren<QLabel *>(QStringLiteral("transportTime"));
-            QCOMPARE(times.size(), 1);
-            for (QLabel *time : times) {
-                QCOMPARE(time->palette().color(QPalette::WindowText).rgb(), theme.accentText.rgb());
-                QCOMPARE(dominantColor(time->parentWidget()->grab().toImage()), theme.panel.rgb());
-            }
+            // The Source viewer paints its timecodes (mono, ink) itself:
+            // no accent label is left on any panel.
+            QVERIFY(window.m_sourceMonitor->findChildren<QLabel *>(QStringLiteral("transportTime")).isEmpty());
             // The toolbar is chrome.
             QCOMPARE(dominantColor(toolbar->grab().toImage()), theme.chrome.rgb());
             // Tabs never show a close button, under the pointer or not, so
@@ -806,8 +792,8 @@ private slots:
             for (const QWidget *close : closeButtons) QVERIFY(!close->isVisible());
             {
                 // Only areas that show their title strip show tabs (the
-                // program, inspector and browser draw their own strips), so
-                // the names checked are the visible ones: the bin's and the
+                // program, inspector, bin and browser draw their own
+                // strips), so the name checked is the visible one: the
                 // timeline's.
                 ads::CDockWidgetTab *timelineTab = window.m_workspace->panel(QStringLiteral("timeline"))->tabWidget();
                 QVERIFY(timelineTab->isVisible());
@@ -828,7 +814,8 @@ private slots:
                     const QString name = tab->dockWidget()->windowTitle();
                     QVERIFY2(tab->sizeHint().width() <= tab->width(), qPrintable(name + QStringLiteral(" is shortened")));
                 }
-                QVERIFY(shown >= 2);
+                QVERIFY(shown >= 1);
+                QVERIFY(!window.m_workspace->panel(QStringLiteral("project"))->tabWidget()->isVisible());
                 QEvent leave(QEvent::Leave);
                 QCoreApplication::sendEvent(timelineTab, &leave);
             }
@@ -837,17 +824,19 @@ private slots:
             const QColor toolFill = tool.pixelColor(qRound(3 * tool.devicePixelRatio()), tool.height() / 2);
             QCOMPARE(toolFill.rgb(), theme.toolSelected.rgb());
             QVERIFY(highestContrast(tool, tool.rect(), toolFill) >= 3.0);
-            // An unavailable command's symbol is dimmed, never brightened, as
-            // Qt's own disabled pixmap does on dark.
+            // An unavailable command's symbol is dimmed (the kit's `dis`),
+            // never brightened: no pixel of the bar's Undo or Redo is lighter.
             for (const char *id : {"edit.undo", "edit.redo"}) {
                 QAction *action = window.m_commands->action(QString::fromLatin1(id));
                 QVERIFY(!action->isEnabled());
-                const QImage dim = action->icon().pixmap(QSize(20, 20), 2.0, QIcon::Disabled).toImage();
-                QColor ink(0, 0, 0, 0);
+                auto *button = toolbar->findChild<ui::IconButton *>(QStringLiteral("toolbar.%1").arg(QString::fromLatin1(id)));
+                QVERIFY2(button && !button->isEnabled(), id);
+                QCOMPARE(button->iconColor().rgb(), tokens::dis);
+                const QImage dim = button->grab().toImage();
+                int lightest = 0;
                 for (int y = 0; y < dim.height(); ++y)
-                    for (int x = 0; x < dim.width(); ++x)
-                        if (dim.pixelColor(x, y).alpha() > ink.alpha()) ink = dim.pixelColor(x, y);
-                QCOMPARE(ink.rgb(), theme.glyphDisabled.rgb());
+                    for (int x = 0; x < dim.width(); ++x) lightest = std::max(lightest, qGray(dim.pixel(x, y)));
+                QVERIFY2(lightest <= qGray(tokens::dis) + 1, qPrintable(QString::number(lightest)));
             }
             // A tab row's details are plain text on the panel's own surface
             // (text tabs have no strip), not a dead button. The Program
@@ -898,7 +887,11 @@ private slots:
                 save(popup, QStringLiteral("popup-%1").arg(name));
                 QCOMPARE(popup.pixelColor(0, 0).alpha(), 0);
                 QCOMPARE(amberPixels(popup), 0);
-                QVERIFY(exportMenu->geometry().top() > window.m_exportButton->mapToGlobal(QPoint()).y());
+                // The card (inside the translucent shadow margin) opens under the button.
+                const QMargins shadow = ui::shadowMargins();
+                const int cardTop = exportMenu->geometry().top() + std::max(shadow.top(), shadow.bottom());
+                QVERIFY2(cardTop > window.m_exportButton->mapToGlobal(QPoint(0, window.m_exportButton->height() - 1)).y(),
+                         qPrintable(QString::number(cardTop)));
             }
             exportMenu->hide();
             // So does a clip's context menu: rounded and clipped to its
@@ -947,7 +940,9 @@ private slots:
                 // fill, the highlighted row's too, and its text starts 22px
                 // in, as in a menu of commands without symbols.
                 QVERIFY(QCoreApplication::testAttribute(Qt::AA_DontShowIconsInMenus));
-                QVERIFY(symbols && iconColumn);
+                // (The registry's actions carry no symbols now; any that
+                // did would keep the icon column, shown empty.)
+                QVERIFY(!symbols || iconColumn);
                 others.prepend(row);
                 for (const QRect &item : std::as_const(others)) {
                     const QColor fill = item == row ? theme.menuSelection : theme.menu;
@@ -1078,7 +1073,8 @@ private slots:
 
             // States: project.kerf changed on disk, the agent's proposal and
             // next steps, and a conversation in the assistant panel.
-            window.applySnapshot(showcaseSnapshot(13, QStringLiteral("diverged")));
+            // As kerfd sends it, so the review model hears the proposals too.
+            window.handleEvent(QJsonObject{{"type", "state"}, {"snapshot", showcaseSnapshot(13, QStringLiteral("diverged"))}});
             showAssistant(window);
             window.appendConversation(QStringLiteral("You"), QStringLiteral("Tighten the fisher close-up and drop the drone pass."));
             window.appendConversation(QStringLiteral("Kerf"),
@@ -1092,91 +1088,32 @@ private slots:
             QCoreApplication::processEvents();
             QVERIFY(!window.m_divergedBanner->isHidden());
             QVERIFY(!window.m_aiBar->isVisible());
-            // The proposal's default button, Accept, is a pill filled with the accent.
-            QPushButton *primary = window.m_acceptButton;
-            QVERIFY(primary->isVisible() && primary->isEnabled());
-            QCOMPARE(primary->objectName(), QStringLiteral("chatPillFilled"));
-            // With the proposal scrolled away under the latest comment, the
-            // compact bar's Accept stands in for it, filled the same.
-            QTRY_VERIFY(window.m_chat->proposalBar()->isVisible() || window.m_chatScroll->verticalScrollBar()->value() == 0);
-            QPushButton *shown = window.m_chat->proposalBar()->isVisible() ? window.m_chat->barAcceptButton() : primary;
-            QCOMPARE(shown->objectName(), QStringLiteral("chatPillFilled"));
+            // The pinned proposal's card (mockup .pcard): Reject, then the
+            // primary Accept filled with the accent, its label reading on it.
+            ProposalCard *pinned = nullptr;
+            for (ProposalCard *card : window.m_chat->cards())
+                if (card->isPinned()) pinned = card;
+            QVERIFY(pinned);
+            ui::Button *accept = pinned->acceptButton();
+            QCOMPARE(accept->kind(), ui::Button::Kind::Primary);
+            QCOMPARE(pinned->rejectButton()->parentWidget(), accept->parentWidget());
+            QVERIFY(pinned->rejectButton()->geometry().right() < accept->geometry().left());
+            {
+                const QImage pill = accept->grab().toImage();
+                QCOMPARE(pill.pixelColor(QPoint(4, accept->height() / 2) * pill.devicePixelRatio()).rgb(), tokens::accent);
+                QVERIFY(contrastRatio(QColor(tokens::accentText), QColor(tokens::accent)) >= 4.5);
+            }
             const QImage states = window.grab().toImage();
-            QCOMPARE(states.pixelColor(shown->mapTo(&window, QPoint(shown->height() / 2 - 6, shown->height() / 2)) * states.devicePixelRatio()).rgb(),
-                     theme.accent.rgb());
-            // The proposal's diff: additions green, removals red, the rest secondary.
-            int added = 0;
-            int removed = 0;
-            for (QTextBlock block = window.m_proposalDiff->document()->begin(); block.isValid(); block = block.next()) {
-                const QString line = block.text();
-                if (line.isEmpty()) continue;
-                const bool header = line.startsWith(QStringLiteral("+++")) || line.startsWith(QStringLiteral("---"));
-                QColor expected = theme.textSecondary;
-                if (!header && line.startsWith(QLatin1Char('+'))) {
-                    expected = theme.success;
-                    ++added;
-                } else if (!header && line.startsWith(QLatin1Char('-'))) {
-                    expected = theme.error;
-                    ++removed;
-                }
-                QCOMPARE(block.begin().fragment().charFormat().foreground().color(), expected);
-            }
-            QVERIFY(added > 0 && removed > 0);
-            // Reject, then the default Accept, at the right.
-            QVERIFY(window.m_rejectButton->geometry().right() < window.m_acceptButton->geometry().left());
-            QCOMPARE(window.m_acceptButton->height(), ChatPanel::kPillHeight);
-            // So does every other row of buttons, as macOS orders them: the
-            // timeline's bar (shown with the conversation closed) ends in
-            // Accept and the banner in Load from Disk, each 8px past the
-            // button before it.
-            window.setChatOpen(false);
-            QCoreApplication::processEvents();
-            {
-                QList<QWidget *> bar;
-                for (QToolButton *button : window.m_aiBar->findChildren<QToolButton *>())
-                    if (button->isVisible()) bar.append(button);
-                std::sort(bar.begin(), bar.end(), [](const QWidget *a, const QWidget *b) { return a->x() < b->x(); });
-                QCOMPARE(bar.size(), 3);
-                QCOMPARE(bar.constLast()->objectName(), QStringLiteral("aiAccept"));
-                for (int i = 1; i < bar.size(); ++i) QCOMPARE(bar.at(i)->x() - bar.at(i - 1)->geometry().right() - 1, 8);
-                QCOMPARE(window.m_loadFromDisk->x() - window.m_keepEditorVersion->geometry().right() - 1, 8);
-                // Their trailing buttons line up with the toolbar's last
-                // control, the conversation's switch, 8px in from the
-                // window's edge; the timeline's bar ends 8px in from the
-                // timeline's own edge, the browser column beside it.
-                for (QWidget *trailing : std::initializer_list<QWidget *>{window.m_chatToggle, window.m_loadFromDisk})
-                    QCOMPARE(trailing->mapTo(&window, QPoint(trailing->width(), 0)).x(), window.width() - 8);
-                QWidget *timelineArea = window.m_workspace->panel(QStringLiteral("timeline"))->dockAreaWidget();
-                QCOMPARE(bar.constLast()->mapTo(&window, QPoint(bar.constLast()->width(), 0)).x(),
-                         timelineArea->mapTo(&window, QPoint(timelineArea->width(), 0)).x() - 8);
-            }
-            // Kerf's suggestions are tonal chips sized to their labels, with
-            // no outline: on the timeline's bar at its controls' height...
-            {
-                const auto chips = window.m_nextSteps->findChildren<QPushButton *>(QStringLiteral("nextStep"));
-                QVERIFY(!chips.isEmpty());
-                const QImage bar = window.grab().toImage();
-                for (QPushButton *chip : chips) {
-                    QCOMPARE(chip->height(), 22);
-                    const QRect area(chip->mapTo(&window, QPoint()) * bar.devicePixelRatio(), chip->size() * bar.devicePixelRatio());
-                    QVERIFY(nearColor(dominantColor(bar.copy(area)), laidOn(theme.chrome, theme.chatChip).rgb()));
-                    QVERIFY(chip->width() < 160);
-                }
-            }
-            window.setChatOpen(true);
-            QCoreApplication::processEvents();
-            // ...and over the composer, a chip's 28px.
-            {
-                const auto chips = window.m_chatNextSteps->findChildren<QPushButton *>(QStringLiteral("nextStep"));
-                QVERIFY(!chips.isEmpty());
-                const QImage panel = window.grab().toImage();
-                for (QPushButton *chip : chips) {
-                    QCOMPARE(chip->height(), ChatPanel::kChipHeight);
-                    const QRect area(chip->mapTo(&window, QPoint()) * panel.devicePixelRatio(), chip->size() * panel.devicePixelRatio());
-                    QVERIFY(nearColor(dominantColor(panel.copy(area)), laidOn(theme.chatSurface, theme.chatChip).rgb()));
-                    QVERIFY(chip->width() < 180);
-                }
-            }
+            // The Script's diff: removals in neg, additions in pos.
+            QVERIFY(!pinned->diffLines().isEmpty());
+            QVERIFY(pinned->diffView()->text().contains(tokens::color(tokens::neg).name()));
+            QVERIFY(pinned->diffView()->text().contains(tokens::color(tokens::pos).name()));
+            // Kerf's next steps are the welcome row's suggestions.
+            QVERIFY(!window.m_chat->welcomeRow()->suggestions().isEmpty());
+            // The banner's buttons, as macOS orders them: Load from Disk last,
+            // 8 past the button before it, 8 in from the window's edge.
+            QCOMPARE(window.m_loadFromDisk->x() - window.m_keepEditorVersion->geometry().right() - 1, 8);
+            QCOMPARE(window.m_loadFromDisk->mapTo(&window, QPoint(window.m_loadFromDisk->width(), 0)).x(), window.width() - 8);
             // The bar and its text are neutral; only the 14-point triangle is orange.
             for (QWidget *part : window.m_divergedBanner->findChildren<QWidget *>(Qt::FindDirectChildrenOnly))
                 if (part != window.m_divergedGlyph) QCOMPARE(amberPixels(part->grab().toImage()), 0);
@@ -1185,16 +1122,6 @@ private slots:
             // step lighter than it.
             QVERIFY(theme.warningSurface.rgb() != theme.chrome.rgb());
             QVERIFY(theme.warningSurface.lightness() > theme.chrome.lightness());
-            // The conversation's view, scrolled away from its top, has a
-            // hairline under its header (or the compact proposal bar), as a
-            // comments panel's header does.
-            QVERIFY(window.m_chatScroll->verticalScrollBar()->value() > 0);
-            auto *scrollEdge = window.findChild<QFrame *>(QStringLiteral("scrollEdge"));
-            QVERIFY(scrollEdge && scrollEdge->isVisible());
-            {
-                const QImage shown = window.grab().toImage();
-                QCOMPARE(shown.pixelColor(scrollEdge->mapTo(&window, QPoint(4, 0)) * shown.devicePixelRatio()).rgb(), theme.divider.rgb());
-            }
             save(states, QStringLiteral("states-%1").arg(name));
 
             // Scroll bars are hidden, as the design hides them: shown, they
@@ -1241,21 +1168,27 @@ private slots:
             QVERIFY(inspector->isVisible());
             const auto rows = inspector->findChildren<InspectorRow *>();
             QVERIFY(rows.size() > 6);
+            // mockup .row: pad 0 8 0 12, an 84 label, 8 to the controls (a
+            // wide row's label runs on to its controls).
             for (InspectorRow *row : rows) {
                 if (!row->isVisibleTo(inspector)) continue;
-                QCOMPARE(row->label()->width(), InspectorRow::kLabelWidth);
                 QCOMPARE(row->height(), InspectorRow::kHeight);
+                QCOMPARE(row->label()->x(), InspectorRow::kPadLeft);
+                if (row->isWide()) continue;
+                QCOMPARE(row->label()->width(), InspectorRow::kLabelWidth);
                 int left = row->width();
                 for (QWidget *child : row->findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly))
-                    if (child != row->label() && child->isVisibleTo(row) && child->width() > InspectorRow::kResetLane) left = std::min(left, child->x());
-                QCOMPARE(left, InspectorRow::kLabelWidth + 8);
+                    if (child != row->label() && child->isVisibleTo(row) && child->width() > InspectorRow::kKeyframe) left = std::min(left, child->x());
+                QCOMPARE(left, InspectorRow::kPadLeft + InspectorRow::kLabelWidth + InspectorRow::kGap);
             }
             // The file's row: its field, the folder inside it.
             auto *lookFile = inspector->findChild<QWidget *>(QStringLiteral("effectParam_look_lut"));
             QVERIFY(lookFile && lookFile->findChild<QAction *>(QStringLiteral("chooseFile")));
             // The file's name, its whole path in the tooltip; the name left as
             // shown keeps the path, a typed path replaces it.
-            QLineEdit *lookLine = lookFile->findChild<QLineEdit *>();
+            // (The field itself, its folder a trailing action in it.)
+            auto *lookLine = qobject_cast<QLineEdit *>(lookFile);
+            QVERIFY(lookLine);
             QCOMPARE(lookLine->text(), QStringLiteral("harbor-dusk.cube"));
             QCOMPARE(lookLine->toolTip(), QStringLiteral("looks/harbor-dusk.cube"));
             window.m_lastCommand = {};
@@ -1270,13 +1203,16 @@ private slots:
             // A colour is a well, its hex beside it.
             auto *well = inspector->findChild<QPushButton *>(QStringLiteral("effectParam_color"));
             QVERIFY(well);
-            QCOMPARE(well->size(), QSize(44, 24));
+            // (mockup .sw: 32 wide, inside the 24 row.)
+            QCOMPARE(well->width(), 32);
+            QVERIFY(well->height() <= InspectorRow::kHeight);
             QVERIFY(well->text().isEmpty());
             QCOMPARE(qobject_cast<QLabel *>(well->parentWidget()->findChild<QLabel *>(QStringLiteral("colorHex")))->text(), QStringLiteral("#4DCCFF"));
             // A switch, not a check box, for an effect's bool and for each effect.
             QVERIFY(inspector->findChildren<QCheckBox *>().isEmpty());
             QCOMPARE(inspector->findChildren<PowerKey *>(QStringLiteral("effectEnabled")).size(), 2);
-            for (QLabel *title : inspector->findChildren<QLabel *>(QStringLiteral("effectName"))) QCOMPARE(title->font().weight(), QFont::DemiBold);
+            // An effect's name is UI 12/16 ink (tokens::control, 400).
+            for (QLabel *title : inspector->findChildren<QLabel *>(QStringLiteral("effectName"))) QCOMPARE(title->font().weight(), QFont::Normal);
             // The picture shows the whole Inspector: the window grows until
             // it needs no scrolling.
             QScrollBar *inspectorScroll = inspector->scrollArea()->verticalScrollBar();
@@ -1285,15 +1221,15 @@ private slots:
                 QCoreApplication::processEvents();
             }
             const QImage inspectorImage = window.m_workspace->panel(QStringLiteral("inspector"))->grab().toImage();
-            // The Effects module is a framed plate standing on the panel: its
-            // edge, the light inside its top, then the plate.
+            // A group (mockup .grp) is flat on the column, no plate: chrome
+            // above its foot, and a 1 pt line (lighter) at its foot.
             {
                 const InspectorSection *effects = inspector->section(QStringLiteral("effects"));
-                const QPoint top = effects->mapTo(window.m_workspace->panel(QStringLiteral("inspector")), QPoint(effects->width() / 2, 0));
+                const QPoint foot = effects->mapTo(window.m_workspace->panel(QStringLiteral("inspector")), QPoint(effects->width() / 2, effects->height() - 1));
                 const qreal ratio = inspectorImage.devicePixelRatio();
-                QCOMPARE(inspectorImage.pixelColor(top * ratio).rgb(), theme.moduleEdge.rgb());
-                QCOMPARE(inspectorImage.pixelColor((top - QPoint(0, 1)) * ratio).rgb(), theme.panel.rgb());
-                QCOMPARE(inspectorImage.pixelColor((top + QPoint(0, 4)) * ratio).rgb(), theme.modulePlate.rgb());
+                const QColor line = inspectorImage.pixelColor(foot * ratio);
+                QCOMPARE(inspectorImage.pixelColor((foot - QPoint(0, 2)) * ratio).rgb(), tokens::chrome);
+                QVERIFY2(line.rgb() != tokens::chrome && line.lightness() > QColor(tokens::chrome).lightness(), qPrintable(line.name()));
             }
             save(inspectorImage, QStringLiteral("inspector-%1").arg(name));
             window.close();
@@ -1586,13 +1522,14 @@ private slots:
             painter.setOpacity(0.6);
             painter.drawImage(0, 0, soft);
         }
-        effects.setPreview(QStringLiteral("c1"), QStringLiteral("light.edgeglow"), glow);
+        // A resting thumb comes keyed (the unkeyed call is a no-op now).
+        effects.setPreview(QStringLiteral("c1"), QStringLiteral("light.edgeglow"), QString::fromLatin1(EffectsPanel::kCardKey), glow);
         effects.resize(420, 200);
         const auto tilePixel = [&bin](int row, const QPoint &at) {
             return bin.m_list->item(row)->icon().pixmap(ProjectPanel::kThumbnail).toImage().pixelColor(at);
         };
         const auto cardPixel = [&effects](const char *id) {
-            const QImage card = effects.m_items.value(QString::fromLatin1(id))->icon().pixmap(QSize(160, 90)).toImage();
+            const QImage card = effects.m_items.value(QString::fromLatin1(id))->icon().pixmap(EffectsPanel::kCard).toImage();
             return card.pixelColor(card.width() / 2, 4);
         };
 
@@ -1653,47 +1590,49 @@ private slots:
             monitor.seek(2.0);
             monitor.show();
             QVERIFY(QTest::qWaitForWindowExposed(&monitor));
-            QWidget *scrub = monitor.layout()->itemAt(1)->widget();
-            QVERIFY(scrub && scrub->height() == 18);
-            const QImage bar = scrub->grab().toImage();
-            const qreal barRatio = bar.devicePixelRatio();
-            const auto barX = [scrub](double seconds) { return static_cast<int>(8 + seconds / 4.0 * (scrub->width() - 16)); };
-            QCOMPARE(bar.pixelColor(QPoint(barX(0.5), 9) * barRatio).rgb(), theme.scrubTrack.rgb());
-            QCOMPARE(bar.pixelColor(QPoint(barX(1.5), 9) * barRatio).rgb(), theme.inOutRange.rgb());
-            QCOMPARE(bar.pixelColor(QPoint(barX(2.0), 3) * barRatio).rgb(), theme.playhead.rgb());
-            // The position is cut out of the marked range, a pixel of the panel each side.
-            QCOMPARE(bar.pixelColor(QPoint(barX(2.0) - 2, 9) * barRatio).rgb(), theme.panel.rgb());
-            QCOMPARE(bar.pixelColor(QPoint(barX(2.0) + 1, 9) * barRatio).rgb(), theme.panel.rgb());
+            // mockup-spec 3.6: a 4 pt bar in track, the marked range in
+            // track2, and the position as a 2 x 12 tick in the playhead colour.
+            const QRect bar = monitor.barRect();
+            QVERIFY(bar.isValid() && bar.height() == 4);
+            {
+                const QImage shot = monitor.grab().toImage();
+                const qreal shotRatio = shot.devicePixelRatio();
+                const auto barX = [&bar](double seconds) { return bar.left() + int(bar.width() * seconds / 4.0); };
+                QCOMPARE(shot.pixelColor(QPoint(barX(0.5), bar.top() + 2) * shotRatio).rgb(), tokens::color(tokens::track).rgb());
+                QCOMPARE(shot.pixelColor(QPoint(barX(1.5), bar.top() + 2) * shotRatio).rgb(), tokens::color(tokens::track2).rgb());
+                QCOMPARE(shot.pixelColor(QPoint(barX(3.5), bar.top() + 2) * shotRatio).rgb(), tokens::color(tokens::track).rgb());
+                QCOMPARE(shot.pixelColor(QPoint(barX(2.0), bar.top() - 3) * shotRatio).rgb(), tokens::color(tokens::playhead).rgb());
+            }
             const QImage source = monitor.grab().toImage();
-            QCOMPARE(source.pixelColor(QPoint(2, 2) * source.devicePixelRatio()), theme.viewerSurround);
             QCOMPARE(amberPixels(source), 0);
             save(source, QStringLiteral("source-%1").arg(name));
             monitor.close();
 
-            // Bin tiles and their badges, redrawn for the new appearance.
-            // Sound is the teal tile; a picture tile with no picture has an edge.
-            QCOMPARE(tilePixel(3, QPoint(2, 60)), theme.audioTile);
-            QCOMPARE(tilePixel(2, QPoint(56, 60)), theme.tileEmpty);
-            QCOMPARE(tilePixel(2, QPoint(0, 40)), theme.tileEmptyBorder);
-            QCOMPARE(tilePixel(2, QPoint(5, 10)), theme.badgeError);
-            QCOMPARE(tilePixel(1, QPoint(5, 10)).rgb(), theme.badgeInfo.rgb());
+            // Bin thumbs (72 x 38, mockup-spec 6): sound without peaks on
+            // raised, offline media black saying so, a status as a dot.
+            const auto tileAt = [&bin](int row, const QPoint &at) {
+                const QImage tile = bin.m_list->item(row)->icon().pixmap(ProjectPanel::kThumbnail).toImage();
+                return tile.pixelColor(at * tile.devicePixelRatio()).rgb();
+            };
+            QCOMPARE(tileAt(3, QPoint(2, 2)), tokens::raised);
+            QCOMPARE(tileAt(2, QPoint(2, 2)), qRgb(0, 0, 0));
+            QVERIFY(nearColor(tileAt(1, QPoint(7, 7)), tokens::accentInk, 8));
+            QVERIFY(nearColor(tileAt(0, QPoint(7, 7)), tokens::ink3, 8));
             bin.show();
             QVERIFY(QTest::qWaitForWindowExposed(&bin));
             const QImage tiles = bin.grab().toImage();
             QCOMPARE(amberPixels(tiles), 0);
             save(tiles, QStringLiteral("bin-%1").arg(name));
 
-            // Effect cards: placeholders follow the theme, a preview stays.
-            QCOMPARE(cardPixel("blur.gaussian"), theme.cardPlaceholder);
-            QCOMPARE(cardPixel("light.edgeglow").rgb(), glow.pixelColor(glow.width() / 2, 4).rgb());
+            // Effect cards (88 x 50): a placeholder is black, a preview stays.
+            QCOMPARE(cardPixel("blur.gaussian").rgb(), qRgb(0, 0, 0));
+            QVERIFY(nearColor(cardPixel("light.edgeglow").rgb(), glow.pixelColor(glow.width() / 2, 4).rgb(), 24));
             effects.show();
             QVERIFY(QTest::qWaitForWindowExposed(&effects));
-            // Nothing under the pointer.
             QTest::mouseMove(&effects, QPoint(effects.width() - 2, effects.height() - 2));
-            effects.m_category->setAttribute(Qt::WA_UnderMouse, false);
             const QImage browser = effects.grab().toImage();
-            // The category pop-up is a button's bezel, as every pop-up is.
-            QVERIFY(popUpHasButtonBezel(browser, effects.m_category, theme.button));
+            // The category is a ghost menu button (mockup .bcat), not a pop-up.
+            QVERIFY(effects.m_categoryButton->hasChevron());
             save(browser, QStringLiteral("effects-%1").arg(name));
         }
     }

@@ -1291,6 +1291,7 @@ dependencies = [
  "kerf-core",
  "kerf-engine",
  "kerf-fx",
+ "kerf-interchange",
  "kerf-lang",
  "kerf-mcp",
  "kerf-model",

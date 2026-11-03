@@ -1,267 +1,617 @@
 #include "stage_rail.h"
-#include "editor_theme.h"
+#include "design_tokens.h"
+#include "device_frame.h"
+#include "editor_bus.h"
+#include "icons.h"
 #include "program_level.h"
+#include "review_model.h"
 
-#include <QBrush>
+#include <QAction>
 #include <QEvent>
-#include <QLinearGradient>
+#include <QKeySequence>
+#include <QMenu>
+#include <QMetaMethod>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
-#include <QPolygonF>
-#include <QRadialGradient>
-#include <QVBoxLayout>
+#include <QSignalBlocker>
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 
 namespace kerf {
 
-// ---- RailButton -----------------------------------------------------------
+using tokens::color;
 
-namespace {
+// ================================================================ RailButton
 
-// A rail button's disc as the hardware finish's raised key, round: its ring
-// over a 1px drop, a face shaded from the top with a line of light inside
-// its top edge; held in, it sits down where its drop was, its face darker
-// with the rim's shadow in it. Lit, a 10x2 amber LED glows at the face's
-// top. Returns the face, and what fills it, so a glyph's gap can be cut in
-// the same colour.
-struct RailDisc {
-    QRectF face;
-    QBrush fill;
-};
-
-// `rect` with its edges on device pixels' edges, so the LED's straight
-// sides land crisp at 1.25x as the keys' do.
-QRectF snapToDevicePixels(const QPainter &painter, const QRectF &rect) {
-    const QTransform t = painter.deviceTransform();
-    bool invertible = false;
-    const QTransform back = t.inverted(&invertible);
-    if (t.type() > QTransform::TxScale || !invertible) return rect;
-    const QRectF device = t.mapRect(rect);
-    return back.mapRect(QRectF(QPointF(std::round(device.left()), std::round(device.top())),
-                               QPointF(std::round(device.right()), std::round(device.bottom()))));
-}
-
-RailDisc paintRailDisc(QPainter &painter, const QRectF &disc, bool latched, bool hovered, bool lit) {
-    const EditorTheme &t = editorTheme();
-    // One device pixel at 1x and 1.25x, two at 2x, as the keys' lines are.
-    const QTransform device = painter.deviceTransform();
-    const qreal scale = std::hypot(device.m11(), device.m12());
-    const qreal line = scale > 0 ? std::max<qreal>(1.0, std::round(scale)) / scale : 1.0;
-    painter.save();
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(Qt::NoPen);
-    // The ring is a circle a line narrower than the disc, so its drop (or,
-    // held in, the ring itself) fits under it.
-    QRectF ring(disc.left() + line / 2, disc.top(), disc.width() - line, disc.height() - line);
-    if (latched) {
-        ring.translate(0, line);
-    } else {
-        painter.setBrush(t.keyDrop);
-        painter.drawEllipse(ring.translated(0, line));
-    }
-    painter.setBrush(t.keyRing);
-    painter.drawEllipse(ring);
-    RailDisc out;
-    out.face = ring.adjusted(line, line, -line, -line);
-    QPainterPath face;
-    face.addEllipse(out.face);
-    if (latched) {
-        out.fill = t.keyLatched;
-        painter.fillPath(face, out.fill);
-        QColor clear = t.keyLatchedShadow;
-        clear.setAlpha(0);
-        QLinearGradient shade(out.face.topLeft(), out.face.topLeft() + QPointF(0, 5));
-        shade.setColorAt(0, t.keyLatchedShadow);
-        shade.setColorAt(1, clear);
-        painter.fillPath(face, shade);
-    } else {
-        QLinearGradient bevel(out.face.topLeft(), out.face.bottomLeft());
-        bevel.setColorAt(0, t.keyTop);
-        bevel.setColorAt(1, t.keyBottom);
-        out.fill = bevel;
-        painter.fillPath(face, out.fill);
-        painter.fillPath(face.subtracted(face.translated(0, line)), t.keyHighlight);
-    }
-    if (hovered) painter.fillPath(face, t.hover);
-    if (lit) {
-        const QRectF led = snapToDevicePixels(painter, QRectF(out.face.center().x() - 5, out.face.top() + 4, 10, 2));
-        QColor halo = t.keyLed;
-        halo.setAlphaF(0.45);
-        QColor gone = halo;
-        gone.setAlpha(0);
-        QRadialGradient glow(led.center(), 8);
-        glow.setColorAt(0, halo);
-        glow.setColorAt(1, gone);
-        painter.fillPath(face, glow);
-        painter.setBrush(t.keyLed);
-        painter.drawRoundedRect(led, 1, 1);
-    }
-    painter.restore();
-    return out;
-}
-
-} // namespace
-
-RailButton::RailButton(Glyph glyph, QWidget *parent) : QAbstractButton(parent), m_glyph(glyph) {
+RailButton::RailButton(Glyph glyph, QWidget *parent) : ui::KitButton(parent), m_glyph(glyph) {
     setObjectName(QStringLiteral("railButton"));
     setCursor(Qt::PointingHandCursor);
     setFocusPolicy(Qt::TabFocus);
-    setProperty("bezelRadius", kDisc / 2);
-    QFont small = font();
-    small.setPixelSize(12);
-    small.setWeight(QFont::Medium);
-    setFont(small);
+    setFixedSize(kDisc, kDisc);
 }
 
 void RailButton::setGlyph(Glyph glyph) {
     if (glyph == m_glyph) return;
     m_glyph = glyph;
     update();
+    if (m_stateCallback) m_stateCallback();
 }
 
-void RailButton::setLabel(const QString &label) {
-    if (label == m_label) return;
-    m_label = label;
+void RailButton::setIconName(const QString &icon) {
+    if (icon == m_icon) return;
+    m_icon = icon;
     update();
 }
 
-QRect RailButton::discRect() const { return QRect((width() - kDisc) / 2, 0, kDisc, kDisc); }
+QString RailButton::iconName() const {
+    if (!m_icon.isEmpty()) return m_icon;
+    switch (m_glyph) {
+    case Glyph::Chat: return QStringLiteral("g-comments");
+    case Glyph::Phone: return QStringLiteral("g-phone");
+    case Glyph::Laptop: return QStringLiteral("g-laptop");
+    case Glyph::SafeZones: return QStringLiteral("g-safe");
+    }
+    return {};
+}
 
-QSize RailButton::sizeHint() const { return {StageRail::kWidth, kDisc + 4 + 16}; }
+void RailButton::setChevron(bool chevron) {
+    if (chevron == m_chevron) return;
+    m_chevron = chevron;
+    update();
+}
+
+void RailButton::setHeld(bool held) {
+    if (held == m_held) return;
+    m_held = held;
+    update();
+}
+
+bool RailButton::drawsOn() const { return m_held || (isChecked() && !m_checkedByOwner); }
+
+void RailButton::setRetired(bool retired) {
+    m_retired = retired;
+    if (retired) QAbstractButton::setVisible(false);
+}
+
+void RailButton::setVisible(bool visible) { QAbstractButton::setVisible(visible && !m_retired); }
+
+void RailButton::checkStateSet() {
+    QAbstractButton::checkStateSet();
+    if (m_stateCallback) m_stateCallback();
+}
+
+bool RailButton::event(QEvent *event) {
+    // The rail gives its buttons the design's tip (name and shortcut). An
+    // old owner's setToolTip() would put a plain Qt tip over it, so the
+    // design's wins.
+    if (event->type() == QEvent::ToolTipChange && !ui::tipName(this).isEmpty() && !toolTip().isEmpty())
+        setToolTip(QString());
+    return ui::KitButton::event(event);
+}
 
 void RailButton::paintEvent(QPaintEvent *) {
-    const EditorTheme &theme = editorTheme();
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
-    // On reads from across the stage: held in, with its LED lit. A press
-    // holds it in while the button is down.
-    const bool hovered = underMouse() && !isDown();
-    const RailDisc disc = paintRailDisc(painter, discRect(), isChecked() || isDown(), hovered, isChecked());
-    // A device switched off (the plain card) keeps its name and its
-    // glyph, in secondary ink with a slash through it, as the menu says
-    // "Laptop · Off".
-    const bool device = m_glyph == Glyph::Phone || m_glyph == Glyph::Laptop;
-    const bool off = device && isCheckable() && !isChecked();
-    const QColor ink = off ? theme.textSecondary : theme.railGlyph;
-    // The glyph sits on the face, so it goes down with the key.
-    const QPointF origin = disc.face.center() - QPointF(12, 12);
-    painter.save();
-    painter.translate(origin);
-    painter.setPen(QPen(ink, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    painter.setBrush(Qt::NoBrush);
-    switch (m_glyph) {
-    case Glyph::Chat: {
-        // The speech bubble on a 24-point grid: a rounded bubble, its tail
-        // at the lower left; filled while the chat is open.
-        QPainterPath path;
-        path.moveTo(7.5, 4.5); path.lineTo(16.5, 4.5);
-        path.quadTo(20.5, 4.5, 20.5, 8.5); path.lineTo(20.5, 12.5);
-        path.quadTo(20.5, 16.5, 16.5, 16.5); path.lineTo(11.5, 16.5);
-        path.lineTo(6.5, 20); path.lineTo(7.3, 16.5);
-        path.quadTo(3.5, 16.3, 3.5, 12.5); path.lineTo(3.5, 8.5);
-        path.quadTo(3.5, 4.5, 7.5, 4.5);
-        path.closeSubpath();
-        painter.setBrush(isChecked() ? QBrush(ink) : QBrush(Qt::NoBrush));
-        painter.drawPath(path);
-        break;
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const QRectF r = rect();
+    const bool on = drawsOn();
+    if (on) {
+        p.setPen(Qt::NoPen);
+        p.setBrush(color(tokens::on));
+        p.drawRoundedRect(r, tokens::radius::control, tokens::radius::control);
+        ui::paintInsetLine(p, r, tokens::radius::control, color(tokens::line2));
+    } else if (isEnabled() && hoverProgress() > 0) {
+        QColor fill = color(tokens::raised);
+        fill.setAlphaF(float(hoverProgress()));
+        p.setPen(Qt::NoPen);
+        p.setBrush(fill);
+        p.drawRoundedRect(r, tokens::radius::control, tokens::radius::control);
     }
-    case Glyph::Phone:
-        // A phone's outline and its camera.
-        painter.drawRoundedRect(QRectF(7, 3, 10, 18), 2.5, 2.5);
-        painter.drawLine(QPointF(10.8, 5.8), QPointF(13.2, 5.8));
-        break;
-    case Glyph::Laptop:
-        // A laptop's lid, and its wider base under it.
-        painter.drawRoundedRect(QRectF(5, 5.5, 14, 10), 1.5, 1.5);
-        painter.drawLine(QPointF(3, 18.5), QPointF(21, 18.5));
-        break;
-    case Glyph::SafeZones: {
-        // A frame's corners, and the dashed line inside them.
-        const auto corner = [&painter](QPointF at, double dx, double dy) {
-            painter.drawPolyline(QPolygonF{at + QPointF(0, 4 * dy), at, at + QPointF(4 * dx, 0)});
-        };
-        corner({4, 4}, 1, 1);
-        corner({20, 4}, -1, 1);
-        corner({4, 20}, 1, -1);
-        corner({20, 20}, -1, -1);
-        QPen dashed(ink, 1.4, Qt::CustomDashLine, Qt::FlatCap);
-        dashed.setDashPattern({2.0, 2.0});
-        painter.setPen(dashed);
-        painter.drawRect(QRectF(8, 8, 8, 8));
-        break;
+    const QColor ink = !isEnabled() ? color(tokens::dis)
+                       : on         ? color(tokens::ink)
+                                    : ui::mix(color(tokens::ink2), color(tokens::ink), hoverProgress());
+    icons::paint(p, iconName(), r, ink, 16);
+    if (m_chevron)
+        icons::paint(p, QStringLiteral("rail-chevron"), QRectF(r.right() - 1 - 10, r.bottom() - 1 - 10, 10, 10),
+                     color(isEnabled() ? tokens::ink3 : tokens::dis), 10);
+    if (focusVisible()) ui::paintFocusRing(p, r, tokens::radius::control);
+}
+
+// ================================================================ the rail's parts
+
+namespace {
+
+// A label under a rail button: UI 11/16 ink2, centred in a box 60 wide. It
+// is a sibling of the rail (in the rail's parent), so it may be wider than
+// the rail; it takes no clicks.
+class RailLabel final : public QWidget {
+public:
+    explicit RailLabel(const QString &name, QWidget *parent) : QWidget(parent) {
+        setObjectName(name);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setFocusPolicy(Qt::NoFocus);
     }
+    void setText(const QString &text) {
+        if (text == m_text) return;
+        m_text = text;
+        update();
     }
-    if (off) {
-        // The slash, over a gap cut in the face's own shading (and its
-        // hover) so it reads across the glyph.
-        QBrush gap = disc.fill;
-        gap.setTransform(QTransform::fromTranslate(-origin.x(), -origin.y()));
-        const QLineF slash(QPointF(4.5, 19.5), QPointF(19.5, 4.5));
-        painter.setPen(QPen(gap, 3.5, Qt::SolidLine, Qt::RoundCap));
-        painter.drawLine(slash);
-        if (hovered) {
-            painter.setPen(QPen(theme.hover, 3.5, Qt::SolidLine, Qt::RoundCap));
-            painter.drawLine(slash);
+    QString text() const { return m_text; }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter p(this);
+        p.setFont(tokens::font(tokens::meta));
+        p.setPen(color(tokens::ink2));
+        p.drawText(rect(), Qt::AlignHCenter | Qt::AlignTop, m_text);
+    }
+
+private:
+    QString m_text;
+};
+
+} // namespace
+
+// The meter's two bars, in the meter's own rect (the rail draws its scale).
+class LevelMeterWidget final : public QWidget {
+public:
+    explicit LevelMeterWidget(StageRail *rail) : QWidget(rail), m_rail(rail) {
+        setObjectName(QStringLiteral("programLevel"));
+        setAccessibleName(QStringLiteral("Program level"));
+        setCursor(Qt::PointingHandCursor);
+        ui::setTip(this, QStringLiteral("Program level · dBFS · click for the loudness bridge"));
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter p(this);
+        const ProgramMeter *meter = m_rail->programMeter();
+        const double h = height();
+        for (int c = 0; c < ProgramMeter::kChannels; ++c) {
+            const QRectF bar(6 + 8 * c, 0, 6, h);
+            p.fillRect(bar, color(tokens::raised));
+            p.save();
+            p.setClipRect(bar);
+            if (meter->hasLevel(c))
+                for (const ProgramMeter::Segment &segment : ProgramMeter::segments(meter->level(c), h))
+                    p.fillRect(QRectF(bar.left(), segment.top, bar.width(), segment.bottom - segment.top), color(segment.color));
+            if (meter->hasHold(c))
+                p.fillRect(QRectF(bar.left(), ProgramMeter::y(meter->hold(c), h), bar.width(), 2), color(tokens::ink));
+            p.restore();
         }
-        painter.setPen(QPen(ink, 1.5, Qt::SolidLine, Qt::RoundCap));
-        painter.drawLine(slash);
     }
-    painter.restore();
-    if (!m_label.isEmpty()) {
-        painter.setPen(theme.railLabel);
-        painter.setFont(font());
-        painter.drawText(QRectF(0, discRect().bottom() + 4, width(), 16), Qt::AlignHCenter | Qt::AlignTop, m_label);
+    void mousePressEvent(QMouseEvent *event) override { event->accept(); }
+    void mouseReleaseEvent(QMouseEvent *event) override {
+        if (event->button() == Qt::LeftButton && rect().contains(event->position().toPoint())) m_rail->requestLoudness();
+    }
+
+private:
+    StageRail *m_rail;
+};
+
+// "−17.8" (mono 500 12/16 ink) over "LUFS M" (UI 11/16 ink2), centred.
+class LufsReadoutWidget final : public QWidget {
+public:
+    explicit LufsReadoutWidget(StageRail *rail) : QWidget(rail), m_rail(rail) {
+        setObjectName(QStringLiteral("railLufs"));
+        setAccessibleName(QStringLiteral("Momentary loudness"));
+        setCursor(Qt::PointingHandCursor);
+        ui::setTip(this, QStringLiteral("Momentary loudness · loudness bridge"));
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter p(this);
+        p.setFont(tokens::font(tokens::timecodeStrong));
+        p.setPen(color(tokens::ink));
+        p.drawText(QRect(0, 0, width(), 16), Qt::AlignHCenter | Qt::AlignVCenter, m_rail->lufsText());
+        p.setFont(tokens::font(tokens::meta));
+        p.setPen(color(tokens::ink2));
+        p.drawText(QRect(-8, 16, width() + 16, 16), Qt::AlignHCenter | Qt::AlignVCenter, QStringLiteral("LUFS M"));
+    }
+    void mousePressEvent(QMouseEvent *event) override { event->accept(); }
+    void mouseReleaseEvent(QMouseEvent *event) override {
+        if (event->button() == Qt::LeftButton && rect().contains(event->position().toPoint())) m_rail->requestLoudness();
+    }
+
+private:
+    StageRail *m_rail;
+};
+
+// ================================================================ StageRail
+
+StageRail::StageRail(QWidget *parent, EditorBus *bus) : QWidget(parent) {
+    setObjectName(QStringLiteral("stageRail"));
+    setAccessibleName(QStringLiteral("Stage"));
+    m_meter = new ProgramMeter(this);
+    m_level = new LevelMeterWidget(this);
+    m_lufs = new LufsReadoutWidget(this);
+    connect(m_meter, &ProgramMeter::changed, this, [this] {
+        m_level->update();
+        m_lufs->update();
+    });
+
+    m_device = new RailButton(RailButton::Glyph::Phone, this);
+    m_device->setObjectName(QStringLiteral("railDevice"));
+    m_device->setCheckable(true);
+    m_device->setChecked(true);
+    m_device->setCheckedByOwner(true);
+    m_device->setChevron(true);
+    m_device->setStateCallback([this] { refreshDevice(); });
+    connect(m_device, &QAbstractButton::clicked, this, [this] {
+        // The stage sets the preview; until it listens, the device button's
+        // old owner opens its own menu on the click.
+        if (isSignalConnected(QMetaMethod::fromSignal(&StageRail::devicePreviewRequested))) showDeviceMenu();
+    });
+
+    m_safeZones = new RailButton(RailButton::Glyph::SafeZones, this);
+    m_safeZones->setObjectName(QStringLiteral("railSafeZones"));
+    m_safeZones->setCheckable(true);
+    m_safeZones->setRetired(true);
+
+    m_chat = new RailButton(RailButton::Glyph::Chat, this);
+    m_chat->setObjectName(QStringLiteral("railComments"));
+    m_chat->setCheckable(true);
+    m_chat->setAccessibleName(QStringLiteral("Comments"));
+
+    m_badge = new ui::Badge(QString(), this);
+    m_badge->setObjectName(QStringLiteral("railCommentsBadge"));
+    m_badge->setRingColor(color(tokens::surround));
+    m_badge->hide();
+
+    m_vu = new VuMeter(this);
+
+    m_deviceLabel = new RailLabel(QStringLiteral("railDeviceLabel"), this);
+    m_commentsLabel = new RailLabel(QStringLiteral("railCommentsLabel"), this);
+    static_cast<RailLabel *>(m_commentsLabel.data())->setText(QStringLiteral("Comments"));
+
+    resize(kWidth, kHeight);
+    relayout();
+    setBus(bus);
+    refreshDevice();
+    refreshComments();
+}
+
+StageRail::~StageRail() {
+    // The labels may live in the parent, beside the rail.
+    delete m_deviceLabel.data();
+    delete m_commentsLabel.data();
+}
+
+QWidget *StageRail::deviceLabelWidget() const { return m_deviceLabel; }
+QWidget *StageRail::commentsLabelWidget() const { return m_commentsLabel; }
+
+EditorBus *StageRail::bus() const { return m_bus.data(); }
+
+void StageRail::setBus(EditorBus *bus) {
+    if (bus == m_bus) return;
+    for (const QMetaObject::Connection &connection : std::as_const(m_busConnections)) disconnect(connection);
+    m_busConnections.clear();
+    m_bus = bus;
+    if (m_bus) {
+        m_busConnections << connect(m_bus, &EditorBus::event, this, [this](const QString &type, const QJsonObject &json) {
+            if (type == QStringLiteral("meter")) m_meter->apply(json);
+        });
+        m_busConnections << connect(m_bus, &EditorBus::reviewChanged, this, &StageRail::watchReview);
+        m_busConnections << connect(m_bus, &EditorBus::snapshotChanged, this, &StageRail::refreshDevice);
+        const QJsonObject meter = m_bus->lastEvent(QStringLiteral("meter"));
+        if (!meter.isEmpty()) m_meter->apply(meter);
+    }
+    watchReview();
+    refreshDevice();
+}
+
+void StageRail::setActions(QAction *comments, QAction *device) {
+    m_actionsGiven = true;
+    for (QAction *old : {m_commentsAction.data(), m_deviceAction.data()})
+        if (old) disconnect(old, nullptr, this, nullptr);
+    m_commentsAction = comments;
+    m_deviceAction = device;
+    for (QAction *action : {comments, device})
+        if (action) connect(action, &QAction::changed, this, &StageRail::refreshTips);
+    refreshTips();
+}
+
+void StageRail::attachToWindow() {
+    QWidget *top = window();
+    if (!top || top == this) return;
+    if (!m_bus)
+        if (auto *bus = top->findChild<EditorBus *>(QStringLiteral("editorBus"))) setBus(bus);
+    if (!m_actionsGiven) {
+        QAction *comments = top->findChild<QAction *>(QStringLiteral("window.assistant"));
+        QAction *device = top->findChild<QAction *>(QStringLiteral("view.devicePreview"));
+        if (comments || device) {
+            setActions(comments, device);
+            // Found, not given: a later window may still give its own.
+            m_actionsGiven = false;
+        }
     }
 }
 
-// ---- StageRail ------------------------------------------------------------
-
-StageRail::StageRail(QWidget *parent) : QWidget(parent) {
-    setObjectName(QStringLiteral("stageRail"));
-    auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(12);
-    m_meter = new VuMeter;
-    m_meter->setFixedSize(kWidth, kMeterHeight);
-    layout->addWidget(m_meter, 0, Qt::AlignHCenter);
-    layout->addStretch(1);
-    m_device = new RailButton(RailButton::Glyph::Phone);
-    m_device->setObjectName(QStringLiteral("railDevice"));
-    m_device->setCheckable(true);
-    m_device->setCheckedByOwner(true);
-    m_device->setLabel(QStringLiteral("Phone"));
-    m_safeZones = new RailButton(RailButton::Glyph::SafeZones);
-    m_safeZones->setObjectName(QStringLiteral("railSafeZones"));
-    m_safeZones->setCheckable(true);
-    m_safeZones->setLabel(QStringLiteral("Safe"));
-    m_chat = new RailButton(RailButton::Glyph::Chat);
-    m_chat->setCheckable(true);
-    for (RailButton *button : {m_device, m_safeZones, m_chat}) {
-        button->setFixedSize(button->sizeHint());
-        layout->addWidget(button, 0, Qt::AlignHCenter);
+void StageRail::watchReview() {
+    for (const QMetaObject::Connection &connection : std::as_const(m_reviewConnections)) disconnect(connection);
+    m_reviewConnections.clear();
+    if (ReviewModel *review = m_bus ? m_bus->review() : nullptr) {
+        m_reviewConnections << connect(review, &ReviewModel::countsChanged, this, &StageRail::refreshComments);
+        m_reviewConnections << connect(review, &ReviewModel::changed, this, &StageRail::refreshComments);
+        m_reviewConnections << connect(review, &QObject::destroyed, this, [this] {
+            m_reviewConnections.clear();
+            refreshComments();
+        });
     }
+    refreshComments();
+}
+
+// ---- geometry ---------------------------------------------------------------
+
+int StageRail::meterHeight() const { return std::max(0, kMeterHeight + height() - kHeight); }
+
+QRect StageRail::meterRect() const { return QRect(0, kMeterTop, kWidth, meterHeight()); }
+
+QRect StageRail::barRect(int channel) const { return QRect(6 + 8 * channel, kMeterTop, 6, meterHeight()); }
+
+double StageRail::meterY(double db) const { return ProgramMeter::y(db, meterHeight()); }
+
+QRect StageRail::channelLabelRect(int channel) const {
+    return QRect(6 + 8 * channel, 362 + height() - kHeight, 6, 16);
+}
+
+QRect StageRail::scaleLabelRect(int mark) const {
+    return QRect(24, kMeterTop + int(meterY(-mark)) - 8, 20, 16);
+}
+
+QList<int> StageRail::shownScaleMarks() const {
+    QList<int> shown;
+    double last = 0.0;
+    for (const int mark : ProgramMeter::scaleMarks()) {
+        const double y = meterY(-mark);
+        if (!shown.isEmpty() && y - last < 12.0) continue;
+        shown << mark;
+        last = y;
+    }
+    return shown;
+}
+
+QRect StageRail::lufsRect() const { return QRect(0, 390 + height() - kHeight, kWidth, 32); }
+QRect StageRail::deviceRect() const { return QRect(6, 438 + height() - kHeight, 32, 32); }
+QRect StageRail::deviceLabelRect() const {
+    return QRect((kWidth - kLabelWidth) / 2, 472 + height() - kHeight, kLabelWidth, 16);
+}
+QRect StageRail::commentsRect() const { return QRect(6, 498 + height() - kHeight, 32, 32); }
+QRect StageRail::commentsLabelRect() const {
+    return QRect((kWidth - kLabelWidth) / 2, 532 + height() - kHeight, kLabelWidth, 16);
+}
+
+QString StageRail::lufsText() const { return m_meter->momentaryText(); }
+
+void StageRail::relayout() {
+    const bool meter = meterHeight() >= kMeterMinHeight;
+    m_level->setGeometry(meterRect());
+    m_level->setVisible(meter);
+    m_lufs->setGeometry(lufsRect());
+    m_device->setGeometry(deviceRect());
+    m_chat->setGeometry(commentsRect());
+    refreshComments();
+    placeLabels();
+    update();
+}
+
+void StageRail::placeLabels() {
+    QWidget *host = parentWidget() ? parentWidget() : this;
+    const QPoint offset = host == this ? QPoint() : pos();
+    const QList<QPair<QWidget *, QRect>> labels{{m_deviceLabel.data(), deviceLabelRect()},
+                                                {m_commentsLabel.data(), commentsLabelRect()}};
+    for (const auto &[label, rect] : labels) {
+        if (!label) continue;
+        if (label->parentWidget() != host) label->setParent(host);
+        label->setGeometry(rect.translated(offset));
+        label->setVisible(host == this || !isHidden());
+        if (host != this) label->raise();
+    }
+}
+
+void StageRail::resizeEvent(QResizeEvent *event) {
+    QWidget::resizeEvent(event);
+    relayout();
+}
+
+void StageRail::moveEvent(QMoveEvent *event) {
+    QWidget::moveEvent(event);
+    placeLabels();
 }
 
 bool StageRail::event(QEvent *event) {
     const bool handled = QWidget::event(event);
-    if (event->type() == QEvent::Resize || event->type() == QEvent::LayoutRequest) fitMeter();
+    switch (event->type()) {
+    case QEvent::ParentChange:
+    case QEvent::Show:
+        attachToWindow();
+        placeLabels();
+        break;
+    case QEvent::Hide:
+    case QEvent::ZOrderChange:
+        placeLabels();
+        break;
+    default:
+        break;
+    }
     return handled;
 }
 
-void StageRail::fitMeter() {
-    // The buttons shown, stacked with the layout's spacing; the meter only
-    // where it fits over them with kMeterGap to spare.
-    int buttons = 0;
-    int count = 0;
-    for (const RailButton *button : {m_device, m_safeZones, m_chat}) {
-        if (button->isHidden()) continue;
-        buttons += button->height();
-        ++count;
+void StageRail::paintEvent(QPaintEvent *) {
+    if (meterHeight() < kMeterMinHeight) return;
+    QPainter p(this);
+    p.setFont(tokens::font(tokens::monoSmall));
+    p.setPen(color(tokens::ink2));
+    for (const int mark : shownScaleMarks())
+        p.drawText(scaleLabelRect(mark), Qt::AlignRight | Qt::AlignVCenter, QString::number(mark));
+    p.setFont(tokens::font(tokens::meta));
+    p.setPen(color(tokens::ink3));
+    p.drawText(channelLabelRect(0), Qt::AlignHCenter | Qt::AlignVCenter, QStringLiteral("L"));
+    p.drawText(channelLabelRect(1), Qt::AlignHCenter | Qt::AlignVCenter, QStringLiteral("R"));
+}
+
+void StageRail::requestLoudness() {
+    if (m_bus) {
+        m_bus->run(QStringLiteral("workspace.finish"));
+        emit m_bus->highlightPane(QStringLiteral("loudness"));
     }
-    const int stack = buttons + std::max(0, count - 1) * layout()->spacing();
-    m_meter->setVisible(height() >= stack + kMeterGap + kMeterHeight);
+    emit loudnessRequested();
+}
+
+// ---- the device ---------------------------------------------------------------
+
+void StageRail::setDevicePreview(double pictureAspect, bool on) {
+    m_hasDevice = true;
+    m_deviceAspect = pictureAspect > 0.0 ? pictureAspect : 16.0 / 9.0;
+    m_deviceOn = on;
+    {
+        // The button's checked state says whether the device shows, as its
+        // old owner kept it.
+        const QSignalBlocker blocker(m_device);
+        m_device->setChecked(on);
+    }
+    refreshDevice();
+}
+
+double StageRail::deviceAspect() const {
+    if (m_hasDevice) return m_deviceAspect;
+    if (m_bus && m_bus->frameSize().width() > 0 && m_bus->frameSize().height() > 0)
+        return double(m_bus->frameSize().width()) / m_bus->frameSize().height();
+    return m_device->glyph() == RailButton::Glyph::Laptop ? 16.0 / 9.0 : 9.0 / 16.0;
+}
+
+bool StageRail::deviceOn() const { return m_hasDevice ? m_deviceOn : m_device->isChecked(); }
+
+bool StageRail::deviceIsLaptop() const { return deviceAspect() > 1.0 + 1e-3; }
+
+QString StageRail::formatName() const {
+    const double aspect = deviceAspect();
+    if (m_bus) {
+        const QSize frame = m_bus->frameSize();
+        if (frame.width() > 0 && frame.height() > 0 && std::abs(double(frame.width()) / frame.height() - aspect) < 1e-3) {
+            const int g = std::gcd(frame.width(), frame.height());
+            const int w = frame.width() / g, h = frame.height() / g;
+            if (w <= 64 && h <= 64) return QStringLiteral("%1:%2").arg(w).arg(h);
+        }
+    }
+    static const struct {
+        int w, h;
+    } known[] = {{16, 9}, {9, 16}, {1, 1}, {4, 5}, {4, 3}, {3, 4}, {21, 9}, {2, 1}};
+    for (const auto &k : known)
+        if (std::abs(double(k.w) / k.h - aspect) < 0.01) return QStringLiteral("%1:%2").arg(k.w).arg(k.h);
+    return QStringLiteral("%1:1").arg(aspect, 0, 'f', 2);
+}
+
+QList<StageRail::DeviceChoice> StageRail::deviceChoices() const {
+    const bool on = deviceOn();
+    QList<DeviceChoice> out;
+    if (deviceIsLaptop()) {
+        out << DeviceChoice{true, laptopPreviewLabel(LaptopPreview::Laptop), QStringLiteral("g-laptop"), on};
+        out << DeviceChoice{false, laptopPreviewLabel(LaptopPreview::Off), QStringLiteral("g-devoff"), !on};
+        return out;
+    }
+    const double aspect = deviceAspect();
+    for (const DevicePreview preview : devicePreviewChoices()) {
+        DeviceChoice choice;
+        choice.on = preview != DevicePreview::Off;
+        choice.name = devicePreviewLabel(preview, aspect);
+        choice.icon = !choice.on                ? QStringLiteral("g-devoff")
+                      : deviceShowsFeed(aspect) ? QStringLiteral("g-feed")
+                                                : QStringLiteral("g-phone");
+        choice.checked = choice.on == on;
+        out << choice;
+    }
+    return out;
+}
+
+QString StageRail::deviceLabel() const {
+    if (!deviceOn()) return QStringLiteral("Off");
+    if (deviceIsLaptop()) return QStringLiteral("Laptop");
+    return deviceShowsFeed(deviceAspect()) ? QStringLiteral("Feed") : QStringLiteral("Phone");
+}
+
+QString StageRail::deviceMenuHeader() const { return QStringLiteral("Device preview · %1").arg(formatName()); }
+
+QMenu *StageRail::createDeviceMenu(QWidget *parent) {
+    auto *menu = new QMenu(parent);
+    menu->setObjectName(QStringLiteral("deviceMenu"));
+    ui::styleMenu(menu);
+    menu->setMinimumWidth(240);
+    ui::addMenuHeader(menu, deviceMenuHeader());
+    for (const DeviceChoice &choice : deviceChoices()) {
+        QAction *action = menu->addAction(choice.name);
+        action->setCheckable(true);
+        action->setChecked(choice.checked);
+        ui::setMenuKeyIcon(action, choice.icon);
+        const bool on = choice.on;
+        connect(action, &QAction::triggered, this, [this, on] { emit devicePreviewRequested(on); });
+    }
+    return menu;
+}
+
+void StageRail::showDeviceMenu() {
+    QMenu *menu = createDeviceMenu(this);
+    m_device->setHeld(true);
+    connect(menu, &QMenu::aboutToHide, this, [this, menu] {
+        m_device->setHeld(false);
+        menu->deleteLater();
+    });
+    ui::popupMenu(menu, m_device, ui::Side::Right);
+}
+
+void StageRail::refreshDevice() {
+    const bool on = deviceOn();
+    m_device->setIconName(!on                         ? QStringLiteral("g-devoff")
+                          : deviceIsLaptop()          ? QStringLiteral("g-laptop")
+                          : deviceShowsFeed(deviceAspect()) ? QStringLiteral("g-feed")
+                                                            : QStringLiteral("g-phone"));
+    if (auto *label = static_cast<RailLabel *>(m_deviceLabel.data())) label->setText(deviceLabel());
+    refreshTips();
+}
+
+// ---- the comments -------------------------------------------------------------
+
+int StageRail::openCount() const {
+    const ReviewModel *review = m_bus ? m_bus->review() : nullptr;
+    return review ? review->counts().open : -1;
+}
+
+QString StageRail::commentsTip() const {
+    const int open = openCount();
+    return open < 0 ? QStringLiteral("Comments") : QStringLiteral("Comments · %1 open").arg(open);
+}
+
+void StageRail::refreshComments() {
+    const int open = openCount();
+    if (open > 0) {
+        m_badge->setCount(open);
+        // The badge's right edge 6 past the button's, its top 6 above it;
+        // the widget carries the 2 pt ring around it.
+        const QRect button = commentsRect();
+        const QSize size = m_badge->size();
+        m_badge->move(button.right() + 1 + 6 - (size.width() - ui::Badge::ring), button.top() - 6 - ui::Badge::ring);
+        m_badge->show();
+        m_badge->raise();
+    } else {
+        m_badge->hide();
+    }
+    refreshTips();
+}
+
+QString StageRail::shortcutOf(const QAction *action) const {
+    return action ? action->shortcut().toString(QKeySequence::NativeText) : QString();
+}
+
+void StageRail::refreshTips() {
+    ui::setTip(m_chat, commentsTip(), shortcutOf(m_commentsAction));
+    QString current = deviceLabel();
+    for (const DeviceChoice &choice : deviceChoices())
+        if (choice.checked) current = choice.name;
+    ui::setTip(m_device, QStringLiteral("Device preview: %1").arg(current), shortcutOf(m_deviceAction));
+    m_device->setAccessibleName(QStringLiteral("Device preview: %1").arg(current));
 }
 
 } // namespace kerf

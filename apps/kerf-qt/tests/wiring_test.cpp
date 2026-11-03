@@ -330,8 +330,7 @@ private slots:
         }
         QVERIFY2(unwired.isEmpty(), qPrintable(unwired.join(QStringLiteral(", "))));
         coming.sort();
-        QCOMPARE(coming, (QStringList{"inspector.audio", "inspector.info", "keyboard.customise", "mark.in", "mark.out",
-                                      "playback.loop", "sequence.settings", "view.annotations", "view.dim", "viewer.zoom"}));
+        QCOMPARE(coming, (QStringList{"keyboard.customise", "sequence.settings"}));
         // Export Master is ⌘E; Export… keeps the toolbar's chosen quality.
         QAction *master = window.m_commands->action(QStringLiteral("export.master"));
         QCOMPARE(master->shortcut(), QKeySequence::fromString(QStringLiteral("Ctrl+E"), QKeySequence::PortableText));

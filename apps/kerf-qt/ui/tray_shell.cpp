@@ -25,7 +25,7 @@ TrayPane::TrayPane(const QString &objectName, const QString &name, QLabel *meta,
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(1, 0, 1, 4);
     layout->setSpacing(0);
-    auto *header = new QHBoxLayout;
+    auto *header = m_header = new QHBoxLayout;
     header->setContentsMargins(tokens::space::s12 - 1, 0, tokens::space::s8 - 1, 0);
     header->setSpacing(tokens::space::s8);
     auto *title = text(name, tokens::controlStrong, tokens::ink);
@@ -35,6 +35,10 @@ TrayPane::TrayPane(const QString &objectName, const QString &name, QLabel *meta,
     header->addStretch(1);
     layout->addLayout(header);
     layout->addWidget(body, 1);
+}
+
+void TrayPane::addTrailing(QWidget *widget) {
+    if (widget) m_header->addWidget(widget);
 }
 
 void TrayPane::setHighlighted(bool on) {

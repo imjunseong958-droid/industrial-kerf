@@ -1,99 +1,61 @@
-// MainWindow's comments panel (the agent chat), proposals, Ask and next steps.
-// Moved verbatim from main_window.cpp (Q-SKELETON, W1); Q-COMMENTS owns it in W2.
+// MainWindow's comments panel (the agent chat), proposals, Ask and next
+// steps, and ReviewWiring's members that reach into the window (Q-COMMENTS).
+//
+// The Kerf conversation lives in the review log: kerfd records each agent
+// turn as the reader's comment and Kerf's reply (bridge.h). While a turn
+// runs, the panel shows it as local rows (the request, then Kerf drafting
+// with the stream's latest status); the comments event that records the
+// turn takes their place.
 
 #include "main_window.h"
 #include "ask_prompt.h"
 #include "bridge.h"
 #include "chat_panel.h"
 #include "command_registry.h"
-#include "inspector_panel.h"
-#include "effects_panel.h"
-#include "presets_panel.h"
-#include "project_launcher.h"
-#include "project_panel.h"
-#include "source_monitor_panel.h"
-#include "workspace.h"
+#include "comment_row.h"
+#include "components.h"
+#include "composer.h"
+#include "editor_bus.h"
 #include "editor_common.h"
 #include "editor_theme.h"
-#include "media_artwork.h"
+#include "proposal_card.h"
+#include "review_model.h"
+#include "stage_rail.h"
 #include "timeline_widget.h"
-#include "toolbar_widgets.h"
-#include "player_overlay.h"
-#include "program_level.h"
 #include "viewer_widget.h"
-#ifdef Q_OS_MACOS
-#include "macos_window.h"
-#endif
+#include "workspace.h"
+#include "wiring/main_window_shared.h"
+#include "wiring/review_wiring.h"
 
-#include <QAbstractTextDocumentLayout>
-#include <QActionGroup>
 #include <QApplication>
-#include <QButtonGroup>
 #include <QClipboard>
-#include <QColorDialog>
-#include <QCursor>
+#include <QComboBox>
 #include <QDateTime>
-#include <QDesktopServices>
-#include <QDialog>
-#include <QDialogButtonBox>
 #include <QDir>
-#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QFontDatabase>
-#include <QGridLayout>
-#include <QHBoxLayout>
-#include <QInputDialog>
-#include <QIcon>
-#include <QImage>
 #include <QJsonDocument>
-#include <QKeySequence>
-#include <QLayout>
+#include <QLabel>
+#include <QListWidget>
 #include <QMenu>
-#include <QMenuBar>
-#include <QMessageBox>
-#include <QMouseEvent>
-#include <QPaintEvent>
-#include <QPainter>
-#include <QPainterPath>
-#include <QPixmap>
-#include <QPolygonF>
-#include <QPlainTextEdit>
 #include <QPushButton>
-#include <QProcess>
 #include <QRegularExpression>
-#include <QSaveFile>
+#include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
-#include <QScreen>
-#include <QShortcut>
-#include <QShowEvent>
 #include <QSignalBlocker>
-#include <QStatusBar>
 #include <QTextBlock>
-#include <QTextDocument>
-#include <QTextFrame>
-#include <QToolBar>
+#include <QTextCursor>
+#include <QTextEdit>
 #include <QUrl>
 #include <QVBoxLayout>
-#include <QWindow>
 
-#include <DockManager.h>
 #include <DockWidget.h>
-#include <DockWidgetTab.h>
 
 #include <algorithm>
-#include <numeric>
+#include <cmath>
 #include <limits>
 #include <utility>
-#include "wiring/main_window_shared.h"
-#include "browser_panel.h"
-#include "deliver_tray.h"
-#include "editor_bus.h"
-#include "finish_tray.h"
-#include "inspector_column.h"
-#include "program_strip.h"
-#include "stage_rail.h"
 
 namespace kerf {
 
@@ -176,8 +138,412 @@ QString scriptValue(const QStringList &words, const QString &key) {
 
 } // namespace
 
+// ======================================================================= ReviewWiring
+
+void ReviewWiring::attach(ChatPanel *panel) {
+    m_panel = panel;
+    MainWindow *w = m_window;
+    m_bus->setReview(m_model);
+    panel->setReview(m_model);
+    panel->setScriptDescriber([w](const QString &line) { return w->describeScriptLine(line); });
+    panel->setReviewLink([this](double seconds) { return reviewLink(seconds); });
+
+    // The bus feeds the model and the panel.
+    connect(m_bus, &EditorBus::event, this, &ReviewWiring::handleEvent);
+    connect(m_bus, &EditorBus::playheadChanged, this, [this](double seconds) {
+        m_model->setPlayhead(seconds);
+        if (m_panel) m_panel->setPlayhead(seconds);
+    });
+    connect(m_bus, &EditorBus::snapshotChanged, this, [this] {
+        if (!m_panel) return;
+        m_panel->setFps(m_bus->fps());
+        m_panel->setNamedTimeline(m_bus->timeline());
+    });
+    connect(m_bus, &EditorBus::viewAsChanged, this, [this](const QString &person) { m_model->setViewAs(person); });
+    connect(m_bus, &EditorBus::workspaceChanged, this, [this](const QString &name) {
+        if (m_panel) m_panel->setReviewWorkspace(name == QLatin1String("Review"));
+    });
+    // Cross-region requests.
+    connect(m_bus, &EditorBus::openThread, this, [this, w](const QString &id) {
+        if (!w->chatOpen()) w->setChatOpen(true);
+        if (m_panel) m_panel->openThread(id);
+    });
+    connect(m_bus, &EditorBus::askPrefill, this, [this, w](const QString &text, const QString &threadId) {
+        if (!w->chatOpen()) w->setChatOpen(true);
+        if (!m_panel) return;
+        if (!threadId.isEmpty()) {
+            const ReviewModel::Thread *thread = m_model->threadOf(threadId);
+            if (thread) {
+                m_panel->openThread(thread->id, false);
+                m_panel->setReplyTarget(thread->id);
+            }
+        }
+        m_panel->composerWidget()->fill(text);
+    });
+    connect(m_bus, &EditorBus::commentsPanelRequested, this, [w](bool open) { w->setChatOpen(open); });
+    connect(m_bus, &EditorBus::drawingFinished, this, [this](const QJsonArray &strokes) {
+        if (m_panel) m_panel->composerWidget()->setDraw(strokes.isEmpty() ? Composer::Draw::None : Composer::Draw::Attached, strokes);
+    });
+    connect(m_bus, &EditorBus::drawingCancelled, this, [this] {
+        if (m_panel && m_panel->composerWidget()->drawState() == Composer::Draw::Drawing)
+            m_panel->composerWidget()->setDraw(Composer::Draw::None);
+    });
+    connect(m_model, &ReviewModel::currentChanged, m_bus, &EditorBus::currentThreadChanged);
+    connect(panel, &ChatPanel::threadHovered, m_bus, &EditorBus::threadHovered);
+    connect(panel, &ChatPanel::commentSelected, m_bus, &EditorBus::commentSelected);
+    connect(m_model, &ReviewModel::changed, this, &ReviewWiring::syncPinnedProposal);
+    connect(m_model, &ReviewModel::countsChanged, this, [w] { w->updateChatCount(); });
+    connect(m_model, &ReviewModel::changed, m_bus, &EditorBus::reviewChanged);
+
+    // What the panel asks for.
+    connect(panel, &ChatPanel::postRequested, this, &ReviewWiring::post);
+    connect(panel, &ChatPanel::seekRequested, w, &MainWindow::queueSeek);
+    connect(panel, &ChatPanel::resolveRequested, this, &ReviewWiring::resolveThread);
+    connect(panel, &ChatPanel::acceptRequested, this, &ReviewWiring::accept);
+    connect(panel, &ChatPanel::rejectRequested, this, &ReviewWiring::reject);
+    connect(panel, &ChatPanel::previewRequested, this, &ReviewWiring::preview);
+    // ⌘↩ and Esc act on the version the pinned card shows.
+    connect(panel, &ChatPanel::shownVersionChanged, this, &ReviewWiring::syncPinnedProposal);
+    connect(panel, &ChatPanel::colourPreviewWanted, this, &ReviewWiring::requestColour);
+    // The composer's Stop, Esc while busy, and the drafting row's Stop: one abort each.
+    connect(panel, &ChatPanel::stopRequested, w, [w] {
+        if (!w->execute(QStringLiteral("ai.stop"))) return;
+        w->m_abortButton->setEnabled(false);
+        w->m_agentStatus->setText(QStringLiteral("Stopping"));
+        w->appendConversationNote(QStringLiteral("Progress"), QStringLiteral("Stopping request…"));
+    });
+    connect(panel, &ChatPanel::drawRequested, this, [this] {
+        m_panel->composerWidget()->setDraw(Composer::Draw::Drawing);
+        emit m_bus->drawingRequested();
+    });
+    connect(panel, &ChatPanel::drawCancelRequested, this, [this] {
+        m_panel->composerWidget()->setDraw(Composer::Draw::None);
+        emit m_bus->drawingCancelled();
+    });
+    connect(panel, &ChatPanel::runRequested, this, [this](const QString &what) {
+        if (what == QLatin1String("qc")) m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("check")}});
+    });
+    connect(panel, &ChatPanel::askAgainInThread, this, [this, w](const QString &text, const QString &threadId) {
+        if (w->m_agentBusy || !w->m_connected || text.trimmed().isEmpty()) return;
+        const ReviewModel::Thread *thread = threadId.isEmpty() ? nullptr : m_model->thread(threadId);
+        const QString parent = thread && thread->origin == ReviewModel::Origin::Record ? thread->id : QString();
+        QJsonObject comment;
+        if (!parent.isEmpty()) comment.insert(QStringLiteral("parent"), parent);
+        sendTurn(text, w->m_lastFocus, w->m_lastFocusLabel, comment, parent);
+    });
+    connect(panel, &ChatPanel::rowAction, this, [this](const QString &action, const QString &commentId) {
+        if (action == QLatin1String("marker")) convertToMarker(commentId);
+        else if (action == QLatin1String("delete")) deleteComment(commentId);
+    });
+    connect(panel, &ChatPanel::moreAction, this, [this, w](const QString &action, const QString &argument) {
+        if (action == QLatin1String("settings")) {
+            w->triggerCommand(QStringLiteral("app.preferences"));
+        } else if (action == QLatin1String("activity")) {
+            w->showActivity();
+        } else if (action == QLatin1String("viewAs")) {
+            m_model->setViewAs(argument);
+            m_bus->setViewAs(argument);
+        } else if (action == QLatin1String("model")) {
+            w->m_modelSelect->setEditText(argument);
+        } else if (action == QLatin1String("export")) {
+            QString path;
+            if (argument != QLatin1String("markers")) {
+                const QString suffix = argument == QLatin1String("csv") ? QStringLiteral("csv") : QStringLiteral("edl");
+                const QString base = w->m_projectDirectory.isEmpty() ? QDir::homePath() : w->m_projectDirectory;
+                path = QFileDialog::getSaveFileName(w, QStringLiteral("Export comments"),
+                                                    QDir(base).filePath(QStringLiteral("comments.%1").arg(suffix)),
+                                                    suffix == QLatin1String("csv") ? QStringLiteral("CSV (*.csv)")
+                                                                                   : QStringLiteral("EDL (*.edl)"));
+                if (path.isEmpty()) return;
+            }
+            exportComments(argument, path);
+        }
+    });
+    connect(panel, &ChatPanel::closeRequested, w, [w] { w->setChatOpen(false); });
+
+    panel->setFps(m_bus->fps());
+    panel->setPlayhead(m_bus->playhead());
+}
+
+bool ReviewWiring::post() {
+    MainWindow *w = m_window;
+    if (!m_panel) return false;
+    Composer *composer = m_panel->composerWidget();
+    const QString text = composer->text().trimmed();
+    if (text.isEmpty() || !w->m_connected) return false;
+    // Saving an edit of one's own note.
+    if (!m_panel->editing().isEmpty()) {
+        if (!editComment(m_panel->editing(), text)) return false;
+        composer->clear();
+        m_panel->setEditing(QString());
+        return true;
+    }
+    const QString reply = m_panel->replyTarget();
+    // A reply goes to a review-log thread; an unlinked proposal's thread
+    // (not in the log) only lends its range to Kerf's focus.
+    const ReviewModel::Thread *thread = reply.isEmpty() ? nullptr : m_model->thread(reply);
+    const QString parent = thread && thread->origin == ReviewModel::Origin::Record ? thread->id : QString();
+    const bool stamped = composer->stamped() && parent.isEmpty();
+    const double at = w->m_playhead;
+    const QJsonArray drawing = composer->drawing();
+    bool sent = false;
+    if (review::addressesKerf(text)) {
+        if (w->m_agentBusy) return false;
+        // About the replied thread's mark, or the playhead.
+        QJsonObject focus;
+        QString label;
+        if (thread && thread->root.hasAt()) {
+            const double end = thread->root.at + std::max(0.0, thread->root.duration);
+            focus = QJsonObject{{QStringLiteral("scope"), thread->root.duration > 0 ? QStringLiteral("range") : QStringLiteral("sequence")},
+                                {QStringLiteral("fromFrame"), w->frameAt(thread->root.at)},
+                                {QStringLiteral("toFrame"), w->frameAt(end)}};
+            label = QStringLiteral("Sequence at %1").arg(review::markText(thread->root.at, thread->root.duration, w->m_fps));
+        } else {
+            focus = QJsonObject{{QStringLiteral("scope"), QStringLiteral("sequence")},
+                                {QStringLiteral("fromFrame"), w->frameAt(at)},
+                                {QStringLiteral("toFrame"), w->frameAt(at)}};
+            label = QStringLiteral("Sequence at %1").arg(timelineTimecode(at, w->m_fps));
+        }
+        QJsonObject comment;
+        if (stamped) comment.insert(QStringLiteral("at"), at);
+        if (!parent.isEmpty()) comment.insert(QStringLiteral("parent"), parent);
+        if (!drawing.isEmpty()) comment.insert(QStringLiteral("drawing"), drawing);
+        sent = sendTurn(text, focus, label, comment, parent);
+    } else {
+        // A note for people (and agents over MCP): the review log only.
+        const QString id = nextClientId();
+        QJsonObject command{{QStringLiteral("type"), QStringLiteral("comment_add")},
+                            {QStringLiteral("id"), id},
+                            {QStringLiteral("body"), text}};
+        if (stamped) command.insert(QStringLiteral("at"), at);
+        if (!parent.isEmpty()) command.insert(QStringLiteral("parent"), parent);
+        if (!drawing.isEmpty()) command.insert(QStringLiteral("drawing"), drawing);
+        sent = m_bus->send(command);
+        if (sent) m_panel->addPendingNote(id, text, parent, stamped ? at : std::numeric_limits<double>::quiet_NaN());
+    }
+    if (!sent) return false;
+    composer->clear();
+    m_panel->setReplyTarget(QString());
+    w->updateChatControls();
+    return true;
+}
+
+bool ReviewWiring::sendTurn(const QString &text, const QJsonObject &focus, const QString &focusLabel, const QJsonObject &comment,
+                            const QString &threadId) {
+    MainWindow *w = m_window;
+    QJsonObject request = w->agentSettingsPayload();
+    request.insert(QStringLiteral("type"), QStringLiteral("agent"));
+    request.insert(QStringLiteral("text"), text);
+    if (!focus.isEmpty()) request.insert(QStringLiteral("focus"), focus);
+    // kerfd keeps the turn in the review log: the request as the reader's
+    // comment, Kerf's answer as its reply.
+    request.insert(QStringLiteral("comment"), comment);
+    // The AI bar names what Kerf works on once the bridge reports it busy.
+    w->m_agentFocusLabel = focusLabel;
+    if (!m_bus->send(request)) return false;
+    w->m_lastFocus = focus;
+    w->m_lastFocusLabel = focusLabel;
+    w->showNextSteps(QJsonArray{});
+    w->m_agentBusy = true;
+    w->m_agentText.clear();
+    w->m_agentStatus->setText(QStringLiteral("Working"));
+    w->m_abortButton->setEnabled(true);
+    if (m_panel) {
+        const bool stamped = threadId.isEmpty() && comment.contains(QStringLiteral("at"));
+        m_panel->beginTurn(text, threadId,
+                           stamped ? comment.value(QStringLiteral("at")).toDouble() : std::numeric_limits<double>::quiet_NaN());
+        m_panel->setTurnBusy(true);
+        m_panel->setTurnStatus(focusLabel);
+        w->m_agentRow = m_panel->turnKerfRow(false);
+    }
+    w->m_pendingReplies.clear();
+    w->addActivity(QStringLiteral("agent"), QStringLiteral("Request sent"));
+    w->updateChatControls();
+    w->updateAiBar();
+    w->updateCommandStates();
+    return true;
+}
+
+QJsonObject ReviewWiring::commentForFocus(const QJsonObject &focus) const {
+    const double fps = std::max(1.0, m_window->m_fps);
+    if (!focus.contains(QStringLiteral("fromFrame"))) return {};
+    const double from = focus.value(QStringLiteral("fromFrame")).toDouble() / fps;
+    const double to = focus.value(QStringLiteral("toFrame")).toDouble() / fps;
+    QJsonObject comment{{QStringLiteral("at"), from}};
+    if (to > from) comment.insert(QStringLiteral("duration"), to - from);
+    return comment;
+}
+
+bool ReviewWiring::resolveThread(const QString &threadId, bool resolve) {
+    const ReviewModel::Thread *thread = m_model->thread(threadId);
+    if (!thread || thread->origin != ReviewModel::Origin::Record) return false;
+    const auto set = [this](const QString &id, bool resolved) {
+        return m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("comment_set")},
+                                       {QStringLiteral("id"), id},
+                                       {QStringLiteral("resolved"), resolved}});
+    };
+    if (resolve) return set(thread->root.id, true);
+    // Reopening: the root, and the comments an accept resolved (it never
+    // resolves the root itself).
+    bool sent = false;
+    if (thread->root.resolved) sent = set(thread->root.id, false) || sent;
+    if (!thread->acceptedProposal.isEmpty()) {
+        const ReviewModel::Proposal *accepted = m_model->proposal(thread->acceptedProposal);
+        QList<const ReviewModel::Comment *> comments{&thread->root};
+        for (const ReviewModel::Comment &reply : thread->replies) comments << &reply;
+        for (const ReviewModel::Comment *comment : comments)
+            if (comment->resolved && !comment->proposal.isEmpty() && accepted && accepted->hasVersion(comment->proposal) &&
+                comment->id != thread->root.id)
+                sent = set(comment->id, false) || sent;
+    }
+    return sent;
+}
+
+bool ReviewWiring::accept(const QString &proposalId) {
+    if (m_model->guestMode()) return false;
+    const bool sent = m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("accept")},
+                                              {QStringLiteral("proposalId"), proposalId},
+                                              {QStringLiteral("revision"), m_window->revisionValue()}});
+    if (sent && m_panel) m_panel->markSettledHere(proposalId, true);
+    return sent;
+}
+
+bool ReviewWiring::reject(const QString &proposalId) {
+    if (m_model->guestMode()) return false;
+    const bool sent = m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("reject")},
+                                              {QStringLiteral("proposalId"), proposalId},
+                                              {QStringLiteral("revision"), m_window->revisionValue()}});
+    if (sent && m_panel) m_panel->markSettledHere(proposalId, false);
+    return sent;
+}
+
+bool ReviewWiring::preview(const QString &proposalId, bool on) {
+    if (!on) return m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("preview_exit")}});
+    QJsonObject command{{QStringLiteral("type"), QStringLiteral("preview")}, {QStringLiteral("proposalId"), proposalId}};
+    // Over the proposal's range (at most 120 s), when it has one.
+    if (const ReviewModel::Proposal *proposal = m_model->proposal(proposalId); proposal && proposal->hasRange) {
+        const double start = std::max(0.0, proposal->start);
+        const double length = std::clamp(proposal->end - start, 1.0 / std::max(1.0, m_window->m_fps), 120.0);
+        command.insert(QStringLiteral("start"), start);
+        command.insert(QStringLiteral("duration"), length);
+    }
+    return m_bus->send(command);
+}
+
+bool ReviewWiring::requestColour(const QString &versionId) {
+    if (!m_panel) return false;
+    const QJsonObject request = m_panel->colourPreviewRequest(versionId);
+    return !request.isEmpty() && m_bus->send(request);
+}
+
+bool ReviewWiring::exportComments(const QString &format, const QString &path) {
+    QJsonObject command{{QStringLiteral("type"), QStringLiteral("export_comments")},
+                        {QStringLiteral("format"), format},
+                        {QStringLiteral("includeResolved"), false}};
+    if (!path.isEmpty()) command.insert(QStringLiteral("path"), path);
+    return m_bus->send(command);
+}
+
+bool ReviewWiring::convertToMarker(const QString &commentId) {
+    const ReviewModel::Comment *comment = m_model->comment(commentId);
+    if (!comment || !comment->hasAt()) return false;
+    QJsonObject op{{QStringLiteral("op"), QStringLiteral("add-marker")},
+                   {QStringLiteral("at"), m_window->frameAt(comment->at)},
+                   {QStringLiteral("name"), comment->author.name},
+                   {QStringLiteral("note"), comment->body}};
+    if (comment->duration > 0) op.insert(QStringLiteral("frames"), m_window->frameAt(comment->duration));
+    return m_window->sendEdit(QJsonArray{op});
+}
+
+bool ReviewWiring::deleteComment(const QString &commentId) {
+    return m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("comment_set")},
+                                   {QStringLiteral("id"), commentId},
+                                   {QStringLiteral("deleted"), true}});
+}
+
+bool ReviewWiring::editComment(const QString &commentId, const QString &body) {
+    return m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("comment_set")},
+                                   {QStringLiteral("id"), commentId},
+                                   {QStringLiteral("body"), body}});
+}
+
+QString ReviewWiring::reviewLink(double seconds) const {
+    const MainWindow *w = m_window;
+    QString project = w->m_projectName.isEmpty() ? QFileInfo(w->m_projectDirectory).fileName() : w->m_projectName;
+    if (project.isEmpty()) return {};
+    project = QString::fromUtf8(QUrl::toPercentEncoding(project.toLower().replace(QLatin1Char(' '), QLatin1Char('-'))));
+    QString link = QStringLiteral("kerf://%1/rev%2").arg(project).arg(w->m_revision);
+    if (std::isfinite(seconds)) link += QLatin1Char('@') + review::timecode(seconds, w->m_fps);
+    return link;
+}
+
+void ReviewWiring::syncPinnedProposal() {
+    MainWindow *w = m_window;
+    const QList<ReviewModel::Proposal> open = m_model->openProposals();
+    if (open.isEmpty() && m_model->proposals().isEmpty()) return; // no proposals list yet: updateProposal's own.
+    // The version the pinned card shows: the one its Accept and preview send.
+    const QString pinned = open.isEmpty() ? QString()
+                           : m_panel      ? m_panel->shownVersion(open.constFirst().id)
+                                          : open.constFirst().id;
+    const bool stale = !open.isEmpty() && open.constFirst().stale;
+    if (pinned == w->m_proposalId && stale == w->m_proposalBlocked) return;
+    const bool moved = pinned != w->m_proposalId;
+    w->m_proposalId = pinned;
+    if (moved && w->m_timeline) w->m_timeline->setProposal(window_parts::proposalTimelineFor(w->m_snapshot, pinned));
+    w->m_proposalBlocked = stale;
+    w->m_acceptButton->setEnabled(w->m_connected && !pinned.isEmpty() && !stale);
+    w->m_rejectButton->setEnabled(w->m_connected && !pinned.isEmpty());
+    w->updateAiBar();
+    w->updateCommandStates();
+}
+
+void ReviewWiring::handleEvent(const QString &type, const QJsonObject &event) {
+    if (type == QLatin1String("comments") || type == QLatin1String("state") || type == QLatin1String("collab")) {
+        m_model->applyEvent(type, event);
+        if (type == QLatin1String("state") && m_panel) {
+            const QJsonObject snapshot = event.value(QStringLiteral("snapshot")).toObject().isEmpty()
+                                             ? event.value(QStringLiteral("state")).toObject()
+                                             : event.value(QStringLiteral("snapshot")).toObject();
+            m_panel->setSnapshot(snapshot);
+        }
+        if (type == QLatin1String("comments") && m_panel) m_panel->reconcileLocal();
+    } else if (type == QLatin1String("connection")) {
+        const bool ready = event.value(QStringLiteral("status")).toString() == QLatin1String("ready");
+        if (m_panel) m_panel->setConnected(ready);
+        if (ready) m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("comment_list")}});
+    } else if (type == QLatin1String("check")) {
+        if (event.value(QStringLiteral("status")).toString() == QLatin1String("done") && m_panel)
+            m_panel->setCheckRows(event.value(QStringLiteral("summary")).toObject().value(QStringLiteral("rows")).toArray());
+    } else if (type == QLatin1String("preview")) {
+        const QString status = event.value(QStringLiteral("status")).toString();
+        if (!m_panel) return;
+        if (status == QLatin1String("stopped") || status == QLatin1String("exited") || status == QLatin1String("failed"))
+            m_panel->setPreviewProposal(QString());
+        else if (event.contains(QStringLiteral("proposalId")))
+            m_panel->setPreviewProposal(event.value(QStringLiteral("proposalId")).toString());
+    } else if (type == QLatin1String("effect_preview")) {
+        const QString key = event.value(QStringLiteral("key")).toString();
+        if (!m_panel || (!key.startsWith(QLatin1String("before:")) && !key.startsWith(QLatin1String("after:")))) return;
+        const int width = event.value(QStringLiteral("width")).toInt();
+        const int height = event.value(QStringLiteral("height")).toInt();
+        const QByteArray rgba = QByteArray::fromBase64(event.value(QStringLiteral("rgba")).toString().toLatin1());
+        if (width <= 0 || height <= 0 || rgba.size() < qsizetype(width) * height * 4) return;
+        const QImage image(reinterpret_cast<const uchar *>(rgba.constData()), width, height, width * 4, QImage::Format_RGBA8888);
+        m_panel->setEffectPreview(key, image.copy());
+    } else if (type == QLatin1String("error")) {
+        const QString command = event.value(QStringLiteral("command")).toString();
+        if (!m_panel || !command.startsWith(QLatin1String("comment_"))) return;
+        const QString message = event.value(QStringLiteral("message")).toString(QStringLiteral("The review log refused it"));
+        const QString id = event.value(QStringLiteral("id")).toString();
+        if (!id.isEmpty()) m_panel->failPendingNote(id, message);
+        m_panel->composerWidget()->setError(QStringLiteral("Couldn't save the note · %1").arg(message));
+    }
+}
+
+// ======================================================================= MainWindow
+
 void MainWindow::askAboutInChat(const QString &subject) {
-    // The conversation, open, with the subject in the composer.
+    // The panel, open, with the subject in the composer.
     if (!chatOpen()) setChatOpen(true);
     QString text = m_chatInput->toPlainText().trimmed();
     if (!text.startsWith(subject)) text = subject + QLatin1Char(' ') + text;
@@ -189,36 +555,10 @@ void MainWindow::askAboutInChat(const QString &subject) {
     m_chatInput->setFocus(Qt::OtherFocusReason);
 }
 
-void MainWindow::sendChat() {
-    const QString text = m_chatInput->toPlainText().trimmed();
-    if (text.isEmpty() || !sendAgent(text, QJsonObject{}, QString())) return;
-    m_chatInput->clear();
-}
+void MainWindow::sendChat() { m_reviewWiring->post(); }
 
 bool MainWindow::sendAgent(const QString &text, const QJsonObject &focus, const QString &focusLabel) {
-    QJsonObject request = agentSettingsPayload();
-    request.insert(QStringLiteral("type"), QStringLiteral("agent"));
-    request.insert(QStringLiteral("text"), text);
-    if (!focus.isEmpty()) request.insert(QStringLiteral("focus"), focus);
-    // The AI bar names what Kerf works on once the bridge reports it busy.
-    m_agentFocusLabel = focusLabel;
-    if (!sendSimple(request)) return false;
-    m_lastFocus = focus;
-    m_lastFocusLabel = focusLabel;
-    showNextSteps(QJsonArray{});
-    m_agentBusy = true;
-    m_agentText.clear();
-    m_agentStatus->setText(QStringLiteral("Working"));
-    m_chatInput->setEnabled(false);
-    m_abortButton->setEnabled(true);
-    updateChatControls();
-    if (!focusLabel.isEmpty()) appendConversationNote(QStringLiteral("Focus"), focusLabel);
-    appendConversation(QStringLiteral("You"), text);
-    appendConversationNote(QStringLiteral("Progress"), QStringLiteral("Request sent"));
-    addActivity(QStringLiteral("agent"), QStringLiteral("Request sent"));
-    updateAiBar();
-    updateCommandStates();
-    return true;
+    return m_reviewWiring->sendTurn(text, focus, focusLabel, m_reviewWiring->commentForFocus(focus), QString());
 }
 
 void MainWindow::askAi() {
@@ -232,13 +572,8 @@ void MainWindow::askAi() {
         if (visible.contains(QPoint(std::clamp(top.x(), 0, visible.width() - 1), std::clamp(top.y(), 0, visible.height() - 1))))
             anchor = m_timelineScroll->viewport()->mapToGlobal(QPoint(std::clamp(top.x(), 24, visible.width() - 24), std::max(top.y(), 24)));
     }
-    if (clip.isEmpty()) {
-        m_askPrompt->open(anchor, QStringLiteral("Sequence at %1").arg(timelineTimecode(m_playhead, m_fps)), false);
-        return;
-    }
-    const double start = clip.value(QStringLiteral("timelineStart")).toDouble();
-    const double end = start + clip.value(QStringLiteral("duration")).toDouble();
-    m_askPrompt->open(anchor, QStringLiteral("%1  ·  %2–%3").arg(clipName(clip), timelineTimecode(start, m_fps), timelineTimecode(end, m_fps)), true);
+    const QString title = QStringLiteral("Sequence at %1").arg(timelineTimecode(m_playhead, m_fps));
+    m_askPrompt->open(anchor, title, clip.isEmpty() ? QString() : clipName(clip));
 }
 
 void MainWindow::askSubmitted(const QString &text, const QString &scope) {
@@ -261,28 +596,28 @@ void MainWindow::askSubmitted(const QString &text, const QString &scope) {
 
 void MainWindow::showNextSteps(const QJsonArray &steps) {
     m_steps = steps;
-    for (QWidget *row : {m_nextSteps, m_chatNextSteps}) {
-        while (QLayoutItem *item = row->layout()->takeAt(0)) {
-            // A pressed button sends the request that clears it.
-            if (item->widget()) item->widget()->deleteLater();
-            delete item;
-        }
-        for (const QJsonValue &value : steps) {
-            const QJsonObject step = value.toObject();
-            const QString request = step.value(QStringLiteral("request")).toString();
-            auto *button = new QPushButton(step.value(QStringLiteral("label")).toString());
-            button->setObjectName(QStringLiteral("nextStep"));
-            // A pill: its focus ring follows its round ends.
-            button->setProperty("bezelRadius", 11);
-            button->setToolTip(request);
-            button->setCursor(Qt::PointingHandCursor);
-            connect(button, &QPushButton::clicked, this, [this, request] {
-                if (!m_agentBusy) sendAgent(request, m_lastFocus, m_lastFocusLabel);
-            });
-            row->layout()->addWidget(button);
-        }
+    // The timeline's AI bar shows them as buttons while the panel is closed.
+    QWidget *row = m_nextSteps;
+    while (QLayoutItem *item = row->layout()->takeAt(0)) {
+        // A pressed button sends the request that clears it.
+        if (item->widget()) item->widget()->deleteLater();
+        delete item;
     }
-    m_chatNextSteps->setVisible(!steps.isEmpty());
+    for (const QJsonValue &value : steps) {
+        const QJsonObject step = value.toObject();
+        const QString request = step.value(QStringLiteral("request")).toString();
+        auto *button = new QPushButton(step.value(QStringLiteral("label")).toString());
+        button->setObjectName(QStringLiteral("nextStep"));
+        button->setProperty("bezelRadius", 11);
+        button->setToolTip(request);
+        button->setCursor(Qt::PointingHandCursor);
+        connect(button, &QPushButton::clicked, this, [this, request] {
+            if (!m_agentBusy) sendAgent(request, m_lastFocus, m_lastFocusLabel);
+        });
+        row->layout()->addWidget(button);
+    }
+    // In the panel: the welcome's Try asking and the composer's suggestions.
+    m_chat->setNextSteps(steps);
     updateAiBar();
 }
 
@@ -290,94 +625,54 @@ void MainWindow::updateChatControls() {
     const bool hasText = !m_chatInput->toPlainText().trimmed().isEmpty();
     m_sendButton->setEnabled(m_connected && hasText && !m_agentBusy);
     m_abortButton->setEnabled(m_agentBusy);
-    m_abortButton->setVisible(m_agentBusy);
-    m_sendButton->setVisible(!m_agentBusy);
-    // The composer's underline shows the focus of any field in it (the
-    // message, the model), in place of a ring; a button in it rings itself.
-    const QWidget *focus = QApplication::focusWidget();
-    const bool focused = focus && m_chatComposer->isAncestorOf(focus) && !qobject_cast<const QAbstractButton *>(focus);
-    const QString state = !m_connected ? QStringLiteral("offline")
-                          : m_agentBusy ? QStringLiteral("sending")
-                          : focused ? QStringLiteral("focused") : QStringLiteral("ready");
-    if (m_chatComposer->property("state").toString() != state) {
-        m_chatComposer->setProperty("state", state);
-        m_chatComposer->style()->unpolish(m_chatComposer);
-        m_chatComposer->style()->polish(m_chatComposer);
-        for (QWidget *part : m_chatComposer->findChildren<QWidget *>()) part->update();
-        m_chatComposer->update();
-    }
-    m_chatInput->setToolTip(!m_connected ? QStringLiteral("Connect to start editing")
-                            : m_agentBusy ? QStringLiteral("Kerf is working…")
-                                          : QStringLiteral("Return sends · Shift-Return starts a new line"));
-    // With a clip selected the request goes with it (the bridge sends the
-    // selection), so the composer says so.
-    const QJsonObject selected = selectedClipObject();
-    m_chatInput->setPlaceholderText(!m_connected ? QStringLiteral("Your next edit starts here…")
-                                   : m_agentBusy ? QStringLiteral("Working on your edit…")
-                                   : !selected.isEmpty() ? QStringLiteral("Ask Kerf about %1…").arg(clipName(selected))
-                                                         : QStringLiteral("Describe your next edit…"));
     m_chat->updateComposer(m_agentBusy);
+    m_chatInput->setToolTip(!m_connected ? QStringLiteral("Connect to start editing")
+                                         : QStringLiteral("Return sends · Shift-Return starts a new line"));
+    // The design's one placeholder; offline says so.
+    m_chatInput->setPlaceholderText(!m_connected ? QStringLiteral("Connect to comment or ask Kerf") : QStringLiteral("Comment or ask Kerf"));
+    m_chat->setConnected(m_connected);
     updateChatStatus();
 }
 
-void MainWindow::acceptProposal() {
-    execute(QStringLiteral("proposal.accept"));
-}
+void MainWindow::acceptProposal() { execute(QStringLiteral("proposal.accept")); }
 
-void MainWindow::rejectProposal() {
-    execute(QStringLiteral("proposal.reject"));
-}
+void MainWindow::rejectProposal() { execute(QStringLiteral("proposal.reject")); }
 
 void MainWindow::updateProposal(const QJsonValue &value) {
+    // The snapshot's first open proposal; the review model's pin order takes
+    // over once the state event reaches it (ReviewWiring::syncPinnedProposal).
     m_proposalId.clear();
     m_proposalBlocked = false;
-    bool pending = value.isObject() && value.toObject().value(QStringLiteral("status")).toString() == QStringLiteral("pending");
+    const bool pending = value.isObject() && value.toObject().value(QStringLiteral("status")).toString() == QStringLiteral("pending");
     m_acceptButton->setEnabled(m_connected && pending);
     m_rejectButton->setEnabled(m_connected && pending);
     m_chat->setProposalShown(pending, pending ? value.toObject().value(QStringLiteral("proposalId")).toString() : QString());
     if (!pending) {
-        m_chat->setProposalChanges({});
-        m_chat->setProposalSummary(QStringLiteral("No pending changes"));
         m_proposalText.clear();
         m_proposalDiff->clear();
+        m_chat->setProposalSummary(QStringLiteral("No pending changes"));
         updateAiBar();
         return;
     }
     const QJsonObject proposal = value.toObject();
     m_proposalId = proposal.value(QStringLiteral("proposalId")).toString();
     const bool stale = proposal.value(QStringLiteral("freshness")).toString() == QStringLiteral("stale");
-    const QString diff = proposal.value(QStringLiteral("documentDiff")).toString();
-    // What it changes, one row each, from its script; the summary counts
-    // those rows ("Trim, remove, add a title · 3 changes"); the compact
-    // bar keeps the verbs ("Trim, remove, add a title"), and only the count
-    // where it is too narrow for them.
-    QList<ProposalChange> changes;
-    QStringList verbs;
+    QStringList changes;
     for (const QString &line : proposal.value(QStringLiteral("script")).toString().split(QLatin1Char('\n'))) {
         const QString text = line.trimmed();
         if (text.isEmpty() || text.startsWith(QLatin1Char('#'))) continue;
-        const ProposalChange change = describeScriptLine(text);
-        changes.append(change);
-        const QString verb = change.description.section(QLatin1Char(' '), 0, 0).toLower();
-        const QString phrase = change.glyph == ProposalChange::Glyph::Title && verb == QStringLiteral("add") ? QStringLiteral("add a title") : verb;
-        if (!verbs.contains(phrase)) verbs << phrase;
+        changes << describeScriptLine(text).description;
     }
-    const QString count = changes.size() == 1 ? QStringLiteral("1 change") : QStringLiteral("%1 changes").arg(changes.size());
-    QString verbsLine = verbs.size() <= 3 ? verbs.join(QStringLiteral(", ")) : QString();
-    if (!verbsLine.isEmpty()) verbsLine = verbsLine.left(1).toUpper() + verbsLine.mid(1);
-    const QString sentence = verbsLine.isEmpty() ? QString() : verbsLine + QStringLiteral(" · ");
-    const QString stalePart = stale ? QStringLiteral(" · stale") : QString();
-    m_chat->setProposalSummary(sentence + count + stalePart, verbsLine.isEmpty() ? count + stalePart : verbsLine + stalePart,
-                               count + stalePart);
-    m_chat->setProposalChanges(changes);
+    m_chat->setProposalSummary(changes.join(QStringLiteral(" · ")));
     QString text;
     if (stale) text += QStringLiteral("This proposal is out of date. Ask Kerf to prepare it again before accepting.\n\n");
     text += proposal.value(QStringLiteral("script")).toString();
-    text += QStringLiteral("\n") + diff;
+    text += QStringLiteral("\n") + proposal.value(QStringLiteral("documentDiff")).toString();
     m_proposalText = text;
     showProposalText();
     m_acceptButton->setEnabled(m_connected && !stale);
     m_proposalBlocked = stale;
+    if (m_reviewWiring) m_reviewWiring->syncPinnedProposal();
     updateAiBar();
 }
 
@@ -512,10 +807,10 @@ ProposalChange MainWindow::describeScriptLine(const QString &line) const {
     return change;
 }
 
+
 void MainWindow::showProposalText() {
-    // Added lines in the success green, removed ones in the error red, and
-    // the script and diff headers in secondary text.
-    const EditorTheme &theme = editorTheme();
+    // The pending proposal's script and diff (deprecated view, kept for the
+    // regions that read it): additions in pos, removals in neg.
     m_proposalDiff->clear();
     QTextCursor cursor(m_proposalDiff->document());
     const QStringList lines = m_proposalText.split(QLatin1Char('\n'));
@@ -523,9 +818,9 @@ void MainWindow::showProposalText() {
         const QString &line = lines.at(index);
         const bool header = line.startsWith(QStringLiteral("+++")) || line.startsWith(QStringLiteral("---"));
         QTextCharFormat format;
-        format.setForeground(!header && line.startsWith(QLatin1Char('+')) ? theme.success
-                             : !header && line.startsWith(QLatin1Char('-')) ? theme.error
-                                                                             : theme.textSecondary);
+        format.setForeground(!header && line.startsWith(QLatin1Char('+'))   ? tokens::color(tokens::pos)
+                             : !header && line.startsWith(QLatin1Char('-')) ? tokens::color(tokens::neg)
+                                                                             : tokens::color(tokens::ink2));
         if (index > 0) cursor.insertBlock();
         cursor.insertText(line, format);
     }
@@ -536,12 +831,20 @@ void MainWindow::appendConversation(const QString &speaker, const QString &text)
     if (text.isEmpty()) return;
     const bool user = speaker == QStringLiteral("You");
     const bool error = speaker == QStringLiteral("Error");
-    CommentRow *row = m_chat->addComment(user ? CommentRow::Kind::User : error ? CommentRow::Kind::Error : CommentRow::Kind::Kerf, text);
     if (user) {
         // A new turn: Kerf's steps from now on belong to its next reply.
+        m_chat->beginTurn(text, QString());
         m_agentRow = nullptr;
         m_pendingReplies.clear();
-    } else if (speaker == QStringLiteral("Kerf")) {
+    } else if (error) {
+        m_chat->addComment(CommentRow::Kind::Error, text);
+    } else {
+        CommentRow *row = m_chat->turnKerfRow(false);
+        if (row && row->isDrafting()) {
+            row->setText(text);
+        } else {
+            row = m_chat->addComment(CommentRow::Kind::Kerf, text);
+        }
         m_agentRow = row;
         for (const QString &reply : std::as_const(m_pendingReplies)) row->addReply(reply);
         m_pendingReplies.clear();
@@ -550,18 +853,22 @@ void MainWindow::appendConversation(const QString &speaker, const QString &text)
 }
 
 void MainWindow::updateChatCount() {
-    const qsizetype count = m_chat->rows().size();
-    m_rail->chatButton()->setLabel(count ? QString::number(count) : QStringLiteral("Chat"));
+    // The rail's button counts the open threads.
+    const int open = m_reviewWiring && m_reviewWiring->model() ? m_reviewWiring->model()->counts().open : 0;
+    m_rail->chatButton()->setLabel(open ? QString::number(open) : QStringLiteral("Chat"));
 }
 
 void MainWindow::updateChatTips() {
     if (!m_commands) return;
-    const QString close = m_commands->labelWithShortcut(QStringLiteral("window.assistant"), QStringLiteral("Close Kerf Assistant"));
-    m_chat->closeButton()->setToolTip(close);
+    QAction *assistant = m_commands->action(QStringLiteral("window.assistant"));
+    const QString key = assistant ? assistant->shortcut().toString(QKeySequence::NativeText) : QString();
+    ui::setTip(m_chat->closeButton(), QStringLiteral("Close"), key);
     RailButton *rail = m_rail->chatButton();
-    rail->setToolTip(rail->isChecked() ? close
-                                       : m_commands->labelWithShortcut(QStringLiteral("window.assistant"), QStringLiteral("Open Kerf Assistant")));
-    rail->setAccessibleName(rail->isChecked() ? QStringLiteral("Close Kerf Assistant") : QStringLiteral("Open Kerf Assistant"));
+    const int open = m_reviewWiring && m_reviewWiring->model() ? m_reviewWiring->model()->counts().open : 0;
+    rail->setToolTip(rail->isChecked() ? m_commands->labelWithShortcut(QStringLiteral("window.assistant"), QStringLiteral("Close comments"))
+                                       : m_commands->labelWithShortcut(QStringLiteral("window.assistant"),
+                                                                       QStringLiteral("Comments · %1 open").arg(open)));
+    rail->setAccessibleName(rail->isChecked() ? QStringLiteral("Close comments") : QStringLiteral("Open comments"));
 }
 
 bool MainWindow::chatOpen() const {
@@ -587,7 +894,7 @@ void MainWindow::setChatOpen(bool open) {
 
 void MainWindow::syncChatSwitches() {
     // The toolbar's bubble, Window ▸ Kerf Assistant and the rail's button
-    // read open only while the conversation is open and in sight.
+    // read open only while the panel is open and in sight.
     const bool open = chatOpen();
     if (m_commands) {
         for (const QString &id : {QStringLiteral("window.assistant"), QStringLiteral("view.comments")})
@@ -612,13 +919,9 @@ void MainWindow::showActivity() {
 }
 
 void MainWindow::updateChatStatus() {
-    // A quiet line after the latest comment while there is something to
-    // say: Kerf at work (its three dots and its latest step), connecting,
-    // offline, stopped or failed. Ready and in review say nothing; the
-    // pinned proposal speaks for review.
-    const QString state = m_agentStatus->text();
-    m_chat->statusRow()->setVisible(state != QStringLiteral("Ready") && state != QStringLiteral("Review"));
-    m_chatActivity->setVisible(m_agentBusy && !m_chatActivity->text().isEmpty());
+    // Kerf at work shows in its drafting row: the latest status line.
+    m_chatActivity->setVisible(false);
+    if (m_agentBusy && !m_chatActivity->text().isEmpty()) m_chat->setTurnStatus(m_chatActivity->text());
 }
 
 void MainWindow::appendConversationNote(const QString &kind, const QString &text) {
@@ -628,14 +931,15 @@ void MainWindow::appendConversationNote(const QString &kind, const QString &text
         return;
     }
     const QString detail = text.simplified();
-    // A tool's work is a reply under Kerf's comment for this turn, folded
-    // behind "▸ 2 steps"; until Kerf writes, it waits for that comment.
+    // A tool's work is a step of Kerf's row for this turn, folded behind
+    // "2 steps"; until Kerf's row exists, it waits.
     if (kind == QStringLiteral("Tool")) {
         if (m_agentRow) m_agentRow->addReply(detail);
         else m_pendingReplies.append(detail);
     }
     m_chatActivity->setText(detail);
     m_chatActivity->setToolTip(QStringLiteral("%1 · %2").arg(kind, detail));
+    m_chat->setTurnStatus(detail);
     updateChatStatus();
 }
 
@@ -645,12 +949,27 @@ bool MainWindow::handleAgentEvent(const QJsonObject &event) {
         const QString kind = event.value(QStringLiteral("kind")).toString(QStringLiteral("agent"));
         const QString text = event.value(QStringLiteral("text")).toString();
         if (kind == QStringLiteral("delta")) {
-            if (m_agentText.isEmpty() || !m_agentRow) appendConversation(QStringLiteral("Kerf"), text);
-            else m_agentRow->appendText(text);
+            // The stream shows in the turn's drafting row until done.
+            CommentRow *row = m_chat->turnKerfRow(true);
+            if (m_agentText.isEmpty()) row->setText(text);
+            else row->appendText(text);
+            for (const QString &reply : std::as_const(m_pendingReplies)) row->addReply(reply);
+            m_pendingReplies.clear();
+            m_agentRow = row;
             m_agentText += text;
         } else if (kind == QStringLiteral("done")) {
-            if (m_agentText.isEmpty()) appendConversation(QStringLiteral("Kerf"), text);
+            CommentRow *row = m_chat->turnKerfRow(false);
+            if (m_agentText.isEmpty() && !text.isEmpty()) {
+                if (row) row->setText(text);
+                else row = m_chat->addComment(CommentRow::Kind::Kerf, text);
+            }
+            if (row) {
+                for (const QString &reply : std::as_const(m_pendingReplies)) row->addReply(reply);
+                m_pendingReplies.clear();
+            }
             m_agentText.clear();
+            m_chat->finishTurn();
+            m_agentRow = nullptr;
             appendConversationNote(QStringLiteral("Progress"), QStringLiteral("Response complete"));
         } else if (kind == QStringLiteral("tool")) {
             appendConversationNote(QStringLiteral("Tool"), text);
@@ -671,7 +990,8 @@ bool MainWindow::handleAgentEvent(const QJsonObject &event) {
         else if (m_agentRunState == QStringLiteral("aborted")) m_agentStatus->setText(QStringLiteral("Stopped"));
         else if (m_agentRunState == QStringLiteral("awaiting_review")) m_agentStatus->setText(QStringLiteral("Review"));
         else m_agentStatus->setText(QStringLiteral("Ready"));
-        m_chatInput->setEnabled(m_connected && !busy);
+        m_chat->setTurnBusy(busy);
+        if (!busy) m_chat->finishTurn();
         updateChatControls();
         updateAiBar();
         updateCommandStates();
@@ -687,6 +1007,10 @@ bool MainWindow::handleAgentEvent(const QJsonObject &event) {
         updateChatStatus();
         if (state == QStringLiteral("failed")) {
             appendConversationNote(QStringLiteral("Agent error"), event.value(QStringLiteral("message")).toString());
+            m_chat->finishTurn();
+        } else if (state == QStringLiteral("aborted")) {
+            // "Kerf · stopped", with Ask again.
+            m_chat->stopTurn();
         }
     } else if (type == QStringLiteral("agent_next")) {
         showNextSteps(event.value(QStringLiteral("steps")).toArray());
@@ -696,12 +1020,10 @@ bool MainWindow::handleAgentEvent(const QJsonObject &event) {
     return true;
 }
 
-// The comments panel (Kerf's conversation) and the rail beside the picture.
+// The comments panel (the agent chat) and the rail beside the picture.
 void MainWindow::buildReview() {
-    // Kerf's conversation lives in the Program monitor's stage beside the
-    // picture, as a Short's comments open beside it: the rail's chat button
-    // between them, and the panel as tall as the picture (see
-    // ViewerWidget::stageLayout).
+    // The panel lives in the Program monitor's stage beside the picture, as
+    // tall as the device (see ViewerWidget::stageLayout).
     m_chat = new ChatPanel;
     m_rail = new StageRail;
     m_chatScroll = m_chat->scroll();
@@ -719,33 +1041,10 @@ void MainWindow::buildReview() {
     m_rejectButton = m_chat->rejectButton();
     m_chatNextSteps = m_chat->chips();
     m_modelSelect->setToolTip(QStringLiteral("Model ID sent with each chat request. Suggestions follow the active connection in Settings."));
-    m_chatInput->installEventFilter(this);
     connect(m_chatInput, &QTextEdit::textChanged, this, &MainWindow::updateChatControls);
-    connect(m_sendButton, &QPushButton::clicked, this, &MainWindow::sendChat);
+    // Stop (m_abortButton) reaches kerfd through ChatPanel::stopRequested (ReviewWiring).
     m_abortButton->setEnabled(false);
-    connect(m_abortButton, &QPushButton::clicked, this, [this] {
-        if (!execute(QStringLiteral("ai.stop"))) return;
-        m_abortButton->setEnabled(false);
-        m_agentStatus->setText(QStringLiteral("Stopping"));
-        appendConversationNote(QStringLiteral("Progress"), QStringLiteral("Stopping request…"));
-    });
-    // The composer follows the focus into and out of it (see updateChatControls).
-    connect(qApp, &QApplication::focusChanged, this, [this](QWidget *from, QWidget *to) {
-        if ((from && m_chatComposer->isAncestorOf(from)) || (to && m_chatComposer->isAncestorOf(to))) updateChatControls();
-    });
-    connect(m_chat, &ChatPanel::askAgain, this, [this](const QString &text) {
-        if (!m_agentBusy && m_connected) sendAgent(text, QJsonObject{}, QString());
-    });
-    m_chat->moreButton()->setToolTip(QStringLiteral("Agent settings and activity"));
-    connect(m_chat->moreButton(), &QAbstractButton::clicked, this, [this] {
-        QMenu menu(this);
-        menu.addAction(QStringLiteral("Agent Settings…"), this, [this] { triggerCommand(QStringLiteral("app.preferences")); });
-        menu.addAction(QStringLiteral("Activity"), this, [this] { showActivity(); });
-        QWidget *more = m_chat->moreButton();
-        menu.exec(more->mapToGlobal(QPoint(more->width() - menu.sizeHint().width(), more->height() + 4)));
-    });
-    connect(m_chat->closeButton(), &QAbstractButton::clicked, this, [this] { setChatOpen(false); });
-    // What the agent and the project did, one line each, from the ⋯ menu.
+    // What the agent and the project did, one line each, from More.
     m_activityPopup = new QFrame(this, Qt::Popup);
     m_activityPopup->setObjectName(QStringLiteral("activityPopup"));
     {
@@ -762,6 +1061,7 @@ void MainWindow::buildReview() {
     }
     connect(m_acceptButton, &QPushButton::clicked, this, &MainWindow::acceptProposal);
     connect(m_rejectButton, &QPushButton::clicked, this, &MainWindow::rejectProposal);
+    m_reviewWiring->attach(m_chat);
 }
 
 } // namespace kerf

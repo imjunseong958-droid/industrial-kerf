@@ -1,15 +1,14 @@
 #include "program_strip.h"
+#include "components.h"
 #include "design_tokens.h"
 #include "editor_bus.h"
-#include "editor_theme.h"
 
 #include <QAction>
-#include <QFrame>
 #include <QHBoxLayout>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QLabel>
 #include <QPainter>
-#include <QToolButton>
 
 namespace kerf {
 
@@ -20,31 +19,37 @@ QString css(QRgb color) {
     return QStringLiteral("rgba(%1,%2,%3,%4)").arg(c.red()).arg(c.green()).arg(c.blue()).arg(c.alphaF(), 0, 'f', 3);
 }
 
-QString css(const QColor &c) {
-    return QStringLiteral("rgba(%1,%2,%3,%4)").arg(c.red()).arg(c.green()).arg(c.blue()).arg(c.alphaF(), 0, 'f', 3);
+// The strip's actions by object name: the kit icon, and the name its tip
+// gives (mockup-spec 2 and 15).
+struct StripEntry {
+    const char *object;
+    const char *icon;
+    const char *tip;
+};
+constexpr StripEntry kEntries[] = {
+    {"maskRectangle", "g-mrect", "Rectangle mask"},
+    {"maskEllipse", "g-mell", "Ellipse mask"},
+    {"maskPen", "g-mpen", "Pen mask"},
+    {"view.annotations", "g-annot", "Annotations"},
+    {"view.safeZones", "g-safe", "Safe zones · action 93%, title 90%"},
+    {"view.dim", "g-dim", "Dim surround"},
+    {"viewer.zoom", "", "Viewer zoom"},
+};
+
+const StripEntry *entryFor(const QAction *action) {
+    if (!action) return nullptr;
+    for (const StripEntry &entry : kEntries)
+        if (action->objectName() == QLatin1String(entry.object)) return &entry;
+    return nullptr;
 }
 
-// The strip's tools as the title-bar tools were: bare on the chrome, the
-// hover wash under the pointer and the pressed one held; the chosen tool (a
-// mask tool, a switch that is on) the accent tint, darker while held.
-QString toolSheet() {
-    const EditorTheme &theme = editorTheme();
-    return QStringLiteral(
-               "QToolButton { background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 0 4px; }"
-               "QToolButton:hover { background: %1; border-color: transparent; }"
-               "QToolButton:pressed { background: %2; border-color: transparent; }"
-               "QToolButton:checked:enabled, QToolButton:checked:enabled:hover { background: %3; border-color: transparent; }"
-               "QToolButton:checked:enabled:pressed { background: %4; border-color: transparent; }"
-               "QToolButton:disabled { background: transparent; border-color: transparent; }")
-        .arg(css(theme.raised), css(theme.on), css(theme.accentTint), css(theme.accentTintPressed));
-}
+bool isZoom(const QAction *action) { return action && action->objectName() == QLatin1String("viewer.zoom"); }
 
 } // namespace
 
 ProgramStrip::ProgramStrip(QWidget *parent, EditorBus *bus) : QWidget(parent), m_bus(bus) {
     setObjectName(QStringLiteral("programStrip"));
     setFixedHeight(tokens::layout::strip);
-    setStyleSheet(toolSheet());
     auto *layout = new QHBoxLayout(this);
     layout->setContentsMargins(tokens::space::panelLeft, 0, tokens::space::panelHeaderRight, 0);
     layout->setSpacing(tokens::space::s4);
@@ -53,26 +58,25 @@ ProgramStrip::ProgramStrip(QWidget *parent, EditorBus *bus) : QWidget(parent), m
     m_title->setFont(tokens::font(tokens::controlStrong));
     m_title->setStyleSheet(QStringLiteral("color: %1;").arg(css(tokens::ink)));
     layout->addWidget(m_title);
+    // The preview text, 8 after the title, its dot and words 8 apart.
     layout->addSpacing(tokens::space::s8 - tokens::space::s4);
-    m_previewDot = new QLabel;
+    m_previewDot = new ui::Dot(tokens::color(tokens::ink2));
+    m_previewDot->setObjectName(QStringLiteral("programPreviewDot"));
     m_previewDot->setFixedSize(6, 6);
-    m_previewDot->setStyleSheet(QStringLiteral("background: %1; border-radius: 3px;").arg(css(tokens::ink2)));
     m_previewDot->hide();
-    layout->addWidget(m_previewDot);
+    layout->addWidget(m_previewDot, 0, Qt::AlignVCenter);
+    layout->addSpacing(tokens::space::s8 - tokens::space::s4);
     m_preview = new QLabel;
     m_preview->setObjectName(QStringLiteral("programPreview"));
     m_preview->setFont(tokens::font(tokens::control));
     m_preview->setStyleSheet(QStringLiteral("color: %1;").arg(css(tokens::ink3)));
     m_preview->hide();
     layout->addWidget(m_preview);
-    m_exitPreview = new QToolButton;
+    m_exitPreview = new ui::GhostButton(QStringLiteral("Exit preview"));
     m_exitPreview->setObjectName(QStringLiteral("exitPreview"));
-    m_exitPreview->setText(QStringLiteral("Exit preview"));
-    m_exitPreview->setAutoRaise(true);
-    m_exitPreview->setFont(tokens::font(tokens::control));
-    m_exitPreview->setFixedHeight(tokens::height::h24);
+    m_exitPreview->setTip(QStringLiteral("Exit preview"));
     m_exitPreview->hide();
-    connect(m_exitPreview, &QToolButton::clicked, this, [this] {
+    connect(m_exitPreview, &QAbstractButton::clicked, this, [this] {
         if (m_bus) m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("preview_exit")}});
         emit exitPreviewRequested();
     });
@@ -89,28 +93,72 @@ ProgramStrip::ProgramStrip(QWidget *parent, EditorBus *bus) : QWidget(parent), m
         });
 }
 
+QString ProgramStrip::iconFor(const QAction *action) {
+    const StripEntry *entry = entryFor(action);
+    return entry ? QString::fromLatin1(entry->icon) : QString();
+}
+
+QString ProgramStrip::tipFor(const QAction *action) {
+    if (const StripEntry *entry = entryFor(action)) return QString::fromUtf8(entry->tip);
+    return action ? action->text().remove(QLatin1Char('&')) : QString();
+}
+
+void ProgramStrip::follow(QAbstractButton *button, const QAction *action) {
+    if (!button || !action) return;
+    button->setEnabled(action->isEnabled());
+    if (action->isCheckable()) {
+        button->setCheckable(true);
+        const QSignalBlocker blocker(button);
+        button->setChecked(action->isChecked());
+    }
+    // name · shortcut, and why while it is unavailable (the registry keeps
+    // the reason as the action's status tip).
+    QString name = tipFor(action);
+    QString reason = action->statusTip();
+    // The mask tools wait for a picture clip to be selected.
+    if (reason.isEmpty() && action->objectName().startsWith(QLatin1String("mask"))) reason = QStringLiteral("Select a picture clip");
+    if (!action->isEnabled() && !reason.isEmpty()) name = QStringLiteral("%1 · %2").arg(name, reason);
+    ui::setTip(button, name, action->shortcut().toString(QKeySequence::NativeText));
+    if (auto *ghost = qobject_cast<ui::GhostButton *>(button)) ghost->setText(m_zoomText);
+}
+
 void ProgramStrip::setActions(const QList<QAction *> &actions) {
     for (QWidget *widget : std::as_const(m_trailingWidgets)) widget->deleteLater();
     m_trailingWidgets.clear();
+    m_buttons.clear();
     m_actions = actions;
     for (QAction *action : actions) {
         QWidget *widget = nullptr;
         if (!action) {
-            auto *line = new QFrame;
+            auto *line = new ui::Separator(tokens::space::s4);
             line->setObjectName(QStringLiteral("programStripSeparator"));
-            line->setFixedSize(1, 16);
-            line->setStyleSheet(QStringLiteral("background: %1;").arg(css(tokens::line)));
             widget = line;
         } else {
-            auto *button = new QToolButton;
-            button->setDefaultAction(action);
+            QAbstractButton *button = nullptr;
+            if (isZoom(action)) {
+                auto *ghost = new ui::GhostButton(m_zoomText);
+                ghost->setChevron(true);
+                connect(ghost, &QAbstractButton::clicked, this, [this, ghost] { emit zoomMenuRequested(ghost); });
+                button = ghost;
+            } else {
+                auto *icon = new ui::IconButton(iconFor(action));
+                // A press runs the action, as its menu item and key do; the
+                // action's own state then comes back to the button.
+                connect(icon, &QAbstractButton::clicked, action, [action, icon] {
+                    if (action->isCheckable()) {
+                        // The button flipped itself; the action decides.
+                        const QSignalBlocker blocker(icon);
+                        icon->setChecked(action->isChecked());
+                    }
+                    action->trigger();
+                });
+                button = icon;
+            }
             button->setObjectName(action->objectName());
-            button->setAutoRaise(true);
-            button->setFixedHeight(tokens::height::h24);
-            button->setMinimumWidth(tokens::height::h24);
-            button->setFont(tokens::font(tokens::control));
-            button->setToolButtonStyle(action->icon().isNull() ? Qt::ToolButtonTextOnly : Qt::ToolButtonIconOnly);
-            button->setIconSize(QSize(16, 16));
+            connect(action, &QAction::changed, button, [this, button, action] { follow(button, action); });
+            connect(action, &QAction::toggled, button, [this, button, action] { follow(button, action); });
+            m_buttons.append({button, action});
+            follow(button, action);
             widget = button;
         }
         m_trailing->addWidget(widget, 0, Qt::AlignVCenter);
@@ -118,19 +166,36 @@ void ProgramStrip::setActions(const QList<QAction *> &actions) {
     }
 }
 
-QToolButton *ProgramStrip::buttonFor(const QAction *action) const {
-    for (QWidget *widget : m_trailingWidgets)
-        if (auto *button = qobject_cast<QToolButton *>(widget); button && button->defaultAction() == action) return button;
+QAbstractButton *ProgramStrip::buttonFor(const QAction *action) const {
+    for (const auto &[button, owner] : m_buttons)
+        if (owner == action) return button;
     return nullptr;
 }
 
-bool ProgramStrip::previewShown() const {
-    return !m_preview->isHidden();
+QAbstractButton *ProgramStrip::zoomButton() const {
+    for (const auto &[button, owner] : m_buttons)
+        if (isZoom(owner)) return button;
+    return nullptr;
 }
 
-QString ProgramStrip::previewText() const {
-    return m_preview->text();
+void ProgramStrip::setZoomText(const QString &text) {
+    m_zoomText = text;
+    if (auto *ghost = qobject_cast<ui::GhostButton *>(zoomButton())) {
+        ghost->setText(text);
+        ghost->updateGeometry();
+    }
 }
+
+void ProgramStrip::setDetail(const QString &detail) {
+    m_detail = detail;
+    ui::setTip(m_title, detail.isEmpty() ? QStringLiteral("Program") : QStringLiteral("Program · %1").arg(detail));
+}
+
+bool ProgramStrip::previewShown() const { return !m_preview->isHidden(); }
+
+QString ProgramStrip::previewText() const { return m_preview->text(); }
+
+QAbstractButton *ProgramStrip::exitPreviewButton() const { return m_exitPreview; }
 
 void ProgramStrip::showPreview(const QJsonObject &event) {
     const QString status = event.value(QStringLiteral("status")).toString();
@@ -162,13 +227,9 @@ void ProgramStrip::showPreview(const QJsonObject &event) {
     m_exitPreview->setVisible(shown);
 }
 
-QSize ProgramStrip::sizeHint() const {
-    return {QWidget::sizeHint().width(), tokens::layout::strip};
-}
+QSize ProgramStrip::sizeHint() const { return {QWidget::sizeHint().width(), tokens::layout::strip}; }
 
-QSize ProgramStrip::minimumSizeHint() const {
-    return {0, tokens::layout::strip};
-}
+QSize ProgramStrip::minimumSizeHint() const { return {0, tokens::layout::strip}; }
 
 void ProgramStrip::paintEvent(QPaintEvent *) {
     QPainter painter(this);

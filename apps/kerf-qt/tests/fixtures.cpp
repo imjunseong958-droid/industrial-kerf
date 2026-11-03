@@ -306,8 +306,16 @@ QJsonObject showcaseSnapshot(int revision, const QString &projection) {
     const QJsonObject proposal{{"status", "pending"}, {"proposalId", "p7"},
                                {"script", "trim v1b out -36f\nremove v1c\nadd title t2 at 00:00:12:00\n"},
                                {"documentDiff", "-    clip v1b dur=5s\n+    clip v1b dur=3.5s\n-    clip v1c\n+    title t2\n"}};
+    // The engine's open proposals as kerfd lists them (plan.md section 3);
+    // pendingProposal stays the first of them.
+    QJsonObject listed = proposal;
+    listed.insert(QStringLiteral("version"), 1);
+    listed.insert(QStringLiteral("baseRevision"), revision);
+    listed.insert(QStringLiteral("freshness"), QStringLiteral("fresh"));
+    listed.insert(QStringLiteral("author"), QJsonObject{{"kind", "kerf"}, {"name", "Kerf"}});
     return QJsonObject{{"revision", revision}, {"duration", 18}, {"projectionStatus", projection},
-                       {"timeline", timeline(false)}, {"pendingProposal", proposal}, {"proposalTimeline", timeline(true)}};
+                       {"timeline", timeline(false)}, {"pendingProposal", proposal}, {"proposalTimeline", timeline(true)},
+                       {"proposals", QJsonArray{listed}}, {"proposalTimelines", QJsonObject{{"p7", timeline(true)}}}};
 }
 
 void fakeArtwork(MediaArtwork *artwork) {

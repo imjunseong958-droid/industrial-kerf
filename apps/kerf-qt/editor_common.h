@@ -17,48 +17,44 @@ class QComboBox;
 
 namespace kerf {
 
-// The track headers' column: badge, eye, mute and lock on one line, then
-// the name, as the structure the owner chose.
-constexpr int kTimelineLabelWidth = 220;
-// Where time zero sits: past the track headers by more than half the
-// playhead's head, so the head shows whole at the start.
-constexpr int kTimelineOrigin = kTimelineLabelWidth + 6;
+// The timeline's geometry (mockup-spec 7). The track headers' column, 200
+// wide: patch, target, name, and the lock, eye or mute and solo toggles on
+// one line.
+constexpr int kTimelineLabelWidth = 200;
+// Time zero sits 8 into the lanes (the mockup's x = 8 + t * px/s), so the
+// playhead's 9 pt head shows whole at the start.
+constexpr int kTimelineOrigin = kTimelineLabelWidth + 8;
 constexpr int kTimelineTail = 30;
-constexpr int kRulerHeight = 26;
-// Track heights start as tall as a dense edit allows with its pictures and
-// sound in view: a picture clip is a 29px filmstrip and a sound clip a 25px
-// waveform, each with its name on a chip over the corner (a name bar of its
-// own only from the Large preset up). Both stay one-line headers, under
-// kDetailedTrackHeight. Six tracks fit the timeline at 1280x800, 1366x768
-// and 1440x900, and eight at Small.
-constexpr int kTrackHeight = 30;
-constexpr int kVideoTrackHeight = 34;
-// The add-track row under the last track.
+// The ruler, 32 tall: a 12 pt row of comment marks, proposal bands and
+// sequence markers over the ticks and their labels.
+constexpr int kRulerHeight = 32;
+constexpr int kRulerMarkerRow = 12;
+// Track heights. M, each kind's default, is 36 for picture and 32 for
+// sound; S is 24 and L 48 for both. Fit shares the panel's height.
+constexpr int kVideoTrackHeight = 36;
+constexpr int kTrackHeight = 32;
+constexpr int kSmallTrackHeight = 24;
+constexpr int kLargeTrackHeight = 48;
+// The add-track row under the last track, shown under the pointer.
 constexpr int kAddLaneHeight = 32;
-// Mini: one line per track (badge, toggles, name, and clip names).
-constexpr int kMinTrackHeight = 18;
+// S is the shortest: a header's 20 pt patch, target and toggles fit it.
+constexpr int kMinTrackHeight = kSmallTrackHeight;
 constexpr int kMaxTrackHeight = 160;
 // How far from the line between two headers a drag still resizes the
 // upper track: a sixth of the shorter track, at least 2px and at most this.
 constexpr int kResizeGrip = 4;
-constexpr int kClipInset = 2;
 constexpr int kTrimHandle = 8;
-// Track header preview slot, right-aligned beside the track name.
-constexpr int kHeaderPreviewWidth = 48;
-constexpr int kHeaderPreviewHeight = 27;
-// Below this a header is one line: no clip count under the name, and no preview.
-constexpr int kDetailedTrackHeight = 40;
 
 struct TrackHeightPreset {
     const char *name;
     int height; // 0: each track's default (kVideoTrackHeight or kTrackHeight).
 };
 
-// Track height steps, named the way Pro Tools names them.
+// The track height bar's presets, S, M and L.
 constexpr TrackHeightPreset kTrackHeightPresets[] = {
-    {"Mini", kMinTrackHeight}, {"Small", 26}, {"Medium", 0}, {"Large", 60}, {"Jumbo", 96}};
+    {"Small", kSmallTrackHeight}, {"Medium", 0}, {"Large", kLargeTrackHeight}};
 // The heights Option-scroll and Option-Up/Down step every track through.
-constexpr int kTrackHeightSteps[] = {18, 22, 26, 30, 36, 44, 52, 60, 72, 86, 104, 128, 160};
+constexpr int kTrackHeightSteps[] = {24, 28, 32, 36, 42, 48, 56, 64, 72, 86, 104, 128, 160};
 // One pixel stays under a frame, so the pointer time cannot step in multi-second jumps.
 constexpr double kMinPixelsPerSecond = 80.0;
 
@@ -75,14 +71,21 @@ QString prettyTime(double seconds);
 
 QString timelineTimecode(double seconds, double fps);
 
-QString timelineRulerLabel(double seconds, double fps, double duration);
-
-struct RulerScale {
-    double majorSeconds = 1.0;
-    int divisions = 10;
+// The ruler's ticks (mockup-spec 7.3): a minor tick every `minorFrames`,
+// a major one every `majorFrames` (five minor), a label every `labelFrames`
+// (ten minor). At the design's 25p and 26.8 pt/s that is 10, 50 and 100
+// frames; other rates and zooms take the smallest step of the ladder 1, 2,
+// 5, 10, 20, 50 ... frames whose minor ticks stand at least 8 pt apart.
+struct RulerTicks {
+    qint64 minorFrames = 10;
+    qint64 majorFrames = 50;
+    qint64 labelFrames = 100;
 };
-
-RulerScale rulerScale(double pixelsPerSecond, double fps);
+RulerTicks rulerTicks(double pixelsPerSecond, double fps);
+// A ruler label for `frame`: minutes and seconds ("00:04"), with hours in
+// front from an hour on, and the frame after them ("00:04:04") when labels
+// do not fall on whole seconds.
+QString rulerLabel(qint64 frame, double fps, qint64 labelFrames);
 
 QString clipName(const QJsonObject &clip);
 

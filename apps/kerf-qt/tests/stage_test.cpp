@@ -1,4 +1,5 @@
-// Tests for the Program stage: viewer canvas, player overlay, masks and formats.
+// Tests for the Program stage: the [OWNER] placement, the parts placed in it,
+// the picture overlays, dim, the Program strip, masks and formats.
 
 #include "fixtures.h"
 #include "test_registry.h"
@@ -16,6 +17,12 @@
 #include "main_window.h"
 #include "media_artwork.h"
 #include "player_overlay.h"
+#include "program_strip.h"
+#include "scrub_strip.h"
+#include "stage_rail.h"
+#include "ui/components.h"
+#include "ui/editor_bus.h"
+#include "ui/wiring/stage_wiring.h"
 #include "presets_panel.h"
 #include "program_level.h"
 #include "project_launcher.h"
@@ -45,6 +52,7 @@
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QFrame>
+#include <QGraphicsOpacityEffect>
 #include <QGroupBox>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -113,273 +121,733 @@ namespace kerf {
 
 using namespace test;
 
+namespace {
+
+// Within `tolerance` of `expected`, or a failure naming the value.
+#define KERF_NEAR(actual, expected, tolerance, what)                                                                       \
+    QVERIFY2(std::abs(double(actual) - double(expected)) <= (tolerance),                                                   \
+             qPrintable(QStringLiteral("%1: %2, expected %3").arg(QLatin1String(what)).arg(double(actual), 0, 'f', 2).arg(double(expected))))
+
+// A stage of the 1600 x 1000 canvas (1296 x 564) with stand-ins for its
+// parts: the rail, the panel, the scrub strip, the HUD (hidden, as it is
+// until a preview renders) and the Source column.
+struct Stage {
+    ViewerWidget viewer;
+    QWidget *rail = new QWidget;
+    QWidget *panel = new QWidget;
+    QWidget *scrub = new QWidget;
+    QWidget *hud = new QWidget;
+    QWidget *source = new QWidget;
+    explicit Stage(const QSize &canvas, bool open = true, const QSize &size = QSize(1296, 564)) {
+        viewer.resize(size);
+        hud->hide();
+        viewer.setStage(rail, panel);
+        viewer.setStageParts(scrub, hud, source);
+        viewer.setChatOpen(open);
+        viewer.setProjectInfo(canvas.width(), canvas.height());
+    }
+};
+
+// A snapshot of the showcase in `canvas`'s shape.
+QJsonObject shaped(const QSize &canvas, int revision = 3) {
+    QJsonObject snapshot = showcaseSnapshot(revision, QStringLiteral("clean"));
+    QJsonObject timeline = snapshot.value(QStringLiteral("timeline")).toObject();
+    timeline.insert(QStringLiteral("width"), canvas.width());
+    timeline.insert(QStringLiteral("height"), canvas.height());
+    snapshot.insert(QStringLiteral("timeline"), timeline);
+    snapshot.remove(QStringLiteral("pendingProposal"));
+    snapshot.remove(QStringLiteral("proposalTimeline"));
+    return snapshot;
+}
+
+QColor pixelOf(const QImage &image, const QPointF &point) {
+    const qreal ratio = image.devicePixelRatio();
+    return image.pixelColor(QPoint(int(std::floor(point.x() * ratio)), int(std::floor(point.y() * ratio))));
+}
+
+// The comments the stage's overlays read: a QC thread at 17:08 and Tom's
+// reply with a drawing on it (mockup-spec 4.9 seed, as fixture data only).
+QJsonObject seedComments() {
+    const QJsonArray drawing{QJsonObject{{"tool", "pen"},
+                                         {"points", QJsonArray{QJsonArray{0.30, 0.30}, QJsonArray{0.50, 0.25}, QJsonArray{0.60, 0.45}}},
+                                         {"color", "#ededed"}}};
+    return QJsonObject{
+        {"type", "comments"},
+        {"reviewRevision", 22},
+        {"items", QJsonArray{
+             QJsonObject{{"id", "c-1708"}, {"parent", QJsonValue()}, {"author", QJsonObject{{"kind", "qc"}, {"name", "QC"}, {"role", "captions"}}},
+                         {"at", 17.32}, {"duration", 0.0}, {"body", "Caption overlaps the lower third by 8 px"}, {"tags", QJsonArray{"captions"}},
+                         {"blocking", true}, {"resolved", false}, {"qcKey", "qc:text.overlap:t4"}, {"created", "2026-11-04T10:12:00Z"}, {"revision", 22}},
+             QJsonObject{{"id", "c-1708-r1"}, {"parent", "c-1708"}, {"author", QJsonObject{{"kind", "person"}, {"name", "Tom Lind"}, {"id", "tom@example.com"}}},
+                         {"body", "Here, the flare"}, {"drawing", drawing}, {"resolved", false}, {"created", "2026-11-04T10:13:00Z"}, {"revision", 22}},
+             QJsonObject{{"id", "c-0903"}, {"parent", QJsonValue()}, {"author", QJsonObject{{"kind", "person"}, {"name", "Mina Park"}, {"id", "mina@example.com"}}},
+                         {"at", 9.12}, {"duration", 0.0}, {"body", "The sea reads magenta here"}, {"resolved", false}, {"created", "2026-11-04T10:00:00Z"}, {"revision", 22}}}}};
+}
+
+// A finished check with the caption overlap found at 17:08 (fixture data).
+QJsonObject overlapCheck() {
+    return QJsonObject{
+        {"type", "check"}, {"status", "done"}, {"valid", false},
+        {"findings", QJsonArray{QJsonObject{{"severity", "warning"}, {"code", "text.overlap"}, {"entity", "t4"},
+                                            {"message", "Caption overlaps Atlas Coffee by 8 px from 00:00:17:00 to 00:00:17:20"},
+                                            {"at", 17.0}, {"duration", 0.84}, {"rect", QJsonObject{{"x", 0.30}, {"y", 0.78}, {"w", 0.20}, {"h", 0.04}}},
+                                            {"value", 8}, {"limit", 0}, {"unit", "px"}, {"commentId", "c-1708"}}}},
+        {"summary", QJsonObject{{"passed", 7}, {"total", 8}, {"blocking", 1}}}};
+}
+
+} // namespace
+
 class StageTest final : public QObject {
     Q_OBJECT
 
 private slots:
-    // Each test starts with the conversation's preferences as a new user has them.
-    void init() { QSettings().remove(QStringLiteral("viewer")); }
-
-    void viewerKeepsLandscapeAndShortsInsideOneCanvasContract() {
-        ViewerWidget viewer;
-        viewer.resize(800, 600);
-
-        viewer.setProjectInfo(1920, 1080);
-        const QRectF landscape = viewer.videoRect();
-        QVERIFY(std::abs(landscape.width() / landscape.height() - 16.0 / 9.0) < 0.001);
-        QVERIFY(viewer.rect().contains(landscape.toAlignedRect()));
-        QVERIFY(landscape.contains(viewer.captionRect()));
-
-        viewer.setProjectInfo(1080, 1920);
-        const QRectF shorts = viewer.videoRect();
-        QVERIFY(std::abs(shorts.width() / shorts.height() - 9.0 / 16.0) < 0.001);
-        QVERIFY(viewer.rect().contains(shorts.toAlignedRect()));
-        QVERIFY(shorts.contains(viewer.captionRect()));
-
-        viewer.resize(800, 220);
-        viewer.setProjectInfo(1920, 1080);
-        // In a short viewer the wide picture's laptop fills its height.
-        QVERIFY(viewer.stageLayout().body.top() < 20.0);
-        viewer.show();
-        QSignalSpy scrubs(&viewer, &ViewerWidget::scrubbed);
-        QTest::mouseMove(&viewer, QPoint(400, 80));
-        QVERIFY(!scrubs.isEmpty());
-        QVERIFY(std::abs(scrubs.constLast()[0].toDouble() - 0.5) < 0.005);
-        QVERIFY(nearerScrubFrame(1.0, true, 2.0, 3.0, 24.0));
-        QVERIFY(!nearerScrubFrame(2.5, true, 0.2, 3.0, 24.0));
-        QVERIFY(nearerScrubFrame(0.0, false, 9.0, 1.0, 24.0));
-    }
-
-    // A wide picture shows in a laptop by default, this Mac's preference
-    // like the phone: the rail's Laptop button and Window ▸ Viewer choose
-    // Laptop or Off, and the next editor opens with it. At a laptop's
-    // window the conversation is level with the laptop's body (lid top to
-    // base bottom) and as tall, the picture keeps at least 90% of the width
-    // the plain card has in the same stage, and with the conversation closed
-    // the laptop is centred alone.
-    void laptopPreviewIsRememberedOnThisMac() {
+    // Each test starts with the stage's preferences as a new user has them.
+    void init() {
+        QSettings().remove(QStringLiteral("viewer"));
         QSettings().remove(QStringLiteral("workspace"));
-        QSettings().remove(QStringLiteral("viewer/laptopPreview"));
-        QSettings().remove(QStringLiteral("viewer/chatOpen"));
-        QSettings().remove(QStringLiteral("viewer/chatWidth"));
-        const auto restore = qScopeGuard([] {
-            QSettings().remove(QStringLiteral("workspace"));
-            QSettings().remove(QStringLiteral("viewer/laptopPreview"));
-            QSettings().remove(QStringLiteral("viewer/chatOpen"));
-        });
-        {
-            MainWindow window{QString(), QString()};
-            window.setConnection(QStringLiteral("ready"));
-            window.applySnapshot(showcaseSnapshot(3, QStringLiteral("clean")));
-            window.resize(1440, 900);
-            window.show();
-            QVERIFY(QTest::qWaitForWindowExposed(&window));
-            QCoreApplication::processEvents();
-            ViewerWidget *viewer = window.m_viewer;
-            QCOMPARE(window.m_canvasSize, QSize(1920, 1080));
-            RailButton *device = window.m_rail->deviceButton();
-            QVERIFY(device->isVisible() && device->isChecked());
-            QCOMPARE(device->label(), QStringLiteral("Laptop"));
-            QCOMPARE(device->glyph(), RailButton::Glyph::Laptop);
-            const ViewerWidget::StageLayout stage = viewer->stageLayout();
-            QCOMPARE(stage.kind, ViewerWidget::Device::Laptop);
-            QVERIFY(!stage.overlay);
-            // The conversation: the laptop body's top and height.
-            QCOMPARE(window.m_chat->geometry(), stage.panel);
-            QCOMPARE(stage.panel.top(), qRound(stage.body.top()));
-            QVERIFY2(std::abs(stage.panel.height() - stage.body.height()) <= 1,
-                     qPrintable(QStringLiteral("%1 for %2").arg(stage.panel.height()).arg(stage.body.height())));
-            QVERIFY(stage.panel.height() >= ViewerWidget::kMinChatHeight);
-            // Laptop, rail, conversation: one group, centred.
-            const int leftSpace = qRound(stage.body.left());
-            const int rightSpace = viewer->width() - stage.panel.right() - 1;
-            QVERIFY2(std::abs(leftSpace - rightSpace) <= 2, qPrintable(QStringLiteral("%1 | %2").arg(leftSpace).arg(rightSpace)));
-            QCOMPARE(stage.rail.left() - qRound(stage.body.right()), viewer->stageGap());
-            // Measured from the laptop's widest part, its base: the stage's
-            // margin on the left, the stage's gap before the rail.
-            const auto clearOfEdges = [viewer](const ViewerWidget::StageLayout &layout) {
-                const QRectF base = laptopGeometry(layout.body, 16.0 / 9.0).base;
-                QVERIFY(layout.body.adjusted(-0.01, -0.01, 0.01, 0.01).contains(base));
-                QVERIFY2(base.left() >= ViewerWidget::kStageMargin - 0.5, qPrintable(QString::number(base.left())));
-                QVERIFY2(layout.rail.left() - base.right() >= viewer->stageGap() - 1.0,
-                         qPrintable(QStringLiteral("%1 to %2").arg(base.right()).arg(layout.rail.left())));
-            };
-            clearOfEdges(stage);
-            // The picture keeps 90% of the plain card's width in this stage,
-            // unless the stage's height is what bounds the laptop: over the
-            // 344 band the laptop is as tall as the stage lets it be.
-            const ViewerWidget::StageLayout plain = viewer->stageLayout(ViewerWidget::Device::None);
-            const double roomHeight = viewer->height() - 2.0 * viewer->stageInset(ViewerWidget::Device::Laptop);
-            const bool heightBound = std::abs(stage.body.height() - roomHeight) <= 1.0;
-            QVERIFY2(heightBound || stage.card.width() >= 0.9 * plain.card.width(),
-                     qPrintable(QStringLiteral("%1 of %2, body %3 tall in %4").arg(stage.card.width()).arg(plain.card.width())
-                                    .arg(stage.body.height()).arg(roomHeight)));
-            // The controls inside the screen.
-            QVERIFY(stage.screen.contains(viewer->overlay()->controlsBounds()));
-            // Window ▸ Viewer has Laptop and Off; Off is the plain card, level
-            // with the conversation and as tall too.
-            QCOMPARE(window.m_laptopActions.size(), 2);
-            QVERIFY(window.m_laptopActions.at(0)->isChecked() && !window.m_laptopActions.at(1)->isChecked());
-            window.m_laptopActions.at(1)->trigger();
-            QCoreApplication::processEvents();
-            QCOMPARE(viewer->laptopPreview(), LaptopPreview::Off);
-            QCOMPARE(QSettings().value(QStringLiteral("viewer/laptopPreview")).toString(), QStringLiteral("off"));
-            QVERIFY(!device->isChecked());
-            QCOMPARE(device->label(), QStringLiteral("Laptop"));
-            const ViewerWidget::StageLayout card = viewer->stageLayout();
-            QVERIFY(!card.device);
-            QCOMPARE(card.card, plain.card);
-            QCOMPARE(window.m_chat->geometry(), card.panel);
-            QCOMPARE(card.panel.top(), qRound(card.card.top()));
-            QVERIFY(std::abs(card.panel.height() - card.card.height()) <= 1);
-            window.m_laptopActions.at(0)->trigger();
-            QCoreApplication::processEvents();
-            QCOMPARE(viewer->stageLayout().card, stage.card);
-            // Closed: the laptop centred alone.
-            window.m_chatToggle->click();
-            QCoreApplication::processEvents();
-            const QRectF alone = viewer->stageLayout().body;
-            QVERIFY(std::abs(alone.center().x() - viewer->width() / 2.0) <= 1);
-            // As much room over it as under it, the card's 16: centred in
-            // the stage, as a card is.
-            {
-                const double over = alone.top(), under = viewer->height() - alone.bottom();
-                QVERIFY2(std::abs(over - under) <= 1, qPrintable(QStringLiteral("%1 over, %2 under").arg(over).arg(under)));
-                QVERIFY2(std::abs(over - ViewerWidget::kStageMargin) <= 1, qPrintable(QStringLiteral("%1 over").arg(over)));
-            }
-            QVERIFY(alone.width() >= stage.body.width() - 0.5);
-            clearOfEdges(viewer->stageLayout());
-            window.m_chatToggle->click();
-            window.m_laptopActions.at(1)->trigger();
-            // Nothing of it reaches the project.
-            QVERIFY(!window.m_lastCommand.value("type").toString().contains(QStringLiteral("laptop")));
-            window.close();
-        }
-        MainWindow window{QString(), QString()};
-        QCOMPARE(window.m_viewer->laptopPreview(), LaptopPreview::Off);
-        QVERIFY(window.m_laptopActions.at(1)->isChecked());
+        ViewerWidget::setMotionOverride(-1);
     }
+    void cleanup() { ViewerWidget::setMotionOverride(-1); }
 
-    // The transport lies on the picture as a video player's controls: shown
-    // while paused, faded out a moment after the pointer stops while
-    // playing, back with a move; the play button and the bar run the
-    // editor's own playback and seeking; and the time reads on a white frame.
-    void playerControlsLieOnThePicture() {
-        QSettings().remove(QStringLiteral("workspace"));
-        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
+    // The registry's stage commands run through their QActions: Dim and
+    // Annotations switch the stage, I and O set the scrub strip's marks,
+    // ⌘L its loop (and the strip's own loop button checks the command).
+    void registryCommandsDriveTheStage() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
-        window.applySnapshot(showcaseSnapshot(3, QStringLiteral("clean")));
-        window.resize(1440, 900);
+        window.applySnapshot(shaped(QSize(1920, 1080)));
+        CommandRegistry *commands = window.m_commands;
+        StageWiring *stage = window.m_stageWiring.get();
+        for (const char *id : {"view.dim", "view.annotations", "viewer.zoom", "playback.loop", "mark.in", "mark.out"})
+            QVERIFY2(commands->action(QString::fromLatin1(id))->isEnabled(), id);
+        const bool dim = stage->dim();
+        commands->action(QStringLiteral("view.dim"))->trigger();
+        QCOMPARE(stage->dim(), !dim);
+        const bool annotations = stage->annotations();
+        commands->action(QStringLiteral("view.annotations"))->trigger();
+        QCOMPARE(stage->annotations(), !annotations);
+        commands->action(QStringLiteral("view.annotations"))->trigger();
+        ScrubStrip *scrub = stage->scrub();
+        window.m_bus->setPlayhead(2.0);
+        commands->action(QStringLiteral("mark.in"))->trigger();
+        QVERIFY(scrub->hasIn());
+        QCOMPARE(scrub->inPoint(), 2.0);
+        window.m_bus->setPlayhead(4.0);
+        commands->action(QStringLiteral("mark.out"))->trigger();
+        QVERIFY(scrub->hasOut());
+        QAction *loop = commands->action(QStringLiteral("playback.loop"));
+        QVERIFY(!scrub->loop() && !loop->isChecked());
+        loop->trigger();
+        QVERIFY(scrub->loop() && loop->isChecked());
+        scrub->loopButton()->click();
+        QVERIFY(!scrub->loop() && !loop->isChecked());
+        // The strip's buttons show the commands' keys now they run.
+        QCOMPARE(ui::tipShortcut(scrub->markInButton()), commands->action(QStringLiteral("mark.in"))->shortcut().toString(QKeySequence::NativeText));
+    }
+
+    // The 1296 x 564 stage of the 1600 x 1000 canvas, exactly as the
+    // [OWNER] table of mockup-spec 3.1 places it (±0.5): the device, the
+    // rail 12 right of it, the panel 12 from the stage's right edge, the
+    // scrub strip under the device and the Source column on the left.
+    void stageFollowsTheOwnerPlacement() {
+        {
+            // 16:9, the panel open: the laptop and its rail centred in 16 ... 904.
+            Stage stage(QSize(1920, 1080));
+            const ViewerWidget::StageLayout layout = stage.viewer.stageLayout();
+            QCOMPARE(layout.kind, ViewerWidget::Device::Laptop);
+            KERF_NEAR(layout.body.left(), 85, 0.5, "16:9 open x0");
+            KERF_NEAR(layout.body.right(), 779.5, 0.5, "16:9 open lid right");
+            KERF_NEAR(layout.body.top(), 8, 1e-9, "TOP");
+            KERF_NEAR(layout.body.width(), 694.5, 0.05, "laptop width");
+            KERF_NEAR(layout.body.height(), 483, 1e-9, "laptop height");
+            KERF_NEAR(layout.railRect.left(), 791.5, 0.5, "16:9 open rail");
+            KERF_NEAR(layout.rail.left(), 791.5, 0.5, "16:9 open rail widget");
+            QCOMPARE(layout.rail.width(), 44);
+            QCOMPARE(layout.rail.height(), 548);
+            QCOMPARE(layout.panel, QRect(916, 8, 368, 548));
+            KERF_NEAR(layout.scrub.left(), 96.3, 0.5, "16:9 scrub x");
+            KERF_NEAR(layout.scrub.width(), 671.8, 0.05, "16:9 scrub width");
+            QCOMPARE(layout.scrub.top(), 500.0);
+            QCOMPARE(layout.scrub.height(), 56.0);
+            QVERIFY(!layout.narrowScrub);
+            KERF_NEAR(layout.card.width(), 671.8, 0.05, "16:9 picture width");
+            KERF_NEAR(layout.card.height(), 377.9, 0.05, "16:9 picture height");
+            QVERIFY(layout.source.isEmpty());
+            // The parts stand where the layout puts them.
+            QCOMPARE(stage.panel->geometry(), layout.panel);
+            QVERIFY(stage.panel->isVisibleTo(&stage.viewer));
+            QCOMPARE(stage.rail->geometry(), layout.rail);
+            QCOMPARE(stage.scrub->geometry(), layout.scrub.toRect());
+            QVERIFY(!stage.source->isVisibleTo(&stage.viewer));
+            // The HUD's card in title safe: 288 x 72 at (w - tx - 8 - hw, ty + 8).
+            const double tx = std::round(layout.card.width() * 0.05), ty = std::round(layout.card.height() * 0.05);
+            KERF_NEAR(layout.hud.width(), 288, 1e-9, "HUD width");
+            KERF_NEAR(layout.hud.height(), 72, 1e-9, "HUD height");
+            KERF_NEAR(layout.hud.right(), layout.card.right() - tx - 8, 1e-6, "HUD right");
+            KERF_NEAR(layout.hud.top(), layout.card.top() + ty + 8, 1e-6, "HUD top");
+            QVERIFY(!layout.hudStrip);
+        }
+        {
+            // 16:9, the panel closed: the rail ends 12 from the edge, the
+            // laptop 12 left of it, the Source column on the left.
+            Stage stage(QSize(1920, 1080), false);
+            const ViewerWidget::StageLayout layout = stage.viewer.stageLayout();
+            KERF_NEAR(layout.body.left(), 533.5, 0.5, "16:9 closed x0");
+            KERF_NEAR(layout.body.right(), 1228, 0.5, "16:9 closed lid right");
+            QCOMPARE(layout.rail.left(), 1240);
+            QVERIFY(layout.panel.isEmpty());
+            QVERIFY(!stage.panel->isVisibleTo(&stage.viewer));
+            KERF_NEAR(layout.scrub.left(), 544.8, 0.5, "16:9 closed scrub x");
+            KERF_NEAR(layout.scrub.width(), 671.8, 0.05, "16:9 closed scrub width");
+            QCOMPARE(layout.source.topLeft(), QPoint(16, 8));
+            KERF_NEAR(layout.source.width(), 505.5, 0.5, "Source width");
+            QCOMPARE(layout.source.height(), 548);
+            QCOMPARE(stage.source->geometry(), layout.source);
+            QVERIFY(stage.source->isVisibleTo(&stage.viewer));
+        }
+        {
+            // 9:16, the panel open (480): the phone 12 left of the rail at 748.
+            Stage stage(QSize(1080, 1920));
+            const ViewerWidget::StageLayout layout = stage.viewer.stageLayout();
+            QCOMPARE(layout.kind, ViewerWidget::Device::Phone);
+            KERF_NEAR(layout.body.left(), 506.6, 0.5, "phone open lx");
+            KERF_NEAR(layout.body.width(), 229.4, 0.05, "phone width");
+            KERF_NEAR(layout.body.height(), 480, 1e-9, "phone height");
+            QCOMPARE(layout.rail.left(), 748);
+            QCOMPARE(layout.panel, QRect(804, 8, 480, 548));
+            QCOMPARE(layout.scrub, QRectF(432, 500, 360, 56));
+            QVERIFY(layout.narrowScrub);
+            QCOMPARE(layout.source, QRect(16, 8, 400, 548));
+            QVERIFY(stage.source->isVisibleTo(&stage.viewer));
+            KERF_NEAR(layout.card.height(), 379.8, 0.05, "9:16 picture height");
+            // The HUD docks as a 32 strip over the Source column; while it
+            // shows, the column moves 40 down.
+            QVERIFY(layout.hudStrip);
+            QCOMPARE(layout.hud, QRectF(16, 8, 400, 32));
+            stage.hud->show();
+            QCOMPARE(stage.viewer.stageLayout().source, QRect(16, 48, 400, 508));
+            QCOMPARE(stage.source->geometry(), QRect(16, 48, 400, 508));
+            QCOMPARE(stage.hud->geometry(), QRect(16, 8, 400, 32));
+            stage.hud->hide();
+            QCOMPARE(stage.source->geometry(), QRect(16, 8, 400, 548));
+        }
+        {
+            // 9:16, the panel closed: the rail at 1240, the Source column to the scrub - 32.
+            Stage stage(QSize(1080, 1920), false);
+            const ViewerWidget::StageLayout layout = stage.viewer.stageLayout();
+            KERF_NEAR(layout.body.left(), 998.6, 0.5, "phone closed lx");
+            QCOMPARE(layout.rail.left(), 1240);
+            QCOMPARE(layout.scrub, QRectF(924, 500, 360, 56));
+            QCOMPARE(layout.source, QRect(16, 8, 892, 548));
+        }
+        // 1:1 and 4:5 go in the same phone, beside the 480 panel.
+        for (const QSize &canvas : {QSize(1080, 1080), QSize(1080, 1350)}) {
+            Stage stage(canvas);
+            const ViewerWidget::StageLayout layout = stage.viewer.stageLayout();
+            QCOMPARE(layout.kind, ViewerWidget::Device::Phone);
+            KERF_NEAR(layout.body.left(), 506.6, 0.5, "feed lx");
+            QCOMPARE(layout.panel.width(), 480);
+            KERF_NEAR(layout.card.height(), canvas == QSize(1080, 1080) ? 213.7 : 267.1, 0.05, "feed picture height");
+        }
+    }
+
+    // The anchors hold at every window: the panel 12 from the stage's
+    // right edge, the rail 12 right of the device, the laptop's box 64 + 9
+    // over the stage's foot, the scrub strip under the picture. At 1600 x
+    // 1000 the window's own parts stand exactly where the table puts them.
+    void stageKeepsItsAnchorsAtEveryWindow() {
+        for (const QSize &size : {QSize(1600, 1000), QSize(1440, 900), QSize(1920, 1080)}) {
+            MainWindow window{QString(), QString()};
+            window.setConnection(QStringLiteral("ready"));
+            window.applySnapshot(shaped(QSize(1920, 1080)));
+            window.resize(size);
+            window.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&window));
+            window.m_errorBanner->hide();
+            QCoreApplication::processEvents();
+            ViewerWidget *viewer = window.m_viewer;
+            const QString what = QStringLiteral("%1x%2").arg(size.width()).arg(size.height());
+            const ViewerWidget::StageLayout layout = viewer->stageLayout();
+            if (size == QSize(1600, 1000)) QCOMPARE(viewer->size(), QSize(1296, 564));
+            QVERIFY2(!layout.overlay, qPrintable(what));
+            QCOMPARE(window.m_chat->geometry(), layout.panel);
+            QCOMPARE(layout.panel.right() + 1, viewer->width() - 12);
+            QCOMPARE(layout.panel.top(), 8);
+            QCOMPARE(layout.panel.height(), viewer->height() - 16);
+            QCOMPARE(layout.panel.width(), 368);
+            QCOMPARE(window.m_rail->geometry(), layout.rail);
+            KERF_NEAR(layout.railRect.left() - layout.body.right(), 12, 1e-6, qPrintable(what));
+            KERF_NEAR(layout.body.height(), viewer->height() - 64 - 9 - 8, 1e-6, qPrintable(what));
+            // Centred in 16 ... panel - 12.
+            KERF_NEAR(layout.body.left() - 16, (layout.panel.left() - 12) - layout.railRect.right(), 1.0, qPrintable(what));
+            QWidget *scrub = window.m_stageWiring->scrub();
+            QCOMPARE(scrub->parentWidget(), viewer);
+            QCOMPARE(scrub->geometry(), layout.scrub.toRect());
+            QCOMPARE(layout.scrub.top(), viewer->height() - 64.0);
+            QCOMPARE(window.m_stageSource->parentWidget(), viewer);
+            QVERIFY(!window.m_stageSource->isVisible());
+            // Closed (as Edit has it): the Source column fills the left.
+            window.setChatOpen(false);
+            QCoreApplication::processEvents();
+            const ViewerWidget::StageLayout closed = viewer->stageLayout();
+            QCOMPARE(closed.rail.right() + 1, viewer->width() - 12);
+            QVERIFY(window.m_stageSource->isVisible());
+            QCOMPARE(window.m_stageSource->geometry(), closed.source);
+            KERF_NEAR(closed.source.right() + 1, closed.body.left() - 12, 0.5, qPrintable(what));
+            window.setChatOpen(true);
+            window.close();
+        }
+    }
+
+    // The panel is dragged between 300 and 480 and keeps a width for 16:9
+    // and one for the phone formats, each remembered on this Mac.
+    void panelResizesBetween300And480PerFormat() {
+        Stage stage(QSize(1920, 1080));
+        QCOMPARE(stage.viewer.chatWidth(), 368);
+        QSignalSpy widths(&stage.viewer, &ViewerWidget::chatWidthChanged);
+        stage.viewer.setChatWidth(250);
+        QCOMPARE(stage.viewer.chatWidth(), 300);
+        stage.viewer.setChatWidth(600);
+        QCOMPARE(stage.viewer.chatWidth(), 480);
+        QCOMPARE(widths.size(), 2);
+        // Its right edge stays put.
+        QCOMPARE(stage.viewer.stageLayout().panel, QRect(1284 - 480, 8, 480, 548));
+        QCOMPARE(stage.panel->geometry(), stage.viewer.stageLayout().panel);
+        stage.viewer.setChatWidth(400);
+        // The phone's is its own.
+        stage.viewer.setProjectInfo(1080, 1920);
+        QCOMPARE(stage.viewer.chatWidth(), 480);
+        stage.viewer.setChatWidth(320);
+        QCOMPARE(stage.viewer.stageLayout().panel.width(), 320);
+        stage.viewer.setProjectInfo(1920, 1080);
+        QCOMPARE(stage.viewer.chatWidth(), 400);
+        QCOMPARE(stage.viewer.chatWidth(true), 320);
+        // The window remembers each under its own key when a drag ends.
+        {
+            MainWindow window{QString(), QString()};
+            window.m_viewer->setChatWidth(330);
+            emit window.m_chat->widthDragFinished();
+            QCOMPARE(QSettings().value(QStringLiteral("viewer/chatWidth")).toInt(), 330);
+            window.applySnapshot(shaped(QSize(1080, 1920)));
+            window.m_viewer->setChatWidth(450);
+            emit window.m_chat->widthDragFinished();
+            QCOMPARE(QSettings().value(QStringLiteral("viewer/chatWidthPhone")).toInt(), 450);
+        }
+        MainWindow window{QString(), QString()};
+        QCOMPARE(window.m_viewer->chatWidth(false), 330);
+        QCOMPARE(window.m_viewer->chatWidth(true), 450);
+    }
+
+    // The panel's open and close move the stage over 220 ms: the panel
+    // slides 24 to the right as it fades out of the stage, the device goes
+    // to its closed place. The first layout has no motion.
+    void panelOpensAndClosesWithMotion() {
+        Stage stage(QSize(1920, 1080));
+        stage.viewer.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stage.viewer));
+        QVERIFY(!stage.viewer.moving());
+        ViewerWidget::setMotionOverride(1);
+        const QRect open = stage.viewer.stageLayout().panel;
+        const double from = stage.viewer.stageLayout().body.left();
+        stage.viewer.setChatOpen(false);
+        QVERIFY(stage.viewer.moving());
+        QVERIFY(stage.panel->isVisible());
+        QTest::qWait(80);
+        const ViewerWidget::StageLayout midway = stage.viewer.shownLayout();
+        QVERIFY2(midway.body.left() > from && midway.body.left() < stage.viewer.stageLayout().body.left(),
+                 qPrintable(QString::number(midway.body.left())));
+        QVERIFY(midway.panel.left() > open.left() && midway.panel.left() <= open.left() + 24);
+        // It fades as it slides, and paints as itself once the move ends.
+        const auto fade = [&stage] { return qobject_cast<QGraphicsOpacityEffect *>(stage.panel->graphicsEffect()); };
+        QVERIFY(fade());
+        QVERIFY2(fade()->opacity() > 0.0 && fade()->opacity() < 1.0, qPrintable(QString::number(fade()->opacity())));
+        QTRY_VERIFY(!stage.viewer.moving());
+        QVERIFY(!stage.panel->isVisible());
+        QVERIFY(!stage.panel->graphicsEffect());
+        QCOMPARE(stage.viewer.shownLayout().body, stage.viewer.stageLayout().body);
+        stage.viewer.setChatOpen(true);
+        QVERIFY(stage.panel->isVisible());
+        QVERIFY(fade() && fade()->opacity() < 0.5);
+        QTRY_VERIFY(!stage.viewer.moving());
+        QVERIFY(!stage.panel->graphicsEffect());
+        QCOMPARE(stage.panel->geometry(), open);
+        // Where nothing shows the motion (the offscreen tests), none runs.
+        ViewerWidget::setMotionOverride(-1);
+        if (QGuiApplication::platformName() == QLatin1String("offscreen")) {
+            stage.viewer.setChatOpen(false);
+            QVERIFY(!stage.viewer.moving());
+            QVERIFY(!stage.panel->isVisible());
+        }
+    }
+
+    // Dim surround: the stage's backdrop goes from #0e0e0e to #050505, from
+    // the view.dim switch and from a workspace's stage (Finish dims).
+    void dimFollowsTheSwitchAndTheFinishWorkspace() {
+        {
+            Stage stage(QSize(1920, 1080));
+            QCOMPARE(stage.viewer.surroundColor().rgb(), qRgb(0x0e, 0x0e, 0x0e));
+            QCOMPARE(pixelOf(stage.viewer.grab().toImage(), QPointF(4, 4)).rgb(), qRgb(0x0e, 0x0e, 0x0e));
+            stage.viewer.setDim(true);
+            QVERIFY(stage.viewer.dimmed());
+            QCOMPARE(stage.viewer.surroundColor().rgb(), qRgb(0x05, 0x05, 0x05));
+            QCOMPARE(pixelOf(stage.viewer.grab().toImage(), QPointF(4, 4)).rgb(), qRgb(0x05, 0x05, 0x05));
+            // With motion, it fades over 220 ms.
+            ViewerWidget::setMotionOverride(1);
+            stage.viewer.setDim(false);
+            QTest::qWait(60);
+            const QColor midway = stage.viewer.surroundColor();
+            QVERIFY2(midway.red() > 0x05 && midway.red() < 0x0e, qPrintable(midway.name()));
+            QTRY_COMPARE(stage.viewer.surroundColor().rgb(), qRgb(0x0e, 0x0e, 0x0e));
+            ViewerWidget::setMotionOverride(-1);
+        }
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(shaped(QSize(1920, 1080)));
+        QVERIFY(!window.m_viewer->dimmed());
+        // The switch (view.dim, ⇧L) and the strip's button.
+        QAction *dim = window.m_commands->action(QStringLiteral("view.dim"));
+        QVERIFY(dim && dim->isCheckable());
+        QCOMPARE(dim->shortcut(), QKeySequence(Qt::SHIFT | Qt::Key_L));
+        emit window.m_commands->toggled(QStringLiteral("view.dim"), true);
+        QVERIFY(window.m_viewer->dimmed() && dim->isChecked());
+        QVERIFY(window.m_programStrip->buttonFor(dim)->isChecked());
+        QVERIFY(window.m_workspace->stageState().dim);
+        emit window.m_commands->toggled(QStringLiteral("view.dim"), false);
+        QVERIFY(!window.m_viewer->dimmed() && !dim->isChecked());
+        // Finish dims; Review does not.
+        window.m_workspace->activate(QStringLiteral("Finish"));
+        QVERIFY(window.m_viewer->dimmed() && dim->isChecked());
+        window.m_workspace->activate(QStringLiteral("Review"));
+        QVERIFY(!window.m_viewer->dimmed() && !dim->isChecked());
+        window.m_workspace->activate(QStringLiteral("Finish"));
+        QVERIFY(window.m_viewer->dimmed());
+        window.m_workspace->activate(QStringLiteral("Review"));
+    }
+
+    // Safe zones over the picture in every format: the action-safe line
+    // 3.5% in (93%) and title safe's corner ticks 5% in (90%) with the
+    // cross at the centre. Off, the picture is untouched.
+    void safeZonesOutlineActionAndTitleSafe() {
+        for (const QSize &canvas : {QSize(1920, 1080), QSize(1080, 1920), QSize(1080, 1080)}) {
+            Stage stage(canvas);
+            QImage black(canvas / 8, QImage::Format_RGB32);
+            black.fill(Qt::black);
+            stage.viewer.setFrame(black, 0.0);
+            QVERIFY(stage.viewer.safeZonesShown());
+            const QRectF picture = stage.viewer.pictureRect();
+            const SafeZones zones = safeZones(picture);
+            KERF_NEAR(zones.action.width(), picture.width() * 0.93, 1e-6, "action safe");
+            KERF_NEAR(zones.title.width(), picture.width() * 0.90, 1e-6, "title safe");
+            KERF_NEAR(zones.action.left() - picture.left(), picture.width() * 0.035, 1e-6, "action inset");
+            QCOMPARE(zones.cross.center(), picture.center());
+            const QImage on = stage.viewer.grab().toImage();
+            // The ticks at title safe's corners, the line along action safe,
+            // the cross; the picture's black between.
+            const QPointF tick = zones.title.topLeft() + QPointF(8, 0.5);
+            const QPointF line = QPointF(zones.action.center().x(), zones.action.top() + 0.5);
+            const QPointF cross = picture.center() + QPointF(-3, 0.5);
+            for (const QPointF &point : {tick, line, cross})
+                QVERIFY2(pixelOf(on, point).lightness() > 40, qPrintable(QStringLiteral("%1,%2").arg(point.x()).arg(point.y())));
+            QVERIFY(pixelOf(on, zones.title.topLeft() + QPointF(8, 8)).lightness() < 8);
+            // The ticks are brighter than the action line (.45 over .22).
+            QVERIFY(pixelOf(on, tick).lightness() > pixelOf(on, line).lightness());
+            stage.viewer.setSafeZones(false);
+            const QImage off = stage.viewer.grab().toImage();
+            for (const QPointF &point : {tick, line, cross}) QVERIFY(pixelOf(off, point).lightness() < 8);
+        }
+    }
+
+    // The engine's caption sits centred with its foot on title safe's (UI
+    // 15/20 white on rgba(0,0,0,.72), padding 2 8): one line on 16:9, cut
+    // at title safe; wrapped and balanced on a phone.
+    void captionSitsOnTitleSafe() {
+        const QString text = QStringLiteral("We open before the city does, on the road out to the cliffs at dawn");
+        {
+            Stage stage(QSize(1920, 1080));
+            QVERIFY(stage.viewer.captionRect().isEmpty());
+            stage.viewer.setCaption(QStringLiteral("We open before the city does"));
+            const QRectF picture = stage.viewer.pictureRect();
+            const QRectF caption = stage.viewer.captionRect();
+            KERF_NEAR(caption.bottom(), picture.bottom() - std::round(picture.height() * 0.05), 1e-6, "caption foot");
+            KERF_NEAR(caption.center().x(), picture.center().x(), 0.5, "caption centre");
+            QCOMPARE(caption.height(), 24.0);
+            stage.viewer.setCaption(text + text);
+            const QRectF long16 = stage.viewer.captionRect();
+            QCOMPARE(long16.height(), 24.0);
+            QVERIFY(long16.width() <= picture.width() - 2 * std::round(picture.width() * 0.05) + 0.5);
+            // Drawn over the picture: its box is the caption's dark.
+            QImage white(QSize(480, 270), QImage::Format_RGB32);
+            white.fill(Qt::white);
+            stage.viewer.setFrame(white, 0.0);
+            stage.viewer.setSafeZones(false);
+            const QColor under = pixelOf(stage.viewer.grab().toImage(), long16.topLeft() + QPointF(3, 1));
+            QVERIFY2(under.lightness() < 90, qPrintable(under.name()));
+        }
+        {
+            Stage stage(QSize(1080, 1920));
+            stage.viewer.setCaption(text);
+            const QRectF picture = stage.viewer.pictureRect();
+            const QRectF caption = stage.viewer.captionRect();
+            const double tx = std::round(picture.width() * 0.05);
+            QVERIFY(caption.width() <= picture.width() - 2 * tx - 16 + 0.5);
+            QVERIFY2(caption.height() >= 44.0, qPrintable(QString::number(caption.height())));
+            QCOMPARE(int(caption.height() - 4) % 20, 0);
+            KERF_NEAR(caption.bottom(), picture.bottom() - std::round(picture.height() * 0.05), 1e-6, "phone caption foot");
+            // Balanced: the box is no wider than the widest balanced line needs,
+            // well under the most it may take.
+            QString lines;
+            (void)stage.viewer.captionBox(&lines);
+            const QStringList parts = lines.split(QLatin1Char('\n'));
+            QVERIFY(parts.size() >= 2);
+            const QFontMetricsF metrics(tokens::font(tokens::caption));
+            QVERIFY2(metrics.horizontalAdvance(parts.constLast()) > 0.4 * metrics.horizontalAdvance(parts.constFirst()), qPrintable(lines));
+        }
+    }
+
+    // The QC overlap box: from the last finished check, the text.overlap
+    // finding whose comment is the current thread, while the playhead is in
+    // it: the finding's rect on the picture (fill rgba(236,93,97,.32), a
+    // neg line), its "8 px" tag and the caption's neg outline.
+    void overlapBoxFollowsTheCurrentQcThread() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(shaped(QSize(1920, 1080)));
+        window.resize(1600, 1000);
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
         ViewerWidget *viewer = window.m_viewer;
-        PlayerOverlay *overlay = viewer->overlay();
-        overlay->setFadeDuration(0);
-        overlay->setIdleTimeout(40);
-        QCOMPARE(overlay->rect(), viewer->videoRect());
-        QVERIFY(!overlay->compact());
-        // Paused: shown, with the time over the length.
-        QVERIFY(overlay->shown());
-        QCOMPARE(overlay->opacity(), 1.0);
-        QCOMPARE(overlay->timecodeText(), QStringLiteral("00:00:00:00 / 00:00:18:00"));
-        QVERIFY(viewer->videoRect().contains(overlay->controlsBounds()));
-        QVERIFY(overlay->controlTip(PlayerOverlay::Control::Play).startsWith(QStringLiteral("Play")));
-        // The play button asks for playback.
-        QTest::mouseClick(viewer, Qt::LeftButton, {}, overlay->controlRect(PlayerOverlay::Control::Play).center().toPoint());
-        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("play"));
-        // Playing: hidden a moment after the pointer's last move...
-        QTest::mouseMove(viewer, viewer->videoRect().center().toPoint());
-        window.handleEvent(QJsonObject{{"type", "playback"}, {"playing", true}});
-        QVERIFY(overlay->playing());
-        QTRY_VERIFY(!overlay->shown());
-        QCOMPARE(overlay->opacity(), 0.0);
-        // ...back on the next move over the picture, and gone again after.
-        QTest::mouseMove(viewer, viewer->videoRect().center().toPoint() + QPoint(5, 5));
-        QVERIFY(overlay->shown());
-        QTRY_VERIFY(!overlay->shown());
-        // Paused again, it stays.
-        window.handleEvent(QJsonObject{{"type", "playback"}, {"playing", false}});
-        QVERIFY(overlay->shown());
-        // A click on the bar seeks to the frame under it, and a drag follows.
-        const QRectF bar = overlay->barRect();
-        const auto sendMouse = [viewer](QEvent::Type type, const QPointF &at, Qt::MouseButtons buttons) {
-            QMouseEvent event(type, at, viewer->mapToGlobal(at), type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton, buttons,
-                              Qt::NoModifier);
-            QCoreApplication::sendEvent(viewer, &event);
-        };
-        sendMouse(QEvent::MouseButtonPress, QPointF(bar.left() + bar.width() * 0.5, bar.center().y()), Qt::LeftButton);
-        QVERIFY(std::abs(window.m_playhead - 9.0) < 1.0 / 24.0);
-        sendMouse(QEvent::MouseMove, QPointF(bar.left() + bar.width() * 0.25, bar.center().y()), Qt::LeftButton);
-        sendMouse(QEvent::MouseButtonRelease, QPointF(bar.left() + bar.width() * 0.25, bar.center().y()), Qt::NoButton);
-        QVERIFY(std::abs(window.m_playhead - 4.5) < 1.0 / 24.0);
-        QCOMPARE(overlay->timecodeText(), QStringLiteral("00:00:04:12 / 00:00:18:00"));
-        // The step buttons step one frame.
-        QTest::mouseClick(viewer, Qt::LeftButton, {}, overlay->controlRect(PlayerOverlay::Control::StepForward).center().toPoint());
-        QVERIFY(std::abs(window.m_playhead - (4.5 + 1.0 / 24.0)) < 0.001);
-        // No strip of buttons and timecodes under the picture: the stage
-        // below the card is empty.
-        QVERIFY(!window.findChild<QWidget *>(QStringLiteral("viewerFrame"))->findChild<QLabel *>(QStringLiteral("transportTime")));
-
-        // On a portrait card at a laptop's window, a short-video player's
-        // arrangement: the cluster at the top left, the bar along the foot,
-        // the time small over it, all on the picture.
-        QJsonObject snapshot = showcaseSnapshot(4, QStringLiteral("clean"));
-        QJsonObject timeline = snapshot.value(QStringLiteral("timeline")).toObject();
-        timeline.insert(QStringLiteral("width"), 1080);
-        timeline.insert(QStringLiteral("height"), 1920);
-        snapshot.insert(QStringLiteral("timeline"), timeline);
-        window.applySnapshot(snapshot);
-        window.resize(1280, 800);
-        QCoreApplication::processEvents();
-        for (const DevicePreview preview : {DevicePreview::Phone, DevicePreview::Off}) {
-            window.setDevicePreview(preview);
-            QCoreApplication::processEvents();
-            const QRectF card = viewer->videoRect();
-            QVERIFY(overlay->compact());
-            QVERIFY2(card.contains(overlay->controlsBounds()), qPrintable(QStringLiteral("%1 wide").arg(card.width())));
-            QVERIFY(overlay->controlRect(PlayerOverlay::Control::Play).top() < card.top() + 8);
-            QVERIFY(overlay->barRect().bottom() >= card.bottom() - 0.5);
-            QVERIFY(overlay->controlRect(PlayerOverlay::Control::StepForward).right() < card.right());
-            // The time fits whole: over the length where there is room, the
-            // playhead's alone where there is not.
-            const QFontMetricsF metrics(overlay->timeFont(11));
-            QVERIFY(metrics.horizontalAdvance(overlay->timecodeText()) <= overlay->timecodeRect().width());
-            QVERIFY(overlay->timecodeText().startsWith(QStringLiteral("00:00:04:13")));
-        }
-        window.setDevicePreview(DevicePreview::Phone);
+        viewer->setSafeZones(false);
+        window.handleEvent(seedComments());
+        window.handleEvent(overlapCheck());
+        window.handleEvent(QJsonObject{{"type", "clock"}, {"position", 17.32}, {"duration", 18.0}});
+        QVERIFY(!viewer->overlapShown());
+        emit window.bus()->currentThreadChanged(QStringLiteral("c-1708"));
+        QVERIFY(viewer->overlapShown());
+        QCOMPARE(viewer->overlap(), QRectF(0.30, 0.78, 0.20, 0.04));
+        QCOMPARE(viewer->overlapTag(), QStringLiteral("8 px"));
+        const QRectF picture = viewer->pictureRect();
+        const QRectF box = viewer->overlapBox();
+        KERF_NEAR(box.left(), picture.left() + 0.30 * picture.width(), 1e-6, "box x");
+        KERF_NEAR(box.height(), 0.04 * picture.height(), 1e-6, "box h");
+        QImage black(QSize(480, 270), QImage::Format_RGB32);
+        black.fill(Qt::black);
+        viewer->setFrame(black, 17.32);
+        const QImage image = viewer->grab().toImage();
+        const QColor inside = pixelOf(image, box.center());
+        QVERIFY2(inside.red() > inside.green() + 30 && inside.red() > 50, qPrintable(inside.name()));
+        // Its tag, without a caption over the box's right, 4 over it.
+        const QRectF tag = viewer->overlapTagRect();
+        KERF_NEAR(tag.right(), box.right(), 1e-6, "tag right");
+        KERF_NEAR(tag.bottom(), box.top() - 4, 1e-6, "tag foot");
+        QCOMPARE(tag.height(), 16.0);
+        // With a caption, the tag stands over the caption's right.
+        viewer->setCaption(QStringLiteral("We open before the city does"));
+        KERF_NEAR(viewer->overlapTagRect().right(), viewer->captionRect().right(), 1e-6, "tag on the caption");
+        // Another thread, or the playhead out of the finding: no box.
+        emit window.bus()->currentThreadChanged(QStringLiteral("c-0903"));
+        QVERIFY(!viewer->overlapShown());
+        // Hovered in the panel, it shows while another thread is current.
+        window.m_stageWiring->hoverThread(QStringLiteral("c-1708"));
+        QVERIFY(viewer->overlapShown());
+        window.m_stageWiring->hoverThread(QString());
+        QVERIFY(!viewer->overlapShown());
+        emit window.bus()->currentThreadChanged(QStringLiteral("c-1708"));
+        QVERIFY(viewer->overlapShown());
+        window.handleEvent(QJsonObject{{"type", "clock"}, {"position", 9.0}, {"duration", 18.0}});
+        QVERIFY(!viewer->overlapShown());
+        window.handleEvent(QJsonObject{{"type", "clock"}, {"position", 17.5}, {"duration", 18.0}});
+        QVERIFY(viewer->overlapShown());
+        // A check running keeps the last one's box; a new one without it clears it.
+        window.handleEvent(QJsonObject{{"type", "check"}, {"status", "running"}, {"progress", 0.1}});
+        QVERIFY(viewer->overlapShown());
+        window.handleEvent(QJsonObject{{"type", "check"}, {"status", "done"}, {"valid", true}, {"findings", QJsonArray{}}});
+        QVERIFY(!viewer->overlapShown());
         window.close();
-
-        // The time reads at 4.5:1 on a white frame, on the gradient's darkest part.
-        for (const QSize &canvas : {QSize(1920, 1080), QSize(1080, 1920)}) {
-            ViewerWidget plain;
-            plain.resize(900, 520);
-            plain.setProjectInfo(canvas.width(), canvas.height());
-            QImage white(canvas / 4, QImage::Format_RGB32);
-            white.fill(Qt::white);
-            plain.setFrame(white, 0.0);
-            PlayerOverlay *controls = plain.overlay();
-            const QImage image = plain.grab().toImage();
-            const QRectF time = controls->timecodeRect();
-            const QFontMetricsF metrics(controls->timeFont(controls->compact() ? 11 : 12));
-            const QPointF clear(time.left() + metrics.horizontalAdvance(controls->timecodeText()) + 6, time.center().y());
-            QVERIFY(controls->rect().contains(clear));
-            const QColor under = image.pixelColor((clear * image.devicePixelRatio()).toPoint());
-            const QColor ink = laidOn(under, editorTheme().playerInk);
-            QVERIFY2(contrastRatio(ink, under) >= 4.5, qPrintable(QStringLiteral("%1 on %2").arg(ink.name(), under.name())));
-        }
     }
 
-    // The pointer on the picture works as on a video player: skimming maps
-    // across the picture (as the bar does), not across the stage, so the
-    // frame skimmed is the one under the bar's tip; a click on the picture
-    // plays or pauses and never seeks; off the picture nothing happens.
+    // The composer's Draw: the stage takes the pointer for strokes on the
+    // frame; Return gives them back on the bus, normalised to the frame;
+    // Esc (or the composer) cancels.
+    void drawingOnTheFrameGoesBackOnTheBus() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(shaped(QSize(1920, 1080)));
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        ViewerWidget *viewer = window.m_viewer;
+        QSignalSpy finished(window.bus(), &EditorBus::drawingFinished);
+        QSignalSpy cancelled(window.bus(), &EditorBus::drawingCancelled);
+        QSignalSpy scrubs(viewer, &ViewerWidget::scrubbed);
+        emit window.bus()->drawingRequested();
+        QVERIFY(viewer->capturingDrawing());
+        const QRectF picture = viewer->pictureRect();
+        const auto at = [&picture](double x, double y) { return QPointF(picture.left() + x * picture.width(), picture.top() + y * picture.height()); };
+        mouse(viewer, QEvent::MouseButtonPress, at(0.25, 0.25));
+        for (int step = 1; step <= 10; ++step) {
+            QMouseEvent move(QEvent::MouseMove, at(0.25 + 0.02 * step, 0.25 + 0.01 * step), viewer->mapToGlobal(at(0.25 + 0.02 * step, 0.25 + 0.01 * step)),
+                             Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(viewer, &move);
+        }
+        mouse(viewer, QEvent::MouseButtonRelease, at(0.45, 0.35));
+        // The picture neither skims nor plays while it is drawn on.
+        QVERIFY(scrubs.isEmpty());
+        QCOMPARE(viewer->capturedStrokes().size(), 1);
+        key(viewer, Qt::Key_Return);
+        QVERIFY(!viewer->capturingDrawing());
+        QCOMPARE(finished.size(), 1);
+        const QJsonArray strokes = finished.constFirst().at(0).toJsonArray();
+        QCOMPARE(strokes.size(), 1);
+        const QJsonObject stroke = strokes.first().toObject();
+        QCOMPARE(stroke.value("tool").toString(), QStringLiteral("pen"));
+        const QJsonArray points = stroke.value("points").toArray();
+        QVERIFY(points.size() >= 5);
+        QVERIFY(near(points.first(), {0.25, 0.25}));
+        for (const QJsonValue &point : points) {
+            const QJsonArray xy = point.toArray();
+            QVERIFY(xy.at(0).toDouble() >= 0.0 && xy.at(0).toDouble() <= 1.0 && xy.at(1).toDouble() >= 0.0 && xy.at(1).toDouble() <= 1.0);
+        }
+        QVERIFY(cancelled.isEmpty());
+        // Esc cancels; nothing drawn is no drawing.
+        emit window.bus()->drawingRequested();
+        mouse(viewer, QEvent::MouseButtonPress, at(0.5, 0.5));
+        mouse(viewer, QEvent::MouseButtonRelease, at(0.5, 0.5));
+        key(viewer, Qt::Key_Escape);
+        QVERIFY(!viewer->capturingDrawing());
+        QCOMPARE(cancelled.size(), 1);
+        emit window.bus()->drawingRequested();
+        key(viewer, Qt::Key_Return);
+        QCOMPARE(cancelled.size(), 2);
+        QCOMPARE(finished.size(), 1);
+        // The composer's own Cancel ends it once, without an echo.
+        emit window.bus()->drawingRequested();
+        QVERIFY(viewer->capturingDrawing());
+        emit window.bus()->drawingCancelled();
+        QVERIFY(!viewer->capturingDrawing());
+        QCOMPARE(cancelled.size(), 3);
+        window.close();
+    }
+
+    // The current thread's drawings show over the picture while the
+    // playhead is at their comment (a reply at its thread's time), with the
+    // author's 16 pt avatar at the start; view.annotations (⇧A) hides them.
+    void annotationsShowTheCurrentThreadsDrawings() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(shaped(QSize(1920, 1080)));
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        ViewerWidget *viewer = window.m_viewer;
+        viewer->setSafeZones(false);
+        window.handleEvent(seedComments());
+        window.handleEvent(QJsonObject{{"type", "clock"}, {"position", 17.32}, {"duration", 18.0}});
+        QVERIFY(viewer->annotations().isEmpty());
+        emit window.bus()->currentThreadChanged(QStringLiteral("c-1708"));
+        QCOMPARE(viewer->annotations().size(), 1);
+        QCOMPARE(viewer->annotations().first().comment, QStringLiteral("c-1708-r1"));
+        QCOMPARE(viewer->annotations().first().initials, QStringLiteral("TL"));
+        QVERIFY(viewer->annotationsShown());
+        QImage black(QSize(480, 270), QImage::Format_RGB32);
+        black.fill(Qt::black);
+        viewer->setFrame(black, 17.32);
+        const QRectF picture = viewer->pictureRect();
+        const QPointF onStroke(picture.left() + 0.40 * picture.width(), picture.top() + 0.275 * picture.height());
+        QVERIFY2(pixelOf(viewer->grab().toImage(), onStroke).lightness() > 150, qPrintable(pixelOf(viewer->grab().toImage(), onStroke).name()));
+        // The avatar at the stroke's start: the on grey.
+        const QPointF start(picture.left() + 0.30 * picture.width(), picture.top() + 0.30 * picture.height() - 6.5);
+        QVERIFY(nearColor(pixelOf(viewer->grab().toImage(), start).rgb(), tokens::on, 6));
+        // The switch hides them, and is remembered.
+        emit window.m_commands->toggled(QStringLiteral("view.annotations"), false);
+        QVERIFY(!viewer->annotationsShown());
+        QVERIFY(!window.m_commands->action(QStringLiteral("view.annotations"))->isChecked());
+        QVERIFY(pixelOf(viewer->grab().toImage(), onStroke).lightness() < 10);
+        QCOMPARE(QSettings().value(QStringLiteral("viewer/annotations")).toBool(), false);
+        emit window.m_commands->toggled(QStringLiteral("view.annotations"), true);
+        // The reply chosen in the panel shows its drawing with another
+        // thread current, at its thread's time.
+        emit window.bus()->currentThreadChanged(QStringLiteral("c-0903"));
+        QVERIFY(viewer->annotations().isEmpty());
+        window.m_stageWiring->selectComment(QStringLiteral("c-1708-r1"));
+        QCOMPARE(viewer->annotations().size(), 1);
+        window.m_stageWiring->selectComment(QString());
+        QVERIFY(viewer->annotations().isEmpty());
+        emit window.bus()->currentThreadChanged(QStringLiteral("c-1708"));
+        // Away from the comment's time, none.
+        window.handleEvent(QJsonObject{{"type", "clock"}, {"position", 12.0}, {"duration", 18.0}});
+        QVERIFY(viewer->annotations().isEmpty());
+        window.close();
+    }
+
+    // The Program strip (mockup-spec 2): "Program", the mask tools, then
+    // Annotations, Safe zones and Dim, then Fit with its chevron; each a kit
+    // button following its action, with the mockup's tips. The Fit menu sets
+    // the viewer's zoom.
+    void programStripShowsTheViewersSwitches() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(shaped(QSize(1920, 1080)));
+        ProgramStrip *strip = window.m_programStrip;
+        QCOMPARE(strip->height(), 28);
+        const QList<QPair<QString, QString>> icons{{"maskRectangle", "g-mrect"}, {"maskEllipse", "g-mell"}, {"maskPen", "g-mpen"},
+                                                   {"view.annotations", "g-annot"}, {"view.safeZones", "g-safe"}, {"view.dim", "g-dim"}};
+        for (const auto &[name, icon] : icons) {
+            QAction *action = nullptr;
+            for (QAction *candidate : strip->actions())
+                if (candidate && candidate->objectName() == name) action = candidate;
+            QVERIFY2(action, qPrintable(name));
+            auto *button = qobject_cast<ui::IconButton *>(strip->buttonFor(action));
+            QVERIFY2(button, qPrintable(name));
+            QCOMPARE(button->iconName(), icon);
+            QCOMPARE(button->isEnabled(), action->isEnabled());
+        }
+        // Their keys: ⇧R ⇧E ⇧P for the masks.
+        QCOMPARE(window.m_maskTools.at(0)->shortcut(), QKeySequence(Qt::SHIFT | Qt::Key_R));
+        QCOMPARE(window.m_maskTools.at(1)->shortcut(), QKeySequence(Qt::SHIFT | Qt::Key_E));
+        QCOMPARE(window.m_maskTools.at(2)->shortcut(), QKeySequence(Qt::SHIFT | Qt::Key_P));
+        QAction *safe = window.m_commands->action(QStringLiteral("view.safeZones"));
+        QAbstractButton *safeButton = strip->buttonFor(safe);
+        QCOMPARE(ui::tipName(safeButton), QStringLiteral("Safe zones · action 93%, title 90%"));
+        QCOMPARE(safeButton->isChecked(), window.m_viewer->safeZonesShown());
+        safeButton->click();
+        QCOMPARE(window.m_viewer->safeZonesShown(), safe->isChecked());
+        QCOMPARE(safeButton->isChecked(), safe->isChecked());
+        safeButton->click();
+        QVERIFY(window.m_viewer->safeZonesShown());
+        // A disabled one says why.
+        QVERIFY(!window.m_maskTools.at(0)->isEnabled());
+        QVERIFY(ui::tipName(strip->buttonFor(window.m_maskTools.at(0))).startsWith(QStringLiteral("Rectangle mask · ")));
+        // Fit: the zoom's ghost button and its menu.
+        QAbstractButton *fit = strip->zoomButton();
+        QVERIFY(fit);
+        QCOMPARE(strip->zoomText(), QStringLiteral("Fit"));
+        QMenu *menu = window.m_stageWiring->zoomMenu();
+        QStringList items;
+        for (QAction *action : menu->actions())
+            if (!action->isSeparator()) items << action->text();
+        QCOMPARE(items, (QStringList{"Fit", "50%", "100%", "200%", "Sequence settings…"}));
+        for (QAction *action : menu->actions())
+            if (action->text() == QStringLiteral("100%")) action->trigger();
+        QCOMPARE(window.m_viewer->zoom(), 1.0);
+        QCOMPARE(strip->zoomText(), QStringLiteral("100%"));
+        // At 100% a frame pixel is a device pixel.
+        const qreal ratio = std::max(1.0, window.m_viewer->devicePixelRatioF());
+        KERF_NEAR(window.m_viewer->pictureRect().width(), 1920.0 / ratio, 1e-6, "100% width");
+        KERF_NEAR(window.m_viewer->pictureRect().center().x(), window.m_viewer->videoRect().center().x(), 1e-6, "zoom centre");
+        window.m_stageWiring->setZoom(0.0);
+        QCOMPARE(window.m_viewer->pictureRect(), window.m_viewer->videoRect());
+        QCOMPARE(strip->zoomText(), QStringLiteral("Fit"));
+        // The title's tip names the program.
+        QVERIFY(ui::tipName(strip->findChild<QLabel *>(QStringLiteral("programStripTitle"))).contains(QStringLiteral("1920 × 1080")));
+    }
+
+    // The pointer on the picture skims across the picture (as the scrub's
+    // bar maps it), so the frame skimmed is the one under the pointer's x;
+    // a click on the picture plays or pauses and never seeks; off the
+    // picture nothing happens.
     void pictureSkimsAcrossItselfAndAClickPlays() {
-        ViewerWidget viewer;
-        viewer.resize(1063, 528);
-        viewer.setStage(new QWidget, new QWidget);
-        viewer.setChatOpen(true);
-        viewer.setProjectInfo(1080, 1920);
+        Stage stage(QSize(1080, 1920));
+        ViewerWidget &viewer = stage.viewer;
         viewer.show();
         QVERIFY(QTest::qWaitForWindowExposed(&viewer));
         const QRectF card = viewer.videoRect();
@@ -395,116 +863,92 @@ private slots:
         QVERIFY(std::abs(scrubs.constLast()[0].toDouble() - 0.25) <= 0.02);
         // Off the picture, on the stage beside the phone: the skim ends.
         const qsizetype skimmed = scrubs.size();
-        QTest::mouseMove(&viewer, QPoint(8, qRound(card.center().y())));
+        QTest::mouseMove(&viewer, QPoint(qRound(card.right() + 4), qRound(card.top() - 30)));
         QCOMPARE(scrubs.size(), skimmed);
         QCOMPARE(ends.size(), 1);
         // A click on the picture plays; a click on the stage does nothing.
         QTest::mouseClick(&viewer, Qt::LeftButton, {}, card.center().toPoint());
         QCOMPARE(controls.size(), 1);
         QCOMPARE(controls.constFirst()[0].value<PlayerOverlay::Control>(), PlayerOverlay::Control::Play);
-        QTest::mouseClick(&viewer, Qt::LeftButton, {}, QPoint(8, 8));
+        QTest::mouseClick(&viewer, Qt::LeftButton, {}, QPoint(qRound(card.right() + 4), qRound(card.top() - 30)));
         QCOMPARE(controls.size(), 1);
         QVERIFY(seeks.isEmpty());
     }
 
-    // The caption preview is lifted over the player's controls while they
-    // show, as a video site lifts its captions, and drawn over the shade, so
-    // the bar never runs through it; with the controls gone it is back at
-    // its place near the foot. Safe zones keep the controls (all but the
-    // bar) off the picture until the pointer comes over it. A mask's handle
-    // under a control is the handle's, and the empty card has one play
-    // button only, the player's.
-    void captionsAndMasksKeepClearOfThePlayer() {
-        for (const QSize &canvas : {QSize(1920, 1080), QSize(1080, 1920)}) {
-            ViewerWidget viewer;
-            viewer.resize(900, 520);
-            viewer.setProjectInfo(canvas.width(), canvas.height());
-            viewer.setCaption(QStringLiteral("We open on the harbor at dawn."));
-            PlayerOverlay *controls = viewer.overlay();
-            controls->setFadeDuration(0);
-            controls->setIdleTimeout(10);
-            const QRectF video = viewer.videoRect();
-            QCOMPARE(controls->opacity(), 1.0);
-            const QRectF lifted = viewer.captionRect();
-            QVERIFY(video.contains(lifted));
-            QVERIFY2(lifted.bottom() <= controls->footTop() - 8.0 + 0.01,
-                     qPrintable(QStringLiteral("%1 over %2").arg(lifted.bottom()).arg(controls->footTop())));
-            QVERIFY(!lifted.intersects(controls->barReach()) && !lifted.intersects(controls->timecodeRect()));
-            for (const PlayerOverlay::Control control : {PlayerOverlay::Control::Play, PlayerOverlay::Control::StepBack,
-                                                         PlayerOverlay::Control::StepForward})
-                QVERIFY(!lifted.intersects(controls->controlRect(control)));
-            QVERIFY(contrastRatio(editorTheme().viewerCaptionText, laidOn(QColor(Qt::white), editorTheme().viewerCaption)) >= 4.5);
-            // Playing, the controls fade: the caption goes back to its place.
-            controls->setPlaying(true);
-            QTRY_COMPARE(controls->opacity(), 0.0);
-            const QRectF rest = viewer.captionRect();
-            QVERIFY(rest.bottom() >= lifted.bottom());
-            if (canvas.width() > canvas.height()) QVERIFY(rest.bottom() > lifted.bottom());
-            QVERIFY(std::abs(rest.bottom() - (video.bottom() - std::max(12.0, video.height() * 0.08))) < 0.5);
-            controls->setPlaying(false);
-        }
+    // The transport left the picture for the scrub strip under the device
+    // (mockup-spec 3.4): nothing of a player lies over the picture (no
+    // shade, no controls, no time), whatever it shows, and the overlay takes
+    // no pointer; it still names the transport's commands for the window.
+    void transportLeftThePicture() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(shaped(QSize(1920, 1080)));
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        ViewerWidget *viewer = window.m_viewer;
+        viewer->setSafeZones(false);
+        QImage white(QSize(480, 270), QImage::Format_RGB32);
+        white.fill(Qt::white);
+        viewer->setFrame(white, 0.0);
+        QTest::mouseMove(viewer, viewer->videoRect().center().toPoint());
+        const QImage image = viewer->grab().toImage();
+        const QRectF picture = viewer->videoRect();
+        for (const QPointF &point : {QPointF(picture.left() + 20, picture.bottom() - 6), QPointF(picture.center().x(), picture.bottom() - 20),
+                                     QPointF(picture.left() + 30, picture.bottom() - 22), QPointF(picture.left() + 20, picture.top() + 20)})
+            QCOMPARE(pixelOf(image, point).rgb(), qRgb(255, 255, 255));
+        QVERIFY(!viewer->overlay()->mousePress(picture.center()));
+        QVERIFY(viewer->overlay()->toolTipAt(picture.center()).isEmpty());
+        QVERIFY(viewer->overlay()->controlTip(PlayerOverlay::Control::Play).startsWith(QStringLiteral("Play")));
+        // The scrub strip is the transport, under the laptop.
+        QWidget *scrub = window.m_stageWiring->scrub();
+        QVERIFY(scrub->isVisible());
+        QVERIFY(scrub->geometry().top() >= qRound(viewer->stageLayout().body.bottom()));
+        window.close();
+    }
+
+    // A wide picture shows in a laptop by default, this Mac's preference
+    // like the phone: Window ▸ Viewer (and the rail) choose Laptop or Off,
+    // and the next editor opens with it. Off draws the plain picture where
+    // the laptop's is; the rail and the scrub keep their places.
+    void laptopPreviewIsRememberedOnThisMac() {
         {
-            // Safe zones: only the bar until the pointer is over the picture.
-            ViewerWidget viewer;
-            viewer.resize(900, 520);
-            viewer.setProjectInfo(1080, 1920);
-            viewer.show();
-            QVERIFY(QTest::qWaitForWindowExposed(&viewer));
-            PlayerOverlay *controls = viewer.overlay();
-            QVERIFY(controls->controlsShown());
-            viewer.setSafeZones(true);
-            QVERIFY(controls->controlsSuppressed() && !controls->controlsShown());
-            QVERIFY(std::abs(controls->footTop() - (viewer.videoRect().bottom() - PlayerOverlay::kBarHoverHeight)) < 0.01);
-            QTest::mouseMove(&viewer, viewer.videoRect().center().toPoint());
-            QVERIFY(controls->controlsShown());
-            QTest::mouseMove(&viewer, QPoint(4, 4));
-            QVERIFY(!controls->controlsShown());
-            viewer.setSafeZones(false);
-            QVERIFY(!controls->controlsSuppressed());
+            MainWindow window{QString(), QString()};
+            window.setConnection(QStringLiteral("ready"));
+            window.applySnapshot(shaped(QSize(1920, 1080)));
+            window.resize(1600, 1000);
+            window.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&window));
+            QCoreApplication::processEvents();
+            ViewerWidget *viewer = window.m_viewer;
+            RailButton *device = window.m_rail->deviceButton();
+            QVERIFY(device->isVisible() && device->isChecked());
+            QCOMPARE(device->glyph(), RailButton::Glyph::Laptop);
+            const ViewerWidget::StageLayout stage = viewer->stageLayout();
+            QCOMPARE(stage.kind, ViewerWidget::Device::Laptop);
+            QCOMPARE(window.m_laptopActions.size(), 2);
+            QVERIFY(window.m_laptopActions.at(0)->isChecked() && !window.m_laptopActions.at(1)->isChecked());
+            window.m_laptopActions.at(1)->trigger();
+            QCOMPARE(viewer->laptopPreview(), LaptopPreview::Off);
+            QCOMPARE(QSettings().value(QStringLiteral("viewer/laptopPreview")).toString(), QStringLiteral("off"));
+            QVERIFY(!device->isChecked());
+            const ViewerWidget::StageLayout off = viewer->stageLayout();
+            QVERIFY(!off.device);
+            QCOMPARE(off.card, stage.card);
+            QCOMPARE(off.rail, stage.rail);
+            QCOMPARE(off.scrub, stage.scrub);
+            QCOMPARE(window.m_chat->geometry(), off.panel);
+            // The rail's menu brings it back.
+            emit window.m_rail->devicePreviewRequested(true);
+            QCOMPARE(viewer->laptopPreview(), LaptopPreview::Laptop);
+            QVERIFY(device->isChecked());
+            window.m_laptopActions.at(1)->trigger();
+            QVERIFY(!window.m_lastCommand.value("type").toString().contains(QStringLiteral("laptop")));
+            window.close();
         }
-        {
-            // A mask whose corner sits on the play button: pressing there
-            // takes the corner, not the button.
-            ViewerWidget viewer;
-            viewer.resize(900, 520);
-            viewer.setProjectInfo(1920, 1080);
-            viewer.show();
-            QVERIFY(QTest::qWaitForWindowExposed(&viewer));
-            const QRectF video = viewer.videoRect();
-            const QPointF play = viewer.overlay()->controlRect(PlayerOverlay::Control::Play).center();
-            const double fx = (play.x() - video.left()) / video.width();
-            const double fy = (play.y() - video.top()) / video.height();
-            viewer.setMasks(QStringLiteral("v1"),
-                            QJsonArray{QJsonObject{{"name", "k1"}, {"mode", "add"}, {"rect", QJsonArray{fx, 0.2, 0.8, fy}}}},
-                            QTransform::fromScale(1920, 1080));
-            viewer.selectMask(QStringLiteral("k1"));
-            QSignalSpy controls(viewer.overlay(), &PlayerOverlay::controlTriggered);
-            QSignalSpy edits(&viewer, &ViewerWidget::editRequested);
-            QTest::mousePress(&viewer, Qt::LeftButton, {}, play.toPoint());
-            QTest::mouseMove(&viewer, (play + QPointF(20, -20)).toPoint());
-            QTest::mouseRelease(&viewer, Qt::LeftButton, {}, (play + QPointF(20, -20)).toPoint());
-            QVERIFY(controls.isEmpty());
-            QCOMPARE(edits.size(), 1);
-            QCOMPARE(edits.constFirst()[0].toJsonArray().first().toObject().value("op").toString(), QStringLiteral("mask-set"));
-        }
-        {
-            // The empty card: two quiet lines, and no play disc of its own
-            // over them (the player's play button is the only one).
-            ViewerWidget viewer;
-            viewer.resize(900, 520);
-            viewer.setProjectInfo(1920, 1080);
-            const qreal ratio = viewer.grab().toImage().devicePixelRatio();
-            // In the laptop, the screen's black; on the plain card, the canvas.
-            for (const bool laptop : {true, false}) {
-                viewer.setLaptopPreview(laptop ? LaptopPreview::Laptop : LaptopPreview::Off);
-                const QImage image = viewer.grab().toImage();
-                const QRectF video = viewer.videoRect();
-                const QColor backdrop = laptop ? tokens::color(tokens::overlay::deviceScreen) : editorTheme().viewerCanvas;
-                for (int dy = -40; dy <= -26; dy += 2)
-                    for (int dx = -14; dx <= 14; dx += 2)
-                        QCOMPARE(image.pixelColor(((video.center() + QPointF(dx, dy)) * ratio).toPoint()).rgb(), backdrop.rgb());
-            }
-        }
+        MainWindow window{QString(), QString()};
+        QCOMPARE(window.m_viewer->laptopPreview(), LaptopPreview::Off);
+        QVERIFY(window.m_laptopActions.at(1)->isChecked());
     }
 
     void viewerCanvasResolutionMatchesProjectThenSourceThenDefault() {
@@ -765,8 +1209,8 @@ private slots:
             QCOMPARE(pair.size(), 2);
             inspector->ensurePolished();
             QCOMPARE(inspector->section(QStringLiteral("masks"))->findChild<QLabel *>(QStringLiteral("sectionCount"))->text(), QStringLiteral("2"));
-            // The module's title is engraved: bold capitals.
-            QCOMPARE(inspector->section(QStringLiteral("masks"))->findChild<QLabel *>(QStringLiteral("sectionTitle"))->font().weight(), QFont::Bold);
+            // The group's title, flat: UI 500 (spec 0.3 has only 400 and 500).
+            QCOMPARE(inspector->section(QStringLiteral("masks"))->findChild<QLabel *>(QStringLiteral("sectionTitle"))->font().weight(), QFont::Medium);
             for (QWidget *box : pair) {
                 box->ensurePolished();
                 auto *name = box->findChild<QToolButton *>(QStringLiteral("maskName"));
@@ -774,6 +1218,31 @@ private slots:
                 // The flat sheet's UI 500 (spec 0.3 has only 400 and 500).
                 QCOMPARE(name->font().weight(), QFont::Medium);
             }
+        }
+        // A mask whose bottom edge runs within 20 pt of the picture's foot
+        // draws its outline there while paused: the stage has no controls
+        // on the picture for it to keep clear of.
+        {
+            const QJsonObject foot{{"name", "k1"}, {"rect", QJsonArray{0.2, 0.3, 0.8, 0.98}}, {"mode", "add"},
+                                   {"inverted", false}, {"params", QJsonObject{}}};
+            snapshot(10, QJsonArray{foot});
+            viewer->selectMask(QString());
+            QVERIFY(viewer->m_overlay->controlsShown());
+            // A first grab lays the viewer out at its size in the window.
+            viewer->grab();
+            toWidget = viewer->pictureToWidget();
+            const QPointF edge = toWidget.map(QPointF(0.5, 0.98));
+            QVERIFY2(toWidget.map(QPointF(0.5, 1.0)).y() - edge.y() < 20.0, qPrintable(QString::number(edge.y())));
+            // In the band the player's foot once kept outlines out of.
+            QVERIFY(edge.y() > viewer->m_overlay->footTop() - 4.0);
+            const QImage shot = viewer->grab().toImage();
+            int brightest = 0;
+            for (double dy = -2.0; dy <= 2.0; dy += 0.5)
+                brightest = std::max(brightest, qGray(pixelOf(shot, edge + QPointF(0, dy)).rgb()));
+            // The outline (white at 70%) against the screen just inside it.
+            const int inside = qGray(pixelOf(shot, edge - QPointF(0, 10)).rgb());
+            QVERIFY2(brightest > 100 && brightest - inside > 80,
+                     qPrintable(QStringLiteral("%1 over %2").arg(brightest).arg(inside)));
         }
         // Deselecting the clip hides its masks and stops a tool.
         rectangle->trigger();
@@ -842,315 +1311,118 @@ private slots:
         QVERIFY(window.m_statusDevice->isHidden());
     }
 
-    // The whole editor in the Editing workspace with Kerf's conversation
-    // open in the stage, as a Short shows with its comments open: a 16:9, a
-    // 9:16 and a 1:1 project. The card keeps the
-    // project's shape and is as large as the group allows; card, rail and
-    // conversation are one group centred in the stage, the conversation as
-    // tall as the card and level with it. With KERF_SCREENSHOT_DIR set, each
-    // is saved as editor-<format>-dark.png, the 9:16 and 16:9 ones with the
-    // conversation closed as editor-<format>-closed-dark.png, and the 16:9
-    // one with the laptop off as editor-16x9-off-dark.png.
+    // The whole editor at the 1600 x 1000 canvas in the Review workspace,
+    // its comments panel open in the stage, for each format: 16:9 in the
+    // laptop beside the 368 panel, 9:16, 1:1 and 4:5 in the phone beside the
+    // 480 panel with the Source column on the left, every part where the
+    // [OWNER] table puts it; then the panel closed. With
+    // KERF_SCREENSHOT_DIR set, each is saved as editor-<format>-dark.png and
+    // editor-<format>-closed-dark.png, the 16:9 one with the laptop off as
+    // editor-16x9-off-dark.png, and the 16:9 one dimmed as
+    // editor-16x9-dim-dark.png.
     void editorShowsEveryFormatBesideItsConversation() {
-        QSettings().remove(QStringLiteral("workspace"));
         const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
-        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
-        // A harbor at dawn in the project's shape (the tests' procedural
-        // footage): sky over the water, whose lower part is a dark blue-grey.
         const auto picture = [](const QSize &size) { return testing::footageFrame(testing::Shot::HarborWide, size); };
         struct Format {
             const char *name;
             QSize canvas;
         };
-        {
-            const EditorTheme &theme = editorTheme();
-            for (const Format &format : {Format{"16x9", QSize(1920, 1080)}, Format{"9x16", QSize(1080, 1920)}, Format{"1x1", QSize(1080, 1080)}}) {
-                QSettings().remove(QStringLiteral("workspace"));
-                QJsonObject snapshot = showcaseSnapshot(12, QStringLiteral("clean"));
-                QJsonObject timeline = snapshot.value(QStringLiteral("timeline")).toObject();
-                timeline.insert(QStringLiteral("width"), format.canvas.width());
-                timeline.insert(QStringLiteral("height"), format.canvas.height());
-                snapshot.insert(QStringLiteral("timeline"), timeline);
-                snapshot.remove(QStringLiteral("pendingProposal"));
-                snapshot.remove(QStringLiteral("proposalTimeline"));
-                MainWindow window{QString(), QString()};
-                window.setConnection(QStringLiteral("ready"));
-                window.applySnapshot(snapshot);
-                window.handleEvent(QJsonObject{{"type", "collab"}, {"status", sharedStatus()}});
-                fakeArtwork(window.m_artwork);
-                window.resize(1440, 900);
-                window.show();
-                QVERIFY(QTest::qWaitForWindowExposed(&window));
-                window.m_errorBanner->hide();
-                window.m_viewer->setFrame(picture(format.canvas / 4), 0.0);
-                window.appendConversation(QStringLiteral("You"), QStringLiteral("Tighten the fisher close-up and drop the drone pass."));
-                window.appendConversation(QStringLiteral("Kerf"),
-                    QStringLiteral("I trimmed the close-up by 1.5 seconds, removed the drone pass, and added a lower third at 12 s."));
-                window.appendConversationNote(QStringLiteral("Tool"), QStringLiteral("Trimmed v1b by 36 frames"));
-                window.appendConversationNote(QStringLiteral("Tool"), QStringLiteral("Removed v1c"));
-                window.appendConversation(QStringLiteral("You"), QStringLiteral("Now caption the dialogue."));
-                window.showNextSteps(QJsonArray{QJsonObject{{"label", "Add captions"}, {"request", "Caption the dialogue"}},
-                                                QJsonObject{{"label", "Duck the music"}, {"request", "Lower the music under the dialogue"}},
-                                                QJsonObject{{"label", "Match the colour"}, {"request", "Match the close-up to the wide"}}});
-                QTest::mouseMove(window.statusBar(), QPoint(window.statusBar()->width() / 2, 4));
-                // Let the conversation settle at its latest comment.
-                QTest::qWait(30);
-                const QString label = QString::fromLatin1(format.name);
-                QCOMPARE(window.m_canvasSize, format.canvas);
-                verifyListEnd(window.m_chat);
-                QVERIFY(window.m_viewer->isVisible() && window.m_chat->isVisible() && window.m_rail->isVisible());
-                QVERIFY(!window.m_sourceMonitor->isVisible());
-
-                // The card keeps the project's shape; card (or the phone a
-                // portrait one shows in), rail and conversation are one group
-                // centred in the stage.
-                const ViewerWidget::StageLayout stage = window.m_viewer->stageLayout();
-                QVERIFY2(!stage.overlay, qPrintable(label));
-                const bool tall = format.canvas.width() < format.canvas.height();
-                const bool wide = format.canvas.width() > format.canvas.height();
-                // A portrait picture in a phone, a wide one in a laptop, a
-                // square one on the plain card (in a phone it would be under
-                // half the card's width here).
-                QCOMPARE(stage.kind, tall ? ViewerWidget::Device::Phone : wide ? ViewerWidget::Device::Laptop : ViewerWidget::Device::None);
-                if (!tall && !wide) {
-                    // Measured, as R10 asks before putting 1:1 in the phone:
-                    // the square picture on the card against the same picture
-                    // across a phone's screen, in this stage.
-                    const ViewerWidget::StageLayout inPhone = window.m_viewer->stageLayout(ViewerWidget::Device::Phone);
-                    qInfo("1:1 at 1440x900: card picture %.0f px wide, in the phone %.0f px (%.0f%%)", stage.card.width(),
-                          inPhone.card.width(), 100.0 * inPhone.card.width() / stage.card.width());
-                    QVERIFY(inPhone.screen.adjusted(-0.5, -0.5, 0.5, 0.5).contains(inPhone.card));
-                    QVERIFY2(inPhone.card.width() < 0.5 * stage.card.width(), "a square picture loses over half its width in the phone");
-                }
-                const QRectF video = stage.card;
-                const QRectF body = stage.body;
-                QCOMPARE(window.m_viewer->videoRect(), video);
-                QVERIFY2(std::abs(video.width() / video.height() - double(format.canvas.width()) / format.canvas.height()) < 0.01,
-                         qPrintable(label));
-                const int inset = window.m_viewer->stageInset(stage.kind);
-                if (!tall) QCOMPARE(inset, ViewerWidget::kStageMargin);
-                const QRectF room = QRectF(window.m_viewer->rect()).adjusted(ViewerWidget::kStageMargin, inset,
-                                                                             -ViewerWidget::kStageMargin, -inset);
-                const QRect panel = window.m_chat->geometry();
-                QCOMPARE(panel, stage.panel);
-                QCOMPARE(window.m_rail->geometry(), stage.rail);
-                const int leftSpace = qRound(body.left());
-                const int rightSpace = window.m_viewer->width() - panel.right() - 1;
-                QVERIFY2(std::abs(leftSpace - rightSpace) <= 2, qPrintable(QStringLiteral("%1: %2 | %3").arg(label).arg(leftSpace).arg(rightSpace)));
-                QVERIFY2(room.contains(QRectF(body.left(), panel.top(), panel.right() - body.left(), panel.height()).adjusted(0.5, 0.5, -0.5, -0.5)),
-                         qPrintable(label));
-                // Level with the card (or the device's body) and as tall,
-                // in every format, and never shorter than its least.
-                QCOMPARE(panel.top(), qRound(body.top()));
-                QVERIFY2(std::abs(panel.height() - body.height()) <= 1,
-                         qPrintable(QStringLiteral("%1: %2 for %3").arg(label).arg(panel.height()).arg(body.height())));
-                QVERIFY2(panel.height() >= ViewerWidget::kMinChatHeight, qPrintable(label));
-                // A tall or square card fills the stage's height; a wide one
-                // the height, or the width the group leaves it.
-                if (!wide)
-                    QVERIFY2(std::abs(body.height() - room.height()) < 1, qPrintable(label));
-                else
-                    QVERIFY2(std::abs(body.height() - room.height()) < 1 ||
-                                 std::abs(body.width() - (room.width() - 2 * window.m_viewer->stageGap() - ViewerWidget::kRailWidth - panel.width())) < 1,
-                             qPrintable(label));
-                // Its own width beside a tall or square picture; beside a wide
-                // one it narrows so the picture keeps its share.
-                if (!wide)
-                    QCOMPARE(panel.width(), ViewerWidget::kDefaultChatWidth);
-                else
-                    QVERIFY(panel.width() >= ViewerWidget::kMinChatWidth && panel.width() <= ViewerWidget::kDefaultChatWidth);
-                // At this window a wide or square picture stays the larger
-                // part of the group. Beside a phone the conversation takes its
-                // phone width (spec 0.1: 480 at 1600), wider than the phone.
-                QVERIFY2(tall || body.width() * body.height() > panel.width() * panel.height() * 0.5,
-                         qPrintable(QStringLiteral("%1: body %2x%3, panel %4x%5, viewer %6x%7").arg(label).arg(body.width()).arg(body.height())
-                                        .arg(panel.width()).arg(panel.height()).arg(window.m_viewer->width()).arg(window.m_viewer->height())));
-                // One stage row for every shape over the bottom band (its
-                // 344 less the 1 px seam): the timeline does not jump when
-                // the format changes.
-                const int timelineHeight = window.m_workspace->panel(QStringLiteral("timeline"))->dockAreaWidget()->height();
-                QVERIFY2(std::abs(timelineHeight - (tokens::layout::band - 1)) <= 2,
-                         qPrintable(QStringLiteral("%1: timeline %2").arg(label).arg(timelineHeight)));
-                if (tall) {
-                    // The phone: its 1206:2622 screen inside an even border,
-                    // the picture across its width; where the stage is too
-                    // short for a 240-point screen at the exact proportions
-                    // (a body 539 tall), the stage's least inset gives it all
-                    // the height there is. A 9:16 picture in the taller screen is bounded
-                    // by the stage's height, so it keeps the share of the
-                    // plain card's width the phone's proportions leave it:
-                    // the screen is 0.93136 of a body 0.47794 as wide as
-                    // tall, so 0.7913 of a 9:16 card as tall as the body.
-                    QVERIFY(body.contains(stage.screen));
-                    QVERIFY(std::abs(stage.screen.width() / stage.screen.height() - kDeviceScreenAspect) < 0.001);
-                    QVERIFY(std::abs((stage.screen.left() - body.left()) - kDeviceBezel * body.width()) < 0.01);
-                    QVERIFY(std::abs(video.width() - stage.screen.width()) < 0.5);
-                    QVERIFY(stage.screen.adjusted(-0.01, -0.01, 0.01, 0.01).contains(video));
-                    const double plain = window.m_viewer->stageLayout(ViewerWidget::Device::None).card.width();
-                    QVERIFY2((stage.screen.width() >= ViewerWidget::kLeastPhoneScreen || inset == ViewerWidget::kLeastStageInset) &&
-                                 stage.screen.width() >= 0.78 * plain,
-                             qPrintable(QStringLiteral("%1: screen %2 of %3").arg(label).arg(stage.screen.width()).arg(plain)));
-                }
-                if (wide) {
-                    // The laptop: the 16:9 picture across its 3024:1964
-                    // screen, at least 90% as wide as the plain card here.
-                    const auto rectText = [](const QRectF &r) { return QStringLiteral("%1,%2 %3x%4").arg(r.x()).arg(r.y()).arg(r.width()).arg(r.height()); };
-                    QVERIFY2(body.contains(stage.screen) && stage.screen.adjusted(-0.01, -0.01, 0.01, 0.01).contains(video),
-                             qPrintable(QStringLiteral("body %1 screen %2 video %3").arg(rectText(body), rectText(stage.screen), rectText(video))));
-                    QVERIFY(std::abs(stage.screen.width() / stage.screen.height() - kLaptopScreenAspect) < 0.01);
-                    QVERIFY(std::abs(video.width() - stage.screen.width()) < 0.5);
-                    const double plain = window.m_viewer->stageLayout(ViewerWidget::Device::None).card.width();
-                    QVERIFY2(video.width() >= 0.9 * plain, qPrintable(QStringLiteral("%1 of %2").arg(video.width()).arg(plain)));
-                    QVERIFY(stage.screen.contains(window.m_viewer->overlay()->controlsBounds()));
-                }
-                const QImage image = window.grab().toImage();
-                const qreal ratio = image.devicePixelRatio();
-                const QPoint viewerOrigin = window.m_viewer->mapTo(&window, QPoint());
-                const auto at = [&](const QPointF &viewerPoint) {
-                    return image.pixelColor((QPointF(viewerOrigin) + viewerPoint).toPoint() * ratio).rgb();
-                };
-                // Whether the 7 by 7 area at `viewerPoint` is the water: its
-                // average a dark blue-grey (blue above red), as no stage,
-                // card or panel is. Averaged, so the footage's grain and
-                // ripples do not matter.
-                const auto water = [&](const QPointF &viewerPoint) {
-                    double red = 0, green = 0, blue = 0;
-                    const QPoint centre = (QPointF(viewerOrigin) + viewerPoint).toPoint();
-                    for (int dy = -3; dy <= 3; ++dy)
-                        for (int dx = -3; dx <= 3; ++dx) {
-                            const QColor c = image.pixelColor((centre + QPoint(dx, dy)) * ratio);
-                            red += c.red(); green += c.green(); blue += c.blue();
-                        }
-                    red /= 49; green /= 49; blue /= 49;
-                    return blue > red + 12 && (red + green + blue) / 3 < 110;
-                };
-                // Above the player's gradient, either side of the sun's path.
-                QVERIFY2(water(QPointF(video.left() + 14, video.top() + video.height() * 0.7)), qPrintable(label));
-                QVERIFY2(water(QPointF(video.right() - 14, video.top() + video.height() * 0.7)), qPrintable(label));
-                // Around the group, the stage; between card and rail too.
-                QCOMPARE(at(QPointF(body.left() - 6, body.top() + 8)), theme.viewerSurround.rgb());
-                QCOMPARE(at(QPointF(body.right() + 6, body.top() + 8)), theme.viewerSurround.rgb());
-                // The card's (or phone's) and the panel's corners are round:
-                // the stage shows at the very corner.
-                QCOMPARE(at(body.topLeft() + QPointF(1, 1)), theme.viewerSurround.rgb());
-                // The frames' graphite: a neutral grey of the band's, lid's and base's tones.
-                const auto graphite = [&](const QPointF &viewerPoint) {
-                    const QColor c = QColor::fromRgb(at(viewerPoint));
-                    const int lo = std::min({c.red(), c.green(), c.blue()}), hi = std::max({c.red(), c.green(), c.blue()});
-                    return lo >= 0x38 && hi <= 0x64 && hi - lo <= 8;
-                };
-                const QRgb glass = tokens::color(tokens::overlay::deviceGlass).rgb();
-                const QRgb black = tokens::color(tokens::overlay::deviceScreen).rgb();
-                if (tall) {
-                    // The phone's graphite band, its glass, and its screen's
-                    // black above the picture.
-                    const DeviceGeometry phone = deviceGeometry(body, 9.0 / 16.0);
-                    QVERIFY(graphite(QPointF(body.center().x(), std::floor(body.top()) + 2.0)));
-                    QCOMPARE(at(QPointF(body.center().x(), (phone.glass.top() + stage.screen.top()) / 2.0)), glass);
-                    QCOMPARE(at(QPointF(stage.screen.left() + 3, (stage.screen.top() + video.top()) / 2.0 + 6)), black);
-                }
-                if (wide) {
-                    // The laptop's graphite rim round its glass, the screen's
-                    // black over the picture, and its base.
-                    const LaptopGeometry laptop = laptopGeometry(body, 16.0 / 9.0);
-                    QVERIFY(graphite(QPointF(std::floor(laptop.lid.left()) + 2.0, laptop.lid.center().y())));
-                    QCOMPARE(at(QPointF((laptop.glass.left() + laptop.screen.left() - kLaptopGlassEdge) / 2.0, laptop.lid.center().y())), glass);
-                    QCOMPARE(at(QPointF(stage.screen.left() + 20, (stage.screen.top() + video.top()) / 2.0)), black);
-                    QVERIFY(graphite(QPointF(laptop.base.left() + laptop.base.width() * 0.25, laptop.base.center().y())));
-                }
-                QCOMPARE(at(QPointF(panel.left() + 1, panel.top() + 1)), theme.viewerSurround.rgb());
-                // The panel is its own surface, under its header.
-                QCOMPARE(at(QPointF(panel.left() + 4, panel.top() + ChatPanel::kHeaderHeight / 2)), theme.chatSurface.rgb());
-                QVERIFY(theme.chatSurface.rgb() != theme.viewerSurround.rgb());
-                // Its header: the title, the count, ⋯ and the close button.
-                QCOMPARE(window.m_chat->title()->text(), QStringLiteral("Kerf"));
-                QCOMPARE(window.m_chat->countLabel()->text(), QStringLiteral("3"));
-                QVERIFY(window.m_chat->moreButton()->isVisible() && window.m_chat->closeButton()->isVisible());
-                QCOMPARE(window.m_rail->chatButton()->label(), QStringLiteral("3"));
-                QVERIFY(window.m_chatScroll->widget()->minimumSizeHint().width() <= window.m_chatScroll->viewport()->width());
-                QVERIFY(window.m_chatToggle->isChecked() && window.m_rail->chatButton()->isChecked());
-                // Kerf's steps folded under its comment.
-                QCOMPARE(window.m_chat->rows().at(1)->expander()->text(), QStringLiteral("2 steps"));
-                // Its next steps show once, in it, not again over the timeline.
-                QVERIFY(window.m_chatNextSteps->isVisible() && !window.m_aiBar->isVisible());
-                QCOMPARE(amberPixels(image), 0);
-                const QString schemeName = QStringLiteral("dark");
-                if (!shots.isEmpty()) QVERIFY(image.save(QDir(shots).filePath(QStringLiteral("editor-%1-%2.png").arg(label, schemeName))));
-                if (tall && !shots.isEmpty()) {
-                    // Safe zones over the phone, and the plain card.
-                    window.setSafeZones(true);
-                    QCoreApplication::processEvents();
-                    QVERIFY(window.grab().toImage().save(QDir(shots).filePath(QStringLiteral("editor-9x16-safezones-%1.png").arg(schemeName))));
-                    window.setSafeZones(false);
-                    window.setDevicePreview(DevicePreview::Off);
-                    QCoreApplication::processEvents();
-                    QVERIFY(window.grab().toImage().save(QDir(shots).filePath(QStringLiteral("editor-9x16-card-%1.png").arg(schemeName))));
-                    window.setDevicePreview(DevicePreview::Phone);
-                    QCoreApplication::processEvents();
-                    QCOMPARE(window.m_viewer->videoRect(), video);
-                }
-                if (wide) {
-                    // The laptop Off: the plain card, level with the
-                    // conversation and as tall.
-                    window.setLaptopPreview(LaptopPreview::Off);
-                    QCoreApplication::processEvents();
-                    const ViewerWidget::StageLayout card = window.m_viewer->stageLayout();
-                    QVERIFY(!card.device);
-                    QCOMPARE(window.m_chat->geometry().top(), qRound(card.card.top()));
-                    QVERIFY(std::abs(window.m_chat->height() - card.card.height()) <= 1);
-                    const QImage off = window.grab().toImage();
-                    QCOMPARE(amberPixels(off), 0);
-                    if (!shots.isEmpty()) QVERIFY(off.save(QDir(shots).filePath(QStringLiteral("editor-16x9-off-%1.png").arg(schemeName))));
-                    window.setLaptopPreview(LaptopPreview::Laptop);
-                    QCoreApplication::processEvents();
-                    QCOMPARE(window.m_viewer->videoRect(), video);
-                }
-                // Closed from the toolbar, the picture (its phone, its
-                // laptop) is centred alone, the rail hanging on its right.
-                if (tall || wide) {
-                    window.m_chatToggle->click();
-                    QCoreApplication::processEvents();
-                    QVERIFY(!window.m_chat->isVisible() && !window.m_chatToggle->isChecked());
-                    // Closed, the timeline's bar stands in for it with the next steps.
-                    QVERIFY(window.m_aiBar->isVisible());
-                    const QRectF alone = window.m_viewer->stageLayout().body;
-                    QVERIFY(std::abs(alone.center().x() - window.m_viewer->width() / 2.0) <= 1);
-                    QVERIFY(std::abs(alone.height() - room.height()) < 1);
-                    // The same inset over it as under it, the card's 16 for
-                    // the laptop; the phone's only as much less as its
-                    // 240-point screen needs here, and never under the least.
-                    {
-                        const double over = alone.top(), under = window.m_viewer->height() - alone.bottom();
-                        QVERIFY2(std::abs(over - under) <= 1, qPrintable(QStringLiteral("%1: %2 over, %3 under").arg(label).arg(over).arg(under)));
-                        QVERIFY2(std::abs(over - inset) <= 1, qPrintable(QStringLiteral("%1: %2 over for %3").arg(label).arg(over).arg(inset)));
-                        if (tall) {
-                            QVERIFY(inset >= ViewerWidget::kLeastStageInset && inset <= ViewerWidget::kStageMargin);
-                            QVERIFY(window.m_viewer->stageLayout().screen.width() >= ViewerWidget::kLeastPhoneScreen ||
-                                    inset == ViewerWidget::kLeastStageInset);
-                            if (inset < ViewerWidget::kStageMargin && inset > ViewerWidget::kLeastStageInset) {
-                                // One more point over and under and the screen
-                                // would fall under 240.
-                                const double body = window.m_viewer->height() - 2.0 * (inset + 1);
-                                QVERIFY(body * deviceBodyAspect() * (1.0 - 2.0 * kDeviceBezel) < ViewerWidget::kLeastPhoneScreen);
-                            }
-                        }
-                    }
-                    QVERIFY(window.m_rail->isVisible());
-                    QCOMPARE(window.m_rail->x() - qRound(alone.right()), window.m_viewer->stageGap());
-                    const QImage closed = window.grab().toImage();
-                    QCOMPARE(amberPixels(closed), 0);
-                    if (!shots.isEmpty()) QVERIFY(closed.save(QDir(shots).filePath(QStringLiteral("editor-%1-closed-%2.png").arg(label, schemeName))));
-                    // Opened again, the group is back as it was.
-                    window.m_chatToggle->click();
-                    QCoreApplication::processEvents();
-                    QVERIFY(window.m_chat->isVisible());
-                    QCOMPARE(window.m_viewer->videoRect(), video);
-                }
-                window.close();
+        for (const Format &format : {Format{"16x9", QSize(1920, 1080)}, Format{"9x16", QSize(1080, 1920)}, Format{"1x1", QSize(1080, 1080)},
+                                     Format{"4x5", QSize(1080, 1350)}}) {
+            QSettings().remove(QStringLiteral("workspace"));
+            QSettings().remove(QStringLiteral("viewer"));
+            MainWindow window{QString(), QString()};
+            window.setConnection(QStringLiteral("ready"));
+            window.applySnapshot(shaped(format.canvas, 12));
+            window.handleEvent(QJsonObject{{"type", "collab"}, {"status", sharedStatus()}});
+            fakeArtwork(window.m_artwork);
+            window.resize(1600, 1000);
+            window.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&window));
+            window.m_errorBanner->hide();
+            window.m_viewer->setFrame(picture(format.canvas / 4), 0.0);
+            window.handleEvent(QJsonObject{{"type", "caption"}, {"text", "We open before the city does"}});
+            QTest::mouseMove(window.statusBar(), QPoint(window.statusBar()->width() / 2, 4));
+            QTest::qWait(30);
+            const QString label = QString::fromLatin1(format.name);
+            const bool wide = format.canvas.width() > format.canvas.height();
+            ViewerWidget *viewer = window.m_viewer;
+            QCOMPARE(window.m_canvasSize, format.canvas);
+            QCOMPARE(viewer->size(), QSize(1296, 564));
+            QVERIFY(viewer->isVisible() && window.m_chat->isVisible() && window.m_rail->isVisible());
+            const ViewerWidget::StageLayout stage = viewer->stageLayout();
+            QVERIFY2(!stage.overlay, qPrintable(label));
+            QCOMPARE(stage.kind, wide ? ViewerWidget::Device::Laptop : ViewerWidget::Device::Phone);
+            QCOMPARE(window.m_chat->geometry(), stage.panel);
+            QCOMPARE(window.m_rail->geometry(), stage.rail);
+            QCOMPARE(window.m_stageWiring->scrub()->geometry(), stage.scrub.toRect());
+            if (wide) {
+                KERF_NEAR(stage.body.left(), 85, 0.5, "x0");
+                QCOMPARE(stage.panel, QRect(916, 8, 368, 548));
+                QVERIFY(!window.m_stageSource->isVisible());
+            } else {
+                KERF_NEAR(stage.body.left(), 506.6, 0.5, "lx");
+                QCOMPARE(stage.panel, QRect(804, 8, 480, 548));
+                QCOMPARE(stage.rail.left(), 748);
+                QVERIFY(window.m_stageSource->isVisible());
+                QCOMPARE(window.m_stageSource->geometry(), stage.source);
+                QCOMPARE(stage.source.width(), 400);
             }
+            QVERIFY2(std::abs(stage.card.width() / stage.card.height() - double(format.canvas.width()) / format.canvas.height()) < 0.01,
+                     qPrintable(label));
+            // The band under the stage is the design's 344 for every shape.
+            const int timelineHeight = window.m_workspace->panel(QStringLiteral("timeline"))->dockAreaWidget()->height();
+            QVERIFY2(std::abs(timelineHeight - (tokens::layout::band - 1)) <= 2, qPrintable(QStringLiteral("%1: timeline %2").arg(label).arg(timelineHeight)));
+            const QImage image = window.grab().toImage();
+            const qreal ratio = image.devicePixelRatio();
+            const QPoint origin = viewer->mapTo(&window, QPoint());
+            const auto at = [&](const QPointF &point) { return image.pixelColor((QPointF(origin) + point).toPoint() * ratio).rgb(); };
+            // The surround round the device, between it and the rail.
+            QCOMPARE(at(QPointF(stage.body.left() - 6, stage.body.top() + 8)), tokens::color(tokens::surround).rgb());
+            QCOMPARE(at(QPointF(stage.body.right() + 6, stage.body.top() + 30)), tokens::color(tokens::surround).rgb());
+            QCOMPARE(at(stage.body.topLeft() + QPointF(1, 1)), tokens::color(tokens::surround).rgb());
+            // The screen's black over the picture.
+            QCOMPARE(at(QPointF(stage.screen.left() + 40, (stage.screen.top() + stage.card.top()) / 2.0)), tokens::color(tokens::overlay::deviceScreen).rgb());
+            QCOMPARE(amberPixels(image), 0);
+            if (!shots.isEmpty()) QVERIFY(image.save(QDir(shots).filePath(QStringLiteral("editor-%1-dark.png").arg(label))));
+            if (wide) {
+                // The laptop off: the plain picture at the same place.
+                window.setLaptopPreview(LaptopPreview::Off);
+                QCoreApplication::processEvents();
+                QCOMPARE(viewer->stageLayout().card, stage.card);
+                if (!shots.isEmpty()) QVERIFY(window.grab().toImage().save(QDir(shots).filePath(QStringLiteral("editor-16x9-off-dark.png"))));
+                window.setLaptopPreview(LaptopPreview::Laptop);
+                // Dimmed (Finish keeps its band; dim alone here).
+                window.m_stageWiring->setDim(true);
+                QCoreApplication::processEvents();
+                const QImage dim = window.grab().toImage();
+                QCOMPARE(dim.pixelColor((QPointF(origin) + QPointF(stage.body.left() - 6, stage.body.top() + 8)).toPoint() * ratio).rgb(),
+                         tokens::color(tokens::surroundDim).rgb());
+                if (!shots.isEmpty()) QVERIFY(dim.save(QDir(shots).filePath(QStringLiteral("editor-16x9-dim-dark.png"))));
+                window.m_stageWiring->setDim(false);
+            }
+            // Closed: the rail at the stage's edge, the Source column on the left.
+            window.setChatOpen(false);
+            QCoreApplication::processEvents();
+            QVERIFY(!window.m_chat->isVisible());
+            const ViewerWidget::StageLayout closed = viewer->stageLayout();
+            QCOMPARE(closed.rail.left(), 1240);
+            KERF_NEAR(closed.body.left(), wide ? 533.5 : 998.6, 0.5, "closed");
+            QVERIFY(window.m_stageSource->isVisible());
+            QCOMPARE(window.m_stageSource->geometry(), closed.source);
+            QCOMPARE(window.m_stageWiring->scrub()->geometry(), closed.scrub.toRect());
+            const QImage shut = window.grab().toImage();
+            QCOMPARE(amberPixels(shut), 0);
+            if (!shots.isEmpty()) QVERIFY(shut.save(QDir(shots).filePath(QStringLiteral("editor-%1-closed-dark.png").arg(label))));
+            window.setChatOpen(true);
+            QCoreApplication::processEvents();
+            QCOMPARE(viewer->videoRect(), stage.card);
+            window.close();
         }
     }
 };
+
+#undef KERF_NEAR
 
 } // namespace kerf
 

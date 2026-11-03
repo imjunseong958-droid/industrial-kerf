@@ -19,6 +19,7 @@
 #include "timeline_widget.h"
 #include "viewer_widget.h"
 #include "workspace.h"
+#include "wiring/review_wiring.h"
 
 #include <QAction>
 #include <QImage>
@@ -105,8 +106,14 @@ private slots:
         QVERIFY(!window.chatOpen());
         QVERIFY(bus->run(QStringLiteral("window.assistant")));
         QVERIFY(window.chatOpen());
-        // One still to come does not run.
-        QVERIFY(!bus->run(QStringLiteral("view.dim")));
+        // The viewer's switches run now; one still to come does not.
+        QAction *dim = window.m_commands->action(QStringLiteral("view.dim"));
+        const bool dimmed = dim->isChecked();
+        QVERIFY(bus->run(QStringLiteral("view.dim")));
+        QCOMPARE(dim->isChecked(), !dimmed);
+        QVERIFY(bus->run(QStringLiteral("view.dim")));
+        QCOMPARE(dim->isChecked(), dimmed);
+        QVERIFY(!bus->run(QStringLiteral("sequence.settings")));
         QVERIFY(!bus->run(QString()));
     }
 
@@ -176,7 +183,9 @@ private slots:
         bus->setViewAs(QStringLiteral("mina@example.com"));
         QCOMPARE(viewAs.size(), 1);
         QCOMPARE(bus->viewAs(), QStringLiteral("mina@example.com"));
-        QVERIFY(!bus->review());
+        // The comments region builds the review model and hands it over.
+        QVERIFY(bus->review());
+        QCOMPARE(bus->review(), window.m_reviewWiring->model());
     }
 
     // The shells hear the engine through the bus: the Program strip says
@@ -206,14 +215,20 @@ private slots:
         window.handleEvent(QJsonObject{{"type", "preview"}, {"status", "running"}});
         QVERIFY(!strip->previewShown());
 
+        // The HUD follows a proposal's preview render (mockup-spec 3.3),
+        // not the agent's turn.
+        window.handleEvent(QJsonObject{{"type", "preview"}, {"status", "ready"}});
         AgentHud hud(nullptr, window.bus());
         QVERIFY(!hud.active() && hud.isHidden());
         window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
+        QVERIFY(!hud.active());
+        window.handleEvent(QJsonObject{{"type", "preview"}, {"status", "running"}, {"proposalId", "p2"}, {"progress", 0.62}});
         QVERIFY(hud.active());
-        window.handleEvent(QJsonObject{{"type", "agent"}, {"kind", "tool"}, {"text", "Trimming  B003_C011"}});
-        QCOMPARE(hud.text(), QStringLiteral("Kerf · Trimming B003_C011"));
-        window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", false}});
+        QCOMPARE(hud.text(), QStringLiteral("Rendering preview · v2"));
+        QCOMPARE(hud.percentText(), QStringLiteral("62%"));
+        window.handleEvent(QJsonObject{{"type", "preview"}, {"status", "ready"}, {"proposalId", "p2"}});
         QVERIFY(!hud.active() && hud.text().isEmpty());
+        window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", false}});
 
         ScrubStrip scrub(nullptr, window.bus());
         QCOMPARE(scrub.height(), 56);

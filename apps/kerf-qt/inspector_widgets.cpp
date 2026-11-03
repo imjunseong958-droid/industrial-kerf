@@ -1,7 +1,10 @@
 #include "inspector_widgets.h"
+#include "components.h"
+#include "design_tokens.h"
 #include "editor_common.h"
-#include "editor_theme.h"
+#include "icons.h"
 
+#include <QAction>
 #include <QApplication>
 #include <QCursor>
 #include <QEnterEvent>
@@ -9,9 +12,11 @@
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QRadialGradient>
 #include <QScreen>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -21,109 +26,71 @@
 
 namespace kerf {
 
+using namespace tokens;
+
 namespace {
 
-// A well's corners, as the hardware draws a recessed field.
-constexpr double kFieldRadius = 4.0;
 // Pixels of drag per step.
 constexpr int kScrubPixels = 2;
 // A press that travels less than this is a click.
 constexpr int kClickSlop = 3;
 
-QFont sized(const QFont &base, int pixels, QFont::Weight weight = QFont::Normal, bool tabular = false) {
-    QFont font = base;
-    font.setPixelSize(pixels);
-    font.setWeight(weight);
-#if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)
-    if (tabular) font.setFeature(QFont::Tag("tnum"), 1);
-#else
-    Q_UNUSED(tabular)
-#endif
-    return font;
+QColor col(QRgb rgba) {
+    return tokens::color(rgba);
 }
 
-// A value's recessed well, washed under the pointer and darker while held.
-void fillField(QPainter &painter, const QRectF &rect, bool hovered, bool pressed) {
-    const EditorTheme &theme = editorTheme();
-    paintWell(painter, rect, kFieldRadius);
-    if (!pressed && !hovered) return;
-    // Over the well, not its lip of light below.
-    QPainterPath path;
-    path.addRoundedRect(rect.adjusted(0, 0, 0, -1), kFieldRadius, kFieldRadius);
-    painter.fillPath(path, pressed ? theme.pressed : theme.hover);
+QString css(QRgb rgba) {
+    const QColor c = col(rgba);
+    return QStringLiteral("rgba(%1,%2,%3,%4)").arg(c.red()).arg(c.green()).arg(c.blue()).arg(c.alphaF(), 0, 'f', 3);
 }
 
-// A module's title, engraved into its plate (drawEngraved), sized for the
-// engraved face rather than the style sheet's.
-class EngravedLabel final : public QLabel {
-public:
-    explicit EngravedLabel(const QString &text, QWidget *parent = nullptr) : QLabel(text, parent) {}
-    QSize sizeHint() const override {
-        const QFontMetrics metrics(engravedFont(font(), text()));
-        return {metrics.horizontalAdvance(text()) + 2, metrics.height() + 1};
-    }
-    QSize minimumSizeHint() const override { return sizeHint(); }
+// The editor's typing field, over a value or a name: the raised fill, an
+// accent ring (the design's focus colour), the figures as the value showed them.
+QString editorSheet() {
+    return QStringLiteral("QLineEdit { background: %1; color: %2; border: 1px solid %3; border-radius: 4px; padding: 0px 3px; "
+                          "selection-background-color: %4; selection-color: %2; }")
+        .arg(css(raised), css(tokens::ink), css(accent), css(accentHover));
+}
 
-protected:
-    void paintEvent(QPaintEvent *) override {
-        QPainter painter(this);
-        painter.setFont(font());
-        drawEngraved(painter, QRectF(contentsRect()), int(Qt::AlignLeft | Qt::AlignVCenter), text());
-    }
-};
+// The knob shadow (0 1px 2px rgba(0,0,0,.6)) as a soft disc under a circle.
+void paintKnobShadow(QPainter &painter, const QPointF &centre, qreal radius) {
+    const Shadow &shadow = tokens::knob;
+    const QColor shade = col(shadow.color);
+    QColor clear = shade;
+    clear.setAlpha(0);
+    QRadialGradient gradient(centre + QPointF(shadow.dx, shadow.dy), radius + shadow.blur);
+    gradient.setColorAt(0, shade);
+    gradient.setColorAt((radius - shadow.blur / 2) / (radius + shadow.blur), shade);
+    gradient.setColorAt(1, clear);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(gradient);
+    painter.drawEllipse(centre + QPointF(shadow.dx, shadow.dy), radius + shadow.blur, radius + shadow.blur);
+}
 
-// One key of a KeyBank: raised, or latched (held in) with its amber bar
-// lit, its legend engraved. The bank decides what latches: a click alone
-// changes nothing here.
-class BankKey final : public QAbstractButton {
-public:
-    explicit BankKey(QWidget *parent = nullptr) : QAbstractButton(parent) {
-        setCheckable(true);
-        setAttribute(Qt::WA_Hover);
-        setFocusPolicy(Qt::TabFocus);
-        setCursor(Qt::PointingHandCursor);
-        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        setFixedHeight(ScrubField::kHeight - 2 * KeyBank::kPadding);
+// The 14-point check box of the kit (.cbx) in `box`.
+void paintCheck(QPainter &painter, const QRectF &box, bool checked, bool enabled) {
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+    if (!enabled) painter.setOpacity(0.5);
+    if (checked) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(col(on));
+        painter.drawRoundedRect(box, radius::small, radius::small);
     }
-    QSize sizeHint() const override {
-        return {QFontMetrics(engravedFont(font(), text())).horizontalAdvance(text()) + 12, ScrubField::kHeight - 2 * KeyBank::kPadding};
-    }
-    QSize minimumSizeHint() const override { return {16, sizeHint().height()}; }
-
-protected:
-    void nextCheckState() override {}
-    void paintEvent(QPaintEvent *) override {
-        QPainter painter(this);
-        const bool in = isChecked() || isDown();
-        paintRaisedKey(painter, QRectF(rect()), in, underMouse() && isEnabled(), isChecked());
-        // The legend in the face, clear of the bar when it is lit.
-        QRectF face = QRectF(rect()).adjusted(0, 0, 0, in ? 0 : -1);
-        if (isChecked()) face.adjust(0, 3, 0, 0);
-        painter.setFont(font());
-        drawEngraved(painter, face, int(Qt::AlignCenter), text());
-        if (hasFocus()) {
-            painter.setRenderHint(QPainter::Antialiasing);
-            painter.setPen(QPen(editorTheme().focusRing, 1.0));
-            painter.setBrush(Qt::NoBrush);
-            painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 4, 4);
-        }
-    }
-};
-
-void ringFocus(QPainter &painter, const QRectF &rect) {
-    const EditorTheme &theme = editorTheme();
-    painter.setPen(QPen(theme.focusHalo, 3.0));
-    painter.setBrush(Qt::NoBrush);
-    painter.drawRoundedRect(rect.adjusted(-1.0, -1.0, 1.0, 1.0), kFieldRadius + 1.0, kFieldRadius + 1.0);
-    painter.setPen(QPen(theme.focusRing, 1.0));
-    painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), kFieldRadius, kFieldRadius);
+    ui::paintInsetLine(painter, box, radius::small, col(checkboxOutline));
+    if (checked) icons::paint(painter, QStringLiteral("checkbox-check"), box, col(ink2), 14);
+    painter.restore();
 }
 
 } // namespace
 
+QString inspectorFontCss(const tokens::TypeStyle &style) {
+    return QStringLiteral("font-family: \"%1\"; font-size: %2px; font-weight: %3;")
+        .arg(tokens::font(style).family()).arg(style.px).arg(style.weight);
+}
+
 QColor changedValueInk() {
-    const EditorTheme &theme = editorTheme();
-    return readableOn(theme.accentText, theme.wellFill, 4.5);
+    return col(tokens::ink);
 }
 
 // ---------------------------------------------------------------- ScrubField
@@ -136,7 +103,7 @@ ScrubField::ScrubField(QWidget *parent) : QWidget(parent) {
     setAttribute(Qt::WA_Hover);
     setCursor(Qt::SizeHorCursor);
     setFixedHeight(kHeight);
-    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     m_flash = new QTimer(this);
     m_flash->setSingleShot(true);
     m_flash->setInterval(600);
@@ -163,6 +130,7 @@ void ScrubField::setTrailingInset(int inset) {
 
 void ScrubField::setFormat(const NumberFormat &format) {
     m_format = format;
+    updateGeometry();
     update();
 }
 
@@ -190,37 +158,27 @@ void ScrubField::setDimmed(bool dimmed) {
 }
 
 void ScrubField::setGlass(bool glass) {
-    if (m_glass == glass) return;
     m_glass = glass;
+}
+
+void ScrubField::setSmall(bool small) {
+    m_small = small;
+    updateGeometry();
     update();
 }
 
 QColor ScrubField::valueInk() const {
-    // A default, mixed or flashing value is quieter; so is one whose effect
-    // is switched off, in the secondary ink, which still reads at 4.5:1 on
-    // the well (it still edits; the power key and the effect's name say it
-    // is off). A value moved from its default is in the accent, as the
-    // module's lamp says it moved; one with no default (a source's In) in
-    // the body ink.
-    const EditorTheme &theme = editorTheme();
-    const bool quiet = m_mixed || isDefault() || !isEnabled() || m_flash->isActive();
-    if (m_glass) return quiet ? theme.glassLabel : theme.glassText;
-    if (m_dimmed || quiet) return theme.textSecondary;
-    return m_hasDefault && !m_readOnly ? changedValueInk() : theme.text;
+    // Values are in the primary ink (mono 12 ink); a switched-off effect's,
+    // a mixed value and a flash after a refused entry in the secondary;
+    // the small value under a wheel in ink3; disabled in dis.
+    if (!isEnabled()) return col(dis);
+    if (m_small) return col(ink3);
+    if (m_dimmed || m_mixed || m_flash->isActive()) return col(ink2);
+    return col(tokens::ink);
 }
 
 QFont ScrubField::valueFont() const {
-    // The glass's figures in the monospaced face, a size down so a whole
-    // timecode fits a third of the 300-point column.
-    return m_glass ? monoFont(11) : sized(font(), 12, QFont::Normal, true);
-}
-
-double ScrubField::padding() const {
-    // A timecode keeps 4 points (its eleven figures fill a third of the
-    // column), 3 behind the glass; everything else 6; plain text none.
-    if (m_glass) return 3.0;
-    if (m_readOnly) return 0.0;
-    return m_format.kind == NumberFormat::Kind::Timecode ? 4.0 : 6.0;
+    return tokens::font(m_small ? monoSmall : timecode);
 }
 
 void ScrubField::setMixed(bool mixed) {
@@ -239,8 +197,27 @@ QString ScrubField::text() const {
     return m_mixed ? QStringLiteral("Mixed") : formatNumber(m_format, m_value);
 }
 
+QString ScrubField::unitText() const {
+    if (m_mixed) return {};
+    if (m_format.kind == NumberFormat::Kind::Pan || m_format.kind == NumberFormat::Kind::Timecode) return {};
+    if (m_format.kind == NumberFormat::Kind::Gain && m_value <= m_format.min + 1e-6) return {};
+    return m_format.kind == NumberFormat::Kind::Speed ? QStringLiteral("%") : m_format.unit;
+}
+
+int ScrubField::neededWidth() const {
+    const QFontMetricsF value(valueFont());
+    const QFontMetricsF small(tokens::font(meta));
+    double needed = value.horizontalAdvance(text());
+    const QString unit = unitText();
+    // The unit's slot is 14 wide, wider for a long unit ("stops").
+    if (!unit.isEmpty() || (!m_small && m_format.kind != NumberFormat::Kind::Timecode && m_format.kind != NumberFormat::Kind::Pan))
+        needed += kUnitGap + std::max<double>(kUnitSlot, small.horizontalAdvance(unit));
+    if (!m_format.prefix.isEmpty()) needed += small.horizontalAdvance(m_format.prefix) + 4.0;
+    return int(std::ceil(needed)) + 4 + m_trailingInset;
+}
+
 QSize ScrubField::sizeHint() const {
-    return {78, kHeight};
+    return {std::max(InspectorRow::kValueField, neededWidth()), kHeight};
 }
 
 double ScrubField::clamped(double display, bool *wasClamped) const {
@@ -261,82 +238,63 @@ void ScrubField::flash() {
 }
 
 Qt::Alignment ScrubField::valueAlignment() const {
-    // A timing row reads from the left, under its labels, timecode and
-    // "Mixed" alike; every other value is right-aligned, its unit after it.
-    return m_format.kind == NumberFormat::Kind::Timecode ? Qt::AlignLeft : Qt::AlignRight;
+    return m_small ? Qt::AlignHCenter : Qt::AlignRight;
 }
 
 bool ScrubField::showsWhole() const {
-    // As paintEvent lays it out: the value, its unit and its prefix inside
-    // the padding.
-    const double pad = padding();
-    const QFontMetricsF value(valueFont());
-    const QFontMetricsF small(sized(font(), 11));
-    const QString unit = m_mixed ? QString() :
-        (m_format.kind == NumberFormat::Kind::Pan || m_format.kind == NumberFormat::Kind::Timecode) ? QString()
-        : (m_format.kind == NumberFormat::Kind::Gain && m_value <= m_format.min + 1e-6) ? QString()
-        : m_format.kind == NumberFormat::Kind::Speed ? QStringLiteral("%") : m_format.unit;
-    double needed = value.horizontalAdvance(text());
-    if (!unit.isEmpty()) needed += small.horizontalAdvance(unit) + ((m_format.tightUnit || m_format.kind == NumberFormat::Kind::Speed) ? 1.0 : 3.0);
-    if (!m_format.prefix.isEmpty()) needed += small.horizontalAdvance(m_format.prefix) + 4.0;
-    return needed <= width() - 2.0 * pad - m_trailingInset;
+    return neededWidth() - 4 <= width();
 }
 
 void ScrubField::paintEvent(QPaintEvent *) {
-    const EditorTheme &theme = editorTheme();
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
-    const QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-    const bool hovered = m_hovered && isEnabled() && !isTyping();
-    if (m_glass) {
-        // On the glass: no well, only a faint wash of its cream under the
-        // pointer, stronger while dragging.
-        if (hovered || m_dragging) {
-            QColor wash = theme.glassText;
-            wash.setAlphaF(m_dragging ? 0.14 : 0.08);
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(wash);
-            painter.drawRoundedRect(box, kFieldRadius, kFieldRadius);
-        }
-    } else if (!m_readOnly) {
-        // The well stays while typing: the editor over it is clear.
-        fillField(painter, QRectF(rect()), hovered, m_dragging);
+    const bool hovered = m_hovered && isEnabled() && !m_readOnly && !isTyping();
+    // Under the pointer (or while dragging) a raised wash says it scrubs.
+    if (hovered || m_dragging) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(col(m_dragging ? hover2 : raised));
+        painter.drawRoundedRect(QRectF(rect()).adjusted(0, 2, 0, -2), radius::small, radius::small);
     }
     if (isTyping()) return;
-    const double pad = padding();
-    const QRectF inner = QRectF(rect()).adjusted(pad, 0, -pad - m_trailingInset, 0).adjusted(0, 0, 0, m_glass || m_readOnly ? 0 : -1);
+    const QRectF inner = QRectF(rect()).adjusted(2, 0, -2 - m_trailingInset, 0);
     const QFont valueFont = this->valueFont();
-    const QFont unitFont = sized(font(), 11);
-    const QColor unitInk = m_glass ? theme.glassLabel : theme.textSecondary;
+    const QFont unitFont = tokens::font(meta);
+    const QColor unitInk = col(isEnabled() ? ink3 : dis);
     double right = inner.right();
-    // The unit, after the value (% and ° sit against it).
-    const QString unit = m_mixed ? QString() :
-        (m_format.kind == NumberFormat::Kind::Pan || m_format.kind == NumberFormat::Kind::Timecode) ? QString()
-        : (m_format.kind == NumberFormat::Kind::Gain && m_value <= m_format.min + 1e-6) ? QString()
-        : m_format.kind == NumberFormat::Kind::Speed ? QStringLiteral("%") : m_format.unit;
-    if (!unit.isEmpty()) {
-        const QFontMetricsF metrics(unitFont);
-        const double width = metrics.horizontalAdvance(unit);
+    const QString unit = unitText();
+    // The unit in its 14-point slot after the figures, left-aligned in it.
+    if (!m_small && m_format.kind != NumberFormat::Kind::Timecode && m_format.kind != NumberFormat::Kind::Pan && !m_mixed) {
+        const double slot = std::max<double>(kUnitSlot, QFontMetricsF(unitFont).horizontalAdvance(unit));
+        if (!unit.isEmpty()) {
+            painter.setFont(unitFont);
+            painter.setPen(unitInk);
+            painter.drawText(QRectF(right - slot, inner.top(), slot, inner.height()), Qt::AlignLeft | Qt::AlignVCenter, unit);
+        }
+        right -= slot + kUnitGap;
+    } else if (!unit.isEmpty()) {
+        const double width = QFontMetricsF(unitFont).horizontalAdvance(unit);
         painter.setFont(unitFont);
         painter.setPen(unitInk);
         painter.drawText(QRectF(right - width, inner.top(), width, inner.height()), Qt::AlignRight | Qt::AlignVCenter, unit);
-        right -= width + ((m_format.tightUnit || m_format.kind == NumberFormat::Kind::Speed) ? 1.0 : 3.0);
+        right -= width + kUnitGap;
     }
-    painter.setFont(valueFont);
-    painter.setPen(valueInk());
+    const QFontMetricsF metrics(valueFont);
     double left = inner.left();
     if (!m_format.prefix.isEmpty()) {
-        painter.save();
+        // The axis label (X, Y) 4 before the figures, which keep right.
+        const double prefixWidth = QFontMetricsF(unitFont).horizontalAdvance(m_format.prefix);
+        const double figures = std::min(metrics.horizontalAdvance(text()), right - left - prefixWidth - 4.0);
         painter.setFont(unitFont);
         painter.setPen(unitInk);
-        painter.drawText(QRectF(left, inner.top(), inner.width(), inner.height()), Qt::AlignLeft | Qt::AlignVCenter, m_format.prefix);
-        left += QFontMetricsF(unitFont).horizontalAdvance(m_format.prefix) + 4.0;
-        painter.restore();
+        painter.drawText(QRectF(right - figures - 4.0 - prefixWidth, inner.top(), prefixWidth + 1, inner.height()),
+                         Qt::AlignLeft | Qt::AlignVCenter, m_format.prefix);
+        left = right - figures;
     }
     const QRectF valueRect(left, inner.top(), std::max(0.0, right - left), inner.height());
-    const QString shown = QFontMetricsF(valueFont).elidedText(text(), Qt::ElideLeft, valueRect.width());
-    painter.drawText(valueRect, valueAlignment() | Qt::AlignVCenter, shown);
-    if (hasFocus() && !m_readOnly) ringFocus(painter, box);
+    painter.setFont(valueFont);
+    painter.setPen(valueInk());
+    painter.drawText(valueRect, valueAlignment() | Qt::AlignVCenter, metrics.elidedText(text(), Qt::ElideLeft, valueRect.width()));
+    if (hasFocus() && !m_readOnly) ui::paintFocusRing(painter, QRectF(rect()).adjusted(1, 3, -1, -3), radius::small);
 }
 
 void ScrubField::mousePressEvent(QMouseEvent *event) {
@@ -411,21 +369,14 @@ void ScrubField::beginTyping() {
         m_editor = new QLineEdit(this);
         m_editor->setObjectName(QStringLiteral("scrubEditor"));
         m_editor->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        m_editor->setStyleSheet(editorSheet());
         m_editor->installEventFilter(this);
         connect(m_editor, &QLineEdit::editingFinished, this, [this] {
             if (isTyping()) endTyping(true);
         });
     }
     m_editor->setFont(valueFont());
-    // Typed into on the glass, the figures stay cream on the dark glass,
-    // ringed in its label ink (the accent would not read there); in a well
-    // the style sheet's clear editor shows the well.
-    const EditorTheme &theme = editorTheme();
-    m_editor->setStyleSheet(m_glass ? QStringLiteral("QLineEdit { background: transparent; color: %1; border: 1px solid %2; "
-                                                     "border-radius: 4px; padding: 0px 2px; }")
-                                          .arg(theme.glassText.name(), theme.glassLabel.name())
-                                    : QString());
-    m_editor->setGeometry(rect().adjusted(0, 0, -m_trailingInset, 0));
+    m_editor->setGeometry(rect().adjusted(0, 1, -m_trailingInset, -1));
     m_editor->setText(m_mixed ? QString() : formatNumber(m_format, m_value));
     m_editor->show();
     m_editor->setFocus(Qt::MouseFocusReason);
@@ -478,8 +429,6 @@ void ScrubField::endTyping(bool commit) {
 }
 
 void ScrubField::stepEditor(Qt::KeyboardModifiers modifiers, bool up) {
-    // From what the field says (a typed value counts), one step, clamped;
-    // the text follows, selected, so the next key replaces or steps it.
     const double base = parseNumber(m_format, m_editor->text(), m_value).value_or(m_value);
     bool wasClamped = false;
     const double value = clamped(base + stepFor(modifiers) * (up ? 1.0 : -1.0), &wasClamped);
@@ -591,7 +540,7 @@ void ScrubField::leaveEvent(QEvent *event) {
 }
 
 void ScrubField::resizeEvent(QResizeEvent *event) {
-    if (m_editor) m_editor->setGeometry(rect().adjusted(0, 0, -m_trailingInset, 0));
+    if (m_editor) m_editor->setGeometry(rect().adjusted(0, 1, -m_trailingInset, -1));
     QWidget::resizeEvent(event);
 }
 
@@ -600,7 +549,7 @@ void ScrubField::resizeEvent(QResizeEvent *event) {
 InspectorSlider::InspectorSlider(QWidget *parent) : QWidget(parent) {
     setObjectName(QStringLiteral("inspectorSlider"));
     setFixedHeight(ScrubField::kHeight);
-    setMinimumWidth(48);
+    setMinimumWidth(32);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     setCursor(Qt::PointingHandCursor);
 }
@@ -637,9 +586,13 @@ void InspectorSlider::setMixed(bool mixed) {
     update();
 }
 
+bool InspectorSlider::isBipolar() const {
+    return m_min < 0.0 && m_max > 0.0 && std::abs(m_origin) < 1e-12;
+}
+
 QColor InspectorSlider::fillInk() const {
-    const EditorTheme &theme = editorTheme();
-    return !isEnabled() ? theme.textDisabled : m_dimmed ? theme.textSecondary : theme.switchOn;
+    if (!isEnabled()) return col(dis);
+    return m_dimmed ? col(ink3) : col(track2);
 }
 
 void InspectorSlider::setDimmed(bool dimmed) {
@@ -659,7 +612,9 @@ double InspectorSlider::fromTravel(double travel) const {
 }
 
 QRectF InspectorSlider::groove() const {
-    return QRectF(7.0, height() / 2.0 - 2.0, std::max(1.0, width() - 14.0), 4.0);
+    // The kit's 2-point track, between insets of half the knob so the knob
+    // is never cut, at the row's middle.
+    return QRectF(kKnobRadius, height() / 2.0 - 1.0, std::max(1.0, width() - 2.0 * kKnobRadius), 2.0);
 }
 
 QPointF InspectorSlider::knobCenter() const {
@@ -677,45 +632,34 @@ double InspectorSlider::valueAt(double x, double scale) const {
 }
 
 QRect InspectorSlider::detentTick() const {
+    if (!isBipolar()) return {};
     const QRectF track = groove();
-    const double detentX = track.left() + travelOf(m_detent) * track.width();
-    const int x = int(std::floor(detentX));
-    const int middle = int(std::lround(track.center().y()));
-    // Under the knob, it runs past the knob's top and bottom so its ends
-    // show; elsewhere a 1x10 mark.
-    const bool under = !m_mixed && std::abs(detentX - knobCenter().x()) < kKnobRadius + 1.0;
-    const int half = under ? int(std::ceil(kKnobRadius)) + kTickBeyondKnob : 5;
-    return {x, middle - half, 1, 2 * half};
-}
-
-QColor InspectorSlider::knobEdge() const {
-    const EditorTheme &theme = editorTheme();
-    return std::abs(m_value - m_detent) > 1e-12 ? theme.sliderHandleChanged : theme.sliderHandleAtDefault;
+    const double middle = track.left() + travelOf(0.0) * track.width();
+    return {int(std::floor(middle)), int(std::lround(track.center().y())) - 3, 1, 6};
 }
 
 void InspectorSlider::paintEvent(QPaintEvent *) {
-    const EditorTheme &theme = editorTheme();
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     const QRectF track = groove();
     painter.setPen(Qt::NoPen);
-    painter.setBrush(theme.sliderGroove);
-    painter.drawRoundedRect(track, 2.0, 2.0);
+    painter.setBrush(col(tokens::track));
+    painter.drawRoundedRect(track, 1.0, 1.0);
     if (!m_mixed)
         if (const QRectF fill = fillRect(); !fill.isEmpty()) {
             painter.setBrush(fillInk());
-            painter.drawRoundedRect(fill, 2.0, 2.0);
+            painter.drawRoundedRect(fill, 1.0, 1.0);
         }
-    // The default: a crisp one-pixel mark, drawn before the knob so
-    // nothing ever lies on the knob.
-    painter.setRenderHint(QPainter::Antialiasing, false);
-    painter.fillRect(detentTick(), theme.inspectorDetent);
-    painter.setRenderHint(QPainter::Antialiasing, true);
+    if (const QRect tick = detentTick(); !tick.isEmpty()) {
+        painter.setRenderHint(QPainter::Antialiasing, false);
+        painter.fillRect(tick, col(track2));
+        painter.setRenderHint(QPainter::Antialiasing, true);
+    }
     if (m_mixed) return;
-    // Changed: the knob's edge in full ink; at its default, grey.
-    painter.setPen(QPen(knobEdge(), 1.0));
-    painter.setBrush(theme.sliderHandle);
-    painter.drawEllipse(knobCenter(), kKnobRadius, kKnobRadius);
+    const QPointF centre = knobCenter();
+    paintKnobShadow(painter, centre, kKnobRadius);
+    painter.setBrush(isEnabled() ? col(tokens::ink) : col(dis));
+    painter.drawEllipse(centre, kKnobRadius, kKnobRadius);
 }
 
 QRectF InspectorSlider::fillRect() const {
@@ -731,19 +675,15 @@ void InspectorSlider::mousePressEvent(QMouseEvent *event) {
     m_dragging = true;
     m_start = m_value;
     // Nothing moves until the pointer does, then the knob moves by as much,
-    // wherever the press began: grabbing the knob off its centre does not
-    // jump the value by the offset.
+    // wherever the press began.
     m_pressX = event->position().x();
     m_pressKnob = knobCenter().x();
-    // With ⌥ held from the start, fine travel.
     m_fine = event->modifiers().testFlag(Qt::AltModifier);
 }
 
 double InspectorSlider::dragValue(double x, Qt::KeyboardModifiers modifiers) {
     const bool fine = modifiers.testFlag(Qt::AltModifier);
     if (fine != m_fine) {
-        // ⌥ pressed or let go mid-drag: on from where the knob is, at the
-        // new rate.
         m_fine = fine;
         m_pressX = x;
         m_pressKnob = knobCenter().x();
@@ -788,53 +728,31 @@ void InspectorSlider::mouseDoubleClickEvent(QMouseEvent *event) {
 InspectorSwitch::InspectorSwitch(QWidget *parent) : QAbstractButton(parent) {
     setObjectName(QStringLiteral("inspectorSwitch"));
     setCheckable(true);
-    setFixedSize(26, 16);
+    setFixedSize(kSize, kSize);
     setFocusPolicy(Qt::TabFocus);
     setCursor(Qt::PointingHandCursor);
 }
 
 void InspectorSwitch::paintEvent(QPaintEvent *) {
-    const EditorTheme &theme = editorTheme();
     QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
-    const QRectF plate = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-    const double radius = plate.height() / 2.0;
-    if (isChecked()) {
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(isEnabled() ? theme.switchOn : theme.textDisabled);
-    } else {
-        painter.setPen(QPen(theme.switchOffStroke, 1.0));
-        painter.setBrush(theme.switchOff);
-    }
-    painter.drawRoundedRect(plate, radius, radius);
-    const double knobRadius = radius - 2.0;
-    const QPointF centre(isChecked() ? plate.right() - radius : plate.left() + radius, plate.center().y());
-    painter.setPen(Qt::NoPen);
-    if (isChecked()) {
-        // A 1px shadow under the knob, so on reads as raised, not greyed.
-        QColor shadow(0, 0, 0, theme.dark ? 110 : 60);
-        painter.setBrush(shadow);
-        painter.drawEllipse(centre + QPointF(0, 1.0), knobRadius, knobRadius);
-    }
-    painter.setBrush(isChecked() ? theme.switchOnKnob : theme.knob);
-    painter.drawEllipse(centre, knobRadius, knobRadius);
-    if (!isChecked()) {
-        painter.setPen(QPen(theme.switchOffStroke, 0.75));
-        painter.setBrush(Qt::NoBrush);
-        painter.drawEllipse(centre, knobRadius, knobRadius);
-    }
+    const QRectF box(0, 0, kSize, kSize);
+    paintCheck(painter, box, isChecked(), isEnabled());
     if (hasFocus()) {
-        painter.setPen(QPen(theme.focusRing, 1.0));
-        painter.setBrush(Qt::NoBrush);
-        painter.drawRoundedRect(plate, radius, radius);
+        painter.setRenderHint(QPainter::Antialiasing);
+        ui::paintFocusRing(painter, box.adjusted(1, 1, -1, -1), radius::small);
     }
+}
+
+PowerKey::PowerKey(QWidget *parent) : InspectorSwitch(parent) {
+    setObjectName(QStringLiteral("powerKey"));
+    setAccessibleName(QStringLiteral("On"));
 }
 
 // ------------------------------------------------------------ SegmentedField
 
 SegmentedField::SegmentedField(const QList<Segment> &segments, QWidget *parent) : QWidget(parent), m_segments(segments) {
     setObjectName(QStringLiteral("segmentedField"));
-    setFixedHeight(ScrubField::kHeight);
+    setFixedHeight(tokens::height::h24);
     setFocusPolicy(Qt::TabFocus);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     setCursor(Qt::PointingHandCursor);
@@ -851,45 +769,43 @@ void SegmentedField::setDefaultIndex(int index) {
 }
 
 QRect SegmentedField::segmentRect(int index) const {
-    // Inside the well, clear of its lip of light at the foot.
     const int count = std::max(1, int(m_segments.size()));
     const double each = (width() - 4.0) / count;
-    return QRectF(2.0 + index * each, 2.0, each, height() - 5.0).toRect();
+    return QRectF(2.0 + index * each, 2.0, each, height() - 4.0).toRect();
 }
 
 QSize SegmentedField::sizeHint() const {
-    return {78, ScrubField::kHeight};
+    const QFontMetrics metrics(tokens::font(controlStrong));
+    int width = 4;
+    for (const Segment &segment : m_segments)
+        width += segment.glyph != Glyph::None ? 24 : metrics.horizontalAdvance(segment.label) + 16;
+    return {width, tokens::height::h24};
 }
 
 QColor SegmentedField::inkAt(int index) const {
-    const EditorTheme &theme = editorTheme();
-    if (index != m_current) return theme.textSecondary;
-    return m_default >= 0 && index != m_default ? changedValueInk() : theme.text;
+    return index == m_current ? col(tokens::ink) : col(ink2);
 }
 
 void SegmentedField::paintEvent(QPaintEvent *) {
-    const EditorTheme &theme = editorTheme();
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
-    paintWell(painter, QRectF(rect()), kFieldRadius);
-    painter.setFont(sized(font(), 12));
-    // With none chosen, a hairline at half height parts the choices, so they
-    // never read as one field holding two words.
-    if (m_current < 0)
-        for (int index = 1; index < m_segments.size(); ++index) {
-            const QRect segment = segmentRect(index);
-            painter.fillRect(QRectF(segment.left() - 0.5, height() * 0.25, 1.0, height() * 0.5), theme.divider);
-        }
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(col(raised));
+    painter.drawRoundedRect(QRectF(rect()), radius::control, radius::control);
     for (int index = 0; index < m_segments.size(); ++index) {
         const QRectF segment = QRectF(segmentRect(index));
-        // The chosen one stands up out of the well as a key.
-        if (index == m_current) paintRaisedKey(painter, segment, false, false, false);
-        const QRectF face = index == m_current ? segment.adjusted(0, 0, 0, -1) : segment;
-        const QColor ink = inkAt(index);
+        if (index == m_current) {
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(col(on));
+            painter.drawRoundedRect(segment, radius::small, radius::small);
+            ui::paintInsetLine(painter, segment, radius::small, col(line2));
+            ui::paintTopHighlight(painter, segment, radius::small, col(segmentHighlight));
+        }
+        const QColor color = inkAt(index);
         const Segment &item = m_segments.at(index);
         if (item.glyph != Glyph::None) {
-            painter.setPen(QPen(ink, 1.25, Qt::SolidLine, Qt::RoundCap));
-            const QPointF c = face.center();
+            painter.setPen(QPen(color, 1.25, Qt::SolidLine, Qt::RoundCap));
+            const QPointF c = segment.center();
             const double widths[4] = {10.0, 6.0, 10.0, 6.0};
             for (int line = 0; line < 4; ++line) {
                 const double y = c.y() - 4.5 + line * 3.0;
@@ -900,11 +816,12 @@ void SegmentedField::paintEvent(QPaintEvent *) {
                 painter.drawLine(QPointF(left, y), QPointF(left + w, y));
             }
         } else {
-            painter.setPen(ink);
-            painter.drawText(face, Qt::AlignCenter, QFontMetrics(painter.font()).elidedText(item.label, Qt::ElideRight, int(face.width()) - 4));
+            painter.setFont(tokens::font(index == m_current ? controlStrong : control));
+            painter.setPen(color);
+            painter.drawText(segment, Qt::AlignCenter, QFontMetrics(painter.font()).elidedText(item.label, Qt::ElideRight, int(segment.width()) - 4));
         }
     }
-    if (hasFocus()) ringFocus(painter, QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5));
+    if (hasFocus()) ui::paintFocusRing(painter, QRectF(rect()), radius::control);
 }
 
 void SegmentedField::mousePressEvent(QMouseEvent *event) {
@@ -928,315 +845,172 @@ void SegmentedField::keyPressEvent(QKeyEvent *event) {
     QWidget::keyPressEvent(event);
 }
 
-// ------------------------------------------------------------------- KeyBank
+// ---------------------------------------------------------------- GhostPopup
 
-KeyBank::KeyBank(const QList<Key> &keys, bool exclusive, QWidget *parent) : QWidget(parent), m_exclusive(exclusive) {
-    setObjectName(QStringLiteral("keyBank"));
-    setFixedHeight(ScrubField::kHeight);
-    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    auto *layout = new QHBoxLayout(this);
-    layout->setContentsMargins(kPadding, kPadding, kPadding, kPadding);
-    layout->setSpacing(kPadding);
-    for (int index = 0; index < keys.size(); ++index) {
-        const Key &key = keys.at(index);
-        auto *button = new BankKey;
-        button->setObjectName(key.name);
-        button->setText(key.label);
-        button->setToolTip(key.tip);
-        button->setAccessibleName(key.label);
-        button->setAccessibleDescription(key.tip);
-        connect(button, &QAbstractButton::clicked, this, [this, index] {
-            if (m_exclusive) setCurrent(index);
-            else setLatched(index, !isLatched(index));
-            emit activated(index);
-        });
-        layout->addWidget(button, 1);
-        m_keys << button;
-    }
-}
-
-void KeyBank::setCurrent(int index) {
-    for (int at = 0; at < m_keys.size(); ++at) m_keys.at(at)->setChecked(at == index);
-}
-
-int KeyBank::current() const {
-    for (int at = 0; at < m_keys.size(); ++at)
-        if (m_keys.at(at)->isChecked()) return at;
-    return -1;
-}
-
-void KeyBank::setLatched(int index, bool latched) {
-    if (QAbstractButton *key = m_keys.value(index)) key->setChecked(latched);
-}
-
-bool KeyBank::isLatched(int index) const {
-    const QAbstractButton *key = m_keys.value(index);
-    return key && key->isChecked();
-}
-
-QSize KeyBank::sizeHint() const {
-    int width = kPadding;
-    for (const QAbstractButton *key : m_keys) width += key->sizeHint().width() + kPadding;
-    return {width, ScrubField::kHeight};
-}
-
-void KeyBank::paintEvent(QPaintEvent *) {
-    QPainter painter(this);
-    paintKeyBank(painter, QRectF(rect()));
-}
-
-// ------------------------------------------------------------------ PowerKey
-
-PowerKey::PowerKey(QWidget *parent) : QAbstractButton(parent) {
-    setObjectName(QStringLiteral("powerKey"));
-    setCheckable(true);
+GhostPopup::GhostPopup(QWidget *parent) : QComboBox(parent) {
+    setObjectName(QStringLiteral("ghostPopup"));
     setAttribute(Qt::WA_Hover);
-    setFixedSize(sizeHint());
     setFocusPolicy(Qt::TabFocus);
     setCursor(Qt::PointingHandCursor);
-    setAccessibleName(QStringLiteral("On"));
+    setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    setFixedHeight(tokens::height::h24);
+    // Its own look: the app's QComboBox rules do not reach it.
+    setStyleSheet(QStringLiteral("QComboBox { background: transparent; border: none; }"));
 }
 
-void PowerKey::paintEvent(QPaintEvent *) {
+QColor GhostPopup::textColor() const {
+    if (!isEnabled()) return col(dis);
+    return m_hovered || (m_menu && m_menu->isVisible()) ? col(tokens::ink) : col(ink2);
+}
+
+QSize GhostPopup::sizeHint() const {
+    // Pad 0 8, the text, gap 4, the 14-point chevron: snapped to whole points.
+    return {8 + ui::snapWidth(control, currentIndex() < 0 ? placeholderText() : currentText()) + 4 + 14 + 8, tokens::height::h24};
+}
+
+QSize GhostPopup::minimumSizeHint() const {
+    return {8 + 14 + 8, tokens::height::h24};
+}
+
+void GhostPopup::paintEvent(QPaintEvent *) {
     QPainter painter(this);
-    const bool in = isChecked() || isDown();
-    paintRaisedKey(painter, QRectF(rect()), in, underMouse() && isEnabled(), false);
-    // The lamp in the middle of the face (which sits a pixel lower held in).
-    const QRectF face = QRectF(rect()).adjusted(0, 0, 0, in ? 0 : -1);
-    paintLamp(painter, face.center(), 6, lampState());
-    if (hasFocus()) {
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(QPen(editorTheme().focusRing, 1.0));
-        painter.setBrush(Qt::NoBrush);
-        painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 4, 4);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const QRectF box(rect());
+    if (isEnabled() && (m_hovered || (m_menu && m_menu->isVisible()))) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(col(raised));
+        painter.drawRoundedRect(box, radius::control, radius::control);
     }
+    const QColor color = textColor();
+    painter.setFont(tokens::font(control));
+    painter.setPen(color);
+    const QRectF chevron(box.right() - 8 - 14, (box.height() - 14) / 2.0, 14, 14);
+    const QRectF text(box.left() + 8, 0, std::max(0.0, chevron.left() - 4 - box.left() - 8), box.height());
+    painter.drawText(text, Qt::AlignRight | Qt::AlignVCenter,
+                     painter.fontMetrics().elidedText(currentIndex() < 0 ? placeholderText() : currentText(), Qt::ElideRight, int(text.width())));
+    icons::paint(painter, QStringLiteral("g-chev"), chevron, color, 14);
+    if (hasFocus()) ui::paintFocusRing(painter, box, radius::control);
 }
 
-// ------------------------------------------------------------- InspectorLamp
-
-InspectorLamp::InspectorLamp(qreal diameter, QWidget *parent) : QWidget(parent), m_diameter(diameter) {
-    setObjectName(QStringLiteral("inspectorLamp"));
-    // A lit lamp's glow reaches a diameter from its centre.
-    const int side = int(std::ceil(2 * diameter));
-    setFixedSize(side, side);
-    setAttribute(Qt::WA_TransparentForMouseEvents);
-    setState(LampState::Off);
-}
-
-void InspectorLamp::setState(LampState state) {
-    m_state = state;
-    setAccessibleName(state == LampState::Changed ? QStringLiteral("Changed") : state == LampState::Off ? QStringLiteral("At its default")
-                                                                                                        : QStringLiteral("On"));
+void GhostPopup::showPopup() {
+    if (count() == 0) return;
+    delete m_menu;
+    auto *menu = new QMenu(this);
+    menu->setObjectName(QStringLiteral("ghostPopupMenu"));
+    ui::styleMenu(menu);
+    for (int index = 0; index < count(); ++index) {
+        QAction *action = menu->addAction(itemText(index).isEmpty() ? QStringLiteral("None") : itemText(index));
+        action->setCheckable(true);
+        action->setChecked(index == currentIndex());
+        connect(action, &QAction::triggered, this, [this, index] {
+            setCurrentIndex(index);
+            emit activated(index);
+        });
+    }
+    connect(menu, &QMenu::aboutToHide, this, qOverload<>(&QWidget::update));
+    m_menu = menu;
+    ui::popupMenu(menu, this);
     update();
 }
 
-void InspectorLamp::paintEvent(QPaintEvent *) {
-    QPainter painter(this);
-    paintLamp(painter, QRectF(rect()).center(), m_diameter, m_state);
+void GhostPopup::hidePopup() {
+    if (m_menu) m_menu->hide();
+    update();
 }
 
-// -------------------------------------------------------------- RotationKnob
+void GhostPopup::enterEvent(QEnterEvent *event) {
+    m_hovered = true;
+    update();
+    QComboBox::enterEvent(event);
+}
 
-RotationKnob::RotationKnob(QWidget *parent) : QWidget(parent) {
-    setObjectName(QStringLiteral("rotationKnob"));
+void GhostPopup::leaveEvent(QEvent *event) {
+    m_hovered = false;
+    update();
+    QComboBox::leaveEvent(event);
+}
+
+// ------------------------------------------------------------ KeyframeButton
+
+KeyframeButton::KeyframeButton(QWidget *parent) : QAbstractButton(parent) {
+    setObjectName(QStringLiteral("keyframeButton"));
+    setAttribute(Qt::WA_Hover);
+    setFocusPolicy(Qt::TabFocus);
+    setCursor(Qt::PointingHandCursor);
     setFixedSize(kSize, kSize);
-    setCursor(Qt::SizeVerCursor);
-    setToolTip(QStringLiteral("Drag up or down to turn; ⇧ steps 15°; double-click for 0°"));
-    setAccessibleName(QStringLiteral("Rotation"));
-    m_wheelRun = new QTimer(this);
-    m_wheelRun->setSingleShot(true);
-    m_wheelRun->setInterval(kWheelRunMs);
-    connect(m_wheelRun, &QTimer::timeout, this, &RotationKnob::flushWheel);
+    setAccessibleName(QStringLiteral("Keyframe"));
 }
 
-void RotationKnob::setAngle(double degrees) {
-    // A snapshot arriving mid-gesture never pulls the knob back.
-    if (m_dragging || m_wheeling) return;
-    m_angle = degrees;
+void KeyframeButton::setHas(bool has) {
+    if (m_has == has) return;
+    m_has = has;
     update();
 }
 
-void RotationKnob::paintEvent(QPaintEvent *) {
+void KeyframeButton::setAnimated(bool animated) {
+    if (m_animated == animated) return;
+    m_animated = animated;
+    update();
+}
+
+QString KeyframeButton::iconName() const {
+    return m_has ? QStringLiteral("g-kff") : QStringLiteral("g-kf");
+}
+
+QColor KeyframeButton::iconColor() const {
+    if (!isEnabled()) return col(dis);
+    if (m_has || m_hovered || isDown()) return col(tokens::ink);
+    return m_animated ? col(ink2) : col(ink3);
+}
+
+void KeyframeButton::paintEvent(QPaintEvent *) {
     QPainter painter(this);
-    // Clockwise from 12 o'clock, as the compositor turns.
-    paintKnob(painter, QRectF(rect()), m_angle);
-}
-
-double RotationKnob::rounded(double degrees) const {
-    const double unit = std::pow(10.0, m_decimals);
-    return std::round(degrees * unit) / unit;
-}
-
-double RotationKnob::dragAngle(double y, Qt::KeyboardModifiers modifiers) const {
-    const double rate = modifiers.testFlag(Qt::AltModifier) ? 0.1 : 1.0;
-    double degrees = m_start + (m_pressY - y) * rate;
-    if (modifiers.testFlag(Qt::ShiftModifier)) degrees = std::round(degrees / 15.0) * 15.0;
-    return rounded(degrees);
-}
-
-void RotationKnob::mousePressEvent(QMouseEvent *event) {
-    if (event->button() != Qt::LeftButton || !isEnabled()) return;
-    flushWheel();
-    m_pressed = true;
-    m_dragging = false;
-    m_pressY = event->position().y();
-}
-
-void RotationKnob::mouseMoveEvent(QMouseEvent *event) {
-    if (!m_pressed) return;
-    // A press that wanders less than the slop is a click, and turns nothing.
-    if (!m_dragging) {
-        if (std::abs(event->position().y() - m_pressY) < kClickSlop) return;
-        m_dragging = true;
-        m_start = m_angle;
+    painter.setRenderHint(QPainter::Antialiasing);
+    if (isEnabled() && (m_hovered || isDown())) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(col(isDown() ? hover2 : raised));
+        painter.drawRoundedRect(QRectF(rect()), radius::small, radius::small);
     }
-    const double degrees = dragAngle(event->position().y(), event->modifiers());
-    if (std::abs(degrees - m_angle) < 1e-9) return;
-    m_angle = degrees;
+    icons::paint(painter, iconName(), QRectF(rect()), iconColor(), 16);
+    if (hasFocus()) ui::paintFocusRing(painter, QRectF(rect()), radius::small);
+}
+
+void KeyframeButton::enterEvent(QEnterEvent *event) {
+    m_hovered = true;
     update();
-    emit turned(m_angle);
+    QAbstractButton::enterEvent(event);
 }
 
-void RotationKnob::mouseReleaseEvent(QMouseEvent *event) {
-    if (!m_pressed) return;
-    m_pressed = false;
-    if (!m_dragging) return;
-    m_dragging = false;
-    m_angle = dragAngle(event->position().y(), event->modifiers());
+void KeyframeButton::leaveEvent(QEvent *event) {
+    m_hovered = false;
     update();
-    if (std::abs(m_angle - m_start) > 1e-6) emit released(m_angle, m_start);
-}
-
-void RotationKnob::mouseDoubleClickEvent(QMouseEvent *event) {
-    if (event->button() != Qt::LeftButton || !isEnabled()) return;
-    flushWheel();
-    m_pressed = false;
-    m_dragging = false;
-    m_angle = 0.0;
-    update();
-    emit turned(m_angle);
-    // Even at 0° itself: the other clips selected may not be.
-    emit resetRequested();
-}
-
-void RotationKnob::wheelEvent(QWheelEvent *event) {
-    if (!isEnabled()) return QWidget::wheelEvent(event);
-    event->accept();
-    // ⇧ turns the wheel sideways on a Mac.
-    const QPoint delta = event->angleDelta();
-    m_wheelRest += delta.y() != 0 ? delta.y() : delta.x();
-    const int steps = m_wheelRest / QWheelEvent::DefaultDeltasPerStep;
-    if (steps == 0) return;
-    m_wheelRest -= steps * QWheelEvent::DefaultDeltasPerStep;
-    if (!m_wheeling) {
-        m_wheeling = true;
-        m_start = m_angle;
-    }
-    if (event->modifiers().testFlag(Qt::ShiftModifier)) {
-        // From the 15° mark it sits on or has just passed, on by whole marks.
-        const double mark = steps > 0 ? std::floor(m_angle / 15.0 + 1e-9) : std::ceil(m_angle / 15.0 - 1e-9);
-        m_angle = (mark + steps) * 15.0;
-    } else {
-        m_angle = rounded(m_angle + steps);
-    }
-    update();
-    emit turned(m_angle);
-    m_wheelRun->start();
-}
-
-void RotationKnob::flushWheel() {
-    m_wheelRun->stop();
-    m_wheelRest = 0;
-    if (!m_wheeling) return;
-    m_wheeling = false;
-    if (std::abs(m_angle - m_start) > 1e-6) emit released(m_angle, m_start);
-}
-
-// -------------------------------------------------------------- GlassReadout
-
-GlassReadout::GlassReadout(QWidget *parent) : QWidget(parent) {
-    setObjectName(QStringLiteral("inspectorTiming"));
-    m_layout = new QHBoxLayout(this);
-    // The glass's lip of light takes the foot's last pixel.
-    m_layout->setContentsMargins(kPadding, kLabelBand, kPadding, kPadding - 1);
-    m_layout->setSpacing(kPadding);
-}
-
-QFont GlassReadout::labelFont(const QFont &base) {
-    QFont font = base;
-    font.setPixelSize(9);
-    font.setWeight(QFont::Bold);
-    font.setCapitalization(QFont::AllUppercase);
-    font.setLetterSpacing(QFont::AbsoluteSpacing, 1.0);
-    return font;
-}
-
-void GlassReadout::addColumn(const QString &label, QWidget *value) {
-    m_layout->addWidget(value, 1);
-    m_columns.append({label, value});
-    update();
-}
-
-void GlassReadout::clearColumns() {
-    while (QLayoutItem *item = m_layout->takeAt(0)) {
-        delete item->widget();
-        delete item;
-    }
-    m_columns.clear();
-    update();
-}
-
-QStringList GlassReadout::labels() const {
-    QStringList out;
-    for (const auto &column : m_columns) out << column.first;
-    return out;
-}
-
-void GlassReadout::paintEvent(QPaintEvent *) {
-    const EditorTheme &theme = editorTheme();
-    QPainter painter(this);
-    paintGlass(painter, QRectF(rect()));
-    painter.setFont(labelFont(font()));
-    painter.setPen(theme.glassLabel);
-    for (const auto &[label, value] : m_columns) {
-        if (!value) continue;
-        // Over its figures, at their padding.
-        const QRect under = value->geometry();
-        painter.drawText(QRectF(under.left() + 3, 2, under.width() - 3, kLabelBand - 2), Qt::AlignLeft | Qt::AlignVCenter, label);
-    }
+    QAbstractButton::leaveEvent(event);
 }
 
 // ---------------------------------------------------------------- GlyphButton
 
 void drawInspectorGlyph(QPainter &painter, GlyphButton::Glyph glyph, const QRectF &rect, const QColor &color, bool open) {
     using Glyph = GlyphButton::Glyph;
+    const qreal px = std::min<qreal>(16.0, std::min(rect.width(), rect.height()));
+    const auto icon = [&](const char *name, qreal size) { icons::paint(painter, QString::fromLatin1(name), rect, color, size); };
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing);
     const QPointF c = rect.center();
-    QPen pen(color, 1.25, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+    QPen pen(color, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
     painter.setPen(pen);
     painter.setBrush(Qt::NoBrush);
     switch (glyph) {
-    case Glyph::Reset: {
-        // ↺: an open circle with an arrowhead at its start.
-        const QRectF ring(c.x() - 4.5, c.y() - 4.5, 9.0, 9.0);
-        painter.drawArc(ring, 100 * 16, 290 * 16);
-        const QPointF tip(c.x() - 1.0, c.y() - 4.5);
-        painter.drawLine(tip, tip + QPointF(2.5, -2.0));
-        painter.drawLine(tip, tip + QPointF(2.5, 2.0));
+    case Glyph::Reset:
+        icon("g-reset", px);
         break;
-    }
     case Glyph::More:
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(color);
-        for (int dot = -1; dot <= 1; ++dot) painter.drawEllipse(c + QPointF(dot * 5.0, 0.0), 1.4, 1.4);
+        icon("g-more", px);
         break;
     case Glyph::Plus:
-        painter.drawLine(c - QPointF(5.0, 0.0), c + QPointF(5.0, 0.0));
-        painter.drawLine(c - QPointF(0.0, 5.0), c + QPointF(0.0, 5.0));
+        painter.drawLine(c - QPointF(4.5, 0.0), c + QPointF(4.5, 0.0));
+        painter.drawLine(c - QPointF(0.0, 4.5), c + QPointF(0.0, 4.5));
         break;
     case Glyph::Folder: {
-        // A folder: its tab at the top left, its body under it.
         QPainterPath folder;
         folder.moveTo(c + QPointF(-6.0, 4.5));
         folder.lineTo(c + QPointF(-6.0, -4.0));
@@ -1249,56 +1023,33 @@ void drawInspectorGlyph(QPainter &painter, GlyphButton::Glyph glyph, const QRect
         break;
     }
     case Glyph::Chevron:
-        if (open) {
-            painter.drawLine(c + QPointF(-3.5, -1.5), c + QPointF(0.0, 2.0));
-            painter.drawLine(c + QPointF(0.0, 2.0), c + QPointF(3.5, -1.5));
-        } else {
-            painter.drawLine(c + QPointF(-1.5, -3.5), c + QPointF(2.0, 0.0));
-            painter.drawLine(c + QPointF(2.0, 0.0), c + QPointF(-1.5, 3.5));
-        }
+        // g-chev points down; folded, it turns −90° (spec 5.1).
+        painter.translate(c);
+        if (!open) painter.rotate(-90);
+        painter.translate(-c);
+        icon("g-chev", 14);
         break;
     case Glyph::Menu:
-        painter.drawLine(c + QPointF(-3.0, -1.0), c + QPointF(0.0, 2.0));
-        painter.drawLine(c + QPointF(0.0, 2.0), c + QPointF(3.0, -1.0));
+        icon("g-chev", 14);
         break;
-    case Glyph::Reverse: {
-        // Play backwards: the play triangle turned to point left, as a
-        // transport's reverse-play button draws it. Not a curved arrow,
-        // which reads as undo; not two arrows, which read as swap. Off it
-        // is only an outline (`open` false); on, solid.
-        painter.setPen(QPen(color, 1.25, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    case Glyph::Reverse:
         painter.setBrush(open ? QBrush(color) : QBrush(Qt::NoBrush));
         painter.drawPolygon(QPolygonF{c + QPointF(-4.5, 0.0), c + QPointF(3.5, -5.0), c + QPointF(3.5, 5.0)});
         break;
-    }
-    case Glyph::Bubble: {
-        // A speech bubble: a rounded body with a tail at its lower left.
-        const double w = rect.width(), h = rect.height();
-        const QRectF body(rect.left() + 0.12 * w, rect.top() + 0.14 * h, 0.76 * w, 0.56 * h);
-        QPainterPath bubble;
-        bubble.addRoundedRect(body, 0.2 * h, 0.2 * h);
-        QPainterPath tip;
-        tip.moveTo(body.left() + 0.18 * w, body.bottom() - 0.5);
-        tip.lineTo(body.left() + 0.14 * w, rect.top() + 0.9 * h);
-        tip.lineTo(body.left() + 0.42 * w, body.bottom() - 0.5);
-        painter.drawPath(bubble.united(tip));
+    case Glyph::Bubble:
+        icon("g-comments", px);
         break;
-    }
-    case Glyph::Diamond: {
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(color);
-        QPolygonF diamond{c + QPointF(0, -4), c + QPointF(4, 0), c + QPointF(0, 4), c + QPointF(-4, 0)};
-        painter.drawPolygon(diamond);
+    case Glyph::Diamond:
+        icon("g-kf", px);
         break;
-    }
     case Glyph::Rectangle:
-        painter.drawRect(QRectF(c.x() - 5.0, c.y() - 3.5, 10.0, 7.0));
+        icon("g-mrect", px);
         break;
     case Glyph::Ellipse:
-        painter.drawEllipse(c, 5.0, 4.0);
+        icon("g-mell", px);
         break;
     case Glyph::Pen:
-        drawPenNib(painter, c, color);
+        icon("g-mpen", px);
         break;
     }
     painter.restore();
@@ -1309,19 +1060,16 @@ GlyphButton::GlyphButton(Glyph glyph, QWidget *parent) : QAbstractButton(parent)
     setAttribute(Qt::WA_Hover);
     setFocusPolicy(Qt::TabFocus);
     setCursor(Qt::PointingHandCursor);
-    const QSize size = sizeHint();
-    setFixedSize(size);
+    setFixedSize(sizeHint());
 }
 
 QSize GlyphButton::sizeHint() const {
     switch (m_glyph) {
-    case Glyph::Reset:
-    case Glyph::Diamond:
-        return {16, 16};
     case Glyph::Chevron:
-        return {16, 24};
+    case Glyph::Diamond:
+        return {14, 14};
     default:
-        return {24, 24};
+        return {tokens::height::h24, tokens::height::h24};
     }
 }
 
@@ -1331,63 +1079,57 @@ void GlyphButton::setOpen(bool open) {
 }
 
 QColor GlyphButton::discColor() const {
-    // A toggle on sits on the neutral pressed disc (no accent wash: purple
-    // is the focus ring's alone here).
-    const EditorTheme &theme = editorTheme();
-    const bool hovered = underMouse() && isEnabled() && m_glyph != Glyph::Chevron && m_glyph != Glyph::Diamond;
-    const bool checked = isCheckable() && isChecked();
-    if (isDown() || checked) return theme.pressed;
-    if (hovered) return theme.hover;
+    if (m_glyph == Glyph::Chevron || m_glyph == Glyph::Diamond || !isEnabled()) return {};
+    if (isCheckable() && isChecked()) return col(on);
+    if (isDown()) return col(hover2);
+    if (underMouse()) return col(raised);
     return {};
 }
 
 QColor GlyphButton::inkColor() const {
-    const EditorTheme &theme = editorTheme();
-    if (!isEnabled()) return theme.textDisabled;
-    const bool hovered = underMouse() && m_glyph != Glyph::Chevron && m_glyph != Glyph::Diamond;
-    // Off, a toggle is a quiet secondary glyph (full ink under the pointer).
-    const bool quiet = m_glyph == Glyph::Reset || m_glyph == Glyph::Chevron || m_glyph == Glyph::Diamond ||
-                       (isCheckable() && !isChecked() && !hovered);
-    return quiet ? theme.textSecondary : theme.text;
+    if (!isEnabled()) return col(dis);
+    if (m_glyph == Glyph::Chevron || m_glyph == Glyph::Diamond) return col(ink3);
+    if (underMouse() || isDown() || (isCheckable() && isChecked())) return col(tokens::ink);
+    return col(ink2);
 }
 
 void GlyphButton::paintEvent(QPaintEvent *) {
-    const EditorTheme &theme = editorTheme();
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     if (const QColor disc = discColor(); disc.isValid()) {
         painter.setPen(Qt::NoPen);
         painter.setBrush(disc);
-        painter.drawEllipse(QRectF(rect()).adjusted(1, 1, -1, -1));
+        painter.drawRoundedRect(QRectF(rect()), radius::control, radius::control);
+        if (isCheckable() && isChecked()) ui::paintInsetLine(painter, QRectF(rect()), radius::control, col(line2));
     }
     drawInspectorGlyph(painter, m_glyph, QRectF(rect()), inkColor(), isCheckable() ? isChecked() : m_open);
-    if (hasFocus()) {
-        painter.setPen(QPen(theme.focusRing, 1.0));
-        painter.setBrush(Qt::NoBrush);
-        painter.drawEllipse(QRectF(rect()).adjusted(1.5, 1.5, -1.5, -1.5));
-    }
+    if (hasFocus()) ui::paintFocusRing(painter, QRectF(rect()), radius::control);
 }
 
 // ------------------------------------------------------------------- RowLabel
 
 RowLabel::RowLabel(const QString &text, QWidget *parent) : QLabel(text, parent), m_full(text) {
     setObjectName(QStringLiteral("inspectorLabel"));
-    setFont(sized(font(), 12));
+    setFont(tokens::font(control));
     setIndent(0);
+    setMinimumWidth(0);
+    setStrong(false);
     setToolTip(text);
 }
 
+void RowLabel::setStrong(bool strong) {
+    setStyleSheet(QStringLiteral("QLabel { color: %1; background: transparent; %2 }").arg(css(strong ? tokens::ink : ink2), inspectorFontCss(control)));
+}
+
 void RowLabel::resizeEvent(QResizeEvent *event) {
-    // One line at 12 points, ended with an ellipsis where the label column
-    // cuts it; the tooltip has it whole.
-    if (font().pixelSize() != 12) setFont(sized(font(), 12));
+    // One line, ended with an ellipsis where its column cuts it.
     const QString shown = fontMetrics().elidedText(m_full, Qt::ElideRight, std::max(0, width()));
     if (shown != text()) setText(shown);
     QLabel::resizeEvent(event);
 }
 
 void RowLabel::mousePressEvent(QMouseEvent *event) {
-    if (m_field && event->button() == Qt::LeftButton && !m_field->isReadOnly()) {
+    if (m_field && event->button() == Qt::LeftButton && !m_field->isReadOnly() && m_field->isEnabled()) {
         m_pressed = true;
         m_field->scrubPress(event->globalPosition().toPoint());
         return;
@@ -1424,78 +1166,70 @@ void RowLabel::mouseDoubleClickEvent(QMouseEvent *event) {
 
 InspectorRow::InspectorRow(const QString &label, QWidget *parent) : QWidget(parent) {
     setObjectName(QStringLiteral("inspectorRow"));
-    setAttribute(Qt::WA_Hover);
     setFixedHeight(kHeight);
     auto *layout = new QHBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(0);
+    layout->setContentsMargins(kPadLeft, 0, kPadRight, 0);
+    layout->setSpacing(kGap);
     m_label = new RowLabel(label);
     m_label->setFixedWidth(kLabelWidth);
     layout->addWidget(m_label);
-    layout->addSpacing(8);
-    m_controls = new QHBoxLayout;
+    m_controlSlot = new QWidget;
+    m_controlSlot->setObjectName(QStringLiteral("rowControls"));
+    m_controls = new QHBoxLayout(m_controlSlot);
     m_controls->setContentsMargins(0, 0, 0, 0);
-    m_controls->setSpacing(8);
-    layout->addLayout(m_controls, 1);
-    layout->addSpacing(4);
-    auto *lane = new QWidget;
-    lane->setFixedWidth(kResetLane);
-    // The ↺ at the lane's right end, level with the section headers' ends.
-    auto *laneLayout = new QHBoxLayout(lane);
-    laneLayout->setContentsMargins(0, 0, 0, 0);
-    m_reset = new GlyphButton(GlyphButton::Glyph::Reset);
-    m_reset->setObjectName(QStringLiteral("rowReset"));
-    m_reset->setToolTip(QStringLiteral("Reset to the default"));
-    m_reset->hide();
-    connect(m_reset, &QAbstractButton::clicked, this, &InspectorRow::reset);
-    laneLayout->addWidget(m_reset);
-    m_diamond = new QLabel;
-    m_diamond->setObjectName(QStringLiteral("animatedMark"));
-    m_diamond->setFixedSize(16, 16);
-    m_diamond->setPixmap(glyphPixmap(QSize(16, 16), [](QPainter &p, const QColor &color) {
-        drawInspectorGlyph(p, GlyphButton::Glyph::Diamond, QRectF(0, 0, 16, 16), color);
-    }, editorTheme().textSecondary));
-    m_diamond->hide();
-    laneLayout->addWidget(m_diamond);
-    // At rest a changed value's lamp holds the ↺'s place.
-    m_lamp = new InspectorLamp(kLampDiameter);
-    m_lamp->setObjectName(QStringLiteral("rowLamp"));
-    m_lamp->setFixedSize(kResetLane, kResetLane);
-    m_lamp->setState(LampState::Changed);
-    m_lamp->setToolTip(QStringLiteral("Changed from its default"));
-    m_lamp->hide();
-    laneLayout->addWidget(m_lamp);
-    layout->addWidget(lane);
+    m_controls->setSpacing(12);
+    layout->addWidget(m_controlSlot, 1);
+    m_valueSlot = new QWidget;
+    m_valueSlot->setObjectName(QStringLiteral("rowValue"));
+    m_valueSlot->setFixedWidth(kValueField);
+    m_values = new QHBoxLayout(m_valueSlot);
+    m_values->setContentsMargins(0, 0, 0, 0);
+    m_values->setSpacing(0);
+    m_valueSlot->hide();
+    layout->addWidget(m_valueSlot);
+    m_keyframe = new KeyframeButton;
+    // The keyframe column keeps its place on every row, button or not.
+    QSizePolicy keep = m_keyframe->sizePolicy();
+    keep.setRetainSizeWhenHidden(true);
+    m_keyframe->setSizePolicy(keep);
+    m_keyframe->hide();
+    layout->addWidget(m_keyframe);
     connect(m_label, &RowLabel::resetRequested, this, &InspectorRow::reset);
 }
 
-QList<QRect> InspectorRow::wells() const {
-    QList<QRect> out;
-    for (const QWidget *child : findChildren<QWidget *>()) {
-        if (!child->property("inspector").toBool() || !child->isVisibleTo(this)) continue;
-        out << QRect(child->mapTo(this, QPoint(0, 0)), child->size());
-    }
-    return out;
+void InspectorRow::addValue(QWidget *value) {
+    m_values->addWidget(value, 1);
+    m_valueSlot->show();
 }
 
-void InspectorRow::paintEvent(QPaintEvent *) {
-    // The pop-ups and text fields are clear (the style sheet's): their
-    // wells are pressed into the row under them.
-    const QList<QRect> rects = wells();
-    if (rects.isEmpty()) return;
-    QPainter painter(this);
-    for (const QRect &well : rects) paintWell(painter, QRectF(well), kFieldRadius);
+void InspectorRow::setWide(bool wide) {
+    if (m_wide == wide) return;
+    m_wide = wide;
+    auto *row = static_cast<QHBoxLayout *>(layout());
+    if (wide) {
+        // The label takes what its controls leave; they keep their size.
+        m_label->setMinimumWidth(kLabelWidth);
+        m_label->setMaximumWidth(QWIDGETSIZE_MAX);
+        m_label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        m_controlSlot->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
+        row->setStretchFactor(m_label, 1);
+        row->setStretchFactor(m_controlSlot, 0);
+    } else {
+        m_label->setFixedWidth(kLabelWidth);
+        m_label->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
+        m_controlSlot->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+        row->setStretchFactor(m_label, 0);
+        row->setStretchFactor(m_controlSlot, 1);
+    }
 }
 
 void InspectorRow::setChanged(bool changed) {
     m_changed = changed;
-    updateLane();
 }
 
 void InspectorRow::setAnimated(bool animated, const QString &tip) {
     m_animated = animated;
-    m_diamond->setToolTip(tip);
-    updateLane();
+    if (!tip.isEmpty()) m_keyframe->setToolTip(tip);
 }
 
 void InspectorRow::setResetHandler(std::function<void()> reset) {
@@ -1503,26 +1237,7 @@ void InspectorRow::setResetHandler(std::function<void()> reset) {
 }
 
 void InspectorRow::reset() {
-    if (m_resetHandler && !m_animated) m_resetHandler();
-}
-
-void InspectorRow::updateLane() {
-    m_diamond->setVisible(m_animated);
-    const bool resettable = !m_animated && m_changed && m_resetHandler;
-    m_reset->setVisible(resettable && m_hovered);
-    m_lamp->setVisible(!m_animated && m_changed && !(resettable && m_hovered));
-}
-
-void InspectorRow::enterEvent(QEnterEvent *event) {
-    m_hovered = true;
-    updateLane();
-    QWidget::enterEvent(event);
-}
-
-void InspectorRow::leaveEvent(QEvent *event) {
-    m_hovered = false;
-    updateLane();
-    QWidget::leaveEvent(event);
+    if (m_resetHandler) m_resetHandler();
 }
 
 // ----------------------------------------------------------- InspectorSection
@@ -1532,57 +1247,54 @@ InspectorSection::InspectorSection(const QString &id, const QString &title, QWid
     setObjectName(QStringLiteral("inspectorSection"));
     setProperty("sectionId", id);
     auto *layout = new QVBoxLayout(this);
-    // The plate's own margin: its header and rows sit 8 points in; the gap
-    // under it is its own, so a rack of folded modules can close it up.
-    layout->setContentsMargins(kInset, 0, kInset, kGap);
+    // The line at its foot is drawn inside it (inset 0 −1px 0).
+    layout->setContentsMargins(0, 0, 0, 1);
     layout->setSpacing(0);
     m_header = new QWidget;
     m_header->setObjectName(QStringLiteral("sectionHeader"));
     m_header->setAttribute(Qt::WA_Hover);
-    m_header->setAttribute(Qt::WA_StyledBackground);
     m_header->setFixedHeight(kHeaderHeight);
     m_header->setCursor(Qt::PointingHandCursor);
-    // Tab reaches the header, and Space or Return folds or opens it, so the
-    // rows of a folded module are never out of the keyboard's reach.
+    // Tab reaches the header, and Space or Return folds or opens it.
     m_header->setFocusPolicy(Qt::TabFocus);
     m_header->installEventFilter(this);
     auto *row = new QHBoxLayout(m_header);
-    row->setContentsMargins(0, 0, 0, 0);
-    row->setSpacing(4);
-    // The lamp first, then the engraved title, as a module's legend reads.
-    m_lamp = new InspectorLamp(kLampDiameter);
-    m_lamp->setObjectName(QStringLiteral("sectionLamp"));
-    row->addWidget(m_lamp);
-    m_titleLabel = new EngravedLabel(title);
+    row->setContentsMargins(12, 0, 8, 0);
+    row->setSpacing(8);
+    m_enable = new InspectorSwitch;
+    m_enable->setObjectName(QStringLiteral("sectionEnabled"));
+    m_enable->hide();
+    connect(m_enable, &QAbstractButton::clicked, this, &InspectorSection::enableToggled);
+    row->addWidget(m_enable);
+    m_titleLabel = new QLabel(title);
     m_titleLabel->setObjectName(QStringLiteral("sectionTitle"));
-    m_titleLabel->setFont(engravedFont(font(), title));
+    m_titleLabel->setFont(tokens::font(controlStrong));
+    m_titleLabel->setStyleSheet(QStringLiteral("QLabel { color: %1; background: transparent; %2 }").arg(css(tokens::ink), inspectorFontCss(controlStrong)));
     m_titleLabel->setAccessibleName(title);
     row->addWidget(m_titleLabel);
     m_countLabel = new QLabel;
     m_countLabel->setObjectName(QStringLiteral("sectionCount"));
-    m_countLabel->setFont(sized(font(), 12));
+    m_countLabel->setFont(tokens::font(control));
+    m_countLabel->setStyleSheet(QStringLiteral("QLabel { color: %1; background: transparent; %2 }").arg(css(ink3), inspectorFontCss(control)));
     m_countLabel->hide();
     row->addWidget(m_countLabel);
-    m_summaryLabel = new QLabel;
-    m_summaryLabel->setObjectName(QStringLiteral("sectionSummary"));
-    m_summaryLabel->setFont(sized(font(), 12));
-    m_summaryLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    m_summaryLabel->setMinimumWidth(0);
-    m_summaryLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    row->addWidget(m_summaryLabel, 1);
+    row->addStretch(1);
     m_trailing = new QHBoxLayout;
     m_trailing->setSpacing(0);
     row->addLayout(m_trailing);
     m_reset = new GlyphButton(GlyphButton::Glyph::Reset);
     m_reset->setObjectName(QStringLiteral("sectionReset"));
-    m_reset->setToolTip(QStringLiteral("Reset %1").arg(title));
+    ui::setTip(m_reset, QStringLiteral("Reset %1").arg(title.toLower()));
+    QSizePolicy keep = m_reset->sizePolicy();
+    keep.setRetainSizeWhenHidden(true);
+    m_reset->setSizePolicy(keep);
     m_reset->hide();
     connect(m_reset, &QAbstractButton::clicked, this, [this] {
         if (m_resetHandler) m_resetHandler();
     });
     row->addWidget(m_reset);
-    // The chevron at the right end, over the rows' lamps and ↺.
     m_chevron = new GlyphButton(GlyphButton::Glyph::Chevron);
+    m_chevron->setObjectName(QStringLiteral("sectionChevron"));
     m_chevron->setFocusPolicy(Qt::NoFocus);
     m_chevron->setAttribute(Qt::WA_TransparentForMouseEvents);
     row->addWidget(m_chevron);
@@ -1597,33 +1309,23 @@ InspectorSection::InspectorSection(const QString &id, const QString &title, QWid
     updateHeader();
 }
 
-void InspectorSection::setJoined(bool above, bool below) {
-    if (m_joinAbove == above && m_joinBelow == below) return;
-    m_joinAbove = above;
-    m_joinBelow = below;
-    layout()->setContentsMargins(kInset, 0, kInset, below ? 0 : kGap);
-    update();
+void InspectorSection::setEnable(Enable enable, const QString &tip) {
+    m_enableState = enable;
+    m_enable->setVisible(enable != Enable::Hidden);
+    {
+        const QSignalBlocker blocker(m_enable);
+        m_enable->setChecked(enable == Enable::On || enable == Enable::Always);
+    }
+    m_enable->setEnabled(enable == Enable::On || enable == Enable::Off);
+    ui::setTip(m_enable, tip.isEmpty() ? (enable == Enable::Always ? QStringLiteral("%1 is always applied").arg(m_title) : m_title) : tip);
 }
 
 void InspectorSection::paintEvent(QPaintEvent *) {
-    const EditorTheme &theme = editorTheme();
     QPainter painter(this);
-    const QRect plate = rect().adjusted(0, 0, 0, m_joinBelow ? 0 : -kGap);
-    painter.setClipRect(plate);
-    // Joined, the plate runs on past the shared edge (its rounded corners
-    // out of sight) and a hairline parts the two units of the rack, with
-    // the light along the lower one's top as a plate's own edge has.
-    const qreal past = 8;
-    paintModulePlate(painter, QRectF(plate).adjusted(0, m_joinAbove ? -past : 0, 0, m_joinBelow ? past : 0));
-    if (m_joinAbove) {
-        painter.fillRect(QRect(0, 0, plate.width(), 1), theme.moduleEdge);
-        painter.fillRect(QRect(1, 1, plate.width() - 2, 1), theme.moduleHighlight);
-    }
-    // The focused header ringed as a focused field is, just inside it, so
-    // the plate's edge (and the one above in a rack) does not cut it.
+    painter.fillRect(QRect(0, height() - 1, width(), 1), col(line));
     if (m_header->hasFocus()) {
         painter.setRenderHint(QPainter::Antialiasing);
-        ringFocus(painter, QRectF(m_header->geometry()).adjusted(2, 2, -2, -2));
+        ui::paintFocusRing(painter, QRectF(m_header->geometry()).adjusted(3, 3, -3, -3), radius::control);
     }
 }
 
@@ -1651,10 +1353,6 @@ void InspectorSection::setSummary(const Summary &summary) {
 
 void InspectorSection::setSummary(const QString &summary) {
     setSummary(Summary{summary.isEmpty() ? QStringList{} : QStringList{summary}, {}, {}, summary});
-}
-
-QString InspectorSection::shownSummary() const {
-    return m_summaryLabel->text();
 }
 
 QString InspectorSection::fitSummary(const Summary &summary, const QFontMetrics &metrics, int room) {
@@ -1685,15 +1383,12 @@ void InspectorSection::setResetHandler(std::function<void()> reset) {
 
 void InspectorSection::updateHeader() {
     m_chevron->setOpen(m_open);
-    // A folded section says what changed in it, in whole words; an open
-    // one shows it. The whole in its tooltip.
-    const int room = m_summaryLabel->contentsRect().width();
-    const QString shown = room > 0 ? fitSummary(m_summary, m_summaryLabel->fontMetrics(), room) : m_summary.full;
-    m_summaryLabel->setText(m_open ? QString() : shown);
-    m_summaryLabel->setToolTip(m_summary.full);
-    m_reset->setVisible(m_changed && m_hovered && m_resetHandler);
-    m_lamp->setState(m_changed ? LampState::Changed : LampState::Off);
-    // Read out with its fold, as a disclosure is.
+    m_bodyWidget->layout()->setContentsMargins(0, 0, 0, kFoot);
+    // What changed, whole, in the header's tooltip; the reset shows while
+    // the pointer is over the header, active once anything moved.
+    m_header->setToolTip(m_summary.full);
+    m_reset->setVisible(m_hovered && m_resetHandler != nullptr);
+    m_reset->setEnabled(m_changed);
     m_header->setAccessibleName(QStringLiteral("%1, %2").arg(m_title, m_open ? QStringLiteral("expanded") : QStringLiteral("collapsed")));
 }
 
@@ -1710,9 +1405,6 @@ bool InspectorSection::eventFilter(QObject *watched, QEvent *event) {
             m_hovered = false;
             updateHeader();
             break;
-        case QEvent::Resize:
-            QTimer::singleShot(0, this, &InspectorSection::updateHeader);
-            break;
         case QEvent::FocusIn:
         case QEvent::FocusOut:
             update();
@@ -1726,7 +1418,6 @@ bool InspectorSection::eventFilter(QObject *watched, QEvent *event) {
         case QEvent::KeyPress: {
             auto *key = static_cast<QKeyEvent *>(event);
             if (key->key() != Qt::Key_Space && key->key() != Qt::Key_Return && key->key() != Qt::Key_Enter) break;
-            // ⌥ and ⌘ as with a click: all alike, or only this one.
             const Qt::KeyboardModifiers modifiers = key->modifiers() & ~Qt::KeypadModifier;
             setOpen(!m_open);
             emit toggled(m_open, modifiers);
@@ -1747,51 +1438,86 @@ bool InspectorSection::eventFilter(QObject *watched, QEvent *event) {
     return QWidget::eventFilter(watched, event);
 }
 
-// -------------------------------------------------------- InspectorThumbnail
+// ---------------------------------------------------------------- ColorWheel
 
-InspectorThumbnail::InspectorThumbnail(QWidget *parent) : QWidget(parent) {
-    setObjectName(QStringLiteral("inspectorThumbnail"));
-    setFixedSize(sizeHint());
+ColorWheel::ColorWheel(QWidget *parent) : QWidget(parent) {
+    setObjectName(QStringLiteral("colorWheel"));
+    setFixedSize(kSize, kSize);
+    setCursor(Qt::PointingHandCursor);
 }
 
-QSize InspectorThumbnail::sizeHint() const {
-    // Several clips stack, 4 points up and to the right each.
-    const int extra = 4 * std::max(0, int(m_images.size()) - 1);
-    return {64 + extra, 36 + extra};
-}
-
-void InspectorThumbnail::setImages(const QList<QImage> &images) {
-    m_images = images.mid(0, 3);
-    setFixedSize(sizeHint());
+void ColorWheel::setPuck(const QPointF &unit) {
+    if (m_dragging) return;
+    QPointF puck = unit;
+    const double length = std::hypot(puck.x(), puck.y());
+    if (length > 1.0) puck /= length;
+    m_puck = puck;
     update();
 }
 
-void InspectorThumbnail::paintEvent(QPaintEvent *) {
-    const EditorTheme &theme = editorTheme();
+QPointF ColorWheel::puckCenter() const {
+    return QPointF(kSize / 2.0, kSize / 2.0) + m_puck * kTravel;
+}
+
+void ColorWheel::paintEvent(QPaintEvent *) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform);
-    const int count = int(m_images.size());
-    // The first clip in front, the others stacked up and to the right.
-    for (int index = count - 1; index >= 0; --index) {
-        const QRectF tile(index * 4.0 + 0.5, 4.0 * (count - 1 - index) + 0.5, 63.0, 35.0);
-        QPainterPath path;
-        path.addRoundedRect(tile, 4.0, 4.0);
-        painter.save();
-        painter.setClipPath(path);
-        painter.fillRect(tile, theme.thumbnail);
-        const QImage &image = m_images.at(index);
-        if (!image.isNull()) {
-            // Cover the tile, centred.
-            const QSizeF scaled = QSizeF(image.size()).scaled(tile.size(), Qt::KeepAspectRatioByExpanding);
-            const QRectF target(tile.center() - QPointF(scaled.width(), scaled.height()) / 2.0, scaled);
-            painter.drawImage(target, image);
-        }
-        painter.restore();
-        painter.setPen(QPen(theme.borderSubtle, 1.0));
-        painter.setBrush(Qt::NoBrush);
-        painter.drawPath(path);
-    }
+    const QRectF disc(0, 0, kSize, kSize);
+    // The ring: an inset 2-point line in `track`.
+    painter.setPen(QPen(col(tokens::track), kRing));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawEllipse(disc.adjusted(kRing / 2.0, kRing / 2.0, -kRing / 2.0, -kRing / 2.0));
+    // The crosshair, 1 point and 48 long, at 35 (the mockup's left/top 35).
+    painter.setRenderHint(QPainter::Antialiasing, false);
+    const int from = (kSize - kCross) / 2;
+    painter.fillRect(QRect(kSize / 2 - 1, from, 1, kCross), col(tokens::track));
+    painter.fillRect(QRect(from, kSize / 2 - 1, kCross, 1), col(tokens::track));
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QPointF centre = puckCenter();
+    paintKnobShadow(painter, centre, kPuck / 2.0);
+    painter.setBrush(isEnabled() ? col(tokens::ink) : col(dis));
+    painter.drawEllipse(centre, kPuck / 2.0, kPuck / 2.0);
+}
+
+void ColorWheel::mousePressEvent(QMouseEvent *event) {
+    if (event->button() != Qt::LeftButton || !isEnabled()) return;
+    m_pressed = true;
+    m_dragging = false;
+    m_pressAt = event->position();
+    m_start = m_puck;
+}
+
+void ColorWheel::mouseMoveEvent(QMouseEvent *event) {
+    if (!m_pressed) return;
+    const QPointF delta = event->position() - m_pressAt;
+    if (!m_dragging && std::hypot(delta.x(), delta.y()) < kClickSlop) return;
+    m_dragging = true;
+    // ⌥: a tenth as far, for fine trims.
+    const double rate = event->modifiers().testFlag(Qt::AltModifier) ? 0.1 : 1.0;
+    QPointF puck = m_start + delta * rate / kTravel;
+    const double length = std::hypot(puck.x(), puck.y());
+    if (length > 1.0) puck /= length;
+    m_puck = puck;
+    update();
+    emit puckMoved(m_puck);
+}
+
+void ColorWheel::mouseReleaseEvent(QMouseEvent *) {
+    if (!m_pressed) return;
+    m_pressed = false;
+    const bool dragged = m_dragging;
+    m_dragging = false;
+    if (dragged && m_puck != m_start) emit puckReleased(m_puck, m_start);
+}
+
+void ColorWheel::mouseDoubleClickEvent(QMouseEvent *event) {
+    if (event->button() != Qt::LeftButton || !isEnabled()) return;
+    m_pressed = false;
+    m_dragging = false;
+    const QPointF start = m_puck;
+    m_puck = QPointF();
+    update();
+    if (start != m_puck) emit puckReleased(m_puck, start);
 }
 
 // ----------------------------------------------------------------- KindSquare
@@ -1812,20 +1538,14 @@ void KindSquare::paintEvent(QPaintEvent *) {
     painter.setPen(Qt::NoPen);
     painter.setBrush(m_color);
     painter.drawRoundedRect(QRectF(rect()), 2.0, 2.0);
-    // A 1px inner edge of the secondary ink at 40%, so a dark clip colour
-    // still reads against the dark panel (3:1 for the shape).
-    QColor edge = editorTheme().textSecondary;
-    edge.setAlphaF(0.4);
-    painter.setPen(QPen(edge, 1.0));
-    painter.setBrush(Qt::NoBrush);
-    painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 1.5, 1.5);
 }
 
 // ------------------------------------------------------------------ NameLabel
 
 NameLabel::NameLabel(QWidget *parent) : QWidget(parent) {
     setObjectName(QStringLiteral("inspectorName"));
-    setFont(sized(font(), 14, QFont::DemiBold));
+    setFont(tokens::font(tokens::title));
+    setStyleSheet(QStringLiteral("QWidget#inspectorName { %1 }").arg(inspectorFontCss(tokens::title)));
     setFixedHeight(20);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     setFocusPolicy(Qt::TabFocus);
@@ -1851,12 +1571,12 @@ void NameLabel::paintEvent(QPaintEvent *) {
     if (m_editor && !m_editor->isHidden()) return;
     QPainter painter(this);
     painter.setFont(font());
-    painter.setPen(editorTheme().textStrong);
+    painter.setPen(col(tokens::ink));
     // Shortened in the middle, so a long name keeps both its start and the
-    // end that tells takes apart ("Interview – …take 3").
+    // end that tells takes apart.
     painter.drawText(rect(), Qt::AlignLeft | Qt::AlignVCenter, fontMetrics().elidedText(m_name, Qt::ElideMiddle, width()));
     if (hasFocus()) {
-        painter.setPen(QPen(editorTheme().focusRing, 1.0));
+        painter.setPen(QPen(col(accent), 1.0));
         painter.drawLine(QPointF(0, height() - 0.5), QPointF(std::min<double>(width(), fontMetrics().horizontalAdvance(m_name)), height() - 0.5));
     }
 }
@@ -1867,6 +1587,7 @@ void NameLabel::beginEditing() {
         m_editor = new QLineEdit(this);
         m_editor->setObjectName(QStringLiteral("inspectorNameEditor"));
         m_editor->setFont(font());
+        m_editor->setStyleSheet(editorSheet());
         m_editor->installEventFilter(this);
     }
     m_editor->setGeometry(rect().adjusted(-4, -2, 0, 2));

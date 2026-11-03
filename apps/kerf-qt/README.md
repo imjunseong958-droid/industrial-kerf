@@ -27,7 +27,9 @@ The positional arguments may also be supplied as `KERF_PROJECT_DIR` and
 installed app carries one), else the one on the `PATH`. Without a project, Kerf opens the project launcher instead
 (`KERFD_BIN=/path/to/kerfd target/qt/kerf-qt`). For a quick visual smoke
 run, add `--screenshot /tmp/kerf.png --quit-after-ms 900`; without a project
-it captures the launcher.
+it captures the launcher. `--window-size 1600x1000` sizes the window,
+`--workspace Finish` opens it in that workspace, and `--settings-dir DIR`
+keeps the run's settings in DIR (INI files) instead of the user's.
 
 The editor and the launcher follow the system's light or dark appearance and
 switch live when it changes; `KERF_COLOR_SCHEME=light` or `dark` picks one

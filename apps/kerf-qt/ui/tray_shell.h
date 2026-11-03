@@ -12,6 +12,7 @@
 
 class QAbstractButton;
 class QAction;
+class QHBoxLayout;
 class QLabel;
 
 namespace kerf::shell {
@@ -27,11 +28,15 @@ public:
     TrayPane(const QString &objectName, const QString &name, QLabel *meta, QWidget *body, QWidget *parent = nullptr);
     void setHighlighted(bool on);
     bool highlighted() const { return m_highlighted; }
+    // A widget at the header's right end, after its spacer (Waveform's
+    // "Luma ⌄", QC's standards).
+    void addTrailing(QWidget *widget);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
 
 private:
+    QHBoxLayout *m_header = nullptr;
     bool m_highlighted = false;
 };
 

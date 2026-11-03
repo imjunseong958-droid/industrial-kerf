@@ -4,6 +4,7 @@
 #include "test_registry.h"
 
 #include "ask_prompt.h"
+#include "bridge.h"
 #include "chat_panel.h"
 #include "command_registry.h"
 #include "device_frame.h"
@@ -25,6 +26,11 @@
 #include "toolbar_widgets.h"
 #include "viewer_widget.h"
 #include "workspace.h"
+#include "design_tokens.h"
+#include "editor_bus.h"
+#include "ui/browser_panel.h"
+#include "ui/components.h"
+#include "ui/wiring/bin_wiring.h"
 
 #include <QAbstractItemView>
 #include <QAccessible>
@@ -76,6 +82,7 @@
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSignalSpy>
+#include <QStackedWidget>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QStyleOptionViewItem>
@@ -217,8 +224,8 @@ private slots:
     void effectsPanelShowsCardsAndAddsToTheSelectedClip() {
         QSettings().remove(QStringLiteral("workspace"));
         MainWindow window{QString(), QString()};
-        // The Editing layout keeps Effects behind the Project bin.
-        QVERIFY(!window.m_workspace->panel(QStringLiteral("effects"))->isClosed());
+        // The browser is in the band, its Effects page in front.
+        QVERIFY(!window.m_workspace->panel(QStringLiteral("browser"))->isClosed());
         QVERIFY(window.m_commands->action(QStringLiteral("window.effects")));
         window.setConnection(QStringLiteral("ready"));
         window.applySnapshot(QJsonObject{{"revision", 3}, {"duration", 4}, {"timeline", QJsonObject{
@@ -228,28 +235,38 @@ private slots:
                     QJsonObject{{"id", "c1"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 0.0},
                                 {"duration", 2.0}}}}}}}}}});
         EffectsPanel *panel = window.m_effects;
-        // The whole effects catalog is offered, by category and words.
+        // The whole effects catalog is offered (picture and sound), by
+        // category and words; transitions and generators are not effects.
         QVERIFY(panel->m_items.size() > 100);
         QVERIFY(panel->m_items.contains(QStringLiteral("light.edgeglow")));
+        QVERIFY(panel->m_items.contains(QStringLiteral("audio.limiter")));
         QVERIFY(!panel->m_items.contains(QStringLiteral("push")));
+        QVERIFY(!panel->m_items.contains(QStringLiteral("title")));
         panel->m_search->setText(QStringLiteral("neon"));
         QVERIFY(!panel->m_items.value(QStringLiteral("light.edgeglow"))->isHidden());
         QVERIFY(panel->m_items.value(QStringLiteral("channel.invert"))->isHidden());
+        // With nothing selected the cards show the program's clip under the playhead.
+        QCOMPARE(panel->previewClip(), QStringLiteral("c1"));
         window.selectClip(QStringLiteral("c1"));
         QCOMPARE(panel->m_clip, QStringLiteral("c1"));
         QVERIFY(panel->m_picture);
-        // The cards shown ask for previews of themselves on the clip.
+        // The cards shown ask for previews of themselves on the clip, at
+        // twice the thumb's width.
         panel->requestPreviews();
         QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("effect_previews"));
         QCOMPARE(window.m_lastCommand.value("clip").toString(), QStringLiteral("c1"));
+        QCOMPARE(window.m_lastCommand.value("width").toInt(), EffectsPanel::kPreviewWidth);
+        QCOMPARE(window.m_lastCommand.value("key").toString(), QStringLiteral("card"));
         QVERIFY(window.m_lastCommand.value("effects").toArray().contains(QJsonValue("light.edgeglow")));
         QImage red(16, 9, QImage::Format_RGBA8888);
         red.fill(Qt::red);
-        window.handleEvent(QJsonObject{{"type", "effect_preview"}, {"clip", "c1"}, {"fx", "light.edgeglow"},
+        window.handleEvent(QJsonObject{{"type", "effect_preview"}, {"clip", "c1"}, {"fx", "light.edgeglow"}, {"key", "card"},
                                        {"width", 16}, {"height", 9},
                                        {"rgba", QString::fromLatin1(QByteArray(reinterpret_cast<const char *>(red.constBits()), 16 * 9 * 4).toBase64())}});
-        const QImage card = panel->m_items.value(QStringLiteral("light.edgeglow"))->icon().pixmap(QSize(160, 90)).toImage();
+        const QImage card = panel->m_items.value(QStringLiteral("light.edgeglow"))->icon().pixmap(EffectsPanel::kCard).toImage();
         QCOMPARE(card.pixelColor(card.width() / 2, card.height() / 2), QColor(Qt::red));
+        // A card with its preview is not asked for again.
+        QVERIFY(!panel->shownEffects().contains(QStringLiteral("light.edgeglow")));
         // Double-click adds the effect to the selected clip.
         emit panel->m_cards->itemActivated(panel->m_items.value(QStringLiteral("light.edgeglow")));
         const QJsonObject op = window.m_lastCommand.value("ops").toArray().first().toObject();
@@ -452,8 +469,9 @@ private slots:
         QCOMPARE(at(QJsonObject{{"in", 0.0}, {"out", 4.0}, {"duration", 2.0}, {"speed", 2.0}, {"reverse", true}}, 1.0), 2.0);
     }
 
-    // Bin tiles fit a poster at its own shape, the bars in the tile's colour
-    // (not black from the picture), and draw a sound's waveform from its peaks.
+    // Bin thumbs (72 x 38 on black) fit a poster at its own shape, draw a
+    // sound's waveform on raised, a checkerboard under media with alpha, and
+    // the duration in seconds and frames at the sequence's rate.
     void binTilesFitPostersAtTheirShape() {
         MediaArtwork artwork;
         QImage vertical(79, 140, QImage::Format_RGB32);
@@ -461,26 +479,219 @@ private slots:
         artwork.frames.insert(QStringLiteral("tall"), vertical);
         artwork.peaks.insert(QStringLiteral("snd"), fullScalePeaks(4.0));
         ProjectPanel bin(&artwork);
+        bin.setFps(25);
         bin.setSources(QJsonArray{
-            QJsonObject{{"id", "tall"}, {"path", "media/tall.mov"}, {"width", 1080}, {"height", 1920}, {"duration", 4}},
-            QJsonObject{{"id", "snd"}, {"path", "media/voice.wav"}, {"duration", 4}, {"hasAudio", true}}});
-        const QImage tall = bin.m_list->item(0)->icon().pixmap(ProjectPanel::kThumbnail).toImage();
-        const QPoint centre(ProjectPanel::kThumbnail.width() / 2, ProjectPanel::kThumbnail.height() / 2);
-        QCOMPARE(tall.pixelColor(centre), QColor("#e87342"));
-        // 9:16 in a 70px tall tile is 39px wide: bars either side.
-        QCOMPARE(tall.pixelColor(centre.x() - 22, centre.y()), editorTheme().thumbnail);
-        QCOMPARE(tall.pixelColor(centre.x() + 22, centre.y()), editorTheme().thumbnail);
-        QCOMPARE(tall.pixelColor(centre.x() - 18, centre.y()), QColor("#e87342"));
-        const QImage sound = bin.m_list->item(1)->icon().pixmap(ProjectPanel::kThumbnail).toImage();
-        QVERIFY(isWaveInk(sound.pixelColor(centre.x(), centre.y() + 10)));
-        QCOMPARE(sound.pixelColor(2, centre.y()), editorTheme().audioTile);
+            QJsonObject{{"id", "tall"}, {"path", "media/tall.mov"}, {"width", 1080}, {"height", 1920}, {"duration", 9.8}},
+            QJsonObject{{"id", "snd"}, {"path", "media/voice.wav"}, {"duration", 4}, {"hasAudio", true}},
+            QJsonObject{{"id", "logo"}, {"path", "media/logo.mov"}, {"width", 1920}, {"height", 1080}, {"duration", 3.44}},
+            QJsonObject{{"id", "hiss"}, {"path", "media/steam.wav"}, {"duration", 4}, {"hasAudio", true}}});
+        bin.setMediaInfo(QJsonObject{{"logo", QJsonObject{{"codec", "prores"}, {"pixFmt", "yuva444p12le"}}}});
+        const auto tile = [&bin](int row) { return bin.m_list->item(row)->icon().pixmap(ProjectPanel::kThumbnail).toImage(); };
+        const QImage tall = tile(0);
+        QCOMPARE(tall.size() / tall.devicePixelRatio(), ProjectPanel::kThumbnail);
+        const QPoint centre(36, 14);
+        QCOMPARE(tall.pixelColor(centre * tall.devicePixelRatio()), QColor("#e87342"));
+        // 9:16 in a 38 pt tall thumb is 21 wide: black either side.
+        QCOMPARE(tall.pixelColor(QPoint(centre.x() - 14, centre.y()) * tall.devicePixelRatio()), QColor(Qt::black));
+        QCOMPARE(tall.pixelColor(QPoint(centre.x() + 14, centre.y()) * tall.devicePixelRatio()), QColor(Qt::black));
+        QCOMPARE(tall.pixelColor(QPoint(centre.x() - 8, centre.y()) * tall.devicePixelRatio()), QColor("#e87342"));
+        // The duration badge at right 4, bottom 4, frames at 25p.
+        QCOMPARE(bin.m_list->item(0)->data(Qt::UserRole + 1).toString(), QStringLiteral("9s20f"));
+        const QColor badge = tall.pixelColor(QPoint(66, 31) * tall.devicePixelRatio());
+        QVERIFY2(badge.red() < 0x60 || badge == QColor(Qt::white), qPrintable(badge.name()));
+        const QImage sound = tile(1);
+        QVERIFY(isWaveInk(sound.pixelColor(QPoint(20, 19) * sound.devicePixelRatio())));
+        // Sound whose peaks have not come yet: raised, with the audio symbol.
+        const QImage hiss = tile(3);
+        QCOMPARE(hiss.pixelColor(QPoint(2, 2) * hiss.devicePixelRatio()).rgb(), tokens::raised);
+        // Alpha media: the 8 pt checkerboard (no picture decoded yet).
+        const QImage logo = tile(2);
+        QCOMPARE(logo.pixelColor(QPoint(2, 2) * logo.devicePixelRatio()).rgb(), qRgb(0x26, 0x26, 0x26));
+        QCOMPARE(logo.pixelColor(QPoint(10, 2) * logo.devicePixelRatio()).rgb(), qRgb(0x30, 0x30, 0x30));
+        QVERIFY(ProjectPanel::pixelFormatHasAlpha(QStringLiteral("rgba")));
+        QVERIFY(!ProjectPanel::pixelFormatHasAlpha(QStringLiteral("yuv420p")));
+        QCOMPARE(ProjectPanel::badgeText(30.0, 25), QStringLiteral("30s00f"));
+        QCOMPARE(ProjectPanel::badgeText(6.48, 25), QStringLiteral("6s12f"));
+        QCOMPARE(ProjectPanel::badgeText(75.5, 25), QStringLiteral("1m15s"));
+        QCOMPARE(ProjectPanel::badgeText(3725, 24), QStringLiteral("1h02m"));
+    }
+
+    // The bin at its 272 (271 inside its seam): a 28 strip, the grid 192 on
+    // the well, 3 columns of 72, 12 apart, padded 8 16; items 56 tall with
+    // rows 8 apart; Roles in the rest.
+    void binGridIsThreeColumnsOf72At272() {
+        ProjectPanel bin(nullptr);
+        QJsonArray sources;
+        for (int index = 0; index < 12; ++index)
+            sources.append(QJsonObject{{"id", QStringLiteral("m%1").arg(index)}, {"path", QStringLiteral("media/clip%1.mov").arg(index)},
+                                       {"width", 1920}, {"height", 1080}, {"duration", 4}});
+        bin.setSources(sources);
+        QCOMPARE(bin.mediaCount(), 12);
+        bin.resize(tokens::layout::bin - 1, tokens::layout::band - 1);
+        bin.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&bin));
+        QCoreApplication::processEvents();
+        QCOMPARE(bin.m_pages->height(), ProjectPanel::kGridHeight);
+        QCOMPARE(bin.m_pages->y(), tokens::layout::strip);
+        const auto thumb = [&bin](int row) {
+            const QRect cell = bin.m_list->visualItemRect(bin.m_list->item(row));
+            return QRect(bin.m_list->viewport()->mapTo(&bin, cell.topLeft()), ProjectPanel::kThumbnail);
+        };
+        QCOMPARE(thumb(0).topLeft(), QPoint(ProjectPanel::kSidePadding, tokens::layout::strip + ProjectPanel::kTopPadding));
+        QCOMPARE(thumb(1).left(), ProjectPanel::kSidePadding + 72 + 12);
+        QCOMPARE(thumb(2).left(), ProjectPanel::kSidePadding + 2 * (72 + 12));
+        QCOMPARE(thumb(3).left(), ProjectPanel::kSidePadding);
+        QCOMPARE(thumb(3).top() - thumb(0).top(), ProjectPanel::kItemHeight + ProjectPanel::kRowGap);
+        // The third column ends inside the bin, clear of its edge.
+        QVERIFY(thumb(2).right() < bin.width() - 1);
+        // The list view keeps the same media, 24 pt rows.
+        bin.setListView(true);
+        QCoreApplication::processEvents();
+        QCOMPARE(bin.m_list->visualItemRect(bin.m_list->item(1)).top() - bin.m_list->visualItemRect(bin.m_list->item(0)).top(),
+                 ProjectPanel::kListRow);
+        QCOMPARE(bin.m_viewButton->iconName(), QStringLiteral("g-grid"));
+        QCOMPARE(ui::tipName(bin.m_viewButton), QStringLiteral("Grid view"));
+        bin.setListView(false);
+        QCOMPARE(ui::tipName(bin.m_viewButton), QStringLiteral("List view"));
+        QCOMPARE(ui::tipShortcut(bin.m_viewButton), QStringLiteral("⌘⌥2"));
+        // Search shows its field and narrows the media by name.
+        bin.focusSearch();
+        QVERIFY(bin.m_searchRow->isVisible());
+        bin.m_search->setText(QStringLiteral("clip1"));
+        int shown = 0;
+        for (int row = 0; row < bin.m_list->count(); ++row) shown += bin.m_list->item(row)->isHidden() ? 0 : 1;
+        QCOMPARE(shown, 3); // clip1, clip10, clip11
+        QTest::keyClick(bin.m_search, Qt::Key_Escape);
+        QVERIFY(!bin.m_searchRow->isVisible());
+        QVERIFY(bin.m_search->text().isEmpty());
+    }
+
+    // The Index tab: the chosen media's shots (its cuts as ranges), silences
+    // and loudest moments from media_index; a row shows the media in the
+    // Source viewer there.
+    void indexRowsComeFromTheMediaIndex() {
+        QTemporaryDir project;
+        MainWindow window{project.path(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(QJsonObject{{"revision", 2}, {"duration", 10}, {"timeline", QJsonObject{
+            {"fps", 25}, {"tracks", QJsonArray{}}, {"sources", QJsonArray{
+                QJsonObject{{"id", "vo"}, {"path", "media/VO_take3.wav"}, {"duration", 10.4}, {"hasAudio", true}, {"rate", "25"}, {"fps", 25}},
+                QJsonObject{{"id", "b3"}, {"path", "media/B003_C011.mov"}, {"width", 1920}, {"height", 1080}, {"duration", 9.8}, {"fps", 25}}}}}}});
+        ProjectPanel *bin = window.m_projectPanel;
+        QSignalSpy wanted(bin, &ProjectPanel::indexWanted);
+        // Nothing chosen: the Index says how to get one.
+        bin->setTab(ProjectPanel::Tab::Index);
+        QVERIFY(bin->m_indexEmpty->text().contains(QStringLiteral("Choose media")));
+        QCOMPARE(wanted.size(), 0);
+        bin->setCurrentMedia(QStringLiteral("vo"));
+        QCOMPARE(wanted.size(), 1);
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_index"}, {"media", "vo"}}));
+        QVERIFY(bin->m_indexEmpty->text().startsWith(QStringLiteral("Indexing VO_take3")));
+        // Asked once.
+        bin->setTab(ProjectPanel::Tab::Media);
+        bin->setTab(ProjectPanel::Tab::Index);
+        QCOMPARE(wanted.size(), 1);
+        window.handleEvent(QJsonObject{{"type", "media_index"}, {"media", "vo"}, {"cuts", QJsonArray{2.0, 5.48}},
+                                       {"ranges", QJsonArray{QJsonObject{{"start", 0.0}, {"end", 2.0}}, QJsonObject{{"start", 2.0}, {"end", 5.48}},
+                                                             QJsonObject{{"start", 5.48}, {"end", 10.4}}}},
+                                       {"silences", QJsonArray{QJsonArray{6.0, 6.8}}}, {"loudest", QJsonArray{3.2}}});
+        QStringList rows;
+        for (int row = 0; row < bin->m_index->count(); ++row) {
+            const QListWidgetItem *item = bin->m_index->item(row);
+            rows << (item->text() + QLatin1Char('|') + item->data(Qt::UserRole + 3).toString());
+        }
+        QCOMPARE(rows, (QStringList{"3 shots|", "Shot 1|00:00:00:00–00:00:02:00", "Shot 2|00:00:02:00–00:00:05:12",
+                                    "Shot 3|00:00:05:12–00:00:10:10", "1 silence|", "Silence 1|00:00:06:00–00:00:06:20",
+                                    "Loudest moments|", "Loudest 1|00:00:03:05"}));
+        QVERIFY(bin->m_index->isVisibleTo(bin) && !bin->m_indexEmpty->isVisibleTo(bin));
+        // Shot 2 shows the media in the Source viewer at its start.
+        emit bin->m_index->itemClicked(bin->m_index->item(2));
+        QCOMPARE(window.m_sourceMonitor->mediaId(), QStringLiteral("vo"));
+        QCOMPARE(window.m_sourceMonitor->position(), 2.0);
+        // Without ranges, the shots are the spans between the cuts; a
+        // refusal is shown in place of the rows.
+        bin->setMediaIndex(QJsonObject{{"media", "vo"}, {"cuts", QJsonArray{4.0}}});
+        QCOMPARE(bin->m_index->item(0)->text(), QStringLiteral("2 shots"));
+        QCOMPARE(bin->m_index->item(2)->data(Qt::UserRole + 3).toString(), QStringLiteral("00:00:04:00–00:00:10:10"));
+        bin->setCurrentMedia(QStringLiteral("b3"));
+        window.handleEvent(QJsonObject{{"type", "error"}, {"command", "media_index"}, {"media", "b3"}, {"message", "B003_C011.mov is offline"}});
+        QCOMPARE(bin->m_indexEmpty->text(), QStringLiteral("B003_C011.mov is offline"));
+        QVERIFY(bin->m_index->isHidden());
+    }
+
+    // Roles: the program's tracks grouped by role, tracks without one
+    // under their kind; a role's box switches its tracks with one edit, and
+    // Edit roles… sends set-track role for each track changed.
+    void rolesGroupTracksAndSwitchThem() {
+        const auto track = [](const char *id, const char *type, const char *role, bool assigned, bool enabled = true) {
+            QJsonObject value{{"id", id}, {"type", type}, {"roleAssigned", assigned}, {"enabled", enabled}, {"clips", QJsonArray{}}};
+            if (role) value.insert("role", role);
+            return value;
+        };
+        const QJsonArray tracks{track("V1", "video", "video", false), track("V2", "video", "video", false),
+                                track("V3", "video", "titles", true), track("V4", "video", "titles", true, false),
+                                track("V5", "video", "Titles", true), track("A1", "audio", "dialogue", false),
+                                track("A2", "audio", "music", true), track("A3", "audio", "effects", true),
+                                track("A4", "audio", "dialogue", true), track("S1", "subtitle", nullptr, false)};
+        const QList<ProjectPanel::RoleGroup> groups = ProjectPanel::roleGroups(tracks);
+        QStringList seen;
+        for (const ProjectPanel::RoleGroup &group : groups) seen << QStringLiteral("%1 %2 %3").arg(group.name, group.tracks.join(QLatin1Char(' ')), group.enabled ? "on" : "off");
+        QCOMPARE(seen, (QStringList{"Video V1 V2 on", "Titles V3 V4 V5 off", "Dialogue A1 A4 on", "Music A2 on", "Effects A3 on",
+                                    "Captions S1 on"}));
+
+        QSettings().remove(QStringLiteral("workspace"));
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(QJsonObject{{"revision", 9}, {"duration", 30}, {"timeline", QJsonObject{{"fps", 25}, {"tracks", tracks}}}});
+        ProjectPanel *bin = window.m_projectPanel;
+        QCOMPARE(bin->m_roleChecks.size(), 6);
+        ui::CheckBox *titles = bin->findChild<ui::CheckBox *>(QStringLiteral("binRoleCheck_titles"));
+        QVERIFY(titles);
+        QVERIFY(!titles->isChecked());
+        titles->click();
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("edit"));
+        QCOMPARE(window.m_lastCommand.value("revision").toInt(), 9);
+        QCOMPARE(window.m_lastCommand.value("ops").toArray(), BinWiring::enableOps({"V3", "V4", "V5"}, true));
+        // The box flipped before kerfd answered; a snapshot with the tracks
+        // as they were (the edit refused) puts it back.
+        QVERIFY(titles->isChecked());
+        window.applySnapshot(QJsonObject{{"revision", 10}, {"duration", 30}, {"timeline", QJsonObject{{"fps", 25}, {"tracks", tracks}}}});
+        QCOMPARE(bin->findChild<ui::CheckBox *>(QStringLiteral("binRoleCheck_titles")), titles);
+        QVERIFY(!titles->isChecked());
+        QCOMPARE(BinWiring::enableOps({"A2"}, false).first().toObject(),
+                 (QJsonObject{{"op", "set-track"}, {"track", "A2"}, {"enabled", false}}));
+        // Edit roles…: A2 becomes Effects, A4 goes back to its kind's own.
+        QCOMPARE(BinWiring::roleChoices(tracks).mid(0, 5), (QStringList{"Video", "Titles", "Dialogue", "Music", "Effects"}));
+        QTimer::singleShot(0, &window, [&window] {
+            auto *dialog = window.findChild<QDialog *>(QStringLiteral("editRolesDialog"));
+            QVERIFY(dialog);
+            QTimer::singleShot(2000, dialog, &QDialog::reject);
+            auto *music = dialog->findChild<QComboBox *>(QStringLiteral("roleFor_A2"));
+            auto *voice = dialog->findChild<QComboBox *>(QStringLiteral("roleFor_A4"));
+            auto *captions = dialog->findChild<QComboBox *>(QStringLiteral("roleFor_S1"));
+            QVERIFY(music && voice && captions);
+            QCOMPARE(music->currentText(), QStringLiteral("Music"));
+            QCOMPARE(voice->currentText(), QStringLiteral("Dialogue"));
+            QCOMPARE(captions->currentIndex(), 0);
+            QCOMPARE(captions->currentText(), QStringLiteral("Captions (default)"));
+            music->setCurrentIndex(music->findText(QStringLiteral("Effects")));
+            voice->setCurrentIndex(0);
+            dialog->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->click();
+        });
+        window.m_lastCommand = {};
+        bin->editRolesButton()->click();
+        QStringList ops;
+        for (const QJsonValue &op : window.m_lastCommand.value("ops").toArray())
+            ops << QString::fromUtf8(QJsonDocument(op.toObject()).toJson(QJsonDocument::Compact));
+        ops.sort();
+        QCOMPARE(ops, (QStringList{R"({"op":"set-track","role":"","track":"A4"})", R"({"op":"set-track","role":"effects","track":"A2"})"}));
     }
 
     void presetsPanelListsAppliesAndSavesTheLibrary() {
         QSettings().remove(QStringLiteral("workspace"));
         QTemporaryDir project;
         MainWindow window{project.path(), QString()};
-        // The Editing layout keeps Presets behind the Project bin.
+        // Presets is a page of the browser in the band.
         QVERIFY(window.m_commands->action(QStringLiteral("window.presets"))->isChecked());
         QVERIFY(!window.m_workspace->panel(QStringLiteral("presets"))->isClosed());
         PresetsPanel *panel = window.m_presets;
@@ -495,7 +706,12 @@ private slots:
                         {"texts", QJsonObject{{"c4", "Title"}}}},
             QJsonObject{{"path", "presets/broken.kerfpreset"}, {"name", "broken"}, {"error", "line 3: unknown statement"}}}}});
         QCOMPARE(panel->m_list->count(), 2);
-        QVERIFY(panel->m_list->item(0)->text().startsWith(QStringLiteral("Intro\n2 slots · 1 text · jun · ")));
+        // 44 pt rows: the name, then clips · slots · texts · date.
+        QVERIFY2(panel->m_list->item(0)->text().startsWith(QStringLiteral("Intro\n3 clips · 2 slots · 1 text · ")),
+                 qPrintable(panel->m_list->item(0)->text()));
+        QVERIFY(panel->m_list->item(0)->toolTip().contains(QStringLiteral("Saved by jun")));
+        QCOMPARE(panel->m_count->text(), QStringLiteral("2 items"));
+        QCOMPARE(panel->m_list->visualItemRect(panel->m_list->item(0)).height(), PresetsPanel::kRowHeight);
         QVERIFY(panel->m_list->item(0)->toolTip().contains(QStringLiteral("slot1 · 4.00 s · picture and sound · 2 clips")));
         QVERIFY(panel->m_list->item(1)->text().contains(QStringLiteral("line 3: unknown statement")));
         panel->m_list->setCurrentRow(1);
@@ -564,8 +780,7 @@ private slots:
         QCOMPARE(window.m_commands->reason(QStringLiteral("collab.consolidate")), QStringLiteral("All media is inside the project folder"));
     }
 
-    // An unreadable preset's red is the appearance's own after a switch,
-    // not the one it was listed in.
+    // An unreadable preset's name is in neg, and still reads on the chrome.
     void unreadablePresetsTurnRedInEitherAppearance() {
         PresetsPanel panel;
         panel.setLibrary(QJsonObject{{"presets", QJsonArray{
@@ -573,12 +788,10 @@ private slots:
             QJsonObject{{"path", "presets/intro.kerfpreset"}, {"name", "Intro"}, {"slots", QJsonArray{}}}}}}, QDir::tempPath());
         QListWidgetItem *unreadable = panel.m_list->item(0);
         QListWidgetItem *readable = panel.m_list->item(1);
-        QCOMPARE(unreadable->foreground().color(), editorTheme().error);
-        {
-            QCOMPARE(unreadable->foreground().color(), editorTheme().error);
-            QVERIFY(contrastRatio(unreadable->foreground().color(), editorTheme().well) >= 4.5);
-            QVERIFY(!readable->data(Qt::ForegroundRole).isValid());
-        }
+        QCOMPARE(unreadable->foreground().color(), tokens::color(tokens::neg));
+        QVERIFY(contrastRatio(unreadable->foreground().color(), tokens::color(tokens::chrome)) >= 4.5);
+        QVERIFY(!readable->data(Qt::ForegroundRole).isValid());
+        QCOMPARE(PresetsPanel::metaLine(QJsonObject{{"error", "bad"}}), QStringLiteral("Cannot be read: bad"));
     }
 
     // Answer the next modal question with `button`, checking that it asks `text`.
@@ -651,6 +864,287 @@ private slots:
         });
         window.handleEvent(QJsonObject{{"type", "error"}, {"message", exists}});
         QCOMPARE(window.m_errorMessage->text(), exists);
+    }
+    // The category menu counts the catalog: every picture effect, each of
+    // its categories in catalog order, then the sound effects; the count
+    // follows the category and the search.
+    void browserCategoriesCountTheCatalog() {
+        const QJsonArray catalog{
+            QJsonObject{{"kind", "effect"}, {"domain", "video"}, {"id", "color.board"}, {"name", "Color board"}, {"category", "Color"}},
+            QJsonObject{{"kind", "effect"}, {"domain", "video"}, {"id", "color.bw"}, {"name", "Black & white"}, {"category", "Color"}},
+            QJsonObject{{"kind", "effect"}, {"domain", "video"}, {"id", "blur.gaussian"}, {"name", "Gaussian blur"}, {"category", "Blur and sharpen"}},
+            QJsonObject{{"kind", "effect"}, {"domain", "audio"}, {"id", "audio.eq"}, {"name", "Channel EQ"}, {"category", "Audio"}},
+            QJsonObject{{"kind", "effect"}, {"domain", "audio"}, {"id", "audio.limiter"}, {"name", "Limiter"}, {"category", "Audio"}},
+            QJsonObject{{"kind", "transition"}, {"domain", "video"}, {"id", "dissolve"}, {"name", "Cross dissolve"}, {"category", "Transition"}},
+            QJsonObject{{"kind", "generator"}, {"domain", "video"}, {"id", "title"}, {"name", "A line of text. Position it with x and y"},
+                        {"category", "Generate"}}};
+        EffectsPanel effects;
+        effects.setCatalog(catalog);
+        QStringList rows;
+        for (const EffectsPanel::Category &category : effects.categories())
+            rows << QStringLiteral("%1%2 %3").arg(category.separatorBefore ? "— " : "", category.name).arg(category.count);
+        QCOMPARE(rows, (QStringList{"All video effects 3", "Color 2", "Blur and sharpen 1", "— All audio effects 2"}));
+        QCOMPARE(effects.category(), QStringLiteral("video"));
+        QCOMPARE(effects.m_count->text(), QStringLiteral("3 items"));
+        QCOMPARE(effects.m_categoryButton->text(), QStringLiteral("All video effects"));
+        QVERIFY(effects.m_categoryButton->hasChevron());
+        effects.setCategory(QStringLiteral("video:Color"));
+        QCOMPARE(effects.shownCount(), 2);
+        QCOMPARE(effects.m_categoryButton->text(), QStringLiteral("Color"));
+        effects.setCategory(QStringLiteral("audio"));
+        QCOMPARE(effects.m_count->text(), QStringLiteral("2 items"));
+        QVERIFY(effects.m_items.value(QStringLiteral("blur.gaussian"))->isHidden());
+        // Sound effects have no picture to preview.
+        effects.setClip(QStringLiteral("c1"), true);
+        QVERIFY(effects.shownEffects().isEmpty());
+        // The menu: a checked row per category, its count on the right.
+        std::unique_ptr<QMenu> menu(effects.categoryMenu());
+        QStringList items;
+        for (QAction *action : menu->actions())
+            items << (action->isSeparator() ? QStringLiteral("—") : action->text() + (action->isChecked() ? QStringLiteral(" ✓") : QString()));
+        QCOMPARE(items, (QStringList{"All video effects", "Color", "Blur and sharpen", "—", "All audio effects ✓"}));
+        menu->actions().at(1)->trigger();
+        QCOMPARE(effects.category(), QStringLiteral("video:Color"));
+        // Search narrows within the category; nothing found says so.
+        effects.focusSearch();
+        effects.m_search->setText(QStringLiteral("zebra"));
+        QCOMPARE(effects.m_count->text(), QStringLiteral("0 items"));
+        QVERIFY(effects.m_hint->text().contains(QStringLiteral("zebra")));
+        // No catalog (no engine): an empty state, not sample cards.
+        EffectsPanel none;
+        none.setCatalog({});
+        QVERIFY(none.m_hint->text().contains(QStringLiteral("catalog is not available")));
+        QVERIFY(!none.m_categoryButton->isEnabled());
+        // The real catalog: its generators are the Titles, and its sound
+        // effects count under All audio effects.
+        char *all = kerf_fx_catalog_all();
+        QVERIFY(all);
+        const QJsonArray real = QJsonDocument::fromJson(QByteArray(all)).array();
+        kerf_bridge_string_free(all);
+        EffectsPanel catalogEffects;
+        catalogEffects.setCatalog(real);
+        QVERIFY(catalogEffects.categories().constLast().key == QStringLiteral("audio"));
+        QVERIFY(catalogEffects.categories().constLast().count >= 3);
+        EffectsPanel catalogTitles(nullptr, EffectsPanel::Mode::Titles);
+        catalogTitles.setCatalog(real);
+        QVERIFY(catalogTitles.m_items.contains(QStringLiteral("title")));
+        QVERIFY(catalogTitles.m_items.contains(QStringLiteral("solid")));
+        QCOMPARE(catalogTitles.m_items.value(QStringLiteral("title"))->text(), QStringLiteral("A line of text"));
+        QCOMPARE(catalogTitles.categories().constFirst().name, QStringLiteral("All titles"));
+    }
+
+    // Hovering a thumb scrubs the effect's main parameter by the pointer's
+    // x: effect_previews with {fx, params}, at most once per 120 ms (the
+    // latest position going when the interval is up); its answer shows on
+    // the card, and leaving puts the resting thumb back.
+    void hoverScrubSendsEffectPreviewsWithParams() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(QJsonObject{{"revision", 3}, {"duration", 4}, {"timeline", QJsonObject{
+            {"fps", 24}, {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+                QJsonObject{{"id", "c1"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 0.0}, {"duration", 2.0}}}}}}}}}});
+        window.selectClip(QStringLiteral("c1"));
+        EffectsPanel *panel = window.m_effects;
+        qint64 clock = 1000;
+        panel->setClock([&clock] { return clock; });
+        const QJsonObject radius = EffectsPanel::mainParam(panel->m_fx.value(QStringLiteral("blur.gaussian")));
+        QCOMPARE(radius.value("name").toString(), QStringLiteral("radius"));
+        QCOMPARE(radius.value("max").toDouble(), 500.0);
+        const auto scrubbed = [&window] {
+            const QJsonObject entry = window.m_lastCommand.value("effects").toArray().first().toObject();
+            return entry.value("params").toObject().value("radius").toDouble();
+        };
+        panel->scrubAt(QStringLiteral("blur.gaussian"), 0.5);
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("effect_previews"));
+        QCOMPARE(window.m_lastCommand.value("clip").toString(), QStringLiteral("c1"));
+        QCOMPARE(window.m_lastCommand.value("key").toString(), QStringLiteral("scrub"));
+        QCOMPARE(window.m_lastCommand.value("effects").toArray().first().toObject().value("fx").toString(), QStringLiteral("blur.gaussian"));
+        QCOMPARE(window.m_lastCommand.value("effects").toArray().first().toObject().value("key").toString(), QStringLiteral("scrub"));
+        QCOMPARE(scrubbed(), 250.0);
+        // 50 ms later: held back, the latest position waiting.
+        window.m_lastCommand = {};
+        clock += 50;
+        panel->scrubAt(QStringLiteral("blur.gaussian"), 0.2);
+        panel->scrubAt(QStringLiteral("blur.gaussian"), 0.25);
+        QCOMPARE(window.m_lastCommand, QJsonObject{});
+        QVERIFY(panel->m_scrubTimer->isActive());
+        QCOMPARE(panel->m_scrubTimer->interval(), 70);
+        clock += 70;
+        panel->m_scrubTimer->stop();
+        panel->sendScrub();
+        QCOMPARE(scrubbed(), 125.0);
+        // The resting thumb, then the scrub's frame over it; leaving puts it back.
+        const auto rgba = [](const QColor &color) {
+            QImage image(16, 9, QImage::Format_RGBA8888);
+            image.fill(color);
+            return QString::fromLatin1(QByteArray(reinterpret_cast<const char *>(image.constBits()), 16 * 9 * 4).toBase64());
+        };
+        const auto cardCentre = [panel] {
+            const QImage card = panel->m_items.value(QStringLiteral("blur.gaussian"))->icon().pixmap(EffectsPanel::kCard).toImage();
+            return card.pixelColor(card.width() / 2, card.height() / 2);
+        };
+        window.handleEvent(QJsonObject{{"type", "effect_preview"}, {"clip", "c1"}, {"fx", "blur.gaussian"}, {"key", "card"},
+                                       {"width", 16}, {"height", 9}, {"rgba", rgba(Qt::blue)}});
+        // While the pointer is on the card the resting thumb waits.
+        QVERIFY(cardCentre() != QColor(Qt::blue));
+        window.handleEvent(QJsonObject{{"type", "effect_preview"}, {"clip", "c1"}, {"fx", "blur.gaussian"}, {"key", "scrub"},
+                                       {"width", 16}, {"height", 9}, {"rgba", rgba(Qt::green)}});
+        QCOMPARE(cardCentre(), QColor(Qt::green));
+        QCOMPARE(panel->m_base.value(QStringLiteral("blur.gaussian")).pixelColor(0, 0), QColor(Qt::blue));
+        panel->endScrub();
+        QCOMPARE(cardCentre(), QColor(Qt::blue));
+        QVERIFY(panel->scrubbing().isEmpty());
+        // An effect with no ranged number is not scrubbed.
+        window.m_lastCommand = {};
+        clock += 500;
+        panel->scrubAt(QStringLiteral("channel.invert"), 0.5);
+        if (EffectsPanel::mainParam(panel->m_fx.value(QStringLiteral("channel.invert"))).isEmpty()) QCOMPARE(window.m_lastCommand, QJsonObject{});
+    }
+
+    // effect_preview answers another region asked for (a proposal card's
+    // "before:"/"after:" frames) carry that request's params: no card takes
+    // them, and the page in front asks again for what it was cut short of.
+    void foreignPreviewKeysLeaveCardsAlone() {
+        QSettings().remove(QStringLiteral("workspace"));
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(QJsonObject{{"revision", 3}, {"duration", 4}, {"timeline", QJsonObject{
+            {"fps", 24}, {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+                QJsonObject{{"id", "c1"}, {"kind", "media"}, {"sourceId", "m1"}, {"timelineStart", 0.0}, {"duration", 2.0}}}}}}}}}});
+        window.selectClip(QStringLiteral("c1"));
+        window.m_browserPanel->setPage(BrowserPanel::Page::Effects);
+        EffectsPanel *panel = window.m_effects;
+        EffectsPanel *titles = window.m_binWiring->titles();
+        QCOMPARE(panel->previewClip(), QStringLiteral("c1"));
+        const QString fx = QStringLiteral("blur.gaussian");
+        QVERIFY(panel->m_items.contains(fx));
+        const auto rgba = [](const QColor &color) {
+            QImage image(16, 9, QImage::Format_RGBA8888);
+            image.fill(color);
+            return QString::fromLatin1(QByteArray(reinterpret_cast<const char *>(image.constBits()), 16 * 9 * 4).toBase64());
+        };
+        const auto preview = [&rgba](const QString &clip, const QString &id, const QString &key, const QColor &color) {
+            QJsonObject event{{"type", "effect_preview"}, {"clip", clip}, {"fx", id}, {"width", 16}, {"height", 9}, {"rgba", rgba(color)}};
+            if (!key.isNull()) event.insert("key", key);
+            return event;
+        };
+        const auto cardCentre = [panel, &fx] {
+            const QImage card = panel->m_items.value(fx)->icon().pixmap(EffectsPanel::kCard).toImage();
+            return card.pixelColor(card.width() / 2, card.height() / 2);
+        };
+        const QColor resting = cardCentre();
+        QVERIFY(panel->shownEffects().contains(fx));
+
+        // A proposal's frames for the shown clip and card: dropped, and the
+        // card is still one to ask for.
+        panel->m_previewTimer->stop();
+        window.handleEvent(preview("c1", fx, "after:p1", Qt::red));
+        window.handleEvent(preview("c1", fx, "before:p1", Qt::red));
+        QCOMPARE(cardCentre(), resting);
+        QVERIFY(!panel->m_base.contains(fx));
+        QVERIFY(panel->shownEffects().contains(fx));
+        // That other request stopped the page's own: it asks again soon.
+        QVERIFY(panel->m_previewTimer->isActive());
+        // The Titles page took nothing either.
+        QVERIFY(titles->m_base.isEmpty());
+
+        // The deprecated unkeyed call takes nothing.
+        panel->setPreview(QStringLiteral("c1"), fx, QImage(16, 9, QImage::Format_RGB32));
+        QVERIFY(!panel->m_base.contains(fx));
+        // The other page's key is not this one's either.
+        panel->setPreview(QStringLiteral("c1"), fx, QString::fromLatin1(EffectsPanel::kTitleKey), QImage(16, 9, QImage::Format_RGB32));
+        QVERIFY(!panel->m_base.contains(fx));
+
+        // The page's own answer is a thumb and asks for nothing more.
+        panel->m_previewTimer->stop();
+        window.handleEvent(preview("c1", fx, "card", Qt::blue));
+        QCOMPARE(cardCentre(), QColor(Qt::blue));
+        QCOMPARE(panel->m_base.value(fx).pixelColor(0, 0), QColor(Qt::blue));
+        QVERIFY(!panel->shownEffects().contains(fx));
+        QVERIFY(!panel->m_previewTimer->isActive());
+        // A later proposal frame leaves it as it is.
+        window.handleEvent(preview("c1", fx, "after:p1", Qt::red));
+        QCOMPARE(cardCentre(), QColor(Qt::blue));
+        QCOMPARE(panel->m_base.value(fx).pixelColor(0, 0), QColor(Qt::blue));
+        // An unkeyed answer (an older kerfd) is still a resting thumb.
+        window.handleEvent(preview("c1", fx, QString(), Qt::green));
+        QCOMPARE(panel->m_base.value(fx).pixelColor(0, 0), QColor(Qt::green));
+    }
+
+    // Titles: the catalog's generators, each previewed alone on black
+    // (effect_previews with clip "" and key title); adding one waits for an
+    // engine op that inserts generator clips, and says so.
+    void titlesListGeneratorsWithTheirPreviews() {
+        QSettings().remove(QStringLiteral("workspace"));
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        BrowserPanel *browser = window.m_browserPanel;
+        EffectsPanel *titles = window.m_binWiring->titles();
+        QVERIFY(titles);
+        QCOMPARE(browser->titles(), titles);
+        QVERIFY(browser->pageButton(BrowserPanel::Page::Titles)->isEnabled());
+        browser->pageButton(BrowserPanel::Page::Titles)->click();
+        QCOMPARE(browser->page(), BrowserPanel::Page::Titles);
+        QCOMPARE(browser->currentPage(), titles);
+        // Without a bridge the page does not ask on its own; asked, it
+        // wants every generator with a picture.
+        QVERIFY(window.m_lastCommand.value("type").toString() != QStringLiteral("effect_previews"));
+        titles->requestPreviews();
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("effect_previews"));
+        QCOMPARE(window.m_lastCommand.value("clip").toString(), QString());
+        QCOMPARE(window.m_lastCommand.value("key").toString(), QStringLiteral("title"));
+        const QJsonArray asked = window.m_lastCommand.value("effects").toArray();
+        QVERIFY(asked.contains(QJsonValue("title")) && asked.contains(QJsonValue("solid")));
+        // The adjustment layer has no picture.
+        QVERIFY(!asked.contains(QJsonValue("adjustment")));
+        QImage white(16, 9, QImage::Format_RGBA8888);
+        white.fill(Qt::white);
+        window.handleEvent(QJsonObject{{"type", "effect_preview"}, {"clip", ""}, {"fx", "title"}, {"key", "title"}, {"width", 16}, {"height", 9},
+                                       {"rgba", QString::fromLatin1(QByteArray(reinterpret_cast<const char *>(white.constBits()), 16 * 9 * 4).toBase64())}});
+        const QImage card = titles->m_items.value(QStringLiteral("title"))->icon().pixmap(EffectsPanel::kCard).toImage();
+        QCOMPARE(card.pixelColor(card.width() / 2, card.height() / 2), QColor(Qt::white));
+        // The Effects page did not take the generator's picture.
+        QVERIFY(!window.m_effects->m_items.contains(QStringLiteral("title")));
+        // Adding is not available yet: the cards say why and nothing is sent.
+        QVERIFY(!titles->addAvailable());
+        QVERIFY(titles->m_items.value(QStringLiteral("title"))->toolTip().contains(BinWiring::titleAddReason()));
+        QSignalSpy added(titles, &EffectsPanel::addRequested);
+        window.m_lastCommand = {};
+        emit titles->m_cards->itemActivated(titles->m_items.value(QStringLiteral("title")));
+        QCOMPARE(added.size(), 0);
+        QCOMPARE(window.m_lastCommand, QJsonObject{});
+        // Search follows the page in front.
+        browser->focusSearch();
+        QVERIFY(titles->m_searchRow->isVisibleTo(titles));
+    }
+
+    // The browser at its 304 (303 inside its seam): 3 columns of 88 x 50
+    // thumbs, 8 apart, padded 8 12, rows 12 apart.
+    void browserGridIsThreeColumnsOf88At304() {
+        EffectsPanel effects;
+        QJsonArray catalog;
+        for (int index = 0; index < 7; ++index)
+            catalog.append(QJsonObject{{"kind", "effect"}, {"domain", "video"}, {"id", QStringLiteral("fx%1").arg(index)},
+                                       {"name", QStringLiteral("Effect %1").arg(index)}, {"category", "Color"}});
+        effects.setCatalog(catalog);
+        effects.resize(tokens::layout::browser - 1, tokens::layout::band - 1 - tokens::layout::strip);
+        effects.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&effects));
+        QCoreApplication::processEvents();
+        const auto thumb = [&effects](int row) {
+            const QRect cell = effects.m_cards->visualItemRect(effects.m_cards->item(row));
+            return QRect(effects.m_cards->viewport()->mapTo(&effects, cell.topLeft()), EffectsPanel::kCard);
+        };
+        // Under the 24 category row, 4 under the strip.
+        QCOMPARE(thumb(0).topLeft(), QPoint(EffectsPanel::kPadX, EffectsPanel::kCategoryRow + 4 + EffectsPanel::kPadY));
+        QCOMPARE(thumb(1).left(), EffectsPanel::kPadX + 88 + 8);
+        QCOMPARE(thumb(2).left(), EffectsPanel::kPadX + 2 * (88 + 8));
+        QCOMPARE(thumb(3).left(), EffectsPanel::kPadX);
+        QCOMPARE(thumb(3).top() - thumb(0).top(), 50 + 4 + 16 + 12);
+        QVERIFY(thumb(2).right() <= effects.width() - EffectsPanel::kPadX);
+        // The category ghost and the count share the row.
+        QCOMPARE(effects.m_categoryButton->mapTo(&effects, QPoint()).x(), 4);
+        QCOMPARE(effects.m_count->mapTo(&effects, QPoint(effects.m_count->width(), 0)).x(), effects.width() - EffectsPanel::kPadX);
     }
 };
 

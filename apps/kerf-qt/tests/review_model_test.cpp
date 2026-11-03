@@ -856,6 +856,42 @@ private slots:
         model.applyEvent(QStringLiteral("comments"), QJsonObject{{"items", seedComments()}});
         QCOMPARE(changed.count(), 0);
     }
+
+    // What the Comments panel builds on: the welcome passes All and From
+    // Kerf only (no chip, tag or search keeps a row with no record), and an
+    // older version's proposal timeline diffs on its own (the versions
+    // menu's "v1 00:00:25:21 · −7 fr").
+    void welcomeAndVersionsForThePanel() {
+        ReviewModel model;
+        seed(model);
+        const auto shown = [&model] {
+            QStringList out;
+            for (const ReviewModel::Thread &thread : model.threads()) out << thread.id;
+            return out;
+        };
+        QCOMPARE(shown().constFirst(), kWelcome);
+        model.setFrom(ReviewModel::From::Kerf);
+        QCOMPARE(shown().constFirst(), kWelcome);
+        model.setFrom(ReviewModel::From::Anyone);
+        model.setChip(ReviewModel::Chip::Open);
+        QVERIFY(!shown().contains(kWelcome));
+        model.setChip(ReviewModel::Chip::All);
+        model.setSearch(QStringLiteral("magenta"));
+        QCOMPARE(shown(), QStringList{QStringLiteral("c-0903")});
+        model.setSearch(QString());
+        // v1 of Claude Code's proposal moves the logo 7 frames earlier.
+        const QJsonObject snapshot = seedSnapshot();
+        const QList<ReviewModel::ClipChange> v1 = ReviewModel::diffTimelines(
+            snapshot.value("timeline").toObject(), snapshot.value("proposalTimelines").toObject().value("proposal-cc1").toObject());
+        QCOMPARE(v1.size(), 2);
+        QCOMPARE(v1.at(0).clip, QStringLiteral("logo"));
+        QVERIFY(v1.at(0).moved);
+        QCOMPARE(std::llround(v1.at(0).shift() * 25), -7LL);
+        QCOMPARE(std::llround(v1.at(0).newStart * 25), 646LL);
+        // The pin is the current version, found by any of its versions' ids.
+        QCOMPARE(model.proposal(QStringLiteral("proposal-cc1"))->id, QStringLiteral("proposal-cc2"));
+        QVERIFY(model.isPinned(QStringLiteral("proposal-cc1")));
+    }
 };
 
 } // namespace kerf

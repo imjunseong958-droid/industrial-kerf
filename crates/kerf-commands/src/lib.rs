@@ -995,7 +995,7 @@ pub static COMMANDS: &[Command] = &[
     ),
     checkable(keys(
         frontend(menu(
-            command("playback.loop", "Loop Playback", coming),
+            command("playback.loop", "Loop Playback", connected),
             Menu::Playback,
             2,
         )),
@@ -1005,7 +1005,7 @@ pub static COMMANDS: &[Command] = &[
     // `source.markIn` and `source.markOut`, on the same keys there.
     keys(
         timeline(frontend(menu(
-            command("mark.in", "Mark In", coming),
+            command("mark.in", "Mark In", connected),
             Menu::Markers,
             2,
         ))),
@@ -1013,7 +1013,7 @@ pub static COMMANDS: &[Command] = &[
     ),
     keys(
         timeline(frontend(menu(
-            command("mark.out", "Mark Out", coming),
+            command("mark.out", "Mark Out", connected),
             Menu::Markers,
             2,
         ))),
@@ -1040,7 +1040,7 @@ pub static COMMANDS: &[Command] = &[
     // The program viewer's switches.
     checkable(keys(
         frontend(menu(
-            command("view.annotations", "Annotations", coming),
+            command("view.annotations", "Annotations", always),
             Menu::View,
             0,
         )),
@@ -1056,7 +1056,7 @@ pub static COMMANDS: &[Command] = &[
     )),
     checkable(keys(
         frontend(menu(
-            command("view.dim", "Dim Surround", coming),
+            command("view.dim", "Dim Surround", always),
             Menu::View,
             0,
         )),
@@ -1072,7 +1072,7 @@ pub static COMMANDS: &[Command] = &[
     )),
     keys(
         frontend(menu(
-            command("viewer.zoom", "Viewer Zoom…", coming),
+            command("viewer.zoom", "Viewer Zoom…", always),
             Menu::View,
             0,
         )),
@@ -1095,7 +1095,7 @@ pub static COMMANDS: &[Command] = &[
     )),
     checkable(keys(
         frontend(menu(
-            command("inspector.audio", "Audio Inspector", coming),
+            command("inspector.audio", "Audio Inspector", always),
             Menu::View,
             2,
         )),
@@ -1103,7 +1103,7 @@ pub static COMMANDS: &[Command] = &[
     )),
     checkable(keys(
         frontend(menu(
-            command("inspector.info", "Info Inspector", coming),
+            command("inspector.info", "Info Inspector", always),
             Menu::View,
             2,
         )),
@@ -1917,6 +1917,9 @@ mod tests {
     #[test]
     fn commands_without_a_handler_yet_say_so() {
         let states = states(&ready());
+        for id in ["sequence.settings", "keyboard.customise"] {
+            assert_eq!(states[id], COMING, "{id}");
+        }
         for id in [
             "view.dim",
             "view.annotations",
@@ -1926,12 +1929,6 @@ mod tests {
             "mark.out",
             "inspector.audio",
             "inspector.info",
-            "sequence.settings",
-            "keyboard.customise",
-        ] {
-            assert_eq!(states[id], COMING, "{id}");
-        }
-        for id in [
             "workspace.edit",
             "workspace.review",
             "workspace.finish",
@@ -1947,7 +1944,22 @@ mod tests {
             assert!(states[id].is_null(), "{id}: {}", states[id]);
         }
         assert_eq!(states["qc.run"], Value::Null);
-        assert_eq!(super::states(&Context::default())["qc.run"], json!(OFFLINE));
+        let offline = super::states(&Context::default());
+        assert_eq!(offline["qc.run"], json!(OFFLINE));
+        // The program's marks and loop need a program; the viewer's
+        // switches and the Inspector's kinds work without one.
+        for id in ["playback.loop", "mark.in", "mark.out"] {
+            assert_eq!(offline[id], json!(OFFLINE), "{id}");
+        }
+        for id in [
+            "view.dim",
+            "view.annotations",
+            "viewer.zoom",
+            "inspector.audio",
+            "inspector.info",
+        ] {
+            assert!(offline[id].is_null(), "{id}: {}", offline[id]);
+        }
     }
 
     #[test]

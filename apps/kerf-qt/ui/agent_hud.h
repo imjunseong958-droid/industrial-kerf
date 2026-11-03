@@ -1,41 +1,105 @@
 #pragma once
 
-// The agent HUD over the picture (mockup-spec 3.3): who is at work and their
-// latest step, while an agent works. Shell from Q-SKELETON (W1): it follows
-// the bridge's `agent_busy`, `agent_state` and `agent` (tool and status)
-// events; Q-SCRUBRAIL gives it its look and place in W2, keeping the
-// constructor and this API.
+// The agent HUD over the picture (mockup-spec 3.3): Kerf's preview render at
+// work, from the bridge's `preview {status, progress, message, proposalId}`
+// events. It shows only while a preview renders (status running) and hides
+// on any other status, or at once after Stop.
+//
+//   16:9, a card (288 x 72 at most, inside title safe; see cardRect):
+//     row 1  the Kerf tile and "Rendering preview · v2" (the version of the
+//            proposal being previewed, from the snapshot's proposals)
+//     row 2  the proposal's first change and its count: "Logo reveal →
+//            00:00:26:12 · 2 changes" (the review model's proposal diff),
+//            else its summary, else the event's message
+//     row 3  the progress bar, "62%" and Stop (preview_stop; Esc)
+//   Phone formats, docked: a 32-tall strip (row 2 hidden, the bar 120 wide)
+//   on top of the Source column.
 
 #include <QJsonObject>
+#include <QPointer>
+#include <QRectF>
+#include <QSizeF>
 #include <QWidget>
 
+class QAbstractButton;
 class QLabel;
 
 namespace kerf {
 
 class EditorBus;
 
+namespace ui {
+class Button;
+class ThinProgress;
+}
+
 class AgentHud final : public QWidget {
     Q_OBJECT
 public:
+    static constexpr int kCardWidth = 288;
+    static constexpr int kCardHeight = 72;
+    static constexpr int kStripHeight = 32;
+    static constexpr int kStripBar = 120;
+
     explicit AgentHud(QWidget *parent, EditorBus *bus);
-    // An agent is at work: the HUD has something to say.
-    bool active() const { return m_busy; }
-    // "Kerf · Trimming B003_C011", or empty while idle.
+    ~AgentHud() override;
+
+    // A preview renders and was not stopped here: the HUD shows.
+    bool active() const { return m_running && !m_stopped; }
+    // Row 1 ("Rendering preview · v2"), or empty while hidden.
     QString text() const;
+    QString title() const;
+    // Row 2 as plain text.
+    QString detail() const;
+    double progress() const { return m_progress; }
+    // "62%".
+    QString percentText() const;
+    QString proposalId() const { return m_proposal; }
+
+    // The phone strip (true) or the 16:9 card.
+    void setDocked(bool docked);
+    bool docked() const { return m_docked; }
+    QSize sizeHint() const override;
+    // Where the card sits on a picture of `picture` size, in the picture's
+    // coordinates: w = min(288, w - 2tx - 16), 72 tall, at
+    // (w - tx - 8 - hw, ty + 8), with tx and ty the 5% title-safe insets.
+    static QRectF cardRect(const QSizeF &picture);
+
+    QAbstractButton *stopButton() const;
+    // Stops the render (preview_stop) and hides the HUD until the next one.
+    void stop();
 
 signals:
     void activeChanged(bool active);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
+    struct Run {
+        QString text;
+        bool mono = false;
+    };
     void handle(const QString &type, const QJsonObject &event);
-    EditorBus *m_bus = nullptr;
-    QLabel *m_text = nullptr;
-    QString m_step;
-    bool m_busy = false;
+    void refresh();
+    void relayout();
+    void updateEscape();
+    int versionOf(const QString &proposalId) const;
+    QList<Run> detailRuns() const;
+
+    QPointer<EditorBus> m_bus;
+    ui::Button *m_stop = nullptr;
+    ui::ThinProgress *m_bar = nullptr;
+    bool m_running = false;
+    bool m_stopped = false;
+    bool m_docked = false;
+    bool m_wasActive = false;
+    bool m_filtering = false;
+    double m_progress = 0.0;
+    QString m_proposal;
+    QString m_message;
 };
 
 } // namespace kerf

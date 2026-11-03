@@ -1,4 +1,5 @@
 #include "inspector_column.h"
+#include "components.h"
 #include "deliver_pane.h"
 #include "design_tokens.h"
 #include "editor_bus.h"
@@ -6,60 +7,20 @@
 #include "source_monitor_panel.h"
 #include "workspace.h"
 
-#include <QButtonGroup>
-#include <QFrame>
+#include <QAbstractButton>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QIcon>
 #include <QPainter>
-#include <QPainterPath>
-#include <QPixmap>
 #include <QStackedWidget>
-#include <QToolButton>
 #include <QVBoxLayout>
 
 namespace kerf {
 
 namespace {
 
-QString css(QRgb color) {
-    const QColor c = tokens::color(color);
-    return QStringLiteral("rgba(%1,%2,%3,%4)").arg(c.red()).arg(c.green()).arg(c.blue()).arg(c.alphaF(), 0, 'f', 3);
-}
-
-// A segmented control's track, its segments text buttons that latch one at a time.
-QFrame *segmented(const QString &name, QButtonGroup *group, const QStringList &labels, QList<QToolButton *> &buttons) {
-    auto *track = new QFrame;
-    track->setObjectName(name);
-    track->setFixedHeight(tokens::height::h24);
-    track->setStyleSheet(QStringLiteral(
-        "QFrame#%1 { background: %2; border-radius: 6px; }"
-        "QToolButton { color: %3; background: transparent; border: none; border-radius: 4px; padding: 0 8px; }"
-        "QToolButton:hover { color: %4; }"
-        "QToolButton:checked { color: %4; background: %5; }"
-        "QToolButton:disabled { color: %6; }")
-                             .arg(name, css(tokens::raised), css(tokens::ink2), css(tokens::ink), css(tokens::on), css(tokens::dis)));
-    auto *layout = new QHBoxLayout(track);
-    layout->setContentsMargins(2, 2, 2, 2);
-    layout->setSpacing(0);
-    for (const QString &label : labels) {
-        auto *button = new QToolButton;
-        button->setText(label);
-        button->setCheckable(true);
-        button->setFixedHeight(20);
-        button->setFont(tokens::font(tokens::controlStrong));
-        button->setCursor(Qt::PointingHandCursor);
-        group->addButton(button, int(buttons.size()));
-        layout->addWidget(button);
-        buttons.append(button);
-    }
-    return track;
-}
-
 // The column's pages. The column keeps its width (304 at the design's
 // window) whichever page shows: its least size is the Inspector's and the
-// Deliver pane's, not the Source monitor's, which Q-SOURCE makes compact
-// for the column in W2.
+// Deliver pane's, not the Source monitor's.
 class PageStack final : public QStackedWidget {
 public:
     QWidget *loose = nullptr;
@@ -71,45 +32,13 @@ public:
     }
 };
 
-// A kind's symbol on a 14-point grid, in each state's ink.
-QIcon kindIcon(InspectorColumn::Kind kind) {
-    QIcon icon;
-    const struct {
-        QIcon::Mode mode;
-        QIcon::State state;
-        QRgb ink;
-    } inks[] = {{QIcon::Normal, QIcon::Off, tokens::ink2}, {QIcon::Normal, QIcon::On, tokens::ink},
-                {QIcon::Active, QIcon::Off, tokens::ink}, {QIcon::Active, QIcon::On, tokens::ink},
-                {QIcon::Disabled, QIcon::Off, tokens::dis}, {QIcon::Disabled, QIcon::On, tokens::dis}};
-    for (const auto &entry : inks) {
-        QPixmap pixmap(28, 28);
-        pixmap.setDevicePixelRatio(2);
-        pixmap.fill(Qt::transparent);
-        QPainter painter(&pixmap);
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(QPen(tokens::color(entry.ink), 1.3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        switch (kind) {
-        case InspectorColumn::Kind::Video:
-            painter.drawRoundedRect(QRectF(1.5, 3.5, 11, 7), 1.5, 1.5);
-            break;
-        case InspectorColumn::Kind::Audio: {
-            QPainterPath speaker;
-            speaker.moveTo(2, 5.5); speaker.lineTo(4.5, 5.5); speaker.lineTo(7.5, 3); speaker.lineTo(7.5, 11);
-            speaker.lineTo(4.5, 8.5); speaker.lineTo(2, 8.5); speaker.closeSubpath();
-            painter.drawPath(speaker);
-            painter.drawArc(QRectF(7, 4, 5, 6), -60 * 16, 120 * 16);
-            break;
-        }
-        case InspectorColumn::Kind::Info:
-            painter.drawEllipse(QRectF(1.5, 1.5, 11, 11));
-            painter.drawLine(QPointF(7, 6.2), QPointF(7, 10));
-            painter.drawPoint(QPointF(7, 4.2));
-            break;
-        }
-        painter.end();
-        icon.addPixmap(pixmap, entry.mode, entry.state);
+InspectorPanel::Pane paneOf(InspectorColumn::Kind kind) {
+    switch (kind) {
+    case InspectorColumn::Kind::Audio: return InspectorPanel::Pane::Audio;
+    case InspectorColumn::Kind::Info: return InspectorPanel::Pane::Info;
+    case InspectorColumn::Kind::Video: break;
     }
-    return icon;
+    return InspectorPanel::Pane::Video;
 }
 
 } // namespace
@@ -120,46 +49,49 @@ InspectorColumn::InspectorColumn(QWidget *parent, EditorBus *bus) : QWidget(pare
     // The column's left seam is the dock splitter's line.
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
+    // The strip (spec 5): 28, pad 0 12, a line at its foot; the segmented
+    // Inspector | Source, then the w20 icon segments Video, Audio, Info.
     auto *strip = new QWidget;
     strip->setObjectName(QStringLiteral("inspectorStrip"));
     strip->setFixedHeight(tokens::layout::strip);
     auto *stripLayout = new QHBoxLayout(strip);
     stripLayout->setContentsMargins(tokens::space::s12, 0, tokens::space::s12, 0);
     stripLayout->setSpacing(tokens::space::s4);
-    auto *pages = new QButtonGroup(this);
-    QList<QToolButton *> pageButtons;
-    stripLayout->addWidget(segmented(QStringLiteral("inspectorPages"), pages, {QStringLiteral("Inspector"), QStringLiteral("Source")}, pageButtons));
+    m_pages = new ui::SegmentedControl;
+    m_pages->setObjectName(QStringLiteral("inspectorPages"));
+    m_pages->addSegment(QStringLiteral("Inspector"), QStringLiteral("Inspector"), QStringLiteral("⌘4"));
+    m_pages->addSegment(QStringLiteral("Source"), QStringLiteral("Source"));
+    m_pages->setCurrentIndex(0, false);
+    stripLayout->addWidget(m_pages);
     stripLayout->addStretch(1);
-    auto *kinds = new QButtonGroup(this);
-    QList<QToolButton *> kindButtons;
-    stripLayout->addWidget(segmented(QStringLiteral("inspectorKinds"), kinds, {QString(), QString(), QString()}, kindButtons));
-    // The kinds are 20-point icon segments (Q-INSPECTOR draws the kit's
-    // icons for them in W2): a frame, a speaker, an "i".
+    m_kinds = new ui::SegmentedControl;
+    m_kinds->setObjectName(QStringLiteral("inspectorKinds"));
+    m_kinds->setIconSegmentWidth(20);
+    m_kinds->addIconSegment(QStringLiteral("g-video"), QStringLiteral("Video"), QStringLiteral("⌃⌥4"));
+    m_kinds->addIconSegment(QStringLiteral("g-audio"), QStringLiteral("Audio"), QStringLiteral("⌃⌥5"));
+    m_kinds->addIconSegment(QStringLiteral("g-info"), QStringLiteral("Info"), QStringLiteral("⌃⌥6"));
+    m_kinds->setCurrentIndex(0, false);
+    const char *names[] = {"Video", "Audio", "Info"};
     for (int index = 0; index < 3; ++index) {
-        QToolButton *button = kindButtons.at(index);
-        button->setFixedSize(20, 20);
-        button->setIconSize(QSize(14, 14));
-        button->setAccessibleName(QStringList{QStringLiteral("Video"), QStringLiteral("Audio"), QStringLiteral("Info")}.at(index));
-        button->setIcon(kindIcon(Kind(index)));
+        m_kindButtons[index] = qobject_cast<QAbstractButton *>(m_kinds->segment(index));
+        if (m_kindButtons[index]) m_kindButtons[index]->setAccessibleName(QString::fromLatin1(names[index]));
     }
-    for (int index = 0; index < 2; ++index) m_pageButtons[index] = pageButtons.at(index);
-    const char *kindTips[] = {"Video (⌃⌥4)", "Audio (⌃⌥5)", "Info (⌃⌥6)"};
-    for (int index = 0; index < 3; ++index) {
-        m_kindButtons[index] = kindButtons.at(index);
-        const bool available = kindAvailable(Kind(index));
-        m_kindButtons[index]->setEnabled(available);
-        m_kindButtons[index]->setToolTip(available ? QString::fromUtf8(kindTips[index])
-                                                   : QStringLiteral("%1\nComing in this release").arg(QString::fromUtf8(kindTips[index])));
-    }
-    m_pageButtons[0]->setChecked(true);
-    m_kindButtons[0]->setChecked(true);
-    connect(pages, &QButtonGroup::idClicked, this, [this](int id) { setPage(Page(id)); });
-    connect(kinds, &QButtonGroup::idClicked, this, [this](int id) { setKind(Kind(id)); });
+    for (int index = 0; index < 2; ++index) m_pageButtons[index] = qobject_cast<QAbstractButton *>(m_pages->segment(index));
+    stripLayout->addWidget(m_kinds);
+    connect(m_pages, &ui::SegmentedControl::activated, this, [this](int index) { setPage(Page(index)); });
+    connect(m_kinds, &ui::SegmentedControl::activated, this, [this](int index) {
+        // A kind chosen shows its pane on the Inspector page (as the mockup's
+        // kind segments turn the Inspector tab back on).
+        setKind(Kind(index));
+        setPage(Page::Inspector);
+    });
     layout->addWidget(strip);
     m_stack = new PageStack;
     m_stack->setObjectName(QStringLiteral("inspectorPagesStack"));
     auto *empty = new QLabel(QStringLiteral("Nothing to inspect"));
     empty->setAlignment(Qt::AlignCenter);
+    empty->setFont(tokens::font(tokens::meta));
+    empty->setStyleSheet(QStringLiteral("QLabel { color: %1; }").arg(tokens::color(tokens::ink3).name()));
     m_empty = empty;
     m_stack->addWidget(m_empty);
     m_deliver = new DeliverPane(nullptr, bus);
@@ -179,7 +111,10 @@ void InspectorColumn::setInspector(InspectorPanel *inspector) {
     if (m_inspector == inspector) return;
     if (m_inspector) m_stack->removeWidget(m_inspector);
     m_inspector = inspector;
-    if (inspector) m_stack->addWidget(inspector);
+    if (inspector) {
+        m_stack->addWidget(inspector);
+        inspector->setPane(paneOf(m_kind));
+    }
     showCurrent();
 }
 
@@ -189,7 +124,8 @@ void InspectorColumn::setSourceMonitor(SourceMonitorPanel *source) {
     m_source = source;
     static_cast<PageStack *>(m_stack)->loose = source;
     if (source) {
-        // Narrower than its least, it is cut at the column's edge until then.
+        // Narrower than its least, it is cut at the column's edge until
+        // Q-SOURCE gives it its compact form.
         source->setMinimumWidth(0);
         m_stack->addWidget(source);
     }
@@ -197,7 +133,7 @@ void InspectorColumn::setSourceMonitor(SourceMonitorPanel *source) {
 }
 
 void InspectorColumn::setPage(Page page) {
-    m_pageButtons[int(page)]->setChecked(true);
+    m_pages->setCurrentIndex(int(page));
     if (page == m_page) return;
     m_page = page;
     showCurrent();
@@ -206,18 +142,20 @@ void InspectorColumn::setPage(Page page) {
 
 void InspectorColumn::setKind(Kind kind) {
     if (!kindAvailable(kind)) {
-        m_kindButtons[int(m_kind)]->setChecked(true);
+        m_kinds->setCurrentIndex(int(m_kind));
         return;
     }
-    m_kindButtons[int(kind)]->setChecked(true);
+    m_kinds->setCurrentIndex(int(kind));
     if (kind == m_kind) return;
     m_kind = kind;
+    if (m_inspector) m_inspector->setPane(paneOf(kind));
     showCurrent();
     emit kindChanged(kind);
 }
 
-bool InspectorColumn::kindAvailable(Kind kind) {
-    return kind == Kind::Video;
+bool InspectorColumn::kindAvailable(Kind) {
+    // Video, Audio and Info each have their pane (Q-INSPECTOR, W2).
+    return true;
 }
 
 QString InspectorColumn::kindId(Kind kind) {

@@ -93,8 +93,91 @@ void kerf_bridge_free(void *bridge);
 // of the program; preview_stop stops the preview render running
 // (preview {status: stopped}); preview_exit stops it and plays the program
 // again (preview {status: exited}, then viewer_reset and the program's own
-// preview status). export {quality: preview|full, sequence?} renders a
-// sequence (the first when absent). One render runs at a time.
+// preview status). One viewer preview renders at a time; it is not an
+// output and never shows in the render queue.
+// Render queue: export {quality: preview|full|review|master, codec?:
+// h264|hevc|prores_hq (a master is ProRes 422 HQ in QuickTime with 24-bit
+// PCM unless codec says otherwise; a review copy is full-size H.264 at
+// 12 Mb/s; a preview is a draft from proxies), sequence? (the first when
+// absent), output? (a folder, ending in / or existing, or a file whose
+// extension the codec takes: .mov for ProRes, else .mp4; relative ones are
+// read against the project and must stay inside it; an absolute folder
+// must exist), name? (the job's name, and the file's in a folder)} queues
+// the render with kerfd at once: export {status: queued, jobId, name, path
+// (the file it will write; a folder takes the next free name, "Master
+// 2.mov"), progress: 0, quality, codec, sequence?}. A refusal is error
+// {message, code: INVALID_RENDER_QUALITY|INVALID_RENDER_CODEC|
+// INVALID_RENDER_OUTPUT|INVALID_RENDER_NAME|RENDER_OUTPUT_BUSY|
+// RENDER_OUTPUT_EXISTS|..., command: export}, and nothing is queued. Jobs
+// render one at a time, oldest first, from the document as it was when
+// queued: export {status: running, jobId, name, path, progress (0..1)},
+// then completed (path, progress 1), failed (message; also error {command:
+// export, jobId}) or cancelled. export_cancel {jobId} takes a queued job
+// out, or stops the one rendering (export {status: cancelled}); a finished
+// job stays as it is. render_queue {} answers render_queue {jobs: [{jobId,
+// name (or what it renders: Master, Review copy, Full render, Preview),
+// quality, codec, sequence, status: queued|running|completed|failed|
+// cancelled, progress, outputPath, error?}]} (oldest first: kerfd's queued,
+// running and newest finished jobs, from any client), which is also sent
+// after every change of status. Closing the bridge stops the job rendering
+// and cancels the queued ones.
+// Paperwork: export_comments {format: csv|edl|markers, includeResolved
+// (default false), path?} and export_captions {format: srt|vtt, path?,
+// sequence? (the program when absent), track? (every enabled subtitle
+// track when absent)}. csv is the review log as a sheet (TC in, TC out,
+// Author, Kind, Body, Status, Tags; timecode of the program sequence); edl
+// is a CMX3600 EDL of the program with a * LOC: line for each sequence
+// marker and each kept comment that has a time (coloured by who wrote it);
+// open comments are kept, resolved ones too with includeResolved. Files go
+// to path (a file, or a folder for the default name; relative to the
+// project), else beside the newest finished master (<master> comments.csv,
+// <master>.edl, <master>.srt|vtt), else in deliveries/ named after the
+// project; they are written whole (through a temporary file) and replace an
+// earlier file of that name. The answer is export {status: completed, kind:
+// paperwork|captions, format, path} or export {status: failed, kind,
+// format, message} with error {message, command: export_comments|
+// export_captions, format}. markers is one edit adding a sequence marker
+// for each kept comment with a time (id note-<comment id>, name "Author:
+// body", note the body, colour red when blocking, else orange for QC, blue
+// for Kerf, purple for MCP agents, yellow for people, as long as the
+// comment's range); exporting again sets those markers rather than adding
+// more. It answers with the state, then export {status: completed, kind:
+// paperwork, format: markers, count}.
+// Analysis: loudness {sequence?} measures the programme (or that sequence)
+// to EBU R128 off the GUI: loudness {status: running, progress, revision,
+// sequence?}, then loudness {status: ready, integrated (LUFS), lra (LU),
+// truePeak: [l, r] (dBTP), truePeakMax, shortTermMax, momentaryMax,
+// shortTermMaxAt, momentaryMaxAt (s), series: [[t, momentary, shortTerm]]
+// every 0.1 s, duration, target: -23, limit: -1, revision (the document
+// revision measured), sequence?} with silence as null, or loudness {status:
+// failed, message, revision?, sequence?}. A measurement is kept for its
+// revision, so asking again before an edit answers ready at once; a
+// request while one runs is taken when it ends. media_info {media?} answers
+// media_info {media: {mediaId: {codec, profile?, pixFmt, bitDepth,
+// colorSpace?, transfer?, primaries?, colorRange?, camera?, lens?, reel?,
+// timecode?, audioCodec?, audioSampleFmt?, audioBitDepth?, audioChannels?,
+// audioSampleRate?}}, errors?: {mediaId: message}} (fields the file does
+// not say are left out); it is also sent on its own for media new to the
+// editor (on opening, after an import, a replace or a merge). The one
+// media asked for that cannot be read is error {command: media_info,
+// media, message}. It is never written into the document. media_index
+// {media} answers media_index {media, duration, cuts: [s], ranges:
+// [{start, end}] (the shots the cuts make), silences: [[start, end]],
+// loudest: [s] (in time order), peaks: [{at, level (dBFS)}], onsets: [s],
+// tempo: {bpm, first, confidence} or null}, seconds from the media's first
+// frame, from the project's cache when kerfd's import made it, else made
+// now; a refusal is error {command: media_index, media, message}.
+// Effects presets: look_save {clip, name, replace?} keeps the clip's
+// enabled picture effects (settings and keyframes) as a look in
+// presets/looks/<name>.kerflook (refusing an existing file unless replace):
+// look_saved {path (relative to the project), id (look.<name>), version,
+// effects (how many), skipped: [what a look cannot carry: looks, sound
+// effects, parameters naming a mask or a track]}. look_apply {clip, path}
+// keeps the look in the project's .kerf/looks/<id>@<version>.kerflook (a
+// look that differs from one of that id already there becomes its next
+// version) and adds it to the clip as one effect: the state, then
+// look_applied {path, clip, fx, version}. A refusal is error {message,
+// command: look_save|look_apply}.
 // Kerf Cloud: cloud_sign_in {token} keeps a token and reads its account,
 // cloud_sign_out forgets it, cloud_refresh reads the account again; each is
 // answered by a cloud event.
@@ -159,7 +242,12 @@ bool kerf_bridge_send(void *bridge, const char *json);
 // viewer_reset,
 // preview {status: running|ready|live|required|unavailable|failed|stopped|
 // exited, progress?, message?, proposalId? (the proposal a rendered preview
-// shows)}, export {status: running|completed|failed, path?, progress?},
+// shows)}, export (see Render queue and Paperwork above: {status: queued|
+// running|completed|failed|cancelled, jobId, name, path, progress, quality,
+// codec, sequence?} for renders, {status, kind: paperwork|captions, format,
+// path|message, count?} for paperwork), render_queue {jobs}, loudness,
+// media_info, media_index, look_saved, look_applied (see Analysis and
+// Effects presets above),
 // cloud {access: ready|unavailable|signedOut|unreachable|notIncluded|
 // outOfCredits, account?, message?},
 // The state snapshot: {document, timeline, revision, canUndo, canRedo,
@@ -191,7 +279,9 @@ bool kerf_bridge_send(void *bridge, const char *json);
 // preset_library {directory, presets: [{path (relative to the project),
 // name, slots: [{id, seconds, video, audio, clips}], texts: {clipId: text},
 // author?, updated? (ISO 8601, from the last commit that touched it),
-// error?}]}, preset_saved {path},
+// error?}], looks: [{path, name, id, version, effects, author?, updated?}
+// or {path, name, error}] (the effects presets in presets/looks/)},
+// preset_saved {path},
 // collab {status: {repository, enclosing?, branch, upstream, remote, ahead,
 // behind, changed, conflicted, branches, lfs, gh (installed and signed in),
 // live, busy, user: {name, email} or null (who commits here are by, also

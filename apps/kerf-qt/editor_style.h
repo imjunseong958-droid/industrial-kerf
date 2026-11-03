@@ -308,14 +308,6 @@ QFrame#timelineFrame {
     background: transparent;
     border: 0;
 }
-QWidget#transport {
-    background: @panel;
-    border: 0;
-    border-top: 1px solid @divider;
-    border-radius: 0px;
-}
-QLabel#transportTime { color: @accentText; font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; font-weight: 500; }
-QLabel#transportDuration { color: @textSecondary; font-family: "JetBrains Mono", Menlo, monospace; font-size: 11px; }
 /* Seams: a 1pt line. */
 QSplitter::handle { background: @dockSeparator; }
 QSplitter::handle:hover { background: @dockSeparatorHover; }

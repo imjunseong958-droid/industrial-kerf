@@ -22,6 +22,7 @@
 #include "deliver_tray.h"
 #include "editor_bus.h"
 #include "finish_tray.h"
+#include "deliver_pane.h"
 #include "inspector_column.h"
 #include "wiring/main_window_shared.h"
 #include "program_strip.h"
@@ -1112,7 +1113,7 @@ void MainWindow::setupActions() {
         } else if (id == QStringLiteral("view.safeZones")) setSafeZones(checked);
         else if (id == QStringLiteral("view.devicePreview")) {
             if (m_viewer->landscape()) setLaptopPreview(checked ? LaptopPreview::Laptop : LaptopPreview::Off);
-            else setDevicePreview(checked ? DevicePreview::Island : DevicePreview::Off);
+            else setDevicePreview(checked ? DevicePreview::Phone : DevicePreview::Off);
         } else if (id == QStringLiteral("inspector.video")) {
             if (ads::CDockWidget *inspector = m_workspace->panel(QStringLiteral("inspector")); inspector && inspector->isClosed())
                 inspector->toggleView(true);
@@ -1289,6 +1290,10 @@ void MainWindow::setupActions() {
     setupProgramStrip();
     m_finishTray->setActions(m_commands->action(QStringLiteral("ai.ask")), m_commands->action(QStringLiteral("qc.run")));
     m_deliverTray->setRenderAction(m_commands->action(QStringLiteral("export.master")));
+    // Deliver keys its outputs and paperwork by the project, wherever its
+    // tray and pane are docked (not through the window's file path).
+    m_deliverTray->setProjectDirectory(m_projectDirectory);
+    if (DeliverPane *pane = m_inspectorColumn ? m_inspectorColumn->deliverPane() : nullptr) pane->setProjectDirectory(m_projectDirectory);
     syncPanelCommands();
     syncWorkspaceCommands();
     // The registry's switches as the stage is: the comments panel, safe
@@ -1912,17 +1917,9 @@ void MainWindow::routeEvent(const QJsonObject &event) {
         m_cloudAccount = event.value(QStringLiteral("account")).toObject();
         m_cloudMessage = event.value(QStringLiteral("message")).toString();
         updateCloudStatus();
-    } else if (type == QStringLiteral("effect_preview")) {
-        const int width = event.value(QStringLiteral("width")).toInt();
-        const int height = event.value(QStringLiteral("height")).toInt();
-        const QByteArray rgba = QByteArray::fromBase64(event.value(QStringLiteral("rgba")).toString().toLatin1());
-        if (width > 0 && height > 0 && rgba.size() >= qsizetype(width) * height * 4) {
-            const QImage image(reinterpret_cast<const uchar *>(rgba.constData()), width, height, width * 4,
-                               QImage::Format_RGBA8888);
-            m_effects->setPreview(event.value(QStringLiteral("clip")).toString(),
-                                  event.value(QStringLiteral("fx")).toString(), image.copy());
-        }
     } else if (type == QStringLiteral("caption")) {
+        // (effect_preview answers reach their regions keyed, through the bus:
+        // BinWiring for the browser, ReviewWiring for the colour chip.)
         m_viewer->setCaption(event.value(QStringLiteral("text")).toString());
     }
     if (type == QStringLiteral("preview")) updateCommandStates();
@@ -1980,7 +1977,7 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
     // The picture is always fitted to the stage: the row says so.
     m_viewerDetail->setText(QStringLiteral("%1 × %2  ·  %3 fps  ·  Fit")
                                 .arg(canvasSize.width()).arg(canvasSize.height()).arg(QString::number(m_fps, 'g', 5)));
-    m_timelineDetail->setText(QStringLiteral("%1  ·  %2")
+    m_timelineDetail->setText(QStringLiteral("%1 · %2")
                                   .arg(m_trackCount == 1 ? QStringLiteral("1 track") : QStringLiteral("%1 tracks").arg(m_trackCount),
                                        timelineTimecode(m_duration, m_fps)));
     m_viewerDetail->setVisible(true);
@@ -1999,7 +1996,8 @@ void MainWindow::applySnapshot(const QJsonObject &snapshot) {
         if (!present) m_sourceMonitor->close();
     }
     updateProposal(snapshot.value(QStringLiteral("pendingProposal")));
-    m_timeline->setProposal(m_proposalId.isEmpty() ? QJsonObject{} : snapshot.value(QStringLiteral("proposalTimeline")).toObject());
+    // The pinned proposal's (the version its card shows), not just the first open one.
+    m_timeline->setProposal(window_parts::proposalTimelineFor(snapshot, m_proposalId));
     m_divergedBanner->setVisible(diverged(snapshot));
     updateInspector();
     updateCommandStates();

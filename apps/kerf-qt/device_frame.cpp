@@ -2,8 +2,6 @@
 #include "design_tokens.h"
 #include "editor_theme.h"
 
-#include <QFont>
-#include <QFontMetricsF>
 #include <QLinearGradient>
 #include <QPainter>
 #include <QPainterPath>
@@ -383,62 +381,48 @@ void DeviceFrameCache::paint(QPainter &painter, Kind kind, const QRectF &body, c
 
 // ------------------------------------------------------------------ safe zones
 
+namespace {
+constexpr QRgb kSafeTickColor = qRgba(255, 255, 255, tokens::alpha(0.45));
+} // namespace
+
 SafeZones safeZones(const QRectF &picture) {
     const double w = picture.width();
     const double h = picture.height();
-    const QPointF o = picture.topLeft();
     SafeZones out;
-    out.top = QRectF(o, QSizeF(w, 0.08 * h));
-    out.actions = QRectF(o + QPointF(0.84 * w, 0.42 * h), QSizeF(0.13 * w, 0.38 * h));
-    out.caption = QRectF(o + QPointF(0.03 * w, 0.82 * h), QSizeF(0.78 * w, 0.14 * h));
+    out.action = picture.adjusted(kActionSafeInset * w, kActionSafeInset * h, -kActionSafeInset * w, -kActionSafeInset * h);
+    out.title = picture.adjusted(kTitleSafeInset * w, kTitleSafeInset * h, -kTitleSafeInset * w, -kTitleSafeInset * h);
+    out.cross = QRectF(picture.center() - QPointF(kSafeCross / 2.0, kSafeCross / 2.0), QSizeF(kSafeCross, kSafeCross));
     return out;
 }
 
-void paintSafeZones(QPainter &p, const QRectF &picture, const EditorTheme &theme) {
+void paintSafeZones(QPainter &p, const QRectF &picture, const EditorTheme &) {
+    if (picture.width() < 2.0 * kSafeTick || picture.height() < 2.0 * kSafeTick) return;
     const SafeZones zones = safeZones(picture);
     p.save();
-    p.setRenderHint(QPainter::Antialiasing);
-    QFont font = p.font();
-    font.setPixelSize(11);
-    font.setWeight(QFont::DemiBold);
-    p.setFont(font);
-    const auto zone = [&](const QRectF &area, const QString &label, bool vertical, Qt::Alignment alignment = {}) {
-        p.setPen(Qt::NoPen);
-        p.setBrush(theme.safeZoneFill);
-        p.drawRoundedRect(area, 4, 4);
-        QPen line(theme.safeZoneLine, 1.0, Qt::DashLine);
-        p.setPen(line);
-        p.setBrush(Qt::NoBrush);
-        p.drawRoundedRect(area.adjusted(0.5, 0.5, -0.5, -0.5), 4, 4);
-        // The label on a small dark chip, so it reads over the picture and
-        // the player's bar alike.
-        const QFontMetricsF metrics(font);
-        const QSizeF chip(metrics.horizontalAdvance(label) + 8.0, metrics.height() + 2.0);
-        p.save();
-        QRectF box;
-        if (vertical) {
-            // Up the column, as a narrow one has no room across.
-            p.translate(area.center());
-            p.rotate(-90);
-            box = QRectF(QPointF(-chip.width() / 2.0, -chip.height() / 2.0), chip);
-        } else {
-            const QRectF inner = area.adjusted(4, 4, -4, -4);
-            const double x = (alignment & Qt::AlignRight) ? inner.right() - chip.width() : inner.left();
-            const double y = (alignment & Qt::AlignTop) ? inner.top() : inner.center().y() - chip.height() / 2.0;
-            box = QRectF(QPointF(x, y), chip);
-        }
-        p.setPen(Qt::NoPen);
-        p.setBrush(theme.safeZoneLabel);
-        p.drawRoundedRect(box, 4, 4);
-        p.setPen(theme.safeZoneText);
-        p.drawText(box, Qt::AlignCenter, label);
-        p.restore();
-    };
-    // Each label clear of the player's controls: the top bar's at its right,
-    // clear of the play cluster; the caption's at its top, over the time.
-    zone(zones.top, QStringLiteral("Top bar"), false, Qt::AlignRight | Qt::AlignVCenter);
-    zone(zones.actions, QStringLiteral("Actions"), true);
-    zone(zones.caption, QStringLiteral("Caption, handle, music"), false, Qt::AlignLeft | Qt::AlignTop);
+    p.setRenderHint(QPainter::Antialiasing, false);
+    p.setPen(Qt::NoPen);
+    // Action safe: an inset 1 pt line, drawn as four bars inside the rect.
+    const QRectF a = zones.action;
+    p.setBrush(tokens::color(tokens::lineh));
+    p.drawRect(QRectF(a.left(), a.top(), a.width(), 1.0));
+    p.drawRect(QRectF(a.left(), a.bottom() - 1.0, a.width(), 1.0));
+    p.drawRect(QRectF(a.left(), a.top() + 1.0, 1.0, a.height() - 2.0));
+    p.drawRect(QRectF(a.right() - 1.0, a.top() + 1.0, 1.0, a.height() - 2.0));
+    // Title safe: an L of 16 x 16 in each corner, inside the rect, and the cross.
+    const QRectF t = zones.title;
+    p.setBrush(tokens::color(kSafeTickColor));
+    const double k = kSafeTick;
+    p.drawRect(QRectF(t.left(), t.top(), k, 1.0));
+    p.drawRect(QRectF(t.left(), t.top() + 1.0, 1.0, k - 1.0));
+    p.drawRect(QRectF(t.right() - k, t.top(), k, 1.0));
+    p.drawRect(QRectF(t.right() - 1.0, t.top() + 1.0, 1.0, k - 1.0));
+    p.drawRect(QRectF(t.left(), t.bottom() - 1.0, k, 1.0));
+    p.drawRect(QRectF(t.left(), t.bottom() - k, 1.0, k - 1.0));
+    p.drawRect(QRectF(t.right() - k, t.bottom() - 1.0, k, 1.0));
+    p.drawRect(QRectF(t.right() - 1.0, t.bottom() - k, 1.0, k - 1.0));
+    const QRectF c = zones.cross;
+    p.drawRect(QRectF(c.left(), c.top() + kSafeCross / 2.0, kSafeCross, 1.0));
+    p.drawRect(QRectF(c.left() + kSafeCross / 2.0, c.top(), 1.0, kSafeCross));
     p.restore();
 }
 

@@ -1,11 +1,15 @@
 //! Qt's nonblocking, UTF-8 C ABI. Canonical edits stay in kerfd; media frames
 //! travel through a latest-frame slot rather than JSON or an accumulating queue.
+mod analysis;
 mod collab;
+mod looks;
 mod media;
 mod meter;
+mod paperwork;
 mod presets;
 mod previews;
 mod qc;
+mod queue;
 mod review;
 mod tasks;
 #[cfg(test)]
@@ -124,11 +128,45 @@ enum Command {
     Volume {
         value: f32,
     },
-    Export {
-        quality: String,
-        /// The sequence to render; the first when absent.
+    /// Queue a render: `export {status: queued, jobId, …}`, then its
+    /// turn on the render queue's thread.
+    Export(queue::ExportRequest),
+    /// Take a queued render out of the queue, or stop the one rendering.
+    ExportCancel {
+        #[serde(rename = "jobId")]
+        job_id: String,
+    },
+    /// The render jobs kerfd keeps: `render_queue`.
+    RenderQueue,
+    /// The review log as a CSV sheet, EDL locators, or sequence markers.
+    ExportComments(paperwork::CommentsRequest),
+    /// The captions as SRT or WebVTT.
+    ExportCaptions(paperwork::CaptionsRequest),
+    /// The programme measured to EBU R128: `loudness`.
+    Loudness {
         #[serde(default)]
         sequence: Option<String>,
+    },
+    /// What the media files say of themselves: `media_info`.
+    MediaInfo {
+        #[serde(default)]
+        media: Option<String>,
+    },
+    /// Where a media file cuts, pauses and is loudest: `media_index`.
+    MediaIndex {
+        media: String,
+    },
+    /// Keep a clip's picture effects as an effects preset: `look_saved`.
+    LookSave {
+        clip: String,
+        name: String,
+        #[serde(default)]
+        replace: bool,
+    },
+    /// Put an effects preset on a clip, as one edit.
+    LookApply {
+        clip: String,
+        path: String,
     },
     PresetExport {
         path: String,
@@ -271,7 +309,8 @@ struct Shared {
     closed: AtomicBool,
     revision: AtomicU64,
     agent_busy: AtomicBool,
-    export_busy: AtomicBool,
+    /// A viewer preview is rendering; exports go through `renders`.
+    preview_busy: AtomicBool,
     abort: Mutex<Option<Arc<AtomicBool>>>,
     frame: Mutex<Option<PlaybackFrame>>,
     seek: Mutex<Option<PendingSeek>>,
@@ -307,6 +346,10 @@ struct Shared {
     check_busy: AtomicBool,
     /// Cancels the QC check running, so closing the bridge stops it.
     check_cancel: Mutex<Option<kerf_engine::CancellationToken>>,
+    /// The render queue the export thread works through.
+    renders: queue::Queue,
+    /// Loudness, media info and media index work.
+    analysis: analysis::Analysis,
 }
 
 struct Bridge {
@@ -392,6 +435,8 @@ fn publish_snapshot(
             Ok(mut project) => {
                 media::publish_status(shared, tx, &project);
                 kerf_runtime::resolve_media_paths(&mut project, &shared.directory);
+                // What new media are, for the bin and the inspector.
+                analysis::media_changed(shared, tx, &project);
                 if let Ok(mut model) = shared.model.lock() {
                     *model = Some(project.clone());
                 }
@@ -573,6 +618,58 @@ fn runtime_worker(
             }
             command => command,
         };
+        // Render queue, paperwork files and saved looks answer with their
+        // own events, never a state.
+        let side = match command {
+            Command::Export(request) => {
+                let renders: Arc<dyn queue::Renders> = Arc::new(active_client.clone());
+                Err(("export", queue::submit(&shared, renders, &request, &tx)))
+            }
+            Command::ExportCancel { job_id } => Err((
+                "export_cancel",
+                queue::cancel(&shared, &active_client, &job_id, &tx),
+            )),
+            Command::RenderQueue => {
+                Err(("render_queue", queue::publish(&shared, &active_client, &tx)))
+            }
+            Command::ExportComments(request) if request.format != "markers" => Err((
+                "export_comments",
+                paperwork::export_comments(&active_client, &directory, &request, &tx),
+            )),
+            Command::ExportCaptions(request) => Err((
+                "export_captions",
+                paperwork::export_captions(&active_client, &directory, &request, &tx),
+            )),
+            Command::LookSave {
+                clip,
+                name,
+                replace,
+            } => Err((
+                "look_save",
+                looks::save_from(&active_client, &directory, &clip, &name, replace, &tx),
+            )),
+            command => Ok(command),
+        };
+        let command = match side {
+            Ok(command) => command,
+            Err((name, result)) => {
+                match result {
+                    Ok(()) => {}
+                    Err(error) if error.is_transport() => {
+                        let _ = media.try_send(Command::Pause);
+                        connection_event(&tx, "disconnected", Some(&error.message));
+                        client = None;
+                    }
+                    Err(error) => {
+                        queue::refused(&tx, name, &error);
+                    }
+                }
+                continue;
+            }
+        };
+        // What follows a command's state, and the command a refusal names.
+        let mut then: Option<Value> = None;
+        let mut refusal: Option<&'static str> = None;
         let result = match command {
             Command::Refresh => active_client.get_state(),
             Command::Reload => {
@@ -607,6 +704,40 @@ fn runtime_worker(
                 active_client.import_projection_request("ui", &operation, state.revision)
             }),
             Command::ProjectionRepair => active_client.repair_projection(),
+            Command::ExportComments(request) => {
+                match paperwork::markers(&active_client, &request, &tx) {
+                    Ok(Some((ops, revision, count))) => {
+                        then = Some(paperwork::markers_done(count));
+                        refusal = Some("markers");
+                        active_client.apply_ops_request("ui", &operation, ops, revision)
+                    }
+                    Ok(None) => continue,
+                    Err(error) => Err(error),
+                }
+            }
+            Command::LookApply { clip, path } => {
+                let opened = active_client
+                    .get_document(false)
+                    .and_then(|(revision, text)| {
+                        kerf_runtime::parse_document(&text).map(|project| (revision, project))
+                    });
+                match opened {
+                    Ok((revision, project)) => {
+                        match looks::apply(&directory, &project, &clip, &path) {
+                            Ok((ops, event)) => {
+                                then = Some(event);
+                                refusal = Some("look_apply");
+                                active_client.apply_ops_request("ui", &operation, ops, revision)
+                            }
+                            Err(message) => {
+                                looks::refused(&tx, "look_apply", &message);
+                                continue;
+                            }
+                        }
+                    }
+                    Err(error) => Err(error),
+                }
+            }
             Command::PresetSave { name, replace } => {
                 let saved = active_client
                     .get_document(false)
@@ -746,21 +877,6 @@ fn runtime_worker(
                 );
                 continue;
             }
-            Command::Export { quality, sequence } => {
-                spawn_render(
-                    RenderRequest {
-                        quality,
-                        preview: false,
-                        proposal: None,
-                        range: None,
-                        sequence,
-                    },
-                    &active_client,
-                    &tx,
-                    &shared,
-                );
-                continue;
-            }
             _ => continue,
         };
         match result {
@@ -771,6 +887,9 @@ fn runtime_worker(
                 } else {
                     publish(state, &shared, &tx, &mut previous);
                 }
+                if let Some(event) = then.take() {
+                    emit(&tx, event);
+                }
                 let _ = review::follow(&active_client, review_revision, &shared, &tx);
             }
             Err(error) if error.is_transport() => {
@@ -779,7 +898,13 @@ fn runtime_worker(
                 client = None;
             }
             Err(runtime_error) => {
-                error(&tx, runtime_error.message);
+                match refusal {
+                    Some("markers") => paperwork::markers_failed(&tx, &runtime_error.message),
+                    Some(name) => {
+                        queue::refused(&tx, name, &runtime_error);
+                    }
+                    None => error(&tx, runtime_error.message),
+                }
                 if let Ok(state) = active_client.get_state() {
                     publish_force(state, &shared, &tx, &mut previous);
                 } else {
@@ -792,7 +917,7 @@ fn runtime_worker(
     }
 }
 
-/// Run `request` on its own thread, one render at a time. A preview plays
+/// Run the preview `request` on its own thread, one at a time. It plays
 /// once rendered, unless the program was edited, the preview stopped, or
 /// the bridge closed meanwhile.
 fn spawn_render(
@@ -801,8 +926,8 @@ fn spawn_render(
     tx: &SyncSender<Value>,
     shared: &Arc<Shared>,
 ) {
-    if shared.export_busy.swap(true, Ordering::SeqCst) {
-        error(tx, "An export is already running");
+    if shared.preview_busy.swap(true, Ordering::SeqCst) {
+        error(tx, "A preview is already rendering");
         return;
     }
     if request.preview {
@@ -864,7 +989,7 @@ fn spawn_render(
         if request.preview {
             shared.preview_running.store(false, Ordering::SeqCst);
         }
-        shared.export_busy.store(false, Ordering::SeqCst);
+        shared.preview_busy.store(false, Ordering::SeqCst);
     });
 }
 
@@ -886,6 +1011,8 @@ fn export(
     )?;
     let cancel = kerf_runtime::render_cancel_path(client.directory(), &job.job_id);
     if preview {
+        // The viewer's render, not an output.
+        shared.renders.mark_viewer(&job.job_id);
         if let Ok(mut running) = shared.preview_cancel.lock() {
             *running = Some(cancel.clone());
         }
@@ -1738,7 +1865,7 @@ pub unsafe extern "C" fn kerf_bridge_new(
         revision: AtomicU64::new(0),
         closed: AtomicBool::new(false),
         agent_busy: AtomicBool::new(false),
-        export_busy: AtomicBool::new(false),
+        preview_busy: AtomicBool::new(false),
         abort: Mutex::new(None),
         frame: Mutex::new(None),
         seek: Mutex::new(None),
@@ -1753,6 +1880,8 @@ pub unsafe extern "C" fn kerf_bridge_new(
         review_seen: Mutex::new(None),
         check_busy: AtomicBool::new(false),
         check_cancel: Mutex::new(None),
+        renders: queue::Queue::default(),
+        analysis: analysis::Analysis::default(),
     });
     {
         let directory = directory.clone();
@@ -1775,6 +1904,11 @@ pub unsafe extern "C" fn kerf_bridge_new(
         let tx = emit.clone();
         let shared = shared.clone();
         thread::spawn(move || media_worker(media_rx, tx, shared));
+    }
+    {
+        let tx = emit.clone();
+        let shared = shared.clone();
+        thread::spawn(move || queue::worker(shared, tx));
     }
     {
         let tx = emit.clone();
@@ -1816,6 +1950,8 @@ pub unsafe extern "C" fn kerf_bridge_free(bridge: *mut c_void) {
     cancel_preview(&bridge.shared);
     discard_previews(&bridge.shared);
     qc::cancel(&bridge.shared);
+    bridge.shared.renders.close(&bridge.shared.directory);
+    bridge.shared.analysis.close();
     if let Ok(abort) = bridge.shared.abort.lock() {
         if let Some(abort) = &*abort {
             abort.store(true, Ordering::SeqCst);
@@ -1883,6 +2019,18 @@ pub unsafe extern "C" fn kerf_bridge_send(bridge: *mut c_void, message: *const c
         }
         Command::Check { sequence } => {
             qc::spawn(bridge.shared.clone(), bridge.events_tx.clone(), sequence);
+            true
+        }
+        Command::Loudness { sequence } => {
+            analysis::loudness(bridge.shared.clone(), bridge.events_tx.clone(), sequence);
+            true
+        }
+        Command::MediaInfo { media } => {
+            analysis::media_info(bridge.shared.clone(), bridge.events_tx.clone(), media);
+            true
+        }
+        Command::MediaIndex { media } => {
+            analysis::media_index(bridge.shared.clone(), bridge.events_tx.clone(), media);
             true
         }
         Command::CloudSignIn { .. } | Command::CloudSignOut | Command::CloudRefresh => {
@@ -2179,7 +2327,7 @@ pub unsafe extern "C" fn kerf_bridge_frame(bridge: *mut c_void, output: *mut Ker
 mod tests {
     use super::{
         cancel_preview, discard_preview, discard_previews, media_worker, preview_frame_size,
-        publish, publish_force, rendered_preview, sweep_previews, AgentSettings, Command,
+        publish, publish_force, queue, rendered_preview, sweep_previews, AgentSettings, Command,
         MediaProject, Shared,
     };
     use kerf_runtime::{EditOp, PendingProposal, ProposalEntry, ProposalFreshness, StateSnapshot};
@@ -2667,17 +2815,17 @@ mod tests {
             serde_json::from_value(json!({"type": "preview_exit"})).unwrap(),
             Command::PreviewExit
         ));
-        let Command::Export { quality, sequence } = serde_json::from_value(json!({
+        let Command::Export(export) = serde_json::from_value(json!({
             "type": "export", "quality": "full", "sequence": "vertical"
         }))
         .unwrap() else {
             panic!("expected export");
         };
-        assert_eq!(quality, "full");
-        assert_eq!(sequence.as_deref(), Some("vertical"));
+        assert_eq!(export.quality, "full");
+        assert_eq!(export.sequence.as_deref(), Some("vertical"));
         assert!(matches!(
             serde_json::from_value(json!({"type": "export", "quality": "preview"})).unwrap(),
-            Command::Export { sequence: None, .. }
+            Command::Export(queue::ExportRequest { sequence: None, .. })
         ));
     }
 

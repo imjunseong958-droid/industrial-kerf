@@ -9,6 +9,8 @@
 #include <QDirIterator>
 #include <QFontDatabase>
 #include <QPointer>
+#include <QSettings>
+#include <QSize>
 #include <QStandardPaths>
 #include <QTimer>
 
@@ -40,6 +42,14 @@ kerf::MainWindow *openEditor(const QString &project, const QString &kerfd) {
 } // namespace
 
 int main(int argc, char **argv) {
+    // A smoke run may keep its settings in a folder of its own (INI files),
+    // so a capture neither reads nor changes the user's: set before the
+    // first QSettings is made.
+    for (int i = 1; i + 1 < argc; ++i)
+        if (QString::fromUtf8(argv[i]) == QStringLiteral("--settings-dir")) {
+            QSettings::setDefaultFormat(QSettings::IniFormat);
+            QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, QString::fromUtf8(argv[i + 1]));
+        }
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("Industrial Kerf"));
     // Windows and Linux add it after the project's name in window titles;
@@ -62,6 +72,8 @@ int main(int argc, char **argv) {
     QString screenshotPath;
     bool renderPreview = false;
     int quitAfterMs = 0;
+    QSize windowSize;
+    QString workspace;
     QStringList positional;
     for (int i = 1; i < argc; ++i) {
         const QString argument = QString::fromUtf8(argv[i]);
@@ -75,6 +87,15 @@ int main(int argc, char **argv) {
             quitAfterMs = QString::fromUtf8(argv[++i]).toInt();
         } else if (argument.startsWith(QStringLiteral("--quit-after-ms="))) {
             quitAfterMs = argument.mid(16).toInt();
+        } else if (argument == QStringLiteral("--settings-dir") && i + 1 < argc) {
+            ++i; // applied before the application was made
+        } else if (argument == QStringLiteral("--window-size") && i + 1 < argc) {
+            // WxH, e.g. 1600x1000 (the design's canvas).
+            const QStringList parts = QString::fromUtf8(argv[++i]).split(QLatin1Char('x'));
+            if (parts.size() == 2) windowSize = QSize(parts.at(0).toInt(), parts.at(1).toInt());
+        } else if (argument == QStringLiteral("--workspace") && i + 1 < argc) {
+            // A built-in or saved workspace's name: Review, Edit, Finish, Deliver.
+            workspace = QString::fromUtf8(argv[++i]);
         } else {
             positional << argument;
         }
@@ -107,7 +128,10 @@ int main(int argc, char **argv) {
         project = launcher.chosenPath();
     }
     if (!shown) {
+        // The workspace to open in, as if chosen when the editor last closed.
+        if (!workspace.isEmpty()) QSettings().setValue(QStringLiteral("workspace/current"), workspace);
         QPointer<kerf::MainWindow> window = openEditor(QDir(project).absolutePath(), kerfd);
+        if (windowSize.isValid() && !windowSize.isEmpty()) window->resize(windowSize);
         shown = window.data();
         if (renderPreview) {
             QTimer::singleShot(1500, window.data(), [window] {

@@ -4,6 +4,13 @@
 #include "test_registry.h"
 
 #include "ask_prompt.h"
+#include "bridge.h"
+#include "components.h"
+#include "deliver_pane.h"
+#include "design_tokens.h"
+#include "editor_bus.h"
+#include "inspector_column.h"
+#include "wiring/inspector_wiring.h"
 #include "chat_panel.h"
 #include "command_registry.h"
 #include "device_frame.h"
@@ -114,15 +121,11 @@ using namespace test;
 
 namespace {
 
-// Whether `image` has any paint outside the device pixels `logical` covers.
-bool paintsOutside(const QImage &image, const QRectF &logical) {
-    const qreal ratio = image.devicePixelRatio();
-    const QRect inside(QPoint(qFloor(logical.left() * ratio), qFloor(logical.top() * ratio)),
-                       QPoint(qCeil(logical.right() * ratio) - 1, qCeil(logical.bottom() * ratio) - 1));
-    for (int y = 0; y < image.height(); ++y)
-        for (int x = 0; x < image.width(); ++x)
-            if (!inside.contains(x, y) && qAlpha(image.pixel(x, y)) != 0) return true;
-    return false;
+// The property row a control sits in.
+InspectorRow *rowOf(QWidget *widget) {
+    for (QWidget *at = widget; at; at = at->parentWidget())
+        if (auto *row = qobject_cast<InspectorRow *>(at)) return row;
+    return nullptr;
 }
 
 } // namespace
@@ -274,58 +277,56 @@ private slots:
         QCOMPARE(released.constLast().at(1).toDouble(), changed);
     }
 
-    // A slider's default stays in sight in both appearances without
-    // anything drawn on the knob: under the knob the 1pt tick's ends show
-    // above and below it, crisp, in the detent ink; the knob's inside is
-    // its own colour only. A changed value's knob edge stands out against
-    // the groove and panel; at the default it is quieter.
+    // The slider is the kit's .sl in a 24-point row: a 2pt track in
+    // `track` at the middle, the fill in `track2` from its origin to the
+    // knob, a 10pt ink knob; a bipolar slider has the 1 x 6 `track2` tick at
+    // its middle (drawn under the knob, never on it), a one-sided one none.
     void inspectorSliderDefaultShowsAroundTheKnob() {
-        {
-            applyEditorAppearance();
-            const EditorTheme &theme = editorTheme();
-            // The knob's edge is read against what lies round it: a changed
-            // knob's is the more visible one against both the groove and
-            // the panel, at least 3:1 on the groove, in both appearances.
-            const QString look = QStringLiteral("dark");
-            QVERIFY(theme.sliderHandleChanged != theme.sliderHandleAtDefault);
-            for (const QColor &around : {theme.sliderGroove, theme.panel})
-                QVERIFY2(contrastRatio(theme.sliderHandleChanged, around) > contrastRatio(theme.sliderHandleAtDefault, around),
-                         qPrintable(look + QStringLiteral(" on ") + around.name()));
-            QVERIFY2(contrastRatio(theme.sliderHandleChanged, theme.sliderGroove) >= 3.0, qPrintable(look));
-            QVERIFY2(contrastRatio(theme.sliderHandleChanged, theme.panel) >= 3.0, qPrintable(look));
-            InspectorSlider slider;
-            slider.resize(92, ScrubField::kHeight);
-            slider.setRange(-3.0, 3.0);
-            slider.setOrigin(0.0);
-            slider.setDetent(0.0);
-            for (const double value : {0.0, 0.1}) {
-                slider.setValue(value);
-                const QString what = QStringLiteral("%1 %2").arg("dark").arg(value);
-                QCOMPARE(slider.knobEdge(), value == 0.0 ? theme.sliderHandleAtDefault : theme.sliderHandleChanged);
-                const QRect tick = slider.detentTick();
-                const QPointF knob = slider.knobCenter();
-                QCOMPARE(tick.width(), 1);
-                QVERIFY2(tick.top() <= knob.y() - InspectorSlider::kKnobRadius - 3.0, qPrintable(what));
-                QVERIFY2(tick.bottom() + 1 >= knob.y() + InspectorSlider::kKnobRadius + 3.0, qPrintable(what));
-                QImage image(slider.size(), QImage::Format_ARGB32_Premultiplied);
-                image.fill(theme.panel);
-                slider.render(&image);
-                // The tick's ends: the detent ink, solid, above and below.
-                for (const int y : {tick.top(), tick.top() + 2, tick.bottom() - 2, tick.bottom()})
-                    QVERIFY2(image.pixelColor(tick.left(), y) == theme.inspectorDetent, qPrintable(what + QStringLiteral(" y %1").arg(y)));
-                // Inside the knob (clear of its 1pt edge): the knob's colour only.
-                for (int y = 0; y < image.height(); ++y)
-                    for (int x = 0; x < image.width(); ++x) {
-                        const QPointF centre(x + 0.5, y + 0.5);
-                        if (QLineF(centre, knob).length() > InspectorSlider::kKnobRadius - 1.5) continue;
-                        QVERIFY2(image.pixelColor(x, y) == theme.sliderHandle,
-                                 qPrintable(what + QStringLiteral(" at %1,%2").arg(x).arg(y)));
-                    }
+        InspectorSlider slider;
+        slider.resize(100, ScrubField::kHeight);
+        slider.setRange(-3.0, 3.0);
+        slider.setOrigin(0.0);
+        slider.setDetent(0.0);
+        QVERIFY(slider.isBipolar());
+        const QRectF track = slider.trackRect();
+        QCOMPARE(track.height(), 2.0);
+        QCOMPARE(track.center().y(), ScrubField::kHeight / 2.0);
+        QCOMPARE(track.left(), InspectorSlider::kKnobRadius);
+        QCOMPARE(slider.fillInk(), tokens::color(tokens::track2));
+        for (const double value : {0.0, 1.5}) {
+            slider.setValue(value);
+            const QRect tick = slider.detentTick();
+            QCOMPARE(tick.size(), QSize(1, 6));
+            QVERIFY(std::abs(tick.left() - (track.left() + track.width() / 2)) <= 1.0);
+            QImage image(slider.size() * 2, QImage::Format_ARGB32_Premultiplied);
+            image.setDevicePixelRatio(2);
+            image.fill(tokens::color(tokens::chrome));
+            slider.render(&image);
+            const QPointF knob = slider.knobCenter();
+            // The knob's middle is the ink, whatever lies under it.
+            QCOMPARE(image.pixelColor((knob * 2).toPoint()).rgb(), tokens::color(tokens::ink).rgb());
+            // The track away from the knob and the fill.
+            const QPointF bare(track.left() + 2, track.center().y());
+            QVERIFY(nearColor(image.pixelColor((bare * 2).toPoint()).rgb(), tokens::color(tokens::track).rgb(), 24));
+            if (value > 0) {
+                const QRectF fill = slider.fillRect();
+                QVERIFY(std::abs(fill.left() - (track.left() + track.width() / 2)) < 0.5);
+                QVERIFY(std::abs(fill.right() - knob.x()) < 0.5);
+            } else {
+                QVERIFY(slider.fillRect().isEmpty());
             }
-            // Away from the knob, the plain 1x10 mark.
-            slider.setValue(2.0);
-            QCOMPARE(slider.detentTick().height(), 10);
         }
+        // One-sided (an opacity): no tick, filled from the left.
+        slider.setRange(0.0, 100.0);
+        slider.setOrigin(0.0);
+        slider.setDetent(100.0);
+        slider.setValue(42.0);
+        QVERIFY(!slider.isBipolar());
+        QVERIFY(slider.detentTick().isEmpty());
+        QCOMPARE(slider.fillRect().left(), slider.trackRect().left());
+        // Disabled (an animated value outside its clip): dis.
+        slider.setEnabled(false);
+        QCOMPARE(slider.fillInk(), tokens::color(tokens::dis));
     }
 
     // A switched-off effect's values stay editable and readable: numbers,
@@ -348,30 +349,29 @@ private slots:
         QWidget *box = inspector->findChild<QWidget *>(QStringLiteral("effectBox"));
         QVERIFY(box);
         QVERIFY(!box->findChild<PowerKey *>(QStringLiteral("effectEnabled"))->isChecked());
-        const EditorTheme &theme = editorTheme();
-        QVERIFY(contrastRatio(theme.textSecondary, theme.inspectorField) >= 4.5);
+        // The secondary ink reads at 4.5:1 on the column.
+        QVERIFY(contrastRatio(tokens::color(tokens::ink2), tokens::color(tokens::chrome)) >= 4.5);
         const auto fields = box->findChildren<ScrubField *>();
         QVERIFY(!fields.isEmpty());
         for (ScrubField *field : fields) {
-            QVERIFY(field->isDimmed());
-            QCOMPARE(field->valueInk(), theme.textSecondary);
+            QVERIFY(field->isDimmed() && field->isEnabled());
+            QCOMPARE(field->valueInk(), tokens::color(tokens::ink2));
         }
         const auto sliders = box->findChildren<InspectorSlider *>();
         QVERIFY(!sliders.isEmpty());
         for (InspectorSlider *slider : sliders) {
             QVERIFY(slider->isDimmed() && slider->isEnabled());
-            QCOMPARE(slider->fillInk(), theme.textSecondary);
+            QCOMPARE(slider->fillInk(), tokens::color(tokens::ink3));
         }
-        for (QLabel *hex : box->findChildren<QLabel *>(QStringLiteral("colorHex"))) {
+        for (QLabel *hex : box->findChildren<QLabel *>(QStringLiteral("colorHex")))
             QVERIFY(hex->property("off").toBool());
-            QCOMPARE(hex->palette().color(QPalette::WindowText), theme.textSecondary);
-        }
+        QVERIFY(box->findChild<QLabel *>(QStringLiteral("effectName"))->property("off").toBool());
     }
 
-    // Each effect is a header with a switch, its name and ⋯ (Reset, Ask
-    // Kerf, Remove), no ✕; folded, a second line lists what changed; its
-    // parameters are scrub fields with units, five before "N more", grouped
-    // under quiet sub-headers when the catalog groups them.
+    // Each effect is a row with its enable box, its name and More (Reset,
+    // Ask Kerf, Remove), no ✕; its parameters are rows with units, five
+    // before "N more", grouped under quiet sub-headers when the catalog
+    // groups them.
     void inspectorShowsAndEditsTheEffectStack() {
         QSettings().remove(QStringLiteral("editor/inspector"));
         const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("editor/inspector")); });
@@ -389,10 +389,13 @@ private slots:
         InspectorPanel *inspector = window.m_inspector;
         InspectorSection *effects = inspector->section(QStringLiteral("effects"));
         QVERIFY(effects);
-        // Folded, its header names every effect it counts, one switched
-        // off marked so.
-        QVERIFY(!effects->isOpen());
+        // Open (the design's first group), counting its effects; its
+        // tooltip names every one, one switched off marked so.
+        QVERIFY(effects->isOpen());
+        QCOMPARE(effects->findChild<QLabel *>(QStringLiteral("sectionCount"))->text(), QStringLiteral("2"));
         QCOMPARE(effects->summary(), QStringLiteral("Edge Glow, Invert (off)"));
+        // Its box: every effect on or off (one is on).
+        QCOMPARE(effects->enable(), InspectorSection::Enable::On);
         // Shown in whole names only: the ones on, then the count switched
         // off; short of room, "1 on · 1 off"; shorter still, nothing.
         {
@@ -406,7 +409,6 @@ private slots:
             QCOMPARE(fit(QStringLiteral("Primary Colour Correction +1 · 1 off")), QStringLiteral("Primary Colour Correction +1 · 1 off"));
             QCOMPARE(fit(QStringLiteral("Primary Colour Correction")), QStringLiteral("2 on · 1 off"));
             QCOMPARE(InspectorSection::fitSummary(summary, metrics, 8), QString());
-            QCOMPARE(effects->shownSummary().contains(QChar(0x2026)), false);
         }
         const auto boxes = inspector->findChildren<QWidget *>(QStringLiteral("effectBox"));
         QCOMPARE(boxes.size(), 2);
@@ -423,10 +425,7 @@ private slots:
         QVERIFY(boxes.at(0)->findChild<InspectorSlider *>(QStringLiteral("slider_intensity")));
         QVERIFY(!boxes.at(1)->findChild<PowerKey *>(QStringLiteral("effectEnabled"))->isChecked());
         QVERIFY(boxes.at(1)->findChild<QLabel *>(QStringLiteral("effectName"))->property("off").toBool());
-        // Folded, the second line lists the values that differ.
-        auto *summary = boxes.at(0)->findChild<QLabel *>(QStringLiteral("effectSummary"));
-        QCOMPARE(summary->text(), QStringLiteral("Glow radius 40 px · Intensity 200%"));
-        QVERIFY(!summary->isHidden());
+        // Folded at first: its rows hidden under its own row.
         QVERIFY(boxes.at(0)->findChild<QWidget *>(QStringLiteral("effectParams"))->isHidden());
         // No ✕ anywhere.
         for (QAbstractButton *button : inspector->findChildren<QAbstractButton *>()) {
@@ -436,7 +435,6 @@ private slots:
         // Opening it shows its rows and hides the line; it stays open for the effect.
         boxes.at(0)->findChild<GlyphButton *>(QStringLiteral("effectChevron"))->click();
         QVERIFY(!boxes.at(0)->findChild<QWidget *>(QStringLiteral("effectParams"))->isHidden());
-        QVERIFY(summary->isHidden());
         QVERIFY(QSettings().value(QStringLiteral("editor/inspector/fx/light.edgeglow/open")).toBool());
         // Row labels keep one 12-point line: a first word the effect's name
         // says goes ("Edge Threshold" under Edge Glow reads "Threshold"),
@@ -543,7 +541,7 @@ private slots:
         QCOMPARE(grouped->findChild<QPushButton *>(QStringLiteral("effectMoreToggle"))->text(), QStringLiteral("2 more"));
         QWidget *amount = grouped->findChild<ScrubField *>(QStringLiteral("effectParam_amount"));
         QVERIFY(amount && grouped->findChild<QWidget *>(QStringLiteral("effectMoreRows"))->isAncestorOf(amount));
-        auto *tintRow = qobject_cast<InspectorRow *>(grouped->findChild<ScrubField *>(QStringLiteral("effectParam_tint"))->parentWidget());
+        auto *tintRow = rowOf(grouped->findChild<ScrubField *>(QStringLiteral("effectParam_tint")));
         QVERIFY(tintRow);
         QCOMPARE(tintRow->label()->toolTip(), QStringLiteral("Basic Correction: Tint"));
 
@@ -564,8 +562,7 @@ private slots:
         auto *more = long7->findChild<QPushButton *>(QStringLiteral("effectMoreToggle"));
         QVERIFY(more);
         QCOMPARE(more->text(), QStringLiteral("2 more"));
-        QCOMPARE(more->font().pixelSize(), 12);
-        QCOMPARE(more->mapTo(long7, QPoint()).x(), 0);
+        QCOMPARE(more->font().pixelSize(), 11);
         QWidget *moreRows = long7->findChild<QWidget *>(QStringLiteral("effectMoreRows"));
         QVERIFY(moreRows->isHidden());
         QVERIFY(moreRows->isAncestorOf(long7->findChild<ScrubField *>(QStringLiteral("effectParam_p5"))));
@@ -625,17 +622,17 @@ private slots:
         QCOMPARE(rotation->format().unit, QStringLiteral("°"));
         QCOMPARE(x->format().unit, QStringLiteral("px"));
         QCOMPARE(x->format().prefix, QStringLiteral("X"));
-        // Animated: its value at the playhead (0.25 of 1080), read-only, ◆.
-        auto *xRow = qobject_cast<InspectorRow *>(x->parentWidget());
+        // Animated: its value at the playhead (0.25 of 1080), editable (the
+        // edit keys the playhead), its keyframe button lit on the key there.
+        auto *xRow = rowOf(x);
         QVERIFY(xRow);
-        QVERIFY(x->isReadOnly());
+        QVERIFY(!x->isReadOnly());
         QCOMPARE(x->text(), QStringLiteral("270"));
         QVERIFY(xRow->isAnimated());
-        QVERIFY(xRow->findChild<QLabel *>(QStringLiteral("animatedMark"))->toolTip().contains(QStringLiteral("2 keyframes")));
+        QVERIFY(xRow->keyframeButton()->isAnimated() && xRow->keyframeButton()->has());
         inspector->setPlayhead(0.5);
         QCOMPARE(x->text(), QStringLiteral("675"));
-        for (QWidget *widget : inspector->findChildren<QWidget *>())
-            QVERIFY(!widget->objectName().contains(QStringLiteral("keyframe"), Qt::CaseInsensitive));
+        QVERIFY(!xRow->keyframeButton()->has());
         QCOMPARE(blend->currentText(), QStringLiteral("Normal"));
         opacity->commitText(QStringLiteral("50%"));
         QVERIFY(takeOps(window).isEmpty());
@@ -699,16 +696,12 @@ private slots:
         // A file parameter is a field with a folder glyph inside its right
         // end that chooses the file; no push button beside it.
         inspector->findChild<QWidget *>(QStringLiteral("effectParams"))->show();
-        QWidget *file = inspector->findChild<QWidget *>(QStringLiteral("effectParam_lut"));
-        QVERIFY(file);
-        auto *fileLine = file->findChild<QLineEdit *>();
-        QVERIFY(fileLine && !file->findChild<QPushButton *>());
+        auto *fileLine = inspector->findChild<QLineEdit *>(QStringLiteral("effectParam_lut"));
+        QVERIFY(fileLine);
+        QVERIFY(!fileLine->parentWidget()->findChild<QPushButton *>());
         auto *fileChoose = fileLine->findChild<QAction *>(QStringLiteral("chooseFile"));
         QVERIFY(fileChoose && !fileChoose->icon().isNull());
         QCOMPARE(fileChoose->toolTip(), QStringLiteral("Choose a file"));
-        file->resize(240, 22);
-        file->layout()->activate();
-        QCOMPARE(fileLine->geometry().right(), file->width() - 1);
         // A track parameter picks a picture track or none; a sound one a
         // sound track or none.
         auto *track = inspector->findChild<QComboBox *>(QStringLiteral("effectParam_map"));
@@ -829,7 +822,7 @@ private slots:
         QVERIFY(std::abs(ops.first().toObject().value("props").toObject().value("x").toDouble() - 10.0 / 1080.0) < 1e-9);
         // So does its row's label.
         snapshot(2, {});
-        auto *row = qobject_cast<InspectorRow *>(x->parentWidget());
+        auto *row = rowOf(x);
         QVERIFY(row && row->label()->field() == x);
         mouse(row->label(), QEvent::MouseButtonPress, QPointF(10, 12));
         mouse(row->label(), QEvent::MouseMove, QPointF(30, 12));
@@ -929,26 +922,28 @@ private slots:
         QCOMPARE(formatWithUnit(percent, 50.0), QStringLiteral("50%"));
         QCOMPARE(formatWithUnit(x->format(), -48.0), QString(QChar(0x2212)) + QStringLiteral("48 px"));
         QVERIFY(!parseNumber(percent, QStringLiteral("soon"), 1.0));
-        // A value at its default is drawn in the secondary ink, a changed one
-        // in the accent (4.5:1 on its well).
+        // Values are mono 12 in the ink, default or not; the unit is UI 11
+        // ink3 in its 14-point slot, the axis label too.
         snapshot(18, QJsonObject{{"x", 0.1}});
         ScrubField *y = inspector->findChild<ScrubField *>(QStringLiteral("prop_y"));
         y->resize(78, ScrubField::kHeight);
         x->resize(78, ScrubField::kHeight);
         TextRecorder quiet;
         y->render(&quiet);
-        QCOMPARE(quiet.colorOf(QStringLiteral("0")).rgb(), editorTheme().textSecondary.rgb());
+        QCOMPARE(quiet.colorOf(QStringLiteral("0")).rgb(), tokens::color(tokens::ink).rgb());
         TextRecorder changed;
         x->render(&changed);
-        QCOMPARE(changed.colorOf(QStringLiteral("108")).rgb(), changedValueInk().rgb());
-        QVERIFY(contrastRatio(changedValueInk(), editorTheme().wellFill) >= 4.5);
-        QCOMPARE(changed.colorOf(QStringLiteral("px")).rgb(), editorTheme().textSecondary.rgb());
+        QCOMPARE(changed.colorOf(QStringLiteral("108")).rgb(), tokens::color(tokens::ink).rgb());
+        QCOMPARE(changed.colorOf(QStringLiteral("px")).rgb(), tokens::color(tokens::ink3).rgb());
+        QCOMPARE(changed.colorOf(QStringLiteral("X")).rgb(), tokens::color(tokens::ink3).rgb());
+        QCOMPARE(QFontInfo(x->valueFont()).pixelSize(), 12);
     }
 
-    // ↺ shows on a row's hover only while its value differs from the
-    // default, and sends null; so does double-clicking its label. A
-    // section's ↺ resets all its rows in one edit, and its folded header
-    // says what changed in it.
+    // Double-clicking a row's label sends null for its value. A group's
+    // reset (shown while the pointer is over its header, live once anything
+    // in it moved) resets all its rows in one edit; its header's tooltip says
+    // what changed in it. Folds are kept per pane and kind of clip; ⌥-click
+    // opens or closes every group, ⌘-click opens only this one.
     void inspectorRowsResetToDefaults() {
         QSettings().remove(QStringLiteral("editor/inspector"));
         const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("editor/inspector")); });
@@ -964,8 +959,8 @@ private slots:
         snapshot(1, QJsonObject{{"scale", 1.12}, {"crop_l", 0.1}, {"crop_b", 0.05}});
         window.selectClip(QStringLiteral("v"));
         InspectorPanel *inspector = window.m_inspector;
-        auto *scaleRow = qobject_cast<InspectorRow *>(inspector->findChild<ScrubField *>(QStringLiteral("prop_scale"))->parentWidget());
-        auto *opacityRow = qobject_cast<InspectorRow *>(inspector->findChild<ScrubField *>(QStringLiteral("prop_opacity"))->parentWidget());
+        auto *scaleRow = rowOf(inspector->findChild<ScrubField *>(QStringLiteral("prop_scale")));
+        auto *opacityRow = rowOf(inspector->findChild<ScrubField *>(QStringLiteral("prop_opacity")));
         QVERIFY(scaleRow && opacityRow);
         const auto hover = [](QWidget *widget, bool in) {
             if (in) {
@@ -977,27 +972,19 @@ private slots:
             }
         };
         QVERIFY(scaleRow->isChanged() && !opacityRow->isChanged());
-        QVERIFY(!scaleRow->resetButton()->isVisibleTo(scaleRow));
-        hover(scaleRow, true);
-        QVERIFY(scaleRow->resetButton()->isVisibleTo(scaleRow));
-        hover(opacityRow, true);
-        QVERIFY(!opacityRow->resetButton()->isVisibleTo(opacityRow));
-        scaleRow->resetButton()->click();
-        QJsonObject op = takeOps(window).first().toObject();
-        QVERIFY(op.value("props").toObject().contains("scale") && op.value("props").toObject().value("scale").isNull());
-        hover(scaleRow, false);
-        QVERIFY(!scaleRow->resetButton()->isVisibleTo(scaleRow));
-        // Double-clicking the label resets it too.
+        // Double-clicking the label resets it.
         QMouseEvent doubleClick(QEvent::MouseButtonDblClick, QPointF(4, 4), scaleRow->label()->mapToGlobal(QPointF(4, 4)),
                                 Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
         QCoreApplication::sendEvent(scaleRow->label(), &doubleClick);
-        QVERIFY(takeOps(window).first().toObject().value("props").toObject().value("scale").isNull());
-        // Crop folds to what changed in it, and resets in one edit.
+        QJsonObject op = takeOps(window).first().toObject();
+        QVERIFY(op.value("props").toObject().contains("scale") && op.value("props").toObject().value("scale").isNull());
+        // Crop says what changed in it, and resets in one edit.
         InspectorSection *crop = inspector->section(QStringLiteral("crop"));
-        QVERIFY(crop && !crop->isOpen());
-        QCOMPARE(crop->summary(), QStringLiteral("L 192 · B 54 px"));
+        QVERIFY(crop && crop->isOpen());
+        QCOMPARE(crop->summary(), QStringLiteral("Left 192 px · Bottom 54 px"));
+        QVERIFY(crop->resetButton()->isHidden());
         hover(crop->header(), true);
-        QVERIFY(crop->resetButton()->isVisibleTo(crop));
+        QVERIFY(crop->resetButton()->isVisibleTo(crop) && crop->resetButton()->isEnabled());
         crop->resetButton()->click();
         const QJsonArray ops = takeOps(window);
         QCOMPARE(ops.size(), 2);
@@ -1006,32 +993,37 @@ private slots:
             QCOMPARE(props.size(), 1);
             QVERIFY(props.begin().value().isNull());
         }
+        hover(crop->header(), false);
+        QVERIFY(crop->resetButton()->isHidden());
         snapshot(2, QJsonObject{{"crop_b", 0.05}});
         QCOMPARE(crop->summary(), QStringLiteral("Bottom 54 px"));
         snapshot(3, {});
         QVERIFY(crop->summary().isEmpty());
         hover(crop->header(), true);
-        QVERIFY(!crop->resetButton()->isVisibleTo(crop));
-        // A section opens and closes, and stays so for this kind of clip.
-        crop->setOpen(true);
-        emit crop->toggled(true, Qt::NoModifier);
-        QVERIFY(QSettings().value(QStringLiteral("editor/inspector/folds/video")).toMap().value(QStringLiteral("crop")).toBool());
-        // ⌥-click opens or closes every section; ⌘-click opens only this one.
-        InspectorSection *anchor = inspector->section(QStringLiteral("anchor"));
+        QVERIFY(!crop->resetButton()->isEnabled());
+        // A group folds and opens, and stays so for this pane and kind.
         crop->setOpen(false);
+        emit crop->toggled(false, Qt::NoModifier);
+        QVERIFY(!QSettings().value(QStringLiteral("editor/inspector/folds/video:video")).toMap().value(QStringLiteral("crop")).toBool());
+        // ⌥-click opens or closes every group; ⌘-click opens only this one.
+        InspectorSection *transform = inspector->section(QStringLiteral("transform"));
+        InspectorSection *time = inspector->section(QStringLiteral("time"));
+        QVERIFY(transform && time);
         emit crop->toggled(false, Qt::AltModifier);
-        QVERIFY(!anchor->isOpen() && !inspector->section(QStringLiteral("source"))->isOpen());
-        anchor->setOpen(true);
-        emit anchor->toggled(true, Qt::AltModifier);
-        QVERIFY(crop->isOpen() && inspector->section(QStringLiteral("source"))->isOpen());
-        emit anchor->toggled(true, Qt::ControlModifier);
-        QVERIFY(anchor->isOpen() && !crop->isOpen() && !inspector->section(QStringLiteral("source"))->isOpen());
+        QVERIFY(!transform->isOpen() && !time->isOpen());
+        transform->setOpen(true);
+        emit transform->toggled(true, Qt::AltModifier);
+        QVERIFY(crop->isOpen() && time->isOpen());
+        emit transform->toggled(true, Qt::ControlModifier);
+        QVERIFY(transform->isOpen() && !crop->isOpen() && !time->isOpen());
+        // Folded, a group's rows hide and its chevron turns.
+        QVERIFY(crop->bodyWidget()->isHidden());
+        QVERIFY(!crop->chevron()->isOpen());
     }
 
-    // Each module's fold is kept by id, so one added since (or newly open
-    // by default) opens or folds as it does by default; the old list of
-    // open modules carries over: what was open stays open, and a module
-    // open by default missing from it stays folded.
+    // Each group's fold is kept by id per pane and kind, so one never seen
+    // opens or folds as the design has it: Effects, Compositing, Transform
+    // and Crop open, the rest folded.
     void inspectorSectionFoldsKeepNewModulesDefaults() {
         QSettings().remove(QStringLiteral("editor/inspector"));
         const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("editor/inspector")); });
@@ -1048,38 +1040,27 @@ private slots:
                 if (entry.section->isOpen()) ids << entry.section->id();
             return ids;
         };
-        // Left with only Crop open before Transform and Composite came open
-        // by default: they open now, Crop stays open, and Anchor folded.
-        QSettings().setValue(QStringLiteral("editor/inspector/sections/video"), QStringList{QStringLiteral("crop")});
-        {
-            const auto inspector = build({QStringLiteral("v")});
-            QCOMPARE(opened(*inspector), (QStringList{"transform", "compositing", "crop"}));
-        }
-        // Tracks, open by default and missing from the sequence's list, was
-        // folded by hand, and stays so.
-        QSettings().setValue(QStringLiteral("editor/inspector/sections/sequence"), QStringList{QStringLiteral("markers")});
+        QCOMPARE(opened(*build({QStringLiteral("v")})), (QStringList{"effects", "compositing", "transform", "crop"}));
+        // The sequence: Format and Tracks open, Markers folded.
         {
             const auto inspector = build({});
-            QVERIFY(!inspector->section(QStringLiteral("tracks"))->isOpen());
-            QVERIFY(inspector->section(QStringLiteral("markers"))->isOpen());
+            QVERIFY(inspector->section(QStringLiteral("tracks"))->isOpen());
+            QVERIFY(!inspector->section(QStringLiteral("markers"))->isOpen());
         }
-        // A fold is kept by id; a module never seen opens as it does by
-        // default, though others of its kind were folded by hand.
-        QSettings().remove(QStringLiteral("editor/inspector"));
-        QSettings().setValue(QStringLiteral("editor/inspector/folds/video"),
+        // A fold is kept by id; a group never seen opens as it does by default.
+        QSettings().setValue(QStringLiteral("editor/inspector/folds/video:video"),
                              QVariantMap{{QStringLiteral("crop"), true}, {QStringLiteral("compositing"), false}});
         {
             const auto inspector = build({QStringLiteral("v")});
-            QCOMPARE(opened(*inspector), (QStringList{"transform", "crop"}));
+            QCOMPARE(opened(*inspector), (QStringList{"effects", "transform", "crop"}));
             InspectorSection *transform = inspector->section(QStringLiteral("transform"));
             transform->setOpen(false);
             emit transform->toggled(false, Qt::NoModifier);
         }
-        const QVariantMap folds = QSettings().value(QStringLiteral("editor/inspector/folds/video")).toMap();
+        const QVariantMap folds = QSettings().value(QStringLiteral("editor/inspector/folds/video:video")).toMap();
         QCOMPARE(folds.value(QStringLiteral("transform")), QVariant(false));
         QCOMPARE(folds.value(QStringLiteral("crop")), QVariant(true));
-        QVERIFY(!QSettings().contains(QStringLiteral("editor/inspector/sections/video")));
-        QCOMPARE(opened(*build({QStringLiteral("v")})), (QStringList{"crop"}));
+        QCOMPARE(opened(*build({QStringLiteral("v")})), (QStringList{"effects", "crop"}));
     }
 
     // Fit and Fill write the scale that fits or fills the frame, centred;
@@ -1103,28 +1084,31 @@ private slots:
         snapshot(1, {}, 1.0, false);
         window.selectClip(QStringLiteral("v"));
         InspectorPanel *inspector = window.m_inspector;
-        auto *fit = inspector->findChild<KeyBank *>(QStringLiteral("fitFill"));
+        // Fit and Fill: a pop-up at the Transform group's header.
+        auto *fit = inspector->findChild<QComboBox *>(QStringLiteral("fitFill"));
         QVERIFY(fit);
-        QCOMPARE(fit->current(), 0);
+        QVERIFY(inspector->section(QStringLiteral("transform"))->header()->isAncestorOf(fit));
+        QCOMPARE(fit->currentIndex(), 0);
         emit fit->activated(1);
         QJsonObject props = takeOps(window).first().toObject().value("props").toObject();
         QVERIFY2(std::abs(props.value("scale").toDouble() - 3.1605) < 0.001, qPrintable(QString::number(props.value("scale").toDouble())));
         QVERIFY(props.contains("x") && props.value("x").isNull() && props.contains("y") && props.value("y").isNull());
         snapshot(2, QJsonObject{{"scale", 3.1605}}, 1.0, false);
-        QCOMPARE(fit->current(), 1);
+        QCOMPARE(fit->currentIndex(), 1);
         emit fit->activated(0);
         props = takeOps(window).first().toObject().value("props").toObject();
         QVERIFY(props.value("scale").isNull() && props.value("x").isNull());
         snapshot(3, QJsonObject{{"scale", 3.1605}, {"x", 0.1}}, 1.0, false);
-        QCOMPARE(fit->current(), -1);
+        QCOMPARE(fit->currentIndex(), -1);
+        QCOMPARE(fit->placeholderText(), QStringLiteral("Custom"));
         // Speed: 200% is a ratio of 2; Reverse its sign; presets keep the direction.
         ScrubField *speed = inspector->findChild<ScrubField *>(QStringLiteral("speed"));
         auto *reverse = inspector->findChild<GlyphButton *>(QStringLiteral("speedReverse"));
         QVERIFY(speed && reverse);
         QCOMPARE(speed->text(), QStringLiteral("100"));
-        // Off, Reverse is a quiet outline in the secondary ink, no disc.
+        // Off, Reverse is an outline in the secondary ink, no fill.
         QVERIFY(!reverse->isChecked());
-        QCOMPARE(reverse->inkColor(), editorTheme().textSecondary);
+        QCOMPARE(reverse->inkColor(), tokens::color(tokens::ink2));
         QVERIFY(!reverse->discColor().isValid());
         speed->commitText(QStringLiteral("200"));
         QJsonObject op = takeOps(window).first().toObject();
@@ -1136,10 +1120,9 @@ private slots:
         snapshot(5, {}, 2.0, true);
         QCOMPARE(speed->text(), QString(QChar(0x2212)) + QStringLiteral("200"));
         QVERIFY(reverse->isChecked());
-        // On: full ink on the neutral pressed disc, no purple wash.
-        QCOMPARE(reverse->inkColor(), editorTheme().text);
-        QCOMPARE(reverse->discColor(), editorTheme().pressed);
-        QVERIFY(reverse->discColor() != editorTheme().accentTint);
+        // On: ink on the `on` fill (.ib.on), never the accent.
+        QCOMPARE(reverse->inkColor(), tokens::color(tokens::ink));
+        QCOMPARE(reverse->discColor(), tokens::color(tokens::on));
         inspector->findChild<QAction *>(QStringLiteral("speed50"))->trigger();
         QCOMPARE(takeOps(window).first().toObject().value("speed").toString(), QStringLiteral("-0.5"));
         // A title's Place: Top is y −0.30.
@@ -1219,12 +1202,6 @@ private slots:
         QVERIFY(relative);
     }
 
-    static QString plainText(const QString &html) {
-        static const QRegularExpression tags(QStringLiteral("<[^>]*>"));
-        QString text = html;
-        return text.remove(tags).replace(QStringLiteral("&amp;"), QStringLiteral("&"));
-    }
-
     // The header never shows a stand-in name: a clip's own name, else its
     // media's file name, else what generates it, else where it is.
     void inspectorNamesEveryClip() {
@@ -1251,96 +1228,68 @@ private slots:
         QCOMPARE(inspector.nameText(), QStringLiteral("Title"));
     }
 
-    // Selecting a clip shows what it is: a thumbnail, its name, its kind
-    // in the clip's own timeline colour, its track, and its Start, End and
-    // Duration in timecode.
+    // Selecting a clip shows what it is in the clip header: its name over
+    // the mono line "track · in–out · duration"; its Start, End and Duration
+    // in timecode in the Time group; its sound's volume in the Audio pane.
     void inspectorShowsWhatEachClipIs() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
         window.applySnapshot(everyKindSnapshot(1));
         fakeArtwork(window.m_artwork);
         InspectorPanel *inspector = window.m_inspector;
-        const EditorTheme &theme = editorTheme();
         const struct {
             const char *id;
-            const char *kind;
-            const char *track;
-            ClipKind color;
+            const char *meta;
             const char *start;
             const char *duration;
         } cases[] = {
-            {"v", "Video", "V1 Video 1 · linked A1", ClipKind::Video, "00:00:06:00", "00:00:05:00"},
-            {"n", "Sequence", "V1 Video 1", ClipKind::Video, "00:00:11:00", "00:00:04:00"},
-            {"t", "Title", "V2 Titles", ClipKind::Generator, "00:00:01:00", "00:00:04:00"},
-            {"s", "Solid", "V2 Titles", ClipKind::Generator, "00:00:05:00", "00:00:02:00"},
-            {"adj", "Adjustment", "V2 Titles", ClipKind::Generator, "00:00:08:00", "00:00:03:00"},
+            {"v", "V1 · 00:00:06:00\u201300:00:11:00 · 5s0f", "00:00:06:00", "00:00:05:00"},
+            {"n", "V1 · 00:00:11:00\u201300:00:15:00 · 4s0f", "00:00:11:00", "00:00:04:00"},
+            {"t", "V2 · 00:00:01:00\u201300:00:05:00 · 4s0f", "00:00:01:00", "00:00:04:00"},
+            {"s", "V2 · 00:00:05:00\u201300:00:07:00 · 2s0f", "00:00:05:00", "00:00:02:00"},
+            {"adj", "V2 · 00:00:08:00\u201300:00:11:00 · 3s0f", "00:00:08:00", "00:00:03:00"},
             // As the timeline's header names it: the subtitle track is the
             // third picture track, V3.
-            {"cap", "Caption", "V3 Captions", ClipKind::Caption, "00:00:02:00", "00:00:04:00"},
-            {"a", "Audio", "A1 Dialogue · linked V1", ClipKind::Audio, "00:00:06:00", "00:00:05:00"},
-            {"music", "Audio", "A2 Music", ClipKind::Music, "00:00:00:00", "00:00:18:00"},
+            {"cap", "V3 · 00:00:02:00\u201300:00:06:00 · 4s0f", "00:00:02:00", "00:00:04:00"},
+            {"a", "A1 · 00:00:06:00\u201300:00:11:00 · 5s0f", "00:00:06:00", "00:00:05:00"},
+            {"music", "A2 · 00:00:00:00\u201300:00:18:00 · 18s0f", "00:00:00:00", "00:00:18:00"},
         };
         for (const auto &expected : cases) {
             const QString id = QString::fromLatin1(expected.id);
             window.selectClip(id);
-            const QString kind = plainText(inspector->kindText());
-            QCOMPARE(kind, QStringLiteral("%1 · %2").arg(QString::fromUtf8(expected.kind), QString::fromUtf8(expected.track)));
-            QCOMPARE(inspector->m_kindSquare->color().rgb(), theme.clip(expected.color).header.rgb());
-            QVERIFY(inspector->m_kindSquare->isVisibleTo(inspector));
+            QCOMPARE(inspector->metaText(), QString::fromUtf8(expected.meta));
+            QCOMPARE(inspector->kindText(), inspector->metaText());
             QCOMPARE(inspector->findChild<ScrubField *>(QStringLiteral("timing_start"))->text(), QString::fromLatin1(expected.start));
             QCOMPARE(inspector->findChild<ScrubField *>(QStringLiteral("timing_duration"))->text(), QString::fromLatin1(expected.duration));
-            const QList<QImage> thumbs = inspector->m_thumbnail->images();
-            QCOMPARE(thumbs.size(), 1);
-            QVERIFY2(!thumbs.first().isNull(), expected.id);
             QVERIFY(!inspector->nameText().isEmpty());
         }
-        // The video's thumbnail is its picture; the solid's its colour.
-        window.selectClip(QStringLiteral("s"));
-        const QImage solid = inspector->m_thumbnail->images().first();
-        QCOMPARE(solid.pixelColor(solid.width() / 2, solid.height() / 2).rgb(), QColor(0x33, 0x55, 0x77).rgb());
-        // The adjustment says what it is for; the caption how to change it.
+        // The adjustment says what it is for; its effects come first, open.
         window.selectClip(QStringLiteral("adj"));
         QCOMPARE(inspector->m_note->text(), QStringLiteral("Applies its effects to every layer beneath it."));
         QVERIFY(!inspector->m_note->isHidden());
-        // Its effects come first, and open.
         QVERIFY(inspector->section(QStringLiteral("effects"))->isOpen());
+        QCOMPARE(inspector->m_sections.first().section->id(), QStringLiteral("effects"));
+        // The caption: its text, and how to change it.
         window.selectClip(QStringLiteral("cap"));
         QCOMPARE(inspector->findChild<QLabel *>(QStringLiteral("captionText"))->text(), QStringLiteral("We open on the harbor at dawn."));
-        // Ask Kerf to change it: a link (pointing hand, no bezel), not grey text.
         auto *captionAsk = inspector->findChild<QPushButton *>(QStringLiteral("captionHint"));
-        QVERIFY(captionAsk && captionAsk->property("inspectorLink").toBool());
+        QVERIFY(captionAsk);
         QCOMPARE(captionAsk->cursor().shape(), Qt::PointingHandCursor);
-        // Its one module holds the text.
-        QCOMPARE(inspector->m_sections.size(), 1);
         QCOMPARE(inspector->m_sections.first().section->id(), QStringLiteral("caption"));
-        // The video's Source section: its file and format, as plain text.
+        // The video's sound (linked A1) is edited in the Audio pane, on the linked clip.
         window.selectClip(QStringLiteral("v"));
-        QCOMPARE(inspector->section(QStringLiteral("source"))->summary(), QStringLiteral("1920 × 1080 · 24 fps"));
-        QCOMPARE(inspector->findChild<QLabel *>(QStringLiteral("sourceFile"))->text(), QStringLiteral("fisher-close.mov"));
-        QCOMPARE(inspector->findChild<QLabel *>(QStringLiteral("sourceAudio"))->text(), QStringLiteral("2 ch · 48 kHz"));
-        // Its linked sound's volume and pan, edited on the linked clip.
-        InspectorSection *linked = inspector->section(QStringLiteral("linkedAudio"));
-        QVERIFY(linked);
-        QCOMPARE(linked->title(), QStringLiteral("Audio · A1"));
-        inspector->findChild<ScrubField *>(QStringLiteral("linked_gain"))->commitText(QStringLiteral("-8"));
+        inspector->setPane(InspectorPanel::Pane::Audio);
+        QCOMPARE(inspector->metaText(), QStringLiteral("A1 linked · 48 kHz · stereo"));
+        inspector->findChild<ScrubField *>(QStringLiteral("prop_gain"))->commitText(QStringLiteral("-8"));
         const QJsonObject op = takeOps(window).first().toObject();
         QCOMPARE(op.value("clip").toString(), QStringLiteral("a"));
         QCOMPARE(op.value("props").toObject().value("gain").toDouble(), -8.0);
-        // The music's folded volume reads in dB.
+        inspector->setPane(InspectorPanel::Pane::Video);
+        // The music's volume reads in dB; the sound effects are offered.
         window.selectClip(QStringLiteral("music"));
         QCOMPARE(inspector->findChild<ScrubField *>(QStringLiteral("prop_gain"))->text(), QString(QChar(0x2212)) + QStringLiteral("8.0"));
-        // Its thumbnail is its real waveform, as the bin's tile: the glyph
-        // ink in the band the wave fills, the tile's colour above it.
-        {
-            const QImage wave = inspector->m_thumbnail->images().first();
-            QCOMPARE(wave.pixelColor(64, 4).rgb(), theme.audioTile.rgb());
-            int inked = 0;
-            for (int x = 0; x < wave.width(); ++x) inked += wave.pixelColor(x, 36).rgb() == theme.audioTileGlyph.rgb() ? 1 : 0;
-            QVERIFY2(inked > wave.width() / 2, qPrintable(QString::number(inked)));
-        }
-        // A sound clip carrying no effects has no Effects section: no effect
-        // in this version of Kerf applies to sound.
-        QVERIFY(!inspector->section(QStringLiteral("effects")));
+        QVERIFY(inspector->section(QStringLiteral("volume")));
+        QVERIFY(inspector->section(QStringLiteral("effects")));
     }
 
     // The name edits in place: Return renames the clip (set {name}), Esc
@@ -1373,8 +1322,6 @@ private slots:
         QVERIFY(takeOps(window).isEmpty());
         QVERIFY(!name->editor()->isVisibleTo(name));
         QCOMPARE(name->name(), QStringLiteral("fisher-close.mov"));
-        // The composer names the selected clip.
-        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Ask Kerf about fisher-close.mov…"));
         // ⋯ ▸ Ask Kerf about This Clip: the conversation, open, about it.
         window.setChatOpen(false);
         QAction *ask = inspector->m_moreMenu->findChild<QAction *>(QStringLiteral("inspectorAsk"));
@@ -1383,7 +1330,6 @@ private slots:
         QVERIFY(window.chatOpen());
         QCOMPARE(window.m_chatInput->toPlainText(), QStringLiteral("@fisher-close.mov "));
         window.selectClip(QString());
-        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Describe your next edit…"));
         // A sequence is not renamed here.
         QVERIFY(!name->isEditable());
     }
@@ -1401,22 +1347,11 @@ private slots:
         window.selectClip(QString());
         InspectorPanel *inspector = window.m_inspector;
         QCOMPARE(inspector->nameText(), QStringLiteral("Harbor Teaser"));
-        QCOMPARE(plainText(inspector->kindText()), QStringLiteral("Sequence · 1080 × 1920 · 24 fps"));
-        QVERIFY(!inspector->m_kindSquare->isVisibleTo(inspector));
+        // Its frame, rate and length on the header's mono line.
+        QCOMPARE(inspector->metaText(), QStringLiteral("1080×1920 · 24p · 00:00:18:00"));
         QVERIFY(inspector->findChildren<ScrubField *>().isEmpty());
-        QCOMPARE(inspector->findChild<QLabel *>(QStringLiteral("timing_start"))->text(), QStringLiteral("00:00:00:00"));
-        QCOMPARE(inspector->findChild<QLabel *>(QStringLiteral("timing_duration"))->text(), QStringLiteral("00:00:18:00"));
         QCOMPARE(inspector->m_note->text(), QStringLiteral("Select a clip to adjust it."));
-        // The hint is its own line: 8 points under the timing row.
-        {
-            QLayout *header = inspector->m_header->layout();
-            const int tall = header->heightForWidth(300) > 0 ? header->heightForWidth(300) : header->sizeHint().height();
-            header->setGeometry(QRect(0, 0, 300, tall));
-            const int below = inspector->m_note->geometry().top() + inspector->m_note->contentsMargins().top() - inspector->m_timing->geometry().bottom() - 1;
-            QVERIFY2(below >= 8, qPrintable(QString::number(below)));
-            const int above = tall - inspector->m_note->geometry().bottom() - 1 + inspector->m_note->contentsMargins().bottom();
-            QVERIFY2(above >= 8, qPrintable(QString::number(above)));
-        }
+        QVERIFY(!inspector->m_note->isHidden());
         InspectorSection *format = inspector->section(QStringLiteral("format"));
         InspectorSection *tracks = inspector->section(QStringLiteral("tracks"));
         InspectorSection *markers = inspector->section(QStringLiteral("markers"));
@@ -1443,6 +1378,23 @@ private slots:
         QCOMPARE(markers->findChild<QLabel *>(QStringLiteral("sectionCount"))->text(), QStringLiteral("2"));
         QCOMPARE(inspector->findChild<QLabel *>(QStringLiteral("sequenceRate"))->text(), QStringLiteral("24 fps"));
         QCOMPARE(inspector->findChild<QLabel *>(QStringLiteral("sequenceAudio"))->text(), QStringLiteral("48 kHz"));
+        {
+            // A sequence at another rate (as a project opens over an empty
+            // state) shows its own rate, not the one the rows were built at.
+            QJsonObject other = snapshot;
+            QJsonObject timeline = other.value("timeline").toObject();
+            timeline.insert(QStringLiteral("fps"), 30.0);
+            other.insert(QStringLiteral("timeline"), timeline);
+            const auto shownRate = [inspector] {
+                for (QLabel *rate : inspector->findChildren<QLabel *>(QStringLiteral("sequenceRate")))
+                    if (rate->parentWidget() && inspector->m_bodyWidget->isAncestorOf(rate)) return rate->text();
+                return QString();
+            };
+            window.applySnapshot(other);
+            QCOMPARE(shownRate(), QStringLiteral("30 fps"));
+            window.applySnapshot(snapshot);
+            QCOMPARE(shownRate(), QStringLiteral("24 fps"));
+        }
         // Only the frame size can change; no clip fields.
         const auto popups = inspector->findChildren<QComboBox *>();
         QCOMPARE(popups.size(), 1);
@@ -1452,7 +1404,7 @@ private slots:
         QCOMPARE(size->currentText(), QStringLiteral("9:16 · 1080\u2009×\u20091920"));
         QVERIFY(inspector->findChildren<QLineEdit *>().size() <= 1); // the name's editor, hidden
         QVERIFY(inspector->findChildren<QPlainTextEdit *>().isEmpty());
-        QVERIFY(inspector->findChildren<InspectorSwitch *>().isEmpty());
+        for (InspectorSwitch *box : inspector->findChildren<InspectorSwitch *>()) QVERIFY(box->isHidden());
         size->setCurrentIndex(0);
         emit size->activated(0);
         const QJsonObject op = takeOps(window).first().toObject();
@@ -1486,8 +1438,7 @@ private slots:
         inspector->setSelection({QStringLiteral("v1"), QStringLiteral("v2"), QStringLiteral("v3")});
         QCOMPARE(inspector->nameText(), QStringLiteral("3 clips"));
         QVERIFY(!inspector->m_name->isEditable());
-        QCOMPARE(plainText(inspector->kindText()), QStringLiteral("Video · V1"));
-        QCOMPARE(inspector->m_thumbnail->images().size(), 3);
+        QCOMPARE(inspector->kindText(), QStringLiteral("Video · V1"));
         ScrubField *opacity = inspector->findChild<ScrubField *>(QStringLiteral("prop_opacity"));
         ScrubField *x = inspector->findChild<ScrubField *>(QStringLiteral("prop_x"));
         QVERIFY(opacity && x);
@@ -1537,12 +1488,13 @@ private slots:
         QCOMPARE(ops.size(), 1);
         QCOMPARE(ops.at(0).toObject().value("clip").toString(), QStringLiteral("v3"));
         QCOMPARE(ops.at(0).toObject().value("frames").toInt(), 12);
-        // The timing row keeps one alignment, timecode and "Mixed" alike.
-        for (ScrubField *field : std::as_const(inspector->m_timingFields)) QCOMPARE(field->valueAlignment(), Qt::Alignment(Qt::AlignLeft));
-        // Different kinds: the timing only, and why.
+        // The timing values keep one alignment, timecode and "Mixed" alike.
+        for (ScrubField *field : std::as_const(inspector->m_timingFields)) QCOMPARE(field->valueAlignment(), Qt::Alignment(Qt::AlignRight));
+        // Different kinds: the timing only (the Time group), and why.
         inspector->setSelection({QStringLiteral("v1"), QStringLiteral("a1")});
-        QCOMPARE(plainText(inspector->kindText()), QStringLiteral("1 Audio, 1 Video"));
-        QVERIFY(inspector->findChildren<InspectorRow *>().isEmpty());
+        QCOMPARE(inspector->kindText(), QStringLiteral("1 Audio, 1 Video"));
+        QCOMPARE(inspector->m_sections.size(), 1);
+        QCOMPARE(inspector->m_sections.first().section->id(), QStringLiteral("time"));
         QCOMPARE(inspector->m_timingFields.size(), 3);
         QCOMPARE(inspector->m_note->text(), QStringLiteral("Video and audio clips have no properties in common."));
     }
@@ -1577,18 +1529,9 @@ private slots:
         inspector->section(QStringLiteral("crop"))->setOpen(true);
         QCoreApplication::processEvents();
         QScrollBar *scroll = inspector->scrollArea()->verticalScrollBar();
-        // The body scrolls with its scroll bar hidden (mockup-spec 5): it
-        // takes no width; the Inspector still marks when the pointer is over it.
-        {
-            QCOMPARE(scroll->sizeHint().width(), 0);
-            QVERIFY(!inspector->scrollArea()->property("active").toBool());
-            QEnterEvent enter(QPointF(10, 10), QPointF(10, 10), QPointF(10, 10));
-            QCoreApplication::sendEvent(inspector, &enter);
-            QVERIFY(inspector->scrollArea()->property("active").toBool());
-            QEvent leave(QEvent::Leave);
-            QCoreApplication::sendEvent(inspector, &leave);
-            QVERIFY(!inspector->scrollArea()->property("active").toBool());
-        }
+        // The body scrolls with its scroll bar hidden (mockup-spec 5).
+        QCOMPARE(inspector->scrollArea()->verticalScrollBarPolicy(), Qt::ScrollBarAlwaysOff);
+        QVERIFY(!scroll->isVisible());
         QVERIFY(scroll->maximum() > 60);
         scroll->setValue(60);
         // From the click to the painted values (the panel repainted at once,
@@ -1620,13 +1563,13 @@ private slots:
               times.first());
         QVERIFY2(median < 32.0, qPrintable(QStringLiteral("%1 ms").arg(median)));
         QCOMPARE(scroll->value(), 60);
-        // The header's hairline shows while the body is scrolled under it,
-        // laid over the body's top edge, so the body does not move for it.
-        QVERIFY(inspector->m_scrollEdge->isVisible());
-        QCOMPARE(inspector->m_scrollEdge->parentWidget(), inspector->m_scroll);
-        QCOMPARE(inspector->m_scrollEdge->geometry(), QRect(0, 0, inspector->m_scroll->width(), 1));
-        scroll->setValue(0);
-        QVERIFY(!inspector->m_scrollEdge->isVisible());
+        // The 12-point fade at the body's foot shows while there is more
+        // below, over the viewport's last 12 points.
+        QVERIFY(inspector->m_fade->isVisible());
+        const QRect viewport = inspector->scrollArea()->viewport()->geometry();
+        QCOMPARE(inspector->m_fade->geometry(), QRect(viewport.left(), viewport.bottom() + 1 - 12, viewport.width(), 12));
+        scroll->setValue(scroll->maximum());
+        QVERIFY(!inspector->m_fade->isVisible());
     }
 
     // A clip of a shape seen a moment ago shows the same rows again, with
@@ -1678,467 +1621,10 @@ private slots:
         QCOMPARE(inspector->findChildren<QWidget *>(QStringLiteral("inspectorBody")).size(), 1);
     }
 
-    // The Inspector for every kind of clip, nothing selected and several
-    // clips, in both appearances, and the whole editor with a clip clicked
-    // in 9:16 and 16:9. With KERF_SCREENSHOT_DIR set, each is saved as
-    // inspector-<state>-<scheme>.png and editor-<format>-inspector-<scheme>.png.
-    void inspectorRendersEveryState() {
-        const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
-        const auto save = [&shots](const QImage &image, const QString &name) {
-            if (!shots.isEmpty()) QVERIFY(image.save(QDir(shots).filePath(name + QStringLiteral(".png"))));
-        };
-        const auto restore = qScopeGuard([] {
-            QSettings().remove(QStringLiteral("workspace"));
-            QSettings().remove(QStringLiteral("editor/inspector"));
-        });
-        // The showcase with the close-up graded, scaled up and masked, and
-        // more kinds of clip.
-        const auto snapshotFor = [](const QSize &canvas) {
-            QJsonObject snapshot = showcaseSnapshot(12, QStringLiteral("clean"));
-            snapshot.remove(QStringLiteral("pendingProposal"));
-            snapshot.remove(QStringLiteral("proposalTimeline"));
-            QJsonObject timeline = snapshot.value(QStringLiteral("timeline")).toObject();
-            timeline.insert(QStringLiteral("width"), canvas.width());
-            timeline.insert(QStringLiteral("height"), canvas.height());
-            timeline.insert(QStringLiteral("sampleRate"), 48000);
-            timeline.insert(QStringLiteral("properties"), catalogProperties());
-            timeline.insert(QStringLiteral("generators"), catalogGenerators());
-            timeline.insert(QStringLiteral("maskModes"), QJsonArray{"add", "subtract", "intersect", "none"});
-            timeline.insert(QStringLiteral("maskProperties"), QJsonArray{
-                QJsonObject{{"name", "feather"}, {"type", "number"}, {"default", 0.0}, {"min", 0.0}, {"max", 10000.0}, {"unit", "pixels"}},
-                QJsonObject{{"name", "opacity"}, {"type", "number"}, {"default", 1.0}, {"min", 0.0}, {"max", 1.0}},
-                QJsonObject{{"name", "expansion"}, {"type", "number"}, {"default", 0.0}, {"min", -10000.0}, {"max", 10000.0}, {"unit", "pixels"}}});
-            QJsonArray tracks = timeline.value(QStringLiteral("tracks")).toArray();
-            const auto edit = [&tracks](int track, int index, const std::function<void(QJsonObject &)> &change) {
-                QJsonObject t = tracks.at(track).toObject();
-                QJsonArray clips = t.value(QStringLiteral("clips")).toArray();
-                QJsonObject clip = clips.at(index).toObject();
-                change(clip);
-                clips.replace(index, clip);
-                t.insert(QStringLiteral("clips"), clips);
-                tracks.replace(track, t);
-            };
-            edit(0, 1, [](QJsonObject &clip) {
-                clip.insert("startFrame", 144);
-                clip.insert("durationFrames", 120);
-                clip.insert("speed", 1.0);
-                clip.insert("link", "L2");
-                clip.insert("props", QJsonObject{{"scale", 1.12}, {"y", -0.025}, {"crop_b", 0.0556}});
-                clip.insert("masks", QJsonArray{QJsonObject{{"name", "vignette"}, {"ellipse", QJsonArray{0.5, 0.5, 0.4, 0.4}}, {"mode", "add"},
-                                                            {"inverted", false}, {"params", QJsonObject{{"feather", 40.0}}}}});
-                clip.insert("effects", QJsonArray{
-                    QJsonObject{{"fx", "color.basic"}, {"enabled", true},
-                                {"params", QJsonObject{{"exposure", 0.4}, {"contrast", 1.1}, {"saturation", 0.92}, {"temperature", 350.0}}}},
-                    QJsonObject{{"fx", "blur.gaussian"}, {"enabled", false}, {"params", QJsonObject{{"radius", 8.0}}}}});
-            });
-            edit(1, 0, [](QJsonObject &clip) {
-                clip.insert("props", QJsonObject{{"text", "Harbor Teaser"}, {"size", 0.06}, {"y", 0.28}});
-            });
-            QJsonObject titles = tracks.at(1).toObject();
-            QJsonArray titleClips = titles.value(QStringLiteral("clips")).toArray();
-            titleClips.append(QJsonObject{{"id", "adj"}, {"kind", "generator"}, {"fx", "adjustment"}, {"name", "Warm grade"},
-                                          {"timelineStart", 6.0}, {"duration", 5.0},
-                                          {"effects", QJsonArray{QJsonObject{{"fx", "color.basic"}, {"enabled", true},
-                                                                             {"params", QJsonObject{{"temperature", 400.0}, {"saturation", 1.1}}}}}}});
-            titles.insert(QStringLiteral("clips"), titleClips);
-            tracks.replace(1, titles);
-            edit(3, 1, [](QJsonObject &clip) { clip.insert("link", "L2"); clip.insert("speed", 1.0); });
-            edit(4, 0, [](QJsonObject &clip) {
-                clip.insert("speed", 1.0);
-                clip.insert("props", QJsonObject{{"gain", -8.0}, {"pan", -0.4}});
-            });
-            timeline.insert(QStringLiteral("tracks"), tracks);
-            snapshot.insert(QStringLiteral("timeline"), timeline);
-            return snapshot;
-        };
-        {
-            const EditorTheme &theme = editorTheme();
-            const QString name = QStringLiteral("dark");
-            for (const QSize canvas : {QSize(1080, 1920), QSize(1920, 1080)}) {
-                const bool tall = canvas.height() > canvas.width();
-                QSettings().remove(QStringLiteral("workspace"));
-                QSettings().remove(QStringLiteral("editor/inspector"));
-                MainWindow window{QString(), QString()};
-                window.setConnection(QStringLiteral("ready"));
-                window.applySnapshot(snapshotFor(canvas));
-                window.handleEvent(QJsonObject{{"type", "collab"}, {"status", sharedStatus()}});
-                fakeArtwork(window.m_artwork);
-                window.resize(1440, 900);
-                window.show();
-                QVERIFY(QTest::qWaitForWindowExposed(&window));
-                window.m_errorBanner->hide();
-                // The playhead in the close-up, where the frame shown is: the
-                // time on the picture and the timeline's playhead agree with it.
-                window.handleEvent(QJsonObject{{"type", "clock"}, {"position", 6.0}, {"duration", 18.0}});
-                window.m_viewer->setFrame(testing::footageFrame(testing::Shot::FisherClose, canvas / 4), 6.0);
-                QCOMPARE(window.m_timeline->m_playhead, 6.0);
-                window.m_inspector->setProgramFrame(testing::footageFrame(testing::Shot::HarborWide, QSize(160, 90)));
-                window.appendConversation(QStringLiteral("You"), QStringLiteral("Warm up the close-up a little."));
-                window.appendConversation(QStringLiteral("Kerf"), QStringLiteral("I raised the exposure and the temperature on fisher-close.mov."));
-                QTest::mouseMove(window.statusBar(), QPoint(window.statusBar()->width() / 2, 4));
-                window.clickSelectClip(QStringLiteral("v1b"));
-                QTest::qWait(30);
-                ads::CDockWidget *panel = window.m_workspace->panel(QStringLiteral("inspector"));
-                QVERIFY(panel->isCurrentTab());
-                InspectorPanel *inspector = window.m_inspector;
-                // The chat is untouched beside the picture.
-                QVERIFY(window.m_chat->isVisible());
-                QCOMPARE(window.m_chat->geometry(), window.m_viewer->stageLayout().panel);
-                QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Ask Kerf about fisher-close…"));
-                const QImage editor = window.grab().toImage();
-                // Amber is the lamps' alone: the close-up's changed values
-                // light the Inspector's, and nothing outside it is amber.
-                {
-                    QImage outside = editor.copy();
-                    QPainter cover(&outside);
-                    cover.fillRect(QRect(panel->mapTo(&window, QPoint()), panel->size()), Qt::black);
-                    cover.end();
-                    QCOMPARE(amberPixels(outside), 0);
-                }
-                save(editor, QStringLiteral("editor-%1-inspector-%2").arg(tall ? QStringLiteral("9x16") : QStringLiteral("16x9"), name));
-                if (!tall) continue;
-                // Framed modules on the panel, the values in recessed wells.
-                const auto grabPanel = [panel] { return panel->grab().toImage(); };
-                {
-                    const QImage image = grabPanel();
-                    const qreal ratio = image.devicePixelRatio();
-                    // An open module stands apart on the panel...
-                    InspectorSection *transform = inspector->section(QStringLiteral("transform"));
-                    const QPoint top = transform->mapTo(panel, QPoint(transform->width() / 2, 0));
-                    QCOMPARE(image.pixelColor(top * ratio).rgb(), theme.moduleEdge.rgb());
-                    QCOMPARE(image.pixelColor((top - QPoint(0, 1)) * ratio).rgb(), theme.panel.rgb());
-                    // ...and the folded ones stand together as a rack, a
-                    // hairline between Time and Crop, plate on either side.
-                    InspectorSection *time = inspector->section(QStringLiteral("time"));
-                    InspectorSection *crop = inspector->section(QStringLiteral("crop"));
-                    QVERIFY(!time->isOpen() && !time->joinsAbove() && time->joinsBelow());
-                    QVERIFY(crop->joinsAbove());
-                    QCOMPARE(crop->y(), time->geometry().bottom() + 1);
-                    const QPoint edge = crop->mapTo(panel, QPoint(crop->width() / 2, 0));
-                    QCOMPARE(image.pixelColor(edge * ratio).rgb(), theme.moduleEdge.rgb());
-                    QCOMPARE(image.pixelColor((edge - QPoint(0, 2)) * ratio).rgb(), theme.modulePlate.rgb());
-                    ScrubField *scale = inspector->findChild<ScrubField *>(QStringLiteral("prop_scale"));
-                    const QPoint inside = scale->mapTo(panel, QPoint(3, scale->height() / 2));
-                    QCOMPARE(image.pixelColor(inside * ratio).rgb(), theme.wellFill.rgb());
-                    // The plates, not purple, are what the Inspector is made of.
-                    QCOMPARE(dominantColor(image), theme.modulePlate.rgb());
-                    // The moved close-up lights its modules' lamps (and its rows').
-                    QCOMPARE(inspector->section(QStringLiteral("transform"))->lamp()->state(), LampState::Changed);
-                    QVERIFY(qobject_cast<InspectorRow *>(scale->parentWidget())->lamp()->isVisible());
-                    QCOMPARE(inspector->section(QStringLiteral("compositing"))->lamp()->state(), LampState::Off);
-                }
-                // The video, its Scale row under the pointer: ↺ and its changed value.
-                auto *scaleRow = qobject_cast<InspectorRow *>(inspector->findChild<ScrubField *>(QStringLiteral("prop_scale"))->parentWidget());
-                {
-                    QEnterEvent enter(QPointF(4, 4), QPointF(4, 4), QPointF(4, 4));
-                    QCoreApplication::sendEvent(scaleRow, &enter);
-                    QCoreApplication::sendEvent(inspector->findChild<ScrubField *>(QStringLiteral("prop_scale")), &enter);
-                }
-                QVERIFY(scaleRow->resetButton()->isVisible());
-                save(grabPanel(), QStringLiteral("inspector-video-%1").arg(name));
-                {
-                    QEvent leave(QEvent::Leave);
-                    QCoreApplication::sendEvent(scaleRow, &leave);
-                    QCoreApplication::sendEvent(inspector->findChild<ScrubField *>(QStringLiteral("prop_scale")), &leave);
-                }
-                // Folded, the Effects header in the 300pt column names what
-                // is on in whole words, never cut ("…"), and counts the rest.
-                {
-                    InspectorSection *fx = inspector->section(QStringLiteral("effects"));
-                    QVERIFY(!fx->isOpen());
-                    QCoreApplication::processEvents();
-                    auto *label = fx->findChild<QLabel *>(QStringLiteral("sectionSummary"));
-                    const QString shown = fx->shownSummary();
-                    QVERIFY2(!shown.isEmpty() && !shown.contains(QChar(0x2026)), qPrintable(shown));
-                    QVERIFY2(label->fontMetrics().horizontalAdvance(shown) <= label->contentsRect().width(), qPrintable(shown));
-                    QVERIFY(fx->summary().startsWith(QStringLiteral("Primary Colour Correction")));
-                    QCOMPARE(label->toolTip(), fx->summary());
-                }
-                // Its effects: Color open with "6 more", the blur folded with its line.
-                inspector->section(QStringLiteral("effects"))->setOpen(true);
-                for (const char *section : {"crop", "anchor", "linkedAudio", "masks", "source"})
-                    inspector->section(QString::fromLatin1(section))->setOpen(false);
-                const auto boxes = inspector->findChildren<QWidget *>(QStringLiteral("effectBox"));
-                QCOMPARE(boxes.size(), 2);
-                boxes.at(0)->findChild<GlyphButton *>(QStringLiteral("effectChevron"))->click();
-                QCOMPARE(boxes.at(0)->findChild<QPushButton *>(QStringLiteral("effectMoreToggle"))->text(), QStringLiteral("6 more"));
-                QCOMPARE(boxes.at(1)->findChild<QLabel *>(QStringLiteral("effectSummary"))->text(), QStringLiteral("Radius 8 px"));
-                QCOMPARE(inspector->findChild<ScrubField *>(QStringLiteral("effectParam_exposure"))->text(), QStringLiteral("+0.40"));
-                QCoreApplication::processEvents();
-                for (ScrubField *field : boxes.at(0)->findChildren<ScrubField *>())
-                    if (field->isVisible()) QVERIFY2(field->showsWhole(), qPrintable(field->objectName()));
-                QCOMPARE(inspector->findChild<ScrubField *>(QStringLiteral("effectParam_contrast"))->text(), QStringLiteral("110"));
-                QCoreApplication::processEvents();
-                inspector->scrollArea()->ensureWidgetVisible(boxes.at(0), 0, 0);
-                inspector->scrollArea()->verticalScrollBar()->setValue(inspector->section(QStringLiteral("effects"))->y() - 8);
-                QCoreApplication::processEvents();
-                save(grabPanel(), QStringLiteral("inspector-video-effects-%1").arg(name));
-                inspector->section(QStringLiteral("effects"))->setOpen(false);
-                // The other kinds.
-                for (const auto &[clip, label] : {std::pair{"a2", "audio"}, std::pair{"t1", "title"}, std::pair{"adj", "adjustment"}, std::pair{"c1", "caption"}}) {
-                    window.clickSelectClip(QString::fromLatin1(clip));
-                    QCoreApplication::processEvents();
-                    QVERIFY2(panel->isCurrentTab(), qPrintable(QStringLiteral("%1: %2").arg(QString::fromLatin1(clip),
-                                                                 panel->dockAreaWidget()->currentDockWidget()->objectName())));
-                    save(grabPanel(), QStringLiteral("inspector-%1-%2").arg(QString::fromLatin1(label), name));
-                }
-                // Nothing selected (with the Inspector's tab chosen by hand, so it stays).
-                window.m_workspace->panel(QStringLiteral("project"))->setAsCurrentTab();
-                panel->setAsCurrentTab();
-                window.clickSelectClip(QString());
-                QCoreApplication::processEvents();
-                QVERIFY(panel->isCurrentTab());
-                save(grabPanel(), QStringLiteral("inspector-nothing-%1").arg(name));
-                // Several clips.
-                inspector->setSelection({QStringLiteral("v1a"), QStringLiteral("v1b"), QStringLiteral("v1c")});
-                QCoreApplication::processEvents();
-                save(grabPanel(), QStringLiteral("inspector-multi-%1").arg(name));
-                window.close();
-            }
-        }
-    }
-
-    // The Inspector in the hardware finish: framed modules with engraved
-    // titles and lamps (the folded ones a rack), values in wells, Fit and
-    // Fill and Flip as latching keys, a knob beside Rotation, the timing
-    // on a display glass, and each effect's power key.
-    void inspectorHardwareModules() {
-        QSettings().remove(QStringLiteral("editor/inspector"));
-        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("editor/inspector")); });
-        // The video clip "v" of everyKindSnapshot, with `props` and `effects`.
-        const QJsonObject base = everyKindSnapshot(1).value("timeline").toObject();
-        const auto withProps = [&base](const QJsonObject &props, const QJsonArray &effects = {}) {
-            QJsonObject timeline = base;
-            QJsonArray tracks = timeline.value("tracks").toArray();
-            QJsonObject video = tracks.at(0).toObject();
-            QJsonArray clips = video.value("clips").toArray();
-            QJsonObject clip = clips.at(0).toObject();
-            clip.insert("props", props);
-            clip.insert("effects", effects);
-            clips.replace(0, clip);
-            video.insert("clips", clips);
-            tracks.replace(0, video);
-            timeline.insert("tracks", tracks);
-            return timeline;
-        };
-        InspectorPanel inspector;
-        inspector.setEffectCatalog(QJsonArray{});
-        QList<QJsonArray> sent;
-        connect(&inspector, &InspectorPanel::editRequested, &inspector, [&sent](const QJsonArray &ops) { sent << ops; });
-        const auto lastProps = [&sent] { return sent.isEmpty() ? QJsonObject() : sent.last().first().toObject().value("props").toObject(); };
-        inspector.setState(withProps({}), {QStringLiteral("v")});
-        inspector.resize(300, 900);
-        inspector.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&inspector));
-        QCoreApplication::processEvents();
-
-        // Every row is in a module: Transform and Composite open first, then
-        // the folded ones, Time heading them, standing together as a rack.
-        QStringList ids;
-        for (const auto &entry : std::as_const(inspector.m_sections)) ids << entry.section->id();
-        QCOMPARE(ids.mid(0, 4), (QStringList{"transform", "compositing", "time", "crop"}));
-        for (InspectorRow *row : inspector.findChildren<InspectorRow *>())
-            QVERIFY2(qobject_cast<InspectorSection *>(row->parentWidget()->parentWidget()), qPrintable(row->label()->text()));
-        InspectorSection *transform = inspector.section(QStringLiteral("transform"));
-        InspectorSection *compositing = inspector.section(QStringLiteral("compositing"));
-        InspectorSection *time = inspector.section(QStringLiteral("time"));
-        InspectorSection *crop = inspector.section(QStringLiteral("crop"));
-        QVERIFY(transform->isOpen() && compositing->isOpen() && !time->isOpen() && !crop->isOpen());
-        QVERIFY(!transform->joinsAbove() && !transform->joinsBelow() && !compositing->joinsBelow());
-        QVERIFY(!time->joinsAbove() && time->joinsBelow() && crop->joinsAbove());
-        QCOMPARE(crop->y(), time->geometry().bottom() + 1);
-        QCOMPARE(time->y() - compositing->geometry().bottom() - 1, 0);
-        QCOMPARE(compositing->height() - compositing->bodyWidget()->geometry().bottom() - 1, InspectorSection::kGap);
-        // Opening one parts the rack round it, and folding it closes it again.
-        crop->setOpen(true);
-        QVERIFY(!time->joinsBelow() && !crop->joinsAbove());
-        crop->setOpen(false);
-        QVERIFY(time->joinsBelow() && crop->joinsAbove());
-        // The titles are engraved: bold capitals, tracked, named whole for
-        // assistive technology.
-        QCOMPARE(transform->titleLabel()->font().weight(), QFont::Bold);
-        QCOMPARE(transform->titleLabel()->font().capitalization(), QFont::AllUppercase);
-        QCOMPARE(transform->titleLabel()->accessibleName(), QStringLiteral("Transform"));
-        QCOMPARE(compositing->title(), QStringLiteral("Composite"));
-        QCOMPARE(transform->header()->height(), InspectorSection::kHeaderHeight);
-        // A header takes focus from Tab, named with its fold; Space or
-        // Return folds or opens it (Space no longer play there), and it is
-        // ringed as a focused field is.
-        {
-            QWidget *header = time->header();
-            QCOMPARE(header->focusPolicy(), Qt::TabFocus);
-            QCOMPARE(header->accessibleName(), QStringLiteral("Time, collapsed"));
-            inspector.activateWindow();
-            QVERIFY(QTest::qWaitForWindowActive(&inspector));
-            const QPoint ringAt(header->x() + 2, header->y() + header->height() / 2);
-            const auto ringPixel = [time, ringAt] {
-                const QImage image = time->grab().toImage();
-                return image.pixelColor(ringAt * image.devicePixelRatio());
-            };
-            QVERIFY(!nearColor(ringPixel().rgb(), editorTheme().focusRing.rgb(), 8));
-            header->setFocus(Qt::TabFocusReason);
-            QVERIFY(header->hasFocus());
-            QVERIFY2(nearColor(ringPixel().rgb(), editorTheme().focusRing.rgb(), 8), qPrintable(ringPixel().name()));
-            QKeyEvent override(QEvent::ShortcutOverride, Qt::Key_Space, Qt::NoModifier, QStringLiteral(" "));
-            override.ignore();
-            QCoreApplication::sendEvent(header, &override);
-            QVERIFY(override.isAccepted());
-            QSignalSpy toggled(time, &InspectorSection::toggled);
-            QTest::keyClick(header, Qt::Key_Space);
-            QVERIFY(time->isOpen());
-            QCOMPARE(toggled.size(), 1);
-            QCOMPARE(header->accessibleName(), QStringLiteral("Time, expanded"));
-            QTest::keyClick(header, Qt::Key_Return);
-            QVERIFY(!time->isOpen());
-            QCOMPARE(toggled.size(), 2);
-            QCOMPARE(header->accessibleName(), QStringLiteral("Time, collapsed"));
-            header->clearFocus();
-        }
-
-        // Lamps: dark at the defaults; a moved value lights its module's and
-        // rests in its row's lane until the pointer brings ↺.
-        auto *scaleRow = qobject_cast<InspectorRow *>(inspector.findChild<ScrubField *>(QStringLiteral("prop_scale"))->parentWidget());
-        QVERIFY(scaleRow);
-        QCOMPARE(transform->lamp()->state(), LampState::Off);
-        QVERIFY(!scaleRow->lamp()->isVisibleTo(scaleRow));
-        inspector.setState(withProps({{"scale", 1.12}, {"blend", "multiply"}}), {QStringLiteral("v")});
-        QCOMPARE(transform->lamp()->state(), LampState::Changed);
-        QCOMPARE(transform->lamp()->accessibleName(), QStringLiteral("Changed"));
-        QCOMPARE(compositing->lamp()->state(), LampState::Changed);
-        QCOMPARE(crop->lamp()->state(), LampState::Off);
-        QCOMPARE(scaleRow->lamp()->state(), LampState::Changed);
-        QCOMPARE(scaleRow->lamp()->diameter(), InspectorRow::kLampDiameter);
-        QVERIFY(scaleRow->lamp()->isVisibleTo(scaleRow) && !scaleRow->resetButton()->isVisibleTo(scaleRow));
-        {
-            QEnterEvent enter(QPointF(4, 4), QPointF(4, 4), QPointF(4, 4));
-            QCoreApplication::sendEvent(scaleRow, &enter);
-        }
-        QVERIFY(!scaleRow->lamp()->isVisibleTo(scaleRow) && scaleRow->resetButton()->isVisibleTo(scaleRow));
-        {
-            QEvent leave(QEvent::Leave);
-            QCoreApplication::sendEvent(scaleRow, &leave);
-        }
-        QVERIFY(scaleRow->lamp()->isVisibleTo(scaleRow));
-        // The changed value reads in the accent; at its default, quiet.
-        auto *scale = inspector.findChild<ScrubField *>(QStringLiteral("prop_scale"));
-        QCOMPARE(scale->valueInk(), changedValueInk());
-        QCOMPARE(inspector.findChild<ScrubField *>(QStringLiteral("prop_opacity"))->valueInk(), editorTheme().textSecondary);
-
-        // The pop-up is clear over a well its row presses under it, and in
-        // the accent once moved from its default.
-        auto *blend = inspector.findChild<QComboBox *>(QStringLiteral("prop_blend"));
-        QVERIFY(blend);
-        auto *blendRow = qobject_cast<InspectorRow *>(blend->parentWidget());
-        QVERIFY(blendRow);
-        QCOMPARE(blendRow->wells(), (QList<QRect>{blend->geometry()}));
-        QVERIFY(blend->property("changed").toBool());
-        inspector.setState(withProps({{"scale", 1.12}}), {QStringLiteral("v")});
-        QVERIFY(!blend->property("changed").toBool());
-
-        // The timing on one glass: In, Out and Dur over cream figures that
-        // still scrub and take typing, each named for what it is.
-        QCOMPARE(inspector.m_timing->labels(), (QStringList{"In", "Out", "Dur"}));
-        QCOMPARE(inspector.m_timingFields.size(), 3);
-        const QStringList names{"Start", "End", "Duration"};
-        for (int index = 0; index < 3; ++index) {
-            ScrubField *field = inspector.m_timingFields.at(index);
-            QVERIFY(field->isGlass());
-            QCOMPARE(field->accessibleName(), names.at(index));
-            QCOMPARE(field->parentWidget(), static_cast<QWidget *>(inspector.m_timing));
-            QCOMPARE(field->valueInk(), editorTheme().glassText);
-        }
-        QCOMPARE(inspector.m_timingFields.at(0)->text(), QStringLiteral("00:00:06:00"));
-        QVERIFY(inspector.m_timingFields.at(0)->showsWhole());
-        inspector.m_timingFields.at(0)->commitText(QStringLiteral("+12"));
-        QCOMPARE(sent.last().first().toObject().value("op").toString(), QStringLiteral("move"));
-        QCOMPARE(sent.last().first().toObject().value("frames").toInt(), 12);
-
-        // Fit and Fill: an exclusive bank, the matching key latched (none
-        // after a scale that is neither); a press latches its key at once.
-        auto *fit = inspector.findChild<KeyBank *>(QStringLiteral("fitFill"));
-        QVERIFY(fit && fit->isExclusive());
-        QCOMPARE(fit->count(), 2);
-        QCOMPARE(fit->current(), -1);
-        QCOMPARE(fit->key(0)->accessibleName(), QStringLiteral("Fit"));
-        QCOMPARE(fit->key(1)->toolTip(), QStringLiteral("The frame filled, edges cropped"));
-        QVERIFY(fit->key(1)->isCheckable());
-        fit->key(1)->click();
-        QCOMPARE(fit->current(), 1);
-        QVERIFY(lastProps().value("scale").toDouble() > 3.0);
-        inspector.setState(withProps({}), {QStringLiteral("v")});
-        QCOMPARE(fit->current(), 0);
-        // A press on the key already in changes nothing on the bank.
-        fit->key(0)->click();
-        QCOMPARE(fit->current(), 0);
-
-        // Flip: H and V latch on their own.
-        inspector.section(QStringLiteral("anchor"))->setOpen(true);
-        auto *flip = inspector.findChild<KeyBank *>(QStringLiteral("flip"));
-        QVERIFY(flip && !flip->isExclusive());
-        QCOMPARE(flip->width(), InspectorRow::kValueField);
-        QVERIFY(!flip->isLatched(0) && !flip->isLatched(1));
-        flip->key(0)->click();
-        QCOMPARE(lastProps().value("scale_x").toDouble(), -1.0);
-        inspector.setState(withProps({{"scale_x", -1.0}}), {QStringLiteral("v")});
-        QVERIFY(flip->isLatched(0) && !flip->isLatched(1));
-        QCOMPARE(inspector.section(QStringLiteral("anchor"))->lamp()->state(), LampState::Changed);
-        flip->key(0)->click();
-        QVERIFY(lastProps().value("scale_x").isNull());
-
-        // The knob beside Rotation: a drag up turns it clockwise, one edit
-        // on release, the field following it; the wheel's run of steps is
-        // one edit too; a double-click turns it back.
-        auto *knob = inspector.findChild<RotationKnob *>(QStringLiteral("rotationKnob"));
-        auto *rotation = inspector.findChild<ScrubField *>(QStringLiteral("prop_rotation"));
-        QVERIFY(knob && rotation);
-        QCOMPARE(knob->size(), QSize(RotationKnob::kSize, RotationKnob::kSize));
-        QCOMPARE(knob->accessibleName(), QStringLiteral("Rotation"));
-        const QPoint middle = knob->rect().center();
-        const qsizetype before = sent.size();
-        QTest::mousePress(knob, Qt::LeftButton, Qt::NoModifier, middle);
-        QTest::mouseMove(knob, middle - QPoint(0, 30));
-        QCOMPARE(sent.size(), before);
-        QCOMPARE(rotation->value(), 30.0);
-        QTest::mouseRelease(knob, Qt::LeftButton, Qt::NoModifier, middle - QPoint(0, 30));
-        QCOMPARE(sent.size(), before + 1);
-        QCOMPARE(lastProps().value("rotation").toDouble(), 30.0);
-        inspector.setState(withProps({{"rotation", 30.0}}), {QStringLiteral("v")});
-        QCOMPARE(knob->angle(), 30.0);
-        for (int notch = 0; notch < 3; ++notch) {
-            QWheelEvent wheel(QPointF(middle), knob->mapToGlobal(QPointF(middle)), QPoint(), QPoint(0, QWheelEvent::DefaultDeltasPerStep),
-                              Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
-            QCoreApplication::sendEvent(knob, &wheel);
-        }
-        QCOMPARE(knob->angle(), 33.0);
-        QCOMPARE(sent.size(), before + 1);
-        knob->flushWheel();
-        QCOMPARE(sent.size(), before + 2);
-        QCOMPARE(lastProps().value("rotation").toDouble(), 33.0);
-        inspector.setState(withProps({{"rotation", 33.0}}), {QStringLiteral("v")});
-        QTest::mouseDClick(knob, Qt::LeftButton, Qt::NoModifier, middle);
-        QVERIFY(lastProps().contains("rotation") && lastProps().value("rotation").isNull());
-
-        // Each effect's power key: held in with its lamp lit while on.
-        inspector.setState(withProps({}, QJsonArray{QJsonObject{{"fx", "blur.gaussian"}, {"enabled", false}, {"params", QJsonObject{}}}}),
-                           {QStringLiteral("v")});
-        auto *power = inspector.findChild<PowerKey *>(QStringLiteral("effectEnabled"));
-        QVERIFY(power);
-        QVERIFY(!power->isChecked());
-        QCOMPARE(power->lampState(), LampState::Off);
-        QCOMPARE(power->accessibleName(), QStringLiteral("On"));
-        power->click();
-        QCOMPARE(sent.last().first().toObject().value("enabled").toBool(), true);
-        inspector.setState(withProps({}, QJsonArray{QJsonObject{{"fx", "blur.gaussian"}, {"enabled", true}, {"params", QJsonObject{}}}}),
-                           {QStringLiteral("v")});
-        power = inspector.findChild<PowerKey *>(QStringLiteral("effectEnabled"));
-        QVERIFY(power->isChecked());
-        QCOMPARE(power->lampState(), LampState::Ok);
-    }
-
-    // The knob beside Rotation: a click turns nothing, a drag lands on the
-    // field's tenths, a double-click puts every clip selected back at 0°,
-    // and a run of wheel steps edits the clips it was turned for, though
-    // the selection changes before its pause ends.
+    // Rotation is a bipolar slider now (the knob is retired), with its edit
+    // semantics kept: a stray click turns nothing, a drag is one edit, and a
+    // double-click on the knob puts every selected clip back at 0°, not the
+    // second shifted by the first's turn.
     void inspectorRotationKnobEditsTheSelection() {
         QSettings().remove(QStringLiteral("editor/inspector"));
         const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("editor/inspector")); });
@@ -2151,47 +1637,39 @@ private slots:
             {"sources", QJsonArray{QJsonObject{{"id", "m1"}, {"path", "a.mov"}, {"width", 1920}, {"height", 1080}, {"duration", 20}}}},
             {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{clip("v1", 0.0, 30.0), clip("v2", 2.0, 10.0)}}}}}};
         InspectorPanel inspector;
-        inspector.setEffectCatalog(QJsonArray{});
         QList<QJsonArray> sent;
         connect(&inspector, &InspectorPanel::editRequested, &inspector, [&sent](const QJsonArray &ops) { sent << ops; });
         inspector.setState(timeline, {QStringLiteral("v1")});
-        inspector.resize(300, 900);
+        inspector.section(QStringLiteral("transform"))->setOpen(true);
+        inspector.resize(304, 900);
         inspector.show();
         QVERIFY(QTest::qWaitForWindowExposed(&inspector));
-        const auto shownKnob = [&inspector]() -> RotationKnob * {
-            for (RotationKnob *knob : inspector.findChildren<RotationKnob *>())
-                if (knob->isVisible()) return knob;
-            return nullptr;
-        };
-        RotationKnob *knob = shownKnob();
-        QVERIFY(knob);
-        const QPointF middle = QRectF(knob->rect()).center();
-        const auto mouse = [knob](QEvent::Type type, const QPointF &at) {
-            QMouseEvent event(type, at, knob->mapToGlobal(at), Qt::LeftButton,
-                              type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, Qt::NoModifier);
-            QCoreApplication::sendEvent(knob, &event);
-        };
-
-        // A click that wanders a point or two turns nothing.
-        mouse(QEvent::MouseButtonPress, middle);
-        mouse(QEvent::MouseMove, middle - QPointF(0, 2));
-        mouse(QEvent::MouseButtonRelease, middle - QPointF(0, 2));
+        auto *slider = inspector.findChild<InspectorSlider *>(QStringLiteral("slider_rotation"));
+        QVERIFY(slider && slider->isVisible());
+        // Bipolar about 0°: the tick at its middle, filled from there.
+        QVERIFY(slider->isBipolar());
+        QVERIFY(!slider->detentTick().isEmpty());
+        QCOMPARE(slider->value(), 30.0);
+        const double knob = slider->knobCenter().x();
+        // A click that does not move turns nothing.
+        mouse(slider, QEvent::MouseButtonPress, QPointF(knob, 12));
+        mouse(slider, QEvent::MouseButtonRelease, QPointF(knob, 12));
         QVERIFY(sent.isEmpty());
-        QCOMPARE(knob->angle(), 30.0);
-        // A drag of 12.46 points lands on the field's tenth of a degree.
-        mouse(QEvent::MouseButtonPress, middle);
-        mouse(QEvent::MouseMove, middle - QPointF(0, 12.46));
-        mouse(QEvent::MouseButtonRelease, middle - QPointF(0, 12.46));
+        // A drag: one edit, to the value the knob reached.
+        mouse(slider, QEvent::MouseButtonPress, QPointF(knob, 12));
+        mouse(slider, QEvent::MouseMove, QPointF(knob + 10, 12));
+        mouse(slider, QEvent::MouseButtonRelease, QPointF(knob + 10, 12));
         QCOMPARE(sent.size(), 1);
-        QCOMPARE(sent.last().first().toObject().value("props").toObject().value("rotation").toDouble(), 42.5);
-
-        // A double-click on two clips at 30° and 10°: both at 0°, not the
-        // second shifted by the first's turn.
+        const double turned = sent.last().first().toObject().value("props").toObject().value("rotation").toDouble();
+        QVERIFY2(turned > 30.0 && turned < 180.0, qPrintable(QString::number(turned)));
+        // Two clips at 30° and 10: a double-click on the knob resets both.
         sent.clear();
         inspector.setState(timeline, {QStringLiteral("v1"), QStringLiteral("v2")});
-        knob = shownKnob();
-        QVERIFY(knob);
-        QTest::mouseDClick(knob, Qt::LeftButton, Qt::NoModifier, knob->rect().center());
+        slider = inspector.findChild<InspectorSlider *>(QStringLiteral("slider_rotation"));
+        QVERIFY(slider);
+        // Mixed, the knob hides; the row's label double-click resets them.
+        RowLabel *label = rowOf(slider)->label();
+        QTest::mouseDClick(label, Qt::LeftButton);
         QCOMPARE(sent.size(), 1);
         QStringList reset;
         for (const QJsonValue &op : sent.last()) {
@@ -2199,263 +1677,614 @@ private slots:
             reset << op.toObject().value("clip").toString();
         }
         QCOMPARE(reset, (QStringList{"v1", "v2"}));
+    }
 
-        // Two wheel steps on the first clip, then the second selected
-        // before the pause ends: the edit goes to the first, then and once.
+    // Keyframes are real: a number row's diamond writes {keys:[{at: frame,
+    // value, interp}]} at the playhead (clip-relative frames, as kerfd keys
+    // them); a key under the playhead is the filled diamond, "Keyframe at
+    // playhead", and a click takes it out (the last one leaves the value it
+    // had, still); editing an animated value sets the key at the playhead.
+    // Sound keys only on gain; outside the clip there is no key to set.
+    void inspectorKeyframesToggleAtThePlayhead() {
+        QSettings().remove(QStringLiteral("editor/inspector"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("editor/inspector")); });
+        QJsonObject timeline = everyKindSnapshot(1).value("timeline").toObject();
+        const auto withProps = [&timeline](const char *clipId, const QJsonObject &props) {
+            QJsonArray tracks = timeline.value("tracks").toArray();
+            for (int t = 0; t < tracks.size(); ++t) {
+                QJsonObject track = tracks.at(t).toObject();
+                QJsonArray clips = track.value("clips").toArray();
+                for (int c = 0; c < clips.size(); ++c) {
+                    QJsonObject clip = clips.at(c).toObject();
+                    if (clip.value("id").toString() != QLatin1String(clipId)) continue;
+                    clip.insert("props", props);
+                    clips.replace(c, clip);
+                }
+                track.insert("clips", clips);
+                tracks.replace(t, track);
+            }
+            QJsonObject out = timeline;
+            out.insert("tracks", tracks);
+            return out;
+        };
+        InspectorPanel inspector;
+        QList<QJsonArray> sent;
+        connect(&inspector, &InspectorPanel::editRequested, &inspector, [&sent](const QJsonArray &ops) { sent << ops; });
+        // The close-up "v" runs 6 s to 11 s (frames 144-264); the playhead at 6.5 s is its frame 12.
+        inspector.setPlayhead(6.5);
+        inspector.setState(withProps("v", QJsonObject{{"opacity", 0.5}}), {QStringLiteral("v")});
+        const auto rowOf = [&inspector](const char *field) -> InspectorRow * {
+            for (QWidget *at = inspector.findChild<QWidget *>(QString::fromLatin1(field)); at; at = at->parentWidget())
+                if (auto *row = qobject_cast<InspectorRow *>(at)) return row;
+            return nullptr;
+        };
+        InspectorRow *opacity = rowOf("prop_opacity");
+        QVERIFY(opacity);
+        KeyframeButton *diamond = opacity->keyframeButton();
+        QVERIFY(diamond->isEnabled() && !diamond->has());
+        QCOMPARE(diamond->iconName(), QStringLiteral("g-kf"));
+        QCOMPARE(ui::tipName(diamond), QStringLiteral("Add keyframe"));
+        diamond->click();
+        QCOMPARE(sent.size(), 1);
+        QJsonObject op = sent.last().first().toObject();
+        QCOMPARE(op.value("op").toString(), QStringLiteral("set"));
+        QCOMPARE(op.value("clip").toString(), QStringLiteral("v"));
+        const QJsonArray keys = op.value("props").toObject().value("opacity").toObject().value("keys").toArray();
+        QCOMPARE(keys.size(), 1);
+        QCOMPARE(keys.first().toObject().value("at").toInt(), 12);
+        QCOMPARE(keys.first().toObject().value("value").toDouble(), 0.5);
+        QCOMPARE(keys.first().toObject().value("interp").toString(), QStringLiteral("linear"));
+        // The snapshot with the key: the filled diamond, and its tooltip.
+        const QJsonArray keyed{QJsonObject{{"at", 0.5}, {"frame", 12}, {"value", 0.5}, {"interp", "linear"}}};
+        inspector.setState(withProps("v", QJsonObject{{"opacity", keyed}}), {QStringLiteral("v")});
+        diamond = rowOf("prop_opacity")->keyframeButton();
+        QVERIFY(diamond->has());
+        QCOMPARE(diamond->iconName(), QStringLiteral("g-kff"));
+        QCOMPARE(ui::tipName(diamond), QStringLiteral("Keyframe at playhead"));
+        // Moved a second on, the value edits the key there: two keys.
         sent.clear();
-        inspector.setState(timeline, {QStringLiteral("v1")});
-        knob = shownKnob();
-        QVERIFY(knob);
-        for (int notch = 0; notch < 2; ++notch) {
-            QWheelEvent wheel(middle, knob->mapToGlobal(middle), QPoint(), QPoint(0, QWheelEvent::DefaultDeltasPerStep),
-                              Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
-            QCoreApplication::sendEvent(knob, &wheel);
+        inspector.setPlayhead(7.5);
+        QVERIFY(!diamond->has());
+        auto *field = inspector.findChild<ScrubField *>(QStringLiteral("prop_opacity"));
+        QVERIFY(field && !field->isReadOnly());
+        field->commitText(QStringLiteral("80"));
+        QCOMPARE(sent.size(), 1);
+        const QJsonArray two = sent.last().first().toObject().value("props").toObject().value("opacity").toObject().value("keys").toArray();
+        QCOMPARE(two.size(), 2);
+        QCOMPARE(two.at(0).toObject().value("at").toInt(), 12);
+        QCOMPARE(two.at(1).toObject().value("at").toInt(), 36);
+        QVERIFY(std::abs(two.at(1).toObject().value("value").toDouble() - 0.8) < 1e-9);
+        // Back on the key, a click takes it out: the last one leaves 0.5, still.
+        sent.clear();
+        inspector.setPlayhead(6.5);
+        QVERIFY(diamond->has());
+        diamond->click();
+        QCOMPARE(sent.size(), 1);
+        QCOMPARE(sent.last().first().toObject().value("props").toObject().value("opacity").toDouble(), 0.5);
+        // Outside the clip: nothing to key, and why.
+        inspector.setPlayhead(2.0);
+        QVERIFY(!diamond->isEnabled());
+        QVERIFY(ui::tipName(diamond).contains(QStringLiteral("playhead over the clip")));
+        // Sound: gain keys, pan does not ("Playback and renders follow
+        // keyframes on gain only").
+        inspector.setPlayhead(1.0);
+        inspector.setState(timeline, {QStringLiteral("music")});
+        InspectorRow *gain = rowOf("prop_gain");
+        InspectorRow *pan = rowOf("prop_pan");
+        QVERIFY(gain && pan);
+        QVERIFY(gain->keyframeButton()->isEnabled());
+        QVERIFY(!pan->keyframeButton()->isEnabled());
+        QCOMPARE(ui::tipName(pan->keyframeButton()), QStringLiteral("Playback and renders follow keyframes on gain only"));
+        sent.clear();
+        gain->keyframeButton()->click();
+        QCOMPARE(sent.size(), 1);
+        const QJsonArray gainKeys = sent.last().first().toObject().value("props").toObject().value("gain").toObject().value("keys").toArray();
+        QCOMPARE(gainKeys.size(), 1);
+        QCOMPARE(gainKeys.first().toObject().value("at").toInt(), 24);
+        QCOMPARE(gainKeys.first().toObject().value("value").toDouble(), -8.0);
+        // A value that cannot be animated (blend) has no diamond.
+        inspector.setPlayhead(6.5);
+        inspector.setState(timeline, {QStringLiteral("v")});
+        QVERIFY(rowOf("prop_blend")->keyframeButton()->isHidden());
+    }
+
+    // The Finish workspace's Lift, Gamma and Gain wheels (72 points, a 2pt
+    // ring, a 48pt crosshair, an 8pt puck) write the clip's ASC CDL: offset,
+    // power and slope per channel, added on the first edit; the master value
+    // under each is the luma (Lift −0.02, Gamma +0.01, Gain 1.04); with only
+    // Lumetri on the clip they write its wheels instead.
+    void inspectorWheelsWriteTheAscCdl() {
+        QSettings().remove(QStringLiteral("editor/inspector"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("editor/inspector")); });
+        QJsonObject timeline = everyKindSnapshot(1).value("timeline").toObject();
+        const auto withEffects = [&timeline](const QJsonArray &effects) {
+            QJsonArray tracks = timeline.value("tracks").toArray();
+            QJsonObject track = tracks.at(0).toObject();
+            QJsonArray clips = track.value("clips").toArray();
+            QJsonObject clip = clips.at(0).toObject();
+            clip.insert("effects", effects);
+            clips.replace(0, clip);
+            track.insert("clips", clips);
+            tracks.replace(0, track);
+            QJsonObject out = timeline;
+            out.insert("tracks", tracks);
+            return out;
+        };
+        InspectorPanel inspector;
+        char *catalog = kerf_fx_catalog_all();
+        QVERIFY(catalog);
+        inspector.setEffectCatalog(QJsonDocument::fromJson(QByteArray(catalog)).array());
+        kerf_bridge_string_free(catalog);
+        QList<QJsonArray> sent;
+        connect(&inspector, &InspectorPanel::editRequested, &inspector, [&sent](const QJsonArray &ops) { sent << ops; });
+        inspector.setState(withEffects({}), {QStringLiteral("v")});
+        // Not in Finish: no wheels.
+        QVERIFY(!inspector.wheels());
+        inspector.setFinish(true);
+        QVERIFY(inspector.wheels());
+        inspector.resize(304, 900);
+        inspector.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&inspector));
+        const auto wheels = inspector.wheels()->findChildren<ColorWheel *>();
+        QCOMPARE(wheels.size(), 3);
+        for (ColorWheel *wheel : wheels) {
+            QCOMPARE(wheel->size(), QSize(72, 72));
+            QCOMPARE(wheel->puckCenter(), QPointF(36, 36));
         }
+        // Spread across the column, 16 in from its sides, under the header.
+        QCOMPARE(wheels.first()->mapTo(&inspector, QPoint()).x(), 16);
+        QCOMPARE(wheels.last()->mapTo(&inspector, QPoint(72, 0)).x(), inspector.width() - 16);
+        QCOMPARE(inspector.wheels()->mapTo(&inspector, QPoint()).y(), 44);
+        auto *gain = inspector.findChild<ColorWheel *>(QStringLiteral("colorWheel_gain"));
+        auto *gainValue = inspector.findChild<ScrubField *>(QStringLiteral("wheelValue_gain"));
+        auto *liftValue = inspector.findChild<ScrubField *>(QStringLiteral("wheelValue_lift"));
+        QVERIFY(gain && gainValue && liftValue);
+        QCOMPARE(gainValue->text(), QStringLiteral("1.00"));
+        QCOMPARE(liftValue->text(), QStringLiteral("0.00"));
+        // A drag right pushes blue (Cb): the CDL is added with the slopes.
+        mouse(gain, QEvent::MouseButtonPress, QPointF(36, 36));
+        mouse(gain, QEvent::MouseMove, QPointF(46, 36));
+        mouse(gain, QEvent::MouseButtonRelease, QPointF(46, 36));
+        QCOMPARE(sent.size(), 1);
+        QJsonObject op = sent.last().first().toObject();
+        QCOMPARE(op.value("op").toString(), QStringLiteral("fx-add"));
+        QCOMPARE(op.value("fx").toString(), QStringLiteral("color.asccdl"));
+        const QJsonObject added = op.value("params").toObject();
+        QVERIFY2(added.value("b_slope").toDouble() > 1.0, qPrintable(QJsonDocument(added).toJson(QJsonDocument::Compact)));
+        QVERIFY(added.value("g_slope").toDouble() < 1.0);
+        // On the clip: its values show, and a typed Gain sets every slope.
+        sent.clear();
+        inspector.setState(withEffects({QJsonObject{{"fx", "color.asccdl"}, {"enabled", true},
+                                                    {"params", QJsonObject{{"r_offset", -0.02}, {"g_offset", -0.02}, {"b_offset", -0.02},
+                                                                           {"r_power", 1.01}, {"g_power", 1.01}, {"b_power", 1.01}}}}}),
+                           {QStringLiteral("v")});
+        // A new stack is a new body: its wheels found again.
+        gainValue = inspector.findChild<ScrubField *>(QStringLiteral("wheelValue_gain"));
+        liftValue = inspector.findChild<ScrubField *>(QStringLiteral("wheelValue_lift"));
+        QVERIFY(gainValue && liftValue);
+        QCOMPARE(liftValue->text(), QStringLiteral("−0.02"));
+        QCOMPARE(inspector.findChild<ScrubField *>(QStringLiteral("wheelValue_gamma"))->text(), QStringLiteral("+0.01"));
+        gainValue->commitText(QStringLiteral("1.04"));
+        QCOMPARE(sent.size(), 1);
+        op = sent.last().first().toObject();
+        QCOMPARE(op.value("op").toString(), QStringLiteral("fx-set"));
+        QCOMPARE(op.value("index").toInt(), 0);
+        for (const char *slope : {"r_slope", "g_slope", "b_slope"})
+            QVERIFY2(std::abs(op.value("params").toObject().value(QLatin1String(slope)).toDouble() - 1.04) < 1e-4, slope);
+        // A double-click puts the puck back: the chroma goes, the level stays.
+        sent.clear();
+        auto *lift = inspector.findChild<ColorWheel *>(QStringLiteral("colorWheel_lift"));
+        QTest::mouseDClick(lift, Qt::LeftButton, Qt::NoModifier, QPoint(36, 36));
+        // Neutral already: nothing to send.
         QVERIFY(sent.isEmpty());
-        inspector.setState(timeline, {QStringLiteral("v2")});
+        // Lumetri alone grades: the wheels are its own.
+        inspector.setState(withEffects({QJsonObject{{"fx", "color.lumetri"}, {"enabled", true}, {"params", QJsonObject{}}}}),
+                           {QStringLiteral("v")});
+        lift = inspector.findChild<ColorWheel *>(QStringLiteral("colorWheel_lift"));
+        mouse(lift, QEvent::MouseButtonPress, QPointF(36, 36));
+        mouse(lift, QEvent::MouseMove, QPointF(36, 50));
+        mouse(lift, QEvent::MouseButtonRelease, QPointF(36, 50));
         QCOMPARE(sent.size(), 1);
-        const QJsonObject op = sent.last().first().toObject();
-        QCOMPARE(op.value("clip").toString(), QStringLiteral("v1"));
-        QCOMPARE(op.value("props").toObject().value("rotation").toDouble(), 32.0);
-        QTest::qWait(RotationKnob::kWheelRunMs + 100);
-        QCOMPARE(sent.size(), 1);
+        op = sent.last().first().toObject();
+        QCOMPARE(op.value("op").toString(), QStringLiteral("fx-set"));
+        QVERIFY(op.value("params").toObject().value("wheel_shadows_y").toDouble() > 0.0);
+        // Out of Finish they go.
+        inspector.setFinish(false);
+        QVERIFY(!inspector.wheels());
     }
 
-    // The parts are painted from the hardware tokens in both appearances,
-    // and their text reads at 4.5:1 on what it is printed on.
-    void inspectorHardwareColours() {
-        {
-            const EditorTheme &theme = editorTheme();
-            const QString name = QStringLiteral("dark");
-            // Labels on the plate, values in the well, legends on the keys.
-            for (const QColor &surface : {theme.modulePlate, theme.wellFill})
-                QVERIFY2(contrastRatio(theme.textSecondary, surface) >= 4.5, qPrintable(name));
-            QVERIFY2(contrastRatio(theme.text, theme.wellFill) >= 4.5, qPrintable(name));
-            QVERIFY2(contrastRatio(changedValueInk(), theme.wellFill) >= 4.5, qPrintable(name));
-            QVERIFY2(contrastRatio(theme.accentText, theme.wellFill) >= 4.5, qPrintable(name));
-            for (const QColor &key : {theme.keyTop, theme.keyBottom, theme.keyLatched})
-                QVERIFY2(contrastRatio(theme.engravedInk, key) >= 4.5, qPrintable(name));
-            // A value's well.
-            ScrubField field;
-            field.resize(InspectorRow::kValueField, ScrubField::kHeight);
-            QImage image(field.size(), QImage::Format_ARGB32_Premultiplied);
-            image.fill(theme.modulePlate);
-            field.render(&image, QPoint(), QRegion(), QWidget::DrawChildren);
-            QCOMPARE(image.pixelColor(field.width() / 2, field.height() / 2).rgb(), theme.wellFill.rgb());
-            // A latched key's amber bar, lit at its top; a raised key has none.
-            KeyBank bank({{QStringLiteral("Fit"), QString(), QStringLiteral("a")}, {QStringLiteral("Fill"), QString(), QStringLiteral("b")}}, true);
-            bank.resize(96, ScrubField::kHeight);
-            bank.setCurrent(0);
+    // The Audio pane: Volume (Level in dB, Pan bipolar) and Channel EQ,
+    // audio.eq's low cut and presence, added on the first edit (its box off
+    // until it is on the clip). A picture clip's pane edits its linked sound;
+    // one with none says so.
+    void inspectorAudioPaneAddsTheChannelEq() {
+        QSettings().remove(QStringLiteral("editor/inspector"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("editor/inspector")); });
+        QJsonObject timeline = everyKindSnapshot(1).value("timeline").toObject();
+        InspectorPanel inspector;
+        char *catalog = kerf_fx_catalog_all();
+        QVERIFY(catalog);
+        inspector.setEffectCatalog(QJsonDocument::fromJson(QByteArray(catalog)).array());
+        kerf_bridge_string_free(catalog);
+        QList<QJsonArray> sent;
+        connect(&inspector, &InspectorPanel::editRequested, &inspector, [&sent](const QJsonArray &ops) { sent << ops; });
+        inspector.setPane(InspectorPanel::Pane::Audio);
+        inspector.setState(timeline, {QStringLiteral("music")});
+        InspectorSection *volume = inspector.section(QStringLiteral("volume"));
+        InspectorSection *eq = inspector.section(QStringLiteral("channelEq"));
+        QVERIFY(volume && eq);
+        QVERIFY(volume->isOpen() && eq->isOpen());
+        QCOMPARE(eq->title(), QStringLiteral("Channel EQ"));
+        QCOMPARE(eq->enable(), InspectorSection::Enable::Off);
+        QVERIFY(inspector.metaText().startsWith(QStringLiteral("A2 · 48 kHz")));
+        QVERIFY(inspector.metaText().endsWith(QStringLiteral("stereo")));
+        auto *level = inspector.findChild<ScrubField *>(QStringLiteral("prop_gain"));
+        auto *pan = inspector.findChild<InspectorSlider *>(QStringLiteral("slider_pan"));
+        auto *lowCut = inspector.findChild<ScrubField *>(QStringLiteral("fxParam_lowcut_hz"));
+        auto *presence = inspector.findChild<ScrubField *>(QStringLiteral("fxParam_presence_db"));
+        QVERIFY(level && pan && lowCut && presence);
+        QVERIFY(pan->isBipolar());
+        QCOMPARE(level->text(), QStringLiteral("−8.0"));
+        QCOMPARE(lowCut->unitText(), QStringLiteral("Hz"));
+        // The labels read as the design's.
+        QCOMPARE(rowOf(lowCut)->label()->fullText(), QStringLiteral("Low cut"));
+        QCOMPARE(rowOf(presence)->label()->fullText(), QStringLiteral("Presence"));
+        // The first edit adds audio.eq with its value.
+        lowCut->commitText(QStringLiteral("80"));
+        QCOMPARE(sent.size(), 1);
+        QJsonObject op = sent.last().first().toObject();
+        QCOMPARE(op.value("op").toString(), QStringLiteral("fx-add"));
+        QCOMPARE(op.value("clip").toString(), QStringLiteral("music"));
+        QCOMPARE(op.value("fx").toString(), QStringLiteral("audio.eq"));
+        QCOMPARE(op.value("params").toObject().value("lowcut_hz").toDouble(), 80.0);
+        // Checking the box adds it plain.
+        sent.clear();
+        eq->enableBox()->click();
+        QCOMPARE(sent.size(), 1);
+        QCOMPARE(sent.last().first().toObject().value("fx").toString(), QStringLiteral("audio.eq"));
+        // On the clip, edits set it, and its box switches it.
+        QJsonArray tracks = timeline.value("tracks").toArray();
+        QJsonObject music = tracks.at(4).toObject();
+        QJsonArray clips = music.value("clips").toArray();
+        QJsonObject clip = clips.at(0).toObject();
+        clip.insert("effects", QJsonArray{QJsonObject{{"fx", "audio.eq"}, {"enabled", true}, {"params", QJsonObject{{"lowcut_hz", 80}}}}});
+        clips.replace(0, clip);
+        music.insert("clips", clips);
+        tracks.replace(4, music);
+        timeline.insert("tracks", tracks);
+        sent.clear();
+        inspector.setState(timeline, {QStringLiteral("music")});
+        eq = inspector.section(QStringLiteral("channelEq"));
+        QVERIFY(eq);
+        QCOMPARE(eq->enable(), InspectorSection::Enable::On);
+        presence = inspector.findChild<ScrubField *>(QStringLiteral("fxParam_presence_db"));
+        presence->commitText(QStringLiteral("1.5"));
+        op = sent.last().first().toObject();
+        QCOMPARE(op.value("op").toString(), QStringLiteral("fx-set"));
+        QCOMPARE(op.value("index").toInt(), 0);
+        QCOMPARE(op.value("params").toObject().value("presence_db").toDouble(), 1.5);
+        inspector.section(QStringLiteral("channelEq"))->enableBox()->click();
+        op = sent.last().first().toObject();
+        QCOMPARE(op.value("op").toString(), QStringLiteral("fx-set"));
+        QCOMPARE(op.value("enabled").toBool(), false);
+        // Sound effect parameters take no keyframes.
+        QVERIFY(!rowOf(presence)->keyframeButton()->isEnabled());
+        // A level typed: the clip's gain.
+        level = inspector.findChild<ScrubField *>(QStringLiteral("prop_gain"));
+        level->commitText(QStringLiteral("-6"));
+        op = sent.last().first().toObject();
+        QCOMPARE(op.value("op").toString(), QStringLiteral("set"));
+        QCOMPARE(op.value("props").toObject().value("gain").toDouble(), -6.0);
+        // The picture clip "v": its linked sound "a" on A1.
+        sent.clear();
+        inspector.setState(timeline, {QStringLiteral("v")});
+        QVERIFY(inspector.metaText().startsWith(QStringLiteral("A1 linked")));
+        inspector.findChild<ScrubField *>(QStringLiteral("prop_gain"))->commitText(QStringLiteral("-3"));
+        QCOMPARE(sent.last().first().toObject().value("clip").toString(), QStringLiteral("a"));
+        // A title carries no sound.
+        inspector.setState(timeline, {QStringLiteral("t")});
+        QVERIFY(!inspector.section(QStringLiteral("volume")));
+        QVERIFY(inspector.findChild<QLabel *>(QStringLiteral("inspectorNote"))->text().contains(QStringLiteral("no sound")));
+    }
+
+    // The Info pane: key-value rows from the snapshot (Start, End, Duration,
+    // Frame size, Frame rate, Roles from the track) and from media_info
+    // (Codec, Colour, Camera, Lens, Reel); a field the engine does not give is
+    // left out, never invented.
+    void inspectorInfoShowsMediaInfoOnlyWhenPresent() {
+        QJsonObject timeline = everyKindSnapshot(1).value("timeline").toObject();
+        QJsonArray tracks = timeline.value("tracks").toArray();
+        QJsonObject v1 = tracks.at(0).toObject();
+        v1.insert("role", "video");
+        tracks.replace(0, v1);
+        timeline.insert("tracks", tracks);
+        InspectorPanel inspector;
+        inspector.setPane(InspectorPanel::Pane::Info);
+        inspector.setState(timeline, {QStringLiteral("v")});
+        QCOMPARE(inspector.infoKeys(), (QStringList{"Start", "End", "Duration", "Frame size", "Frame rate", "Audio", "Roles", "File"}));
+        QCOMPARE(inspector.infoValue(QStringLiteral("Start")), QStringLiteral("00:00:06:00"));
+        QCOMPARE(inspector.infoValue(QStringLiteral("Duration")), QStringLiteral("00:00:05:00"));
+        QCOMPARE(inspector.infoValue(QStringLiteral("Frame size")), QStringLiteral("1920×1080"));
+        QCOMPARE(inspector.infoValue(QStringLiteral("Frame rate")), QStringLiteral("24p"));
+        QCOMPARE(inspector.infoValue(QStringLiteral("Roles")), QStringLiteral("Video"));
+        QCOMPARE(inspector.infoValue(QStringLiteral("Codec")), QString());
+        // Info on the file: only the fields it gives.
+        inspector.setMediaInfo(QJsonObject{{"close", QJsonObject{{"codec", "prores"}, {"profile", "4444"}, {"camera", "ARRI ALEXA Mini LF"},
+                                                                 {"lens", "Signature Prime 47 mm"}, {"reel", "B003"}, {"primaries", "bt709"},
+                                                                 {"transfer", "bt709"}, {"audioBitDepth", 24}}}});
+        QCOMPARE(inspector.infoValue(QStringLiteral("Codec")), QStringLiteral("ProRes 4444"));
+        QCOMPARE(inspector.infoValue(QStringLiteral("Lens")), QStringLiteral("Signature Prime 47 mm"));
+        QCOMPARE(inspector.infoValue(QStringLiteral("Reel")), QStringLiteral("B003"));
+        QCOMPARE(inspector.infoValue(QStringLiteral("Colour")), QStringLiteral("Rec.709"));
+        QCOMPARE(inspector.infoValue(QStringLiteral("Audio")), QStringLiteral("48 kHz · 24-bit · stereo"));
+        QCOMPARE(inspector.metaText(), QStringLiteral("ARRI ALEXA Mini LF · ProRes 4444"));
+        QVERIFY(!inspector.infoKeys().contains(QStringLiteral("Timecode")));
+        QVERIFY(!inspector.infoKeys().contains(QStringLiteral("Pixel format")));
+        // Each row: 24 tall, its value right-aligned in mono.
+        for (QWidget *row : inspector.findChildren<QWidget *>(QStringLiteral("infoRow"))) QCOMPARE(row->height(), 24);
+        auto *codec = inspector.findChildren<QLabel *>(QStringLiteral("infoValue")).value(0);
+        QVERIFY(codec);
+        QVERIFY(codec->alignment() & Qt::AlignRight);
+        QVERIFY(QFontInfo(codec->font()).fixedPitch() || codec->font().family().contains(QStringLiteral("Mono")) ||
+                codec->font().family() == QLatin1String(tokens::monoFallback));
+        // The window takes media_info from the bridge's event.
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(everyKindSnapshot(2));
+        window.handleEvent(QJsonObject{{"type", "media_info"}, {"media", QJsonObject{{"close", QJsonObject{{"lens", "Signature Prime 47 mm"}}}}}});
+        QCOMPARE(window.m_inspector->mediaInfo().value("close").toObject().value("lens").toString(), QStringLiteral("Signature Prime 47 mm"));
+    }
+
+    // An open proposal that changes the clip shows as a hint row in the
+    // group it changes (Effects for an effect): "<author> proposes <change>"
+    // with Show, which opens the comments panel on the proposal's thread.
+    void inspectorProposalHintOpensItsThread() {
+        QSettings().remove(QStringLiteral("editor/inspector"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("editor/inspector")); });
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        QJsonObject snapshot = everyKindSnapshot(3);
+        QJsonObject proposed = snapshot.value("timeline").toObject();
+        QJsonArray tracks = proposed.value("tracks").toArray();
+        QJsonObject v1 = tracks.at(0).toObject();
+        QJsonArray clips = v1.value("clips").toArray();
+        QJsonObject clip = clips.at(0).toObject();
+        clip.insert("effects", QJsonArray{QJsonObject{{"fx", "color.basic"}, {"enabled", true}, {"params", QJsonObject{}}}});
+        clip.insert("props", QJsonObject{{"opacity", 0.5}});
+        clips.replace(0, clip);
+        v1.insert("clips", clips);
+        tracks.replace(0, v1);
+        proposed.insert("tracks", tracks);
+        snapshot.insert("proposals", QJsonArray{QJsonObject{{"proposalId", "p1"}, {"status", "pending"},
+                                                            {"author", QJsonObject{{"kind", "mcp"}, {"name", "Codex"}}}}});
+        snapshot.insert("proposalTimelines", QJsonObject{{"p1", proposed}});
+        window.applySnapshot(snapshot);
+        window.handleEvent(QJsonObject{{"type", "comments"}, {"reviewRevision", 1}, {"items", QJsonArray{
+            QJsonObject{{"id", "c-root"}, {"parent", QJsonValue()}, {"body", "Fade the close-up"}},
+            QJsonObject{{"id", "c-reply"}, {"parent", "c-root"}, {"body", "Here it is"}, {"proposal", "p1"}}}}});
+        window.selectClip(QStringLiteral("v"));
+        InspectorPanel *inspector = window.m_inspector;
+        QWidget *hint = inspector->proposalHint();
+        QVERIFY(hint && !hint->isHidden());
+        QVERIFY2(inspector->proposalHintText().startsWith(QStringLiteral("Codex proposes Opacity 50")), qPrintable(inspector->proposalHintText()));
+        QVERIFY(inspector->proposalHintText().endsWith(QStringLiteral("+1")));
+        QCOMPARE(hint->height(), 20);
+        // In the group of what it changes: Compositing holds Opacity.
+        QVERIFY(inspector->section(QStringLiteral("compositing"))->bodyWidget()->isAncestorOf(hint));
+        QSignalSpy opened(window.m_bus, &EditorBus::openThread);
+        QSignalSpy panel(window.m_bus, &EditorBus::commentsPanelRequested);
+        hint->findChild<QPushButton *>(QStringLiteral("proposalHintShow"))->click();
+        QCOMPARE(opened.size(), 1);
+        QCOMPARE(opened.first().first().toString(), QStringLiteral("c-root"));
+        QCOMPARE(panel.size(), 1);
+        QVERIFY(panel.first().first().toBool());
+        // An effect change only: in Effects.
+        clip.insert("props", QJsonObject{});
+        clips.replace(0, clip);
+        v1.insert("clips", clips);
+        tracks.replace(0, v1);
+        proposed.insert("tracks", tracks);
+        snapshot.insert("revision", 4);
+        snapshot.insert("proposalTimelines", QJsonObject{{"p1", proposed}});
+        window.applySnapshot(snapshot);
+        QVERIFY(!hint->isHidden());
+        QVERIFY(inspector->section(QStringLiteral("effects"))->bodyWidget()->isAncestorOf(hint));
+        QVERIFY(inspector->proposalHintText().startsWith(QStringLiteral("Codex proposes")));
+        // Settled: no hint.
+        snapshot.insert("revision", 5);
+        snapshot.insert("proposals", QJsonArray{QJsonObject{{"proposalId", "p1"}, {"status", "accepted"}}});
+        window.applySnapshot(snapshot);
+        QVERIFY(hint->isHidden());
+    }
+
+    // The column's kinds are its panes, Audio and Info included; in the
+    // Deliver workspace the Video kind shows the Deliver pane; a workspace
+    // switch goes back to the Inspector page; Finish shows the wheels.
+    void inspectorColumnShowsEachKindAndTheDeliverPane() {
+        QSettings().remove(QStringLiteral("workspace"));
+        QSettings().remove(QStringLiteral("editor/inspector"));
+        const auto restore = qScopeGuard([] {
+            QSettings().remove(QStringLiteral("workspace"));
+            QSettings().remove(QStringLiteral("editor/inspector"));
+        });
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(everyKindSnapshot(1));
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.clickSelectClip(QStringLiteral("v"));
+        InspectorColumn *column = window.m_inspectorColumn;
+        InspectorPanel *inspector = window.m_inspector;
+        for (const auto kind : {InspectorColumn::Kind::Video, InspectorColumn::Kind::Audio, InspectorColumn::Kind::Info})
+            QVERIFY(InspectorColumn::kindAvailable(kind) && column->kindButton(kind)->isEnabled());
+        column->kindButton(InspectorColumn::Kind::Audio)->click();
+        QCOMPARE(column->kind(), InspectorColumn::Kind::Audio);
+        QCOMPARE(inspector->pane(), InspectorPanel::Pane::Audio);
+        QCOMPARE(column->currentPage(), inspector);
+        QVERIFY(inspector->section(QStringLiteral("volume")));
+        QVERIFY(inspector->footer()->isHidden());
+        column->kindButton(InspectorColumn::Kind::Info)->click();
+        QCOMPARE(inspector->pane(), InspectorPanel::Pane::Info);
+        QVERIFY(inspector->infoKeys().contains(QStringLiteral("Frame size")));
+        // Choosing a kind from the Source page turns the Inspector page back on.
+        column->setPage(InspectorColumn::Page::Source);
+        column->kindButton(InspectorColumn::Kind::Video)->click();
+        QCOMPARE(column->page(), InspectorColumn::Page::Inspector);
+        QCOMPARE(inspector->pane(), InspectorPanel::Pane::Video);
+        QVERIFY(!inspector->footer()->isHidden());
+        // Deliver: the Deliver pane stands in for the Video kind.
+        window.m_workspace->activate(QString::fromLatin1(Workspace::kDeliver));
+        QCoreApplication::processEvents();
+        QVERIFY(column->deliverShown());
+        QCOMPARE(column->currentPage(), column->deliverPane());
+        column->setKind(InspectorColumn::Kind::Info);
+        QCOMPARE(column->currentPage(), inspector);
+        column->setKind(InspectorColumn::Kind::Video);
+        QCOMPARE(column->currentPage(), column->deliverPane());
+        // Finish: the wheels over the Video pane.
+        column->setPage(InspectorColumn::Page::Source);
+        window.m_workspace->activate(QString::fromLatin1(Workspace::kFinish));
+        QCoreApplication::processEvents();
+        QCOMPARE(column->page(), InspectorColumn::Page::Inspector);
+        QVERIFY(inspector->finish());
+        QVERIFY(inspector->wheels());
+        window.m_workspace->activate(QString::fromLatin1(Workspace::kReview));
+        QCoreApplication::processEvents();
+        QVERIFY(!inspector->finish());
+    }
+
+    // Save effects preset (the footer, 32 tall with its line on top): a name,
+    // then look_save {clip, name}; a bridge that answers look_save as an
+    // unknown command turns the button off, saying why.
+    void inspectorSavesAnEffectsPreset() {
+        QSettings().remove(QStringLiteral("editor/inspector"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("editor/inspector")); });
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        QJsonObject snapshot = everyKindSnapshot(1);
+        QJsonObject timeline = snapshot.value("timeline").toObject();
+        QJsonArray tracks = timeline.value("tracks").toArray();
+        QJsonObject v1 = tracks.at(0).toObject();
+        QJsonArray clips = v1.value("clips").toArray();
+        QJsonObject clip = clips.at(0).toObject();
+        clip.insert("effects", QJsonArray{QJsonObject{{"fx", "color.basic"}, {"enabled", true}, {"params", QJsonObject{}}}});
+        clips.replace(0, clip);
+        v1.insert("clips", clips);
+        tracks.replace(0, v1);
+        timeline.insert("tracks", tracks);
+        snapshot.insert("timeline", timeline);
+        window.applySnapshot(snapshot);
+        InspectorPanel *inspector = window.m_inspector;
+        // Nothing selected: nothing to save.
+        QVERIFY(!inspector->savePresetButton()->isEnabled());
+        window.selectClip(QStringLiteral("v"));
+        ui::Button *save = inspector->savePresetButton();
+        QVERIFY(save->isEnabled());
+        QCOMPARE(save->text(), QStringLiteral("Save effects preset"));
+        QCOMPARE(save->kind(), ui::Button::Kind::Secondary);
+        QCOMPARE(inspector->footer()->height(), 32);
+        window.m_inspectorWiring->setNameAsker([](QWidget *, const QString &) { return QStringLiteral("Harbor warm"); });
+        save->click();
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("look_save"));
+        QCOMPARE(window.m_lastCommand.value("clip").toString(), QStringLiteral("v"));
+        QCOMPARE(window.m_lastCommand.value("name").toString(), QStringLiteral("Harbor warm"));
+        // A cancelled name sends nothing.
+        window.m_lastCommand = {};
+        window.m_inspectorWiring->setNameAsker([](QWidget *, const QString &) { return QString(); });
+        save->click();
+        QVERIFY(window.m_lastCommand.isEmpty());
+        // Refused as unknown: off, with the reason.
+        window.handleEvent(QJsonObject{{"type", "error"}, {"command", "look_save"}, {"message", "unknown command: look_save"}});
+        QVERIFY(!save->isEnabled());
+        QCOMPARE(ui::tipName(save), InspectorWiring::unsupportedReason());
+        window.handleEvent(QJsonObject{{"type", "look_saved"}, {"path", "looks/Harbor warm.kerflook"}});
+        QVERIFY(save->isEnabled());
+    }
+
+    // The 304-point column at the design's 1600 × 1000 window, as spec 5
+    // draws it: the 28 strip, the 44 clip header (name UI 500 14/20 over the
+    // mono meta line), 28-point group headers, and 24-point rows on the
+    // 84 | 1fr | 56 | 20 grid with 8 between, pad 0 8 0 12. With
+    // KERF_SCREENSHOT_DIR set, each pane is saved as inspector-<pane>.png.
+    void inspectorColumnFollowsTheSpecGrid() {
+        QSettings().remove(QStringLiteral("workspace"));
+        QSettings().remove(QStringLiteral("editor/inspector"));
+        const auto restore = qScopeGuard([] {
+            QSettings().remove(QStringLiteral("workspace"));
+            QSettings().remove(QStringLiteral("editor/inspector"));
+        });
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(everyKindSnapshot(1));
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.clickSelectClip(QStringLiteral("v"));
+        QCoreApplication::processEvents();
+        InspectorColumn *column = window.m_inspectorColumn;
+        InspectorPanel *inspector = window.m_inspector;
+        // 304 with its seam: 303 of content.
+        QVERIFY2(std::abs(column->width() - (tokens::layout::inspector - 1)) <= 1, qPrintable(QString::number(column->width())));
+        QCOMPARE(column->findChild<QWidget *>(QStringLiteral("inspectorStrip"))->height(), 28);
+        QCOMPARE(inspector->mapTo(column, QPoint()).y(), 28);
+        QCOMPARE(inspector->header()->height(), 44);
+        QCOMPARE(inspector->m_name->font().pixelSize(), 14);
+        QCOMPARE(inspector->m_name->font().weight(), QFont::Medium);
+        QCOMPARE(inspector->m_name->mapTo(inspector->header(), QPoint()), QPoint(12, 4));
+        QCOMPARE(inspector->m_kind->height(), 16);
+        QCOMPARE(inspector->m_kind->font().pixelSize(), 11);
+        // "V1 · 00:00:06:00–00:00:11:00 · 5s0f"
+        QCOMPARE(inspector->metaText(), QStringLiteral("V1 · 00:00:06:00–00:00:11:00 · 5s0f"));
+        QCOMPARE(inspector->m_more->size(), QSize(24, 24));
+        QCOMPARE(inspector->m_more->mapTo(inspector->header(), QPoint(24, 0)), QPoint(inspector->width() - 8, 4));
+        InspectorSection *transform = inspector->section(QStringLiteral("transform"));
+        QVERIFY(transform && transform->isOpen());
+        QCOMPARE(transform->header()->height(), 28);
+        QCOMPARE(transform->width(), inspector->width());
+        // Every visible row on the one grid.
+        int checked = 0;
+        for (InspectorRow *row : inspector->findChildren<InspectorRow *>()) {
+            if (!row->isVisibleTo(inspector) || row->isWide()) continue;
+            ++checked;
+            QCOMPARE(row->height(), 24);
+            QCOMPARE(row->label()->geometry(), QRect(12, 0, 84, 24));
+            QWidget *value = row->valueSlot();
+            KeyframeButton *keyframe = row->keyframeButton();
+            QCOMPARE(keyframe->geometry().right() + 1, row->width() - 8);
+            QCOMPARE(keyframe->size(), QSize(20, 20));
+            QCOMPARE(value->width(), 56);
+            QCOMPARE(value->geometry().right() + 1 + 8, keyframe->x());
+            QWidget *control = row->findChild<QWidget *>(QStringLiteral("rowControls"));
+            QCOMPARE(control->x(), 12 + 84 + 8);
+            QCOMPARE(control->geometry().right() + 1 + 8, value->x());
+            QCOMPARE(control->width(), row->width() - 12 - 8 - 84 - 56 - 20 - 3 * 8);
+        }
+        QVERIFY2(checked >= 4, qPrintable(QString::number(checked)));
+        // Wide rows (pairs, pop-ups) end where the value column does.
+        for (const char *pair : {"prop_y", "prop_anchor_y"}) {
+            auto *field = inspector->findChild<ScrubField *>(QString::fromLatin1(pair));
+            QVERIFY(field && field->isVisible());
+            QVERIFY(field->showsWhole());
+            InspectorRow *row = rowOf(field);
+            QCOMPARE(field->mapTo(row, QPoint(field->width(), 0)).x() + 8, row->keyframeButton()->x());
+        }
+        // The group's reset shows only under the pointer; its fold chevron is ink3.
+        QVERIFY(transform->resetButton()->isHidden());
+        QCOMPARE(transform->chevron()->inkColor(), tokens::color(tokens::ink3));
+        QVERIFY(inspector->scrollArea()->verticalScrollBarPolicy() == Qt::ScrollBarAlwaysOff);
+        const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
+        for (const auto kind : {InspectorColumn::Kind::Video, InspectorColumn::Kind::Audio, InspectorColumn::Kind::Info}) {
+            column->setKind(kind);
             QCoreApplication::processEvents();
-            QImage keys(bank.size(), QImage::Format_ARGB32_Premultiplied);
-            keys.fill(theme.modulePlate);
-            bank.render(&keys, QPoint(), QRegion(), QWidget::DrawWindowBackground | QWidget::DrawChildren);
-            const QRect lit = bank.key(0)->geometry();
-            const QRect raised = bank.key(1)->geometry();
-            QCOMPARE(keys.pixelColor(lit.center().x(), lit.top() + 3).rgb(), theme.keyLed.rgb());
-            QVERIFY(keys.pixelColor(raised.center().x(), raised.top() + 3).rgb() != theme.keyLed.rgb());
-            // The bank's well shows between and round the keys.
-            QCOMPARE(keys.pixelColor(lit.right() + 1, bank.height() / 2).rgb(), theme.bankWell.rgb());
-            // The glass is dark in both, its figures cream.
-            GlassReadout glass;
-            glass.resize(240, 40);
-            QImage readout(glass.size(), QImage::Format_ARGB32_Premultiplied);
-            readout.fill(theme.panel);
-            glass.render(&readout);
-            QVERIFY(readout.pixelColor(120, 30).lightnessF() < 0.2);
+            const QImage shot = column->grab().toImage();
+            QCOMPARE(shot.pixelColor(QPoint(column->width() / 2, 2) * shot.devicePixelRatio()).rgb(), tokens::color(tokens::chrome).rgb());
+            if (!shots.isEmpty()) QVERIFY(shot.save(QDir(shots).filePath(QStringLiteral("inspector-%1.png").arg(InspectorColumn::kindId(kind)))));
         }
-    }
-
-    // Every part paints inside the rectangle it is given, its drop and lip
-    // and a lamp's glow included, in both appearances and at 1x, 1.25x and
-    // 2x; and its straight edges land on whole device pixels.
-    void hardwarePartsStayInTheirBounds() {
-        const QRectF rect(10, 10, 100, 30);
-        const QRectF knobBox(10, 10, 32, 32);
-        const QList<std::pair<const char *, std::function<void(QPainter &)>>> parts = {
-            {"key", [&](QPainter &p) { paintRaisedKey(p, rect, false, false, false); }},
-            {"hovered key", [&](QPainter &p) { paintRaisedKey(p, rect, false, true, false); }},
-            {"latched lit key", [&](QPainter &p) { paintRaisedKey(p, rect, true, true, true); }},
-            {"bank", [&](QPainter &p) { paintKeyBank(p, rect); }},
-            {"well", [&](QPainter &p) { paintWell(p, rect); }},
-            {"module", [&](QPainter &p) { paintModulePlate(p, rect); }},
-            {"glass", [&](QPainter &p) { paintGlass(p, rect); }},
-            {"engraved", [&](QPainter &p) { drawEngraved(p, rect, Qt::AlignCenter, QStringLiteral("Speed")); }},
-            {"engraved hangul", [&](QPainter &p) { drawEngraved(p, rect, Qt::AlignCenter, QStringLiteral("속도")); }},
-            {"vu", [&](QPainter &p) { paintVuMeter(p, rect, 0.9); }},
-        };
-        {
-            for (const qreal ratio : {1.0, 1.25, 2.0}) {
-                const QByteArray where = QByteArray::number(ratio) + (" dark");
-                for (const auto &[name, paint] : parts) {
-                    const QImage image = paintedAt(ratio, QSize(120, 50), paint);
-                    QVERIFY2(!paintsOutside(image, rect), QByteArray(name) + " at " + where);
-                    bool painted = false;
-                    for (int y = 0; y < image.height() && !painted; ++y)
-                        for (int x = 0; x < image.width() && !painted; ++x) painted = qAlpha(image.pixel(x, y)) != 0;
-                    QVERIFY2(painted, QByteArray(name) + " at " + where);
-                }
-                for (const double turn : {-135.0, 0.0, 135.0}) {
-                    const QImage knob = paintedAt(ratio, QSize(60, 60), [&](QPainter &p) { paintKnob(p, knobBox, turn); });
-                    QVERIFY2(!paintsOutside(knob, knobBox), "knob at " + where);
-                }
-                for (const LampState state : {LampState::Off, LampState::Changed, LampState::Kerf, LampState::Ok}) {
-                    const QImage lamp = paintedAt(ratio, QSize(60, 40), [state](QPainter &p) { paintLamp(p, {30, 20}, 6, state); });
-                    QVERIFY2(!paintsOutside(lamp, QRectF(24, 14, 12, 12)), "lamp at " + where);
-                    QVERIFY2(qAlpha(lamp.pixel(int(30 * ratio), int(20 * ratio))) == 255, "lamp at " + where);
-                }
-                // A module's top and left edges are whole rows and columns of
-                // its edge colour, with nothing above or beside them.
-                const QImage plate = paintedAt(ratio, QSize(120, 50), [&](QPainter &p) { paintModulePlate(p, rect); });
-                const int edge = int(std::round(10 * ratio));
-                const int middle = int(60 * ratio);
-                const QColor edgeColor = editorTheme().moduleEdge;
-                QCOMPARE(qAlpha(plate.pixel(middle, edge - 1)), 0);
-                QCOMPARE(QColor::fromRgba(plate.pixel(middle, edge)), edgeColor);
-                QCOMPARE(qAlpha(plate.pixel(edge - 1, int(25 * ratio))), 0);
-                QCOMPARE(QColor::fromRgba(plate.pixel(edge, int(25 * ratio))), edgeColor);
-                // Its 1px edge is one device pixel at 1.25x, not a blur
-                // across two; under it, flat, the plate itself (no line of
-                // light any more).
-                const int line = int(std::round(ratio));
-                QCOMPARE(QColor::fromRgba(plate.pixel(middle, edge + line - 1)), edgeColor);
-                QCOMPARE(QColor::fromRgba(plate.pixel(middle, edge + line)), editorTheme().modulePlate);
-                QCOMPARE(QColor::fromRgba(plate.pixel(middle, edge + 2 * line)), editorTheme().modulePlate);
-            }
-        }
-    }
-
-    // Flat keys: a latched key is the on fill, lighter than a raised one's
-    // `raised`, and flat across its face; under the pointer a key brightens;
-    // lit, its accent bar shows at its top.
-    void hardwareKeyStates() {
-        const QRectF key(10, 10, 40, 24);
-        {
-            const EditorTheme &t = editorTheme();
-            const auto keyImage = [&](bool latched, bool hovered, bool lit) {
-                return paintedAt(2, QSize(60, 44), [&](QPainter &p) { paintRaisedKey(p, key, latched, hovered, lit); });
-            };
-            const QImage raised = keyImage(false, false, false);
-            const QImage latched = keyImage(true, false, false);
-            QVERIFY(raised != latched);
-            QVERIFY(lightnessAt(latched, {30, 24}) > lightnessAt(raised, {30, 24}));
-            // No shadow or bevel: the face is one fill, top to foot.
-            QCOMPARE(lightnessAt(latched, {30, 14}), lightnessAt(latched, {30, 30}));
-            QCOMPARE(lightnessAt(raised, {30, 14}), lightnessAt(raised, {30, 30}));
-            QVERIFY(keyImage(false, true, false) != raised);
-            const QImage lit = keyImage(false, false, true);
-            const QColor led = QColor::fromRgba(lit.pixel(30 * 2, 13 * 2 + 1));
-            QVERIFY2(std::abs(led.hue() - t.keyLed.hue()) < 12 && led.saturation() > 120, qPrintable(led.name()));
-            QVERIFY(lit != raised);
-            // Unlit, the same spot is the key's own face.
-            QVERIFY(QColor::fromRgba(raised.pixel(30 * 2, 13 * 2 + 1)).saturation() < 120);
-        }
-    }
-
-    // The knob's pointer turns with its angle, from straight up clockwise.
-    void hardwareKnobPointerFollowsTheTurn() {
-        const QRectF box(0, 0, 32, 32);
-        const QPointF centre = box.center();
-        const auto pointerAt = [&](double degrees) {
-            const qreal radians = qDegreesToRadians(degrees);
-            return centre + QPointF(std::sin(radians), -std::cos(radians)) * 6;
-        };
-        for (const qreal ratio : {1.0, 2.0}) {
-            for (const double turn : {0.0, 90.0, -135.0, 135.0}) {
-                const QImage knob = paintedAt(ratio, QSize(32, 32), [&](QPainter &p) { paintKnob(p, box, turn); });
-                const int pointer = lightnessAt(knob, pointerAt(turn));
-                QVERIFY2(pointer > 160, qPrintable(QStringLiteral("%1° at %2x: %3").arg(turn).arg(ratio).arg(pointer)));
-                // A quarter turn away is the knob's dark face.
-                QVERIFY(lightnessAt(knob, pointerAt(turn + 90)) < 100);
-                QVERIFY(lightnessAt(knob, pointerAt(turn + 180)) < 100);
-            }
-        }
-    }
-
-    // Engraved labels are tracked capitals, except Hangul and other CJK
-    // text, which has no capitals and loses its shapes when spaced: it is
-    // untracked, as written, and a pixel larger. The ink is painted over its
-    // catch of light.
-    void hardwareEngravedLabels() {
-        QFont base;
-        base.setPixelSize(13);
-        const QFont latin = engravedFont(base, QStringLiteral("Speed"));
-        QCOMPARE(latin.pixelSize(), 10);
-        QCOMPARE(latin.weight(), QFont::Bold);
-        QCOMPARE(latin.letterSpacingType(), QFont::AbsoluteSpacing);
-        QVERIFY(std::abs(latin.letterSpacing() - 1.3) < 0.01); // Kept in 64ths of a pixel.
-        QCOMPARE(latin.capitalization(), QFont::AllUppercase);
-        QCOMPARE(latin.family(), base.family());
-        for (const QString &text : {QStringLiteral("속도"), QStringLiteral("速度"), QStringLiteral("スピード"),
-                                    QStringLiteral("Speed 속도")}) {
-            const QFont cjk = engravedFont(base, text);
-            QCOMPARE(cjk.pixelSize(), 11);
-            QCOMPARE(cjk.weight(), QFont::Bold);
-            QCOMPARE(cjk.letterSpacing(), 0.0);
-            QCOMPARE(cjk.capitalization(), QFont::MixedCase);
-        }
-        {
-            TextRecorder recorder;
-            QPainter painter(&recorder);
-            drawEngraved(painter, QRectF(0, 0, 200, 20), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("Speed"));
-            painter.end();
-            QVERIFY(recorder.runs.size() >= 2);
-            QCOMPARE(recorder.runs.first().color, editorTheme().engravedHighlight);
-            QCOMPARE(recorder.runs.last().color, editorTheme().engravedInk);
-        }
-    }
-
-    // Pictures of every hardware part on the faceplate, to look at: run with
-    // KERF_HARDWARE_GALLERY set to a folder. Each appearance is drawn at 1x,
-    // 1.25x and 2x.
-    void hardwareGallery() {
-        const QString folder = qEnvironmentVariable("KERF_HARDWARE_GALLERY");
-        if (folder.isEmpty()) QSKIP("Set KERF_HARDWARE_GALLERY to draw the hardware parts.");
-        QDir().mkpath(folder);
-        {
-            const EditorTheme &t = editorTheme();
-            for (const qreal ratio : {1.0, 1.25, 2.0}) {
-                const QImage image = paintedAt(ratio, QSize(560, 200), [&](QPainter &p) {
-                    QLinearGradient plate(0, 0, 0, 200);
-                    plate.setColorAt(0, t.faceplateTop);
-                    plate.setColorAt(1, t.faceplateBottom);
-                    p.fillRect(QRectF(0, 0, 560, 200), plate);
-                    p.fillRect(QRectF(0, 0, 560, 1), t.faceplateHighlight);
-                    p.fillRect(QRectF(0, 199, 560, 1), t.faceplateEdge);
-                    // A bank of three keys: raised, hovered, latched and lit.
-                    paintKeyBank(p, QRectF(12, 12, 4 + 3 * 30 + 2 * 2, 30));
-                    for (int key = 0; key < 3; ++key)
-                        paintRaisedKey(p, QRectF(14 + key * 32, 14, 30, 26), key == 2, key == 1, key == 2);
-                    paintWell(p, QRectF(130, 14, 70, 24));
-                    p.setFont(monoFont(12));
-                    p.setPen(t.accentText);
-                    p.drawText(QRectF(130, 14, 66, 23), Qt::AlignRight | Qt::AlignVCenter, QStringLiteral("1.25×"));
-                    paintGlass(p, QRectF(214, 10, 150, 32));
-                    p.setFont(monoFont(16, QFont::Medium));
-                    p.setPen(t.glassText);
-                    p.drawText(QRectF(240, 10, 120, 31), Qt::AlignRight | Qt::AlignVCenter, QStringLiteral("00:00:12:04"));
-                    QFont label = monoFont(9, QFont::Bold);
-                    label.setLetterSpacing(QFont::AbsoluteSpacing, 1.2);
-                    p.setFont(label);
-                    p.setPen(t.glassLabel);
-                    p.drawText(QRectF(222, 10, 30, 31), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("TC"));
-                    // A module with engraved labels, lamps and a knob.
-                    paintModulePlate(p, QRectF(12, 56, 260, 130));
-                    drawEngraved(p, QRectF(26, 64, 120, 18), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("Speed"));
-                    drawEngraved(p, QRectF(150, 64, 110, 18), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("속도 조절"));
-                    int lamp = 0;
-                    for (const LampState state : {LampState::Off, LampState::Changed, LampState::Kerf, LampState::Ok})
-                        paintLamp(p, QPointF(32 + 20 * lamp++, 100), 6, state);
-                    for (int knob = 0; knob < 3; ++knob)
-                        paintKnob(p, QRectF(26 + knob * 44, 120, 32, 32), -135 + knob * 135);
-                    paintKnob(p, QRectF(170, 104, 64, 64), 30);
-                    paintVuMeter(p, QRectF(290, 56, 150, 90), 0.62);
-                    paintVuMeter(p, QRectF(456, 56, 90, 54), 0.9);
-                });
-                const QString look = QStringLiteral("dark");
-                QVERIFY(image.save(QDir(folder).filePath(QStringLiteral("%1-%2x.png").arg(look).arg(ratio))));
-            }
-        }
+        window.m_workspace->activate(QString::fromLatin1(Workspace::kFinish));
+        column->setKind(InspectorColumn::Kind::Video);
+        QCoreApplication::processEvents();
+        if (!shots.isEmpty()) QVERIFY(column->grab().toImage().save(QDir(shots).filePath(QStringLiteral("inspector-finish.png"))));
     }
 };
 

@@ -350,6 +350,9 @@ QString presentationLabel(const QJsonObject &def) {
         {QStringLiteral("crop_r"), QStringLiteral("Right")},    {QStringLiteral("crop_t"), QStringLiteral("Top")},
         {QStringLiteral("crop_b"), QStringLiteral("Bottom")},   {QStringLiteral("feather"), QStringLiteral("Feather")},
         {QStringLiteral("expansion"), QStringLiteral("Expansion")},
+        // The sound effects' (audio.eq, audio.limiter).
+        {QStringLiteral("lowcut_hz"), QStringLiteral("Low cut")},   {QStringLiteral("presence_db"), QStringLiteral("Presence")},
+        {QStringLiteral("limit_db"), QStringLiteral("Limit")},      {QStringLiteral("release_ms"), QStringLiteral("Release")},
     };
     const QString name = def.value(QStringLiteral("name")).toString();
     if (table.contains(name) && !def.contains(QStringLiteral("group"))) return table.value(name);

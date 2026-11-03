@@ -5,9 +5,9 @@
 // stacks: the Inspector (InspectorPanel), the compact Source monitor, and
 // in the Deliver workspace, while Video is chosen, the Deliver pane.
 //
-// Shell from Q-SKELETON (W1): Video is the InspectorPanel as it is; Audio
-// and Info are disabled until Q-INSPECTOR builds them in W2 ("Coming in this
-// release"). Q-INSPECTOR fills it in, keeping the constructor and this API.
+// The kinds are the Inspector's panes (InspectorPanel::setPane): Video,
+// Audio and Info. Choosing a kind turns the Inspector page back on; a
+// workspace switch goes back to the Inspector page (spec 10).
 
 #include <QWidget>
 
@@ -18,6 +18,9 @@ namespace kerf {
 
 class DeliverPane;
 class EditorBus;
+namespace ui {
+class SegmentedControl;
+}
 class InspectorPanel;
 class SourceMonitorPanel;
 
@@ -39,7 +42,7 @@ public:
     Page page() const { return m_page; }
     void setPage(Page page);
     Kind kind() const { return m_kind; }
-    // A kind not available yet is refused.
+    // Shows the kind's pane of the Inspector.
     void setKind(Kind kind);
     static bool kindAvailable(Kind kind);
     static QString kindId(Kind kind);
@@ -67,6 +70,8 @@ private:
     DeliverPane *m_deliver = nullptr;
     QStackedWidget *m_stack = nullptr;
     QWidget *m_empty = nullptr;
+    ui::SegmentedControl *m_pages = nullptr;
+    ui::SegmentedControl *m_kinds = nullptr;
     QAbstractButton *m_pageButtons[2] = {};
     QAbstractButton *m_kindButtons[3] = {};
     Page m_page = Page::Inspector;

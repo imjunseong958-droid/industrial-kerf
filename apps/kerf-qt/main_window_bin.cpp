@@ -1,5 +1,6 @@
-// MainWindow's media bin, presets and the browser.
-// Moved verbatim from main_window.cpp (Q-SKELETON, W1); Q-BINBROWSER owns it in W2.
+// MainWindow's media bin, presets and the browser (mockup-spec 6 and 8).
+// Q-BINBROWSER (W2); the region's own state and engine traffic are in
+// ui/wiring/bin_wiring.*.
 
 #include "main_window.h"
 #include "ask_prompt.h"
@@ -94,6 +95,7 @@
 #include "inspector_column.h"
 #include "program_strip.h"
 #include "stage_rail.h"
+#include "wiring/bin_wiring.h"
 
 namespace kerf {
 
@@ -391,14 +393,17 @@ void MainWindow::buildBin() {
     m_presets = new PresetsPanel;
     connect(m_presets, &PresetsPanel::applyRequested, this, &MainWindow::applyLibraryPreset);
 
-    // The effects offered: cards on the selected clip, and the parameters
-    // the inspector edits.
+    // The effects offered: cards on the selected clip (or the program's
+    // clip under the playhead), from the whole catalog, picture and sound;
+    // the Inspector edits the picture catalog's parameters.
     m_effects = new EffectsPanel;
-    if (char *catalog = kerf_fx_catalog()) {
-        const QJsonArray effects = QJsonDocument::fromJson(QByteArray(catalog)).array();
+    if (char *catalog = kerf_fx_catalog_all()) {
+        m_effects->setCatalog(QJsonDocument::fromJson(QByteArray(catalog)).array());
         kerf_bridge_string_free(catalog);
-        m_effects->setCatalog(effects);
-        m_inspector->setEffectCatalog(effects);
+    }
+    if (char *catalog = kerf_fx_catalog()) {
+        m_inspector->setEffectCatalog(QJsonDocument::fromJson(QByteArray(catalog)).array());
+        kerf_bridge_string_free(catalog);
     }
     connect(m_effects, &EffectsPanel::addRequested, this, [this](const QString &fx) {
         const QStringList clips = m_inspector->selection();
@@ -422,7 +427,8 @@ void MainWindow::buildBin() {
                                {QStringLiteral("clip"), clip},
                                {QStringLiteral("at"), m_playhead},
                                {QStringLiteral("effects"), QJsonArray::fromStringList(effects)},
-                               {QStringLiteral("width"), 160}});
+                               {QStringLiteral("width"), EffectsPanel::kPreviewWidth},
+                               {QStringLiteral("key"), QString::fromLatin1(EffectsPanel::kCardKey)}});
     });
 
     // The browser at the band's right: Effects | Titles | Presets.
@@ -434,6 +440,8 @@ void MainWindow::buildBin() {
         if (page != BrowserPanel::Page::Effects) m_effectsFromInspector = false;
         syncPanelCommands();
     });
+    // The Titles page, the bin's Index and Roles, and the region's engine traffic.
+    m_binWiring->build();
 }
 
 } // namespace kerf

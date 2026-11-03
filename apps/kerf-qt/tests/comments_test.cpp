@@ -1,4 +1,11 @@
-// Tests for the comments panel (the agent conversation), its composer and connections.
+// Tests for the Comments panel (the agent chat, mockup-spec 4): its threads,
+// chips, filters, pin bar, proposal cards with versions and the colour chip,
+// the composer with its stamp, mention and draw, the Ask popover, and how
+// MainWindow wires them to kerfd (the agent turn kept as comments,
+// comment_add, comment_set, accept/reject, preview, effect_previews).
+//
+// The fixtures are the mockup's seed threads (spec 4.9) as the bridge sends
+// them; nothing here is sample data in the app.
 
 #include "fixtures.h"
 #include "test_registry.h"
@@ -6,49 +13,26 @@
 #include "ask_prompt.h"
 #include "chat_panel.h"
 #include "command_registry.h"
-#include "device_frame.h"
-#include "editor_common.h"
-#include "editor_style.h"
-#include "effects_panel.h"
-#include "inspector_panel.h"
-#include "inspector_widgets.h"
+#include "comment_row.h"
+#include "components.h"
+#include "composer.h"
+#include "editor_bus.h"
 #include "main_window.h"
-#include "media_artwork.h"
-#include "player_overlay.h"
-#include "presets_panel.h"
-#include "program_level.h"
-#include "project_launcher.h"
-#include "project_panel.h"
-#include "source_monitor_panel.h"
-#include "test_footage.h"
-#include "timeline_widget.h"
-#include "toolbar_widgets.h"
+#include "proposal_card.h"
+#include "review_model.h"
 #include "viewer_widget.h"
-#include "workspace.h"
+#include "wiring/review_wiring.h"
 
-#include <QAbstractItemView>
-#include <QAccessible>
+#include <QAbstractButton>
 #include <QAction>
-#include <QActionGroup>
 #include <QApplication>
-#include <QCheckBox>
 #include <QClipboard>
 #include <QComboBox>
 #include <QCoreApplication>
-#include <QDialog>
-#include <QDialogButtonBox>
 #include <QDir>
-#include <QDoubleSpinBox>
-#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
-#include <QFormLayout>
-#include <QFrame>
 #include <QGroupBox>
-#include <QGuiApplication>
-#include <QHBoxLayout>
-#include <QImage>
-#include <QInputDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -56,68 +40,293 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
-#include <QMenuBar>
-#include <QMimeData>
-#include <QPaintDevice>
-#include <QPaintEngine>
-#include <QPainter>
-#include <QPixmap>
-#include <QPlainTextEdit>
-#include <QProcess>
-#include <QProgressBar>
 #include <QPushButton>
 #include <QRadioButton>
-#include <QRegularExpression>
-#include <QScopeGuard>
-#include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
-#include <QSet>
 #include <QSettings>
-#include <QSignalBlocker>
+#include <QEnterEvent>
 #include <QSignalSpy>
-#include <QStandardPaths>
-#include <QStatusBar>
-#include <QStyleOptionViewItem>
-#include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTest>
-#include <QTextBlock>
-#include <QTextCursor>
 #include <QTextEdit>
-#include <QTextFrame>
-#include <QTextLayout>
-#include <QToolBar>
-#include <QToolButton>
-#include <QToolTip>
-#include <QWheelEvent>
-#include <QWidget>
-
-#include <DockAreaTabBar.h>
-#include <DockAreaTitleBar.h>
-#include <DockAreaWidget.h>
-#include <DockManager.h>
-#include <DockSplitter.h>
-#include <DockWidget.h>
-#include <DockWidgetTab.h>
-#include <ElidingLabel.h>
+#include <QScopeGuard>
 
 #include <algorithm>
-#include <climits>
 #include <cmath>
-#include <functional>
-#include <vector>
+#include <initializer_list>
+#include <limits>
 
 namespace kerf {
 
 using namespace test;
 
+namespace {
+
+const QString kYou = QStringLiteral("ana@kerf.test");
+const QString kMina = QStringLiteral("mina@kerf.test");
+const QString kTom = QStringLiteral("tom@kerf.test");
+
+QJsonObject person(const char *name, const QString &email, const char *role = nullptr) {
+    QJsonObject author{{"kind", "person"}, {"name", name}, {"id", email}};
+    if (role) author.insert("role", role);
+    return author;
+}
+
+QJsonObject agent(const char *kind, const char *name, const char *id, const char *role) {
+    QJsonObject author{{"kind", kind}, {"name", name}, {"role", role}};
+    if (id) author.insert("id", id);
+    return author;
+}
+
+QJsonObject mina() { return person("Mina Park", kMina, "director"); }
+QJsonObject tom() { return person("Tom Lind", kTom, "colourist"); }
+QJsonObject you() { return person("Ana Ruiz", kYou); }
+QJsonObject kerfAuthor(const char *role = nullptr) {
+    QJsonObject author{{"kind", "kerf"}, {"name", "Kerf"}};
+    if (role) author.insert("role", role);
+    return author;
+}
+
+QJsonObject note(const char *id, const QJsonObject &author, const char *created, const char *body,
+                 std::initializer_list<std::pair<const char *, QJsonValue>> extra = {}) {
+    QJsonObject record{{"id", id},           {"parent", QJsonValue()}, {"author", author}, {"body", body},
+                       {"tags", QJsonArray{}}, {"blocking", false},    {"resolved", false}, {"created", created},
+                       {"revision", 22}};
+    for (const auto &[key, value] : extra) record.insert(key, value);
+    return record;
+}
+
+QJsonObject reply(const char *id, const char *parent, const QJsonObject &author, const char *created, const char *body,
+                  std::initializer_list<std::pair<const char *, QJsonValue>> extra = {}) {
+    QJsonObject record = note(id, author, created, body, extra);
+    record.insert("parent", parent);
+    return record;
+}
+
+// The seed threads of mockup-spec 4.9 as kerfd's review log folds them (the
+// same records review_model_test reads).
+QJsonArray seedComments() {
+    return QJsonArray{
+        note("c-2916", agent("mcp", "Codex", "codex", "MCP"), "2026-11-01T12:00:00.000000Z",
+             "End card holds a beat long, trimmed 12 frames",
+             {{"at", 29.64}, {"frame", 741}, {"proposal", "proposal-cx"}, {"resolved", true}, {"resolvedRevision", 20}}),
+        note("c-0300", mina(), "2026-11-02T09:00:00.000000Z", "Open on the road, not the sky", {{"at", 3.0}, {"frame", 75}}),
+        reply("c-0300-r1", "c-0300", agent("mcp", "Cursor", "cursor", "MCP"), "2026-11-02T09:10:00.000000Z",
+              "Moved A012_C004 to the head, trimmed 1 s of sky",
+              {{"proposal", "proposal-cu"}, {"resolved", true}, {"resolvedBy", you()}, {"resolvedRevision", 20}}),
+        reply("c-0300-r2", "c-0300", mina(), "2026-11-02T09:20:00.000000Z", "Better, thanks"),
+        note("c-0903", tom(), "2026-11-02T10:00:00.000000Z", "The sea reads magenta here",
+             {{"at", 9.12}, {"frame", 228}, {"tags", QJsonArray{"color"}}}),
+        reply("c-0903-r1", "c-0903", kerfAuthor(), "2026-11-02T10:01:00.000000Z", "Sea back toward cyan",
+              {{"proposal", "proposal-kg"},
+               {"steps", QJsonArray{"Sampled the sea on B003_C011 at 00:00:09:03", "Measured hue 9° off the cyan axis",
+                                    "Drafted a hue-vs-hue key, sea only"}}}),
+        note("c-1708", kerfAuthor("QC"), "2026-11-03T08:00:00.000000Z", "Caption overlaps the lower-third by 8 px",
+             {{"at", 17.32}, {"duration", 2.48}, {"frame", 433}, {"tags", QJsonArray{"captions"}},
+              {"qcKey", "qc:text.overlap:clip-12"}}),
+        reply("c-1708-r1", "c-1708", tom(), "2026-11-03T08:30:00.000000Z", "Also clips the sun flare, circled",
+              {{"drawing", QJsonArray{QJsonObject{{"tool", "ellipse"},
+                                                  {"points", QJsonArray{QJsonArray{0.61, 0.22}, QJsonArray{0.74, 0.35}}},
+                                                  {"color", "#ededed"}}}}}),
+        note("c-2614", mina(), "2026-11-03T09:00:00.000000Z", "Logo lands late, should hit on the snare",
+             {{"at", 26.56}, {"frame", 664}, {"blocking", true}}),
+        reply("c-2614-r1", "c-2614", agent("mcp", "Claude Code", "claude-code", "MCP · via Kerf"),
+              "2026-11-03T09:05:00.000000Z", "Move logo reveal to the snare", {{"proposal", "proposal-cc1"}}),
+        reply("c-2614-r2", "c-2614", mina(), "2026-11-03T09:10:00.000000Z", "Two frames earlier, on the transient 00:00:26:12"),
+        reply("c-2614-r3", "c-2614", agent("mcp", "Claude Code", "claude-code", "MCP"), "2026-11-03T09:15:00.000000Z",
+              "Updated to v2, Logo_reveal now lands on 00:00:26:12", {{"proposal", "proposal-cc2"}}),
+        note("c-2718", agent("qc", "QC", nullptr, "loudness"), "2026-11-03T10:00:00.000000Z",
+             "True peak −0.4 dBTP, limit −1.0 dBTP (EBU R128)",
+             {{"at", 27.72}, {"duration", 1.08}, {"frame", 693}, {"blocking", true}, {"tags", QJsonArray{"audio"}},
+              {"qcKey", "qc:audio.true_peak"}}),
+        reply("c-2718-r1", "c-2718", you(), "2026-11-03T10:05:00.000000Z", "@Kerf limit the music bus here"),
+        reply("c-2718-r2", "c-2718", kerfAuthor(), "2026-11-03T10:06:00.000000Z", "A2 Music is locked. Unlock it, then ask again",
+              {{"error", true}}),
+        reply("c-2718-r3", "c-2718", you(), "2026-11-03T10:10:00.000000Z", "Unlocked A2, try again"),
+    };
+}
+
+// The program at 25 fps, 30 s: the sea shot, the logo and its whoosh.
+QJsonObject timeline(double logoAt, const QJsonArray &seaFx = {}) {
+    const auto clip = [](const char *id, const char *name, double start, double duration) {
+        return QJsonObject{{"id", id}, {"name", name}, {"kind", "media"}, {"timelineStart", start}, {"duration", duration}};
+    };
+    QJsonObject sea = clip("sea", "B003_C011", 8.48, 4.72);
+    if (!seaFx.isEmpty()) sea.insert("effects", seaFx);
+    return QJsonObject{
+        {"fps", 25},
+        {"tracks", QJsonArray{
+                       QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{clip("road", "A012_C004", 0.0, 8.48), sea}}},
+                       QJsonObject{{"id", "V4"}, {"type", "video"}, {"clips", QJsonArray{clip("logo", "Logo_reveal", logoAt, 30.0 - logoAt)}}},
+                       QJsonObject{{"id", "A3"}, {"type", "audio"}, {"clips", QJsonArray{clip("whoosh", "Whoosh_logo", logoAt + 0.28, 1.0)}}},
+                   }},
+    };
+}
+
+QJsonArray hueFx() {
+    return QJsonArray{QJsonObject{{"fx", "color.huehue"}, {"version", 1}, {"enabled", true}, {"params", QJsonObject{{"hue", -9}, {"sat", -6}}}}};
+}
+
+QJsonObject proposalEntry(const char *id, const char *status, const QJsonObject &author, int version, const QJsonArray &versions,
+                          const char *script, std::initializer_list<std::pair<const char *, QJsonValue>> extra = {}) {
+    QJsonObject entry{{"proposalId", id},  {"status", status},   {"freshness", "current"}, {"baseRevision", 22},
+                      {"script", script},  {"source", script},   {"documentDiff", ""},     {"author", author},
+                      {"version", version}, {"supersedes", QJsonValue()}, {"versions", versions}};
+    for (const auto &[key, value] : extra) entry.insert(key, value);
+    return entry;
+}
+
+QJsonObject versionEntry(int version, const char *id, const char *script, const char *diff = "") {
+    return QJsonObject{{"version", version}, {"proposalId", id}, {"baseRevision", 22}, {"script", script}, {"documentDiff", diff}};
+}
+
+const char *kLogoDiff = "--- before\n+++ after\n@@ -4,2 +4,2 @@\n- clip \"Logo_reveal\" V4 00:00:26:03\n+ clip \"Logo_reveal\" V4 00:00:25:20\n";
+
+// The snapshot at rev 22: Claude Code's v2 and Kerf's colour key wait; two
+// settled at rev 20.
+QJsonObject seedSnapshot() {
+    const QJsonObject claude = agent("mcp", "Claude Code", "claude-code", "MCP · via Kerf");
+    const char *cc1 = "move logo to 00:00:25:21\nmove whoosh to 00:00:26:03\n";
+    const char *cc2 = "move logo to 00:00:25:20\nmove whoosh to 00:00:26:02\n";
+    const char *kg = "use main\neffect add sea color.huehue hue=-9 sat=-6\n";
+    QJsonObject cc = proposalEntry("proposal-cc2", "pending", claude, 2,
+                                   QJsonArray{versionEntry(1, "proposal-cc1", cc1), versionEntry(2, "proposal-cc2", cc2, kLogoDiff)},
+                                   cc2, {{"supersedes", "proposal-cc1"}, {"staged", "2026-11-03T09:15:00Z"}});
+    cc.insert("documentDiff", kLogoDiff);
+    const QJsonArray proposals{
+        cc,
+        proposalEntry("proposal-kg", "pending", QJsonObject{{"kind", "kerf"}, {"name", "Kerf"}}, 1,
+                      QJsonArray{versionEntry(1, "proposal-kg", kg)}, kg, {{"staged", "2026-11-02T10:01:00Z"}}),
+        proposalEntry("proposal-cu", "accepted", agent("mcp", "Cursor", "cursor", "MCP"), 1,
+                      QJsonArray{versionEntry(1, "proposal-cu", "move road to 00:00:00:00\n")}, "move road to 00:00:00:00\n",
+                      {{"appliedRevision", 20}}),
+        proposalEntry("proposal-cx", "accepted", agent("mcp", "Codex", "codex", "MCP"), 1,
+                      QJsonArray{versionEntry(1, "proposal-cx", "trim end out -12f\n")}, "trim end out -12f\n",
+                      {{"appliedRevision", 20}}),
+    };
+    const QJsonObject timelines{
+        {"proposal-cc2", timeline(25.8)},
+        {"proposal-cc1", timeline(25.84)},
+        {"proposal-kg", timeline(26.12, hueFx())},
+    };
+    return QJsonObject{{"revision", 22},
+                       {"timeline", timeline(26.12)},
+                       {"proposals", proposals},
+                       {"proposalTimelines", timelines},
+                       {"reviewRevision", 41}};
+}
+
+QJsonObject identity() { return QJsonObject{{"name", "Ana Ruiz"}, {"email", kYou}}; }
+
+// A panel on its own with the seed, as the editor shows it at the mockup's start.
+struct Seeded {
+    ReviewModel model;
+    ChatPanel panel;
+    Seeded(int width = 368, int height = 548) {
+        panel.setReview(&model);
+        model.setIdentity(identity());
+        model.setSnapshot(seedSnapshot());
+        model.setComments(seedComments());
+        model.setPlayhead(17.32);
+        panel.setFps(25);
+        panel.setSnapshot(seedSnapshot());
+        panel.setPlayhead(17.32);
+        panel.setConnected(true);
+        panel.resize(width, height);
+        panel.show();
+        settle();
+    }
+    void settle() {
+        for (int i = 0; i < 4; ++i) QCoreApplication::processEvents();
+    }
+};
+
+QStringList threadIds(ChatPanel &panel) {
+    QStringList ids;
+    for (ThreadWidget *thread : panel.threadWidgets()) ids << thread->threadId();
+    return ids;
+}
+
+// The threads shown, without the welcome (which no filter but From Kerf keeps).
+QStringList recordIds(ChatPanel &panel) {
+    QStringList ids = threadIds(panel);
+    ids.removeAll(QString::fromLatin1(ReviewModel::kWelcomeId));
+    return ids;
+}
+
+QStringList tagTexts(CommentRow *row) {
+    QStringList texts;
+    for (TagButton *tag : row->tags()) texts << tag->text();
+    return texts;
+}
+
+QMenu *openMenu(const QString &name) {
+    for (QWidget *widget : QApplication::topLevelWidgets())
+        if (auto *menu = qobject_cast<QMenu *>(widget); menu && menu->objectName() == name && menu->isVisible()) return menu;
+    return nullptr;
+}
+
+QAction *actionNamed(QMenu *menu, const QString &prefix) {
+    for (QAction *action : menu->actions())
+        if (action->text().startsWith(prefix)) return action;
+    return nullptr;
+}
+
+QImage solid(QColor color) {
+    QImage image(32, 18, QImage::Format_RGBA8888);
+    image.fill(color);
+    return image;
+}
+
+} // namespace
+
 class CommentsTest final : public QObject {
     Q_OBJECT
 
+    // A window fed the seed through the bus as kerfd sends it, its commands
+    // caught instead of sent.
+    struct SeededWindow {
+        MainWindow window{QString(), QString()};
+        QList<QJsonObject> sent;
+        explicit SeededWindow(bool show = true) {
+            window.m_bus->setSender([this](const QJsonObject &command) {
+                sent << command;
+                window.m_lastCommand = command;
+                return true;
+            });
+            window.setConnection(QStringLiteral("ready"));
+            window.m_reviewWiring->handleEvent(QStringLiteral("connection"), QJsonObject{{"type", "connection"}, {"status", "ready"}});
+            ReviewWiring *wiring = window.m_reviewWiring.get();
+            wiring->handleEvent(QStringLiteral("collab"), QJsonObject{{"type", "collab"}, {"status", QJsonObject{{"user", identity()}}}});
+            wiring->handleEvent(QStringLiteral("state"), QJsonObject{{"type", "state"}, {"snapshot", seedSnapshot()}});
+            wiring->handleEvent(QStringLiteral("comments"), QJsonObject{{"type", "comments"}, {"items", seedComments()}, {"reviewRevision", 41}});
+            wiring->model()->setPlayhead(17.32);
+            window.m_chat->setFps(25);
+            window.m_fps = 25;
+            window.m_revision = 22;
+            if (show) {
+                window.resize(1600, 1000);
+                window.show();
+                window.setChatOpen(true);
+            }
+            settle();
+        }
+        void settle() {
+            for (int i = 0; i < 4; ++i) QCoreApplication::processEvents();
+        }
+        QJsonObject last(const QString &type) const {
+            for (auto it = sent.crbegin(); it != sent.crend(); ++it)
+                if (it->value("type").toString() == type) return *it;
+            return {};
+        }
+    };
+
 private slots:
-    // Each test starts with the conversation's preferences as a new user has them.
+    // Each test starts with the panel's preferences as a new user has them.
     void init() { QSettings().remove(QStringLiteral("viewer")); }
+
+    // ---- agent settings (unchanged protocol) ----------------------------------
 
     void inboundMcpConfigValidatesStdioShape() {
         QVERIFY(!validateInboundMcpConfig("[]").isEmpty());
@@ -193,111 +402,831 @@ private slots:
         QCOMPARE(QJsonDocument::fromJson(editor->toPlainText().toUtf8()).object(), expected);
         button->click();
         QCOMPARE(QApplication::clipboard()->text(), editor->toPlainText());
-        QCOMPARE(section->findChild<QLabel *>(QStringLiteral("muted"))->text(),
-                 QStringLiteral("MCP config copied"));
+        QCOMPARE(section->findChild<QLabel *>(QStringLiteral("muted"))->text(), QStringLiteral("MCP config copied"));
     }
 
+    // The agent request carries the settings of the active connection, as
+    // before; the model is the More menu's Agent settings… key.
     void agentPayloadFollowsSettingsProtocol() {
         MainWindow window{QString(), QString()};
         showAssistant(window);
         QVERIFY(!window.findChild<QComboBox *>(QStringLiteral("agentProvider")));
-        QVERIFY(!window.findChild<QFrame *>(QStringLiteral("agentContext")));
-        QVERIFY(!window.findChild<QLabel *>(QStringLiteral("agentConfig")));
         QVERIFY(window.findChild<QComboBox *>(QStringLiteral("agentModel")));
-        // Provider details live in Settings, not beside the chat.
-        QWidget *chatTab = window.findChild<QWidget *>(QStringLiteral("chatPanel"));
-        QVERIFY(chatTab);
+        QWidget *panel = window.findChild<QWidget *>(QStringLiteral("chatPanel"));
+        QVERIFY(panel);
         QVERIFY(window.m_preferences->isAncestorOf(window.m_anthropicKey));
-        for (auto *label : chatTab->findChildren<QLabel *>()) {
+        for (auto *label : panel->findChildren<QLabel *>()) {
             QVERIFY(!label->text().contains(QStringLiteral("OpenAI")));
             QVERIFY(!label->text().contains(QStringLiteral("Anthropic")));
         }
         auto *anthropicRadio = window.findChild<QRadioButton *>(QStringLiteral("agentActiveAnthropic"));
         auto *openaiRadio = window.findChild<QRadioButton *>(QStringLiteral("agentActiveOpenai"));
-        QVERIFY(anthropicRadio);
-        QVERIFY(openaiRadio);
+        QVERIFY(anthropicRadio && openaiRadio);
         const QSignalBlocker anthropicBlock(anthropicRadio);
         const QSignalBlocker openaiBlock(openaiRadio);
-        // Keys of one's own are the Advanced connection.
         QVERIFY(window.m_advancedSettings->isAncestorOf(anthropicRadio));
         {
             const QSignalBlocker ownBlock(window.m_ownKeyRadio);
             window.m_ownKeyRadio->setChecked(true);
         }
-
-        const QString anthropicKey = QStringLiteral("sk-ant-test");
-        const QString anthropicUrl = QStringLiteral("https://anthropic.example/v1");
-        const QString anthropicModel = QStringLiteral("claude-test-model");
         anthropicRadio->setChecked(true);
-        window.m_anthropicKey->setText(anthropicKey);
-        window.m_anthropicBaseUrl->setText(anthropicUrl);
-        window.m_anthropicModel->setText(anthropicModel);
+        window.m_anthropicKey->setText(QStringLiteral("sk-ant-test"));
+        window.m_anthropicBaseUrl->setText(QStringLiteral("https://anthropic.example/v1"));
+        window.m_anthropicModel->setText(QStringLiteral("claude-test-model"));
         window.updateAgentModelChoices();
         const QJsonObject anthropicPayload = window.agentSettingsPayload();
         QCOMPARE(anthropicPayload.value(QStringLiteral("provider")).toString(), QStringLiteral("anthropic"));
-        QCOMPARE(anthropicPayload.value(QStringLiteral("apiKey")).toString(), anthropicKey);
-        QCOMPARE(anthropicPayload.value(QStringLiteral("baseUrl")).toString(), anthropicUrl);
-        QCOMPARE(anthropicPayload.value(QStringLiteral("model")).toString(), anthropicModel);
-
-        const QString openaiKey = QStringLiteral("sk-openai-test");
-        const QString openaiUrl = QStringLiteral("https://openai.example/v1");
-        const QString openaiModel = QStringLiteral("gpt-test-model");
+        QCOMPARE(anthropicPayload.value(QStringLiteral("apiKey")).toString(), QStringLiteral("sk-ant-test"));
+        QCOMPARE(anthropicPayload.value(QStringLiteral("model")).toString(), QStringLiteral("claude-test-model"));
+        // The More menu names the model at Agent settings….
+        QMenu *more = window.m_chat->buildMoreMenu();
+        QAction *settings = actionNamed(more, QStringLiteral("Agent settings"));
+        QVERIFY(settings);
+        QCOMPARE(settings->property("kerfMenuKey").toString(), window.m_modelSelect->currentText());
+        QCOMPARE(window.m_modelSelect->currentText(), QStringLiteral("claude-test-model"));
+        delete more;
         openaiRadio->setChecked(true);
-        window.m_openaiKey->setText(openaiKey);
-        window.m_openaiBaseUrl->setText(openaiUrl);
-        window.m_openaiModel->setText(openaiModel);
+        window.m_openaiKey->setText(QStringLiteral("sk-openai-test"));
+        window.m_openaiModel->setText(QStringLiteral("gpt-test-model"));
         window.updateAgentModelChoices();
         const QJsonObject openaiPayload = window.agentSettingsPayload();
         QCOMPARE(openaiPayload.value(QStringLiteral("provider")).toString(), QStringLiteral("openai"));
-        QCOMPARE(openaiPayload.value(QStringLiteral("apiKey")).toString(), openaiKey);
-        QCOMPARE(openaiPayload.value(QStringLiteral("baseUrl")).toString(), openaiUrl);
-        QCOMPARE(openaiPayload.value(QStringLiteral("model")).toString(), openaiModel);
+        QCOMPARE(openaiPayload.value(QStringLiteral("model")).toString(), QStringLiteral("gpt-test-model"));
     }
 
-    void editorChromeKeepsComposerAtTheBottom() {
-        MainWindow window{QString(), QString()};
-        window.show();
-        showAssistant(window);
-        QTest::qWait(20);
+    // ---- the seed as the panel shows it ----------------------------------------
 
-        // The status bar carries live state instead of sitting empty.
-        QVERIFY(window.statusBar()->isVisible());
-        QCOMPARE(window.m_statusConnection->text(), QStringLiteral("● Connecting…"));
-        window.setConnection(QStringLiteral("ready"));
-        QCOMPARE(window.m_statusConnection->text(), QStringLiteral("● Connected"));
-        // The player's controls on the picture follow the connection.
-        const auto controls = {PlayerOverlay::Control::Play, PlayerOverlay::Control::StepBack, PlayerOverlay::Control::StepForward};
-        PlayerOverlay *overlay = window.m_viewer->overlay();
-        QVERIFY(std::all_of(controls.begin(), controls.end(), [overlay](PlayerOverlay::Control c) { return overlay->controlEnabled(c); }));
-        window.setConnection(QStringLiteral("disconnected"));
-        QVERIFY(std::none_of(controls.begin(), controls.end(), [overlay](PlayerOverlay::Control c) { return overlay->controlEnabled(c); }));
-        // No strip of transport buttons under the viewer any more.
-        QVERIFY(!window.findChild<QWidget *>(QStringLiteral("viewerFrame"))->findChild<QWidget *>(QStringLiteral("transport")));
-        // The conversation is no dock of its own: it lives in the Program
-        // monitor's stage, beside the picture.
-        QVERIFY(!window.m_workspace->panel(QStringLiteral("assistant")));
-        QCOMPARE(window.m_chat->parentWidget(), window.m_viewer);
-        QVERIFY(window.m_chat->isVisible());
-
-        // The composer is the panel's footer; the status line sits above it.
-        auto *composer = window.findChild<QFrame *>(QStringLiteral("chatComposer"));
-        QVERIFY(composer);
-        QCOMPARE(composer->parentWidget(), window.m_chat);
-        QCOMPARE(composer->geometry().bottom(), window.m_chat->rect().bottom());
-        QVERIFY(window.m_chat->statusRow()->isVisible());
-        QVERIFY(window.m_chat->statusRow()->mapTo(window.m_chat, QPoint()).y() < composer->y());
-        // Export progress is the window's, in the status bar.
-        QVERIFY(window.statusBar()->isAncestorOf(window.m_exportProgress));
-        QVERIFY(window.m_exportProgress->isHidden());
-
-        window.handleEvent(QJsonObject{{"type", "export"}, {"status", "running"}, {"progress", 0.5}});
-        QVERIFY(!window.m_exportProgress->isHidden());
-        QCOMPARE(window.m_exportProgress->value(), 50);
-        window.handleEvent(QJsonObject{{"type", "export"}, {"status", "completed"}, {"progress", 1.0}});
-        QVERIFY(window.m_exportProgress->isHidden());
+    // The mockup's seed: All 7 / Open 4 / Proposals 2; the threads in
+    // timecode order under the welcome; each row's anatomy.
+    void seedRendersTheMockup() {
+        Seeded seed;
+        ChatPanel &panel = seed.panel;
+        QCOMPARE(panel.title()->text(), QStringLiteral("Comments"));
+        QCOMPARE(panel.chipAll()->count(), 7);
+        QCOMPARE(panel.chipOpen()->count(), 4);
+        QCOMPARE(panel.chipProposals()->count(), 2);
+        QVERIFY(panel.chipAll()->isChecked());
+        QCOMPARE(threadIds(panel), (QStringList{QString::fromLatin1(ReviewModel::kWelcomeId), "c-0300", "c-0903", "c-1708", "c-2614",
+                                                "c-2718", "c-2916"}));
+        // Frame and header metrics.
+        QCOMPARE(panel.findChild<QWidget *>(QStringLiteral("chatHeader"))->height(), ChatPanel::kHeaderHeight);
+        QCOMPARE(panel.findChild<QWidget *>(QStringLiteral("chatChips"))->height(), ChatPanel::kChipsHeight);
+        // The welcome: Kerf, agent, its words.
+        CommentRow *welcome = panel.welcomeRow();
+        QCOMPARE(welcome->name(), QStringLiteral("Kerf"));
+        QCOMPARE(welcome->roleLabel()->text(), QStringLiteral("agent"));
+        QVERIFY(welcome->text().startsWith(QStringLiteral("Mention @Kerf")));
+        // c-0300: Mina's settled note, its replies folded, Accepted in rev 20.
+        CommentRow *road = panel.threadWidget("c-0300")->root();
+        QCOMPARE(road->name(), QStringLiteral("Mina Park"));
+        QCOMPARE(road->roleLabel()->text(), QStringLiteral("director"));
+        QCOMPARE(road->avatar()->initials(), QStringLiteral("MP"));
+        QVERIFY(road->avatar()->isRound());
+        QCOMPARE(road->timecodeLink()->text(), QStringLiteral("00:00:03:00"));
+        QVERIFY(road->ring()->isVisible() && road->ring()->isResolved());
+        QCOMPARE(tagTexts(road), QStringList{QStringLiteral("Accepted in rev 20")});
+        QCOMPARE(road->replyFold()->text(), QStringLiteral("2 replies"));
+        QVERIFY(!road->replyFold()->isChecked());
+        QVERIFY(!panel.threadWidget("c-0300")->repliesShown());
+        // c-0903: open, #color, Kerf's reply with 3 steps and the colour card.
+        CommentRow *sea = panel.threadWidget("c-0903")->root();
+        QCOMPARE(tagTexts(sea), QStringList{QStringLiteral("#color")});
+        QVERIFY(!sea->ring()->isResolved());
+        CommentRow *kerfReply = panel.rowFor("c-0903-r1");
+        QVERIFY(kerfReply && kerfReply->isReply());
+        QCOMPARE(kerfReply->roleLabel()->text(), QStringLiteral("agent"));
+        QCOMPARE(kerfReply->expander()->text(), QStringLiteral("3 steps"));
+        QVERIFY(!kerfReply->repliesExpanded());
+        kerfReply->expander()->click();
+        QVERIFY(kerfReply->repliesExpanded());
+        // c-1708: Kerf QC, the ranged TC, Failed and #captions, 1 folded reply with a drawing.
+        CommentRow *caption = panel.threadWidget("c-1708")->root();
+        QCOMPARE(caption->timecodeLink()->text(), QStringLiteral("00:00:17:08 · 2s12f"));
+        QCOMPARE(tagTexts(caption), (QStringList{"Failed", "#captions"}));
+        QCOMPARE(caption->tags().constFirst()->style(), TagButton::Style::Failed);
+        QCOMPARE(caption->replyFold()->text(), QStringLiteral("1 reply"));
+        QVERIFY(!panel.threadWidget("c-1708")->repliesShown());
+        QVERIFY(!panel.rowFor("c-1708-r1")->drawingFlag()->isHidden());
+        // c-2614: Blocking, the pinned card.
+        CommentRow *logo = panel.threadWidget("c-2614")->root();
+        QCOMPARE(tagTexts(logo), QStringList{QStringLiteral("Blocking")});
+        QCOMPARE(logo->tags().constFirst()->style(), TagButton::Style::Blocking);
+        QCOMPARE(ui::tipName(logo->tags().constFirst()), QStringLiteral("Blocks Render master"));
+        // c-2718: QC (gauge), Failed, Blocking, #audio; your replies have no ring, Kerf's error.
+        CommentRow *peak = panel.threadWidget("c-2718")->root();
+        QCOMPARE(peak->avatar()->kind(), ui::Avatar::Kind::Qc);
+        QCOMPARE(tagTexts(peak), (QStringList{"Failed", "Blocking", "#audio"}));
+        QVERIFY(panel.threadWidget("c-2718")->repliesShown());
+        CommentRow *yours = panel.rowFor("c-2718-r1");
+        QCOMPARE(yours->name(), QStringLiteral("You"));
+        QVERIFY(yours->avatar()->initials().isEmpty());
+        QVERIFY(yours->ring()->isHidden());
+        QVERIFY(yours->body()->text().contains(QStringLiteral("font-weight:500")));
+        CommentRow *failed = panel.rowFor("c-2718-r2");
+        QVERIFY(failed->isError() && !failed->errorLabel()->isHidden());
+        QCOMPARE(failed->errorLabel()->text(), QStringLiteral("Couldn't edit"));
+        QCOMPARE(failed->links().size(), 2);
+        QCOMPARE(failed->links().at(0)->text(), QStringLiteral("Ask again"));
+        // c-2916: Codex's settled note.
+        CommentRow *endCard = panel.threadWidget("c-2916")->root();
+        QCOMPARE(endCard->avatar()->kind(), ui::Avatar::Kind::Agent);
+        QCOMPARE(tagTexts(endCard), QStringList{QStringLiteral("Accepted in rev 20")});
+        // Inline timecodes are links that seek.
+        CommentRow *transient = panel.rowFor("c-2614-r2");
+        QVERIFY(transient->body()->text().contains(QStringLiteral("href=\"tc:26.48\"")));
+        QSignalSpy seeks(&panel, &ChatPanel::seekRequested);
+        emit transient->body()->linkActivated(QStringLiteral("tc:26.48"));
+        QCOMPARE(seeks.size(), 1);
+        QCOMPARE(seeks.constFirst().at(0).toDouble(), 26.48);
+        road->timecodeLink()->click();
+        QCOMPARE(seeks.last().at(0).toDouble(), 3.0);
+        // Rows sit 16 in from the panel; replies 36 further; the bleed is 8.
+        QCOMPARE(road->mapTo(&panel, QPoint()).x() + CommentRow::kBleedX, 16);
+        QCOMPARE(kerfReply->mapTo(&panel, QPoint()).x() + CommentRow::kBleedX, 16 + 36);
+        QCOMPARE(road->avatar()->width(), 24);
     }
 
-    void chatComposerSupportsMultilineWithoutAccidentalSend() {
+    // The proposal cards: the pinned (blocking) one open with its header,
+    // changes, versions and a primary Accept; Kerf's colour key closed with
+    // a secondary Accept.
+    void proposalCardsFollowTheSnapshot() {
+        Seeded seed;
+        ChatPanel &panel = seed.panel;
+        ProposalCard *logo = panel.card("proposal-cc2");
+        ProposalCard *sea = panel.card("proposal-kg");
+        QVERIFY(logo && sea);
+        QVERIFY(logo->isPinned() && !sea->isPinned());
+        QCOMPARE(logo->pinHeaderText()->text(), QStringLiteral("Pinned proposal · blocking first"));
+        QVERIFY(logo->isOpen() && !sea->isOpen());
+        QCOMPARE(logo->titleLabel()->text(), QStringLiteral("Move logo reveal to the snare"));
+        QCOMPARE(logo->changesLink()->text(), QStringLiteral("2 changes"));
+        QCOMPARE(logo->changeRows().size(), 2);
+        QCOMPARE(ui::tipName(logo->changeRows().at(0)), QStringLiteral("Logo_reveal · V4 → 00:00:25:20 −8f"));
+        QVERIFY(logo->versionButton()->isVisible());
+        QCOMPARE(logo->versionButton()->text(), QStringLiteral("v2"));
+        QCOMPARE(logo->versions().size(), 2);
+        QCOMPARE(logo->versions().at(0).label, QStringLiteral("v1 00:00:25:21 · −7 fr"));
+        QCOMPARE(logo->acceptButton()->kind(), ui::Button::Kind::Primary);
+        QCOMPARE(ui::tipName(logo->acceptButton()), QStringLiteral("Accept · resolves Mina's note"));
+        QCOMPARE(ui::tipShortcut(logo->acceptButton()), QStringLiteral("⌘↩"));
+        QCOMPARE(sea->acceptButton()->kind(), ui::Button::Kind::Secondary);
+        // The card sits under Claude Code's first reply, across the thread.
+        CommentRow *carrier = panel.rowFor("c-2614-r1");
+        QVERIFY(carrier->isAncestorOf(logo));
+        QCOMPARE(logo->mapTo(&panel, QPoint()).x(), 16 + 36);
+        QVERIFY(!panel.rowFor("c-2614-r3")->isAncestorOf(logo));
+        // The Script shows the document's diff, removals neg and additions pos.
+        QVERIFY(!logo->diffView()->isVisible());
+        logo->scriptButton()->click();
+        QVERIFY(logo->diffView()->isVisible());
+        QCOMPARE(logo->diffLines(), (QStringList{"- clip \"Logo_reveal\" V4 00:00:26:03", "+ clip \"Logo_reveal\" V4 00:00:25:20"}));
+        QVERIFY(logo->diffView()->text().contains(tokens::color(tokens::neg).name()));
+        QVERIFY(logo->diffView()->text().contains(tokens::color(tokens::pos).name()));
+        // The sea card opens on its title.
+        QTest::mouseClick(sea->titleLabel(), Qt::LeftButton);
+        QVERIFY(sea->isOpen());
+        QVERIFY(sea->hasColour());
+        QCOMPARE(sea->colourTitle()->text(), QStringLiteral("B003_C011 · Huehue"));
+        QCOMPARE(sea->colourParams()->text(), QStringLiteral("Hue −9, Sat −6"));
+    }
+
+    // Filters, sort and search: chips, From with the filter dot, tags,
+    // Hide resolved; Newest shows its label; search narrows the list.
+    void filtersSortAndSearch() {
+        Seeded seed;
+        ChatPanel &panel = seed.panel;
+        panel.chipOpen()->click();
+        seed.settle();
+        QVERIFY(panel.chipOpen()->isChecked() && !panel.chipAll()->isChecked());
+        QVERIFY(!threadIds(panel).contains("c-0300") && threadIds(panel).contains("c-1708"));
+        panel.chipProposals()->click();
+        seed.settle();
+        QCOMPARE(recordIds(panel), (QStringList{"c-0903", "c-2614"}));
+        panel.chipAll()->click();
+        seed.settle();
+        // From Kerf, through the menu.
+        QVERIFY(!panel.filterDotShown());
+        QMenu *filter = panel.buildFilterMenu();
+        actionNamed(filter, QStringLiteral("Kerf"))->trigger();
+        delete filter;
+        seed.settle();
+        QVERIFY(panel.filterDotShown());
+        QCOMPARE(recordIds(panel), (QStringList{"c-0903", "c-1708", "c-2718"}));
+        filter = panel.buildFilterMenu();
+        QVERIFY(actionNamed(filter, QStringLiteral("Kerf"))->isChecked());
+        QVERIFY(actionNamed(filter, QStringLiteral("#audio")));
+        QCOMPARE(actionNamed(filter, QStringLiteral("Blocking"))->property("kerfMenuKey").toString(), QStringLiteral("2"));
+        actionNamed(filter, QStringLiteral("Kerf"))->trigger(); // again: anyone
+        delete filter;
+        seed.settle();
+        QVERIFY(!panel.filterDotShown());
+        // A tag clicked in a row toggles the same filter.
+        panel.threadWidget("c-0903")->root()->tags().constFirst()->click();
+        seed.settle();
+        QCOMPARE(recordIds(panel), QStringList{"c-0903"});
+        panel.threadWidget("c-0903")->root()->tags().constFirst()->click();
+        seed.settle();
+        QCOMPARE(threadIds(panel).size(), 7);
+        // Hide resolved.
+        filter = panel.buildFilterMenu();
+        actionNamed(filter, QStringLiteral("Hide resolved"))->trigger();
+        delete filter;
+        seed.settle();
+        QVERIFY(!threadIds(panel).contains("c-0300") && !threadIds(panel).contains("c-2916"));
+        seed.model.clearFilters();
+        seed.settle();
+        // Sort: Newest, with its label.
+        QVERIFY(panel.sortLabel()->isHidden());
+        QMenu *sort = panel.buildSortMenu();
+        QVERIFY(actionNamed(sort, QStringLiteral("Timecode"))->isChecked());
+        actionNamed(sort, QStringLiteral("Newest"))->trigger();
+        delete sort;
+        seed.settle();
+        QVERIFY(!panel.sortLabel()->isHidden());
+        QCOMPARE(panel.sortLabel()->text(), QStringLiteral("Newest"));
+        QCOMPARE(ui::tipName(panel.sortButton()), QStringLiteral("Sort: Newest"));
+        QCOMPARE(threadIds(panel).at(1), QStringLiteral("c-2718"));
+        seed.model.setSort(ReviewModel::Sort::Timecode);
+        // Search (⌘F).
+        panel.searchButton()->click();
+        QVERIFY(panel.searchRow()->isVisible());
+        panel.searchField()->setText(QStringLiteral("magenta"));
+        seed.settle();
+        QCOMPARE(recordIds(panel), QStringList{"c-0903"});
+        QTest::keyClick(panel.searchField(), Qt::Key_Escape);
+        seed.settle();
+        QVERIFY(!panel.searchRow()->isVisible());
+        QCOMPARE(threadIds(panel).size(), 7);
+    }
+
+    // The pin bar shows only while the pinned card's actions are out of
+    // view, with its author, summary and N/M; its arrows page the open
+    // proposals in pin order, and a click brings the card into view.
+    void pinBarAppearsOnlyWhenTheActionsScrollAway() {
+        ui::setReducedMotionOverride(1);
+        const auto restore = qScopeGuard([] { ui::setReducedMotionOverride(-1); });
+        Seeded seed;
+        ChatPanel &panel = seed.panel;
+        QScrollBar *bar = panel.scroll()->verticalScrollBar();
+        ProposalCard *logo = panel.card("proposal-cc2");
+        QVERIFY(bar->maximum() > 0);
+        // Scrolled so the footer is in view: no bar.
+        const int footer = logo->footer()->mapTo(panel.listContent(), QPoint()).y();
+        bar->setValue(std::max(0, footer - 120));
+        seed.settle();
+        QVERIFY(!panel.pinBarWanted());
+        QCOMPARE(panel.pinBar()->height(), 0);
+        // At the top, the card is far below: the bar.
+        bar->setValue(0);
+        seed.settle();
+        QVERIFY(panel.pinBarWanted());
+        QCOMPARE(panel.pinBar()->height(), ChatPanel::kPinHeight);
+        QCOMPARE(panel.pinAuthor()->text(), QStringLiteral("Claude Code"));
+        QCOMPARE(panel.pinSummary()->text(), QStringLiteral("Move logo reveal to the snare"));
+        QCOMPARE(panel.pinCount()->text(), QStringLiteral("1/2"));
+        panel.pinNext()->click();
+        QCOMPARE(panel.pinCount()->text(), QStringLiteral("2/2"));
+        QCOMPARE(panel.pinAuthor()->text(), QStringLiteral("Kerf"));
+        QCOMPARE(panel.pinBarProposal(), QStringLiteral("proposal-kg"));
+        panel.pinPrevious()->click();
+        QCOMPARE(panel.pinBarProposal(), QStringLiteral("proposal-cc2"));
+        // A click on the bar scrolls the card's comment to the list's top + 24.
+        QTest::mouseClick(panel.pinBar(), Qt::LeftButton, {}, QPoint(60, 16));
+        seed.settle();
+        const int carrier = panel.rowFor("c-2614-r1")->mapTo(panel.listContent(), QPoint()).y();
+        QCOMPARE(bar->value(), std::min(bar->maximum(), carrier - 24));
+    }
+
+    // On first show the current thread (the one at the playhead) is at the
+    // top, 12 under the chips.
+    void firstShowPlacesTheCurrentThread() {
+        Seeded seed;
+        ChatPanel &panel = seed.panel;
+        panel.setReviewWorkspace(false);
+        QVERIFY(panel.placed());
+        QCOMPARE(seed.model.currentThread(), QStringLiteral("c-1708"));
+        CommentRow *root = panel.threadWidget("c-1708")->root();
+        QVERIFY(root->isCurrent());
+        const int top = root->mapTo(panel.listContent(), QPoint()).y();
+        QScrollBar *bar = panel.scroll()->verticalScrollBar();
+        QVERIFY2(bar->value() >= std::min(bar->maximum(), top - ChatPanel::kListTop),
+                 qPrintable(QStringLiteral("value %1, max %2, top %3").arg(bar->value()).arg(bar->maximum()).arg(top)));
+        // Clicking another root makes it current.
+        QTest::mouseClick(panel.threadWidget("c-0903")->root(), Qt::LeftButton, {}, QPoint(200, 8));
+        QCOMPARE(seed.model.currentThread(), QStringLiteral("c-0903"));
+        QVERIFY(panel.threadWidget("c-0903")->root()->isCurrent());
+        QVERIFY(!panel.threadWidget("c-1708")->root()->isCurrent());
+    }
+
+    // Viewing as Mina: Accept and Reject give way to "Waiting for the editor".
+    void guestModeHidesAcceptAndReject() {
+        Seeded seed;
+        seed.model.setViewAs(kMina);
+        seed.settle();
+        QVERIFY(seed.model.guestMode());
+        ProposalCard *logo = seed.panel.card("proposal-cc2");
+        QVERIFY(logo->acceptButton()->isHidden() && logo->rejectButton()->isHidden());
+        QVERIFY(!logo->waitChip()->isHidden());
+        QCOMPARE(logo->waitChip()->text(), QStringLiteral("Waiting for the editor"));
+        QMenu *more = seed.panel.buildMoreMenu();
+        QAction *viewAs = actionNamed(more, QStringLiteral("View as Mina Park"));
+        QVERIFY(viewAs && viewAs->isChecked());
+        delete more;
+        seed.model.setViewAs(QString());
+        seed.settle();
+        QVERIFY(!seed.panel.card("proposal-cc2")->acceptButton()->isHidden());
+    }
+
+    // ---- wiring to kerfd ---------------------------------------------------------
+
+    // The window feeds the model from the bus, sets it on the bus and asks
+    // for the review log on connecting.
+    // The row under the pointer and the row pressed reach the stage through
+    // the bus: threadHovered (empty on leaving) and commentSelected.
+    void hoverAndSelectionReachTheBus() {
+        SeededWindow seeded;
+        MainWindow &window = seeded.window;
+        CommentRow *reply = window.m_chat->rowFor(QStringLiteral("c-2614-r1"));
+        QVERIFY(reply && !reply->threadId().isEmpty());
+        QSignalSpy hovered(window.m_bus, &EditorBus::threadHovered);
+        QSignalSpy selected(window.m_bus, &EditorBus::commentSelected);
+        QEnterEvent enter(QPointF(4, 4), QPointF(4, 4), reply->mapToGlobal(QPointF(4, 4)));
+        QCoreApplication::sendEvent(reply, &enter);
+        QCOMPARE(hovered.size(), 1);
+        QCOMPARE(hovered.last().first().toString(), reply->threadId());
+        QEvent leave(QEvent::Leave);
+        QCoreApplication::sendEvent(reply, &leave);
+        QCOMPARE(hovered.last().first().toString(), QString());
+        QTest::mousePress(reply, Qt::LeftButton, {}, QPoint(4, 4));
+        QCOMPARE(selected.size(), 1);
+        QCOMPARE(selected.last().first().toString(), QStringLiteral("c-2614-r1"));
+    }
+
+    void windowWiresTheReviewModel() {
+        SeededWindow seeded;
+        MainWindow &window = seeded.window;
+        QVERIFY(window.m_bus->review());
+        QCOMPARE(window.m_bus->review(), window.m_reviewWiring->model());
+        QVERIFY(!seeded.last(QStringLiteral("comment_list")).isEmpty());
+        QCOMPARE(window.m_chat->chipAll()->count(), 7);
+        QCOMPARE(window.m_chat->chipOpen()->count(), 4);
+        // ⌘↩ and Esc act on the pinned proposal.
+        QCOMPARE(window.m_proposalId, QStringLiteral("proposal-cc2"));
+        // The rail counts the open threads.
+        QCOMPARE(window.m_rail->chatButton()->label(), QStringLiteral("4"));
+        // bus openThread opens the panel at the thread and flashes its root.
+        window.setChatOpen(false);
+        emit window.m_bus->openThread(QStringLiteral("c-2718-r2"));
+        seeded.settle();
+        QVERIFY(window.chatOpen());
+        QCOMPARE(window.m_reviewWiring->model()->currentThread(), QStringLiteral("c-2718"));
+        QVERIFY(window.m_chat->threadWidget("c-2718")->root()->isFlashing());
+        // askPrefill opens the composer as a reply.
+        emit window.m_bus->askPrefill(QStringLiteral("@Kerf bring true peak under −1 dBTP on the music bus"), QStringLiteral("c-2718"));
+        seeded.settle();
+        QCOMPARE(window.m_chat->replyTarget(), QStringLiteral("c-2718"));
+        QCOMPARE(window.m_chatInput->toPlainText(), QStringLiteral("@Kerf bring true peak under −1 dBTP on the music bus"));
+        QVERIFY(window.m_chat->replyBar()->isOpen());
+        QVERIFY(window.m_chat->replyBar()->label()->text().contains(QStringLiteral("QC")));
+        // An unlinked proposal's thread is not in the review log: no reply
+        // target, so the post carries no parent kerfd would refuse.
+        QJsonObject snapshot = seedSnapshot();
+        QJsonArray proposals = snapshot.value("proposals").toArray();
+        proposals.append(proposalEntry("proposal-un", "pending", agent("mcp", "Cursor", "cursor", "MCP"), 1,
+                                       QJsonArray{versionEntry(1, "proposal-un", "trim end out -6f\n")}, "trim end out -6f\n",
+                                       {{"staged", "2026-11-03T08:00:00Z"}}));
+        snapshot.insert("proposals", proposals);
+        window.m_reviewWiring->handleEvent(QStringLiteral("state"), QJsonObject{{"type", "state"}, {"snapshot", snapshot}});
+        seeded.settle();
+        const ReviewModel::Thread *unlinked = window.m_reviewWiring->model()->thread(QStringLiteral("proposal:proposal-un"));
+        QVERIFY(unlinked && unlinked->origin == ReviewModel::Origin::Proposal);
+        emit window.m_bus->askPrefill(QStringLiteral("@Mina is this trim right?"), QStringLiteral("proposal:proposal-un"));
+        seeded.settle();
+        QVERIFY(window.m_chat->replyTarget().isEmpty());
+        QVERIFY(!window.m_chat->replyBar()->isOpen());
+        QTest::keyClick(window.m_chatInput, Qt::Key_Return);
+        const QJsonObject add = seeded.last(QStringLiteral("comment_add"));
+        QCOMPARE(add.value("body").toString(), QStringLiteral("@Mina is this trim right?"));
+        QVERIFY(!add.contains("parent"));
+    }
+
+    // Post: text for Kerf (@Kerf, or no mention) is an agent turn with its
+    // comment; text for people only is comment_add. The stamp gives the
+    // time unless detached or replying; a drawing goes with it.
+    void postRoutesToKerfOrToTheReviewLog() {
+        SeededWindow seeded;
+        MainWindow &window = seeded.window;
+        Composer *composer = window.m_chat->composerWidget();
+        window.m_playhead = 17.32;
+        window.m_chat->setPlayhead(17.32);
+        QCOMPARE(composer->stamp()->text(), QStringLiteral("00:00:17:08"));
+        // For Kerf, stamped.
+        composer->fill(QStringLiteral("@Kerf tighten the caption timing"));
+        QVERIFY(window.m_sendButton->isEnabled());
+        QTest::keyClick(window.m_chatInput, Qt::Key_Return);
+        QJsonObject agentTurn = seeded.last(QStringLiteral("agent"));
+        QCOMPARE(agentTurn.value("text").toString(), QStringLiteral("@Kerf tighten the caption timing"));
+        QCOMPARE(agentTurn.value("comment").toObject().value("at").toDouble(), 17.32);
+        QVERIFY(!agentTurn.value("comment").toObject().contains("parent"));
+        QCOMPARE(agentTurn.value("focus").toObject().value("fromFrame").toInt(), 433);
+        QVERIFY(agentTurn.contains("provider") || agentTurn.contains("cloud") || agentTurn.contains("model"));
+        QVERIFY(composer->text().isEmpty());
+        // The turn's local rows: you, then Kerf drafting; Send gives way to Stop.
+        seeded.settle();
+        QList<CommentRow *> rows = window.m_chat->rows();
+        QVERIFY(rows.size() >= 2);
+        QCOMPARE(rows.at(rows.size() - 2)->name(), QStringLiteral("You"));
+        // Stamped, not a reply: the local row carries its timecode.
+        QVERIFY(!rows.at(rows.size() - 2)->timecodeLink()->isHidden());
+        QCOMPARE(rows.at(rows.size() - 2)->timecodeLink()->text(), QStringLiteral("00:00:17:08"));
+        QVERIFY(rows.constLast()->isDrafting());
+        QCOMPARE(rows.constLast()->name(), QStringLiteral("Kerf is drafting"));
+        QVERIFY(composer->stopButton()->isVisible() && !composer->sendButton()->isVisible());
+        // The composer's Stop asks once, and the bridge gets its abort.
+        QSignalSpy stops(window.m_chat, &ChatPanel::stopRequested);
+        window.m_lastCommand = {};
+        composer->stopButton()->click();
+        QCOMPARE(stops.count(), 1);
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("abort"));
+        // While Kerf drafts, posting to it waits.
+        window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", false}});
+        window.handleEvent(QJsonObject{{"type", "agent_state"}, {"state", "completed"}});
+        seeded.settle();
+        // For people only: comment_add with a client id, stamped.
+        composer->fill(QStringLiteral("@Mina is the sky better now?"));
+        QTest::keyClick(window.m_chatInput, Qt::Key_Return);
+        QJsonObject add = seeded.last(QStringLiteral("comment_add"));
+        QCOMPARE(add.value("body").toString(), QStringLiteral("@Mina is the sky better now?"));
+        QVERIFY(add.value("id").toString().startsWith(QStringLiteral("c-qt-")));
+        QCOMPARE(add.value("id").toString(), window.m_reviewWiring->lastClientId());
+        QCOMPARE(add.value("at").toDouble(), 17.32);
+        QVERIFY(!add.contains("parent"));
+        seeded.settle();
+        CommentRow *pending = window.m_chat->rowFor(add.value("id").toString());
+        QVERIFY(pending);
+        // The log has it now: the optimistic row goes.
+        QJsonArray items = seedComments();
+        items.append(note(qPrintable(add.value("id").toString()), you(), "2026-11-04T10:00:00.000000Z", "@Mina is the sky better now?",
+                          {{"at", 17.32}}));
+        window.m_reviewWiring->handleEvent(QStringLiteral("comments"), QJsonObject{{"type", "comments"}, {"items", items}});
+        seeded.settle();
+        QCOMPARE(window.m_chat->rows().count(pending), 0);
+        // A refused add shows on the composer.
+        composer->fill(QStringLiteral("@Tom one more"));
+        QTest::keyClick(window.m_chatInput, Qt::Key_Return);
+        const QString refused = window.m_reviewWiring->lastClientId();
+        window.m_reviewWiring->handleEvent(QStringLiteral("error"), QJsonObject{{"type", "error"},
+                                                                                {"message", "INVALID_COMMENT"},
+                                                                                {"command", "comment_add"},
+                                                                                {"id", refused}});
+        QVERIFY(!composer->errorLabel()->isHidden());
+        QVERIFY(window.m_chat->rowFor(refused)->isError());
+        // A reply: parent, no time; the stamp detached: no time either.
+        window.m_chat->setReplyTarget(QStringLiteral("c-2614"));
+        composer->fill(QStringLiteral("@Mina two frames it is"));
+        QTest::keyClick(window.m_chatInput, Qt::Key_Return);
+        add = seeded.last(QStringLiteral("comment_add"));
+        QCOMPARE(add.value("parent").toString(), QStringLiteral("c-2614"));
+        QVERIFY(!add.contains("at"));
+        QVERIFY(window.m_chat->replyTarget().isEmpty());
+        composer->stamp()->click();
+        QVERIFY(!composer->stamped());
+        composer->fill(QStringLiteral("@Tom check the grade"));
+        QTest::keyClick(window.m_chatInput, Qt::Key_Return);
+        QVERIFY(!seeded.last(QStringLiteral("comment_add")).contains("at"));
+        composer->stamp()->click();
+        QVERIFY(composer->stamped());
+        // Draw on frame: the stage takes the drawing, which goes with the note.
+        QSignalSpy draw(window.m_bus, &EditorBus::drawingRequested);
+        composer->drawButton()->click();
+        QCOMPARE(draw.size(), 1);
+        QCOMPARE(composer->drawState(), Composer::Draw::Drawing);
+        const QJsonArray strokes{QJsonObject{{"tool", "ellipse"}, {"points", QJsonArray{QJsonArray{0.1, 0.2}, QJsonArray{0.3, 0.4}}}}};
+        emit window.m_bus->drawingFinished(strokes);
+        QCOMPARE(composer->drawState(), Composer::Draw::Attached);
+        composer->fill(QStringLiteral("@Tom here"));
+        QTest::keyClick(window.m_chatInput, Qt::Key_Return);
+        QCOMPARE(seeded.last(QStringLiteral("comment_add")).value("drawing").toArray(), strokes);
+        QCOMPARE(composer->drawState(), Composer::Draw::None);
+        // A reply to Kerf's thread with no mention is for Kerf, about its range.
+        window.m_chat->setReplyTarget(QStringLiteral("c-1708"));
+        composer->fill(QStringLiteral("move it up a little"));
+        QTest::keyClick(window.m_chatInput, Qt::Key_Return);
+        agentTurn = seeded.last(QStringLiteral("agent"));
+        QCOMPARE(agentTurn.value("text").toString(), QStringLiteral("move it up a little"));
+        QCOMPARE(agentTurn.value("comment").toObject().value("parent").toString(), QStringLiteral("c-1708"));
+        QVERIFY(!agentTurn.value("comment").toObject().contains("at"));
+        QCOMPARE(agentTurn.value("focus").toObject().value("scope").toString(), QStringLiteral("range"));
+        QCOMPARE(agentTurn.value("focus").toObject().value("fromFrame").toInt(), 433);
+        QCOMPARE(agentTurn.value("focus").toObject().value("toFrame").toInt(), 495);
+    }
+
+    // The agent stream lands in the turn's drafting row: its latest status
+    // as meta, tools as steps, text as it streams; Stop aborts and leaves
+    // "Kerf · stopped" with Ask again; the review log then takes over.
+    void draftingRowFollowsTheAgentStream() {
+        SeededWindow seeded;
+        MainWindow &window = seeded.window;
+        Composer *composer = window.m_chat->composerWidget();
+        window.m_chat->setReplyTarget(QStringLiteral("c-2718"));
+        composer->fill(QStringLiteral("@Kerf limit the music bus here, again"));
+        QTest::keyClick(window.m_chatInput, Qt::Key_Return);
+        window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
+        window.handleEvent(QJsonObject{{"type", "agent"}, {"kind", "status"}, {"text", "limiter on A2 Music"}});
+        window.handleEvent(QJsonObject{{"type", "agent"}, {"kind", "tool"}, {"text", "Reading the A2 Music bus"}});
+        seeded.settle();
+        CommentRow *drafting = window.m_chat->turnKerfRow(false);
+        QVERIFY(drafting && drafting->isDrafting());
+        QVERIFY(window.m_chat->threadWidget("c-2718")->replyRows().contains(drafting));
+        QCOMPARE(drafting->draftMeta(), QStringLiteral("Reading the A2 Music bus"));
+        QCOMPARE(drafting->replies(), QStringList{QStringLiteral("Reading the A2 Music bus")});
+        QVERIFY(!drafting->dots()->isHidden());
+        QVERIFY(!drafting->skeleton()->parentWidget()->isHidden());
+        window.handleEvent(QJsonObject{{"type", "agent"}, {"kind", "delta"}, {"text", "Adding a limiter"}});
+        QCOMPARE(drafting->text(), QStringLiteral("Adding a limiter"));
+        QVERIFY(drafting->skeleton()->parentWidget()->isHidden());
+        // Stop: the bridge's abort, then "Kerf · stopped" with Ask again.
+        drafting->stopButton()->click();
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("abort"));
+        window.handleEvent(QJsonObject{{"type", "agent_state"}, {"state", "aborted"}});
+        window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", false}});
+        seeded.settle();
+        QVERIFY(drafting->isStopped());
+        QCOMPARE(drafting->name(), QStringLiteral("Kerf · stopped"));
+        QCOMPARE(drafting->stopButton()->text(), QStringLiteral("Ask again"));
+        QVERIFY(composer->sendButton()->isVisible());
+        drafting->stopButton()->click();
+        const QJsonObject again = seeded.last(QStringLiteral("agent"));
+        QCOMPARE(again.value("text").toString(), QStringLiteral("@Kerf limit the music bus here, again"));
+        QCOMPARE(again.value("comment").toObject().value("parent").toString(), QStringLiteral("c-2718"));
+        window.handleEvent(QJsonObject{{"type", "agent"}, {"kind", "done"}, {"text", "Added a limiter on A2 Music."}});
+        window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", false}});
+        seeded.settle();
+        QVERIFY(window.m_chat->transcript().contains(QStringLiteral("Added a limiter on A2 Music.")));
+        // kerfd records the turn: your request and Kerf's reply replace the local rows.
+        QJsonArray items = seedComments();
+        const QString now = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+        // Both requests (the stopped one and the one asked again) are kept.
+        items.append(reply("c-2718-r4a", "c-2718", you(), qPrintable(now), "@Kerf limit the music bus here, again"));
+        items.append(reply("c-2718-r4", "c-2718", you(), qPrintable(now), "@Kerf limit the music bus here, again"));
+        items.append(reply("c-2718-r5", "c-2718", kerfAuthor(), qPrintable(now), "Added a limiter on A2 Music.",
+                           {{"steps", QJsonArray{"Reading the A2 Music bus"}}}));
+        window.m_reviewWiring->handleEvent(QStringLiteral("comments"), QJsonObject{{"type", "comments"}, {"items", items}});
+        seeded.settle();
+        seeded.settle();
+        int answers = 0;
+        for (CommentRow *row : window.m_chat->rows())
+            if (row->text() == QStringLiteral("Added a limiter on A2 Music.")) ++answers;
+        QCOMPARE(answers, 1);
+        QVERIFY(window.m_chat->rowFor("c-2718-r5"));
+        QCOMPARE(window.m_chat->rowFor("c-2718-r5")->expander()->text(), QStringLiteral("1 step"));
+    }
+
+    // Accept and Reject send the version shown with the revision; the
+    // versions menu shows an older version, previews it, and Accept then
+    // sends its id. The card settles to one line once kerfd accepts.
+    void versionsMenuAcceptsTheChosenVersion() {
+        SeededWindow seeded;
+        MainWindow &window = seeded.window;
+        ProposalCard *logo = window.m_chat->card("proposal-cc2");
+        QVERIFY(logo);
+        logo->showVersionMenu();
+        QMenu *menu = nullptr;
+        QTRY_VERIFY((menu = openMenu(QStringLiteral("versionsMenu"))));
+        QCOMPARE(menu->actions().size(), 2);
+        QVERIFY(menu->actions().at(1)->isChecked());
+        menu->actions().at(0)->trigger();
+        menu->close();
+        seeded.settle();
+        const QJsonObject preview = seeded.last(QStringLiteral("preview"));
+        QCOMPARE(preview.value("proposalId").toString(), QStringLiteral("proposal-cc1"));
+        QVERIFY(preview.contains("start") && preview.contains("duration"));
+        logo = window.m_chat->card("proposal-cc2");
+        QCOMPARE(logo->shownId(), QStringLiteral("proposal-cc1"));
+        QCOMPARE(logo->versionButton()->text(), QStringLiteral("v1"));
+        // ⌘↩ (proposal.accept) accepts the version on screen, not the latest.
+        QCOMPARE(window.m_proposalId, QStringLiteral("proposal-cc1"));
+        window.m_lastCommand = {};
+        window.triggerCommand(QStringLiteral("proposal.accept"));
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("accept"));
+        QCOMPARE(window.m_lastCommand.value("proposalId").toString(), QStringLiteral("proposal-cc1"));
+        seeded.sent.clear();
+        logo->acceptButton()->click();
+        QJsonObject accept = seeded.last(QStringLiteral("accept"));
+        QCOMPARE(accept.value("proposalId").toString(), QStringLiteral("proposal-cc1"));
+        QCOMPARE(accept.value("revision").toInteger(), qint64(22));
+        // kerfd accepted v1 at rev 23.
+        QJsonObject snapshot = seedSnapshot();
+        QJsonArray proposals = snapshot.value("proposals").toArray();
+        QJsonObject cc = proposals.at(0).toObject();
+        cc.insert("status", "accepted");
+        cc.insert("proposalId", "proposal-cc1");
+        cc.insert("appliedRevision", 23);
+        proposals.replace(0, cc);
+        snapshot.insert("proposals", proposals);
+        snapshot.insert("revision", 23);
+        window.m_reviewWiring->handleEvent(QStringLiteral("state"), QJsonObject{{"type", "state"}, {"snapshot", snapshot}});
+        seeded.settle();
+        ProposalCard *settled = window.m_chat->card("proposal-cc1");
+        QVERIFY(settled && settled->isSettled());
+        QVERIFY(settled->settledLabel()->text().startsWith(QStringLiteral("Accepted in rev 23 · You · ")));
+        // The pin moved to Kerf's colour key.
+        QCOMPARE(window.m_proposalId, QStringLiteral("proposal-kg"));
+        ProposalCard *sea = window.m_chat->card("proposal-kg");
+        QVERIFY(sea->isPinned());
+        sea->rejectButton()->setVisible(true);
+        sea->setOpen(true);
+        sea->rejectButton()->click();
+        QCOMPARE(seeded.last(QStringLiteral("reject")).value("proposalId").toString(), QStringLiteral("proposal-kg"));
+    }
+
+    // The colour card asks for the clip's frame before and after the
+    // proposed effect parameters, and bins both in the 72 pt vectorscope.
+    void colourPreviewRequestsEffectPreviewsWithParams() {
+        SeededWindow seeded;
+        MainWindow &window = seeded.window;
+        ProposalCard *sea = window.m_chat->card("proposal-kg");
+        QVERIFY(sea && sea->hasColour());
+        sea->changesLink()->click();
+        seeded.settle();
+        const QJsonObject request = seeded.last(QStringLiteral("effect_previews"));
+        QCOMPARE(request.value("clip").toString(), QStringLiteral("sea"));
+        QCOMPARE(request.value("width").toInt(), 160);
+        const double at = request.value("at").toDouble();
+        QVERIFY(at >= 8.48 && at < 13.2);
+        const QJsonArray effects = request.value("effects").toArray();
+        QCOMPARE(effects.size(), 2);
+        QCOMPARE(effects.at(0).toObject().value("key").toString(), QStringLiteral("before:proposal-kg"));
+        QCOMPARE(effects.at(0).toObject().value("fx").toString(), QStringLiteral("color.huehue"));
+        QVERIFY(!effects.at(0).toObject().contains("params")); // a new effect: at its defaults
+        QCOMPARE(effects.at(1).toObject().value("key").toString(), QStringLiteral("after:proposal-kg"));
+        QCOMPARE(effects.at(1).toObject().value("params").toObject(), (QJsonObject{{"hue", -9}, {"sat", -6}}));
+        // The frames land in the chip.
+        const auto frame = [](const QString &key, QColor color) {
+            const QImage image = solid(color);
+            return QJsonObject{{"type", "effect_preview"}, {"clip", "sea"}, {"fx", "color.huehue"}, {"key", key},
+                               {"width", image.width()}, {"height", image.height()},
+                               {"rgba", QString::fromLatin1(QByteArray(reinterpret_cast<const char *>(image.constBits()),
+                                                                       image.sizeInBytes()).toBase64())}};
+        };
+        window.m_reviewWiring->handleEvent(QStringLiteral("effect_preview"), frame(QStringLiteral("before:proposal-kg"), QColor(160, 60, 160)));
+        window.m_reviewWiring->handleEvent(QStringLiteral("effect_preview"), frame(QStringLiteral("after:proposal-kg"), QColor(60, 160, 170)));
+        QVERIFY(sea->chip()->hasBefore() && sea->chip()->hasAfter());
+        QVERIFY(sea->chip()->before().total > 0);
+        // Magenta lands up and right of the centre, cyan down and left.
+        const scope::Density &before = sea->chip()->before();
+        const scope::Density &after = sea->chip()->after();
+        double bx = 0, ax = 0;
+        quint64 bn = 0, an = 0;
+        for (int y = 0; y < before.height; ++y)
+            for (int x = 0; x < before.width; ++x) {
+                bx += before.at(x, y) * x;
+                bn += before.at(x, y);
+                ax += after.at(x, y) * x;
+                an += after.at(x, y);
+            }
+        QVERIFY(bn && an);
+        QVERIFY(bx / bn > ax / an);
+        // Opening it again asks for nothing more.
+        const int requests = int(std::count_if(seeded.sent.begin(), seeded.sent.end(),
+                                               [](const QJsonObject &c) { return c.value("type") == QStringLiteral("effect_previews"); }));
+        sea->changesLink()->click();
+        sea->changesLink()->click();
+        QCOMPARE(int(std::count_if(seeded.sent.begin(), seeded.sent.end(),
+                                   [](const QJsonObject &c) { return c.value("type") == QStringLiteral("effect_previews"); })),
+                 requests);
+    }
+
+    // The Preview checkbox renders the proposal's range; off plays the program again.
+    void previewCheckboxSendsPreview() {
+        SeededWindow seeded;
+        ProposalCard *logo = seeded.window.m_chat->card("proposal-cc2");
+        logo->previewBox()->click();
+        const QJsonObject preview = seeded.last(QStringLiteral("preview"));
+        QCOMPARE(preview.value("proposalId").toString(), QStringLiteral("proposal-cc2"));
+        QVERIFY(preview.value("duration").toDouble() > 0 && preview.value("duration").toDouble() <= 120);
+        seeded.window.m_reviewWiring->handleEvent(QStringLiteral("preview"),
+                                                  QJsonObject{{"type", "preview"}, {"status", "running"}, {"proposalId", "proposal-cc2"}});
+        QCOMPARE(seeded.window.m_chat->previewProposal(), QStringLiteral("proposal-cc2"));
+        logo->previewBox()->click();
+        QCOMPARE(seeded.sent.constLast().value("type").toString(), QStringLiteral("preview_exit"));
+        seeded.window.m_reviewWiring->handleEvent(QStringLiteral("preview"), QJsonObject{{"type", "preview"}, {"status", "exited"}});
+        QVERIFY(seeded.window.m_chat->previewProposal().isEmpty());
+    }
+
+    // The ring resolves; reopening a thread an accept settled reopens the
+    // comments carrying the proposal (the root was never resolved).
+    void resolveRingSendsCommentSet() {
+        SeededWindow seeded;
+        MainWindow &window = seeded.window;
+        window.m_chat->threadWidget("c-0903")->root()->ring()->click();
+        QJsonObject set = seeded.last(QStringLiteral("comment_set"));
+        QCOMPARE(set.value("id").toString(), QStringLiteral("c-0903"));
+        QCOMPARE(set.value("resolved").toBool(), true);
+        seeded.sent.clear();
+        window.m_chat->threadWidget("c-0300")->root()->ring()->click();
+        QCOMPARE(seeded.sent.size(), 1);
+        QCOMPARE(seeded.sent.constFirst().value("id").toString(), QStringLiteral("c-0300-r1"));
+        QCOMPARE(seeded.sent.constFirst().value("resolved").toBool(), false);
+        // Your own replies have no Resolve; others' roots do.
+        QVERIFY(window.m_chat->rowFor("c-2718-r1")->resolveAction()->isHidden());
+        QVERIFY(!window.m_chat->threadWidget("c-0903")->root()->resolveAction()->isHidden());
+    }
+
+    // The row menu: Copy and the review link for all; Convert to sequence
+    // marker for people's notes; Ask again, Edit and Delete on your own.
+    void rowMenuOffersEachRowsActions() {
+        SeededWindow seeded;
+        MainWindow &window = seeded.window;
+        window.m_projectName = QStringLiteral("Atlas");
+        QMenu *menu = window.m_chat->buildRowMenu(QStringLiteral("c-2614"));
+        QVERIFY(actionNamed(menu, QStringLiteral("Copy")));
+        QAction *link = actionNamed(menu, QStringLiteral("Copy link"));
+        QCOMPARE(link->text(), QStringLiteral("Copy link kerf://atlas/rev22@00:00:26:14"));
+        QAction *marker = actionNamed(menu, QStringLiteral("Convert to sequence marker"));
+        QVERIFY(marker && !actionNamed(menu, QStringLiteral("Delete")));
+        marker->trigger();
+        const QJsonArray ops = window.m_lastCommand.value("ops").toArray();
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("edit"));
+        QCOMPARE(ops.at(0).toObject().value("op").toString(), QStringLiteral("add-marker"));
+        QCOMPARE(ops.at(0).toObject().value("at").toInt(), 664);
+        QCOMPARE(ops.at(0).toObject().value("note").toString(), QStringLiteral("Logo lands late, should hit on the snare"));
+        delete menu;
+        menu = window.m_chat->buildRowMenu(QStringLiteral("c-2718-r3"));
+        QVERIFY(actionNamed(menu, QStringLiteral("Ask again")) && actionNamed(menu, QStringLiteral("Edit")));
+        actionNamed(menu, QStringLiteral("Delete"))->trigger();
+        QCOMPARE(seeded.last(QStringLiteral("comment_set")).value("deleted").toBool(), true);
+        QCOMPARE(seeded.last(QStringLiteral("comment_set")).value("id").toString(), QStringLiteral("c-2718-r3"));
+        actionNamed(menu, QStringLiteral("Edit"))->trigger();
+        delete menu;
+        QCOMPARE(window.m_chatInput->toPlainText(), QStringLiteral("Unlocked A2, try again"));
+        window.m_chatInput->setPlainText(QStringLiteral("Unlocked A2 and A3, try again"));
+        QTest::keyClick(window.m_chatInput, Qt::Key_Return);
+        const QJsonObject edit = seeded.last(QStringLiteral("comment_set"));
+        QCOMPARE(edit.value("id").toString(), QStringLiteral("c-2718-r3"));
+        QCOMPARE(edit.value("body").toString(), QStringLiteral("Unlocked A2 and A3, try again"));
+        // The More menu's export and review link.
+        QMenu *more = window.m_chat->buildMoreMenu();
+        QCOMPARE(actionNamed(more, QStringLiteral("Copy review link"))->text(), QStringLiteral("Copy review link kerf://atlas/rev22"));
+        actionNamed(more, QStringLiteral("As sequence markers"))->trigger();
+        QCOMPARE(seeded.last(QStringLiteral("export_comments")).value("format").toString(), QStringLiteral("markers"));
+        delete more;
+    }
+
+    // Kerf's next steps are the welcome's Try asking and the composer's
+    // suggestions, with each person's open notes, the failing checks and QC.
+    void nextStepsBecomeSuggestions() {
+        SeededWindow seeded;
+        MainWindow &window = seeded.window;
+        window.handleEvent(QJsonObject{{"type", "agent_next"},
+                                       {"steps", QJsonArray{QJsonObject{{"label", "Duck the music"}, {"request", "Duck the music 6 dB under the voice-over"}}}}});
+        window.m_reviewWiring->handleEvent(QStringLiteral("check"), QJsonObject{{"type", "check"}, {"status", "done"},
+                                                                               {"summary", QJsonObject{{"rows", QJsonArray{
+                                                                                   QJsonObject{{"name", "Caption overlap"}, {"passed", false}, {"at", 17.32}},
+                                                                                   QJsonObject{{"name", "Gamut Rec.709"}, {"passed", true}}}}}}});
+        seeded.settle();
+        const QList<SuggestionButton *> welcome = window.m_chat->welcomeRow()->suggestions();
+        QCOMPARE(welcome.size(), 1);
+        QCOMPARE(welcome.constFirst()->text(), QStringLiteral("Duck the music"));
+        welcome.constFirst()->click();
+        QCOMPARE(window.m_chatInput->toPlainText(), QStringLiteral("Duck the music 6 dB under the voice-over"));
+        QCOMPARE(window.m_lastCommand.value("type").toString() == QStringLiteral("agent"), false);
+        QStringList labels;
+        for (const ChatPanel::Suggestion &s : window.m_chat->suggestions()) labels << s.label;
+        // People in the order their open notes come on the program.
+        QCOMPARE(labels, (QStringList{"Duck the music", "Address Tom's open notes", "Address Mina's open notes", "Fix the caption overlap",
+                                      "Run QC on the whole sequence"}));
+        // The popover shows while the input is focused and empty.
+        window.m_chatInput->clear();
+        window.m_chatInput->setFocus();
+        QTRY_VERIFY(window.m_chat->composerWidget()->suggestionsPopover()->isVisible());
+        emit window.m_chat->composerWidget()->suggestionsPopover()->chosen(int(labels.size()) - 1);
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("check"));
+        emit window.m_chat->composerWidget()->suggestionsPopover()->chosen(2);
+        QVERIFY(window.m_chatInput->toPlainText().startsWith(QStringLiteral("@Kerf Address Mina Park's open notes:")));
+        QVERIFY(window.m_chatInput->toPlainText().contains(QStringLiteral("00:00:26:14 Logo lands late")));
+    }
+
+    // @ completes Kerf, the agents seen and the people.
+    void mentionCompletes() {
+        Seeded seed;
+        Composer *composer = seed.panel.composerWidget();
+        // Kerf, the agents in the order they come, then the people by name.
+        QCOMPARE(seed.panel.mentionCandidates(), (QStringList{"Kerf", "Cursor", "Claude Code", "Codex", "Mina Park", "Tom Lind"}));
+        composer->input()->setFocus();
+        QTRY_VERIFY(composer->input()->hasFocus());
+        composer->mentionButton()->click();
+        QVERIFY(composer->mentionList()->isVisible());
+        QTest::keyClicks(composer->input(), "Mi");
+        QCOMPARE(composer->mentionList()->items(), QStringList{QStringLiteral("Mina Park")});
+        QTest::keyClick(composer->input(), Qt::Key_Return);
+        QCOMPARE(composer->text(), QStringLiteral("@Mina "));
+        QVERIFY(!composer->mentionList()->isVisible());
+    }
+
+    // The composer: Return sends, Shift-Return is a new line, nothing is
+    // sent while offline.
+    void composerKeysAndStates() {
         MainWindow window{QString(), QString()};
         window.show();
         showAssistant(window);
@@ -308,684 +1237,62 @@ private slots:
         QTest::keyClick(window.m_chatInput, Qt::Key_Return, Qt::ShiftModifier);
         QTest::keyClicks(window.m_chatInput, "Second edit");
         QCOMPARE(window.m_chatInput->toPlainText(), QStringLiteral("First edit\nSecond edit"));
-        // Return must preserve a draft while sending is unavailable.
         QTest::keyClick(window.m_chatInput, Qt::Key_Return);
         QCOMPARE(window.m_chatInput->toPlainText(), QStringLiteral("First edit\nSecond edit"));
         QVERIFY(!window.m_sendButton->isEnabled());
         QVERIFY(window.m_abortButton->isHidden());
+        QCOMPARE(window.m_chat->composer()->objectName(), QStringLiteral("chatComposer"));
+        QCOMPARE(window.m_chat->composer()->parentWidget(), window.m_chat);
+        QCOMPARE(window.m_chat->composer()->geometry().bottom(), window.m_chat->rect().bottom());
+        // The send button: idle on, ready accent.
+        auto *send = static_cast<SendButton *>(window.m_sendButton);
+        QCOMPARE(send->background(), tokens::color(tokens::on));
+        window.setConnection(QStringLiteral("ready"));
+        QVERIFY(window.m_sendButton->isEnabled());
+        QCOMPARE(send->background(), tokens::color(tokens::accent));
+        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Comment or ask Kerf"));
     }
 
-    // Every turn is a comment row, Kerf's and the reader's alike, as in a
-    // video's comments panel: an avatar, the name and time, the text. Kerf's
-    // steps fold under its comment as replies; streamed text stays in its
-    // one comment; the view follows the latest unless scrolled away.
-    void conversationIsCommentRowsAndKeepsStreamInItsComment() {
+    // Old callers of the conversation: appendConversation and the agent
+    // events still land in rows (local until the log records them).
+    void conversationCallsLandInRows() {
         MainWindow window{QString(), QString()};
         window.resize(1440, 900);
         window.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&window));
         showAssistant(window);
-        ChatPanel *chat = window.m_chat;
-        // Before the first message, Kerf's welcome with requests to try, in
-        // colours that read on the panel's surface, in both appearances.
-        QVERIFY(chat->welcome()->isVisible());
-        {
-            {
-                QString words;
-                int colours = 0;
-                for (QLabel *label : chat->welcome()->findChildren<QLabel *>()) {
-                    label->ensurePolished();
-                    words += label->text() + QLatin1Char('\n');
-                    const QColor ink = label->palette().color(QPalette::WindowText);
-                    const qreal ratio = contrastRatio(ink, editorTheme().chatSurface);
-                    QVERIFY2(ratio >= 4.5, qPrintable(QStringLiteral("%1 on %2: %3").arg(ink.name(), editorTheme().chatSurface.name()).arg(ratio, 0, 'f', 2)));
-                    ++colours;
-                }
-                QVERIFY(colours >= 4);
-                // A comment as every other: name and time, one plain line, then the examples.
-                QVERIFY(words.startsWith(QStringLiteral("Kerf\nnow\n")));
-                QVERIFY(words.contains(QStringLiteral("review it before it touches the cut")));
-                QVERIFY(words.contains(QStringLiteral("Try asking")));
-                QVERIFY(!words.contains(QStringLiteral("Make your next cut.")));
-            }
-        }
-        // An example fills the composer and sends nothing.
-        window.setConnection(QStringLiteral("ready"));
-        QCOMPARE(chat->examples().size(), 2);
-        chat->examples().constFirst()->click();
-        QCOMPARE(window.m_chatInput->toPlainText(), QStringLiteral("Trim the opening to three seconds."));
-        QVERIFY(window.m_lastCommand.value("type").toString() != QStringLiteral("agent"));
-        window.m_chatInput->clear();
-
-        // A step before Kerf has written waits, and adds no row.
         window.appendConversationNote(QStringLiteral("Tool"), QStringLiteral("Inspecting timeline"));
-        QVERIFY(chat->isEmpty());
-        const int activityCount = window.m_activityList->count();
-
-        window.appendConversation(QStringLiteral("You"), QStringLiteral("Trim <intro>\nKeep the dialogue."));
-        window.handleEvent(QJsonObject{{"type", "agent"}, {"kind", "delta"}, {"text", "I’ll trim "}});
-        window.handleEvent(QJsonObject{{"type", "agent"}, {"kind", "tool"}, {"text", "Reading <timeline>"}});
-        window.handleEvent(QJsonObject{{"type", "agent_state"}, {"state", "failed"}, {"message", "Could not read <media>"}});
-        window.handleEvent(QJsonObject{{"type", "agent"}, {"kind", "delta"}, {"text", "the opening."}});
-        window.handleEvent(QJsonObject{{"type", "agent"}, {"kind", "done"}, {"text", "I’ll trim the opening."}});
-        QCoreApplication::processEvents();
-
-        const QString transcript = chat->transcript();
-        QVERIFY(!chat->welcome()->isVisible());
-        QVERIFY(transcript.contains(QStringLiteral("Trim <intro>\nKeep the dialogue.")));
-        QCOMPARE(transcript.count(QStringLiteral("I’ll trim the opening.")), 1);
-        QVERIFY(transcript.contains(QStringLiteral("Could not read <media>")));
-        QVERIFY(!transcript.contains(QStringLiteral("Reading <timeline>")));
-        QCOMPARE(window.m_activityList->count(), activityCount + 1);
-        const QList<CommentRow *> rows = chat->rows();
+        QVERIFY(window.m_chat->isEmpty());
+        window.appendConversation(QStringLiteral("You"), QStringLiteral("Trim <intro>"));
+        window.appendConversation(QStringLiteral("Kerf"), QStringLiteral("I’ll trim the opening."));
+        window.appendConversationNote(QStringLiteral("Tool"), QStringLiteral("Trimmed v1b"));
+        window.appendConversation(QStringLiteral("Error"), QStringLiteral("Could not read <media>"));
+        const QList<CommentRow *> rows = window.m_chat->rows();
         QCOMPARE(rows.size(), 3);
-        QCOMPARE(rows.at(0)->kind(), CommentRow::Kind::User);
-        QCOMPARE(rows.at(1)->kind(), CommentRow::Kind::Kerf);
-        QCOMPARE(rows.at(2)->kind(), CommentRow::Kind::Error);
         QCOMPARE(rows.at(0)->name(), QStringLiteral("You"));
         QCOMPARE(rows.at(1)->name(), QStringLiteral("Kerf"));
-        // The reader's initial on a neutral disc; Kerf's monogram on its purple.
-        QCOMPARE(rows.at(0)->avatar()->who(), ChatAvatar::Who::User);
-        QCOMPARE(rows.at(1)->avatar()->who(), ChatAvatar::Who::Kerf);
-        QCOMPARE(rows.at(1)->avatar()->monogram(), QStringLiteral("K"));
-        // No bubbles: every row starts at the panel's padding, the reader's too.
-        for (const CommentRow *row : rows) {
-            QCOMPARE(row->avatar()->mapTo(chat, QPoint()).x(), ChatPanel::kSidePadding);
-            QCOMPARE(row->avatar()->width(), ChatPanel::kAvatar);
-            // Text comes literally, never as markup.
-            QVERIFY(row->body()->textFormat() == Qt::RichText);
-        }
-        QVERIFY(rows.at(0)->body()->text().contains(QStringLiteral("Trim &lt;intro&gt;")));
-        // The tool's step is a reply under Kerf's comment, folded behind "1 step".
-        QCOMPARE(rows.at(1)->replies(), QStringList{QStringLiteral("Reading <timeline>")});
-        QVERIFY(rows.at(1)->expander()->isVisible());
+        // A step before the turn began belongs to no reply.
+        QCOMPARE(rows.at(1)->replies(), QStringList{QStringLiteral("Trimmed v1b")});
         QCOMPARE(rows.at(1)->expander()->text(), QStringLiteral("1 step"));
-        QVERIFY(!rows.at(1)->replyList()->isVisible());
-        rows.at(1)->expander()->click();
-        QVERIFY(rows.at(1)->repliesExpanded() && rows.at(1)->replyList()->isVisible());
-        QVERIFY(!rows.at(0)->expander()->isVisible());
-        // The reader's rows can be asked again; every row can be copied.
-        QCOMPARE(rows.at(0)->actions().size(), 2);
-        QCOMPARE(rows.at(1)->actions().size(), 1);
-        rows.at(1)->actions().constFirst()->click();
-        QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("I’ll trim the opening."));
-        // The header counts the messages, as a comments panel does, and so
-        // does the rail's chat button.
-        QCOMPARE(chat->countLabel()->text(), QStringLiteral("3"));
-        QCOMPARE(window.m_rail->chatButton()->label(), QStringLiteral("3"));
-        window.appendConversation(QStringLiteral("Kerf"), QStringLiteral("A separate response."));
-        QCOMPARE(chat->rows().size(), 4);
-        QCOMPARE(chat->countLabel()->text(), QStringLiteral("4"));
-
-        // New output must not pull the reader away from earlier messages.
-        for (int i = 0; i < 12; ++i)
-            window.appendConversation(QStringLiteral("You"), QStringLiteral("A longer edit request.\nKeep this line readable."));
-        QCoreApplication::processEvents();
-        auto *scroll = chat->scroll()->verticalScrollBar();
-        QVERIFY(scroll->maximum() > 0);
-        // It followed the output to the latest.
-        QCOMPARE(scroll->value(), scroll->maximum());
-        scroll->setValue(0);
-        window.appendConversation(QStringLiteral("Kerf"), QStringLiteral("New response."));
-        QCoreApplication::processEvents();
-        QCOMPARE(scroll->value(), 0);
-        // Nothing in it scrolls sideways.
-        QCOMPARE(chat->scroll()->widget()->width(), chat->scroll()->viewport()->width());
+        QVERIFY(rows.at(2)->isError());
+        // Text comes literally, never as markup.
+        QVERIFY(rows.at(0)->body()->text().contains(QStringLiteral("Trim &lt;intro&gt;")));
+        QVERIFY(window.m_chat->transcript().contains(QStringLiteral("Could not read <media>")));
+        // A done with no turn is a Kerf row of its own.
+        window.handleEvent(QJsonObject{{"type", "agent"}, {"kind", "done"}, {"text", "Trimmed the intro."}});
+        QVERIFY(window.m_chat->transcript().contains(QStringLiteral("Trimmed the intro.")));
     }
 
-    void composerStatesAndNarrowLayoutRemainUsable() {
-        MainWindow window{QString(), QString()};
-        window.resize(1080, 700);
-        window.show();
-        showAssistant(window);
-        ChatPanel *chat = window.m_chat;
-        QCOMPARE(window.m_chatComposer->property("state").toString(), QStringLiteral("offline"));
-        // Offline, the composer is one quiet line, with nothing to send.
-        QVERIFY(!chat->composerExpanded());
-        window.setConnection(QStringLiteral("ready"));
-        window.activateWindow();
-        // At rest: one line, no buttons, as a comment field before it is used.
-        QVERIFY(!chat->composerExpanded());
-        window.m_chatInput->setFocus();
-        QTRY_COMPARE(window.m_chatComposer->property("state").toString(), QStringLiteral("focused"));
-        // In focus its row of the model, Cancel and Send shows, and its
-        // underline turns the accent, with no ring around the field.
-        QVERIFY(chat->composerExpanded());
-        QVERIFY(chat->cancelButton()->isVisible() && window.m_sendButton->isVisible());
-        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-        QVERIFY(!window.findChild<QWidget *>(QStringLiteral("focusHalo")));
-        auto *rule = window.m_chatComposer->findChild<QWidget *>(QStringLiteral("chatComposerRule"));
-        QVERIFY(rule);
-        const auto underline = [&] {
-            const QImage composer = window.m_chatComposer->grab().toImage();
-            const QPoint at = rule->mapTo(window.m_chatComposer, QPoint(rule->width() / 2, 0));
-            return composer.pixelColor(at * composer.devicePixelRatio()).rgb();
-        };
-        QCOMPARE(underline(), editorTheme().chatComposerRuleFocus.rgb());
-        QCOMPARE(editorTheme().chatComposerRuleFocus.rgb(), editorTheme().focusRing.rgb());
-        // So it does as the model's field is typed in (with keys of one's
-        // own), and it goes back as the focus leaves the composer.
-        {
-            const QSignalBlocker ownBlock(window.m_ownKeyRadio);
-            window.m_ownKeyRadio->setChecked(true);
-        }
-        window.updateAgentModelChoices();
-        QVERIFY(window.m_modelSelect->isEnabled());
-        QTest::mouseClick(window.m_modelSelect->lineEdit(), Qt::LeftButton);
-        QVERIFY(window.m_chatComposer->isAncestorOf(QApplication::focusWidget()));
-        QCOMPARE(window.m_chatComposer->property("state").toString(), QStringLiteral("focused"));
-        QCOMPARE(underline(), editorTheme().chatComposerRuleFocus.rgb());
-        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-        QVERIFY(!window.findChild<QWidget *>(QStringLiteral("focusHalo")));
-        window.m_timeline->setFocus();
-        QVERIFY(!window.m_chatComposer->isAncestorOf(QApplication::focusWidget()));
-        QCOMPARE(window.m_chatComposer->property("state").toString(), QStringLiteral("ready"));
-        QVERIFY(!chat->composerExpanded());
-        QVERIFY(underline() != editorTheme().chatComposerRuleFocus.rgb());
-        // A draft keeps it open, and Kerf at work shows Stop for Send.
-        window.m_chatInput->setPlainText(QStringLiteral("Keep my draft"));
-        QVERIFY(chat->composerExpanded());
-        window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
-        QCOMPARE(window.m_chatComposer->property("state").toString(), QStringLiteral("sending"));
-        QVERIFY(!window.m_chatInput->isEnabled());
-        QVERIFY(window.m_abortButton->isVisible());
-        QVERIFY(!window.m_sendButton->isVisible());
-        // The status line says so, with three dots, after the latest comment.
-        QVERIFY(chat->statusRow()->isVisible());
-        QCOMPARE(window.m_agentStatus->text(), QStringLiteral("Thinking"));
-        window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", false}});
-        QVERIFY(window.m_chatInput->isEnabled());
-        QVERIFY(window.m_sendButton->isEnabled());
-        QVERIFY(!chat->statusRow()->isVisible());
-        QCOMPARE(window.m_chatInput->toPlainText(), QStringLiteral("Keep my draft"));
-        // Cancel clears the draft and folds the composer.
-        chat->cancelButton()->click();
-        QVERIFY(window.m_chatInput->toPlainText().isEmpty());
-        QVERIFY(!chat->composerExpanded());
-        window.appendConversation(QStringLiteral("You"), QStringLiteral("Trim the opening to three seconds."));
-        window.appendConversation(QStringLiteral("Kerf"), QStringLiteral("I’ll shorten the opening and keep the rest of your sequence in place.\nReview the changes before applying them."));
-        window.appendConversationNote(QStringLiteral("Tool"), QString(500, QLatin1Char('x')));
-        window.updateProposal(QJsonObject{{"status", "pending"}, {"proposalId", "review"},
-            {"script", "trim c1 out -1s\n"}, {"documentDiff", "-    clip c1 dur=00:00:04:00\n+    clip c1 dur=00:00:03:00\n"}});
-        chat->setProposalExpanded(true);
-        window.m_chatInput->setFocus();
-        QCoreApplication::processEvents();
-        QVERIFY(window.m_chatInput->height() <= 36);
-        // In the smallest window the panel is short: the proposal scrolls
-        // with the list it heads, so its script opens in place and the
-        // composer stays whole at the panel's foot; Accept is in reach on
-        // the proposal in view, or else on the compact bar under the header.
-        QVERIFY(chat->height() < ViewerWidget::kMinChatHeight);
-        QVERIFY(chat->proposalExpanded() && window.m_proposalDiff->isVisible() && chat->proposalExpander()->isVisible());
-        QVERIFY(chat->rect().contains(window.m_chatComposer->geometry()));
-        QCOMPARE(window.m_chatComposer->geometry().bottom(), chat->rect().bottom());
-        QTRY_VERIFY(window.m_proposalBox->rect().contains(window.m_acceptButton->geometry()));
-        {
-            const QRect pills(window.m_acceptButton->mapTo(chat->scroll()->widget(), QPoint()), window.m_acceptButton->size());
-            const int top = chat->scroll()->verticalScrollBar()->value();
-            const bool inView = pills.top() >= top && pills.bottom() < top + chat->scroll()->viewport()->height();
-            QCOMPARE(chat->proposalBar()->isVisible(), !inView);
-        }
-        QVERIFY(chat->scroll()->mapTo(chat, QPoint(0, chat->scroll()->height())).y() <= window.m_chatComposer->y());
-        // The long step wraps inside the column rather than widening it.
-        QCOMPARE(chat->scroll()->widget()->width(), chat->scroll()->viewport()->width());
-        // In a taller window the script opens under the pills.
-        window.resize(1440, 900);
-        QCoreApplication::processEvents();
-        QVERIFY(window.m_proposalDiff->isVisible());
-        QVERIFY(window.m_proposalBox->rect().contains(window.m_proposalDiff->geometry()));
-        QVERIFY(window.m_proposalDiff->geometry().top() > window.m_acceptButton->geometry().bottom());
-        QCOMPARE(window.m_chatComposer->geometry().bottom(), chat->rect().bottom());
-        // Optional artifact for manual review of the real styled widget tree.
-        const QString screenshot = qEnvironmentVariable("KERF_QT_UI_SCREENSHOT");
-        if (!screenshot.isEmpty()) QVERIFY(window.grab().save(screenshot));
-    }
-
-    // A conversation closed when the editor last closed is closed the next
-    // time, and opens at the width it had; a width kept while it was a
-    // docked column carries over the first time. (In a window wide enough
-    // that the wide picture's laptop leaves it its own width.)
-    void conversationKeepsItsWidthAndStateAfterARelaunch() {
-        QSettings().remove(QStringLiteral("workspace"));
-        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
-        {
-            QSettings().setValue(QStringLiteral("workspace/assistantWidth"), 380);
-            MainWindow window{QString(), QString()};
-            window.resize(1680, 900);
-            window.show();
-            QVERIFY(QTest::qWaitForWindowExposed(&window));
-            QCOMPARE(window.m_chat->width(), 380);
-            QTest::mousePress(window.m_chat->resizeHandle(), Qt::LeftButton, {}, QPoint(2, 60));
-            QTest::mouseMove(window.m_chat->resizeHandle(), QPoint(2 - 20, 60));
-            QTest::mouseRelease(window.m_chat->resizeHandle(), Qt::LeftButton, {}, QPoint(2 - 20, 60));
-            QCoreApplication::processEvents();
-            QCOMPARE(window.m_chat->width(), 400);
-            window.setChatOpen(false);
-            window.close();
-        }
-        MainWindow window{QString(), QString()};
-        window.resize(1680, 900);
-        window.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&window));
-        QVERIFY(!window.chatOpen() && !window.m_chat->isVisible());
-        QVERIFY(!window.m_chatToggle->isChecked() && !window.m_rail->chatButton()->isChecked());
-        window.m_chatToggle->click();
-        QCoreApplication::processEvents();
-        QCOMPARE(window.m_chat->width(), 400);
-        QCOMPARE(window.m_chat->geometry(), window.m_viewer->stageLayout().panel);
-    }
-
-    // Nothing in the conversation's panel widens it or scrolls it sideways,
-    // at its default width and at its narrowest, except Kerf's next steps:
-    // one row of chips that scrolls sideways, as a chip bar does, rather
-    // than wrap and take the conversation's height.
-    void conversationFitsItsPanel() {
-        QSettings().remove(QStringLiteral("workspace"));
-        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
-        MainWindow window{QString(), QString()};
-        // Wide enough that a wide picture leaves the conversation its own width.
-        window.resize(1680, 900);
-        window.setConnection(QStringLiteral("ready"));
-        window.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&window));
-        window.showNextSteps(QJsonArray{QJsonObject{{"label", "Add captions"}, {"request", "Caption the dialogue"}},
-                                        QJsonObject{{"label", "Duck the music"}, {"request", "Lower the music"}},
-                                        QJsonObject{{"label", "Tighten the opening"}, {"request", "Trim the opening"}},
-                                        QJsonObject{{"label", "Match the colour"}, {"request", "Match the shots"}}});
-        window.updateProposal(QJsonObject{{"status", "pending"}, {"proposalId", "p1"},
-                                          {"script", "trim v1b out -36f\nremove v1c\nadd title t2 at 00:00:12:00 text=\"A lower third that runs well past the column's edge\"\n"},
-                                          {"documentDiff", "-    clip v1b dur=5s\n+    clip v1b dur=3.5s\n+    title t2 text=\"A lower third that runs well past the column's edge\"\n"}});
-        window.m_chat->setProposalExpanded(true);
-        window.appendConversation(QStringLiteral("You"), QStringLiteral("Tighten the fisher close-up and drop the drone pass."));
-        window.appendConversation(QStringLiteral("Kerf"), QStringLiteral("Done: /Users/editor/Movies/Harbor/footage/fisher-close-up-take-three-final.mov is shorter now."));
-        QCoreApplication::processEvents();
-        ChatPanel *column = window.m_chat;
-        for (const int width : {ViewerWidget::kDefaultChatWidth, ViewerWidget::kMinChatWidth}) {
-            window.m_viewer->setChatWidth(width);
-            QCoreApplication::processEvents();
-            QVERIFY(column->isVisible());
-            QCOMPARE(column->width(), width);
-            // The chips: one line, a fixed row's height, the first at the
-            // panel's side padding; those past the edge fade under it.
-            const auto chips = window.m_chatNextSteps->findChildren<QPushButton *>(QStringLiteral("nextStep"));
-            QCOMPARE(chips.size(), 4);
-            QSet<int> lines;
-            for (QPushButton *chip : chips) {
-                lines.insert(chip->y());
-                QCOMPARE(chip->height(), ChatPanel::kChipHeight);
-            }
-            QCOMPARE(lines.size(), 1);
-            QCOMPARE(window.m_chatNextSteps->height(), ChatPanel::kChipRowHeight);
-            QCOMPARE(chips.constFirst()->x(), ChatPanel::kSidePadding);
-            QPushButton *last = chips.constLast();
-            QVERIFY(last->geometry().right() > window.m_chatNextSteps->width() - ChatPanel::kSidePadding);
-            auto *trailing = window.m_chatNextSteps->findChild<QWidget *>(QStringLiteral("chipFadeTrailing"));
-            auto *leading = window.m_chatNextSteps->findChild<QWidget *>(QStringLiteral("chipFadeLeading"));
-            QVERIFY(trailing && leading);
-            QTRY_VERIFY(trailing->isVisible());
-            QVERIFY(!leading->isVisible());
-            // Only chips that fit whole show: the trailing cover starts at the
-            // first that does not, opaque (the panel's surface), so no sliver
-            // of a cut chip shows beside the pager.
-            {
-                const int cover = trailing->x();
-                QVERIFY(cover <= column->chipsForward()->x() - 8);
-                bool hidden = false;
-                for (QPushButton *chip : chips) {
-                    QVERIFY2(chip->geometry().right() < cover || chip->x() >= cover,
-                             qPrintable(QStringLiteral("%1 at %2..%3, cover at %4").arg(chip->text()).arg(chip->x()).arg(chip->geometry().right()).arg(cover)));
-                    hidden = hidden || chip->x() >= cover;
-                }
-                QVERIFY(hidden);
-                QVERIFY(chips.constFirst()->geometry().right() < cover);
-                const QImage row = window.m_chatNextSteps->grab().toImage();
-                const QPoint inCover(cover + 2, trailing->y() + trailing->height() / 2);
-                QCOMPARE(row.pixelColor(inCover * row.devicePixelRatio()).rgb(), editorTheme().chatSurface.rgb());
-            }
-            // A wheel turned over the row scrolls it to its last chip, whole.
-            for (int turn = 0; turn < 10; ++turn) {
-                QWheelEvent wheel(QPointF(40, 20), window.m_chatNextSteps->mapToGlobal(QPointF(40, 20)), QPoint(), QPoint(0, -120),
-                                  Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
-                QCoreApplication::sendEvent(window.m_chatNextSteps, &wheel);
-            }
-            QCOMPARE(last->geometry().right(), window.m_chatNextSteps->width() - ChatPanel::kSidePadding - 1);
-            QTRY_VERIFY(!trailing->isVisible() && leading->isVisible());
-            for (QPushButton *chip : chips) QVERIFY(chip->geometry().right() < leading->width() || chip->x() >= leading->width());
-            for (int turn = 0; turn < 10; ++turn) {
-                QWheelEvent wheel(QPointF(40, 20), window.m_chatNextSteps->mapToGlobal(QPointF(40, 20)), QPoint(), QPoint(0, 120),
-                                  Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
-                QCoreApplication::sendEvent(window.m_chatNextSteps, &wheel);
-            }
-            QCOMPARE(chips.constFirst()->x(), ChatPanel::kSidePadding);
-            // Round pagers over the fades, as a chip bar's: forward while the
-            // row has more that way, back once it is scrolled; each pages it.
-            ChatIconButton *back = column->chipsBack();
-            ChatIconButton *forward = column->chipsForward();
-            QTRY_VERIFY(forward->isVisible());
-            QVERIFY(!back->isVisible());
-            QCOMPARE(forward->size(), QSize(ChatPanel::kChipPager, ChatPanel::kChipPager));
-            QVERIFY(forward->geometry().right() < window.m_chatNextSteps->width() - 4);
-            QCOMPARE(ChatPanel::kChipFadeWidth, 48);
-            forward->click();
-            QVERIFY(chips.constFirst()->x() < ChatPanel::kSidePadding);
-            QVERIFY(chips.constFirst()->x() >= ChatPanel::kSidePadding - ChatPanel::kChipPage);
-            QVERIFY(back->isVisible());
-            back->click();
-            QCOMPARE(chips.constFirst()->x(), ChatPanel::kSidePadding);
-            QVERIFY(!back->isVisible() && forward->isVisible());
-            // The list scrolls with its scroll bar hidden (mockup-spec 4.5):
-            // the bar takes no width, under the pointer or not, so the rows
-            // keep the panel's whole width.
-            {
-                QScrollBar *listBar = window.m_chatScroll->verticalScrollBar();
-                QVERIFY(listBar->maximum() > 0);
-                QCOMPARE(listBar->value(), listBar->maximum());
-                QCOMPARE(listBar->isVisible() ? listBar->width() : 0, 0);
-                QEnterEvent enter(QPointF(20, 20), QPointF(20, 20), column->mapToGlobal(QPointF(20, 20)));
-                QCoreApplication::sendEvent(column, &enter);
-                QCoreApplication::processEvents();
-                QCOMPARE(listBar->isVisible() ? listBar->width() : 0, 0);
-                QEvent leave(QEvent::Leave);
-                QCoreApplication::sendEvent(column, &leave);
-            }
-            // Nothing asks for more width than the panel has; a long path wraps.
-            QVERIFY(window.m_chatScroll->widget()->minimumSizeHint().width() <= window.m_chatScroll->viewport()->width());
-            QCOMPARE(window.m_chatScroll->widget()->width(), window.m_chatScroll->viewport()->width());
-            QVERIFY(window.m_chatComposer->minimumSizeHint().width() <= window.m_chatComposer->width());
-            QVERIFY(!window.m_proposalDiff->horizontalScrollBar()->isVisible());
-            for (const CommentRow *row : column->rows())
-                QVERIFY(row->body()->mapTo(column, QPoint(row->body()->width(), 0)).x() <= column->width() - ChatPanel::kSidePadding);
-            // The proposal's buttons and the composer's Send sit inside it.
-            window.m_chatInput->setPlainText(QStringLiteral("Also duck the music"));
-            QCoreApplication::processEvents();
-            for (QWidget *control : std::initializer_list<QWidget *>{window.m_acceptButton, window.m_rejectButton, window.m_sendButton}) {
-                QVERIFY(control->isVisible());
-                QVERIFY(control->mapTo(column, QPoint(control->width(), 0)).x() <= column->width() - ChatPanel::kSidePadding);
-            }
-        }
-    }
-
-    void nextStepsAreButtonsThatAskForThem() {
-        MainWindow window{QString(), QString()};
-        window.setConnection(QStringLiteral("ready"));
-        // The last request was about clip c1.
-        const QJsonObject focus{{"scope", "clip"}, {"clip", "c1"}, {"fromFrame", 0}, {"toFrame", 24}};
-        window.m_lastFocus = focus;
-        window.m_lastFocusLabel = QStringLiteral("clip c1");
-        window.handleEvent(QJsonObject{{"type", "agent_next"}, {"steps", QJsonArray{
-            QJsonObject{{"label", "Stronger glow"}, {"request", "Make the glow stronger."}},
-            QJsonObject{{"label", "Wipe out"}, {"request", "Use a linear wipe into the next shot."}}}}});
-        const auto chips = window.m_nextSteps->findChildren<QPushButton *>(QStringLiteral("nextStep"));
-        QCOMPARE(chips.size(), 2);
-        QCOMPARE(chips.at(0)->text(), QStringLiteral("Stronger glow"));
-        // The conversation, open beside the picture, shows them; the
-        // timeline's bar shows them only while it is closed.
-        QVERIFY(window.chatOpen());
-        QVERIFY(window.m_aiBar->isHidden());
-        window.setChatOpen(false);
-        QVERIFY(!window.m_aiBar->isHidden());
-        QCOMPARE(window.m_aiBarText->text(), QStringLiteral("Next with Kerf"));
-        QCOMPARE(window.m_chatNextSteps->findChildren<QPushButton *>(QStringLiteral("nextStep")).size(), 2);
-        // Pressing one asks for it, about what the last request was about.
-        chips.at(1)->click();
-        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("agent"));
-        QCOMPARE(window.m_lastCommand.value("text").toString(), QStringLiteral("Use a linear wipe into the next shot."));
-        QCOMPARE(window.m_lastCommand.value("focus").toObject(), focus);
-    }
-
-    // Kerf's conversation, in its panel beside the picture, scrolls as a
-    // comments panel does: the rows are cut cleanly at the edge under the
-    // header (no cover, no fade, no blank band) and a hairline shows there
-    // while the list is scrolled away from its top. The pinned proposal
-    // heads the list and scrolls away with it; while its pills are out of
-    // view, a compact bar under the header keeps its summary, Reject and
-    // Accept in reach. Its script and diff are as tall as their lines, up
-    // to ten.
-    void conversationScrollsUnderACleanEdge() {
-        QSettings().remove(QStringLiteral("workspace"));
-        const auto restore = qScopeGuard([] {
-            QSettings().remove(QStringLiteral("workspace"));
-        });
-        {
-            const EditorTheme &theme = editorTheme();
-            MainWindow window{QString(), QString()};
-            window.setConnection(QStringLiteral("ready"));
-            QJsonObject proposal{{"status", "pending"}, {"proposalId", "p1"}, {"script", "trim v1b out -36f\nremove v1c\n"},
-                                 {"documentDiff", "-    clip v1b dur=5s\n+    clip v1b dur=3.5s\n-    clip v1c\n"}};
-            QJsonObject snapshot = showcaseSnapshot(3, QStringLiteral("clean"));
-            QJsonObject timeline = snapshot.value(QStringLiteral("timeline")).toObject();
-            timeline.insert(QStringLiteral("width"), 1080);
-            timeline.insert(QStringLiteral("height"), 1920);
-            snapshot.insert(QStringLiteral("timeline"), timeline);
-            snapshot.insert(QStringLiteral("pendingProposal"), proposal);
-            window.applySnapshot(snapshot);
-            window.resize(1440, 900);
-            window.show();
-            QVERIFY(QTest::qWaitForWindowExposed(&window));
-            window.m_errorBanner->hide();
-            for (int turn = 0; turn < 4; ++turn) {
-                window.appendConversation(QStringLiteral("You"), QStringLiteral("Tighten the fisher close-up and drop the drone pass, please."));
-                window.appendConversation(QStringLiteral("Kerf"), QStringLiteral("I trimmed the close-up by 1.5 seconds and removed the drone pass."));
-            }
-            QCoreApplication::processEvents();
-            ChatPanel *chat = window.m_chat;
-            QScrollArea *scroll = window.m_chatScroll;
-            QScrollBar *bar = scroll->verticalScrollBar();
-            QWidget *content = scroll->widget();
-            QFrame *sticky = chat->proposalBar();
-            // The proposal heads the list, 16 points under its top, as a
-            // pinned comment heads the comments.
-            QCOMPARE(window.m_proposalBox->parentWidget(), content);
-            QCOMPARE(window.m_proposalBox->y(), 16);
-            // Followed to the latest, the proposal has scrolled away: the
-            // compact bar holds its summary and pills, under the header.
-            QTRY_VERIFY(bar->maximum() > 0);
-            QTRY_COMPARE(bar->value(), bar->maximum());
-            verifyListEnd(chat);
-            QVERIFY(sticky->isVisible());
-            QCOMPARE(sticky->y(), ChatPanel::kHeaderHeight);
-            // What it does, without the count, where it fits whole; else only
-            // the count, whole: never a list cut mid-way (its tip has the
-            // summary and the count).
-            QCOMPARE(chat->proposalBarSummary()->toolTip(), window.m_proposalSummary->text());
-            QCOMPARE(chat->proposalBarSummary()->toolTip(), QStringLiteral("Trim, remove · 2 changes"));
-            QVERIFY2(chat->proposalBarSummary()->text() == QStringLiteral("Trim, remove") ||
-                         chat->proposalBarSummary()->text() == QStringLiteral("2 changes"),
-                     qPrintable(chat->proposalBarSummary()->text()));
-            QCOMPARE(chat->width(), ViewerWidget::kDefaultChatWidth);
-            QCOMPARE(chat->proposalBarSummary()->text(), QStringLiteral("Trim, remove"));
-            QVERIFY(QFontMetrics(chat->proposalBarSummary()->font()).horizontalAdvance(chat->proposalBarSummary()->text()) <=
-                    chat->proposalBarSummary()->contentsRect().width());
-            for (QPushButton *pill : {chat->barRejectButton(), chat->barAcceptButton()}) {
-                QVERIFY(pill->isVisible() && pill->isEnabled());
-                QVERIFY(sticky->rect().contains(pill->geometry()));
-            }
-            QVERIFY(chat->barRejectButton()->geometry().right() < chat->barAcceptButton()->geometry().left());
-            // They follow the proposal's own pills.
-            window.m_acceptButton->setEnabled(false);
-            QVERIFY(!chat->barAcceptButton()->isEnabled());
-            window.m_acceptButton->setEnabled(true);
-            QVERIFY(chat->barAcceptButton()->isEnabled());
-            // The hairline under the bar, and the rows cut cleanly under it.
-            QImage image = window.grab().toImage();
-            qreal ratio = image.devicePixelRatio();
-            const QPoint edge = chat->listEdge()->mapTo(&window, QPoint(chat->width() / 2, 0));
-            QCOMPARE(image.pixelColor(edge * ratio).rgb(), theme.divider.rgb());
-
-            // Scrolled so a comment of the reader's is cut 10 points into
-            // its avatar: the avatar runs right up to the view's edge.
-            CommentRow *message = nullptr;
-            for (CommentRow *row : chat->rows())
-                if (row->kind() == CommentRow::Kind::User && row->y() > 200) {
-                    message = row;
-                    break;
-                }
-            QVERIFY(message);
-            const int into = message->avatar()->mapTo(content, QPoint()).y() + 10;
-            bar->setValue(into);
-            QCoreApplication::processEvents();
-            QCOMPARE(bar->value(), into);
-            QVERIFY(sticky->isVisible());
-            image = window.grab().toImage();
-            ratio = image.devicePixelRatio();
-            const QPoint viewTop = scroll->viewport()->mapTo(&window, QPoint());
-            const QPoint inAvatar(message->avatar()->mapTo(&window, QPoint(5, 0)).x(), viewTop.y());
-            QCOMPARE(image.pixelColor(inAvatar * ratio).rgb(), theme.chatAvatarUser.rgb());
-            QCOMPARE(image.pixelColor((inAvatar - QPoint(0, 1)) * ratio).rgb(), theme.divider.rgb());
-
-            // At the top: the proposal whole, no bar, no hairline.
-            bar->setValue(0);
-            QCoreApplication::processEvents();
-            QVERIFY(!sticky->isVisible());
-            QVERIFY(window.m_acceptButton->isVisible());
-            QCOMPARE(window.m_proposalBox->mapTo(chat, QPoint()).y(), ChatPanel::kHeaderHeight + 1 + 16);
-            QVERIFY(!chat->listEdge()->property("scrolled").toBool());
-            image = window.grab().toImage();
-            QCOMPARE(image.pixelColor(chat->listEdge()->mapTo(&window, QPoint(chat->width() / 2, 0)) * ratio).rgb(), theme.chatSurface.rgb());
-            // Just past its head ("Pinned by Kerf", which says what the pills
-            // decide), the bar comes, though the pills are still in view;
-            // with its head in view, it goes.
-            QWidget *head = window.m_proposalBox->findChild<QWidget *>(QStringLiteral("proposalPinLine"));
-            QVERIFY(head);
-            const int headBottom = head->mapTo(content, QPoint(0, head->height())).y();
-            bar->setValue(headBottom + 1);
-            QCoreApplication::processEvents();
-            QVERIFY(sticky->isVisible());
-            QVERIFY(window.m_acceptButton->mapTo(content, QPoint()).y() > bar->value());
-            bar->setValue(headBottom);
-            QCoreApplication::processEvents();
-            QVERIFY(!sticky->isVisible());
-            bar->setValue(0);
-            QCoreApplication::processEvents();
-
-            // The script, opened: as tall as its lines, no room left under its
-            // last line, and no scroll bar.
-            QTextEdit *diff = window.m_proposalDiff;
-            QVERIFY(!diff->isVisible());
-            chat->proposalExpander()->click();
-            QCoreApplication::processEvents();
-            QVERIFY(diff->isVisible());
-            const int line = diff->fontMetrics().lineSpacing();
-            const qreal lines = diff->document()->size().height();
-            QVERIFY2(diff->viewport()->height() - lines < line,
-                     qPrintable(QStringLiteral("%1 px for %2 px of lines").arg(diff->viewport()->height()).arg(lines)));
-            QVERIFY(diff->viewport()->height() >= lines - 1);
-            QCOMPARE(diff->verticalScrollBar()->maximum(), 0);
-            // A long one stops at ten lines at most, and scrolls.
-            QString longScript;
-            for (int index = 0; index < 40; ++index) longScript += QStringLiteral("trim v%1 out -12f\n").arg(index);
-            proposal.insert(QStringLiteral("script"), longScript);
-            snapshot.insert(QStringLiteral("pendingProposal"), proposal);
-            snapshot.insert(QStringLiteral("revision"), 4);
-            window.applySnapshot(snapshot);
-            QCoreApplication::processEvents();
-            QVERIFY(diff->isVisible());
-            QVERIFY(diff->viewport()->height() <= ChatPanel::kProposalDiffLines * line + 2 * diff->document()->documentMargin() + 1);
-            QVERIFY(diff->viewport()->height() >= 2 * line);
-            QVERIFY(diff->verticalScrollBar()->maximum() > 0);
-            chat->proposalExpander()->click();
-            QCoreApplication::processEvents();
-
-            // The panel's corners are round: the stage shows past them.
-            image = window.grab().toImage();
-            const QPoint corner = chat->mapTo(&window, QPoint(1, 1));
-            QCOMPARE(image.pixelColor(corner * ratio).rgb(), theme.viewerSurround.rgb());
-            const QPoint inside = chat->mapTo(&window, QPoint(ChatPanel::kRadius, 2));
-            QCOMPARE(image.pixelColor(inside * ratio).rgb(), theme.chatSurface.rgb());
-            // The bar's Accept is the proposal's.
-            bar->setValue(bar->maximum());
-            QCoreApplication::processEvents();
-            QVERIFY(sticky->isVisible());
-            chat->barAcceptButton()->click();
-            QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("accept"));
-        }
-    }
-
-    void savedOwnKeysKeepTheOwnKeyConnection() {
-        QSettings settings;
-        const QVariant connection = settings.value(QStringLiteral("agent/connection"));
-        const QVariant key = settings.value(QStringLiteral("agent/anthropic/apiKey"));
-        settings.remove(QStringLiteral("agent/connection"));
-        settings.setValue(QStringLiteral("agent/anthropic/apiKey"), QStringLiteral("sk-ant-saved"));
-        {
-            MainWindow window{QString(), QString()};
-            QVERIFY(window.m_ownKeyRadio->isChecked());
-        }
-        settings.setValue(QStringLiteral("agent/anthropic/apiKey"), QString());
-        settings.remove(QStringLiteral("agent/connection"));
-        if (qEnvironmentVariableIsEmpty("ANTHROPIC_API_KEY") && qEnvironmentVariableIsEmpty("OPENAI_API_KEY")) {
-            settings.setValue(QStringLiteral("agent/openai/apiKey"), QString());
-            MainWindow window{QString(), QString()};
-            QVERIFY(window.m_cloudRadio->isChecked());
-        }
-        settings.setValue(QStringLiteral("agent/connection"), QStringLiteral("cloud"));
-        settings.setValue(QStringLiteral("agent/anthropic/apiKey"), QStringLiteral("sk-ant-saved"));
-        {
-            // An explicit choice wins over a saved key.
-            MainWindow window{QString(), QString()};
-            QVERIFY(window.m_cloudRadio->isChecked());
-        }
-        if (connection.isValid()) settings.setValue(QStringLiteral("agent/connection"), connection);
-        else settings.remove(QStringLiteral("agent/connection"));
-        settings.setValue(QStringLiteral("agent/anthropic/apiKey"), key);
-    }
-
-    void kerfCloudIsTheDefaultConnectionAndReflectsTheAccount() {
-        MainWindow window{QString(), QString()};
-        {
-            const QSignalBlocker cloudBlock(window.m_cloudRadio);
-            window.m_cloudRadio->setChecked(true);
-        }
-        window.setConnection(QStringLiteral("ready"));
-        QVERIFY(window.m_advancedSettings->isHidden());
-        // Without a service, Kerf Cloud says so and points at Advanced.
-        window.handleEvent(QJsonObject{{"type", "cloud"}, {"access", "unavailable"}});
-        QVERIFY(window.m_commands->reason(QStringLiteral("ai.ask")).contains(QStringLiteral("Settings → Advanced")));
-        QVERIFY(window.m_cloudStatus->text().contains(QStringLiteral("isn't available yet")));
-        QVERIFY(window.m_cloudSignIn->isHidden());
-        QCOMPARE(window.agentSettingsPayload().value(QStringLiteral("cloud")).toBool(), true);
-        QVERIFY(!window.agentSettingsPayload().contains(QStringLiteral("apiKey")));
-
-        window.handleEvent(QJsonObject{{"type", "cloud"}, {"access", "signedOut"}});
-        QCOMPARE(window.m_commands->reason(QStringLiteral("ai.ask")), QStringLiteral("Sign in to Kerf Cloud in Settings"));
-        QVERIFY(!window.m_cloudSignIn->isHidden());
-        window.m_cloudToken->setText(QStringLiteral("tok-1"));
-        window.m_cloudSignIn->click();
-        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("cloud_sign_in"));
-        QCOMPARE(window.m_lastCommand.value("token").toString(), QStringLiteral("tok-1"));
-
-        window.handleEvent(QJsonObject{{"type", "cloud"}, {"access", "ready"}, {"account", QJsonObject{
-            {"email", "lim@example.com"}, {"plan", "Pro"}, {"ai", true}, {"credits", 1200}}}});
-        QVERIFY(window.m_cloudStatus->text().contains(QStringLiteral("lim@example.com")));
-        QVERIFY(window.m_cloudStatus->text().contains(QStringLiteral("1200 requests left")));
-        QCOMPARE(window.m_statusAccount->text(), QStringLiteral("Kerf Cloud · Pro"));
-        if (const QString shot = qEnvironmentVariable("KERF_QT_UI_SCREENSHOT"); !shot.isEmpty()) {
-            window.m_preferences->show();
-            QCoreApplication::processEvents();
-            QVERIFY(window.m_preferences->grab().save(shot + QStringLiteral(".settings.png")));
-            window.m_preferences->hide();
-        }
-        QVERIFY(window.m_cloudSignIn->isHidden());
-        QCOMPARE(window.m_commands->reason(QStringLiteral("ai.ask")), QString());
-        window.handleEvent(QJsonObject{{"type", "cloud"}, {"access", "outOfCredits"}, {"account", QJsonObject{
-            {"email", "lim@example.com"}, {"plan", "Pro"}, {"ai", true}, {"credits", 0}}}});
-        QCOMPARE(window.m_commands->reason(QStringLiteral("ai.ask")), QStringLiteral("You've used this period's Kerf Cloud requests"));
-        window.m_cloudSignOut->click();
-        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("cloud_sign_out"));
-        // A key of one's own needs the key.
-        {
-            const QSignalBlocker ownBlock(window.m_ownKeyRadio);
-            window.m_ownKeyRadio->setChecked(true);
-        }
-        window.m_anthropicActiveRadio->setChecked(true);
-        window.m_anthropicKey->clear();
-        window.updateCommandStates();
-        if (qEnvironmentVariableIsEmpty("ANTHROPIC_API_KEY"))
-            QCOMPARE(window.m_commands->reason(QStringLiteral("ai.ask")), QStringLiteral("Add your API key in Settings → Advanced"));
-    }
-
+    // The Ask popover (#mAsk): 380 wide, the title, the Scope ghost with the
+    // clip, the 56 pt field, a primary Ask; it sends the agent request with
+    // the selection as focus, kept as a comment on the clip's range.
     void askingCutSendsTheSelectionAsFocus() {
         MainWindow window{QString(), QString()};
+        QList<QJsonObject> sent;
+        window.m_bus->setSender([&](const QJsonObject &command) {
+            sent << command;
+            window.m_lastCommand = command;
+            return true;
+        });
         window.show();
         window.setConnection(QStringLiteral("ready"));
         window.applySnapshot(QJsonObject{{"revision", 3}, {"duration", 4}, {"timeline", QJsonObject{
@@ -1002,27 +1309,18 @@ private slots:
         window.updateCommandStates();
         window.m_commands->action(QStringLiteral("ai.ask"))->trigger();
         QTRY_VERIFY(window.m_askPrompt->isVisible());
-        // Its field shows its focus as every field does: the ring around
-        // its 5px bezel, and its edge in the accent.
-        {
-            QTextEdit *input = window.m_askPrompt->m_input;
-            QTRY_VERIFY(input->hasFocus());
-            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-            const auto halos = window.m_askPrompt->findChildren<QWidget *>(QStringLiteral("focusHalo"));
-            QCOMPARE(halos.size(), 1);
-            QCOMPARE(halos.constFirst()->geometry(), input->geometry().adjusted(-3, -3, 3, 3));
-            QCOMPARE(input->property("bezelRadius").toInt(), 5);
-            const QImage prompt = window.m_askPrompt->grab().toImage();
-            QCOMPARE(prompt.pixelColor(QPoint(input->x(), input->geometry().center().y()) * prompt.devicePixelRatio()).rgb(),
-                     editorTheme().focusRing.rgb());
-        }
-        QVERIFY(window.m_askPrompt->m_title->text().contains(QStringLiteral("Opening")));
-        QCOMPARE(window.m_askPrompt->scope(), QStringLiteral("clip"));
-        window.m_askPrompt->m_input->setPlainText(QStringLiteral("Tighten the start"));
-        if (const QString shot = qEnvironmentVariable("KERF_QT_UI_SCREENSHOT"); !shot.isEmpty())
-            QVERIFY(window.m_askPrompt->grab().save(shot + QStringLiteral(".ask.png")));
-        QTest::keyClick(window.m_askPrompt->m_input, Qt::Key_Return);
-        QVERIFY(!window.m_askPrompt->isVisible());
+        AskPrompt *ask = window.m_askPrompt;
+        QCOMPARE(ask->cardRect().width(), AskPrompt::kWidth);
+        QVERIFY(ask->titleLabel()->text().startsWith(QStringLiteral("Sequence at ")));
+        QCOMPARE(ask->scope(), QStringLiteral("clip"));
+        QVERIFY(ask->scopeButton()->text().startsWith(QStringLiteral("This clip · ")));
+        QVERIFY(ask->scopeButton()->text().contains(QStringLiteral("Opening")));
+        QCOMPARE(ask->input()->placeholderText(), QStringLiteral("Tell Kerf what to change"));
+        QCOMPARE(ask->input()->parentWidget()->height(), 56);
+        QCOMPARE(ask->askButton()->kind(), ui::Button::Kind::Primary);
+        ask->input()->setPlainText(QStringLiteral("Tighten the start"));
+        QTest::keyClick(ask->input(), Qt::Key_Return);
+        QVERIFY(!ask->isVisible());
         QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("agent"));
         QCOMPARE(window.m_lastCommand.value("text").toString(), QStringLiteral("Tighten the start"));
         const QJsonObject focus = window.m_lastCommand.value("focus").toObject();
@@ -1030,614 +1328,54 @@ private slots:
         QCOMPARE(focus.value("clip").toString(), QStringLiteral("c1"));
         QCOMPARE(focus.value("fromFrame").toInt(), 24);
         QCOMPARE(focus.value("toFrame").toInt(), 72);
-        // While Kerf works with its conversation closed, the timeline says
-        // so and offers Stop.
+        const QJsonObject comment = window.m_lastCommand.value("comment").toObject();
+        QCOMPARE(comment.value("at").toDouble(), 1.0);
+        QCOMPARE(comment.value("duration").toDouble(), 2.0);
+        // While Kerf works with the panel closed, the timeline says so and offers Stop.
         window.setChatOpen(false);
         window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
         QVERIFY(window.m_aiBar->isVisible());
-        QVERIFY(window.m_aiBarText->text().contains(QStringLiteral("Opening")));
         QVERIFY(window.m_commands->isEnabled(QStringLiteral("ai.stop")));
-        QCOMPARE(window.m_commands->reason(QStringLiteral("ai.ask")), QStringLiteral("Kerf is working on a request"));
     }
 
-    void proposalShowsTheScriptAndDocumentDiff() {
-        MainWindow window{QString(), QString()};
-        window.setConnection(QStringLiteral("ready"));
-        QJsonObject proposal{{"status", "pending"}, {"proposalId", "proposal-1"},
-                             {"script", "trim c1 out -24f\n"},
-                             {"documentDiff", "--- before\n+++ after\n@@ -1,1 +1,1 @@\n-    clip c1 dur=00:00:04:00\n+    clip c1 dur=00:00:03:00\n"}};
-        window.updateProposal(proposal);
-        const auto text = window.m_proposalDiff->toPlainText();
-        QVERIFY(text.contains(QStringLiteral("trim c1 out -24f")));
-        QVERIFY(text.contains(QStringLiteral("+    clip c1 dur=00:00:03:00")));
-        // Counted from its script's changes, as its rows list them (a narrow
-        // panel leaves the count to the rows; the whole summary is its tip).
-        QCOMPARE(window.m_chat->proposalBarSummary()->toolTip(), QStringLiteral("Trim · 1 change"));
-        QVERIFY(window.m_proposalSummary->text() == QStringLiteral("Trim · 1 change") ||
-                (window.m_chat->width() < ChatPanel::kNarrowProposal && window.m_proposalSummary->text() == QStringLiteral("Trim")));
-        QCOMPARE(window.m_chat->proposalChangeRows().size(), 1);
-        QCOMPARE(window.m_chat->proposalChangeRows().constFirst()->change().description, QStringLiteral("Trim c1"));
-        QCOMPARE(window.m_chat->proposalChangeRows().constFirst()->change().detail, QStringLiteral("end \u22121 s"));
-        QVERIFY(window.m_acceptButton->isEnabled());
-        proposal.insert(QStringLiteral("freshness"), QStringLiteral("stale"));
-        window.updateProposal(proposal);
-        QVERIFY(!window.m_acceptButton->isEnabled());
-        QVERIFY(window.m_proposalDiff->toPlainText().contains(QStringLiteral("out of date")));
-    }
-
-    // The conversation scrolled to its latest, as a comments panel rests:
-    // the latest comment's foot exactly 16 points over the chips or the
-    // composer; at the top the rows are cut cleanly at the view's edge, right
-    // under the header (or the compact proposal bar) and its hairline, with
-    // no cover, fade or blank band; the hairline shows while the list is
-    // scrolled away from its top.
-    // The list scrolls freely and its edges cut rows cleanly: where a cut
-    // would leave only a sliver of a line (its ascenders over the bottom
-    // edge, its descenders under the top) or of a symbol, the panel's
-    // surface covers it.
-    // A file name in a comment wraps as one word: never "fisher-" at the
-    // end of a line and "close.mov." on the next.
-    void chatBodyKeepsFileNamesWhole() {
-        const QString text = QStringLiteral("I raised the exposure and the temperature on fisher-close.mov.");
-        ChatPanel chat;
-        CommentRow *row = chat.addComment(CommentRow::Kind::Kerf, text);
-        chat.resize(ViewerWidget::kDefaultChatWidth, 520);
-        chat.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&chat));
-        QLabel *body = row->body();
-        body->ensurePolished();
-        // What the row copies is the text as written.
-        QCOMPARE(row->text(), text);
-        const auto linesAt = [body](const QString &html, int width) {
-            QTextDocument document;
-            document.setDocumentMargin(0);
-            document.setDefaultFont(body->font());
-            document.setHtml(html);
-            document.setTextWidth(width);
-            document.size(); // laid out
-            QStringList lines;
-            for (QTextBlock block = document.begin(); block.isValid(); block = block.next())
-                for (int index = 0; index < block.layout()->lineCount(); ++index) {
-                    const QTextLine line = block.layout()->lineAt(index);
-                    lines << block.text().mid(line.textStart(), line.textLength()).trimmed();
-                }
-            return lines;
-        };
-        int cases = 0;
-        // From the narrowest width the name fits on a line by itself to the
-        // row's own.
-        const int name = int(std::ceil(QFontMetricsF(body->font()).horizontalAdvance(QStringLiteral("fisher-close.mov.")))) + 2;
-        for (int width = name; width <= body->contentsRect().width(); ++width) {
-            // Only the widths where the text as written would break at the hyphen.
-            const QStringList plain = linesAt(text.toHtmlEscaped(), width);
-            if (std::none_of(plain.begin(), plain.end(), [](const QString &line) { return line.endsWith(QLatin1Char('-')); })) continue;
-            ++cases;
-            const QStringList shown = linesAt(body->text(), width);
-            for (const QString &line : shown)
-                QVERIFY2(!line.endsWith(QLatin1Char('-')), qPrintable(QStringLiteral("at %1: “%2”").arg(width).arg(line)));
-            QVERIFY2(std::any_of(shown.begin(), shown.end(), [](const QString &line) { return line.contains(QStringLiteral("close.mov")) && line.contains(QStringLiteral("fisher")); }),
-                     qPrintable(QStringLiteral("at %1: %2").arg(width).arg(shown.join(QStringLiteral(" | ")))));
-        }
-        QVERIFY2(cases > 0, "no width breaks the name as written");
-        // Selected and copied with ⌘C, the text lands on the clipboard as
-        // written, without the invisible break hints.
-        QApplication::clipboard()->clear();
-        QTextDocument shown;
-        shown.setHtml(body->text());
-        body->setSelection(0, int(shown.characterCount()) - 1);
-        QVERIFY(body->hasSelectedText());
-        QVERIFY(body->selectedText().contains(QChar(0x2060)));
-        QKeyEvent override(QEvent::ShortcutOverride, Qt::Key_C, Qt::ControlModifier);
-        QCoreApplication::sendEvent(body, &override);
-        QVERIFY(override.isAccepted());
-        QKeyEvent copy(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier);
-        QCoreApplication::sendEvent(body, &copy);
-        QCOMPARE(QApplication::clipboard()->text(), text);
-    }
-
-    void chatEdgesLeaveNoSlivers() {
-        ChatPanel chat;
-        for (int index = 0; index < 14; ++index)
-            chat.addComment(index % 2 ? CommentRow::Kind::Kerf : CommentRow::Kind::User,
-                            QStringLiteral("Comment %1: tighten the cut after the drone pass and warm the dusk shots a little.").arg(index));
-        chat.resize(300, 520);
-        chat.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&chat));
-        QScrollBar *bar = chat.scroll()->verticalScrollBar();
-        QTRY_VERIFY(bar->maximum() > 200);
-        QWidget *viewport = chat.scroll()->viewport();
-        int covered = 0;
-        for (int value = 0; value <= bar->maximum(); value += 3) {
-            bar->setValue(value);
-            QCoreApplication::processEvents();
-            const QList<QRect> strips = chat.edgeCoverStrips();
-            QRegion cover;
-            for (const QRect &strip : strips) cover += strip;
-            for (QLabel *label : chat.scroll()->widget()->findChildren<QLabel *>()) {
-                if (!label->isVisibleTo(chat.scroll()->widget()) || label->text().isEmpty()) continue;
-                const QList<TextLine> lines = labelTextLines(label);
-                QVERIFY(!lines.isEmpty());
-                // The lines lie inside the label, their capitals' tops in them.
-                QVERIFY2(label->rect().adjusted(0, -1, 0, 1).contains(lines.constFirst().rect) &&
-                             label->rect().adjusted(0, -1, 0, 1).contains(lines.constLast().rect),
-                         qPrintable(label->text().left(30)));
-                for (const TextLine &text : lines) {
-                    QVERIFY(text.capTop > text.rect.top() && text.capTop < text.rect.top() + text.rect.height() / 2);
-                    const QRect line = text.rect.translated(label->mapTo(viewport, QPoint()));
-                    const int capTop = text.capTop + label->mapTo(viewport, QPoint()).y();
-                    // Under the top edge: a line whose baseline shows shows
-                    // its capitals' tops too, or none of it.
-                    if (line.top() < 0 && line.bottom() >= 0) {
-                        const QRegion shownPart = QRegion(QRect(line.left(), 0, line.width(), line.bottom() + 1)).subtracted(cover);
-                        if (capTop < 0)
-                            QVERIFY2(shownPart.isEmpty(), qPrintable(QStringLiteral("at %1: a line of “%2” cut through its capitals").arg(value).arg(label->text().left(20))));
-                        else
-                            QVERIFY2(shownPart == QRegion(QRect(line.left(), 0, line.width(), line.bottom() + 1)),
-                                     qPrintable(QStringLiteral("at %1: a line of “%2” with its capitals covered").arg(value).arg(label->text().left(20))));
-                    }
-                    const int shown = viewport->height() - line.top();
-                    if (shown > 0 && shown < ChatPanel::kSliverLine * line.height())
-                        QVERIFY2(QRegion(QRect(line.left(), line.top(), line.width(), shown)).subtracted(cover).isEmpty(),
-                                 qPrintable(QStringLiteral("at %1: %2 px of a line of “%3” left").arg(value).arg(shown).arg(label->text().left(20))));
-                    const int over = line.bottom() + 1;
-                    if (line.top() < 0 && over > 0 && over < ChatPanel::kSliverLine * line.height())
-                        QVERIFY2(QRegion(QRect(line.left(), 0, line.width(), over)).subtracted(cover).isEmpty(),
-                                 qPrintable(QStringLiteral("at %1: %2 px of a line's foot left").arg(value).arg(over)));
-                }
-            }
-            // A text button's words ("Copy", "Ask again", "2 steps") by the
-            // same rule as a label's line: under the top edge, shown with
-            // their capitals' tops or not at all.
-            int buttons = 0;
-            for (QAbstractButton *button : chat.scroll()->widget()->findChildren<QAbstractButton *>()) {
-                if (!button->isVisibleTo(chat.scroll()->widget()) || button->text().isEmpty() || !button->findChildren<QWidget *>().isEmpty())
-                    continue;
-                ++buttons;
-                const TextLine text = buttonTextLine(button);
-                QVERIFY2(button->rect().adjusted(0, -1, 0, 1).contains(text.rect), qPrintable(button->text()));
-                QVERIFY(text.capTop > text.rect.top() && text.capTop < text.rect.top() + text.rect.height() / 2);
-                const QPoint origin = button->mapTo(viewport, QPoint());
-                const QRect line = text.rect.translated(origin);
-                const int capTop = text.capTop + origin.y();
-                if (line.top() < 0 && line.bottom() >= 0) {
-                    const QRect inView(line.left(), 0, line.width(), line.bottom() + 1);
-                    const QRegion shownPart = QRegion(inView).subtracted(cover);
-                    if (capTop < 0)
-                        QVERIFY2(shownPart.isEmpty(), qPrintable(QStringLiteral("at %1: “%2” cut through its capitals").arg(value).arg(button->text())));
-                    else
-                        QVERIFY2(shownPart == QRegion(inView), qPrintable(QStringLiteral("at %1: “%2” with its capitals covered").arg(value).arg(button->text())));
-                }
-            }
-            QVERIFY(buttons > 0);
-            // An avatar's arc under the top edge or over the bottom one.
-            for (ChatAvatar *avatar : chat.scroll()->widget()->findChildren<ChatAvatar *>()) {
-                if (!avatar->isVisibleTo(chat.scroll()->widget())) continue;
-                const QRect box(avatar->mapTo(viewport, QPoint()), avatar->size());
-                const double least = std::max<double>(ChatPanel::kSliver, ChatPanel::kSliverAvatar * box.height());
-                if (box.top() < 0 && box.bottom() >= 0 && box.bottom() + 1 < least)
-                    QVERIFY2(QRegion(QRect(box.left(), 0, box.width(), box.bottom() + 1)).subtracted(cover).isEmpty(), qPrintable(QString::number(value)));
-                const int shown = viewport->height() - box.top();
-                if (shown > 0 && box.bottom() >= viewport->height() && shown < least)
-                    QVERIFY2(QRegion(QRect(box.left(), box.top(), box.width(), shown)).subtracted(cover).isEmpty(), qPrintable(QString::number(value)));
-            }
-            // A line half in view or more over the bottom edge is never
-            // covered; under the top edge, no strip is taller than a line.
-            for (const QRect &strip : strips) {
-                if (strip.top() > 0) QVERIFY(strip.height() <= std::max(ChatPanel::kSliverAvatar * ChatPanel::kAvatar, 0.5 * 24));
-                else QVERIFY(strip.height() < 24);
-            }
-            if (!strips.isEmpty() && covered < 3) {
-                // The cover is the panel's own surface, solid.
-                ++covered;
-                const QImage image = chat.grab().toImage();
-                const QRect strip = strips.first().translated(viewport->mapTo(&chat, QPoint()));
-                if (strip.width() > 4 && strip.height() >= 2)
-                    QCOMPARE(image.pixelColor(QPoint(strip.center().x(), strip.top()) * image.devicePixelRatio()).rgb(), editorTheme().chatSurface.rgb());
-            }
-        }
-        QVERIFY2(covered > 0, "some scroll position cuts a line to a sliver");
-    }
-
-    // The conversation's states in the 9:16 stage, in both appearances:
-    // the welcome before the first message, a long conversation with Kerf
-    // streaming its reply, a pending proposal pinned at the top of the list
-    // with its Accept and Reject pills, and, scrolled away under a longer
-    // conversation, the compact bar that keeps them in reach. With
-    // KERF_SCREENSHOT_DIR set, each
-    // is saved as editor-9x16-<state>-<scheme>.png.
-    void conversationRendersItsStates() {
-        QSettings().remove(QStringLiteral("workspace"));
+    // With KERF_SCREENSHOT_DIR set, the panel's states are saved: the seed
+    // at the mockup's start, guest mode, a filter, and Kerf drafting.
+    void panelStatesScreenshots() {
         const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
-        const auto restore = qScopeGuard([] {
-            QSettings().remove(QStringLiteral("workspace"));
-        });
+        if (shots.isEmpty()) QSKIP("KERF_SCREENSHOT_DIR is not set");
+        const auto save = [&](QWidget &widget, const QString &name) {
+            QCoreApplication::processEvents();
+            QVERIFY(widget.grab().save(QDir(shots).filePath(QStringLiteral("comments-%1.png").arg(name))));
+        };
         {
-            const EditorTheme &theme = editorTheme();
-            const QString schemeName = QStringLiteral("dark");
-            const auto open = [&](MainWindow &window, bool proposal) {
-                QSettings().remove(QStringLiteral("workspace"));
-                QJsonObject snapshot = showcaseSnapshot(12, QStringLiteral("clean"));
-                QJsonObject timeline = snapshot.value(QStringLiteral("timeline")).toObject();
-                timeline.insert(QStringLiteral("width"), 1080);
-                timeline.insert(QStringLiteral("height"), 1920);
-                snapshot.insert(QStringLiteral("timeline"), timeline);
-                if (!proposal) {
-                    snapshot.remove(QStringLiteral("pendingProposal"));
-                    snapshot.remove(QStringLiteral("proposalTimeline"));
-                }
-                window.setConnection(QStringLiteral("ready"));
-                window.applySnapshot(snapshot);
-                window.handleEvent(QJsonObject{{"type", "collab"}, {"status", sharedStatus()}});
-                fakeArtwork(window.m_artwork);
-                window.resize(1440, 900);
-                window.show();
-                QVERIFY(QTest::qWaitForWindowExposed(&window));
-                window.m_errorBanner->hide();
-                window.m_viewer->setFrame(testing::footageFrame(testing::Shot::FisherClose, QSize(270, 480)), 0.0);
-                QTest::mouseMove(window.statusBar(), QPoint(window.statusBar()->width() / 2, 4));
-            };
-            QImage image;
-            const auto save = [&](MainWindow &window, const QString &state) {
-                QTest::qWait(30);
-                image = window.grab().toImage();
-                QCOMPARE(amberPixels(image), 0);
-                if (!shots.isEmpty())
-                    QVERIFY(image.save(QDir(shots).filePath(QStringLiteral("editor-9x16-%1-%2.png").arg(state, schemeName))));
-            };
-            {
-                // The welcome: Kerf's first comment, and two requests to try.
-                MainWindow window{QString(), QString()};
-                open(window, false);
-                QVERIFY(window.m_chat->welcome()->isVisible());
-                QVERIFY(window.m_chat->countLabel()->text().isEmpty());
-                QCOMPARE(window.m_rail->chatButton()->label(), QStringLiteral("Chat"));
-                // Plain rows of words after an arrow, no chip: at least 32
-                // points, on at most two lines.
-                for (QAbstractButton *example : window.m_chat->examples()) {
-                    QVERIFY(example->isVisible());
-                    QVERIFY(qobject_cast<SuggestionButton *>(example));
-                    QVERIFY(example->height() >= 32 && example->height() <= 2 * 20 + 12);
-                }
-                QVERIFY(!window.m_chat->statusRow()->isVisible());
-                save(window, QStringLiteral("welcome"));
-                // At the panel's narrowest an example wraps onto a second line
-                // rather than end in an ellipsis, and never runs past the
-                // panel's padding.
-                window.m_viewer->setChatWidth(ViewerWidget::kMinChatWidth);
-                QCoreApplication::processEvents();
-                QCOMPARE(window.m_chat->width(), ViewerWidget::kMinChatWidth);
-                for (QAbstractButton *example : window.m_chat->examples()) {
-                    QVERIFY2(example->mapTo(window.m_chat, QPoint(example->width(), 0)).x() <= window.m_chat->width() - ChatPanel::kSidePadding,
-                             qPrintable(example->text()));
-                    auto *suggestion = static_cast<SuggestionButton *>(example);
-                    QFont font = example->font();
-                    font.setPixelSize(13);
-                    // Lines counted as the button lays them out: a wrapped
-                    // block's pixel height rounds up past twice a rounded
-                    // line spacing where the font's line height is fractional
-                    // (DejaVu Sans on Linux).
-                    QTextLayout layout(example->text(), font);
-                    QTextOption option;
-                    option.setWrapMode(QTextOption::WordWrap);
-                    layout.setTextOption(option);
-                    layout.beginLayout();
-                    int lines = 0;
-                    for (QTextLine line = layout.createLine(); line.isValid(); line = layout.createLine()) {
-                        line.setLineWidth(suggestion->textRect().width());
-                        ++lines;
-                    }
-                    layout.endLayout();
-                    QVERIFY2(lines <= 2, qPrintable(QStringLiteral("%1: %2 lines").arg(example->text()).arg(lines)));
-                }
-                QVERIFY(window.m_chatScroll->widget()->width() <= window.m_chatScroll->viewport()->width());
-                window.m_viewer->setChatWidth(ViewerWidget::kDefaultChatWidth);
-            }
-            {
-                // A long conversation, Kerf streaming its latest reply: its
-                // three dots and its latest step after the latest comment,
-                // and Stop for Send.
-                MainWindow window{QString(), QString()};
-                open(window, false);
-                const QStringList asks{QStringLiteral("Open on the harbor wide, and hold it for four seconds."),
-                                       QStringLiteral("Cut to the fisher close-up on the first beat."),
-                                       QStringLiteral("Can the drone pass come in under the title?"),
-                                       QStringLiteral("Lower the music under the dialogue.")};
-                const QStringList answers{QStringLiteral("Done: the wide holds for 4 s and the close-up starts on the downbeat at 00:00:04:00."),
-                                          QStringLiteral("The close-up now cuts in on the first beat."),
-                                          QStringLiteral("I moved the drone pass to V2 under the title, with a 12-frame dissolve.")};
-                for (int turn = 0; turn < asks.size(); ++turn) {
-                    window.appendConversation(QStringLiteral("You"), asks.at(turn));
-                    if (turn < answers.size()) {
-                        window.appendConversation(QStringLiteral("Kerf"), answers.at(turn));
-                        window.appendConversationNote(QStringLiteral("Tool"), QStringLiteral("Edited the timeline"));
-                    }
-                }
-                window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
-                window.handleEvent(QJsonObject{{"type", "agent"}, {"kind", "tool"}, {"text", "Reading the music's loudness"}});
-                window.handleEvent(QJsonObject{{"type", "agent"}, {"kind", "delta"}, {"text", "I’ll duck the score by 8 dB "}});
-                window.handleEvent(QJsonObject{{"type", "agent"}, {"kind", "delta"}, {"text", "wherever someone speaks, with"}});
-                QCoreApplication::processEvents();
-                const QList<CommentRow *> rows = window.m_chat->rows();
-                QCOMPARE(rows.size(), 8);
-                QCOMPARE(rows.constLast()->text(), QStringLiteral("I’ll duck the score by 8 dB wherever someone speaks, with"));
-                QCOMPARE(rows.constLast()->replies(), QStringList{QStringLiteral("Reading the music's loudness")});
-                QVERIFY(window.m_chat->statusRow()->isVisible());
-                QVERIFY(window.m_chatActivity->isVisible());
-                QCOMPARE(window.m_chatActivity->text(), QStringLiteral("Reading the music's loudness"));
-                QVERIFY(window.m_abortButton->isVisible() && !window.m_sendButton->isVisible());
-                // It followed the stream to the latest.
-                QScrollBar *bar = window.m_chatScroll->verticalScrollBar();
-                QTRY_VERIFY(bar->maximum() > 0);
-                QTRY_COMPARE(bar->value(), bar->maximum());
-                verifyListEnd(window.m_chat);
-                save(window, QStringLiteral("streaming"));
-            }
-            {
-                // A pending proposal, pinned under the header with its changes
-                // listed as rows: Accept filled with the accent, Reject tonal,
-                // both 36px pills. It arrives after Kerf's reply, as it does,
-                // and the list shows it from its head.
-                MainWindow window{QString(), QString()};
-                open(window, false);
-                window.appendConversation(QStringLiteral("You"), QStringLiteral("Tighten the fisher close-up and drop the drone pass."));
-                window.appendConversation(QStringLiteral("Kerf"),
-                    QStringLiteral("Here’s the cut: the close-up is 1.5 s shorter and the drone pass is gone. Review it before it changes the cut."));
-                window.appendConversationNote(QStringLiteral("Tool"), QStringLiteral("Trimmed v1b by 36 frames"));
-                window.appendConversationNote(QStringLiteral("Tool"), QStringLiteral("Removed v1c"));
-                {
-                    QJsonObject snapshot = showcaseSnapshot(13, QStringLiteral("clean"));
-                    QJsonObject timeline = snapshot.value(QStringLiteral("timeline")).toObject();
-                    timeline.insert(QStringLiteral("width"), 1080);
-                    timeline.insert(QStringLiteral("height"), 1920);
-                    snapshot.insert(QStringLiteral("timeline"), timeline);
-                    window.applySnapshot(snapshot);
-                }
-                QCoreApplication::processEvents();
-                QVERIFY(window.m_proposalBox->isVisible());
-                // Pinned at the top of the list, 16 points under its top.
-                QCOMPARE(window.m_proposalBox->parentWidget(), window.m_chatScroll->widget());
-                QCOMPARE(window.m_proposalBox->y(), 16);
-                QVERIFY(window.m_proposalBox->findChild<QLabel *>(QStringLiteral("chatPinned"))->text().startsWith(QStringLiteral("Pinned")));
-                // Under "Pinned by Kerf", the name line every comment has, then its text.
-                QCOMPARE(window.m_chat->proposalName()->text(), QStringLiteral("Kerf"));
-                QCOMPARE(window.m_chat->proposalTime()->text(), QStringLiteral("now"));
-                QVERIFY(window.m_chat->proposalName()->isVisible() && window.m_chat->proposalTime()->isVisible());
-                QVERIFY(window.m_chat->proposalName()->mapTo(window.m_chat, QPoint()).y() <
-                        window.m_chat->proposalSummary()->mapTo(window.m_chat, QPoint()).y());
-                for (QPushButton *pill : {window.m_acceptButton, window.m_rejectButton}) {
-                    QVERIFY(pill->isVisible() && pill->isEnabled());
-                    QCOMPARE(pill->height(), ChatPanel::kPillHeight);
-                }
-                QVERIFY(window.m_rejectButton->geometry().right() < window.m_acceptButton->geometry().left());
-                QCOMPARE(ChatPanel::kPillHeight, 36);
-                // The summary counts the rows it heads, in words.
-                QCOMPARE(window.m_proposalSummary->text(), QStringLiteral("Trim, remove, add a title · 3 changes"));
-                QWidget *changes = window.m_chat->proposalChanges();
-                QVERIFY(changes->isVisible());
-                // Each change a row: a glyph, what it does in words, and a
-                // detail in secondary ink at the right. No script.
-                const QList<ProposalChangeRow *> rows = window.m_chat->proposalChangeRows();
-                QCOMPARE(rows.size(), 3);
-                QTRY_VERIFY(changes->height() >= 3 * ProposalChangeRow::kHeight);
-                const QList<QPair<QString, QString>> expected{{QStringLiteral("Trim fisher-close"), QStringLiteral("end \u22121.5 s")},
-                                                              {QStringLiteral("Remove drone-pass"), QStringLiteral("0:11\u2009\u2013\u20090:18")},
-                                                              {QStringLiteral("Add title “Lower third”"), QStringLiteral("at 0:12")}};
-                const QList<ProposalChange::Glyph> glyphs{ProposalChange::Glyph::Trim, ProposalChange::Glyph::Remove, ProposalChange::Glyph::Title};
-                for (int index = 0; index < rows.size(); ++index) {
-                    ProposalChangeRow *row = rows.at(index);
-                    QCOMPARE(row->change().description, expected.at(index).first);
-                    QCOMPARE(row->change().detail, expected.at(index).second);
-                    QCOMPARE(row->change().glyph, glyphs.at(index));
-                    QCOMPARE(row->height(), ProposalChangeRow::kHeight);
-                    // The glyph at the text column, the detail at its right end.
-                    QCOMPARE(row->mapTo(window.m_chat, row->glyphRect().topLeft()).x(),
-                             window.m_chat->proposalSummary()->mapTo(window.m_chat, QPoint()).x());
-                    QCOMPARE(row->detailRect().right(), row->width() - 1);
-                    QVERIFY(row->descriptionRect().right() < row->detailRect().left());
-                    if (index) QCOMPARE(row->y(), rows.at(index - 1)->y() + ProposalChangeRow::kHeight);
-                }
-                // The pills under the rows, then a hairline closing the pinned
-                // comment 16 points under them.
-                QVERIFY(window.m_acceptButton->mapTo(window.m_proposalBox, QPoint()).y() >
-                        rows.constLast()->mapTo(window.m_proposalBox, QPoint(0, rows.constLast()->height())).y() - 1);
-                QFrame *rule = window.m_chat->proposalRule();
-                QVERIFY(rule->isVisible());
-                QCOMPARE(rule->height(), 1);
-                QCOMPARE(rule->mapTo(window.m_proposalBox, QPoint()).y(),
-                         window.m_acceptButton->mapTo(window.m_proposalBox, QPoint(0, window.m_acceptButton->height())).y() + 16);
-                QCOMPARE(rule->width(), window.m_proposalBox->width());
-                // Opening the script folds the rows; the script has every line.
-                window.m_chat->proposalExpander()->click();
-                QCoreApplication::processEvents();
-                QVERIFY(!changes->isVisible());
-                QVERIFY(window.m_proposalDiff->toPlainText().contains(QStringLiteral("trim v1b out -36f")));
-                window.m_chat->proposalExpander()->click();
-                QCoreApplication::processEvents();
-                QVERIFY(changes->isVisible());
-                // Wide, "Script" ends the summary's line; in a narrow panel (as
-                // beside a laptop) it starts the pills' row instead, so the
-                // summary keeps one line, and each change keeps its words
-                // whole, its detail giving way first.
-                {
-                    ChatExpander *script = window.m_chat->proposalExpander();
-                    const auto middle = [&](QWidget *widget) { return widget->mapTo(window.m_chat, QPoint(0, widget->height() / 2)).y(); };
-                    QVERIFY(window.m_chat->width() >= ChatPanel::kNarrowProposal);
-                    QVERIFY(std::abs(middle(script) - middle(window.m_proposalSummary)) <= window.m_proposalSummary->height() / 2);
-                    window.m_viewer->setChatWidth(ViewerWidget::kMinChatWidth);
-                    QCoreApplication::processEvents();
-                    QCOMPARE(window.m_chat->width(), ViewerWidget::kMinChatWidth);
-                    QVERIFY(std::abs(middle(script) - middle(window.m_acceptButton)) <= 1);
-                    QCOMPARE(script->mapTo(window.m_chat, QPoint()).x(), window.m_proposalSummary->mapTo(window.m_chat, QPoint()).x());
-                    QVERIFY(script->mapTo(window.m_chat, QPoint(script->width(), 0)).x() < window.m_rejectButton->mapTo(window.m_chat, QPoint()).x());
-                    QCOMPARE(window.m_proposalSummary->height(), window.m_proposalSummary->heightForWidth(window.m_proposalSummary->width()));
-                    QVERIFY2(window.m_proposalSummary->heightForWidth(window.m_proposalSummary->width()) < 2 * window.m_proposalSummary->fontMetrics().lineSpacing(),
-                             "the summary wraps beside a narrow panel");
-                    // Its count is left to the rows under it (and the tooltip).
-                    QCOMPARE(window.m_proposalSummary->text(), QStringLiteral("Trim, remove, add a title"));
-                    QCOMPARE(window.m_proposalSummary->toolTip(), QStringLiteral("Trim, remove, add a title · 3 changes"));
-                    // "Script" whole on the row; the pills unclipped, the row
-                    // inside the column.
-                    QVERIFY(script->isCompact() && script->labelShown());
-                    QVERIFY(window.m_acceptButton->mapTo(window.m_chat, QPoint(window.m_acceptButton->width(), 0)).x() <=
-                            window.m_chatScroll->viewport()->mapTo(window.m_chat, QPoint(window.m_chatScroll->viewport()->width(), 0)).x() - ChatPanel::kSidePadding);
-                    QCOMPARE(window.m_chatScroll->widget()->width(), window.m_chatScroll->viewport()->width());
-                    // The detail (an amount, a time) is never cut: the words
-                    // drop the clip's extension first, then the detail takes a
-                    // second line under them. Only the words could be elided,
-                    // and here none is; the tooltip says it whole.
-                    const QList<ProposalChangeRow *> narrow = window.m_chat->proposalChangeRows();
-                    const QStringList shortWords{QStringLiteral("Trim fisher-close"), QStringLiteral("Remove drone-pass"), QStringLiteral("Add title “Lower third”")};
-                    for (int index = 0; index < narrow.size(); ++index) {
-                        ProposalChangeRow *row = narrow.at(index);
-                        QFont detail = row->font();
-                        detail.setPixelSize(12);
-                        detail.setFeature(QFont::Tag("tnum"), 1);
-                        const int detailWide = QFontMetrics(detail).horizontalAdvance(row->change().detail);
-                        QCOMPARE(row->change().shortDescription, shortWords.at(index));
-                        QCOMPARE(row->shownDetail(), row->change().detail);
-                        QVERIFY2(row->detailRect().width() >= detailWide, qPrintable(row->change().detail));
-                        QVERIFY2(!row->shownDescription().endsWith(QChar(0x2026)), qPrintable(row->shownDescription()));
-                        QVERIFY(row->shownDescription() == row->change().description || row->shownDescription() == row->change().shortDescription);
-                        if (row->shownDescription() != row->change().description)
-                            QCOMPARE(row->toolTip(), row->change().description + QStringLiteral(" · ") + row->change().detail);
-                        QCOMPARE(row->detailRect().right(), row->width() - 1);
-                        QVERIFY(row->descriptionRect().left() == ProposalChangeRow::kTextLeft);
-                        if (row->twoLines()) {
-                            // The detail under the words, at their x; the row
-                            // grows to hold both lines.
-                            QCOMPARE(row->height(), ProposalChangeRow::kTwoLineHeight);
-                            QCOMPARE(row->detailRect().left(), ProposalChangeRow::kTextLeft);
-                            QVERIFY(row->detailRect().top() >= row->descriptionRect().bottom());
-                            QVERIFY(row->detailRect().bottom() < row->height());
-                        } else {
-                            QCOMPARE(row->height(), ProposalChangeRow::kHeight);
-                            QVERIFY(row->descriptionRect().right() < row->detailRect().left());
-                        }
-                        if (index) QCOMPARE(row->y(), narrow.at(index - 1)->y() + narrow.at(index - 1)->height());
-                    }
-                    // A row narrower still keeps its detail whole on its own line.
-                    {
-                        ProposalChange change = narrow.at(1)->change();
-                        ProposalChangeRow tight(change);
-                        tight.resize(170, ProposalChangeRow::kHeight);
-                        tight.show();
-                        QCoreApplication::processEvents();
-                        QCOMPARE(tight.width(), 170);
-                        QVERIFY(tight.twoLines());
-                        QCOMPARE(tight.height(), ProposalChangeRow::kTwoLineHeight);
-                        QCOMPARE(tight.shownDetail(), change.detail);
-                        QVERIFY(tight.shownDescription() == change.description || tight.shownDescription() == change.shortDescription);
-                        if (tight.shownDescription() != change.description)
-                            QCOMPARE(tight.toolTip(), change.description + QStringLiteral(" · ") + change.detail);
-                    }
-                    window.m_viewer->setChatWidth(ViewerWidget::kDefaultChatWidth);
-                    QCoreApplication::processEvents();
-                    QVERIFY(std::abs(middle(script) - middle(window.m_proposalSummary)) <= window.m_proposalSummary->height() / 2);
-                    QVERIFY(!script->isCompact());
-                    QCOMPARE(window.m_proposalSummary->text(), QStringLiteral("Trim, remove, add a title · 3 changes"));
-                }
-                // Shown from its head: 16 points under the header, no hairline
-                // and no compact bar.
-                QCOMPARE(window.m_chatScroll->verticalScrollBar()->value(), 0);
-                QCOMPARE(window.m_proposalBox->mapTo(window.m_chat, QPoint()).y(), ChatPanel::kHeaderHeight + 1 + 16);
-                QVERIFY(!window.m_chat->listEdge()->property("scrolled").toBool());
-                QVERIFY(!window.m_chat->proposalBar()->isVisible());
-                save(window, QStringLiteral("proposal"));
-                const qreal ratio = image.devicePixelRatio();
-                const auto fill = [&](QPushButton *pill) {
-                    return image.pixelColor(pill->mapTo(&window, QPoint(pill->height() / 2 - 6, pill->height() / 2)) * ratio).rgb();
-                };
-                QCOMPARE(fill(window.m_acceptButton), theme.accent.rgb());
-                QVERIFY(nearColor(fill(window.m_rejectButton), laidOn(theme.chatSurface, theme.pillTonal).rgb()));
-                QVERIFY(contrastRatio(theme.onAccent, theme.accent) >= 4.5);
-                // A longer conversation scrolls the proposal away: the compact
-                // bar under the header keeps its summary and pills, its
-                // Accept filled the same, and the hairline under it.
-                window.m_chatScroll->verticalScrollBar()->setValue(window.m_chatScroll->verticalScrollBar()->maximum());
-                window.appendConversation(QStringLiteral("You"), QStringLiteral("Before I accept: does the lower third still land on the beat?"));
-                window.appendConversation(QStringLiteral("Kerf"),
-                    QStringLiteral("Yes. It starts at 00:00:12:00, on the downbeat after the close-up, and holds for three seconds."));
-                window.appendConversation(QStringLiteral("You"), QStringLiteral("And the music under it?"));
-                window.appendConversation(QStringLiteral("Kerf"), QStringLiteral("Unchanged: the score keeps its level until the dialogue starts."));
-                QTRY_VERIFY(window.m_chat->proposalBar()->isVisible());
-                verifyListEnd(window.m_chat);
-                save(window, QStringLiteral("proposal-scrolled"));
-                QCOMPARE(fill(window.m_chat->barAcceptButton()), theme.accent.rgb());
-                window.m_chatScroll->verticalScrollBar()->setValue(0);
-                QCoreApplication::processEvents();
-                QVERIFY(!window.m_chat->proposalBar()->isVisible());
-                // Accept and Reject run the proposal's commands.
-                window.m_acceptButton->click();
-                QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("accept"));
-            }
-            {
-                // 16:9, the laptop's shorter panel, a short conversation: the
-                // proposal arrives and the list shows it from its head, so its
-                // "Pinned by Kerf" line, avatar and summary are in view, not
-                // only its pills. Scrolled to the latest, its head scrolls away
-                // and the compact bar keeps the decision in reach.
-                QSettings().remove(QStringLiteral("workspace"));
-                MainWindow window{QString(), QString()};
-                QJsonObject snapshot = showcaseSnapshot(12, QStringLiteral("clean"));
-                snapshot.remove(QStringLiteral("pendingProposal"));
-                snapshot.remove(QStringLiteral("proposalTimeline"));
-                window.setConnection(QStringLiteral("ready"));
-                window.applySnapshot(snapshot);
-                window.handleEvent(QJsonObject{{"type", "collab"}, {"status", sharedStatus()}});
-                fakeArtwork(window.m_artwork);
-                window.resize(1440, 900);
-                window.show();
-                QVERIFY(QTest::qWaitForWindowExposed(&window));
-                window.m_errorBanner->hide();
-                window.m_viewer->setFrame(testing::footageFrame(testing::Shot::HarborWide, QSize(480, 270)), 0.0);
-                QTest::mouseMove(window.statusBar(), QPoint(window.statusBar()->width() / 2, 4));
-                window.appendConversation(QStringLiteral("You"), QStringLiteral("Tighten the fisher close-up and drop the drone pass."));
-                window.appendConversation(QStringLiteral("Kerf"),
-                    QStringLiteral("Here’s the cut: the close-up is 1.5 s shorter and the drone pass is gone. Review it before it changes the cut."));
-                QCoreApplication::processEvents();
-                window.applySnapshot(showcaseSnapshot(13, QStringLiteral("clean")));
-                QTest::qWait(30);
-                QCOMPARE(window.m_viewer->device(), ViewerWidget::Device::Laptop);
-                QScrollBar *bar = window.m_chatScroll->verticalScrollBar();
-                QVERIFY2(bar->maximum() > 0, "the conversation is taller than the laptop's panel");
-                QCOMPARE(bar->value(), 0);
-                QWidget *pin = window.m_proposalBox->findChild<QLabel *>(QStringLiteral("chatPinned"));
-                const int viewportTop = window.m_chatScroll->viewport()->mapTo(window.m_chat, QPoint()).y();
-                QVERIFY(pin->mapTo(window.m_chat, QPoint()).y() >= viewportTop);
-                QVERIFY(window.m_chat->proposalSummary()->visibleRegion().boundingRect().height() > 0);
-                QVERIFY(!window.m_chat->proposalBar()->isVisible());
-                // The compact bar says what the proposal does where that fits
-                // whole, and only the count, whole, where it does not: at
-                // every width, never a summary that ends in an ellipsis.
-                bar->setValue(bar->maximum());
-                QCoreApplication::processEvents();
-                QTRY_VERIFY(window.m_chat->proposalBar()->isVisible());
-                for (const int panel : {ViewerWidget::kMinChatWidth, 331, ViewerWidget::kDefaultChatWidth}) {
-                    window.m_viewer->setChatWidth(panel);
-                    bar->setValue(bar->maximum());
-                    QCoreApplication::processEvents();
-                    QTRY_VERIFY(window.m_chat->proposalBar()->isVisible());
-                    QLabel *summary = window.m_chat->proposalBarSummary();
-                    QVERIFY2(!summary->text().endsWith(QChar(0x2026)), qPrintable(QStringLiteral("%1: %2").arg(panel).arg(summary->text())));
-                    QVERIFY2(summary->text() == QStringLiteral("Trim, remove, add a title") || summary->text() == QStringLiteral("3 changes"),
-                             qPrintable(summary->text()));
-                    QVERIFY(QFontMetrics(summary->font()).horizontalAdvance(summary->text()) <= summary->contentsRect().width());
-                }
-                window.m_viewer->setChatWidth(ViewerWidget::kMinChatWidth);
-                bar->setValue(bar->maximum());
-                QCoreApplication::processEvents();
-                QTRY_VERIFY(window.m_chat->proposalBar()->isVisible());
-                QCOMPARE(window.m_chat->proposalBarSummary()->text(), QStringLiteral("3 changes"));
-                bar->setValue(0);
-                QCoreApplication::processEvents();
-                QVERIFY(!window.m_chat->proposalBar()->isVisible());
-                window.m_viewer->setChatWidth(ViewerWidget::kDefaultChatWidth);
-                QTest::qWait(30);
-                const QImage wide = window.grab().toImage();
-                QCOMPARE(amberPixels(wide), 0);
-                if (!shots.isEmpty())
-                    QVERIFY(wide.save(QDir(shots).filePath(QStringLiteral("editor-16x9-proposal-%1.png").arg(schemeName))));
-            }
+            Seeded seed;
+            save(seed.panel, QStringLiteral("seed"));
+            seed.panel.scroll()->verticalScrollBar()->setValue(0);
+            seed.settle();
+            save(seed.panel, QStringLiteral("top-pinbar"));
+            seed.model.setViewAs(kMina);
+            seed.settle();
+            seed.panel.openThread(QStringLiteral("c-2614"), false);
+            seed.settle();
+            save(seed.panel, QStringLiteral("guest"));
+        }
+        {
+            Seeded seed(480, 548);
+            seed.panel.chipOpen()->click();
+            seed.settle();
+            save(seed.panel, QStringLiteral("open-480"));
+        }
+        {
+            SeededWindow seeded;
+            seeded.window.m_chat->setReplyTarget(QStringLiteral("c-2718"));
+            seeded.window.m_chat->composerWidget()->fill(QStringLiteral("@Kerf limit the music bus here"));
+            QTest::keyClick(seeded.window.m_chatInput, Qt::Key_Return);
+            seeded.window.handleEvent(QJsonObject{{"type", "agent"}, {"kind", "status"}, {"text", "limiter on A2 Music"}});
+            seeded.settle();
+            seeded.window.m_chat->openThread(QStringLiteral("c-2718"), false);
+            seeded.settle();
+            save(*seeded.window.m_chat, QStringLiteral("drafting"));
+            save(seeded.window, QStringLiteral("window"));
         }
     }
 };
@@ -1645,5 +1383,4 @@ private slots:
 } // namespace kerf
 
 KERF_TEST_CLASS(kerf::CommentsTest)
-
 #include "comments_test.moc"

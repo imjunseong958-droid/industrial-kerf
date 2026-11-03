@@ -1,5 +1,6 @@
 #pragma once
 
+#include "design_tokens.h"
 #include "device_frame.h"
 #include "editor_common.h"
 #include "test_friends.h"
@@ -7,6 +8,7 @@
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QList>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPointer>
@@ -14,14 +16,34 @@
 #include <QVector>
 #include <QWidget>
 
+class QGraphicsOpacityEffect;
+class QVariantAnimation;
+
 namespace kerf {
 
 class PlayerOverlay;
 
-// The Program monitor. It also draws the selected picture clip's masks over
-// the picture and edits them: a mask tool draws a new one, a handle drag
-// moves a corner or point, a drag inside a mask moves it, and Delete
-// removes the selected one. Every change leaves as a typed operation.
+// The Program stage (mockup-spec 3): the picture in its device, the rail on
+// the device's right, the comments panel anchored to the stage's right edge,
+// the scrub strip under the device, the agent HUD and, in the Edit workspace
+// and the phone formats, the Source column on the left. It also draws the
+// picture's overlays (safe zones, the caption, the QC overlap box and the
+// comments' drawings), captures a drawing on the frame, and draws the
+// selected picture clip's masks over the picture and edits them: a mask tool
+// draws a new one, a handle drag moves a corner or point, a drag inside a
+// mask moves it, and Delete removes the selected one. Every change leaves as
+// a typed operation.
+//
+// Placement (the [OWNER] table of mockup-spec 3.1): the device's top is
+// kStageTop; the scrub strip's (SY) is the stage's height less 64; the
+// laptop's box is SY - 9 - TOP tall and the phone's SY - 12 - TOP. The panel
+// keeps a 12 margin to the stage's right edge, the rail stands 12 right of
+// the device. With the panel open a 16:9 device and its rail are centred in
+// 16 ... panel - 12, and a phone stands 12 left of the rail; closed, the rail
+// ends 12 from the stage's edge and the Source column fills the left. The
+// device is scaled to fit its box at its product's exact proportions, its
+// outer rect snapped to whole points; "Off" draws the picture as a plain
+// rect where the device's picture would be.
 class ViewerWidget final : public QWidget {
     Q_OBJECT
     KERF_TEST_FRIENDS
@@ -31,108 +53,172 @@ public:
     QImage frame() const { return m_frame; }
     void clearFrame();
     void setLiveScrub(bool live);
+    // The engine's caption at the playhead (a `caption {text}` event).
     void setCaption(const QString &caption);
+    QString caption() const { return m_caption; }
     void setProjectInfo(double width, double height);
-    // The stage, as a Short's page lays out its player: the picture card,
-    // the action rail on its right, and Kerf's conversation on the rail's
-    // right, one group centred in the viewer. A portrait picture shows in a
-    // phone (see DevicePreview) and a wide one in a laptop (see
-    // LaptopPreview), whose body takes the card's place in the group. The
-    // conversation is level with the card (or the device's body) and as
-    // tall: where the stage has the room, the card is made large enough for
-    // the conversation's least height (kMinChatHeight), the conversation
-    // narrowing for it. With the conversation closed the card is centred
-    // alone and the rail hangs on its right. Where the viewer is too narrow
-    // for all three, the conversation narrows first, so the picture keeps
-    // four fifths of its width (and a laptop's picture kLaptopKeeps of the
-    // plain card's); past that the card shrinks, then the conversation lies
-    // over the stage's right side.
+
     enum class Device { None, Phone, Laptop };
     struct StageLayout {
-        QRectF card;   // The picture.
-        QRectF body;   // The device it shows in; the card itself without one.
-        QRectF screen; // The device's screen; empty without one.
-        QRect rail;    // Empty when there is no room for it.
-        QRect panel;   // Empty while the conversation is closed.
-        bool overlay = false;
-        bool device = false; // In a phone or a laptop.
+        QRectF card;    // The picture (at Fit).
+        QRectF body;    // The device; the picture itself when the device is Off.
+        QRectF screen;  // The device's screen; empty without one.
+        QRect rail;     // The rail's geometry (railRect rounded).
+        QRectF railRect;
+        QRect panel;    // The comments panel; empty while it is closed.
+        QRect panelSlot; // Where the panel stands when open (its width for this format).
+        QRectF scrub;   // The scrub strip under the device.
+        bool narrowScrub = false;
+        QRect source;   // The Source column; empty when it does not show.
+        QRectF hud;     // The agent HUD: a card in title safe, or a strip over the Source column.
+        bool hudStrip = false;
+        bool phone = false;   // A phone format (9:16, 1:1, 4:5): the phone, its 480 panel.
+        bool overlay = false; // Too narrow for the group: the panel lies over the stage.
+        bool device = false;  // In a phone or a laptop.
         Device kind = Device::None;
     };
-    // Round the card or the device: the same at the sides, over and under
-    // it, for a card, a laptop and a phone alike (a device's shadow lies in
-    // its frame's own pixmap, inside this).
+
+    // ---- placement (tokens::layout) ----
+    static constexpr int kStageTop = tokens::layout::stageTop;          // the device's top
+    static constexpr int kStageFoot = tokens::layout::stageBottom;      // under the scrub strip
+    static constexpr int kScrubHeight = tokens::layout::scrub;          // 56
+    static constexpr int kLaptopScrubGap = 9;                            // laptop base to the scrub
+    static constexpr int kPhoneScrubGap = 12;                            // phone body to the scrub
+    static constexpr int kStageEdge = tokens::layout::stageMargin;      // 12: rail and panel to the edge, device to rail
+    static constexpr int kSourceInset = tokens::layout::stageInset;     // 16: the Source column's (and the group's) left
+    static constexpr int kRailWidth = tokens::layout::rail;             // 44
+    static constexpr int kPhoneScrubWidth = 360;
+    static constexpr int kPhoneSourceWidth = 400;
+    // The Source column's least width; narrower, it does not show.
+    static constexpr int kLeastSourceWidth = 240;
+    // The device's least width before the panel lies over the stage.
+    static constexpr int kMinDeviceWidth = 160;
+    // A 16:9 picture narrower than this has the scrub strip's narrow mode.
+    static constexpr int kNarrowScrubWidth = 480;
+    static constexpr int kHudWidth = 288;
+    static constexpr int kHudHeight = 72;
+    static constexpr int kHudStripHeight = 32;
+    // The panel's width: 368 beside a 16:9 picture, 480 beside a phone,
+    // dragged between 300 and 480 and remembered per format.
+    static constexpr int kMinChatWidth = tokens::layout::panelMin;
+    static constexpr int kMaxChatWidth = tokens::layout::panelMax;
+    static constexpr int kDefaultChatWidth = tokens::layout::panel;
+    static constexpr int kPhoneChatWidth = tokens::layout::panelPhone;
+    // Stage and device moves, the panel's open and close.
+    static constexpr int kMoveDuration = tokens::motion::move;
+
+    // Deprecated (the stage before the [OWNER] placement), removed in W3:
+    // kept so code that names them compiles.
     static constexpr int kStageMargin = 16;
-    // Only a phone in a stage too short for its screen to be kLeastPhoneScreen
-    // wide at kStageMargin over and under it takes less, as little as it
-    // needs, never under kLeastStageInset, and still as much over as under.
     static constexpr int kLeastStageInset = 10;
     static constexpr double kLeastPhoneScreen = 240.0;
     static constexpr int kStageGap = 12;
-    // Between card, rail and conversation in a narrow stage.
-    static constexpr int kNarrowStageGap = 8;
+    static constexpr int kNarrowStageGap = 12;
     static constexpr int kNarrowStage = 1000;
     static constexpr int kCardRadius = 12;
-    static constexpr int kRailWidth = 48;
-    // The conversation's width: kept between these (a per-user preference).
-    static constexpr int kMinChatWidth = 300;
-    static constexpr int kMaxChatWidth = 480;
-    static constexpr int kDefaultChatWidth = 432;
-    // The card (or device) is made tall enough for the conversation beside
-    // it to be this tall where the stage has the room, so its header, a
-    // couple of comments, the next steps' chips and its composer fit...
     static constexpr int kMinChatHeight = 352;
-    // ...and where it has not (the conversation at its narrowest beside a
-    // wide picture), the conversation is still as tall as the card down to
-    // this, then no shorter (the card centred on it).
     static constexpr int kLeastChatHeight = 280;
-    // The card's narrowest before the conversation narrows, then lies over it.
     static constexpr int kMinCardWidth = 160;
-    // The share of its width with the conversation closed that the card
-    // keeps before the conversation gives up any of its own.
     static constexpr double kCardKeeps = 0.8;
-    // The share of the plain card's width (in the same stage, with the
-    // conversation open) a laptop's picture keeps: its bezel and base come
-    // mostly out of the conversation's width.
     static constexpr double kLaptopKeeps = 0.92;
-    // The rail and conversation, laid out in the stage as children.
+    static constexpr double kCompactPlayerWidth = 360.0;
+    int stageGap() const { return kStageEdge; }
+    int stageInset(Device) const { return kStageTop; }
+    bool compactPlayer(const QRectF &card) const { return phoneFormat() || card.width() < kCompactPlayerWidth; }
+
+    // The rail and the comments panel, laid out in the stage as children.
     void setStage(QWidget *rail, QWidget *panel);
+    // The scrub strip, the agent HUD and the Source column, the same way.
+    // The HUD shows and hides itself; the stage follows.
+    void setStageParts(QWidget *scrub, QWidget *hud, QWidget *source);
+    QWidget *scrubStrip() const { return m_scrub; }
+    QWidget *hud() const { return m_hud; }
+    QWidget *sourceColumn() const { return m_source; }
     void setChatOpen(bool open);
     bool chatOpen() const { return m_chatOpen; }
+    // The panel's width for the format in use (300-480).
     void setChatWidth(int width);
-    int chatWidth() const { return m_chatWidth; }
-    // The phone a portrait picture shows in, or Off for the plain card, and
-    // the outlines of where a vertical-video app covers the picture.
+    int chatWidth() const { return phoneFormat() ? m_phoneChatWidth : m_chatWidth; }
+    // The width for 16:9 (`phone` false) or the phone formats.
+    void setChatWidth(bool phone, int width);
+    int chatWidth(bool phone) const { return phone ? m_phoneChatWidth : m_chatWidth; }
+
+    // The phone a portrait, square or 4:5 picture shows in, or Off.
     void setDevicePreview(DevicePreview preview);
     DevicePreview devicePreview() const { return m_device; }
+    // Action and title safe over the picture, every format.
     void setSafeZones(bool shown);
     bool safeZonesShown() const { return m_safeZones; }
-    // The laptop a wide picture shows in, or Off for the plain card.
+    // The laptop a wide picture shows in, or Off.
     void setLaptopPreview(LaptopPreview preview);
     LaptopPreview laptopPreview() const { return m_laptop; }
     // Whether the picture is taller than wide, or wider than tall.
     bool portrait() const { return aspect() < 1.0; }
-    // The player's compact arrangement: on a portrait card, and on a wide
-    // one too narrow for the row of controls and the time over the length.
-    static constexpr double kCompactPlayerWidth = 360.0;
-    bool compactPlayer(const QRectF &card) const { return portrait() || card.width() < kCompactPlayerWidth; }
     bool landscape() const { return aspect() > 1.0; }
+    // The picture's width over its height.
+    double pictureAspect() const { return aspect(); }
+    // A phone format: 9:16, 1:1, 4:5 (anything up to square).
+    bool phoneFormat() const { return aspect() <= 1.0 + 1e-3; }
     // The device the picture shows in, as the previews and its shape choose.
     Device device() const;
     // How many times a device's frame was drawn rather than blitted from
     // its cache (see DeviceFrameCache).
     int deviceFrameRenders() const { return m_frameCache.renders(); }
-    int stageGap() const;
-    // The room over (and as much under) the card or the device.
-    int stageInset(Device device) const;
+    // The stage as it is laid out (where a move is going to).
     StageLayout stageLayout() const { return stageLayout(device()); }
-    // The stage as it would be with the picture in `device`.
+    // The stage with the picture in `device` (None: the device Off).
     StageLayout stageLayout(Device device) const;
+    // The stage as it is drawn now, part way through a move.
+    StageLayout shownLayout() const;
     QRectF videoRect() const;
-    // Where the caption preview sits: near the picture's foot, lifted over
-    // the player's controls while they show, as a video site lifts its
-    // captions, gliding with the controls' fade.
+    // The picture as drawn: the card at Fit, else the frame at the zoom,
+    // centred on the card (clipped to the screen).
+    QRectF pictureRect() const;
+    // Where the caption sits: centred, its foot on title safe's (mockup-spec 3.3).
     QRectF captionRect() const;
     PlayerOverlay *overlay() const { return m_overlay; }
+
+    // Dim surround: the stage's backdrop from surround to surroundDim over
+    // 220 ms (view.dim, and the Finish workspace).
+    void setDim(bool dim);
+    bool dimmed() const { return m_dim; }
+    QColor surroundColor() const;
+    // The comments' drawings over the picture (view.annotations).
+    void setAnnotationsShown(bool shown);
+    bool annotationsShown() const { return m_annotationsShown; }
+    // One comment's drawing to show now: strokes normalised to the frame
+    // ({tool: pen|ellipse|rect|arrow, points: [[x, y], ...], color}) and
+    // the initials on the 16 pt avatar at the first stroke's start.
+    struct Annotation {
+        QString comment;
+        QJsonArray drawing;
+        QString initials;
+    };
+    void setAnnotations(const QList<Annotation> &annotations);
+    QList<Annotation> annotations() const { return m_annotations; }
+    // The QC overlap box: `rect` normalised to the frame, `tag` its text
+    // ("8 px"); an empty rect hides it (fading over 160 ms).
+    void setOverlap(const QRectF &rect, const QString &tag);
+    QRectF overlap() const { return m_overlapRect; }
+    QString overlapTag() const { return m_overlapTag; }
+    bool overlapShown() const { return m_overlapShown; }
+    // The overlap box and its tag in widget points, as drawn.
+    QRectF overlapBox() const;
+    QRectF overlapTagRect() const;
+
+    // Viewer zoom: 0 is Fit, else the share of the frame's own pixels (0.5,
+    // 1, 2), one frame pixel a device pixel.
+    void setZoom(double zoom);
+    double zoom() const { return m_zoom; }
+
+    // A drawing on the frame (the composer's Draw): the pointer draws pen
+    // strokes over the picture; Return finishes (drawingFinished with the
+    // strokes, normalised to the frame), Esc cancels.
+    void beginDrawing();
+    void finishDrawing();
+    void cancelDrawingCapture();
+    bool capturingDrawing() const { return m_capturing; }
+    QJsonArray capturedStrokes() const;
 
     // The masks of picture clip `clip` as its snapshot carries them, and
     // where its picture lands on the canvas (picturePlacement). An empty
@@ -143,19 +229,29 @@ public:
     void selectMask(const QString &name);
     QString selectedMask() const { return m_selectedMask; }
 
+    // Tests: -1 moves where something shows them (not on the offscreen
+    // platform, not under reduced motion), 0 never, 1 always.
+    static void setMotionOverride(int state);
+    bool moving() const;
+
 signals:
     void scrubbed(double fraction);
     void scrubEnded();
     void editRequested(const QJsonArray &ops);
-    // The conversation's width changed (a drag on its edge).
+    // The panel's width changed (a drag on its edge).
     void chatWidthChanged(int width);
     // A mask was drawn or the tool was put down.
     void maskToolChanged(MaskTool tool);
     // A click chose a mask, or none.
     void maskSelected(const QString &name);
+    void drawingFinished(const QJsonArray &strokes);
+    void drawingCancelled();
+    // Placed again (a resize, the panel, the format): the stage's parts moved.
+    void stageLaidOut();
 
 protected:
     bool event(QEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
@@ -163,10 +259,17 @@ protected:
     void leaveEvent(QEvent *) override;
     void paintEvent(QPaintEvent *) override;
     void resizeEvent(QResizeEvent *) override;
+    void showEvent(QShowEvent *) override;
 
 private:
-    // Place the rail and the conversation where stageLayout() puts them.
+    // Place the stage's parts where the layout puts them now (part way
+    // through a move while one runs: see setChatOpen).
     void layoutStage();
+    void applyLayout(const StageLayout &layout);
+    // The panel's fade while it opens or closes, `m_move` of the way; none
+    // once the move ends.
+    void fadePanel();
+    bool motionAllowed() const;
     double aspect() const;
     // Across the picture, as the player's bar is.
     double fractionAt(double x) const;
@@ -176,6 +279,9 @@ private:
     // Fractions of the clip's picture to widget pixels.
     QTransform pictureToWidget() const;
     QPointF picturePoint(const QPointF &widget) const;
+    // Widget points to fractions of the frame, and back.
+    QPointF frameFraction(const QPointF &widget) const;
+    QPointF fromFrame(const QPointF &fraction) const;
     int maskIndex(const QString &name) const;
     // The selected mask's handle under the pointer, or -1.
     int handleAt(const QPointF &widget) const;
@@ -183,6 +289,13 @@ private:
     QString maskAt(const QPointF &widget) const;
     void updateCursor(const QPointF &widget);
     void paintMasks(QPainter &p);
+    void paintCaption(QPainter &p, bool flagged);
+    void paintOverlap(QPainter &p);
+    void paintAnnotations(QPainter &p);
+    void paintStrokes(QPainter &p, const QJsonArray &drawing, const QString &initials);
+    // The caption's text box: its lines wrapped (and balanced) on a phone,
+    // one line on 16:9, and the box with its padding.
+    QRectF captionBox(QString *text) const;
     // Add `mask` (an outline) as the next free `k1`, `k2`, …, select it, and
     // put the tool down.
     void addMask(QJsonObject mask);
@@ -197,18 +310,47 @@ private:
     double m_height = 0.0;
     QPointer<QWidget> m_rail;
     QPointer<QWidget> m_panel;
+    QPointer<QWidget> m_scrub;
+    QPointer<QWidget> m_hud;
+    QPointer<QWidget> m_source;
     bool m_chatOpen = false;
     int m_chatWidth = kDefaultChatWidth;
-    DevicePreview m_device = DevicePreview::Island;
+    int m_phoneChatWidth = kPhoneChatWidth;
+    DevicePreview m_device = DevicePreview::Phone;
     LaptopPreview m_laptop = LaptopPreview::Laptop;
     DeviceFrameCache m_frameCache;
-    bool m_safeZones = false;
+    bool m_safeZones = true;
     PlayerOverlay *m_overlay = nullptr;
     double m_skimFraction = -1.0;
     bool m_skimming = false;
     bool m_liveScrub = false;
     bool m_scaledFast = false;
     QString m_caption;
+
+    // The move under way: from the layout drawn when it began to the
+    // layout's target, `m_move` (eased) of the way.
+    QVariantAnimation *m_mover = nullptr;
+    StageLayout m_from;
+    double m_move = 1.0;
+    bool m_laidOut = false;
+    QPointer<QGraphicsOpacityEffect> m_panelFade;
+    // Dim, 0 (surround) to 1 (surroundDim).
+    bool m_dim = false;
+    double m_dimLevel = 0.0;
+    QVariantAnimation *m_dimmer = nullptr;
+    bool m_annotationsShown = true;
+    QList<Annotation> m_annotations;
+    QRectF m_overlapRect;
+    QString m_overlapTag;
+    bool m_overlapShown = false;
+    double m_overlapLevel = 0.0;
+    QVariantAnimation *m_overlapFade = nullptr;
+    double m_zoom = 0.0;
+    // The drawing being captured: finished strokes and the one in hand, in
+    // fractions of the frame.
+    bool m_capturing = false;
+    QList<QVector<QPointF>> m_strokes;
+    QVector<QPointF> m_stroke;
 
     QString m_maskClip;
     QJsonArray m_masks;

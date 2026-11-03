@@ -39,7 +39,8 @@ pub(crate) fn library_files(directory: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// The `preset_library` event for the project in `directory`.
+/// The `preset_library` event for the project in `directory`: the
+/// presets, and the effects presets saved in `presets/looks/`.
 pub(crate) fn library(directory: &Path) -> Value {
     let presets: Vec<Value> = library_files(directory)
         .iter()
@@ -47,7 +48,64 @@ pub(crate) fn library(directory: &Path) -> Value {
         .collect();
     json!({"type": "preset_library",
         "directory": directory.join(PRESETS_DIR).to_string_lossy(),
-        "presets": presets})
+        "presets": presets, "looks": looks(directory)})
+}
+
+/// The effects presets in `presets/looks/`, in name order: `{path, name,
+/// id, version, effects, author?, updated?}`, or `{path, name, error}` for
+/// one that does not read.
+fn looks(directory: &Path) -> Vec<Value> {
+    let folder = directory.join(crate::looks::LOOKS_DIR);
+    let Ok(entries) = fs::read_dir(&folder) else {
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("kerflook")
+        })
+        .collect();
+    files.sort();
+    files.truncate(MAX_LISTED);
+    files
+        .iter()
+        .map(|file| {
+            let name = file
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let path = format!(
+                "{}/{}",
+                crate::looks::LOOKS_DIR,
+                file.file_name().unwrap_or_default().to_string_lossy()
+            );
+            let read = fs::read_to_string(file)
+                .map_err(|error| error.to_string())
+                .and_then(|text| kerf_model::look::read(&text, &path).map_err(|e| e.to_string()));
+            let mut entry = match read {
+                Ok(look) => {
+                    let effects = look
+                        .lines
+                        .iter()
+                        .filter(|line| matches!(line, kerf_model::look::Line::Fx { .. }))
+                        .count();
+                    json!({"path": path, "name": look.name, "id": look.id.as_str(),
+                        "version": look.version, "effects": effects})
+                }
+                Err(message) => json!({"path": path, "name": name, "error": message}),
+            };
+            if let Some(line) = git_text(
+                directory,
+                &["log", "-1", "--format=%an%x1f%cI", "--", &path],
+            ) {
+                if let Some((author, updated)) = line.split_once('\u{1f}') {
+                    entry["author"] = json!(author);
+                    entry["updated"] = json!(updated);
+                }
+            }
+            entry
+        })
+        .collect()
 }
 
 /// One library entry: what the preset needs, and who last changed it when
@@ -317,5 +375,29 @@ mod tests {
         let broken = &presets[2];
         assert_eq!(broken["name"], "broken");
         assert!(broken["error"].is_string(), "{broken}");
+        assert_eq!(event["looks"], json!([]));
+    }
+
+    #[test]
+    fn the_library_lists_saved_effects_presets() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut project = program();
+        let clip = &mut project.sequences[0].tracks[0].clips[0];
+        clip.effects.push(kerf_model::Effect {
+            fx: Id::new("blur.gaussian").unwrap(),
+            version: 1,
+            enabled: true,
+            params: Default::default(),
+        });
+        crate::looks::save(directory.path(), &project, "c1", "Soft", false).unwrap();
+        fs::write(directory.path().join("presets/looks/bad.kerflook"), "nope").unwrap();
+        let event = library(directory.path());
+        let looks = event["looks"].as_array().unwrap();
+        assert_eq!(looks.len(), 2, "{event}");
+        assert_eq!(looks[0]["path"], "presets/looks/Soft.kerflook");
+        assert_eq!(looks[0]["name"], "Soft");
+        assert_eq!(looks[0]["id"], "look.soft");
+        assert_eq!(looks[0]["effects"], 1);
+        assert!(looks[1]["error"].is_string());
     }
 }
