@@ -10,7 +10,10 @@
 //! per snapshot, keyed by track type, and `generators` the parameter
 //! definitions of each generator. Each clip's `props` holds only the
 //! properties and generator parameters it sets: a static value, or a keyframe
-//! list when animated. Anything absent is at its default. Its `effects` list
+//! list when animated, each key with its clip-relative `at` in seconds, the
+//! same offset as a whole `frame` on the sequence rate (what a typed op's
+//! `{"keys": [...]}` takes back), its `value` and its `interp`. Anything
+//! absent is at its default. Its `effects` list
 //! the effect stack in order, each with the parameters it sets the same way;
 //! their definitions are [`fx_catalog_json`]. Its `masks` list a picture
 //! clip's masks in order: each one's outline as the language writes it
@@ -18,7 +21,10 @@
 //! the properties it sets, which `maskProperties` defines; `maskModes` lists
 //! the modes. The sequence's `dropFrame` and `sampleRate`, and each
 //! source's `channels` and `sampleRate`, describe the formats an inspector
-//! shows.
+//! shows. Each track carries its `role` (the one it was given, or its kind's:
+//! `video` for picture, `dialogue` for sound, none for subtitles),
+//! `roleAssigned` (whether it was given one), and `syncLocked` (whether ripple
+//! edits on other tracks move it).
 
 use kerf_model::{
     Catalog, Clip, Content, Domain, FxKind, Mask, MaskMode, MaskShape, Param, ParamDef, ParamType,
@@ -139,6 +145,9 @@ fn track_json(project: &Project, sequence: &Sequence, track: &Track) -> Json {
         "enabled": track.enabled,
         "locked": track.locked,
         "muted": track.muted,
+        "role": track.role_or_default(),
+        "roleAssigned": track.role.is_some(),
+        "syncLocked": track.sync_locked,
         "clips": track.clips.iter().map(|clip| clip_json(project, rate, clip)).collect::<Vec<_>>(),
         "transitions": track.transitions.iter().map(|transition| {
             let cut = track.clip(transition.from.as_str()).map_or(Time::ZERO, Clip::end);
@@ -231,7 +240,7 @@ fn clip_json(project: &Project, rate: Rate, clip: &Clip) -> Json {
         .props
         .iter()
         .chain(params.into_iter().flatten())
-        .map(|(name, param)| (name.clone(), param_json(param)))
+        .map(|(name, param)| (name.clone(), param_json(param, rate)))
         .collect();
     if !props.is_empty() {
         object.insert("props".into(), Json::Object(props));
@@ -245,7 +254,7 @@ fn clip_json(project: &Project, rate: Rate, clip: &Clip) -> Json {
                     let params: Map<String, Json> = effect
                         .params
                         .iter()
-                        .map(|(name, param)| (name.clone(), param_json(param)))
+                        .map(|(name, param)| (name.clone(), param_json(param, rate)))
                         .collect();
                     json!({
                         "fx": effect.fx.as_str(),
@@ -259,12 +268,18 @@ fn clip_json(project: &Project, rate: Rate, clip: &Clip) -> Json {
         );
     }
     if !clip.masks.is_empty() {
-        object.insert("masks".into(), clip.masks.iter().map(mask_json).collect());
+        object.insert(
+            "masks".into(),
+            clip.masks
+                .iter()
+                .map(|mask| mask_json(mask, rate))
+                .collect(),
+        );
     }
     value
 }
 
-fn mask_json(mask: &Mask) -> Json {
+fn mask_json(mask: &Mask, rate: Rate) -> Json {
     let mut value = json!({
         "name": mask.name.as_str(),
         "mode": mask.mode.name(),
@@ -272,7 +287,7 @@ fn mask_json(mask: &Mask) -> Json {
         "params": mask
             .params
             .iter()
-            .map(|(name, param)| (name.clone(), param_json(param)))
+            .map(|(name, param)| (name.clone(), param_json(param, rate)))
             .collect::<Map<String, Json>>(),
     });
     match &mask.shape {
@@ -356,7 +371,7 @@ fn param_def_json(def: &ParamDef) -> Json {
     value
 }
 
-fn param_json(param: &Param) -> Json {
+fn param_json(param: &Param, rate: Rate) -> Json {
     match param {
         Param::Static(value) => value_json(value),
         Param::Animated(keys) => keys
@@ -364,6 +379,7 @@ fn param_json(param: &Param) -> Json {
             .map(|key| {
                 json!({
                     "at": key.at.seconds(),
+                    "frame": frames(rate, key.at),
                     "value": value_json(&key.value),
                     "interp": key.interp.name(),
                 })

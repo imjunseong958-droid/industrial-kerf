@@ -1,8 +1,10 @@
 #include "device_frame.h"
+#include "design_tokens.h"
 #include "editor_theme.h"
 
 #include <QFont>
 #include <QFontMetricsF>
+#include <QLinearGradient>
 #include <QPainter>
 #include <QPainterPath>
 
@@ -11,162 +13,288 @@
 
 namespace kerf {
 
-QString devicePreviewKey(DevicePreview preview) {
-    switch (preview) {
-    case DevicePreview::PunchHole: return QStringLiteral("punchhole");
-    case DevicePreview::Off: return QStringLiteral("off");
-    case DevicePreview::Island: break;
-    }
-    return QStringLiteral("island");
+namespace {
+
+QColor rgb(QRgb value) { return QColor::fromRgba(value); }
+
+// `color` with its HSL lightness moved by `delta` (0.04 is 4% lighter).
+QColor lightened(QRgb color, double delta) {
+    float h = 0, s = 0, l = 0, a = 0;
+    rgb(color).getHslF(&h, &s, &l, &a);
+    return QColor::fromHslF(h, s, float(std::clamp(double(l) + delta, 0.0, 1.0)), a);
 }
 
-DevicePreview devicePreviewFromKey(const QString &key) {
-    if (key == QLatin1String("punchhole")) return DevicePreview::PunchHole;
-    if (key == QLatin1String("off")) return DevicePreview::Off;
-    return DevicePreview::Island;
+// The colour `t` (0..1) of the way from `from` to `to`.
+QColor mixed(QRgb from, QRgb to, double t) {
+    t = std::clamp(t, 0.0, 1.0);
+    const auto channel = [t](int a, int b) { return int(std::lround(a + (b - a) * t)); };
+    return QColor(channel(qRed(from), qRed(to)), channel(qGreen(from), qGreen(to)), channel(qBlue(from), qBlue(to)));
 }
 
-QString devicePreviewLabel(DevicePreview preview) {
-    switch (preview) {
-    case DevicePreview::PunchHole: return QStringLiteral("Phone · Punch-Hole");
-    case DevicePreview::Off: return QStringLiteral("Off");
-    case DevicePreview::Island: break;
-    }
-    return QStringLiteral("Phone · Island");
+QLinearGradient vertical(const QRectF &r, QRgb top, QRgb bottom) {
+    QLinearGradient gradient(r.topLeft(), r.bottomLeft());
+    gradient.setColorAt(0.0, rgb(top));
+    gradient.setColorAt(1.0, rgb(bottom));
+    return gradient;
 }
 
-double deviceBodyAspect() {
-    // The screen is the body's width less two bezels; the body's height is
-    // the screen's plus two bezels.
-    const double screen = 1.0 - 2.0 * kDeviceBezel;
-    return 1.0 / (screen / kDeviceScreenAspect + 2.0 * kDeviceBezel);
+// A rectangle whose top corners are circular arcs of `top` and bottom ones of `bottom`.
+QPainterPath roundedTop(const QRectF &r, double top, double bottom) {
+    const double most = std::max(0.0, std::min(r.width(), r.height()) / 2.0);
+    top = std::clamp(top, 0.0, most);
+    bottom = std::clamp(bottom, 0.0, most);
+    QPainterPath path;
+    path.moveTo(r.left() + top, r.top());
+    path.lineTo(r.right() - top, r.top());
+    if (top > 0) path.arcTo(QRectF(r.right() - 2.0 * top, r.top(), 2.0 * top, 2.0 * top), 90, -90);
+    path.lineTo(r.right(), r.bottom() - bottom);
+    if (bottom > 0) path.arcTo(QRectF(r.right() - 2.0 * bottom, r.bottom() - 2.0 * bottom, 2.0 * bottom, 2.0 * bottom), 0, -90);
+    path.lineTo(r.left() + bottom, r.bottom());
+    if (bottom > 0) path.arcTo(QRectF(r.left(), r.bottom() - 2.0 * bottom, 2.0 * bottom, 2.0 * bottom), 270, -90);
+    path.lineTo(r.left(), r.top() + top);
+    if (top > 0) path.arcTo(QRectF(r.left(), r.top(), 2.0 * top, 2.0 * top), 180, -90);
+    path.closeSubpath();
+    return path;
 }
 
-DeviceGeometry deviceGeometry(const QRectF &body, double pictureAspect) {
-    DeviceGeometry out;
-    out.body = body;
-    out.bezel = kDeviceBezel * body.width();
-    out.bodyRadius = kDeviceBodyRadius * body.width();
-    out.screenRadius = std::max(0.0, out.bodyRadius - out.bezel);
-    out.screen = body.adjusted(out.bezel, out.bezel, -out.bezel, -out.bezel);
-    // Across the screen's width, centred on its height; a picture taller
-    // than the screen fits its height instead.
-    QSizeF picture(out.screen.width(), out.screen.width() / std::max(0.01, pictureAspect));
-    if (picture.height() > out.screen.height())
-        picture = QSizeF(out.screen.height() * pictureAspect, out.screen.height());
-    out.picture = QRectF(out.screen.center() - QPointF(picture.width() / 2.0, picture.height() / 2.0), picture);
-    return out;
+// A continuous corner of `radius`: it leaves each edge 1.5287 radii from the
+// corner with no curvature (both control points on the edge), and its two
+// halves meet at a circular corner's 45-degree point, tangent there.
+constexpr double kCornerReach = 1.528665;
+constexpr double kCornerControl = 1.088493;
+constexpr double kCornerInner = 2.0 - 1.4142135623730951; // 0.58579: the 45-degree point's tangent meets the edge here
+constexpr double kCornerMid = 1.0 - 0.7071067811865476;   // 0.29289: the 45-degree point's offset from each edge
+
+QPainterPath continuousRect(const QRectF &r, double radius) {
+    radius = std::clamp(radius, 0.0, std::min(r.width(), r.height()) / 2.0 / kCornerReach);
+    const double reach = kCornerReach * radius;
+    QPainterPath path;
+    // `u` points back along the edge that arrives at `corner`, `v` along the one that leaves it.
+    const auto corner = [&](const QPointF &c, const QPointF &u, const QPointF &v) {
+        const auto at = [&](double a, double b) { return c + a * radius * u + b * radius * v; };
+        path.cubicTo(at(kCornerControl, 0), at(kCornerInner, 0), at(kCornerMid, kCornerMid));
+        path.cubicTo(at(0, kCornerInner), at(0, kCornerControl), at(0, kCornerReach));
+    };
+    path.moveTo(r.left() + reach, r.top());
+    path.lineTo(r.right() - reach, r.top());
+    corner(r.topRight(), QPointF(-1, 0), QPointF(0, 1));
+    path.lineTo(r.right(), r.bottom() - reach);
+    corner(r.bottomRight(), QPointF(0, -1), QPointF(-1, 0));
+    path.lineTo(r.left() + reach, r.bottom());
+    corner(r.bottomLeft(), QPointF(1, 0), QPointF(0, -1));
+    path.lineTo(r.left(), r.top() + reach);
+    corner(r.topLeft(), QPointF(0, 1), QPointF(1, 0));
+    path.closeSubpath();
+    return path;
 }
 
-QRectF deviceStatusBar(const DeviceGeometry &device) {
-    const double s = device.screen.width();
-    return QRectF(device.screen.left(), device.screen.top(), s, 0.132 * s);
+// The picture of `aspect` across `screen`'s width, centred on its height; a
+// picture taller than the screen fits its height instead.
+QRectF pictureOn(const QRectF &screen, double aspect) {
+    aspect = std::max(0.01, aspect);
+    QSizeF size(screen.width(), screen.width() / aspect);
+    if (size.height() > screen.height()) size = QSizeF(screen.height() * aspect, screen.height());
+    return QRectF(screen.center() - QPointF(size.width() / 2.0, size.height() / 2.0), size);
 }
 
-QRectF deviceCamera(const DeviceGeometry &device, DevicePreview preview) {
-    const double s = device.screen.width();
-    const double cx = device.screen.center().x();
-    if (preview == DevicePreview::Island) {
-        const QSizeF size(0.30 * s, 0.088 * s);
-        return QRectF(cx - size.width() / 2.0, device.screen.top() + 0.028 * s, size.width(), size.height());
-    }
-    if (preview == DevicePreview::PunchHole) {
-        const double d = std::max(4.0, 0.05 * s);
-        const double y = deviceStatusBar(device).center().y() - d / 2.0;
-        return QRectF(cx - d / 2.0, y, d, d);
-    }
-    return {};
-}
+// The screen width the feed's offsets are the mockup's at: the phone's at the
+// 1600 x 1000 stage, 480 tall.
+constexpr double kFeedReference = 480.0 * kDeviceBodyAspect * kDeviceScreenWidth; // 213.66
 
-void paintDeviceBody(QPainter &p, const DeviceGeometry &device, const EditorTheme &theme) {
+void paintPhone(QPainter &p, const DeviceGeometry &device) {
     p.save();
     p.setRenderHint(QPainter::Antialiasing);
     p.setPen(Qt::NoPen);
-    // A soft shadow round the phone: layers that grow and fade, centred on
-    // it, as a 10-point blur would leave; it stays inside the stage's margin.
-    constexpr int kLayers = 6;
-    for (int layer = 0; layer < kLayers; ++layer) {
-        const double spread = kDeviceShadowBlur * (1.0 - double(layer) / kLayers) / 2.0;
-        QColor shade = theme.deviceShadow;
-        shade.setAlphaF(theme.deviceShadow.alphaF() / kLayers * 1.6);
-        p.setBrush(shade);
-        p.drawRoundedRect(device.body.adjusted(-spread, -spread, spread, spread), device.bodyRadius + spread, device.bodyRadius + spread);
-    }
-    // The side buttons, a little proud of the body: volume on the left,
-    // power on the right.
     const QRectF body = device.body;
-    const double h = body.height();
-    const auto button = [&](bool left, double from, double to) {
-        const double x = left ? body.left() - kDeviceButtonProud : body.right() - 3.0;
-        p.setBrush(theme.deviceEdge);
-        p.drawRoundedRect(QRectF(x, body.top() + from * h, kDeviceButtonProud + 3.0, (to - from) * h), 1.0, 1.0);
-    };
-    button(true, 0.20, 0.26);
-    button(true, 0.29, 0.35);
-    button(false, 0.24, 0.34);
-    // The body, its 1px lighter edge, and the screen.
-    p.setBrush(theme.deviceFrame);
-    p.drawRoundedRect(body, device.bodyRadius, device.bodyRadius);
-    p.setPen(QPen(theme.deviceEdge, 1.0));
-    p.setBrush(Qt::NoBrush);
-    p.drawRoundedRect(body.adjusted(0.5, 0.5, -0.5, -0.5), device.bodyRadius - 0.5, device.bodyRadius - 0.5);
-    p.setPen(Qt::NoPen);
-    p.setBrush(theme.deviceScreen);
+    // The buttons under the band, 4% darker than the band where they sit.
+    for (const QRectF &button : deviceButtons(device)) {
+        const double t = (button.center().y() - body.top()) / std::max(1.0, body.height());
+        const QColor band = mixed(device_material::bandTop, device_material::bandBottom, t);
+        p.setBrush(lightened(band.rgb(), -device_material::buttonDarker));
+        p.drawRoundedRect(button, kDeviceButtonRadius, kDeviceButtonRadius);
+    }
+    // The band: a 1 pt black outline, then the graphite.
+    p.setBrush(rgb(device_material::outline));
+    p.drawPath(deviceBodyPath(device));
+    DeviceGeometry inner = device;
+    inner.body = body.adjusted(1, 1, -1, -1);
+    inner.bodyRadius = std::max(0.0, device.bodyRadius - 1.0);
+    p.setBrush(vertical(body, device_material::bandTop, device_material::bandBottom));
+    p.drawPath(deviceBodyPath(inner));
+    // The glass, and the screen's black on it.
+    p.setBrush(rgb(tokens::overlay::deviceGlass));
+    p.drawRoundedRect(device.glass, device.glassRadius, device.glassRadius);
+    p.setBrush(rgb(tokens::overlay::deviceScreen));
     p.drawRoundedRect(device.screen, device.screenRadius, device.screenRadius);
     p.restore();
 }
 
-void paintDeviceChrome(QPainter &p, const DeviceGeometry &device, DevicePreview preview, const EditorTheme &theme) {
-    if (preview == DevicePreview::Off) return;
+void paintLaptop(QPainter &p, const LaptopGeometry &laptop) {
     p.save();
     p.setRenderHint(QPainter::Antialiasing);
-    const QRectF bar = deviceStatusBar(device);
-    const QRectF camera = deviceCamera(device, preview);
-    // The camera on the screen's black: its faint rim and a lens's glint,
-    // so it reads as a simulator draws it.
-    p.setPen(QPen(theme.deviceEdge, 1.0));
-    p.setBrush(theme.deviceScreen);
-    const QRectF rim = camera.adjusted(0.5, 0.5, -0.5, -0.5);
-    p.drawRoundedRect(rim, rim.height() / 2.0, rim.height() / 2.0);
     p.setPen(Qt::NoPen);
-    p.setBrush(theme.deviceEdge);
-    const QPointF lens = preview == DevicePreview::Island ? QPointF(camera.right() - camera.height() / 2.0, camera.center().y()) : camera.center();
-    p.drawEllipse(lens, camera.height() * 0.18, camera.height() * 0.18);
-    // The time in the left side's middle; signal and battery in the right's.
-    const double side = (bar.width() - std::max(camera.width(), 0.30 * bar.width())) / 2.0;
-    const QRectF left(bar.left(), bar.top(), side, bar.height());
-    const QRectF right(bar.right() - side, bar.top(), side, bar.height());
-    QFont font = p.font();
-    font.setPixelSize(11);
-    font.setWeight(QFont::DemiBold);
-    p.setFont(font);
-    p.setPen(theme.deviceInk);
-    p.drawText(left, Qt::AlignCenter, QStringLiteral("12:00"));
-    const QFontMetricsF metrics(font);
-    const double glyphHeight = std::round(metrics.capHeight());
-    const double y = std::round(right.center().y() + glyphHeight / 2.0);
-    // Four bars of signal, rising, then the battery and its nub.
-    const double signalWidth = 4 * 2.0 + 3 * 1.5;
-    const double batteryWidth = 18.0;
-    double x = std::round(right.center().x() - (signalWidth + 5.0 + batteryWidth) / 2.0);
-    p.setPen(Qt::NoPen);
-    p.setBrush(theme.deviceInk);
-    for (int step = 0; step < 4; ++step) {
-        const double barHeight = glyphHeight * (0.4 + 0.2 * step);
-        p.drawRoundedRect(QRectF(x, y - barHeight, 2.0, barHeight), 0.6, 0.6);
-        x += 3.5;
+    const QRectF lid = laptop.lid;
+    const QRectF base = laptop.base;
+    // The lid: a 1 pt black outline, a 1 pt lighter line inside it, and the
+    // graphite, all inside the lid's own bounds.
+    const auto lidPath = [&](double inset) {
+        return roundedTop(lid.adjusted(inset, inset, -inset, -inset), laptop.lidRadius - inset, laptop.lidFootRadius - inset);
+    };
+    p.setBrush(rgb(device_material::outline));
+    p.drawPath(lidPath(0));
+    p.setBrush(rgb(device_material::lidInset));
+    p.drawPath(lidPath(1));
+    p.setBrush(vertical(lid, device_material::lidTop, device_material::lidBottom));
+    p.drawPath(lidPath(2));
+    // The glass inside the rim, the glass-edge line just outside the screen,
+    // and the screen's black; the screen's top corners round, its bottom
+    // ones square.
+    p.setBrush(rgb(tokens::overlay::deviceGlass));
+    p.drawPath(roundedTop(laptop.glass, laptop.glassRadius, std::max(0.0, laptop.lidFootRadius - laptop.rim)));
+    const double edge = kLaptopGlassEdge;
+    p.setBrush(rgb(device_material::outline));
+    p.drawPath(roundedTop(laptop.screen.adjusted(-edge, -edge, edge, edge), laptop.screenRadius + edge, 0.0));
+    p.setBrush(rgb(tokens::overlay::deviceScreen));
+    p.drawPath(roundedTop(laptop.screen, laptop.screenRadius, 0.0));
+    // The hinge: the lid's bottom rim in its dark tone.
+    p.setBrush(rgb(device_material::hinge));
+    p.drawRect(laptop.hinge);
+    // The base: outlined, its face darker toward the foot, under a top lip
+    // 4% lighter, the thumb scoop cut from the lip, 3% darker than the face.
+    if (!base.isEmpty()) {
+        const auto basePath = [&](double inset) {
+            return roundedTop(base.adjusted(inset, inset, -inset, -inset), laptop.baseTopRadius - inset, laptop.baseRadius - inset);
+        };
+        p.setBrush(rgb(device_material::outline));
+        p.drawPath(basePath(0));
+        p.setBrush(vertical(base, device_material::baseTop, device_material::baseBottom));
+        p.drawPath(basePath(1));
+        const double lip = std::min(kLaptopLip, base.height() / 2.0);
+        p.setBrush(lightened(device_material::baseTop, device_material::lipLighter));
+        p.drawRect(QRectF(base.left() + 1.0, base.top(), base.width() - 2.0, lip));
+        const QRectF scoop = laptop.scoop;
+        if (!scoop.isEmpty()) {
+            // Its ends elliptical, as the mockup's 24 / 4 corners on a 112-wide scoop.
+            const double rx = std::min(scoop.width() / 2.0, 24.0 / 112.0 * scoop.width());
+            const double ry = scoop.height();
+            QPainterPath cut;
+            cut.moveTo(scoop.topLeft());
+            cut.arcTo(QRectF(scoop.left(), scoop.top() - ry, 2.0 * rx, 2.0 * ry), 180, 90);
+            cut.lineTo(scoop.right() - rx, scoop.bottom());
+            cut.arcTo(QRectF(scoop.right() - 2.0 * rx, scoop.top() - ry, 2.0 * rx, 2.0 * ry), 270, 90);
+            cut.closeSubpath();
+            const QColor face = mixed(device_material::baseTop, device_material::baseBottom, 0.5 * scoop.height() / base.height());
+            p.setBrush(lightened(face.rgb(), -device_material::scoopDarker));
+            p.drawPath(cut);
+        }
     }
-    x += 5.0 - 1.5;
-    const QRectF battery(x, y - glyphHeight, batteryWidth - 2.0, glyphHeight);
-    p.setPen(QPen(theme.deviceInk, 1.0));
-    p.setBrush(Qt::NoBrush);
-    p.drawRoundedRect(battery.adjusted(0.5, 0.5, -0.5, -0.5), 2.5, 2.5);
-    p.setPen(Qt::NoPen);
-    p.setBrush(theme.deviceInk);
-    p.drawRoundedRect(battery.adjusted(2.0, 2.0, -5.0, -2.0), 1.0, 1.0);
-    p.drawRoundedRect(QRectF(battery.right() + 0.5, battery.center().y() - 2.0, 1.5, 4.0), 0.5, 0.5);
     p.restore();
 }
+
+} // namespace
+
+// ------------------------------------------------------------------------ phone
+
+QString devicePreviewKey(DevicePreview preview) {
+    return preview == DevicePreview::Off ? QStringLiteral("off") : QStringLiteral("phone");
+}
+
+DevicePreview devicePreviewFromKey(const QString &key) {
+    // "phone", and the old "island", "punchhole" and "punch", are the phone.
+    return key == QLatin1String("off") ? DevicePreview::Off : DevicePreview::Phone;
+}
+
+QString devicePreviewLabel(DevicePreview preview) {
+    return preview == DevicePreview::Off ? QStringLiteral("Off") : QStringLiteral("Phone");
+}
+
+QString devicePreviewLabel(DevicePreview preview, double pictureAspect) {
+    if (preview != DevicePreview::Off && deviceShowsFeed(pictureAspect)) return QStringLiteral("Phone · Feed");
+    return devicePreviewLabel(preview);
+}
+
+QList<DevicePreview> devicePreviewChoices() { return {DevicePreview::Phone, DevicePreview::Off}; }
+
+bool deviceShowsFeed(double pictureAspect) { return pictureAspect >= 0.75 - 1e-3 && pictureAspect <= 1.0 + 1e-3; }
+
+double deviceBodyAspect() { return kDeviceBodyAspect; }
+
+DeviceGeometry deviceGeometry(const QRectF &body, double pictureAspect) {
+    DeviceGeometry out;
+    out.body = body;
+    const double w = body.width();
+    out.bezel = kDeviceBezel * w;
+    out.topBezel = kDeviceTopBezel * w;
+    out.bodyRadius = kDeviceBodyRadius * w;
+    // The screen at its own shape, centred in the body.
+    const QSizeF screen(w - 2.0 * out.bezel, (w - 2.0 * out.bezel) / kDeviceScreenAspect);
+    out.screen = QRectF(body.center() - QPointF(screen.width() / 2.0, screen.height() / 2.0), screen);
+    out.screenRadius = kDeviceScreenRadius * screen.width();
+    const double glass = kDeviceGlass * w;
+    out.glass = out.screen.adjusted(-glass, -glass, glass, glass);
+    out.glassRadius = out.screenRadius + glass;
+    out.picture = pictureOn(out.screen, pictureAspect);
+    return out;
+}
+
+QPainterPath deviceBodyPath(const DeviceGeometry &device) { return continuousRect(device.body, device.bodyRadius); }
+
+QList<QRectF> deviceButtons(const DeviceGeometry &device) {
+    const QRectF body = device.body;
+    QList<QRectF> out;
+    for (const DeviceButtonSpan &span : kDeviceButtons) {
+        const double x = span.left ? body.left() - kDeviceButtonProud : body.right() + kDeviceButtonProud - kDeviceButtonWidth;
+        out.append(QRectF(x, body.top() + span.from * body.height(), kDeviceButtonWidth, (span.to - span.from) * body.height()));
+    }
+    return out;
+}
+
+QRectF deviceStatusBar(const DeviceGeometry &) { return {}; }
+
+QRectF deviceCamera(const DeviceGeometry &, DevicePreview) { return {}; }
+
+DeviceFeed deviceFeed(const DeviceGeometry &device) {
+    const double s = std::min(1.0, device.screen.width() / kFeedReference);
+    const QRectF pic = device.picture;
+    const double px = pic.left(), py = pic.top(), below = pic.bottom();
+    const auto box = [s](double x, double y, double w, double h) { return QRectF(x, y, w * s, h * s); };
+    DeviceFeed out;
+    out.avatar = box(px + 12 * s, py - 36 * s, 24, 24);
+    out.name = box(px + 44 * s, py - 32 * s, 72, 6);
+    out.handle = box(px + 44 * s, py - 20 * s, 44, 6);
+    for (int index = 0; index < 3; ++index) out.actions[index] = box(px + (12 + 28 * index) * s, below + 12 * s, 16, 16);
+    out.caption = box(px + 12 * s, below + 40 * s, 160, 6);
+    out.captionMore = box(px + 12 * s, below + 52 * s, 112, 6);
+    return out;
+}
+
+void paintDeviceBody(QPainter &painter, const DeviceGeometry &device, const EditorTheme &) { paintPhone(painter, device); }
+
+void paintDeviceFeed(QPainter &p, const DeviceGeometry &device) {
+    const DeviceFeed feed = deviceFeed(device);
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(Qt::NoPen);
+    p.setBrush(rgb(tokens::raised));
+    QPainterPath screen;
+    screen.addRoundedRect(device.screen, device.screenRadius, device.screenRadius);
+    p.setClipPath(screen, Qt::IntersectClip);
+    const auto bar = [&p](const QRectF &r) {
+        const double radius = std::min({tokens::radius::small, r.height() / 2.0, r.width() / 2.0});
+        p.drawRoundedRect(r, radius, radius);
+    };
+    p.drawEllipse(feed.avatar);
+    bar(feed.name);
+    bar(feed.handle);
+    for (const QRectF &dot : feed.actions) p.drawEllipse(dot);
+    bar(feed.caption);
+    bar(feed.captionMore);
+    p.restore();
+}
+
+void paintDeviceChrome(QPainter &, const DeviceGeometry &, DevicePreview, const EditorTheme &) {}
+
+// ----------------------------------------------------------------------- laptop
 
 QString laptopPreviewKey(LaptopPreview preview) {
     return preview == LaptopPreview::Off ? QStringLiteral("off") : QStringLiteral("laptop");
@@ -180,175 +308,80 @@ QString laptopPreviewLabel(LaptopPreview preview) {
     return preview == LaptopPreview::Off ? QStringLiteral("Off") : QStringLiteral("Laptop");
 }
 
-namespace {
+double laptopBodyAspect() { return kLaptopBodyAspect; }
 
-// The lid's height over its width: the bezel over the screen, the screen,
-// and the bezel under it.
-double lidAspect() { return kLaptopTopBezel + (1.0 - 2.0 * kLaptopBezel) / kLaptopScreenAspect + kLaptopBezel; }
-
-} // namespace
-
-double laptopBodyAspect() { return kLaptopBodyWidth / (lidAspect() * (1.0 + kLaptopBaseHeight)); }
-
-double laptopPictureShare() { return (1.0 - 2.0 * kLaptopBezel) / kLaptopBodyWidth; }
+double laptopPictureShare() { return kLaptopScreenWidth / kLaptopBodyWidth; }
 
 LaptopGeometry laptopGeometry(const QRectF &body, double pictureAspect) {
     LaptopGeometry out;
     out.body = body;
-    const double lidWidth = body.width() / kLaptopBodyWidth;
-    const double lidHeight = lidWidth * lidAspect();
-    out.lid = QRectF(body.center().x() - lidWidth / 2.0, body.top(), lidWidth, lidHeight);
-    const double baseWidth = lidWidth * kLaptopBaseWidth;
-    out.base = QRectF(body.center().x() - baseWidth / 2.0, out.lid.bottom(), baseWidth, body.bottom() - out.lid.bottom());
-    out.rim = std::max(2.0, kLaptopRim * lidWidth);
-    out.bezel = kLaptopBezel * lidWidth;
-    out.topBezel = kLaptopTopBezel * lidWidth;
-    out.lidRadius = kLaptopLidRadius * lidWidth;
-    out.screen = QRectF(out.lid.left() + out.bezel, out.lid.top() + out.topBezel, lidWidth - 2.0 * out.bezel,
-                        (lidWidth - 2.0 * out.bezel) / kLaptopScreenAspect);
-    out.screenRadius = std::max(2.0, kLaptopScreenRadius * lidWidth);
-    // Across the screen's width, centred on its height; a picture taller
-    // than the screen fits its height instead.
-    QSizeF picture(out.screen.width(), out.screen.width() / std::max(0.01, pictureAspect));
-    if (picture.height() > out.screen.height())
-        picture = QSizeF(out.screen.height() * pictureAspect, out.screen.height());
-    out.picture = QRectF(out.screen.center() - QPointF(picture.width() / 2.0, picture.height() / 2.0), picture);
-    const QSizeF notch(kLaptopNotchWidth * lidWidth, kLaptopNotchDepth * lidWidth);
-    out.notch = QRectF(QPointF(out.screen.center().x() - notch.width() / 2.0, out.screen.top()), notch);
+    const double w = body.width() / kLaptopBodyWidth;
+    out.lid = QRectF(body.center().x() - w / 2.0, body.top(), w, kLaptopLidHeight * w);
+    out.base = QRectF(body.center().x() - kLaptopBaseWidth * w / 2.0, out.lid.bottom(), kLaptopBaseWidth * w,
+                      std::max(0.0, body.bottom() - out.lid.bottom()));
+    out.rim = kLaptopRim * w;
+    out.bezel = kLaptopBezel * w;
+    out.topBezel = out.bezel;
+    out.glass = out.lid.adjusted(out.rim, out.rim, -out.rim, -out.rim);
+    out.screen = out.lid.adjusted(out.bezel, out.bezel, -out.bezel, -out.bezel);
+    out.screenRadius = kLaptopScreenRadius * out.screen.width();
+    out.lidRadius = out.screenRadius + out.bezel;
+    out.glassRadius = out.screenRadius + (out.bezel - out.rim);
+    out.lidFootRadius = kLaptopLidFootRadius * w;
+    out.hinge = QRectF(out.lid.left() + out.rim, out.lid.bottom() - out.rim, w - 2.0 * out.rim, out.rim);
+    out.baseRadius = kLaptopBaseRadius * w;
+    out.baseTopRadius = kLaptopBaseTopRadius;
+    const double scoopWidth = kLaptopScoopWidth * out.base.width();
+    out.scoop = QRectF(out.base.center().x() - scoopWidth / 2.0, out.base.top(), scoopWidth,
+                       std::min(kLaptopScoopDepth * w, out.base.height() / 2.0));
+    out.picture = pictureOn(out.screen, pictureAspect);
     return out;
 }
 
-QRectF laptopCamera(const LaptopGeometry &laptop) {
-    const double d = std::max(2.5, 0.28 * laptop.notch.height());
-    return QRectF(laptop.notch.center() - QPointF(d / 2.0, d / 2.0), QSizeF(d, d));
-}
+QRectF laptopCamera(const LaptopGeometry &) { return {}; }
 
-namespace {
+void paintLaptopBody(QPainter &painter, const LaptopGeometry &laptop, const EditorTheme &) { paintLaptop(painter, laptop); }
 
-// A rectangle whose top corners are rounded by `top` and bottom ones by `bottom`.
-QPainterPath roundedTop(const QRectF &r, double top, double bottom) {
-    top = std::min({top, r.width() / 2.0, r.height() / 2.0});
-    bottom = std::min({bottom, r.width() / 2.0, r.height() / 2.0});
-    QPainterPath path;
-    path.moveTo(r.left() + top, r.top());
-    path.lineTo(r.right() - top, r.top());
-    path.quadTo(r.right(), r.top(), r.right(), r.top() + top);
-    path.lineTo(r.right(), r.bottom() - bottom);
-    path.quadTo(r.right(), r.bottom(), r.right() - bottom, r.bottom());
-    path.lineTo(r.left() + bottom, r.bottom());
-    path.quadTo(r.left(), r.bottom(), r.left(), r.bottom() - bottom);
-    path.lineTo(r.left(), r.top() + top);
-    path.quadTo(r.left(), r.top(), r.left() + top, r.top());
-    path.closeSubpath();
-    return path;
-}
+// ------------------------------------------------------------------------ cache
 
-} // namespace
-
-void paintLaptopBody(QPainter &p, const LaptopGeometry &laptop, const EditorTheme &theme) {
-    p.save();
-    p.setRenderHint(QPainter::Antialiasing);
-    p.setPen(Qt::NoPen);
-    const QRectF lid = laptop.lid;
-    const QRectF base = laptop.base;
-    // The base's front corners are rounded by most of its height, as a thin
-    // slab's are seen from the front; its back ones hardly at all. The
-    // lid's foot is hidden by the hinge, so its corners there are nearly
-    // square.
-    const double baseRadius = 0.8 * base.height();
-    const double lidFoot = 1.5;
-    const QPainterPath lidPath = roundedTop(lid, laptop.lidRadius, lidFoot);
-    const QPainterPath basePath = roundedTop(base, 1.0, baseRadius);
-    // The same soft shadow as the phone's, even all round.
-    constexpr int kLayers = 6;
-    for (int layer = 0; layer < kLayers; ++layer) {
-        const double spread = kDeviceShadowBlur * (1.0 - double(layer) / kLayers) / 2.0;
-        QColor shade = theme.deviceShadow;
-        shade.setAlphaF(theme.deviceShadow.alphaF() / kLayers * 1.6);
-        p.setBrush(shade);
-        QPainterPath shadow = roundedTop(lid.adjusted(-spread, -spread, spread, spread), laptop.lidRadius + spread, lidFoot + spread);
-        shadow.addPath(roundedTop(base.adjusted(-spread, -spread, spread, spread), 1.0 + spread, baseRadius + spread));
-        shadow.setFillRule(Qt::WindingFill);
-        p.drawPath(shadow);
-    }
-    // The lid: its thin metal rim round black glass, the black screen with
-    // rounded top corners, and the notch with the camera in it, hanging
-    // into the bar over the picture.
-    p.setBrush(theme.laptopShell);
-    p.drawPath(lidPath);
-    const double rim = laptop.rim;
-    p.setBrush(theme.laptopBezel);
-    p.drawPath(roundedTop(lid.adjusted(rim, rim, -rim, -rim), std::max(0.0, laptop.lidRadius - rim), std::max(0.0, lidFoot - rim)));
-    p.setBrush(theme.deviceScreen);
-    p.drawPath(roundedTop(laptop.screen, laptop.screenRadius, 0.0));
-    const QRectF notch = laptop.notch;
-    p.setBrush(theme.laptopBezel);
-    p.drawPath(roundedTop(notch, 0.0, 0.45 * notch.height()));
-    const QRectF camera = laptopCamera(laptop);
-    p.setBrush(theme.laptopCamera);
-    p.drawEllipse(camera);
-    // The hinge: a dark band along the lid's foot, between its rounded
-    // corners, where it meets the base.
-    const double hinge = std::max(1.5, 0.005 * lid.width());
-    p.setBrush(theme.laptopHinge);
-    p.drawRect(QRectF(lid.left() + 2.0 * rim, lid.bottom() - hinge, lid.width() - 4.0 * rim, hinge));
-    // The base: the metal's front face, darker toward the foot, under its
-    // lit top face, with a highlight along the very top.
-    QLinearGradient front(base.topLeft(), base.bottomLeft());
-    front.setColorAt(0.0, theme.laptopShell);
-    front.setColorAt(1.0, theme.laptopShellShade);
-    p.setBrush(front);
-    p.drawPath(basePath);
-    const double face = std::max(1.0, std::round(0.38 * base.height()));
-    p.setBrush(theme.laptopDeck);
-    p.drawRect(QRectF(base.left() + 1.0, base.top(), base.width() - 2.0, face));
-    // The thumb-cut: a shallow scoop in the middle of the top face, in the
-    // front face's shade.
-    const double cutWidth = 0.12 * lid.width();
-    const double cutDepth = std::max(1.5, 0.45 * base.height());
-    const QRectF cut(base.center().x() - cutWidth / 2.0, base.top(), cutWidth, cutDepth);
-    p.setBrush(theme.laptopShellShade);
-    p.drawPath(roundedTop(cut, 0.0, cutDepth));
-    p.setPen(QPen(theme.laptopHighlight, 1.0));
-    p.drawLine(QPointF(base.left() + 1.0, base.top() + 0.5), QPointF(cut.left(), base.top() + 0.5));
-    p.drawLine(QPointF(cut.right(), base.top() + 0.5), QPointF(base.right() - 1.0, base.top() + 0.5));
-    p.setPen(Qt::NoPen);
-    // Its two feet, just showing under the front corners.
-    const double footWidth = 0.05 * lid.width();
-    const double footHeight = std::max(1.0, 0.18 * base.height());
-    p.setBrush(theme.laptopHinge);
-    for (const double x : {base.left() + 0.07 * base.width(), base.right() - 0.07 * base.width() - footWidth})
-        p.drawRoundedRect(QRectF(x, base.bottom() - 0.5, footWidth, footHeight + 0.5), footHeight / 2.0, footHeight / 2.0);
-    p.restore();
-}
-
-void DeviceFrameCache::paint(QPainter &painter, Kind kind, const QRectF &body, const EditorTheme &theme, qreal ratio) {
+void DeviceFrameCache::paint(QPainter &painter, Kind kind, const QRectF &body, double pictureAspect, qreal ratio) {
     // The pixmap starts on a whole point; the body keeps its offset within it.
     const QPointF origin(std::floor(body.left()) - kMargin, std::floor(body.top()) - kMargin);
     const QRectF local = body.translated(-origin);
-    const bool same = !m_pixmap.isNull() && kind == m_kind && local == m_local && theme.dark == m_dark &&
-                      theme.deviceFrame.rgba() == m_frame && theme.deviceScreen.rgba() == m_screen && ratio == m_ratio;
+    // Only a phone's feed depends on the picture's shape.
+    const bool feed = kind == Kind::Phone && deviceShowsFeed(pictureAspect);
+    const double aspect = feed ? pictureAspect : 0.0;
+    const bool same = !m_pixmap.isNull() && kind == m_kind && local == m_local && feed == m_feed && aspect == m_aspect &&
+                      ratio == m_ratio;
     if (!same) {
         const QSize size(int(std::ceil(local.right())) + kMargin, int(std::ceil(local.bottom())) + kMargin);
         m_pixmap = QPixmap(QSize(int(std::ceil(size.width() * ratio)), int(std::ceil(size.height() * ratio))));
         m_pixmap.setDevicePixelRatio(ratio);
         m_pixmap.fill(Qt::transparent);
         QPainter frame(&m_pixmap);
-        if (kind == Kind::Laptop)
-            paintLaptopBody(frame, laptopGeometry(local, 16.0 / 9.0), theme);
-        else
-            paintDeviceBody(frame, deviceGeometry(local, 9.0 / 16.0), theme);
+        if (kind == Kind::Laptop) {
+            paintLaptop(frame, laptopGeometry(local, 16.0 / 9.0));
+        } else {
+            const DeviceGeometry phone = deviceGeometry(local, feed ? aspect : 9.0 / 16.0);
+            paintPhone(frame, phone);
+            if (feed) paintDeviceFeed(frame, phone);
+        }
         frame.end();
         m_kind = kind;
         m_local = local;
-        m_dark = theme.dark;
-        m_frame = theme.deviceFrame.rgba();
-        m_screen = theme.deviceScreen.rgba();
+        m_feed = feed;
+        m_aspect = aspect;
         m_ratio = ratio;
         ++m_renders;
     }
     painter.drawPixmap(origin, m_pixmap);
 }
+
+void DeviceFrameCache::paint(QPainter &painter, Kind kind, const QRectF &body, const EditorTheme &, qreal ratio) {
+    paint(painter, kind, body, kind == Kind::Laptop ? 16.0 / 9.0 : 9.0 / 16.0, ratio);
+}
+
+// ------------------------------------------------------------------ safe zones
 
 SafeZones safeZones(const QRectF &picture) {
     const double w = picture.width();

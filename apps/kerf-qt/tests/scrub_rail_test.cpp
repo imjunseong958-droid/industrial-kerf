@@ -130,14 +130,12 @@ private slots:
     void stageRailHoldsTheProgramLevel() {
         const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
         const auto restore = qScopeGuard([] {
-            setEditorColorScheme(ColorScheme::Dark);
             QSettings().remove(QStringLiteral("workspace"));
             QSettings().remove(QStringLiteral("viewer/chatOpen"));
             QSettings().remove(QStringLiteral("viewer/chatWidth"));
         });
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
-            const QString name = editorTheme().dark ? QStringLiteral("dark") : QStringLiteral("light");
+        {
+            const QString name = QStringLiteral("dark");
             for (const QSize canvas : {QSize(1080, 1920), QSize(1920, 1080)}) {
                 const bool tall = canvas.height() > canvas.width();
                 QSettings().remove(QStringLiteral("workspace"));
@@ -296,19 +294,16 @@ private slots:
         QVERIFY(!meter.animating());
     }
 
-    // A rail button's disc is a raised key of the hardware finish: off, it
-    // stands proud in the key's shading; on, it is held in and its amber
-    // LED is lit at its top, in both appearances. Its glyph reads on the
-    // key either way.
+    // A rail button's disc is a key of the (now flat) hardware finish: off,
+    // the raised fill; on, the on fill with its LED lit in the accent at its
+    // top. Its glyph reads on the key either way.
     void railButtonLightsItsLedWhenOn() {
-        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
         const auto distance = [](const QColor &a, const QColor &b) {
             return std::abs(a.red() - b.red()) + std::abs(a.green() - b.green()) + std::abs(a.blue() - b.blue());
         };
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             const EditorTheme &t = editorTheme();
-            const QString name = t.dark ? QStringLiteral("dark") : QStringLiteral("light");
+            const QString name = QStringLiteral("dark");
             for (const QColor &key : {t.keyTop, t.keyBottom, t.keyLatched})
                 QVERIFY2(contrastRatio(t.railGlyph, key) >= 3.0, qPrintable(name + QStringLiteral(" glyph on ") + key.name()));
             for (const QColor &key : {t.keyTop, t.keyBottom})
@@ -327,12 +322,12 @@ private slots:
                 return image.pixelColor((QPointF(point) * image.devicePixelRatio()).toPoint());
             };
             const QImage off = button.grab().toImage();
-            QVERIFY2(!isAmber(at(off, led)), qPrintable(name + QStringLiteral(" off ") + at(off, led).name()));
+            QVERIFY2(distance(at(off, led), t.keyLed) > 80, qPrintable(name + QStringLiteral(" off ") + at(off, led).name()));
             QVERIFY(distance(at(off, face), t.keyBottom) < distance(at(off, face), t.keyLatched));
             button.setChecked(true);
             const QImage on = button.grab().toImage();
-            QVERIFY2(isAmber(at(on, led)), qPrintable(name + QStringLiteral(" on ") + at(on, led).name()));
-            QVERIFY(distance(at(on, led), t.keyLed) < 40);
+            QCOMPARE(t.keyLed.rgb(), t.accent.rgb());
+            QVERIFY2(distance(at(on, led), t.keyLed) < 40, qPrintable(name + QStringLiteral(" on ") + at(on, led).name()));
             QVERIFY(distance(at(on, face), t.keyLatched) < distance(at(on, face), t.keyBottom));
             // The label stays under the disc.
             QCOMPARE(button.label(), QStringLiteral("Safe"));
@@ -388,25 +383,27 @@ private slots:
         const QRectF face = rect.adjusted(5, 5, -5, -5);
         const QPointF pivot(face.center().x(), face.bottom() - face.height() * 0.08);
         const qreal reach = std::min(face.height() * 0.78, face.width() * 0.5 / std::sin(qDegreesToRadians(50.0)));
-        const auto darkestAlong = [&](const QImage &image, double degrees) {
-            int darkest = 255;
+        // The needle is the ink on the well's dark face: the lightest
+        // point along each angle.
+        const auto lightestAlong = [&](const QImage &image, double degrees) {
+            int lightest = 0;
             const qreal radians = qDegreesToRadians(degrees);
             for (qreal along = 0.3; along <= 0.7; along += 0.05) {
                 const QPointF at = pivot + QPointF(std::sin(radians), -std::cos(radians)) * reach * along;
-                darkest = std::min(darkest, lightnessAt(image, at));
+                lightest = std::max(lightest, lightnessAt(image, at));
             }
-            return darkest;
+            return lightest;
         };
         const auto meter = [&](double level) {
             return paintedAt(2, QSize(120, 70), [&](QPainter &p) { paintVuMeter(p, rect, level); });
         };
         const QImage quiet = meter(0);
         const QImage loud = meter(1);
-        QVERIFY(darkestAlong(quiet, -50) < 80);
-        QVERIFY(darkestAlong(quiet, 50) > 150);
-        QVERIFY(darkestAlong(loud, 50) < 80);
-        QVERIFY(darkestAlong(loud, -50) > 150);
-        QVERIFY(darkestAlong(meter(0.5), 0) < 80);
+        QVERIFY(lightestAlong(quiet, -50) > 150);
+        QVERIFY(lightestAlong(quiet, 50) < 80);
+        QVERIFY(lightestAlong(loud, 50) > 150);
+        QVERIFY(lightestAlong(loud, -50) < 80);
+        QVERIFY(lightestAlong(meter(0.5), 0) > 150);
         QCOMPARE(meter(2), loud);
         QCOMPARE(meter(-1), quiet);
     }

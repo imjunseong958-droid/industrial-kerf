@@ -302,10 +302,11 @@ private slots:
         QSettings().remove(QStringLiteral("projects"));
     }
 
-    // The launcher follows the system appearance with its own style sheet,
-    // whatever the editor's: every page in light and in dark. With
-    // KERF_SCREENSHOT_DIR set, each is saved as <page>-<scheme>.png.
-    void launcherRendersBothAppearances() {
+    // The launcher draws the editor's graphite ramp with its own style sheet,
+    // dark only, on every page: the sidebar on chrome, the pages on card, the
+    // default button the flat accent. With KERF_SCREENSHOT_DIR set, each page
+    // is saved as <page>-dark.png.
+    void launcherRendersTheGraphiteRamp() {
         QSettings().remove(QStringLiteral("launcher"));
         QSettings().remove(QStringLiteral("projects"));
         QTemporaryDir root;
@@ -356,14 +357,15 @@ private slots:
             QVERIFY(amberPixels(probe) > 0);
         }
         const char *const pageNames[] = {"new", "recent", "preset", "clone"};
-        for (const auto scheme : {ProjectLauncher::ColorScheme::Light, ProjectLauncher::ColorScheme::Dark}) {
-            const bool dark = scheme == ProjectLauncher::ColorScheme::Dark;
-            const QString schemeName = dark ? QStringLiteral("dark") : QStringLiteral("light");
+        {
+            const QString schemeName = QStringLiteral("dark");
             for (int page = ProjectLauncher::NewProject; page <= ProjectLauncher::Clone; ++page) {
                 QSettings().remove(QStringLiteral("launcher"));
                 ProjectLauncher launcher;
-                launcher.setColorScheme(scheme);
-                QCOMPARE(launcher.theme().dark, dark);
+                // The old scheme API changes nothing: the launcher is dark only.
+                launcher.setColorScheme(ProjectLauncher::ColorScheme::Light);
+                QCOMPARE(launcher.colorScheme(), ProjectLauncher::ColorScheme::Dark);
+                QVERIFY(launcher.theme().dark);
                 launcher.m_inspectProject = inspectProject;
                 launcher.m_inspectPreset = inspectPreset;
                 launcher.reloadRecent();
@@ -389,17 +391,21 @@ private slots:
                 const auto at = [&image, ratio](int x, int y) { return image.pixelColor(QPoint(x, y) * ratio).rgb(); };
                 QCOMPARE(at(launcher.width() - 6, 6), launcher.theme().content.rgb());
                 QCOMPARE(at(100, launcher.height() - 10), launcher.theme().sidebar.rgb());
-                // Antique cream in light, warm espresso in dark: never pure
-                // white or black, and warm (red above blue).
-                QVERIFY(isWarmPaper(launcher.theme().content, dark));
-                QVERIFY(isWarmPaper(launcher.theme().sidebar, dark));
+                // The graphite ramp, exactly: card pages, a chrome sidebar.
+                QCOMPARE(launcher.theme().content.rgb(), QColor("#1c1c1c").rgb());
+                QCOMPARE(launcher.theme().sidebar.rgb(), QColor("#171717").rgb());
+                QCOMPARE(launcher.theme().field.rgb(), QColor("#262626").rgb());
+                QVERIFY(isGraphite(launcher.theme().content));
+                QVERIFY(isGraphite(launcher.theme().sidebar));
+                // Controls are the design's 24pt.
+                QCOMPARE(launcher.m_choose->height(), 24);
                 if (launcher.m_choose->isEnabled()) {
-                    // The default button is the accent, lightening towards its top.
+                    // The default button is the flat accent, top to foot.
                     const QImage choose = launcher.m_choose->grab().toImage();
-                    const QColor fill = choose.pixelColor(QPoint(8, launcher.m_choose->height() / 2) * choose.devicePixelRatio());
+                    const qreal r = choose.devicePixelRatio();
                     const QColor accent = launcher.theme().accent;
-                    QVERIFY2(std::abs(fill.hue() - accent.hue()) <= 4 && std::abs(fill.value() - accent.value()) <= 24,
-                             qPrintable(fill.name()));
+                    for (const int y : {4, launcher.m_choose->height() / 2, launcher.m_choose->height() - 4})
+                        QCOMPARE(choose.pixelColor(QPoint(8, y) * r).rgb(), accent.rgb());
                 }
                 QVERIFY2(amberPixels(image, &firstAmber) == 0,
                          qPrintable(QStringLiteral("amber area in %1-%2 at %3,%4")
@@ -455,10 +461,10 @@ private slots:
         QSettings().remove(QStringLiteral("projects"));
     }
 
-    // A chosen recent project's text reads on its selection (4.5:1), in
-    // both appearances: a missing project's name on the grey of a list
-    // without focus, and the details on the focused list's selection. The colours
-    // are read from the pens the rows are painted with.
+    // A chosen recent project's text reads on its selection (4.5:1): a
+    // missing project's name on the on fill of a list without focus, and the
+    // details on the focused list's accent selection. The colours are read
+    // from the pens the rows are painted with.
     void launcherRowsReadWhenChosen() {
         const auto clean = qScopeGuard([] {
             ProjectLauncher::clearRecentProjects();
@@ -473,10 +479,9 @@ private slots:
         ProjectLauncher::clearRecentProjects();
         ProjectLauncher::rememberProject(present);
         ProjectLauncher::rememberProject(missing);
-        for (const auto scheme : {ProjectLauncher::ColorScheme::Light, ProjectLauncher::ColorScheme::Dark}) {
+        {
             QSettings().remove(QStringLiteral("launcher"));
             ProjectLauncher launcher;
-            launcher.setColorScheme(scheme);
             launcher.m_inspectProject = [](const QJsonObject &request) {
                 const QString path = request.value("path").toString();
                 return QJsonObject{{"path", path}, {"exists", QFileInfo(path).isDir()}, {"name", QFileInfo(path).fileName()},

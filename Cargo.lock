@@ -1287,6 +1287,7 @@ dependencies = [
  "kerf-cloud",
  "kerf-collab",
  "kerf-commands",
+ "kerf-compose",
  "kerf-core",
  "kerf-engine",
  "kerf-fx",

@@ -135,9 +135,11 @@ void answerInput(QWidget *parent, const QString &text);
 // arrows and nothing to scroll.
 bool popupShowsEveryRow(QComboBox *combo);
 
-// Whether `color` is one of the palette's paper surfaces: antique cream
-// in light (light, but not white) and espresso in dark (dark, but not
-// black), warm in both (red above blue).
+// Whether `color` is one of the graphite ramp's surfaces (surroundDim
+// through hover2): opaque, neutral (|r-g| and |g-b| at most 2), dark, and
+// not pure black.
+bool isGraphite(const QColor &color);
+// Deprecated, removed in W3: isGraphite(color); the editor is dark only.
 bool isWarmPaper(const QColor &color, bool dark);
 
 // Saturated amber or gold, as the editor's old accent was.
@@ -152,8 +154,8 @@ int amberPixels(const QImage &image, QPoint *first = nullptr);
 // chips (or the composer) and the rows cut cleanly at the list's edges.
 void verifyListEnd(ChatPanel *chat);
 
-// A waveform's white ink (waveformBody over a clip's colour): white, a
-// touch of the clip's hue through it, the same in either appearance.
+// A waveform's ink (its RMS grey, rgba(144,144,144,.75), over a clip's
+// card and its peak): a neutral mid grey.
 bool isWaveInk(const QColor &pixel);
 
 // The colour most of `image` is.

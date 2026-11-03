@@ -4,6 +4,9 @@
 #include "test_registry.h"
 
 #include "ask_prompt.h"
+#include "bridge.h"
+#include "editor_bus.h"
+#include "inspector_column.h"
 #include "chat_panel.h"
 #include "command_registry.h"
 #include "device_frame.h"
@@ -297,6 +300,81 @@ private slots:
         const QString existing = QStringLiteral("https://github.com/jun/compare/pull/4");
         window.handleEvent(QJsonObject{{"type", "collab_pull_request"}, {"url", existing}, {"created", false}});
         QCOMPARE(window.statusBar()->currentMessage(), QStringLiteral("This branch already has a pull request: ") + existing);
+    }
+
+    // Every command the registry lists for the editor is wired: a frontend
+    // command that can run has a handler here or is a switch the window
+    // follows; one still to come says so. The new ones reach their places.
+    void everyEditorCommandIsWired() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(showcaseSnapshot(3, QStringLiteral("clean")));
+        char *raw = kerf_commands_catalog("kerf");
+        QVERIFY(raw);
+        const QJsonArray commands = QJsonDocument::fromJson(QByteArray(raw)).object().value("commands").toArray();
+        kerf_bridge_string_free(raw);
+        QVERIFY(commands.size() > 80);
+        QStringList unwired;
+        QStringList coming;
+        for (const QJsonValue &value : commands) {
+            const QJsonObject command = value.toObject();
+            const QString id = command.value("id").toString();
+            QAction *action = window.m_commands->action(id);
+            QVERIFY2(action, qPrintable(id));
+            if (command.value("kind").toString() != QStringLiteral("frontend")) continue;
+            if (window.m_commands->reason(id) == QStringLiteral("Coming in this release")) {
+                coming << id;
+                continue;
+            }
+            if (!action->isCheckable() && !window.m_commandHandlers.contains(id)) unwired << id;
+        }
+        QVERIFY2(unwired.isEmpty(), qPrintable(unwired.join(QStringLiteral(", "))));
+        coming.sort();
+        QCOMPARE(coming, (QStringList{"inspector.audio", "inspector.info", "keyboard.customise", "mark.in", "mark.out",
+                                      "playback.loop", "sequence.settings", "view.annotations", "view.dim", "viewer.zoom"}));
+        // Export Master is ⌘E; Export… keeps the toolbar's chosen quality.
+        QAction *master = window.m_commands->action(QStringLiteral("export.master"));
+        QCOMPARE(master->shortcut(), QKeySequence::fromString(QStringLiteral("Ctrl+E"), QKeySequence::PortableText));
+        QVERIFY(window.m_commands->action(QStringLiteral("file.export"))->shortcut().isEmpty());
+        master->trigger();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "export"}, {"quality", "master"}}));
+        window.m_commands->action(QStringLiteral("qc.run"))->trigger();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "check"}}));
+        // Add Track (⌘⇧T) is the timeline's own command, its menu the handler's.
+        QCOMPARE(window.m_commands->action(QStringLiteral("timeline.addTrack"))->shortcut(),
+                 QKeySequence::fromString(QStringLiteral("Ctrl+Shift+T"), QKeySequence::PortableText));
+        // The viewer's switches follow the viewer, and drive it.
+        QAction *safe = window.m_commands->action(QStringLiteral("view.safeZones"));
+        QCOMPARE(safe->isChecked(), window.m_viewer->safeZonesShown());
+        safe->trigger();
+        QCOMPARE(window.m_viewer->safeZonesShown(), safe->isChecked());
+        QCOMPARE(window.m_safeZonesAction->isChecked(), safe->isChecked());
+        window.m_safeZonesAction->trigger();
+        QCOMPARE(safe->isChecked(), window.m_viewer->safeZonesShown());
+        QAction *device = window.m_commands->action(QStringLiteral("view.devicePreview"));
+        const bool shown = device->isChecked();
+        device->trigger();
+        QCOMPARE(device->isChecked(), !shown);
+        QCOMPARE(window.m_rail->deviceButton()->isChecked(), !shown);
+        device->trigger();
+        // Comments is the assistant's switch.
+        QAction *comments = window.m_commands->action(QStringLiteral("view.comments"));
+        QVERIFY(comments->isChecked() && window.chatOpen());
+        comments->trigger();
+        QVERIFY(!window.chatOpen());
+        QVERIFY(!window.m_commands->action(QStringLiteral("window.assistant"))->isChecked());
+        comments->trigger();
+        QVERIFY(window.chatOpen());
+        // The card's Accept and Reject go out as the proposal's.
+        window.bus()->run(QStringLiteral("comment.reject"), QJsonObject{{"proposal", "p4"}});
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "reject"}, {"proposalId", "p4"}, {"revision", 3}}));
+        // The workspaces' commands are a radio group.
+        window.m_commands->action(QStringLiteral("workspace.deliver"))->trigger();
+        QCOMPARE(window.m_workspace->current(), QStringLiteral("Deliver"));
+        QVERIFY(window.m_commands->action(QStringLiteral("workspace.deliver"))->isChecked());
+        QVERIFY(!window.m_commands->action(QStringLiteral("workspace.review"))->isChecked());
+        window.m_commands->action(QStringLiteral("workspace.review"))->trigger();
+        QSettings().remove(QStringLiteral("workspace"));
     }
 
     void syncConflictsSayWhereAndWhoseVersionWasKept() {

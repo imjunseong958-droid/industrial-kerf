@@ -330,9 +330,7 @@ private slots:
         // colours that read on the panel's surface, in both appearances.
         QVERIFY(chat->welcome()->isVisible());
         {
-            const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
-            for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-                setEditorColorScheme(scheme);
+            {
                 QString words;
                 int colours = 0;
                 for (QLabel *label : chat->welcome()->findChildren<QLabel *>()) {
@@ -675,22 +673,19 @@ private slots:
             back->click();
             QCOMPARE(chips.constFirst()->x(), ChatPanel::kSidePadding);
             QVERIFY(!back->isVisible() && forward->isVisible());
-            // The list's scroll bar shows only while the pointer is over the
-            // panel: the panel's surface where its handle is, until then.
+            // The list scrolls with its scroll bar hidden (mockup-spec 4.5):
+            // the bar takes no width, under the pointer or not, so the rows
+            // keep the panel's whole width.
             {
                 QScrollBar *listBar = window.m_chatScroll->verticalScrollBar();
-                QVERIFY(listBar->isVisible());
+                QVERIFY(listBar->maximum() > 0);
                 QCOMPARE(listBar->value(), listBar->maximum());
-                const QPoint inHandle = listBar->mapTo(&window, QPoint(listBar->width() / 2, listBar->height() - 12));
-                QEvent leave(QEvent::Leave);
-                QCoreApplication::sendEvent(column, &leave);
-                const QImage quiet = window.grab().toImage();
-                QCOMPARE(quiet.pixelColor(inHandle * quiet.devicePixelRatio()).rgb(), editorTheme().chatSurface.rgb());
+                QCOMPARE(listBar->isVisible() ? listBar->width() : 0, 0);
                 QEnterEvent enter(QPointF(20, 20), QPointF(20, 20), column->mapToGlobal(QPointF(20, 20)));
                 QCoreApplication::sendEvent(column, &enter);
-                const QImage hovered = window.grab().toImage();
-                QVERIFY(nearColor(hovered.pixelColor(inHandle * hovered.devicePixelRatio()).rgb(),
-                                  laidOn(editorTheme().chatSurface, editorTheme().chatScrollHandle).rgb()));
+                QCoreApplication::processEvents();
+                QCOMPARE(listBar->isVisible() ? listBar->width() : 0, 0);
+                QEvent leave(QEvent::Leave);
                 QCoreApplication::sendEvent(column, &leave);
             }
             // Nothing asks for more width than the panel has; a long path wraps.
@@ -749,11 +744,9 @@ private slots:
     void conversationScrollsUnderACleanEdge() {
         QSettings().remove(QStringLiteral("workspace"));
         const auto restore = qScopeGuard([] {
-            setEditorColorScheme(ColorScheme::Dark);
             QSettings().remove(QStringLiteral("workspace"));
         });
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             const EditorTheme &theme = editorTheme();
             MainWindow window{QString(), QString()};
             window.setConnection(QStringLiteral("ready"));
@@ -1256,13 +1249,11 @@ private slots:
         QSettings().remove(QStringLiteral("workspace"));
         const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
         const auto restore = qScopeGuard([] {
-            setEditorColorScheme(ColorScheme::Dark);
             QSettings().remove(QStringLiteral("workspace"));
         });
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             const EditorTheme &theme = editorTheme();
-            const QString schemeName = theme.dark ? QStringLiteral("dark") : QStringLiteral("light");
+            const QString schemeName = QStringLiteral("dark");
             const auto open = [&](MainWindow &window, bool proposal) {
                 QSettings().remove(QStringLiteral("workspace"));
                 QJsonObject snapshot = showcaseSnapshot(12, QStringLiteral("clean"));

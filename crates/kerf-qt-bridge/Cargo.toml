@@ -10,6 +10,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 kerf-core = { path = "../kerf-core" }
+kerf-compose = { path = "../kerf-compose" }
 kerf-lang = { path = "../kerf-lang" }
 kerf-model = { path = "../kerf-model" }
 kerf-runtime = { path = "../kerf-runtime" }

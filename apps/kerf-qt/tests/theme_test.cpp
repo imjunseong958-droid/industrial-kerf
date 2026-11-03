@@ -1,6 +1,8 @@
-// Tests for the editor theme: palette, type scale, contrast, focus rings and appearance.
+// Tests for the editor theme: the dark graphite ramp, type scale, contrast,
+// focus outlines and the flat style sheet.
 
 #include "fixtures.h"
+#include "design_tokens.h"
 #include "test_registry.h"
 
 #include "ask_prompt.h"
@@ -72,6 +74,7 @@
 #include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSlider>
 #include <QSet>
 #include <QSettings>
 #include <QSignalBlocker>
@@ -90,6 +93,7 @@
 #include <QToolBar>
 #include <QToolButton>
 #include <QToolTip>
+#include <QVBoxLayout>
 #include <QWheelEvent>
 #include <QWidget>
 
@@ -119,15 +123,15 @@ private slots:
     // Each test starts with the conversation's preferences as a new user has them.
     void init() { QSettings().remove(QStringLiteral("viewer")); }
 
-    // Whether `combo`, in `shot` of its window, is drawn as macOS draws a
-    // pop-up button: a push button's bezel, filled with `button` and lit from
-    // above (its bottom edge darker than its top), not a field's even edge.
+    // Whether `combo`, in `shot` of its window, is drawn as the design draws
+    // a pop-up button: a secondary button's bezel, filled with `button`, flat
+    // (its top and bottom edges the same), not a field's.
     static bool popUpHasButtonBezel(const QImage &shot, const QComboBox *combo, const QColor &button) {
         const qreal ratio = shot.devicePixelRatio();
         const QRect bezel(combo->mapTo(combo->window(), QPoint()), combo->size());
         const auto at = [&](int x, int y) { return shot.pixelColor(QPoint(x, y) * ratio); };
         return at(bezel.left() + 4, bezel.center().y()).rgb() == button.rgb() &&
-               at(bezel.center().x(), bezel.bottom()).lightness() + 16 < at(bezel.center().x(), bezel.top()).lightness();
+               at(bezel.center().x(), bezel.bottom()).rgb() == at(bezel.center().x(), bezel.top()).rgb();
     }
 
     // The most contrast any pixel of `area` in `image` has with `background`.
@@ -140,119 +144,106 @@ private slots:
         return best;
     }
 
-    // Kerf has its own accent, a purple in each appearance, and does not
-    // follow the system's: the editor and the launcher keep it when the
-    // platform reports another accent, and switch only with light and dark.
-    void kerfDrawsItsOwnPurpleAccent() {
-        const auto restore = qScopeGuard([] {
-            QGuiApplication::setPalette(QPalette());
-            setEditorColorScheme(ColorScheme::Dark);
-        });
-        for (const bool dark : {false, true}) {
-            const EditorTheme t = makeEditorTheme(dark);
-            const LauncherTheme l = launcherTheme(dark);
-            QCOMPARE(t.accent.rgb(), kerfAccent(dark).rgb());
-            QCOMPARE(l.accent.rgb(), t.accent.rgb());
-            // Purple: between blue and red, and clearly coloured.
-            QVERIFY2(t.accent.hslHue() >= 270 && t.accent.hslHue() <= 320, qPrintable(t.accent.name()));
-            QVERIFY2(t.accent.hslSaturation() >= 40, qPrintable(t.accent.name()));
-            // Kerf's own marks are the accent: the playhead, focus, the
-            // agent's proposals and its avatar.
-            for (const QColor &mark : {t.playhead, t.focusRing, t.assistant, t.proposalAdd, t.chatAvatarKerf, t.maskHandleFill})
-                QCOMPARE(mark.rgb(), t.accent.rgb());
-            // Track toggles are bare symbols: on, a neutral ink, not the
-            // accent; off, the same ink, faint. No plate under either.
-            QVERIFY(t.trackToggleOn.rgb() != t.accent.rgb() && t.trackToggleOn.hsvSaturation() < 90);
-            QCOMPARE(t.trackToggle.rgb(), t.trackToggleOn.rgb());
-            QVERIFY(t.trackToggle.alpha() <= t.trackToggleOn.alpha() / 2);
-            // In dark the mauve carries dark ink, so the launcher's chosen
-            // rows (a deep plum) and its switch knob have their own tokens.
-            QVERIFY(contrastRatio(l.selectionText, l.selection) >= 4.5);
-            if (dark) QVERIFY(l.selectionText.rgb() != l.onAccent.rgb());
-            // Fewer boxes: the caption on the picture has no line round it,
-            // the open chat's toggle is a tonal disc with Kerf's ink, and the
-            // launcher's format tiles are paper cards lighter than the page.
-            QCOMPARE(t.viewerCaptionBorder.rgba(), t.viewerCaption.rgba());
-            QCOMPARE(t.railButtonActive.rgba(), t.railButton.rgba());
-            QCOMPARE(t.railGlyphActive.rgb(), t.accentText.rgb());
-            QVERIFY(l.tile.lightness() > l.content.lightness());
-            // No blue on the timeline: no clip kind's header is a blue
-            // (hue 190-250 with any real colour in it), and picture clips,
-            // the largest coloured area, are a dull heather well under the
-            // accent's saturation.
-            for (const ClipStyle *style : {&t.clipVideo, &t.clipAudio, &t.clipMusic, &t.clipGenerator, &t.clipCaption}) {
-                const QColor header = style->header;
-                const bool blue = header.hslHueF() * 360 >= 190 && header.hslHueF() * 360 <= 250 && header.hslSaturationF() > 0.15;
-                QVERIFY2(!blue, qPrintable(header.name()));
-            }
-            QVERIFY(t.clipVideo.header.hslSaturationF() < t.accent.hslSaturationF() / 2);
-            QVERIFY(t.clipVideo.header.rgb() != t.clipCaption.header.rgb());
-            QVERIFY(contrastRatio(t.clipVideo.label, t.clipVideo.header) >= 4.5);
+    // Kerf has its own accent, the design's one blue, and does not follow
+    // the system's: the editor and the launcher keep it when the platform
+    // reports another accent.
+    void kerfDrawsItsOwnBlueAccent() {
+        const auto restore = qScopeGuard([] { QApplication::setPalette(editorPalette(editorTheme())); });
+        const EditorTheme t = makeEditorTheme();
+        const LauncherTheme l = launcherTheme();
+        QCOMPARE(t.accent.rgb(), QColor("#3366e6").rgb());
+        QCOMPARE(t.accent.rgb(), tokens::color(tokens::accent).rgb());
+        QCOMPARE(l.accent.rgb(), t.accent.rgb());
+        // Kerf's own marks are the accent: focus, the agent's proposals, its
+        // avatar and the mask handles. The playhead is the design's red.
+        for (const QColor &mark : {t.focusRing, t.assistant, t.proposalAdd, t.chatAvatarKerf, t.maskHandleFill, t.lampKerf})
+            QCOMPARE(mark.rgb(), t.accent.rgb());
+        QCOMPARE(t.playhead.rgb(), QColor("#e5484d").rgb());
+        // The accent as text is the accent ink.
+        QCOMPARE(t.accentText.rgb(), QColor("#8fb0ff").rgb());
+        // Track toggles are bare symbols: on, a neutral ink, not the
+        // accent; off, the same ink, faint. No plate under either.
+        QVERIFY(t.trackToggleOn.rgb() != t.accent.rgb() && t.trackToggleOn.hsvSaturation() < 90);
+        QCOMPARE(t.trackToggle.rgb(), t.trackToggleOn.rgb());
+        QVERIFY(t.trackToggle.alpha() <= t.trackToggleOn.alpha() / 2);
+        QVERIFY(contrastRatio(l.selectionText, l.selection) >= 4.5);
+        // Fewer boxes: the caption on the picture has no line round it; a
+        // rail button is clear at rest and the on fill when on (.ib.on), its
+        // symbol the ink; the launcher's format tiles are raised on the page.
+        QCOMPARE(t.viewerCaptionBorder.rgba(), t.viewerCaption.rgba());
+        QCOMPARE(t.railButton.alpha(), 0);
+        QCOMPARE(t.railButtonActive.rgb(), QColor("#303030").rgb());
+        QCOMPARE(t.railGlyphActive.rgb(), QColor("#ededed").rgb());
+        QVERIFY(l.tile.lightness() > l.content.lightness());
+        // Clips are graphite: no clip kind's header has any colour in it,
+        // and every label reads on its header.
+        for (const ClipStyle *style : {&t.clipVideo, &t.clipAudio, &t.clipMusic, &t.clipGenerator, &t.clipCaption}) {
+            QVERIFY2(isGraphite(style->header), qPrintable(style->header.name()));
+            QVERIFY(contrastRatio(style->label, style->header) >= 4.5);
         }
-        // The light and dark accents differ: ink on cream, mauve on espresso.
-        QVERIFY(kerfAccent(true).lightness() > kerfAccent(false).lightness() + 60);
+        QVERIFY(t.clipVideo.header.rgb() != t.clipCaption.header.rgb());
 #if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
         // A system accent of any colour leaves Kerf's in place.
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
-            QPalette blue = QGuiApplication::palette();
-            blue.setColor(QPalette::Accent, QColor("#007aff"));
-            QGuiApplication::setPalette(blue);
-            applyEditorAppearance();
-            const bool dark = scheme == ColorScheme::Dark;
-            QCOMPARE(editorTheme().accent.rgb(), kerfAccent(dark).rgb());
-            ProjectLauncher launcher;
-            launcher.setColorScheme(dark ? ProjectLauncher::ColorScheme::Dark : ProjectLauncher::ColorScheme::Light);
-            QCOMPARE(launcher.theme().accent.rgb(), kerfAccent(dark).rgb());
-            QGuiApplication::setPalette(QPalette());
-        }
+        QPalette red = QGuiApplication::palette();
+        red.setColor(QPalette::Accent, QColor("#ff2d55"));
+        QGuiApplication::setPalette(red);
+        applyEditorAppearance();
+        QCOMPARE(editorTheme().accent.rgb(), QColor("#3366e6").rgb());
+        ProjectLauncher launcher;
+        QCOMPARE(launcher.theme().accent.rgb(), QColor("#3366e6").rgb());
+        // A focused list's chosen row is Kerf's accent.
+        QCOMPARE(editorPalette(editorTheme()).color(QPalette::Active, QPalette::Highlight).rgb(), t.accent.rgb());
 #endif
     }
 
     // The accent as text (the transports' timecodes, the timeline's corner
-    // time, the sync chip) reads at 4.5:1 on each surface it is drawn on, in
-    // both appearances; text on the filled accent reads at 4.5:1 too, with
-    // no exemption.
+    // time, the sync chip) reads at 4.5:1 on each surface it is drawn on;
+    // text on the filled accent reads at 4.5:1 too, with no exemption.
     void accentTextReadsOnEverySurfaceItIsDrawnOn() {
-        for (const bool dark : {false, true}) {
-            const EditorTheme theme = makeEditorTheme(dark);
-            for (const QColor &surface : {theme.panel, theme.rulerCorner, theme.statusBar, theme.raised, theme.window,
-                                          theme.chrome, theme.well, theme.field, theme.dialog, theme.group, theme.chatSurface}) {
-                const qreal ratio = contrastRatio(theme.accentText, surface);
-                QVERIFY2(ratio >= 4.5, qPrintable(QStringLiteral("%1 on %2 in %3: %4")
-                                                      .arg(theme.accentText.name(), surface.name(),
-                                                           dark ? QStringLiteral("dark") : QStringLiteral("light"))
-                                                      .arg(ratio, 0, 'f', 2)));
-            }
-            // So does the Source monitor's marked range, at 3:1 on its panel.
-            QVERIFY(contrastRatio(theme.inOutRange, theme.panel) >= 3.0);
-            // Text on the accent's fill, at rest, lit and held.
-            for (const QColor &fill : {theme.accent, theme.accentTop, theme.accentPressed})
-                QVERIFY2(contrastRatio(theme.onAccent, fill) >= 4.5, qPrintable(fill.name()));
+        const EditorTheme theme = makeEditorTheme();
+        for (const QColor &surface : {theme.panel, theme.rulerCorner, theme.statusBar, theme.raised, theme.window,
+                                      theme.chrome, theme.well, theme.field, theme.dialog, theme.group, theme.chatSurface,
+                                      theme.accentTint, theme.accentTintPressed}) {
+            const qreal ratio = contrastRatio(theme.accentText, surface);
+            QVERIFY2(ratio >= 4.5, qPrintable(QStringLiteral("%1 on %2: %3").arg(theme.accentText.name(), surface.name()).arg(ratio, 0, 'f', 2)));
         }
+        // So does the Source monitor's marked range, at 3:1 on its panel.
+        QVERIFY(contrastRatio(theme.inOutRange, theme.panel) >= 3.0);
+        // Text on the accent's fill, at rest, under the pointer and held.
+        for (const QColor &fill : {theme.accent, theme.accentTop, theme.accentPressed, theme.accentHover})
+            QVERIFY2(contrastRatio(theme.onAccent, fill) >= 4.5, qPrintable(fill.name()));
     }
 
-    // The chrome keeps one type scale: every size the editor's, the docks'
-    // and the launcher's style sheets set, and every size the timeline
-    // paints in, is 11, 12, 13, 14, 16 or 20px. (The chat's composer is
-    // rebuilt separately and keeps its own for now.)
+    // The chrome keeps the design's one type scale (mockup-spec 0.3): every
+    // size the editor's, the docks' and the launcher's style sheets set is
+    // 11, 12, 13 or 14px, or 15px (the caption on the picture only).
     void chromeKeepsOneTypeScale() {
-        const QSet<int> scale{11, 12, 13, 14, 16, 20};
+        const QSet<int> scale{11, 12, 13, 14, 15};
         static const QRegularExpression rule(QStringLiteral("([^{}]+)\\{([^{}]*)\\}"));
         static const QRegularExpression size(QStringLiteral("font-size:\\s*(\\d+)px"));
-        for (const bool dark : {false, true}) {
-            const EditorTheme t = makeEditorTheme(dark);
-            for (const QString &sheet : {editorStyleSheet(t), dockStyleSheet(t), launcherStyleSheet(launcherTheme(dark))}) {
-                for (auto it = rule.globalMatch(sheet); it.hasNext();) {
-                    const QRegularExpressionMatch match = it.next();
-                    const QString selector = match.captured(1).trimmed();
-                    for (auto sizes = size.globalMatch(match.captured(2)); sizes.hasNext();) {
-                        const int pixels = sizes.next().captured(1).toInt();
-                        QVERIFY2(scale.contains(pixels), qPrintable(QStringLiteral("%1px in %2").arg(pixels).arg(selector)));
-                    }
+        const EditorTheme t = makeEditorTheme();
+        for (const QString &sheet : {editorStyleSheet(t), dockStyleSheet(t), launcherStyleSheet(launcherTheme())}) {
+            for (auto it = rule.globalMatch(sheet); it.hasNext();) {
+                const QRegularExpressionMatch match = it.next();
+                const QString selector = match.captured(1).trimmed();
+                for (auto sizes = size.globalMatch(match.captured(2)); sizes.hasNext();) {
+                    const int pixels = sizes.next().captured(1).toInt();
+                    QVERIFY2(scale.contains(pixels), qPrintable(QStringLiteral("%1px in %2").arg(pixels).arg(selector)));
+                    if (pixels == 15) QVERIFY2(selector.contains(QStringLiteral("aption")), qPrintable(selector));
                 }
             }
         }
+        // The type pairs themselves.
+        QCOMPARE(tokens::body.px, 13);
+        QCOMPARE(tokens::control.px, 12);
+        QCOMPARE(tokens::meta.px, 11);
+        QCOMPARE(tokens::title.px, 14);
+        QCOMPARE(tokens::caption.px, 15);
+        // Mono figures are the tokens' mono face.
+        const QFont mono = monoFont(12);
+        QCOMPARE(mono.pixelSize(), 12);
+        QVERIFY(mono.families().contains(QStringLiteral("JetBrains Mono")));
+        QVERIFY(mono.families().contains(QStringLiteral("Menlo")));
         // The track number is engraved on its channel plate, at the
         // hardware labels' size.
         TimelineWidget timeline;
@@ -261,8 +252,8 @@ private slots:
     }
 
     // Colours drawn one on another, each with the ratio it must reach there
-    // (4.5:1 for text, 3:1 for symbols, edges and handles), in both
-    // appearances; a translucent one is laid on what is under it first.
+    // (4.5:1 for text, 3:1 for symbols, edges and handles); a translucent one
+    // is laid on what is under it first.
     void themeColorsReadWhereTheyAreDrawn_data() {
         QTest::addColumn<QColor>("foreground");
         QTest::addColumn<QColor>("background");
@@ -273,9 +264,9 @@ private slots:
             QColor background;
             qreal ratio;
         };
-        for (const bool dark : {false, true}) {
-            const EditorTheme t = makeEditorTheme(dark);
-            const LauncherTheme l = launcherTheme(dark);
+        {
+            const EditorTheme t = makeEditorTheme();
+            const LauncherTheme l = launcherTheme();
             std::vector<Pair> pairs{
                 {"chosen mask tool's symbol on its wash", t.accentText, t.accentTint, 3.0},
                 {"chosen mask tool's symbol on its wash, held", t.accentText, t.accentTintPressed, 3.0},
@@ -288,7 +279,11 @@ private slots:
                 {"secondary text on a selected row", t.onAccentSecondary, t.selection, 4.5},
                 {"chosen menu item", t.menuSelectionText, t.menuSelection, 4.5},
                 {"default button's label", t.onAccent, t.accent, 4.5},
-                {"check box's tick", t.onAccent, t.accent, 3.0},
+                {"check box's tick", t.ink2, t.on, 3.0},
+                {"tertiary text on chrome", t.ink3, t.chrome, 4.5},
+                {"status bar text", t.statusText, t.statusBar, 4.5},
+                {"timeline ruler labels", t.rulerText, t.ruler, 4.5},
+                {"primary button's label under the pointer", t.onAccent, t.accentHover, 4.5},
                 {"track number on its header", t.trackBadgeText, t.trackHeader, 4.5},
                 {"track toggle's symbol, on", t.trackToggleOn, t.trackHeader, 3.0},
                 {"track toggle's symbol, on, under the pointer", t.trackToggleOn, laidOn(t.trackHeader, t.trackToggleHover), 3.0},
@@ -349,6 +344,7 @@ private slots:
                 {"launcher: secondary text on a selected row", l.onAccentSecondary, l.selection, 4.5},
                 {"launcher: Choose's label", l.onAccent, l.accent, 4.5},
                 {"launcher: Choose's label, lit", l.onAccent, l.accentTop, 4.5},
+                {"launcher: Choose's label, held", l.onAccent, l.accentPressed, 4.5},
                 {"launcher: sidebar symbol", l.accent, l.sidebar, 3.0},
                 {"launcher: format tile's frame", l.tileGlyph, l.tile, 3.0},
                 {"launcher: format tile's plus", l.tileGlyph, l.badge, 3.0},
@@ -362,8 +358,7 @@ private slots:
                 pairs.push_back({name + " marker on the ruler's foot", color, t.rulerBottom, 3.0});
             }
             for (const Pair &pair : pairs)
-                QTest::addRow("%s (%s), %s", pair.what.constData(), qPrintable(pair.foreground.name(QColor::HexArgb)),
-                              dark ? "dark" : "light")
+                QTest::addRow("%s (%s)", pair.what.constData(), qPrintable(pair.foreground.name(QColor::HexArgb)))
                     << pair.foreground << pair.background << pair.ratio;
         }
     }
@@ -382,45 +377,44 @@ private slots:
 
     // States meant to differ still do: the skimmed playhead is a grey that
     // reads clearly less than the playhead itself wherever either is drawn
-    // (the ruler for their heads, their solid halo for their lines); and a
-    // scroll bar's handle under the pointer or held reads more than at rest.
+    // (the ruler for their heads, their solid halo for their lines); a
+    // scroll bar's handle under the pointer or held reads more than at rest;
+    // and the ramp's hover and on fills stay apart.
     void quietAndActiveStatesStayApart() {
-        for (const bool dark : {false, true}) {
-            const EditorTheme t = makeEditorTheme(dark);
-            QVERIFY(t.playheadIdle.hsvSaturation() < 70);
-            QCOMPARE(t.playheadHalo.alpha(), 255);
-            for (const QColor &surface : {t.ruler, t.rulerBottom, t.playheadHalo})
-                QVERIFY2(contrastRatio(t.playheadIdle, surface) + 0.35 <= contrastRatio(t.playhead, surface),
-                         qPrintable(QStringLiteral("%1 and %2 on %3").arg(t.playheadIdle.name(), t.playhead.name(), surface.name())));
-            // The playhead is Kerf's accent, as it is.
-            QCOMPARE(t.playhead.rgb(), kerfAccent(dark).rgb());
-            const LauncherTheme l = launcherTheme(dark);
-            const auto stronger = [](const QColor &rest, const QColor &active, const QColor &surface) {
-                return contrastRatio(laidOn(surface, active), surface) > contrastRatio(laidOn(surface, rest), surface) + 1.0;
-            };
-            for (const QColor &surface : {t.panel, t.well, t.field, t.dialog})
-                QVERIFY2(stronger(t.scrollHandle, t.scrollHandleHover, surface), qPrintable(surface.name()));
-            for (const QColor &surface : {l.content, l.group, l.sidebar})
-                QVERIFY2(stronger(l.scrollHandle, l.scrollHandleHover, surface), qPrintable(surface.name()));
-        }
+        const EditorTheme t = makeEditorTheme();
+        QVERIFY(t.playheadIdle.hsvSaturation() < 70);
+        QCOMPARE(t.playheadHalo.alpha(), 255);
+        for (const QColor &surface : {t.ruler, t.rulerBottom, t.playheadHalo})
+            QVERIFY2(contrastRatio(t.playheadIdle, surface) + 0.35 <= contrastRatio(t.playhead, surface),
+                     qPrintable(QStringLiteral("%1 and %2 on %3").arg(t.playheadIdle.name(), t.playhead.name(), surface.name())));
+        // The playhead is the design's red, as it is, stroked in the stage's dark.
+        QCOMPARE(t.playhead.rgb(), tokens::color(tokens::playhead).rgb());
+        QCOMPARE(t.playheadHalo.rgb(), tokens::color(tokens::surround).rgb());
+        const LauncherTheme l = launcherTheme();
+        const auto stronger = [](const QColor &rest, const QColor &active, const QColor &surface) {
+            return contrastRatio(laidOn(surface, active), surface) > contrastRatio(laidOn(surface, rest), surface) + 1.0;
+        };
+        for (const QColor &surface : {t.panel, t.well, t.field, t.dialog})
+            QVERIFY2(stronger(t.scrollHandle, t.scrollHandleHover, surface), qPrintable(surface.name()));
+        for (const QColor &surface : {l.content, l.group, l.sidebar})
+            QVERIFY2(stronger(l.scrollHandle, l.scrollHandleHover, surface), qPrintable(surface.name()));
+        // Hover and on stay apart from rest and from each other: raised under
+        // the pointer, on when chosen, hover2 over a raised surface.
+        QVERIFY(t.raised.lightness() < t.on.lightness() && t.on.lightness() < t.hover2.lightness());
+        QVERIFY(t.chrome.lightness() < t.raised.lightness());
         // Both sheets give the stronger handle to a held one as well as a hovered one.
         QVERIFY(editorStyleSheet(editorTheme()).contains(QStringLiteral("QScrollBar::handle:vertical:pressed")));
-        QVERIFY(launcherStyleSheet(launcherTheme(true)).contains(QStringLiteral("QScrollBar::handle:vertical:pressed")));
+        QVERIFY(launcherStyleSheet(launcherTheme()).contains(QStringLiteral("QScrollBar::handle:vertical:pressed")));
     }
 
     // The chosen mask tool and the selected mask stand out from the others,
-    // at rest, under the pointer and held (darkening while held, as every
-    // bezel does), in the Inspector and in the Program panel's title
-    // strip alike; and the Assistant's Model field reads on its hover wash,
-    // in both appearances.
+    // at rest, under the pointer and held (the on fill, `raised` while
+    // held), in the Inspector and in the Program panel's title strip alike;
+    // and the Assistant's Model field reads on its hover wash.
     void chosenMasksAndToolsStandOut() {
-        const auto restore = qScopeGuard([] {
-            setEditorColorScheme(ColorScheme::Dark);
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
+        {
             QSettings().remove(QStringLiteral("workspace"));
-        });
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            QSettings().remove(QStringLiteral("workspace"));
-            setEditorColorScheme(scheme);
             const EditorTheme &theme = editorTheme();
             MainWindow window{QString(), QString()};
             window.setConnection(QStringLiteral("ready"));
@@ -465,9 +459,9 @@ private slots:
                 return color;
             };
 
-            // The chosen tool is a quiet accent wash with no outline, its
-            // symbol the accent, which reads on the wash; the others are bare
-            // symbols on the panel (no bezel), a wash under the pointer.
+            // The chosen tool is `raised`, its accent glyph reading on it.with no accent outline, its
+            // symbol the accent ink, which reads on it; the others are bare
+            // symbols on the panel (no bezel), `raised` under the pointer.
             auto *rectangle = window.findChild<QAction *>(QStringLiteral("maskRectangle"));
             QVERIFY(rectangle && rectangle->isEnabled());
             rectangle->trigger();
@@ -535,14 +529,13 @@ private slots:
     }
 
     // A colour well's swatch is ringed in a grey that reads at 3:1 against
-    // white and black alike, so a white swatch shows on the light bezel and
-    // a black one on the dark, without a light halo on the dark bezel.
+    // white and black alike, so either swatch shows on the dark bezel,
+    // without a light halo round a black one.
     void colorWellsRingWhiteAndBlackSwatches() {
         QPushButton well;
         well.setIconSize(QSize(32, 12));
-        for (const bool dark : {false, true}) {
-            const QColor value = dark ? QColor(Qt::black) : QColor(Qt::white);
-            const QColor bezel = makeEditorTheme(dark).button;
+        const QColor bezel = makeEditorTheme().button;
+        for (const QColor &value : {QColor(Qt::white), QColor(Qt::black)}) {
             InspectorPanel::paintWell(&well, value.name());
             const QImage swatch = well.icon().pixmap(well.iconSize(), 2.0).toImage();
             QCOMPARE(swatch.size(), well.iconSize() * 2);
@@ -550,26 +543,20 @@ private slots:
             // The ring's outer half, solid at twice the size, as it shows on the bezel.
             const QColor ring = laidOn(bezel, swatch.pixelColor(0, swatch.height() / 2));
             QVERIFY2(contrastRatio(ring, value) >= 3.0, qPrintable(ring.name()));
-            // It shows on the light bezel, and on the dark one keeps to the
-            // bezel's own grey rather than ringing the swatch in light.
-            // (The dark bezel is a deep espresso, so a ring that reads on
-            // black stays a step above it, never a light halo.)
-            if (!dark) QVERIFY2(contrastRatio(ring, bezel) >= 3.0, qPrintable(ring.name()));
-            else QVERIFY2(contrastRatio(ring, bezel) < 2.0 && ring.lightness() < bezel.lightness() + 50, qPrintable(ring.name()));
+            if (value == QColor(Qt::black)) QVERIFY2(ring.lightness() < bezel.lightness() + 90, qPrintable(ring.name()));
         }
     }
 
-    void editorRendersBothAppearances() {
+    // The editor draws the design's graphite ramp (mockup-spec 0.2) and
+    // nothing else: exact surfaces, the flat bars, menus, dialogs and the
+    // states. With KERF_SCREENSHOT_DIR set, each picture is saved.
+    void editorRendersTheGraphiteRamp() {
         QSettings().remove(QStringLiteral("workspace"));
         const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
         const auto save = [&shots](const QImage &image, const QString &name) {
             if (!shots.isEmpty()) QVERIFY(image.save(QDir(shots).filePath(name + QStringLiteral(".png"))));
         };
-        // Back to the tests' dark appearance however this test ends.
-        const auto restore = qScopeGuard([] {
-            setEditorColorScheme(ColorScheme::Dark);
-            QSettings().remove(QStringLiteral("workspace"));
-        });
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
         QSignalSpy changed(EditorAppearance::instance(), &EditorAppearance::changed);
         const QJsonObject preset{{"name", "Harbor Intro"}, {"document", "kerf 1\nproject name=\"Harbor Intro\"\n"}, {"sequence", "s1"},
             {"slots", QJsonArray{
@@ -581,36 +568,55 @@ private slots:
                     {"fits", QJsonArray{QJsonObject{{"media", "drone"}, {"latestFrame", 432}}}}}}},
             {"textSlots", QJsonObject{{"title1", "Harbor Teaser"}}}};
 
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            const bool dark = scheme == ColorScheme::Dark;
-            const QString name = dark ? QStringLiteral("dark") : QStringLiteral("light");
+        {
+            const QString name = QStringLiteral("dark");
             // Each picture starts from the Editing layout.
             QSettings().remove(QStringLiteral("workspace"));
-            // The API KERF_COLOR_SCHEME feeds.
-            setEditorColorScheme(scheme);
-            QCOMPARE(editorColorScheme(), scheme);
+            // The old scheme API draws the one theme, whatever it is asked.
+            setEditorColorScheme(ColorScheme::Light);
+            QCOMPARE(editorColorScheme(), ColorScheme::Dark);
             const EditorTheme &theme = editorTheme();
-            QCOMPARE(theme.dark, dark);
+            QVERIFY(theme.dark);
+            // The ramp, exactly (mockup-spec 0.2).
+            const std::pair<const char *, QColor> ramp[] = {
+                {"#050505", theme.window},    {"#0e0e0e", theme.viewerSurround}, {"#121212", theme.well},
+                {"#171717", theme.chrome},    {"#171717", theme.panel},          {"#171717", theme.statusBar},
+                {"#1c1c1c", theme.card},      {"#1c1c1c", theme.chatSurface},    {"#1c1c1c", theme.menu},
+                {"#1c1c1c", theme.tooltip},   {"#1c1c1c", theme.dialog},         {"#262626", theme.raised},
+                {"#262626", theme.field},     {"#303030", theme.on},             {"#262626", theme.toolSelected},
+                {"#363636", theme.hover2},    {"#ededed", theme.text},           {"#a8a8a8", theme.textSecondary},
+                {"#828282", theme.ink3},      {"#5c5c5c", theme.textDisabled},   {"#3a3a3a", theme.track},
+                {"#6a6a6a", theme.track2},    {"#3366e6", theme.accent},         {"#2b5ad6", theme.accentHover},
+                {"#8fb0ff", theme.accentInk}, {"#4cc38a", theme.success},        {"#ec5d61", theme.error},
+                {"#e5484d", theme.playhead},  {"#d6a345", theme.warning},
+            };
+            for (const auto &[code, color] : ramp)
+                QVERIFY2(color.rgba() == QColor(code).rgba(), qPrintable(QStringLiteral("%1 for %2").arg(color.name(), code)));
+            QCOMPARE(theme.line.rgba(), qRgba(255, 255, 255, 20));
+            QCOMPARE(theme.line2.rgba(), qRgba(255, 255, 255, 36));
+            QCOMPARE(theme.lineh.rgba(), qRgba(255, 255, 255, 56));
+            // Every surface is neutral graphite.
             for (const QColor &surface : {theme.window, theme.panel, theme.chrome, theme.well, theme.field, theme.dialog,
-                                          theme.chatSurface, theme.viewerSurround})
-                QVERIFY2(isWarmPaper(surface, dark), qPrintable(surface.name()));
-            QVERIFY(dark ? theme.text.lightness() > 180 : theme.text.lightness() < 60);
-            // Text is warm near-black or cream, never pure black or white.
-            QVERIFY(theme.text.rgb() != QColor(Qt::black).rgb() && theme.text.rgb() != QColor(Qt::white).rgb());
-            QVERIFY(theme.textStrong.rgb() != QColor(Qt::black).rgb() && theme.textStrong.rgb() != QColor(Qt::white).rgb());
-            // Every token is filled in, and nothing amber or gold is left.
+                                          theme.chatSurface, theme.viewerSurround, theme.raised, theme.on})
+                QVERIFY2(isGraphite(surface), qPrintable(surface.name()));
+            // Every token is filled in, and nothing amber or gold is left but
+            // the design's own warn colour.
             const QString sheet = qApp->styleSheet() + dockStyleSheet(theme);
             QVERIFY(!sheet.contains(QLatin1Char('@')));
             static const QRegularExpression hex(QStringLiteral("#[0-9a-fA-F]{6,8}\\b"));
             for (auto it = hex.globalMatch(sheet); it.hasNext();) {
                 const QString code = it.next().captured();
-                QVERIFY2(!isAmber(QColor(code)), qPrintable(code));
+                QVERIFY2(!isAmber(QColor(code)) || QColor(code).rgb() == theme.warning.rgb(), qPrintable(code));
             }
-            // The system's Window and Accent stay the platform's, so
-            // detection keeps reading the system and not the theme.
-            QVERIFY(!QGuiApplication::palette().isBrushSet(QPalette::Active, QPalette::Accent));
-            QVERIFY(!QGuiApplication::palette().isBrushSet(QPalette::Active, QPalette::Window));
+            // No gradients and no bevels: every bezel is flat.
+            QVERIFY(!sheet.contains(QStringLiteral("qlineargradient")));
+            QVERIFY(!sheet.contains(QStringLiteral("border-top-color")));
+            // The application palette is the ramp, its accent Kerf's.
             QCOMPARE(QGuiApplication::palette().color(QPalette::Active, QPalette::Base), theme.field);
+            QCOMPARE(QGuiApplication::palette().color(QPalette::Active, QPalette::Window), theme.chrome);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
+            QCOMPARE(QGuiApplication::palette().color(QPalette::Active, QPalette::Accent), theme.accent);
+#endif
             // Clip labels read on their headers, at the base of the name bar
             // and at its lightened top, where the label sits.
             for (const ClipKind kind : {ClipKind::Video, ClipKind::Audio, ClipKind::Music, ClipKind::Generator, ClipKind::Caption}) {
@@ -622,15 +628,15 @@ private slots:
             // Every marker reads as a mark on the ruler.
             for (const char *marker : {"red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink", "white"})
                 QVERIFY2(contrastRatio(theme.marker(QString::fromLatin1(marker)), theme.ruler) >= 3.0, marker);
-            // Secondary text reads on the grey window and dialogs too, and
-            // Kerf's suggestion chips on their purple surface.
+            // Secondary text reads on the window and dialogs too, and Kerf's
+            // text on the proposal card.
             QVERIFY(contrastRatio(theme.textSecondary, theme.dialog) >= 4.5);
             QVERIFY(contrastRatio(theme.textSecondary, theme.panelTitle) >= 4.5);
             QVERIFY(contrastRatio(theme.assistantText, theme.assistantSurface) >= 4.5);
             QVERIFY(contrastRatio(theme.assistantText, theme.assistantHover) >= 4.5);
             QVERIFY(contrastRatio(theme.badgeErrorText, theme.badgeError) >= 4.5);
-            // In dark, the current tab is lighter than the strip, as in light.
-            QVERIFY(theme.panelTitleActive.lightness() > theme.panelTitle.lightness());
+            // A title strip is chrome, whichever tab is current: names, not boxes.
+            QCOMPARE(theme.panelTitleActive.rgb(), theme.panelTitle.rgb());
             // The accent as text reads on each surface it is drawn on; see
             // accentTextReadsOnEverySurfaceItIsDrawnOn for every accent.
             for (const QColor &surface : {theme.panel, theme.rulerCorner, theme.statusBar})
@@ -639,15 +645,15 @@ private slots:
             // symbols, when on, as glyphs, on the hover wash too.
             QVERIFY(contrastRatio(theme.trackBadgeText, theme.trackHeader) >= 4.5);
             QVERIFY(contrastRatio(theme.trackToggleOn, laidOn(theme.trackHeader, theme.trackToggleHover)) >= 3.0);
-            // An unchecked check box's edge reads (3:1) on the panels and
-            // dialogs it sits on, and on a dialog's grouped boxes.
+            // An unchecked check box's edge is the design's outline.
             const auto over = [](const QColor &under, QColor top) {
                 const qreal alpha = top.alphaF();
                 top.setAlpha(255);
                 return mixColor(under, top, alpha);
             };
-            for (const QColor &surface : {theme.panel, theme.dialog, over(theme.dialog, theme.group)})
-                QVERIFY2(contrastRatio(theme.checkBorder, surface) >= 3.0, qPrintable(surface.name()));
+            // (The design's check box outline is white at 16%, a hairline,
+            // not a 3:1 edge; its checked state is the on fill.)
+            QCOMPARE(theme.checkBorder.rgb(), over(theme.chrome, tokens::color(tokens::checkboxOutline)).rgb());
             QVERIFY(contrastRatio(theme.assistantText, theme.chrome) >= 4.5);
             QVERIFY(contrastRatio(theme.tabInactiveText, theme.panelTitle) >= 4.5);
             QVERIFY(contrastRatio(theme.trackHeaderDetail, theme.trackHeader) >= 4.5);
@@ -669,16 +675,13 @@ private slots:
             QVERIFY(contrastRatio(theme.inOutRange, theme.panel) >= 3.0);
             // The changed-on-disk triangle reads on its bar.
             QVERIFY(contrastRatio(theme.warningGlyph, theme.warningSurface) >= 3.0);
-            // A clip the agent adds is named in its purple, on its wash over the lane.
+            // A clip the agent adds is named in the accent ink, on its wash over the lane.
             QVERIFY(contrastRatio(theme.assistantText, over(theme.trackLane, theme.proposalAddFill)) >= 4.5);
-            // A button focused from the keyboard is ringed in the accent at 35%.
-            QCOMPARE(theme.focusHalo.rgb(), theme.accent.rgb());
-            QCOMPARE(theme.focusHalo.alpha(), 89);
-            // The viewer's stage follows the appearance (cream or espresso,
-            // a step deeper than the panels), and the picture card is the
-            // same warm black in both.
-            QCOMPARE(theme.viewerSurround.rgb(), (dark ? QColor("#120e0b") : QColor("#e6dece")).rgb());
-            QCOMPARE(theme.viewerCanvas.rgb(), QColor("#0a0807").rgb());
+            // A control focused from the keyboard is outlined in the solid accent.
+            QCOMPARE(theme.focusHalo.rgba(), theme.accent.rgba());
+            // The stage is the surround, the picture's canvas black.
+            QCOMPARE(theme.viewerSurround.rgb(), QColor("#0e0e0e").rgb());
+            QCOMPARE(theme.viewerCanvas.rgb(), QColor("#000000").rgb());
 
             MainWindow window{QString(), QString()};
             window.setConnection(QStringLiteral("ready"));
@@ -709,8 +712,8 @@ private slots:
             QVERIFY(!window.m_aiBar->isVisible());
             QCoreApplication::processEvents();
             const QImage image = window.grab().toImage();
-            // The bars are the theme's: the toolbar's faceplate, status bar,
-            // and dock title strips.
+            // The bars are the theme's: the toolbar's plate (flat chrome),
+            // status bar, and dock title strips.
             auto *toolbar = window.findChild<QToolBar *>();
             QVERIFY(qobject_cast<FaceplateToolBar *>(toolbar));
             {
@@ -726,9 +729,8 @@ private slots:
             // Mission Control and the Dock name it, and the toolbar shows the same.
             QCOMPARE(window.windowTitle(), QStringLiteral("Harbor Teaser"));
             QCOMPARE(window.m_projectTitle->text(), window.windowTitle());
-            // The title is 13px semibold, as the launcher's and macOS's, and
-            // centred on the window (the toolbar spans it), clear of the
-            // groups either side.
+            // The title is UI 13, centred on the window (the toolbar spans
+            // it), clear of the groups either side.
             QLabel *title = window.m_projectTitle;
             QCOMPARE(title->font().pixelSize(), 13);
             QVERIFY2(std::abs(title->geometry().center().x() - toolbar->width() / 2) <= 1,
@@ -741,8 +743,7 @@ private slots:
             QCOMPARE(exportButton->x() - window.m_formatBank->geometry().right() - 1, 8);
             QCOMPARE(exportButton->height(), window.m_formatBank->key(0)->height());
             // Kerf's conversation is open, so its switch at the toolbar's end,
-            // a group of its own, is chosen: a quiet accent wash with no
-            // outline, its bubble the accent, as a chosen mode in a title strip.
+            // a group of its own, is on: the on fill, `raised` while held.
             QToolButton *chat = window.m_chatToggle;
             QVERIFY(chat->isVisible() && chat->isChecked());
             QVERIFY(chat->x() - exportButton->geometry().right() - 1 > 8);
@@ -796,39 +797,48 @@ private slots:
                 QCOMPARE(time->palette().color(QPalette::WindowText).rgb(), theme.accentText.rgb());
                 QCOMPARE(dominantColor(time->parentWidget()->grab().toImage()), theme.panel.rgb());
             }
-            // The launcher's chrome: #f5f5f5 in light, #2c2c2e in dark.
-            QVERIFY(dark ? qGray(dominantColor(toolbar->grab().toImage())) < 60 : qGray(dominantColor(toolbar->grab().toImage())) > 220);
+            // The toolbar is chrome.
+            QCOMPARE(dominantColor(toolbar->grab().toImage()), theme.chrome.rgb());
             // Tabs never show a close button, under the pointer or not, so
             // hovering one changes no tab's width and no name is shortened.
             const auto closeButtons = window.findChildren<QWidget *>(QStringLiteral("tabCloseButton"));
             QVERIFY(closeButtons.size() >= 3);
             for (const QWidget *close : closeButtons) QVERIFY(!close->isVisible());
             {
-                ads::CDockWidgetTab *inspectorTab = window.m_workspace->panel(QStringLiteral("inspector"))->tabWidget();
-                QWidget *strip = inspectorTab->parentWidget();
+                // Only areas that show their title strip show tabs (the
+                // program, inspector and browser draw their own strips), so
+                // the names checked are the visible ones: the bin's and the
+                // timeline's.
+                ads::CDockWidgetTab *timelineTab = window.m_workspace->panel(QStringLiteral("timeline"))->tabWidget();
+                QVERIFY(timelineTab->isVisible());
+                QWidget *strip = timelineTab->parentWidget();
                 QList<QRect> before;
                 for (auto *tab : strip->findChildren<ads::CDockWidgetTab *>()) before.append(tab->geometry());
                 QEvent enter(QEvent::Enter);
-                QCoreApplication::sendEvent(inspectorTab, &enter);
+                QCoreApplication::sendEvent(timelineTab, &enter);
                 QCoreApplication::processEvents();
                 QList<QRect> after;
-                for (auto *tab : strip->findChildren<ads::CDockWidgetTab *>()) {
-                    after.append(tab->geometry());
+                for (auto *tab : strip->findChildren<ads::CDockWidgetTab *>()) after.append(tab->geometry());
+                QCOMPARE(after, before);
+                int shown = 0;
+                for (auto *tab : window.findChildren<ads::CDockWidgetTab *>()) {
                     QVERIFY(!tab->findChild<QWidget *>(QStringLiteral("tabCloseButton"))->isVisible());
+                    if (!tab->isVisible()) continue;
+                    ++shown;
                     const QString name = tab->dockWidget()->windowTitle();
                     QVERIFY2(tab->sizeHint().width() <= tab->width(), qPrintable(name + QStringLiteral(" is shortened")));
                 }
-                QCOMPARE(after, before);
+                QVERIFY(shown >= 2);
                 QEvent leave(QEvent::Leave);
-                QCoreApplication::sendEvent(inspectorTab, &leave);
+                QCoreApplication::sendEvent(timelineTab, &leave);
             }
-            // The chosen tool is a quiet chip with its symbol in the accent.
+            // The chosen tool is `raised`, its accent glyph reading on it.
             const QImage tool = window.m_toolPalette->widgetForAction(window.m_commands->action(QStringLiteral("tool.selection")))->grab().toImage();
             const QColor toolFill = tool.pixelColor(qRound(3 * tool.devicePixelRatio()), tool.height() / 2);
             QCOMPARE(toolFill.rgb(), theme.toolSelected.rgb());
             QVERIFY(highestContrast(tool, tool.rect(), toolFill) >= 3.0);
-            // An unavailable command's symbol is dimmed in both appearances,
-            // never brightened, as Qt's own disabled pixmap does on dark.
+            // An unavailable command's symbol is dimmed, never brightened, as
+            // Qt's own disabled pixmap does on dark.
             for (const char *id : {"edit.undo", "edit.redo"}) {
                 QAction *action = window.m_commands->action(QString::fromLatin1(id));
                 QVERIFY(!action->isEnabled());
@@ -840,11 +850,12 @@ private slots:
                 QCOMPARE(ink.rgb(), theme.glyphDisabled.rgb());
             }
             // A tab row's details are plain text on the panel's own surface
-            // (text tabs have no strip), not a dead button.
+            // (text tabs have no strip), not a dead button. The Program
+            // monitor's tab row is hidden: its ProgramStrip stands in for it.
             {
                 auto *detail = window.findChild<QToolButton *>(QStringLiteral("viewerDetail"));
-                QVERIFY(detail && detail->isVisible() && !detail->isEnabled());
-                QCOMPARE(dominantColor(detail->parentWidget()->grab(detail->geometry()).toImage()), theme.panel.rgb());
+                QVERIFY(detail && !detail->isVisible() && !detail->isEnabled());
+                QVERIFY(!window.m_workspace->panel(QStringLiteral("program"))->dockAreaWidget()->titleBar()->isVisible());
                 auto *tracks = window.findChild<QLabel *>(QStringLiteral("timelineDetail"));
                 QVERIFY(tracks && tracks->isVisible());
                 QCOMPARE(dominantColor(tracks->parentWidget()->grab(tracks->geometry()).toImage()), theme.panel.rgb());
@@ -853,7 +864,7 @@ private slots:
             save(image, QStringLiteral("editor-%1").arg(name));
             // With the conversation closed, the timeline's bar stands in for
             // it: the window's chrome, no coloured stripe at its start, not
-            // amber, and 22px tonal chips for its buttons (no outlined box).
+            // amber, and 22px chips on `raised` for its buttons (no outline).
             window.setChatOpen(false);
             QCoreApplication::processEvents();
             QVERIFY(window.m_aiBar->isVisible());
@@ -876,8 +887,8 @@ private slots:
             QCoreApplication::processEvents();
             QVERIFY(!window.m_aiBar->isVisible());
 
-            // Export's menu opens as macOS's menu: rounded and clipped to its
-            // corners, under the button.
+            // Export's menu opens as the design's menu: a card, rounded and
+            // clipped to its corners, under the button.
             window.m_exportButton->showMenu();
             QMenu *exportMenu = window.m_exportButton->menu();
             QVERIFY(QTest::qWaitForWindowExposed(exportMenu));
@@ -891,7 +902,8 @@ private slots:
             }
             exportMenu->hide();
             // So does a clip's context menu: rounded and clipped to its
-            // corners, the row under the pointer a rounded accent fill.
+            // corners, the row under the pointer a rounded `raised` fill,
+            // every row 28pt.
             {
                 QImage shape;
                 QRect row;
@@ -928,6 +940,7 @@ private slots:
                 const qreal ratio = shape.devicePixelRatio();
                 QCOMPARE(shape.pixelColor(0, 0).alpha(), 0);
                 QCOMPARE(shape.pixelColor(QPoint(row.left() + 2, row.center().y()) * ratio).rgb(), theme.menuSelection.rgb());
+                QCOMPARE(row.height(), 28);
                 QCOMPARE(amberPixels(shape), 0);
                 // Menus show no symbols, as macOS's, though Split and Delete
                 // have them for the toolbar: each row's first 20px are its
@@ -1029,13 +1042,14 @@ private slots:
                 // The default button is the accent, as in macOS dialogs.
                 QPushButton *create = dialog->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok);
                 QCOMPARE(create->text(), QStringLiteral("Create Proposal"));
-                // Its row of pop-up and seconds field is one 22px line, as in the launcher.
+                // Its row of pop-up and seconds field is one 24pt line, as the
+                // design's controls are.
                 auto *choice = dialog->findChild<QComboBox *>(QStringLiteral("presetMedia_Opening"));
                 auto *from = dialog->findChild<QDoubleSpinBox *>(QStringLiteral("presetFrom_Opening"));
                 QVERIFY(choice && from);
-                QCOMPARE(choice->height(), 22);
-                QCOMPARE(from->height(), 22);
-                QCOMPARE(create->height(), 22);
+                QCOMPARE(choice->height(), 24);
+                QCOMPARE(from->height(), 24);
+                QCOMPARE(create->height(), 24);
                 QCOMPARE(from->geometry().center().y(), choice->geometry().center().y());
                 QVERIFY(popupShowsEveryRow(choice));
                 // Its pop-ups are buttons' bezels, as the launcher's Frame
@@ -1128,9 +1142,13 @@ private slots:
                 QCOMPARE(window.m_loadFromDisk->x() - window.m_keepEditorVersion->geometry().right() - 1, 8);
                 // Their trailing buttons line up with the toolbar's last
                 // control, the conversation's switch, 8px in from the
-                // window's edge.
-                for (QWidget *trailing : std::initializer_list<QWidget *>{window.m_chatToggle, window.m_loadFromDisk, bar.constLast()})
+                // window's edge; the timeline's bar ends 8px in from the
+                // timeline's own edge, the browser column beside it.
+                for (QWidget *trailing : std::initializer_list<QWidget *>{window.m_chatToggle, window.m_loadFromDisk})
                     QCOMPARE(trailing->mapTo(&window, QPoint(trailing->width(), 0)).x(), window.width() - 8);
+                QWidget *timelineArea = window.m_workspace->panel(QStringLiteral("timeline"))->dockAreaWidget();
+                QCOMPARE(bar.constLast()->mapTo(&window, QPoint(bar.constLast()->width(), 0)).x(),
+                         timelineArea->mapTo(&window, QPoint(timelineArea->width(), 0)).x() - 8);
             }
             // Kerf's suggestions are tonal chips sized to their labels, with
             // no outline: on the timeline's bar at its controls' height...
@@ -1163,10 +1181,10 @@ private slots:
             for (QWidget *part : window.m_divergedBanner->findChildren<QWidget *>(Qt::FindDirectChildrenOnly))
                 if (part != window.m_divergedGlyph) QCOMPARE(amberPixels(part->grab().toImage()), 0);
             QCOMPARE(dominantColor(window.m_divergedBanner->grab().toImage()), theme.warningSurface.rgb());
-            // The banner is its own bar, not a second row of the toolbar: in
-            // dark a step lighter than it, in light a warm tint.
+            // The banner is its own bar, not a second row of the toolbar: a
+            // step lighter than it.
             QVERIFY(theme.warningSurface.rgb() != theme.chrome.rgb());
-            if (dark) QVERIFY(theme.warningSurface.lightness() > theme.chrome.lightness());
+            QVERIFY(theme.warningSurface.lightness() > theme.chrome.lightness());
             // The conversation's view, scrolled away from its top, has a
             // hairline under its header (or the compact proposal bar), as a
             // comments panel's header does.
@@ -1179,8 +1197,8 @@ private slots:
             }
             save(states, QStringLiteral("states-%1").arg(name));
 
-            // Where the timeline's scroll bars meet is the panel, not a framed
-            // square. Both bars are shown here, whatever the fonts' heights.
+            // Scroll bars are hidden, as the design hides them: shown, they
+            // take no room, so nothing is framed where two would meet.
             {
                 QScrollArea *scroll = window.m_timelineScroll;
                 const Qt::ScrollBarPolicy verticalPolicy = scroll->verticalScrollBarPolicy();
@@ -1188,14 +1206,8 @@ private slots:
                 scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
                 scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
                 QCoreApplication::processEvents();
-                const QScrollBar *vertical = scroll->verticalScrollBar();
-                const QScrollBar *horizontal = scroll->horizontalScrollBar();
-                QVERIFY(vertical->isVisible() && horizontal->isVisible());
-                const QRect corner(QPoint(vertical->mapTo(&window, QPoint()).x(), horizontal->mapTo(&window, QPoint()).y()),
-                                   QSize(vertical->width(), horizontal->height()));
-                const QImage cornerImage = window.grab(corner).toImage();
-                for (int y = 0; y < cornerImage.height(); ++y)
-                    for (int x = 0; x < cornerImage.width(); ++x) QCOMPARE(cornerImage.pixelColor(x, y).rgb(), theme.panel.rgb());
+                QCOMPARE(scroll->verticalScrollBar()->width(), 0);
+                QCOMPARE(scroll->horizontalScrollBar()->height(), 0);
                 scroll->setVerticalScrollBarPolicy(verticalPolicy);
                 scroll->setHorizontalScrollBarPolicy(horizontalPolicy);
             }
@@ -1258,7 +1270,7 @@ private slots:
             // A colour is a well, its hex beside it.
             auto *well = inspector->findChild<QPushButton *>(QStringLiteral("effectParam_color"));
             QVERIFY(well);
-            QCOMPARE(well->size(), QSize(44, 22));
+            QCOMPARE(well->size(), QSize(44, 24));
             QVERIFY(well->text().isEmpty());
             QCOMPARE(qobject_cast<QLabel *>(well->parentWidget()->findChild<QLabel *>(QStringLiteral("colorHex")))->text(), QStringLiteral("#4DCCFF"));
             // A switch, not a check box, for an effect's bool and for each effect.
@@ -1286,11 +1298,13 @@ private slots:
             save(inspectorImage, QStringLiteral("inspector-%1").arg(name));
             window.close();
         }
-        QVERIFY(changed.count() >= 2);
+        // The theme was applied once, before this test; nothing above asked
+        // for another, so nothing changed.
+        QCOMPARE(changed.count(), 0);
 
-        // A change of appearance reaches a window that is already open: its
-        // docks, and the conversation's panel and the comments it shows.
-        setEditorColorScheme(ColorScheme::Light);
+        // An open window keeps the one theme when the old scheme API is
+        // called: no change is signalled, and its docks, the conversation's
+        // panel and the comments it shows draw the same.
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
         window.resize(1440, 900);
@@ -1309,9 +1323,11 @@ private slots:
         };
         QCOMPARE(surface(), editorTheme().chatSurface.rgb());
         QCOMPARE(nameInk(), editorTheme().chatText.rgb());
-        const int before = changed.count();
-        setEditorColorScheme(ColorScheme::Dark);
-        QCOMPARE(changed.count(), before + 1);
+        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::System, ColorScheme::Dark}) {
+            setEditorColorScheme(scheme);
+            applyEditorAppearance();
+        }
+        QCOMPARE(changed.count(), 0);
         QVERIFY(window.m_workspace->manager()->styleSheet().contains(editorTheme().panel.name()));
         QCoreApplication::processEvents();
         QCOMPARE(surface(), editorTheme().chatSurface.rgb());
@@ -1319,19 +1335,15 @@ private slots:
         QVERIFY(!window.m_disclosures.isEmpty());
         for (QToolButton *disclosure : std::as_const(window.m_disclosures))
             QCOMPARE(ink(disclosure->icon()), editorTheme().textSecondary.rgb());
-        // Re-applying the same appearance changes nothing.
-        applyEditorAppearance();
-        QCOMPARE(changed.count(), before + 1);
     }
 
-    // Push buttons and pop-up buttons take focus from Tab alone, as macOS's
-    // do, so a click leaves no accent behind. Tab rings the control in the
-    // accent at 35%, 3px outside its bezel, and the ring moves with the
-    // focus. A field being typed in is ringed however it got focus.
+    // Push buttons and pop-up buttons take focus from Tab alone, so a click
+    // leaves no accent behind. Tab outlines the control as the design does
+    // (2pt of the solid accent, 1pt outside its bezel), and the outline
+    // moves with the focus. A field being typed in is outlined however it
+    // got focus.
     void focusRingsFollowTheKeyboardAndTyping() {
-        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             const EditorTheme &theme = editorTheme();
             QDialog dialog;
             auto *layout = new QHBoxLayout(&dialog);
@@ -1361,10 +1373,10 @@ private slots:
                 QCOMPARE(halos.size(), 1);
                 QVERIFY(halos.constFirst()->isVisible());
                 QCOMPARE(halos.constFirst()->geometry(), control->geometry().adjusted(-3, -3, 3, 3));
-                // The ring's middle, beside the bezel, is the accent at 35% on the dialog.
+                // The outline, 2pt out from the bezel, is the accent.
                 const QImage image = dialog.grab().toImage();
                 const QColor ring = image.pixelColor(QPoint(control->x() - 2, control->geometry().center().y()) * image.devicePixelRatio());
-                const QColor expected = mixColor(theme.dialog, theme.accent, theme.focusHalo.alphaF());
+                const QColor expected = theme.accent;
                 QVERIFY2(std::abs(ring.red() - expected.red()) <= 3 && std::abs(ring.green() - expected.green()) <= 3 &&
                              std::abs(ring.blue() - expected.blue()) <= 3,
                          qPrintable(ring.name() + QStringLiteral(" for ") + expected.name()));
@@ -1420,30 +1432,133 @@ private slots:
             QVERIFY(transcript->hasFocus());
             QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
             QVERIFY(!dialog.findChild<QWidget *>(QStringLiteral("focusHalo")));
-            // A combo box that takes typing stays a field.
+            // A combo box that takes typing stays a field: a line edit on
+            // the field's fill (the flat ramp gives fields and secondary
+            // buttons the same `raised`), with no chevron cell of its own.
             auto *typed = new QComboBox;
             typed->setEditable(true);
             typed->addItem(QStringLiteral("Kerf Cloud"));
             layout->addWidget(typed);
             typed->show();
             QCoreApplication::processEvents();
-            QVERIFY(!popUpHasButtonBezel(dialog.grab().toImage(), typed, theme.button));
+            QVERIFY(typed->lineEdit());
+            const QImage shot = dialog.grab().toImage();
+            QCOMPARE(shot.pixelColor(QPoint(typed->x() + 4, typed->geometry().center().y()) * shot.devicePixelRatio()).rgb(),
+                     theme.field.rgb());
         }
     }
 
+    // The flat style sheet keeps the design's control metrics (mockup-spec
+    // 0.4, 0.5): buttons, fields and pop-ups 24pt with 6pt corners, a dialog
+    // button at least 64pt wide, 14pt check boxes, a 16pt slider with a 10pt
+    // knob, 28pt menu rows, a 24pt tooltip on a rounded card, and scroll bars
+    // that take no room.
+    void flatControlsKeepTheDesignsMetrics() {
+        QDialog dialog;
+        auto *layout = new QVBoxLayout(&dialog);
+        auto *button = new QPushButton(QStringLiteral("OK"));
+        auto *field = new QLineEdit;
+        auto *choice = new QComboBox;
+        choice->addItems({QStringLiteral("Master"), QStringLiteral("Draft")});
+        auto *seconds = new StepperSpinBox;
+        auto *box = new QCheckBox(QStringLiteral("Include comments as EDL locators"));
+        auto *slider = new QSlider(Qt::Horizontal);
+        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+        auto *list = new QListWidget;
+        for (int row = 0; row < 40; ++row) list->addItem(QStringLiteral("Row %1").arg(row));
+        for (QWidget *widget : std::initializer_list<QWidget *>{button, field, choice, seconds, box, slider, buttons, list})
+            layout->addWidget(widget);
+        dialog.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+        for (QWidget *control : std::initializer_list<QWidget *>{button, field, choice, seconds})
+            QVERIFY2(control->height() == 24, qPrintable(QStringLiteral("%1 is %2").arg(control->metaObject()->className()).arg(control->height())));
+        for (QAbstractButton *push : buttons->buttons()) {
+            QCOMPARE(push->height(), 24);
+            QVERIFY(push->width() >= 64);
+        }
+        // Flat: a button's fill is the same at its top and foot, and its
+        // corner is clear (6pt radius).
+        const QImage shot = dialog.grab().toImage();
+        const qreal ratio = shot.devicePixelRatio();
+        const QRect bezel = button->geometry();
+        const auto at = [&](int x, int y) { return shot.pixelColor(QPoint(x, y) * ratio).rgb(); };
+        QCOMPARE(at(bezel.center().x(), bezel.top() + 3), editorTheme().button.rgb());
+        QCOMPARE(at(bezel.center().x(), bezel.bottom() - 3), editorTheme().button.rgb());
+        QCOMPARE(at(bezel.left(), bezel.top()), editorTheme().dialog.rgb());
+        // The default button is the flat accent.
+        QPushButton *ok = buttons->button(QDialogButtonBox::Ok);
+        QVERIFY(ok->isDefault());
+        const QRect okBezel(ok->mapTo(&dialog, QPoint()), ok->size());
+        QCOMPARE(at(okBezel.center().x(), okBezel.top() + 3), editorTheme().accent.rgb());
+        QCOMPARE(at(okBezel.center().x(), okBezel.bottom() - 3), editorTheme().accent.rgb());
+        // A field is `raised`.
+        QCOMPARE(at(field->geometry().left() + 4, field->geometry().center().y()), editorTheme().field.rgb());
+        // Check boxes and the slider's knob.
+        QCOMPARE(QApplication::style()->pixelMetric(QStyle::PM_IndicatorWidth), 14);
+        QCOMPARE(QApplication::style()->pixelMetric(QStyle::PM_SliderLength), 10);
+        QCOMPARE(QApplication::style()->pixelMetric(QStyle::PM_ScrollBarExtent), 0);
+        // The list scrolls, its bar hidden: the bar takes no width.
+        QVERIFY(list->verticalScrollBar()->maximum() > 0);
+        QCOMPARE(list->verticalScrollBar()->isVisible() ? list->verticalScrollBar()->width() : 0, 0);
+        // Menus: rows 28pt.
+        QMenu menu;
+        menu.addAction(QStringLiteral("Render preview"));
+        menu.addAction(QStringLiteral("Open Deliver workspace"));
+        menu.popup(dialog.mapToGlobal(QPoint(10, 10)));
+        QVERIFY(QTest::qWaitForWindowExposed(&menu));
+        for (QAction *action : menu.actions()) QCOMPARE(menu.actionGeometry(action).height(), 28);
+        QVERIFY(menu.testAttribute(Qt::WA_TranslucentBackground));
+        menu.close();
+        // The tooltip is a rounded card: a 1pt line2 edge, 3pt above and
+        // below its one 12px line and 8pt either side (24pt with the UI
+        // face's 16pt line).
+        QToolTip::showText(dialog.mapToGlobal(QPoint(20, 20)), QStringLiteral("Export master"), &dialog);
+        QWidget *tip = nullptr;
+        QTRY_VERIFY((tip = [] {
+            for (QWidget *widget : QApplication::topLevelWidgets())
+                if (widget->inherits("QTipLabel") && widget->isVisible()) return widget;
+            return static_cast<QWidget *>(nullptr);
+        }()));
+        QCOMPARE(tip->contentsMargins(), QMargins(9, 4, 9, 4));
+        QCOMPARE(tip->font().pixelSize(), 12);
+        QVERIFY(tip->testAttribute(Qt::WA_TranslucentBackground));
+        QToolTip::hideText();
+        // Tooltips wake after 400ms and come back at once within 300ms.
+        QCOMPARE(QApplication::style()->styleHint(QStyle::SH_ToolTip_WakeUpDelay), 400);
+        QCOMPARE(QApplication::style()->styleHint(QStyle::SH_ToolTip_FallAsleepDelay), 300);
+    }
+
+    // The theme never changes now, so EditorAppearance::changed fires only
+    // when what cached pixmaps depend on does: the application font (or a
+    // screen's density). The theme it re-applies is the same one.
+    void appearanceChangesOnlyForFontsAndScreens() {
+        QSignalSpy changed(EditorAppearance::instance(), &EditorAppearance::changed);
+        const QColor accent = editorTheme().accent;
+        setEditorColorScheme(ColorScheme::Light);
+        setEditorColorScheme(ColorScheme::System);
+        applyEditorAppearance();
+        QCOMPARE(changed.count(), 0);
+        const QFont was = QApplication::font();
+        const auto restore = qScopeGuard([was] { QApplication::setFont(was); });
+        QFont bigger = was;
+        bigger.setPixelSize(was.pixelSize() > 0 ? was.pixelSize() + 1 : 14);
+        QApplication::setFont(bigger);
+        QTRY_COMPARE(changed.count(), 1);
+        QCOMPARE(editorTheme().accent, accent);
+        QCOMPARE(QGuiApplication::palette().color(QPalette::Active, QPalette::Base), editorTheme().field);
+        QVERIFY(qApp->styleSheet().contains(editorTheme().chrome.name()));
+    }
+
     // The viewers, the Source monitor's scrub bar, bin tiles and effect
-    // cards draw in the theme in force, and the cached ones redraw when it
-    // changes. The viewers keep the same dark field in both appearances.
+    // cards draw in the theme.
     void paintedPanelsFollowTheAppearance() {
         const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
         const auto save = [&shots](const QImage &image, const QString &name) {
             if (!shots.isEmpty()) QVERIFY(image.save(QDir(shots).filePath(name + QStringLiteral(".png"))));
         };
-        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
         // Footage (the harbor at dawn: sky, hills and water), on which the
         // masks' outlines and names must read.
         const QImage picture = testing::footageFrame(testing::Shot::HarborWide, QSize(960, 540));
-        // Made in the tests' dark appearance, so the loop below sees them redraw.
         MediaArtwork artwork;
         artwork.frames.insert(QStringLiteral("m1"), picture.scaled(160, 90));
         artwork.frames.insert(QStringLiteral("m2"), picture.scaled(160, 90));
@@ -1481,10 +1596,9 @@ private slots:
             return card.pixelColor(card.width() / 2, 4);
         };
 
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             const EditorTheme &theme = editorTheme();
-            const QString name = theme.dark ? QStringLiteral("dark") : QStringLiteral("light");
+            const QString name = QStringLiteral("dark");
 
             // Program monitor: a picture, a caption, and two masks, one selected.
             ViewerWidget viewer;
@@ -1584,80 +1698,79 @@ private slots:
         }
     }
 
-    // The hardware finish's colours exist in both appearances, light's as the
-    // owner's faceplate has them, and its text reads at 4.5:1 on whatever it
-    // is printed on.
+    // The hardware finish is flat on the graphite ramp until W2 replaces its
+    // widgets: single fills with no gradient, highlight, drop or inner
+    // shadow; lamps in the status colours; and its text reads at 4.5:1 on
+    // whatever it is printed on.
     void hardwareTokens() {
-        const EditorTheme light = makeEditorTheme(false);
-        QCOMPARE(light.faceplateTop, QColor("#f4eee3"));
-        QCOMPARE(light.faceplateBottom, QColor("#e8e0d0"));
-        QCOMPARE(light.keyLatched, QColor("#d8ccb6"));
-        QCOMPARE(light.keyLed, QColor("#d4882a"));
-        QCOMPARE(light.wellFill, QColor("#e8dfcc"));
-        QCOMPARE(light.modulePlate, QColor("#f9f4eb"));
-        QCOMPARE(light.engravedInk, QColor("#4d4237"));
-        QCOMPARE(light.glassText, QColor("#f1e4c8"));
-        QCOMPARE(light.vuRedZone, QColor("#b23a2e"));
-        QCOMPARE(light.keyRing, cssColor("#3c281429"));
-        for (const bool dark : {false, true}) {
-            const EditorTheme t = makeEditorTheme(dark);
-            for (const QColor &color :
-                 {t.faceplateTop, t.faceplateBottom, t.faceplateHighlight, t.faceplateEdge, t.keyTop, t.keyBottom, t.keyRing,
-                  t.keyDrop, t.keyHighlight, t.keyLatched, t.keyLatchedShadow, t.keyLed, t.bankWell, t.bankShadow, t.bankLip,
-                  t.wellFill, t.wellShadow, t.wellLip, t.modulePlate, t.moduleEdge, t.moduleHighlight, t.engravedInk,
-                  t.engravedHighlight, t.lampOff, t.lampChanged, t.lampKerf, t.lampOk, t.glassTop, t.glassBottom,
-                  t.glassShadow, t.glassLip, t.glassText, t.glassLabel, t.knobRing, t.knobFaceLight, t.knobFaceDark,
-                  t.knobTick, t.knobPointer, t.vuBezelTop, t.vuBezelBottom, t.vuFace, t.vuInk, t.vuRedZone, t.vuNeedle})
-                QVERIFY(color.isValid() && color.alpha() > 0);
-            for (const QColor &glass : {t.glassTop, t.glassBottom}) {
-                QVERIFY2(contrastRatio(t.glassText, glass) >= 4.5, dark ? "dark" : "light");
-                QVERIFY2(contrastRatio(t.glassLabel, glass) >= 4.5, dark ? "dark" : "light");
-            }
-            for (const QColor &plate : {t.modulePlate, t.faceplateTop, t.faceplateBottom})
-                QVERIFY2(contrastRatio(t.engravedInk, plate) >= 4.5, dark ? "dark" : "light");
-            QVERIFY(contrastRatio(t.vuInk, t.vuFace) >= 4.5);
-            // Kerf's lamp is Kerf's ink; the other colours are the lamps' own.
-            QCOMPARE(t.lampKerf, t.accent);
-            QVERIFY(t.lampChanged != t.lampOk && t.lampChanged != t.accent);
-            // The glass is set deeper than the plate round it, a well is
-            // pressed below the faceplate, and a latched key below a raised one.
-            QVERIFY(t.glassBottom.lightness() < t.faceplateBottom.lightness());
-            QVERIFY(t.wellFill.lightness() < t.faceplateBottom.lightness());
-            QVERIFY(t.keyLatched.lightness() < t.keyBottom.lightness());
-            // A lamp that is off is still a lens set into the plate.
-            QVERIFY(t.lampOff != t.modulePlate);
+        const EditorTheme t = makeEditorTheme();
+        QCOMPARE(t.faceplateTop, QColor("#171717"));
+        QCOMPARE(t.faceplateBottom, t.faceplateTop);
+        QCOMPARE(t.keyTop, QColor("#262626"));
+        QCOMPARE(t.keyBottom, t.keyTop);
+        QCOMPARE(t.keyLatched, QColor("#303030"));
+        QCOMPARE(t.keyLed, t.accent);
+        QCOMPARE(t.wellFill, QColor("#262626"));
+        QCOMPARE(t.modulePlate, QColor("#171717"));
+        QCOMPARE(t.glassTop, QColor("#121212"));
+        QCOMPARE(t.glassBottom, t.glassTop);
+        QCOMPARE(t.vuRedZone, QColor("#ec5d61"));
+        QCOMPARE(t.keyRing.rgba(), qRgba(255, 255, 255, 36));
+        // Flat: every light and shadow the finish drew is clear.
+        for (const QColor &clear : {t.faceplateHighlight, t.keyDrop, t.keyHighlight, t.keyLatchedShadow, t.bankShadow, t.bankLip,
+                                    t.wellShadow, t.wellLip, t.moduleHighlight, t.engravedHighlight, t.glassShadow, t.glassLip})
+            QCOMPARE(clear.alpha(), 0);
+        QCOMPARE(t.knobFaceLight, t.knobFaceDark);
+        QCOMPARE(t.vuBezelTop, t.vuBezelBottom);
+        for (const QColor &color :
+             {t.faceplateTop, t.faceplateEdge, t.keyTop, t.keyRing, t.keyLatched, t.keyLed, t.bankWell, t.wellFill,
+              t.modulePlate, t.moduleEdge, t.engravedInk, t.lampOff, t.lampChanged, t.lampKerf, t.lampOk, t.glassTop,
+              t.glassText, t.glassLabel, t.knobRing, t.knobFaceLight, t.knobTick, t.knobPointer, t.vuBezelTop, t.vuFace,
+              t.vuInk, t.vuRedZone, t.vuNeedle})
+            QVERIFY(color.isValid() && color.alpha() > 0);
+        for (const QColor &glass : {t.glassTop, t.glassBottom}) {
+            QVERIFY(contrastRatio(t.glassText, glass) >= 4.5);
+            QVERIFY(contrastRatio(t.glassLabel, glass) >= 4.5);
         }
-        QVERIFY(makeEditorTheme(true).faceplateTop.lightness() < light.faceplateTop.lightness());
+        for (const QColor &plate : {t.modulePlate, t.faceplateTop, t.faceplateBottom})
+            QVERIFY(contrastRatio(t.engravedInk, plate) >= 4.5);
+        QVERIFY(contrastRatio(t.vuInk, t.vuFace) >= 4.5);
+        // Kerf's lamp is Kerf's ink; the others are pos, warn and the track.
+        QCOMPARE(t.lampKerf, t.accent);
+        QCOMPARE(t.lampOk, t.success);
+        QCOMPARE(t.lampChanged, t.warning);
+        QVERIFY(t.lampChanged != t.lampOk && t.lampChanged != t.accent);
+        // The glass is the well, deeper than the plate; a field is raised
+        // above it, and a latched key is on, above a raised one.
+        QVERIFY(t.glassBottom.lightness() < t.faceplateBottom.lightness());
+        QVERIFY(t.wellFill.lightness() > t.faceplateBottom.lightness());
+        QVERIFY(t.keyLatched.lightness() > t.keyBottom.lightness());
+        // A lamp that is off still shows on the plate.
+        QVERIFY(t.lampOff != t.modulePlate);
     }
 
-    // The whole editor, a portrait project with a clip selected, in light
-    // and dark, to look at: run with KERF_EDITOR_GALLERY set to a folder
-    // (QT_SCALE_FACTOR=2 for a Retina screen's pixels).
+    // The whole editor, a portrait project with a clip selected, to look at:
+    // run with KERF_EDITOR_GALLERY set to a folder (QT_SCALE_FACTOR=2 for a
+    // Retina screen's pixels).
     void editorGallery() {
         const QString folder = qEnvironmentVariable("KERF_EDITOR_GALLERY");
         if (folder.isEmpty()) QSKIP("Set KERF_EDITOR_GALLERY to draw the editor.");
         QDir().mkpath(folder);
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
-            MainWindow window{QString(), QString()};
-            window.resize(1366, 737);
-            window.show();
-            QVERIFY(QTest::qWaitForWindowExposed(&window));
-            QJsonObject snapshot = showcaseSnapshot(3, QStringLiteral("clean"));
-            QJsonObject timeline = snapshot.value(QStringLiteral("timeline")).toObject();
-            timeline.insert(QStringLiteral("width"), 1080);
-            timeline.insert(QStringLiteral("height"), 1920);
-            snapshot.insert(QStringLiteral("timeline"), timeline);
-            window.applySnapshot(snapshot);
-            window.selectClip(QStringLiteral("v1a"));
-            window.m_workspace->panel(QStringLiteral("inspector"))->setAsCurrentTab();
-            QCoreApplication::processEvents();
-            QTest::qWait(50);
-            const QString look = scheme == ColorScheme::Dark ? QStringLiteral("dark") : QStringLiteral("light");
-            QVERIFY(window.grab().save(QDir(folder).filePath(QStringLiteral("editor-%1.png").arg(look))));
-        }
-        // The suite runs in the dark appearance (initTestCase).
-        setEditorColorScheme(ColorScheme::Dark);
+        MainWindow window{QString(), QString()};
+        window.resize(1366, 737);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QJsonObject snapshot = showcaseSnapshot(3, QStringLiteral("clean"));
+        QJsonObject timeline = snapshot.value(QStringLiteral("timeline")).toObject();
+        timeline.insert(QStringLiteral("width"), 1080);
+        timeline.insert(QStringLiteral("height"), 1920);
+        snapshot.insert(QStringLiteral("timeline"), timeline);
+        window.applySnapshot(snapshot);
+        window.selectClip(QStringLiteral("v1a"));
+        window.m_workspace->panel(QStringLiteral("inspector"))->setAsCurrentTab();
+        QCoreApplication::processEvents();
+        QTest::qWait(50);
+        QVERIFY(window.grab().save(QDir(folder).filePath(QStringLiteral("editor-dark.png"))));
     }
 };
 

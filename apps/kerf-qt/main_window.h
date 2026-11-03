@@ -37,11 +37,29 @@
 
 #include <cmath>
 #include <functional>
+#include <memory>
+
+struct KerfFrame; // bridge.h
 
 namespace kerf {
 
 class AskPrompt;
+class BrowserPanel;
 class ChatPanel;
+class DeliverTray;
+class EditorBus;
+class FinishTray;
+class InspectorColumn;
+class ProgramStrip;
+// The regions' wiring (ui/wiring/<region>_wiring.h), each a friend that holds
+// its region's own state.
+class BinWiring;
+class InspectorWiring;
+class ReviewWiring;
+class SourceWiring;
+class StageWiring;
+class TimelineWiring;
+class ToolbarWiring;
 struct ProposalChange;
 class CommentRow;
 class StageRail;
@@ -59,12 +77,25 @@ class TimelineWidget;
 class TimelineZoomControl;
 class ViewerWidget;
 
+// The editor's window. Its member functions are split by region into
+// main_window_<region>.cpp (review, stage, toolbar, status, timeline,
+// inspector, bin, source), each region's own state in its wiring class;
+// the regions talk through the EditorBus (ui/editor_bus.h) it owns.
 class MainWindow final : public QMainWindow {
     Q_OBJECT
     KERF_TEST_FRIENDS
+    friend class BinWiring;
+    friend class InspectorWiring;
+    friend class ReviewWiring;
+    friend class SourceWiring;
+    friend class StageWiring;
+    friend class TimelineWiring;
+    friend class ToolbarWiring;
 public:
     MainWindow(const QString &projectDirectory, const QString &kerfdBinary, QWidget *parent = nullptr);
     ~MainWindow() override;
+    // The bus the window's regions share.
+    EditorBus *bus() const { return m_bus; }
 
 signals:
     // File ▸ New Project, Open Project, and Open Recent: open `path` in a
@@ -171,7 +202,38 @@ protected:
     void changeEvent(QEvent *event) override;
 
 private:
+    // A program frame from the bridge (pollBridge): shown in the viewer and
+    // handed to the bus; false when it is not shown (offline, short, or
+    // farther from the scrub target than the one on screen).
+    bool showProgramFrame(const KerfFrame &frame);
     void buildUi();
+    // The regions' parts of buildUi, each in its region's file.
+    void buildReview();
+    void buildStage();
+    void buildTimeline();
+    void buildSource();
+    void buildInspector();
+    void buildBin();
+    // Settings (main_window.cpp).
+    void buildPreferences();
+    // The docked panels, once the regions are built.
+    void addPanels();
+    // The timeline's gestures, once every region exists (main_window_timeline.cpp).
+    void wireTimeline();
+    // The toolbar, once the registry's actions exist (main_window_toolbar.cpp).
+    void setupToolbar(const QHash<QString, QMenu *> &menus);
+    // The Program strip's switches, once the registry's actions exist.
+    void setupProgramStrip();
+    // A workspace was chosen or reset: its stage, its commands, the bus.
+    void applyWorkspace();
+    // The stage as it is now, as the current workspace's (Save Changes keeps it).
+    void rememberStage();
+    // The Window menu's panel commands checked as their panels and pages show.
+    void syncPanelCommands();
+    void syncWorkspaceCommands();
+    // A registry command by id for the bus: a frontend command runs its
+    // handler, an engine command goes through execute().
+    bool runCommand(const QString &id, const QJsonObject &params);
     // On macOS, where the toolbar is the title bar: fill the title bar's
     // height and start past the window buttons (none in full screen).
     void fitTitleBar();
@@ -224,7 +286,13 @@ private:
     bool sendSimple(const QJsonObject &value);
     bool sendSeek(double position, bool scrub);
     void flushSeek();
+    // A bridge event: the window handles it (routeEvent), then the bus sends
+    // it on to the regions.
     void handleEvent(QJsonObject event);
+    void routeEvent(const QJsonObject &event);
+    // The agent's events (agent, agent_busy, agent_state, agent_next); false
+    // for any other (main_window_review.cpp).
+    bool handleAgentEvent(const QJsonObject &event);
     void applySnapshot(const QJsonObject &snapshot);
     QString selectedTrackType() const;
     QJsonObject selectedClipObject() const;
@@ -291,6 +359,27 @@ private:
     // The bin's context menu for `mediaId` (empty for the bin itself).
     QMenu *binMenu(const QString &mediaId);
 
+    EditorBus *m_bus = nullptr;
+    std::unique_ptr<ReviewWiring> m_reviewWiring;
+    std::unique_ptr<StageWiring> m_stageWiring;
+    std::unique_ptr<ToolbarWiring> m_toolbarWiring;
+    std::unique_ptr<InspectorWiring> m_inspectorWiring;
+    std::unique_ptr<TimelineWiring> m_timelineWiring;
+    std::unique_ptr<BinWiring> m_binWiring;
+    std::unique_ptr<SourceWiring> m_sourceWiring;
+    // The regions' containers: the Program monitor (its strip over the
+    // viewer), the timeline's panel, the Inspector column, the browser, the
+    // Finish and Deliver trays.
+    QFrame *m_viewerFrame = nullptr;
+    ProgramStrip *m_programStrip = nullptr;
+    QWidget *m_timelinePanel = nullptr;
+    InspectorColumn *m_inspectorColumn = nullptr;
+    BrowserPanel *m_browserPanel = nullptr;
+    FinishTray *m_finishTray = nullptr;
+    DeliverTray *m_deliverTray = nullptr;
+    // The stage column's Source viewer (Edit and phone formats), placed by
+    // Q-STAGE in W2; m_sourceMonitor is the Inspector column's Source page.
+    SourceMonitorPanel *m_stageSource = nullptr;
     MediaArtwork *m_artwork = nullptr;
     QToolBar *m_toolbar = nullptr;
     // The room at the toolbar's leading end for the window buttons (macOS).
@@ -326,7 +415,7 @@ private:
     QList<QAction *> m_toolGlyphs;
     // Disclosure buttons (Settings' Advanced), whose chevrons are too.
     QList<QToolButton *> m_disclosures;
-    // Window ▸ Viewer: the phone (Island, Punch-Hole, Off), the laptop
+    // Window ▸ Viewer: the phone (Phone, Off), the laptop
     // (Laptop, Off) and safe zones.
     QList<QAction *> m_deviceActions;
     QList<QAction *> m_laptopActions;

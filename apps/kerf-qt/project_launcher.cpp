@@ -1,4 +1,5 @@
 #include "project_launcher.h"
+#include "design_tokens.h"
 #include "bridge.h"
 #include "editor_common.h"
 #ifdef Q_OS_MACOS
@@ -40,7 +41,6 @@
 #include <QStackedWidget>
 #include <QStandardPaths>
 #include <QStyle>
-#include <QStyleHints>
 #include <QStyledItemDelegate>
 #include <QTimer>
 #include <QToolButton>
@@ -499,9 +499,10 @@ protected:
         const QRectF track(2, (height() - kTrackHeight) / 2.0, kTrackWidth, kTrackHeight);
         const qreal round = kTrackHeight / 2.0;
         if (hasFocus()) {
-            painter.setPen(QPen(t.focusRing, 3));
+            // The design's focus outline: 2pt of the accent, 1pt outside.
+            painter.setPen(QPen(t.focusRing, 2));
             painter.setBrush(Qt::NoBrush);
-            painter.drawRoundedRect(track.adjusted(-1.5, -1.5, 1.5, 1.5), round + 1.5, round + 1.5);
+            painter.drawRoundedRect(track.adjusted(-2, -2, 2, 2), round + 2, round + 2);
         }
         painter.setOpacity(enabled ? 1.0 : 0.45);
         if (on) {
@@ -517,7 +518,7 @@ protected:
         const qreal knob = kTrackHeight - 4;
         const QRectF knobRect(on ? track.right() - 2 - knob : track.left() + 2, track.top() + 2, knob, knob);
         painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor(0, 0, 0, t.dark ? 80 : 50));
+        painter.setBrush(QColor(0, 0, 0, 80));
         painter.drawEllipse(knobRect.translated(0, 0.8));
         painter.setPen(QPen(t.knobEdge, 0.75));
         painter.setBrush(on ? t.knobOn : t.knob);
@@ -600,8 +601,8 @@ private:
     Qt::TextElideMode m_mode;
 };
 
-// The soft accent ring macOS draws around the field being typed in. It sits
-// under the field, so only the part outside its border shows.
+// The design's focus outline around the field being typed in: 2pt of the
+// accent. It sits under the field, so only the part outside its border shows.
 class FocusRing final : public QFocusFrame {
 public:
     FocusRing(const LauncherTheme *theme, QWidget *parent) : QFocusFrame(parent), m_theme(theme) {}
@@ -611,9 +612,9 @@ protected:
         if (!widget()) return;
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(QPen(m_theme->focusRing, 3));
+        painter.setPen(QPen(m_theme->focusRing, 2));
         painter.setBrush(Qt::NoBrush);
-        painter.drawRoundedRect(QRectF(rect()).adjusted(1.5, 1.5, -1.5, -1.5), 6.5, 6.5);
+        painter.drawRoundedRect(QRectF(rect()).adjusted(1, 1, -1, -1), 7, 7);
     }
 
 private:
@@ -704,14 +705,10 @@ ProjectLauncher::ProjectLauncher(const QString &kerfdBinary, QWidget *parent) : 
     // Its FocusRing rings its fields and pop-up, so the editor's style
     // leaves them alone (see useEditorStyle).
     setProperty("ringsOwnFields", true);
-    // The system's interface font, not the editor's.
-    QFont interfaceFont = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
-    interfaceFont.setPixelSize(13);
-    setFont(interfaceFont);
+    // The design's interface face at 13pt, as the editor's (design_tokens.h).
+    setFont(tokens::font(tokens::body));
     resize(1040, 650);
     setMinimumSize(860, 560);
-    // The editor's scheme: KERF_COLOR_SCHEME's, or the system's.
-    m_scheme = editorColorScheme();
     m_inspectProject = [](const QJsonObject &request) { return callJson(kerf_project_inspect, request); };
     m_inspectPreset = [](const QJsonObject &request) { return callJson(kerf_preset_inspect, request); };
 #if KERF_LAUNCHER_OWN_TITLE_BAR
@@ -798,10 +795,7 @@ ProjectLauncher::ProjectLauncher(const QString &kerfdBinary, QWidget *parent) : 
     });
     connect(static_cast<QApplication *>(QCoreApplication::instance()), &QApplication::focusChanged, this,
             [this](QWidget *, QWidget *now) { trackFocus(now); });
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
-    connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, [this] { applyTheme(); });
-#endif
-    applyTheme(true);
+    applyTheme();
     reloadRecent();
     reloadPresetChoices();
     const int saved = QSettings().value(QStringLiteral("launcher/page"), int(NewProject)).toInt();
@@ -826,30 +820,14 @@ ProjectLauncher::~ProjectLauncher() {
 #endif
 }
 
-void ProjectLauncher::setColorScheme(ColorScheme scheme) {
-    m_scheme = scheme;
-    applyTheme();
-}
+void ProjectLauncher::setColorScheme(ColorScheme) {}
 
-void ProjectLauncher::applyTheme(bool force) {
-    if (m_theming) return;
-    const bool dark = schemeIsDark(m_scheme);
-    if (!force && m_themed && dark == m_theme.dark) return;
-    m_theming = true;
-    m_theme = launcherTheme(dark);
-    m_themed = true;
+void ProjectLauncher::applyTheme() {
+    m_theme = launcherTheme();
     setStyleSheet(launcherStyleSheet(m_theme));
     m_detailsToggle->setIcon(disclosureIcon(m_detailsToggle->isChecked(), m_theme.secondary));
     for (QListWidget *list : {m_sidebar, m_templates, m_recent, m_presetChoices}) list->viewport()->update();
     update();
-    m_theming = false;
-}
-
-void ProjectLauncher::changeEvent(QEvent *event) {
-    QDialog::changeEvent(event);
-    // Where Qt has no colour scheme to report, a new system palette is how
-    // a change of appearance arrives.
-    if (event->type() == QEvent::ApplicationPaletteChange || event->type() == QEvent::PaletteChange) applyTheme();
 }
 
 void ProjectLauncher::showEvent(QShowEvent *event) {

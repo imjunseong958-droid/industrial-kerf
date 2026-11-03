@@ -6,6 +6,7 @@
 #include "ask_prompt.h"
 #include "chat_panel.h"
 #include "command_registry.h"
+#include "design_tokens.h"
 #include "device_frame.h"
 #include "editor_common.h"
 #include "editor_style.h"
@@ -204,10 +205,15 @@ private slots:
                          qPrintable(QStringLiteral("%1 to %2").arg(base.right()).arg(layout.rail.left())));
             };
             clearOfEdges(stage);
-            // The picture keeps 90% of the plain card's width in this stage.
+            // The picture keeps 90% of the plain card's width in this stage,
+            // unless the stage's height is what bounds the laptop: over the
+            // 344 band the laptop is as tall as the stage lets it be.
             const ViewerWidget::StageLayout plain = viewer->stageLayout(ViewerWidget::Device::None);
-            QVERIFY2(stage.card.width() >= 0.9 * plain.card.width(),
-                     qPrintable(QStringLiteral("%1 of %2").arg(stage.card.width()).arg(plain.card.width())));
+            const double roomHeight = viewer->height() - 2.0 * viewer->stageInset(ViewerWidget::Device::Laptop);
+            const bool heightBound = std::abs(stage.body.height() - roomHeight) <= 1.0;
+            QVERIFY2(heightBound || stage.card.width() >= 0.9 * plain.card.width(),
+                     qPrintable(QStringLiteral("%1 of %2, body %3 tall in %4").arg(stage.card.width()).arg(plain.card.width())
+                                    .arg(stage.body.height()).arg(roomHeight)));
             // The controls inside the screen.
             QVERIFY(stage.screen.contains(viewer->overlay()->controlsBounds()));
             // Window ▸ Viewer has Laptop and Off; Off is the plain card, level
@@ -326,7 +332,7 @@ private slots:
         window.applySnapshot(snapshot);
         window.resize(1280, 800);
         QCoreApplication::processEvents();
-        for (const DevicePreview preview : {DevicePreview::Island, DevicePreview::Off}) {
+        for (const DevicePreview preview : {DevicePreview::Phone, DevicePreview::Off}) {
             window.setDevicePreview(preview);
             QCoreApplication::processEvents();
             const QRectF card = viewer->videoRect();
@@ -341,7 +347,7 @@ private slots:
             QVERIFY(metrics.horizontalAdvance(overlay->timecodeText()) <= overlay->timecodeRect().width());
             QVERIFY(overlay->timecodeText().startsWith(QStringLiteral("00:00:04:13")));
         }
-        window.setDevicePreview(DevicePreview::Island);
+        window.setDevicePreview(DevicePreview::Phone);
         window.close();
 
         // The time reads at 4.5:1 on a white frame, on the gradient's darkest part.
@@ -493,7 +499,7 @@ private slots:
                 viewer.setLaptopPreview(laptop ? LaptopPreview::Laptop : LaptopPreview::Off);
                 const QImage image = viewer.grab().toImage();
                 const QRectF video = viewer.videoRect();
-                const QColor backdrop = laptop ? editorTheme().deviceScreen : editorTheme().viewerCanvas;
+                const QColor backdrop = laptop ? tokens::color(tokens::overlay::deviceScreen) : editorTheme().viewerCanvas;
                 for (int dy = -40; dy <= -26; dy += 2)
                     for (int dx = -14; dx <= 14; dx += 2)
                         QCOMPARE(image.pixelColor(((video.center() + QPointF(dx, dy)) * ratio).toPoint()).rgb(), backdrop.rgb());
@@ -765,7 +771,8 @@ private slots:
                 box->ensurePolished();
                 auto *name = box->findChild<QToolButton *>(QStringLiteral("maskName"));
                 name->ensurePolished();
-                QCOMPARE(name->font().weight(), QFont::DemiBold);
+                // The flat sheet's UI 500 (spec 0.3 has only 400 and 500).
+                QCOMPARE(name->font().weight(), QFont::Medium);
             }
         }
         // Deselecting the clip hides its masks and stops a tool.
@@ -837,20 +844,17 @@ private slots:
 
     // The whole editor in the Editing workspace with Kerf's conversation
     // open in the stage, as a Short shows with its comments open: a 16:9, a
-    // 9:16 and a 1:1 project, in both appearances. The card keeps the
+    // 9:16 and a 1:1 project. The card keeps the
     // project's shape and is as large as the group allows; card, rail and
     // conversation are one group centred in the stage, the conversation as
     // tall as the card and level with it. With KERF_SCREENSHOT_DIR set, each
-    // is saved as editor-<format>-<scheme>.png, the 9:16 and 16:9 ones with
-    // the conversation closed as editor-<format>-closed-<scheme>.png, and the
-    // 16:9 one with the laptop off as editor-16x9-off-<scheme>.png.
+    // is saved as editor-<format>-dark.png, the 9:16 and 16:9 ones with the
+    // conversation closed as editor-<format>-closed-dark.png, and the 16:9
+    // one with the laptop off as editor-16x9-off-dark.png.
     void editorShowsEveryFormatBesideItsConversation() {
         QSettings().remove(QStringLiteral("workspace"));
         const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
-        const auto restore = qScopeGuard([] {
-            setEditorColorScheme(ColorScheme::Dark);
-            QSettings().remove(QStringLiteral("workspace"));
-        });
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
         // A harbor at dawn in the project's shape (the tests' procedural
         // footage): sky over the water, whose lower part is a dark blue-grey.
         const auto picture = [](const QSize &size) { return testing::footageFrame(testing::Shot::HarborWide, size); };
@@ -858,8 +862,7 @@ private slots:
             const char *name;
             QSize canvas;
         };
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             const EditorTheme &theme = editorTheme();
             for (const Format &format : {Format{"16x9", QSize(1920, 1080)}, Format{"9x16", QSize(1080, 1920)}, Format{"1x1", QSize(1080, 1080)}}) {
                 QSettings().remove(QStringLiteral("workspace"));
@@ -956,32 +959,41 @@ private slots:
                     QCOMPARE(panel.width(), ViewerWidget::kDefaultChatWidth);
                 else
                     QVERIFY(panel.width() >= ViewerWidget::kMinChatWidth && panel.width() <= ViewerWidget::kDefaultChatWidth);
-                // At this window the picture stays the larger part of the group.
-                QVERIFY2(body.width() * body.height() > panel.width() * panel.height() * 0.5,
+                // At this window a wide or square picture stays the larger
+                // part of the group. Beside a phone the conversation takes its
+                // phone width (spec 0.1: 480 at 1600), wider than the phone.
+                QVERIFY2(tall || body.width() * body.height() > panel.width() * panel.height() * 0.5,
                          qPrintable(QStringLiteral("%1: body %2x%3, panel %4x%5, viewer %6x%7").arg(label).arg(body.width()).arg(body.height())
                                         .arg(panel.width()).arg(panel.height()).arg(window.m_viewer->width()).arg(window.m_viewer->height())));
-                // One stage row for every shape (575 over a 290 timeline):
-                // the timeline does not jump when the format changes.
+                // One stage row for every shape over the bottom band (its
+                // 344 less the 1 px seam): the timeline does not jump when
+                // the format changes.
                 const int timelineHeight = window.m_workspace->panel(QStringLiteral("timeline"))->dockAreaWidget()->height();
-                QVERIFY2(timelineHeight >= 280 && timelineHeight <= 300, qPrintable(QStringLiteral("%1: timeline %2").arg(label).arg(timelineHeight)));
+                QVERIFY2(std::abs(timelineHeight - (tokens::layout::band - 1)) <= 2,
+                         qPrintable(QStringLiteral("%1: timeline %2").arg(label).arg(timelineHeight)));
                 if (tall) {
-                    // The phone: its screen 9:18.5 inside an even bezel, the
-                    // picture across its width, at least 240 points wide.
-                    // A 9:16 picture in a taller screen is bounded by the
-                    // stage's height, so it keeps over four fifths of the
-                    // plain card's width (16/18.5 of it, less the bezel).
+                    // The phone: its 1206:2622 screen inside an even border,
+                    // the picture across its width; where the stage is too
+                    // short for a 240-point screen at the exact proportions
+                    // (a body 539 tall), the stage's least inset gives it all
+                    // the height there is. A 9:16 picture in the taller screen is bounded
+                    // by the stage's height, so it keeps the share of the
+                    // plain card's width the phone's proportions leave it:
+                    // the screen is 0.93136 of a body 0.47794 as wide as
+                    // tall, so 0.7913 of a 9:16 card as tall as the body.
                     QVERIFY(body.contains(stage.screen));
-                    QVERIFY(std::abs(stage.screen.width() / stage.screen.height() - kDeviceScreenAspect) < 0.01);
-                    QVERIFY(std::abs((stage.screen.left() - body.left()) - kDeviceBezel * body.width()) < 0.5);
+                    QVERIFY(std::abs(stage.screen.width() / stage.screen.height() - kDeviceScreenAspect) < 0.001);
+                    QVERIFY(std::abs((stage.screen.left() - body.left()) - kDeviceBezel * body.width()) < 0.01);
                     QVERIFY(std::abs(video.width() - stage.screen.width()) < 0.5);
                     QVERIFY(stage.screen.adjusted(-0.01, -0.01, 0.01, 0.01).contains(video));
                     const double plain = window.m_viewer->stageLayout(ViewerWidget::Device::None).card.width();
-                    QVERIFY2(stage.screen.width() >= 240 && stage.screen.width() >= 0.82 * plain,
+                    QVERIFY2((stage.screen.width() >= ViewerWidget::kLeastPhoneScreen || inset == ViewerWidget::kLeastStageInset) &&
+                                 stage.screen.width() >= 0.78 * plain,
                              qPrintable(QStringLiteral("%1: screen %2 of %3").arg(label).arg(stage.screen.width()).arg(plain)));
                 }
                 if (wide) {
-                    // The laptop: the 16:9 picture across its 16:10 screen,
-                    // at least 90% as wide as the plain card here.
+                    // The laptop: the 16:9 picture across its 3024:1964
+                    // screen, at least 90% as wide as the plain card here.
                     const auto rectText = [](const QRectF &r) { return QStringLiteral("%1,%2 %3x%4").arg(r.x()).arg(r.y()).arg(r.width()).arg(r.height()); };
                     QVERIFY2(body.contains(stage.screen) && stage.screen.adjusted(-0.01, -0.01, 0.01, 0.01).contains(video),
                              qPrintable(QStringLiteral("body %1 screen %2 video %3").arg(rectText(body), rectText(stage.screen), rectText(video))));
@@ -1021,21 +1033,30 @@ private slots:
                 // The card's (or phone's) and the panel's corners are round:
                 // the stage shows at the very corner.
                 QCOMPARE(at(body.topLeft() + QPointF(1, 1)), theme.viewerSurround.rgb());
+                // The frames' graphite: a neutral grey of the band's, lid's and base's tones.
+                const auto graphite = [&](const QPointF &viewerPoint) {
+                    const QColor c = QColor::fromRgb(at(viewerPoint));
+                    const int lo = std::min({c.red(), c.green(), c.blue()}), hi = std::max({c.red(), c.green(), c.blue()});
+                    return lo >= 0x38 && hi <= 0x64 && hi - lo <= 8;
+                };
+                const QRgb glass = tokens::color(tokens::overlay::deviceGlass).rgb();
+                const QRgb black = tokens::color(tokens::overlay::deviceScreen).rgb();
                 if (tall) {
-                    // The phone's graphite frame in either appearance, and its
-                    // screen's black above the picture.
-                    QCOMPARE(at(QPointF(body.center().x(), body.top() + stage.screen.top() - body.top()) - QPointF(0, 2)), theme.deviceFrame.rgb());
-                    QCOMPARE(at(QPointF(stage.screen.left() + 3, (stage.screen.top() + video.top()) / 2.0 + 6)), theme.deviceScreen.rgb());
+                    // The phone's graphite band, its glass, and its screen's
+                    // black above the picture.
+                    const DeviceGeometry phone = deviceGeometry(body, 9.0 / 16.0);
+                    QVERIFY(graphite(QPointF(body.center().x(), std::floor(body.top()) + 2.0)));
+                    QCOMPARE(at(QPointF(body.center().x(), (phone.glass.top() + stage.screen.top()) / 2.0)), glass);
+                    QCOMPARE(at(QPointF(stage.screen.left() + 3, (stage.screen.top() + video.top()) / 2.0 + 6)), black);
                 }
                 if (wide) {
-                    // The laptop's stone rim and black glass in either
-                    // appearance, the screen's black bar over the picture,
-                    // and its base.
+                    // The laptop's graphite rim round its glass, the screen's
+                    // black over the picture, and its base.
                     const LaptopGeometry laptop = laptopGeometry(body, 16.0 / 9.0);
-                    QCOMPARE(at(QPointF(std::ceil(laptop.lid.left()) + 0.25, laptop.lid.center().y())), theme.laptopShell.rgb());
-                    QCOMPARE(at(QPointF((laptop.lid.left() + laptop.rim + laptop.screen.left()) / 2.0, laptop.lid.center().y())), theme.laptopBezel.rgb());
-                    QCOMPARE(at(QPointF(stage.screen.left() + 20, (stage.screen.top() + video.top()) / 2.0)), theme.deviceScreen.rgb());
-                    QCOMPARE(at(QPointF(laptop.base.left() + laptop.base.width() * 0.25, laptop.base.top() + 2.0)), theme.laptopDeck.rgb());
+                    QVERIFY(graphite(QPointF(std::floor(laptop.lid.left()) + 2.0, laptop.lid.center().y())));
+                    QCOMPARE(at(QPointF((laptop.glass.left() + laptop.screen.left() - kLaptopGlassEdge) / 2.0, laptop.lid.center().y())), glass);
+                    QCOMPARE(at(QPointF(stage.screen.left() + 20, (stage.screen.top() + video.top()) / 2.0)), black);
+                    QVERIFY(graphite(QPointF(laptop.base.left() + laptop.base.width() * 0.25, laptop.base.center().y())));
                 }
                 QCOMPARE(at(QPointF(panel.left() + 1, panel.top() + 1)), theme.viewerSurround.rgb());
                 // The panel is its own surface, under its header.
@@ -1053,13 +1074,10 @@ private slots:
                 // Its next steps show once, in it, not again over the timeline.
                 QVERIFY(window.m_chatNextSteps->isVisible() && !window.m_aiBar->isVisible());
                 QCOMPARE(amberPixels(image), 0);
-                const QString schemeName = theme.dark ? QStringLiteral("dark") : QStringLiteral("light");
+                const QString schemeName = QStringLiteral("dark");
                 if (!shots.isEmpty()) QVERIFY(image.save(QDir(shots).filePath(QStringLiteral("editor-%1-%2.png").arg(label, schemeName))));
                 if (tall && !shots.isEmpty()) {
-                    // The other phone, safe zones over it, and the plain card.
-                    window.setDevicePreview(DevicePreview::PunchHole);
-                    QCoreApplication::processEvents();
-                    QVERIFY(window.grab().toImage().save(QDir(shots).filePath(QStringLiteral("editor-9x16-punchhole-%1.png").arg(schemeName))));
+                    // Safe zones over the phone, and the plain card.
                     window.setSafeZones(true);
                     QCoreApplication::processEvents();
                     QVERIFY(window.grab().toImage().save(QDir(shots).filePath(QStringLiteral("editor-9x16-safezones-%1.png").arg(schemeName))));
@@ -1067,7 +1085,7 @@ private slots:
                     window.setDevicePreview(DevicePreview::Off);
                     QCoreApplication::processEvents();
                     QVERIFY(window.grab().toImage().save(QDir(shots).filePath(QStringLiteral("editor-9x16-card-%1.png").arg(schemeName))));
-                    window.setDevicePreview(DevicePreview::Island);
+                    window.setDevicePreview(DevicePreview::Phone);
                     QCoreApplication::processEvents();
                     QCOMPARE(window.m_viewer->videoRect(), video);
                 }
@@ -1100,15 +1118,16 @@ private slots:
                     QVERIFY(std::abs(alone.height() - room.height()) < 1);
                     // The same inset over it as under it, the card's 16 for
                     // the laptop; the phone's only as much less as its
-                    // 240-point screen needs here.
+                    // 240-point screen needs here, and never under the least.
                     {
                         const double over = alone.top(), under = window.m_viewer->height() - alone.bottom();
                         QVERIFY2(std::abs(over - under) <= 1, qPrintable(QStringLiteral("%1: %2 over, %3 under").arg(label).arg(over).arg(under)));
                         QVERIFY2(std::abs(over - inset) <= 1, qPrintable(QStringLiteral("%1: %2 over for %3").arg(label).arg(over).arg(inset)));
                         if (tall) {
                             QVERIFY(inset >= ViewerWidget::kLeastStageInset && inset <= ViewerWidget::kStageMargin);
-                            QVERIFY(window.m_viewer->stageLayout().screen.width() >= ViewerWidget::kLeastPhoneScreen);
-                            if (inset < ViewerWidget::kStageMargin) {
+                            QVERIFY(window.m_viewer->stageLayout().screen.width() >= ViewerWidget::kLeastPhoneScreen ||
+                                    inset == ViewerWidget::kLeastStageInset);
+                            if (inset < ViewerWidget::kStageMargin && inset > ViewerWidget::kLeastStageInset) {
                                 // One more point over and under and the screen
                                 // would fall under 240.
                                 const double body = window.m_viewer->height() - 2.0 * (inset + 1);

@@ -4,7 +4,7 @@
 use crate::{
     io_error, kernel, unique_id, Author, Comment, CommentPatch, EditOp, NewComment, RenderJob,
     RenderRange, RequestEnvelope, ReviewLog, RuntimeError, RuntimeHandle, RuntimeRequest,
-    RuntimeResponse, StateSnapshot,
+    RuntimeResponse, StartRenderOptions, StateSnapshot,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -614,15 +614,37 @@ impl RuntimeClient {
         proposal: Option<&str>,
         sequence: Option<&str>,
     ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
-        let (start, duration) = range
+        self.start_render_with(&StartRenderOptions {
+            quality: quality.to_owned(),
+            range,
+            proposal: proposal.map(str::to_owned),
+            sequence: sequence.map(str::to_owned),
+            ..StartRenderOptions::default()
+        })
+    }
+
+    /// Queue a render job as `options` describe it: its quality and codec
+    /// (a ProRes 422 HQ master, a review copy), where its file goes, and its
+    /// name. Returns the job, the document to render, and the file to write;
+    /// [`crate::run_render_job`] renders it.
+    pub fn start_render_with(
+        &self,
+        options: &StartRenderOptions,
+    ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
+        let (start, duration) = options
+            .range
+            .as_ref()
             .map(|range| (Some(range.start), Some(range.duration)))
             .unwrap_or((None, None));
         match self.request(RuntimeRequest::StartRender {
-            quality: quality.to_owned(),
+            quality: options.quality.clone(),
             start,
             duration,
-            proposal_id: proposal.map(str::to_owned),
-            sequence: sequence.map(str::to_owned),
+            proposal_id: options.proposal.clone(),
+            sequence: options.sequence.clone(),
+            codec: options.codec.clone(),
+            output: options.output.clone(),
+            name: options.name.clone(),
         })? {
             RuntimeResponse::RenderStarted {
                 job,
@@ -630,6 +652,15 @@ impl RuntimeClient {
                 output,
             } => Ok((job, document, output)),
             _ => Err(unexpected_response("render-start")),
+        }
+    }
+
+    /// Every render job kept: queued, running, and the newest finished,
+    /// oldest first.
+    pub fn list_renders(&self) -> Result<Vec<RenderJob>, RuntimeError> {
+        match self.request(RuntimeRequest::ListRenders)? {
+            RuntimeResponse::RenderJobs(jobs) => Ok(jobs),
+            _ => Err(unexpected_response("render-jobs")),
         }
     }
 
@@ -1033,6 +1064,7 @@ fn request_is_read_only(request: &RuntimeRequest) -> bool {
             | RuntimeRequest::GetDocument { .. }
             | RuntimeRequest::GetProposalDocuments { .. }
             | RuntimeRequest::GetRender { .. }
+            | RuntimeRequest::ListRenders
             | RuntimeRequest::ListComments
     )
 }
@@ -1089,6 +1121,7 @@ fn request_has_stable_idempotency_key(request: &RuntimeRequest) -> bool {
         | RuntimeRequest::GetProposalDocuments { .. }
         | RuntimeRequest::StartRender { .. }
         | RuntimeRequest::GetRender { .. }
+        | RuntimeRequest::ListRenders
         | RuntimeRequest::UpdateJob { .. }
         | RuntimeRequest::CancelRender { .. }
         | RuntimeRequest::RepairProjection
@@ -1184,6 +1217,11 @@ fn decode_response(value: &Value, expected_id: &str) -> Result<RuntimeResponse, 
             });
         }
         return Ok(RuntimeResponse::State(state));
+    }
+    if let Some(jobs) = object.get("jobs") {
+        let jobs = serde_json::from_value::<Vec<RenderJob>>(jobs.clone())
+            .map_err(|error| RuntimeError::new("RUNTIME_PROTOCOL_ERROR", error.to_string()))?;
+        return Ok(RuntimeResponse::RenderJobs(jobs));
     }
     if let Some(job) = object.get("job") {
         let job = serde_json::from_value::<RenderJob>(job.clone())
@@ -1363,6 +1401,12 @@ pub fn response_value(id: &str, result: Result<RuntimeResponse, RuntimeError>) -
             "id": id,
             "ok": true,
             "job": job
+        }),
+        Ok(RuntimeResponse::RenderJobs(jobs)) => json!({
+            "protocolVersion": RequestEnvelope::PROTOCOL_VERSION,
+            "id": id,
+            "ok": true,
+            "jobs": jobs
         }),
         Ok(RuntimeResponse::Comments { log, comment }) => json!({
             "protocolVersion": RequestEnvelope::PROTOCOL_VERSION,

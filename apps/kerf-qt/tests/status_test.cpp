@@ -216,7 +216,6 @@ private slots:
 
         // Every state's words read at 4.5:1 on the status bar, in both
         // appearances; "Not shared" is the only sign a project is not.
-        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
         QJsonObject live = status;
         live.insert("live", true);
         const QList<QJsonObject> events{
@@ -227,8 +226,7 @@ private slots:
             QJsonObject{{"type", "collab_sync"}, {"stage", "failed"}, {"message", "offline"}},
             QJsonObject{{"type", "collab"}, {"status", conflicted}},
             QJsonObject{{"type", "collab"}, {"status", local}}};
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             QSet<QString> states;
             for (const QJsonObject &event : events) {
                 window.handleEvent(event);

@@ -11,9 +11,10 @@ use kerf_lang::{
     Speech,
 };
 use kerf_model::{
-    apply, AudioInfo, Catalog, ClipChange, Content, Diagnostic, Edge, Effect, FxDef, Id,
-    MarkerColor, Mask, MaskMode, MaskShape, Media, NewClip, Op, Param, ParamType, Project, Rate,
-    Ratio, Rejected, Sequence, SequenceChange, Time, TrackChange, TrackKind, Value, VideoInfo,
+    apply, track_role, AudioInfo, Catalog, ClipChange, Content, Diagnostic, Domain, Edge, Effect,
+    FxDef, Id, Interp, Keyframe, MarkerChange, MarkerColor, Mask, MaskMode, MaskShape, Media,
+    NewClip, Op, Param, ParamDef, ParamType, Project, Rate, Ratio, Rejected, Sequence,
+    SequenceChange, Time, TrackChange, TrackKind, TrackRoleChange, Value, VideoInfo,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
@@ -736,7 +737,9 @@ pub enum EditOp {
     RippleDelete {
         clips: Vec<String>,
     },
-    /// Static property or generator parameter values; `null` restores the
+    /// Property or generator parameter values: a static value, keyframes
+    /// as `{"keys": [{"at": frames, "value": v, "interp": "linear"}]}` with
+    /// `at` counted from the clip's first frame, or `null` to restore the
     /// default. `name` renames the clip; an empty one gives it back the
     /// name of what it shows.
     Set {
@@ -751,7 +754,8 @@ pub enum EditOp {
         speed: String,
     },
     /// Add an effect to the end of the clip's stack, or at `index`, with
-    /// static parameter values; the rest stay at their defaults.
+    /// parameter values, static or keyframed; the rest stay at their
+    /// defaults.
     FxAdd {
         clip: String,
         fx: String,
@@ -760,8 +764,8 @@ pub enum EditOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         index: Option<usize>,
     },
-    /// Turn the effect at `index` on or off, or set its parameters; `null`
-    /// restores a parameter's default.
+    /// Turn the effect at `index` on or off, or set its parameters, static
+    /// or keyframed; `null` restores a parameter's default.
     FxSet {
         clip: String,
         index: usize,
@@ -847,6 +851,23 @@ pub enum EditOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sequence: Option<String>,
     },
+    /// Move, retime, rename, recolour, or annotate the marker `marker`:
+    /// `at` is a frame offset from the sequence's first frame and `frames`
+    /// its length, as `add-marker` counts them. An empty `name`, `note`, or
+    /// `color` clears it; what is absent stays as it is.
+    SetMarker {
+        marker: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frames: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<String>,
+    },
     RemoveMarker {
         id: String,
     },
@@ -856,6 +877,11 @@ pub enum EditOp {
     Unlink {
         clips: Vec<String>,
     },
+    /// `set-track`: a track's switches, its role, and its sync lock. `role`
+    /// is one of `video`, `titles`, `dialogue`, `music`, `effects` (any
+    /// case) or other one-line text, and an empty one gives back the
+    /// kind's own; `syncLocked` false keeps ripple edits on other tracks
+    /// from moving the track.
     SetTrack {
         track: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -866,6 +892,10 @@ pub enum EditOp {
         locked: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         muted: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sync_locked: Option<bool>,
     },
     /// An empty track after the others of its kind (`video`, `audio`, or
     /// `subtitle`), with a generated id unless `id` names it.
@@ -938,8 +968,10 @@ fn mask_mode(mode: &Option<String>) -> Result<Option<MaskMode>, RuntimeError> {
 }
 
 /// A mask's properties from JSON, as `fx_params` reads an effect's.
+/// Keyframes count frames of `rate`, the rate of the clip's sequence.
 fn mask_params(
     params: &BTreeMap<String, Json>,
+    rate: Option<Rate>,
 ) -> Result<Vec<(String, Option<Param>)>, RuntimeError> {
     params
         .iter()
@@ -947,13 +979,7 @@ fn mask_params(
             let def = catalog()
                 .mask_prop(name)
                 .ok_or_else(|| invalid(format!("a mask has no property `{name}`")))?;
-            let value = match value {
-                Json::Null => None,
-                value => Some(Param::Static(json_value(&def.ty, value).ok_or_else(
-                    || invalid(format!("`{name}` expects a {}", def.ty.name())),
-                )?)),
-            };
-            Ok((name.clone(), value))
+            Ok((name.clone(), param_value(name, def, value, rate)?))
         })
         .collect()
 }
@@ -997,12 +1023,12 @@ pub(crate) fn lower_ops(project: &Project, ops: &[EditOp]) -> Result<Vec<Op>, Ru
 }
 
 fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
-    let clip_rate = |clip: &str| {
+    let rate_of = |clip: &str| {
         project
             .locate(clip)
             .map(|at| project.sequences[at.sequence].rate)
-            .ok_or_else(|| invalid(format!("no clip `{clip}`")))
     };
+    let clip_rate = |clip: &str| rate_of(clip).ok_or_else(|| invalid(format!("no clip `{clip}`")));
     let sequence = |id: &Option<String>| match id {
         Some(id) => project
             .sequence(id)
@@ -1076,13 +1102,14 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
                 .locate(clip)
                 .ok_or_else(|| invalid(format!("no clip `{clip}`")))?;
             let target = project.clip_at(at);
+            let rate = project.sequences[at.sequence].rate;
             let domain = project.sequences[at.sequence].tracks[at.track]
                 .kind
                 .domain();
             let mut changes = Vec::new();
             for (name, value) in props {
-                let def = domain
-                    .and_then(|domain| catalog().prop(domain, name))
+                let prop = domain.and_then(|domain| catalog().prop(domain, name));
+                let def = prop
                     .or_else(|| match &target.content {
                         Content::Generator { fx, .. } => {
                             catalog().fx(fx.as_str()).and_then(|def| def.find(name))
@@ -1090,12 +1117,10 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
                         _ => None,
                     })
                     .ok_or_else(|| invalid(format!("clip `{clip}` has no property `{name}`")))?;
-                let param = match value {
-                    Json::Null => None,
-                    value => Some(Param::Static(json_value(&def.ty, value).ok_or_else(
-                        || invalid(format!("`{name}` expects a {}", def.ty.name())),
-                    )?)),
-                };
+                let param = param_value(name, def, value, Some(rate))?;
+                if prop.is_some() && domain == Some(Domain::Audio) {
+                    sound_keyframes(None, name, param.as_ref())?;
+                }
                 changes.push(ClipChange::Param(name.clone(), param));
             }
             if let Some(name) = name {
@@ -1122,7 +1147,7 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
             let def = catalog()
                 .fx(fx)
                 .ok_or_else(|| invalid(format!("no effect `{fx}`")))?;
-            let params = fx_params(def, params)?
+            let params = fx_params(def, params, rate_of(clip))?
                 .into_iter()
                 .filter_map(|(name, param)| param.map(|param| (name, param)))
                 .collect();
@@ -1154,7 +1179,7 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
                 clip: edit_id(clip)?,
                 index: *index,
                 enabled: *enabled,
-                params: fx_params(def, params)?,
+                params: fx_params(def, params, rate_of(clip))?,
             }
         }
         EditOp::FxRemove { clip, index } => Op::FxRemove {
@@ -1185,7 +1210,7 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
                     shape,
                     mode: mask_mode(mode)?.unwrap_or_default(),
                     inverted: inverted.unwrap_or(false),
-                    params: mask_params(params)?
+                    params: mask_params(params, rate_of(clip))?
                         .into_iter()
                         .filter_map(|(name, param)| param.map(|param| (name, param)))
                         .collect(),
@@ -1206,7 +1231,7 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
             shape: outline.shape()?,
             mode: mask_mode(mode)?,
             inverted: *inverted,
-            params: mask_params(params)?,
+            params: mask_params(params, rate_of(clip))?,
         },
         EditOp::MaskRemove { clip, name } => Op::MaskRemove {
             clip: edit_id(clip)?,
@@ -1291,6 +1316,44 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
                 note: note.clone(),
             }
         }
+        EditOp::SetMarker {
+            marker,
+            at,
+            frames,
+            name,
+            note,
+            color,
+        } => {
+            let sequence = project
+                .sequences
+                .iter()
+                .find(|sequence| sequence.marker(marker).is_some())
+                .ok_or_else(|| invalid(format!("no marker `{marker}`")))?;
+            // Blank text clears; absent text leaves what is there.
+            let text = |text: &Option<String>| {
+                text.as_ref()
+                    .map(|text| (!text.trim().is_empty()).then(|| text.clone()))
+            };
+            let color = match color.as_deref().map(str::trim) {
+                None => None,
+                Some("") => Some(None),
+                Some(color) => {
+                    Some(Some(MarkerColor::parse(color).ok_or_else(|| {
+                        invalid(format!("`{color}` is not a marker color"))
+                    })?))
+                }
+            };
+            Op::SetMarker {
+                id: edit_id(marker)?,
+                change: MarkerChange {
+                    at: at.map(|at| sequence.rate.time_of(at)),
+                    duration: frames.map(|frames| sequence.rate.time_of(frames)),
+                    name: text(name),
+                    color,
+                    note: text(note),
+                },
+            }
+        }
         EditOp::RemoveMarker { id } => Op::RemoveMarker { id: edit_id(id)? },
         EditOp::Link { clips } => Op::Link {
             clips: edit_ids(clips)?,
@@ -1305,16 +1368,42 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
             enabled,
             locked,
             muted,
-        } => Op::SetTrack {
-            sequence: sequence(id)?.id.clone(),
-            track: edit_id(track)?,
-            change: TrackChange {
+            role,
+            sync_locked,
+        } => {
+            let (sequence, track) = (sequence(id)?.id.clone(), edit_id(track)?);
+            let switches = TrackChange {
                 name: None,
                 enabled: *enabled,
                 locked: *locked,
                 muted: *muted,
-            },
-        },
+            };
+            let roles = TrackRoleChange {
+                role: role
+                    .as_deref()
+                    .map(|role| track_role(role).map_err(invalid))
+                    .transpose()?,
+                sync_locked: *sync_locked,
+            };
+            let mut ops = Vec::new();
+            // An op that names nothing to change still names the track,
+            // which must exist, as `set-track` always has.
+            if switches != TrackChange::default() || roles == TrackRoleChange::default() {
+                ops.push(Op::SetTrack {
+                    sequence: sequence.clone(),
+                    track: track.clone(),
+                    change: switches,
+                });
+            }
+            if roles != TrackRoleChange::default() {
+                ops.push(Op::SetTrackRole {
+                    sequence,
+                    track,
+                    change: roles,
+                });
+            }
+            return Ok(ops);
+        }
         EditOp::AddTrack {
             kind,
             id,
@@ -1360,11 +1449,13 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
     }])
 }
 
-/// An effect's parameters from JSON: a static value each, or `None` (for
-/// `null`) to restore the default.
+/// An effect's parameters from JSON: a static value or keyframes each (see
+/// `json_param`), or `None` (for `null`) to restore the default.
+/// Keyframes count frames of `rate`, the rate of the clip's sequence.
 fn fx_params(
     def: &FxDef,
     params: &BTreeMap<String, Json>,
+    rate: Option<Rate>,
 ) -> Result<Vec<(String, Option<Param>)>, RuntimeError> {
     params
         .iter()
@@ -1372,15 +1463,132 @@ fn fx_params(
             let param = def
                 .find(name)
                 .ok_or_else(|| invalid(format!("`{}` has no parameter `{name}`", def.id)))?;
-            let value = match value {
-                Json::Null => None,
-                value => Some(Param::Static(json_value(&param.ty, value).ok_or_else(
-                    || invalid(format!("`{name}` expects a {}", param.ty.name())),
-                )?)),
-            };
+            let value = param_value(name, param, value, rate)?;
+            if def.domain == Domain::Audio {
+                sound_keyframes(Some(def.id.as_str()), name, value.as_ref())?;
+            }
             Ok((name.clone(), value))
         })
         .collect()
+}
+
+/// A property or parameter value a typed op gives: `None` for `null`, which
+/// restores the default, else a static value or keyframes. `rate` is the
+/// rate of the clip's sequence, or `None` when there is no such clip.
+fn param_value(
+    name: &str,
+    def: &ParamDef,
+    value: &Json,
+    rate: Option<Rate>,
+) -> Result<Option<Param>, RuntimeError> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let keyed = value.get("keys").is_some();
+    if keyed && !def.animatable {
+        return Err(invalid(format!("`{name}` cannot be animated")));
+    }
+    let param = match rate {
+        Some(rate) => json_param(&def.ty, value, rate),
+        None if keyed => return Err(invalid("keyframes need a clip to count frames on")),
+        None => json_value(&def.ty, value).map(Param::Static),
+    };
+    param.map(Some).ok_or_else(|| {
+        invalid(if keyed {
+            format!(
+                "`{name}` keyframes are {{\"keys\": [{{\"at\": <frame>, \"value\": <{}>, \
+                 \"interp\": {}}}]}}, at least one, at whole frames",
+                def.ty.name(),
+                Interp::ALL.map(Interp::name).join("|"),
+            )
+        } else {
+            format!("`{name}` expects a {}", def.ty.name())
+        })
+    })
+}
+
+/// Refuse keyframes on sound that playback and renders cannot follow. The
+/// program (kerf-core) lowers keyframed clip gain to a volume expression;
+/// it refuses keyframed pan and keyframed sound-effect parameters, so an
+/// edit that makes them is refused here, with the reason, before it lands.
+fn sound_keyframes(
+    fx: Option<&str>,
+    name: &str,
+    param: Option<&Param>,
+) -> Result<(), RuntimeError> {
+    if !matches!(param, Some(Param::Animated(_))) {
+        return Ok(());
+    }
+    match fx {
+        None if name == "gain" => Ok(()),
+        None => Err(invalid(format!(
+            "`{name}` cannot be animated on sound: playback and renders follow keyframes on \
+             gain only"
+        ))),
+        Some(fx) => Err(invalid(format!(
+            "`{fx}` {name} cannot be animated: playback and renders do not follow keyframes on \
+             sound effects"
+        ))),
+    }
+}
+
+/// The largest keyframe offset a typed op takes, in frames: well past any
+/// clip, and far inside what a time holds.
+const MAX_KEY_FRAMES: i64 = 1 << 30;
+
+/// A parameter from JSON of type `ty`: a static value, or keyframes as
+/// `{"keys": [{"at": frames, "value": v, "interp": "linear"}]}`. `at` counts
+/// whole frames of `rate` (the clip's sequence) from the clip's first frame,
+/// as the model keeps keyframes clip-relative; `interp` is `linear` (the
+/// default), `hold`, `ease`, `ease-in` or `ease-out`, and says how the value
+/// moves toward the next key. Keys are put in time order; two at one frame
+/// are refused when the edit is checked. `None` for anything else.
+pub(crate) fn json_param(ty: &ParamType, value: &Json, rate: Rate) -> Option<Param> {
+    let Some(keys) = value.as_object().and_then(|object| object.get("keys")) else {
+        return json_value(ty, value).map(Param::Static);
+    };
+    if value.as_object().is_some_and(|object| object.len() != 1) {
+        return None;
+    }
+    let mut keys = keys
+        .as_array()?
+        .iter()
+        .map(|key| {
+            let key = key.as_object()?;
+            let at = key.get("at").and_then(whole_frames)?;
+            let value = json_value(ty, key.get("value")?)?;
+            let interp = match key.get("interp") {
+                None | Some(Json::Null) => Interp::Linear,
+                Some(Json::String(name)) => Interp::parse(name)?,
+                Some(_) => return None,
+            };
+            Some(Keyframe {
+                at: rate.time_of(at),
+                value,
+                interp,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    if keys.is_empty() {
+        return None;
+    }
+    keys.sort_by_key(|key| key.at);
+    Some(Param::Animated(keys))
+}
+
+/// A whole number of frames, within [`MAX_KEY_FRAMES`] either way.
+fn whole_frames(value: &Json) -> Option<i64> {
+    let frames = match value.as_i64() {
+        Some(frames) => frames,
+        None => {
+            let frames = value.as_f64()?;
+            if frames.fract() != 0.0 || frames.abs() > MAX_KEY_FRAMES as f64 {
+                return None;
+            }
+            frames as i64
+        }
+    };
+    (frames.abs() <= MAX_KEY_FRAMES).then_some(frames)
 }
 
 fn json_value(ty: &ParamType, value: &Json) -> Option<Value> {

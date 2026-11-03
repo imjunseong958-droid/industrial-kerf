@@ -248,6 +248,12 @@ pub enum Request {
     },
     /// Copy media from outside the project into `media/` and relink it.
     CollabConsolidate,
+    /// Run the QC pass over a sequence (the program one without a name):
+    /// the bridge answers with a `check` event.
+    Check {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sequence: Option<String>,
+    },
 }
 
 /// A GitHub repository to create with `gh`; without a name it is named
@@ -431,6 +437,14 @@ fn can_play(context: &Context) -> Result<(), &'static str> {
     } else {
         Ok(())
     }
+}
+
+/// Why a command the editor lists has no handler yet: its region lands
+/// later in this release, and the command reads as unavailable until then.
+pub const COMING: &str = "Coming in this release";
+
+fn coming(_: &Context) -> Result<(), &'static str> {
+    Err(COMING)
 }
 
 const NOT_SHARED: &str = "Share the project with Git first (Collaborate → Publish to GitHub…)";
@@ -627,10 +641,19 @@ pub static COMMANDS: &[Command] = &[
         ),
         &["Ctrl+O"],
     ),
+    // The toolbar's Export with the quality chosen in its menu; ⌘E is
+    // Export Master.
+    params(
+        menu(command("file.export", "Export…", connected), Menu::File, 1),
+        r#"{"quality": "preview" | "full"}"#,
+    ),
+    // The finished file: the `master` quality, which the runtime renders as
+    // ProRes 422 HQ.
     keys(
-        params(
-            menu(command("file.export", "Export…", connected), Menu::File, 1),
-            r#"{"quality": "preview" | "full"}"#,
+        menu(
+            command("export.master", "Export Master", connected),
+            Menu::File,
+            1,
         ),
         &["Ctrl+E"],
     ),
@@ -722,6 +745,14 @@ pub static COMMANDS: &[Command] = &[
         &["Ctrl+,"],
     ),
     keys(
+        frontend(menu(
+            command("keyboard.customise", "Customise Keyboard…", coming),
+            Menu::Edit,
+            3,
+        )),
+        &["Ctrl+Alt+K"],
+    ),
+    keys(
         frontend(menu(command("ai.ask", "Ask Kerf…", can_ask), Menu::Clip, 1)),
         &["Ctrl+J"],
     ),
@@ -742,6 +773,16 @@ pub static COMMANDS: &[Command] = &[
         &["Escape"],
     ),
     menu(command("ai.stop", "Stop Kerf", agent_busy), Menu::Clip, 1),
+    // The current thread's proposal, from its card: ⌘↩ and Esc there are
+    // `proposal.accept` and `proposal.reject`'s keys.
+    params(
+        command("comment.accept", "Accept", can_accept),
+        r#"{"proposal": string}"#,
+    ),
+    params(
+        command("comment.reject", "Reject", has_proposal),
+        r#"{"proposal": string}"#,
+    ),
     keys(
         params(
             menu(
@@ -952,6 +993,122 @@ pub static COMMANDS: &[Command] = &[
         ))),
         &["End"],
     ),
+    checkable(keys(
+        frontend(menu(
+            command("playback.loop", "Loop Playback", coming),
+            Menu::Playback,
+            2,
+        )),
+        &["Ctrl+L"],
+    )),
+    // The program's in and out marks; the Source monitor's are
+    // `source.markIn` and `source.markOut`, on the same keys there.
+    keys(
+        timeline(frontend(menu(
+            command("mark.in", "Mark In", coming),
+            Menu::Markers,
+            2,
+        ))),
+        &["I"],
+    ),
+    keys(
+        timeline(frontend(menu(
+            command("mark.out", "Mark Out", coming),
+            Menu::Markers,
+            2,
+        ))),
+        &["O"],
+    ),
+    // Add Marker (M) is `marker.add`; Snap (⇧S) is `sequence.snap`.
+    keys(
+        timeline(frontend(menu(
+            command("timeline.addTrack", "Add Track…", connected),
+            Menu::Sequence,
+            1,
+        ))),
+        &["Ctrl+Shift+T"],
+    ),
+    keys(
+        frontend(menu(
+            command("sequence.settings", "Sequence Settings…", coming),
+            Menu::Sequence,
+            3,
+        )),
+        &["Ctrl+0"],
+    ),
+    menu(command("qc.run", "Run QC", connected), Menu::Sequence, 3),
+    // The program viewer's switches.
+    checkable(keys(
+        frontend(menu(
+            command("view.annotations", "Annotations", coming),
+            Menu::View,
+            0,
+        )),
+        &["Shift+A"],
+    )),
+    checkable(keys(
+        frontend(menu(
+            command("view.safeZones", "Safe Zones", always),
+            Menu::View,
+            0,
+        )),
+        &["'"],
+    )),
+    checkable(keys(
+        frontend(menu(
+            command("view.dim", "Dim Surround", coming),
+            Menu::View,
+            0,
+        )),
+        &["Shift+L"],
+    )),
+    checkable(keys(
+        frontend(menu(
+            command("view.devicePreview", "Device Preview", always),
+            Menu::View,
+            0,
+        )),
+        &["Shift+D"],
+    )),
+    keys(
+        frontend(menu(
+            command("viewer.zoom", "Viewer Zoom…", coming),
+            Menu::View,
+            0,
+        )),
+        &["Shift+Z"],
+    ),
+    // The comments panel; ⇧⌘J belongs to `window.assistant`, the same switch.
+    checkable(frontend(menu(
+        command("view.comments", "Comments", always),
+        Menu::View,
+        0,
+    ))),
+    // The Inspector column's kinds, ⌃⌥4-6 as in Final Cut Pro.
+    checkable(keys(
+        frontend(menu(
+            command("inspector.video", "Video Inspector", always),
+            Menu::View,
+            2,
+        )),
+        &["Meta+Alt+4"],
+    )),
+    checkable(keys(
+        frontend(menu(
+            command("inspector.audio", "Audio Inspector", coming),
+            Menu::View,
+            2,
+        )),
+        &["Meta+Alt+5"],
+    )),
+    checkable(keys(
+        frontend(menu(
+            command("inspector.info", "Info Inspector", coming),
+            Menu::View,
+            2,
+        )),
+        &["Meta+Alt+6"],
+    )),
     frontend(menu(
         command("view.fitTracks", "Fit Tracks to Panel", always),
         Menu::View,
@@ -1028,6 +1185,39 @@ pub static COMMANDS: &[Command] = &[
         Menu::Collaborate,
         2,
     ),
+    // The four built-in workspaces, one chosen at a time.
+    checkable(keys(
+        frontend(menu(
+            command("workspace.edit", "Edit", always),
+            Menu::Window,
+            0,
+        )),
+        &["Alt+Shift+1"],
+    )),
+    checkable(keys(
+        frontend(menu(
+            command("workspace.review", "Review", always),
+            Menu::Window,
+            0,
+        )),
+        &["Alt+Shift+2"],
+    )),
+    checkable(keys(
+        frontend(menu(
+            command("workspace.finish", "Finish", always),
+            Menu::Window,
+            0,
+        )),
+        &["Alt+Shift+3"],
+    )),
+    checkable(keys(
+        frontend(menu(
+            command("workspace.deliver", "Deliver", always),
+            Menu::Window,
+            0,
+        )),
+        &["Alt+Shift+4"],
+    )),
     frontend(menu(
         command(
             "window.saveWorkspace",
@@ -1134,7 +1324,7 @@ pub static KEYMAPS: &[Keymap] = &[
         label: "Premiere Pro",
         overrides: &[
             ("file.import", &["Ctrl+I"]),
-            ("file.export", &["Ctrl+M"]),
+            ("export.master", &["Ctrl+M"]),
             ("clip.split", &["Ctrl+K"]),
             ("sequence.renderPreview", &["Return"]),
             ("sequence.snap", &["S"]),
@@ -1159,6 +1349,11 @@ pub static KEYMAPS: &[Keymap] = &[
             ("tool.roll", &[]),
             ("tool.slip", &[]),
             ("tool.slide", &[]),
+            // Final Cut Pro's workspaces are on ⌃⇧1, ⌃⇧2, …
+            ("workspace.edit", &["Meta+Shift+1"]),
+            ("workspace.review", &["Meta+Shift+2"]),
+            ("workspace.finish", &["Meta+Shift+3"]),
+            ("workspace.deliver", &["Meta+Shift+4"]),
         ],
     },
 ];
@@ -1350,13 +1545,22 @@ pub fn run(id: &str, context: &Context, params: &Value) -> Result<Request, Strin
             enabled: params.bool("enabled")?,
             locked: params.bool("locked")?,
             muted: params.bool("muted")?,
+            // An empty role gives the track back its kind's own.
+            role: params.string("role").map(|role| role.trim().to_string()),
+            sync_locked: params.bool("syncLocked")?,
         }),
-        "proposal.accept" | "proposal.reject" => {
+        "export.master" => Request::Export {
+            quality: "master".into(),
+        },
+        "qc.run" => Request::Check {
+            sequence: params.trimmed("sequence"),
+        },
+        "proposal.accept" | "proposal.reject" | "comment.accept" | "comment.reject" => {
             let proposal_id = match params.string("proposal") {
                 Some(id) => id,
                 None => context.proposal.clone().unwrap_or_default().id,
             };
-            if id == "proposal.accept" {
+            if id == "proposal.accept" || id == "comment.accept" {
                 Request::Accept {
                     proposal_id,
                     revision,
@@ -1658,6 +1862,133 @@ mod tests {
     }
 
     #[test]
+    fn workspaces_and_viewer_switches_have_their_keys_in_every_keymap() {
+        let kerf = Keymap::find("kerf");
+        let premiere = Keymap::find("premiere");
+        let fcp = Keymap::find("fcp");
+        for (index, id) in [
+            "workspace.edit",
+            "workspace.review",
+            "workspace.finish",
+            "workspace.deliver",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let command = find(id).unwrap();
+            assert!(command.checkable && command.kind == Kind::Frontend, "{id}");
+            assert_eq!(command.menu, Some(Menu::Window), "{id}");
+            let number = index + 1;
+            assert_eq!(kerf.keys(command), [format!("Alt+Shift+{number}")], "{id}");
+            assert_eq!(
+                premiere.keys(command),
+                [format!("Alt+Shift+{number}")],
+                "{id}"
+            );
+            assert_eq!(fcp.keys(command), [format!("Meta+Shift+{number}")], "{id}");
+        }
+        let keys = |id: &str| kerf.keys(find(id).unwrap());
+        assert_eq!(keys("window.resetWorkspace"), ["Alt+Shift+0"]);
+        assert_eq!(keys("view.dim"), ["Shift+L"]);
+        assert_eq!(keys("view.annotations"), ["Shift+A"]);
+        assert_eq!(keys("view.safeZones"), ["'"]);
+        assert_eq!(keys("view.devicePreview"), ["Shift+D"]);
+        assert_eq!(keys("viewer.zoom"), ["Shift+Z"]);
+        assert_eq!(keys("playback.loop"), ["Ctrl+L"]);
+        assert_eq!(keys("mark.in"), ["I"]);
+        assert_eq!(keys("mark.out"), ["O"]);
+        assert_eq!(keys("timeline.addTrack"), ["Ctrl+Shift+T"]);
+        assert_eq!(keys("inspector.video"), ["Meta+Alt+4"]);
+        assert_eq!(keys("inspector.audio"), ["Meta+Alt+5"]);
+        assert_eq!(keys("inspector.info"), ["Meta+Alt+6"]);
+        assert_eq!(keys("export.master"), ["Ctrl+E"]);
+        assert_eq!(premiere.keys(find("export.master").unwrap()), ["Ctrl+M"]);
+        assert_eq!(keys("sequence.settings"), ["Ctrl+0"]);
+        assert_eq!(keys("keyboard.customise"), ["Ctrl+Alt+K"]);
+        // The comments panel is the assistant's switch, whose key it is.
+        assert!(keys("view.comments").is_empty());
+        assert_eq!(keys("window.assistant"), ["Ctrl+Shift+J"]);
+        // The program's marks are the timeline's, the source's the Source
+        // monitor's: the same keys in their own panels.
+        assert_eq!(find("mark.in").unwrap().scope, Scope::Timeline);
+        assert_eq!(find("source.markIn").unwrap().scope, Scope::Source);
+    }
+
+    #[test]
+    fn commands_without_a_handler_yet_say_so() {
+        let states = states(&ready());
+        for id in [
+            "view.dim",
+            "view.annotations",
+            "viewer.zoom",
+            "playback.loop",
+            "mark.in",
+            "mark.out",
+            "inspector.audio",
+            "inspector.info",
+            "sequence.settings",
+            "keyboard.customise",
+        ] {
+            assert_eq!(states[id], COMING, "{id}");
+        }
+        for id in [
+            "workspace.edit",
+            "workspace.review",
+            "workspace.finish",
+            "workspace.deliver",
+            "view.safeZones",
+            "view.devicePreview",
+            "view.comments",
+            "inspector.video",
+            "timeline.addTrack",
+            "export.master",
+            "qc.run",
+        ] {
+            assert!(states[id].is_null(), "{id}: {}", states[id]);
+        }
+        assert_eq!(states["qc.run"], Value::Null);
+        assert_eq!(super::states(&Context::default())["qc.run"], json!(OFFLINE));
+    }
+
+    #[test]
+    fn master_export_qc_and_the_cards_resolve_to_bridge_requests() {
+        let context = ready();
+        assert_eq!(
+            serde_json::to_value(run("export.master", &context, &Value::Null).unwrap()).unwrap(),
+            json!({"type": "export", "quality": "master"})
+        );
+        assert_eq!(
+            serde_json::to_value(run("qc.run", &context, &Value::Null).unwrap()).unwrap(),
+            json!({"type": "check"})
+        );
+        assert_eq!(
+            serde_json::to_value(
+                run("qc.run", &context, &json!({"sequence": "vertical"})).unwrap()
+            )
+            .unwrap(),
+            json!({"type": "check", "sequence": "vertical"})
+        );
+        let mut reviewing = context.clone();
+        reviewing.proposal = Some(ProposalState {
+            id: "p1".into(),
+            blocked: None,
+        });
+        assert_eq!(
+            serde_json::to_value(
+                run("comment.accept", &reviewing, &json!({"proposal": "p2"})).unwrap()
+            )
+            .unwrap(),
+            json!({"type": "accept", "proposalId": "p2", "revision": 7})
+        );
+        assert_eq!(
+            serde_json::to_value(run("comment.reject", &reviewing, &Value::Null).unwrap()).unwrap(),
+            json!({"type": "reject", "proposalId": "p1", "revision": 7})
+        );
+        assert!(run("comment.accept", &context, &Value::Null).is_err());
+        assert!(run("workspace.review", &context, &Value::Null).is_err());
+    }
+
+    #[test]
     fn keymaps_rebind_commands_and_fall_back_to_cut() {
         let split = find("clip.split").unwrap();
         assert_eq!(Keymap::find("kerf").keys(split), ["S"]);
@@ -1854,8 +2185,20 @@ mod tests {
                 sequence: None,
                 enabled: None,
                 locked: Some(true),
-                muted: None
+                muted: None,
+                role: None,
+                sync_locked: None,
             }]
+        );
+        let roles = ops(run(
+            "track.set",
+            &ready(),
+            &json!({"track": "V2", "role": " Titles ", "syncLocked": false}),
+        )
+        .unwrap());
+        assert_eq!(
+            serde_json::to_value(&roles[0]).unwrap(),
+            json!({"op": "set-track", "track": "V2", "role": "Titles", "syncLocked": false})
         );
     }
 
@@ -2201,12 +2544,15 @@ mod tests {
                 json!({"remote": "git@example.com:film.git"}),
             ),
             ("collab.consolidate", json!({})),
+            ("qc.run", Value::Null),
+            ("export.master", Value::Null),
         ];
         for (id, params) in invocations {
             let request = request(id, &context, params);
             let kind = request["type"].as_str().unwrap();
             assert!(BRIDGE.contains(kind), "bridge.h has no `{kind}` for {id}");
         }
+        assert!(BRIDGE.contains("check {sequence?}"));
         assert!(BRIDGE.contains("projection_import") && BRIDGE.contains("projection_repair"));
     }
 }

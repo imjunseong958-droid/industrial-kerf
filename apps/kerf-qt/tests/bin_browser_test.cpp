@@ -567,8 +567,6 @@ private slots:
     // An unreadable preset's red is the appearance's own after a switch,
     // not the one it was listed in.
     void unreadablePresetsTurnRedInEitherAppearance() {
-        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
-        setEditorColorScheme(ColorScheme::Light);
         PresetsPanel panel;
         panel.setLibrary(QJsonObject{{"presets", QJsonArray{
             QJsonObject{{"path", "presets/old.kerfpreset"}, {"name", "old"}, {"error", "line 3: unknown statement"}},
@@ -576,8 +574,7 @@ private slots:
         QListWidgetItem *unreadable = panel.m_list->item(0);
         QListWidgetItem *readable = panel.m_list->item(1);
         QCOMPARE(unreadable->foreground().color(), editorTheme().error);
-        for (const ColorScheme scheme : {ColorScheme::Dark, ColorScheme::Light}) {
-            setEditorColorScheme(scheme);
+        {
             QCOMPARE(unreadable->foreground().color(), editorTheme().error);
             QVERIFY(contrastRatio(unreadable->foreground().color(), editorTheme().well) >= 4.5);
             QVERIFY(!readable->data(Qt::ForegroundRole).isValid());

@@ -40,9 +40,8 @@ class ProjectLauncher final : public QDialog {
 
 public:
     enum Page { NewProject, Recent, FromPreset, Clone };
-    // System follows macOS's appearance as it changes; KERF_COLOR_SCHEME=light
-    // or dark picks one for the whole run. A launcher starts in the editor's
-    // scheme (editorColorScheme()).
+    // Deprecated, removed in W3: the launcher is dark only, whatever scheme
+    // is asked for.
     using ColorScheme = kerf::ColorScheme;
 
     // `kerfdBinary` makes the first edit of a project made from a preset.
@@ -51,8 +50,10 @@ public:
 
     QString chosenPath() const { return m_chosen; }
     void showPage(Page page);
+    // Deprecated, removed in W3: does nothing.
     void setColorScheme(ColorScheme scheme);
-    ColorScheme colorScheme() const { return m_scheme; }
+    // Deprecated, removed in W3: always Dark.
+    ColorScheme colorScheme() const { return ColorScheme::Dark; }
     const LauncherTheme &theme() const { return m_theme; }
 
     // Recent projects (QSettings `projects/recent`), most recent first.
@@ -62,13 +63,11 @@ public:
     static constexpr int kRecentLimit = 12;
 
 protected:
-    void changeEvent(QEvent *event) override;
     void showEvent(QShowEvent *event) override;
 
 private:
-    // Restyle for the current appearance and accent; does nothing when
-    // neither changed unless `force`.
-    void applyTheme(bool force = false);
+    // Style the launcher with its one theme, once.
+    void applyTheme();
     void setDetailsOpen(bool open);
     // Fit the sidebar's top and the title band to the title bar macOS
     // draws over them.
@@ -118,10 +117,7 @@ private:
 
     QString m_kerfd;
     QString m_chosen;
-    ColorScheme m_scheme = ColorScheme::System;
     LauncherTheme m_theme;
-    bool m_themed = false;
-    bool m_theming = false;
     QPointer<QFocusFrame> m_focusRing;
     QJsonObject m_tools;
     bool m_busy = false;

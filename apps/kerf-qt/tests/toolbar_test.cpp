@@ -210,12 +210,11 @@ private slots:
         QCOMPARE(bank.currentIndex(), 0);
     }
 
-    // The keys and their bank in both appearances: the latched key is held
-    // in with its amber LED lit, the others raised, the shapes in the
-    // engraved ink.
+    // The keys and their bank, flat on the ramp: the latched key is the on
+    // fill with its LED lit in the accent, the others raised, the shapes in
+    // the engraved ink.
     void toolbarFormatBankPaintsTheHardware() {
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             const EditorTheme &theme = editorTheme();
             FormatBank bank;
             bank.setCanvasSize(QSize(1080, 1920));
@@ -247,7 +246,6 @@ private slots:
             const QRgb gap = at(raised, QPointF(raised->width() + 1, raised->height() - 3));
             QVERIFY2(nearColor(gap, theme.bankWell.rgb(), 6), qPrintable(QColor(gap).name()));
         }
-        setEditorColorScheme(ColorScheme::Dark);
     }
 
     // Export is one key in the accent: Export, a chip naming the quality,
@@ -335,8 +333,7 @@ private slots:
 
         // Its colours, in both appearances: the accent lit from above, the
         // chip and label in the ink on it; a disabled export a disabled bezel.
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             const EditorTheme &theme = editorTheme();
             exportAction->setEnabled(true);
             QImage image = button->grab().toImage();
@@ -353,7 +350,6 @@ private slots:
             ratio = image.devicePixelRatio();
             QVERIFY(nearColor(image.pixelColor(QPoint(4, button->height() / 2) * ratio).rgb(), theme.buttonDisabled.rgb(), 3));
         }
-        setEditorColorScheme(ColorScheme::Dark);
     }
 
     // The title still centres between the toolbar's groups, and at
@@ -393,10 +389,9 @@ private slots:
             window.resize(1366, 768);
             window.setConnection(QStringLiteral("ready"));
             window.m_commands->action(QStringLiteral("file.export"))->setEnabled(true);
-            for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-                setEditorColorScheme(scheme);
+            {
                 QCoreApplication::processEvents();
-                const QString name = scheme == ColorScheme::Light ? QStringLiteral("light") : QStringLiteral("dark");
+                const QString name = QStringLiteral("dark");
                 toolbar->grab().save(QDir(folder).filePath(QStringLiteral("toolbar-%1.png").arg(name)));
                 window.m_exportButton->showMenu();
                 QVERIFY(QTest::qWaitForWindowExposed(window.m_exportButton->menu()));
@@ -406,7 +401,6 @@ private slots:
                 toolbar->grab().save(QDir(folder).filePath(QStringLiteral("toolbar-custom-%1.png").arg(name)));
                 window.syncCanvasPreset(QSize(1920, 1080));
             }
-            setEditorColorScheme(ColorScheme::Dark);
         }
     }
 };

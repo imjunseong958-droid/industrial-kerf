@@ -280,15 +280,13 @@ private slots:
     // its own colour only. A changed value's knob edge stands out against
     // the groove and panel; at the default it is quieter.
     void inspectorSliderDefaultShowsAroundTheKnob() {
-        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); applyEditorAppearance(); });
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             applyEditorAppearance();
             const EditorTheme &theme = editorTheme();
             // The knob's edge is read against what lies round it: a changed
             // knob's is the more visible one against both the groove and
             // the panel, at least 3:1 on the groove, in both appearances.
-            const QString look = theme.dark ? QStringLiteral("dark") : QStringLiteral("light");
+            const QString look = QStringLiteral("dark");
             QVERIFY(theme.sliderHandleChanged != theme.sliderHandleAtDefault);
             for (const QColor &around : {theme.sliderGroove, theme.panel})
                 QVERIFY2(contrastRatio(theme.sliderHandleChanged, around) > contrastRatio(theme.sliderHandleAtDefault, around),
@@ -302,7 +300,7 @@ private slots:
             slider.setDetent(0.0);
             for (const double value : {0.0, 0.1}) {
                 slider.setValue(value);
-                const QString what = QStringLiteral("%1 %2").arg(theme.dark ? "dark" : "light").arg(value);
+                const QString what = QStringLiteral("%1 %2").arg("dark").arg(value);
                 QCOMPARE(slider.knobEdge(), value == 0.0 ? theme.sliderHandleAtDefault : theme.sliderHandleChanged);
                 const QRect tick = slider.detentTick();
                 const QPointF knob = slider.knobCenter();
@@ -1579,10 +1577,10 @@ private slots:
         inspector->section(QStringLiteral("crop"))->setOpen(true);
         QCoreApplication::processEvents();
         QScrollBar *scroll = inspector->scrollArea()->verticalScrollBar();
-        // An overlay-style scroller: 6 points, no groove, its handle shown
-        // only while the pointer is over the Inspector (or it is wheeled).
+        // The body scrolls with its scroll bar hidden (mockup-spec 5): it
+        // takes no width; the Inspector still marks when the pointer is over it.
         {
-            QCOMPARE(scroll->sizeHint().width(), 6);
+            QCOMPARE(scroll->sizeHint().width(), 0);
             QVERIFY(!inspector->scrollArea()->property("active").toBool());
             QEnterEvent enter(QPointF(10, 10), QPointF(10, 10), QPointF(10, 10));
             QCoreApplication::sendEvent(inspector, &enter);
@@ -1671,10 +1669,9 @@ private slots:
             QCOMPARE(visibleRows(), videoRows);
             QCOMPARE(inspector->findChildren<QWidget *>(QStringLiteral("inspectorBody")).size(), 1);
         }
-        // A new appearance builds every body again.
-        const ColorScheme was = editorColorScheme();
-        const auto back = qScopeGuard([was] { setEditorColorScheme(was); });
-        setEditorColorScheme(was == ColorScheme::Dark ? ColorScheme::Light : ColorScheme::Dark);
+        // A font or screen density change (EditorAppearance::changed)
+        // builds every body again.
+        emit EditorAppearance::instance()->changed();
         window.clickSelectClip(QStringLiteral("t"));
         QCoreApplication::processEvents();
         QCOMPARE(visibleRows(), titleRows);
@@ -1691,7 +1688,6 @@ private slots:
             if (!shots.isEmpty()) QVERIFY(image.save(QDir(shots).filePath(name + QStringLiteral(".png"))));
         };
         const auto restore = qScopeGuard([] {
-            setEditorColorScheme(ColorScheme::Dark);
             QSettings().remove(QStringLiteral("workspace"));
             QSettings().remove(QStringLiteral("editor/inspector"));
         });
@@ -1755,10 +1751,9 @@ private slots:
             snapshot.insert(QStringLiteral("timeline"), timeline);
             return snapshot;
         };
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             const EditorTheme &theme = editorTheme();
-            const QString name = theme.dark ? QStringLiteral("dark") : QStringLiteral("light");
+            const QString name = QStringLiteral("dark");
             for (const QSize canvas : {QSize(1080, 1920), QSize(1920, 1080)}) {
                 const bool tall = canvas.height() > canvas.width();
                 QSettings().remove(QStringLiteral("workspace"));
@@ -2229,11 +2224,9 @@ private slots:
     // The parts are painted from the hardware tokens in both appearances,
     // and their text reads at 4.5:1 on what it is printed on.
     void inspectorHardwareColours() {
-        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             const EditorTheme &theme = editorTheme();
-            const QString name = theme.dark ? QStringLiteral("dark") : QStringLiteral("light");
+            const QString name = QStringLiteral("dark");
             // Labels on the plate, values in the well, legends on the keys.
             for (const QColor &surface : {theme.modulePlate, theme.wellFill})
                 QVERIFY2(contrastRatio(theme.textSecondary, surface) >= 4.5, qPrintable(name));
@@ -2277,7 +2270,6 @@ private slots:
     // and a lamp's glow included, in both appearances and at 1x, 1.25x and
     // 2x; and its straight edges land on whole device pixels.
     void hardwarePartsStayInTheirBounds() {
-        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
         const QRectF rect(10, 10, 100, 30);
         const QRectF knobBox(10, 10, 32, 32);
         const QList<std::pair<const char *, std::function<void(QPainter &)>>> parts = {
@@ -2292,10 +2284,9 @@ private slots:
             {"engraved hangul", [&](QPainter &p) { drawEngraved(p, rect, Qt::AlignCenter, QStringLiteral("속도")); }},
             {"vu", [&](QPainter &p) { paintVuMeter(p, rect, 0.9); }},
         };
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             for (const qreal ratio : {1.0, 1.25, 2.0}) {
-                const QByteArray where = QByteArray::number(ratio) + (scheme == ColorScheme::Dark ? " dark" : " light");
+                const QByteArray where = QByteArray::number(ratio) + (" dark");
                 for (const auto &[name, paint] : parts) {
                     const QImage image = paintedAt(ratio, QSize(120, 50), paint);
                     QVERIFY2(!paintsOutside(image, rect), QByteArray(name) + " at " + where);
@@ -2323,25 +2314,23 @@ private slots:
                 QCOMPARE(QColor::fromRgba(plate.pixel(middle, edge)), edgeColor);
                 QCOMPARE(qAlpha(plate.pixel(edge - 1, int(25 * ratio))), 0);
                 QCOMPARE(QColor::fromRgba(plate.pixel(edge, int(25 * ratio))), edgeColor);
-                // Its 1px lines are one device pixel at 1.25x, not a blur
-                // across two: under the edge, its line of light, then the
-                // plate itself.
+                // Its 1px edge is one device pixel at 1.25x, not a blur
+                // across two; under it, flat, the plate itself (no line of
+                // light any more).
                 const int line = int(std::round(ratio));
                 QCOMPARE(QColor::fromRgba(plate.pixel(middle, edge + line - 1)), edgeColor);
-                QVERIFY(plate.pixel(middle, edge + line) != plate.pixel(middle, edge + 2 * line));
+                QCOMPARE(QColor::fromRgba(plate.pixel(middle, edge + line)), editorTheme().modulePlate);
                 QCOMPARE(QColor::fromRgba(plate.pixel(middle, edge + 2 * line)), editorTheme().modulePlate);
             }
         }
     }
 
-    // A latched key is pressed in: darker than a raised one, with no drop
-    // below it; under the pointer a key brightens; lit, its amber bar shows
-    // at its top.
+    // Flat keys: a latched key is the on fill, lighter than a raised one's
+    // `raised`, and flat across its face; under the pointer a key brightens;
+    // lit, its accent bar shows at its top.
     void hardwareKeyStates() {
-        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
         const QRectF key(10, 10, 40, 24);
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             const EditorTheme &t = editorTheme();
             const auto keyImage = [&](bool latched, bool hovered, bool lit) {
                 return paintedAt(2, QSize(60, 44), [&](QPainter &p) { paintRaisedKey(p, key, latched, hovered, lit); });
@@ -2349,9 +2338,10 @@ private slots:
             const QImage raised = keyImage(false, false, false);
             const QImage latched = keyImage(true, false, false);
             QVERIFY(raised != latched);
-            QVERIFY(lightnessAt(latched, {30, 24}) < lightnessAt(raised, {30, 24}));
-            // Held in, its rim's shadow falls across the top of its face.
-            QVERIFY(lightnessAt(latched, {30, 12}) < lightnessAt(latched, {30, 30}));
+            QVERIFY(lightnessAt(latched, {30, 24}) > lightnessAt(raised, {30, 24}));
+            // No shadow or bevel: the face is one fill, top to foot.
+            QCOMPARE(lightnessAt(latched, {30, 14}), lightnessAt(latched, {30, 30}));
+            QCOMPARE(lightnessAt(raised, {30, 14}), lightnessAt(raised, {30, 30}));
             QVERIFY(keyImage(false, true, false) != raised);
             const QImage lit = keyImage(false, false, true);
             const QColor led = QColor::fromRgba(lit.pixel(30 * 2, 13 * 2 + 1));
@@ -2404,9 +2394,7 @@ private slots:
             QCOMPARE(cjk.letterSpacing(), 0.0);
             QCOMPARE(cjk.capitalization(), QFont::MixedCase);
         }
-        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             TextRecorder recorder;
             QPainter painter(&recorder);
             drawEngraved(painter, QRectF(0, 0, 200, 20), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("Speed"));
@@ -2424,9 +2412,7 @@ private slots:
         const QString folder = qEnvironmentVariable("KERF_HARDWARE_GALLERY");
         if (folder.isEmpty()) QSKIP("Set KERF_HARDWARE_GALLERY to draw the hardware parts.");
         QDir().mkpath(folder);
-        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             const EditorTheme &t = editorTheme();
             for (const qreal ratio : {1.0, 1.25, 2.0}) {
                 const QImage image = paintedAt(ratio, QSize(560, 200), [&](QPainter &p) {
@@ -2466,7 +2452,7 @@ private slots:
                     paintVuMeter(p, QRectF(290, 56, 150, 90), 0.62);
                     paintVuMeter(p, QRectF(456, 56, 90, 54), 0.9);
                 });
-                const QString look = scheme == ColorScheme::Dark ? QStringLiteral("dark") : QStringLiteral("light");
+                const QString look = QStringLiteral("dark");
                 QVERIFY(image.save(QDir(folder).filePath(QStringLiteral("%1-%2x.png").arg(look).arg(ratio))));
             }
         }

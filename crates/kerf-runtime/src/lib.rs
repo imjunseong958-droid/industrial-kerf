@@ -28,7 +28,7 @@ pub use ipc::{
     RuntimeLease, MAX_REQUEST_BYTES, UNIX_SOCKET_PATH_LIMIT,
 };
 pub use kernel::{resolve_media_paths, use_proxies, CachedFacts, EditOp, MaskOutline, TrimSide};
-pub use render::{render_cancel_path, run_render_job};
+pub use render::{render_cancel_path, run_render_job, RENDER_CODECS, RENDER_QUALITIES};
 pub use review::{Author, Comment, CommentPatch, NewComment, ReviewLog, Stroke};
 pub use timeline::{fx_catalog_all_json, fx_catalog_json};
 
@@ -253,6 +253,67 @@ pub struct RenderJob {
     pub sequence: Option<String>,
     #[serde(default = "default_render_progress")]
     pub progress: f64,
+    /// What the render was called when it was started, for a queue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// `preview`, `full`, `review` or `master`; absent on jobs recorded
+    /// before renders kept it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<String>,
+    /// `h264`, `hevc` or `prores_hq`; absent on jobs recorded before renders
+    /// kept it, which were H.264.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec: Option<String>,
+}
+
+/// What [`RuntimeClient::start_render_with`] renders, how, and where.
+///
+/// - `quality`: `preview` (a draft from proxies), `full`, `review` (a
+///   full-size H.264 review copy at 12 Mb/s), or `master` (ProRes 422 HQ
+///   unless `codec` says otherwise).
+/// - `codec`: `h264`, `hevc` or `prores_hq` (QuickTime with 24-bit PCM). A
+///   preview is H.264 or HEVC, and a review copy is H.264.
+/// - `output`: a folder (ending in `/`, or one that exists) or a file whose
+///   extension the codec's container takes (`.mp4`, or `.mov` for ProRes).
+///   A relative one is read against the project folder and must stay inside
+///   it, out of hidden folders; missing folders inside it are made. An
+///   absolute one is a folder the user chose: it must exist. Absent, the
+///   file goes in the project folder. A render never writes over a file
+///   on disk or one a kept job made or is making: into a folder it takes
+///   the next free name (`Master 2.mov`); a file named outright is
+///   refused with `RENDER_OUTPUT_EXISTS`, and one an unfinished job is
+///   writing with `RENDER_OUTPUT_BUSY`. Nothing is made on disk for a
+///   refused render.
+/// - `name`: the job's name in a queue, and the file's name in a folder;
+///   the job id names the file when absent.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartRenderOptions {
+    pub quality: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<RenderRange>,
+    /// Render what this pending proposal would make of the project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal: Option<String>,
+    /// The sequence to render; the first when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl StartRenderOptions {
+    /// A render of the whole first sequence at `quality`.
+    pub fn new(quality: impl Into<String>) -> Self {
+        Self {
+            quality: quality.into(),
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -421,7 +482,19 @@ pub enum RuntimeRequest {
         /// The sequence to render; the first when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sequence: Option<String>,
+        /// `h264`, `hevc` or `prores_hq` (see [`StartRenderOptions`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        codec: Option<String>,
+        /// The folder or file to render to (see [`StartRenderOptions`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+        /// The job's name, and the file's in a folder.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
     },
+    /// Every render job kept: queued, running, and the newest finished,
+    /// oldest first.
+    ListRenders,
     GetRender {
         #[serde(rename = "jobId")]
         job_id: String,
@@ -609,6 +682,8 @@ pub enum RuntimeResponse {
         output: PathBuf,
     },
     RenderJob(RenderJob),
+    /// The render jobs kept, oldest first.
+    RenderJobs(Vec<RenderJob>),
     /// The review log after a comment request, with the comment it added
     /// or changed (none once deleted, or for a listing).
     Comments {

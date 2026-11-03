@@ -1,4 +1,5 @@
 #include "editor_common.h"
+#include "design_tokens.h"
 #include "editor_theme.h"
 
 #include <QAbstractItemView>
@@ -21,6 +22,7 @@
 #include <QProxyStyle>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QStyleOptionMenuItem>
 #include <QTemporaryDir>
 #include <QTextEdit>
 #include <QtMath>
@@ -37,6 +39,8 @@ namespace {
 
 // Where a pop-up row's text starts, past the current choice's check.
 constexpr int kPopupTextLeft = 22;
+// A pop-up row is a menu item: 28pt (mockup-spec 0.5).
+constexpr int kPopupRowHeight = 28;
 
 } // namespace
 
@@ -219,7 +223,9 @@ QHash<QString, QString> sourceNames(const QJsonArray &sources) {
 }
 
 QFont monoFont(int pixelSize, QFont::Weight weight) {
-    QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    // The tokens' mono face (JetBrains Mono when bundled, else Menlo, else
+    // the system's fixed font), tabular, at the size asked for.
+    QFont font = tokens::font(tokens::TypeStyle{pixelSize, pixelSize, int(weight), true});
     font.setPixelSize(pixelSize);
     font.setWeight(weight);
     return font;
@@ -409,7 +415,7 @@ QColor StepperSpinBox::stepperColor() const {
 PopupItemDelegate::PopupItemDelegate(QComboBox *combo) : QStyledItemDelegate(combo), m_combo(combo) {}
 
 QSize PopupItemDelegate::sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const {
-    return {kPopupTextLeft + option.fontMetrics.horizontalAdvance(index.data(Qt::DisplayRole).toString()) + 16, 22};
+    return {kPopupTextLeft + option.fontMetrics.horizontalAdvance(index.data(Qt::DisplayRole).toString()) + 16, kPopupRowHeight};
 }
 
 void PopupItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const {
@@ -421,7 +427,7 @@ void PopupItemDelegate::paint(QPainter *painter, const QStyleOptionViewItem &opt
     if (selected) {
         painter->setPen(Qt::NoPen);
         painter->setBrush(c.selection);
-        painter->drawRoundedRect(row, 4, 4);
+        painter->drawRoundedRect(row, 6, 6);
     }
     const QColor color = selected ? c.selectionText : c.text;
     if (index.row() == m_combo->currentIndex()) drawMenuCheck(*painter, QPointF(row.left() + 7, row.center().y()), color);
@@ -438,15 +444,67 @@ PopupItemDelegate::Colors PopupItemDelegate::colors() const {
 
 namespace {
 
-// Fusion, whose push buttons (and check boxes) take focus from Tab alone,
-// and whose pop-up buttons' menu windows paint no panel of their own.
+// Fusion with the design's flat metrics (mockup-spec 0.4, 0.5): controls
+// 24pt tall (the style sheet makes toolbar ones 28), 6pt radii, 14pt check
+// boxes, 16pt icons, a 16pt slider with a 10pt knob, no scroll bar width (the
+// design hides them), and tooltips that wake after 400ms and come back at
+// once within 300ms. Its push buttons (and check boxes) take focus from Tab
+// alone, and its pop-up buttons' menu windows paint no panel of their own.
 class EditorStyle final : public QProxyStyle {
 public:
     EditorStyle() : QProxyStyle(QStringLiteral("Fusion")) {}
 
     int styleHint(StyleHint hint, const QStyleOption *option, const QWidget *widget, QStyleHintReturn *data) const override {
-        if (hint == SH_Button_FocusPolicy) return Qt::TabFocus;
-        return QProxyStyle::styleHint(hint, option, widget, data);
+        switch (hint) {
+        case SH_Button_FocusPolicy: return Qt::TabFocus;
+        case SH_ToolTip_WakeUpDelay: return 400;
+        case SH_ToolTip_FallAsleepDelay: return 300;
+        case SH_ScrollBar_Transient: return 1;
+        case SH_DialogButtonBox_ButtonsHaveIcons: return 0;
+        case SH_Menu_FadeOutOnHide: return 0;
+        default: return QProxyStyle::styleHint(hint, option, widget, data);
+        }
+    }
+
+    int pixelMetric(PixelMetric metric, const QStyleOption *option, const QWidget *widget) const override {
+        switch (metric) {
+        case PM_IndicatorWidth:
+        case PM_IndicatorHeight:
+        case PM_ExclusiveIndicatorWidth:
+        case PM_ExclusiveIndicatorHeight: return kCheckSize;
+        case PM_SmallIconSize:
+        case PM_ToolBarIconSize:
+        case PM_ButtonIconSize:
+        case PM_TabBarIconSize: return kIconSize;
+        case PM_ScrollBarExtent: return 0;
+        case PM_SliderThickness: return kSliderThickness;
+        case PM_SliderLength:
+        case PM_SliderControlThickness: return kSliderKnob;
+        case PM_DefaultFrameWidth: return 1;
+        case PM_MenuPanelWidth: return 1;
+        case PM_MenuHMargin:
+        case PM_MenuVMargin: return 4;
+        case PM_ToolTipLabelFrameWidth: return 1;
+        default: return QProxyStyle::pixelMetric(metric, option, widget);
+        }
+    }
+
+    QSize sizeFromContents(ContentsType type, const QStyleOption *option, const QSize &contents, const QWidget *widget) const override {
+        QSize size = QProxyStyle::sizeFromContents(type, option, contents, widget);
+        switch (type) {
+        case CT_PushButton:
+        case CT_ComboBox:
+        case CT_LineEdit:
+        case CT_SpinBox: size.setHeight(std::max(size.height(), kControlHeight)); break;
+        case CT_ToolButton: size = size.expandedTo(QSize(kControlHeight, kControlHeight)); break;
+        case CT_MenuItem:
+            if (const auto *item = qstyleoption_cast<const QStyleOptionMenuItem *>(option);
+                item && item->menuItemType != QStyleOptionMenuItem::Separator)
+                size.setHeight(std::max(size.height(), kMenuItemHeight));
+            break;
+        default: break;
+        }
+        return size;
     }
 
     void drawPrimitive(PrimitiveElement element, const QStyleOption *option, QPainter *painter, const QWidget *widget) const override {
@@ -457,12 +515,20 @@ public:
             return;
         QProxyStyle::drawPrimitive(element, option, painter, widget);
     }
+
+private:
+    static constexpr int kControlHeight = 24;
+    static constexpr int kMenuItemHeight = 28;
+    static constexpr int kCheckSize = 14;
+    static constexpr int kIconSize = 16;
+    static constexpr int kSliderThickness = 16;
+    static constexpr int kSliderKnob = 10;
 };
 
 // The ring around a focused field, or a button or pop-up focused from the
-// keyboard: 3 points of the accent at 35% outside its bezel, as the
-// launcher rings its fields. It sits in the control's parent, under the
-// control, and follows it.
+// keyboard: the design's focus outline, 2pt of the accent 1pt outside the
+// control's bezel (mockup-spec 0.2). It sits in the control's parent, under
+// the control, and follows it.
 class FocusHalo final : public QWidget {
 public:
     explicit FocusHalo(QWidget *control) : QWidget(control->parentWidget()), m_control(control) {
@@ -497,16 +563,19 @@ protected:
         const qreal radius = m_control->property("bezelRadius").toReal(&set);
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(QPen(editorTheme().focusHalo, kWidth));
+        painter.setPen(QPen(editorTheme().focusHalo, kRing));
         painter.setBrush(Qt::NoBrush);
-        // The pen's middle runs half its width outside the bezel.
-        const qreal middle = kWidth / 2.0;
-        const qreal round = (set ? radius : 5.0) + middle;
+        // The pen's middle runs half its width inside the halo's edge, so
+        // the ring ends kOffset outside the bezel.
+        const qreal middle = kRing / 2.0;
+        const qreal round = (set ? radius : 6.0) + kOffset + middle;
         painter.drawRoundedRect(QRectF(rect()).adjusted(middle, middle, -middle, -middle), round, round);
     }
 
 private:
-    static constexpr int kWidth = 3;
+    static constexpr int kRing = 2;
+    static constexpr int kOffset = 1;
+    static constexpr int kWidth = kRing + kOffset;
 
     void place() {
         if (!m_control) return;
@@ -518,8 +587,8 @@ private:
     QPointer<QWidget> m_control;
 };
 
-// Gives pop-up buttons their rows, pop-up windows their round corners, and
-// focused controls their ring, for the whole application.
+// Gives pop-up buttons their rows, pop-up windows and tooltips their round
+// corners, and focused controls their ring, for the whole application.
 class EditorControls final : public QObject {
 public:
     using QObject::QObject;
@@ -544,6 +613,9 @@ protected:
             } else if (auto *menu = qobject_cast<QMenu *>(watched)) {
                 roundCorners(menu);
                 markColumns(menu);
+            } else if (watched->inherits("QTipLabel")) {
+                // The style sheet rounds a tooltip's card by 6pt.
+                roundCorners(static_cast<QWidget *>(watched));
             }
             break;
         case QEvent::ActionAdded:

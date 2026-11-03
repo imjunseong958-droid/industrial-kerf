@@ -333,8 +333,6 @@ private slots:
     // its cached lanes when the appearance changes under it.
     void timelineFollowsTheAppearance() {
         const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
-        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
-        setEditorColorScheme(ColorScheme::Light);
         MediaArtwork artwork;
         fakeArtwork(&artwork);
         const QJsonObject snapshot = showcaseSnapshot(1, QStringLiteral("clean"));
@@ -356,13 +354,12 @@ private slots:
         // Dragging v1b by this much lands its end near the caption's end at 13 s.
         const QPoint grip = selected.center();
         const QPoint drop = grip + QPoint(x(13.0) - x(11.0) - 5, 0);
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
+        {
             // Switched under the open timeline, with nothing else to invalidate its lanes.
-            setEditorColorScheme(scheme);
             const EditorTheme &theme = editorTheme();
             const QImage image = timeline.grab().toImage();
             if (!shots.isEmpty())
-                QVERIFY(image.save(QDir(shots).filePath(QStringLiteral("timeline-%1.png").arg(theme.dark ? "dark" : "light"))));
+                QVERIFY(image.save(QDir(shots).filePath(QStringLiteral("timeline-%1.png").arg("dark"))));
             QCOMPARE(image.pixelColor(4, 4), theme.rulerCorner);
             // (Clear of the grid line at 9 s.)
             QCOMPARE(image.pixelColor(x(9.0) + 4, titles), theme.trackLane);
@@ -398,7 +395,7 @@ private slots:
             QTest::mouseMove(&timeline, drop);
             const QImage dragging = timeline.grab().toImage();
             if (!shots.isEmpty())
-                QVERIFY(dragging.save(QDir(shots).filePath(QStringLiteral("timeline-drag-%1.png").arg(theme.dark ? "dark" : "light"))));
+                QVERIFY(dragging.save(QDir(shots).filePath(QStringLiteral("timeline-drag-%1.png").arg("dark"))));
             QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, drop);
             QVERIFY(std::abs(qGray(dragging.pixel(x(13.0), captions)) - qGray(theme.trackLane.rgb())) > 100);
             QCOMPARE(amberPixels(dragging), 0);
@@ -584,7 +581,6 @@ private slots:
     // The skimmed playhead keeps the playhead's halo, so its line reads at
     // 3:1 where it crosses clips and pictures, not only on bare lanes.
     void skimmedPlayheadKeepsItsHaloOverClips() {
-        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
         TimelineWidget timeline;
         timeline.resize(800, 200);
         timeline.setProject(QJsonObject{{"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
@@ -596,10 +592,9 @@ private slots:
         QVERIFY(clip.left() < playX - 1 && clip.right() > playX + 1);
         // In the clip's body, under its name bar.
         const int y = clip.bottom() - 4;
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             const EditorTheme &theme = editorTheme();
-            QTest::mouseMove(&timeline, QPoint(kTimelineOrigin + (scheme == ColorScheme::Dark ? 420 : 400), clip.center().y()));
+            QTest::mouseMove(&timeline, QPoint(kTimelineOrigin + (420), clip.center().y()));
             QVERIFY(!timeline.skimLabel().isEmpty());
             const QImage skimmed = timeline.grab().toImage();
             QCOMPARE(skimmed.pixel(playX, y), theme.playheadIdle.rgb());
@@ -702,7 +697,6 @@ private slots:
     // a button for each action, which the timeline paints as one bank of
     // latching keys (S, M, L, Fit) in its well, in either appearance.
     void timelineTrackHeightsAreABankOfKeys() {
-        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
         TimelineWidget timeline;
         timeline.setProject(trackList({"video", "audio"}), 8, 24);
         QWidget strip;
@@ -728,8 +722,7 @@ private slots:
         // 2px inside the well above its 1px lip, and the face's corners round
         // its last rows.
         const int faceRow = buttons.at(0)->height() - 9;
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             const EditorTheme &theme = editorTheme();
             const QImage image = strip.grab().toImage();
             const qreal ratio = image.devicePixelRatio();
@@ -1165,7 +1158,6 @@ private slots:
     // when on, brighter under the pointer, their symbols engraved; and the
     // track numbers' inks read in their plates, in either appearance.
     void timelineHeaderTogglesAreLatchingKeys() {
-        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
         TimelineWidget timeline;
         timeline.resize(800, 300);
         timeline.setProject(QJsonObject{{"fps", 24}, {"tracks", QJsonArray{
@@ -1181,8 +1173,7 @@ private slots:
             const QRect key = timeline.headerToggleRect(row, index);
             return image.pixelColor(key.center().x(), key.bottom() - 2);
         };
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             const EditorTheme &theme = editorTheme();
             const QImage image = timeline.grab().toImage();
             QCOMPARE(face(image, 0, 0) == theme.keyLatched, false); // Hidden: its output key is out.
@@ -1221,7 +1212,6 @@ private slots:
     // The corner time sits on a display glass sized to its figures, cream
     // for the playhead and the glass's dimmer label ink while skimming.
     void timelineCornerTimeSitsOnDisplayGlass() {
-        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
         TimelineWidget timeline;
         timeline.resize(800, 200);
         timeline.setProject(trackList({"video", "audio"}), 8, 24);
@@ -1238,8 +1228,7 @@ private slots:
         // Figures of one width: the glass keeps its size as the time runs.
         QCOMPARE(timeline.cornerGlassRect(QPoint(), timelineTimecode(3599.0, 24)).size(), glass.size());
         QCOMPARE(TimelineWidget::cornerFont().family(), monoFont(12).family());
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             const EditorTheme &theme = editorTheme();
             const QImage image = timeline.grab().toImage();
             QCOMPARE(image.pixelColor(4, 4), theme.rulerCorner);
@@ -1272,7 +1261,6 @@ private slots:
     // side of a short fader whose bakelite cap stands where the slider's
     // handle is, so a press on the cap drags it; tips and names as before.
     void timelineZoomIsAFaderBetweenKeys() {
-        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
         TimelineWidget timeline;
         timeline.setProject(trackList({"video"}), 60, 24);
         TimelineZoomControl zoom(&timeline);
@@ -1309,8 +1297,7 @@ private slots:
         // Painted from the theme in either appearance: a cream index line
         // down the dark cap, the groove's well beside it, the keys raised.
         fader->setValue(50);
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             const EditorTheme &theme = editorTheme();
             const QImage image = zoom.grab().toImage();
             const qreal ratio = image.devicePixelRatio();
@@ -1333,7 +1320,6 @@ private slots:
         const QString folder = qEnvironmentVariable("KERF_TIMELINE_HEADER_GALLERY");
         if (folder.isEmpty()) QSKIP("Set KERF_TIMELINE_HEADER_GALLERY to draw the track headers and header bar.");
         QDir().mkpath(folder);
-        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
         const QJsonObject clip{{"id", "c"}, {"timelineStart", 0.0}, {"duration", 4.0}};
         TimelineWidget timeline;
         timeline.setProject(QJsonObject{{"fps", 24}, {"tracks", QJsonArray{
@@ -1367,10 +1353,9 @@ private slots:
         strip.show();
         QVERIFY(QTest::qWaitForWindowExposed(&strip));
         timeline.updateHeightActions();
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             QCoreApplication::processEvents();
-            const QString look = scheme == ColorScheme::Dark ? QStringLiteral("dark") : QStringLiteral("light");
+            const QString look = QStringLiteral("dark");
             for (const int height : {0, kMinTrackHeight, 60}) {
                 if (height > 0) timeline.setAllTrackHeights(height);
                 else timeline.resetTrackHeights();
@@ -1389,10 +1374,9 @@ private slots:
         window.resize(1440, 900);
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             QCoreApplication::processEvents();
-            const QString look = scheme == ColorScheme::Dark ? QStringLiteral("dark") : QStringLiteral("light");
+            const QString look = QStringLiteral("dark");
             QWidget *bar = window.m_workspace->panel(QStringLiteral("timeline"))->dockAreaWidget()->titleBar();
             QVERIFY(bar->grab().save(QDir(folder).filePath(QStringLiteral("%1-timeline-title.png").arg(look))));
         }
@@ -1499,17 +1483,21 @@ private slots:
             const bool settled = scrolled == onScreen();
             scroll.viewport()->repaint();
             const QImage repainted = onScreen();
-            // Where they differ, to tell a stale strip from a stray pixel.
+            // Where they differ, to tell a stale strip from a stray pixel. An
+            // antialiased edge laid over a moved strip may round one step
+            // apart from the same edge painted whole (a filmstrip under the
+            // flat theme's translucent name bar shows it), so a pixel counts
+            // only when a channel is more than one step off.
             QRect differ;
             int count = 0;
             if (scrolled.size() == repainted.size())
                 for (int y = 0; y < scrolled.height(); ++y)
                     for (int x = 0; x < scrolled.width(); ++x)
-                        if (scrolled.pixel(x, y) != repainted.pixel(x, y)) {
+                        if (!nearColor(scrolled.pixel(x, y), repainted.pixel(x, y), 1)) {
                             differ |= QRect(x, y, 1, 1);
                             ++count;
                         }
-            QVERIFY2(scrolled == repainted,
+            QVERIFY2(scrolled.size() == repainted.size() && count == 0,
                      qPrintable(QStringLiteral("after %1, %2: %3 px differ in %4,%5 %6x%7 (%8 px painted; viewport at %9,%10 %11x%12; %13)")
                                     .arg(step.dx)
                                     .arg(step.dy)
@@ -1563,7 +1551,6 @@ private slots:
     // A dense edit: 48 tracks at Mini, one line each, in both appearances.
     void denseTimelineFollowsTheAppearance() {
         const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
-        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
         MediaArtwork artwork;
         fakeArtwork(&artwork);
         TimelineWidget timeline;
@@ -1576,12 +1563,11 @@ private slots:
         timeline.show();
         QCOMPARE(trackHeights(timeline), QList<int>(48, kMinTrackHeight));
         const int playX = kTimelineOrigin + int(std::floor(7.5 * 72.0));
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             const EditorTheme &theme = editorTheme();
             const QImage image = timeline.grab().toImage();
             if (!shots.isEmpty())
-                QVERIFY(image.save(QDir(shots).filePath(QStringLiteral("timeline-dense-%1.png").arg(theme.dark ? "dark" : "light"))));
+                QVERIFY(image.save(QDir(shots).filePath(QStringLiteral("timeline-dense-%1.png").arg("dark"))));
             for (int row = 0; row < 48; ++row) {
                 const QRect header = timeline.trackHeaderRect(row);
                 QVERIFY(header.bottom() < image.height());
@@ -1723,9 +1709,8 @@ private slots:
         timeline.show();
         QVERIFY(QTest::qWaitForWindowExposed(&timeline));
         QDir().mkpath(folder);
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
-            const QString look = scheme == ColorScheme::Dark ? QStringLiteral("dark") : QStringLiteral("light");
+        {
+            const QString look = QStringLiteral("dark");
             timeline.resetTrackHeights();
             QCoreApplication::processEvents();
             QVERIFY(timeline.grab().save(QDir(folder).filePath(QStringLiteral("%1-default.png").arg(look))));
@@ -1735,29 +1720,25 @@ private slots:
                 QVERIFY(timeline.grab().save(QDir(folder).filePath(QStringLiteral("%1-tracks-%2.png").arg(look).arg(height))));
             }
         }
-        // The suite runs in the dark appearance (initTestCase).
-        setEditorColorScheme(ColorScheme::Dark);
     }
 
-    // Picture, sound and music clips are one colour in either appearance,
-    // their waveforms white on it; and a picture clip with sound shows it in
-    // a band under its frames from the Large preset up, as a Final Cut clip
-    // does, never at the default height.
+    // Picture, sound and music clips are the design's card (7.4), their
+    // waveforms the literal greys on it; and a picture clip with sound shows
+    // it in a band under its frames from the Large preset up, as a Final Cut
+    // clip does, never at the default height.
     void timelineClipsKeepTheirColoursAndShowSoundUnderPicture() {
-        const EditorTheme light = makeEditorTheme(false);
-        const EditorTheme dark = makeEditorTheme(true);
-        for (const auto &[a, b] : {std::pair{&light.clipVideo, &dark.clipVideo}, std::pair{&light.clipAudio, &dark.clipAudio},
-                                   std::pair{&light.clipMusic, &dark.clipMusic}}) {
-            QCOMPARE(a->fill.rgba(), b->fill.rgba());
-            QCOMPARE(a->header.rgba(), b->header.rgba());
-            QCOMPARE(a->border.rgba(), b->border.rgba());
+        const EditorTheme t = makeEditorTheme();
+        for (const ClipStyle *style : {&t.clipVideo, &t.clipAudio, &t.clipMusic}) {
+            QCOMPARE(style->fill.rgb(), QColor("#1c1c1c").rgb());
+            QCOMPARE(style->label.rgb(), QColor("#ededed").rgb());
         }
-        QCOMPARE(light.waveformBody.rgba(), dark.waveformBody.rgba());
-        QCOMPARE(light.waveformPeak.rgba(), dark.waveformPeak.rgba());
-        QCOMPARE(light.waveformBody.rgb(), QColor(Qt::white).rgb());
-        // White reads on every sound colour.
-        for (const ClipStyle *style : {&light.clipAudio, &light.clipMusic})
-            QVERIFY2(contrastRatio(Qt::white, style->fill) >= 4.5, qPrintable(style->fill.name()));
+        QCOMPARE(t.clipGenerator.fill.rgb(), QColor("#262626").rgb());
+        QCOMPARE(t.clipCaption.fill.rgb(), QColor("#262626").rgb());
+        QCOMPARE(t.waveformBody.rgba(), qRgba(144, 144, 144, 191));
+        QCOMPARE(t.waveformPeak.rgba(), qRgba(144, 144, 144, 105));
+        // The waveform's body reads on every sound clip's card.
+        for (const ClipStyle *style : {&t.clipAudio, &t.clipMusic})
+            QVERIFY2(contrastRatio(laidOn(style->fill, t.waveformBody), style->fill) >= 3.0, qPrintable(style->fill.name()));
 
         MediaArtwork artwork;
         Filmstrip strip;
@@ -1796,21 +1777,19 @@ private slots:
         // Its frames still fill the top of the clip.
         const QRect clip = timeline.clipBounds(QStringLiteral("v"));
         QCOMPARE(timeline.grab().toImage().pixelColor(clip.center().x(), clip.top() + 24), QColor("#e87342"));
-        // The sound clip's glass is one colour in either appearance, white
-        // reading on it at 4.5:1, and nothing of the lane shows through.
-        // (Turned down 40 dB, so the glass shows under its waveform.)
+        // The sound clip's body is the card, white reading on it at 4.5:1,
+        // and nothing of the lane shows through. (Turned down 40 dB, so the
+        // body shows under its waveform.)
         timeline.setProject(project(true, -40.0), 6, 24);
         QList<QRgb> glass;
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             const QImage image = timeline.grab().toImage();
             const QRect sound = timeline.clipBounds(QStringLiteral("a"));
             const QColor pane = image.pixelColor(sound.left() + 30, sound.bottom() - 4);
             glass << pane.rgb();
             QVERIFY2(contrastRatio(Qt::white, pane) >= 4.5, qPrintable(pane.name()));
         }
-        setEditorColorScheme(ColorScheme::Dark);
-        QCOMPARE(glass.at(0), glass.at(1));
+        QVERIFY(glass.at(0) != editorTheme().trackLane.rgb());
         // Unlinked, or with its sound clip gone, a picture clip shows no sound.
         timeline.setProject(project(false), 6, 24);
         timeline.setAllTrackHeights(96);
@@ -2092,7 +2071,6 @@ private slots:
     // over a clip already in the track (an overwrite's, a replacement's) as
     // over the bare lane.
     void proposedClipNamesReadOverClipsAlreadyThere() {
-        const auto restore = qScopeGuard([] { setEditorColorScheme(ColorScheme::Dark); });
         const QJsonObject wide{{"id", "a"}, {"kind", "media"}, {"timelineStart", 0.0}, {"duration", 8.0}};
         const QJsonObject inserted{{"id", "n"}, {"kind", "media"}, {"name", "Insert"}, {"timelineStart", 2.0}, {"duration", 4.0}};
         const auto timeline = [](const QJsonArray &clips) {
@@ -2108,8 +2086,7 @@ private slots:
         // Near the added clip's right end (6 s), clear of its name and its dashes,
         // inside its name's band, over the existing clip's name bar.
         const QPoint band(existing.left() + existing.width() * 3 / 4 - 10, existing.top() + 7);
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             const EditorTheme &theme = editorTheme();
             const QImage image = widget.grab().toImage();
             const QColor drawn = image.pixelColor(band * image.devicePixelRatio());
@@ -2133,8 +2110,7 @@ private slots:
         }
         widget.setProject(locked, 10, 24);
         widget.setProposal(lockedProposal);
-        for (const ColorScheme scheme : {ColorScheme::Light, ColorScheme::Dark}) {
-            setEditorColorScheme(scheme);
+        {
             const EditorTheme &theme = editorTheme();
             const QImage image = widget.grab().toImage();
             const auto near = [](const QColor &a, const QColor &b) {

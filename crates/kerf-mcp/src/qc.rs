@@ -263,93 +263,118 @@ impl RowDef {
 
 /// The rows [`check`] reports, in the order the editor lists them. Checks
 /// that need the program rendered or measured (loudness, true peak, gamut,
-/// luma levels, flashing) add their own rows after these.
+/// luma levels, flashing) are in [`crate::FULL_ROWS`], which
+/// [`crate::check_full`] reports.
 pub const ROWS: &[RowDef] = &[
-    RowDef {
-        code: "media",
-        name: "Media online",
-        codes: &["missing_media"],
-        noun: "missing",
-        limit: None,
-    },
-    RowDef {
-        code: "render",
-        name: "Renders",
-        codes: &["unrenderable"],
-        noun: "unrenderable",
-        limit: None,
-    },
-    RowDef {
-        code: "document",
-        name: "Document",
-        codes: &[],
-        noun: "problems",
-        limit: None,
-    },
-    RowDef {
-        code: "picture.black",
-        name: "Black frames",
-        codes: &["picture.black"],
-        noun: "black",
-        limit: None,
-    },
-    RowDef {
-        code: "picture.edges",
-        name: "Frame edges",
-        codes: &["picture.edges"],
-        noun: "uncovered",
-        limit: None,
-    },
-    RowDef {
-        code: "clip.flash",
-        name: "Flash frames",
-        codes: &["clip.flash", "cut.near_scene_cut"],
-        noun: "flash frames",
-        limit: Some("≥ 3 frames"),
-    },
-    RowDef {
-        code: "cut.in_word",
-        name: "Cuts in words",
-        codes: &["cut.in_word"],
-        noun: "in words",
-        limit: None,
-    },
-    RowDef {
-        code: "text.safe_area",
-        name: "Title safe 90%",
-        codes: &["text.safe_area"],
-        noun: "outside",
-        limit: Some("90%"),
-    },
-    RowDef {
-        code: "text.overlap",
-        name: "Caption overlap",
-        codes: &["text.overlap"],
-        noun: "overlapping",
-        limit: None,
-    },
-    RowDef {
-        code: "caption.reading_speed",
-        name: "Caption reading speed",
-        codes: &["caption.reading_speed"],
-        noun: "too fast",
-        limit: Some("≤ 17 cps"),
-    },
-    RowDef {
-        code: "caption.short",
-        name: "Caption duration",
-        codes: &["caption.short"],
-        noun: "too short",
-        limit: Some("≥ 5/6 s"),
-    },
-    RowDef {
-        code: "caption.gap",
-        name: "Caption gaps",
-        codes: &["caption.gap"],
-        noun: "too close",
-        limit: Some("≥ 2 frames or none"),
-    },
+    MEDIA,
+    RENDER,
+    DOCUMENT,
+    BLACK_FRAMES,
+    FRAME_EDGES,
+    FLASH_FRAMES,
+    CUTS_IN_WORDS,
+    TITLE_SAFE,
+    CAPTION_OVERLAP,
+    READING_SPEED_ROW,
+    CAPTION_DURATION,
+    CAPTION_GAPS,
 ];
+
+pub(crate) const MEDIA: RowDef = RowDef {
+    code: "media",
+    name: "Media online",
+    codes: &["missing_media"],
+    noun: "missing",
+    limit: None,
+};
+
+pub(crate) const RENDER: RowDef = RowDef {
+    code: "render",
+    name: "Renders",
+    codes: &["unrenderable"],
+    noun: "unrenderable",
+    limit: None,
+};
+
+pub(crate) const DOCUMENT: RowDef = RowDef {
+    code: "document",
+    name: "Document",
+    codes: &[],
+    noun: "problems",
+    limit: None,
+};
+
+pub(crate) const BLACK_FRAMES: RowDef = RowDef {
+    code: "picture.black",
+    name: "Black frames",
+    codes: &["picture.black"],
+    noun: "black",
+    limit: None,
+};
+
+pub(crate) const FRAME_EDGES: RowDef = RowDef {
+    code: "picture.edges",
+    name: "Frame edges",
+    codes: &["picture.edges"],
+    noun: "uncovered",
+    limit: None,
+};
+
+pub(crate) const FLASH_FRAMES: RowDef = RowDef {
+    code: "clip.flash",
+    name: "Flash frames",
+    codes: &["clip.flash", "cut.near_scene_cut"],
+    noun: "flash frames",
+    limit: Some("≥ 3 frames"),
+};
+
+pub(crate) const CUTS_IN_WORDS: RowDef = RowDef {
+    code: "cut.in_word",
+    name: "Cuts in words",
+    codes: &["cut.in_word"],
+    noun: "in words",
+    limit: None,
+};
+
+pub(crate) const TITLE_SAFE: RowDef = RowDef {
+    code: "text.safe_area",
+    name: "Title safe 90%",
+    codes: &["text.safe_area"],
+    noun: "outside",
+    limit: Some("90%"),
+};
+
+pub(crate) const CAPTION_OVERLAP: RowDef = RowDef {
+    code: "text.overlap",
+    name: "Caption overlap",
+    codes: &["text.overlap"],
+    noun: "overlapping",
+    limit: None,
+};
+
+pub(crate) const READING_SPEED_ROW: RowDef = RowDef {
+    code: "caption.reading_speed",
+    name: "Caption reading speed",
+    codes: &["caption.reading_speed"],
+    noun: "too fast",
+    limit: Some("≤ 17 cps"),
+};
+
+pub(crate) const CAPTION_DURATION: RowDef = RowDef {
+    code: "caption.short",
+    name: "Caption duration",
+    codes: &["caption.short"],
+    noun: "too short",
+    limit: Some("≥ 5/6 s"),
+};
+
+pub(crate) const CAPTION_GAPS: RowDef = RowDef {
+    code: "caption.gap",
+    name: "Caption gaps",
+    codes: &["caption.gap"],
+    noun: "too close",
+    limit: Some("≥ 2 frames or none"),
+};
 
 /// What stands between a project and its render: media that cannot be
 /// read, features the renderer cannot lower, and the model's warnings;

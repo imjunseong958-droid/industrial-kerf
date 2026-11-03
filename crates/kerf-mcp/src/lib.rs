@@ -1,9 +1,10 @@
 //! MCP stdio transport and project-scoped capability router.
 //!
 //! Every mutation goes through kerfd. The MCP process is a stateless adapter
-//! for the kernel harness (`look`, `edit`, `render`; see `harness`): it reads
-//! the current document for each request and stages every edit as a
-//! proposal for the user.
+//! for the kernel harness (`look`, `edit`, `render`, `note`; see `harness`):
+//! it reads the current document for each request, stages every edit as a
+//! proposal for the user, and posts notes to the project's review log. Both
+//! carry the client's name, as `initialize` gave it, as their author.
 
 pub mod docs;
 pub mod harness;
@@ -11,14 +12,16 @@ pub mod inbound;
 mod lint;
 mod presets;
 pub mod qc;
+mod qc_full;
 mod text_lint;
 
 pub use presets::{keep_looks, PRESET_FOLDERS};
 pub use qc::{check, CheckReport, Finding, Rect, Row, RowDef, Severity, Summary};
+pub use qc_full::{check_full, check_full_with, QcLimits, FULL_ROWS};
 pub use text_lint::{CAPTION_GAP_FRAMES, READING_SPEED, SHORT_CAPTION_SIXTHS, TITLE_SAFE};
 
 use kerf_agent::{AgentTool, ToolMap};
-use kerf_runtime::{RuntimeClient, RuntimeError, RuntimeLease};
+use kerf_runtime::{Author, RuntimeClient, RuntimeError, RuntimeLease};
 use kerf_skills::{load_skills_with_bundled, Skill};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -121,6 +124,10 @@ pub struct KerfMcpRouter {
     /// The render jobs `render` started, shared by every copy; see
     /// [`KerfMcpRouter::finish_renders`].
     renders: Arc<Mutex<Vec<RenderWorker>>>,
+    /// Who the proposals and notes made through this router are by,
+    /// shared by every copy: Kerf for the built-in agents, the client an
+    /// [`McpServer`] serves once it has said who it is.
+    author: Arc<Mutex<Author>>,
 }
 
 /// A render job running on a thread of this process.
@@ -160,7 +167,22 @@ impl KerfMcpRouter {
             skills,
             namespace,
             renders: Arc::default(),
+            author: Arc::new(Mutex::new(Author::kerf())),
         })
+    }
+
+    /// Who the proposals and notes made through this router are by.
+    pub fn author(&self) -> Author {
+        self.author
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Make the proposals and notes from now on, through this router and
+    /// every copy of it, by `author`.
+    pub fn set_author(&self, author: Author) {
+        *self.author.lock().unwrap_or_else(PoisonError::into_inner) = author;
     }
 
     /// This router, holding kerfd open for as long as it or a copy of it
@@ -317,6 +339,7 @@ impl KerfMcpRouter {
             "look" => self.look(arguments),
             "edit" => self.edit(arguments),
             "render" => self.render(arguments),
+            "note" => self.note(arguments),
             _ => Err(McpError::new(
                 "UNKNOWN_TOOL",
                 format!("unknown tool: {name}"),
@@ -337,7 +360,10 @@ pub struct McpServer {
 }
 
 impl McpServer {
+    /// Serve `router` to one MCP client. Until the client names itself in
+    /// `initialize`, what it does is by an unnamed MCP client.
     pub fn new(router: KerfMcpRouter) -> Self {
+        router.set_author(client_author(None));
         Self {
             name: "kerf-mcp".into(),
             version: env!("CARGO_PKG_VERSION").into(),
@@ -367,19 +393,27 @@ impl McpServer {
             ));
         };
         match method {
-            "initialize" => Some(json_rpc_result(
-                id,
-                json!({
-                    "protocolVersion": request
-                        .get("params")
-                        .and_then(|params| params.get("protocolVersion"))
-                        .and_then(Value::as_str)
-                        .unwrap_or(docs::MCP_PROTOCOL_VERSION),
-                    "capabilities": {"tools": {"listChanged": false}, "resources": {}},
-                    "serverInfo": {"name": self.name, "version": self.version},
-                    "instructions": self.instructions,
-                }),
-            )),
+            "initialize" => {
+                let client = request
+                    .get("params")
+                    .and_then(|params| params.get("clientInfo"))
+                    .and_then(|info| info.get("name"))
+                    .and_then(Value::as_str);
+                self.router.set_author(client_author(client));
+                Some(json_rpc_result(
+                    id,
+                    json!({
+                        "protocolVersion": request
+                            .get("params")
+                            .and_then(|params| params.get("protocolVersion"))
+                            .and_then(Value::as_str)
+                            .unwrap_or(docs::MCP_PROTOCOL_VERSION),
+                        "capabilities": {"tools": {"listChanged": false}, "resources": {}},
+                        "serverInfo": {"name": self.name, "version": self.version},
+                        "instructions": self.instructions,
+                    }),
+                ))
+            }
             "ping" => Some(json_rpc_result(id, json!({}))),
             "tools/list" => Some(json_rpc_result(
                 id,
@@ -522,6 +556,57 @@ pub fn load_project_skills(dir: &Path) -> io::Result<Vec<Skill>> {
     load_skills_with_bundled(&directories)
 }
 
+/// What an MCP client's proposals and notes are by: `{kind: mcp, name,
+/// id, role: MCP}`. `name` is the client's own `clientInfo.name`, kept as
+/// `id`; the agents the editor shows by name (Claude Code, Cursor, Codex,
+/// Claude) read as they spell themselves, any other client as it named
+/// itself, and one that gave no name as "MCP client".
+pub fn client_author(name: Option<&str>) -> Author {
+    let given = name
+        .and_then(|name| name.lines().map(str::trim).find(|line| !line.is_empty()))
+        .map(|name| bounded_chars(name, MAX_CLIENT_NAME_CHARS));
+    let key: String = given
+        .as_deref()
+        .unwrap_or_default()
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let known = KNOWN_CLIENTS
+        .iter()
+        .find(|(prefix, _)| key.starts_with(prefix))
+        .map(|(_, name)| (*name).to_owned());
+    let mut author = Author::new(
+        "mcp",
+        known
+            .or_else(|| given.clone())
+            .unwrap_or_else(|| "MCP client".to_owned()),
+    );
+    author.id = given;
+    author.role = Some("MCP".to_owned());
+    author
+}
+
+/// Clients by the start of their `clientInfo.name`, letters and digits
+/// only, lowercased: `claude-code`, `cursor-vscode`, `codex-mcp-client`,
+/// `claude-ai` (the desktop app).
+const KNOWN_CLIENTS: &[(&str, &str)] = &[
+    ("claudecode", "Claude Code"),
+    ("claudeai", "Claude"),
+    ("cursor", "Cursor"),
+    ("codex", "Codex"),
+];
+const MAX_CLIENT_NAME_CHARS: usize = 64;
+
+/// `text`, cut to at most `max` characters.
+fn bounded_chars(text: &str, max: usize) -> String {
+    text.chars()
+        .take(max)
+        .collect::<String>()
+        .trim_end()
+        .to_owned()
+}
+
 fn runtime_error_text(error: RuntimeError) -> String {
     format!("{}: {}", error.code, error.message)
 }
@@ -568,7 +653,9 @@ mod tests {
             .map(Value::as_str)
             .collect::<Option<Vec<_>>>()
             .expect("string tool names");
-        assert_eq!(harness::TOOL_NAMES, expected.as_slice());
+        // The shared fixture lists the tools every client relies on, in
+        // order.
+        assert_eq!(harness::TOOL_NAMES.to_vec(), expected);
     }
 
     #[test]
@@ -609,11 +696,57 @@ mod tests {
             .into_iter()
             .map(|tool| tool.name)
             .collect::<Vec<_>>();
-        assert_eq!(names, ["kerf.look", "kerf.edit", "kerf.render"]);
+        assert_eq!(
+            names,
+            ["kerf.look", "kerf.edit", "kerf.render", "kerf.note"]
+        );
         assert_eq!(
             router.agent_tools().keys().collect::<Vec<_>>(),
-            ["edit", "look", "render"]
+            ["edit", "look", "note", "render"]
         );
+    }
+
+    #[test]
+    fn clients_are_named_as_the_editor_shows_them() {
+        for (given, name) in [
+            ("claude-code", "Claude Code"),
+            ("Claude Code", "Claude Code"),
+            ("cursor-vscode", "Cursor"),
+            ("Cursor", "Cursor"),
+            ("codex-mcp-client", "Codex"),
+            ("codex_cli_rs", "Codex"),
+            ("claude-ai", "Claude"),
+            ("  zed  ", "zed"),
+        ] {
+            let author = client_author(Some(given));
+            assert_eq!(author.kind, "mcp", "{given}");
+            assert_eq!(author.name, name, "{given}");
+            assert_eq!(author.id.as_deref(), Some(given.trim()), "{given}");
+            assert_eq!(author.role.as_deref(), Some("MCP"), "{given}");
+        }
+        for unnamed in [None, Some(""), Some(" \n ")] {
+            let author = client_author(unnamed);
+            assert_eq!(author.name, "MCP client");
+            assert_eq!(author.id, None);
+        }
+        let long = "x".repeat(300);
+        assert_eq!(client_author(Some(&long)).name.chars().count(), 64);
+    }
+
+    #[test]
+    fn initialize_names_the_author_of_what_the_client_does() {
+        let root = TempDir::new().expect("temp dir");
+        let router = KerfMcpRouter::new(root.path(), None).expect("router");
+        assert_eq!(router.author(), Author::kerf(), "built-in agents are Kerf");
+        let server = McpServer::new(router.clone());
+        assert_eq!(router.author().name, "MCP client");
+        server.handle(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2024-11-05",
+                       "clientInfo": {"name": "claude-code", "version": "2.1.0"}}}));
+        let author = router.author();
+        assert_eq!(author.kind, "mcp");
+        assert_eq!(author.name, "Claude Code");
+        assert_eq!(author.id.as_deref(), Some("claude-code"));
     }
 
     #[test]

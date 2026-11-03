@@ -1,4 +1,5 @@
-//! `look`, `edit`, and `render` against a real kerfd and real footage.
+//! `look`, `edit`, `render`, and `note` against a real kerfd and real
+//! footage.
 
 use kerf_mcp::{KerfMcpRouter, McpServer};
 use serde_json::{json, Value};
@@ -240,7 +241,7 @@ fn presets_share_native_edit_code_and_apply_replacement_media_as_a_proposal() {
 }
 
 #[test]
-fn lists_three_tools_and_the_reference() {
+fn lists_the_four_tools_and_the_reference() {
     let directory = TempDir::new().unwrap();
     let router = KerfMcpRouter::new(directory.path(), None).unwrap();
     let names = router
@@ -248,9 +249,12 @@ fn lists_three_tools_and_the_reference() {
         .into_iter()
         .map(|tool| tool.name)
         .collect::<Vec<_>>();
-    assert_eq!(names, ["look", "edit", "render"]);
+    assert_eq!(names, ["look", "edit", "render", "note"]);
     let agent = router.agent_tools();
-    assert_eq!(agent.keys().collect::<Vec<_>>(), ["edit", "look", "render"]);
+    assert_eq!(
+        agent.keys().collect::<Vec<_>>(),
+        ["edit", "look", "note", "render"]
+    );
     let server = McpServer::new(router);
     let initialized = server
         .handle(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}))
@@ -348,8 +352,28 @@ fn edit_stages_a_checked_proposal_with_a_preview() {
         json!({"script": "trim c1 out -30f ripple", "revise": proposal["proposal"]}),
     );
     let id = revised["proposal"].as_str().unwrap();
-    assert_ne!(id, proposal["proposal"].as_str().unwrap());
+    let first = proposal["proposal"].as_str().unwrap();
+    assert_ne!(id, first);
     assert_eq!(revised["status"], "awaiting_review");
+    // A revise is the proposal's next version; the first is kept.
+    assert_eq!(proposal["version"], 1, "{proposal}");
+    assert_eq!(revised["version"], 2, "{revised}");
+    assert_eq!(revised["supersedes"], first);
+    let state = router.runtime().get_state().unwrap();
+    let open: Vec<_> = state
+        .proposals
+        .iter()
+        .filter(|entry| entry.status == "pending")
+        .collect();
+    assert_eq!(open.len(), 1, "one proposal, two versions: {open:#?}");
+    assert_eq!(open[0].proposal_id, id);
+    let versions: Vec<(u32, &str)> = open[0]
+        .versions
+        .iter()
+        .map(|version| (version.version, version.proposal_id.as_str()))
+        .collect();
+    assert_eq!(versions, [(1, first), (2, id)]);
+    assert!(open[0].versions[0].script.starts_with("ripple-delete c1"));
     let diff = revised["diff"].as_str().unwrap();
     assert!(
         diff.contains("+    clip c1 media=m1 src=00:00:00:00 at=00:00:00:00 dur=00:00:03:00"),
@@ -854,8 +878,21 @@ fn a_proposal_can_be_seen_extended_and_rendered() {
     assert_eq!(extended["preview"]["to"], "00:00:03:00", "{extended}");
     assert!(has_image(&extended["preview"]["before"]), "{extended}");
     assert!(has_image(&extended["preview"]["after"]), "{extended}");
-    let replaced = error(&router, "look", json!({"proposal": first_id}));
-    assert_eq!(replaced["code"], "NOT_PENDING");
+    // It is the proposal's second version; the first can still be seen.
+    assert_eq!(extended["version"], 2, "{extended}");
+    assert_eq!(extended["supersedes"], first_id.as_str());
+    let earlier = ok(&router, "look", json!({"proposal": first_id}));
+    let text = earlier["document"].as_str().unwrap();
+    assert!(text.contains("at=00:00:00:00 dur=00:00:03:00"), "{text}");
+    let context = kerf_mcp::harness::context(router.runtime()).unwrap();
+    assert!(
+        context.contains(&format!("Proposal {id} (v2, by Kerf,")),
+        "{context}"
+    );
+    assert!(
+        context.contains(&format!("Earlier versions: v1 {first_id}.")),
+        "{context}"
+    );
     let both = error(
         &router,
         "edit",
@@ -988,4 +1025,210 @@ fn raster_effects_are_looked_up_checked_and_previewed() {
         "{proposal}"
     );
     assert!(has_image(&proposal["preview"]["after"]), "{proposal}");
+}
+
+/// An MCP server for `router` whose client said it is `client`.
+fn served(router: &KerfMcpRouter, client: &str) -> McpServer {
+    let server = McpServer::new(router.clone());
+    let initialized = server
+        .handle(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2024-11-05",
+                       "clientInfo": {"name": client, "version": "1.0.0"}}}))
+        .unwrap();
+    assert_eq!(initialized["result"]["serverInfo"]["name"], "kerf-mcp");
+    server
+}
+
+/// Call `name` through `server` as its client would.
+fn call(server: &McpServer, name: &str, arguments: Value) -> Value {
+    let response = server
+        .handle(&json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": name, "arguments": arguments}}))
+        .unwrap();
+    let structured = response["result"]["structuredContent"].clone();
+    assert_eq!(structured["ok"], true, "{name}: {structured}");
+    structured["result"].clone()
+}
+
+#[test]
+fn an_mcp_clients_proposals_are_by_the_client_and_keep_their_versions() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    let server = served(&router, "claude-code");
+    let first = call(
+        &server,
+        "edit",
+        json!({"script": "trim c1 out -30f ripple"}),
+    );
+    assert_eq!(first["author"], "Claude Code", "{first}");
+    let first_id = first["proposal"].as_str().unwrap().to_owned();
+
+    // Kerf's own agent, or another client, proposes beside it.
+    let kerf = KerfMcpRouter::new(router.directory(), None).unwrap();
+    let beside = ok(&kerf, "edit", json!({"script": "trim c1 in +5f"}));
+    assert_eq!(beside["author"], "Kerf");
+    let beside_id = beside["proposal"].as_str().unwrap().to_owned();
+    let cursor = KerfMcpRouter::new(router.directory(), None).unwrap();
+    let cursor_server = served(&cursor, "cursor-vscode");
+    let third = call(
+        &cursor_server,
+        "edit",
+        json!({"script": "set c1 opacity=0.8"}),
+    );
+    assert_eq!(third["author"], "Cursor");
+
+    // Claude Code revises its proposal, which is no longer the newest.
+    let revised = call(
+        &server,
+        "edit",
+        json!({"script": "trim c1 out -32f ripple", "revise": first_id}),
+    );
+    assert_eq!(revised["version"], 2, "{revised}");
+    assert_eq!(revised["supersedes"], first_id.as_str());
+    let revised_id = revised["proposal"].as_str().unwrap().to_owned();
+
+    let state = router.runtime().get_state().unwrap();
+    let open: Vec<_> = state
+        .proposals
+        .iter()
+        .filter(|entry| entry.status == "pending")
+        .collect();
+    assert_eq!(open.len(), 3, "{open:#?}");
+    let claude = open
+        .iter()
+        .find(|entry| entry.proposal_id == revised_id)
+        .expect("the revised proposal is open");
+    assert_eq!(claude.author.kind, "mcp");
+    assert_eq!(claude.author.name, "Claude Code");
+    assert_eq!(claude.author.id.as_deref(), Some("claude-code"));
+    assert_eq!(claude.version, 2);
+    assert_eq!(claude.versions.len(), 2);
+    assert_eq!(claude.versions[0].proposal_id, first_id);
+    let by = |id: &str| {
+        open.iter()
+            .find(|entry| entry.proposal_id == id)
+            .map(|entry| (entry.author.kind.clone(), entry.author.name.clone()))
+    };
+    assert_eq!(by(&beside_id), Some(("kerf".into(), "Kerf".into())));
+    assert_eq!(
+        by(third["proposal"].as_str().unwrap()),
+        Some(("mcp".into(), "Cursor".into()))
+    );
+
+    // Extending the proposal Kerf made, though another is newer.
+    let extended = ok(
+        &kerf,
+        "edit",
+        json!({"script": "trim c1 in +1f", "extend": beside_id}),
+    );
+    assert_eq!(extended["version"], 2, "{extended}");
+    // And v1 of Claude Code's is still the user's to see and accept.
+    let v1 = call(&server, "look", json!({"proposal": first_id}));
+    assert!(
+        v1["document"]
+            .as_str()
+            .unwrap()
+            .contains("at=00:00:00:00 dur=00:00:03:00"),
+        "{v1}"
+    );
+}
+
+#[test]
+fn the_note_tool_writes_a_comment_by_the_client() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    let server = served(&router, "codex-mcp-client");
+    let proposal = call(
+        &server,
+        "edit",
+        json!({"script": "trim c1 out -12f ripple"}),
+    );
+    let proposal_id = proposal["proposal"].as_str().unwrap().to_owned();
+    let before = router.runtime().get_state().unwrap();
+
+    let note = call(
+        &server,
+        "note",
+        json!({"body": "End card holds a beat long, trimmed 12 frames",
+               "at": "00:00:02:15", "duration": "15f", "proposal": proposal_id,
+               "tags": ["#pacing"], "blocking": false}),
+    );
+    let comment = &note["comment"];
+    assert_eq!(comment["author"]["kind"], "mcp", "{note}");
+    assert_eq!(comment["author"]["name"], "Codex");
+    assert_eq!(comment["author"]["id"], "codex-mcp-client");
+    assert_eq!(comment["author"]["role"], "MCP");
+    assert_eq!(comment["at"], 2.5);
+    assert_eq!(comment["duration"], 0.5);
+    assert_eq!(comment["frame"], 75);
+    assert_eq!(comment["proposal"], proposal_id.as_str());
+    assert_eq!(comment["tags"], json!(["pacing"]));
+    assert_eq!(note["timecode"], "00:00:02:15");
+    let root = comment["id"].as_str().unwrap().to_owned();
+
+    // A reply to the reply joins the thread.
+    let reply = call(
+        &server,
+        "note",
+        json!({"body": "Two frames earlier", "parent": root}),
+    );
+    let reply_id = reply["comment"]["id"].as_str().unwrap().to_owned();
+    let again = call(&server, "note", json!({"body": "Done", "parent": reply_id}));
+    assert_eq!(again["comment"]["parent"], root.as_str(), "{again}");
+
+    // The review log keeps all three; the document and the proposal are
+    // as they were, and the bridge sees the log change.
+    let log = router.runtime().comments().unwrap();
+    assert_eq!(log.items.len(), 3);
+    assert!(log.items.iter().all(|item| item.author.name == "Codex"));
+    let after = router.runtime().get_state().unwrap();
+    assert_eq!(after.revision, before.revision);
+    assert_eq!(after.document, before.document);
+    assert!(after.review_revision > before.review_revision);
+    assert_eq!(
+        after
+            .pending_proposal
+            .as_ref()
+            .map(|p| serde_json::to_value(p).unwrap()["freshness"].clone()),
+        before
+            .pending_proposal
+            .as_ref()
+            .map(|p| serde_json::to_value(p).unwrap()["freshness"].clone())
+    );
+
+    // The generated agent docs describe the tool.
+    let docs = router.generate_agent_docs().unwrap();
+    let protocol = std::fs::read_to_string(docs.directory.join("protocol.md")).unwrap();
+    assert!(protocol.contains("### `note`"), "{protocol}");
+    assert!(protocol.contains("## Proposals and notes"));
+
+    // Kerf's own agent notes as Kerf.
+    let kerf = KerfMcpRouter::new(router.directory(), None).unwrap();
+    let own = ok(&kerf, "note", json!({"body": "Welcome"}));
+    assert_eq!(own["comment"]["author"]["kind"], "kerf");
+    assert_eq!(own["comment"]["at"], Value::Null);
+
+    for (arguments, code) in [
+        (json!({"body": "  "}), "INVALID_ARGUMENTS"),
+        (json!({"body": "x", "duration": "1s"}), "INVALID_ARGUMENTS"),
+        (json!({"body": "x", "at": "10s"}), "INVALID_ARGUMENTS"),
+        (
+            json!({"body": "x", "at": "1s", "duration": "0f"}),
+            "INVALID_ARGUMENTS",
+        ),
+        (json!({"body": "x", "parent": "c-nope"}), "UNKNOWN_COMMENT"),
+        (
+            json!({"body": "x", "proposal": "proposal-nope"}),
+            "UNKNOWN_PROPOSAL",
+        ),
+        (json!({"body": "x", "colour": "red"}), "INVALID_ARGUMENTS"),
+    ] {
+        assert_eq!(
+            error(&router, "note", arguments.clone())["code"],
+            code,
+            "{arguments}"
+        );
+    }
 }

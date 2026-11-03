@@ -1,3 +1,4 @@
+#include "design_tokens.h"
 #include "editor_common.h"
 #include "editor_theme.h"
 #include "main_window.h"
@@ -5,12 +6,21 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QDirIterator>
 #include <QFontDatabase>
 #include <QPointer>
 #include <QStandardPaths>
 #include <QTimer>
 
 namespace {
+
+// Register every font file under :/fonts (resources/fonts, compiled in only
+// when that folder holds .ttf or .otf files).
+void loadBundledFonts() {
+    QDirIterator files(QStringLiteral(":/fonts"), {QStringLiteral("*.ttf"), QStringLiteral("*.otf")}, QDir::Files,
+                       QDirIterator::Subdirectories);
+    while (files.hasNext()) QFontDatabase::addApplicationFont(files.next());
+}
 
 // An editor window for `project`. It lives on the heap and is deleted when
 // closed; opening another project from it opens a new window first, so the
@@ -36,19 +46,16 @@ int main(int argc, char **argv) {
     // macOS titles a window with its document alone.
     QApplication::setApplicationDisplayName(QStringLiteral("Industrial Kerf"));
     QApplication::setOrganizationName(QStringLiteral("Industrial Kerf"));
-    // The system's interface font (SF Pro on macOS), as the launcher uses.
-    QFont interfaceFont = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
-    interfaceFont.setPixelSize(13);
-    interfaceFont.setWeight(QFont::Normal);
-    app.setFont(interfaceFont);
-    // Fusion, with macOS's focus, pop-up buttons and menus.
+    // The design's faces: Inter for the interface and JetBrains Mono for
+    // figures, from the bundle's :/fonts when it carries them. Without them
+    // the interface is the system's UI font and figures Menlo, at the same
+    // sizes, with tabular figures (design_tokens.h).
+    loadBundledFonts();
+    app.setFont(kerf::tokens::font(kerf::tokens::body));
+    // Fusion with the design's flat metrics and focus outline.
     kerf::useEditorStyle();
-    // KERF_COLOR_SCHEME=light or dark picks one appearance for the run;
-    // otherwise the editor follows the system's light or dark appearance and
-    // its accent, live: on a change of colour scheme, and on a new
-    // application palette, which is how an accent change arrives.
-    kerf::setEditorColorScheme(kerf::environmentColorScheme());
-    kerf::followSystemAppearance();
+    // The editor is dark only; this applies its one theme.
+    kerf::applyEditorAppearance();
 
     QString project;
     QString kerfd;

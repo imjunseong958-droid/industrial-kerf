@@ -101,8 +101,9 @@ pub struct PlaybackClock {
 }
 
 /// The program's level where it is being heard, read from the sound as it
-/// is mixed. Levels are in dBFS (1.0 is full scale) and loudness in LUFS;
-/// anything quieter than [`LEVEL_FLOOR_DB`] reads as the floor.
+/// is mixed. Levels are in dBFS (0 dB is a full-scale sample, so they are
+/// zero or below) and loudness in LUFS; anything quieter than
+/// [`LEVEL_FLOOR_DB`] reads as the floor.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Levels {
     /// The sample peak of left and right over the blocks of the mix

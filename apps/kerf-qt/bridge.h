@@ -11,11 +11,77 @@ void kerf_bridge_free(void *bridge);
 // undo/redo {revision}, accept/reject {proposalId,revision}, agent {text,
 // focus?: {scope: clip|range|sequence, clip?, fromFrame, toFrame} (what the
 // request is about, in sequence frames), provider,apiMode,apiKey,baseUrl,
-// model,mcpEnabled,mcpConfigVersion,cloud? (use Kerf Cloud's hosted model)},
-// abort, play, pause, seek {position,scrub}, volume {value},
-// effect_previews {clip,at,effects,width}. Agent
+// model,mcpEnabled,mcpConfigVersion,cloud? (use Kerf Cloud's hosted model),
+// comment?: {at?, duration?, parent?, drawing?} (keep the turn in the
+// review log, below)}, abort, play, pause, seek {position,scrub},
+// volume {value}, solo {tracks: [trackId]} (hear only those audio tracks,
+// [] hears all; monitoring only, the project never changes, and it holds
+// across edits until changed; no event answers it). Agent
 // settings are request-scoped so switching providers never mutates the
 // project or leaks credentials into its state.
+// Edit ops beyond moves and trims: set {clip, props} and the generator
+// parameters, fx-add/fx-set {clip, fx, params}, mask-add/mask-set {clip,
+// name, params} take a static value or keyframes {keys: [{at: frame
+// (whole frames from the clip's first frame), value, interp?: linear|hold|
+// ease|ease-in|ease-out}]}; keys on pan and on sound-effect parameters are
+// refused (playback and renders follow keyframes on gain only).
+// set-marker {marker, at?: frame, frames?, name?, note?, color?} moves,
+// renames or recolours a marker ("" clears a field). set-track {track,
+// sequence?, enabled?, locked?, muted?, role?, syncLocked?} ("" role gives
+// back the kind's default; ripple edits move only sync-locked tracks).
+// Effect previews: effect_previews {clip, at, effects: [fxId | {fx, params?,
+// key?}], width, key?} answers one effect_preview per entry that has a
+// picture, width wide (at most 640, even). An id shows the effect added
+// after the clip's own at its defaults; {fx, params} shows those static
+// parameters (numbers kept in range, unknown names ignored), in place of
+// the clip's own effect of that id when it has one, so a look before and
+// after a change can be compared. A generator id (title, solid) draws the
+// generator alone on black on a canvas shaped like the clip's sequence (a
+// title with no text says "Title"); clip may then be "". Raster and
+// FilmCraft effects run on the clip's decoded picture, graph effects
+// (color.basic, blur.gaussian) and generators through Kerf's compositor.
+// Sound effects and the adjustment generator have no preview. A newer
+// request stops an older one.
+// Review log (review/comments.jsonl, kept by kerfd beside the project,
+// never in the document or undo): comment_list answers comments even when
+// unchanged; comment_add {body, at?, duration?, parent? (the thread's
+// root), tags?, blocking?, drawing?: [{tool: pen|ellipse|rect|arrow,
+// points: [[x, y]] (0..1 of the frame), color?}], proposal?, id? (a
+// client id makes a retried add harmless)} writes a note by the person Git
+// names (author {kind: person, name, id: email}); comment_set {id,
+// resolved?, body?, tags?, blocking?, deleted?} changes one (resolvedBy is
+// that person). A refusal is error {message, code (INVALID_COMMENT,
+// COMMENT_NOT_FOUND, ...), command: comment_add|comment_set|comment_list,
+// id?}. agent with comment records the request as the person's comment
+// (at, duration, drawing; under parent when given) before the agent runs,
+// then Kerf's answer as a reply under the thread's root (author {kind:
+// kerf, name: Kerf}, steps: the finished tool calls and statuses, error:
+// true with the failure's message when the turn failed, proposal: the
+// proposal the turn staged, which is also linked from the root when it
+// names none, so accepting it resolves the thread). The agent's stream
+// events are unchanged.
+// QC: check {sequence?} runs Kerf's full QC pass on the project kerfd has
+// (the document checks, plus the sound measured to EBU R128 and every frame
+// measured for gamut, luma levels, flashing and black, on the sequence or
+// else the first one; about as long as a draft render): check {status:
+// running, progress (0..1), sequence?} as it goes, then check {status:
+// done, sequence?,
+// valid (nothing blocks), findings: [{severity: error|warning|info, code,
+// entity, message, sequence?, at?, duration?, timecode?, rect?: {x, y, w,
+// h} (0..1 of the frame), value?, limit?, unit?, commentId?}], summary:
+// {passed, total, blocking, rows: [{code, name, passed, value, limit?, at?,
+// count, blocking, commentId?}]}} or check {status: failed, message} (also
+// when it is cancelled, which closing the bridge does). With
+// a sequence, findings on other sequences are left out and the rows
+// counted again. Every failing finding (warning or error) of the whole
+// project is kept as a qc comment (author {kind: qc, name: QC, role:
+// captions|loudness|picture|edit|media|render|document}, tags [area],
+// blocking only for errors, qcKey "qc:<code>:<entity>", or
+// "qc:<code>:<entity>@<seconds>" for picture.flashing and picture.black,
+// which are found once per stretch; at most 100 new
+// ones per check), opened again when it comes back, and resolved by QC
+// when a later check no longer finds it; commentId names that comment.
+// One check runs at a time; another meanwhile is error {command: check}.
 // Proposals: several can wait at once (at most 8, newest first in the
 // snapshot's proposals); accepting one makes the others stale (they then
 // need a revise), and resolves the comments linked to it (resolvedRevision
@@ -68,11 +134,28 @@ void kerf_bridge_free(void *bridge);
 // false means the bounded queue is full; show an error, never silently drop edits.
 bool kerf_bridge_send(void *bridge, const char *json);
 // One JSON event, owned until kerf_bridge_string_free; nullptr when idle.
-// Events: state {snapshot}, connection {status,message}, error {message},
+// Events: state {snapshot}, connection {status,message}, error {message,
+// code?, command?, id?} (code, command and id name a refused command),
 // agent {kind: delta|status|tool|done|...,text}, agent_busy {busy},
 // agent_state {state: running|awaiting_review|aborted|completed|failed,
 // message?}, agent_next {steps: [text]} (next steps to offer as buttons),
-// clock {position,duration}, playback {playing}, caption {text},
+// clock {position, duration, dropped (frames the presenter skipped as late
+// since the program was opened or moved)}, playback {playing},
+// caption {text},
+// meter {peak: [l, r], rms: [l, r] (dBFS, at least -120), momentary,
+// shortTerm (BS.1770 LUFS, null until 400 ms / 3 s were heard), at (the
+// program time the reading reaches)} about 20 times a second while
+// playing, and once with every value null when playback stops,
+// comments {items: [Comment], reviewRevision, comment? (the one a command
+// just wrote)}: the whole review log, sent on connecting, after every
+// change the editor or an agent turn makes, after a collab sync, and
+// whenever the snapshot's reviewRevision moves (notes from MCP agents and
+// Git merges). A Comment is {id, parent (the thread's root or null),
+// author {kind: kerf|mcp|person|qc, name, id?, role?}, at, duration (s on
+// the program sequence, or null), frame, body, tags, blocking, drawing,
+// proposal, steps, error, resolved, resolvedBy (an author or null),
+// resolvedRevision, qcKey, created (RFC 3339), revision, edited};
+// deleted comments are left out,
 // viewer_reset,
 // preview {status: running|ready|live|required|unavailable|failed|stopped|
 // exited, progress?, message?, proposalId? (the proposal a rendered preview
@@ -95,8 +178,13 @@ bool kerf_bridge_send(void *bridge, const char *json);
 // (changes whenever review/comments.jsonl does, here, from another client
 // such as an MCP agent, or on disk), revisionTime? (ISO 8601 of the current
 // revision)}. timeline.sequences lists every sequence: [{id, name, width,
-// height, rate, fps, dropFrame, duration}].
-// effect_preview {clip,fx,width,height,rgba (base64)},
+// height, rate, fps, dropFrame, duration}]; timeline.tracks[] carry role
+// (the track's role or its kind's default), roleAssigned and syncLocked;
+// each keyframe carries frame (clip-relative, as edits send it back) beside
+// at (seconds), value and interp.
+// effect_preview {clip, fx, key? (the entry's key, else the request's),
+// width, height, rgba (base64)},
+// check (see QC above),
 // media_status {missing: [mediaId], pointers: [mediaId] (Git LFS files not
 // downloaded), external: [mediaId] (outside the project folder, or ignored
 // by Git there)},
@@ -130,6 +218,11 @@ char *kerf_commands_run(const char *invocation);
 // The picture effects and transitions offered, as a JSON array of
 // {id, kind, category, name, doc, engine, params}. Free with kerf_bridge_string_free.
 char *kerf_fx_catalog(void);
+// Everything the catalog offers, the same shape plus domain: video|audio:
+// picture effects and transitions, generators (kind: generator, such as
+// title and solid) and sound effects (domain: audio). Free with
+// kerf_bridge_string_free.
+char *kerf_fx_catalog_all(void);
 // The project launcher, before any bridge exists. Synchronous and local.
 // {path} -> {path, exists, project (has project.kerf), name, repository,
 // branch, remote, modified (ISO 8601 of project.kerf), presets: count}.

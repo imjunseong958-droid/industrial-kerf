@@ -98,8 +98,9 @@ QString sourceFileName(const QJsonObject &source);
 // the timeline and an @mention never name two media alike.
 QHash<QString, QString> sourceNames(const QJsonArray &sources);
 
-// The editor's one monospaced face (the system's: SF Mono on macOS), for
-// timecode and other figures that must not shift as they change.
+// The editor's one monospaced face (JetBrains Mono when bundled, else Menlo,
+// else the system's fixed font, with tabular figures), for timecode and
+// other figures that must not shift as they change.
 QFont monoFont(int pixelSize, QFont::Weight weight = QFont::Normal);
 
 QSize resolvedCanvasSize(const QJsonObject &project, const QJsonArray &sources);
@@ -173,9 +174,10 @@ protected:
     virtual QColor stepperColor() const;
 };
 
-// The rows of a pop-up button's menu, as macOS draws them: 22 points tall,
-// a check by the current choice, and the row under the pointer filled with
-// the accent under white text (the editor's pop-ups, and the launcher's).
+// The rows of a pop-up button's menu, as the design's menus draw them: 28
+// points tall, a check by the current choice, and the row under the pointer
+// on `menuSelection` with 6pt corners (the editor's pop-ups, and the
+// launcher's).
 class PopupItemDelegate : public QStyledItemDelegate {
 public:
     explicit PopupItemDelegate(QComboBox *combo);
@@ -196,17 +198,18 @@ private:
     QComboBox *m_combo;
 };
 
-// Draw the application in the editor's style: Fusion, with push buttons
-// and pop-up buttons that take focus from Tab alone, as macOS's do, so a
+// Draw the application in the editor's style: Fusion with the design's flat
+// metrics (24pt controls, 6pt radii, 14pt check boxes, no scroll bar width),
+// with push buttons and pop-up buttons that take focus from Tab alone, so a
 // click leaves none behind, and menus without symbols. Every pop-up button
-// gets PopupItemDelegate's rows (unless it brings its own), pop-up lists
-// and menus are clipped to their rounded corners, and a field being typed
-// in, or a button or pop-up focused from the keyboard, shows macOS's soft
-// accent ring outside its bezel (its `bezelRadius` property, 5 points
-// unless set; 3 for a multi-line field). A window or frame whose
-// `ringsOwnFields` property is true (the launcher, the Assistant's
-// composer) shows its fields' and pop-ups' focus itself. Called once,
-// before any widget is made.
+// gets PopupItemDelegate's rows (unless it brings its own), pop-up lists,
+// menus and tooltips are clipped to their rounded corners, and a field being
+// typed in, or a button or pop-up focused from the keyboard, shows the
+// design's focus outline: 2pt of the accent, 1pt outside its bezel (its
+// `bezelRadius` property, 6 points unless set; 3 for a multi-line field). A
+// window or frame whose `ringsOwnFields` property is true (the launcher, the
+// Assistant's composer) shows its fields' and pop-ups' focus itself. Called
+// once, before any widget is made.
 void useEditorStyle();
 
 // SF Symbols' waveform: six round-capped bars on an 18-point grid scaled to
@@ -273,7 +276,7 @@ QPainterPath maskPath(const QJsonObject &mask);
 // device's pixels, so the parts stay crisp at 1x, 1.25x and 2x.
 
 // A key in a bank: raised, or `latched` (held in, below the plate). Under
-// the pointer it brightens; `lit`, a small amber bar glows at its top.
+// the pointer it brightens; `lit`, a small bar in `keyLed` glows at its top.
 void paintRaisedKey(QPainter &painter, const QRectF &rect, bool latched, bool hovered, bool lit);
 // The recessed well a bank of keys sits in (2px round its keys, 2px apart).
 void paintKeyBank(QPainter &painter, const QRectF &rect);
@@ -284,7 +287,7 @@ void paintModulePlate(QPainter &painter, const QRectF &rect);
 // The dark display glass behind a readout (figures in monoFont()).
 void paintGlass(QPainter &painter, const QRectF &rect, qreal radius = 5);
 
-// What a jewel lamp shows: dark; amber for a value moved from its default;
+// What a jewel lamp shows: dark; warn for a value moved from its default;
 // Kerf's ink for Kerf's work or a proposal; green for all is well.
 enum class LampState { Off, Changed, Kerf, Ok };
 // A jewel lamp `diameter` across on `centre`. A lit lamp's glow reaches
@@ -303,7 +306,7 @@ void drawEngraved(QPainter &painter, const QRectF &rect, int flags, const QStrin
 // in `box` (drawn on a 32px grid). Its pointer turns `turn` degrees from
 // straight up, clockwise.
 void paintKnob(QPainter &painter, const QRectF &box, double turn);
-// An analogue VU meter in `rect`: a dark bezel round a cream face, its
+// An analogue VU meter in `rect`: a bezel round its face (the theme's), its
 // needle `level` of the way along the scale (0 to 1).
 void paintVuMeter(QPainter &painter, const QRectF &rect, double level);
 

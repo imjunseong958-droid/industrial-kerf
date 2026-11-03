@@ -224,7 +224,8 @@ fn lufs(power: f64) -> f32 {
     }
 }
 
-/// An amplitude in dBFS, where 1.0 is full scale.
+/// A linear amplitude (1.0 is a full-scale sample) in dBFS, never under
+/// the floor.
 fn dbfs(amplitude: f64) -> f32 {
     if amplitude > 0.0 {
         ((20.0 * amplitude.log10()) as f32).max(LEVEL_FLOOR_DB)

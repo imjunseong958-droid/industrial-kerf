@@ -3,7 +3,7 @@
 //! the journal before publishing `project.kerf`.
 
 use crate::kernel::{self, CachedFacts, Edit, Edited};
-use crate::render::render_cancel_path;
+use crate::render::{render_cancel_path, render_name, render_output, Encoding};
 use crate::review::{self, Review};
 use crate::store::{
     append_journal_record, inspect_projection, load_checkpoint, load_journal,
@@ -18,7 +18,8 @@ use crate::timeline;
 use crate::{
     io_error, unique_id, validate_actor, Author, EditOp, MailboxMessage, PendingProposal,
     ProposalEntry, ProposalFreshness, ProposalVersion, RenderJob, RenderRange, RuntimeError,
-    RuntimeRequest, RuntimeResponse, StateSnapshot, MAX_PROPOSALS, SOURCE_VERSION,
+    RuntimeRequest, RuntimeResponse, StartRenderOptions, StateSnapshot, MAX_PROPOSALS,
+    SOURCE_VERSION,
 };
 use kerf_lang::NoFacts;
 use kerf_model::Project;
@@ -1173,7 +1174,9 @@ impl Runtime {
 
     /// Queue a render of the first sequence of the project, or of what a
     /// pending `proposal` would make of it, and return the document to
-    /// render, with media paths resolved.
+    /// render, with media paths resolved. Requests go through
+    /// [`Runtime::start_render_with`]; tests use this shorter form.
+    #[cfg(test)]
     pub fn start_render_range(
         &mut self,
         quality: &str,
@@ -1181,12 +1184,34 @@ impl Runtime {
         proposal: Option<&str>,
         sequence: Option<&str>,
     ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
-        if !matches!(quality, "preview" | "full") {
-            return Err(RuntimeError::new(
-                "INVALID_RENDER_QUALITY",
-                "quality must be preview or full",
-            ));
-        }
+        self.start_render_with(StartRenderOptions {
+            quality: quality.to_owned(),
+            range,
+            proposal: proposal.map(str::to_owned),
+            sequence: sequence.map(str::to_owned),
+            ..StartRenderOptions::default()
+        })
+    }
+
+    /// Queue a render as `options` describe it: what it renders, its quality
+    /// and codec, where its file goes, and its name. Returns the job, the
+    /// document to render with media paths resolved, and the file to write.
+    pub fn start_render_with(
+        &mut self,
+        options: StartRenderOptions,
+    ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
+        let StartRenderOptions {
+            quality,
+            range,
+            proposal,
+            sequence,
+            codec,
+            output,
+            name,
+        } = options;
+        let (proposal, sequence) = (proposal.as_deref(), sequence.as_deref());
+        let encoding = Encoding::new(&quality, codec.as_deref())?;
+        let name = render_name(name.as_deref())?;
         let proposed = proposal.map(|id| self.proposal_result(id)).transpose()?;
         let project = proposed.as_ref().unwrap_or(&self.state.project);
         let document = self.renderable(project);
@@ -1206,11 +1231,33 @@ impl Runtime {
             }
         }
         let id = format!("render-{}", unique_id());
-        let output = self
-            .project_path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join(format!("{id}.mp4"));
+        let target = render_output(
+            self.directory(),
+            output.as_deref(),
+            name.as_deref().unwrap_or(&id),
+            encoding.extension(),
+        )?;
+        let writes = |file: &Path, status: fn(&str) -> bool| {
+            self.state.jobs.values().any(|job| {
+                status(&job.status) && job.output_path.as_deref().map(Path::new) == Some(file)
+            })
+        };
+        if writes(&target.file, |status| !job_finished(status)) {
+            return Err(RuntimeError::new(
+                "RENDER_OUTPUT_BUSY",
+                format!("another render is writing {}", target.file.display()),
+            ));
+        }
+        // A file on disk, or one a kept job made or is making, is never
+        // written over: the queue would misdescribe it.
+        let target = target.free(|file| {
+            file.symlink_metadata().is_ok()
+                || writes(file, |status| {
+                    status == "completed" || !job_finished(status)
+                })
+        })?;
+        target.make(self.directory())?;
+        let output = target.file;
         let cancel_path =
             render_cancel_path(self.project_path.parent().unwrap_or(Path::new(".")), &id);
         match fs::remove_file(&cancel_path) {
@@ -1227,6 +1274,9 @@ impl Runtime {
             range,
             sequence: sequence.map(str::to_owned),
             progress: 0.0,
+            name,
+            quality: Some(encoding.quality.to_owned()),
+            codec: Some(encoding.codec.to_owned()),
         };
         let mut candidate = self.state.clone();
         candidate.jobs.insert(id, job.clone());
@@ -1468,6 +1518,14 @@ impl Runtime {
         Ok(())
     }
 
+    /// Every render job kept, oldest first: queued and running ones, and
+    /// the newest finished.
+    pub fn render_jobs(&self) -> Vec<RenderJob> {
+        let mut jobs: Vec<RenderJob> = self.state.jobs.values().cloned().collect();
+        jobs.sort_by(|a, b| job_order(&a.job_id).cmp(&job_order(&b.job_id)));
+        jobs
+    }
+
     pub fn render_job(&self, id: &str) -> Result<RenderJob, RuntimeError> {
         self.state.jobs.get(id).cloned().ok_or_else(|| {
             RuntimeError::new("RENDER_NOT_FOUND", format!("render job not found: {id}"))
@@ -1618,6 +1676,9 @@ impl Runtime {
                 duration,
                 proposal_id,
                 sequence,
+                codec,
+                output,
+                name,
             } => {
                 let range = match (start, duration) {
                     (None, None) => None,
@@ -1629,12 +1690,15 @@ impl Runtime {
                         ))
                     }
                 };
-                let (job, document, output) = self.start_render_range(
-                    &quality,
+                let (job, document, output) = self.start_render_with(StartRenderOptions {
+                    quality,
                     range,
-                    proposal_id.as_deref(),
-                    sequence.as_deref(),
-                )?;
+                    proposal: proposal_id,
+                    sequence,
+                    codec,
+                    output,
+                    name,
+                })?;
                 Ok(RuntimeResponse::RenderStarted {
                     job,
                     document,
@@ -1644,6 +1708,7 @@ impl Runtime {
             RuntimeRequest::GetRender { job_id } => {
                 Ok(RuntimeResponse::RenderJob(self.render_job(&job_id)?))
             }
+            RuntimeRequest::ListRenders => Ok(RuntimeResponse::RenderJobs(self.render_jobs())),
             RuntimeRequest::UpdateJob {
                 job_id,
                 status,
@@ -2236,9 +2301,27 @@ fn job_finished(status: &str) -> bool {
     matches!(status, "completed" | "failed" | "cancelled")
 }
 
+/// The order render jobs were made in, from their ids: `render-<nanos>-<seq>`
+/// in hex, where the time comes first and the sequence, which starts again
+/// at 0 each time kerfd starts, breaks ties within one run. Each part is
+/// compared as a number, so neither a longer sequence nor a longer time
+/// sorts wrongly; an id of another shape sorts first, by its text.
+fn job_order(id: &str) -> (Option<(u128, u64)>, &str) {
+    let parsed = id
+        .strip_prefix("render-")
+        .and_then(|rest| rest.split_once('-'))
+        .and_then(|(nanos, seq)| {
+            Some((
+                u128::from_str_radix(nanos, 16).ok()?,
+                u64::from_str_radix(seq, 16).ok()?,
+            ))
+        });
+    (parsed, id)
+}
+
 /// Drop the oldest finished render jobs until at most `MAX_FINISHED_JOBS`
-/// remain. A job id begins with the time it was made in fixed-width hex,
-/// so ids sort oldest first. Their outputs stay where they are.
+/// remain, in the order [`job_order`] gives. Their outputs stay where they
+/// are.
 fn bound_jobs(jobs: &mut HashMap<String, RenderJob>) {
     let mut finished: Vec<String> = jobs
         .iter()
@@ -2248,7 +2331,7 @@ fn bound_jobs(jobs: &mut HashMap<String, RenderJob>) {
     if finished.len() <= MAX_FINISHED_JOBS {
         return;
     }
-    finished.sort_unstable();
+    finished.sort_unstable_by(|a, b| job_order(a).cmp(&job_order(b)));
     for id in &finished[..finished.len() - MAX_FINISHED_JOBS] {
         jobs.remove(id);
     }
@@ -2508,6 +2591,8 @@ fn project_relative(directory: &Path, file: &Path) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("/"))
 }
 
+#[cfg(test)]
+mod edit_render_tests;
 #[cfg(test)]
 mod proposal_tests;
 

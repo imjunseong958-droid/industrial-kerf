@@ -173,11 +173,12 @@ bool popupShowsEveryRow(QComboBox *combo) {
     return fits;
 }
 
-bool isWarmPaper(const QColor &color, bool dark) {
-    const bool warm = color.red() >= color.blue() + (dark ? 4 : 10);
-    return warm && (dark ? color.lightness() < 45 && color.rgb() != QColor(Qt::black).rgb()
-                         : color.lightness() > 200 && color.rgb() != QColor(Qt::white).rgb());
+bool isGraphite(const QColor &color) {
+    const bool neutral = std::abs(color.red() - color.green()) <= 2 && std::abs(color.green() - color.blue()) <= 2;
+    return neutral && color.alpha() == 255 && color.lightness() <= 0x36 && color.rgb() != QColor(Qt::black).rgb();
 }
+
+bool isWarmPaper(const QColor &color, bool) { return isGraphite(color); }
 
 bool isAmber(const QColor &color) {
     return color.hue() >= 30 && color.hue() <= 52 && color.saturation() > 140 && color.value() > 150;
@@ -227,7 +228,10 @@ void verifyListEnd(ChatPanel *chat) {
     QCOMPARE(edge->property("scrolled").toBool(), top > 0);
 }
 
-bool isWaveInk(const QColor &pixel) { return pixel.lightness() >= 240 && pixel.hslSaturationF() < 0.5; }
+bool isWaveInk(const QColor &pixel) {
+    const bool neutral = std::abs(pixel.red() - pixel.green()) <= 6 && std::abs(pixel.green() - pixel.blue()) <= 6;
+    return neutral && pixel.lightness() >= 100 && pixel.lightness() <= 160;
+}
 
 QRgb dominantColor(const QImage &image) {
     QHash<QRgb, int> counts;

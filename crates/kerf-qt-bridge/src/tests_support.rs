@@ -30,6 +30,9 @@ pub(crate) fn shared(directory: &Path) -> Shared {
         preview_stopped: AtomicBool::new(false),
         stale_previews: Mutex::new(Vec::new()),
         shown_preview: Mutex::new(None),
+        review_seen: Mutex::new(None),
+        check_busy: AtomicBool::new(false),
+        check_cancel: Mutex::new(None),
     }
 }
 

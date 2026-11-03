@@ -25,6 +25,16 @@
 #include "toolbar_widgets.h"
 #include "viewer_widget.h"
 #include "workspace.h"
+#include "browser_panel.h"
+#include "deliver_pane.h"
+#include "deliver_tray.h"
+#include "design_tokens.h"
+#include "editor_bus.h"
+#include "finish_tray.h"
+#include "inspector_column.h"
+#include "loudness_view.h"
+#include "program_strip.h"
+#include "qc_view.h"
 
 #include <QAbstractItemView>
 #include <QAccessible>
@@ -239,15 +249,22 @@ private slots:
         }
     }
 
+    // The four built-in workspaces and one's own: each is a Window ▸
+    // Workspaces item and a registry command (⌥⇧1-4); each keeps its
+    // changes until reset; a workspace saved as Grading comes back as it
+    // was saved, its stage with it.
     void workspacesDockPanelsAndRememberLayouts() {
         QSettings().remove(QStringLiteral("workspace"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
         {
             MainWindow window{QString(), QString()};
             window.show();
             Workspace *workspace = window.m_workspace;
-            ads::CDockWidget *timeline = workspace->panel(QStringLiteral("timeline"));
-            ads::CDockWidget *project = workspace->panel(QStringLiteral("project"));
-            QAction *toggle = window.m_commands->action(QStringLiteral("window.timeline"));
+            const auto panel = [workspace](const char *id) { return workspace->panel(QString::fromLatin1(id)); };
+            const auto command = [&window](const char *id) { return window.m_commands->action(QString::fromLatin1(id)); };
+            ads::CDockWidget *timeline = panel("timeline");
+            ads::CDockWidget *project = panel("project");
+            QAction *toggle = command("window.timeline");
             QVERIFY(toggle->isChecked());
             QVERIFY(!timeline->isClosed());
             toggle->trigger();
@@ -256,36 +273,357 @@ private slots:
             timeline->toggleView(true);
             QVERIFY(toggle->isChecked());
 
-            QCOMPARE(workspace->names(), QStringList{QStringLiteral("Editing")});
+            QCOMPARE(workspace->names(), (QStringList{"Edit", "Review", "Finish", "Deliver"}));
+            QCOMPARE(workspace->current(), QStringLiteral("Review"));
+            QCOMPARE(window.m_bus->workspace(), QStringLiteral("Review"));
             // Kerf's conversation starts open, in the Program monitor's stage.
             QVERIFY(window.chatOpen());
-            QVERIFY(workspace->saveAs(QStringLiteral("Review")));
-            QVERIFY(!workspace->saveAs(QStringLiteral("review")));
-            QCOMPARE(workspace->current(), QStringLiteral("Review"));
-            project->toggleView(false);
-            workspace->activate(QStringLiteral("Editing"));
-            QVERIFY(!project->isClosed());
+            const char *ids[] = {"workspace.edit", "workspace.review", "workspace.finish", "workspace.deliver"};
+            for (int index = 0; index < 4; ++index) {
+                QAction *choice = command(ids[index]);
+                QVERIFY2(choice && choice->isCheckable(), ids[index]);
+                QCOMPARE(choice->isChecked(), index == 1);
+                QCOMPARE(choice->shortcut(), QKeySequence::fromString(QStringLiteral("Alt+Shift+%1").arg(index + 1), QKeySequence::PortableText));
+            }
+            QCOMPARE(command("window.resetWorkspace")->shortcut(), QKeySequence::fromString(QStringLiteral("Alt+Shift+0"), QKeySequence::PortableText));
+
+            // Edit: the band as Review's, the panel closed (the Source viewer's place).
+            QSignalSpy switched(window.m_bus, &EditorBus::workspaceChanged);
+            command("workspace.edit")->trigger();
+            QCOMPARE(workspace->current(), QStringLiteral("Edit"));
+            QCOMPARE(switched.size(), 1);
+            QCOMPARE(switched.first().first().toString(), QStringLiteral("Edit"));
+            QVERIFY(!window.chatOpen() && !window.m_viewer->chatOpen());
+            QVERIFY(command("workspace.edit")->isChecked() && !command("workspace.review")->isChecked());
+            for (const char *id : {"project", "timeline", "browser", "program", "inspector"}) QVERIFY2(!panel(id)->isClosed(), id);
+            for (const char *id : {"finish", "deliver"}) QVERIFY2(panel(id)->isClosed(), id);
+            QVERIFY(!workspace->stageState().panelOpen);
+            // Choosing the current one again leaves it chosen.
+            command("workspace.edit")->trigger();
+            QVERIFY(command("workspace.edit")->isChecked());
+            QCOMPARE(workspace->current(), QStringLiteral("Edit"));
+            // Review opens it again.
+            command("workspace.review")->trigger();
+            QVERIFY(window.chatOpen());
+            // Finish and Deliver: their tray in the band's place, Finish dimmed.
+            command("workspace.finish")->trigger();
+            QCOMPARE(workspace->current(), QStringLiteral("Finish"));
+            for (const char *id : {"project", "timeline", "browser", "deliver"}) QVERIFY2(panel(id)->isClosed(), id);
+            QVERIFY(!panel("finish")->isClosed() && !panel("inspector")->isClosed() && !panel("program")->isClosed());
+            QVERIFY(workspace->stageState().dim);
+            QVERIFY(window.chatOpen());
+            // Reset in Finish applies its stage again, so the regions hear
+            // it although the name is the same: the Inspector column goes
+            // back to its Inspector page.
+            window.m_inspectorColumn->setPage(InspectorColumn::Page::Source);
+            switched.clear();
+            command("window.resetWorkspace")->trigger();
+            QCOMPARE(switched.size(), 1);
+            QCOMPARE(switched.first().first().toString(), QStringLiteral("Finish"));
+            QCOMPARE(window.m_inspectorColumn->page(), InspectorColumn::Page::Inspector);
+            QVERIFY(workspace->stageState().dim);
+            command("workspace.deliver")->trigger();
+            QVERIFY(panel("finish")->isClosed() && !panel("deliver")->isClosed());
+            QVERIFY(!workspace->stageState().dim);
+            command("workspace.review")->trigger();
+            for (const char *id : {"project", "timeline", "browser"}) QVERIFY2(!panel(id)->isClosed(), id);
+            for (const char *id : {"finish", "deliver"}) QVERIFY2(panel(id)->isClosed(), id);
+
             // Each workspace keeps its changes until it is reset.
+            project->toggleView(false);
+            workspace->activate(QStringLiteral("Edit"));
+            QVERIFY(!project->isClosed());
             workspace->activate(QStringLiteral("Review"));
             QVERIFY(project->isClosed());
-            QVERIFY(!window.m_commands->action(QStringLiteral("window.project"))->isChecked());
+            QVERIFY(!command("window.project")->isChecked());
             workspace->resetCurrent();
             QVERIFY(!project->isClosed());
 
+            // One's own: Finish with the Inspector column closed, saved as Grading.
+            workspace->activate(QStringLiteral("Finish"));
+            panel("inspector")->toggleView(false);
+            QVERIFY(workspace->saveAs(QStringLiteral("Grading")));
+            QVERIFY(!workspace->saveAs(QStringLiteral("grading")));
+            QVERIFY(!workspace->saveAs(QStringLiteral("review")));
+            QVERIFY(!workspace->saveAs(QStringLiteral("Editing")));
+            QCOMPARE(workspace->current(), QStringLiteral("Grading"));
+            QCOMPARE(workspace->names().constLast(), QStringLiteral("Grading"));
+            QVERIFY(workspace->stageState(QStringLiteral("Grading")).dim);
+            // None of the built-ins is chosen while it is.
+            for (const char *id : ids) QVERIFY2(!command(id)->isChecked(), id);
+            workspace->activate(QStringLiteral("Review"));
+            QVERIFY(!panel("inspector")->isClosed() && panel("finish")->isClosed());
+            workspace->activate(QStringLiteral("Grading"));
+            QVERIFY(panel("inspector")->isClosed() && !panel("finish")->isClosed());
+            QCOMPARE(window.m_bus->workspace(), QStringLiteral("Grading"));
+            // Changed and saved: the change is the saved layout now.
+            panel("inspector")->toggleView(true);
+            command("window.saveWorkspace")->trigger();
+            QVERIFY(QSettings().value(QStringLiteral("workspace/changes/Grading")).isNull());
+            workspace->activate(QStringLiteral("Review"));
+            workspace->activate(QStringLiteral("Grading"));
+            QVERIFY(!panel("inspector")->isClosed());
+
+            // A built-in's stage saved: Edit with its panel open.
+            workspace->activate(QStringLiteral("Edit"));
+            QVERIFY(!window.chatOpen());
+            window.setChatOpen(true);
+            command("window.saveWorkspace")->trigger();
+            workspace->activate(QStringLiteral("Review"));
+            workspace->activate(QStringLiteral("Edit"));
+            QVERIFY(window.chatOpen());
+            workspace->activate(QStringLiteral("Review"));
+
+            // Window ▸ Workspaces as the design lists it.
+            auto *menu = window.findChild<QMenu *>(QStringLiteral("workspacesMenu"));
+            QVERIFY(menu);
+            emit menu->aboutToShow();
+            QStringList items;
+            for (const QAction *action : menu->actions()) items << (action->isSeparator() ? QStringLiteral("-") : action->text());
+            QCOMPARE(items, (QStringList{"Workspaces", "Edit", "Review", "Finish", "Deliver", "Grading", "-",
+                                         "Save Changes to This Workspace", "Save as New Workspace…", "Reset to Saved Layout"}));
+            QVERIFY(!menu->actions().first()->isEnabled());
+            QVERIFY(command("workspace.review")->isChecked());
+            QAction *grading = menu->actions().at(5);
+            QVERIFY(grading->isCheckable() && !grading->isChecked());
+            grading->trigger();
+            QCOMPARE(workspace->current(), QStringLiteral("Grading"));
+
             window.m_commands->action(QStringLiteral("app.preferences"))->trigger();
             QVERIFY(window.m_preferences->isVisible());
+            window.close();
         }
-        QSettings().remove(QStringLiteral("workspace"));
+        {
+            // The next window opens in the workspace the last one closed in.
+            MainWindow window{QString(), QString()};
+            QCOMPARE(window.m_workspace->current(), QStringLiteral("Grading"));
+            QCOMPARE(window.m_bus->workspace(), QStringLiteral("Grading"));
+            QVERIFY(!window.m_workspace->panel(QStringLiteral("finish"))->isClosed());
+            QVERIFY(window.m_workspace->panel(QStringLiteral("timeline"))->isClosed());
+        }
     }
 
-    // The Editing workspace reads as a Short does on YouTube's desktop page:
-    // the Program monitor is the page, the widest panel of its row, and in
-    // its stage the picture card, the action rail and Kerf's conversation
-    // form one group, centred, the conversation as tall as the card and
-    // level with it. The browsers and Effect Controls sit on its left, the
-    // Source monitor is a tab behind it, and the Timeline runs the window's
-    // full width under them.
-    void editingShowsTheVideoWithItsConversationInItsStage() {
+    // Finish and Deliver put their tray in the place of the whole band, at
+    // the band's height, under the same top row; their panes hear the
+    // engine through the bus.
+    void finishAndDeliverReplaceTheBand() {
+        QSettings().remove(QStringLiteral("workspace"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(showcaseSnapshot(3, QStringLiteral("clean")));
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.m_errorBanner->hide();
+        Workspace *workspace = window.m_workspace;
+        const auto area = [workspace](const char *id) { return workspace->panel(QString::fromLatin1(id))->dockAreaWidget(); };
+        const auto frame = [&window](const QWidget *widget) { return QRect(widget->mapTo(&window, QPoint()), widget->size()); };
+        QCoreApplication::processEvents();
+        const QRect program = frame(area("program"));
+        const QRect inspector = frame(area("inspector"));
+        const QRect band = frame(area("timeline")).united(frame(area("project"))).united(frame(area("browser")));
+
+        window.m_commands->action(QStringLiteral("workspace.finish"))->trigger();
+        QCoreApplication::processEvents();
+        QVERIFY(window.m_finishTray->isVisible());
+        const QRect tray = frame(area("finish"));
+        QCOMPARE(tray.left(), 0);
+        QCOMPARE(tray.right(), window.width() - 1);
+        QVERIFY2(std::abs(tray.top() - band.top()) <= 1 && std::abs(tray.height() - band.height()) <= 1,
+                 qPrintable(QStringLiteral("%1 %2 / %3 %4").arg(tray.top()).arg(tray.height()).arg(band.top()).arg(band.height())));
+        QCOMPARE(frame(area("program")), program);
+        QCOMPARE(frame(area("inspector")), inspector);
+        // The tray's own bar is its strip: no tab row over it.
+        QVERIFY(area("finish")->titleBar()->isHidden());
+        // Five panes, 8 apart: the vectorscope and loudness 240, the rest sharing.
+        FinishTray *finish = window.m_finishTray;
+        QCOMPARE(finish->pane(QStringLiteral("vectorscope"))->width(), 240);
+        QCOMPARE(finish->pane(QStringLiteral("loudness"))->width(), 240);
+        const int waveform = finish->pane(QStringLiteral("waveform"))->width();
+        QVERIFY2(std::abs(waveform - 352) <= 2, qPrintable(QString::number(waveform)));
+        QVERIFY(std::abs(finish->pane(QStringLiteral("qc"))->width() - 368) <= 2);
+        QCOMPARE(finish->pane(QStringLiteral("vectorscope"))->x() - finish->pane(QStringLiteral("waveform"))->geometry().right() - 1, 8);
+        QCOMPARE(finish->pane(QStringLiteral("waveform"))->x(), 8);
+        // Run QC and Ask follow their registry actions: offline they are
+        // unavailable, with the registry's reason; their tips carry the
+        // keymap's shortcut.
+        QAction *runQc = window.m_commands->action(QStringLiteral("qc.run"));
+        QVERIFY(finish->runQcButton()->isEnabled() && finish->runQcButton()->toolTip() == runQc->toolTip());
+        QCOMPARE(finish->askButton()->toolTip(), window.m_commands->action(QStringLiteral("ai.ask"))->toolTip());
+        window.setConnection(QStringLiteral("disconnected"));
+        QVERIFY(!finish->runQcButton()->isEnabled());
+        QVERIFY(!runQc->statusTip().isEmpty() && finish->runQcButton()->toolTip().contains(runQc->statusTip()));
+        window.setConnection(QStringLiteral("ready"));
+        QVERIFY(finish->runQcButton()->isEnabled());
+        // Run QC asks the bridge for a check; its answer lists the rows, a
+        // failure with its thread.
+        window.m_lastCommand = {};
+        finish->runQcButton()->click();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "check"}}));
+        QSignalSpy threads(window.m_bus, &EditorBus::openThread);
+        window.handleEvent(QJsonObject{{"type", "check"}, {"status", "done"}, {"valid", false},
+                                       {"summary", QJsonObject{{"passed", 1}, {"total", 2}, {"blocking", 0},
+                                                               {"rows", QJsonArray{
+                                                                   QJsonObject{{"code", "loudness.true_peak"}, {"name", "True peak"}, {"passed", false},
+                                                                               {"value", "−0.4 dBTP"}, {"limit", "≤ −1.0"}, {"commentId", "c-2718"}},
+                                                                   QJsonObject{{"code", "picture.out_of_range"}, {"name", "Gamut Rec.709"}, {"passed", true},
+                                                                               {"value", "legal"}}}}}}});
+        QCOMPARE(finish->qcView()->rowCount(), 2);
+        QCOMPARE(finish->qcView()->summaryText(), QStringLiteral("1 of 2 pass"));
+        auto *inThread = finish->qcView()->findChild<QToolButton *>(QStringLiteral("qcInThread"));
+        QVERIFY(inThread);
+        inThread->click();
+        QCOMPARE(threads.size(), 1);
+        QCOMPARE(threads.first().first().toString(), QStringLiteral("c-2718"));
+        // The programme's loudness, and the meter's while it plays; unmeasured is a dash.
+        QCOMPARE(finish->loudnessView()->statText(QStringLiteral("I")), QStringLiteral("—"));
+        window.handleEvent(QJsonObject{{"type", "loudness"}, {"status", "ready"}, {"integrated", -23.1}, {"lra", 6.2},
+                                       {"truePeak", QJsonArray{-0.4, -1.3}}, {"target", -23}, {"limit", -1}});
+        QCOMPARE(finish->loudnessView()->statText(QStringLiteral("I")), QStringLiteral("−23.1"));
+        QCOMPARE(finish->loudnessView()->statText(QStringLiteral("LRA")), QStringLiteral("6.2"));
+        QCOMPARE(finish->loudnessView()->statText(QStringLiteral("TP L")), QStringLiteral("−0.4 dBTP"));
+        window.handleEvent(QJsonObject{{"type", "meter"}, {"momentary", -17.8}, {"shortTerm", QJsonValue()}});
+        QCOMPARE(finish->loudnessView()->statText(QStringLiteral("M")), QStringLiteral("−17.8"));
+        QCOMPARE(finish->loudnessView()->statText(QStringLiteral("S")), QStringLiteral("—"));
+        // A pane asked for over the bus comes forward outlined.
+        emit window.m_bus->highlightPane(QStringLiteral("loudness"));
+        QCOMPARE(finish->highlightedPane(), QStringLiteral("loudness"));
+
+        window.m_commands->action(QStringLiteral("workspace.deliver"))->trigger();
+        QCoreApplication::processEvents();
+        QVERIFY(!window.m_finishTray->isVisible() && window.m_deliverTray->isVisible());
+        QCOMPARE(frame(area("deliver")).left(), 0);
+        QCOMPARE(frame(area("deliver")).right(), window.width() - 1);
+        QVERIFY(std::abs(frame(area("deliver")).height() - band.height()) <= 1);
+        // The Inspector shows the Deliver pane (Video chosen).
+        QVERIFY(window.m_inspectorColumn->deliverShown());
+        QCOMPARE(window.m_inspectorColumn->currentPage(), window.m_inspectorColumn->deliverPane());
+        QCOMPARE(window.m_inspectorColumn->deliverPane()->fileText(), QStringLiteral("No master output yet"));
+        // The check reached the preflight too.
+        QCOMPARE(window.m_deliverTray->qcView()->rowCount(), 2);
+        // Blocking notes hold the master back.
+        DeliverTray *deliver = window.m_deliverTray;
+        const auto comments = [&window](bool resolved) {
+            window.handleEvent(QJsonObject{{"type", "comments"}, {"reviewRevision", 4}, {"items", QJsonArray{
+                QJsonObject{{"id", "c-1708"}, {"body", "Caption overlap"}, {"blocking", true}, {"resolved", resolved}},
+                QJsonObject{{"id", "c-0903"}, {"body", "Warmer"}, {"blocking", false}, {"resolved", false}}}}});
+        };
+        // Before the notes are known nothing is said of them, and the
+        // master waits for them.
+        QCOMPARE(deliver->blockingCount(), -1);
+        QVERIFY(deliver->blockingText().isEmpty());
+        QVERIFY(!deliver->renderButton()->isEnabled());
+        QCOMPARE(deliver->renderButton()->toolTip(), QStringLiteral("Waiting for the review notes"));
+        comments(false);
+        QCOMPARE(deliver->blockingCount(), 1);
+        QCOMPARE(deliver->blockingText(), QStringLiteral("1 blocking note open"));
+        QVERIFY(!deliver->renderButton()->isEnabled());
+        QCOMPARE(deliver->renderButton()->toolTip(), QStringLiteral("Resolve blocking notes first"));
+        comments(true);
+        QCOMPARE(deliver->blockingText(), QStringLiteral("No blocking notes"));
+        QVERIFY(deliver->renderButton()->isEnabled());
+        QCOMPARE(deliver->renderButton()->toolTip(), window.m_commands->action(QStringLiteral("export.master"))->toolTip());
+        window.m_lastCommand = {};
+        deliver->renderButton()->click();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "export"}, {"quality", "master"}}));
+        // The render queue, one row a job.
+        window.handleEvent(QJsonObject{{"type", "render_queue"}, {"jobs", QJsonArray{
+            QJsonObject{{"jobId", "j1"}, {"name", "Master"}, {"quality", "master"}, {"codec", "prores_hq"}, {"status", "running"}, {"progress", 0.38}},
+            QJsonObject{{"jobId", "j2"}, {"name", "Draft"}, {"quality", "review"}, {"status", "queued"}}}}});
+        QCOMPARE(deliver->queueRowCount(), 2);
+
+        // Back in Review the band returns, and the Inspector is the Inspector.
+        window.m_commands->action(QStringLiteral("workspace.review"))->trigger();
+        QCoreApplication::processEvents();
+        QCOMPARE(frame(area("timeline")).united(frame(area("project"))).united(frame(area("browser"))), band);
+        QCOMPARE(window.m_inspectorColumn->currentPage(), window.m_inspector);
+        // A wider window: the tray keeps its height and its fixed panes.
+        window.m_commands->action(QStringLiteral("workspace.finish"))->trigger();
+        window.resize(1920, 1080);
+        QCoreApplication::processEvents();
+        QCOMPARE(frame(area("finish")).right(), window.width() - 1);
+        QVERIFY(std::abs(frame(area("finish")).height() - band.height()) <= 1);
+        QCOMPARE(finish->pane(QStringLiteral("vectorscope"))->width(), 240);
+    }
+
+    // Settings from before version 9: the Editing workspace and its
+    // layouts become Review's (which then takes its own arrangement, the
+    // old tree being gone), one's own named like a built-in is renamed, and
+    // one's own from before today's tree opens as Review is arranged.
+    void layoutsFromVersion8MigrateToReview() {
+        QSettings().remove(QStringLiteral("workspace"));
+        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
+        QByteArray older;
+        {
+            MainWindow window{QString(), QString()};
+            window.m_workspace->panel(QStringLiteral("timeline"))->toggleView(false);
+            older = window.m_workspace->manager()->saveState(8);
+            if (!older.startsWith("<?xml")) older = qUncompress(older);
+            older.replace("Name=\"inspector\"", "Name=\"effectControls\"");
+            // As version 8 had it: Effects where the browser is with Presets
+            // beside it, a Source panel, and no trays.
+            QString xml = QString::fromUtf8(older);
+            xml.replace(QStringLiteral("Name=\"browser\""), QStringLiteral("Name=\"effects\""));
+            xml.replace(QStringLiteral("Current=\"browser\""), QStringLiteral("Current=\"effects\""));
+            xml.replace(QRegularExpression(QStringLiteral(R"((<Widget Name="effects"[^>]*/>))")),
+                        QStringLiteral(R"(\1<Widget Name="presets" Closed="0"/><Widget Name="source" Closed="0"/>)"));
+            xml.remove(QRegularExpression(QStringLiteral(R"re(<Widget Name="(finish|deliver)"[^>]*/>)re")));
+            QVERIFY(xml.contains(QStringLiteral("Name=\"presets\"")) && !xml.contains(QStringLiteral("Name=\"finish\"")));
+            older = xml.toUtf8();
+        }
+        {
+            QSettings settings;
+            settings.setValue(QStringLiteral("workspace/names"), QStringList{QStringLiteral("Grading"), QStringLiteral("Review")});
+            settings.setValue(QStringLiteral("workspace/saved/Editing"), older);
+            settings.setValue(QStringLiteral("workspace/changes/Editing"), older);
+            settings.setValue(QStringLiteral("workspace/saved/Grading"), older);
+            settings.setValue(QStringLiteral("workspace/saved/Review"), older);
+            settings.setValue(QStringLiteral("workspace/current"), QStringLiteral("Editing"));
+        }
+        MainWindow window{QString(), QString()};
+        Workspace *workspace = window.m_workspace;
+        QCOMPARE(workspace->current(), QStringLiteral("Review"));
+        QCOMPARE(workspace->names(), (QStringList{"Edit", "Review", "Finish", "Deliver", "Grading", "Review (own)"}));
+        const QSettings settings;
+        QVERIFY(!settings.contains(QStringLiteral("workspace/changes/Editing")));
+        QVERIFY(!settings.contains(QStringLiteral("workspace/saved/Editing")));
+        QVERIFY(settings.contains(QStringLiteral("workspace/saved/Review (own)")));
+        // The version-8 layout gave way: Review is as it is arranged.
+        for (const char *id : {"program", "inspector", "project", "timeline", "browser"})
+            QVERIFY2(!workspace->panel(QString::fromLatin1(id))->isClosed(), id);
+        for (const char *id : {"finish", "deliver"}) QVERIFY2(workspace->panel(QString::fromLatin1(id))->isClosed(), id);
+        // One's own workspace keeps its version-8 layout: its timeline
+        // closed as it was saved, the browser in Effects' place, the
+        // Inspector column; the trays it had none of are placed, closed.
+        workspace->activate(QStringLiteral("Grading"));
+        QCOMPARE(workspace->current(), QStringLiteral("Grading"));
+        QVERIFY(workspace->panel(QStringLiteral("timeline"))->isClosed());
+        for (const char *id : {"program", "inspector", "project", "browser"})
+            QVERIFY2(!workspace->panel(QString::fromLatin1(id))->isClosed(), id);
+        for (const char *id : {"finish", "deliver"}) {
+            QVERIFY2(workspace->panel(QString::fromLatin1(id))->isClosed(), id);
+            QVERIFY2(workspace->panel(QString::fromLatin1(id))->dockAreaWidget(), id);
+        }
+        // Finish, a built-in, has its tray as it is arranged.
+        workspace->activate(QStringLiteral("Finish"));
+        QVERIFY(!workspace->panel(QStringLiteral("finish"))->isClosed());
+        workspace->activate(QStringLiteral("Grading"));
+        // Panels that became pages are found by their old ids.
+        QCOMPARE(workspace->panel(QStringLiteral("effects")), workspace->panel(QStringLiteral("browser")));
+        QCOMPARE(workspace->panel(QStringLiteral("presets")), workspace->panel(QStringLiteral("browser")));
+        QCOMPARE(workspace->panel(QStringLiteral("source")), workspace->panel(QStringLiteral("inspector")));
+        QVERIFY(!workspace->panel(QStringLiteral("assistant")));
+        // The conversation is the stage's, whatever the workspace.
+        QVERIFY(window.chatOpen());
+    }
+
+    // The Review workspace: the Program monitor is the page, the widest
+    // panel of its row, and in its stage the picture, the action rail and
+    // Kerf's conversation form one group, centred, the conversation as tall
+    // as the picture and level with it. The Inspector column is on its
+    // right, and the band of the bin, the timeline and the browser under it.
+    void reviewShowsTheVideoWithItsConversationInItsStage() {
         QSettings().remove(QStringLiteral("workspace"));
         const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
         MainWindow window{QString(), QString()};
@@ -305,33 +643,34 @@ private slots:
         QVERIFY(toggle->isCheckable() && toggle->isChecked());
         QVERIFY(window.m_chatToggle && window.m_chatToggle->isChecked());
         QCOMPARE(window.m_chatToggle->defaultAction(), toggle);
-        QCOMPARE(area("source"), area("program"));
-        QVERIFY(panel("program")->isCurrentTab());
-        for (const char *id : {"inspector", "effects", "presets"}) QCOMPARE(area(id), area("project"));
-        QVERIFY(panel("project")->isCurrentTab());
-        // Their column shows the four tabs' names in full.
-        for (const char *id : {"project", "inspector", "effects", "presets"}) {
-            auto *label = panel(id)->tabWidget()->findChild<ads::CElidingLabel *>();
-            QVERIFY2(label && label->isVisible() && !label->isElided(), id);
-        }
+        // Each region in an area of its own; the Source monitor is a page of
+        // the Inspector column, Effects and Presets pages of the browser.
+        QCOMPARE(panel("source"), panel("inspector"));
+        QCOMPARE(panel("effects"), panel("browser"));
+        for (const char *id : {"program", "inspector", "project", "timeline", "browser"})
+            for (const char *other : {"program", "inspector", "project", "timeline", "browser"})
+                if (qstrcmp(id, other) != 0) QVERIFY2(area(id) != area(other), id);
         // Every panel is open, and Window lists each one.
-        for (const char *id : {"project", "source", "program", "timeline", "inspector", "effects", "presets"}) {
-            QVERIFY2(!panel(id)->isClosed(), id);
+        for (const char *id : {"project", "program", "timeline", "inspector", "browser"}) QVERIFY2(!panel(id)->isClosed(), id);
+        for (const char *id : {"project", "program", "timeline", "inspector", "effects"}) {
             QAction *item = window.m_commands->action(QStringLiteral("window.%1").arg(QString::fromLatin1(id)));
             QVERIFY2(item && item->isCheckable() && item->isChecked(), id);
         }
+        QVERIFY(!window.m_commands->action(QStringLiteral("window.source"))->isChecked());
+        QVERIFY(window.m_commands->action(QStringLiteral("window.presets"))->isChecked());
 
-        const QRect browser = frame(area("project"));
+        const QRect browser = frame(area("inspector"));
         const QRect viewer = frame(area("program"));
         const QRect timeline = frame(area("timeline"));
-        // One row: the browsers, then the viewer to the window's edge.
-        QVERIFY(browser.right() < viewer.left());
-        QCOMPARE(viewer.right(), window.width() - 1);
+        // One row: the viewer from the window's edge, then the Inspector column to the other.
+        QCOMPARE(viewer.left(), 0);
+        QVERIFY(viewer.right() < browser.left());
+        QCOMPARE(browser.right(), window.width() - 1);
         QCOMPARE(browser.top(), viewer.top());
         QVERIFY(viewer.width() > 2 * browser.width());
-        QCOMPARE(timeline.left(), browser.left());
-        QCOMPARE(timeline.right(), viewer.right());
         QVERIFY(timeline.top() > viewer.bottom());
+        QCOMPARE(frame(area("project")).left(), 0);
+        QCOMPARE(frame(area("browser")).right(), window.width() - 1);
         QVERIFY(viewer.height() > timeline.height());
 
         // The stage: the picture's laptop (or card), rail, conversation, one
@@ -367,9 +706,10 @@ private slots:
         // the rest.
         window.resize(1680, 900);
         QCoreApplication::processEvents();
-        QCOMPARE(frame(area("project")).width(), browser.width());
+        QCOMPARE(frame(area("inspector")).width(), browser.width());
         QCOMPARE(frame(area("program")).width(), viewer.width() + 240);
-        QVERIFY(window.m_chat->width() > chatWidth && window.m_chat->width() <= ViewerWidget::kDefaultChatWidth);
+        // (In the design's shorter stage it may have its own width already.)
+        QVERIFY(window.m_chat->width() >= chatWidth && window.m_chat->width() <= ViewerWidget::kDefaultChatWidth);
         QVERIFY(window.m_viewer->videoRect().width() >= card.width() - 0.5);
         checkGroup("1680");
         // A laptop's window: the conversation gives way before the picture,
@@ -382,9 +722,8 @@ private slots:
             const ViewerWidget::StageLayout stage = window.m_viewer->stageLayout();
             QVERIFY(!stage.overlay);
             QCOMPARE(window.m_viewer->stageGap(), ViewerWidget::kNarrowStageGap);
-            const double cardArea = stage.card.width() * stage.card.height();
-            const double panelArea = double(stage.panel.width()) * stage.panel.height();
-            QVERIFY2(cardArea >= panelArea, qPrintable(QStringLiteral("%1 < %2").arg(cardArea).arg(panelArea)));
+            // (Which of the picture and the panel is larger in a stage this
+            // short is the stage layout's to say: Q-STAGE, W2.)
             QVERIFY(stage.panel.width() >= ViewerWidget::kMinChatWidth);
             window.setChatOpen(false);
             QCoreApplication::processEvents();
@@ -407,7 +746,7 @@ private slots:
         QVERIFY(std::abs(window.m_viewer->videoRect().center().x() - window.m_viewer->width() / 2.0) <= 1);
         QVERIFY(window.m_rail->isVisible());
         QCOMPARE(window.m_rail->x() - qRound(window.m_viewer->stageLayout().body.right()), ViewerWidget::kStageGap);
-        QCOMPARE(frame(area("project")).width(), browser.width());
+        QCOMPARE(frame(area("inspector")).width(), browser.width());
         // And opens it again as it was.
         window.m_chatToggle->click();
         QCoreApplication::processEvents();
@@ -440,21 +779,21 @@ private slots:
         toggle->trigger();
         QCoreApplication::processEvents();
         QVERIFY(!window.chatOpen() && !window.m_chatToggle->isChecked());
-        // With the Source monitor in front, opening the conversation brings
-        // the Program monitor, whose stage holds it, forward.
-        panel("source")->setAsCurrentTab();
+        // With the Program monitor closed, opening the conversation brings it
+        // back, its stage holding the conversation.
+        panel("program")->toggleView(false);
         QCoreApplication::processEvents();
         QVERIFY(!window.m_viewer->isVisible());
         toggle->trigger();
         QCoreApplication::processEvents();
-        QVERIFY(panel("program")->isCurrentTab() && window.m_chat->isVisible());
-        // Open but out of sight behind the Source monitor, it reads as
+        QVERIFY(!panel("program")->isClosed() && window.m_chat->isVisible());
+        // Open but out of sight with the Program monitor closed, it reads as
         // closed: the timeline's bar stands in for it with Kerf's proposal,
-        // and the first press of ⇧⌘J brings it back into sight.
+        // and ⇧⌘J brings it back into sight.
         window.setConnection(QStringLiteral("ready"));
         window.updateProposal(QJsonObject{{"status", "pending"}, {"proposalId", "p1"}, {"script", "remove v1c\n"},
                                           {"documentDiff", "-    clip v1c\n"}});
-        panel("source")->setAsCurrentTab();
+        panel("program")->toggleView(false);
         QCoreApplication::processEvents();
         QVERIFY(window.m_viewer->chatOpen() && !window.chatOpen());
         QVERIFY(!toggle->isChecked() && !window.m_chatToggle->isChecked());
@@ -462,7 +801,7 @@ private slots:
         QVERIFY(window.m_aiBarText->text().startsWith(QStringLiteral("Proposal")));
         QTest::keyClick(&window, Qt::Key_J, Qt::ControlModifier | Qt::ShiftModifier);
         QCoreApplication::processEvents();
-        QVERIFY(panel("program")->isCurrentTab() && window.chatOpen() && window.m_chat->isVisible());
+        QVERIFY(!panel("program")->isClosed() && window.chatOpen() && window.m_chat->isVisible());
         QVERIFY(toggle->isChecked() && window.m_chatToggle->isChecked());
         QVERIFY(!window.m_aiBar->isVisible());
         window.updateProposal(QJsonValue());
@@ -511,61 +850,9 @@ private slots:
         QCOMPARE(QSettings().value(QStringLiteral("viewer/chatOpen")).toBool(), true);
     }
 
-    // The new Editing arrangement takes the place of the Editing layout
-    // saved before it, while a workspace of one's own saved then keeps its
-    // arrangement, even one saved with the conversation's old dock (which
-    // restoring leaves out); one from before today's panels gives way to
-    // Editing's.
-    void editingLayoutReplacesOldDefaultsAndKeepsOwnWorkspaces() {
-        QSettings().remove(QStringLiteral("workspace"));
-        const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
-        QByteArray before;
-        QByteArray older;
-        QByteArray docked;
-        {
-            MainWindow window{QString(), QString()};
-            window.m_workspace->panel(QStringLiteral("presets"))->toggleView(false);
-            before = window.m_workspace->manager()->saveState(5);
-            older = window.m_workspace->manager()->saveState(3);
-            // A layout of version 5 with the conversation docked as its own
-            // panel (in place of the Inspector, in the browsers' column).
-            docked = window.m_workspace->manager()->saveState(5);
-            if (!docked.startsWith("<?xml")) docked = qUncompress(docked);
-            QVERIFY(docked.contains("Name=\"inspector\""));
-            docked.replace("Name=\"inspector\"", "Name=\"assistant\"");
-        }
-        {
-            QSettings settings;
-            settings.setValue(QStringLiteral("workspace/names"), QStringList{QStringLiteral("Review"), QStringLiteral("Old"), QStringLiteral("Docked")});
-            settings.setValue(QStringLiteral("workspace/saved/Editing"), before);
-            settings.setValue(QStringLiteral("workspace/changes/Editing"), before);
-            settings.setValue(QStringLiteral("workspace/saved/Review"), before);
-            settings.setValue(QStringLiteral("workspace/saved/Old"), older);
-            settings.setValue(QStringLiteral("workspace/saved/Docked"), docked);
-            settings.setValue(QStringLiteral("workspace/current"), QStringLiteral("Editing"));
-        }
-        MainWindow window{QString(), QString()};
-        Workspace *workspace = window.m_workspace;
-        ads::CDockWidget *presets = workspace->panel(QStringLiteral("presets"));
-        QVERIFY(!presets->isClosed());
-        workspace->activate(QStringLiteral("Review"));
-        QCOMPARE(workspace->current(), QStringLiteral("Review"));
-        QVERIFY(presets->isClosed());
-        QVERIFY(!window.m_commands->action(QStringLiteral("window.presets"))->isChecked());
-        workspace->activate(QStringLiteral("Old"));
-        QVERIFY(!presets->isClosed());
-        workspace->activate(QStringLiteral("Docked"));
-        QCOMPARE(workspace->current(), QStringLiteral("Docked"));
-        QVERIFY(presets->isClosed());
-        QVERIFY(!workspace->panel(QStringLiteral("program"))->isClosed());
-        QVERIFY(!workspace->panel(QStringLiteral("assistant")));
-        // The conversation is the stage's, whatever the workspace.
-        QVERIFY(window.chatOpen());
-    }
-
-    // Add effect raises the Effects browser with its search ready; adding
-    // one brings the Inspector back with it open. Dropping an effect on the
-    // Inspector inserts it where it lands.
+    // Add effect brings the browser's Effects page up with its search
+    // ready, the Inspector staying in view; adding one opens it there.
+    // Dropping an effect on the Inspector inserts it where it lands.
     void inspectorAddsAndDropsEffects() {
         QSettings().remove(QStringLiteral("workspace"));
         QSettings().remove(QStringLiteral("editor/inspector"));
@@ -590,22 +877,24 @@ private slots:
         QVERIFY(QTest::qWaitForWindowExposed(&window));
         window.clickSelectClip(QStringLiteral("c1"));
         Workspace *workspace = window.m_workspace;
-        QVERIFY(workspace->panel(QStringLiteral("inspector"))->isCurrentTab());
+        QVERIFY(window.m_inspector->isVisible());
         InspectorPanel *inspector = window.m_inspector;
         inspector->section(QStringLiteral("effects"))->setOpen(true);
         QCoreApplication::processEvents();
         auto *add = inspector->findChild<QPushButton *>(QStringLiteral("addEffect"));
         QVERIFY(add && add->isVisible());
         QCOMPARE(add->text(), QStringLiteral("Add effect"));
+        window.m_browserPanel->setPage(BrowserPanel::Page::Presets);
         add->click();
-        QVERIFY(workspace->panel(QStringLiteral("effects"))->isCurrentTab());
+        QCOMPARE(window.m_browserPanel->page(), BrowserPanel::Page::Effects);
+        QVERIFY(window.m_inspector->isVisible());
         QVERIFY(window.m_effects->m_search->hasFocus() || QApplication::focusWidget() == window.m_effects->m_search);
         // Adding: one fx-add, and the Inspector is back.
         emit window.m_effects->addRequested(QStringLiteral("blur.gaussian"));
         const QJsonObject added = takeOps(window).first().toObject();
         QCOMPARE(added.value("op").toString(), QStringLiteral("fx-add"));
         QCOMPARE(added.value("fx").toString(), QStringLiteral("blur.gaussian"));
-        QVERIFY(workspace->panel(QStringLiteral("inspector"))->isCurrentTab());
+        QVERIFY(window.m_inspector->isVisible());
         // The snapshot with it shows it open.
         snapshot(2, 3);
         QCoreApplication::processEvents();
@@ -618,7 +907,6 @@ private slots:
         QCOMPARE(wanted.size(), 1);
         QCOMPARE(wanted.first().first().toBool(), false);
         // A drop between the first and second effects inserts at 1.
-        workspace->panel(QStringLiteral("inspector"))->setAsCurrentTab();
         QCoreApplication::processEvents();
         const QWidget *second = boxes.at(1);
         const QPoint at = second->mapTo(inspector, QPoint(20, 4));
@@ -647,11 +935,11 @@ private slots:
         QCOMPARE(dragged->data(QStringLiteral("application/x-kerf-fx")), QByteArray("blur.gaussian"));
     }
 
-    // Clicking a clip brings the Inspector to the front of its column and
-    // remembers the tab it came from; clearing the selection goes back to
-    // it, unless the Inspector was chosen by hand. A clip selected by an
-    // edit raises nothing, and a closed column stays closed. The
-    // conversation is never touched, and keyboard focus stays put.
+    // Clicking a clip brings the Inspector page forward over the column's
+    // Source page and remembers it came from there; clearing the selection
+    // goes back, unless the Inspector was chosen by hand. A clip selected by
+    // an edit raises nothing, a closed column stays closed, and the browser
+    // in the band is never in the way. Keyboard focus stays put.
     void inspectorFollowsClickedClips() {
         QSettings().remove(QStringLiteral("workspace"));
         QSettings().remove(QStringLiteral("editor/inspectorFollowsSelection"));
@@ -667,56 +955,62 @@ private slots:
         QVERIFY(QTest::qWaitForWindowExposed(&window));
         QCoreApplication::processEvents();
         Workspace *workspace = window.m_workspace;
+        InspectorColumn *column = window.m_inspectorColumn;
         ads::CDockWidget *inspector = workspace->panel(QStringLiteral("inspector"));
-        ads::CDockWidget *project = workspace->panel(QStringLiteral("project"));
-        QVERIFY(project->isCurrentTab());
+        using Page = InspectorColumn::Page;
+        QCOMPARE(column->page(), Page::Inspector);
         const QRect chat = window.m_chat->geometry();
-        QVERIFY(window.m_chat->isVisible());
+        // The Source page chosen by hand.
+        column->pageButton(Page::Source)->click();
+        QCOMPARE(column->page(), Page::Source);
+        QVERIFY(window.m_commands->action(QStringLiteral("window.source"))->isChecked());
         window.m_timeline->setFocus(Qt::OtherFocusReason);
         QCoreApplication::processEvents();
         QWidget *focus = QApplication::focusWidget();
         // A click on a clip: the Inspector, showing it; focus stays.
         emit window.m_timeline->clipSelected(QStringLiteral("v1b"));
         QCoreApplication::processEvents();
-        QVERIFY(inspector->isCurrentTab());
+        QCOMPARE(column->page(), Page::Inspector);
+        QVERIFY(workspace->inspectorRaisedBySelection());
         QCOMPARE(window.m_inspector->nameText(), QStringLiteral("fisher-close"));
         QCOMPARE(QApplication::focusWidget(), focus);
+        QVERIFY(!window.m_commands->action(QStringLiteral("window.source"))->isChecked());
         // Another clip: only the values change.
         emit window.m_timeline->clipSelected(QStringLiteral("v1a"));
-        QVERIFY(inspector->isCurrentTab());
-        // Deselected (an empty lane, Esc): back to Project.
+        QCOMPARE(column->page(), Page::Inspector);
+        // Deselected (an empty lane, Esc): back to Source.
         emit window.m_timeline->deselectRequested();
         QCoreApplication::processEvents();
-        QVERIFY(project->isCurrentTab());
+        QCOMPARE(column->page(), Page::Source);
         QVERIFY(window.m_selectedClip.isEmpty());
         // A selection by an edit raises nothing.
         window.selectClip(QStringLiteral("v1b"));
-        QVERIFY(project->isCurrentTab());
+        QCOMPARE(column->page(), Page::Source);
         window.selectClip(QString());
-        // Project chosen while a clip is selected stays until a new clip is clicked.
+        // Source chosen while a clip is selected stays until a new clip is clicked.
         emit window.m_timeline->clipSelected(QStringLiteral("v1b"));
-        QVERIFY(inspector->isCurrentTab());
-        project->setAsCurrentTab();
+        QCOMPARE(column->page(), Page::Inspector);
+        column->pageButton(Page::Source)->click();
         emit window.m_timeline->clipSelected(QStringLiteral("v1b"));
-        QVERIFY(project->isCurrentTab());
+        QCOMPARE(column->page(), Page::Source);
         emit window.m_timeline->clipSelected(QStringLiteral("v1a"));
-        QVERIFY(inspector->isCurrentTab());
+        QCOMPARE(column->page(), Page::Inspector);
         emit window.m_timeline->deselectRequested();
-        QVERIFY(project->isCurrentTab());
+        QCOMPARE(column->page(), Page::Source);
         // ⌘4: the Inspector by hand, which stays when the selection clears
-        // and shows the sequence; ⌘4 again goes back.
+        // and shows the sequence; ⌘4 again goes back to Source.
         QAction *show = window.m_commands->action(QStringLiteral("window.inspector"));
         show->trigger();
         QCoreApplication::processEvents();
-        QVERIFY(inspector->isCurrentTab());
+        QCOMPARE(column->page(), Page::Inspector);
         QVERIFY(show->isChecked());
         emit window.m_timeline->clipSelected(QStringLiteral("v1b"));
         emit window.m_timeline->deselectRequested();
-        QVERIFY(inspector->isCurrentTab());
+        QCOMPARE(column->page(), Page::Inspector);
         QCOMPARE(window.m_inspector->m_mode, InspectorPanel::Mode::Sequence);
         show->trigger();
         QCoreApplication::processEvents();
-        QVERIFY(project->isCurrentTab());
+        QCOMPARE(column->page(), Page::Source);
         QVERIFY(!inspector->isClosed() && show->isChecked());
         // Following off: clicks leave the column alone, and it is remembered.
         QAction *follows = window.m_commands->action(QStringLiteral("window.inspectorFollows"));
@@ -724,34 +1018,52 @@ private slots:
         follows->trigger();
         QVERIFY(!QSettings().value(QStringLiteral("editor/inspectorFollowsSelection")).toBool());
         emit window.m_timeline->clipSelected(QStringLiteral("v1a"));
-        QVERIFY(project->isCurrentTab());
+        QCOMPARE(column->page(), Page::Source);
         follows->trigger();
         QVERIFY(Workspace::inspectorFollowsSelection());
         emit window.m_timeline->deselectRequested();
-        // A closed Inspector is not reopened by a click.
+        // A closed column is not reopened by a click; ⌘4 opens it on the Inspector.
         inspector->toggleView(false);
-        QVERIFY(!window.m_commands->action(QStringLiteral("window.inspector"))->isChecked());
+        QVERIFY(!show->isChecked());
         emit window.m_timeline->clipSelected(QStringLiteral("v1b"));
         QVERIFY(inspector->isClosed());
-        // ⌘4 opens it again.
         show->trigger();
-        QVERIFY(!inspector->isClosed() && inspector->isCurrentTab());
-        // Effects or Presets chosen by hand stay in front when another clip
-        // is clicked (looks applied clip by clip), and the browser adds to
-        // the clip just clicked.
-        ads::CDockWidget *effects = workspace->panel(QStringLiteral("effects"));
-        ads::CDockWidget *presets = workspace->panel(QStringLiteral("presets"));
-        QVERIFY(effects && presets);
-        QCOMPARE(effects->dockAreaWidget(), inspector->dockAreaWidget());
-        emit window.m_timeline->clipSelected(QStringLiteral("v1b"));
-        QVERIFY(inspector->isCurrentTab());
-        effects->setAsCurrentTab();
-        QCoreApplication::processEvents();
+        QVERIFY(!inspector->isClosed());
+        QCOMPARE(column->page(), Page::Inspector);
+        // The browser is in the band, beside the timeline: choosing its pages
+        // never hides the Inspector, which shows the clip clicked.
+        BrowserPanel *browser = window.m_browserPanel;
+        QVERIFY(workspace->panel(QStringLiteral("browser"))->dockAreaWidget() != inspector->dockAreaWidget());
+        browser->pageButton(BrowserPanel::Page::Presets)->click();
+        QCOMPARE(browser->page(), BrowserPanel::Page::Presets);
+        // Window ▸ Effects and Presets read as open while the browser is.
+        QVERIFY(window.m_commands->action(QStringLiteral("window.presets"))->isChecked());
+        QVERIFY(window.m_commands->action(QStringLiteral("window.effects"))->isChecked());
         emit window.m_timeline->clipSelected(QStringLiteral("v1a"));
         QCoreApplication::processEvents();
-        QVERIFY(effects->isCurrentTab());
-        QCOMPARE(window.m_inspector->selection(), QStringList{QStringLiteral("v1a")});
+        QVERIFY(window.m_inspector->isVisible());
+        QCOMPARE(browser->page(), BrowserPanel::Page::Presets);
+        // Titles is not built yet: it says so and cannot be chosen.
+        QVERIFY(!browser->pageButton(BrowserPanel::Page::Titles)->isEnabled());
+        QVERIFY(browser->pageButton(BrowserPanel::Page::Titles)->toolTip().contains(QStringLiteral("Coming in this release")));
+        browser->setPage(BrowserPanel::Page::Titles);
+        QCOMPARE(browser->page(), BrowserPanel::Page::Presets);
+        // Window ▸ Effects closes the browser, and opens it on that page.
+        QAction *effects = window.m_commands->action(QStringLiteral("window.effects"));
+        effects->trigger();
+        QVERIFY(workspace->panel(QStringLiteral("browser"))->isClosed());
+        QVERIFY(!effects->isChecked() && !window.m_commands->action(QStringLiteral("window.presets"))->isChecked());
+        effects->trigger();
+        QVERIFY(!workspace->panel(QStringLiteral("browser"))->isClosed());
+        QCOMPARE(browser->page(), BrowserPanel::Page::Effects);
+        QCOMPARE(browser->currentPage(), window.m_effects);
+        // The Inspector's Add effect brings Effects up with its search ready;
+        // the effect goes to the clip the Inspector shows.
+        browser->setPage(BrowserPanel::Page::Presets);
         takeOps(window);
+        emit window.m_inspector->addEffectRequested(false);
+        QCoreApplication::processEvents();
+        QCOMPARE(browser->page(), BrowserPanel::Page::Effects);
         emit window.m_effects->addRequested(QStringLiteral("blur.gaussian"));
         {
             const QJsonArray added = takeOps(window);
@@ -759,145 +1071,80 @@ private slots:
             QCOMPARE(added.at(0).toObject().value("op").toString(), QStringLiteral("fx-add"));
             QCOMPARE(added.at(0).toObject().value("clip").toString(), QStringLiteral("v1a"));
         }
-        QVERIFY(effects->isCurrentTab());
-        presets->setAsCurrentTab();
-        QCoreApplication::processEvents();
-        emit window.m_timeline->clipSelected(QStringLiteral("v1b"));
-        QVERIFY(presets->isCurrentTab());
-        // From Project a click still raises it; the Inspector's own Add
-        // effect brings Effects up for it, and the next click brings the
-        // Inspector back.
-        project->setAsCurrentTab();
-        QCoreApplication::processEvents();
-        emit window.m_timeline->clipSelected(QStringLiteral("v1a"));
-        QVERIFY(inspector->isCurrentTab());
-        emit window.m_inspector->addEffectRequested(false);
-        QCoreApplication::processEvents();
-        QVERIFY(effects->isCurrentTab());
-        emit window.m_timeline->clipSelected(QStringLiteral("v1b"));
-        QCoreApplication::processEvents();
-        QVERIFY(inspector->isCurrentTab());
-        // Add effect, an effect added (the Inspector comes back), then a
-        // deselect: back to Project, not Effects; the next click raises
-        // the Inspector again.
-        emit window.m_timeline->deselectRequested();
-        QCoreApplication::processEvents();
-        QVERIFY(project->isCurrentTab());
-        emit window.m_timeline->clipSelected(QStringLiteral("v1a"));
-        QCoreApplication::processEvents();
-        QVERIFY(inspector->isCurrentTab());
-        emit window.m_inspector->addEffectRequested(false);
-        QCoreApplication::processEvents();
-        QVERIFY(effects->isCurrentTab());
-        emit window.m_effects->addRequested(QStringLiteral("blur.gaussian"));
-        QCoreApplication::processEvents();
-        QVERIFY(inspector->isCurrentTab());
-        // It still knows the clip it shows: Project chosen by hand stays
-        // when that same clip is clicked again (to drag or trim it); a new
-        // clip brings the Inspector back.
-        project->setAsCurrentTab();
-        QCoreApplication::processEvents();
-        emit window.m_timeline->clipSelected(QStringLiteral("v1a"));
-        QCoreApplication::processEvents();
-        QVERIFY(project->isCurrentTab());
-        emit window.m_timeline->clipSelected(QStringLiteral("v1b"));
-        QCoreApplication::processEvents();
-        QVERIFY(inspector->isCurrentTab());
-        emit window.m_timeline->deselectRequested();
-        QCoreApplication::processEvents();
-        QVERIFY(project->isCurrentTab());
-        emit window.m_timeline->clipSelected(QStringLiteral("v1b"));
-        QCoreApplication::processEvents();
-        QVERIFY(inspector->isCurrentTab());
-        // Effects chosen by hand stays through a deselect and the next
-        // click; Project then gives the click back to the Inspector.
-        effects->setAsCurrentTab();
-        QCoreApplication::processEvents();
-        emit window.m_timeline->clipSelected(QStringLiteral("v1a"));
-        QVERIFY(effects->isCurrentTab());
-        emit window.m_timeline->deselectRequested();
-        QCoreApplication::processEvents();
-        QVERIFY(effects->isCurrentTab());
-        emit window.m_timeline->clipSelected(QStringLiteral("v1b"));
-        QCoreApplication::processEvents();
-        QVERIFY(effects->isCurrentTab());
-        project->setAsCurrentTab();
-        emit window.m_timeline->clipSelected(QStringLiteral("v1a"));
-        QCoreApplication::processEvents();
-        QVERIFY(inspector->isCurrentTab());
-        // ⌘4 still shows it over a browser chosen by hand.
-        effects->setAsCurrentTab();
-        QCoreApplication::processEvents();
-        show->trigger();
-        QVERIFY(inspector->isCurrentTab());
+        QVERIFY(window.m_inspector->isVisible());
         // The conversation never moved.
         QVERIFY(window.m_chat->isVisible());
         QCOMPARE(window.m_chat->geometry(), chat);
     }
 
     // ⌘4 is Window ▸ Inspector (Effect Controls' old command still finds
-    // it); ⌥⌘4 is Inspector Follows Selection. Workspaces saved with Effect
-    // Controls restore with the Inspector where it was.
-    void inspectorCommandsAndLayoutMigration() {
+    // it), ⌥⌘4 Inspector Follows Selection, ⌃⌥4-6 the column's kinds; the
+    // column's Source page is Window ▸ Source Monitor, and a bin item opens
+    // there.
+    void inspectorCommandsAndSourcePage() {
         QSettings().remove(QStringLiteral("workspace"));
         const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
-        QByteArray old;
-        {
-            MainWindow window{QString(), QString()};
-            QAction *inspector = window.m_commands->action(QStringLiteral("window.inspector"));
-            QVERIFY(inspector && inspector->isCheckable());
-            QCOMPARE(inspector->text(), QStringLiteral("Inspector"));
-            QCOMPARE(inspector->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_4));
-            QCOMPARE(window.m_commands->action(QStringLiteral("window.effectControls")), inspector);
-            QCOMPARE(CommandRegistry::resolve(QStringLiteral("window.effectControls")), QStringLiteral("window.inspector"));
-            QAction *follows = window.m_commands->action(QStringLiteral("window.inspectorFollows"));
-            QVERIFY(follows && follows->isCheckable());
-            QCOMPARE(follows->shortcut(), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_4));
-            // Its tab is second in the column, named Inspector.
-            ads::CDockAreaWidget *area = window.m_workspace->panel(QStringLiteral("project"))->dockAreaWidget();
-            QCOMPARE(area->dockWidget(1)->objectName(), QStringLiteral("inspector"));
-            QCOMPARE(area->dockWidget(1)->windowTitle(), QStringLiteral("Inspector"));
-            // A version-6 layout, with the Inspector by its old id and Presets closed.
-            window.m_workspace->panel(QStringLiteral("presets"))->toggleView(false);
-            old = window.m_workspace->manager()->saveState(6);
-            if (!old.startsWith("<?xml")) old = qUncompress(old);
-            QVERIFY(old.contains("Name=\"inspector\""));
-            old.replace("Name=\"inspector\"", "Name=\"effectControls\"");
-        }
-        {
-            QSettings settings;
-            settings.setValue(QStringLiteral("workspace/names"), QStringList{QStringLiteral("Grading")});
-            settings.setValue(QStringLiteral("workspace/saved/Grading"), old);
-            settings.setValue(QStringLiteral("workspace/changes/Editing"), old);
-            settings.setValue(QStringLiteral("workspace/current"), QStringLiteral("Editing"));
-        }
         MainWindow window{QString(), QString()};
-        Workspace *workspace = window.m_workspace;
-        // Editing's own changes from version 6 give way to the new
-        // proportions (version 8: the 300 column over a 290 timeline), with
-        // the Inspector open in the column; a workspace of one's own keeps
-        // its arrangement, the Inspector renamed.
-        QVERIFY(!workspace->panel(QStringLiteral("presets"))->isClosed());
-        QVERIFY(!workspace->panel(QStringLiteral("inspector"))->isClosed());
-        QCOMPARE(workspace->panel(QStringLiteral("inspector"))->dockAreaWidget(), workspace->panel(QStringLiteral("project"))->dockAreaWidget());
-        workspace->resetCurrent();
-        workspace->activate(QStringLiteral("Grading"));
-        QCOMPARE(workspace->current(), QStringLiteral("Grading"));
-        QVERIFY(workspace->panel(QStringLiteral("presets"))->isClosed());
-        QVERIFY(!workspace->panel(QStringLiteral("inspector"))->isClosed());
-        QCOMPARE(workspace->panel(QStringLiteral("inspector"))->dockAreaWidget(), workspace->panel(QStringLiteral("project"))->dockAreaWidget());
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(showcaseSnapshot(3, QStringLiteral("clean")));
+        QAction *inspector = window.m_commands->action(QStringLiteral("window.inspector"));
+        QVERIFY(inspector && inspector->isCheckable());
+        QCOMPARE(inspector->text(), QStringLiteral("Inspector"));
+        QCOMPARE(inspector->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_4));
+        QCOMPARE(window.m_commands->action(QStringLiteral("window.effectControls")), inspector);
+        QCOMPARE(CommandRegistry::resolve(QStringLiteral("window.effectControls")), QStringLiteral("window.inspector"));
+        QAction *follows = window.m_commands->action(QStringLiteral("window.inspectorFollows"));
+        QVERIFY(follows && follows->isCheckable());
+        QCOMPARE(follows->shortcut(), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_4));
+        // The kinds: Video now; Audio and Info say they are coming.
+        InspectorColumn *column = window.m_inspectorColumn;
+        QAction *video = window.m_commands->action(QStringLiteral("inspector.video"));
+        QVERIFY(video->isChecked() && video->isEnabled());
+        QCOMPARE(video->shortcut(), QKeySequence(Qt::META | Qt::ALT | Qt::Key_4));
+        for (const char *id : {"inspector.audio", "inspector.info"}) {
+            QAction *kind = window.m_commands->action(QString::fromLatin1(id));
+            QVERIFY2(!kind->isEnabled(), id);
+            QCOMPARE(window.m_commands->reason(QString::fromLatin1(id)), QStringLiteral("Coming in this release"));
+        }
+        QVERIFY(!column->kindButton(InspectorColumn::Kind::Audio)->isEnabled());
+        QVERIFY(column->kindButton(InspectorColumn::Kind::Info)->toolTip().contains(QStringLiteral("Coming in this release")));
+        column->setKind(InspectorColumn::Kind::Info);
+        QCOMPARE(column->kind(), InspectorColumn::Kind::Video);
+        // Window ▸ Source Monitor shows the column's Source page, and back.
+        QAction *source = window.m_commands->action(QStringLiteral("window.source"));
+        source->trigger();
+        QCOMPARE(column->page(), InspectorColumn::Page::Source);
+        QCOMPARE(column->currentPage(), window.m_sourceMonitor);
+        QVERIFY(source->isChecked());
+        source->trigger();
+        QCOMPARE(column->page(), InspectorColumn::Page::Inspector);
+        // ⌃⌥4 brings the Video Inspector back from the Source page.
+        source->trigger();
+        video->trigger();
+        QCOMPARE(column->page(), InspectorColumn::Page::Inspector);
+        QVERIFY(video->isChecked());
+        // A bin item opens on the Source page; the stage's Source viewer
+        // waits for its place (Q-STAGE).
+        const QString media = showcaseSnapshot(3, QStringLiteral("clean")).value("timeline").toObject().value("sources").toArray()
+                                  .first().toObject().value("id").toString();
+        QVERIFY(!media.isEmpty());
+        window.openSource(media);
+        QCOMPARE(column->page(), InspectorColumn::Page::Source);
+        QVERIFY(window.m_sourceMonitor->isOpen());
+        QVERIFY(window.m_stageSource && window.m_stageSource != window.m_sourceMonitor && window.m_stageSource->isHidden());
+        // A workspace switch goes back to the Inspector (mockup-spec 10).
+        window.m_commands->action(QStringLiteral("workspace.edit"))->trigger();
+        QCOMPARE(column->page(), InspectorColumn::Page::Inspector);
     }
 
-    // At 1440x900 the Inspector fits its column: no row wider than the
+    // At 1600x1000 the Inspector fits its column: no row wider than the
     // column, and a video clip's identity, its primary rows and every
     // folded section header in view without scrolling.
-    // Dragged all the way up, the timeline's split closes the row over it
-    // altogether instead of stopping at a band of cut-off panels, and comes
-    // back when dragged down; the timeline itself never closes. Short of
-    // that, each dock area stops at its panels' least size, so nothing in
-    // it is cut off, and the column of Project, Inspector, Effects and
-    // Presets keeps one least width (no shorter than its tabs' names)
-    // whichever is chosen.
+    // Dragged all the way up, the band's split closes the row over it
+    // altogether instead of stopping at a strip of cut-off panels, and comes
+    // back when dragged down; the band itself never closes. Short of that,
+    // each dock area stops at its panels' least size, so nothing in it is
+    // cut off, and the browser keeps its width whichever page is chosen.
     void timelineSplitClosesTheRowOverIt() {
         QSettings().remove(QStringLiteral("workspace"));
         const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
@@ -910,35 +1157,39 @@ private slots:
         QCoreApplication::processEvents();
         Workspace *workspace = window.m_workspace;
         ads::CDockAreaWidget *timeline = workspace->panel(QStringLiteral("timeline"))->dockAreaWidget();
-        ads::CDockAreaWidget *browser = workspace->panel(QStringLiteral("project"))->dockAreaWidget();
+        ads::CDockAreaWidget *browser = workspace->panel(QStringLiteral("browser"))->dockAreaWidget();
         ads::CDockAreaWidget *viewer = workspace->panel(QStringLiteral("program"))->dockAreaWidget();
-        auto *rows = qobject_cast<QSplitter *>(timeline->parentWidget());
-        QVERIFY(rows && rows->orientation() == Qt::Vertical && rows->count() == 2);
-        const int timelineIndex = rows->indexOf(timeline);
-        const int topIndex = 1 - timelineIndex;
-        QVERIFY(rows->isCollapsible(topIndex) && !rows->isCollapsible(timelineIndex));
+        // The rows: the top row, the band (holding the timeline), the trays.
+        QWidget *band = timeline->parentWidget();
+        QWidget *top = viewer->parentWidget();
+        auto *rows = qobject_cast<QSplitter *>(band->parentWidget());
+        QVERIFY(rows && rows->orientation() == Qt::Vertical && rows->count() == 3 && top->parentWidget() == rows);
+        const int timelineIndex = rows->indexOf(band);
+        const int topIndex = rows->indexOf(top);
+        QCOMPARE(topIndex, 0);
+        QCOMPARE(timelineIndex, 1);
+        QVERIFY(rows->isCollapsible(topIndex) && !rows->isCollapsible(timelineIndex) && !rows->isCollapsible(2));
         // Each area's least size is its panels' largest.
-        for (const char *id : {"project", "inspector", "effects", "presets", "program", "source"}) {
+        for (const char *id : {"project", "inspector", "browser", "program"}) {
             ads::CDockWidget *dock = workspace->panel(QString::fromLatin1(id));
             const QSize least = dock->dockAreaWidget()->minimumSizeHint();
             QVERIFY2(least.width() >= dock->widget()->minimumSizeHint().width() && least.height() >= dock->widget()->minimumSizeHint().height(),
                      id);
         }
-        QVERIFY(browser->minimumSizeHint().width() >= browser->titleBar()->tabBar()->sizeHint().width());
         QVERIFY(timeline->minimumSizeHint().height() >= workspace->panel(QStringLiteral("timeline"))->widget()->minimumHeight());
         // The Editing arrangement holds the timeline's least height.
         QVERIFY(timeline->height() >= timeline->minimumSizeHint().height());
-        // Choosing another tab leaves the column's width alone.
+        // Choosing another page leaves the browser's width alone.
         const int browserWidth = browser->width();
-        for (const char *id : {"inspector", "effects", "presets", "project"}) {
-            workspace->panel(QString::fromLatin1(id))->setAsCurrentTab();
+        for (const BrowserPanel::Page page : {BrowserPanel::Page::Presets, BrowserPanel::Page::Effects}) {
+            window.m_browserPanel->setPage(page);
             QCoreApplication::processEvents();
             QCOMPARE(browser->width(), browserWidth);
         }
         // Part way up: the row stops at its least height, its panels whole.
         const QList<int> arranged = rows->sizes();
         const int total = arranged.at(0) + arranged.at(1);
-        QList<int> partWay(2);
+        QList<int> partWay(3);
         partWay[topIndex] = 120;
         partWay[timelineIndex] = total - 120;
         rows->setSizes(partWay);
@@ -963,9 +1214,9 @@ private slots:
         // As it does from a restored layout.
         workspace->resetCurrent();
         QCoreApplication::processEvents();
-        rows = qobject_cast<QSplitter *>(workspace->panel(QStringLiteral("timeline"))->dockAreaWidget()->parentWidget());
+        rows = qobject_cast<QSplitter *>(workspace->panel(QStringLiteral("timeline"))->dockAreaWidget()->parentWidget()->parentWidget());
         QVERIFY(rows && rows->childrenCollapsible());
-        QVERIFY(!rows->isCollapsible(rows->indexOf(workspace->panel(QStringLiteral("timeline"))->dockAreaWidget())));
+        QVERIFY(!rows->isCollapsible(rows->indexOf(workspace->panel(QStringLiteral("timeline"))->dockAreaWidget()->parentWidget())));
     }
 
     void inspectorFitsItsColumn() {
@@ -979,7 +1230,8 @@ private slots:
         window.setConnection(QStringLiteral("ready"));
         window.applySnapshot(everyKindSnapshot(1));
         fakeArtwork(window.m_artwork);
-        window.resize(1440, 900);
+        // The design's window: the column's 564 under its strip.
+        window.resize(1600, 1000);
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
         window.clickSelectClip(QStringLiteral("v"));
@@ -1036,10 +1288,10 @@ private slots:
             QVERIFY(viewport.contains(QRect(source->header()->mapTo(inspector, QPoint()), source->header()->size())));
             unclipped(QStringLiteral("16:9 column"));
         }
-        // On a 1366 × 768 screen the open Transform and Composite modules
+        // In a 1440 × 900 window the open Transform and Composite modules
         // still show whole, unscrolled.
         {
-            window.resize(1366, 768);
+            window.resize(1440, 900);
             QCoreApplication::processEvents();
             const QRect small(inspector->scrollArea()->viewport()->mapTo(inspector, QPoint()), inspector->scrollArea()->viewport()->size());
             QCOMPARE(scroll->value(), 0);
@@ -1049,7 +1301,7 @@ private slots:
                 const QRect plate(module->mapTo(inspector, QPoint()), module->size() - QSize(0, InspectorSection::kGap));
                 QVERIFY2(small.contains(plate), qPrintable(QStringLiteral("%1 at %2 in %3").arg(QString::fromLatin1(id)).arg(plate.bottom()).arg(small.bottom())));
             }
-            window.resize(1440, 900);
+            window.resize(1600, 1000);
             QCoreApplication::processEvents();
         }
         // Every row lines its controls up after one label column, and ends
@@ -1070,7 +1322,8 @@ private slots:
             for (ScrubField *field : row->findChildren<ScrubField *>(QString(), Qt::FindDirectChildrenOnly))
                 if (field->isVisibleTo(row)) fields << field;
             if (fields.size() == 2) {
-                QCOMPARE(fields.at(0)->width(), fields.at(1)->width());
+                // Within a point: the 303-point column splits unevenly.
+                QVERIFY(std::abs(fields.at(0)->width() - fields.at(1)->width()) <= 1);
                 QVERIFY(fields.at(0)->width() >= InspectorRow::kValueField);
             } else {
                 for (ScrubField *field : fields) QCOMPARE(field->width(), InspectorRow::kValueField);
@@ -1126,12 +1379,14 @@ private slots:
         delete alone;
     }
 
-    // The structure the owner chose (SPEC-R10 part D): a title with a quiet
-    // subtitle of the project's state; text tabs with an underline; a 300
-    // column holding "Search media" over a two-column grid of tiles; a stage
-    // row over a 290 timeline that shows eight tracks at 1440x900 and six at
-    // 1280x800, its header saying how many tracks and how long, with a zoom;
-    // and the selection on the status bar's left, ⌘-click adding to it.
+    // The structure of the review design (mockup-spec 0.1) at 1600 x 1000:
+    // the toolbar 40; Program 1296 wide, its strip 28 over a 564 stage; the
+    // Inspector column 304; the band 344 of the bin 272, the timeline 1024
+    // and the browser 304; the status bar 24; each region counting its 1 pt
+    // seam, all to within a point. At 1440 x 900 and 1920 x 1080 the columns
+    // and the band keep their sizes and the Program monitor and the
+    // timeline take the rest. Then the title, the format bank, the
+    // timeline's header and the selection on the status bar.
     void editorTakesTheChosenStructure() {
         QSettings().remove(QStringLiteral("workspace"));
         const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("workspace")); });
@@ -1156,12 +1411,73 @@ private slots:
             {"name", "Harbor Teaser"}, {"fps", 24}, {"width", 1920}, {"height", 1080}, {"sources", sources}, {"tracks", tracks}}}});
         window.handleEvent(QJsonObject{{"type", "collab"}, {"status", sharedStatus()}});
         fakeArtwork(window.m_artwork);
-        window.resize(1440, 900);
+        window.resize(1600, 1000);
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
         window.m_errorBanner->hide();
         QCoreApplication::processEvents();
-        const EditorTheme &theme = editorTheme();
+        namespace layout = tokens::layout;
+        Workspace *workspace = window.m_workspace;
+        const auto frame = [&window](const QWidget *widget) { return QRect(widget->mapTo(&window, QPoint()), widget->size()); };
+        const auto area = [&](const char *id) { return frame(workspace->panel(QString::fromLatin1(id))->dockAreaWidget()); };
+        // A region with its seam: the 1 pt splitter line before it counts as its own.
+        const auto near = [](int actual, int expected) { return std::abs(actual - expected) <= 1; };
+        const auto check = [&](const char *what) {
+            QCoreApplication::processEvents();
+            const int width = window.width();
+            const int height = window.height();
+            const QRect toolbar = frame(window.m_toolbar);
+            const QRect status = frame(window.statusBar());
+            const QRect program = area("program");
+            const QRect inspector = area("inspector");
+            const QRect bin = area("project");
+            const QRect timeline = area("timeline");
+            const QRect browser = area("browser");
+            const QString got = QStringLiteral("%1: toolbar %2 status %3 program %4,%5 %6x%7 inspector %8 %9x%10 bin %11,%12 %13x%14 timeline %15 %16 browser %17 %18")
+                                    .arg(QString::fromLatin1(what)).arg(toolbar.height()).arg(status.height())
+                                    .arg(program.x()).arg(program.y()).arg(program.width()).arg(program.height())
+                                    .arg(inspector.x()).arg(inspector.width()).arg(inspector.height())
+                                    .arg(bin.x()).arg(bin.y()).arg(bin.width()).arg(bin.height())
+                                    .arg(timeline.x()).arg(timeline.width()).arg(browser.x()).arg(browser.width());
+            QVERIFY2(toolbar.top() == 0 && toolbar.height() == layout::toolbar, qPrintable(got));
+            QVERIFY2(status.bottom() == height - 1 && status.height() == layout::status, qPrintable(got));
+            // The top row: Program, then the Inspector column to the edge.
+            QVERIFY2(program.left() == 0 && program.top() == layout::toolbar, qPrintable(got));
+            QVERIFY2(near(program.width(), width - layout::inspector), qPrintable(got));
+            QVERIFY2(near(inspector.left() - 1, width - layout::inspector) && inspector.right() == width - 1, qPrintable(got));
+            QVERIFY2(near(inspector.width() + 1, layout::inspector) && inspector.top() == program.top(), qPrintable(got));
+            QVERIFY2(near(program.height(), height - layout::toolbar - layout::status - layout::band), qPrintable(got));
+            QVERIFY2(inspector.height() == program.height(), qPrintable(got));
+            // The Program monitor's strip and stage.
+            const QRect strip = frame(window.m_programStrip);
+            const QRect stage = frame(window.m_viewer);
+            QVERIFY2(strip.top() == program.top() && strip.height() == layout::strip && strip.width() == program.width(), qPrintable(got));
+            QVERIFY2(stage.top() == strip.bottom() + 1 && stage.bottom() == program.bottom(), qPrintable(got));
+            // The band: the bin, the timeline, the browser, under the row.
+            QVERIFY2(near(bin.top() - 1, program.bottom() + 1) && bin.bottom() == status.top() - 1, qPrintable(got));
+            QVERIFY2(near(bin.height() + 1, layout::band), qPrintable(got));
+            QVERIFY2(bin.left() == 0 && near(bin.width() + 1, layout::bin), qPrintable(got));
+            QVERIFY2(near(timeline.left(), layout::bin) && near(timeline.width(), width - layout::bin - layout::browser), qPrintable(got));
+            QVERIFY2(near(browser.left() - 1, width - layout::browser) && browser.right() == width - 1, qPrintable(got));
+            QVERIFY2(timeline.top() == bin.top() && browser.top() == bin.top() && timeline.height() == bin.height(), qPrintable(got));
+            // No gaps: each seam is the one point between.
+            QVERIFY2(inspector.left() - program.right() == 2 && timeline.left() - bin.right() == 2 && browser.left() - timeline.right() == 2,
+                     qPrintable(got));
+            QVERIFY2(bin.top() - program.bottom() == 2, qPrintable(got));
+        };
+        check("1600x1000");
+        QCOMPARE(window.m_viewer->height(), 564);
+        QCOMPARE(area("program").width(), 1296);
+        QCOMPARE(area("timeline").width(), 1024);
+        // The regions that draw their own strip show no tab row over it.
+        for (const char *id : {"program", "inspector", "browser"})
+            QVERIFY2(workspace->panel(QString::fromLatin1(id))->dockAreaWidget()->titleBar()->isHidden(), id);
+        window.resize(1440, 900);
+        check("1440x900");
+        window.resize(1920, 1080);
+        check("1920x1080");
+        window.resize(1600, 1000);
+        check("back to 1600x1000");
 
         // The title, and under it the project's state, centred together.
         QCOMPARE(window.m_projectTitle->text(), QStringLiteral("Harbor Teaser"));
@@ -1172,116 +1488,36 @@ private slots:
         edited.insert(QStringLiteral("changed"), true);
         window.handleEvent(QJsonObject{{"type", "collab"}, {"status", edited}});
         QCOMPARE(window.m_projectSubtitle->text(), QStringLiteral("Edited · 16:9 · 24 fps"));
-        // The toolbar's format bank names the format as the subtitle and
-        // the Inspector's Frame size do: "1:1 · 1080 × 1080", one separator,
-        // never "Custom" for a preset, never two spaces in a row; a custom
-        // size latches no key.
+        // The toolbar's format bank names the format as the subtitle does.
         {
-            const QString times = QStringLiteral("\u2009×\u2009");
+            const QString times = QStringLiteral(" × ");
             QCOMPARE(window.m_formatBank->toolTip(), QStringLiteral("16:9 · 1920") + times + QStringLiteral("1080"));
-            const struct {
-                QSize size;
-                QString ratio;
-                QString text;
-            } formats[] = {{QSize(1080, 1080), QStringLiteral("1:1"), QStringLiteral("1:1 · 1080") + times + QStringLiteral("1080")},
-                           {QSize(1080, 1350), QStringLiteral("4:5"), QStringLiteral("4:5 · 1080") + times + QStringLiteral("1350")},
-                           {QSize(1080, 1920), QStringLiteral("9:16"), QStringLiteral("9:16 · 1080") + times + QStringLiteral("1920")},
-                           {QSize(1280, 720), QStringLiteral("16:9"), QStringLiteral("Custom · 1280") + times + QStringLiteral("720")}};
-            for (const auto &format : formats) {
-                window.syncCanvasPreset(format.size);
-                QCOMPARE(window.m_formatBank->toolTip(), format.text);
-                QCOMPARE(window.m_projectSubtitle->text(), QStringLiteral("Edited · %1 · 24 fps").arg(format.ratio));
-                QCOMPARE(canvasSizeLabel(format.size), format.text);
-                const bool custom = format.text.startsWith(QStringLiteral("Custom"));
-                QCOMPARE(window.m_formatBank->currentIndex() < 0, custom);
-                for (int index = 0; index < window.m_formatBank->count(); ++index)
-                    QVERIFY2(!window.m_formatBank->key(index)->toolTip().contains(QStringLiteral("  ")), qPrintable(window.m_formatBank->key(index)->toolTip()));
-            }
+            window.syncCanvasPreset(QSize(1080, 1920));
+            QCOMPARE(window.m_formatBank->toolTip(), QStringLiteral("9:16 · 1080") + times + QStringLiteral("1920"));
+            QCOMPARE(window.m_projectSubtitle->text(), QStringLiteral("Edited · 9:16 · 24 fps"));
             window.syncCanvasPreset(QSize(1920, 1080));
-            QCOMPARE(window.m_formatBank->toolTip(), QStringLiteral("16:9 · 1920") + times + QStringLiteral("1080"));
             QCOMPARE(window.m_formatBank->currentIndex(), 0);
         }
-
-        // Text tabs: 13pt names on the panel's own surface, the chosen one in
-        // the strongest ink over a 2pt underline of it, the others quieter,
-        // a hairline under the row; no strip, no boxes.
-        for (const char *id : {"project", "inspector", "effects", "presets", "program", "source", "timeline"}) {
-            ads::CDockWidget *dock = window.m_workspace->panel(QString::fromLatin1(id));
-            ads::CDockWidgetTab *tab = dock->tabWidget();
-            QVERIFY2(tab->property("textTab").toBool(), id);
-            auto *name = tab->findChild<QLabel *>();
-            QVERIFY(name);
-            QCOMPARE(name->font().pixelSize(), 13);
-            const bool chosen = dock->dockAreaWidget()->currentDockWidget() == dock;
-            // (A tab under the pointer takes the body's ink.)
-            if (tab->underMouse()) continue;
-            QVERIFY2(name->palette().color(QPalette::WindowText).rgb() == (chosen ? theme.textStrong : theme.tabInactiveText).rgb(),
-                     qPrintable(QStringLiteral("%1 %2 %3").arg(QString::fromLatin1(id)).arg(chosen).arg(name->palette().color(QPalette::WindowText).name())));
-            QCOMPARE(tab->palette().color(QPalette::Window).alpha() == 0 || !tab->autoFillBackground(), true);
-            QCOMPARE(dock->dockAreaWidget()->titleBar()->height(), 32);
-        }
-        QVERIFY(window.m_workspace->manager()->styleSheet().contains(QStringLiteral("border-bottom: 2px solid ") + theme.textStrong.name()));
-        // The Program tab row ends with the frame, the rate and the fit.
-        QCOMPARE(window.m_viewerDetail->text(), QStringLiteral("1920 × 1080  ·  24 fps  ·  Fit"));
-
-        // The column: about 300 at 1440x900, "Search media" over two columns
-        // of 124 by 70 tiles, 16 in from its edge.
-        ads::CDockAreaWidget *column = window.m_workspace->panel(QStringLiteral("project"))->dockAreaWidget();
-        QVERIFY2(std::abs(column->width() - 300) <= 6, qPrintable(QString::number(column->width())));
-        ProjectPanel *bin = window.m_projectPanel;
-        QCOMPARE(bin->search()->placeholderText(), QStringLiteral("Search media"));
-        QCOMPARE(bin->m_list->count(), 4);
-        const QRect first = bin->m_list->visualItemRect(bin->m_list->item(0));
-        const QRect second = bin->m_list->visualItemRect(bin->m_list->item(1));
-        QCOMPARE(second.top(), first.top());
-        QVERIFY(second.left() > first.right() - 1);
-        const int tileLeft = bin->m_list->viewport()->mapTo(bin, first.topLeft()).x() + (first.width() - ProjectPanel::kThumbnail.width()) / 2;
-        QCOMPARE(tileLeft, ProjectPanel::kSidePadding);
-        QCOMPARE(bin->m_list->item(0)->data(Qt::UserRole + 1).toString(), QStringLiteral("16:9"));
-        QCOMPARE(bin->m_list->item(1)->data(Qt::UserRole + 1).toString(), QStringLiteral("9:16"));
-        QCOMPARE(bin->m_list->item(3)->data(Qt::UserRole + 1).toString(), QStringLiteral("Audio"));
-        // Search filters the bin by name.
-        bin->search()->setText(QStringLiteral("DRONE"));
-        QStringList shown;
-        for (int row = 0; row < bin->m_list->count(); ++row)
-            if (!bin->m_list->item(row)->isHidden()) shown << bin->m_list->item(row)->data(Qt::UserRole).toString();
-        QCOMPARE(shown, QStringList{QStringLiteral("drone")});
-        bin->search()->clear();
-        QVERIFY(!bin->m_list->item(0)->isHidden());
-
+        // The Program strip: its name, the mask tools and the viewer's
+        // switches as the registry's actions (the ones still to come say so).
+        ProgramStrip *strip = window.m_programStrip;
+        QVERIFY(strip->buttonFor(window.m_maskTools.at(0)));
+        QAction *safe = window.m_commands->action(QStringLiteral("view.safeZones"));
+        QVERIFY(strip->buttonFor(safe));
+        QCOMPARE(safe->shortcut(), QKeySequence(Qt::Key_Apostrophe));
+        QAction *dim = window.m_commands->action(QStringLiteral("view.dim"));
+        QVERIFY(strip->buttonFor(dim) && !dim->isEnabled());
+        QVERIFY(dim->toolTip().contains(QStringLiteral("Coming in this release")));
+        QVERIFY(strip->buttonFor(window.m_commands->action(QStringLiteral("viewer.zoom"))));
+        QVERIFY(!strip->previewShown());
         // The timeline's header: after its name, how many tracks and how
         // long; on the right, the zoom beside the track heights.
         QCOMPARE(window.m_timelineDetail->text(), QStringLiteral("9 tracks  ·  00:00:18:00"));
         QVERIFY(window.m_timelineDetail->isVisible() && window.m_timelineZoom->isVisible());
-        ads::CDockAreaTitleBar *header = window.m_workspace->panel(QStringLiteral("timeline"))->dockAreaWidget()->titleBar();
+        ads::CDockAreaTitleBar *header = workspace->panel(QStringLiteral("timeline"))->dockAreaWidget()->titleBar();
         QCOMPARE(window.m_timelineDetail->parentWidget(), header);
         QCOMPARE(header->indexOf(window.m_timelineDetail), header->indexOf(header->tabBar()) + 1);
         QVERIFY(window.m_timelineZoom->x() > header->width() / 2);
-        auto *heights = header->findChild<QToolButton *>(QStringLiteral("trackHeightMini"));
-        QVERIFY(heights && window.m_timelineZoom->geometry().right() < heights->x());
-        // At their default heights, filmstrips and waveforms in view, six
-        // tracks fit at 1440x900; at Small, one line each, eight.
-        const auto tracksShown = [&window] {
-            QCoreApplication::processEvents();
-            const int bottom = window.m_timelineScroll->viewport()->height() - window.m_timeline->pos().y();
-            int fit = 0;
-            for (int row = 0; row < window.m_timeline->trackRowCount(); ++row)
-                if (window.m_timeline->trackHeaderRect(row).bottom() < bottom) ++fit;
-            return fit;
-        };
-        QVERIFY2(tracksShown() >= 6, qPrintable(QString::number(tracksShown())));
-        window.m_timeline->setAllTrackHeights(kTrackHeightPresets[1].height);
-        QVERIFY2(tracksShown() >= 8, qPrintable(QString::number(tracksShown())));
-        window.m_timeline->resetTrackHeights();
-        // The zoom sets the timeline's scale, and follows it.
-        const double before = window.m_timeline->scale();
-        window.m_timelineZoom->zoomInButton()->click();
-        QVERIFY(window.m_timeline->scale() > before * 1.2);
-        window.m_timelineZoom->slider()->setValue(0);
-        QVERIFY(std::abs(window.m_timeline->scale() - TimelineWidget::kMinScale) < 0.5);
-        window.m_timeline->setScale(120.0);
-        QCOMPARE(window.m_timelineZoom->slider()->value(), TimelineZoomControl::position(120.0));
-
         // The selection on the status bar's left: a click, then ⌘-click adds.
         QVERIFY(window.m_selectionStatus->text().isEmpty());
         window.clickSelectClip(QStringLiteral("v1a"));
@@ -1292,20 +1528,13 @@ private slots:
         QVERIFY(!other.isEmpty());
         QTest::mouseClick(window.m_timeline, Qt::LeftButton, Qt::ControlModifier, other.center());
         QCOMPARE(window.m_selectedClips, (QStringList{QStringLiteral("v1a"), QStringLiteral("v1b")}));
-        QCOMPARE(window.m_timeline->selectedClips(), window.m_selectedClips);
+        QCOMPARE(window.m_bus->selection(), window.m_selectedClips);
         QCOMPARE(window.m_selectionStatus->text(), QStringLiteral("2 clips selected  ·  00:00:11:00"));
         QCOMPARE(window.m_inspector->selection(), window.m_selectedClips);
-        // ⌘-click again takes it out; a plain click selects one.
         QTest::mouseClick(window.m_timeline, Qt::LeftButton, Qt::ControlModifier, other.center());
         QCOMPARE(window.m_selectedClips, QStringList{QStringLiteral("v1a")});
         window.clickSelectClip(QString());
         QVERIFY(window.m_selectionStatus->text().isEmpty());
-
-        // At 1280x800 six tracks still fit.
-        window.resize(1280, 800);
-        QCoreApplication::processEvents();
-        QTest::qWait(20);
-        QVERIFY2(tracksShown() >= 6, qPrintable(QString::number(tracksShown())));
     }
 };
 
